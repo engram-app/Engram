@@ -20,6 +20,10 @@ export default {
 	"Failed to duplicate.": "Duplikování selhalo.",
 	"Batch delete failed.": "Hromadné smazání selhalo.",
 	"Batch move failed.": "Hromadné přesunutí selhalo.",
+	"Couldn't load sign-in": "Nelze načíst přihlášení",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"Služba přihlášení se nenačetla. Zkontrolujte připojení a obnovte stránku.",
+	Reload: "Obnovit",
 	"This account is suspended. Contact an admin to restore access.":
 		"Tento účet je pozastaven. Kontaktujte administrátora pro obnovení přístupu.",
 	"Incorrect email or password.": "Nesprávná e-mailová adresa nebo heslo.",
@@ -152,6 +156,23 @@ export default {
 		few: "Zbývají {count} dny vaší bezplatné zkušební verze.",
 		many: "Zbývá {count} dne vaší bezplatné zkušební verze.",
 		other: "Zbývá {count} dní vaší bezplatné zkušební verze.",
+	},
+	"Indexing budget": "Limit indexování",
+	"{available} of {capacity} tokens left": "Zbývá {available} z {capacity} tokenů",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Doplňuje {perDay} tokenů denně. Opět plné {date}.",
+	"All tokens are available.": "Všechny tokeny jsou k dispozici.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count} poznámka má pouze vyhledávání klíčových slov, do {date}.",
+		few: "{count} poznámky mají vyhledávání pouze podle klíčových slov, do {date}.",
+		many: "{count} Poznámky umožňují pouze vyhledávání podle klíčových slov, do {date}.",
+		other: "{count} poznámek má pouze vyhledávání podle klíčových slov, do {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "Pro jednu poznámku je vyhledávání klíčových slov dostupné pouze do vyčerpání kreditu.",
+		few: "{count} poznámky mají vyhledávání pouze podle klíčových slov, dokud se nevyčerpá limit.",
+		many: "{count} Poznámky umožňují vyhledávání podle klíčových slov, dokud se nevyčerpá limit.",
+		other: "{count} poznámek má vyhledávání pouze podle klíčových slov, dokud se nevyčerpá limit.",
 	},
 	"Loading current connection…": "Načítám aktuální připojení…",
 	"Disconnected. Retry the new connection now.": "Odpojeno. Zkuste znovu připojit.",
@@ -563,7 +584,6 @@ export default {
 	"Linux PC": "Linux počítač",
 	Oops: "Ups",
 	"Something went wrong": "Nastala chyba",
-	Reload: "Obnovit",
 	"Back to home": "Zpět na úvodní stránku",
 	"Error detail (dev only)": "Podrobnosti chyby (pouze pro vývojáře)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -701,6 +721,9 @@ export default {
 	"Love it": "Miluji to",
 	"Tell us more": "Řekněte nám více",
 	Language: "Jazyk",
+	"Show Engram in {language}?": "Zobrazit Engram v {language}?",
+	"Switch language": "Změnit jazyk",
+	"Not now": "Ne, děkuji",
 	"My Vault": "Můj trezor",
 	"{count} days left in your trial.": {
 		one: "Zbývá vám {count} den do konce zkušební verze.",
@@ -936,6 +959,7 @@ export default {
 	"{client} is connected": "{client} je připojen",
 	"Your AI tool is connected": "Váš nástroj umělé inteligence je připojen",
 	"What will you use Engram for?": "K čemu budete Engram používat?",
+	"Could not continue. Please try again.": "Nelze pokračovat. Zkuste to znovu.",
 	"Review the Terms": "Prohlédněte si podmínky",
 	"privacy notice": "Zásady ochrany osobních údajů",
 	"What changed": "Co se změnilo",
@@ -996,7 +1020,6 @@ export default {
 		"7denní zkušební verze u placených tarifů. Vyžaduje se platební karta, poplatek bude stržen až po skončení zkušební doby.",
 	"Continue with Free →": "Pokračovat s bezplatnou verzí →",
 	"{summary} · upgrade anytime": "{summary} · můžete kdykoli upgradovat",
-	"Could not continue. Please try again.": "Nelze pokračovat. Zkuste to znovu.",
 	"Step {step} of {total}": "Krok {step} z {total}",
 	Onboarding: "Úvodní nastavení",
 	"Stop connecting this app": "Zastavit připojení této aplikace",
@@ -1056,6 +1079,10 @@ export default {
 	"Why {tool} can't be connected": "Proč {tool} nelze připojit",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Není to úplný seznam, vyberte {client}, pokud váš není uveden.",
+	"Customer insights": "Získávání informací o zákaznících",
+	"User ID": "ID uživatele",
+	"Show timeline": "Zobrazit časovou osu",
+	"Failed to load the report.": "Nepodařilo se načíst zprávu.",
 	Account: "Účet",
 	"Manage your profile, password, and account.": "Spravujte svůj profil heslo a účet.",
 	"Manage your profile, security, and active sessions.":

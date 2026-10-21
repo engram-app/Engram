@@ -90,6 +90,16 @@ describe("RemoteLogBuffer", () => {
 		expect(body.logs[0].message.length).toBeLessThanOrEqual(500);
 	});
 
+	it("sends structured context beside the message, and omits it when absent", async () => {
+		const buf = new RemoteLogBuffer(async () => transport);
+		buf.log("error", "api_request", "network_error GET x", { browser: "Chrome 155", attempt: 2 });
+		buf.log("warn", "crdt", "no context");
+		await buf.flush();
+		const body = JSON.parse(String(calls[0]?.init.body));
+		expect(body.logs[0].context).toEqual({ browser: "Chrome 155", attempt: 2 });
+		expect(body.logs[1]).not.toHaveProperty("context");
+	});
+
 	it("a fetch failure never throws into the caller", async () => {
 		vi.stubGlobal("fetch", () => Promise.reject(new Error("network down")));
 		const buf = new RemoteLogBuffer(async () => transport);

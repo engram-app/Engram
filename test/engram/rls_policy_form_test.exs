@@ -35,6 +35,16 @@ defmodule Engram.RlsPolicyFormTest do
 
       assert check_expr =~ ~r/\(\s*SELECT current_setting/i,
              "WITH CHECK clause on #{table} must wrap current_setting in (SELECT ...); got: #{check_expr}"
+
+      # The setting is cast once per statement, not the column per row:
+      # `(user_id)::text = ...` ran uuid_out on every row it looked at.
+      for expr <- [using_expr, check_expr] do
+        refute expr =~ "(user_id)::text",
+               "#{table}'s policy casts user_id to text per row; got: #{expr}"
+
+        assert expr =~ ~r/user_id = \(\s*SELECT \(?NULLIF\(\(\s*SELECT current_setting/i,
+               "#{table}'s policy must compare user_id to the setting cast to uuid; got: #{expr}"
+      end
     end
   end
 end

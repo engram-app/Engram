@@ -101,9 +101,17 @@ defmodule EngramWeb.Schemas.SyncQuiescenceResponse do
       },
       pending_checkpoints: %Schema{
         type: :integer,
-        description: "Scheduled or running checkpoint jobs for this vault's notes."
+        description:
+          "Unfinished checkpoint jobs for this vault's notes whose note has no live " <>
+            "room. Includes a snoozed job whose room has since exited."
+      },
+      deferred_checkpoints: %Schema{
+        type: :integer,
+        description:
+          "Unfinished checkpoint jobs held by a live room, which materializes the " <>
+            "note itself on exit. Not owed work."
       }
     },
-    required: [:change_seq, :pending_crdt_updates, :pending_checkpoints]
+    required: [:change_seq, :pending_crdt_updates, :pending_checkpoints, :deferred_checkpoints]
   })
 end

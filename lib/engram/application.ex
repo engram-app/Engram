@@ -350,6 +350,12 @@ defmodule Engram.Application do
       # token requests missing the same key on one node make one fetch.
       {Registry, keys: :unique, name: Engram.OAuth.Cimd.JwksCache.Flights},
       Engram.Auth.SignupRejections,
+      # Buffered analytics_events rows, flushed in one statement every 5s.
+      # After Repo so the shutdown flush can still write; before Folds, whose
+      # shutdown flush records into it.
+      Engram.Analytics.EventLog.Buffer,
+      # Counts behind throttled analytics events (calls per mcp_tool_called).
+      Engram.Analytics.Folds,
       # Per-request origin counters, flushed in one statement every 30s. After
       # Repo so the shutdown flush can still write.
       Engram.Abuse.OriginStats.Buffer,

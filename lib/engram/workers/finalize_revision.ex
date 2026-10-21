@@ -129,7 +129,6 @@ defmodule Engram.Workers.FinalizeRevision do
           set: [
             storage_key: key,
             blob_nonce: nonce,
-            char_count: String.length(text),
             dek_version: Crypto.row_version_aad_bound(),
             pending_ciphertext: nil,
             pending_nonce: nil,

@@ -18,6 +18,10 @@ export default {
 	"Failed to duplicate.": "复制失败。",
 	"Batch delete failed.": "批量删除失败。",
 	"Batch move failed.": "批量移动失败。",
+	"Couldn't load sign-in": "无法加载登录",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"登录服务加载失败。检查网络连接，然后重新加载页面。",
+	Reload: "重新加载",
 	"This account is suspended. Contact an admin to restore access.":
 		"账号已禁用。联系管理员恢复访问。",
 	"Incorrect email or password.": "邮箱或密码错误。",
@@ -135,6 +139,17 @@ export default {
 	"Current Plan": "当前方案",
 	Free: "免费",
 	"{count} days remaining in your free trial.": { other: "免费试用剩余{count}天。" },
+	"Indexing budget": "索引配额",
+	"{available} of {capacity} tokens left": "剩余 {available} 个 {capacity} 个 token",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"每日补充 {perDay} 个 token。将于 {date} 再次充满。",
+	"All tokens are available.": "所有令牌可用。",
+	"{count} notes have keyword search only, until {date}.": {
+		other: "{count} 笔记仅支持关键词搜索，截至 {date}。",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		other: "{count} 笔记仅支持关键词搜索，直到预算恢复。",
+	},
 	"Loading current connection…": "正在连接…",
 	"Disconnected. Retry the new connection now.": "已断开。立即重试连接。",
 	"Couldn't disconnect. Try Settings → Connections.": "断开失败。请尝试 设置 → 连接。",
@@ -489,7 +504,6 @@ export default {
 	"Linux PC": "Linux 电脑",
 	Oops: "哎呀",
 	"Something went wrong": "发生错误",
-	Reload: "重新加载",
 	"Back to home": "返回主页",
 	"Error detail (dev only)": "错误详情 (仅限开发者)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -620,6 +634,9 @@ export default {
 	"Love it": "非常喜欢",
 	"Tell us more": "详细说明",
 	Language: "语言",
+	"Show Engram in {language}?": "在 {language} 中显示 Engram？",
+	"Switch language": "切换语言",
+	"Not now": "稍后",
 	"My Vault": "我的仓库",
 	"{count} days left in your trial.": { other: "试用期剩余{count}天。" },
 	"Collapse sidebar": "隐藏侧边栏",
@@ -823,6 +840,7 @@ export default {
 	"{client} is connected": "{client} 已连接",
 	"Your AI tool is connected": "你的 AI 工具已连接",
 	"What will you use Engram for?": "您将如何使用 Engram？",
+	"Could not continue. Please try again.": "无法继续。请重试。",
 	"Review the Terms": "查看条款",
 	"privacy notice": "隐私声明",
 	"What changed": "发生了什么变化",
@@ -881,7 +899,6 @@ export default {
 		"付费方案提供 7 天免费试用。需要信用卡，到期才收费。",
 	"Continue with Free →": "继续使用免费版 →",
 	"{summary} · upgrade anytime": "{summary} · 随时升级",
-	"Could not continue. Please try again.": "无法继续。请重试。",
 	"Step {step} of {total}": "第 {step} 步，共 {total} 步",
 	Onboarding: "入门引导",
 	"Stop connecting this app": "停止连接此应用",
@@ -938,6 +955,10 @@ export default {
 	"Why {tool} can't be connected": "为什么无法连接 {tool}",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"并非完整列表，如果您的工具不在列表中，请选择 {client}。",
+	"Customer insights": "用户洞察",
+	"User ID": "用户ID",
+	"Show timeline": "显示时间线",
+	"Failed to load the report.": "报告加载失败。",
 	Account: "账户",
 	"Manage your profile, password, and account.": "管理你的资料、密码和账号。",
 	"Manage your profile, security, and active sessions.": "管理你的资料、安全设置和活动会话。",

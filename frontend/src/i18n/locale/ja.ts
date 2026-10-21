@@ -22,6 +22,10 @@ export default {
 	"Failed to duplicate.": "コピーに失敗しました。",
 	"Batch delete failed.": "一括削除に失敗しました。",
 	"Batch move failed.": "一括移動に失敗しました。",
+	"Couldn't load sign-in": "ログインに失敗しました",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"ログインサービスが読み込まれませんでした。接続を確認し、ページを再読み込みしてください。",
+	Reload: "再読み込み",
 	"This account is suspended. Contact an admin to restore access.":
 		"このアカウントは停止されています。アクセスを回復するには、管理者にお問い合わせください。",
 	"Incorrect email or password.": "メールアドレスまたはパスワードが正しくありません。",
@@ -149,6 +153,17 @@ export default {
 	"Current Plan": "現在のプラン",
 	Free: "無料",
 	"{count} days remaining in your free trial.": { other: "無料トライアルは残り{count}日です。" },
+	"Indexing budget": "インデックス作成の制限",
+	"{available} of {capacity} tokens left": "{available}トークン残 {capacity}トークン中",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"1日に{perDay}トークンを補充します。{date}に上限まで補充されます。",
+	"All tokens are available.": "すべてのトークンが利用可能です。",
+	"{count} notes have keyword search only, until {date}.": {
+		other: "{count} のノートは、{date} までキーワード検索のみに対応します。",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		other: "{count} ノートは、インデックスの予算が回復するまで、キーワード検索のみが可能です。",
+	},
 	"Loading current connection…": "接続中です…",
 	"Disconnected. Retry the new connection now.": "接続解除されました。新しい接続を試してください。",
 	"Couldn't disconnect. Try Settings → Connections.":
@@ -518,7 +533,6 @@ export default {
 	"Linux PC": "Linux PC",
 	Oops: "あら",
 	"Something went wrong": "エラーが発生しました",
-	Reload: "再読み込み",
 	"Back to home": "ホームへ戻る",
 	"Error detail (dev only)": "エラー詳細 (開発者向け)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -654,6 +668,9 @@ export default {
 	"Love it": "素晴らしい",
 	"Tell us more": "詳細を教えてください",
 	Language: "言語",
+	"Show Engram in {language}?": "{language} の Engram を表示しますか？",
+	"Switch language": "言語を切り替えます",
+	"Not now": "今は不要",
 	"My Vault": "私の保管庫",
 	"{count} days left in your trial.": { other: "トライアル期間は残り{count}日です。" },
 	"Collapse sidebar": "サイドバーを折りたたみ",
@@ -861,6 +878,7 @@ export default {
 	"{client} is connected": "{client} に接続されています",
 	"Your AI tool is connected": "AIツールに接続されています",
 	"What will you use Engram for?": "Engramをどのように利用しますか？",
+	"Could not continue. Please try again.": "続行できませんでした。もう一度お試しください。",
 	"Review the Terms": "利用規約を確認",
 	"privacy notice": "プライバシーポリシー",
 	"What changed": "変更点",
@@ -921,7 +939,6 @@ export default {
 		"有料プランでは、7日間の無料トライアルがあります。カード情報が必要ですが、終了するまでは料金は発生しません。",
 	"Continue with Free →": "無料版で続ける →",
 	"{summary} · upgrade anytime": "{summary} · いつでもアップグレード可能",
-	"Could not continue. Please try again.": "続行できませんでした。もう一度お試しください。",
 	"Step {step} of {total}": "{total} の {step} 段階",
 	Onboarding: "初期設定",
 	"Stop connecting this app": "このアプリの接続を停止",
@@ -979,6 +996,10 @@ export default {
 	"Why {tool} can't be connected": "なぜ{tool}に接続できないのか",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"完全なリストではありません。こちらにない場合は{client}を選択してください。",
+	"Customer insights": "顧客インサイト",
+	"User ID": "ユーザーID",
+	"Show timeline": "タイムラインを表示",
+	"Failed to load the report.": "レポートの読み込みに失敗しました。",
 	Account: "アカウント",
 	"Manage your profile, password, and account.":
 		"プロフィール、パスワード、アカウントを管理します。",

@@ -21,6 +21,10 @@ export default {
 	"Failed to duplicate.": "No se pudo duplicar.",
 	"Batch delete failed.": "Falló la eliminación por lotes.",
 	"Batch move failed.": "Falló el movimiento por lotes.",
+	"Couldn't load sign-in": "No se pudo cargar el inicio de sesión",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"El servicio de inicio de sesión no se cargó. Verifica tu conexión y vuelve a cargar la página.",
+	Reload: "Recargar",
 	"This account is suspended. Contact an admin to restore access.":
 		"Esta cuenta está suspendida. Contacta a un administrador para restablecer el acceso.",
 	"Incorrect email or password.": "Correo electrónico o contraseña incorrectos.",
@@ -156,6 +160,21 @@ export default {
 		one: "Te queda {count} día en tu prueba gratuita.",
 		many: "Te quedan {count} días en tu prueba gratuita.",
 		other: "Quedan {count} días en tu prueba gratuita.",
+	},
+	"Indexing budget": "Presupuesto de indexación",
+	"{available} of {capacity} tokens left": "Te quedan {available} de {capacity} tokens",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Recarga {perDay} tokens al día. Se recarga completamente el {date}.",
+	"All tokens are available.": "Todos los tokens están disponibles.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count} nota tiene búsqueda por palabras clave solo, hasta {date}.",
+		many: "{count} notas tienen solo búsqueda por palabra clave, hasta {date}.",
+		other: "{count} notas tienen solo búsqueda por palabra clave, hasta {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "{count} nota tiene búsqueda por palabras clave, hasta que se recargue el crédito.",
+		many: "{count} notas tienen solo búsqueda por palabra clave, hasta que se recargue el presupuesto.",
+		other: "{count} notas tienen búsqueda por palabra clave, hasta que se recargue el crédito.",
 	},
 	"Loading current connection…": "Cargando la conexión actual…",
 	"Disconnected. Retry the new connection now.": "Desconectado. Intenta conectar de nuevo.",
@@ -553,7 +572,6 @@ export default {
 	"Linux PC": "PC con Linux",
 	Oops: "¡Uy!",
 	"Something went wrong": "Algo salió mal",
-	Reload: "Recargar",
 	"Back to home": "Volver al inicio",
 	"Error detail (dev only)": "Detalle del error (solo para desarrolladores)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -691,6 +709,9 @@ export default {
 	"Love it": "Me encanta",
 	"Tell us more": "Cuéntanos más",
 	Language: "Idioma",
+	"Show Engram in {language}?": "¿Mostrar Engram en {language}?",
+	"Switch language": "Cambiar idioma",
+	"Not now": "No, gracias",
 	"My Vault": "Mi bóveda",
 	"{count} days left in your trial.": {
 		one: "Te queda {count} día en tu prueba.",
@@ -904,6 +925,7 @@ export default {
 	"{client} is connected": "{client} está conectado",
 	"Your AI tool is connected": "Tu herramienta de IA está conectada",
 	"What will you use Engram for?": "¿Para qué usarás Engram?",
+	"Could not continue. Please try again.": "No se pudo continuar. Por favor, intenta de nuevo.",
 	"Review the Terms": "Revisa los términos",
 	"privacy notice": "aviso de privacidad",
 	"What changed": "¿Qué cambió?",
@@ -964,7 +986,6 @@ export default {
 		"Prueba gratuita de 7 días en los planes de pago. Se requiere tarjeta, no se te cobrará hasta que finalice.",
 	"Continue with Free →": "Continuar con la versión gratuita →",
 	"{summary} · upgrade anytime": "{summary} · puedes actualizar en cualquier momento",
-	"Could not continue. Please try again.": "No se pudo continuar. Por favor, intenta de nuevo.",
 	"Step {step} of {total}": "Paso {step} de {total}",
 	Onboarding: "Incorporación",
 	"Stop connecting this app": "Deja de conectar esta aplicación",
@@ -1024,6 +1045,10 @@ export default {
 	"Why {tool} can't be connected": "¿Por qué {tool} no se puede conectar?",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"No es una lista exhaustiva, elige {client} si la tuya no está aquí.",
+	"Customer insights": "Información del cliente",
+	"User ID": "Identificador de usuario",
+	"Show timeline": "Mostrar línea de tiempo",
+	"Failed to load the report.": "No se pudo cargar el informe.",
 	Account: "Cuenta",
 	"Manage your profile, password, and account.": "Gestiona tu perfil, tu contraseña y tu cuenta.",
 	"Manage your profile, security, and active sessions.":

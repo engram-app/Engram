@@ -67,6 +67,10 @@ defmodule Engram.PromEx.Indexing do
     * `engram_prom_ex_indexing_vector_cache_skipped_rows_total`: rows the cache
       refused to write, tagged by `:reason` (`rotation | note_deleted`). A
       sustained rate means the cache is not saving the retries it exists for.
+    * `engram_prom_ex_indexing_payload_reconcile_total`: notes handled by
+      `ReconcileNotePayloads`, tagged by `:outcome` (`checked | drifted |
+      rewritten | skipped_v5`). `rewritten / checked` is how much of the
+      collection the heal is rewriting; expected near zero outside a rotation.
 
   Cardinality contract: only `:outcome`/`:reason`/`:kind`/`:dense` (closed
   enums). NEVER add note_id, user_id, or vault_id.
@@ -145,6 +149,8 @@ defmodule Engram.PromEx.Indexing do
     Logger.warning("rebuild ledger poll skipped: #{why}")
     :ok
   end
+
+  @payload_reconcile_event [:engram, :indexing, :payload_reconcile]
 
   @impl true
   def event_metrics(opts) do
@@ -267,6 +273,15 @@ defmodule Engram.PromEx.Indexing do
           description:
             "v5 rebuild jobs snoozed by the pass's pacing: tokens (bucket spent) or qdrant (behind).",
           tags: [:reason]
+        ),
+        sum(
+          metric_prefix ++ [:payload_reconcile, :total],
+          event_name: @payload_reconcile_event,
+          measurement: :count,
+          description:
+            "Notes handled by ReconcileNotePayloads, by outcome (checked, drifted, " <>
+              "rewritten, skipped_v5).",
+          tags: [:outcome]
         )
       ]
     )

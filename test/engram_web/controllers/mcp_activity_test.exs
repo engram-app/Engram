@@ -92,6 +92,62 @@ defmodule EngramWeb.McpActivityTest do
     assert Enum.sort(tools) == ["list_tags", "list_vaults"]
   end
 
+  test "mcp_tool_called carries the calls and errors folded into its window", %{conn: conn} do
+    call(conn, "list_vaults")
+    assert [first] = for(e <- drain(), e["event"] == "mcp_tool_called", do: e)
+    assert first["properties"]["calls"] == 1
+    assert first["properties"]["errors"] == 0
+
+    call(conn, "list_vaults")
+
+    post(conn, "/api/mcp", %{
+      "jsonrpc" => "2.0",
+      "id" => 1,
+      "method" => "tools/call",
+      "params" => %{"name" => "list_vaults", "arguments" => %{"foo" => "x"}}
+    })
+
+    assert [] = for(e <- drain(), e["event"] == "mcp_tool_called", do: e)
+
+    # Next window: the two folded calls (one an error) plus this one.
+    EngramWeb.RateLimiter.reset_buckets!()
+    call(conn, "list_vaults")
+    assert [next] = for(e <- drain(), e["event"] == "mcp_tool_called", do: e)
+    assert next["properties"]["calls"] == 3
+    assert next["properties"]["errors"] == 1
+  end
+
+  # Counts folded into a window no later event closes are not held until the
+  # user's next call (days, or never): the periodic flush sends them on their
+  # own, within minutes, and the next window starts from zero.
+  test "a flush sends the pending folded counts as mcp_tool_called_rollup", %{conn: conn} do
+    call(conn, "list_vaults")
+    call(conn, "list_vaults")
+
+    post(conn, "/api/mcp", %{
+      "jsonrpc" => "2.0",
+      "id" => 1,
+      "method" => "tools/call",
+      "params" => %{"name" => "list_vaults", "arguments" => %{"foo" => "x"}}
+    })
+
+    _ = drain()
+    :ok = Engram.Analytics.Folds.flush()
+
+    assert [rollup] = for(e <- drain(), e["event"] == "mcp_tool_called_rollup", do: e)
+    assert rollup["properties"]["calls"] == 2
+    assert rollup["properties"]["errors"] == 1
+    assert rollup["properties"]["tool"] == "list_vaults"
+
+    :ok = Engram.Analytics.Folds.flush()
+    assert [] = for(e <- drain(), String.ends_with?(e["event"], "_rollup"), do: e)
+
+    EngramWeb.RateLimiter.reset_buckets!()
+    call(conn, "list_vaults")
+    assert [next] = for(e <- drain(), e["event"] == "mcp_tool_called", do: e)
+    assert next["properties"]["calls"] == 1
+  end
+
   test "an invalid-args call still counts as MCP activity", %{conn: conn} do
     post(conn, "/api/mcp", %{
       "jsonrpc" => "2.0",

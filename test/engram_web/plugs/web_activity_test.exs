@@ -62,6 +62,26 @@ defmodule EngramWeb.Plugs.WebActivityTest do
     refute_receive {:posthog_body, _}, 200
   end
 
+  for {status, kind} <- [{409, "conflict"}, {413, "too_large"}, {426, "upgrade_required"}] do
+    test "a #{status} response is one throttled sync_error{#{kind}}", %{conn: conn, user: user} do
+      for _ <- 1..3 do
+        run(conn, user, current_auth_method: :internal_jwt)
+        |> Plug.Conn.send_resp(unquote(status), "")
+      end
+
+      assert_receive {:posthog_body, %{"event" => "sync_error"} = body}, 1_000
+      assert body["properties"]["kind"] == unquote(kind)
+      assert body["properties"]["surface"] == "obsidian_sync"
+      refute_receive {:posthog_body, %{"event" => "sync_error"}}, 300
+    end
+  end
+
+  test "an ordinary response is not a sync_error", %{conn: conn, user: user} do
+    run(conn, user, current_auth_method: :internal_jwt) |> Plug.Conn.send_resp(200, "")
+    run(conn, user, current_auth_method: :internal_jwt) |> Plug.Conn.send_resp(404, "")
+    refute_receive {:posthog_body, %{"event" => "sync_error"}}, 300
+  end
+
   test "repeat requests are throttled to one event", %{conn: conn, user: user} do
     for _ <- 1..4, do: run(conn, user, [])
 

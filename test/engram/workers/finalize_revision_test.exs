@@ -83,7 +83,6 @@ defmodule Engram.Workers.FinalizeRevisionTest do
     assert rev.pending_ciphertext == nil
     assert rev.storage_key == Storage.revision_key(u.id, rev.vault_id, n.id, rev.id)
     assert {:ok, "keep me"} = blob_text(u, rev, rev.id)
-    assert rev.char_count == String.length("keep me")
   end
 
   test "a second run changes nothing", %{user: u, note: n, baseline: b} do

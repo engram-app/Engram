@@ -67,6 +67,7 @@ defmodule Engram.PromEx.Qdrant do
   use PromEx.Plugin
 
   alias Engram.Logger.Metadata
+  alias Engram.PromEx.Buckets
   alias Engram.ServiceConfig
   alias Engram.Vector.Qdrant
   alias Engram.Vector.QdrantLayout
@@ -343,9 +344,7 @@ defmodule Engram.PromEx.Qdrant do
           event_name: @stop_event,
           measurement: :duration,
           description: "Qdrant HTTP request latency by operation.",
-          reporter_options: [
-            buckets: [1, 5, 10, 25, 50, 100, 250, 500, 1_000, 5_000]
-          ],
+          reporter_options: Buckets.opts(Engram.PromEx.Qdrant.RequestDurationBuckets),
           tags: [:op, :status],
           unit: {:native, :millisecond}
         ),
@@ -377,4 +376,9 @@ defmodule Engram.PromEx.Qdrant do
       ]
     )
   end
+end
+
+defmodule Engram.PromEx.Qdrant.RequestDurationBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [1, 5, 10, 25, 50, 100, 250, 500, 1_000, 5_000]
 end

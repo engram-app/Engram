@@ -43,18 +43,21 @@ if [ -z "$base_version" ]; then
   exit 1
 fi
 
-# Skip if any new migration carries `# rollback-irreversible`. Used for
-# schema-restore baselines whose `down` raises by design — there is no
-# sensible reversal of "blow away everything and reinstall the dump."
-for v in "${new_versions[@]}"; do
-  if grep -q "# rollback-irreversible" "$MIG_DIR"/${v}_*.exs 2>/dev/null; then
-    echo "rollback test: skipping — ${v} carries # rollback-irreversible marker"
-    exit 0
-  fi
-done
+# Each new migration is applied, rolled back and re-applied on its own, in
+# order, so a `# rollback-irreversible` marker (schema-restore baselines whose
+# `down` raises by design) exempts only its own file. This used to exit on the
+# first marker and leave every OTHER new migration's `down` untested.
+mix ecto.migrate --to "$base_version"
 
-echo "rollback test: $n new migration(s) — migrate → rollback → re-migrate"
-mix ecto.migrate
-mix ecto.rollback --step "$n"
-mix ecto.migrate
-echo "rollback test: new migrations reverse and re-apply cleanly ✓"
+echo "rollback test: $n new migration(s) - migrate, rollback, re-migrate each"
+for v in $(printf '%s\n' "${new_versions[@]}" | sort -u); do
+  file=$(compgen -G "$MIG_DIR/${v}_*.exs" | head -1)
+  mix ecto.migrate --to "$v"
+  if grep -qE '^[[:space:]]*# rollback-irreversible' "$file"; then
+    echo "rollback test: ${file##*/} carries # rollback-irreversible - applied, not rolled back"
+    continue
+  fi
+  mix ecto.rollback --step 1
+  mix ecto.migrate --to "$v"
+done
+echo "rollback test: new migrations reverse and re-apply cleanly"

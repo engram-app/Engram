@@ -1,5 +1,6 @@
 import type { Breadcrumb } from "@sentry/react";
 import type { ErrorInfo } from "react";
+import { whenLoaded } from "@/lib/when-loaded";
 import { scrubLogText } from "./lib/scrub-log-text";
 import { ROUTES, VAULT_PREFIX } from "./routes";
 
@@ -61,7 +62,14 @@ const KNOWN_FIRST_SEGMENTS = new Set<string>([
  *  every frame of it is a bug in something the USER installed, surfacing here
  *  only because our global handlers catch it. Keep this to patterns actually
  *  observed in prod — a speculative blocklist is how a real error goes missing. */
-const IGNORED_ERROR_PATTERNS = [/runtime\.sendMessage/];
+const IGNORED_ERROR_PATTERNS = [
+	/runtime\.sendMessage/,
+	// @clerk/shared rethrows a clerk-js/clerk-ui script-load failure inside a
+	// `.catch` nobody awaits, so it always arrives as an unhandled rejection
+	// (ENGRAM-FRONTEND-A). The same failure flips Clerk's status to "error",
+	// which ClerkLoadGate renders and reports once as a handled warning.
+	/Failed to load Clerk (?:JS|UI)\b/,
+];
 
 /** Whether the SDK's inbound filter will discard this error.
  *
@@ -79,9 +87,18 @@ const sentryDsn = import.meta.env.VITE_SENTRY_DSN;
 
 type SentrySdk = typeof import("@sentry/react");
 
-const earlyErrors: unknown[] = [];
-const onEarlyError = (e: ErrorEvent) => earlyErrors.push(e.error ?? e.message);
-const onEarlyRejection = (e: PromiseRejectionEvent) => earlyErrors.push(e.reason);
+// Queued with the mechanism the SDK's own global handlers would have stamped,
+// so beforeSend applies one policy to both (a non-Error rejection is dropped
+// whether it fired before or after the chunk landed).
+interface EarlyError {
+	error: unknown;
+	handler: "onerror" | "onunhandledrejection";
+}
+const earlyErrors: EarlyError[] = [];
+const onEarlyError = (e: ErrorEvent) =>
+	earlyErrors.push({ error: e.error ?? e.message, handler: "onerror" });
+const onEarlyRejection = (e: PromiseRejectionEvent) =>
+	earlyErrors.push({ error: e.reason, handler: "onunhandledrejection" });
 if (sentryDsn) {
 	window.addEventListener("error", onEarlyError);
 	window.addEventListener("unhandledrejection", onEarlyRejection);
@@ -105,16 +122,32 @@ function scrubExceptionValue(
 	return scrubLogText(value);
 }
 
+/** An unhandled rejection whose reason is not an Error is not ours: lint
+ *  (style/useThrowOnlyError, nursery/usePromiseRejectErrors) keeps our own
+ *  throws and rejections Error-only. The SDK files it as "Object captured as
+ *  promise rejection with keys: ..." with no stack, so there is nothing to act
+ *  on. ENGRAM-FRONTEND-7 was a crypto-wallet extension's EIP-1193
+ *  `{code: 4001, message}`. */
+function isForeignRejection(
+	event: { exception?: { values?: Array<{ mechanism?: { type?: string } }> } },
+	hint: { originalException?: unknown },
+): boolean {
+	const mechanism = event.exception?.values?.[0]?.mechanism?.type ?? "";
+	return mechanism.endsWith("onunhandledrejection") && !(hint.originalException instanceof Error);
+}
+
 export const sentryReady: Promise<SentrySdk | null> | null = sentryDsn
-	? import("@sentry/react")
+	? whenLoaded(import("@sentry/react"))
 			.then((Sentry) => {
 				Sentry.init(sentryInitOptions(sentryDsn));
 				// The SDK's own global handlers are live from here; hand it the
 				// backlog and retire the temporary listeners.
 				window.removeEventListener("error", onEarlyError);
 				window.removeEventListener("unhandledrejection", onEarlyRejection);
-				for (const err of earlyErrors.splice(0)) {
-					Sentry.captureException(err);
+				for (const { error, handler } of earlyErrors.splice(0)) {
+					Sentry.captureException(error, {
+						mechanism: { type: `auto.browser.global_handlers.${handler}`, handled: false },
+					});
 				}
 				return Sentry;
 			})
@@ -322,6 +355,18 @@ export function scrubEvent<
 	return event;
 }
 
+/** `beforeSend`: drop what is not ours, scrub the rest. */
+export function beforeSend<
+	T extends {
+		request?: { url?: string; headers?: Record<string, string> };
+		exception?: {
+			values?: Array<{ type?: string; value?: string; mechanism?: { type?: string } }>;
+		};
+	},
+>(event: T, hint: { originalException?: unknown }): T | null {
+	return isForeignRejection(event, hint) ? null : scrubEvent(event);
+}
+
 /** The exact options passed to `Sentry.init`. Exported so a test can assert the
  *  scrubbers are actually WIRED — with them inline, deleting the two hook lines
  *  left every test green while DOM breadcrumbs (which serialize title/alt/
@@ -344,6 +389,6 @@ export function sentryInitOptions(dsn: string) {
 		// object merges into, so this needs no extra integration to take effect.
 		ignoreErrors: IGNORED_ERROR_PATTERNS,
 		beforeBreadcrumb: scrubBreadcrumb,
-		beforeSend: scrubEvent,
+		beforeSend,
 	};
 }

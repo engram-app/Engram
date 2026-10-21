@@ -28,16 +28,26 @@ defmodule EngramWeb.Plugs.RotationLockCheck do
       %User{id: user_id} when conn.method not in ["GET", "HEAD"] ->
         # `current_user` comes from the `:user` cache, so a lock taken on
         # another node is visible here only once its eviction lands. A write
-        # encrypts under the user's DEK, so it re-reads the lock (one query);
-        # reads keep the cached answer. An MCP request is always a POST, so
-        # it is a read when its JSON-RPC body says so.
-        if mcp_read?(conn) do
-          conn
-        else
-          case RotationGate.check(user_id) do
-            {:error, :rotation_in_progress} -> halt_rotating(conn)
-            _ -> conn
-          end
+        # encrypts under the user's DEK, so it must see the lock fresh; reads
+        # keep the cached answer. An MCP request is always a POST, so it is a
+        # read when its JSON-RPC body says so.
+        cond do
+          mcp_read?(conn) ->
+            conn
+
+          # MCP turns a raise into a JSON-RPC error, so it reads the lock here.
+          conn.path_info == ["api", "mcp"] ->
+            case RotationGate.check(user_id) do
+              {:error, :rotation_in_progress} -> halt_rotating(conn)
+              _ -> conn
+            end
+
+          # REST: the write's own tenant transaction reads the lock in its
+          # tenant_enter (RotationGate.gated/1), one round trip fewer, and a
+          # locked user's write raises RotationInProgressError (503) before it
+          # writes anything.
+          true ->
+            gate_request(conn)
         end
 
       _ ->
@@ -61,6 +71,21 @@ defmodule EngramWeb.Plugs.RotationLockCheck do
   end
 
   defp mcp_read?(_conn), do: false
+
+  # The gate is process state, and a keep-alive connection serves its next
+  # request from the same process, so the response clears it. The before_send
+  # also gives the 503 its Retry-After (the error renderer sets no headers).
+  defp gate_request(conn) do
+    Process.put(:engram_write_gate, true)
+
+    register_before_send(conn, fn conn ->
+      Process.delete(:engram_write_gate)
+
+      if conn.status == 503 and get_resp_header(conn, "retry-after") == [],
+        do: put_resp_header(conn, "retry-after", "60"),
+        else: conn
+    end)
+  end
 
   defp halt_rotating(conn) do
     conn

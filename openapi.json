@@ -687,8 +687,14 @@
             "x-struct": null,
             "x-validate": null
           },
+          "deferred_checkpoints": {
+            "description": "Unfinished checkpoint jobs held by a live room, which materializes the note itself on exit. Not owed work.",
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
           "pending_checkpoints": {
-            "description": "Scheduled or running checkpoint jobs for this vault's notes.",
+            "description": "Unfinished checkpoint jobs for this vault's notes whose note has no live room. Includes a snoozed job whose room has since exited.",
             "type": "integer",
             "x-struct": null,
             "x-validate": null
@@ -703,7 +709,8 @@
         "required": [
           "change_seq",
           "pending_crdt_updates",
-          "pending_checkpoints"
+          "pending_checkpoints",
+          "deferred_checkpoints"
         ],
         "title": "SyncQuiescenceResponse",
         "type": "object",
@@ -1012,6 +1019,58 @@
         "x-struct": "Elixir.EngramWeb.Schemas.SearchRequest",
         "x-validate": null
       },
+      "SetCtimesRequest": {
+        "example": {
+          "entries": [
+            {
+              "ctime": 1.7294e9,
+              "path": "Projects/plan.md"
+            },
+            {
+              "ctime": 1729486400.5,
+              "path": "Inbox/idea.md"
+            }
+          ]
+        },
+        "properties": {
+          "entries": {
+            "items": {
+              "properties": {
+                "ctime": {
+                  "description": "Epoch seconds",
+                  "format": "float",
+                  "type": "number",
+                  "x-struct": null,
+                  "x-validate": null
+                },
+                "path": {
+                  "type": "string",
+                  "x-struct": null,
+                  "x-validate": null
+                }
+              },
+              "required": [
+                "path",
+                "ctime"
+              ],
+              "type": "object",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "maxItems": 500,
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "title": "SetCtimesRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.SetCtimesRequest",
+        "x-validate": null
+      },
       "DeleteAccountRequest": {
         "example": {
           "password": "correct horse battery staple"
@@ -1138,6 +1197,23 @@
         "title": "UploadAttachmentRequest",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.UploadAttachmentRequest",
+        "x-validate": null
+      },
+      "UpdatedCount": {
+        "properties": {
+          "updated": {
+            "example": 3,
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "updated"
+        ],
+        "title": "UpdatedCount",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.UpdatedCount",
         "x-validate": null
       },
       "MessageError": {
@@ -1501,6 +1577,14 @@
             "x-struct": null,
             "x-validate": null
           },
+          "ctime": {
+            "description": "Client file creation time (epoch seconds). Optional; omitted by older plugins.",
+            "format": "float",
+            "nullable": true,
+            "type": "number",
+            "x-struct": null,
+            "x-validate": null
+          },
           "folder": {
             "nullable": true,
             "type": "string",
@@ -1602,6 +1686,14 @@
           "content_hash": {
             "nullable": true,
             "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "ctime": {
+            "description": "Client file creation time (epoch seconds)",
+            "format": "float",
+            "nullable": true,
+            "type": "number",
             "x-struct": null,
             "x-validate": null
           },
@@ -2550,6 +2642,13 @@
             "x-struct": null,
             "x-validate": null
           },
+          "context": {
+            "description": "Structured fields beside the message (the web app's network_error context: browser, went_offline, attempt, elapsed_ms, error_name, error_message, visibility, effective_type). Only allowlisted keys holding their declared shape are kept; the rest are dropped.",
+            "nullable": true,
+            "type": "object",
+            "x-struct": null,
+            "x-validate": null
+          },
           "device_id": {
             "description": "Per-install Obsidian instance id, for per-device attribution.",
             "nullable": true,
@@ -2714,6 +2813,13 @@
           "content_hash": {
             "nullable": true,
             "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "ctime": {
+            "format": "float",
+            "nullable": true,
+            "type": "number",
             "x-struct": null,
             "x-validate": null
           },
@@ -5021,7 +5127,7 @@
     "/api/sync/quiescence": {
       "get": {
         "callbacks": {},
-        "description": "The vault's `change_seq` plus how many CRDT updates still await their checkpoint. A client whose catch-up cursor has reached `change_seq` while both counts are 0 has seen every change the server will make on its own.",
+        "description": "The vault's `change_seq` plus how many CRDT updates still await their checkpoint. A client whose catch-up cursor has reached `change_seq` while both counts are 0 has seen every change the server will make on its own. `deferred_checkpoints` (held by a live room) is reported but is not owed work.",
         "operationId": "sync-quiescence",
         "parameters": [],
         "responses": {
@@ -5555,6 +5661,51 @@
         ]
       }
     },
+    "/api/notes/ctime": {
+      "post": {
+        "callbacks": {},
+        "description": "Sets `ctime` on existing notes that have none, matched by path. Never touches content, version or sync state, and never overwrites an existing ctime, so it is idempotent. At most 500 entries per call; unknown paths are skipped.",
+        "operationId": "notes-set-ctimes",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetCtimesRequest"
+              }
+            }
+          },
+          "description": "Path + ctime pairs",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatedCount"
+                }
+              }
+            },
+            "description": "Updated count"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid entries"
+          }
+        },
+        "summary": "Fill client file creation times (bulk, metadata-only)",
+        "tags": [
+          "Notes"
+        ]
+      }
+    },
     "/api/folders/*path": {
       "delete": {
         "callbacks": {},
@@ -5699,7 +5850,7 @@
     "/api/vaults/{id}/restore": {
       "post": {
         "callbacks": {},
-        "description": "Restores a soft-deleted vault back to active within its 30-day window. Returns 402 when restoring would exceed the plan's vault cap and 404 when no such vault exists.",
+        "description": "Restores a soft-deleted vault back to active within its 30-day window. Returns 402 when restoring would exceed the plan's vault cap, 409 once its permanent deletion has started, and 404 when no such vault exists.",
         "operationId": "vaults-restore",
         "parameters": [
           {
@@ -5754,6 +5905,16 @@
               }
             },
             "description": "No such vault, or one the credential cannot reach (the two look the same)"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Permanent deletion of this vault has started"
           }
         },
         "summary": "Restore a soft-deleted vault",

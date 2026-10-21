@@ -75,13 +75,22 @@ defmodule Engram.Indexing do
     * `:reserve_tokens` — `fn tokens -> boolean end`, called with the tokens
       this pass would actually send to the embedder, AFTER chunk reuse is
       planned (so a one-section edit asks for one section, not the note).
-      `false` downgrades the pass to sparse-only, so the note stays
-      keyword-searchable. `EmbedNote` passes the lifetime embed budget here.
+      `false` does NOT drop the note's dense vectors: reused dense chunks
+      stay dense, the new chunks that fit `:budget_available` are embedded,
+      and only the rest are indexed keyword-only (`deferred_tokens` names
+      what they still need). `EmbedNote` passes the Free embed bucket here.
+    * `:budget_available`: `fn -> non_neg_integer end`, the tokens the caller
+      can still spend; asked only after `:reserve_tokens` refuses the whole
+      pass. Default 0.
     * `:release_tokens` — `fn tokens -> any end`, called when the embed call
       fails after a reservation, so a failed attempt is not charged.
-    * `:in_commit` — `fn chunk_count, dense?, index_tier -> any end`, run on
-      success INSIDE the tenant transaction that writes the chunk rows (or, on
-      the no-chunks path, in one opened after the purge). `EmbedNote` stamps its
+    * `:in_commit`: `fn chunk_count, dense?, pass -> any end`, run on success
+      INSIDE the tenant transaction that writes the chunk rows (or, on the
+      no-chunks path, in one opened after the purge). `pass` is a map of what
+      the pass did that both budgets' stamps need: `index_tier`, `held_model`
+      (`held_model/2`), `deferred_tokens` (what a partial pass still needs)
+      and `next_deferred_tokens` (the first deferred chunk's tokens, nil when
+      none). `EmbedNote` stamps its
       hashes here, so the stamp shares the index write's transaction instead
       of opening its own. `index_tier` is the tier this pass used: `floor_tier/2`,
       or a floor tier when a full pass would overrun `points_budget_ok?/3`.
@@ -195,7 +204,7 @@ defmodule Engram.Indexing do
                     set: [index_tier: nil, chunk_count: nil]
                   )
 
-                run_in_commit(note, opts, 0, true, nil)
+                run_in_commit(note, opts, 0, true, pass_info(%{}))
               end)
 
               {:ok, 0, 0, true}
@@ -214,17 +223,9 @@ defmodule Engram.Indexing do
         # each attempt re-embedded the whole note (3-4 full paid passes).
         retain(prepared.retain)
 
-        case commit_index(
-               prepared,
-               &run_in_commit(
-                 note,
-                 opts,
-                 &1,
-                 prepared.dense?,
-                 prepared.index_tier,
-                 prepared.held_model
-               )
-             ) do
+        commit = &run_in_commit(note, opts, &1, prepared.dense?, pass_info(prepared))
+
+        case commit_index(prepared, commit) do
           {:ok, count} ->
             forget_retained(prepared.retain)
             {:ok, count, prepared.embedded_bytes, prepared.dense?}
@@ -326,11 +327,15 @@ defmodule Engram.Indexing do
       {:ok,
        Map.merge(prepared, %{
          embedded_bytes: embedded_bytes,
-         dense?: dense?,
+         # Complete only when nothing was deferred: a partial pass leaves the
+         # note dense-missing, so it is parked and finished as tokens refill.
+         dense?: dense? and not Map.get(plan, :partial?, false),
+         deferred_tokens: Map.get(plan, :deferred_tokens, 0),
+         next_deferred_tokens: Map.get(plan, :next_deferred_tokens),
          index_tier: tier,
          okf_healed?: okf_healed?,
          write_first: regroup?(note, plan),
-         retain: if(dense? and texts != [], do: {retained_key(note, texts), vectors}),
+         retain: if(dense?, do: retention(note, plan, texts, vectors)),
          chunk_count: chunk_count,
          held_model: held_model(plan.entries, dense?)
        })}
@@ -998,20 +1003,24 @@ defmodule Engram.Indexing do
 
   # Re-entrant inside commit_index/2's chunk transaction; on the purge path it
   # opens one of its own.
-  # A 4-arity `in_commit` also gets the pass's `held_model/2`.
-  defp run_in_commit(note, opts, chunk_count, dense?, index_tier, held_model \\ nil) do
+  # `pass` (`pass_info/1`): what the pass did, for the caller's stamp.
+  defp run_in_commit(note, opts, chunk_count, dense?, pass) do
     case Keyword.get(opts, :in_commit) do
       nil ->
         :ok
 
-      fun when is_function(fun, 4) ->
-        Repo.with_tenant!(note.user_id, fn ->
-          fun.(chunk_count, dense?, index_tier, held_model)
-        end)
-
       fun ->
-        Repo.with_tenant!(note.user_id, fn -> fun.(chunk_count, dense?, index_tier) end)
+        Repo.with_tenant!(note.user_id, fn -> fun.(chunk_count, dense?, pass) end)
     end
+  end
+
+  defp pass_info(prepared) do
+    %{
+      index_tier: Map.get(prepared, :index_tier),
+      held_model: Map.get(prepared, :held_model),
+      deferred_tokens: Map.get(prepared, :deferred_tokens, 0),
+      next_deferred_tokens: Map.get(prepared, :next_deferred_tokens)
+    }
   end
 
   # Guarded on chunk rows existing so the overwhelmingly common case (a note
@@ -1548,9 +1557,11 @@ defmodule Engram.Indexing do
       reuse branch of `build_entry/3` does no embed, no tokenizer pass and no
       encryption, and discards the `avgdl` it is handed, so a stale BM25 weight
       and `token_count` would survive verbatim (#1477).
-    * `notes.embed_hash` / `dense_indexed_hash` — `EmbedNote` skips a note whose
-      `embed_hash` still equals its `content_hash`, which is every
-      already-indexed note (#1607).
+    * `notes.embed_hash`: `EmbedNote` skips a note whose `embed_hash` still
+      equals its `content_hash`, which is every already-indexed note (#1607).
+      `dense_indexed_hash` is KEPT: it is how `EmbedNote` tells this rebuild
+      (our maintenance, unmetered) from new content (charged to a Free
+      user's embed bucket).
 
   Clearing only one of the two is a silent no-op, which is why this is one
   function rather than a step each caller remembers.
@@ -1613,7 +1624,7 @@ defmodule Engram.Indexing do
         {n, _} =
           Note
           |> where([n], n.id in ^batch)
-          |> repo.update_all(set: [embed_hash: nil, dense_indexed_hash: nil])
+          |> repo.update_all(set: [embed_hash: nil])
 
         acc + n
       end)
@@ -1848,7 +1859,9 @@ defmodule Engram.Indexing do
   # Third element: dense vectors an earlier attempt already paid for but did
   # not commit (`retain/1`, held across the commit). A hit skips the
   # reservation AND the embed, so a retry after any post-embed failure is
-  # charged once.
+  # charged once. A partial pass is retained under the FULL plan's key, with
+  # `<<>>` for each chunk it deferred, so its retry finds it and rebuilds the
+  # same partial plan (`partial_from_retained/5`).
   #
   # A v5 rebuild (`rebuild: true`, chunker v5 Task 16.3) only plans here:
   # its vectors are sourced after the planning transaction
@@ -1879,41 +1892,175 @@ defmodule Engram.Indexing do
 
     case retained(note, texts) do
       {:ok, vectors} ->
-        {true, plan, vectors}
+        if <<>> in vectors,
+          do: partial_from_retained(rows, chunks, content_key, plan, vectors),
+          else: {true, plan, vectors}
 
       :miss ->
-        # Cache hits are free: only what Voyage will be sent is reserved. With
-        # the cache, the user's share is summed over exactly the texts this
-        # pass sends (`:charge_bytes`): a hit or a miss deferred past the pass
-        # budget costs nothing until it is actually sent.
-        cache = Keyword.get(opts, :vector_cache)
-        user_bytes = if cache && budget_enabled?(), do: changed_bytes_per_text(plan, rows)
-        plan = with_cache_lookup(plan, texts, cache, user_bytes)
-        sent = Map.get_lazy(plan, :embed_bytes, fn -> text_bytes(texts) end)
-        total = UsageMeters.estimate_tokens(sent)
+        {plan, charged, total} = with_charge(plan, rows, opts)
 
-        charged =
-          cond do
-            Map.has_key?(plan, :charge_bytes) ->
-              min(UsageMeters.estimate_tokens(plan.charge_bytes), total)
+        cond do
+          charged == 0 or reserve.(charged) ->
+            maintenance_tokens(total - charged)
+            {true, plan, nil}
 
-            budget_enabled?() ->
-              min(changed_tokens(plan, rows), total)
+          # ponytail: a refused rebuild re-plans sparse whole, since its
+          # vectors are sourced after planning (`priced_rebuild/6`). Make it
+          # partial too if Free rebuilds are ever refused in practice.
+          Keyword.get(opts, :rebuild, false) ->
+            {false, plan_chunks(chunks, rows, content_key, false), nil}
 
-            true ->
-              total
-          end
-
-        plan = Map.put(plan, :charge, {charged, total - charged})
-
-        if charged > 0 and not reserve.(charged) do
-          {false, plan_chunks(chunks, rows, content_key, false), nil}
-        else
-          maintenance_tokens(total - charged)
-          {true, plan, nil}
+          true ->
+            partial_plan(rows, chunks, content_key, plan, opts)
         end
     end
   end
+
+  # Cache hits are free: only what Voyage will be sent is reserved. With the
+  # cache, the user's share is summed over exactly the texts this pass sends
+  # (`:charge_bytes`): a hit or a miss deferred past the pass budget costs
+  # nothing until it is actually sent. Returns the plan (cache lookup and
+  # `:charge` on it), the tokens to reserve, and the tokens sent.
+  defp with_charge(plan, rows, opts) do
+    texts = embed_texts(plan)
+    cache = Keyword.get(opts, :vector_cache)
+    user_bytes = if cache && budget_enabled?(), do: changed_bytes_per_text(plan, rows)
+    plan = with_cache_lookup(plan, texts, cache, user_bytes)
+    sent = Map.get_lazy(plan, :embed_bytes, fn -> text_bytes(texts) end)
+    total = UsageMeters.estimate_tokens(sent)
+
+    charged =
+      cond do
+        Map.has_key?(plan, :charge_bytes) ->
+          min(UsageMeters.estimate_tokens(plan.charge_bytes), total)
+
+        budget_enabled?() ->
+          min(changed_tokens(plan, rows), total)
+
+        true ->
+          total
+      end
+
+    {Map.put(plan, :charge, {charged, total - charged}), charged, total}
+  end
+
+  # The whole pass did not fit. Never drop a dense vector the note already has
+  # for that: reused dense chunks keep their points, the new texts that fit
+  # `:budget_available` are embedded (in note order; the first that does not
+  # fit leaves only uncharged ones to follow), and only the rest are planned
+  # sparse-only. Their fingerprints differ (sparse), so the next pass re-plans
+  # them dense. `deferred_tokens` is what they still need, for the park. A
+  # refused reservation for what fits (a race for the bucket) defers every
+  # sent text.
+  defp partial_plan(rows, chunks, content_key, plan, opts) do
+    available = Keyword.get(opts, :budget_available, fn -> 0 end).()
+    reserve = Keyword.get(opts, :reserve_tokens, fn _tokens -> true end)
+    costs = text_charges(plan, rows)
+
+    {fit, _left} =
+      plan
+      |> sent_entry_indexes()
+      |> Enum.zip(costs)
+      |> Enum.reduce({MapSet.new(), available}, fn {i, need}, {fit, left} ->
+        if need <= left, do: {MapSet.put(fit, i), left - need}, else: {fit, 0}
+      end)
+
+    {partial, charged, total} =
+      with_charge(flag_partial(rows, chunks, content_key, plan, fit, costs), rows, opts)
+
+    if charged == 0 or reserve.(charged) do
+      maintenance_tokens(total - charged)
+      {true, partial, nil}
+    else
+      none = flag_partial(rows, chunks, content_key, plan, MapSet.new(), costs)
+      {true, none, nil}
+    end
+  end
+
+  # A retry of a partial pass: the retained vectors (full plan order, `<<>>`
+  # for a deferred chunk) say which chunks it embedded. Already paid for, so
+  # no reservation and no embed.
+  defp partial_from_retained(rows, chunks, content_key, plan, retained) do
+    fit =
+      plan
+      |> sent_entry_indexes()
+      |> Enum.zip(retained)
+      |> Enum.reject(fn {_i, vector} -> vector == <<>> end)
+      |> MapSet.new(&elem(&1, 0))
+
+    {true, flag_partial(rows, chunks, content_key, plan, fit, text_charges(plan, rows)),
+     Enum.reject(retained, &(&1 == <<>>))}
+  end
+
+  # `plan`'s sent texts outside `fit` are re-planned sparse-only (`chunks` and
+  # `plan.entries` are 1:1, in order).
+  defp flag_partial(rows, chunks, content_key, plan, fit, costs) do
+    sent = sent_entry_indexes(plan)
+    deferred = for {i, cost} <- Enum.zip(sent, costs), not MapSet.member?(fit, i), do: {i, cost}
+    skip = MapSet.new(deferred, &elem(&1, 0))
+
+    chunks
+    |> Enum.with_index()
+    |> Enum.map(fn {chunk, i} ->
+      if MapSet.member?(skip, i), do: Map.put(chunk, :sparse_only, true), else: chunk
+    end)
+    |> plan_chunks(rows, content_key, true)
+    |> Map.merge(%{
+      partial?: deferred != [],
+      deferred_tokens: deferred |> Enum.map(&elem(&1, 1)) |> Enum.sum(),
+      next_deferred_tokens:
+        case deferred do
+          [{_i, cost} | _] -> cost
+          [] -> nil
+        end,
+      retain_texts: embed_texts(plan),
+      retain_mask: Enum.map(sent, &MapSet.member?(fit, &1))
+    })
+  end
+
+  # Indexes into `plan.entries` of the chunks `embed_texts/1` sends, in order.
+  defp sent_entry_indexes(plan) do
+    for {{:embed, chunk}, i} <- Enum.with_index(plan.entries),
+        sent?(chunk, plan.dense?),
+        do: i
+  end
+
+  # The tokens each sent text charges the user, in `embed_texts/1` order: its
+  # changed bytes with the index budget on, else all of it; a vector cache
+  # hit charges nothing.
+  defp text_charges(plan, rows) do
+    bytes =
+      if budget_enabled?(),
+        do: changed_bytes_per_text(plan, rows),
+        else: Enum.map(embed_texts(plan), &IO.iodata_length/1)
+
+    hit? =
+      case plan do
+        %{cache: %{keys: keys, hits: hits}} -> Enum.map(keys, &Map.has_key?(hits, &1))
+        _ -> Enum.map(bytes, fn _ -> false end)
+      end
+
+    Enum.zip_with(bytes, hit?, fn b, hit ->
+      if hit, do: 0, else: UsageMeters.estimate_tokens(b)
+    end)
+  end
+
+  # What `retain/1` holds for a pass: the vectors under the key its retry will
+  # look up. A partial pass is keyed by the full plan, `<<>>` marking each
+  # deferred chunk.
+  defp retention(_note, _plan, [], _vectors), do: nil
+
+  defp retention(note, %{retain_mask: mask, retain_texts: full}, _texts, vectors) do
+    {spread, []} =
+      Enum.map_reduce(mask, vectors, fn
+        true, [v | rest] -> {v, rest}
+        false, rest -> {<<>>, rest}
+      end)
+
+    {retained_key(note, full), spread}
+  end
+
+  defp retention(note, _plan, texts, vectors), do: {retained_key(note, texts), vectors}
 
   defp retained_or_embed(nil, dense?, plan, texts, opts),
     do: embed_or_release(dense?, plan, texts, opts)
@@ -3578,6 +3725,49 @@ defmodule Engram.Indexing do
       member_hmacs: Map.get(chunk, :member_hmacs),
       created_at: now
     }
+  end
+
+  @doc """
+  The note-level Qdrant payload `note`'s points must carry (`note_payload/1`:
+  filter HMACs and dates, no ciphertext). For `ReconcileNotePayloads`.
+
+  Invariant behind `notes.payload_hash`: every writer of a note's points
+  either stamps the hash of this payload or leaves it NULL. A writer that
+  changes points without doing either hides drift from the heal forever.
+  """
+  @spec expected_note_payload(Note.t()) :: map()
+  def expected_note_payload(note), do: note_payload(note)
+
+  @doc "The `notes.payload_hash` value for `payload` (see `stamp_payload_hash/2`)."
+  @spec note_payload_hash(map()) :: binary()
+  def note_payload_hash(payload), do: payload_hash(payload)
+
+  @doc """
+  Maps every chunk fingerprint `note`'s current text produces under
+  `old_key` to its twin under `new_key` (dense and sparse-only alike, as
+  `plan_fingerprints/3` writes them). DEK rotation rekeys `chunks.context_hmac`
+  with it: the content-hash key derives from the DEK, so without this every
+  fingerprint goes stale and the next index re-embeds the whole note. `note`
+  is decrypted.
+  """
+  @spec rekey_fingerprints(Note.t(), binary(), binary()) :: %{String.t() => String.t()}
+  def rekey_fingerprints(note, old_key, new_key) do
+    case Markdown.parse(note.content || "", note.path) do
+      [] ->
+        %{}
+
+      chunks ->
+        # Per plan, a note may hold any plan model's vectors (`reuse_models/0`).
+        models = if EmbedModels.per_plan?(), do: EmbedModels.acceptable(:free), else: [nil]
+
+        for model <- models, dense? <- [true, false], reduce: %{} do
+          acc ->
+            fingerprints(old_key, chunks, dense?, model)
+            |> Enum.zip(fingerprints(new_key, chunks, dense?, model))
+            |> Map.new()
+            |> Map.merge(acc)
+        end
+    end
   end
 
   # The slice of a Qdrant payload that is a property of the NOTE rather than of

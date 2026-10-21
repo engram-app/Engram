@@ -8,7 +8,7 @@ defmodule EngramWeb.Plugs.HostRewrite do
     * `api.engram.page` — prefix `/api` if the path doesn't already start
       with `/api`, `/socket`, `/webhooks`, or `/.well-known`, and is not one
       of the advertised OAuth endpoints (`/oauth/authorize|token|register|revoke`,
-      passed through). After rewrite, reject anything that would have resolved
+      passed through). `/robots.txt` passes through on both dedicated hosts. After rewrite, reject anything that would have resolved
       outside those scopes.
     * `mcp.engram.page` — pass `/.well-known/oauth-*`, the MCP server card and
       the AI catalog through unmodified; map `/server-card` to
@@ -43,6 +43,7 @@ defmodule EngramWeb.Plugs.HostRewrite do
     notes folders search vaults vault attachments oauth mcp auth admin billing
     tasks health user me onboarding bootstrap api-keys connections tags sync
     logs telemetry embed-status index-status openapi types fields feedback
+    analytics operator
   )
 
   # Test-only accessor exposing the @api_top_segments allowlist so the
@@ -77,11 +78,17 @@ defmodule EngramWeb.Plugs.HostRewrite do
     end
   end
 
+  # Served by Plug.Static, which sits after this plug. Rejecting it left
+  # crawlers on api/mcp with only Cloudflare's managed file and none of our
+  # rules, so a bot loading /oauth/authorize paged on-call (2026-10-20).
+  @robots_path "/robots.txt"
+
   def call(conn, opts) when is_list(opts) do
     api_host = opts[:api_host]
     mcp_host = opts[:mcp_host]
 
     cond do
+      conn.request_path == @robots_path and conn.host in [api_host, mcp_host] -> conn
       api_host && conn.host == api_host -> handle_api_host(conn)
       mcp_host && conn.host == mcp_host -> handle_mcp_host(conn)
       true -> handle_unknown_host(conn, opts)

@@ -12,6 +12,9 @@ defmodule Engram.Billing.Subscription do
     field :status, :string, default: "trialing"
     field :current_period_end, :utc_datetime
     field :custom_data, :map, default: %{}
+    # `%{tier:, status:}` before a webhook update, set by `Billing` so the
+    # analytics forwarder can name the change. Never persisted.
+    field :previous, :map, virtual: true
 
     belongs_to :user, Engram.Accounts.User
 

@@ -915,7 +915,10 @@ if config_env() == :prod do
            # T3.0.2 — defense-in-depth. Prevents Ecto SQL params (path, folder,
            # tags, wrapped DEK on UPDATE) from hitting :debug logs if anyone
            # bumps prod log level. Audit-only; prod log level today is :info.
-           log: false
+           log: false,
+           # Idle-in-transaction and lock timeouts; see the function's doc.
+           # Release.migrate strips them for the migrator.
+           parameters: Engram.RuntimeConfig.repo_parameters(:app)
          ] ++ database_ssl_opts
 
   # Second pool, for work that legitimately spans tenants (orphan reaping,
@@ -958,7 +961,8 @@ if config_env() == :prod do
                socket_options: maybe_ipv6,
                # Same reasoning as Engram.Repo above (T3.0.2): keep Ecto params
                # out of :debug logs if anyone raises the log level.
-               log: false
+               log: false,
+               parameters: Engram.RuntimeConfig.repo_parameters(:maintenance)
              ] ++
                Engram.RuntimeConfig.database_ssl(
                  &System.get_env/1,
@@ -1002,6 +1006,24 @@ if config_env() == :prod do
     config :engram, EngramWeb.RateLimiter, backend: :distributed_ets
   end
 
+  # Oban notifier: PG over distributed Erlang when clustered, saving the
+  # Postgres notifier's dedicated LISTEN connection on every node. Unclustered
+  # nodes (self-host, single node) keep the Postgres default, the only path
+  # between them. PG sends at once rather than on commit; Engram.Oban.SafeEngine
+  # re-announces a job inserted inside a transaction after it commits.
+  #
+  # Failure modes, none of which lose a job (jobs are rows): a node cut off
+  # from the cluster hears no inserts, and its stager falls back to waking its
+  # own producers every stage_interval (Notifier.status :solitary/:isolated ->
+  # local mode). During the rolling deploy that switches notifiers, old and new
+  # nodes cannot hear each other's notifications; a new worker that is not
+  # yet leader hears inserts only from new web nodes, and picks up the rest
+  # once the old worker exits and it takes leadership (Peers.Database, 30s
+  # election) and stages. ObanPgNotifierTest pins this branch.
+  if System.get_env("DNS_CLUSTER_QUERY") do
+    config :engram, Oban, notifier: Oban.Notifiers.PG
+  end
+
   # Node role. `queues: false` supervises no producers while leaving
   # `Oban.insert/1` fully working, so a node that holds user sockets still
   # ENQUEUES embed/index/checkpoint work but never EXECUTES it. That is the
@@ -1016,10 +1038,15 @@ if config_env() == :prod do
   # unset variable on the worker service and NOTHING in the cluster drains the
   # queues — silently, since enqueues keep succeeding.
   #
-  # Plugins stay on EVERY node on purpose. Cron/Pruner/Lifeline are
-  # leader-elected through Oban's Postgres peer table, and Cron only INSERTS
-  # jobs — the worker is what runs them. Disabling plugins here would mean a
-  # web node winning leadership silently stops all cron work.
+  # Web also runs no plugins, and that is what keeps it out of the leader
+  # election. Cron/Pruner/Lifeline and the Stager's DB transaction run only on
+  # the Oban leader, and before this a web task held leadership about 49% of
+  # the time (2026-10-20 audit): leadership moved to web whenever the single
+  # worker restarted and stayed there until web redeployed. In Oban 2.24,
+  # `plugins: false` maps the peer to `Oban.Peers.Isolated, leader?: false`, so
+  # the worker (or an unset/self-host node) is the only possible leader.
+  # `Oban.insert/1` and its pg_notify are unaffected. ObanWebRolePluginsTest
+  # pins both halves.
   #
   # The worker MUST share DNS_CLUSTER_QUERY with the web nodes:
   # `Workers.CheckpointNote` guards on `CrdtRegistry.lookup/1`, which is
@@ -1046,7 +1073,7 @@ if config_env() == :prod do
       case role |> String.trim() |> String.downcase() do
         "web" ->
           config :engram, :node_role, :web
-          config :engram, Oban, queues: false
+          config :engram, Oban, queues: false, plugins: false
 
           # `queues: false` leaves this node unable to observe queue depth, and
           # PromEx's `:oban_queue_poll_metrics` are `last_value` gauges that
@@ -1061,7 +1088,11 @@ if config_env() == :prod do
           # application starts; calling into app code there is a boot-crash risk
           # for no gain. PromExObanPollGroupTest asserts this literal and that
           # function stay in agreement.
-          config :engram, Engram.PromEx, drop_metrics_groups: [:oban_queue_poll_metrics]
+          #
+          # The Installs poller is dropped too: every node reads the same
+          # install_pings count from the DB, so the worker's copy is enough.
+          config :engram, Engram.PromEx,
+            drop_metrics_groups: [:oban_queue_poll_metrics, :engram_installs_polling_metrics]
 
         "worker" ->
           # Recorded because DECLARING a role is what tells the boot check this

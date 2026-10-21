@@ -265,7 +265,7 @@ defmodule Engram.Workers.EmbedNoteBackpressureTest do
         note,
         vault,
         user,
-        opts.(fn _count, _dense?, _tier -> raise "chunk insert blew up" end)
+        opts.(fn _count, _dense?, _pass -> raise "chunk insert blew up" end)
       )
     end
 
@@ -276,11 +276,72 @@ defmodule Engram.Workers.EmbedNoteBackpressureTest do
                note,
                vault,
                user,
-               opts.(fn _count, _dense?, _tier -> :ok end)
+               opts.(fn _count, _dense?, _pass -> :ok end)
              )
 
     refute_received {:reserved, _}
     refute_received {:released, _}
+  end
+
+  test "a partial pass that fails after the embed: the retry neither re-embeds nor re-reserves",
+       %{bypass: bypass, note: note} do
+    fake_qdrant(bypass, [])
+    embeds_ok(1)
+
+    user = Engram.Accounts.get_user_with_subscription!(note.user_id)
+    vault = Repo.get!(Engram.Vaults.Vault, note.vault_id, skip_tenant_check: true)
+    {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
+
+    section = fn i, word -> "## Part #{i}\n\n" <> String.duplicate("#{word} ", 120) end
+
+    note = %{
+      note
+      | content: Enum.map_join(1..3, "\n\n", &section.(&1, Enum.at(~w(ash elm oak), &1 - 1)))
+    }
+
+    one_chunk = UsageMeters.estimate_tokens(section.(1, "ash"))
+    test_pid = self()
+
+    # Room for one of the three new chunks: the whole pass is refused, one fits.
+    opts = fn in_commit ->
+      [
+        reserve_tokens: fn tokens ->
+          send(test_pid, {:reserved, tokens})
+          tokens <= one_chunk + div(one_chunk, 2)
+        end,
+        budget_available: fn -> one_chunk + div(one_chunk, 2) end,
+        release_tokens: fn tokens -> send(test_pid, {:released, tokens}) end,
+        in_commit: in_commit
+      ]
+    end
+
+    assert_raise RuntimeError, "chunk insert blew up", fn ->
+      Engram.Indexing.index_note_with_usage(
+        note,
+        vault,
+        user,
+        opts.(fn _count, _dense?, _pass -> raise "chunk insert blew up" end)
+      )
+    end
+
+    assert_received {:reserved, _whole}
+    assert_received {:reserved, _partial}
+
+    assert {:ok, _count, 0, false} =
+             Engram.Indexing.index_note_with_usage(
+               note,
+               vault,
+               user,
+               opts.(fn _count, _dense?, %{deferred_tokens: deferred} ->
+                 send(test_pid, {:deferred, deferred})
+                 :ok
+               end)
+             )
+
+    refute_received {:reserved, _}
+    refute_received {:released, _}
+    assert_received {:deferred, deferred}
+    assert deferred > one_chunk
   end
 
   # 2026-10-19 prod: a ~3 min Qdrant restart poisoned 11 notes. Oban's default

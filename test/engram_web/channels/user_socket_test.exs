@@ -99,6 +99,19 @@ defmodule EngramWeb.UserSocketTest do
     assert socket.assigns.plugin_version == "1.29.0"
   end
 
+  test "a known platform param lands in assigns; anything else is nil", %{user: user} do
+    for {sent, want} <- [
+          {"mobile", "mobile"},
+          {"desktop", "desktop"},
+          {"toaster", nil},
+          {nil, nil}
+        ] do
+      params = %{"token" => version_token(user), "platform" => sent}
+      assert {:ok, socket} = connect(EngramWeb.UserSocket, params)
+      assert socket.assigns.platform == want
+    end
+  end
+
   test "a socket that sends no plugin_version assigns nil, not a crash", %{user: user} do
     assert {:ok, socket} = connect(EngramWeb.UserSocket, %{"token" => version_token(user)})
 

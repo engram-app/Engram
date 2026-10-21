@@ -27,8 +27,6 @@ defmodule Engram.Notes.CrdtBridge do
   @raw_frontmatter_name "frontmatter_raw"
   @order_name "frontmatter_order"
   @doc_schema_version 2
-  @flatten_bytes 500_000
-  @flatten_clients 1_000
 
   @doc "The shared Y.Text key holding note body content."
   @spec text_name() :: String.t()
@@ -81,7 +79,7 @@ defmodule Engram.Notes.CrdtBridge do
       offset_kind: :utf16,
       # The Rust NIF success typing infers collection_id: binary() (not nil).
       # Pass "" so the struct literal matches the NIF's inferred argument type
-      # and dialyzer doesn't cascade no_return through doc_from_state/flatten.
+      # and dialyzer doesn't cascade no_return through doc_from_state.
       collection_id: ""
     })
   end
@@ -403,36 +401,9 @@ defmodule Engram.Notes.CrdtBridge do
     case CrdtTransport.read_leb128_varuint(Yex.encode_state_vector!(doc)) do
       {:ok, count, _rest} -> count
       # Unreachable in practice (input is our own encode_state_vector!
-      # round-trip, always a well-formed varint); 0 just means "don't
-      # flatten yet", so silent degradation is the safe direction here.
+      # round-trip, always a well-formed varint); it only feeds telemetry, so
+      # silent degradation is the safe direction here.
       :error -> 0
-    end
-  end
-
-  @doc """
-  True only when BOTH the encoded-state byte ceiling AND the client-ID
-  ceiling are crossed. A large note with few authors must NOT flatten;
-  a small note with many stale client-IDs must NOT flatten. AND is required.
-  """
-  @spec should_flatten?(binary(), Yex.Doc.t()) :: boolean()
-  def should_flatten?(state, %Yex.Doc{} = doc) when is_binary(state) do
-    byte_size(state) >= @flatten_bytes and client_count(doc) >= @flatten_clients
-  end
-
-  @doc """
-  Text-preserving CRDT reset. Extracts the current content, seeds a fresh
-  single-client doc, and re-encodes — collapsing all accumulated client-ID
-  entries in the state vector to one. Lineage is intentionally broken; this
-  is a deliberate reset, not a merge.
-  """
-  @spec flatten(Yex.Doc.t()) :: {:ok, %{doc: Yex.Doc.t(), state: binary()}} | {:error, term()}
-  def flatten(%Yex.Doc{} = doc) do
-    fresh = new_doc()
-    :ok = ingest_plaintext(fresh, project_doc(doc))
-
-    case Yex.encode_state_as_update(fresh) do
-      {:ok, state} -> {:ok, %{doc: fresh, state: state}}
-      {:error, reason} -> {:error, reason}
     end
   end
 end

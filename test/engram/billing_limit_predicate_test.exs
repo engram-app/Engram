@@ -38,29 +38,29 @@ defmodule Engram.BillingLimitPredicateTest do
     Application.put_env(:engram, :limits_enforced, false)
     user = insert(:user)
 
-    refute Billing.limit_enforced?(user, :lifetime_embed_token_cap)
+    refute Billing.limit_enforced?(user, :embed_token_bucket)
 
-    assert Billing.check_limit(user, :lifetime_embed_token_cap, 0) == :ok
-    assert Billing.check_limit(user, :lifetime_embed_token_cap, @huge) == :ok
+    assert Billing.check_limit(user, :embed_token_bucket, 0) == :ok
+    assert Billing.check_limit(user, :embed_token_bucket, @huge) == :ok
   end
 
   test "with enforcement ON the predicate matches whether the count is consulted" do
     Application.put_env(:engram, :limits_enforced, true)
     user = insert(:user)
 
-    if Billing.limit_enforced?(user, :lifetime_embed_token_cap) do
+    if Billing.limit_enforced?(user, :embed_token_bucket) do
       # A real ceiling: an absurd count MUST be rejected. If this passes, the
       # predicate claimed a cap that check_limit does not actually apply.
-      assert Billing.check_limit(user, :lifetime_embed_token_cap, @huge) ==
+      assert Billing.check_limit(user, :embed_token_bucket, @huge) ==
                {:error, :limit_reached},
              "limit_enforced? said this plan has a ceiling, but check_limit accepted a\n" <>
                "count of #{@huge}. The two disagree about what a cap is."
     else
       # No ceiling: EVERY count must pass. This is the property that makes
       # skipping the measurement safe.
-      assert Billing.check_limit(user, :lifetime_embed_token_cap, 0) == :ok
+      assert Billing.check_limit(user, :embed_token_bucket, 0) == :ok
 
-      assert Billing.check_limit(user, :lifetime_embed_token_cap, @huge) == :ok,
+      assert Billing.check_limit(user, :embed_token_bucket, @huge) == :ok,
              "limit_enforced? said there is no cap, so the caller will not measure usage —\n" <>
                "but check_limit rejected a large count. Skipping would bypass a real limit."
     end
@@ -92,7 +92,7 @@ defmodule Engram.BillingLimitPredicateTest do
       %Engram.Billing.UserLimitOverride{
         id: Ecto.UUID.generate(),
         user_id: overridden.id,
-        key: "lifetime_embed_token_cap",
+        key: "embed_token_bucket",
         value: %{"v" => -1},
         reason: "test",
         set_by: "test"
@@ -100,14 +100,14 @@ defmodule Engram.BillingLimitPredicateTest do
       skip_tenant_check: true
     )
 
-    assert Billing.cap(overridden, :lifetime_embed_token_cap) == nil
-    refute Billing.limit_enforced?(overridden, :lifetime_embed_token_cap)
-    assert Billing.check_limit(overridden, :lifetime_embed_token_cap, @huge) == :ok
+    assert Billing.cap(overridden, :embed_token_bucket) == nil
+    refute Billing.limit_enforced?(overridden, :embed_token_bucket)
+    assert Billing.check_limit(overridden, :embed_token_bucket, @huge) == :ok
 
     # `nil` — the catalog's unmetered default. Not reachable as an override
     # value (`effective_limit/2` treats a nil override as a miss and falls
     # through), so use a key that is nil on this user's own tier:
-    # `lifetime_embed_token_cap` is unmetered on paid tiers; use an override of
+    # `embed_token_bucket` is unmetered on paid tiers; use an override of
     # nil-equivalent instead. `account_export_rate_per_24h` is nil on Free.
     unmetered = insert(:user)
 
@@ -120,7 +120,7 @@ defmodule Engram.BillingLimitPredicateTest do
     Application.put_env(:engram, :limits_enforced, false)
     user = insert(:user)
 
-    assert Billing.cap(user, :lifetime_embed_token_cap) == nil
+    assert Billing.cap(user, :embed_token_bucket) == nil
     assert Billing.granted?(user, :reranker_enabled), "enforcement off grants every boolean"
   end
 end

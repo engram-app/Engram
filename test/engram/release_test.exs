@@ -60,6 +60,122 @@ defmodule Engram.ReleaseTest do
     end
   end
 
+  # Both run in their own `eval` while a sibling task may be migrating. With
+  # the app Repo's 10s lock_timeout a boot behind that migration fails instead
+  # of waiting, so they open the migrator's session like migrate/0.
+  describe "migrator session" do
+    setup do
+      original = Application.get_env(:engram, Repo)
+      on_exit(fn -> Application.put_env(:engram, Repo, original) end)
+
+      Application.put_env(
+        :engram,
+        Repo,
+        Keyword.put(original, :parameters, Engram.RuntimeConfig.repo_parameters(:app))
+      )
+    end
+
+    test "verify_schema_baseline/0 drops the app Repo's session parameters" do
+      assert :ok == Release.verify_schema_baseline()
+      refute Keyword.has_key?(Application.get_env(:engram, Repo), :parameters)
+    end
+
+    test "prepare_database/0 drops the app Repo's session parameters" do
+      assert :ok == Release.prepare_database()
+      refute Keyword.has_key?(Application.get_env(:engram, Repo), :parameters)
+    end
+  end
+
+  # #2128: web and worker boot migrators ran one CONCURRENTLY migration at
+  # the same time and deadlocked. The lock must make a second migrator wait.
+  describe "with_migration_lock/3" do
+    test "a second caller waits until the first one finishes" do
+      parent = self()
+
+      first =
+        Task.async(fn ->
+          Release.with_migration_lock(Repo.config(), fn ->
+            send(parent, :first_in)
+            receive do: (:release -> :first_done)
+          end)
+        end)
+
+      assert_receive :first_in, 5_000
+
+      second =
+        Task.async(fn ->
+          Release.with_migration_lock(Repo.config(), fn -> send(parent, :second_in) end, 50)
+        end)
+
+      refute_receive :second_in, 300
+      send(first.pid, :release)
+      assert Task.await(first) == :first_done
+      assert_receive :second_in, 5_000
+      Task.await(second)
+    end
+
+    test "releases the lock when the function raises" do
+      assert_raise RuntimeError, fn ->
+        Release.with_migration_lock(Repo.config(), fn -> raise "boom" end)
+      end
+
+      assert Release.with_migration_lock(Repo.config(), fn -> :ok end, 50) == :ok
+    end
+
+    # prepare_database runs on every task too: two concurrent GRANT ON ALL
+    # TABLES rewrite the same pg_class rows and one fails with "tuple
+    # concurrently updated". reset_baseline drops the schema and replays
+    # migrations, so a second one must re-check under the lock.
+    for eval <- [:prepare_database, :reset_baseline] do
+      test "#{eval}/0 waits for the migration lock" do
+        eval = unquote(eval)
+        original = Application.get_env(:engram, Repo)
+        on_exit(fn -> Application.put_env(:engram, Repo, original) end)
+        parent = self()
+
+        holder =
+          Task.async(fn ->
+            Release.with_migration_lock(Repo.config(), fn ->
+              send(parent, :held)
+              receive do: (:release -> :ok)
+            end)
+          end)
+
+        assert_receive :held, 5_000
+
+        waiter =
+          Task.async(fn -> send(parent, {:done, Function.capture(Release, eval, 0).()}) end)
+
+        refute_receive {:done, _}, 500
+        send(holder.pid, :release)
+        Task.await(holder)
+        assert_receive {:done, :ok}, 5_000
+        Task.await(waiter)
+      end
+    end
+  end
+
+  describe "reset_baseline/0" do
+    # It replays every migration when it fires, so it must open the migrator's
+    # session like migrate/0 does: the app Repo's lock_timeout would fail a
+    # CREATE INDEX CONCURRENTLY and leave an INVALID index behind.
+    test "drops the app Repo's session parameters before it runs, like migrate/0" do
+      original = Application.get_env(:engram, Repo)
+      on_exit(fn -> Application.put_env(:engram, Repo, original) end)
+
+      Application.put_env(
+        :engram,
+        Repo,
+        Keyword.put(original, :parameters, Engram.RuntimeConfig.repo_parameters(:app))
+      )
+
+      # A healthy uuid schema: the reset itself is a no-op.
+      assert :ok == Release.reset_baseline()
+
+      refute Keyword.has_key?(Application.get_env(:engram, Repo), :parameters)
+    end
+  end
+
   describe "set_engram_app_password/1" do
     # Reaches Postgres directly rather than through prepare_database/0, which
     # opens its own connection via Ecto.Migrator.with_repo and escapes the

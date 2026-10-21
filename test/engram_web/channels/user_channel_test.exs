@@ -45,7 +45,23 @@ defmodule EngramWeb.UserChannelTest do
 
       {:ok, reply, _socket} = subscribe_and_join(socket, "user:#{user.id}", %{})
 
-      assert reply.features == %{raw_attachment_upload: true, raw_attachment_download: true}
+      assert reply.features == %{
+               raw_attachment_upload: true,
+               raw_attachment_download: true,
+               crdt_diff_refusal: true
+             }
+    end
+
+    # The plugin reads the room-free missing-deps refusal here, not from
+    # /health: during a deploy /health can answer from a different task than
+    # the one holding the socket.
+    test "advertises the room-free missing-deps refusal in the join reply" do
+      user = insert(:user)
+      {:ok, socket} = connect_as(user)
+
+      {:ok, reply, _socket} = subscribe_and_join(socket, "user:#{user.id}", %{})
+
+      assert reply.features.crdt_diff_refusal == true
     end
 
     test "rejects joining another user's topic", %{other_user: other_user} do

@@ -1,5 +1,7 @@
+import { whenLoaded } from "@/lib/when-loaded";
+
 // Lazy: each historical policy is its own chunk, fetched only when shown.
-const mds = import.meta.glob<string>("./versions/*.md", { query: "?raw", import: "default" });
+const mds = import.meta.glob<{ default: string }>("./versions/*.md", { query: "?raw" });
 
 export type LegalDocKind = "terms" | "privacy";
 
@@ -27,5 +29,6 @@ export function loadVersion(doc: LegalDocKind, version: string): Promise<string>
 			new Error(`legal: missing bundled ${doc}-${version}.md — run "bun run sync-theme"`),
 		);
 	}
-	return load();
+	// Not `import: "default"`: Vite would read `.default` of an undefined module; see whenLoaded.
+	return whenLoaded(load()).then((m) => m.default);
 }

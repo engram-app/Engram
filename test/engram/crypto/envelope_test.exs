@@ -104,4 +104,34 @@ defmodule Engram.Crypto.EnvelopeTest do
       assert byte_size(nonce) == 13
     end
   end
+
+  describe "merged layout (nonce || ciphertext)" do
+    test "decrypts from one column, both formats" do
+      dek = :crypto.strong_rand_bytes(32)
+
+      for mode <- [:none, :zstd] do
+        {ct, nonce} = Engram.Native.envelope_seal("body body body", dek, "aad", mode)
+        merged = Envelope.merge(nonce, ct)
+
+        assert {:ok, ^ct, ^nonce} = Envelope.split_merged(merged)
+        assert {:ok, "body body body"} = Envelope.decrypt(merged, nil, dek, "aad")
+      end
+    end
+
+    test "a format 0 nonce is stored behind a leading 0" do
+      nonce = :crypto.strong_rand_bytes(12)
+      ct = :crypto.strong_rand_bytes(20)
+      merged = Envelope.merge(nonce, ct)
+
+      assert <<0, ^nonce::binary-12, ^ct::binary>> = merged
+      assert {:ok, ^ct, ^nonce} = Envelope.split_merged(merged)
+    end
+
+    test "garbage is :error, never a raise" do
+      for bad <- [<<>>, <<2, 0>>, <<1>> <> :binary.copy(<<0>>, 20), <<0, 1, 2>>] do
+        assert Envelope.split_merged(bad) == :error
+        assert Envelope.decrypt(bad, nil, :crypto.strong_rand_bytes(32), "aad") == :error
+      end
+    end
+  end
 end

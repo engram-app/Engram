@@ -55,6 +55,39 @@ defmodule Engram.MCP.HandlersLinksTest do
     refute text =~ "more"
   end
 
+  # One links read and one backlinks read for the whole call, not two per
+  # note: an over-budget note or a miss gets no links, but the found notes
+  # still see each other (and the over-budget note as a backlink source).
+  test "links for several notes come from one batched read each", %{user: u, a: a} do
+    big = "[[A]] " <> String.duplicate("x", Handlers.get_notes_budget())
+
+    seed(u, a, [
+      {"A.md", "see [[B]]"},
+      {"B.md", "see [[A]] and [[Ghost]]"},
+      {"Big.md", big}
+    ])
+
+    link_reads = fn fun ->
+      Engram.TenantQueryCounter.count_matching_queries(fun, &(&1 =~ ~s("note_links")))
+    end
+
+    paths = ["A.md", "B.md", "Big.md", "Nope.md"]
+    queries = link_reads.(fn -> send(self(), {:got, get(u, a, %{"paths" => paths})}) end)
+    assert_received {:got, {:ok, _text, %{"notes" => [na, nb, nbig, missing]}}}
+
+    assert length(queries) == 2, "expected 2 link reads, got:\n#{Enum.join(queries, "\n")}"
+
+    assert Enum.sort(na["backlinks"]) == ["B.md", "Big.md"]
+    assert na["outgoing"] == ["B.md"]
+    assert na["unresolved"] == []
+    assert nb["backlinks"] == ["A.md"]
+    assert nb["outgoing"] == ["A.md"]
+    assert nb["unresolved"] == ["Ghost"]
+    assert nbig["error"] =~ "own call"
+    refute Map.has_key?(nbig, "backlinks")
+    assert missing == %{"path" => "Nope.md", "found" => false}
+  end
+
   # Review Focus 4
   test "links never cross vaults", %{user: u, a: a, b: b} do
     seed(u, a, [{"Target.md", "# T"}])

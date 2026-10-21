@@ -24,6 +24,36 @@ defmodule EngramWeb.NotesControllerTest do
       assert note["version"] == 1
     end
 
+    test "accepts ctime and returns it", %{conn: conn} do
+      conn =
+        post(conn, "/api/notes", %{path: "Test/C.md", content: "# c", mtime: 2.0, ctime: 1.5})
+
+      assert %{"note" => note} = json_response(conn, 200)
+      assert note["ctime"] == 1.5
+    end
+
+    test "POST /notes/ctime fills ctime in bulk without bumping version", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "Test/B.md", content: "# b", mtime: 2.0})
+
+      conn2 =
+        post(conn, "/api/notes/ctime", %{
+          entries: [%{path: "Test/B.md", ctime: 3.5}, %{path: "Nope.md", ctime: 1.0}]
+        })
+
+      assert %{"updated" => 1} = json_response(conn2, 200)
+
+      conn3 = post(conn, "/api/notes", %{path: "Test/B.md", content: "# b2", mtime: 4.0})
+      assert %{"note" => %{"ctime" => 3.5, "version" => 2}} = json_response(conn3, 200)
+    end
+
+    test "POST /notes/ctime rejects bad entries and oversize batches", %{conn: conn} do
+      bad = post(conn, "/api/notes/ctime", %{entries: [%{path: "a.md", ctime: 0}]})
+      assert json_response(bad, 400)
+
+      big = for i <- 1..501, do: %{path: "n#{i}.md", ctime: 1.0}
+      assert conn |> post("/api/notes/ctime", %{entries: big}) |> json_response(400)
+    end
+
     test "upserts an existing note and increments version", %{conn: conn} do
       post(conn, "/api/notes", %{path: "Test/File.md", content: "# v1", mtime: 1_000.0})
 

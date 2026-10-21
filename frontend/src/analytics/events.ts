@@ -19,7 +19,10 @@ export type EngramEvent =
 	| "upgrade_link_clicked"
 	| "checklist_action"
 	| "vault_source_picked"
-	| "plugin_listing_opened";
+	| "plugin_listing_opened"
+	| "browser_languages_unsupported"
+	| "browser_translation_detected"
+	| "paywall_shown";
 
 /** Mirrors Engram.Onboarding.gate/2's next_step. One state machine, not two. */
 export type OnboardingStep = "agreement" | "billing" | "heard" | "vault" | "done";
@@ -40,9 +43,31 @@ export type CheckoutMethod = (typeof CHECKOUT_METHODS)[number];
 // be the only cross-domain edge in this file.
 export const CHECKOUT_TIERS = ["starter", "pro"] as const;
 
-// Where an "Upgrade" link was clicked. The post-wizard checklist sends Free
-// users to Settings > Billing.
-export const UPGRADE_SOURCES = ["checklist"] as const;
+// Mirrors api/queries.ts's BillingCadence.
+export const CHECKOUT_CADENCES = ["monthly", "annual"] as const;
+
+// Where an "Upgrade" link was clicked: the post-wizard checklist, the 402
+// paywall dialog, or nowhere ("direct": billing opened unprompted).
+export const UPGRADE_SOURCES = ["checklist", "paywall", "direct"] as const;
+export type UpgradeSource = (typeof UPGRADE_SOURCES)[number];
+
+// The 402 `reason`s the paywall dialog has copy for (billing/limit-copy.ts),
+// plus "other" for one this build does not know.
+export const LIMIT_REASONS = [
+	"notes_cap_exceeded",
+	"vaults_cap_exceeded",
+	"attachments_disabled",
+	"attachments_quota_exceeded",
+	"file_too_large",
+	"concurrent_devices_exceeded",
+	"device_swap_cooldown",
+	"ai_searches_per_day_exceeded",
+	"attachment_must_be_text",
+	"obsidian_connections_exceeded",
+	"account_suspended",
+	"no_tier",
+	"other",
+] as const;
 
 // Every row the checklist can render: vault, discord, the Obsidian plugin and
 // one per selectable tool slug (onboarding-tools.ts). Enumerated because a
@@ -116,11 +141,16 @@ export type PropKind =
 	| "tier"
 	| "mcp_client"
 	| "upgrade_source"
+	| "cadence"
+	| "limit_reason"
 	| "checklist_item"
 	| "checklist_action"
 	| "vault_source"
 	| "error_code"
 	| "gate_reasons"
+	| "language_tag"
+	| "language_tags"
+	| "locale"
 	| "boolean"
 	| "number";
 
@@ -140,7 +170,12 @@ export const EVENT_SCHEMAS: Record<EngramEvent, Record<string, PropKind>> = {
 	plugin_connect_succeeded: { vault_id: "uuid", duration_ms: "number" },
 	plugin_connect_failed: { vault_id: "uuid", reason: "error_code" },
 	vault_first_sync_completed: { vault_id: "uuid", note_count: "number", duration_ms: "number" },
-	checkout_opened: { method: "checkout_method", tier: "tier" },
+	checkout_opened: {
+		method: "checkout_method",
+		tier: "tier",
+		cadence: "cadence",
+		source: "upgrade_source",
+	},
 	checkout_stalled: { method: "checkout_method", reason: "error_code" },
 	checkout_completed: { method: "checkout_method" },
 	checkout_abandoned: { method: "checkout_method", reason: "error_code" },
@@ -153,4 +188,9 @@ export const EVENT_SCHEMAS: Record<EngramEvent, Record<string, PropKind>> = {
 	vault_source_picked: { source: "vault_source" },
 	// No properties: the click itself is the signal.
 	plugin_listing_opened: {},
+	// navigator.languages entries no app locale serves: which languages to add.
+	browser_languages_unsupported: { languages: "language_tags" },
+	// The browser translated the page: into which language, from which locale.
+	browser_translation_detected: { to: "language_tag", app_locale: "locale" },
+	paywall_shown: { limit_key: "limit_reason" },
 };

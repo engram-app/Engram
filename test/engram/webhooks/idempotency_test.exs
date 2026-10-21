@@ -27,4 +27,35 @@ defmodule Engram.Webhooks.IdempotencyTest do
     assert Idempotency.mark_processed(:paddle, nil) == :ok
     assert Idempotency.mark_processed(:paddle, "") == :ok
   end
+
+  describe "claim/2" do
+    test "true once per id, then false" do
+      id = "adj_#{System.unique_integer([:positive])}"
+      assert Idempotency.claim(:paddle_adjustment, id)
+      refute Idempotency.claim(:paddle_adjustment, id)
+      assert Idempotency.claim(:paddle_adjustment, id <> "_other")
+    end
+
+    test "a missing id is always true" do
+      assert Idempotency.claim(:paddle_adjustment, nil)
+      assert Idempotency.claim(:paddle_adjustment, nil)
+    end
+
+    # An adjustment can be updated weeks later (a chargeback's evidence), so
+    # its claim outlives the 7-day replay window.
+    test "the 7-day prune keeps adjustment claims" do
+      id = "adj_#{System.unique_integer([:positive])}"
+      assert Idempotency.claim(:paddle_adjustment, id)
+      Idempotency.mark_processed(:paddle, id)
+      old = DateTime.add(DateTime.utc_now(), -30, :day)
+
+      Repo.update_all(from(e in "processed_webhook_events", where: e.event_id == ^id),
+        set: [inserted_at: old]
+      )
+
+      {:ok, _} = Idempotency.prune()
+      refute Idempotency.claim(:paddle_adjustment, id)
+      assert Idempotency.check(:paddle, id) == :proceed
+    end
+  end
 end

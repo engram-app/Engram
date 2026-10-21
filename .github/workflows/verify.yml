@@ -7,6 +7,7 @@ on:
     # ever fetches one and pushes it to the base repo to test.
     branches:
       - main
+      - "bot/**"
       - "bump/**"
       - "chore/**"
       - "dependabot/**"
@@ -1185,6 +1186,7 @@ jobs:
           clean: false  # Preserve _build/ and deps/ for incremental compilation
 
       - name: Checkout plugin
+        timeout-minutes: 5
         env:
           EXPLICIT_BRANCH: ${{ inputs.plugin_branch || github.event.client_payload.plugin_branch || '' }}
           CURRENT_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -1223,11 +1225,25 @@ jobs:
             git init -q plugin-src
             cd plugin-src
           fi
-          # Re-point origin every run: the embedded app token is single-run.
+          # The plain public URL matches the runners' git-cache insteadOf
+          # (git_cdn on FastRaid :8095, homelab runner_vm role), as
+          # actions/checkout does. Direct GitHub is bandwidth-shaped per shared
+          # NAT IP: a token URL skipped the cache and took up to 885 s (p50 3 s),
+          # twice hanging until cancelled (run 39375387565, PR #2072). The last
+          # try goes direct with the token, in case the cache cannot serve the
+          # SHA. Shallow: nothing reads plugin history. Under 10 KB/s for 20 s
+          # aborts a try.
           git remote remove origin 2>/dev/null || true
-          git remote add origin \
-            "https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git"
-          git fetch origin "$PLUGIN_SHA"
+          git remote add origin https://github.com/engram-app/Engram-obsidian.git
+          for attempt in 1 2 3; do
+            url=origin
+            [ "$attempt" = 3 ] && url="https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git"
+            GIT_HTTP_LOW_SPEED_LIMIT=10000 GIT_HTTP_LOW_SPEED_TIME=20 \
+              git fetch --depth=1 "$url" "$PLUGIN_SHA" && break
+            [ "$attempt" = 3 ] && { echo "::error::plugin fetch failed 3 times"; exit 1; }
+            echo "::warning::plugin fetch attempt $attempt stalled or failed; retrying"
+            sleep 5
+          done
           git checkout -B "$BRANCH" "$PLUGIN_SHA"
 
       # ------------------------------------------------------------------
@@ -1245,24 +1261,15 @@ jobs:
           alloc_ports() {
             python3 -c "import socket,sys; ss=[socket.socket() for _ in range(int(sys.argv[1]))]; [s.bind(('',0)) for s in ss]; print(' '.join(str(s.getsockname()[1]) for s in ss))" "$1"
           }
-          # CDP ports: 3 Obsidian instances × 2 xdist workers = 6 ports, plus
-          # the resumed pair (test_82) × 2 workers = 4. Per-worker env vars
-          # (E2E_CDP_PORT_A_W{0,1}, E2E_CDP_PORT_RESUMED_A_W{0,1}, ...) are
-          # consumed by e2e/conftest.py so dynamic allocation is safe.
-          read -r ENGRAM_PORT PG_PORT \
-            CDP_PORT_A_W0 CDP_PORT_B_W0 CDP_PORT_C_W0 \
-            CDP_PORT_A_W1 CDP_PORT_B_W1 CDP_PORT_C_W1 \
-            CDP_PORT_RESUMED_A_W0 CDP_PORT_RESUMED_B_W0 \
-            CDP_PORT_RESUMED_A_W1 CDP_PORT_RESUMED_B_W1 <<< "$(alloc_ports 12)"
+          # No CDP ports here: Obsidian binds its own (--remote-debugging-port=0)
+          # and the harness reads it back. Pre-picked ports raced other
+          # processes on the runner (run 39520960336).
+          read -r ENGRAM_PORT PG_PORT <<< "$(alloc_ports 2)"
           # DISPLAY_BASE comes from the earlier "Compute display range" step so
           # pre-cleanup and tear-down can scope Xvfb kills consistently.
 
           # Validate all ports are non-empty (alloc_ports can fail silently)
-          for var in ENGRAM_PORT PG_PORT \
-                     CDP_PORT_A_W0 CDP_PORT_B_W0 CDP_PORT_C_W0 \
-                     CDP_PORT_A_W1 CDP_PORT_B_W1 CDP_PORT_C_W1 \
-                     CDP_PORT_RESUMED_A_W0 CDP_PORT_RESUMED_B_W0 \
-                     CDP_PORT_RESUMED_A_W1 CDP_PORT_RESUMED_B_W1; do
+          for var in ENGRAM_PORT PG_PORT; do
             if [ -z "${!var}" ]; then
               echo "::error::Port allocation failed for $var"
               exit 1
@@ -1272,21 +1279,9 @@ jobs:
           {
             echo "engram_port=$ENGRAM_PORT"
             echo "pg_port=$PG_PORT"
-            echo "cdp_port_a_w0=$CDP_PORT_A_W0"
-            echo "cdp_port_b_w0=$CDP_PORT_B_W0"
-            echo "cdp_port_c_w0=$CDP_PORT_C_W0"
-            echo "cdp_port_a_w1=$CDP_PORT_A_W1"
-            echo "cdp_port_b_w1=$CDP_PORT_B_W1"
-            echo "cdp_port_c_w1=$CDP_PORT_C_W1"
-            echo "cdp_port_resumed_a_w0=$CDP_PORT_RESUMED_A_W0"
-            echo "cdp_port_resumed_b_w0=$CDP_PORT_RESUMED_B_W0"
-            echo "cdp_port_resumed_a_w1=$CDP_PORT_RESUMED_A_W1"
-            echo "cdp_port_resumed_b_w1=$CDP_PORT_RESUMED_B_W1"
             echo "display_base=$DISPLAY_BASE"
           } >> "$GITHUB_OUTPUT"
           echo "Ports: engram=$ENGRAM_PORT pg=$PG_PORT"
-          echo "  w0 cdp: $CDP_PORT_A_W0 $CDP_PORT_B_W0 $CDP_PORT_C_W0"
-          echo "  w1 cdp: $CDP_PORT_A_W1 $CDP_PORT_B_W1 $CDP_PORT_C_W1"
           echo "  display base :$DISPLAY_BASE (uses :$DISPLAY_BASE..:$((DISPLAY_BASE-5)))"
 
       - name: "Background: CI stack + plugin build + Playwright + Ollama + Qdrant"
@@ -1345,6 +1340,7 @@ jobs:
               touch "${MARKER_PREFIX}-stack-failed.marker"
             fi
           ) > "${MARKER_PREFIX}-stack.log" 2>&1 &
+          echo $! > "${MARKER_PREFIX}-stack.pid"
           echo "CI stack build started (PID $!)"
 
           # --- Plugin build (background) ---
@@ -1506,10 +1502,15 @@ jobs:
           QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
           OLLAMA_URL: http://10.0.20.214:11434
 
-      # always(): an api_only failure above must not mask the Obsidian suite's
+      # !cancelled(): an api_only failure above must not mask the Obsidian suite's
       # signal (the job still fails on the failed step).
+      # Test steps use !cancelled(), not always(): always() also runs them after
+      # a cancel (a superseded push), the suite outlives the runner's cancel
+      # grace, the job is force-killed, and Tear down / the Clerk reaper never
+      # run. That leaked 15 e2e stacks on SlowRaid for up to 3 days (2026-10-20).
+      # !cancelled() still runs them after an earlier step FAILS.
       - name: Wait for plugin + Playwright
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           echo "Waiting for plugin build..."
           for i in $(seq 1 300); do
@@ -1538,9 +1539,9 @@ jobs:
       # Harness unit tests (stack-free): e2e/unit has its own pytest rootdir
       # so e2e/conftest.py (Obsidian/auth session fixtures) never loads.
       # Guards helper logic like the Clerk session-create retry budget (#869).
-      # always(): keep this guard's signal even if the api step failed.
+      # !cancelled(): keep this guard's signal even if the api step failed.
       - name: "Harness unit tests"
-        if: always()
+        if: ${{ !cancelled() }}
         working-directory: e2e/unit
         run: python3 -m pytest . -v --no-header -p no:cacheprovider
 
@@ -1551,7 +1552,7 @@ jobs:
         # Not plain always(): with no backend every test errors and the suite
         # blames the first one ("INFRA DEAD ... first seen in test_51"). The
         # failed stack step is the real signal (9 such jobs in 14 days).
-        if: always() && steps.stack.outcome == 'success'
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
         working-directory: e2e
         # -n 1 --dist=loadfile: SINGLE worker (default). Under -n 2, two workers
         # each drive their own Obsidian instance doing live Clerk auth + CRDT
@@ -1589,18 +1590,8 @@ jobs:
           AUTH_PROVIDER: clerk
           E2E_VAULT_PREFIX: ${{ env.E2E_VAULT_PREFIX }}
           E2E_CONFIG_PREFIX: ${{ env.E2E_CONFIG_PREFIX }}
-          E2E_CDP_PORT_A_W0: ${{ steps.ports.outputs.cdp_port_a_w0 }}
-          E2E_CDP_PORT_B_W0: ${{ steps.ports.outputs.cdp_port_b_w0 }}
-          E2E_CDP_PORT_C_W0: ${{ steps.ports.outputs.cdp_port_c_w0 }}
-          E2E_CDP_PORT_A_W1: ${{ steps.ports.outputs.cdp_port_a_w1 }}
-          E2E_CDP_PORT_B_W1: ${{ steps.ports.outputs.cdp_port_b_w1 }}
-          E2E_CDP_PORT_C_W1: ${{ steps.ports.outputs.cdp_port_c_w1 }}
           E2E_DISPLAY_BASE: ${{ steps.ports.outputs.display_base }}
           E2E_DISPLAY_BASE_RESUMED: ${{ steps.display.outputs.resumed_base }}
-          E2E_CDP_PORT_RESUMED_A_W0: ${{ steps.ports.outputs.cdp_port_resumed_a_w0 }}
-          E2E_CDP_PORT_RESUMED_B_W0: ${{ steps.ports.outputs.cdp_port_resumed_b_w0 }}
-          E2E_CDP_PORT_RESUMED_A_W1: ${{ steps.ports.outputs.cdp_port_resumed_a_w1 }}
-          E2E_CDP_PORT_RESUMED_B_W1: ${{ steps.ports.outputs.cdp_port_resumed_b_w1 }}
 
       # Note: the backend/e2e commit status for plugin PRs is posted by the
       # dedicated `report-e2e-to-plugin` job (needs all e2e suites, always runs
@@ -1622,6 +1613,9 @@ jobs:
       # immediately; this step + cron mop up crashed-run orphans frequently.
       - name: Reap stale Clerk orphans (>1h)
         if: always()
+        # Deletes users one at a time. A slow Clerk must not eat the cancel
+        # grace before Tear down below runs.
+        timeout-minutes: 2
         env:
           E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
         run: |
@@ -1704,6 +1698,16 @@ jobs:
           DISPLAY_MIN: ${{ steps.display.outputs.min }}
           DISPLAY_MAX: ${{ steps.display.outputs.max }}
         run: |
+          # Stop the background stack bring-up first. A cancel during "Wait for
+          # CI stack" otherwise races it: its `up --wait` (or the retry's second
+          # attempt) recreates containers after the `down` below. Freeze it so
+          # it spawns nothing new, then KILL the whole tree.
+          tree() { echo "$1"; for c in $(pgrep -P "$1"); do tree "$c"; done; }
+          # Skipped once a marker exists: the subshell has exited, the pid may be reused.
+          if [ -f "${MARKER_PREFIX}-stack.pid" ] && [ ! -f "${MARKER_PREFIX}-stack.marker" ] && [ ! -f "${MARKER_PREFIX}-stack-failed.marker" ]; then
+            pid="$(cat "${MARKER_PREFIX}-stack.pid")"
+            kill -STOP "$pid" 2>/dev/null && kill -KILL $(tree "$pid") 2>/dev/null || true
+          fi
           # Delete this run's Qdrant collection on SlowRaid
           curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
           # Kill only this run's Obsidian/Xvfb processes (scoped by config dir)
@@ -1855,6 +1859,7 @@ jobs:
           clean: false  # Preserve _build/ and deps/ for incremental compilation
 
       - name: Checkout plugin
+        timeout-minutes: 5
         env:
           EXPLICIT_BRANCH: ${{ inputs.plugin_branch || github.event.client_payload.plugin_branch || '' }}
           CURRENT_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -1893,11 +1898,25 @@ jobs:
             git init -q plugin-src
             cd plugin-src
           fi
-          # Re-point origin every run: the embedded app token is single-run.
+          # The plain public URL matches the runners' git-cache insteadOf
+          # (git_cdn on FastRaid :8095, homelab runner_vm role), as
+          # actions/checkout does. Direct GitHub is bandwidth-shaped per shared
+          # NAT IP: a token URL skipped the cache and took up to 885 s (p50 3 s),
+          # twice hanging until cancelled (run 39375387565, PR #2072). The last
+          # try goes direct with the token, in case the cache cannot serve the
+          # SHA. Shallow: nothing reads plugin history. Under 10 KB/s for 20 s
+          # aborts a try.
           git remote remove origin 2>/dev/null || true
-          git remote add origin \
-            "https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git"
-          git fetch origin "$PLUGIN_SHA"
+          git remote add origin https://github.com/engram-app/Engram-obsidian.git
+          for attempt in 1 2 3; do
+            url=origin
+            [ "$attempt" = 3 ] && url="https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git"
+            GIT_HTTP_LOW_SPEED_LIMIT=10000 GIT_HTTP_LOW_SPEED_TIME=20 \
+              git fetch --depth=1 "$url" "$PLUGIN_SHA" && break
+            [ "$attempt" = 3 ] && { echo "::error::plugin fetch failed 3 times"; exit 1; }
+            echo "::warning::plugin fetch attempt $attempt stalled or failed; retrying"
+            sleep 5
+          done
           git checkout -B "$BRANCH" "$PLUGIN_SHA"
 
       # ------------------------------------------------------------------
@@ -1915,19 +1934,13 @@ jobs:
           alloc_ports() {
             python3 -c "import socket,sys; ss=[socket.socket() for _ in range(int(sys.argv[1]))]; [s.bind(('',0)) for s in ss]; print(' '.join(str(s.getsockname()[1]) for s in ss))" "$1"
           }
-          # CDP ports: 3 Obsidian instances × 2 xdist workers = 6 ports total.
-          # Per-worker env vars (E2E_CDP_PORT_A_W{0,1} etc) are consumed by
-          # e2e/conftest.py so dynamic (non-contiguous) allocation is safe.
-          read -r ENGRAM_PORT PG_PORT \
-            CDP_PORT_A_W0 CDP_PORT_B_W0 CDP_PORT_C_W0 \
-            CDP_PORT_A_W1 CDP_PORT_B_W1 CDP_PORT_C_W1 <<< "$(alloc_ports 8)"
+          # No CDP ports here: Obsidian binds its own (--remote-debugging-port=0).
+          read -r ENGRAM_PORT PG_PORT <<< "$(alloc_ports 2)"
           # DISPLAY_BASE comes from the earlier "Compute display range" step so
           # pre-cleanup and tear-down can scope Xvfb kills consistently.
 
           # Validate all ports are non-empty (alloc_ports can fail silently)
-          for var in ENGRAM_PORT PG_PORT \
-                     CDP_PORT_A_W0 CDP_PORT_B_W0 CDP_PORT_C_W0 \
-                     CDP_PORT_A_W1 CDP_PORT_B_W1 CDP_PORT_C_W1; do
+          for var in ENGRAM_PORT PG_PORT; do
             if [ -z "${!var}" ]; then
               echo "::error::Port allocation failed for $var"
               exit 1
@@ -1937,17 +1950,9 @@ jobs:
           {
             echo "engram_port=$ENGRAM_PORT"
             echo "pg_port=$PG_PORT"
-            echo "cdp_port_a_w0=$CDP_PORT_A_W0"
-            echo "cdp_port_b_w0=$CDP_PORT_B_W0"
-            echo "cdp_port_c_w0=$CDP_PORT_C_W0"
-            echo "cdp_port_a_w1=$CDP_PORT_A_W1"
-            echo "cdp_port_b_w1=$CDP_PORT_B_W1"
-            echo "cdp_port_c_w1=$CDP_PORT_C_W1"
             echo "display_base=$DISPLAY_BASE"
           } >> "$GITHUB_OUTPUT"
           echo "Ports: engram=$ENGRAM_PORT pg=$PG_PORT"
-          echo "  w0 cdp: $CDP_PORT_A_W0 $CDP_PORT_B_W0 $CDP_PORT_C_W0"
-          echo "  w1 cdp: $CDP_PORT_A_W1 $CDP_PORT_B_W1 $CDP_PORT_C_W1"
           echo "  display base :$DISPLAY_BASE (uses :$DISPLAY_BASE..:$((DISPLAY_BASE-5)))"
 
       - name: "Background: CI stack + plugin build + Playwright + Ollama + Qdrant"
@@ -2005,6 +2010,7 @@ jobs:
               touch "${MARKER_PREFIX}-stack-failed.marker"
             fi
           ) > "${MARKER_PREFIX}-stack.log" 2>&1 &
+          echo $! > "${MARKER_PREFIX}-stack.pid"
           echo "CI stack build started (PID $!)"
 
           # --- Plugin build (background) ---
@@ -2168,10 +2174,10 @@ jobs:
           python3 -m pytest tests/api_only/local/ tests/api_only/test_61_auth_agnostic.py \
             "${K_ARGS[@]}" -v --timeout=600 -p no:cacheprovider --no-header
 
-      # always(): a local-auth API failure above must not mask the CRDT suite's
+      # !cancelled(): a local-auth API failure above must not mask the CRDT suite's
       # signal (the job still fails on the failed step).
       - name: Wait for plugin + Playwright
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           echo "Waiting for plugin build..."
           for i in $(seq 1 300); do
@@ -2202,7 +2208,7 @@ jobs:
       # ------------------------------------------------------------------
       - name: "Run CRDT E2E tests"
         # Requires the stack: see "Run Obsidian E2E tests".
-        if: always() && steps.stack.outcome == 'success' && needs.fingerprint.outputs.e2e-target-suite != 'local'
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' && needs.fingerprint.outputs.e2e-target-suite != 'local' }}
         working-directory: e2e
         # Single-process (no -n): the CRDT suite runs serially. It stays green
         # this way, and is the stability reference the e2e-clerk suite above now
@@ -2225,12 +2231,6 @@ jobs:
           AUTH_PROVIDER: local
           E2E_VAULT_PREFIX: ${{ env.E2E_VAULT_PREFIX }}
           E2E_CONFIG_PREFIX: ${{ env.E2E_CONFIG_PREFIX }}
-          E2E_CDP_PORT_A_W0: ${{ steps.ports.outputs.cdp_port_a_w0 }}
-          E2E_CDP_PORT_B_W0: ${{ steps.ports.outputs.cdp_port_b_w0 }}
-          E2E_CDP_PORT_C_W0: ${{ steps.ports.outputs.cdp_port_c_w0 }}
-          E2E_CDP_PORT_A_W1: ${{ steps.ports.outputs.cdp_port_a_w1 }}
-          E2E_CDP_PORT_B_W1: ${{ steps.ports.outputs.cdp_port_b_w1 }}
-          E2E_CDP_PORT_C_W1: ${{ steps.ports.outputs.cdp_port_c_w1 }}
           E2E_DISPLAY_BASE: ${{ steps.ports.outputs.display_base }}
 
       # ------------------------------------------------------------------
@@ -2290,6 +2290,16 @@ jobs:
           DISPLAY_MIN: ${{ steps.display.outputs.min }}
           DISPLAY_MAX: ${{ steps.display.outputs.max }}
         run: |
+          # Stop the background stack bring-up first. A cancel during "Wait for
+          # CI stack" otherwise races it: its `up --wait` (or the retry's second
+          # attempt) recreates containers after the `down` below. Freeze it so
+          # it spawns nothing new, then KILL the whole tree.
+          tree() { echo "$1"; for c in $(pgrep -P "$1"); do tree "$c"; done; }
+          # Skipped once a marker exists: the subshell has exited, the pid may be reused.
+          if [ -f "${MARKER_PREFIX}-stack.pid" ] && [ ! -f "${MARKER_PREFIX}-stack.marker" ] && [ ! -f "${MARKER_PREFIX}-stack-failed.marker" ]; then
+            pid="$(cat "${MARKER_PREFIX}-stack.pid")"
+            kill -STOP "$pid" 2>/dev/null && kill -KILL $(tree "$pid") 2>/dev/null || true
+          fi
           # Delete this run's Qdrant collection on SlowRaid
           curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
           # Kill only this run's Obsidian/Xvfb processes (scoped by config dir)
@@ -2383,6 +2393,7 @@ jobs:
           clean: false
 
       - name: Checkout plugin
+        timeout-minutes: 5
         env:
           EXPLICIT_BRANCH: ${{ inputs.plugin_branch || github.event.client_payload.plugin_branch || '' }}
           CURRENT_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -2407,10 +2418,25 @@ jobs:
           else
             rm -rf plugin-src; git init -q plugin-src; cd plugin-src
           fi
+          # The plain public URL matches the runners' git-cache insteadOf
+          # (git_cdn on FastRaid :8095, homelab runner_vm role), as
+          # actions/checkout does. Direct GitHub is bandwidth-shaped per shared
+          # NAT IP: a token URL skipped the cache and took up to 885 s (p50 3 s),
+          # twice hanging until cancelled (run 39375387565, PR #2072). The last
+          # try goes direct with the token, in case the cache cannot serve the
+          # SHA. Shallow: nothing reads plugin history. Under 10 KB/s for 20 s
+          # aborts a try.
           git remote remove origin 2>/dev/null || true
-          git remote add origin \
-            "https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git"
-          git fetch origin "$PLUGIN_SHA"
+          git remote add origin https://github.com/engram-app/Engram-obsidian.git
+          for attempt in 1 2 3; do
+            url=origin
+            [ "$attempt" = 3 ] && url="https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git"
+            GIT_HTTP_LOW_SPEED_LIMIT=10000 GIT_HTTP_LOW_SPEED_TIME=20 \
+              git fetch --depth=1 "$url" "$PLUGIN_SHA" && break
+            [ "$attempt" = 3 ] && { echo "::error::plugin fetch failed 3 times"; exit 1; }
+            echo "::warning::plugin fetch attempt $attempt stalled or failed; retrying"
+            sleep 5
+          done
           git checkout -B "$BRANCH" "$PLUGIN_SHA"
 
       - name: Allocate dynamic ports
@@ -4260,18 +4286,21 @@ jobs:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_n1
         working-directory: ${{ env.PREV_DIR }}
         run: |
-          # Copy this branch's NEW migrations into prev's migrations dir.
+          # Copy every migration prev's tree lacks into prev's migrations
+          # dir: this branch's new ones AND main's not yet released. A deploy
+          # of this branch applies all of them on top of prev's schema, and a
+          # new migration may build on an unreleased one (diffing against
+          # main alone made such a PR fail on a table that exists by the time
+          # it deploys).
           cd "${{ github.workspace }}"
-          git fetch -q --depth=1 origin main || true
-          if ! new_files_output=$(bash priv/repo/list_new_migrations.sh); then
-            echo "::error::n1-compat: list_new_migrations.sh failed (BASE_REF may not be fetched)"
-            exit 1
-          fi
+          new_files_output=$(comm -23 \
+            <(ls priv/repo/migrations | grep -E '\.exs$' | sort) \
+            <(ls "$PREV_DIR"/priv/repo/migrations | grep -E '\.exs$' | sort))
           if [ -z "$new_files_output" ]; then
-            echo "::notice::n1-compat: no new migrations on this branch — nothing to apply on top of prev."
+            echo "::notice::n1-compat: no migrations newer than prev — nothing to apply on top of prev."
             exit 0
           fi
-          echo "New migrations on this PR (about to apply on top of prev's schema):"
+          echo "Migrations not in prev (about to apply on top of prev's schema):"
           echo "$new_files_output" | sed 's/^/  /'
           while IFS= read -r f; do
             cp "priv/repo/migrations/$f" "$PREV_DIR"/priv/repo/migrations/

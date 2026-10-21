@@ -230,7 +230,7 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
       assert sweep_job.args["sweep"] == true
 
       # Late indexing arrives: the edge is created now. Old.md is gone
-      # (renamed away), so this resolves dangling on insert.
+      # (renamed away), so this reads dangling.
       :ok = Links.replace_links(user, vault, source.id, Parser.extract("see [[Old]]"))
 
       assert dangling_target(user, source.id) == nil
@@ -244,13 +244,8 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
   end
 
   defp dangling_target(user, source_id) do
-    Repo.one(
-      from(l in Engram.Links.NoteLink,
-        where: l.user_id == ^user.id and l.source_note_id == ^source_id,
-        select: l.target_note_id
-      ),
-      skip_tenant_check: true
-    )
+    [%{target_note_id: id}] = Links.links_for_note(user, source_id)
+    id
   end
 
   # Regression for the no-`unique:` invariant. `Oban.insert/1` called twice

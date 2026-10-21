@@ -29,6 +29,45 @@ DEFAULT_OBSIDIAN_BIN = Path.home() / "Applications" / "Obsidian.AppImage"
 DEFAULT_OBSIDIAN_EXTRACTED = Path.home() / "Applications" / "obsidian-extracted"
 
 
+DEVTOOLS_ACTIVE_PORT = "DevToolsActivePort"
+
+
+class CdpPortHijacked(RuntimeError):
+    """The CDP port answered, but not as Chromium DevTools."""
+
+
+def read_devtools_active_port(user_data_dir: Path) -> int | None:
+    """Port Chromium bound for `--remote-debugging-port=0`, or None if not yet.
+
+    Chromium writes `<port>\n<browser ws path>` to DevToolsActivePort in the
+    profile dir once the DevTools server listens. Electron passes its
+    DIR_SESSION_DATA there, which defaults to DIR_USER_DATA, which
+    `--user-data-dir` overrides; Obsidian never re-points sessionData.
+    """
+    try:
+        first = (user_data_dir / DEVTOOLS_ACTIVE_PORT).read_text().split("\n", 1)[0].strip()
+    except FileNotFoundError:
+        return None
+    # Not atomic on Chromium's side: an empty/partial read just means "poll again".
+    return int(first) if first.isdigit() else None
+
+
+def check_devtools_version(port: int, resp: requests.Response) -> None:
+    """Raise unless `/json/version` came from a Chromium/Electron browser."""
+    body = None
+    if resp.status_code == 200:
+        try:
+            body = resp.json()
+        except ValueError:
+            pass
+    if not isinstance(body, dict) or "Browser" not in body:
+        raise CdpPortHijacked(
+            f"port {port} is held by another process, not Obsidian's DevTools: "
+            f"GET /json/version -> {resp.status_code} ({len(resp.content)} bytes): "
+            f"{resp.text[:200]!r}"
+        )
+
+
 class ObsidianInstance:
     """Manages a single headless Obsidian instance on a virtual display."""
 
@@ -36,7 +75,6 @@ class ObsidianInstance:
         self,
         name: str,
         vault_path: Path,
-        cdp_port: int,
         display: str,
         api_url: str,
         api_key: str,
@@ -47,7 +85,14 @@ class ObsidianInstance:
     ):
         self.name = name
         self.vault_path = vault_path
-        self.cdp_port = cdp_port
+        # Chromium picks the CDP port itself (`--remote-debugging-port=0`);
+        # _wait_for_cdp reads it back. A pre-picked port was a TOCTOU race on
+        # the shared runner: run 39520960336's resumed instance found its port
+        # already taken by a foreign HTTP server minutes after CI allocated it.
+        self.cdp_port: int | None = None
+        # The instance's own CDP client; _wait_for_cdp retargets it whenever a
+        # restart lands on a new port, so fixtures holding it stay valid.
+        self.cdp: CdpClient | None = None
         self.display = display
         self.api_url = api_url
         self.api_key = api_key
@@ -66,10 +111,7 @@ class ObsidianInstance:
 
     def start(self) -> None:
         """Start Xvfb, configure vault, launch Obsidian, enable plugin via CDP."""
-        logger.info(
-            "[%s] Starting on display %s, CDP port %d",
-            self.name, self.display, self.cdp_port,
-        )
+        logger.info("[%s] Starting on display %s", self.name, self.display)
 
         self._prepare_vault()
         self._prepare_config()
@@ -368,7 +410,7 @@ class ObsidianInstance:
             cmd = [
                 str(extracted_bin),
                 "--no-sandbox",
-                f"--remote-debugging-port={self.cdp_port}",
+                "--remote-debugging-port=0",
                 "--remote-allow-origins=http://127.0.0.1",
                 "--disable-gpu",
                 f"--user-data-dir={self.config_dir}",
@@ -379,7 +421,7 @@ class ObsidianInstance:
                 str(self.obsidian_bin),
                 "--appimage-extract-and-run",
                 "--no-sandbox",
-                f"--remote-debugging-port={self.cdp_port}",
+                "--remote-debugging-port=0",
                 "--remote-allow-origins=http://127.0.0.1",
                 "--disable-gpu",
                 f"--user-data-dir={self.config_dir}",
@@ -404,19 +446,31 @@ class ObsidianInstance:
         )
 
     def _wait_for_cdp(self, timeout: float = 60) -> None:
-        """Poll until CDP endpoint responds."""
+        """Poll until Chromium reports its CDP port and that port answers."""
         deadline = time.monotonic() + timeout
-        url = f"http://127.0.0.1:{self.cdp_port}/json/version"
+        port = None
         while time.monotonic() < deadline:
-            try:
-                resp = requests.get(url, timeout=2)
-                if resp.status_code == 200:
-                    logger.info("[%s] CDP ready", self.name)
+            port = read_devtools_active_port(self.config_dir)
+            if port is not None:
+                try:
+                    resp = requests.get(f"http://127.0.0.1:{port}/json/version", timeout=2)
+                except requests.ConnectionError:
+                    pass
+                else:
+                    check_devtools_version(port, resp)  # fail fast, don't poll a foreign server
+                    self.cdp_port = port
+                    if self.cdp is None:
+                        self.cdp = CdpClient(port)
+                    else:
+                        self.cdp.retarget(port)
+                    logger.info("[%s] CDP ready on port %d", self.name, port)
                     return
-            except requests.ConnectionError:
-                pass
-            time.sleep(1)
-        raise TimeoutError(f"CDP not available on port {self.cdp_port} after {timeout}s")
+            time.sleep(0.5)
+        if port is None:
+            raise TimeoutError(
+                f"[{self.name}] no {DEVTOOLS_ACTIVE_PORT} in {self.config_dir} after {timeout}s"
+            )
+        raise TimeoutError(f"[{self.name}] CDP not answering on port {port} after {timeout}s")
 
     async def _enable_plugin_async(self) -> None:
         """Enable community plugins and load engram-vault-sync via CDP.
@@ -494,10 +548,7 @@ class ObsidianInstance:
             restart: If True, skip vault/config prep to preserve existing state
                      (e.g. persisted offline queue in data.json).
         """
-        logger.info(
-            "[%s] Starting (async) on display %s, CDP port %d",
-            self.name, self.display, self.cdp_port,
-        )
+        logger.info("[%s] Starting (async) on display %s", self.name, self.display)
 
         if not restart:
             self._prepare_vault()

@@ -217,6 +217,12 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
         # The phase-2 window opens BEFORE the work that would generate rows and
         # AFTER the toggle, so phase 1's own rows cannot satisfy an assert-zero
         # whose whole job is to prove silence.
+        #
+        # /logs applies `since` at the stored ONE-SECOND resolution (rows in
+        # the same second as `since` are included). Step past the second the
+        # toggle happened in, or a phase-1 row stamped in that same second
+        # would read as a post-disable leak.
+        await asyncio.sleep(1.1)
         after_since = datetime.now(timezone.utc).isoformat()
         await cdp_a.trigger_full_sync()
         # Attempt a flush — should be a no-op because rlog is disabled.

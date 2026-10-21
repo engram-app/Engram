@@ -140,8 +140,9 @@ defmodule Engram.Workers.ExtractNoteLinks do
     # resolve through the authority.
     with {:ok, decrypted} <- Crypto.maybe_decrypt_note_fields(note, user),
          {:ok, content} <- authoritative(user, decrypted, tail) do
-      dangling = Links.replace_links_dangling(user, vault, note.id, Parser.extract(content))
-      :ok = repair_rename_danglers(user, vault, dangling)
+      parsed = Parser.extract(content)
+      basenames = Links.replace_links_basenames(user, vault, note.id, parsed)
+      :ok = repair_rename_danglers(user, vault, parsed, basenames)
       :ok
     else
       {:error, reason} ->
@@ -187,8 +188,8 @@ defmodule Engram.Workers.ExtractNoteLinks do
   # than rename+60s, when its sweep re-walked). The durable evidence for
   # every rewriting rename origin (REST tombstone-backed, CRDT
   # ciphertext-backed, folder cascade, attachment move) is the original
-  # oban_jobs row — retained 7 days by the Pruner, args already in the exact
-  # T3.2 shape (ids + b64 HMACs/ciphertext). Re-enqueue those args verbatim
+  # oban_jobs row, retained 1 day by the Pruner (the window is 10 min),
+  # args already in the exact T3.2 shape (ids + b64 HMACs/ciphertext). Re-enqueue those args verbatim
   # with the cursor reset and "sweep" => true:
   #   * "sweep" => true makes the repair chain terminate WITHOUT enqueueing
   #     another sweep (RewriteNoteLinks.maybe_enqueue_sweep/1) — one walk.
@@ -203,15 +204,26 @@ defmodule Engram.Workers.ExtractNoteLinks do
   # rewrite persists nothing → no re-extraction → no re-trigger.
   # Plugin/Obsidian-origin renames never enqueued a rewrite (one-rewriter
   # invariant) → no evidence row → correctly never repaired here.
-  # `dangling_hmacs` comes from `Links.replace_links_dangling/4`, which knows
-  # which edges it just left dangling, so this no longer reads them back.
-  defp repair_rename_danglers(user, vault, dangling_hmacs) do
-    dangling_hmacs
-    |> Enum.map(&Base.encode64/1)
-    |> recent_rename_job_args(user.id, vault.id)
-    |> Enum.each(&enqueue_repair/1)
+  # The rename evidence is probed first, for every name this note links: a
+  # write with no recent rename on any of them (nearly all writes) resolves
+  # nothing. Only names with evidence are resolved, to keep the danglers.
+  defp repair_rename_danglers(user, vault, parsed, basenames) do
+    case basenames |> Enum.map(&Base.encode64/1) |> recent_rename_job_args(user.id, vault.id) do
+      [] ->
+        :ok
 
-    :ok
+      args ->
+        hmacs = Enum.map(args, &Base.decode64!(&1["old_basename_hmac"]))
+
+        dangling =
+          user
+          |> Links.dangling_basenames(vault, parsed, hmacs)
+          |> MapSet.new(&Base.encode64/1)
+
+        args
+        |> Enum.filter(&MapSet.member?(dangling, &1["old_basename_hmac"]))
+        |> Enum.each(&enqueue_repair/1)
+    end
   end
 
   # Per dangler hmac, the newest rewrite-job row (ANY state, completed

@@ -21,6 +21,10 @@ export default {
 	"Failed to duplicate.": "Не удалось продублировать.",
 	"Batch delete failed.": "Удаление пакетом не удалось.",
 	"Batch move failed.": "Перемещение пакетом не удалось.",
+	"Couldn't load sign-in": "Не удалось загрузить страницу входа",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"Сервис входа не загрузился. Проверьте подключение, затем перезагрузите страницу.",
+	Reload: "Обновить",
 	"This account is suspended. Contact an admin to restore access.":
 		"Эта учетная запись заблокирована. Обратитесь к администратору для восстановления доступа.",
 	"Incorrect email or password.": "Неверный адрес электронной почты или пароль.",
@@ -159,6 +163,23 @@ export default {
 		few: "До конца бесплатного пробного периода осталось {count} дня.",
 		many: "До окончания бесплатного пробного периода осталось {count} дней.",
 		other: "До окончания бесплатного пробного периода осталось {count} дня.",
+	},
+	"Indexing budget": "Лимит индексации",
+	"{available} of {capacity} tokens left": "Осталось {available} из {capacity} токенов",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Пополняет {perDay} токенов в день. Пополнение до {date}.",
+	"All tokens are available.": "Все токены доступны.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count} заметка поддерживает только поиск по ключевым словам, до {date}.",
+		few: "{count} заметки имеют только поиск по ключевым словам, до {date}.",
+		many: "{count} заметок имеют только поиск по ключевым словам, до {date}.",
+		other: "{count} Заметки поддерживают поиск по ключевым словам, но только до {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "{count} заметка поддерживает только поиск по ключевым словам, пока не будет пополнен лимит.",
+		few: "Для {count} заметок доступен только поиск по ключевым словам, пока не будет пополнен лимит.",
+		many: "{count} заметок доступны только для поиска по ключевым словам, пока не будет пополнен лимит.",
+		other: "{count}: Поиск по ключевым словам доступен только до пополнения бюджета.",
 	},
 	"Loading current connection…": "Загрузка текущего подключения…",
 	"Disconnected. Retry the new connection now.": "Отключено. Повторите подключение.",
@@ -575,7 +596,6 @@ export default {
 	"Linux PC": "Компьютер Linux",
 	Oops: "Ой",
 	"Something went wrong": "Произошла ошибка",
-	Reload: "Обновить",
 	"Back to home": "Вернуться на главную",
 	"Error detail (dev only)": "Подробности ошибки (только для разработчиков)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -714,6 +734,9 @@ export default {
 	"Love it": "Мне это нравится",
 	"Tell us more": "Расскажите нам подробнее",
 	Language: "Язык",
+	"Show Engram in {language}?": "Показать Engram в {language}?",
+	"Switch language": "Сменить язык",
+	"Not now": "Не сейчас",
 	"My Vault": "Моё хранилище",
 	"{count} days left in your trial.": {
 		one: "До конца пробного периода остался {count} день.",
@@ -949,6 +972,7 @@ export default {
 	"{client} is connected": "{client} подключено",
 	"Your AI tool is connected": "Ваш AI-инструмент подключен",
 	"What will you use Engram for?": "Для чего вы будете использовать Engram?",
+	"Could not continue. Please try again.": "Не удалось продолжить. Пожалуйста, попробуйте ещё раз.",
 	"Review the Terms": "Ознакомьтесь с условиями",
 	"privacy notice": "Уведомление о конфиденциальности",
 	"What changed": "Что изменилось",
@@ -1010,7 +1034,6 @@ export default {
 		"7-дневный бесплатный пробный период для платных планов. Требуется карта, списание средств не произойдет до окончания пробного периода.",
 	"Continue with Free →": "Продолжить с бесплатным тарифом →",
 	"{summary} · upgrade anytime": "{summary} · можно обновить в любое время",
-	"Could not continue. Please try again.": "Не удалось продолжить. Пожалуйста, попробуйте ещё раз.",
 	"Step {step} of {total}": "Шаг {step} из {total}",
 	Onboarding: "Обучение",
 	"Stop connecting this app": "Прекратить подключение этого приложения",
@@ -1070,6 +1093,10 @@ export default {
 	"Why {tool} can't be connected": "Почему {tool} не может быть подключено",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Это не полный список, выберите {client}, если вашего инструмента здесь нет.",
+	"Customer insights": "Информация о клиентах",
+	"User ID": "Идентификатор пользователя",
+	"Show timeline": "Показать временную шкалу",
+	"Failed to load the report.": "Не удалось загрузить отчёт.",
 	Account: "Учётная запись",
 	"Manage your profile, password, and account.": "Управляйте профилем, паролем и учётной записью.",
 	"Manage your profile, security, and active sessions.":

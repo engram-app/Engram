@@ -1,5 +1,73 @@
 # Changelog
 
+## [0.60.2](https://github.com/engram-app/Engram/compare/0.60.1...0.60.2) (2026-10-21)
+
+
+### Bug Fixes
+
+* **crdt:** remove the checkpoint flatten (rival lineage) ([#2118](https://github.com/engram-app/Engram/issues/2118)) ([4a1197e](https://github.com/engram-app/Engram/commit/4a1197e5b9c053121b9502e699980ea8df7eb257))
+* **notes:** live-first folder marker lookup ([#2122](https://github.com/engram-app/Engram/issues/2122)) ([4ee786b](https://github.com/engram-app/Engram/commit/4ee786ba04afcef462238f95fa313c58ed5131a1))
+
+## [0.60.1](https://github.com/engram-app/Engram/compare/0.60.0...0.60.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* 0.60.1 deploy safety (migration locks, boot session, ctime) ([#2117](https://github.com/engram-app/Engram/issues/2117)) ([f84b879](https://github.com/engram-app/Engram/commit/f84b879fb981ee25818ba12531e2d4aaec11212b))
+
+## [0.60.0](https://github.com/engram-app/Engram/compare/0.59.0...0.60.0) (2026-10-21)
+
+
+### Features
+
+* **notes:** accept and store client file ctime ([#2082](https://github.com/engram-app/Engram/issues/2082)) ([789dd51](https://github.com/engram-app/Engram/commit/789dd51cfdb914107347cdaa385373677af3379a))
+
+
+### Bug Fixes
+
+* **ci:** skip e2e test steps on cancel so teardown runs ([#2099](https://github.com/engram-app/Engram/issues/2099)) ([dcf5a28](https://github.com/engram-app/Engram/commit/dcf5a2887cd25dbcebe35e0f7cc6e944e342b935))
+* **crypto:** single-flight DEK unwraps per node ([#2107](https://github.com/engram-app/Engram/issues/2107)) ([19728b0](https://github.com/engram-app/Engram/commit/19728b0c665b3c2d4a932f086e96d04bad13c819))
+* DEK rotation filter rewrite, Free 6M embed bucket, fixed PromEx buckets ([#2101](https://github.com/engram-app/Engram/issues/2101)) ([e53b205](https://github.com/engram-app/Engram/commit/e53b2056aaffbcb06f6aa956e8ae49d93fa51773))
+
+
+### Performance Improvements
+
+* **links:** stop storing resolved targets, batch MCP links ([#2051](https://github.com/engram-app/Engram/issues/2051)) ([09e2a3e](https://github.com/engram-app/Engram/commit/09e2a3e9420b84e0907c2a737bdb5ff1f5ea9b2b))
+
+## [0.59.0](https://github.com/engram-app/Engram/compare/0.58.1...0.59.0) (2026-10-21)
+
+
+### Features
+
+* **analytics:** funnel tracking and customer insights ([#2027](https://github.com/engram-app/Engram/issues/2027)) ([94053d4](https://github.com/engram-app/Engram/commit/94053d4be1425e7b8c69f964243e52c6de01d356))
+
+
+### Bug Fixes
+
+* **ci:** fetch the plugin through the runner git cache ([#2074](https://github.com/engram-app/Engram/issues/2074)) ([08864d2](https://github.com/engram-app/Engram/commit/08864d231714336efb6b830b7fa45e165d6d68a0))
+* **e2e:** quiescence ignores checkpoints held by a live room ([#2096](https://github.com/engram-app/Engram/issues/2096)) ([973190f](https://github.com/engram-app/Engram/commit/973190f966c611810bd5610a818b66fdef501b9f))
+* **frontend:** keep the operator page off initial JS ([#2080](https://github.com/engram-app/Engram/issues/2080)) ([e864e22](https://github.com/engram-app/Engram/commit/e864e22ea39f1fd8b9eee39fa0b62a236390bb86))
+
+
+### Performance Improvements
+
+* **db:** scale wave 1 - Oban off web, index fixes, retention, timeouts ([#2088](https://github.com/engram-app/Engram/issues/2088)) ([485c722](https://github.com/engram-app/Engram/commit/485c72206f94724c20a8854e1164ec7b4ec5a40a))
+
+## [0.58.1](https://github.com/engram-app/Engram/compare/0.58.0...0.58.1) (2026-10-20)
+
+
+### Bug Fixes
+
+* **ci:** run every CI Postgres on tmpfs ([#2071](https://github.com/engram-app/Engram/issues/2071)) ([15078e4](https://github.com/engram-app/Engram/commit/15078e437fcee4916d414c945a25dcb64f8b9d9d))
+* **logs:** GET /api/logs since no longer drops same-second rows ([#2072](https://github.com/engram-app/Engram/issues/2072)) ([6c3a44e](https://github.com/engram-app/Engram/commit/6c3a44e60830e9c94883d2d04c8bfdc265de821f))
+* root-cause the week's Sentry errors and alert noise ([#2073](https://github.com/engram-app/Engram/issues/2073)) ([ccf8dcc](https://github.com/engram-app/Engram/commit/ccf8dcc6006d0527a10e1920234dd339fba194c8))
+* **search:** no-rebuild hardening before chunker v5 ([#2066](https://github.com/engram-app/Engram/issues/2066)) ([68c73fd](https://github.com/engram-app/Engram/commit/68c73fd27ba498d22dcc95d4ec390fcf6c9f84c0))
+
+
+### Performance Improvements
+
+* **e2e:** replace fixed sleeps with quiescence barrier ([#2052](https://github.com/engram-app/Engram/issues/2052)) ([ceba394](https://github.com/engram-app/Engram/commit/ceba39407ebd244ba45dfe55c54eac12e913ff5b))
+
 ## [0.58.0](https://github.com/engram-app/Engram/compare/0.57.0...0.58.0) (2026-10-20)
 
 

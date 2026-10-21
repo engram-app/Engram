@@ -112,10 +112,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
 
   # ── #1706: CRDT doc bloat telemetry ───────────────────────────────────────
   # Everything in the history/DB-growth workstream is guessed until the shape of
-  # `crdt_state` vs the text it encodes is visible. The measurement is taken on
-  # the PRE-flatten state on purpose: post-flatten bytes are what the gate
-  # already reclaimed, and #1707 has to tune that gate against the bloat it is
-  # supposed to catch.
+  # `crdt_state` vs the text it encodes is visible.
   # A tick in flight when a delete commits reads the row after the delete's
   # seq bump, so the seq fence alone matched and the checkpoint materialized
   # content, bumped seq and enqueued jobs for the trashed note.
@@ -504,6 +501,59 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     rebuilt_text = CrdtBridge.text_of(rebuilt)
     assert rebuilt_text =~ "APPEND"
     assert rebuilt_text =~ "EDIT"
+  end
+
+  # #958. The checkpoint used to flatten a doc past 500 KB AND 1,000 client ids
+  # into a fresh single-client lineage, persist only the flattened state, and
+  # keep the live room on the old one. The next checkpoint's union then folded
+  # two disjoint lineages and doubled the body. A checkpoint must never reset
+  # lineage, however big or many-client the doc is.
+  test "a big many-client doc keeps its lineage across checkpoints (no flatten doubling)", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    body = String.duplicate("ALPHA ", 90_000)
+
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => body}, actor: "api")
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+
+    # 1,200 extra client ids that never touch the body text.
+    for i <- 1..1200 do
+      other = Yex.Doc.new()
+      Yex.Map.set(Yex.Doc.get_map(other, "bloat_test"), "k#{i}", "v")
+      {:ok, u} = Yex.encode_state_as_update(other)
+      :ok = Yex.apply_update(doc, u)
+    end
+
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    # Checkpoint 1 really persisted a doc past the old gate, on the live doc's
+    # lineage (`checkpoint/5` returns :ok on a skip too).
+    {:ok, row} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, stored} = Crypto.decrypt_crdt_state(row, user)
+    {:ok, stored_doc} = CrdtBridge.doc_from_state(stored)
+    assert byte_size(stored) >= 500_000
+    assert CrdtBridge.client_count(stored_doc) >= 1_000
+    # Same lineage both ways: neither holds a struct the other lacks. (State-
+    # vector bytes are hash-map ordered, so compare by diff. A v1 diff always
+    # carries the WHOLE delete set, so only its leading struct-client count —
+    # 0 — says "nothing missing".)
+    assert {:ok, <<0, _::binary>>} =
+             Yex.encode_state_as_update(stored_doc, Yex.encode_state_vector!(doc))
+
+    assert {:ok, <<0, _::binary>>} =
+             Yex.encode_state_as_update(doc, Yex.encode_state_vector!(stored_doc))
+
+    # The room keeps editing the doc it already holds.
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), body <> "BETA")
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    {:ok, fresh} = Notes.get_note(user, vault, "p.md")
+    assert byte_size(fresh.content) == byte_size(body <> "BETA")
+    assert fresh.content == body <> "BETA"
   end
 
   test "checkpoint ABORTS (row untouched) when the row's stored state cannot be read", ctx do

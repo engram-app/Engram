@@ -256,6 +256,40 @@ defmodule Engram.Logger.ExceptionEgressTest do
 
       assert log == ""
     end
+
+    test "a server error logs at error" do
+      {e, st} = match_error()
+      assert bandit_exception(e, st) =~ "[error]"
+    end
+
+    # A stalled upload times out reading the body (Bandit.HTTPError 408/400),
+    # then the error response hits a closed socket (Bandit.TransportError).
+    # Neither is ours to fix, so neither may reach Sentry (error level), but a
+    # count of them in Loki is how a stall pattern gets noticed.
+    test "a client-side request failure logs a warning, not an error" do
+      conn = %Plug.Conn{method: "POST"}
+
+      for e <- [
+            %Bandit.HTTPError{message: "Body read timeout", plug_status: :request_timeout},
+            %Bandit.TransportError{message: "Unrecoverable error: closed", error: :closed}
+          ] do
+        log =
+          capture_log([metadata: [:category, :method, :status]], fn ->
+            EngramWeb.RequestExceptionLogger.handle_event(
+              [:bandit, :request, :exception],
+              %{},
+              %{kind: :exit, exception: e, stacktrace: [], conn: conn},
+              nil
+            )
+          end)
+
+        assert log =~ "[warning]"
+        refute log =~ "[error]"
+        assert log =~ inspect(e.__struct__)
+        assert log =~ "category=http"
+        assert log =~ "method=POST"
+      end
+    end
   end
 
   describe "Oban errors column" do

@@ -409,6 +409,20 @@ defmodule EngramWeb.VaultsControllerTest do
       {:ok, v, _} = Vaults.register_vault(user, "Active", Ecto.UUID.generate())
       conn |> post("/api/vaults/#{v.id}/restore") |> json_response(404)
     end
+
+    test "returns 409 once the vault's purge has started", %{conn: conn, user: user} do
+      {:ok, v, _} = Vaults.register_vault(user, "Purging", Ecto.UUID.generate())
+      {:ok, _} = Vaults.delete_vault(user, v.id)
+
+      Engram.Repo.update_all(
+        from(x in Engram.Vaults.Vault, where: x.id == ^v.id),
+        [set: [purge_started_at: DateTime.utc_now(:second)]],
+        skip_tenant_check: true
+      )
+
+      body = conn |> post("/api/vaults/#{v.id}/restore") |> json_response(409)
+      assert body["error"] == "purge_started"
+    end
   end
 
   describe "POST /api/vaults/:id/purge" do

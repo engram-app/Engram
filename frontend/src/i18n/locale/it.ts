@@ -21,6 +21,10 @@ export default {
 	"Failed to duplicate.": "Duplicazione fallita.",
 	"Batch delete failed.": "Eliminazione di massa fallita.",
 	"Batch move failed.": "Spostamento di massa fallito.",
+	"Couldn't load sign-in": "Impossibile caricare l'accesso",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"Il servizio di accesso non è stato caricato. Controlla la connessione e ricarica la pagina.",
+	Reload: "Ricarica",
 	"This account is suspended. Contact an admin to restore access.":
 		"Questo account è sospeso. Contatta un amministratore per ripristinare l'accesso.",
 	"Incorrect email or password.": "Email o password errate.",
@@ -154,6 +158,22 @@ export default {
 		one: "{count} giorno rimanente per la tua prova gratuita.",
 		many: "Rimangono {count} giorni alla fine della tua prova gratuita.",
 		other: "Rimangono {count} giorni alla fine della tua prova gratuita.",
+	},
+	"Indexing budget": "Budget di indicizzazione",
+	"{available} of {capacity} tokens left": "Rimangono {available} di {capacity} token",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Ricarica {perDay} token al giorno. Ricarica completa il {date}.",
+	"All tokens are available.": "Tutti i token sono disponibili.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count} nota ha solo ricerca per parole chiave, fino a {date}.",
+		many: "{count} note hanno solo la ricerca per parole chiave, fino al {date}.",
+		other: "{count} note hanno solo la ricerca per parole chiave, fino a {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "{count} nota ha solo la ricerca per parole chiave, fino al prossimo rifornimento.",
+		many: "{count} note con ricerca solo per parole chiave, fino al ripristino del budget.",
+		other:
+			"{count} note hanno solo la ricerca per parole chiave, fino al prossimo rinnovo dell'abbonamento.",
 	},
 	"Loading current connection…": "Caricamento della connessione corrente…",
 	"Disconnected. Retry the new connection now.": "Disconnesso. Riprova a connetterti.",
@@ -546,7 +566,6 @@ export default {
 	"Linux PC": "PC Linux",
 	Oops: "Ops",
 	"Something went wrong": "Si è verificato un errore",
-	Reload: "Ricarica",
 	"Back to home": "Ritorna alla home",
 	"Error detail (dev only)": "Dettagli errore (solo sviluppatori)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -682,6 +701,9 @@ export default {
 	"Love it": "Mi piace molto",
 	"Tell us more": "Raccontaci di più",
 	Language: "Lingua",
+	"Show Engram in {language}?": "Mostrare Engram in {language}?",
+	"Switch language": "Cambia lingua",
+	"Not now": "Non ora",
 	"My Vault": "La mia vault",
 	"{count} days left in your trial.": {
 		one: "Ti resta {count} giorno di prova.",
@@ -901,6 +923,7 @@ export default {
 	"{client} is connected": "{client} è connesso",
 	"Your AI tool is connected": "Il tuo strumento AI è connesso",
 	"What will you use Engram for?": "A cosa userai Engram?",
+	"Could not continue. Please try again.": "Impossibile continuare. Riprova.",
 	"Review the Terms": "Leggi i Termini",
 	"privacy notice": "Informativa sulla privacy",
 	"What changed": "Cosa è cambiato",
@@ -962,7 +985,6 @@ export default {
 	"Continue with Free →": "Continua con la versione gratuita →",
 	"{summary} · upgrade anytime":
 		"{summary} · puoi passare a un piano a pagamento in qualsiasi momento",
-	"Could not continue. Please try again.": "Impossibile continuare. Riprova.",
 	"Step {step} of {total}": "Fase {step} di {total}",
 	Onboarding: "Guida introduttiva",
 	"Stop connecting this app": "Interrompi la connessione di questa app",
@@ -1022,6 +1044,10 @@ export default {
 	"Why {tool} can't be connected": "Perché {tool} non può essere connesso",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Non è una lista completa, scegli {client} se il tuo non è presente.",
+	"Customer insights": "Informazioni sui clienti",
+	"User ID": "ID utente",
+	"Show timeline": "Mostra la cronologia",
+	"Failed to load the report.": "Impossibile caricare il report.",
 	Account: "Account",
 	"Manage your profile, password, and account.":
 		"Gestisci il tuo profilo, la password e l'account.",

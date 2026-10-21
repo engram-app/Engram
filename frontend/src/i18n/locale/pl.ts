@@ -21,6 +21,10 @@ export default {
 	"Failed to duplicate.": "Nie udało się skopiować.",
 	"Batch delete failed.": "Nie udało się usunąć w pakiecie.",
 	"Batch move failed.": "Nie udało się przenieść w pakiecie.",
+	"Couldn't load sign-in": "Nie można załadować logowania",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"Usługa logowania nie została załadowana. Sprawdź połączenie, a następnie odśwież stronę.",
+	Reload: "Odśwież",
 	"This account is suspended. Contact an admin to restore access.":
 		"To konto jest zawieszone. Skontaktuj się z administratorem, aby odzyskać dostęp.",
 	"Incorrect email or password.": "Nieprawidłowy adres e-mail lub hasło.",
@@ -154,6 +158,24 @@ export default {
 		few: "Zostało {count} dni do końca darmowego okresu próbnego.",
 		many: "Zostało {count} dni do końca darmowego okresu próbnego.",
 		other: "Pozostało {count} dnia w bezpłatnym okresie próbnym.",
+	},
+	"Indexing budget": "Budżet indeksowania",
+	"{available} of {capacity} tokens left": "Pozostało {available} z {capacity} tokenów",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Odzyskuje {perDay} tokenów dziennie. Pełny stan na {date}.",
+	"All tokens are available.": "Wszystkie tokeny są dostępne.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count} notatka ma tylko wyszukiwanie po słowach kluczowych, do {date}.",
+		few: "{count} notatki mają tylko wyszukiwanie po słowach kluczowych, do czasu {date}.",
+		many: "{count} notatek ma tylko wyszukiwanie po słowach kluczowych, do {date}.",
+		other: "{count} Notatki mają tylko wyszukiwanie po słowach kluczowych, do czasu {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "Wyszukiwanie po słowach kluczowych działa tylko dla jednej notatki, do momentu uzupełnienia budżetu.",
+		few: "{count} notatki mają tylko wyszukiwanie po słowach kluczowych, do momentu uzupełnienia budżetu.",
+		many: "{count} notatek ma tylko wyszukiwanie po słowach kluczowych, do momentu uzupełnienia budżetu.",
+		other:
+			"{count} Notatki mają tylko wyszukiwanie po słowach kluczowych, do momentu uzupełnienia budżetu.",
 	},
 	"Loading current connection…": "Ładowanie aktualnego połączenia…",
 	"Disconnected. Retry the new connection now.": "Rozłączono. Spróbuj ponownie połączyć się.",
@@ -564,7 +586,6 @@ export default {
 	"Linux PC": "Komputer z systemem Linux",
 	Oops: "Ups",
 	"Something went wrong": "Coś poszło nie tak",
-	Reload: "Odśwież",
 	"Back to home": "Powrót do strony głównej",
 	"Error detail (dev only)": "Szczegóły błędu (tylko dla deweloperów)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -701,6 +722,9 @@ export default {
 	"Love it": "Uwielbiam to",
 	"Tell us more": "Powiedz nam więcej",
 	Language: "Język",
+	"Show Engram in {language}?": "Pokaż Engram w {language}?",
+	"Switch language": "Zmień język",
+	"Not now": "Nie teraz",
 	"My Vault": "Mój Sejf",
 	"{count} days left in your trial.": {
 		one: "Jeden dzień pozostał do końca okresu próbnego.",
@@ -936,6 +960,7 @@ export default {
 	"{client} is connected": "{client} jest połączone",
 	"Your AI tool is connected": "Twoje narzędzie AI jest połączone",
 	"What will you use Engram for?": "Do czego użyjesz Engram?",
+	"Could not continue. Please try again.": "Nie udało się kontynuować. Spróbuj ponownie.",
 	"Review the Terms": "Zapoznaj się z regulaminem",
 	"privacy notice": "polityka prywatności",
 	"What changed": "Co się zmieniło",
@@ -997,7 +1022,6 @@ export default {
 		"7-dniowy okres próbny w płatnych planach. Wymagana karta, bez opłat do momentu zakończenia.",
 	"Continue with Free →": "Kontynuuj z darmowym planem →",
 	"{summary} · upgrade anytime": "{summary} · możesz uaktualnić w dowolnym momencie",
-	"Could not continue. Please try again.": "Nie udało się kontynuować. Spróbuj ponownie.",
 	"Step {step} of {total}": "Krok {step} z {total}",
 	Onboarding: "Wprowadzenie",
 	"Stop connecting this app": "Przestań łączyć tę aplikację",
@@ -1057,6 +1081,10 @@ export default {
 	"Why {tool} can't be connected": "Dlaczego {tool} nie może być połączone",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Nie jest to pełna lista, wybierz {client}, jeśli twoje narzędzie nie znajduje się tutaj.",
+	"Customer insights": "Wgląd w dane klientów",
+	"User ID": "ID użytkownika",
+	"Show timeline": "Pokaż oś czasu",
+	"Failed to load the report.": "Nie udało się załadować raportu.",
 	Account: "Konto",
 	"Manage your profile, password, and account.": "Zarządzaj swoim profilem, hasłem i kontem.",
 	"Manage your profile, security, and active sessions.":

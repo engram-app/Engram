@@ -105,7 +105,8 @@ defmodule Engram.Workers.ReconcileEmbeddingsMaintenanceTest do
         cond do
           self() != test_pid or source != "notes" -> :ok
           repo == Repo -> send(test_pid, :app_pool_notes_query)
-          sql =~ ~r/^UPDATE/ -> send(test_pid, :maintenance_page)
+          # The embed sweep's UPDATE rides behind its eligible-ids CTE.
+          sql =~ ~r/^(WITH "reconcile_eligible" .*)?UPDATE/s -> send(test_pid, :maintenance_page)
           true -> :ok
         end
       end,

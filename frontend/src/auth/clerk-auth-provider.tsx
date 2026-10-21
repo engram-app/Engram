@@ -1,6 +1,9 @@
 import { ClerkProvider, useAuth, useClerk } from "@clerk/react";
 import { dark } from "@clerk/themes";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
+import AuthPanel from "@/layout/auth-panel";
+import { heading } from "@/lib/ui-classes";
 import { setTokenGetter } from "../api/client";
 import { useMe } from "../api/queries";
 import { queryClient } from "../api/query-client";
@@ -10,7 +13,7 @@ import type { Locale } from "../i18n/locales";
 import { type ClerkLocalization, clerkLocalizationLoaders } from "../i18n/vendor-locales";
 import { getAppRouter } from "../router";
 import { ROUTES } from "../routes";
-import { captureError } from "../sentry";
+import { captureError, sentryReady } from "../sentry";
 import { useTheme } from "../theme/theme-provider";
 import { type AuthAdapter, AuthContext } from "./auth-context";
 import { clearHttpCache } from "./clear-http-cache";
@@ -102,6 +105,39 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 	return <AuthContext.Provider value={adapter}>{children}</AuthContext.Provider>;
 }
 
+// clerk-js is a script Clerk hot-loads from clerk.engram.page. When it fails
+// (blocked, offline, a CDN miss) Clerk sets `status` to "error" and never
+// loads, so every auth-gated page waits on a spinner forever (Sentry
+// ENGRAM-FRONTEND-A). Show the failure with a way out instead. Clerk's own
+// rejection escapes unhandled (a `throw` inside a `.catch` nobody awaits in
+// @clerk/shared loadClerkJSScript), so sentry.ts ignores it and this reports
+// the failure once, as a handled warning.
+function ClerkLoadGate({ children }: { children: React.ReactNode }) {
+	const failed = useClerk().status === "error";
+	const { t } = useT();
+
+	useEffect(() => {
+		if (failed) {
+			sentryReady?.then((Sentry) => Sentry?.captureMessage("clerk_js_load_failed", "warning"));
+		}
+	}, [failed]);
+
+	if (!failed) {
+		return children;
+	}
+	return (
+		<AuthPanel className="flex flex-col items-center gap-4 text-center">
+			<h1 className={heading}>{t("Couldn't load sign-in")}</h1>
+			<p className="text-muted-foreground text-sm">
+				{t("The sign-in service didn't load. Check your connection, then reload the page.")}
+			</p>
+			<Button type="button" onClick={() => window.location.reload()}>
+				{t("Reload")}
+			</Button>
+		</AuthPanel>
+	);
+}
+
 // Clerk's components follow the rendered app locale. The catalog is a lazy
 // chunk per language, so English (undefined) shows until it lands, and stays on
 // a failed load. Tagged with its locale so a stale load is never applied.
@@ -186,7 +222,9 @@ export default function ClerkAuthProvider({ children }: { children: React.ReactN
 			routerPush={(to) => getAppRouter().navigate(toRelativeUrl(to))}
 			routerReplace={(to) => getAppRouter().navigate(toRelativeUrl(to), { replace: true })}
 		>
-			<ClerkAdapterInner>{children}</ClerkAdapterInner>
+			<ClerkLoadGate>
+				<ClerkAdapterInner>{children}</ClerkAdapterInner>
+			</ClerkLoadGate>
 		</ClerkProvider>
 	);
 }

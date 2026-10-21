@@ -10,6 +10,7 @@ defmodule Engram.Notes do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Crypto.PathCrypto
+  alias Engram.Crypto.RotationGate
   alias Engram.Links
   alias Engram.Logger.DecryptFailure
   alias Engram.Logger.Metadata
@@ -27,28 +28,43 @@ defmodule Engram.Notes do
     Frontmatter,
     Helpers,
     Identity,
+    Keys,
     Note,
     OkfFields,
     PathSanitizer,
     Revisions,
-    TagsTerm
+    TagsTerm,
+    VaultScanCache
   }
 
   alias Engram.Repo
   alias Engram.Sync.Broadcast
   alias Engram.Telemetry
   alias Engram.UsageMeters
+  alias Engram.Vaults.Vault
 
   alias Engram.Workers.{
     DeleteNoteIndex,
     EmbedNote,
     FinalizeRevision,
+    NoteCommitted,
     ReleaseIndexEntries,
     RepathNoteIndex,
     RewriteNoteLinks
   }
 
   require Logger
+
+  # Every persisted Note column except the CRDT state, about half of a note's
+  # stored bytes. Read by a catch-up page (`list_changes_by_seq/4`,
+  # `fields: :all`; change maps carry no state, and stale-facade resolution
+  # re-reads its own rows, so selecting it shipped bytes the byte budget never
+  # counted) and by `fetch_note_for_worker/1,2` (the embed, repath and keyword
+  # workers use the facade; the link worker's legacy path re-reads through
+  # `authoritative_content/2`). Computed from the schema so a new column is
+  # fed by default.
+  @note_fields_without_crdt Note.__schema__(:fields) --
+                              [:crdt_state_ciphertext, :crdt_state_nonce]
 
   # Every persisted Note column except content_ciphertext/content_nonce —
   # the metadata projection for reads that never serialize content (changes
@@ -64,6 +80,7 @@ defmodule Engram.Notes do
     :content_hash,
     :embed_hash,
     :mtime,
+    :ctime,
     :deleted_at,
     :title_ciphertext,
     :title_nonce,
@@ -668,7 +685,13 @@ defmodule Engram.Notes do
   end
 
   defp folder_markers_by_hmac_query(user, vault, hmacs) do
-    from(n in scoped(user, vault), where: n.kind == "folder" and n.folder_hmac in ^hmacs)
+    ids? = Keys.ids?()
+
+    from(n in scoped(user, vault),
+      where: n.kind == "folder",
+      where: ^Keys.in_any(:folder, hmacs, ids?),
+      where: ^Keys.kind_match(:folder, ids?)
+    )
   end
 
   # Shared by the single and batch creates. `seq_fun` is only called when a
@@ -706,11 +729,22 @@ defmodule Engram.Notes do
     end
   end
 
+  # Tombstones included on purpose: upsert_folder_marker/6 revives one in
+  # place so the folder keeps its id. A name can hold one live marker plus any
+  # number of tombstones with the same hmac (the unique index covers live rows
+  # only, and a rename onto a deleted name moves the old marker in beside the
+  # name's tombstone), so take the live row, else the newest tombstone (#2121).
   defp find_folder_marker(user, vault, folder_hmac) do
+    ids? = Keys.ids?()
+
     row =
       Repo.one(
         from(n in scoped(user, vault),
-          where: n.kind == "folder" and n.folder_hmac == ^folder_hmac
+          where: n.kind == "folder",
+          where: ^Keys.eq(:folder, folder_hmac, ids?),
+          where: ^Keys.kind_match(:folder, ids?),
+          order_by: [desc_nulls_first: n.deleted_at],
+          limit: 1
         )
       )
 
@@ -822,6 +856,9 @@ defmodule Engram.Notes do
       `"api:<key_id>"`, `"link_rewrite"`, `"maintenance"` or `"system"`. No
       default, so a new caller cannot silently file its edits under another
       writer's version.
+    * `surface:` the analytics surface of a `"sync"` write (`"web"` or
+      `"obsidian_sync"`, from `EngramWeb.WriteActor.surface/1`). Other actors
+      imply it; see `created_surface/1`.
     * `announce_vault_populated: false` — suppress the `vault_populated`
       broadcast for a write the SERVER originated. See the call site; the
       welcome-note seed is the only caller that passes it.
@@ -887,6 +924,8 @@ defmodule Engram.Notes do
         created_at: now,
         updated_at: now
       }
+
+      base_attrs = put_client_ctime(base_attrs, attrs)
 
       {:ok, lookup_query} = note_by_path_query(user, vault, sanitized_path)
       opts = prepare_expected(opts, base_attrs, user, sanitized_path, folder)
@@ -959,7 +998,8 @@ defmodule Engram.Notes do
             :ok =
               Repo.after_commit(fn ->
                 Engram.Analytics.track(user, "note_created", %{
-                  vault_id: vault.id
+                  vault_id: vault.id,
+                  surface: created_surface(opts)
                 })
               end)
           end
@@ -1051,6 +1091,63 @@ defmodule Engram.Notes do
       end
     end
   end
+
+  @doc """
+  Fills `ctime` for existing live notes from `[%{path, ctime}]` in ONE statement.
+
+  Metadata-only: touches no content, version, seq, `updated_at`, CRDT state or
+  index, emits no fan-out, and fills only NULL ctimes, so it is idempotent and
+  never clobbers a value (re-sends and older plugins are harmless). Unknown
+  paths are skipped. Returns `{:ok, updated_count}`.
+  """
+  @spec set_client_ctimes(map(), map(), [%{path: String.t(), ctime: number()}]) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def set_client_ctimes(_user, _vault, []), do: {:ok, 0}
+
+  def set_client_ctimes(user, vault, entries) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+      {hmacs, ctimes} =
+        entries
+        |> Map.new(fn %{path: path, ctime: ctime} ->
+          {Crypto.hmac_field(filter_key, PathSanitizer.sanitize(path)), ctime * 1.0}
+        end)
+        |> Enum.unzip()
+
+      query =
+        from(n in scoped_live(user, vault),
+          join:
+            v in fragment(
+              "SELECT * FROM unnest(?::bytea[], ?::float8[]) AS t(h, c)",
+              ^hmacs,
+              ^ctimes
+            ),
+          on: n.path_hmac == field(v, :h),
+          where: is_nil(n.ctime) and n.kind == "note",
+          update: [set: [ctime: field(v, :c)]]
+        )
+
+      {n, _} = Repo.with_tenant!(user.id, fn -> Repo.update_all(query, []) end)
+      {:ok, n}
+    end
+  end
+
+  # Only carry ctime when sent: the key's absence leaves a stored value
+  # untouched on update (older plugins must not null it). Same rule as
+  # POST /notes/ctime: a number > 0, anything else is ignored rather than
+  # failing the whole push.
+  defp put_client_ctime(base_attrs, attrs) do
+    case attrs["ctime"] || attrs[:ctime] do
+      ctime when is_number(ctime) and ctime > 0 -> Map.put(base_attrs, :ctime, ctime)
+      _ -> base_attrs
+    end
+  end
+
+  # ctime is the file's creation time, and another device's copy has its own
+  # (when that device synced the file down). The first ctime stored wins, as
+  # in set_client_ctimes/3; an edit only fills one the note never had.
+  defp keep_stored_ctime(attrs, %Note{ctime: nil}), do: attrs
+  defp keep_stored_ctime(attrs, %Note{ctime: ctime}), do: Map.put(attrs, :ctime, ctime)
 
   defp insert_new_note(base_attrs, user, sanitized_path, folder, client_id, lookup_query) do
     # Pricing v2 §G — server-side notes_cap enforcement. Free tier defaults
@@ -1169,17 +1266,21 @@ defmodule Engram.Notes do
          lookup_query,
          remint? \\ true
        ) do
+    # `crdt_doc` (genesis only) rides in the attrs so a re-mint keeps it.
+    {crdt_doc, insert_attrs} = Map.pop(base_attrs, :crdt_doc)
+
     with {:ok, crdt} <-
            maybe_merge_crdt(
              nil,
-             base_attrs.content,
+             insert_attrs.content,
              user,
              note_id,
-             base_attrs.vault_id,
-             sanitized_path
+             insert_attrs.vault_id,
+             sanitized_path,
+             crdt_doc
            ),
          merged_attrs = %{
-           base_attrs
+           insert_attrs
            | content: crdt.merged_text,
              title: crdt.title,
              tags: crdt.tags,
@@ -1198,7 +1299,7 @@ defmodule Engram.Notes do
       # writer (append, move, rename, get_note_for_update/3) takes the vault row
       # first, so inserting first and locking after deadlocks against them
       # (Postgres 40P01). Pinned by crdt_create_query_budget_test.exs.
-      seq = Engram.Vaults.next_seq!(base_attrs.vault_id)
+      seq = Engram.Vaults.next_seq!(insert_attrs.vault_id)
       changeset = Ecto.Changeset.put_change(changeset, :seq, seq)
 
       case Repo.insert(changeset, on_conflict: :nothing) do
@@ -1348,7 +1449,8 @@ defmodule Engram.Notes do
            folder: folder,
            origin: origin,
            recording: recording,
-           seed: Keyword.get(opts, :seed)
+           seed: Keyword.get(opts, :seed),
+           body: Keyword.get(opts, :body)
          },
          {:ran, result, claimed?} <- run_genesis(genesis, initial_claim(opts)) do
       {result, seed_outcome} = take_seed(result)
@@ -1480,6 +1582,9 @@ defmodule Engram.Notes do
   defp probe_vault_populated({:ok, _note, :announce, _finalize?} = result, g),
     do: tap(result, fn _ -> :ok = maybe_broadcast_vault_populated(g.user, g.vault) end)
 
+  defp probe_vault_populated({:ok, _note, :announce_bodied} = result, g),
+    do: tap(result, fn _ -> :ok = maybe_broadcast_vault_populated(g.user, g.vault) end)
+
   defp probe_vault_populated(result, _g), do: result
 
   # #1409's open half: an `opts[:seed]` fun writes the genesis body INSIDE the
@@ -1498,6 +1603,13 @@ defmodule Engram.Notes do
   defp seed_in_txn({:ok, note, :announce, _finalize?} = result, %{seed: seed})
        when is_function(seed, 1),
        do: {:seeded, result, seed.(note)}
+
+  # The body went into the INSERT itself (`:body`, genesis_insert_bare/7): no
+  # checkpoint is needed, the seed fun only learns it (`{:inserted, note}`).
+  defp seed_in_txn({:ok, note, :announce_bodied}, %{seed: seed}) when is_function(seed, 1),
+    do: {:seeded, {:ok, note, :announce}, seed.({:inserted, note})}
+
+  defp seed_in_txn({:ok, note, :announce_bodied}, _g), do: {:ok, note, :announce}
 
   defp seed_in_txn(result, _g), do: result
 
@@ -1522,7 +1634,7 @@ defmodule Engram.Notes do
            folder: folder,
            origin: origin,
            recording: recording
-         },
+         } = g,
          claim
        ) do
     case classify_by_id(vault, canonical_id) do
@@ -1582,11 +1694,12 @@ defmodule Engram.Notes do
           mint_id(),
           sanitized_path,
           folder,
-          canonical_id
+          canonical_id,
+          g[:body]
         )
 
       :none ->
-        genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder)
+        genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder, nil, g[:body])
     end
   end
 
@@ -1674,7 +1787,7 @@ defmodule Engram.Notes do
   # exists only so the re-mint is logged on the leg that actually inserts: an
   # OCCUPIED path adopts the note living there and never uses the fresh id, so
   # announcing a re-mint up at the call site would cry wolf on every adopt.
-  defp genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder, taken_id \\ nil) do
+  defp genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder, taken_id, body) do
     case note_by_path_query(user, vault, sanitized_path) do
       {:ok, lookup_query} ->
         case Repo.one(lookup_query) do
@@ -1696,7 +1809,8 @@ defmodule Engram.Notes do
                    canonical_id,
                    sanitized_path,
                    folder,
-                   lookup_query
+                   lookup_query,
+                   body
                  ) do
               {:ok, _note, _tag} = ok ->
                 if taken_id, do: log_id_taken(user, vault.id, taken_id, canonical_id)
@@ -2046,12 +2160,22 @@ defmodule Engram.Notes do
   # `id` is guaranteed a valid, cast UUID string by genesis_crdt_note/4's
   # single up-front validation point — unlike insert_new_note/7's optional
   # client_id, this id is REQUIRED, so there is no mint_id() fallback here.
-  defp genesis_insert_bare(user, vault, id, sanitized_path, folder, lookup_query) do
+  # With `body` (the client's genesis doc, decoded by the channel) the row is
+  # inserted WITH its content and the client's own CRDT state: one notes
+  # version and no in-transaction checkpoint (#1409's seed used to UPDATE the
+  # bare row it had just inserted). Without it the row is bare, as before.
+  defp genesis_insert_bare(user, vault, id, sanitized_path, folder, lookup_query, body) do
     now = DateTime.utc_now()
+
+    # A body is CRDT state encrypted under the user's current DEK, which a
+    # rotation in flight must not get (#1341). Locked: insert bare, and the
+    # seed's checkpoint skips exactly as it always did, so the client pushes.
+    body = if body && RotationGate.check(user.id) == :ok, do: body
 
     base_attrs = %{
       kind: "note",
-      content: "",
+      content: if(body, do: CrdtBridge.text_of(body), else: ""),
+      crdt_doc: body,
       title: nil,
       tags: [],
       content_hash: nil,
@@ -2067,8 +2191,13 @@ defmodule Engram.Notes do
       # decrypts inline and tags :announce (a real create), a version_conflict
       # on a concurrent-create race.
       case do_bare_insert(base_attrs, user, sanitized_path, folder, id, lookup_query) do
-        {:inserted, inserted, _crdt} ->
+        {:inserted, inserted, _crdt} when is_nil(body) ->
           {:ok, decrypt_or_raise!(inserted, user), :announce}
+
+        {:inserted, inserted, _crdt} ->
+          note = decrypt_or_raise!(inserted, user)
+          _ = if note.content != "", do: commit_genesis_body(note, user)
+          {:ok, note, :announce_bodied}
 
         {:raced, existing} ->
           {:error, :version_conflict, decrypt_or_raise!(existing, user)}
@@ -2077,6 +2206,20 @@ defmodule Engram.Notes do
           err
       end
     end
+  end
+
+  # The content jobs the seed's checkpoint used to enqueue for a genesis body,
+  # after the row's commit like the checkpoint's.
+  defp commit_genesis_body(note, user) do
+    Repo.after_commit(fn ->
+      Enqueue.enqueue(
+        NoteCommitted.job(note.id, user.id,
+          embed_priority: EmbedNote.priority_for(note),
+          finalize?: false
+        ),
+        "note_committed"
+      )
+    end)
   end
 
   # Phase 0 stale-base gate: a writer that declares the content_hash it READ
@@ -2262,13 +2405,17 @@ defmodule Engram.Notes do
              prior.vault_id,
              sanitized_path
            ) do
-      merged_attrs = %{
-        base_attrs
-        | content: crdt.merged_text,
-          title: crdt.title,
-          tags: crdt.tags,
-          content_hash: crdt.content_hash
-      }
+      merged_attrs =
+        keep_stored_ctime(
+          %{
+            base_attrs
+            | content: crdt.merged_text,
+              title: crdt.title,
+              tags: crdt.tags,
+              content_hash: crdt.content_hash
+          },
+          prior
+        )
 
       with {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, prior.id) do
         phase_b =
@@ -2678,16 +2825,21 @@ defmodule Engram.Notes do
              sanitized_path,
              merge_doc
            ),
-         merged_attrs = %{
-           base_attrs
-           | content: crdt.merged_text,
-             title: crdt.title,
-             tags: crdt.tags,
-             content_hash: crdt.content_hash
-         },
+         merged_attrs =
+           keep_stored_ctime(
+             %{
+               base_attrs
+               | content: crdt.merged_text,
+                 title: crdt.title,
+                 tags: crdt.tags,
+                 content_hash: crdt.content_hash
+             },
+             existing
+           ),
          {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, existing.id) do
       phase_b =
         inject_phase_b_fields(encrypted, user, existing.id, sanitized_path, folder, crdt.tags)
+        |> keep_stored_path(existing)
         |> inject_frontmatter_fields(user, existing.id, crdt.merged_text)
         |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
         |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
@@ -2718,7 +2870,10 @@ defmodule Engram.Notes do
   # counts it when building the parameter list, so mixing one with a non-nil
   # filter raises `parameters must be of length N`. A row with no snapshot has
   # none to lose, and its `seq` still guards it.
-  defp snapshot_fenced(changeset, %Note{crdt_state_ciphertext: nil} = pre) do
+  # The state is fenced by its nonce: every write of crdt_state encrypts it
+  # under a fresh one, so the nonce names the version without sending (and
+  # de-TOASTing) the whole state as a parameter on every edit.
+  defp snapshot_fenced(changeset, %Note{crdt_state_nonce: nil} = pre) do
     %{changeset | filters: Map.put(changeset.filters, :seq, pre.seq)}
   end
 
@@ -2728,7 +2883,7 @@ defmodule Engram.Notes do
       | filters:
           Map.merge(changeset.filters, %{
             seq: pre.seq,
-            crdt_state_ciphertext: pre.crdt_state_ciphertext
+            crdt_state_nonce: pre.crdt_state_nonce
           })
     }
   end
@@ -2787,6 +2942,15 @@ defmodule Engram.Notes do
        ) do
     with {:ok, merged} <- CrdtBridge.merge_plaintext_into_doc(doc, incoming_content),
          do: crdt_merge_result(merged, user, note_id, path)
+  end
+
+  # A genesis insert with the client's doc: stored as the client built it, no
+  # diff (re-ingesting would add server ops for nothing). Its own lineage, so
+  # a retried frame merges as a no-op instead of doubling (#846).
+  defp maybe_merge_crdt(nil, _incoming, user, note_id, _vault_id, path, %Yex.Doc{} = doc) do
+    with {:ok, state} <- Yex.encode_state_as_update(doc),
+         do:
+           crdt_merge_result(%{state: state, text: CrdtBridge.text_of(doc)}, user, note_id, path)
   end
 
   # A read-modify-write of a legacy row (no crdt_state) whose tail was empty
@@ -3334,9 +3498,13 @@ defmodule Engram.Notes do
   """
   @spec fetch_note_for_worker(String.t(), String.t()) :: {:ok, Note.t()} | {:discard, String.t()}
   def fetch_note_for_worker(note_id, user_id) when is_binary(user_id) do
-    result = Repo.with_tenant!(user_id, fn -> Repo.get(Note, note_id) end)
+    result = Repo.with_tenant!(user_id, fn -> Repo.one(worker_note_query(note_id)) end)
     classify_worker_note(note_id, result)
   end
+
+  # No CRDT state: see @note_fields_without_crdt.
+  defp worker_note_query(note_id),
+    do: from(n in Note, where: n.id == ^note_id, select: struct(n, @note_fields_without_crdt))
 
   @doc """
   `fetch_note_for_worker/2` plus the note's tail rows, from one statement (for
@@ -3379,7 +3547,7 @@ defmodule Engram.Notes do
   """
   @spec fetch_note_for_worker(String.t()) :: {:ok, Note.t()} | {:discard, String.t()}
   def fetch_note_for_worker(note_id) do
-    note = Repo.cross_tenant(fn -> Repo.get(Note, note_id) end)
+    note = Repo.cross_tenant(fn -> Repo.one(worker_note_query(note_id)) end)
     classify_worker_note(note_id, note)
   end
 
@@ -3470,8 +3638,23 @@ defmodule Engram.Notes do
     with {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       hmac = Crypto.hmac_field(filter_key, path)
 
-      {:ok, from(n in scoped_live(user, vault), where: n.path_hmac == ^hmac)}
+      ids? = Keys.ids?()
+      {:ok, from(n in live_notes(user, vault, ids?), where: ^Keys.eq(:path, hmac, ids?))}
     end
+  end
+
+  # Live `kind = 'note'` rows. Every lookup by `path_hmac` goes through this,
+  # because the only live path index is the partial
+  # `notes_user_vault_path_v2 ... WHERE deleted_at IS NULL AND kind = 'note'`
+  # and Postgres uses it only when the query states both conditions (it does not
+  # read `notes_kind_shape_check`). Folder markers have `path_hmac IS NULL` by
+  # that CHECK, so the kind filter drops nothing a path lookup could match.
+  # NotesPathIndexPlanTest pins the plans.
+  defp live_notes(user, vault, ids?) do
+    from(n in scoped_live(user, vault),
+      where: n.kind == "note",
+      where: ^Keys.kind_match(:note, ids?)
+    )
   end
 
   @doc false
@@ -3489,10 +3672,11 @@ defmodule Engram.Notes do
       {:ok, filter_key} ->
         by_hmac = Map.new(paths, fn path -> {Crypto.hmac_field(filter_key, path), path} end)
         hmacs = Map.keys(by_hmac)
+        ids? = Keys.ids?()
 
         query =
-          from(n in scoped_live(user, vault),
-            where: n.path_hmac in ^hmacs,
+          from(n in live_notes(user, vault, ids?),
+            where: ^Keys.in_any(:path, hmacs, ids?),
             select: {n.path_hmac, n.id}
           )
 
@@ -3522,8 +3706,9 @@ defmodule Engram.Notes do
 
         Repo.exists?(
           from(n in scoped(user, vault_id),
+            where: ^Keys.eq(:path, hmac),
             where:
-              n.path_hmac == ^hmac and n.kind == "note" and not is_nil(n.deleted_at) and
+              n.kind == "note" and not is_nil(n.deleted_at) and
                 n.deleted_at >= ^cutoff and n.content_hash == ^content_hash
           )
         )
@@ -3563,17 +3748,29 @@ defmodule Engram.Notes do
       |> Map.new(fn p -> {Crypto.hmac_field(filter_key, p), p} end)
 
     hmacs = Map.keys(hmac_to_path)
+    ids? = Keys.ids?()
 
     query =
       from(n in Note,
-        where: n.user_id == ^user.id and n.path_hmac in ^hmacs and is_nil(n.deleted_at),
+        # `kind` for the partial path index; see live_notes/2.
+        where: n.user_id == ^user.id and is_nil(n.deleted_at) and n.kind == "note",
+        where: ^Keys.in_any(:path, hmacs, ids?),
+        where: ^Keys.kind_match(:note, ids?),
         select: {n.path_hmac, n.id}
       )
 
+    # Every path index leads with vault_id, so an all-vaults lookup names the
+    # user's vaults rather than scanning their notes.
     query =
       case vault do
-        %{id: vault_id} -> from(n in query, where: n.vault_id == ^vault_id)
-        _ -> query
+        %{id: vault_id} ->
+          from(n in query, where: n.vault_id == ^vault_id)
+
+        _ ->
+          from(n in query,
+            where:
+              n.vault_id in subquery(from(v in Vault, where: v.user_id == ^user.id, select: v.id))
+          )
       end
 
     rows =
@@ -4576,7 +4773,12 @@ defmodule Engram.Notes do
 
     base =
       if after_id do
-        from(n in base, where: n.seq > ^after_seq or (n.seq == ^after_seq and n.id > ^after_id))
+        # A row comparison, not `seq > s OR (seq = s AND id > i)`: only this
+        # form is an index range on (vault_id, seq, id), so a page seeks to its
+        # cursor instead of walking the feed from seq 0 (SeqFeedKeysetPlanTest).
+        from(n in base,
+          where: fragment("(?, ?) > (?, ?)", n.seq, n.id, ^after_seq, type(^after_id, Ecto.UUID))
+        )
       else
         from(n in base, where: n.seq > ^after_seq)
       end
@@ -4584,7 +4786,7 @@ defmodule Engram.Notes do
     query =
       case fields do
         :meta -> from(n in base, select: struct(n, @note_meta_fields))
-        :all -> base
+        :all -> from(n in base, select: struct(n, @note_fields_without_crdt))
       end
 
     # Byte budget. `limit` caps ROWS; nothing capped BYTES, and POST /notes
@@ -4597,6 +4799,9 @@ defmodule Engram.Notes do
     # decrypted the rows it was meant to exclude, which is exactly where the
     # memory goes. The probe selects sizes only — no content, no decrypt — so it
     # is a few KB regardless of how fat the page would have been.
+    #
+    # The page reads no CRDT state (@note_fields_without_crdt), so content is the only
+    # large column it selects and this probe measures what is actually read.
     #
     # The probe bounds the STORED ciphertext read only. Stored size is NOT the
     # plaintext size (format 1 rows are zstd-compressed, so a few KB can inflate
@@ -5106,40 +5311,12 @@ defmodule Engram.Notes do
   @doc """
   Returns unique tags across all non-deleted notes for a user.
 
-  Phase B.3: tags live only in `tags_ciphertext` (envelope-encrypted JSON list).
-  Each note's tags are decrypted Elixir-side and then deduplicated. Filters
-  out notes with no tags via `tags_hmac != []` so we skip the decrypt round.
+  The names of `list_tags_with_counts/2`, which it shares a cache entry with.
   """
   @spec list_tags(map(), map()) :: {:ok, [String.t()]}
   def list_tags(user, vault) do
-    case Crypto.dek_filter_key(user) do
-      {:ok, _filter_key} ->
-        {:ok, dek} = Crypto.get_dek(user)
-
-        {:ok, rows} =
-          Repo.with_tenant(user.id, fn ->
-            Repo.all(
-              from(n in scoped_live(user, vault),
-                where: not is_nil(n.tags_ciphertext) and n.tags_hmac != ^[],
-                select: {n.id, n.dek_version, n.tags_ciphertext, n.tags_nonce}
-              )
-            )
-          end)
-
-        tags =
-          rows
-          |> Enum.flat_map(fn {id, dv, ct, nonce} ->
-            decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :tags, id, dv))
-            |> TagsTerm.decode!()
-          end)
-          |> Enum.uniq()
-          |> Enum.sort()
-
-        {:ok, tags}
-
-      {:error, :no_dek} ->
-        {:ok, []}
-    end
+    {:ok, counts} = list_tags_with_counts(user, vault)
+    {:ok, Enum.map(counts, & &1.name)}
   end
 
   @doc """
@@ -5160,8 +5337,8 @@ defmodule Engram.Notes do
   distinct types — `DISTINCT ON` collapses to one representative row per type
   in the database (riding the existing `{user_id, vault_id, type_hmac}` index)
   and only those get decrypted. A 10k-note vault with a dozen types costs a
-  dozen decrypts, not ten thousand. Tags cannot do this: `tags_hmac` is a
-  list, so there is no one-row-per-value to collapse to.
+  dozen decrypts, not ten thousand. The DISTINCT ON still reads every live
+  row, so the answer is cached per vault seq (`VaultScanCache`).
   """
   @spec list_types(map(), map()) :: {:ok, [String.t()]}
   def list_types(user, vault) do
@@ -5169,23 +5346,26 @@ defmodule Engram.Notes do
       {:ok, _filter_key} ->
         {:ok, dek} = Crypto.get_dek(user)
 
-        {:ok, rows} =
-          Repo.with_tenant(user.id, fn ->
-            Repo.all(
-              from(n in scoped_live(user, vault),
-                where: not is_nil(n.type_hmac) and not is_nil(n.type_ciphertext),
-                distinct: [asc: n.type_hmac],
-                select: {n.id, n.dek_version, n.type_ciphertext, n.type_nonce}
-              )
+        # notes_type (vault_id, type_id) is partial on `type_id IS NOT NULL`:
+        # only typed notes (about 5%) are read.
+        type_col = Keys.col(:type)
+
+        raw = fn ->
+          Repo.all(
+            from(n in scoped_live(user, vault),
+              where: not is_nil(field(n, ^type_col)) and not is_nil(n.type_ciphertext),
+              distinct: [asc: field(n, ^type_col)],
+              select: {n.id, n.dek_version, n.type_ciphertext, n.type_nonce}
             )
-          end)
+          )
+        end
 
         # Enum.uniq/1 is NOT redundant after the DISTINCT ON. The hmac is keyed
         # by the user's filter key, so rows written either side of a filter-key
         # rotation carry different hmacs for the same logical type and survive
         # the database dedup as separate rows. Normalising and uniq'ing the
         # plaintext collapses them.
-        types =
+        finish = fn rows ->
           rows
           |> Enum.map(fn {id, dv, ct, nonce} ->
             decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :type, id, dv))
@@ -5193,8 +5373,9 @@ defmodule Engram.Notes do
           end)
           |> Enum.uniq()
           |> Enum.sort()
+        end
 
-        {:ok, types}
+        {:ok, VaultScanCache.read(user, vault, :types, raw, finish)}
 
       {:error, :no_dek} ->
         {:ok, []}
@@ -5339,13 +5520,14 @@ defmodule Engram.Notes do
     # across CPU work). No DEK means no notes, as in list_folders_with_counts/2.
     case Crypto.get_dek(user) do
       {:ok, dek} ->
-        {counts, markers} =
+        {seq, counts, markers} =
           Repo.with_tenant!(user.id, fn ->
-            {raw_folder_count_rows(user, vault), raw_folder_marker_rows(user, vault)}
+            seq = Engram.Vaults.raw_current_seq(vault.id)
+            {seq, raw_folder_counts_at(user, vault, seq), raw_folder_marker_rows(user, vault)}
           end)
 
         combine_folders_payload(
-          decrypt_folder_count_rows(counts, dek),
+          folder_counts_at(vault, seq, counts, dek),
           decrypt_folder_marker_rows(markers, dek)
         )
 
@@ -5495,9 +5677,12 @@ defmodule Engram.Notes do
   @doc """
   Returns tags with counts across all non-deleted notes for a user.
 
-  Phase B.3: tags are envelope-encrypted per note. Decrypts each note's
-  tags Elixir-side, then aggregates counts. The Postgres `unnest()` /
-  `GROUP BY tag` shortcut is gone with the plaintext column.
+  Tags are envelope-encrypted per note, so the counting happens here, not in
+  SQL. But `tags_hmac` is the note's tag list hashed in order, so notes with
+  the same hmac list hold the same tags: Postgres groups by it, and one
+  representative per distinct tag set is decrypted, weighted by how many
+  notes share it. A vault where most notes repeat a few tag sets costs a few
+  decrypts, not one per note. Cached per vault seq (`VaultScanCache`).
   """
   @spec list_tags_with_counts(map(), map()) :: {:ok, [%{name: String.t(), count: integer()}]}
   def list_tags_with_counts(user, vault) do
@@ -5505,31 +5690,54 @@ defmodule Engram.Notes do
       {:ok, _filter_key} ->
         {:ok, dek} = Crypto.get_dek(user)
 
-        {:ok, rows} =
-          Repo.with_tenant(user.id, fn ->
-            Repo.all(
-              from(n in scoped_live(user, vault),
-                where: not is_nil(n.tags_ciphertext) and n.tags_hmac != ^[],
-                select: {n.id, n.dek_version, n.tags_ciphertext, n.tags_nonce}
-              )
-            )
-          end)
-
         counts =
-          rows
-          |> Enum.flat_map(fn {id, dv, ct, nonce} ->
-            decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :tags, id, dv))
-            |> TagsTerm.decode!()
-          end)
-          |> Enum.frequencies()
-          |> Enum.map(fn {name, count} -> %{name: name, count: count} end)
-          |> Enum.sort_by(& &1.name)
+          VaultScanCache.read(
+            user,
+            vault,
+            :tag_counts,
+            fn ->
+              Repo.all(
+                from(n in scoped_live(user, vault),
+                  where: not is_nil(n.tags_ciphertext) and n.tags_hmac != ^[],
+                  group_by: n.tags_hmac,
+                  select: {
+                    fragment(
+                      "any_value(ROW(?, ?, ?, ?))",
+                      n.id,
+                      n.dek_version,
+                      n.tags_ciphertext,
+                      n.tags_nonce
+                    ),
+                    count()
+                  }
+                )
+              )
+            end,
+            &tag_counts_from_sets(&1, dek)
+          )
 
         {:ok, counts}
 
       {:error, :no_dek} ->
         {:ok, []}
     end
+  end
+
+  # One `{representative row, notes sharing its tag set}` per distinct
+  # tags_hmac. Two hmac lists can still hold the same tags (written either
+  # side of a filter-key rotation), so the sum is over plaintext names.
+  defp tag_counts_from_sets(sets, dek) do
+    sets
+    |> Enum.reduce(%{}, fn {{id, dv, ct, nonce}, notes}, acc ->
+      # A record's fields skip Ecto's type casting, so the uuid is raw bytes.
+      aad = row_aad(:notes, :tags, Ecto.UUID.load!(id), dv)
+
+      decrypt_envelope!(ct, nonce, dek, aad)
+      |> TagsTerm.decode!()
+      |> Enum.reduce(acc, fn name, acc -> Map.update(acc, name, notes, &(&1 + notes)) end)
+    end)
+    |> Enum.map(fn {name, count} -> %{name: name, count: count} end)
+    |> Enum.sort_by(& &1.name)
   end
 
   @doc """
@@ -5541,8 +5749,17 @@ defmodule Engram.Notes do
     case Crypto.dek_filter_key(user) do
       {:ok, _filter_key} ->
         {:ok, dek} = Crypto.get_dek(user)
-        rows = Repo.with_tenant!(user.id, fn -> raw_folder_count_rows(user, vault) end)
-        {:ok, decrypt_folder_count_rows(rows, dek)}
+
+        counts =
+          VaultScanCache.read(
+            user,
+            vault,
+            :folder_counts,
+            fn -> raw_folder_count_rows(user, vault) end,
+            &decrypt_folder_count_rows(&1, dek)
+          )
+
+        {:ok, counts}
 
       {:error, :no_dek} ->
         {:ok, []}
@@ -5596,6 +5813,30 @@ defmodule Engram.Notes do
       # A record's fields skip Ecto's type casting, so the uuid is raw bytes.
       %{id: Ecto.UUID.load!(id), dv: dv, ct: ct, nonce: nonce, count: count}
     end)
+  end
+
+  @doc """
+  The folder counts at `seq` (read by the caller in the same transaction):
+  `{:cached, counts}` from `VaultScanCache`, else `{:rows, raw rows}` for
+  `folder_counts_at/4`. MUST run inside the caller's `Repo.with_tenant/2`.
+  """
+  @spec raw_folder_counts_at(map(), map(), integer()) :: {:cached, [map()]} | {:rows, [map()]}
+  def raw_folder_counts_at(user, vault, seq) do
+    case VaultScanCache.get(vault.id, seq, :folder_counts) do
+      {:ok, counts} -> {:cached, counts}
+      :miss -> {:rows, raw_folder_count_rows(user, vault)}
+    end
+  end
+
+  @doc "Decrypts (and caches) what `raw_folder_counts_at/3` returned. No DB access."
+  @spec folder_counts_at(map(), integer(), {:cached, [map()]} | {:rows, [map()]}, binary()) ::
+          [%{folder: String.t(), count: integer()}]
+  def folder_counts_at(_vault, _seq, {:cached, counts}, _dek), do: counts
+
+  def folder_counts_at(vault, seq, {:rows, rows}, dek) do
+    counts = decrypt_folder_count_rows(rows, dek)
+    VaultScanCache.put(vault.id, seq, :folder_counts, counts)
+    counts
   end
 
   @doc "Decrypts `raw_folder_count_rows/2`'s rows. Pure — no DB access."
@@ -5666,7 +5907,8 @@ defmodule Engram.Notes do
           Repo.with_tenant(user.id, fn ->
             Repo.all(
               from(n in scoped_live(user, vault),
-                where: n.kind == "note" and n.folder_hmac == ^target_hmac,
+                where: n.kind == "note",
+                where: ^Keys.eq(:folder, target_hmac),
                 order_by: [asc: n.id],
                 select: struct(n, @note_meta_fields)
               )
@@ -5797,33 +6039,76 @@ defmodule Engram.Notes do
     # Unwrap once so the caller can branch on a plain boolean.
     {:ok, exists?} =
       Repo.with_tenant(user.id, fn ->
-        Repo.exists?(from(n in scoped_live(user, vault), where: n.folder_hmac == ^target_hmac))
+        Repo.exists?(from(n in scoped_live(user, vault), where: ^Keys.eq(:folder, target_hmac)))
       end)
 
     exists?
   end
 
-  # Fetch + decrypt every live row in the vault for a folder-cascade scan
-  # (Phase B.3: plaintext `folder` is gone, so prefix filtering happens in
-  # Elixir over decrypted rows). Markers hydrate their single folder
-  # envelope; real notes go through the parallel batch decryptor instead
-  # of one-at-a-time. `:meta` skips the content column entirely for flows
-  # that never rewrite content (delete cascades).
-  # Always meta-projected (#863): both callers (folder rename + folder-delete
-  # cascade) only need path/folder/kind; content decrypt is targeted per-id
-  # where actually required (fetch_v1_contents).
-  defp fetch_decrypted_live_rows(user, vault) do
-    query = from(n in scoped_live(user, vault), select: struct(n, @note_meta_fields))
-
-    rows = Repo.with_tenant!(user.id, fn -> Repo.all(query) end)
+  # Fetch + decrypt the live rows in `folders` or under them, at any depth,
+  # for a folder cascade (rename, move, delete). Plaintext `folder` is gone
+  # (Phase B.3), so the prefix match runs on decrypted folders: but on ONE
+  # row per distinct folder_hmac (grouped in Postgres), and then only the
+  # rows in the matching folders are fetched, by the folder_hmac index. A
+  # rename used to fetch and decrypt every row of the vault.
+  # Markers hydrate their single folder envelope; real notes go through the
+  # parallel batch decryptor. Always meta-projected (#863): callers only need
+  # path/folder/kind; content decrypt is targeted per-id where actually
+  # required (fetch_v1_contents).
+  defp fetch_decrypted_live_rows(user, vault, folders) do
     {:ok, dek} = Crypto.get_dek(user)
+
+    hmacs = folder_hmacs_under(user, vault, folders, dek)
+
+    rows =
+      Repo.with_tenant!(user.id, fn ->
+        Repo.all(
+          from(n in scoped_live(user, vault),
+            where: ^Keys.in_any(:folder, hmacs),
+            select: struct(n, @note_meta_fields)
+          )
+        )
+      end)
 
     # Marker rows have nil path_ciphertext, so the standard decrypt path
     # short-circuits before unwrapping the folder envelope — they go
     # through the dedicated hydrate path instead.
     {markers, real} = Enum.split_with(rows, &(&1.kind == "folder"))
-    Enum.map(markers, &hydrate_folder_marker(&1, dek)) ++ decrypt_or_raise!(real, user)
+
+    (Enum.map(markers, &hydrate_folder_marker(&1, dek)) ++ decrypt_or_raise!(real, user))
+    |> Enum.filter(&folder_in?(&1.folder || "", folders))
   end
+
+  # The folder_hmacs of the vault's live rows whose folder is one of
+  # `folders` or under one. Every folder_hmac, not just this filter key's: a
+  # filter-key rotation leaves rows with another hmac for the same folder.
+  defp folder_hmacs_under(user, vault, folders, dek) do
+    Repo.with_tenant!(user.id, fn ->
+      Repo.all(
+        from(n in scoped_live(user, vault),
+          group_by: n.folder_hmac,
+          select:
+            {n.folder_hmac,
+             fragment(
+               "any_value(ROW(?, ?, ?, ?))",
+               n.id,
+               n.dek_version,
+               n.folder_ciphertext,
+               n.folder_nonce
+             )}
+        )
+      )
+    end)
+    |> Enum.filter(fn {_hmac, {id, dv, ct, nonce}} ->
+      # A record's fields skip Ecto's type casting, so the uuid is raw bytes.
+      aad = row_aad(:notes, :folder, Ecto.UUID.load!(id), dv)
+      folder_in?(decrypt_envelope!(ct, nonce, dek, aad), folders)
+    end)
+    |> Enum.map(&elem(&1, 0))
+  end
+
+  defp folder_in?(folder, folders),
+    do: folder in folders or Enum.any?(folders, &String.starts_with?(folder, &1 <> "/"))
 
   # Targeted content fetch for legacy (pre-AAD) rows in a folder rename —
   # the only rows whose rename path re-encrypts content. Returns
@@ -5908,7 +6193,7 @@ defmodule Engram.Notes do
     # (full AAD rebind, needs content + recomputed title) fetch content,
     # targeted by id below. `rows` (batch-move path) reuses a scan the caller
     # already holds instead of re-scanning per marker.
-    decrypted = rows || fetch_decrypted_live_rows(user, vault)
+    decrypted = rows || fetch_decrypted_live_rows(user, vault, [old_folder])
 
     notes =
       Enum.filter(decrypted, fn n ->
@@ -6304,14 +6589,7 @@ defmodule Engram.Notes do
 
     case Crypto.get_dek(user) do
       {:ok, _dek} ->
-        prefixes = Enum.map(folders, &(&1 <> "/"))
-
-        {:ok,
-         fetch_decrypted_live_rows(user, vault)
-         |> Enum.filter(fn r ->
-           f = r.folder || ""
-           f in folders or Enum.any?(prefixes, &String.starts_with?(f, &1))
-         end)}
+        {:ok, fetch_decrypted_live_rows(user, vault, folders)}
 
       {:error, :no_dek} ->
         {:ok, []}
@@ -6495,6 +6773,7 @@ defmodule Engram.Notes do
 
     from(n in Note,
       where: n.id in ^ids and n.folder_hmac in ^hmacs and is_nil(n.deleted_at),
+      # By primary key: the hmac is a fence on the row's folder, not a lookup.
       select: n.id
     )
   end
@@ -6635,14 +6914,14 @@ defmodule Engram.Notes do
   # `target_folder` (a path), rolling the whole batch back on the first failure.
   #
   # ONE shared vault scan for the whole batch (mirrors do_delete_folders/3) —
-  # the old shape re-ran fetch_decrypted_live_rows (full-vault fetch + decrypt)
+  # the old shape re-ran fetch_decrypted_live_rows (a vault fetch + decrypt)
   # inside EVERY marker's rename cascade. The scan is advanced IN MEMORY after
   # each successful rename so a batch containing a parent and its own
   # descendant still filters against post-move state (the per-marker re-scan
   # got that for free by re-reading the DB inside the same transaction).
   defp reduce_move_folders(user, vault, marker_ids, target_folder, dek) do
-    with :ok <- resolve_move_folders(user, vault, marker_ids, target_folder, dek) do
-      do_reduce_move_folders(user, vault, marker_ids, target_folder, dek)
+    with {:ok, sources} <- resolve_move_folders(user, vault, marker_ids, target_folder, dek) do
+      do_reduce_move_folders(user, vault, marker_ids, target_folder, dek, sources)
     end
   end
 
@@ -6660,8 +6939,9 @@ defmodule Engram.Notes do
   # detected here, with nothing moved. What genuinely cannot be pre-checked is a
   # path collision that only exists once earlier folders in the batch have
   # moved; that still halts mid-batch, and the folders already moved stay moved.
+  # Returns the markers' folders, which bound the batch's shared scan.
   defp resolve_move_folders(user, vault, marker_ids, target_folder, dek) do
-    Enum.reduce_while(marker_ids, :ok, fn id, :ok ->
+    Enum.reduce_while(marker_ids, {:ok, []}, fn id, {:ok, sources} ->
       case get_folder_marker_by_id(user, vault, id) do
         {:ok, marker} ->
           source = hydrate_folder_marker(marker, dek).folder
@@ -6669,7 +6949,7 @@ defmodule Engram.Notes do
           if target_folder == source or String.starts_with?(target_folder, source <> "/") do
             {:halt, {:error, {:cycle, id}}}
           else
-            {:cont, :ok}
+            {:cont, {:ok, [source | sources]}}
           end
 
         {:error, :not_found} ->
@@ -6678,8 +6958,12 @@ defmodule Engram.Notes do
     end)
   end
 
-  defp do_reduce_move_folders(user, vault, marker_ids, target_folder, dek) do
-    rows = fetch_decrypted_live_rows(user, vault)
+  # The scan holds every row under any marker's folder as resolved. A marker
+  # that sits under an earlier one in the batch moves with it in memory
+  # (advance_renamed_rows/3), and its rows were already under the earlier
+  # folder, so later lookups by its current folder still find them.
+  defp do_reduce_move_folders(user, vault, marker_ids, target_folder, dek, sources) do
+    rows = fetch_decrypted_live_rows(user, vault, sources)
 
     marker_ids
     |> Enum.reduce_while({%{moved: 0, pairs: []}, rows}, fn id, {acc, rows} ->
@@ -6901,6 +7185,18 @@ defmodule Engram.Notes do
   # to 1 notes (see `populating_notes/2` for what counts). Subsequent inserts skip the broadcast; the FTUX listener
   # is one-shot anyway, but avoiding extra channel traffic keeps the
   # invariant readable from the server side too.
+  # `note_created`'s `surface`: where the note came from. "welcome" is our own
+  # seed note, so activation queries can tell it apart from a user's first note.
+  defp created_surface(opts) do
+    case Keyword.get(opts, :actor) do
+      "mcp" -> "mcp"
+      "system" -> "welcome"
+      "api" <> _ -> "api"
+      "sync" -> Keyword.get(opts, :surface, "other")
+      _ -> "other"
+    end
+  end
+
   defp maybe_broadcast_vault_populated(user, vault) do
     # "Exactly one row?" via LIMIT 2 instead of COUNT(*): the aggregate
     # visits every matching row, so a bulk first-sync paid an O(vault)
@@ -6942,7 +7238,13 @@ defmodule Engram.Notes do
     _ =
       if length(ids) == 1 do
         Repo.after_commit(fn ->
-          EngramWeb.Endpoint.broadcast("user:#{user.id}", "vault_populated", %{vault_id: vault.id})
+          _ =
+            EngramWeb.Endpoint.broadcast("user:#{user.id}", "vault_populated", %{
+              vault_id: vault.id
+            })
+
+          # The first-content timestamp, whether or not a page is open to see it.
+          Engram.Analytics.track(user, "vault_populated", %{vault_id: vault.id})
         end)
       end
 
@@ -7147,6 +7449,36 @@ defmodule Engram.Notes do
   # thin wrapper exposes it without promoting it to an official public API.
   def inject_phase_b_fields_pub(attrs, user, note_id, path, folder, tags) do
     inject_phase_b_fields(attrs, user, note_id, path, folder, tags)
+  end
+
+  @path_folder_fields [
+    :path_ciphertext,
+    :path_nonce,
+    :path_hmac,
+    :basename_hmac,
+    :path_ci_hmac,
+    :path_length,
+    :link_keys_stamp,
+    :folder_ciphertext,
+    :folder_nonce,
+    :folder_hmac
+  ]
+
+  @doc """
+  Drops the freshly encrypted path and folder from a content write's
+  attributes when the row already stores the same path and folder, AAD-bound:
+  equal hmacs under the current filter key mean equal plaintext. Re-encrypting
+  them only swapped the nonces, and `path_nonce`/`link_keys_stamp` sit in
+  index keys and predicates, so no content write could be a HOT update. A
+  rename, a legacy (pre-AAD) row or a filter-key change keeps the new fields.
+  """
+  @spec keep_stored_path(map(), Note.t()) :: map()
+  def keep_stored_path(attrs, %Note{} = stored) do
+    if stored.dek_version == Crypto.row_version_aad_bound() and
+         is_binary(stored.path_ciphertext) and is_binary(stored.folder_ciphertext) and
+         attrs[:path_hmac] == stored.path_hmac and attrs[:folder_hmac] == stored.folder_hmac,
+       do: Map.drop(attrs, @path_folder_fields),
+       else: attrs
   end
 
   @doc false

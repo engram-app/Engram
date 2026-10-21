@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/locale-provider";
 import { track } from "../analytics/track";
+import { ApiError, api } from "../api/client";
 import AgreementPage from "./agreement-page";
 
 // The behaviour under test is the page, not the legal texts: rendering the
@@ -18,6 +19,11 @@ vi.mock("../legal/load", async (importOriginal) => ({
 }));
 
 vi.mock("../analytics/track", () => ({ track: vi.fn() }));
+const captureError = vi.hoisted(() => vi.fn());
+vi.mock("../sentry", () => ({ captureError, scrubUrl: (url: string) => url }));
+vi.mock("../observability/remote-log", () => ({
+	rlog: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
 const mockTrack = vi.mocked(track);
 
 const { mutate, submitFeedback, statusRef } = vi.hoisted(() => ({
@@ -219,6 +225,60 @@ describe("AgreementPage: terms only", () => {
 		await screen.findByRole("heading", { name: /Terms of Service/iu });
 		expect(screen.queryByText("How did you hear about Engram?")).not.toBeInTheDocument();
 		expect(screen.queryByRole("radio")).toBeNull();
+	});
+
+	// ENGRAM-FRONTEND-5: Safari's "Load failed" on POST /onboarding/accept-terms
+	// escaped the click handler as an unhandled rejection, and the user was left
+	// on a page that said nothing.
+	it("shows a retryable error, not an unhandled rejection, when accepting fails", async () => {
+		const unhandled = vi.fn();
+		process.on("unhandledRejection", unhandled);
+		captureError.mockClear();
+		// Through the real api client: it owns (and reports) network failures.
+		globalThis.fetch = vi.fn().mockRejectedValue(new TypeError("Load failed"));
+		mutate.mockImplementationOnce(() => api.post("/onboarding/accept-terms", {}));
+		renderPage();
+		fireEvent.click(screen.getByRole("checkbox", { name: /agree/iu }));
+		await clickContinue();
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"Could not continue. Please try again.",
+		);
+		expect(screen.getByRole("button", { name: /continue/iu })).toBeEnabled();
+		await new Promise((r) => setTimeout(r, 0));
+		process.off("unhandledRejection", unhandled);
+		expect(unhandled).not.toHaveBeenCalled();
+		// The api client reports network failures itself; not twice.
+		expect(captureError).not.toHaveBeenCalled();
+	});
+
+	// A 4xx is not a network or server failure, so the api client reports
+	// nothing: the page must, or a broken accept goes unseen.
+	it("reports a 4xx the api client does not, and still shows the error", async () => {
+		captureError.mockClear();
+		const err = new ApiError(422, "tos_hash_mismatch");
+		mutate.mockRejectedValueOnce(err);
+		renderPage();
+		fireEvent.click(screen.getByRole("checkbox", { name: /agree/iu }));
+		await clickContinue();
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"Could not continue. Please try again.",
+		);
+		expect(captureError).toHaveBeenCalledOnce();
+		expect(captureError).toHaveBeenCalledWith(err);
+	});
+
+	// The server's English is never shown; a status with its own sentence is.
+	it("shows the translated sentence for a status that has one", async () => {
+		mutate.mockRejectedValueOnce(new ApiError(429, "rate_limited"));
+		renderPage();
+		fireEvent.click(screen.getByRole("checkbox", { name: /agree/iu }));
+		await clickContinue();
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"Too many requests. Try again in a moment.",
+		);
 	});
 
 	it("cannot be submitted twice while saving", async () => {

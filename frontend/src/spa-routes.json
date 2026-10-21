@@ -21,7 +21,8 @@
 		"/v/my-vault",
 		"/v/my-vault/018f2b3c-0000-7000-8000-000000000000",
 		"/settings/api-keys",
-		"/settings/connections"
+		"/settings/connections",
+		"/operator"
 	],
 	"mustNotResolve": [
 		"/v/my-vault/wiki/Some%20Note",

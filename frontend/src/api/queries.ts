@@ -581,7 +581,8 @@ export interface SearchResult {
 export interface User {
 	id: string;
 	email: string;
-	role: "admin" | "member";
+	// "operator" is granted only from the release console (Engram.Release).
+	role: "admin" | "member" | "operator";
 	display_name: string | null;
 	// UI language (BCP 47) as last reported by a client; null until one does.
 	locale: string | null;
@@ -1346,11 +1347,25 @@ export function useBillingStatus() {
 	});
 }
 
-// GET /billing/usage, the slice the usage meter reads. `limit: null` is
-// uncapped (`index_points` is uncapped while the v5 index budget is off).
+// GET /billing/usage, the slice the usage meter and the embed-bucket row read.
+// `limit: null` is uncapped (`index_points` is uncapped while the v5 index
+// budget is off).
 export interface UsageEntry {
 	used: number;
 	limit: number | null;
+}
+
+/** Free's refilling embed budget from `GET /billing/usage`; null when the user has none. */
+export interface EmbedBucket {
+	available: number;
+	capacity: number;
+	refill_per_day: number;
+	/** ISO timestamp the bucket is full again; null when it already is. */
+	full_at: string | null;
+	/** Notes waiting on the bucket, searchable by keyword until they fit. */
+	parked_notes: number;
+	/** When every waiting note fits; null when they fit now or never refill. */
+	parked_ready_at: string | null;
 }
 
 export interface BillingUsage {
@@ -1360,6 +1375,7 @@ export interface BillingUsage {
 		index_points: UsageEntry;
 		// Notes on keyword-only search (the floor tier).
 		floor_notes: number;
+		embed_bucket?: EmbedBucket | null;
 	};
 }
 
@@ -1367,6 +1383,16 @@ export function useBillingUsage() {
 	return useQuery({
 		queryKey: ["billing", "usage"],
 		queryFn: () => api.get<BillingUsage>("/billing/usage"),
+		staleTime: 60_000,
+	});
+}
+
+// Same query key and payload as useBillingUsage, so both share one cache entry.
+export function useEmbedBucket() {
+	return useQuery({
+		queryKey: ["billing", "usage"],
+		queryFn: () => api.get<BillingUsage>("/billing/usage"),
+		select: (data) => data?.usage?.embed_bucket ?? null,
 		staleTime: 60_000,
 	});
 }

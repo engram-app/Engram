@@ -162,6 +162,7 @@ defmodule EngramWeb.VaultAccessAttackTest do
       {:post, "/api/notes", %{"path" => "x.md", "content" => "pwn", "mtime" => 2.0}},
       {:post, "/api/notes/append", %{"path" => "Dir/a.md", "text" => "pwn"}},
       {:post, "/api/notes/rename", %{"old_path" => "Dir/a.md", "new_path" => "Dir/b.md"}},
+      {:post, "/api/notes/ctime", %{"entries" => [%{"path" => "Dir/a.md", "ctime" => 1.0}]}},
       {:delete, "/api/notes/Dir/a.md", %{}},
       {:delete, "/api/notes/by-id/#{note.id}", %{}},
       {:post, "/api/notes/batch-delete", %{"ids" => [note.id]}},

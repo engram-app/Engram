@@ -61,6 +61,17 @@ defmodule Engram.PromEx.ZeroInitTest do
              Enum.sort(~w(text_undecryptable note_undecryptable payload_undecryptable))
   end
 
+  test "covers each status and outcome the v5 alerts select" do
+    labels = Enum.map(ZeroInit.prometheus_series(), &elem(&1, 1))
+    statuses = for %{status: s} <- labels, uniq: true, do: s
+    outcomes = for %{outcome: o} <- labels, uniq: true, do: o
+
+    assert Enum.sort(statuses) ==
+             Enum.sort(~w(requeue_failed remap_failed after_flip both_deks_failed))
+
+    assert "drifted" in outcomes and "rewritten" in outcomes
+  end
+
   test "starts after PromEx, so its handlers are attached" do
     children = Engram.Application.children(Application.fetch_env!(:engram, Oban))
     prom_ex = Enum.find_index(children, &(&1 == Engram.PromEx))

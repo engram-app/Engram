@@ -1,23 +1,30 @@
+import { LOCALES } from "../i18n/locales";
 import { isMember } from "../lib/is-member";
 import { captureError } from "../sentry";
 import { analyticsClient } from "./client";
 import {
 	CHECKLIST_ACTIONS,
 	CHECKLIST_ITEMS,
+	CHECKOUT_CADENCES,
 	CHECKOUT_METHODS,
 	CHECKOUT_TIERS,
 	type EngramEvent,
 	ERROR_CODES,
 	EVENT_SCHEMAS,
 	GATE_REASONS,
+	LIMIT_REASONS,
 	MCP_CLIENTS,
 	ONBOARDING_STEPS,
 	type PropKind,
 	UPGRADE_SOURCES,
 	VAULT_SOURCES,
 } from "./events";
+import { serverEvents } from "./server-sink";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// A BCP-47 language tag: language, then up to three script/region/variant
+// subtags. Nothing else fits, so no free text can pass as one.
+const LANGUAGE_TAG = /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/;
 
 /** A value is allowed only if it both matches its declared kind AND sits under
  *  a key the event's schema actually declares — see EVENT_SCHEMAS. Checking
@@ -37,6 +44,10 @@ function isKind(kind: PropKind, value: unknown): boolean {
 			return isMember(MCP_CLIENTS, value);
 		case "upgrade_source":
 			return isMember(UPGRADE_SOURCES, value);
+		case "cadence":
+			return isMember(CHECKOUT_CADENCES, value);
+		case "limit_reason":
+			return isMember(LIMIT_REASONS, value);
 		case "checklist_item":
 			return isMember(CHECKLIST_ITEMS, value);
 		case "checklist_action":
@@ -47,6 +58,14 @@ function isKind(kind: PropKind, value: unknown): boolean {
 			return isMember(ERROR_CODES, value);
 		case "gate_reasons":
 			return Array.isArray(value) && value.every((v) => isMember(GATE_REASONS, v));
+		case "language_tag":
+			return typeof value === "string" && LANGUAGE_TAG.test(value);
+		case "locale":
+			return isMember(LOCALES, value);
+		case "language_tags":
+			return (
+				Array.isArray(value) && value.every((v) => typeof v === "string" && LANGUAGE_TAG.test(v))
+			);
 		case "boolean":
 			return typeof value === "boolean";
 		case "number":
@@ -101,4 +120,7 @@ export function track(event: EngramEvent, props: Record<string, unknown> = {}): 
 	}
 
 	analyticsClient()?.capture(event, props);
+	// Our own event log too (recorded there only, never re-sent to PostHog),
+	// under the same consent: see server-sink.ts.
+	serverEvents.add(event, props);
 }

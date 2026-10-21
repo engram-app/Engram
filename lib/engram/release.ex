@@ -56,6 +56,8 @@ defmodule Engram.Release do
   "prod moved" — check the infra PR, not this workflow's status.
   """
 
+  import Ecto.Query, only: [from: 2]
+
   alias Engram.Logger.Metadata
 
   require Logger
@@ -197,7 +199,13 @@ defmodule Engram.Release do
     _ = load_app()
 
     for repo <- repos() do
-      {:ok, _, _} = Ecto.Migrator.with_repo(repo, &do_prepare_database/1)
+      # A sibling task may be migrating: wait on its locks, don't fail boot.
+      :ok = use_migrator_session(repo)
+
+      {:ok, _, _} =
+        Ecto.Migrator.with_repo(repo, fn repo ->
+          with_migration_lock(repo.config(), fn -> do_prepare_database(repo) end)
+        end)
     end
 
     :ok
@@ -207,12 +215,151 @@ defmodule Engram.Release do
     _ = load_app()
 
     for repo <- repos() do
-      {:ok, _, _} = Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :up, all: true))
+      :ok = use_migrator_session(repo)
+
+      {:ok, _, _} =
+        Ecto.Migrator.with_repo(repo, fn repo ->
+          with_migration_lock(repo.config(), fn -> Ecto.Migrator.run(repo, :up, all: true) end)
+        end)
+    end
+  end
+
+  # Every web and worker task migrates on boot. Ecto's own migration lock
+  # skips each `@disable_migration_lock` migration, which is every
+  # CONCURRENTLY index build, so two tasks booting together ran the same
+  # build and Postgres deadlocked them (#2128). One advisory lock, held by a
+  # dedicated idle session around the whole run, makes the next migrator
+  # wait and then find nothing pending.
+  #
+  # The waiter polls `pg_try_advisory_lock` instead of blocking in
+  # `pg_advisory_lock`: a blocked statement holds a snapshot, and the
+  # holder's CONCURRENTLY build waits on every open snapshot, so the two
+  # would wait on each other forever with no deadlock error.
+  @migration_lock_key 2_128_000_001
+
+  @doc false
+  @spec with_migration_lock(keyword(), (-> result), pos_integer()) :: result when result: term()
+  def with_migration_lock(config, fun, retry_ms \\ 2_000) do
+    {:ok, conn} =
+      config
+      |> Keyword.drop([:pool, :pool_size, :parameters])
+      |> Keyword.put(:pool_size, 1)
+      |> Postgrex.start_link()
+
+    try do
+      await_migration_lock(conn, retry_ms, true)
+      fun.()
+    after
+      # Closing the session releases the lock, even if `fun` raised.
+      GenServer.stop(conn)
+    end
+  end
+
+  defp await_migration_lock(conn, retry_ms, first?) do
+    case Postgrex.query!(conn, "SELECT pg_try_advisory_lock($1)", [@migration_lock_key]) do
+      %{rows: [[true]]} ->
+        :ok
+
+      _ ->
+        if first?,
+          do:
+            Logger.info(
+              "another task is migrating; waiting for the migration lock",
+              Metadata.with_category(:info, :boot, [])
+            )
+
+        Process.sleep(retry_ms)
+        await_migration_lock(conn, retry_ms, false)
+    end
+  end
+
+  # The app Repo's session timeouts (`RuntimeConfig.repo_parameters/1`) must
+  # not reach the migrator: `lock_timeout` would fail a
+  # `CREATE INDEX CONCURRENTLY` that is waiting out older transactions, and
+  # leave an INVALID index behind. The migrator runs in its own `eval` before
+  # the app boots, so changing the env here touches nothing else.
+  defp use_migrator_session(repo) do
+    Application.put_env(@app, repo, migrator_config(Application.get_env(@app, repo, [])))
+  end
+
+  @doc false
+  @spec migrator_config(keyword()) :: keyword()
+  def migrator_config(config), do: Keyword.delete(config, :parameters)
+
+  @doc """
+  Grant the platform `operator` role (the operator insights page) to the
+  live account with `email`, from the release console:
+
+      /app/bin/engram eval 'Engram.Release.grant_operator("you@example.com")'
+
+  The ONLY way to grant it: no API, plug or changeset casts `role`
+  (`Engram.Insights.OperatorRoleTest`). Only a `member` can be granted, so a
+  self-host admin is never demoted by it. Logged in `role_change_log` with
+  no actor (the console has no acting user). Returns `:ok` or
+  `{:error, :not_found | {:role_is, role}}`.
+  """
+  @spec grant_operator(String.t()) :: :ok | {:error, term()}
+  def grant_operator(email), do: change_platform_role(email, "member", "operator")
+
+  @doc "Revoke the `operator` role (back to `member`). Logged like a grant."
+  @spec revoke_operator(String.t()) :: :ok | {:error, term()}
+  def revoke_operator(email), do: change_platform_role(email, "operator", "member")
+
+  defp change_platform_role(email, from, to) do
+    _ = load_app()
+    action = if to == "operator", do: "grant_operator", else: "revoke_operator"
+
+    {:ok, result, _} =
+      Ecto.Migrator.with_repo(Engram.Repo, fn repo ->
+        repo.transaction(fn -> set_platform_role(repo, email, from, to, action) end)
+      end)
+
+    case result do
+      {:ok, user_id} ->
+        Logger.info(
+          "#{action} user_id=#{user_id}",
+          Metadata.with_category(:info, :lifecycle, [])
+        )
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp set_platform_role(repo, email, from, to, action) do
+    email = email |> String.trim() |> String.downcase()
+
+    user =
+      repo.one(
+        from(u in Engram.Accounts.User,
+          where: fragment("lower(?)", u.email) == ^email and is_nil(u.deleted_at),
+          lock: "FOR UPDATE"
+        )
+      )
+
+    cond do
+      is_nil(user) ->
+        repo.rollback(:not_found)
+
+      user.role != from ->
+        repo.rollback({:role_is, user.role})
+
+      true ->
+        repo.update!(Ecto.Changeset.change(user, role: to))
+
+        repo.insert!(%Engram.Insights.RoleChange{
+          target_user_id: user.id,
+          action: action,
+          scope: "platform"
+        })
+
+        user.id
     end
   end
 
   def rollback(repo, version) do
     _ = load_app()
+    :ok = use_migrator_session(repo)
     {:ok, _, _} = Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :down, to: version))
   end
 
@@ -244,7 +391,13 @@ defmodule Engram.Release do
     _ = load_app()
 
     for repo <- repos() do
-      {:ok, _, _} = Ecto.Migrator.with_repo(repo, &do_reset_baseline/1)
+      # It replays every migration when it fires: same session as migrate/0.
+      :ok = use_migrator_session(repo)
+
+      {:ok, _, _} =
+        Ecto.Migrator.with_repo(repo, fn repo ->
+          with_migration_lock(repo.config(), fn -> do_reset_baseline(repo) end)
+        end)
     end
 
     :ok
@@ -323,6 +476,7 @@ defmodule Engram.Release do
     _ = load_app()
 
     for repo <- repos() do
+      :ok = use_migrator_session(repo)
       {:ok, _, _} = Ecto.Migrator.with_repo(repo, &verify_schema_baseline!/1)
     end
 

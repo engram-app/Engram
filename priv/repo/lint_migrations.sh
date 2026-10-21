@@ -49,45 +49,23 @@ if [ -z "$base_version" ]; then
   exit 1
 fi
 
-# Skip lint entirely if any new migration file carries the
-# `# squawk-ignore-file` marker. Used for schema-restore baselines whose
-# rendered DDL is the entire schema (FORCE ROW LEVEL SECURITY, sequences,
-# ALTER ... OWNER, etc.) — squawk's parser chokes on the advanced syntax
-# and the lint adds no value over the existing schema diff gate.
-for v in "${new_versions[@]}"; do
-  if grep -q "# squawk-ignore-file" "$MIG_DIR"/${v}_*.exs 2>/dev/null; then
-    echo "squawk: skipping — ${v} carries # squawk-ignore-file marker"
-    exit 0
-  fi
-done
-
-echo "squawk: linting new migrations: ${new_versions[*]}"
-
-# Bring the throwaway DB up to the base branch state, then render only the new
-# migrations' SQL. The clean SQL lines have no timestamp prefix; each statement
-# is terminated by a params marker (` []` inline, or a lone `[]` line).
-mix ecto.migrate --to "$base_version" >/dev/null
-
-tmp_sql="$(mktemp --suffix=.sql)"
-trap 'rm -f "$tmp_sql"' EXIT
-
-mix ecto.migrate --log-migrations-sql 2>/dev/null \
-  | grep -vE '^[0-9]{2}:[0-9]{2}:[0-9]{2}' \
-  | grep -vE '^\s*$' \
-  | awk '{ t=$0; sub(/[ \t]+$/,"",t);
-           if (t=="[]") { if(buf!=""){print buf ";"; buf=""} }
-           else if (t ~ / \[\]$/) { sub(/ \[\]$/,"",t); buf=(buf==""?t:buf"\n"t); print buf ";"; buf="" }
-           else { buf=(buf==""?t:buf"\n"t) } }
-       END { if (buf!="") print buf ";" }' > "$tmp_sql"
-
-if [ ! -s "$tmp_sql" ]; then
-  echo "squawk: rendered no SQL — nothing to lint"
-  exit 0
-fi
-
-echo "── rendered DDL ──"
-cat "$tmp_sql"
-echo "──────────────────"
+# Markers, per migration file:
+#
+#   # squawk-ignore-file          the file's DDL is not linted at all. For
+#                                 schema-restore baselines squawk cannot parse.
+#   # squawk-ignore: rule-a, rule-b
+#                                 lint the file, minus these rules. Prefer this:
+#                                 an empty-table CREATE INDEX needs only
+#                                 require-concurrent-index-creation off, not the
+#                                 whole file unlinted.
+#
+# Each new migration is rendered and linted ON ITS OWN, so a marker scopes to
+# its file. This used to render all new migrations as one SQL blob and exit on
+# the first ignore-file marker, which silently skipped every OTHER new
+# migration in the PR (#2095 bundled a marked migration and its rebuild
+# migrations were never linted).
+#
+# A marked file is still migrated: later migrations build on its schema.
 
 # `ban-drop-column` / `ban-drop-table` are ON globally (see .squawk.toml) and
 # should stay on: an unintended DROP in a migration that was not meant to drop
@@ -97,30 +75,98 @@ echo "──────────────────"
 # already gates that separately and more precisely: verify.yml "migration
 # gates" extracts what any new migration drops and greps lib/ to prove nothing
 # still reads the dropped columns/tables. A blanket ban would make dropping
-# unshippable.
+# unshippable. Scoped to the filename convention, NOT to a global config
+# exclusion, so the rules keep gating every other migration.
 #
-# Scoped to the filename convention, NOT to a global config exclusion, so the
-# rules keep gating every other migration.
 # squawk's `--exclude` REPLACES `.squawk.toml`'s `excluded_rules` rather than
 # merging with it (verified: passing the drop rules alone brought
 # require-timeout-settings and prefer-robust-stmts back, even with an explicit
-# `-c`). So when we add the drop rules we must re-state the config's own list.
+# `-c`). So any per-file exclusion must re-state the config's own list.
 # Derived from the file rather than duplicated, so the two cannot drift; if the
 # config's format ever changes this yields an empty base and CI goes red on the
 # re-appearing rules, which is the loud failure we want.
 base_excluded=$(sed -n 's/^excluded_rules *= *\[\(.*\)\]/\1/p' ".squawk.toml" |
   tr -d '" ' | tr -d "'")
 
-drop_rules_excluded=""
-for v in "${new_versions[@]}"; do
-  # `compgen -G`, not `ls`: `ls a b` exits non-zero when EITHER operand is an
-  # unmatched glob, so testing both suffixes at once silently never fired.
-  if compgen -G "$MIG_DIR/${v}_*_drops.exs" >/dev/null; then
-    drop_rules_excluded="--exclude=${base_excluded:+$base_excluded,}ban-drop-column,ban-drop-table"
-    echo "squawk: ${v} is a *_drops migration - drop rules" \
+# Ecto's --log-migrations-sql output to plain SQL. The clean SQL lines have no
+# timestamp prefix; each statement is terminated by a params marker (` []`
+# inline, or a lone `[]` line). The greps are `|| true`: a migration that
+# renders nothing (data-only, no-op) makes grep exit 1, which pipefail would
+# turn into a silent script exit before the "rendered no SQL" branch.
+render_sql() {
+  { grep -vE '^[0-9]{2}:[0-9]{2}:[0-9]{2}' || true; } \
+    | { grep -vE '^\s*$' || true; } \
+    | awk '{ t=$0; sub(/[ \t]+$/,"",t);
+             if (t=="[]") { if(buf!=""){print buf ";"; buf=""} }
+             else if (t ~ / \[\]$/) { sub(/ \[\]$/,"",t); buf=(buf==""?t:buf"\n"t); print buf ";"; buf="" }
+             else { buf=(buf==""?t:buf"\n"t) } }
+         END { if (buf!="") print buf ";" }'
+}
+
+echo "squawk: linting new migrations: ${new_versions[*]}"
+
+# Bring the throwaway DB up to the base branch state, then step through the
+# new migrations one at a time, rendering each one's SQL.
+mix ecto.migrate --to "$base_version" >/dev/null
+
+tmp_sql="$(mktemp --suffix=.sql)"
+mix_out="$(mktemp)"
+mix_err="$(mktemp)"
+trap 'rm -f "$tmp_sql" "$mix_out" "$mix_err"' EXIT
+
+failed=()
+for v in $(printf '%s\n' "${new_versions[@]}" | sort -u); do
+  file=$(compgen -G "$MIG_DIR/${v}_*.exs" | head -1)
+
+  # A migration that fails to apply must say which one and why, not end the
+  # step with a bare exit 1.
+  if ! mix ecto.migrate --to "$v" --log-migrations-sql >"$mix_out" 2>"$mix_err"; then
+    echo "::error::squawk: ${file##*/} failed to migrate" >&2
+    cat "$mix_err" "$mix_out" >&2
+    exit 1
+  fi
+  render_sql <"$mix_out" >"$tmp_sql"
+
+  # Anchored to a comment line, so prose that mentions the marker does not
+  # silently skip the file.
+  if grep -qE '^[[:space:]]*# squawk-ignore-file' "$file"; then
+    echo "squawk: skipping ${file##*/} (# squawk-ignore-file)"
+    continue
+  fi
+
+  if [ ! -s "$tmp_sql" ]; then
+    echo "squawk: ${file##*/} rendered no SQL - nothing to lint"
+    continue
+  fi
+
+  excluded=""
+  if [[ "$file" == *_drops.exs ]]; then
+    excluded="ban-drop-column,ban-drop-table"
+    echo "squawk: ${file##*/} is a *_drops migration - drop rules" \
          "deferred to the reference check in verify.yml migration gates"
+  fi
+  # `# squawk-ignore: a, b` (the whole line, rule names only). Anything else on
+  # the line fails to match, the rules stay on, and squawk goes red: loud.
+  file_rules=$(sed -nE 's/^[[:space:]]*# squawk-ignore:[[:space:]]*([a-z0-9-]+([[:space:]]*,[[:space:]]*[a-z0-9-]+)*)[[:space:]]*$/\1/p' "$file" |
+    tr -d ' ' | paste -sd, -)
+  if [ -n "$file_rules" ]; then
+    excluded="${excluded:+$excluded,}$file_rules"
+    echo "squawk: ${file##*/} ignores: $file_rules"
+  fi
+
+  echo "── ${file##*/} ──"
+  cat "$tmp_sql"
+  echo "──────────────────"
+
+  exclude_arg=()
+  [ -n "$excluded" ] && exclude_arg=("--exclude=${base_excluded:+$base_excluded,}$excluded")
+
+  if ! "$SQUAWK" "${exclude_arg[@]}" "$tmp_sql"; then
+    failed+=("${file##*/}")
   fi
 done
 
-# shellcheck disable=SC2086 # intentional word-splitting: empty or one --exclude
-"$SQUAWK" $drop_rules_excluded "$tmp_sql"
+if [ "${#failed[@]}" -gt 0 ]; then
+  echo "::error::squawk: ${#failed[@]} migration(s) failed lint: ${failed[*]}" >&2
+  exit 1
+fi

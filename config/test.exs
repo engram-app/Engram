@@ -40,6 +40,9 @@ config :engram, :boot_canary_enabled, false
 config :engram, :background_job_priority, :normal
 config :engram, :origin_stats_flush_ms, nil
 config :engram, :origin_stats_flush_on_terminate, false
+# Folded analytics counts (Engram.Analytics.Folds): tests flush by hand.
+config :engram, :analytics_folds_flush_ms, nil
+config :engram, :analytics_folds_flush_on_terminate, false
 
 # CheckpointGate inline limit raised out of the way for tests: the gate is a
 # process-global counter shared by the whole (partly async) suite, and many
@@ -193,6 +196,12 @@ config :engram, :billing_enabled, true
 # Limits enforced by default in test env so existing tests don't bypass.
 config :engram, :limits_enforced, true
 
+# Our own analytics event log (Engram.Analytics.EventLog); a test that wants
+# it turns it on, and flushes its buffer by hand (`EventLog.flush/0`).
+config :engram, :analytics_event_log, false
+config :engram, :analytics_event_log_flush_ms, nil
+config :engram, :analytics_event_log_flush_on_terminate, false
+
 # Legal seeder skipped at boot in tests — SeederTest seeds per-case.
 config :engram, :seed_legal_on_boot, false
 
@@ -248,3 +257,6 @@ config :engram, :qdrant_collection_metrics, false
 # EmbedNote's Qdrant pressure preflight: off for the same reason (it GETs
 # /sys_metrics and /metrics); its tests opt in per-process.
 config :engram, :qdrant_backpressure_preflight, false
+
+# Post-flip Qdrant sweep retries without waiting in tests.
+config :engram, Engram.Crypto.UserDekRotation, qdrant_retry_ms: 0

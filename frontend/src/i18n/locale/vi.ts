@@ -20,6 +20,10 @@ export default {
 	"Failed to duplicate.": "Sao chép thất bại.",
 	"Batch delete failed.": "Xóa hàng loạt không thành công.",
 	"Batch move failed.": "Di chuyển hàng loạt không thành công.",
+	"Couldn't load sign-in": "Không tải được trang đăng nhập",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"Dịch vụ đăng nhập không tải được. Kiểm tra kết nối của bạn, sau đó tải lại trang.",
+	Reload: "Tải lại",
 	"This account is suspended. Contact an admin to restore access.":
 		"Tài khoản này đã bị khóa. Liên hệ với quản trị viên để khôi phục quyền truy cập.",
 	"Incorrect email or password.": "Địa chỉ email hoặc mật khẩu không chính xác.",
@@ -148,6 +152,17 @@ export default {
 	Free: "Miễn phí",
 	"{count} days remaining in your free trial.": {
 		other: "Còn {count} ngày trong thời gian dùng thử miễn phí của bạn.",
+	},
+	"Indexing budget": "Ngân sách lập chỉ mục",
+	"{available} of {capacity} tokens left": "Còn {available} trong số {capacity} token",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Tái nạp {perDay} token mỗi ngày. Đủ token lại vào lúc {date}.",
+	"All tokens are available.": "Tất cả mã thông báo đều khả dụng.",
+	"{count} notes have keyword search only, until {date}.": {
+		other: "{count} ghi chú chỉ hỗ trợ tìm kiếm theo từ khóa, cho đến {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		other: "{count} ghi chú chỉ có tìm kiếm theo từ khóa, cho đến khi tài khoản được nạp lại.",
 	},
 	"Loading current connection…": "Đang tải kết nối hiện tại…",
 	"Disconnected. Retry the new connection now.": "Đã ngắt kết nối. Thử kết nối mới ngay bây giờ.",
@@ -518,7 +533,6 @@ export default {
 	"Linux PC": "Máy tính Linux",
 	Oops: "Ốp",
 	"Something went wrong": "Có lỗi xảy ra",
-	Reload: "Tải lại",
 	"Back to home": "Quay lại trang chủ",
 	"Error detail (dev only)": "Chi tiết lỗi (chỉ dành cho nhà phát triển)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -655,6 +669,9 @@ export default {
 	"Love it": "Rất thích",
 	"Tell us more": "Hãy cho chúng tôi biết thêm",
 	Language: "Ngôn ngữ",
+	"Show Engram in {language}?": "Hiển thị Engram trong {language}?",
+	"Switch language": "Chuyển đổi ngôn ngữ",
+	"Not now": "Không hiện tại",
 	"My Vault": "Kho lưu trữ của tôi",
 	"{count} days left in your trial.": {
 		other: "Còn {count} ngày trong thời gian dùng thử của bạn.",
@@ -862,6 +879,7 @@ export default {
 	"{client} is connected": "{client} đã kết nối",
 	"Your AI tool is connected": "Công cụ AI của bạn đã kết nối",
 	"What will you use Engram for?": "Bạn sẽ sử dụng Engram cho mục đích gì?",
+	"Could not continue. Please try again.": "Không thể tiếp tục. Vui lòng thử lại.",
 	"Review the Terms": "Xem lại Điều khoản",
 	"privacy notice": "Thông báo về quyền riêng tư",
 	"What changed": "Những thay đổi là gì",
@@ -922,7 +940,6 @@ export default {
 		"Thử nghiệm miễn phí 7 ngày cho các gói trả phí. Cần thẻ, không tính phí cho đến khi hết hạn.",
 	"Continue with Free →": "Tiếp tục với gói Miễn phí →",
 	"{summary} · upgrade anytime": "{summary} · nâng cấp bất cứ lúc nào",
-	"Could not continue. Please try again.": "Không thể tiếp tục. Vui lòng thử lại.",
 	"Step {step} of {total}": "Bước {step} trong {total}",
 	Onboarding: "Hướng dẫn sử dụng",
 	"Stop connecting this app": "Dừng kết nối ứng dụng này",
@@ -982,6 +999,10 @@ export default {
 	"Why {tool} can't be connected": "Tại sao {tool} không thể kết nối",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Danh sách này chưa đầy đủ, chọn {client} nếu công cụ của bạn không có trong đây.",
+	"Customer insights": "Thông tin khách hàng",
+	"User ID": "ID người dùng",
+	"Show timeline": "Hiển thị dòng thời gian",
+	"Failed to load the report.": "Không tải được báo cáo.",
 	Account: "Tài khoản",
 	"Manage your profile, password, and account.": "Quản lý hồ sơ mật khẩu và tài khoản của bạn.",
 	"Manage your profile, security, and active sessions.":

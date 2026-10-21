@@ -20,6 +20,10 @@ export default {
 	"Failed to duplicate.": "복사에 실패했습니다.",
 	"Batch delete failed.": "일괄 삭제에 실패했습니다.",
 	"Batch move failed.": "일괄 이동에 실패했습니다.",
+	"Couldn't load sign-in": "로그인 불러오기 실패",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"로그인 서비스 로드에 실패했습니다. 연결 상태를 확인한 후 페이지를 다시 로드하세요.",
+	Reload: "다시 로드",
 	"This account is suspended. Contact an admin to restore access.":
 		"이 계정은 정지되었습니다. 접근 권한을 복구하려면 관리자에게 문의하세요.",
 	"Incorrect email or password.": "이메일 또는 비밀번호가 올바르지 않습니다.",
@@ -146,6 +150,17 @@ export default {
 	"Current Plan": "현재 요금제",
 	Free: "무료",
 	"{count} days remaining in your free trial.": { other: "무료 체험은 {count}일 남았습니다." },
+	"Indexing budget": "인덱싱 용량",
+	"{available} of {capacity} tokens left": "{available} 토큰 남음 ({capacity} 토큰 중)",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"하루 {perDay} 토큰을 충전합니다. {date}에 다시 가득 찹니다.",
+	"All tokens are available.": "모든 토큰이 사용 가능합니다.",
+	"{count} notes have keyword search only, until {date}.": {
+		other: "{count} 노트는 {date}까지 키워드 검색만 지원합니다.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		other: "{count} 노트는 예산이 충전될 때까지 키워드 검색만 지원합니다.",
+	},
 	"Loading current connection…": "현재 연결 로딩 중…",
 	"Disconnected. Retry the new connection now.": "연결 해제됨. 지금 새로운 연결을 시도하세요.",
 	"Couldn't disconnect. Try Settings → Connections.":
@@ -507,7 +522,6 @@ export default {
 	"Linux PC": "리눅스 PC",
 	Oops: "어휴",
 	"Something went wrong": "오류가 발생했습니다",
-	Reload: "다시 로드",
 	"Back to home": "홈으로 돌아가기",
 	"Error detail (dev only)": "오류 세부 정보 (개발자 전용)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -643,6 +657,9 @@ export default {
 	"Love it": "매우 만족합니다",
 	"Tell us more": "자세히 알려주세요",
 	Language: "언어",
+	"Show Engram in {language}?": "{language}에 Engram을 표시하시겠습니까?",
+	"Switch language": "언어 변경",
+	"Not now": "지금은 아니요",
 	"My Vault": "내 보관함",
 	"{count} days left in your trial.": { other: "무료 체험은 {count}일 남았습니다." },
 	"Collapse sidebar": "사이드바 접기",
@@ -849,6 +866,7 @@ export default {
 	"{client} is connected": "{client}이 연결되었습니다",
 	"Your AI tool is connected": "AI 도구가 연결되었습니다",
 	"What will you use Engram for?": "Engram을 어디에 사용하시겠습니까?",
+	"Could not continue. Please try again.": "계속할 수 없습니다. 다시 시도해주세요.",
 	"Review the Terms": "이용 약관 확인",
 	"privacy notice": "개인정보 처리방침",
 	"What changed": "변경 내역",
@@ -907,7 +925,6 @@ export default {
 		"유료 요금제의 경우 7일 무료 체험 제공. 카드 정보 필요하며, 종료 시까지 요금이 부과되지 않습니다.",
 	"Continue with Free →": "무료로 시작하기 →",
 	"{summary} · upgrade anytime": "{summary} · 언제든지 업그레이드 가능",
-	"Could not continue. Please try again.": "계속할 수 없습니다. 다시 시도해주세요.",
 	"Step {step} of {total}": "{step}단계 / {total}단계",
 	Onboarding: "시작하기",
 	"Stop connecting this app": "이 앱 연결 중지",
@@ -966,6 +983,10 @@ export default {
 	"Why {tool} can't be connected": "{tool} 연결이 안 되는 이유",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"완전한 목록은 아니지만, 목록에 없으면 {client}을(를) 선택하세요.",
+	"Customer insights": "고객 인사이트",
+	"User ID": "사용자 ID",
+	"Show timeline": "타임라인 보기",
+	"Failed to load the report.": "보고서 로드 실패.",
 	Account: "계정",
 	"Manage your profile, password, and account.": "프로필, 비밀번호, 계정을 관리하세요.",
 	"Manage your profile, security, and active sessions.": "프로필, 보안 및 활성 세션을 관리하세요.",

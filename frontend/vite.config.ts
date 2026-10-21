@@ -118,7 +118,8 @@ export default defineConfig({
 		environment: "happy-dom",
 		globals: true,
 		setupFiles: ["./src/test-setup.ts"],
-		exclude: ["**/node_modules/**", "**/dist/**", "**/e2e/**"],
+		// e2e specs run under Playwright; only the pure helpers in e2e/support are unit-tested.
+		exclude: ["**/node_modules/**", "**/dist/**", "**/e2e/**/*.spec.ts"],
 		// @atomic-editor/editor's compiled dist/*.js uses extensionless relative
 		// imports (e.g. `from './AtomicCodeMirrorEditor'`), which is invalid under
 		// Node's native ESM resolver. Vitest externalizes node_modules deps to

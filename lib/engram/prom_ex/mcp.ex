@@ -32,6 +32,8 @@ defmodule Engram.PromEx.Mcp do
 
   use PromEx.Plugin
 
+  alias Engram.PromEx.Buckets
+
   @stop_event [:engram, :mcp, :tool, :stop]
   @parse_event [:engram, :mcp, :section_parse, :stop]
 
@@ -48,9 +50,7 @@ defmodule Engram.PromEx.Mcp do
           event_name: @stop_event,
           measurement: :duration,
           description: "MCP tool dispatch latency by tool.",
-          reporter_options: [
-            buckets: [5, 10, 25, 50, 100, 250, 500, 1_000, 5_000]
-          ],
+          reporter_options: Buckets.opts(Engram.PromEx.Mcp.DurationBuckets),
           tags: [:tool, :status],
           unit: {:native, :millisecond}
         ),
@@ -65,9 +65,7 @@ defmodule Engram.PromEx.Mcp do
           event_name: @stop_event,
           measurement: :result_bytes,
           description: "MCP tool result payload size in bytes (LLM context cost).",
-          reporter_options: [
-            buckets: [64, 256, 1_024, 4_096, 16_384, 65_536, 262_144]
-          ],
+          reporter_options: Buckets.opts(Engram.PromEx.Mcp.ResultBytesBuckets),
           tags: [:tool]
         ),
         counter(
@@ -79,4 +77,14 @@ defmodule Engram.PromEx.Mcp do
       ]
     )
   end
+end
+
+defmodule Engram.PromEx.Mcp.DurationBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [5, 10, 25, 50, 100, 250, 500, 1_000, 5_000]
+end
+
+defmodule Engram.PromEx.Mcp.ResultBytesBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [64, 256, 1_024, 4_096, 16_384, 65_536, 262_144]
 end

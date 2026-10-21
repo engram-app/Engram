@@ -4,6 +4,7 @@ import { useParams } from "react-router";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import { encodePathSegments } from "@/lib/path";
+import { whenLoaded } from "@/lib/when-loaded";
 import { ApiError, api, isNotFound } from "../api/client";
 import { useAttachments } from "../api/queries";
 import { DocumentHeader } from "./document-header";
@@ -13,7 +14,7 @@ import PreviewColumn from "./preview-column";
 
 // pdf.js is heavy — only pull its chunk when a PDF is actually opened, never
 // for image/other previews.
-const PdfView = lazy(() => import("./pdf-view"));
+const PdfView = lazy(() => whenLoaded(import("./pdf-view")));
 
 // Read-only preview for a single attachment, routed by uuid (/attachment/:id) —
 // like notes, so the URL survives a rename/move. Resolves the id to its path +

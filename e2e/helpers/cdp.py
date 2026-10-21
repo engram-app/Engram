@@ -54,6 +54,14 @@ class CdpClient:
         self._settings_ws = None
         self._logged_targets = False
 
+    def retarget(self, port: int) -> None:
+        """Point at a restarted Obsidian's new CDP port.
+
+        The old socket belongs to a dead process (and maybe a closed event
+        loop), so it is dropped, not closed.
+        """
+        self.__init__(port, self.host)
+
     def _list_page_targets(self) -> list[dict]:
         resp = requests.get(f"{self._base_url}/json", timeout=5)
         resp.raise_for_status()

@@ -5,8 +5,10 @@ defmodule Engram.PromEx.Crypto do
   Subscribes to:
 
     * `[:engram, :crypto, :dek_cache]` — `%{count: 1}`, metadata
-      `%{outcome: :hit | :miss}`. A miss pairs with a provider unwrap
-      (network RPC under AwsKms), so the hit/miss ratio is the leading
+      `%{outcome: :hit | :miss | :coalesced}`. `:coalesced` is a miss that
+      waited for another caller's in-flight unwrap and got its DEK or its
+      error, so `miss - coalesced` is the number of provider unwrap attempts
+      (network RPC under AwsKms), the leading
       indicator of unwrap cost on the read path.
     * `[:engram, :envelope, :compression_gate]`: `%{allowed: 0 | 1}`,
       emitted by `Engram.Crypto.CompressionGate` on every verdict change.
@@ -44,6 +46,11 @@ defmodule Engram.PromEx.Crypto do
   (KMS excepted), but that list feeds LiveDashboard only — this plugin is what gets
   them onto the scraped `/metrics` endpoint.
 
+    * `engram_prom_ex_crypto_rotate_row_failed_total`: tags `[:table, :phase,
+      :status]`, from `[:engram, :crypto, :rotate, :dek, :row_failed]`
+      (`UserDekRotation`). `status="requeue_failed"` or `"remap_failed"`
+      means a committed rotation left index repair undone (alert on it).
+
   Cardinality contract: only the atoms above. NEVER add user_id,
   vault_id, or note ids.
   """
@@ -55,6 +62,7 @@ defmodule Engram.PromEx.Crypto do
   @gate_reason_event [:engram, :envelope, :compression_gate, :reason]
   @kms_attempt_event [:ex_aws, :request, :stop]
   @kms_failure_event [:engram, :crypto, :kms, :failure]
+  @rotate_row_failed_event [:engram, :crypto, :rotate, :dek, :row_failed]
 
   @impl true
   def event_metrics(opts) do
@@ -67,7 +75,8 @@ defmodule Engram.PromEx.Crypto do
         counter(
           metric_prefix ++ [:dek_cache, :total],
           event_name: @dek_cache_event,
-          description: "DekCache lookups by outcome (hit | miss).",
+          description:
+            "DekCache lookups by outcome (hit | miss | coalesced); unwraps = miss - coalesced.",
           tags: [:outcome]
         ),
         last_value(
@@ -97,6 +106,15 @@ defmodule Engram.PromEx.Crypto do
           event_name: @kms_failure_event,
           description: "Failed KmsExAws calls (not attempts) by op and error class.",
           tags: [:op, :error_class]
+        ),
+        sum(
+          metric_prefix ++ [:rotate, :row_failed, :total],
+          event_name: @rotate_row_failed_event,
+          measurement: :count,
+          description:
+            "Per-user DEK rotation row/point failures by table, phase and status " <>
+              "(after_flip, requeue_failed, remap_failed, orphan_deleted, ...).",
+          tags: [:table, :phase, :status]
         )
       ]
     )

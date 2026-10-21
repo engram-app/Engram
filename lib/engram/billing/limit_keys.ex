@@ -98,9 +98,15 @@ defmodule Engram.Billing.LimitKeys do
       type: :integer,
       defaults: %{free: 10_485_760, starter: 209_715_200, pro: 524_288_000}
     },
-    lifetime_embed_token_cap: %{
+    # Free's Voyage budget: the CAPACITY of a token bucket that refills
+    # continuously at one capacity per 365 days (`UsageMeters.bucket_take/4`),
+    # so 6M up front and ~16.4k a day after. Replaces the 20M LIFETIME cap,
+    # which spent once and then stopped embedding a Free user forever. An empty
+    # bucket never stops indexing: the pass runs keyword-only and the note is
+    # re-embedded densely as tokens refill. nil (paid) = no bucket.
+    embed_token_bucket: %{
       type: :integer,
-      defaults: %{free: 20_000_000, starter: nil, pro: nil}
+      defaults: %{free: 6_000_000, starter: nil, pro: nil}
     },
     # Free gets 2 so the tier can actually DEMONSTRATE sync — laptop + phone is
     # the floor for an Obsidian user, and a 1-device free tier can never show
@@ -117,7 +123,7 @@ defmodule Engram.Billing.LimitKeys do
     device_swap_cooldown_hours: %{type: :integer, defaults: %{free: 24, starter: 0, pro: 0}},
     reranker_enabled: %{type: :boolean, defaults: %{free: false, starter: false, pro: true}},
     # No `search_semantic_enabled` key: semantic search is every tier's. Free is
-    # bounded by `notes_cap`, `lifetime_embed_token_cap` and
+    # bounded by `notes_cap`, `embed_token_bucket` and
     # `ai_searches_per_day`, not by a feature flag.
     # API KEYS WORK EVERYWHERE, ON EVERY TIER (#1974). A personal API key may
     # call every route (REST, MCP, the sync sockets) on Free, Starter and Pro,
@@ -222,6 +228,20 @@ defmodule Engram.Billing.LimitKeys do
   @spec default_for(atom(), atom()) :: integer() | boolean() | String.t() | nil
   def default_for(key, tier) when key in @keys and tier in @tiers,
     do: @catalog |> Map.fetch!(key) |> Map.fetch!(:defaults) |> Map.fetch!(tier)
+
+  # Renamed keys whose existing `user_limit_overrides` rows must keep working:
+  # a row under the old name still applies to the new key (the new name wins
+  # when both exist) and can still be edited. `lifetime_embed_token_cap` became
+  # the refilling `embed_token_bucket`; a raised value or `-1` keeps its sense.
+  @legacy_keys %{embed_token_bucket: "lifetime_embed_token_cap"}
+
+  @doc "The old override key a renamed limit key still honours, or nil."
+  @spec legacy_key(atom()) :: String.t() | nil
+  def legacy_key(key), do: Map.get(@legacy_keys, key)
+
+  @doc "True for an old override key name kept readable after a rename."
+  @spec legacy_key?(term()) :: boolean()
+  def legacy_key?(name), do: name in Map.values(@legacy_keys)
 
   @spec env_var_names() :: [{atom(), atom(), String.t()}]
   def env_var_names do

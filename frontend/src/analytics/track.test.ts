@@ -2,6 +2,7 @@ import type { PostHog } from "posthog-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureError } from "../sentry";
 import { setAnalyticsClient } from "./client";
+import { serverEvents } from "./server-sink";
 import { track } from "./track";
 
 // Mirrors route-error-boundary.test.tsx's convention: assert WHAT gets
@@ -12,7 +13,10 @@ const mockCapture = vi.mocked(captureError);
 const posthog = { capture: vi.fn() };
 setAnalyticsClient(posthog as unknown as PostHog);
 
+const serverAdd = vi.spyOn(serverEvents, "add");
+
 afterEach(() => {
+	serverAdd.mockClear();
 	vi.unstubAllEnvs();
 	mockCapture.mockClear();
 	posthog.capture.mockClear();
@@ -122,6 +126,8 @@ describe("track onboarding interaction events", () => {
 		["vault_source_picked", { source: "obsidian" }],
 		["vault_source_picked", { source: "fresh" }],
 		["plugin_listing_opened", {}],
+		["browser_languages_unsupported", { languages: ["ar", "he-IL", "zh-Hant-HK"] }],
+		["browser_translation_detected", { to: "zh-CN", app_locale: "en" }],
 	] as const)("allows %s %j", (event, props) => {
 		track(event, props);
 		expect(posthog.capture).toHaveBeenCalledWith(event, props);
@@ -138,9 +144,27 @@ describe("track onboarding interaction events", () => {
 		["an unknown checklist action", "checklist_action", { item: "claude", action: "rage_clicked" }],
 		["a path as the vault source", "vault_source_picked", { source: "Work/Q3.md" }],
 		["any property on the listing click", "plugin_listing_opened", { url: "https://x.example" }],
+		["free text as a language", "browser_languages_unsupported", { languages: ["My journal"] }],
+		["a single language, not a list", "browser_languages_unsupported", { languages: "ar" }],
+		["free text as the target", "browser_translation_detected", { to: "hello world" }],
+		["an unshipped app locale", "browser_translation_detected", { app_locale: "ar" }],
 	] as const)("rejects %s", (_label, event, props) => {
 		track(event, props);
 		expect(posthog.capture).not.toHaveBeenCalled();
 		expect(mockCapture).toHaveBeenCalledOnce();
+	});
+});
+
+// The funnel also lands in our own event log (server-sink.ts), with the same
+// validation: only an event PostHog would get is sent there.
+describe("track feeds the server event log", () => {
+	it("queues a valid event for the server too", () => {
+		track("paywall_shown", { limit_key: "notes_cap_exceeded" });
+		expect(serverAdd).toHaveBeenCalledWith("paywall_shown", { limit_key: "notes_cap_exceeded" });
+	});
+
+	it("never queues a rejected event", () => {
+		track("onboarding_step_viewed", { step: "vault", title: "My private journal" });
+		expect(serverAdd).not.toHaveBeenCalled();
 	});
 });

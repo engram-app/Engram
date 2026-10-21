@@ -188,6 +188,15 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
 		"Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 	"Edit access for {name}":
 		"Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
+	// Billing "Indexing budget" row (2026-10-20). zh-CN, zh-TW and tr dropped the
+	// "of" and gave the second number its own counter; fr and pt-BR read the
+	// plural's leading number as a list item ("1. Les notes...").
+	"{available} of {capacity} tokens left":
+		"Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
+	"{count} notes have keyword search only, until {date}.":
+		"Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
+	"{count} notes have keyword search only, until the budget refills.":
+		"Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 	// Meaning check, 2026-10-16: "device" came back as an office (pl) and the label
 	// as a full sentence (ja). Other misread sources were reworded instead.
 	"Your plan resumes on {date}":

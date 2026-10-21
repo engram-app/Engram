@@ -108,6 +108,7 @@ defmodule Engram.Billing do
     string_key = to_string(key)
 
     with :miss <- user_override_lookup(user.id, string_key),
+         :miss <- legacy_override_lookup(user.id, key),
          :miss <- env_override_lookup(user_tier, key),
          :miss <- plan_lookup(user, string_key) do
       LimitKeys.default_for(key, user_tier)
@@ -208,6 +209,23 @@ defmodule Engram.Billing do
     end
   end
 
+  @doc """
+  `cap/2` for a whole tier, ignoring per-user overrides: the env override,
+  else the catalog default. nil means no ceiling. For reports over many users
+  that read the overrides in one query instead of one lookup per user.
+  """
+  @spec tier_cap(:free | :starter | :pro, atom()) :: integer() | nil
+  def tier_cap(tier, key) do
+    limit =
+      case {enforced?(), env_override_lookup(tier, key)} do
+        {false, _} -> nil
+        {true, {:hit, v}} -> v
+        {true, :miss} -> LimitKeys.default_for(key, tier)
+      end
+
+    if is_integer(limit) and limit >= 0, do: limit
+  end
+
   @spec granted?(term(), atom()) :: boolean()
   def granted?(user, key), do: check_feature(user, key) == :ok
 
@@ -280,6 +298,14 @@ defmodule Engram.Billing do
       )
       |> wrap_lookup()
     end)
+  end
+
+  # An override row written under a key's old name (`LimitKeys.legacy_key/1`).
+  defp legacy_override_lookup(user_id, key) do
+    case LimitKeys.legacy_key(key) do
+      nil -> :miss
+      old -> user_override_lookup(user_id, old)
+    end
   end
 
   defp env_override_lookup(tier, key) do
@@ -816,7 +842,7 @@ defmodule Engram.Billing do
               )
             end
 
-            {:ok, updated}
+            {:ok, %{updated | previous: %{tier: sub.tier, status: sub.status}}}
 
           {:error, reason} ->
             {:error, reason}
@@ -863,7 +889,7 @@ defmodule Engram.Billing do
               Engram.Auth.SessionInvalidator.disconnect_user(updated.user_id)
             end
 
-            {:ok, updated}
+            {:ok, %{updated | previous: %{tier: prev_tier, status: prev_status}}}
 
           err ->
             err
@@ -916,6 +942,19 @@ defmodule Engram.Billing do
     )
 
     {:ok, :ignored}
+  end
+
+  # Refunds and chargebacks. An adjustment carries no custom_data, so the owner
+  # is found through its subscription and handed to the analytics forwarder.
+  # Nothing is written: Paddle's subscription events carry any state change.
+  def upsert_from_paddle_event(%{"event_type" => type, "data" => data})
+      when type in ~w(adjustment.created adjustment.updated) do
+    with id when is_binary(id) <- data["subscription_id"],
+         %Subscription{} = sub <- get_subscription_by_paddle_id(id) do
+      {:ok, sub}
+    else
+      _ -> {:ok, :ignored}
+    end
   end
 
   def upsert_from_paddle_event(%{"event_type" => type}) do

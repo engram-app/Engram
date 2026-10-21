@@ -15,7 +15,7 @@ defmodule Engram.Repo do
   # (Engram#788). Their access is already correct — onboarding_actions via
   # `skip_tenant_check`, crdt_update_log via `with_tenant` — so listing them
   # only tightens the guard, it doesn't change behavior.
-  @tenant_tables ~w(notes chunks attachments api_keys vaults user_agreements onboarding_actions crdt_update_log note_links vault_index_states vault_index_update_log account_exports note_revisions subscriptions note_attrs frontmatter_keys embedding_cache chunk_points rebuild_manifest rebuild_manifest_vaults)a
+  @tenant_tables ~w(notes chunks attachments api_keys vaults user_agreements onboarding_actions crdt_update_log note_links vault_index_states vault_index_update_log account_exports note_revisions subscriptions note_bodies note_attrs frontmatter_keys embedding_cache chunk_points rebuild_manifest rebuild_manifest_vaults)a
 
   @doc """
   The tables guarded by `prepare_query/3`, which must equal the set of tables
@@ -83,8 +83,9 @@ defmodule Engram.Repo do
   PostgreSQL transaction-local `app.current_tenant` (for RLS enforcement).
 
   `tenant_id` is a canonical UUID string (post PG18+UUIDv7 rework).
-  The RLS policy compares `(user_id)::text = current_setting('app.current_tenant')`,
-  so the bind value is the lower-case hyphenated UUID string.
+  The RLS policy compares `user_id = NULLIF(current_setting('app.current_tenant'), '')::uuid`
+  (cast once per statement), so the bind value must be a UUID string; '' means
+  no tenant.
 
   Wire shape: tenant + role drop are applied in ONE parameterized
   `SELECT set_config(...)` (`set_config(..., true)` is exactly SET LOCAL).
@@ -265,6 +266,16 @@ defmodule Engram.Repo do
     result
   end
 
+  @tenant_enter "SELECT set_config('app.current_tenant', $1, true), " <>
+                  "set_config('role', 'engram_app', true)"
+  @tenant_enter_gated @tenant_enter <>
+                        ", (SELECT dek_rotation_locked_at IS NOT NULL " <>
+                        "FROM users WHERE id = $1::uuid)"
+
+  # Two literal statements, not one built at runtime: the SQL is fixed text.
+  defp enter_tenant(uuid, false), do: query!(@tenant_enter, [uuid], source: "tenant_enter")
+  defp enter_tenant(uuid, true), do: query!(@tenant_enter_gated, [uuid], source: "tenant_enter")
+
   defp tenant_transaction(uuid, fun) do
     # Decided before the transaction opens: inside it, in_transaction? is
     # always true.
@@ -291,13 +302,16 @@ defmodule Engram.Repo do
           # tenant + the engram_app role drop in a single round trip.
           # Superusers bypass RLS even with FORCE — the role drop scopes
           # enforcement to this transaction.
-          _ =
-            query!(
-              "SELECT set_config('app.current_tenant', $1, true), " <>
-                "set_config('role', 'engram_app', true)",
-              [uuid],
-              source: "tenant_enter"
-            )
+          #
+          # Under `RotationGate.gated/1` the same statement also reads the
+          # user's DEK rotation lock (a primary-key probe), so a write learns
+          # of a lock taken on another node without a separate round trip.
+          # `users` carries no RLS, so the role drop does not hide the row.
+          gated? = Process.get(:engram_write_gate, false)
+
+          %{rows: [row]} = enter_tenant(uuid, gated?)
+
+          if gated? and List.last(row), do: raise(Engram.Crypto.RotationInProgressError)
 
           result = fun.()
 

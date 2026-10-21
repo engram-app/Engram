@@ -96,7 +96,7 @@ defmodule Engram.Search do
          :ok <- validate_input(query, opts),
          :ok <- cross_vault_entitlement(user, opts),
          {:ok, opts} <- resolve_field_filters(user, opts),
-         :ok <- spend_search_budget(user) do
+         :ok <- spend_search_budget(user, opts) do
       do_search_instrumented(user, vault, query, opts)
     end
   end
@@ -269,7 +269,7 @@ defmodule Engram.Search do
       |> scrub_result_utf8()
       |> window_texts(query)
 
-    emit_search_performed(user, result, started_at, cross_vault)
+    emit_search_performed(user, result, started_at, cross_vault, surface_prop(opts))
 
     :telemetry.execute(
       [:engram, :search, :request, :stop],
@@ -467,18 +467,23 @@ defmodule Engram.Search do
     end
   end
 
-  defp emit_search_performed(user, {:ok, results}, started_at, cross_vault)
+  defp emit_search_performed(user, {:ok, results}, started_at, cross_vault, surface)
        when is_list(results) do
     latency_ms = System.monotonic_time(:millisecond) - started_at
 
-    Engram.Analytics.track(user, "search_performed", %{
-      result_count: length(results),
-      latency_ms: latency_ms,
-      cross_vault: cross_vault
-    })
+    Engram.Analytics.track(
+      user,
+      "search_performed",
+      Map.merge(surface, %{
+        status: "ok",
+        result_count: length(results),
+        latency_ms: latency_ms,
+        cross_vault: cross_vault
+      })
+    )
   end
 
-  defp emit_search_performed(_user, _other, _started_at, _cross_vault), do: :ok
+  defp emit_search_performed(_user, _other, _started_at, _cross_vault, _surface), do: :ok
 
   # Context-boundary bound on the caller-supplied limit: the controller
   # clamps to 50, but MCP/console callers hit this module directly and
@@ -1164,7 +1169,7 @@ defmodule Engram.Search do
   # Fixed window, not a rolling bucket: Hammer keys buckets by
   # `div(now, scale)`, so the 24-hour window is epoch-aligned and a user can
   # spend the budget either side of a boundary. Same permissive bias.
-  defp spend_search_budget(user) do
+  defp spend_search_budget(user, opts) do
     case Billing.cap(user, :ai_searches_per_day) do
       nil ->
         :ok
@@ -1172,14 +1177,41 @@ defmodule Engram.Search do
       limit when is_integer(limit) and limit > 0 ->
         case RateLimiter.hit("ai_search:#{user.id}", @budget_scale_ms, limit, :ai_search) do
           {:allow, _count} -> :ok
-          {:deny, _retry} -> {:error, :search_cap_exceeded, limit}
+          {:deny, _retry} -> refuse_search(user, limit, opts)
         end
 
       # `Billing.cap/2` answers `integer | nil` and maps every "no cap" spelling
       # (including a malformed override) to nil, so what reaches here is an
       # integer <= 0: a tier configured not to search at all.
       limit ->
-        {:error, :search_cap_exceeded, limit}
+        refuse_search(user, limit, opts)
+    end
+  end
+
+  # Reported here, at the one funnel, so MCP refusals count as well as REST.
+  # Throttled like `limit_hit` (one per user and surface per hour): a client
+  # retrying past its cap must not send one event per retry.
+  defp refuse_search(user, limit, opts) do
+    surface = surface_prop(opts)
+    Engram.Analytics.track_limit_hit(user, :ai_searches_per_day, surface)
+
+    Engram.Analytics.track_throttled(
+      user,
+      "search_performed",
+      "refused:#{Map.get(surface, :surface, "unknown")}",
+      :timer.hours(1),
+      Map.put(surface, :status, "refused")
+    )
+
+    {:error, :search_cap_exceeded, limit}
+  end
+
+  # The transport that searched (`web`, `api`, `obsidian_sync`, `mcp`), passed
+  # by the caller as `opts[:surface]`. Omitted when the caller did not say.
+  defp surface_prop(opts) do
+    case Keyword.get(opts, :surface) do
+      surface when is_binary(surface) -> %{surface: surface}
+      _ -> %{}
     end
   end
 end

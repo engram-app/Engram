@@ -21,6 +21,10 @@ export default {
 	"Failed to duplicate.": "Не вдалося скопіювати.",
 	"Batch delete failed.": "Видалення пакету не вдалося.",
 	"Batch move failed.": "Переміщення пакету не вдалося.",
+	"Couldn't load sign-in": "Не вдалося завантажити сторінку входу",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"Сервіс входу не завантажився. Перевірте ваше з'єднання, потім перезавантажте сторінку.",
+	Reload: "Перезавантажити",
 	"This account is suspended. Contact an admin to restore access.":
 		"Цей обліковий запис заблоковано. Зв'яжіться з адміністратором, щоб відновити доступ.",
 	"Incorrect email or password.": "Неправильний електронний адрес або пароль.",
@@ -157,6 +161,23 @@ export default {
 		few: "До кінця безкоштовного пробного періоду залишилося {count} дні.",
 		many: "До кінця безкоштовного пробного періоду залишилося {count} днів.",
 		other: "До кінця безкоштовного пробного періоду залишилося {count} дні.",
+	},
+	"Indexing budget": "Обсяг індексування",
+	"{available} of {capacity} tokens left": "Залишилося {available} з {capacity} токенів",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Поповнює {perDay} токенів на день. Поповнення відбудеться знову {date}.",
+	"All tokens are available.": "Усі токени доступні.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count} замітка має лише пошук за ключовими словами, до {date}.",
+		few: "{count} замітки мають лише пошук за ключовими словами, до {date}.",
+		many: "{count} заміток мають лише пошук за ключовими словами, до {date}.",
+		other: "{count} Замітки мають лише пошук за ключовими словами, до {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "{count} замітка має лише пошук за ключовими словами, поки не буде відновлено бюджет.",
+		few: "Для {count} заміток доступний лише пошук за ключовими словами, поки не буде відновлено бюджет.",
+		many: "{count} заміток мають лише пошук за ключовими словами, поки не буде відновлено бюджет.",
+		other: "{count} Замітки мають лише пошук за ключовими словами, поки не буде відновлено бюджет.",
 	},
 	"Loading current connection…": "Завантаження поточного з'єднання…",
 	"Disconnected. Retry the new connection now.": "Відключено. Спробуйте повторно підключитися.",
@@ -571,7 +592,6 @@ export default {
 	"Linux PC": "Комп'ютер Linux",
 	Oops: "Ой",
 	"Something went wrong": "Виникла помилка",
-	Reload: "Перезавантажити",
 	"Back to home": "Повернутися на головну",
 	"Error detail (dev only)": "Деталі помилки (лише для розробників)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -710,6 +730,9 @@ export default {
 	"Love it": "Мені це подобається",
 	"Tell us more": "Розкажіть нам більше",
 	Language: "Мова",
+	"Show Engram in {language}?": "Показати Engram у {language}?",
+	"Switch language": "Змінити мову",
+	"Not now": "Не зараз",
 	"My Vault": "Моє сховище",
 	"{count} days left in your trial.": {
 		one: "До кінця вашого пробного періоду залишилося {count} день.",
@@ -945,6 +968,7 @@ export default {
 	"{client} is connected": "{client} підключено",
 	"Your AI tool is connected": "Ваш AI-інструмент підключено",
 	"What will you use Engram for?": "Для чого ви будете використовувати Engram?",
+	"Could not continue. Please try again.": "Не вдалося продовжити. Будь ласка, спробуйте ще раз.",
 	"Review the Terms": "Переглянути умови",
 	"privacy notice": "Повідомлення про конфіденційність",
 	"What changed": "Що змінилося",
@@ -1005,7 +1029,6 @@ export default {
 		"7-денний безкоштовний пробний період для платних планів. Потрібна картка, зняття коштів не відбудеться до закінчення пробного періоду.",
 	"Continue with Free →": "Продовжити з безкоштовного →",
 	"{summary} · upgrade anytime": "{summary} · можливість оновлення в будь-який час",
-	"Could not continue. Please try again.": "Не вдалося продовжити. Будь ласка, спробуйте ще раз.",
 	"Step {step} of {total}": "Крок {step} з {total}",
 	Onboarding: "Ознайомлення",
 	"Stop connecting this app": "Припинити підключення цього застосунку",
@@ -1065,6 +1088,10 @@ export default {
 	"Why {tool} can't be connected": "Чому {tool} не може бути підключено",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Це не повний список, виберіть {client}, якщо вашого тут немає.",
+	"Customer insights": "Аналітика користувачів",
+	"User ID": "Ідентифікатор користувача",
+	"Show timeline": "Показати часову шкалу",
+	"Failed to load the report.": "Не вдалося завантажити звіт.",
 	Account: "Обліковий запис",
 	"Manage your profile, password, and account.":
 		"Керуйте вашим профілем паролем та обліковим записом.",

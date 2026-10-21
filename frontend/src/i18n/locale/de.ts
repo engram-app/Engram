@@ -23,6 +23,10 @@ export default {
 	"Failed to duplicate.": "Duplizieren fehlgeschlagen.",
 	"Batch delete failed.": "Fehler beim Löschen mehrerer Elemente.",
 	"Batch move failed.": "Fehler beim Verschieben mehrerer Elemente.",
+	"Couldn't load sign-in": "Anmeldung konnte nicht geladen werden",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"Der Anmeldedienst konnte nicht geladen werden. Überprüfe deine Verbindung und lade die Seite neu.",
+	Reload: "Neu laden",
 	"This account is suspended. Contact an admin to restore access.":
 		"Dieses Konto ist gesperrt. Kontaktiere einen Administrator, um den Zugriff wiederherzustellen.",
 	"Incorrect email or password.": "Falsche E-Mail-Adresse oder Passwort.",
@@ -156,6 +160,19 @@ export default {
 	"{count} days remaining in your free trial.": {
 		one: "Noch {count} Tag in deiner kostenlosen Testphase.",
 		other: "Noch {count} Tage in deiner kostenlosen Testphase.",
+	},
+	"Indexing budget": "Indexierungsbudget",
+	"{available} of {capacity} tokens left": "{available} von {capacity} Token übrig",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Füllt {perDay} Token pro Tag auf. Wieder voll am {date}.",
+	"All tokens are available.": "Alle Token sind verfügbar.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count} Notiz hat nur Stichwortsuche, bis {date}.",
+		other: "{count} Notizen haben nur eine Stichwortsuche, bis {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "Eine Notiz hat nur eine Stichwortsuche, bis das Guthaben wieder aufgefüllt ist.",
+		other: "{count} Notizen haben nur eine Stichwortsuche, bis das Guthaben wieder aufgefüllt ist.",
 	},
 	"Loading current connection…": "Verbindung wird aufgebaut…",
 	"Disconnected. Retry the new connection now.":
@@ -535,7 +552,6 @@ export default {
 	"Linux PC": "Linux-PC",
 	Oops: "Ups",
 	"Something went wrong": "Etwas ist schiefgelaufen",
-	Reload: "Neu laden",
 	"Back to home": "Zurück zur Startseite",
 	"Error detail (dev only)": "Fehlerdetails (nur für Entwickler)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -673,6 +689,9 @@ export default {
 	"Love it": "Gefällt mir sehr gut",
 	"Tell us more": "Erzähl uns mehr",
 	Language: "Sprache",
+	"Show Engram in {language}?": "Engram in {language} anzeigen?",
+	"Switch language": "Sprache ändern",
+	"Not now": "Nicht jetzt",
 	"My Vault": "Mein Vault",
 	"{count} days left in your trial.": {
 		one: "Noch {count} Tag in deiner Testphase.",
@@ -882,6 +901,8 @@ export default {
 	"{client} is connected": "{client} ist verbunden",
 	"Your AI tool is connected": "Dein KI-Tool ist verbunden",
 	"What will you use Engram for?": "Wofür möchtest du Engram nutzen?",
+	"Could not continue. Please try again.":
+		"Konnte nicht fortgesetzt werden. Bitte versuche es erneut.",
 	"Review the Terms": "Bedingungen prüfen",
 	"privacy notice": "Datenschutzerklärung",
 	"What changed": "Was hat sich geändert",
@@ -944,8 +965,6 @@ export default {
 		"7-tägige kostenlose Testphase für kostenpflichtige Pläne. Kreditkarte erforderlich, keine Gebühr bis zum Ende.",
 	"Continue with Free →": "Mit kostenloser Version fortfahren →",
 	"{summary} · upgrade anytime": "{summary} · jederzeit upgraden",
-	"Could not continue. Please try again.":
-		"Konnte nicht fortgesetzt werden. Bitte versuche es erneut.",
 	"Step {step} of {total}": "Schritt {step} von {total}",
 	Onboarding: "Einrichtung",
 	"Stop connecting this app": "Verbindung zu dieser App beenden",
@@ -1005,6 +1024,10 @@ export default {
 	"Why {tool} can't be connected": "Warum {tool} nicht verbunden werden kann",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Keine vollständige Liste, wähle {client}, wenn deins nicht dabei ist.",
+	"Customer insights": "Kundeninformationen",
+	"User ID": "Benutzer-ID",
+	"Show timeline": "Zeitleiste anzeigen",
+	"Failed to load the report.": "Fehler beim Laden des Berichts.",
 	Account: "Konto",
 	"Manage your profile, password, and account.":
 		"Verwalte dein Profil, dein Passwort und dein Konto.",

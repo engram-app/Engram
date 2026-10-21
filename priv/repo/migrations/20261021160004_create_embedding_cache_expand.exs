@@ -2,11 +2,10 @@
 defmodule Engram.Repo.Migrations.CreateEmbeddingCacheExpand do
   use Ecto.Migration
 
-  # squawk-ignore-file
+  # squawk-ignore: require-concurrent-index-creation
   #
-  # Same reason as note_revisions: the table is created empty in this
-  # migration, so require-concurrent-index-creation has no rows or writers to
-  # block, and lint_migrations.sh has no per-rule per-file exclusion.
+  # The table is created empty in this migration, so a plain CREATE INDEX has
+  # no rows or writers to block. Every other rule still lints this file.
   #
   # phase/expand: new table, no backfill. The encrypted per-user vector cache
   # (chunker v5 Task 12, `Engram.Indexing.VectorCache`). Read and written only

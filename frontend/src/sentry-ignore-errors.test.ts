@@ -70,6 +70,42 @@ describe("ignoreErrors actually filters", () => {
 		expect(sent).toEqual([]);
 	});
 
+	// ENGRAM-FRONTEND-A: @clerk/shared rethrows a script-load failure inside a
+	// `.catch` nobody awaits. The provider renders the failure and reports it
+	// once as a handled warning (clerk-auth-provider.tsx); this copy is noise.
+	it("drops Clerk's unhandled script-load rejection", async () => {
+		Sentry.captureException(
+			new Error(
+				"Clerk: Failed to load Clerk JS, failed to load script: https://clerk.engram.page/npm/@clerk/clerk-js@6/dist/clerk.browser.js",
+			),
+		);
+		await Sentry.flush(2000);
+
+		expect(sent).toEqual([]);
+	});
+
+	// ENGRAM-FRONTEND-7: a crypto-wallet extension rejected with an EIP-1193
+	// `{code, message}` object. Our lint keeps our own rejections Error-only, so
+	// a non-Error rejection reason is someone else's, and it has no stack.
+	it("drops an unhandled rejection whose reason is not an Error", async () => {
+		Sentry.captureException(
+			{ code: 4001, message: "wallet must has at least one account" },
+			{ mechanism: { type: "auto.browser.global_handlers.onunhandledrejection", handled: false } },
+		);
+		await Sentry.flush(2000);
+
+		expect(sent).toEqual([]);
+	});
+
+	it("still sends an unhandled rejection whose reason is an Error", async () => {
+		Sentry.captureException(new TypeError("Load failed"), {
+			mechanism: { type: "auto.browser.global_handlers.onunhandledrejection", handled: false },
+		});
+		await Sentry.flush(2000);
+
+		expect(sent).toEqual(["Load failed"]);
+	});
+
 	// The control. Without this, a filter that swallowed EVERYTHING would pass
 	// the test above — which is the failure mode that actually matters, since it
 	// would silently end all crash reporting.

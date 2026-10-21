@@ -154,7 +154,12 @@ defmodule Engram.Notes.CrdtTransport do
   """
   @spec apply_update(map(), map(), String.t(), binary(), atom()) ::
           {:ok, %{head: String.t()}}
-          | {:error, :not_found | :invalid_update | :note_too_large | :room_unavailable}
+          | {:error,
+             :not_found
+             | :invalid_update
+             | :note_too_large
+             | :missing_dependencies
+             | :room_unavailable}
   def apply_update(user, vault, note_id, update, source \\ :unknown) do
     # No separate existence check: a cold room's bind/3 reads the note and
     # refuses one outside this vault, or deleted ({:error, :not_found}), and a
@@ -172,7 +177,8 @@ defmodule Engram.Notes.CrdtTransport do
          {:ok, head} <- apply_in_room(room, {user.id, vault.id}, note_id, update) do
       {:ok, %{head: head}}
     else
-      {:error, reason} when reason in [:not_found, :invalid_update, :note_too_large] ->
+      {:error, reason}
+      when reason in [:not_found, :invalid_update, :note_too_large, :missing_dependencies] ->
         {:error, reason}
 
       # ensure_started failure, a room that timed out / died mid-apply, or a
@@ -193,7 +199,12 @@ defmodule Engram.Notes.CrdtTransport do
   @spec apply_in_room(pid(), {String.t(), String.t()}, String.t(), binary()) ::
           {:ok, String.t()}
           | {:error,
-             :not_found | :invalid_update | :note_too_large | :room_unavailable | :append_failed}
+             :not_found
+             | :invalid_update
+             | :note_too_large
+             | :missing_dependencies
+             | :room_unavailable
+             | :append_failed}
   defp apply_in_room(room, owner, note_id, update) do
     parent = self()
     ref = make_ref()
@@ -271,13 +282,36 @@ defmodule Engram.Notes.CrdtTransport do
         cond do
           not CrdtPersistence.owned_by?(user_id, vault_id) -> {:error, :not_found}
           not CrdtBridge.fits?(doc, update) -> {:error, :note_too_large}
-          Yex.apply_update(doc, update) == :ok -> {:ok, head_marker(doc)}
-          true -> {:error, :invalid_update}
+          true -> apply_checked(doc, update)
         end
 
       send(parent, {ref, result})
       :ok
     end)
+  end
+
+  # A delivery diffed against a state vector the doc no longer has (a stored
+  # lineage the client never saw) has missing dependencies, and
+  # yrs parks those structs as pending instead of applying them. Acknowledged,
+  # the client would drop an edit the server does not hold; refused, it
+  # resends its full state, which carries its own dependencies. Pending
+  # structs never leave the doc: a state encode (the checkpoint) and the update
+  # event (the tail append) both carry only integrated ones, so refusing after
+  # the apply keeps nothing of them, and costs nothing on the common path.
+  defp apply_checked(doc, update) do
+    before = pending(doc)
+
+    cond do
+      Yex.apply_update(doc, update) != :ok -> {:error, :invalid_update}
+      pending(doc) not in [before, {nil, nil}] -> {:error, :missing_dependencies}
+      true -> {:ok, head_marker(doc)}
+    end
+  end
+
+  defp pending(doc) do
+    {:ok, structs} = Yex.Doc.get_pending_update(doc)
+    {:ok, ds} = Yex.Doc.get_pending_ds(doc)
+    {structs, ds}
   end
 
   @doc """

@@ -18,6 +18,10 @@ export default {
 	"Failed to duplicate.": "複製失敗。",
 	"Batch delete failed.": "批量刪除失敗。",
 	"Batch move failed.": "批量移動失敗。",
+	"Couldn't load sign-in": "載入登入失敗",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"登入服務載入失敗。請檢查網路連線，然後重新載入頁面。",
+	Reload: "重新載入",
 	"This account is suspended. Contact an admin to restore access.":
 		"該帳戶已停用。請聯繫管理員以恢復存取權。",
 	"Incorrect email or password.": "電子郵件或密碼錯誤。",
@@ -136,6 +140,17 @@ export default {
 	"Current Plan": "目前方案",
 	Free: "免费",
 	"{count} days remaining in your free trial.": { other: "您的免費試用期還剩 {count} 天。" },
+	"Indexing budget": "索引配額",
+	"{available} of {capacity} tokens left": "剩餘 {available} 個 {capacity} 個 token",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"每日額滿 {perDay} 個 token。於 {date} 再次額滿。",
+	"All tokens are available.": "所有 Token 皆可用。",
+	"{count} notes have keyword search only, until {date}.": {
+		other: "{count} 筆記僅支援關鍵字搜尋，至 {date} 為止。",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		other: "{count} 筆記僅支援關鍵字搜尋，直到索引預算恢復。",
+	},
 	"Loading current connection…": "正在載入連線…",
 	"Disconnected. Retry the new connection now.": "已斷線。立即重新連線。",
 	"Couldn't disconnect. Try Settings → Connections.": "斷線失敗。請嘗試「設定」→「連線」。",
@@ -491,7 +506,6 @@ export default {
 	"Linux PC": "Linux 電腦",
 	Oops: "哎呀",
 	"Something went wrong": "發生錯誤",
-	Reload: "重新載入",
 	"Back to home": "返回首頁",
 	"Error detail (dev only)": "錯誤詳情（僅限開發者）",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -622,6 +636,9 @@ export default {
 	"Love it": "非常喜歡",
 	"Tell us more": "告訴我們更多",
 	Language: "語言",
+	"Show Engram in {language}?": "在 {language} 中顯示 Engram？",
+	"Switch language": "切換語言",
+	"Not now": "現在不感興趣",
 	"My Vault": "我的儲存庫",
 	"{count} days left in your trial.": { other: "試用期剩 {count} 天。" },
 	"Collapse sidebar": "摺疊側邊欄",
@@ -825,6 +842,7 @@ export default {
 	"{client} is connected": "{client} 已連線",
 	"Your AI tool is connected": "您的 AI 工具已連線",
 	"What will you use Engram for?": "您將如何使用 Engram？",
+	"Could not continue. Please try again.": "執行失敗。請重試。",
 	"Review the Terms": "檢閱條款",
 	"privacy notice": "隱私權聲明",
 	"What changed": "變更內容",
@@ -883,7 +901,6 @@ export default {
 		"付費方案提供 7 天免費試用。需綁定信用卡，試用期滿後才會扣款。",
 	"Continue with Free →": "繼續使用免費版 →",
 	"{summary} · upgrade anytime": "{summary} · 隨時升級",
-	"Could not continue. Please try again.": "執行失敗。請重試。",
 	"Step {step} of {total}": "第 {step} 步，共 {total} 步",
 	Onboarding: "入門指南",
 	"Stop connecting this app": "停止連接此應用程式",
@@ -940,6 +957,10 @@ export default {
 	"Why {tool} can't be connected": "為什麼 {tool} 無法連接",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"並非完整清單，如果您的工具不在這裡，請選擇 {client}。",
+	"Customer insights": "客戶洞察",
+	"User ID": "用戶 ID",
+	"Show timeline": "顯示時間軸",
+	"Failed to load the report.": "載入報告失敗。",
 	Account: "帳戶",
 	"Manage your profile, password, and account.": "管理你的個人資料、密碼與帳號。",
 	"Manage your profile, security, and active sessions.": "管理您的個人資料、安全設定和活躍會話。",

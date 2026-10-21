@@ -82,8 +82,8 @@ config :engram, Oban,
   engine: Engram.Oban.SafeEngine,
   repo: Engram.Repo,
   # Staging poll cadence (default 1s). Fresh inserts dispatch instantly via the
-  # Postgres notifier (pg_notify), which also fans out across our unclustered
-  # prod nodes through the shared DB — so this poll only paces promotion of
+  # notifier (pg_notify through the shared DB; Oban.Notifiers.PG when clustered,
+  # see config/runtime.exs), so this poll only paces promotion of
   # scheduled/retry jobs and acts as a missed-notify safety net. 5s trims ~80%
   # of the source-less BEGIN/COMMIT/SELECT staging churn with no fresh-insert
   # latency cost.
@@ -184,7 +184,11 @@ config :engram, Oban,
     crdt_checkpoint: 3
   ],
   plugins: [
-    {Oban.Plugins.Pruner, max_age: 7 * 24 * 3600},
+    # One day. The PromEx queue-count poll scans every retained row, and at
+    # 7 days it was the #1 app statement in prod (2026-10-20 audit). Nothing
+    # may rely on a completed job outliving this: ObanRetentionTest fails a
+    # worker whose unique period is longer, unless a table really dedupes it.
+    {Oban.Plugins.Pruner, max_age: 24 * 3600},
     Oban.Plugins.Lifeline,
     {
       Oban.Plugins.Cron,
@@ -214,6 +218,8 @@ config :engram, Oban,
         # census pings): hourly, so each run deletes an hour's worth.
         {"23 * * * *", Engram.Workers.ClientLogsPruner},
         {"28 * * * *", Engram.Workers.InstallPingsPruner},
+        # analytics_events: two-year retention.
+        {"58 * * * *", Engram.Workers.AnalyticsEventsPrune},
         # Self-healing data migrations (#1872): one pass of each one whose
         # ledger row is not done; a pass that finds no work closes it.
         # Also at boot, so an upgrade heals without waiting up to an hour. A boot
@@ -232,6 +238,7 @@ config :engram, Oban,
         # Every CRDT persist NULLs crdt_head; this re-warms them (a continuing
         # self-heal, never done; see docs/context/data-migrations-ledger.md).
         {"48 * * * *", Engram.Workers.WarmCrdtHeads},
+        {"5-59/15 * * * *", Engram.Workers.DrainStrandedTails},
         # Export archives past the 7-day download window (#859).
         {"53 * * * *", Engram.Workers.ExportExpirySweep},
         # Paddle drift check. Daily: drift logs at :error to Sentry, and a
@@ -251,6 +258,8 @@ config :engram, Oban,
         # CIMD JWKS refresh (#1974): keeps the persisted key set fresh so the
         # token path never fetches. Schedules the sweep 1-30 s out.
         {"1-59/5 * * * *", Engram.Workers.CimdJwksSchedule},
+        # Yesterday's account and vault snapshots for the operator insights.
+        {"40 0 * * *", Engram.Workers.DailySnapshot},
         # Account facts onto PostHog persons; no-op unless PostHog is configured.
         {"25 6 * * *", Engram.Workers.PostHogPersonSync}
       ]
@@ -281,6 +290,7 @@ config :logger, :default_formatter,
     :attempt,
     :aud_form,
     :body_size,
+    :browser,
     :cap,
     :category,
     # Emitted by every OAuth/MCP refusal via Engram.OAuth.log_refusal/3. Credo's
@@ -299,8 +309,13 @@ config :logger, :default_formatter,
     :dialed_ip,
     :drift_kind,
     :duration_ms,
+    :effective_type,
+    :elapsed_ms,
+    :elapsed_ms_min,
     :error_code,
     :error_kind,
+    :error_message,
+    :error_name,
     :event_id,
     :event_type,
     :exception,
@@ -363,6 +378,8 @@ config :logger, :default_formatter,
     :user_agent,
     :user_id,
     :vault_id,
+    :visibility,
+    :went_offline,
     :within_grace,
     :worker
   ]
@@ -430,13 +447,14 @@ config :engram, :hmac_key_user_id, "dev-hmac-key-do-not-use-in-prod"
 # away. Throwaway default for dev/test; prod overrides via runtime.exs.
 config :engram, :hmac_key_analytics_id, "dev-analytics-key-do-not-use-in-prod"
 
-# Sentry PII scrubber. Compile-time so it applies wherever Sentry captures,
+# Sentry before_send: drops client-side request failures, then scrubs PII
+# (Engram.Sentry.EventFilter). Compile-time so it applies wherever Sentry captures,
 # including the no-DSN dev/test case if a future test exercises a Sentry stub.
 # DSN, release tag, environment_name, and source-context flags live in
 # runtime.exs (gated on SENTRY_DSN).
 config :sentry,
   context_lines: 5,
-  before_send: {Engram.Sentry.Scrubber, :scrub},
+  before_send: {Engram.Sentry.EventFilter, :before_send},
   client: Engram.Observability.SentryFinchClient
 
 # OpenTelemetry tracing is off by default. runtime.exs flips the

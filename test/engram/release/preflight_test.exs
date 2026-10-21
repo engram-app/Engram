@@ -194,7 +194,9 @@ defmodule Engram.Release.PreflightTest do
     result = Preflight.report(FakeRepo, applied_versions: [])
 
     refute result.pending == []
-    # One code-server call, not one per migration.
+    # Resolve once: app_dir is a :code_server call, and calling it once per
+    # pending migration (130+) queued each call behind the suite's module
+    # loading and blew the 60s test timeout in CI.
     app_dir = Application.app_dir(:engram)
     assert Enum.all?(result.pending, &String.starts_with?(&1.file, app_dir))
   end

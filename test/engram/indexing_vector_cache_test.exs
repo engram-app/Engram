@@ -123,7 +123,9 @@ defmodule Engram.IndexingVectorCacheTest do
     [
       reserve_tokens: fn t ->
         send(test, {:reserved, t})
-        UsageMeters.reserve_embed_tokens(user.id, t, 1_000_000_000)
+        # Unmetered, still recorded (the lifetime reservation is gone, #2101).
+        _ = UsageMeters.add_embed_tokens(user.id, t)
+        true
       end,
       release_tokens: fn t ->
         send(test, {:released, t})

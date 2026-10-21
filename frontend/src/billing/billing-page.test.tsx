@@ -305,9 +305,12 @@ describe("BillingPage — Paddle effect cleanup", () => {
 				await Promise.resolve();
 			});
 
+			// Annual is the default cadence; nothing upstream named a source.
 			expect(mockTrack).toHaveBeenCalledWith("checkout_opened", {
 				method: "unknown",
 				tier: "starter",
+				cadence: "annual",
+				source: "direct",
 			});
 		});
 

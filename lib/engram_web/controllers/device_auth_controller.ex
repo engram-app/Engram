@@ -71,7 +71,10 @@ defmodule EngramWeb.DeviceAuthController do
       {:ok, vault, status} ->
         # Only on :created — a re-tapped Authorize resolves to the existing
         # vault, and re-seeding there would resurrect a note the user deleted.
-        if status == :created, do: WelcomeNote.seed(user, vault)
+        if status == :created do
+          WelcomeNote.seed(user, vault)
+          Vaults.track_created(user, vault, "obsidian_sync")
+        end
 
         do_authorize(conn, user_code, user, vault.id, params["label"])
 
@@ -129,11 +132,17 @@ defmodule EngramWeb.DeviceAuthController do
     end
   end
 
-  def token(conn, %{"device_code" => device_code}) do
+  def token(conn, %{"device_code" => device_code} = params) do
     case DeviceFlow.exchange_device_code(device_code) do
       {:ok, result} ->
         # Activation milestone: the plugin actually holds credentials now.
         Engram.Analytics.track(result.user, "plugin_linked", %{})
+
+        # Connection churn, paired with device_disconnected. `platform` is an
+        # enum a newer plugin sends; anything else is dropped.
+        Engram.Analytics.track(result.user, "device_connected", %{
+          platform: if(params["platform"] in ~w(desktop mobile), do: params["platform"])
+        })
 
         json(conn, %{
           access_token: result.access_token,

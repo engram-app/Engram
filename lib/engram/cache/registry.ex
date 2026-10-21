@@ -60,6 +60,8 @@ defmodule Engram.Cache.Registry do
     %{name: :terms, ttl: 300_000, cache_nil: false, evict_match: :key, pg_channel: nil},
     # Last usage_meters.last_active_at stamp per user (debounce).
     %{name: :activity, ttl: :infinity, cache_nil: false, evict_match: :key, pg_channel: nil},
+    # Last api_keys.last_used stamp per key id (debounce, Accounts).
+    %{name: :api_key_used, ttl: :infinity, cache_nil: false, evict_match: :key, pg_channel: nil},
     # Plan limits maps by plan id; plan rows are static at runtime.
     %{name: :plan, ttl: :infinity, cache_nil: true, evict_match: :key, pg_channel: nil},
     # Per-request auth and tenancy lookups. Freshness comes from the
@@ -134,6 +136,15 @@ defmodule Engram.Cache.Registry do
       evict_match: :first_elem,
       pg_channel: "note_counts_changed"
     },
+    # {vault_id, change_seq, what} => a decrypted whole-vault aggregate (tags,
+    # types, folder counts; Engram.Notes.VaultScanCache). Never evicted: every
+    # write to a note row takes a new change_seq, so a write moves readers to
+    # a new key instead of invalidating this one, on every node at once. The
+    # TTL only reaps the keys a write left behind.
+    %{name: :vault_scan, ttl: 600_000, cache_nil: false, evict_match: :key, pg_channel: nil},
+    # Whether every notes row carries wave 3's 16-byte ids (Engram.Notes.Keys);
+    # the NoteSplit ledger, read at most once a minute per node.
+    %{name: :note_split, ttl: 60_000, cache_nil: false, evict_match: :key, pg_channel: nil},
     # Legal floor / current version / hash per document; evicted on publish.
     %{
       name: :legal_version,

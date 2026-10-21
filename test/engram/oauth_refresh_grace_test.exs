@@ -311,11 +311,13 @@ defmodule Engram.OAuthRefreshGraceTest do
 
   # Reuse detection needs the used rows: a replay of a token whose row was
   # pruned reads as unknown, not as reuse, and revokes nothing. The hourly
-  # cleanup must keep consumed and revoked rows well past the grace window
-  # (at least 30 min; it keeps revoked rows 7 days, consumed ones until expiry).
-  test "cleanup keeps used refresh tokens long enough for reuse detection", ctx do
+  # cleanup keeps a consumed row for 24h after its use (revoked rows 7 days),
+  # well past the 60s grace window. Past 24h a replay is no longer caught as
+  # reuse: an accepted tradeoff (2026-10-20 audit), since every rotation left
+  # a row behind until the family expired.
+  test "cleanup keeps a used refresh token for 24h, and a replay then is reuse", ctx do
     {:ok, %{refresh_token: rt2}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
-    age_consumed(ctx.rt1, 31 * 60)
+    age_consumed(ctx.rt1, 23 * 3600)
     {:ok, %{refresh_token: rt3}} = OAuth.rotate_refresh_token(rt2, ctx.client_id)
 
     OAuth.cleanup_expired()
@@ -329,8 +331,12 @@ defmodule Engram.OAuthRefreshGraceTest do
       end)
 
     assert log =~ "oauth_refresh_reuse"
+    assert live_in_family(row(rt3).family_id) == 0
 
-    # Revoked rows are kept well past the window too.
+    # Revoked rows are kept for the 7-day reap, consumed or not, even past
+    # the consumed-row grace: they are what marks the family revoked.
+    age_consumed(ctx.rt1, 25 * 3600)
+
     rt3
     |> row()
     |> Ecto.Changeset.change(revoked_at: DateTime.add(DateTime.utc_now(:second), -31 * 60))
@@ -340,5 +346,35 @@ defmodule Engram.OAuthRefreshGraceTest do
 
     assert row(ctx.rt1).consumed_at
     assert row(rt3).revoked_at
+  end
+
+  test "cleanup deletes a used refresh token 24h after its use, leaving the family live",
+       ctx do
+    {:ok, %{refresh_token: rt2}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+    age_consumed(ctx.rt1, 24 * 3600 + 60)
+    family_id = row(rt2).family_id
+    user_id = row(rt2).user_id
+
+    OAuth.cleanup_expired()
+
+    hash = Engram.Crypto.sha256_hex(ctx.rt1)
+
+    refute Repo.exists?(from(r in RefreshToken, where: r.token_hash == ^hash),
+             skip_tenant_check: true
+           )
+
+    assert live_in_family(family_id) == 1
+
+    # The replay now reads as an unknown token and revokes nothing.
+    assert {:error, {:invalid_grant, :refresh_token_unknown}} =
+             OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+
+    assert live_in_family(family_id) == 1
+
+    # The live leaf still proves the connection to the announcer.
+    internal = row(rt2).client_id
+    assert OAuth.prior_connection?(user_id, internal, Ecto.UUID.generate())
+
+    assert {:ok, _} = OAuth.rotate_refresh_token(rt2, ctx.client_id)
   end
 end

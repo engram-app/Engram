@@ -82,7 +82,7 @@ defmodule Engram.Workers.OrphanSweepMissingPointsTest do
 
   defp reload(note), do: Repo.get!(Note, note.id, skip_tenant_check: true)
 
-  test "nulls the index hashes when a chunk names a point Qdrant does not have", %{
+  test "clears embed_hash when a chunk names a point Qdrant does not have", %{
     bypass: bypass
   } do
     user = insert(:user)
@@ -105,7 +105,8 @@ defmodule Engram.Workers.OrphanSweepMissingPointsTest do
 
     reloaded = reload(note)
     assert is_nil(reloaded.embed_hash)
-    assert is_nil(reloaded.dense_indexed_hash)
+    # Kept, so EmbedNote runs the rebuild as unmetered maintenance.
+    assert reloaded.dense_indexed_hash == "cafe"
     # Re-indexing starts now, not on reconcile's next tick.
     assert_enqueued(worker: Engram.Workers.ReconcileEmbeddings)
   end

@@ -104,9 +104,12 @@ async def first_sync_shapes(
         await asyncio.sleep(2)
     assert landed >= expected, f"sync landed only {landed}/{expected}"
 
-    # The drift branch can fire on a catch-up that follows the backend's
-    # debounced checkpoint. The barrier waits for that checkpoint (no job
-    # pending) AND for this device's catch-up cursor to pass the seq it bumps.
+    # The drift branch can fire on a catch-up that follows a backend
+    # checkpoint (a CheckpointNote from room-shutdown overflow or a link
+    # rewrite, or a room's own checkpoint). The barrier waits for no runnable
+    # checkpoint job AND for this device's catch-up cursor to pass the seq it
+    # bumps; a job held by a live room is deferred, not
+    # waited on.
     await await_quiescent(cdp, api_sync)
 
     created = await cdp.evaluate(

@@ -84,7 +84,24 @@ defmodule EngramWeb.ConnectionsController do
       end
 
     with :ok <- result do
+      track_oauth_revoked(user, client_id)
       send_resp(conn, 204, "")
+    end
+  end
+
+  # Connection churn: an Obsidian OAuth grant is a device, anything else an
+  # MCP client (bucketed to its family, never the client's own name).
+  defp track_oauth_revoked(user, client_id) do
+    case Engram.OAuth.get_client(client_id) do
+      {:ok, %{kind: "obsidian"}} ->
+        Engram.Analytics.track(user, "device_disconnected", %{via: "oauth"})
+
+      {:ok, client} ->
+        {family, _registration} = Engram.Analytics.McpClient.of_client(client)
+        Engram.Analytics.track(user, "mcp_client_disconnected", %{via: "oauth", client: family})
+
+      _ ->
+        :ok
     end
   end
 
@@ -153,6 +170,7 @@ defmodule EngramWeb.ConnectionsController do
     user = conn.assigns.current_user
 
     with :ok <- Connections.revoke_device_family(user.id, family_id) do
+      Engram.Analytics.track(user, "device_disconnected", %{via: "device_flow"})
       send_resp(conn, 204, "")
     end
   end
@@ -178,6 +196,7 @@ defmodule EngramWeb.ConnectionsController do
 
     with {:ok, id} <- Ecto.UUID.cast(id_str),
          :ok <- Engram.Accounts.revoke_api_key(user, id) do
+      Engram.Analytics.track(user, "mcp_client_disconnected", %{via: "api_key"})
       send_resp(conn, 204, "")
     else
       # Malformed UUID and revoke errors alike render the same 404.

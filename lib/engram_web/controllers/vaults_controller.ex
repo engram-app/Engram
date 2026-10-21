@@ -227,8 +227,12 @@ defmodule EngramWeb.VaultsController do
 
     with_writable_vault(conn, id, fn vault_id ->
       case Vaults.delete_vault(user, vault_id) do
-        {:ok, vault} -> json(conn, %{deleted: true, id: vault.id})
-        {:error, :not_found} -> not_found(conn)
+        {:ok, vault} ->
+          Vaults.track_deleted(user, vault, EngramWeb.Plugs.WebActivity.surface(conn.assigns))
+          json(conn, %{deleted: true, id: vault.id})
+
+        {:error, :not_found} ->
+          not_found(conn)
       end
     end)
   end
@@ -240,12 +244,15 @@ defmodule EngramWeb.VaultsController do
     summary: "Restore a soft-deleted vault",
     description:
       "Restores a soft-deleted vault back to active within its 30-day window. Returns 402 when " <>
-        "restoring would exceed the plan's vault cap and 404 when no such vault exists.",
+        "restoring would exceed the plan's vault cap, 409 once its permanent deletion has " <>
+        "started, and 404 when no such vault exists.",
     tags: ["Vaults"],
     parameters: [id: [in: :path, type: :string, required: true, description: "Vault UUID"]],
     responses: [
       ok: {"Restored", "application/json", Schemas.VaultResponse},
       payment_required: {"Vault cap reached", "application/json", Schemas.LimitError},
+      conflict:
+        {"Permanent deletion of this vault has started", "application/json", Schemas.MessageError},
       forbidden:
         {"The credential may not restore this vault: this needs write access to it",
          "application/json", Schemas.MessageError},
@@ -272,6 +279,11 @@ defmodule EngramWeb.VaultsController do
             limit,
             current
           )
+
+        {:error, :purge_started} ->
+          conn
+          |> put_status(:conflict)
+          |> json(%{error: "purge_started"})
 
         {:error, :not_found} ->
           not_found(conn)
@@ -363,6 +375,7 @@ defmodule EngramWeb.VaultsController do
             end
 
           WelcomeNote.seed(user, vault)
+          Vaults.track_created(user, vault, EngramWeb.Plugs.WebActivity.surface(conn.assigns))
 
           conn
           |> put_status(201)

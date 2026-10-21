@@ -1,6 +1,7 @@
 import { setupClerkTestingToken } from "@clerk/testing/playwright";
 import { devices, expect, type Page, test } from "@playwright/test";
 import { clerkSignIn, loadAuthState } from "./clerk-helpers";
+import { clerkFetch } from "./support/clerk-fetch";
 
 /**
  * An MCP-first signup completes onboarding and resumes the authorization.
@@ -91,7 +92,7 @@ async function createUnonboardedUser(): Promise<{ email: string; id: string }> {
 	const ts = Date.now();
 	const email = `e2e-browser-pending-${ts}@test.com`;
 
-	const resp = await fetch(`${CLERK_API}/users`, {
+	const resp = await clerkFetch(`${CLERK_API}/users`, {
 		method: "POST",
 		headers: {
 			Authorization: `Bearer ${SECRET_KEY}`,
@@ -159,7 +160,7 @@ test.describe("MCP-first signup resumes consent after onboarding", () => {
 		// bare `.catch()` sees nothing and the user leaks silently. This suite
 		// has hit Clerk's quota before, and it surfaces as unrelated specs
 		// failing to create users much later.
-		await fetch(`${CLERK_API}/users/${pending.id}`, {
+		await clerkFetch(`${CLERK_API}/users/${pending.id}`, {
 			method: "DELETE",
 			headers: { Authorization: `Bearer ${SECRET_KEY}` },
 		})

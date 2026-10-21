@@ -21,6 +21,10 @@ export default {
 	"Failed to duplicate.": "Duplikasi gagal.",
 	"Batch delete failed.": "Penghapusan massal gagal.",
 	"Batch move failed.": "Pemindahan massal gagal.",
+	"Couldn't load sign-in": "Tidak dapat memuat login",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"Layanan login tidak dapat dimuat. Periksa koneksi Anda, lalu muat ulang halaman.",
+	Reload: "Muat ulang",
 	"This account is suspended. Contact an admin to restore access.":
 		"Akun ini telah diblokir. Hubungi administrator untuk mengaktifkan kembali.",
 	"Incorrect email or password.": "Email atau kata sandi salah.",
@@ -152,6 +156,18 @@ export default {
 	Free: "Gratis",
 	"{count} days remaining in your free trial.": {
 		other: "Sisa {count} hari dalam uji coba gratis Anda.",
+	},
+	"Indexing budget": "Kuota pengindeksan",
+	"{available} of {capacity} tokens left": "Tersisa {available} dari {capacity} token",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Mengisi ulang {perDay} token per hari. Penuh kembali pada {date}.",
+	"All tokens are available.": "Semua token tersedia.",
+	"{count} notes have keyword search only, until {date}.": {
+		other: "{count} catatan hanya memiliki pencarian berdasarkan kata kunci, hingga {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		other:
+			"{count} catatan hanya memiliki pencarian berdasarkan kata kunci, sampai anggaran terisi kembali.",
 	},
 	"Loading current connection…": "Memuat koneksi saat ini…",
 	"Disconnected. Retry the new connection now.": "Terputus. Coba sambungkan kembali sekarang.",
@@ -520,7 +536,6 @@ export default {
 	"Linux PC": "Komputer Linux",
 	Oops: "Ups",
 	"Something went wrong": "Terjadi kesalahan",
-	Reload: "Muat ulang",
 	"Back to home": "Kembali ke beranda",
 	"Error detail (dev only)": "Detail kesalahan (khusus pengembang)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -658,6 +673,9 @@ export default {
 	"Love it": "Saya menyukainya",
 	"Tell us more": "Beri tahu kami lebih banyak",
 	Language: "Bahasa",
+	"Show Engram in {language}?": "Tampilkan Engram di {language}?",
+	"Switch language": "Ganti bahasa",
+	"Not now": "Tidak sekarang",
 	"My Vault": "Vault Saya",
 	"{count} days left in your trial.": { other: "Sisa {count} hari dalam masa percobaan Anda." },
 	"Collapse sidebar": "Sembunyikan bilah sisi",
@@ -864,6 +882,7 @@ export default {
 	"{client} is connected": "{client} terhubung",
 	"Your AI tool is connected": "Alat AI Anda terhubung",
 	"What will you use Engram for?": "Untuk apa Anda akan menggunakan Engram?",
+	"Could not continue. Please try again.": "Tidak dapat melanjutkan. Silakan coba lagi.",
 	"Review the Terms": "Tinjau Ketentuan",
 	"privacy notice": "pemberitahuan privasi",
 	"What changed": "Apa yang berubah",
@@ -925,7 +944,6 @@ export default {
 		"Uji coba gratis 7 hari untuk paket berbayar. Kartu diperlukan, tidak ada biaya sampai selesai.",
 	"Continue with Free →": "Lanjutkan dengan Gratis →",
 	"{summary} · upgrade anytime": "{summary} · tingkatkan kapan saja",
-	"Could not continue. Please try again.": "Tidak dapat melanjutkan. Silakan coba lagi.",
 	"Step {step} of {total}": "Langkah {step} dari {total}",
 	Onboarding: "Pengaturan awal",
 	"Stop connecting this app": "Hentikan koneksi aplikasi ini",
@@ -985,6 +1003,10 @@ export default {
 	"Why {tool} can't be connected": "Mengapa {tool} tidak dapat terhubung",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Daftar ini tidak lengkap, pilih {client} jika milik Anda tidak ada di sini.",
+	"Customer insights": "Wawasan pelanggan",
+	"User ID": "ID pengguna",
+	"Show timeline": "Tampilkan linimasa",
+	"Failed to load the report.": "Gagal memuat laporan.",
 	Account: "Akun",
 	"Manage your profile, password, and account.": "Kelola profil kata sandi dan akun Anda.",
 	"Manage your profile, security, and active sessions.":

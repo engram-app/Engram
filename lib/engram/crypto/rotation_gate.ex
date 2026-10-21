@@ -49,6 +49,30 @@ defmodule Engram.Crypto.RotationGate do
     end
   end
 
+  @doc """
+  Run `fun` with every top-level `Repo.with_tenant/2` it opens refusing a
+  user whose DEK rotation is locked: the transaction's own `tenant_enter`
+  reads the lock (no extra round trip) and raises
+  `Engram.Crypto.RotationInProgressError` before the block runs, so nothing is
+  written. Called inside a tenant transaction (whose re-entrant blocks run
+  no tenant_enter) it reads the lock once up front instead.
+  """
+  @spec gated((-> result)) :: result when result: term()
+  def gated(fun) when is_function(fun, 0) do
+    tenant = Process.get(:engram_tenant)
+
+    if tenant && Repo.in_transaction?() && check(tenant) == {:error, :rotation_in_progress},
+      do: raise(Engram.Crypto.RotationInProgressError)
+
+    previous = Process.put(:engram_write_gate, true)
+
+    try do
+      fun.()
+    after
+      unless previous, do: Process.delete(:engram_write_gate)
+    end
+  end
+
   @spec check_user(User.t()) :: :ok | {:error, :rotation_in_progress}
   def check_user(%User{dek_rotation_locked_at: %DateTime{}}), do: {:error, :rotation_in_progress}
   def check_user(%User{}), do: :ok

@@ -264,7 +264,9 @@ defmodule Engram.Workers.RewriteNoteLinks do
           from(n in Note,
             where:
               n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
-                n.path_hmac == ^old_path_hmac and not is_nil(n.deleted_at),
+                not is_nil(n.deleted_at),
+            # notes_path_tomb (vault_id, path_id, seq): a backward probe.
+            where: ^Engram.Notes.Keys.eq(:path, old_path_hmac),
             order_by: [desc: n.seq],
             limit: 1
           )

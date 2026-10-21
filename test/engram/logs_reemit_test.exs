@@ -156,6 +156,145 @@ defmodule Engram.LogsReemitTest do
     assert meta[:platform] == "web"
   end
 
+  # A web network_error says only "Failed to fetch"; the context the SPA sends
+  # beside it (browser, timing, attempt) is what tells causes apart, and it is
+  # only useful as Loki metadata (`| metadata_browser="Chrome 155"`).
+  describe "network context" do
+    defp reemit_context(context) do
+      user = insert(:user)
+      parent = self()
+      ref = make_ref()
+      handler_id = :logs_reemit_context_handler
+
+      :logger.add_handler(handler_id, __MODULE__, %{config: %{parent: parent, ref: ref}})
+      on_exit(fn -> :logger.remove_handler(handler_id) end)
+
+      {:ok, 1} =
+        Logs.insert_logs(user, [
+          %{
+            "ts" => DateTime.utc_now() |> DateTime.to_iso8601(),
+            "level" => "error",
+            "category" => "api_request",
+            "message" => "network_error GET https://api.engram.page/me",
+            "platform" => "web",
+            "conn_id" => "c1",
+            "context" => context
+          }
+        ])
+
+      assert_receive {^ref, _level, meta}, 1000
+      meta
+    end
+
+    test "allowlisted fields reach the re-emit metadata" do
+      meta =
+        reemit_context(%{
+          "browser" => "Chrome 155",
+          "went_offline" => true,
+          "attempt" => 2,
+          "elapsed_ms" => 812,
+          "error_name" => "TypeError",
+          "error_message" => "Failed to fetch",
+          "visibility" => "visible",
+          "effective_type" => "4g"
+        })
+
+      assert meta[:browser] == "Chrome 155"
+      assert meta[:went_offline] == true
+      assert meta[:attempt] == 2
+      assert meta[:elapsed_ms] == 812
+      assert meta[:error_name] == "TypeError"
+      assert meta[:error_message] == "Failed to fetch"
+      assert meta[:visibility] == "visible"
+      assert meta[:effective_type] == "4g"
+    end
+
+    test "unknown keys and out-of-shape values are dropped" do
+      meta =
+        reemit_context(%{
+          "url" => "https://api.engram.page/notes/Medical/x.md",
+          "browser" => String.duplicate("Chrome ", 50) <> "155",
+          "went_offline" => "yes",
+          "attempt" => 10_000,
+          "elapsed_ms" => -1,
+          "error_name" => "Medical/x.md",
+          "error_message" => "net::ERR at https://api.engram.page/notes/Medical/x.md",
+          "visibility" => "<script>",
+          "effective_type" => "5g"
+        })
+
+      for key <-
+            ~w(url browser went_offline attempt elapsed_ms error_name error_message visibility effective_type)a do
+        refute Map.has_key?(meta, key), "#{key} passed through"
+      end
+    end
+
+    # `false` is a value, not an absence: "did not go offline" is
+    # exactly as much signal as one that is true.
+    test "a false value survives" do
+      meta = reemit_context(%{"went_offline" => false})
+      assert Map.fetch(meta, :went_offline) == {:ok, false}
+    end
+
+    # A burst of the same network_error differs only in timing. Keying the
+    # collapse on the whole context kept every one of them a separate line.
+    test "identical errors collapse even though elapsed_ms differs" do
+      user = insert(:user)
+      parent = self()
+      ref = make_ref()
+      handler_id = :logs_reemit_context_handler
+
+      :logger.add_handler(handler_id, __MODULE__, %{config: %{parent: parent, ref: ref}})
+      on_exit(fn -> :logger.remove_handler(handler_id) end)
+
+      entry = fn elapsed, message ->
+        %{
+          "level" => "error",
+          "category" => "api_request",
+          "message" => "network_error GET https://api.engram.page/me",
+          "platform" => "web",
+          "conn_id" => "c1",
+          "context" => %{
+            "browser" => "Chrome 155",
+            "error_message" => message,
+            "elapsed_ms" => elapsed
+          }
+        }
+      end
+
+      entries =
+        for(ms <- 1..50, do: entry.(ms * 10, "Failed to fetch")) ++ [entry.(7, "other")]
+
+      {:ok, 51} = Logs.insert_logs(user, entries)
+
+      assert_receive {^ref, _level, burst}, 1000
+      assert burst[:repeat] == 50
+      assert burst[:error_message] == "Failed to fetch"
+      # The range, so a burst of fast failures and one stall stay distinguishable.
+      assert burst[:elapsed_ms] == 500
+      assert burst[:elapsed_ms_min] == 10
+
+      assert_receive {^ref, _level, other}, 1000
+      assert other[:error_message] == "other"
+      assert other[:elapsed_ms] == 7
+      refute Map.has_key?(other, :elapsed_ms_min)
+      refute_receive {^ref, _, _}, 100
+    end
+
+    # config.exs requires every metadata key we emit in :default_formatter's
+    # list; these reach Logger through Keyword.merge, where credo's
+    # MissedMetadataKeyInLoggerConfig cannot see them.
+    test "every context key is a declared formatter metadata key" do
+      declared = Application.fetch_env!(:logger, :default_formatter)[:metadata]
+      assert Logs.context_metadata_keys() -- declared == []
+    end
+
+    test "a context that is not a map is ignored" do
+      meta = reemit_context("browser=Chrome")
+      refute Map.has_key?(meta, :browser)
+    end
+  end
+
   # The re-emit is the surface that is greppable in ONE Loki query without the
   # read-only DB bastion, so it is where "does this signal cover the whole
   # fleet, or only opted-in users?" actually gets asked. Persisting `forced` to

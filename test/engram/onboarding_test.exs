@@ -1055,6 +1055,61 @@ defmodule Engram.OnboardingTest do
       assert props["$set_once"] == %{"signup_source" => "plugin", "signup_tool" => "obsidian"}
     end
 
+    test "attribution is stored once, bounded, and sent as signup_attributed" do
+      capture_posthog()
+      user = insert(:user, onboarding_profile: %{})
+
+      assert {:ok, updated} =
+               Onboarding.set_profile(user, %{
+                 attribution: %{
+                   "utm_source" => "newsletter",
+                   "utm_campaign" => String.duplicate("a", 100),
+                   "via" => "todd",
+                   "referrer_domain" => "News.YCombinator.com",
+                   "utm_term" => "not allowlisted",
+                   "utm_medium" => "has spaces/and slashes"
+                 }
+               })
+
+      stored = updated.onboarding_profile["attribution"]
+
+      assert stored == %{
+               "utm_source" => "newsletter",
+               "utm_campaign" => String.duplicate("a", 64),
+               "via" => "todd",
+               "referrer_domain" => "news.ycombinator.com"
+             }
+
+      assert [%{"properties" => props}] = collect_posthog_events("signup_attributed")
+      assert props["utm_source"] == "newsletter"
+      assert props["$set_once"]["referrer_domain"] == "news.ycombinator.com"
+      assert props["$set_once"]["signup_source"] == "website"
+
+      # First touch wins: a second post neither overwrites nor re-sends.
+      {:ok, again} = Onboarding.set_profile(user, %{attribution: %{"utm_source" => "other"}})
+      assert again.onboarding_profile["attribution"]["utm_source"] == "newsletter"
+      assert [] = collect_posthog_events("signup_attributed")
+    end
+
+    test "attribution on a plugin or connector signup does not claim website" do
+      capture_posthog()
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, signup_source: "plugin"})
+      {:ok, _} = Onboarding.set_profile(user, %{attribution: %{"utm_source" => "x"}})
+
+      assert [%{"properties" => props}] = collect_posthog_events("signup_attributed")
+      refute Map.has_key?(props["$set_once"], "signup_source")
+    end
+
+    test "attribution must be a map with at least one usable field" do
+      user = insert(:user, onboarding_profile: %{})
+
+      assert {:error, :invalid_attribution} = Onboarding.set_profile(user, %{attribution: "x"})
+
+      assert {:error, :invalid_attribution} =
+               Onboarding.set_profile(user, %{attribution: %{"utm_term" => "x", "via" => 1}})
+    end
+
     test "signup_source must be a known origin" do
       user = insert(:user, onboarding_profile: %{})
 

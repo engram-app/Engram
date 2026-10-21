@@ -85,6 +85,18 @@ defmodule EngramWeb.Plugs.HostRewriteTest do
       assert conn.request_path == "/api/oauth/clients/abc"
     end
 
+    # Otherwise Plug.Static never sees it: the origin 404s and crawlers get
+    # only Cloudflare's managed file, with none of our Disallow rules.
+    test "passes /robots.txt through unchanged", %{opts: opts} do
+      conn =
+        conn(:get, "/robots.txt")
+        |> Map.put(:host, "api.engram.page")
+        |> HostRewrite.call(opts)
+
+      refute conn.halted
+      assert conn.request_path == "/robots.txt"
+    end
+
     test "rejects paths under SPA root with 404", %{opts: opts} do
       conn =
         conn(:get, "/login")
@@ -173,6 +185,18 @@ defmodule EngramWeb.Plugs.HostRewriteTest do
 
       assert conn.request_path == "/api/mcp/foo"
       refute conn.halted
+    end
+
+    # Otherwise Plug.Static never sees it: the origin 404s and crawlers get
+    # only Cloudflare's managed file, with none of our Disallow rules.
+    test "passes /robots.txt through unchanged", %{opts: opts} do
+      conn =
+        conn(:get, "/robots.txt")
+        |> Map.put(:host, "mcp.engram.page")
+        |> HostRewrite.call(opts)
+
+      refute conn.halted
+      assert conn.request_path == "/robots.txt"
     end
 
     test "rejects anything else with 404", %{opts: opts} do

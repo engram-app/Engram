@@ -26,7 +26,8 @@ defmodule Engram.I18n do
 
   @type locale :: String.t()
 
-  @doc "Every shipped locale, in the web app's order (`LOCALES`)."
+  @doc "Every locale the app ships, as the web app names them."
+  @spec locales() :: [locale()]
   def locales, do: @locales
 
   @doc "The supported locale for `user.locale` (a BCP 47 tag), or \"en\"."
