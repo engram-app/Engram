@@ -1,6 +1,11 @@
 defmodule Engram.Repo.Migrations.AddSegmentedAttachmentColumnsExpand do
   use Ecto.Migration
 
+  # squawk-ignore: prefer-bigint-over-int
+  #
+  # segment_size is the fixed part size and segment_count is capped by
+  # Uploads' max part count, both far below int range.
+
   @moduledoc """
   Columns for attachment content format v2 (`Engram.Attachments.SegmentedCipher`):
   the DEK-wrapped per-file key and its nonce, the upload whose id is bound
@@ -11,6 +16,10 @@ defmodule Engram.Repo.Migrations.AddSegmentedAttachmentColumnsExpand do
   """
 
   def up do
+    # Fail fast instead of queueing ACCESS EXCLUSIVE on attachments behind a
+    # long transaction (the migrator session drops the app's lock_timeout).
+    execute "SET LOCAL lock_timeout = '5s'"
+
     alter table(:attachments) do
       add :wrapped_file_key, :binary
       add :file_key_nonce, :binary
