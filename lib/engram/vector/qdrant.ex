@@ -671,10 +671,17 @@ defmodule Engram.Vector.Qdrant do
   end
 
   defp reconcile_strict_fields(col, info, limits, version) do
+    deployment = deployment(base_url())
+
+    # Limits only: the unindexed-filter refusal is the boot reconcile's, set
+    # after the payload indexes exist (this tick may run before them).
     want =
       version
-      |> QdrantLayout.desired(limits, strict_mode?(), deployment(base_url()))
+      |> QdrantLayout.desired(limits, strict_mode?(), deployment)
       |> Map.take(["strict_mode_config"])
+      |> Map.new(fn {key, strict} ->
+        {key, Map.drop(strict, Map.keys(QdrantLayout.unindexed_refused(deployment)))}
+      end)
 
     case QdrantLayout.diff(info["config"] || %{}, want) do
       diff when map_size(diff) == 0 ->

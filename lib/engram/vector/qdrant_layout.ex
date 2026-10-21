@@ -157,6 +157,20 @@ defmodule Engram.Vector.QdrantLayout do
   def desired_strict(:self_host), do: %{}
   def desired_strict(:cloud), do: @hard_limits
 
+  # Qdrant Cloud's managed default, set here too so the cloud profile
+  # (`QDRANT_STRICT_PROFILE=cloud` on staging) refuses an unindexed filtered
+  # read as prod does (#2138). Prod already has it, so no PATCH moves it.
+  # Not `unindexed_filtering_update`: prod leaves it unset, and setting it
+  # would refuse update-by-filter on unindexed keys there.
+  @unindexed_refused %{"unindexed_filtering_retrieve" => false}
+
+  @doc """
+  The strict fields refusing unindexed filters on `deployment`. Applied by
+  the boot reconcile only, after the payload indexes; the poller leaves them.
+  """
+  def unindexed_refused(:self_host), do: %{}
+  def unindexed_refused(:cloud), do: @unindexed_refused
+
   @doc """
   The desired PATCH sub-objects for a server at `version` (`nil` = unknown),
   with strict mode refusing writes at `limits` (see `strict_limits/2`;
@@ -200,7 +214,12 @@ defmodule Engram.Vector.QdrantLayout do
         storage(version, graph?)
 
       guards ->
-        strict = Map.merge(desired_strict(deployment), Map.new([{"enabled", true} | guards]))
+        strict =
+          deployment
+          |> desired_strict()
+          |> Map.merge(unindexed_refused(deployment))
+          |> Map.merge(Map.new([{"enabled", true} | guards]))
+
         Map.put(storage(version, graph?), "strict_mode_config", strict)
     end
   end
