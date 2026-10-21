@@ -9,6 +9,7 @@ defmodule Engram.Indexing do
   import Ecto.Query
 
   alias Engram.Crypto
+  alias Engram.EmbedModels
   alias Engram.Indexing.RetainedVectors
   alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
@@ -80,7 +81,10 @@ defmodule Engram.Indexing do
       the tenant transaction that writes the chunk rows (or, on the no-chunks
       path, in one opened after the purge). `EmbedNote` stamps its
       hashes here, so the stamp shares the index write's transaction instead
-      of opening its own.
+      of opening its own. A 5-arity function also gets the cheapest doc model
+      among the dense vectors the note now holds (nil off per-plan).
+    * `:doc_model`: the doc model to embed with (`Engram.EmbedModels`); per
+      plan only, resolved from `user` when absent.
   """
   def index_note_with_usage(note, %Engram.Vaults.Vault{} = vault, user \\ nil, opts \\ []) do
     # Resolve identity ONCE for the whole call. This function and
@@ -95,7 +99,50 @@ defmodule Engram.Indexing do
     # embed budget resolves the tier), and on a bare `get_user!/1` struct that
     # is one `subscriptions` query. The join folds it into this fetch. See #1502.
     user = user || Engram.Accounts.get_user_with_subscription!(note.user_id)
+    with_pass_model(user, opts, fn -> index_with_usage(note, vault, user, opts) end)
+  end
 
+  @pass_model_key {__MODULE__, :pass_model}
+
+  # The doc model of this pass, by the owner's plan (`Engram.EmbedModels`):
+  # `opts[:doc_model]` (EmbedNote stamps the same one) or resolved here.
+  # Held in the process for the pass, so every reuse key (retained vectors,
+  # fingerprints) and the Voyage request name the same model.
+  # Off per-plan nothing is set and `embed_model/0` applies, as before.
+  defp with_pass_model(user, opts, fun) do
+    if EmbedModels.per_plan?() do
+      model = opts[:doc_model] || EmbedModels.doc_model(user)
+      prev = Process.put(@pass_model_key, {model, EmbedModels.reuse_models(user, model)})
+
+      try do
+        fun.()
+      after
+        if prev, do: Process.put(@pass_model_key, prev), else: Process.delete(@pass_model_key)
+      end
+    else
+      fun.()
+    end
+  end
+
+  # The model this pass embeds with: the plan's, else the build's.
+  defp pass_model do
+    case Process.get(@pass_model_key) do
+      {model, _reuse} -> model
+      nil -> embed_model()
+    end
+  end
+
+  # Higher-tier models whose stored vectors this pass may keep (a Free note's
+  # voyage-4-large vectors): tried after the pass model's fingerprint by
+  # chunk reuse. [] off per-plan.
+  defp reuse_models do
+    case Process.get(@pass_model_key) do
+      {_model, reuse} -> reuse
+      nil -> []
+    end
+  end
+
+  defp index_with_usage(note, vault, user, opts) do
     case prepare_index(note, vault, user, opts) do
       {:ok, :no_chunks} ->
         case Crypto.get_dek(user) do
@@ -119,7 +166,7 @@ defmodule Engram.Indexing do
             # keeps `dense_indexed_hash` nil and ReconcileEmbeddings re-selects
             # it every tick.
             with :ok <- purge_stale_index(note) do
-              run_in_commit(note, opts, 0, true, {0, nil})
+              run_in_commit(note, opts, 0, true, {0, nil, nil})
               {:ok, 0, 0, true}
             end
 
@@ -139,7 +186,8 @@ defmodule Engram.Indexing do
         commit =
           &run_in_commit(note, opts, &1, prepared.dense?, {
             prepared.deferred_tokens,
-            prepared.next_deferred_tokens
+            prepared.next_deferred_tokens,
+            prepared.held_model
           })
 
         case commit_index(prepared, commit) do
@@ -221,6 +269,7 @@ defmodule Engram.Indexing do
          |> Map.put(:deferred_tokens, deferred)
          |> Map.put(:next_deferred_tokens, Map.get(plan, :next_deferred_tokens))
          |> Map.put(:okf_healed?, okf_healed?)
+         |> Map.put(:held_model, held_model(plan.entries, dense?))
          |> Map.put(:retain, if(dense?, do: retention(note, plan, texts, vectors)))}
       else
         {:error, :no_dek} = err ->
@@ -272,10 +321,13 @@ defmodule Engram.Indexing do
 
   # Re-entrant inside commit_index/2's chunk transaction; on the purge path it
   # opens one of its own.
-  defp run_in_commit(note, opts, chunk_count, dense?, {deferred, next}) do
+  defp run_in_commit(note, opts, chunk_count, dense?, {deferred, next, held}) do
     case Keyword.get(opts, :in_commit) do
       nil ->
         :ok
+
+      fun when is_function(fun, 5) ->
+        Repo.with_tenant!(note.user_id, fn -> fun.(chunk_count, dense?, deferred, next, held) end)
 
       fun when is_function(fun, 4) ->
         Repo.with_tenant!(note.user_id, fn -> fun.(chunk_count, dense?, deferred, next) end)
@@ -1048,7 +1100,7 @@ defmodule Engram.Indexing do
   # note. Oban's default backoff puts all five attempts inside the TTL. Persist
   # them (chunks table) if failures get common.
   defp retained_key(note, texts),
-    do: {note.id, :crypto.hash(:sha256, :erlang.term_to_binary({embed_model(), texts}))}
+    do: {note.id, :crypto.hash(:sha256, :erlang.term_to_binary({pass_model(), texts}))}
 
   defp retained(_note, []), do: :miss
   defp retained(note, texts), do: RetainedVectors.get(retained_key(note, texts))
@@ -1232,7 +1284,7 @@ defmodule Engram.Indexing do
   end
 
   defp do_embed_batch(texts) do
-    case doc_embed_model() do
+    case if(Process.get(@pass_model_key), do: pass_model(), else: doc_embed_model()) do
       nil -> embedder().embed_texts(texts)
       model -> embedder().embed_texts(texts, model: model)
     end
@@ -1255,7 +1307,19 @@ defmodule Engram.Indexing do
   # Matched by multiplicity, not by set membership: a note with two identical
   # sections has two rows under one hmac and must consume one point each, or
   # the second chunk silently adopts the first one's point.
+  #
+  # A chunk with no match under the pass model's fingerprint may keep a point
+  # made by a higher-tier model (`reuse_models/0`): its `context_hmac` then
+  # names THAT model, so the row stays truthful about the vector it holds.
   defp plan_chunks(note, chunks, content_key, dense?) do
+    alts =
+      if dense?,
+        do:
+          reuse_models()
+          |> Enum.map(&plan_fingerprints(content_key, chunks, dense?, &1))
+          |> transpose(length(chunks)),
+        else: List.duplicate([], length(chunks))
+
     chunks =
       Enum.zip_with(chunks, plan_fingerprints(content_key, chunks, dense?), fn chunk, hmac ->
         Map.put(chunk, :context_hmac, hmac)
@@ -1286,14 +1350,20 @@ defmodule Engram.Indexing do
         fn {_hmac, point_id, tokens} -> {point_id, tokens} end
       )
 
-    {entries, _left} =
-      Enum.map_reduce(chunks, by_hmac, fn chunk, acc ->
-        case Map.get(acc, chunk.context_hmac) do
-          [{point_id, tokens} | rest] ->
-            {{:reuse, chunk, point_id, tokens}, Map.put(acc, chunk.context_hmac, rest)}
+    models = [nil | reuse_models()]
 
-          _none ->
+    {entries, _left} =
+      Enum.map_reduce(Enum.zip(chunks, alts), by_hmac, fn {chunk, others}, acc ->
+        candidates = Enum.zip([chunk.context_hmac | others], models)
+
+        case Enum.find(candidates, fn {hmac, _} -> match?([_ | _], Map.get(acc, hmac)) end) do
+          nil ->
             {{:embed, chunk}, acc}
+
+          {hmac, model} ->
+            [{point_id, tokens} | rest] = Map.fetch!(acc, hmac)
+            chunk = if model, do: Map.put(chunk, :vector_model, model), else: chunk
+            {{:reuse, %{chunk | context_hmac: hmac}, point_id, tokens}, Map.put(acc, hmac, rest)}
         end
       end)
 
@@ -1320,13 +1390,13 @@ defmodule Engram.Indexing do
   # Per chunk on a dense pass: only prose gets a dense vector, so the rest are
   # fingerprinted as the sparse-only points they become, and a chunk whose kind
   # changes never reuses a point of the other shape.
-  defp plan_fingerprints(content_key, chunks, dense?) do
+  defp plan_fingerprints(content_key, chunks, dense?, model \\ nil) do
     {dense, sparse} = Enum.split_with(chunks, &dense_chunk?(&1, dense?))
 
     {hmacs, {[], []}} =
       Enum.map_reduce(
         chunks,
-        {fingerprints(content_key, dense, true), fingerprints(content_key, sparse, false)},
+        {fingerprints(content_key, dense, true, model), fingerprints(content_key, sparse, false)},
         fn chunk, {d, s} ->
           if dense_chunk?(chunk, dense?), do: {hd(d), {tl(d), s}}, else: {hd(s), {d, tl(s)}}
         end
@@ -1338,10 +1408,10 @@ defmodule Engram.Indexing do
   defp dense_chunk?(chunk, dense?),
     do: dense? and chunk.kind == "prose" and not Map.get(chunk, :keyword_only, false)
 
-  defp fingerprints(content_key, chunks, dense?) do
+  defp fingerprints(content_key, chunks, dense?, model \\ nil) do
     Engram.Native.hmac_hex_many(
       content_key,
-      fingerprint_prefix(dense?),
+      fingerprint_prefix(dense?, model),
       Enum.map(chunks, &fingerprint_input/1)
     )
   end
@@ -1359,8 +1429,8 @@ defmodule Engram.Indexing do
   # embedder sends its own default, and a reuse fingerprint that names no
   # model would reuse old-model vectors after a default change, under a new
   # model stamp. (Prod sets DOC_EMBED_MODEL, so its model part is unchanged.)
-  defp fingerprint_prefix(true), do: "dense:#{embed_model()}/embed_text\n"
-  defp fingerprint_prefix(false), do: "sparse\n"
+  defp fingerprint_prefix(true, model), do: "dense:#{model || pass_model()}/embed_text\n"
+  defp fingerprint_prefix(false, _model), do: "sparse\n"
 
   # `embed_text`, not `context_text`: no folder, which is a filter key, not
   # meaning (#1621). The reuse fingerprint covers both (`fingerprint_input/1`).
@@ -1516,20 +1586,28 @@ defmodule Engram.Indexing do
     # must not accept them (they say nothing about which vectors the point
     # holds), but this rewrites only the keyword vector, so the text match is
     # all it needs.
+    #
+    # Per plan, a note may hold any plan model's dense vectors (a Free note's
+    # kept voyage-4-large points), so those fingerprints are candidates too.
+    alt_models = if EmbedModels.per_plan?(), do: EmbedModels.acceptable(:free), else: []
+
     keyed =
       Enum.zip([
         chunks,
         fingerprints(content_key, chunks, true),
         fingerprints(content_key, chunks, false),
-        Engram.Native.hmac_hex_many(content_key, "", Enum.map(chunks, & &1.context_text))
+        Engram.Native.hmac_hex_many(content_key, "", Enum.map(chunks, & &1.context_text)),
+        alt_models
+        |> Enum.map(&fingerprints(content_key, chunks, true, &1))
+        |> transpose(length(chunks))
       ])
 
     {matched, _left} =
-      Enum.flat_map_reduce(keyed, {by_hmac, by_offsets}, fn {chunk, dense, sparse, legacy},
+      Enum.flat_map_reduce(keyed, {by_hmac, by_offsets}, fn {chunk, dense, sparse, legacy, alts},
                                                             {hmacs, offsets} = acc ->
         offset_key = {chunk.position, chunk.char_start, chunk.char_end}
 
-        case Enum.find([dense, sparse, legacy], &match?([_ | _], Map.get(hmacs, &1))) do
+        case Enum.find([dense, sparse, legacy | alts], &match?([_ | _], Map.get(hmacs, &1))) do
           nil ->
             case Map.pop(offsets, offset_key) do
               {nil, _} -> {[], acc}
@@ -1588,6 +1666,31 @@ defmodule Engram.Indexing do
 
   defp entry_chunk({:reuse, chunk, _point_id, _tokens}), do: chunk
   defp entry_chunk({:embed, chunk}), do: chunk
+
+  # The cheapest model among the dense vectors the pass leaves stored, for
+  # `notes.embed_model`: a Free note that kept every voyage-4-large vector
+  # stays stamped large, so a later upgrade re-embeds nothing. A kept vector
+  # names its model (`:vector_model`, set by `plan_chunks/4` on a higher-tier
+  # match); a fresh one is the pass model. nil off per-plan or with no dense
+  # vector: the caller's model applies.
+  defp held_model(entries, dense?) do
+    held =
+      for entry <- entries,
+          dense_chunk?(entry_chunk(entry), dense?),
+          do: vector_model(entry)
+
+    if EmbedModels.per_plan?() and held != [], do: Enum.min_by(held, &EmbedModels.price/1)
+  end
+
+  defp vector_model({:reuse, chunk, _point_id, _tokens}),
+    do: Map.get(chunk, :vector_model) || pass_model()
+
+  defp vector_model({:embed, _chunk}), do: pass_model()
+
+  # Per-model lists of per-chunk values, regrouped per chunk: `n` empty
+  # lists when there are no models.
+  defp transpose([], n), do: List.duplicate([], n)
+  defp transpose(lists, _n), do: Enum.zip_with(lists, & &1)
 
   # Encrypt-first: build payloads + encrypt in memory BEFORE any mutation.
   # If any chunk's encryption fails, no Postgres row or Qdrant point is touched
@@ -1793,10 +1896,13 @@ defmodule Engram.Indexing do
         %{}
 
       chunks ->
-        for dense? <- [true, false], reduce: %{} do
+        # Per plan, a note may hold any plan model's vectors (`reuse_models/0`).
+        models = if EmbedModels.per_plan?(), do: EmbedModels.acceptable(:free), else: [nil]
+
+        for model <- models, dense? <- [true, false], reduce: %{} do
           acc ->
-            fingerprints(old_key, chunks, dense?)
-            |> Enum.zip(fingerprints(new_key, chunks, dense?))
+            fingerprints(old_key, chunks, dense?, model)
+            |> Enum.zip(fingerprints(new_key, chunks, dense?, model))
             |> Map.new()
             |> Map.merge(acc)
         end

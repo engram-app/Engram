@@ -29,7 +29,11 @@ defmodule Engram.Search.SearchProfile do
   @spec resolve(map()) :: t()
   def resolve(user) do
     %__MODULE__{
-      query_model: as_model(Billing.effective_limit(user, :search_query_model)),
+      # An override wins; else the searching user's plan model (SaaS), else
+      # nil: the global `:query_embed_model` (self-host).
+      query_model:
+        as_model(Billing.effective_limit(user, :search_query_model)) ||
+          Engram.EmbedModels.query_model(user),
       full_precision: Billing.granted?(user, :search_full_precision),
       reranker: Billing.granted?(user, :reranker_enabled),
       # fallback 30 = 0.3 default; self-host (no cap) gets MMR like every tier

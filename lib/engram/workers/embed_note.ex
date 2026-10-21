@@ -45,6 +45,7 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
+  alias Engram.EmbedModels
   alias Engram.Indexing
   alias Engram.Logger.DecryptFailure
   alias Engram.Logger.Metadata
@@ -395,12 +396,14 @@ defmodule Engram.Workers.EmbedNote do
 
   @doc """
   True when an indexed note is behind this build: an older chunker, or dense
-  vectors from another embed model. The single definition both `perform/1`
+  vectors from a model the note may not keep (`Engram.EmbedModels`: per plan,
+  else exactly the build's model). The single definition both `perform/1`
   and `ReconcileEmbeddings` route on. Model tracking is off when the build
-  cannot name its model (nil).
+  cannot name its model (nil). `paid?` is the owner's plan when the caller
+  already knows it; nil looks it up (only per-plan).
   """
-  def version_stale?(%Note{} = note) do
-    chunker_stale?(note.chunker_version) or model_stale?(note, Indexing.embed_model())
+  def version_stale?(%Note{} = note, paid? \\ nil) do
+    chunker_stale?(note.chunker_version) or model_stale?(note, paid?)
   end
 
   # Explicit nil: Erlang orders numbers below atoms, so `nil < 3` is false.
@@ -408,10 +411,31 @@ defmodule Engram.Workers.EmbedNote do
   defp chunker_stale?(nil), do: true
   defp chunker_stale?(version), do: version < @chunker_version
 
-  defp model_stale?(_note, nil), do: false
+  defp model_stale?(note, paid?) do
+    note.dense_indexed_hash == note.content_hash and
+      case keepable_models(note, paid?) do
+        nil -> false
+        models -> note.embed_model not in models
+      end
+  end
 
-  defp model_stale?(note, model),
-    do: note.dense_indexed_hash == note.content_hash and note.embed_model != model
+  defp keepable_models(note, paid?) do
+    cond do
+      EmbedModels.per_plan?() -> EmbedModels.acceptable(plan_class(note, paid?))
+      model = Indexing.embed_model() -> [model]
+      true -> nil
+    end
+  end
+
+  defp plan_class(_note, true), do: :paid
+  defp plan_class(_note, false), do: :free
+
+  defp plan_class(note, nil) do
+    case Accounts.get_user_with_subscription(note.user_id) do
+      nil -> :free
+      user -> plan_class(note, Billing.paid?(user))
+    end
+  end
 
   # Cheap pre-check for the dense backfill of an already-indexed note: when
   # the queue is ahead of it or the bucket is empty, park it (keeping its
@@ -711,9 +735,20 @@ defmodule Engram.Workers.EmbedNote do
         # the stamp would then disagree with the index. The stamp runs
         # inside the chunk-row transaction (`:in_commit`), with the tokens a
         # partial pass still needs.
+        # The owner's plan model (`Engram.EmbedModels`): Indexing embeds with
+        # it and the stamp names it, from this one read. `held` is the
+        # cheapest model among the vectors the note keeps, so a Free note
+        # that kept every voyage-4-large vector stays stamped large.
+        model = EmbedModels.doc_model(user)
+
         index_opts =
           budget ++
-            [in_commit: &stamp_embed_hash(note, &2, &1, {:budget, &3, &4})]
+            [
+              doc_model: model,
+              in_commit: fn count, dense?, deferred, next, held ->
+                stamp_embed_hash(note, dense?, count, {:budget, deferred, next}, held || model)
+              end
+            ]
 
         case Indexing.index_note_with_usage(decrypted_note, vault, user, index_opts) do
           {:ok, _count, _embedded_bytes, true} ->
@@ -835,10 +870,13 @@ defmodule Engram.Workers.EmbedNote do
   # the note is no longer broken, and the crash guard's dead-man stamp, since
   # this runs inside the index write's transaction.
 
-  defp stamp_embed_hash(%Note{content_hash: nil} = note, _dense?, _count, _park),
+  # `model`: the doc model the pass embedded with, stamped on a dense pass.
+  defp stamp_embed_hash(note, dense?, chunk_count, sparse_park, model \\ Indexing.embed_model())
+
+  defp stamp_embed_hash(%Note{content_hash: nil} = note, _dense?, _count, _park, _model),
     do: CrashGuard.clear(note, :ok)
 
-  defp stamp_embed_hash(note, dense?, chunk_count, sparse_park) do
+  defp stamp_embed_hash(note, dense?, chunk_count, sparse_park, model) do
     # `embed_hash` = "this content is indexed" (keyword and/or dense).
     # `dense_indexed_hash` = "this content has dense vectors in Qdrant".
     # Keeping them separate is what lets ReconcileEmbeddings backfill the
@@ -866,14 +904,14 @@ defmodule Engram.Workers.EmbedNote do
         chunk_count == 0 and dense? ->
           [
             dense_indexed_hash: note.content_hash,
-            embed_model: Indexing.embed_model(),
+            embed_model: model,
             embed_retry_after: nil
           ] ++ @queue_clear
 
         dense? ->
           [
             dense_indexed_hash: note.content_hash,
-            embed_model: Indexing.embed_model(),
+            embed_model: model,
             embed_retry_after: nil
           ] ++ @queue_clear
 

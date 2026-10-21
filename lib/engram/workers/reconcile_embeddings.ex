@@ -83,14 +83,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # `tier` filter is load-bearing: `subscriptions.tier` accepts "free" while
     # `status` DEFAULTS to "trialing", so matching on status alone would treat
     # a Free user as paying.
-    paid =
-      from(s in Engram.Billing.Subscription,
-        where:
-          s.user_id == parent_as(:note).user_id and
-            s.status in ^Engram.Billing.entitled_statuses() and
-            s.tier in ["starter", "pro"],
-        select: 1
-      )
+    paid = IndexVersions.owner_paid()
 
     # 3. indexed at its current content by an older chunker, or with dense
     #    vectors from another embed model. #1620 kept this cron off
@@ -178,11 +171,12 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       # nested-loop semi join that re-ran the sorted subquery per outer row,
       # O(N^2): 15 s for 1,205 notes, past the checkout deadline, every tick.
       {_count, rows} =
-        Note
+        from(n in Note, as: :note)
         |> with_cte("reconcile_eligible", as: ^eligible, materialized: true)
         |> join(:inner, [n], e in "reconcile_eligible", on: field(e, :id) == n.id)
         |> where([n], n.kind == "note")
-        # The columns `EmbedNote.version_stale?/1` reads, to route each note.
+        # The columns `EmbedNote.version_stale?/2` reads, to route each note,
+        # and the owner's plan for its model term.
         |> select([n], %{
           id: n.id,
           user_id: n.user_id,
@@ -190,7 +184,8 @@ defmodule Engram.Workers.ReconcileEmbeddings do
           content_hash: n.content_hash,
           dense_indexed_hash: n.dense_indexed_hash,
           chunker_version: n.chunker_version,
-          embed_model: n.embed_model
+          embed_model: n.embed_model,
+          paid: exists(paid)
         })
         # Clears the budget-park flag with it: the #897 backoff must hold for
         # this note even for a paying user, or a crash mid-embed re-selects it
@@ -448,7 +443,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   end
 
   defp version_rebuild?(%{embed_hash: hash, content_hash: hash} = row) when hash != nil,
-    do: EmbedNote.version_stale?(struct(Note, row))
+    do: EmbedNote.version_stale?(struct(Note, row), Map.get(row, :paid))
 
   defp version_rebuild?(_row), do: false
 
