@@ -140,7 +140,8 @@ defmodule Engram.DataMigrations.IndexVersions do
   end
 
   @doc """
-  Notes whose keyword vectors predate `KeywordIndex.version/0`. A newer stamp
+  Notes whose keyword vectors predate the target keyword version (the pin
+  until `INDEX_REBUILD=on`, then `KeywordIndex.version/0`). A newer stamp
   counts as current, for the same rollback reason as the chunker.
   `{chunker, keyword}` defaults to `Rebuild.target_versions/0`.
   """

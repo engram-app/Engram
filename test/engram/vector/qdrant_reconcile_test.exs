@@ -779,6 +779,31 @@ defmodule Engram.Vector.QdrantReconcileTest do
       refute Map.has_key?(info["config"]["strict_mode_config"], "unindexed_filtering_update")
     end
 
+    # The boot ensure now runs on every node, web tier included. At default
+    # flags it must find every payload index prod already has and create
+    # none, and never set `unindexed_filtering_update` (prod leaves it unset).
+    test "default flags: the ensure on prod creates no payload index", %{bypass: bypass} do
+      test_pid = self()
+      fake_collection(bypass, "engram_notes", @prod_info)
+
+      Bypass.expect_once(bypass, "PUT", "/collections/engram_notes", fn conn ->
+        json(conn, 409, %{status: %{error: "already exists"}})
+      end)
+
+      Bypass.stub(bypass, "PUT", "/collections/engram_notes/index", fn conn ->
+        send(test_pid, :index)
+        json(conn, 200, %{status: "ok"})
+      end)
+
+      assert :ok = Qdrant.ensure_collection("engram_notes", 1024)
+      refute_received :index
+
+      for {:patch, %{"strict_mode_config" => strict}} <- flush() do
+        assert Map.get(strict, "unindexed_filtering_retrieve", false) == false
+        refute Map.has_key?(strict, "unindexed_filtering_update")
+      end
+    end
+
     # The poller runs on its own clock, possibly before the boot ensure made
     # the indexes: it keeps the limits only, never the refusal.
     test "the poller never sets the refusal", %{bypass: bypass} do
