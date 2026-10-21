@@ -518,6 +518,11 @@ defmodule Engram.Notes do
     end
   end
 
+  # Tombstones included on purpose: upsert_folder_marker/6 revives one in
+  # place so the folder keeps its id. A name can hold one live marker plus any
+  # number of tombstones with the same hmac (the unique index covers live rows
+  # only, and a rename onto a deleted name moves the old marker in beside the
+  # name's tombstone), so take the live row, else the newest tombstone (#2121).
   defp find_folder_marker(user, vault, folder_hmac) do
     ids? = Keys.ids?()
 
@@ -526,7 +531,9 @@ defmodule Engram.Notes do
         from(n in scoped(user, vault),
           where: n.kind == "folder",
           where: ^Keys.eq(:folder, folder_hmac, ids?),
-          where: ^Keys.kind_match(:folder, ids?)
+          where: ^Keys.kind_match(:folder, ids?),
+          order_by: [desc_nulls_first: n.deleted_at],
+          limit: 1
         )
       )
 
