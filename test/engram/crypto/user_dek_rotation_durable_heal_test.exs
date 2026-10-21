@@ -260,6 +260,22 @@ defmodule Engram.Crypto.UserDekRotationDurableHealTest do
     refute_received {:payload_write, _, _}
   end
 
+  # A note the payload heal marked undecryptable is re-checked after a
+  # rotation: the flip NULLs every stamp, the marker included.
+  test "a rotation clears the undecryptable marker", ctx do
+    stub_qdrant(heal: stale_v5(ctx.point, ctx.user))
+
+    {1, _} =
+      Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^ctx.note.id),
+        [set: [payload_hash: ReconcileNotePayloads.undecryptable_stamp()]],
+        skip_tenant_check: true
+      )
+
+    assert :ok = UserDekRotation.rotate_user(ctx.user.id)
+    assert raw(ctx.note).payload_hash == nil
+  end
+
   test "a Qdrant failure is retried by the heal and costs no re-embed", ctx do
     stub_qdrant(heal: stale_v5(ctx.point, ctx.user), overwrite_status: 500)
 

@@ -312,6 +312,25 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     assert NotePayloadStamps.run_pass() == :done
   end
 
+  # A key-provider or DEK-load failure is not "this note is undecryptable":
+  # the note stays NULL (the daily re-check still covers it) and the job
+  # fails so Oban backs off.
+  test "a transient key failure marks nothing and fails the job", ctx do
+    for id <- point_ids(ctx.stale),
+        do: Agent.update(ctx.store, &put_in(&1.points[id], %{"u" => "x", "y" => "b2xk"}))
+
+    {1, _} =
+      Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^ctx.user.id),
+        [set: [encrypted_dek: nil]],
+        skip_tenant_check: true
+      )
+
+    assert {:error, _} = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+    assert reload(ctx.stale).payload_hash == nil
+    assert Agent.get(ctx.store, & &1.overwrites) == []
+  end
+
   # Once done, the migration re-checks daily on the existing runner cron, so
   # a row a lost race unstamped is healed without waiting for an edit.
   test "a done migration reopens for a row unstamped later", ctx do

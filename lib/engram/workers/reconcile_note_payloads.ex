@@ -22,7 +22,9 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   Both layouts. A v3 point gets `expected_note_payload/1` merged in; a v5
   point (#2087's short-key layout) gets `expected_v5_payload/2`, built from
   the decrypted note as a pass builds it, and REPLACED (`overwrite_payload`).
-  A v5 note that does not decrypt cannot be healed: it is counted
+  A v5 note whose ciphertext fails AEAD under the current DEK
+  (`{:error, :decrypt_failed}`; any other error is transient and fails the
+  job) cannot be healed: it is counted
   (`skipped_v5`) and marked with `undecryptable_stamp/0` in `payload_hash`,
   so the daily re-check does not requeue its user forever. Never deleted;
   the stamp matches no real hash, so the note's next index pass refreshes
@@ -253,8 +255,10 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   """
   def undecryptable_stamp, do: @undecryptable
 
-  # CAS on the row as read: an edit since then re-indexes (and stamps) it.
-  defp mark_undecryptable(note) do
+  # CAS on the row as read (an edit since then re-indexes and stamps it) and
+  # on the user's DEK version: a rotation flip in between NULLs every stamp,
+  # and the row may open under the new DEK.
+  defp mark_undecryptable(note, user) do
     {:ok, {_, _}} =
       Repo.with_tenant(note.user_id, fn ->
         same_content =
@@ -264,13 +268,20 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
         from(n in Note,
           where: n.kind == "note" and n.id == ^note.id and is_nil(n.payload_hash),
-          where: ^same_content
+          where: ^same_content,
+          where: exists(same_dek(user))
         )
         |> Repo.update_all(set: [payload_hash: @undecryptable])
       end)
 
     :ok
   end
+
+  defp same_dek(%User{id: id, dek_version: nil}),
+    do: from(u in User, where: u.id == ^id and is_nil(u.dek_version), select: 1)
+
+  defp same_dek(%User{id: id, dek_version: v}),
+    do: from(u in User, where: u.id == ^id and u.dek_version == ^v, select: 1)
 
   defp heal_notes(user, notes, points, stored, counts) do
     Enum.reduce_while(notes, {:ok, counts}, fn note, {:ok, counts} ->
@@ -283,8 +294,11 @@ defmodule Engram.Workers.ReconcileNotePayloads do
           heal_note(note, payload, writes, counts)
 
         :skip ->
-          mark_undecryptable(note)
+          mark_undecryptable(note, user)
           {:cont, {:ok, bump(counts, :skipped_v5)}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason, counts}}
       end
     end)
   end
@@ -305,7 +319,12 @@ defmodule Engram.Workers.ReconcileNotePayloads do
       writes = if drifted == [], do: [], else: [{:overwrite, drifted, v5}]
       {:ok, writes ++ v3_writes(v3_ids, stored, Indexing.expected_note_payload(note)), v5}
     else
-      _ -> :skip
+      # The note's own ciphertext fails AEAD under the current DEK: it is
+      # undecryptable, not unlucky. Anything else (no DEK, a contended load,
+      # a key-provider error) is transient: the job fails and Oban backs off,
+      # the note stays NULL for the daily re-check.
+      {:error, :decrypt_failed} -> :skip
+      {:error, reason} -> {:error, reason}
     end
   end
 
