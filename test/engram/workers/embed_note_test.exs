@@ -1653,9 +1653,15 @@ defmodule Engram.Workers.EmbedNoteTest do
   # Voyage is sent, and the stamp names the same one.
   describe "model per plan" do
     setup do
-      prev = Map.new([:billing_enabled, :embed_model], &{&1, Application.get_env(:engram, &1)})
+      prev =
+        Map.new(
+          [:billing_enabled, :embed_model, :embed_models_per_plan],
+          &{&1, Application.get_env(:engram, &1)}
+        )
+
       Application.put_env(:engram, :billing_enabled, true)
       Application.put_env(:engram, :embed_model, "voyage-4-large")
+      Application.put_env(:engram, :embed_models_per_plan, true)
 
       on_exit(fn ->
         for {k, v} <- prev,

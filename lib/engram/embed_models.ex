@@ -3,7 +3,7 @@ defmodule Engram.EmbedModels do
   Which Voyage model embeds a note's documents and a user's queries, by plan
   (chunker v5 rebuild, "model per plan").
 
-  SaaS (`:billing_enabled`): Free embeds documents AND queries with
+  SaaS (`:billing_enabled`, with `EMBED_MODELS_PER_PLAN=true`): Free embeds documents AND queries with
   `voyage-4-lite`, Starter and Pro with `voyage-4-large`. The voyage-4 family
   shares one embedding space, so lite and large points coexist in one
   collection and either query model searches both (workspace report
@@ -32,7 +32,7 @@ defmodule Engram.EmbedModels do
       including the rebuild, keeps every stored large vector
       (`reuse_models/2`) and embeds only new or changed chunks at lite.
 
-  Self-host (billing off), and any build that cannot name its model (the
+  Self-host (billing off), SaaS with the switch unset, and any build that cannot name its model (the
   test mock): one configured model for every note and query, as before
   (`Engram.Indexing.embed_model/0`, `:query_embed_model`).
 
@@ -57,11 +57,17 @@ defmodule Engram.EmbedModels do
   @doc "The per-plan defaults; an unset env var reads these (runtime.exs)."
   def plan_defaults, do: @plan_defaults
 
-  @doc "True when models follow the plan: billing on and a nameable model."
+  @doc """
+  True when models follow the plan: `EMBED_MODELS_PER_PLAN=true`, billing on
+  and a nameable model. Off by default: until the v5 go sequence turns it on,
+  SaaS keeps one doc model and one query model for every plan, so a plain
+  deploy changes no ranking and no Voyage spend.
+  """
   @spec per_plan?() :: boolean()
   def per_plan?,
     do:
-      Application.get_env(:engram, :billing_enabled, false) == true and
+      Application.get_env(:engram, :embed_models_per_plan, false) == true and
+        Application.get_env(:engram, :billing_enabled, false) == true and
         Indexing.embed_model() != nil
 
   @doc "The model a pass embeds `user`'s documents with."

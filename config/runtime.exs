@@ -101,19 +101,23 @@ if config_env() == :dev do
   config :logger, level: String.to_existing_atom(System.get_env("LOG_LEVEL", "debug"))
 end
 
-# Model per plan (SaaS, billing on): `{DOC,QUERY}_EMBED_MODEL_{FREE,STARTER,PRO}`.
-# Unset or blank reads the default (`Engram.EmbedModels.plan_defaults/0`):
-# Free voyage-4-lite, Starter and Pro voyage-4-large. Self-host ignores them.
+# Model per plan (SaaS, billing on, `EMBED_MODELS_PER_PLAN=true`):
+# `{DOC,QUERY}_EMBED_MODEL_{FREE,STARTER,PRO}`.
+# Only the set ones are configured; an unset or blank plan reads its default
+# in `Engram.EmbedModels` (`plan_defaults/0`, the one copy: Free
+# voyage-4-lite, Starter and Pro voyage-4-large). Self-host ignores them.
 plan_models = fn prefix ->
-  Map.new(
-    [free: "voyage-4-lite", starter: "voyage-4-large", pro: "voyage-4-large"],
-    fn {plan, default} ->
-      case System.get_env("#{prefix}_#{String.upcase(to_string(plan))}", "") |> String.trim() do
-        "" -> {plan, default}
-        model -> {plan, model}
-      end
-    end
-  )
+  for plan <- [:free, :starter, :pro],
+      model = System.get_env("#{prefix}_#{String.upcase(to_string(plan))}", "") |> String.trim(),
+      model != "",
+      into: %{},
+      do: {plan, model}
+end
+
+# The switch: unset or anything but "true" keeps one model for every plan
+# (the global ones), as before v5. Flipped at v5 go time.
+if per_plan = System.get_env("EMBED_MODELS_PER_PLAN") do
+  config :engram, :embed_models_per_plan, per_plan == "true"
 end
 
 config :engram, :plan_doc_embed_models, plan_models.("DOC_EMBED_MODEL")
