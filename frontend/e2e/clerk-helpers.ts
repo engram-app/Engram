@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { clerk } from "@clerk/testing/playwright";
 import { expect, type Page } from "@playwright/test";
+import { clerkFetch } from "./support/clerk-fetch";
 
 // Shared by the Clerk specs. clerk-auth.spec.ts keeps its own no-retry sign-in
 // on purpose (a "No user found" there must surface immediately, see its
@@ -89,7 +90,7 @@ export async function createUnonboardedUser(
 	const ts = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 	const email = `${prefix}-${ts}@test.com`;
 
-	const resp = await fetch(`${CLERK_API}/users`, {
+	const resp = await clerkFetch(`${CLERK_API}/users`, {
 		method: "POST",
 		headers: {
 			Authorization: `Bearer ${process.env.E2E_CLERK_SECRET_KEY ?? ""}`,
@@ -117,7 +118,7 @@ export async function createUnonboardedUser(
  * sees nothing and the user leaks silently into the instance's 100-user cap.
  */
 export async function deleteClerkUser(id: string): Promise<void> {
-	await fetch(`${CLERK_API}/users/${id}`, {
+	await clerkFetch(`${CLERK_API}/users/${id}`, {
 		method: "DELETE",
 		headers: { Authorization: `Bearer ${process.env.E2E_CLERK_SECRET_KEY ?? ""}` },
 	})
