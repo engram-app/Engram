@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import secrets
@@ -35,6 +36,8 @@ API_URL = os.environ.get("ENGRAM_API_URL") or "http://localhost:8100/api"
 SPA_URL = os.environ.get("ENGRAM_SPA_URL") or (
     API_URL[:-4] if API_URL.endswith("/api") else API_URL
 )
+
+logger = logging.getLogger(__name__)
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("E2E_CLERK_SECRET_KEY"),
@@ -126,6 +129,7 @@ async def test_plugin_first_journey(fresh_unlinked_instance, clerk_client, ts, s
     notes = _vault_notes()
     email = e2e_email("pluginfirst", ts)
     user_id = None
+    passed = False
 
     try:
         with timed_step("seed-local-vault"):
@@ -140,6 +144,9 @@ async def test_plugin_first_journey(fresh_unlinked_instance, clerk_client, ts, s
             )
 
         with timed_step("start-link-from-plugin"):
+            # Plugin surface this depends on: `settingTab.startDeviceFlow()` (src/settings.ts)
+            # and DeviceFlowModal's `window.open(verificationUrlWithCode(...))`
+            # (src/device-flow-modal.ts). Rename either and this step must follow.
             await cdp.evaluate(
                 "window.__engramOpened = []; "
                 "window.open = (u) => { window.__engramOpened.push(String(u)); return null; }; "
@@ -178,6 +185,8 @@ async def test_plugin_first_journey(fresh_unlinked_instance, clerk_client, ts, s
             # Linking opens the first-sync preview. The server vault is not empty:
             # creating it on /link seeds the welcome note, so this is the full
             # preview, and its safe default ("Sync", smart-merge) is the user's click.
+            # Pins plugin UI: the `.engram-sync-preview-modal` class, the "Sync" option
+            # label and the English plan copy (Obsidian runs with locale en-US).
             await cdp.wait_for_sync_preview_modal(timeout=30)
             plan = "Uploads 21, downloads 1."
             deadline = time.monotonic() + 30
@@ -201,17 +210,28 @@ async def test_plugin_first_journey(fresh_unlinked_instance, clerk_client, ts, s
                 timeout=10,
             )
             assert raw.status_code == 200 and raw.content == TINY_PNG
-            # Cold CRDT bodies fold in asynchronously; wait for the fold, then demand bytes.
+            # Cold CRDT bodies fold in asynchronously; wait for every fold, then
+            # demand bytes for all 20 (frontmatter and unicode included).
             deadline = time.monotonic() + 30
-            while (got := (api.get_note(FRONTMATTER_NOTE) or {}).get("content")) != FRONTMATTER_BODY:
-                if time.monotonic() >= deadline:
+            while True:
+                server = {p: (api.get_note(p) or {}).get("content") for p in notes}
+                differ = sorted(p for p, body in notes.items() if server[p] != body)
+                if not differ or time.monotonic() >= deadline:
                     break
                 await asyncio.sleep(0.5)
-            assert got == FRONTMATTER_BODY, f"frontmatter note differs on server: {got!r}"
-            assert (api.get_note(UNICODE_NOTE) or {}).get("content") == notes[UNICODE_NOTE]
+            assert not differ, "server bodies differ from disk: " + "; ".join(
+                f"{p}: {server[p]!r}" for p in differ
+            )
+        passed = True
     finally:
         # The account goes with the Clerk user (session_cleanup sweeps e2e-* rows);
         # DELETE /api/me needs a first-party session and a password, which a
         # device token never has.
         if user_id:
-            clerk_client.delete_user(user_id)
+            try:
+                clerk_client.delete_user(user_id)
+            except Exception:
+                logger.exception("teardown: deleting Clerk user %s failed", user_id)
+                # Never mask the test's own failure with a teardown error.
+                if passed:
+                    raise
