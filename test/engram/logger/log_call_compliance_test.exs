@@ -100,6 +100,12 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/indexing.ex",
     # Holds paid Voyage vectors of note text, keyed by a hash of that text.
     "lib/engram/indexing/retained_vectors.ex",
+    # The v5 payload builder sees frontmatter-derived values; the point id
+    # is a hash of a note id and a chunk fingerprint.
+    "lib/engram/indexing/payload_v5.ex",
+    "lib/engram/indexing/point_id.ex",
+    # Encrypted Voyage vectors keyed by an HMAC of note text (and its schema).
+    "lib/engram/indexing/vector_cache",
     "lib/engram/crypto.ex",
     "lib/engram_web/controllers/attachments_controller.ex",
     "lib/engram/backfill/",
@@ -185,6 +191,11 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # has to be put in scope or written down here with a reason. That turns an
   # omission into a decision.
   @out_of_scope [
+    # The v5 rebuild switch, manifest and ledger: token counts, point counts
+    # and avgdl per note/vault id. No content, path, title or query, no
+    # Logger call. (Its dry-run worker, which decrypts notes, is in workers/.)
+    "lib/engram/rebuild.ex",
+    "lib/engram/rebuild/",
     # Pure function from conn assigns to an actor string ("api:<key id>" or
     # "sync"). No Logger call, never touches content, path, title or a query.
     "lib/engram_web/write_actor.ex",
@@ -276,6 +287,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/cache/",
     "lib/engram/cluster/",
     "lib/engram/drainer.ex",
+    # Plan -> Voyage model name and price table: no Logger call, reads only a
+    # user's plan tier and config.
+    "lib/engram/embed_models.ex",
     "lib/engram/email/",
     "lib/engram/http/",
     "lib/engram/idempotency.ex",

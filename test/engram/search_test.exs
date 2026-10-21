@@ -1,6 +1,8 @@
 defmodule Engram.SearchTest do
   use Engram.DataCase, async: false
 
+  import Engram.QdrantFilterView
+
   import Bitwise, only: [bxor: 2]
   import Mox
 
@@ -460,7 +462,7 @@ defmodule Engram.SearchTest do
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
-        conditions = decoded["filter"]["must"]
+        conditions = legacy_view(decoded["filter"]["must"])
         keys = Enum.map(conditions, & &1["key"])
         assert "vault_id" in keys
 
@@ -483,7 +485,7 @@ defmodule Engram.SearchTest do
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
-        conditions = decoded["filter"]["must"]
+        conditions = legacy_view(decoded["filter"]["must"])
         keys = Enum.map(conditions, & &1["key"])
 
         # Plaintext folder filter is gone; HMAC filter takes its place.
@@ -515,7 +517,7 @@ defmodule Engram.SearchTest do
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
-        conditions = decoded["filter"]["must"]
+        conditions = legacy_view(decoded["filter"]["must"])
         keys = Enum.map(conditions, & &1["key"])
 
         refute "tags" in keys
@@ -547,7 +549,7 @@ defmodule Engram.SearchTest do
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
-        conditions = decoded["filter"]["must"]
+        conditions = legacy_view(decoded["filter"]["must"])
 
         type_cond = Enum.find(conditions, &(&1["key"] == "type_hmac"))
         assert type_cond["match"]["value"] == expected_type_hmac
@@ -587,7 +589,7 @@ defmodule Engram.SearchTest do
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
-        conditions = decoded["filter"]["must"]
+        conditions = legacy_view(decoded["filter"]["must"])
         assert Enum.find(conditions, &(&1["key"] == "fm_timestamp"))
 
         conn

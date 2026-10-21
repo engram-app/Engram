@@ -1,0 +1,15 @@
+{
+	"type": "tür",
+	"status": "durum",
+	"author": "yazar",
+	"reviewed_by": "Gözdengeçiren",
+	"source": "kaynak",
+	"project": "proje",
+	"created": "oluşturulma",
+	"updated": "güncellendi",
+	"reviewed": "gözdengeçirildi",
+	"expires": "geçerlilik",
+	"due": "teslimtarih",
+	"priority": "önemlilik",
+	"description": "özet"
+}

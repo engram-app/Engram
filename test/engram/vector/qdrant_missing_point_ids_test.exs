@@ -2,8 +2,8 @@ defmodule Engram.Vector.QdrantMissingPointIdsTest do
   @moduledoc """
   Point ids taken from `chunks` rows can name a point Qdrant no longer holds
   (an orphaned row). A payload write over such a list must still land on the
-  points that exist and return `:ok`, or the reused-point payload refresh
-  fails for any user with one orphan. Bypass answers 200 to
+  points that exist and return `:ok`, or a DEK rotation (`resync_points`) and
+  a payload refresh fail for any user with one orphan. Bypass answers 200 to
   anything, so only a real Qdrant shows what a missing id does.
   """
   use ExUnit.Case, async: false
@@ -39,8 +39,14 @@ defmodule Engram.Vector.QdrantMissingPointIdsTest do
     assert payload(ctx.col, ctx.live) == %{"a" => 1, "b" => 2}
   end
 
+  test "overwrite_payload replaces the live point's payload and skips a missing id", ctx do
+    assert :ok = Qdrant.overwrite_payload(ctx.col, [ctx.live, ctx.missing], %{"c" => 3})
+    assert payload(ctx.col, ctx.live) == %{"c" => 3}
+  end
+
   test "a list of only missing ids is a no-op", ctx do
     assert :ok = Qdrant.set_payload(ctx.col, [ctx.missing], %{"b" => 2})
+    assert :ok = Qdrant.overwrite_payload(ctx.col, [ctx.missing], %{"c" => 3})
     assert payload(ctx.col, ctx.live) == %{"a" => 1}
   end
 

@@ -59,6 +59,9 @@ defmodule Engram.Vector.QdrantReconcileTest do
       {"sparse_vectors", v}, acc ->
         update_in(acc, ["config", "params", "sparse_vectors"], &deep_merge(&1, v))
 
+      {"hnsw_config", v}, acc ->
+        update_in(acc, ["config", "hnsw_config"], &deep_merge(&1, v))
+
       {"optimizers_config", v}, acc ->
         update_in(acc, ["config", "optimizer_config"], &deep_merge(&1, v))
 
@@ -76,6 +79,12 @@ defmodule Engram.Vector.QdrantReconcileTest do
   defp stub_memory(bypass, col, disk_bytes) do
     Bypass.stub(bypass, "GET", "/collections/#{col}/memory", fn conn ->
       json(conn, 200, %{result: %{total: %{disk_bytes: disk_bytes, ram_bytes: 0}}})
+    end)
+  end
+
+  defp stub_index_creates(bypass, col) do
+    Bypass.stub(bypass, "PUT", "/collections/#{col}/index", fn conn ->
+      json(conn, 200, %{status: "ok"})
     end)
   end
 
@@ -279,6 +288,40 @@ defmodule Engram.Vector.QdrantReconcileTest do
       assert Qdrant.parse_volume_stats(
                ~s|kubelet_volume_stats_used_bytes{persistentvolumeclaim="qdrant-storage-0"} 4\n|
              ) == nil
+    end
+  end
+
+  describe "per-tenant graph (m 0), Task 18.1's :qdrant_tenant_graph switch" do
+    @tenant_u %{
+      "data_type" => "uuid",
+      "params" => %{"type" => "uuid", "is_tenant" => true, "on_disk" => true}
+    }
+
+    defp boot_1192(bypass, info) do
+      stub_version(bypass, "1.19.2")
+      fake_collection(bypass, "engram_notes", info, ["max_disk_usage_percent"])
+      stub_memory(bypass, "engram_notes", 100)
+      stub_no_sys_metrics(bypass)
+      assert {:ok, _} = Qdrant.reconcile_config("engram_notes")
+    end
+
+    test "switch off (default): never PATCHes the graph", %{bypass: bypass} do
+      boot_1192(bypass, put_in(@prod_info, ["payload_schema", "u"], @tenant_u))
+      refute_receive {:patch, %{"hnsw_config" => _}}
+    end
+
+    test "switch on, but `u` is not the tenant index: graph untouched", %{bypass: bypass} do
+      ServiceConfig.put_override(:qdrant_tenant_graph, true)
+      boot_1192(bypass, @prod_info)
+      refute_receive {:patch, %{"hnsw_config" => _}}
+    end
+
+    test "switch on and `u` is_tenant: m 0 once, then no drift", %{bypass: bypass} do
+      ServiceConfig.put_override(:qdrant_tenant_graph, true)
+      boot_1192(bypass, put_in(@prod_info, ["payload_schema", "u"], @tenant_u))
+
+      assert_receive {:patch, %{"hnsw_config" => %{"m" => 0, "payload_m" => 16}}}
+      assert {:ok, []} = Qdrant.reconcile_config("engram_notes")
     end
   end
 
@@ -663,6 +706,10 @@ defmodule Engram.Vector.QdrantReconcileTest do
       json(conn, 409, %{status: %{error: "already exists"}})
     end)
 
+    # The prod fixture predates the v5 short-key indexes, which ensure_collection
+    # now adds to an existing collection.
+    stub_index_creates(bypass, "engram_notes")
+
     assert :ok = Qdrant.ensure_collection("engram_notes", 1024)
     assert_receive {:patch, %{"vectors" => _}}
   end
@@ -684,6 +731,10 @@ defmodule Engram.Vector.QdrantReconcileTest do
     Bypass.expect_once(bypass, "PUT", "/collections/engram_notes", fn conn ->
       json(conn, 409, %{status: %{error: "already exists"}})
     end)
+
+    # The prod fixture predates the v5 short-key indexes, which ensure_collection
+    # now adds to an existing collection.
+    stub_index_creates(bypass, "engram_notes")
 
     assert :ok = Qdrant.ensure_collection("engram_notes", 1024)
   end

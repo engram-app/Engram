@@ -38,6 +38,11 @@ defmodule Engram.Cache.Registry do
     },
     # Per-vault avgdl (BM25 length normalizer); a soft value, TTL-only.
     %{name: :avgdl, ttl: 600_000, cache_nil: false, evict_match: :key, pg_channel: nil},
+    # The v5 rebuild's halt flag (`:halted`) and pinned avgdl per vault
+    # (`{:avgdl, vault_id}`, nil when unpinned), read only while
+    # INDEX_REBUILD is not off. A halt evicts cluster-wide; the TTL bounds a
+    # lost eviction, and `Rebuild.debit/1` refuses spend on its own anyway.
+    %{name: :rebuild, ttl: 30_000, cache_nil: true, evict_match: :key, pg_channel: nil},
     # CIMD client signing keys by jwks_uri; public keys, TTL-only. The TTL is
     # the 7-day STALE limit: freshness is judged by JwksCache from each entry's
     # own fetched_at, so a failing vendor keeps verifying on its last keys.
@@ -165,6 +170,31 @@ defmodule Engram.Cache.Registry do
     # moves only on a Qdrant upgrade; the TTL bounds how long a tick after one
     # gates guards on the old version.
     %{name: :qdrant_version, ttl: 600_000, cache_nil: false, evict_match: :key, pg_channel: nil},
+    # Qdrant base URL => server Version, or :unknown when unreadable, for the
+    # search path's tenant IDF gate (Search.tenant_idf?/1). Unknown is cached
+    # too, so a search probes `GET /` at most once per TTL.
+    %{
+      name: :tenant_idf_version,
+      ttl: 300_000,
+      cache_nil: false,
+      evict_match: :key,
+      pg_channel: nil
+    },
+    # user_id => the account's point count, for the tenant IDF threshold. A
+    # soft value (it only feeds a >= 1,000 test), TTL-only.
+    %{name: :tenant_points, ttl: 600_000, cache_nil: false, evict_match: :key, pg_channel: nil},
+    # {vault_id, {user_id, change_seq}} => the vault's field catalog
+    # (Notes.FieldCatalog), decrypted. A write moves change_seq, so an old
+    # entry is never read again; an index pass (which writes note_attrs but
+    # not the seq) evicts every entry of the vault. The TTL only reaps
+    # entries of seqs that have moved on.
+    %{
+      name: :field_catalog,
+      ttl: 600_000,
+      cache_nil: false,
+      evict_match: :first_elem,
+      pg_channel: nil
+    },
     # {note_id, embed key} => dense vectors Voyage was paid for, held across
     # the commit so a retry after any failure (backpressure, a raise) reuses
     # them instead of paying again. Evicted on a successful commit. Byte cap

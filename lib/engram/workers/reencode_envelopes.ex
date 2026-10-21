@@ -156,6 +156,8 @@ defmodule Engram.Workers.ReencodeEnvelopes do
       nonce: :update_nonce,
       aad: {:vault_index_update_log, :update, :id}
     }
+    # No chunk display envelope: it is written per index pass under the
+    # policy in force, and only for notes over the display threshold.
   ]
 
   @impl Oban.Worker
@@ -299,7 +301,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   # octet_length(update_nonce) = 12 (and likewise per column).
   def enqueue_missing do
     user_ids = TenantScan.flat_map_users(fn uid -> if any_legacy?(uid), do: [uid], else: [] end)
-    executing = executing_user_ids()
+    executing = TenantScan.executing_user_ids(__MODULE__)
     # One insert per user, not insert_all: Oban's Basic engine ignores
     # `unique` in insert_all. `unique` drops a user whose job is pending; an
     # :executing job is not a unique state (a job inserts its own successor),
@@ -309,17 +311,6 @@ defmodule Engram.Workers.ReencodeEnvelopes do
         do: {:ok, _} = Oban.insert(new(%{"user_id" => uid}))
 
     length(user_ids)
-  end
-
-  defp executing_user_ids do
-    worker = inspect(__MODULE__)
-
-    from(j in Oban.Job,
-      where: j.worker == ^worker and j.state == "executing",
-      select: fragment("?->>'user_id'", j.args)
-    )
-    |> Repo.all()
-    |> MapSet.new()
   end
 
   @doc "True while the user still has a row this worker would re-encode."

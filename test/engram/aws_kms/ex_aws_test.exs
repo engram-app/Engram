@@ -2,6 +2,7 @@ defmodule Engram.AwsKms.ExAwsTest do
   use ExUnit.Case, async: false
 
   alias Engram.AwsKms.ExAws, as: KmsExAws
+  alias Engram.Test.PromExMetrics
 
   setup do
     bypass = Bypass.open()
@@ -371,7 +372,7 @@ defmodule Engram.AwsKms.ExAwsTest do
   # Mirrors what PromEx does with the metric: keep filter, then tag values.
   defp attach_kms_requests_counter do
     metric =
-      Engram.PromEx.Crypto.event_metrics(otp_app: :engram)
+      PromExMetrics.of(Engram.PromEx.Crypto)
       |> List.wrap()
       |> Enum.flat_map(& &1.metrics)
       |> Enum.find(&(&1.name == [:engram, :prom_ex, :crypto, :kms, :requests, :total]))

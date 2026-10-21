@@ -39,9 +39,12 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Indexing
   alias Engram.Logger.Metadata
   alias Engram.Notes.CrdtUpdateLog
+  alias Engram.Notes.FieldCatalog
+  alias Engram.Notes.FlatFields
+  alias Engram.Notes.FrontmatterKeys
   alias Engram.Repo
   alias Engram.Vector.Qdrant
-  alias Engram.Workers.EmbedNote
+  alias Engram.Workers.{EmbedNote, ReconcileNotePayloads, RotationTextGuard}
 
   require Logger
 
@@ -184,12 +187,19 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- sweep_vault_index_update_log(user, old_dek, new_dek, new_dek_version),
          :ok <- sweep_attachments(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_note_links(user, old_dek, new_dek, new_filter_key, new_dek_version),
-         :ok <- final_flip(user, new_dek_version, new_wrapped) do
+         :ok <- sweep_chunk_texts(user, old_dek, new_dek),
+         :ok <- sweep_slice_sums(user, old_dek, new_dek),
+         :ok <- Engram.Indexing.VectorCache.rotate(to_string(user_id), old_dek, new_dek),
+         :ok <- sweep_frontmatter_keys(user, old_dek, new_dek, new_filter_key),
+         :ok <- resync_note_attrs(user, new_dek, new_filter_key),
+         {:ok, guard} <- final_flip(user, new_dek_version, new_wrapped) do
       # The index is derived data, so it never fails the rotation: see
       # `post_flip_index_repairs/3`. The DB-only remap goes first, while few
       # edits can have landed; an incomplete text sweep then overrides it.
       :ok = post_flip_index_repairs(user, old_dek, new_dek)
-      :ok = sweep_qdrant_after_flip(user, old_dek, new_dek)
+      :ok = sweep_qdrant_after_flip(user, old_dek, new_dek, guard)
+      # Finished (or requeued what it could not rewrap): the guard is moot.
+      :ok = cancel_text_guard(guard)
 
       Logger.info(
         "T3.7 per-user DEK rotation complete",
@@ -376,6 +386,42 @@ defmodule Engram.Crypto.UserDekRotation do
   end
 
   # ---------------------------------------------------------------------------
+  # Frontmatter key dictionary sweep
+  # ---------------------------------------------------------------------------
+  #
+  # Every key name is rewrapped under the new DEK and its `key_hmac`
+  # recomputed under the new filter key; the ids stay (`FrontmatterKeys`).
+  # Old DEK, then new (already rotated by a crashed run, skip); a row neither
+  # opens raises like the other DB sweeps. A skipped row would keep an
+  # old-key HMAC nobody can match and get the same key a second id.
+  defp sweep_frontmatter_keys(%User{id: user_id}, old_dek, new_dek, new_filter_key) do
+    uid = to_string(user_id)
+
+    {:ok, _} =
+      Repo.with_tenant(uid, fn ->
+        for key <- FrontmatterKeys.all(uid) do
+          aad = FrontmatterKeys.name_aad(uid, key.key_id)
+
+          case try_rewrap(key.name_ct, key.name_nonce, old_dek, new_dek, aad, aad,
+                 table: :frontmatter_keys,
+                 phase: :sweep_frontmatter_keys,
+                 log: "T3.7 sweep_frontmatter_keys: decrypt failed under both old and new DEK",
+                 log_meta: [user_id: uid, key_id: key.key_id],
+                 on_both_failed:
+                   {:raise,
+                    "T3.7 sweep_frontmatter_keys: decrypt failed under both old and new DEK " <>
+                      "for key_id=#{key.key_id}"}
+               ) do
+            {:ok, name} -> FrontmatterKeys.put_rotated(key, name, new_dek, new_filter_key)
+            :already_rotated -> :ok
+          end
+        end
+      end)
+
+    :ok
+  end
+
+  # ---------------------------------------------------------------------------
   # Shared dual-DEK rewrap discriminator
   # ---------------------------------------------------------------------------
   #
@@ -393,6 +439,10 @@ defmodule Engram.Crypto.UserDekRotation do
   # contract_supertype against the inferred per-site success typing.
   defp try_rewrap(ct, nonce, old_dek, new_dek, old_aad, new_aad, opts) do
     case Envelope.decrypt(ct, nonce, old_dek, old_aad) do
+      # Verify mode (`verify_point_text/1`): one key, nothing to rewrap.
+      {:ok, _plaintext} when old_dek == new_dek ->
+        :already_rotated
+
       {:ok, plaintext} ->
         # Row was under old DEK — caller re-encrypts with the new DEK
         {:ok, plaintext}
@@ -910,6 +960,230 @@ defmodule Engram.Crypto.UserDekRotation do
   # push into a 409. It moves to the new key with the note's next write, as
   # `embed_hash` does with it (they stay equal, so EmbedNote still skips).
   #
+  # Every filter key derives from the DEK (`Crypto.dek_filter_key/1`), so a
+  # rotation changes every HMAC a Qdrant filter matches on: `path/folder/
+  # tags/type_hmac` on v3 points, the short ids on v5 points, and the
+  # `note_attrs` rows. Nothing re-indexes after a rotation, and a re-index
+  # would re-embed every chunk, so the keys are rewritten here from the
+  # rotated rows and the decrypted frontmatter. No embedder call: a rotation
+  # costs $0 in Voyage.
+  #
+  # Split by where it writes, so nothing network-bound runs between the
+  # rewrap and the flip. `note_attrs` is DB only: rewritten here, before the
+  # flip like every other DB sweep (after `sweep_notes` recomputed the row
+  # HMACs and `sweep_frontmatter_keys/4` rekeyed the dictionary). The points
+  # are Qdrant: `ReconcileNotePayloads`, which the flip commits with itself,
+  # rewrites v3 and v5 filter keys from the rows as they are when it runs, so
+  # a node dying after the flip loses nothing and a later edit is not
+  # reverted.
+  defp resync_note_attrs(%User{id: user_id}, new_dek, new_filter_key) do
+    TenantSweep.each_batch(
+      user_id,
+      Engram.Notes.Note,
+      fn batch_ids ->
+        {:ok, notes} =
+          Repo.with_tenant(user_id, fn ->
+            Repo.all(from(n in Engram.Notes.Note, where: n.id in ^batch_ids))
+          end)
+
+        rewrite_note_attrs(user_id, notes, note_flats(user_id, notes, new_dek, new_filter_key))
+      end,
+      fun_in_tenant: false
+    )
+  end
+
+  defp note_flats(user_id, notes, new_dek, new_filter_key) do
+    if Qdrant.v5_payload_format?(),
+      do: Map.new(notes, &{&1.id, flat_fields(user_id, &1, new_dek, new_filter_key)}),
+      else: %{}
+  end
+
+  # Key ids survive a rotation (`sweep_frontmatter_keys/4` already rekeyed
+  # the dictionary), so resolving under the new filter key finds the same ids.
+  defp flat_fields(user_id, note, new_dek, new_filter_key) do
+    aad = Crypto.aad_for_row(:notes, :content, note.id)
+
+    case note.content_ciphertext &&
+           Envelope.decrypt(note.content_ciphertext, note.content_nonce, new_dek, aad) do
+      {:ok, content} ->
+        flat = FlatFields.extract(content, new_filter_key)
+        {ids, _skipped} = FrontmatterKeys.resolve(user_id, new_dek, flat.names)
+        FlatFields.put_key_ids(flat, ids)
+
+      _ ->
+        FlatFields.empty()
+    end
+  end
+
+  # `note_attrs` HMACs are under the old key, so the rows are rebuilt from
+  # the decrypted frontmatter under the new one (dropped when the v5 format
+  # is off: any leftover row is under the old key and could never match).
+  defp rewrite_note_attrs(user_id, notes, flats) do
+    ids = Enum.map(notes, & &1.id)
+
+    {:ok, _} =
+      Repo.with_tenant(user_id, fn ->
+        Repo.delete_all(from(a in Engram.Notes.NoteAttr, where: a.note_id in ^ids))
+
+        _inserted =
+          for note <- notes, flat = flats[note.id], flat != nil do
+            Repo.insert_all(Engram.Notes.NoteAttr, FlatFields.attr_rows(flat, note))
+          end
+
+        # The seq does not move here: drop catalogs built on the old rows.
+        notes |> Enum.map(& &1.vault_id) |> Enum.uniq() |> Enum.each(&FieldCatalog.evict/1)
+      end)
+
+    :ok
+  end
+
+  # Task 11.1: a point's display envelope (`chunk_points.display_ct`, notes
+  # over the display threshold only), bound to its point id. Only the
+  # envelope is rewrapped: `slice_sum` and the offsets hold no plaintext and
+  # no key. The
+  # AAD does not change across a rotation, only the key. Old-then-new, so a
+  # resumed rotation skips rows it already re-wrapped. A row unreadable under
+  # both keys is NULLed rather than aborting the rotation: search then
+  # re-derives the text from the note content, and the next index pass
+  # writes the envelope again.
+  defp sweep_chunk_texts(%User{id: user_id}, old_dek, new_dek) do
+    TenantSweep.each_batch(user_id, Engram.Notes.ChunkPoint, fn batch_ids ->
+      Repo.transaction(fn ->
+        from(c in Engram.Notes.ChunkPoint,
+          where: c.point_id in ^batch_ids and not is_nil(c.display_ct),
+          lock: "FOR UPDATE"
+        )
+        |> Repo.all(skip_tenant_check: true)
+        |> Enum.each(&rewrap_chunk_text(&1, user_id, old_dek, new_dek))
+      end)
+      |> case do
+        {:ok, _} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
+  defp rewrap_chunk_text(chunk, user_id, old_dek, new_dek) do
+    sets =
+      case Crypto.decrypt_chunk_text(chunk, old_dek, chunk.point_id) do
+        {:ok, {text, heading}} ->
+          new_ck = Crypto.dek_content_hash_key_from_bytes(new_dek)
+
+          Map.to_list(Crypto.encrypt_chunk_text(text, heading, new_dek, chunk.point_id)) ++
+            [slice_sum: Indexing.text_sum(new_ck, text)]
+
+        :error ->
+          case Crypto.decrypt_chunk_text(chunk, new_dek, chunk.point_id) do
+            {:ok, _} ->
+              nil
+
+            :error ->
+              _ =
+                both_deks_failed(
+                  table: :chunks,
+                  phase: :sweep_chunk_texts,
+                  log: "T3.7 sweep_chunk_texts: decrypt failed under both old and new DEK",
+                  log_meta: [user_id: user_id, row_id: chunk.point_id],
+                  on_both_failed: {:error, :both_deks_failed}
+                )
+
+              [display_ct: nil]
+          end
+      end
+
+    write_chunk_text(chunk.point_id, sets)
+  end
+
+  # `slice_sum` is keyed by the content-hash subkey (`Indexing.text_sum/2`),
+  # so every checksum-only row is re-summed under the new key from the text
+  # search would show for it: the note content (already swept, so under the
+  # new DEK) re-chunked as the read path does (`Indexing.display_chunks/3`).
+  # An envelope row was re-summed with its rewrap above. A floor row's text
+  # is "" by construction (never re-derived). Resumable: a row already
+  # re-summed recomputes to the same value. A note that does not decrypt
+  # keeps its row as is; search then shows it stale or not at all, and its
+  # next index pass writes a fresh sum. ponytail: one UPDATE per row; a
+  # rotation is rare. Batch it with a VALUES join if rotations get large.
+  defp sweep_slice_sums(%User{id: user_id}, old_dek, new_dek) do
+    old_floor = Indexing.text_sum(Crypto.dek_content_hash_key_from_bytes(old_dek), "")
+    new_ck = Crypto.dek_content_hash_key_from_bytes(new_dek)
+    new_floor = Indexing.text_sum(new_ck, "")
+
+    # By NOTE: the ChunkPoint cursor (`TenantSweep`) visits only envelope
+    # rows, and these are the rows without one. The batch runs in the tenant.
+    TenantSweep.each_batch(user_id, Engram.Notes.Note, fn note_ids ->
+      rows =
+        from(c in Engram.Notes.ChunkPoint,
+          where: c.note_id in ^note_ids and is_nil(c.display_ct) and not is_nil(c.slice_sum),
+          select: %{
+            point_id: c.point_id,
+            note_id: c.note_id,
+            position: c.position,
+            sum: c.slice_sum
+          }
+        )
+        |> Repo.all()
+
+      derived = rows |> Enum.map(& &1.note_id) |> Enum.uniq() |> derived_display(new_dek)
+
+      Enum.each(rows, fn row ->
+        sum =
+          cond do
+            row.sum in [old_floor, new_floor] ->
+              new_floor
+
+            text = get_in(derived, [row.note_id, row.position, :text]) ->
+              Indexing.text_sum(new_ck, text)
+
+            true ->
+              row.sum
+          end
+
+        if sum != row.sum, do: write_chunk_text(row.point_id, slice_sum: sum)
+      end)
+    end)
+  end
+
+  # note_id => %{position => %{text, heading_path}}, for the notes that decrypt.
+  defp derived_display([], _dek), do: %{}
+
+  defp derived_display(note_ids, dek) do
+    from(n in Engram.Notes.Note,
+      where: n.id in ^note_ids,
+      select:
+        {n.id, n.content_ciphertext, n.content_nonce, n.path_ciphertext, n.path_nonce,
+         fragment("(SELECT count(*) FROM chunk_points p WHERE p.note_id = ?)", n.id)}
+    )
+    |> Repo.all()
+    |> Enum.flat_map(fn {id, content_ct, content_nonce, path_ct, path_nonce, count} ->
+      with true <- is_binary(content_ct) and is_binary(path_ct),
+           {:ok, content} <-
+             Envelope.decrypt(
+               content_ct,
+               content_nonce,
+               dek,
+               Crypto.aad_for_row(:notes, :content, id)
+             ),
+           {:ok, path} <-
+             Envelope.decrypt(path_ct, path_nonce, dek, Crypto.aad_for_row(:notes, :path, id)) do
+        [{id, Indexing.display_chunks(content, path, count)}]
+      else
+        _ -> []
+      end
+    end)
+    |> Map.new()
+  end
+
+  defp write_chunk_text(_id, nil), do: :ok
+
+  defp write_chunk_text(id, sets) do
+    {_, _} =
+      from(c in Engram.Notes.ChunkPoint, where: c.point_id == ^id)
+      |> Repo.update_all([set: sets], skip_tenant_check: true)
+
+    :ok
+  end
+
   # The user is unlocked by now, so an edit can index first. That edit pays
   # for its own changed chunks; at worst its untouched chunks re-embed once
   # if it lands before the remap.
@@ -1023,19 +1297,25 @@ defmodule Engram.Crypto.UserDekRotation do
   #
   # Once this returns the old DEK is gone, so a point it did not rewrap keeps
   # text no key can read, and search drops it. Those notes are queued for a
-  # rebuild (`requeue_for_rebuild/2`).
-  defp sweep_qdrant_after_flip(user, old_dek, new_dek, attempt \\ 1) do
-    case sweep_qdrant(user, old_dek, new_dek) do
-      {:ok, []} ->
+  # rebuild (`requeue_for_rebuild/2`). If this process dies first, the
+  # `RotationTextGuard` the flip committed finds them (`verify_point_text/1`).
+  #
+  # Every page pushes the guard out again (`push_text_guard/1`): while this
+  # sweep makes progress the guard never fires, so it never pays Voyage to
+  # rebuild notes this sweep is about to rewrap. A dead sweep stops pushing
+  # and the guard runs `RotationTextGuard.delay_seconds/0` after its last page.
+  defp sweep_qdrant_after_flip(user, old_dek, new_dek, guard, attempt \\ 1) do
+    case sweep_qdrant(user, old_dek, new_dek, on_page: fn -> push_text_guard(guard) end) do
+      {:ok, [], nil} ->
         :ok
 
       # Deterministic (the point is under neither key), so not retried.
-      {:ok, skipped} ->
-        settle_undecryptable(user.id, skipped)
+      {:ok, skipped, nil} ->
+        settle_undecryptable(user.id, skipped, :after_flip)
 
       {:error, _} when attempt < @qdrant_attempts ->
         Process.sleep(@qdrant_retry_ms * attempt)
-        sweep_qdrant_after_flip(user, old_dek, new_dek, attempt + 1)
+        sweep_qdrant_after_flip(user, old_dek, new_dek, guard, attempt + 1)
 
       {:error, reason} ->
         requeue_for_rebuild(user.id, :all, classify_reason(reason))
@@ -1047,13 +1327,56 @@ defmodule Engram.Crypto.UserDekRotation do
       requeue_for_rebuild(user.id, :all, Metadata.safe_exit_reason(reason))
   end
 
+  @doc """
+  The point-text check behind `Engram.Workers.RotationTextGuard`: every point
+  of `user` whose text does not open under the CURRENT DEK goes the way the
+  post-flip sweep sends its skips (`settle_undecryptable/2`): a live note's
+  is rebuilt, unmetered, and an orphan's is deleted. That is what a rotation
+  whose process died between its flip and the end of its text sweep leaves
+  behind, and the retired DEK that could rewrap them died with it.
+
+  Reads only, unless something is unreadable. A Qdrant failure is
+  `{:error, reason}`, for the job to retry: never a whole-vault rebuild.
+
+  At most `max_pages` pages from `offset` (a scroll cursor, nil from the
+  start), settled before it returns, so a big vault on a slow Qdrant makes
+  durable progress per job instead of rescanning from page 1 on every
+  attempt. `{:ok, next}`: nil when the scroll is done, else where the next
+  job resumes.
+  """
+  @spec verify_point_text(User.t(), term(), pos_integer()) ::
+          {:ok, term()} | {:error, term()}
+  def verify_point_text(%User{} = user, offset, max_pages) do
+    with {:ok, dek} <- Crypto.get_dek(user),
+         {:ok, skipped, next} <-
+           sweep_qdrant(user, dek, dek, offset: offset, max_pages: max_pages) do
+      :ok = settle_undecryptable(user.id, skipped, :guard_rebuild)
+      {:ok, next}
+    end
+  end
+
+  # The flip's guard, still scheduled, is due a full delay from now. A guard
+  # already running (or done, or cancelled) is left alone.
+  defp push_text_guard(%Oban.Job{id: id}) when is_integer(id) do
+    due = DateTime.add(DateTime.utc_now(), RotationTextGuard.delay_seconds())
+
+    from(j in Oban.Job, where: j.id == ^id and j.state == "scheduled")
+    |> Repo.update_all(set: [scheduled_at: due])
+
+    :ok
+  end
+
+  defp push_text_guard(_conflict), do: :ok
+
   # A skipped point a LIVE note's chunk row names belongs to an index that
   # must be rebuilt. Any other is dead weight: no row names it (an orphan
   # left by a crashed rotation), or its note is trashed, where a rebuild job
   # would only discard. Nothing would ever rebuild or reap those, so they are
   # deleted. The ids come from a scroll filtered to this user, so the delete
   # touches only this user's points.
-  defp settle_undecryptable(user_id, skipped) do
+  defp settle_undecryptable(_user_id, [], _status), do: :ok
+
+  defp settle_undecryptable(user_id, skipped, status) do
     {:ok, named} =
       Repo.with_tenant(user_id, fn ->
         from(c in Engram.Notes.Chunk,
@@ -1085,7 +1408,7 @@ defmodule Engram.Crypto.UserDekRotation do
 
       named ->
         note_ids = named |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
-        requeue_for_rebuild(user_id, note_ids, "undecryptable_points:#{length(named)}")
+        requeue_for_rebuild(user_id, note_ids, "undecryptable_points:#{length(named)}", status)
     end
   end
 
@@ -1098,7 +1421,11 @@ defmodule Engram.Crypto.UserDekRotation do
   # rather than at the reconcile sweep's daily version hour.
   #
   # Never raises: the rotation is committed by now and must report :ok.
-  defp requeue_for_rebuild(user_id, note_ids, reason) do
+  #
+  # `status` labels the row_failed counter: `:after_flip` counts one per
+  # incomplete post-flip sweep; `:guard_rebuild` counts the notes a
+  # `RotationTextGuard` rebuilt, as that is Voyage we pay with no ledger.
+  defp requeue_for_rebuild(user_id, note_ids, reason, status \\ :after_flip) do
     Logger.error(
       "T3.7 sweep_qdrant incomplete after the flip: notes requeued for a rebuild",
       Metadata.with_category(:error, :crypto,
@@ -1108,10 +1435,12 @@ defmodule Engram.Crypto.UserDekRotation do
       )
     )
 
+    count = if status == :guard_rebuild, do: length(note_ids), else: 1
+
     :telemetry.execute(
       [:engram, :crypto, :rotate, :dek, :row_failed],
-      %{count: 1},
-      %{table: :qdrant, phase: :sweep_qdrant, status: :after_flip}
+      %{count: count},
+      %{table: :qdrant, phase: :sweep_qdrant, status: status}
     )
 
     {:ok, ids} =
@@ -1128,8 +1457,11 @@ defmodule Engram.Crypto.UserDekRotation do
         ids
       end)
 
+    # A pending RebuildStaleNote rebuilds the note too (chunker_version is
+    # NULL now), so an EmbedNote beside it would pay Voyage twice.
     ids
     |> EmbedNote.reject_already_queued(EmbedNote.backfill_priority())
+    |> then(&Engram.Jobs.reject_pending(Engram.Workers.RebuildStaleNote, &1))
     |> Enum.chunk_every(500)
     |> Enum.each(fn batch ->
       Oban.insert_all(
@@ -1167,30 +1499,67 @@ defmodule Engram.Crypto.UserDekRotation do
     :ok
   end
 
-  defp sweep_qdrant(%User{id: user_id}, old_dek, new_dek) do
+  @qdrant_encrypted_fields [:text, :title, :heading_path]
+  # Only what the rewrap reads. `set_payloads/2` merges, so writing back just
+  # these keys leaves the filter keys alone.
+  @qdrant_encrypted_keys Enum.flat_map(@qdrant_encrypted_fields, &[to_string(&1), "#{&1}_nonce"])
+
+  # `{:ok, skipped, next}`: `next` is nil once the scroll is done, else the
+  # cursor after `:max_pages` pages. `:on_page` runs after each page.
+  defp sweep_qdrant(%User{id: user_id}, old_dek, new_dek, opts) do
     collection = Qdrant.collection_name()
     filter = %{must: [%{key: "user_id", match: %{value: user_id}}]}
-    sweep_qdrant_loop(collection, filter, user_id, {old_dek, new_dek}, nil, [])
+
+    walk = %{
+      on_page: Keyword.get(opts, :on_page, fn -> :ok end),
+      pages_left: Keyword.get(opts, :max_pages, :infinity)
+    }
+
+    sweep_qdrant_loop(
+      collection,
+      filter,
+      user_id,
+      {old_dek, new_dek},
+      Keyword.get(opts, :offset),
+      [],
+      walk
+    )
   end
 
-  defp sweep_qdrant_loop(collection, filter, user_id, {old_dek, new_dek} = deks, offset, skipped) do
+  defp sweep_qdrant_loop(collection, filter, user_id, deks, offset, skipped, walk) do
+    {old_dek, new_dek} = deks
+
     case Qdrant.scroll(collection,
            filter: filter,
-           with_payload: true,
+           with_payload: @qdrant_encrypted_keys,
            with_vector: false,
            limit: 200,
            offset: offset
          ) do
       {:ok, %{points: [], next_page_offset: _}} ->
-        {:ok, skipped}
+        {:ok, skipped, nil}
 
       {:ok, %{points: points, next_page_offset: next}} ->
         case rewrap_qdrant_points(collection, user_id, points, old_dek, new_dek) do
           {:ok, page_skipped} when is_nil(next) ->
-            {:ok, page_skipped ++ skipped}
+            {:ok, page_skipped ++ skipped, nil}
+
+          {:ok, page_skipped} when walk.pages_left == 1 ->
+            {:ok, page_skipped ++ skipped, next}
 
           {:ok, page_skipped} ->
-            sweep_qdrant_loop(collection, filter, user_id, deks, next, page_skipped ++ skipped)
+            :ok = walk.on_page.()
+            walk = %{walk | pages_left: next_pages_left(walk.pages_left)}
+
+            sweep_qdrant_loop(
+              collection,
+              filter,
+              user_id,
+              deks,
+              next,
+              page_skipped ++ skipped,
+              walk
+            )
 
           {:error, _} = err ->
             err
@@ -1210,6 +1579,9 @@ defmodule Engram.Crypto.UserDekRotation do
         {:error, reason}
     end
   end
+
+  defp next_pages_left(:infinity), do: :infinity
+  defp next_pages_left(n), do: n - 1
 
   # One page, two Qdrant requests whatever its size (`Qdrant.set_payloads/2`):
   # a waited set_payload per point was one WAL flush each, and a ~150k-point
@@ -1272,8 +1644,6 @@ defmodule Engram.Crypto.UserDekRotation do
 
     raise "T3.7 sweep_qdrant: point missing id"
   end
-
-  @qdrant_encrypted_fields [:text, :title, :heading_path]
 
   defp rewrap_qdrant_payload(collection, qdrant_id, payload, old_dek, new_dek) do
     encrypted_fields_present? =
@@ -1546,6 +1916,7 @@ defmodule Engram.Crypto.UserDekRotation do
           []
         else
           old_aad = old_aad_for(:notes, column, note)
+
           new_aad = Crypto.aad_for_row(:notes, column, note.id)
 
           case try_rewrap(ct, nonce, old_dek, new_dek, old_aad, new_aad,
@@ -1585,7 +1956,9 @@ defmodule Engram.Crypto.UserDekRotation do
                   []
                 end
 
-              ct_updates ++ hmac_updates ++ basename_updates
+              ct_updates ++
+                hmac_updates ++
+                basename_updates
 
             :already_rotated ->
               # Already rotated under this run's new_dek — skip
@@ -1786,17 +2159,28 @@ defmodule Engram.Crypto.UserDekRotation do
 
   # Inside the flip's transaction: the points' filter HMACs and sparse
   # vectors are on the retired key from this commit on, so the NULLs the
-  # heals select on and the heal job commit with it, or not at all.
-  defp hand_points_to_heals(user_id) do
+  # heals select on and the heal jobs commit with it, or not at all. Returns
+  # the text guard, which this process cancels once its own text sweep is
+  # done (`cancel_text_guard/1`).
+  defp hand_points_to_heals(user_id, new_dek_version) do
     {:ok, {_, _}} =
       Repo.with_tenant(user_id, fn ->
         from(n in Engram.Notes.Note, where: n.user_id == ^user_id and n.kind == "note")
         |> Repo.update_all(set: [payload_hash: nil, keyword_version: nil])
       end)
 
-    {:ok, _} = Oban.insert(Engram.Workers.ReconcileNotePayloads.new(%{"user_id" => user_id}))
-    :ok
+    {:ok, _} = Oban.insert(ReconcileNotePayloads.new(%{"user_id" => user_id}))
+
+    Oban.insert(
+      RotationTextGuard.new(
+        %{"user_id" => user_id, "dek_version" => new_dek_version},
+        schedule_in: RotationTextGuard.delay_seconds()
+      )
+    )
   end
+
+  defp cancel_text_guard(%Oban.Job{id: id}) when is_integer(id), do: Oban.cancel_job(id)
+  defp cancel_text_guard(_conflict), do: :ok
 
   defp final_flip(%User{} = user, new_dek_version, new_wrapped) do
     # B4: user-vanish treated as structured {:error, ...} — NOT a raise — so it
@@ -1821,7 +2205,8 @@ defmodule Engram.Crypto.UserDekRotation do
                skip_tenant_check: true
              ) do
           {1, _} ->
-            hand_points_to_heals(user.id)
+            {:ok, guard} = hand_points_to_heals(user.id, new_dek_version)
+            guard
 
           {0, _} ->
             Logger.error(
@@ -1839,7 +2224,7 @@ defmodule Engram.Crypto.UserDekRotation do
       end)
 
     case txn_result do
-      {:ok, :ok} ->
+      {:ok, guard} ->
         # Only invalidate caches after the txn commits successfully. The
         # cached user (which carries `encrypted_dek`) goes FIRST: a DekCache
         # miss between the two would otherwise unwrap the retired blob off it.
@@ -1847,7 +2232,7 @@ defmodule Engram.Crypto.UserDekRotation do
         # covers peers whose :user eviction has not landed yet.)
         Engram.Accounts.evict_user(user.id)
         DekCache.invalidate(user.id)
-        :ok
+        {:ok, guard}
 
       {:error, {:user_vanished_mid_rotation, _uid}} = err ->
         err

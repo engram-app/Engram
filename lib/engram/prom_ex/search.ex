@@ -19,6 +19,11 @@ defmodule Engram.PromEx.Search do
       histogram here.
     * `engram_prom_ex_search_hits_dropped_total`: sum of `count` from
       `[:engram, :search, :hit_dropped]`, tag `[:reason]`.
+    * `engram_prom_ex_search_text_missing_total`: sum of `count` from
+      `[:engram, :search, :text_missing]`.
+    * `engram_prom_ex_search_hits_total`: sum of `count` from
+      `[:engram, :search, :hits]`, every candidate on the Postgres read path
+      (the ratio denominator for the two above).
 
   Cardinality contract: only the booleans/atoms above. NEVER add
   user_id, vault_id, or the query string.
@@ -29,6 +34,9 @@ defmodule Engram.PromEx.Search do
   @stop_event [:engram, :search, :request, :stop]
   @degraded_event [:engram, :search, :degraded]
   @hit_dropped_event [:engram, :search, :hit_dropped]
+  @text_missing_event [:engram, :search, :text_missing]
+  @hits_event [:engram, :search, :hits]
+  @text_stale_event [:engram, :search, :text_stale]
 
   @impl true
   def event_metrics(opts) do
@@ -55,15 +63,47 @@ defmodule Engram.PromEx.Search do
           description: "Searches that degraded to a single leg (embed failure).",
           tags: [:leg, :reason]
         ),
-        # Grouped-search hits dropped because their chunk row was not there
-        # (Qdrant upsert lands before the rows commit). Should stay near zero;
-        # a sustained rate means results are silently going missing.
+        # Hits dropped, by `reason`: `no_chunk_row` (Qdrant upsert lands
+        # before the rows commit; brief per edit, a sustained rate means
+        # results are silently going missing), `text_undecryptable`,
+        # `note_undecryptable`, `payload_undecryptable` (a pre-text-column
+        # row whose payload fallback failed), `vault_inactive`.
+        # NOT alerted on yet: the engram-infra ratio alert over search hits
+        # (PR #2089 "Infra follow-up") is owed before `:chunk_text_read`
+        # flips on, since that flag is what makes these drops reachable.
         sum(
           metric_prefix ++ [:hits_dropped, :total],
           event_name: @hit_dropped_event,
           measurement: :count,
-          description: "Search hits dropped at rehydrate (no chunk row).",
+          description: "Search hits dropped, by reason.",
           tags: [:reason]
+        ),
+        # Task 11.3: hits shown with empty text because neither the chunk row
+        # nor the payload carried any. Near zero once the v5 pass has written
+        # every row; a rate means rows are missing their text.
+        sum(
+          metric_prefix ++ [:text_missing, :total],
+          event_name: @text_missing_event,
+          measurement: :count,
+          description: "Search hits with no text in Postgres or the payload."
+        ),
+        # Hits whose note was edited since its index: the text re-derived
+        # from the content no longer matches the row's checksum, so the hit
+        # shows the current chunk at its position. A sustained rate means
+        # notes are left unindexed after edits.
+        sum(
+          metric_prefix ++ [:text_stale, :total],
+          event_name: @text_stale_event,
+          measurement: :count,
+          description: "Search hits shown with text re-derived after an edit since index."
+        ),
+        # Every Qdrant candidate on the `:chunk_text_read` path, before any
+        # drop: the denominator for the two counters above.
+        sum(
+          metric_prefix ++ [:hits, :total],
+          event_name: @hits_event,
+          measurement: :count,
+          description: "Search hits read from Postgres, before drops."
         )
       ]
     )

@@ -45,11 +45,13 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
+  alias Engram.EmbedModels
   alias Engram.Indexing
   alias Engram.Logger.DecryptFailure
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
+  alias Engram.Rebuild
   alias Engram.Repo
   alias Engram.ServiceConfig
   alias Engram.UsageMeters
@@ -103,12 +105,19 @@ defmodule Engram.Workers.EmbedNote do
     case load(args, old_path_hmac_b64) do
       {:run, note, user, vault, opts} ->
         opts = if cap = args["budget_cap"], do: [{:budget_cap, cap} | opts], else: opts
-        run_and_stamp(note, user, vault, old_path_hmac_b64, job, opts)
+        run_and_stamp(note, user, vault, old_path_hmac_b64, job, opts ++ embed_purpose(job))
 
       other ->
         other
     end
   end
+
+  # A RebuildStaleNote job is our maintenance: its Voyage calls never retry
+  # once they may have been billed (`Voyage.request_defaults(:maintenance)`, H6).
+  defp embed_purpose(%Oban.Job{worker: "Engram.Workers.RebuildStaleNote"}),
+    do: [embed_purpose: :maintenance]
+
+  defp embed_purpose(_job), do: []
 
   # Every read the job needs before it embeds, in ONE tenant transaction: the
   # note, the user and the vault used to open one each (3 round trips
@@ -131,6 +140,19 @@ defmodule Engram.Workers.EmbedNote do
       {:ok, %Note{content_hash: hash, embed_hash: hash} = note}
       when hash != nil and is_nil(old_path_hmac_b64) ->
         cond do
+          # The index points budget (`ReconcileEmbeddings.budget_sweep/1`)
+          # stamped this note "floor"/"floor_paid": rebuild it as one keyword
+          # point. Never metered (a floor plan reserves nothing).
+          args["index_budget"] == "demote" and Indexing.floor_tier(note) != nil ->
+            load_for_run(note, maintenance: true)
+
+          # The budget has room again: a full pass. A "floor_paid" note had
+          # dense vectors we deleted, so its are rebuilt unmetered; a
+          # "floor" one never had them and is metered as a first embed. The
+          # pass refuses to commit if the tier moved meanwhile.
+          args["index_budget"] == "promote" and Indexing.floor_tier(note) != nil ->
+            load_for_run(note, index_tier: nil, maintenance: note.index_tier == "floor_paid")
+
           # Indexed by an older chunker (#1620; NULL predates the stamp) or
           # another embed model. Content unchanged, so this is OUR maintenance,
           # not the user's usage: a note that has dense vectors gets them
@@ -138,48 +160,40 @@ defmodule Engram.Workers.EmbedNote do
           # sparse-only note stays on the normal budget, so a version bump
           # never grants dense vectors the cap refused. `run_and_stamp`
           # re-stamps both versions, so this matches at most once per bump.
+          #
+          # While the v5 rebuild is `on`, its tokens go through the ledger
+          # (`rebuild: true`, see `index/5`).
           version_stale?(note) ->
-            load_for_run(note, maintenance: note.dense_indexed_hash == hash)
+            load_for_run(
+              note,
+              Indexing.version_rebuild_opts(note) ++ [rebuild: Rebuild.mode() == :on]
+            )
+
+          # Holds more chunks than its tier's per-note cap (ReconcileEmbeddings
+          # found it): re-merge it, unmetered. It already has dense vectors, so
+          # this is our maintenance, never a second charge.
+          args["recap"] == true and note.dense_indexed_hash == hash ->
+            load_for_run(note, maintenance: true, keep_dense: true)
+
+          # The key alias table moved and this note's frontmatter now reads
+          # differently (`Engram.Workers.HealKeyAliases`): a pass that reuses
+          # every unchanged vector (0 Voyage) and refreshes the payload; only a
+          # changed chunk-0 lead line (a type/description alias) re-embeds.
+          args["key_aliases"] == true ->
+            load_for_run(note, Indexing.version_rebuild_opts(note))
 
           # Current content, chunker and model, with dense vectors: skip.
           note.dense_indexed_hash == hash ->
             :ok
 
+          # Floor-indexed at its current content: a floor note has no dense
+          # leg to backfill. Promoting it back to a full index is the index
+          # budget's call (an `index_budget: "promote"` job), not this job's.
+          Indexing.floor_tier(note) ->
+            :ok
+
           true ->
-            # Content is indexed but has no dense vectors: the dense backfill for
-            # a note indexed sparse-only (Free before semantic search was every
-            # tier's, or a pass that ran with the embed budget spent). If the
-            # budget is already spent, the sparse index is in place, so park the
-            # note instead of rebuilding it — otherwise ReconcileEmbeddings
-            # re-selects it every tick forever. Otherwise the pass itself reserves
-            # exactly what it needs (see `reserve_embed_tokens/2`).
-            # Loaded once here and handed to run_and_stamp — it needs the same row
-            # for the rotation gate, so re-resolving would cost a second read on
-            # exactly the path that already paid for one. See #1502.
-            case Accounts.get_user_with_subscription(note.user_id) do
-              nil ->
-                {:discard, :user_deleted}
-
-              user ->
-                # A note with no chunk rows has NO index to keep, so parking it
-                # would leave it unsearchable: the shape the removed
-                # search-coverage cap left behind. Run it; the pass indexes it
-                # sparse-only and parks it itself. The chunk check is only paid
-                # on the budget-spent path.
-                cond do
-                  not budget_blocks?(user, note) ->
-                    load_for_run(note, [], user)
-
-                  # Spent budget is already known: index keyword-only without
-                  # asking for a reservation, so a former over-cap vault's
-                  # backfill does not fire one abuse event per note.
-                  not has_chunks?(note) ->
-                    load_for_run(note, [budget_spent: true], user)
-
-                  true ->
-                    park_over_budget(note, user)
-                end
-            end
+            dense_backfill(note)
         end
 
       # The current content already has dense vectors, so this pass is OUR
@@ -192,6 +206,43 @@ defmodule Engram.Workers.EmbedNote do
 
       {:ok, note} ->
         load_for_run(note, [])
+    end
+  end
+
+  defp dense_backfill(note) do
+    # Content is indexed but has no dense vectors: the dense backfill for
+    # a note indexed sparse-only (Free before semantic search was every
+    # tier's, or a pass that ran with the embed budget spent). If the
+    # budget is already spent, the sparse index is in place, so park the
+    # note instead of rebuilding it — otherwise ReconcileEmbeddings
+    # re-selects it every tick forever. Otherwise the pass itself reserves
+    # exactly what it needs (see `budget_opts/3`).
+    # Loaded once here and handed to run_and_stamp — it needs the same row
+    # for the rotation gate, so re-resolving would cost a second read on
+    # exactly the path that already paid for one. See #1502.
+    case Accounts.get_user_with_subscription(note.user_id) do
+      nil ->
+        {:discard, :user_deleted}
+
+      user ->
+        # A note with no chunk rows has NO index to keep, so parking it
+        # would leave it unsearchable: the shape the removed
+        # search-coverage cap left behind. Run it; the pass indexes it
+        # sparse-only and parks it itself. The chunk check is only paid
+        # on the budget-spent path.
+        cond do
+          not budget_blocks?(user, note) ->
+            load_for_run(note, [], user)
+
+          # Spent budget is already known: index keyword-only without
+          # asking for a reservation, so a former over-cap vault's
+          # backfill does not fire one abuse event per note.
+          not has_chunks?(note) ->
+            load_for_run(note, [budget_spent: true], user)
+
+          true ->
+            park_over_budget(note, user)
+        end
     end
   end
 
@@ -395,23 +446,58 @@ defmodule Engram.Workers.EmbedNote do
 
   @doc """
   True when an indexed note is behind this build: an older chunker, or dense
-  vectors from another embed model. The single definition both `perform/1`
-  and `ReconcileEmbeddings` route on. Model tracking is off when the build
-  cannot name its model (nil).
+  vectors from a model the note may not keep (`Engram.EmbedModels`: per
+  plan, a downgrade keeps its vectors). The single definition both
+  `perform/1` and `ReconcileEmbeddings` route on. Model tracking is off when
+  the build cannot name its model (nil). `paid?` is the owner's
+  `Billing.paid?/1`; nil looks it up when the model term needs it.
   """
-  def version_stale?(%Note{} = note) do
-    chunker_stale?(note.chunker_version) or model_stale?(note, Indexing.embed_model())
+  def version_stale?(%Note{} = note, paid? \\ nil) do
+    {chunker, _keyword} = Rebuild.target_versions()
+    chunker_stale?(note.chunker_version, chunker) or model_stale?(note, paid?)
+  end
+
+  @doc """
+  Stale only by its model (a plan upgrade, or a pre-tracking stamp): the
+  reconcile sweep queues these as paced, lowest-priority rebuilds.
+  """
+  def model_only_stale?(%Note{} = note, paid? \\ nil) do
+    {chunker, _keyword} = Rebuild.target_versions()
+    not chunker_stale?(note.chunker_version, chunker) and model_stale?(note, paid?)
   end
 
   # Explicit nil: Erlang orders numbers below atoms, so `nil < 3` is false.
   # A newer chunker counts as current (see `IndexVersions.stale_dynamic/0`).
-  defp chunker_stale?(nil), do: true
-  defp chunker_stale?(version), do: version < @chunker_version
+  # The target is `Rebuild.target_versions/0`'s: the pin while the v5
+  # rebuild is not `on`, so a stamp bump alone rebuilds nothing.
+  defp chunker_stale?(nil, _target), do: true
+  defp chunker_stale?(version, target), do: version < target
 
-  defp model_stale?(_note, nil), do: false
+  defp model_stale?(note, paid?) do
+    note.dense_indexed_hash == note.content_hash and
+      case keepable_models(note, paid?) do
+        nil -> false
+        models -> note.embed_model not in models
+      end
+  end
 
-  defp model_stale?(note, model),
-    do: note.dense_indexed_hash == note.content_hash and note.embed_model != model
+  defp keepable_models(note, paid?) do
+    cond do
+      EmbedModels.per_plan?() -> EmbedModels.acceptable(plan_class(note, paid?))
+      model = Indexing.embed_model() -> [model]
+      true -> nil
+    end
+  end
+
+  defp plan_class(_note, true), do: :paid
+  defp plan_class(_note, false), do: :free
+
+  defp plan_class(note, nil) do
+    case Accounts.get_user_with_subscription(note.user_id) do
+      nil -> :free
+      user -> plan_class(note, Billing.paid?(user))
+    end
+  end
 
   # Cheap pre-check for the dense backfill of an already-indexed note: when
   # the queue is ahead of it or the bucket is empty, park it (keeping its
@@ -536,6 +622,10 @@ defmodule Engram.Workers.EmbedNote do
       embed_budget_parked_at: note.embed_budget_parked_at || DateTime.utc_now()
     ]
   end
+
+  # Set by run_embed's `in_commit`: whether the stamp parked the note on the
+  # bucket. Read and deleted in the same process once the pass returns.
+  @budget_parked_key {__MODULE__, :budget_parked}
 
   @queue_clear [
     embed_budget_parked: nil,
@@ -711,18 +801,48 @@ defmodule Engram.Workers.EmbedNote do
         # the stamp would then disagree with the index. The stamp runs
         # inside the chunk-row transaction (`:in_commit`), with the tokens a
         # partial pass still needs.
+        # The owner's plan model (`Engram.EmbedModels`): Indexing embeds
+        # with it and the stamp names it, from this one read.
+        model = EmbedModels.doc_model(user)
+
         index_opts =
           budget ++
-            [in_commit: &stamp_embed_hash(note, &2, &1, {:budget, &3, &4})]
+            Keyword.take(opts, [:index_tier, :keep_dense, :embed_purpose, :rebuild]) ++
+            [
+              doc_model: model,
+              # `held_model`: the cheapest model among the vectors the note
+              # keeps (`Indexing.held_model/2`), so kept large vectors stamp
+              # large. The stamp's outcome is read back below, once the
+              # transaction has committed.
+              in_commit: fn count, dense?, pass ->
+                outcome =
+                  stamp_embed_hash(note, dense?, count, pass, :budget, pass.held_model || model)
 
-        case Indexing.index_note_with_usage(decrypted_note, vault, user, index_opts) do
-          {:ok, _count, _embedded_bytes, true} ->
+                Process.put(@budget_parked_key, outcome == :parked)
+              end
+            ]
+
+        result = index(note, decrypted_note, vault, user, index_opts, opts)
+        parked? = Process.delete(@budget_parked_key) == true
+
+        case result do
+          # Parked on the bucket (not a floor pass: that is sparse by design).
+          # A budget-spent backfill already knew, so it stays quiet (one event
+          # per note of a former over-cap vault).
+          {:ok, _count, _embedded_bytes, _dense?} ->
+            if parked? and !opts[:budget_spent], do: newly_parked(note, user), else: :ok
             :ok
 
-          # Parked on the bucket. A budget-spent backfill already knew, so it
-          # stays quiet (one event per note of a former over-cap vault).
-          {:ok, _count, _embedded_bytes, false} ->
-            if opts[:budget_spent], do: :ok, else: newly_parked(note, user)
+          # The v5 rebuild left `on` (halted, or switched off) after this job
+          # was routed: no Voyage call. Re-routed later, it either skips (the
+          # note is no longer behind the target) or runs again under `on`.
+          {:error, :rebuild_paused} ->
+            {:snooze, 300}
+
+          # The rebuild was about to pay Voyage twice for this content
+          # (`Rebuild.park_double_pay/1`): parked until edited, not failed.
+          {:error, :rebuild_double_pay} ->
+            :ok
 
           # Voyage 429 — back off without burning an Oban attempt. Voyage's
           # paid-tier RPM is finite; without this guard five consecutive
@@ -741,6 +861,29 @@ defmodule Engram.Workers.EmbedNote do
           # and the reservation stays charged: it was spent.
           {:error, :qdrant_backpressure} ->
             Qdrant.backpressure_snooze(:refused)
+
+          # The index budget moved the note's tier while this pass was
+          # planned or ran: not an embed failure. Rerun from the new tier,
+          # without spending an attempt or counting toward poison parking.
+          {:error, :index_tier_changed} ->
+            {:snooze, 5}
+
+          # Vector cache on and the note's cache misses exceed one pass's
+          # embed budget: this pass embedded and cached its share, the next
+          # finds it as hits and embeds the rest. Not a failure.
+          {:error, :embed_continues} ->
+            {:snooze, 1}
+
+          # A newer edit replaced the content this pass planned from; that
+          # edit's own job indexes it. Nothing failed.
+          {:error, :superseded} ->
+            :ok
+
+          # A maintenance pass over budget kept the note's dense points
+          # (`keep_dense`): nothing failed, and the budget sweep, not this
+          # job, decides whether the note floors.
+          {:error, :over_budget} ->
+            :ok
 
           # The write is queued but not applied within its wait (Qdrant 200
           # with status "wait_timeout"), so the note is not stamped. Same as a
@@ -794,6 +937,24 @@ defmodule Engram.Workers.EmbedNote do
     end
   end
 
+  # A version rebuild under `on` re-checks the mode right before Voyage and
+  # charges what it sent to the ledger (`Rebuild.spend/2`), which also parks
+  # a note that drifted past its estimate. Everything else indexes as is.
+  defp index(note, decrypted_note, vault, user, index_opts, opts) do
+    cond do
+      not Keyword.get(opts, :rebuild, false) ->
+        Indexing.index_note_with_usage(decrypted_note, vault, user, index_opts)
+
+      Rebuild.mode() == :on ->
+        Rebuild.spend(note, fn ->
+          Indexing.index_note_with_usage(decrypted_note, vault, user, index_opts)
+        end)
+
+      true ->
+        {:error, :rebuild_paused}
+    end
+  end
+
   # Chunks are capped well under the context window, so a document should
   # never get here; if one does, it stays searchable by keyword. Logged as a
   # warning: it means that cap no longer holds.
@@ -810,11 +971,15 @@ defmodule Engram.Workers.EmbedNote do
     opts = [
       reserve_tokens: fn _ -> false end,
       release_tokens: fn _ -> :ok end,
-      in_commit: &stamp_embed_hash(note, &2, &1, :too_long)
+      in_commit: &stamp_embed_hash(note, &2, &1, &3, :too_long)
     ]
 
     case Indexing.index_note_with_usage(decrypted_note, vault, user, opts) do
       {:ok, _count, _bytes, _dense?} -> :ok
+      # A refused reservation still runs dense when it would charge nothing
+      # (index budget on, every changed chunk already known). Past the pass
+      # embed budget that pass continues like any other: snooze, no attempt.
+      {:error, :embed_continues} -> {:snooze, 1}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -834,11 +999,27 @@ defmodule Engram.Workers.EmbedNote do
   # Also clears any embed_retry_after poison cooldown — a successful embed means
   # the note is no longer broken, and the crash guard's dead-man stamp, since
   # this runs inside the index write's transaction.
+  # `pass`: what `Indexing` reports from the commit (`index_tier`, and the
+  # tokens a partial pass still needs: `deferred_tokens`,
+  # `next_deferred_tokens`).
+  # `sparse_park`: :budget (a refused or partial reservation parks the note on
+  # the Free bucket queue) or :too_long (an input over the model's window,
+  # parked until the content changes).
+  # `model`: the doc model the pass embedded with, stamped on a dense pass.
+  # Returns `:parked` when it parked the note on the bucket, else `:ok`.
+  defp stamp_embed_hash(
+         note,
+         dense?,
+         chunk_count,
+         pass,
+         sparse_park,
+         model \\ Indexing.embed_model()
+       )
 
-  defp stamp_embed_hash(%Note{content_hash: nil} = note, _dense?, _count, _park),
+  defp stamp_embed_hash(%Note{content_hash: nil} = note, _dense?, _count, _pass, _park, _m),
     do: CrashGuard.clear(note, :ok)
 
-  defp stamp_embed_hash(note, dense?, chunk_count, sparse_park) do
+  defp stamp_embed_hash(note, dense?, chunk_count, pass, sparse_park, model) do
     # `embed_hash` = "this content is indexed" (keyword and/or dense).
     # `dense_indexed_hash` = "this content has dense vectors in Qdrant".
     # Keeping them separate is what lets ReconcileEmbeddings backfill the
@@ -866,14 +1047,25 @@ defmodule Engram.Workers.EmbedNote do
         chunk_count == 0 and dense? ->
           [
             dense_indexed_hash: note.content_hash,
-            embed_model: Indexing.embed_model(),
+            embed_model: model,
             embed_retry_after: nil
           ] ++ @queue_clear
 
         dense? ->
           [
             dense_indexed_hash: note.content_hash,
-            embed_model: Indexing.embed_model(),
+            embed_model: model,
+            embed_retry_after: nil
+          ] ++ @queue_clear
+
+        # A floor pass is sparse-only by design, not because the embed budget
+        # refused it: nothing to park. ReconcileEmbeddings' dense backfill
+        # skips a note with `index_tier` set (Indexing stamps it in this
+        # transaction), so a cleared cooldown does not re-select it.
+        pass.index_tier != nil ->
+          [
+            dense_indexed_hash: nil,
+            embed_model: nil,
             embed_retry_after: nil
           ] ++ @queue_clear
 
@@ -885,12 +1077,8 @@ defmodule Engram.Workers.EmbedNote do
           ] ++ @queue_clear
 
         true ->
-          {need, next} =
-            case sparse_park do
-              {:budget, need, next} when is_integer(need) -> {need, next}
-              _ -> {0, nil}
-            end
-
+          need = Map.get(pass, :deferred_tokens) || 0
+          next = Map.get(pass, :next_deferred_tokens)
           [dense_indexed_hash: nil, embed_model: nil] ++ budget_park_set(note, need, next)
       end
 
@@ -899,7 +1087,9 @@ defmodule Engram.Workers.EmbedNote do
       [
         embed_hash: note.content_hash,
         chunker_version: @chunker_version,
-        keyword_version: Engram.KeywordIndex.version()
+        keyword_version: Engram.KeywordIndex.version(),
+        # A full pass read the frontmatter under the current key alias table.
+        key_alias_version: Engram.Notes.KeyAliases.version()
       ] ++ set
 
     # Tenant-scoped: same filtered-UPDATE class as `maybe_mark_poison/3`.
@@ -921,7 +1111,8 @@ defmodule Engram.Workers.EmbedNote do
       )
     end
 
-    CrashGuard.clear(note, :ok)
+    :ok = CrashGuard.clear(note, :ok)
+    if count > 0 and Keyword.get(set, :embed_budget_parked) == true, do: :parked, else: :ok
   end
 
   @doc """

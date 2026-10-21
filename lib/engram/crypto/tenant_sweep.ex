@@ -94,6 +94,22 @@ defmodule Engram.Crypto.TenantSweep do
     |> Repo.all(skip_tenant_check: true)
   end
 
+  # Chunk points are swept only for their display envelope (DEK rotation),
+  # so only rows that hold one are visited: notes over the display
+  # threshold, none with the chunk-text write flag off. Keyed by point_id, on
+  # the partial index `chunk_points_with_display_index` (WHERE display_ct IS
+  # NOT NULL).
+  defp fetch_batch_ids(user_id, Engram.Notes.ChunkPoint, last_id, size) do
+    from(p in Engram.Notes.ChunkPoint,
+      where: p.user_id == ^user_id and not is_nil(p.display_ct),
+      where: p.point_id > ^last_id,
+      order_by: p.point_id,
+      limit: ^size,
+      select: p.point_id
+    )
+    |> Repo.all(skip_tenant_check: true)
+  end
+
   # Default fallback for schemas with a direct user_id column.
   defp fetch_batch_ids(user_id, schema, last_id, size) do
     from(r in schema,

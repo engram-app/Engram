@@ -7,16 +7,41 @@ defmodule Engram.Billing.LimitKeys do
 
     LimitKeys.defined?(:notes_cap)            #=> true
     LimitKeys.type(:notes_cap)                #=> :integer
-    LimitKeys.default_for(:notes_cap, :free)  #=> 3_000
+    LimitKeys.default_for(:notes_cap, :free)  #=> 3_000 (2_000 with v5 plan limits)
     LimitKeys.env_var_names()                 #=> one tuple per key per tier
   """
 
   @catalog %{
     # Pricing v2 spec §9.2 — 17 keys
-    # Free: 3,000 notes stored, and every stored note is searchable (2026-10-17).
-    # The upgrade levers are `ai_searches_per_day` and `vaults_cap`, not search
-    # coverage: the separate `indexed_notes_cap` was removed.
-    notes_cap: %{type: :integer, defaults: %{free: 3_000, starter: 50_000, pro: nil}},
+    # 3,000 / 50,000 / unlimited notes stored (2026-10-17), until the v5 go
+    # flag (`plan_limits/0`) switches to 2,000 / 20,000 / 40,000 (owner
+    # decision 2026-10-19). Every stored note is searchable: the upgrade
+    # levers are `ai_searches_per_day` and `vaults_cap`, not search coverage,
+    # and the separate `indexed_notes_cap` was removed.
+    notes_cap: %{
+      type: :integer,
+      defaults: %{free: 3_000, starter: 50_000, pro: nil},
+      v5_defaults: %{free: 2_000, starter: 20_000, pro: 40_000}
+    },
+    # Free index budget (spec: Engram vault `50 Engineering/_Superpowers Specs/
+    # 2026-10-18-qdrant-storage-and-free-index-budget-design.md`). Bounds the
+    # Qdrant points one account may hold, counted in `chunks` rows. Past the cap
+    # notes are demoted to a floor point; sync and writes never fail on it.
+    #
+    # GOLDEN RULE: points cap = `notes_cap` x 6. The chunker v5 median is
+    # about 5.2 points per note (min512 coalesce, per-note merge cap), so a
+    # full account of median notes fits with headroom (owner approved
+    # 2026-10-19; re-derive only if the v5 dry-run median leaves 5.0 to 6.5).
+    # Change both together.
+    index_points_cap: %{
+      type: :integer,
+      defaults: %{free: 12_000, starter: 120_000, pro: 240_000}
+    },
+    # Dense points one note may hold. A note chunked past it has adjacent
+    # chunks merged into exactly this many points, so the whole note stays
+    # covered (`Indexing.cap_chunks/3`). 641 prod notes over 128 chunks held
+    # 62.6% of all points (2026-10-18 audit).
+    note_points_cap: %{type: :integer, defaults: %{free: 128, starter: 1_024, pro: 1_024}},
     # PACKAGING, NOT A RESOURCE (pricing v3.1, 2026-09-03). An earlier draft
     # justified a Pro ceiling on per-vault CRDT index-room memory. That was
     # wrong three ways and is recorded so it is not re-derived:
@@ -205,9 +230,29 @@ defmodule Engram.Billing.LimitKeys do
   @spec type(atom()) :: :integer | :boolean | :string
   def type(key) when key in @keys, do: @catalog |> Map.fetch!(key) |> Map.fetch!(:type)
 
+  @doc """
+  Which default set is enforced: `:v5` once the v5 go flag is on
+  (`INDEX_BUDGET_ENABLED`, `Engram.Indexing.budget_enabled?/0`: the note caps
+  are sized with the index points budget, `notes_cap` x 6), else `:legacy`.
+  Every reader of a default goes through `default_for/2`, so the enforced
+  caps, `/billing/usage`, capabilities and `/billing/config` never disagree.
+  """
+  @spec plan_limits() :: :v5 | :legacy
+  def plan_limits, do: if(Engram.Indexing.budget_enabled?(), do: :v5, else: :legacy)
+
   @spec default_for(atom(), atom()) :: integer() | boolean() | String.t() | nil
-  def default_for(key, tier) when key in @keys and tier in @tiers,
-    do: @catalog |> Map.fetch!(key) |> Map.fetch!(:defaults) |> Map.fetch!(tier)
+  def default_for(key, tier), do: default_for(key, tier, plan_limits())
+
+  @doc "`key`'s default for `tier` in one set; a key with one set answers it in both."
+  @spec default_for(atom(), atom(), :v5 | :legacy) :: integer() | boolean() | String.t() | nil
+  def default_for(key, tier, set) when key in @keys and tier in @tiers do
+    entry = Map.fetch!(@catalog, key)
+
+    defaults =
+      if set == :v5, do: Map.get(entry, :v5_defaults, entry.defaults), else: entry.defaults
+
+    Map.fetch!(defaults, tier)
+  end
 
   # Renamed keys whose existing `user_limit_overrides` rows must keep working:
   # a row under the old name still applies to the new key (the new name wins

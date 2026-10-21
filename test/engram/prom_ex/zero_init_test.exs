@@ -8,17 +8,17 @@ defmodule Engram.PromEx.ZeroInitTest do
 
   alias Engram.PromEx.ZeroInit
 
+  # A labelled series prints `name{...} v`, an unlabelled one `name v`.
   defp series_line?(scrape, metric, labels) do
     scrape
     |> String.split("\n")
     |> Enum.any?(fn line ->
-      String.starts_with?(line, metric <> "{") and
+      String.starts_with?(line, [metric <> "{", metric <> " "]) and
         Enum.all?(labels, fn {k, v} -> line =~ ~s(#{k}="#{v}") end)
     end)
   end
 
   test "every alerted series is on /metrics after start" do
-    # get_metrics/1 returns iodata.
     scrape = Engram.PromEx |> PromEx.get_metrics() |> IO.iodata_to_binary()
 
     for {metric, labels} <- ZeroInit.prometheus_series() do
@@ -49,13 +49,25 @@ defmodule Engram.PromEx.ZeroInitTest do
     end
   end
 
+  test "covers the search counters the increase() alerts select" do
+    series = ZeroInit.prometheus_series()
+
+    assert {"engram_prom_ex_search_hits_total", %{}} in series
+    assert {"engram_prom_ex_search_text_missing_total", %{}} in series
+
+    dropped = for {"engram_prom_ex_search_hits_dropped_total", %{reason: r}} <- series, do: r
+
+    assert Enum.sort(dropped) ==
+             Enum.sort(~w(text_undecryptable note_undecryptable payload_undecryptable))
+  end
+
   test "covers each status and outcome the v5 alerts select" do
     labels = Enum.map(ZeroInit.prometheus_series(), &elem(&1, 1))
     statuses = for %{status: s} <- labels, uniq: true, do: s
     outcomes = for %{outcome: o} <- labels, uniq: true, do: o
 
     assert Enum.sort(statuses) ==
-             Enum.sort(~w(requeue_failed remap_failed after_flip both_deks_failed))
+             Enum.sort(~w(requeue_failed remap_failed after_flip guard_rebuild both_deks_failed))
 
     assert "drifted" in outcomes and "rewritten" in outcomes
   end

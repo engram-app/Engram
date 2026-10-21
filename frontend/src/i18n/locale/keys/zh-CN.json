@@ -1,0 +1,15 @@
+{
+	"type": "类型",
+	"status": "状态",
+	"author": "作者",
+	"reviewed_by": "审核人",
+	"source": "来源",
+	"project": "项目",
+	"created": "创建日期",
+	"updated": "更新时间",
+	"reviewed": "检查时间",
+	"expires": "过期时间",
+	"due": "截止日期",
+	"priority": "优先级",
+	"description": "摘要"
+}

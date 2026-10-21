@@ -4,9 +4,9 @@ defmodule Engram.Billing.LimitKeysTest do
   alias Engram.Billing.LimitKeys
 
   describe "all/0" do
-    test "returns the 24 catalog keys" do
+    test "returns the 26 catalog keys" do
       keys = LimitKeys.all()
-      assert length(keys) == 24
+      assert length(keys) == 26
       assert :notes_cap in keys
       assert :vaults_cap in keys
       assert :reranker_enabled in keys
@@ -50,7 +50,8 @@ defmodule Engram.Billing.LimitKeysTest do
   describe "default_for/2 — full matrix pin" do
     test "free tier matrix matches spec §9.2" do
       # 3,000 since 2026-10-17: Free stores 3,000 notes and all of them are
-      # searchable. The search-coverage cap was removed, not lowered.
+      # searchable. The search-coverage cap was removed, not lowered. The
+      # 2026-10-19 caps wait for the v5 go flag (see "v5 plan limits").
       assert LimitKeys.default_for(:notes_cap, :free) == 3_000
       assert LimitKeys.default_for(:vaults_cap, :free) == 1
       assert LimitKeys.default_for(:attachment_bytes_cap, :free) == 1_073_741_824
@@ -221,5 +222,55 @@ defmodule Engram.Billing.LimitKeysTest do
     assert LimitKeys.default_for(:search_candidate_pool, :pro) == 30
     assert LimitKeys.default_for(:search_full_precision, :pro) == false
     assert LimitKeys.default_for(:search_query_model, :pro) == nil
+  end
+
+  test "index_points_cap bounds Qdrant points per account" do
+    assert LimitKeys.defined?(:index_points_cap)
+    assert LimitKeys.type(:index_points_cap) == :integer
+    # notes_cap x 6: the v5 median is ~5.2 points a note (approved 10-19).
+    assert LimitKeys.default_for(:index_points_cap, :free) == 12_000
+    assert LimitKeys.default_for(:index_points_cap, :starter) == 120_000
+    assert LimitKeys.default_for(:index_points_cap, :pro) == 240_000
+
+    # The points cap is enforced only with the index budget on, which is
+    # also what selects the v5 note caps: the rule binds that set.
+    for tier <- [:free, :starter, :pro] do
+      assert LimitKeys.default_for(:index_points_cap, tier) ==
+               LimitKeys.default_for(:notes_cap, tier, :v5) * 6
+    end
+  end
+
+  test "note_points_cap bounds dense points per note" do
+    assert LimitKeys.defined?(:note_points_cap)
+    assert LimitKeys.type(:note_points_cap) == :integer
+    assert LimitKeys.default_for(:note_points_cap, :free) == 128
+    assert LimitKeys.default_for(:note_points_cap, :starter) == 1_024
+    assert LimitKeys.default_for(:note_points_cap, :pro) == 1_024
+  end
+
+  # The 2026-10-19 note caps are one set in the catalog, picked by the v5 go
+  # flag (`LimitKeys.plan_limits/0`, INDEX_BUDGET_ENABLED). Pure here: the
+  # flag-wired path is covered in CapabilitiesTest and BillingControllerTest.
+  describe "v5 plan limits" do
+    test "the legacy set is main's caps" do
+      assert LimitKeys.default_for(:notes_cap, :free, :legacy) == 3_000
+      assert LimitKeys.default_for(:notes_cap, :starter, :legacy) == 50_000
+      assert LimitKeys.default_for(:notes_cap, :pro, :legacy) == nil
+    end
+
+    test "the v5 set is the 2026-10-19 caps" do
+      assert LimitKeys.default_for(:notes_cap, :free, :v5) == 2_000
+      assert LimitKeys.default_for(:notes_cap, :starter, :v5) == 20_000
+      assert LimitKeys.default_for(:notes_cap, :pro, :v5) == 40_000
+    end
+
+    test "a key with one set answers the same in both" do
+      for tier <- LimitKeys.tiers(),
+          do:
+            assert(
+              LimitKeys.default_for(:vaults_cap, tier, :v5) ==
+                LimitKeys.default_for(:vaults_cap, tier, :legacy)
+            )
+    end
   end
 end

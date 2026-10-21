@@ -16,7 +16,7 @@ import {
 	useConfirmPlanChange,
 	usePlanChangePreview,
 } from "../api/queries";
-import { CadenceToggle, PLAN_CATALOG, PLAN_TIERS, PlanCard, type PlanTier } from "./plan-cards";
+import { CadenceToggle, PLAN_TIERS, PlanCard, type PlanTier, planCopy } from "./plan-cards";
 
 interface PlanChangePanelProps {
 	billing: BillingStatus;
@@ -56,6 +56,7 @@ function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClos
 	const { t, renderedLocale } = useT();
 
 	const { data: config } = useBillingConfig();
+	const { catalog } = planCopy(config?.plan_limits);
 	const { data: detail } = useBillingSubscriptionDetail(Boolean(billing.subscription));
 	const currentTier = deriveCurrentTier(billing);
 	const currentCadence = deriveCurrentCadence(detail);
@@ -127,7 +128,7 @@ function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClos
 
 			<ul className="grid items-stretch gap-4 sm:grid-cols-2">
 				{PLAN_TIERS.map((tier) => {
-					const meta = PLAN_CATALOG[tier];
+					const meta = catalog[tier];
 					// 'Current' only matches when the toggle is on the user's
 					// existing cadence — flipping to Annual surfaces Pro again as a
 					// selectable upgrade target so monthly→annual is a real path.

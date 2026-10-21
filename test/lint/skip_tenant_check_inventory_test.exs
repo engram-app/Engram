@@ -76,11 +76,11 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/crypto/provider_migration.ex" => 4,
     "engram/crypto/rotation_gate.ex" => 1,
     "engram/crypto/rotation_lock.ex" => 4,
-    "engram/crypto/tenant_sweep.ex" => 3,
-    "engram/crypto/user_dek_rotation.ex" => 18,
+    "engram/crypto/tenant_sweep.ex" => 4,
+    "engram/crypto/user_dek_rotation.ex" => 20,
     "engram/feedback.ex" => 2,
     "engram/idempotency.ex" => 1,
-    "engram/indexing.ex" => 2,
+    "engram/indexing.ex" => 4,
     "engram/instance.ex" => 7,
     "engram/legal.ex" => 5,
     "engram/legal/seeder.ex" => 2,
@@ -100,6 +100,10 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     # Generated: one clause per entry in `Repo.tenant_tables/0`, but the
     # keyword appears once in source, which is what this lint counts.
     "engram/prom_ex/installs.ex" => 1,
+    # `Rebuild.rebuild_order/1` reads `usage_meters` (activity and size) for
+    # many users at once. Not a tenant table (no RLS), read as
+    # `UsageMeters.last_active_at/1` reads it.
+    "engram/rebuild.ex" => 1,
     "engram/repo/tenancy_guard.ex" => 1,
     "engram/telemetry/install_pings.ex" => 1,
     "engram/usage_meters.ex" => 10,

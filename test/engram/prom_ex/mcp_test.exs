@@ -10,11 +10,12 @@ defmodule Engram.PromEx.McpTest do
   use ExUnit.Case, async: true
 
   alias Engram.PromEx.Mcp, as: McpPlugin
+  alias Engram.Test.PromExMetrics
   alias PromEx.MetricTypes.Event
 
   describe "event_metrics/1" do
     test "returns Event struct(s) prefixed [:engram, :prom_ex, :mcp]" do
-      events = McpPlugin.event_metrics(otp_app: :engram) |> List.wrap()
+      events = PromExMetrics.of(McpPlugin) |> List.wrap()
       assert Enum.all?(events, &match?(%Event{}, &1))
       metrics = Enum.flat_map(events, & &1.metrics)
       assert Enum.any?(metrics, fn m -> Enum.at(m.name, 2) == :mcp end)
@@ -22,7 +23,7 @@ defmodule Engram.PromEx.McpTest do
 
     test "declares distribution + counter on [:engram, :mcp, :tool, :stop]" do
       metrics =
-        McpPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+        PromExMetrics.of(McpPlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
       target = [:engram, :mcp, :tool, :stop]
 
@@ -37,7 +38,7 @@ defmodule Engram.PromEx.McpTest do
 
     test "declares a result_bytes distribution" do
       metrics =
-        McpPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+        PromExMetrics.of(McpPlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
       assert Enum.any?(metrics, fn m ->
                match?(%Telemetry.Metrics.Distribution{}, m) and m.measurement == :result_bytes
@@ -48,7 +49,7 @@ defmodule Engram.PromEx.McpTest do
     # parse timeouts.
     test "declares only an outcome counter on section_parse" do
       metrics =
-        McpPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+        PromExMetrics.of(McpPlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
       target = [:engram, :mcp, :section_parse, :stop]
 
@@ -58,7 +59,7 @@ defmodule Engram.PromEx.McpTest do
 
     test "no per-tenant tags" do
       metrics =
-        McpPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+        PromExMetrics.of(McpPlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
       banned = [:user_id, :vault_id, :args, :tenant_id]
 

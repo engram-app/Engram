@@ -1,6 +1,8 @@
 defmodule Engram.IndexingTest do
   use Engram.DataCase, async: false
 
+  import Engram.QdrantFilterView
+
   import Mox
 
   alias Engram.Crypto.DekCache
@@ -144,6 +146,9 @@ defmodule Engram.IndexingTest do
       user: user,
       vault: vault
     } do
+      # Self-host shape: no per-note cap, so the note keeps all its points.
+      insert(:user_limit_override, user: user, key: "note_points_cap", value: %{"v" => 10_000})
+
       # A 10MB-class note can yield thousands of chunks; a single Voyage
       # call with all of them is a guaranteed 4xx (1,000-input API limit)
       # that retries can never fix — the job then churns through
@@ -312,6 +317,9 @@ defmodule Engram.IndexingTest do
       user: user,
       vault: vault
     } do
+      # Self-host shape: no per-note cap, so the note keeps all its points.
+      insert(:user_limit_override, user: user, key: "note_points_cap", value: %{"v" => 10_000})
+
       # 5k chunks × 1024-dim float vectors as one JSON body is tens of MB
       # per upsert — split the PUT into bounded batches.
       {:ok, big_note} =
@@ -745,7 +753,7 @@ defmodule Engram.IndexingTest do
       assert {:ok, _} = Indexing.index_note(decrypted, vault)
 
       assert_received {:delete_filter, body}
-      must = body["filter"]["must"]
+      must = legacy_view(body["filter"]["must"])
 
       path_hmac_clause = Enum.find(must, fn c -> c["key"] == "path_hmac" end)
       assert path_hmac_clause, "expected delete filter to key on path_hmac, got: #{inspect(must)}"
@@ -845,7 +853,7 @@ defmodule Engram.IndexingTest do
         assert decoded["payload"]["folder_hmac"] == Base.encode64(<<4, 5, 6>>)
 
         assert %{"key" => "path_hmac", "match" => %{"value" => ^old_b64}} =
-                 Enum.find(decoded["filter"]["must"], &(&1["key"] == "path_hmac"))
+                 Enum.find(legacy_view(decoded["filter"]["must"]), &(&1["key"] == "path_hmac"))
 
         Plug.Conn.send_resp(conn, 200, ~s({"result": true}))
       end)
@@ -862,7 +870,7 @@ defmodule Engram.IndexingTest do
 
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/count", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
-        must = Jason.decode!(body)["filter"]["must"]
+        must = legacy_view(Jason.decode!(body)["filter"]["must"])
 
         # The wrapper must forward the full tenant triple to Qdrant (#755).
         assert %{"key" => "user_id", "match" => %{"value" => to_string(user.id)}} in must
@@ -880,11 +888,15 @@ defmodule Engram.IndexingTest do
     end
   end
 
+  # Over 512 B: the chunker's min512 merge (v5) leaves each section alone,
+  # so every section is still its own chunk.
+  @pad String.duplicate("filler words here ", 30)
+
   # Markdown with `n` distinct heading sections — each becomes at least one
   # chunk under the heading-aware chunker.
   defp big_sectioned_content(n) do
     Enum.map_join(1..n, "\n\n", fn i ->
-      "## Section #{i}\n\nParagraph for section #{i} with enough words to be a real chunk."
+      "## Section #{i}\n\nParagraph for section #{i} with enough words to be a real chunk. #{@pad}"
     end)
   end
 

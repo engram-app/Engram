@@ -1,0 +1,15 @@
+{
+	"type": "jenis",
+	"status": "status",
+	"author": "penulis",
+	"reviewed_by": "diperiksa_oleh",
+	"source": "sumber",
+	"project": "proyek",
+	"created": "dibuat",
+	"updated": "diperbarui",
+	"reviewed": "ditinjau",
+	"expires": "kedaluwarsa",
+	"due": "bataswaktu",
+	"priority": "prioritas",
+	"description": "deskripsi"
+}

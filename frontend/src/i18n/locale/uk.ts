@@ -258,18 +258,23 @@ export default {
 	"You're on this plan": "Ви користуєтеся цим тарифним планом",
 	"Start free trial": "Почніть безкоштовний пробний період",
 	Popular: "Популярні",
+	"2,000 notes · 20 AI searches a day · 1 vault":
+		"2000 заміток · 20 запитів до ШІ на день · 1 сховище",
 	"3,000 notes · 20 AI searches a day · 1 vault":
 		"3000 заміток · 20 запитів до ШІ на день · 1 сховище",
+	"2,000 notes, all searchable": "2000 заміток, усі доступні для пошуку",
 	"3,000 notes, all searchable": "3000 заміток, усі доступні для пошуку",
 	"20 AI searches a day": "20 AI-запитів на день",
 	"1 vault": "1 сховище",
 	"1 GB attachments": "1 ГБ вкладень",
 	"2 devices": "2 пристрої",
+	"20,000 notes": "20000 заміток",
 	"10 vaults": "10 сховищ",
 	"Unlimited devices": "Необмежена кількість пристроїв",
 	"10 GB attachments": "10 ГБ вкладень",
 	"Unlimited AI searches": "Необмежена кількість AI-запитів",
 	"Unlimited vaults": "Необмежена кількість сховищ",
+	"40,000 notes": "40000 заміток",
 	"50 GB attachments": "50 ГБ вкладень",
 	"Cross-vault search": "Пошук між сховищами",
 	"Loading plan options…": "Завантаження варіантів плану…",
@@ -310,6 +315,33 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Ви перебуваєте на безкоштовному пробному періоді. Paddle, наш платіжний процесор, не дозволяє змінювати план під час пробної підписки — ваш пробний період закінчується {date}.",
 	Upgrade: "Оновити",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Ви досягли ліміту у {cap} заміток. Синхронізація нових заміток припиняється, поки ви не оновите підписку або не видалите деякі.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Ви використали {percent}% з вашого ліміту у {cap} заміток. Після досягнення ліміту {cap}, синхронізація нових заміток припиняється, поки ви не оновите підписку або не видалите деякі.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Ви використали {percent}% з вашого ліміту у {cap} фрагментів для повного пошуку. Після цього, старіші замітки знаходяться лише за ключовими словами (точні слова, а не значення). Нічого не видаляється.",
+	"See usage": "Переглянути використання",
+	Usage: "Використання",
+	"Notes: {used}": "Замітки: {used}",
+	"Notes: {used} of {cap}": "Замітки: {used} з {cap}",
+	"Full search: {used} of {cap} passages": "Повний пошук: {used} з {cap} фрагментів",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Фрагмент – це окрема частина замітки, яку можна шукати. Після цього, старіші замітки знаходяться лише за ключовими словами (точні слова, а не значення). Нічого не видаляється.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			one: "Ваші можливості повного пошуку вичерпано. Знайдено {count} старішу замітку лише за ключовими словами (точні слова, не значення). Нічого не видалено. Оновіть підписку, щоб відновити повний пошук.",
+			few: "Ваші можливості повного пошуку вичерпано. Знайдено {count} старіші замітки лише за ключовими словами (точні слова, не значення). Нічого не видалено. Оновіть підписку, щоб відновити повний пошук.",
+			many: "Ваші можливості повного пошуку вичерпано. Знайдено {count} старих заміток лише за ключовими словами (точні слова, не значення). Нічого не видаляється. Оновіть підписку, щоб відновити повний пошук.",
+			other:
+				"Ваші можливості повного пошуку вичерпано. {count} старіших заміток знайдено лише за ключовими словами (точні слова, не значення). Нічого не видаляється. Оновіть підписку, щоб відновити повний пошук.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		one: "Знайдено {count} замітку за ключовим словом (точні слова, не значення).",
+		few: "Знайдено {count} замітки за ключовим словом (точні слова, не значення).",
+		many: "Знайдено {count} заміток за ключовим словом (точні слова, не значення).",
+		other: "{count} Замітки знаходяться лише за ключовими словами (точні слова, не значення).",
+	},
 	"All vaults, including ones you create later":
 		"Усі сховища, включно з тими, які ви створите пізніше",
 	"All current vaults": "Усі поточні сховища",
@@ -440,11 +472,21 @@ export default {
 	"a list, or one name": "список або одне ім'я",
 	"Topics. Browsable and searchable across the vault.":
 		"Теми. Можна переглядати та шукати у всьому сховищі.",
-	"A one-line summary of the note.": "Короткий опис замітки.",
-	"The thing the note is about — usually a URL.": "Те, про що йдеться в замінітці — зазвичай URL.",
+	"Where the note stands, such as draft or stable.":
+		"Місцезнаходження замітки, наприклад, чернетка або остаточна версія.",
+	"Who wrote the note, a person or an agent.": "Хто написав замітку, особа або агент.",
+	"Who last checked the note.": "Хто востаннє перевірив замітку.",
+	"What the note is based on, usually a URL.": "На чому базується замітка, зазвичай URL.",
+	"The project the note belongs to.": "Проєкт, до якого належить замітка.",
 	"a date (YYYY-MM-DD)": "дата (РРРР-ММ-ДД)",
 	"When the note came into being.": "Коли було створено замітки.",
 	"When it last changed.": "Коли востаннє було змінено.",
+	"When it was last checked.": "Коли востаннє було перевірено.",
+	"When the note goes out of date.": "Коли замітка стає неактуальною.",
+	"When the work in the note is due.": "Коли потрібно завершити роботу над заміткою.",
+	"a number": "число",
+	"How much the note matters, as a number.": "Наскільки важлива замітка, числом.",
+	"A one-line summary of the note.": "Короткий опис замітки.",
 	"Link Obsidian Vault": "Посилання на Obsidian сховище",
 	"Please sign in to link your Obsidian vault.":
 		"Будь ласка, увійдіть, щоб підключити ваше Obsidian сховище.",
@@ -1416,8 +1458,11 @@ export default {
 	frontmatter: "frontmatter",
 	reads: "читає",
 	"{what} Wants {expectsLabel}.": "{what} хоче {expectsLabel}.",
+	"use {alias} or {key}": "використовуйте {alias} або {key}",
 	"also accepts {aliases}": "також приймає {aliases}",
 	or: "або",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Вкладене ім'я, таке як {example}, не можна редагувати тут або в Obsidian; редагування можливе лише вручну, MCP, або за допомогою ШІ.",
 	Properties: "Властивості",
 	"About properties": "Про властивості",
 	"Property name": "Назва властивості",

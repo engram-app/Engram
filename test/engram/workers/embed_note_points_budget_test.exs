@@ -1,0 +1,387 @@
+defmodule Engram.Workers.EmbedNotePointsBudgetTest do
+  # async: false: the RLS control drops the connection role, and the
+  # limits_enforced toggle is global app env.
+  use Engram.DataCase, async: false
+
+  use Oban.Testing, repo: Engram.Repo
+
+  import Engram.IndexBudgetHelpers
+  import Ecto.Query
+  import Engram.RlsCase, only: [as_prod_role: 1]
+  import Mox
+  import Phoenix.ChannelTest, only: [subscribe_and_join: 4, push: 3, assert_reply: 3, socket: 3]
+  import Phoenix.ConnTest, only: [build_conn: 0, post: 3]
+
+  alias Engram.Crypto
+  alias Engram.Indexing
+  alias Engram.Notes.Chunk
+  alias Engram.Notes.Note
+  alias Engram.Repo
+  alias Engram.ServiceConfig
+  alias Engram.UsageMeters
+  alias Engram.Workers.{EmbedNote, RebuildStaleNote, ReconcileEmbeddings}
+
+  @endpoint EngramWeb.Endpoint
+
+  # The v5 index budget is off by default (review H2); these tests are about it.
+  setup :enable_index_budget
+
+  setup :verify_on_exit!
+
+  # Over 512 B: the chunker's min512 merge (v5) leaves each section alone,
+  # so every section is still its own chunk.
+  @pad String.duplicate("filler words here ", 30)
+
+  # Five sections, so five chunks on a full pass.
+  @content """
+  # Five
+
+  ## One
+
+  Alpha section text. #{@pad}
+
+  ## Two
+
+  Bravo section text. #{@pad}
+
+  ## Three
+
+  Charlie section text. #{@pad}
+
+  ## Four
+
+  Delta section text. #{@pad}
+
+  ## Five
+
+  Echo section text. #{@pad}
+  """
+
+  setup do
+    bypass = Bypass.open()
+    ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+
+    Bypass.stub(bypass, :any, :any, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, ~s({"result": true}))
+    end)
+
+    {:ok, user} = Crypto.ensure_user_dek(insert(:user))
+    vault = insert(:vault, user: user, is_default: true)
+    note = Engram.Fixtures.insert_note!(user, vault, %{path: "Five.md", content: @content})
+    assert length(Engram.Parsers.Markdown.parse(@content, "Five.md")) == 5
+    %{user: user, vault: vault, note: note}
+  end
+
+  # `count` chunk rows on filler notes, so the account already holds them.
+  # One filler per 30,000 rows: `position` is a smallint, unique per note.
+  # Generated in SQL: 100,000 rows through `insert_all` outlive the timeout.
+  defp seed_points(user, vault, count) do
+    for n <- 0..div(count - 1, 30_000) do
+      size = min(30_000, count - n * 30_000)
+      filler = Engram.Fixtures.insert_note!(user, vault, %{path: "Filler#{n}.md", content: "x"})
+
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.query!(
+            """
+            INSERT INTO chunks
+              (note_id, user_id, vault_id, position, char_start, char_end, qdrant_point_id, created_at)
+            SELECT $1, $2, $3, g, 0, 1, gen_random_uuid(), now()
+            FROM generate_series(1, $4) g
+            """,
+            [
+              Ecto.UUID.dump!(filler.id),
+              Ecto.UUID.dump!(user.id),
+              Ecto.UUID.dump!(vault.id),
+              size
+            ]
+          )
+        end)
+    end
+
+    :ok
+  end
+
+  defp rows_for(note) do
+    {:ok, rows} =
+      Repo.with_tenant(note.user_id, fn ->
+        Repo.all(from(c in Chunk, where: c.note_id == ^note.id))
+      end)
+
+    rows
+  end
+
+  # The pass compare-and-sets the tier it was planned from, so the row must
+  # carry the tier the struct does.
+  defp with_tier(note, tier) do
+    {:ok, _} =
+      Engram.Repo.with_tenant(note.user_id, fn ->
+        Engram.Repo.update_all(from(n in Note, where: n.id == ^note.id), set: [index_tier: tier])
+      end)
+
+    %{note | index_tier: tier}
+  end
+
+  defp reload(note) do
+    {:ok, row} = Repo.with_tenant(note.user_id, fn -> Repo.get!(Note, note.id) end)
+    row
+  end
+
+  defp stub_embedder do
+    Mox.stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+      {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+    end)
+  end
+
+  defp embed(note), do: perform_job(EmbedNote, %{"note_id" => note.id, "user_id" => note.user_id})
+
+  defp with_limits_enforced(value) do
+    prev = Application.get_env(:engram, :limits_enforced)
+    Application.put_env(:engram, :limits_enforced, value)
+
+    on_exit(fn ->
+      if is_nil(prev),
+        do: Application.delete_env(:engram, :limits_enforced),
+        else: Application.put_env(:engram, :limits_enforced, prev)
+    end)
+  end
+
+  describe "full vs floor on Free (cap 12,000)" do
+    test "at 11,990 a 5-chunk note gets a full index", %{user: user, vault: vault, note: note} do
+      seed_points(user, vault, 11_990)
+      stub_embedder()
+
+      assert :ok = embed(note)
+      assert length(rows_for(note)) == 5
+      indexed = reload(note)
+      assert indexed.index_tier == nil
+      assert indexed.dense_indexed_hash == indexed.content_hash
+    end
+
+    # Review M1: an inline pass may overshoot the cap by 5% rather than
+    # floor the note the user is editing; the 04:00 sweep then demotes the
+    # least recently edited notes. 11,998 + 5 = 12,003, under 12,600.
+    test "at 11,998 the note being indexed overshoots instead of flooring", %{
+      user: user,
+      vault: vault,
+      note: note
+    } do
+      seed_points(user, vault, 11_998)
+      stub_embedder()
+
+      assert :ok = embed(note)
+      assert length(rows_for(note)) == 5
+      assert reload(note).index_tier == nil
+    end
+
+    # No embedder stub: any Voyage call fails the test.
+    test "past the 5% overshoot the note is floored, unmetered", %{
+      user: user,
+      vault: vault,
+      note: note
+    } do
+      seed_points(user, vault, 12_598)
+      before = UsageMeters.lifetime_embed_tokens(user.id)
+
+      assert :ok = embed(note)
+      assert [%{token_count: nil}] = rows_for(note)
+      assert reload(note).index_tier == "floor"
+      assert UsageMeters.lifetime_embed_tokens(user.id) == before
+    end
+
+    test "the floor path never reserves or releases tokens", %{
+      user: user,
+      vault: vault,
+      note: note
+    } do
+      seed_points(user, vault, 12_598)
+      {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
+      parent = self()
+
+      assert {:ok, 1, 0, false} =
+               Indexing.index_note_with_usage(note, vault, user,
+                 reserve_tokens: fn t -> send(parent, {:reserved, t}) && true end,
+                 release_tokens: fn t -> send(parent, {:released, t}) end
+               )
+
+      refute_received {:reserved, _}
+      refute_received {:released, _}
+    end
+
+    test "boundary: other rows + planned == cap is a full index", %{
+      user: user,
+      vault: vault,
+      note: note
+    } do
+      seed_points(user, vault, 11_995)
+      stub_embedder()
+
+      assert :ok = embed(note)
+      assert length(rows_for(note)) == 5
+      assert reload(note).index_tier == nil
+    end
+
+    # Zero other rows, and the note alone is over the account cap: it floors
+    # once and stays floored, nothing re-selects it.
+    test "a note over the cap on its own floors, no loop", %{user: user, note: note} do
+      insert(:user_limit_override, user: user, key: "index_points_cap", value: %{"v" => 3})
+
+      assert :ok = embed(note)
+      assert [%{qdrant_point_id: point_id, token_count: nil}] = rows_for(note)
+      assert reload(note).index_tier == "floor"
+
+      for _tick <- 1..2 do
+        # In the 04:00 UTC re-verify hour, so the budget sweep runs too: it
+        # must not promote a note that cannot fit. Pinned, not the wall
+        # clock, so the result never depends on when CI runs.
+        assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
+        refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+        refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
+
+        {:ok, _} =
+          Repo.with_tenant(user.id, fn ->
+            Repo.update_all(from(n in Note, where: n.id == ^note.id),
+              set: [embed_retry_after: DateTime.add(DateTime.utc_now(), -1, :second)]
+            )
+          end)
+      end
+
+      # A re-delivered job is a no-op: same point.
+      assert :ok = embed(note)
+      assert [%{qdrant_point_id: ^point_id}] = rows_for(note)
+    end
+
+    test "the note's own chunks do not count against it", %{user: user, vault: vault, note: note} do
+      stub_embedder()
+      assert :ok = embed(note)
+      seed_points(user, vault, 11_995)
+
+      # 12,000 rows now, five of them this note's: a re-index replaces them.
+      {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
+      assert {:ok, 5, _, true} = Indexing.index_note_with_usage(note, vault, user)
+      assert reload(note).index_tier == nil
+    end
+
+    test "a floor_paid note forced full over the cap stays floor_paid", %{
+      user: user,
+      vault: vault,
+      note: note
+    } do
+      seed_points(user, vault, 12_600)
+      {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
+      note = with_tier(note, "floor_paid")
+
+      assert {:ok, 1, 0, false} =
+               Indexing.index_note_with_usage(note, vault, user, index_tier: nil)
+
+      assert reload(note).index_tier == "floor_paid"
+    end
+  end
+
+  # Review M2: a maintenance pass (a version rebuild, a recap) over budget
+  # keeps a dense note's points rather than flooring it: the floor would
+  # delete vectors a later promotion pays to rebuild.
+  describe "a maintenance pass over budget" do
+    test "keeps the dense note's points and changes nothing", %{
+      user: user,
+      vault: vault,
+      note: note
+    } do
+      stub_embedder()
+      assert :ok = embed(note)
+      ids = Enum.map(rows_for(note), & &1.qdrant_point_id)
+      seed_points(user, vault, 12_600)
+      {:ok, note} = Crypto.maybe_decrypt_note_fields(reload(note), user)
+      edited = %{note | content: note.content <> "\n\n## More\n\nnew section here."}
+
+      assert {:error, :over_budget} =
+               Indexing.index_note_with_usage(edited, vault, user, keep_dense: true)
+
+      assert Enum.map(rows_for(note), & &1.qdrant_point_id) == ids
+      assert reload(note).index_tier == nil
+    end
+  end
+
+  describe "other tiers" do
+    test "billing disabled at 100,000: full", %{user: user, vault: vault, note: note} do
+      with_limits_enforced(false)
+      seed_points(user, vault, 100_000)
+      stub_embedder()
+
+      assert :ok = embed(note)
+      assert length(rows_for(note)) == 5
+      assert reload(note).index_tier == nil
+    end
+
+    test "Starter at 50,000: full", %{user: user, vault: vault, note: note} do
+      insert(:subscription, user: user, tier: "starter", status: "active")
+      seed_points(user, vault, 50_000)
+      stub_embedder()
+
+      assert :ok = embed(note)
+      assert length(rows_for(note)) == 5
+      assert reload(note).index_tier == nil
+    end
+  end
+
+  describe "points_budget_ok?/3" do
+    test "counts under its own tenant: unscoped the rows are invisible", %{
+      user: user,
+      vault: vault,
+      note: note
+    } do
+      seed_points(user, vault, 12_000)
+
+      # Control: the app role with no tenant sees zero rows.
+      assert {:returned, 0} =
+               as_prod_role(fn -> Repo.aggregate(Chunk, :count, skip_tenant_check: true) end)
+
+      # Unscoped, a count would read 0 and say yes. It sets the tenant itself.
+      assert {:returned, false} =
+               as_prod_role(fn -> Indexing.points_budget_ok?(user, note.id, 1) end)
+
+      assert Indexing.points_budget_ok?(user, note.id, 0)
+    end
+  end
+
+  describe "writes over the cap still succeed" do
+    setup %{user: user, vault: vault} do
+      seed_points(user, vault, 12_000)
+      Engram.ApiEntitlementHelpers.lift_api_rps_cap!(user)
+      :ok
+    end
+
+    test "REST create", %{user: user} do
+      {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "budget")
+
+      conn =
+        build_conn()
+        |> Plug.Conn.put_req_header("authorization", "Bearer #{api_key}")
+        |> post("/api/notes", %{path: "Over.md", content: "# Over\n\nText.", mtime: 1_000.0})
+
+      assert conn.status in [200, 201]
+    end
+
+    test "socket create", %{user: user, vault: vault} do
+      sock =
+        socket(EngramWeb.UserSocket, "user_#{user.id}", %{
+          current_user: user,
+          current_api_key: nil
+        })
+
+      {:ok, _, joined} =
+        subscribe_and_join(sock, EngramWeb.CrdtChannel, "crdt:#{user.id}:#{vault.id}", %{
+          "crdt_proto" => 2
+        })
+
+      Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), joined.channel_pid)
+      id = Ecto.UUID.generate()
+      ref = push(joined, "crdt_create", %{"doc_id" => id, "path" => "Over2.md"})
+      assert_reply ref, :ok, %{doc_id: ^id}
+    end
+  end
+
+  defp reverify_tick, do: DateTime.new!(Date.utc_today(), ~T[04:02:00])
+end

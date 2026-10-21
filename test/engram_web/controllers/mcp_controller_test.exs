@@ -1,6 +1,8 @@
 defmodule EngramWeb.McpControllerTest do
   use EngramWeb.ConnCase, async: true
 
+  import Engram.QdrantFilterView
+
   alias Engram.QdrantStub
 
   # ---------------------------------------------------------------------------
@@ -94,17 +96,18 @@ defmodule EngramWeb.McpControllerTest do
       assert resp["result"]["capabilities"]["tools"]
     end
 
-    test "tools/list returns 19 tools", %{conn: conn} do
+    test "tools/list returns 20 tools", %{conn: conn} do
       conn = jsonrpc(conn, "tools/list")
       resp = json_response(conn, 200)
 
       tools = resp["result"]["tools"]
-      assert length(tools) == 19
+      assert length(tools) == 20
 
       names = Enum.map(tools, & &1["name"])
       assert "list_vaults" in names
       assert "delete_attachment" in names
       assert "search_notes" in names
+      assert "list_fields" in names
       assert "get_notes" in names
       assert "write_note" in names
       assert "edit_note" in names
@@ -1330,7 +1333,7 @@ defmodule EngramWeb.McpControllerTest do
       assert legs != []
 
       for leg <- legs do
-        clause = Enum.find(leg["filter"]["must"], &(&1["key"] == "vault_id"))
+        clause = Enum.find(legacy_view(leg["filter"]["must"]), &(&1["key"] == "vault_id"))
         assert %{"match" => %{"any" => ids}} = clause
         assert Enum.sort(ids) == Enum.sort([to_string(va.id), to_string(vb.id)])
         refute to_string(vc.id) in ids

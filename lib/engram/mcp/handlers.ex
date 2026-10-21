@@ -195,6 +195,23 @@ defmodule Engram.MCP.Handlers do
     {:ok, text, %{"tags" => Enum.map(tags, &%{"name" => &1.name, "count" => &1.count})}}
   end
 
+  def handle("list_fields", user, vault, _args) do
+    {:ok, fields} = Engram.Notes.FieldCatalog.list(user, vault)
+    filterable = Engram.Search.FieldFilters.available?()
+
+    text =
+      if fields == [] do
+        "No fields found. Fields appear once notes with frontmatter have been indexed."
+      else
+        ["| Field | Kinds | Notes | Range | Top values |", "|---|---|---|---|---|"]
+        |> Kernel.++(Enum.map(fields, &field_row/1))
+        |> Kernel.++(["", fields_hint(filterable)])
+        |> Enum.join("\n")
+      end
+
+    {:ok, text, %{"fields" => Enum.map(fields, &field_json/1), "filterable" => filterable}}
+  end
+
   def handle("list_folders", user, vault, _args) do
     {:ok, folders} = Notes.list_folders_with_counts(user, vault)
 
@@ -726,6 +743,60 @@ defmodule Engram.MCP.Handlers do
   # which answers -32602 for a name that has no definition, so nothing can reach
   # this module with a name it doesn't implement.
 
+  # -- list_fields --
+
+  @text_values 10
+
+  defp field_row(f) do
+    range =
+      [f.number_range, f.date_range]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map_join("; ", &"#{&1.min} to #{&1.max}")
+
+    values =
+      f.values |> Enum.take(@text_values) |> Enum.map_join(", ", &"#{&1.value} (#{&1.count})")
+
+    kinds = Enum.join(f.kinds, ", ") <> if(f.list, do: " (list)", else: "")
+
+    "| " <> Enum.map_join([f.name, kinds, f.note_count, range, values], " | ", &cell/1) <> " |"
+  end
+
+  # Names and values are user text: keep each inside its table cell.
+  defp cell(v),
+    do:
+      v
+      |> to_string()
+      |> String.replace(["\\", "|", "\r", "\n"], fn
+        "\\" -> "\\\\"
+        "|" -> "\\|"
+        _ -> " "
+      end)
+
+  defp fields_hint(true),
+    do:
+      ~s(Filter with search_notes `fields`: [{"key": <field>, "op": "eq" | "in" | "gt" | ) <>
+        ~s("gte" | "lt" | "lte" | "after" | "before", "value": ...}].)
+
+  defp fields_hint(false),
+    do: "search_notes cannot filter on these fields on this server yet."
+
+  defp field_json(f) do
+    range = fn
+      nil -> nil
+      r -> %{"min" => r.min, "max" => r.max}
+    end
+
+    %{
+      "name" => f.name,
+      "kinds" => f.kinds,
+      "list" => f.list,
+      "note_count" => f.note_count,
+      "number_range" => range.(f.number_range),
+      "date_range" => range.(f.date_range),
+      "values" => Enum.map(f.values, &%{"value" => &1.value, "count" => &1.count})
+    }
+  end
+
   # -- edit_note (replaces patch_note / update_section) --
 
   defp reject_other_mode(args, "replace_text") do
@@ -1114,6 +1185,7 @@ defmodule Engram.MCP.Handlers do
     opts = if tags, do: Keyword.put(opts, :tags, tags), else: opts
     opts = if args["folder"], do: Keyword.put(opts, :folder, args["folder"]), else: opts
     opts = if args["type"], do: Keyword.put(opts, :type, args["type"]), else: opts
+    opts = if is_list(args["fields"]), do: Keyword.put(opts, :fields, args["fields"]), else: opts
 
     opts =
       Enum.reduce(Search.date_params(), opts, fn key, acc ->
@@ -1239,7 +1311,7 @@ defmodule Engram.MCP.Handlers do
   def render_search({:error, reason}, _names),
     do: {:error, Search.input_error_message(reason) || "Search unavailable."}
 
-  @search_filters ~w(tags folder type created_after created_before updated_after updated_before)
+  @search_filters ~w(tags folder type fields created_after created_before updated_after updated_before)
 
   # `:recent` when query is blank AND similar_to is absent. `similar_to` and a
   # non-blank query never combine: naming a source note AND asking a question

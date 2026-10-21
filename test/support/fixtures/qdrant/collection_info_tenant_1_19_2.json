@@ -1,0 +1,358 @@
+{
+  "status": "green",
+  "optimizer_status": "ok",
+  "indexed_vectors_count": 0,
+  "points_count": 0,
+  "segments_count": 2,
+  "config": {
+    "params": {
+      "vectors": {
+        "dense": {
+          "size": 8,
+          "distance": "Cosine",
+          "on_disk": true,
+          "datatype": "float16"
+        }
+      },
+      "shard_number": 1,
+      "replication_factor": 1,
+      "write_consistency_factor": 1,
+      "on_disk_payload": true,
+      "sparse_vectors": {
+        "keyword": {
+          "index": {
+            "on_disk": true
+          },
+          "modifier": "idf"
+        }
+      }
+    },
+    "hnsw_config": {
+      "m": 0,
+      "ef_construct": 100,
+      "full_scan_threshold": 10000,
+      "max_indexing_threads": 1,
+      "on_disk": false,
+      "payload_m": 16
+    },
+    "optimizer_config": {
+      "deleted_threshold": 0.2,
+      "vacuum_min_vector_number": 1000,
+      "default_segment_number": 0,
+      "max_segment_size": 1000000,
+      "memmap_threshold": null,
+      "indexing_threshold": 10000,
+      "flush_interval_sec": 5,
+      "max_optimization_threads": 1,
+      "prevent_unoptimized": null
+    },
+    "wal_config": {
+      "wal_capacity_mb": 32,
+      "wal_segments_ahead": 0,
+      "wal_retain_closed": 1
+    },
+    "quantization_config": {
+      "binary": {
+        "always_ram": true
+      }
+    },
+    "strict_mode_config": {
+      "enabled": true,
+      "max_resident_memory_percent": 85
+    }
+  },
+  "payload_schema": {
+    "fm_timestamp": {
+      "data_type": "integer",
+      "params": {
+        "type": "integer",
+        "lookup": false,
+        "range": true,
+        "is_principal": null,
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "o": {
+      "data_type": "uuid",
+      "params": {
+        "type": "uuid",
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "up": {
+      "data_type": "integer",
+      "params": {
+        "type": "integer",
+        "lookup": false,
+        "range": true,
+        "is_principal": null,
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "fm_created": {
+      "data_type": "integer",
+      "params": {
+        "type": "integer",
+        "lookup": false,
+        "range": true,
+        "is_principal": null,
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "folder_hmac": {
+      "data_type": "keyword",
+      "params": {
+        "type": "keyword",
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "a": {
+      "data_type": "uuid",
+      "params": {
+        "type": "uuid",
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "du": {
+      "data_type": "integer",
+      "params": {
+        "type": "integer",
+        "lookup": false,
+        "range": true,
+        "is_principal": null,
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "g": {
+      "data_type": "uuid",
+      "params": {
+        "type": "uuid",
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "y": {
+      "data_type": "uuid",
+      "params": {
+        "type": "uuid",
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "r": {
+      "data_type": "uuid",
+      "params": {
+        "type": "uuid",
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "s": {
+      "data_type": "uuid",
+      "params": {
+        "type": "uuid",
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "vault_id": {
+      "data_type": "keyword",
+      "params": {
+        "type": "keyword",
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "type_hmac": {
+      "data_type": "keyword",
+      "params": {
+        "type": "keyword",
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "cr": {
+      "data_type": "integer",
+      "params": {
+        "type": "integer",
+        "lookup": false,
+        "range": true,
+        "is_principal": null,
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "user_id": {
+      "data_type": "keyword",
+      "params": {
+        "type": "keyword",
+        "on_disk": true
+      },
+      "points": 0
+    },
+    "u": {
+      "data_type": "uuid",
+      "params": {
+        "type": "uuid",
+        "is_tenant": true,
+        "on_disk": true
+      },
+      "points": 0
+    },
+    "path_hmac": {
+      "data_type": "keyword",
+      "params": {
+        "type": "keyword",
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "pr": {
+      "data_type": "float",
+      "params": {
+        "type": "float",
+        "is_principal": null,
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "tags_hmac": {
+      "data_type": "keyword",
+      "params": {
+        "type": "keyword",
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "v": {
+      "data_type": "uuid",
+      "params": {
+        "type": "uuid",
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "p": {
+      "data_type": "uuid",
+      "params": {
+        "type": "uuid",
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "ex": {
+      "data_type": "integer",
+      "params": {
+        "type": "integer",
+        "lookup": false,
+        "range": true,
+        "is_principal": null,
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "rd": {
+      "data_type": "integer",
+      "params": {
+        "type": "integer",
+        "lookup": false,
+        "range": true,
+        "is_principal": null,
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "j": {
+      "data_type": "uuid",
+      "params": {
+        "type": "uuid",
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "f": {
+      "data_type": "uuid",
+      "params": {
+        "type": "uuid",
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "fa[].k": {
+      "data_type": "integer",
+      "params": {
+        "type": "integer",
+        "lookup": true,
+        "range": false,
+        "is_principal": null,
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "fa[].h": {
+      "data_type": "keyword",
+      "params": {
+        "type": "keyword",
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "fa[].n": {
+      "data_type": "float",
+      "params": {
+        "type": "float",
+        "is_principal": null,
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "fa[].d": {
+      "data_type": "integer",
+      "params": {
+        "type": "integer",
+        "lookup": false,
+        "range": true,
+        "is_principal": null,
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    }
+  },
+  "update_queue": {
+    "length": 0
+  }
+}

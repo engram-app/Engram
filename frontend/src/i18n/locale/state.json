@@ -4,6 +4,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes have keyword search only, until {date}.": "{count} note has keyword search only, until {date}.",
 			"{count} notes have keyword search only, until the budget refills.": "{count} note has keyword search only, until the budget refills.",
 			"{count} notes": "{count} note",
@@ -49,6 +51,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
@@ -63,6 +66,7 @@
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
@@ -71,6 +75,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes have keyword search only, until {date}.": "{count} note has keyword search only, until {date}.",
 			"{count} notes have keyword search only, until the budget refills.": "{count} note has keyword search only, until the budget refills.",
 			"{count} notes": "{count} note",
@@ -116,6 +122,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
@@ -130,6 +137,7 @@
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
@@ -138,6 +146,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes have keyword search only, until {date}.": "{count} note has keyword search only, until {date}.",
 			"{count} notes have keyword search only, until the budget refills.": "{count} note has keyword search only, until the budget refills.",
 			"{count} notes": "{count} note",
@@ -186,6 +196,7 @@
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
@@ -200,6 +211,7 @@
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
@@ -208,6 +220,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes have keyword search only, until {date}.": "{count} note has keyword search only, until {date}.",
 			"{count} notes have keyword search only, until the budget refills.": "{count} note has keyword search only, until the budget refills.",
 			"{count} notes": "{count} note",
@@ -253,6 +267,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
@@ -267,6 +282,7 @@
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
@@ -275,6 +291,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes have keyword search only, until {date}.": "{count} note has keyword search only, until {date}.",
 			"{count} notes have keyword search only, until the budget refills.": "{count} note has keyword search only, until the budget refills.",
 			"{count} notes": "{count} note",
@@ -323,6 +341,7 @@
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
@@ -337,6 +356,7 @@
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
@@ -345,6 +365,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes have keyword search only, until {date}.": "{count} note has keyword search only, until {date}.",
 			"{count} notes have keyword search only, until the budget refills.": "{count} note has keyword search only, until the budget refills.",
 			"{count} notes": "{count} note",
@@ -390,6 +412,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
@@ -404,6 +427,7 @@
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
@@ -412,6 +436,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes have keyword search only, until {date}.": "{count} note has keyword search only, until {date}.",
 			"{count} notes have keyword search only, until the budget refills.": "{count} note has keyword search only, until the budget refills.",
 			"{count} notes": "{count} note",
@@ -457,6 +483,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
@@ -471,6 +498,7 @@
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
@@ -479,6 +507,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes have keyword search only, until {date}.": "{count} note has keyword search only, until {date}.",
 			"{count} notes have keyword search only, until the budget refills.": "{count} note has keyword search only, until the budget refills.",
 			"{count} notes": "{count} note",
@@ -527,6 +557,7 @@
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
@@ -541,6 +572,7 @@
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
@@ -549,6 +581,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes have keyword search only, until {date}.": "{count} note has keyword search only, until {date}.",
 			"{count} notes have keyword search only, until the budget refills.": "{count} note has keyword search only, until the budget refills.",
 			"{count} notes": "{count} note",
@@ -594,6 +628,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
@@ -608,6 +643,7 @@
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
@@ -616,6 +652,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes have keyword search only, until {date}.": "{count} note has keyword search only, until {date}.",
 			"{count} notes have keyword search only, until the budget refills.": "{count} note has keyword search only, until the budget refills.",
 			"{count} notes": "{count} note",
@@ -661,6 +699,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
@@ -675,6 +714,7 @@
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
@@ -683,6 +723,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes have keyword search only, until {date}.": "{count} note has keyword search only, until {date}.",
 			"{count} notes have keyword search only, until the budget refills.": "{count} note has keyword search only, until the budget refills.",
 			"{count} notes": "{count} note",
@@ -731,6 +773,7 @@
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
@@ -745,6 +788,7 @@
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
@@ -753,6 +797,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes have keyword search only, until {date}.": "{count} note has keyword search only, until {date}.",
 			"{count} notes have keyword search only, until the budget refills.": "{count} note has keyword search only, until the budget refills.",
 			"{count} notes": "{count} note",
@@ -801,6 +847,7 @@
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
@@ -815,6 +862,7 @@
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
@@ -823,6 +871,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes have keyword search only, until {date}.": "{count} note has keyword search only, until {date}.",
 			"{count} notes have keyword search only, until the budget refills.": "{count} note has keyword search only, until the budget refills.",
 			"{count} notes": "{count} note",
@@ -868,6 +918,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
@@ -882,6 +933,7 @@
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
@@ -890,6 +942,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes have keyword search only, until {date}.": "{count} note has keyword search only, until {date}.",
 			"{count} notes have keyword search only, until the budget refills.": "{count} note has keyword search only, until the budget refills.",
 			"{count} notes": "{count} note",
@@ -935,6 +989,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
@@ -949,6 +1004,7 @@
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
@@ -957,6 +1013,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes have keyword search only, until {date}.": "{count} note has keyword search only, until {date}.",
 			"{count} notes have keyword search only, until the budget refills.": "{count} note has keyword search only, until the budget refills.",
 			"{count} notes": "{count} note",
@@ -1005,6 +1063,7 @@
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
@@ -1019,6 +1078,7 @@
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
@@ -1027,6 +1087,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes have keyword search only, until {date}.": "{count} note has keyword search only, until {date}.",
 			"{count} notes have keyword search only, until the budget refills.": "{count} note has keyword search only, until the budget refills.",
 			"{count} notes": "{count} note",
@@ -1072,6 +1134,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
@@ -1086,6 +1149,7 @@
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
@@ -1094,6 +1158,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes have keyword search only, until {date}.": "{count} note has keyword search only, until {date}.",
 			"{count} notes have keyword search only, until the budget refills.": "{count} note has keyword search only, until the budget refills.",
 			"{count} notes": "{count} note",
@@ -1139,6 +1205,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
@@ -1153,6 +1220,7 @@
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	}

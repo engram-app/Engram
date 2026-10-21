@@ -2,6 +2,8 @@ defmodule Engram.Workers.OrphanSweepTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  import Engram.QdrantFilterView
+
   alias Engram.Storage
   alias Engram.Test.LogCapture
   alias Engram.Workers.OrphanSweep
@@ -62,7 +64,7 @@ defmodule Engram.Workers.OrphanSweepTest do
 
     assert_received {:qdrant_delete, body}
     decoded = Jason.decode!(body)
-    assert get_in(decoded, ["filter", "must", Access.at(0), "match", "value"]) == ghost_id
+    assert get_in(hd(legacy_view(decoded["filter"]["must"])), ["match", "value"]) == ghost_id
   end
 
   test "deletes S3 prefix for users that no longer exist", %{bypass: bypass} do

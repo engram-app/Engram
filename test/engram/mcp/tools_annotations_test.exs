@@ -9,7 +9,7 @@ defmodule Engram.MCP.ToolsAnnotationsTest do
   # `get_attachment_upload_target` is NOT here: it hands out the endpoint and
   # limits for a WRITE (an upload with this connection's credential), so a
   # read-only grant must neither list nor call it (#174).
-  @read_only ~w(list_vaults set_vault search_notes list_tags list_folders list_folder
+  @read_only ~w(list_vaults set_vault search_notes list_tags list_fields list_folders list_folder
                 suggest_folder get_note get_notes)
 
   # Overwrites or removes content the user wrote.

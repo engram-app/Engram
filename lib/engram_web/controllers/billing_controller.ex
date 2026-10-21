@@ -55,34 +55,53 @@ defmodule EngramWeb.BillingController do
 
     json(conn, %{
       tier: to_string(Billing.tier(user)),
-      usage: %{
-        notes: used_limit(meters.notes, Billing.cap(user, :notes_cap)),
-        vaults: used_limit(Vaults.count_for(user), Billing.cap(user, :vaults_cap)),
-        attachment_bytes:
-          used_limit(
-            storage_used_bytes(user),
-            Billing.cap(user, :attachment_bytes_cap)
-          ),
-        # COMPAT SHIM: the lifetime cap is gone (Free has the refilling
-        # `embed_bucket` below), so this is a plain counter with no limit.
-        lifetime_embed_tokens: used_limit(meters.lifetime_embed_tokens, nil),
-        embed_bucket: embed_bucket(user),
-        # COMPAT SHIM, remove in a later contract PR. Plugins from before the
-        # search-coverage cap removal render a "Notes searchable" row from
-        # this; `limit: nil` (uncapped) hides it there. Every stored note is
-        # searchable, so `used` is the stored count.
-        indexed_notes: %{used: meters.notes, limit: nil},
-        # `used` is nil on purpose. The budget lives in the cluster-synced ETS
-        # counter (`EngramWeb.RateLimiter`), which is a Hammer bucket with no
-        # read-without-spend API — asking how much is left must not consume any.
-        # The cap itself is still worth publishing so the UI can name the limit
-        # in an upgrade prompt; the refusal carries the same key.
-        ai_searches: %{
-          used: nil,
-          limit: cap_json(Billing.cap(user, :ai_searches_per_day))
+      usage:
+        %{
+          notes: used_limit(meters.notes, Billing.cap(user, :notes_cap)),
+          vaults: used_limit(Vaults.count_for(user), Billing.cap(user, :vaults_cap)),
+          attachment_bytes:
+            used_limit(
+              storage_used_bytes(user),
+              Billing.cap(user, :attachment_bytes_cap)
+            ),
+          # COMPAT SHIM: the lifetime cap is gone (Free has the refilling
+          # `embed_bucket` below), so this is a plain counter with no limit.
+          lifetime_embed_tokens: used_limit(meters.lifetime_embed_tokens, nil),
+          embed_bucket: embed_bucket(user),
+          # COMPAT SHIM, remove in a later contract PR. Plugins from before the
+          # search-coverage cap removal render a "Notes searchable" row from
+          # this; `limit: nil` (uncapped) hides it there. Every stored note is
+          # searchable, so `used` is the stored count.
+          indexed_notes: %{used: meters.notes, limit: nil},
+          # `used` is nil on purpose. The budget lives in the cluster-synced ETS
+          # counter (`EngramWeb.RateLimiter`), which is a Hammer bucket with no
+          # read-without-spend API — asking how much is left must not consume any.
+          # The cap itself is still worth publishing so the UI can name the limit
+          # in an upgrade prompt; the refusal carries the same key.
+          ai_searches: %{
+            used: nil,
+            limit: cap_json(Billing.cap(user, :ai_searches_per_day))
+          }
         }
-      }
+        |> Map.merge(index_budget_usage(user))
     })
+  end
+
+  # The v5 index budget (review H3, "no invisible limits"): the account's
+  # search points against `index_points_cap`, and how many notes are on
+  # keyword-only search (the floor tier). Only with the budget on
+  # (`Indexing.budget_enabled?/0`): off, the response is main's, and no
+  # count over the user's chunks runs on every call.
+  defp index_budget_usage(user) do
+    if Engram.Indexing.budget_enabled?() do
+      %{
+        index_points:
+          used_limit(Engram.Indexing.point_count(user.id), Billing.cap(user, :index_points_cap)),
+        floor_notes: Engram.Indexing.floor_note_count(user.id)
+      }
+    else
+      %{}
+    end
   end
 
   defp used_limit(used, limit), do: %{used: used, limit: cap_json(limit)}
@@ -223,7 +242,10 @@ defmodule EngramWeb.BillingController do
       },
       customer_email: user.email,
       custom_data: %{user_id: user.id},
-      vaults_cap: cap_json(Billing.cap(user, :vaults_cap))
+      vaults_cap: cap_json(Billing.cap(user, :vaults_cap)),
+      # Which note-cap set is enforced ("legacy" or "v5"): the plan cards
+      # show the copy for it (`LimitKeys.plan_limits/0`).
+      plan_limits: Engram.Billing.LimitKeys.plan_limits()
     })
   end
 

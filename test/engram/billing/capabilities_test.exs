@@ -7,6 +7,8 @@ defmodule Engram.Billing.CapabilitiesTest do
 
   alias Engram.Billing
   alias Engram.Billing.EntitlementCache
+  alias Engram.Billing.LimitKeys
+  alias Engram.IndexBudgetHelpers
 
   setup do
     on_exit(fn -> EntitlementCache.evict_all() end)
@@ -54,7 +56,7 @@ defmodule Engram.Billing.CapabilitiesTest do
     user = insert(:user)
     caps = Billing.capabilities(user)
 
-    expected_keys = Enum.map(Engram.Billing.LimitKeys.all(), &Atom.to_string/1)
+    expected_keys = Enum.map(LimitKeys.all(), &Atom.to_string/1)
     assert Enum.sort(Map.keys(caps.limits)) == Enum.sort(expected_keys)
 
     Enum.each(caps.limits, fn {_key, v} ->
@@ -83,5 +85,30 @@ defmodule Engram.Billing.CapabilitiesTest do
     caps = Billing.capabilities(user)
     assert caps.tier == "pro"
     assert caps.limits["notes_cap"] == nil
+  end
+
+  # The v5 go flag (INDEX_BUDGET_ENABLED) switches the note caps for every
+  # reader at once; at its default they are main's.
+  describe "v5 plan limits" do
+    test "default: main's note caps" do
+      assert Billing.capabilities(insert(:user)).limits["notes_cap"] == 3_000
+      assert LimitKeys.plan_limits() == :legacy
+    end
+
+    test "flag on: the 2026-10-19 note caps", _ctx do
+      IndexBudgetHelpers.enable_index_budget()
+      assert LimitKeys.plan_limits() == :v5
+
+      free = insert(:user)
+      starter = insert(:user)
+      insert(:subscription, user: starter, tier: "starter", status: "active")
+      pro = insert(:user)
+      insert(:subscription, user: pro, tier: "pro", status: "active")
+
+      assert Billing.capabilities(free).limits["notes_cap"] == 2_000
+      assert Billing.capabilities(starter).limits["notes_cap"] == 20_000
+      assert Billing.capabilities(pro).limits["notes_cap"] == 40_000
+      assert Billing.tier_cap(:pro, :notes_cap) == 40_000
+    end
   end
 end

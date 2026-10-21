@@ -1,6 +1,8 @@
 defmodule Engram.Vector.QdrantTest do
   use ExUnit.Case, async: true
 
+  import Engram.QdrantFilterView
+
   import ExUnit.CaptureLog
 
   alias Engram.ServiceConfig
@@ -224,7 +226,7 @@ defmodule Engram.Vector.QdrantTest do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/delete", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
-        conditions = decoded["filter"]["must"]
+        conditions = legacy_view(decoded["filter"]["must"])
         keys = Enum.map(conditions, & &1["key"])
 
         assert length(conditions) == 2
@@ -269,7 +271,7 @@ defmodule Engram.Vector.QdrantTest do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/delete", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
-        keys = Enum.map(decoded["filter"]["must"], & &1["key"])
+        keys = Enum.map(legacy_view(decoded["filter"]["must"]), & &1["key"])
 
         refute "source_path" in keys
 
@@ -291,7 +293,7 @@ defmodule Engram.Vector.QdrantTest do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/delete", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
-        conditions = decoded["filter"]["must"]
+        conditions = legacy_view(decoded["filter"]["must"])
         keys = Enum.map(conditions, & &1["key"])
         assert "user_id" in keys
         assert "vault_id" in keys
@@ -353,7 +355,7 @@ defmodule Engram.Vector.QdrantTest do
         assert decoded["exact"] == true
         # Tenant triple is mandatory (#755) — a regression dropping user_id or
         # vault_id would silently count across tenants.
-        must = decoded["filter"]["must"]
+        must = legacy_view(decoded["filter"]["must"])
         assert %{"key" => "user_id", "match" => %{"value" => "7"}} in must
         assert %{"key" => "vault_id", "match" => %{"value" => "9"}} in must
         assert %{"key" => "path_hmac", "match" => %{"value" => "oldp=="}} in must
@@ -468,7 +470,7 @@ defmodule Engram.Vector.QdrantTest do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
-        conditions = decoded["filter"]["must"]
+        conditions = legacy_view(decoded["filter"]["must"])
 
         cond = Enum.find(conditions, &(&1["key"] == "folder_hmac"))
         assert cond, "expected a folder_hmac filter, got #{inspect(conditions)}"
@@ -493,7 +495,7 @@ defmodule Engram.Vector.QdrantTest do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
-        conditions = decoded["filter"]["must"]
+        conditions = legacy_view(decoded["filter"]["must"])
 
         cond = Enum.find(conditions, &(&1["key"] == "tags_hmac"))
         assert cond, "expected a tags_hmac filter, got #{inspect(conditions)}"
@@ -680,11 +682,12 @@ defmodule Engram.Vector.QdrantTest do
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
 
-        assert decoded["with_payload"] == true
+        # Task 15.7: no payload unless the caller names the keys.
+        assert decoded["with_payload"] == false
         assert decoded["with_vector"] == false
         assert decoded["limit"] == 200
 
-        filter = decoded["filter"]["must"]
+        filter = legacy_view(decoded["filter"]["must"])
         assert length(filter) == 1
         assert hd(filter)["key"] == "user_id"
         assert hd(filter)["match"]["value"] == 42
@@ -933,7 +936,7 @@ defmodule Engram.Vector.QdrantTest do
 
         assert decoded["payload"] == %{"path_hmac" => "newp==", "folder_hmac" => "newf=="}
 
-        must = decoded["filter"]["must"]
+        must = legacy_view(decoded["filter"]["must"])
         assert %{"key" => "user_id", "match" => %{"value" => "7"}} in must
         assert %{"key" => "vault_id", "match" => %{"value" => "9"}} in must
         assert %{"key" => "path_hmac", "match" => %{"value" => "oldp=="}} in must
@@ -972,7 +975,7 @@ defmodule Engram.Vector.QdrantTest do
     test "scopes the PATCH to the caller's user_id/vault_id (no cross-tenant)", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
-        must = Jason.decode!(body)["filter"]["must"]
+        must = legacy_view(Jason.decode!(body)["filter"]["must"])
 
         assert %{"key" => "user_id", "match" => %{"value" => "7"}} in must
         assert %{"key" => "vault_id", "match" => %{"value" => "9"}} in must

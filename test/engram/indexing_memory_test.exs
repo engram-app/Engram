@@ -79,6 +79,9 @@ defmodule Engram.IndexingMemoryTest do
   end
 
   test "indexing a 2,000-chunk note stays under a 60 MB heap", %{user: user, vault: vault} do
+    # Self-host shape: no per-note cap, so all 2,000 points are built.
+    insert(:user_limit_override, user: user, key: "note_points_cap", value: %{"v" => 10_000})
+
     stub(Engram.MockEmbedder, :embed_texts, fn texts ->
       {:ok, Enum.map(texts, fn _ -> random_vector() end)}
     end)
@@ -123,6 +126,9 @@ defmodule Engram.IndexingMemoryTest do
   # 40 MB; 80 MB leaves room for GC/OTP variance.
   @tag timeout: :timer.minutes(5)
   test "a wide-vocabulary note's sparse vectors stay off the heap", %{user: user, vault: vault} do
+    # Self-host shape: no per-note cap, so all 2,000 points are built.
+    insert(:user_limit_override, user: user, key: "note_points_cap", value: %{"v" => 10_000})
+
     stub(Engram.MockEmbedder, :embed_texts, fn texts ->
       {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
     end)

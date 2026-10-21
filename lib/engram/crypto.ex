@@ -886,6 +886,48 @@ defmodule Engram.Crypto do
   end
 
   @doc """
+  Seals a chunk's display text and heading for its `chunks` row as ONE
+  envelope, `display_ct` (Task 11.1, hybrid design: only notes at or over
+  `Engram.Indexing.display_ct_threshold/0` (32 KB) store one; smaller notes slice
+  their text from the note content). Layout: `<<nonce_len::8, nonce,
+  ciphertext>>`, the plaintext JSON `{"h": heading, "t": text}`, zstd per the
+  envelope policy. AAD binds the column and the point id
+  (`aad_for_row(:chunks, :display, point_id)`), the DEK binds the user; the
+  point id, not the row id, because a reused point keeps its id across passes.
+  """
+  @spec encrypt_chunk_text(binary(), String.t() | [String.t()] | nil, <<_::256>>, binary()) ::
+          %{display_ct: binary()}
+  def encrypt_chunk_text(text, heading, <<_::256>> = dek, point_id) when is_binary(text) do
+    plaintext = Jason.encode!(%{"h" => heading, "t" => text})
+    {ct, nonce} = Envelope.encrypt(plaintext, dek, aad_for_row(:chunks, :display, point_id))
+    %{display_ct: <<byte_size(nonce)::8, nonce::binary, ct::binary>>}
+  end
+
+  @doc """
+  Inverse of `encrypt_chunk_text/4` for one row: `:none` when the row has no
+  envelope, `:error` when it does not open under this DEK and point id.
+  """
+  @spec decrypt_chunk_text(map(), <<_::256>>, binary()) ::
+          {:ok, {String.t(), String.t() | [String.t()] | nil}} | :none | :error
+  def decrypt_chunk_text(%{display_ct: nil}, _dek, _point_id), do: :none
+
+  def decrypt_chunk_text(
+        %{display_ct: <<n::8, nonce::binary-size(n), ct::binary>>},
+        <<_::256>> = dek,
+        point_id
+      ) do
+    with {:ok, json} <-
+           Envelope.decrypt(ct, nonce, dek, aad_for_row(:chunks, :display, point_id)),
+         {:ok, %{"h" => heading, "t" => text}} when is_binary(text) <- Jason.decode(json) do
+      {:ok, {text, heading}}
+    else
+      _ -> :error
+    end
+  end
+
+  def decrypt_chunk_text(_row, _dek, _point_id), do: :error
+
+  @doc """
   Decrypts a list of Qdrant search candidates in-place. Phase B.4:
   encryption is mandatory, so every candidate with a known vault is
   expected to carry ciphertext.
@@ -997,11 +1039,16 @@ defmodule Engram.Crypto do
   # before this PR have neither key — fall back to empty AAD. `collection`
   # may be nil when callers haven't been threaded through yet (legacy reads
   # only); empty AAD applies in that case too.
+  #
+  # Task 15.7: a v5 point stores no `aad_version`; the v5 payload format
+  # (`format: :v5`, set by `Qdrant` from the short keys) implies it is bound.
+  # v3/v4 points still read through their stored `aad_version`.
   defp qdrant_aad(candidate, collection, field) do
     aad_version = Map.get(candidate, :aad_version)
     qdrant_id = Map.get(candidate, :qdrant_id)
+    bound? = Map.get(candidate, :format) == :v5 or aad_version_aad_bound?(aad_version)
 
-    if is_binary(collection) and is_binary(qdrant_id) and aad_version_aad_bound?(aad_version),
+    if is_binary(collection) and is_binary(qdrant_id) and bound?,
       do: aad_for_qdrant(collection, qdrant_id, field),
       else: <<>>
   end

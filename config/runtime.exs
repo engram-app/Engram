@@ -101,6 +101,28 @@ if config_env() == :dev do
   config :logger, level: String.to_existing_atom(System.get_env("LOG_LEVEL", "debug"))
 end
 
+# Model per plan (SaaS, billing on, `EMBED_MODELS_PER_PLAN=true`):
+# `{DOC,QUERY}_EMBED_MODEL_{FREE,STARTER,PRO}`.
+# Only the set ones are configured; an unset or blank plan reads its default
+# in `Engram.EmbedModels` (`plan_defaults/0`, the one copy: Free
+# voyage-4-lite, Starter and Pro voyage-4-large). Self-host ignores them.
+plan_models = fn prefix ->
+  for plan <- [:free, :starter, :pro],
+      model = System.get_env("#{prefix}_#{String.upcase(to_string(plan))}", "") |> String.trim(),
+      model != "",
+      into: %{},
+      do: {plan, model}
+end
+
+# The switch: unset or anything but "true" keeps one model for every plan
+# (the global ones), as before v5. Flipped at v5 go time.
+if per_plan = System.get_env("EMBED_MODELS_PER_PLAN") do
+  config :engram, :embed_models_per_plan, per_plan == "true"
+end
+
+config :engram, :plan_doc_embed_models, plan_models.("DOC_EMBED_MODEL")
+config :engram, :plan_query_embed_models, plan_models.("QUERY_EMBED_MODEL")
+
 if config_env() != :test do
   # Storage backend. Default "s3" is the SaaS/prod path (AWS S3) and the
   # standard self-host path (MinIO). "database" is a self-host-only convenience
@@ -333,6 +355,65 @@ case qdrant_switch.("QDRANT_MANAGE_QUOTAS") do
   on? -> config :engram, :qdrant_manage_quotas, on?
 end
 
+# true = the keyword leg computes IDF over the user's own points (Qdrant
+# 1.19+, users with >= :tenant_idf_min_points points). Default false: it
+# changes keyword ranking, so it is flipped at v5 go time, and false here
+# turns it off again without a deploy.
+case qdrant_switch.("TENANT_IDF") do
+  nil -> :ok
+  on? -> config :engram, :tenant_idf, on?
+end
+
+# v5 rebuild tuning (INFRA-5 sets these on the web and worker task defs).
+# Unset, nothing is configured and each reader's default applies: 0.2, 0.25,
+# 1_000, true and [] (today's behaviour). A malformed value refuses to boot.
+unit_fraction = fn var ->
+  with v when is_binary(v) <- System.get_env(var) do
+    case Float.parse(v) do
+      {f, ""} when f >= 0 and f <= 1 -> f
+      _ -> raise "#{var} must be a number from 0 to 1, got #{inspect(v)}"
+    end
+  end
+end
+
+# Qdrant optimizer `deleted_threshold` on the collection (`QdrantLayout`).
+if threshold = unit_fraction.("QDRANT_DELETED_THRESHOLD") do
+  config :engram, :qdrant_deleted_threshold, threshold
+end
+
+# BM25 `b` for merged (capped) chunks (`Indexing`).
+if b = unit_fraction.("BM25_B_MERGED") do
+  config :engram, :bm25_b_merged, b
+end
+
+# Points a user needs before TENANT_IDF computes IDF over their own points.
+if min_points = System.get_env("TENANT_IDF_MIN_POINTS") do
+  case Integer.parse(min_points) do
+    {n, ""} when n >= 0 -> config :engram, :tenant_idf_min_points, n
+    _ -> raise "TENANT_IDF_MIN_POINTS must be a non-negative integer, got #{inspect(min_points)}"
+  end
+end
+
+# true = filters also match the v3 `*_hmac` payload fields; false only after
+# the v5 pass has rewritten every point (PR-18).
+case qdrant_switch.("LEGACY_FILTER_FIELDS") do
+  nil -> :ok
+  on? -> config :engram, :legacy_filter_fields, on?
+end
+
+# Comma-separated user ids the v5 pass rebuilds last (`Rebuild.rebuild_order/1`).
+if last_users = System.get_env("REBUILD_LAST_USERS") do
+  ids =
+    for id <- last_users |> String.split(",") |> Enum.map(&String.trim/1), id != "" do
+      case Ecto.UUID.cast(id) do
+        {:ok, uuid} -> uuid
+        :error -> raise "REBUILD_LAST_USERS must be comma-separated user ids, got #{inspect(id)}"
+      end
+    end
+
+  config :engram, :rebuild_last_users, ids
+end
+
 # false = EmbedNote never pauses for Qdrant pressure before paying Voyage.
 case qdrant_switch.("QDRANT_BACKPRESSURE_PREFLIGHT") do
   nil -> :ok
@@ -563,6 +644,27 @@ end
 # rather than a per-node remote-console `Application.put_env` — that was the
 # explicit ask in #1004. The queue-depth gauge shipped (#1487); the alarm in
 # #1004 is still open.
+# The v5 index budget (`Engram.Indexing.budget_enabled?/0`): per-note cap
+# merge, points budget and floor, the 04:00 UTC recap and budget sweeps.
+# Off until the v5 pass completes; turned on with the v5 stamp.
+if budget = System.get_env("INDEX_BUDGET_ENABLED") do
+  config :engram, :index_budget_enabled, budget == "true"
+end
+
+# The one-time v5 index rebuild switch (`Engram.Rebuild`, chunker v5 Task
+# 16.1): `off` (default), `dry_run` or `on`. Off, a stamp bump rebuilds
+# nothing and nothing reads the rebuild tables.
+if rebuild = System.get_env("INDEX_REBUILD") do
+  config :engram, :index_rebuild, rebuild
+end
+
+# The encrypted per-user vector cache (`Engram.Indexing.VectorCache`, chunker
+# v5 Task 12): a text is paid to Voyage once. Off by default; off, the embed
+# path never reads or writes `embedding_cache`.
+if cache = System.get_env("VECTOR_CACHE_ENABLED") do
+  config :engram, :vector_cache_enabled, cache == "true"
+end
+
 if pacing = System.get_env("FANOUT_PACING_ENABLED") do
   config :engram, :fanout_pacing_enabled, pacing == "true"
 end

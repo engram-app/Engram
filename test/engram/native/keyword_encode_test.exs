@@ -31,6 +31,20 @@ defmodule Engram.Native.KeywordEncodeTest do
     assert Tokenizer.tokens("running dogs", :xx) == ["running", "dogs"]
   end
 
+  # A b outside [0, 1] or a cap below 1 gives a zero or negative norm, so
+  # inf, NaN or negative weights: refused before the NIF runs.
+  test "encode_documents refuses out-of-range b and cap" do
+    for opts <- [[b: 1.5], [b: -0.1], [b: nil], [cap: 0.5], [cap: 0], [cap: "3"]] do
+      assert_raise ArgumentError, fn ->
+        Engram.Native.encode_documents(["hello world"], @key, 3.0, nil, opts)
+      end
+    end
+
+    for opts <- [[b: 0], [b: 1], [cap: 1], [cap: 3], [cap: nil]] do
+      assert [{_, _, 2}] = Engram.Native.encode_documents(["hello world"], @key, 3.0, nil, opts)
+    end
+  end
+
   describe "memory standard" do
     # Peak per byte is input-shape dependent (measured up to ~30x for one huge
     # CJK word), so callers bound the INPUT: chunks are at most 2 KB, a call
@@ -40,7 +54,7 @@ defmodule Engram.Native.KeywordEncodeTest do
             [String.duplicate("a", 2_000_000)],
             for(i <- 1..2_000, do: "chunk #{i} " <> String.duplicate("word#{i} ", 100))
           ] do
-        {_, peak} = Engram.Native.encode_documents_nif(texts, @key, 300.0, "en")
+        {_, peak} = Engram.Native.encode_documents_nif(texts, @key, 300.0, "en", 0.75, nil)
         assert peak <= 4 * :erlang.iolist_size(texts) + 65_536
       end
     end
@@ -49,7 +63,7 @@ defmodule Engram.Native.KeywordEncodeTest do
       texts = for i <- 1..20, do: "note #{i} running fast and far"
 
       Engram.NativeLeak.assert_no_leak(fn ->
-        Engram.Native.encode_documents_nif(texts, @key, 300.0, "en")
+        Engram.Native.encode_documents_nif(texts, @key, 300.0, "en", 0.75, nil)
       end)
     end
 

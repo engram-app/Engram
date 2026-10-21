@@ -252,18 +252,23 @@ export default {
 	"You're on this plan": "Používáte tento tarif",
 	"Start free trial": "Začněte bezplatnou zkušební verzi",
 	Popular: "Oblíbené",
+	"2,000 notes · 20 AI searches a day · 1 vault":
+		"2 000 poznámek · 20 AI vyhledávání denně · 1 trezor",
 	"3,000 notes · 20 AI searches a day · 1 vault":
 		"3 000 poznámek · 20 AI vyhledávání denně · 1 trezor",
+	"2,000 notes, all searchable": "2 000 poznámek, všechny vyhledávatelné",
 	"3,000 notes, all searchable": "3 000 poznámek, vše vyhledávatelné",
 	"20 AI searches a day": "20 AI vyhledávání denně",
 	"1 vault": "1 trezor",
 	"1 GB attachments": "1 GB příloh",
 	"2 devices": "2 zařízení",
+	"20,000 notes": "20 000 poznámek",
 	"10 vaults": "10 trezorů",
 	"Unlimited devices": "Neomezený počet zařízení",
 	"10 GB attachments": "10 GB příloh",
 	"Unlimited AI searches": "Neomezený počet AI vyhledávání",
 	"Unlimited vaults": "Neomezený počet trezorů",
+	"40,000 notes": "40 000 poznámek",
 	"50 GB attachments": "50 GB příloh",
 	"Cross-vault search": "Vyhledávání mezi trezory",
 	"Loading plan options…": "Načítání možností tarifu…",
@@ -303,6 +308,33 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Používáte bezplatnou zkušební verzi. Paddle, náš platební procesor, neumožňuje změny plánu během zkušební verze – vaše zkušební verze končí dne {date}.",
 	Upgrade: "Aktualizovat",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Dosařili jste limit {cap} poznámek. Nové poznámky se nebudou synchronizovat, dokud neprovedete upgrade nebo neodstraníte některé.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Využili jste {percent}% z celkového počtu {cap} poznámek. Při dosažení {cap} se nové poznámky nebudou synchronizovat, dokud neprovedete upgrade nebo neodstraníte některé.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Využili jste {percent}% z celkového počtu {cap} pasáží pro úplné vyhledávání. Pokud překročíte toto množství, starší poznámky se budou vyhledávat pouze podle klíčových slov (přesné výrazy, ne význam). Nic se nemaže.",
+	"See usage": "Zobrazit využití",
+	Usage: "Využití",
+	"Notes: {used}": "Poznámky: {used}",
+	"Notes: {used} of {cap}": "Poznámky: {used} z {cap}",
+	"Full search: {used} of {cap} passages": "Úplné vyhledávání: {used} z {cap} pasáží",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Pasáž je jedna vyhledávací část poznámky. Pokud překročíte toto množství, starší poznámky se budou vyhledávat pouze podle klíčových slov (přesné výrazy, ne význam). Nic se nemaže.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			one: "Vaše možnosti vyhledávání jsou vyčerpány. Nalezena je {count} starší poznámka pouze podle klíčových slov (přesné výrazy, ne význam). Nic nebylo smazáno. Upgradujte pro obnovení plného vyhledávání.",
+			few: "Vaše možnosti vyhledávání jsou vyčerpány. {count} starší poznámky byly nalezeny pouze podle klíčových slov (přesné výrazy, ne význam). Nic nebylo smazáno. Upgradujte pro obnovení plného vyhledávání.",
+			many: "Vaše možnosti vyhledávání jsou vyčerpány. {count} starší poznámky jsou nalezeny pouze podle klíčových slov (přesné výrazy, ne význam). Nic není smazáno. Aktualizujte si účet a získejte zpět plné vyhledávání.",
+			other:
+				"Vaše možnosti vyhledávání jsou vyčerpány. Bylo nalezeno {count} starších poznámek pouze podle klíčových slov (přesné výrazy, ne význam). Nic nebylo smazáno. Upgradujte pro obnovení plného vyhledávání.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		one: "Nalezena {count} poznámka pouze podle zadaného klíčového slova (přesné shoda, ne význam).",
+		few: "Nalezeno {count} poznámky, které obsahují zadané klíčové slovo (přesné shoda, ne význam).",
+		many: "{count} Poznámky jsou nalezeny pouze podle klíčových slov (přesné výrazy, ne význam).",
+		other: "Nalezeno {count} poznámek pouze podle klíčových slov (přesné výrazy, ne význam).",
+	},
 	"All vaults, including ones you create later":
 		"Všechny trezory, včetně těch, které vytvoříte později",
 	"All current vaults": "Všechny aktuální trezory",
@@ -433,11 +465,21 @@ export default {
 	"a list, or one name": "seznam nebo jedno jméno",
 	"Topics. Browsable and searchable across the vault.":
 		"Témata. Procházení a vyhledávání v rámci trezoru.",
-	"A one-line summary of the note.": "Stručný popis poznámky.",
-	"The thing the note is about — usually a URL.": "O čem poznámka je – obvykle URL.",
+	"Where the note stands, such as draft or stable.":
+		"Umístění poznámky, například návrh nebo finální verze.",
+	"Who wrote the note, a person or an agent.": "Autor poznámky, osoba nebo agent.",
+	"Who last checked the note.": "Kdo naposledy zkontroloval poznámku.",
+	"What the note is based on, usually a URL.": "Na čem je poznámka založena, obvykle URL.",
+	"The project the note belongs to.": "Projekt, ke kterému poznámka patří.",
 	"a date (YYYY-MM-DD)": "datum (RRRR-MM-DD)",
 	"When the note came into being.": "Kdy byla poznámka vytvořena.",
 	"When it last changed.": "Kdy byla naposledy změněna.",
+	"When it was last checked.": "Kdy byla poznámka naposledy zkontrolována.",
+	"When the note goes out of date.": "Kdy poznámka přestane být aktuální.",
+	"When the work in the note is due.": "Kdy je práce v poznámce splněna.",
+	"a number": "číslo",
+	"How much the note matters, as a number.": "Důležitost poznámky, jako číslo.",
+	"A one-line summary of the note.": "Stručný popis poznámky.",
 	"Link Obsidian Vault": "Propojit trezor Obsidian",
 	"Please sign in to link your Obsidian vault.":
 		"Přihlaste se, abyste mohli propojit svůj trezor Obsidian.",
@@ -1400,8 +1442,11 @@ export default {
 	frontmatter: "frontmatter",
 	reads: "čte",
 	"{what} Wants {expectsLabel}.": "{what} chce {expectsLabel}.",
+	"use {alias} or {key}": "použijte {alias} nebo {key}",
 	"also accepts {aliases}": "také přijímá {aliases}",
 	or: "nebo",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Vnořené jméno, jako je {example}, nelze upravit zde ani v Obsidian; lze jej upravit pouze přímo, pomocí MCP nebo pomocí AI.",
 	Properties: "Vlastnosti",
 	"About properties": "O vlastnostech",
 	"Property name": "Název vlastnosti",

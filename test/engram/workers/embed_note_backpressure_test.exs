@@ -265,7 +265,7 @@ defmodule Engram.Workers.EmbedNoteBackpressureTest do
         note,
         vault,
         user,
-        opts.(fn _count, _dense? -> raise "chunk insert blew up" end)
+        opts.(fn _count, _dense?, _pass -> raise "chunk insert blew up" end)
       )
     end
 
@@ -276,7 +276,7 @@ defmodule Engram.Workers.EmbedNoteBackpressureTest do
                note,
                vault,
                user,
-               opts.(fn _count, _dense? -> :ok end)
+               opts.(fn _count, _dense?, _pass -> :ok end)
              )
 
     refute_received {:reserved, _}
@@ -320,7 +320,7 @@ defmodule Engram.Workers.EmbedNoteBackpressureTest do
         note,
         vault,
         user,
-        opts.(fn _count, _dense?, _deferred -> raise "chunk insert blew up" end)
+        opts.(fn _count, _dense?, _pass -> raise "chunk insert blew up" end)
       )
     end
 
@@ -332,7 +332,7 @@ defmodule Engram.Workers.EmbedNoteBackpressureTest do
                note,
                vault,
                user,
-               opts.(fn _count, _dense?, deferred ->
+               opts.(fn _count, _dense?, %{deferred_tokens: deferred} ->
                  send(test_pid, {:deferred, deferred})
                  :ok
                end)

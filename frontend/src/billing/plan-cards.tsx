@@ -5,7 +5,7 @@ import { msg } from "@/i18n/msg";
 import type { Translate } from "@/i18n/translate";
 import type { MsgKey } from "@/i18n/ui-text";
 import { cn } from "@/lib/utils";
-import type { BillingCadence } from "../api/queries";
+import { type BillingCadence, useBillingConfig } from "../api/queries";
 
 // Feature checklist shared by the full card and the accordion row. `className`
 // merges extra layout (e.g. `flex-1` on the full card).
@@ -24,6 +24,83 @@ function FeatureList({ features, className }: { features: readonly MsgKey[]; cla
 		</ul>
 	);
 }
+
+interface FreeTierCopy {
+	name: MsgKey;
+	price: string;
+	summary: MsgKey;
+	features: readonly MsgKey[];
+}
+
+// Free tier display copy. Not a PlanTier (no Paddle price / checkout), but
+// centralized here alongside the paid catalog so the onboarding accordion and
+// the desktop free-link can't drift. Every stored note is searchable; the
+// upgrade levers are the daily AI search limit and more vaults (and, with the
+// v5 caps, more notes), so those are what the summary states.
+const FREE_REST = [
+	msg("20 AI searches a day"),
+	msg("1 vault"),
+	msg("1 GB attachments"),
+	msg("2 devices"),
+];
+
+const FREE_TIER: Record<PlanLimits, FreeTierCopy> = {
+	legacy: {
+		name: msg("Free"),
+		price: "$0",
+		summary: msg("3,000 notes · 20 AI searches a day · 1 vault"),
+		features: [msg("3,000 notes, all searchable"), ...FREE_REST],
+	},
+	v5: {
+		name: msg("Free"),
+		price: "$0",
+		summary: msg("2,000 notes · 20 AI searches a day · 1 vault"),
+		features: [msg("2,000 notes, all searchable"), ...FREE_REST],
+	},
+};
+
+// The note-cap line is the only difference between the sets: Starter 50,000
+// and Pro unlimited state none (legacy), the v5 caps state theirs.
+function planCatalog(limits: PlanLimits): Record<PlanTier, PlanCardCatalog> {
+	const v5 = limits === "v5";
+	return {
+		starter: {
+			name: msg("Starter"),
+			monthlyPrice: 7,
+			annualPrice: 70,
+			features: [
+				...(v5 ? [msg("20,000 notes")] : []),
+				msg("10 vaults"),
+				msg("Unlimited devices"),
+				msg("10 GB attachments"),
+				msg("Unlimited AI searches"),
+			],
+		},
+		pro: {
+			name: msg("Pro"),
+			monthlyPrice: 14,
+			annualPrice: 140,
+			// Lead with what is actually Pro-ONLY. Unlimited devices and unlimited
+			// AI searches are true here too, but they are table stakes on paid and
+			// listing them made Pro read as "Starter with more storage" at double
+			// the price. `cross_vault_search` is the key that is genuinely pro-true
+			// in `LimitKeys` (API access is every tier's since #1974). Reranking is also
+			// pro-only but ships with RERANKER_BACKEND unset, so it stays off this
+			// list until the backend is actually deployed.
+			features: [
+				msg("Unlimited vaults"),
+				...(v5 ? [msg("40,000 notes")] : []),
+				msg("50 GB attachments"),
+				msg("Cross-vault search"),
+			],
+		},
+	};
+}
+
+const PLAN_CATALOG: Record<PlanLimits, Record<PlanTier, PlanCardCatalog>> = {
+	legacy: planCatalog("legacy"),
+	v5: planCatalog("v5"),
+};
 
 interface PlanCardProps {
 	name: MsgKey;
@@ -67,24 +144,11 @@ export function formatPlanPrice(
 		: t("{price}/yr", { price: `$${catalog.annualPrice}` });
 }
 
-// Free tier display copy. Not a PlanTier (no Paddle price / checkout), but
-// centralized here alongside the paid catalog so the onboarding accordion and
-// the desktop free-link can't drift.
-export const FREE_TIER = {
-	name: msg("Free"),
-	price: "$0",
-	// Decision 2026-10-17: Free stores 3,000 notes and every one is
-	// searchable. The upgrade levers are the daily AI search limit and more
-	// vaults, so those are what the summary states.
-	summary: msg("3,000 notes · 20 AI searches a day · 1 vault"),
-	features: [
-		msg("3,000 notes, all searchable"),
-		msg("20 AI searches a day"),
-		msg("1 vault"),
-		msg("1 GB attachments"),
-		msg("2 devices"),
-	],
-} as const;
+// Which note caps the copy states: the set the backend enforces
+// (`/billing/config` `plan_limits`, `Engram.Billing.LimitKeys.plan_limits/0`).
+// "legacy" until the v5 go flag is on, and while the config loads, so a
+// card never promises caps the backend is not enforcing.
+export type PlanLimits = "legacy" | "v5";
 
 // Single catalog source-of-truth: both onboarding (trial signup) and the
 // change-plan panel read display prices from here. Keep in sync with the
@@ -92,32 +156,17 @@ export const FREE_TIER = {
 // memory project_pricing_model). Updating Paddle prices means updating here.
 export const PLAN_TIERS: readonly PlanTier[] = ["starter", "pro"];
 
-export const PLAN_CATALOG: Record<PlanTier, PlanCardCatalog> = {
-	starter: {
-		name: msg("Starter"),
-		monthlyPrice: 7,
-		annualPrice: 70,
-		features: [
-			msg("10 vaults"),
-			msg("Unlimited devices"),
-			msg("10 GB attachments"),
-			msg("Unlimited AI searches"),
-		],
-	},
-	pro: {
-		name: msg("Pro"),
-		monthlyPrice: 14,
-		annualPrice: 140,
-		// Lead with what is actually Pro-ONLY. Unlimited devices and unlimited
-		// AI searches are true here too, but they are table stakes on paid and
-		// listing them made Pro read as "Starter with more storage" at double
-		// the price. `cross_vault_search` is the key that is genuinely pro-true
-		// in `LimitKeys` (API access is every tier's since #1974). Reranking is also
-		// pro-only but ships with RERANKER_BACKEND unset, so it stays off this
-		// list until the backend is actually deployed.
-		features: [msg("Unlimited vaults"), msg("50 GB attachments"), msg("Cross-vault search")],
-	},
-};
+/** The plan copy for an enforced set; anything but "v5" reads as legacy. */
+export function planCopy(limits: PlanLimits | undefined) {
+	const set: PlanLimits = limits === "v5" ? "v5" : "legacy";
+	return { freeTier: FREE_TIER[set], catalog: PLAN_CATALOG[set] };
+}
+
+/** `planCopy/1` for the set `/billing/config` reports. */
+export function usePlanCopy() {
+	const { data } = useBillingConfig();
+	return planCopy(data?.plan_limits);
+}
 
 export function CadenceToggle({
 	cadence,

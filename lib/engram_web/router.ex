@@ -682,6 +682,7 @@ defmodule EngramWeb.Router do
     # Metadata
     get "/tags", TagsController, :index
     get "/types", TypesController, :index
+    get "/fields", FieldsController, :index
     get "/folders/explicit", FoldersController, :explicit
     get "/folders/list", FoldersController, :list
     get "/folders/by-id/:id/notes", FoldersController, :list_notes

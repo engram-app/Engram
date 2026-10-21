@@ -244,17 +244,21 @@ export default {
 	"You're on this plan": "このプランを利用中",
 	"Start free trial": "無料トライアル開始",
 	Popular: "人気",
+	"2,000 notes · 20 AI searches a day · 1 vault": "2000ノート · 1日20回AI検索 · 1つの保管庫",
 	"3,000 notes · 20 AI searches a day · 1 vault": "3000ノート · 1日20回AI検索 · 1つの保管庫",
+	"2,000 notes, all searchable": "2000ノート、すべて検索可能",
 	"3,000 notes, all searchable": "3000ノート、すべて検索可能",
 	"20 AI searches a day": "1日20回AI検索",
 	"1 vault": "1つの保管庫",
 	"1 GB attachments": "1 GBの添付ファイル",
 	"2 devices": "2台のデバイス",
+	"20,000 notes": "20000ノート",
 	"10 vaults": "10個の保管庫",
 	"Unlimited devices": "デバイス数無制限",
 	"10 GB attachments": "10 GBの添付ファイル",
 	"Unlimited AI searches": "AI検索数無制限",
 	"Unlimited vaults": "保管庫数無制限",
+	"40,000 notes": "40000ノート",
 	"50 GB attachments": "50 GBの添付ファイル",
 	"Cross-vault search": "保管庫間検索",
 	"Loading plan options…": "プランのオプションを読み込み中…",
@@ -294,6 +298,27 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"無料トライアル中です。支払い処理サービス Paddle では、トライアル期間中のプラン変更はできません。トライアルは {date} に終了します。",
 	Upgrade: "アップグレード",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"{cap}個のノートに達しました。新しいノートの同期は、アップグレードするかノートを削除するまで停止します。",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"{cap}個のノートのうち、{percent}%を使用しています。{cap}に達すると、新しいノートの同期は、アップグレードするかノートを削除するまで停止します。",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"フル検索可能な箇所は{cap}個のうち、{percent}%を使用しています。これを超えると、古いノートはキーワードでのみ検索されます（意味ではなく、完全一致）。何も削除されません。",
+	"See usage": "使用状況を確認",
+	Usage: "使用状況",
+	"Notes: {used}": "ノート: {used}個",
+	"Notes: {used} of {cap}": "ノート: {cap}個中 {used}個",
+	"Full search: {used} of {cap} passages": "フル検索: {cap}箇所中 {used}箇所",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"1つの箇所は、ノートの中で検索可能な部分です。これを超えると、古いノートはキーワードでのみ検索されます（意味ではなく、完全一致）。何も削除されません。",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			other:
+				"完全検索の利用回数が上限に達しました。{count}個の古いノートはキーワードでのみ検索可能です（意味ではなく、完全一致）。データは削除されません。完全検索を再利用するには、アップグレードしてください。",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		other: "キーワードで {count} 個のノートが見つかりました (意味ではなく、完全一致の単語)。",
+	},
 	"All vaults, including ones you create later":
 		"作成されたすべての保管庫（後で作成したものも含む）",
 	"All current vaults": "現在のすべての保管庫",
@@ -414,11 +439,20 @@ export default {
 	"a list, or one name": "リスト、または単一の名前",
 	"Topics. Browsable and searchable across the vault.":
 		"トピック。保管庫全体で閲覧・検索できます。",
-	"A one-line summary of the note.": "ノートの簡単な概要。",
-	"The thing the note is about — usually a URL.": "ノートの内容 — 通常はURL。",
+	"Where the note stands, such as draft or stable.": "ノートの状態（下書きなど）。",
+	"Who wrote the note, a person or an agent.": "ノートの作成者（個人またはエージェント）。",
+	"Who last checked the note.": "ノートを最後に確認した人。",
+	"What the note is based on, usually a URL.": "ノートの参照元（通常はURL）。",
+	"The project the note belongs to.": "ノートが属するプロジェクト。",
 	"a date (YYYY-MM-DD)": "日付 (YYYY-MM-DD)",
 	"When the note came into being.": "ノートが作成された日時。",
 	"When it last changed.": "最後に変更された日時。",
+	"When it was last checked.": "最後に確認した日時。",
+	"When the note goes out of date.": "ノートの有効期限。",
+	"When the work in the note is due.": "ノート内の作業の締め切り。",
+	"a number": "数字",
+	"How much the note matters, as a number.": "ノートの重要度（数値）。",
+	"A one-line summary of the note.": "ノートの簡単な概要。",
 	"Link Obsidian Vault": "Obsidian 保管庫へのリンク",
 	"Please sign in to link your Obsidian vault.":
 		"Obsidian 保管庫をリンクするには、サインインしてください。",
@@ -1311,8 +1345,11 @@ export default {
 	frontmatter: "フロントマター",
 	reads: "閲覧数",
 	"{what} Wants {expectsLabel}.": "{what} は {expectsLabel} を希望",
+	"use {alias} or {key}": "{alias}または{key}を使用します",
 	"also accepts {aliases}": "{aliases} も受け入れます",
 	or: "または",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"{example} のようなネストされた名前は、ここまたは Obsidian では編集できません。編集は MCP または AI によるもののみです。",
 	Properties: "プロパティ",
 	"About properties": "プロパティについて",
 	"Property name": "プロパティ名",

@@ -86,10 +86,15 @@ integration_excluded =
 vendor_conformance_excluded =
   if System.get_env("VENDOR_CONFORMANCE") == "1", do: [], else: [:vendor_conformance]
 
+# - :huge indexes 10 and 30 MB notes (test/engram/indexing_huge_notes_test.exs):
+#   minutes of CPU and ~250 MB a case. Its own CI job runs them → HUGE_TESTS=1.
+huge_excluded = if System.get_env("HUGE_TESTS") == "1", do: [], else: [:huge]
+
 case qdrant_excluded ++
        cluster_excluded ++
        integration_excluded ++
-       vendor_conformance_excluded do
+       vendor_conformance_excluded ++
+       huge_excluded do
   [] -> :ok
   excluded -> ExUnit.configure(exclude: excluded)
 end

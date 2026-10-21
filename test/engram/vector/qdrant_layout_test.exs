@@ -114,6 +114,14 @@ defmodule Engram.Vector.QdrantLayoutTest do
     end
   end
 
+  # The Task 8.1 graph and segment params, as 1.19.2 reads them back.
+  defp tenant_applied(config) do
+    config
+    |> update_in(["optimizer_config"], fn o ->
+      Map.merge(o, %{"max_segment_size" => 1_000_000, "deleted_threshold" => 0.2})
+    end)
+  end
+
   describe "desired/1" do
     test "PATCH body shape per sub-object on 1.18.2" do
       assert QdrantLayout.desired(@v1182) == %{
@@ -185,6 +193,23 @@ defmodule Engram.Vector.QdrantLayoutTest do
         |> put_in(["params", "vectors", "dense", "on_disk"], true)
         |> put_in(["params", "sparse_vectors", "keyword", "index"], %{"on_disk" => true})
         |> put_in(["optimizer_config", "max_optimization_threads"], 1)
+        |> tenant_applied()
+        |> put_in(["strict_mode_config"], %{
+          "enabled" => true,
+          "max_resident_memory_percent" => 85
+        })
+
+      assert QdrantLayout.diff(config, QdrantLayout.desired(@v1192)) == %{}
+    end
+
+    test "an existing float32 collection is not drift" do
+      config =
+        @prod_info["config"]
+        |> put_in(["params", "vectors", "dense", "on_disk"], true)
+        |> put_in(["params", "vectors", "dense", "datatype"], "float32")
+        |> put_in(["params", "sparse_vectors", "keyword", "index"], %{"on_disk" => true})
+        |> put_in(["optimizer_config", "max_optimization_threads"], 1)
+        |> tenant_applied()
         |> put_in(["strict_mode_config"], %{
           "enabled" => true,
           "max_resident_memory_percent" => 85
@@ -324,11 +349,14 @@ defmodule Engram.Vector.QdrantLayoutTest do
     test "a fresh collection is created with the storage params directly" do
       body = QdrantLayout.create_params(1024)
 
+      # float32 (no datatype) until the v5 payload format is on.
       assert body["vectors"]["dense"] == %{
                "size" => 1024,
                "distance" => "Cosine",
                "on_disk" => true
              }
+
+      assert QdrantLayout.create_params(1024, true)["vectors"]["dense"]["datatype"] == "float16"
 
       assert body["sparse_vectors"]["keyword"] == %{
                "modifier" => "idf",
@@ -336,6 +364,165 @@ defmodule Engram.Vector.QdrantLayoutTest do
              }
 
       assert body["optimizers_config"] == %{"max_optimization_threads" => 1}
+    end
+  end
+
+  # Task 8.1: on Qdrant >= 1.19.2 the graph is per tenant (`m: 0`,
+  # `payload_m: 16` over the `is_tenant` field) and every payload index sits
+  # on disk. Below it the layout is exactly today's, so the reconcile never
+  # PATCHes prod's 1.18.2 collection.
+  describe "tenant layout (Qdrant >= 1.19.2)" do
+    # GET /collections/{c} from Qdrant 1.19.2 after `Qdrant.ensure_collection`
+    # created it with the v5 format on (captured 2026-10-20).
+    @tenant_info "test/support/fixtures/qdrant/collection_info_tenant_1_19_2.json"
+                 |> File.read!()
+                 |> Jason.decode!()
+
+    @today_storage %{
+      "vectors" => %{"dense" => %{"on_disk" => true}},
+      "sparse_vectors" => %{
+        "keyword" => %{"modifier" => "idf", "index" => %{"on_disk" => true}}
+      },
+      "optimizers_config" => %{"max_optimization_threads" => 1}
+    }
+
+    test "below 1.19.2 the desired layout is today's" do
+      for v <- [@v1171, @v1181, @v1182, Version.parse!("1.19.1"), nil] do
+        assert Map.delete(QdrantLayout.desired(v), "strict_mode_config") == @today_storage
+        refute Map.has_key?(QdrantLayout.create_params(1024, true, v), "hnsw_config")
+
+        assert QdrantLayout.create_params(1024, true, v) ==
+                 QdrantLayout.create_params(1024, true)
+      end
+    end
+
+    @tenant_graph %{"m" => 0, "payload_m" => 16, "max_indexing_threads" => 1}
+
+    test "1.19.2 adds the segment limits; the global graph stays (m 16) by default" do
+      want = QdrantLayout.desired(@v1192)
+
+      refute Map.has_key?(want, "hnsw_config")
+
+      assert want["optimizers_config"] == %{
+               "max_optimization_threads" => 1,
+               "max_segment_size" => 1_000_000,
+               "deleted_threshold" => 0.2
+             }
+
+      body = QdrantLayout.create_params(1024, true, @v1192)
+      refute Map.has_key?(body, "hnsw_config")
+      assert body["optimizers_config"] == want["optimizers_config"]
+    end
+
+    test "the per-tenant graph only once tenant_graph? holds" do
+      want = QdrantLayout.desired(@v1192, nil, true, :self_host, true)
+      assert want["hnsw_config"] == @tenant_graph
+      assert "hnsw_config" in QdrantLayout.on_disk_keys()
+    end
+
+    test "deleted_threshold is sent as a float, so an integer config never drifts" do
+      Engram.ServiceConfig.put_override(:qdrant_deleted_threshold, 1)
+      assert QdrantLayout.desired(@v1192)["optimizers_config"]["deleted_threshold"] === 1.0
+    end
+
+    # The m 0 graph links a point only to points sharing its tenant value. While
+    # legacy `user_id` points and v5 `u` points coexist, one user is two
+    # disconnected subgraphs, so m 0 waits for Task 18.1's switch AND a
+    # collection whose `u` index really is the tenant index.
+    test "tenant_graph?: switch on, 1.19.2, and `u` indexed is_tenant" do
+      assert QdrantLayout.tenant_graph?(@tenant_info, @v1192, true)
+      refute QdrantLayout.tenant_graph?(@tenant_info, @v1192, false)
+      refute QdrantLayout.tenant_graph?(@tenant_info, @v1182, true)
+      refute QdrantLayout.tenant_graph?(@tenant_info, nil, true)
+
+      untenanted = put_in(@tenant_info, ["payload_schema", "u", "params", "is_tenant"], false)
+      refute QdrantLayout.tenant_graph?(untenanted, @v1192, true)
+
+      no_u = update_in(@tenant_info, ["payload_schema"], &Map.delete(&1, "u"))
+      refute QdrantLayout.tenant_graph?(no_u, @v1192, true)
+      refute QdrantLayout.tenant_graph?(@prod_info, @v1192, true)
+    end
+
+    # The fixture was captured with m 0 applied (the post-18.1 shape).
+    test "a 1.19.2 collection with the layout is no drift (no PATCH every boot)" do
+      config = @tenant_info["config"]
+
+      for strict? <- [true, false], deployment <- [:self_host, :cloud], graph? <- [true, false] do
+        want = QdrantLayout.desired(@v1192, nil, strict?, deployment, graph?)
+        assert Map.drop(QdrantLayout.diff(config, want), ["strict_mode_config"]) == %{}
+      end
+    end
+
+    test "today's prod shape on 1.19.2 never drifts on the graph without tenant_graph?" do
+      diff = QdrantLayout.diff(@prod_info["config"], QdrantLayout.desired(@v1192))
+      refute Map.has_key?(diff, "hnsw_config")
+    end
+
+    test "payload indexes below 1.19.2 are today's sets" do
+      legacy = ~w(user_id vault_id path_hmac type_hmac folder_hmac tags_hmac)
+
+      today =
+        Enum.map(legacy ++ ["note_id"], &{&1, "keyword"}) ++
+          [{"fm_timestamp", "integer"}, {"fm_created", "integer"}]
+
+      v5_today =
+        Enum.map(legacy, &{&1, "keyword"}) ++
+          [{"fm_timestamp", "integer"}, {"fm_created", "integer"}] ++
+          Engram.Vector.PayloadKeys.index_fields()
+
+      for v <- [@v1182, Version.parse!("1.19.1"), nil] do
+        assert QdrantLayout.payload_indexes(v, false) == today
+        assert QdrantLayout.payload_indexes(v, true) == v5_today
+      end
+    end
+
+    test "1.19.2: one tenant field, every index on disk, no other graph, no note_id" do
+      for v5? <- [false, true] do
+        indexes = Map.new(QdrantLayout.payload_indexes(@v1192, v5?))
+
+        refute Map.has_key?(indexes, "note_id")
+        assert Enum.all?(indexes, fn {_f, s} -> s["on_disk"] == true end)
+
+        # Legacy points keep their per-user graph (enable_hnsw default) while
+        # the pass runs; everything else builds no extra edges.
+        assert indexes["user_id"] == %{"type" => "keyword", "on_disk" => true}
+
+        for f <- ~w(vault_id path_hmac type_hmac folder_hmac tags_hmac) do
+          assert indexes[f] == %{"type" => "keyword", "on_disk" => true, "enable_hnsw" => false}
+        end
+
+        for f <- ~w(fm_timestamp fm_created) do
+          assert indexes[f] == %{
+                   "type" => "integer",
+                   "lookup" => false,
+                   "range" => true,
+                   "on_disk" => true,
+                   "enable_hnsw" => false
+                 }
+        end
+
+        if v5? do
+          assert indexes["u"] == %{"type" => "uuid", "is_tenant" => true, "on_disk" => true}
+
+          for {f, s} <- indexes, f not in ["u", "user_id"] do
+            assert s["enable_hnsw"] == false, "#{f} must not build HNSW edges"
+          end
+        else
+          refute Map.has_key?(indexes, "u")
+        end
+      end
+    end
+
+    test "the 1.19.2 GET echoes every index schema as created" do
+      schema = @tenant_info["payload_schema"]
+
+      for {field, want} <- QdrantLayout.payload_indexes(@v1192, true) do
+        have = schema[field]["params"]
+        assert have, "#{field} missing from the 1.19.2 fixture"
+        assert Enum.all?(want, fn {k, v} -> have[k] == v end), "#{field}: #{inspect(have)}"
+      end
+
+      assert map_size(schema) == length(QdrantLayout.payload_indexes(@v1192, true))
     end
   end
 

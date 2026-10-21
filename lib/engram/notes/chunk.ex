@@ -19,6 +19,9 @@ defmodule Engram.Notes.Chunk do
     # written before the column existed, and after a DEK rotation invalidates
     # the key; both read as "changed".
     field :context_hmac, :string
+    # Merged rows only: each member chunk's fingerprint, leading 16 hex
+    # chars. See `Engram.Indexing.cap_chunks/4`.
+    field :member_hmacs, {:array, :string}
 
     belongs_to :note, Engram.Notes.Note
     belongs_to :user, Engram.Accounts.User
@@ -36,6 +39,7 @@ defmodule Engram.Notes.Chunk do
       :token_count,
       :qdrant_point_id,
       :context_hmac,
+      :member_hmacs,
       :note_id,
       :user_id,
       :vault_id

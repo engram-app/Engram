@@ -60,6 +60,7 @@ defmodule Engram.MCP.Tools do
     "set_vault" => {"Check Vault", true, false, true},
     "search_notes" => {"Search Notes", true, false, true},
     "list_tags" => {"List Tags", true, false, true},
+    "list_fields" => {"List Fields", true, false, true},
     "list_folders" => {"List Folders", true, false, true},
     "list_folder" => {"List Folder Contents", true, false, true},
     "create_folder" => {"Create Folder", false, false, true},
@@ -108,6 +109,7 @@ defmodule Engram.MCP.Tools do
       list_vaults_def(),
       search_notes_def(),
       list_tags_def(),
+      list_fields_def(),
       list_folder_def(),
       create_folder_def(),
       suggest_folder_def(),
@@ -410,6 +412,30 @@ defmodule Engram.MCP.Tools do
             "description" =>
               "Optional frontmatter type to filter by (e.g. 'Playbook', 'Reference'); case-insensitive"
           },
+          "fields" => %{
+            "type" => "array",
+            "description" =>
+              "Optional filters on any frontmatter key, all must match: user-added keys " <>
+                "and the built-in status, author, reviewed_by, source, project, type, tags " <>
+                "(exact) and created, updated, reviewed, expires, due, priority (range). " <>
+                "op: eq, in (a list, at most 100), gt/gte/lt/lte (numbers or ISO dates), " <>
+                "after/before (ISO dates; a bare date is the whole UTC day). A quoted " <>
+                "number is text. created/updated fall back to the note's real times when " <>
+                "the key is missing. A key no note has is an error.",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "key" => %{"type" => "string"},
+                "op" => %{
+                  "type" => "string",
+                  "enum" => ~w(eq in gt gte lt lte after before),
+                  "default" => "eq"
+                },
+                "value" => %{}
+              },
+              "required" => ["key", "value"]
+            }
+          },
           "created_after" => %{
             "type" => "string",
             "description" =>
@@ -504,6 +530,76 @@ defmodule Engram.MCP.Tools do
         "required" => ["tags"]
       },
       handler: &Handlers.handle("list_tags", &1, &2, &3)
+    }
+  end
+
+  defp list_fields_def do
+    range = fn type ->
+      %{
+        "type" => ["object", "null"],
+        "properties" => %{"min" => %{"type" => type}, "max" => %{"type" => type}},
+        "required" => ["min", "max"]
+      }
+    end
+
+    %{
+      name: "list_fields",
+      description:
+        "List every frontmatter field used in the vault: its name, value kinds " <>
+          "(string, boolean, number, date), how many notes carry it, whether notes hold " <>
+          "a list of values, the number or date range, and the most used values with " <>
+          "counts. Call this before filtering search_notes by frontmatter: pass a field's " <>
+          "name as the key of a search_notes `fields` filter, with one of its values " <>
+          "(exact match) or a bound inside its range.",
+      inputSchema: %{"type" => "object", "properties" => %{}},
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "fields" => %{
+            "type" => "array",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "name" => %{
+                  "type" => "string",
+                  "description" => "The key to pass in a search_notes fields filter"
+                },
+                "kinds" => %{
+                  "type" => "array",
+                  "items" => %{"type" => "string", "enum" => ~w(string boolean number date)}
+                },
+                "list" => %{
+                  "type" => "boolean",
+                  "description" => "Some note holds several values for this field"
+                },
+                "note_count" => %{"type" => "integer", "description" => "Notes carrying it"},
+                "number_range" => range.("number"),
+                "date_range" =>
+                  Map.put(range.("string"), "description", "ISO dates or datetimes (UTC)"),
+                "values" => %{
+                  "type" => "array",
+                  "description" => "Most used exact values (at most 50), most notes first",
+                  "items" => %{
+                    "type" => "object",
+                    "properties" => %{
+                      "value" => %{"type" => "string"},
+                      "count" => %{"type" => "integer"}
+                    },
+                    "required" => ["value", "count"]
+                  }
+                }
+              },
+              "required" => ~w(name kinds list note_count number_range date_range values)
+            }
+          },
+          "filterable" => %{
+            "type" => "boolean",
+            "description" => "Whether search_notes accepts fields filters on this server yet"
+          }
+        },
+        "required" => ["fields", "filterable"]
+      },
+      handler: &Handlers.handle("list_fields", &1, &2, &3)
     }
   end
 

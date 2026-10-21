@@ -6,7 +6,7 @@ defmodule EngramWeb.BillingUsageTest do
   """
   use EngramWeb.ConnCase, async: false
 
-  import Ecto.Query, only: [from: 2]
+  import Ecto.Query
 
   alias Engram.UsageMeters
 
@@ -37,6 +37,12 @@ defmodule EngramWeb.BillingUsageTest do
     # the cluster-synced ETS counter, which has no read-without-spend API.
     assert body["usage"]["ai_searches"]["used"] == nil
     assert is_integer(body["usage"]["ai_searches"]["limit"])
+  end
+
+  # The usage banner and panel read this: they follow the enforced set.
+  test "reports the v5 Free note cap only once the v5 go flag is on", %{conn: conn} do
+    Engram.IndexBudgetHelpers.enable_index_budget()
+    assert usage(conn)["usage"]["notes"]["limit"] == 2_000
   end
 
   test "reports the Free caps and a real vault count", %{conn: conn} do
@@ -76,6 +82,55 @@ defmodule EngramWeb.BillingUsageTest do
     body = usage(conn)
 
     assert body["usage"]["indexed_notes"] == %{"used" => 2_500, "limit" => nil}
+  end
+
+  # Review H3: the v5 index budget is visible. `index_points` pairs the
+  # account's points (chunk rows) with its cap, which is null while the
+  # budget is off; `floor_notes` counts notes on keyword-only search.
+  describe "index budget" do
+    setup %{user: user} do
+      vault =
+        Engram.Repo.one!(from(v in Engram.Vaults.Vault, where: v.user_id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      %{vault: vault}
+    end
+
+    # Budget off is main's response: no points or floor fields, so no
+    # count over the user's chunks on every call.
+    test "omits points and floor notes while the budget is off", %{conn: conn} do
+      body = usage(conn)
+      refute Map.has_key?(body["usage"], "index_points")
+      refute Map.has_key?(body["usage"], "floor_notes")
+    end
+
+    test "with the budget on: the Free cap, real points and floor notes", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      Engram.IndexBudgetHelpers.enable_index_budget()
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "F.md", content: "x"})
+
+      {:ok, _} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          Engram.Repo.query!(
+            "INSERT INTO chunks (note_id, user_id, vault_id, position, char_start, char_end, qdrant_point_id, created_at) " <>
+              "SELECT $1, $2, $3, g, 0, 1, gen_random_uuid(), now() FROM generate_series(1, 7) g",
+            [Ecto.UUID.dump!(note.id), Ecto.UUID.dump!(user.id), Ecto.UUID.dump!(vault.id)]
+          )
+
+          Engram.Repo.update_all(
+            from(n in Engram.Notes.Note, where: n.id == ^note.id),
+            set: [index_tier: "floor"]
+          )
+        end)
+
+      body = usage(conn)
+      assert body["usage"]["index_points"] == %{"used" => 7, "limit" => 12_000}
+      assert body["usage"]["floor_notes"] == 1
+    end
   end
 
   describe "embed_bucket" do

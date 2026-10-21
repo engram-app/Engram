@@ -117,7 +117,10 @@ defmodule Engram.Workers.ReconcileEmbeddingsMaintenanceTest do
       # One note per page, so each sweep must loop to find both tenants' work.
       assert :ok =
                as_prod_role_committing(fn ->
-                 perform_job(ReconcileEmbeddings, %{"page" => 1})
+                 # Off the re-verify hour: the daily per-note cap sweep stays out.
+                 perform_job(ReconcileEmbeddings, %{"page" => 1},
+                   scheduled_at: DateTime.new!(Date.utc_today(), ~T[03:57:00])
+                 )
                end)
     after
       :telemetry.detach(handler)

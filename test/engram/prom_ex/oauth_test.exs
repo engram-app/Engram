@@ -6,9 +6,10 @@ defmodule Engram.PromEx.OAuthTest do
   use ExUnit.Case, async: true
 
   alias Engram.PromEx.OAuth, as: Plugin
+  alias Engram.Test.PromExMetrics
 
   defp metrics do
-    Plugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+    PromExMetrics.of(Plugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
   end
 
   test "is registered in the PromEx plugin list (else metrics never reach /metrics)" do

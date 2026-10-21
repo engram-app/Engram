@@ -1,0 +1,15 @@
+{
+	"type": "тип",
+	"status": "статус",
+	"author": "автор",
+	"reviewed_by": "Проверил",
+	"source": "Основа",
+	"project": "проект",
+	"created": "Создано",
+	"updated": "изменено",
+	"reviewed": "проверено",
+	"expires": "срок_действия",
+	"due": "срок",
+	"priority": "приоритет",
+	"description": "описание"
+}

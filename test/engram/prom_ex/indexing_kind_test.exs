@@ -15,6 +15,7 @@ defmodule Engram.PromEx.IndexingKindTest do
   alias Engram.Notes
   alias Engram.PromEx.Indexing, as: IndexingPlugin
   alias Engram.ServiceConfig
+  alias Engram.Test.PromExMetrics
 
   @event [:engram, :indexing, :points_written]
 
@@ -90,8 +91,8 @@ defmodule Engram.PromEx.IndexingKindTest do
 
   test "canvas and base notes are labelled by path", ctx do
     index(ctx, "board.canvas", ~s({"nodes":[{"id":"a","type":"text","text":"hello world"}]}))
-    assert [{"canvas", "false", n}] = drain()
-    assert n >= 1
+    # Its text card is the dense input of its one chunk (F12).
+    assert [{"canvas", "true", 1}] = drain()
 
     index(ctx, "table.base", "filters:\n  and:\n    - file.hasTag(\"x\")\n")
     assert [{"base", "false", m}] = drain()
@@ -131,7 +132,7 @@ defmodule Engram.PromEx.IndexingKindTest do
   test "the counter is registered with closed-enum tags" do
     metric =
       [otp_app: :engram]
-      |> IndexingPlugin.event_metrics()
+      |> then(&PromExMetrics.of(IndexingPlugin, &1))
       |> Map.fetch!(:metrics)
       |> Enum.find(&(&1.event_name == @event))
 

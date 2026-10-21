@@ -9,20 +9,30 @@ defmodule Engram.PromEx.ZeroInit do
   (one rotation's `requeue_failed`) never paged (engram-infra #1525 review).
   Seeding 0 makes every alerted series exist from boot.
 
-  A series is the FULL label set, so each entry names the exact
-  `table`/`phase`/`status` an emit site sends (`UserDekRotation`). Add one
-  here when an alert selects a new label value or a site adds a pair.
+  A series is the FULL label set, so each entry names the exact label values
+  an emit site sends (for the rotation, the `table`/`phase`/`status` of
+  `UserDekRotation`). Add one here when an alert selects a new label value
+  or a site adds a pair.
   """
 
+  @search_hits [:engram, :search, :hits]
+  @search_text_missing [:engram, :search, :text_missing]
+  @search_hit_dropped [:engram, :search, :hit_dropped]
   @row_failed [:engram, :crypto, :rotate, :dek, :row_failed]
   @payload_reconcile [:engram, :indexing, :payload_reconcile]
+
+  # The `hit_dropped` reasons the undecryptable-text alert selects
+  # (`Engram.Search`): a key or ciphertext fault, never an expected orphan.
+  @undecryptable [:text_undecryptable, :note_undecryptable, :payload_undecryptable]
 
   # Every try_rewrap site's {table, phase} (both_deks_failed).
   @rewrap_sites [
     {:vaults, :sweep_vaults},
+    {:frontmatter_keys, :sweep_frontmatter_keys},
     {:attachments, :sweep_attachments_blob},
     {:attachments, :sweep_attachments_metadata},
     {:note_links, :sweep_note_links},
+    {:chunks, :sweep_chunk_texts},
     {:qdrant, :sweep_qdrant},
     {:vault_index_update_log, :sweep_vault_index_update_log},
     {:notes, :sweep_notes},
@@ -38,7 +48,8 @@ defmodule Engram.PromEx.ZeroInit do
       [
         {:chunks, :post_flip_index_repairs, :remap_failed},
         {:qdrant, :sweep_qdrant, :requeue_failed},
-        {:qdrant, :sweep_qdrant, :after_flip}
+        {:qdrant, :sweep_qdrant, :after_flip},
+        {:qdrant, :sweep_qdrant, :guard_rebuild}
         | for({table, phase} <- @rewrap_sites, do: {table, phase, :both_deks_failed})
       ]
 
@@ -50,7 +61,13 @@ defmodule Engram.PromEx.ZeroInit do
       for outcome <- [:checked, :drifted, :rewritten, :skipped_v5],
           do: {@payload_reconcile, %{count: 0}, %{outcome: outcome}}
 
-    rotate_series ++ reconcile_series
+    # `sum` metrics over `count`: a 0 adds nothing to the total.
+    search_series =
+      [{@search_hits, %{count: 0}, %{}}, {@search_text_missing, %{count: 0}, %{}}] ++
+        for reason <- @undecryptable,
+            do: {@search_hit_dropped, %{count: 0}, %{reason: reason}}
+
+    search_series ++ rotate_series ++ reconcile_series
   end
 
   @doc "The same series as Prometheus names them: `{metric, %{label => value}}`."
@@ -58,6 +75,9 @@ defmodule Engram.PromEx.ZeroInit do
     for {event, _measurements, meta} <- series() do
       metric =
         case event do
+          @search_hits -> "engram_prom_ex_search_hits_total"
+          @search_text_missing -> "engram_prom_ex_search_text_missing_total"
+          @search_hit_dropped -> "engram_prom_ex_search_hits_dropped_total"
           @row_failed -> "engram_prom_ex_crypto_rotate_row_failed_total"
           @payload_reconcile -> "engram_prom_ex_indexing_payload_reconcile_total"
         end

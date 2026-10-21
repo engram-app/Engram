@@ -242,18 +242,23 @@ export default {
 	"You're on this plan": "Bạn đang sử dụng gói này",
 	"Start free trial": "Bắt đầu dùng thử miễn phí",
 	Popular: "Phổ biến",
+	"2,000 notes · 20 AI searches a day · 1 vault":
+		"2.000 ghi chú · 20 lượt tìm kiếm AI mỗi ngày · 1 kho lưu trữ",
 	"3,000 notes · 20 AI searches a day · 1 vault":
 		"3.000 ghi chú · 20 lượt tìm kiếm AI mỗi ngày · 1 kho lưu trữ",
+	"2,000 notes, all searchable": "2.000 ghi chú, tất cả đều có thể tìm kiếm",
 	"3,000 notes, all searchable": "3.000 ghi chú, tất cả đều có thể tìm kiếm",
 	"20 AI searches a day": "20 lượt tìm kiếm AI mỗi ngày",
 	"1 vault": "1 kho lưu trữ",
 	"1 GB attachments": "1 GB tệp đính kèm",
 	"2 devices": "2 thiết bị",
+	"20,000 notes": "20.000 ghi chú",
 	"10 vaults": "10 kho lưu trữ",
 	"Unlimited devices": "Số lượng thiết bị không giới hạn",
 	"10 GB attachments": "10 GB tệp đính kèm",
 	"Unlimited AI searches": "Tìm kiếm AI không giới hạn",
 	"Unlimited vaults": "Số lượng kho lưu trữ không giới hạn",
+	"40,000 notes": "40.000 ghi chú",
 	"50 GB attachments": "50 GB tệp đính kèm",
 	"Cross-vault search": "Tìm kiếm trên nhiều kho lưu trữ",
 	"Loading plan options…": "Đang tải các tùy chọn gói...",
@@ -293,6 +298,27 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Bạn đang dùng bản dùng thử miễn phí. Paddle, dịch vụ thanh toán của chúng tôi, không cho phép thay đổi gói trong thời gian dùng thử — bản dùng thử của bạn sẽ kết thúc vào ngày {date}.",
 	Upgrade: "Nâng cấp",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Bạn đã đạt giới hạn {cap} ghi chú. Các ghi chú mới sẽ ngừng đồng bộ hóa cho đến khi bạn nâng cấp hoặc xóa một số.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Bạn đã sử dụng {percent}% trong tổng số {cap} ghi chú của bạn. Khi đạt {cap}, các ghi chú mới sẽ ngừng đồng bộ hóa cho đến khi bạn nâng cấp hoặc xóa một số.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Bạn đã sử dụng {percent}% trong tổng số {cap} đoạn văn có thể tìm kiếm đầy đủ. Vượt quá giới hạn này, các ghi chú cũ hơn chỉ được tìm thấy bằng từ khóa (các từ chính xác, không phải ý nghĩa). Không có gì bị xóa.",
+	"See usage": "Xem thông tin sử dụng",
+	Usage: "Thông tin sử dụng",
+	"Notes: {used}": "Ghi chú: {used}",
+	"Notes: {used} of {cap}": "Ghi chú: {used} trong {cap}",
+	"Full search: {used} of {cap} passages": "Tìm kiếm đầy đủ: {used} trong {cap} đoạn văn",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Một đoạn văn là một phần có thể tìm kiếm của một ghi chú. Vượt quá giới hạn này, các ghi chú cũ hơn chỉ được tìm thấy bằng từ khóa (các từ chính xác, không phải ý nghĩa). Không có gì bị xóa.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			other:
+				"Các đoạn văn tìm kiếm đầy đủ của bạn đã hết. {count} ghi chú cũ hơn chỉ được tìm thấy theo từ khóa (từ chính xác, không phải nghĩa). Không có gì bị xóa. Nâng cấp để kích hoạt lại tìm kiếm đầy đủ.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		other: "{count} ghi chú được tìm thấy chỉ bằng từ khóa (từ chính xác, không phải ý nghĩa).",
+	},
 	"All vaults, including ones you create later":
 		"Tất cả kho lưu trữ, bao gồm cả những kho bạn tạo sau này",
 	"All current vaults": "Tất cả các kho lưu trữ hiện tại",
@@ -413,11 +439,21 @@ export default {
 	"a list, or one name": "một danh sách hoặc một tên",
 	"Topics. Browsable and searchable across the vault.":
 		"Chủ đề. Có thể duyệt và tìm kiếm trong toàn kho lưu trữ.",
-	"A one-line summary of the note.": "Tóm tắt một dòng của ghi chú.",
-	"The thing the note is about — usually a URL.": "Nội dung của ghi chú – thường là một URL.",
+	"Where the note stands, such as draft or stable.":
+		"Vị trí của ghi chú, ví dụ: bản nháp hoặc đã hoàn thiện.",
+	"Who wrote the note, a person or an agent.": "Ai đã viết ghi chú, một người hoặc một tác nhân.",
+	"Who last checked the note.": "Ai đã kiểm tra ghi chú lần cuối.",
+	"What the note is based on, usually a URL.": "Nguồn gốc của ghi chú, thường là một URL.",
+	"The project the note belongs to.": "Dự án mà ghi chú thuộc về.",
 	"a date (YYYY-MM-DD)": "một ngày (YYYY-MM-DD)",
 	"When the note came into being.": "Thời điểm ghi chú được tạo.",
 	"When it last changed.": "Thời điểm ghi chú được thay đổi lần cuối.",
+	"When it was last checked.": "Thời điểm kiểm tra ghi chú lần cuối.",
+	"When the note goes out of date.": "Thời điểm ghi chú trở nên lỗi thời.",
+	"When the work in the note is due.": "Thời hạn hoàn thành công việc trong ghi chú.",
+	"a number": "một số",
+	"How much the note matters, as a number.": "Mức độ quan trọng của ghi chú, dưới dạng một số.",
+	"A one-line summary of the note.": "Tóm tắt một dòng của ghi chú.",
 	"Link Obsidian Vault": "Liên kết Kho lưu trữ Obsidian",
 	"Please sign in to link your Obsidian vault.":
 		"Vui lòng đăng nhập để liên kết Kho lưu trữ Obsidian của bạn.",
@@ -1306,8 +1342,11 @@ export default {
 	frontmatter: "frontmatter",
 	reads: "đọc",
 	"{what} Wants {expectsLabel}.": "{what} muốn {expectsLabel}.",
+	"use {alias} or {key}": "sử dụng {alias} hoặc {key}",
 	"also accepts {aliases}": "cũng chấp nhận {aliases}",
 	or: "hoặc",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Một tên có cấu trúc như {example} không thể chỉnh sửa ở đây hoặc trong Obsidian; chỉ có thể chỉnh sửa trực tiếp, MCP, hoặc được viết bởi AI.",
 	Properties: "Thuộc tính",
 	"About properties": "Về thuộc tính",
 	"Property name": "Tên thuộc tính",

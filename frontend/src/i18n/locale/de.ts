@@ -254,17 +254,21 @@ export default {
 	"You're on this plan": "Du nutzt diesen Plan",
 	"Start free trial": "Kostenlose Testphase starten",
 	Popular: "Beliebt",
+	"2,000 notes · 20 AI searches a day · 1 vault": "2.000 Notizen · 20 KI-Suchen pro Tag · 1 Vault",
 	"3,000 notes · 20 AI searches a day · 1 vault": "3.000 Notizen · 20 KI-Suchen pro Tag · 1 Vault",
+	"2,000 notes, all searchable": "2.000 Notizen, alle durchsuchbar",
 	"3,000 notes, all searchable": "3.000 Notizen, alle durchsuchbar",
 	"20 AI searches a day": "20 KI-Suchen pro Tag",
 	"1 vault": "1 Vault",
 	"1 GB attachments": "1 GB Anhänge",
 	"2 devices": "2 Geräte",
+	"20,000 notes": "20.000 Notizen",
 	"10 vaults": "10 Vaults",
 	"Unlimited devices": "Unbegrenzte Geräte",
 	"10 GB attachments": "10 GB Anhänge",
 	"Unlimited AI searches": "Unbegrenzte AI-Suchen",
 	"Unlimited vaults": "Unbegrenzte Vaults",
+	"40,000 notes": "40.000 Notizen",
 	"50 GB attachments": "50 GB Anhänge",
 	"Cross-vault search": "Suche über mehrere Vaults",
 	"Loading plan options…": "Lade Optionen…",
@@ -305,6 +309,29 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Du bist in einer kostenlosen Testphase. Paddle, unser Zahlungsdienstleister, erlaubt keine Änderungen des Abonnements während der Testphase – deine Testphase endet am {date}.",
 	Upgrade: "Upgrade",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Du hast dein Limit von {cap} Notizen erreicht. Neue Notizen werden nicht mehr synchronisiert, bis du ein Upgrade kaufst oder einige löschst.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Du hast {percent}% deiner {cap} Notizen verwendet. Bei {cap} werden neue Notizen nicht mehr synchronisiert, bis du ein Upgrade kaufst oder einige löschst.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Du hast {percent}% deiner {cap} durchsuchbaren Textabschnitte verwendet. Danach werden ältere Notizen nur noch über Stichwörter gefunden (genaue Wörter, nicht Bedeutung). Nichts wird gelöscht.",
+	"See usage": "Nutzung ansehen",
+	Usage: "Nutzung",
+	"Notes: {used}": "Notizen: {used}",
+	"Notes: {used} of {cap}": "Notizen: {used} von {cap}",
+	"Full search: {used} of {cap} passages": "Vollständige Suche: {used} von {cap} Textabschnitten",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Ein Textabschnitt ist ein durchsuchbarer Teil einer Notiz. Danach werden ältere Notizen nur noch über Stichwörter gefunden (genaue Wörter, nicht Bedeutung). Nichts wird gelöscht.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			one: "Deine Suchabfragen sind aufgebraucht. Eine ältere Notiz wurde nur anhand von Schlüsselwörtern gefunden (exakte Wörter, nicht Bedeutung). Nichts wurde gelöscht. Upgrade, um die vollständige Suche wiederherzustellen.",
+			other:
+				"Deine Suchabfragen sind aufgebraucht. {count} ältere Notizen wurden nur nach Schlüsselwörtern gefunden (exakte Wörter, nicht Bedeutung). Nichts wurde gelöscht. Upgrade, um die vollständige Suche wiederherzustellen.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		one: "{count} Notiz gefunden (nur nach exakten Wörtern).",
+		other: "{count} Notizen gefunden (nur nach Schlüsselwörtern, exakte Wörter).",
+	},
 	"All vaults, including ones you create later": "Alle Vaults, auch die, die du später erstellst",
 	"All current vaults": "Alle aktuellen Vaults",
 	"Vaults you create later": "Vaults, die du später erstellst",
@@ -426,11 +453,23 @@ export default {
 	"a list, or one name": "eine Liste oder ein Name",
 	"Topics. Browsable and searchable across the vault.":
 		"Themen. Durchsuchbar und über den gesamten Vault verfügbar.",
-	"A one-line summary of the note.": "Eine kurze Zusammenfassung der Notiz.",
-	"The thing the note is about — usually a URL.": "Worum es in der Notiz geht – meist eine URL.",
+	"Where the note stands, such as draft or stable.":
+		"Wo sich die Notiz befindet, z. B. Entwurf oder stabil.",
+	"Who wrote the note, a person or an agent.":
+		"Wer die Notiz erstellt hat, eine Person oder ein Agent.",
+	"Who last checked the note.": "Wer die Notiz zuletzt überprüft hat.",
+	"What the note is based on, usually a URL.":
+		"Worauf sich die Notiz bezieht, normalerweise eine URL.",
+	"The project the note belongs to.": "Das Projekt, zu dem die Notiz gehört.",
 	"a date (YYYY-MM-DD)": "ein Datum (YYYY-MM-DD)",
 	"When the note came into being.": "Wann die Notiz erstellt wurde.",
 	"When it last changed.": "Wann sie zuletzt geändert wurde.",
+	"When it was last checked.": "Wann die Notiz zuletzt überprüft wurde.",
+	"When the note goes out of date.": "Wann die Notiz veraltet ist.",
+	"When the work in the note is due.": "Wann die Arbeit in der Notiz fällig ist.",
+	"a number": "eine Zahl",
+	"How much the note matters, as a number.": "Wie wichtig die Notiz ist, als Zahl.",
+	"A one-line summary of the note.": "Eine kurze Zusammenfassung der Notiz.",
 	"Link Obsidian Vault": "Obsidian Vault verknüpfen",
 	"Please sign in to link your Obsidian vault.":
 		"Melde dich an, um deinen Obsidian Vault zu verknüpfen.",
@@ -1345,8 +1384,11 @@ export default {
 	frontmatter: "Frontmatter",
 	reads: "liest",
 	"{what} Wants {expectsLabel}.": "{what} möchte {expectsLabel}.",
+	"use {alias} or {key}": "verwende {alias} oder {key}",
 	"also accepts {aliases}": "akzeptiert auch {aliases}",
 	or: "oder",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Ein verschachtelter Name wie {example} kann hier oder in Obsidian nicht bearbeitet werden; nur eine direkte Bearbeitung, MCP, oder eine KI schreibt ihn.",
 	Properties: "Eigenschaften",
 	"About properties": "Über Eigenschaften",
 	"Property name": "Name der Eigenschaft",

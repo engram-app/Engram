@@ -7,6 +7,7 @@ defmodule Engram.Links.RewriteWiringTest do
   alias Engram.MCP.Handlers
   alias Engram.Notes
   alias Engram.Notes.Note
+  alias Engram.Test.PromExMetrics
   alias Engram.Workers.RebindNoteLinks
   alias Engram.Workers.RewriteNoteLinks
 
@@ -95,7 +96,7 @@ defmodule Engram.Links.RewriteWiringTest do
   test "PromEx indexing plugin exposes the rewrite-failure counter" do
     metrics =
       [otp_app: :engram]
-      |> Engram.PromEx.Indexing.event_metrics()
+      |> then(&PromExMetrics.of(Engram.PromEx.Indexing, &1))
       |> List.wrap()
       |> Enum.flat_map(& &1.metrics)
 

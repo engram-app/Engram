@@ -23,10 +23,28 @@ defmodule Engram.KeywordIndex do
   tokenizes a second time just to count.
   """
   @callback encode_documents(
-              texts :: [String.t()],
+              texts :: [iodata()],
               filter_key :: binary(),
               avgdl :: float(),
               language :: atom() | nil
+            ) :: [{packed_sparse(), doc_len :: non_neg_integer()}]
+
+  # Optional: only floor points and merged v5 chunks call it, and test
+  # doubles implement /4.
+  @optional_callbacks encode_documents: 5
+
+  @doc """
+  `encode_documents/4` with options. `cap_doc_len: true` length-normalizes
+  each document as if it were at most 3 x `avgdl` long (floor points and
+  capped groups). `b:` (default 0.75) is the BM25 length weight; merged v5
+  chunks use a smaller one (`Engram.Indexing.sparse_opts/1`).
+  """
+  @callback encode_documents(
+              texts :: [iodata()],
+              filter_key :: binary(),
+              avgdl :: float(),
+              language :: atom() | nil,
+              opts :: keyword()
             ) :: [{packed_sparse(), doc_len :: non_neg_integer()}]
 
   @doc "Encode a query string into a sparse query vector (unit values)."

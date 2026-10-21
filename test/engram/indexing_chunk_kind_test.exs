@@ -20,17 +20,20 @@ defmodule Engram.IndexingChunkKindTest do
 
   setup :verify_on_exit!
 
+  # Each section is over 512 B, so min512 keeps them apart.
+  @filler String.duplicate("more words here ", 40)
+
   @content """
   ---
   project: zanzibar
   ---
   # Plan
 
-  The first section talks about the launch.
+  The first section talks about the launch. #{@filler}
 
   ## Risks
 
-  The second section lists what could go wrong.
+  The second section lists what could go wrong. #{@filler}
   """
 
   @frontmatter_only """
@@ -122,16 +125,28 @@ defmodule Engram.IndexingChunkKindTest do
     assert prepared.dense?
   end
 
-  test "a frontmatter-only note writes one sparse-only point, found by keyword", ctx do
+  # B8: with no body, the frontmatter is all there is to find by meaning.
+  test "a frontmatter-only note writes one small dense point, found by keyword too", ctx do
     note = put_note(ctx, @frontmatter_only)
 
     assert {:ok, prepared} = Indexing.prepare_index(note, ctx.vault, ctx.user)
 
+    assert [sent] = drain(:embedded)
+    assert sent =~ "Plan" and sent =~ "zanzibar"
+    assert [point] = prepared.qdrant_points
+    assert Map.has_key?(point.vector, "dense")
+    assert has_dim?(point, ctx.user, "zanzibar")
+    assert prepared.embedded_bytes == byte_size(sent)
+  end
+
+  # C7
+  test "a dataview section is keyword-only", ctx do
+    content = "# Plan\n\n```dataview\nTABLE status FROM \"Projects\"\n```\n"
+    note = put_note(ctx, content)
+    assert {:ok, prepared} = Indexing.prepare_index(note, ctx.vault, ctx.user)
     assert drain(:embedded) == []
     assert [point] = prepared.qdrant_points
     refute Map.has_key?(point.vector, "dense")
-    assert has_dim?(point, ctx.user, "zanzibar")
-    assert prepared.embedded_bytes == 0
   end
 
   test "metered tokens are the prose chunks' tokens only", ctx do

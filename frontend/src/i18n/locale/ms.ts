@@ -247,17 +247,21 @@ export default {
 	"You're on this plan": "Anda menggunakan pelan ini",
 	"Start free trial": "Mulakan percubaan percuma",
 	Popular: "Popular",
+	"2,000 notes · 20 AI searches a day · 1 vault": "2,000 nota · 20 carian AI sehari · 1 peti nota",
 	"3,000 notes · 20 AI searches a day · 1 vault": "3,000 nota · 20 carian AI sehari · 1 peti nota",
+	"2,000 notes, all searchable": "2,000 nota, semua boleh dicari",
 	"3,000 notes, all searchable": "3,000 nota, semua boleh dicari",
 	"20 AI searches a day": "20 carian AI sehari",
 	"1 vault": "1 peti nota",
 	"1 GB attachments": "1 GB lampiran",
 	"2 devices": "2 peranti",
+	"20,000 notes": "20,000 nota",
 	"10 vaults": "10 peti nota",
 	"Unlimited devices": "Peranti tanpa had",
 	"10 GB attachments": "10 GB lampiran",
 	"Unlimited AI searches": "Carian AI tanpa had",
 	"Unlimited vaults": "Peti nota tanpa had",
+	"40,000 notes": "40,000 nota",
 	"50 GB attachments": "50 GB lampiran",
 	"Cross-vault search": "Carian merentasi peti nota",
 	"Loading plan options…": "Memuatkan pilihan pelan…",
@@ -297,6 +301,27 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Anda sedang dalam tempoh percubaan. Paddle, pemproses pembayaran kami, tidak membenarkan perubahan pelan semasa langganan dalam tempoh percubaan — tempoh percubaan anda akan tamat pada {date}.",
 	Upgrade: "Tingkatkan",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Anda telah mencapai had {cap} nota. Nota baharu berhenti disegerakkan sehingga anda meningkatkan atau menghapuskan beberapa.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Anda telah menggunakan {percent}% daripada {cap} nota anda. Pada {cap}, nota baharu berhenti disegerakkan sehingga anda meningkatkan atau menghapuskan beberapa.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Anda telah menggunakan {percent}% daripada {cap} bahagian yang boleh dicari sepenuhnya. Melebihi itu, nota lama hanya dicari berdasarkan kata kunci (kata tepat, bukan makna). Tiada apa yang dipadam.",
+	"See usage": "Lihat penggunaan",
+	Usage: "Penggunaan",
+	"Notes: {used}": "Nota: {used}",
+	"Notes: {used} of {cap}": "Nota: {used} daripada {cap}",
+	"Full search: {used} of {cap} passages": "Cari penuh: {used} daripada {cap} bahagian",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Satu bahagian ialah sebahagian daripada nota yang boleh dicari. Melebihi itu, nota lama hanya dicari berdasarkan kata kunci (kata tepat, bukan makna). Tiada apa yang dipadam.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			other:
+				"Potongan carian penuh anda telah digunakan. {count} nota lama dicari berdasarkan kata kunci sahaja (kata tepat, bukan makna). Tiada apa yang dipadam. Tingkatkan untuk mengaktifkan semula carian penuh.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		other: "{count} nota ditemui berdasarkan kata kunci sahaja (kata tepat, bukan makna).",
+	},
 	"All vaults, including ones you create later":
 		"Semua peti nota, termasuk yang anda cipta kemudian",
 	"All current vaults": "Semua peti nota semasa",
@@ -417,12 +442,20 @@ export default {
 	"a list, or one name": "senarai, atau satu nama",
 	"Topics. Browsable and searchable across the vault.":
 		"Tajuk. Boleh dilayari dan dicari dalam peti nota.",
-	"A one-line summary of the note.": "Ringkasan satu baris nota tersebut.",
-	"The thing the note is about — usually a URL.":
-		"Perkara yang nota ini bicarakan – biasanya satu URL.",
+	"Where the note stands, such as draft or stable.": "Lokasi nota, seperti draf atau stabil.",
+	"Who wrote the note, a person or an agent.": "Siapa yang menulis nota, seseorang atau agen.",
+	"Who last checked the note.": "Siapa yang terakhir menyemak nota.",
+	"What the note is based on, usually a URL.": "Berasaskan apa nota ini, biasanya URL.",
+	"The project the note belongs to.": "Projek tempat nota ini berada.",
 	"a date (YYYY-MM-DD)": "satu tarikh (YYYY-MM-DD)",
 	"When the note came into being.": "Bilanya nota ini dicipta.",
 	"When it last changed.": "Bilanya ia diubah terakhir.",
+	"When it was last checked.": "Bila ia terakhir disemak.",
+	"When the note goes out of date.": "Bila nota ini menjadi tidak relevan.",
+	"When the work in the note is due.": "Bila kerja dalam nota ini perlu disiapkan.",
+	"a number": "sebuah nombor",
+	"How much the note matters, as a number.": "Seberapa pentingnya nota ini, sebagai nombor.",
+	"A one-line summary of the note.": "Ringkasan satu baris nota tersebut.",
 	"Link Obsidian Vault": "Pautkan Peti Nota Obsidian",
 	"Please sign in to link your Obsidian vault.":
 		"Sila log masuk untuk pautkan Peti Nota Obsidian anda.",
@@ -1312,8 +1345,11 @@ export default {
 	frontmatter: "frontmatter",
 	reads: "bacaan",
 	"{what} Wants {expectsLabel}.": "{what} mahu {expectsLabel}.",
+	"use {alias} or {key}": "gunakan {alias} atau {key}",
 	"also accepts {aliases}": "juga menerima {aliases}",
 	or: "atau",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Nama bersarang seperti {example} tidak boleh diedit di sini atau dalam Obsidian; hanya editan asas, MCP, atau AI yang menulisnya.",
 	Properties: "Sifat",
 	"About properties": "Mengenai sifat",
 	"Property name": "Nama sifat",

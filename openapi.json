@@ -3241,6 +3241,205 @@
         "x-struct": "Elixir.EngramWeb.Schemas.AttachmentWithContent",
         "x-validate": null
       },
+      "FieldsResponse": {
+        "example": {
+          "fields": [
+            {
+              "date_range": null,
+              "kinds": [
+                "string"
+              ],
+              "list": false,
+              "name": "status",
+              "note_count": 42,
+              "number_range": null,
+              "values": [
+                {
+                  "count": 30,
+                  "value": "draft"
+                },
+                {
+                  "count": 12,
+                  "value": "done"
+                }
+              ]
+            },
+            {
+              "date_range": null,
+              "kinds": [
+                "number"
+              ],
+              "list": false,
+              "name": "priority",
+              "note_count": 17,
+              "number_range": {
+                "max": 5.0,
+                "min": 1.0
+              },
+              "values": []
+            },
+            {
+              "date_range": {
+                "max": "2026-12-15",
+                "min": "2026-09-01"
+              },
+              "kinds": [
+                "date"
+              ],
+              "list": false,
+              "name": "due",
+              "note_count": 9,
+              "number_range": null,
+              "values": []
+            }
+          ],
+          "filterable": true
+        },
+        "properties": {
+          "fields": {
+            "items": {
+              "properties": {
+                "date_range": {
+                  "description": "Earliest and latest ISO date or datetime (UTC), or null",
+                  "nullable": true,
+                  "properties": {
+                    "max": {
+                      "type": "string",
+                      "x-struct": null,
+                      "x-validate": null
+                    },
+                    "min": {
+                      "type": "string",
+                      "x-struct": null,
+                      "x-validate": null
+                    }
+                  },
+                  "required": [
+                    "min",
+                    "max"
+                  ],
+                  "type": "object",
+                  "x-struct": null,
+                  "x-validate": null
+                },
+                "kinds": {
+                  "items": {
+                    "enum": [
+                      "string",
+                      "boolean",
+                      "number",
+                      "date"
+                    ],
+                    "type": "string",
+                    "x-struct": null,
+                    "x-validate": null
+                  },
+                  "type": "array",
+                  "x-struct": null,
+                  "x-validate": null
+                },
+                "list": {
+                  "description": "Some note holds several values",
+                  "type": "boolean",
+                  "x-struct": null,
+                  "x-validate": null
+                },
+                "name": {
+                  "description": "The key a search `fields` filter takes",
+                  "type": "string",
+                  "x-struct": null,
+                  "x-validate": null
+                },
+                "note_count": {
+                  "description": "Live notes carrying the field",
+                  "type": "integer",
+                  "x-struct": null,
+                  "x-validate": null
+                },
+                "number_range": {
+                  "description": "Smallest and largest number, or null",
+                  "nullable": true,
+                  "properties": {
+                    "max": {
+                      "type": "number",
+                      "x-struct": null,
+                      "x-validate": null
+                    },
+                    "min": {
+                      "type": "number",
+                      "x-struct": null,
+                      "x-validate": null
+                    }
+                  },
+                  "required": [
+                    "min",
+                    "max"
+                  ],
+                  "type": "object",
+                  "x-struct": null,
+                  "x-validate": null
+                },
+                "values": {
+                  "description": "Most used exact values (at most 50), most notes first",
+                  "items": {
+                    "properties": {
+                      "count": {
+                        "type": "integer",
+                        "x-struct": null,
+                        "x-validate": null
+                      },
+                      "value": {
+                        "type": "string",
+                        "x-struct": null,
+                        "x-validate": null
+                      }
+                    },
+                    "required": [
+                      "value",
+                      "count"
+                    ],
+                    "type": "object",
+                    "x-struct": null,
+                    "x-validate": null
+                  },
+                  "type": "array",
+                  "x-struct": null,
+                  "x-validate": null
+                }
+              },
+              "required": [
+                "name",
+                "kinds",
+                "list",
+                "note_count",
+                "number_range",
+                "date_range",
+                "values"
+              ],
+              "type": "object",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "filterable": {
+            "description": "Whether search accepts `fields` filters on this server yet",
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "fields",
+          "filterable"
+        ],
+        "title": "FieldsResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.FieldsResponse",
+        "x-validate": null
+      },
       "TypesResponse": {
         "properties": {
           "types": {
@@ -4481,6 +4680,30 @@
         "summary": "Rename / move an attachment",
         "tags": [
           "Attachments"
+        ]
+      }
+    },
+    "/api/fields": {
+      "get": {
+        "callbacks": {},
+        "description": "Returns every frontmatter field the vault's indexed notes use: its name (the `key` of a search `fields` filter), value kinds, how many live notes carry it, whether a note holds a list of values, the number or date range, and the 50 most used exact values with note counts. Most used fields first. Derived from the index, so a note's fields appear once it has been indexed. `filterable` says whether search accepts `fields` filters on this server yet.",
+        "operationId": "fields",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FieldsResponse"
+                }
+              }
+            },
+            "description": "Fields"
+          }
+        },
+        "summary": "List every frontmatter field in the vault",
+        "tags": [
+          "Fields"
         ]
       }
     },

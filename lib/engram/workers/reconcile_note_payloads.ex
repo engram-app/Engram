@@ -19,8 +19,20 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   so a concurrent index wins. A note whose points are all gone is stamped
   too: the next index re-creates them.
 
-  v3 points only. A v5 point (#2087's short-key layout) is skipped and its
-  note left unstamped; #2087 extends this heal to v5.
+  Both layouts. A v3 point gets `expected_note_payload/1` merged in; a v5
+  point (#2087's short-key layout) gets `expected_v5_payload/2`, built from
+  the decrypted note as a pass builds it, and REPLACED (`overwrite_payload`).
+  A v5 note whose ciphertext fails AEAD under the current DEK
+  (`{:error, :decrypt_failed}`; any other error is transient and fails the
+  job) cannot be healed: it is counted
+  (`skipped_v5`) and marked with `undecryptable_stamp/0` in `payload_hash`,
+  so the daily re-check does not requeue its user forever. Never deleted;
+  the stamp matches no real hash, so the note's next index pass refreshes
+  its points and stamps the real one.
+
+  Every note row is read fresh per batch, so an edit that commits after a
+  rotation's flip is healed with its own keys, and one whose index already
+  re-stamped `payload_hash` is not selected at all.
 
   Rate-limited: one batch of 200 notes costs one scroll per 2048 points plus
   a `set_payload` per drifted note, with a pause between batches, on the
@@ -41,11 +53,13 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   alias Engram.Accounts.User
   alias Engram.Backfill.TenantScan
+  alias Engram.Crypto
   alias Engram.Crypto.RotationGate
   alias Engram.Indexing
   alias Engram.Logger.Metadata
   alias Engram.Notes.{Chunk, Note}
   alias Engram.Repo
+  alias Engram.Vector.PayloadKeys
   alias Engram.Vector.Qdrant
 
   require Logger
@@ -65,7 +79,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     with %User{} = user <- Repo.get(User, user_id),
          :ok <- RotationGate.check_user(user) do
       deadline = System.monotonic_time(:millisecond) + @budget_ms
-      {result, counts} = heal(user_id, args["after"], deadline, @zero)
+      {result, counts} = heal(user, args["after"], deadline, @zero)
       report(user_id, counts)
 
       case result do
@@ -108,7 +122,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
         if Repo.exists?(where(unstamped(), [n], n.user_id == ^uid)), do: [uid], else: []
       end)
 
-    executing = executing_user_ids()
+    executing = Engram.Backfill.TenantScan.executing_user_ids(__MODULE__)
 
     # One insert per user: Oban's Basic engine ignores `unique` in insert_all.
     for uid <- user_ids,
@@ -132,16 +146,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     )
   end
 
-  defp executing_user_ids do
-    from(j in Oban.Job,
-      where: j.worker == ^inspect(__MODULE__) and j.state == "executing",
-      select: fragment("?->>'user_id'", j.args)
-    )
-    |> Repo.all()
-    |> MapSet.new()
-  end
-
-  defp heal(user_id, after_id, deadline, counts) do
+  defp heal(%User{id: user_id} = user, after_id, deadline, counts) do
     {notes, points} = batch(user_id, after_id)
 
     cond do
@@ -156,12 +161,12 @@ defmodule Engram.Workers.ReconcileNotePayloads do
              # Per batch, after the read and before any write: a rotation
              # that started since would have its fresh keys overwritten.
              :ok <- RotationGate.check(user_id),
-             {:ok, counts} <- heal_notes(notes, points, stored, counts) do
+             {:ok, counts} <- heal_notes(user, notes, points, stored, counts) do
           if length(notes) < @batch_size do
             {:done, counts}
           else
             Process.sleep(@pause_ms)
-            heal(user_id, List.last(notes).id, deadline, counts)
+            heal(user, List.last(notes).id, deadline, counts)
           end
         else
           {:error, reason, counts} -> {qdrant_answer(reason), counts}
@@ -210,7 +215,11 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   # `%{point_id => payload}` for the points that exist, payload keys only.
   defp read_payloads(user_id, ids) do
-    keys = ["u" | Indexing.expected_note_payload(%Note{}) |> Map.keys() |> Enum.map(&to_string/1)]
+    keys =
+      Enum.uniq(
+        v5_keys() ++
+          (Indexing.expected_note_payload(%Note{}) |> Map.keys() |> Enum.map(&to_string/1))
+      )
 
     ids
     |> Enum.chunk_every(Qdrant.max_ids())
@@ -238,34 +247,109 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     end)
   end
 
-  defp heal_notes(notes, points, stored, counts) do
+  @undecryptable "undecryptable"
+
+  @doc """
+  The `payload_hash` of a note the heal could not decrypt. Not a SHA-256
+  (a real stamp is 32 bytes), so it never vouches for any payload.
+  """
+  def undecryptable_stamp, do: @undecryptable
+
+  # CAS on the row as read (an edit since then re-indexes and stamps it) and
+  # on the user's DEK version: a rotation flip in between NULLs every stamp,
+  # and the row may open under the new DEK.
+  defp mark_undecryptable(note, user) do
+    {:ok, {_, _}} =
+      Repo.with_tenant(note.user_id, fn ->
+        same_content =
+          if note.content_hash,
+            do: dynamic([n], n.content_hash == ^note.content_hash),
+            else: dynamic([n], is_nil(n.content_hash))
+
+        from(n in Note,
+          where: n.kind == "note" and n.id == ^note.id and is_nil(n.payload_hash),
+          where: ^same_content,
+          where: exists(same_dek(user))
+        )
+        |> Repo.update_all(set: [payload_hash: @undecryptable])
+      end)
+
+    :ok
+  end
+
+  defp same_dek(%User{id: id, dek_version: nil}),
+    do: from(u in User, where: u.id == ^id and is_nil(u.dek_version), select: 1)
+
+  defp same_dek(%User{id: id, dek_version: v}),
+    do: from(u in User, where: u.id == ^id and u.dek_version == ^v, select: 1)
+
+  defp heal_notes(user, notes, points, stored, counts) do
     Enum.reduce_while(notes, {:ok, counts}, fn note, {:ok, counts} ->
-      payload = Indexing.expected_note_payload(note)
-      want = payload |> Jason.encode!() |> Jason.decode!()
       present = for id <- Map.get(points, note.id, []), Map.has_key?(stored, id), do: id
+      {v5_ids, v3_ids} = Enum.split_with(present, &v5?(stored[&1]))
       counts = bump(counts, :checked)
 
-      if Enum.any?(present, &v5?(stored[&1])) do
-        # #2087's short-key layout. A v3 compare reads every such point as
-        # drifted and would merge v3 keys onto it, so it is left alone and
-        # unstamped: the v5 heal (#2087) compares and stamps those.
-        {:cont, {:ok, bump(counts, :skipped_v5)}}
-      else
-        drifted = Enum.reject(present, &holds?(stored[&1], want))
-        heal_note(note, payload, drifted, counts)
+      case plan_note(user, note, v5_ids, v3_ids, stored) do
+        {:ok, writes, payload} ->
+          heal_note(note, payload, writes, counts)
+
+        :skip ->
+          mark_undecryptable(note, user)
+          {:cont, {:ok, bump(counts, :skipped_v5)}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason, counts}}
       end
     end)
   end
+
+  # `{:ok, writes, stamp_payload}`: the drifted points of each layout with
+  # the payload each must hold, and the payload whose hash the row gets (the
+  # v5 one when the note has v5 points, as a v5 pass stamps).
+  defp plan_note(_user, note, [], v3_ids, stored) do
+    payload = Indexing.expected_note_payload(note)
+    {:ok, v3_writes(v3_ids, stored, payload), payload}
+  end
+
+  defp plan_note(user, note, v5_ids, v3_ids, stored) do
+    with {:ok, plain} <- Crypto.maybe_decrypt_note_fields(note, user),
+         {:ok, v5} <- Indexing.expected_v5_payload(plain, user) do
+      want = normalize(v5)
+      drifted = Enum.reject(v5_ids, &(Map.take(stored[&1], v5_keys()) == want))
+      writes = if drifted == [], do: [], else: [{:overwrite, drifted, v5}]
+      {:ok, writes ++ v3_writes(v3_ids, stored, Indexing.expected_note_payload(note)), v5}
+    else
+      # The note's own ciphertext fails AEAD under the current DEK: it is
+      # undecryptable, not unlucky. Anything else (no DEK, a contended load,
+      # a key-provider error) is transient: the job fails and Oban backs off,
+      # the note stays NULL for the daily re-check.
+      {:error, :decrypt_failed} -> :skip
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp v3_writes(ids, stored, payload) do
+    want = normalize(payload)
+
+    case Enum.reject(ids, &holds?(stored[&1], want)) do
+      [] -> []
+      drifted -> [{:set, drifted, payload}]
+    end
+  end
+
+  defp normalize(payload), do: payload |> Jason.encode!() |> Jason.decode!()
+
+  defp v5_keys, do: Enum.map(PayloadKeys.logical_names(), &PayloadKeys.short/1)
 
   defp heal_note(note, payload, [], counts) do
     stamp(note, payload, false)
     {:cont, {:ok, counts}}
   end
 
-  defp heal_note(note, payload, drifted, counts) do
+  defp heal_note(note, payload, writes, counts) do
     counts = bump(counts, :drifted)
 
-    case Qdrant.set_payload(Qdrant.collection_name(), drifted, payload) do
+    case Enum.reduce_while(writes, :ok, fn w, :ok -> write(w) end) do
       :ok ->
         # Drifted filter keys mean a rotation, so the sparse vectors (keyed
         # on the same filter key) are stale too: the keyword sweep redoes them.
@@ -274,7 +358,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
       {:error, reason} ->
         Logger.warning(
-          "note payload reconcile: set_payload failed",
+          "note payload reconcile: payload write failed",
           Metadata.with_category(:warning, :search,
             user_id: note.user_id,
             note_id: note.id,
@@ -286,11 +370,21 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     end
   end
 
+  defp write({op, ids, payload}) do
+    fun = if op == :set, do: &Qdrant.set_payload/3, else: &Qdrant.overwrite_payload/3
+
+    case fun.(Qdrant.collection_name(), ids, payload) do
+      :ok -> {:cont, :ok}
+      err -> {:halt, err}
+    end
+  end
+
   # Compare-and-set on every column the payload is built from, and on the
   # stamp still being NULL: an index that committed since the read wrote (and
   # stamped) its own payload, and stamping ours would vouch for HMACs the row
   # no longer holds. A miss stays NULL for the next pass.
   @payload_columns [
+    :content_hash,
     :vault_id,
     :path_hmac,
     :folder_hmac,
@@ -313,9 +407,15 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     set = [payload_hash: Indexing.note_payload_hash(payload)]
     set = if drifted?, do: [{:keyword_version, nil} | set], else: set
 
-    {:ok, {_, _}} =
+    {:ok, :ok} =
       Repo.with_tenant(note.user_id, fn ->
-        Repo.update_all(from(n in Note, where: n.kind == "note", where: ^guard), set: set)
+        case Repo.update_all(from(n in Note, where: n.kind == "note", where: ^guard), set: set) do
+          # We wrote this note's points from the row we read and the stamp
+          # missed: an index committed (and stamped) in between, and our
+          # write may have replaced its fresher payload.
+          {0, _} when drifted? -> Indexing.unstamp_payload_hash(note)
+          {_, _} -> :ok
+        end
       end)
 
     :ok

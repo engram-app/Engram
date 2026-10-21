@@ -17,8 +17,13 @@ defmodule Engram.Crypto.UserDekRotationTest do
     VaultIndexUpdateLog
   }
 
+  alias Engram.Notes.FlatFields
+  alias Engram.Notes.FrontmatterKey
+  alias Engram.Notes.FrontmatterKeys
+  alias Engram.Notes.NoteAttr
   alias Engram.Repo
   alias Engram.Test.LogCapture
+  alias Engram.Vector.FilterId
   alias Engram.Vector.Qdrant
   alias Yex.Sync.SharedDoc
 
@@ -38,6 +43,12 @@ defmodule Engram.Crypto.UserDekRotationTest do
         200,
         Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => nil}})
       )
+    end)
+
+    # The payload heal (`ReconcileNotePayloads`) set_payloads a drifted
+    # point when a test drains it.
+    Bypass.stub(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
+      Plug.Conn.send_resp(conn, 200, ~s({"result": {"status": "completed"}, "status": "ok"}))
     end)
 
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture(dek_version: 1)
@@ -442,6 +453,123 @@ defmodule Engram.Crypto.UserDekRotationTest do
         Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^a.id), skip_tenant_check: true)
 
       refute reloaded.content_ciphertext == old_ct
+    end
+  end
+
+  # Task 11.1: chunk text is encrypted under the DEK and bound to the point id.
+  # Left out of the rotation, it decrypts until the old key is retired, then
+  # every search hit loses its text.
+  describe "rotate_user/1 - chunk text" do
+    test "chunk text re-encrypts under the new DEK, still bound to its point", %{user: user} do
+      vault = Engram.Fixtures.insert_vault!(user, "ChunkTextVault")
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "c.md", content: "c"})
+      {:ok, old_dek} = Crypto.get_dek(user)
+
+      rows =
+        for {text, pos} <- [{"first", 0}, {"second", 1}, {"third", 2}] do
+          point_id = Ecto.UUID.generate()
+
+          Map.merge(
+            %{point_id: point_id, note_id: note.id, user_id: user.id, position: pos},
+            Map.put(
+              Crypto.encrypt_chunk_text(text, "H#{pos}", old_dek, point_id),
+              :slice_sum,
+              42 + pos
+            )
+          )
+        end
+
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.insert_all(Engram.Notes.ChunkPoint, rows, skip_tenant_check: true)
+        end)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      {:ok, new_dek} = Crypto.get_dek(reloaded_user)
+      refute new_dek == old_dek
+
+      {:ok, stored} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(
+            from(c in Engram.Notes.ChunkPoint, where: c.note_id == ^note.id, order_by: c.position)
+          )
+        end)
+
+      assert [{"first", "H0"}, {"second", "H1"}, {"third", "H2"}] =
+               Enum.map(stored, fn c ->
+                 {:ok, pair} = Crypto.decrypt_chunk_text(c, new_dek, c.point_id)
+                 pair
+               end)
+
+      assert Enum.all?(
+               stored,
+               &(Crypto.decrypt_chunk_text(&1, old_dek, &1.point_id) == :error)
+             )
+
+      # The checksum is keyed: re-summed under the new key from the text.
+      new_ck = Crypto.dek_content_hash_key_from_bytes(new_dek)
+
+      assert Enum.map(stored, & &1.slice_sum) ==
+               Enum.map(~w(first second third), &Engram.Indexing.text_sum(new_ck, &1))
+    end
+
+    test "a checksum-only row is re-summed under the new DEK, so search still shows it",
+         %{user: user} do
+      vault = Engram.Fixtures.insert_vault!(user, "SliceVault")
+      content = "# Iron\n\nFerritin levels are low."
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "s.md", content: content})
+      {:ok, old_dek} = Crypto.get_dek(user)
+      old_ck = Crypto.dek_content_hash_key_from_bytes(old_dek)
+      [{0, %{text: text}}] = Enum.to_list(Engram.Indexing.display_chunks(content, "s.md", 1))
+      point_id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.insert!(%Engram.Notes.Chunk{
+            note_id: note.id,
+            user_id: user.id,
+            vault_id: vault.id,
+            position: 0,
+            char_start: 0,
+            char_end: byte_size(text),
+            qdrant_point_id: point_id
+          })
+
+          Repo.insert!(%Engram.Notes.ChunkPoint{
+            point_id: point_id,
+            note_id: note.id,
+            user_id: user.id,
+            position: 0,
+            slice_sum: Engram.Indexing.text_sum(old_ck, text)
+          })
+        end)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      {:ok, new_dek} = Crypto.get_dek(reloaded_user)
+      new_ck = Crypto.dek_content_hash_key_from_bytes(new_dek)
+
+      {:ok, [stored]} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(from(c in Engram.Notes.ChunkPoint, where: c.note_id == ^note.id))
+        end)
+
+      assert stored.slice_sum == Engram.Indexing.text_sum(new_ck, text)
+
+      {:ok, hits} = Engram.Notes.search_hits_by_qdrant_points(reloaded_user, [point_id])
+      assert %{text: ^text} = hit = hits[point_id]
+      refute Map.get(hit, :stale, false)
     end
   end
 
@@ -919,6 +1047,207 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
       {:ok, new_filter_key} = Crypto.dek_filter_key(reloaded_user)
       assert raw.type_hmac == Crypto.hmac_field(new_filter_key, "playbook")
+    end
+
+    # M2: a dictionary row neither DEK opens fails the rotation like the other
+    # DB sweeps; skipping it would leave an old-key HMAC that resolves to a
+    # second id for the same key.
+    test "a dictionary row neither DEK decrypts fails the rotation", %{user: user} do
+      Repo.insert_all(
+        FrontmatterKey,
+        [
+          %{
+            user_id: user.id,
+            key_id: 64,
+            key_hmac: :crypto.strong_rand_bytes(32),
+            name_ct: :crypto.strong_rand_bytes(24),
+            name_nonce: :crypto.strong_rand_bytes(12)
+          }
+        ],
+        skip_tenant_check: true
+      )
+
+      assert_raise RuntimeError, ~r/sweep_frontmatter_keys: decrypt failed/, fn ->
+        UserDekRotation.rotate_user(user.id)
+      end
+    end
+
+    test "rotation keeps every frontmatter key id, rekeys the dictionary, rewraps names",
+         %{user: user, vault: vault} do
+      content = "---\nstatus: Draft\nMood: calm\nrating: 4\n---\nbody\n"
+
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/flat.md", "content" => content},
+          actor: "api"
+        )
+
+      # What the indexing pass writes (`Indexing.stamp_flat_fields/1`).
+      user = Repo.get!(Engram.Accounts.User, user.id)
+      {:ok, fk} = Crypto.dek_filter_key(user)
+      {:ok, dek} = Crypto.get_dek(user)
+      flat = FlatFields.extract(content, fk)
+      {ids, 0} = FrontmatterKeys.resolve(user.id, dek, flat.names)
+      flat = FlatFields.put_key_ids(flat, ids)
+      Repo.insert_all(NoteAttr, FlatFields.attr_rows(flat, note), skip_tenant_check: true)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded = Repo.get!(Engram.Accounts.User, user.id)
+      {:ok, new_fk} = Crypto.dek_filter_key(reloaded)
+      {:ok, new_dek} = Crypto.get_dek(reloaded)
+
+      keys =
+        Repo.all(from(k in FrontmatterKey, where: k.user_id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      by_id = Map.new(keys, &{&1.key_id, &1})
+      assert Map.keys(by_id) |> Enum.sort() == ids |> Map.values() |> Enum.sort()
+
+      mood = by_id[ids[FilterId.key_hmac(fk, "mood")]]
+      assert mood.key_hmac == FilterId.key_hmac(new_fk, "mood")
+      assert FrontmatterKeys.name(mood, new_dek) == {:ok, "Mood"}
+
+      # note_attrs held old-key HMACs; with the v5 format off nothing rebuilds
+      # them, so they are dropped.
+      assert Repo.all(from(a in NoteAttr, where: a.note_id == ^note.id),
+               skip_tenant_check: true
+             ) == []
+    end
+  end
+
+  # Every filter key derives from the DEK, so a rotation must rewrite the
+  # HMACs Qdrant filters on, or a type/tag/folder filter built with the new
+  # key silently matches nothing. Nothing re-indexes after a rotation, and it
+  # must not: a re-index would re-embed (the content-hash key rotates too).
+  describe "rotate_user/1 - Qdrant filter keys follow the new key, $0 in Voyage" do
+    setup %{user: user} do
+      vault = Engram.Fixtures.insert_vault!(user, "KeysVault")
+      content = "---\ntype: Playbook\ntags: [ops]\nstatus: draft\nmood: calm\n---\nbody\n"
+
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/keys.md", "content" => content},
+          actor: "api"
+        )
+
+      point = Ecto.UUID.generate()
+
+      Repo.insert!(
+        %Engram.Notes.Chunk{
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          position: 0,
+          char_start: 0,
+          char_end: 4,
+          qdrant_point_id: point
+        },
+        skip_tenant_check: true
+      )
+
+      # No embed, ever: the rotation must not reach the embedder.
+      Mox.expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("embed during rotation") end)
+
+      {:ok, note: note, point: point}
+    end
+
+    # `points`: what Qdrant holds for the note, as the payload heal reads it.
+    defp capture_payload_writes(test_pid, points) do
+      bypass = Bypass.open()
+      Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+
+      Bypass.stub(bypass, "POST", "/collections/engram_notes/points/scroll", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:scroll, Jason.decode!(body)})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"result" => %{"points" => points, "next_page_offset" => nil}})
+        )
+      end)
+
+      Bypass.stub(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:set, Jason.decode!(body)})
+        Plug.Conn.send_resp(conn, 200, ~s({"result": {"status": "completed"}, "status": "ok"}))
+      end)
+
+      Bypass.stub(bypass, "PUT", "/collections/engram_notes/points/payload", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:overwrite, Jason.decode!(body)})
+        Plug.Conn.send_resp(conn, 200, ~s({"result": {"status": "completed"}, "status": "ok"}))
+      end)
+
+      bypass
+    end
+
+    test "a v3 point gets the new type, tag and path HMACs", %{
+      user: user,
+      note: note,
+      point: point
+    } do
+      capture_payload_writes(self(), [
+        %{"id" => point, "payload" => %{"user_id" => user.id, "type_hmac" => "b2xk"}}
+      ])
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+      # Not in the rotating process: the flip commits the heal (#2067 delta).
+      refute_received {:set, %{"filter" => %{"should" => [%{"has_id" => [^point]}]}}}
+      assert :ok = perform_job(Engram.Workers.ReconcileNotePayloads, %{"user_id" => user.id})
+      Mox.verify!()
+
+      {:ok, new_fk} = Crypto.dek_filter_key(Repo.get!(Engram.Accounts.User, user.id))
+
+      raw =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      assert_received {:set,
+                       %{
+                         "filter" => %{"should" => [%{"has_id" => [^point]}]},
+                         "payload" => payload
+                       }}
+
+      # Exactly what a type / tag filter built after the rotation sends.
+      assert payload["type_hmac"] == Base.encode64(Crypto.hmac_field(new_fk, "playbook"))
+      assert payload["tags_hmac"] == [Base.encode64(Crypto.hmac_field(new_fk, "ops"))]
+      assert payload["path_hmac"] == Base.encode64(raw.path_hmac)
+    end
+
+    test "a v5 point is rebuilt under the new key and note_attrs rewritten from the frontmatter",
+         %{user: user, note: note, point: point} do
+      Engram.ServiceConfig.put_override(:v5_payload_format, true)
+
+      capture_payload_writes(self(), [%{"id" => point, "payload" => %{"u" => "x", "y" => "b2xk"}}])
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+      refute_received {:overwrite, _}
+      assert :ok = perform_job(Engram.Workers.ReconcileNotePayloads, %{"user_id" => user.id})
+      Mox.verify!()
+
+      {:ok, new_fk} = Crypto.dek_filter_key(Repo.get!(Engram.Accounts.User, user.id))
+
+      assert_received {:overwrite,
+                       %{"filter" => %{"should" => [%{"has_id" => [^point]}]}, "payload" => p}}
+
+      refute_received {:set, %{"filter" => %{"should" => [%{"has_id" => [^point]}]}}}
+      assert p["y"] == FilterId.from_hmac(Crypto.hmac_field(new_fk, "playbook"))
+      assert p["s"] == FilterId.attr_value(new_fk, "draft")
+
+      [mood] =
+        Repo.all(from(k in FrontmatterKey, where: k.user_id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      assert mood.key_hmac == FilterId.key_hmac(new_fk, "mood")
+      assert p["fa"] == [%{"k" => mood.key_id, "h" => FilterId.attr_value(new_fk, "calm")}]
+
+      rows = Repo.all(from(a in NoteAttr, where: a.note_id == ^note.id), skip_tenant_check: true)
+      assert Enum.find(rows, &(&1.key_id == mood.key_id)).h == FilterId.value_hmac(new_fk, "calm")
+
+      assert Enum.find(rows, &(&1.key_id == FrontmatterKeys.named_id(:status))).h ==
+               FilterId.value_hmac(new_fk, "draft")
     end
   end
 
@@ -2402,8 +2731,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       # For Postgrex.Error we verify the clause by ensuring the pattern is
       # unreachable from rotate_user in unit tests (it requires a real DB error),
       # so we test the adjacent new clause: {status, body} integer-status tuple.
-      # The existing "sweep returns error when scroll fails" test exercises
-      # {:qdrant_scroll, 503, body} → "qdrant_scroll_failed" (tested above).
+      # A scroll failure no longer fails the rotation (it is reported after the
+      # flip, #2101), so {:qdrant_scroll, 503, body} reaches classify_reason/1
+      # only as a requeue reason_label.
       #
       # The http_{status} clause is exercised by a raw {500, body} tuple if Qdrant
       # returns it (pre-scroll wrapper). We confirm that pattern with a direct

@@ -23,6 +23,13 @@ defmodule Engram.DataMigrations.NotePayloadStamps do
   @impl true
   def version, do: 1
 
+  # Daily, on the existing runner cron: a lost write race NULLs a stamp
+  # (`Indexing.unstamp_payload_hash/1`) after the migration closed, and only
+  # this heal rewrites those points before the note's next edit. The check
+  # is an exists query per user; a reopen rewrites payloads, never embeds.
+  @impl true
+  def reverify?, do: true
+
   @impl true
   def run_pass do
     case ReconcileNotePayloads.enqueue_missing() do

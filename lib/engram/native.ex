@@ -55,7 +55,7 @@ defmodule Engram.Native do
     {:link_extract, :link_extract_nif, :link_extract_dirty_nif, 2},
     {:note_title, :note_title_nif, :note_title_dirty_nif, 1},
     {:note_meta, :note_meta_nif, :note_meta_dirty_nif, 1},
-    {:chunk, :chunk_nif, :chunk_dirty_nif, 3},
+    {:chunk, :chunk_nif, :chunk_dirty_nif, 5},
     {:frontmatter_split, :frontmatter_split_nif, :frontmatter_split_dirty_nif, 1},
     {:frontmatter_parse, :frontmatter_parse_nif, :frontmatter_parse_dirty_nif, 1},
     {:text_diff, :text_diff_nif, :text_diff_dirty_nif, 2},
@@ -71,7 +71,7 @@ defmodule Engram.Native do
 
   # NIFs reached only through a wrapper below that fixes their schedule.
   @single [
-    encode_documents_nif: 4,
+    encode_documents_nif: 6,
     mmr_select_nif: 5,
     pack_f32_nif: 1,
     dense_json_nif: 1,
@@ -118,10 +118,13 @@ defmodule Engram.Native do
 
   @doc """
   Chunks for `Engram.Parsers.Markdown.parse/2`: `[{text, context_text,
-  heading_path, char_start, char_end}]`, before positions. Splits
+  embed_text, {headings, section_count}, char_start, char_end, kind}]`,
+  before positions; `headings` is a list, title first, and `section_count`
+  the sections a min512 chunk joins (1 for one). Splits
   frontmatter itself. Valid UTF-8 only.
   """
-  def chunk(content, folder, title), do: sized(:chunk, content, [content, folder, title])
+  def chunk(content, folder, title, aliases \\ [], lead \\ nil),
+    do: sized(:chunk, content, [content, folder, title, aliases, lead])
 
   @doc """
   Frontmatter fence offsets for `Engram.Notes.Frontmatter.split/1`:
@@ -194,10 +197,28 @@ defmodule Engram.Native do
   @doc """
   Batch keyword encode: `[{indices_u32le, values_f64le, doc_len}]`, indices
   ascending. Emits `[:engram, :nif, :call, :stop]`.
+
+  Options: `:b` BM25 length weight (default 0.75), `:cap` score each
+  document as if it were at most `cap` x `avgdl` long (default none). The
+  defaults encode exactly as before the options existed. A `b` outside
+  [0, 1] or a `cap` below 1 would make the norm zero or negative (inf, NaN
+  or negative weights) and raises `ArgumentError` before the NIF runs.
   """
-  def encode_documents(texts, filter_key, avgdl, language) do
+  def encode_documents(texts, filter_key, avgdl, language, opts \\ []) do
+    b = Keyword.get(opts, :b, 0.75)
+    cap = Keyword.get(opts, :cap)
+
+    unless is_number(b) and b >= 0 and b <= 1,
+      do: raise(ArgumentError, "b must be in [0, 1], got: #{inspect(b)}")
+
+    unless is_nil(cap) or (is_number(cap) and cap >= 1),
+      do: raise(ArgumentError, "cap must be nil or >= 1, got: #{inspect(cap)}")
+
+    b = b / 1
+    cap = cap && cap / 1
+
     call(:keyword_encode, texts, %{dirty: true}, fn ->
-      encode_documents_nif(texts, filter_key, avgdl, language)
+      encode_documents_nif(texts, filter_key, avgdl, language, b, cap)
     end)
   end
 

@@ -1347,6 +1347,14 @@ export function useBillingStatus() {
 	});
 }
 
+// GET /billing/usage, the slice the usage meter and the embed-bucket row read.
+// `limit: null` is uncapped. `index_points` and `floor_notes` are present only
+// while the v5 index budget is on.
+export interface UsageEntry {
+	used: number;
+	limit: number | null;
+}
+
 /** Free's refilling embed budget from `GET /billing/usage`; null when the user has none. */
 export interface EmbedBucket {
 	available: number;
@@ -1360,10 +1368,30 @@ export interface EmbedBucket {
 	parked_ready_at: string | null;
 }
 
+export interface BillingUsage {
+	tier: string;
+	usage: {
+		notes: UsageEntry;
+		index_points?: UsageEntry;
+		// Notes on keyword-only search (the floor tier).
+		floor_notes?: number;
+		embed_bucket?: EmbedBucket | null;
+	};
+}
+
+export function useBillingUsage() {
+	return useQuery({
+		queryKey: ["billing", "usage"],
+		queryFn: () => api.get<BillingUsage>("/billing/usage"),
+		staleTime: 60_000,
+	});
+}
+
+// Same query key and payload as useBillingUsage, so both share one cache entry.
 export function useEmbedBucket() {
 	return useQuery({
 		queryKey: ["billing", "usage"],
-		queryFn: () => api.get<{ usage?: { embed_bucket?: EmbedBucket | null } }>("/billing/usage"),
+		queryFn: () => api.get<BillingUsage>("/billing/usage"),
 		select: (data) => data?.usage?.embed_bucket ?? null,
 		staleTime: 60_000,
 	});
@@ -1382,6 +1410,9 @@ export interface BillingConfig {
 	};
 	// Maximum number of active vaults the user may have, or null for unlimited.
 	vaults_cap: number | null;
+	// Which note-cap set the backend enforces (`LimitKeys.plan_limits/0`);
+	// the plan cards show its copy. Absent on an older backend: legacy.
+	plan_limits?: "legacy" | "v5";
 }
 
 export type BillingCadence = "monthly" | "annual";

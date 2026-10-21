@@ -34,7 +34,8 @@ defmodule Engram.Workers.DataMigrationsRunner do
     Engram.DataMigrations.EnvelopeFormat,
     Engram.DataMigrations.LinkResolutionKeys,
     Engram.DataMigrations.NotePayloadStamps,
-    Engram.DataMigrations.NoteSplit
+    Engram.DataMigrations.NoteSplit,
+    Engram.DataMigrations.KeyAliases
   ]
 
   @impl Oban.Worker

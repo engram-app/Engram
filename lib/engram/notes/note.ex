@@ -46,9 +46,16 @@ defmodule Engram.Notes.Note do
     field :chunker_version, :integer
     field :keyword_version, :integer
     field :embed_model, :string
+    field :key_alias_version, :integer
     # Hash of the note-level Qdrant payload last written to this note's
     # points; see `Engram.Indexing.commit_index/2`. NULL = unknown, refresh.
     field :payload_hash, :binary
+    # Free index budget: NULL = full index, "floor" / "floor_paid" = one
+    # sparse-only point for the whole note. See `Engram.Indexing.floor_plan/2`.
+    field :index_tier, :string
+    # Chunks a full pass would write before the per-note cap, on a floored or
+    # merged note only (NULL otherwise). Read by the index budget sweep.
+    field :chunk_count, :integer
     # Poison-loop guard: when a note exhausts its EmbedNote attempts, the worker
     # stamps a cooldown timestamp here. ReconcileEmbeddings skips notes whose
     # cooldown hasn't elapsed, so a permanently-failing note re-bills Voyage at
@@ -69,6 +76,9 @@ defmodule Engram.Notes.Note do
     field :embed_started_by, :string
     field :embed_started_hash, :string
     field :embed_crashes, :integer
+    # A v5 rebuild pass got its vectors from Voyage and has not committed yet
+    # (`Engram.Indexing`, chunker v5 Task 16.3).
+    field :rebuild_paid_at, :utc_datetime_usec
     field :mtime, :float
     field :ctime, :float
     field :deleted_at, :utc_datetime_usec

@@ -1,0 +1,15 @@
+{
+	"type": "Art",
+	"status": "status",
+	"author": "Autor",
+	"reviewed_by": "geprüft_von",
+	"source": "Quelle",
+	"project": "Projekt",
+	"created": "erstellt",
+	"updated": "geändert",
+	"reviewed": "überprüft",
+	"expires": "Verfallsdatum",
+	"due": "Fälligkeitsdatum",
+	"priority": "Priorität",
+	"description": "Beschreibung"
+}

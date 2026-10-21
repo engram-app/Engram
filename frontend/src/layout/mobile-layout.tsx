@@ -12,6 +12,7 @@ import {
 	SheetTrigger,
 } from "@/components/ui/sheet";
 import { useT } from "@/i18n/locale-provider";
+import { UsageBanner } from "../billing/usage-limits";
 import { LegalNoticeBanner } from "../legal/legal-notice-banner";
 import FolderTree from "../viewer/folder-tree";
 import FolderActions from "./folder-actions";
@@ -72,6 +73,7 @@ export default function MobileLayout() {
 		<section className="flex h-dvh flex-col bg-background text-foreground [--mobile-header:3.5rem]">
 			{/* Above the floating header, in flow, so the header never covers it. */}
 			<LegalNoticeBanner />
+			<UsageBanner />
 			<div className="relative flex min-h-0 flex-1 flex-col">
 				{/* Obsidian-style: no title bar, just the corner buttons floating over
 			    the page, so text scrolls past behind them. The icons sit on small

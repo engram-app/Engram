@@ -256,17 +256,21 @@ export default {
 	"You're on this plan": "Jesteś na tym planie",
 	"Start free trial": "Rozpocznij darmowy okres próbny",
 	Popular: "Popularny",
+	"2,000 notes · 20 AI searches a day · 1 vault": "2000 notatek · 20 zapytań AI dziennie · 1 sejf",
 	"3,000 notes · 20 AI searches a day · 1 vault": "3000 notatek · 20 zapytań AI dziennie · 1 sejf",
+	"2,000 notes, all searchable": "2000 notatek, wszystkie przeszukiwalne",
 	"3,000 notes, all searchable": "3000 notatek, wszystkie przeszukiwalne",
 	"20 AI searches a day": "20 zapytań AI dziennie",
 	"1 vault": "1 sejf",
 	"1 GB attachments": "1 GB załączników",
 	"2 devices": "2 urządzenia",
+	"20,000 notes": "20 000 notatek",
 	"10 vaults": "10 sejfów",
 	"Unlimited devices": "Nieograniczona liczba urządzeń",
 	"10 GB attachments": "10 GB załączników",
 	"Unlimited AI searches": "Nieograniczone wyszukiwania AI",
 	"Unlimited vaults": "Nieograniczona liczba sejfów",
+	"40,000 notes": "40 000 notatek",
 	"50 GB attachments": "50 GB załączników",
 	"Cross-vault search": "Wyszukiwanie między sejfami",
 	"Loading plan options…": "Ładowanie opcji planu…",
@@ -306,6 +310,34 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Korzystasz z bezpłatnego okresu próbnego. Paddle, nasz procesor płatności, nie pozwala na zmiany planu podczas okresu próbnego – Twój okres próbny kończy się {date}.",
 	Upgrade: "Zaktualizuj",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Osiągnąłeś limit {cap} notatek. Nowe notatki przestają się synchronizować, dopóki nie wykupisz dodatkowej przestrzeni lub nie usuniesz niektórych.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Wykorzystałeś {percent}% z {cap} notatek. Przy {cap}, nowe notatki przestają się synchronizować, dopóki nie wykupisz dodatkowej przestrzeni lub nie usuniesz niektórych.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Wykorzystałeś {percent}% z {cap} fragmentów przeszukiwanych. Po przekroczeniu tego limitu, starsze notatki są wyszukiwane tylko po słowach kluczowych (dokładne słowa, nie znaczenie). Nic nie jest usuwane.",
+	"See usage": "Zobacz użycie",
+	Usage: "Użycie",
+	"Notes: {used}": "Notatki: {used}",
+	"Notes: {used} of {cap}": "Notatki: {used} z {cap}",
+	"Full search: {used} of {cap} passages": "Pełne wyszukiwanie: {used} z {cap} fragmentów",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Fragment to jedna wyszukiwalna część notatki. Po przekroczeniu tego limitu, starsze notatki są wyszukiwane tylko po słowach kluczowych (dokładne słowa, nie znaczenie). Nic nie jest usuwane.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			one: "Twoje możliwości pełnego wyszukiwania zostały wykorzystane. Znaleziono {count} starszą notatkę tylko po słowach kluczowych (dokładne słowa, nie znaczenie). Nic nie zostanie usunięte. Zaktualizuj, aby przywrócić pełne wyszukiwanie.",
+			few: "Twoje możliwości pełnego wyszukiwania zostały wykorzystane. Znaleziono {count} starsze notatki tylko po słowach kluczowych (dokładne słowa, nie znaczenie). Nic nie zostanie usunięte. Zaktualizuj, aby przywrócić pełne wyszukiwanie.",
+			many: "Twoje możliwości pełnego wyszukiwania zostały wykorzystane. Znaleziono {count} starszych notatek, ale tylko po słowach kluczowych (dokładne słowa, nie znaczenie). Nic nie zostanie usunięte. Zaktualizuj, aby odzyskać pełne wyszukiwanie.",
+			other:
+				"Wykorzystano wszystkie możliwości pełnego wyszukiwania. Znaleziono {count} starszych notatek, ale tylko po słowach kluczowych (dokładne słowa, nie znaczenie). Nic nie zostanie usunięte. Zaktualizuj, aby przywrócić pełne wyszukiwanie.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		one: "Znaleziono {count} notatkę, pasującą tylko do podanych słów (dokładne słowa, nie znaczenie).",
+		few: "Znaleziono {count} notatki, pasujące tylko do podanych słów (dokładne słowa, nie znaczenie).",
+		many: "Znaleziono {count} notatek, pasujących tylko do podanych słów (dokładne słowa, nie znaczenie).",
+		other:
+			"{count} Notatki są wyszukiwane tylko po słowach kluczowych (dokładne słowa, nie znaczenie).",
+	},
 	"All vaults, including ones you create later":
 		"Wszystkie sejfy, w tym te, które utworzysz później",
 	"All current vaults": "Wszystkie aktualne sejfy",
@@ -436,11 +468,22 @@ export default {
 	"a list, or one name": "lista lub jedna nazwa",
 	"Topics. Browsable and searchable across the vault.":
 		"Tematy. Można przeglądać i wyszukiwać w całym sejfie.",
-	"A one-line summary of the note.": "Krótkie podsumowanie notatki.",
-	"The thing the note is about — usually a URL.": "O czym jest notatka – zazwyczaj adres URL.",
+	"Where the note stands, such as draft or stable.":
+		"Gdzie znajduje się notatka, np. wersja robocza czy stabilna.",
+	"Who wrote the note, a person or an agent.": "Kto napisał notatkę, osoba czy agent.",
+	"Who last checked the note.": "Kto ostatnio sprawdził notatkę.",
+	"What the note is based on, usually a URL.":
+		"Na czym opiera się notatka, zazwyczaj na adresie URL.",
+	"The project the note belongs to.": "Projekt, do którego należy notatka.",
 	"a date (YYYY-MM-DD)": "data (RRRR-MM-DD)",
 	"When the note came into being.": "Kiedy notatka powstała.",
 	"When it last changed.": "Kiedy ostatnio została zmieniona.",
+	"When it was last checked.": "Kiedy notatka została ostatnio sprawdzona.",
+	"When the note goes out of date.": "Kiedy notatka stanie się nieaktualna.",
+	"When the work in the note is due.": "Kiedy praca zawarta w notatce jest wymagana.",
+	"a number": "liczba",
+	"How much the note matters, as a number.": "Jak ważna jest notatka, jako liczba.",
+	"A one-line summary of the note.": "Krótkie podsumowanie notatki.",
 	"Link Obsidian Vault": "Link do sejfu Obsidian",
 	"Please sign in to link your Obsidian vault.": "Zaloguj się, aby połączyć swój sejf Obsidian.",
 	"Finish setting up": "Zakończ konfigurację",
@@ -1404,8 +1447,11 @@ export default {
 	frontmatter: "metadane",
 	reads: "odczytuje",
 	"{what} Wants {expectsLabel}.": "{what} potrzebuje {expectsLabel}.",
+	"use {alias} or {key}": "użyj {alias} lub {key}",
 	"also accepts {aliases}": "akceptuje również {aliases}",
 	or: "lub",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Zagnieżdżona nazwa, taka jak {example}, nie może być edytowana tutaj ani w Obsidian; można ją edytować tylko bezpośrednio, MCP, lub AI ją napisze.",
 	Properties: "Atrybuty",
 	"About properties": "O właściwościach",
 	"Property name": "Nazwa właściwości",

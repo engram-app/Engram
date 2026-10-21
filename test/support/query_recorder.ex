@@ -15,11 +15,23 @@ defmodule Engram.QueryRecorder do
     end
   end
 
+  defp poller_query?(sql) do
+    sql =~ ~r/FROM "public"."oban_jobs".*GROUP BY/s or
+      (sql =~ ~r/FROM "rebuild_ledger"/ and from_ledger_poller?())
+  end
+
+  # Only the poller's read: a request path that reads the ledger still counts.
+  defp from_ledger_poller? do
+    {:current_stacktrace, st} = Process.info(self(), :current_stacktrace)
+    Enum.any?(st, &match?({Engram.PromEx.Indexing, :execute_rebuild_ledger, _, _}, &1))
+  end
+
   @doc false
   def handle(_event, _measurements, meta, pid) do
-    # The telemetry poller's oban_jobs gauge query fires on a timer in an
-    # unrelated process and would make counts flap by one.
-    unless meta.query =~ ~r/FROM "public"."oban_jobs".*GROUP BY/s do
+    # Telemetry pollers fire on a timer in an unrelated process and would make
+    # counts flap by one: the oban_jobs gauge and the v5 rebuild ledger gauge
+    # (`Engram.PromEx.Indexing.execute_rebuild_ledger/0`).
+    unless poller_query?(meta.query) do
       {:current_stacktrace, st} = Process.info(self(), :current_stacktrace)
       # `pid`: the process that ran the query, so an async test can keep only
       # its own (the handler sees every process's queries).

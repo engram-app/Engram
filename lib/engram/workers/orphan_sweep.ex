@@ -40,6 +40,7 @@ defmodule Engram.Workers.OrphanSweep do
   alias Engram.Repo
   alias Engram.Storage
   alias Engram.Vaults.Vault
+  alias Engram.Vector.FilterId
   alias Engram.Vector.Qdrant
 
   require Logger
@@ -117,6 +118,9 @@ defmodule Engram.Workers.OrphanSweep do
     s3_deleted = sweep_s3(live_ids)
     points_deleted = sweep_point_orphans()
     notes_flagged = sweep_missing_points(force: Map.get(args, "force", false))
+    # Frontmatter keys no note uses any more: frees per-user cap space (ids
+    # are never reused, see `FrontmatterKeys.reap_unused/1`).
+    keys_reaped = Engram.Notes.FrontmatterKeys.reap_unused()
 
     :telemetry.execute(
       [:engram, :orphan_sweep, :result],
@@ -124,7 +128,8 @@ defmodule Engram.Workers.OrphanSweep do
         qdrant_users_swept: qdrant_deleted,
         s3_prefixes_swept: s3_deleted,
         qdrant_points_swept: points_deleted,
-        notes_flagged_for_reindex: notes_flagged
+        notes_flagged_for_reindex: notes_flagged,
+        frontmatter_keys_reaped: keys_reaped
       },
       %{}
     )
@@ -137,7 +142,8 @@ defmodule Engram.Workers.OrphanSweep do
           qdrant_users_swept: qdrant_deleted,
           s3_prefixes_swept: s3_deleted,
           qdrant_points_swept: points_deleted,
-          notes_flagged_for_reindex: notes_flagged
+          notes_flagged_for_reindex: notes_flagged,
+          frontmatter_keys_reaped: keys_reaped
         }
       )
     )
@@ -732,7 +738,8 @@ defmodule Engram.Workers.OrphanSweep do
     opts = [
       filter: %{},
       limit: @qdrant_scroll_limit,
-      with_payload: ["user_id"],
+      # `u` is the v5 point's user id (undashed, `PayloadKeys`).
+      with_payload: if(Qdrant.v5_payload_format?(), do: ["user_id", "u"], else: ["user_id"]),
       with_vector: false
     ]
 
@@ -742,8 +749,9 @@ defmodule Engram.Workers.OrphanSweep do
       {:ok, %{points: points, next_page_offset: next}} ->
         acc =
           Enum.reduce(points, acc, fn point, set ->
-            case get_in(point, ["payload", "user_id"]) do
-              uid when is_binary(uid) -> MapSet.put(set, uid)
+            case point["payload"] do
+              %{"user_id" => uid} when is_binary(uid) -> MapSet.put(set, uid)
+              %{"u" => uid} when is_binary(uid) -> MapSet.put(set, FilterId.dashed(uid))
               _ -> set
             end
           end)

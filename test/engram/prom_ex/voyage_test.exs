@@ -10,11 +10,12 @@ defmodule Engram.PromEx.VoyageTest do
   use ExUnit.Case, async: true
 
   alias Engram.PromEx.Voyage, as: VoyagePlugin
+  alias Engram.Test.PromExMetrics
   alias PromEx.MetricTypes.Event
 
   describe "event_metrics/1" do
     test "returns an Event.t() (or list) of Telemetry.Metrics with engram_prom_ex.voyage prefix" do
-      result = VoyagePlugin.event_metrics(otp_app: :engram)
+      result = PromExMetrics.of(VoyagePlugin)
       events = List.wrap(result)
 
       assert Enum.all?(events, &match?(%Event{}, &1)),
@@ -32,7 +33,7 @@ defmodule Engram.PromEx.VoyageTest do
 
     test "declares a latency distribution for embed requests" do
       metrics =
-        VoyagePlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+        PromExMetrics.of(VoyagePlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
       assert Enum.any?(metrics, fn m ->
                match?(%Telemetry.Metrics.Distribution{}, m) and
@@ -43,7 +44,7 @@ defmodule Engram.PromEx.VoyageTest do
 
     test "declares a counter for embed errors" do
       metrics =
-        VoyagePlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+        PromExMetrics.of(VoyagePlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
       assert Enum.any?(metrics, fn m ->
                match?(%Telemetry.Metrics.Counter{}, m) and
@@ -54,7 +55,7 @@ defmodule Engram.PromEx.VoyageTest do
 
     test "never includes high-cardinality tags (user_id, vault_id)" do
       metrics =
-        VoyagePlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+        PromExMetrics.of(VoyagePlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
       banned = [:user_id, :vault_id, :tenant_id, :path, :path_hmac]
 

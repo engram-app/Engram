@@ -1,6 +1,8 @@
 defmodule EngramWeb.SearchControllerTest do
   use EngramWeb.ConnCase, async: false
 
+  import Engram.QdrantFilterView
+
   import ExUnit.CaptureLog
   import Mox
 
@@ -498,6 +500,32 @@ defmodule EngramWeb.SearchControllerTest do
       %{"results" => results} = json_response(conn, 200)
       assert length(results) == 3
     end
+
+    # A merged chunk (several chunks in one point, under the per-note cap)
+    # holds up to ~30 KB: the snippet is a window around the match.
+    test "a merged hit's snippet is a window of at most 1,500 chars around the match", %{
+      conn: conn,
+      bypass: bypass,
+      user: user
+    } do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      text = merged_text("quixotic")
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
+        result = %{"result" => [chunk("uuid-m", 0.9, "Big.md", "Big", text, user)]}
+
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(c, result)))
+      end)
+
+      conn = post(conn, "/api/search", %{query: "quixotic finale", diversity: 0})
+      assert %{"results" => [hit]} = json_response(conn, 200)
+      assert String.length(hit["snippet"]) <= 1_500
+      assert hit["snippet"] =~ "quixotic finale"
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -578,7 +606,7 @@ defmodule EngramWeb.SearchControllerTest do
       assert legs != []
 
       for leg <- legs do
-        clause = Enum.find(leg["filter"]["must"], &(&1["key"] == "vault_id"))
+        clause = Enum.find(legacy_view(leg["filter"]["must"]), &(&1["key"] == "vault_id"))
         assert %{"match" => %{"any" => ids}} = clause
         assert Enum.sort(ids) == Enum.sort([to_string(vault.id), to_string(vault_b.id)])
         refute to_string(vault_c.id) in ids
@@ -621,7 +649,7 @@ defmodule EngramWeb.SearchControllerTest do
       assert_received {:qdrant_body, body}
 
       for leg <- body["searches"] || [body] do
-        clause = Enum.find(leg["filter"]["must"], &(&1["key"] == "vault_id"))
+        clause = Enum.find(legacy_view(leg["filter"]["must"]), &(&1["key"] == "vault_id"))
         assert clause["match"] == %{"value" => to_string(vault.id)}
         refute to_string(vault_b.id) in List.wrap(clause["match"]["any"])
       end
@@ -697,7 +725,7 @@ defmodule EngramWeb.SearchControllerTest do
       assert_received {:qdrant_body, body}
 
       for leg <- body["searches"] || [body] do
-        refute Enum.any?(leg["filter"]["must"] || [], &(&1["key"] == "vault_id"))
+        refute Enum.any?(legacy_view(leg["filter"]["must"]) || [], &(&1["key"] == "vault_id"))
       end
     end
   end
@@ -732,6 +760,14 @@ defmodule EngramWeb.SearchControllerTest do
         "vault_id" => to_string(vault_id)
       }
     }
+  end
+
+  # ~30 KB of filler paragraphs with `word` in one near the end.
+  defp merged_text(word) do
+    Enum.map_join(1..600, "\n\n", fn
+      550 -> "Paragraph 550 holds the #{word} finale."
+      i -> "Paragraph #{i} of ordinary filler text."
+    end)
   end
 
   defp default_vault_id(user) do

@@ -76,6 +76,20 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
     end
 
+    # A DEK rotation's text guard requeues a note as an EmbedNote that takes
+    # the version-rebuild route itself. A RebuildStaleNote for the same note
+    # beside it would make two workers pay Voyage for one rebuild.
+    test "a version-stale note with an EmbedNote pending gets no second rebuild job" do
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+      note = current_note(user, chunker_version: nil, keyword_version: nil)
+      {:ok, _} = Oban.insert(EmbedNote.new(%{"note_id" => note.id, "user_id" => user.id}))
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+
+      refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
+    end
+
     # Once IndexVersions is done, no content-current note is on an old
     # version, so the sweep stops looking for them, except on one tick a day.
     test "once IndexVersions is done, a version-stale note is not swept" do
@@ -527,7 +541,11 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
         )
       end
 
-      txns = count_tenant_txns(fn -> assert :ok = perform_job(ReconcileEmbeddings, %{}) end)
+      # Off the re-verify hour, so the daily per-note cap sweep stays out.
+      txns =
+        count_tenant_txns(fn ->
+          assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[03:57:00]))
+        end)
 
       assert length(all_enqueued(worker: EmbedNote)) == 1_205
 
@@ -545,7 +563,10 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
 
       txns =
         count_tenant_txns(fn ->
-          assert :ok = perform_job(ReconcileEmbeddings, %{"page" => 2})
+          assert :ok =
+                   perform_job(ReconcileEmbeddings, %{"page" => 2},
+                     scheduled_at: tick(~T[03:57:00])
+                   )
         end)
 
       assert length(all_enqueued(worker: RefreshKeywordVectors)) == 5
@@ -583,7 +604,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       )
 
       try do
-        assert :ok = perform_job(ReconcileEmbeddings, %{})
+        assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[03:57:00]))
       after
         :telemetry.detach(handler_id)
       end

@@ -258,18 +258,23 @@ export default {
 	"You're on this plan": "Tu es sur cet abonnement",
 	"Start free trial": "Démarre un essai gratuit",
 	Popular: "Populaire",
+	"2,000 notes · 20 AI searches a day · 1 vault":
+		"2 000 notes · 20 recherches IA par jour · 1 coffre",
 	"3,000 notes · 20 AI searches a day · 1 vault":
 		"3 000 notes · 20 recherches IA par jour · 1 coffre",
+	"2,000 notes, all searchable": "2 000 notes, toutes consultables",
 	"3,000 notes, all searchable": "3 000 notes, toutes consultables",
 	"20 AI searches a day": "20 recherches IA par jour",
 	"1 vault": "1 coffre",
 	"1 GB attachments": "1 Go de pièces jointes",
 	"2 devices": "2 appareils",
+	"20,000 notes": "20 000 notes",
 	"10 vaults": "10 coffres",
 	"Unlimited devices": "Appareils illimités",
 	"10 GB attachments": "10 Go de pièces jointes",
 	"Unlimited AI searches": "Recherches IA illimitées",
 	"Unlimited vaults": "Coffres illimités",
+	"40,000 notes": "40 000 notes",
 	"50 GB attachments": "50 Go de pièces jointes",
 	"Cross-vault search": "Recherche entre les coffres",
 	"Loading plan options…": "Chargement des options de plan…",
@@ -309,6 +314,31 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Tu profites d'un essai gratuit. Paddle, notre processeur de paiement, ne permet pas de modifier ton abonnement pendant la période d'essai – ton essai se termine le {date}.",
 	Upgrade: "Mettre à niveau",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Tu as atteint ta limite de {cap} notes. Les nouvelles notes cessent de se synchroniser jusqu'à ce que tu passes à une version supérieure ou que tu en supprimes.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Tu as utilisé {percent}% de tes {cap} notes. Au-delà de {cap}, les nouvelles notes cessent de se synchroniser jusqu'à ce que tu passes à une version supérieure ou que tu en supprimes.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Tu as utilisé {percent}% de tes {cap} passages de recherche complète. Au-delà, les notes plus anciennes sont trouvées uniquement par mot-clé (mots exacts, pas le sens). Rien n'est supprimé.",
+	"See usage": "Voir l'utilisation",
+	Usage: "Utilisation",
+	"Notes: {used}": "Notes : {used}",
+	"Notes: {used} of {cap}": "Notes : {used} sur {cap}",
+	"Full search: {used} of {cap} passages": "Recherche complète : {used} sur {cap} passages",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Un passage est une partie d'une note qui peut être recherchée. Au-delà de ça, les notes plus anciennes sont trouvées uniquement par mots-clés (mots exacts, pas le sens). Rien n'est supprimé.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			one: "Tes passages de recherche complète sont épuisés. {count} note plus ancienne est trouvée par mot-clé uniquement (mots exacts, pas le sens). Rien n'est supprimé. Passe à un abonnement payant pour retrouver la recherche complète.",
+			many: "Tes passages de recherche complète sont épuisés. {count} notes plus anciennes sont trouvées par mot-clé seulement (mots exacts, pas le sens). Rien n'est supprimé. Passe à la version Pro pour retrouver la recherche complète.",
+			other:
+				"Tes passages de recherche complète sont épuisés. {count} notes plus anciennes sont trouvées par mot-clé uniquement (mots exacts, pas le sens). Rien n'est supprimé. Passe à la version Pro pour retrouver la recherche complète.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		one: "{count}. Les notes sont trouvées uniquement par mot-clé (mots exacts, pas le sens).",
+		many: "{count} notes trouvées avec les mots-clés (correspondance exacte, pas de sens).",
+		other: "{count} notes trouvées avec le mot-clé (mots exacts, pas le sens).",
+	},
 	"All vaults, including ones you create later":
 		"Tous les coffres, y compris ceux que tu crées plus tard",
 	"All current vaults": "Tous tes coffres actuels",
@@ -429,11 +459,21 @@ export default {
 	"a list, or one name": "une liste, ou un nom",
 	"Topics. Browsable and searchable across the vault.":
 		"Sujets. Consultables et recherchables dans le coffre.",
-	"A one-line summary of the note.": "Un résumé en une ligne de la note.",
-	"The thing the note is about — usually a URL.": "Le sujet de la note — généralement une URL.",
+	"Where the note stands, such as draft or stable.":
+		"L'état de la note, par exemple brouillon ou stable.",
+	"Who wrote the note, a person or an agent.": "L'auteur de la note, une personne ou un agent.",
+	"Who last checked the note.": "La dernière personne à avoir vérifié la note.",
+	"What the note is based on, usually a URL.": "La source de la note, généralement une URL.",
+	"The project the note belongs to.": "Le projet auquel appartient la note.",
 	"a date (YYYY-MM-DD)": "une date (AAAA-MM-JJ)",
 	"When the note came into being.": "Date de création de la note.",
 	"When it last changed.": "Date de la dernière modification.",
+	"When it was last checked.": "La date de la dernière vérification.",
+	"When the note goes out of date.": "La date à laquelle la note devient obsolète.",
+	"When the work in the note is due.": "La date limite pour le travail dans la note.",
+	"a number": "un nombre",
+	"How much the note matters, as a number.": "L'importance de la note, sous forme de nombre.",
+	"A one-line summary of the note.": "Un résumé en une ligne de la note.",
 	"Link Obsidian Vault": "Lier le Coffre Obsidian",
 	"Please sign in to link your Obsidian vault.": "Connecte-toi pour lier ton Coffre Obsidian.",
 	"Finish setting up": "Terminer la configuration",
@@ -1369,8 +1409,11 @@ export default {
 	frontmatter: "en-tête",
 	reads: "lectures",
 	"{what} Wants {expectsLabel}.": "{what} veut {expectsLabel}.",
+	"use {alias} or {key}": "utilise {alias} ou {key}",
 	"also accepts {aliases}": "accepte également {aliases}",
 	or: "ou",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Un nom imbriqué comme {example} ne peut pas être modifié ici ou dans Obsidian ; seule une modification directe, MCP, ou une IA peut l'écrire.",
 	Properties: "Propriétés",
 	"About properties": "À propos des propriétés",
 	"Property name": "Nom de la propriété",

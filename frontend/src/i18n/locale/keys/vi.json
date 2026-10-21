@@ -1,0 +1,15 @@
+{
+	"type": "loại",
+	"status": "trạng thái",
+	"author": "tác giả",
+	"reviewed_by": "người_kiểm_tra",
+	"source": "Nguồn",
+	"project": "dự án",
+	"created": "tạo",
+	"updated": "cập nhật",
+	"reviewed": "đã_kiểm_tra",
+	"expires": "hết hạn",
+	"due": "hạn",
+	"priority": "độ_quan_trọng",
+	"description": "tóm tắt"
+}

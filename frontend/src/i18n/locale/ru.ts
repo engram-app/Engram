@@ -260,18 +260,23 @@ export default {
 	"You're on this plan": "Вы используете этот тарифный план",
 	"Start free trial": "Начать бесплатный пробный период",
 	Popular: "Популярный",
+	"2,000 notes · 20 AI searches a day · 1 vault":
+		"2000 заметок · 20 запросов к ИИ в день · 1 хранилище",
 	"3,000 notes · 20 AI searches a day · 1 vault":
 		"3000 заметок · 20 запросов к ИИ в день · 1 хранилище",
+	"2,000 notes, all searchable": "2000 заметок, все доступны для поиска",
 	"3,000 notes, all searchable": "3000 заметок, все доступны для поиска",
 	"20 AI searches a day": "20 AI-запросов в день",
 	"1 vault": "1 хранилище",
 	"1 GB attachments": "1 ГБ вложений",
 	"2 devices": "2 устройства",
+	"20,000 notes": "20000 заметок",
 	"10 vaults": "10 хранилищ",
 	"Unlimited devices": "Неограниченное количество устройств",
 	"10 GB attachments": "10 ГБ вложений",
 	"Unlimited AI searches": "Неограниченное количество поисков с использованием ИИ",
 	"Unlimited vaults": "Неограниченное количество хранилищ",
+	"40,000 notes": "40000 заметок",
 	"50 GB attachments": "50 ГБ вложений",
 	"Cross-vault search": "Поиск по всем хранилищам",
 	"Loading plan options…": "Загрузка вариантов тарифных планов…",
@@ -312,6 +317,33 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Вы используете бесплатный пробный период. Paddle, наш платежный процессор, не позволяет изменять тарифный план во время пробного периода — ваш пробный период закончится {date}.",
 	Upgrade: "Обновить",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Вы достигли лимита в {cap} заметок. Добавление новых заметок прекращается до тех пор, пока вы не обновите подписку или не удалите некоторые заметки.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Вы использовали {percent}% из {cap} ваших заметок. При достижении {cap}, добавление новых заметок прекращается до тех пор, пока вы не обновите подписку или не удалите некоторые заметки.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Вы использовали {percent}% из {cap} фрагментов, доступных для полного поиска. После этого, более старые заметки находятся только по ключевым словам (точные слова, а не смысл). Ничто не удаляется.",
+	"See usage": "Просмотреть использование",
+	Usage: "Использование",
+	"Notes: {used}": "Заметок: {used}",
+	"Notes: {used} of {cap}": "Заметок: {used} из {cap}",
+	"Full search: {used} of {cap} passages": "Фрагментов для полного поиска: {used} из {cap}",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Фрагмент – это одна из частей заметки, доступная для поиска. После этого, более старые заметки находятся только по ключевым словам (точные слова, а не смысл). Ничто не удаляется.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			one: "Ваши возможности расширенного поиска исчерпаны. {count} старая заметка найдена только по ключевым словам (точные слова, не смысл). Ничего не удалено. Обновите подписку, чтобы вернуть полный поиск.",
+			few: "Ваши возможности расширенного поиска исчерпаны. {count} старые заметки найдены только по ключевым словам (точные слова, не смысл). Ничего не удалено. Обновите подписку, чтобы вернуть полный поиск.",
+			many: "Ваш лимит поиска исчерпан. Найдено {count} старых заметок по ключевым словам (только точное соответствие, без учета смысла). Ничего не удалено. Обновите подписку, чтобы вернуть полный поиск.",
+			other:
+				"Ваши возможности расширенного поиска исчерпаны. {count} старых заметок найдены только по ключевым словам (точные слова, не смысл). Ничего не удаляется. Обновите подписку, чтобы вернуть полный поиск.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		one: "Найдено {count} заметка, содержащая указанные ключевые слова (точный текст, не смысл).",
+		few: "Найдено {count} заметки по ключевому слову (только точные слова, не смысл).",
+		many: "Найдено {count} заметок, соответствующих ключевому слову (точный текст, не смысл).",
+		other: "{count} Заметки находятся по ключевым словам (только точное соответствие).",
+	},
 	"All vaults, including ones you create later":
 		"Все хранилища, включая те, которые вы создадите позже",
 	"All current vaults": "Все текущие хранилища",
@@ -443,11 +475,21 @@ export default {
 	"a list, or one name": "список или одно имя",
 	"Topics. Browsable and searchable across the vault.":
 		"Темы. Можно просматривать и искать по всему хранилищу.",
-	"A one-line summary of the note.": "Краткое описание заметки.",
-	"The thing the note is about — usually a URL.": "Тема заметки — обычно URL.",
+	"Where the note stands, such as draft or stable.":
+		"Где находится заметка, например, черновик или стабильная версия.",
+	"Who wrote the note, a person or an agent.": "Кто автор заметки, человек или агент.",
+	"Who last checked the note.": "Кто последний раз проверял заметку.",
+	"What the note is based on, usually a URL.": "На чём основана заметка, обычно URL.",
+	"The project the note belongs to.": "Проект, к которому относится заметка.",
 	"a date (YYYY-MM-DD)": "дата (ГГГГ-ММ-ДД)",
 	"When the note came into being.": "Дата создания заметки.",
 	"When it last changed.": "Дата последнего изменения.",
+	"When it was last checked.": "Когда заметка была последний раз проверена.",
+	"When the note goes out of date.": "Когда заметка устаревает.",
+	"When the work in the note is due.": "Когда работа, описанная в заметке, должна быть выполнена.",
+	"a number": "число",
+	"How much the note matters, as a number.": "Насколько важна заметка, в виде числа.",
+	"A one-line summary of the note.": "Краткое описание заметки.",
 	"Link Obsidian Vault": "Подключить хранилище Obsidian",
 	"Please sign in to link your Obsidian vault.":
 		"Пожалуйста, войдите, чтобы подключить ваше хранилище Obsidian.",
@@ -1424,8 +1466,11 @@ export default {
 	frontmatter: "метаданные",
 	reads: "читает",
 	"{what} Wants {expectsLabel}.": "{what} хочет {expectsLabel}.",
+	"use {alias} or {key}": "используйте {alias} или {key}",
 	"also accepts {aliases}": "также принимает {aliases}",
 	or: "или",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Вложенное имя, такое как {example}, нельзя редактировать здесь или в Obsidian; редактирование возможно только напрямую, MCP, или с помощью ИИ.",
 	Properties: "Свойства",
 	"About properties": "О свойствах",
 	"Property name": "Имя свойства",

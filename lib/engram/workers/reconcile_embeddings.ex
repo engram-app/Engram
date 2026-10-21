@@ -37,11 +37,23 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   import Ecto.Query
 
   alias Engram.Backfill.TenantScan
+  alias Engram.Billing
+  alias Engram.Billing.Subscription
   alias Engram.DataMigrations.IndexVersions
+  alias Engram.Indexing
   alias Engram.Logger.Metadata
-  alias Engram.Notes.Note
+  alias Engram.Notes.{Chunk, Note}
+  alias Engram.Rebuild
   alias Engram.Repo
-  alias Engram.Workers.{EmbedNote, ExtractNoteLinks, RebuildStaleNote, RefreshKeywordVectors}
+  alias Engram.Vector.Qdrant
+
+  alias Engram.Workers.{
+    EmbedNote,
+    ExtractNoteLinks,
+    RebuildDryRun,
+    RebuildStaleNote,
+    RefreshKeywordVectors
+  }
 
   require Logger
 
@@ -49,6 +61,11 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # page's query (the stamp), so a loop of pages walks the whole backlog.
   # Tests pass a smaller `"page"` arg to exercise the loop.
   @page 1_000
+
+  # The index points budget (`index_points_cap`): users per tick, and notes
+  # per user per tick.
+  @budget_users 20
+  @budget_notes 200
 
   @doc """
   Queues a sweep now. Called where notes are marked for re-indexing (index
@@ -83,14 +100,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # `tier` filter is load-bearing: `subscriptions.tier` accepts "free" while
     # `status` DEFAULTS to "trialing", so matching on status alone would treat
     # a Free user as paying.
-    paid =
-      from(s in Engram.Billing.Subscription,
-        where:
-          s.user_id == parent_as(:note).user_id and
-            s.status in ^Engram.Billing.entitled_statuses() and
-            s.tier in ["starter", "pro"],
-        select: 1
-      )
+    paid = IndexVersions.owner_paid()
 
     # 3. indexed at its current content by an older chunker, or with dense
     #    vectors from another embed model. #1620 kept this cron off
@@ -104,8 +114,16 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # which reopens both. Except in the daily re-verify hour: a rollback then
     # roll-forward, or a restored soft-deleted vault, puts version-stale notes
     # back after the migration closed, and nothing would reopen it.
+    #
+    # The versions are the rebuild switch's (`Rebuild.target_versions/0`),
+    # read once for both sweeps. `done?/0` reads them again through the
+    # migration name; a halt between the two reads only makes this tick
+    # skip rebuilds, never queue extra ones.
+    versions = Rebuild.target_versions()
     versions_done = IndexVersions.done?() and not daily_reverify?(scheduled_at)
-    version_stale = if versions_done, do: dynamic(false), else: IndexVersions.stale_dynamic()
+
+    version_stale =
+      if versions_done, do: dynamic(false), else: IndexVersions.stale_dynamic(versions)
 
     sweep_tenant = fn repo, remaining ->
       eligible =
@@ -124,11 +142,16 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         #
         # A note whose embed budget is spent is kept out by the cooldown filter
         # below: EmbedNote parks it with a future `embed_retry_after`.
+        #
+        # A floor note (`index_tier` set) has no dense leg by design, so (2)
+        # skips it; it would otherwise come back every tick. (1) and the
+        # version term still reach it: an edit or a version bump re-floors it,
+        # unmetered.
         |> where(
           ^dynamic(
             [n],
             is_nil(n.embed_hash) or n.embed_hash != n.content_hash or
-              ^version_stale or is_nil(n.dense_indexed_hash)
+              ^version_stale or (is_nil(n.dense_indexed_hash) and is_nil(n.index_tier))
           )
         )
         # Poison-loop guard: a note that exhausts its EmbedNote attempts gets an
@@ -178,11 +201,12 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       # nested-loop semi join that re-ran the sorted subquery per outer row,
       # O(N^2): 15 s for 1,205 notes, past the checkout deadline, every tick.
       {_count, rows} =
-        Note
+        from(n in Note, as: :note)
         |> with_cte("reconcile_eligible", as: ^eligible, materialized: true)
         |> join(:inner, [n], e in "reconcile_eligible", on: field(e, :id) == n.id)
         |> where([n], n.kind == "note")
-        # The columns `EmbedNote.version_stale?/1` reads, to route each note.
+        # The columns `EmbedNote.version_stale?/2` reads, to route each note,
+        # and the owner's plan for its model term.
         |> select([n], %{
           id: n.id,
           user_id: n.user_id,
@@ -190,7 +214,8 @@ defmodule Engram.Workers.ReconcileEmbeddings do
           content_hash: n.content_hash,
           dense_indexed_hash: n.dense_indexed_hash,
           chunker_version: n.chunker_version,
-          embed_model: n.embed_model
+          embed_model: n.embed_model,
+          paid: exists(paid)
         })
         # Clears the budget-park flag with it: the #897 backoff must hold for
         # this note even for a paying user, or a crash mid-embed re-selects it
@@ -218,11 +243,674 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       )
     )
 
-    :ok = wake_budget_parked(backoff_until)
+    # Both daily: the backlog is a one-off, new notes are capped and
+    # budget-checked as they are indexed (`Indexing`), and a promotion after
+    # deletes can wait a day.
+    _ =
+      if daily_reverify?(scheduled_at) and Indexing.budget_enabled?() do
+        :ok = sweep_over_note_cap(now)
+        {:ok, _} = budget_sweep(@budget_users, now)
+      end
 
-    if versions_done, do: :ok, else: sweep_keyword_stale(now, paid, page_size)
+    :ok = wake_budget_parked(backoff_until)
+    :ok = maybe_dry_run()
+    if versions_done, do: :ok, else: sweep_keyword_stale(now, paid, page_size, versions)
   end
 
+  # `dry_run` plans the pass instead of running it: the dry run coordinator
+  # (unique while pending) queues per-user planners and seals. Once a budget
+  # is sealed there is nothing left for it to do, so it is not queued again.
+  defp maybe_dry_run do
+    _ =
+      if Rebuild.mode() == :dry_run and Rebuild.ledger() == nil do
+        {:ok, _job} = Oban.insert(RebuildDryRun.new(%{}))
+      end
+
+    :ok
+  end
+
+  # Notes rebuilt per tick by `sweep_over_note_cap/1`: 1,200 a day over the
+  # twelve re-verify ticks.
+  @recap_batch 100
+
+  # Notes indexed before the per-note cap (or on a plan since downgraded)
+  # that hold more chunks than their tier's `note_points_cap`. They go to
+  # RebuildStaleNote with `recap: true`, which re-merges them unmetered. One
+  # bounded batch per tick, and only in the daily re-verify hour: the probe
+  # touches every dense note, the backlog is a one-off (641 notes in prod on
+  # 2026-10-18, under a day of ticks), new notes are capped as they are indexed,
+  # and a downgrade can wait a day.
+  #
+  # "More than `cap` chunks" is read as "a chunk at position >= cap": positions
+  # are unique per note and start at 0, so a note over the cap always has one,
+  # and the (note_id, position) index answers it per note.
+  #
+  # The cap is each user's effective one, resolved in SQL the way
+  # `Billing.effective_limit/2` resolves it: a per-user override, else the
+  # tier's (plan env override, else default). A note under a raised override
+  # is never selected; a non-integer or non-positive cap selects nothing, as
+  # `Indexing` then applies no cap.
+  #
+  # Dense notes only: a sparse-only note reaches the dense backfill (term 2 of
+  # the main sweep), whose pass caps it.
+  defp sweep_over_note_cap(now) do
+    tier_caps = by_tier(:note_points_cap)
+
+    # Every tier `:unlimited` is enforcement off (self-host): nothing to do.
+    unless Enum.all?(Map.values(tier_caps), &(&1 == :unlimited)) do
+      backoff_until = DateTime.add(now, reconcile_backoff_seconds(), :second)
+      over_cap = over_note_cap_dynamic(tier_caps, Billing.active_overrides(:note_points_cap))
+
+      page = fn repo, limit ->
+        eligible =
+          IndexVersions.content_current_notes()
+          |> where([n], n.dense_indexed_hash == n.content_hash and is_nil(n.index_tier))
+          |> where([n], is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now)
+          |> where(^over_cap)
+          |> order_by([n], asc: n.updated_at)
+          |> limit(^limit)
+          |> select([n], n.id)
+
+        {_count, found} =
+          from(n in Note, where: n.kind == "note" and n.id in subquery(eligible))
+          |> select([n], {n.id, n.user_id})
+          |> repo.update_all(set: [embed_retry_after: backoff_until])
+
+        found
+      end
+
+      rows =
+        case Repo.maintenance() do
+          Repo ->
+            Enum.reduce_while(TenantScan.user_ids(), [], fn user_id, acc ->
+              case @recap_batch - length(acc) do
+                0 ->
+                  {:halt, acc}
+
+                left ->
+                  {:ok, found} = Repo.with_tenant(user_id, fn -> page.(Repo, left) end)
+                  {:cont, acc ++ found}
+              end
+            end)
+
+          maintenance ->
+            page.(maintenance, @recap_batch)
+        end
+
+      fresh = rows |> reject_pending(RebuildStaleNote) |> within_ceilings(now)
+
+      _ =
+        Oban.insert_all(
+          Enum.map(fresh, fn {note_id, user_id, args} ->
+            RebuildStaleNote.new(
+              Map.merge(args, %{note_id: to_string(note_id), user_id: user_id, recap: true}),
+              priority: EmbedNote.backfill_priority()
+            )
+          end)
+        )
+
+      Logger.info(
+        "reconcile_embeddings: swept notes over the per-note cap",
+        Metadata.with_category(:info, :search,
+          eligible_count: length(rows),
+          total_count: length(fresh)
+        )
+      )
+    end
+
+    :ok
+  end
+
+  # ponytail: at most 2,000 unmetered promoted points per user per rolling
+  # day, read back from the jobs this sweep enqueued (`budget_points`, kept
+  # by Oban's 7-day pruner), so delete-and-promote cycles cannot spend
+  # unbounded Voyage. A metered promotion spends the user's own budget and
+  # is not counted.
+  @unmetered_points_per_day 2_000
+
+  # Recaps are unmetered maintenance (review L3): each job carries its
+  # `budget_points` (the note's per-note cap, what it re-embeds into) and
+  # `budget_tokens`, so it counts against the user's daily ceiling below and
+  # the global one. A note past either waits for a later day (its backoff
+  # stamp is already set).
+  defp within_ceilings(rows, now) do
+    room = maintenance_token_room(now)
+
+    {kept, _room} =
+      rows
+      |> Enum.group_by(&elem(&1, 1), &elem(&1, 0))
+      |> Enum.flat_map_reduce(room, fn {user_id, note_ids}, room ->
+        user = Engram.Accounts.get_user_with_subscription!(user_id)
+        cap = Billing.effective_limit(user, :note_points_cap)
+        tokens = Repo.with_tenant!(user_id, fn -> chunk_tokens(note_ids) end)
+
+        spent =
+          for j <- budget_jobs(user_id, now), j.unmetered, reduce: 0, do: (acc -> acc + j.points)
+
+        {picked, {_spent, room}} =
+          Enum.flat_map_reduce(note_ids, {spent, room}, fn id, {spent, room} ->
+            # `shrink`: this recap merges, so its points are not added to a
+            # projection the way a queued promotion's are (`budget_user/2`).
+            args = %{
+              budget_points: cap,
+              budget_tokens: Map.get(tokens, id, 0),
+              unmetered: true,
+              shrink: true
+            }
+
+            if is_integer(cap) and spent + cap <= @unmetered_points_per_day and
+                 args.budget_tokens <= room,
+               do: {[{id, user_id, args}], {spent + cap, room - args.budget_tokens}},
+               else: {[], {spent, room}}
+          end)
+
+        {picked, room}
+      end)
+
+    kept
+  end
+
+  # Estimated Voyage tokens a full re-embed of each note costs: its rows at
+  # half a 2 KB chunk's bytes / 4 (an upper bound for most text).
+  @tokens_per_chunk 512
+
+  defp chunk_tokens(note_ids) do
+    from(c in Chunk,
+      where: c.note_id in ^note_ids,
+      group_by: c.note_id,
+      select: {c.note_id, count()}
+    )
+    |> Repo.all()
+    |> Map.new(fn {id, rows} -> {id, rows * @tokens_per_chunk} end)
+  end
+
+  # Review M4: both 04:00 sweeps together enqueue at most this many
+  # estimated unmetered Voyage tokens a rolling day: 150k a minute over the
+  # hour, the maintenance bucket the v5 pass uses, so they cannot saturate
+  # Voyage's TPM and starve query embeds. Read back from the jobs' own
+  # `budget_tokens` (Oban prunes after 7 days).
+  @maintenance_tokens_per_day 9_000_000
+
+  defp maintenance_token_room(now) do
+    day_ago = DateTime.add(now, -86_400, :second)
+
+    ceiling =
+      Application.get_env(:engram, :maintenance_tokens_per_day, @maintenance_tokens_per_day)
+
+    used =
+      from(j in Oban.Job,
+        where:
+          j.worker == ^inspect(RebuildStaleNote) and j.inserted_at > ^day_ago and
+            not is_nil(j.args["budget_tokens"]) and j.args["unmetered"] == true,
+        select: coalesce(sum(type(j.args["budget_tokens"], :integer)), 0)
+      )
+      |> Repo.one()
+
+    # `sum` over a cast comes back as a Decimal.
+    max(ceiling - Decimal.to_integer(Decimal.new(used)), 0)
+  end
+
+  # A promotion costs the note's `chunk_count` (stamped by the pass that
+  # floored or merged it), at most its per-note cap: exact for a note under
+  # the cap, an upper bound for one that merges. A note with no stamp falls
+  # back to its span over 1,024 characters (half the chunker's 2 KB
+  # MAX_CHUNK). Either way a pass that would pass 100% is floored by
+  # `Indexing.points_budget_ok?/3`, and 90% to 100% keeps that from flapping.
+  @chars_per_point 1_024
+
+  @doc """
+  Keeps every account within its `index_points_cap`: the cap resolved per
+  user, overrides included, and never applied with billing disabled.
+
+  Over 100% of the cap, the oldest full notes are demoted to the floor (one
+  keyword point per MiB of body, `Indexing.floor_plan/2`): `"floor_paid"` if they had
+  dense vectors, else `"floor"`. Below 90%, floor notes are promoted back,
+  newest first, while the projected count stays under 90%, and merged notes
+  whose per-note cap has since risen are rebuilt at it. A `"floor_paid"` or
+  merged note promotes unmetered (we never charge twice), a `"floor"` one on
+  the user's embed budget.
+
+  Users are selected on `Repo.maintenance/0` (at most `limit_users`); each is
+  counted and written inside its own tenant. The tier is written here with a
+  compare-and-set and the rows by a job; a pass that read the old tier
+  refuses to commit (`Indexing.commit_index/2`). Does nothing while the
+  collection is red.
+  """
+  @spec budget_sweep(pos_integer(), DateTime.t()) ::
+          {:ok, %{demoted: non_neg_integer(), promoted: non_neg_integer()}}
+  def budget_sweep(limit_users, now \\ DateTime.utc_now()) do
+    with caps when caps != :off <- budget_caps(),
+         [_ | _] = users <- budget_users(caps, limit_users, now),
+         false <- collection_red?() do
+      totals =
+        Enum.reduce(users, %{demoted: 0, promoted: 0}, fn user, acc ->
+          Map.merge(acc, budget_user(user, now), fn _k, a, b -> a + b end)
+        end)
+
+      Logger.info(
+        "reconcile_embeddings: swept index points budget",
+        Metadata.with_category(:info, :search,
+          user_count: length(users),
+          demoted_count: totals.demoted,
+          promoted_count: totals.promoted
+        )
+      )
+
+      {:ok, totals}
+    else
+      _ -> {:ok, %{demoted: 0, promoted: 0}}
+    end
+  end
+
+  # `key`'s plan limit per tier: env override, else default.
+  defp by_tier(key),
+    do: Map.new(Engram.Billing.LimitKeys.tiers(), &{&1, Billing.tier_limit(&1, key)})
+
+  defp budget_caps do
+    index = by_tier(:index_points_cap)
+
+    if Enum.all?(Map.values(index), &(&1 == :unlimited)),
+      do: :off,
+      else: %{
+        index: {index, Map.new(Billing.active_overrides(:index_points_cap))},
+        note: {by_tier(:note_points_cap), Map.new(Billing.active_overrides(:note_points_cap))}
+      }
+  end
+
+  # `effective_limit/2`'s chain, from `Billing.tier_limit/2` and
+  # `Billing.active_overrides/1`. nil: no cap. A
+  # zero index cap is a ceiling (as in `points_budget_ok?/3`), a zero note
+  # cap none (as in `Indexing`).
+  defp user_cap({by_tier, overrides}, user_id, tier, min) do
+    case Map.get(overrides, user_id, by_tier[tier]) do
+      cap when is_integer(cap) and cap >= min -> cap
+      _ -> nil
+    end
+  end
+
+  # Cross-tenant on the maintenance pool: users over their cap first, then
+  # users with something that can promote under today's caps: a floor note
+  # that fits below 90%, or a merged note whose chunks now fit its per-note
+  # cap. The second group is ordered by a hash of the user and the 5-minute
+  # tick, so a user whose promotion keeps not fitting (the ledger, a large
+  # note) cannot hold a slot on every tick.
+  #
+  # ponytail: one `IN ^ids` subscriptions read over every chunk-owning user;
+  # batch it past tens of thousands of users.
+  defp budget_users(caps, limit, now) do
+    repo = Repo.maintenance()
+    tick = div(DateTime.to_unix(now), 300)
+    per_user = fn query -> Repo.cross_tenant(fn -> repo.all(query) end) end
+
+    counts = per_user.(from(c in Chunk, group_by: c.user_id, select: {c.user_id, count()}))
+
+    # A floor note's promotion cost, and a merged note's natural chunk count
+    # (`chunk_count` is set on a full-tier note only when it merged): the
+    # smallest per user is the one that could promote first.
+    smallest = fn where ->
+      from(n in Note,
+        where: n.kind == "note" and is_nil(n.deleted_at),
+        group_by: n.user_id,
+        select: {n.user_id, min(coalesce(n.chunk_count, 1))}
+      )
+      |> where(^where)
+      |> per_user.()
+      |> Map.new()
+    end
+
+    floors = smallest.(dynamic([n], n.index_tier in ["floor", "floor_paid"]))
+    merged = smallest.(dynamic([n], is_nil(n.index_tier) and not is_nil(n.chunk_count)))
+    ids = Enum.map(counts, &elem(&1, 0))
+
+    # `Billing.tier/1` in SQL: an entitled Pro, else Starter, else Free.
+    tiers =
+      from(s in Subscription,
+        where:
+          s.user_id in ^ids and s.status in ^Billing.entitled_statuses() and
+            s.tier in ["starter", "pro"],
+        select: {s.user_id, s.tier}
+      )
+      |> per_user.()
+      |> Enum.sort_by(&(elem(&1, 1) == "pro"))
+      |> Map.new(fn {id, tier} -> {id, String.to_existing_atom(tier)} end)
+
+    counts
+    |> Enum.flat_map(fn {id, points} ->
+      tier = Map.get(tiers, id, :free)
+      cap = user_cap(caps.index, id, tier, 0)
+      note_cap = user_cap(caps.note, id, tier, 1)
+      user = %{id: id, cap: cap, note_cap: note_cap}
+      fits? = &(is_nil(cap) or 10 * (points + &1) < 9 * cap)
+      unmerges? = &(is_nil(note_cap) or not Indexing.merges?(&1, note_cap, true))
+      floor = Map.get(floors, id)
+      unmerge = Map.get(merged, id)
+
+      cond do
+        cap && points > cap ->
+          [{0, cap - points, user}]
+
+        (floor && fits?.(min(floor, note_cap || floor))) ||
+            (unmerge && unmerges?.(unmerge) && fits?.(unmerge)) ->
+          [{1, :erlang.phash2({id, tick}), user}]
+
+        true ->
+          []
+      end
+    end)
+    |> Enum.sort_by(fn {group, rank, _user} -> {group, rank} end)
+    |> Enum.take(limit)
+    |> Enum.map(&elem(&1, 2))
+  end
+
+  # The collection status the Qdrant health poller reads. Unreachable counts as red: nothing
+  # this sweep queues could write.
+  defp collection_red? do
+    case Qdrant.collection_info(
+           Application.get_env(:engram, :qdrant_collection, "obsidian_notes")
+         ) do
+      {:ok, %{"status" => "red"}} -> true
+      {:ok, _} -> false
+      {:error, _} -> true
+    end
+  end
+
+  defp budget_user(user, now) do
+    Repo.with_tenant!(user.id, fn ->
+      notes = budget_notes(user.id, now)
+      jobs = budget_jobs(user.id, now)
+      pending = for j <- jobs, j.pending, not j.shrink, into: %{}, do: {j.note_id, j.points}
+
+      # `Indexing.points_budget_ok?/3`'s count (every chunk row), with each note at what it will
+      # hold: a floor note its floor points (one per MiB, `floor_points/1`), a
+      # full note at most its per-note cap,
+      # and a queued promotion at its estimate.
+      projected =
+        Enum.reduce(notes, Repo.aggregate(Chunk, :count), fn n, acc ->
+          cond do
+            floored?(n) -> acc
+            n.tier != nil -> acc - max(n.rows - Indexing.floor_points(n.span), 0)
+            user.note_cap -> acc - max(n.rows - user.note_cap, 0)
+            true -> acc
+          end
+        end) + Enum.sum(Map.values(pending))
+
+      if user.cap && projected > user.cap,
+        do: %{demoted: demote(user, notes, projected, now), promoted: 0},
+        else: %{demoted: 0, promoted: promote(user, notes, projected, pending, jobs, now)}
+    end)
+  end
+
+  defp budget_notes(user_id, now) do
+    # A crash-guard stamp older than EmbedNote's timeout belongs to no live
+    # attempt (CrashGuard clears it on the note's next pass).
+    stale_before = DateTime.add(now, -div(EmbedNote.timeout(nil), 1_000), :second)
+
+    # One pass over the user's rows (`idx_chunks_user`), then one join per
+    # note, rather than a per-note probe the planner may turn into a scan.
+    per_note =
+      from(c in Chunk,
+        where: c.user_id == ^user_id,
+        group_by: c.note_id,
+        select: %{
+          note_id: c.note_id,
+          rows: count(),
+          # Floor rows: no length and no reuse fingerprint (a merged row has
+          # the fingerprint).
+          floor_rows: filter(count(), is_nil(c.token_count) and is_nil(c.context_hmac)),
+          span: max(c.char_end)
+        }
+      )
+
+    IndexVersions.live_notes()
+    |> join(:inner, [n], c in subquery(per_note), on: c.note_id == n.id)
+    |> select([n, _v, c], %{
+      id: n.id,
+      tier: n.index_tier,
+      updated_at: n.updated_at,
+      dense: n.dense_indexed_hash == n.embed_hash,
+      # A pass is running, or the note sits out a cooldown: left alone.
+      busy:
+        coalesce(n.embed_started_at > ^stale_before, false) or
+          coalesce(n.embed_retry_after > ^now, false),
+      rows: c.rows,
+      floor_rows: c.floor_rows,
+      span: c.span,
+      chunk_count: n.chunk_count
+    })
+    |> order_by([n], desc: n.updated_at, desc: n.id)
+    |> Repo.all()
+  end
+
+  # This sweep's jobs for the user: queued ones (their points are not in
+  # `chunks` yet) and the last day's unmetered ones (the daily ceiling).
+  defp budget_jobs(user_id, now) do
+    day_ago = DateTime.add(now, -86_400, :second)
+    pending = ~w(scheduled available executing retryable)
+
+    from(j in Oban.Job,
+      where:
+        j.worker == ^inspect(RebuildStaleNote) and
+          fragment("? @> ?", j.args, type(^%{"user_id" => user_id}, :map)) and
+          not is_nil(j.args["budget_points"]) and
+          (j.inserted_at > ^day_ago or j.state in ^pending),
+      select: %{
+        note_id: j.args["note_id"],
+        points: j.args["budget_points"],
+        unmetered: j.args["unmetered"] == true,
+        shrink: j.args["shrink"] == true,
+        inserted_at: j.inserted_at,
+        pending: j.state in ^pending
+      }
+    )
+    |> Repo.all()
+  end
+
+  # Newest first, every full note kept while the account, with every note
+  # after it at its floor points, stays within the cap. The rest demote,
+  # oldest first.
+  defp demote(user, notes, projected, now) do
+    full = Enum.filter(notes, &is_nil(&1.tier))
+    cost = &min(&1.rows, user.note_cap || &1.rows)
+    floor = &Indexing.floor_points(&1.span)
+    fixed = projected - Enum.sum(Enum.map(full, cost)) + Enum.sum(Enum.map(full, floor))
+
+    {_kept, over} =
+      Enum.reduce(full, {fixed, []}, fn n, {acc, over} ->
+        if over == [] and acc + cost.(n) - floor.(n) <= user.cap,
+          do: {acc + cost.(n) - floor.(n), over},
+          else: {acc, [n | over]}
+      end)
+
+    ids = for n <- over, not n.busy, do: n.id
+
+    # Compare-and-set: only a note still full, with no pass running, is
+    # stamped. "floor_paid" when it had dense vectors.
+    {_count, stamped} =
+      from(n in Note,
+        where:
+          n.id in ^Enum.take(ids, @budget_notes) and n.kind == "note" and is_nil(n.index_tier) and
+            (is_nil(n.embed_started_at) or
+               n.embed_started_at <=
+                 ^DateTime.add(now, -div(EmbedNote.timeout(nil), 1_000), :second)),
+        select: n.id,
+        update: [
+          set: [
+            index_tier:
+              fragment(
+                "CASE WHEN ? = ? THEN 'floor_paid' ELSE 'floor' END",
+                n.dense_indexed_hash,
+                n.embed_hash
+              )
+          ]
+        ]
+      )
+      |> Repo.update_all([])
+
+    # Floor-tier notes still holding full rows: this tick's, and any whose
+    # job was lost.
+    unfloored =
+      for n <- notes, n.tier != nil and not n.busy and not floored?(n), do: n.id
+
+    (stamped ++ unfloored)
+    |> Enum.uniq()
+    |> Enum.take(@budget_notes)
+    |> then(&Engram.Jobs.reject_pending(RebuildStaleNote, &1))
+    |> enqueue_budget(user.id, fn id -> %{note_id: id, index_budget: "demote"} end)
+
+    length(stamped)
+  end
+
+  # Newest first while the projection stays under 90% of the cap.
+  defp promote(user, notes, projected, pending, jobs, now) do
+    day_ago = DateTime.add(now, -86_400, :second)
+
+    spent =
+      for j <- jobs,
+          j.unmetered,
+          DateTime.compare(j.inserted_at, day_ago) == :gt,
+          reduce: 0,
+          do: (acc -> acc + j.points)
+
+    room = maintenance_token_room(now)
+
+    {_acc, _spent, picked} =
+      notes
+      |> Enum.reject(&(&1.busy or Map.has_key?(pending, to_string(&1.id))))
+      |> Enum.flat_map(&promotion(&1, user.note_cap))
+      |> Enum.reduce_while({projected, spent, []}, fn {n, args}, {acc, spent, picked} ->
+        tokens = for({_id, a} <- picked, a.unmetered, reduce: 0, do: (t -> t + a.budget_tokens))
+
+        cond do
+          args.unmetered and tokens + args.budget_tokens > room ->
+            {:cont, {acc, spent, picked}}
+
+          length(picked) == @budget_notes ->
+            {:halt, {acc, spent, picked}}
+
+          user.cap && 10 * (acc + args.budget_points) >= 9 * user.cap ->
+            {:halt, {acc, spent, picked}}
+
+          args.unmetered and spent + args.budget_points > @unmetered_points_per_day ->
+            {:cont, {acc, spent, picked}}
+
+          true ->
+            {:cont,
+             {acc + args.budget_points,
+              spent + if(args.unmetered, do: args.budget_points, else: 0),
+              [{n.id, args} | picked]}}
+        end
+      end)
+
+    args = Map.new(picked)
+    fresh = Engram.Jobs.reject_pending(RebuildStaleNote, Map.keys(args))
+    enqueue_budget(fresh, user.id, &Map.put(args[&1], :note_id, &1))
+    length(fresh)
+  end
+
+  # Holds only floor rows (`Indexing.floor_plan/2`): however many a large
+  # note took, none has a length or a fingerprint.
+  defp floored?(n), do: n.tier != nil and n.floor_rows == n.rows
+
+  # A floor note (fully floored: its keyword rows), or a merged note whose
+  # natural chunk count now un-merges under its per-note cap (an upgrade or
+  # a raised override; at or below 0.75 x cap, `Indexing.merges?/3`), which a
+  # recap pass unmerges.
+  defp promotion(n, note_cap) do
+    est = n.chunk_count || max(div(n.span + @chars_per_point - 1, @chars_per_point), 1)
+    est = if note_cap, do: min(est, note_cap), else: est
+    # A promotion re-embeds the note's whole text: its byte span / 4.
+    tok = Engram.UsageMeters.estimate_tokens(n.span)
+
+    cond do
+      floored?(n) ->
+        unmetered = n.tier == "floor_paid"
+
+        [
+          {n,
+           %{
+             index_budget: "promote",
+             budget_points: est,
+             unmetered: unmetered,
+             budget_tokens: tok
+           }}
+        ]
+
+      is_nil(n.tier) and n.dense == true and n.chunk_count != nil and
+          (is_nil(note_cap) or not Indexing.merges?(n.chunk_count, note_cap, true)) ->
+        [{n, %{recap: true, budget_points: est, unmetered: true, budget_tokens: tok}}]
+
+      true ->
+        []
+    end
+  end
+
+  # Same #897 backoff stamp as every sweep: a job that dies mid-pass is not
+  # re-queued every tick.
+  defp enqueue_budget([], _user_id, _args), do: :ok
+
+  defp enqueue_budget(ids, user_id, args) do
+    backoff_until = DateTime.add(DateTime.utc_now(), reconcile_backoff_seconds(), :second)
+
+    {_, _} =
+      Repo.update_all(from(n in Note, where: n.id in ^ids and n.kind == "note"),
+        set: [embed_retry_after: backoff_until]
+      )
+
+    _ =
+      Oban.insert_all(
+        Enum.map(ids, fn id ->
+          id
+          |> args.()
+          |> Map.merge(%{note_id: to_string(id), user_id: user_id})
+          |> RebuildStaleNote.new(priority: EmbedNote.backfill_priority())
+        end)
+      )
+
+    :ok
+  end
+
+  # Over its user's cap: an override's cap for users who have one, else the
+  # tier's. `tier/1` order: an entitled Starter or Pro subscription, else Free.
+  defp over_note_cap_dynamic(tier_caps, overrides) do
+    entitled = fn tiers ->
+      from(s in Subscription,
+        where:
+          s.user_id == parent_as(:note).user_id and
+            s.status in ^Billing.entitled_statuses() and s.tier in ^tiers,
+        select: 1
+      )
+    end
+
+    overridden = Enum.map(overrides, &elem(&1, 0))
+
+    by_tier =
+      dynamic(
+        [n],
+        n.user_id not in ^overridden and
+          ((exists(entitled.(["pro"])) and ^over(tier_caps.pro)) or
+             (exists(entitled.(["starter"])) and ^over(tier_caps.starter)) or
+             (not exists(entitled.(["starter", "pro"])) and ^over(tier_caps.free)))
+      )
+
+    overrides
+    |> Enum.group_by(&elem(&1, 1), &elem(&1, 0))
+    |> Enum.reduce(by_tier, fn {cap, user_ids}, acc ->
+      dynamic([n], ^acc or (n.user_id in ^user_ids and ^over(cap)))
+    end)
+  end
+
+  defp over(cap) when is_integer(cap) and cap > 0 do
+    dynamic(
+      exists(
+        from(c in Chunk,
+          where: c.note_id == parent_as(:note).id and c.position >= ^cap,
+          select: 1
+        )
+      )
+    )
+  end
+
+  defp over(_no_cap), do: dynamic(false)
   # The Free embed-bucket queue. A budget-parked note waits with no clock
   # (`EmbedNote.parked_until_edited/0`); this wakes, per user, the parked notes
   # whose recorded `embed_budget_need` fits what the bucket holds now, first
@@ -448,22 +1136,51 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   end
 
   defp version_rebuild?(%{embed_hash: hash, content_hash: hash} = row) when hash != nil,
-    do: EmbedNote.version_stale?(struct(Note, row))
+    do: EmbedNote.version_stale?(struct(Note, row), Map.get(row, :paid))
 
   defp version_rebuild?(_row), do: false
 
   defp enqueue_rebuilds([]), do: 0
 
+  # In `Rebuild.rebuild_order/1` order, at its per-user priority (paid
+  # first, whales last). ponytail: "smallest first" holds within a page;
+  # across pages only the priority classes order the queue.
+  #
+  # A note stale by its model alone (a plan upgrade, `Engram.EmbedModels`)
+  # goes last: `upgrade: true` at backfill priority, paced by the rebuild's
+  # gate even when the pass is not `on`.
   defp enqueue_rebuilds(rows) do
-    fresh = reject_pending(Enum.map(rows, &{&1.id, &1.user_id}), RebuildStaleNote)
+    upgrades =
+      for r <- rows,
+          EmbedNote.model_only_stale?(struct(Note, r), Map.get(r, :paid)),
+          into: MapSet.new(),
+          do: r.id
+
+    # Pending under EITHER worker: an EmbedNote for a version-stale note (a
+    # DEK rotation's text guard queues those) rebuilds it too, and two jobs
+    # would pay Voyage twice for one note.
+    fresh =
+      rows
+      |> Enum.map(&{&1.id, &1.user_id})
+      |> reject_pending(RebuildStaleNote)
+      |> reject_pending(EmbedNote)
+
+    {upgrade, version} = Enum.split_with(fresh, &MapSet.member?(upgrades, elem(&1, 0)))
+    by_user = Enum.group_by(version, &elem(&1, 1), &elem(&1, 0))
 
     _ =
       Oban.insert_all(
-        Enum.map(fresh, fn {note_id, user_id} ->
+        for {user_id, priority} <- Rebuild.rebuild_order(Map.keys(by_user)),
+            note_id <- Map.fetch!(by_user, user_id) do
           RebuildStaleNote.new(%{note_id: to_string(note_id), user_id: user_id},
-            priority: EmbedNote.backfill_priority()
+            priority: priority
           )
-        end)
+        end ++
+          for {note_id, user_id} <- upgrade do
+            RebuildStaleNote.new(%{note_id: to_string(note_id), user_id: user_id, upgrade: true},
+              priority: EmbedNote.backfill_priority()
+            )
+          end
       )
 
     length(fresh)
@@ -485,16 +1202,16 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # notes every tick. Fine at thousands of notes per tenant; add a partial
   # index on (user_id) WHERE keyword_version IS DISTINCT FROM <current> if a
   # tenant reaches hundreds of thousands.
-  defp sweep_keyword_stale(now, paid, page_size) do
+  defp sweep_keyword_stale(now, paid, page_size, versions) do
     backoff_until = DateTime.add(now, reconcile_backoff_seconds(), :second)
 
     page = fn repo ->
       eligible =
         IndexVersions.content_current_notes()
-        |> where(^IndexVersions.keyword_stale_dynamic())
+        |> where(^IndexVersions.keyword_stale_dynamic(versions))
         # A version-stale note gets a full rebuild above, which stamps the
         # keyword version itself.
-        |> where(^dynamic([n], not (^IndexVersions.stale_dynamic())))
+        |> where(^dynamic([n], not (^IndexVersions.stale_dynamic(versions))))
         # A too-long park (`EmbedNote.parked_until_edited/0`) is keyword-only
         # by design, so its keyword vectors still refresh. ponytail: the stamp
         # below replaces the park with the backoff, so each keyword bump costs
