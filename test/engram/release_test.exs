@@ -121,6 +121,38 @@ defmodule Engram.ReleaseTest do
 
       assert Release.with_migration_lock(Repo.config(), fn -> :ok end, 50) == :ok
     end
+
+    # prepare_database runs on every task too: two concurrent GRANT ON ALL
+    # TABLES rewrite the same pg_class rows and one fails with "tuple
+    # concurrently updated". reset_baseline drops the schema and replays
+    # migrations, so a second one must re-check under the lock.
+    for eval <- [:prepare_database, :reset_baseline] do
+      test "#{eval}/0 waits for the migration lock" do
+        eval = unquote(eval)
+        original = Application.get_env(:engram, Repo)
+        on_exit(fn -> Application.put_env(:engram, Repo, original) end)
+        parent = self()
+
+        holder =
+          Task.async(fn ->
+            Release.with_migration_lock(Repo.config(), fn ->
+              send(parent, :held)
+              receive do: (:release -> :ok)
+            end)
+          end)
+
+        assert_receive :held, 5_000
+
+        waiter =
+          Task.async(fn -> send(parent, {:done, Function.capture(Release, eval, 0).()}) end)
+
+        refute_receive {:done, _}, 500
+        send(holder.pid, :release)
+        Task.await(holder)
+        assert_receive {:done, :ok}, 5_000
+        Task.await(waiter)
+      end
+    end
   end
 
   describe "reset_baseline/0" do
