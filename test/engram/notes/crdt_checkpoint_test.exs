@@ -506,6 +506,42 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     assert rebuilt_text =~ "EDIT"
   end
 
+  # #958. The checkpoint used to flatten a doc past 500 KB AND 1,000 client ids
+  # into a fresh single-client lineage, persist only the flattened state, and
+  # keep the live room on the old one. The next checkpoint's union then folded
+  # two disjoint lineages and doubled the body. A checkpoint must never reset
+  # lineage, however big or many-client the doc is.
+  test "a big many-client doc keeps its lineage across checkpoints (no flatten doubling)", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    body = String.duplicate("ALPHA ", 90_000)
+
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => body}, actor: "api")
+
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
+
+    # 1,200 extra client ids that never touch the body text.
+    for i <- 1..1200 do
+      other = Yex.Doc.new()
+      Yex.Map.set(Yex.Doc.get_map(other, "bloat_test"), "k#{i}", "v")
+      {:ok, u} = Yex.encode_state_as_update(other)
+      :ok = Yex.apply_update(doc, u)
+    end
+
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    # The room keeps editing the doc it already holds.
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), body <> "BETA")
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+
+    {:ok, fresh} = Notes.get_note(user, vault, "p.md")
+    assert byte_size(fresh.content) == byte_size(body <> "BETA")
+    assert fresh.content == body <> "BETA"
+  end
+
   test "checkpoint ABORTS (row untouched) when the row's stored state cannot be read", ctx do
     %{user: user, vault: vault, note: note} = ctx
 
