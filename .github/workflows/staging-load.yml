@@ -1,0 +1,89 @@
+name: staging-load
+
+# Prod-shaped traffic simulator against a deployed environment (staging by
+# default). Manual only: run it before promoting a release, and for the v5
+# staging rehearsal. See e2e/load/README.md (one-time grant, spend guard,
+# reading the summary). Server-side sampling (Oban, pg_stat_*, CRDT metrics)
+# needs SSH to the staging host, so it runs from the dev box alongside:
+#   e2e/load/server_probe.sh <out> 60 <seconds>
+#
+# Needs the STAGING_CLERK_SECRET_KEY secret: the Backend API key of the
+# TARGET's Clerk instance (staging's `CLERK_SECRET_KEY`; it is not the e2e
+# instance's E2E_CLERK_SECRET_KEY).
+
+on:
+  workflow_dispatch:
+    inputs:
+      api:
+        description: API base URL
+        type: string
+        default: https://staging.engram.page/api
+      duration:
+        description: Traffic seconds after seeding (default 2 h)
+        type: string
+        default: "7200"
+      steady:
+        description: Steady multiplier of prod's 24h mean rate
+        type: string
+        default: "10"
+      burst:
+        description: Burst multiplier (5 min at --burst-at)
+        type: string
+        default: "30"
+      burst_at:
+        type: string
+        default: "3600"
+      purge_at:
+        type: string
+        default: "2700"
+      plugin_ref:
+        description: Engram-obsidian ref for the CRDT half
+        type: string
+        default: main
+
+concurrency:
+  group: staging-load
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: [self-hosted, linux, x64, isolated]
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Checkout plugin
+        run: |
+          rm -rf plugin-src
+          git clone --depth=1 --branch "${{ inputs.plugin_ref }}" https://github.com/engram-app/Engram-obsidian.git plugin-src
+
+      - name: Install deps
+        run: |
+          if [ ! -x "$HOME/.bun/bin/bun" ]; then curl -fsSL https://bun.sh/install | bash; fi
+          export PATH="$HOME/.bun/bin:$PATH"
+          (cd plugin-src && bun install --frozen-lockfile --registry http://10.0.20.214:4873)
+          python3 -m venv .venv-load
+          .venv-load/bin/pip install -q 'requests>=2.33' 'websockets>=13' urllib3
+
+      - name: Run simulator
+        env:
+          STAGING_CLERK_SECRET_KEY: ${{ secrets.STAGING_CLERK_SECRET_KEY }}
+          ENGRAM_PLUGIN_SRC: ${{ github.workspace }}/plugin-src
+        run: |
+          export PATH="$HOME/.bun/bin:$PATH"
+          .venv-load/bin/python e2e/load/sim.py --api "${{ inputs.api }}" \
+            --duration "${{ inputs.duration }}" --steady "${{ inputs.steady }}" \
+            --burst "${{ inputs.burst }}" --burst-at "${{ inputs.burst_at }}" \
+            --purge-at "${{ inputs.purge_at }}" --out load-out
+          cat load-out/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: staging-load-${{ github.run_id }}
+          path: load-out/
+          retention-days: 30
