@@ -1013,9 +1013,10 @@ defmodule Engram.Crypto.UserDekRotation do
       Repo.with_tenant(user_id, fn ->
         Repo.delete_all(from(a in Engram.Notes.NoteAttr, where: a.note_id in ^ids))
 
-        for note <- notes, flat = flats[note.id], flat != nil do
-          Repo.insert_all(Engram.Notes.NoteAttr, FlatFields.attr_rows(flat, note))
-        end
+        _inserted =
+          for note <- notes, flat = flats[note.id], flat != nil do
+            Repo.insert_all(Engram.Notes.NoteAttr, FlatFields.attr_rows(flat, note))
+          end
 
         # The seq does not move here: drop catalogs built on the old rows.
         notes |> Enum.map(& &1.vault_id) |> Enum.uniq() |> Enum.each(&FieldCatalog.evict/1)
