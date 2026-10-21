@@ -12,6 +12,7 @@ defmodule Engram.Rebuild.Manifest do
     field :mean_pooled_points, :integer
     field :dl_sum, :integer
     field :dl_count, :integer
+    field :planned_at, :utc_datetime_usec
     field :inserted_at, :utc_datetime_usec, read_after_writes: true
   end
 end

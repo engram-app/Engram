@@ -90,6 +90,18 @@ defmodule Engram.RebuildTest do
       refute_enqueued(worker: RebuildDryRun)
     end
 
+    test "off with a bump queues no rebuild for a keyword-stale note (nil or below the pin)" do
+      missing = bumped_note(keyword_version: nil)
+      below = bumped_note(keyword_version: elem(@pins, 1) - 1)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+
+      for note <- [missing, below] do
+        refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
+        refute Engram.Workers.EmbedNote.version_stale?(note)
+      end
+    end
+
     test "off with the build at its pins is today's sweep: an older stamp still rebuilds" do
       ServiceConfig.put_override(
         :rebuild_pinned_versions,
@@ -204,12 +216,24 @@ defmodule Engram.RebuildTest do
             est_tokens: m.est_tokens,
             new_points: m.new_points,
             reused_points: m.reused_points,
-            mean_pooled_points: m.mean_pooled_points
+            mean_pooled_points: m.mean_pooled_points,
+            planned?: not is_nil(m.planned_at)
           }
         )
         |> Repo.all()
       end)
     end
+
+    # The real flow: the coordinator queues planners, they run, and the next
+    # coordinator run seals.
+    defp dry_run! do
+      assert :ok = perform_job(RebuildDryRun, %{})
+      Oban.drain_queue(queue: :events)
+      assert :ok = perform_job(RebuildDryRun, %{})
+    end
+
+    defp planner_jobs(user),
+      do: all_enqueued(worker: RebuildDryRun, args: %{"user_id" => user.id})
 
     test "writes manifest rows, vault avgdl and the budget with 0 Voyage and 0 Qdrant calls",
          %{user: user, vault: vault} do
@@ -217,12 +241,11 @@ defmodule Engram.RebuildTest do
       b = stale_note!(user, vault, "B.md", "# Beta\n\n" <> String.duplicate("beta words ", 300))
       mode!("dry_run")
 
-      assert :ok = perform_job(RebuildDryRun, %{})
+      dry_run!()
 
       rows = manifest(user.id)
       assert Enum.map(rows, & &1.note_id) |> Enum.sort() == Enum.sort([a.id, b.id])
       assert Enum.all?(rows, &(&1.est_tokens > 0 and &1.new_points > 0))
-      assert Enum.all?(rows, &(&1.reused_points == 0 and &1.mean_pooled_points == 0))
 
       assert Rebuild.pinned_avgdl(user.id, vault.id) > 0.0
 
@@ -237,22 +260,227 @@ defmodule Engram.RebuildTest do
       refute_received {:qdrant_call, _, _}
     end
 
-    test "a re-run skips notes already in the manifest", %{user: user, vault: vault} do
+    test "the coordinator queues one planner per user and does not seal before they finish",
+         %{user: user, vault: vault} do
       _ = stale_note!(user, vault, "A.md", "# Alpha\n\nsome words here")
       mode!("dry_run")
-      assert :ok = perform_job(RebuildDryRun, %{})
-      [before] = manifest(user.id)
 
       assert :ok = perform_job(RebuildDryRun, %{})
+      assert [_one] = planner_jobs(user)
+      assert Rebuild.ledger() == nil
+
+      # A second coordinator run while the planner is pending queues nothing
+      # more and still does not seal.
+      assert :ok = perform_job(RebuildDryRun, %{})
+      assert [_one] = planner_jobs(user)
+      assert Rebuild.ledger() == nil
+    end
+
+    test "a completed user is not planned again", %{user: user, vault: vault} do
+      _ = stale_note!(user, vault, "A.md", "# Alpha\n\nsome words here")
+      mode!("dry_run")
+      dry_run!()
+      Repo.query!("DELETE FROM rebuild_ledger")
+
+      assert :ok = perform_job(RebuildDryRun, %{})
+      refute Enum.any?(planner_jobs(user), &(&1.state == "available"))
+    end
+
+    test "a planner re-run skips notes already in the manifest", %{user: user, vault: vault} do
+      _ = stale_note!(user, vault, "A.md", "# Alpha\n\nsome words here")
+      mode!("dry_run")
+      assert :ok = perform_job(RebuildDryRun, %{"user_id" => user.id})
+      [before] = manifest(user.id)
+
+      assert :ok = perform_job(RebuildDryRun, %{"user_id" => user.id})
       assert manifest(user.id) == [before]
     end
 
-    test "is a no-op unless the mode is dry_run", %{user: user, vault: vault} do
+    test "a planner cancels once the mode leaves dry_run", %{user: user, vault: vault} do
+      _ = stale_note!(user, vault, "A.md", "# Alpha\n\nsome words here")
+      mode!("on")
+
+      assert {:cancel, :not_dry_run} = perform_job(RebuildDryRun, %{"user_id" => user.id})
+      assert manifest(user.id) == []
+    end
+
+    test "the coordinator is a no-op unless the mode is dry_run", %{user: user, vault: vault} do
       _ = stale_note!(user, vault, "A.md", "# Alpha\n\nsome words here")
 
       assert :ok = perform_job(RebuildDryRun, %{})
-      assert manifest(user.id) == []
+      assert planner_jobs(user) == []
       assert Rebuild.ledger() == nil
+    end
+
+    test "a note whose planning crashed (dead-man row left pending) is never planned again",
+         %{user: user, vault: vault} do
+      crashed = stale_note!(user, vault, "A.md", "# Alpha\n\nsome words here")
+      ok = stale_note!(user, vault, "B.md", "# Beta\n\nother words here")
+      :ok = Rebuild.put_pending(user.id, crashed)
+      mode!("dry_run")
+
+      assert :ok = perform_job(RebuildDryRun, %{"user_id" => user.id})
+
+      by_id = Map.new(manifest(user.id), &{&1.note_id, &1})
+      assert %{est_tokens: 0, planned?: false} = by_id[crashed.id]
+      assert %{planned?: true} = by_id[ok.id]
+      assert by_id[ok.id].est_tokens > 0
+    end
+
+    test "a note the embed crash guard charged a death to is skipped", %{user: user, vault: vault} do
+      note = stale_note!(user, vault, "A.md", "# Alpha\n\nsome words here")
+
+      Repo.with_tenant!(user.id, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^note.id), set: [embed_crashes: 1])
+      end)
+
+      mode!("dry_run")
+      assert :ok = perform_job(RebuildDryRun, %{"user_id" => user.id})
+      assert manifest(user.id) == []
+    end
+  end
+
+  describe "seal/0" do
+    setup do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      %{user: user, vault: vault}
+    end
+
+    defp planned!(user, vault, est, dl_sum) do
+      note = insert(:note, user: user, vault: vault)
+
+      :ok =
+        Rebuild.put_manifest(user.id, [
+          %{
+            note_id: note.id,
+            vault_id: vault.id,
+            est_tokens: est,
+            new_points: 1,
+            reused_points: 0,
+            mean_pooled_points: 0,
+            dl_sum: dl_sum,
+            dl_count: 1
+          }
+        ])
+    end
+
+    test "seals only while the mode is still dry_run", %{user: user, vault: vault} do
+      planned!(user, vault, 100, 10)
+      mode!("on")
+
+      assert Rebuild.seal() == {:error, :not_dry_run}
+      assert Rebuild.ledger() == nil
+      assert Rebuild.pinned_avgdl(user.id, vault.id) == nil
+    end
+
+    test "never clears a halt and never overwrites a budget already set",
+         %{user: user, vault: vault} do
+      planned!(user, vault, 1_000_000, 10)
+      Rebuild.set_budget(5)
+      assert Rebuild.debit(10) == :halt
+      mode!("dry_run")
+
+      assert Rebuild.seal() == {:ok, 5}
+      assert Rebuild.ledger() == %{budget_tokens: 5, spent_tokens: 10, halted?: true}
+    end
+
+    test "never replaces a pin once a budget is sealed", %{user: user, vault: vault} do
+      mode!("dry_run")
+      planned!(user, vault, 100, 10)
+      assert {:ok, _} = Rebuild.seal()
+      Engram.Cache.clear_local(:rebuild)
+      assert Rebuild.pinned_avgdl(user.id, vault.id) == 10.0
+
+      # A late row would move the vault's average to 20.
+      planned!(user, vault, 100, 30)
+      assert {:ok, _} = Rebuild.seal()
+      Engram.Cache.clear_local(:rebuild)
+      assert Rebuild.pinned_avgdl(user.id, vault.id) == 10.0
+    end
+  end
+
+  describe "rebuild_estimate/2 on indexed notes" do
+    import Engram.IndexBudgetHelpers
+
+    setup do
+      bypass = Bypass.open()
+      ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+
+      Bypass.stub(bypass, :any, :any, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": true, "status": "ok"}))
+      end)
+
+      stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      {:ok, user} = Crypto.ensure_user_dek(insert(:user))
+      vault = insert(:vault, user: user)
+      %{user: user, vault: vault}
+    end
+
+    @pad String.duplicate("filler words here ", 30)
+
+    defp sections(n),
+      do: Enum.map_join(1..n, "\n\n", &"## Section #{&1}\n\nBody #{&1}. #{@pad}")
+
+    defp indexed!(user, vault, content) do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "N.md", "content" => content, "mtime" => 1.0},
+          actor: "api"
+        )
+
+      assert {:ok, count} = Indexing.index_note(note, vault, user)
+      assert count >= 4
+      %{note | dense_indexed_hash: note.content_hash}
+    end
+
+    defp estimate!(note, user) do
+      {:ok, decrypted} = Crypto.maybe_decrypt_note_fields(note, user)
+
+      {:ok, est} =
+        Repo.with_tenant!(user.id, fn -> Indexing.rebuild_estimate(decrypted, user) end)
+
+      est
+    end
+
+    test "an unchanged indexed note reuses every point for 0 tokens", %{user: user, vault: vault} do
+      note = indexed!(user, vault, sections(4))
+      est = estimate!(note, user)
+
+      assert est.reused_points >= 4
+      assert est.new_points == 0
+      assert est.est_tokens == 0
+    end
+
+    test "a capped note whose members each have a stored vector is mean-pooled for 0 tokens",
+         %{user: user, vault: vault} do
+      note = indexed!(user, vault, sections(6))
+      enable_index_budget()
+      insert(:user_limit_override, user: user, key: "note_points_cap", value: %{"v" => 2})
+
+      est = estimate!(note, Repo.reload!(user, skip_tenant_check: true))
+
+      assert est.mean_pooled_points > 0
+      assert est.est_tokens == 0
+    end
+
+    test "a note with no dense hash is planned dense and estimated with tokens",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(
+          user,
+          vault,
+          %{"path" => "N.md", "content" => sections(4), "mtime" => 1.0},
+          actor: "api"
+        )
+
+      assert note.dense_indexed_hash == nil
+      assert Indexing.version_rebuild_opts(note)[:maintenance] == false
+      assert estimate!(note, user).est_tokens > 0
     end
   end
 
@@ -267,12 +495,19 @@ defmodule Engram.RebuildTest do
       assert Rebuild.mode() == :on
 
       assert Rebuild.debit(1) == :halt
-      assert_received {[:engram, :rebuild, :halted], ^ref, %{spent_tokens: 1_001}, _}
+      assert_received {[:engram, :rebuild, :halted], ^ref, %{count: 1, spent_tokens: 1_001}, _}
       assert Rebuild.mode() == :off
       assert Rebuild.ledger() == %{budget_tokens: 1_000, spent_tokens: 1_001, halted?: true}
 
-      # Halted stays halted; nothing is spent past it unrecorded.
+      # Halted stays halted, nothing is spent past it unrecorded, and the
+      # halt event (the PromEx counter) fires once per off transition.
       assert Rebuild.debit(1) == :halt
+      refute_received {[:engram, :rebuild, :halted], ^ref, _, _}
+    end
+
+    test "the halt is a PromEx counter" do
+      %{metrics: metrics} = Engram.PromEx.Indexing.event_metrics(otp_app: :engram)
+      assert Enum.any?(metrics, &(&1.event_name == [:engram, :rebuild, :halted]))
     end
 
     test "with no ledger (no dry run sealed a budget) halts" do

@@ -121,8 +121,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # roll-forward, or a restored soft-deleted vault, puts version-stale notes
     # back after the migration closed, and nothing would reopen it.
     #
-    # The versions are the rebuild switch's (`Rebuild.target_versions/0`):
-    # read once, so one tick never mixes two targets.
+    # The versions are the rebuild switch's (`Rebuild.target_versions/0`),
+    # read once for both sweeps. `done?/0` reads them again through the
+    # migration name; a halt between the two reads only makes this tick
+    # skip rebuilds, never queue extra ones.
     versions = Rebuild.target_versions()
     versions_done = IndexVersions.done?() and not daily_reverify?(scheduled_at)
 
@@ -249,18 +251,16 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     if versions_done, do: :ok, else: sweep_keyword_stale(now, paid, page_size, versions)
   end
 
-  # `dry_run` plans the pass instead of running it. Unique while pending, so
-  # a tick during a long dry run queues nothing; a finished one re-runs each
-  # tick over notes not yet in the manifest, and re-seals the budget.
+  # `dry_run` plans the pass instead of running it: the dry run coordinator
+  # (unique while pending) queues per-user planners and seals. Once a budget
+  # is sealed there is nothing left for it to do, so it is not queued again.
   defp maybe_dry_run do
-    case Rebuild.mode() do
-      :dry_run ->
+    _ =
+      if Rebuild.mode() == :dry_run and Rebuild.ledger() == nil do
         {:ok, _job} = Oban.insert(RebuildDryRun.new(%{}))
-        :ok
+      end
 
-      _mode ->
-        :ok
-    end
+    :ok
   end
 
   # Notes rebuilt per tick by `sweep_over_note_cap/1`: 1,200 a day over the

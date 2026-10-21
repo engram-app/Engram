@@ -32,6 +32,9 @@ defmodule Engram.Repo.Migrations.CreateRebuildManifestExpand do
       add :mean_pooled_points, :bigint, null: false
       add :dl_sum, :bigint, null: false
       add :dl_count, :bigint, null: false
+      # NULL: the planner's dead-man row, written before a note is planned
+      # (`Rebuild.put_pending/2`). Still NULL later means planning it crashed.
+      add :planned_at, :timestamptz
       add :inserted_at, :timestamptz, null: false, default: fragment("now()")
     end
 

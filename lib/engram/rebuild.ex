@@ -7,20 +7,20 @@ defmodule Engram.Rebuild do
 
   `INDEX_REBUILD` (`:index_rebuild`) is `off` (default), `dry_run` or `on`.
 
-    * `off`: nothing here runs and nothing here is queried. The index
-      version sweep rebuilds only notes older than the pinned versions
-      (`target_versions/0`), which equal today's build versions, so main
-      behaves exactly as before. A later stamp bump (PR-17) rebuilds nothing
-      until the operator says so.
-    * `dry_run`: `Engram.Workers.RebuildDryRun` plans every stale note and
-      writes `rebuild_manifest` rows, the per-vault pinned `avgdl` and the
+    * `off`: nothing here runs and nothing here is queried. Every index
+      version check (`target_versions/0`) uses the pinned versions, which
+      equal today's build, so main behaves exactly as before. A later stamp
+      bump (PR-17) rebuilds nothing until the operator says so.
+    * `dry_run`: `Engram.Workers.RebuildDryRun` plans every stale note into
+      `rebuild_manifest`, then seals: the per-vault pinned `avgdl` and the
       ledger budget. No Voyage call, no Qdrant call. Version rebuilds stay
       gated as under `off`.
-    * `on`: the version sweep targets the build's versions, every keyword
-      encode reads the pinned `avgdl`, and spend is debited against the
-      ledger. A debit past the budget halts the pass: `mode/0` then reads
-      `:off` until a new budget is set (`set_budget/1` or a dry run). With
-      no budget at all, `on` reads `:off` too.
+    * `on`: version checks target the build's versions, every keyword encode
+      reads the pinned `avgdl`, and every version rebuild's Voyage tokens are
+      debited against the ledger (`spend/2`). A debit past the budget halts
+      the pass: `mode/0` then reads `:off`, so queued rebuilds skip, until an
+      operator sets a new budget (`set_budget/1`). With no budget at all,
+      `on` reads `:off` too.
 
   Resuming `on` after `off` needs nothing: the per-note version stamps say
   what is left.
@@ -31,9 +31,13 @@ defmodule Engram.Rebuild do
   alias Engram.Backfill.TenantScan
   alias Engram.Cache
   alias Engram.KeywordIndex
+  alias Engram.Logger.Metadata
+  alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
   alias Engram.Rebuild.{Manifest, ManifestVault}
   alias Engram.Repo
+
+  require Logger
 
   # The last versions every install rebuilds automatically, without the
   # switch: today's build (chunker 3, keyword 2). PR-17's bump to chunker 5
@@ -46,6 +50,8 @@ defmodule Engram.Rebuild do
   @budget_pct 115
   @drift_pct 150
   @drift_floor 50_000
+
+  @meter_key {__MODULE__, :tokens}
 
   @type mode :: :off | :dry_run | :on
 
@@ -64,9 +70,11 @@ defmodule Engram.Rebuild do
   def build_versions, do: {Markdown.chunker_version(), KeywordIndex.version()}
 
   @doc """
-  `{chunker, keyword}` versions the index version sweep rebuilds up to: the
-  build's while `on`, else the pins (never above the build: a rollback build
-  older than a pin keeps its own).
+  `{chunker, keyword}` versions every index version check rebuilds up to:
+  the build's while `on`, else the pins (never above the build: a rollback
+  build older than a pin keeps its own). The ONE accessor: the reconcile
+  sweep, `EmbedNote.version_stale?/1`, `RefreshKeywordVectors` and
+  `IndexVersions` all read it.
   """
   @spec target_versions() :: {pos_integer(), pos_integer()}
   def target_versions do
@@ -98,6 +106,7 @@ defmodule Engram.Rebuild do
   Records `tokens` the pass has spent, in one atomic statement. `:halt` once
   the total passes the budget (or with no budget at all); the halt is
   stamped in the same UPDATE, so concurrent debits never overspend unseen.
+  `[:engram, :rebuild, :halted]` fires once, on the debit that halts.
   """
   @spec debit(non_neg_integer()) :: :ok | :halt
   def debit(tokens) when is_integer(tokens) and tokens >= 0 do
@@ -120,23 +129,72 @@ defmodule Engram.Rebuild do
             updated_at: fragment("now()")
           ]
         ],
-        select: {l.spent_tokens, not is_nil(l.halted_at)}
+        # PG18 `RETURNING old.*`: halted now and not before is the off
+        # transition, seen by exactly one debit.
+        select: {l.spent_tokens, not is_nil(l.halted_at), fragment("old.halted_at IS NULL")}
       )
       |> Repo.update_all([])
 
     case rows do
-      [{_spent, false}] -> :ok
-      [{spent, true}] -> halt(spent)
+      [{_spent, false, _}] ->
+        :ok
+
+      [{spent, true, transition?}] ->
+        if transition? == true do
+          :telemetry.execute([:engram, :rebuild, :halted], %{count: 1, spent_tokens: spent}, %{})
+          :ok = Cache.evict(:rebuild, :halted)
+        end
+
+        :halt
+
       # No ledger row: no sealed budget, nothing may be spent.
-      [] -> halt(0)
+      [] ->
+        :halt
     end
   end
 
-  defp halt(spent) do
-    :telemetry.execute([:engram, :rebuild, :halted], %{spent_tokens: spent}, %{})
-    :ok = Cache.evict(:rebuild, :halted)
-    :halt
+  @doc """
+  Runs one version rebuild's indexing `fun` and charges what it sent Voyage
+  (`usage.total_tokens`, counted from `[:engram, :voyage, :embed, :tokens]`
+  in this process) to the ledger, raise or not. Then the drift check: a
+  note that cost over its limit is parked until edited.
+  """
+  @spec spend(Note.t(), (-> result)) :: result when result: term()
+  def spend(%Note{} = note, fun) do
+    Process.put(@meter_key, 0)
+
+    try do
+      fun.()
+    after
+      tokens = Process.delete(@meter_key) || 0
+      _ = if tokens > 0, do: debit(tokens)
+      if check_note(note, tokens) != :ok, do: park_drift(note, tokens)
+    end
   end
+
+  @doc false
+  # Attached once at boot. Telemetry handlers run in the emitting process,
+  # so this counts only the tokens of the process inside `spend/2`.
+  def attach do
+    :telemetry.attach(
+      "engram-rebuild-token-meter",
+      [:engram, :voyage, :embed, :tokens],
+      &__MODULE__.handle_tokens/4,
+      nil
+    )
+  end
+
+  @doc false
+  def handle_tokens(_event, %{total_tokens: tokens}, _meta, _config) when is_integer(tokens) do
+    case Process.get(@meter_key) do
+      nil -> :ok
+      n -> Process.put(@meter_key, n + tokens)
+    end
+
+    :ok
+  end
+
+  def handle_tokens(_event, _measurements, _meta, _config), do: :ok
 
   @doc """
   `{:park, :rebuild_drift}` when a note cost over 1.5x its manifest
@@ -158,20 +216,66 @@ defmodule Engram.Rebuild do
     if 100 * actual > @drift_pct * est, do: {:park, :rebuild_drift}, else: :ok
   end
 
-  @doc "Upserts one user's manifest rows (`note_id`, `vault_id`, counts)."
+  # Parked like a too-long note: until its content changes. Tokens only in
+  # the log: they are counts, not content.
+  defp park_drift(note, tokens) do
+    {:ok, _} =
+      Repo.with_tenant(note.user_id, fn ->
+        Repo.update_all(from(n in Note, where: n.kind == "note" and n.id == ^note.id),
+          set: [embed_retry_after: Engram.Workers.EmbedNote.parked_until_edited()]
+        )
+      end)
+
+    :telemetry.execute([:engram, :rebuild, :drift_parked], %{count: 1, tokens: tokens}, %{})
+
+    Logger.warning(
+      "rebuild_drift_parked",
+      Metadata.with_category(:warning, :oban, note_id: note.id, total_count: tokens)
+    )
+  end
+
+  @doc "Upserts one user's planned manifest rows (`note_id`, `vault_id`, counts)."
   @spec put_manifest(Ecto.UUID.t(), [map()]) :: :ok
   def put_manifest(_user_id, []), do: :ok
 
   def put_manifest(user_id, rows) do
-    rows = Enum.map(rows, &Map.put(&1, :user_id, user_id))
+    now = DateTime.utc_now()
+    rows = Enum.map(rows, &Map.merge(&1, %{user_id: user_id, planned_at: now}))
+    upsert(user_id, rows)
+  end
 
+  @doc """
+  The planner's dead-man row: written right before a note is planned, and
+  replaced by `put_manifest/2` when it is. One still pending (`planned_at`
+  nil) on a later run is a note whose planning crashed the node: the dry run
+  never plans it again and counts it as skipped.
+  """
+  @spec put_pending(Ecto.UUID.t(), %{id: Ecto.UUID.t(), vault_id: Ecto.UUID.t()}) :: :ok
+  def put_pending(user_id, note) do
+    upsert(user_id, [
+      %{
+        note_id: note.id,
+        vault_id: note.vault_id,
+        user_id: user_id,
+        est_tokens: 0,
+        new_points: 0,
+        reused_points: 0,
+        mean_pooled_points: 0,
+        dl_sum: 0,
+        dl_count: 0,
+        planned_at: nil
+      }
+    ])
+  end
+
+  defp upsert(user_id, rows) do
     {_, _} =
       Repo.with_tenant!(user_id, fn ->
         Repo.insert_all(Manifest, rows,
           on_conflict:
             {:replace,
              [:vault_id, :est_tokens, :new_points, :reused_points, :mean_pooled_points] ++
-               [:dl_sum, :dl_count]},
+               [:dl_sum, :dl_count, :planned_at]},
           conflict_target: :note_id
         )
       end)
@@ -181,11 +285,24 @@ defmodule Engram.Rebuild do
 
   @doc """
   Closes a dry run: pins each vault's `avgdl` from the manifest and sets the
-  budget to 1.15x the manifest's estimated tokens. Per tenant, as
+  budget to 1.15x the manifest's estimated tokens. Only while the mode is
+  still `dry_run`. The budget is set only when none exists (an operator's
+  budget wins, and a halt is never cleared here), and once a budget exists
+  the pins are never replaced, only added for vaults that had none, so a
+  late seal cannot move a running pass's avgdl. Per tenant, as
   `ReconcileEmbeddings` scans.
   """
-  @spec seal() :: {:ok, non_neg_integer()}
+  @spec seal() :: {:ok, non_neg_integer()} | {:error, :not_dry_run}
   def seal do
+    if mode() == :dry_run, do: do_seal(), else: {:error, :not_dry_run}
+  end
+
+  defp do_seal do
+    pins_conflict =
+      if ledger() == nil,
+        do: {:replace, [:avgdl]},
+        else: :nothing
+
     est =
       each_tenant(fn repo ->
         _ =
@@ -200,7 +317,7 @@ defmodule Engram.Rebuild do
                 avgdl: fragment("sum(?)::float8 / sum(?)", m.dl_sum, m.dl_count)
               }
             ),
-            on_conflict: {:replace, [:avgdl]},
+            on_conflict: pins_conflict,
             conflict_target: :vault_id
           )
 
@@ -211,12 +328,21 @@ defmodule Engram.Rebuild do
       |> Enum.sum()
 
     budget = div(@budget_pct * est + 99, 100)
-    :ok = set_budget(budget)
+
+    {_, _} =
+      Repo.insert_all("rebuild_ledger", [%{id: true, budget_tokens: budget, spent_tokens: 0}],
+        on_conflict: :nothing,
+        conflict_target: :id
+      )
+
     :ok = Cache.evict_all(:rebuild)
-    {:ok, budget}
+    {:ok, ledger().budget_tokens}
   end
 
-  @doc "Sets the pass budget and clears a halt; what was spent stays."
+  @doc """
+  The operator's lever: sets the pass budget and clears a halt; what was
+  spent stays. Never called by the pass itself.
+  """
   @spec set_budget(non_neg_integer()) :: :ok
   def set_budget(tokens) when is_integer(tokens) and tokens >= 0 do
     {1, _} =
@@ -237,6 +363,7 @@ defmodule Engram.Rebuild do
           %{budget_tokens: integer(), spent_tokens: integer(), halted?: boolean()} | nil
   def ledger do
     from(l in "rebuild_ledger",
+      where: l.id == true,
       select: %{
         budget_tokens: l.budget_tokens,
         spent_tokens: l.spent_tokens,
@@ -249,7 +376,8 @@ defmodule Engram.Rebuild do
   # No ledger row is halted too: `on` without a sealed budget spends nothing.
   defp halted? do
     Cache.fetch(:rebuild, :halted, fn ->
-      from(l in "rebuild_ledger", select: is_nil(l.halted_at)) |> Repo.one() != true
+      from(l in "rebuild_ledger", where: l.id == true, select: is_nil(l.halted_at))
+      |> Repo.one() != true
     end)
   end
 

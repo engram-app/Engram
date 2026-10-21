@@ -2469,8 +2469,9 @@ defmodule Engram.Indexing do
     * `dl_sum`, `dl_count`: keyword lengths of the planned points that
       count toward `avgdl` (not merged, not floor).
 
-  A sparse-only note (no dense vectors now) stays sparse and costs 0 tokens.
-  `note` is decrypted.
+  Planned with `version_rebuild_opts/1`, the opts the version rebuild
+  runs with, so the estimate and the pass agree on what is dense. `note` is
+  decrypted.
   """
   @spec rebuild_estimate(map(), map()) :: {:ok, %{atom() => non_neg_integer()}} | {:error, term()}
   def rebuild_estimate(note, user) do
@@ -2500,10 +2501,13 @@ defmodule Engram.Indexing do
         do: chunks |> cap_chunks(note_points_cap(user), merged?) |> fit_positions(merged?),
         else: fit_positions(chunks, merged?)
 
-    dense? = not is_nil(Map.get(note, :dense_indexed_hash))
+    # As `prepare_index/4` plans it: dense unless the opts say otherwise.
+    dense? = Keyword.get(version_rebuild_opts(note), :dense, true)
     plan = plan_chunks(capped, rows, content_key, dense?)
 
-    known = known_hmacs(rows)
+    # C13 averages each member's OWN stored vector: a fingerprint that lives
+    # only as a member of a merged point has none, so it is not counted.
+    known = standalone_hmacs(rows)
 
     Enum.reduce(plan.entries, zero, fn entry, acc ->
       chunk = entry_chunk(entry)
@@ -2523,6 +2527,26 @@ defmodule Engram.Indexing do
       end
     end)
   end
+
+  @doc """
+  The opts a version rebuild (`EmbedNote`, `RebuildStaleNote`) indexes a
+  content-current note with, shared with `rebuild_estimate/2`: our
+  maintenance (unmetered) when the note's dense vectors are for its current
+  content, and its dense points are kept.
+  """
+  @spec version_rebuild_opts(map()) :: keyword()
+  def version_rebuild_opts(note) do
+    hash = Map.get(note, :content_hash)
+    [maintenance: hash != nil and Map.get(note, :dense_indexed_hash) == hash, keep_dense: true]
+  end
+
+  defp standalone_hmacs(rows),
+    do:
+      MapSet.new(
+        for {hmac, point_id, _tokens, nil} <- rows,
+            hmac != nil and point_id != nil,
+            do: short_hmac(hmac)
+      )
 
   defp embed_estimate(acc, chunk, dense?) do
     tokens =

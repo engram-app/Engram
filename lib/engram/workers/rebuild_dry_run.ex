@@ -2,21 +2,39 @@ defmodule Engram.Workers.RebuildDryRun do
   @moduledoc """
   The v5 rebuild dry run (`INDEX_REBUILD=dry_run`, plan Task 16.1): plans
   every note the pass would rebuild (content current, behind this build's
-  chunker or keyword version) and writes its `rebuild_manifest` row, then
-  pins each vault's `avgdl` and sets the ledger budget (`Rebuild.seal/0`).
+  chunker or keyword version) into `rebuild_manifest`, then seals: pins
+  each vault's `avgdl` and sets the ledger budget (`Rebuild.seal/0`).
 
   Never calls Voyage or Qdrant: `Indexing.rebuild_estimate/2` parses, caps
-  and fingerprints locally. Queued by `ReconcileEmbeddings` while the mode is
-  `dry_run`; a no-op in any other mode. Resumable: a note already in the
-  manifest is skipped, so a run cut short by its timeout continues on the
-  next tick, and only a run that reaches the end seals.
+  and fingerprints locally.
+
+  Two kinds of job, one worker:
+
+    * the coordinator (`%{}`), queued by `ReconcileEmbeddings` each tick
+      while the mode is `dry_run` and no budget is sealed. It queues one
+      planner job per user that has none yet, and seals once every planner
+      job has finished and the mode is still `dry_run`.
+    * a planner (`%{"user_id" => id}`): plans that user's notes one at a
+      time. A completed planner is never queued again for that user.
+
+  Every planner re-checks the mode per page and cancels once it leaves
+  `dry_run`. A note is planned behind a dead-man row (`Rebuild.put_pending/2`):
+  if planning it kills the node, the row stays pending and no later run
+  plans it again, so one note cannot crash-loop the queue. Notes the embed
+  crash guard has charged a death to are skipped too.
   """
   use Oban.Worker,
     # :events, not :maintenance: that queue runs the cron workers only
-    # (ObanQueueConfigTest).
+    # (ObanQueueConfigTest). Planners run at the lowest priority, behind
+    # every other events job.
     queue: :events,
-    max_attempts: 1,
-    unique: [period: :infinity, states: [:available, :scheduled, :executing]]
+    max_attempts: 3,
+    # Coordinators share the nil `user_id` key, so one runs at a time.
+    unique: [
+      period: :infinity,
+      keys: [:user_id],
+      states: [:available, :scheduled, :executing, :retryable]
+    ]
 
   import Ecto.Query
 
@@ -33,78 +51,119 @@ defmodule Engram.Workers.RebuildDryRun do
   require Logger
 
   @page 200
+  @running ~w(available scheduled executing retryable)
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(30)
 
   @impl Oban.Worker
-  def perform(%Oban.Job{}) do
-    if Rebuild.mode() == :dry_run, do: run(), else: :ok
+  def perform(%Oban.Job{args: %{"user_id" => user_id}}) do
+    if Rebuild.mode() == :dry_run, do: plan_user(user_id), else: {:cancel, :not_dry_run}
   end
 
-  defp run do
-    versions = Rebuild.build_versions()
-
-    {planned, skipped} =
-      Enum.reduce(TenantScan.user_ids(), {0, 0}, fn user_id, {p, s} ->
-        {up, us} = plan_user(user_id, versions)
-        {p + up, s + us}
-      end)
-
-    {:ok, budget} = Rebuild.seal()
-
-    Logger.info(
-      "rebuild_dry_run: sealed",
-      Metadata.with_category(:info, :search,
-        total_count: planned,
-        skipped_count: skipped,
-        budget_tokens: budget
-      )
-    )
-
-    :ok
+  def perform(%Oban.Job{id: id}) do
+    if Rebuild.mode() == :dry_run, do: coordinate(id), else: :ok
   end
 
-  # `{planned, skipped}` for one user, a page at a time.
-  defp plan_user(user_id, versions) do
-    case Accounts.get_user_with_subscription(user_id) do
-      nil -> {0, 0}
-      user -> plan_pages(user, versions, nil, {0, 0})
+  defp coordinate(self_id) do
+    queued = MapSet.new(planner_user_ids())
+    missing = Enum.reject(TenantScan.user_ids(), &MapSet.member?(queued, &1))
+
+    _ =
+      missing
+      |> Enum.map(&new(%{user_id: &1}, priority: 9))
+      |> Enum.chunk_every(500)
+      |> Enum.each(&Oban.insert_all/1)
+
+    if missing == [] and not planners_running?(self_id), do: seal(), else: :ok
+  end
+
+  defp seal do
+    case Rebuild.seal() do
+      {:ok, budget} ->
+        Logger.info(
+          "rebuild_dry_run: sealed",
+          Metadata.with_category(:info, :oban, budget_tokens: budget, skipped_count: pending())
+        )
+
+        :ok
+
+      {:error, :not_dry_run} ->
+        :ok
     end
   end
 
-  defp plan_pages(user, versions, after_id, {p, s}) do
-    notes = Repo.with_tenant!(user.id, fn -> Repo.all(page_query(versions, after_id)) end)
+  # Users with a planner job that has not been discarded or cancelled.
+  defp planner_user_ids do
+    from(j in Oban.Job,
+      where:
+        j.worker == ^inspect(__MODULE__) and j.state not in ["discarded", "cancelled"] and
+          fragment("? \\? 'user_id'", j.args),
+      select: fragment("?->>'user_id'", j.args)
+    )
+    |> Repo.all()
+  end
 
-    {rows, skipped} =
-      notes
-      |> Crypto.decrypt_notes_batch(user)
-      |> Enum.reduce({[], 0}, fn
-        {:ok, note}, {rows, sk} ->
-          case Indexing.rebuild_estimate(note, user) do
-            {:ok, est} ->
-              {[Map.merge(est, %{note_id: note.id, vault_id: note.vault_id}) | rows], sk}
+  defp planners_running?(self_id) do
+    from(j in Oban.Job,
+      where:
+        j.worker == ^inspect(__MODULE__) and j.state in @running and j.id != ^self_id and
+          fragment("? \\? 'user_id'", j.args),
+      select: 1,
+      limit: 1
+    )
+    |> Repo.one()
+    |> Kernel.==(1)
+  end
 
-            {:error, _reason} ->
-              {rows, sk + 1}
-          end
+  # Dead-man rows still pending: notes whose planning crashed.
+  defp pending do
+    Rebuild.each_tenant(fn repo ->
+      repo.aggregate(from(m in Manifest, where: is_nil(m.planned_at)), :count)
+    end)
+    |> Enum.sum()
+  end
 
-        {:error, _reason}, {rows, sk} ->
-          {rows, sk + 1}
-      end)
+  defp plan_user(user_id) do
+    case Accounts.get_user_with_subscription(user_id) do
+      nil -> :ok
+      user -> plan_pages(user, Rebuild.build_versions(), nil)
+    end
+  end
 
-    :ok = Rebuild.put_manifest(user.id, rows)
-    acc = {p + length(rows), s + skipped}
+  defp plan_pages(user, versions, after_id) do
+    if Rebuild.mode() == :dry_run do
+      notes = Repo.with_tenant!(user.id, fn -> Repo.all(page_query(versions, after_id)) end)
+      Enum.each(notes, &plan_note(user, &1))
 
-    # Keyset on id, not the manifest anti-join alone: a skipped note (no DEK,
-    # a corrupt row) never enters the manifest and would head every page.
-    if length(notes) < @page,
-      do: acc,
-      else: plan_pages(user, versions, List.last(notes).id, acc)
+      # Keyset on id, not the manifest anti-join alone: a note that failed to
+      # decrypt or plan keeps a pending row and must not head every page.
+      if length(notes) < @page,
+        do: :ok,
+        else: plan_pages(user, versions, List.last(notes).id)
+    else
+      {:cancel, :not_dry_run}
+    end
+  end
+
+  # One note at a time: decrypted, planned and written before the next is
+  # touched, behind its dead-man row.
+  defp plan_note(user, note) do
+    :ok = Rebuild.put_pending(user.id, note)
+
+    with {:ok, note} <- Crypto.maybe_decrypt_note_fields(note, user),
+         {:ok, est} <- Indexing.rebuild_estimate(note, user) do
+      Rebuild.put_manifest(user.id, [Map.merge(est, %{note_id: note.id, vault_id: note.vault_id})])
+    else
+      # Left pending: counted as skipped at the seal, estimated at 0 by
+      # `Rebuild.check_note/2`.
+      {:error, _reason} -> :ok
+    end
   end
 
   # The note set the pass rebuilds, at the BUILD's versions (not the switch's
-  # gated ones), minus what the manifest already holds. RLS scopes it.
+  # gated ones), minus what the manifest already holds (planned or pending)
+  # and minus notes the embed crash guard charged a death to. RLS scopes it.
   defp page_query(versions, after_id) do
     IndexVersions.content_current_notes()
     |> where(
@@ -113,6 +172,7 @@ defmodule Engram.Workers.RebuildDryRun do
         ^IndexVersions.stale_dynamic(versions) or ^IndexVersions.keyword_stale_dynamic(versions)
       )
     )
+    |> where([n], is_nil(n.embed_crashes) or n.embed_crashes == 0)
     |> where(
       [n],
       not exists(from(m in Manifest, where: m.note_id == parent_as(:note).id, select: 1))
