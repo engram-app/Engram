@@ -176,13 +176,19 @@ async def test_plugin_first_journey(fresh_unlinked_instance, clerk_client, ts, s
             # Linking opens the first-sync preview; an empty server vault gets the
             # one-click upload screen, which is what the user clicks.
             await cdp.wait_for_sync_preview_modal(timeout=30)
-            body = await _poll(
-                lambda: cdp.evaluate(
-                    "document.querySelector('.engram-sync-preview-simple-body')?.textContent || ''"
-                ),
-                30,
-                "the one-click first-sync screen",
-            )
+            try:
+                body = await _poll(
+                    lambda: cdp.evaluate(
+                        "document.querySelector('.engram-sync-preview-simple-body')?.textContent || ''"
+                    ),
+                    30,
+                    "the one-click first-sync screen",
+                )
+            except AssertionError as e:
+                shown = await cdp.evaluate(
+                    "[...document.querySelectorAll('.modal')].map(m => m.innerText).join(' || ')"
+                )
+                raise AssertionError(f"{e}; modals show: {shown!r}") from None
             assert body == "This vault is empty on the server. Upload your 20 notes and 1 attachments?", body
             await cdp.evaluate("document.querySelector('.engram-sync-preview-simple-action').click()")
             await cdp.wait_for_modal_closed(timeout=10)
