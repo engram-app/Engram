@@ -81,7 +81,7 @@ defmodule Engram.Notes.LineageAudit do
   end
 
   # Ids off the maintenance pool (RLS would hide other tenants), then each
-  # user's and vault's struct once. Lazy, so a big population streams.
+  # user's and vault's struct once, in two batched reads.
   defp targets(opts) do
     repo = Repo.maintenance()
 
@@ -98,13 +98,23 @@ defmodule Engram.Notes.LineageAudit do
         user_id -> where(query, [n], n.user_id == ^user_id)
       end
 
-    query
-    |> repo.all()
-    |> Stream.chunk_by(fn {u, v, _} -> {u, v} end)
-    |> Stream.flat_map(fn [{user_id, vault_id, _} | _] = rows ->
-      user = repo.get!(User, user_id)
-      vault = repo.get!(Vault, vault_id)
-      Enum.map(rows, fn {_, _, note_id} -> {user, vault, note_id} end)
+    # `cross_tenant/1` is a no-op on the maintenance pool and load-bearing on
+    # the `Repo` fallback (RLS not enforced), as in `OrphanSweep`.
+    {rows, owners} =
+      Repo.cross_tenant(fn ->
+        rows = repo.all(query)
+        user_ids = rows |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
+        vault_ids = rows |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
+
+        {rows,
+         %{
+           users: Map.new(repo.all(from(u in User, where: u.id in ^user_ids)), &{&1.id, &1}),
+           vaults: Map.new(repo.all(from(v in Vault, where: v.id in ^vault_ids)), &{&1.id, &1})
+         }}
+      end)
+
+    Enum.map(rows, fn {user_id, vault_id, note_id} ->
+      {owners.users[user_id], owners.vaults[vault_id], note_id}
     end)
   end
 end
