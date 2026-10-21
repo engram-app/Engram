@@ -79,14 +79,18 @@ defmodule Engram.IndexingNoteCapTest do
     row
   end
 
-  # Each embed call reports its texts to the test process.
+  # Each embed call reports its texts to the test process. Both arities: a
+  # RebuildStaleNote pass sends `purpose: :maintenance`.
   defp stub_embedder do
     parent = self()
 
-    Mox.stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+    embed = fn texts ->
       send(parent, {:embedded, texts})
       {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
-    end)
+    end
+
+    Mox.stub(Engram.MockEmbedder, :embed_texts, embed)
+    Mox.stub(Engram.MockEmbedder, :embed_texts, fn texts, _opts -> embed.(texts) end)
   end
 
   defp embedded_texts(acc \\ []) do

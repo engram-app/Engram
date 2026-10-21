@@ -1925,7 +1925,7 @@ defmodule Engram.Indexing do
 
     result =
       try do
-        embed_dense(plan, texts)
+        embed_dense(plan, texts, opts)
       catch
         kind, reason ->
           release.()
@@ -2027,24 +2027,24 @@ defmodule Engram.Indexing do
     })
   end
 
-  defp embed_dense(%{cache: cache}, _texts) do
-    with {:ok, fresh} <- embed_misses(cache) do
+  defp embed_dense(%{cache: cache}, _texts, opts) do
+    with {:ok, fresh} <- embed_misses(cache, opts) do
       if cache.continues,
         do: {:error, :embed_continues},
         else: {:ok, Enum.map(cache.keys, &(Map.get(cache.hits, &1) || Map.fetch!(fresh, &1)))}
     end
   end
 
-  defp embed_dense(_plan, texts), do: maybe_embed(true, texts)
+  defp embed_dense(_plan, texts, opts), do: embed_for_indexing(texts, opts)
 
   # Each Voyage batch is cached the moment it returns, before Qdrant or the
   # chunk rows: a 429 on batch 3, a crash before commit or a retry on another
   # node pays only for the batches not yet cached.
-  defp embed_misses(cache) do
+  defp embed_misses(cache, opts) do
     cache.send
     |> batch_texts(fn {_key, _digest, text, _ub} -> IO.iodata_length(text) end)
     |> Enum.reduce_while({:ok, %{}}, fn batch, {:ok, acc} ->
-      with {:ok, vectors} <- do_embed_batch(Enum.map(batch, &elem(&1, 2))),
+      with {:ok, vectors} <- do_embed_batch(Enum.map(batch, &elem(&1, 2)), opts),
            :ok <- same_count(vectors, batch) do
         entries =
           Enum.zip_with(batch, vectors, fn {key, digest, _text, _ub}, v ->
@@ -2084,7 +2084,6 @@ defmodule Engram.Indexing do
   # `false` yields a nil vector per chunk. Kept as an explicit list (not a bare
   # nil) so build_prepared/8 can zip chunks with vectors either way.
   defp maybe_embed(false, texts), do: {:ok, Enum.map(texts, fn _ -> nil end)}
-  defp maybe_embed(true, texts), do: embed_for_indexing(texts)
 
   # A dense vector is held as packed float32 between the embed call and the
   # Qdrant upsert, not as the embedder's float list. As a list each element
@@ -2167,13 +2166,13 @@ defmodule Engram.Indexing do
   defp vector_json(%{indices: indices, values: values}) when is_binary(indices),
     do: Jason.Fragment.new(Engram.Native.sparse_json(indices, values))
 
-  defp embed_for_indexing(texts) do
+  defp embed_for_indexing(texts, opts) do
     n = length(texts)
 
     texts
     |> batch_texts()
     |> Enum.reduce_while({:ok, []}, fn batch, {:ok, acc} ->
-      case do_embed_batch(batch) do
+      case do_embed_batch(batch, opts) do
         {:ok, vectors} ->
           :ok = collect_garbage(n)
           {:cont, {:ok, [Enum.map(vectors, &pack_vector/1) | acc]}}
@@ -2223,13 +2222,18 @@ defmodule Engram.Indexing do
     )
   end
 
-  # A merged input is iodata until its batch goes out.
-  defp do_embed_batch(texts) do
+  # A merged input is iodata until its batch goes out. `:embed_purpose`
+  # (`:maintenance` for a RebuildStaleNote pass) picks the embedder's request
+  # defaults; with neither it nor a doc model the call is the bare one.
+  defp do_embed_batch(texts, opts) do
     texts = Enum.map(texts, &IO.iodata_to_binary/1)
 
-    case doc_embed_model() do
-      nil -> embedder().embed_texts(texts)
-      model -> embedder().embed_texts(texts, model: model)
+    case Enum.reject(
+           [model: doc_embed_model(), purpose: opts[:embed_purpose]],
+           &is_nil(elem(&1, 1))
+         ) do
+      [] -> embedder().embed_texts(texts)
+      embed_opts -> embedder().embed_texts(texts, embed_opts)
     end
   end
 

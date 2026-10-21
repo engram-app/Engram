@@ -1020,16 +1020,21 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
   defp enqueue_rebuilds([]), do: 0
 
+  # In `Rebuild.rebuild_order/1` order, at its per-user priority (paid
+  # first, whales last). ponytail: "smallest first" holds within a page;
+  # across pages only the priority classes order the queue.
   defp enqueue_rebuilds(rows) do
     fresh = reject_pending(Enum.map(rows, &{&1.id, &1.user_id}), RebuildStaleNote)
+    by_user = Enum.group_by(fresh, &elem(&1, 1), &elem(&1, 0))
 
     _ =
       Oban.insert_all(
-        Enum.map(fresh, fn {note_id, user_id} ->
+        for {user_id, priority} <- Rebuild.rebuild_order(Map.keys(by_user)),
+            note_id <- Map.fetch!(by_user, user_id) do
           RebuildStaleNote.new(%{note_id: to_string(note_id), user_id: user_id},
-            priority: EmbedNote.backfill_priority()
+            priority: priority
           )
-        end)
+        end
       )
 
     length(fresh)

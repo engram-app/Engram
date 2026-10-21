@@ -11,17 +11,26 @@ defmodule Engram.Workers.RebuildStaleNote do
   sparse-only and dropped the dense vectors for good). A worker they do not
   have makes them fail the job harmlessly; a new node retries it. See
   `docs/context/index-version-self-heal.md`.
+
+  Its own `rebuild` queue (chunker v5 Task 16.2), so a pass never holds an
+  `embed` slot a user's edit is waiting for. Every Voyage call here is
+  `purpose: :maintenance`: never retried once it may have been billed (H6).
+  While the v5 pass is `on`, each job first passes `Engram.Rebuild.gate/0`
+  (the maintenance token bucket and the Qdrant optimizer backlog).
   """
   use Oban.Worker,
-    queue: :embed,
+    queue: :rebuild,
     max_attempts: 5,
     unique: [period: 3600, keys: [:note_id], states: [:available, :scheduled]]
 
+  alias Engram.Rebuild
   alias Engram.Workers.EmbedNote
 
   @impl Oban.Worker
   def timeout(job), do: EmbedNote.timeout(job)
 
   @impl Oban.Worker
-  def perform(%Oban.Job{} = job), do: EmbedNote.perform(job)
+  def perform(%Oban.Job{} = job) do
+    with :ok <- Rebuild.gate(), do: EmbedNote.perform(job)
+  end
 end

@@ -118,6 +118,10 @@ config :engram, Oban,
     # A note whose embed killed the node once re-runs here ALONE, so a second
     # death is its own and not a neighbour's (EmbedNote.CrashGuard).
     embed_isolated: 1,
+    # Version rebuilds (RebuildStaleNote, the v5 pass among them): never
+    # ahead of a user's edit on `embed`, and 2 at a time at most, behind the
+    # maintenance token bucket and the Qdrant optimizer gate (Engram.Rebuild).
+    rebuild: 2,
     # Cron backstops. Three event workers still run here until the next
     # release moves them to :events (ObanQueueConfigTest @moving_to_events).
     maintenance: 2,

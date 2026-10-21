@@ -103,12 +103,19 @@ defmodule Engram.Workers.EmbedNote do
 
     case load(args, old_path_hmac_b64) do
       {:run, note, user, vault, opts} ->
-        run_and_stamp(note, user, vault, old_path_hmac_b64, job, opts)
+        run_and_stamp(note, user, vault, old_path_hmac_b64, job, opts ++ embed_purpose(job))
 
       other ->
         other
     end
   end
+
+  # A RebuildStaleNote job is our maintenance: its Voyage calls never retry
+  # once they may have been billed (`Voyage.request_defaults(:maintenance)`, H6).
+  defp embed_purpose(%Oban.Job{worker: "Engram.Workers.RebuildStaleNote"}),
+    do: [embed_purpose: :maintenance]
+
+  defp embed_purpose(_job), do: []
 
   # Every read the job needs before it embeds, in ONE tenant transaction: the
   # note, the user and the vault used to open one each (3 round trips
@@ -613,7 +620,7 @@ defmodule Engram.Workers.EmbedNote do
         # inside the chunk-row transaction (`:in_commit`).
         index_opts =
           budget ++
-            Keyword.take(opts, [:index_tier, :keep_dense]) ++
+            Keyword.take(opts, [:index_tier, :keep_dense, :embed_purpose]) ++
             [in_commit: &stamp_embed_hash(note, &2, &1, &3)]
 
         case index(note, decrypted_note, vault, user, index_opts, opts) do

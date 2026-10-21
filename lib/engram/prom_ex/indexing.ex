@@ -21,6 +21,9 @@ defmodule Engram.PromEx.Indexing do
       ledger halt (once per off transition) and drift parks (`Engram.Rebuild`).
     * `engram_prom_ex_indexing_rebuild_meter_failed_total`: live ledger debits
       that failed and were carried to the end of the rebuild job.
+    * `engram_prom_ex_indexing_rebuild_gated_total{reason}`: rebuild jobs
+      snoozed by `Engram.Rebuild.gate/0`, `tokens` (the maintenance bucket
+      is spent for the minute) or `qdrant` (the collection is behind).
     * `engram_prom_ex_indexing_repath_total` — counter of repath events by
       `:outcome`. Alert on `:fallback` / `:missing_points` rate; the `:ok` rate
       is the "renames took the cheap path" signal.
@@ -71,6 +74,7 @@ defmodule Engram.PromEx.Indexing do
   @rebuild_halted_event [:engram, :rebuild, :halted]
   @rebuild_drift_event [:engram, :rebuild, :drift_parked]
   @rebuild_meter_failed_event [:engram, :rebuild, :meter_failed]
+  @rebuild_gated_event [:engram, :rebuild, :gated]
   @maintenance_embed_event [:engram, :embed, :maintenance]
   @points_written_event [:engram, :indexing, :points_written]
   @keys_skipped_event [:engram, :frontmatter_keys, :skipped]
@@ -187,6 +191,13 @@ defmodule Engram.PromEx.Indexing do
           event_name: @rebuild_meter_failed_event,
           description:
             "v5 rebuild ledger debits that failed live and were carried to the job's end."
+        ),
+        counter(
+          metric_prefix ++ [:rebuild, :gated, :total],
+          event_name: @rebuild_gated_event,
+          description:
+            "v5 rebuild jobs snoozed by the pass's pacing: tokens (bucket spent) or qdrant (behind).",
+          tags: [:reason]
         )
       ]
     )

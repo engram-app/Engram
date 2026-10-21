@@ -37,10 +37,22 @@ defmodule Engram.RebuildLedgerWiringTest do
     bypass = Bypass.open()
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
 
+    # A green, caught-up collection for `Rebuild.gate/0`; every write succeeds.
+    col = "/collections/#{Engram.Vector.Qdrant.collection_name()}"
+    green = ~s({"result": {"status": "green", "optimizer_status": "ok"}, "status": "ok"})
+    idle = ~s({"result": {"summary": {"queued_points": 0}, "running": []}, "status": "ok"})
+
     Bypass.stub(bypass, :any, :any, fn conn ->
+      body =
+        case {conn.method, conn.request_path} do
+          {"GET", ^col} -> green
+          {"GET", path} when path == col <> "/optimizations" -> idle
+          _ -> ~s({"result": true, "status": "ok"})
+        end
+
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, ~s({"result": true, "status": "ok"}))
+      |> Plug.Conn.send_resp(200, body)
     end)
 
     {:ok, user} = Crypto.ensure_user_dek(insert(:user))
@@ -69,9 +81,10 @@ defmodule Engram.RebuildLedgerWiringTest do
     %{user: user, vault: vault, note: note}
   end
 
-  # A Voyage stand-in that reports `tokens` the way the real client does.
+  # A Voyage stand-in that reports `tokens` the way the real client does. A
+  # RebuildStaleNote pass calls it with `purpose: :maintenance`.
   defp embedder_reporting(tokens) do
-    stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+    stub(Engram.MockEmbedder, :embed_texts, fn texts, _opts ->
       :telemetry.execute(
         [:engram, :voyage, :embed, :tokens],
         %{total_tokens: tokens},
@@ -98,7 +111,7 @@ defmodule Engram.RebuildLedgerWiringTest do
   test "a job queued before a halt makes 0 Voyage calls", %{note: note} do
     Rebuild.set_budget(1)
     assert Rebuild.debit(2) == :halt
-    expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("Voyage called after halt") end)
+    expect(Engram.MockEmbedder, :embed_texts, 0, fn _, _ -> flunk("Voyage called after halt") end)
 
     assert :ok = rebuild(note)
     assert Rebuild.ledger().spent_tokens == 2
@@ -131,7 +144,7 @@ defmodule Engram.RebuildLedgerWiringTest do
       )
     end)
 
-    expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("Voyage called after halt") end)
+    expect(Engram.MockEmbedder, :embed_texts, 0, fn _, _ -> flunk("Voyage called after halt") end)
     assert :ok = rebuild(other)
   end
 
@@ -299,7 +312,7 @@ defmodule Engram.RebuildLedgerWiringTest do
 
   test "with the switch off the job rebuilds nothing and spends nothing", %{note: note} do
     ServiceConfig.put_override(:index_rebuild, "off")
-    expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("Voyage called while off") end)
+    expect(Engram.MockEmbedder, :embed_texts, 0, fn _, _ -> flunk("Voyage called while off") end)
 
     assert :ok = rebuild(note)
     assert Rebuild.ledger() == nil

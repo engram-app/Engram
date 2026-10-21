@@ -183,8 +183,11 @@ defmodule Engram.Workers.EmbedNoteTest do
         skip_tenant_check: true
       )
 
+      # A maintenance call: never retried once it may have been billed (H6).
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn texts -> {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)} end)
+      |> expect(:embed_texts, fn texts, [purpose: :maintenance] ->
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
 
       stub_qdrant(bypass)
 
