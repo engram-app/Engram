@@ -70,7 +70,7 @@ class TestRenameRepathSearch:
         assert resp.ok, f"upsert {old_path} failed: {resp.status_code} {resp.text[:300]}"
 
         old_path_hmac = latest_note_path_hmac(vault_id)
-        wait_for_qdrant_indexed(vault_id, old_path_hmac, old_path, timeout=90)
+        wait_for_qdrant_indexed(vault_id, old_path_hmac, old_path)
         # Search rehydrates hits from chunk rows, which commit AFTER the
         # Qdrant upsert; a hit with no row yet is dropped.
         wait_for_chunks_committed(vault_id, old_path_hmac, old_path, timeout=90)
