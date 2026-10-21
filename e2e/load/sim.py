@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import atexit
-import contextlib
 import base64
 import json
 import math
@@ -48,7 +47,12 @@ import requests  # noqa: E402
 from websockets.sync.client import connect as ws_connect  # noqa: E402
 
 from helpers.clerk import ClerkClient  # noqa: E402
-from load.guards import SpendGuard, check_clerk_key, check_target  # noqa: E402
+from load.guards import (  # noqa: E402
+    SpendGuard,
+    check_clerk_key,
+    check_target,
+    remove_quietly,
+)
 from helpers.clerk_auth import ClerkAuth  # noqa: E402
 
 # --------------------------------------------------------------------------
@@ -1061,7 +1065,7 @@ def main() -> int:
         # The plugin code bun imports comes from another repo's ref: it gets no Clerk key.
         env = {k: v for k, v in os.environ.items() if k != "STAGING_CLERK_SECRET_KEY"}
         env.update(ENGRAM_API_URL=args.api, E2E_DELIVERY_TIMEOUT="60")
-        atexit.register(lambda: contextlib.suppress(OSError)(os.unlink)(crdt_cfg))
+        atexit.register(remove_quietly, crdt_cfg)
         crdt = subprocess.Popen(
             [
                 "bun",
@@ -1140,8 +1144,7 @@ def main() -> int:
             crdt.wait(timeout=600)
         except subprocess.TimeoutExpired:
             crdt.kill()
-        with contextlib.suppress(OSError):
-            os.unlink(crdt_cfg)
+        remove_quietly(crdt_cfg)
     for a in accts:  # don't leave this run's device families live
         revoke_device_families(a, clerk)
     a = args

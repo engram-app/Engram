@@ -10,7 +10,13 @@ import threading
 
 import pytest
 
-from load.guards import SpendGuard, TargetRefused, check_clerk_key, check_target
+from load.guards import (
+    SpendGuard,
+    TargetRefused,
+    check_clerk_key,
+    check_target,
+    remove_quietly,
+)
 
 
 @pytest.mark.parametrize(
@@ -109,3 +115,17 @@ def test_spend_guard_is_thread_safe():
         t.join()
     assert len(ok) == 1000
     assert g.spent == 1000
+
+
+# The CRDT config holds live API keys; the atexit cleanup must delete it and
+# never raise (an earlier `contextlib.suppress(OSError)(os.unlink)` raised
+# TypeError at exit and left the file behind on an aborted run).
+def test_remove_quietly_deletes_the_file(tmp_path):
+    f = tmp_path / "cfg.json"
+    f.write_text("{}")
+    remove_quietly(str(f))
+    assert not f.exists()
+
+
+def test_remove_quietly_ignores_a_missing_file(tmp_path):
+    remove_quietly(str(tmp_path / "gone.json"))

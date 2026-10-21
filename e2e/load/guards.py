@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
 import threading
 from urllib.parse import urlsplit
 
@@ -52,3 +54,9 @@ class SpendGuard:
                 return False
             self.spent += tokens
             return True
+
+
+def remove_quietly(path: str) -> None:
+    """Delete `path` if it is there; never raises (safe from atexit)."""
+    with contextlib.suppress(OSError):
+        os.unlink(path)
