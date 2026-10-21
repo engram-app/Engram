@@ -1361,7 +1361,7 @@ defmodule Engram.Crypto.UserDekRotation do
     due = DateTime.add(DateTime.utc_now(), RotationTextGuard.delay_seconds())
 
     from(j in Oban.Job, where: j.id == ^id and j.state == "scheduled")
-    |> Repo.update_all([set: [scheduled_at: due]], skip_tenant_check: true)
+    |> Repo.update_all(set: [scheduled_at: due])
 
     :ok
   end
