@@ -35,6 +35,7 @@ defmodule Engram.Workers.RebuildStaleNoteV5Test do
     Repo.query!("DELETE FROM rebuild_ledger")
     EngramWeb.RateLimiter.reset_buckets!()
     ServiceConfig.put_override(:rebuild_pinned_versions, @pins)
+    ServiceConfig.put_override(:write_v5_layout, true)
     ServiceConfig.put_override(:index_rebuild, "on")
     Rebuild.set_budget(10_000_000)
 

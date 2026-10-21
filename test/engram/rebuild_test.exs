@@ -37,7 +37,11 @@ defmodule Engram.RebuildTest do
     :ok
   end
 
-  defp mode!(mode), do: ServiceConfig.put_override(:index_rebuild, mode)
+  # `on` and the seal need the v5 write layout (Task 16.4).
+  defp mode!(mode) do
+    ServiceConfig.put_override(:write_v5_layout, true)
+    ServiceConfig.put_override(:index_rebuild, mode)
+  end
 
   defp bumped_note(attrs \\ []) do
     user = insert(:user)

@@ -88,7 +88,8 @@ defmodule Engram.Workers.RebuildDryRun do
 
         :ok
 
-      {:error, :not_dry_run} ->
+      # Left unsealed: `Rebuild.seal/0` logged the v5 layout warning.
+      {:error, reason} when reason in [:not_dry_run, :v5_layout_off] ->
         :ok
     end
   end

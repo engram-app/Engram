@@ -25,6 +25,21 @@ defmodule Engram.Rebuild do
   Resuming `on` after `off` needs nothing: the per-note version stamps say
   what is left.
 
+  ## The v5 layout guard (Task 16.4)
+
+  `on` reads `:on` only while new points are written in the v5 layout
+  (`Qdrant.write_v5_layout?/0`, which implies `:v5_payload_format`), and a
+  dry run seals only then. Otherwise `on` reads `:off` and logs one warning
+  per node: a rebuilt v5 point would get an old-format payload merged onto
+  it by the note's next ordinary edit.
+
+  ## Other writers while `on` (Task 16.4)
+
+  A DEK rotation (`RotateUserDek`) snoozes an hour and writes nothing, and a
+  bulk repath (a folder rename moving over 100 notes) snoozes an hour; a
+  single-note rename still repaths. The recap cron (`IndexCapMaintenance`)
+  is already a no-op.
+
   ## Pacing (Task 16.2)
 
   While `on`, each `RebuildStaleNote` job waits (`gate/0`) for two things:
@@ -92,9 +107,33 @@ defmodule Engram.Rebuild do
   def mode do
     case ServiceConfig.get(:index_rebuild, "off") do
       "dry_run" -> :dry_run
-      "on" -> if halted?(), do: :off, else: :on
+      "on" -> on_mode()
       _off -> :off
     end
+  end
+
+  defp on_mode do
+    cond do
+      halted?() -> :off
+      not Qdrant.write_v5_layout?() -> v5_layout_off()
+      true -> :on
+    end
+  end
+
+  @v5_warned_key {__MODULE__, :v5_layout_off_warned}
+
+  # `:off`, logging once per node: `mode/0` runs on every embed.
+  defp v5_layout_off do
+    unless :persistent_term.get(@v5_warned_key, false) do
+      :persistent_term.put(@v5_warned_key, true)
+
+      Logger.warning(
+        "rebuild_v5_layout_off",
+        Metadata.with_category(:warning, :oban)
+      )
+    end
+
+    :off
   end
 
   @doc "`{chunker, keyword}` versions of this build."
@@ -497,9 +536,19 @@ defmodule Engram.Rebuild do
   late seal cannot move a running pass's avgdl. Per tenant, as
   `ReconcileEmbeddings` scans.
   """
-  @spec seal() :: {:ok, non_neg_integer()} | {:error, :not_dry_run}
+  @spec seal() :: {:ok, non_neg_integer()} | {:error, :not_dry_run | :v5_layout_off}
   def seal do
-    if mode() == :dry_run, do: do_seal(), else: {:error, :not_dry_run}
+    cond do
+      mode() != :dry_run ->
+        {:error, :not_dry_run}
+
+      not Qdrant.write_v5_layout?() ->
+        _ = v5_layout_off()
+        {:error, :v5_layout_off}
+
+      true ->
+        do_seal()
+    end
   end
 
   defp do_seal do

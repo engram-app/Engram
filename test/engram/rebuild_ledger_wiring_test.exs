@@ -32,6 +32,7 @@ defmodule Engram.RebuildLedgerWiringTest do
     Engram.Cache.clear_local(:rebuild)
     Repo.query!("DELETE FROM rebuild_ledger")
     ServiceConfig.put_override(:rebuild_pinned_versions, @pins)
+    ServiceConfig.put_override(:write_v5_layout, true)
     ServiceConfig.put_override(:index_rebuild, "on")
 
     bypass = Bypass.open()
