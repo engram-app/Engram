@@ -147,12 +147,16 @@ defmodule Engram.Attachments do
 
   # A raise in the locked write (a storage client error on the re-PUT, a
   # constraint) must not orphan the fresh blob. Deleted only while no row
-  # points at it, so a raise after the commit cannot reach a live blob.
+  # points at it, so a raise after the commit cannot reach a live blob. The
+  # raise is often the rotation gate refusing the write; the check is a read
+  # and runs ungated, or it would raise the same way and skip the delete.
   defp deleting_blob_on_raise(user, vault, key, fun) do
     fun.()
   rescue
     e ->
-      unless blob_referenced?(user, vault, key), do: delete_external(key)
+      unless RotationGate.ungated(fn -> blob_referenced?(user, vault, key) end),
+        do: delete_external(key)
+
       reraise e, __STACKTRACE__
   end
 

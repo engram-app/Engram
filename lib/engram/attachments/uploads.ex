@@ -631,11 +631,16 @@ defmodule Engram.Attachments.Uploads do
     now = DateTime.utc_now(:second)
 
     with :ok <- complete_storage(up) do
+      # Ungated: the multipart upload is gone once storage assembled it, so
+      # a rotation lock refusing this bookkeeping (no key material) would
+      # leave a session no retry can complete.
       {:ok, _} =
-        Repo.with_tenant(user.id, fn ->
-          Repo.update_all(from(u in scoped(user, vault), where: u.id == ^up.id),
-            set: [assembled_at: now, updated_at: now]
-          )
+        RotationGate.ungated(fn ->
+          Repo.with_tenant(user.id, fn ->
+            Repo.update_all(from(u in scoped(user, vault), where: u.id == ^up.id),
+              set: [assembled_at: now, updated_at: now]
+            )
+          end)
         end)
         |> unwrap()
 

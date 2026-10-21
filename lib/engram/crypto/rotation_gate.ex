@@ -88,6 +88,22 @@ defmodule Engram.Crypto.RotationGate do
     end
   end
 
+  @doc """
+  Run `fun` with `gated/1`'s (or `RotationLockCheck`'s) write gate lifted, for
+  cleanup that must still run after the gate refused the write, such as
+  checking whether a just-stored blob is referenced before deleting it.
+  """
+  @spec ungated((-> result)) :: result when result: term()
+  def ungated(fun) when is_function(fun, 0) do
+    previous = Process.delete(:engram_write_gate)
+
+    try do
+      fun.()
+    after
+      if previous, do: Process.put(:engram_write_gate, previous)
+    end
+  end
+
   defp same_version(opts, version) do
     case Keyword.fetch(opts, :dek_version) do
       {:ok, expected} when expected != version -> {:error, :rotation_in_progress}

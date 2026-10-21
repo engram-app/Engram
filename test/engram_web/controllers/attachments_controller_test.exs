@@ -1436,7 +1436,10 @@ defmodule EngramWeb.AttachmentsControllerTest do
       on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
       stub_with(Engram.MockStorage, InMemory)
 
+      test_pid = self()
+
       stub(Engram.MockStorage, :put, fn key, bin, opts ->
+        send(test_pid, {:stored, key})
         set_rotation_lock(user, DateTime.utc_now(:second))
         InMemory.put(key, bin, opts)
       end)
@@ -1447,6 +1450,10 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert %{"error" => "rotation_in_progress"} = Jason.decode!(body)
       assert {"retry-after", "60"} in headers
       assert live_rows(user) == []
+
+      # The blob stored before the refusal is not left orphaned.
+      assert_received {:stored, key}
+      refute InMemory.exists?(key)
     end
 
     # A rotation that already finished (lock clear, DEK version moved)
