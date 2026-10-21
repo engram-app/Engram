@@ -284,6 +284,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/cache/",
     "lib/engram/cluster/",
     "lib/engram/drainer.ex",
+    # Plan -> Voyage model name and price table: no Logger call, reads only a
+    # user's plan tier and config.
+    "lib/engram/embed_models.ex",
     "lib/engram/email/",
     "lib/engram/http/",
     "lib/engram/idempotency.ex",
