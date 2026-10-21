@@ -172,6 +172,79 @@ defmodule Engram.Notes.NoteFieldsTest do
     assert length(for r <- attrs(note.id), r.key_id >= 64, do: r) == 2
   end
 
+  # N1: an id resolved before the Voyage call may be reaped before commit.
+  describe "a reaper racing an index pass" do
+    defp age_keys!(user_id) do
+      Repo.query!(
+        "UPDATE frontmatter_keys SET inserted_at = now() - interval '2 days' WHERE user_id = $1",
+        [Ecto.UUID.dump!(user_id)]
+      )
+    end
+
+    # `phase` used, then unused, aged, and not the user's highest id.
+    defp reapable_phase!(user, vault) do
+      {_note, user} = index!(user, vault, "---\nphase: beta\n---\n# Fields\n\nBody one.\n")
+      {:ok, fk} = Crypto.dek_filter_key(user)
+      {:ok, dek} = Crypto.get_dek(user)
+
+      {_, 0} =
+        FrontmatterKeys.resolve(user.id, dek, %{FilterId.key_hmac(fk, "zz_top") => "zz_top"})
+
+      {_note, user} = index!(user, vault, "# Fields\n\nBody two.\n")
+      age_keys!(user.id)
+      phase = ids(user.id)[FilterId.key_hmac(fk, "phase")]
+      {user, fk, phase}
+    end
+
+    defp dangling(user_id, note_id) do
+      known = user_id |> dictionary() |> MapSet.new(& &1.key_id)
+      for r <- attrs(note_id), r.key_id >= 64, not MapSet.member?(known, r.key_id), do: r.key_id
+    end
+
+    test "commit refuses an id reaped after it was resolved", %{user: user, vault: vault} do
+      {user, _fk, phase} = reapable_phase!(user, vault)
+
+      {:ok, note} =
+        Notes.upsert_note(
+          user,
+          vault,
+          %{"path" => "F/Fields.md", "content" => "---\nphase: beta\n---\n# F\n\nBody three.\n"},
+          actor: "api"
+        )
+
+      {:ok, prepared} = Indexing.prepare_index(note, vault, user)
+      assert FrontmatterKeys.reap_unused() >= 1
+      refute phase in Enum.map(dictionary(user.id), & &1.key_id)
+
+      assert Indexing.commit_index(prepared) == {:error, :frontmatter_keys_gone}
+    end
+
+    test "the pass re-resolves once and never writes a dead id", %{user: user, vault: vault} do
+      {user, fk, phase} = reapable_phase!(user, vault)
+
+      # The reaper runs while the pass is embedding, i.e. after `resolve`.
+      stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+        _ = FrontmatterKeys.reap_unused()
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      {:ok, note} =
+        Notes.upsert_note(
+          user,
+          vault,
+          %{"path" => "F/Fields.md", "content" => "---\nphase: beta\n---\n# F\n\nBody four.\n"},
+          actor: "api"
+        )
+
+      assert {:ok, _, _, _} = Indexing.index_note_with_usage(note, vault, user)
+
+      new_phase = ids(user.id)[FilterId.key_hmac(fk, "phase")]
+      assert new_phase > phase
+      assert dangling(user.id, note.id) == []
+      assert Enum.any?(attrs(note.id), &(&1.key_id == new_phase))
+    end
+  end
+
   test "an absent key writes no row", %{user: user, vault: vault} do
     {note, _user} = index!(user, vault, "# Plain\n\nBody text with no frontmatter.\n")
     assert attrs(note.id) == []

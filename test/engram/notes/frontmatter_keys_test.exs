@@ -79,13 +79,18 @@ defmodule Engram.Notes.FrontmatterKeysTest do
     assert length(rows(u.id)) == 1
   end
 
-  defp attr!(user, key_id) do
+  defp attr!(user, key_id, value \\ %{n: 1.0}) do
     vault = insert(:vault, user: user)
     note = insert(:note, user: user, vault: vault)
 
     Repo.insert_all(
       Engram.Notes.NoteAttr,
-      [%{note_id: note.id, user_id: user.id, vault_id: vault.id, key_id: key_id, ord: 0, n: 1.0}],
+      [
+        Map.merge(
+          %{note_id: note.id, user_id: user.id, vault_id: vault.id, key_id: key_id, ord: 0},
+          value
+        )
+      ],
       skip_tenant_check: true
     )
   end
@@ -109,6 +114,35 @@ defmodule Engram.Notes.FrontmatterKeysTest do
       # a, c and d go; b is used, and `young` is both too new and the highest.
       assert FrontmatterKeys.reap_unused() == 3
       assert Enum.map(rows(u.id), & &1.key_id) == Enum.sort([id.("b"), 68])
+    end
+
+    # N2: one NOT EXISTS per value column (each served by its partial
+    # index), so a key used only as h, only as n or only as d all survive.
+    test "a key used in any value column survives", %{user: u, dek: dek, fk: fk} do
+      {ids, 0} = FrontmatterKeys.resolve(u.id, dek, names(fk, ~w(h n d top)))
+      id = &ids[FilterId.key_hmac(fk, &1)]
+      top = Enum.max(Map.values(ids))
+      used = Enum.reject(~w(h n d), &(id.(&1) == top))
+      values = %{"h" => %{h: "x"}, "n" => %{n: 1.0}, "d" => %{d: 1}}
+      for name <- used, do: attr!(u, id.(name), values[name])
+      age!(u.id)
+
+      assert FrontmatterKeys.reap_unused() == 4 - 1 - length(used)
+      kept = Enum.map(rows(u.id), & &1.key_id)
+      for name <- used, do: assert(id.(name) in kept, name)
+    end
+
+    # N3: a user mid DEK rotation is skipped; the rotation sweep owns the rows.
+    test "a user mid rotation is skipped", %{user: u, dek: dek, fk: fk} do
+      {_, 0} = FrontmatterKeys.resolve(u.id, dek, names(fk, ~w(a b)))
+      age!(u.id)
+
+      Repo.query!("UPDATE users SET dek_rotation_locked_at = now() WHERE id = $1", [
+        Ecto.UUID.dump!(u.id)
+      ])
+
+      assert FrontmatterKeys.reap_unused() == 0
+      assert length(rows(u.id)) == 2
     end
 
     test "a reaped id is never handed out again", %{user: u, dek: dek, fk: fk} do
