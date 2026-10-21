@@ -16,7 +16,9 @@ defmodule Engram.Notes.FlatFields do
   is midnight UTC for the flat keys; the nested aliases (`generated.at`,
   `verified[].at`, `stale_after`) need a datetime with an offset, as OKF
   requires. `due`/`expires` keep the day as written. Keys match
-  case-insensitively. Nothing here writes
+  case-insensitively, and a localized key name is its English field
+  (`種類` is `type`; `Engram.Notes.KeyAliases`, applied by
+  `OkfFields.values/1`, with its collision rule). Nothing here writes
   back into the user's frontmatter. Values are never logged.
 
   `fm_updated` uses the v5 precedence (`updated` first). The older

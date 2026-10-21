@@ -12,6 +12,7 @@ defmodule Engram.Notes.OkfFields do
   """
 
   alias Engram.Notes.Frontmatter
+  alias Engram.Notes.KeyAliases
 
   # Key paths into the decoded frontmatter, first valid wins. v0.2
   # (amended 2026-08-21) requires `generated.at` to be a full datetime with
@@ -67,8 +68,9 @@ defmodule Engram.Notes.OkfFields do
 
   @doc """
   The decoded top-level frontmatter values of a `Frontmatter.parse/1` result
-  (`%{}` for no frontmatter or a parse error). Shared with `FlatFields`, so
-  the v5 fields read the same terms as the OKF ones.
+  (`%{}` for no frontmatter or a parse error), named fields under their
+  English key (`KeyAliases.canonicalize/1`). Shared with `FlatFields` and the
+  chunker's lead line, so all of them read the same terms as the OKF ones.
   """
   @spec values(Frontmatter.parse_result() | nil) :: %{String.t() => term()}
   def values({:ok, _order, values, _degraded}), do: decode_values(values)
@@ -89,13 +91,17 @@ defmodule Engram.Notes.OkfFields do
   def parse_date_value(value, mode), do: parse_datetime(value, mode)
 
   # Frontmatter.parse values are JSON-encoded strings; decode back to terms.
+  # Named fields come back under their English key (`種類` is `type`, see
+  # `KeyAliases`), so every reader of these values sees one spelling.
   defp decode_values(values) do
-    Map.new(values, fn {k, json} ->
+    values
+    |> Map.new(fn {k, json} ->
       case Jason.decode(json) do
         {:ok, decoded} -> {k, decoded}
         {:error, _} -> {k, nil}
       end
     end)
+    |> KeyAliases.canonicalize()
   end
 
   defp string_field(v) when is_binary(v) and v != "", do: v

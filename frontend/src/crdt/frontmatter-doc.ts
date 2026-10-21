@@ -1,4 +1,8 @@
 import type * as Y from "yjs";
+import type { Catalog } from "@/i18n/core/core";
+import { buildAliases, canonicalKey } from "@/i18n/frontmatter-keys";
+import { isMember } from "@/lib/is-member";
+import { LOCALES, type Locale } from "@/i18n/locales";
 import type { MsgKey } from "@/i18n/ui-text";
 import { msg } from "../i18n/msg";
 import { coerceValue, type PropertyType } from "../viewer/property-types";
@@ -171,6 +175,28 @@ export const OKF_FIELD_HELP: ReadonlyArray<{
 		what: msg("A one-line summary of the note."),
 	},
 ];
+
+// The named fields' localized key names (translategemma, locale/keys/*.json): the
+// same catalogs the backend's KeyAliases reads, so `種類` is `type` on both sides.
+const KEY_CATALOGS: Partial<Record<Locale, Catalog>> = Object.fromEntries(
+	Object.entries(
+		import.meta.glob<Catalog>(["../i18n/locale/keys/*.json", "!../i18n/locale/keys/state.json"], {
+			eager: true,
+			import: "default",
+		}),
+	).flatMap(([path, catalog]) => {
+		const code = path.slice(path.lastIndexOf("/") + 1, -".json".length);
+		return isMember(LOCALES, code) ? [[code, catalog]] : [];
+	}),
+);
+const KEY_ALIASES = buildAliases(KEY_CATALOGS, LOCALES);
+
+/** A named field's key name in `locale` (`種類` for `type` in ja); the English key
+ *  when the locale has none. */
+export function fieldKeyLabel(key: string, locale: Locale): string {
+	const local = KEY_CATALOGS[locale]?.[key];
+	return typeof local === "string" ? local : key;
+}
 
 /** The flat key an alias stands for; `undefined` for a flat key or an unknown name. */
 export function okfAliasOf(name: string): string | undefined {
@@ -375,9 +401,10 @@ export function applyParsedFrontmatter(
  *  Not "is the key spelled right" and not "does the widget render it as the
  *  right type". Both of those were tried and both lied:
  *
- *    - matching the key case-INSENSITIVELY highlighted `Type:`, which
- *      `OkfFields.extract/1` never sees -- it reads `decoded["type"]` literally
- *      and nothing downcases the key on the way in.
+ *    - matching the key case-INSENSITIVELY once highlighted `Type:`, which the
+ *      backend then read literally. It now folds a named field's key (NFKC, lower
+ *      case, localized names: `KeyAliases`), so this does the same through
+ *      `canonicalKey`; `tags` and the OKF aliases still match as written.
  *    - trusting the rendered type highlighted `created` holding the
  *      datetime-local picker's own output, which `parse_datetime/1` rejects,
  *      and left `tags: work` muted even though the tag scanner does index an
@@ -390,7 +417,8 @@ export function applyParsedFrontmatter(
  *  that a mismatch is silently unindexed, and a highlight that over-promises
  *  removes the only signal the user gets. */
 export function isOkfMatch(key: string, type: PropertyType, value: unknown): boolean {
-	const field = OKF_FIELD_HELP.find((f) => f.key === key || f.aliases.includes(key));
+	const name = canonicalKey(key, KEY_ALIASES) ?? key;
+	const field = OKF_FIELD_HELP.find((f) => f.key === name || f.aliases.includes(name));
 	if (field === undefined || !field.expects.includes(type)) {
 		return false;
 	}

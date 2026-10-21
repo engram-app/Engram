@@ -151,6 +151,9 @@ COPY config config
 COPY lib lib
 COPY native native
 COPY priv priv
+# Engram.Notes.KeyAliases reads the generated frontmatter key catalogs at
+# compile time; they live with the web app's catalogs (one source for both).
+COPY frontend/src/i18n/locale/keys frontend/src/i18n/locale/keys
 # rel/ holds env.sh.eex, whose ECS_ENABLE_CLUSTER gate exports
 # RELEASE_DISTRIBUTION=name + RELEASE_NODE=engram@<ip> for BEAM clustering
 # (engram-app/Engram#710). Without this COPY, `mix release` below never sees

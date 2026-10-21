@@ -1,0 +1,15 @@
+{
+	"type": "tipo",
+	"status": "stato",
+	"author": "autore",
+	"reviewed_by": "controllato_da",
+	"source": "base",
+	"project": "progetto",
+	"created": "creazione",
+	"updated": "modificata",
+	"reviewed": "verificato",
+	"expires": "scadenza",
+	"due": "scadenza",
+	"priority": "priorità",
+	"description": "descrizione"
+}

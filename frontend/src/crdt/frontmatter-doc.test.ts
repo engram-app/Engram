@@ -271,6 +271,11 @@ describe("isOkfMatch", () => {
 		["updated", "date", "2026-08-29"],
 		["modified", "date", "2026-08-29"],
 		["date", "date", "2026-08-29"],
+		// A named field's key folds NFKC + case, and takes its localized names.
+		["Type", "text", "article"],
+		["ｔｙｐｅ", "text", "article"],
+		["Created", "date", "2026-08-29"],
+		["種類", "text", "会議"],
 	] as const)("%s as %s = %o is indexed", (key, type, value) => {
 		expect(isOkfMatch(key, type, value)).toBe(true);
 	});
@@ -293,10 +298,8 @@ describe("isOkfMatch", () => {
 		// parse_datetime/1 accepts neither.
 		["created", "datetime", "2026-08-29T14:30"],
 		["timestamp", "datetime", "2026-08-29T14:30:00"],
-		// OkfFields reads decoded["type"] literally; nothing downcases the key.
-		["Type", "text", "article"],
+		// Obsidian reads only `tags` as tags, so its key does not fold.
 		["TAGS", "list", ["a"]],
-		["Created", "date", "2026-08-29"],
 	] as const)("%s as %s = %o is NOT indexed", (key, type, value) => {
 		expect(isOkfMatch(key, type, value)).toBe(false);
 	});

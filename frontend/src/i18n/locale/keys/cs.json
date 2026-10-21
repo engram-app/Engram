@@ -1,0 +1,15 @@
+{
+	"type": "typ",
+	"status": "stav",
+	"author": "autor",
+	"reviewed_by": "ověřeno_uživatelem",
+	"source": "zdroj",
+	"project": "projekt",
+	"created": "vytvoření",
+	"updated": "aktualizováno",
+	"reviewed": "zkontrolováno",
+	"expires": "datum_platnosti",
+	"due": "datum_splatnosti",
+	"priority": "priorita",
+	"description": "popis"
+}

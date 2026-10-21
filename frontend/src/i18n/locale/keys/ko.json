@@ -1,0 +1,15 @@
+{
+	"type": "유형",
+	"status": "상태",
+	"author": "작성자",
+	"reviewed_by": "확인자",
+	"source": "출처",
+	"project": "프로젝트",
+	"created": "생성일",
+	"updated": "최신일",
+	"reviewed": "확인일",
+	"expires": "만료일",
+	"due": "마감일",
+	"priority": "우선순위",
+	"description": "설명"
+}

@@ -12,7 +12,9 @@ defmodule Engram.Search.FieldFilters do
   `updated` (`timestamp`, `modified`), `reviewed`, `expires`
   (`stale_after`), `due` and `priority` range. `status: stable` is the
   default and stored as no key, so it matches a missing `s`. `title`,
-  `aliases`, `description`, `generated` and `verified` have no filter.
+  `aliases`, `description`, `generated` and `verified` have no filter. A
+  named key matches in any casing or width (NFKC + lower case) and under its
+  localized names (`種類` is `type`, `Engram.Notes.KeyAliases`).
 
   **User-added keys** resolve to the per-user `key_id` through the dictionary
   (`FrontmatterKeys.lookup/2`), one query per request for every filter, and
@@ -32,6 +34,7 @@ defmodule Engram.Search.FieldFilters do
   alias Engram.Crypto
   alias Engram.Notes.FrontmatterDate
   alias Engram.Notes.FrontmatterKeys
+  alias Engram.Notes.KeyAliases
   alias Engram.Notes.OkfFields
   alias Engram.Vector.FilterId
   alias Engram.Vector.PayloadKeys
@@ -135,8 +138,10 @@ defmodule Engram.Search.FieldFilters do
 
   defp parse(other), do: {:error, {:invalid_field_filter, echo(inspect(other))}}
 
+  # NFKC + lower case, and a localized alias is its English field
+  # (`KeyAliases`), the same fold the extraction side applies.
   defp field(key, op, value) do
-    lower = String.downcase(key)
+    lower = KeyAliases.canonical(key) || OkfFields.normalize_type(key)
 
     cond do
       Map.has_key?(@named, lower) -> {:ok, {{:named, @named[lower], key}, op, value}}
