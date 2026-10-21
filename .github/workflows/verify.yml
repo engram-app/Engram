@@ -7,6 +7,7 @@ on:
     # ever fetches one and pushes it to the base repo to test.
     branches:
       - main
+      - "bot/**"
       - "bump/**"
       - "chore/**"
       - "dependabot/**"
