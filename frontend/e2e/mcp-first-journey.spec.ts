@@ -117,47 +117,59 @@ test.describe("MCP-first: a new user connects an AI app", () => {
 		}
 	});
 
-	test("discover, sign up, approve, then read and write notes", async ({ page }) => {
+	test("discover, sign up, approve, then read and write notes", {
+		tag: ["@canary"],
+		annotation: [
+			{ type: "cadence", description: "hourly" },
+			{ type: "targets", description: "ci,staging" },
+		],
+	}, async ({ page }) => {
 		const provider = new MemoryProvider();
 
 		// 1. First contact: the unauthenticated connect must end in a redirect
 		//    to our authorization endpoint, reached by discovery alone.
-		await expect(connect(provider)).rejects.toThrow(/unauthorized/iu);
-		const authorize = provider.authorizationUrl;
-		expect(authorize, "SDK never reached redirectToAuthorization").not.toBeNull();
-		expect(provider.clientInformation()?.client_id, "DCR returned no client_id").toBeTruthy();
+		await test.step("discover-and-register", async () => {
+			await expect(connect(provider)).rejects.toThrow(/unauthorized/iu);
+			expect(provider.authorizationUrl, "SDK never reached redirectToAuthorization").not.toBeNull();
+			expect(provider.clientInformation()?.client_id, "DCR returned no client_id").toBeTruthy();
+		});
+		const authorize = provider.authorizationUrl as URL;
 
 		// 2. The user: sign in, onboard, approve.
-		const code = await approveAsNewUser(
-			page,
-			(pending as { email: string }).email,
-			authorize as URL,
-		);
+		const code = await test.step("sign-in-onboard-approve", () =>
+			approveAsNewUser(page, (pending as { email: string }).email, authorize));
 
 		// 3. The app finishes the exchange and works.
-		await new StreamableHTTPClientTransport(MCP_URL, { authProvider: provider }).finishAuth(code);
-		const client = await connect(provider);
-		try {
-			const { tools } = await client.listTools();
-			const names = tools.map((t) => t.name);
-			expect(names).toEqual(expect.arrayContaining(["write_note", "get_notes", "search_notes"]));
+		await test.step("token-exchange-and-tools", async () => {
+			await new StreamableHTTPClientTransport(MCP_URL, { authProvider: provider }).finishAuth(code);
+			const client = await connect(provider);
+			try {
+				const { tools } = await client.listTools();
+				const names = tools.map((t) => t.name);
+				expect(names).toEqual(expect.arrayContaining(["write_note", "get_notes", "search_notes"]));
 
-			const wrote = await client.callTool({
-				name: "write_note",
-				arguments: { path: NOTE_PATH, content: NOTE_BODY },
-			});
-			expect(wrote.isError, JSON.stringify(wrote.content)).toBeFalsy();
+				const wrote = await client.callTool({
+					name: "write_note",
+					arguments: { path: NOTE_PATH, content: NOTE_BODY },
+				});
+				expect(wrote.isError, JSON.stringify(wrote.content)).toBeFalsy();
 
-			const read = await client.callTool({ name: "get_notes", arguments: { paths: [NOTE_PATH] } });
-			expect(read.isError, JSON.stringify(read.content)).toBeFalsy();
-			expect(JSON.stringify(read.content)).toContain(NOTE_BODY);
-		} finally {
-			await client.close();
-		}
+				const read = await client.callTool({
+					name: "get_notes",
+					arguments: { paths: [NOTE_PATH] },
+				});
+				expect(read.isError, JSON.stringify(read.content)).toBeFalsy();
+				expect(JSON.stringify(read.content)).toContain(NOTE_BODY);
+			} finally {
+				await client.close();
+			}
+		});
 
 		// 4. What the app wrote is in the user's vault in the web app.
-		await page.goto(`${SPA}/`);
-		await expect(page.getByText("Hello from my AI").first()).toBeVisible({ timeout: 20_000 });
+		await test.step("note-visible-in-web", async () => {
+			await page.goto(`${SPA}/`);
+			await expect(page.getByText("Hello from my AI").first()).toBeVisible({ timeout: 20_000 });
+		});
 	});
 });
 

@@ -165,6 +165,32 @@ def _backend_alive() -> bool:
         return True
 
 
+def pytest_collection_modifyitems(items):
+    """Write canary marker kwargs for scripts/list_scenarios.py.
+
+    Only active when SCENARIO_COLLECT_OUT names a path; a normal run is untouched.
+    """
+    out = os.environ.get("SCENARIO_COLLECT_OUT")
+    if not out:
+        return
+    entries = []
+    for item in items:
+        marker = item.get_closest_marker("canary")
+        if marker is not None:
+            entries.append({"nodeid": item.nodeid, **marker.kwargs})
+    Path(out).write_text(json.dumps(entries))
+
+
+@pytest.fixture
+def scenario_steps(request):
+    """Step list for helpers.scenario.timed_step; lands in junit properties."""
+    from helpers.scenario import bind_steps, unbind_steps
+
+    steps = bind_steps(request.node.user_properties)
+    yield steps
+    unbind_steps()
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     outcome = yield
