@@ -114,6 +114,31 @@ defmodule Engram.Notes.NoteFieldsTest do
         do: refute(c in cols, c)
   end
 
+  # The pass writes note_attrs without moving vaults.change_seq, so the field
+  # catalog (cached on that seq) must be evicted by the pass itself.
+  test "an index pass evicts the vault's field catalog", %{user: user, vault: vault} do
+    {:ok, note} =
+      Notes.upsert_note(
+        user,
+        vault,
+        %{"path" => "F/Fields.md", "content" => @full, "mtime" => 1.0},
+        actor: "api"
+      )
+
+    user = Repo.get!(Engram.Accounts.User, user.id)
+    assert {:ok, []} = Engram.Notes.FieldCatalog.list(user, vault)
+
+    stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+      {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+    end)
+
+    {:ok, prepared} = Indexing.prepare_index(note, vault, user)
+    {:ok, _} = Indexing.commit_index(prepared)
+
+    assert {:ok, fields} = Engram.Notes.FieldCatalog.list(user, vault)
+    assert "mood" in Enum.map(fields, & &1.name)
+  end
+
   test "named fields land in note_attrs under their reserved ids", %{user: user, vault: vault} do
     {note, user} = index!(user, vault, @full)
     {:ok, fk} = Crypto.dek_filter_key(user)

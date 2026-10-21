@@ -17,6 +17,7 @@ defmodule Engram.Indexing do
   alias Engram.Logger.Metadata
   alias Engram.Notes.Chunk
   alias Engram.Notes.ChunkPoint
+  alias Engram.Notes.FieldCatalog
   alias Engram.Notes.FlatFields
   alias Engram.Notes.Frontmatter
   alias Engram.Notes.FrontmatterKeys
@@ -3283,7 +3284,9 @@ defmodule Engram.Indexing do
     Repo.delete_all(from(a in NoteAttr, where: a.note_id == ^note.id))
     _ = rows |> Enum.chunk_every(@insert_batch) |> Enum.each(&Repo.insert_all(NoteAttr, &1))
 
-    :ok
+    # The field catalog is cached on change_seq, which this pass does not
+    # move; the eviction runs once this transaction commits.
+    FieldCatalog.evict(note.vault_id)
   end
 
   defp stamp_flat_fields(_prepared), do: :ok

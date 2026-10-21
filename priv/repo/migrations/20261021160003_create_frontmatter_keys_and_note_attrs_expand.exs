@@ -63,12 +63,13 @@ defmodule Engram.Repo.Migrations.CreateFrontmatterKeysAndNoteAttrsExpand do
 
     # Every search is vault-scoped (a multi-vault query is one IN over the
     # user's vault ids), so the lookups lead with vault_id. INCLUDE note_id so
-    # the per-vault field catalog (GROUP BY key_id / key_id, h with
-    # count(DISTINCT note_id), min/max) is index-only. user_id stays a column
-    # for RLS only.
+    # the per-vault field catalog (`Engram.Notes.FieldCatalog`: GROUP BY
+    # key_id / key_id, h with count(DISTINCT note_id), min/max) is
+    # index-only, and user_id because the RLS policy reads it: without it
+    # every row the app role scans is a heap fetch, never an index-only scan.
     for col <- ~w(h n d)a do
       create index(:note_attrs, [:vault_id, :key_id, col],
-               include: [:note_id],
+               include: [:note_id, :user_id],
                where: "#{col} IS NOT NULL"
              )
     end
