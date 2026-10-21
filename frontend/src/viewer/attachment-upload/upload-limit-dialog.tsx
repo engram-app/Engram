@@ -1,5 +1,5 @@
 import { File as FileIcon, FileWarning, HardDrive } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useId } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -110,6 +110,22 @@ export function UploadLimitDialog({
 		? tn({ one: "File too large", other: "Files too large" }, tooLarge.length)
 		: t("Not enough storage");
 	const limit = current === null ? "" : fmt(current);
+	const roomDescription = billingEnabled
+		? tn(
+				{
+					one: "There isn't enough room left on your {plan} plan for this file.",
+					other: "There isn't enough room left on your {plan} plan for these files.",
+				},
+				noRoom.length,
+				{ plan },
+			)
+		: tn(
+				{
+					one: "There isn't enough room left on this server for this file.",
+					other: "There isn't enough room left on this server for these files.",
+				},
+				noRoom.length,
+			);
 	const description = sizeCase
 		? billingEnabled
 			? tn(
@@ -128,22 +144,8 @@ export function UploadLimitDialog({
 					tooLarge.length,
 					{ limit },
 				)
-		: billingEnabled
-			? tn(
-					{
-						one: "There isn't enough room left on your {plan} plan for this file.",
-						other: "There isn't enough room left on your {plan} plan for these files.",
-					},
-					noRoom.length,
-					{ plan },
-				)
-			: tn(
-					{
-						one: "There isn't enough room left on this server for this file.",
-						other: "There isn't enough room left on this server for these files.",
-					},
-					noRoom.length,
-				);
+		: roomDescription;
+	const roomId = useId();
 	const Icon = sizeCase ? FileWarning : HardDrive;
 
 	return (
@@ -164,6 +166,18 @@ export function UploadLimitDialog({
 				</DialogHeader>
 
 				<FileRows files={files} fmt={fmt} />
+
+				{/* One drop can be refused for both reasons; the files with no room
+				    must not vanish from the upload unexplained. */}
+				{sizeCase && noRoom.length > 0 ? (
+					<section aria-labelledby={roomId} className="flex flex-col gap-2">
+						<h2 id={roomId} className="font-medium text-sm">
+							{t("Not enough storage")}
+						</h2>
+						<p className="text-foreground/80 text-sm">{roomDescription}</p>
+						<FileRows files={noRoom} fmt={fmt} />
+					</section>
+				) : null}
 
 				{!sizeCase && limits.storageCap !== null ? (
 					<section className="flex flex-col gap-1.5">

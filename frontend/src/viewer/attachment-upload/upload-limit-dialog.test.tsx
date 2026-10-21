@@ -59,6 +59,17 @@ describe("UploadLimitDialog", () => {
 		expect(plans.getByText("50 GB")).toBeInTheDocument();
 	});
 
+	it("a drop refused for both reasons lists the files with no room too", () => {
+		renderDialog({ tooLarge: [f("big.zip", 42 * MB)], noRoom: [f("a.mp4", 5 * MB)] });
+		expect(screen.getByRole("heading", { level: 1, name: "File too large" })).toBeInTheDocument();
+		expect(screen.getByText("big.zip")).toBeInTheDocument();
+		const room = within(screen.getByRole("region", { name: "Not enough storage" }));
+		expect(room.getByText("a.mp4")).toBeInTheDocument();
+		expect(
+			room.getByText("There isn't enough room left on your Free plan for this file."),
+		).toBeInTheDocument();
+	});
+
 	it("lists several refused files", () => {
 		renderDialog({ tooLarge: [f("a.zip", 11 * MB), f("b.zip", 12 * MB)] });
 		expect(screen.getByRole("heading", { level: 1, name: "Files too large" })).toBeInTheDocument();
