@@ -90,10 +90,12 @@ base_excluded=$(sed -n 's/^excluded_rules *= *\[\(.*\)\]/\1/p' ".squawk.toml" |
 
 # Ecto's --log-migrations-sql output to plain SQL. The clean SQL lines have no
 # timestamp prefix; each statement is terminated by a params marker (` []`
-# inline, or a lone `[]` line).
+# inline, or a lone `[]` line). The greps are `|| true`: a migration that
+# renders nothing (data-only, no-op) makes grep exit 1, which pipefail would
+# turn into a silent script exit before the "rendered no SQL" branch.
 render_sql() {
-  grep -vE '^[0-9]{2}:[0-9]{2}:[0-9]{2}' \
-    | grep -vE '^\s*$' \
+  { grep -vE '^[0-9]{2}:[0-9]{2}:[0-9]{2}' || true; } \
+    | { grep -vE '^\s*$' || true; } \
     | awk '{ t=$0; sub(/[ \t]+$/,"",t);
              if (t=="[]") { if(buf!=""){print buf ";"; buf=""} }
              else if (t ~ / \[\]$/) { sub(/ \[\]$/,"",t); buf=(buf==""?t:buf"\n"t); print buf ";"; buf="" }
@@ -108,15 +110,26 @@ echo "squawk: linting new migrations: ${new_versions[*]}"
 mix ecto.migrate --to "$base_version" >/dev/null
 
 tmp_sql="$(mktemp --suffix=.sql)"
-trap 'rm -f "$tmp_sql"' EXIT
+mix_out="$(mktemp)"
+mix_err="$(mktemp)"
+trap 'rm -f "$tmp_sql" "$mix_out" "$mix_err"' EXIT
 
 failed=()
 for v in $(printf '%s\n' "${new_versions[@]}" | sort -u); do
   file=$(compgen -G "$MIG_DIR/${v}_*.exs" | head -1)
 
-  mix ecto.migrate --to "$v" --log-migrations-sql 2>/dev/null | render_sql > "$tmp_sql"
+  # A migration that fails to apply must say which one and why, not end the
+  # step with a bare exit 1.
+  if ! mix ecto.migrate --to "$v" --log-migrations-sql >"$mix_out" 2>"$mix_err"; then
+    echo "::error::squawk: ${file##*/} failed to migrate" >&2
+    cat "$mix_err" "$mix_out" >&2
+    exit 1
+  fi
+  render_sql <"$mix_out" >"$tmp_sql"
 
-  if grep -q "# squawk-ignore-file" "$file"; then
+  # Anchored to a comment line, so prose that mentions the marker does not
+  # silently skip the file.
+  if grep -qE '^[[:space:]]*# squawk-ignore-file' "$file"; then
     echo "squawk: skipping ${file##*/} (# squawk-ignore-file)"
     continue
   fi

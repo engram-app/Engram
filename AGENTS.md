@@ -424,6 +424,9 @@ separately). Prefer the narrow one:
 
 The marker line holds rule names only; put the reason on the next line.
 `# squawk-ignore-file` (no lint at all) is for DDL squawk cannot parse.
+Because each file is linted alone, an index on a table created in an EARLIER
+new migration is no longer exempt (squawk only exempts same-file tables):
+mark it `# squawk-ignore: require-concurrent-index-creation`.
 
 ## Migration self-host story
 
