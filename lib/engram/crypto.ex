@@ -1113,6 +1113,14 @@ defmodule Engram.Crypto do
   end
 
   @doc """
+  `dek_content_hash_key/1` from raw DEK bytes, for the rotation orchestrator
+  (same reason as `dek_filter_key_from_bytes/1`).
+  """
+  @spec dek_content_hash_key_from_bytes(<<_::256>>) :: binary()
+  def dek_content_hash_key_from_bytes(<<_::256>> = dek),
+    do: :crypto.mac(:hmac, :sha256, dek, @content_hash_info)
+
+  @doc """
   Computes the HMAC-SHA256 content-hash hex digest using a content-hash key
   from `dek_content_hash_key/1`. Returns 64-char lowercase hex.
 

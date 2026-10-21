@@ -570,6 +570,13 @@ if budget = System.get_env("INDEX_BUDGET_ENABLED") do
   config :engram, :index_budget_enabled, budget == "true"
 end
 
+# The encrypted per-user vector cache (`Engram.Indexing.VectorCache`, chunker
+# v5 Task 12): a text is paid to Voyage once. Off by default; off, the embed
+# path never reads or writes `embedding_cache`.
+if cache = System.get_env("VECTOR_CACHE_ENABLED") do
+  config :engram, :vector_cache_enabled, cache == "true"
+end
+
 if pacing = System.get_env("FANOUT_PACING_ENABLED") do
   config :engram, :fanout_pacing_enabled, pacing == "true"
 end

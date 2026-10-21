@@ -100,6 +100,8 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/indexing.ex",
     # Holds paid Voyage vectors of note text, keyed by a hash of that text.
     "lib/engram/indexing/retained_vectors.ex",
+    # Encrypted Voyage vectors keyed by an HMAC of note text (and its schema).
+    "lib/engram/indexing/vector_cache",
     "lib/engram/crypto.ex",
     "lib/engram_web/controllers/attachments_controller.ex",
     "lib/engram/backfill/",

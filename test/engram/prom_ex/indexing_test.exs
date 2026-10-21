@@ -73,4 +73,18 @@ defmodule Engram.PromEx.IndexingTest do
     assert metric.measurement == :tokens
     assert metric.tags == []
   end
+
+  # Skipped cache writes are vectors a retry pays for again: exported, by a
+  # closed :reason only.
+  test "event_metrics/1 sums skipped vector cache rows by reason" do
+    built = Indexing.event_metrics(otp_app: :engram)
+
+    assert [metric] =
+             Enum.filter(built.metrics, &(&1.event_name == [:engram, :vector_cache, :skipped]))
+
+    assert match?(%Telemetry.Metrics.Sum{}, metric)
+    assert metric.name == [:engram, :prom_ex, :indexing, :vector_cache, :skipped_rows, :total]
+    assert metric.measurement == :rows
+    assert metric.tags == [:reason]
+  end
 end
