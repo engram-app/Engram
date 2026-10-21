@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { cleanupTestUsers } from "./db-cleanup";
+import { clerkFetch } from "./support/clerk-fetch";
 
 const AUTH_STATE_PATH = path.join(__dirname, ".auth-state.json");
 const CLERK_API = "https://api.clerk.com/v1";
@@ -23,7 +24,7 @@ async function cleanupClerkUser() {
 		return;
 	}
 
-	const resp = await fetch(`${CLERK_API}/users/${state.clerk_user_id}`, {
+	const resp = await clerkFetch(`${CLERK_API}/users/${state.clerk_user_id}`, {
 		method: "DELETE",
 		headers: { Authorization: `Bearer ${secretKey}` },
 	});
