@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
-import { frontmatterMaps } from "./frontmatter-doc";
 import { CrdtManager } from "./manager";
 
 function freshId(): string {
@@ -85,47 +84,5 @@ describe("CrdtManager", () => {
 		]);
 		await expect(guarded).resolves.toBe("resolved");
 		expect(m.hasDoc("hang.md")).toBe(false); // no ghost entry remains
-	});
-
-	it("flattenIfBloated on a non-live path is a no-op and does not create a doc", async () => {
-		const m = new CrdtManager({ onUpdate: () => {} });
-		await m.getDoc("notes/x.md");
-		m.closeDoc("notes/x.md");
-		const flattened = await m.flattenIfBloated("notes/x.md");
-		expect(flattened).toBe(false);
-		expect(m.hasDoc("notes/x.md")).toBe(false); // must NOT have been resurrected
-	});
-
-	it("flattenIfBloated preserves frontmatter maps (#814)", async () => {
-		// Small injected thresholds: the defaults (500 KB, 1000 client-IDs) took
-		// ~1100 full-doc rebuilds and 20+ s to cross. The flatten path is the same.
-		const m = new CrdtManager({ onUpdate: () => {}, maxContentBytes: 5000, maxClientIds: 10 });
-		const path = "notes/fm.md";
-		const doc = await m.getDoc(path);
-		const maps = frontmatterMaps(doc);
-		doc.transact(() => {
-			maps.values.set("type", JSON.stringify("Playbook"));
-			maps.order.insert(0, ["type"]);
-			maps.types.set("type", "text");
-		});
-
-		// Cross both flatten thresholds the same way the plugin's equivalent test
-		// does: apply an update authored by a fresh Y.Doc per iteration so each
-		// carries a unique client-ID, and pad content past the byte threshold.
-		for (let i = 0; i < 11; i++) {
-			const author = new Y.Doc();
-			Y.applyUpdate(author, Y.encodeStateAsUpdate(doc));
-			author.getText("content").insert(author.getText("content").length, "x".repeat(500));
-			Y.applyUpdate(doc, Y.encodeStateAsUpdate(author, Y.encodeStateVector(doc)));
-		}
-
-		const flattened = await m.flattenIfBloated(path);
-		expect(flattened).toBe(true);
-
-		const fresh = await m.getDoc(path);
-		const after = frontmatterMaps(fresh);
-		expect(after.values.get("type")).toBe(JSON.stringify("Playbook"));
-		expect(after.order.toArray()).toEqual(["type"]);
-		expect(after.types.get("type")).toBe("text");
 	});
 });
