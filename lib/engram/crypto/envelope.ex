@@ -136,8 +136,7 @@ defmodule Engram.Crypto.Envelope do
             {:vault_index_states, :state, :zstd},
             {:vault_index_update_log, :update, :zstd},
             {:note_revisions, :content, :zstd},
-            {:chunks, :text, :zstd},
-            {:chunks, :heading, :zstd},
+            {:chunks, :display, :zstd},
             {:attachments, :content, :auto}
           ]
           |> Enum.map(fn {t, c, mode} -> {Engram.Crypto.aad_prefix(t, c), mode} end)

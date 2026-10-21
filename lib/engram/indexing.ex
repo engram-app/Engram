@@ -16,6 +16,7 @@ defmodule Engram.Indexing do
   alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
   alias Engram.Notes.Chunk
+  alias Engram.Notes.ChunkPoint
   alias Engram.Notes.FlatFields
   alias Engram.Notes.Frontmatter
   alias Engram.Notes.FrontmatterKeys
@@ -1098,6 +1099,8 @@ defmodule Engram.Indexing do
           |> Enum.chunk_every(@insert_batch)
           |> Enum.each(&Repo.insert_all(Chunk, &1, skip_tenant_check: true))
 
+          write_point_rows(note, Map.get(prepared, :point_rows))
+
           stamp_payload_hash(note, payload_hash)
           stamp_okf_timestamp(prepared)
           stamp_flat_fields(prepared)
@@ -1116,6 +1119,18 @@ defmodule Engram.Indexing do
         {:ok, length(chunk_rows)}
       end
     end
+  end
+
+  # Delete-then-insert per note, like `chunks`; nil (text off) leaves the
+  # note's `chunk_points` as they are.
+  defp write_point_rows(_note, nil), do: :ok
+
+  defp write_point_rows(note, rows) do
+    Repo.delete_all(from(p in ChunkPoint, where: p.note_id == ^note.id), skip_tenant_check: true)
+
+    rows
+    |> Enum.chunk_every(@insert_batch)
+    |> Enum.each(&Repo.insert_all(ChunkPoint, &1, skip_tenant_check: true))
   end
 
   # Every point of the note now carries `note_payload`: upserted ones were
@@ -1591,6 +1606,7 @@ defmodule Engram.Indexing do
       {:ok, _} =
         Repo.with_tenant(note.user_id, fn ->
           Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id))
+          Repo.delete_all(from(p in ChunkPoint, where: p.note_id == ^note.id))
         end)
 
       :ok
@@ -2950,15 +2966,24 @@ defmodule Engram.Indexing do
 
     text? = v5? or chunk_text_write?()
 
+    mode =
+      cond do
+        not text? -> :none
+        display_ct?(note) -> :sealed
+        true -> :sum
+      end
+
     with {:ok, reversed, _spent} <- prepared,
-         {:ok, dek} <- if(v5_format? or text?, do: Crypto.get_dek(user), else: {:ok, nil}) do
+         {:ok, dek} <-
+           if(v5_format? or mode == :sealed, do: Crypto.get_dek(user), else: {:ok, nil}) do
       built = Enum.reverse(reversed)
       qdrant_points = for(%{point: p} <- built, p != nil, do: p)
 
       {:ok,
        %{
          note: note,
-         chunk_rows: chunk_rows(plan.entries, built, dek, text?),
+         chunk_rows: Enum.map(built, & &1.row),
+         point_rows: point_rows(plan.entries, built, dek, mode),
          qdrant_points: qdrant_points,
          point_kinds: for(%{kind: k, dense?: d} <- built, do: {k, d}),
          # Straight from the plan, not re-derived from `built`. Two independent
@@ -2979,30 +3004,6 @@ defmodule Engram.Indexing do
     end
   end
 
-  # Task 11.2: each row carries its chunk's display text and heading,
-  # encrypted and bound to the point id, so search can read them from
-  # Postgres. They land in the same INSERT as the row, so a row never exists
-  # without its text and text never outlives its row (it is deleted with it).
-  # A reused row is encrypted afresh from the chunk in hand rather than copied
-  # from the old row: the rows are rewritten wholesale anyway, and the seal is
-  # cheap next to the embed it replaces.
-  defp chunk_rows(_entries, built, _dek, false), do: Enum.map(built, & &1.row)
-
-  defp chunk_rows(entries, built, dek, true) do
-    Enum.zip_with(entries, built, fn entry, %{row: row} ->
-      chunk = entry_chunk(entry)
-
-      Map.merge(
-        row,
-        Crypto.encrypt_chunk_text(chunk.text, chunk.heading_path, dek, row.qdrant_point_id)
-      )
-    end)
-  end
-
-  # Off until the v5 rollout turns it on; the v5 layout writes text
-  # regardless, since its payload has none.
-  defp chunk_text_write?, do: Engram.ServiceConfig.get(:chunk_text_write, false)
-
   # Past the per-user cap a new key is skipped (left out of the payload and
   # `note_attrs`, counted by `FrontmatterKeys`), never an indexing error.
   defp with_key_ids(flat, note, user) do
@@ -3015,6 +3016,86 @@ defmodule Engram.Indexing do
         flat
     end
   end
+
+  # Task 11.2, hybrid (notes-chunks-hyperopt 2.4/2.4b): with text on, every
+  # point also gets a `chunk_points` row (written in the same transaction as
+  # its `chunks` row, `commit_index/2`) carrying `slice_sum`, the checksum of
+  # its chunk's display text; search derives the text from the note content
+  # (`display_chunks/3`). Only a note over `display_ct_threshold/0` also
+  # stores the text and heading, sealed as ONE envelope bound to the point
+  # id, so a hit there never decrypts and re-chunks the whole note. A reused
+  # point is sealed afresh from the chunk in hand: rows are rewritten
+  # wholesale anyway. nil: text off, `chunk_points` untouched.
+  defp point_rows(_entries, _built, _dek, :none), do: nil
+
+  defp point_rows(entries, built, dek, mode) do
+    Enum.zip_with(entries, built, fn entry, %{row: row} ->
+      chunk = entry_chunk(entry)
+
+      point = %{
+        point_id: row.qdrant_point_id,
+        note_id: row.note_id,
+        user_id: row.user_id,
+        char_start: row.char_start,
+        char_end: row.char_end,
+        token_count: row.token_count,
+        slice_sum: text_sum(chunk.text),
+        position: row.position,
+        member_fps: member_fps(row.member_hmacs),
+        display_ct: nil
+      }
+
+      if mode == :sealed, do: Map.merge(point, seal(chunk, dek, row)), else: point
+    end)
+  end
+
+  # The 16-hex member fingerprint prefixes as 8 raw bytes each, concatenated.
+  defp member_fps(nil), do: nil
+  defp member_fps(hexes), do: Enum.map_join(hexes, &Base.decode16!(&1, case: :mixed))
+
+  defp seal(chunk, dek, row),
+    do: Crypto.encrypt_chunk_text(chunk.text, chunk.heading_path, dek, row.qdrant_point_id)
+
+  @display_ct_threshold 256 * 1024
+
+  defp display_ct?(note), do: byte_size(note.content || "") > @display_ct_threshold
+
+  @doc "Notes whose content is over this many bytes store each chunk's display envelope."
+  def display_ct_threshold, do: @display_ct_threshold
+
+  @doc """
+  A chunk's display-text checksum: CRC32, as a signed int4 for the column.
+  Unkeyed, so a DEK rotation leaves it alone.
+  """
+  @spec text_sum(binary()) :: integer()
+  def text_sum(text) do
+    <<sum::signed-32>> = <<:erlang.crc32(text)::32>>
+    sum
+  end
+
+  @doc """
+  The chunks search shows for a note, by position: what the indexing pass
+  built from this content, for a note holding `row_count` rows. A merged
+  note is regrouped the way `resparse_note/2` does (`merged_like/2`, from
+  the stored row count). A position missing from the map, or a chunk whose
+  `text_sum/1` differs from the row's, means the note changed since it was
+  indexed.
+  """
+  @spec display_chunks(binary(), String.t(), non_neg_integer()) :: %{
+          non_neg_integer() => %{text: binary(), heading_path: term()}
+        }
+  def display_chunks(content, path, row_count) do
+    chunks = Markdown.parse(content, path)
+
+    chunks =
+      (row_count < length(chunks) and merged_like(chunks, row_count)) || chunks
+
+    Map.new(chunks, &{&1.position, Map.take(&1, [:text, :heading_path])})
+  end
+
+  # Off until the v5 rollout turns it on; the v5 layout writes text
+  # regardless, since its payload has none.
+  defp chunk_text_write?, do: Engram.ServiceConfig.get(:chunk_text_write, false)
 
   # A reused chunk costs nothing but a row: no embed, no tokenizer pass, no
   # encryption. Its `token_count` rides along from the row it replaces rather

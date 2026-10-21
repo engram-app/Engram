@@ -80,7 +80,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/crypto/user_dek_rotation.ex" => 21,
     "engram/feedback.ex" => 2,
     "engram/idempotency.ex" => 1,
-    "engram/indexing.ex" => 2,
+    "engram/indexing.ex" => 4,
     "engram/instance.ex" => 7,
     "engram/legal.ex" => 5,
     "engram/legal/seeder.ex" => 2,

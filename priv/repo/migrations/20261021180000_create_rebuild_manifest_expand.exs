@@ -1,4 +1,4 @@
-# priv/repo/migrations/20261020214100_create_rebuild_manifest_expand.exs
+# priv/repo/migrations/20261021180000_create_rebuild_manifest_expand.exs
 defmodule Engram.Repo.Migrations.CreateRebuildManifestExpand do
   use Ecto.Migration
 

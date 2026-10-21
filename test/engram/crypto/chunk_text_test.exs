@@ -1,6 +1,6 @@
 defmodule Engram.Crypto.ChunkTextTest do
-  # Chunk text and heading live encrypted on the `chunks` row (Task 11.1),
-  # bound to the point id, so search reads them from Postgres, not Qdrant.
+  # A big note's chunk text and heading live on the `chunks` row as ONE
+  # envelope, `display_ct` (Task 11.1, hybrid), bound to the point id.
   use ExUnit.Case, async: true
 
   alias Engram.Crypto
@@ -37,17 +37,17 @@ defmodule Engram.Crypto.ChunkTextTest do
     assert :error = Crypto.decrypt_chunk_text(row_a, @dek, b)
   end
 
-  test "text and heading are bound to their own column" do
+  test "one envelope per row: a single display_ct column" do
+    row = Crypto.encrypt_chunk_text("t", "h", @dek, Ecto.UUID.generate())
+    assert Map.keys(row) == [:display_ct]
+  end
+
+  test "a truncated envelope is an error, not a crash" do
     id = Ecto.UUID.generate()
-    row = Crypto.encrypt_chunk_text("t", "h", @dek, id)
+    %{display_ct: ct} = Crypto.encrypt_chunk_text("t", "h", @dek, id)
 
-    swapped = %{
-      row
-      | text_ciphertext: row.heading_ciphertext,
-        text_nonce: row.heading_nonce
-    }
-
-    assert :error = Crypto.decrypt_chunk_text(swapped, @dek, id)
+    assert :error = Crypto.decrypt_chunk_text(%{display_ct: binary_part(ct, 0, 5)}, @dek, id)
+    assert :error = Crypto.decrypt_chunk_text(%{display_ct: <<>>}, @dek, id)
   end
 
   test "another user's DEK fails" do
@@ -59,15 +59,13 @@ defmodule Engram.Crypto.ChunkTextTest do
 
   test "a row with no ciphertext reads as :none (written before the column)" do
     id = Ecto.UUID.generate()
-    blank = %{text_ciphertext: nil, text_nonce: nil, heading_ciphertext: nil, heading_nonce: nil}
+    blank = %{display_ct: nil}
 
     assert :none = Crypto.decrypt_chunk_text(blank, @dek, id)
   end
 
-  test "chunk text and heading are on the zstd policy" do
+  test "the display envelope is on the zstd policy" do
     id = Ecto.UUID.generate()
-
-    assert Envelope.compression_policy(Crypto.aad_for_row(:chunks, :text, id)) == :zstd
-    assert Envelope.compression_policy(Crypto.aad_for_row(:chunks, :heading, id)) == :zstd
+    assert Envelope.compression_policy(Crypto.aad_for_row(:chunks, :display, id)) == :zstd
   end
 end

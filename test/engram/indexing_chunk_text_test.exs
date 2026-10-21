@@ -1,7 +1,10 @@
 defmodule Engram.IndexingChunkTextTest do
   @moduledoc """
-  Task 11.2: the indexing pass writes each chunk's display text and heading,
-  encrypted, onto its `chunks` row, in the same INSERT as the row. Behind
+  Task 11.2, hybrid: the indexing pass writes a `chunk_points` row per point,
+  in the same transaction as its `chunks` row, with the display-text
+  checksum (`slice_sum`), and for a note over the display threshold its text
+  and heading as ONE envelope (`display_ct`).
+  Search shows a small note's chunk re-derived from the note content. Behind
   `:chunk_text_write` (off), and always on for the v5 layout, whose payload
   carries no text.
   """
@@ -10,16 +13,16 @@ defmodule Engram.IndexingChunkTextTest do
   import Ecto.Query
   import Mox
 
-  alias Engram.{Crypto, Indexing, Notes, ServiceConfig}
-  alias Engram.Notes.Chunk
+  alias Engram.{Indexing, Notes, ServiceConfig}
+  alias Engram.Notes.{Chunk, ChunkPoint}
 
   setup :verify_on_exit!
 
   @path "Health/Iron Panel.md"
 
-  # Over 512 B a section: the v5 chunker's min512 coalesce (#2084) would
-  # otherwise merge these short sections into one chunk.
-  @pad String.duplicate("filler words here ", 30)
+  # Each section is padded past the v5 chunker's 512-byte coalesce floor,
+  # so the three sections stay three chunks.
+  @pad String.duplicate("Reference ranges and units vary by lab. ", 15)
 
   defp content(ferritin_body) do
     """
@@ -56,16 +59,22 @@ defmodule Engram.IndexingChunkTextTest do
     %{user: user, vault: vault}
   end
 
-  defp put_note(user, vault, body) do
+  defp put_note(user, vault, body, content \\ nil) do
     {:ok, note} =
       Notes.upsert_note(
         user,
         vault,
-        %{"path" => @path, "content" => content(body), "mtime" => 1_000.0},
+        %{"path" => @path, "content" => content || content(body), "mtime" => 1_000.0},
         actor: "api"
       )
 
     note
+  end
+
+  defp points(note) do
+    Repo.all(from(p in ChunkPoint, where: p.note_id == ^note.id, order_by: p.position),
+      skip_tenant_check: true
+    )
   end
 
   defp rows(note) do
@@ -74,20 +83,20 @@ defmodule Engram.IndexingChunkTextTest do
     )
   end
 
+  # What search shows for each row, by position, through the read path.
   defp texts(note, user) do
-    {:ok, dek} = Crypto.get_dek(Repo.reload!(user, skip_tenant_check: true))
-
-    for row <- rows(note) do
-      {:ok, pair} = Crypto.decrypt_chunk_text(row, dek, row.qdrant_point_id)
-      pair
-    end
+    user = Repo.reload!(user, skip_tenant_check: true)
+    rows = rows(note)
+    ids = Enum.map(rows, &to_string(&1.qdrant_point_id))
+    {:ok, hits} = Notes.search_hits_by_qdrant_points(user, ids)
+    for id <- ids, do: {hits[id].text, hits[id].heading_path}
   end
 
   test "flag off: rows carry no text (prod writes unchanged)", ctx do
     note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
     assert {:ok, count} = Indexing.index_note(note, ctx.vault)
     assert count > 2
-    assert Enum.all?(rows(note), &is_nil(&1.text_ciphertext))
+    assert points(note) == []
   end
 
   describe "flag on" do
@@ -96,15 +105,49 @@ defmodule Engram.IndexingChunkTextTest do
       :ok
     end
 
-    test "every row decrypts to its chunk's text and heading", ctx do
+    test "a small note stores checksums only and displays from its content", ctx do
       note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
       assert {:ok, count} = Indexing.index_note(note, ctx.vault)
+
+      points = points(note)
+      assert length(points) == count
+      assert Enum.all?(points, &(is_integer(&1.slice_sum) and is_nil(&1.display_ct)))
+
+      # One point row per chunk row, same point ids and offsets.
+      assert Enum.map(points, &{&1.point_id, &1.position, &1.char_start, &1.char_end}) ==
+               Enum.map(
+                 rows(note),
+                 &{&1.qdrant_point_id, &1.position, &1.char_start, &1.char_end}
+               )
 
       pairs = texts(note, ctx.user)
       assert length(pairs) == count
       assert {text, heading} = Enum.find(pairs, fn {t, _} -> t =~ "Ferritin levels are low." end)
       assert heading =~ "Ferritin"
       refute text =~ "Transferrin saturation"
+    end
+
+    test "a note over the threshold (300 KB) stores display_ct and displays from it", ctx do
+      filler = String.duplicate("Iron stores and lab values. ", 11_000)
+      big = content("Ferritin levels are low.") <> "\n## Appendix\n\n" <> filler
+      assert byte_size(big) > 300_000
+      note = put_note(ctx.user, ctx.vault, nil, big)
+      assert {:ok, _count} = Indexing.index_note(note, ctx.vault)
+
+      assert Enum.all?(points(note), &(is_binary(&1.display_ct) and is_integer(&1.slice_sum)))
+
+      # Search reads the envelope, not the content: corrupting the content
+      # ciphertext leaves every hit's text intact.
+      {:ok, _} =
+        Repo.with_tenant(ctx.user.id, fn ->
+          Repo.update_all(from(n in Engram.Notes.Note, where: n.id == ^note.id),
+            set: [content_ciphertext: :crypto.strong_rand_bytes(64)]
+          )
+        end)
+
+      pairs = texts(note, ctx.user)
+      assert {_text, heading} = Enum.find(pairs, fn {t, _} -> t =~ "Ferritin levels are low." end)
+      assert heading =~ "Ferritin"
     end
 
     test "a sparse-only (budget-parked) pass also writes text", ctx do

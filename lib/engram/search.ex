@@ -567,7 +567,7 @@ defmodule Engram.Search do
 
         with {:ok, candidates} <- run_legs(mode, user, query, search_opts, profile),
              {:ok, {candidates, hits}} <- postgres_hits(candidates, user, read?),
-             {:ok, candidates} <- payload_fallback(candidates, hits),
+             {:ok, candidates} <- payload_fallback(candidates, hits, user),
              vaults_by_id = load_candidate_vaults(user, vault, candidates),
              {:ok, decrypted} <- decrypt_candidates(candidates, user, vaults_by_id, hits) do
           rerank_module = if rerank_for_user?, do: reranker(), else: Engram.Rerankers.None
@@ -907,24 +907,40 @@ defmodule Engram.Search do
 
   # With `:chunk_text_read` on the ranked query fetches no payload; the hits
   # whose chunk row has no text (rows written before the text columns) get
-  # their payload text keys here, in one retrieve of just those points. A
-  # point gone since the query keeps its hit with empty text, as a payload
-  # with no text always has.
-  defp payload_fallback(candidates, nil), do: {:ok, candidates}
+  # their payload text keys here, in one retrieve of just those points (none
+  # when every row has its text). A point deleted since the query is dropped
+  # and counted (`point_gone`), as main never returned it. A failed retrieve
+  # fails the search, as a failed query does.
+  defp payload_fallback(candidates, nil, _user), do: {:ok, candidates}
 
-  defp payload_fallback(candidates, hits) do
-    ids = for c <- candidates, is_nil(hits[c.qdrant_id].text), do: c.qdrant_id
+  defp payload_fallback(candidates, hits, user) do
+    case for(c <- candidates, is_nil(hits[c.qdrant_id].text), do: c.qdrant_id) do
+      [] -> {:ok, candidates}
+      ids -> merge_fallback(candidates, ids, user)
+    end
+  end
+
+  defp merge_fallback(candidates, ids, user) do
     keys = Qdrant.result_payload(:fallback)
 
     with {:ok, points} <- Qdrant.retrieve(collection(), ids, with_payload: keys) do
       by_id = Map.new(points, &{&1.qdrant_id, &1})
-      {:ok, Enum.map(candidates, &Map.merge(Map.get(by_id, &1.qdrant_id, %{}), &1))}
+      wanted = MapSet.new(ids)
+
+      {gone, kept} =
+        Enum.split_with(
+          candidates,
+          &(&1.qdrant_id in wanted and not is_map_key(by_id, &1.qdrant_id))
+        )
+
+      if gone != [], do: emit_hit_dropped(:point_gone, length(gone), user)
+      {:ok, Enum.map(kept, &Map.merge(Map.get(by_id, &1.qdrant_id, %{}), &1))}
     end
   end
 
   # One counter for every reason (`engram_prom_ex_search_hits_dropped_total`).
-  # The orphan window is expected on every edit, so it logs at debug; the
-  # others are real faults.
+  # The orphan windows (a stale point, a point deleted mid-search) are
+  # expected on every edit, so they log at debug; the others are real faults.
   defp emit_hit_dropped(reason, count, user) do
     :telemetry.execute([:engram, :search, :hit_dropped], %{count: count}, %{reason: reason})
 
@@ -933,6 +949,7 @@ defmodule Engram.Search do
 
     case reason do
       :no_chunk_row -> Logger.debug("search dropped #{count} hit(s): no chunk row", meta)
+      :point_gone -> Logger.debug("search dropped #{count} hit(s): point gone", meta)
       _ -> Logger.warning("search dropped #{count} hit(s): #{reason}", meta)
     end
   end

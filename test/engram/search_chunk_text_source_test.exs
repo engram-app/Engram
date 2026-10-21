@@ -13,7 +13,7 @@ defmodule Engram.SearchChunkTextSourceTest do
   import Mox
 
   alias Engram.{Crypto, Notes, Search, ServiceConfig}
-  alias Engram.Notes.Chunk
+  alias Engram.Notes.{Chunk, ChunkPoint}
 
   setup :verify_on_exit!
 
@@ -59,8 +59,38 @@ defmodule Engram.SearchChunkTextSourceTest do
           char_end: 1,
           qdrant_point_id: point_id
         })
-        |> Ecto.Changeset.change(enc)
         |> Repo.insert!()
+
+        # The point's `chunk_points` row holds the envelope; none = written
+        # with the write flag off.
+        if enc != %{}, do: insert_point!(ctx, point_id, pos, enc)
+      end)
+  end
+
+  defp insert_point!(ctx, point_id, pos, fields) do
+    %ChunkPoint{point_id: point_id, note_id: ctx.note.id, user_id: ctx.user.id, position: pos}
+    |> struct(fields)
+    |> Repo.insert!()
+  end
+
+  # A small note's row: a checksum, no envelope (Task 11.2 hybrid). Search
+  # re-derives the chunk at `pos` from the note's current content.
+  defp insert_sum_chunk!(ctx, point_id, pos, text) do
+    {:ok, _} =
+      Repo.with_tenant(ctx.user.id, fn ->
+        %Chunk{}
+        |> Chunk.changeset(%{
+          note_id: ctx.note.id,
+          user_id: ctx.user.id,
+          vault_id: ctx.vault.id,
+          position: pos,
+          char_start: 0,
+          char_end: byte_size(text),
+          qdrant_point_id: point_id
+        })
+        |> Repo.insert!()
+
+        insert_point!(ctx, point_id, pos, slice_sum: Engram.Indexing.text_sum(text))
       end)
   end
 
@@ -90,18 +120,23 @@ defmodule Engram.SearchChunkTextSourceTest do
   defp v5_point(ctx, id, score),
     do: %{"id" => id, "score" => score, "payload" => %{"u" => to_string(ctx.user.id)}}
 
-  # The ranked query answers `points` whole; a retrieve (Task 15.8: the
-  # payload fallback, or MMR's vectors) answers the keys it asks for.
-  defp answer(ctx, points) do
+  # Both the ranked query and a retrieve (Task 15.8: the payload fallback,
+  # or hybrid's fused retrieve) answer only the payload keys they ask for.
+  # `retrieved` defaults to `points`; a test passes fewer to delete a point
+  # between the two calls.
+  defp answer(ctx, points, retrieved \\ nil) do
     test_pid = self()
+    retrieved = retrieved || points
 
     Bypass.expect(ctx.bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
       {:ok, raw, conn} = Plug.Conn.read_body(conn)
-      send(test_pid, {:query_body, Jason.decode!(raw)})
+      body = Jason.decode!(raw)
+      send(test_pid, {:query_body, body})
+      shaped = Enum.map(points, &take_payload(&1, body["with_payload"]))
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => points}}))
+      |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => shaped}}))
     end)
 
     Bypass.stub(ctx.bypass, "POST", "/collections/engram_notes/points", fn conn ->
@@ -109,10 +144,9 @@ defmodule Engram.SearchChunkTextSourceTest do
       %{"ids" => ids, "with_payload" => keys} = body = Jason.decode!(raw)
       send(test_pid, {:retrieve_body, body})
 
-      # MMR's vector retrieve asks for no payload.
       found =
-        for id <- ids, p <- points, p["id"] == id do
-          %{"id" => id, "payload" => Map.take(p["payload"], keys || [])}
+        for id <- ids, p <- retrieved, p["id"] == id do
+          p |> Map.delete("score") |> take_payload(keys)
         end
 
       conn
@@ -120,6 +154,11 @@ defmodule Engram.SearchChunkTextSourceTest do
       |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => found}))
     end)
   end
+
+  defp take_payload(point, keys) when is_list(keys),
+    do: Map.update(point, "payload", %{}, &Map.take(&1, keys))
+
+  defp take_payload(point, _none), do: Map.delete(point, "payload")
 
   defp search(ctx), do: Search.search(ctx.user, ctx.vault, "ferritin", mode: :vector, limit: 5)
 
@@ -161,6 +200,56 @@ defmodule Engram.SearchChunkTextSourceTest do
     assert hit.heading_path == "Iron > Labs"
     assert hit.source_path == "Health/Iron.md"
     assert hit.vault_id == to_string(ctx.vault.id)
+  end
+
+  test "a small note displays its chunk from the note content (no display_ct)", ctx do
+    id = Ecto.UUID.generate()
+    [chunk] = Engram.Parsers.Markdown.parse("# Iron\n\nFerritin.", "Health/Iron.md")
+    insert_sum_chunk!(ctx, id, 0, chunk.text)
+    answer(ctx, [v5_point(ctx, id, 0.9)])
+
+    {result, events} = with_event([:engram, :search, :text_stale], fn -> search(ctx) end)
+
+    assert {:ok, [hit]} = result
+    assert hit.text == chunk.text
+    assert hit.heading_path == chunk.heading_path
+    assert events == []
+  end
+
+  test "a note edited since its index shows the current text and counts it", ctx do
+    id = Ecto.UUID.generate()
+    insert_sum_chunk!(ctx, id, 0, "# Iron\n\nFerritin.")
+
+    {:ok, _} =
+      Notes.upsert_note(
+        ctx.user,
+        ctx.vault,
+        %{"path" => "Health/Iron.md", "content" => "# Iron\n\nFerritin is 90.", "mtime" => 2.0},
+        actor: "api"
+      )
+
+    answer(ctx, [v5_point(ctx, id, 0.9)])
+
+    {result, events} = with_event([:engram, :search, :text_stale], fn -> search(ctx) end)
+
+    assert {:ok, [hit]} = result
+    assert hit.text =~ "Ferritin is 90."
+    assert [{%{count: 1}, _}] = events
+  end
+
+  test "small-note hits: one notes content query for every hit note", ctx do
+    [chunk] = Engram.Parsers.Markdown.parse("# Iron\n\nFerritin.", "Health/Iron.md")
+    ids = for _ <- 1..3, do: Ecto.UUID.generate()
+    # Three points at position 0 of one note (only one row per position is
+    # allowed, so the others use 1 and 2, gone from the content).
+    for {id, pos} <- Enum.with_index(ids), do: insert_sum_chunk!(ctx, id, pos, chunk.text)
+    answer(ctx, for({id, i} <- Enum.with_index(ids), do: v5_point(ctx, id, 1.0 - i / 10)))
+
+    {result, events} = with_event([:engram, :repo, :query], fn -> search(ctx) end)
+
+    assert {:ok, [_ | _]} = result
+    assert Enum.count(events, fn {_m, meta} -> meta[:source] == "chunks" end) == 1
+    assert Enum.count(events, fn {_m, meta} -> meta[:source] == "notes" end) <= 2
   end
 
   test "a row with no ciphertext falls back to the payload", ctx do
@@ -233,8 +322,8 @@ defmodule Engram.SearchChunkTextSourceTest do
 
     {:ok, _} =
       Repo.with_tenant(ctx.user.id, fn ->
-        Repo.update_all(from(c in Chunk, where: c.qdrant_point_id == ^bad),
-          set: [text_ciphertext: :crypto.strong_rand_bytes(40)]
+        Repo.update_all(from(c in ChunkPoint, where: c.point_id == ^bad),
+          set: [display_ct: <<12, :crypto.strong_rand_bytes(40)::binary>>]
         )
       end)
 
@@ -282,8 +371,8 @@ defmodule Engram.SearchChunkTextSourceTest do
   defp corrupt_text!(ctx, point_id) do
     {:ok, _} =
       Repo.with_tenant(ctx.user.id, fn ->
-        Repo.update_all(from(c in Chunk, where: c.qdrant_point_id == ^point_id),
-          set: [text_ciphertext: :crypto.strong_rand_bytes(40)]
+        Repo.update_all(from(c in ChunkPoint, where: c.point_id == ^point_id),
+          set: [display_ct: <<12, :crypto.strong_rand_bytes(40)::binary>>]
         )
       end)
   end
@@ -421,7 +510,8 @@ defmodule Engram.SearchChunkTextSourceTest do
              )
 
     assert Enum.sort(Enum.map(hits, & &1.text)) == ["T0", "T1", "T2"]
-    # The only retrieve is MMR's: its pool's vectors, no payload.
+    # The only retrieve is hybrid's fused one, carrying the pool's vectors
+    # for MMR and no payload (the text is in Postgres).
     assert %{"with_payload" => false, "with_vector" => ["dense"]} =
              Engram.QdrantStub.last_retrieve(ctx.bypass)
   end
@@ -464,9 +554,40 @@ defmodule Engram.SearchChunkTextSourceTest do
     insert_chunk!(ctx, id, 0, "Ferritin.")
     answer(ctx, [v5_point(ctx, id, 0.9)])
 
-    assert {:ok, [_]} = search(ctx)
+    {result, events} = with_event([:engram, :qdrant, :request, :stop], fn -> search(ctx) end)
+
+    assert {:ok, [_]} = result
     assert_received {:query_body, %{"with_payload" => false}}
     refute_received {:retrieve_body, _}
+    # Not even an empty (no-HTTP) retrieve shows on the Qdrant metrics.
+    refute Enum.any?(events, fn {_m, meta} -> meta[:op] == :retrieve end)
+  end
+
+  test "a point deleted before the fallback retrieve: its hit is dropped and counted", ctx do
+    live = Ecto.UUID.generate()
+    gone = Ecto.UUID.generate()
+    insert_chunk!(ctx, live, 0, "Ferritin live.")
+    insert_chunk!(ctx, gone, 1)
+    query_points = [legacy_point(ctx, gone, "Deleted.", 0.95), v5_point(ctx, live, 0.9)]
+    answer(ctx, query_points, [v5_point(ctx, live, 0.9)])
+
+    {{result, events}, _log} =
+      with_log(fn -> with_event([:engram, :search, :hit_dropped], fn -> search(ctx) end) end)
+
+    assert {:ok, [%{text: "Ferritin live."}]} = result
+    assert [{%{count: 1}, %{reason: :point_gone}}] = events
+  end
+
+  test "a failed fallback retrieve fails the search, as a failed query does", ctx do
+    id = Ecto.UUID.generate()
+    insert_chunk!(ctx, id, 0)
+    answer(ctx, [legacy_point(ctx, id, "Ferritin from the payload.", 0.9)])
+
+    Bypass.stub(ctx.bypass, "POST", "/collections/engram_notes/points", fn conn ->
+      Plug.Conn.send_resp(conn, 500, ~s({"status":{"error":"boom"}}))
+    end)
+
+    assert {{:error, _}, _log} = with_log(fn -> search(ctx) end)
   end
 
   test "a row without text: its point alone is retrieved, for the text keys only", ctx do

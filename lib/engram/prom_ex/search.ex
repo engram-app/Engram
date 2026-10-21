@@ -36,6 +36,7 @@ defmodule Engram.PromEx.Search do
   @hit_dropped_event [:engram, :search, :hit_dropped]
   @text_missing_event [:engram, :search, :text_missing]
   @hits_event [:engram, :search, :hits]
+  @text_stale_event [:engram, :search, :text_stale]
 
   @impl true
   def event_metrics(opts) do
@@ -85,6 +86,16 @@ defmodule Engram.PromEx.Search do
           event_name: @text_missing_event,
           measurement: :count,
           description: "Search hits with no text in Postgres or the payload."
+        ),
+        # Hits whose note was edited since its index: the text re-derived
+        # from the content no longer matches the row's checksum, so the hit
+        # shows the current chunk at its position. A sustained rate means
+        # notes are left unindexed after edits.
+        sum(
+          metric_prefix ++ [:text_stale, :total],
+          event_name: @text_stale_event,
+          measurement: :count,
+          description: "Search hits shown with text re-derived after an edit since index."
         ),
         # Every Qdrant candidate on the `:chunk_text_read` path, before any
         # drop: the denominator for the two counters above.

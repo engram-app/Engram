@@ -94,17 +94,18 @@ defmodule Engram.Crypto.TenantSweep do
     |> Repo.all(skip_tenant_check: true)
   end
 
-  # Chunks are swept only for their encrypted text (DEK rotation, envelope
-  # re-encode), so only rows that hold any are visited. With the chunk-text
-  # write flag off that is none, via the partial index
-  # `chunks_with_text_user_id_id_index` (WHERE text_ciphertext IS NOT NULL).
-  defp fetch_batch_ids(user_id, Engram.Notes.Chunk, last_id, size) do
-    from(c in Engram.Notes.Chunk,
-      where: c.user_id == ^user_id and not is_nil(c.text_ciphertext),
-      where: c.id > ^last_id,
-      order_by: c.id,
+  # Chunk points are swept only for their display envelope (DEK rotation),
+  # so only rows that hold one are visited: notes over the display
+  # threshold, none with the chunk-text write flag off. Keyed by point_id, on
+  # the partial index `chunk_points_with_display_index` (WHERE display_ct IS
+  # NOT NULL).
+  defp fetch_batch_ids(user_id, Engram.Notes.ChunkPoint, last_id, size) do
+    from(p in Engram.Notes.ChunkPoint,
+      where: p.user_id == ^user_id and not is_nil(p.display_ct),
+      where: p.point_id > ^last_id,
+      order_by: p.point_id,
       limit: ^size,
-      select: c.id
+      select: p.point_id
     )
     |> Repo.all(skip_tenant_check: true)
   end

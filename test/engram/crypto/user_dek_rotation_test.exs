@@ -470,23 +470,18 @@ defmodule Engram.Crypto.UserDekRotationTest do
           point_id = Ecto.UUID.generate()
 
           Map.merge(
-            %{
-              note_id: note.id,
-              user_id: user.id,
-              vault_id: vault.id,
-              position: pos,
-              char_start: 0,
-              char_end: 1,
-              qdrant_point_id: point_id,
-              created_at: DateTime.utc_now(:second)
-            },
-            Crypto.encrypt_chunk_text(text, "H#{pos}", old_dek, point_id)
+            %{point_id: point_id, note_id: note.id, user_id: user.id, position: pos},
+            Map.put(
+              Crypto.encrypt_chunk_text(text, "H#{pos}", old_dek, point_id),
+              :slice_sum,
+              42 + pos
+            )
           )
         end
 
       {:ok, _} =
         Repo.with_tenant(user.id, fn ->
-          Repo.insert_all(Engram.Notes.Chunk, rows, skip_tenant_check: true)
+          Repo.insert_all(Engram.Notes.ChunkPoint, rows, skip_tenant_check: true)
         end)
 
       assert :ok = UserDekRotation.rotate_user(user.id)
@@ -502,20 +497,23 @@ defmodule Engram.Crypto.UserDekRotationTest do
       {:ok, stored} =
         Repo.with_tenant(user.id, fn ->
           Repo.all(
-            from(c in Engram.Notes.Chunk, where: c.note_id == ^note.id, order_by: c.position)
+            from(c in Engram.Notes.ChunkPoint, where: c.note_id == ^note.id, order_by: c.position)
           )
         end)
 
       assert [{"first", "H0"}, {"second", "H1"}, {"third", "H2"}] =
                Enum.map(stored, fn c ->
-                 {:ok, pair} = Crypto.decrypt_chunk_text(c, new_dek, c.qdrant_point_id)
+                 {:ok, pair} = Crypto.decrypt_chunk_text(c, new_dek, c.point_id)
                  pair
                end)
 
       assert Enum.all?(
                stored,
-               &(Crypto.decrypt_chunk_text(&1, old_dek, &1.qdrant_point_id) == :error)
+               &(Crypto.decrypt_chunk_text(&1, old_dek, &1.point_id) == :error)
              )
+
+      # Only the envelope is rewrapped: the checksum holds no key.
+      assert Enum.map(stored, & &1.slice_sum) == [42, 43, 44]
     end
   end
 

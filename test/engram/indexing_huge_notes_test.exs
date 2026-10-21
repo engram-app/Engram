@@ -167,14 +167,20 @@ defmodule Engram.IndexingHugeNotesTest do
     ServiceConfig.put_override(:chunk_text_write, true)
     run_case(ctx)
 
-    [row | _] =
-      rows =
-      Repo.all(from(c in Chunk, where: c.user_id == ^ctx.user.id), skip_tenant_check: true)
+    rows = Repo.all(from(c in Chunk, where: c.user_id == ^ctx.user.id), skip_tenant_check: true)
 
     assert length(rows) > 4_369, "fixture must overflow one statement (got #{length(rows)})"
-    assert Enum.all?(rows, &is_binary(&1.text_ciphertext))
+    # Over the display threshold: every point row holds its envelope.
+    points =
+      Repo.all(from(p in Engram.Notes.ChunkPoint, where: p.user_id == ^ctx.user.id),
+        skip_tenant_check: true
+      )
+
+    assert length(points) == length(rows)
+    assert Enum.all?(points, &is_binary(&1.display_ct))
+    row = hd(points)
     {:ok, dek} = Crypto.get_dek(ctx.user)
-    assert {:ok, {_text, _heading}} = Crypto.decrypt_chunk_text(row, dek, row.qdrant_point_id)
+    assert {:ok, {_text, _heading}} = Crypto.decrypt_chunk_text(row, dek, row.point_id)
   end
 
   # Real Qdrant (the unit-tests CI job runs `:qdrant_integration`): a word in
