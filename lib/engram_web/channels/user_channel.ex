@@ -35,7 +35,10 @@ defmodule EngramWeb.UserChannel do
   # backend can be older than the plugin talking to it. Add a key when a new
   # wire shape ships; drop it with its compat shim
   # (docs/context/plugin-compat-shims.md).
-  @features %{raw_attachment_upload: true, raw_attachment_download: true}
+  # `crdt_diff_refusal`: a diff whose deps the server lacks is refused
+  # without opening a room. Read from the join reply, which comes from the
+  # task holding this socket (/health can hit another task mid-deploy).
+  @features %{raw_attachment_upload: true, raw_attachment_download: true, crdt_diff_refusal: true}
 
   @impl true
   def join("user:" <> user_id_str, _params, socket) do
