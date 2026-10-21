@@ -306,7 +306,8 @@ defmodule Engram.Search.FieldFilters do
 
   defp exact?(v), do: (is_binary(v) and v != "" and not date(v)) or is_boolean(v)
 
-  defp text?(v), do: (is_binary(v) and v != "") or is_boolean(v)
+  # A number too: the field holds `status: 2` as the text "2".
+  defp text?(v), do: (is_binary(v) and v != "") or is_boolean(v) or is_number(v)
 
   defp stable?(v), do: is_binary(v) and OkfFields.normalize_type(v) == "stable"
 

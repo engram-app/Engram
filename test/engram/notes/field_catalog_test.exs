@@ -130,6 +130,27 @@ defmodule Engram.Notes.FieldCatalogTest do
     assert length(many.values) == 50
   end
 
+  # YAML reads these as a number, a boolean and a date-shaped string; the
+  # named exact fields hold their text, and the catalog shows it.
+  test "numeric, boolean and date-shaped named values are listed as text",
+       %{user: user, vault: vault} do
+    write_indexed!(user, vault, "a.md", """
+    ---
+    status: 2
+    reviewed_by: true
+    project: 2026-01-01
+    source: [2024, 1.5]
+    ---
+    body
+    """)
+
+    assert {:ok, fields} = FieldCatalog.list(user, vault)
+    assert %{kinds: ["string"], values: [%{value: "2", count: 1}]} = field(fields, "status")
+    assert %{kinds: ["boolean"], values: [%{value: "true"}]} = field(fields, "reviewed_by")
+    assert %{values: [%{value: "2026-01-01", count: 1}]} = field(fields, "project")
+    assert Enum.sort(Enum.map(field(fields, "source").values, & &1.value)) == ["1.5", "2024"]
+  end
+
   test "the cache answers until the vault's change_seq moves", %{user: user, vault: vault} do
     note = seed!(user, vault)
     {:ok, first} = FieldCatalog.list(user, vault)

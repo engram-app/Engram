@@ -210,9 +210,12 @@ defmodule Engram.Notes.FlatFields do
 
   defp latest_verified(_), do: {nil, nil}
 
-  defp dig(v, [a, b]), do: is_map(v[a]) && v[a][b]
+  defp dig(v, [a, b]), do: if(is_map(v[a]), do: v[a][b])
 
+  # YAML reads `status: 2` as a number and `reviewed_by: true` as a boolean;
+  # a named exact field holds their text, so a filter for "2" finds them.
   defp str(s) when is_binary(s) and s != "" and byte_size(s) <= @max_string, do: s
+  defp str(scalar) when is_number(scalar) or is_boolean(scalar), do: str(to_string(scalar))
   defp str(_), do: nil
 
   defp strs(list) when is_list(list) do
@@ -222,7 +225,7 @@ defmodule Engram.Notes.FlatFields do
     end
   end
 
-  defp strs(s), do: if(str(s), do: [s])
+  defp strs(s), do: if(text = str(s), do: [text])
 
   defp hmac(_fk, nil), do: nil
   defp hmac(fk, s), do: FilterId.value_hmac(fk, s)
