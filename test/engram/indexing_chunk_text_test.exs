@@ -1,8 +1,9 @@
 defmodule Engram.IndexingChunkTextTest do
   @moduledoc """
-  Task 11.2, hybrid: the indexing pass writes each chunk row's display-text
-  checksum (`text_sum`), and for a note over the display threshold its text
-  and heading as ONE envelope (`display_ct`), in the same INSERT as the row.
+  Task 11.2, hybrid: the indexing pass writes a `chunk_points` row per point,
+  in the same transaction as its `chunks` row, with the display-text
+  checksum (`slice_sum`), and for a note over the display threshold its text
+  and heading as ONE envelope (`display_ct`).
   Search shows a small note's chunk re-derived from the note content. Behind
   `:chunk_text_write` (off), and always on for the v5 layout, whose payload
   carries no text.
@@ -12,8 +13,8 @@ defmodule Engram.IndexingChunkTextTest do
   import Ecto.Query
   import Mox
 
-  alias Engram.{Crypto, Indexing, Notes, ServiceConfig}
-  alias Engram.Notes.Chunk
+  alias Engram.{Indexing, Notes, ServiceConfig}
+  alias Engram.Notes.{Chunk, ChunkPoint}
 
   setup :verify_on_exit!
 
@@ -66,6 +67,12 @@ defmodule Engram.IndexingChunkTextTest do
     note
   end
 
+  defp points(note) do
+    Repo.all(from(p in ChunkPoint, where: p.note_id == ^note.id, order_by: p.position),
+      skip_tenant_check: true
+    )
+  end
+
   defp rows(note) do
     Repo.all(from(c in Chunk, where: c.note_id == ^note.id, order_by: c.position),
       skip_tenant_check: true
@@ -85,7 +92,7 @@ defmodule Engram.IndexingChunkTextTest do
     note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
     assert {:ok, count} = Indexing.index_note(note, ctx.vault)
     assert count > 2
-    assert Enum.all?(rows(note), &(is_nil(&1.text_sum) and is_nil(&1.display_ct)))
+    assert points(note) == []
   end
 
   describe "flag on" do
@@ -98,7 +105,16 @@ defmodule Engram.IndexingChunkTextTest do
       note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
       assert {:ok, count} = Indexing.index_note(note, ctx.vault)
 
-      assert Enum.all?(rows(note), &(is_integer(&1.text_sum) and is_nil(&1.display_ct)))
+      points = points(note)
+      assert length(points) == count
+      assert Enum.all?(points, &(is_integer(&1.slice_sum) and is_nil(&1.display_ct)))
+
+      # One point row per chunk row, same point ids and offsets.
+      assert Enum.map(points, &{&1.point_id, &1.position, &1.char_start, &1.char_end}) ==
+               Enum.map(
+                 rows(note),
+                 &{&1.qdrant_point_id, &1.position, &1.char_start, &1.char_end}
+               )
 
       pairs = texts(note, ctx.user)
       assert length(pairs) == count
@@ -114,8 +130,7 @@ defmodule Engram.IndexingChunkTextTest do
       note = put_note(ctx.user, ctx.vault, nil, big)
       assert {:ok, _count} = Indexing.index_note(note, ctx.vault)
 
-      rows = rows(note)
-      assert Enum.all?(rows, &(is_binary(&1.display_ct) and is_integer(&1.text_sum)))
+      assert Enum.all?(points(note), &(is_binary(&1.display_ct) and is_integer(&1.slice_sum)))
 
       # Search reads the envelope, not the content: corrupting the content
       # ciphertext leaves every hit's text intact.

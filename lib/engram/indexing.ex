@@ -15,6 +15,7 @@ defmodule Engram.Indexing do
   alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
   alias Engram.Notes.Chunk
+  alias Engram.Notes.ChunkPoint
   alias Engram.Notes.FlatFields
   alias Engram.Notes.Frontmatter
   alias Engram.Notes.FrontmatterKeys
@@ -1038,6 +1039,8 @@ defmodule Engram.Indexing do
           |> Enum.chunk_every(@insert_batch)
           |> Enum.each(&Repo.insert_all(Chunk, &1, skip_tenant_check: true))
 
+          write_point_rows(note, Map.get(prepared, :point_rows))
+
           stamp_payload_hash(note, payload_hash)
           stamp_okf_timestamp(prepared)
           stamp_flat_fields(prepared)
@@ -1056,6 +1059,18 @@ defmodule Engram.Indexing do
         {:ok, length(chunk_rows)}
       end
     end
+  end
+
+  # Delete-then-insert per note, like `chunks`; nil (text off) leaves the
+  # note's `chunk_points` as they are.
+  defp write_point_rows(_note, nil), do: :ok
+
+  defp write_point_rows(note, rows) do
+    Repo.delete_all(from(p in ChunkPoint, where: p.note_id == ^note.id), skip_tenant_check: true)
+
+    rows
+    |> Enum.chunk_every(@insert_batch)
+    |> Enum.each(&Repo.insert_all(ChunkPoint, &1, skip_tenant_check: true))
   end
 
   # Every point of the note now carries `note_payload`: upserted ones were
@@ -1531,6 +1546,7 @@ defmodule Engram.Indexing do
       {:ok, _} =
         Repo.with_tenant(note.user_id, fn ->
           Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id))
+          Repo.delete_all(from(p in ChunkPoint, where: p.note_id == ^note.id))
         end)
 
       :ok
@@ -2568,7 +2584,8 @@ defmodule Engram.Indexing do
       {:ok,
        %{
          note: note,
-         chunk_rows: chunk_rows(plan.entries, built, dek, mode),
+         chunk_rows: Enum.map(built, & &1.row),
+         point_rows: point_rows(plan.entries, built, dek, mode),
          qdrant_points: qdrant_points,
          point_kinds: for(%{kind: k, dense?: d} <- built, do: {k, d}),
          # Straight from the plan, not re-derived from `built`. Two independent
@@ -2602,30 +2619,41 @@ defmodule Engram.Indexing do
     end
   end
 
-  # Task 11.2, hybrid (notes-chunks-hyperopt 2.4b): every row carries
-  # `text_sum`, the checksum of its chunk's display text, and search derives
-  # the text from the note content (`display_chunks/3`). Only a note over
-  # `display_ct_threshold/0` also stores the text and heading, sealed as ONE
-  # envelope bound to the point id, so a hit there never decrypts and
-  # re-chunks the whole note. Both land in the same INSERT as the row, so a
-  # row never exists without them and they never outlive it. A reused row is
-  # sealed afresh from the chunk in hand: rows are rewritten wholesale anyway.
-  defp chunk_rows(entries, built, dek, mode) do
+  # Task 11.2, hybrid (notes-chunks-hyperopt 2.4/2.4b): with text on, every
+  # point also gets a `chunk_points` row (written in the same transaction as
+  # its `chunks` row, `commit_index/2`) carrying `slice_sum`, the checksum of
+  # its chunk's display text; search derives the text from the note content
+  # (`display_chunks/3`). Only a note over `display_ct_threshold/0` also
+  # stores the text and heading, sealed as ONE envelope bound to the point
+  # id, so a hit there never decrypts and re-chunks the whole note. A reused
+  # point is sealed afresh from the chunk in hand: rows are rewritten
+  # wholesale anyway. nil: text off, `chunk_points` untouched.
+  defp point_rows(_entries, _built, _dek, :none), do: nil
+
+  defp point_rows(entries, built, dek, mode) do
     Enum.zip_with(entries, built, fn entry, %{row: row} ->
       chunk = entry_chunk(entry)
 
-      case mode do
-        :none ->
-          row
+      point = %{
+        point_id: row.qdrant_point_id,
+        note_id: row.note_id,
+        user_id: row.user_id,
+        char_start: row.char_start,
+        char_end: row.char_end,
+        token_count: row.token_count,
+        slice_sum: text_sum(chunk.text),
+        position: row.position,
+        member_fps: member_fps(row.member_hmacs),
+        display_ct: nil
+      }
 
-        :sum ->
-          Map.put(row, :text_sum, text_sum(chunk.text))
-
-        :sealed ->
-          row |> Map.put(:text_sum, text_sum(chunk.text)) |> Map.merge(seal(chunk, dek, row))
-      end
+      if mode == :sealed, do: Map.merge(point, seal(chunk, dek, row)), else: point
     end)
   end
+
+  # The 16-hex member fingerprint prefixes as 8 raw bytes each, concatenated.
+  defp member_fps(nil), do: nil
+  defp member_fps(hexes), do: Enum.map_join(hexes, &Base.decode16!(&1, case: :mixed))
 
   defp seal(chunk, dek, row),
     do: Crypto.encrypt_chunk_text(chunk.text, chunk.heading_path, dek, row.qdrant_point_id)

@@ -17,6 +17,7 @@ defmodule Engram.Notes do
   alias Engram.Notes.{
     BulkRename,
     Chunk,
+    ChunkPoint,
     ContentCommit,
     CrdtBridge,
     CrdtDeliver,
@@ -207,20 +208,23 @@ defmodule Engram.Notes do
 
   @doc """
   Task 11.3: everything a search hit shows, from Postgres, keyed by the hits'
-  point ids: the chunk row's vault, its display text and heading, and the
-  note's display fields. ONE chunks query for the hits, plus ONE notes query
-  for the content of the hit notes that slice their text (below).
+  point ids: the hit's vault (from its note), its display text and heading,
+  and the note's display fields. ONE query for the hits (`chunks`, joined to
+  the note and to the point's `chunk_points` row), plus ONE notes query for
+  the content of the hit notes that slice their text (below). `chunks` stays
+  the existence check, so a point written before `chunk_points` keeps its
+  hit and falls back to the payload; PR-18 moves the base to `chunk_points`.
 
-  Display text (hybrid, notes-chunks-hyperopt 2.4b):
+  Display text (hybrid, notes-chunks-hyperopt 2.4b), from `chunk_points`:
     * a row with `display_ct` (a note over the display threshold) opens it;
-    * a row with only `text_sum` re-derives its chunk from the note content,
+    * a row with only `slice_sum` re-derives its chunk from the note content,
       decrypted once per note, chunked once per note
       (`Engram.Indexing.display_chunks/3`), at the row's position. The
       heading comes from the same re-derivation (rows store none). A chunk
       whose checksum differs (the note was edited since its index) still
       shows the current chunk at that position, counted
       `[:engram, :search, :text_stale]`;
-    * a row with neither was written with the write flag off: `text` and
+    * no `chunk_points` row (written with the write flag off): `text` and
       `heading_path` are nil and the caller falls back to the payload.
 
   `{:ok, map}`: a point id with no chunk row is absent (a stale point the
@@ -244,10 +248,17 @@ defmodule Engram.Notes do
           from(c in Chunk,
             join: n in ^notes_only(),
             on: n.id == c.note_id,
+            left_join: p in ChunkPoint,
+            on: p.point_id == c.qdrant_point_id,
             where: c.qdrant_point_id in ^uuids,
             select:
-              {map(c, [:qdrant_point_id, :vault_id, :note_id, :position, :text_sum, :display_ct]),
-               struct(n, @note_meta_fields)}
+              {%{
+                 qdrant_point_id: c.qdrant_point_id,
+                 note_id: c.note_id,
+                 position: p.position,
+                 slice_sum: p.slice_sum,
+                 display_ct: p.display_ct
+               }, struct(n, @note_meta_fields)}
           )
         )
       end)
@@ -282,13 +293,13 @@ defmodule Engram.Notes do
 
   # Rows that slice their text: a checksum, no envelope, not a floor point
   # (its display text is "" by construction, see `Indexing.floor_plan/2`).
-  defp slices?(%{display_ct: nil, text_sum: sum}),
+  defp slices?(%{display_ct: nil, slice_sum: sum}),
     do: is_integer(sum) and sum != Engram.Indexing.text_sum("")
 
   defp slices?(_chunk), do: false
 
   # note_id => %{position => chunk} | :error, for the hit notes whose rows
-  # slice. One query: each note's content and its chunk-row count (the merge
+  # slice. One query: each note's content and its point-row count (the merge
   # the rows were built with, as `Indexing.resparse_note/2` reads it).
   defp derived_chunks(user, pairs) do
     paths =
@@ -315,7 +326,7 @@ defmodule Engram.Notes do
                    :dek_version,
                    :content_ciphertext,
                    :content_nonce
-                 ]), fragment("(SELECT count(*) FROM chunks c WHERE c.note_id = ?)", n.id)}
+                 ]), fragment("(SELECT count(*) FROM chunk_points p WHERE p.note_id = ?)", n.id)}
             )
           )
         end)
@@ -342,7 +353,7 @@ defmodule Engram.Notes do
 
   defp search_hit({:ok, note}, chunk, {dek, derived}) do
     hit = %{
-      vault_id: to_string(chunk.vault_id),
+      vault_id: to_string(note.vault_id),
       source_path: note.path,
       title: note.title,
       tags: note.tags || [],
@@ -368,7 +379,7 @@ defmodule Engram.Notes do
   defp display_text(%{display_ct: ct} = chunk, dek, _derived) when is_binary(ct),
     do: Crypto.decrypt_chunk_text(chunk, dek, to_string(chunk.qdrant_point_id))
 
-  defp display_text(%{text_sum: nil}, _dek, _derived), do: :none
+  defp display_text(%{slice_sum: nil}, _dek, _derived), do: :none
 
   defp display_text(chunk, _dek, derived) do
     if slices?(chunk) do
@@ -379,7 +390,7 @@ defmodule Engram.Notes do
         by_position ->
           case Map.get(by_position, chunk.position) do
             %{text: text, heading_path: heading} ->
-              tag = if Engram.Indexing.text_sum(text) == chunk.text_sum, do: :ok, else: :stale
+              tag = if Engram.Indexing.text_sum(text) == chunk.slice_sum, do: :ok, else: :stale
               {tag, {text, heading}}
 
             # The note lost this position since its index: nothing to show

@@ -22,14 +22,6 @@ defmodule Engram.Notes.Chunk do
     # Merged rows only: each member chunk's fingerprint, leading 16 hex
     # chars. See `Engram.Indexing.cap_chunks/4`.
     field :member_hmacs, {:array, :string}
-    # Display text (Task 11.1, hybrid). `text_sum`: CRC32 of the chunk's
-    # display text, signed int4, on every row written with the write flag on;
-    # search re-derives the text from the note content and checks it.
-    # `display_ct`: the text and heading in ONE envelope
-    # (`Crypto.encrypt_chunk_text/4`), only for notes over
-    # `Engram.Indexing.display_ct_threshold/0`. Both nil while the flag is off.
-    field :text_sum, :integer
-    field :display_ct, :binary, redact: true
 
     belongs_to :note, Engram.Notes.Note
     belongs_to :user, Engram.Accounts.User

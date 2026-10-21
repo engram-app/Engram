@@ -13,7 +13,7 @@ defmodule Engram.SearchChunkTextSourceTest do
   import Mox
 
   alias Engram.{Crypto, Notes, Search, ServiceConfig}
-  alias Engram.Notes.Chunk
+  alias Engram.Notes.{Chunk, ChunkPoint}
 
   setup :verify_on_exit!
 
@@ -59,9 +59,18 @@ defmodule Engram.SearchChunkTextSourceTest do
           char_end: 1,
           qdrant_point_id: point_id
         })
-        |> Ecto.Changeset.change(enc)
         |> Repo.insert!()
+
+        # The point's `chunk_points` row holds the envelope; none = written
+        # with the write flag off.
+        if enc != %{}, do: insert_point!(ctx, point_id, pos, enc)
       end)
+  end
+
+  defp insert_point!(ctx, point_id, pos, fields) do
+    %ChunkPoint{point_id: point_id, note_id: ctx.note.id, user_id: ctx.user.id, position: pos}
+    |> struct(fields)
+    |> Repo.insert!()
   end
 
   # A small note's row: a checksum, no envelope (Task 11.2 hybrid). Search
@@ -79,8 +88,9 @@ defmodule Engram.SearchChunkTextSourceTest do
           char_end: byte_size(text),
           qdrant_point_id: point_id
         })
-        |> Ecto.Changeset.change(text_sum: Engram.Indexing.text_sum(text))
         |> Repo.insert!()
+
+        insert_point!(ctx, point_id, pos, slice_sum: Engram.Indexing.text_sum(text))
       end)
   end
 
@@ -312,7 +322,7 @@ defmodule Engram.SearchChunkTextSourceTest do
 
     {:ok, _} =
       Repo.with_tenant(ctx.user.id, fn ->
-        Repo.update_all(from(c in Chunk, where: c.qdrant_point_id == ^bad),
+        Repo.update_all(from(c in ChunkPoint, where: c.point_id == ^bad),
           set: [display_ct: <<12, :crypto.strong_rand_bytes(40)::binary>>]
         )
       end)
@@ -361,7 +371,7 @@ defmodule Engram.SearchChunkTextSourceTest do
   defp corrupt_text!(ctx, point_id) do
     {:ok, _} =
       Repo.with_tenant(ctx.user.id, fn ->
-        Repo.update_all(from(c in Chunk, where: c.qdrant_point_id == ^point_id),
+        Repo.update_all(from(c in ChunkPoint, where: c.point_id == ^point_id),
           set: [display_ct: <<12, :crypto.strong_rand_bytes(40)::binary>>]
         )
       end)

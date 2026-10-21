@@ -15,7 +15,7 @@ defmodule Engram.SearchFetchShapeTest do
   import Mox
 
   alias Engram.{Crypto, Notes, Search, ServiceConfig}
-  alias Engram.Notes.Chunk
+  alias Engram.Notes.{Chunk, ChunkPoint}
 
   setup :verify_on_exit!
 
@@ -77,8 +77,13 @@ defmodule Engram.SearchFetchShapeTest do
               char_end: 1,
               qdrant_point_id: id
             })
-            |> Ecto.Changeset.change(enc)
             |> Repo.insert!()
+
+            if enc != %{} do
+              %ChunkPoint{point_id: id, note_id: note.id, user_id: user.id, position: rem(i, 2)}
+              |> struct(enc)
+              |> Repo.insert!()
+            end
           end)
 
         {:ok, p} =
