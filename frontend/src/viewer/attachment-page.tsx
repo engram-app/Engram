@@ -1,5 +1,5 @@
 import { Download } from "lucide-react";
-import { lazy, type ReactNode, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
@@ -38,6 +38,13 @@ export default function AttachmentPage() {
 	const mime = att?.mime_type ?? "";
 	const kind = att ? previewKind(path, mime, att.size_bytes) : null;
 	const rawPath = `/attachments/${encodePathSegments(path)}?raw=1`;
+	// The bytes are keyed by WHAT the file is, not where it lives: a rename or
+	// move changes the path but not the content, so it must not refetch them.
+	const contentKey = att ? `${att.id}:${att.size_bytes}:${att.mtime}` : "";
+	// Read in the fetch effect so a path change alone does not re-run it.
+	const rawPathRef = useRef(rawPath);
+	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. The fetch must use the CURRENT path but re-run only when the content changes.
+	rawPathRef.current = rawPath;
 
 	// Which name is in rename mode: the pinned header, or the title on the page.
 	const [renamingAt, setRenamingAt] = useState<"header" | "title" | null>(null);
@@ -46,24 +53,24 @@ export default function AttachmentPage() {
 	// 'missing' = real 404; 'failed' = transient (5xx/network) — don't conflate.
 	const [error, setError] = useState<"missing" | "failed" | null>(null);
 
-	// A new `path` is a new resource: drop the previous blob url and error
+	// New content is a new resource: drop the previous blob url and error
 	// during render rather than one paint later from inside the effect.
-	const [seededPath, setSeededPath] = useState(path);
-	if (seededPath !== path) {
-		setSeededPath(path);
+	const [seededKey, setSeededKey] = useState(contentKey);
+	if (seededKey !== contentKey) {
+		setSeededKey(contentKey);
 		setBlob(null);
 		setUrl(null);
 		setError(null);
 	}
 
 	useEffect(() => {
-		if (!path || kind === null) {
+		if (!contentKey || kind === null) {
 			return;
 		}
 		let revoke: string | null = null;
 		let cancelled = false;
 		api
-			.getBlob(rawPath)
+			.getBlob(rawPathRef.current)
 			.then((fetched) => {
 				if (cancelled) {
 					return;
@@ -91,7 +98,7 @@ export default function AttachmentPage() {
 				URL.revokeObjectURL(revoke);
 			}
 		};
-	}, [path, kind, rawPath]);
+	}, [contentKey, kind]);
 
 	// Same right-rail Backlinks panel a note gets.
 	const backlinksNode = useMemo(() => (id ? <BacklinksPanel attachmentId={id} /> : null), [id]);

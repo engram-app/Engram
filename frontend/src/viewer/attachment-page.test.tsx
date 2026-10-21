@@ -207,6 +207,47 @@ it("downloads from the loaded bytes without fetching again", async () => {
 	expect(getBlob).toHaveBeenCalledTimes(1);
 });
 
+it("keeps the loaded bytes when the file is renamed", async () => {
+	mockAttachments = [att({ id: "i-1", path: "a.png", mime_type: "image/png" })];
+	const getBlob = vi
+		.spyOn(api, "getBlob")
+		.mockResolvedValueOnce(new Blob(["x"], { type: "image/png" }));
+	const { rerender } = renderAt("i-1");
+	await screen.findByRole("img");
+	mockAttachments = [att({ id: "i-1", path: "b.png", mime_type: "image/png" })];
+	rerender(
+		<RightToolsProvider>
+			<MemoryRouter initialEntries={["/v/work/i-1"]}>
+				<Routes>
+					<Route path="/v/:slug/:itemId" element={<AttachmentPage />} />
+				</Routes>
+			</MemoryRouter>
+		</RightToolsProvider>,
+	);
+	expect(await screen.findByRole("img", { name: "b.png" })).toBeInTheDocument();
+	expect(getBlob).toHaveBeenCalledTimes(1);
+});
+
+it("refetches when the file's content changes", async () => {
+	mockAttachments = [att({ id: "i-1", path: "a.png", mime_type: "image/png", mtime: 1 })];
+	const getBlob = vi
+		.spyOn(api, "getBlob")
+		.mockResolvedValue(new Blob(["x"], { type: "image/png" }));
+	const { rerender } = renderAt("i-1");
+	await screen.findByRole("img");
+	mockAttachments = [att({ id: "i-1", path: "a.png", mime_type: "image/png", mtime: 2 })];
+	rerender(
+		<RightToolsProvider>
+			<MemoryRouter initialEntries={["/v/work/i-1"]}>
+				<Routes>
+					<Route path="/v/:slug/:itemId" element={<AttachmentPage />} />
+				</Routes>
+			</MemoryRouter>
+		</RightToolsProvider>,
+	);
+	await waitFor(() => expect(getBlob).toHaveBeenCalledTimes(2));
+});
+
 it("skips the preview past the size cap", () => {
 	mockAttachments = [
 		att({ id: "v-1", path: "big.mp4", mime_type: "video/mp4", size_bytes: 200 * 1024 * 1024 }),
