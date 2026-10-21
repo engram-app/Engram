@@ -209,6 +209,11 @@ defmodule Engram.Notes.Note do
     |> unique_constraint([:user_id, :vault_id, :folder_hmac],
       name: :notes_user_vault_folder_marker
     )
+    # Wave 3's twins of the two above. Postgres reports whichever unique index
+    # it checks first (index OID order, which a dump/restore can change), so
+    # both names map to the same error.
+    |> unique_constraint([:user_id, :vault_id, :path_hmac], name: :notes_path_live)
+    |> unique_constraint([:user_id, :vault_id, :folder_hmac], name: :notes_folder_marker)
   end
 
   defp validate_required_for_kind(changeset) do

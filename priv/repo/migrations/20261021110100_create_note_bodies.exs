@@ -28,6 +28,9 @@ defmodule Engram.Repo.Migrations.CreateNoteBodies do
   """
 
   def up do
+    # The FK takes SHARE ROW EXCLUSIVE on notes: fail fast, retry on boot.
+    execute "SET lock_timeout = '5s'"
+
     # key_version is a DEK version (bounded), so int2 cannot overflow.
     execute """
     CREATE TABLE note_bodies (
@@ -58,6 +61,7 @@ defmodule Engram.Repo.Migrations.CreateNoteBodies do
     """
 
     execute "GRANT SELECT, INSERT, UPDATE, DELETE ON note_bodies TO engram_app"
+    execute "RESET lock_timeout"
   end
 
   def down do

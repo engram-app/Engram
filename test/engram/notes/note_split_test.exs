@@ -4,8 +4,10 @@ defmodule Engram.Notes.NoteSplitTest do
   # and the NoteSplit data migration fills rows written before them.
   use Engram.DataCase, async: true
 
+  alias Engram.DataMigrations
   alias Engram.DataMigrations.NoteSplit
   alias Engram.Notes
+  alias Engram.Notes.Keys
   alias Engram.Repo
 
   setup do
@@ -148,6 +150,23 @@ defmodule Engram.Notes.NoteSplitTest do
       else: assert(r["link_keys_v"] == nil)
   end
 
+  test "a merged column (NULL nonce) is followed by its bytes", %{user: u, vault: v} do
+    note = write!(u, v, "merged.md", "x")
+    id = Ecto.UUID.dump!(note.id)
+    merged = <<1>> <> :crypto.strong_rand_bytes(40)
+
+    Repo.query!(
+      "UPDATE notes SET content_ciphertext = $2, content_nonce = NULL WHERE id = $1",
+      [id, merged]
+    )
+
+    assert row(note.id)["b_content"] == merged
+
+    merged2 = <<1>> <> :crypto.strong_rand_bytes(40)
+    Repo.query!("UPDATE notes SET content_ciphertext = $2 WHERE id = $1", [id, merged2])
+    assert row(note.id)["b_content"] == merged2
+  end
+
   describe "NoteSplit" do
     test "fills rows written before the triggers, then reports done", %{user: u, vault: v} do
       a = write!(u, v, "a.md", "a")
@@ -171,6 +190,24 @@ defmodule Engram.Notes.NoteSplitTest do
       assert Enum.map([a, b], &row(&1.id)["seq"]) == seqs
 
       assert :done = NoteSplit.run_pass()
+    end
+  end
+
+  describe "Keys.ids?" do
+    test "follows the ledger both ways, within its cache" do
+      on_exit(fn -> Engram.Cache.clear_local(:note_split) end)
+      Engram.Cache.clear_local(:note_split)
+      refute Keys.ids?()
+
+      :ok = DataMigrations.mark_done("note_split", 1)
+      Engram.Cache.clear_local(:note_split)
+      assert Keys.ids?()
+
+      # A re-verify that finds rows without ids reopens it: the ids go off
+      # once the cache turns over, on every node, not at the next restart.
+      :ok = DataMigrations.reopen("note_split", 1)
+      Engram.Cache.clear_local(:note_split)
+      refute Keys.ids?()
     end
   end
 end
