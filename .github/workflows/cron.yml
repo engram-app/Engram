@@ -1,32 +1,24 @@
 name: cron
 
-# Consolidated scheduled jobs + manual diagnostics. Replaces six
-# standalone workflow files (clerk-orphans, runner-cleanup, obsidian-update,
-# plan-triage, frontend-major-updates, runner-diagnostics).
+# Consolidated scheduled jobs + manual diagnostics, as ONE daily run.
 #
-# Each schedule firing still appears as its OWN run in the Actions UI —
-# this is file-count cleanup (6 files → 1), not UI-count cleanup. The win
-# is having all cron job bodies under one path so cross-cutting changes
-# (runner labels, common deps, the isolated-runner concurrency idiom)
-# touch one file.
+# One schedule (03:15 UTC) fires one run; every daily task is a job in it and
+# the weekly ones gate on `needs.when.outputs.dow`. Was nine schedules (one
+# hourly) = ~30 runs a day in the Actions list, and GitHub dropped most of the
+# hourly firings anyway (23 of ~96 ran 10-17..10-20). 03:15 keeps clear of the
+# 06:00 nightly e2e run (verify.yml).
 #
-# Each job's `if:` matches either its schedule (`github.event.schedule`)
-# OR the dispatch input (`inputs.task`). Scheduled firings only run the
-# matching job; the rest `if:`-out. Manual dispatch via:
+# Runner disk hygiene is NOT here: it is the runner-disk-guard systemd timer
+# on every runner VM (homelab ansible role runner_vm), which every new runner
+# gets at provisioning and which GitHub cannot drop.
+#
+# Manual dispatch via:
 #   gh workflow run cron.yml -f task=<name>            (most tasks)
 #   gh workflow run cron.yml -f task=obsidian-update -f force=true
 
 on:
   schedule:
-    - cron: '30 * * * *'    # e2e-orphans (clerk + qdrant)  (hourly, :30)
-    - cron: '15 3 * * *'    # runner-cleanup           (daily 03:15 UTC)
-    - cron: '0 4 * * 1'     # obsidian-update          (Mon 04:00 UTC)
-    - cron: '17 13 * * 1'   # frontend-major-updates   (Mon 13:17 UTC)
-    - cron: '0 14 * * 1'    # plan-triage              (Mon 14:00 UTC)
-    - cron: '0 3 * * 6'     # dependency-submission    (Sat 03:00 UTC)
-    - cron: '40 5 * * *'    # mcp-conformance          (daily 05:40 UTC)
-    - cron: '40 7 * * *'    # vendor-conformance       (daily 07:40 UTC)
-    - cron: '20 8 * * *'    # native-deep              (daily 08:20 UTC)
+    - cron: '15 3 * * *'    # every task; weekly ones gate on day of week
   workflow_dispatch:
     inputs:
       task:
@@ -35,7 +27,6 @@ on:
         required: true
         options:
           - e2e-orphans
-          - runner-cleanup
           - obsidian-update
           - plan-triage
           - frontend-major-updates
@@ -57,22 +48,29 @@ on:
 permissions: {}
 
 jobs:
+  # Day of week for the weekly tasks (1 = Monday). Expressions have no clock.
+  when:
+    runs-on: [self-hosted, linux, x64, isolated, light]
+    outputs:
+      dow: ${{ steps.d.outputs.dow }}
+    steps:
+      - id: d
+        run: echo "dow=$(date -u +%u)" >> "$GITHUB_OUTPUT"
+
   # ── Out-of-band cleanup for orphaned e2e resources left behind by crashed CI
   # runs: stale e2e-* Clerk users AND leaked CI Qdrant collections. Both leak
   # the same way — a run cancelled / OOM-killed before its teardown fired never
-  # cleans up. Bundled into ONE hourly job (was two would-be schedules).
-  # Hourly (:30): the Clerk dev instance caps at 100 users, and a heavy-CI
-  # burst (release day, an e2e-rerun storm) can mint 100+ e2e-* users within
-  # a few hours — faster than a once-daily sweep clears them, exhausting the
-  # quota and 403'ing every Clerk-auth e2e run (2026-06-13). Hourly bounds the
-  # standing orphan count to ~1-2h of churn; the 1h age filter still protects
-  # in-flight runs. (Was once-daily 2026-06-02..06-13 — too sparse for bursts.)
-  # The Qdrant reap rides this same job but self-gates to once a day (see its
-  # step) — no separate schedule — and is protected against live runs by an
-  # active-run guard instead of a time filter.
+  # cleans up.
+  # Daily is a BACKSTOP for Clerk, not the main sweep. The dev instance caps at
+  # 100 users and a CI burst can mint 100+ in a few hours, which is why this
+  # used to be hourly; but every e2e-clerk job ends with the same instance-wide
+  # `cleanup_clerk_users.py --older-than 1h` (verify.yml), dozens of times a
+  # day, and since engram#2099 that step also runs on cancelled runs. The
+  # once-daily quota exhaustion (2026-06-13, every Clerk e2e 403'd) predates
+  # that per-job reaper (added 2026-08-27, #1487).
   e2e-orphans:
     if: |
-      github.event.schedule == '30 * * * *'
+      github.event_name == 'schedule'
       || github.event.inputs.task == 'e2e-orphans'
     runs-on: [self-hosted, linux, x64, isolated]
     permissions:
@@ -120,136 +118,14 @@ jobs:
       # reachable" outage. Reaps every ci_* collection whose run is no longer
       # active; real vaults never match the ci_ prefix.
       #
-      # Unlike the Clerk sweep (hourly — 100-user cap), Qdrant collections
-      # accumulate slowly (crash threshold ~300, dozens/day), so this reaps ONCE
-      # A DAY. It rides the hourly job but self-gates to the 03:xx firing rather
-      # than adding a second schedule. Manual dispatch always runs it.
+      # Qdrant collections accumulate slowly (crash threshold ~300, dozens/day),
+      # so once a day is enough.
       - name: Reap orphaned CI Qdrant collections (daily)
         env:
           QDRANT_URL: http://10.0.20.201:6333
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          if [ "${{ github.event_name }}" != "workflow_dispatch" ] && [ "$(date -u +%H)" != "03" ]; then
-            echo "Skipping Qdrant reap — runs daily ~03:30 UTC (current hour: $(date -u +%H) UTC)."
-            exit 0
-          fi
           python3 e2e/scripts/cleanup_qdrant_collections.py
-
-  # ── Daily disk reap on EVERY runner host. Keeps disk bounded so long-running
-  # runner VMs don't fill up. One leg per host for the same reason as
-  # obsidian-update below: an unpinned job only ever cleaned whichever host it
-  # landed on. On 2026-10-13 the SlowRaid VM hit 96% and killed a release gate
-  # mid-run (no space left on device): a buildx builder leaked by a dead job
-  # (11 GB), 8 cached CodeQL versions (13 GB), a dead job's e2e containers and
-  # 1.4 GB of e2e files in the desktop Trash were none of them reaped.
-  runner-cleanup:
-    if: |
-      github.event.schedule == '15 3 * * *'
-      || github.event.inputs.task == 'runner-cleanup'
-    strategy:
-      fail-fast: false  # one host being wedged must not skip the other
-      matrix:
-        host: [fastraid, slowraid]
-    runs-on: [self-hosted, linux, x64, isolated, "${{ matrix.host }}"]
-    permissions:
-      contents: read
-    steps:
-      - name: Docker cleanup
-        run: |
-          echo "=== Before ==="
-          df -h / /tmp
-          docker system df
-
-          # 0. Reap what a job that died mid-run never tore down. A live job is
-          # far younger than these limits, so only leftovers match.
-          #    - buildx builders (setup-buildx-action removes its builder in a
-          #      post step that never runs when the job dies), with their
-          #      multi-GB `_state` cache volume
-          #    - per-run e2e stacks (engram-e2e-*, engram-unit-test-*)
-          reap() {  # $1 = name regex, $2 = max age in hours
-            now=$(date +%s)
-            docker ps -a --filter "name=$1" --format '{{.Names}}' | while read -r c; do
-              created=$(date -d "$(docker inspect -f '{{.Created}}' "$c")" +%s)
-              if [ $(( (now - created) / 3600 )) -ge "$2" ]; then
-                echo "reaping $c"
-                docker rm -f -v "$c" >/dev/null 2>&1 || true
-                docker volume rm "${c}_state" >/dev/null 2>&1 || true
-              fi
-            done
-          }
-          reap '^buildx_buildkit_' 24
-          reap '^engram-(e2e|unit-test)' 6
-
-          # 1. Remove stopped containers + their volumes
-          docker container prune -f 2>/dev/null || true
-
-          # 2. Remove dangling volumes (anonymous volumes from dead containers)
-          docker volume prune -f 2>/dev/null || true
-
-          # 3. Remove dangling images (untagged layers)
-          docker image prune -f 2>/dev/null || true
-
-          # 4. Keep only latest 3 GHCR engram release tags
-          docker images --format '{{.Repository}}:{{.Tag}}' \
-            --filter "reference=ghcr.io/engram-app/engram:*" \
-            | grep -v ':latest$' \
-            | tail -n +3 \
-            | xargs -r docker rmi 2>/dev/null || true
-
-          # 5. Keep only latest CI cache image
-          docker images --format '{{.Repository}}:{{.Tag}}' \
-            --filter "reference=engram-ci:*" \
-            | tail -n +2 \
-            | xargs -r docker rmi 2>/dev/null || true
-
-          # 5b. Same for the registry-qualified pulls (`:5001/engram-ci:<hash>`,
-          #     which the bare `engram-ci:*` filter never matched) and the
-          #     prebuilt deps base (`:5001/engram-deps:<hash>`, ~2.4GB, see the
-          #     Dockerfile's DEPS_IMAGE). `docker images` lists newest first.
-          for repo in engram-ci engram-deps; do
-            docker images --format '{{.Repository}}:{{.Tag}}' \
-              --filter "reference=*/${repo}:*" \
-              | tail -n +2 \
-              | xargs -r docker rmi 2>/dev/null || true
-          done
-
-          # 6. Remove stale per-run images that slipped through teardown (cancelled jobs)
-          docker images --format '{{.Repository}}:{{.Tag}}' \
-            --filter "reference=engram-ci-*-engram:latest" \
-            | xargs -r docker rmi 2>/dev/null || true
-
-          # 7. Prune build cache — keep max 2GB, nuke the rest
-          # --mount=type=cache entries stay "active" indefinitely, so age-based
-          # filters don't work. Use --all to reclaim everything, then rebuild
-          # cache naturally on next CI run.
-          docker builder prune --all --keep-storage=2gb -f 2>/dev/null || true
-
-          # 8. Clean Bun .node cache files (8.8MB each, ~400/week, never auto-cleaned)
-          find /tmp -maxdepth 1 -name '.ff*.node' -delete 2>/dev/null || true
-
-          # 9. Clean other stale /tmp files (tmpfs has user quota, fills up fast)
-          find /tmp -maxdepth 1 -user "$(whoami)" -mtime +1 \
-            ! -name 'claude-*' \
-            ! -name 'bunx-*' \
-            -exec rm -rf {} + 2>/dev/null || true
-          # 10. setup-codeql caches every CodeQL release it ever used
-          #     (~1.5 GB each); keep only the newest.
-          if [ -d /opt/hostedtoolcache/CodeQL ]; then
-            ls -1 /opt/hostedtoolcache/CodeQL | grep -v '\.complete$' | sort -V | head -n -1 \
-              | while read -r v; do
-                  echo "removing CodeQL $v"
-                  rm -rf "/opt/hostedtoolcache/CodeQL/$v" "/opt/hostedtoolcache/CodeQL/$v.complete"
-                done
-          fi
-
-          # 11. Obsidian e2e trashes notes to the desktop Trash, never emptied.
-          find "$HOME/.local/share/Trash" -mindepth 2 -delete 2>/dev/null || true
-
-          echo "=== After ==="
-          df -h / /tmp
-          docker system df
-          echo "=== /tmp ==="
-          du -sh /tmp/ 2>/dev/null || true
 
   # ── Keeps the runner pool's pre-extracted Obsidian AppImage at the latest
   # released version so E2E tests exercise up-to-date Obsidian.
@@ -266,8 +142,9 @@ jobs:
   # labels). An unpinned single job silently covered only whichever host it
   # happened to land on, leaving the other stranded on an old version.
   obsidian-update:
+    needs: when
     if: |
-      github.event.schedule == '0 4 * * 1'
+      (github.event_name == 'schedule' && needs.when.outputs.dow == '1')
       || github.event.inputs.task == 'obsidian-update'
     strategy:
       fail-fast: false  # one host being wedged must not skip the other
@@ -305,8 +182,9 @@ jobs:
   # opens/updates a tracking issue summarizing status. Needs write perms to
   # commit + issue/PR perms for the digest output.
   plan-triage:
+    needs: when
     if: |
-      github.event.schedule == '0 14 * * 1'
+      (github.event_name == 'schedule' && needs.when.outputs.dow == '1')
       || github.event.inputs.task == 'plan-triage'
     runs-on: [self-hosted, linux, x64, isolated]
     permissions:
@@ -346,8 +224,9 @@ jobs:
   # tracking issue. Closing the issue is the signal that the next bump should
   # happen.
   frontend-major-updates:
+    needs: when
     if: |
-      github.event.schedule == '17 13 * * 1'
+      (github.event_name == 'schedule' && needs.when.outputs.dow == '1')
       || github.event.inputs.task == 'frontend-major-updates'
     runs-on: [self-hosted, linux, x64, isolated]
     permissions:
@@ -622,8 +501,9 @@ jobs:
   # See pre-fold dependency-submission.yml for the historical why
   # (GitHub's static mix.lock parser silently fails on this repo).
   dependency-submission:
+    needs: when
     if: |
-      github.event.schedule == '0 3 * * 6'
+      (github.event_name == 'schedule' && needs.when.outputs.dow == '6')
       || github.event.inputs.task == 'dependency-submission'
     runs-on: [self-hosted, linux, x64, isolated]
     permissions:
@@ -664,7 +544,7 @@ jobs:
   # last step in this job; a failing cron nobody subscribes to is not one.
   mcp-conformance:
     if: |
-      github.event.schedule == '40 5 * * *'
+      github.event_name == 'schedule'
       || github.event.inputs.task == 'mcp-conformance'
     name: mcp-conformance (${{ matrix.label }})
     runs-on: [self-hosted, linux, x64, isolated, light]
@@ -919,13 +799,13 @@ jobs:
   # step opens, because the alert can only name the job.
   vendor-conformance:
     if: |
-      github.event.schedule == '40 7 * * *'
+      github.event_name == 'schedule'
       || github.event.inputs.task == 'vendor-conformance'
     # `heavy`, for the same reason verify.yml pins unit-tests there (#355): a
     # cold `mix compile` of the whole app saturates a VM for minutes, and on a
     # generic slot it lands next to e2e suites whose delivery budgets are
-    # timing-bounded. 07:40 also keeps it clear of the 06:00 nightly e2e
-    # convergence run — an earlier draft sat 10 minutes inside it.
+    # timing-bounded. The 03:15 daily run keeps it clear of verify.yml's 06:00
+    # nightly e2e convergence run — an earlier draft sat 10 minutes inside it.
     runs-on: [self-hosted, linux, x64, isolated, heavy]
     # deps.get against hex.pm and a cold compile are both open-ended; the
     # vendor HTTP itself is bounded at 5s inside HttpFetcher. Without this the
@@ -938,7 +818,7 @@ jobs:
       PG_CONTAINER: engram-vendor-conformance-${{ github.run_id }}
     steps:
       # MANDATORY before `clean: false` on this label set. `e2e-orphans` runs
-      # hourly on these same runners and checks out with `sparse-checkout`
+      # on these same runners and checks out with `sparse-checkout`
       # limited to four e2e/ files; actions/checkout does not clear stale
       # skip-worktree bits, so landing after it would leave mix.exs and test/
       # absent. `mix deps.get` then fails, rc is never set, no issue is filed,
@@ -1085,7 +965,7 @@ jobs:
 
             // The title is also the dedup key, so it must not assert something
             // the run did not establish. The test distinguishes these cases in
-            // its own message; a transient 503 at 07:40 filing "we refuse this
+            // its own message; a transient 503 on the daily run filing "we refuse this
             // vendor" would leave a standing, factually wrong issue that a
             // later real refusal merely updates.
             const refused = log.includes('we would REFUSE')
@@ -1196,7 +1076,7 @@ jobs:
   # Fails into alert-cron-failure like the rest.
   native-deep:
     if: |
-      github.event.schedule == '20 8 * * *'
+      github.event_name == 'schedule'
       || github.event.inputs.task == 'native-deep'
     runs-on: [self-hosted, linux, x64, isolated]
     timeout-minutes: 30
@@ -1241,13 +1121,27 @@ jobs:
             "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv$v/$f"
           echo "7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428  $RUNNER_TEMP/$f" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP"
-          "$RUNNER_TEMP/cargo-audit-x86_64-unknown-linux-musl-v$v/cargo-audit" audit --deny warnings
+          # The advisory DB as a tarball, same speed floor and retries. Left to
+          # itself cargo-audit git-clones it from github.com with no timeout;
+          # that clone hung every run 10-15..10-20 until the 30-minute cap
+          # (reported as "cancelled", so nothing alerted).
+          curl --proto "=https" --tlsv1.2 -sSfL --connect-timeout 15 --speed-limit 1024 --speed-time 30 --retry 5 --retry-all-errors -o "$RUNNER_TEMP/advisory-db.tgz" \
+            https://github.com/rustsec/advisory-db/archive/refs/heads/main.tar.gz
+          mkdir -p "$RUNNER_TEMP/advisory-db"
+          tar -xzf "$RUNNER_TEMP/advisory-db.tgz" -C "$RUNNER_TEMP/advisory-db" --strip-components=1
+          "$RUNNER_TEMP/cargo-audit-x86_64-unknown-linux-musl-v$v/cargo-audit" audit \
+            --db "$RUNNER_TEMP/advisory-db" --no-fetch --deny warnings
+        # --no-fetch also skips the crates.io index update, so the yanked-crate
+        # check reads the local sparse-index cache. The cargo test step above
+        # just populated it with every crate in Cargo.lock, so it stays on.
 
   alert-cron-failure:
-    if: always() && contains(needs.*.result, 'failure')
+    # A timeout reports as `cancelled`; native-deep timed out daily for a
+    # week without one alert. Scheduled runs are never cancelled otherwise.
+    if: always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
     needs:
+      - when
       - e2e-orphans
-      - runner-cleanup
       - obsidian-update
       - plan-triage
       - frontend-major-updates
@@ -1268,7 +1162,7 @@ jobs:
           [ -n "$WEBHOOK" ] || { echo "No alerts webhook configured — skipping."; exit 0; }
           # Name the jobs that actually failed; a bare "cron failed" would
           # send you to the run page to find out which of eight it was.
-          FAILED=$(printf '%s' "$RESULTS" | jq -r 'to_entries|map(select(.value.result=="failure"))|map(.key)|join(", ")')
+          FAILED=$(printf '%s' "$RESULTS" | jq -r 'to_entries|map(select(.value.result=="failure" or .value.result=="cancelled"))|map(.key)|join(", ")')
           CONTENT="**CRON FAILED** \`${GITHUB_REPOSITORY}\`
           Jobs: ${FAILED:-unknown}
           ${RUN_URL}"
