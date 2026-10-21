@@ -71,9 +71,13 @@ defmodule Engram.PromEx.Indexing do
       `ReconcileNotePayloads`, tagged by `:outcome` (`checked | drifted |
       rewritten | skipped_v5`). `rewritten / checked` is how much of the
       collection the heal is rewriting; expected near zero outside a rotation.
+    * `engram_prom_ex_indexing_payload_reconcile_cancelled_total`: reconcile
+      jobs cancelled on a 4xx Qdrant refusal, tagged by `:http_status`
+      (100..599, bounded). Any increase means a request Qdrant refuses on
+      every attempt (#2138): the hourly re-check would cancel it forever.
 
   Cardinality contract: only `:outcome`/`:reason`/`:kind`/`:dense` (closed
-  enums). NEVER add note_id, user_id, or vault_id.
+  enums) and `:http_status` (an HTTP status). NEVER add note_id, user_id, or vault_id.
   """
 
   use PromEx.Plugin
@@ -151,6 +155,7 @@ defmodule Engram.PromEx.Indexing do
   end
 
   @payload_reconcile_event [:engram, :indexing, :payload_reconcile]
+  @payload_reconcile_cancelled_event [:engram, :indexing, :payload_reconcile_cancelled]
 
   @impl true
   def event_metrics(opts) do
@@ -282,6 +287,13 @@ defmodule Engram.PromEx.Indexing do
             "Notes handled by ReconcileNotePayloads, by outcome (checked, drifted, " <>
               "rewritten, skipped_v5).",
           tags: [:outcome]
+        ),
+        sum(
+          metric_prefix ++ [:payload_reconcile_cancelled, :total],
+          event_name: @payload_reconcile_cancelled_event,
+          measurement: :count,
+          description: "ReconcileNotePayloads jobs cancelled on a 4xx Qdrant refusal, by status.",
+          tags: [:http_status]
         )
       ]
     )

@@ -20,6 +20,12 @@ defmodule Engram.PromEx.ZeroInit do
   @search_hit_dropped [:engram, :search, :hit_dropped]
   @row_failed [:engram, :crypto, :rotate, :dek, :row_failed]
   @payload_reconcile [:engram, :indexing, :payload_reconcile]
+  @reconcile_cancelled [:engram, :indexing, :payload_reconcile_cancelled]
+
+  # The 4xx statuses Qdrant answers a request it will refuse on every retry:
+  # 400 (strict mode's unindexed filter, #2138, or a bad shape), 404 (no
+  # collection), 413 (body too large), 422 (invalid payload).
+  @reconcile_cancel_statuses [400, 404, 413, 422]
 
   # The `hit_dropped` reasons the undecryptable-text alert selects
   # (`Engram.Search`): a key or ciphertext fault, never an expected orphan.
@@ -61,13 +67,17 @@ defmodule Engram.PromEx.ZeroInit do
       for outcome <- [:checked, :drifted, :rewritten, :skipped_v5],
           do: {@payload_reconcile, %{count: 0}, %{outcome: outcome}}
 
+    cancelled_series =
+      for status <- @reconcile_cancel_statuses,
+          do: {@reconcile_cancelled, %{count: 0}, %{http_status: status}}
+
     # `sum` metrics over `count`: a 0 adds nothing to the total.
     search_series =
       [{@search_hits, %{count: 0}, %{}}, {@search_text_missing, %{count: 0}, %{}}] ++
         for reason <- @undecryptable,
             do: {@search_hit_dropped, %{count: 0}, %{reason: reason}}
 
-    search_series ++ rotate_series ++ reconcile_series
+    search_series ++ rotate_series ++ reconcile_series ++ cancelled_series
   end
 
   @doc "The same series as Prometheus names them: `{metric, %{label => value}}`."
@@ -80,6 +90,7 @@ defmodule Engram.PromEx.ZeroInit do
           @search_hit_dropped -> "engram_prom_ex_search_hits_dropped_total"
           @row_failed -> "engram_prom_ex_crypto_rotate_row_failed_total"
           @payload_reconcile -> "engram_prom_ex_indexing_payload_reconcile_total"
+          @reconcile_cancelled -> "engram_prom_ex_indexing_payload_reconcile_cancelled_total"
         end
 
       {metric, Map.new(meta, fn {k, v} -> {k, to_string(v)} end)}

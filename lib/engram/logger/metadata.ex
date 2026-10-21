@@ -120,6 +120,15 @@ defmodule Engram.Logger.Metadata do
   def safe_reason({tag, payload}) when is_atom(tag) and is_atom(payload),
     do: "#{inspect(tag)} #{inspect(payload)}"
 
+  # Qdrant refusals: `{:qdrant_scroll, status, body}` from `Qdrant.scroll/2`
+  # and `{status, body}` from its payload writes. The status is the whole
+  # triage signal (#2138 burned 1812 jobs as a bare ":error"); the body is
+  # dropped, a Qdrant error message can echo filter values.
+  def safe_reason({:qdrant_scroll, status, _body}) when is_integer(status),
+    do: ":qdrant_scroll #{status}"
+
+  def safe_reason({status, _body}) when status in 100..599, do: "http #{status}"
+
   def safe_reason(reason) when is_tuple(reason) and tuple_size(reason) > 0 do
     case elem(reason, 0) do
       tag when is_atom(tag) -> inspect(tag)

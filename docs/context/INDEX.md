@@ -49,6 +49,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Adding an Oban worker or cron, or code that marks rows for later processing (queue it when due; the queue throttles, crons are backstops; no two crons share a minute) → `docs/context/oban-scheduling-model.md`
 - Stranded Qdrant points after a rename → delete race → `docs/context/qdrant-orphan-points-rename-delete-race.md`
 - Qdrant payload indexes missing or rejected under strict mode (`ensure_collection/2` reconciles them on every boot) → `docs/context/qdrant-payload-indexes-strict-mode.md`
+- A Qdrant scroll/search/filter 400s on every retry (prod strict mode refuses unindexed payload keys; `ReconcileNotePayloads` v5 key `u`, #2138; build filters via `Qdrant.match_filter(:user, ...)`, index a key before any reader uses it) → `docs/context/qdrant-strict-mode-unindexed-filter.md`
 - An edit re-embeds far more chunks than it changed, or you are about to change how `split_text/2` packs chunks (boundaries cascade to the end of the heading section; paragraph-granularity looks like a free fix and is not) → `docs/context/chunk-boundary-stability.md`
 - Measuring chunk reuse (repeated synthetic paragraphs + `MapSet` gives a wrong answer — match with multiplicity) → `docs/context/chunk-boundary-stability.md`
 - Lingua NIF memory — `low_accuracy_mode` dial, the #891 OOM crash-loop → `docs/context/lingua-language-detection-memory.md`

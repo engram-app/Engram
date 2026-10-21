@@ -268,6 +268,15 @@ defmodule Engram.Logger.MetadataSafeReasonTest do
     test "a tuple with a non-atom tag is not rendered at all" do
       assert Metadata.safe_reason({@secret, 1}) == "unknown"
     end
+
+    # #2138: 1812 reconcile jobs failed as a bare ":qdrant_scroll"-less
+    # ":error". The status is the signal; the body can echo filter values.
+    test "a Qdrant refusal keeps its status, drops its body" do
+      body = %{"status" => %{"error" => "bad filter #{@secret}"}}
+      assert Metadata.safe_reason({:qdrant_scroll, 400, body}) == ":qdrant_scroll 400"
+      assert Metadata.safe_reason({422, body}) == "http 422"
+      refute Metadata.safe_reason({422, body}) =~ @secret
+    end
   end
 
   # Storage errors are the case where dropping the payload would cost a real
