@@ -35,17 +35,21 @@ describe("UploadLimitDialog", () => {
 	it("says the file size, the plan's limit, and what each paid plan allows", () => {
 		renderDialog({ tooLarge: [f("big.zip", 42 * MB)] });
 		const dialog = screen.getByRole("dialog");
-		expect(dialog).toHaveTextContent("big.zip is too large to upload");
-		expect(dialog).toHaveTextContent("It's 42 MB. Your Free plan uploads files up to 10 MB.");
+		expect(screen.getByRole("heading", { name: "File too large" })).toBeInTheDocument();
+		expect(dialog).toHaveTextContent("big.zip is 42 MB.");
+		expect(dialog).toHaveTextContent("Your Free plan uploads files up to 10 MB.");
 		expect(dialog).toHaveTextContent("Starter: files up to 200 MB");
 		expect(dialog).toHaveTextContent("Pro: files up to 500 MB");
+		// Upgrade is the one action; the corner X dismisses.
 		expect(screen.getByRole("button", { name: "Upgrade" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "OK" })).not.toBeInTheDocument();
 	});
 
 	it("says storage is full with used and total, and what each plan includes", () => {
 		renderDialog({ noRoom: [f("a.mp4", 50 * MB)] });
 		const dialog = screen.getByRole("dialog");
-		expect(dialog).toHaveTextContent("Not enough storage for a.mp4");
+		expect(screen.getByRole("heading", { name: "Storage full" })).toBeInTheDocument();
+		expect(dialog).toHaveTextContent("a.mp4 doesn't fit.");
 		expect(dialog).toHaveTextContent("You've used 1,000 MB of your Free plan's 1 GB.");
 		expect(dialog).toHaveTextContent("Starter: 10 GB of storage");
 		expect(dialog).toHaveTextContent("Pro: 50 GB of storage");
@@ -53,7 +57,8 @@ describe("UploadLimitDialog", () => {
 
 	it("lists several refused files", () => {
 		renderDialog({ tooLarge: [f("a.zip", 11 * MB), f("b.zip", 12 * MB)] });
-		expect(screen.getByRole("dialog")).toHaveTextContent("2 files are too large to upload");
+		expect(screen.getByRole("heading", { name: "Files too large" })).toBeInTheDocument();
+		expect(screen.getByRole("dialog")).toHaveTextContent("2 files are over the limit.");
 		expect(screen.getByText("a.zip")).toBeInTheDocument();
 		expect(screen.getByText("b.zip")).toBeInTheDocument();
 	});
@@ -66,8 +71,8 @@ describe("UploadLimitDialog", () => {
 		expect(screen.queryByRole("button", { name: "Upgrade" })).not.toBeInTheDocument();
 	});
 
-	it("closes", () => {
-		const { onClose } = renderDialog({ tooLarge: [f("big.zip", 42 * MB)] });
+	it("without billing, OK closes", () => {
+		const { onClose } = renderDialog({ tooLarge: [f("big.zip", 42 * MB)], billingEnabled: false });
 		fireEvent.click(screen.getByRole("button", { name: "OK" }));
 		expect(onClose).toHaveBeenCalled();
 	});
