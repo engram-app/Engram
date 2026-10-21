@@ -2277,6 +2277,19 @@ describe("useRenameAttachment", () => {
 			result.current.mutateAsync({ old_path: "a.png", new_path: "b.png" }),
 		).rejects.toMatchObject({ status: 409 });
 	});
+
+	it.each([
+		[409, "A file with that name already exists."],
+		[404, "File no longer exists."],
+	])("a %i says file, not note", async (status, copy) => {
+		vi.mocked(toast.error).mockClear();
+		post.mockRejectedValue(new ApiError(status, "refused"));
+		const { result } = renderHook(() => useRenameAttachment(), { wrapper });
+		await act(async () => {
+			await result.current.mutateAsync({ old_path: "a.png", new_path: "b.png" }).catch(() => {});
+		});
+		expect(toast.error).toHaveBeenCalledWith(copy);
+	});
 });
 
 describe("optimistic attachment rename / move / delete", () => {

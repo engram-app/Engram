@@ -133,7 +133,8 @@ function joinRefused(err: unknown, t: Translate): boolean {
 // Shared by note rename (CRDT → CrdtOpError) and folder/attachment rename
 // (REST → ApiError). A note's target-occupied conflict surfaces as
 // crdt_create's `create_failed`; the REST paths use HTTP 409/404.
-function renameErrorToast(err: unknown, kind: "file" | "folder", t: Translate) {
+// "file" is a note (the tree's word for it); "attachment" is any other file.
+function renameErrorToast(err: unknown, kind: "file" | "folder" | "attachment", t: Translate) {
 	if (joinRefused(err, t)) {
 		return;
 	}
@@ -143,12 +144,20 @@ function renameErrorToast(err: unknown, kind: "file" | "folder", t: Translate) {
 	const gone = err instanceof ApiError && err.status === 404;
 	if (conflict) {
 		notify.error(
-			kind === "file"
-				? t("A note with that name already exists.")
-				: t("A folder with that name already exists."),
+			{
+				file: t("A note with that name already exists."),
+				folder: t("A folder with that name already exists."),
+				attachment: t("A file with that name already exists."),
+			}[kind],
 		);
 	} else if (gone) {
-		notify.error(kind === "file" ? t("Note no longer exists.") : t("Folder no longer exists."));
+		notify.error(
+			{
+				file: t("Note no longer exists."),
+				folder: t("Folder no longer exists."),
+				attachment: t("File no longer exists."),
+			}[kind],
+		);
 	} else {
 		notify.error(t("Rename failed."));
 	}
@@ -2662,7 +2671,7 @@ export function useRenameAttachment() {
 		},
 		onError: (err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
-			renameErrorToast(err, "file", t);
+			renameErrorToast(err, "attachment", t);
 		},
 		onSettled: () => {
 			invalidateVaultTree(qc, vaultId);
