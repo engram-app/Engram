@@ -1143,10 +1143,12 @@ defmodule Engram.Crypto.UserDekRotation do
     new_ck = Crypto.dek_content_hash_key_from_bytes(new_dek)
     new_floor = Indexing.text_sum(new_ck, "")
 
-    TenantSweep.each_batch(user_id, Engram.Notes.ChunkPoint, fn batch_ids ->
+    # By NOTE: the ChunkPoint cursor (`TenantSweep`) visits only envelope
+    # rows, and these are the rows without one. The batch runs in the tenant.
+    TenantSweep.each_batch(user_id, Engram.Notes.Note, fn note_ids ->
       rows =
         from(c in Engram.Notes.ChunkPoint,
-          where: c.point_id in ^batch_ids and is_nil(c.display_ct) and not is_nil(c.slice_sum),
+          where: c.note_id in ^note_ids and is_nil(c.display_ct) and not is_nil(c.slice_sum),
           select: %{
             point_id: c.point_id,
             note_id: c.note_id,
@@ -1154,7 +1156,7 @@ defmodule Engram.Crypto.UserDekRotation do
             sum: c.slice_sum
           }
         )
-        |> Repo.all(skip_tenant_check: true)
+        |> Repo.all()
 
       derived = rows |> Enum.map(& &1.note_id) |> Enum.uniq() |> derived_display(new_dek)
 
@@ -1186,7 +1188,7 @@ defmodule Engram.Crypto.UserDekRotation do
         {n.id, n.content_ciphertext, n.content_nonce, n.path_ciphertext, n.path_nonce,
          fragment("(SELECT count(*) FROM chunk_points p WHERE p.note_id = ?)", n.id)}
     )
-    |> Repo.all(skip_tenant_check: true)
+    |> Repo.all()
     |> Enum.flat_map(fn {id, content_ct, content_nonce, path_ct, path_nonce, count} ->
       with true <- is_binary(content_ct) and is_binary(path_ct),
            {:ok, content} <-
