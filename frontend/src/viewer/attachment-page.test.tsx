@@ -248,6 +248,28 @@ it("refetches when the file's content changes", async () => {
 	await waitFor(() => expect(getBlob).toHaveBeenCalledTimes(2));
 });
 
+it("puts the file details and actions above the preview", async () => {
+	mockAttachments = [att({ id: "i-1", path: "a.png", mime_type: "image/png" })];
+	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["x"], { type: "image/png" }));
+	renderAt("i-1");
+	const img = await screen.findByRole("img");
+	const details = screen.getByRole("region", { name: "File details" });
+	expect(details.compareDocumentPosition(img)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+});
+
+it("says so when the browser can't render the file", async () => {
+	mockAttachments = [att({ id: "h-1", path: "IMG_1.heic", mime_type: "image/heic" })];
+	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["x"], { type: "image/heic" }));
+	HTMLImageElement.prototype.decode = vi.fn().mockRejectedValue(new Error("EncodingError"));
+	try {
+		renderAt("h-1");
+		expect(await screen.findByText(/this browser can't preview IMG_1.heic/iu)).toBeInTheDocument();
+		expect(screen.queryByRole("img")).not.toBeInTheDocument();
+	} finally {
+		Reflect.deleteProperty(HTMLImageElement.prototype, "decode");
+	}
+});
+
 it("skips the preview past the size cap", () => {
 	mockAttachments = [
 		att({ id: "v-1", path: "big.mp4", mime_type: "video/mp4", size_bytes: 200 * 1024 * 1024 }),

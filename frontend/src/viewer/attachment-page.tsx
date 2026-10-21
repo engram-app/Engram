@@ -52,12 +52,15 @@ export default function AttachmentPage() {
 	const [url, setUrl] = useState<string | null>(null);
 	// 'missing' = real 404; 'failed' = transient (5xx/network) — don't conflate.
 	const [error, setError] = useState<"missing" | "failed" | null>(null);
+	// The browser refused to render the bytes (HEIC in Chrome, MKV, ...).
+	const [unrenderable, setUnrenderable] = useState(false);
 
 	// New content is a new resource: drop the previous blob url and error
 	// during render rather than one paint later from inside the effect.
 	const [seededKey, setSeededKey] = useState(contentKey);
 	if (seededKey !== contentKey) {
 		setSeededKey(contentKey);
+		setUnrenderable(false);
 		setBlob(null);
 		setUrl(null);
 		setError(null);
@@ -99,6 +102,25 @@ export default function AttachmentPage() {
 			}
 		};
 	}, [contentKey, kind]);
+
+	// The browser may not decode the format (HEIC in Chrome). Probe it off-DOM
+	// so a failure shows a message instead of a broken image.
+	useEffect(() => {
+		if (kind !== "image" || !url) {
+			return;
+		}
+		let cancelled = false;
+		const probe = new Image();
+		probe.src = url;
+		probe.decode?.().catch(() => {
+			if (!cancelled) {
+				setUnrenderable(true);
+			}
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, [kind, url]);
 
 	// Same right-rail Backlinks panel a note gets.
 	const backlinksNode = useMemo(() => (id ? <BacklinksPanel attachmentId={id} /> : null), [id]);
@@ -152,23 +174,37 @@ export default function AttachmentPage() {
 		);
 	} else if (kind !== null && !(url && blob)) {
 		preview = <LoadingPane />;
+	} else if (unrenderable) {
+		preview = (
+			<p className="text-muted-foreground text-sm">
+				{t("This browser can't preview {filename}. Download it to open it.", { filename })}
+			</p>
+		);
 	} else if (url && blob) {
+		const onRenderError = () => setUnrenderable(true);
 		if (kind === "image") {
 			preview = (
 				<img
 					draggable={false}
 					src={url}
 					alt={filename}
-					className="mx-auto max-w-full rounded shadow-md"
+					className="max-w-full rounded shadow-md"
 					style={{ maxWidth: 800 }}
 				/>
 			);
 		} else if (kind === "audio") {
 			// biome-ignore lint/a11y/useMediaCaption: user files ship no caption track to attach.
-			preview = <audio controls src={url} className="w-full" />;
+			preview = <audio controls src={url} className="w-full" onError={onRenderError} />;
 		} else if (kind === "video") {
-			// biome-ignore lint/a11y/useMediaCaption: user files ship no caption track to attach.
-			preview = <video controls src={url} className="max-h-[70vh] w-full rounded bg-black" />;
+			preview = (
+				// biome-ignore lint/a11y/useMediaCaption: user files ship no caption track to attach.
+				<video
+					controls
+					src={url}
+					className="max-h-[70vh] w-full rounded bg-black"
+					onError={onRenderError}
+				/>
+			);
 		} else if (kind === "text" || kind === "csv") {
 			preview = <AttachmentTextPreview blob={blob} csv={kind === "csv"} filename={filename} />;
 		}
@@ -187,7 +223,6 @@ export default function AttachmentPage() {
 		) : (
 			<PreviewColumn>
 				<article className="flex flex-col gap-6 p-6">
-					{preview}
 					<AttachmentDetails
 						att={att}
 						kind={kind}
@@ -197,6 +232,7 @@ export default function AttachmentPage() {
 						onRename={() => setRenamingAt("title")}
 						onRenameDone={() => setRenamingAt(null)}
 					/>
+					{preview}
 				</article>
 			</PreviewColumn>
 		);
