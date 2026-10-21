@@ -5,6 +5,11 @@ defmodule Engram.DataMigrations.KeyAliases do
   catalog). Each pass enqueues `HealKeyAliases` per user who still has a
   note stamped with another version. The name carries the version, so a
   regenerated table is a new, not-done migration.
+
+  Off (skipped by the runner, never marked done) until the v5 payload format
+  is on: before that every row is unstamped, a heal re-chunks the note under
+  the unstamped v5 chunker and pays Voyage, and the v5 rebuild re-reads
+  every note anyway (`EmbedNote` stamps the version on a full pass).
   """
   @behaviour Engram.DataMigration
 
@@ -16,6 +21,9 @@ defmodule Engram.DataMigrations.KeyAliases do
 
   @impl true
   def version, do: 1
+
+  @impl true
+  def enabled?, do: Engram.Vector.Qdrant.v5_payload_format?()
 
   @impl true
   def run_pass do

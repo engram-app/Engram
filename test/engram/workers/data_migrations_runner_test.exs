@@ -278,6 +278,8 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
   end
 
   test "perform runs every registered migration" do
+    # KeyAliases runs only once the v5 payload format is on.
+    Engram.ServiceConfig.put_override(:v5_payload_format, true)
     assert :ok = perform_job(DataMigrationsRunner, %{})
 
     # Every pass leaves a ledger row: mark_done/2 on :done, note_open/2 on :more.

@@ -96,6 +96,17 @@ defmodule Engram.Workers.HealKeyAliasesTest do
              Repo.all(from(j in Oban.Job, where: j.worker == "Engram.Workers.HealKeyAliases"))
   end
 
+  # The plain deploy: every row is unstamped, and a heal re-chunks the note
+  # under the unstamped v5 chunker (paid Voyage). Until v5 go time the v5
+  # rebuild owns that re-read, so the migration must not run at all.
+  test "the migration is off until the v5 payload format is on", ctx do
+    _ = indexed(ctx, "---\n種類: 会議\n---\n# A\n", nil)
+
+    refute Migration.enabled?()
+    Engram.ServiceConfig.put_override(:v5_payload_format, true)
+    assert Migration.enabled?()
+  end
+
   test "the migration is done once every note is read under the current table", ctx do
     assert Migration in DataMigrationsRunner.migrations()
     assert Migration.name() == "key_aliases:#{KeyAliases.version()}"
