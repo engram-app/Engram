@@ -199,6 +199,8 @@ defmodule Engram.Release do
     _ = load_app()
 
     for repo <- repos() do
+      # A sibling task may be migrating: wait on its locks, don't fail boot.
+      :ok = use_migrator_session(repo)
       {:ok, _, _} = Ecto.Migrator.with_repo(repo, &do_prepare_database/1)
     end
 
@@ -413,6 +415,7 @@ defmodule Engram.Release do
     _ = load_app()
 
     for repo <- repos() do
+      :ok = use_migrator_session(repo)
       {:ok, _, _} = Ecto.Migrator.with_repo(repo, &verify_schema_baseline!/1)
     end
 

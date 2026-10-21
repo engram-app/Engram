@@ -60,6 +60,32 @@ defmodule Engram.ReleaseTest do
     end
   end
 
+  # Both run in their own `eval` while a sibling task may be migrating. With
+  # the app Repo's 10s lock_timeout a boot behind that migration fails instead
+  # of waiting, so they open the migrator's session like migrate/0.
+  describe "migrator session" do
+    setup do
+      original = Application.get_env(:engram, Repo)
+      on_exit(fn -> Application.put_env(:engram, Repo, original) end)
+
+      Application.put_env(
+        :engram,
+        Repo,
+        Keyword.put(original, :parameters, Engram.RuntimeConfig.repo_parameters(:app))
+      )
+    end
+
+    test "verify_schema_baseline/0 drops the app Repo's session parameters" do
+      assert :ok == Release.verify_schema_baseline()
+      refute Keyword.has_key?(Application.get_env(:engram, Repo), :parameters)
+    end
+
+    test "prepare_database/0 drops the app Repo's session parameters" do
+      assert :ok == Release.prepare_database()
+      refute Keyword.has_key?(Application.get_env(:engram, Repo), :parameters)
+    end
+  end
+
   describe "reset_baseline/0" do
     # It replays every migration when it fires, so it must open the migrator's
     # session like migrate/0 does: the app Repo's lock_timeout would fail a
