@@ -195,6 +195,9 @@ export async function spaApiHeaders(page: Page): Promise<Record<string, string>>
 			}
 		).Clerk?.session?.getToken(),
 	);
+	if (!token) {
+		throw new Error("spaApiHeaders: no Clerk session token in page");
+	}
 	const vaultId = await page.evaluate(() => localStorage.getItem("engram.activeVaultId"));
 	return { Authorization: `Bearer ${token}`, ...(vaultId ? { "X-Vault-ID": vaultId } : {}) };
 }
