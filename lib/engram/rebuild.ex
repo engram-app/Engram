@@ -396,12 +396,7 @@ defmodule Engram.Rebuild do
   # Parked like a too-long note: until its content changes. Tokens only in
   # the log: they are counts, not content.
   defp park_drift(note, tokens) do
-    {:ok, _} =
-      Repo.with_tenant(note.user_id, fn ->
-        Repo.update_all(from(n in Note, where: n.kind == "note" and n.id == ^note.id),
-          set: [embed_retry_after: Engram.Workers.EmbedNote.parked_until_edited()]
-        )
-      end)
+    park_until_edited(note)
 
     :telemetry.execute([:engram, :rebuild, :drift_parked], %{count: 1, tokens: tokens}, %{})
 
@@ -409,6 +404,35 @@ defmodule Engram.Rebuild do
       "rebuild_drift_parked",
       Metadata.with_category(:warning, :oban, note_id: note.id, total_count: tokens)
     )
+  end
+
+  @doc """
+  Parks a note whose rebuild was about to pay Voyage a second time for the
+  same content (`notes.rebuild_paid_at` set, chunker v5 Task 16.3), until
+  edited. Returns `{:error, :rebuild_double_pay}`.
+  """
+  @spec park_double_pay(note_ref()) :: {:error, :rebuild_double_pay}
+  def park_double_pay(note) do
+    park_until_edited(note)
+    :telemetry.execute([:engram, :rebuild, :double_pay_parked], %{count: 1}, %{})
+
+    Logger.warning(
+      "rebuild_double_pay_parked",
+      Metadata.with_category(:warning, :oban, note_id: note.id)
+    )
+
+    {:error, :rebuild_double_pay}
+  end
+
+  defp park_until_edited(note) do
+    {:ok, _} =
+      Repo.with_tenant(note.user_id, fn ->
+        Repo.update_all(from(n in Note, where: n.kind == "note" and n.id == ^note.id),
+          set: [embed_retry_after: Engram.Workers.EmbedNote.parked_until_edited()]
+        )
+      end)
+
+    :ok
   end
 
   @doc "Upserts one user's planned manifest rows (`note_id`, `vault_id`, counts)."

@@ -25,6 +25,7 @@ defmodule Engram.Indexing do
   alias Engram.Notes.NoteAttr
   alias Engram.Notes.OkfFields
   alias Engram.Parsers.Markdown
+  alias Engram.Rebuild
   alias Engram.Repo
   alias Engram.UsageMeters
   alias Engram.Vector.Qdrant
@@ -248,9 +249,11 @@ defmodule Engram.Indexing do
              with :ok <- tier_unchanged(note),
                   do: plan_index(note, user, chunks, content_key, opts)
            end),
+         {:ok, dense?, plan, retained} <-
+           rebuild_sources(note, dense?, plan, retained, content_key, opts),
          :ok = collect_garbage(n),
          texts = embed_texts(plan),
-         {:ok, vectors} <- retained_or_embed(retained, dense?, plan, texts, opts),
+         {:ok, vectors} <- paid_once(note, retained, dense?, plan, texts, opts),
          :ok <- ensure_one_vector_per_text(vectors, texts, note),
          :ok = collect_garbage(n),
          avgdl = avgdl(note.user_id, note.vault_id),
@@ -337,7 +340,7 @@ defmodule Engram.Indexing do
   defp regroup?(note, plan),
     do:
       budget_enabled?() or merged?(plan) or Map.get(note, :index_tier) != nil or
-        Map.get(note, :chunk_count) != nil
+        Map.get(note, :chunk_count) != nil or Map.get(plan, :rebuild?, false)
 
   defp merged?(plan), do: Enum.any?(plan.entries, &Map.get(entry_chunk(&1), :merged, false))
 
@@ -1103,6 +1106,7 @@ defmodule Engram.Indexing do
           write_point_rows(note, Map.get(prepared, :point_rows))
 
           stamp_payload_hash(note, payload_hash)
+          clear_rebuild_paid(prepared)
           stamp_okf_timestamp(prepared)
           stamp_flat_fields(prepared)
           in_commit.(length(chunk_rows))
@@ -1132,6 +1136,22 @@ defmodule Engram.Indexing do
     rows
     |> Enum.chunk_every(@insert_batch)
     |> Enum.each(&Repo.insert_all(ChunkPoint, &1, skip_tenant_check: true))
+  end
+
+  # The note's index is committed, so a Voyage payment for it is spent:
+  # a later rebuild pass may pay again.
+  defp clear_rebuild_paid(%{note: note} = prepared) do
+    if Map.get(prepared, :rebuild?) or Map.get(note, :rebuild_paid_at) != nil do
+      {_, _} =
+        Repo.update_all(
+          from(n in Note,
+            where: n.kind == "note" and n.id == ^note.id and not is_nil(n.rebuild_paid_at)
+          ),
+          set: [rebuild_paid_at: nil]
+        )
+    end
+
+    :ok
   end
 
   # Every point of the note now carries `note_payload`: upserted ones were
@@ -1765,7 +1785,20 @@ defmodule Engram.Indexing do
   # not commit (`retain/1`, held across the commit). A hit skips the
   # reservation AND the embed, so a retry after any post-embed failure is
   # charged once.
-  defp plan_within_budget(_note, rows, chunks, content_key, false, _opts),
+  #
+  # A v5 rebuild (`rebuild: true`, chunker v5 Task 16.3) only plans here:
+  # its vectors are sourced after the planning transaction
+  # (`rebuild_sources/6`), since the copy reads Qdrant.
+  defp plan_within_budget(note, rows, chunks, content_key, dense?, opts) do
+    if Keyword.get(opts, :rebuild, false),
+      do:
+        {dense?,
+         chunks |> plan_chunks(rows, content_key, dense?) |> Map.put(:rebuild, {rows, chunks}),
+         nil},
+      else: budget_plan(note, rows, chunks, content_key, dense?, opts)
+  end
+
+  defp budget_plan(_note, rows, chunks, content_key, false, _opts),
     do: {false, plan_chunks(chunks, rows, content_key, false), nil}
 
   #
@@ -1773,8 +1806,10 @@ defmodule Engram.Indexing do
   # grouped them (adversarial V3): a re-embedded merged group meters only its
   # members whose own fingerprint no stored row or member has. The rest of
   # what Voyage is sent is our maintenance, `[:engram, :embed, :maintenance]`.
-  defp plan_within_budget(note, rows, chunks, content_key, true, opts) do
-    plan = plan_chunks(chunks, rows, content_key, true)
+  defp budget_plan(note, rows, chunks, content_key, true, opts),
+    do: price(note, rows, chunks, content_key, plan_chunks(chunks, rows, content_key, true), opts)
+
+  defp price(note, rows, chunks, content_key, plan, opts) do
     texts = embed_texts(plan)
     reserve = Keyword.get(opts, :reserve_tokens, fn _tokens -> true end)
 
@@ -1821,6 +1856,140 @@ defmodule Engram.Indexing do
 
   defp retained_or_embed(vectors, _dense?, _plan, _texts, _opts), do: {:ok, vectors}
 
+  # ---------------------------------------------------------------------------
+  # v5 rebuild of one note (chunker v5 Task 16.3)
+  # ---------------------------------------------------------------------------
+
+  # Every point is written fresh (a UUIDv5 id, the v5 payload): nothing is
+  # reused in place, and every old id is deleted after the new rows commit
+  # (`write_first`). Each dense vector comes from, in order: the old point
+  # with the same fingerprint (the old `chunks.context_hmac`); the vector
+  # cache; the normalized mean of a capped group's members' old points, when
+  # every member has one (C13); else Voyage. Sparse vectors are local.
+  defp rebuild_sources(note, dense?, %{rebuild: {rows, chunks}} = plan, _retained, ck, opts) do
+    old = for {hmac, id, _tokens, _members} <- rows, id != nil, do: {hmac, id}
+    by_member = for {hmac, id} <- old, hmac != nil, into: %{}, do: {short_hmac(hmac), id}
+    sources = Enum.map(plan.entries, &old_sources(&1, dense?, by_member))
+
+    with {:ok, found} <- old_dense(Enum.uniq(List.flatten(sources)), dense?) do
+      plan =
+        plan
+        |> Map.delete(:rebuild)
+        |> Map.merge(%{
+          entries: Enum.zip_with(plan.entries, sources, &fresh_entry(&1, &2, found)),
+          reused_point_ids: [],
+          stale_point_ids: Enum.map(old, &elem(&1, 1)),
+          rebuild?: true
+        })
+
+      if dense?,
+        do: priced_rebuild(note, rows, chunks, ck, plan, opts),
+        else: {:ok, false, plan, nil}
+    end
+  end
+
+  defp rebuild_sources(_note, dense?, plan, retained, _ck, _opts),
+    do: {:ok, dense?, plan, retained}
+
+  # Priced like any pass (the reservation is maintenance for a dense note),
+  # over only what is left to send. A refusal re-plans sparse-only, and that
+  # plan is a rebuild too.
+  defp priced_rebuild(note, rows, chunks, ck, plan, opts) do
+    case Repo.with_tenant!(note.user_id, fn -> price(note, rows, chunks, ck, plan, opts) end) do
+      {false, sparse, nil} ->
+        rebuild_sources(note, false, Map.put(sparse, :rebuild, {rows, chunks}), nil, ck, opts)
+
+      {dense?, plan, retained} ->
+        {:ok, dense?, plan, retained}
+    end
+  end
+
+  # The old point ids a planned entry's dense vector can come from.
+  defp old_sources({:reuse, chunk, id, _tokens}, dense?, _by_member),
+    do: if(dense_chunk?(chunk, dense?), do: [id], else: [])
+
+  defp old_sources({:embed, %{merged: true, member_hmacs: hmacs} = chunk}, dense?, by_member) do
+    ids = Enum.map(hmacs, &Map.get(by_member, &1))
+    if dense_chunk?(chunk, dense?) and nil not in ids, do: ids, else: []
+  end
+
+  defp old_sources(_entry, _dense?, _by_member), do: []
+
+  defp old_dense([], _dense?), do: {:ok, %{}}
+  defp old_dense(_ids, false), do: {:ok, %{}}
+
+  # Paged like an upsert, so a response stays a few MB of vectors.
+  defp old_dense(ids, true) do
+    ids
+    |> Enum.chunk_every(Qdrant.max_write_batch())
+    |> Enum.reduce_while({:ok, %{}}, fn page, {:ok, acc} ->
+      case Qdrant.retrieve(collection(), page, with_vector: true) do
+        {:ok, points} ->
+          {:cont,
+           {:ok, for(%{qdrant_id: id, vector: [_ | _] = d} <- points, into: acc, do: {id, d})}}
+
+        other ->
+          {:halt, other}
+      end
+    end)
+  end
+
+  defp fresh_entry({:reuse, chunk, _id, _tokens}, ids, found),
+    do: fresh_entry({:embed, chunk}, ids, found)
+
+  defp fresh_entry({:embed, chunk}, [], _found), do: {:embed, chunk}
+
+  defp fresh_entry({:embed, chunk}, ids, found) do
+    vectors = Enum.map(ids, &Map.get(found, &1))
+
+    vector =
+      case vectors do
+        [single] -> single
+        _ -> if nil not in vectors, do: unit_mean(vectors)
+      end
+
+    if vector, do: {:embed, Map.put(chunk, :vector, pack_vector(vector))}, else: {:embed, chunk}
+  end
+
+  # ponytail: Elixir floats over a group's members (a few to a few hundred
+  # 1024-dim vectors); move to a NIF if it shows in a rebuild profile.
+  defp unit_mean(vectors) do
+    sum = Enum.zip_with(vectors, &Enum.sum/1)
+    norm = :math.sqrt(Enum.reduce(sum, 0.0, &(&1 * &1 + &2)))
+    if norm > 0, do: Enum.map(sum, &(&1 / norm))
+  end
+
+  # A rebuild pays Voyage at most once per note until its index commits
+  # (`notes.rebuild_paid_at`, cleared by `clear_rebuild_paid/1`). A retry
+  # whose vectors were retained or cached sends nothing and is not checked.
+  defp paid_once(note, retained, dense?, %{rebuild?: true} = plan, texts, opts) do
+    to_send = if match?(%{cache: _}, plan), do: plan.cache.send, else: texts
+    sends? = dense? and is_nil(retained) and to_send != []
+
+    cond do
+      not sends? ->
+        retained_or_embed(retained, dense?, plan, texts, opts)
+
+      Map.get(note, :rebuild_paid_at) != nil ->
+        Rebuild.park_double_pay(note)
+
+      true ->
+        with {:ok, _vectors} = ok <- retained_or_embed(retained, dense?, plan, texts, opts) do
+          {:ok, _} =
+            Repo.with_tenant(note.user_id, fn ->
+              Repo.update_all(from(n in Note, where: n.kind == "note" and n.id == ^note.id),
+                set: [rebuild_paid_at: DateTime.utc_now()]
+              )
+            end)
+
+          ok
+        end
+    end
+  end
+
+  defp paid_once(_note, retained, dense?, plan, texts, opts),
+    do: retained_or_embed(retained, dense?, plan, texts, opts)
+
   # ponytail: node-local, 30 min TTL, byte-capped (RetainedVectors). A retry on
   # another node, after the TTL, or after a cap eviction re-pays Voyage for that
   # note. Oban's default backoff puts all five attempts inside the TTL. Persist
@@ -1855,7 +2024,7 @@ defmodule Engram.Indexing do
     new? = &(not MapSet.member?(known, &1))
 
     for {:embed, chunk} <- plan.entries,
-        dense_chunk?(chunk, plan.dense?),
+        sent?(chunk, plan.dense?),
         do: chunk |> changed_bytes(new?) |> Enum.sum()
   end
 
@@ -2346,6 +2515,10 @@ defmodule Engram.Indexing do
   defp dense_chunk?(chunk, dense?),
     do: dense? and Markdown.dense_kind?(chunk.kind) and not Map.get(chunk, :sparse_only, false)
 
+  # A dense chunk Voyage (or the vector cache) must supply: not one whose
+  # vector a v5 rebuild already sourced from Qdrant (`rebuild_sources/6`).
+  defp sent?(chunk, dense?), do: dense_chunk?(chunk, dense?) and not Map.has_key?(chunk, :vector)
+
   # A merged chunk's point holds a length-capped keyword vector and no
   # `avgdl` length, so it never matches an unmerged chunk with the same
   # text, or the reverse: `merged/` in front, decided per chunk. A group of
@@ -2636,7 +2809,7 @@ defmodule Engram.Indexing do
     do:
       for(
         {:embed, chunk} <- plan.entries,
-        dense_chunk?(chunk, plan.dense?),
+        sent?(chunk, plan.dense?),
         do: chunk.embed_text
       )
 
@@ -2647,6 +2820,9 @@ defmodule Engram.Indexing do
       Enum.flat_map_reduce(plan.entries, vectors, fn
         {:reuse, _chunk, _point_id, _tokens}, left ->
           {[], left}
+
+        {:embed, %{vector: vector}}, left ->
+          {[vector], left}
 
         {:embed, chunk}, left ->
           if dense_chunk?(chunk, plan.dense?),
@@ -2933,8 +3109,12 @@ defmodule Engram.Indexing do
     # for a key whose pass then fails is harmless). Both behind flags that
     # are off, so with them off a pass does exactly what main does: no
     # extraction, no Postgres writes, the v3 payload.
-    v5_format? = Qdrant.v5_payload_format?()
-    v5? = write_v5_layout?()
+    # A v5 rebuild writes the v5 layout whatever the flags say: the pass IS
+    # the move to it, and it re-extracts the flat fields from the current
+    # frontmatter for every note it touches (Task 16.3).
+    rebuild? = Map.get(plan, :rebuild?, false)
+    v5_format? = rebuild? or Qdrant.v5_payload_format?()
+    v5? = rebuild? or write_v5_layout?()
 
     flat =
       if v5_format?,
@@ -3003,7 +3183,8 @@ defmodule Engram.Indexing do
          stale_point_ids: unrewritten(plan.stale_point_ids, qdrant_points, v5?),
          note_payload: note_payload,
          payload_hash: payload_hash(note_payload),
-         v5_layout?: v5?
+         v5_layout?: v5?,
+         rebuild?: rebuild?
        }
        |> then(fn p ->
          if v5_format?,

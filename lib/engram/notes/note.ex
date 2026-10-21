@@ -68,6 +68,9 @@ defmodule Engram.Notes.Note do
     field :embed_started_by, :string
     field :embed_started_hash, :string
     field :embed_crashes, :integer
+    # A v5 rebuild pass got its vectors from Voyage and has not committed yet
+    # (`Engram.Indexing`, chunker v5 Task 16.3).
+    field :rebuild_paid_at, :utc_datetime_usec
     field :mtime, :float
     field :deleted_at, :utc_datetime_usec
     field :content_ciphertext, :binary

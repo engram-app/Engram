@@ -19,6 +19,8 @@ defmodule Engram.PromEx.Indexing do
     * `engram_prom_ex_indexing_rebuild_halted_total` and
       `engram_prom_ex_indexing_rebuild_drift_parked_total`: the v5 rebuild
       ledger halt (once per off transition) and drift parks (`Engram.Rebuild`).
+    * `engram_prom_ex_indexing_rebuild_double_pay_parked_total`: rebuild
+      notes parked before a second Voyage payment for the same content.
     * `engram_prom_ex_indexing_rebuild_meter_failed_total`: live ledger debits
       that failed and were carried to the end of the rebuild job.
     * `engram_prom_ex_indexing_rebuild_ledger_{budget,spent}_tokens`: the
@@ -79,6 +81,7 @@ defmodule Engram.PromEx.Indexing do
   @stale_points_leaked_event [:engram, :indexing, :stale_points_leaked]
   @rebuild_halted_event [:engram, :rebuild, :halted]
   @rebuild_drift_event [:engram, :rebuild, :drift_parked]
+  @rebuild_double_pay_event [:engram, :rebuild, :double_pay_parked]
   @rebuild_meter_failed_event [:engram, :rebuild, :meter_failed]
   @rebuild_gated_event [:engram, :rebuild, :gated]
   @rebuild_ledger_event [:engram, :rebuild, :ledger]
@@ -246,6 +249,11 @@ defmodule Engram.PromEx.Indexing do
           event_name: @rebuild_drift_event,
           description:
             "v5 rebuild notes parked for costing over 1.5x their estimate and 50k tokens."
+        ),
+        counter(
+          metric_prefix ++ [:rebuild, :double_pay_parked, :total],
+          event_name: @rebuild_double_pay_event,
+          description: "v5 rebuild notes parked before paying Voyage twice for the same content."
         ),
         counter(
           metric_prefix ++ [:rebuild, :meter_failed, :total],

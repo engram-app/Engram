@@ -620,7 +620,7 @@ defmodule Engram.Workers.EmbedNote do
         # inside the chunk-row transaction (`:in_commit`).
         index_opts =
           budget ++
-            Keyword.take(opts, [:index_tier, :keep_dense, :embed_purpose]) ++
+            Keyword.take(opts, [:index_tier, :keep_dense, :embed_purpose, :rebuild]) ++
             [in_commit: &stamp_embed_hash(note, &2, &1, &3)]
 
         case index(note, decrypted_note, vault, user, index_opts, opts) do
@@ -632,6 +632,11 @@ defmodule Engram.Workers.EmbedNote do
           # note is no longer behind the target) or runs again under `on`.
           {:error, :rebuild_paused} ->
             {:snooze, 300}
+
+          # The rebuild was about to pay Voyage twice for this content
+          # (`Rebuild.park_double_pay/1`): parked until edited, not failed.
+          {:error, :rebuild_double_pay} ->
+            :ok
 
           # Voyage 429 — back off without burning an Oban attempt. Voyage's
           # paid-tier RPM is finite; without this guard five consecutive
