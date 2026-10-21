@@ -30,6 +30,7 @@ import pytest
 import requests
 
 from helpers.billing import grant_test_plan, grant_vault_headroom
+from helpers.clerk import e2e_email
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +193,7 @@ def _make_clerk_user(clerk_client) -> tuple[str, str, str]:
     `grant_test_plan(email)` themselves.
     """
     ts = _ts()
-    email = f"e2e-conn-{ts}+clerk_test@example.com"
+    email = e2e_email("conn", ts)
     password = secrets.token_urlsafe(32)
 
     clerk_user_id = clerk_client.create_user(email, password)

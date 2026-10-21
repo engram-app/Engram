@@ -305,3 +305,35 @@ def test_username_is_clerk_valid_for_long_and_odd_emails(monkeypatch: pytest.Mon
 def test_username_is_stable_for_same_email(monkeypatch: pytest.MonkeyPatch) -> None:
     e = "stable+tag@example.com"
     assert _posted_username(monkeypatch, e) == _posted_username(monkeypatch, e)
+
+
+# --- shared e2e email builder -------------------------------------------------
+# Clerk 422 form_param_format_invalid (param email_address) on local parts > 64.
+
+_LONG_TS = "20261016082322730191r389999999999j" + "e2e-clerk" + "w12"  # 12-digit run id
+
+
+def test_e2e_email_local_part_within_64() -> None:
+    for label in ("sync", "iso", "onboarding-envelope", "vacc-u1-2c97b0"):
+        email = clerk_mod.e2e_email(label, _LONG_TS)
+        assert len(email.split("@")[0]) <= 64, email
+
+
+def test_e2e_email_unique_per_parts() -> None:
+    a = clerk_mod.e2e_email("sync", "20261016082322730191r1j1w0")
+    b = clerk_mod.e2e_email("sync", "20261016082322730192r1j1w0")
+    c = clerk_mod.e2e_email("iso", "20261016082322730191r1j1w0")
+    assert len({a, b, c}) == 3
+
+
+def test_e2e_email_stays_inside_reaper_and_sweep_patterns() -> None:
+    from helpers.clerk_constants import is_e2e_clerk_email
+
+    email = clerk_mod.e2e_email("onboarding-envelope", _LONG_TS)
+    assert is_e2e_clerk_email(email)
+    assert email.endswith(f"{_LONG_TS}+clerk_test@example.com")  # w{N}/r..j.. scoping intact
+
+
+def test_e2e_email_raises_when_ts_alone_cannot_fit() -> None:
+    with pytest.raises(ValueError):
+        clerk_mod.e2e_email("x", "9" * 80)

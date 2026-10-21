@@ -28,7 +28,7 @@ from datetime import datetime
 import pytest
 
 from helpers.api import ApiClient
-from helpers.clerk import ClerkClient
+from helpers.clerk import ClerkClient, e2e_email
 from helpers.clerk_auth import provision_clerk_user
 
 logger = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ def test_free_attachment_uploads_and_402_shape():
     """Free user: image upload 200, override -> 402, markdown upsert 200."""
 
     clerk = ClerkClient(CLERK_SECRET)
-    email = f"e2e-free-att-{_ts()}+clerk_test@example.com"
+    email = e2e_email("free-att", _ts())
     password = secrets.token_urlsafe(32)
     _clerk_user_id, clerk_auth, _api_key = provision_clerk_user(
         clerk, email, password, API_URL,
