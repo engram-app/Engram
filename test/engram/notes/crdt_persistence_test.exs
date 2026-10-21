@@ -914,6 +914,28 @@ defmodule Engram.Notes.CrdtPersistenceTest do
       assert %{settle_timer: nil, first_dirty_at: nil} = :sys.get_state(timer_of(room))
     end
 
+    # The load is dropped by its transaction origin, not by counting: an edit
+    # landing right after the start is the room's next update and must be
+    # logged (a miscounted credit used to be able to swallow it).
+    test "an edit right after the start is still logged", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+      {:ok, %{state: upd}} = CrdtBridge.merge_plaintext(nil, "tail edit")
+      st = %{user_id: user.id, vault_id: vault.id, note_id: note.id}
+      _ = CrdtPersistence.update_v1(st, upd, note.id, CrdtBridge.new_doc())
+
+      room = start_room(user, vault, note)
+      assert tail_count(user, note.id) == 1
+
+      :ok =
+        SharedDoc.update_doc(room, fn doc ->
+          doc |> Yex.Doc.get_text(CrdtBridge.text_name()) |> Yex.Text.insert(0, "E-")
+        end)
+
+      _ = :sys.get_state(room)
+      assert tail_count(user, note.id) == 2
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}
+    end
+
     # The #902 fence is the row the checkpoint transaction reads (plus the
     # snapshot fence on its write), so a tick reads the note once and opens one
     # transaction.

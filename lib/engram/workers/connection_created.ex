@@ -14,14 +14,19 @@ defmodule Engram.Workers.ConnectionCreated do
       link (`Engram.Mailer.send_connected/3`). A failed send is returned, so
       Oban retries it; a suppressed address is not retried.
 
-  Unique per (user, client) for 30 days, so re-authorizing queues nothing new.
+  The dedupe is `OAuth.prior_connection?/3`, a query over the token table:
+  re-authorizing a client the user already has sends nothing. The unique
+  window below only collapses a burst of exchanges; the Pruner deletes
+  completed jobs after a day, so it cannot be the 30-day dedupe
+  (ObanRetentionTest).
   Self-host sends nothing via the NoOp mail provider.
   """
 
   use Oban.Worker,
     queue: :events,
     max_attempts: 3,
-    # 30 days, the same look-back as `OAuth.prior_connection?/3`.
+    # The same look-back as `OAuth.prior_connection?/3`, which is the real
+    # dedupe. Effective only as long as the Pruner keeps completed jobs.
     unique: [keys: [:user_id, :client_id], period: 30 * 24 * 3600]
 
   alias Engram.Accounts.User

@@ -4207,18 +4207,21 @@ jobs:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_n1
         working-directory: ${{ env.PREV_DIR }}
         run: |
-          # Copy this branch's NEW migrations into prev's migrations dir.
+          # Copy every migration prev's tree lacks into prev's migrations
+          # dir: this branch's new ones AND main's not yet released. A deploy
+          # of this branch applies all of them on top of prev's schema, and a
+          # new migration may build on an unreleased one (diffing against
+          # main alone made such a PR fail on a table that exists by the time
+          # it deploys).
           cd "${{ github.workspace }}"
-          git fetch -q --depth=1 origin main || true
-          if ! new_files_output=$(bash priv/repo/list_new_migrations.sh); then
-            echo "::error::n1-compat: list_new_migrations.sh failed (BASE_REF may not be fetched)"
-            exit 1
-          fi
+          new_files_output=$(comm -23 \
+            <(ls priv/repo/migrations | grep -E '\.exs$' | sort) \
+            <(ls "$PREV_DIR"/priv/repo/migrations | grep -E '\.exs$' | sort))
           if [ -z "$new_files_output" ]; then
-            echo "::notice::n1-compat: no new migrations on this branch — nothing to apply on top of prev."
+            echo "::notice::n1-compat: no migrations newer than prev — nothing to apply on top of prev."
             exit 0
           fi
-          echo "New migrations on this PR (about to apply on top of prev's schema):"
+          echo "Migrations not in prev (about to apply on top of prev's schema):"
           echo "$new_files_output" | sed 's/^/  /'
           while IFS= read -r f; do
             cp "priv/repo/migrations/$f" "$PREV_DIR"/priv/repo/migrations/

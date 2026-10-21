@@ -82,8 +82,8 @@ config :engram, Oban,
   engine: Engram.Oban.SafeEngine,
   repo: Engram.Repo,
   # Staging poll cadence (default 1s). Fresh inserts dispatch instantly via the
-  # Postgres notifier (pg_notify), which also fans out across our unclustered
-  # prod nodes through the shared DB — so this poll only paces promotion of
+  # notifier (pg_notify through the shared DB; Oban.Notifiers.PG when clustered,
+  # see config/runtime.exs), so this poll only paces promotion of
   # scheduled/retry jobs and acts as a missed-notify safety net. 5s trims ~80%
   # of the source-less BEGIN/COMMIT/SELECT staging churn with no fresh-insert
   # latency cost.
@@ -180,7 +180,11 @@ config :engram, Oban,
     crdt_checkpoint: 3
   ],
   plugins: [
-    {Oban.Plugins.Pruner, max_age: 7 * 24 * 3600},
+    # One day. The PromEx queue-count poll scans every retained row, and at
+    # 7 days it was the #1 app statement in prod (2026-10-20 audit). Nothing
+    # may rely on a completed job outliving this: ObanRetentionTest fails a
+    # worker whose unique period is longer, unless a table really dedupes it.
+    {Oban.Plugins.Pruner, max_age: 24 * 3600},
     Oban.Plugins.Lifeline,
     {
       Oban.Plugins.Cron,
@@ -228,6 +232,7 @@ config :engram, Oban,
         # Every CRDT persist NULLs crdt_head; this re-warms them (a continuing
         # self-heal, never done; see docs/context/data-migrations-ledger.md).
         {"48 * * * *", Engram.Workers.WarmCrdtHeads},
+        {"5-59/15 * * * *", Engram.Workers.DrainStrandedTails},
         # Export archives past the 7-day download window (#859).
         {"53 * * * *", Engram.Workers.ExportExpirySweep},
         # Paddle drift check. Daily: drift logs at :error to Sentry, and a

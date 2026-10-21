@@ -168,6 +168,36 @@ defmodule Engram.RuntimeConfig do
   def validate_saas_origins!(_auth_provider, _phx_hosts, _ci?), do: :ok
 
   @doc """
+  Session settings for a Repo's connections, sent by Postgrex in the startup
+  packet, so they cost no round trip per query.
+
+    * `idle_in_transaction_session_timeout`: a transaction left open while the
+      app does something else holds its row locks and stops vacuum from
+      cleaning the rows it can see. Prod's server default is 24h; the app set
+      nothing (2026-10-20 audit, P1-12). Postgres ends the session, and the
+      pool reconnects.
+    * `lock_timeout` (app pool only): a request waiting behind a lock fails in
+      10s instead of queueing for the full 15s checkout timeout behind, say, a
+      migration's ACCESS EXCLUSIVE.
+
+  No `statement_timeout`: vault cleanup, exports and backfills legitimately
+  run long statements, and DBConnection's per-query timeout already bounds the
+  app side.
+
+  The maintenance pool runs cross-tenant sweeps, so it gets a longer idle
+  bound and no lock timeout. Migrations must not inherit either (a
+  `CREATE INDEX CONCURRENTLY` waits on other transactions through the lock
+  manager): `Engram.Release` strips them for the migrator.
+
+  No `@spec`: each clause returns a compile-time constant, so any keyword
+  spec is a dialyzer `contract_supertype` (see `Engram.Repo.tenant_tables/0`).
+  """
+  def repo_parameters(:app),
+    do: [idle_in_transaction_session_timeout: "60s", lock_timeout: "10s"]
+
+  def repo_parameters(:maintenance), do: [idle_in_transaction_session_timeout: "10min"]
+
+  @doc """
   Builds the `Engram.Repo` SSL options from env.
 
     * `DATABASE_SSL` not in `~w(true 1)` → `[]` (no TLS; self-host/local pg).

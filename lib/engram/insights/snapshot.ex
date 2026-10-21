@@ -271,7 +271,66 @@ defmodule Engram.Insights.Snapshot do
 
   defp midnight(date), do: DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
 
+  # A vault whose change_seq has not moved since the day before holds the
+  # same notes, folders, tags and attachments: every write to one of those
+  # rows takes a seq (Vaults.next_seq!/1). Its row is copied instead of
+  # reading every note again, which is most vaults on most days. Two things
+  # move without a seq and are handled here: links are written after their
+  # note's commit (ExtractNoteLinks), so they are always recounted, and a
+  # re-encode (DEK rotation, envelope format) changes stored bytes, so a
+  # vault is read again once its last real read is a week old.
+  @rescan_days 7
+  @copied_fields [:vault_id, :user_id, :vault_created_at, :change_seq, :scanned_on] ++
+                   [:notes, :note_bytes, :attachments, :attachment_bytes, :folders, :tags]
+
   defp vault_rows(repo, ids, day, now) do
+    # Read BEFORE the sizes, so a write landing mid-scan leaves a seq older
+    # than the sizes: the next day reads the vault again.
+    seqs = Map.new(repo.all(from(v in Vault, where: v.id in ^ids, select: {v.id, v.change_seq})))
+    since = Date.add(day, -@rescan_days)
+
+    copies =
+      from(m in VaultDailyMetric,
+        where: m.vault_id in ^ids and m.date == ^Date.add(day, -1) and m.scanned_on > ^since
+      )
+      |> repo.all()
+      |> Enum.filter(&(&1.change_seq == Map.get(seqs, &1.vault_id)))
+
+    copied = Enum.map(copies, & &1.vault_id)
+    links = link_counts(repo, copied)
+
+    copied_rows =
+      for m <- copies do
+        m
+        |> Map.take(@copied_fields)
+        |> Map.put(:links, Map.get(links, m.vault_id, 0))
+      end
+
+    scanned_rows =
+      case ids -- copied do
+        [] -> []
+        scan -> scan_vaults(repo, scan, seqs, day)
+      end
+
+    Enum.map(
+      copied_rows ++ scanned_rows,
+      &Map.merge(&1, %{date: day, inserted_at: now, updated_at: now})
+    )
+  end
+
+  defp link_counts(_repo, []), do: %{}
+
+  defp link_counts(repo, ids) do
+    from(l in NoteLink,
+      where: l.vault_id in ^ids,
+      group_by: l.vault_id,
+      select: {l.vault_id, count(l.id)}
+    )
+    |> repo.all(timeout: @chunk_timeout)
+    |> Map.new()
+  end
+
+  defp scan_vaults(repo, ids, seqs, day) do
     notes =
       from(n in Note,
         where: n.vault_id in ^ids and is_nil(n.deleted_at) and n.kind == "note",
@@ -345,10 +404,9 @@ defmodule Engram.Insights.Snapshot do
     |> repo.all(timeout: @chunk_timeout)
     |> Enum.map(
       &Map.merge(&1, %{
-        date: day,
         vault_created_at: usec(&1.vault_created_at),
-        inserted_at: now,
-        updated_at: now
+        change_seq: Map.fetch!(seqs, &1.vault_id),
+        scanned_on: day
       })
     )
   end

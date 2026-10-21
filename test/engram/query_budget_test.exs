@@ -46,6 +46,10 @@ defmodule Engram.QueryBudgetTest do
   # measurement fix, no code change). Task 10b fix round 1: bootstrap runs
   # its DB work in one tenant block (cold 29 -> 20, warm 0 -> 3: the block
   # opens even when every loader hits).
+  # DB wave 2: a REST write and a checkpoint read the rotation lock in their
+  # own tenant_enter (RotationGate.gated/1), not in a query before it (-1
+  # each; MCP keeps the up-front read). The "rotation lock" lines below are
+  # now that tenant_enter.
   @budgets %{
     # Read target 5. begin, tenant_enter, the note, commit.
     "mcp get_notes" => 4,
@@ -82,15 +86,15 @@ defmodule Engram.QueryBudgetTest do
     "GET sync/manifest" => 6,
     "GET notes/*path" => 5,
     # As "mcp write_note update" (1-13), plus the response's note_links read.
-    "POST notes update" => 15,
+    "POST notes update" => 14,
     # Write target 12; floor 17: rotation lock, begin, enter, path lookup,
     # notes cap (usage_meters), path-collision probe, seq bump, INSERT, the
     # inserted row's re-read, usage_meters increment, EmbedNote and
     # ExtractNoteLinks unique check + insert (4), the vault_populated probe,
     # the response's links read, commit.
-    "POST notes create" => 17,
+    "POST notes create" => 16,
     # As "mcp append_to_note" (1-13), plus the response's note_links read.
-    "POST notes/append" => 15,
+    "POST notes/append" => 14,
     # Not consolidated in Task 10b (no query-classify item; a rename claims its
     # path in the vault index room, which must commit before the row txn):
     #  1 rotation lock. 2-5 claim validation txn (note ids at the paths).
@@ -99,10 +103,10 @@ defmodule Engram.QueryBudgetTest do
     #  14-21 rename txn (2 note reads, seq, UPDATE, tombstone INSERT).
     #  22-27 post-commit jobs (one unique, own txn). 28-32 idle-room fanout
     #  (fresh users row + note read). 33-36 links txn.
-    "POST notes/rename" => 36,
+    "POST notes/rename" => 35,
     # rotation lock, begin, enter, the note row, seq bump, tombstone,
     # usage_meters, two job inserts + their pg_notify, commit.
-    "DELETE notes/*path" => 12,
+    "DELETE notes/*path" => 11,
     # Warm: every loader is a cache hit; what remains is the controller's one
     # tenant block (begin, enter, commit), opened unconditionally (fix round 1
     # ruling: bootstrap's DB work runs in ONE block).
@@ -129,9 +133,9 @@ defmodule Engram.QueryBudgetTest do
     # (10: BEGIN, tenant_enter, note read, next_seq, note write, tail prune,
     # revisions read + 2 inserts, COMMIT) plus the dispatcher job insert and
     # Oban's pg_notify.
-    "CRDT checkpoint tick" => 13,
+    "CRDT checkpoint tick" => 12,
     # idle (was 48): bind 5 + delta 4 + the exit checkpoint 13.
-    "CRDT crdt_doc_update idle" => 22,
+    "CRDT crdt_doc_update idle" => 21,
     # open (was 25 at bee71923): the channel's note_in_vault? 4 + bind 5 +
     # the announce's path read 4.
     "CRDT room open" => 13

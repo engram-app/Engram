@@ -17,6 +17,13 @@ defmodule Engram.PromEx.CrdtTest do
 
   defp polling, do: Plugin.polling_metrics(otp_app: :engram) |> List.wrap()
 
+  test "records each update-log append's size, untagged" do
+    metrics = Plugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+    m = Enum.find(metrics, &(&1.name == [:engram, :prom_ex, :crdt, :update, :bytes]))
+    assert %Telemetry.Metrics.Distribution{event_name: [:engram, :crdt, :update_appended]} = m
+    assert m.tags == []
+  end
+
   test "is registered in the PromEx plugin list (else metrics never reach /metrics)" do
     assert Plugin in Engram.PromEx.plugins()
   end

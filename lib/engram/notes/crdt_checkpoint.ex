@@ -135,23 +135,13 @@ defmodule Engram.Notes.CrdtCheckpoint do
         # channel, and the CheckpointNote worker. Gating only the worker leg
         # left the one that actually fires open.
         #
-        # `check/1`, not `check_user/1`: `user` comes from the `:user` cache,
-        # which learns of a lock taken on another node only when its eviction
-        # lands, so the lock is read from the DB (one query). Skipping prunes
-        # nothing, so every edit stays in the tail-WAL and replays on the next
-        # bind.
-        case RotationGate.check(user.id) do
-          {:error, :rotation_in_progress} ->
-            Logger.warning(
-              "crdt checkpoint skipped — dek rotation in progress note_id=#{note_id}",
-              Metadata.with_category(:warning, :sync, note_id: note_id)
-            )
-
-            :skipped
-
-          _ ->
-            do_checkpoint(user, user_id, vault_id, note_id, live, opts)
-        end
+        # The lock is read fresh, not off `user` (the `:user` cache learns of
+        # a lock taken on another node only when its eviction lands): `gated/1`
+        # reads it in the checkpoint transaction's own tenant_enter, and a
+        # locked user raises RotationInProgressError before anything is written
+        # (do_checkpoint's rescue reports :skipped). Skipping prunes nothing,
+        # so every edit stays in the tail-WAL and replays on the next bind.
+        RotationGate.gated(fn -> do_checkpoint(user, user_id, vault_id, note_id, live, opts) end)
     end
   rescue
     # The user resolve and the lock read above are the only DB calls outside
@@ -363,6 +353,14 @@ defmodule Engram.Notes.CrdtCheckpoint do
         :skipped
     end
   rescue
+    Engram.Crypto.RotationInProgressError ->
+      Logger.warning(
+        "crdt checkpoint skipped — dek rotation in progress note_id=#{note_id}",
+        Metadata.with_category(:warning, :sync, note_id: note_id)
+      )
+
+      :skipped
+
     err ->
       Logger.error(
         "crdt checkpoint raised note_id=#{note_id} " <>
@@ -599,6 +597,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
             note.folder,
             tags
           )
+          |> Notes.keep_stored_path(note)
           |> Notes.inject_frontmatter_fields_pub(user, note_id, text)
           |> Map.put(:crdt_state_ciphertext, ct)
           |> Map.put(:crdt_state_nonce, nonce)

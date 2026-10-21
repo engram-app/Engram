@@ -1589,12 +1589,15 @@ defmodule Engram.OAuth do
   "no revoked row" (`expand_claims/1`), so that would bring the grant back.
   Expired rows are deleted one by one only in families with no revoked row,
   where no deletion can change liveness (a family left with no rows at all
-  reads as revoked). Neither changes what any grant may do, so nothing is
+  reads as revoked). Consumed, unrevoked rows are deleted 24h after their
+  use: never the family's live leaf, and never a revoked row, so liveness is
+  unchanged. None of these changes what any grant may do, so nothing is
   evicted here.
   """
   def cleanup_expired do
     code_cutoff = DateTime.utc_now(:second) |> DateTime.add(-3600, :second)
     revoked_cutoff = DateTime.utc_now(:second) |> DateTime.add(-7 * 24 * 3600, :second)
+    consumed_cutoff = DateTime.utc_now(:second) |> DateTime.add(-24 * 3600, :second)
 
     {codes, reaped} =
       from(ac in AuthorizationCode,
@@ -1632,7 +1635,21 @@ defmodule Engram.OAuth do
       )
       |> delete_tokens_locked()
 
-    {codes + revoked_tokens + expired_tokens, nil}
+    # A used token is kept for reuse detection (a replay of it revokes the
+    # family) for 24h, far past the 60s grace window, then deleted: before,
+    # every rotation left a row until the family expired. A replay after that
+    # reads as unknown and revokes nothing (accepted, 2026-10-20 audit).
+    # Revoked rows are left to the 7-day reap above: they mark the family
+    # revoked. The family's live leaf is never consumed, so liveness and
+    # `prior_connection?/3` read the same answer without these rows.
+    consumed_tokens =
+      from(rt in RefreshToken,
+        where: not is_nil(rt.consumed_at) and rt.consumed_at < ^consumed_cutoff,
+        where: is_nil(rt.revoked_at)
+      )
+      |> delete_tokens_locked()
+
+    {codes + revoked_tokens + expired_tokens + consumed_tokens, nil}
   end
 
   # A code reaped without ever being exchanged: the client never came back
@@ -1666,23 +1683,27 @@ defmodule Engram.OAuth do
 
   # A bare DELETE locks rows in heap order and takes no grant lock, so against
   # a revoke (grant lock, then rows by id) each side could hold a row the
-  # other wants: a deadlock. So cleanup takes the revoke's order: every
-  # owner's grant lock, users sorted, then the rows by id, then deletes those
-  # rows. Rows of an owner whose lock it does not hold are left for next hour.
-  # ponytail: one transaction holds one advisory lock per affected user; fine
-  # at hourly volumes, batch by user if a run ever touches thousands.
+  # other wants: a deadlock. So cleanup takes the revoke's order: the owner's
+  # grant lock, then the rows by id, then deletes those rows.
+  #
+  # One transaction PER USER. A single transaction holding every affected
+  # user's grant lock grew with the user count, and blocked each of those
+  # users' sign-ins and refreshes for the whole sweep (2026-10-20 audit).
+  # Rows that appear for a user after the list is read are left for next hour.
   defp delete_tokens_locked(query) do
+    from(t in query, select: t.user_id, distinct: true, order_by: t.user_id)
+    |> Repo.all(skip_tenant_check: true)
+    |> Enum.reduce(0, fn user_id, total -> total + delete_user_tokens_locked(query, user_id) end)
+  end
+
+  defp delete_user_tokens_locked(query, user_id) do
     {:ok, count} =
       Repo.transaction(fn ->
-        users =
-          from(t in query, select: t.user_id, distinct: true, order_by: t.user_id)
-          |> Repo.all(skip_tenant_check: true)
-
-        Enum.each(users, &lock_grants!/1)
+        lock_grants!(user_id)
 
         ids =
           from(t in query,
-            where: t.user_id in ^users,
+            where: t.user_id == ^user_id,
             select: t.id,
             order_by: t.id,
             lock: "FOR UPDATE"

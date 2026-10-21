@@ -58,22 +58,23 @@ defmodule Engram.Workers.BackfillCrdtHead do
   """
   @spec enqueue_all() :: non_neg_integer()
   def enqueue_all do
-    # Per-user inside each tenant's RLS context. A single cross-tenant read
-    # with `skip_tenant_check: true` returns zero rows on prod under FORCE ROW
-    # LEVEL SECURITY and enqueues nothing while reporting success (#1349).
+    # Through TenantScan.all/1: one maintenance-pool query on SaaS, a
+    # per-tenant loop elsewhere. Never one cross-tenant read on the app pool,
+    # which FORCE ROW LEVEL SECURITY turns into zero rows (#1349).
+    # ponytail: an hourly scan of the live notes, deliberately unindexed. Any
+    # index on crdt_head makes every CRDT append (which clears it) a non-HOT
+    # update across all notes indexes (NotesHotAppendTest); one bounded scan
+    # an hour is the cheaper side. Moving crdt_head off `notes` (the v5-window
+    # body split) is the upgrade path.
     pairs =
-      TenantScan.flat_map_users(fn user_id ->
-        from(n in Note,
-          join: v in Vault,
-          on: v.id == n.vault_id and is_nil(v.deleted_at),
-          where: n.kind == "note" and is_nil(n.crdt_head) and is_nil(n.deleted_at),
-          where: n.user_id == ^user_id,
-          group_by: n.vault_id,
-          select: n.vault_id
-        )
-        |> Repo.all()
-        |> Enum.map(&{user_id, &1})
-      end)
+      from(n in Note,
+        join: v in Vault,
+        on: v.id == n.vault_id and is_nil(v.deleted_at),
+        where: n.kind == "note" and is_nil(n.crdt_head) and is_nil(n.deleted_at),
+        distinct: true,
+        select: {n.user_id, n.vault_id}
+      )
+      |> TenantScan.all()
 
     Enum.each(pairs, fn {user_id, vault_id} ->
       %{"user_id" => user_id, "vault_id" => vault_id, "cursor" => @start_cursor}

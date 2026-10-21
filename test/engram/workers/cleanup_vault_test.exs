@@ -254,6 +254,190 @@ defmodule Engram.Workers.CleanupVaultTest do
       assert UsageMeters.notes_count(user.id) == 0
     end
 
+    # A big vault used to go in ONE transaction: every chunk, note (with its
+    # cascades) and attachment under one snapshot, past the checkout timeout,
+    # rolled back and retried forever (2026-10-20 audit, P1-8). Rows now go in
+    # id-ordered batches, each committed with its share of the counter, so a
+    # retry resumes from what is left.
+    test "deletes a vault bigger than one batch, a batch per transaction", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      stub_qdrant(bypass)
+      Application.put_env(:engram, :cleanup_vault_batch_size, 2)
+      on_exit(fn -> Application.delete_env(:engram, :cleanup_vault_batch_size) end)
+
+      notes = for _ <- 1..4, do: insert(:note, user: user, vault: vault)
+      insert(:note, user: user, vault: vault, deleted_at: DateTime.utc_now())
+      for _ <- 1..3, do: insert(:attachment, user: user, vault: vault)
+
+      for n <- notes do
+        %Chunk{
+          note_id: n.id,
+          vault_id: vault.id,
+          user_id: user.id,
+          position: 0,
+          char_start: 0,
+          char_end: 10,
+          qdrant_point_id: Ecto.UUID.generate()
+        }
+        |> Repo.insert!(skip_tenant_check: true)
+      end
+
+      # Setup seeded one live note too: 5 live.
+      assert UsageMeters.recount_notes!(user.id) == 5
+
+      {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.aggregate(Note, :count) end)
+      assert rows == 6
+
+      {_, queries} =
+        Engram.QueryRecorder.record(fn ->
+          assert :ok = CleanupVault.perform_cleanup(vault.id, user.id)
+        end)
+
+      deleting_notes =
+        queries
+        |> Engram.QueryRecorder.transactions()
+        |> Enum.count(fn stmts -> Enum.any?(stmts, &(&1 =~ ~s(DELETE FROM "notes"))) end)
+
+      # 6 notes at 2 per batch is 3 batches; the final transaction is a 4th.
+      assert deleting_notes >= 4, Engram.QueryRecorder.format(queries)
+
+      assert UsageMeters.notes_count(user.id) == 0
+
+      refute Repo.exists?(from(n in Note, where: n.vault_id == ^vault.id),
+               skip_tenant_check: true
+             )
+
+      refute Repo.exists?(from(a in Attachment, where: a.vault_id == ^vault.id),
+               skip_tenant_check: true
+             )
+
+      refute Repo.exists?(from(c in Chunk, where: c.vault_id == ^vault.id),
+               skip_tenant_check: true
+             )
+
+      refute Repo.get(Vault, vault.id, skip_tenant_check: true)
+    end
+
+    # A restore committing between two batches must stop the purge: the
+    # remaining batches and the final vault delete would otherwise wipe a vault
+    # the user has taken back. The restore is injected right after the first
+    # note batch's DELETE, so it commits with that batch.
+    test "a restore between batches stops the purge and keeps the vault", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      stub_qdrant(bypass)
+      Application.put_env(:engram, :cleanup_vault_batch_size, 2)
+      on_exit(fn -> Application.delete_env(:engram, :cleanup_vault_batch_size) end)
+      for _ <- 1..4, do: insert(:note, user: user, vault: vault)
+
+      test_pid = self()
+      handler = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        handler,
+        [:engram, :repo, :query],
+        fn _e, _m, %{query: sql}, _c ->
+          if self() == test_pid and sql =~ ~s(DELETE FROM "notes") do
+            :telemetry.detach(handler)
+
+            Repo.update_all(from(v in Vault, where: v.id == ^vault.id), [set: [deleted_at: nil]],
+              skip_tenant_check: true
+            )
+          end
+        end,
+        nil
+      )
+
+      try do
+        capture_log(fn -> assert :ok = CleanupVault.perform_cleanup(vault.id, user.id) end)
+      after
+        :telemetry.detach(handler)
+      end
+
+      assert Repo.get(Vault, vault.id, skip_tenant_check: true)
+
+      left =
+        Repo.aggregate(from(n in Note, where: n.vault_id == ^vault.id), :count,
+          skip_tenant_check: true
+        )
+
+      # 5 notes (setup's + 4); one batch of 2 went before the restore.
+      assert left == 3
+    end
+
+    # A purge that dies mid-way (all attempts) leaves the vault soft-deleted
+    # with some of its rows gone. Restoring it would hand back a partial vault
+    # as if it were whole, so once the first batch runs the vault is stamped
+    # `purge_started_at` and `restore_vault/2` refuses it. A retry finishes.
+    test "a purge that fails mid-way leaves the vault unrestorable; a retry finishes", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      stub_qdrant(bypass)
+      Application.put_env(:engram, :cleanup_vault_batch_size, 2)
+      on_exit(fn -> Application.delete_env(:engram, :cleanup_vault_batch_size) end)
+      for _ <- 1..4, do: insert(:note, user: user, vault: vault)
+
+      test_pid = self()
+      handler = {__MODULE__, make_ref()}
+      seen = :counters.new(1, [])
+
+      # The SECOND note batch's DELETE aborts its transaction (a failing
+      # statement inside it), so the next statement raises: the first batch
+      # is committed, the rest is not.
+      :telemetry.attach(
+        handler,
+        [:engram, :repo, :query],
+        fn _e, _m, %{query: sql}, _c ->
+          if self() == test_pid and sql =~ ~s(DELETE FROM "notes") do
+            :counters.add(seen, 1, 1)
+
+            if :counters.get(seen, 1) == 2 do
+              :telemetry.detach(handler)
+              Repo.query("SELECT 1/0")
+            end
+          end
+        end,
+        nil
+      )
+
+      try do
+        assert_raise Postgrex.Error, fn -> CleanupVault.perform_cleanup(vault.id, user.id) end
+      after
+        :telemetry.detach(handler)
+      end
+
+      stamped = Repo.get!(Vault, vault.id, skip_tenant_check: true)
+      assert stamped.deleted_at
+      assert stamped.purge_started_at
+
+      left =
+        Repo.aggregate(from(n in Note, where: n.vault_id == ^vault.id), :count,
+          skip_tenant_check: true
+        )
+
+      # 5 notes (setup's + 4); the first batch of 2 committed.
+      assert left == 3
+
+      assert {:error, :purge_started} = Vaults.restore_vault(user, vault.id)
+      assert Repo.get!(Vault, vault.id, skip_tenant_check: true).deleted_at
+
+      assert :ok = CleanupVault.perform_cleanup(vault.id, user.id)
+      refute Repo.get(Vault, vault.id, skip_tenant_check: true)
+    end
+
+    test "a vault whose purge has not started still restores", %{user: user, vault: vault} do
+      assert {:ok, restored} = Vaults.restore_vault(user, vault.id)
+      assert restored.id == vault.id
+      refute Repo.get!(Vault, vault.id, skip_tenant_check: true).deleted_at
+    end
+
     test "hard-deletes chunks associated with notes", %{
       bypass: bypass,
       user: user,

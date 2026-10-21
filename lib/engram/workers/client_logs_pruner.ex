@@ -32,14 +32,27 @@ defmodule Engram.Workers.ClientLogsPruner do
     {:ok, n}
   end
 
+  # By the time-ordered uuidv7 primary key, not `created_at`: `created_at` has
+  # no index (dropped in 20260629230000), so every batch seq-scanned the table.
+  # Every id is a server-minted uuidv7 (column default, no app-side mint), and
+  # a uuidv7's leading 48 bits are its mint time in ms, so `id < floor(cutoff)`
+  # is a pkey range scan. `created_at < cutoff` stays as the correctness bound:
+  # no row younger than retention is ever deleted, whatever its id.
   defp prune(cutoff, acc) do
+    floor =
+      cutoff
+      |> DateTime.from_naive!("Etc/UTC")
+      |> DateTime.to_unix(:millisecond)
+      |> id_floor()
+
     {n, _} =
       Repo.delete_all(
         from(l in "client_logs",
           where:
             l.id in subquery(
               from(s in "client_logs",
-                where: s.created_at < ^cutoff,
+                where: s.id < type(^floor, Ecto.UUID) and s.created_at < ^cutoff,
+                order_by: s.id,
                 select: s.id,
                 limit: @batch
               )
@@ -48,5 +61,11 @@ defmodule Engram.Workers.ClientLogsPruner do
       )
 
     if n >= @batch, do: prune(cutoff, acc + n), else: acc + n
+  end
+
+  # The smallest uuidv7 minted at `ms`: its timestamp bits, then all zeros.
+  @doc false
+  def id_floor(ms) when is_integer(ms) do
+    Ecto.UUID.cast!(<<ms::48, 0::80>>)
   end
 end

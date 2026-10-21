@@ -33,6 +33,18 @@ defmodule Engram.PromExObanPollGroupTest do
     end
   end
 
+  # `Engram.PromEx.Installs` polls the install_pings table every 5 minutes, and
+  # every node computes the same DB number (dashboards aggregate with max). On
+  # a split fleet the worker publishes it; a web node polling too is only extra
+  # DB work.
+  @installs_group :engram_installs_polling_metrics
+
+  test "the web role drops the Installs poller; the worker and an unset role keep it" do
+    assert @installs_group in drop_groups_for(%{"ENGRAM_NODE_ROLE" => "web"})
+    refute @installs_group in drop_groups_for(%{"ENGRAM_NODE_ROLE" => "worker"})
+    refute @installs_group in drop_groups_for(%{})
+  end
+
   describe "nodes that DO run queues" do
     test "the worker role keeps the group — it is the only node that can observe queue depth" do
       dropped = drop_groups_for(%{"ENGRAM_NODE_ROLE" => "worker"})

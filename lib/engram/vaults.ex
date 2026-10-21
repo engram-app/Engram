@@ -804,16 +804,29 @@ defmodule Engram.Vaults do
   re-sets default explicitly. The pending CleanupVault job becomes a no-op
   once deleted_at is nil.
 
-  Returns {:ok, vault}, {:error, {:limit_reached, limit, current}}, or
-  {:error, :not_found}.
+  Refuses (`{:error, :purge_started}`) once its permanent deletion has begun
+  (`purge_started_at`, stamped by CleanupVault before the first batch): the
+  purge commits in batches, so a vault whose purge failed part-way is missing
+  rows and must not come back as if whole. The purge job retries to the end.
+
+  Returns {:ok, vault}, {:error, {:limit_reached, limit, current}},
+  {:error, :purge_started}, or {:error, :not_found}.
   """
   def restore_vault(user, vault_id) do
     user = fresh_user(user)
 
     Repo.with_tenant(user.id, fn ->
-      case fetch_deleted(user.id, vault_id) do
+      # FOR UPDATE: CleanupVault stamps `purge_started_at` under the same row
+      # lock, so either this sees the stamp, or the stamp waits and finds the
+      # vault restored (and the purge stops before deleting anything).
+      case Repo.one(
+             from(v in deleted(scoped(user.id)), where: v.id == ^vault_id, lock: "FOR UPDATE")
+           ) do
         nil ->
           {:error, :not_found}
+
+        %Vault{purge_started_at: %DateTime{}} ->
+          {:error, :purge_started}
 
         vault ->
           # Skip the COUNT when no cap applies (#1502). Unlike insert_vault/4

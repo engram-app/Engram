@@ -60,6 +60,27 @@ defmodule Engram.ReleaseTest do
     end
   end
 
+  describe "reset_baseline/0" do
+    # It replays every migration when it fires, so it must open the migrator's
+    # session like migrate/0 does: the app Repo's lock_timeout would fail a
+    # CREATE INDEX CONCURRENTLY and leave an INVALID index behind.
+    test "drops the app Repo's session parameters before it runs, like migrate/0" do
+      original = Application.get_env(:engram, Repo)
+      on_exit(fn -> Application.put_env(:engram, Repo, original) end)
+
+      Application.put_env(
+        :engram,
+        Repo,
+        Keyword.put(original, :parameters, Engram.RuntimeConfig.repo_parameters(:app))
+      )
+
+      # A healthy uuid schema: the reset itself is a no-op.
+      assert :ok == Release.reset_baseline()
+
+      refute Keyword.has_key?(Application.get_env(:engram, Repo), :parameters)
+    end
+  end
+
   describe "set_engram_app_password/1" do
     # Reaches Postgres directly rather than through prepare_database/0, which
     # opens its own connection via Ecto.Migrator.with_repo and escapes the

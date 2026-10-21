@@ -140,6 +140,7 @@ defmodule Engram.PromEx.Crdt do
   @abort_event [:engram, :crdt, :checkpoint_abort]
   @projection_event [:engram, :crdt, :index_projection]
   @doc_event [:engram, :crdt, :checkpoint_doc]
+  @update_event [:engram, :crdt, :update_appended]
   @sweep_event [:engram, :crdt, :state_sweep]
 
   @impl true
@@ -246,6 +247,19 @@ defmodule Engram.PromEx.Crdt do
           description: "Projected markdown size per checkpoint — the bloat_ratio denominator.",
           reporter_options: [
             buckets: [500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000]
+          ]
+        ),
+        # Every crdt_update_log append's update size (CrdtPersistence). The
+        # table only holds the unfolded survivors, so their average said
+        # nothing about the write stream. Untagged: note/vault ids are
+        # unbounded labels.
+        distribution(
+          metric_prefix ++ [:update, :bytes],
+          event_name: @update_event,
+          measurement: :bytes,
+          description: "Yjs update size per CRDT update-log append, before encryption.",
+          reporter_options: [
+            buckets: [64, 256, 1_024, 4_096, 16_384, 65_536, 262_144, 1_048_576, 5_242_880]
           ]
         ),
         # The other half of the flatten gate. `should_flatten?/2` requires 1,000

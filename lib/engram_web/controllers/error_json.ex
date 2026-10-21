@@ -15,6 +15,11 @@ defmodule EngramWeb.ErrorJSON do
   # By default, Phoenix returns the status message from
   # the template name. For example, "404.json" becomes
   # "Not Found".
+  # Same body as RotationLockCheck's halt, for a write refused in its own
+  # tenant transaction (Engram.Crypto.RotationGate.gated/1).
+  def render("503.json", %{reason: %Engram.Crypto.RotationInProgressError{}}),
+    do: %{error: "rotation_in_progress"}
+
   def render(template, _assigns) do
     %{errors: %{detail: Phoenix.Controller.status_message_from_template(template)}}
   end

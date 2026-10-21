@@ -77,6 +77,9 @@ defmodule Engram.OAuthRotationRaceTest do
     Repo.query!("DELETE FROM oauth_authorization_codes WHERE user_id = $1", [uid])
     Repo.query!("DELETE FROM oauth_clients WHERE client_id = $1", [Ecto.UUID.dump!(client_id)])
     Repo.query!("DELETE FROM users WHERE id = $1", [uid])
+    # The exchange's ConnectionCreated job committed too; left behind it shows
+    # up in every later all_enqueued/1 on this database.
+    Repo.query!("DELETE FROM oban_jobs WHERE args->>'user_id' = $1", [user_id])
   end
 
   # Holds FOR UPDATE on the token row in its own transaction until told to

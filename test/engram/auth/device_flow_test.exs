@@ -489,6 +489,39 @@ defmodule Engram.Auth.DeviceFlowTest do
       {deleted, _} = DeviceFlow.cleanup_expired()
       assert deleted >= 1
     end
+
+    # A refresh token that expired without ever being rotated (an abandoned
+    # device) was never deleted: only revoked rows were. Expired tokens are
+    # refused before revocation is looked at, so deleting them changes no
+    # outcome. The current head of a live device is kept.
+    test "deletes refresh tokens expired over a week ago, never revoked or not" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      long_ago = DateTime.utc_now(:second) |> DateTime.add(-8 * 24 * 3600, :second)
+      recent = DateTime.utc_now(:second) |> DateTime.add(-3600, :second)
+
+      abandoned = insert(:device_refresh_token, user: user, vault: vault, expires_at: long_ago)
+      just_expired = insert(:device_refresh_token, user: user, vault: vault, expires_at: recent)
+      live = insert(:device_refresh_token, user: user, vault: vault)
+
+      old_revoked =
+        insert(:device_refresh_token, user: user, vault: vault, revoked_at: long_ago)
+
+      new_revoked = insert(:device_refresh_token, user: user, vault: vault, revoked_at: recent)
+
+      DeviceFlow.cleanup_expired()
+
+      left =
+        from(t in DeviceRefreshToken, where: t.user_id == ^user.id, select: t.id)
+        |> Repo.all(skip_tenant_check: true)
+        |> MapSet.new()
+
+      refute abandoned.id in left
+      refute old_revoked.id in left
+      assert just_expired.id in left
+      assert live.id in left
+      assert new_revoked.id in left
+    end
   end
 
   describe "authorize_device/3 vault ownership" do

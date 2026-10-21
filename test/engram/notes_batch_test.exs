@@ -525,16 +525,19 @@ defmodule Engram.NotesBatchTest do
     count_notes_queries(fun, fn _sql -> true end)
   end
 
-  # Counts only FULL-VAULT scans (fetch_decrypted_live_rows' shape): a SELECT
-  # over live rows with no id / folder_hmac / path_hmac narrowing. Marker
-  # lookups, conflict checks, and content-by-id fetches don't match, so the
-  # count pins exactly the O(vault) N+1 the shared-scan restructure removed.
+  # Counts only FULL-VAULT scans: a SELECT over live rows with no id /
+  # folder_hmac / path_hmac narrowing, or the cascade's one pass over the
+  # vault, grouped by folder_hmac (fetch_decrypted_live_rows/3). Marker
+  # lookups, conflict checks, content-by-id fetches and the cascade's fetch
+  # of the matching folders' rows don't match, so the count pins exactly the
+  # O(vault) N+1 the shared-scan restructure removed.
   defp with_vault_scan_count(fun) do
     count_notes_queries(fun, fn sql ->
       where_clause = sql |> String.split(" WHERE ", parts: 2) |> Enum.at(1, "")
+      grouped? = where_clause =~ ~s(GROUP BY n0."folder_hmac")
 
       String.starts_with?(sql, "SELECT") and where_clause =~ ~s("deleted_at" IS NULL) and
-        not (where_clause =~ ~s("id")) and not (where_clause =~ "folder_hmac") and
+        not (where_clause =~ ~s("id")) and (grouped? or not (where_clause =~ "folder_hmac")) and
         not (where_clause =~ "path_hmac")
     end)
   end

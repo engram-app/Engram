@@ -23,7 +23,6 @@ defmodule Engram.Notes.Revision do
     field :vault_id, Ecto.UUID
     field :actor, :string
     field :origin, :string
-    field :actor_user_id, Ecto.UUID
     field :restored_from_id, Ecto.UUID
     field :session_started_at, :utc_datetime_usec
     field :closed_at, :utc_datetime_usec
@@ -34,7 +33,6 @@ defmodule Engram.Notes.Revision do
     field :storage_key, :string
     field :blob_nonce, :binary
     field :content_hash, :string
-    field :char_count, :integer
     field :dek_version, :integer, default: 2
 
     timestamps(type: :utc_datetime_usec)

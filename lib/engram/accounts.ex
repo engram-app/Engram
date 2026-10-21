@@ -852,11 +852,51 @@ defmodule Engram.Accounts do
     # user's state change never has to evict the key.
     with {%ApiKey{} = key, _scope} <- cached_api_key(key_hash),
          %User{} = user <- get_user(key.user_id) do
+      :ok = touch_api_key(key)
       {:ok, user, key}
     else
       nil -> {:error, :invalid_key}
     end
   end
+
+  @key_used_debounce_seconds 3600
+
+  # Stamps `api_keys.last_used` (the connections page's "last used") at most
+  # once an hour per key per node: the `:api_key_used` cache holds the last
+  # stamp, and a node that has none trusts the one on the key row. The UPDATE
+  # repeats the hour test, so nodes racing on the same key write once. The
+  # stamp does not evict the `:api_key` cache (the trigger skips last_used),
+  # which is why that cache's copy of it is only a floor.
+  defp touch_api_key(%ApiKey{id: id, user_id: user_id, last_used: stored}) do
+    last =
+      case Engram.Cache.get(:api_key_used, id) do
+        {:ok, ts} -> ts
+        :miss -> stored
+      end
+
+    if key_used_stale?(last) do
+      now = DateTime.utc_now(:second)
+      cutoff = DateTime.add(now, -@key_used_debounce_seconds, :second)
+
+      Repo.with_tenant!(user_id, fn ->
+        Repo.update_all(
+          from(k in ApiKey,
+            where: k.id == ^id and (is_nil(k.last_used) or k.last_used < ^cutoff)
+          ),
+          set: [last_used: now]
+        )
+      end)
+
+      Engram.Cache.put(:api_key_used, id, now)
+    else
+      Engram.Cache.put(:api_key_used, id, last)
+    end
+  end
+
+  defp key_used_stale?(nil), do: true
+
+  defp key_used_stale?(%DateTime{} = ts),
+    do: DateTime.diff(DateTime.utc_now(), ts, :second) >= @key_used_debounce_seconds
 
   @doc """
   `{%ApiKey{}, vault_scope}` for a key hash, or nil for no such key. Cached as

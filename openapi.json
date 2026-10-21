@@ -5483,7 +5483,7 @@
     "/api/vaults/{id}/restore": {
       "post": {
         "callbacks": {},
-        "description": "Restores a soft-deleted vault back to active within its 30-day window. Returns 402 when restoring would exceed the plan's vault cap and 404 when no such vault exists.",
+        "description": "Restores a soft-deleted vault back to active within its 30-day window. Returns 402 when restoring would exceed the plan's vault cap, 409 once its permanent deletion has started, and 404 when no such vault exists.",
         "operationId": "vaults-restore",
         "parameters": [
           {
@@ -5538,6 +5538,16 @@
               }
             },
             "description": "No such vault, or one the credential cannot reach (the two look the same)"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Permanent deletion of this vault has started"
           }
         },
         "summary": "Restore a soft-deleted vault",
