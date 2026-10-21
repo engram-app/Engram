@@ -17,7 +17,7 @@ defmodule Engram.PromEx.Indexing do
   Metrics:
 
     * `engram_prom_ex_indexing_rebuild_halted_total` and
-      `engram_prom_ex_indexing_rebuild_drift_parked_total` — the v5 rebuild
+      `engram_prom_ex_indexing_rebuild_drift_parked_total`: the v5 rebuild
       ledger halt (once per off transition) and drift parks (`Engram.Rebuild`).
     * `engram_prom_ex_indexing_repath_total` — counter of repath events by
       `:outcome`. Alert on `:fallback` / `:missing_points` rate; the `:ok` rate
