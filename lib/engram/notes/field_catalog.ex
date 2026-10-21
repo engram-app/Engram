@@ -74,12 +74,17 @@ defmodule Engram.Notes.FieldCatalog do
   """
 
   # The most used exact values per key, with one sample note each to read the
-  # value's text from. The sample is the lowest note id, so samples overlap
-  # across keys and values (fewer notes to decrypt); uuid has no min().
+  # value's text from. The sample is the lowest note id, and ties on count
+  # break on it, so samples overlap across keys and values: one-note values
+  # (urls, ids) of every key land on the same lowest-id notes, ~50 decrypts
+  # instead of 50 per key. uuid has no min().
   @values_sql """
   SELECT key_id, h, notes, sample FROM (
     SELECT a.key_id, a.h, count(DISTINCT a.note_id) AS notes, min(a.note_id::text)::uuid AS sample,
-           row_number() OVER (PARTITION BY a.key_id ORDER BY count(DISTINCT a.note_id) DESC, a.h) AS rn
+           row_number() OVER (
+             PARTITION BY a.key_id
+             ORDER BY count(DISTINCT a.note_id) DESC, min(a.note_id::text), a.h
+           ) AS rn
     FROM note_attrs a
     WHERE a.vault_id = $1 AND a.h IS NOT NULL
       AND NOT EXISTS (
@@ -236,10 +241,10 @@ defmodule Engram.Notes.FieldCatalog do
   # value HMAC => text, from each sample note's frontmatter (and, for `type`
   # and `tags`, the note row's own blind-index inputs).
   # ponytail: one decrypt per distinct sample note. Samples are the lowest
-  # note id per value, so they overlap, but a vault whose keys each hold many
-  # one-note values still pays up to 50 x keys decrypts on a cache miss (the
-  # CRDT state is never loaded). Cap the samples if a cold catalog shows up
-  # in traces.
+  # note id per value and ties break on it, so they overlap; keys whose
+  # one-note values sit on disjoint notes still pay up to 50 x keys decrypts
+  # on a cache miss (the CRDT state is never loaded). Cap the samples if a
+  # cold catalog shows up in traces.
   defp value_texts(_user, _vault, [], _fk), do: {true, %{}}
 
   defp value_texts(user, vault, values, fk) do
