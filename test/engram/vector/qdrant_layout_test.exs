@@ -252,6 +252,21 @@ defmodule Engram.Vector.QdrantLayoutTest do
       refute Map.has_key?(QdrantLayout.desired_strict(:cloud), "write_rate_limit")
     end
 
+    # Qdrant Cloud's managed default, set by us so the cloud profile
+    # (staging) refuses an unindexed filtered read as prod does (#2138).
+    # Only `_retrieve`: prod leaves `unindexed_filtering_update` unset
+    # (collection_info_prod_2026_10_18.json), so setting it would change prod.
+    test "cloud refuses unindexed filtered reads; self-host and the kill switch do not set it" do
+      cloud = QdrantLayout.desired(@v1182, nil, true, :cloud)["strict_mode_config"]
+      assert cloud["unindexed_filtering_retrieve"] == false
+      refute Map.has_key?(cloud, "unindexed_filtering_update")
+
+      for {strict?, deployment} <- [{true, :self_host}, {false, :cloud}, {false, :self_host}] do
+        want = QdrantLayout.desired(@v1182, nil, strict?, deployment)["strict_mode_config"] || %{}
+        refute Map.has_key?(want, "unindexed_filtering_retrieve")
+      end
+    end
+
     # A self-hoster's collection can outgrow any number picked from our prod.
     test "self-host: none" do
       assert QdrantLayout.desired_strict(:self_host) == %{}

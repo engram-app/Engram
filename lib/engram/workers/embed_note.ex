@@ -18,8 +18,9 @@ defmodule Engram.Workers.EmbedNote do
 
   That skip is also gated on `chunker_version` (#1620): content being unchanged
   is not enough if the chunks were built by an older chunker, so a note stamped
-  below the current `Markdown.chunker_version/0` (or not at all) is rebuilt
-  rather than skipped. A newer stamp is current, so a rollback rebuilds nothing. Version-stale notes are re-embedded by the
+  below the target chunker (`Engram.Rebuild.target_versions/0`), or not at
+  all, is rebuilt rather than skipped. A newer stamp is current, so a
+  rollback rebuilds nothing. Version-stale notes are re-embedded by the
   `IndexVersions` data migration (`Engram.DataMigrations`).
 
   A chunker bump alone does not re-normalize BM25 against a drifted `avgdl`:
@@ -50,7 +51,6 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Logger.DecryptFailure
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
-  alias Engram.Parsers.Markdown
   alias Engram.Rebuild
   alias Engram.Repo
   alias Engram.ServiceConfig
@@ -61,13 +61,6 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Workers.EmbedNote.CrashGuard
 
   require Logger
-
-  # Read at COMPILE time so it can appear in a clause head below — a guard
-  # cannot call `Markdown.chunker_version/0`. The tradeoff is a compile-time
-  # dependency on the parser: bumping the version recompiles this worker, which
-  # is what we want, since a stale copy here would skip the notes the bump
-  # exists to rebuild.
-  @chunker_version Markdown.chunker_version()
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(10)
@@ -1083,11 +1076,21 @@ defmodule Engram.Workers.EmbedNote do
       end
 
     # A full pass encodes the current keyword version too, so it stamps both.
+    # The TARGET versions, not the build's: before `INDEX_REBUILD=on` they are
+    # the pins, so a note edited then keeps a pre-v5 stamp and the v5 pass
+    # still rewrites it in the pass's layout and encoding (pinned avgdl).
+    # Stamping the build would make the pass skip it for good. A pass that
+    # reuses every vector costs it 0 Voyage tokens.
+    # ponytail: read at stamp time, so an off->on flip DURING this index
+    # stamps the build for a pass that did not use the pinned avgdl; capture
+    # the target before indexing if that window ever matters.
+    {chunker, keyword} = Rebuild.target_versions()
+
     set =
       [
         embed_hash: note.content_hash,
-        chunker_version: @chunker_version,
-        keyword_version: Engram.KeywordIndex.version(),
+        chunker_version: chunker,
+        keyword_version: keyword,
         # A full pass read the frontmatter under the current key alias table.
         key_alias_version: Engram.Notes.KeyAliases.version()
       ] ++ set

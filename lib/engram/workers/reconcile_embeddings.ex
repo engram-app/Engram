@@ -1186,8 +1186,8 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     length(fresh)
   end
 
-  # Notes indexed at their current content whose keyword vectors predate
-  # `KeywordIndex.version/0`: a keyword-encoding change (tokenizer, stemmer,
+  # Notes indexed at their current content whose keyword vectors predate the
+  # target keyword version (`Rebuild.target_versions/0`): a keyword-encoding change (tokenizer, stemmer,
   # what text is encoded) reaches them here with no operator step, on SaaS and
   # every self-host install. They go to RefreshKeywordVectors, which rewrites only the
   # sparse vectors and never calls the embedder. NOT to EmbedNote: most of

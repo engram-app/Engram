@@ -81,9 +81,10 @@ defmodule Engram.Rebuild do
   require Logger
 
   # The last versions every install rebuilds automatically, without the
-  # switch: today's build (chunker 3, keyword 2). PR-17's bump to chunker 5
-  # and keyword 3 waits for `on`. `:rebuild_pinned_versions` is a test seam
-  # only (no env var): it lets a test build stand in for a bumped one.
+  # switch: the stamps prod notes carry before the v5 pass (chunker 3,
+  # keyword 2). The build is at 5 / 3 (PR-17); that waits for `on`.
+  # `:rebuild_pinned_versions` is a test seam only (no env var, set by
+  # `test_helper.exs` to the build's versions so the suite runs pins == build).
   @pinned {3, 2}
 
   # Spec guards: the budget is 1.15x the manifest, and a note parks once it
@@ -146,6 +147,10 @@ defmodule Engram.Rebuild do
     :off
   end
 
+  @doc "`{chunker, keyword}` versions `off` and `dry_run` target: prod's pre-v5 stamps."
+  # No `@spec`, as `build_versions/0`.
+  def pinned_versions, do: @pinned
+
   @doc "`{chunker, keyword}` versions of this build."
   # No `@spec`: the body is two compile-time constants, so any integer spec
   # is a dialyzer `contract_supertype` (as `Repo.tenant_tables/0`).
@@ -165,7 +170,7 @@ defmodule Engram.Rebuild do
     if mode() == :on do
       {chunker, keyword}
     else
-      {pin_chunker, pin_keyword} = ServiceConfig.get(:rebuild_pinned_versions, @pinned)
+      {pin_chunker, pin_keyword} = ServiceConfig.get(:rebuild_pinned_versions, pinned_versions())
       {min(chunker, pin_chunker), min(keyword, pin_keyword)}
     end
   end

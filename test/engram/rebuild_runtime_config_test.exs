@@ -9,7 +9,12 @@ defmodule Engram.RebuildRuntimeConfigTest do
     "BM25_B_MERGED" => :bm25_b_merged,
     "TENANT_IDF_MIN_POINTS" => :tenant_idf_min_points,
     "LEGACY_FILTER_FIELDS" => :legacy_filter_fields,
-    "REBUILD_LAST_USERS" => :rebuild_last_users
+    "REBUILD_LAST_USERS" => :rebuild_last_users,
+    "WRITE_V5_LAYOUT" => :write_v5_layout,
+    "V5_PAYLOAD_FORMAT" => :v5_payload_format,
+    "CHUNK_TEXT_WRITE" => :chunk_text_write,
+    "CHUNK_TEXT_READ" => :chunk_text_read,
+    "QDRANT_TENANT_GRAPH" => :qdrant_tenant_graph
   }
 
   setup do
@@ -75,5 +80,42 @@ defmodule Engram.RebuildRuntimeConfigTest do
 
     System.put_env("REBUILD_LAST_USERS", "#{a},not-a-uuid")
     assert_raise RuntimeError, ~r/REBUILD_LAST_USERS/, &read_runtime/0
+  end
+
+  # The v5 layout flags: off unless set ("unset" above), strict switches.
+  for var <- ["WRITE_V5_LAYOUT", "V5_PAYLOAD_FORMAT", "CHUNK_TEXT_WRITE", "CHUNK_TEXT_READ"] do
+    test "#{var} is a switch" do
+      assert with_env(unquote(var), "true") == true
+      assert with_env(unquote(var), "1") == true
+      assert with_env(unquote(var), "false") == false
+      System.put_env(unquote(var), "yes")
+      assert_raise RuntimeError, ~r/#{unquote(var)} must be true or false/, &read_runtime/0
+    end
+  end
+
+  test "WRITE_V5_LAYOUT implies the v5 payload format" do
+    Engram.ServiceConfig.put_override(:write_v5_layout, true)
+    Engram.ServiceConfig.put_override(:v5_payload_format, false)
+    assert Engram.Vector.Qdrant.v5_payload_format?()
+  end
+
+  test "QDRANT_TENANT_GRAPH is a switch, true only after drop-legacy-fields" do
+    assert with_env("QDRANT_TENANT_GRAPH", "false") == false
+
+    # Only with LEGACY_FILTER_FIELDS=false (PR-18): unset or true refuses.
+    System.put_env("QDRANT_TENANT_GRAPH", "true")
+
+    assert_raise RuntimeError,
+                 ~r/QDRANT_TENANT_GRAPH=true needs LEGACY_FILTER_FIELDS=false/,
+                 &read_runtime/0
+
+    System.put_env("LEGACY_FILTER_FIELDS", "true")
+    assert_raise RuntimeError, ~r/QDRANT_TENANT_GRAPH/, &read_runtime/0
+
+    System.put_env("LEGACY_FILTER_FIELDS", "false")
+    assert engram(:qdrant_tenant_graph) == true
+
+    System.put_env("QDRANT_TENANT_GRAPH", "maybe")
+    assert_raise RuntimeError, ~r/QDRANT_TENANT_GRAPH must be true or false/, &read_runtime/0
   end
 end

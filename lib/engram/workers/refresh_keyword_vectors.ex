@@ -8,7 +8,7 @@ defmodule Engram.Workers.RefreshKeywordVectors do
   from, so its chunks fingerprint-match the stored points.
 
   Also enqueued by `ReconcileEmbeddings` for every note whose
-  `keyword_version` is behind `Engram.KeywordIndex.version/0`, so a keyword
+  `keyword_version` is behind the target (`Engram.Rebuild.target_versions/0`), so a keyword
   encoding change heals itself with no operator step. Success stamps the
   version.
 
@@ -32,7 +32,6 @@ defmodule Engram.Workers.RefreshKeywordVectors do
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
   alias Engram.Indexing
-  alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Repo
@@ -87,7 +86,9 @@ defmodule Engram.Workers.RefreshKeywordVectors do
   defp stale_chunker?(v), do: is_nil(v) or v < elem(Engram.Rebuild.target_versions(), 0)
 
   # Every point now carries the current keyword encoding, so the note leaves
-  # ReconcileEmbeddings' keyword sweep. Guarded on the content it read: an edit
+  # ReconcileEmbeddings' keyword sweep. Stamped with the TARGET version (the
+  # pin before `INDEX_REBUILD=on`), as `EmbedNote` stamps: the v5 pass must
+  # still re-encode it with the pinned avgdl. Guarded on the content it read: an edit
   # that landed meanwhile is EmbedNote's to index (and stamp).
   defp stamp_keyword_version(note) do
     {:ok, _} =
@@ -96,7 +97,7 @@ defmodule Engram.Workers.RefreshKeywordVectors do
           from(n in Note,
             where: n.kind == "note" and n.id == ^note.id and n.content_hash == ^note.content_hash
           ),
-          set: [keyword_version: KeywordIndex.version()]
+          set: [keyword_version: elem(Engram.Rebuild.target_versions(), 1)]
         )
       end)
 

@@ -271,8 +271,19 @@ defmodule Engram.Indexing do
     end
   end
 
+  @doc """
+  Ensures the notes collection and its payload indexes for the current flag
+  state (`Qdrant.ensure_collection/2`, memoised per node). Every index calls
+  it; so does `Engram.Vector.EnsureCollectionAtBoot`, so a node that never
+  indexes (a dry run, a web node) still has the indexes its filters need.
+  """
+  @spec ensure_collection() :: :ok | {:error, term()}
+  def ensure_collection, do: Qdrant.ensure_collection(collection(), embed_dims())
+
+  defp embed_dims, do: Application.get_env(:engram, :embed_dims, @default_dims)
+
   defp prepare_chunks(note, user, chunks, opts, okf_healed? \\ false) do
-    dims = Application.get_env(:engram, :embed_dims, @default_dims)
+    dims = embed_dims()
     # Counted up front so nothing after planning holds the raw chunks: on a
     # merged note the plan has its own copies (Task 9.2).
     n = length(chunks)
@@ -291,7 +302,7 @@ defmodule Engram.Indexing do
     # Nothing after it queries but a refusal's meter read for its log line;
     # the sparse re-plan reuses the rows already read (`plan_within_budget/5`).
     # Move the reservation past the commit if that ever contends.
-    with :ok <- Qdrant.ensure_collection(collection(), dims),
+    with :ok <- ensure_collection(),
          {:ok, filter_key} <- Crypto.dek_filter_key(user),
          {:ok, content_key} <- Crypto.dek_content_hash_key(user),
          {:ok, opts} <- with_vector_cache(user, note, content_key, dims, opts),

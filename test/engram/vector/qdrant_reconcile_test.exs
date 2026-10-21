@@ -714,6 +714,114 @@ defmodule Engram.Vector.QdrantReconcileTest do
     assert_receive {:patch, %{"vectors" => _}}
   end
 
+  # `QDRANT_STRICT_PROFILE=cloud` reproduces prod's unindexed-filter refusal
+  # (#2138). It must land AFTER the payload indexes, or the first filter 400s.
+  describe "unindexed filtering on the cloud profile" do
+    setup %{bypass: bypass} do
+      ServiceConfig.put_override(:qdrant_strict_profile, :cloud)
+      stub_version(bypass, "1.18.2")
+      stub_memory(bypass, "engram_notes", 100)
+      stub_no_sys_metrics(bypass)
+      :ok
+    end
+
+    defp without_refusal(info),
+      do:
+        update_in(
+          info,
+          ["config", "strict_mode_config"],
+          &Map.delete(&1, "unindexed_filtering_retrieve")
+        )
+
+    test "boot creates the payload indexes, then refuses unindexed reads", %{bypass: bypass} do
+      test_pid = self()
+      # The v5 short keys are missing from the fixture: index creates happen.
+      ServiceConfig.put_override(:v5_payload_format, true)
+      fake_collection(bypass, "engram_notes", without_refusal(@prod_info))
+
+      Bypass.expect_once(bypass, "PUT", "/collections/engram_notes", fn conn ->
+        json(conn, 409, %{status: %{error: "already exists"}})
+      end)
+
+      Bypass.stub(bypass, "PUT", "/collections/engram_notes/index", fn conn ->
+        send(test_pid, :index)
+        json(conn, 200, %{status: "ok"})
+      end)
+
+      assert :ok = Qdrant.ensure_collection("engram_notes", 1024)
+
+      msgs = for msg <- flush(), msg == :index or match?({:patch, _}, msg), do: msg
+
+      refusal =
+        Enum.find_index(
+          msgs,
+          &match?(
+            {:patch, %{"strict_mode_config" => %{"unindexed_filtering_retrieve" => false}}},
+            &1
+          )
+        )
+
+      assert refusal, "no PATCH set unindexed_filtering_retrieve: false"
+
+      assert :index in Enum.take(msgs, refusal),
+             "the refusal was applied before any payload index"
+
+      refute :index in Enum.drop(msgs, refusal)
+    end
+
+    test "prod already refuses: re-applying it is idempotent", %{bypass: bypass} do
+      fake_collection(bypass, "engram_notes", @prod_info)
+      assert {:ok, _} = Qdrant.reconcile_config("engram_notes")
+      assert {:ok, []} = Qdrant.reconcile_config("engram_notes")
+
+      {:ok, info} = Qdrant.collection_info("engram_notes")
+      assert info["config"]["strict_mode_config"]["unindexed_filtering_retrieve"] == false
+      refute Map.has_key?(info["config"]["strict_mode_config"], "unindexed_filtering_update")
+    end
+
+    # The boot ensure now runs on every node, web tier included. At default
+    # flags it must find every payload index prod already has and create
+    # none, and never set `unindexed_filtering_update` (prod leaves it unset).
+    test "default flags: the ensure on prod creates no payload index", %{bypass: bypass} do
+      test_pid = self()
+      fake_collection(bypass, "engram_notes", @prod_info)
+
+      Bypass.expect_once(bypass, "PUT", "/collections/engram_notes", fn conn ->
+        json(conn, 409, %{status: %{error: "already exists"}})
+      end)
+
+      Bypass.stub(bypass, "PUT", "/collections/engram_notes/index", fn conn ->
+        send(test_pid, :index)
+        json(conn, 200, %{status: "ok"})
+      end)
+
+      assert :ok = Qdrant.ensure_collection("engram_notes", 1024)
+      refute_received :index
+
+      for {:patch, %{"strict_mode_config" => strict}} <- flush() do
+        assert Map.get(strict, "unindexed_filtering_retrieve", false) == false
+        refute Map.has_key?(strict, "unindexed_filtering_update")
+      end
+    end
+
+    # The poller runs on its own clock, possibly before the boot ensure made
+    # the indexes: it keeps the limits only, never the refusal.
+    test "the poller never sets the refusal", %{bypass: bypass} do
+      fake_collection(bypass, "engram_notes", without_refusal(@prod_info))
+
+      assert :ok =
+               Qdrant.reconcile_strict_mode(
+                 "engram_notes",
+                 without_refusal(@prod_info),
+                 nil,
+                 Version.parse!("1.18.2")
+               )
+
+      assert_receive {:patch, %{"strict_mode_config" => strict}}
+      refute Map.has_key?(strict, "unindexed_filtering_retrieve")
+    end
+  end
+
   test "ensure_collection still succeeds when the reconcile fails", %{bypass: bypass} do
     stub_version(bypass, "1.18.2")
 

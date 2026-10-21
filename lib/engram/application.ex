@@ -362,6 +362,11 @@ defmodule Engram.Application do
       rate_limiter_child(),
       {Oban, oban},
       boot_sweep_child(oban),
+      # Payload indexes for this boot's flag state, on every node; retries
+      # in the background while Qdrant is down. Off in :test (Bypass suites).
+      if(Application.get_env(:engram, :qdrant_boot_ensure, true),
+        do: Engram.Vector.EnsureCollectionAtBoot
+      ),
       clerk_strategy_child(),
       # Bounds concurrent inline unbind checkpoints (self-healing via monitors);
       # must start before any CRDT room can terminate and call unbind/3.

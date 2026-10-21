@@ -252,6 +252,26 @@ defmodule Engram.IndexingResparseTest do
              Engram.KeywordIndex.version()
   end
 
+  # Before `INDEX_REBUILD=on` the target is the pin: stamping the build here
+  # would make the v5 pass skip a note it must re-encode (pinned avgdl).
+  test "before the v5 pass the job stamps the pinned keyword version", ctx do
+    %{user: user, note: note} = ctx
+    Engram.ServiceConfig.put_override(:rebuild_pinned_versions, Engram.Rebuild.pinned_versions())
+
+    Repo.update_all(from(n in Notes.Note, where: n.id == ^note.id), [set: [keyword_version: nil]],
+      skip_tenant_check: true
+    )
+
+    assert :ok =
+             perform_job(Engram.Workers.RefreshKeywordVectors, %{
+               note_id: note.id,
+               user_id: user.id
+             })
+
+    assert Repo.get!(Notes.Note, note.id, skip_tenant_check: true).keyword_version ==
+             elem(Engram.Rebuild.pinned_versions(), 1)
+  end
+
   # No fingerprint AND offsets no current chunk has: unmatchable.
   defp orphan_one_row(note) do
     {:ok, _} =

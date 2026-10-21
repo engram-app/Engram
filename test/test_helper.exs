@@ -6,6 +6,12 @@ Ecto.Adapters.SQL.Sandbox.mode(Engram.Repo, :manual)
 # See Engram.ServiceConfig.
 Engram.ServiceConfig.ensure_table()
 
+# The suite runs with the rebuild pins at the build's versions (as before the
+# v5 stamp), so "current" means this build's chunker everywhere. Prod's real
+# pins (`Rebuild.pinned_versions/0`) are installed per test by the suites that
+# prove the deploy is a no-op (`index_versions_pin_test.exs`).
+Application.put_env(:engram, :rebuild_pinned_versions, Engram.Rebuild.build_versions())
+
 # Same for the in-memory storage blobs: a test that created the table would
 # take every other test's blobs with it when it exits.
 Engram.Storage.InMemory.ensure_table()

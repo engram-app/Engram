@@ -59,7 +59,10 @@ defmodule Engram.KeywordIndex do
   # `Markdown.chunker_version/0` bump instead.
   #
   # NULL (pre-stamp) is stale. 2: the `context_text` prefix (#1615).
-  @version 2
+  # 3: the v5 rebuild's encoding (pinned per-vault avgdl, merged-chunk BM25
+  # `b`; chunker v5 PR-17). Reached only under `INDEX_REBUILD=on`
+  # (`Engram.Rebuild.target_versions/0`).
+  @version 3
 
   @doc "Version of the keyword encoding in this build, stamped on `notes.keyword_version`."
   # No @spec, like `Markdown.chunker_version/0`: the body is a literal, so
