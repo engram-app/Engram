@@ -116,7 +116,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
         if Repo.exists?(where(unstamped(), [n], n.user_id == ^uid)), do: [uid], else: []
       end)
 
-    executing = executing_user_ids()
+    executing = Engram.Backfill.TenantScan.executing_user_ids(__MODULE__)
 
     # One insert per user: Oban's Basic engine ignores `unique` in insert_all.
     for uid <- user_ids,
@@ -138,15 +138,6 @@ defmodule Engram.Workers.ReconcileNotePayloads do
             )
           )
     )
-  end
-
-  defp executing_user_ids do
-    from(j in Oban.Job,
-      where: j.worker == ^inspect(__MODULE__) and j.state == "executing",
-      select: fragment("?->>'user_id'", j.args)
-    )
-    |> Repo.all()
-    |> MapSet.new()
   end
 
   defp heal(%User{id: user_id} = user, after_id, deadline, counts) do
@@ -362,9 +353,15 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     set = [payload_hash: Indexing.note_payload_hash(payload)]
     set = if drifted?, do: [{:keyword_version, nil} | set], else: set
 
-    {:ok, {_, _}} =
+    {:ok, :ok} =
       Repo.with_tenant(note.user_id, fn ->
-        Repo.update_all(from(n in Note, where: n.kind == "note", where: ^guard), set: set)
+        case Repo.update_all(from(n in Note, where: n.kind == "note", where: ^guard), set: set) do
+          # We wrote this note's points from the row we read and the stamp
+          # missed: an index committed (and stamped) in between, and our
+          # write may have replaced its fresher payload.
+          {0, _} when drifted? -> Indexing.unstamp_payload_hash(note)
+          {_, _} -> :ok
+        end
       end)
 
     :ok

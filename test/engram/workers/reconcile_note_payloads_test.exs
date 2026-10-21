@@ -29,6 +29,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           set_payloads: [],
           overwrites: [],
           on_scroll: nil,
+          on_write: nil,
           payload_status: 200
         }
       end)
@@ -134,23 +135,64 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   # merge would leave the layouts mixed), and stamped with its hash. Before
   # #2067 this note was skipped and left unstamped, so a rotation left every
   # v5 point on the retired key for good.
-  test "a v5-shaped point is replaced with the v5 payload and its note stamped", ctx do
-    for id <- point_ids(ctx.stale),
+  # `want` is what a real v5 index pass wrote, never `expected_v5_payload/2`
+  # (the function under test): drift between the heal and the pass, or an
+  # overwrite that drops a key the pass writes, fails here.
+  test "a v5-shaped point is replaced with exactly what a v5 pass writes", ctx do
+    Engram.ServiceConfig.put_override(:write_v5_layout, true)
+    vault = Repo.get!(Engram.Vaults.Vault, ctx.stale.vault_id, skip_tenant_check: true)
+    {:ok, plain} = Crypto.maybe_decrypt_note_fields(reload(ctx.stale), ctx.user)
+    assert {:ok, _} = Indexing.index_note(plain, vault)
+
+    ids = point_ids(ctx.stale)
+    passed = Agent.get(ctx.store, &Map.take(&1.points, ids))
+    assert map_size(passed) == length(ids) and ids != []
+    pass_hash = reload(ctx.stale).payload_hash
+    Agent.update(ctx.store, &%{&1 | overwrites: []})
+
+    # A rotation left the points on the retired key, and the stamp NULL.
+    for id <- ids,
         do: Agent.update(ctx.store, &put_in(&1.points[id], %{"u" => "x", "y" => "b2xk"}))
+
+    {1, _} =
+      Repo.update_all(from(n in Note, where: n.id == ^ctx.stale.id), [set: [payload_hash: nil]],
+        skip_tenant_check: true
+      )
 
     expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("embed during reconcile") end)
     assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
 
-    {:ok, plain} = Crypto.maybe_decrypt_note_fields(reload(ctx.stale), ctx.user)
-    {:ok, v5} = Indexing.expected_v5_payload(plain, ctx.user)
-    want = v5 |> Jason.encode!() |> Jason.decode!()
-
-    assert [ids] = Agent.get(ctx.store, & &1.overwrites)
-    assert Enum.sort(ids) == Enum.sort(point_ids(ctx.stale))
-    for id <- ids, do: assert(Agent.get(ctx.store, &Map.fetch!(&1.points, id)) == want)
+    assert [written] = Agent.get(ctx.store, & &1.overwrites)
+    assert Enum.sort(written) == Enum.sort(ids)
+    assert Agent.get(ctx.store, &Map.take(&1.points, ids)) == passed
 
     assert Agent.get(ctx.store, & &1.set_payloads) == []
-    assert reload(ctx.stale).payload_hash == Indexing.note_payload_hash(v5)
+    assert reload(ctx.stale).payload_hash == pass_hash
+    assert reload(ctx.healthy).payload_hash
+  end
+
+  # An index commits (and stamps its own payload) after the heal read the
+  # row and before its write lands: the heal's write may have replaced the
+  # fresher payload, so the row must not keep a stamp that vouches for it.
+  test "a write that lost the race to an index leaves the row unstamped", ctx do
+    stale_id = ctx.stale.id
+
+    Agent.update(ctx.store, fn s ->
+      %{
+        s
+        | on_write: fn ->
+            Repo.update_all(
+              from(n in Note, where: n.id == ^stale_id),
+              [set: [content_hash: "edited", payload_hash: "stamped-by-the-index"]],
+              skip_tenant_check: true
+            )
+          end
+      }
+    end)
+
+    assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+    assert [_] = Agent.get(ctx.store, & &1.set_payloads)
+    assert reload(ctx.stale).payload_hash == nil
     assert reload(ctx.healthy).payload_hash
   end
 
@@ -175,6 +217,33 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
     assert reload(ctx.stale).payload_hash == nil
     assert reload(ctx.healthy).payload_hash
+  end
+
+  # The same race on the index pass: it PATCHes its reused points, then an
+  # edit commits (and stamps) first and the pass rolls back superseded. Its
+  # PATCH may have replaced the edit's payload, so the row is unstamped.
+  test "a pass superseded after refreshing reused points leaves the row unstamped", ctx do
+    id = ctx.healthy.id
+
+    Agent.update(ctx.store, fn s ->
+      %{
+        s
+        | on_write: fn ->
+            Repo.update_all(
+              from(n in Note, where: n.id == ^id),
+              [set: [content_hash: "edited", payload_hash: "stamped-by-the-edit"]],
+              skip_tenant_check: true
+            )
+          end
+      }
+    end)
+
+    vault = Repo.get!(Engram.Vaults.Vault, ctx.healthy.vault_id, skip_tenant_check: true)
+    {:ok, plain} = Crypto.maybe_decrypt_note_fields(reload(ctx.healthy), ctx.user)
+
+    assert {:error, :superseded} = Indexing.index_note(plain, vault)
+    assert [_] = Agent.get(ctx.store, & &1.set_payloads)
+    assert reload(ctx.healthy).payload_hash == nil
   end
 
   test "a rotation that starts mid-job snoozes it before any write", ctx do
@@ -295,6 +364,8 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           %{"status" => "completed"}
 
         {"POST", "/collections/engram_notes/points/payload"} ->
+          if hook = Agent.get(store, & &1.on_write), do: hook.()
+
           ids = for %{"has_id" => ids} <- body["filter"]["should"], id <- ids, do: id
 
           Agent.update(store, fn s ->
@@ -309,6 +380,8 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           %{"status" => "completed"}
 
         {"PUT", "/collections/engram_notes/points/payload"} ->
+          if hook = Agent.get(store, & &1.on_write), do: hook.()
+
           ids = for %{"has_id" => ids} <- body["filter"]["should"], id <- ids, do: id
 
           Agent.update(store, fn s ->

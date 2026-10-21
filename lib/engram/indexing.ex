@@ -1181,6 +1181,12 @@ defmodule Engram.Indexing do
           in_commit.(length(chunk_rows))
         end)
 
+      # Lost to a newer pass after PATCHing reused points: that pass may have
+      # stamped a payload our PATCH just replaced, so the stamp no longer
+      # vouches for the points. NULL makes the note's next pass refresh them.
+      if committed == {:error, :superseded} and refresh_ids != [],
+        do: unstamp_payload_hash(note)
+
       with {:ok, _} <- committed,
            :ok <-
              if(floor?,
@@ -1208,14 +1214,11 @@ defmodule Engram.Indexing do
   end
 
   # The note's index is committed, so a Voyage payment for it is spent:
-  # a later rebuild pass may pay again.
-  defp clear_rebuild_paid(%{note: note} = prepared) do
-    if Map.get(prepared, :rebuild?, false) or Map.get(note, :rebuild_paid_at) != nil,
-      do: unstamp_rebuild_paid(note),
-      else: :ok
-  end
-
-  defp unstamp_rebuild_paid(note) do
+  # a later rebuild pass may pay again. Unconditional: the loaded row can
+  # predate a rebuild's stamp (an edit planned before it), and a stamp left
+  # set parks the note's next rebuild as a double pay. One PK lookup that
+  # matches nothing in the common case.
+  defp clear_rebuild_paid(%{note: note}) do
     {_, _} =
       Repo.update_all(
         from(n in Note,
@@ -1223,6 +1226,22 @@ defmodule Engram.Indexing do
         ),
         set: [rebuild_paid_at: nil]
       )
+
+    :ok
+  end
+
+  @doc """
+  NULLs `note`'s `payload_hash`: a writer that may have replaced a fresher
+  payload on its points (a lost race) must not leave a stamp vouching for
+  them. The note's next pass refreshes the payload.
+  """
+  @spec unstamp_payload_hash(Note.t()) :: :ok
+  def unstamp_payload_hash(note) do
+    {:ok, _} =
+      Repo.with_tenant(note.user_id, fn ->
+        from(n in Note, where: n.id == ^note.id and not is_nil(n.payload_hash))
+        |> Repo.update_all(set: [payload_hash: nil])
+      end)
 
     :ok
   end

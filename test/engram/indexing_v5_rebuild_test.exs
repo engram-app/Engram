@@ -310,6 +310,23 @@ defmodule Engram.IndexingV5RebuildTest do
     assert reload(note).rebuild_paid_at == nil
   end
 
+  # A rebuild paid, failed its write, and an edit's pass committed from a row
+  # it loaded BEFORE that stamp. The commit must still clear it: left set,
+  # the next rebuild of this note parks as a double pay.
+  test "any committing pass clears the stamp, even from a row loaded before it", ctx do
+    note = indexed(ctx)
+    assert note.rebuild_paid_at == nil
+
+    tenant(ctx.user, fn ->
+      Repo.update_all(from(n in Note, where: n.id == ^note.id),
+        set: [rebuild_paid_at: DateTime.utc_now()]
+      )
+    end)
+
+    assert {:ok, _, _, _} = Indexing.index_note_with_usage(note, ctx.vault, ctx.user)
+    assert reload(note).rebuild_paid_at == nil
+  end
+
   test "a second Voyage call for an already-paid note parks it rebuild_double_pay", ctx do
     note = indexed(ctx)
     drop_dense(ctx.store)
