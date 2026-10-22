@@ -199,6 +199,13 @@ defmodule Engram.Vector.ClusterDiffTest do
              ClusterDiff.run("old", "v2", since: "2026-10-21", pause_ms: 0)
 
     _second = insert(:note, user: ctx.user, vault: ctx.note.vault)
+
+    Repo.update_all(
+      from(n in Note, where: n.user_id == ^ctx.user.id),
+      [set: [payload_hash: <<1>>, keyword_version: 1]],
+      skip_tenant_check: true
+    )
+
     since = DateTime.add(DateTime.utc_now(), -3600)
 
     assert {:ok, report} =
@@ -208,6 +215,10 @@ defmodule Engram.Vector.ClusterDiffTest do
     # Two notes at one per batch, plus the empty page that ends the walk is
     # not a batch.
     assert report.requeue_batches == 2
+
+    for note <-
+          Repo.all(from(n in Note, where: n.user_id == ^ctx.user.id), skip_tenant_check: true),
+        do: assert(is_nil(note.payload_hash) and is_nil(note.keyword_version))
   end
 
   test "a walk resumes after the last chunk id a report names" do

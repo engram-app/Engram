@@ -254,6 +254,17 @@ defmodule Engram.ServiceConfig.OverridesTest do
       assert message =~ "peer@10.0.0.2 (old_release)"
     end
 
+    test "a multicall that answers for fewer nodes than asked fails closed" do
+      assert {:error, {:invariant, message}} =
+               ServiceConfig.override(:qdrant_active_cluster, "v2",
+                 by: "t",
+                 peers: fn -> [:"a@10.0.0.2", :"b@10.0.0.3"] end,
+                 multicall: fn _ -> [{:ok, true}] end
+               )
+
+      assert message =~ "b@10.0.0.3 (unreachable)"
+    end
+
     test "every node configured: the flip goes through" do
       assert :ok = flip({:ok, true})
     end
@@ -267,17 +278,60 @@ defmodule Engram.ServiceConfig.OverridesTest do
 
   describe "override vs the env pin" do
     # The override wins whenever the table is readable; a node booted with the
-    # DB unreachable runs on env, so a mismatch is a latent split brain.
-    test "an override that disagrees with QDRANT_ACTIVE_CLUSTER logs an error" do
-      ServiceConfig.put_override(:qdrant_active_cluster, "v2")
+    # DB unreachable runs on env, so a mismatch is a latent split brain. It is
+    # read every 15s TTL, so the log fires once per distinct pair (a warning:
+    # an error is a Sentry event each time) and the gauge carries the state.
+    setup do
+      :persistent_term.erase({Engram.ServiceConfig.Overrides, :env_mismatch})
       ServiceConfig.put_override(:qdrant_url_v2, "http://v2")
       ServiceConfig.put_override(:qdrant_api_key_v2, "v2-key")
+      ref = make_ref()
+      test = self()
+
+      :telemetry.attach(
+        "mismatch-#{inspect(ref)}",
+        [:engram, :qdrant, :active_cluster],
+        fn _event, measurements, _meta, _ -> send(test, {ref, measurements}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("mismatch-#{inspect(ref)}") end)
+      %{ref: ref}
+    end
+
+    defp reload do
+      Cache.clear_local(:service_overrides)
+      capture_log(fn -> ServiceConfig.get(:qdrant_active_cluster, "old") end)
+    end
+
+    test "logs one warning per distinct override/env pair, and again on a change", ctx do
+      ServiceConfig.put_override(:qdrant_active_cluster, "v2")
       :ok = ServiceConfig.override(:qdrant_active_cluster, "old", by: "t")
 
-      log =
-        capture_log(fn -> assert ServiceConfig.get(:qdrant_active_cluster, "old") == "old" end)
+      first =
+        capture_log([level: :warning], fn ->
+          assert ServiceConfig.get(:qdrant_active_cluster, "old") == "old"
+        end)
 
-      assert log =~ "disagrees with env"
+      assert first =~ "disagrees with env"
+      assert first =~ "[warning]"
+      assert_receive {_, %{mismatch: 1}}
+      refute reload() =~ "disagrees with env"
+      assert_receive {r, %{mismatch: 1}} when r == ctx.ref
+
+      # Same override, env re-pinned the same way: still the same pair.
+      ServiceConfig.put_override(:qdrant_active_cluster, "old")
+      refute reload() =~ "disagrees with env"
+      assert_receive {_, %{mismatch: 0}}
+
+      ServiceConfig.put_override(:qdrant_active_cluster, "v2")
+      assert reload() =~ "disagrees with env"
+    end
+
+    test "no env pin, or a matching one: gauge 0, no log", ctx do
+      :ok = ServiceConfig.override(:qdrant_active_cluster, "old", by: "t")
+      refute reload() =~ "disagrees"
+      assert_receive {r, %{mismatch: 0}} when r == ctx.ref
     end
   end
 
