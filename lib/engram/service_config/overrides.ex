@@ -123,9 +123,12 @@ defmodule Engram.ServiceConfig.Overrides do
 
   # Inside a transaction the caller already holds a connection: read on it.
   # A task would need a second one, and N workers each holding one inside
-  # `with_tenant` could drain the pool waiting on themselves.
+  # `with_tenant` could drain the pool waiting on themselves. In a savepoint:
+  # a failed SELECT (table not migrated yet, a cancelled statement) would
+  # otherwise abort the CALLER's transaction, failing whatever write path
+  # read the flag.
   defp read do
-    if in_transaction?(), do: guarded_read(), else: read_in_task()
+    if in_transaction?(), do: guarded_read(mode: :savepoint), else: read_in_task()
   end
 
   # `Repo.in_transaction?/0` raises once the repo is gone (shutdown).
@@ -137,7 +140,7 @@ defmodule Engram.ServiceConfig.Overrides do
 
   # Outside one, a task bounds a hung database to @load_timeout_ms.
   defp read_in_task do
-    task = Task.async(&guarded_read/0)
+    task = Task.async(fn -> guarded_read([]) end)
 
     case Task.yield(task, @load_timeout_ms) || Task.shutdown(task, :brutal_kill) do
       {:ok, result} -> result
@@ -146,17 +149,17 @@ defmodule Engram.ServiceConfig.Overrides do
     end
   end
 
-  defp guarded_read do
-    {:ok, read_table()}
+  defp guarded_read(opts) do
+    {:ok, read_table(opts)}
   rescue
     e -> {:error, e}
   catch
     :exit, reason -> {:error, reason}
   end
 
-  defp read_table do
+  defp read_table(opts \\ []) do
     from(o in "service_overrides", select: {o.key, o.value})
-    |> Repo.all()
+    |> Repo.all(opts)
     |> Enum.flat_map(fn {name, value} ->
       # A row a newer release wrote, or a bad raw-SQL edit, is ignored.
       with {:ok, key} <- resolve(name),
@@ -205,12 +208,15 @@ defmodule Engram.ServiceConfig.Overrides do
             :clear -> Map.delete(current, key)
           end
 
-        case invariant_violation(next) do
-          nil ->
+        # Only a violation this write ADDS refuses it. One already there (an
+        # env change under a live override) must not block every later write,
+        # least of all a kill switch.
+        case violations(next, key) -- violations(current, nil) do
+          [] ->
             _ = write(key, op, by)
             {Map.fetch(current, key), Map.fetch(next, key)}
 
-          message ->
+          [message | _] ->
             Repo.rollback({:invariant, message})
         end
       end)
@@ -285,29 +291,49 @@ defmodule Engram.ServiceConfig.Overrides do
   end
 
   # The env-side twins live in engram-infra's v5_flags.tf validations; this
-  # keeps a runtime flip from reaching a state TF would refuse.
-  defp invariant_violation(overrides) do
+  # keeps a runtime flip from reaching a state TF would refuse. `changed` is
+  # the key being written: the v2 check asks every connected node only then.
+  defp violations(overrides, changed) do
     get = fn key -> Map.get_lazy(overrides, key, fn -> env(key) end) end
     rebuild = get.(:index_rebuild)
 
-    cond do
-      rebuild in ["dry_run", "on"] and get.(:write_v5_layout) != true ->
-        "index_rebuild=#{rebuild} needs write_v5_layout=true"
-
-      rebuild == "on" and get.(:vector_cache_enabled) != true ->
-        "index_rebuild=on needs vector_cache_enabled=true"
-
+    [
+      rebuild in ["dry_run", "on"] and get.(:write_v5_layout) != true &&
+        "index_rebuild=#{rebuild} needs write_v5_layout=true",
+      rebuild == "on" and get.(:vector_cache_enabled) != true &&
+        "index_rebuild=on needs vector_cache_enabled=true",
       get.(:qdrant_tenant_graph) == true and
-          ServiceConfig.env(:legacy_filter_fields, true) != false ->
-        "qdrant_tenant_graph=true needs LEGACY_FILTER_FIELDS=false"
+        ServiceConfig.env(:legacy_filter_fields, true) != false &&
+        "qdrant_tenant_graph=true needs LEGACY_FILTER_FIELDS=false",
+      get.(:qdrant_active_cluster) == "v2" && v2_violation(changed == :qdrant_active_cluster)
+    ]
+    |> Enum.filter(&is_binary/1)
+  end
 
-      get.(:qdrant_active_cluster) == "v2" and ServiceConfig.env(:qdrant_url_v2) in [nil, ""] ->
-        "qdrant_active_cluster=v2 needs QDRANT_URL_V2"
-
-      true ->
-        nil
+  defp v2_violation(peers?) do
+    case nodes_without_v2_url(peers?) do
+      [] -> nil
+      missing -> "qdrant_active_cluster=v2 needs QDRANT_URL_V2 on #{Enum.join(missing, ", ")}"
     end
   end
+
+  # This node's env, plus (on the flip itself) every connected node's: a
+  # task def that lacks QDRANT_URL_V2 (one tier's TF not rolled) reads `old`
+  # (`Qdrant.endpoint/0`) and would keep writing the old cluster while its
+  # peers write v2. A node that cannot answer counts as lacking it. A node
+  # not connected (no mesh) is not seen; QDRANT_ACTIVE_CLUSTER pins env.
+  defp nodes_without_v2_url(peers?) do
+    local = if configured?(ServiceConfig.env(:qdrant_url_v2)), do: [], else: [node()]
+    peers = if peers?, do: Node.list(), else: []
+    answers = :erpc.multicall(peers, ServiceConfig, :env, [:qdrant_url_v2], 5_000)
+
+    local ++ for {peer, answer} <- Enum.zip(peers, answers), not ok_url?(answer), do: peer
+  end
+
+  defp ok_url?({:ok, url}), do: configured?(url)
+  defp ok_url?(_), do: false
+
+  defp configured?(url), do: is_binary(url) and url != ""
 
   defp env(key), do: ServiceConfig.env(key, Map.fetch!(@defaults, key))
 end
