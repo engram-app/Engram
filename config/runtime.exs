@@ -312,8 +312,9 @@ if config_env() != :test do
       config :engram, :qdrant_active_cluster, "old"
 
     "v2" ->
-      if System.get_env("QDRANT_URL_V2") in [nil, ""],
-        do: raise("QDRANT_ACTIVE_CLUSTER=v2 needs QDRANT_URL_V2")
+      for var <- ["QDRANT_URL_V2", "QDRANT_API_KEY_V2"],
+          System.get_env(var) in [nil, ""],
+          do: raise("QDRANT_ACTIVE_CLUSTER=v2 needs #{var}")
 
       config :engram, :qdrant_active_cluster, "v2"
 

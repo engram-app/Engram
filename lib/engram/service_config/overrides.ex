@@ -176,23 +176,46 @@ defmodule Engram.ServiceConfig.Overrides do
   # The override wins over env whenever the table is readable. But a node
   # that boots with the DB unreachable has no override yet and runs on env:
   # an override rollback under an env pin the other way (QDRANT_ACTIVE_CLUSTER)
-  # is the split brain inverted. Logged on every load (each TTL) until the
-  # env pin is changed to match.
-  defp warn_env_disagreement(%{qdrant_active_cluster: cluster}) do
-    case ServiceConfig.env(:qdrant_active_cluster) do
-      env when is_binary(env) and env != cluster ->
-        Logger.error(
-          "qdrant_active_cluster override=#{cluster} disagrees with env " <>
-            "QDRANT_ACTIVE_CLUSTER=#{env}: change the env pin to match",
-          Metadata.with_category(:error, :data)
-        )
+  # is the split brain inverted. The state is a gauge
+  # (`engram_prom_ex_qdrant_active_cluster_mismatch`, 0/1, emitted on every
+  # load) for alerting; the log is one warning per distinct pair per node,
+  # since a load is every 15s TTL and an error is a Sentry event each time.
+  @mismatch_key {__MODULE__, :env_mismatch}
+  @mismatch_event [:engram, :qdrant, :active_cluster]
 
-      _ ->
-        :ok
+  @doc false
+  def mismatch_event, do: @mismatch_event
+
+  defp warn_env_disagreement(overrides) do
+    pair =
+      with {:ok, cluster} <- Map.fetch(overrides, :qdrant_active_cluster),
+           env when is_binary(env) and env != cluster <- ServiceConfig.env(:qdrant_active_cluster) do
+        {cluster, env}
+      else
+        _ -> nil
+      end
+
+    :telemetry.execute(@mismatch_event, %{mismatch: if(pair, do: 1, else: 0)}, %{})
+
+    # ponytail: persistent_term written only when the pair changes (a handful
+    # of times per rollout), so its global GC is noise.
+    if pair != :persistent_term.get(@mismatch_key, nil) do
+      :persistent_term.put(@mismatch_key, pair)
+      log_mismatch(pair)
     end
+
+    :ok
   end
 
-  defp warn_env_disagreement(_overrides), do: :ok
+  defp log_mismatch(nil), do: :ok
+
+  defp log_mismatch({cluster, env}) do
+    Logger.warning(
+      "qdrant_active_cluster override=#{cluster} disagrees with env " <>
+        "QDRANT_ACTIVE_CLUSTER=#{env}: change the env pin to match",
+      Metadata.with_category(:warning, :data)
+    )
+  end
 
   defp fallback(reason) do
     Logger.warning(
@@ -372,9 +395,16 @@ defmodule Engram.ServiceConfig.Overrides do
     peers = if peers?, do: Keyword.get(opts, :peers, &Node.list/0).(), else: []
     multicall = Keyword.get(opts, :multicall, &multicall/1)
 
+    answers = if peers == [], do: [], else: multicall.(peers)
+
+    # One answer per node, or the rest count as unreachable: `Enum.zip`
+    # alone would drop them and pass the check.
+    answers =
+      answers ++ List.duplicate({:error, :no_answer}, max(length(peers) - length(answers), 0))
+
     remote =
       peers
-      |> Enum.zip(if(peers == [], do: [], else: multicall.(peers)))
+      |> Enum.zip(answers)
       |> Enum.flat_map(fn
         {_node, {:ok, true}} -> []
         {node, {:ok, _}} -> [{node, :missing}]
