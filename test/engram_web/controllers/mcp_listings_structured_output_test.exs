@@ -16,6 +16,8 @@ defmodule EngramWeb.McpListingsStructuredOutputTest do
   @converted ~w(search_notes list_folders list_folder list_tags list_fields)
 
   setup do
+    Engram.ServiceConfig.put_override(:v5_payload_format, true)
+    Engram.ServiceConfig.put_override(:write_v5_layout, true)
     user = insert(:user)
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test Vault", Ecto.UUID.generate())
