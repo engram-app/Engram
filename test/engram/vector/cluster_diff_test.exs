@@ -56,13 +56,13 @@ defmodule Engram.Vector.ClusterDiffTest do
   defp point(id),
     do: %{"id" => id, "vector" => %{"dense" => [0.1, 0.2]}, "payload" => %{"u" => "x"}}
 
-  defp insert_chunk!(note, point_id) do
+  defp insert_chunk!(note, point_id, position) do
     Repo.insert!(
       %Chunk{
         note_id: note.id,
         user_id: note.user_id,
         vault_id: note.vault_id,
-        position: 0,
+        position: position,
         char_start: 0,
         char_end: 10,
         qdrant_point_id: point_id
@@ -80,7 +80,7 @@ defmodule Engram.Vector.ClusterDiffTest do
 
     [a, b, c] = for _ <- 1..3, do: Ecto.UUID.generate()
     stray = Ecto.UUID.generate()
-    for id <- [a, b, c], do: insert_chunk!(note, id)
+    for {id, i} <- Enum.with_index([a, b, c]), do: insert_chunk!(note, id, i)
 
     # old holds a and b; v2 holds a and a point no chunk row names. So on v2
     # b is missing (copyable from old) and c is missing (on neither).

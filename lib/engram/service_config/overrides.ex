@@ -16,8 +16,9 @@ defmodule Engram.ServiceConfig.Overrides do
   `Engram.Cluster.CacheSync`, on every peer; the TTL bounds a lost eviction
   (and a raw-SQL edit, which evicts nothing).
 
-  The load runs in a short-lived task with a 2s budget, so a hung or down
-  database never blocks a Qdrant call for longer and never raises. On a
+  Outside a transaction the load runs in a short-lived task with a 2s
+  budget, so a hung database never blocks a Qdrant call for longer; inside
+  one it reads on the caller's connection. Neither path raises. On a
   failed load the node keeps the overrides it last read
   (`:service_overrides_last_good`) and retries after the TTL; a node that has
   never read the table falls back to env. Keeping the last read values
@@ -103,28 +104,40 @@ defmodule Engram.ServiceConfig.Overrides do
   # ponytail: no single-flight; concurrent misses after a TTL or eviction each
   # run one tiny SELECT. Add a per-node loader process if traces show a herd.
   defp load do
-    task =
-      Task.async(fn ->
-        try do
-          {:ok, read_table()}
-        rescue
-          e -> {:error, e}
-        catch
-          :exit, reason -> {:error, reason}
-        end
-      end)
-
-    case Task.yield(task, @load_timeout_ms) || Task.shutdown(task, :brutal_kill) do
-      {:ok, {:ok, overrides}} ->
+    case read() do
+      {:ok, overrides} ->
         :ok = Cache.put(:service_overrides_last_good, :all, overrides)
         overrides
 
-      {:ok, {:error, reason}} ->
+      {:error, reason} ->
         fallback(reason)
-
-      other ->
-        fallback(other || :timeout)
     end
+  end
+
+  # Inside a transaction the caller already holds a connection: read on it.
+  # A task would need a second one, and N workers each holding one inside
+  # `with_tenant` could drain the pool waiting on themselves.
+  defp read do
+    if Repo.in_transaction?(), do: guarded_read(), else: read_in_task()
+  end
+
+  # Outside one, a task bounds a hung database to @load_timeout_ms.
+  defp read_in_task do
+    task = Task.async(&guarded_read/0)
+
+    case Task.yield(task, @load_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> result
+      {:exit, reason} -> {:error, reason}
+      nil -> {:error, :timeout}
+    end
+  end
+
+  defp guarded_read do
+    {:ok, read_table()}
+  rescue
+    e -> {:error, e}
+  catch
+    :exit, reason -> {:error, reason}
   end
 
   defp read_table do
