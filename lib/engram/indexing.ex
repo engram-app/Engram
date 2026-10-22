@@ -940,8 +940,10 @@ defmodule Engram.Indexing do
   # Body bytes one floor point covers. One vector for a whole note grew with
   # the note: a 3 MB CJK note (every bigram a term) was an 11.8 MB upsert
   # and a 213 MB encode peak, so 10 MB passed Qdrant's 32 MiB request cap
-  # and 30 MB the worker's RAM. 1 MiB of text keeps a point near 4 MB of
-  # JSON at that density.
+  # and 30 MB the worker's RAM. 1 MiB of body keeps a point near 5 MB of
+  # JSON at that density. Its keyword text can be far more (a breadcrumb
+  # repeats per member: a deep heading tree measured 24 MiB a point), but
+  # the repeats add few terms, so the vector stays near the body's.
   @floor_span 1_048_576
 
   @doc """
@@ -1424,8 +1426,8 @@ defmodule Engram.Indexing do
   defp collect_garbage(_n), do: :ok
 
   # At most `@upsert_batch` points and `@upsert_batch_bytes` of JSON each. A
-  # point bigger than the byte budget goes alone (a floor point is bounded by
-  # `@floor_span`).
+  # point bigger than the byte budget goes alone (a floor point's terms are
+  # bounded by the `@floor_span` of body it covers).
   defp point_batches(points) do
     Enum.chunk_while(
       points,
