@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.61.0](https://github.com/engram-app/Engram/compare/0.60.2...0.61.0) (2026-10-22)
+
+
+### Features
+
+* **indexing:** chunker v5 (one-time rebuild) ([#2067](https://github.com/engram-app/Engram/issues/2067)) ([8473bd9](https://github.com/engram-app/Engram/commit/8473bd9fdc7fa1f1600cdc084303cbdb550b5669))
+* **indexing:** stamp chunker v5 ([#2142](https://github.com/engram-app/Engram/issues/2142)) ([e616f73](https://github.com/engram-app/Engram/commit/e616f73b6b45cc961f4469682b62139038a30837))
+* sync any non-executable attachment and large files ([#2075](https://github.com/engram-app/Engram/issues/2075)) ([ba0299e](https://github.com/engram-app/Engram/commit/ba0299e4235f3b4a64965ca4d0d602e1222d3329))
+
+
+### Bug Fixes
+
+* **e2e:** restore real vault after simulated switch ([#2135](https://github.com/engram-app/Engram/issues/2135)) ([60cbac7](https://github.com/engram-app/Engram/commit/60cbac7c9f603617ed8a976d544b3c6610b1d35d))
+* **indexing:** reconcile read filters indexed keys ([#2140](https://github.com/engram-app/Engram/issues/2140)) ([85f7045](https://github.com/engram-app/Engram/commit/85f704560bc2bb94d4529f1f903d70b3fe543dd7))
+* **mcp:** hide v5-only fields until filters work ([#2144](https://github.com/engram-app/Engram/issues/2144)) ([26279a0](https://github.com/engram-app/Engram/commit/26279a0b41f47b30637e456dab2a40636305f285))
+* **release:** serialize boot migrators with an advisory lock ([#2129](https://github.com/engram-app/Engram/issues/2129)) ([dd7eb0e](https://github.com/engram-app/Engram/commit/dd7eb0e2ffe3a02c13f803092537518df2e79eca))
+* **search:** v5 layout implies chunk text read ([#2143](https://github.com/engram-app/Engram/issues/2143)) ([dcafb4c](https://github.com/engram-app/Engram/commit/dcafb4c868ac47aa5082897950764c5aa791791c))
+
 ## [0.60.2](https://github.com/engram-app/Engram/compare/0.60.1...0.60.2) (2026-10-21)
 
 
