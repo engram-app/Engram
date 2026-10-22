@@ -406,7 +406,7 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
         let room = p.body + text.len();
         let mut used = p.crumbs;
         let mut fit = |c: Option<String>| {
-            c.filter(|c| used + c.len() + 1 <= room)
+            c.filter(|c| used + c.len() < room)
                 .inspect(|c| used += c.len() + 1)
         };
         let first = fit((!p.first_crumb && p.first.len() > shared.len() + 1)
