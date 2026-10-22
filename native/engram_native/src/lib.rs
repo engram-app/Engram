@@ -34,10 +34,24 @@ const K1: f64 = 1.2;
 const MEMO_MAX: usize = 20_000;
 
 fn dim(key: &[u8], token: &str) -> u32 {
+    dim_parts(key, &[token.as_bytes()])
+}
+
+fn dim_parts(key: &[u8], parts: &[&[u8]]) -> u32 {
     let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("hmac accepts any key length");
-    mac.update(token.as_bytes());
+    for p in parts {
+        mac.update(p);
+    }
     let out = mac.finalize().into_bytes();
     u32::from_be_bytes([out[0], out[1], out[2], out[3]])
+}
+
+/// Dim of the adjacent-word pair `a b`: HMAC(key, "\x01bg " a " " b), the
+/// eval prototype's preimage, keyed. A unigram is one word run, which never
+/// holds \x01 or a space, so no unigram has this preimage; the u32s can
+/// still meet by chance, like any two unigrams, and sum.
+fn pair_dim(key: &[u8], a: &str, b: &str) -> u32 {
+    dim_parts(key, &[b"\x01bg ", a.as_bytes(), b" ", b.as_bytes()])
 }
 
 /// BM25 length options. `b` is the length weight (0.75 for every v3 point);
@@ -58,7 +72,8 @@ fn encode(
     lang: Option<&str>,
     memo: &mut HashMap<String, u32>,
 ) -> (Vec<u8>, Vec<u8>, usize) {
-    let (tokens, doc_len) = tokenizer::tokens_with_len(text, lang);
+    let (tokens, raw) = tokenizer::tokenize(text, lang);
+    let doc_len = raw.len();
     // Uncapped, this is the exact expression the encoder always used, so a
     // b 0.75 uncapped vector is bit-identical to before the options existed.
     let len = doc_len as f64;
@@ -88,6 +103,18 @@ fn encode(
         let n = n as f64;
         let w = n * (K1 + 1.0) / (n + K1 * norm);
         *by_dim.entry(d).or_insert(0.0) += w;
+    }
+
+    // Phrase features: adjacent raw pairs, same BM25 tf weight and norm.
+    // Only quoted query phrases ask for them, so they move nothing else.
+    let mut pair_tf: HashMap<(&str, &str), u32> = HashMap::new();
+    for p in tokenizer::pairs(&tokens, &raw) {
+        *pair_tf.entry(p).or_insert(0) += 1;
+    }
+    for ((a, b), n) in pair_tf {
+        let n = n as f64;
+        let w = n * (K1 + 1.0) / (n + K1 * norm);
+        *by_dim.entry(pair_dim(key, a, b)).or_insert(0.0) += w;
     }
 
     let mut pairs: Vec<(u32, f64)> = by_dim.into_iter().collect();
@@ -131,13 +158,24 @@ fn encode_documents_nif<'a>(
     })
 }
 
-/// Query vector: distinct tokens, value 1.0 each (Qdrant applies IDF).
+/// Query vector: distinct tokens, value 1.0 each (Qdrant applies IDF), plus
+/// the adjacent-pair dims of each quoted `phrase` (none: the unigram vector
+/// exactly as before phrases existed).
 /// Plain lists: a query is a few terms and goes straight into a JSON body.
 /// Dirty like the rest: query length is caller-controlled.
 #[rustler::nif(schedule = "DirtyCpu")]
-fn encode_query_nif(query: &str, key: Binary, lang: Option<String>) -> (Vec<u32>, Vec<f64>) {
+fn encode_query_nif(
+    query: &str,
+    key: Binary,
+    lang: Option<String>,
+    phrases: Vec<String>,
+) -> (Vec<u32>, Vec<f64>) {
     let (tokens, _) = tokenizer::tokens_with_len(query, lang.as_deref());
     let mut dims: Vec<u32> = tokens.iter().map(|t| dim(key.as_slice(), t)).collect();
+    for phrase in &phrases {
+        let (pt, raw) = tokenizer::tokenize(phrase, None);
+        dims.extend(tokenizer::pairs(&pt, &raw).map(|(a, b)| pair_dim(key.as_slice(), a, b)));
+    }
     dims.sort_unstable();
     dims.dedup();
     let values = vec![1.0; dims.len()];

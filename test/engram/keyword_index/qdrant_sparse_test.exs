@@ -28,8 +28,9 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
       QdrantSparse.encode_document("alpha alpha beta", key, 3.0, nil)
 
     assert doc_len == 3
-    assert length(indices) == 2
-    assert length(values) == 2
+    # alpha, beta, and the pairs "alpha alpha", "alpha beta".
+    assert length(indices) == 4
+    assert length(values) == 4
     assert Enum.all?(indices, &(is_integer(&1) and &1 >= 0))
     assert Enum.all?(values, &is_float/1)
     # 'alpha' (tf=2) outweighs 'beta' (tf=1)
@@ -74,22 +75,41 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
   # The pre-NIF Elixir encoder math, verbatim (HMAC + BM25 in Elixir over the
   # shared tokenizer), holding the Rust HMAC and BM25 to it: one HMAC and one full BM25 weight per
   # (chunk, distinct token). The bar the optimized code must match exactly.
+  # Plus the phrase features (keyword v4): every adjacent pair of RAW tokens
+  # (the language-nil stream), neither one CJK, weighted the same way.
   defp reference_encode(text, key, avgdl, lang, b \\ 0.75, max_len \\ nil) do
     {tokens, doc_len} = Tokenizer.tokens_with_len(text, lang)
     len = if max_len, do: min(doc_len, max_len), else: doc_len
 
+    raw = Tokenizer.tokens(text, nil)
+
+    pairs =
+      raw
+      |> Enum.zip(Enum.drop(raw, 1))
+      |> Enum.reject(fn {a, b} -> cjk?(a) or cjk?(b) end)
+      |> Enum.map(fn {a, b} -> {:pair, a, b} end)
+
     {indices, values} =
-      tokens
+      (tokens ++ pairs)
       |> Enum.frequencies()
       |> Enum.reduce(%{}, fn {token, tf}, acc ->
         w = Engram.KeywordIndex.Bm25.tf_weight(tf, len, avgdl, b: b)
-        Map.update(acc, QdrantSparse.dim(key, token), w, &(&1 + w))
+        Map.update(acc, ref_dim(key, token), w, &(&1 + w))
       end)
       |> Map.to_list()
       |> Enum.unzip()
 
     {%{indices: indices, values: values}, doc_len}
   end
+
+  defp ref_dim(key, {:pair, a, b}), do: QdrantSparse.pair_dim(key, a, b)
+  defp ref_dim(key, token), do: QdrantSparse.dim(key, token)
+
+  # The NIF tokenizer's CJK ranges (`is_cjk` in tokenizer.rs).
+  defp cjk?(token),
+    do:
+      token =~
+        ~r/[\x{3040}-\x{30FF}\x{3400}-\x{4DBF}\x{4E00}-\x{9FFF}\x{AC00}-\x{D7AF}\x{F900}-\x{FAFF}]/u
 
   # `b:` and `cap_doc_len` go to the NIF, which computes BM25's norm at that
   # b over min(len, 3 x avgdl); the weights must match the reference.

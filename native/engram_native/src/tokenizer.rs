@@ -168,6 +168,13 @@ fn bigrams(g: &[&str], out: &mut Vec<String>) -> usize {
 
 /// `{tokens, raw_len}` exactly as `Tokenizer.tokens_with_len/2`.
 pub fn tokens_with_len(text: &str, lang: Option<&str>) -> (Vec<String>, usize) {
+    let (out, raw) = tokenize(text, lang);
+    (out, raw.len())
+}
+
+/// Tokens, plus the position in them of each RAW token, in text order (a
+/// stem is never raw). `raw.len()` is the BM25 doc_len.
+pub fn tokenize(text: &str, lang: Option<&str>) -> (Vec<String>, Vec<usize>) {
     // Per-char lowercase, NOT `str::to_lowercase`: the latter applies the
     // contextual Greek final-sigma rule (Σ -> ς at word end) and Elixir's
     // `String.downcase(:default)` does not. Different sigma, different token.
@@ -176,11 +183,11 @@ pub fn tokens_with_len(text: &str, lang: Option<&str>) -> (Vec<String>, usize) {
     // İ -> i + U+0307, and zalgo spam), keeping Arabic/Hebrew marks attached.
     let stripped = STRIP_MARKS.replace_all(&norm, "$1");
     let mut out = Vec::new();
-    let mut raw = 0;
+    let mut raw = Vec::new();
     for word in WORD.find_iter(&stripped).map(|m| m.as_str()) {
         if !word.chars().any(is_cjk) {
+            raw.push(out.len());
             emit(word.to_string(), lang, &mut out);
-            raw += 1;
             continue;
         }
         let graphemes: Vec<&str> = word.graphemes(true).collect();
@@ -192,13 +199,25 @@ pub fn tokens_with_len(text: &str, lang: Option<&str>) -> (Vec<String>, usize) {
                 j += 1;
             }
             if cjk {
-                raw += bigrams(&graphemes[i..j], &mut out);
+                let at = out.len();
+                let n = bigrams(&graphemes[i..j], &mut out);
+                raw.extend(at..at + n);
             } else {
+                raw.push(out.len());
                 emit(graphemes[i..j].concat(), lang, &mut out);
-                raw += 1;
             }
             i = j;
         }
     }
     (out, raw)
+}
+
+/// Adjacent raw-token pairs, the phrase features of the keyword vector.
+/// A pair with a CJK token is skipped: CJK runs are already char bigrams.
+/// Same rule for documents and quoted query phrases.
+pub fn pairs<'a>(tokens: &'a [String], raw: &[usize]) -> impl Iterator<Item = (&'a str, &'a str)> {
+    raw.windows(2).filter_map(move |w| {
+        let (a, b) = (tokens[w[0]].as_str(), tokens[w[1]].as_str());
+        (!a.chars().any(is_cjk) && !b.chars().any(is_cjk)).then_some((a, b))
+    })
 }
