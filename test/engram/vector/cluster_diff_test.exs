@@ -143,7 +143,9 @@ defmodule Engram.Vector.ClusterDiffTest do
     assert report.missing == 2
     assert report.extra == nil
 
-    assert {:ok, other} = ClusterDiff.run("old", "v2", user_ids: [Ecto.UUID.generate()], pause_ms: 0)
+    assert {:ok, other} =
+             ClusterDiff.run("old", "v2", user_ids: [Ecto.UUID.generate()], pause_ms: 0)
+
     assert other.checked == 0
   end
 

@@ -149,7 +149,9 @@ defmodule Engram.ServiceConfig.OverridesTest do
 
     test "the GO SEQUENCE invariants hold across override and env" do
       assert {:error, {:invariant, _}} = ServiceConfig.override(:index_rebuild, "on", by: "t")
-      assert {:error, {:invariant, _}} = ServiceConfig.override(:index_rebuild, "dry_run", by: "t")
+
+      assert {:error, {:invariant, _}} =
+               ServiceConfig.override(:index_rebuild, "dry_run", by: "t")
 
       :ok = ServiceConfig.override(:write_v5_layout, true, by: "t")
       :ok = ServiceConfig.override(:index_rebuild, "dry_run", by: "t")
@@ -200,7 +202,12 @@ defmodule Engram.ServiceConfig.OverridesTest do
       refute Qdrant.write_v5_layout?()
       refute Qdrant.chunk_text_read?()
 
-      for key <- [:vector_cache_enabled, :index_budget_enabled, :embed_models_per_plan, :tenant_idf],
+      for key <- [
+            :vector_cache_enabled,
+            :index_budget_enabled,
+            :embed_models_per_plan,
+            :tenant_idf
+          ],
           do: :ok = ServiceConfig.override(key, true, by: "t")
 
       assert Engram.Indexing.VectorCache.enabled?()

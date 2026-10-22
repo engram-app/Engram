@@ -111,6 +111,7 @@ defmodule Engram.Vector.Qdrant do
       _ -> {ServiceConfig.get(:qdrant_url, @default_url), ServiceConfig.get(:qdrant_api_key)}
     end
   end
+
   defp collection, do: ServiceConfig.get(:qdrant_collection, @default_collection)
 
   @doc "Returns the configured Qdrant collection name (env-var-driven)."

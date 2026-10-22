@@ -158,7 +158,11 @@ defmodule Engram.Vector.ClusterDiff do
       ]
 
       with {:ok, %{points: points}} <- on(source, fn -> Qdrant.scroll(opts) end),
-           points = Enum.map(points, &%{id: &1["id"], vector: &1["vector"], payload: &1["payload"] || %{}}),
+           points =
+             Enum.map(
+               points,
+               &%{id: &1["id"], vector: &1["vector"], payload: &1["payload"] || %{}}
+             ),
            :ok <- upsert(target, points) do
         {:cont, {:ok, Enum.into(points, acc, & &1.id)}}
       else
