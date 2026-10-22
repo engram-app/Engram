@@ -1,6 +1,13 @@
 defmodule Engram.QueryRecorder do
   @moduledoc "Test helper: records every Repo query a function issues, with its Engram caller."
 
+  # The handler forwards every process's queries, so under a busy async
+  # suite a 50 ms quiet gap may never come: two tests sat in this loop for
+  # the whole 60 s test timeout (#2151 CI). The recorded function's own
+  # queries were sent before it returned; the gap only waits for stragglers,
+  # so it is capped.
+  @drain_max_ms 1_000
+
   def record(fun) do
     me = self()
     id = "query-recorder-#{System.unique_integer([:positive])}"
@@ -9,7 +16,7 @@ defmodule Engram.QueryRecorder do
 
     try do
       result = fun.()
-      {result, drain([])}
+      {result, drain([], System.monotonic_time(:millisecond) + @drain_max_ms)}
     after
       :telemetry.detach(id)
     end
@@ -55,11 +62,13 @@ defmodule Engram.QueryRecorder do
     end)
   end
 
-  defp drain(acc) do
+  defp drain(acc, deadline) do
+    wait = min(50, max(0, deadline - System.monotonic_time(:millisecond)))
+
     receive do
-      {:recorded_query, q} -> drain([q | acc])
+      {:recorded_query, q} -> drain([q | acc], deadline)
     after
-      50 -> Enum.reverse(acc)
+      wait -> Enum.reverse(acc)
     end
   end
 

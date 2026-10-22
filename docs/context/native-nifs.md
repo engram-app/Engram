@@ -655,6 +655,14 @@ dirty. Up to 16 KB of input (`@inline_max`, well under 1 ms) runs
 on the calling scheduler. A note write must not queue behind a long
 keyword encode on the one dirty scheduler, and the hop alone cost ~20 us.
 
+`chunk` over 256 KB (`@slice_from`) is not one dirty call: `chunk_job_nif`
+makes a resumable `chunker::Job` (a resource) and `chunk_step_nif` reads one
+64 KB heading segment per dirty call, so the scheduler is free between
+steps. A 10 MB heading tree took one 8-20 s call; its steps take at most
+~120 ms each (debug-profile NIF, #2151). The steps' chunks equal the one
+call's (`chunk_dirty_nif` stays for tests). Text with no heading is one
+section and one step, at ~10 MB/s.
+
 One rule, one place each side. Rust: declare the pair with
 `sized_nif!(f, f_nif, f_dirty_nif, ...)` in `lib.rs`, never by hand (except
 `envelope_open`; see above). Elixir:

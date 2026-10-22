@@ -6,7 +6,7 @@
 //! Headings come from pulldown-cmark, so a `# comment` inside code is not a
 //! heading and setext headings count. Only top-level headings split: one
 //! inside a list item or block quote is part of that block.
-use crate::links::{segmented, SEGMENT};
+use crate::links::{Segments, SEGMENT};
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use regex::Regex;
 use std::sync::OnceLock;
@@ -67,8 +67,61 @@ struct Heading {
 #[cfg(test)]
 pub fn chunk(content: &str, folder: &str, title: &str) -> Vec<Chunk> {
     let mut out = Vec::new();
-    each_chunk(content, folder, title, &[], None, |c| out.push(c));
+    each_chunk(content, folder, title, &[], None, &mut out);
     out
+}
+
+/// Where `each_chunk` hands chunks. A body over `budget` is chunked again,
+/// coalesced: `clear` drops what the first pass handed over.
+pub trait Sink {
+    fn push(&mut self, c: Chunk);
+    fn clear(&mut self);
+}
+
+impl Sink for Vec<Chunk> {
+    fn push(&mut self, c: Chunk) {
+        Vec::push(self, c)
+    }
+    fn clear(&mut self) {
+        Vec::clear(self)
+    }
+}
+
+/// Counts and drops: for callers that only measure.
+impl Sink for usize {
+    fn push(&mut self, _: Chunk) {
+        *self += 1
+    }
+    fn clear(&mut self) {
+        *self = 0
+    }
+}
+
+/// Puts the lead on the first dense chunk and notes whether any chunk was
+/// prose; `clear` resets both with the chunks.
+struct Leading<'s, S: Sink> {
+    sink: &'s mut S,
+    lead: Option<&'s str>,
+    unused: Option<&'s str>,
+    prose_seen: bool,
+}
+
+impl<S: Sink> Sink for Leading<'_, S> {
+    fn push(&mut self, mut c: Chunk) {
+        let dense = c.6 == PROSE || c.6 == FRONTMATTER_DENSE;
+        self.prose_seen |= c.6 == PROSE;
+        if let Some(l) = self.unused.filter(|_| dense) {
+            c.1 = with_lead(&c.1, l);
+            c.2 = with_lead(&c.2, l);
+            self.unused = None;
+        }
+        self.sink.push(c)
+    }
+    fn clear(&mut self) {
+        self.sink.clear();
+        self.unused = self.lead;
+        self.prose_seen = false;
+    }
 }
 
 /// Most chunks a body of `len` bytes may produce before its tiny sections
@@ -81,13 +134,15 @@ fn budget(len: usize) -> usize {
 }
 
 /// 2,000 sections need at least this much body (`# h\nx\n` is 6 bytes):
-/// below it the count pass is skipped.
+/// below it the budget is not checked.
 const COUNT_FROM: usize = 16 * 1024;
 
-/// `chunk`, handing each chunk to `emit` as it is made, so a huge note's
+/// `chunk`, handing each chunk to `sink` as it is made, so a huge note's
 /// chunks are never all held in Rust at once. Headings stream in segment by
-/// segment, so they are not all held either. A body that would pass
-/// `budget` is chunked again with its small sections coalesced.
+/// segment, so they are not all held either. The first pass stops at the
+/// chunk that would pass `budget`; the body is then chunked again with its
+/// small sections coalesced. (A separate count pass chunked every body over
+/// 16 KB twice.)
 /// `aliases` (from the frontmatter, cleaned by the caller) follow the title
 /// in every prefix: `Title (aka A, B) > H1`. `lead` (`Type: description`,
 /// one line, built by the caller) is a line after the prefix of the first
@@ -99,35 +154,155 @@ pub fn each_chunk(
     title: &str,
     aliases: &[String],
     lead: Option<&str>,
-    mut emit: impl FnMut(Chunk),
+    sink: &mut impl Sink,
 ) {
-    // The lead is for Voyage: it goes on the first chunk with a dense input,
-    // not on a leading data or query block (review M4). Capped: an
-    // over-length input is a permanent Voyage 400.
-    let mut lead = lead.filter(|l| !l.is_empty()).map(|l| cut(l, MAX_LEAD));
-    let prose_seen = std::cell::Cell::new(false);
-    let mut emit = |mut c: Chunk| {
-        let dense = c.6 == PROSE || c.6 == FRONTMATTER_DENSE;
-        prose_seen.set(prose_seen.get() || c.6 == PROSE);
-        if let Some(l) = lead.filter(|_| dense) {
-            c.1 = with_lead(&c.1, l);
-            c.2 = with_lead(&c.2, l);
-            lead = None;
+    let mut job = Job::new(content, folder, title, aliases, lead);
+    while !job.step(sink, usize::MAX) {}
+}
+
+/// A note being chunked, `step` by `step`: each reads a few heading
+/// segments (SEGMENT bytes each) and returns, so a huge note is chunked over
+/// many short NIF calls, not one that holds the dirty scheduler for seconds.
+/// The steps' chunks, joined, are `each_chunk`'s.
+pub struct Job<'a> {
+    body: std::borrow::Cow<'a, str>,
+    block: Option<String>,
+    note: Note,
+    lead: Option<String>,
+    lead_unused: bool,
+    prose_seen: bool,
+    headings: bool,
+    pass: Pass,
+    done: bool,
+}
+
+impl<'a> Job<'a> {
+    pub fn new(
+        content: &'a str,
+        folder: &str,
+        title: &str,
+        aliases: &[String],
+        lead: Option<&str>,
+    ) -> Self {
+        // A BOM before the fence still opens frontmatter here. Only for
+        // chunking: the shared splitter (CRDT ingest, normalize) keeps its
+        // byte contract.
+        let content = content.strip_prefix('\u{FEFF}').unwrap_or(content);
+        let (block, body) = crate::frontmatter::parts(content);
+        let body = excalidraw(block.as_deref(), body);
+        // The lead is for Voyage: it goes on the first chunk with a dense
+        // input, not on a leading data or query block (review M4). Capped:
+        // an over-length input is a permanent Voyage 400.
+        let lead = lead
+            .filter(|l| !l.is_empty())
+            .map(|l| cut(l, MAX_LEAD).to_string());
+        let limit = if body.len() >= COUNT_FROM {
+            budget(body.len())
+        } else {
+            usize::MAX
+        };
+        Job {
+            headings: may_have_heading(&body),
+            body,
+            block,
+            note: Note::new(folder, title, aliases),
+            lead_unused: lead.is_some(),
+            lead,
+            prose_seen: false,
+            pass: Pass::new(false, limit),
+            done: false,
         }
-        emit(c)
-    };
-    // A BOM before the fence still opens frontmatter here. Only for chunking:
-    // the shared splitter (CRDT ingest, normalize) keeps its byte contract.
-    let content = content.strip_prefix('\u{FEFF}').unwrap_or(content);
-    let (block, body) = crate::frontmatter::parts(content);
-    let body = &*excalidraw(block.as_deref(), body);
-    let note = Note::new(folder, title, aliases);
-    let coalesce = body.len() >= COUNT_FROM && {
-        let mut n = 0;
-        chunk_body(body, &note, false, &mut |_| n += 1);
-        n > budget(body.len())
-    };
-    let emitted = chunk_body(body, &note, coalesce, &mut emit);
+    }
+
+    /// The same job owning its text, to outlive the call that made it.
+    pub fn into_owned(self) -> Job<'static> {
+        Job {
+            body: std::borrow::Cow::Owned(self.body.into_owned()),
+            block: self.block,
+            note: self.note,
+            lead: self.lead,
+            lead_unused: self.lead_unused,
+            prose_seen: self.prose_seen,
+            headings: self.headings,
+            pass: self.pass,
+            done: self.done,
+        }
+    }
+
+    /// Reads up to `segments` heading segments into `sink`; true once the
+    /// note is done. The first pass stops at the chunk that would pass
+    /// `budget`: the sink is cleared and the body chunked again with its
+    /// small sections coalesced. (A separate count pass read every body
+    /// over 16 KB twice.)
+    pub fn step(&mut self, sink: &mut impl Sink, segments: usize) -> bool {
+        if self.done {
+            return true;
+        }
+        let body: &str = &self.body;
+        let mut emit = Leading {
+            sink,
+            lead: self.lead.as_deref(),
+            unused: self.lead.as_deref().filter(|_| self.lead_unused),
+            prose_seen: self.prose_seen,
+        };
+        let mut read = 0;
+        let ended = loop {
+            if self.pass.over {
+                emit.clear();
+                self.pass = Pass::new(true, usize::MAX);
+            }
+            let next = if self.headings {
+                self.pass.segments.next(body, &mut segment_headings_guarded)
+            } else {
+                None
+            };
+            let mut sections = Sections {
+                body,
+                note: &self.note,
+                emit: &mut emit,
+                p: &mut self.pass,
+            };
+            match next {
+                Some(hs) => hs.into_iter().for_each(|h| sections.heading(h)),
+                None => {
+                    sections.close(body.len());
+                    sections.flush();
+                    if self.pass.over {
+                        continue;
+                    }
+                    break true;
+                }
+            }
+            read += 1;
+            if read >= segments && !self.pass.over {
+                break false;
+            }
+        };
+        if ended {
+            tail(
+                body,
+                self.block.as_deref(),
+                &self.note,
+                self.pass.emitted,
+                &mut emit,
+            );
+            self.done = true;
+        }
+        self.lead_unused = emit.unused.is_some();
+        self.prose_seen = emit.prose_seen;
+        self.done
+    }
+}
+
+/// After the sections: the headings of a note with no section text, then
+/// the frontmatter chunks.
+fn tail(
+    body: &str,
+    block: Option<&str>,
+    note: &Note,
+    emitted: bool,
+    emit: &mut Leading<impl Sink>,
+) {
     // Every section was a bare heading (a stub, a daily-note template): keep
     // the headings as one chunk, or search could not find the note at all.
     if !emitted {
@@ -135,7 +310,7 @@ pub fn each_chunk(
         if !markup_only(&rest) {
             let path = [note.title.to_string()];
             for (t, kind) in classified(split(&normalize("", &rest))) {
-                emit(make(&note, &path, t, 0, body.len(), kind));
+                emit.push(make(note, &path, t, 0, body.len(), kind));
             }
         }
     }
@@ -143,32 +318,32 @@ pub fn each_chunk(
     // blocks, review M5): its first frontmatter chunk gets a small dense
     // input, the head and the property values, or a search by meaning could
     // never reach it. Its keyword input stays the raw block.
-    let mut dense = !prose_seen.get();
+    let mut dense = !emit.prose_seen;
     if let Some(block) = block.filter(|b| !b.is_empty()) {
-        let text = normalize("", &strip_blobs(&block));
+        let text = normalize("", &strip_blobs(block));
         let path = [note.title.to_string(), "frontmatter".to_string()];
         for t in word_split(&text, MAX_CHUNK)
             .into_iter()
             .filter(|t| !t.is_empty())
         {
-            let mut c = make(&note, &path, t, 0, 0, "frontmatter");
+            let mut c = make(note, &path, t, 0, 0, "frontmatter");
             c.3 = (vec!["frontmatter".to_string()], 1);
             if std::mem::take(&mut dense) {
-                c.2 = match props(&block) {
+                c.2 = match props(block) {
                     v if v.is_empty() => note.head.clone(),
                     v => format!("{}\n\n{v}", note.head),
                 };
                 c.6 = FRONTMATTER_DENSE;
             }
-            emit(c);
+            emit.push(c);
         }
     }
 }
 
 /// What every chunk of a note shares.
-struct Note<'a> {
-    folder: &'a str,
-    title: &'a str,
+struct Note {
+    folder: String,
+    title: String,
     /// The title as heading text reads (`clean_heading`), to spot the H1
     /// that is the title: `# my_note` in `my_note.md` (review L1).
     title_text: String,
@@ -183,8 +358,8 @@ const MAX_LEAD: usize = 256;
 /// pushed the headings out of the prefix).
 const MAX_AKA: usize = 200;
 
-impl<'a> Note<'a> {
-    fn new(folder: &'a str, title: &'a str, aliases: &[String]) -> Self {
+impl Note {
+    fn new(folder: &str, title: &str, aliases: &[String]) -> Self {
         // Capped as heading text is, so the H1 that is the title still
         // matches it, and every heading path element is bounded.
         let title = cut(title, MAX_PREFIX);
@@ -195,8 +370,8 @@ impl<'a> Note<'a> {
             None => format!("{title} (aka {aka})"),
         };
         Note {
-            folder,
-            title,
+            folder: folder.to_string(),
+            title: title.to_string(),
             title_text: cut(&clean_heading(title), MAX_PREFIX).to_string(),
             head,
         }
@@ -270,35 +445,12 @@ fn props(block: &str) -> String {
     out
 }
 
-/// The body's section chunks; true if any was emitted.
-fn chunk_body(body: &str, note: &Note, coalesce: bool, emit: &mut impl FnMut(Chunk)) -> bool {
-    let mut sections = Sections {
-        body,
-        note,
-        emit,
-        stack: Vec::new(),
-        start: 0,
-        head_end: 0,
-        emitted: false,
-        title_seen: false,
-        coalesce,
-        pending: None,
-    };
-    if may_have_heading(body) {
-        segmented(body, SEGMENT, segment_headings_guarded, |hs| {
-            hs.into_iter().for_each(|h| sections.heading(h))
-        });
-    }
-    sections.close(body.len());
-    sections.flush();
-    sections.emitted
-}
-
-/// The section being read and the headings above it.
-struct Sections<'a, 'e, F: FnMut(Chunk)> {
-    body: &'a str,
-    note: &'a Note<'a>,
-    emit: &'e mut F,
+/// One chunking pass over the body: where it is and what is pending.
+struct Pass {
+    segments: Segments,
+    /// Chunks left before `over`: the body passed the budget.
+    limit: usize,
+    over: bool,
     /// (level, text, is the title H1)
     stack: Vec<(usize, String, bool)>,
     start: usize,
@@ -309,6 +461,31 @@ struct Sections<'a, 'e, F: FnMut(Chunk)> {
     /// until it would pass MAX_CHUNK, whatever their size or kind.
     coalesce: bool,
     pending: Option<Pending>,
+}
+
+impl Pass {
+    fn new(coalesce: bool, limit: usize) -> Self {
+        Pass {
+            segments: Segments::new(SEGMENT),
+            limit,
+            over: false,
+            stack: Vec::new(),
+            start: 0,
+            head_end: 0,
+            emitted: false,
+            title_seen: false,
+            coalesce,
+            pending: None,
+        }
+    }
+}
+
+/// A pass at work: the section being read and the headings above it.
+struct Sections<'a, 'e, S: Sink> {
+    body: &'a str,
+    note: &'a Note,
+    emit: &'e mut S,
+    p: &'e mut Pass,
 }
 
 /// Sections joined into one chunk so far.
@@ -323,6 +500,12 @@ struct Pending {
     first_crumb: bool,
     /// The last member's, for the next breadcrumb.
     last: Vec<String>,
+    /// Bytes of member text, and of breadcrumb lines (newlines included).
+    /// Breadcrumbs never outgrow the text they label, so a merged chunk is
+    /// at most twice its members: a deep tree of tiny sections repeated a
+    /// full path per member, 11x the note (#2150 review).
+    body: usize,
+    crumbs: usize,
     kind: &'static str,
     members: u16,
     /// The last member is a content-defined boundary: the chunk ends there.
@@ -356,58 +539,75 @@ fn common(a: &[String], b: &[String]) -> Vec<String> {
         .collect()
 }
 
-impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
+impl<S: Sink> Sections<'_, '_, S> {
+    fn out(&mut self, c: Chunk) {
+        if self.p.limit == 0 {
+            self.p.over = true;
+            return;
+        }
+        self.p.limit -= 1;
+        self.emit.push(c);
+        self.p.emitted = true;
+    }
+
     fn heading(&mut self, h: Heading) {
+        if self.p.over {
+            return;
+        }
         self.close(h.start);
         // The H1 that IS the title is not repeated in the path. Matched by
         // text: a frontmatter title or an earlier setext H1 leaves it shown.
-        let is_title = !self.title_seen && h.level == 1 && h.text == self.note.title_text;
-        self.title_seen |= is_title;
-        self.stack.retain(|&(l, _, _)| l < h.level);
-        self.stack.push((h.level, h.text, is_title));
-        self.start = h.start;
-        self.head_end = h.end;
+        let is_title = !self.p.title_seen && h.level == 1 && h.text == self.note.title_text;
+        self.p.title_seen |= is_title;
+        self.p.stack.retain(|&(l, _, _)| l < h.level);
+        self.p.stack.push((h.level, h.text, is_title));
+        self.p.start = h.start;
+        self.p.head_end = h.end;
     }
 
     /// Emits the section from `start` (its heading included) to `end`,
     /// unless nothing but the heading is there.
     fn close(&mut self, end: usize) {
-        let head_end = self.head_end.clamp(self.start, end);
+        if self.p.over {
+            return;
+        }
+        #[cfg(test)]
+        tests::CLOSED.with(|n| n.set(n.get() + 1));
+        let head_end = self.p.head_end.clamp(self.p.start, end);
         let rest = strip_blobs(&self.body[head_end..end]);
         if markup_only(&rest) {
             return;
         }
-        let text = normalize(&self.body[self.start..head_end], &rest);
-        let path = heading_path(self.note.title, &self.stack);
+        let text = normalize(&self.body[self.p.start..head_end], &rest);
+        let path = heading_path(&self.note.title, &self.p.stack);
         if text.len() <= MAX_CHUNK {
             self.pend(text, path, end);
             return;
         }
         self.flush();
         for (t, kind) in classified(split(&text)) {
-            (self.emit)(make(self.note, &path, t, self.start, end, kind));
-            self.emitted = true;
+            self.out(make(self.note, &path, t, self.p.start, end, kind));
         }
     }
 
     /// Bytes `p` grows by if `path`'s section joins it: the separator, the
     /// section, its breadcrumb, and the first member's breadcrumb once the
-    /// shared path no longer holds the first member's parents.
-    fn joined(
-        p: &Pending,
-        path: &[String],
-        crumb: Option<&String>,
-        text: &str,
-    ) -> (usize, Option<String>) {
+    /// shared path no longer holds the first member's parents. A breadcrumb
+    /// is left out when it would take the chunk's breadcrumbs past its
+    /// members' text; the prefix still shows the path they share.
+    fn joined(p: &Pending, path: &[String], text: &str) -> (usize, Option<String>, Option<String>) {
         let shared = common(&p.path, path);
-        let first = (!p.first_crumb && p.first.len() > shared.len() + 1)
+        let room = p.body + text.len();
+        let mut used = p.crumbs;
+        let mut fit = |c: Option<String>| {
+            c.filter(|c| used + c.len() < room)
+                .inspect(|c| used += c.len() + 1)
+        };
+        let first = fit((!p.first_crumb && p.first.len() > shared.len() + 1)
             .then(|| breadcrumb(&p.first))
-            .flatten();
-        let add = 2
-            + text.len()
-            + crumb.map_or(0, |c| c.len() + 1)
-            + first.as_ref().map_or(0, |c| c.len() + 1);
-        (add, first)
+            .flatten());
+        let crumb = fit((p.last != path).then(|| breadcrumb(path)).flatten());
+        (2 + text.len() + used - p.crumbs, first, crumb)
     }
 
     /// Joins a section that fits in one chunk to the ones before it while
@@ -415,18 +615,19 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
     /// the last member is not a content-defined `boundary` (over budget:
     /// whenever it fits). A member under other headings than the one before
     /// it starts with a breadcrumb line, `A > B` (the path without the
-    /// title), so a merged chunk keeps every member's parents; the prefix
-    /// shows only the path all members share.
+    /// title), while the chunk's breadcrumbs fit in its members' text
+    /// (`joined`); the prefix shows only the path all members share.
     fn pend(&mut self, text: String, path: Vec<String>, end: usize) {
         let kind = classify(&text, Fence::Out).0;
         let closes = boundary(&text);
-        if let Some(p) = &mut self.pending {
-            let crumb = (p.last != path).then(|| breadcrumb(&path)).flatten();
-            let (add, first) = Self::joined(p, &path, crumb.as_ref(), &text);
+        if let Some(p) = &mut self.p.pending {
+            let (add, first, crumb) = Self::joined(p, &path, &text);
             let fits = p.text.len() + add <= MAX_CHUNK;
             let small = p.text.len() < MIN_CHUNK || text.len() < MIN_CHUNK;
             let open = !p.closed && small && p.kind == kind;
-            if fits && (self.coalesce || open) {
+            if fits && (self.p.coalesce || open) {
+                p.crumbs += add - 2 - text.len();
+                p.body += text.len();
                 if let Some(c) = first {
                     p.text.insert_str(0, &format!("{c}\n"));
                     p.first_crumb = true;
@@ -446,7 +647,9 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
             }
             self.flush();
         }
-        self.pending = Some(Pending {
+        self.p.pending = Some(Pending {
+            body: text.len(),
+            crumbs: 0,
             text,
             first: path.clone(),
             first_crumb: false,
@@ -455,19 +658,18 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
             kind,
             members: 1,
             closed: closes,
-            from: self.start,
+            from: self.p.start,
             to: end,
         });
     }
 
     fn flush(&mut self) {
-        if let Some(p) = self.pending.take() {
+        if let Some(p) = self.p.pending.take() {
             // Members share a kind unless over budget; the whole decides.
             let kind = classify(&p.text, Fence::Out).0;
             let mut c = make(self.note, &p.path, &p.text, p.from, p.to, kind);
             c.3 .1 = p.members;
-            (self.emit)(c);
-            self.emitted = true;
+            self.out(c);
         }
     }
 }
@@ -653,7 +855,7 @@ fn wide_word(tok: &str) -> bool {
 /// `path` is the heading path, title first; the prefix shows the note's
 /// head (title and aliases) in the title's place.
 fn make(note: &Note, path: &[String], text: &str, s: usize, e: usize, kind: &'static str) -> Chunk {
-    let folder = note.folder;
+    let folder = &*note.folder;
     let emb = prefix(&note.head, &path[1..]);
     let ctx = if folder.is_empty() {
         emb.clone()
@@ -1210,7 +1412,7 @@ fn word_split(text: &str, max: usize) -> Vec<&str> {
 #[cfg(test)]
 pub fn heading_spans(body: &str, segment: usize) -> (Vec<(usize, usize, usize, String)>, bool) {
     let mut spans = Vec::new();
-    segmented(body, segment, segment_headings_guarded, |hs| {
+    crate::links::segmented(body, segment, segment_headings_guarded, |hs| {
         spans.extend(hs.into_iter().map(|h| (h.level, h.start, h.end, h.text)))
     });
     (spans, may_have_heading(body))
@@ -1218,6 +1420,87 @@ pub fn heading_spans(body: &str, segment: usize) -> (Vec<(usize, usize, usize, S
 
 #[cfg(test)]
 mod tests {
+    thread_local! {
+        /// Sections `close` read on this thread: the chunker's work count.
+        pub static CLOSED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    fn closed(content: &str) -> (usize, usize) {
+        CLOSED.with(|n| n.set(0));
+        let chunks = chunk(content, "f", "T").len();
+        (CLOSED.with(|n| n.get()), chunks)
+    }
+
+    // Each section was read twice in every body over 16 KB: once to count
+    // its chunks against the budget, once to chunk it. 4.5 MB of heading
+    // tree took 8 s on the one dirty CPU scheduler.
+    #[test]
+    fn a_body_is_read_once_under_the_budget_and_less_than_twice_over_it() {
+        // 2,000 sections of ~600 B: under the budget (2,000 chunks), counted.
+        let pad = "filler words ".repeat(45);
+        let under: String = (0..2_000).map(|i| format!("# s{i}\n{pad}\n\n")).collect();
+        assert!(under.len() > COUNT_FROM);
+        let (reads, chunks) = closed(&under);
+        assert_eq!(chunks, 2_000);
+        assert_eq!(reads, 2_001, "a section read more than once");
+        // 60,000 tiny sections: over the budget, coalesced.
+        let over: String = (0..60_000).map(|i| format!("# h{i}\nword{i}\n")).collect();
+        let (reads, chunks) = closed(&over);
+        assert!(chunks <= budget(over.len()), "{chunks} chunks");
+        assert!(reads < 2 * 60_001, "{reads} section reads");
+    }
+
+    // The NIF chunks a large note a segment per call (`Job::step`): the
+    // steps' chunks are the one call's, past the budget's restart too, and
+    // a step reads about one segment of headings.
+    #[test]
+    fn stepping_a_job_one_segment_at_a_time_changes_nothing() {
+        let parents = |g: usize| -> String {
+            (1..=5)
+                .map(|l| format!("{} Parent {l} of {g}\n\n", "#".repeat(l)))
+                .collect()
+        };
+        let tree: String = (0..40_000)
+            .map(|i| {
+                let head = if i % 1000 == 0 {
+                    parents(i / 1000)
+                } else {
+                    String::new()
+                };
+                format!("{head}###### leaf {i}\nword{i}\n\n")
+            })
+            .collect();
+        let pad = "filler words ".repeat(45);
+        let long: String = (0..2_000).map(|i| format!("# s{i}\n{pad}\n\n")).collect();
+        let fm = format!("---\ndescription: d\n---\n{long}");
+        let plain = "no heading at all\n\n".repeat(30_000);
+        for content in [&tree, &long, &fm, &plain] {
+            let lead = Some("Type: a description");
+            let mut whole = Vec::new();
+            each_chunk(content, "f", "T", &[], lead, &mut whole);
+            let mut job = Job::new(content, "f", "T", &[], lead).into_owned();
+            let (mut stepped, mut steps) = (Vec::new(), 0);
+            loop {
+                CLOSED.with(|n| n.set(0));
+                let done = job.step(&mut stepped, 1);
+                steps += 1;
+                // One 64 KB segment of 10-byte sections, twice on a restart.
+                assert!(CLOSED.with(|n| n.get()) <= 2 * 2 * SEGMENT / 10);
+                if done {
+                    break;
+                }
+            }
+            assert_eq!(stepped, whole);
+            // Text with no heading is one section, read in one step: plain
+            // text chunks at ~10 MB/s, a heading tree at ~1.
+            let sliced = if may_have_heading(content) {
+                content.len() / (4 * SEGMENT)
+            } else {
+                1
+            };
+            assert!(steps >= sliced, "{steps} steps");
+        }
+    }
     use super::*;
 
     fn paths(content: &str) -> Vec<String> {
@@ -1363,8 +1646,41 @@ mod tests {
             fill(r#"{"id":4821,"ok":true},"#),
         ] {
             let ((), peak) =
-                crate::memory::measured(|| each_chunk(&content, "f", "T", &[], None, |_| {}));
+                crate::memory::measured(|| each_chunk(&content, "f", "T", &[], None, &mut 0));
             assert!(peak <= 10 * content.len(), "{peak} for {:?}", &content[..8]);
+        }
+    }
+
+    // Tiny leaves under five long parents: each merged member repeated the
+    // full breadcrumb, 11x the note in text alone (#2150 review).
+    #[test]
+    fn breadcrumbs_never_outgrow_the_members_they_label() {
+        let parents = |g: usize| -> String {
+            (1..=5)
+                .map(|l| {
+                    format!(
+                        "{} Parent level {l} group {g} with a long title\n\n",
+                        "#".repeat(l)
+                    )
+                })
+                .collect()
+        };
+        for leaves in [3_000, 30_000] {
+            let content: String = (0..leaves)
+                .map(|i| {
+                    let head = if i % 1000 == 0 {
+                        parents(i / 1000)
+                    } else {
+                        String::new()
+                    };
+                    format!("{head}###### leaf {i}\nword{i}\n\n")
+                })
+                .collect();
+            let cs = chunk(&content, "f", "T");
+            let text: usize = cs.iter().map(|c| c.0.len()).sum();
+            assert!(text <= 2 * content.len(), "{text} for {}", content.len());
+            let words: usize = cs.iter().map(|c| c.0.matches("\nword").count()).sum();
+            assert_eq!(words, leaves);
         }
     }
 
@@ -1871,7 +2187,7 @@ mod tests {
     fn aka(content: &str, aliases: &[&str]) -> Vec<Chunk> {
         let aliases: Vec<String> = aliases.iter().map(|a| a.to_string()).collect();
         let mut out = Vec::new();
-        each_chunk(content, "", "T", &aliases, None, |c| out.push(c));
+        each_chunk(content, "", "T", &aliases, None, &mut out);
         out
     }
 
@@ -2015,7 +2331,7 @@ mod tests {
 
     fn led(content: &str, lead: &str) -> Vec<Chunk> {
         let mut out = Vec::new();
-        each_chunk(content, "", "T", &[], Some(lead), |c| out.push(c));
+        each_chunk(content, "", "T", &[], Some(lead), &mut out);
         out
     }
 
@@ -2098,7 +2414,7 @@ mod tests {
             &emoji,
             &aliases,
             Some(cut(&emoji, 400)),
-            |c| cs.push(c),
+            &mut cs,
         );
         assert!(!cs.is_empty());
         for c in &cs {

@@ -123,6 +123,66 @@ defmodule Engram.Native.ChunkerTest do
       end
     end
 
+    # A deep heading tree of tiny leaves: every merged member repeated its
+    # full breadcrumb, so 4.5 MB of note was 52 MB of text, 65 MB each of
+    # context and embed text, and a 337 MB BEAM peak (#2150 review).
+    test "a deep heading tree's chunk text stays linear in the note" do
+      parents = fn i ->
+        Enum.map_join(1..5, fn lvl ->
+          String.duplicate("#", lvl) <>
+            " Parent heading level #{lvl} group #{i} with a fairly long descriptive title\n\n"
+        end)
+      end
+
+      # 3k leaves: min512 merging; 30k: past budget/1, coalesced. Under the
+      # budget each chunk also carries its <= 512 B prefix twice, so only the
+      # coalesced note bounds context and embed text (up to 2,000 chunks).
+      for leaves <- [3_000, 30_000] do
+        content =
+          Enum.map_join(0..(leaves - 1), fn i ->
+            if(rem(i, 1000) == 0, do: parents.(div(i, 1000)), else: "") <>
+              "###### leaf #{i}\nword#{i}\n\n"
+          end)
+
+        chunks = Markdown.parse(content, "f/Tree.md")
+        bytes = fn key -> chunks |> Enum.map(&byte_size(Map.fetch!(&1, key))) |> Enum.sum() end
+        note = byte_size(content)
+
+        assert bytes.(:text) <= 2 * note, "text #{bytes.(:text)} for #{note}"
+
+        if leaves > 3_000 do
+          assert bytes.(:context_text) <= 3 * note, "context #{bytes.(:context_text)}"
+          assert bytes.(:embed_text) <= 3 * note, "embed #{bytes.(:embed_text)}"
+        end
+
+        # Nothing dropped: every leaf's text is in some chunk.
+        assert chunks |> Enum.map(&length(:binary.matches(&1.text, "\nword"))) |> Enum.sum() ==
+                 leaves
+      end
+    end
+
+    # 4.5 MB of heading tree held the one dirty CPU scheduler for 8 s. Over
+    # 256 KB a note is chunked a heading segment per dirty call; the chunks
+    # are the one call's, past the budget's restart (the 30k tree) too.
+    test "a large note chunks in short steps, with the one call's chunks" do
+      tree = fn leaves ->
+        Enum.map_join(0..(leaves - 1), fn i ->
+          if(rem(i, 1000) == 0, do: "# Parent #{i}\n\n## Child #{i}\n\n", else: "") <>
+            "###### leaf #{i}\nword#{i}\n\n"
+        end)
+      end
+
+      for content <- [tree.(12_000), tree.(30_000), "---\na: 1\n---\n" <> tree.(12_000)] do
+        assert byte_size(content) > 262_144
+        ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+        sliced = Engram.Native.chunk(content, "f", "T", ["al"], "Type: d")
+        {whole, _peak} = Engram.Native.chunk_dirty_nif(content, "f", "T", ["al"], "Type: d")
+        assert sliced == whole
+        assert_receive {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :chunk, sliced: true}}
+        :telemetry.detach(ref)
+      end
+    end
+
     test "repeated calls leak nothing" do
       args = ["---\ntags: [a]\n---\n# A\n\ntext `c`\n\n## B\n\nmore", "f", "T", ["x"], "lead"]
       Engram.NativeLeak.assert_no_leak(fn -> apply(Engram.Native, :chunk_nif, args) end)

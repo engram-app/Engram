@@ -88,40 +88,71 @@ pub fn segmented<T>(
     mut visit: impl FnMut(&str, usize, &mut Vec<T>) -> Option<usize>,
     mut accept: impl FnMut(Vec<T>),
 ) {
-    let mut start = 0;
-    let mut want = segment;
-    let mut longest = 0;
-    while start < body.len() {
-        let base = want.max(FORCE / 2);
-        let reach = base.saturating_mul(2);
-        let limit = start.saturating_add(reach);
-        // `at_end`: the segment runs to the end of the body, so a block
-        // still open there is open in the whole document too.
-        let (end, at_end) = match next_cut(body, start.saturating_add(want), limit) {
-            Some(c) if c - start <= reach => (c, false),
-            None if body.len() - start <= reach => (body.len(), true),
-            _ => (forced_cut(body, start + base), false),
-        };
-        let mut items = Vec::new();
-        // A forced cut that leaves a fence open is retried longer too:
-        // accepting it split the fence, and what followed parsed as if the
-        // fence never closed (review of #1895). The open block is one node,
-        // so growing the segment over it costs little.
-        match visit(&body[start..end], start, &mut items) {
-            Some(open) if !at_end => {
-                let before = open > 0
-                    && end - start > longest
-                    && next_cut(body, start + open, start + open) == Some(start + open);
-                longest = longest.max(end - start);
-                want = if before { open } else { 2 * longest };
-            }
-            _ => {
-                accept(items);
-                start = end;
-                want = segment;
-                longest = 0;
+    let mut segments = Segments::new(segment);
+    while let Some(items) = segments.next(body, &mut visit) {
+        accept(items)
+    }
+}
+
+/// `segmented` one accepted segment at a time, so a caller can stop
+/// between segments and resume (the chunker yields there).
+pub struct Segments {
+    segment: usize,
+    start: usize,
+    want: usize,
+    longest: usize,
+}
+
+impl Segments {
+    pub fn new(segment: usize) -> Self {
+        Segments {
+            segment,
+            start: 0,
+            want: segment,
+            longest: 0,
+        }
+    }
+
+    /// The next accepted segment's items, or None past the end of `body`.
+    pub fn next<T>(
+        &mut self,
+        body: &str,
+        visit: &mut impl FnMut(&str, usize, &mut Vec<T>) -> Option<usize>,
+    ) -> Option<Vec<T>> {
+        while self.start < body.len() {
+            let start = self.start;
+            let base = self.want.max(FORCE / 2);
+            let reach = base.saturating_mul(2);
+            let limit = start.saturating_add(reach);
+            // `at_end`: the segment runs to the end of the body, so a block
+            // still open there is open in the whole document too.
+            let (end, at_end) = match next_cut(body, start.saturating_add(self.want), limit) {
+                Some(c) if c - start <= reach => (c, false),
+                None if body.len() - start <= reach => (body.len(), true),
+                _ => (forced_cut(body, start + base), false),
+            };
+            let mut items = Vec::new();
+            // A forced cut that leaves a fence open is retried longer too:
+            // accepting it split the fence, and what followed parsed as if the
+            // fence never closed (review of #1895). The open block is one node,
+            // so growing the segment over it costs little.
+            match visit(&body[start..end], start, &mut items) {
+                Some(open) if !at_end => {
+                    let before = open > 0
+                        && end - start > self.longest
+                        && next_cut(body, start + open, start + open) == Some(start + open);
+                    self.longest = self.longest.max(end - start);
+                    self.want = if before { open } else { 2 * self.longest };
+                }
+                _ => {
+                    self.start = end;
+                    self.want = self.segment;
+                    self.longest = 0;
+                    return Some(items);
+                }
             }
         }
+        None
     }
 }
 
