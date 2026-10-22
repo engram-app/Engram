@@ -89,7 +89,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # Never per VAULT, which is what this used to be: one stale-notes query
     # per vault per tick, O(total vaults).
     now = DateTime.utc_now()
-    backoff_until = DateTime.add(now, reconcile_backoff_seconds(), :second)
+    backoff_until = DateTime.add(now, backoff_seconds(), :second)
 
     # One page of eligible stale notes, oldest-first, kept as a subquery so
     # the whole select-and-stamp is ONE statement (see the UPDATE below).
@@ -298,7 +298,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     # Every tier `:unlimited` is enforcement off (self-host): nothing to do.
     unless Enum.all?(Map.values(tier_caps), &(&1 == :unlimited)) do
-      backoff_until = DateTime.add(now, reconcile_backoff_seconds(), :second)
+      backoff_until = DateTime.add(now, backoff_seconds(), :second)
       over_cap = over_note_cap_dynamic(tier_caps, Billing.active_overrides(:note_points_cap))
 
       page = fn repo, limit ->
@@ -849,7 +849,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   defp enqueue_budget([], _user_id, _args), do: :ok
 
   defp enqueue_budget(ids, user_id, args) do
-    backoff_until = DateTime.add(DateTime.utc_now(), reconcile_backoff_seconds(), :second)
+    backoff_until = DateTime.add(DateTime.utc_now(), backoff_seconds(), :second)
 
     {_, _} =
       Repo.update_all(from(n in Note, where: n.id in ^ids and n.kind == "note"),
@@ -1203,7 +1203,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # index on (user_id) WHERE keyword_version IS DISTINCT FROM <current> if a
   # tenant reaches hundreds of thousands.
   defp sweep_keyword_stale(now, paid, page_size, versions) do
-    backoff_until = DateTime.add(now, reconcile_backoff_seconds(), :second)
+    backoff_until = DateTime.add(now, backoff_seconds(), :second)
 
     page = fn repo ->
       eligible =
@@ -1292,7 +1292,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # Floored at 6 min, past the cron interval: at or below `now` the stamp no
   # longer removes a note from the next page's query, and the page loop
   # never ends.
-  defp reconcile_backoff_seconds do
-    max(Application.get_env(:engram, :embed_reconcile_backoff_seconds, 1_800), 360)
-  end
+  @doc false
+  # Also read by `RebuildStaleNote`, which releases this backoff on a note a
+  # halted pass skipped.
+  @spec backoff_seconds() :: pos_integer()
+  def backoff_seconds,
+    do: max(Application.get_env(:engram, :embed_reconcile_backoff_seconds, 1_800), 360)
 end

@@ -3015,8 +3015,13 @@ defmodule Engram.Indexing do
   write and send Voyage, from the same parse, cap plan and reuse
   fingerprints as `prepare_index/4`, with no Voyage and no Qdrant call.
 
-    * `est_tokens`: estimated tokens of the dense texts Voyage would be sent
-      (vector cache hits are not counted: an upper bound).
+    * `est_tokens`: estimated tokens (bytes/4) of the dense texts this note
+      alone would send Voyage. The pass runs with the per-user vector cache
+      on, so a text several of a user's notes share is paid once, by the
+      first: summed over a user, this is an upper bound on texts sent
+      (staging 2026-10-22: 0.144x on a user with many duplicated notes).
+      Per note it counts what the note sends on a cold cache, which is what
+      the drift park compares.
     * `new_points`: points that need a new vector (or are keyword-only).
     * `reused_points`: points whose fingerprint is unchanged (vector copied).
     * `mean_pooled_points`: merged groups whose members all have a stored

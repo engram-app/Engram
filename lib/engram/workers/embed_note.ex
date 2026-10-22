@@ -827,10 +827,11 @@ defmodule Engram.Workers.EmbedNote do
             :ok
 
           # The v5 rebuild left `on` (halted, or switched off) after this job
-          # was routed: no Voyage call. Re-routed later, it either skips (the
-          # note is no longer behind the target) or runs again under `on`.
+          # was routed: no Voyage call. Re-routed a minute later, it either
+          # runs again under `on`, or skips and releases the note's sweep
+          # backoff (`RebuildStaleNote`), so a resume never waits on it.
           {:error, :rebuild_paused} ->
-            {:snooze, 300}
+            {:snooze, 60}
 
           # The rebuild was about to pay Voyage twice for this content
           # (`Rebuild.park_double_pay/1`): parked until edited, not failed.

@@ -21,7 +21,7 @@ defmodule Engram.Workers.RebuildStaleNoteV5Test do
   alias Engram.Rebuild
   alias Engram.ServiceConfig
   alias Engram.Vector.Qdrant
-  alias Engram.Workers.{RebuildStaleNote, ReconcileEmbeddings}
+  alias Engram.Workers.{EmbedNote, RebuildStaleNote, ReconcileEmbeddings}
 
   setup :set_mox_global
   setup :verify_on_exit!
@@ -199,6 +199,82 @@ defmodule Engram.Workers.RebuildStaleNoteV5Test do
 
       # Off, a note behind the build but not the pins is not rebuilt at all.
       assert :ok = rebuild(stale_note!(user, vault, "A.md"))
+    end
+  end
+
+  # Staging rehearsal 2026-10-22: a stop (`off` + `set_budget(0)`) let the
+  # queued jobs skip and complete, and their notes sat out the sweep's
+  # 30-minute backoff after `on` came back. Resume must re-queue them on the
+  # next sweep, and no note may be paid twice.
+  describe "stop, then resume" do
+    defp voyage_calls(n \\ 0) do
+      receive do
+        {:voyage, _opts} -> voyage_calls(n + 1)
+      after
+        0 -> n
+      end
+    end
+
+    defp chunker(note),
+      do: Repo.with_tenant!(note.user_id, fn -> Repo.get!(Note, note.id).chunker_version end)
+
+    test "the next sweep re-queues the halted notes", %{user: user, vault: vault} do
+      done = stale_note!(user, vault, "A.md")
+      halted = stale_note!(user, vault, "B.md")
+      embedder_reporting(10)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert :ok = rebuild(done)
+
+      ServiceConfig.put_override(:index_rebuild, "off")
+      Rebuild.set_budget(0)
+      # The queued jobs run while stopped: both complete, nothing embeds.
+      assert %{success: 2} = Oban.drain_queue(queue: :rebuild)
+      assert chunker(halted) == elem(@pins, 0)
+
+      ServiceConfig.put_override(:index_rebuild, "on")
+      Rebuild.set_budget(10_000_000)
+      # Same minute, no clock moved: the backoff would hold it for 30.
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+
+      assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => halted.id})
+      refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => done.id})
+
+      assert %{success: 1} = Oban.drain_queue(queue: :rebuild)
+      assert chunker(halted) == Markdown.chunker_version()
+      # One Voyage call per note: `done` before the stop, `halted` after.
+      assert voyage_calls() == 2
+      assert Rebuild.ledger().spent_tokens == 20
+
+      # Nothing left: a second sweep pays nothing more.
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert %{success: 0} = Oban.drain_queue(queue: :rebuild)
+      assert voyage_calls() == 0
+    end
+
+    test "a stopped job keeps a poison cooldown and a park", %{user: user, vault: vault} do
+      poisoned = stale_note!(user, vault, "P.md")
+      parked = stale_note!(user, vault, "Q.md")
+      cooldown = DateTime.add(DateTime.utc_now(), 6 * 3600, :second)
+
+      for {note, until} <- [{poisoned, cooldown}, {parked, EmbedNote.parked_until_edited()}] do
+        Repo.with_tenant!(user.id, fn ->
+          Repo.update_all(from(n in Note, where: n.id == ^note.id),
+            set: [embed_retry_after: until]
+          )
+        end)
+      end
+
+      ServiceConfig.put_override(:index_rebuild, "off")
+      assert :ok = rebuild(poisoned)
+      assert :ok = rebuild(parked)
+
+      retry_after = fn note ->
+        Repo.with_tenant!(user.id, fn -> Repo.get!(Note, note.id).embed_retry_after end)
+      end
+
+      assert DateTime.compare(retry_after.(poisoned), DateTime.utc_now()) == :gt
+      assert retry_after.(parked) == EmbedNote.parked_until_edited()
     end
   end
 
