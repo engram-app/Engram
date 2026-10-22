@@ -104,13 +104,20 @@ defmodule Engram.ServiceConfig.Overrides do
   # ponytail: no single-flight; concurrent misses after a TTL or eviction each
   # run one tiny SELECT. Add a per-node loader process if traces show a herd.
   defp load do
-    case read() do
-      {:ok, overrides} ->
-        :ok = Cache.put(:service_overrides_last_good, :all, overrides)
-        overrides
+    if Process.whereis(Repo) do
+      case read() do
+        {:ok, overrides} ->
+          :ok = Cache.put(:service_overrides_last_good, :all, overrides)
+          overrides
 
-      {:error, reason} ->
-        fallback(reason)
+        {:error, reason} ->
+          fallback(reason)
+      end
+    else
+      # Compile time (a module attribute reading a flag) or boot before the
+      # repo starts: nothing to read yet and nothing worth a warning. Not
+      # stored, so the first read once the repo is up goes to the table.
+      Cache.no_store(last_good())
     end
   end
 
@@ -118,7 +125,14 @@ defmodule Engram.ServiceConfig.Overrides do
   # A task would need a second one, and N workers each holding one inside
   # `with_tenant` could drain the pool waiting on themselves.
   defp read do
-    if Repo.in_transaction?(), do: guarded_read(), else: read_in_task()
+    if in_transaction?(), do: guarded_read(), else: read_in_task()
+  end
+
+  # `Repo.in_transaction?/0` raises once the repo is gone (shutdown).
+  defp in_transaction? do
+    Repo.in_transaction?()
+  rescue
+    _ -> false
   end
 
   # Outside one, a task bounds a hung database to @load_timeout_ms.
@@ -161,6 +175,10 @@ defmodule Engram.ServiceConfig.Overrides do
       Metadata.with_category(:warning, :data, reason: safe(reason))
     )
 
+    last_good()
+  end
+
+  defp last_good do
     case Cache.get(:service_overrides_last_good, :all) do
       {:ok, overrides} -> overrides
       :miss -> %{}
