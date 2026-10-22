@@ -125,6 +125,25 @@ defmodule Engram.ServiceConfig.OverridesTest do
     end
   end
 
+  describe "reads inside a transaction" do
+    # The read runs on the caller's connection there. Unguarded, a failed
+    # SELECT (table not migrated yet, a cancelled statement) aborts the
+    # CALLER's transaction: every later statement in it fails, on every
+    # write path that reads a flag.
+    test "a failed read leaves the caller's transaction usable" do
+      {:ok, result} =
+        Repo.transaction(fn ->
+          # The table is then unresolvable, as before its migration ran.
+          Repo.query!("SET LOCAL search_path TO pg_catalog")
+
+          capture_log(fn -> assert ServiceConfig.get(:tenant_idf, false) == false end)
+          Repo.query!("SELECT 1").rows
+        end)
+
+      assert result == [[1]]
+    end
+  end
+
   describe "writes are validated" do
     test "an unknown key is rejected" do
       assert {:error, {:unknown_key, :qdrant_url}} =
@@ -173,6 +192,20 @@ defmodule Engram.ServiceConfig.OverridesTest do
 
       ServiceConfig.put_override(:qdrant_url_v2, "http://v2")
       assert :ok = ServiceConfig.override(:qdrant_active_cluster, "v2", by: "t")
+    end
+
+    # An env change under a live override can leave the effective config
+    # violating an invariant. That must not refuse every later write: a kill
+    # switch (INDEX_REBUILD=off) is exactly the write an incident needs.
+    test "a violation the write did not introduce does not block it" do
+      ServiceConfig.put_override(:legacy_filter_fields, false)
+      :ok = ServiceConfig.override(:qdrant_tenant_graph, true, by: "t")
+      ServiceConfig.put_override(:legacy_filter_fields, true)
+
+      assert :ok = ServiceConfig.override(:index_rebuild, "off", by: "t")
+      assert :ok = ServiceConfig.override(:tenant_idf, true, by: "t")
+      # A write that would ADD a violation is still refused.
+      assert {:error, {:invariant, _}} = ServiceConfig.override(:index_rebuild, "on", by: "t")
     end
 
     test "every change is logged with operator, old and new value" do

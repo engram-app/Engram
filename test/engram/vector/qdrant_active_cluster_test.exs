@@ -39,11 +39,16 @@ defmodule Engram.Vector.QdrantActiveClusterTest do
     assert Qdrant.base_url() == "http://localhost:#{v2.port}"
   end
 
-  test "v2 without a URL reads old", %{old: old} do
+  # A node whose task def lacks QDRANT_URL_V2 (one tier's TF not rolled)
+  # writes the old cluster while its peers write v2: it must say so loudly.
+  test "v2 without a URL reads old, and logs an error", %{old: old} do
     ServiceConfig.put_override(:qdrant_active_cluster, "v2")
     ServiceConfig.put_override(:qdrant_url_v2, nil)
+    :persistent_term.erase({Qdrant, :v2_unconfigured_logged_at})
     expect_scroll(old, "old-key")
-    assert {:ok, _} = scroll()
+
+    log = ExUnit.CaptureLog.capture_log(fn -> assert {:ok, _} = scroll() end)
+    assert log =~ "QDRANT_URL_V2"
   end
 
   test "with_cluster pins this process and restores after", %{old: old, v2: v2} do

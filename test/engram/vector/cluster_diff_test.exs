@@ -149,6 +149,61 @@ defmodule Engram.Vector.ClusterDiffTest do
     assert other.checked == 0
   end
 
+  # A node on a stale cache (lost eviction, no mesh, an in-flight request
+  # with retries) writes the OLD cluster after the flip. New point ids show up
+  # as missing and are copied; a payload or sparse rewrite of an EXISTING id
+  # leaves v2 holding the pre-flip version under the same id, which no id
+  # diff can see. `since:` hands every note changed since then to the $0
+  # heals (ReconcileNotePayloads, keyword refresh) on the active cluster.
+  test "since requeues the payload and keyword heals for notes changed since", ctx do
+    since = DateTime.add(DateTime.utc_now(), -3600)
+
+    assert {:error, :target_not_active} =
+             ClusterDiff.run("old", "v2", since: since, pause_ms: 0)
+
+    ServiceConfig.put_override(:qdrant_active_cluster, "v2")
+
+    before =
+      insert(:note,
+        user: ctx.user,
+        vault: ctx.note.vault,
+        updated_at: DateTime.add(since, -60) |> DateTime.truncate(:second)
+      )
+
+    for n <- [ctx.note, before] do
+      Repo.update_all(
+        from(x in Note, where: x.id == ^n.id),
+        [set: [payload_hash: <<1>>, keyword_version: 1]],
+        skip_tenant_check: true
+      )
+    end
+
+    assert {:ok, report} = ClusterDiff.run("old", "v2", since: since, pause_ms: 0)
+    assert report.requeued_notes == 1
+
+    healed = Repo.get!(Note, ctx.note.id, skip_tenant_check: true)
+    assert is_nil(healed.payload_hash) and is_nil(healed.keyword_version)
+    untouched = Repo.get!(Note, before.id, skip_tenant_check: true)
+    assert untouched.payload_hash == <<1>> and untouched.keyword_version == 1
+
+    assert_enqueued(
+      worker: Engram.Workers.ReconcileNotePayloads,
+      args: %{"user_id" => ctx.user.id}
+    )
+  end
+
+  test "a walk resumes after the last chunk id a report names", ctx do
+    assert {:ok, first} = ClusterDiff.run("old", "v2", batch: 2, pause_ms: 0)
+    assert first.checked == 3
+
+    [first_id | _] =
+      Repo.all(from(c in Chunk, order_by: c.id, select: c.id), skip_tenant_check: true)
+
+    assert {:ok, resumed} = ClusterDiff.run("old", "v2", after: first_id, pause_ms: 0)
+    assert resumed.checked == 2
+    assert resumed.last_chunk_id == first.last_chunk_id
+  end
+
   test "refuses to diff a cluster with itself" do
     assert {:error, :same_cluster} = ClusterDiff.run("v2", "v2")
   end
