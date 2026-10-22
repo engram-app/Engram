@@ -592,7 +592,10 @@ defmodule Engram.Rebuild do
 
   @doc """
   Closes a dry run: pins each vault's `avgdl` from the manifest and sets the
-  budget to 1.15x the manifest's estimated tokens. Only while the mode is
+  budget to 1.15x the manifest's estimated tokens. That is a ceiling, not a
+  forecast: the per-user vector cache pays a text shared across notes once,
+  and the manifest counts it per note (`Indexing.rebuild_estimate/2`), so a
+  corpus with repeated text spends well under it. Only while the mode is
   still `dry_run`. The budget is set only when none exists (an operator's
   budget wins, and a halt is never cleared here), and once a budget exists
   the pins are never replaced, only added for vaults that had none, so a

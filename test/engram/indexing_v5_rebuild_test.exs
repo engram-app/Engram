@@ -237,6 +237,36 @@ defmodule Engram.IndexingV5RebuildTest do
     assert est.est_tokens == sent |> Enum.map(&UsageMeters.estimate_tokens/1) |> Enum.sum()
   end
 
+  # What the staging rehearsal (2026-10-22) actually saw: the pass runs with
+  # the vector cache on (`index_rebuild=on` requires it), and the cache is
+  # per USER, so a text two notes share is paid once. The estimate is per
+  # note and counts it in both: per note it is exact, summed over a user's
+  # notes it is an upper bound. Staging's one paid user: 13,189 new points,
+  # 1,381 texts cached (sent), spend 0.144x the manifest.
+  test "with the vector cache on, a text two notes share is sent once", ctx do
+    Application.put_env(:engram, :vector_cache_enabled, true)
+    on_exit(fn -> Application.delete_env(:engram, :vector_cache_enabled) end)
+
+    shared = sections(3) <> "\n\n## New\n\nshared new text. #{@pad}"
+    a = indexed(ctx)
+    b = Engram.Fixtures.insert_note!(ctx.user, ctx.vault, %{path: "B.md", content: shared})
+    {:ok, b} = Crypto.maybe_decrypt_note_fields(b, ctx.user)
+    _ = embedded()
+
+    [{est_a, sent_a}, {est_b, sent_b}] =
+      for note <- [%{a | content: shared}, b] do
+        {:ok, est} = tenant(ctx.user, fn -> Indexing.rebuild_estimate(note, ctx.user) end)
+        assert {:ok, _, _, true} = rebuild(note, ctx.vault, ctx.user)
+        {est.est_tokens, embedded() |> Enum.map(&UsageMeters.estimate_tokens/1) |> Enum.sum()}
+      end
+
+    # `a` reuses its 3 sections and sends `New`, exactly its estimate. `b`
+    # (never indexed) is estimated at all 4 texts, and every one is a cache
+    # hit from `a`'s index and rebuild: the user pays 144 of an estimated 726.
+    assert sent_a == est_a and est_a > 0
+    assert est_b > est_a and sent_b == 0
+  end
+
   test "a capped group of all-dense members gets a unit-norm mean and 0 tokens", ctx do
     note = indexed(ctx, 200)
     enable_index_budget()
