@@ -192,7 +192,7 @@ defmodule Engram.Vector.ClusterDiffTest do
     )
   end
 
-  test "a walk resumes after the last chunk id a report names", ctx do
+  test "a walk resumes after the last chunk id a report names" do
     assert {:ok, first} = ClusterDiff.run("old", "v2", batch: 2, pause_ms: 0)
     assert first.checked == 3
 

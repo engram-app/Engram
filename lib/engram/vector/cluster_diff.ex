@@ -25,19 +25,45 @@ defmodule Engram.Vector.ClusterDiff do
   free). Re-indexing writes to the ACTIVE cluster, so `reindex: true` is
   refused unless the target is active.
 
+  ## After a flip: what an id diff cannot see
+
+  A node still on the old value after a flip (a lost eviction, up to the
+  15s override TTL; a request already in flight, up to ~2 min with Req's
+  retries; a node booted with the DB unreachable, on env) writes the OLD
+  cluster. Its new point ids read as missing here and are copied. A delete
+  leaves an extra on the target (reported; OrphanSweep removes it). But a
+  payload or sparse-vector rewrite of an EXISTING id (a rename's repath, a
+  reused point's payload refresh, a keyword refresh) leaves the target
+  holding the pre-flip version under the same id, and no id diff sees it.
+  `since: %DateTime{}` repairs that class: every live note changed since
+  then gets `payload_hash` and `keyword_version` cleared, so
+  `ReconcileNotePayloads` and the keyword refresh rewrite its points on the
+  active cluster. $0 Voyage (payload reads, then writes only where drifted),
+  so pick it generously: the flip time minus the indexing backlog, an hour
+  is cheap. Refused unless the target is active, as `reindex: true` is.
+
   Paced: `pause_ms` (default 200) between pages. Run it with the
   Qdrant-writing queues paused: a write that lands on the target between the
   probe and the copy would be overwritten by the source's older point.
+
+  Resumable: every report carries `last_chunk_id`, the keyset cursor of the
+  last page the missing walk finished; pass it back as `after:` to resume a
+  run that stopped mid-walk. A copy is idempotent, so overlap costs only
+  probes.
 
   Returns `{:ok, report}`, or `{:error, reason}` before any page ran, or
   `{:error, reason, partial_report}` when a page failed mid-walk.
   """
 
+  import Ecto.Query
+
   alias Engram.Indexing
   alias Engram.Logger.Metadata
+  alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vector.PointIds
   alias Engram.Vector.Qdrant
+  alias Engram.Workers.ReconcileNotePayloads
 
   require Logger
 
@@ -51,7 +77,9 @@ defmodule Engram.Vector.ClusterDiff do
   def run(same, same, _opts), do: {:error, :same_cluster}
 
   def run(source, target, opts) when source in @clusters and target in @clusters do
-    if Keyword.get(opts, :reindex, false) and Qdrant.active_cluster() != target do
+    writes_active? = Keyword.get(opts, :reindex, false) or Keyword.has_key?(opts, :since)
+
+    if writes_active? and Qdrant.active_cluster() != target do
       {:error, :target_not_active}
     else
       report = %{
@@ -65,16 +93,20 @@ defmodule Engram.Vector.ClusterDiff do
         copied: 0,
         unrecoverable: 0,
         flagged_notes: 0,
+        requeued_notes: 0,
+        last_chunk_id: Keyword.get(opts, :after),
         scanned_target: 0,
         extra: if(Keyword.has_key?(opts, :user_ids), do: nil, else: 0),
         extra_sample: []
       }
 
-      with {:ok, report} <- walk_chunks(nil, report, opts),
-           {:ok, report} <- walk_target(nil, report, opts) do
+      with {:ok, report} <- walk_chunks(report.last_chunk_id, report, opts),
+           {:ok, report} <- walk_target(nil, report, opts),
+           {:ok, report} <- requeue_heals(report, opts) do
         Logger.info(
           "cluster_diff #{source}->#{target} checked=#{report.checked} missing=#{report.missing} " <>
-            "extra=#{inspect(report.extra)} copied=#{report.copied} flagged=#{report.flagged_notes}",
+            "extra=#{inspect(report.extra)} copied=#{report.copied} flagged=#{report.flagged_notes} " <>
+            "requeued=#{report.requeued_notes}",
           Metadata.with_category(:info, :data)
         )
 
@@ -102,7 +134,7 @@ defmodule Engram.Vector.ClusterDiff do
              {:ok, report} <- repair(missing, count_missing(report, rows, missing), opts) do
           pause(opts)
           {last_id, _, _, _} = List.last(rows)
-          walk_chunks(last_id, report, opts)
+          walk_chunks(last_id, %{report | last_chunk_id: last_id}, opts)
         else
           {:error, reason} -> failed(reason, report)
         end
@@ -187,6 +219,37 @@ defmodule Engram.Vector.ClusterDiff do
     count = Indexing.flag_notes_for_rebuild(note_ids, Repo.maintenance())
     _ = if count > 0, do: Engram.Workers.ReconcileEmbeddings.kick()
     count
+  end
+
+  # -- same-id writes since a flip ----------------------------------------------
+
+  defp requeue_heals(report, opts) do
+    case Keyword.get(opts, :since) do
+      nil ->
+        {:ok, report}
+
+      %DateTime{} = since ->
+        n = requeue_notes_since(since, Keyword.get(opts, :user_ids))
+        _ = if n > 0, do: ReconcileNotePayloads.enqueue_missing()
+        {:ok, %{report | requeued_notes: n}}
+    end
+  end
+
+  # The NULLs `UserDekRotation.hand_points_to_heals/2` sets for the same two
+  # heals, cross-tenant on the maintenance pool (RLS would hide the rows).
+  defp requeue_notes_since(since, user_ids) do
+    repo = Repo.maintenance()
+
+    Repo.cross_tenant(fn ->
+      {n, _} =
+        from(n in Note,
+          where: n.kind == "note" and is_nil(n.deleted_at) and n.updated_at >= ^since
+        )
+        |> then(fn q -> if user_ids, do: where(q, [n], n.user_id in ^user_ids), else: q end)
+        |> repo.update_all(set: [payload_hash: nil, keyword_version: nil])
+
+      n
+    end)
   end
 
   # -- extra on the target ------------------------------------------------------
