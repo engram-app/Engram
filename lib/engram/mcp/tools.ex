@@ -145,7 +145,8 @@ defmodule Engram.MCP.Tools do
         %{name: "search_notes"} = t ->
           update_in(t, [:inputSchema, "properties"], &Map.delete(&1, "fields"))
 
-        t -> t
+        t ->
+          t
       end)
     end
   end
