@@ -454,7 +454,7 @@ defmodule Engram.Indexing do
   plans exactly as before the budget existed.
   """
   @spec budget_enabled?() :: boolean()
-  def budget_enabled?, do: Application.get_env(:engram, :index_budget_enabled, false)
+  def budget_enabled?, do: Engram.ServiceConfig.get(:index_budget_enabled, false)
 
   # The per-note cap runs first, so the points budget below counts the points
   # a full pass would actually write.

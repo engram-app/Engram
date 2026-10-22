@@ -25,10 +25,45 @@ defmodule Engram.ServiceConfig do
 
   ## Prod path
 
-  The override machinery is **compile-time gated** (`@is_test_build`). In a
-  non-test build `get/2` is a plain `Application.get_env/3` — byte-identical to
-  the old reads, zero hot-path cost, and `put_override/2` does not exist.
+  The per-process override machinery is **compile-time gated**
+  (`@is_test_build`). In a non-test build `get/2` is a plain
+  `Application.get_env/3` for every key outside the runtime-override
+  allowlist, and `put_override/2` does not exist.
+
+  ## Runtime overrides (every build)
+
+  The keys in `Engram.ServiceConfig.Overrides.keys/0` (the v5 rollout flags
+  and `:qdrant_active_cluster`) can be overridden at runtime from a remote
+  shell, cluster-wide and durably, through a DB row: `override/3`, `clear/2`,
+  `list/0`. An override beats env; with none set the env value is returned
+  unchanged. See `Engram.ServiceConfig.Overrides` for the cache, the
+  invalidation and the DB-outage fallback.
   """
+
+  alias Engram.ServiceConfig.Overrides
+
+  @override_keys Overrides.keys()
+
+  @doc """
+  Sets a runtime override of an allowlisted key, cluster-wide. `by:` names the
+  operator for the log. Release-safe: `bin/engram rpc` can call it.
+  """
+  @spec override(atom() | String.t(), term(), keyword()) :: :ok | {:error, term()}
+  def override(key, value, opts \\ []), do: Overrides.put(key, value, opts)
+
+  @doc "Removes a runtime override; the key reads its env value again."
+  @spec clear(atom() | String.t(), keyword()) :: :ok | {:error, term()}
+  def clear(key, opts \\ []), do: Overrides.delete(key, opts)
+
+  @doc "Every runtime override set now, read from the DB (not the cache)."
+  @spec list() :: [map()]
+  def list, do: Overrides.list()
+
+  # The allowlisted keys check the override first; every other key never
+  # touches it. `:service_overrides_enabled` is off only in the test suite.
+  defp runtime_override(key) do
+    if env(:service_overrides_enabled, true), do: Overrides.fetch(key), else: :error
+  end
 
   # Mirrors the `@is_test_build` pattern in `Engram.Embedders.Voyage` /
   # `EngramWeb.Plugs.RateLimit` (config.exs sets `:engram, :env, Mix.env()`).
@@ -41,13 +76,31 @@ defmodule Engram.ServiceConfig do
     @table :engram_service_config_overrides
 
     @doc """
-    Reads `key`, preferring a per-process override over global app env.
+    Reads `key`, preferring a runtime override, then a per-process override,
+    then global app env.
 
-    Resolution order: the first override found scanning `[self() | $callers]`,
-    then `Application.get_env(:engram, key, default)`.
+    Resolution order: a runtime override (allowlisted keys only, see the
+    moduledoc), the first per-process override found scanning
+    `[self() | $callers]`, then `Application.get_env(:engram, key, default)`.
     """
     @spec get(atom(), term()) :: term()
-    def get(key, default \\ nil) do
+    def get(key, default \\ nil)
+
+    def get(key, default) when key in @override_keys do
+      case runtime_override(key) do
+        {:ok, value} -> value
+        :error -> env(key, default)
+      end
+    end
+
+    def get(key, default), do: env(key, default)
+
+    @doc """
+    `get/2` without the runtime override: what env says. The per-process
+    override counts as env here (it is the test stand-in for it).
+    """
+    @spec env(atom(), term()) :: term()
+    def env(key, default \\ nil) do
       case fetch_override(key) do
         {:ok, value} -> value
         :error -> Application.get_env(:engram, key, default)
@@ -112,6 +165,19 @@ defmodule Engram.ServiceConfig do
     end
   else
     @spec get(atom(), term()) :: term()
-    def get(key, default \\ nil), do: Application.get_env(:engram, key, default)
+    def get(key, default \\ nil)
+
+    def get(key, default) when key in @override_keys do
+      case runtime_override(key) do
+        {:ok, value} -> value
+        :error -> Application.get_env(:engram, key, default)
+      end
+    end
+
+    def get(key, default), do: Application.get_env(:engram, key, default)
+
+    @doc "`get/2` without the runtime override: what env says."
+    @spec env(atom(), term()) :: term()
+    def env(key, default \\ nil), do: Application.get_env(:engram, key, default)
   end
 end

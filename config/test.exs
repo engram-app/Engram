@@ -262,3 +262,9 @@ config :engram, :qdrant_backpressure_preflight, false
 
 # Post-flip Qdrant sweep retries without waiting in tests.
 config :engram, Engram.Crypto.UserDekRotation, qdrant_retry_ms: 0
+
+# Runtime config overrides (`Engram.ServiceConfig.Overrides`): off for the
+# suite, so a flag read never queries `service_overrides` from a process the
+# sandbox does not own and no test sees another's cached override. Its own
+# tests opt in per-process via `ServiceConfig.put_override/2`.
+config :engram, :service_overrides_enabled, false

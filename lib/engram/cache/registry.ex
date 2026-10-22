@@ -163,6 +163,26 @@ defmodule Engram.Cache.Registry do
       evict_match: :key,
       pg_channel: nil
     },
+    # :all => the runtime config overrides (`Engram.ServiceConfig.Overrides`),
+    # the whole `service_overrides` table. A write evicts it cluster-wide; the
+    # TTL bounds a lost eviction and a raw-SQL edit. Short in the suite so the
+    # TTL test does not sleep 15s.
+    %{
+      name: :service_overrides,
+      ttl: if(Mix.env() == :test, do: 200, else: 15_000),
+      cache_nil: false,
+      evict_match: :key,
+      pg_channel: nil
+    },
+    # :all => the last overrides read successfully, served while the table is
+    # unreadable so a DB blip cannot flip a node back to env values.
+    %{
+      name: :service_overrides_last_good,
+      ttl: :infinity,
+      cache_nil: false,
+      evict_match: :key,
+      pg_channel: nil
+    },
     # Qdrant base URL => `%{disk:, heap:}` percent (Qdrant.pressure/0). The
     # TTL is the freshness: EmbedNote's preflight reads it per job.
     %{name: :qdrant_pressure, ttl: 60_000, cache_nil: false, evict_match: :key, pg_channel: nil},

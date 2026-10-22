@@ -66,7 +66,7 @@ defmodule Engram.EmbedModels do
   @spec per_plan?() :: boolean()
   def per_plan?,
     do:
-      Application.get_env(:engram, :embed_models_per_plan, false) == true and
+      Engram.ServiceConfig.get(:embed_models_per_plan, false) == true and
         Application.get_env(:engram, :billing_enabled, false) == true and
         Indexing.embed_model() != nil
 
