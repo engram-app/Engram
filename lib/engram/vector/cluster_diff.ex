@@ -288,7 +288,7 @@ defmodule Engram.Vector.ClusterDiff do
       ids ->
         {updated, _} =
           Repo.cross_tenant(fn ->
-            from(n in Note, where: n.id in ^ids)
+            from(n in Note, where: n.id in ^ids and n.kind == "note")
             |> repo.update_all(set: [payload_hash: nil, keyword_version: nil])
           end)
 
