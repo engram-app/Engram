@@ -20,6 +20,7 @@ defmodule Engram.IndexingV5RebuildTest do
   alias Engram.Indexing.PointId
   alias Engram.Notes.{Chunk, ChunkPoint, Note, NoteAttr}
   alias Engram.ServiceConfig
+  alias Engram.UsageMeters
   alias Engram.Workers.EmbedNote
   alias Engram.Workers.EmbedNote.CrashGuard
   alias Engram.Workers.RebuildStaleNote
@@ -204,6 +205,36 @@ defmodule Engram.IndexingV5RebuildTest do
       tenant(ctx.user, fn -> Repo.all(from(p in ChunkPoint, where: p.note_id == ^note.id)) end)
 
     assert length(point_rows) == count
+  end
+
+  # The dry run's estimate (`rebuild_estimate/2`) and the pass plan from the
+  # same parse, rows and fingerprints, so the estimate is exactly what the
+  # pass sends Voyage. A note with partial reuse and a block repeated more
+  # times than the stored rows hold (staging rehearsal 2026-10-22: the pass
+  # spent 0.144x of the manifest).
+  test "the dry-run estimate is exactly what the rebuild sends Voyage", ctx do
+    repeated = "## Repeated\n\nthe same block of words. #{@pad}"
+    first = sections(4) <> "\n\n" <> repeated <> "\n\n" <> repeated
+    note = insert_note(ctx.user, ctx.vault, first)
+    assert {:ok, _, _, true} = Indexing.index_note_with_usage(note, ctx.vault, ctx.user)
+    _ = embedded()
+
+    # Two sections reworded, one added, the repeated block now three times.
+    content =
+      first
+      |> String.replace("section2 body", "section2 reworded body")
+      |> String.replace("section3 body", "section3 reworded body")
+      |> Kernel.<>("\n\n## S9\n\nnew section. #{@pad}\n\n" <> repeated)
+
+    changed = %{note | content: content}
+    {:ok, est} = tenant(ctx.user, fn -> Indexing.rebuild_estimate(changed, ctx.user) end)
+    assert est.new_points >= 4 and est.reused_points >= 4
+
+    assert {:ok, _, _, true} = rebuild(changed, ctx.vault, ctx.user)
+    sent = embedded()
+
+    assert sent != []
+    assert est.est_tokens == sent |> Enum.map(&UsageMeters.estimate_tokens/1) |> Enum.sum()
   end
 
   test "a capped group of all-dense members gets a unit-norm mean and 0 tokens", ctx do
