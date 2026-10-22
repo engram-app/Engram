@@ -100,15 +100,45 @@ defmodule Engram.Vector.Qdrant do
   end
 
   # {url, api_key} of the active cluster. `v2` without a URL reads `old`:
-  # `ServiceConfig.override/3` refuses that flip, so it takes an env change
-  # under a live override to get here.
+  # `ServiceConfig.override/3` refuses that flip while any connected node
+  # lacks the URL, so it takes a task booted later without it (TF drift on
+  # one tier) to get here. That node then writes the old cluster while its
+  # peers write v2, so it logs an error (at most once a minute).
   defp endpoint do
-    with "v2" <- active_cluster(),
-         url when url not in [nil, ""] <- ServiceConfig.get(:qdrant_url_v2) do
-      {url, ServiceConfig.get(:qdrant_api_key_v2)}
-    else
-      _ -> {ServiceConfig.get(:qdrant_url, @default_url), ServiceConfig.get(:qdrant_api_key)}
+    case active_cluster() do
+      "v2" ->
+        case ServiceConfig.get(:qdrant_url_v2) do
+          url when url not in [nil, ""] -> {url, ServiceConfig.get(:qdrant_api_key_v2)}
+          _ -> v2_unconfigured()
+        end
+
+      _ ->
+        old_endpoint()
     end
+  end
+
+  defp old_endpoint,
+    do: {ServiceConfig.get(:qdrant_url, @default_url), ServiceConfig.get(:qdrant_api_key)}
+
+  @v2_unconfigured_key {__MODULE__, :v2_unconfigured_logged_at}
+
+  # ponytail: persistent_term write at most once a minute, and only on a
+  # misconfigured node, so the global GC it triggers is noise.
+  defp v2_unconfigured do
+    now = System.monotonic_time(:second)
+    last = :persistent_term.get(@v2_unconfigured_key, nil)
+
+    if is_nil(last) or now - last >= 60 do
+      :persistent_term.put(@v2_unconfigured_key, now)
+
+      Logger.error(
+        "qdrant_active_cluster=v2 but QDRANT_URL_V2 is unset on this node: " <>
+          "writing the OLD cluster (split brain)",
+        Metadata.with_category(:error, :data)
+      )
+    end
+
+    old_endpoint()
   end
 
   defp collection, do: ServiceConfig.get(:qdrant_collection, @default_collection)

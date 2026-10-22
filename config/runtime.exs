@@ -300,6 +300,27 @@ if config_env() != :test do
     config :engram, :qdrant_api_key_v2, qdrant_api_key_v2
   end
 
+  # The env side of `:qdrant_active_cluster`, for once the cutover is done:
+  # pin `v2` here so a task that boots with the DB unreachable (no override
+  # read yet, so env) still writes v2, and the override can be cleared. The
+  # override, when set, still wins.
+  case System.get_env("QDRANT_ACTIVE_CLUSTER") do
+    nil ->
+      :ok
+
+    "old" ->
+      config :engram, :qdrant_active_cluster, "old"
+
+    "v2" ->
+      if System.get_env("QDRANT_URL_V2") in [nil, ""],
+        do: raise("QDRANT_ACTIVE_CLUSTER=v2 needs QDRANT_URL_V2")
+
+      config :engram, :qdrant_active_cluster, "v2"
+
+    other ->
+      raise "QDRANT_ACTIVE_CLUSTER must be old or v2, got #{inspect(other)}"
+  end
+
   # Binary quantization — requires AVX2+ CPU. Disable on older hardware.
   if System.get_env("QDRANT_BINARY_QUANTIZATION") == "false" do
     config :engram, :qdrant_binary_quantization, false
