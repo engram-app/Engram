@@ -940,8 +940,10 @@ defmodule Engram.Indexing do
   # Body bytes one floor point covers. One vector for a whole note grew with
   # the note: a 3 MB CJK note (every bigram a term) was an 11.8 MB upsert
   # and a 213 MB encode peak, so 10 MB passed Qdrant's 32 MiB request cap
-  # and 30 MB the worker's RAM. 1 MiB of text keeps a point near 4 MB of
-  # JSON at that density.
+  # and 30 MB the worker's RAM. 1 MiB of body keeps a point near 5 MB of
+  # JSON at that density. Its keyword text can be far more (a breadcrumb
+  # repeats per member: a deep heading tree measured 24 MiB a point), but
+  # the repeats add few terms, so the vector stays near the body's.
   @floor_span 1_048_576
 
   @doc """
@@ -960,8 +962,8 @@ defmodule Engram.Indexing do
 
   A point's keyword input is its chunks' `context_text` joined, so the
   vectors hold the union of the note's terms (headings and title prefix
-  included). Chunks are packed in order, a point closing before its chunks'
-  text would pass 1 MiB.
+  included). Chunks are packed in order, a point closing before the body its
+  chunks cover would pass 1 MiB (`floor_body_bytes/1`).
   It has no dense vector and no display text: its payload text is `""`, and a
   hit's snippet is the note's title and path from `notes`. The row's
   `token_count` is nil, so a whole-note length never enters the vault's
@@ -975,7 +977,7 @@ defmodule Engram.Indexing do
       |> Enum.chunk_while(
         {[], 0},
         fn chunk, {acc, bytes} ->
-          size = byte_size(chunk.text)
+          size = floor_body_bytes(chunk)
 
           if acc != [] and bytes + size > @floor_span,
             do: {:cont, Enum.reverse(acc), {[chunk], size}},
@@ -1011,6 +1013,17 @@ defmodule Engram.Indexing do
       language: note_language(chunks)
     }
   end
+
+  # The body bytes a chunk covers, what `floor_points/1` counts. Not its
+  # text: a merged chunk repeats each member's breadcrumb (`A > B`), so on
+  # tiny sections its text is ~2x the body and a 3 MB note took 6 floor
+  # points against floor_points/1's 4. Split pieces of one section all carry
+  # the section's span, so each counts at most its own text; the frontmatter
+  # chunk (span 0) counts its text.
+  defp floor_body_bytes(%{char_start: s, char_end: e, text: text}) when e > s,
+    do: min(byte_size(text), e - s)
+
+  defp floor_body_bytes(chunk), do: byte_size(chunk.text)
 
   # Re-entrant inside commit_index/2's chunk transaction; on the purge path it
   # opens one of its own.
@@ -1413,8 +1426,8 @@ defmodule Engram.Indexing do
   defp collect_garbage(_n), do: :ok
 
   # At most `@upsert_batch` points and `@upsert_batch_bytes` of JSON each. A
-  # point bigger than the byte budget goes alone (a floor point is bounded by
-  # `@floor_span`).
+  # point bigger than the byte budget goes alone (a floor point's terms are
+  # bounded by the `@floor_span` of body it covers).
   defp point_batches(points) do
     Enum.chunk_while(
       points,

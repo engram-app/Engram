@@ -14,6 +14,7 @@ defmodule Engram.IndexingFloorTest do
   alias Engram.KeywordIndex.QdrantSparse
   alias Engram.Notes.Chunk
   alias Engram.Notes.Note
+  alias Engram.Parsers.Markdown
   alias Engram.Repo
   alias Engram.ServiceConfig
   alias Engram.UsageMeters
@@ -122,7 +123,7 @@ defmodule Engram.IndexingFloorTest do
 
       span =
         note.content
-        |> Engram.Parsers.Markdown.parse("Cjk.md")
+        |> Markdown.parse("Cjk.md")
         |> Enum.map(& &1.char_end)
         |> Enum.max()
 
@@ -139,7 +140,7 @@ defmodule Engram.IndexingFloorTest do
       vault: vault
     } do
       note = floor_note(user, vault)
-      assert length(Engram.Parsers.Markdown.parse(note.content, note.path)) >= 3
+      assert length(Markdown.parse(note.content, note.path)) >= 3
       before = UsageMeters.lifetime_embed_tokens(user.id)
 
       {:ok, prepared} = Indexing.prepare_index(note, vault, user, index_tier: "floor")
@@ -192,6 +193,37 @@ defmodule Engram.IndexingFloorTest do
                Indexing.index_note_with_usage(note, vault, user, index_tier: "floor")
 
       assert Enum.all?(chunk_rows(note), &(is_nil(&1.token_count) and is_nil(&1.context_hmac)))
+    end
+
+    # The huge-notes matrix (3 MB tiny_sections headings=true floor: 6
+    # points, cap 4). A merged chunk's text repeats each member's breadcrumb
+    # (`## Section > ### t`), so its text outgrows the body it covers, and
+    # packing by text broke the floor_points/1 bound the budget sweep and
+    # the per-note cap count on.
+    test "breadcrumb-heavy merged chunks floor within floor_points/1 of the note", %{
+      user: user,
+      vault: vault
+    } do
+      letters = fn i -> i |> Integer.to_string(26) |> String.downcase() end
+
+      content =
+        Enum.map_join(0..69_999, fn i ->
+          head = if rem(i, 8) == 0, do: "## Section s#{letters.(i)}\n\n", else: ""
+          head <> "### t#{letters.(i)}\nzqx#{letters.(i)}qz\n\n"
+        end)
+
+      note = floor_note(user, vault, "Tiny.md", content)
+      chunks = Markdown.parse(note.content, note.path)
+      cap = Indexing.floor_points(byte_size(content))
+
+      # The fixture is the bug's shape: chunk text well past the body's
+      # MiB count, so a text-packed floor overruns the cap.
+      assert cap == 2
+      assert chunks |> Enum.map(&byte_size(&1.text)) |> Enum.sum() > 2 * 1_048_576
+
+      {:ok, prepared} = Indexing.prepare_index(note, vault, user, index_tier: "floor")
+
+      assert length(prepared.qdrant_points) <= cap
     end
 
     test "the floor vector carries every section's terms", %{user: user, vault: vault} do
