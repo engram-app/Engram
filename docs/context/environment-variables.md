@@ -113,8 +113,8 @@ Live. Covers every var `config/runtime.exs` reads (`Engram.EnvVarDocsTest` fails
 | `QDRANT_URL` | (compile-time) | Qdrant base URL. |
 | `QDRANT_COLLECTION` | env-driven; fallback `obsidian_notes` (module) / `engram_notes` (dev+test+prod) | Collection name. See nuance above. |
 | `QDRANT_API_KEY` | unset | Qdrant Cloud key. |
-| `QDRANT_URL_V2` | unset | Second Qdrant cluster (v5 move). Used only while `:qdrant_active_cluster` is `v2` (runtime override `Engram.ServiceConfig.override/3`, or `QDRANT_ACTIVE_CLUSTER`). Must be set on EVERY tier (web and worker): a node without it reads `old` and logs an error. |
-| `QDRANT_ACTIVE_CLUSTER` | unset (`old`) | `old` or `v2`. The env side of the cluster switch: pin `v2` once the cutover is done, so a task booted with the DB unreachable still writes v2. A runtime override still wins. `v2` without `QDRANT_URL_V2` fails boot. |
+| `QDRANT_URL_V2` | unset | Second Qdrant cluster (v5 move). Used only while `:qdrant_active_cluster` is `v2` (runtime override `Engram.ServiceConfig.override/3`, or `QDRANT_ACTIVE_CLUSTER`). Must be set on EVERY tier (web and worker), with `QDRANT_API_KEY_V2`: the flip to v2 asks every connected node and refuses if any lacks either, and a node without the URL reads `old` and logs an error. |
+| `QDRANT_ACTIVE_CLUSTER` | unset (`old`) | `old` or `v2`. The env side of the cluster switch: pin `v2` once the cutover is done, so a task booted with the DB unreachable still writes v2. A runtime override still wins. `v2` without `QDRANT_URL_V2` fails boot. A rollback after pinning `v2` must change this pin too: a node booted with the DB unreachable runs on env, and a disagreeing override logs an error every 15s until they match. |
 | `QDRANT_API_KEY_V2` | unset | Key for `QDRANT_URL_V2`. Needs manage rights (collection create, payload indexes, config PATCH), like `QDRANT_API_KEY`. |
 | `QDRANT_BINARY_QUANTIZATION` | on | Set `false` to disable BQ on non-AVX2 hardware. |
 | `QDRANT_RECONCILE_CONFIG` | `true` | Kill switch: `false` = never PATCH the collection config (boot reconcile + poller strict-mode sync). |

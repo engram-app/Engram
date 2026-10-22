@@ -38,9 +38,15 @@ defmodule Engram.Vector.ClusterDiff do
   `since: %DateTime{}` repairs that class: every live note changed since
   then gets `payload_hash` and `keyword_version` cleared, so
   `ReconcileNotePayloads` and the keyword refresh rewrite its points on the
-  active cluster. $0 Voyage (payload reads, then writes only where drifted),
-  so pick it generously: the flip time minus the indexing backlog, an hour
-  is cheap. Refused unless the target is active, as `reindex: true` is.
+  active cluster. $0 Voyage, but not free: the payload heal reads every
+  requeued note's points and writes only the drifted ones, while the
+  keyword refresh re-encodes and rewrites the sparse vectors of EVERY
+  requeued note (`RefreshKeywordVectors`, on the `embed` queue). So the
+  window sizes Qdrant writes and embed-queue time: the flip time minus the
+  indexing backlog, not a day. The UPDATE runs in id-keyset batches of
+  `requeue_batch` (default 1,000) with `pause_ms` between. Refused unless the
+  target is active, as `reindex: true` is; a `since:` that is not a
+  `DateTime` is refused before the walk.
 
   Paced: `pause_ms` (default 200) between pages. Run it with the
   Qdrant-writing queues paused: a write that lands on the target between the
@@ -69,6 +75,7 @@ defmodule Engram.Vector.ClusterDiff do
 
   @clusters ["old", "v2"]
   @sample 100
+  @requeue_batch 1_000
 
   @spec run(String.t(), String.t(), keyword()) ::
           {:ok, map()} | {:error, term()} | {:error, term(), map()}
@@ -79,43 +86,57 @@ defmodule Engram.Vector.ClusterDiff do
   def run(source, target, opts) when source in @clusters and target in @clusters do
     writes_active? = Keyword.get(opts, :reindex, false) or Keyword.has_key?(opts, :since)
 
-    if writes_active? and Qdrant.active_cluster() != target do
-      {:error, :target_not_active}
-    else
-      report = %{
-        source: source,
-        target: target,
-        repair: Keyword.get(opts, :repair, false),
-        checked: 0,
-        missing: 0,
-        missing_by_user: %{},
-        missing_sample: [],
-        copied: 0,
-        unrecoverable: 0,
-        flagged_notes: 0,
-        requeued_notes: 0,
-        last_chunk_id: Keyword.get(opts, :after),
-        scanned_target: 0,
-        extra: if(Keyword.has_key?(opts, :user_ids), do: nil, else: 0),
-        extra_sample: []
-      }
+    cond do
+      not valid_since?(Keyword.get(opts, :since)) ->
+        {:error, {:invalid_since, Keyword.get(opts, :since)}}
 
-      with {:ok, report} <- walk_chunks(report.last_chunk_id, report, opts),
-           {:ok, report} <- walk_target(nil, report, opts),
-           {:ok, report} <- requeue_heals(report, opts) do
-        Logger.info(
-          "cluster_diff #{source}->#{target} checked=#{report.checked} missing=#{report.missing} " <>
-            "extra=#{inspect(report.extra)} copied=#{report.copied} flagged=#{report.flagged_notes} " <>
-            "requeued=#{report.requeued_notes}",
-          Metadata.with_category(:info, :data)
-        )
+      writes_active? and Qdrant.active_cluster() != target ->
+        {:error, :target_not_active}
 
-        {:ok, report}
-      end
+      true ->
+        walk(source, target, opts)
     end
   end
 
   def run(_source, _target, _opts), do: {:error, :unknown_cluster}
+
+  defp valid_since?(nil), do: true
+  defp valid_since?(%DateTime{}), do: true
+  defp valid_since?(_), do: false
+
+  defp walk(source, target, opts) do
+    report = %{
+      source: source,
+      target: target,
+      repair: Keyword.get(opts, :repair, false),
+      checked: 0,
+      missing: 0,
+      missing_by_user: %{},
+      missing_sample: [],
+      copied: 0,
+      unrecoverable: 0,
+      flagged_notes: 0,
+      requeued_notes: 0,
+      requeue_batches: 0,
+      last_chunk_id: Keyword.get(opts, :after),
+      scanned_target: 0,
+      extra: if(Keyword.has_key?(opts, :user_ids), do: nil, else: 0),
+      extra_sample: []
+    }
+
+    with {:ok, report} <- walk_chunks(report.last_chunk_id, report, opts),
+         {:ok, report} <- walk_target(nil, report, opts),
+         {:ok, report} <- requeue_heals(report, opts) do
+      Logger.info(
+        "cluster_diff #{source}->#{target} checked=#{report.checked} missing=#{report.missing} " <>
+          "extra=#{inspect(report.extra)} copied=#{report.copied} flagged=#{report.flagged_notes} " <>
+          "requeued=#{report.requeued_notes}",
+        Metadata.with_category(:info, :data)
+      )
+
+      {:ok, report}
+    end
+  end
 
   # -- missing on the target ----------------------------------------------------
 
@@ -229,27 +250,57 @@ defmodule Engram.Vector.ClusterDiff do
         {:ok, report}
 
       %DateTime{} = since ->
-        n = requeue_notes_since(since, Keyword.get(opts, :user_ids))
-        _ = if n > 0, do: ReconcileNotePayloads.enqueue_missing()
-        {:ok, %{report | requeued_notes: n}}
+        batch = Keyword.get(opts, :requeue_batch, @requeue_batch)
+
+        {count, batches} =
+          requeue_since(since, Keyword.get(opts, :user_ids), batch, opts, nil, {0, 0})
+
+        _ = if count > 0, do: ReconcileNotePayloads.enqueue_missing()
+        {:ok, %{report | requeued_notes: count, requeue_batches: batches}}
     end
   end
 
-  # The NULLs `UserDekRotation.hand_points_to_heals/2` sets for the same two
-  # heals, cross-tenant on the maintenance pool (RLS would hide the rows).
-  defp requeue_notes_since(since, user_ids) do
+  # Keyset on notes.id, `batch` rows per UPDATE, paced: a wide window must
+  # not take row locks on every note in one statement against live edits.
+  # The NULLs are the ones `UserDekRotation.hand_points_to_heals/2` sets for
+  # the same two heals, cross-tenant on the maintenance pool (RLS would hide
+  # the rows).
+  defp requeue_since(since, user_ids, batch, opts, after_id, {count, batches}) do
     repo = Repo.maintenance()
 
-    Repo.cross_tenant(fn ->
-      {n, _} =
+    ids =
+      Repo.cross_tenant(fn ->
         from(n in Note,
-          where: n.kind == "note" and is_nil(n.deleted_at) and n.updated_at >= ^since
+          where: n.kind == "note" and is_nil(n.deleted_at) and n.updated_at >= ^since,
+          order_by: n.id,
+          limit: ^batch,
+          select: n.id
         )
+        |> then(fn q -> if after_id, do: where(q, [n], n.id > ^after_id), else: q end)
         |> then(fn q -> if user_ids, do: where(q, [n], n.user_id in ^user_ids), else: q end)
-        |> repo.update_all(set: [payload_hash: nil, keyword_version: nil])
+        |> repo.all()
+      end)
 
-      n
-    end)
+    case ids do
+      [] ->
+        {count, batches}
+
+      ids ->
+        {updated, _} =
+          Repo.cross_tenant(fn ->
+            from(n in Note, where: n.id in ^ids)
+            |> repo.update_all(set: [payload_hash: nil, keyword_version: nil])
+          end)
+
+        acc = {count + updated, batches + 1}
+
+        if length(ids) < batch do
+          acc
+        else
+          pause(opts)
+          requeue_since(since, user_ids, batch, opts, List.last(ids), acc)
+        end
+    end
   end
 
   # -- extra on the target ------------------------------------------------------

@@ -75,13 +75,13 @@ defmodule Engram.ServiceConfig.Overrides do
   def put(key, value, opts \\ []) do
     with {:ok, key} <- resolve(key),
          :ok <- validate(key, value) do
-      change(key, {:set, value}, operator(opts))
+      change(key, {:set, value}, opts)
     end
   end
 
   @spec delete(atom() | String.t(), keyword()) :: :ok | {:error, term()}
   def delete(key, opts \\ []) do
-    with {:ok, key} <- resolve(key), do: change(key, :clear, operator(opts))
+    with {:ok, key} <- resolve(key), do: change(key, :clear, opts)
   end
 
   # No @spec: the inferred row map is narrower than any spec worth writing.
@@ -108,6 +108,7 @@ defmodule Engram.ServiceConfig.Overrides do
       case read() do
         {:ok, overrides} ->
           :ok = Cache.put(:service_overrides_last_good, :all, overrides)
+          :ok = warn_env_disagreement(overrides)
           overrides
 
         {:error, reason} ->
@@ -172,6 +173,27 @@ defmodule Engram.ServiceConfig.Overrides do
     |> Map.new()
   end
 
+  # The override wins over env whenever the table is readable. But a node
+  # that boots with the DB unreachable has no override yet and runs on env:
+  # an override rollback under an env pin the other way (QDRANT_ACTIVE_CLUSTER)
+  # is the split brain inverted. Logged on every load (each TTL) until the
+  # env pin is changed to match.
+  defp warn_env_disagreement(%{qdrant_active_cluster: cluster}) do
+    case ServiceConfig.env(:qdrant_active_cluster) do
+      env when is_binary(env) and env != cluster ->
+        Logger.error(
+          "qdrant_active_cluster override=#{cluster} disagrees with env " <>
+            "QDRANT_ACTIVE_CLUSTER=#{env}: change the env pin to match",
+          Metadata.with_category(:error, :data)
+        )
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp warn_env_disagreement(_overrides), do: :ok
+
   defp fallback(reason) do
     Logger.warning(
       "service overrides unreadable; serving the last values read, or env",
@@ -193,7 +215,9 @@ defmodule Engram.ServiceConfig.Overrides do
 
   # -- writes -----------------------------------------------------------------
 
-  defp change(key, op, by) do
+  defp change(key, op, opts) do
+    by = operator(opts)
+
     result =
       Repo.transaction(fn ->
         # Serialises writers so two operators cannot each pass the invariant
@@ -211,7 +235,7 @@ defmodule Engram.ServiceConfig.Overrides do
         # Only a violation this write ADDS refuses it. One already there (an
         # env change under a live override) must not block every later write,
         # least of all a kill switch.
-        case violations(next, key) -- violations(current, nil) do
+        case violations(next, key, opts) -- violations(current, nil, opts) do
           [] ->
             _ = write(key, op, by)
             {Map.fetch(current, key), Map.fetch(next, key)}
@@ -293,7 +317,10 @@ defmodule Engram.ServiceConfig.Overrides do
   # The env-side twins live in engram-infra's v5_flags.tf validations; this
   # keeps a runtime flip from reaching a state TF would refuse. `changed` is
   # the key being written: the v2 check asks every connected node only then.
-  defp violations(overrides, changed) do
+  # `opts` may inject `:peers` (0-arity, default `Node.list/0`) and
+  # `:multicall` (fun of the peer list returning `:erpc.multicall/5`-shaped
+  # results), as `Engram.Crypto.CompressionGate.evaluate/1` does.
+  defp violations(overrides, changed, opts) do
     get = fn key -> Map.get_lazy(overrides, key, fn -> env(key) end) end
     rebuild = get.(:index_rebuild)
 
@@ -305,33 +332,61 @@ defmodule Engram.ServiceConfig.Overrides do
       get.(:qdrant_tenant_graph) == true and
         ServiceConfig.env(:legacy_filter_fields, true) != false &&
         "qdrant_tenant_graph=true needs LEGACY_FILTER_FIELDS=false",
-      get.(:qdrant_active_cluster) == "v2" && v2_violation(changed == :qdrant_active_cluster)
+      get.(:qdrant_active_cluster) == "v2" &&
+        v2_violation(changed == :qdrant_active_cluster, opts)
     ]
     |> Enum.filter(&is_binary/1)
   end
 
-  defp v2_violation(peers?) do
-    case nodes_without_v2_url(peers?) do
-      [] -> nil
-      missing -> "qdrant_active_cluster=v2 needs QDRANT_URL_V2 on #{Enum.join(missing, ", ")}"
+  defp v2_violation(peers?, opts) do
+    case nodes_without_v2(peers?, opts) do
+      [] ->
+        nil
+
+      bad ->
+        "qdrant_active_cluster=v2 needs QDRANT_URL_V2 and QDRANT_API_KEY_V2 on every node: " <>
+          Enum.map_join(bad, ", ", fn {node, why} -> "#{node} (#{why})" end)
     end
   end
 
-  # This node's env, plus (on the flip itself) every connected node's: a
-  # task def that lacks QDRANT_URL_V2 (one tier's TF not rolled) reads `old`
-  # (`Qdrant.endpoint/0`) and would keep writing the old cluster while its
-  # peers write v2. A node that cannot answer counts as lacking it. A node
-  # not connected (no mesh) is not seen; QDRANT_ACTIVE_CLUSTER pins env.
-  defp nodes_without_v2_url(peers?) do
-    local = if configured?(ServiceConfig.env(:qdrant_url_v2)), do: [], else: [node()]
-    peers = if peers?, do: Node.list(), else: []
-    answers = :erpc.multicall(peers, ServiceConfig, :env, [:qdrant_url_v2], 5_000)
+  @erpc_timeout_ms 5_000
 
-    local ++ for {peer, answer} <- Enum.zip(peers, answers), not ok_url?(answer), do: peer
+  @doc """
+  True when this node has both halves of the v2 endpoint. Called on every
+  connected node by the v2 flip; public for that `:erpc` call.
+  """
+  @spec v2_configured?() :: boolean()
+  def v2_configured?,
+    do:
+      configured?(ServiceConfig.env(:qdrant_url_v2)) and
+        configured?(ServiceConfig.env(:qdrant_api_key_v2))
+
+  # This node, plus (on the flip itself) every connected node: a task def
+  # that lacks QDRANT_URL_V2 (one tier's TF not rolled) reads `old`
+  # (`Qdrant.endpoint/0`) and keeps writing the old cluster while its peers
+  # write v2; one without the key 401s. A node that cannot answer, or runs a
+  # release without `v2_configured?/0`, is refused too. A node not connected
+  # (no mesh) is not seen; QDRANT_ACTIVE_CLUSTER pins env for those.
+  defp nodes_without_v2(peers?, opts) do
+    local = if v2_configured?(), do: [], else: [{node(), :missing}]
+    peers = if peers?, do: Keyword.get(opts, :peers, &Node.list/0).(), else: []
+    multicall = Keyword.get(opts, :multicall, &multicall/1)
+
+    remote =
+      peers
+      |> Enum.zip(if(peers == [], do: [], else: multicall.(peers)))
+      |> Enum.flat_map(fn
+        {_node, {:ok, true}} -> []
+        {node, {:ok, _}} -> [{node, :missing}]
+        {node, {:error, {:exception, :undef, _}}} -> [{node, :old_release}]
+        {node, _} -> [{node, :unreachable}]
+      end)
+
+    local ++ remote
   end
 
-  defp ok_url?({:ok, url}), do: configured?(url)
-  defp ok_url?(_), do: false
+  defp multicall(peers),
+    do: :erpc.multicall(peers, __MODULE__, :v2_configured?, [], @erpc_timeout_ms)
 
   defp configured?(url), do: is_binary(url) and url != ""
 
