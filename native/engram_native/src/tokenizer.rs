@@ -215,7 +215,10 @@ pub fn tokenize(text: &str, lang: Option<&str>) -> (Vec<String>, Vec<usize>) {
 /// Adjacent raw-token pairs, the phrase features of the keyword vector.
 /// A pair with a CJK token is skipped: CJK runs are already char bigrams.
 /// Same rule for documents and quoted query phrases.
-pub fn pairs<'a>(tokens: &'a [String], raw: &[usize]) -> impl Iterator<Item = (&'a str, &'a str)> {
+pub fn pairs<'a>(
+    tokens: &'a [String],
+    raw: &'a [usize],
+) -> impl Iterator<Item = (&'a str, &'a str)> {
     raw.windows(2).filter_map(move |w| {
         let (a, b) = (tokens[w[0]].as_str(), tokens[w[1]].as_str());
         (!a.chars().any(is_cjk) && !b.chars().any(is_cjk)).then_some((a, b))
