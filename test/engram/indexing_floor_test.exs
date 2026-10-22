@@ -14,6 +14,7 @@ defmodule Engram.IndexingFloorTest do
   alias Engram.KeywordIndex.QdrantSparse
   alias Engram.Notes.Chunk
   alias Engram.Notes.Note
+  alias Engram.Parsers.Markdown
   alias Engram.Repo
   alias Engram.ServiceConfig
   alias Engram.UsageMeters
@@ -122,7 +123,7 @@ defmodule Engram.IndexingFloorTest do
 
       span =
         note.content
-        |> Engram.Parsers.Markdown.parse("Cjk.md")
+        |> Markdown.parse("Cjk.md")
         |> Enum.map(& &1.char_end)
         |> Enum.max()
 
@@ -139,7 +140,7 @@ defmodule Engram.IndexingFloorTest do
       vault: vault
     } do
       note = floor_note(user, vault)
-      assert length(Engram.Parsers.Markdown.parse(note.content, note.path)) >= 3
+      assert length(Markdown.parse(note.content, note.path)) >= 3
       before = UsageMeters.lifetime_embed_tokens(user.id)
 
       {:ok, prepared} = Indexing.prepare_index(note, vault, user, index_tier: "floor")
@@ -212,7 +213,7 @@ defmodule Engram.IndexingFloorTest do
         end)
 
       note = floor_note(user, vault, "Tiny.md", content)
-      chunks = Engram.Parsers.Markdown.parse(note.content, note.path)
+      chunks = Markdown.parse(note.content, note.path)
       cap = Indexing.floor_points(byte_size(content))
 
       # The fixture is the bug's shape: chunk text well past the body's
