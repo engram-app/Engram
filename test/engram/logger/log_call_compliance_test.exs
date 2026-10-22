@@ -316,6 +316,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/schema.ex",
     "lib/engram/secrets.ex",
     "lib/engram/service_config.ex",
+    # Runtime config overrides: logs an allowlisted key, its validated
+    # boolean/enum values and a sanitised operator name. No content in scope.
+    "lib/engram/service_config/",
     "lib/engram/tenant_error.ex",
 
     # Mix tasks — operator tooling, run by hand.

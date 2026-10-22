@@ -166,31 +166,43 @@ defmodule Engram.Workers.OrphanSweepTest do
   # second unpiped `Repo.one(...)` in the same function would have walked
   # straight past while both assertions stayed green.
   test "every authority read runs on the maintenance pool, not on Repo" do
-    {:ok, ast} = Code.string_to_quoted(File.read!("lib/engram/workers/orphan_sweep.ex"))
+    # The chunk reads moved to Engram.Vector.PointIds (shared with
+    # ClusterDiff); the guard follows them there.
+    sweep = authority_bodies("lib/engram/workers/orphan_sweep.ex", :defp, [:live_user_ids])
+    shared = authority_bodies("lib/engram/vector/point_ids.ex", :def, [:chunk_page, :known])
 
-    bodies =
-      ast
-      |> Macro.prewalk(%{}, fn
-        {:defp, _, [{name, _, _}, [do: body]]} = node, acc
-        when name in [:chunk_page, :chunk_point_ids, :live_user_ids] ->
-          {node, Map.put(acc, name, Macro.to_string(body))}
+    assert Map.keys(sweep) == [:live_user_ids]
 
-        node, acc ->
-          {node, acc}
-      end)
-      |> elem(1)
-
-    assert bodies |> Map.keys() |> Enum.sort() ==
-             [:chunk_page, :chunk_point_ids, :live_user_ids],
+    assert shared |> Map.keys() |> Enum.sort() == [:chunk_page, :known],
            "all three authority reads must still exist under these names"
 
-    for {name, body} <- bodies do
-      assert body =~ "maintenance_repo()",
-             "#{name} must resolve its pool via maintenance_repo/0"
+    assert sweep.live_user_ids =~ "maintenance_repo()"
+    for {name, body} <- shared, do: assert(body =~ "Repo.maintenance()", "#{name} pool")
 
+    for {name, body} <- Map.merge(sweep, shared) do
       refute body =~ ~r/\bRepo\.(all|one|stream|exists\?|aggregate|update_all)\b/,
              "#{name} must not read on Repo. That is the #1746 deletion path"
     end
+
+    source = File.read!("lib/engram/workers/orphan_sweep.ex")
+    assert source =~ "PointIds.known(ids)"
+    assert source =~ "PointIds.chunk_page(after_id"
+  end
+
+  defp authority_bodies(file, kind, names) do
+    {:ok, ast} = Code.string_to_quoted(File.read!(file))
+
+    ast
+    |> Macro.prewalk(%{}, fn
+      {^kind, _, [{name, _, _}, [do: body]]} = node, acc ->
+        if name in names,
+          do: {node, Map.put(acc, name, Macro.to_string(body))},
+          else: {node, acc}
+
+      node, acc ->
+        {node, acc}
+    end)
+    |> elem(1)
   end
 
   # The write half of the same bug. `flag_notes_for_rebuild/2`'s two `update_all`s

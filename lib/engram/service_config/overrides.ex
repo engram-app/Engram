@@ -1,0 +1,424 @@
+defmodule Engram.ServiceConfig.Overrides do
+  @moduledoc """
+  Runtime overrides of an allowlist of config keys, stored in the global
+  `service_overrides` table and read through `Engram.ServiceConfig.get/2`.
+
+  Why: a TF env flip plus the ECS rollout measured 6m46s to 8m49s after
+  merge, and while it rolls old and new tasks serve side by side. The v5
+  rollout needs every step reversible in about 5 minutes. A row here moves
+  every node within seconds and a task booted later reads the same row, so
+  there is no split brain between old and new tasks.
+
+  ## Reads
+
+  The whole table (a handful of rows) is one `Engram.Cache` entry per node,
+  `:service_overrides`, TTL 15s. A write evicts it on this node and, through
+  `Engram.Cluster.CacheSync`, on every peer; the TTL bounds a lost eviction
+  (and a raw-SQL edit, which evicts nothing).
+
+  Outside a transaction the load runs in a short-lived task with a 2s
+  budget, so a hung database never blocks a Qdrant call for longer; inside
+  one it reads on the caller's connection. Neither path raises. On a
+  failed load the node keeps the overrides it last read
+  (`:service_overrides_last_good`) and retries after the TTL; a node that has
+  never read the table falls back to env. Keeping the last read values
+  rather than env is deliberate: a DB blip must not flip one node back to
+  the old Qdrant cluster while its peers stay on v2.
+
+  ## Writes
+
+  `put/3` and `delete/2` validate the key against `keys/0`, the value against
+  its type, and the GO SEQUENCE invariants (the ones engram-infra's
+  v5_flags.tf validates for env) over the effective config after the change.
+  They serialise on a table lock, log key, old and new value and the
+  operator, then evict cluster-wide. Values are booleans and short enums, so
+  nothing logged is a secret.
+  """
+
+  import Ecto.Query
+
+  alias Engram.Cache
+  alias Engram.Logger.Metadata
+  alias Engram.Repo
+  alias Engram.ServiceConfig
+
+  require Logger
+
+  @boolean_keys ~w(write_v5_layout v5_payload_format chunk_text_write chunk_text_read
+                   vector_cache_enabled embed_models_per_plan index_budget_enabled tenant_idf
+                   qdrant_tenant_graph)a
+
+  @types Map.merge(Map.new(@boolean_keys, &{&1, :boolean}), %{
+           index_rebuild: {:enum, ~w(off dry_run on)},
+           qdrant_active_cluster: {:enum, ~w(old v2)}
+         })
+
+  @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})
+
+  # Each key's reader default, for the invariant check when env leaves it unset.
+  @defaults Map.merge(Map.new(@boolean_keys, &{&1, false}), %{
+              index_rebuild: "off",
+              qdrant_active_cluster: "old"
+            })
+
+  @load_timeout_ms 2_000
+
+  @doc "The keys that can be overridden at runtime."
+  # No @spec: dialyzer's :underspecs flags `[atom()]` against the literal list.
+  def keys, do: Map.keys(@types)
+
+  @doc "`{:ok, value}` when `key` is overridden, else `:error`."
+  @spec fetch(atom()) :: {:ok, term()} | :error
+  def fetch(key), do: Map.fetch(Cache.fetch(:service_overrides, :all, &load/0), key)
+
+  @spec put(atom() | String.t(), term(), keyword()) :: :ok | {:error, term()}
+  def put(key, value, opts \\ []) do
+    with {:ok, key} <- resolve(key),
+         :ok <- validate(key, value) do
+      change(key, {:set, value}, opts)
+    end
+  end
+
+  @spec delete(atom() | String.t(), keyword()) :: :ok | {:error, term()}
+  def delete(key, opts \\ []) do
+    with {:ok, key} <- resolve(key), do: change(key, :clear, opts)
+  end
+
+  # No @spec: the inferred row map is narrower than any spec worth writing.
+  def list do
+    from(o in "service_overrides",
+      order_by: o.key,
+      select: %{key: o.key, value: o.value, updated_by: o.updated_by, updated_at: o.updated_at}
+    )
+    |> Repo.all()
+    |> Enum.flat_map(fn row ->
+      case resolve(row.key) do
+        {:ok, key} -> [%{row | key: key}]
+        {:error, _} -> []
+      end
+    end)
+  end
+
+  # -- reads ------------------------------------------------------------------
+
+  # ponytail: no single-flight; concurrent misses after a TTL or eviction each
+  # run one tiny SELECT. Add a per-node loader process if traces show a herd.
+  defp load do
+    if Process.whereis(Repo) do
+      case read() do
+        {:ok, overrides} ->
+          :ok = Cache.put(:service_overrides_last_good, :all, overrides)
+          :ok = warn_env_disagreement(overrides)
+          overrides
+
+        {:error, reason} ->
+          fallback(reason)
+      end
+    else
+      # Compile time (a module attribute reading a flag) or boot before the
+      # repo starts: nothing to read yet and nothing worth a warning. Not
+      # stored, so the first read once the repo is up goes to the table.
+      Cache.no_store(last_good())
+    end
+  end
+
+  # Inside a transaction the caller already holds a connection: read on it.
+  # A task would need a second one, and N workers each holding one inside
+  # `with_tenant` could drain the pool waiting on themselves. In a savepoint:
+  # a failed SELECT (table not migrated yet, a cancelled statement) would
+  # otherwise abort the CALLER's transaction, failing whatever write path
+  # read the flag.
+  defp read do
+    if in_transaction?(), do: guarded_read(mode: :savepoint), else: read_in_task()
+  end
+
+  # `Repo.in_transaction?/0` raises once the repo is gone (shutdown).
+  defp in_transaction? do
+    Repo.in_transaction?()
+  rescue
+    _ -> false
+  end
+
+  # Outside one, a task bounds a hung database to @load_timeout_ms.
+  defp read_in_task do
+    task = Task.async(fn -> guarded_read([]) end)
+
+    case Task.yield(task, @load_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> result
+      {:exit, reason} -> {:error, reason}
+      nil -> {:error, :timeout}
+    end
+  end
+
+  defp guarded_read(opts) do
+    {:ok, read_table(opts)}
+  rescue
+    e -> {:error, e}
+  catch
+    :exit, reason -> {:error, reason}
+  end
+
+  defp read_table(opts \\ []) do
+    from(o in "service_overrides", select: {o.key, o.value})
+    |> Repo.all(opts)
+    |> Enum.flat_map(fn {name, value} ->
+      # A row a newer release wrote, or a bad raw-SQL edit, is ignored.
+      with {:ok, key} <- resolve(name),
+           :ok <- validate(key, value) do
+        [{key, value}]
+      else
+        _ -> []
+      end
+    end)
+    |> Map.new()
+  end
+
+  # The override wins over env whenever the table is readable. But a node
+  # that boots with the DB unreachable has no override yet and runs on env:
+  # an override rollback under an env pin the other way (QDRANT_ACTIVE_CLUSTER)
+  # is the split brain inverted. The state is a gauge
+  # (`engram_prom_ex_qdrant_active_cluster_mismatch`, 0/1, emitted on every
+  # load) for alerting; the log is one warning per distinct pair per node,
+  # since a load is every 15s TTL and an error is a Sentry event each time.
+  @mismatch_key {__MODULE__, :env_mismatch}
+  @mismatch_event [:engram, :qdrant, :active_cluster]
+
+  @doc false
+  def mismatch_event, do: @mismatch_event
+
+  defp warn_env_disagreement(overrides) do
+    pair =
+      with {:ok, cluster} <- Map.fetch(overrides, :qdrant_active_cluster),
+           env when is_binary(env) and env != cluster <- ServiceConfig.env(:qdrant_active_cluster) do
+        {cluster, env}
+      else
+        _ -> nil
+      end
+
+    :telemetry.execute(@mismatch_event, %{mismatch: if(pair, do: 1, else: 0)}, %{})
+
+    # ponytail: persistent_term written only when the pair changes (a handful
+    # of times per rollout), so its global GC is noise.
+    if pair != :persistent_term.get(@mismatch_key, nil) do
+      :persistent_term.put(@mismatch_key, pair)
+      log_mismatch(pair)
+    end
+
+    :ok
+  end
+
+  defp log_mismatch(nil), do: :ok
+
+  defp log_mismatch({cluster, env}) do
+    Logger.warning(
+      "qdrant_active_cluster override=#{cluster} disagrees with env " <>
+        "QDRANT_ACTIVE_CLUSTER=#{env}: change the env pin to match",
+      Metadata.with_category(:warning, :data)
+    )
+  end
+
+  defp fallback(reason) do
+    Logger.warning(
+      "service overrides unreadable; serving the last values read, or env",
+      Metadata.with_category(:warning, :data, reason: safe(reason))
+    )
+
+    last_good()
+  end
+
+  defp last_good do
+    case Cache.get(:service_overrides_last_good, :all) do
+      {:ok, overrides} -> overrides
+      :miss -> %{}
+    end
+  end
+
+  defp safe(%{__exception__: true} = e), do: Metadata.safe_reason(e)
+  defp safe(reason), do: Metadata.safe_exit_reason(reason)
+
+  # -- writes -----------------------------------------------------------------
+
+  defp change(key, op, opts) do
+    by = operator(opts)
+
+    result =
+      Repo.transaction(fn ->
+        # Serialises writers so two operators cannot each pass the invariant
+        # check against the other's stale view. Readers (ACCESS SHARE) are not
+        # blocked.
+        _ = Repo.query!("LOCK TABLE service_overrides IN EXCLUSIVE MODE")
+        current = read_table()
+
+        next =
+          case op do
+            {:set, value} -> Map.put(current, key, value)
+            :clear -> Map.delete(current, key)
+          end
+
+        # Only a violation this write ADDS refuses it. One already there (an
+        # env change under a live override) must not block every later write,
+        # least of all a kill switch.
+        case violations(next, key, opts) -- violations(current, nil, opts) do
+          [] ->
+            _ = write(key, op, by)
+            {Map.fetch(current, key), Map.fetch(next, key)}
+
+          [message | _] ->
+            Repo.rollback({:invariant, message})
+        end
+      end)
+
+    case result do
+      {:ok, {old, new}} ->
+        :ok = Cache.evict(:service_overrides, :all)
+        log_change(key, old, new, by)
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp write(key, {:set, value}, by) do
+    Repo.query!(
+      """
+      INSERT INTO service_overrides (key, value, updated_by, updated_at)
+      VALUES ($1, $2, $3, now())
+      ON CONFLICT (key) DO UPDATE
+        SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()
+      """,
+      [Atom.to_string(key), value, by]
+    )
+  end
+
+  defp write(key, :clear, _by),
+    do: Repo.query!("DELETE FROM service_overrides WHERE key = $1", [Atom.to_string(key)])
+
+  defp log_change(key, old, new, by) do
+    verb = if new == :error, do: "cleared", else: "set"
+
+    Logger.warning(
+      "service override #{verb} key=#{key} old=#{shown(old)} new=#{shown(new)} by=#{by}",
+      Metadata.with_category(:warning, :data)
+    )
+  end
+
+  defp shown({:ok, value}), do: inspect(value)
+  defp shown(:error), do: "(env)"
+
+  # Operator names are free text from a remote shell: keep them to a short
+  # identifier so the log line cannot be forged or carry anything else.
+  defp operator(opts) do
+    raw = Keyword.get(opts, :by) || System.get_env("ENGRAM_OPERATOR") || "unknown"
+    cleaned = String.replace(to_string(raw), ~r/[^A-Za-z0-9@._-]/, "")
+    if cleaned == "", do: "unknown", else: String.slice(cleaned, 0, 64)
+  end
+
+  # -- validation -------------------------------------------------------------
+
+  defp resolve(key) when is_atom(key),
+    do: if(Map.has_key?(@types, key), do: {:ok, key}, else: {:error, {:unknown_key, key}})
+
+  defp resolve(key) when is_binary(key) do
+    case Map.fetch(@by_name, key) do
+      {:ok, atom} -> {:ok, atom}
+      :error -> {:error, {:unknown_key, key}}
+    end
+  end
+
+  defp resolve(key), do: {:error, {:unknown_key, key}}
+
+  defp validate(key, value) do
+    ok? =
+      case Map.fetch!(@types, key) do
+        :boolean -> is_boolean(value)
+        {:enum, allowed} -> value in allowed
+      end
+
+    if ok?, do: :ok, else: {:error, {:invalid_value, key, value}}
+  end
+
+  # The env-side twins live in engram-infra's v5_flags.tf validations; this
+  # keeps a runtime flip from reaching a state TF would refuse. `changed` is
+  # the key being written: the v2 check asks every connected node only then.
+  # `opts` may inject `:peers` (0-arity, default `Node.list/0`) and
+  # `:multicall` (fun of the peer list returning `:erpc.multicall/5`-shaped
+  # results), as `Engram.Crypto.CompressionGate.evaluate/1` does.
+  defp violations(overrides, changed, opts) do
+    get = fn key -> Map.get_lazy(overrides, key, fn -> env(key) end) end
+    rebuild = get.(:index_rebuild)
+
+    [
+      rebuild in ["dry_run", "on"] and get.(:write_v5_layout) != true &&
+        "index_rebuild=#{rebuild} needs write_v5_layout=true",
+      rebuild == "on" and get.(:vector_cache_enabled) != true &&
+        "index_rebuild=on needs vector_cache_enabled=true",
+      get.(:qdrant_tenant_graph) == true and
+        ServiceConfig.env(:legacy_filter_fields, true) != false &&
+        "qdrant_tenant_graph=true needs LEGACY_FILTER_FIELDS=false",
+      get.(:qdrant_active_cluster) == "v2" &&
+        v2_violation(changed == :qdrant_active_cluster, opts)
+    ]
+    |> Enum.filter(&is_binary/1)
+  end
+
+  defp v2_violation(peers?, opts) do
+    case nodes_without_v2(peers?, opts) do
+      [] ->
+        nil
+
+      bad ->
+        "qdrant_active_cluster=v2 needs QDRANT_URL_V2 and QDRANT_API_KEY_V2 on every node: " <>
+          Enum.map_join(bad, ", ", fn {node, why} -> "#{node} (#{why})" end)
+    end
+  end
+
+  @erpc_timeout_ms 5_000
+
+  @doc """
+  True when this node has both halves of the v2 endpoint. Called on every
+  connected node by the v2 flip; public for that `:erpc` call.
+  """
+  @spec v2_configured?() :: boolean()
+  def v2_configured?,
+    do:
+      configured?(ServiceConfig.env(:qdrant_url_v2)) and
+        configured?(ServiceConfig.env(:qdrant_api_key_v2))
+
+  # This node, plus (on the flip itself) every connected node: a task def
+  # that lacks QDRANT_URL_V2 (one tier's TF not rolled) reads `old`
+  # (`Qdrant.endpoint/0`) and keeps writing the old cluster while its peers
+  # write v2; one without the key 401s. A node that cannot answer, or runs a
+  # release without `v2_configured?/0`, is refused too. A node not connected
+  # (no mesh) is not seen; QDRANT_ACTIVE_CLUSTER pins env for those.
+  defp nodes_without_v2(peers?, opts) do
+    local = if v2_configured?(), do: [], else: [{node(), :missing}]
+    peers = if peers?, do: Keyword.get(opts, :peers, &Node.list/0).(), else: []
+    multicall = Keyword.get(opts, :multicall, &multicall/1)
+
+    answers = if peers == [], do: [], else: multicall.(peers)
+
+    # One answer per node, or the rest count as unreachable: `Enum.zip`
+    # alone would drop them and pass the check.
+    answers =
+      answers ++ List.duplicate({:error, :no_answer}, max(length(peers) - length(answers), 0))
+
+    remote =
+      peers
+      |> Enum.zip(answers)
+      |> Enum.flat_map(fn
+        {_node, {:ok, true}} -> []
+        {node, {:ok, _}} -> [{node, :missing}]
+        {node, {:error, {:exception, :undef, _}}} -> [{node, :old_release}]
+        {node, _} -> [{node, :unreachable}]
+      end)
+
+    local ++ remote
+  end
+
+  defp multicall(peers),
+    do: :erpc.multicall(peers, __MODULE__, :v2_configured?, [], @erpc_timeout_ms)
+
+  defp configured?(url), do: is_binary(url) and url != ""
+
+  defp env(key), do: ServiceConfig.env(key, Map.fetch!(@defaults, key))
+end

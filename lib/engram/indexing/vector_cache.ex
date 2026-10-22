@@ -98,7 +98,7 @@ defmodule Engram.Indexing.VectorCache do
 
   @doc "True when the cache is on. Default off."
   @spec enabled?() :: boolean()
-  def enabled?, do: Application.get_env(:engram, :vector_cache_enabled, false)
+  def enabled?, do: Engram.ServiceConfig.get(:vector_cache_enabled, false)
 
   @doc "NFC, then every `\\p{Cf}` (format) code point removed."
   @spec normalize(iodata()) :: binary()

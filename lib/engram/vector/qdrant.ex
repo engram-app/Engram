@@ -6,6 +6,9 @@ defmodule Engram.Vector.Qdrant do
   Config:
   - :qdrant_url — base URL (default http://localhost:6333)
   - QDRANT_API_KEY env var — API key for Qdrant Cloud (optional for local)
+  - :qdrant_url_v2 / :qdrant_api_key_v2 (QDRANT_URL_V2 / QDRANT_API_KEY_V2) —
+    the second cluster, used while `:qdrant_active_cluster` is `v2`
+    (`active_cluster/0`)
 
   Ops kill switches (env, read at boot in every environment; all default on;
   `false`/`0` to turn off, then restart):
@@ -57,8 +60,87 @@ defmodule Engram.Vector.Qdrant do
   @doc "Largest point batch one upsert or vector update sends."
   def max_write_batch, do: @max_write_batch
 
-  @doc "The Qdrant base URL this node talks to (a cache key for per-server values)."
-  def base_url, do: ServiceConfig.get(:qdrant_url, @default_url)
+  @cluster_pin {__MODULE__, :cluster}
+
+  @doc """
+  The Qdrant base URL this node talks to (a cache key for per-server values):
+  the active cluster's. Every per-cluster cache (ensure-collection memo,
+  version, pressure, tenant IDF) is keyed by it, so a cluster flip starts
+  each one cold instead of serving the other cluster's answer.
+  """
+  def base_url, do: elem(endpoint(), 0)
+
+  @doc """
+  `old` (QDRANT_URL / QDRANT_API_KEY, the default) or `v2` (QDRANT_URL_V2 /
+  QDRANT_API_KEY_V2): the runtime override `:qdrant_active_cluster`, unless
+  this process pinned one with `with_cluster/2`. Resolved per call, so a flip
+  reaches every node within the override cache TTL.
+  """
+  @spec active_cluster() :: String.t()
+  def active_cluster,
+    do: Process.get(@cluster_pin) || ServiceConfig.get(:qdrant_active_cluster, "old")
+
+  @doc """
+  Runs `fun` with every Qdrant call in this process sent to `cluster`
+  (`"old"` or `"v2"`), whatever the active cluster is. For the cross-cluster
+  diff and copy (`Engram.Vector.ClusterDiff`). Raises when `"v2"` has no URL,
+  so a diff can never quietly compare a cluster with itself.
+  """
+  def with_cluster(cluster, fun) when cluster in ["old", "v2"] and is_function(fun, 0) do
+    if cluster == "v2" and ServiceConfig.get(:qdrant_url_v2) in [nil, ""],
+      do: raise(ArgumentError, "QDRANT_URL_V2 is not configured")
+
+    previous = Process.put(@cluster_pin, cluster)
+
+    try do
+      fun.()
+    after
+      if previous, do: Process.put(@cluster_pin, previous), else: Process.delete(@cluster_pin)
+    end
+  end
+
+  # {url, api_key} of the active cluster. `v2` without a URL reads `old`:
+  # `ServiceConfig.override/3` refuses that flip while any connected node
+  # lacks the URL, so it takes a task booted later without it (TF drift on
+  # one tier) to get here. That node then writes the old cluster while its
+  # peers write v2, so it logs an error (at most once a minute).
+  defp endpoint do
+    case active_cluster() do
+      "v2" ->
+        case ServiceConfig.get(:qdrant_url_v2) do
+          url when url not in [nil, ""] -> {url, ServiceConfig.get(:qdrant_api_key_v2)}
+          _ -> v2_unconfigured()
+        end
+
+      _ ->
+        old_endpoint()
+    end
+  end
+
+  defp old_endpoint,
+    do: {ServiceConfig.get(:qdrant_url, @default_url), ServiceConfig.get(:qdrant_api_key)}
+
+  @v2_unconfigured_key {__MODULE__, :v2_unconfigured_logged_at}
+
+  # ponytail: persistent_term write at most once a minute, and only on a
+  # misconfigured node, so the global GC it triggers is noise.
+  defp v2_unconfigured do
+    now = System.monotonic_time(:second)
+    last = :persistent_term.get(@v2_unconfigured_key, nil)
+
+    if is_nil(last) or now - last >= 60 do
+      :persistent_term.put(@v2_unconfigured_key, now)
+
+      Logger.error(
+        "qdrant_active_cluster=v2 but QDRANT_URL_V2 is unset on this node: " <>
+          "writing the OLD cluster (split brain)",
+        Metadata.with_category(:error, :data)
+      )
+    end
+
+    old_endpoint()
+  end
+
   defp collection, do: ServiceConfig.get(:qdrant_collection, @default_collection)
 
   @doc "Returns the configured Qdrant collection name (env-var-driven)."
@@ -146,7 +228,7 @@ defmodule Engram.Vector.Qdrant do
   def server_timeout_s(:indexing), do: 25
 
   defp put_api_key(base) do
-    case ServiceConfig.get(:qdrant_api_key) do
+    case elem(endpoint(), 1) do
       nil -> base
       key -> Keyword.put(base, :headers, [{"api-key", key}])
     end

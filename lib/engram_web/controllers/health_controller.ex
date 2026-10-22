@@ -165,7 +165,7 @@ defmodule EngramWeb.HealthController do
   end
 
   defp check_qdrant do
-    qdrant_url = Application.get_env(:engram, :qdrant_url, "http://localhost:6333")
+    qdrant_url = Engram.Vector.Qdrant.base_url()
 
     case Req.get("#{qdrant_url}/healthz", receive_timeout: 5_000, retry: false) do
       {:ok, %{status: status}} when status in 200..299 -> "ok"
