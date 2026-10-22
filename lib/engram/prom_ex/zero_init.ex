@@ -21,6 +21,9 @@ defmodule Engram.PromEx.ZeroInit do
   @row_failed [:engram, :crypto, :rotate, :dek, :row_failed]
   @payload_reconcile [:engram, :indexing, :payload_reconcile]
   @reconcile_cancelled [:engram, :indexing, :payload_reconcile_cancelled]
+  @rebuild_halted [:engram, :rebuild, :halted]
+  @rebuild_meter_failed [:engram, :rebuild, :meter_failed]
+  @rebuild_double_pay [:engram, :rebuild, :double_pay_parked]
 
   # The 4xx statuses Qdrant answers a request it will refuse on every retry:
   # 400 (strict mode's unindexed filter, #2138, or a bad shape), 404 (no
@@ -77,7 +80,11 @@ defmodule Engram.PromEx.ZeroInit do
         for reason <- @undecryptable,
             do: {@search_hit_dropped, %{count: 0}, %{reason: reason}}
 
-    search_series ++ rotate_series ++ reconcile_series ++ cancelled_series
+    rebuild_series =
+      for event <- [@rebuild_halted, @rebuild_meter_failed, @rebuild_double_pay],
+          do: {event, %{count: 0}, %{}}
+
+    search_series ++ rotate_series ++ reconcile_series ++ cancelled_series ++ rebuild_series
   end
 
   @doc "The same series as Prometheus names them: `{metric, %{label => value}}`."
@@ -91,6 +98,9 @@ defmodule Engram.PromEx.ZeroInit do
           @row_failed -> "engram_prom_ex_crypto_rotate_row_failed_total"
           @payload_reconcile -> "engram_prom_ex_indexing_payload_reconcile_total"
           @reconcile_cancelled -> "engram_prom_ex_indexing_payload_reconcile_cancelled_total"
+          @rebuild_halted -> "engram_prom_ex_indexing_rebuild_halted_total"
+          @rebuild_meter_failed -> "engram_prom_ex_indexing_rebuild_meter_failed_total"
+          @rebuild_double_pay -> "engram_prom_ex_indexing_rebuild_double_pay_parked_total"
         end
 
       {metric, Map.new(meta, fn {k, v} -> {k, to_string(v)} end)}

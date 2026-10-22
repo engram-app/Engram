@@ -249,9 +249,10 @@ defmodule Engram.PromEx.Indexing do
               "or the note was deleted mid-embed): vectors a retry pays for again.",
           tags: [:reason]
         ),
-        counter(
+        sum(
           metric_prefix ++ [:rebuild, :halted, :total],
           event_name: @rebuild_halted_event,
+          measurement: :count,
           description:
             "v5 rebuild ledger halts: once per off transition, when a debit passes the budget."
         ),
@@ -261,14 +262,16 @@ defmodule Engram.PromEx.Indexing do
           description:
             "v5 rebuild notes parked for costing over 1.5x their estimate and 50k tokens."
         ),
-        counter(
+        sum(
           metric_prefix ++ [:rebuild, :double_pay_parked, :total],
           event_name: @rebuild_double_pay_event,
+          measurement: :count,
           description: "v5 rebuild notes parked before paying Voyage twice for the same content."
         ),
-        counter(
+        sum(
           metric_prefix ++ [:rebuild, :meter_failed, :total],
           event_name: @rebuild_meter_failed_event,
+          measurement: :count,
           description:
             "v5 rebuild ledger debits that failed live and were carried to the job's end."
         ),

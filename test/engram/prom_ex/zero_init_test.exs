@@ -61,6 +61,25 @@ defmodule Engram.PromEx.ZeroInitTest do
              Enum.sort(~w(text_undecryptable note_undecryptable payload_undecryptable))
   end
 
+  test "covers the rebuild counters the v5 alerts select" do
+    series = ZeroInit.prometheus_series()
+
+    for metric <- ~w(rebuild_halted rebuild_meter_failed rebuild_double_pay_parked) do
+      assert {"engram_prom_ex_indexing_#{metric}_total", %{}} in series
+    end
+  end
+
+  # A counter counts events, so the boot emit of count: 0 would export 1 and
+  # fake a halt/failure on every deploy. A sum of :count adds the 0.
+  test "the seeded rebuild metrics sum :count, so the boot emit exports 0" do
+    built = Engram.PromEx.Indexing.event_metrics(otp_app: :engram)
+
+    for event <- [:halted, :meter_failed, :double_pay_parked] do
+      assert [metric] = Enum.filter(built.metrics, &(&1.event_name == [:engram, :rebuild, event]))
+      assert %Telemetry.Metrics.Sum{measurement: :count, tags: []} = metric
+    end
+  end
+
   test "covers each status and outcome the v5 alerts select" do
     labels = Enum.map(ZeroInit.prometheus_series(), &elem(&1, 1))
     statuses = for %{status: s} <- labels, uniq: true, do: s
