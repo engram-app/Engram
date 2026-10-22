@@ -86,7 +86,6 @@ defmodule Engram.Vector.Qdrant do
   diff and copy (`Engram.Vector.ClusterDiff`). Raises when `"v2"` has no URL,
   so a diff can never quietly compare a cluster with itself.
   """
-  @spec with_cluster(String.t(), (-> result)) :: result when result: term()
   def with_cluster(cluster, fun) when cluster in ["old", "v2"] and is_function(fun, 0) do
     if cluster == "v2" and ServiceConfig.get(:qdrant_url_v2) in [nil, ""],
       do: raise(ArgumentError, "QDRANT_URL_V2 is not configured")

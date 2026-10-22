@@ -185,7 +185,7 @@ defmodule Engram.Vector.ClusterDiff do
       for {_, note_id, pid, _} <- lost, MapSet.member?(live, pid), uniq: true, do: note_id
 
     count = Indexing.flag_notes_for_rebuild(note_ids, Repo.maintenance())
-    if count > 0, do: _ = Engram.Workers.ReconcileEmbeddings.kick()
+    _ = if count > 0, do: Engram.Workers.ReconcileEmbeddings.kick()
     count
   end
 

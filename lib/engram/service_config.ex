@@ -56,7 +56,7 @@ defmodule Engram.ServiceConfig do
   def clear(key, opts \\ []), do: Overrides.delete(key, opts)
 
   @doc "Every runtime override set now, read from the DB (not the cache)."
-  @spec list() :: [map()]
+  # No @spec, same reason as `Overrides.list/0` (dialyzer :underspecs).
   def list, do: Overrides.list()
 
   # The allowlisted keys check the override first; every other key never

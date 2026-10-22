@@ -84,7 +84,7 @@ defmodule Engram.ServiceConfig.Overrides do
     with {:ok, key} <- resolve(key), do: change(key, :clear, operator(opts))
   end
 
-  @spec list() :: [%{key: atom(), value: term(), updated_by: String.t(), updated_at: term()}]
+  # No @spec: the inferred row map is narrower than any spec worth writing.
   def list do
     from(o in "service_overrides",
       order_by: o.key,
@@ -196,7 +196,7 @@ defmodule Engram.ServiceConfig.Overrides do
         # Serialises writers so two operators cannot each pass the invariant
         # check against the other's stale view. Readers (ACCESS SHARE) are not
         # blocked.
-        Repo.query!("LOCK TABLE service_overrides IN EXCLUSIVE MODE")
+        _ = Repo.query!("LOCK TABLE service_overrides IN EXCLUSIVE MODE")
         current = read_table()
 
         next =
@@ -207,7 +207,7 @@ defmodule Engram.ServiceConfig.Overrides do
 
         case invariant_violation(next) do
           nil ->
-            write(key, op, by)
+            _ = write(key, op, by)
             {Map.fetch(current, key), Map.fetch(next, key)}
 
           message ->
