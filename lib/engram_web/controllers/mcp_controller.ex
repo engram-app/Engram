@@ -730,7 +730,7 @@ defmodule EngramWeb.McpController do
          user = conn.assigns.current_user,
          # §E — record origin fingerprint for daily-rollup aggregation.
          _ = OriginStats.record(user.id, List.first(get_req_header(conn, "user-agent"))),
-         args = drop_exempt_vault_id(tool, args),
+         args = drop_unavailable_fields(tool, drop_exempt_vault_id(tool, args)),
          :ok <- validate_tool_args(tool, args) do
       dispatch_tool(tool, user, normalize_args(tool, args), conn)
     else
@@ -862,6 +862,15 @@ defmodule EngramWeb.McpController do
   end
 
   defp drop_exempt_vault_id(_tool, args), do: args
+
+  # `fields` is unadvertised while field filters are unavailable (see
+  # `Tools.list/0`). A client holding a stale tools/list may still send it:
+  # ignore it rather than reject or error.
+  defp drop_unavailable_fields(%{name: "search_notes"}, args) when is_map(args) do
+    if Engram.Search.FieldFilters.available?(), do: args, else: Map.delete(args, "fields")
+  end
+
+  defp drop_unavailable_fields(_tool, args), do: args
 
   defp validate_tool_args(tool, args) when not is_map(args) do
     {:error, tool.name, "Arguments must be an object"}

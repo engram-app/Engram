@@ -128,6 +128,27 @@ defmodule Engram.MCP.Tools do
       send_feedback_def()
     ]
     |> Enum.map(&(&1 |> with_vault_id() |> with_annotations()))
+    |> hide_unavailable_fields()
+  end
+
+  # `list_fields` and search_notes' `fields` param work only once field filters
+  # do (`FieldFilters.available?/0`); until then `fields` errors and the
+  # catalog is empty, so neither is advertised or callable. Runtime check,
+  # because `list/0` is rebuilt on every request.
+  defp hide_unavailable_fields(tools) do
+    if Engram.Search.FieldFilters.available?() do
+      tools
+    else
+      tools
+      |> Enum.reject(&(&1.name == "list_fields"))
+      |> Enum.map(fn
+        %{name: "search_notes"} = t ->
+          update_in(t, [:inputSchema, "properties"], &Map.delete(&1, "fields"))
+
+        t ->
+          t
+      end)
+    end
   end
 
   # Retired tool names that stay CALLABLE (clients cache tools/list and our own
