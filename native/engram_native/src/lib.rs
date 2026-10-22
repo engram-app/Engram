@@ -469,12 +469,85 @@ fn chunk<'a>(
     lead: Option<String>,
 ) -> (Vec<Term<'a>>, usize) {
     memory::measured(|| {
-        let mut out = Vec::new();
-        chunker::each_chunk(content, folder, title, &aliases, lead.as_deref(), |c| {
-            out.push(c.encode(env))
-        });
-        out
+        let mut out = Terms::new(env);
+        chunker::each_chunk(content, folder, title, &aliases, lead.as_deref(), &mut out);
+        out.out
     })
+}
+
+/// Chunks encoded as they come, so Rust never holds them all. Terms a
+/// cleared first pass made stay on the env until the call returns: at most
+/// `budget` chunks, what a note just under it returns anyway.
+struct Terms<'a> {
+    env: Env<'a>,
+    out: Vec<Term<'a>>,
+    cleared: bool,
+}
+
+impl<'a> Terms<'a> {
+    fn new(env: Env<'a>) -> Self {
+        Terms {
+            env,
+            out: Vec::new(),
+            cleared: false,
+        }
+    }
+}
+
+impl chunker::Sink for Terms<'_> {
+    fn push(&mut self, c: chunker::Chunk) {
+        self.out.push(c.encode(self.env))
+    }
+    fn clear(&mut self) {
+        self.out.clear();
+        self.cleared = true;
+    }
+}
+
+/// A large note's chunking, resumed by `chunk_step_nif` one heading segment
+/// (64 KB) per call, so one note never holds the dirty CPU scheduler (prod
+/// has one) for its whole run: 4.5 MB of heading tree held it for 8 s.
+pub struct ChunkJob(std::sync::Mutex<chunker::Job<'static>>);
+
+#[rustler::resource_impl]
+impl rustler::Resource for ChunkJob {}
+
+/// Segments per `chunk_step_nif` call.
+const STEP_SEGMENTS: usize = 1;
+
+/// `{job, peak}` for `chunk/5`'s arguments. Dirty: it copies the body.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn chunk_job_nif(
+    content: &str,
+    folder: &str,
+    title: &str,
+    aliases: Vec<String>,
+    lead: Option<String>,
+) -> (ResourceArc<ChunkJob>, usize) {
+    memory::measured(|| {
+        let job = chunker::Job::new(content, folder, title, &aliases, lead.as_deref());
+        ResourceArc::new(ChunkJob(std::sync::Mutex::new(job.into_owned())))
+    })
+}
+
+/// `{done, cleared, chunks}`.
+type Step<'a> = (bool, bool, Vec<Term<'a>>);
+
+/// `{{done, cleared, chunks}, peak}`: the next segment's chunks. `cleared`:
+/// the body passed its budget, so the chunks of every earlier step are
+/// dropped (it is chunked again, coalesced). Raises once a step panicked.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn chunk_step_nif<'a>(env: Env<'a>, job: ResourceArc<ChunkJob>) -> NifResult<(Step<'a>, usize)> {
+    let mut job = job
+        .0
+        .lock()
+        .map_err(|_| Error::RaiseAtom("chunk_job_poisoned"))?;
+    let ((done, terms), peak) = memory::measured(|| {
+        let mut terms = Terms::new(env);
+        let done = job.step(&mut terms, STEP_SEGMENTS);
+        (done, terms)
+    });
+    Ok(((done, terms.cleared, terms.out), peak))
 }
 
 sized_nif!(chunk, chunk_nif, chunk_dirty_nif, <'a>(env, content: &str, folder: &str, title: &str, aliases: Vec<String>, lead: Option<String>) [content, folder, title, aliases, lead] -> (Vec<Term<'a>>, usize));

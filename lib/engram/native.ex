@@ -87,7 +87,9 @@ defmodule Engram.Native do
     name_index_put_nif: 4,
     name_index_delete_nif: 3,
     name_index_bytes_nif: 1,
-    name_index_patch_nif: 2
+    name_index_patch_nif: 2,
+    chunk_job_nif: 5,
+    chunk_step_nif: 1
   ]
 
   # Test hooks, built only with the crate's `test-hooks` feature, which
@@ -127,8 +129,34 @@ defmodule Engram.Native do
   the sections a min512 chunk joins (1 for one). Splits
   frontmatter itself. Valid UTF-8 only.
   """
-  def chunk(content, folder, title, aliases \\ [], lead \\ nil),
+  def chunk(content, folder, title, aliases \\ [], lead \\ nil)
+
+  @slice_from 262_144
+
+  # Over @slice_from, a note chunks one heading segment (64 KB) per dirty
+  # call, so it never holds the one dirty CPU scheduler for its whole run
+  # (4.5 MB of heading tree held it for 8 s). The chunks are the same.
+  def chunk(content, folder, title, aliases, lead) when byte_size(content) > @slice_from do
+    call(:chunk, content, %{dirty: true, sliced: true}, fn ->
+      {job, peak} = chunk_job_nif(content, folder, title, aliases, lead)
+      chunk_steps(job, [], peak)
+    end)
+  end
+
+  def chunk(content, folder, title, aliases, lead),
     do: sized(:chunk, content, [content, folder, title, aliases, lead])
+
+  # `cleared`: the body passed its chunk budget and is being chunked again,
+  # coalesced; what earlier steps returned is dropped.
+  defp chunk_steps(job, acc, peak) do
+    {{done, cleared, chunks}, step_peak} = chunk_step_nif(job)
+    acc = if cleared, do: [chunks], else: [chunks | acc]
+    peak = max(peak, step_peak)
+
+    if done,
+      do: {acc |> Enum.reverse() |> Enum.concat(), peak},
+      else: chunk_steps(job, acc, peak)
+  end
 
   @doc """
   Frontmatter fence offsets for `Engram.Notes.Frontmatter.split/1`:

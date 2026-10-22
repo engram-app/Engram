@@ -161,6 +161,28 @@ defmodule Engram.Native.ChunkerTest do
       end
     end
 
+    # 4.5 MB of heading tree held the one dirty CPU scheduler for 8 s. Over
+    # 256 KB a note is chunked a heading segment per dirty call; the chunks
+    # are the one call's, past the budget's restart (the 30k tree) too.
+    test "a large note chunks in short steps, with the one call's chunks" do
+      tree = fn leaves ->
+        Enum.map_join(0..(leaves - 1), fn i ->
+          if(rem(i, 1000) == 0, do: "# Parent #{i}\n\n## Child #{i}\n\n", else: "") <>
+            "###### leaf #{i}\nword#{i}\n\n"
+        end)
+      end
+
+      for content <- [tree.(12_000), tree.(30_000), "---\na: 1\n---\n" <> tree.(12_000)] do
+        assert byte_size(content) > 262_144
+        ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+        sliced = Engram.Native.chunk(content, "f", "T", ["al"], "Type: d")
+        {whole, _peak} = Engram.Native.chunk_dirty_nif(content, "f", "T", ["al"], "Type: d")
+        assert sliced == whole
+        assert_receive {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :chunk, sliced: true}}
+        :telemetry.detach(ref)
+      end
+    end
+
     test "repeated calls leak nothing" do
       args = ["---\ntags: [a]\n---\n# A\n\ntext `c`\n\n## B\n\nmore", "f", "T", ["x"], "lead"]
       Engram.NativeLeak.assert_no_leak(fn -> apply(Engram.Native, :chunk_nif, args) end)
