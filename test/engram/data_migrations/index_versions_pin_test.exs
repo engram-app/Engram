@@ -2,7 +2,7 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
   @moduledoc """
   Prod deploy safety for the v5 stamp (chunker v5 plan, Task 17.1).
 
-  The build moves to chunker 5 / keyword 3 while prod notes carry 3 / 2.
+  The build moves to chunker 5 / keyword 4 while prod notes carry 3 / 2.
   Until an operator sets `INDEX_REBUILD=on`, every version check targets the
   pins, so the deploy makes no note version-stale: nothing re-embeds and
   Voyage spend is $0. `test_helper.exs` pins the suite to the build's
@@ -53,8 +53,8 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
     )
   end
 
-  test "the build is v5: chunker 5, keyword 3" do
-    assert Rebuild.build_versions() == {5, 3}
+  test "the build is v5: chunker 5, keyword 4" do
+    assert Rebuild.build_versions() == {5, 4}
   end
 
   test "the pins equal prod's pre-v5 stamps: chunker 3, keyword 2" do
@@ -75,7 +75,7 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
       assert IndexVersions.name() =~ "index_versions:chunker=3,keyword=2,"
 
       # Prod's stamps, and a note a newer release stamped (H10: `<`, not `!=`).
-      notes = [stamped_note(3, 2), stamped_note(5, 3)]
+      notes = [stamped_note(3, 2), stamped_note(5, 4)]
       for note <- notes, do: refute(EmbedNote.version_stale?(note))
 
       # Any Voyage call fails the test.
@@ -97,14 +97,14 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
     assert Rebuild.target_versions() == {3, 2}
   end
 
-  test "on targets the build: chunker 5, keyword 3" do
+  test "on targets the build: chunker 5, keyword 4" do
     Rebuild.set_budget(1_000)
     mode!("on")
 
-    assert Rebuild.target_versions() == {5, 3}
+    assert Rebuild.target_versions() == {5, 4}
 
     assert IndexVersions.name() ==
-             "index_versions:chunker=5,keyword=3,model=#{Engram.Indexing.embed_model() || "none"}"
+             "index_versions:chunker=5,keyword=4,model=#{Engram.Indexing.embed_model() || "none"}"
 
     assert EmbedNote.version_stale?(stamped_note(3, 2))
   end

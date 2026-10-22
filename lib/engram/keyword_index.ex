@@ -60,14 +60,41 @@ defmodule Engram.KeywordIndex do
   #
   # NULL (pre-stamp) is stale. 2: the `context_text` prefix (#1615).
   # 3: the v5 rebuild's encoding (pinned per-vault avgdl, merged-chunk BM25
-  # `b`; chunker v5 PR-17). Reached only under `INDEX_REBUILD=on`
-  # (`Engram.Rebuild.target_versions/0`).
-  @version 3
+  # `b`; chunker v5 PR-17). 4: adjacent-word pair dims for quoted-phrase
+  # queries, riding the same pass. 3 and 4 are reached only under
+  # `INDEX_REBUILD=on` (`Engram.Rebuild.target_versions/0` pins 2 until
+  # then); the bump is sparse-only, so it adds no Voyage call.
+  @version 4
 
   @doc "Version of the keyword encoding in this build, stamped on `notes.keyword_version`."
   # No @spec, like `Markdown.chunker_version/0`: the body is a literal, so
   # dialyzer rejects any wider contract as a supertype.
   def version, do: @version
+
+  @doc """
+  The double-quoted spans of a search query, the phrases the keyword leg
+  matches in word order. Smart, low-9 (German), guillemet and fullwidth
+  double quotes count as quotes. An odd number of quotes means the user did
+  not close one, so it is no phrase at all.
+
+      iex> Engram.KeywordIndex.quoted_phrases(~s(fix "reduce the size" now))
+      ["reduce the size"]
+
+      iex> Engram.KeywordIndex.quoted_phrases(~s(unclosed "quote))
+      []
+  """
+  # Every double-quote glyph a keyboard or autocorrect types, folded to `"`:
+  # “ ” „ ‟ (smart, German/Polish low-9), « » (guillemets), ＂ (fullwidth).
+  @double_quotes ["\u201C", "\u201D", "\u201E", "\u201F", "\u00AB", "\u00BB", "\uFF02"]
+
+  @spec quoted_phrases(String.t()) :: [String.t()]
+  def quoted_phrases(query) do
+    parts = query |> String.replace(@double_quotes, "\"") |> String.split("\"")
+
+    if rem(length(parts), 2) == 0,
+      do: [],
+      else: parts |> Enum.drop(1) |> Enum.take_every(2) |> Enum.reject(&(String.trim(&1) == ""))
+  end
 
   @doc "The configured keyword-index adapter."
   @spec module() :: module()

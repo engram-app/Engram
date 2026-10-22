@@ -27,6 +27,14 @@ defmodule Engram.KeywordIndex.QdrantSparse do
     u32
   end
 
+  @doc """
+  Dim of the adjacent raw-token pair `a b` (phrase features): the HMAC of
+  `"\\x01bg " <> a <> " " <> b`. A token is one word run and never holds
+  `\\x01` or a space, so no token shares the preimage. Reference for the NIF.
+  """
+  @spec pair_dim(binary(), String.t(), String.t()) :: non_neg_integer()
+  def pair_dim(filter_key, a, b), do: dim(filter_key, "\x01bg " <> a <> " " <> b)
+
   # Convenience arity (language defaults to nil = raw-only).
   def encode_document(text, filter_key, avgdl),
     do: encode_document(text, filter_key, avgdl, nil)
@@ -122,12 +130,20 @@ defmodule Engram.KeywordIndex.QdrantSparse do
     )
   end
 
+  # Words inside double quotes also add their adjacent-pair dims, which only
+  # documents holding those words in that order carry. An unquoted query
+  # encodes exactly as before phrases existed.
   @impl Engram.KeywordIndex
   def encode_query(query, filter_key, language) when byte_size(filter_key) == 32 do
+    query = String.slice(query, 0, @query_chars)
+
     {indices, values} =
-      query
-      |> String.slice(0, @query_chars)
-      |> Engram.Native.encode_query_nif(filter_key, Tokenizer.lang(language))
+      Engram.Native.encode_query_nif(
+        query,
+        filter_key,
+        Tokenizer.lang(language),
+        Engram.KeywordIndex.quoted_phrases(query)
+      )
 
     %{indices: indices, values: values}
   end
