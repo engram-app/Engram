@@ -113,6 +113,8 @@ Live. Covers every var `config/runtime.exs` reads (`Engram.EnvVarDocsTest` fails
 | `QDRANT_URL` | (compile-time) | Qdrant base URL. |
 | `QDRANT_COLLECTION` | env-driven; fallback `obsidian_notes` (module) / `engram_notes` (dev+test+prod) | Collection name. See nuance above. |
 | `QDRANT_API_KEY` | unset | Qdrant Cloud key. |
+| `QDRANT_URL_V2` | unset | Second Qdrant cluster (v5 move). Used only while the runtime override `:qdrant_active_cluster` is `v2` (`Engram.ServiceConfig.override/3`). |
+| `QDRANT_API_KEY_V2` | unset | Key for `QDRANT_URL_V2`. Needs manage rights (collection create, payload indexes, config PATCH), like `QDRANT_API_KEY`. |
 | `QDRANT_BINARY_QUANTIZATION` | on | Set `false` to disable BQ on non-AVX2 hardware. |
 | `QDRANT_RECONCILE_CONFIG` | `true` | Kill switch: `false` = never PATCH the collection config (boot reconcile + poller strict-mode sync). |
 | `QDRANT_RECONCILE_ON_DISK` | `true` | Kill switch: `false` = skip only the on-disk group (dense + sparse index on disk). |
