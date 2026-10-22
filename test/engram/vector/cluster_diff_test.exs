@@ -192,6 +192,24 @@ defmodule Engram.Vector.ClusterDiffTest do
     )
   end
 
+  test "since is validated before the walk and requeued in paced id batches", ctx do
+    ServiceConfig.put_override(:qdrant_active_cluster, "v2")
+
+    assert {:error, {:invalid_since, "2026-10-21"}} =
+             ClusterDiff.run("old", "v2", since: "2026-10-21", pause_ms: 0)
+
+    _second = insert(:note, user: ctx.user, vault: ctx.note.vault)
+    since = DateTime.add(DateTime.utc_now(), -3600)
+
+    assert {:ok, report} =
+             ClusterDiff.run("old", "v2", since: since, requeue_batch: 1, pause_ms: 0)
+
+    assert report.requeued_notes == 2
+    # Two notes at one per batch, plus the empty page that ends the walk is
+    # not a batch.
+    assert report.requeue_batches == 2
+  end
+
   test "a walk resumes after the last chunk id a report names" do
     assert {:ok, first} = ClusterDiff.run("old", "v2", batch: 2, pause_ms: 0)
     assert first.checked == 3

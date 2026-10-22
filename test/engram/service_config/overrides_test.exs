@@ -191,6 +191,7 @@ defmodule Engram.ServiceConfig.OverridesTest do
                ServiceConfig.override(:qdrant_active_cluster, "v2", by: "t")
 
       ServiceConfig.put_override(:qdrant_url_v2, "http://v2")
+      ServiceConfig.put_override(:qdrant_api_key_v2, "v2-key")
       assert :ok = ServiceConfig.override(:qdrant_active_cluster, "v2", by: "t")
     end
 
@@ -218,6 +219,65 @@ defmodule Engram.ServiceConfig.OverridesTest do
       assert log =~ "service override set"
       assert log =~ "service override cleared"
       assert log =~ "todd"
+    end
+  end
+
+  describe "the v2 flip checks every connected node" do
+    # The peer list and the multicall are injected (as CompressionGate's are),
+    # so CI proves the refusal without a second BEAM node.
+    setup do
+      ServiceConfig.put_override(:qdrant_url_v2, "http://v2")
+      ServiceConfig.put_override(:qdrant_api_key_v2, "v2-key")
+      :ok
+    end
+
+    defp flip(answer) do
+      ServiceConfig.override(:qdrant_active_cluster, "v2",
+        by: "t",
+        peers: fn -> [:"peer@10.0.0.2"] end,
+        multicall: fn [:"peer@10.0.0.2"] -> [answer] end
+      )
+    end
+
+    test "a node missing the URL or key is refused, by name" do
+      assert {:error, {:invariant, message}} = flip({:ok, false})
+      assert message =~ "peer@10.0.0.2 (missing)"
+    end
+
+    test "a node that does not answer is refused" do
+      assert {:error, {:invariant, message}} = flip({:error, {:erpc, :noconnection}})
+      assert message =~ "peer@10.0.0.2 (unreachable)"
+    end
+
+    test "a node on an older release (no v2_configured?/0) is refused" do
+      assert {:error, {:invariant, message}} = flip({:error, {:exception, :undef, []}})
+      assert message =~ "peer@10.0.0.2 (old_release)"
+    end
+
+    test "every node configured: the flip goes through" do
+      assert :ok = flip({:ok, true})
+    end
+
+    test "this node needs QDRANT_API_KEY_V2 as well as the URL" do
+      ServiceConfig.put_override(:qdrant_api_key_v2, nil)
+      assert {:error, {:invariant, message}} = flip({:ok, true})
+      assert message =~ "(missing)"
+    end
+  end
+
+  describe "override vs the env pin" do
+    # The override wins whenever the table is readable; a node booted with the
+    # DB unreachable runs on env, so a mismatch is a latent split brain.
+    test "an override that disagrees with QDRANT_ACTIVE_CLUSTER logs an error" do
+      ServiceConfig.put_override(:qdrant_active_cluster, "v2")
+      ServiceConfig.put_override(:qdrant_url_v2, "http://v2")
+      ServiceConfig.put_override(:qdrant_api_key_v2, "v2-key")
+      :ok = ServiceConfig.override(:qdrant_active_cluster, "old", by: "t")
+
+      log =
+        capture_log(fn -> assert ServiceConfig.get(:qdrant_active_cluster, "old") == "old" end)
+
+      assert log =~ "disagrees with env"
     end
   end
 
@@ -260,6 +320,7 @@ defmodule Engram.ServiceConfig.OverridesTest do
     test "the active cluster override routes the Qdrant client" do
       ServiceConfig.put_override(:qdrant_url, "http://old:6333")
       ServiceConfig.put_override(:qdrant_url_v2, "http://v2:6333")
+      ServiceConfig.put_override(:qdrant_api_key_v2, "v2-key")
       assert Qdrant.base_url() == "http://old:6333"
 
       :ok = ServiceConfig.override(:qdrant_active_cluster, "v2", by: "t")
