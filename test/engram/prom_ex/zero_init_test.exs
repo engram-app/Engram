@@ -61,6 +61,14 @@ defmodule Engram.PromEx.ZeroInitTest do
              Enum.sort(~w(text_undecryptable note_undecryptable payload_undecryptable))
   end
 
+  test "covers the rebuild counters the v5 alerts select" do
+    series = ZeroInit.prometheus_series()
+
+    for metric <- ~w(rebuild_halted rebuild_meter_failed rebuild_double_pay_parked) do
+      assert {"engram_prom_ex_indexing_#{metric}_total", %{}} in series
+    end
+  end
+
   test "covers each status and outcome the v5 alerts select" do
     labels = Enum.map(ZeroInit.prometheus_series(), &elem(&1, 1))
     statuses = for %{status: s} <- labels, uniq: true, do: s
