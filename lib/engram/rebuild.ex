@@ -22,8 +22,12 @@ defmodule Engram.Rebuild do
       operator sets a new budget (`set_budget/1`). With no budget at all,
       `on` reads `:off` too.
 
-  Resuming `on` after `off` needs nothing: the per-note version stamps say
-  what is left.
+  Resuming is `on` plus a budget (`set_budget/1`) plus
+  `Engram.Workers.ReconcileEmbeddings.kick/0`: the per-note version stamps
+  say what is left, and the kick queues it within about a minute. The jobs
+  a halted pass skipped released their notes' sweep backoff
+  (`Engram.Workers.RebuildStaleNote`), and one caught mid-flight retries
+  after 60 s. Without the kick the 5-minute cron picks the notes up.
 
   ## Pricing by plan
 
