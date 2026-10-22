@@ -323,6 +323,12 @@ struct Pending {
     first_crumb: bool,
     /// The last member's, for the next breadcrumb.
     last: Vec<String>,
+    /// Bytes of member text, and of breadcrumb lines (newlines included).
+    /// Breadcrumbs never outgrow the text they label, so a merged chunk is
+    /// at most twice its members: a deep tree of tiny sections repeated a
+    /// full path per member, 11x the note (#2150 review).
+    body: usize,
+    crumbs: usize,
     kind: &'static str,
     members: u16,
     /// The last member is a content-defined boundary: the chunk ends there.
@@ -392,22 +398,22 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
 
     /// Bytes `p` grows by if `path`'s section joins it: the separator, the
     /// section, its breadcrumb, and the first member's breadcrumb once the
-    /// shared path no longer holds the first member's parents.
-    fn joined(
-        p: &Pending,
-        path: &[String],
-        crumb: Option<&String>,
-        text: &str,
-    ) -> (usize, Option<String>) {
+    /// shared path no longer holds the first member's parents. A breadcrumb
+    /// is left out when it would take the chunk's breadcrumbs past its
+    /// members' text; the prefix still shows the path they share.
+    fn joined(p: &Pending, path: &[String], text: &str) -> (usize, Option<String>, Option<String>) {
         let shared = common(&p.path, path);
-        let first = (!p.first_crumb && p.first.len() > shared.len() + 1)
+        let room = p.body + text.len();
+        let mut used = p.crumbs;
+        let mut fit = |c: Option<String>| {
+            c.filter(|c| used + c.len() + 1 <= room)
+                .inspect(|c| used += c.len() + 1)
+        };
+        let first = fit((!p.first_crumb && p.first.len() > shared.len() + 1)
             .then(|| breadcrumb(&p.first))
-            .flatten();
-        let add = 2
-            + text.len()
-            + crumb.map_or(0, |c| c.len() + 1)
-            + first.as_ref().map_or(0, |c| c.len() + 1);
-        (add, first)
+            .flatten());
+        let crumb = fit((p.last != path).then(|| breadcrumb(path)).flatten());
+        (2 + text.len() + used - p.crumbs, first, crumb)
     }
 
     /// Joins a section that fits in one chunk to the ones before it while
@@ -415,18 +421,19 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
     /// the last member is not a content-defined `boundary` (over budget:
     /// whenever it fits). A member under other headings than the one before
     /// it starts with a breadcrumb line, `A > B` (the path without the
-    /// title), so a merged chunk keeps every member's parents; the prefix
-    /// shows only the path all members share.
+    /// title), while the chunk's breadcrumbs fit in its members' text
+    /// (`joined`); the prefix shows only the path all members share.
     fn pend(&mut self, text: String, path: Vec<String>, end: usize) {
         let kind = classify(&text, Fence::Out).0;
         let closes = boundary(&text);
         if let Some(p) = &mut self.pending {
-            let crumb = (p.last != path).then(|| breadcrumb(&path)).flatten();
-            let (add, first) = Self::joined(p, &path, crumb.as_ref(), &text);
+            let (add, first, crumb) = Self::joined(p, &path, &text);
             let fits = p.text.len() + add <= MAX_CHUNK;
             let small = p.text.len() < MIN_CHUNK || text.len() < MIN_CHUNK;
             let open = !p.closed && small && p.kind == kind;
             if fits && (self.coalesce || open) {
+                p.crumbs += add - 2 - text.len();
+                p.body += text.len();
                 if let Some(c) = first {
                     p.text.insert_str(0, &format!("{c}\n"));
                     p.first_crumb = true;
@@ -447,6 +454,8 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
             self.flush();
         }
         self.pending = Some(Pending {
+            body: text.len(),
+            crumbs: 0,
             text,
             first: path.clone(),
             first_crumb: false,
@@ -1365,6 +1374,39 @@ mod tests {
             let ((), peak) =
                 crate::memory::measured(|| each_chunk(&content, "f", "T", &[], None, |_| {}));
             assert!(peak <= 10 * content.len(), "{peak} for {:?}", &content[..8]);
+        }
+    }
+
+    // Tiny leaves under five long parents: each merged member repeated the
+    // full breadcrumb, 11x the note in text alone (#2150 review).
+    #[test]
+    fn breadcrumbs_never_outgrow_the_members_they_label() {
+        let parents = |g: usize| -> String {
+            (1..=5)
+                .map(|l| {
+                    format!(
+                        "{} Parent level {l} group {g} with a long title\n\n",
+                        "#".repeat(l)
+                    )
+                })
+                .collect()
+        };
+        for leaves in [3_000, 30_000] {
+            let content: String = (0..leaves)
+                .map(|i| {
+                    let head = if i % 1000 == 0 {
+                        parents(i / 1000)
+                    } else {
+                        String::new()
+                    };
+                    format!("{head}###### leaf {i}\nword{i}\n\n")
+                })
+                .collect();
+            let cs = chunk(&content, "f", "T");
+            let text: usize = cs.iter().map(|c| c.0.len()).sum();
+            assert!(text <= 2 * content.len(), "{text} for {}", content.len());
+            let words: usize = cs.iter().map(|c| c.0.matches("\nword").count()).sum();
+            assert_eq!(words, leaves);
         }
     }
 
