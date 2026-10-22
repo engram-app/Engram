@@ -287,6 +287,19 @@ if config_env() != :test do
     config :engram, :qdrant_api_key, qdrant_api_key
   end
 
+  # The second Qdrant cluster for the v5 move. Unset, nothing changes: the
+  # client talks to QDRANT_URL. Set, `:qdrant_active_cluster` (a runtime
+  # override, `Engram.ServiceConfig.override/3`) picks `old` or `v2` per call.
+  # The key needs manage rights (collection create, payload indexes, config
+  # PATCH), as QDRANT_API_KEY does.
+  if qdrant_url_v2 = System.get_env("QDRANT_URL_V2") do
+    config :engram, :qdrant_url_v2, qdrant_url_v2
+  end
+
+  if qdrant_api_key_v2 = System.get_env("QDRANT_API_KEY_V2") do
+    config :engram, :qdrant_api_key_v2, qdrant_api_key_v2
+  end
+
   # Binary quantization — requires AVX2+ CPU. Disable on older hardware.
   if System.get_env("QDRANT_BINARY_QUANTIZATION") == "false" do
     config :engram, :qdrant_binary_quantization, false
