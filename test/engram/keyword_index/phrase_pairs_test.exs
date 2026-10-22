@@ -27,6 +27,22 @@ defmodule Engram.KeywordIndex.PhrasePairsTest do
       assert KeywordIndex.quoted_phrases("a “one two” b") == ["one two"]
     end
 
+    # German/Polish low-9 openers, guillemets (French, Russian) and the
+    # fullwidth quote a CJK keyboard types: each is a double quote too.
+    test "non-English double quotes" do
+      for q <- [
+            "a „one two“ b",
+            "a „one two” b",
+            "a « one two » b",
+            "a »one two« b",
+            "a ＂one two＂ b",
+            "a ‟one two” b"
+          ] do
+        assert KeywordIndex.quoted_phrases(q) |> Enum.map(&String.trim/1) == ["one two"],
+               inspect(q)
+      end
+    end
+
     test "no quotes, an unbalanced quote, and an empty pair are no phrases" do
       for q <- ["plain words", ~s(open "never closed), "“dangling", ~s(a "" b), ""] do
         assert KeywordIndex.quoted_phrases(q) == [], inspect(q)

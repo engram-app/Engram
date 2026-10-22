@@ -73,8 +73,9 @@ defmodule Engram.KeywordIndex do
 
   @doc """
   The double-quoted spans of a search query, the phrases the keyword leg
-  matches in word order. Smart quotes count as quotes. An odd number of
-  quotes means the user did not close one, so it is no phrase at all.
+  matches in word order. Smart, low-9 (German), guillemet and fullwidth
+  double quotes count as quotes. An odd number of quotes means the user did
+  not close one, so it is no phrase at all.
 
       iex> Engram.KeywordIndex.quoted_phrases(~s(fix "reduce the size" now))
       ["reduce the size"]
@@ -82,9 +83,13 @@ defmodule Engram.KeywordIndex do
       iex> Engram.KeywordIndex.quoted_phrases(~s(unclosed "quote))
       []
   """
+  # Every double-quote glyph a keyboard or autocorrect types, folded to `"`:
+  # “ ” „ ‟ (smart, German/Polish low-9), « » (guillemets), ＂ (fullwidth).
+  @double_quotes ["\u201C", "\u201D", "\u201E", "\u201F", "\u00AB", "\u00BB", "\uFF02"]
+
   @spec quoted_phrases(String.t()) :: [String.t()]
   def quoted_phrases(query) do
-    parts = query |> String.replace(["\u201C", "\u201D"], "\"") |> String.split("\"")
+    parts = query |> String.replace(@double_quotes, "\"") |> String.split("\"")
 
     if rem(length(parts), 2) == 0,
       do: [],
