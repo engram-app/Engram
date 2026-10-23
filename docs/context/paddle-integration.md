@@ -144,7 +144,7 @@ Four observability layers on the webhook + a daily reconciliation. Each is indep
    | `:missing_local` | Paddle has the subscription, we don't (most likely silent-200 swallowed-error or a missed webhook). **Excludes `canceled` Paddle subs** — see below. |
    | `:status_mismatch` | `paddle.status != local.status`. |
    | `:tier_mismatch` | Price ID maps to a different tier than `local.tier`. |
-   | `:period_mismatch` | `current_billing_period.ends_at` disagrees by more than 120 seconds, or Paddle has a live period and we stored none. A sub with `current_billing_period: null` (canceled/paused) is never compared: there is no period, and access is gated on status. |
+   | `:period_mismatch` | `current_billing_period.ends_at` disagrees by more than 120 seconds. A live Paddle period with no local one is not drift: reconcile copies it into the row (`paddle_reconcile_period_repaired`, info). A sub with `current_billing_period: null` (canceled/paused) is never compared: there is no period, and access is gated on status. |
 
    Each entry logs at `:error` (Sentry-captured). Worker always returns `:ok` — drift is *signal*, not job failure, so Oban shouldn't retry it.
 
