@@ -93,7 +93,7 @@ async function proxyToPostHog(request: Request): Promise<Response> {
 // /.well-known path 404s: without this the SPA fallback answers them with
 // index.html + 200, which is what broke the Apple Pay check. OAuth/MCP
 // discovery lives on mcp.engram.page (Phoenix), never on this host.
-const APPLE_PAY_PATH = "/.well-known/apple-developer-merchantid-domain-association";
+export const APPLE_PAY_PATH = "/.well-known/apple-developer-merchantid-domain-association";
 
 async function serveWellKnown(request: Request, env: Env, pathname: string): Promise<Response> {
 	const notFound = new Response("Not Found", {

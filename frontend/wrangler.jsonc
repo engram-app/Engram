@@ -4,9 +4,9 @@
 	"compatibility_date": "2026-06-10",
 	// Mostly a pure static SPA. `bun run build:saas` emits the bundle +
 	// config.json into ./dist. The Worker script below runs ONLY for the
-	// dead pre-eject `/api/mcp` path (see `assets.run_worker_first`) to 410
-	// stale MCP clients; every other path is served as a static asset
-	// directly, without invoking the Worker.
+	// paths listed in `assets.run_worker_first` (dead pre-eject `/api/mcp`,
+	// the PostHog proxy, `/.well-known`); every other path is served as a
+	// static asset directly, without invoking the Worker.
 	"main": "./worker/index.ts",
 	"workers_dev": false,
 	// app.engram.page/* is served by this Worker via a Cloudflare Worker ROUTE,

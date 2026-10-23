@@ -4,7 +4,7 @@
 // silently strips forbidden "Sec-*" request headers — this test needs
 // Sec-GPC to actually land on the constructed Request.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import worker from "./index";
+import worker, { APPLE_PAY_PATH } from "./index";
 
 const envStub = {
 	ASSETS: { fetch: vi.fn(async () => new Response("asset")) },
@@ -69,7 +69,6 @@ describe("worker /ph proxy", () => {
 });
 
 describe("worker /.well-known", () => {
-	const APPLE_PAY_PATH = "/.well-known/apple-developer-merchantid-domain-association";
 	const assetsFetch = vi.fn<(request: Request) => Promise<Response>>();
 	const env = { ASSETS: { fetch: assetsFetch } };
 
@@ -120,6 +119,9 @@ describe("worker /.well-known", () => {
 			"2de7b483319c713bf649352f7f158f1fedbda92f546bebfe576ae0a2d2c526c6",
 		);
 		const wrangler = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
-		expect(wrangler).toContain('"/.well-known", "/.well-known/*"');
+		const runWorkerFirst = JSON.parse(
+			wrangler.match(/"run_worker_first":\s*(\[[^\]]*\])/)?.[1] ?? "[]",
+		);
+		expect(runWorkerFirst).toEqual(expect.arrayContaining(["/.well-known", "/.well-known/*"]));
 	});
 });
