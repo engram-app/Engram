@@ -170,8 +170,8 @@ defmodule Engram.Billing.Workers.PaddleReconcileTest do
       assert Reconciliation.report_stalled_checkouts(@anchor) == 0
     end
 
-    # Both crons fire on the 02:00 tick; uniqueness on [:worker] alone would
-    # silently drop one of them.
+    # Same worker, different job: uniqueness on [:worker] alone would silently
+    # drop one when both are enqueued within the unique period.
     test "the daily drift run and the scan are not deduped against each other" do
       {:ok, _} = Oban.insert(PaddleReconcile.new(%{}))
       {:ok, scan} = Oban.insert(PaddleReconcile.new(%{"scan" => "stalled_checkouts"}))

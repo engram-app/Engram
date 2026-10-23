@@ -20,8 +20,9 @@ defmodule Engram.Billing.Workers.PaddleReconcile do
   use Oban.Worker,
     queue: :maintenance,
     max_attempts: 2,
-    # :args too: the daily drift run and the 15-minute stalled scan share the
-    # 02:00 tick, and [:worker] alone would drop one as a duplicate.
+    # :args too: the daily drift run and the stalled scan are the same worker,
+    # and [:worker] alone would drop one as a duplicate whenever they land
+    # within the 60 s period (a manual run, a retry, a future schedule move).
     unique: [period: 60, fields: [:worker, :args]]
 
   @impl Oban.Worker
