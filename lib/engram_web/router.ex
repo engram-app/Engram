@@ -324,8 +324,12 @@ defmodule EngramWeb.Router do
 
   # Paddle.js boot config for /pay (Paddle's default payment link), which opens
   # in fresh, often logged-out tabs. The client-side token is public by design.
+  # NOT :public_cacheable: CORS echoes the request Origin here, so a shared
+  # cache would replay one origin's ACAO to another (and keep a self-host 404),
+  # see docs/context/edge-cache-request-varying-headers.md. One fetch per
+  # page load does not need an edge cache.
   scope "/api", EngramWeb do
-    pipe_through [:api, :public_cacheable]
+    pipe_through :api
     get "/billing/paddle-client", BillingController, :paddle_client
   end
 

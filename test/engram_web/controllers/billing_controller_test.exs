@@ -124,6 +124,13 @@ defmodule EngramWeb.BillingControllerTest do
       assert body == %{"client_token" => "live_token_test_fake", "environment" => "sandbox"}
     end
 
+    # CORS echoes the Origin on this path, so a shared cache must never store
+    # it (edge-cache-request-varying-headers.md).
+    test "is not publicly cacheable" do
+      conn = get(build_conn(), "/api/billing/paddle-client")
+      refute Enum.any?(get_resp_header(conn, "cache-control"), &(&1 =~ "public"))
+    end
+
     test "404s when billing is disabled (self-host)" do
       Application.put_env(:engram, :billing_enabled, false)
       assert get(build_conn(), "/api/billing/paddle-client").status == 404
