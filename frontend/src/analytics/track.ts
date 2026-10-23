@@ -100,7 +100,18 @@ function reportViolation(message: string): void {
 	// data gap; a thrown one is an outage.
 }
 
-export function track(event: EngramEvent, props: Record<string, unknown> = {}): void {
+/** `beacon`: the page is going away (pagehide). PostHog sends via
+ *  navigator.sendBeacon and our own sink flushes now (keepalive fetch), so the
+ *  event survives the unload instead of waiting on a batch timer that dies. */
+export interface TrackOptions {
+	beacon?: boolean;
+}
+
+export function track(
+	event: EngramEvent,
+	props: Record<string, unknown> = {},
+	options: TrackOptions = {},
+): void {
 	const schema = EVENT_SCHEMAS[event];
 	if (!schema) {
 		// Unreachable under the exhaustive EVENT_SCHEMAS type, but an event
@@ -119,8 +130,15 @@ export function track(event: EngramEvent, props: Record<string, unknown> = {}): 
 		return; // Drop the whole event. A partial event is a silent lie.
 	}
 
-	analyticsClient()?.capture(event, props);
+	if (options.beacon) {
+		analyticsClient()?.capture(event, props, { transport: "sendBeacon" });
+	} else {
+		analyticsClient()?.capture(event, props);
+	}
 	// Our own event log too (recorded there only, never re-sent to PostHog),
 	// under the same consent: see server-sink.ts.
 	serverEvents.add(event, props);
+	if (options.beacon) {
+		serverEvents.flush();
+	}
 }

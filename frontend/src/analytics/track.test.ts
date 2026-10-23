@@ -168,3 +168,18 @@ describe("track feeds the server event log", () => {
 		expect(serverAdd).not.toHaveBeenCalled();
 	});
 });
+
+describe("track beacon mode", () => {
+	it("sends via sendBeacon and flushes our own sink when the page is going away", () => {
+		const flush = vi.spyOn(serverEvents, "flush").mockResolvedValue(undefined);
+		track("checkout_abandoned", { method: "card" }, { beacon: true });
+		expect(posthog.capture).toHaveBeenCalledWith(
+			"checkout_abandoned",
+			{ method: "card" },
+			{ transport: "sendBeacon" },
+		);
+		expect(serverAdd).toHaveBeenCalledWith("checkout_abandoned", { method: "card" });
+		expect(flush).toHaveBeenCalled();
+		flush.mockRestore();
+	});
+});

@@ -446,6 +446,56 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			expect(mockTrack).not.toHaveBeenCalledWith("checkout_stalled", expect.anything());
 		});
 
+		// Most real abandons close the tab, so checkout.closed never fires.
+		it("beacons checkout_abandoned on pagehide while a checkout is open, once", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+
+			window.dispatchEvent(new Event("pagehide"));
+			window.dispatchEvent(new Event("pagehide"));
+			await act(async () => {
+				captured!({ name: "checkout.closed", data: {} });
+				await Promise.resolve();
+			});
+
+			const abandons = mockTrack.mock.calls.filter(([e]) => e === "checkout_abandoned");
+			expect(abandons).toEqual([["checkout_abandoned", { method: "unknown" }, { beacon: true }]]);
+		});
+
+		it("sends nothing on pagehide when no checkout is open or it completed", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			window.dispatchEvent(new Event("pagehide"));
+			await startCheckout(container);
+			await act(async () => {
+				captured!({ name: "checkout.completed", data: {} });
+				await Promise.resolve();
+			});
+			window.dispatchEvent(new Event("pagehide"));
+
+			expect(mockTrack).not.toHaveBeenCalledWith(
+				"checkout_abandoned",
+				expect.anything(),
+				expect.anything(),
+			);
+			expect(mockTrack).not.toHaveBeenCalledWith("checkout_abandoned", expect.anything());
+		});
+
 		it("does not emit checkout_abandoned on CHECKOUT_CLOSED after a completion", async () => {
 			mockBillingApi();
 			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;

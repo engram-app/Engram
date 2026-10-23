@@ -261,16 +261,17 @@ export default function BillingPage({
 	// an abandonment just because it lands after this flag was reset.
 	const checkoutCompletedRef = useRef(false);
 	// Per attempt, for the exit report (reportCheckoutExit): a checkout frame
-	// is up, a payment was started in it, and its exit was already reported.
+	// is up, a payment was started in it, and its exit was already reported
+	// (checkout.closed and pagehide can both fire; count it once).
 	const checkoutOpenRef = useRef(false);
 	const paymentAttemptedRef = useRef(false);
 	const checkoutExitReportedRef = useRef(false);
 
-	// A checkout ended without completing. A payment already started means the
-	// buyer got stuck mid-payment (a dismissed Apple Pay sheet, an unanswered
-	// 3DS challenge), which Paddle.js has no event for, so that is reported as
-	// a stall too.
-	const reportCheckoutExit = useCallback(() => {
+	// A checkout ended without completing: closed in the frame, or the tab went
+	// away (pagehide; most real abandons close the tab, so checkout.closed never
+	// fires). A payment already started means the buyer got stuck mid-payment,
+	// which Paddle.js has no event for, so that is reported as a stall too.
+	const reportCheckoutExit = useCallback((beacon: boolean) => {
 		if (
 			!checkoutOpenRef.current ||
 			checkoutCompletedRef.current ||
@@ -279,12 +280,20 @@ export default function BillingPage({
 			return;
 		}
 		checkoutExitReportedRef.current = true;
+		// Spread so the closed-in-frame path keeps the plain two-argument call.
+		const options = beacon ? [{ beacon: true }] : [];
 		const method = checkoutMethodRef.current;
 		if (paymentAttemptedRef.current) {
-			track("checkout_stalled", { method, reason: "payment_unfinished" });
+			track("checkout_stalled", { method, reason: "payment_unfinished" }, ...options);
 		}
-		track("checkout_abandoned", { method });
+		track("checkout_abandoned", { method }, ...options);
 	}, []);
+
+	useEffect(() => {
+		const onPageHide = () => reportCheckoutExit(true);
+		window.addEventListener("pagehide", onPageHide);
+		return () => window.removeEventListener("pagehide", onPageHide);
+	}, [reportCheckoutExit]);
 
 	// Annual by default: it buys RETENTION, not payment-fee savings. The 17%
 	// discount costs more than the flat $0.50/transaction fee saves ($66.00 vs
@@ -500,7 +509,7 @@ export default function BillingPage({
 					break;
 				}
 				case CheckoutEventNames.CHECKOUT_CLOSED: {
-					reportCheckoutExit();
+					reportCheckoutExit(false);
 					checkoutOpenRef.current = false;
 					break;
 				}
