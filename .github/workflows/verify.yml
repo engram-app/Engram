@@ -1602,9 +1602,8 @@ jobs:
       # ------------------------------------------------------------------
       # Cleanup — MUST kill everything, even on cancel/failure
       # ------------------------------------------------------------------
-      # Reap stale e2e Clerk orphans on EVERY run (not just the throttled
-      # hourly cron, which GitHub fires only ~every 3-5h and a CI burst
-      # outpaces). Runs `if: always()` so it fires even when pytest is
+      # Reap stale e2e Clerk orphans on EVERY run (not just the daily cron
+      # backstop, which a CI burst outpaces). Runs `if: always()` so it fires even when pytest is
       # hard-killed before its session_cleanup fixture (helpers/clerk.py
       # ClerkClient.cleanup_tracked) could delete this run's users. The
       # `--older-than 1h` age filter protects any concurrent run's in-flight
