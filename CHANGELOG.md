@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.62.0](https://github.com/engram-app/Engram/compare/0.61.0...0.62.0) (2026-10-22)
+
+
+### Features
+
+* runtime levers for the v5 rollout ([#2149](https://github.com/engram-app/Engram/issues/2149)) ([dc8f124](https://github.com/engram-app/Engram/commit/dc8f12434198b3aee41c68ad48f3c59688049d33))
+* **search:** phrase pairs for quoted queries ([#2147](https://github.com/engram-app/Engram/issues/2147)) ([1f0c630](https://github.com/engram-app/Engram/commit/1f0c630f726aec790452cc59ab719ab659d41ee5))
+
+
+### Bug Fixes
+
+* **chunker:** cap breadcrumbs at member text ([#2151](https://github.com/engram-app/Engram/issues/2151)) ([9eb4d09](https://github.com/engram-app/Engram/commit/9eb4d09578ce8709b83ffd2108d22507b5dec337))
+* **indexing:** pack floor points by body bytes ([#2150](https://github.com/engram-app/Engram/issues/2150)) ([563958b](https://github.com/engram-app/Engram/commit/563958bda1d31b84a90877d5721698c15b9e6eae))
+* **metrics:** zero-init the rebuild counters ([#2145](https://github.com/engram-app/Engram/issues/2145)) ([edcbf90](https://github.com/engram-app/Engram/commit/edcbf90d7f30c2fe36f02205358b7fbe1f4ee719))
+* **rebuild:** resume a halted pass at once ([#2153](https://github.com/engram-app/Engram/issues/2153)) ([2494c3d](https://github.com/engram-app/Engram/commit/2494c3da67ab06de5f63521012768eb96b074b84))
+
 ## [0.61.0](https://github.com/engram-app/Engram/compare/0.60.2...0.61.0) (2026-10-22)
 
 
