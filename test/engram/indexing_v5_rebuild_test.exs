@@ -285,6 +285,19 @@ defmodule Engram.IndexingV5RebuildTest do
     end
   end
 
+  # NOTE_POINTS_CAP_ENABLED alone (the budget still off, as during the v5
+  # pass): the pass caps an uncapped note from its stored vectors, no Voyage.
+  test "with only the note cap flag, a capped group is mean-pooled for 0 tokens", ctx do
+    note = indexed(ctx, 200)
+    ServiceConfig.put_override(:note_points_cap_enabled, true)
+    refute Indexing.budget_enabled?()
+
+    assert {:ok, count, 0, true} = rebuild(note, ctx.vault, ctx.user)
+    assert count <= 128
+    assert embedded() == []
+    assert Enum.any?(rows(note), &(&1.member_hmacs != nil))
+  end
+
   test "H8: a refused upsert (507) keeps the old points searchable and the note retried", ctx do
     note = indexed(ctx)
     before = points(ctx.store)
