@@ -19,6 +19,7 @@ from datetime import datetime
 import requests
 
 from helpers.device_flow import start_device_flow, poll_for_tokens
+from helpers.clerk import e2e_email
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ async def provision_oauth_tokens(
     The label is used in the email prefix for log traceability.
     """
     ts = datetime.now().strftime("%Y%m%d%H%M%S%f")
-    email = f"e2e-oauth-{label}-{ts}+clerk_test@example.com"
+    email = e2e_email(f"oauth-{label}", ts)
     password = secrets.token_urlsafe(32)
 
     clerk_user_id = clerk_client.create_user(email, password)

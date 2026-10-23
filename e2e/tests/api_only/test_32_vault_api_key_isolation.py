@@ -24,7 +24,7 @@ import pytest
 
 from helpers.api import ApiClient
 from helpers.billing import grant_test_plan
-from helpers.clerk import ClerkClient
+from helpers.clerk import ClerkClient, e2e_email
 from helpers.clerk_auth import provision_clerk_user
 from helpers.crypto_probe import (
     latest_note_path_hmac,
@@ -70,7 +70,7 @@ def _register_test_user(ts: int):
     in Engram via the real auth pipeline (Clerk JWT → find_or_create).
     """
     clerk_client = ClerkClient(CLERK_SECRET)
-    email = f"e2e-vault-iso-{ts}+clerk_test@example.com"
+    email = e2e_email("vault-iso", ts)
     password = secrets.token_urlsafe(32)
 
     clerk_user_id, _clerk_auth, api_key = provision_clerk_user(
@@ -275,7 +275,7 @@ def test_mcp_search_spans_all_vaults_by_default(vault_setup):
     # Chunk rows commit AFTER the Qdrant upsert and search rehydrates from them.
     for vid in (vault_a_id, vault_b_id):
         path_hmac = latest_note_path_hmac(vid)
-        wait_for_qdrant_indexed(vid, path_hmac, timeout=90)
+        wait_for_qdrant_indexed(vid, path_hmac)
         wait_for_chunks_committed(vid, path_hmac, timeout=90)
 
     resp, status = api.mcp_call("search_notes", {"query": "Secret"})
@@ -293,7 +293,7 @@ def test_mcp_search_scoped_to_vault_id_excludes_others(vault_setup):
     vault_a_id = vault_setup["vault_a_id"]
     vault_b_id = vault_setup["vault_b_id"]
 
-    wait_for_qdrant_indexed(vault_a_id, latest_note_path_hmac(vault_a_id), timeout=90)
+    wait_for_qdrant_indexed(vault_a_id, latest_note_path_hmac(vault_a_id))
 
     resp, status = api.mcp_call("search_notes", {"query": "Secret", "vault_id": vault_a_id})
     assert status == 200

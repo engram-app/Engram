@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from helpers.api import ApiClient
+from helpers.clerk import e2e_email
 from helpers.auth_provider import get_auth_provider, ClerkAuthProvider
 from helpers.cdp import SIMULATED_SWITCH_VAULT_ID
 from helpers.billing import grant_test_plan
@@ -163,6 +164,20 @@ def _backend_alive() -> bool:
         # Any HTTP-level answer (or timeout) means the socket is accepting;
         # only a refused/unreachable connection counts as dead.
         return True
+
+
+# Hook lives in helpers.scenario so a stack-free unit test can load it as a plugin.
+from helpers.scenario import pytest_collection_modifyitems  # noqa: E402,F401
+
+
+@pytest.fixture
+def scenario_steps(request):
+    """Step list for helpers.scenario.timed_step; lands in junit properties."""
+    from helpers.scenario import bind_steps, unbind_steps
+
+    steps = bind_steps(request.node.user_properties)
+    yield steps
+    unbind_steps()
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -369,7 +384,7 @@ def sync_user(ts, auth_provider, sync_password):
 
     Returns: (email, provider_user_id, api_key)
     """
-    email = f"e2e-sync-{ts}+clerk_test@example.com"
+    email = e2e_email("sync", ts)
     provider_user_id, api_key = auth_provider.provision_user(email, sync_password)
     # Lift api_rps_cap (30/s on every tier, #1974) and the Free caps before
     # any api-key-authed request hits the user — mirrors
@@ -384,7 +399,7 @@ def isolation_user(ts, auth_provider):
 
     Returns: (email, provider_user_id, api_key)
     """
-    email = f"e2e-iso-{ts}+clerk_test@example.com"
+    email = e2e_email("iso", ts)
     password = secrets.token_urlsafe(32)
     provider_user_id, api_key = auth_provider.provision_user(email, password)
     grant_test_plan(email)
@@ -409,7 +424,7 @@ def resumed_user(ts, auth_provider):
     # local part must stay <= 64 (RFC 5321) or Clerk create_user 422s. With
     # "+clerk_test" that budgets ~9 chars for the prefix (e2e-sync-/e2e-iso-
     # sit right at the ceiling); "e2e-rsm-" keeps us at 63.
-    email = f"e2e-rsm-{ts}+clerk_test@example.com"
+    email = e2e_email("rsm", ts)
     password = secrets.token_urlsafe(32)
     provider_user_id, api_key = auth_provider.provision_user(email, password)
     grant_test_plan(email)
@@ -620,15 +635,8 @@ def _display_overlap(workers: int) -> set[int]:
     return abc & pair
 
 
-@pytest.fixture
-def fresh_instance_pair(resumed_user, resumed_client_id, resumed_api):
-    """Dedicated A/B-shaped instance pair for tests that stop/restart a device.
-
-    Function-scoped so a mid-test restart can't poison the session fixtures.
-    Runs on resumed_user's private vault (resumed_api pre-registers it) to
-    stay off the suite's shared accumulator vault — see the block comment
-    above and Engram#977/#945.
-    """
+def _assert_resumed_slots_safe() -> None:
+    """Fail before an Xvfb pre-flight pkill can hit another job's display."""
     if os.environ.get("E2E_DISPLAY_BASE") and not os.environ.get("E2E_DISPLAY_BASE_RESUMED"):
         # The :150 default sits inside another CI job's display window, and
         # ObsidianInstance's Xvfb pre-flight `pkill -9` kills whatever owns it.
@@ -640,6 +648,18 @@ def fresh_instance_pair(resumed_user, resumed_client_id, resumed_api):
     if overlap := _display_overlap(workers):
         # Xvfb's pre-flight pkill would take down a session A/B/C instance.
         pytest.fail(f"resumed pair displays {sorted(overlap)} overlap A/B/C ({workers} workers)")
+
+
+@pytest.fixture
+def fresh_instance_pair(resumed_user, resumed_client_id, resumed_api):
+    """Dedicated A/B-shaped instance pair for tests that stop/restart a device.
+
+    Function-scoped so a mid-test restart can't poison the session fixtures.
+    Runs on resumed_user's private vault (resumed_api pre-registers it) to
+    stay off the suite's shared accumulator vault — see the block comment
+    above and Engram#977/#945.
+    """
+    _assert_resumed_slots_safe()
     inst_a = ObsidianInstance(
         name="ResumedA",
         vault_path=Path(f"{VAULT_PREFIX}-resumed-a"),
@@ -669,6 +689,33 @@ def fresh_instance_pair(resumed_user, resumed_client_id, resumed_api):
     finally:
         inst_a.stop()
         inst_b.stop()
+
+
+@pytest.fixture
+def fresh_unlinked_instance():
+    """An Obsidian with the plugin installed and NO credentials, not yet launched.
+
+    The vault dir is prepared (plugin files, empty apiKey) so a test can put a
+    user's existing notes on disk first, then `await inst.async_start(restart=True)`
+    (restart keeps the seeded vault). Borrows the resumed-A slot: function-scoped,
+    and never alive at the same time as fresh_instance_pair.
+    """
+    _assert_resumed_slots_safe()
+    inst = ObsidianInstance(
+        name="Unlinked",
+        vault_path=Path(f"{VAULT_PREFIX}-plugin-first"),
+        display=f":{RESUMED_DISPLAY_BASE}",
+        api_url=API_URL,
+        api_key="",
+        plugin_src=PLUGIN_SRC,
+        obsidian_bin=OBSIDIAN_BIN,
+        config_dir=Path(f"{CONFIG_PREFIX}-plugin-first"),
+    )
+    inst._prepare_vault()
+    try:
+        yield inst
+    finally:
+        inst.stop()
 
 
 # ---------------------------------------------------------------------------

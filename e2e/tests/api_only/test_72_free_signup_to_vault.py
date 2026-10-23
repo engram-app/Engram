@@ -45,7 +45,7 @@ from datetime import datetime
 import pytest
 
 from helpers.api import ApiClient
-from helpers.clerk import ClerkClient
+from helpers.clerk import ClerkClient, e2e_email
 from helpers.clerk_auth import provision_clerk_user
 
 logger = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ def test_free_signup_to_first_note():
 
     # ── 1. Provision a fresh Clerk user + API key ────────────────────────
     clerk = ClerkClient(CLERK_SECRET)
-    email = f"e2e-free-signup-{_ts()}+clerk_test@example.com"
+    email = e2e_email("free-signup", _ts())
     password = secrets.token_urlsafe(32)
     _clerk_user_id, clerk_auth, _api_key = provision_clerk_user(
         clerk, email, password, API_URL,
