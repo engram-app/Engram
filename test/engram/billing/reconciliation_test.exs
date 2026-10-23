@@ -259,17 +259,20 @@ defmodule Engram.Billing.ReconciliationTest do
       refute log =~ "paddle_reconcile_period_unparseable"
     end
 
-    test "a live Paddle period with no local period end is drift" do
+    # Paddle is ground truth for the period: a nil local period end is copied
+    # from Paddle (self-heal), not paged as drift every night.
+    test "a live Paddle period with no local period end is repaired, not drift" do
       user = insert(:user)
 
-      insert(:subscription,
-        user: user,
-        paddle_subscription_id: "sub_nolocal",
-        paddle_customer_id: "ctm_nolocal",
-        tier: "starter",
-        status: "active",
-        current_period_end: nil
-      )
+      sub =
+        insert(:subscription,
+          user: user,
+          paddle_subscription_id: "sub_nolocal",
+          paddle_customer_id: "ctm_nolocal",
+          tier: "starter",
+          status: "active",
+          current_period_end: nil
+        )
 
       Engram.Paddle.ClientMock
       |> expect(:list_subscriptions, fn _since ->
@@ -284,9 +287,44 @@ defmodule Engram.Billing.ReconciliationTest do
       end)
 
       ExUnit.CaptureLog.capture_log(fn ->
-        assert %{drift: [%{kind: :period_mismatch, subscription_id: "sub_nolocal"}]} =
-                 Reconciliation.run(7)
+        assert %{drift: []} = Reconciliation.run(7)
       end)
+
+      assert Engram.Repo.reload!(sub).current_period_end == ~U[2026-07-31 00:00:00Z]
+    end
+
+    # nil on a canceled/paused sub is expected; a present but unreadable value
+    # is a Paddle contract change and must stay visible.
+    test "warns on a present but unparseable ends_at" do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_garbled",
+        paddle_customer_id: "ctm_garbled",
+        tier: "starter",
+        status: "active",
+        current_period_end: ~U[2026-06-30 00:00:00Z]
+      )
+
+      Engram.Paddle.ClientMock
+      |> expect(:list_subscriptions, fn _since ->
+        {:ok,
+         [
+           paddle_sub(%{
+             "id" => "sub_garbled",
+             "customer_id" => "ctm_garbled",
+             "current_billing_period" => %{"ends_at" => "not-a-date"}
+           })
+         ]}
+      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert %{drift: []} = Reconciliation.run(7)
+        end)
+
+      assert log =~ "paddle_reconcile_period_unparseable"
     end
 
     test "tolerates period skew within 2 minutes" do

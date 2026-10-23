@@ -257,6 +257,10 @@ defmodule Engram.Billing.Reconciliation do
           }
         ]
 
+      missing_local_period?(paddle_sub, local) ->
+        repair_period_end(paddle_sub, local)
+        []
+
       period_mismatch?(paddle_sub, local) ->
         [
           %{
@@ -287,22 +291,66 @@ defmodule Engram.Billing.Reconciliation do
 
   # Paddle sends `current_billing_period: null` once a subscription is canceled
   # or paused: there is no period to compare, and access is gated on the status
-  # (already matched above), not on a stale local period end. The old raw-shape
-  # match treated that valid shape as unparseable and warned
-  # `paddle_reconcile_period_unparseable` every night for each such sub in the
-  # window. Paddle's side goes through the parser the webhook path writes with.
+  # (already matched above), not on a stale local period end. Paddle's side goes
+  # through the parser the webhook path writes with. Only a NON-nil `ends_at`
+  # that fails to parse is a contract change worth a warning.
   defp period_mismatch?(paddle_sub, local) do
     case {Engram.Billing.parse_period_end(paddle_sub), local.current_period_end} do
-      {nil, _local} ->
-        false
-
       {%DateTime{} = paddle_dt, %DateTime{} = local_dt} ->
         abs(DateTime.diff(paddle_dt, local_dt, :second)) > @period_skew_seconds
 
-      # Paddle has a live period and we stored none: real drift.
-      {%DateTime{}, nil} ->
-        true
+      {nil, _local} ->
+        warn_if_unparseable(paddle_sub)
+        false
+
+      # {live Paddle period, nil local} is repaired in classify/2 before here.
+      _ ->
+        false
     end
+  end
+
+  defp warn_if_unparseable(paddle_sub) do
+    case paddle_sub["current_billing_period"] do
+      %{"ends_at" => nil} ->
+        :ok
+
+      %{"ends_at" => ends_at} ->
+        Logger.warning(
+          "paddle_reconcile_period_unparseable",
+          Metadata.with_category(:warning, :billing,
+            paddle_subscription_id: paddle_sub["id"],
+            reason: inspect(ends_at)
+          )
+        )
+
+      _ ->
+        :ok
+    end
+  end
+
+  # Paddle has a live period and our mirror stored none (a webhook that
+  # carried no period, then nothing since). Paddle is ground truth for this
+  # field, so copy it over instead of paging the same drift every night.
+  defp missing_local_period?(paddle_sub, local) do
+    is_nil(local.current_period_end) and
+      match?(%DateTime{}, Engram.Billing.parse_period_end(paddle_sub))
+  end
+
+  defp repair_period_end(paddle_sub, local) do
+    period_end = Engram.Billing.parse_period_end(paddle_sub)
+
+    # Written under the owner's tenant, like the webhook mirror (#1758).
+    Repo.with_tenant!(local.user_id, fn ->
+      local |> Ecto.Changeset.change(current_period_end: period_end) |> Repo.update!()
+    end)
+
+    Logger.info(
+      "paddle_reconcile_period_repaired",
+      Metadata.with_category(:info, :billing,
+        paddle_subscription_id: paddle_sub["id"],
+        user_id: local.user_id
+      )
+    )
   end
 
   # A payment parked at `action_required` this long is a stalled checkout,
@@ -317,8 +365,8 @@ defmodule Engram.Billing.Reconciliation do
   no webhook for that state, so without this scan engram-infra #1157's
   stalled-checkout alert never sees the line it needs.
 
-  Dedupe without state: a run anchored at `anchor` (a 15-minute cron tick)
-  owns payments created in `[anchor - 30m, anchor - 15m)`. Consecutive ticks
+  Dedupe without state: a run anchored at `anchor` (its cron tick, to the
+  minute) owns payments created in `[anchor - 30m, anchor - 15m)`. Consecutive ticks
   tile the timeline, so each stalled payment is reported by exactly one run,
   and a retry of the same job (same anchor) re-reads the same window.
   ponytail: a tick that never runs (whole cluster down) skips its window; a
