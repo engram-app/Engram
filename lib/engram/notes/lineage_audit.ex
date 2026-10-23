@@ -128,7 +128,9 @@ defmodule Engram.Notes.LineageAudit do
         note =
           Repo.one(
             from(n in Note,
-              where: n.id == ^note_id and n.vault_id == ^vault.id and is_nil(n.deleted_at),
+              where:
+                n.id == ^note_id and n.vault_id == ^vault.id and n.kind == "note" and
+                  is_nil(n.deleted_at),
               select: struct(n, [:id, :dek_version, :crdt_state_ciphertext, :crdt_state_nonce])
             )
           )

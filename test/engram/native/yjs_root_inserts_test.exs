@@ -57,7 +57,9 @@ defmodule Engram.Native.YjsRootInsertsTest do
     text = Yex.Doc.get_text(b, "content")
     Yex.Text.delete(text, 0, 8)
     Yex.Text.insert(text, 0, "new text")
-    assert root_clients(state(b)) == 1
+    # Retyping hangs off a's deleted structs, so b is not a root; a's root is
+    # wholly deleted, so no LIVE lineage remains (I3). Healthy, never a rival.
+    assert root_clients(state(b)) == 0
   end
 
   test "frontmatter map entries are not body roots" do
