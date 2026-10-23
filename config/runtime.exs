@@ -699,6 +699,13 @@ if budget = System.get_env("INDEX_BUDGET_ENABLED") do
   config :engram, :index_budget_enabled, budget == "true"
 end
 
+# The per-note cap merge on its own (`Engram.Indexing.note_cap_enabled?/0`),
+# and the 04:00 UTC recap. On before the v5 dry run, so the pass embeds each
+# over-cap note once, capped.
+if note_cap = System.get_env("NOTE_POINTS_CAP_ENABLED") do
+  config :engram, :note_points_cap_enabled, note_cap == "true"
+end
+
 # The one-time v5 index rebuild switch (`Engram.Rebuild`, chunker v5 Task
 # 16.1): `off` (default), `dry_run` or `on`. Off, a stamp bump rebuilds
 # nothing and nothing reads the rebuild tables.

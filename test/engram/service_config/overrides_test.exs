@@ -184,6 +184,25 @@ defmodule Engram.ServiceConfig.OverridesTest do
       assert {:error, {:invariant, _}} = ServiceConfig.clear(:write_v5_layout, by: "t")
     end
 
+    # The dry run sealed a budget priced with the cap as it was: flipping it
+    # under a dry run or a pass is refused; stop the rebuild first.
+    test "the note cap flag only moves while the rebuild is off" do
+      assert :ok = ServiceConfig.override(:note_points_cap_enabled, true, by: "t")
+      :ok = ServiceConfig.override(:write_v5_layout, true, by: "t")
+      :ok = ServiceConfig.override(:index_rebuild, "dry_run", by: "t")
+
+      assert {:error, {:invariant, message}} =
+               ServiceConfig.override(:note_points_cap_enabled, false, by: "t")
+
+      assert message =~ "index_rebuild=dry_run"
+      assert {:error, {:invariant, _}} = ServiceConfig.clear(:note_points_cap_enabled, by: "t")
+      # Other writes under the dry run are unaffected.
+      assert :ok = ServiceConfig.override(:tenant_idf, true, by: "t")
+
+      :ok = ServiceConfig.override(:index_rebuild, "off", by: "t")
+      assert :ok = ServiceConfig.override(:note_points_cap_enabled, false, by: "t")
+    end
+
     test "the v2 cluster is refused while its URL is not configured" do
       ServiceConfig.put_override(:qdrant_url_v2, nil)
 
@@ -346,11 +365,13 @@ defmodule Engram.ServiceConfig.OverridesTest do
 
       refute Engram.Indexing.VectorCache.enabled?()
       refute Engram.Indexing.budget_enabled?()
+      refute Engram.Indexing.note_cap_enabled?()
       refute Qdrant.write_v5_layout?()
       refute Qdrant.chunk_text_read?()
 
       for key <- [
             :vector_cache_enabled,
+            :note_points_cap_enabled,
             :index_budget_enabled,
             :embed_models_per_plan,
             :tenant_idf
@@ -359,6 +380,7 @@ defmodule Engram.ServiceConfig.OverridesTest do
 
       assert Engram.Indexing.VectorCache.enabled?()
       assert Engram.Indexing.budget_enabled?()
+      assert Engram.Indexing.note_cap_enabled?()
       assert ServiceConfig.get(:embed_models_per_plan, false) == true
 
       # write_v5_layout still implies the payload format and chunk text reads.

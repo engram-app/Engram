@@ -247,9 +247,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # budget-checked as they are indexed (`Indexing`), and a promotion after
     # deletes can wait a day.
     _ =
-      if daily_reverify?(scheduled_at) and Indexing.budget_enabled?() do
-        :ok = sweep_over_note_cap(now)
-        {:ok, _} = budget_sweep(@budget_users, now)
+      if daily_reverify?(scheduled_at) do
+        if Indexing.note_cap_enabled?(), do: :ok = sweep_over_note_cap(now)
+        if Indexing.budget_enabled?(), do: {:ok, _} = budget_sweep(@budget_users, now)
       end
 
     :ok = wake_budget_parked(backoff_until)
@@ -293,6 +293,13 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   #
   # Dense notes only: a sparse-only note reaches the dense backfill (term 2 of
   # the main sweep), whose pass caps it.
+  #
+  # Runs with the cap (`Indexing.note_cap_enabled?/0`), not only the budget,
+  # but only over notes at THIS BUILD's versions: a note behind them is the
+  # v5 pass's, which re-embeds it capped anyway, and a recap first would pay
+  # for it twice. Before and during the pass that leaves the recap nothing
+  # but notes the pass already wrote; after it, downgrades and lowered
+  # overrides.
   defp sweep_over_note_cap(now) do
     tier_caps = by_tier(:note_points_cap)
 
@@ -305,6 +312,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         eligible =
           IndexVersions.content_current_notes()
           |> where([n], n.dense_indexed_hash == n.content_hash and is_nil(n.index_tier))
+          |> where(^dynamic([n], not (^IndexVersions.stale_dynamic(Rebuild.build_versions()))))
           |> where([n], is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now)
           |> where(^over_cap)
           |> order_by([n], asc: n.updated_at)
