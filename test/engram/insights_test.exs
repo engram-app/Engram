@@ -341,7 +341,7 @@ defmodule Engram.InsightsTest do
     # Reproduce that neighbour deterministically instead of by async timing.
     Task.await(
       Task.async(fn ->
-        :telemetry.execute([:engram, :repo, :query], %{}, %{query: "SELECT 1", source: nil})
+        Engram.QueryRecorder.emit_foreign_query()
       end)
     )
 

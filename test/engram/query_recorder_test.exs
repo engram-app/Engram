@@ -7,7 +7,7 @@ defmodule Engram.QueryRecorderTest do
     noisy =
       spawn_link(fn ->
         Stream.repeatedly(fn ->
-          :telemetry.execute([:engram, :repo, :query], %{}, %{query: "SELECT 1", source: nil})
+          Engram.QueryRecorder.emit_foreign_query()
           Process.sleep(10)
         end)
         |> Stream.run()

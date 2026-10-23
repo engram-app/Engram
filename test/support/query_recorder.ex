@@ -22,6 +22,20 @@ defmodule Engram.QueryRecorder do
     end
   end
 
+  @doc """
+  Emits a repo query event the way a test does, not the way Ecto does: no
+  `:result` and no measurements. A global handler must survive it, or
+  `:telemetry` detaches that handler for the rest of the run. `:repo` stays,
+  since `Engram.PromEx.Ecto`'s tag function needs it.
+  """
+  def emit_foreign_query do
+    :telemetry.execute([:engram, :repo, :query], %{}, %{
+      query: "SELECT 1",
+      source: nil,
+      repo: Engram.Repo
+    })
+  end
+
   defp poller_query?(sql) do
     sql =~ ~r/FROM "public"."oban_jobs".*GROUP BY/s or
       (sql =~ ~r/FROM "rebuild_ledger"/ and from_ledger_poller?())
