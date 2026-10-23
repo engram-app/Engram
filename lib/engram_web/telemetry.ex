@@ -286,7 +286,7 @@ defmodule EngramWeb.Telemetry do
         measurement: :count,
         tags: [:reason, :method],
         description:
-          "Stall REPORTS, not distinct stalled checkouts: one per qualifying webhook, and Paddle re-emits transaction.updated as a transaction moves on (billed → past_due → canceled), so a single dead checkout contributes several. `reason` is :payment_failed | :action_required | :unknown; `method` is the Paddle payment method type (apple_pay, card, paypal, unknown)."
+          "Stall REPORTS, not distinct stalled checkouts: one per qualifying webhook plus one from the 15-minute stalled-checkout scan, and Paddle re-emits transaction.updated as a transaction moves on (billed → past_due → canceled), so a single dead checkout contributes several. `reason` is :payment_failed | :action_required | :unknown; `method` is the Paddle payment method type (apple_pay, card, paypal, unknown)."
       ),
       counter("engram.paddle.reconcile.run.count",
         event_name: [:engram, :paddle, :reconcile, :run],

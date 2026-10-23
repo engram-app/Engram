@@ -392,7 +392,245 @@ describe("BillingPage — Paddle effect cleanup", () => {
 				await Promise.resolve();
 			});
 
-			expect(mockTrack).toHaveBeenCalledWith("checkout_abandoned", { method: "unknown" });
+			expect(mockTrack).toHaveBeenCalledWith(
+				"checkout_abandoned",
+				{ method: "unknown" },
+				{ beacon: false },
+			);
+		});
+
+		// Paddle.js has no event for a payment parked at action_required (a
+		// dismissed Apple Pay sheet, an unanswered 3DS challenge). The visible
+		// symptom is a buyer who started paying and then left: report it.
+		it("emits checkout_stalled when checkout closes after a payment attempt started", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+
+			await act(async () => {
+				captured!({
+					name: "checkout.payment.selected",
+					data: { payment: { method_details: { type: "apple-pay" } } },
+				});
+				captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+				captured!({ name: "checkout.closed", data: {} });
+				await Promise.resolve();
+			});
+
+			expect(mockTrack).toHaveBeenCalledWith(
+				"checkout_stalled",
+				{ method: "apple_pay", reason: "payment_unfinished" },
+				{ beacon: false },
+			);
+			expect(mockTrack).toHaveBeenCalledWith(
+				"checkout_abandoned",
+				{ method: "apple_pay" },
+				{ beacon: false },
+			);
+		});
+
+		it("reports a declined attempt once, not again as unfinished on close", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+			await act(async () => {
+				captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+				captured!({ name: "checkout.payment.failed", data: {} });
+				captured!({ name: "checkout.closed", data: {} });
+				await Promise.resolve();
+			});
+
+			const stalls = mockTrack.mock.calls.filter(([e]) => e === "checkout_stalled");
+			expect(stalls).toEqual([
+				["checkout_stalled", { method: "unknown", reason: "payment_declined" }],
+			]);
+		});
+
+		it("does not report an abandon on pagehide after a checkout error", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+			await act(async () => {
+				captured!({ name: "checkout.error", data: {} });
+				await Promise.resolve();
+			});
+			window.dispatchEvent(new Event("pagehide"));
+
+			expect(mockTrack.mock.calls.filter(([e]) => e === "checkout_abandoned")).toEqual([]);
+		});
+
+		it("does not report a stall when the buyer closes before trying to pay", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+			await act(async () => {
+				captured!({ name: "checkout.closed", data: {} });
+				await Promise.resolve();
+			});
+
+			expect(mockTrack).not.toHaveBeenCalledWith("checkout_stalled", expect.anything());
+		});
+
+		// Most real abandons close the tab, so checkout.closed never fires.
+		it("beacons checkout_abandoned on pagehide while a checkout is open, once", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+
+			window.dispatchEvent(new Event("pagehide"));
+			window.dispatchEvent(new Event("pagehide"));
+			await act(async () => {
+				captured!({ name: "checkout.closed", data: {} });
+				await Promise.resolve();
+			});
+
+			const abandons = mockTrack.mock.calls.filter(([e]) => e === "checkout_abandoned");
+			expect(abandons).toEqual([["checkout_abandoned", { method: "unknown" }, { beacon: true }]]);
+		});
+
+		// After a payment starts, the server (webhooks + the stalled scan) is the
+		// authority: a dropped checkout.completed on a redirect, or a redirect-
+		// based payment method navigating away, must not report a paying buyer.
+		it("sends nothing on pagehide once a payment attempt has started", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+			await act(async () => {
+				captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+				await Promise.resolve();
+			});
+			window.dispatchEvent(new Event("pagehide"));
+
+			const exits = mockTrack.mock.calls.filter(
+				([e]) => e === "checkout_abandoned" || e === "checkout_stalled",
+			);
+			expect(exits).toEqual([]);
+		});
+
+		// bfcache entry (persisted) is not a departure: the page may come back
+		// and the buyer finish, so it must not report, nor burn the once-latch.
+		it("ignores a persisted pagehide (bfcache) and still reports the real exit", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+			// happy-dom's PageTransitionEvent drops the `persisted` init field.
+			const toBfcache = new Event("pagehide");
+			Object.defineProperty(toBfcache, "persisted", { value: true });
+			window.dispatchEvent(toBfcache);
+			expect(mockTrack.mock.calls.filter(([e]) => e === "checkout_abandoned")).toEqual([]);
+
+			await act(async () => {
+				captured!({ name: "checkout.closed", data: {} });
+				await Promise.resolve();
+			});
+			expect(mockTrack).toHaveBeenCalledWith(
+				"checkout_abandoned",
+				{ method: "unknown" },
+				{ beacon: false },
+			);
+		});
+
+		// checkout.loaded is per checkout (Paddle docs), but a repeat for the
+		// SAME checkout id must not wipe an attempt already in flight.
+		it("keeps the attempt when checkout.loaded repeats for the same checkout", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+			await act(async () => {
+				captured!({ name: "checkout.loaded", data: { id: "che_1" } });
+				captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+				captured!({ name: "checkout.loaded", data: { id: "che_1" } });
+				captured!({ name: "checkout.closed", data: {} });
+				await Promise.resolve();
+			});
+
+			expect(mockTrack).toHaveBeenCalledWith(
+				"checkout_stalled",
+				{ method: "unknown", reason: "payment_unfinished" },
+				{ beacon: false },
+			);
+		});
+
+		it("sends nothing on pagehide when no checkout is open or it completed", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			window.dispatchEvent(new Event("pagehide"));
+			await startCheckout(container);
+			await act(async () => {
+				captured!({ name: "checkout.completed", data: {} });
+				await Promise.resolve();
+			});
+			window.dispatchEvent(new Event("pagehide"));
+
+			expect(mockTrack).not.toHaveBeenCalledWith(
+				"checkout_abandoned",
+				expect.anything(),
+				expect.anything(),
+			);
+			expect(mockTrack).not.toHaveBeenCalledWith("checkout_abandoned", expect.anything());
 		});
 
 		it("does not emit checkout_abandoned on CHECKOUT_CLOSED after a completion", async () => {

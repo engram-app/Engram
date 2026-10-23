@@ -246,6 +246,13 @@ config :engram, Oban,
         # Paddle drift check. Daily: drift logs at :error to Sentry, and a
         # repair is manual, so more runs would only repeat the alert.
         {"0 2 * * *", Engram.Billing.Workers.PaddleReconcile},
+        # Stalled-checkout scan: Paddle sends no webhook for a payment parked at
+        # action_required (3DS / Apple Pay approval), so poll for it (#1157).
+        # :14/:29/:44/:59, the one 15-minute phase no other cron shares (after
+        # moving TelemetryHeartbeat off 05:14). Windows are anchored on the tick
+        # itself (PaddleReconcile.scan_anchor/1), so they tile the hour.
+        {"14-59/15 * * * *", Engram.Billing.Workers.PaddleReconcile,
+         args: %{"scan" => "stalled_checkouts"}},
         {"30 3 * * *", Engram.Workers.InactivityCleanup},
         # Fair-use over 3 consecutive DAYS: a daily question.
         {"0 4 * * *", Engram.Workers.OriginAbuseSweep},
@@ -254,7 +261,7 @@ config :engram, Oban,
         # O(collection); revisit around 1M points with a resumable cursor.
         {"0 5 * * *", Engram.Workers.OrphanSweep},
         # Daily self-host install census; no-op on SaaS and unless opted in.
-        {"14 5 * * *", Engram.Workers.TelemetryHeartbeat},
+        {"15 5 * * *", Engram.Workers.TelemetryHeartbeat},
         # CIMD document refresh (#1642): documents carry a 24 h TTL.
         {"40 5 * * *", Engram.Workers.CimdRefresh},
         # CIMD JWKS refresh (#1974): keeps the persisted key set fresh so the

@@ -1,7 +1,9 @@
 defmodule Engram.Billing.Workers.PaddleReconcile do
   @moduledoc """
-  Daily Oban cron worker. Calls `Engram.Billing.Reconciliation.run/1` with
-  a 7-day window. Drift is logged at `:error` and captured by Sentry —
+  Oban cron worker for Paddle reconciliation. Daily: calls
+  `Engram.Billing.Reconciliation.run/1` with a 7-day window. Every 15
+  minutes (args `%{"scan" => "stalled_checkouts"}`): reports checkouts stuck
+  at `action_required` via `Reconciliation.report_stalled_checkouts/1`. Drift is logged at `:error` and captured by Sentry —
   the worker itself always returns `:ok` so Oban doesn't mark the job
   failed for data drift (which is signal, not job failure).
 
@@ -18,12 +20,27 @@ defmodule Engram.Billing.Workers.PaddleReconcile do
   use Oban.Worker,
     queue: :maintenance,
     max_attempts: 2,
-    unique: [period: 60, fields: [:worker]]
+    # :args too: the daily drift run and the stalled scan are the same worker,
+    # and [:worker] alone would drop one as a duplicate whenever they land
+    # within the 60 s period (a manual run, a retry, a future schedule move).
+    unique: [period: 60, fields: [:worker, :args]]
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(15)
 
+  # Stalled-checkout scan (args `%{"scan" => "stalled_checkouts"}`, every 15
+  # min): see `Reconciliation.report_stalled_checkouts/1`. Anchored on the
+  # job's cron tick so a retry re-reads the same window.
   @impl Oban.Worker
+  def perform(%Oban.Job{args: %{"scan" => "stalled_checkouts"}, inserted_at: inserted_at}) do
+    case Engram.Billing.Reconciliation.report_stalled_checkouts(
+           scan_anchor(inserted_at || DateTime.utc_now())
+         ) do
+      {:error, _reason} = error -> error
+      _count -> :ok
+    end
+  end
+
   def perform(_job) do
     result = Engram.Billing.Reconciliation.run(7)
     outcome = result.skipped || :ok
@@ -35,5 +52,17 @@ defmodule Engram.Billing.Workers.PaddleReconcile do
     )
 
     :ok
+  end
+
+  @doc """
+  The scan's anchor: the cron tick the job was inserted for, rounded to the
+  nearest minute. Ticks are exactly 15 minutes apart, so windows anchored on
+  them tile, and the window end (anchor - 15m) is never later than 15 minutes
+  before the run: nothing younger than the grace is reported. Rounding (not
+  flooring) absorbs a DB clock that inserts the job a hair before its minute.
+  """
+  @spec scan_anchor(DateTime.t()) :: DateTime.t()
+  def scan_anchor(%DateTime{} = inserted_at) do
+    DateTime.from_unix!(div(DateTime.to_unix(inserted_at) + 30, 60) * 60)
   end
 end

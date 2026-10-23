@@ -29,7 +29,7 @@ defmodule Engram.Analytics.ClientEvents do
     "checklist_action" => ~w(guide_opened dismissed),
     "vault_source" => ~w(obsidian fresh),
     "error_code" => ~w(onboarding_required gate_closed not_found rate_limited network timeout
-      payment_declined limit_exceeded unknown),
+      payment_declined payment_unfinished limit_exceeded unknown),
     "gate_reasons" => ~w(terms subscription profile vault),
     "locale" => Engram.I18n.locales()
   }

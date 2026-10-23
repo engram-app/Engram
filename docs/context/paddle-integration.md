@@ -144,7 +144,7 @@ Four observability layers on the webhook + a daily reconciliation. Each is indep
    | `:missing_local` | Paddle has the subscription, we don't (most likely silent-200 swallowed-error or a missed webhook). **Excludes `canceled` Paddle subs** — see below. |
    | `:status_mismatch` | `paddle.status != local.status`. |
    | `:tier_mismatch` | Price ID maps to a different tier than `local.tier`. |
-   | `:period_mismatch` | `current_billing_period.ends_at` disagrees by more than 120 seconds. |
+   | `:period_mismatch` | `current_billing_period.ends_at` disagrees by more than 120 seconds. A live Paddle period with no local one is not drift: reconcile copies it into the row (`paddle_reconcile_period_repaired`, info). A sub with `current_billing_period: null` (canceled/paused) is never compared: there is no period, and access is gated on status. |
 
    Each entry logs at `:error` (Sentry-captured). Worker always returns `:ok` — drift is *signal*, not job failure, so Oban shouldn't retry it.
 
@@ -167,6 +167,10 @@ Four observability layers on the webhook + a daily reconciliation. Each is indep
    In a release shell (`bin/engram rpc`), Mix isn't available — inline the call: `Engram.Billing.Reconciliation.run(7)`.
 
    **Paddle list pagination: stop on `has_more`, never `next`.** `meta.pagination.next` is always present, even on the last page (it is a resume bookmark). `list_subscriptions/1` stops when `has_more != true` (`lib/engram/paddle/client/http.ex`); stopping on `next == nil` looped the reconcile worker into `pagination_loop` (PR #723). Any Paddle list mock must include `has_more` and keep a non-nil `next` on the final page, or the test passes on code that loops in prod.
+
+5. **Stalled-checkout scan (every 15 min).** Paddle sends no webhook when a payment attempt parks at `action_required` (3DS, a dismissed Apple Pay sheet), so the stalled-checkout alert (engram-infra #1157) never saw it. `PaddleReconcile` with args `%{"scan" => "stalled_checkouts"}` calls `Reconciliation.report_stalled_checkouts/1`: it lists `ready` transactions (`Client.list_ready_transactions/1`, 30 per page, the transactions maximum) and emits `checkout_payment_action_required` through `Billing.report_checkout_transaction/2`, the same emitter the webhook path uses (`event_type: "reconcile.stalled_scan"`). Dedupe is stateless: the run anchored at tick T owns payments created in `[T-30m, T-15m)`, so ticks tile the timeline and a retry re-reads its own window.
+
+6. **Default payment link = `https://app.engram.page/pay`.** Paddle mails `<default link>?_ptxn=<txn id>` for renewals and payment-method updates. `/pay` is public (logged-out tabs) and boots Paddle.js from `GET /api/billing/paddle-client` (client token + env only). The setting itself is in the Paddle dashboard (Checkout > Checkout settings), not in code.
 
 ### Drift response runbook
 

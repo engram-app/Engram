@@ -39,6 +39,12 @@ defmodule Engram.Test.ObanWorkers do
       {Oban.Plugins.Cron, opts} -> Keyword.fetch!(opts, :crontab)
       _ -> nil
     end)
+    # An entry may carry job opts (`{expr, worker, args: ...}`); the schedule
+    # checks only care about the expression and the worker.
+    |> Enum.map(fn
+      {expr, worker} -> {expr, worker}
+      {expr, worker, _opts} -> {expr, worker}
+    end)
   end
 
   defp worker_module(path) do

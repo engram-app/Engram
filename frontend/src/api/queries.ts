@@ -16,6 +16,7 @@ import { noteName } from "@/lib/note-name";
 import { notify } from "@/lib/notify";
 import { encodePathSegments } from "@/lib/path";
 import { randomUuid } from "@/lib/random-uuid";
+import type { PaddleClientConfig } from "../billing/paddle-checkout";
 import { uuid7 } from "../crdt/uuid7";
 import { noteHref } from "../routes";
 import type { PlanLimits } from "../viewer/attachment-upload/upload-limits";
@@ -1449,9 +1450,7 @@ export function useEmbedBucket() {
 	});
 }
 
-export interface BillingConfig {
-	client_token: string;
-	environment: "sandbox" | "production";
+export interface BillingConfig extends PaddleClientConfig {
 	price_ids: {
 		starter: { monthly: string; annual: string };
 		pro: { monthly: string; annual: string };
@@ -1468,6 +1467,17 @@ export interface BillingConfig {
 }
 
 export type BillingCadence = "monthly" | "annual";
+
+/** Paddle.js boot config without a session: /pay opens checkout from Paddle
+ *  email links, which land in fresh, often logged-out tabs. */
+export function usePaddleClientConfig() {
+	return useQuery({
+		queryKey: ["billing", "paddle-client"],
+		queryFn: () => api.get<PaddleClientConfig>("/billing/paddle-client"),
+		staleTime: Number.POSITIVE_INFINITY,
+		retry: false,
+	});
+}
 
 export function useBillingConfig() {
 	return useQuery({

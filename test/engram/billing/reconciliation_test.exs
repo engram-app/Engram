@@ -223,6 +223,111 @@ defmodule Engram.Billing.ReconciliationTest do
                Reconciliation.run(7)
     end
 
+    # Prod shape behind the nightly `paddle_reconcile_period_unparseable` for
+    # sub_01m22dys... and sub_01m40n7t...: Paddle nulls current_billing_period
+    # once a subscription is canceled, and the webhook mirror stores nil.
+    test "a canceled sub with no current period is in sync, and does not warn" do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_canceled",
+        paddle_customer_id: "ctm_canceled",
+        tier: "starter",
+        status: "canceled",
+        current_period_end: nil
+      )
+
+      Engram.Paddle.ClientMock
+      |> expect(:list_subscriptions, fn _since ->
+        {:ok,
+         [
+           paddle_sub(%{
+             "id" => "sub_canceled",
+             "customer_id" => "ctm_canceled",
+             "status" => "canceled",
+             "current_billing_period" => nil
+           })
+         ]}
+      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert %{drift: []} = Reconciliation.run(7)
+        end)
+
+      refute log =~ "paddle_reconcile_period_unparseable"
+    end
+
+    # Paddle is ground truth for the period: a nil local period end is copied
+    # from Paddle (self-heal), not paged as drift every night.
+    test "a live Paddle period with no local period end is repaired, not drift" do
+      user = insert(:user)
+
+      sub =
+        insert(:subscription,
+          user: user,
+          paddle_subscription_id: "sub_nolocal",
+          paddle_customer_id: "ctm_nolocal",
+          tier: "starter",
+          status: "active",
+          current_period_end: nil
+        )
+
+      Engram.Paddle.ClientMock
+      |> expect(:list_subscriptions, fn _since ->
+        {:ok,
+         [
+           paddle_sub(%{
+             "id" => "sub_nolocal",
+             "customer_id" => "ctm_nolocal",
+             "current_billing_period" => %{"ends_at" => "2026-07-31T00:00:00Z"}
+           })
+         ]}
+      end)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert %{drift: []} = Reconciliation.run(7)
+      end)
+
+      repaired = Engram.Repo.with_tenant!(user.id, fn -> Engram.Repo.reload!(sub) end)
+      assert repaired.current_period_end == ~U[2026-07-31 00:00:00Z]
+    end
+
+    # nil on a canceled/paused sub is expected; a present but unreadable value
+    # is a Paddle contract change and must stay visible.
+    test "warns on a present but unparseable ends_at" do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_garbled",
+        paddle_customer_id: "ctm_garbled",
+        tier: "starter",
+        status: "active",
+        current_period_end: ~U[2026-06-30 00:00:00Z]
+      )
+
+      Engram.Paddle.ClientMock
+      |> expect(:list_subscriptions, fn _since ->
+        {:ok,
+         [
+           paddle_sub(%{
+             "id" => "sub_garbled",
+             "customer_id" => "ctm_garbled",
+             "current_billing_period" => %{"ends_at" => "not-a-date"}
+           })
+         ]}
+      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert %{drift: []} = Reconciliation.run(7)
+        end)
+
+      assert log =~ "paddle_reconcile_period_unparseable"
+    end
+
     test "tolerates period skew within 2 minutes" do
       user = insert(:user)
 

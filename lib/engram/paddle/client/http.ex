@@ -87,7 +87,22 @@ defmodule Engram.Paddle.Client.HTTP do
       iso = DateTime.to_iso8601(since)
       url = base_url() <> "/subscriptions"
       params = [{"updated_at[GTE]", iso}, {"per_page", 200}]
-      list_pages(url, params, headers(api_key), [], MapSet.new([url]), 1)
+      list_pages("subscriptions-list", url, params, headers(api_key), [], MapSet.new([url]), 1)
+    end
+  end
+
+  @impl true
+  def list_ready_transactions(%DateTime{} = since) do
+    with {:ok, api_key} <- fetch_api_key() do
+      url = base_url() <> "/transactions"
+      # 30 is the transactions list maximum (Paddle returns 30 for anything higher).
+      params = [
+        {"status", "ready"},
+        {"updated_at[GTE]", DateTime.to_iso8601(since)},
+        {"per_page", 30}
+      ]
+
+      list_pages("transactions-list", url, params, headers(api_key), [], MapSet.new([url]), 1)
     end
   end
 
@@ -97,16 +112,16 @@ defmodule Engram.Paddle.Client.HTTP do
   # bump if we ever approach it.
   @max_pages 50
 
-  defp list_pages(_url, _params, _headers, acc, _seen, page) when page > @max_pages do
+  defp list_pages(label, _url, _params, _headers, acc, _seen, page) when page > @max_pages do
     Logger.error(
-      "Paddle subscriptions-list page cap exceeded",
+      "Paddle #{label} page cap exceeded",
       Metadata.with_category(:error, :billing, reason_label: :max_pages_exceeded)
     )
 
     {:partial, Enum.reverse(acc) |> List.flatten(), :max_pages_exceeded}
   end
 
-  defp list_pages(url, params, headers, acc, seen, page) do
+  defp list_pages(label, url, params, headers, acc, seen, page) do
     case Req.get(url, params: params, headers: headers, receive_timeout: 15_000) do
       {:ok, %Req.Response{status: 200, body: %{"data" => data} = body}} when is_list(data) ->
         # `has_more` is Paddle's authoritative terminator: per the docs, the
@@ -131,7 +146,7 @@ defmodule Engram.Paddle.Client.HTTP do
               # be an infinite loop. Stop and surface what we have, tagged
               # so the caller treats it as drift signal, not a clean read.
               Logger.error(
-                "Paddle subscriptions-list pagination loop detected",
+                "Paddle #{label} pagination loop detected",
                 Metadata.with_category(:error, :billing, reason_label: :pagination_loop)
               )
 
@@ -140,6 +155,7 @@ defmodule Engram.Paddle.Client.HTTP do
               # Paddle's `next` is a fully-qualified URL with all query params
               # encoded — don't pass `params:` again or Req appends them.
               list_pages(
+                label,
                 next_url,
                 [],
                 headers,
@@ -151,12 +167,12 @@ defmodule Engram.Paddle.Client.HTTP do
         end
 
       {:ok, %Req.Response{status: status, body: body}} ->
-        log_non_2xx("subscriptions-list", status, body)
+        log_non_2xx(label, status, body)
         {:error, {:paddle_error, status, body}}
 
       {:error, reason} ->
         Logger.warning(
-          "Paddle subscriptions-list transport error",
+          "Paddle #{label} transport error",
           Metadata.with_category(:warning, :billing,
             reason: inspect(reason),
             reason_label: :transport

@@ -125,6 +125,10 @@ export const ERROR_CODES = [
 	// be forwarded — this is one deliberate bucket, not an attempt to mirror
 	// Paddle's own granular error codes.
 	"payment_declined",
+	// A payment attempt started and the buyer left before it finished: the
+	// only browser-side trace of a payment parked at action_required (a
+	// dismissed Apple Pay sheet, an unanswered 3DS challenge).
+	"payment_unfinished",
 	// A connection attempt (plugin device-link, MCP OAuth) hit a plan cap
 	// (LimitExceededError) rather than an ordinary failure.
 	"limit_exceeded",

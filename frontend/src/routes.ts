@@ -10,6 +10,8 @@ export const ROUTES = {
 	RESET_PASSWORD: "/reset-password",
 	OAUTH_CONSENT: "/oauth/consent",
 	OPERATOR_INSIGHTS: "/operator",
+	// Paddle's default payment link: Paddle appends `?_ptxn=<txn id>`.
+	PAY: "/pay",
 } as const;
 
 // Every vault-scoped URL sits under this one segment. Vault slugs are

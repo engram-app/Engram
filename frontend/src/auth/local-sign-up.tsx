@@ -8,6 +8,7 @@ import type { Translate } from "@/i18n/translate";
 import { destructiveAlert, heading } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { getApiBase, joinApiUrl } from "../api/base";
+import { SUPPORT_EMAIL, SUPPORT_MAILTO } from "../lib/support";
 import { ROUTES } from "../routes";
 import AuthLayout from "./auth-layout";
 import { safeReturnTo } from "./safe-return-to";
@@ -217,10 +218,10 @@ export default function LocalSignUp() {
 									),
 									email: (
 										<a
-											href="mailto:support@engram.page"
+											href={SUPPORT_MAILTO}
 											className="font-medium text-primary-ink hover:underline"
 										>
-											support@engram.page
+											{SUPPORT_EMAIL}
 										</a>
 									),
 								}}

@@ -257,6 +257,10 @@ defmodule Engram.Billing.Reconciliation do
           }
         ]
 
+      missing_local_period?(paddle_sub, local) ->
+        repair_period_end(paddle_sub, local)
+        []
+
       period_mismatch?(paddle_sub, local) ->
         [
           %{
@@ -285,25 +289,143 @@ defmodule Engram.Billing.Reconciliation do
     end
   end
 
+  # Paddle sends `current_billing_period: null` once a subscription is canceled
+  # or paused: there is no period to compare, and access is gated on the status
+  # (already matched above), not on a stale local period end. Paddle's side goes
+  # through the parser the webhook path writes with. Only a NON-nil `ends_at`
+  # that fails to parse is a contract change worth a warning.
   defp period_mismatch?(paddle_sub, local) do
-    with %{"ends_at" => ts} <- paddle_sub["current_billing_period"],
-         {:ok, paddle_dt, _offset} <- DateTime.from_iso8601(ts),
-         %DateTime{} = local_dt <- local.current_period_end do
-      abs(DateTime.diff(paddle_dt, local_dt, :second)) > @period_skew_seconds
-    else
-      other ->
-        # Couldn't parse — treat as no-drift to avoid spamming Sentry
-        # on every reconciliation cycle when Paddle returns an
-        # unexpected shape, but warn so a contract change is visible.
+    case {Engram.Billing.parse_period_end(paddle_sub), local.current_period_end} do
+      {%DateTime{} = paddle_dt, %DateTime{} = local_dt} ->
+        abs(DateTime.diff(paddle_dt, local_dt, :second)) > @period_skew_seconds
+
+      {nil, _local} ->
+        warn_if_unparseable(paddle_sub)
+        false
+
+      # {live Paddle period, nil local} is repaired in classify/2 before here.
+      _ ->
+        false
+    end
+  end
+
+  defp warn_if_unparseable(paddle_sub) do
+    case paddle_sub["current_billing_period"] do
+      %{"ends_at" => nil} ->
+        :ok
+
+      %{"ends_at" => ends_at} ->
         Logger.warning(
           "paddle_reconcile_period_unparseable",
           Metadata.with_category(:warning, :billing,
             paddle_subscription_id: paddle_sub["id"],
-            reason: inspect(other)
+            reason: inspect(ends_at)
           )
         )
 
-        false
+      _ ->
+        :ok
+    end
+  end
+
+  # Paddle has a live period and our mirror stored none (a webhook that
+  # carried no period, then nothing since). Paddle is ground truth for this
+  # field, so copy it over instead of paging the same drift every night.
+  defp missing_local_period?(paddle_sub, local) do
+    is_nil(local.current_period_end) and
+      match?(%DateTime{}, Engram.Billing.parse_period_end(paddle_sub))
+  end
+
+  defp repair_period_end(paddle_sub, local) do
+    period_end = Engram.Billing.parse_period_end(paddle_sub)
+
+    # Written under the owner's tenant, like the webhook mirror (#1758). By id
+    # with update_all, not update!: a row hard-deleted since the read (an
+    # account delete racing the run) updates nothing instead of raising and
+    # killing the rest of the diff.
+    Repo.with_tenant!(local.user_id, fn ->
+      Repo.update_all(from(s in Subscription, where: s.id == ^local.id),
+        set: [current_period_end: period_end]
+      )
+    end)
+
+    Logger.info(
+      "paddle_reconcile_period_repaired",
+      Metadata.with_category(:info, :billing,
+        paddle_subscription_id: paddle_sub["id"],
+        user_id: local.user_id
+      )
+    )
+  end
+
+  # A payment parked at `action_required` this long is a stalled checkout,
+  # not a 3DS challenge still in progress (the alert's own grace period).
+  @stalled_after_seconds 15 * 60
+  # The scan's cron interval: each run owns exactly one window of this width.
+  @stalled_scan_window_seconds 15 * 60
+
+  @doc """
+  Reports `ready` Paddle transactions whose newest payment parked at
+  `action_required` (3DS / wallet approval) and never moved on. Paddle sends
+  no webhook for that state, so without this scan engram-infra #1157's
+  stalled-checkout alert never sees the line it needs.
+
+  Dedupe without state: a run anchored at `anchor` (its cron tick, to the
+  minute) owns payments created in `[anchor - 30m, anchor - 15m)`. Consecutive ticks
+  tile the timeline, so each stalled payment is reported by exactly one run,
+  and a retry of the same job (same anchor) re-reads the same window.
+  ponytail: a tick that never runs (whole cluster down) skips its window; a
+  persisted cursor would close that gap if it ever matters.
+
+  Returns the number of transactions reported, or `{:error, reason}`.
+  """
+  @spec report_stalled_checkouts(DateTime.t()) :: non_neg_integer() | {:error, :fetch_failed}
+  def report_stalled_checkouts(%DateTime{} = anchor) do
+    if Application.get_env(:engram, :billing_enabled, false) do
+      window_end = DateTime.add(anchor, -@stalled_after_seconds, :second)
+      window_start = DateTime.add(window_end, -@stalled_scan_window_seconds, :second)
+
+      case Engram.Paddle.Client.impl().list_ready_transactions(window_start) do
+        {:ok, txns} ->
+          report_stalled(txns, window_start, window_end)
+
+        {:partial, txns, _reason} ->
+          report_stalled(txns, window_start, window_end)
+
+        {:error, reason} ->
+          # Bounded fields only, same reason as `paddle_reconcile_fetch_failed`.
+          Logger.error(
+            "paddle_stalled_scan_fetch_failed",
+            Metadata.with_category(:error, :billing,
+              error_kind: Telemetry.error_kind(reason),
+              status: paddle_error_status(reason)
+            )
+          )
+
+          {:error, :fetch_failed}
+      end
+    else
+      0
+    end
+  end
+
+  defp report_stalled(txns, window_start, window_end) do
+    txns
+    |> Enum.filter(&stalled_in_window?(&1, window_start, window_end))
+    |> Enum.count(fn txn ->
+      Engram.Billing.report_checkout_transaction("reconcile.stalled_scan", txn) ==
+        {:ok, :checkout_stalled}
+    end)
+  end
+
+  defp stalled_in_window?(txn, window_start, window_end) do
+    with %{"status" => "action_required", "created_at" => created} <-
+           Engram.Billing.newest_payment(List.wrap(txn["payments"])),
+         {:ok, created_at, _} <- DateTime.from_iso8601(created) do
+      DateTime.compare(created_at, window_start) != :lt and
+        DateTime.compare(created_at, window_end) == :lt
+    else
+      _ -> false
     end
   end
 

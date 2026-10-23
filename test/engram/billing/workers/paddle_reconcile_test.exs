@@ -72,4 +72,120 @@ defmodule Engram.Billing.Workers.PaddleReconcileTest do
 
     assert :ok = perform_job(PaddleReconcile, %{})
   end
+
+  describe "stalled-checkout scan" do
+    alias Engram.Billing.Reconciliation
+
+    # Tick 12:00 owns payments created in [11:30, 11:45).
+    @anchor ~U[2026-10-23 12:00:00Z]
+
+    defp txn(id, payments, extra \\ %{}) do
+      Map.merge(
+        %{
+          "id" => id,
+          "status" => "ready",
+          "origin" => "web",
+          "customer_id" => "ctm_1",
+          "payments" => payments
+        },
+        extra
+      )
+    end
+
+    defp payment(status, created_at),
+      do: %{
+        "status" => status,
+        "created_at" => created_at,
+        "method_details" => %{"type" => "apple_pay"}
+      }
+
+    defp stalled_events do
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [[:engram, :paddle, :checkout, :stalled]])
+
+      ref
+    end
+
+    test "reports a ready transaction parked at action_required 15+ minutes, once per window" do
+      ref = stalled_events()
+
+      Engram.Paddle.ClientMock
+      |> expect(:list_ready_transactions, fn since ->
+        assert since == ~U[2026-10-23 11:30:00Z]
+
+        {:ok,
+         [
+           txn("txn_stalled", [payment("action_required", "2026-10-23T11:40:00Z")]),
+           # Newer than 15 min: a 3DS challenge still in progress.
+           txn("txn_fresh", [payment("action_required", "2026-10-23T11:50:00Z")]),
+           # Older than the window: the previous tick already reported it.
+           txn("txn_prev_window", [payment("action_required", "2026-10-23T11:20:00Z")]),
+           # Newest attempt is a capture in flight, not a stall.
+           txn("txn_retried", [
+             payment("action_required", "2026-10-23T11:31:00Z"),
+             payment("authorized", "2026-10-23T11:41:00Z")
+           ]),
+           # Renewal: dunning, owned by subscription.past_due.
+           txn("txn_renewal", [payment("action_required", "2026-10-23T11:40:00Z")], %{
+             "origin" => "subscription_recurring"
+           }),
+           txn("txn_no_payments", [])
+         ]}
+      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert Reconciliation.report_stalled_checkouts(@anchor) == 1
+        end)
+
+      assert log =~ "checkout_payment_action_required"
+
+      assert_received {[:engram, :paddle, :checkout, :stalled], ^ref, %{count: 1},
+                       %{reason: :action_required}}
+
+      refute_received {[:engram, :paddle, :checkout, :stalled], ^ref, _, _}
+    end
+
+    test "the next tick does not re-report the same transaction" do
+      Engram.Paddle.ClientMock
+      |> expect(:list_ready_transactions, fn _since ->
+        {:ok, [txn("txn_stalled", [payment("action_required", "2026-10-23T11:40:00Z")])]}
+      end)
+
+      assert Reconciliation.report_stalled_checkouts(DateTime.add(@anchor, 900, :second)) == 0
+    end
+
+    test "a Paddle fetch failure errors the job so Oban retries the same window" do
+      Engram.Paddle.ClientMock
+      |> expect(:list_ready_transactions, fn _ -> {:error, {:paddle_error, 500, %{}}} end)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, :fetch_failed} =
+                 perform_job(PaddleReconcile, %{"scan" => "stalled_checkouts"})
+      end)
+    end
+
+    # The grace: a window anchored on the tick ends 15 minutes before the run,
+    # so a payment younger than that can never be reported.
+    test "anchors on the cron tick, to the minute, so windows tile and keep the grace" do
+      assert PaddleReconcile.scan_anchor(~U[2026-10-23 12:14:00.020Z]) == ~U[2026-10-23 12:14:00Z]
+      # DB clock a hair early: still that tick, not the previous minute.
+      assert PaddleReconcile.scan_anchor(~U[2026-10-23 12:13:59.990Z]) == ~U[2026-10-23 12:14:00Z]
+      assert PaddleReconcile.scan_anchor(~U[2026-10-23 12:29:00.400Z]) == ~U[2026-10-23 12:29:00Z]
+    end
+
+    test "is a no-op on self-host" do
+      Application.put_env(:engram, :billing_enabled, false)
+      assert Reconciliation.report_stalled_checkouts(@anchor) == 0
+    end
+
+    # Same worker, different job: uniqueness on [:worker] alone would silently
+    # drop one when both are enqueued within the unique period.
+    test "the daily drift run and the scan are not deduped against each other" do
+      {:ok, _} = Oban.insert(PaddleReconcile.new(%{}))
+      {:ok, scan} = Oban.insert(PaddleReconcile.new(%{"scan" => "stalled_checkouts"}))
+      refute scan.conflict?
+      assert_enqueued(worker: PaddleReconcile, args: %{"scan" => "stalled_checkouts"})
+    end
+  end
 end

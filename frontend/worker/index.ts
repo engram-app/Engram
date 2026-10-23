@@ -88,12 +88,43 @@ async function proxyToPostHog(request: Request): Promise<Response> {
 	return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
 }
 
+// Paddle's Apple Pay domain association file (public/.well-known/), which
+// Apple re-fetches to keep app.engram.page verified for Apple Pay. Every other
+// /.well-known path 404s: without this the SPA fallback answers them with
+// index.html + 200, which is what broke the Apple Pay check. OAuth/MCP
+// discovery lives on mcp.engram.page (Phoenix), never on this host.
+const APPLE_PAY_PATH = "/.well-known/apple-developer-merchantid-domain-association";
+
+async function serveWellKnown(request: Request, env: Env, pathname: string): Promise<Response> {
+	const notFound = new Response("Not Found", {
+		status: 404,
+		headers: { "cache-control": "no-store" },
+	});
+	if (pathname !== APPLE_PAY_PATH) {
+		return notFound;
+	}
+
+	const asset = await env.ASSETS.fetch(request);
+	// A missing asset falls through to the SPA shell; never hand Apple HTML.
+	if (asset.status >= 400 || asset.headers.get("content-type")?.startsWith("text/html")) {
+		return notFound;
+	}
+
+	const headers = new Headers(asset.headers);
+	headers.set("content-type", "text/plain; charset=UTF-8");
+	return new Response(asset.body, { status: asset.status, headers });
+}
+
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
 		const { pathname } = new URL(request.url);
 
 		if (pathname === "/ph" || pathname.startsWith("/ph/")) {
 			return await proxyToPostHog(request);
+		}
+
+		if (pathname === "/.well-known" || pathname.startsWith("/.well-known/")) {
+			return await serveWellKnown(request, env, pathname);
 		}
 
 		if (pathname === "/api/mcp" || pathname.startsWith("/api/mcp/")) {
@@ -113,3 +144,5 @@ export default {
 		return await env.ASSETS.fetch(request);
 	},
 };
+
+export { APPLE_PAY_PATH };

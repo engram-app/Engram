@@ -94,6 +94,20 @@ defmodule Engram.Paddle.Client do
               | {:error, term()}
 
   @doc """
+  List `ready` (unpaid, checkout still open) transactions updated since the
+  given DateTime, paginated.
+
+  Paddle endpoint: `GET /transactions?status=ready&updated_at[GTE]={iso}`.
+  Same pagination and return contract as `list_subscriptions/1`. Feeds the
+  stalled-checkout scan in `Engram.Billing.Workers.PaddleReconcile`: Paddle
+  sends no webhook when a payment attempt parks at `action_required`.
+  """
+  @callback list_ready_transactions(since :: DateTime.t()) ::
+              {:ok, [map()]}
+              | {:partial, [map()], :max_pages_exceeded | :pagination_loop}
+              | {:error, term()}
+
+  @doc """
   Cancel a Paddle subscription.
 
   Paddle endpoint: `POST /subscriptions/{id}/cancel` with body
