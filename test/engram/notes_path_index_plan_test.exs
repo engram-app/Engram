@@ -69,6 +69,13 @@ defmodule Engram.NotesPathIndexPlanTest do
   end
 
   test "the delete-wins resurrection check uses the tombstone path index", %{user: u, vault: v} do
+    # Tombstones too, as setup seeds live notes. With one tombstone the two
+    # partial indexes over `deleted_at IS NOT NULL` (this one, led by
+    # path_hmac, and `notes_path_tomb` on (vault_id, path_id, seq)) tie on
+    # cost and the pick flips with ANALYZE's sample. A real vault has many
+    # tombstones, where only the path_hmac-led index narrows to one path.
+    now = DateTime.utc_now()
+    for _ <- 1..300, do: insert(:note, user: u, vault: v, deleted_at: now)
     :ok = Notes.delete_note(u, v, "A.md")
 
     # Tombstones enough that the planner weighs selectivity: with one, every

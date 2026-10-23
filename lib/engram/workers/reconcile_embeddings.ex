@@ -947,9 +947,14 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     end
   end
 
-  defp wake(user, backoff_until) do
-    budget = spendable(user)
+  defp wake(user, backoff_until), do: wake(user, spendable(user), backoff_until)
 
+  # An empty bucket wakes nothing (`fitting/2` returns [] when nothing is
+  # left), so skip the tenant transaction and the queue read. This runs every
+  # tick for every user with a parked note.
+  defp wake(_user, budget, _backoff_until) when is_number(budget) and budget <= 0, do: :ok
+
+  defp wake(user, budget, backoff_until) do
     woken =
       Repo.with_tenant!(user.id, fn ->
         candidates =

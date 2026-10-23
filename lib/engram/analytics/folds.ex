@@ -37,9 +37,14 @@ defmodule Engram.Analytics.Folds do
     end)
   end
 
-  @doc "Read and reset `names` for `key`, as `%{name => n}`."
+  @doc """
+  Read and reset `names` for `key`, as `%{name => n}`. Clears the key's props
+  too, so a key the next event picked up leaves nothing in the table.
+  """
   @spec take(term(), [atom()]) :: %{atom() => non_neg_integer()}
   def take(key, names) do
+    true = :ets.delete(@table, {:props, key})
+
     Map.new(names, fn name ->
       case :ets.take(@table, {key, name}) do
         [{_, n}] -> {name, n}
@@ -62,8 +67,9 @@ defmodule Engram.Analytics.Folds do
       |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
 
     for {{event, user_id, _dedupe} = key, names} <- pending do
-      counts = take(key, names)
+      # Props first: take/2 clears them.
       props = take_props(key)
+      counts = take(key, names)
 
       if Enum.any?(counts, fn {_name, n} -> n > 0 end) do
         Engram.Analytics.track(

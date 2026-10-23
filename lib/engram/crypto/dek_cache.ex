@@ -28,9 +28,9 @@ defmodule Engram.Crypto.DekCache do
   # A claim reads as a miss to `get/1`; this expiry only lets the sweep reap
   # the claim of a loader that crashed.
   @pending_ms 60_000
-  # How long `claim_or_await/1` waits on another loader before claiming over
-  # it (`:dek_await_ms`). Bounds a caller behind a stalled KMS call (ExAws
-  # retries with backoff).
+  # How long `claim_or_await/1` waits on another loader before failing with
+  # `:dek_load_timeout` (`:dek_await_ms`). Bounds a caller behind a stalled
+  # KMS call (ExAws retries with backoff).
   @await_ms 15_000
   @sweep_interval_ms :timer.minutes(5)
 
@@ -103,7 +103,8 @@ defmodule Engram.Crypto.DekCache do
   concurrent miss unwrapped on its own: one KMS Decrypt per caller.
 
   `{:error, reason}` is the loader's own failure, handed to every waiter so a
-  failing KMS costs one call per burst, not one per caller. `:retry` means the
+  failing KMS costs one call per burst, not one per caller, or
+  `:dek_load_timeout` when the loader outlasts the await budget. `:retry` means the
   claim ended without a DEK or an error (loader died, or an invalidate
   landed) and the caller should ask again. Loaders are monitored, so a
   crashed loader wakes its waiters instead of leaving them on the claim until
@@ -116,9 +117,13 @@ defmodule Engram.Crypto.DekCache do
     await_ms = Application.get_env(:engram, :dek_await_ms, @await_ms)
     GenServer.call(__MODULE__, {:claim_or_await, user_id}, await_ms)
   catch
-    # A loader stuck past the await budget: claim over it (monitored) rather
-    # than hang. Its late put_if_claimed then reads :stale.
-    :exit, {:timeout, _} -> {:claimed, claim(user_id)}
+    # A loader stuck past the await budget (a stalled KMS call). Fail rather
+    # than claim over it: every waiter parked on it times out together, and
+    # each claiming over the last is one KMS call per caller again. The
+    # loader keeps its claim and still fills the slot if it finishes; if it
+    # never does, the claim expires after @pending_ms and the next caller
+    # claims. A late reply to this call is dropped (call aliases).
+    :exit, {:timeout, _} -> {:error, :dek_load_timeout}
   end
 
   @doc """
