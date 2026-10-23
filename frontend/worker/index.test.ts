@@ -120,7 +120,7 @@ describe("worker /.well-known", () => {
 		);
 		const wrangler = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
 		const runWorkerFirst = JSON.parse(
-			wrangler.match(/"run_worker_first":\s*(\[[^\]]*\])/)?.[1] ?? "[]",
+			wrangler.match(/"run_worker_first":\s*(?<list>\[[^\]]*\])/)?.groups?.list ?? "[]",
 		);
 		expect(runWorkerFirst).toEqual(expect.arrayContaining(["/.well-known", "/.well-known/*"]));
 	});
