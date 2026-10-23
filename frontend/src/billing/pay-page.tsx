@@ -17,6 +17,15 @@ import { checkoutSettings, initPaddle } from "./paddle-checkout";
 // Paddle's own id shape (`txn_` + 26 lowercase base32 chars, per its API spec).
 const TRANSACTION_ID = /^txn_[a-z\d]{26}$/;
 
+// Paddle API error codes that mean the transaction itself can never be paid
+// here (missing, already paid or canceled). Anything else on checkout.error
+// (a front-end error, a network or API blip) is worth a retry.
+const DEAD_TRANSACTION_CODES = new Set([
+	"not_found",
+	"transaction_not_ready_cannot_process_payment",
+	"transaction_immutable",
+]);
+
 type View = "loading" | "invalid" | "paid" | "canceled" | "closed" | "completed" | "error";
 
 /** The page's view for a Paddle.js event, or null to keep the current one. */
@@ -37,7 +46,9 @@ export function viewForEvent(event: PaddleEventData, settled: boolean): View | n
 			return status === "canceled" ? "canceled" : null;
 		}
 		case CheckoutEventNames.CHECKOUT_ERROR:
-			return "invalid";
+			return event.type === "api_error" && DEAD_TRANSACTION_CODES.has(event.code ?? "")
+				? "invalid"
+				: "error";
 		default:
 			return null;
 	}
@@ -55,6 +66,8 @@ export default function PayPage() {
 	const { t, renderedLocale } = useT();
 	const [view, setView] = useState<View>(valid ? "loading" : "invalid");
 	const paddleRef = useRef<Paddle | undefined>(undefined);
+	// Paddle.js loaded, so a retry can reopen the overlay.
+	const [paddleReady, setPaddleReady] = useState(false);
 	// Completed, already paid or canceled: nothing left to reopen.
 	const settledRef = useRef(false);
 	// Read through a ref: the locale resolves after first paint, and re-running
@@ -88,7 +101,7 @@ export default function PayPage() {
 			if (next === "completed" || next === "paid" || next === "canceled") {
 				settledRef.current = true;
 			}
-			if (next === "paid" || next === "canceled") {
+			if (next === "paid" || next === "canceled" || next === "invalid" || next === "error") {
 				paddleRef.current?.Checkout.close();
 			}
 			if (next) {
@@ -104,6 +117,7 @@ export default function PayPage() {
 					return;
 				}
 				paddleRef.current = paddle;
+				setPaddleReady(true);
 				open();
 			})
 			.catch(() => setView("error"));
@@ -177,6 +191,11 @@ export default function PayPage() {
 				{shownView === "error" && (
 					<>
 						<p role="alert">{t("Something went wrong with checkout. Please try again.")}</p>
+						{paddleReady ? (
+							<Button type="button" onClick={open}>
+								{t("Try again")}
+							</Button>
+						) : null}
 						{home}
 					</>
 				)}

@@ -120,4 +120,31 @@ describe("PayPage (Paddle default payment link)", () => {
 		).toBeInTheDocument();
 		expect(close).toHaveBeenCalled();
 	});
+
+	it("treats an API error for a dead transaction as an invalid link and closes the overlay", async () => {
+		renderAt(`/pay?_ptxn=${TXN}`);
+		await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
+		act(() =>
+			emit({
+				name: "checkout.error",
+				type: "api_error",
+				code: "transaction_not_ready_cannot_process_payment",
+			} as never),
+		);
+		expect(
+			screen.getByRole("heading", { name: "This payment link is invalid or has expired" }),
+		).toBeInTheDocument();
+		expect(close).toHaveBeenCalled();
+	});
+
+	it("offers Try again on a transient checkout error, reopening the same transaction", async () => {
+		renderAt(`/pay?_ptxn=${TXN}`);
+		await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
+		act(() => emit({ name: "checkout.error", type: "front-end_error", code: "unknown" } as never));
+		expect(screen.getByRole("alert")).toBeInTheDocument();
+		expect(close).toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+		expect(open).toHaveBeenCalledTimes(2);
+		expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ transactionId: TXN }));
+	});
 });
