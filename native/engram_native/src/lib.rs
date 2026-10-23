@@ -603,11 +603,13 @@ fn md_outline_nif(content: &str) -> NifResult<(Option<outline::Outline>, usize)>
     }
 }
 
-/// `Engram.Notes.LineageAudit`: `(client, live_utf16_len)` of every live root
-/// insert into the root type `root` (see yjs_lineage.rs), `None` for an update that
-/// does not decode. Always dirty: an ops audit over whole stored docs.
+/// `Engram.Notes.LineageAudit`: `(client, live_utf16_len, total_utf16_len)` of
+/// every root insert into the root type `root`, wholly deleted ones included
+/// (see yjs_lineage.rs), `None` for an update that does not decode. `update`
+/// must be yrs's own fresh re-encode, never client bytes (yjs_lineage.rs says
+/// why). Always dirty: an ops audit over whole stored docs.
 #[rustler::nif(schedule = "DirtyCpu")]
-fn yjs_root_inserts_nif(update: Binary, root: &str) -> (Option<Vec<(u64, u32)>>, usize) {
+fn yjs_root_inserts_nif(update: Binary, root: &str) -> (Option<Vec<(u64, u32, u32)>>, usize) {
     let (r, peak) = memory::measured(|| yjs_lineage::root_inserts(update.as_slice(), root));
     (r.ok(), peak)
 }

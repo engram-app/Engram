@@ -205,12 +205,19 @@ defmodule Engram.Native do
     do: call(:md_outline, text, %{dirty: true}, fn -> md_outline_nif(text) end)
 
   @doc """
-  `{client, live_utf16_len}` for every LIVE root insert (no origin, no right
-  origin: written into an empty sequence) into the root type `root` of a Yjs
-  v1 update, or `:error` when it does not decode. One entry per root struct;
-  a root whose whole range is in the update's delete set is dropped. More
-  than one entry means rival lineages. Read-only audit,
+  `{client, live_utf16_len, total_utf16_len}` for EVERY root insert (no
+  origin, no right origin: written into an empty sequence) into the root type
+  `root` of a Yjs v1 update, wholly deleted ones included, or `:error` when
+  it does not decode. One entry per root struct. More than one live entry is
+  rival lineages; one live beside dead ones is a suspect (a cleaned-up
+  duplicate, or a fresh seed over a cleared note). Read-only audit,
   `Engram.Notes.LineageAudit`. Always dirty.
+
+  `update` must be yrs's own fresh re-encode of stored state
+  (`Yex.encode_state_as_update/1`), never client bytes: yrs's `IdRange` and
+  `Any` decoders allocate from varint lengths, and an allocation failure
+  aborts the whole BEAM; and a raise would carry the plaintext binary into
+  error reports.
   """
   def yjs_root_inserts(update, root) when is_binary(update) and is_binary(root) do
     case call(:yjs_root_inserts, update, %{dirty: true}, fn ->

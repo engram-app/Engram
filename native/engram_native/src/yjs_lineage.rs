@@ -3,13 +3,21 @@
 //! A ROOT insert is an item with neither an origin nor a right origin: it was
 //! inserted into an EMPTY sequence. Yjs keeps deleted neighbours as origins,
 //! so clearing a note and retyping it does not mint a new root; only a client
-//! that wrote into a doc it had never synced does. Two clients owning root
-//! inserts in the same body text is two lineages, which Yjs unions into a
-//! doubled body (the fresh-device seed, #846, #476).
+//! that wrote into a doc it had never synced does. Two root lineages in the
+//! same body text is a writer that seeded a doc it had never synced, which
+//! Yjs unions into a doubled body (the fresh-device seed, #846, #476).
 //!
 //! yrs keeps `Item.origin` crate-private, so this walks the update's struct
 //! section with yrs's public decoder, the same steps as `Update::decode`.
-//! Input is the server's own stored state, not client bytes.
+//!
+//! Input MUST be yrs's own fresh re-encode of the server's stored state
+//! (`encode_state_as_update`), never client bytes, for two reasons:
+//!
+//! * yrs's `IdRange` and `Any` decoders allocate from varint lengths read
+//!   off the wire; a crafted length is an allocation failure, and that
+//!   aborts the whole BEAM (`catch_unwind` cannot stop it).
+//! * a raise would carry the input, a plaintext note body, into the error
+//!   report.
 
 use std::ops::Range;
 
@@ -29,12 +37,13 @@ struct Lineage {
     clocks: Range<u32>,
 }
 
-/// `(client, live_utf16_len)` for every LIVE root insert into the root-level
-/// type named `root` (map entries excluded). One entry per root struct, so
-/// two entries from one client are two lineages. A root whose whole range is
-/// deleted (a rival copy the user already removed) is dropped; one with only
-/// its head deleted is kept, since its live continuation carries an origin.
-pub fn root_inserts(update: &[u8], root: &str) -> Result<Vec<(u64, u32)>, Error> {
+/// `(client, live_utf16_len, total_utf16_len)` for EVERY root insert into the
+/// root-level type named `root` (map entries excluded), wholly deleted ones
+/// included. One entry per root struct, so two entries from one client are two
+/// lineages. Live alone cannot tell "rival deleted, original live" from
+/// "original deleted, rival live" (a cleared note a fresh device re-seeded):
+/// both leave one live lineage, so the caller needs the dead ones too.
+pub fn root_inserts(update: &[u8], root: &str) -> Result<Vec<(u64, u32, u32)>, Error> {
     let mut d = DecoderV1::new(Cursor::new(update));
     let clients: u32 = d.read_var()?;
     let mut lineages: Vec<Lineage> = Vec::new();
@@ -106,12 +115,12 @@ pub fn root_inserts(update: &[u8], root: &str) -> Result<Vec<(u64, u32)>, Error>
     let deleted = DeleteSet::decode(&mut d)?;
     Ok(lineages
         .into_iter()
-        .filter_map(|l| {
+        .map(|l| {
+            let total = l.clocks.end - l.clocks.start;
             let gone = deleted
                 .range(&l.client)
                 .map_or(0, |r| covered(r.iter(), &l.clocks));
-            let live = (l.clocks.end - l.clocks.start).saturating_sub(gone);
-            (live > 0).then_some((l.client, live))
+            (l.client, total.saturating_sub(gone), total)
         })
         .collect())
 }
@@ -145,15 +154,11 @@ mod tests {
             .encode_state_as_update_v1(&StateVector::default())
     }
 
-    fn clients(update: &[u8]) -> Vec<u64> {
-        let mut c: Vec<u64> = root_inserts(update, "content")
-            .unwrap()
-            .into_iter()
-            .map(|(c, _)| c)
-            .collect();
-        c.sort();
-        c.dedup();
-        c
+    /// Sorted `(client, live, total)`.
+    fn roots(doc: &Doc) -> Vec<(u64, u32, u32)> {
+        let mut r = root_inserts(&state(doc), "content").unwrap();
+        r.sort();
+        r
     }
 
     fn seeded(client: u64, text: &str) -> Doc {
@@ -169,41 +174,59 @@ mod tests {
             .unwrap();
     }
 
-    #[test]
-    fn one_lineage_with_edits_is_one_root_client() {
-        let a = seeded(1, "first body line.\n");
-        let b = Doc::with_client_id(2);
-        apply(&b, &state(&a));
-        let t = b.get_or_insert_text("content");
-        t.insert(&mut b.transact_mut(), 17, "second line.\n");
-        t.insert(&mut b.transact_mut(), 0, "# title\n");
-        assert_eq!(clients(&state(&b)), vec![1]);
+    fn body(doc: &Doc) -> String {
+        doc.get_or_insert_text("content")
+            .get_string(&doc.transact())
     }
 
-    #[test]
-    fn a_fresh_client_seeding_an_existing_note_is_two() {
-        let a = seeded(1, "first body line.\n");
-        let fresh = seeded(2, "first body line.\nsecond line.\n");
-        apply(&a, &state(&fresh));
-        let body = a.get_or_insert_text("content").get_string(&a.transact());
-        assert_eq!(body.matches("first body line.").count(), 2); // the doubling
-        let roots = root_inserts(&state(&a), "content").unwrap();
-        assert_eq!(clients(&state(&a)), vec![1, 2]);
-        assert!(roots.contains(&(2, 30)));
-    }
-
-    #[test]
-    fn clearing_and_retyping_mints_no_new_root() {
+    /// Client 1 wrote "old text"; client 2 synced it, cleared it and typed
+    /// "new text".
+    fn cleared_and_retyped() -> Doc {
         let a = seeded(1, "old text");
         let b = Doc::with_client_id(2);
         apply(&b, &state(&a));
         let t = b.get_or_insert_text("content");
         t.remove_range(&mut b.transact_mut(), 0, 8);
         t.insert(&mut b.transact_mut(), 0, "new text");
-        // Retyping hangs off client 1's deleted structs, so client 2 is not a
-        // root. Client 1's root is wholly deleted, so no LIVE lineage remains
-        // (I3): a cleared-and-retyped note is healthy, never a rival.
-        assert_eq!(clients(&state(&b)), Vec::<u64>::new());
+        b
+    }
+
+    #[test]
+    fn one_lineage_with_edits_is_one_root() {
+        let a = seeded(1, "first body line.\n");
+        let b = Doc::with_client_id(2);
+        apply(&b, &state(&a));
+        let t = b.get_or_insert_text("content");
+        t.insert(&mut b.transact_mut(), 17, "second line.\n");
+        t.insert(&mut b.transact_mut(), 0, "# title\n");
+        assert_eq!(roots(&b), vec![(1, 17, 17)]);
+    }
+
+    #[test]
+    fn a_plain_doubled_note_has_two_live_roots() {
+        // RIVAL: a fresh client seeded an existing note.
+        let a = seeded(1, "first body line.\n");
+        apply(&a, &state(&seeded(2, "first body line.\nsecond line.\n")));
+        assert_eq!(body(&a).matches("first body line.").count(), 2);
+        assert_eq!(roots(&a), vec![(1, 17, 17), (2, 30, 30)]);
+    }
+
+    #[test]
+    fn clearing_and_retyping_mints_no_new_root() {
+        // HEALTHY: retyping hangs off client 1's deleted structs, so client 2
+        // is not a root. One lineage, wholly deleted.
+        assert_eq!(roots(&cleared_and_retyped()), vec![(1, 0, 8)]);
+    }
+
+    #[test]
+    fn a_fresh_seed_over_a_cleared_note_keeps_the_dead_root() {
+        // SUSPECT: one LIVE root only, yet the body is doubled. Live roots
+        // alone call this healthy (the I1 false negative); the dead root
+        // beside a live one is what flags it.
+        let b = cleared_and_retyped();
+        apply(&b, &state(&seeded(3, "new text")));
+        assert_eq!(body(&b), "new textnew text");
+        assert_eq!(roots(&b), vec![(1, 0, 8), (3, 8, 8)]);
     }
 
     #[test]
@@ -216,15 +239,14 @@ mod tests {
             .get_or_insert_text("other")
             .insert(&mut other.transact_mut(), 0, "y");
         apply(&a, &state(&other));
-        assert_eq!(clients(&state(&a)), vec![1]);
+        assert_eq!(roots(&a), vec![(1, 4, 4)]);
     }
 
     /// The doubled doc and the offset of client 2's rival copy (30 units).
     fn doubled() -> (Doc, u32) {
         let a = seeded(1, "first body line.\n");
         apply(&a, &state(&seeded(2, "first body line.\nsecond line.\n")));
-        let body = a.get_or_insert_text("content").get_string(&a.transact());
-        let at = if body.starts_with("first body line.\nsecond") {
+        let at = if body(&a).starts_with("first body line.\nsecond") {
             0
         } else {
             17
@@ -238,12 +260,13 @@ mod tests {
     }
 
     #[test]
-    fn a_deleted_rival_copy_is_not_a_lineage() {
-        // The user removed the duplicate by hand: its structs stay as
-        // tombstones, but it is no longer a live lineage.
+    fn a_deleted_rival_copy_is_a_dead_root() {
+        // SUSPECT, not healthy: the user removed the duplicate by hand, which
+        // leaves the same shape (one live root, one dead) as a fresh seed over
+        // a cleared note. Only the text tells them apart, so triage reads it.
         let (a, at) = doubled();
         remove(&a, at, 30);
-        assert_eq!(root_inserts(&state(&a), "content").unwrap(), vec![(1, 17)]);
+        assert_eq!(roots(&a), vec![(1, 17, 17), (2, 0, 30)]);
     }
 
     #[test]
@@ -252,23 +275,19 @@ mod tests {
         // its live continuation carries an origin.
         let (a, at) = doubled();
         remove(&a, at, 6);
-        let roots = root_inserts(&state(&a), "content").unwrap();
-        assert_eq!(clients(&state(&a)), vec![1, 2]);
-        assert!(roots.contains(&(2, 24)), "{roots:?}");
+        assert_eq!(roots(&a), vec![(1, 17, 17), (2, 24, 30)]);
     }
 
     #[test]
     fn a_partly_deleted_rival_reports_its_live_length() {
         let (a, at) = doubled();
         remove(&a, at + 10, 20);
-        let roots = root_inserts(&state(&a), "content").unwrap();
-        assert_eq!(roots.len(), 2);
-        assert!(roots.contains(&(2, 10)), "{roots:?}");
+        assert_eq!(roots(&a), vec![(1, 17, 17), (2, 10, 30)]);
     }
 
     #[test]
     fn empty_and_malformed_updates() {
-        assert_eq!(clients(&state(&Doc::new())), Vec::<u64>::new());
+        assert_eq!(roots(&Doc::new()), Vec::<(u64, u32, u32)>::new());
         assert!(root_inserts(&[0xff, 0xff, 0xff], "content").is_err());
     }
 }

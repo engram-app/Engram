@@ -558,13 +558,26 @@ the NIF does not win.
 
 ### Rival-lineage audit (`yjs_root_inserts`, 2026-10-20)
 
-`Engram.Notes.LineageAudit` (read-only, run via `bin/engram rpc`) counts the
-clients that own a ROOT insert (no origin, no right origin) in a note's body.
-More than one is a doubled note (the fresh-device seed, plugin #619). y_ex
+`Engram.Notes.LineageAudit` (read-only, run via `bin/engram rpc`) lists every
+ROOT insert (no origin, no right origin) in a note's body as `{client, live,
+total}` UTF-16 lengths, wholly deleted roots included. Two or more live roots
+is a RIVAL: a doubled body (the fresh-device seed, plugin #619). One live root
+beside a dead one is a SUSPECT: either a duplicate the user deleted, or a
+fresh seed over a cleared-and-retyped note ("new textnew text"). Counting live
+roots alone missed that second case, so the NIF returns the dead ones too;
+triage reads the text to tell them apart, and the audit never outputs it. y_ex
 and yrs keep `Item.origin` private, so `yjs_lineage.rs` walks the stored v1
 update with yrs's public `DecoderV1` + `ItemContent::decode`, the same steps
 as `Update::decode`. `yrs` is pinned to y_ex's minor (0.25). Always dirty: an
 ops audit, never on a request path.
+
+The input must only ever be yrs's own fresh re-encode of stored state
+(`Yex.encode_state_as_update/1`), never client bytes:
+
+- yrs's `IdRange` and `Any` decoders allocate from varint lengths read off
+  the wire (`Vec::with_capacity(len)`). A crafted length is an allocation
+  failure, and that aborts the whole BEAM (rule 5 below).
+- A raise would carry the input, a plaintext note body, into error reports.
 
 ## The memory standard
 
