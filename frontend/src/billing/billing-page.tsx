@@ -261,36 +261,48 @@ export default function BillingPage({
 	// an abandonment just because it lands after this flag was reset.
 	const checkoutCompletedRef = useRef(false);
 	// Per attempt, for the exit report (reportCheckoutExit): a checkout frame
-	// is up, a payment was started in it, and its exit was already reported
-	// (checkout.closed and pagehide can both fire; count it once).
+	// is up (and which one, by Paddle's `che_` id), a payment was started in
+	// it, and its exit was already reported (checkout.closed and pagehide can
+	// both fire; count it once).
 	const checkoutOpenRef = useRef(false);
+	const checkoutIdRef = useRef<string | null>(null);
 	const paymentAttemptedRef = useRef(false);
 	const checkoutExitReportedRef = useRef(false);
 
-	// A checkout ended without completing: closed in the frame, or the tab went
-	// away (pagehide; most real abandons close the tab, so checkout.closed never
-	// fires). A payment already started means the buyer got stuck mid-payment,
-	// which Paddle.js has no event for, so that is reported as a stall too.
+	// A checkout ended without completing. In the frame (checkout.closed): a
+	// payment already started means the buyer got stuck mid-payment (a
+	// dismissed Apple Pay sheet, an unanswered 3DS challenge), which Paddle.js
+	// has no event for, so that is reported as a stall too. On pagehide (most
+	// real abandons close the tab, so checkout.closed never fires) only a
+	// checkout with NO payment started is reported: once a payment is in
+	// flight the page can unload for a redirect-based method or a dropped
+	// checkout.completed, and the server (webhooks + the stalled scan) is the
+	// authority on whether it finished.
 	const reportCheckoutExit = useCallback((beacon: boolean) => {
 		if (
 			!checkoutOpenRef.current ||
 			checkoutCompletedRef.current ||
-			checkoutExitReportedRef.current
+			checkoutExitReportedRef.current ||
+			(beacon && paymentAttemptedRef.current)
 		) {
 			return;
 		}
 		checkoutExitReportedRef.current = true;
-		// Spread so the closed-in-frame path keeps the plain two-argument call.
-		const options = beacon ? [{ beacon: true }] : [];
 		const method = checkoutMethodRef.current;
 		if (paymentAttemptedRef.current) {
-			track("checkout_stalled", { method, reason: "payment_unfinished" }, ...options);
+			track("checkout_stalled", { method, reason: "payment_unfinished" }, { beacon });
 		}
-		track("checkout_abandoned", { method }, ...options);
+		track("checkout_abandoned", { method }, { beacon });
 	}, []);
 
 	useEffect(() => {
-		const onPageHide = () => reportCheckoutExit(true);
+		// `persisted` = entering the back/forward cache: the page may come back
+		// and the buyer finish, so it is not a departure.
+		const onPageHide = (event: PageTransitionEvent) => {
+			if (!event.persisted) {
+				reportCheckoutExit(true);
+			}
+		};
 		window.addEventListener("pagehide", onPageHide);
 		return () => window.removeEventListener("pagehide", onPageHide);
 	}, [reportCheckoutExit]);
@@ -426,11 +438,26 @@ export default function BillingPage({
 			}
 			switch (event.name) {
 				case CheckoutEventNames.CHECKOUT_LOADED: {
-					// Once per checkout, so a fresh exit report (also covers the
-					// payment-method-update frame, which skips handleStartCheckout).
+					// A NEW checkout (by its `che_` id) gets a fresh exit report; this
+					// also covers the payment-method-update frame, which skips
+					// handleStartCheckout. Paddle documents one loaded per checkout, but
+					// a repeat for the same id must not wipe an attempt in flight.
 					checkoutOpenRef.current = true;
-					paymentAttemptedRef.current = false;
-					checkoutExitReportedRef.current = false;
+					{
+						const data: unknown = event.data;
+						const id =
+							typeof data === "object" &&
+							data !== null &&
+							"id" in data &&
+							typeof data.id === "string"
+								? data.id
+								: null;
+						if (id === null || id !== checkoutIdRef.current) {
+							checkoutIdRef.current = id;
+							paymentAttemptedRef.current = false;
+							checkoutExitReportedRef.current = false;
+						}
+					}
 					// Only for a tier checkout (handleStartCheckout set the ref) — the
 					// payment-method-update flow (handleUpdatePayment) also opens a
 					// Paddle frame via a bare transactionId, and that isn't the
@@ -568,6 +595,7 @@ export default function BillingPage({
 			checkoutMethodRef.current = "unknown";
 			checkoutCompletedRef.current = false;
 			checkoutOpenRef.current = true;
+			checkoutIdRef.current = null;
 			paymentAttemptedRef.current = false;
 			checkoutExitReportedRef.current = false;
 			if (isInline) {
