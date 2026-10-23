@@ -395,6 +395,57 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			expect(mockTrack).toHaveBeenCalledWith("checkout_abandoned", { method: "unknown" });
 		});
 
+		// Paddle.js has no event for a payment parked at action_required (a
+		// dismissed Apple Pay sheet, an unanswered 3DS challenge). The visible
+		// symptom is a buyer who started paying and then left: report it.
+		it("emits checkout_stalled when checkout closes after a payment attempt started", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+
+			await act(async () => {
+				captured!({
+					name: "checkout.payment.selected",
+					data: { payment: { method_details: { type: "apple-pay" } } },
+				});
+				captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+				captured!({ name: "checkout.closed", data: {} });
+				await Promise.resolve();
+			});
+
+			expect(mockTrack).toHaveBeenCalledWith("checkout_stalled", {
+				method: "apple_pay",
+				reason: "payment_unfinished",
+			});
+			expect(mockTrack).toHaveBeenCalledWith("checkout_abandoned", { method: "apple_pay" });
+		});
+
+		it("does not report a stall when the buyer closes before trying to pay", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+			await act(async () => {
+				captured!({ name: "checkout.closed", data: {} });
+				await Promise.resolve();
+			});
+
+			expect(mockTrack).not.toHaveBeenCalledWith("checkout_stalled", expect.anything());
+		});
+
 		it("does not emit checkout_abandoned on CHECKOUT_CLOSED after a completion", async () => {
 			mockBillingApi();
 			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;

@@ -260,6 +260,32 @@ export default function BillingPage({
 	// handleSubscriptionActivated below), and that close event mustn't read as
 	// an abandonment just because it lands after this flag was reset.
 	const checkoutCompletedRef = useRef(false);
+	// Per attempt, for the exit report (reportCheckoutExit): a checkout frame
+	// is up, a payment was started in it, and its exit was already reported.
+	const checkoutOpenRef = useRef(false);
+	const paymentAttemptedRef = useRef(false);
+	const checkoutExitReportedRef = useRef(false);
+
+	// A checkout ended without completing. A payment already started means the
+	// buyer got stuck mid-payment (a dismissed Apple Pay sheet, an unanswered
+	// 3DS challenge), which Paddle.js has no event for, so that is reported as
+	// a stall too.
+	const reportCheckoutExit = useCallback(() => {
+		if (
+			!checkoutOpenRef.current ||
+			checkoutCompletedRef.current ||
+			checkoutExitReportedRef.current
+		) {
+			return;
+		}
+		checkoutExitReportedRef.current = true;
+		const method = checkoutMethodRef.current;
+		if (paymentAttemptedRef.current) {
+			track("checkout_stalled", { method, reason: "payment_unfinished" });
+		}
+		track("checkout_abandoned", { method });
+	}, []);
+
 	// Annual by default: it buys RETENTION, not payment-fee savings. The 17%
 	// discount costs more than the flat $0.50/transaction fee saves ($66.00 vs
 	// $73.80 net per year at list). It wins on churn — a monthly cohort at 5%/mo
@@ -391,6 +417,11 @@ export default function BillingPage({
 			}
 			switch (event.name) {
 				case CheckoutEventNames.CHECKOUT_LOADED: {
+					// Once per checkout, so a fresh exit report (also covers the
+					// payment-method-update frame, which skips handleStartCheckout).
+					checkoutOpenRef.current = true;
+					paymentAttemptedRef.current = false;
+					checkoutExitReportedRef.current = false;
 					// Only for a tier checkout (handleStartCheckout set the ref) — the
 					// payment-method-update flow (handleUpdatePayment) also opens a
 					// Paddle frame via a bare transactionId, and that isn't the
@@ -411,6 +442,7 @@ export default function BillingPage({
 					break;
 				}
 				case CheckoutEventNames.CHECKOUT_PAYMENT_INITIATED: {
+					paymentAttemptedRef.current = true;
 					// Belt-and-suspenders: either PAYMENT_INITIATED or COMPLETED may
 					// drop on trial-signup redirects. Arm the cooldown timer on
 					// whichever fires first (`?? Date.now()` guards against reset)
@@ -468,9 +500,8 @@ export default function BillingPage({
 					break;
 				}
 				case CheckoutEventNames.CHECKOUT_CLOSED: {
-					if (!checkoutCompletedRef.current) {
-						track("checkout_abandoned", { method: checkoutMethodRef.current });
-					}
+					reportCheckoutExit();
+					checkoutOpenRef.current = false;
 					break;
 				}
 				case CheckoutEventNames.CHECKOUT_PAYMENT_ERROR:
@@ -501,7 +532,7 @@ export default function BillingPage({
 			paddleRef.current = undefined;
 			setPaddle(undefined);
 		};
-	}, [config, qc, isInline]);
+	}, [config, qc, isInline, reportCheckoutExit]);
 
 	// Open checkout. In inline mode we set checkingOut first so the mount
 	// div is in the DOM before Paddle tries to find it.
@@ -522,6 +553,9 @@ export default function BillingPage({
 			checkoutCadenceRef.current = cadence;
 			checkoutMethodRef.current = "unknown";
 			checkoutCompletedRef.current = false;
+			checkoutOpenRef.current = true;
+			paymentAttemptedRef.current = false;
+			checkoutExitReportedRef.current = false;
 			if (isInline) {
 				setCheckingOut(true);
 			}
