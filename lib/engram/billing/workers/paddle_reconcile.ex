@@ -29,12 +29,14 @@ defmodule Engram.Billing.Workers.PaddleReconcile do
 
   # Stalled-checkout scan (args `%{"scan" => "stalled_checkouts"}`, every 15
   # min): see `Reconciliation.report_stalled_checkouts/1`. Anchored on the
-  # job's insert tick, floored to the 15-minute boundary, so a retry re-reads
+  # job's insert tick, rounded to the 15-minute boundary, so a retry re-reads
   # the same window instead of sliding past it.
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"scan" => "stalled_checkouts"}, inserted_at: inserted_at}) do
     tick = inserted_at || DateTime.utc_now()
-    anchor = DateTime.from_unix!(div(DateTime.to_unix(tick), 900) * 900)
+    # Nearest tick, not floor: a job inserted a hair before its tick (DB vs
+    # node clock) must not anchor to the previous one and re-read its window.
+    anchor = DateTime.from_unix!(div(DateTime.to_unix(tick) + 450, 900) * 900)
 
     case Engram.Billing.Reconciliation.report_stalled_checkouts(anchor) do
       {:error, _reason} = error -> error

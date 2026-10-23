@@ -488,6 +488,9 @@ export default function BillingPage({
 					break;
 				}
 				case CheckoutEventNames.CHECKOUT_PAYMENT_FAILED: {
+					// Reported below as payment_declined; a close after this decline
+					// must not report the same attempt again as payment_unfinished.
+					paymentAttemptedRef.current = false;
 					// A declined card is a normal, retryable state: Paddle keeps its
 					// inline frame open and shows the reason ("card declined",
 					// "insufficient funds", …) with a retry. Leave the frame mounted
@@ -518,6 +521,8 @@ export default function BillingPage({
 					// Genuine checkout-level error (not a routine decline) — the frame
 					// may be in a broken state, so close it and surface a message.
 					setCheckingOut(false);
+					// Not an abandon: a later tab close must not report one.
+					checkoutOpenRef.current = false;
 					setCompletedAt(null);
 					setSlow(false);
 					// msg() marks the key for the scanner, which cannot see a call through tRef.

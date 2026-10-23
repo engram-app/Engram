@@ -427,6 +427,50 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			expect(mockTrack).toHaveBeenCalledWith("checkout_abandoned", { method: "apple_pay" });
 		});
 
+		it("reports a declined attempt once, not again as unfinished on close", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+			await act(async () => {
+				captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+				captured!({ name: "checkout.payment.failed", data: {} });
+				captured!({ name: "checkout.closed", data: {} });
+				await Promise.resolve();
+			});
+
+			const stalls = mockTrack.mock.calls.filter(([e]) => e === "checkout_stalled");
+			expect(stalls).toEqual([
+				["checkout_stalled", { method: "unknown", reason: "payment_declined" }],
+			]);
+		});
+
+		it("does not report an abandon on pagehide after a checkout error", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+			await act(async () => {
+				captured!({ name: "checkout.error", data: {} });
+				await Promise.resolve();
+			});
+			window.dispatchEvent(new Event("pagehide"));
+
+			expect(mockTrack.mock.calls.filter(([e]) => e === "checkout_abandoned")).toEqual([]);
+		});
+
 		it("does not report a stall when the buyer closes before trying to pay", async () => {
 			mockBillingApi();
 			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;

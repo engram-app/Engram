@@ -20,12 +20,14 @@ const TRANSACTION_ID = /^txn_[a-z\d]{26}$/;
 type View = "loading" | "invalid" | "paid" | "canceled" | "closed" | "completed" | "error";
 
 /** The page's view for a Paddle.js event, or null to keep the current one. */
-export function viewForEvent(event: PaddleEventData, completed: boolean): View | null {
+export function viewForEvent(event: PaddleEventData, settled: boolean): View | null {
 	switch (event.name) {
 		case CheckoutEventNames.CHECKOUT_COMPLETED:
 			return "completed";
+		// After completed / paid / canceled the close is the overlay going away
+		// (ours or the buyer's), not an abandon: keep the settled view.
 		case CheckoutEventNames.CHECKOUT_CLOSED:
-			return completed ? null : "closed";
+			return settled ? null : "closed";
 		case CheckoutEventNames.CHECKOUT_LOADED: {
 			// A link mailed for a transaction that has since been paid or canceled.
 			const status = event.data?.status;
@@ -53,7 +55,8 @@ export default function PayPage() {
 	const { t, renderedLocale } = useT();
 	const [view, setView] = useState<View>(valid ? "loading" : "invalid");
 	const paddleRef = useRef<Paddle | undefined>(undefined);
-	const completedRef = useRef(false);
+	// Completed, already paid or canceled: nothing left to reopen.
+	const settledRef = useRef(false);
 	// Read through a ref: the locale resolves after first paint, and re-running
 	// the init effect on that change would boot Paddle twice and open two overlays.
 	const localeRef = useRef(renderedLocale);
@@ -81,9 +84,9 @@ export default function PayPage() {
 			if (cancelled) {
 				return;
 			}
-			const next = viewForEvent(event, completedRef.current);
-			if (next === "completed") {
-				completedRef.current = true;
+			const next = viewForEvent(event, settledRef.current);
+			if (next === "completed" || next === "paid" || next === "canceled") {
+				settledRef.current = true;
 			}
 			if (next === "paid" || next === "canceled") {
 				paddleRef.current?.Checkout.close();

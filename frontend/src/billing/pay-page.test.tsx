@@ -113,6 +113,8 @@ describe("PayPage (Paddle default payment link)", () => {
 		renderAt(`/pay?_ptxn=${TXN}`);
 		await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
 		act(() => emit({ name: "checkout.loaded", data: { status: "completed" } }));
+		// Our own close fires checkout.closed; that must not offer a reopen.
+		act(() => emit({ name: "checkout.closed", data: { status: "completed" } }));
 		expect(
 			screen.getByRole("heading", { name: "This payment has already been made" }),
 		).toBeInTheDocument();
