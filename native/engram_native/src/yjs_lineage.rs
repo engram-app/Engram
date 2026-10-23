@@ -200,7 +200,10 @@ mod tests {
         let t = b.get_or_insert_text("content");
         t.remove_range(&mut b.transact_mut(), 0, 8);
         t.insert(&mut b.transact_mut(), 0, "new text");
-        assert_eq!(clients(&state(&b)), vec![1]);
+        // Retyping hangs off client 1's deleted structs, so client 2 is not a
+        // root. Client 1's root is wholly deleted, so no LIVE lineage remains
+        // (I3): a cleared-and-retyped note is healthy, never a rival.
+        assert_eq!(clients(&state(&b)), Vec::<u64>::new());
     }
 
     #[test]
