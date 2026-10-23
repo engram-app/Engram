@@ -1,6 +1,5 @@
 import { IndexeddbPersistence } from "y-indexeddb";
 import * as Y from "yjs";
-import { frontmatterMaps } from "./frontmatter-doc";
 import { rememberCrdtDb } from "./idb-registry";
 import { crdtMark } from "./perf";
 
@@ -29,23 +28,14 @@ export interface CrdtManagerOptions {
 	onUpdate: (docId: string, update: Uint8Array, origin: unknown) => void;
 	/** IndexedDB persistence failure (e.g. quota). Sync continues over the WS. */
 	onPersistError?: (noteId: string, err: unknown) => void;
-	/** flattenIfBloated byte threshold. Default 500_000; injectable for tests. */
-	maxContentBytes?: number;
-	/** flattenIfBloated client-ID threshold. Default 1000; injectable for tests. */
-	maxClientIds?: number;
 }
 
 export class CrdtManager {
 	private readonly opts: CrdtManagerOptions;
 	private readonly docs = new Map<string, Entry>();
 
-	private readonly maxContentBytes: number;
-	private readonly maxClientIds: number;
-
 	constructor(opts: CrdtManagerOptions) {
 		this.opts = opts;
-		this.maxContentBytes = opts.maxContentBytes ?? 500_000;
-		this.maxClientIds = opts.maxClientIds ?? 1000;
 	}
 
 	/** The doc id — identity over the note's stable note_id. Used as both the
@@ -105,58 +95,6 @@ export class CrdtManager {
 			await e.persistence.destroy();
 			this.docs.delete(id);
 		}
-	}
-
-	/**
-	 * Flatten to a single-client-ID snapshot only when BOTH thresholds are
-	 * crossed (>500 KB AND >1000 client-IDs). Seeds the flattened plaintext with
-	 * LOCAL origin so the server adopts the reset lineage. Returns true if flattened.
-	 */
-	async flattenIfBloated(noteId: string): Promise<boolean> {
-		if (!this.docs.has(this.docId(noteId))) {
-			return false; // doc not live (closed or never opened) — never resurrect
-		}
-		const e = await this.entry(noteId);
-		const encoded = Y.encodeStateAsUpdate(e.doc);
-		const clientIds = Y.decodeStateVector(Y.encodeStateVector(e.doc)).size;
-		if (encoded.length < this.maxContentBytes || clientIds < this.maxClientIds) {
-			return false;
-		}
-		const plaintext = e.text.toJSON();
-		// #814: capture the frontmatter Y.Maps before destroying the bloated doc,
-		// or the flatten silently drops every widget-managed property (the fresh
-		// doc only ever gets the plaintext body re-inserted).
-		const before = frontmatterMaps(e.doc);
-		const fmValues = new Map<string, string>();
-		before.values.forEach((v, k) => {
-			fmValues.set(k, v);
-		});
-		const fmOrder = before.order.toArray();
-		const fmTypes = new Map<string, string>();
-		before.types.forEach((v, k) => {
-			fmTypes.set(k, v);
-		});
-
-		const id = this.docId(noteId);
-		e.doc.destroy();
-		await e.persistence.clearData();
-		await e.persistence.destroy();
-		this.docs.delete(id);
-		const fresh = await this.entry(noteId);
-		fresh.doc.transact(() => {
-			fresh.text.insert(0, plaintext); // local origin → propagated to the server
-			const after = frontmatterMaps(fresh.doc);
-			for (const [k, v] of fmValues) {
-				after.values.set(k, v);
-			}
-			if (fmOrder.length > 0) {
-				after.order.insert(0, fmOrder);
-			}
-			for (const [k, v] of fmTypes) {
-				after.types.set(k, v);
-			}
-		});
-		return true;
 	}
 
 	/** `timed` gates the open-path perf marks. Every other caller — `getDoc`
