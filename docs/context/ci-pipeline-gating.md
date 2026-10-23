@@ -33,7 +33,8 @@ makes replaying safe.
 | Trigger | Meaning | `is-full`? |
 |---|---|---|
 | push to a branch (PR) | Normal PR validation | ❌ fingerprint decides what to skip |
-| push to `main` (post-merge) | Replays branch markers, runs only what missed | ❌ (marker store decides) |
+| `merge_group` (queue entry on `gh-readonly-queue/main/pr-N-<sha>`) | Tests the combined commit before it lands. Every deterministic gate runs, incl. `migration-gates`; diffs use `merge_group.base_sha` (`DIFF_BASE`), not `origin/main`. All e2e self-skip (`bot-pr`); main runs them post-merge on a marker miss. No side-effect job fires | ✅ forced |
+| push to `main` (post-merge) | Replays the queue's markers (same SHA, main fast-forwards to the queue commit), runs only what missed | ❌ (marker store decides) |
 | `schedule` (06:00 UTC) | Nightly full run + flake measurement | ✅ forced |
 | `workflow_dispatch` `force_full=true` | Manual "run everything" | ✅ forced |
 | `repository_dispatch` | Backend runs e2e for a **plugin** PR, posts a `backend/e2e` status back | — |
@@ -41,8 +42,8 @@ makes replaying safe.
 | `release-v*` tag | `deploy-prod.yml` → release e2e gate → deploy | ✅ (force_full) |
 
 `is-full` (computed by the `fingerprint` job) forces the full suite to actually
-execute instead of cache-skipping. It is true only on `schedule`, `[ci-full]` in
-the commit message, and `force_full` dispatch. main is tracked separately
+execute instead of cache-skipping. It is true only on `schedule`, `merge_group`,
+`[ci-full]` in the commit message, and `force_full` dispatch. main is tracked separately
 (`IS_MAIN`) and only to stop a squash-merge's `[e2e: ...]` tag narrowing main's
 e2e matrix.
 
@@ -96,11 +97,13 @@ not in branch protection. The ruleset says "`ci` must pass"; the `ci` job
 internally decides a flaky e2e is a `::warning::` while a red unit-test is
 `::error::`. So the de-gate was a workflow edit, never a ruleset edit.
 
-`ci`'s `needs`: `[fingerprint, version-check, unit-tests, lint, frontend-lint,
-e2e-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, migration-gates,
-static-checks]`. It exits non-zero if a **deterministic** need failed, if
-`fingerprint` itself did not succeed (every gate skipped, nothing verified), or
-if `e2e-target-suite` is set (a targeted `[e2e: ...]` run is never mergeable).
+`ci`'s `needs`: `[fingerprint, prebuild-mix, prebuild-ci-image, version-check,
+unit-tests, lint, frontend-lint, e2e-lint, storage-database, migration-gates,
+static-checks]` (no e2e: they are report-only). It exits non-zero if a
+**deterministic** need failed, if a prebuild failed (its gates then report
+`skipped`, which would read as a pass), if `fingerprint` itself did not succeed
+(every gate skipped, nothing verified), or if `e2e-target-suite` is set (a
+targeted `[e2e: ...]` run is never mergeable).
 `e2e-*` failures become warnings on every ref, main included.
 
 A **skipped** required check counts as passing to GitHub rulesets, which is why

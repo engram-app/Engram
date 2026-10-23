@@ -10,6 +10,7 @@ on:
       - "bot/**"
       - "bump/**"
       - "chore/**"
+      - "ci/**"
       - "dependabot/**"
       - "docs/**"
       - "feat/**"
@@ -46,6 +47,13 @@ on:
     # spawned a second full CI run on head_branch=0.11.0. `**` is exhaustive
     # and needs no upkeep when a new tag shape appears.
     tags-ignore: ["**"]
+  # Merge queue (ruleset protect-main). Each queue entry tests the combined
+  # commit on gh-readonly-queue/main/pr-N-<sha>, so the fingerprint job forces
+  # a full run (is-full) and the e2e suites self-skip (report-only; main runs
+  # them post-merge on a miss). Side-effect jobs are all gated on push/main,
+  # schedule or dispatch, so none of them fire here.
+  merge_group:
+    types: [checks_requested]
   repository_dispatch:
     types: [plugin-e2e-trigger]
   # Nightly full-e2e convergence run + flake ledger (measurement, non-gating —
@@ -78,7 +86,9 @@ concurrency:
   # main/nightly get a per-run group (run_id): a shared group with
   # cancel-in-progress=false would still serialize them, and GitHub replaces a
   # PENDING run when a newer one queues, cancelling intermediate main commits.
-  group: verify-${{ github.event_name }}-${{ (github.ref == 'refs/heads/main' && github.event_name != 'repository_dispatch') && github.run_id || github.event.client_payload.plugin_branch || github.ref }}
+  # merge_group also gets run_id: the queue owns its entries' lifecycle, and
+  # cancelling one here would fail that entry and eject the PR.
+  group: verify-${{ github.event_name }}-${{ (github.event_name == 'merge_group' || (github.ref == 'refs/heads/main' && github.event_name != 'repository_dispatch')) && github.run_id || github.event.client_payload.plugin_branch || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -110,6 +120,10 @@ env:
   # so every `mix deps.get` (prebuild-mix/unit-tests/lint) and the docker builds
   # pull hex from the LAN instead of WAN. Signatures still verified client-side.
   HEX_MIRROR: "http://10.0.20.214:8090"
+  # Base for the "what changed vs main" diffs (path-filter guards, migration
+  # checks). A merge-queue commit's parent is merge_group.base_sha, which is
+  # main OR the previous queue entry; origin/main lags the latter.
+  DIFF_BASE: ${{ github.event.merge_group.base_sha || 'origin/main' }}
   # Every repo path whose bytes can reach the shipped image: what the
   # Dockerfile COPYs (native/ is the Rust NIF source, rel/ the release
   # env.sh) plus .dockerignore, which shapes the build context. ONE
@@ -227,7 +241,10 @@ jobs:
       # No step needed — job `outputs:` are expressions with `github` in scope.
       # A workflow-level `env:` var would NOT work: job-level `if:` cannot see
       # the `env` context, which is why this has to route through an output.
-      bot-pr: ${{ startsWith(github.ref_name, 'release-please--') || github.actor == 'dependabot[bot]' }}
+      #   merge_group: not a bot, same effect. e2e is report-only, nobody reads
+      #     a queue entry's result, and the main push that follows runs any
+      #     suite whose marker missed.
+      bot-pr: ${{ startsWith(github.ref_name, 'release-please--') || github.actor == 'dependabot[bot]' || github.event_name == 'merge_group' }}
       # Phase 4 targeted e2e ([e2e: suite/pattern] in HEAD commit). Empty = full e2e.
       e2e-target-suite: ${{ steps.skips.outputs.e2e-target-suite }}
       e2e-target-pattern: ${{ steps.skips.outputs.e2e-target-pattern }}
@@ -480,7 +497,9 @@ jobs:
           # everything with no skips. The schedule clause is belt-and-suspenders
           # — GitHub always fires `schedule` against the default branch — but it
           # documents intent and survives a future default-branch change.
-          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.force_full }}" = "true" ] || grep -qiF '[ci-full]' <<<"$(git log -1 --pretty=%B)"; then
+          # merge_group is full too: the queue tests a combined commit nobody
+          # has run before, so every required gate must execute, never inherit.
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "merge_group" ] || [ "${{ github.event.inputs.force_full }}" = "true" ] || grep -qiF '[ci-full]' <<<"$(git log -1 --pretty=%B)"; then
             echo "is-full=true" >> "$GITHUB_OUTPUT"
             export IS_FULL_RUN=true
           else
@@ -2931,10 +2950,10 @@ jobs:
         env:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/squawk_lint
           MIX_ENV: test
-          BASE_REF: origin/main
+          BASE_REF: ${{ env.DIFF_BASE }}
         run: |
-          # Need origin/main locally to detect which migrations are new.
-          git fetch -q --depth=1 origin main || true
+          # Need the base locally to detect which migrations are new.
+          git fetch -q --depth=1 origin "${{ github.event.merge_group.base_sha || 'main' }}" || true
           # squawk (Rust, baseline x86-64), pinned and checksummed. Kept in the
           # runner's $HOME/.cache (like the wasi-sdk) so a GitHub blip only
           # matters on a cold cache (#1874), where the download retries.
@@ -2961,9 +2980,9 @@ jobs:
         env:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/rollback_test
           MIX_ENV: test
-          BASE_REF: origin/main
+          BASE_REF: ${{ env.DIFF_BASE }}
         run: |
-          git fetch -q --depth=1 origin main || true
+          git fetch -q --depth=1 origin "${{ github.event.merge_group.base_sha || 'main' }}" || true
           docker exec "$PG_CONTAINER" createdb -U engram rollback_test
           bash priv/repo/test_rollback.sh
 
@@ -3725,11 +3744,11 @@ jobs:
           # renames surface as status R and slip the check silently.
           while IFS= read -r file; do
             [ -z "$file" ] && continue
-            if git cat-file -e "origin/${BASE_REF}:$file" 2>/dev/null; then
+            if git cat-file -e "${DIFF_BASE}:$file" 2>/dev/null; then
               echo "::error file=$file::Migration was modified in place. Applied migrations are immutable — write a NEW migration to amend the schema. (Bypass with PR label 'allow-migration-edit'.)"
               failed=1
             fi
-          done < <(git diff --name-only --no-renames --diff-filter=MTD "origin/${BASE_REF}...HEAD" -- 'priv/repo/migrations/*.exs')
+          done < <(git diff --name-only --no-renames --diff-filter=MTD "${DIFF_BASE}...HEAD" -- 'priv/repo/migrations/*.exs')
 
           if [ "$failed" -eq 0 ]; then
             echo "OK — no applied migrations modified in place."
@@ -3815,7 +3834,7 @@ jobs:
           # Ensure base ref is available for the diff. Tolerate failure —
           # if fetch fails, the diff will surface the error explicitly.
           git fetch origin main --depth=50 >/dev/null 2>&1 || true
-          if git diff --quiet origin/main HEAD -- \
+          if git diff --quiet "$DIFF_BASE" HEAD -- \
                 frontend/package.json frontend/bun.lock 2>/dev/null; then
             echo "Skipped — no changes to frontend/package.json or frontend/bun.lock vs main."
             echo "skip=true" >> "$GITHUB_OUTPUT"
@@ -3889,7 +3908,11 @@ jobs:
     # (~20s); ~3min on a PR that touches migrations.
     # Enforced by the `ci` aggregate — the three standalone predecessor
     # jobs' results were never actually checked anywhere.
-    if: github.event_name == 'push' && github.ref != 'refs/heads/main'
+    # Runs in the merge queue too: without strict up-to-date, the queue commit
+    # is the first tree where a drop meets lib/ code merged after the PR
+    # branched, so the branch-push run alone no longer proves it. The queue
+    # diffs against merge_group.base_sha (DIFF_BASE), its parent.
+    if: (github.event_name == 'push' && github.ref != 'refs/heads/main') || github.event_name == 'merge_group'
     runs-on: [self-hosted, linux, x64, isolated]
     needs: [fingerprint, prebuild-mix]
     permissions:
@@ -3930,7 +3953,7 @@ jobs:
           # the gates ran on non-migration PRs. Compute the base
           # explicitly and fail loud if it can't, rather than guessing. (#718)
           git fetch -q origin main
-          base=$(git merge-base FETCH_HEAD HEAD)
+          base=$(git merge-base "${{ github.event.merge_group.base_sha || 'FETCH_HEAD' }}" HEAD)
           if [ -z "$base" ]; then
             echo "::error::Could not compute merge-base with origin/main — cannot determine migration touches."
             exit 1
@@ -4042,7 +4065,7 @@ jobs:
         id: list
         run: |
           git fetch -q --depth=1 origin main || true
-          BASE_REF="origin/main" \
+          BASE_REF="$DIFF_BASE" \
             bash priv/repo/list_new_migrations.sh > /tmp/new-migrations.txt
           if [ ! -s /tmp/new-migrations.txt ]; then
             echo "::error::migration drops detected but no migrations newer than base ref"
@@ -4364,7 +4387,7 @@ jobs:
             exit 0
           fi
           git fetch origin main --depth=50 >/dev/null 2>&1 || true
-          if git diff --quiet origin/main HEAD -- e2e/ 2>/dev/null; then
+          if git diff --quiet "$DIFF_BASE" HEAD -- e2e/ 2>/dev/null; then
             echo "Skipped - no e2e/ changes vs main."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
@@ -4419,7 +4442,7 @@ jobs:
           git fetch origin main --depth=50 >/dev/null 2>&1 || true
           # The email catalog gate (frontend/src/i18n/email-keys.test.ts) reads
           # these backend files, so an email-only change must run it too.
-          if git diff --quiet origin/main HEAD -- frontend/ lib/engram/mailer.ex lib/engram/email/template.ex lib/engram/legal/seeder.ex priv/i18n/email/ 2>/dev/null; then
+          if git diff --quiet "$DIFF_BASE" HEAD -- frontend/ lib/engram/mailer.ex lib/engram/email/template.ex lib/engram/legal/seeder.ex priv/i18n/email/ 2>/dev/null; then
             echo "Skipped: no frontend/ or email-string changes vs main."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
@@ -4840,11 +4863,25 @@ jobs:
     # 16-28 min e2e-browser the PR's wall-clock even though `ci` ignored its
     # result. record-pass waits on them instead, so the e2e marker still means
     # "e2e passed".
-    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, e2e-lint, storage-database, migration-gates, static-checks]
+    # prebuild-* are here so their failure is visible: a gate whose prebuild
+    # failed reports `skipped`, which GitHub counts as a passing required check
+    # and the loop below would wave through.
+    needs: [fingerprint, prebuild-mix, prebuild-ci-image, version-check, unit-tests, lint, frontend-lint, e2e-lint, storage-database, migration-gates, static-checks]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Check required jobs
         run: |
+          # A failed prebuild drags unit-tests/lint/storage-database/
+          # migration-gates into `skipped`, i.e. green required checks that ran
+          # nothing. The merge queue would land that commit unattended.
+          for pair in "prebuild-mix=${{ needs.prebuild-mix.result }}" "prebuild-ci-image=${{ needs.prebuild-ci-image.result }}"; do
+            case "${pair#*=}" in
+              failure|cancelled)
+                echo "::error::${pair%=*} ${pair#*=}: the gates that need it skipped without running"
+                exit 1 ;;
+            esac
+          done
+
           VC="${{ needs.version-check.result }}"
           UT="${{ needs.unit-tests.result }}"
           LN="${{ needs.lint.result }}"
