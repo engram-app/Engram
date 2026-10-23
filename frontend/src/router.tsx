@@ -52,6 +52,7 @@ const VaultRoute = lazy(() =>
 const VaultRedirect = lazy(() => whenLoaded(import("./viewer/vault-redirect")));
 const LegacyNoteRedirect = lazy(() => whenLoaded(import("./viewer/legacy-note-redirect")));
 // Wikilink hrefs name notes by path/title; this resolves them to /v/:slug/:id.
+const PayPage = lazy(() => whenLoaded(import("./billing/pay-page")));
 const ResetPasswordPage = lazy(() => whenLoaded(import("./features/auth/ResetPasswordPage")));
 const DeviceLinkPage = lazy(() => whenLoaded(import("./device/device-link-page")));
 const OAuthAuthorizePage = lazy(() => whenLoaded(import("./oauth/oauth-authorize-page")));
@@ -161,6 +162,8 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 				{ path: ROUTES.SIGN_UP, element: <SignUpPage /> },
 				// Public reset — the one-time token IS the credential.
 				{ path: ROUTES.RESET_PASSWORD, element: suspended(<ResetPasswordPage />) },
+				// Public: Paddle email links (`?_ptxn=`) land in logged-out tabs.
+				{ path: ROUTES.PAY, element: suspended(<PayPage />) },
 				// Dev-only connector QC gallery — spreads into nothing in production.
 				...(ConnectorQcPage
 					? [{ path: "/__qc/connectors", element: suspended(<ConnectorQcPage />) }]

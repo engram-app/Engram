@@ -227,26 +227,42 @@ defmodule EngramWeb.BillingController do
   def config(conn, _params) do
     user = conn.assigns.current_user
 
-    json(conn, %{
-      client_token: Application.get_env(:engram, :paddle_client_token),
-      environment: Application.get_env(:engram, :paddle_env, "sandbox"),
-      price_ids: %{
-        starter: %{
-          monthly: Application.get_env(:engram, :paddle_starter_monthly_price_id),
-          annual: Application.get_env(:engram, :paddle_starter_annual_price_id)
+    json(
+      conn,
+      Map.merge(paddle_client_config(), %{
+        price_ids: %{
+          starter: %{
+            monthly: Application.get_env(:engram, :paddle_starter_monthly_price_id),
+            annual: Application.get_env(:engram, :paddle_starter_annual_price_id)
+          },
+          pro: %{
+            monthly: Application.get_env(:engram, :paddle_pro_monthly_price_id),
+            annual: Application.get_env(:engram, :paddle_pro_annual_price_id)
+          }
         },
-        pro: %{
-          monthly: Application.get_env(:engram, :paddle_pro_monthly_price_id),
-          annual: Application.get_env(:engram, :paddle_pro_annual_price_id)
-        }
-      },
-      customer_email: user.email,
-      custom_data: %{user_id: user.id},
-      vaults_cap: cap_json(Billing.cap(user, :vaults_cap)),
-      # Which note-cap set is enforced ("legacy" or "v5"): the plan cards
-      # show the copy for it (`LimitKeys.plan_limits/0`).
-      plan_limits: Engram.Billing.LimitKeys.plan_limits()
-    })
+        customer_email: user.email,
+        custom_data: %{user_id: user.id},
+        vaults_cap: cap_json(Billing.cap(user, :vaults_cap)),
+        # Which note-cap set is enforced ("legacy" or "v5"): the plan cards
+        # show the copy for it (`LimitKeys.plan_limits/0`).
+        plan_limits: Engram.Billing.LimitKeys.plan_limits()
+      })
+    )
+  end
+
+  @doc """
+  Public Paddle.js boot config (client-side token + environment) for the
+  logged-out `/pay` page. 404 when billing is off (self-host).
+  """
+  def paddle_client(conn, _params) do
+    with_billing(conn, fn -> json(conn, paddle_client_config()) end)
+  end
+
+  defp paddle_client_config do
+    %{
+      client_token: Application.get_env(:engram, :paddle_client_token),
+      environment: Application.get_env(:engram, :paddle_env, "sandbox")
+    }
   end
 
   # `Billing.cap/2` has already collapsed every "no cap" spelling to nil; the

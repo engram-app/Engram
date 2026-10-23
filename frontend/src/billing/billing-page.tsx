@@ -1,9 +1,4 @@
-import {
-	CheckoutEventNames,
-	type CheckoutSettings,
-	initializePaddle,
-	type Paddle,
-} from "@paddle/paddle-js";
+import { CheckoutEventNames, type Paddle } from "@paddle/paddle-js";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -11,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Translate } from "@/i18n/translate";
 import { notify } from "@/lib/notify";
+import { SUPPORT_MAILTO } from "@/lib/support";
 import type { CheckoutMethod } from "../analytics/events";
 import { track } from "../analytics/track";
 import { api } from "../api/client";
@@ -31,6 +27,7 @@ import BillingHistoryTable from "./billing-history-table";
 import CancelPanel from "./cancel-panel";
 import CurrentPlanCard from "./current-plan-card";
 import EmbedBucketRow from "./embed-bucket-row";
+import { checkoutSettings, INLINE_FRAME_TARGET, initPaddle } from "./paddle-checkout";
 import PaymentMethodCard from "./payment-method-card";
 import PendingChangeBanner from "./pending-change-banner";
 import { CadenceToggle, formatPlanPrice, PlanAccordionRow, PlanCard, planCopy } from "./plan-cards";
@@ -44,37 +41,6 @@ import { useSubscriptionActivatedEvents } from "./use-subscription-activated-eve
 // Past this we close Paddle and surface a small recovery banner — the push
 // listener stays connected, so a late broadcast still routes the user.
 const COOLDOWN_MS = 15_000;
-
-const INLINE_FRAME_TARGET = "paddle-checkout";
-
-// Paddle's branded-inline-checkout dashboard config (Paddle > Checkout
-// > Branded inline checkout) is a single static color set with no
-// light/dark variant, tuned for light. `theme: "light"` matches it so
-// the unbranded chrome (page background behind fields, default text)
-// doesn't clash with the branded fields. Fixed, not tied to the app's
-// live theme — a dynamic value here tore down/rebuilt the Paddle
-// instance on every app theme toggle, stranding an open checkout.
-// Stable inputs only (isInline): the init effect depends on this shape, and
-// the locale is layered on at call time. Each Checkout.open gets the FULL
-// object, because Paddle.js's merge of partial per-open settings over the
-// init defaults is undocumented and this is the payments path.
-function checkoutSettings(isInline: boolean): CheckoutSettings {
-	return isInline
-		? {
-				displayMode: "inline",
-				frameTarget: INLINE_FRAME_TARGET,
-				frameInitialHeight: 450,
-				// No fixed min-height: Paddle auto-resizes the iframe to fit its
-				// content, and a hard floor overrode the downward resize — so the
-				// short post-payment success screen was stranded in a tall 450px
-				// box. frameInitialHeight covers the initial paint before Paddle
-				// reports the real height. (min-width matches Paddle's own sample.)
-				frameStyle: "width:100%; min-width:312px; background:transparent; border:none;",
-				theme: "light",
-				variant: "one-page",
-			}
-		: { displayMode: "overlay", theme: "light", variant: "one-page" };
-}
 
 // Dev-only: Paddle's checkout iframe can't embed on a non-default-port
 // localhost origin (its frame-ancestors only allows the bare host at :80/:443),
@@ -190,7 +156,7 @@ function SlowActivationBanner({
 						const body = encodeURIComponent(
 							`Hi — my payment went through but my account hasn't activated.\n\nReference: ${transactionId ?? "n/a"}`,
 						);
-						window.location.href = `mailto:support@engram.page?subject=${subject}&body=${body}`;
+						window.location.href = `${SUPPORT_MAILTO}?subject=${subject}&body=${body}`;
 					}}
 				>
 					{t("Contact support")}
@@ -419,117 +385,108 @@ export default function BillingPage({
 			return;
 		}
 		let cancelled = false;
-		initializePaddle({
-			token: config.client_token,
-			environment: config.environment,
-			eventCallback: (event) => {
-				if (cancelled) {
-					return;
-				}
-				switch (event.name) {
-					case CheckoutEventNames.CHECKOUT_LOADED: {
-						// Only for a tier checkout (handleStartCheckout set the ref) — the
-						// payment-method-update flow (handleUpdatePayment) also opens a
-						// Paddle frame via a bare transactionId, and that isn't the
-						// signup/upgrade funnel this event exists to measure.
-						const tier = checkoutTierRef.current;
-						if (tier) {
-							track("checkout_opened", {
-								method: "unknown",
-								tier,
-								cadence: checkoutCadenceRef.current,
-								source: upgradeSource(),
-							});
-						}
-						break;
-					}
-					case CheckoutEventNames.CHECKOUT_PAYMENT_SELECTED: {
-						checkoutMethodRef.current = toCheckoutMethod(paymentMethodFrom(event.data));
-						break;
-					}
-					case CheckoutEventNames.CHECKOUT_PAYMENT_INITIATED: {
-						// Belt-and-suspenders: either PAYMENT_INITIATED or COMPLETED may
-						// drop on trial-signup redirects. Arm the cooldown timer on
-						// whichever fires first (`?? Date.now()` guards against reset)
-						// so a dropped COMPLETED still surfaces the recovery banner
-						// instead of stranding the user on Paddle's inline frame.
-						const data: unknown = event.data;
-						const txn =
-							typeof data === "object" &&
-							data !== null &&
-							"transaction_id" in data &&
-							typeof data.transaction_id === "string"
-								? data.transaction_id
-								: null;
-						setTransactionId(txn);
-						setCompletedAt((prev) => prev ?? Date.now());
-						invalidateBillingState(qc);
-						break;
-					}
-					case CheckoutEventNames.CHECKOUT_COMPLETED: {
-						// Don't close Paddle — its built-in "Payment successful" screen
-						// is the visible confirmation while we wait for the backend
-						// webhook to fire the subscription_activated push. The cooldown
-						// timer is the fallback if the push never arrives (and is also
-						// armed here in case PAYMENT_INITIATED dropped).
-						setCompletedAt((prev) => prev ?? Date.now());
-						invalidateBillingState(qc);
-						checkoutCompletedRef.current = true;
-						// COMPLETED's own payload carries method_details too — prefer it,
-						// fall back to whatever PAYMENT_SELECTED last recorded.
-						const method = paymentMethodFrom(event.data);
-						track("checkout_completed", {
-							method: method ? toCheckoutMethod(method) : checkoutMethodRef.current,
+		initPaddle(config, isInline, (event) => {
+			if (cancelled) {
+				return;
+			}
+			switch (event.name) {
+				case CheckoutEventNames.CHECKOUT_LOADED: {
+					// Only for a tier checkout (handleStartCheckout set the ref) — the
+					// payment-method-update flow (handleUpdatePayment) also opens a
+					// Paddle frame via a bare transactionId, and that isn't the
+					// signup/upgrade funnel this event exists to measure.
+					const tier = checkoutTierRef.current;
+					if (tier) {
+						track("checkout_opened", {
+							method: "unknown",
+							tier,
+							cadence: checkoutCadenceRef.current,
+							source: upgradeSource(),
 						});
-						break;
 					}
-					case CheckoutEventNames.CHECKOUT_PAYMENT_FAILED: {
-						// A declined card is a normal, retryable state: Paddle keeps its
-						// inline frame open and shows the reason ("card declined",
-						// "insufficient funds", …) with a retry. Leave the frame mounted
-						// (do NOT setCheckingOut(false)) so the user sees WHY and can try
-						// another card, instead of being bounced back to the plan picker
-						// with no explanation. Only clear the completion cooldown/recovery
-						// state so a stale COMPLETED/INITIATED timer can't fire.
-						setCompletedAt(null);
-						setSlow(false);
-						// This is the real "payment failed" signal Paddle.js exposes —
-						// there is no separate "action_required" event to distinguish an
-						// outright decline from a payment left awaiting the user (e.g. a
-						// dismissed native Apple Pay sheet). That case has no event here
-						// at all; see the task report.
-						track("checkout_stalled", {
-							method: checkoutMethodRef.current,
-							reason: "payment_declined",
-						});
-						break;
-					}
-					case CheckoutEventNames.CHECKOUT_CLOSED: {
-						if (!checkoutCompletedRef.current) {
-							track("checkout_abandoned", { method: checkoutMethodRef.current });
-						}
-						break;
-					}
-					case CheckoutEventNames.CHECKOUT_PAYMENT_ERROR:
-					case CheckoutEventNames.CHECKOUT_ERROR: {
-						// Genuine checkout-level error (not a routine decline) — the frame
-						// may be in a broken state, so close it and surface a message.
-						setCheckingOut(false);
-						setCompletedAt(null);
-						setSlow(false);
-						// msg() marks the key for the scanner, which cannot see a call through tRef.
-						notify.error(
-							tRef.current(msg("Something went wrong with checkout. Please try again.")),
-						);
-						break;
-					}
-					default:
-						break;
+					break;
 				}
-			},
-			// `locale: "en"` is only the default; every Checkout.open passes the full
-			// settings again with the rendered app locale (see checkoutSettings).
-			checkout: { settings: { ...checkoutSettings(isInline), locale: "en" } },
+				case CheckoutEventNames.CHECKOUT_PAYMENT_SELECTED: {
+					checkoutMethodRef.current = toCheckoutMethod(paymentMethodFrom(event.data));
+					break;
+				}
+				case CheckoutEventNames.CHECKOUT_PAYMENT_INITIATED: {
+					// Belt-and-suspenders: either PAYMENT_INITIATED or COMPLETED may
+					// drop on trial-signup redirects. Arm the cooldown timer on
+					// whichever fires first (`?? Date.now()` guards against reset)
+					// so a dropped COMPLETED still surfaces the recovery banner
+					// instead of stranding the user on Paddle's inline frame.
+					const data: unknown = event.data;
+					const txn =
+						typeof data === "object" &&
+						data !== null &&
+						"transaction_id" in data &&
+						typeof data.transaction_id === "string"
+							? data.transaction_id
+							: null;
+					setTransactionId(txn);
+					setCompletedAt((prev) => prev ?? Date.now());
+					invalidateBillingState(qc);
+					break;
+				}
+				case CheckoutEventNames.CHECKOUT_COMPLETED: {
+					// Don't close Paddle — its built-in "Payment successful" screen
+					// is the visible confirmation while we wait for the backend
+					// webhook to fire the subscription_activated push. The cooldown
+					// timer is the fallback if the push never arrives (and is also
+					// armed here in case PAYMENT_INITIATED dropped).
+					setCompletedAt((prev) => prev ?? Date.now());
+					invalidateBillingState(qc);
+					checkoutCompletedRef.current = true;
+					// COMPLETED's own payload carries method_details too — prefer it,
+					// fall back to whatever PAYMENT_SELECTED last recorded.
+					const method = paymentMethodFrom(event.data);
+					track("checkout_completed", {
+						method: method ? toCheckoutMethod(method) : checkoutMethodRef.current,
+					});
+					break;
+				}
+				case CheckoutEventNames.CHECKOUT_PAYMENT_FAILED: {
+					// A declined card is a normal, retryable state: Paddle keeps its
+					// inline frame open and shows the reason ("card declined",
+					// "insufficient funds", …) with a retry. Leave the frame mounted
+					// (do NOT setCheckingOut(false)) so the user sees WHY and can try
+					// another card, instead of being bounced back to the plan picker
+					// with no explanation. Only clear the completion cooldown/recovery
+					// state so a stale COMPLETED/INITIATED timer can't fire.
+					setCompletedAt(null);
+					setSlow(false);
+					// This is the real "payment failed" signal Paddle.js exposes —
+					// there is no separate "action_required" event to distinguish an
+					// outright decline from a payment left awaiting the user (e.g. a
+					// dismissed native Apple Pay sheet). That case has no event here
+					// at all; see the task report.
+					track("checkout_stalled", {
+						method: checkoutMethodRef.current,
+						reason: "payment_declined",
+					});
+					break;
+				}
+				case CheckoutEventNames.CHECKOUT_CLOSED: {
+					if (!checkoutCompletedRef.current) {
+						track("checkout_abandoned", { method: checkoutMethodRef.current });
+					}
+					break;
+				}
+				case CheckoutEventNames.CHECKOUT_PAYMENT_ERROR:
+				case CheckoutEventNames.CHECKOUT_ERROR: {
+					// Genuine checkout-level error (not a routine decline) — the frame
+					// may be in a broken state, so close it and surface a message.
+					setCheckingOut(false);
+					setCompletedAt(null);
+					setSlow(false);
+					// msg() marks the key for the scanner, which cannot see a call through tRef.
+					notify.error(tRef.current(msg("Something went wrong with checkout. Please try again.")));
+					break;
+				}
+				default:
+					break;
+			}
 		}).then((instance) => {
 			if (cancelled) {
 				return;

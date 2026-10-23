@@ -115,6 +115,21 @@ defmodule EngramWeb.BillingControllerTest do
     end
   end
 
+  # The /pay page (Paddle's default payment link) opens checkout for a
+  # `?_ptxn=` link that arrives in a fresh, often logged-out tab, so the
+  # Paddle.js client token must be readable without a session.
+  describe "GET /api/billing/paddle-client" do
+    test "returns the Paddle.js client token and environment without auth" do
+      body = json_response(get(build_conn(), "/api/billing/paddle-client"), 200)
+      assert body == %{"client_token" => "live_token_test_fake", "environment" => "sandbox"}
+    end
+
+    test "404s when billing is disabled (self-host)" do
+      Application.put_env(:engram, :billing_enabled, false)
+      assert get(build_conn(), "/api/billing/paddle-client").status == 404
+    end
+  end
+
   describe "GET /api/billing/config" do
     test "returns Paddle.js overlay config for the authenticated user", %{conn: conn, user: user} do
       conn = get(conn, "/api/billing/config")

@@ -4,6 +4,7 @@ import { useT } from "./i18n/locale-provider";
 import { Trans } from "./i18n/trans";
 import AuthBackdrop from "./layout/auth-backdrop";
 import AuthPanel from "./layout/auth-panel";
+import { SUPPORT_EMAIL, SUPPORT_MAILTO } from "./lib/support";
 
 // Top-level crash page rendered by `RootErrorBoundary` in main.tsx.
 //
@@ -29,8 +30,8 @@ interface ErrorFallbackProps {
 export default function ErrorFallback({ error, eventId, reported = false }: ErrorFallbackProps) {
 	const { t } = useT();
 	const supportLink = (
-		<a className="underline" href="mailto:support@engram.page">
-			support@engram.page
+		<a className="underline" href={SUPPORT_MAILTO}>
+			{SUPPORT_EMAIL}
 		</a>
 	);
 	const message = error instanceof Error ? error.message : String(error);

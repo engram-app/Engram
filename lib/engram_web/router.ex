@@ -322,6 +322,13 @@ defmodule EngramWeb.Router do
     get "/health/deep", HealthController, :deep
   end
 
+  # Paddle.js boot config for /pay (Paddle's default payment link), which opens
+  # in fresh, often logged-out tabs. The client-side token is public by design.
+  scope "/api", EngramWeb do
+    pipe_through [:api, :public_cacheable]
+    get "/billing/paddle-client", BillingController, :paddle_client
+  end
+
   # OpenAPI spec — public, no auth. Drives the docs site + CI drift gate.
   # No EngramWeb alias on this scope: RenderSpec is an open_api_spex plug,
   # not an Engram controller.
@@ -830,6 +837,9 @@ defmodule EngramWeb.Router do
     # test/engram_web/spa_route_parity_test.exs now fails if any top-level
     # React route lacks an entry here.
     get "/reset-password", SpaController, :index
+    # Paddle's default payment link (`/pay?_ptxn=<txn id>`), mailed for
+    # renewals and payment-method updates: a hard load in a logged-out tab.
+    get "/pay", SpaController, :index
     get "/link", SpaController, :index
     get "/onboard", SpaController, :index
     get "/onboard/*path", SpaController, :index
