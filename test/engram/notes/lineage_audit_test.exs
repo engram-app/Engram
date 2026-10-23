@@ -240,7 +240,19 @@ defmodule Engram.Notes.LineageAuditTest do
   test "run/1 writes nothing and starts no room or job", %{user: user, vault: vault} do
     n = note(user, vault, "G/ReadOnly.md", "a\n")
     rival_seed(user, vault, n.id, "a\nb\n")
-    CrdtRegistry.terminate_room(n.id)
+
+    # terminate_room is an async :kill; wait for the room to be gone so a late
+    # checkpoint cannot land between the snapshots below.
+    case CrdtRegistry.lookup(n.id) do
+      nil ->
+        :ok
+
+      pid ->
+        ref = Process.monitor(pid)
+        CrdtRegistry.terminate_room(n.id)
+        assert_receive {:DOWN, ^ref, :process, _, _}, 5_000
+    end
+
     before = persisted(user, n.id)
     jobs = all_enqueued()
 

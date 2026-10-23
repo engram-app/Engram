@@ -76,6 +76,10 @@ defmodule Engram.Notes.LineageAuditMaintenanceTest do
   end
 
   test "CONTROL: the app pool as engram_app with no tenant sees no note", %{note_ids: ids} do
+    # The rows exist (the superuser sees them), so the zero below is RLS.
+    assert Repo.aggregate(from(n in Note, where: n.id in ^ids), :count, skip_tenant_check: true) ==
+             length(ids)
+
     assert {:returned, 0} =
              as_prod_role(fn ->
                Repo.aggregate(from(n in Note, where: n.id in ^ids), :count,

@@ -100,7 +100,14 @@ defmodule Engram.Notes.LineageAudit do
         last_id: nil
       }
 
-      every = Keyword.get(opts, :progress_every, @progress_every)
+      # A non-positive interval would raise in rem/2 outside safe_scan and kill
+      # the whole run; fall back to the default instead.
+      every =
+        case Keyword.get(opts, :progress_every, @progress_every) do
+          n when is_integer(n) and n > 0 -> n
+          _ -> @progress_every
+        end
+
       scan = Keyword.get(opts, :scan, &scan_note/3)
       result = opts |> targets() |> Enum.reduce(acc, &tally(&1, &2, scan, every))
 
