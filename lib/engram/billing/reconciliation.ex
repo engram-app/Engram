@@ -339,9 +339,14 @@ defmodule Engram.Billing.Reconciliation do
   defp repair_period_end(paddle_sub, local) do
     period_end = Engram.Billing.parse_period_end(paddle_sub)
 
-    # Written under the owner's tenant, like the webhook mirror (#1758).
+    # Written under the owner's tenant, like the webhook mirror (#1758). By id
+    # with update_all, not update!: a row hard-deleted since the read (an
+    # account delete racing the run) updates nothing instead of raising and
+    # killing the rest of the diff.
     Repo.with_tenant!(local.user_id, fn ->
-      local |> Ecto.Changeset.change(current_period_end: period_end) |> Repo.update!()
+      Repo.update_all(from(s in Subscription, where: s.id == ^local.id),
+        set: [current_period_end: period_end]
+      )
     end)
 
     Logger.info(

@@ -290,7 +290,8 @@ defmodule Engram.Billing.ReconciliationTest do
         assert %{drift: []} = Reconciliation.run(7)
       end)
 
-      assert Engram.Repo.reload!(sub).current_period_end == ~U[2026-07-31 00:00:00Z]
+      repaired = Engram.Repo.with_tenant!(user.id, fn -> Engram.Repo.reload!(sub) end)
+      assert repaired.current_period_end == ~U[2026-07-31 00:00:00Z]
     end
 
     # nil on a canceled/paused sub is expected; a present but unreadable value

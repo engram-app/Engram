@@ -23,6 +23,7 @@ const TRANSACTION_ID = /^txn_[a-z\d]{26}$/;
 const DEAD_TRANSACTION_CODES = new Set([
 	"not_found",
 	"transaction_not_ready_cannot_process_payment",
+	"transaction_status_must_be_ready",
 	"transaction_immutable",
 ]);
 
