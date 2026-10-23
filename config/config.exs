@@ -246,6 +246,10 @@ config :engram, Oban,
         # Paddle drift check. Daily: drift logs at :error to Sentry, and a
         # repair is manual, so more runs would only repeat the alert.
         {"0 2 * * *", Engram.Billing.Workers.PaddleReconcile},
+        # Stalled-checkout scan: Paddle sends no webhook for a payment parked at
+        # action_required (3DS / Apple Pay approval), so poll for it (#1157).
+        {"*/15 * * * *", Engram.Billing.Workers.PaddleReconcile,
+         args: %{"scan" => "stalled_checkouts"}},
         {"30 3 * * *", Engram.Workers.InactivityCleanup},
         # Fair-use over 3 consecutive DAYS: a daily question.
         {"0 4 * * *", Engram.Workers.OriginAbuseSweep},

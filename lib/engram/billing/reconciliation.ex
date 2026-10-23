@@ -307,6 +307,77 @@ defmodule Engram.Billing.Reconciliation do
     end
   end
 
+  # A payment parked at `action_required` this long is a stalled checkout,
+  # not a 3DS challenge still in progress (the alert's own grace period).
+  @stalled_after_seconds 15 * 60
+  # The scan's cron interval: each run owns exactly one window of this width.
+  @stalled_scan_window_seconds 15 * 60
+
+  @doc """
+  Reports `ready` Paddle transactions whose newest payment parked at
+  `action_required` (3DS / wallet approval) and never moved on. Paddle sends
+  no webhook for that state, so without this scan engram-infra #1157's
+  stalled-checkout alert never sees the line it needs.
+
+  Dedupe without state: a run anchored at `anchor` (a 15-minute cron tick)
+  owns payments created in `[anchor - 30m, anchor - 15m)`. Consecutive ticks
+  tile the timeline, so each stalled payment is reported by exactly one run,
+  and a retry of the same job (same anchor) re-reads the same window.
+  ponytail: a tick that never runs (whole cluster down) skips its window; a
+  persisted cursor would close that gap if it ever matters.
+
+  Returns the number of transactions reported, or `{:error, reason}`.
+  """
+  @spec report_stalled_checkouts(DateTime.t()) :: non_neg_integer() | {:error, :fetch_failed}
+  def report_stalled_checkouts(%DateTime{} = anchor) do
+    if Application.get_env(:engram, :billing_enabled, false) do
+      window_end = DateTime.add(anchor, -@stalled_after_seconds, :second)
+      window_start = DateTime.add(window_end, -@stalled_scan_window_seconds, :second)
+
+      case Engram.Paddle.Client.impl().list_ready_transactions(window_start) do
+        {:ok, txns} ->
+          report_stalled(txns, window_start, window_end)
+
+        {:partial, txns, _reason} ->
+          report_stalled(txns, window_start, window_end)
+
+        {:error, reason} ->
+          # Bounded fields only, same reason as `paddle_reconcile_fetch_failed`.
+          Logger.error(
+            "paddle_stalled_scan_fetch_failed",
+            Metadata.with_category(:error, :billing,
+              error_kind: Telemetry.error_kind(reason),
+              status: paddle_error_status(reason)
+            )
+          )
+
+          {:error, :fetch_failed}
+      end
+    else
+      0
+    end
+  end
+
+  defp report_stalled(txns, window_start, window_end) do
+    txns
+    |> Enum.filter(&stalled_in_window?(&1, window_start, window_end))
+    |> Enum.count(fn txn ->
+      Engram.Billing.report_checkout_transaction("reconcile.stalled_scan", txn) ==
+        {:ok, :checkout_stalled}
+    end)
+  end
+
+  defp stalled_in_window?(txn, window_start, window_end) do
+    with %{"status" => "action_required", "created_at" => created} <-
+           Engram.Billing.newest_payment(List.wrap(txn["payments"])),
+         {:ok, created_at, _} <- DateTime.from_iso8601(created) do
+      DateTime.compare(created_at, window_start) != :lt and
+        DateTime.compare(created_at, window_end) == :lt
+    else
+      _ -> false
+    end
+  end
+
   defp log_summary(paddle, local, drift) do
     Logger.info(
       "paddle_reconcile_summary paddle=#{length(paddle)} local=#{length(local)} drift=#{length(drift)}",

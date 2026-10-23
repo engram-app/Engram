@@ -941,15 +941,7 @@ defmodule Engram.Billing do
   # that never reaches a `paddle_transaction_completed` line.
   def upsert_from_paddle_event(%{"event_type" => type, "data" => data})
       when type in ~w(transaction.payment_failed transaction.updated) do
-    # A renewal decline is dunning, not a stalled checkout: it already arrives
-    # as subscription.past_due, which this module handles. Reporting it here
-    # would page for an expired card on an existing subscriber, under a log
-    # name that says "checkout".
-    if dunning?(data) do
-      {:ok, :ignored}
-    else
-      report_checkout_payment(type, data)
-    end
+    report_checkout_transaction(type, data)
   end
 
   # The other half of the stalled-3DS alert (engram-infra #1157): it fires on a
@@ -992,6 +984,37 @@ defmodule Engram.Billing do
 
   def upsert_from_paddle_event(_event), do: {:ok, :ignored}
 
+  @doc """
+  Emits `checkout_payment_stalled` / `checkout_payment_action_required` (log +
+  `[:engram, :paddle, :checkout, :stalled]`) for a Paddle transaction whose
+  newest payment attempt is stuck. The one emitter for both the webhook path
+  and the reconcile scan, so engram-infra #1157's alert reads one line shape.
+  `source` lands on the line as `event_type`.
+  """
+  @spec report_checkout_transaction(String.t(), map()) ::
+          {:ok, :checkout_stalled | :ignored}
+  def report_checkout_transaction(source, data) do
+    # A renewal decline is dunning, not a stalled checkout: it already arrives
+    # as subscription.past_due, which this module handles. Reporting it here
+    # would page for an expired card on an existing subscriber, under a log
+    # name that says "checkout".
+    if dunning?(data) do
+      {:ok, :ignored}
+    else
+      report_checkout_payment(source, data)
+    end
+  end
+
+  @doc """
+  The newest payment attempt on a Paddle transaction, or nil. Paddle orders
+  payments newest-first, but that is not relied on: this sorts by `created_at`
+  and falls back to the head when the field is absent.
+  """
+  @spec newest_payment([map()]) :: map() | nil
+  def newest_payment([]), do: nil
+  def newest_payment([payment]), do: payment
+  def newest_payment(payments), do: Enum.max_by(payments, &(&1["created_at"] || ""))
+
   @stalled_payment_statuses ~w(error action_required)
 
   defp report_checkout_payment(type, data) do
@@ -1023,13 +1046,6 @@ defmodule Engram.Billing do
   # in a live checkout, and neither arrives as subscription.past_due — keying
   # on the id would silently drop exactly the failures we are here to see.
   defp dunning?(data), do: data["origin"] == "subscription_recurring"
-
-  # Paddle orders payments newest-first, but that is not documented, so sort by
-  # `created_at` and fall back to the head when the field is absent.
-  defp newest_payment([]), do: nil
-  defp newest_payment([payment]), do: payment
-
-  defp newest_payment(payments), do: Enum.max_by(payments, &(&1["created_at"] || ""))
 
   defp report_stalled_checkout(event_type, data, payment) do
     method = get_in(payment, ["method_details", "type"]) || "unknown"

@@ -1,7 +1,9 @@
 defmodule Engram.Billing.Workers.PaddleReconcile do
   @moduledoc """
-  Daily Oban cron worker. Calls `Engram.Billing.Reconciliation.run/1` with
-  a 7-day window. Drift is logged at `:error` and captured by Sentry —
+  Oban cron worker for Paddle reconciliation. Daily: calls
+  `Engram.Billing.Reconciliation.run/1` with a 7-day window. Every 15
+  minutes (args `%{"scan" => "stalled_checkouts"}`): reports checkouts stuck
+  at `action_required` via `Reconciliation.report_stalled_checkouts/1`. Drift is logged at `:error` and captured by Sentry —
   the worker itself always returns `:ok` so Oban doesn't mark the job
   failed for data drift (which is signal, not job failure).
 
@@ -18,12 +20,28 @@ defmodule Engram.Billing.Workers.PaddleReconcile do
   use Oban.Worker,
     queue: :maintenance,
     max_attempts: 2,
-    unique: [period: 60, fields: [:worker]]
+    # :args too: the daily drift run and the 15-minute stalled scan share the
+    # 02:00 tick, and [:worker] alone would drop one as a duplicate.
+    unique: [period: 60, fields: [:worker, :args]]
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(15)
 
+  # Stalled-checkout scan (args `%{"scan" => "stalled_checkouts"}`, every 15
+  # min): see `Reconciliation.report_stalled_checkouts/1`. Anchored on the
+  # job's insert tick, floored to the 15-minute boundary, so a retry re-reads
+  # the same window instead of sliding past it.
   @impl Oban.Worker
+  def perform(%Oban.Job{args: %{"scan" => "stalled_checkouts"}, inserted_at: inserted_at}) do
+    tick = inserted_at || DateTime.utc_now()
+    anchor = DateTime.from_unix!(div(DateTime.to_unix(tick), 900) * 900)
+
+    case Engram.Billing.Reconciliation.report_stalled_checkouts(anchor) do
+      {:error, _reason} = error -> error
+      _count -> :ok
+    end
+  end
+
   def perform(_job) do
     result = Engram.Billing.Reconciliation.run(7)
     outcome = result.skipped || :ok
