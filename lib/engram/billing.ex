@@ -1295,12 +1295,18 @@ defmodule Engram.Billing do
     end
   end
 
-  defp parse_period_end(%{"current_billing_period" => %{"ends_at" => ts}}) when is_binary(ts) do
+  @doc """
+  A Paddle subscription's current period end, truncated to seconds, as stored
+  in `subscriptions.current_period_end`. nil when Paddle has no current period
+  (`current_billing_period: null` on a canceled or paused subscription).
+  """
+  @spec parse_period_end(map()) :: DateTime.t() | nil
+  def parse_period_end(%{"current_billing_period" => %{"ends_at" => ts}}) when is_binary(ts) do
     case DateTime.from_iso8601(ts) do
       {:ok, dt, _offset} -> DateTime.truncate(dt, :second)
       _ -> nil
     end
   end
 
-  defp parse_period_end(_), do: nil
+  def parse_period_end(_), do: nil
 end

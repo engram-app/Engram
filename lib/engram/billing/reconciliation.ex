@@ -285,25 +285,23 @@ defmodule Engram.Billing.Reconciliation do
     end
   end
 
+  # Paddle sends `current_billing_period: null` once a subscription is canceled
+  # or paused: there is no period to compare, and access is gated on the status
+  # (already matched above), not on a stale local period end. The old raw-shape
+  # match treated that valid shape as unparseable and warned
+  # `paddle_reconcile_period_unparseable` every night for each such sub in the
+  # window. Paddle's side goes through the parser the webhook path writes with.
   defp period_mismatch?(paddle_sub, local) do
-    with %{"ends_at" => ts} <- paddle_sub["current_billing_period"],
-         {:ok, paddle_dt, _offset} <- DateTime.from_iso8601(ts),
-         %DateTime{} = local_dt <- local.current_period_end do
-      abs(DateTime.diff(paddle_dt, local_dt, :second)) > @period_skew_seconds
-    else
-      other ->
-        # Couldn't parse — treat as no-drift to avoid spamming Sentry
-        # on every reconciliation cycle when Paddle returns an
-        # unexpected shape, but warn so a contract change is visible.
-        Logger.warning(
-          "paddle_reconcile_period_unparseable",
-          Metadata.with_category(:warning, :billing,
-            paddle_subscription_id: paddle_sub["id"],
-            reason: inspect(other)
-          )
-        )
-
+    case {Engram.Billing.parse_period_end(paddle_sub), local.current_period_end} do
+      {nil, _local} ->
         false
+
+      {%DateTime{} = paddle_dt, %DateTime{} = local_dt} ->
+        abs(DateTime.diff(paddle_dt, local_dt, :second)) > @period_skew_seconds
+
+      # Paddle has a live period and we stored none: real drift.
+      {%DateTime{}, nil} ->
+        true
     end
   end
 

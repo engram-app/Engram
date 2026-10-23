@@ -223,6 +223,72 @@ defmodule Engram.Billing.ReconciliationTest do
                Reconciliation.run(7)
     end
 
+    # Prod shape behind the nightly `paddle_reconcile_period_unparseable` for
+    # sub_01m22dys... and sub_01m40n7t...: Paddle nulls current_billing_period
+    # once a subscription is canceled, and the webhook mirror stores nil.
+    test "a canceled sub with no current period is in sync, and does not warn" do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_canceled",
+        paddle_customer_id: "ctm_canceled",
+        tier: "starter",
+        status: "canceled",
+        current_period_end: nil
+      )
+
+      Engram.Paddle.ClientMock
+      |> expect(:list_subscriptions, fn _since ->
+        {:ok,
+         [
+           paddle_sub(%{
+             "id" => "sub_canceled",
+             "customer_id" => "ctm_canceled",
+             "status" => "canceled",
+             "current_billing_period" => nil
+           })
+         ]}
+      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert %{drift: []} = Reconciliation.run(7)
+        end)
+
+      refute log =~ "paddle_reconcile_period_unparseable"
+    end
+
+    test "a live Paddle period with no local period end is drift" do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_nolocal",
+        paddle_customer_id: "ctm_nolocal",
+        tier: "starter",
+        status: "active",
+        current_period_end: nil
+      )
+
+      Engram.Paddle.ClientMock
+      |> expect(:list_subscriptions, fn _since ->
+        {:ok,
+         [
+           paddle_sub(%{
+             "id" => "sub_nolocal",
+             "customer_id" => "ctm_nolocal",
+             "current_billing_period" => %{"ends_at" => "2026-07-31T00:00:00Z"}
+           })
+         ]}
+      end)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert %{drift: [%{kind: :period_mismatch, subscription_id: "sub_nolocal"}]} =
+                 Reconciliation.run(7)
+      end)
+    end
+
     test "tolerates period skew within 2 minutes" do
       user = insert(:user)
 
