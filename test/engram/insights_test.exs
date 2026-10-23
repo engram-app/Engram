@@ -325,10 +325,12 @@ defmodule Engram.InsightsTest do
       [:engram, :repo, :query],
       # Handlers run in the querying process: count only this test's queries,
       # not those of async tests running alongside.
+      # Other tests emit this event with no `:result` (QueryRecorderTest): a
+      # raising handler is detached by telemetry and every later count is empty.
       fn _event, _measure, meta, _ ->
-        case meta.result do
-          {:ok, %{num_rows: n}} when self() == parent -> send(parent, {:rows, ref, n})
-          _ -> :ok
+        with true <- self() == parent,
+             {:ok, %{num_rows: n}} <- Map.get(meta, :result) do
+          send(parent, {:rows, ref, n})
         end
       end,
       nil
@@ -336,11 +338,19 @@ defmodule Engram.InsightsTest do
 
     on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
 
+    # Reproduce that neighbour deterministically instead of by async timing.
+    Task.await(
+      Task.async(fn ->
+        :telemetry.execute([:engram, :repo, :query], %{}, %{query: "SELECT 1", source: nil})
+      end)
+    )
+
     for name <- Insights.reports() do
       _ = Insights.report(name, :all)
       counts = drain_rows(ref)
+      assert counts != [], "#{name} recorded no queries: the handler is gone"
       assert length(counts) <= 12, "#{name} ran #{length(counts)} queries"
-      assert Enum.max(counts, fn -> 0 end) <= 200, "#{name} loaded #{Enum.max(counts)} rows"
+      assert Enum.max(counts) <= 200, "#{name} loaded #{Enum.max(counts)} rows"
     end
   end
 
