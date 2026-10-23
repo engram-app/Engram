@@ -30,16 +30,12 @@ defmodule Engram.Billing.Workers.PaddleReconcile do
 
   # Stalled-checkout scan (args `%{"scan" => "stalled_checkouts"}`, every 15
   # min): see `Reconciliation.report_stalled_checkouts/1`. Anchored on the
-  # job's insert tick, rounded to the 15-minute boundary, so a retry re-reads
-  # the same window instead of sliding past it.
+  # job's cron tick so a retry re-reads the same window.
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"scan" => "stalled_checkouts"}, inserted_at: inserted_at}) do
-    tick = inserted_at || DateTime.utc_now()
-    # Nearest tick, not floor: a job inserted a hair before its tick (DB vs
-    # node clock) must not anchor to the previous one and re-read its window.
-    anchor = DateTime.from_unix!(div(DateTime.to_unix(tick) + 450, 900) * 900)
-
-    case Engram.Billing.Reconciliation.report_stalled_checkouts(anchor) do
+    case Engram.Billing.Reconciliation.report_stalled_checkouts(
+           scan_anchor(inserted_at || DateTime.utc_now())
+         ) do
       {:error, _reason} = error -> error
       _count -> :ok
     end
@@ -56,5 +52,17 @@ defmodule Engram.Billing.Workers.PaddleReconcile do
     )
 
     :ok
+  end
+
+  @doc """
+  The scan's anchor: the cron tick the job was inserted for, rounded to the
+  nearest minute. Ticks are exactly 15 minutes apart, so windows anchored on
+  them tile, and the window end (anchor - 15m) is never later than 15 minutes
+  before the run: nothing younger than the grace is reported. Rounding (not
+  flooring) absorbs a DB clock that inserts the job a hair before its minute.
+  """
+  @spec scan_anchor(DateTime.t()) :: DateTime.t()
+  def scan_anchor(%DateTime{} = inserted_at) do
+    DateTime.from_unix!(div(DateTime.to_unix(inserted_at) + 30, 60) * 60)
   end
 end

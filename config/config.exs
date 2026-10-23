@@ -249,8 +249,8 @@ config :engram, Oban,
         # Stalled-checkout scan: Paddle sends no webhook for a payment parked at
         # action_required (3DS / Apple Pay approval), so poll for it (#1157).
         # :14/:29/:44/:59, the one 15-minute phase no other cron shares (after
-        # moving TelemetryHeartbeat off 05:14). The worker rounds the tick to
-        # :15/:30/:45/:00, so its windows still tile the hour.
+        # moving TelemetryHeartbeat off 05:14). Windows are anchored on the tick
+        # itself (PaddleReconcile.scan_anchor/1), so they tile the hour.
         {"14-59/15 * * * *", Engram.Billing.Workers.PaddleReconcile,
          args: %{"scan" => "stalled_checkouts"}},
         {"30 3 * * *", Engram.Workers.InactivityCleanup},

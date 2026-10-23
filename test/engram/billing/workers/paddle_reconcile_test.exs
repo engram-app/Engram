@@ -165,6 +165,15 @@ defmodule Engram.Billing.Workers.PaddleReconcileTest do
       end)
     end
 
+    # The grace: a window anchored on the tick ends 15 minutes before the run,
+    # so a payment younger than that can never be reported.
+    test "anchors on the cron tick, to the minute, so windows tile and keep the grace" do
+      assert PaddleReconcile.scan_anchor(~U[2026-10-23 12:14:00.020Z]) == ~U[2026-10-23 12:14:00Z]
+      # DB clock a hair early: still that tick, not the previous minute.
+      assert PaddleReconcile.scan_anchor(~U[2026-10-23 12:13:59.990Z]) == ~U[2026-10-23 12:14:00Z]
+      assert PaddleReconcile.scan_anchor(~U[2026-10-23 12:29:00.400Z]) == ~U[2026-10-23 12:29:00Z]
+    end
+
     test "is a no-op on self-host" do
       Application.put_env(:engram, :billing_enabled, false)
       assert Reconciliation.report_stalled_checkouts(@anchor) == 0
