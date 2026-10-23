@@ -1,5 +1,6 @@
 defmodule Engram.Notes.LineageAuditTest do
   use Engram.DataCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   import ExUnit.CaptureLog
 
@@ -8,6 +9,7 @@ defmodule Engram.Notes.LineageAuditTest do
   alias Engram.Notes
   alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtTransport, CrdtUpdateLog, LineageAudit, Note}
   alias Engram.Repo
+  alias Engram.Test.LogCapture
 
   setup do
     {user, vault} = owner("LineageAudit")
@@ -30,6 +32,7 @@ defmodule Engram.Notes.LineageAuditTest do
   end
 
   # Moves the whole snapshot into one update-log row: a never-checkpointed note.
+  # The row is stamped with `vault` (pass a foreign one for the #1318 shape).
   defp log_only!(user, vault, note_id) do
     {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note_id) end)
     {:ok, state} = Crypto.decrypt_crdt_state(raw, user)
@@ -76,25 +79,68 @@ defmodule Engram.Notes.LineageAuditTest do
     {:ok, _} = CrdtTransport.apply_update(user, vault, note_id, update)
   end
 
+  # A client on the server's lineage selects the whole body and types `text`.
+  defp clear_and_retype(user, vault, note_id, text) do
+    {:ok, %{update: full}} = CrdtTransport.read_delta(user, vault, note_id, nil)
+    client = CrdtBridge.new_doc()
+    :ok = Yex.apply_update(client, full)
+    sv = Yex.encode_state_vector!(client)
+    body = Yex.Doc.get_text(client, CrdtBridge.text_name())
+    Yex.Text.delete(body, 0, String.length(Yex.Text.to_string(body)))
+    Yex.Text.insert(body, 0, text)
+    {:ok, update} = Yex.encode_state_as_update(client, sv)
+    {:ok, _} = CrdtTransport.apply_update(user, vault, note_id, update)
+  end
+
   test "an edited note is one lineage", %{user: user, vault: vault} do
     n = note(user, vault, "A/Clean.md", "first body line.\n")
     edit(user, vault, n.id, "first body line.\nsecond line.\n")
 
-    assert {:ok, %{note_id: id, root_client_count: 1}} = LineageAudit.scan_note(user, vault, n.id)
+    assert {:ok, %{note_id: id, live_root_count: 1, root_count: 1, root_client_count: 1}} =
+             LineageAudit.scan_note(user, vault, n.id)
+
     assert id == n.id
   end
 
-  test "a fresh-device seed is two lineages", %{user: user, vault: vault} do
+  test "RIVAL: a fresh-device seed is two live lineages", %{user: user, vault: vault} do
     n = note(user, vault, "A/Doubled.md", "first body line.\n")
     rival_seed(user, vault, n.id, "first body line.\nsecond line.\n")
 
-    assert {:ok, %{root_client_count: 2, root_count: 2, lineage_lengths: lengths}} =
+    assert {:ok,
+            %{live_root_count: 2, root_client_count: 2, root_count: 2, lineage_lengths: lengths}} =
              LineageAudit.scan_note(user, vault, n.id)
 
     assert length(lengths) == 2
+    assert {:ok, %{rivals: [%{note_id: id}], suspects: []}} = LineageAudit.run(user_id: user.id)
+    assert id == n.id
   end
 
-  test "a doubled note whose rival copy was deleted is one lineage", %{user: user, vault: vault} do
+  test "HEALTHY: a cleared-and-retyped note is one dead root", %{user: user, vault: vault} do
+    n = note(user, vault, "A/Retyped.md", "old text")
+    clear_and_retype(user, vault, n.id, "new text")
+
+    # Retyping hangs off the deleted structs: still one lineage, now dead.
+    assert {:ok, %{live_root_count: 0, root_count: 1}} =
+             LineageAudit.scan_note(user, vault, n.id)
+
+    assert {:ok, %{rivals: [], suspects: []}} = LineageAudit.run(user_id: user.id)
+  end
+
+  test "SUSPECT: a fresh seed over a cleared-and-retyped note", %{user: user, vault: vault} do
+    # The I1 false negative: the original root is dead and the rival is live,
+    # so only ONE live root remains while the body reads "new textnew text".
+    n = note(user, vault, "A/Reseeded.md", "old text")
+    clear_and_retype(user, vault, n.id, "new text")
+    rival_seed(user, vault, n.id, "new text")
+
+    assert {:ok, %{live_root_count: 1, root_count: 2}} =
+             LineageAudit.scan_note(user, vault, n.id)
+
+    assert {:ok, %{rivals: [], suspects: [%{note_id: id}]}} = LineageAudit.run(user_id: user.id)
+    assert id == n.id
+  end
+
+  test "SUSPECT: a doubled note whose rival copy was deleted", %{user: user, vault: vault} do
     n = note(user, vault, "A/Cleaned.md", "first body line.\n")
     rival = "first body line.\nsecond line.\n"
     rival_seed(user, vault, n.id, rival)
@@ -110,7 +156,11 @@ defmodule Engram.Notes.LineageAuditTest do
     {:ok, update} = Yex.encode_state_as_update(client, sv)
     {:ok, _} = CrdtTransport.apply_update(user, vault, n.id, update)
 
-    assert {:ok, %{root_client_count: 1, root_count: 1}} =
+    # Was "one lineage" while only live roots counted. The deleted copy is a
+    # dead root beside a live one, the same shape as a fresh seed over a
+    # cleared note (above), whose body IS doubled. The audit cannot tell them
+    # apart without reading text, so both are suspects for triage.
+    assert {:ok, %{live_root_count: 1, root_count: 2, root_client_count: 2}} =
              LineageAudit.scan_note(user, vault, n.id)
   end
 
@@ -129,6 +179,90 @@ defmodule Engram.Notes.LineageAuditTest do
     set_note(user, n.id, crdt_state_ciphertext: nil, crdt_state_nonce: nil)
 
     assert {:ok, %{scanned: 0}} = LineageAudit.run(user_id: user.id)
+  end
+
+  test "a log-only note whose rows are all in a foreign vault is not scanned clean", ctx do
+    %{user: user, vault: vault} = ctx
+    {:ok, foreign, _} = Engram.Vaults.register_vault(user, "Foreign", Ecto.UUID.generate())
+    n = note(user, vault, "A/Foreign.md", "body\n")
+    CrdtRegistry.terminate_room(n.id)
+    # #1318 shape: the note's only state is a log row stamped with another vault.
+    log_only!(user, foreign, n.id)
+
+    capture_log(fn ->
+      assert {:error, :not_found} = LineageAudit.scan_note(user, vault, n.id)
+      assert {:ok, %{scanned: 0}} = LineageAudit.run(user_id: user.id)
+    end)
+  end
+
+  test "a tail row that decrypts but will not apply is :undecodable", ctx do
+    %{user: user, vault: vault} = ctx
+    n = note(user, vault, "C/BadRow.md", "x\n")
+    CrdtRegistry.terminate_room(n.id)
+    {:ok, dek} = Crypto.get_dek(user)
+    # Decrypts fine (right key, right AAD); the plaintext is not a Yjs update.
+    {ct, nonce} =
+      Envelope.encrypt(<<255, 255, 255>>, dek, Crypto.aad_for_row(:notes, :crdt_state, n.id))
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.insert!(%CrdtUpdateLog{
+          note_id: n.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          update_ciphertext: ct,
+          update_nonce: nonce,
+          inserted_at: DateTime.utc_now()
+        })
+      end)
+
+    assert {:error, :undecodable} = LineageAudit.scan_note(user, vault, n.id)
+  end
+
+  test "a scan that raises is unreadable as :error, and the run goes on", ctx do
+    %{user: user, vault: vault} = ctx
+    bad = note(user, vault, "C/Raises.md", "x\n")
+    good = note(user, vault, "C/Fine.md", "y\n")
+
+    scan = fn u, v, id ->
+      if id == bad.id, do: raise(ArgumentError, "boom"), else: LineageAudit.scan_note(u, v, id)
+    end
+
+    assert {:ok, %{scanned: 2, unreadable: [%{note_id: id, reason: :error}]} = result} =
+             LineageAudit.run(user_id: user.id, scan: scan)
+
+    assert id == bad.id
+    refute good.id in Enum.map(result.unreadable, & &1.note_id)
+    refute inspect(result) =~ "ArgumentError"
+    refute inspect(result) =~ "boom"
+  end
+
+  test "run/1 writes nothing and starts no room or job", %{user: user, vault: vault} do
+    n = note(user, vault, "G/ReadOnly.md", "a\n")
+    rival_seed(user, vault, n.id, "a\nb\n")
+    CrdtRegistry.terminate_room(n.id)
+    before = persisted(user, n.id)
+    jobs = all_enqueued()
+
+    assert {:ok, %{rivals: [_]}} = LineageAudit.run(user_id: user.id)
+
+    assert persisted(user, n.id) == before
+    assert CrdtRegistry.lookup(n.id) == nil
+    assert all_enqueued() == jobs
+  end
+
+  # What a write would move: the row's updated_at and crdt_head, and the log.
+  defp persisted(user, note_id) do
+    {:ok, state} =
+      Repo.with_tenant(user.id, fn ->
+        {updated_at, head} =
+          Repo.one!(from(n in Note, where: n.id == ^note_id, select: {n.updated_at, n.crdt_head}))
+
+        log = Repo.aggregate(from(l in CrdtUpdateLog, where: l.note_id == ^note_id), :count)
+        {updated_at, head, log}
+      end)
+
+    state
   end
 
   test "corrupt state is unreadable with a reason, and the run goes on", ctx do
@@ -196,12 +330,34 @@ defmodule Engram.Notes.LineageAuditTest do
     end)
   end
 
-  test "progress lines carry counts only", %{user: user, vault: vault} do
-    n = note(user, vault, "F/Secret title.md", "secret body\n")
-    log = capture_log(fn -> LineageAudit.run(user_id: user.id) end)
-    refute log =~ "secret"
-    refute log =~ "Secret"
-    assert {:ok, %{root_count: 1}} = LineageAudit.scan_note(user, vault, n.id)
+  test "progress lines carry counts and last_id only", %{user: user, vault: vault} do
+    n = note(user, vault, "F/Zanzibar Quokka.md", "xylophone marmalade\n")
+    previous = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous) end)
+
+    log =
+      capture_log([level: :info], fn ->
+        {result, events} =
+          LogCapture.with_events(fn -> LineageAudit.run(user_id: user.id, progress_every: 1) end)
+
+        send(self(), {:audit, result, events})
+      end)
+
+    assert_received {:audit, {:ok, %{scanned: 1}}, events}
+    assert [event] = Enum.filter(events, &Map.has_key?(&1.meta, :scanned))
+
+    assert Map.take(event.meta, [:scanned, :rivals, :suspects, :unreadable, :last_id]) ==
+             %{scanned: 1, rivals: 0, suspects: 0, unreadable: 0, last_id: n.id}
+
+    for key <- [:note_id, :path, :title, :content], do: refute(Map.has_key?(event.meta, key))
+    assert log =~ "lineage audit progress"
+    assert log =~ n.id
+
+    for secret <- ["Zanzibar", "Quokka", "xylophone", "marmalade"] do
+      refute log =~ secret
+      refute inspect(events) =~ secret
+    end
   end
 
   test "run/1 reports only rival notes, ids and counts only", %{user: user, vault: vault} do
@@ -209,13 +365,19 @@ defmodule Engram.Notes.LineageAuditTest do
     doubled = note(user, vault, "B/Doubled.md", "old body\n")
     rival_seed(user, vault, doubled.id, "old body\nnew line\n")
 
-    assert {:ok, %{scanned: 2, unreadable: [], unreadable_count: 0, rivals: [finding]}} =
-             LineageAudit.run(user_id: user.id)
+    assert {:ok,
+            %{
+              scanned: 2,
+              unreadable: [],
+              unreadable_count: 0,
+              rivals: [finding],
+              suspects: []
+            }} = LineageAudit.run(user_id: user.id)
 
     assert finding.note_id == doubled.id
 
     assert Map.keys(finding) |> Enum.sort() ==
-             [:lineage_lengths, :note_id, :root_client_count, :root_count]
+             [:lineage_lengths, :live_root_count, :note_id, :root_client_count, :root_count]
 
     refute finding.note_id == clean.id
   end

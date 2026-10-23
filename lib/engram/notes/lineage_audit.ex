@@ -4,12 +4,19 @@ defmodule Engram.Notes.LineageAudit do
 
   A root insert is a body item written into an EMPTY text (no origin, no right
   origin). Yjs keeps deleted neighbours as origins, so a healthy note has
-  exactly one LIVE root struct, however it was edited. A second one means a
-  writer seeded the body into a doc it had never synced, and Yjs unioned the
-  copies. A rival is any note with more than one live root struct, even from one
-  client; a root whose whole range is deleted (a copy the user already removed)
-  is not counted. The count is the source of truth; reading the text for "old
-  body + edit" is triage only.
+  exactly one root struct, however it was edited, even cleared and retyped. A
+  second one means a writer seeded the body into a doc it had never synced,
+  and Yjs unioned the copies. Each finding carries every root lineage, wholly
+  deleted ones included, as `{live, total}` UTF-16 lengths:
+
+    * **rival**: two or more LIVE roots. The body is doubled now.
+    * **suspect**: at most one live root, but two or more roots. Either the
+      user deleted the duplicate by hand (healthy text), or a fresh device
+      seeded a note that had been cleared and retyped (the original root is
+      dead, the rival is live, the body is doubled, e.g. "new textnew text").
+      Live roots alone cannot tell these apart. Triage reads the text for
+      duplication; the audit never puts text in its output.
+    * healthy otherwise (at most one root, live or not).
 
   Known causes of a rival lineage:
 
@@ -32,7 +39,10 @@ defmodule Engram.Notes.LineageAudit do
   Output and logs are ids, counts and reason atoms only: no content, titles or
   paths. Only the CRDT state (snapshot + update-log tail) is decrypted, never
   the content, title or path columns. Writes nothing, starts no room or job.
-  One note at a time, ordered by id; `last_id` resumes a cut-short run.
+  One note at a time, ordered by id; `last_id` (in the result and on every
+  progress line, each `progress_every:` notes, default 1000) resumes a
+  cut-short run. A note whose scan raises is reported unreadable (`:error`)
+  and the run goes on.
   """
   import Ecto.Query
 
@@ -48,16 +58,18 @@ defmodule Engram.Notes.LineageAudit do
 
   @progress_every 1_000
 
-  @type reason :: :decrypt | :undecodable | :owner_missing | :not_found
+  @type reason :: :decrypt | :undecodable | :owner_missing | :not_found | :error
   @type finding :: %{
           note_id: String.t(),
-          root_client_count: non_neg_integer(),
+          live_root_count: non_neg_integer(),
           root_count: non_neg_integer(),
-          lineage_lengths: [non_neg_integer()]
+          root_client_count: non_neg_integer(),
+          lineage_lengths: [{live :: non_neg_integer(), total :: non_neg_integer()}]
         }
   @type result :: %{
           scanned: non_neg_integer(),
           rivals: [finding],
+          suspects: [finding],
           unreadable: [%{note_id: String.t(), reason: reason}],
           unreadable_count: non_neg_integer(),
           last_id: String.t() | nil
@@ -67,6 +79,8 @@ defmodule Engram.Notes.LineageAudit do
   Scan every live note with CRDT state (snapshot or update-log rows), or one
   user's (`user_id:`). `limit:` caps the notes scanned and `after_id:` starts
   past an id (notes go in id order), so `last_id` of one run resumes the next.
+  `progress_every:` sets how often a progress line is logged (default 1000).
+  `scan:` replaces `scan_note/3` (tests only: a scan that raises).
 
   `{:error, :no_maintenance_repo}` where RLS would silently hide every row, and
   `{:error, :scanned_nothing}` for a whole-fleet run (no `user_id:`, no
@@ -77,8 +91,18 @@ defmodule Engram.Notes.LineageAudit do
     if Repo.maintenance() == Repo and Engram.Repo.TenancyGuard.enforced?() do
       {:error, :no_maintenance_repo}
     else
-      acc = %{scanned: 0, rivals: [], unreadable: [], unreadable_count: 0, last_id: nil}
-      result = opts |> targets() |> Enum.reduce(acc, &tally/2)
+      acc = %{
+        scanned: 0,
+        rivals: [],
+        suspects: [],
+        unreadable: [],
+        unreadable_count: 0,
+        last_id: nil
+      }
+
+      every = Keyword.get(opts, :progress_every, @progress_every)
+      scan = Keyword.get(opts, :scan, &scan_note/3)
+      result = opts |> targets() |> Enum.reduce(acc, &tally(&1, &2, scan, every))
 
       if result.scanned == 0 and is_nil(opts[:user_id]) and is_nil(opts[:after_id]) do
         {:error, :scanned_nothing}
@@ -87,6 +111,7 @@ defmodule Engram.Notes.LineageAudit do
          %{
            result
            | rivals: Enum.reverse(result.rivals),
+             suspects: Enum.reverse(result.suspects),
              unreadable: Enum.reverse(result.unreadable)
          }}
       end
@@ -105,9 +130,10 @@ defmodule Engram.Notes.LineageAudit do
       {:ok,
        %{
          note_id: note_id,
-         root_client_count: roots |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> length(),
+         live_root_count: Enum.count(roots, fn {_client, live, _total} -> live > 0 end),
          root_count: length(roots),
-         lineage_lengths: Enum.map(roots, &elem(&1, 1))
+         root_client_count: roots |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> length(),
+         lineage_lengths: Enum.map(roots, fn {_client, live, total} -> {live, total} end)
        }}
     end
   end
@@ -140,23 +166,39 @@ defmodule Engram.Notes.LineageAudit do
 
     with %Note{} <- note,
          {:ok, snapshot} <- decrypt(note, user),
+         :ok <- present(snapshot, rows),
          {:ok, doc} <- doc(snapshot),
          :ok <- replay(doc, user, note_id, rows),
          {:ok, update} <- Yex.encode_state_as_update(doc) do
       {:ok, update}
     else
       nil -> {:error, :not_found}
-      {:error, reason} when reason in [:decrypt, :undecodable] -> {:error, reason}
+      {:error, reason} when reason in [:decrypt, :undecodable, :not_found] -> {:error, reason}
       _ -> {:error, :undecodable}
     end
   end
 
-  # A tail row that would not decrypt (or apply) leaves the doc short, and
-  # `apply_tail_rows/4` only logs it, so compare the counts.
+  # No snapshot and no tail in this vault: nothing to scan. Without this an
+  # empty doc would scan as a clean note (a log-only note whose rows sit in a
+  # foreign vault, #1318 shape, would read as healthy).
+  defp present(nil, []), do: {:error, :not_found}
+  defp present(_snapshot, _rows), do: :ok
+
+  # Row by row, as `CrdtPersistence.apply_tail_rows/4` does, but telling the
+  # two failures apart: a row that will not decrypt is `:decrypt`, one that
+  # decrypts but will not apply is `:undecodable`. Either leaves the doc short.
   defp replay(doc, user, note_id, rows) do
-    if length(CrdtPersistence.apply_tail_rows(doc, user, note_id, rows)) == length(rows),
-      do: :ok,
-      else: {:error, :decrypt}
+    Enum.reduce_while(rows, :ok, fn row, :ok ->
+      case CrdtPersistence.decrypt_tail_row(row, user, note_id) do
+        {:ok, update} when is_binary(update) ->
+          if Yex.apply_update(doc, update) == :ok,
+            do: {:cont, :ok},
+            else: {:halt, {:error, :undecodable}}
+
+        _ ->
+          {:halt, {:error, :decrypt}}
+      end
+    end)
   end
 
   defp decrypt(note, user) do
@@ -173,17 +215,28 @@ defmodule Engram.Notes.LineageAudit do
     end
   end
 
-  defp tally({user, vault, note_id}, acc) do
+  defp tally({user, vault, note_id}, acc, scan, every) do
     acc =
-      case scan_note(user, vault, note_id) do
-        {:ok, %{root_count: n} = f} when n > 1 -> %{acc | rivals: [f | acc.rivals]}
+      case safe_scan(scan, user, vault, note_id) do
+        {:ok, %{live_root_count: live} = f} when live >= 2 -> %{acc | rivals: [f | acc.rivals]}
+        {:ok, %{root_count: n} = f} when n >= 2 -> %{acc | suspects: [f | acc.suspects]}
         {:ok, _} -> acc
         {:error, reason} -> unreadable(acc, note_id, reason)
       end
 
     acc = %{acc | scanned: acc.scanned + 1, last_id: note_id}
-    if rem(acc.scanned, @progress_every) == 0, do: progress(acc)
+    if rem(acc.scanned, every) == 0, do: progress(acc)
     acc
+  end
+
+  # Not swallowing: the raise is recorded against this note in `unreadable`,
+  # as `:error`. One malformed note must not end a fleet-wide run, and the
+  # exception (its module and message can carry decrypted bytes) stays out of
+  # the result and the logs.
+  defp safe_scan(scan, user, vault, note_id) do
+    scan.(user, vault, note_id)
+  rescue
+    _ -> {:error, :error}
   end
 
   defp unreadable(acc, note_id, reason) do
@@ -200,7 +253,9 @@ defmodule Engram.Notes.LineageAudit do
       Metadata.with_category(:info, :data,
         scanned: acc.scanned,
         rivals: length(acc.rivals),
-        unreadable: acc.unreadable_count
+        suspects: length(acc.suspects),
+        unreadable: acc.unreadable_count,
+        last_id: acc.last_id
       )
     )
   end
@@ -218,7 +273,13 @@ defmodule Engram.Notes.LineageAudit do
         where:
           n.kind == "note" and is_nil(n.deleted_at) and
             (not is_nil(n.crdt_state_ciphertext) or
-               exists(from(l in CrdtUpdateLog, where: l.note_id == parent_as(:note).id))),
+               exists(
+                 from(l in CrdtUpdateLog,
+                   where:
+                     l.note_id == parent_as(:note).id and
+                       l.vault_id == parent_as(:note).vault_id
+                 )
+               )),
         order_by: n.id,
         select: {n.user_id, n.vault_id, n.id}
       )
@@ -228,6 +289,7 @@ defmodule Engram.Notes.LineageAudit do
         {:user_id, user_id}, q -> where(q, [n], n.user_id == ^user_id)
         {:after_id, id}, q -> where(q, [n], n.id > ^id)
         {:limit, limit}, q -> limit(q, ^limit)
+        # :progress_every, :scan
         _, q -> q
       end)
 
