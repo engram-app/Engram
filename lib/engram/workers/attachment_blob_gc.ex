@@ -236,17 +236,33 @@ defmodule Engram.Workers.AttachmentBlobGC do
         )
       end)
 
-    if length(matched) < length(rows) do
-      Logger.warning(
-        "attachment_blob_gc: finalize matched fewer rows than it #{label}",
-        Metadata.with_category(:warning, :oban,
-          key_count: length(rows),
-          total_count: length(matched)
-        )
-      )
-    end
+    if length(matched) < length(rows), do: log_unmatched(label, ids -- matched, length(rows))
 
     length(matched)
+  end
+
+  # A deleted key whose row no longer matches (went live, changed key, or was
+  # re-claimed) may be a live row whose blob is now gone: error, with the ids,
+  # so it can be restored from the bucket's noncurrent versions.
+  defp log_unmatched("deleted", unmatched, key_count) do
+    Logger.error(
+      "attachment_blob_gc: blob deleted but its row was not finalized; check these rows",
+      Metadata.with_category(:error, :oban,
+        key_count: key_count,
+        # Joined: the console formatter drops list values.
+        attachment_ids: unmatched |> Enum.take(50) |> Enum.join(",")
+      )
+    )
+  end
+
+  defp log_unmatched(label, unmatched, key_count) do
+    Logger.warning(
+      "attachment_blob_gc: finalize matched fewer rows than it #{label}",
+      Metadata.with_category(:warning, :oban,
+        key_count: key_count,
+        total_count: key_count - length(unmatched)
+      )
+    )
   end
 
   # The keys whose blob is gone. One batched call; if any key in it failed,

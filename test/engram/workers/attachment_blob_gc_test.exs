@@ -280,8 +280,15 @@ defmodule Engram.Workers.AttachmentBlobGCTest do
       InMemory.delete_many(keys)
     end)
 
-    capture_log(fn -> AttachmentBlobGC.sweep() end)
+    log = capture_log(fn -> AttachmentBlobGC.sweep() end)
     assert reload(att).storage_key == att.storage_key
+
+    # The blob IS gone: no current path undeletes, and one that does must
+    # take the vault lock and skip claimed rows (see `claim/3`). Until then
+    # the loss must at least be loud and name the row, so it can be restored.
+    refute blob?(att.storage_key)
+    assert log =~ "blob deleted but its row was not finalized"
+    assert log =~ att.id
   end
 
   test "a delete that raises in one vault does not stop the others", %{
@@ -361,7 +368,7 @@ defmodule Engram.Workers.AttachmentBlobGCTest do
     log = capture_log(fn -> assert AttachmentBlobGC.sweep() == 0 end)
 
     assert reload(att).storage_key == other_key
-    assert log =~ "attachment_blob_gc: finalize matched fewer rows than it deleted"
+    assert log =~ "blob deleted but its row was not finalized"
   end
 
   describe "under enforced RLS with no maintenance pool" do
