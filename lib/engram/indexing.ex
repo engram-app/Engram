@@ -1595,7 +1595,8 @@ defmodule Engram.Indexing do
   reuses ids that are no longer in Qdrant and the note goes unsearchable with
   no error anywhere.
 
-  `Accounts.Lifecycle.soft_delete/2` is such a path — it drops the points and
+  `Accounts.Lifecycle.soft_delete/2` is such a path — it queues the points'
+  drop (`Engram.Workers.DropUserVectors`), clearing the markers first, and
   leaves the rows for the later hard-delete sweep. No code today un-soft-deletes
   an account, so this is a guard rather than a live fix, but the cost is one
   UPDATE on a path that runs once per account and the failure it prevents is

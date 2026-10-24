@@ -403,8 +403,9 @@ defmodule Engram.Accounts do
     2. block if this is the last active admin
     3. drive the shared `Engram.Accounts.Lifecycle` cascade —
        `soft_delete/2` stamps `deleted_at` + revokes tokens + emails,
-       then `hard_delete/2` purges every store (Paddle, Qdrant, S3,
-       Postgres cascade, Clerk).
+       then `hard_delete/2` purges every store (Paddle, S3, Postgres
+       cascade, Clerk). Both queue the Qdrant drop as an Oban job
+       (`Engram.Workers.DropUserVectors`) rather than calling Qdrant inline.
 
   Previously this set `deleted_at` and waited 30 days for the inactivity
   sweep to purge. The account-lifecycle work removes that wait — user-
