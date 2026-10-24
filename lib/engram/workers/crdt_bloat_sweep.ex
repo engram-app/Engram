@@ -230,8 +230,10 @@ defmodule Engram.Workers.CrdtBloatSweep do
           count(*) FILTER (
             WHERE has_state AND big AND ratio > $2::float8 AND state_bytes >= $4::int
           )::bigint,
-          coalesce(array_agg(id) FILTER (WHERE written), '{}'),
-          coalesce(array_agg(version) FILTER (WHERE written), '{}')
+          -- Both ORDER BY id: two aggregates have no shared order otherwise,
+          -- and the arrays are zipped id to version.
+          coalesce(array_agg(id ORDER BY id) FILTER (WHERE written), '{}'),
+          coalesce(array_agg(version ORDER BY id) FILTER (WHERE written), '{}')
         FROM (
           SELECT
             n.id,
