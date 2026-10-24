@@ -35,6 +35,7 @@ defmodule EngramWeb.RateLimiter do
           | :analytics_activity
           | :feedback
           | :client_logs
+          | :folder_create
           | :other
 
   @doc """

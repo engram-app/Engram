@@ -1,6 +1,9 @@
 defmodule EngramWeb.FoldersCreateDeleteTest do
   use EngramWeb.ConnCase, async: true
 
+  alias Engram.Notes
+  alias Engram.Repo
+
   setup %{conn: conn} do
     user = insert(:user)
     vault = insert(:vault, user: user, is_default: true)
@@ -51,18 +54,80 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
       assert %{"id" => ^id} = Enum.find(tree["folders"], &(&1["name"] == "Live/New"))
     end
 
-    test "broadcasts folders.batch create on idempotent re-create too", %{
+    # #2161: a re-create of a live folder changes nothing, so like the batch
+    # endpoint it must not make every peer re-poll /folders/explicit (a loop
+    # of those re-polls is the suspected POST storm amplifier).
+    test "idempotent re-create sends no broadcast, a new folder still does", %{
       conn: conn,
       user: user,
       vault: vault
     } do
       _ = post(conn, "/api/folders", %{"folder" => "Twice"})
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
-      post(conn, "/api/folders", %{"folder" => "Twice"})
+
+      assert conn |> post("/api/folders", %{"folder" => "Twice"}) |> json_response(201)
+      refute_receive %Phoenix.Socket.Broadcast{event: "folders.batch"}, 100
+
+      post(conn, "/api/folders", %{"folder" => "Fresh"})
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "folders.batch",
-        payload: %{op: "create", folder: "Twice"}
+        payload: %{op: "create", folder: "Fresh"}
+      }
+    end
+
+    test "undeleting through the single route broadcasts the original id", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      post(conn, "/api/folders", %{"folder" => "Back"})
+      assert_receive %Phoenix.Socket.Broadcast{payload: %{markers: [%{id: id}]}}
+      {:ok, :deleted} = Notes.delete_folder_marker(Repo.reload!(user), vault, "Back")
+
+      assert conn |> post("/api/folders", %{"folder" => "Back"}) |> json_response(201)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "folders.batch",
+        payload: %{op: "create", markers: [%{id: ^id, name: "Back"}]}
+      }
+    end
+
+    # #2121 through the REST route: a name holding only tombstones revives the
+    # most recently deleted one, whatever order Postgres returns the rows in.
+    test "with two tombstones, re-create revives the newest", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      post(conn, "/api/folders", %{"folder" => "GateG"})
+      assert_receive %Phoenix.Socket.Broadcast{payload: %{markers: [%{id: orig}]}}
+      user = Repo.reload!(user)
+      {:ok, :deleted} = Notes.delete_folder_marker(user, vault, "GateG")
+      post(conn, "/api/folders", %{"folder" => "GateF"})
+      assert_receive %Phoenix.Socket.Broadcast{payload: %{markers: [%{id: moved}]}}
+      {:ok, _} = Notes.rename_folder(user, vault, "GateF", "GateG")
+      {:ok, :deleted} = Notes.delete_folder_marker(user, vault, "GateG")
+
+      # The moved row was written last, so heap order returns it last. Make it
+      # the OLDER tombstone, so the right answer is the row Postgres returns first.
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          {:ok, orig_uuid} = Ecto.UUID.dump(orig)
+          {:ok, moved_uuid} = Ecto.UUID.dump(moved)
+
+          Repo.query!(
+            "UPDATE notes SET deleted_at = (SELECT deleted_at FROM notes WHERE id = $1) - interval '1 hour' WHERE id = $2",
+            [orig_uuid, moved_uuid]
+          )
+        end)
+
+      assert conn |> post("/api/folders", %{"folder" => "GateG"}) |> json_response(201)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        payload: %{op: "create", markers: [%{id: ^orig, name: "GateG"}]}
       }
     end
 
