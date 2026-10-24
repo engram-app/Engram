@@ -127,6 +127,34 @@ defmodule EngramWeb.FoldersController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
+    if within_create_budget?(user),
+      do: do_create(conn, user, vault, folder),
+      else: conn |> put_status(429) |> json(%{error: "rate_limited"})
+  end
+
+  def create(conn, _params) do
+    conn |> put_status(422) |> json(%{error: "folder parameter is required"})
+  end
+
+  # #2161: every single create runs in a pooled tenant transaction and may take
+  # the vault change_seq row lock, so one client looping on this route drained
+  # the Ecto pool on every web task. Refuse before any of that. Bulk creates
+  # belong on POST /folders/batch, which is one transaction for up to 500.
+  defp within_create_budget?(user) do
+    opts = Application.fetch_env!(:engram, :folder_create_rate_limit)
+
+    match?(
+      {:allow, _},
+      EngramWeb.RateLimiter.hit(
+        "folder_create:#{user.id}",
+        Keyword.fetch!(opts, :period_ms),
+        Keyword.fetch!(opts, :limit),
+        :folder_create
+      )
+    )
+  end
+
+  defp do_create(conn, user, vault, folder) do
     case Notes.create_folder_marker(user, vault, folder) do
       {:ok, marker} ->
         # Same event the batch ops emit — lets connected devices (plugin/web)
@@ -151,10 +179,6 @@ defmodule EngramWeb.FoldersController do
         |> put_status(500)
         |> json(%{error: format_error(reason)})
     end
-  end
-
-  def create(conn, _params) do
-    conn |> put_status(422) |> json(%{error: "folder parameter is required"})
   end
 
   operation(:batch_create,
