@@ -166,14 +166,22 @@ defmodule Engram.Billing.Subscriptions do
              | :paddle_unavailable
              | {:paddle_error, integer(), map()}}
   def reverse_cancel(user) do
-    with_active_sub(user, fn sub_id ->
-      Client.impl().update_subscription(
-        sub_id,
-        [],
-        idempotency_key: idempotency_key(:reverse_cancel, user, sub_id, :clear),
-        scheduled_change: nil
-      )
-    end)
+    result =
+      with_active_sub(user, fn sub_id ->
+        Client.impl().update_subscription(
+          sub_id,
+          [],
+          idempotency_key: idempotency_key(:reverse_cancel, user, sub_id, :clear),
+          scheduled_change: nil
+        )
+      end)
+
+    # Ends the cancel episode, so the reason given for it is not counted for
+    # a later cancel (`Engram.Feedback.record_missing_cancel_reason/3`).
+    with {:ok, _} <- result,
+         do: Engram.Analytics.track(user, "subscription_changed", %{kind: "cancel_reversed"})
+
+    result
   end
 
   defp with_active_sub(user, fun) do

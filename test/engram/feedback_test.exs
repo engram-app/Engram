@@ -210,6 +210,7 @@ defmodule Engram.FeedbackTest do
       log_event(user, "subscription_changed", %{"kind" => "cancel_scheduled"}, 20 * 86_400)
       log_event(user, "subscription_cancel_reason", %{"reason" => "too_expensive"}, 20 * 86_400)
       # Reversed, then cancelled again in the portal: no reason this time.
+      log_event(user, "subscription_changed", %{"kind" => "cancel_reversed"}, 10 * 86_400)
       log_event(user, "subscription_changed", %{"kind" => "cancel_scheduled"}, 2 * 86_400)
 
       assert :ok = Feedback.record_missing_cancel_reason(user, started, "portal_no_reason")
@@ -224,6 +225,37 @@ defmodule Engram.FeedbackTest do
 
       assert :ok = Feedback.record_missing_cancel_reason(user, started, "portal_no_reason")
       assert reasons(user) == ["not_using"]
+    end
+
+    # Paddle re-sends cancel_scheduled on every update while a cancel is
+    # pending; a later one must not push the dialog's reason out of the window.
+    test "a later cancel_scheduled resend does not hide the dialog's reason", %{user: user} do
+      started = DateTime.add(DateTime.utc_now(), -30 * 86_400)
+      log_event(user, "subscription_changed", %{"kind" => "cancel_scheduled"}, 10 * 86_400)
+      log_event(user, "subscription_cancel_reason", %{"reason" => "not_using"}, 10 * 86_400 - 5)
+      log_event(user, "subscription_changed", %{"kind" => "cancel_scheduled"}, 3 * 86_400)
+
+      assert :ok = Feedback.record_missing_cancel_reason(user, started, "portal_no_reason")
+      assert reasons(user) == ["not_using"]
+    end
+
+    test "an in-app reverse ends the cancel episode", %{user: user} do
+      insert(:subscription, user: user, paddle_subscription_id: "sub_reverse_episode")
+
+      Mox.expect(Engram.Paddle.ClientMock, :update_subscription, fn _, _, _ ->
+        {:ok, %{"scheduled_change" => nil}}
+      end)
+
+      assert {:ok, _} = Engram.Billing.Subscriptions.reverse_cancel(user)
+      :ok = EventLog.flush()
+
+      assert [%{"kind" => "cancel_reversed"}] =
+               Repo.all(
+                 from(e in Event,
+                   where: e.user_id == ^user.id and e.event == "subscription_changed",
+                   select: e.props
+                 )
+               )
     end
 
     test "payment_failed is filed even when a reason is on file", %{user: user} do
