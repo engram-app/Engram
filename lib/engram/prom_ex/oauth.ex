@@ -75,9 +75,13 @@ defmodule Engram.PromEx.OAuth do
           description: "OAuth token-endpoint outcomes by grant type, result and reason.",
           tags: [:grant_type, :result, :reason, :client, :client_agent]
         ),
-        counter(
+        # A sum of :count, not a counter: `Engram.PromEx.ZeroInit` seeds every
+        # series with a 0 at boot so `increase()` sees the first kill, and a
+        # counter would count that seed as one.
+        sum(
           metric_prefix ++ [:family_revoked, :total],
           event_name: [:engram, :oauth, :family_revoked],
+          measurement: :count,
           description: "OAuth grants (refresh-token families) killed by reuse detection.",
           tags: [:client_agent, :reason]
         ),

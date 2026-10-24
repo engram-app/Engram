@@ -27,6 +27,8 @@ defmodule Engram.PromEx.ZeroInit do
   # A 0/1 last_value gauge, not a counter: seeded so the alert reads 0, not
   # absent, before a fresh node's first override load.
   @cluster_mismatch [:engram, :qdrant, :active_cluster]
+  # engram-prod-oauth-refresh-loop: families killed, per agent and reason.
+  @family_revoked [:engram, :oauth, :family_revoked]
 
   # The 4xx statuses Qdrant answers a request it will refuse on every retry:
   # 400 (strict mode's unindexed filter, #2138, or a bad shape), 404 (no
@@ -87,10 +89,16 @@ defmodule Engram.PromEx.ZeroInit do
       for event <- [@rebuild_halted, @rebuild_meter_failed, @rebuild_double_pay],
           do: {event, %{count: 0}, %{}}
 
+    family_revoked_series =
+      for agent <- Engram.Analytics.McpClient.agents(),
+          reason <- Engram.OAuth.kill_reasons(),
+          do: {@family_revoked, %{count: 0}, %{client_agent: agent, reason: reason}}
+
     search_series ++
       rotate_series ++
       reconcile_series ++
-      cancelled_series ++ rebuild_series ++ [{@cluster_mismatch, %{mismatch: 0}, %{}}]
+      cancelled_series ++
+      rebuild_series ++ family_revoked_series ++ [{@cluster_mismatch, %{mismatch: 0}, %{}}]
   end
 
   @doc "The same series as Prometheus names them: `{metric, %{label => value}}`."
@@ -108,6 +116,7 @@ defmodule Engram.PromEx.ZeroInit do
           @rebuild_meter_failed -> "engram_prom_ex_indexing_rebuild_meter_failed_total"
           @rebuild_double_pay -> "engram_prom_ex_indexing_rebuild_double_pay_parked_total"
           @cluster_mismatch -> "engram_prom_ex_qdrant_active_cluster_mismatch"
+          @family_revoked -> "engram_prom_ex_oauth_family_revoked_total"
         end
 
       {metric, Map.new(meta, fn {k, v} -> {k, to_string(v)} end)}

@@ -1082,6 +1082,10 @@ defmodule Engram.OAuth do
   @typedoc "Why reuse detection killed a family: the `reason` tag of `family_revoked`."
   @type kill_reason :: :refresh_reuse | :revoked_after_use | :superseded_reuse | :code_replay
 
+  @doc "Every `kill_reason()`, for seeding the metric's series at boot."
+  @spec kill_reasons() :: [kill_reason(), ...]
+  def kill_reasons, do: [:refresh_reuse, :revoked_after_use, :superseded_reuse, :code_replay]
+
   # One event per family a reuse check KILLED (2026-10-24 triage): the alert
   # keyed on rejected refresh exchanges fired on one kill, because a client
   # retries the dead token forever and every retry is a rejection. A family
