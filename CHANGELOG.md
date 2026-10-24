@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.63.0](https://github.com/engram-app/Engram/compare/0.62.0...0.63.0) (2026-10-24)
+
+
+### Features
+
+* **index:** note points cap flag for the v5 pass ([#2155](https://github.com/engram-app/Engram/issues/2155)) ([1e8948b](https://github.com/engram-app/Engram/commit/1e8948b3aaac7772d4da6ac5aa6f6eec70bf9587))
+
+
+### Bug Fixes
+
+* **billing:** Apple Pay domain file, /pay link, checkout stall signals ([#2154](https://github.com/engram-app/Engram/issues/2154)) ([640b075](https://github.com/engram-app/Engram/commit/640b0750f1ae4e9d667a49274c0d249aa2773358))
+
 ## [0.62.0](https://github.com/engram-app/Engram/compare/0.61.0...0.62.0) (2026-10-22)
 
 
