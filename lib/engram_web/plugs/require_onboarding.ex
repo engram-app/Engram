@@ -85,13 +85,5 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
   # saas eject it is on app.engram.page while this plug answers on api./mcp.
   # Self-host leaves `:frontend_base_url` unset and serves both from one origin,
   # so the endpoint URL is correct there.
-  defp resume_url do
-    base =
-      case Application.get_env(:engram, :frontend_base_url) do
-        url when is_binary(url) and url != "" -> String.trim_trailing(url, "/")
-        _ -> EngramWeb.Endpoint.url()
-      end
-
-    base <> "/onboard"
-  end
+  defp resume_url, do: EngramWeb.FrontendUrl.url("/onboard")
 end
