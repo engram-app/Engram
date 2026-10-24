@@ -4,7 +4,7 @@ defmodule Engram.MCP.Handlers do
   Each function takes (user, vault, args) and returns a markdown-formatted string.
   """
 
-  alias Engram.MCP.{ParseGate, Sections}
+  alias Engram.MCP.{ParseGate, Sections, ToolError}
   alias Engram.{Notes, Repo, Search}
   alias Engram.Notes.Frontmatter
   alias EngramWeb.Endpoint
@@ -287,7 +287,7 @@ defmodule Engram.MCP.Handlers do
       # refusal fell into the catch-all and reported "No folders found", which
       # tells the caller to give up rather than to upgrade.
       {:error, :search_cap_exceeded, cap} ->
-        {:error, "ai_searches_per_day: daily limit of #{cap} reached"}
+        search_cap_error(cap)
 
       {:ok, results} ->
         suggestions =
@@ -337,7 +337,7 @@ defmodule Engram.MCP.Handlers do
       # batch case and keeps per-path `found` flags instead, because a batch
       # that resolves some of its paths did succeed.
       {:error, :not_found} ->
-        {:error, "Note not found: #{source_path}"}
+        ToolError.error(:note_not_found, "Note not found: #{source_path}")
     end
   end
 
@@ -416,9 +416,11 @@ defmodule Engram.MCP.Handlers do
     stored = Notes.PathSanitizer.sanitize(path)
 
     if Notes.note_exists?(user, vault, stored) do
-      {:error,
-       "A note already exists at #{stored}. Use get_notes to read it, or write_note " <>
-         "to replace it, or pick a different title."}
+      ToolError.error(
+        :path_conflict,
+        "A note already exists at #{stored}. Use get_notes to read it, or write_note " <>
+          "to replace it, or pick a different title."
+      )
     else
       Notes.upsert_note(
         user,
@@ -448,7 +450,7 @@ defmodule Engram.MCP.Handlers do
     # Was `{:ok, "Error: note exceeds maximum size of 10MB"}` — a refusal whose
     # own text said "Error:" while the envelope said success.
     if byte_size(content) > Notes.max_note_bytes() do
-      {:error, "note exceeds maximum size of 10MB"}
+      ToolError.error(:note_too_large, "note exceeds maximum size of 10MB")
     else
       stored = Notes.PathSanitizer.sanitize(path)
 
@@ -538,10 +540,10 @@ defmodule Engram.MCP.Handlers do
          %{"old_path" => old_path, "new_path" => stored}}
 
       {:error, :not_found} ->
-        {:error, "Note not found: #{old_path}"}
+        ToolError.error(:note_not_found, "Note not found: #{old_path}")
 
       {:error, :conflict} ->
-        {:error, "Note rename conflict: #{stored} is already taken"}
+        ToolError.error(:path_conflict, "Note rename conflict: #{stored} is already taken")
 
       # Same catch-all as rename_folder below, and now load-bearing for a second
       # reason: rename_note/5 claims the path in the CRDT authority before
@@ -574,10 +576,10 @@ defmodule Engram.MCP.Handlers do
 
       {:error, :conflict} ->
         {:ok, stored} = Notes.PathSanitizer.sanitize_target(new_folder)
-        {:error, "Folder rename conflict: #{stored} already exists"}
+        ToolError.error(:path_conflict, "Folder rename conflict: #{stored} already exists")
 
       {:error, :invalid_path} ->
-        {:error, "new_folder must be a non-empty path"}
+        ToolError.error(:invalid_path, "new_folder must be a non-empty path")
 
       # Catch-all (Bug 2): Folders.rename can surface a non-:conflict
       # {:error, reason} (e.g. a crypto failure in the attachment leg). Without
@@ -649,7 +651,7 @@ defmodule Engram.MCP.Handlers do
         {:error, "Attachment not found: #{old_path}"}
 
       {:error, :conflict} ->
-        {:error, "Attachment already exists at: #{new_path}"}
+        ToolError.error(:path_conflict, "Attachment already exists at: #{new_path}")
 
       # Plan gate, not a domain outcome: surface it as an MCP error so a client
       # can tell "your plan does not include this" from "that path is free".
@@ -951,7 +953,7 @@ defmodule Engram.MCP.Handlers do
 
     case rmw_upsert(user, vault, path, rebuild) do
       {:error, :not_found} ->
-        {:error, "Note not found: #{path}"}
+        ToolError.error(:note_not_found, "Note not found: #{path}")
 
       result ->
         upsert_reply(
@@ -1097,7 +1099,8 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
-  defp read_error({:error, :not_found}, _op, path), do: {:error, "Note not found: #{path}"}
+  defp read_error({:error, :not_found}, _op, path),
+    do: ToolError.error(:note_not_found, "Note not found: #{path}")
 
   defp read_error({:error, reason}, op, path),
     do: log_and_error(op, reason, "Could not read #{path}; retry")
@@ -1329,7 +1332,7 @@ defmodule Engram.MCP.Handlers do
   # tell "upgrade" from "try again later", and matches the `limit_key` the REST
   # 402 carries for the same refusal.
   def render_search({:error, :search_cap_exceeded, limit}, _names),
-    do: {:error, "ai_searches_per_day: daily limit of #{limit} reached"}
+    do: search_cap_error(limit)
 
   # Was `{:ok, "Search unavailable."}` — an outage reported as success, which
   # no client could distinguish from a genuine zero-hit search, and which a
@@ -1389,7 +1392,7 @@ defmodule Engram.MCP.Handlers do
         {:ok, note}
 
       [] ->
-        {:error, "Note not found: #{path}"}
+        ToolError.error(:note_not_found, "Note not found: #{path}")
 
       many ->
         names = Enum.map_join(many, ", ", fn {_n, v} -> v.name end)
@@ -1696,14 +1699,45 @@ defmodule Engram.MCP.Handlers do
   # the success branch to satisfy the outputSchema promise.
   defp upsert_reply(result, msgs, structured) do
     case result do
-      {:ok, _note} -> {:ok, msgs[:ok], structured}
-      {:error, :version_conflict, _note} -> {:error, msgs[:conflict]}
-      {:error, :note_deleted} -> {:error, msgs[:deleted] || msgs[:error]}
-      {:error, :too_large} -> {:error, @too_large}
-      {:error, reason} when is_binary(reason) -> {:error, reason}
-      {:error, _reason} -> {:error, msgs[:error]}
+      {:ok, _note} ->
+        {:ok, msgs[:ok], structured}
+
+      {:error, :version_conflict, _note} ->
+        ToolError.error(:version_conflict, msgs[:conflict])
+
+      {:error, :note_deleted} ->
+        ToolError.error(:note_not_found, msgs[:deleted] || msgs[:error])
+
+      {:error, :too_large} ->
+        ToolError.error(:note_too_large, @too_large)
+
+      {:error, {:notes_cap_reached, limit, _count}} ->
+        ToolError.error(
+          :notes_cap_exceeded,
+          "notes_cap: your plan's limit of #{limit} notes is reached. Delete notes or " <>
+            "upgrade to add more."
+        )
+
+      {:error, %Ecto.Changeset{errors: errors}} when is_list(errors) ->
+        if Keyword.has_key?(errors, :path),
+          do: ToolError.error(:invalid_path, "path is empty or invalid"),
+          else: {:error, msgs[:error]}
+
+      {:error, reason} when is_binary(reason) ->
+        {:error, reason}
+
+      {:error, {code, message}} = coded when is_atom(code) and is_binary(message) ->
+        coded
+
+      {:error, _reason} ->
+        {:error, msgs[:error]}
     end
   end
+
+  # The daily AI-search budget, the one rate limit a tool call can hit. Shared
+  # by search_notes and suggest_folder so the copy and code cannot drift.
+  defp search_cap_error(cap),
+    do: ToolError.error(:rate_limited, "ai_searches_per_day: daily limit of #{cap} reached")
 
   # "end" stays byte-identical to the pre-position append (existing tests
   # pin the old behavior). "start" inserts right after the frontmatter
