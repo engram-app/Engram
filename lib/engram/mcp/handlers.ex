@@ -647,7 +647,7 @@ defmodule Engram.MCP.Handlers do
          %{"old_path" => old_path, "new_path" => new_path}}
 
       {:error, :not_found} ->
-        {:error, "Attachment not found: #{old_path}"}
+        ToolError.error(:attachment_not_found, "Attachment not found: #{old_path}")
 
       {:error, :conflict} ->
         ToolError.error(:path_conflict, "Attachment already exists at: #{new_path}")
@@ -2028,9 +2028,14 @@ defmodule Engram.MCP.Handlers do
 
   defp narrow_to_section([{path, note}], section, gate) do
     case Sections.section(note.content || "", section, gate) do
-      {:ok, text} -> {:ok, [{path, %{note | content: text}}]}
-      {:error, {:not_found, hs}} -> {:error, heading_missing_msg(path, section, hs)}
-      {:error, reason} -> {:error, section_error(section, reason)}
+      {:ok, text} ->
+        {:ok, [{path, %{note | content: text}}]}
+
+      {:error, {:not_found, hs}} ->
+        ToolError.error(:section_not_found, heading_missing_msg(path, section, hs))
+
+      {:error, reason} ->
+        {:error, section_error(section, reason)}
     end
   end
 
@@ -2275,11 +2280,8 @@ defmodule Engram.MCP.Handlers do
 
   # The vault's Obsidian plugin last reported a version below the floor, so
   # its sync joins are refused (`EngramWeb.ChannelGate`) and new edits in
-  # Obsidian never reach Engram. Same predicate as the gate.
-  defp sync_blocked?(%{plugin_version: version}) when is_binary(version),
-    do: not Engram.PluginVersion.supported?(version)
-
-  defp sync_blocked?(_vault), do: false
+  # Obsidian never reach Engram.
+  defp sync_blocked?(vault), do: Engram.Vaults.plugin_sync_blocked?(vault)
 
   defp sync_blocked_note(v) do
     if sync_blocked?(v),
