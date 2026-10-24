@@ -55,9 +55,9 @@ defmodule Engram.MCP.HandlersLinksTest do
     refute text =~ "more"
   end
 
-  # One links read and one backlinks read for the whole call, not two per
-  # note: an over-budget note or a miss gets no links, but the found notes
-  # still see each other (and the over-budget note as a backlink source).
+  # A fixed number of link reads for the whole call, not a few per note: an
+  # over-budget note or a miss gets no links, but the found notes still see
+  # each other (and the over-budget note as a backlink source).
   test "links for several notes come from one batched read each", %{user: u, a: a} do
     big = "[[A]] " <> String.duplicate("x", Handlers.get_notes_budget())
 
@@ -75,7 +75,10 @@ defmodule Engram.MCP.HandlersLinksTest do
     queries = link_reads.(fn -> send(self(), {:got, get(u, a, %{"paths" => paths})}) end)
     assert_received {:got, {:ok, _text, %{"notes" => [na, nb, nbig, missing]}}}
 
-    assert length(queries) == 2, "expected 2 link reads, got:\n#{Enum.join(queries, "\n")}"
+    # 3, still independent of the note count: outgoing edges, the target keys
+    # incoming edges use (so backlinks only verify spellings a link uses,
+    # #2175 delta check), and the incoming edges themselves.
+    assert length(queries) == 3, "expected 3 link reads, got:\n#{Enum.join(queries, "\n")}"
 
     assert Enum.sort(na["backlinks"]) == ["B.md", "Big.md"]
     assert na["outgoing"] == ["B.md"]
