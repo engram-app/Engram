@@ -518,18 +518,9 @@ defmodule Engram.Notes do
   """
   @spec create_folder_markers(map(), map(), [String.t()]) ::
           {:ok, %{folders: [map()], rejected: [String.t()]}} | {:error, term()}
-  def create_folder_markers(_user, _vault, folders)
-      when is_list(folders) and length(folders) > @max_batch_folders,
-      do: {:error, :batch_too_large}
-
   def create_folder_markers(user, vault, inputs) when is_list(inputs) do
-    {rejected, kept} =
-      inputs
-      |> Enum.uniq()
-      |> Enum.map(&{&1, PathSanitizer.sanitize(&1)})
-      |> Enum.split_with(fn {_input, name} -> name == "" end)
-
-    with {:ok, created} <-
+    with {:ok, kept, rejected} <- prepare_folder_inputs(inputs),
+         {:ok, created} <-
            upsert_folder_batch(user, vault, kept |> Enum.map(&elem(&1, 1)) |> Enum.uniq()) do
       folders =
         Enum.map(kept, fn {input, name} ->
@@ -541,8 +532,30 @@ defmodule Engram.Notes do
           }
         end)
 
-      {:ok, %{folders: folders, rejected: Enum.map(rejected, &elem(&1, 0))}}
+      {:ok, %{folders: folders, rejected: rejected}}
     end
+  end
+
+  @doc """
+  The pure half of `create_folder_markers/3`, no DB: dedupes and sanitizes
+  the inputs. Returns `{:ok, kept, rejected}`, where `kept` is
+  `[{input, name}]` for inputs that name a folder and `rejected` lists the
+  inputs that sanitize to the root, or `{:error, :batch_too_large}` above
+  #{@max_batch_folders}. `kept == []` means a create would write nothing.
+  """
+  @spec prepare_folder_inputs([String.t()]) ::
+          {:ok, [{String.t(), String.t()}], [String.t()]} | {:error, :batch_too_large}
+  def prepare_folder_inputs(inputs) when length(inputs) > @max_batch_folders,
+    do: {:error, :batch_too_large}
+
+  def prepare_folder_inputs(inputs) when is_list(inputs) do
+    {rejected, kept} =
+      inputs
+      |> Enum.uniq()
+      |> Enum.map(&{&1, PathSanitizer.sanitize(&1)})
+      |> Enum.split_with(fn {_input, name} -> name == "" end)
+
+    {:ok, kept, Enum.map(rejected, &elem(&1, 0))}
   end
 
   defp upsert_folder_batch(_user, _vault, []), do: {:ok, %{}}
@@ -590,14 +603,21 @@ defmodule Engram.Notes do
   defp upsert_folder_markers(user, vault, dek, filter_key, folders, seq_fun) do
     hmacs = Enum.map(folders, &Crypto.hmac_field(filter_key, &1))
 
-    # Live markers sort last, so they win the Map.new/2 collapse over a
-    # soft-deleted twin of the same folder.
-    existing =
+    # Map.new/2 keeps the LAST row per hmac, so sort live markers last and
+    # tombstones oldest-first: the live row wins, else the newest tombstone,
+    # the same pick as find_folder_marker/3 (#2121). Postgres row order is not
+    # an order, so the tombstones must be sorted, not just partitioned.
+    {live_rows, tombstones} =
       user
       |> folder_markers_by_hmac_query(vault, hmacs)
       |> Repo.all()
-      |> Enum.sort_by(&(&1.deleted_at == nil))
-      |> Map.new(&{&1.folder_hmac, &1})
+      |> Enum.split_with(&is_nil(&1.deleted_at))
+
+    existing =
+      Map.new(
+        Enum.sort_by(tombstones, & &1.deleted_at, DateTime) ++ live_rows,
+        &{&1.folder_hmac, &1}
+      )
 
     dead_ids = for {_, %Note{deleted_at: %DateTime{}, id: id}} <- existing, do: id
 
