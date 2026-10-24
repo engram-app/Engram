@@ -33,7 +33,7 @@ defmodule Engram.Workers.ExportExpirySweep do
 
   @impl Oban.Worker
   def perform(_job) do
-    if tenancy_unsafe?() do
+    if Repo.tenancy_unsafe?() do
       # Filtered by the tenant policy, the read below returns [] and the sweep
       # reports success while archives of personal data stay in S3 forever.
       Logger.error(
@@ -50,9 +50,6 @@ defmodule Engram.Workers.ExportExpirySweep do
 
   # Same gate as `OrphanSweep`: the fallback `Repo` is only correct where RLS
   # is not enforced.
-  defp tenancy_unsafe? do
-    Repo.maintenance() == Repo and Engram.Repo.TenancyGuard.enforced?()
-  end
 
   # Every query runs on `Repo.maintenance()`: this sweep spans tenants by
   # definition. `cross_tenant/1` is a no-op on the maintenance pool and silences

@@ -162,7 +162,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
   """
   @spec measure_and_emit() :: measurements() | {:error, :tenancy_unsafe}
   def measure_and_emit do
-    if tenancy_unsafe?() do
+    if Repo.tenancy_unsafe?() do
       refuse()
     else
       do_measure_and_emit()
@@ -262,9 +262,6 @@ defmodule Engram.Workers.CrdtBloatSweep do
   # a transient DB blip refuses this slot rather than sweeping blind. That is the
   # safe direction — a lost reading self-heals in 1h, a fabricated zero does not
   # — but it means the refusal message must not assert RLS *is* enforced.
-  defp tenancy_unsafe? do
-    Repo.maintenance() == Repo and Engram.Repo.TenancyGuard.enforced?()
-  end
 
   defp fmt(f) when is_float(f), do: Float.round(f, 2)
 end
