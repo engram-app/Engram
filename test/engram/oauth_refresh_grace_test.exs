@@ -288,10 +288,26 @@ defmodule Engram.OAuthRefreshGraceTest do
     {:ok, %{refresh_token: rt2}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
     {:ok, %{refresh_token: rt3}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
 
-    assert {:error, {:invalid_grant, :refresh_token_revoked}} =
-             OAuth.rotate_refresh_token(rt2, ctx.client_id)
+    # Every family kill is logged (2026-10-24 triage): this one used to revoke
+    # silently, so it was missing from every count of killed connections.
+    log =
+      capture_log(fn ->
+        assert {:error, {:invalid_grant, :refresh_token_revoked}} =
+                 OAuth.rotate_refresh_token(rt2, ctx.client_id)
+      end)
 
+    assert log =~ "oauth_refresh_reuse"
+    assert log =~ "reason=superseded_reuse"
     assert live_in_family(row(rt3).family_id) == 0
+
+    # The family is dead now: presenting the token again kills nothing new.
+    log =
+      capture_log(fn ->
+        assert {:error, {:invalid_grant, :refresh_token_revoked}} =
+                 OAuth.rotate_refresh_token(rt2, ctx.client_id)
+      end)
+
+    refute log =~ "oauth_refresh_reuse"
   end
 
   test "a replay from another client never re-issues", ctx do

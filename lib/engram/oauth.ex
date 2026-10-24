@@ -815,7 +815,12 @@ defmodule Engram.OAuth do
   end
 
   defp report({:error, :revoked_after_use}, rt) do
-    log_reuse(rt, within_grace: false, family_revoked: true)
+    log_reuse(rt, within_grace: false, reason: "family_revoked")
+    grant_error(:refresh_token_revoked)
+  end
+
+  defp report({:error, :superseded_reuse}, rt) do
+    log_reuse(rt, within_grace: false, reason: "superseded_reuse")
     grant_error(:refresh_token_revoked)
   end
 
@@ -829,10 +834,10 @@ defmodule Engram.OAuth do
   # (`family_unrevoked/1`), so a family with any revoked row mints nothing,
   # whichever of its rows was marked: one read just before a family revoke,
   # or one a release that revoked a single row left unmarked.
-  defp decide({%RefreshToken{revoked_at: %DateTime{}} = rt, _family_live}, _ip),
-    do: refuse_revoked(rt)
+  defp decide({%RefreshToken{revoked_at: %DateTime{}} = rt, family_live}, _ip),
+    do: refuse_revoked(rt, family_live)
 
-  defp decide({%RefreshToken{} = rt, false = _family_live}, _ip), do: refuse_revoked(rt)
+  defp decide({%RefreshToken{} = rt, false = _family_live}, _ip), do: refuse_revoked(rt, false)
 
   # Consumed, in a live family: a replay. Inside the grace window it may be a
   # lost rotation response (`grace_reissue/2`); otherwise it is reuse.
@@ -869,13 +874,21 @@ defmodule Engram.OAuth do
 
   # Answered as revoked. A used token whose presentation is what revokes the
   # family (some row of it was still live) is also reported (`report/2`) as
-  # reuse: an exchanged token turning up again is the theft signal. Once the
-  # family is dead (Disconnect, RFC 7009, an earlier replay), presenting any
-  # of its tokens changes nothing and is not logged again.
-  defp refuse_revoked(rt) do
-    if revoke_family(rt.family_id) != [] and rt.consumed_at,
-      do: {:error, :revoked_after_use},
-      else: {:error, :refresh_token_revoked}
+  # reuse: an exchanged token turning up again is the theft signal. So is a
+  # never-used row of a LIVE family: the only such revoked row is a successor
+  # a grace re-issue superseded, and it turning up means two parties held the
+  # lineage. That kill used to be silent, so it was missing from every count
+  # of killed connections (2026-10-24 triage). Once the family is dead
+  # (Disconnect, RFC 7009, an earlier replay), presenting any of its tokens
+  # changes nothing and is not logged again.
+  defp refuse_revoked(rt, family_live) do
+    killed = revoke_family(rt.family_id) != []
+
+    cond do
+      killed and rt.consumed_at -> {:error, :revoked_after_use}
+      killed and family_live -> {:error, :superseded_reuse}
+      true -> {:error, :refresh_token_revoked}
+    end
   end
 
   # The presented row, locked, and whether its family is live.
@@ -1045,7 +1058,7 @@ defmodule Engram.OAuth do
     metadata =
       [within_grace: to_string(within_grace), client_id: rt.client_id, family_id: rt.family_id] ++
         if(within_grace, do: [ip_matched: to_string(Keyword.fetch!(opts, :ip_matched))], else: []) ++
-        if(opts[:family_revoked], do: [reason: "family_revoked"], else: [])
+        if(opts[:reason], do: [reason: opts[:reason]], else: [])
 
     Logger.warning(
       if(within_grace, do: "oauth_refresh_grace_reissue", else: "oauth_refresh_reuse"),
