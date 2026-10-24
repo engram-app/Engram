@@ -30,7 +30,7 @@ defmodule Engram.MCP.Handlers do
         Enum.map_join(vaults, "\n", fn v ->
           default = if v.is_default, do: " (default)", else: ""
           desc = if v.description, do: ": #{v.description}", else: ""
-          "- **#{v.name}**#{default} (ID: #{v.id})#{desc}"
+          "- **#{v.name}**#{default} (ID: #{v.id})#{desc}#{sync_blocked_note(v)}"
         end)
       end
 
@@ -2262,11 +2262,32 @@ defmodule Engram.MCP.Handlers do
   end
 
   defp vault_payload(v) do
-    %{
+    payload = %{
       "id" => to_string(v.id),
       "name" => v.name,
       "slug" => v.slug,
       "is_default" => v.is_default
     }
+
+    if sync_blocked?(v),
+      do: Map.put(payload, "sync_blocked", "plugin_upgrade_required"),
+      else: payload
+  end
+
+  # The vault's Obsidian plugin last reported a version below the floor, so
+  # its sync joins are refused (`EngramWeb.ChannelGate`) and new edits in
+  # Obsidian never reach Engram. Same predicate as the gate.
+  defp sync_blocked?(%{plugin_version: version}) when is_binary(version),
+    do: not Engram.PluginVersion.supported?(version)
+
+  defp sync_blocked?(_vault), do: false
+
+  defp sync_blocked_note(v) do
+    if sync_blocked?(v),
+      do:
+        " — sync blocked: tell the user to update the Engram Vault Sync plugin in Obsidian " <>
+          "to #{Engram.PluginVersion.minimum()} or later (Settings > Community plugins); " <>
+          "this vault is on #{v.plugin_version}.",
+      else: ""
   end
 end

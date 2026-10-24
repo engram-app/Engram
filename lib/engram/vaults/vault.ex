@@ -27,6 +27,10 @@ defmodule Engram.Vaults.Vault do
     field :deleted_at, :utc_datetime
     # Set by CleanupVault before its first delete batch; restore refuses it.
     field :purge_started_at, :utc_datetime
+    # Last Obsidian-plugin version reported on this vault's sync join
+    # (`Engram.Vaults.record_plugin_version/3`). Not cast by any changeset.
+    field :plugin_version, :string
+    field :plugin_version_seen_at, :utc_datetime
     field :name_ciphertext, :binary
     field :name_nonce, :binary
     field :name_hmac, :binary
