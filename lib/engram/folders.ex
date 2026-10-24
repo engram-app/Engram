@@ -90,10 +90,17 @@ defmodule Engram.Folders do
   def rename(user, vault, old_folder, new_folder) do
     # Sanitize the target once here: it is the only entry for REST and MCP
     # folder renames, and both legs below would otherwise write it verbatim.
-    with {:ok, new_folder} <- PathSanitizer.sanitize_target(new_folder) do
+    #
+    # The attachment scan + decrypt runs BEFORE the transaction (#2159): held
+    # inside it, it was part of what pushed a large rename past the 15 s
+    # checkout limit. An attachment added under the folder in between stays
+    # at its path, the same outcome as one added just after the rename.
+    with {:ok, new_folder} <- PathSanitizer.sanitize_target(new_folder),
+         {:ok, att_pairs} <-
+           Attachments.folder_rename_pairs(user, vault, old_folder, new_folder) do
       atomic(fn ->
         with {:ok, notes} <- Notes.rename_folder(user, vault, old_folder, new_folder),
-             {:ok, atts} <- Attachments.rename_folder(user, vault, old_folder, new_folder) do
+             {:ok, atts} <- Attachments.move_folder_pairs(user, vault, att_pairs) do
           {:ok, %{notes: notes, attachments: atts}}
         end
       end)
@@ -249,13 +256,16 @@ defmodule Engram.Folders do
   def batch_move(_user, _vault, [], _target), do: {:ok, %{notes: 0, attachments: 0}}
 
   def batch_move(user, vault, marker_ids, target) do
-    atomic(fn ->
-      with {:ok, %{moved: notes, pairs: pairs}} <-
-             Notes.batch_move_folders(user, vault, marker_ids, target),
-           {:ok, atts} <- rename_attachments_for(user, vault, pairs) do
-        {:ok, %{notes: notes, attachments: atts}}
-      end
-    end)
+    # Attachment scan before the transaction (#2159), like `rename/4`.
+    with {:ok, metas} <- Attachments.list_attachments(user, vault) do
+      atomic(fn ->
+        with {:ok, %{moved: notes, pairs: pairs}} <-
+               Notes.batch_move_folders(user, vault, marker_ids, target),
+             {:ok, atts} <- rename_attachments_for(user, vault, metas, pairs) do
+          {:ok, %{notes: notes, attachments: atts}}
+        end
+      end)
+    end
   end
 
   # Perf (finding #9): scan the vault's attachments ONCE per batch op, then
@@ -287,20 +297,18 @@ defmodule Engram.Folders do
     end
   end
 
-  defp rename_attachments_for(_user, _vault, []), do: {:ok, 0}
+  defp rename_attachments_for(_user, _vault, _metas, []), do: {:ok, 0}
 
-  defp rename_attachments_for(user, vault, pairs) do
-    with {:ok, metas} <- Attachments.list_attachments(user, vault) do
-      move_pairs =
-        Enum.flat_map(metas, fn %{path: old_path} ->
-          case rename_target(old_path, pairs) do
-            {:ok, new_path} -> [{old_path, new_path}]
-            :no_match -> []
-          end
-        end)
+  defp rename_attachments_for(user, vault, metas, pairs) do
+    move_pairs =
+      Enum.flat_map(metas, fn %{path: old_path} ->
+        case rename_target(old_path, pairs) do
+          {:ok, new_path} -> [{old_path, new_path}]
+          :no_match -> []
+        end
+      end)
 
-      Attachments.move_folder_pairs(user, vault, move_pairs)
-    end
+    Attachments.move_folder_pairs(user, vault, move_pairs)
   end
 
   defp folder_prefix(folder), do: String.trim_trailing(folder, "/") <> "/"

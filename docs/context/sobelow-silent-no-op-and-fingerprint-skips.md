@@ -1,6 +1,6 @@
 # Sobelow was a silent no-op, and the fingerprint skips that hid it
 
-_Last verified: 2026-10-19 (sobelow 0.16.0, 17 entries in `.sobelow-skips`)_
+_Last verified: 2026-10-23 (sobelow 0.16.0, 17 entries in `.sobelow-skips`)_
 
 ## The one idea
 
@@ -70,7 +70,7 @@ with literal suffixes. The one dynamic case (`release/preflight.ex`) derives
 filenames from `File.ls!` filtered by an anchored `^\d{14}_.+\.exs$` regex.
 `spa_controller.ex` is HTTP-reachable but `index/2` discards params entirely.
 
-### `SQL.Query` x2
+### `SQL.Query` x3
 
 `attachments/bulk_update.ex`, `notes/bulk_rename.ex`.
 

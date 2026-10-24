@@ -984,28 +984,182 @@ defmodule Engram.Attachments do
     end
   end
 
-  # Shared move-loop for every "relocate these [{old, new}] pairs atomically"
-  # caller (`batch_move/4` + the folder-rename cascade). One `Repo.transaction`
-  # wraps `reduce_while` over `move_attachment/4` (which carries the #614 per-item
-  # repoint+tombstone-share-one-seq discipline); any item error halts and rolls
-  # the WHOLE batch back. `on_error.(reason, old_path)` shapes the rollback value
-  # so each surface keeps its own contract (bare `:conflict` for folder rename,
-  # `{:conflict, path}` for `batch_move`). Returns `{:ok, count}` | `{:error, _}`.
+  # Shared mover for every "relocate these [{old, new}] pairs atomically"
+  # caller (`batch_move/4` + the folder-rename cascade). Set-based (#2159):
+  # it was one `do_move_attachment/4` per pair, ~10 statements each, inside
+  # one transaction, and a 7,440-attachment folder rename hit the 15 s
+  # checkout kill. Now: one read of the sources, one of the targets, one seq
+  # block, one VALUES UPDATE per 500 repoints, one insert_all per 500
+  # tombstones, one insert_all per 2,000 link-rewrite jobs.
+  #
+  # Same contract as the per-item loop: all-or-nothing, and the #614 rule
+  # that each repoint and its old-path tombstone share ONE seq (distinct
+  # items get distinct seqs). A target held by ANY live row is a conflict,
+  # including a row that is itself moving in this batch: one UPDATE cannot
+  # order a chain of moves past the live-path unique index. `on_error.(reason,
+  # old_path)` shapes the error so each surface keeps its own contract (bare
+  # `:conflict` for folder rename, `{:conflict, path}` for `batch_move`).
+  # Returns `{:ok, count}` | `{:error, _}`.
   defp move_pairs(_user, _vault, [], _on_error), do: {:ok, 0}
 
   defp move_pairs(user, vault, pairs, on_error) do
-    Repo.transaction(fn ->
-      Enum.reduce_while(pairs, 0, fn {old_path, new_path}, count ->
-        case do_move_attachment(user, vault, old_path, new_path) do
-          {:ok, _} -> {:cont, count + 1}
-          {:error, reason} -> {:halt, {:rollback, on_error.(reason, old_path)}}
+    user = fresh_user(user)
+
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, dek} <- Crypto.get_dek(user),
+         {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+      items =
+        Enum.map(pairs, fn {old_path, new_path} ->
+          old_path = PathSanitizer.sanitize(old_path)
+          new_path = PathSanitizer.sanitize(new_path)
+
+          %{
+            old_path: old_path,
+            new_path: new_path,
+            old_hmac: Crypto.hmac_field(filter_key, old_path),
+            new_hmac: Crypto.hmac_field(filter_key, new_path),
+            old_basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(old_path)),
+            new_basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(new_path))
+          }
+        end)
+
+      Repo.with_tenant(user.id, fn ->
+        with {:ok, live} <- move_sources(user, vault, items, on_error),
+             moving = Enum.reject(items, &(&1.old_path == &1.new_path)),
+             :ok <- move_targets_free(user, vault, moving, on_error) do
+          moved = apply_moves(user, vault, {dek, filter_key}, moving, live)
+          {:ok, {length(items), moved}}
         end
       end)
+      |> unwrap_tenant()
       |> case do
-        {:rollback, reason} -> Repo.rollback(reason)
-        count -> count
+        {:ok, {count, moved}} ->
+          Enum.each(moved, fn {item, att} ->
+            broadcast_attachment(user.id, vault.id, "delete", item.old_path, att)
+            broadcast_attachment(user.id, vault.id, "upsert", item.new_path, att)
+          end)
+
+          {:ok, count}
+
+        {:error, _} = err ->
+          err
       end
+    end
+  end
+
+  # Every source must be a live row, or the batch is refused.
+  defp move_sources(user, vault, items, on_error) do
+    live =
+      from(a in scoped_live(user, vault), where: a.path_hmac in ^Enum.map(items, & &1.old_hmac))
+      |> Repo.all()
+      |> Map.new(&{&1.path_hmac, &1})
+
+    case Enum.find(items, &(not Map.has_key?(live, &1.old_hmac))) do
+      nil -> {:ok, live}
+      item -> {:error, on_error.(:not_found, item.old_path)}
+    end
+  end
+
+  defp move_targets_free(_user, _vault, [], _on_error), do: :ok
+
+  defp move_targets_free(user, vault, moving, on_error) do
+    new_hmacs = Enum.map(moving, & &1.new_hmac)
+
+    held =
+      from(a in scoped_live(user, vault), where: a.path_hmac in ^new_hmacs, select: a.path_hmac)
+      |> Repo.all()
+      |> MapSet.new()
+
+    # Two pairs landing on one path conflict with each other too.
+    {dupes, _} =
+      Enum.reduce(new_hmacs, {MapSet.new(), MapSet.new()}, fn h, {d, seen} ->
+        if MapSet.member?(seen, h), do: {MapSet.put(d, h), seen}, else: {d, MapSet.put(seen, h)}
+      end)
+
+    case Enum.find(
+           moving,
+           &(MapSet.member?(held, &1.new_hmac) or MapSet.member?(dupes, &1.new_hmac))
+         ) do
+      nil -> :ok
+      item -> {:error, on_error.(:conflict, item.old_path)}
+    end
+  end
+
+  # Returns `[{item, updated_attachment}]` for the broadcasts.
+  defp apply_moves(_user, _vault, _keys, [], _live), do: []
+
+  defp apply_moves(user, vault, {dek, filter_key}, moving, live) do
+    now = DateTime.utc_now(:second)
+    n = length(moving)
+    last_seq = Engram.Vaults.next_seq_block!(vault.id, n)
+
+    moved =
+      moving
+      |> Enum.with_index(last_seq - n + 1)
+      |> Enum.map(fn {item, seq} ->
+        att = Map.fetch!(live, item.old_hmac)
+
+        {path_ct, path_n} =
+          Envelope.encrypt(item.new_path, dek, Crypto.aad_for_row(:attachments, :path, att.id))
+
+        cols =
+          [
+            path_ciphertext: path_ct,
+            path_nonce: path_n,
+            path_hmac: item.new_hmac,
+            basename_hmac: item.new_basename_hmac
+          ] ++ Links.path_keys(filter_key, item.new_path, path_n)
+
+        {item, seq, cols, struct(%{att | path: item.new_path, updated_at: now, seq: seq}, cols)}
+      end)
+
+    ^n =
+      BulkUpdate.move!(Enum.map(moved, fn {_i, seq, cols, att} -> {att.id, seq, cols} end), now)
+
+    :ok = evict_counts(user.id)
+
+    moved
+    |> Enum.map(fn {item, seq, _cols, _att} ->
+      tombstone_row(user, vault, dek, item, Map.fetch!(live, item.old_hmac), seq, now)
     end)
+    |> Enum.chunk_every(500)
+    |> Enum.each(&Repo.insert_all(Attachment, &1))
+
+    # #648/#1231: rewrite referring notes' ![[...]]/[[...]] targets. In this
+    # transaction, so the jobs roll back with the moves.
+    moved
+    |> Enum.map(fn {item, _seq, _cols, att} ->
+      Engram.Workers.RewriteNoteLinks.new_for(
+        user.id,
+        vault.id,
+        :attachment,
+        att.id,
+        Base.encode64(item.old_hmac),
+        Base.encode64(item.old_basename_hmac)
+      )
+    end)
+    |> Enum.chunk_every(2_000)
+    |> Enum.each(&Oban.insert_all/1)
+
+    Enum.map(moved, fn {item, _seq, _cols, att} -> {item, att} end)
+  end
+
+  # `tombstone_changeset/8` as an insert_all row.
+  defp tombstone_row(user, vault, dek, item, live, seq, now) do
+    user
+    |> tombstone_changeset(
+      vault,
+      dek,
+      item.old_path,
+      {item.old_hmac, item.old_basename_hmac},
+      live,
+      seq,
+      now
+    )
+    |> Ecto.Changeset.apply_action!(:insert)
+    |> Map.take(Attachment.__schema__(:fields))
+    |> Map.drop([:path, :content])
+    |> Map.merge(%{created_at: now, updated_at: now})
   end
 
   # nil when the pair's target passes the blocklist (`Enum.find_value/3`).
@@ -1036,24 +1190,30 @@ defmodule Engram.Attachments do
   @spec rename_folder(map(), map(), String.t(), String.t()) ::
           {:ok, non_neg_integer()} | {:error, term()}
   def rename_folder(user, vault, old_folder, new_folder) do
+    with {:ok, pairs} <- folder_rename_pairs(user, vault, old_folder, new_folder),
+         do: move_folder_pairs(user, vault, pairs)
+  end
+
+  @doc """
+  The `[{old_path, new_path}]` moves a rename of `old_folder` to
+  `new_folder` implies, from one decrypt scan. Split from `rename_folder/4`
+  so `Engram.Folders` can run the scan BEFORE its transaction opens (#2159).
+  """
+  @spec folder_rename_pairs(map(), map(), String.t(), String.t()) ::
+          {:ok, [{String.t(), String.t()}]} | {:error, term()}
+  def folder_rename_pairs(user, vault, old_folder, new_folder) do
     old_folder = String.trim_trailing(old_folder, "/")
     new_folder = String.trim_trailing(new_folder, "/")
     prefix = old_folder <> "/"
     old_len = String.length(old_folder)
 
-    case list_attachments(user, vault) do
-      {:ok, metas} ->
-        pairs =
-          metas
-          |> Enum.filter(&String.starts_with?(&1.path, prefix))
-          |> Enum.map(fn %{path: old_path} ->
-            {old_path, new_folder <> String.slice(old_path, old_len..-1//1)}
-          end)
-
-        move_folder_pairs(user, vault, pairs)
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, metas} <- list_attachments(user, vault) do
+      {:ok,
+       metas
+       |> Enum.filter(&String.starts_with?(&1.path, prefix))
+       |> Enum.map(fn %{path: old_path} ->
+         {old_path, new_folder <> String.slice(old_path, old_len..-1//1)}
+       end)}
     end
   end
 

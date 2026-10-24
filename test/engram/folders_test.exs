@@ -413,6 +413,53 @@ defmodule Engram.FoldersTest do
     end
   end
 
+  # #2159: MCP rename_folder on the same 7,440-attachment vault hit the 15 s
+  # checkout kill 4 times: one repoint + tombstone + job per attachment, all
+  # in one transaction, with the decrypt-scan inside it too.
+  describe "folder rename batches the attachment leg (#2159)" do
+    test "statement count in the rename transaction does not grow with attachments", %{
+      user: user,
+      vault: vault
+    } do
+      for i <- 1..30, do: put_att(user, vault, "Docs/f#{i}.png")
+
+      {{:ok, %{attachments: 30}}, queries} =
+        Engram.QueryRecorder.record(fn -> Folders.rename(user, vault, "Docs", "Archive") end)
+
+      largest =
+        queries |> Engram.QueryRecorder.transactions() |> Enum.map(&length/1) |> Enum.max()
+
+      assert largest < 30,
+             "the rename transaction ran #{largest} statements for 30 attachments\n" <>
+               Engram.QueryRecorder.format(queries)
+
+      assert att_paths(user, vault) == Enum.sort(for i <- 1..30, do: "Archive/f#{i}.png")
+    end
+
+    # #614: a repoint and its tombstone share ONE seq, so a cursor pull never
+    # sees one without the other; distinct items keep distinct seqs.
+    test "every moved attachment leaves an old-path tombstone at its own seq", %{
+      user: user,
+      vault: vault
+    } do
+      put_att(user, vault, "Docs/a.png")
+      put_att(user, vault, "Docs/Sub/b.png")
+
+      assert {:ok, %{attachments: 2}} = Folders.rename(user, vault, "Docs", "Archive")
+
+      rows =
+        Engram.Repo.all(
+          from(a in Engram.Attachments.Attachment, where: a.vault_id == ^vault.id),
+          skip_tenant_check: true
+        )
+
+      {live, tombs} = Enum.split_with(rows, &is_nil(&1.deleted_at))
+      assert length(live) == 2 and length(tombs) == 2
+      assert Enum.all?(tombs, &is_nil(&1.storage_key))
+      assert rows |> Enum.frequencies_by(& &1.seq) |> Map.values() == [2, 2]
+    end
+  end
+
   describe "cascade broadcasts defer until the outer transaction commits (Fix #1)" do
     test "rename/4 emits NO note_changed events when the attachment leg rolls back", %{
       user: user,
