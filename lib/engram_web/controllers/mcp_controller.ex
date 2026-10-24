@@ -16,6 +16,7 @@ defmodule EngramWeb.McpController do
   alias Engram.MCP.Tools
 
   require Logger
+  require OpenTelemetry.Tracer
 
   @capabilities %{
     "tools" => %{"listChanged" => false},
@@ -180,11 +181,74 @@ defmodule EngramWeb.McpController do
     emit_client_connected(conn, params)
     header = List.first(get_req_header(conn, "mcp-protocol-version"))
 
-    if modern_request?(header, params) do
-      modern_handle(conn, header, params)
-    else
-      legacy_gate(conn, header, params)
+    case tool_call_budget(conn, params) do
+      {:deny, limit, retry_after_ms} ->
+        tool_call_rate_exceeded(conn, limit, retry_after_ms)
+
+      :ok ->
+        if modern_request?(header, params),
+          do: modern_handle(conn, header, params),
+          else: legacy_gate(conn, header, params)
     end
+  end
+
+  # Per-user `tools/call` budget (`mcp_tool_calls_per_min`) for requests
+  # without an API key: API-key traffic is already under `api_rps_cap`
+  # (`RequireApiRpsBudget`), and OAuth MCP had only the 600/min pre-auth
+  # bucket. Counted before era validation, so a malformed call still spends.
+  # `Billing.cap/2` is nil when limits are not enforced (self-host): no
+  # limiter call at all.
+  @tool_call_window_ms 60_000
+
+  defp tool_call_budget(
+         %{assigns: %{current_user: %{} = user} = assigns},
+         %{"method" => "tools/call"}
+       )
+       when not is_map_key(assigns, :current_api_key) do
+    case Engram.Billing.cap(user, :mcp_tool_calls_per_min) do
+      # The per-user kill switch, as `api_rps_cap` 0 is: refused outright,
+      # with no Retry-After a client would loop on.
+      0 ->
+        {:deny, 0, nil}
+
+      limit when is_integer(limit) and limit > 0 ->
+        "mcp_tool_call:#{user.id}"
+        |> EngramWeb.RateLimiter.hit(@tool_call_window_ms, limit, :mcp_tool_call)
+        |> case do
+          {:allow, _count} -> :ok
+          {:deny, retry_after_ms} -> {:deny, limit, retry_after_ms}
+        end
+
+      _unlimited ->
+        :ok
+    end
+  end
+
+  defp tool_call_budget(_conn, _params), do: :ok
+
+  # The REST refusal shape; `McpErrorEnvelope` turns it into a JSON-RPC error
+  # (status kept, body in `data`), like every other MCP pipeline refusal.
+  defp tool_call_rate_exceeded(conn, 0, nil) do
+    EngramWeb.Plugs.Halt.json(conn, 429, %{
+      error: "mcp_tool_calls_disabled",
+      message: "MCP tool calls are switched off for this account. Contact support.",
+      limit: 0
+    })
+  end
+
+  defp tool_call_rate_exceeded(conn, limit, retry_after_ms) do
+    retry_after_s = max(div(retry_after_ms + 999, 1_000), 1)
+
+    conn
+    |> put_resp_header("retry-after", Integer.to_string(retry_after_s))
+    |> EngramWeb.Plugs.Halt.json(429, %{
+      error: "mcp_tool_rate_exceeded",
+      message:
+        "Rate limit: #{limit} tool calls per minute. Retry after #{retry_after_s} seconds.",
+      limit: limit,
+      period_ms: @tool_call_window_ms,
+      retry_after_ms: retry_after_ms
+    })
   end
 
   # A request is modern when it carries the era's own `_meta` keys, or when the
@@ -716,6 +780,7 @@ defmodule EngramWeb.McpController do
 
   defp dispatch(conn, "tools/call", %{"name" => name, "arguments" => args}) do
     start_mono = System.monotonic_time()
+    trace_tool(name)
 
     # OriginStats runs for every call against a KNOWN tool regardless of whether
     # its arguments turn out to be valid — a client that always sends malformed
@@ -724,7 +789,8 @@ defmodule EngramWeb.McpController do
     # There is no usage metering here any more. `ai_searches_per_day` is charged
     # inside `Engram.Search.search/4`, the funnel every retrieval passes through,
     # so this controller cannot forget to charge a new retrieval tool. Volume is
-    # bounded by `EngramWeb.Plugs.PreAuthRateLimit` on the shared pipeline.
+    # bounded per user by `mcp_tool_calls_per_min` (`tool_call_budget/2`, OAuth)
+    # or `api_rps_cap` (API keys), and by `PreAuthRateLimit` on the pipeline.
     with {:ok, tool} <- Tools.get(name),
          :ok <- check_read_only_grant(conn, tool),
          user = conn.assigns.current_user,
@@ -764,6 +830,16 @@ defmodule EngramWeb.McpController do
 
   defp dispatch(_conn, _method, _params) do
     {:error, -32_601, "Method not found"}
+  end
+
+  # Which tool, on the request span (OTel MCP semconv names), so Tempo
+  # answers "which tool, which user" with `app.user_id` (`TraceUserAttrs`).
+  # Bounded: a name off the roster is `unknown`, never client text.
+  defp trace_tool(name) do
+    OpenTelemetry.Tracer.set_attributes([
+      {"mcp.method.name", "tools/call"},
+      {"gen_ai.tool.name", @tool_atoms |> Map.get(name, :unknown) |> Atom.to_string()}
+    ])
   end
 
   # Enforced at call time, not only by hiding the tool from `tools/list`: a
@@ -1038,8 +1114,14 @@ defmodule EngramWeb.McpController do
   # because the tool-analytics call sites are several frames below any conn.
   @client_family_key :engram_mcp_client_family
 
+  # `client_agent` and `client_version` (2026-10-24): Codex reports as
+  # `chatgpt` or `other` by name, and only Codex >= 0.164 stops racing
+  # refresh rotation, so the share on a fixed release is read from here.
+  # Both are bounded (`McpClient.agent/2`, `McpClient.version/2`).
   defp emit_client_connected(conn, envelope) do
-    family = request_client_family(conn, envelope)
+    info = request_client_info(envelope)
+    ua = conn |> get_req_header("user-agent") |> List.first()
+    family = client_family(info["name"], ua)
     Process.put(@client_family_key, family)
 
     case conn.assigns[:current_user] do
@@ -1048,14 +1130,31 @@ defmodule EngramWeb.McpController do
 
       user ->
         Engram.Analytics.track_activity(user, :mcp)
+        agent = McpClient.agent(ua, family)
 
-        Engram.Analytics.track_throttled(user, "mcp_client_connected", family, :timer.hours(1), %{
-          client: family
-        })
+        # Lazy: built only when the throttle lets the event through.
+        props = fn ->
+          maybe_put_prop(
+            %{client: family, client_agent: agent},
+            :client_version,
+            McpClient.version(info["version"], ua)
+          )
+        end
+
+        Engram.Analytics.track_throttled(
+          user,
+          "mcp_client_connected",
+          "#{family}:#{agent}",
+          :timer.hours(1),
+          props
+        )
 
         emit_api_key_connected(user, conn.assigns[:current_api_key], family)
     end
   end
+
+  defp maybe_put_prop(props, _key, nil), do: props
+  defp maybe_put_prop(props, key, value), do: Map.put(props, key, value)
 
   defp emit_api_key_connected(_user, nil, _family), do: :ok
 
@@ -1071,20 +1170,23 @@ defmodule EngramWeb.McpController do
 
   defp emit_api_key_connected(_user, _key, _family), do: :ok
 
-  # The client's own name wins (legacy `initialize` clientInfo, or the
-  # modern per-request `_meta`), then its user agent. Bucketed either way.
-  defp request_client_family(conn, envelope) do
+  # The client's own `clientInfo` (legacy `initialize`, or the modern
+  # per-request `_meta`), or `%{}`. Its fields are client text: callers
+  # bucket them (`McpClient`), never pass them on raw.
+  defp request_client_info(envelope) do
     inner = if is_non_struct_map(envelope), do: envelope["params"], else: nil
 
-    name =
-      case inner do
-        %{"clientInfo" => %{"name" => name}} when is_binary(name) -> name
-        %{"_meta" => %{@meta_client_info => %{"name" => name}}} when is_binary(name) -> name
-        _ -> nil
-      end
+    case inner do
+      %{"clientInfo" => info} when is_non_struct_map(info) -> info
+      %{"_meta" => %{@meta_client_info => info}} when is_non_struct_map(info) -> info
+      _ -> %{}
+    end
+  end
 
+  # The client's own name wins, then its user agent. Bucketed either way.
+  defp client_family(name, ua) do
     case McpClient.family(name) do
-      "other" -> conn |> get_req_header("user-agent") |> List.first() |> McpClient.family()
+      "other" -> McpClient.family(ua)
       family -> family
     end
   end

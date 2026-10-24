@@ -61,6 +61,15 @@ defmodule Engram.PromEx.ZeroInitTest do
              Enum.sort(~w(text_undecryptable note_undecryptable payload_undecryptable))
   end
 
+  test "covers the family-kill series engram-prod-oauth-refresh-loop selects" do
+    series = ZeroInit.prometheus_series()
+
+    for agent <- ~w(codex chatgpt claude other),
+        reason <- ~w(refresh_reuse revoked_after_use superseded_reuse code_replay) do
+      assert {"engram_prom_ex_oauth_family_revoked_total", %{client_agent: agent, reason: reason}} in series
+    end
+  end
+
   test "covers the rebuild counters the v5 alerts select" do
     series = ZeroInit.prometheus_series()
 

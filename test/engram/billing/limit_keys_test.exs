@@ -4,14 +4,15 @@ defmodule Engram.Billing.LimitKeysTest do
   alias Engram.Billing.LimitKeys
 
   describe "all/0" do
-    test "returns the 26 catalog keys" do
+    test "returns the 27 catalog keys" do
       keys = LimitKeys.all()
-      assert length(keys) == 26
+      assert length(keys) == 27
       assert :notes_cap in keys
       assert :vaults_cap in keys
       assert :reranker_enabled in keys
       assert :cross_vault_search in keys
       assert :history_enabled in keys
+      assert :mcp_tool_calls_per_min in keys
     end
   end
 

@@ -53,5 +53,36 @@ defmodule Engram.Analytics.McpClientTest do
     test "a UA that only mentions codex later is not codex" do
       assert McpClient.agent("evil/1.0 codex-mcp-client/1", "other") == "other"
     end
+
+    test "ChatGPT's MCP requests are chatgpt" do
+      assert McpClient.agent("openai-mcp/1.0.0", "other") == "chatgpt"
+    end
+  end
+
+  # 2026-10-24: Codex < 0.164 races refresh rotation (openai/codex#46028), so
+  # we need the share of Codex on a fixed release, from a bounded value.
+  describe "version/2" do
+    test "reads major.minor from clientInfo.version first" do
+      assert McpClient.version("0.164.0", "codex-mcp-client/0.163.0") == "0.164"
+    end
+
+    test "falls back to the User-Agent's version token" do
+      assert McpClient.version(nil, "codex-mcp-client/0.163.0-alpha.11") == "0.163"
+      assert McpClient.version(nil, "codex-mcp-client/0.164.0") == "0.164"
+      assert McpClient.version(%{"x" => 1}, "claude-code/2.1.303 (cli)") == "2.1"
+    end
+
+    test "leading zeros are normalized" do
+      assert McpClient.version("01.0164", nil) == "1.164"
+    end
+
+    test "anything else is nil, never client text" do
+      assert McpClient.version(nil, nil) == nil
+      assert McpClient.version("latest", "node") == nil
+      assert McpClient.version("<script>1.2", "x/<b>") == nil
+      assert McpClient.version("12345.1", nil) == nil
+      assert McpClient.version("1.12345", nil) == nil
+      assert McpClient.version(String.duplicate("9", 10_000), nil) == nil
+    end
   end
 end
