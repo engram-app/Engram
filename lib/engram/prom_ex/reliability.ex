@@ -35,6 +35,12 @@ defmodule Engram.PromEx.Reliability do
       a reconcile job that found bucket versions unavailable (#2159). A
       configuration state on self-host and staging, not an error; on prod it
       means the IAM grant is missing.
+    * `[:engram, :abuse, :inactivity_sweep_failed]` →
+      `..._inactivity_sweep_failed_total`, tags `[:step, :kind]` — one user's
+      step in the daily inactivity sweep raised, exited or threw, and the
+      sweep moved on (`step`: `warning_60`, `warning_80`, `soft_delete`,
+      `hard_delete`). A failing user is retried only on the next daily run,
+      so a non-zero rate that persists is a stuck account.
     * `[:engram, :fanout_pacer, :drain]` → `..._fanout_pacer_queue_depth`,
       `..._fanout_pacer_queued`, `..._fanout_pacer_topics` (#1004) — the
       vault-channel pacer's cold-queue state, sampled on every drain tick.
@@ -143,6 +149,12 @@ defmodule Engram.PromEx.Reliability do
           event_name: [:engram, :oban, :timeout],
           description: "Oban jobs killed by their worker timeout, on any attempt.",
           tags: [:worker, :queue]
+        ),
+        counter(
+          metric_prefix ++ [:inactivity_sweep_failed, :total],
+          event_name: [:engram, :abuse, :inactivity_sweep_failed],
+          description: "Inactivity sweep per-user steps that failed, by step + kind.",
+          tags: [:step, :kind]
         ),
         last_value(
           metric_prefix ++ [:fanout_pacer, :queue_depth],

@@ -43,6 +43,12 @@ defmodule Engram.PromEx.ReliabilityTest do
       assert %{tags: [:reason]} = counter_for([:engram, :attachments, :reconcile_unavailable])
     end
 
+    # A per-user inactivity-sweep failure is swallowed so the run continues;
+    # without this counter it shows nowhere but one log line.
+    test "counts inactivity sweep per-user failures by step + kind (not user_id)" do
+      assert %{tags: [:step, :kind]} = counter_for([:engram, :abuse, :inactivity_sweep_failed])
+    end
+
     test "counts auth rejections tagged by reason + source" do
       m = counter_for([:engram, :auth, :rejected])
       assert m, "expected a counter on [:engram, :auth, :rejected]"
