@@ -1,6 +1,9 @@
 defmodule EngramWeb.FoldersCreateDeleteTest do
   use EngramWeb.ConnCase, async: true
 
+  alias Engram.Notes
+  alias Engram.Repo
+
   setup %{conn: conn} do
     user = insert(:user)
     vault = insert(:vault, user: user, is_default: true)
@@ -70,6 +73,43 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
       assert_receive %Phoenix.Socket.Broadcast{
         event: "folders.batch",
         payload: %{op: "create", folder: "Fresh"}
+      }
+    end
+
+    # #2121 through the REST route: a name holding only tombstones revives the
+    # most recently deleted one, whatever order Postgres returns the rows in.
+    test "with two tombstones, re-create revives the newest", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      post(conn, "/api/folders", %{"folder" => "GateG"})
+      assert_receive %Phoenix.Socket.Broadcast{payload: %{markers: [%{id: orig}]}}
+      user = Repo.reload!(user)
+      {:ok, :deleted} = Notes.delete_folder_marker(user, vault, "GateG")
+      post(conn, "/api/folders", %{"folder" => "GateF"})
+      assert_receive %Phoenix.Socket.Broadcast{payload: %{markers: [%{id: moved}]}}
+      {:ok, _} = Notes.rename_folder(user, vault, "GateF", "GateG")
+      {:ok, :deleted} = Notes.delete_folder_marker(user, vault, "GateG")
+
+      # The moved row was written last, so heap order returns it last. Make it
+      # the OLDER tombstone, so the right answer is the row Postgres returns first.
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          {:ok, orig_uuid} = Ecto.UUID.dump(orig)
+          {:ok, moved_uuid} = Ecto.UUID.dump(moved)
+
+          Repo.query!(
+            "UPDATE notes SET deleted_at = (SELECT deleted_at FROM notes WHERE id = $1) - interval '1 hour' WHERE id = $2",
+            [orig_uuid, moved_uuid]
+          )
+        end)
+
+      assert conn |> post("/api/folders", %{"folder" => "GateG"}) |> json_response(201)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        payload: %{op: "create", markers: [%{id: ^orig, name: "GateG"}]}
       }
     end
 
