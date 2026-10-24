@@ -520,6 +520,9 @@ config :engram, :client_logs_retention_days, 30
 # lock, so an unbounded client drains the Ecto pool for every tenant. Normal
 # traffic is a few per hour; the plugin's first-sync seeding posts one per
 # empty folder in sequence, hence the headroom. Bulk callers use /folders/batch.
+# Spent by Engram.Folders.create_markers/3, one unit per call (REST single,
+# REST batch, MCP create_folder). Keyed per USER, not per vault: first-syncing
+# two vaults at once shares the one budget.
 config :engram, :folder_create_rate_limit, limit: 120, period_ms: 60_000
 
 # ex_aws HTTP client: Req (first-party in ex_aws 2.7). Req uses its own default

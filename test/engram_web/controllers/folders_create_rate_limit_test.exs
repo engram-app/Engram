@@ -36,4 +36,24 @@ defmodule EngramWeb.FoldersCreateRateLimitTest do
     %{conn: other} = authed_api_conn(%{conn: build_conn()})
     assert other |> post(~p"/api/folders", %{folder: "C"}) |> json_response(201)
   end
+
+  # MCP create_folder arrives as POST /api/mcp, so only a budget in the shared
+  # create path can see it (docs/context/mcp-bypasses-path-shaped-plugs.md).
+  test "MCP create_folder spends the same per-user budget", %{
+    conn: conn,
+    user: user,
+    vault: vault
+  } do
+    assert conn |> post(~p"/api/folders", %{folder: "A"}) |> json_response(201)
+    user = Engram.Repo.reload!(user)
+
+    assert {:ok, _, _} =
+             Engram.MCP.Handlers.handle("create_folder", user, vault, %{"folder" => "B"})
+
+    assert {:error, msg} =
+             Engram.MCP.Handlers.handle("create_folder", user, vault, %{"folder" => "C"})
+
+    assert msg =~ "rate limited"
+    assert conn |> post(~p"/api/folders", %{folder: "D"}) |> json_response(429)
+  end
 end

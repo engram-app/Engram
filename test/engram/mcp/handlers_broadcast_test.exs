@@ -195,6 +195,15 @@ defmodule Engram.MCP.HandlersBroadcastTest do
     assert is_binary(id)
   end
 
+  # #2161: same no-echo rule as POST /folders and /folders/batch.
+  test "create_folder of a live folder broadcasts nothing", %{user: user, vault: vault} do
+    {:ok, _, _} = Handlers.handle("create_folder", user, vault, %{"folder" => "mcp/twice"})
+    assert_receive %Phoenix.Socket.Broadcast{event: "folders.batch"}
+
+    assert {:ok, _, _} = Handlers.handle("create_folder", user, vault, %{"folder" => "mcp/twice"})
+    refute_receive %Phoenix.Socket.Broadcast{event: "folders.batch"}, 100
+  end
+
   test "delete_folder of an empty folder broadcasts folders.batch", %{user: user, vault: vault} do
     {:ok, _, _} = Handlers.handle("create_folder", user, vault, %{"folder" => "mcp/empty"})
     assert_receive %Phoenix.Socket.Broadcast{event: "folders.batch", payload: %{op: "create"}}

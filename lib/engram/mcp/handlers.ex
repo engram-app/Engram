@@ -255,20 +255,17 @@ defmodule Engram.MCP.Handlers do
   end
 
   def handle("create_folder", user, vault, %{"folder" => folder}) when is_binary(folder) do
-    case Notes.create_folder_marker(user, vault, folder) do
-      {:ok, marker} ->
-        # Same event as POST /folders: an empty folder has no note_changed, so
-        # this is the only way connected devices learn of it.
-        EngramWeb.BatchOps.broadcast_batch(user, vault, "folders.batch", %{
-          op: "create",
-          folder: marker.folder,
-          markers: [%{id: marker.id, name: marker.folder}]
-        })
+    # Same path as POST /folders: one budget, and a broadcast only when this
+    # call created or undeleted the marker.
+    case Engram.Folders.create_markers(user, vault, [folder]) do
+      {:ok, %{folders: [%{name: name}]}} ->
+        {:ok, "Created folder: #{name}", %{"folder" => name}}
 
-        {:ok, "Created folder: #{marker.folder}", %{"folder" => marker.folder}}
-
-      {:error, :root_folder_not_marker} ->
+      {:ok, %{rejected: [_]}} ->
         {:error, "folder must be a non-empty path"}
+
+      {:error, {:rate_limited, _retry_after_ms}} ->
+        {:error, "rate limited: too many folder creates, retry later"}
 
       {:error, atom} when is_atom(atom) ->
         {:error, "Failed: #{atom}"}
