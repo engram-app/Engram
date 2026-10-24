@@ -8,6 +8,7 @@ defmodule Engram.Workers.InactivityCleanupTest do
   alias Engram.Accounts
   alias Engram.Repo
   alias Engram.Storage.InMemory
+  alias Engram.Test.LogCapture
   alias Engram.UsageMeters
   alias Engram.UsageMeters.Meter
   alias Engram.Workers.InactivityCleanup
@@ -61,6 +62,60 @@ defmodule Engram.Workers.InactivityCleanupTest do
 
       reloaded = Accounts.get_user!(user.id)
       assert %DateTime{} = reloaded.inactivity_warning_60_at
+    end
+
+    # A raise or exit in one user's warning used to abort the whole run, so
+    # every later user went unwarned (and stayed so while the bad row did).
+    test "one user's failing warning does not abort the sweep, raise or exit" do
+      a = insert(:user)
+      b = insert(:user)
+      set_last_active(a.id, 65)
+      set_last_active(b.id, 65)
+      a_email = a.email
+
+      stub(Engram.Email.ProviderMock, :send, fn
+        ^a_email, _subject, _html, _opts -> raise "provider down"
+        _to, _subject, _html, _opts -> exit(:provider_timeout)
+      end)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :abuse, :inactivity_sweep_failed]
+        ])
+
+      ExUnit.CaptureLog.capture_log(fn -> InactivityCleanup.__sweep_60__() end)
+
+      kinds =
+        for _ <- 1..2 do
+          assert_receive {[:engram, :abuse, :inactivity_sweep_failed], ^ref, %{count: 1},
+                          %{step: :warning_60, kind: kind}}
+
+          kind
+        end
+
+      assert Enum.sort(kinds) == [:error, :exit]
+    end
+
+    test "a throw in one user's warning is caught and counted" do
+      user = insert(:user)
+      set_last_active(user.id, 65)
+
+      stub(Engram.Email.ProviderMock, :send, fn _to, _subject, _html, _opts -> throw(:boom) end)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :abuse, :inactivity_sweep_failed]
+        ])
+
+      {_, events} = LogCapture.with_events(fn -> InactivityCleanup.__sweep_60__() end)
+
+      assert_receive {[:engram, :abuse, :inactivity_sweep_failed], ^ref, _,
+                      %{step: :warning_60, kind: :throw}}
+
+      # The reason carries the argument-free stacktrace location.
+      failure = Enum.find(events, &(&1.level == :error and &1.meta[:step] == :warning_60))
+      assert failure.meta[:kind] == :throw
+      assert failure.meta[:reason] =~ ~r/^:boom at=Engram\./
     end
 
     test "does not re-send when warning already stamped" do
@@ -286,6 +341,86 @@ defmodule Engram.Workers.InactivityCleanupTest do
       assert_receive {[:engram, :account, :deleted], ^ref, _, %{reason: :inactivity}}
     end
 
+    # A raise inside one user's soft delete used to abort the whole run, so
+    # every later user waited for tomorrow (and forever, if the bad row stayed).
+    test "one user's failing soft delete does not abort the sweep" do
+      a = insert(:user)
+      b = insert(:user)
+      set_last_active(a.id, 95)
+      set_last_active(b.id, 95)
+
+      # Both raise, so the order the sweep visits them in cannot matter.
+      stub(Engram.Email.ProviderMock, :send, fn _to, _subject, _html, _opts ->
+        raise "provider down"
+      end)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :abuse, :inactivity_sweep_failed]
+        ])
+
+      ExUnit.CaptureLog.capture_log(fn -> InactivityCleanup.__sweep_soft__() end)
+
+      assert %DateTime{} = Repo.reload!(a).deleted_at
+      assert %DateTime{} = Repo.reload!(b).deleted_at
+
+      for _ <- 1..2,
+          do:
+            assert_receive(
+              {[:engram, :abuse, :inactivity_sweep_failed], ^ref, _,
+               %{step: :soft_delete, kind: :error}}
+            )
+    end
+
+    # A hard delete that RETURNS an error was only logged, so the sweep-failure
+    # counter never saw it. A rolled-back purge returns `{:error, :pg_failed}`;
+    # only a failed vector-purge enqueue causes that and there is no seam to
+    # force it, so the classification is driven directly.
+    test "a hard delete that returns :pg_failed is counted as an error" do
+      user = insert(:user)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :abuse, :inactivity_sweep_failed]
+        ])
+
+      {_, events} =
+        LogCapture.with_events(fn ->
+          InactivityCleanup.__per_user__(user, :hard_delete, fn -> {:error, :pg_failed} end)
+        end)
+
+      assert_receive {[:engram, :abuse, :inactivity_sweep_failed], ^ref, %{count: 1},
+                      %{step: :hard_delete, kind: :error}}
+
+      assert Enum.any?(events, &(&1.level == :error and &1.meta[:reason] == ":pg_failed"))
+    end
+
+    # The last-admin guard recurs every day until ops promotes another admin:
+    # counted (a stranded account), but as `refused` at warning, never paging.
+    test "the last-admin refusal is counted as refused, logged at warning" do
+      admin =
+        insert(:user, role: "admin")
+        |> Ecto.Changeset.change(%{deleted_at: DateTime.add(DateTime.utc_now(), -31 * 86_400)})
+        |> Repo.update!(skip_tenant_check: true)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :abuse, :inactivity_sweep_failed]
+        ])
+
+      {_, events} =
+        LogCapture.with_events(fn -> InactivityCleanup.__sweep_hard__() end)
+
+      assert_receive {[:engram, :abuse, :inactivity_sweep_failed], ^ref, %{count: 1},
+                      %{step: :hard_delete, kind: :refused}}
+
+      failure = Enum.find(events, &(&1.meta[:step] == :hard_delete))
+      assert failure.level == :warning
+      assert failure.meta[:kind] == :refused
+      refute Enum.any?(events, &(&1.level == :error))
+      assert Repo.get(Engram.Accounts.User, admin.id, skip_tenant_check: true)
+    end
+
     test "legacy :abuse telemetry still fires alongside" do
       user = insert(:user)
       set_last_active(user.id, 95)
@@ -300,6 +435,84 @@ defmodule Engram.Workers.InactivityCleanupTest do
       InactivityCleanup.__sweep_soft__()
 
       assert_receive {[:engram, :abuse, :inactivity_soft_delete], ^ref, _, _}
+    end
+  end
+
+  # The core claim: a LATER user is still processed after an EARLIER one fails.
+  # The sweeps have no ORDER BY, so the failure is keyed on call order, not on
+  # a user: whichever user the sweep reaches first fails, and the other must
+  # still get the step's effect. On main the first failure escapes the sweep,
+  # so the second user is never reached.
+  describe "a later user is processed after an earlier one fails" do
+    # Runs `fail.()` on the first call and `ok.(arg)` on every later one,
+    # recording the args that succeeded.
+    defp first_call_fails(fail, ok) do
+      {:ok, agent} = Agent.start_link(fn -> {0, []} end)
+
+      handler = fn arg ->
+        n = Agent.get_and_update(agent, fn {n, done} -> {n, {n + 1, done}} end)
+
+        if n == 0 do
+          fail.()
+        else
+          Agent.update(agent, fn {n, done} -> {n, [arg | done]} end)
+          ok.(arg)
+        end
+      end
+
+      {handler, fn -> agent |> Agent.get(& &1) |> elem(1) end}
+    end
+
+    test "warning sweep" do
+      users = for _ <- 1..2, do: insert(:user)
+      Enum.each(users, &set_last_active(&1.id, 65))
+
+      {handler, succeeded} = first_call_fails(fn -> raise "provider down" end, fn _ -> :ok end)
+      stub(Engram.Email.ProviderMock, :send, fn to, _subject, _html, _opts -> handler.(to) end)
+
+      ExUnit.CaptureLog.capture_log(fn -> InactivityCleanup.__sweep_60__() end)
+
+      assert [email] = succeeded.()
+      healthy = Enum.find(users, &(&1.email == email))
+      assert %DateTime{} = Accounts.get_user!(healthy.id).inactivity_warning_60_at
+    end
+
+    test "soft-delete sweep" do
+      users = for _ <- 1..2, do: insert(:user)
+      Enum.each(users, &set_last_active(&1.id, 95))
+
+      {handler, succeeded} = first_call_fails(fn -> raise "provider down" end, fn _ -> :ok end)
+      stub(Engram.Email.ProviderMock, :send, fn to, _subject, _html, _opts -> handler.(to) end)
+
+      ExUnit.CaptureLog.capture_log(fn -> InactivityCleanup.__sweep_soft__() end)
+
+      # The deleted-account notice is the soft delete's last step: reaching it
+      # means the second user's soft delete ran to completion.
+      assert [email] = succeeded.()
+      healthy = Enum.find(users, &(&1.email == email))
+      assert %DateTime{} = Repo.reload!(healthy).deleted_at
+    end
+
+    test "hard-delete sweep" do
+      cutoff = DateTime.add(DateTime.utc_now(), -31 * 86_400)
+
+      users =
+        for i <- 1..2 do
+          insert(:user, external_id: "user_clerk_sweep_#{i}")
+          |> Ecto.Changeset.change(%{deleted_at: cutoff})
+          |> Repo.update!(skip_tenant_check: true)
+        end
+
+      # An exit, not a raise: Lifecycle rescues exceptions from the Clerk call,
+      # so only an exit or throw reaches the sweep.
+      {handler, succeeded} = first_call_fails(fn -> exit(:clerk_timeout) end, fn _ -> :ok end)
+      stub(Engram.Auth.Clerk.ApiMock, :delete_user, fn clerk_id -> handler.(clerk_id) end)
+
+      ExUnit.CaptureLog.capture_log(fn -> InactivityCleanup.__sweep_hard__() end)
+
+      assert [clerk_id] = succeeded.()
+      healthy = Enum.find(users, &(&1.external_id == clerk_id))
+      refute Repo.get(Engram.Accounts.User, healthy.id, skip_tenant_check: true)
     end
   end
 end
