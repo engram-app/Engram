@@ -1057,8 +1057,7 @@ defmodule Engram.OAuth do
   defp log_reuse(rt, opts) do
     within_grace = Keyword.fetch!(opts, :within_grace)
 
-    {family, _registration} =
-      Client |> Repo.get(rt.client_id, skip_tenant_check: true) |> McpClient.of_client()
+    family = client_family(rt.client_id)
 
     Engram.Analytics.track(%Accounts.User{id: rt.user_id}, "mcp_oauth_refresh_reuse", %{
       within_grace: within_grace,
@@ -1225,11 +1224,16 @@ defmodule Engram.OAuth do
     end
   end
 
-  defp emit_code_replay_kill(code, user_agent) do
-    {family, _registration} =
-      Client |> Repo.get(code.client_id, skip_tenant_check: true) |> McpClient.of_client()
+  defp emit_code_replay_kill(code, user_agent),
+    do: emit_family_revoked(:code_replay, client_family(code.client_id), user_agent)
 
-    emit_family_revoked(:code_replay, family, user_agent)
+  # The `McpClient` family of an internal client id, for labels. Keyed by
+  # client id, before any user context: no tenant to scope to.
+  defp client_family(client_id) do
+    {family, _registration} =
+      Client |> Repo.get(client_id, skip_tenant_check: true) |> McpClient.of_client()
+
+    family
   end
 
   # A CIMD client presents its document URL here while the code row stores the

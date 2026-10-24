@@ -206,7 +206,12 @@ defmodule EngramWeb.McpController do
        )
        when not is_map_key(assigns, :current_api_key) do
     case Engram.Billing.cap(user, :mcp_tool_calls_per_min) do
-      limit when is_integer(limit) and limit >= 0 ->
+      # The per-user kill switch, as `api_rps_cap` 0 is: refused outright,
+      # with no Retry-After a client would loop on.
+      0 ->
+        {:deny, 0, nil}
+
+      limit when is_integer(limit) and limit > 0 ->
         "mcp_tool_call:#{user.id}"
         |> EngramWeb.RateLimiter.hit(@tool_call_window_ms, limit, :mcp_tool_call)
         |> case do
@@ -223,6 +228,14 @@ defmodule EngramWeb.McpController do
 
   # The REST refusal shape; `McpErrorEnvelope` turns it into a JSON-RPC error
   # (status kept, body in `data`), like every other MCP pipeline refusal.
+  defp tool_call_rate_exceeded(conn, 0, nil) do
+    EngramWeb.Plugs.Halt.json(conn, 429, %{
+      error: "mcp_tool_calls_disabled",
+      message: "MCP tool calls are switched off for this account. Contact support.",
+      limit: 0
+    })
+  end
+
   defp tool_call_rate_exceeded(conn, limit, retry_after_ms) do
     retry_after_s = max(div(retry_after_ms + 999, 1_000), 1)
 
@@ -776,7 +789,8 @@ defmodule EngramWeb.McpController do
     # There is no usage metering here any more. `ai_searches_per_day` is charged
     # inside `Engram.Search.search/4`, the funnel every retrieval passes through,
     # so this controller cannot forget to charge a new retrieval tool. Volume is
-    # bounded by `EngramWeb.Plugs.PreAuthRateLimit` on the shared pipeline.
+    # bounded per user by `mcp_tool_calls_per_min` (`tool_call_budget/2`, OAuth)
+    # or `api_rps_cap` (API keys), and by `PreAuthRateLimit` on the pipeline.
     with {:ok, tool} <- Tools.get(name),
          :ok <- check_read_only_grant(conn, tool),
          user = conn.assigns.current_user,

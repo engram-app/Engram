@@ -61,8 +61,9 @@ defmodule Engram.QueryBudgetTest do
     # Every 60 s cache cold: the warm 5, the ONE grant query
     # (`OAuth.load_grant/1`: liveness, levels, owner, granted_at), the
     # subscription block (4), the onboarding gate's users row, the vault list
-    # block (4).
-    "mcp get_notes oauth cold" => 15,
+    # block (4), and the `mcp_tool_calls_per_min` override lookup (1, the
+    # OAuth tools/call budget, 2026-10-24; warm it is the override cache).
+    "mcp get_notes oauth cold" => 16,
     # Write target 12; floor 14, each kept query required:
     #  1 rotation lock: a write reads it fresh from the DB (RotationGate).
     #  2, 3, 14 begin / tenant_enter / commit: the one tenant txn (RLS).

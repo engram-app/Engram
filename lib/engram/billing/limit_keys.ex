@@ -151,7 +151,9 @@ defmodule Engram.Billing.LimitKeys do
     # family). Only `tools/call` counts: initialize, notifications, ping and
     # the list methods are protocol chatter. Gated in
     # `EngramWeb.McpController`; a refusal is 429 + Retry-After. A key, not a
-    # constant, so an override can lift it for one heavy agent user.
+    # constant, so an override can lift it for one heavy agent user, or set it
+    # to 0: the per-user kill switch (every OAuth tools/call refused, no
+    # Retry-After). One bucket per user, shared by all their OAuth connections.
     mcp_tool_calls_per_min: %{type: :integer, defaults: %{free: 120, starter: 120, pro: 120}},
     # THE AI usage meter. One key, one number, every transport.
     #
