@@ -224,6 +224,48 @@ defmodule Engram.MCP.HandlersLinksTest do
       assert backlinks.("x/y/Note.md") == []
     end
 
+    # Second delta review of #2175: an exact hit in the attachments table,
+    # which an extensionless link tries SECOND, settled the lookup before the
+    # notes table's full set was fetched, so the link bound to the attachment.
+    test "a note suffix match beats an extensionless attachment at the exact path",
+         %{user: u, a: a} do
+      seed(u, a, [
+        {"Note.md", "root, hides the nested note from the shortest-row lookup"},
+        {"x/y/Note.md", "nested"},
+        {"Source.md", "see [[y/Note]]"}
+      ])
+
+      Engram.Fixtures.insert_attachment!(u, a, %{path: "y/Note"})
+
+      assert {:ok, _, %{"notes" => [src]}} = get(u, a, %{"paths" => ["Source.md"]})
+      assert src["outgoing"] == ["x/y/Note.md"]
+    end
+
+    # Delta check of #2175: verifying a deep note's tail spelling (`b/note`)
+    # fetched and decrypted EVERY same-named row (733 for the `index.md` hub)
+    # on each backlinks read, even when no link uses that spelling.
+    test "backlinks of a deep note skip the full same-name fetch when no link needs it",
+         %{user: u, a: a} do
+      seed(u, a, [
+        {"Note.md", "root"},
+        {"a/b/Note.md", "deep"},
+        {"Source.md", "see [[Note]]"}
+      ])
+
+      # The full fetch's own shape (`fetch_candidates_by_hmac/5`): the
+      # candidate union tags rows `$1::integer` first, and the note and name
+      # reads select other columns.
+      full_fetch? = &(&1 =~ ~s(SELECT n0."id", n0."basename_hmac", n0."path_ciphertext"))
+
+      queries =
+        Engram.TenantQueryCounter.count_matching_queries(
+          fn -> get(u, a, %{"paths" => ["a/b/Note.md"]}) end,
+          full_fetch?
+        )
+
+      assert queries == [], "unexpected full fetch:\n#{Enum.join(queries, "\n")}"
+    end
+
     test "a bare name still takes the shortest same-named note", %{user: u, a: a} do
       seed(u, a, [
         {"Deep/Folder/Note.md", "long"},
