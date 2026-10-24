@@ -277,9 +277,9 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(openMock).toHaveBeenCalledTimes(1);
 	});
 
-	// A trial checkout's first charge is $0; Google Pay's zero-amount
-	// authorization stuck at action_required in prod, so it is left out there.
-	it("trial checkout offers every payment method except Google Pay", async () => {
+	// A trial checkout's first charge is $0; Apple Pay and Google Pay stall at
+	// action_required there in prod (#2203), so both are left out.
+	it("trial checkout offers every payment method except the wallets", async () => {
 		mockBillingApi();
 		const openMock = vi.fn();
 		initializePaddleMock.mockImplementation(async () => ({
@@ -298,7 +298,8 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		const methods: string[] = openMock.mock.calls[0]![0].settings.allowedPaymentMethods;
 		expect(methods).not.toContain("google_pay");
-		expect(methods).toEqual(expect.arrayContaining(["card", "paypal", "apple_pay"]));
+		expect(methods).not.toContain("apple_pay");
+		expect(methods).toEqual(expect.arrayContaining(["card", "paypal"]));
 		// Init defaults (which the /pay auto-open inherits) stay unrestricted.
 		const { settings } = initializePaddleMock.mock.calls[0]![0].checkout;
 		expect(settings.allowedPaymentMethods).toBeUndefined();

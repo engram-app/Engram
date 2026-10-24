@@ -134,6 +134,14 @@ function startButton(): HTMLElement {
 	return first;
 }
 
+// $0 checkouts (trial start, payment-method update) leave out both wallets,
+// which stall at action_required there in prod (#2203), and keep the rest.
+function expectZeroAmountMethods(methods: string[]) {
+	expect(methods).not.toContain("apple_pay");
+	expect(methods).not.toContain("google_pay");
+	expect(methods).toEqual(expect.arrayContaining(["card", "paypal"]));
+}
+
 describe("BillingPage locale", () => {
 	beforeEach(() => {
 		window.localStorage.clear();
@@ -155,13 +163,13 @@ describe("BillingPage locale", () => {
 		});
 		await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
 		// A plan purchase is a $0-first-charge trial checkout: it also restricts
-		// payment methods (no Google Pay; see paddle-checkout.ts).
+		// payment methods (no Apple Pay or Google Pay; see paddle-checkout.ts).
 		expect(open.mock.calls[0]?.[0].settings).toEqual({
 			...INLINE_SETTINGS,
-			allowedPaymentMethods: expect.not.arrayContaining(["google_pay"]),
+			allowedPaymentMethods: expect.any(Array),
 			locale: "zh-Hans",
 		});
-		expect(open.mock.calls[0]?.[0].settings.allowedPaymentMethods).toContain("card");
+		expectZeroAmountMethods(open.mock.calls[0]?.[0].settings.allowedPaymentMethods);
 	});
 
 	it("passes the mapped rendered locale with the full settings to the payment-method update checkout", async () => {
@@ -179,14 +187,14 @@ describe("BillingPage locale", () => {
 		expect(open.mock.calls[0]?.[0]).toEqual({
 			transactionId: "txn_1",
 			// An active subscription's payment-method update is a $0 transaction:
-			// same method allowlist as a trial checkout (no Google Pay).
+			// same method allowlist as a trial checkout (no wallets).
 			settings: {
 				...OVERLAY_SETTINGS,
-				allowedPaymentMethods: expect.not.arrayContaining(["google_pay"]),
+				allowedPaymentMethods: expect.any(Array),
 				locale: "zh-Hans",
 			},
 		});
-		expect(open.mock.calls[0]?.[0].settings.allowedPaymentMethods).toContain("card");
+		expectZeroAmountMethods(open.mock.calls[0]?.[0].settings.allowedPaymentMethods);
 	});
 
 	it("sends the current locale after a switch, without re-initializing Paddle", async () => {
@@ -206,9 +214,10 @@ describe("BillingPage locale", () => {
 		await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
 		expect(open.mock.calls[0]?.[0].settings).toEqual({
 			...OVERLAY_SETTINGS,
-			allowedPaymentMethods: expect.not.arrayContaining(["google_pay"]),
+			allowedPaymentMethods: expect.any(Array),
 			locale: "de",
 		});
+		expectZeroAmountMethods(open.mock.calls[0]?.[0].settings.allowedPaymentMethods);
 		expect(initializePaddleMock).toHaveBeenCalledTimes(1);
 	});
 });

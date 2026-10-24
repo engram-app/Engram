@@ -16,13 +16,14 @@ import {
 // the type check here rather than silently hiding it, and each value must be
 // its own key. Paddle still shows only the methods enabled and available on
 // the account.
-// Google Pay is off: prod 2026-10-24, three Google Pay attempts on a trial
-// checkout each stuck at `action_required` with no error. Suspected (not
-// confirmed with Paddle): its zero-amount authorization never completes.
-// Reversible: set it back to "google_pay".
+// The wallets are off: prod audit (#2203) of $0 trial checkouts shows Apple
+// Pay stalling at `action_required` with no error on 4 of 8 attempts and
+// Google Pay on 3 of 3, against PayPal 0 of 7 and card 1 of about 17.
+// Suspected (not confirmed with Paddle): their zero-amount authorization
+// never completes. Reversible: set each back to its own name.
 const ON_ZERO_AMOUNT: { [M in AvailablePaymentMethod]: M | false } = {
 	alipay: "alipay",
-	apple_pay: "apple_pay",
+	apple_pay: false,
 	bancontact: "bancontact",
 	blik: "blik",
 	card: "card",
