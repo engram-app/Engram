@@ -518,18 +518,9 @@ defmodule Engram.Notes do
   """
   @spec create_folder_markers(map(), map(), [String.t()]) ::
           {:ok, %{folders: [map()], rejected: [String.t()]}} | {:error, term()}
-  def create_folder_markers(_user, _vault, folders)
-      when is_list(folders) and length(folders) > @max_batch_folders,
-      do: {:error, :batch_too_large}
-
   def create_folder_markers(user, vault, inputs) when is_list(inputs) do
-    {rejected, kept} =
-      inputs
-      |> Enum.uniq()
-      |> Enum.map(&{&1, PathSanitizer.sanitize(&1)})
-      |> Enum.split_with(fn {_input, name} -> name == "" end)
-
-    with {:ok, created} <-
+    with {:ok, kept, rejected} <- prepare_folder_inputs(inputs),
+         {:ok, created} <-
            upsert_folder_batch(user, vault, kept |> Enum.map(&elem(&1, 1)) |> Enum.uniq()) do
       folders =
         Enum.map(kept, fn {input, name} ->
@@ -541,8 +532,30 @@ defmodule Engram.Notes do
           }
         end)
 
-      {:ok, %{folders: folders, rejected: Enum.map(rejected, &elem(&1, 0))}}
+      {:ok, %{folders: folders, rejected: rejected}}
     end
+  end
+
+  @doc """
+  The pure half of `create_folder_markers/3`, no DB: dedupes and sanitizes
+  the inputs. Returns `{:ok, kept, rejected}`, where `kept` is
+  `[{input, name}]` for inputs that name a folder and `rejected` lists the
+  inputs that sanitize to the root, or `{:error, :batch_too_large}` above
+  #{@max_batch_folders}. `kept == []` means a create would write nothing.
+  """
+  @spec prepare_folder_inputs([String.t()]) ::
+          {:ok, [{String.t(), String.t()}], [String.t()]} | {:error, :batch_too_large}
+  def prepare_folder_inputs(inputs) when length(inputs) > @max_batch_folders,
+    do: {:error, :batch_too_large}
+
+  def prepare_folder_inputs(inputs) when is_list(inputs) do
+    {rejected, kept} =
+      inputs
+      |> Enum.uniq()
+      |> Enum.map(&{&1, PathSanitizer.sanitize(&1)})
+      |> Enum.split_with(fn {_input, name} -> name == "" end)
+
+    {:ok, kept, Enum.map(rejected, &elem(&1, 0))}
   end
 
   defp upsert_folder_batch(_user, _vault, []), do: {:ok, %{}}

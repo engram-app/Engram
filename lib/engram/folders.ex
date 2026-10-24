@@ -106,10 +106,16 @@ defmodule Engram.Folders do
           {:ok, %{folders: [map()], rejected: [String.t()]}}
           | {:error, {:rate_limited, non_neg_integer()} | term()}
   def create_markers(user, vault, inputs) when is_list(inputs) do
-    with :ok <- spend_create_budget(user),
+    # Validate first: a request that can write nothing (empty, all-root, over
+    # the batch cap) spends no budget.
+    with {:ok, [_ | _], _rejected} <- Notes.prepare_folder_inputs(inputs),
+         :ok <- spend_create_budget(user),
          {:ok, %{folders: entries}} = ok <- Notes.create_folder_markers(user, vault, inputs) do
       broadcast_created(user, vault, entries)
       ok
+    else
+      {:ok, [], rejected} -> {:ok, %{folders: [], rejected: rejected}}
+      {:error, _} = err -> err
     end
   end
 

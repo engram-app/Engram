@@ -65,4 +65,19 @@ defmodule EngramWeb.FoldersCreateRateLimitTest do
     assert msg =~ "rate limited"
     assert conn |> post(~p"/api/folders", %{folder: "D"}) |> json_response(429)
   end
+
+  # A batch that can write nothing (empty, all-root, over the cap) must not
+  # spend the budget a real create needs.
+  test "a batch that writes nothing spends no budget", %{conn: conn} do
+    assert conn |> post(~p"/api/folders/batch", %{folders: []}) |> json_response(201)
+    assert conn |> post(~p"/api/folders/batch", %{folders: [".."]}) |> json_response(201)
+
+    too_many = for i <- 1..501, do: "F#{i}"
+
+    assert %{"error" => "batch_too_large"} =
+             conn |> post(~p"/api/folders/batch", %{folders: too_many}) |> json_response(422)
+
+    assert conn |> post(~p"/api/folders", %{folder: "A"}) |> json_response(201)
+    assert conn |> post(~p"/api/folders", %{folder: "B"}) |> json_response(201)
+  end
 end
