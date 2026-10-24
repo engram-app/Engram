@@ -294,6 +294,8 @@ defmodule Engram.FeedbackTest do
 
       Mox.expect(ClientMock, :update_subscription, fn _, _, _ ->
         Repo.delete!(sub, skip_tenant_check: true)
+        # The trigger that evicts this cache fires on commit, which the sandbox never does.
+        :ok = Engram.Cache.evict(:subscription, user.id)
         {:ok, %{"scheduled_change" => nil}}
       end)
 
