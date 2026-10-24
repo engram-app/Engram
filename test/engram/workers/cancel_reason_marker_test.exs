@@ -84,7 +84,7 @@ defmodule Engram.Workers.CancelReasonMarkerTest do
     first = DateTime.add(DateTime.utc_now(), -300)
     second = DateTime.utc_now()
 
-    {:ok, _} =
+    {:ok, first_job} =
       Oban.insert(CancelReasonMarker.new_for(user.id, started, "2027-10-01T00:00:00Z", first))
 
     {:ok, _} =
@@ -92,6 +92,8 @@ defmodule Engram.Workers.CancelReasonMarkerTest do
 
     assert [job] = all_enqueued(worker: CancelReasonMarker)
     assert job.args["scheduled_at"] == DateTime.to_iso8601(second)
+    # The run time moved too: the check waits out the dialog after the NEW cancel.
+    assert DateTime.compare(job.scheduled_at, first_job.scheduled_at) == :gt
   end
 
   test "a deleted user files nothing" do

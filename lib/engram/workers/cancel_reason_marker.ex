@@ -15,17 +15,20 @@ defmodule Engram.Workers.CancelReasonMarker do
   than filing a second one.
 
   Paddle re-sends `subscription.updated` while the cancel is pending. Unique
-  over pending jobs only, replacing args and run time: the NEWEST schedule
-  wins, so an undo then re-cancel gets its own check instead of being dropped
-  as a duplicate. Once a job has run, a later resend enqueues a new one that
-  finds the marker (or the reason) and files nothing.
+  over pending jobs only, replacing args and run time: the LAST DELIVERED
+  schedule wins, so an undo then re-cancel gets its own check instead of being
+  dropped as a duplicate. (An out-of-order Paddle retry can put an older
+  schedule back; that needs a cancel, undo and re-cancel inside ten minutes.)
+  Once a job has run, a later resend enqueues a new one that finds the marker
+  (or the reason) and files nothing.
   """
 
   use Oban.Worker,
     queue: :events,
     max_attempts: 3,
     unique: [keys: [:user_id, :effective_at], states: [:available, :scheduled], period: :infinity],
-    replace: [scheduled: [:args, :scheduled_at]]
+    # A due-but-not-yet-run job keeps its run time: moving it would run it now.
+    replace: [scheduled: [:args, :scheduled_at], available: [:args]]
 
   alias Engram.Accounts
   alias Engram.Accounts.User
