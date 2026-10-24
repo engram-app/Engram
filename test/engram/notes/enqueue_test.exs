@@ -9,6 +9,32 @@ defmodule Engram.Notes.EnqueueTest do
 
   alias Engram.Notes.Enqueue
 
+  describe "enqueue/3 with a list of changesets" do
+    test "an empty list is a skip, like :skip" do
+      assert {:ok, :skipped} = Enqueue.enqueue([], "w", fn _ -> flunk("no insert") end)
+    end
+
+    test "inserts every changeset and returns every job" do
+      assert {:ok, [1, 2, 3]} = Enqueue.enqueue([1, 2, 3], "w", &{:ok, &1})
+    end
+
+    test "stops at the first failure and returns it" do
+      test_pid = self()
+
+      insert = fn
+        2 -> {:error, :nope}
+        n -> send(test_pid, {:inserted, n}) && {:ok, n}
+      end
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, :nope} = Enqueue.enqueue([1, 2, 3], "w", insert)
+      end)
+
+      assert_received {:inserted, 1}
+      refute_received {:inserted, 3}
+    end
+  end
+
   describe "enqueue/3 (T3-audit H3)" do
     test "returns {:ok, job} from underlying insert on success" do
       stub = fn _changeset -> {:ok, %{id: 42}} end

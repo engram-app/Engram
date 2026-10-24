@@ -18,8 +18,13 @@ UUIDv7 mint time is older than an hour (`@stale_claim_grace_ms`, #1550,
 `Engram.Workers.ReleaseIndexEntries`). A younger in-flight create is reported `unresolved`, not
 released.
 
-A run sends ALL its stale ids as ONE release job (one notes read, one index-room change) and logs
-one summary line. Per-id jobs pinned prod on 2026-10-23 (14k+ jobs for one first-sync vault). The
+A run sends its stale ids as release jobs of at most 2,000 ids (`ReleaseIndexEntries.chunk_size/0`;
+one notes read and one index-room change per job) and logs one summary line. Per-id jobs pinned prod
+on 2026-10-23 (14k+ jobs for one first-sync vault). The size is measured, not assumed: a job's cost
+is mostly a fixed part that scales with the whole index (~0.2-0.5 s at 20-40k entries), each id
+adds ~0.05 ms, and a worst-case delete-set broadcast is ~4 B per id. At 20k stale ids, 500 per job
+took 20 s total and 2,000 took 5.7 s with the same ~0.8 s slowest job. It is not the 500-row SQL
+chunk in `Engram.Notes`, which bounds bind params. The
 grace counts from the id's MINT time, so a re-claim of an old id is stale on arrival; released ids
 are remembered per node for an hour (`:released_index_claims` in `Engram.Cache.Registry`) and
 re-claims inside that window are skipped (`index_projection_release_skipped_total`).

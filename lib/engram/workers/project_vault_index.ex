@@ -431,19 +431,23 @@ defmodule Engram.Workers.ProjectVaultIndex do
   # losing it. Nothing else ever releases this claim: a create that never
   # lands is not a delete, so `Notes.delete_note`'s release never fires for it.
   #
-  # ONE job per run, carrying every stale id, and ONE summary log line. The
-  # 2026-10-23 storm (vault f4cd93e6, a first sync whose creates died in a DB
-  # pool exhaustion) enqueued one job and logged one line PER id: 4,792 jobs,
-  # then 14,437+, each its own notes read, index-room edit (a full map copy)
-  # and encrypted tail append. It pinned a web task, then a worker. The job
-  # applies the list as one index-room change, so the cost is O(ids) once.
+  # Chunked jobs (`ReleaseIndexEntries.chunk_size/0` ids each) per run, and
+  # ONE summary log line. The 2026-10-23 storm (vault f4cd93e6, a first sync
+  # whose creates died in a DB pool exhaustion) enqueued one job and logged one
+  # line PER id: 4,792 jobs, then 14,437+, each its own notes read, index-room
+  # edit (a full map copy) and encrypted tail append. It pinned a web task, then
+  # a worker. Each job applies its ids as one index-room change.
   #
-  # Not chunked. What bounds the batch is the index itself: every id here is
-  # an entry in a snapshot capped at 16 MB (`CrdtIndexPersistence`), and the
-  # args are ~40 B per id (15k ids ~ 600 KB of JSONB, well inside Postgres).
-  # A retry re-runs the same one read and one change, and both are idempotent
-  # (releasing an absent entry is a no-op), so chunking would only multiply
-  # the per-job fixed cost this exists to remove.
+  # Chunked, not one job per run (#2164's first shape): a job's cost has a
+  # fixed part that scales with the whole index, so per-id jobs are ruinous,
+  # but an unbounded one is one args payload, one read, one delete set
+  # broadcast to every client, and one retry of everything. `ReleaseIndexEntries` owns
+  # the chunk size and why it is what it is.
+  #
+  # An enqueue that fails part way leaves the earlier chunks queued; all of
+  # `fresh` is then reported unresolved and not remembered, so the next run
+  # enqueues it again. Releasing an absent entry is a no-op, so the overlap
+  # costs a little work and nothing else.
   #
   # Backoff for re-claims: the grace is measured from the UUIDv7 MINT time, not
   # from when the claim was written, so a client that re-claims an id older

@@ -71,15 +71,36 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
 
-  @doc """
-  Build a release job. Returns `:skip` for an empty id list so callers do not
-  each need their own guard (`Enqueue.enqueue/3` no-ops on `:skip`).
-  """
-  @spec new_for(String.t(), String.t(), [String.t()]) :: Ecto.Changeset.t() | :skip
-  def new_for(_user_id, _vault_id, []), do: :skip
+  # Ids per job, and so per index-room change. Chosen by measurement (PR
+  # body of the chunking follow-up to #2164; 20k stale ids, 500/1k/2k/5k/10k
+  # per job): a job's cost is dominated by a FIXED part that scales with the
+  # whole index (snapshot decrypt/re-encrypt, or the room edit plus encrypted
+  # tail append), ~0.2-0.5 s at 20-40k entries, while each extra id adds ~0.05
+  # ms. So small chunks multiply that fixed cost: 20k ids took 20 s at 500 per
+  # job and 5.7 s at 2,000, with the slowest job the same (~0.8 s) at both.
+  # Above 2,000 the slowest job, the delete set broadcast to every connected
+  # client (~4 B per id worst case, 8 KB here) and the args payload (~40 B per
+  # id) keep growing for a shrinking total-time win.
+  #
+  # Deliberately NOT `Notes`' 500-row chunk: that one bounds SQL bind params,
+  # a different limit this job never reaches.
+  @chunk_size 2_000
 
+  @doc "Max note ids per release job, i.e. per index-room change."
+  @spec chunk_size() :: pos_integer()
+  def chunk_size, do: @chunk_size
+
+  @doc """
+  Build release jobs of at most `chunk_size/0` ids each, so every caller is
+  bounded however many ids it hands over. Each job is ONE index-room change
+  and retries on its own, so a failing chunk never holds up the others.
+  Returns `[]` for an empty id list (`Enqueue.enqueue/3` no-ops on it).
+  """
+  @spec new_for(String.t(), String.t(), [String.t()]) :: [Ecto.Changeset.t()]
   def new_for(user_id, vault_id, note_ids) do
-    new(%{user_id: user_id, vault_id: vault_id, note_ids: note_ids})
+    note_ids
+    |> Enum.chunk_every(@chunk_size)
+    |> Enum.map(&new(%{user_id: user_id, vault_id: vault_id, note_ids: &1}))
   end
 
   @impl Oban.Worker
@@ -110,10 +131,10 @@ defmodule Engram.Workers.ReleaseIndexEntries do
     # arrived since it was enqueued. `%{id: vault_id}` is the same
     # bare-map-as-vault shape `ProjectVaultIndex` uses.
     #
-    # ONE metadata read for the whole list, not a full-row fetch and content
-    # decrypt per id: `ProjectVaultIndex` now sends a run's every stale id in
-    # one job (15k in the 2026-10-23 storm). A read failure fails the whole
-    # batch so Oban retries it; the other ids wait for the retry.
+    # ONE metadata read for the job's list, not a full-row fetch and content
+    # decrypt per id: a job carries up to `chunk_size/0` ids (the 2026-10-23
+    # storm had 15k stale ids in one run, so ~8 jobs). A read failure fails
+    # only this chunk so Oban retries it; the other chunks are separate jobs.
     with {:ok, present} <- Notes.get_note_meta_by_ids(user, %{id: vault_id}, note_ids) do
       Identity.release(user, vault_id, Enum.reject(note_ids, &Map.has_key?(present, &1)))
     end

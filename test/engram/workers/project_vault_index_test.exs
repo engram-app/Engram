@@ -784,30 +784,70 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       end
     end
 
-    test "5,000 stale claims enqueue ONE release job, applied as ONE index-room change", ctx do
+    # Each job is ONE index-room change, so the chunk bounds the read, the args
+    # payload, the delete set broadcast to every client, and what a retry redoes.
+    # 20,000 ids is the shape the 2026-10-23 storm was heading for.
+    test "20,000 stale claims enqueue chunked release jobs, ONE index-room change each",
+         ctx do
       attach_projection_telemetry()
-      ids = stale_ids(5_000)
+      chunk = Engram.Workers.ReleaseIndexEntries.chunk_size()
+      ids = stale_ids(20_000)
       seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
 
-      assert :ok = run(ctx)
+      mem_before = :erlang.memory(:total)
+      {run_us, :ok} = :timer.tc(fn -> run(ctx) end)
 
       jobs = release_jobs()
 
-      assert length(jobs) == 1,
-             "expected one batched release job for 5,000 stale claims, got #{length(jobs)}"
+      assert length(jobs) == div(20_000 + chunk - 1, chunk),
+             "expected #{div(20_000 + chunk - 1, chunk)} release jobs of <= #{chunk} ids, got #{length(jobs)}"
 
-      assert Enum.sort(hd(jobs).args["note_ids"]) == Enum.sort(ids)
-      assert_receive {:projection, %{released: 5_000, unresolved: 0}, _}, 2_000
+      assert Enum.all?(jobs, &(length(&1.args["note_ids"]) <= chunk))
+      assert jobs |> Enum.flat_map(& &1.args["note_ids"]) |> Enum.sort() == Enum.sort(ids)
+      assert_receive {:projection, %{released: 20_000, unresolved: 0}, _}, 5_000
 
       attach_release_telemetry()
-      :ok = drain_releases()
+      {drain_us, :ok} = :timer.tc(fn -> drain_releases() end)
+      mem_delta = :erlang.memory(:total) - mem_before
 
-      assert_receive {:index_release, %{entries: 5_000}, _}, 2_000
+      IO.puts(
+        "\n[20k stale claims] projection #{div(run_us, 1000)} ms, " <>
+          "release drain #{div(drain_us, 1000)} ms (#{length(jobs)} jobs), " <>
+          "VM memory delta #{div(mem_delta, 1_048_576)} MB"
+      )
 
-      assert count_messages(:index_release, 1) == 1,
-             "the whole batch must land as ONE index-room change"
+      assert count_messages(:index_release, 0) == length(jobs),
+             "each job must land as exactly ONE index-room change"
 
       assert index_entries(ctx) == %{}
+      # Generous ceilings for a loaded CI box; a regression to per-id work or an
+      # unbounded copy blows through both by an order of magnitude.
+      assert run_us + drain_us < 120_000_000
+      assert mem_delta < 1_024 * 1_048_576
+    end
+
+    test "a failing chunk does not block the other chunks", ctx do
+      chunk = Engram.Workers.ReleaseIndexEntries.chunk_size()
+      ids = stale_ids(chunk * 3)
+      seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
+      assert :ok = run(ctx)
+
+      assert [bad | good] = release_jobs()
+      assert length(good) == 2
+
+      # A job whose read blows up: the guard on get_note_meta_by_ids raises, the
+      # way any read failure surfaces to Oban as a retryable error.
+      assert_raise FunctionClauseError, fn ->
+        perform_job(
+          Engram.Workers.ReleaseIndexEntries,
+          Map.put(bad.args, "note_ids", "not-a-list")
+        )
+      end
+
+      Enum.each(good, &assert(:ok = perform_job(Engram.Workers.ReleaseIndexEntries, &1.args)))
+
+      remaining = index_entries(ctx) |> Map.values() |> Enum.map(& &1["note_id"])
+      assert Enum.sort(remaining) == Enum.sort(bad.args["note_ids"])
     end
 
     test "a release job reads the notes once, however many ids it carries", ctx do
