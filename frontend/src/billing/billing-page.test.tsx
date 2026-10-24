@@ -277,6 +277,33 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(openMock).toHaveBeenCalledTimes(1);
 	});
 
+	// Wallets hidden pending real-charge data (#2203).
+	it("plan checkout offers every payment method except the wallets", async () => {
+		mockBillingApi();
+		const openMock = vi.fn();
+		initializePaddleMock.mockImplementation(async () => ({
+			Checkout: { open: openMock, close: vi.fn() },
+		}));
+
+		const { container, queryAllByText } = renderBilling({ inline: true });
+		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+		const startBtn = Array.from(container.querySelectorAll("button")).find(
+			(b) => b.textContent === "Start free trial",
+		)!;
+		await act(async () => {
+			startBtn.click();
+			await Promise.resolve();
+		});
+
+		const methods: string[] = openMock.mock.calls[0]![0].settings.allowedPaymentMethods;
+		expect(methods).not.toContain("google_pay");
+		expect(methods).not.toContain("apple_pay");
+		expect(methods).toEqual(expect.arrayContaining(["card", "paypal"]));
+		// Init defaults (which the /pay auto-open inherits) stay unrestricted.
+		const { settings } = initializePaddleMock.mock.calls[0]![0].checkout;
+		expect(settings.allowedPaymentMethods).toBeUndefined();
+	});
+
 	describe("checkout funnel tracking", () => {
 		function startCheckout(container: HTMLElement) {
 			const startBtn = Array.from(container.querySelectorAll("button")).find(

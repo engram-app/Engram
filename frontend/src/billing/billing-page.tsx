@@ -620,7 +620,10 @@ export default function BillingPage({
 					],
 					customer: { email: config.customer_email },
 					customData: config.custom_data,
-					settings: { ...checkoutSettings(isInline), locale: checkoutLocale },
+					settings: {
+						...checkoutSettings(isInline, { hideWallets: true }),
+						locale: checkoutLocale,
+					},
 				});
 			});
 		},
@@ -705,7 +708,7 @@ export default function BillingPage({
 			);
 			paddle.Checkout.open({
 				transactionId: transaction_id,
-				settings: { ...checkoutSettings(isInline), locale: checkoutLocale },
+				settings: { ...checkoutSettings(isInline, { hideWallets: true }), locale: checkoutLocale },
 			});
 		} catch {
 			notify.error(t("Could not start the payment update. Please try again."));
