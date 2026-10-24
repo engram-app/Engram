@@ -45,6 +45,19 @@ defmodule Engram.Observability.OtelHandlersTest do
     assert MapSet.difference(handler_ids(), before) == @otel_ids
   end
 
+  # The Bandit span carries the request body size, so a slow POST's span can
+  # be told apart from a slow handler (2026-10-24 speed audit).
+  test "the Bandit handler records the request body size" do
+    :ok = Otel.attach_handlers()
+
+    [%{config: config}] =
+      [:bandit, :request, :stop]
+      |> :telemetry.list_handlers()
+      |> Enum.filter(&(&1.id == {OpentelemetryBandit, :otel_bandit}))
+
+    assert :"http.request.body.size" in config.opt_in_attrs
+  end
+
   test "detach_handlers/0 removes everything attach_handlers/0 attached", %{before: before} do
     :ok = Otel.attach_handlers()
     assert Otel.detach_handlers() == :ok

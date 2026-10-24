@@ -70,7 +70,14 @@ defmodule Engram.Observability.Otel do
   def attach_handlers do
     # setup/0,1 return :ok | {:error, :already_exists}; bind to satisfy the
     # :unmatched_returns dialyzer flag. Re-attaching is harmless (idempotent).
-    _ = OpentelemetryBandit.setup()
+    # Body size on the request span, so a slow POST can be told apart from a
+    # slow handler. The body-read wait itself is `http.request.body_read`
+    # (`EngramWeb.Plugs.CacheRawBody.read_traced/2`).
+    _ =
+      OpentelemetryBandit.setup(
+        opt_in_attrs: [OpenTelemetry.SemConv.Incubating.HTTPAttributes.http_request_body_size()]
+      )
+
     _ = OpentelemetryPhoenix.setup(adapter: :bandit)
     _ = OpentelemetryEcto.setup([:engram, :repo])
     :ok
