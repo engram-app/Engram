@@ -181,35 +181,48 @@ defmodule Engram.Feedback do
 
   A reason counts when it was filed since the subscription started and after
   the user's last in-app reversal (`cancel_reversed`), so a reason given for a
-  cancel the user took back does not cover a later one. Skipped when our
-  event log is off: without it every cancel would look reasonless.
+  cancel the user took back does not cover a later one. With `scheduled_at`
+  (the check for a scheduled cancel), nothing is filed when the user undid
+  the cancel after it was scheduled. Skipped when our event log is off:
+  without it every cancel would look reasonless.
   """
-  @spec record_missing_cancel_reason(User.t(), DateTime.t(), String.t()) :: :ok
-  def record_missing_cancel_reason(user, started_at, reason) do
-    if EventLog.enabled?() and not reason_filed?(user, started_at) do
-      capture(user, "subscription_cancel_reason", %{
-        "reason" => reason,
-        "source" => "webhook",
-        "$set" => %{"cancel_reason" => reason}
-      })
-    else
-      :ok
+  @spec record_missing_cancel_reason(User.t(), DateTime.t(), String.t(), DateTime.t() | nil) ::
+          :ok
+  def record_missing_cancel_reason(user, started_at, reason, scheduled_at \\ nil) do
+    reversed_at = if EventLog.enabled?(), do: last_reversal(user)
+
+    cond do
+      not EventLog.enabled?() ->
+        :ok
+
+      # The cancel was undone after it was scheduled: there is nothing to explain.
+      scheduled_at && reversed_at && DateTime.compare(reversed_at, scheduled_at) == :gt ->
+        :ok
+
+      reason_since?(user, Enum.max([started_at, reversed_at || started_at], DateTime)) ->
+        :ok
+
+      true ->
+        capture(user, "subscription_cancel_reason", %{
+          "reason" => reason,
+          "source" => "webhook",
+          "$set" => %{"cancel_reason" => reason}
+        })
     end
   end
 
-  defp reason_filed?(user, started_at) do
-    reversed_at =
-      Repo.one(
-        from(e in Event,
-          where:
-            e.user_id == ^user.id and e.event == "subscription_changed" and
-              fragment("?->>'kind'", e.props) == "cancel_reversed",
-          select: max(e.inserted_at)
-        )
+  defp last_reversal(user) do
+    Repo.one(
+      from(e in Event,
+        where:
+          e.user_id == ^user.id and e.event == "subscription_changed" and
+            fragment("?->>'kind'", e.props) == "cancel_reversed",
+        select: max(e.inserted_at)
       )
+    )
+  end
 
-    since = if reversed_at, do: Enum.max([reversed_at, started_at], DateTime), else: started_at
-
+  defp reason_since?(user, since) do
     Repo.exists?(
       from(e in Event,
         where:
