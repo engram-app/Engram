@@ -440,9 +440,9 @@ defmodule Engram.Workers.ProjectVaultIndex do
   # The job works through its ids `ReleaseIndexEntries.chunk_size/0` at a
   # time, in series, one index-room change per chunk, handing the rest to a
   # successor only past its time budget. So a storm holds one queue slot, not
-  # all of them. The
-  # args stay bounded by the index itself: every id here is an entry in a
-  # snapshot capped at 16 MB (`CrdtIndexPersistence`), at ~40 B per id.
+  # all of them. The args stay bounded by the index itself: every id here is
+  # an entry in a snapshot capped at 16 MB (`CrdtIndexPersistence`), at ~40 B
+  # per id.
   # `ReleaseIndexEntries` owns the chunk size and the chain.
   #
   # Backoff for re-claims: the grace is measured from the UUIDv7 MINT time, not

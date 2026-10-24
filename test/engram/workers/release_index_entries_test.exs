@@ -5,9 +5,9 @@ defmodule Engram.Workers.ReleaseIndexEntriesTest do
 
   defp ids(n), do: for(_ <- 1..n, do: Ecto.UUID.generate())
 
-  # ONE job per call, whatever the size: the job works through its ids a
-  # chunk per link (perform/1 enqueues the rest as its successor), so a
-  # vault's release never occupies more than one queue slot. The chain itself
+  # ONE job per call, whatever the size: perform/1 works through its ids a
+  # chunk at a time and hands the rest to a successor only past its time
+  # budget, so a release chain never occupies more than one queue slot. That
   # is exercised against a real index in ProjectVaultIndexTest.
   describe "new_for/3" do
     test "no ids, no job" do

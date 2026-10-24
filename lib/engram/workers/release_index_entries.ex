@@ -94,10 +94,12 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   # Wall time one link may spend before handing the rest to a successor. A
   # chunk costs ~0.8 s at 20-40k index entries but its fixed part grows with
   # the index, so a whole-chain loop could outrun `timeout/1` (5 min) on a
-  # huge vault and retry from the top forever. A minute keeps every link far
-  # inside the timeout while a typical storm (34k ids, ~14 s) is ONE job, and
-  # successor args shrink by about a minute of work each.
-  @default_link_budget_ms 60_000
+  # huge vault and retry from the top forever. It is also how long a link
+  # holds one `crdt_checkpoint` slot (3 per web node) before re-queueing
+  # behind waiting `CheckpointNote` jobs, so it stays short: at 10 s, three
+  # vaults storming at once block checkpoints for seconds, not a minute, and
+  # a typical storm (34k ids, ~14 s) is two links.
+  @default_link_budget_ms 10_000
 
   @doc "Wall-time budget per link, in ms. Config-overridable so tests can force a chain."
   def link_budget_ms,
@@ -112,7 +114,8 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   the job outlives `link_budget_ms/0` with ids left, it enqueues them as its
   successor and stops. The budget is checked between chunks, so a link runs
   for the budget plus one chunk (including any wait on the fold lock), far
-  inside the 5 min timeout at ~0.8 s a chunk. A retry restarts from the top
+  inside the 5 min timeout at ~0.8 s a chunk. Each chunk takes and releases
+  its own transaction and fold lock, so nothing is held across chunks. A retry restarts from the top
   of the job's args, so it redoes up to one budget plus the failed chunk;
   each redone chunk re-reads which notes exist, so a re-release is a no-op
   and a note that arrived in between is skipped. A chain runs one link at a
@@ -120,10 +123,10 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   ids) fill every `crdt_checkpoint` slot with jobs that all wait on the same
   per-vault fold lock in `CrdtIndexPersistence`, each holding a pooled DB
   connection while `CheckpointNote` jobs starved behind them. It is also one
-  atomic insert, so
-  a caller never ends up with half its releases queued: a DB error raises and
-  rolls the caller's transaction back, and any other `{:error, _}` is logged
-  and counted by `Enqueue.enqueue/3` (`[:engram, :notes, :enqueue, :failed]`).
+  atomic insert, so a caller never ends up with half its releases queued: a
+  DB error raises and rolls the caller's transaction back, and any other
+  `{:error, _}` is logged and counted by `Enqueue.enqueue/3`
+  (`[:engram, :notes, :enqueue, :failed]`).
   """
   @spec new_for(String.t(), String.t(), [String.t()]) :: Ecto.Changeset.t() | :skip
   def new_for(_user_id, _vault_id, []), do: :skip
@@ -149,10 +152,17 @@ defmodule Engram.Workers.ReleaseIndexEntries do
         case RotationGate.check(user.id) do
           {:error, :rotation_in_progress} -> {:snooze, 30}
           {:error, :user_not_found} -> :ok
-          :ok -> release(user, vault_id, note_ids)
+          :ok -> user |> release(vault_id, note_ids) |> snooze_on_rotation()
         end
     end
   end
+
+  # A rotation that starts mid-link refuses the next chunk's release. That is
+  # the same wait as the gate above, not a failure: snooze rather than burn
+  # one of the 5 attempts (the retry redoes the link's released chunks as
+  # no-ops).
+  defp snooze_on_rotation({:error, :rotation_in_progress}), do: {:snooze, 30}
+  defp snooze_on_rotation(result), do: result
 
   defp release(user, vault_id, note_ids) do
     release_chunks(
@@ -192,9 +202,10 @@ defmodule Engram.Workers.ReleaseIndexEntries do
 
   # ponytail: a successor carries every remaining id, so args written over a
   # chain are about (ids) x (links) / 2, and links = chain wall time / budget.
-  # A 34k storm is one link (no successor). The worst case the 16 MB index
-  # allows (~400k ids) is a few links of up to 16 MB each. Upgrade path if
-  # that shows up: a cursor over a table of pending releases.
+  # A 34k storm is two links. The worst case the 16 MB index allows (~400k
+  # ids, ~200 chunks at a few s each) is tens of links and a few hundred MB
+  # of args over the whole chain: the price of a short slot hold. Upgrade
+  # path if that shows up: a cursor over a table of pending releases.
   #
   # The insert commits on its own. If the node dies after it but before Oban
   # acks this job, the rescued retry inserts a second successor, so two links

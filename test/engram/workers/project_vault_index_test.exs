@@ -850,8 +850,15 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       assert max_mem < 256 * 1_048_576
     end
 
+    # A budget no CI box can exhaust, so "within budget" is deterministic.
+    defp ample_budget do
+      Application.put_env(:engram, :release_index_link_budget_ms, :timer.minutes(10))
+      on_exit(fn -> Application.delete_env(:engram, :release_index_link_budget_ms) end)
+    end
+
     test "within the link budget, ONE job releases every chunk and enqueues no successor",
          ctx do
+      ample_budget()
       chunk = ReleaseIndexEntries.chunk_size()
       ids = stale_ids(chunk * 2 + 1)
       seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
@@ -887,6 +894,58 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       assert map_size(index_entries(ctx)) == chunk * 2, "the failed link released nothing"
       assert {2, _} = drain_chain()
       assert index_entries(ctx) == %{}
+    end
+
+    # A chunk that fails AFTER an earlier chunk of the same link succeeded: the
+    # link must enqueue no successor, and its retry (from the top of its args)
+    # redoes the released chunk as a no-op and finishes. The failure is real:
+    # a note in the second chunk whose path ciphertext no longer authenticates
+    # makes get_note_meta_by_ids raise on decrypt.
+    test "a chunk failing mid-link enqueues no successor and the retry finishes", ctx do
+      ample_budget()
+      chunk = ReleaseIndexEntries.chunk_size()
+      ids = stale_ids(chunk + 1)
+      seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
+      bad = note(ctx, "bad.md")
+      original_ct = Repo.get!(Engram.Notes.Note, bad.id, skip_tenant_check: true).path_ciphertext
+      last = byte_size(original_ct) - 1
+      <<head::binary-size(last), byte>> = original_ct
+      set_path_ciphertext!(bad, <<head::binary, Bitwise.bxor(byte, 0xFF)>>)
+
+      # The bad note sits in the SECOND chunk, after `chunk` stale ids.
+      args = %{
+        "user_id" => ctx.user.id,
+        "vault_id" => ctx.vault.id,
+        "note_ids" => ids ++ [bad.id]
+      }
+
+      attach_release_telemetry()
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert_raise RuntimeError, fn -> perform_job(ReleaseIndexEntries, args) end
+      end)
+
+      assert count_messages(:index_release, 0) == 1, "the first chunk was released"
+      assert release_jobs() == [], "a failed link must not enqueue its successor"
+      assert stale_left(ctx, bad) == [List.last(ids)]
+
+      set_path_ciphertext!(bad, original_ct)
+      assert :ok = perform_job(ReleaseIndexEntries, args)
+      assert release_jobs() == []
+      # The live note is present, so it is never released; every stale id is.
+      assert stale_left(ctx, bad) == []
+    end
+
+    defp stale_left(ctx, live) do
+      for {_path, %{"note_id" => id}} <- index_entries(ctx), id != live.id, do: id
+    end
+
+    defp set_path_ciphertext!(note, ct) do
+      Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^note.id),
+        [set: [path_ciphertext: ct]],
+        skip_tenant_check: true
+      )
     end
 
     defp set_dek!(user, blob) do
