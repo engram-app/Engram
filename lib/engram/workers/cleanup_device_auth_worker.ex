@@ -1,10 +1,10 @@
 defmodule Engram.Workers.CleanupDeviceAuthWorker do
   @moduledoc """
-  Cleanup of expired auth state every 15 minutes — both the legacy device
+  Hourly cleanup of expired auth state, both the legacy device
   flow (`Engram.Auth.DeviceFlow`) and the OAuth 2.1 server (`Engram.OAuth`).
   """
   # `unique` dedups a double insert within one tick; runs cannot overlap (5-min
-  # timeout, 15-min cron). A failing DELETE waits for the next tick rather
+  # timeout, hourly cron). A failing DELETE waits for the next tick rather
   # than retrying 20 times.
   use Oban.Worker,
     queue: :maintenance,
