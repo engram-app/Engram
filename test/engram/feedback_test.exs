@@ -4,7 +4,9 @@ defmodule Engram.FeedbackTest do
   alias Engram.Accounts.User
   alias Engram.Analytics.Event
   alias Engram.Analytics.EventLog
+  alias Engram.Billing.Subscriptions
   alias Engram.Feedback
+  alias Engram.Paddle.ClientMock
 
   setup do
     prior_key = Application.get_env(:engram, :posthog_key)
@@ -227,16 +229,24 @@ defmodule Engram.FeedbackTest do
       assert reasons(user) == ["not_using"]
     end
 
-    # Paddle re-sends cancel_scheduled on every update while a cancel is
-    # pending; a later one must not push the dialog's reason out of the window.
-    test "a later cancel_scheduled resend does not hide the dialog's reason", %{user: user} do
+    test "a reason given after the latest of several reversals counts", %{user: user} do
       started = DateTime.add(DateTime.utc_now(), -30 * 86_400)
-      log_event(user, "subscription_changed", %{"kind" => "cancel_scheduled"}, 10 * 86_400)
-      log_event(user, "subscription_cancel_reason", %{"reason" => "not_using"}, 10 * 86_400 - 5)
-      log_event(user, "subscription_changed", %{"kind" => "cancel_scheduled"}, 3 * 86_400)
+      log_event(user, "subscription_changed", %{"kind" => "cancel_reversed"}, 20 * 86_400)
+      log_event(user, "subscription_changed", %{"kind" => "cancel_reversed"}, 5 * 86_400)
+      log_event(user, "subscription_cancel_reason", %{"reason" => "not_using"}, 86_400)
 
       assert :ok = Feedback.record_missing_cancel_reason(user, started, "portal_no_reason")
       assert reasons(user) == ["not_using"]
+    end
+
+    test "a reason between two reversals does not count", %{user: user} do
+      started = DateTime.add(DateTime.utc_now(), -30 * 86_400)
+      log_event(user, "subscription_changed", %{"kind" => "cancel_reversed"}, 20 * 86_400)
+      log_event(user, "subscription_cancel_reason", %{"reason" => "not_using"}, 10 * 86_400)
+      log_event(user, "subscription_changed", %{"kind" => "cancel_reversed"}, 5 * 86_400)
+
+      assert :ok = Feedback.record_missing_cancel_reason(user, started, "portal_no_reason")
+      assert Enum.sort(reasons(user)) == ["not_using", "portal_no_reason"]
     end
 
     test "an in-app reverse ends the cancel episode", %{user: user} do
@@ -247,11 +257,11 @@ defmodule Engram.FeedbackTest do
         status: "active"
       )
 
-      Mox.expect(Engram.Paddle.ClientMock, :update_subscription, fn _, _, _ ->
+      Mox.expect(ClientMock, :update_subscription, fn _, _, _ ->
         {:ok, %{"scheduled_change" => nil}}
       end)
 
-      assert {:ok, _} = Engram.Billing.Subscriptions.reverse_cancel(user)
+      assert {:ok, _} = Subscriptions.reverse_cancel(user)
       :ok = EventLog.flush()
 
       assert [
@@ -278,14 +288,34 @@ defmodule Engram.FeedbackTest do
       assert reasons(user) == ["too_expensive"]
     end
 
+    test "a reverse whose subscription row is gone records nothing and does not crash",
+         %{user: user} do
+      sub = insert(:subscription, user: user, paddle_subscription_id: "sub_reverse_gone")
+
+      Mox.expect(ClientMock, :update_subscription, fn _, _, _ ->
+        Repo.delete!(sub, skip_tenant_check: true)
+        {:ok, %{"scheduled_change" => nil}}
+      end)
+
+      assert {:ok, _} = Subscriptions.reverse_cancel(user)
+      :ok = EventLog.flush()
+
+      assert [] ==
+               Repo.all(
+                 from(e in Event,
+                   where: e.user_id == ^user.id and e.event == "subscription_changed"
+                 )
+               )
+    end
+
     test "a failed reverse does not end the cancel episode", %{user: user} do
       insert(:subscription, user: user, paddle_subscription_id: "sub_reverse_fail")
 
-      Mox.expect(Engram.Paddle.ClientMock, :update_subscription, fn _, _, _ ->
+      Mox.expect(ClientMock, :update_subscription, fn _, _, _ ->
         {:error, :http_500}
       end)
 
-      assert {:error, _} = Engram.Billing.Subscriptions.reverse_cancel(user)
+      assert {:error, _} = Subscriptions.reverse_cancel(user)
       :ok = EventLog.flush()
 
       assert [] ==
