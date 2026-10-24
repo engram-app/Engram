@@ -620,7 +620,10 @@ export default function BillingPage({
 					],
 					customer: { email: config.customer_email },
 					customData: config.custom_data,
-					settings: { ...checkoutSettings(isInline), locale: checkoutLocale },
+					settings: {
+						...checkoutSettings(isInline, { zeroFirstCharge: true }),
+						locale: checkoutLocale,
+					},
 				});
 			});
 		},
