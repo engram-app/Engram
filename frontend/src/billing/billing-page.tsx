@@ -34,7 +34,10 @@ import { CadenceToggle, formatPlanPrice, PlanAccordionRow, PlanCard, planCopy } 
 import PlanChangePanel from "./plan-change-panel";
 import { upgradeSource } from "./upgrade-source";
 import { UsagePanel } from "./usage-limits";
-import { useSubscriptionActivatedEvents } from "./use-subscription-activated-events";
+import {
+	type SubscriptionActivatedPayload,
+	useSubscriptionActivatedEvents,
+} from "./use-subscription-activated-events";
 
 // Time after CHECKOUT_COMPLETED we keep Paddle's own "Payment successful"
 // screen visible while waiting for the backend subscription_activated push.
@@ -354,43 +357,57 @@ export default function BillingPage({
 	// the user channel just told us. Close Paddle, refresh local query state,
 	// and (in onboarding mode) fetch the fresh onboarding/status to decide
 	// where to route the user next.
-	const handleSubscriptionActivated = useCallback(async () => {
-		// Onboarding: hold a steady "finishing up" view across the async work below
-		// so we never flash the empty plan picker before the redirect. Gate on the
-		// fire latch too: a duplicate/late activation broadcast after the first
-		// fire must NOT re-raise `finalizing` (the reset/navigate path below is
-		// skipped once fired, which would otherwise strand the spinner forever).
-		if (onActivatedRef.current && !onActivatedFiredRef.current) {
-			setFinalizing(true);
-		}
-		// Server activation is authoritative: the checkout is paid even when this
-		// push beats Paddle.js's checkout.completed. Mark it before closing so the
-		// checkout.closed our close fires is not reported as a stall/abandon.
-		checkoutCompletedRef.current = true;
-		paddleRef.current?.Checkout.close();
-		setCheckingOut(false);
-		setCompletedAt(null);
-		setSlow(false);
-		await invalidateBillingState(qc);
-		await qc.invalidateQueries({ queryKey: ["onboarding", "status"] });
-
-		if (onActivatedRef.current && !onActivatedFiredRef.current) {
-			try {
-				const status = await qc.fetchQuery<OnboardingStatus>({
-					queryKey: ["onboarding", "status"],
-					queryFn: () => api.get<OnboardingStatus>("/onboarding/status"),
-					staleTime: 0,
-				});
-				if (!onActivatedFiredRef.current) {
-					onActivatedFiredRef.current = true;
-					onActivatedRef.current(status);
-				}
-			} catch (err) {
-				console.error("failed to refetch onboarding/status after activation", err);
-				setFinalizing(false);
+	const handleSubscriptionActivated = useCallback(
+		async (payload: SubscriptionActivatedPayload) => {
+			// Onboarding: hold a steady "finishing up" view across the async work below
+			// so we never flash the empty plan picker before the redirect. Gate on the
+			// fire latch too: a duplicate/late activation broadcast after the first
+			// fire must NOT re-raise `finalizing` (the reset/navigate path below is
+			// skipped once fired, which would otherwise strand the spinner forever).
+			if (onActivatedRef.current && !onActivatedFiredRef.current) {
+				setFinalizing(true);
 			}
-		}
-	}, [qc]);
+			// The push can beat Paddle.js's checkout.completed. It carries no
+			// transaction id, and it also fires for an older subscription's update or
+			// cancel. A checkout only opens for a user with no paying plan, so a
+			// paying status while one is open is the subscription it created: report
+			// the completion from here (Paddle's late event is then skipped) and mark
+			// it before closing, so the checkout.closed our close fires is not
+			// reported as a stall/abandon. Any other push leaves a real stall reported.
+			if (
+				checkoutOpenRef.current &&
+				!checkoutCompletedRef.current &&
+				(payload.status === "active" || payload.status === "trialing")
+			) {
+				checkoutCompletedRef.current = true;
+				track("checkout_completed", { method: checkoutMethodRef.current });
+			}
+			paddleRef.current?.Checkout.close();
+			setCheckingOut(false);
+			setCompletedAt(null);
+			setSlow(false);
+			await invalidateBillingState(qc);
+			await qc.invalidateQueries({ queryKey: ["onboarding", "status"] });
+
+			if (onActivatedRef.current && !onActivatedFiredRef.current) {
+				try {
+					const status = await qc.fetchQuery<OnboardingStatus>({
+						queryKey: ["onboarding", "status"],
+						queryFn: () => api.get<OnboardingStatus>("/onboarding/status"),
+						staleTime: 0,
+					});
+					if (!onActivatedFiredRef.current) {
+						onActivatedFiredRef.current = true;
+						onActivatedRef.current(status);
+					}
+				} catch (err) {
+					console.error("failed to refetch onboarding/status after activation", err);
+					setFinalizing(false);
+				}
+			}
+		},
+		[qc],
+	);
 
 	useSubscriptionActivatedEvents({
 		userId: me?.id ?? null,
@@ -491,6 +508,10 @@ export default function BillingPage({
 					break;
 				}
 				case CheckoutEventNames.CHECKOUT_COMPLETED: {
+					// The activation push already reported (and closed) this checkout.
+					if (checkoutCompletedRef.current) {
+						break;
+					}
 					// Don't close Paddle — its built-in "Payment successful" screen
 					// is the visible confirmation while we wait for the backend
 					// webhook to fire the subscription_activated push. The cooldown
