@@ -517,6 +517,13 @@ config :engram, :reconnect_jitter_max_ms, 5_000
 # are deleted daily by Engram.Workers.ClientLogsPruner (Engram#792).
 config :engram, :client_logs_retention_days, 30
 
+# Per-user budget for single-folder creates (POST /api/folders, #2161). Each
+# create is a pooled tenant transaction that can take the vault change_seq row
+# lock, so an unbounded client drains the Ecto pool for every tenant. Normal
+# traffic is a few per hour; the plugin's first-sync seeding posts one per
+# empty folder in sequence, hence the headroom. Bulk callers use /folders/batch.
+config :engram, :folder_create_rate_limit, limit: 120, period_ms: 60_000
+
 # ex_aws HTTP client: Req (first-party in ex_aws 2.7). Req uses its own default
 # Finch pool, so the backend carries no hackney dependency. :req_opts sets the
 # per-request timeout, mirroring the old adapter's 30s recv_timeout. Req handles
