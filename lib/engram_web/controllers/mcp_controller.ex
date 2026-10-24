@@ -182,8 +182,11 @@ defmodule EngramWeb.McpController do
     header = List.first(get_req_header(conn, "mcp-protocol-version"))
 
     case tool_call_budget(conn, params) do
-      {:deny, limit, retry_after_ms} -> tool_call_rate_exceeded(conn, limit, retry_after_ms)
-      :ok -> if modern_request?(header, params),
+      {:deny, limit, retry_after_ms} ->
+        tool_call_rate_exceeded(conn, limit, retry_after_ms)
+
+      :ok ->
+        if modern_request?(header, params),
           do: modern_handle(conn, header, params),
           else: legacy_gate(conn, header, params)
     end
