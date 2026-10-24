@@ -590,14 +590,21 @@ defmodule Engram.Notes do
   defp upsert_folder_markers(user, vault, dek, filter_key, folders, seq_fun) do
     hmacs = Enum.map(folders, &Crypto.hmac_field(filter_key, &1))
 
-    # Live markers sort last, so they win the Map.new/2 collapse over a
-    # soft-deleted twin of the same folder.
-    existing =
+    # Map.new/2 keeps the LAST row per hmac, so sort live markers last and
+    # tombstones oldest-first: the live row wins, else the newest tombstone,
+    # the same pick as find_folder_marker/3 (#2121). Postgres row order is not
+    # an order, so the tombstones must be sorted, not just partitioned.
+    {live_rows, tombstones} =
       user
       |> folder_markers_by_hmac_query(vault, hmacs)
       |> Repo.all()
-      |> Enum.sort_by(&(&1.deleted_at == nil))
-      |> Map.new(&{&1.folder_hmac, &1})
+      |> Enum.split_with(&is_nil(&1.deleted_at))
+
+    existing =
+      Map.new(
+        Enum.sort_by(tombstones, & &1.deleted_at, DateTime) ++ live_rows,
+        &{&1.folder_hmac, &1}
+      )
 
     dead_ids = for {_, %Note{deleted_at: %DateTime{}, id: id}} <- existing, do: id
 
