@@ -17,6 +17,7 @@ defmodule Engram.Observability.EmittersTest do
   """
 
   use EngramWeb.ConnCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   import Ecto.Query, only: [from: 2]
   import Mox
@@ -739,6 +740,44 @@ defmodule Engram.Observability.EmittersTest do
 
       assert_receive {:posthog_body, %{"event" => "subscription_canceled"}}, 1_500
       refute_receive {:posthog_body, %{"event" => "subscription_cancel_reason"}}, 300
+    end
+
+    # Paddle sends subscription.updated with a cancel scheduled_change the
+    # moment a cancel is scheduled, so the marker need not wait for period end.
+    # The check runs later: the dialog files its reason after the cancel call.
+    test "a scheduled cancel enqueues the cancel-reason check", %{bypass: bypass} do
+      user = user_with_clerk_id()
+
+      sub = %{
+        insert(:subscription, user: user, tier: "starter", status: "active")
+        | previous: %{tier: "starter", status: "active"}
+      }
+
+      expect_captures(bypass)
+
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{
+            "event_type" => "subscription.updated",
+            "data" => %{
+              "started_at" => "2026-01-01T00:00:00Z",
+              "scheduled_change" => %{
+                "action" => "cancel",
+                "effective_at" => "2027-01-01T00:00:00Z"
+              }
+            }
+          },
+          sub
+        )
+
+      assert_enqueued(
+        worker: Engram.Workers.CancelReasonMarker,
+        args: %{
+          "user_id" => user.id,
+          "started_at" => "2026-01-01T00:00:00Z",
+          "effective_at" => "2027-01-01T00:00:00Z"
+        }
+      )
     end
 
     test "subscription.canceled out of past_due files payment_failed, not a portal gap",
