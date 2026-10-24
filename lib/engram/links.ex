@@ -619,15 +619,17 @@ defmodule Engram.Links do
   # target takes the best-ranked same-basename candidate.
   defp resolve_from_candidates(%{sorted: sorted, by_path: by_path}, target, tag) do
     if String.contains?(target, "/") do
-      [target | Enum.map(@note_exts, &(target <> &1))]
+      variants = Enum.map(["" | @note_exts], &String.downcase(target <> &1))
+
+      variants
       |> Enum.flat_map(fn variant ->
-        case Map.fetch(by_path, String.downcase(variant)) do
+        case Map.fetch(by_path, variant) do
           {:ok, hit} -> [hit]
           :error -> []
         end
       end)
       |> case do
-        [] -> :dangling
+        [] -> suffix_match(sorted, variants, tag)
         hits -> {tag, hits |> Enum.min() |> elem(1)}
       end
     else
@@ -635,6 +637,21 @@ defmodule Engram.Links do
         [] -> :dangling
         [{id, _path} | _] -> {tag, id}
       end
+    end
+  end
+
+  # Obsidian resolves a qualified link that names no exact path to a file
+  # whose path ENDS with it at a folder boundary, so `[[Folder/Note]]` finds
+  # `Projects/Folder/Note.md`. `sorted` is shortest first, so the first hit
+  # is the same winner the bare-name rule would pick among those paths.
+  defp suffix_match(sorted, variants, tag) do
+    suffixes = Enum.map(variants, &("/" <> &1))
+
+    case Enum.find(sorted, fn {_id, path} ->
+           String.ends_with?(String.downcase(path), suffixes)
+         end) do
+      nil -> :dangling
+      {id, _path} -> {tag, id}
     end
   end
 
@@ -1008,16 +1025,36 @@ defmodule Engram.Links do
       |> Repo.all(skip_tenant_check: true)
       |> Enum.uniq_by(&{&1.table, &1.id})
 
-    for {table, tag} <- [notes: 1, attachments: 2], into: %{} do
-      group =
-        rows
-        |> Enum.filter(&(&1.table == tag))
-        |> decrypt_and_group(dek, table)
-        |> index_by_hmac()
+    raw =
+      for {table, tag} <- [notes: 1, attachments: 2], into: %{} do
+        {table, rows |> Enum.filter(&(&1.table == tag)) |> decrypt_and_group(dek, table)}
+      end
 
-      {table, group}
+    indexed = index_groups(raw)
+
+    # A folder-qualified link that names no exact path can still name the
+    # END of one (`[[Folder/Note]]` -> `Projects/Folder/Note.md`), which the
+    # keyed lookup above cannot see: a suffix has no HMAC. Only those misses
+    # pay for every same-named row of their basename, once per call.
+    # ponytail: a hub basename (733 `index.md`) costs one fetch + decrypt of
+    # all its rows when a qualified link to it misses; a suffix key per path
+    # depth would make it an index probe if that ever shows up in traces.
+    case for({h, t} <- pathed, resolve_prefetched(indexed, h, t) == :dangling, uniq: true, do: h) do
+      [] ->
+        indexed
+
+      missed ->
+        raw
+        |> Map.new(fn {table, groups} ->
+          all = fetch_candidates_by_hmac(user, %{id: vault_id}, missed, table, dek)
+          {table, Map.merge(groups, all, fn _hmac, a, b -> Enum.uniq(a ++ b) end)}
+        end)
+        |> index_groups()
     end
   end
+
+  defp index_groups(raw),
+    do: Map.new(raw, fn {table, groups} -> {table, index_by_hmac(groups)} end)
 
   # The `path_ci_hmac`s a folder-qualified `target` can match: the target as
   # written, and with each note extension appended.
@@ -1460,21 +1497,23 @@ defmodule Engram.Links do
     key = basename_key(path)
     bare = [key | Enum.map(@note_exts, &(key <> &1))]
 
-    pathed =
-      if String.contains?(path, "/") do
-        full = String.downcase(path)
+    # The full path and every shorter tail of it that still has a folder
+    # (`a/b/note.md` -> `a/b/note.md`, `b/note.md`), each with and without a
+    # note extension: a qualified link can name any of them (suffix_match/3).
+    segments = path |> String.downcase() |> String.split("/")
 
-        [
-          full
-          | for(
-              ext <- @note_exts,
-              String.ends_with?(full, ext),
-              do: String.replace_suffix(full, ext, "")
-            )
-        ]
-      else
-        []
-      end
+    pathed =
+      for n <- (length(segments) - 1)..1//-1,
+          full = segments |> Enum.take(-(n + 1)) |> Enum.join("/"),
+          spelling <- [
+            full
+            | for(
+                ext <- @note_exts,
+                String.ends_with?(full, ext),
+                do: String.replace_suffix(full, ext, "")
+              )
+          ],
+          do: spelling
 
     Enum.uniq(bare ++ pathed)
   end

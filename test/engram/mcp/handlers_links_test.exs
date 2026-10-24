@@ -144,4 +144,69 @@ defmodule Engram.MCP.HandlersLinksTest do
     assert text =~ "Unresolved: Ghost1, "
     assert text =~ ", and 1 more"
   end
+
+  # User feedback 2026-10-24: `[[Folder/Note]]` came back as a same-named
+  # note in another folder. Obsidian semantics: a folder-qualified link
+  # names that path (or a path ending in it); only a bare name falls back
+  # to the shortest same-named note.
+  describe "folder-qualified wikilinks" do
+    test "[[Folder/Note]] resolves to Folder/Note.md, not a shorter same-named note",
+         %{user: u, a: a} do
+      seed(u, a, [
+        {"Folder/Note.md", "in folder"},
+        {"Ot/Note.md", "shorter path, same name"},
+        {"Source.md", "see [[Folder/Note]]"}
+      ])
+
+      assert {:ok, _, %{"notes" => [src, folder, other]}} =
+               get(u, a, %{"paths" => ["Source.md", "Folder/Note.md", "Ot/Note.md"]})
+
+      assert src["outgoing"] == ["Folder/Note.md"]
+      assert src["unresolved"] == []
+      assert folder["backlinks"] == ["Source.md"]
+      assert other["backlinks"] == []
+    end
+
+    test "a qualified link matches a path that ends with it, as Obsidian does",
+         %{user: u, a: a} do
+      seed(u, a, [
+        {"Projects/Folder/Note.md", "nested"},
+        {"Note.md", "root, same name"},
+        {"Source.md", "see [[Folder/Note]]"}
+      ])
+
+      assert {:ok, _, %{"notes" => [src, nested, root]}} =
+               get(u, a, %{"paths" => ["Source.md", "Projects/Folder/Note.md", "Note.md"]})
+
+      assert src["outgoing"] == ["Projects/Folder/Note.md"]
+      assert nested["backlinks"] == ["Source.md"]
+      assert root["backlinks"] == []
+    end
+
+    test "a qualified link to a missing path stays unresolved when the name exists elsewhere",
+         %{user: u, a: a} do
+      seed(u, a, [
+        {"Ot/Note.md", "same name, other folder"},
+        {"Source.md", "see [[Folder/Note]]"}
+      ])
+
+      assert {:ok, _, %{"notes" => [src, other]}} =
+               get(u, a, %{"paths" => ["Source.md", "Ot/Note.md"]})
+
+      assert src["outgoing"] == []
+      assert src["unresolved"] == ["Folder/Note"]
+      assert other["backlinks"] == []
+    end
+
+    test "a bare name still takes the shortest same-named note", %{user: u, a: a} do
+      seed(u, a, [
+        {"Deep/Folder/Note.md", "long"},
+        {"Ot/Note.md", "short"},
+        {"Source.md", "see [[Note]]"}
+      ])
+
+      assert {:ok, _, %{"notes" => [src]}} = get(u, a, %{"paths" => ["Source.md"]})
+      assert src["outgoing"] == ["Ot/Note.md"]
+    end
+  end
 end
