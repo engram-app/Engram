@@ -96,6 +96,24 @@ Fix in engram-infra branch `feat/worker-crash-alerts`: EventBridge
 prod-alerts SNS -> Discord relay formatter `[ECS-TASK-CRASH]`, plus a notify
 Loki rule on `embed_crash_quarantined`.
 
+### Update 2026-10-24: worker CPU and the `page` severity
+
+- On 2026-10-24 `engram-worker-prod` sat at 100% CPU 02:25-05:35 UTC (an Oban
+  `ReleaseIndexEntries` storm). The CloudWatch alarm
+  `engram-prod-worker-cpu-high` **did** fire: it posted to Discord at 02:25 UTC
+  (SNS -> Lambda, 0 errors). The Grafana rule `engram-prod-ecs-cpu-high` stayed
+  silent because it queried only the web service. engram-infra#1577 (merged)
+  makes its `ServiceName` a list, so it fires one instance per service, worker
+  included. Before blaming "no alert", check both paths: CloudWatch alarms and
+  Grafana rules are separate twins.
+- `severity=page` wakes nobody. The Grafana notification policy routes only
+  `alertname=DatasourceError` and `severity=~notify|warning` explicitly;
+  everything else, `page` included, falls to the root receiver
+  `discord-alerts` (1h repeat). No pager contact point exists. Who gets woken,
+  and how, is an open product decision. Check with
+  `alerting_manage_routing get_notification_policies` before assuming a page
+  reached a person.
+
 ## Remaining hotspots (not fixed, follow-ups)
 
 Fuzz of 25 adversarial 1 MB shapes over title/tags/frontmatter/links/chunker/sparse:
