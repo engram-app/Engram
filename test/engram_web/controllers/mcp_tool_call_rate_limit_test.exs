@@ -100,6 +100,18 @@ defmodule EngramWeb.McpToolCallRateLimitTest do
     assert body["error"]["data"]["limit"] == 2
   end
 
+  test "a cap of 0 refuses every tools/call, with no Retry-After to loop on", %{user: user} do
+    set_cap(user, 0)
+    token = oauth_token(user)
+
+    conn = tool_call(token)
+    body = json_response(conn, 429)
+    assert get_resp_header(conn, "retry-after") == []
+    assert body["error"]["data"]["error"] == "mcp_tool_calls_disabled"
+    # Protocol methods still answer, so the client can show the message.
+    assert json_response(rpc(token, "tools/list", %{}), 200)["result"]
+  end
+
   test "only tools/call counts: handshake and list methods spend nothing", %{user: user} do
     set_cap(user, 1)
     token = oauth_token(user)
