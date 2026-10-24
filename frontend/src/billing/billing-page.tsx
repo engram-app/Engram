@@ -254,7 +254,7 @@ export default function BillingPage({
 	// checkout_stalled can report it — Paddle's own COMPLETED/FAILED payloads
 	// don't reliably carry method_details, but PAYMENT_SELECTED always does.
 	const checkoutMethodRef = useRef<CheckoutMethod>("unknown");
-	// True once CHECKOUT_COMPLETED has fired for the open checkout — the only
+	// True once CHECKOUT_COMPLETED (or the activation push) marks the open checkout paid, the only
 	// thing that tells CHECKOUT_CLOSED apart from an abandon: our OWN code
 	// calls Checkout.close() after a successful activation too (see
 	// handleSubscriptionActivated below), and that close event mustn't read as
@@ -374,6 +374,10 @@ export default function BillingPage({
 		if (onActivatedRef.current && !onActivatedFiredRef.current) {
 			setFinalizing(true);
 		}
+		// Server activation is authoritative: the checkout is paid even when this
+		// push beats Paddle.js's checkout.completed. Mark it before closing so the
+		// checkout.closed our close fires is not reported as a stall/abandon.
+		checkoutCompletedRef.current = true;
 		paddleRef.current?.Checkout.close();
 		setCheckingOut(false);
 		setCompletedAt(null);
