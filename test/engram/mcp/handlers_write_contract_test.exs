@@ -94,7 +94,7 @@ defmodule Engram.MCP.HandlersWriteContractTest do
     end
 
     test "move_attachment reports a missing attachment", %{user: user, vault: vault} do
-      assert {:error, msg} =
+      assert {:error, {:attachment_not_found, msg}} =
                Handlers.handle("move_attachment", user, vault, %{
                  "old_path" => "gone.png",
                  "new_path" => "img/gone.png"

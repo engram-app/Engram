@@ -21,6 +21,7 @@ defmodule Engram.MCP.ToolError do
     vault_not_found vault_required vault_ambiguous vault_read_only
     path_conflict version_conflict invalid_path invalid_arguments
     note_not_found note_too_large notes_cap_exceeded rate_limited tool_error
+    attachment_not_found section_not_found
   )a
 
   @meta_key "engram.page/error_code"
@@ -39,6 +40,8 @@ defmodule Engram.MCP.ToolError do
           | :notes_cap_exceeded
           | :rate_limited
           | :tool_error
+          | :attachment_not_found
+          | :section_not_found
   @type t :: String.t() | {code(), String.t()}
   @type result :: %{
           required(String.t()) => boolean() | [map(), ...] | %{String.t() => String.t()}
@@ -63,6 +66,9 @@ defmodule Engram.MCP.ToolError do
     }
   end
 
+  # An unknown code (a typo past `error/2`) must not turn a refusal into a
+  # crash that loses the message: it degrades to the catch-all code.
+  def result({_unknown, message}) when is_binary(message), do: result({:tool_error, message})
   def result(message) when is_binary(message), do: result({:tool_error, message})
 
   @doc "The human-readable message, without the code."
