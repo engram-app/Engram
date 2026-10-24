@@ -1058,12 +1058,15 @@ defmodule Engram.Links do
   end
 
   # Settled only when the row the read-time rules pick IS an exact path
-  # match: an exact hit in the table route_resolution/3 tries second does
-  # not stop a suffix hit in the first from winning on a partial set.
+  # match in the table route_resolution/3 tries FIRST. An exact hit in the
+  # second table only wins because the first came back dangling, and on a
+  # partial set the first may hold a suffix match it never fetched.
   defp exact_path_hit?(indexed, hmac, target) do
     variants = Enum.map(["" | @note_exts], &String.downcase(target <> &1))
+    ext = target |> Path.basename() |> Path.extname() |> String.downcase()
+    first = if ext != "" and ext not in @note_exts, do: :attachment, else: :note
 
-    with {tag, id} <- resolve_prefetched(indexed, hmac, target),
+    with {^first = tag, id} <- resolve_prefetched(indexed, hmac, target),
          %{sorted: sorted} <- get_in(indexed, [table_of(tag), hmac]),
          {_id, path} <- List.keyfind(sorted, id, 0) do
       String.downcase(path) in variants
