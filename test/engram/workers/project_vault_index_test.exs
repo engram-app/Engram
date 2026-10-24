@@ -25,7 +25,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
   alias Engram.Notes.{CrdtIndexDoc, CrdtIndexRegistry}
-  alias Engram.Workers.ProjectVaultIndex
+  alias Engram.Workers.{ProjectVaultIndex, ReleaseIndexEntries}
   alias Yex.Sync.SharedDoc
 
   setup do
@@ -107,7 +107,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
     row && row.state_ciphertext
   end
 
-  # Releases go through Engram.Workers.ReleaseIndexEntries so they commit with
+  # Releases go through ReleaseIndexEntries so they commit with
   # the caller's transaction and run after it — see that worker's moduledoc.
   defp drain_releases do
     jobs =
@@ -118,11 +118,13 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       )
 
     Enum.each(jobs, fn job ->
-      assert :ok = perform_job(Engram.Workers.ReleaseIndexEntries, job.args)
+      assert :ok = perform_job(ReleaseIndexEntries, job.args)
     end)
 
     Repo.delete_all(from(j in Oban.Job, where: j.id in ^Enum.map(jobs, & &1.id)))
-    :ok
+
+    # A link over chunk_size ids enqueues its successor; run the chain out.
+    if jobs == [], do: :ok, else: drain_releases()
   end
 
   defp run(ctx) do
@@ -153,7 +155,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
 
     test "ReleaseIndexEntries snoozes", ctx do
       assert {:snooze, 30} =
-               perform_job(Engram.Workers.ReleaseIndexEntries, %{
+               perform_job(ReleaseIndexEntries, %{
                  "user_id" => ctx.user.id,
                  "vault_id" => ctx.vault.id,
                  "note_ids" => []
@@ -784,30 +786,176 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       end
     end
 
-    test "5,000 stale claims enqueue ONE release job, applied as ONE index-room change", ctx do
+    # Performs the vault's release chain one link at a time, asserting at every
+    # step that at most ONE release job is waiting: a vault's chunks run in
+    # series, so a storm holds at most one `crdt_checkpoint` slot (and one DB
+    # connection) instead of every slot queueing on the vault's fold lock.
+    defp drain_chain(max_links \\ 1_000) do
+      Enum.reduce_while(1..max_links, {0, 0}, fn _, {links, max_mem} ->
+        case release_jobs() do
+          [] ->
+            {:halt, {links, max_mem}}
+
+          [job] ->
+            assert :ok = perform_job(ReleaseIndexEntries, job.args)
+            Repo.delete_all(from(j in Oban.Job, where: j.id == ^job.id))
+            {:memory, mem} = Process.info(self(), :memory)
+            {:cont, {links + 1, max(max_mem, mem)}}
+
+          jobs ->
+            flunk("#{length(jobs)} release jobs runnable at once for one vault, expected 1")
+        end
+      end)
+    end
+
+    # Each link is ONE index-room change of at most chunk_size ids, so the chunk
+    # bounds the read, the delete set broadcast to every client, and what a
+    # retry redoes. 20,000 ids is the shape the 2026-10-23 storm was heading for.
+    # A zero budget makes every link hand off after one chunk, so the chain
+    # and its one-link-at-a-time property are exercised at a test-sized cost.
+    defp force_chain do
+      Application.put_env(:engram, :release_index_link_budget_ms, 0)
+      on_exit(fn -> Application.delete_env(:engram, :release_index_link_budget_ms) end)
+    end
+
+    test "20,000 stale claims release as ONE chain, a chunk per link, one link at a time",
+         ctx do
+      force_chain()
       attach_projection_telemetry()
-      ids = stale_ids(5_000)
+      chunk = ReleaseIndexEntries.chunk_size()
+      ids = stale_ids(20_000)
       seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
 
-      assert :ok = run(ctx)
+      {run_us, :ok} = :timer.tc(fn -> run(ctx) end)
 
-      jobs = release_jobs()
-
-      assert length(jobs) == 1,
-             "expected one batched release job for 5,000 stale claims, got #{length(jobs)}"
-
-      assert Enum.sort(hd(jobs).args["note_ids"]) == Enum.sort(ids)
-      assert_receive {:projection, %{released: 5_000, unresolved: 0}, _}, 2_000
+      assert [job] = release_jobs()
+      assert Enum.sort(job.args["note_ids"]) == Enum.sort(ids)
+      assert_receive {:projection, %{released: 20_000, unresolved: 0}, _}, 5_000
 
       attach_release_telemetry()
-      :ok = drain_releases()
+      {drain_us, {links, max_mem}} = :timer.tc(fn -> drain_chain() end)
 
-      assert_receive {:index_release, %{entries: 5_000}, _}, 2_000
+      assert links == div(20_000 + chunk - 1, chunk)
 
-      assert count_messages(:index_release, 1) == 1,
-             "the whole batch must land as ONE index-room change"
+      assert count_messages(:index_release, 0) == links,
+             "each link must land as exactly ONE index-room change"
 
       assert index_entries(ctx) == %{}
+      # Generous ceilings for a loaded CI box; a regression to per-id work or an
+      # unbounded copy in the job blows through both by an order of magnitude.
+      # Memory is THIS process after each link (perform_job runs the worker
+      # inline), not the whole VM, so other tests cannot move it. It catches
+      # retained growth, not a transient peak.
+      assert run_us + drain_us < 120_000_000
+      assert max_mem < 256 * 1_048_576
+    end
+
+    # A budget no CI box can exhaust, so "within budget" is deterministic.
+    defp ample_budget do
+      Application.put_env(:engram, :release_index_link_budget_ms, :timer.minutes(10))
+      on_exit(fn -> Application.delete_env(:engram, :release_index_link_budget_ms) end)
+    end
+
+    test "within the link budget, ONE job releases every chunk and enqueues no successor",
+         ctx do
+      ample_budget()
+      chunk = ReleaseIndexEntries.chunk_size()
+      ids = stale_ids(chunk * 2 + 1)
+      seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
+      assert :ok = run(ctx)
+
+      attach_release_telemetry()
+      assert {1, _} = drain_chain()
+      assert count_messages(:index_release, 0) == 3, "one index-room change per chunk"
+      assert index_entries(ctx) == %{}
+    end
+
+    # A real read failure: the user's DEK no longer unwraps (the shape a KMS
+    # outage or a rotated-away master key takes), so get_note_meta_by_ids
+    # returns an error. The link must release nothing, enqueue no successor
+    # (or the rest would run past an unread chunk), and resume on retry.
+    test "a failed link keeps the rest of the chain and resumes on retry", ctx do
+      force_chain()
+      chunk = ReleaseIndexEntries.chunk_size()
+      ids = stale_ids(chunk * 2)
+      seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
+      assert :ok = run(ctx)
+      assert [job] = release_jobs()
+
+      original_dek = Repo.reload!(ctx.user).encrypted_dek
+      last = byte_size(original_dek) - 1
+      <<head::binary-size(last), byte>> = original_dek
+      set_dek!(ctx.user, <<head::binary, Bitwise.bxor(byte, 0xFF)>>)
+
+      assert {:error, _} = perform_job(ReleaseIndexEntries, job.args)
+      assert [^job] = release_jobs(), "a failed link must not enqueue its successor"
+
+      set_dek!(ctx.user, original_dek)
+      assert map_size(index_entries(ctx)) == chunk * 2, "the failed link released nothing"
+      assert {2, _} = drain_chain()
+      assert index_entries(ctx) == %{}
+    end
+
+    # A chunk that fails AFTER an earlier chunk of the same link succeeded: the
+    # link must enqueue no successor, and its retry (from the top of its args)
+    # redoes the released chunk as a no-op and finishes. The failure is real:
+    # a note in the second chunk whose path ciphertext no longer authenticates
+    # makes get_note_meta_by_ids raise on decrypt.
+    test "a chunk failing mid-link enqueues no successor and the retry finishes", ctx do
+      ample_budget()
+      chunk = ReleaseIndexEntries.chunk_size()
+      ids = stale_ids(chunk + 1)
+      seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
+      bad = note(ctx, "bad.md")
+      original_ct = Repo.get!(Engram.Notes.Note, bad.id, skip_tenant_check: true).path_ciphertext
+      last = byte_size(original_ct) - 1
+      <<head::binary-size(last), byte>> = original_ct
+      set_path_ciphertext!(bad, <<head::binary, Bitwise.bxor(byte, 0xFF)>>)
+
+      # The bad note sits in the SECOND chunk, after `chunk` stale ids.
+      args = %{
+        "user_id" => ctx.user.id,
+        "vault_id" => ctx.vault.id,
+        "note_ids" => ids ++ [bad.id]
+      }
+
+      attach_release_telemetry()
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert_raise RuntimeError, fn -> perform_job(ReleaseIndexEntries, args) end
+      end)
+
+      assert count_messages(:index_release, 0) == 1, "the first chunk was released"
+      assert release_jobs() == [], "a failed link must not enqueue its successor"
+      assert stale_left(ctx, bad) == [List.last(ids)]
+
+      set_path_ciphertext!(bad, original_ct)
+      assert :ok = perform_job(ReleaseIndexEntries, args)
+      assert release_jobs() == []
+      # The live note is present, so it is never released; every stale id is.
+      assert stale_left(ctx, bad) == []
+    end
+
+    defp stale_left(ctx, live) do
+      for {_path, %{"note_id" => id}} <- index_entries(ctx), id != live.id, do: id
+    end
+
+    defp set_path_ciphertext!(note, ct) do
+      Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^note.id),
+        [set: [path_ciphertext: ct]],
+        skip_tenant_check: true
+      )
+    end
+
+    defp set_dek!(user, blob) do
+      Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        [set: [encrypted_dek: blob]],
+        skip_tenant_check: true
+      )
+
+      Engram.Crypto.DekCache.invalidate(user.id)
     end
 
     test "a release job reads the notes once, however many ids it carries", ctx do
@@ -829,7 +977,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       )
 
       try do
-        assert :ok = perform_job(Engram.Workers.ReleaseIndexEntries, job.args)
+        assert :ok = perform_job(ReleaseIndexEntries, job.args)
       after
         :telemetry.detach({__MODULE__, ref})
       end

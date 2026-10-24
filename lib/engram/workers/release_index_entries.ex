@@ -66,21 +66,73 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   alias Engram.Accounts
   alias Engram.Crypto.RotationGate
   alias Engram.Notes
-  alias Engram.Notes.Identity
+  alias Engram.Notes.{Enqueue, Identity}
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
 
+  # Ids per link, and so per index-room change. Chosen by measurement (PR
+  # body of the chunking follow-up to #2164; 20k stale ids, 500/1k/2k/5k/10k
+  # per job): a job's cost is dominated by a FIXED part that scales with the
+  # whole index (snapshot decrypt/re-encrypt, or the room edit plus encrypted
+  # tail append), ~0.2-0.5 s at 20-40k entries, while each extra id adds ~0.05
+  # ms. So small chunks multiply that fixed cost: 20k ids took 20 s at 500 per
+  # job and 5.7 s at 2,000, with the slowest job the same (~0.8 s) at both.
+  # Above 2,000 the slowest job and the delete set broadcast to every
+  # connected client (~4 B per id worst case, 8 KB here) keep growing for a
+  # shrinking total-time win.
+  #
+  # Deliberately NOT `Notes`' 500-row chunk: that one bounds SQL bind params,
+  # a different limit this job never reaches.
+  @chunk_size 2_000
+
+  # No @spec: dialyzer infers the exact `2000`, and a wider `pos_integer()`
+  # is a `contract_supertype` it rejects.
+  @doc "Max note ids per link of a release chain, i.e. per index-room change."
+  def chunk_size, do: @chunk_size
+
+  # Wall time one link may spend before handing the rest to a successor. A
+  # chunk costs ~0.8 s at 20-40k index entries but its fixed part grows with
+  # the index, so a whole-chain loop could outrun `timeout/1` (5 min) on a
+  # huge vault and retry from the top forever. It is also how long a link
+  # holds one `crdt_checkpoint` slot (3 per web node) before re-queueing
+  # behind waiting `CheckpointNote` jobs, so it stays short: at 10 s, three
+  # vaults storming at once block checkpoints for seconds, not a minute, and
+  # a typical storm (34k ids, ~14 s) is two links.
+  @default_link_budget_ms 10_000
+
+  @doc "Wall-time budget per link, in ms. Config-overridable so tests can force a chain."
+  def link_budget_ms,
+    do: Application.get_env(:engram, :release_index_link_budget_ms, @default_link_budget_ms)
+
   @doc """
-  Build a release job. Returns `:skip` for an empty id list so callers do not
-  each need their own guard (`Enqueue.enqueue/3` no-ops on `:skip`).
+  Build ONE release job for `note_ids`, or `:skip` for none
+  (`Enqueue.enqueue/3` no-ops on it).
+
+  One job however many ids, on purpose. `perform/1` releases its ids
+  `chunk_size/0` at a time, one index-room change per chunk, in series. If
+  the job outlives `link_budget_ms/0` with ids left, it enqueues them as its
+  successor and stops. The budget is checked between chunks, so a link runs
+  for the budget plus one chunk (including any wait on the fold lock), far
+  inside the 5 min timeout at ~0.8 s a chunk. Each chunk takes and releases
+  its own transaction and fold lock, so nothing is held across chunks. A retry restarts from the top
+  of the job's args, so it redoes up to one budget plus the failed chunk;
+  each redone chunk re-reads which notes exist, so a re-release is a no-op
+  and a note that arrived in between is skipped. A chain runs one link at a
+  time. Enqueueing every chunk up front instead let a storm (17 chunks at 34k
+  ids) fill every `crdt_checkpoint` slot with jobs that all wait on the same
+  per-vault fold lock in `CrdtIndexPersistence`, each holding a pooled DB
+  connection while `CheckpointNote` jobs starved behind them. It is also one
+  atomic insert, so a caller never ends up with half its releases queued: a
+  DB error raises and rolls the caller's transaction back, and any other
+  `{:error, _}` is logged and counted by `Enqueue.enqueue/3`
+  (`[:engram, :notes, :enqueue, :failed]`).
   """
   @spec new_for(String.t(), String.t(), [String.t()]) :: Ecto.Changeset.t() | :skip
   def new_for(_user_id, _vault_id, []), do: :skip
 
-  def new_for(user_id, vault_id, note_ids) do
-    new(%{user_id: user_id, vault_id: vault_id, note_ids: note_ids})
-  end
+  def new_for(user_id, vault_id, note_ids),
+    do: new(%{user_id: user_id, vault_id: vault_id, note_ids: note_ids})
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"user_id" => user_id, "vault_id" => vault_id} = args}) do
@@ -100,22 +152,69 @@ defmodule Engram.Workers.ReleaseIndexEntries do
         case RotationGate.check(user.id) do
           {:error, :rotation_in_progress} -> {:snooze, 30}
           {:error, :user_not_found} -> :ok
-          :ok -> release(user, vault_id, note_ids)
+          :ok -> user |> release(vault_id, note_ids) |> snooze_on_rotation()
         end
     end
   end
 
+  # A rotation that starts mid-link refuses the next chunk's release. That is
+  # the same wait as the gate above, not a failure: snooze rather than burn
+  # one of the 5 attempts (the retry redoes the link's released chunks as
+  # no-ops).
+  defp snooze_on_rotation({:error, :rotation_in_progress}), do: {:snooze, 30}
+  defp snooze_on_rotation(result), do: result
+
   defp release(user, vault_id, note_ids) do
+    release_chunks(
+      user,
+      vault_id,
+      note_ids,
+      System.monotonic_time(:millisecond) + link_budget_ms()
+    )
+  end
+
+  defp release_chunks(user, vault_id, note_ids, deadline) do
+    {chunk, rest} = Enum.split(note_ids, @chunk_size)
+
     # See "Consistency" above: a note this job was told is gone may have
     # arrived since it was enqueued. `%{id: vault_id}` is the same
-    # bare-map-as-vault shape `ProjectVaultIndex` uses.
+    # bare-map-as-vault shape `ProjectVaultIndex` uses. ONE metadata read per
+    # chunk, not a full-row fetch and content decrypt per id.
     #
-    # ONE metadata read for the whole list, not a full-row fetch and content
-    # decrypt per id: `ProjectVaultIndex` now sends a run's every stale id in
-    # one job (15k in the 2026-10-23 storm). A read failure fails the whole
-    # batch so Oban retries it; the other ids wait for the retry.
-    with {:ok, present} <- Notes.get_note_meta_by_ids(user, %{id: vault_id}, note_ids) do
-      Identity.release(user, vault_id, Enum.reject(note_ids, &Map.has_key?(present, &1)))
+    # A failed read or release returns the error and Oban retries THIS job
+    # with its args intact, so no id is lost; chunks it already released are
+    # redone as no-ops. The successor is enqueued only after the last chunk
+    # this link ran succeeded, and a failed insert retries this link too.
+    with {:ok, present} <- Notes.get_note_meta_by_ids(user, %{id: vault_id}, chunk),
+         :ok <- Identity.release(user, vault_id, Enum.reject(chunk, &Map.has_key?(present, &1))) do
+      cond do
+        rest == [] ->
+          :ok
+
+        System.monotonic_time(:millisecond) < deadline ->
+          release_chunks(user, vault_id, rest, deadline)
+
+        true ->
+          enqueue_successor(user, vault_id, rest)
+      end
+    end
+  end
+
+  # ponytail: a successor carries every remaining id, so args written over a
+  # chain are about (ids) x (links) / 2, and links = chain wall time / budget.
+  # A 34k storm is two links. The worst case the 16 MB index allows (~400k
+  # ids, ~200 chunks at a few s each) is tens of links and a few hundred MB
+  # of args over the whole chain: the price of a short slot hold. Upgrade
+  # path if that shows up: a cursor over a table of pending releases.
+  #
+  # The insert commits on its own. If the node dies after it but before Oban
+  # acks this job, the rescued retry inserts a second successor, so two links
+  # can briefly run for one vault. Safe (the fold lock serializes them and
+  # releases are idempotent), just not "one link at a time" in that window.
+  defp enqueue_successor(user, vault_id, rest) do
+    case Enqueue.enqueue(new_for(user.id, vault_id, rest), "release_index_entries") do
+      {:ok, _job} -> :ok
+      {:error, _} = err -> err
     end
   end
 end

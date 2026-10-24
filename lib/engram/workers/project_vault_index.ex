@@ -435,15 +435,15 @@ defmodule Engram.Workers.ProjectVaultIndex do
   # 2026-10-23 storm (vault f4cd93e6, a first sync whose creates died in a DB
   # pool exhaustion) enqueued one job and logged one line PER id: 4,792 jobs,
   # then 14,437+, each its own notes read, index-room edit (a full map copy)
-  # and encrypted tail append. It pinned a web task, then a worker. The job
-  # applies the list as one index-room change, so the cost is O(ids) once.
+  # and encrypted tail append. It pinned a web task, then a worker.
   #
-  # Not chunked. What bounds the batch is the index itself: every id here is
-  # an entry in a snapshot capped at 16 MB (`CrdtIndexPersistence`), and the
-  # args are ~40 B per id (15k ids ~ 600 KB of JSONB, well inside Postgres).
-  # A retry re-runs the same one read and one change, and both are idempotent
-  # (releasing an absent entry is a no-op), so chunking would only multiply
-  # the per-job fixed cost this exists to remove.
+  # The job works through its ids `ReleaseIndexEntries.chunk_size/0` at a
+  # time, in series, one index-room change per chunk, handing the rest to a
+  # successor only past its time budget. So a storm holds one queue slot, not
+  # all of them. The args stay bounded by the index itself: every id here is
+  # an entry in a snapshot capped at 16 MB (`CrdtIndexPersistence`), at ~40 B
+  # per id.
+  # `ReleaseIndexEntries` owns the chunk size and the chain.
   #
   # Backoff for re-claims: the grace is measured from the UUIDv7 MINT time, not
   # from when the claim was written, so a client that re-claims an id older

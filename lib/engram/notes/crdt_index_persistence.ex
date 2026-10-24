@@ -456,11 +456,21 @@ defmodule Engram.Notes.CrdtIndexPersistence do
 
   The whole fold runs in ONE transaction, so a mutation that cannot be persisted
   cannot prune either.
+
+  Serialized per vault by a transaction-scoped advisory lock. `upsert/4`
+  REPLACES the row, so two folds that loaded the same snapshot would each
+  write it back minus only their own change, and the later one silently
+  undoes the earlier. Concurrent roomless folds are routine: a
+  `ReleaseIndexEntries` chain link, per-note delete releases and claims for
+  one vault can run together, and the projection runs right after the room
+  exits. The room checkpoint (`write_snapshot/5`) replaces the same row
+  without this lock (#2176).
   """
   @spec fold_roomless(map(), String.t(), (Yex.Doc.t() -> :ok | {:error, term()})) ::
           :ok | {:error, term()}
   def fold_roomless(user, vault_id, mutate) when is_function(mutate, 1) do
     Repo.with_tenant(user.id, fn ->
+      :ok = Repo.advisory_lock!("crdt_index_fold:" <> vault_id)
       doc = Yex.Doc.new()
 
       with :ok <- load_snapshot_into(doc, user, vault_id) do

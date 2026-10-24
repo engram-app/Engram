@@ -97,13 +97,15 @@ defmodule Engram.QueryBudgetTest do
     "POST notes/append" => 14,
     # Not consolidated in Task 10b (no query-classify item; a rename claims its
     # path in the vault index room, which must commit before the row txn):
-    #  1 rotation lock. 2-5 claim validation txn (note ids at the paths).
-    #  6 the claim's own fresh rotation lock (a socket's user is stale).
-    #  7-13 index room fold (snapshot, tail, tail ids, snapshot upsert).
+    #  1-4 claim validation txn (note ids at the paths).
+    #  5 the claim's own fresh rotation lock (a socket's user is stale).
+    #  6-13 index room fold (per-vault advisory lock, snapshot, tail, tail
+    #  ids, snapshot upsert). The lock (+1) serializes roomless folds so
+    #  concurrent release chunks cannot overwrite each other's snapshot.
     #  14-21 rename txn (2 note reads, seq, UPDATE, tombstone INSERT).
     #  22-27 post-commit jobs (one unique, own txn). 28-32 idle-room fanout
     #  (fresh users row + note read). 33-36 links txn.
-    "POST notes/rename" => 35,
+    "POST notes/rename" => 36,
     # rotation lock, begin, enter, the note row, seq bump, tombstone,
     # usage_meters, two job inserts + their pg_notify, commit.
     "DELETE notes/*path" => 11,
