@@ -133,6 +133,14 @@ defmodule Engram.NotePointsCapFlagTest do
     end
   end
 
+  defp reserved(n \\ 0) do
+    receive do
+      {:reserved, k} -> reserved(n + k)
+    after
+      0 -> n
+    end
+  end
+
   defp lapse_cooldown(note) do
     Repo.with_tenant!(note.user_id, fn ->
       Repo.update_all(from(n in Note, where: n.id == ^note.id),
@@ -183,6 +191,27 @@ defmodule Engram.NotePointsCapFlagTest do
       assert {:ok, n, _, true} = Indexing.index_note_with_usage(note, vault, user)
       assert n <= 128 and rows(note) == n
       assert embedded() == n
+    end
+
+    # Adversarial V3 with the cap alone: the merge is our storage decision, so
+    # an edit inside a merged group charges the user the changed chunk only,
+    # not the whole group (up to 30 KB of a Free embed bucket per edit).
+    test "an edit inside a merged group charges the changed chunk", %{user: user, vault: vault} do
+      parent = self()
+      opts = [reserve_tokens: &(send(parent, {:reserved, &1}) && true)]
+      note = insert_note(user, vault, sections(500))
+      assert {:ok, _, _, true} = Indexing.index_note_with_usage(note, vault, user, opts)
+      _ = {embedded(), reserved()}
+
+      edited = String.replace(note.content, "section250 body", "section250 edited body")
+
+      assert {:ok, _, _, true} =
+               Indexing.index_note_with_usage(%{note | content: edited}, vault, user, opts)
+
+      [changed] =
+        edited |> Markdown.parse("Big.md") |> Enum.filter(&String.contains?(&1.text, "edited"))
+
+      assert reserved() == Engram.UsageMeters.estimate_tokens(byte_size(changed.embed_text))
     end
 
     test "the dry-run estimate prices the capped note", %{user: user, vault: vault} do

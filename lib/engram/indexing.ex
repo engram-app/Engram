@@ -1992,7 +1992,7 @@ defmodule Engram.Indexing do
   defp with_charge(plan, rows, opts) do
     texts = embed_texts(plan)
     cache = Keyword.get(opts, :vector_cache)
-    user_bytes = if cache && budget_enabled?(), do: changed_bytes_per_text(plan, rows)
+    user_bytes = if cache && note_cap_enabled?(), do: changed_bytes_per_text(plan, rows)
     plan = with_cache_lookup(plan, texts, cache, user_bytes)
     sent = Map.get_lazy(plan, :embed_bytes, fn -> text_bytes(texts) end)
     total = UsageMeters.estimate_tokens(sent)
@@ -2002,7 +2002,9 @@ defmodule Engram.Indexing do
         Map.has_key?(plan, :charge_bytes) ->
           min(UsageMeters.estimate_tokens(plan.charge_bytes), total)
 
-        budget_enabled?() ->
+        # Adversarial V3 rides with the merge, so the cap flag alone charges
+        # changed members only, as the budget does.
+        note_cap_enabled?() ->
           min(changed_tokens(plan, rows), total)
 
         true ->
@@ -2094,11 +2096,11 @@ defmodule Engram.Indexing do
   end
 
   # The tokens each sent text charges the user, in `embed_texts/1` order: its
-  # changed bytes with the index budget on, else all of it; a vector cache
-  # hit charges nothing.
+  # changed bytes with the per-note cap on (`note_cap_enabled?/0`), else all
+  # of it; a vector cache hit charges nothing.
   defp text_charges(plan, rows) do
     bytes =
-      if budget_enabled?(),
+      if note_cap_enabled?(),
         do: changed_bytes_per_text(plan, rows),
         else: Enum.map(embed_texts(plan), &IO.iodata_length/1)
 
@@ -2426,8 +2428,8 @@ defmodule Engram.Indexing do
   # to the pass byte budget; any left over make the pass `:continues`.
   defp with_cache_lookup(plan, _texts, nil, _user_bytes), do: plan
 
-  # `user_bytes`: each text's chargeable bytes (budget on), or nil for
-  # "all of it" (budget off: the user pays for everything sent).
+  # `user_bytes`: each text's chargeable bytes (cap on), or nil for
+  # "all of it" (cap off: the user pays for everything sent).
   defp with_cache_lookup(plan, texts, cache, user_bytes) do
     user_bytes = user_bytes || Enum.map(texts, &IO.iodata_length/1)
 
