@@ -32,28 +32,6 @@ defmodule Engram.Notes.Enqueue do
   def enqueue(:skip, worker_label, _insert_fn) when is_binary(worker_label),
     do: {:ok, :skipped}
 
-  # A builder that chunks (e.g. `ReleaseIndexEntries.new_for/3`) returns a list.
-  # Each changeset goes through the single-job clause below, so every failure
-  # keeps its log line and telemetry. Stops at the first failure and returns it;
-  # the jobs already inserted stay inserted (inside a caller's transaction they
-  # roll back with it).
-  def enqueue([], worker_label, _insert_fn) when is_binary(worker_label),
-    do: {:ok, :skipped}
-
-  def enqueue(changesets, worker_label, insert_fn) when is_list(changesets) do
-    changesets
-    |> Enum.reduce_while({:ok, []}, fn changeset, {:ok, jobs} ->
-      case enqueue(changeset, worker_label, insert_fn) do
-        {:ok, job} -> {:cont, {:ok, [job | jobs]}}
-        err -> {:halt, err}
-      end
-    end)
-    |> case do
-      {:ok, jobs} -> {:ok, Enum.reverse(jobs)}
-      err -> err
-    end
-  end
-
   def enqueue(changeset, worker_label, insert_fn)
       when is_binary(worker_label) and is_function(insert_fn, 1) do
     case insert_fn.(changeset) do

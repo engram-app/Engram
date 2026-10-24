@@ -122,7 +122,9 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
     end)
 
     Repo.delete_all(from(j in Oban.Job, where: j.id in ^Enum.map(jobs, & &1.id)))
-    :ok
+
+    # A link over chunk_size ids enqueues its successor; run the chain out.
+    if jobs == [], do: :ok, else: drain_releases()
   end
 
   defp run(ctx) do
@@ -784,70 +786,94 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       end
     end
 
-    # Each job is ONE index-room change, so the chunk bounds the read, the args
-    # payload, the delete set broadcast to every client, and what a retry redoes.
-    # 20,000 ids is the shape the 2026-10-23 storm was heading for.
-    test "20,000 stale claims enqueue chunked release jobs, ONE index-room change each",
+    # Performs the vault's release chain one link at a time, asserting at every
+    # step that at most ONE release job is waiting: a vault's chunks run in
+    # series, so a storm holds at most one `crdt_checkpoint` slot (and one DB
+    # connection) instead of every slot queueing on the vault's fold lock.
+    defp drain_chain(max_links \\ 1_000) do
+      Enum.reduce_while(1..max_links, {0, 0}, fn _, {links, peak_mem} ->
+        case release_jobs() do
+          [] ->
+            {:halt, {links, peak_mem}}
+
+          [job] ->
+            assert :ok = perform_job(Engram.Workers.ReleaseIndexEntries, job.args)
+            Repo.delete_all(from(j in Oban.Job, where: j.id == ^job.id))
+            {:memory, mem} = Process.info(self(), :memory)
+            {:cont, {links + 1, max(peak_mem, mem)}}
+
+          jobs ->
+            flunk("#{length(jobs)} release jobs runnable at once for one vault, expected 1")
+        end
+      end)
+    end
+
+    # Each link is ONE index-room change of at most chunk_size ids, so the chunk
+    # bounds the read, the delete set broadcast to every client, and what a
+    # retry redoes. 20,000 ids is the shape the 2026-10-23 storm was heading for.
+    test "20,000 stale claims release as ONE chain, a chunk per link, one link at a time",
          ctx do
       attach_projection_telemetry()
       chunk = Engram.Workers.ReleaseIndexEntries.chunk_size()
       ids = stale_ids(20_000)
       seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
 
-      mem_before = :erlang.memory(:total)
       {run_us, :ok} = :timer.tc(fn -> run(ctx) end)
 
-      jobs = release_jobs()
-
-      assert length(jobs) == div(20_000 + chunk - 1, chunk),
-             "expected #{div(20_000 + chunk - 1, chunk)} release jobs of <= #{chunk} ids, got #{length(jobs)}"
-
-      assert Enum.all?(jobs, &(length(&1.args["note_ids"]) <= chunk))
-      assert jobs |> Enum.flat_map(& &1.args["note_ids"]) |> Enum.sort() == Enum.sort(ids)
+      assert [job] = release_jobs()
+      assert Enum.sort(job.args["note_ids"]) == Enum.sort(ids)
       assert_receive {:projection, %{released: 20_000, unresolved: 0}, _}, 5_000
 
       attach_release_telemetry()
-      {drain_us, :ok} = :timer.tc(fn -> drain_releases() end)
-      mem_delta = :erlang.memory(:total) - mem_before
+      {drain_us, {links, peak_mem}} = :timer.tc(fn -> drain_chain() end)
 
-      IO.puts(
-        "\n[20k stale claims] projection #{div(run_us, 1000)} ms, " <>
-          "release drain #{div(drain_us, 1000)} ms (#{length(jobs)} jobs), " <>
-          "VM memory delta #{div(mem_delta, 1_048_576)} MB"
-      )
+      assert links == div(20_000 + chunk - 1, chunk)
 
-      assert count_messages(:index_release, 0) == length(jobs),
-             "each job must land as exactly ONE index-room change"
+      assert count_messages(:index_release, 0) == links,
+             "each link must land as exactly ONE index-room change"
 
       assert index_entries(ctx) == %{}
       # Generous ceilings for a loaded CI box; a regression to per-id work or an
-      # unbounded copy blows through both by an order of magnitude.
+      # unbounded copy in the job blows through both by an order of magnitude.
+      # Memory is THIS process (perform_job runs the worker inline), not the
+      # whole VM, so other tests cannot move it.
       assert run_us + drain_us < 120_000_000
-      assert mem_delta < 1_024 * 1_048_576
+      assert peak_mem < 256 * 1_048_576
     end
 
-    test "a failing chunk does not block the other chunks", ctx do
+    # A real read failure: the user's DEK no longer unwraps (the shape a KMS
+    # outage or a rotated-away master key takes), so get_note_meta_by_ids
+    # returns an error. The link must release nothing, enqueue no successor
+    # (or the rest would run past an unread chunk), and resume on retry.
+    test "a failed link keeps the rest of the chain and resumes on retry", ctx do
       chunk = Engram.Workers.ReleaseIndexEntries.chunk_size()
-      ids = stale_ids(chunk * 3)
+      ids = stale_ids(chunk * 2)
       seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
       assert :ok = run(ctx)
+      assert [job] = release_jobs()
 
-      assert [bad | good] = release_jobs()
-      assert length(good) == 2
+      original_dek = Repo.reload!(ctx.user).encrypted_dek
+      last = byte_size(original_dek) - 1
+      <<head::binary-size(last), byte>> = original_dek
+      set_dek!(ctx.user, <<head::binary, Bitwise.bxor(byte, 0xFF)>>)
 
-      # A job whose read blows up: the guard on get_note_meta_by_ids raises, the
-      # way any read failure surfaces to Oban as a retryable error.
-      assert_raise FunctionClauseError, fn ->
-        perform_job(
-          Engram.Workers.ReleaseIndexEntries,
-          Map.put(bad.args, "note_ids", "not-a-list")
-        )
-      end
+      assert {:error, _} = perform_job(Engram.Workers.ReleaseIndexEntries, job.args)
+      assert [^job] = release_jobs(), "a failed link must not enqueue its successor"
 
-      Enum.each(good, &assert(:ok = perform_job(Engram.Workers.ReleaseIndexEntries, &1.args)))
+      set_dek!(ctx.user, original_dek)
+      assert map_size(index_entries(ctx)) == chunk * 2, "the failed link released nothing"
+      assert {2, _} = drain_chain()
+      assert index_entries(ctx) == %{}
+    end
 
-      remaining = index_entries(ctx) |> Map.values() |> Enum.map(& &1["note_id"])
-      assert Enum.sort(remaining) == Enum.sort(bad.args["note_ids"])
+    defp set_dek!(user, blob) do
+      Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        [set: [encrypted_dek: blob]],
+        skip_tenant_check: true
+      )
+
+      Engram.Crypto.DekCache.invalidate(user.id)
     end
 
     test "a release job reads the notes once, however many ids it carries", ctx do

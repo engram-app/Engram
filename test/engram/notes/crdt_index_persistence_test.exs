@@ -676,9 +676,9 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
   end
 
   # Roomless folds are load -> mutate -> REPLACE the snapshot row, with no merge.
-  # Two of them racing for one vault (chunked ReleaseIndexEntries jobs land on
-  # the queue together, and the projection that enqueues them runs right after
-  # the room exits, so they are roomless by construction) both load the same
+  # Two of them racing for one vault (a ReleaseIndexEntries chain link and a
+  # per-note delete release, say; the projection that starts a chain runs right
+  # after the room exits, so it is roomless by construction) both load the same
   # snapshot and the later upsert silently drops the earlier one's change.
   # The sandbox shares one connection, so the race itself cannot run here; this
   # pins the per-vault lock that prevents it and that it is taken before the

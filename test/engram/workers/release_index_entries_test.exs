@@ -4,32 +4,22 @@ defmodule Engram.Workers.ReleaseIndexEntriesTest do
   alias Engram.Workers.ReleaseIndexEntries
 
   defp ids(n), do: for(_ <- 1..n, do: Ecto.UUID.generate())
-  defp sizes(changesets), do: Enum.map(changesets, &length(&1.changes.args.note_ids))
 
-  describe "new_for/3 chunks at chunk_size/0" do
-    setup do: %{chunk: Engram.Workers.ReleaseIndexEntries.chunk_size()}
-
-    test "no ids, no jobs" do
-      assert ReleaseIndexEntries.new_for("u", "v", []) == []
+  # ONE job per call, whatever the size: the job works through its ids a
+  # chunk per link (perform/1 enqueues the rest as its successor), so a
+  # vault's release never occupies more than one queue slot. The chain itself
+  # is exercised against a real index in ProjectVaultIndexTest.
+  describe "new_for/3" do
+    test "no ids, no job" do
+      assert ReleaseIndexEntries.new_for("u", "v", []) == :skip
     end
 
-    test "exactly one chunk of ids is one job", %{chunk: chunk} do
-      assert sizes(ReleaseIndexEntries.new_for("u", "v", ids(chunk))) == [chunk]
-    end
+    test "any number of ids is ONE job carrying all of them, in order" do
+      all = ids(ReleaseIndexEntries.chunk_size() * 2 + 7)
+      job = ReleaseIndexEntries.new_for("u", "v", all)
 
-    test "one id over a chunk is two jobs", %{chunk: chunk} do
-      assert sizes(ReleaseIndexEntries.new_for("u", "v", ids(chunk + 1))) == [chunk, 1]
-    end
-
-    test "every id lands in exactly one job, in order", %{chunk: chunk} do
-      all = ids(chunk * 2 + 7)
-      jobs = ReleaseIndexEntries.new_for("u", "v", all)
-      assert Enum.flat_map(jobs, & &1.changes.args.note_ids) == all
-
-      assert Enum.all?(
-               jobs,
-               &(&1.changes.args.user_id == "u" and &1.changes.args.vault_id == "v")
-             )
+      assert %Ecto.Changeset{} = job
+      assert job.changes.args == %{user_id: "u", vault_id: "v", note_ids: all}
     end
   end
 end
