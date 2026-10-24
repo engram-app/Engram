@@ -195,6 +195,54 @@ defmodule Engram.FeedbackTest do
       assert reasons(user) == ["too_expensive"]
     end
 
+    defp log_event(user, event, props, seconds_ago) do
+      Repo.insert!(%Event{
+        user_id: user.id,
+        event: event,
+        props: props,
+        inserted_at: DateTime.add(DateTime.utc_now(), -seconds_ago)
+      })
+    end
+
+    test "a reason given for an earlier, reversed cancel does not cover a later one",
+         %{user: user} do
+      started = DateTime.add(DateTime.utc_now(), -30 * 86_400)
+      log_event(user, "subscription_changed", %{"kind" => "cancel_scheduled"}, 20 * 86_400)
+      log_event(user, "subscription_cancel_reason", %{"reason" => "too_expensive"}, 20 * 86_400)
+      # Reversed, then cancelled again in the portal: no reason this time.
+      log_event(user, "subscription_changed", %{"kind" => "cancel_scheduled"}, 2 * 86_400)
+
+      assert :ok = Feedback.record_missing_cancel_reason(user, started, "portal_no_reason")
+      assert Enum.sort(reasons(user)) == ["portal_no_reason", "too_expensive"]
+    end
+
+    test "a dialog reason filed just after the scheduled-cancel event still counts",
+         %{user: user} do
+      started = DateTime.add(DateTime.utc_now(), -30 * 86_400)
+      log_event(user, "subscription_cancel_reason", %{"reason" => "not_using"}, 2 * 86_400 + 5)
+      log_event(user, "subscription_changed", %{"kind" => "cancel_scheduled"}, 2 * 86_400)
+
+      assert :ok = Feedback.record_missing_cancel_reason(user, started, "portal_no_reason")
+      assert reasons(user) == ["not_using"]
+    end
+
+    test "payment_failed is filed even when a reason is on file", %{user: user} do
+      started = DateTime.add(DateTime.utc_now(), -30 * 86_400)
+      log_event(user, "subscription_cancel_reason", %{"reason" => "too_expensive"}, 86_400)
+
+      assert :ok = Feedback.record_missing_cancel_reason(user, started, "payment_failed")
+      assert Enum.sort(reasons(user)) == ["payment_failed", "too_expensive"]
+    end
+
+    test "files nothing when the event log is off, since every cancel would look reasonless",
+         %{user: user} do
+      Application.put_env(:engram, :analytics_event_log, false)
+      since = DateTime.add(DateTime.utc_now(), -3600)
+
+      assert :ok = Feedback.record_missing_cancel_reason(user, since, "portal_no_reason")
+      refute_receive {:posthog, %{"event" => "subscription_cancel_reason"}}, 300
+    end
+
     test "a reason from before this subscription started does not count", %{user: user} do
       :ok = Feedback.submit(user, "cancel", %{"reason" => "too_expensive"})
       :ok = EventLog.flush()

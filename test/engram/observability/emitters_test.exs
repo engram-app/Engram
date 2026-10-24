@@ -21,8 +21,10 @@ defmodule Engram.Observability.EmittersTest do
   import Ecto.Query, only: [from: 2]
   import Mox
 
+  alias Engram.Analytics.Event
   alias Engram.Notes
   alias Engram.Observability.PostHog
+  alias Engram.Repo
   alias Engram.Search
   alias EngramWeb.Webhooks.PostHogForwarder
 
@@ -66,6 +68,13 @@ defmodule Engram.Observability.EmittersTest do
       send(parent, {:posthog_body, Jason.decode!(body)})
       Plug.Conn.resp(conn, 200, "1")
     end)
+  end
+
+  # The cancel-reason marker reads our event log, which is off in test.
+  defp enable_event_log do
+    prior = Application.get_env(:engram, :analytics_event_log)
+    Application.put_env(:engram, :analytics_event_log, true)
+    on_exit(fn -> Application.put_env(:engram, :analytics_event_log, prior) end)
   end
 
   defp user_with_clerk_id(opts \\ []) do
@@ -683,6 +692,8 @@ defmodule Engram.Observability.EmittersTest do
     # Paddle's hosted portal arrives with none. File a marker so the gap shows.
     test "subscription.canceled with no reason on file files portal_no_reason",
          %{bypass: bypass} do
+      enable_event_log()
+
       sub = %{
         insert(:subscription, user: user_with_clerk_id(), tier: "starter", status: "canceled")
         | previous: %{tier: "starter", status: "active"}
@@ -701,8 +712,39 @@ defmodule Engram.Observability.EmittersTest do
       assert body["properties"]["source"] == "webhook"
     end
 
+    test "subscription.canceled files no marker when the dialog's reason is on file",
+         %{bypass: bypass} do
+      enable_event_log()
+      user = user_with_clerk_id()
+
+      sub = %{
+        insert(:subscription, user: user, tier: "starter", status: "canceled")
+        | previous: %{tier: "starter", status: "active"}
+      }
+
+      Repo.insert!(%Event{
+        user_id: user.id,
+        event: "subscription_cancel_reason",
+        props: %{"reason" => "not_using"}
+      })
+
+      expect_captures(bypass)
+      started_at = DateTime.utc_now() |> DateTime.add(-86_400) |> DateTime.to_iso8601()
+
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{"event_type" => "subscription.canceled", "data" => %{"started_at" => started_at}},
+          sub
+        )
+
+      assert_receive {:posthog_body, %{"event" => "subscription_canceled"}}, 1_500
+      refute_receive {:posthog_body, %{"event" => "subscription_cancel_reason"}}, 300
+    end
+
     test "subscription.canceled out of past_due files payment_failed, not a portal gap",
          %{bypass: bypass} do
+      enable_event_log()
+
       sub = %{
         insert(:subscription, user: user_with_clerk_id(), tier: "starter", status: "canceled")
         | previous: %{tier: "starter", status: "past_due"}
@@ -811,7 +853,7 @@ defmodule Engram.Observability.EmittersTest do
       sub = insert(:subscription, user: user_with_clerk_id(), tier: "pro", status: "past_due")
 
       set_policy_effective = fn date ->
-        Engram.Repo.update_all(
+        Repo.update_all(
           from(v in Engram.Legal.TermsVersion,
             where: v.document == "privacy_policy" and v.version == "2026-10-12"
           ),

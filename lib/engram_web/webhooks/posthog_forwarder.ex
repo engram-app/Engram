@@ -29,7 +29,10 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   alias Engram.Analytics.PersonProperties
   alias Engram.Billing.Subscription
   alias Engram.Feedback
+  alias Engram.Logger.Metadata
   alias Engram.Webhooks.Idempotency
+
+  require Logger
 
   @doc """
   Forward a verified Clerk webhook event. Returns `:ok` for every input
@@ -156,6 +159,16 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
     end
 
     :ok
+  rescue
+    # Analytics only: the cancel is already saved, so a failed read here must
+    # not report the webhook as failed.
+    error ->
+      Logger.error(
+        "cancel_reason_marker_failed",
+        Metadata.with_category(:error, :billing, reason: Metadata.safe_reason(error))
+      )
+
+      :ok
   end
 
   def forward_paddle_event(%{"event_type" => "subscription.past_due"}, %Subscription{} = sub) do
