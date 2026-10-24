@@ -246,7 +246,7 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
   #     began mid-page, stops this copy (both would leave a current object
   #     no row references).
   defp restore_key({user_id, vault_id, id}, key, versions) do
-    with :missing <- presence(key),
+    with :missing <- presence(key, vault_id),
          true <- still_restorable?(user_id, vault_id, id, key) do
       newest_data =
         versions
@@ -261,10 +261,11 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
 
   # Tri-state, unlike `exists?/1` (which answers false on any error): a
   # one-byte ranged GET tells "not found" from a transient failure.
-  # A 0-byte object cannot serve byte 0: S3 answers 416 InvalidRange (the
-  # test adapter :invalid_range). It exists, so it is present. Sealed
-  # objects are never empty; this keeps the edge from reading as a failure.
-  defp presence(key) do
+  # A 0-byte object cannot serve byte 0: S3 answers 416 InvalidRange. It
+  # exists, so it is present. Sealed objects are never empty; this keeps the
+  # edge from reading as a failure. (The Database adapter never gets here:
+  # its list_versions/2 is :unsupported.)
+  defp presence(key, vault_id) do
     case Storage.adapter().get_range(key, 0, 1) do
       {:ok, _} ->
         :present
@@ -275,13 +276,11 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
       {:error, {:http_error, 416, _}} ->
         :present
 
-      {:error, :invalid_range} ->
-        :present
-
       {:error, reason} ->
         Logger.warning(
           "attachment blob probe failed, retrying on the next run",
           Metadata.with_category(:warning, :sync,
+            vault_id: vault_id,
             storage_key: key,
             reason: Metadata.safe_reason(reason)
           )

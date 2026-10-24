@@ -296,6 +296,7 @@ defmodule Engram.Workers.ReconcileAttachmentBlobsTest do
     refute log =~ "attachment blob unrecoverable"
     # Not silent: a persistent error (an IAM change) must be visible.
     assert log =~ "attachment blob probe failed, retrying on the next run"
+    assert log =~ "vault_id=#{vault.id}"
     refute log =~ lost
   end
 
