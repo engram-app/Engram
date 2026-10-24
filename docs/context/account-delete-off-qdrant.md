@@ -59,7 +59,9 @@ store's latency, and a test harness that retried a non-idempotent method.
 `e2e/helpers/http_retry.py` is the single retry policy for e2e HTTP clients:
 read retries off (`read=0`), status retries only for idempotent methods
 (GET/HEAD/PUT/OPTIONS) unless a caller widens the list, connect retries kept.
-The Clerk client widens it to POST/DELETE only to retry a 429. Do not add a
+The Clerk client widens it to POST/DELETE on 429 and 500/502/503/504
+(`e2e/helpers/clerk.py`); that is safe there because a repeated Clerk user
+create or delete is idempotent, unlike our own `DELETE /api/me`. Do not add a
 per-test `Retry`; use `RetryClient`. Pinned by `e2e/unit/test_http_retry.py`.
 
 ## Gotchas
