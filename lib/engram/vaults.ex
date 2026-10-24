@@ -401,13 +401,20 @@ defmodule Engram.Vaults do
   @spec record_plugin_version(map(), Ecto.UUID.t(), String.t() | nil) :: :ok
   def record_plugin_version(_user, _vault_id, nil), do: :ok
 
-  def record_plugin_version(%{id: user_id} = user, vault_id, version) when is_binary(version) do
+  def record_plugin_version(%{id: user_id}, vault_id, version) when is_binary(version) do
     now = DateTime.utc_now(:second)
     stale = DateTime.add(now, -3600)
 
-    # The cached vault list answers the common case (same version, stamped
-    # within the hour) with no transaction at all.
-    if Enum.any?(list_vaults(user), &(&1.id == vault_id and current_stamp?(&1, version, stale))),
+    # A WARM vault list answers the common case (same version, stamped within
+    # the hour) with no transaction. Only peeked, never loaded: a miss would
+    # decrypt every vault name just to skip one cheap conditional UPDATE.
+    cached =
+      case Engram.Cache.get(:vaults, user_id) do
+        {:ok, vaults} when is_list(vaults) -> vaults
+        _ -> []
+      end
+
+    if Enum.any?(cached, &(&1.id == vault_id and current_stamp?(&1, version, stale))),
       do: :ok,
       else: write_plugin_version(user_id, vault_id, version, now, stale)
   end
