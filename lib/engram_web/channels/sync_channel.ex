@@ -50,6 +50,10 @@ defmodule EngramWeb.SyncChannel do
   # match, which is free — the gate costs DB round-trips and there is no join
   # rate limiter, so a `sync:<other-user>:<uuid>` probe must not pay for it.
   defp gate_and_join(vault_id_str, params, socket, user) do
+    # Before the gate, because the join the gate REFUSES for an old plugin is
+    # the one list_vaults most needs to know about.
+    record_plugin_version(user, vault_id_str, socket.assigns[:plugin_version])
+
     case ChannelGate.check(
            user,
            socket.assigns[:current_api_key],
@@ -58,6 +62,28 @@ defmodule EngramWeb.SyncChannel do
       :ok -> resolve_vault_and_join(vault_id_str, params, socket, user)
       {:error, payload} -> {:error, payload}
     end
+  end
+
+  # Best-effort: failing to record a version must never fail the join.
+  defp record_plugin_version(user, vault_id_str, version) do
+    with {:ok, vault_id} <- Ecto.UUID.cast(vault_id_str) do
+      Vaults.record_plugin_version(user, vault_id, version)
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "plugin version record failed",
+        Metadata.with_category(:warning, :sync, reason: Metadata.safe_reason(e))
+      )
+  catch
+    kind, reason ->
+      Logger.warning(
+        "plugin version record exited",
+        Metadata.with_category(:warning, :sync,
+          reason_label: to_string(kind),
+          reason: Metadata.safe_exit_reason(reason)
+        )
+      )
   end
 
   defp resolve_vault_and_join(vault_id_str, params, socket, user) do

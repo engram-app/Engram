@@ -104,6 +104,49 @@ defmodule EngramWeb.PluginVersionGateChannelTest do
                  "sync:#{ctx.user.id}:#{ctx.vault.id}"
                )
     end
+
+    # So list_vaults can tell the AI the vault's plugin needs an update. The
+    # refused join is exactly the one that must be recorded.
+    test "records the reported version on the vault, refused or not", ctx do
+      sync = fn version ->
+        subscribe_and_join(
+          socket_with_version(ctx.user, version),
+          EngramWeb.SyncChannel,
+          "sync:#{ctx.user.id}:#{ctx.vault.id}"
+        )
+      end
+
+      stored = fn ->
+        Engram.Repo.get!(Engram.Vaults.Vault, ctx.vault.id, skip_tenant_check: true).plugin_version
+      end
+
+      assert {:error, _} = sync.(@ancient)
+      assert stored.() == @ancient
+
+      assert {:ok, _, _} = sync.("1.36.0")
+      assert stored.() == "1.36.0"
+
+      # An unreported version (web SPA, pre-reporting plugins) keeps the last one.
+      assert {:ok, _, _} = sync.(nil)
+      assert stored.() == "1.36.0"
+    end
+
+    # Mutation-checked: dropping the `scoped/1` user predicate in
+    # record_plugin_version/3 keeps this green, because the tenant-scoped
+    # UPDATE is also held by RLS on `vaults`. Two defenses, one test.
+    test "a join for another user's vault records nothing on it", ctx do
+      other = insert_user(onboarding_profile: %{})
+      {:ok, theirs, _} = Vaults.register_vault(other, "Theirs", Ecto.UUID.generate())
+
+      subscribe_and_join(
+        socket_with_version(ctx.user, @ancient),
+        EngramWeb.SyncChannel,
+        "sync:#{ctx.user.id}:#{theirs.id}"
+      )
+
+      assert Engram.Repo.get!(Engram.Vaults.Vault, theirs.id, skip_tenant_check: true).plugin_version ==
+               nil
+    end
   end
 
   describe "everything unknown is allowed" do

@@ -119,6 +119,8 @@ defmodule Engram.PromEx.CrdtTest do
           :bloat_ratio_p99,
           :bloat_ratio_max,
           :notes_over_threshold,
+          :notes_save_rate_over_threshold,
+          :save_rate_max_per_hour,
           :state_bytes_total,
           :content_bytes_total
         ] do

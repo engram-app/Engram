@@ -91,7 +91,7 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     big = String.duplicate("x", Notes.max_note_bytes() - 10)
     {:ok, _} = Notes.upsert_note(u, v, %{"path" => "N.md", "content" => big}, actor: "api")
 
-    assert {:error, msg} =
+    assert {:error, {:note_too_large, msg}} =
              Handlers.handle("append_to_note", u, v, %{
                "path" => "N.md",
                "text" => String.duplicate("y", 100)
@@ -309,7 +309,7 @@ defmodule Engram.MCP.HandlersEditNoteTest do
   end
 
   test "a heading not found is reported, via edit_note", %{user: u, vault: v} do
-    assert {:error, msg} =
+    assert {:error, {:section_not_found, msg}} =
              Handlers.handle("edit_note", u, v, %{
                "path" => "N.md",
                "mode" => "replace_section",

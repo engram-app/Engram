@@ -55,9 +55,9 @@ defmodule Engram.MCP.HandlersLinksTest do
     refute text =~ "more"
   end
 
-  # One links read and one backlinks read for the whole call, not two per
-  # note: an over-budget note or a miss gets no links, but the found notes
-  # still see each other (and the over-budget note as a backlink source).
+  # A fixed number of link reads for the whole call, not a few per note: an
+  # over-budget note or a miss gets no links, but the found notes still see
+  # each other (and the over-budget note as a backlink source).
   test "links for several notes come from one batched read each", %{user: u, a: a} do
     big = "[[A]] " <> String.duplicate("x", Handlers.get_notes_budget())
 
@@ -75,7 +75,10 @@ defmodule Engram.MCP.HandlersLinksTest do
     queries = link_reads.(fn -> send(self(), {:got, get(u, a, %{"paths" => paths})}) end)
     assert_received {:got, {:ok, _text, %{"notes" => [na, nb, nbig, missing]}}}
 
-    assert length(queries) == 2, "expected 2 link reads, got:\n#{Enum.join(queries, "\n")}"
+    # 3, still independent of the note count: outgoing edges, the target keys
+    # incoming edges use (so backlinks only verify spellings a link uses,
+    # #2175 delta check), and the incoming edges themselves.
+    assert length(queries) == 3, "expected 3 link reads, got:\n#{Enum.join(queries, "\n")}"
 
     assert Enum.sort(na["backlinks"]) == ["B.md", "Big.md"]
     assert na["outgoing"] == ["B.md"]
@@ -143,5 +146,146 @@ defmodule Engram.MCP.HandlersLinksTest do
     assert t["links_truncated"] == true
     assert text =~ "Unresolved: Ghost1, "
     assert text =~ ", and 1 more"
+  end
+
+  # User feedback 2026-10-24: `[[Folder/Note]]` came back as a same-named
+  # note in another folder. Obsidian semantics: a folder-qualified link
+  # names that path (or a path ending in it); only a bare name falls back
+  # to the shortest same-named note.
+  describe "folder-qualified wikilinks" do
+    test "[[Folder/Note]] resolves to Folder/Note.md, not a shorter same-named note",
+         %{user: u, a: a} do
+      seed(u, a, [
+        {"Folder/Note.md", "in folder"},
+        {"Ot/Note.md", "shorter path, same name"},
+        {"Source.md", "see [[Folder/Note]]"}
+      ])
+
+      assert {:ok, _, %{"notes" => [src, folder, other]}} =
+               get(u, a, %{"paths" => ["Source.md", "Folder/Note.md", "Ot/Note.md"]})
+
+      assert src["outgoing"] == ["Folder/Note.md"]
+      assert src["unresolved"] == []
+      assert folder["backlinks"] == ["Source.md"]
+      assert other["backlinks"] == []
+    end
+
+    test "a qualified link matches a path that ends with it, as Obsidian does",
+         %{user: u, a: a} do
+      seed(u, a, [
+        {"Projects/Folder/Note.md", "nested"},
+        {"Note.md", "root, same name"},
+        {"Source.md", "see [[Folder/Note]]"}
+      ])
+
+      assert {:ok, _, %{"notes" => [src, nested, root]}} =
+               get(u, a, %{"paths" => ["Source.md", "Projects/Folder/Note.md", "Note.md"]})
+
+      assert src["outgoing"] == ["Projects/Folder/Note.md"]
+      assert nested["backlinks"] == ["Source.md"]
+      assert root["backlinks"] == []
+    end
+
+    test "a qualified link to a missing path stays unresolved when the name exists elsewhere",
+         %{user: u, a: a} do
+      seed(u, a, [
+        {"Ot/Note.md", "same name, other folder"},
+        {"Source.md", "see [[Folder/Note]]"}
+      ])
+
+      assert {:ok, _, %{"notes" => [src, other]}} =
+               get(u, a, %{"paths" => ["Source.md", "Ot/Note.md"]})
+
+      assert src["outgoing"] == []
+      assert src["unresolved"] == ["Folder/Note"]
+      assert other["backlinks"] == []
+    end
+
+    # Adversarial review of #2175: read one at a time, each note's backlink
+    # check saw only its own row, so the suffix matched both and one link was
+    # credited to two notes.
+    test "a suffix link is a backlink of exactly one note, read one at a time",
+         %{user: u, a: a} do
+      # The root Note.md is what hides a/y/Note.md: the keyed lookup fetches
+      # only the shortest same-named rows, and that is Note.md alone.
+      seed(u, a, [
+        {"Note.md", "root"},
+        {"a/y/Note.md", "first"},
+        {"x/y/Note.md", "second"},
+        {"Source.md", "see [[y/Note]]"}
+      ])
+
+      backlinks = fn path ->
+        {:ok, _, %{"notes" => [n]}} = get(u, a, %{"paths" => [path]})
+        n["backlinks"]
+      end
+
+      assert backlinks.("a/y/Note.md") == ["Source.md"]
+      assert backlinks.("x/y/Note.md") == []
+    end
+
+    # Second delta review of #2175: an exact hit in the attachments table,
+    # which an extensionless link tries SECOND, settled the lookup before the
+    # notes table's full set was fetched, so the link bound to the attachment.
+    test "a note suffix match beats an extensionless attachment at the exact path",
+         %{user: u, a: a} do
+      seed(u, a, [
+        {"Note.md", "root, hides the nested note from the shortest-row lookup"},
+        {"x/y/Note.md", "nested"},
+        {"Source.md", "see [[y/Note]]"}
+      ])
+
+      Engram.Fixtures.insert_attachment!(u, a, %{path: "y/Note"})
+
+      assert {:ok, _, %{"notes" => [src]}} = get(u, a, %{"paths" => ["Source.md"]})
+      assert src["outgoing"] == ["x/y/Note.md"]
+    end
+
+    # Delta check of #2175: verifying a deep note's tail spelling (`b/note`)
+    # fetched and decrypted EVERY same-named row (733 for the `index.md` hub)
+    # on each backlinks read, even when no link uses that spelling.
+    test "backlinks of a deep note skip the full same-name fetch when no link needs it",
+         %{user: u, a: a} do
+      seed(u, a, [
+        {"Note.md", "root"},
+        {"a/b/Note.md", "deep"},
+        {"Source.md", "see [[Note]]"}
+      ])
+
+      # The full fetch's own shape (`fetch_candidates_by_hmac/5`): the
+      # candidate union tags rows `$1::integer` first, and the note and name
+      # reads select other columns.
+      full_fetch? = &(&1 =~ ~s(SELECT n0."id", n0."basename_hmac", n0."path_ciphertext"))
+
+      queries =
+        Engram.TenantQueryCounter.count_matching_queries(
+          fn -> get(u, a, %{"paths" => ["a/b/Note.md"]}) end,
+          full_fetch?
+        )
+
+      assert queries == [], "unexpected full fetch:\n#{Enum.join(queries, "\n")}"
+
+      # Control: once a link DOES use the tail spelling, the same matcher must
+      # see the fetch, or a reworded query would leave the assert above
+      # passing while checking nothing.
+      seed(u, a, [{"Other.md", "see [[b/Note]]"}])
+
+      assert [_ | _] =
+               Engram.TenantQueryCounter.count_matching_queries(
+                 fn -> get(u, a, %{"paths" => ["a/b/Note.md"]}) end,
+                 full_fetch?
+               )
+    end
+
+    test "a bare name still takes the shortest same-named note", %{user: u, a: a} do
+      seed(u, a, [
+        {"Deep/Folder/Note.md", "long"},
+        {"Ot/Note.md", "short"},
+        {"Source.md", "see [[Note]]"}
+      ])
+
+      assert {:ok, _, %{"notes" => [src]}} = get(u, a, %{"paths" => ["Source.md"]})
+      assert src["outgoing"] == ["Ot/Note.md"]
+    end
   end
 end

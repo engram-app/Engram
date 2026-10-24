@@ -754,7 +754,7 @@ defmodule EngramWeb.McpController do
         # arguments through `isError: true` so it can self-correct — a
         # protocol error just aborts the call (SEP-1303). The rejection is
         # unchanged: the handler still never runs.
-        error_result(msg)
+        error_result({:invalid_arguments, msg})
     end
   end
 
@@ -803,9 +803,10 @@ defmodule EngramWeb.McpController do
       :ok
     else
       {:error,
-       "Vault #{vault.name || vault.id} is read-only for this connection: #{tool.name} " <>
-         "changes notes and is not available there. Use a vault this connection can write, " <>
-         "or reconnect with write access to this one."}
+       {:vault_read_only,
+        "Vault #{vault.name || vault.id} is read-only for this connection: #{tool.name} " <>
+          "changes notes and is not available there. Use a vault this connection can write, " <>
+          "or reconnect with write access to this one."}}
     end
   end
 
@@ -1147,8 +1148,8 @@ defmodule EngramWeb.McpController do
         # is `content` — structuredContent is for programmatic use.
         {{:ok, result}, :ok, byte_size_safe(text)}
 
-      {:error, msg} ->
-        {error_result(msg), :error, byte_size_safe(msg)}
+      {:error, err} ->
+        {error_result(err), :error, byte_size_safe(Engram.MCP.ToolError.message(err))}
     end
   catch
     kind, reason ->
@@ -1329,7 +1330,7 @@ defmodule EngramWeb.McpController do
 
     case scope_vaults(all, conn) do
       [only] -> {:ok, only}
-      [] -> {:error, no_vault_message_for(all)}
+      [] -> {:error, {:vault_not_found, no_vault_message_for(all)}}
       many -> {:many, many}
     end
   end
@@ -1364,8 +1365,7 @@ defmodule EngramWeb.McpController do
   defp text_result(text),
     do: %{"content" => [%{"type" => "text", "text" => text}], "isError" => false}
 
-  defp error_result(msg),
-    do: {:ok, %{"content" => [%{"type" => "text", "text" => "Error: #{msg}"}], "isError" => true}}
+  defp error_result(err), do: {:ok, Engram.MCP.ToolError.result(err)}
 
   # -- Vault resolution --
 
@@ -1398,9 +1398,10 @@ defmodule EngramWeb.McpController do
         case resolve_bare_vault(user, conn) do
           {:many, _vaults} ->
             {:error,
-             "This connection can reach more than one vault — specify which. Pass " <>
-               "vault_id on this tool call, as either the vault's name or its UUID. " <>
-               "Call list_vaults to see them."}
+             {:vault_required,
+              "This connection can reach more than one vault — specify which. Pass " <>
+                "vault_id on this tool call, as either the vault's name or its UUID. " <>
+                "Call list_vaults to see them."}}
 
           ok_or_error ->
             ok_or_error
@@ -1428,14 +1429,15 @@ defmodule EngramWeb.McpController do
       {:error, {:ambiguous_ref, ids}} ->
         if Engram.Permissions.vault_scope(conn) == :all do
           {:error,
-           "#{length(ids)} vaults are named #{requested}. Pass a UUID or a slug " <>
-             "instead — slugs are unique. Candidates: #{Enum.join(ids, ", ")}."}
+           {:vault_ambiguous,
+            "#{length(ids)} vaults are named #{requested}. Pass a UUID or a slug " <>
+              "instead — slugs are unique. Candidates: #{Enum.join(ids, ", ")}."}}
         else
-          {:error, vault_denied_message(requested, conn)}
+          {:error, {:vault_not_found, vault_denied_message(requested, conn)}}
         end
 
       _ ->
-        {:error, vault_denied_message(requested, conn)}
+        {:error, {:vault_not_found, vault_denied_message(requested, conn)}}
     end
   end
 
@@ -1480,7 +1482,7 @@ defmodule EngramWeb.McpController do
   # Empty accessible set: distinguish "user has no vaults at all" (sync to make
   # one) from "the credential can reach none of the user's vaults" (a scope /
   # deleted-vault problem that syncing won't fix).
-  defp no_vault_message_for([]), do: "No vault found. Sync from Obsidian to create one."
+  defp no_vault_message_for([]), do: EngramWeb.FrontendUrl.no_vault_message()
 
   defp no_vault_message_for(_vaults),
     do:

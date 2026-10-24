@@ -136,6 +136,13 @@
                 "slug": {
                   "description": "URL-safe handle",
                   "type": "string"
+                },
+                "sync_blocked": {
+                  "description": "Present when this vault's Obsidian plugin must be updated before it syncs again",
+                  "enum": [
+                    "plugin_upgrade_required"
+                  ],
+                  "type": "string"
                 }
               },
               "required": [

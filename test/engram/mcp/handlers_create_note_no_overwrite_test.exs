@@ -28,7 +28,7 @@ defmodule Engram.MCP.HandlersCreateNoteNoOverwriteTest do
         actor: "api"
       )
 
-    assert {:error, msg} =
+    assert {:error, {:path_conflict, msg}} =
              Handlers.handle("create_note", user, vault, %{
                "title" => "Meeting Notes",
                "content" => "model text",
@@ -74,5 +74,53 @@ defmodule Engram.MCP.HandlersCreateNoteNoOverwriteTest do
                "content" => "fresh",
                "suggested_folder" => "Projects"
              })
+  end
+
+  # User feedback 2026-10-24 (ChatGPT): create_note put `# Title` above the
+  # `---` fence, so Obsidian no longer read the block as properties.
+  describe "frontmatter" do
+    # Scalar values only: the store re-emits YAML lists in block style, which
+    # is the store's normalisation, not what this test is about.
+    test "content that starts with frontmatter is stored as given, no heading on top",
+         %{user: user, vault: vault} do
+      content = "---\nstatus: draft\n---\nBody text\n"
+
+      assert {:ok, _, %{"path" => path}} =
+               Handlers.handle("create_note", user, vault, %{
+                 "title" => "Props",
+                 "content" => content,
+                 "suggested_folder" => "Projects"
+               })
+
+      {:ok, note} = Notes.get_note(user, vault, path)
+      assert note.content == content
+    end
+
+    test "append_to_note creating a missing note keeps its frontmatter on top",
+         %{user: user, vault: vault} do
+      text = "---\nstatus: new\n---\nfirst line"
+
+      assert {:ok, _, _} =
+               Handlers.handle("append_to_note", user, vault, %{
+                 "path" => "Inbox/Fresh.md",
+                 "text" => text
+               })
+
+      {:ok, note} = Notes.get_note(user, vault, "Inbox/Fresh.md")
+      assert note.content == text
+    end
+
+    test "content without frontmatter or H1 still gets the title heading",
+         %{user: user, vault: vault} do
+      assert {:ok, _, %{"path" => path}} =
+               Handlers.handle("create_note", user, vault, %{
+                 "title" => "Plain",
+                 "content" => "just text",
+                 "suggested_folder" => "Projects"
+               })
+
+      {:ok, note} = Notes.get_note(user, vault, path)
+      assert note.content == "# Plain\n\njust text"
+    end
   end
 end
