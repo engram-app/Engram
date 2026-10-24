@@ -4,8 +4,8 @@ defmodule Engram.Workers.InactivityCleanup do
 
   - **60 days inactive** → warning #1 email + stamp `inactivity_warning_60_at`.
   - **80 days inactive** → final-notice email + stamp `inactivity_warning_80_at`.
-  - **90 days inactive** → soft-delete: drop Qdrant points, S3 attachments,
-    set `users.deleted_at`. Clerk identity untouched.
+  - **90 days inactive** → soft-delete: set `users.deleted_at`, queue the
+    Qdrant drop. Clerk identity untouched.
   - **30 days soft-deleted** → hard-delete: remove user row (cascades to
     notes/vaults/attachments via FK), wipe S3 bucket prefix.
 
@@ -129,7 +129,9 @@ defmodule Engram.Workers.InactivityCleanup do
       case delete_after_days(user) do
         days when is_integer(days) and days > 0 ->
           cutoff = DateTime.add(now, -days * 86_400, :second)
-          if compare_lt?(last_active_at, cutoff), do: soft_delete(user)
+
+          if compare_lt?(last_active_at, cutoff),
+            do: per_user(user, :soft_delete, fn -> soft_delete(user) end)
 
         _ ->
           :skip
@@ -172,7 +174,34 @@ defmodule Engram.Workers.InactivityCleanup do
         skip_tenant_check: true
       )
 
-    Enum.each(users, &hard_delete/1)
+    Enum.each(users, fn user -> per_user(user, :hard_delete, fn -> hard_delete(user) end) end)
+  end
+
+  # One user's failure must not abort the rest of the run: the sweep only
+  # re-finds users by state, so a raise mid-loop leaves every later user for
+  # tomorrow, and a crash that repeats daily (one bad row) starves them
+  # forever. Lifecycle itself still raises, so a request-path caller
+  # (delete_self, the Clerk webhook) fails loudly and its retry re-runs it.
+  defp per_user(user, step, fun) do
+    fun.()
+  rescue
+    e ->
+      :telemetry.execute(
+        [:engram, :abuse, :inactivity_sweep_failed],
+        %{count: 1},
+        %{user_id: user.id, step: step}
+      )
+
+      Logger.error(
+        "Inactivity sweep step failed for one user, continuing",
+        Metadata.with_category(:error, :lifecycle,
+          user_id: user.id,
+          step: step,
+          reason: Metadata.safe_reason(e)
+        )
+      )
+
+      :error
   end
 
   defp hard_delete(user) do

@@ -286,6 +286,36 @@ defmodule Engram.Workers.InactivityCleanupTest do
       assert_receive {[:engram, :account, :deleted], ^ref, _, %{reason: :inactivity}}
     end
 
+    # A raise inside one user's soft delete used to abort the whole run, so
+    # every later user waited for tomorrow (and forever, if the bad row stayed).
+    test "one user's failing soft delete does not abort the sweep" do
+      a = insert(:user)
+      b = insert(:user)
+      set_last_active(a.id, 95)
+      set_last_active(b.id, 95)
+
+      # Both raise, so the order the sweep visits them in cannot matter.
+      stub(Engram.Email.ProviderMock, :send, fn _to, _subject, _html, _opts ->
+        raise "provider down"
+      end)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :abuse, :inactivity_sweep_failed]
+        ])
+
+      ExUnit.CaptureLog.capture_log(fn -> InactivityCleanup.__sweep_soft__() end)
+
+      assert %DateTime{} = Repo.reload!(a).deleted_at
+      assert %DateTime{} = Repo.reload!(b).deleted_at
+
+      for _ <- 1..2,
+          do:
+            assert_receive(
+              {[:engram, :abuse, :inactivity_sweep_failed], ^ref, _, %{step: :soft_delete}}
+            )
+    end
+
     test "legacy :abuse telemetry still fires alongside" do
       user = insert(:user)
       set_last_active(user.id, 95)
