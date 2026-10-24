@@ -277,9 +277,8 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(openMock).toHaveBeenCalledTimes(1);
 	});
 
-	// A trial checkout's first charge is $0; Apple Pay and Google Pay stall at
-	// action_required there in prod (#2203), so both are left out.
-	it("trial checkout offers every payment method except the wallets", async () => {
+	// Wallets hidden pending real-charge data (#2203).
+	it("plan checkout offers every payment method except the wallets", async () => {
 		mockBillingApi();
 		const openMock = vi.fn();
 		initializePaddleMock.mockImplementation(async () => ({

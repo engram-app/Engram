@@ -134,11 +134,11 @@ function startButton(): HTMLElement {
 	return first;
 }
 
-// $0 checkouts (trial start, payment-method update) leave out both wallets,
-// which stall at action_required there in prod (#2203), and keep the rest.
+// In-app checkouts (plan purchase, payment-method update) hide both wallets
+// pending real-charge data (#2203) and keep the rest.
 // Pure (no expect) so each test owns the assertion.
-const ZERO_AMOUNT_EXPECTED = { wallets: [], card: true, paypal: true };
-function zeroAmountMethods(methods: string[]) {
+const NO_WALLETS = { wallets: [], card: true, paypal: true };
+function walletView(methods: string[]) {
 	return {
 		wallets: methods.filter((m) => m === "apple_pay" || m === "google_pay"),
 		card: methods.includes("card"),
@@ -166,16 +166,14 @@ describe("BillingPage locale", () => {
 			await Promise.resolve();
 		});
 		await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
-		// A plan purchase is a $0-first-charge trial checkout: it also restricts
-		// payment methods (no Apple Pay or Google Pay; see paddle-checkout.ts).
+		// In-app checkouts also restrict payment methods (no Apple Pay or Google
+		// Pay; see paddle-checkout.ts).
 		expect(open.mock.calls[0]?.[0].settings).toEqual({
 			...INLINE_SETTINGS,
 			allowedPaymentMethods: expect.any(Array),
 			locale: "zh-Hans",
 		});
-		expect(zeroAmountMethods(open.mock.calls[0]?.[0].settings.allowedPaymentMethods)).toEqual(
-			ZERO_AMOUNT_EXPECTED,
-		);
+		expect(walletView(open.mock.calls[0]?.[0].settings.allowedPaymentMethods)).toEqual(NO_WALLETS);
 	});
 
 	it("passes the mapped rendered locale with the full settings to the payment-method update checkout", async () => {
@@ -192,17 +190,14 @@ describe("BillingPage locale", () => {
 		await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
 		expect(open.mock.calls[0]?.[0]).toEqual({
 			transactionId: "txn_1",
-			// An active subscription's payment-method update is a $0 transaction:
-			// same method allowlist as a trial checkout (no wallets).
+			// Same wallet-free method list as the plan checkout.
 			settings: {
 				...OVERLAY_SETTINGS,
 				allowedPaymentMethods: expect.any(Array),
 				locale: "zh-Hans",
 			},
 		});
-		expect(zeroAmountMethods(open.mock.calls[0]?.[0].settings.allowedPaymentMethods)).toEqual(
-			ZERO_AMOUNT_EXPECTED,
-		);
+		expect(walletView(open.mock.calls[0]?.[0].settings.allowedPaymentMethods)).toEqual(NO_WALLETS);
 	});
 
 	it("sends the current locale after a switch, without re-initializing Paddle", async () => {
@@ -225,9 +220,7 @@ describe("BillingPage locale", () => {
 			allowedPaymentMethods: expect.any(Array),
 			locale: "de",
 		});
-		expect(zeroAmountMethods(open.mock.calls[0]?.[0].settings.allowedPaymentMethods)).toEqual(
-			ZERO_AMOUNT_EXPECTED,
-		);
+		expect(walletView(open.mock.calls[0]?.[0].settings.allowedPaymentMethods)).toEqual(NO_WALLETS);
 		expect(initializePaddleMock).toHaveBeenCalledTimes(1);
 	});
 });

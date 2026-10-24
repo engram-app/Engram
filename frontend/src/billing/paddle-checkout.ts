@@ -10,18 +10,16 @@ import {
 	type PaddleEventData,
 } from "@paddle/paddle-js";
 
-// Payment methods offered on a $0 checkout (a trial that requires a payment
-// method, or an active subscription's payment-method update). Mapped over the
+// Payment methods offered when wallets are hidden. Mapped over the
 // `AvailablePaymentMethod` union, so a paddle-js bump that adds a method fails
 // the type check here rather than silently hiding it, and each value must be
 // its own key. Paddle still shows only the methods enabled and available on
 // the account.
-// The wallets are off: prod audit (#2203) of $0 trial checkouts shows Apple
-// Pay stalling at `action_required` with no error on 4 of 8 attempts and
+// Wallets hidden pending real-charge data, see #2203: on $0 trial checkouts
+// Apple Pay stalled at `action_required` with no error on 4 of 8 attempts and
 // Google Pay on 3 of 3, against PayPal 0 of 7 and card 1 of about 17.
-// Suspected (not confirmed with Paddle): their zero-amount authorization
-// never completes. Reversible: set each back to its own name.
-const ON_ZERO_AMOUNT: { [M in AvailablePaymentMethod]: M | false } = {
+// Reversible: set each back to its own name.
+const WITHOUT_WALLETS: { [M in AvailablePaymentMethod]: M | false } = {
 	alipay: "alipay",
 	apple_pay: false,
 	bancontact: "bancontact",
@@ -42,7 +40,7 @@ const ON_ZERO_AMOUNT: { [M in AvailablePaymentMethod]: M | false } = {
 	wechat_pay: "wechat_pay",
 };
 
-const ZERO_AMOUNT_METHODS = Object.values(ON_ZERO_AMOUNT).filter((m) => m !== false);
+const NO_WALLET_METHODS = Object.values(WITHOUT_WALLETS).filter((m) => m !== false);
 
 /** What Paddle.js needs to boot: the public client-side token + environment. */
 export interface PaddleClientConfig {
@@ -53,10 +51,8 @@ export interface PaddleClientConfig {
 export const INLINE_FRAME_TARGET = "paddle-checkout";
 
 export interface CheckoutOptions {
-	/** The checkout authorizes $0: plan purchases (every plan price carries a
-	 *  7-day trial, as the plan cards promise) and payment-method updates
-	 *  (Paddle's update transaction is $0 for an active subscription). */
-	zeroAmount?: boolean;
+	/** Leave out Apple Pay and Google Pay (see WITHOUT_WALLETS). */
+	hideWallets?: boolean;
 }
 
 // Paddle's branded-inline-checkout dashboard config (Paddle > Checkout
@@ -70,11 +66,11 @@ export interface CheckoutOptions {
 // the locale is layered on at call time. Each Checkout.open gets the FULL
 // object, because Paddle.js's merge of partial per-open settings over the
 // init defaults is undocumented and this is the payments path.
-// `zeroAmount` is per-open only, never in the init defaults, so the /pay
-// page (renewals, invoices: real amounts) keeps every method.
+// `hideWallets` is per-open only, never in the init defaults, so the /pay
+// page (Paddle email links) keeps every method.
 export function checkoutSettings(
 	isInline: boolean,
-	{ zeroAmount = false }: CheckoutOptions = {},
+	{ hideWallets = false }: CheckoutOptions = {},
 ): CheckoutSettings {
 	const display: CheckoutSettings = isInline
 		? {
@@ -91,7 +87,7 @@ export function checkoutSettings(
 				variant: "one-page",
 			}
 		: { displayMode: "overlay", theme: "light", variant: "one-page" };
-	return zeroAmount ? { ...display, allowedPaymentMethods: ZERO_AMOUNT_METHODS } : display;
+	return hideWallets ? { ...display, allowedPaymentMethods: NO_WALLET_METHODS } : display;
 }
 
 // `locale: "en"` is only the default; every Checkout.open passes the full
