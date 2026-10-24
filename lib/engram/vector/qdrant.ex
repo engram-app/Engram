@@ -37,7 +37,7 @@ defmodule Engram.Vector.Qdrant do
   @default_collection "obsidian_notes"
 
   # The payload indexes (legacy and v5, by server version) are
-  # `QdrantLayout.payload_indexes/2`.
+  # `QdrantLayout.payload_indexes/3`.
 
   # The largest request shapes any caller sends, so the Qdrant Cloud strict
   # limits (`QdrantLayout.desired_strict/1`) can sit above them with headroom.
@@ -1331,7 +1331,7 @@ defmodule Engram.Vector.Qdrant do
     col = col || collection()
 
     legacy =
-      if legacy_filter_fields?() or not v5_payload_format?(),
+      if legacy_points?(),
         do: [{legacy_note_filter(user_id, vault_id, path_hmac), payload, []}],
         else: []
 
@@ -1737,27 +1737,51 @@ defmodule Engram.Vector.Qdrant do
   def chunk_text_read?,
     do: ServiceConfig.get(:chunk_text_read, false) == true or write_v5_layout?()
 
-  defp legacy_filter_fields?, do: ServiceConfig.get(:legacy_filter_fields, true)
+  @doc "Whether filters still match the legacy (v3/v4) keys (`LEGACY_FILTER_FIELDS`)."
+  @spec legacy_filter_fields?() :: boolean()
+  def legacy_filter_fields?, do: ServiceConfig.get(:legacy_filter_fields, true)
+
+  @doc """
+  Whether legacy-format points can exist and be filtered: legacy filters on,
+  or the v5 format off (every point is legacy then). Only these points carry
+  ciphertext; a v5 payload has none (`Engram.Indexing.PayloadV5`).
+  """
+  @spec legacy_points?() :: boolean()
+  def legacy_points?, do: legacy_filter_fields?() or not v5_payload_format?()
+
+  @doc """
+  The legacy-key condition alone, for a caller that must touch only
+  legacy-format points (the DEK sweep). Use only while `legacy_points?/0`:
+  the v3 cluster has no index on these keys, and strict mode 400s.
+  """
+  @spec legacy_match_filter(:user | :vault | :path | :folder | :type | :tags, term()) :: map()
+  def legacy_match_filter(field, value),
+    do: %{key: Map.fetch!(@legacy_keys, field), match: match(value)}
 
   @doc """
   One filter condition for `field` equal to `value` (a list matches any), in
   both payload formats. `:user`/`:vault` take ids as stored in Postgres;
   `:path`/`:folder`/`:type`/`:tags` take the base64 HMACs the legacy filters
   use.
+
+  With the v5 format on and legacy filters off it never emits a legacy key
+  (the v3 cluster has no index for one). A value with no v5 form there (an
+  empty list, a malformed HMAC) matches nothing on the v5 key: fail closed.
   """
   @spec match_filter(:user | :vault | :path | :folder | :type | :tags, term()) :: map()
   def match_filter(field, value) do
-    legacy = %{key: Map.fetch!(@legacy_keys, field), match: match(value)}
+    legacy = legacy_match_filter(field, value)
+    v5_key = PayloadKeys.short(Map.fetch!(@v5_keys, field))
 
     case v5_payload_format?() && v5_value(field, value) do
-      v when v in [nil, false] ->
-        legacy
-
-      v ->
-        v5 = %{key: PayloadKeys.short(Map.fetch!(@v5_keys, field)), match: match(v)}
-        if legacy_filter_fields?(), do: %{should: [legacy, v5]}, else: v5
+      false -> legacy
+      nil -> if legacy_filter_fields?(), do: legacy, else: %{key: v5_key, match: %{any: []}}
+      v -> v5_or_both(legacy, %{key: v5_key, match: match(v)})
     end
   end
+
+  defp v5_or_both(legacy, v5),
+    do: if(legacy_filter_fields?(), do: %{should: [legacy, v5]}, else: v5)
 
   @doc "A range condition on `fm_timestamp` / `fm_created`, in both formats."
   @spec range_filter(:fm_timestamp | :fm_created, map()) :: map()
@@ -1827,9 +1851,9 @@ defmodule Engram.Vector.Qdrant do
   defp legacy_note_filter(user_id, vault_id, path_hmac) do
     %{
       must: [
-        %{key: "user_id", match: %{value: user_id}},
-        %{key: "vault_id", match: %{value: vault_id}},
-        %{key: "path_hmac", match: %{value: path_hmac}}
+        legacy_match_filter(:user, user_id),
+        legacy_match_filter(:vault, vault_id),
+        legacy_match_filter(:path, path_hmac)
       ]
     }
   end
@@ -1865,7 +1889,7 @@ defmodule Engram.Vector.Qdrant do
     # OAuth grant (and a subset-restricted API key) needs: without it the only
     # options were one query per vault or dropping the filter entirely, and
     # dropping it leaks every vault the credential was scoped away from (#729).
-    # `vault_id` is already a payload index (`QdrantLayout.payload_indexes/2`), so
+    # `vault_id` is already a payload index (`QdrantLayout.payload_indexes/3`), so
     # `any` needs no new index — same shape as tags_hmac below.
     must =
       case vault_id do

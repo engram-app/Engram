@@ -52,7 +52,7 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
     # The global graph stays while legacy and v5 points coexist (Task 18.1).
     assert info["config"]["hnsw_config"]["m"] == 16
 
-    for {field, schema} <- QdrantLayout.payload_indexes(ctx.version, true) do
+    for {field, schema} <- QdrantLayout.payload_indexes(ctx.version, true, true) do
       have = info["payload_schema"][field]["params"]
       assert Enum.all?(schema, fn {k, v} -> have[k] == v end), "#{field}: #{inspect(have)}"
     end

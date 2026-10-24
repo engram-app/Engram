@@ -525,7 +525,7 @@ defmodule Engram.Search do
     # keyword when the query embed fails.
     mode = Keyword.get(opts, :mode, :hybrid)
     limit = opts |> Keyword.get(:limit, 5) |> clamp_limit()
-    tags = Keyword.get(opts, :tags)
+    tags = opts |> Keyword.get(:tags) |> tag_filter()
     folder = Keyword.get(opts, :folder)
     type = Keyword.get(opts, :type)
     date_bounds = date_bound_kw(opts)
@@ -808,6 +808,17 @@ defmodule Engram.Search do
 
   defp maybe_put_folder_hmac(kw, filter_key, folder),
     do: Keyword.put(kw, :folder_hmac, Base.encode64(Engram.Crypto.hmac_field(filter_key, folder)))
+
+  # No tags named is no tag filter: MCP clients send `"tags": []`, and REST
+  # `tags[]=` decodes as `[""]`. Left in, either matched nothing.
+  defp tag_filter(tags) when is_list(tags) do
+    case Enum.reject(tags, &(&1 == "")) do
+      [] -> nil
+      named -> named
+    end
+  end
+
+  defp tag_filter(tags), do: tags
 
   defp maybe_put_tags_hmac(kw, _filter_key, nil), do: kw
 

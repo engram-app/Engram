@@ -20,7 +20,7 @@ Qdrant 1.18.2, collection `engram_notes`:
 Until #1609, payload indexes were created only right after a FRESH collection create (the `{:ok, :created}` branch). Any field added to `@payload_index_fields` later (`type_hmac`, `fm_timestamp`, `fm_created`) never reached an already-existing collection. `folder_hmac` and `tags_hmac` were filtered on but never listed at all.
 
 ## Fix (#1609)
-`do_ensure_collection/2` calls `ensure_payload_indexes/2` on both branches. On a 409 (exists), `verify_collection_shape/1` already GETs `collection_info`; it now also returns the `payload_schema` keys, and only the missing fields get a `PUT /collections/<col>/index?wait=true`. A fully indexed collection costs no extra requests. The whole call is memoised per node in `:persistent_term` (#1501), so this runs once per boot.
+`do_ensure_collection/2` calls `ensure_payload_indexes/3` on both branches. On a 409 (exists), `verify_collection_shape/1` already GETs `collection_info`; it now also returns the `payload_schema` keys, and only the missing fields get a `PUT /collections/<col>/index?wait=true`. A fully indexed collection costs no extra requests. The whole call is memoised per node in `:persistent_term` (#1501), so this runs once per boot.
 
 ## Rule going forward
 Any new filter key MUST be added to `@payload_index_fields` (keyword: equality/any-match) or `@integer_payload_index_fields` (range). It then self-heals on the next deploy. A filter key missing from both lists works on staging and 400s on prod.
@@ -36,7 +36,7 @@ Any new filter key MUST be added to `@payload_index_fields` (keyword: equality/a
 - Staging green says nothing about filters. Check prod `payload_schema` when a filter-only search fails.
 
 ## File Anchors
-- `lib/engram/vector/qdrant.ex`: `@payload_index_fields`, `@integer_payload_index_fields`, `ensure_collection/2`, `ensure_payload_indexes/2`, `verify_collection_shape/1`
+- `lib/engram/vector/qdrant.ex`: `@payload_index_fields`, `@integer_payload_index_fields`, `ensure_collection/2`, `ensure_payload_indexes/3`, `verify_collection_shape/1`
 - `test/engram/vector/qdrant_collection_test.exs`
 - `lib/engram_web/controllers/search_controller.ex` (`search_failed`), `lib/engram/mcp/handlers.ex` (`render_search/2`)
 

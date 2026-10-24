@@ -34,7 +34,8 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           on_upsert: nil,
           payload_status: 200,
           scroll_status: nil,
-          v5_indexes: false
+          v5_indexes: false,
+          legacy_indexes: true
         }
       end)
 
@@ -290,6 +291,23 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   # A v5 note whose row no longer decrypts cannot be healed. Left NULL, the
   # daily re-check would requeue its user forever; it is marked (never
   # deleted), counted, and skipped by the re-check until a pass rewrites it.
+  test "on the v3 cluster the heal filters on v5 keys only (no strict 400)", ctx do
+    v3_on(ctx)
+
+    for id <- point_ids(ctx.stale),
+        do: Agent.update(ctx.store, &put_in(&1.points[id], retired_v5(ctx)))
+
+    {1, _} =
+      Repo.update_all(
+        from(n in Note, where: n.id == ^ctx.stale.id),
+        [set: [content_ciphertext: :crypto.strong_rand_bytes(48)]],
+        skip_tenant_check: true
+      )
+
+    assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+    assert reload(ctx.stale).payload_hash == ReconcileNotePayloads.undecryptable_stamp()
+  end
+
   test "an undecryptable v5 note is marked, counted, and not re-picked", ctx do
     v5_on(ctx)
 
@@ -483,6 +501,14 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     Agent.update(ctx.store, &%{&1 | v5_indexes: true})
   end
 
+  # The v3 cluster: v5 on and LEGACY_FILTER_FIELDS=false, so the fake has
+  # no legacy index and refuses any filter on a legacy key, as v3 would.
+  defp v3_on(ctx) do
+    v5_on(ctx)
+    Engram.ServiceConfig.put_override(:legacy_filter_fields, false)
+    Agent.update(ctx.store, &%{&1 | legacy_indexes: false})
+  end
+
   # A v5 point a rotation left on the retired key. `u` is the tenant id, not
   # an HMAC, so a rotation never changes it.
   defp retired_v5(ctx), do: %{"u" => FilterId.uuid(ctx.user.id), "y" => "b2xk"}
@@ -510,7 +536,9 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       scroll? and scroll_status != nil ->
         Plug.Conn.send_resp(conn, scroll_status, "{}")
 
-      scroll? and unindexed(body["filter"], Agent.get(store, & &1.v5_indexes)) != [] ->
+      scroll? and
+          unindexed(body["filter"], Agent.get(store, &{&1.v5_indexes, &1.legacy_indexes})) !=
+            [] ->
         # Qdrant Cloud strict mode, `unindexed_filtering_retrieve: false`.
         Plug.Conn.send_resp(conn, 400, ~s({"status":{"error":"Bad request: Index required"}}))
 
@@ -519,8 +547,8 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     end
   end
 
-  defp unindexed(filter, v5?) do
-    indexed = for {key, _} <- QdrantLayout.payload_indexes(nil, v5?), do: key
+  defp unindexed(filter, {v5?, legacy?}) do
+    indexed = for {key, _} <- QdrantLayout.payload_indexes(nil, v5?, legacy?), do: key
     filter |> filter_keys() |> Enum.reject(&(&1 in indexed))
   end
 

@@ -74,6 +74,56 @@ defmodule Engram.Crypto.UserDekRotationTest do
     {:ok, user: user}
   end
 
+  # Only legacy-format points hold ciphertext (v5 payloads carry no text,
+  # `Engram.Indexing.PayloadV5`), so the sweep scrolls exactly those, on the
+  # legacy `user_id` key. With the v5 format on and legacy filters off (the
+  # v3 cluster) there are none and `user_id` has no index, so a scroll there
+  # would 400 under strict mode: the sweep makes no Qdrant call (#2198).
+  describe "rotate_user/1 Qdrant sweep scope" do
+    setup %{user: user} do
+      bypass = Bypass.open()
+      Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+      Engram.ServiceConfig.put_override(:v5_payload_format, true)
+      # Recorded in ETS rather than sent as messages: the assertion reads
+      # every scroll the rotation made.
+      filters = :ets.new(:scroll_filters, [:bag, :public])
+
+      Bypass.stub(
+        bypass,
+        "POST",
+        "/collections/#{Qdrant.collection_name()}/points/scroll",
+        fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          :ets.insert(filters, {:filter, Jason.decode!(body)["filter"]})
+
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(
+            200,
+            Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => nil}})
+          )
+        end
+      )
+
+      %{user: user, filters: filters}
+    end
+
+    test "legacy filters on: scrolls legacy points only, on user_id", ctx do
+      Engram.ServiceConfig.put_override(:legacy_filter_fields, true)
+      assert :ok = UserDekRotation.rotate_user(ctx.user.id)
+      uid = ctx.user.id
+
+      assert [{:filter, %{"must" => [%{"key" => "user_id", "match" => %{"value" => ^uid}}]}}] =
+               :ets.lookup(ctx.filters, :filter)
+    end
+
+    test "legacy filters off: no scroll at all", ctx do
+      Engram.ServiceConfig.put_override(:legacy_filter_fields, false)
+      assert :ok = UserDekRotation.rotate_user(ctx.user.id)
+      assert :ets.lookup(ctx.filters, :filter) == []
+    end
+  end
+
   # A new encrypted table is INVISIBLE to rotation unless it is explicitly swept.
   # The failure mode is delayed and silent: the row stays wrapped under the old
   # dek, keeps decrypting for as long as that key is around, and only breaks
@@ -81,38 +131,6 @@ defmodule Engram.Crypto.UserDekRotationTest do
   # The `:user` cache holds `encrypted_dek`. A user struct cached before the
   # flip must never put the retired DEK back into DekCache: anything written
   # under it becomes unreadable once that entry expires.
-  # #2198: a raw `user_id` filter matches zero v5 points once the legacy
-  # fields are dropped, so the rotation would silently skip every point.
-  test "the Qdrant sweep scrolls on `u` under the v5 layout with legacy filters off",
-       %{user: user} do
-    bypass = Bypass.open()
-    Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
-    Engram.ServiceConfig.put_override(:v5_payload_format, true)
-    Engram.ServiceConfig.put_override(:legacy_filter_fields, false)
-    # Recorded in ETS: a message from the stub did not survive to the assert.
-    filters = :ets.new(:scroll_filters, [:bag, :public])
-    collection = Qdrant.collection_name()
-
-    Bypass.stub(bypass, "POST", "/collections/#{collection}/points/scroll", fn conn ->
-      {:ok, body, conn} = Plug.Conn.read_body(conn)
-      :ets.insert(filters, {:filter, Jason.decode!(body)["filter"]})
-
-      conn
-      |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(
-        200,
-        Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => nil}})
-      )
-    end)
-
-    assert :ok = UserDekRotation.rotate_user(user.id)
-
-    uid = FilterId.uuid(user.id)
-
-    assert [{:filter, %{"must" => [%{"key" => "u", "match" => %{"value" => ^uid}}]}}] =
-             :ets.lookup(filters, :filter)
-  end
-
   describe "rotate_user/1 vs the :user cache" do
     test "final_flip evicts the cached user on the writing node", %{user: user} do
       before = Engram.Accounts.get_user(user.id)

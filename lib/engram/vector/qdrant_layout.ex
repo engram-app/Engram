@@ -276,7 +276,7 @@ defmodule Engram.Vector.QdrantLayout do
   """
   @spec payload_indexes(Version.t() | nil, boolean(), boolean()) ::
           [{String.t(), String.t() | map()}]
-  def payload_indexes(version, v5?, legacy? \\ true) do
+  def payload_indexes(version, v5?, legacy?) do
     tenant? = tenant_layout?(version)
     legacy_only = if v5? or tenant?, do: [], else: @legacy_only
 

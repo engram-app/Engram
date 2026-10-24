@@ -1654,10 +1654,21 @@ defmodule Engram.Crypto.UserDekRotation do
 
   # `{:ok, skipped, next}`: `next` is nil once the scroll is done, else the
   # cursor after `:max_pages` pages. `:on_page` runs after each page.
+  #
+  # Only legacy-format points hold ciphertext (a v5 payload has none,
+  # `Engram.Indexing.PayloadV5`), so the scroll is on the legacy `user_id` key
+  # alone: paging the user's v5 points would find nothing to rewrap. Once no
+  # legacy point can exist (v5 on, legacy filters off: the v3 cluster, which
+  # has no `user_id` index) there is nothing to sweep and no call is made.
   defp sweep_qdrant(%User{id: user_id}, old_dek, new_dek, opts) do
+    if Qdrant.legacy_points?(),
+      do: sweep_legacy_points(user_id, old_dek, new_dek, opts),
+      else: {:ok, [], nil}
+  end
+
+  defp sweep_legacy_points(user_id, old_dek, new_dek, opts) do
     collection = Qdrant.collection_name()
-    # Layout-aware (#2198): a bare `user_id` matches no v5 point.
-    filter = %{must: [Qdrant.match_filter(:user, user_id)]}
+    filter = %{must: [Qdrant.legacy_match_filter(:user, user_id)]}
 
     walk = %{
       on_page: Keyword.get(opts, :on_page, fn -> :ok end),

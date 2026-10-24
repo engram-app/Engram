@@ -535,6 +535,36 @@ defmodule Engram.SearchTest do
                Search.search(user, vault, "query", tags: ["health", "labs"], mode: :vector)
     end
 
+    # An empty tag list (MCP `"tags": []`, REST `tags[]=` which Plug decodes
+    # as `[""]`) is no tag filter, on every layout. Under v5 with legacy off
+    # it used to send the legacy `tags_hmac` key, which v3 has no index for.
+    test "empty tags (MCP [] and REST [\"\"]) add no tag condition, legacy off",
+         %{bypass: bypass, user: user, vault: vault} do
+      Engram.ServiceConfig.put_override(:v5_payload_format, true)
+      Engram.ServiceConfig.put_override(:legacy_filter_fields, false)
+      Engram.MockEmbedder |> expect(:embed_texts, 2, fn _, _ -> {:ok, [[0.1, 0.1, 0.1]]} end)
+      test_pid = self()
+
+      Bypass.expect(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:must, Jason.decode!(body)["filter"]["must"]})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": []}))
+      end)
+
+      mcp = Keyword.put(Engram.MCP.Handlers.build_search_opts(%{"tags" => []}), :mode, :vector)
+
+      for opts <- [mcp, [tags: [""], mode: :vector]] do
+        assert {:ok, []} = Search.search(user, vault, "query", opts)
+        assert_receive {:must, must}
+        keys = must |> inspect()
+        refute keys =~ "tags_hmac"
+        refute keys =~ ~s("g")
+      end
+    end
+
     test "type filter is HMAC-translated and dates become unix bounds (OKF)",
          %{bypass: bypass, user: user, vault: vault} do
       Engram.MockEmbedder

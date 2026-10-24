@@ -175,6 +175,17 @@ defmodule Engram.Vector.QdrantFilterTest do
       assert Qdrant.range_filter(:fm_timestamp, %{gte: 1}) == %{key: "up", range: %{gte: 1}}
     end
 
+    # v3 has no legacy index, so a legacy key there is a strict-mode 400. A
+    # value with no v5 form (an empty list, a non-HMAC) fails closed on the
+    # v5 key instead of falling back to the legacy one.
+    test "with legacy fields off no value falls back to a legacy key" do
+      ServiceConfig.put_override(:legacy_filter_fields, false)
+
+      assert Qdrant.match_filter(:tags, []) == %{key: "g", match: %{any: []}}
+      assert Qdrant.match_filter(:type, []) == %{key: "y", match: %{any: []}}
+      assert Qdrant.match_filter(:folder, "notb64") == %{key: "f", match: %{any: []}}
+    end
+
     test "the tenant condition stays inside must, so it is still an AND" do
       %{must: must} = Qdrant.build_tenant_filter(user_id: @uuid, vault_id: @uuid)
       assert [%{should: [_, _]}, %{should: [_, _]}] = must
