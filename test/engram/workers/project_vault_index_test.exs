@@ -58,7 +58,12 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
     :ok =
       SharedDoc.update_doc(room, fn doc ->
         map = Yex.Doc.get_map(doc, CrdtIndexDoc.map_name())
-        Enum.each(entries, fn {path, id} -> Yex.Map.set(map, path, %{"note_id" => id}) end)
+
+        # One transaction, so a 5,000-entry seed is one update (one tail row),
+        # not 5,000 that outlast the unobserve call's timeout.
+        Yex.Doc.transaction(doc, fn ->
+          Enum.each(entries, fn {path, id} -> Yex.Map.set(map, path, %{"note_id" => id}) end)
+        end)
       end)
 
     ref = Process.monitor(room)
@@ -732,6 +737,159 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       # `released` must survive into the final report, not get overwritten by
       # pass 2's outcome (which never touches the already-released entry).
       assert_receive {:projection, %{unresolved: 0, released: 1}, %{phase: :converged}}, 2_000
+    end
+  end
+
+  # Prod 2026-10-23, vault f4cd93e6: a first sync left thousands of claims for
+  # creates that never landed. Each stale id got its own ReleaseIndexEntries
+  # job and log line (4,792, then 14,437+ in one wave), every job a separate
+  # index-room edit and encrypted tail append, and the client re-claimed the
+  # same ids so it repeated on every checkpoint. Web and worker tasks pinned.
+  describe "a stale-claim storm (2026-10-23)" do
+    defp stale_ids(n) do
+      ms = System.system_time(:millisecond) - :timer.hours(2)
+      for _ <- 1..n, do: UUIDv7.generate(ms)
+    end
+
+    defp release_jobs do
+      Repo.all(
+        from(j in Oban.Job,
+          where: j.worker == "Engram.Workers.ReleaseIndexEntries" and j.state == "available"
+        )
+      )
+    end
+
+    defp attach_release_telemetry do
+      test_pid = self()
+      handler = "release-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :crdt, :index_claim],
+        fn
+          _e, m, %{op: :release} = meta, _ -> send(test_pid, {:index_release, m, meta})
+          _e, _m, _meta, _ -> :ok
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+    end
+
+    defp count_messages(tag, n) do
+      receive do
+        {^tag, _m, _meta} -> count_messages(tag, n + 1)
+      after
+        200 -> n
+      end
+    end
+
+    test "5,000 stale claims enqueue ONE release job, applied as ONE index-room change", ctx do
+      attach_projection_telemetry()
+      ids = stale_ids(5_000)
+      seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
+
+      assert :ok = run(ctx)
+
+      jobs = release_jobs()
+
+      assert length(jobs) == 1,
+             "expected one batched release job for 5,000 stale claims, got #{length(jobs)}"
+
+      assert Enum.sort(hd(jobs).args["note_ids"]) == Enum.sort(ids)
+      assert_receive {:projection, %{released: 5_000, unresolved: 0}, _}, 2_000
+
+      attach_release_telemetry()
+      :ok = drain_releases()
+
+      assert_receive {:index_release, %{entries: 5_000}, _}, 2_000
+
+      assert count_messages(:index_release, 1) == 1,
+             "the whole batch must land as ONE index-room change"
+
+      assert index_entries(ctx) == %{}
+    end
+
+    test "a release job reads the notes once, however many ids it carries", ctx do
+      ids = stale_ids(50)
+      seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
+      assert :ok = run(ctx)
+      [job] = release_jobs()
+
+      ref = make_ref()
+      test_pid = self()
+
+      :telemetry.attach(
+        {__MODULE__, ref},
+        [:engram, :repo, :query],
+        fn _event, _measure, meta, _cfg ->
+          if meta[:source] == "notes", do: send(test_pid, {ref, meta[:query]})
+        end,
+        nil
+      )
+
+      try do
+        assert :ok = perform_job(Engram.Workers.ReleaseIndexEntries, job.args)
+      after
+        :telemetry.detach({__MODULE__, ref})
+      end
+
+      assert length(drain_queries(ref, [])) == 1
+      assert index_entries(ctx) == %{}
+    end
+
+    test "zero stale claims enqueue nothing", ctx do
+      real = note(ctx, "Old/real.md")
+      seed_index(ctx, [{"New/real.md", real.id}])
+
+      assert :ok = run(ctx)
+      assert release_jobs() == []
+    end
+
+    test "mixed fresh and stale: only the stale ids are released, in one job", ctx do
+      attach_projection_telemetry()
+      [s1, s2] = stale_ids(2)
+      in_flight = UUIDv7.generate()
+      real = note(ctx, "real.md")
+
+      seed_index(ctx, [
+        {"g1.md", s1},
+        {"g2.md", s2},
+        {"in-flight.md", in_flight},
+        {"real.md", real.id}
+      ])
+
+      assert :ok = run(ctx)
+
+      assert [job] = release_jobs()
+      assert Enum.sort(job.args["note_ids"]) == Enum.sort([s1, s2])
+      assert_receive {:projection, %{released: 2, unresolved: 1}, _}, 2_000
+    end
+
+    test "re-claimed ids are not released again inside the backoff window, then are", ctx do
+      attach_projection_telemetry()
+      ids = stale_ids(3)
+      entries = Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end)
+
+      seed_index(ctx, entries)
+      assert :ok = run(ctx)
+      assert [_job] = release_jobs()
+      assert_receive {:projection, %{released: 3, release_skipped: 0}, _}, 2_000
+      :ok = drain_releases()
+
+      # The client re-claims the same ids, as the incident's client did.
+      seed_index(ctx, entries)
+      assert :ok = run(ctx)
+
+      assert release_jobs() == [], "a repeat inside the window must not enqueue a release"
+      assert_receive {:projection, %{released: 0, release_skipped: 3}, _}, 2_000
+
+      Process.sleep(Engram.Cache.Registry.fetch!(:released_index_claims).ttl + 50)
+
+      assert :ok = run(ctx)
+      assert [job] = release_jobs()
+      assert Enum.sort(job.args["note_ids"]) == Enum.sort(ids)
+      assert_receive {:projection, %{released: 3, release_skipped: 0}, _}, 2_000
     end
   end
 
