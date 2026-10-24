@@ -9,6 +9,7 @@ defmodule Engram.Workers.AttachmentBlobGCTest do
   use Oban.Testing, repo: Engram.Repo
 
   import Ecto.Query
+  import ExUnit.CaptureLog
   import Engram.RlsCase, only: [as_prod_role: 1]
 
   alias Engram.{Attachments, Folders, Repo, Storage}
@@ -204,6 +205,83 @@ defmodule Engram.Workers.AttachmentBlobGCTest do
     assert :counters.get(fired, 1) == 1
     assert blob?(key)
     assert reload(tomb).storage_key == key
+  end
+
+  defp use_mock_storage do
+    prev = Application.get_env(:engram, :storage)
+    Application.put_env(:engram, :storage, Engram.MockStorage)
+    on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+    Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+    prev
+  end
+
+  defp backdate_claim!(att, hours) do
+    at = DateTime.add(DateTime.utc_now(), -hours * 3600, :second)
+
+    {1, _} =
+      Repo.update_all(
+        from(a in Attachment, where: a.id == ^att.id),
+        [set: [blob_gc_claimed_at: at]],
+        skip_tenant_check: true
+      )
+  end
+
+  # The claim commits before the S3 call. A run that dies in between (deploy,
+  # OOM, timeout) must not orphan the blob: the tombstone keeps its key, and
+  # once the claim is stale the next run claims it again.
+  test "a crash between claim and delete is recovered after the stale threshold", %{
+    user: user,
+    vault: vault
+  } do
+    att = put_att(user, vault, "a.png")
+    :ok = Attachments.delete_attachment(user, vault, "a.png")
+    backdate!(att, 48)
+    prev = use_mock_storage()
+    Mox.stub(Engram.MockStorage, :delete_many, fn _keys -> raise "node lost" end)
+
+    assert_raise RuntimeError, "node lost", fn -> AttachmentBlobGC.sweep() end
+
+    claimed = reload(att)
+    assert claimed.storage_key == att.storage_key
+    assert claimed.blob_gc_claimed_at
+
+    Application.put_env(:engram, :storage, prev)
+
+    # A fresh claim belongs to a run that may still be going: left alone.
+    assert AttachmentBlobGC.sweep() == 0
+    assert blob?(att.storage_key)
+
+    backdate_claim!(att, 2)
+    assert AttachmentBlobGC.sweep() == 1
+    refute blob?(att.storage_key)
+    assert %{storage_key: nil, blob_gc_claimed_at: nil} = reload(att)
+  end
+
+  test "finalize does not clear a key that changed after the claim", %{
+    user: user,
+    vault: vault
+  } do
+    att = put_att(user, vault, "a.png")
+    :ok = Attachments.delete_attachment(user, vault, "a.png")
+    backdate!(att, 48)
+    use_mock_storage()
+    other_key = "#{user.id}/#{vault.id}/objects/#{Ecto.UUID.generate()}"
+
+    Mox.stub(Engram.MockStorage, :delete_many, fn keys ->
+      # The row moves under the run, between its delete and its finalize.
+      Repo.update_all(
+        from(a in Attachment, where: a.id == ^att.id),
+        [set: [storage_key: other_key]],
+        skip_tenant_check: true
+      )
+
+      Engram.Storage.InMemory.delete_many(keys)
+    end)
+
+    log = capture_log(fn -> assert AttachmentBlobGC.sweep() == 0 end)
+
+    assert reload(att).storage_key == other_key
+    assert log =~ "attachment_blob_gc: finalize matched fewer rows than it deleted"
   end
 
   describe "under enforced RLS with no maintenance pool" do

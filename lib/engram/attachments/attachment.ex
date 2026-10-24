@@ -29,6 +29,9 @@ defmodule Engram.Attachments.Attachment do
     field :mtime, :float
     field :storage_key, :string
     field :deleted_at, :utc_datetime
+    # Set while `Engram.Workers.AttachmentBlobGC` owns this tombstone's blob
+    # delete; cleared when it finishes (a stale stamp is re-claimed).
+    field :blob_gc_claimed_at, :utc_datetime_usec
     # Sync change-log seq (monotonic per vault). Stamped on every write.
     field :seq, :integer
     # Sync resurrection-parity counter (mirrors notes.version). Starts at 1 on

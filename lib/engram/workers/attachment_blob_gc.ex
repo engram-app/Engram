@@ -9,13 +9,21 @@ defmodule Engram.Workers.AttachmentBlobGC do
   bytes go later, here, the way GitLab LFS, Nextcloud and Immich do it.
 
   A tombstone is reaped once it is `@grace_hours` old, still holds a
-  `storage_key`, and no live row references that key. Per vault, per batch,
-  one transaction locks the vault row (the lock every key-assigning write
-  takes first), locks the tombstones `FOR UPDATE SKIP LOCKED`, re-checks the
-  live-row condition under those locks and clears their `storage_key`. Only
-  after that commits are exactly those blobs deleted, so the destructive
-  call never races a live row gaining the key. A key whose delete fails is
-  written back onto its tombstone and retried on the next run. Pages are
+  `storage_key`, and no live row references that key. Per vault and batch,
+  in three phases so no transaction is held across S3 and no crash orphans
+  a blob:
+
+    1. claim: one short transaction locks the vault row, then the tombstones
+       `FOR UPDATE SKIP LOCKED`, re-checks the live-row condition under those
+       locks, and stamps `blob_gc_claimed_at`. The key stays on the row.
+    2. delete the claimed blobs, outside any transaction.
+    3. finalize: clear `storage_key` and the stamp for the keys S3 confirmed,
+       guarded by key and stamp; clear only the stamp for failed keys so the
+       next run retries.
+
+  A run that dies between 1 and 3 leaves stamp and key in place; once the
+  stamp is older than `@stale_claim_minutes` the row is eligible again and
+  is re-claimed (re-checked) and re-deleted, which is idempotent. Pages are
   keyset by id, so a stuck key never blocks the rows after it.
 
   Recovery window: `@grace_hours`, plus the bucket's noncurrent-version
@@ -40,6 +48,9 @@ defmodule Engram.Workers.AttachmentBlobGC do
   require Logger
 
   @grace_hours 24
+  # Well above the 15 min job timeout: a claim this old belongs to a run
+  # that died, so it may be taken again.
+  @stale_claim_minutes 60
   @batch 1_000
 
   @impl Oban.Worker
@@ -80,8 +91,10 @@ defmodule Engram.Workers.AttachmentBlobGC do
   # Unlocked, and only to find work: every decision is re-made under the
   # locks in `claim/3`.
   defp candidate_vaults(cutoff) do
+    stale = DateTime.add(DateTime.utc_now(), -@stale_claim_minutes * 60, :second)
+
     query =
-      from(a in eligible(cutoff),
+      from(a in eligible(cutoff, stale),
         distinct: true,
         order_by: a.vault_id,
         select: a.vault_id
@@ -92,28 +105,33 @@ defmodule Engram.Workers.AttachmentBlobGC do
 
   defp sweep_vault(vault_id, cutoff, after_id, reaped) do
     case claim(vault_id, cutoff, after_id) do
-      {[], _last} ->
+      {[], _claimed_at, _last} ->
         reaped
 
-      {claimed, last} ->
-        n = reaped + delete_claimed(claimed)
+      {claimed, claimed_at, last} ->
+        n = reaped + finish(claimed, claimed_at)
         if last, do: sweep_vault(vault_id, cutoff, last, n), else: n
     end
   end
 
-  # ONE transaction per batch, so each key has one owner who commits before
-  # the destructive call (#2159 follow-up):
-  #   1. the vault row, FOR NO KEY UPDATE: the same lock every write that
-  #      gives a row a key takes first (LOCK ORDER, `Engram.Vaults`), so no
-  #      live row can gain a key in this vault until this commits;
-  #   2. the tombstones, FOR UPDATE SKIP LOCKED, re-checked under those locks
-  #      that no live row holds the key;
-  #   3. their storage_key cleared; the keys read in step 2 are now this
-  #      batch's.
-  # Only after commit are those blobs deleted (`delete_claimed/1`). Returns
-  # `{claimed, last_id}`, `last_id` nil when this was the vault's last page.
+  # Phase 1, the claim: ONE short transaction with no I/O.
+  #   1. the vault row, FOR NO KEY UPDATE (see the invariant below);
+  #   2. the eligible tombstones, FOR UPDATE SKIP LOCKED, with the "no live
+  #      row has this key" check re-made as a fresh statement under the lock;
+  #   3. `blob_gc_claimed_at` stamped on them. `storage_key` is KEPT.
+  # Returns `{[{id, key}], claimed_at, last_id}`; `last_id` is nil on the
+  # vault's last page.
+  #
+  # Invariant the vault lock relies on: a key is only ever minted fresh (every
+  # upload) or kept by its own live row (rename, restore, DEK rotation); no
+  # path copies a tombstone's key onto a live row. Writers commit key changes
+  # under the vault row lock (via `next_seq!`/`lock_seq!`). A future path that
+  # copies a tombstone's key must read it AFTER taking that lock, or this
+  # re-check cannot see it.
   defp claim(vault_id, cutoff, after_id) do
     repo = Repo.maintenance()
+    claimed_at = DateTime.utc_now()
+    stale = DateTime.add(claimed_at, -@stale_claim_minutes * 60, :second)
 
     {:ok, result} =
       Repo.cross_tenant(fn ->
@@ -124,7 +142,7 @@ defmodule Engram.Workers.AttachmentBlobGC do
             )
 
           query =
-            from(a in eligible(cutoff),
+            from(a in eligible(cutoff, stale),
               where: a.vault_id == ^vault_id,
               order_by: a.id,
               limit: @batch,
@@ -133,26 +151,30 @@ defmodule Engram.Workers.AttachmentBlobGC do
             )
 
           query = if after_id, do: where(query, [a], a.id > ^after_id), else: query
-          # Keys read under the lock: RETURNING would give the new (nil) value.
           rows = repo.all(query)
           ids = Enum.map(rows, &elem(&1, 0))
 
           {_n, _} =
-            repo.update_all(from(a in Attachment, where: a.id in ^ids), set: [storage_key: nil])
+            repo.update_all(from(a in Attachment, where: a.id in ^ids),
+              set: [blob_gc_claimed_at: claimed_at]
+            )
 
-          {rows, if(length(rows) == @batch, do: List.last(ids))}
+          {rows, claimed_at, if(length(rows) == @batch, do: List.last(ids))}
         end)
       end)
 
     result
   end
 
-  # A tombstone past the grace window that still holds a key no live row has.
-  defp eligible(cutoff) do
+  # A tombstone past the grace window that still holds a key no live row
+  # has, unclaimed or holding a claim older than the stale threshold (a run
+  # that died between claim and finalize).
+  defp eligible(cutoff, stale) do
     from(a in Attachment,
       as: :tomb,
       where:
         not is_nil(a.deleted_at) and a.deleted_at < ^cutoff and not is_nil(a.storage_key) and
+          (is_nil(a.blob_gc_claimed_at) or a.blob_gc_claimed_at < ^stale) and
           not exists(
             from(l in Attachment,
               where: l.storage_key == parent_as(:tomb).storage_key and is_nil(l.deleted_at),
@@ -162,26 +184,55 @@ defmodule Engram.Workers.AttachmentBlobGC do
     )
   end
 
-  # Deletes the blobs whose keys this batch committed. A key whose delete
-  # fails goes back on its tombstone, so the next run retries it with the
-  # same claim protocol (no pending table: the tombstone is the record).
-  # Returns how many blobs are gone.
-  defp delete_claimed(claimed) do
+  # Phases 2 and 3: delete the claimed blobs outside any transaction, then
+  # finalize. Deleted keys: `storage_key` and the stamp cleared, guarded by
+  # the key AND this run's stamp, so a row that changed or was re-claimed
+  # since is left alone. Failed keys: the stamp cleared, so the next run
+  # retries. A crash anywhere here leaves the stamp and the key, and the
+  # stale threshold brings the row back. Returns how many were reaped.
+  defp finish(claimed, claimed_at) do
     gone = deleted_keys(claimed)
-    failed = Enum.reject(claimed, fn {_id, key} -> MapSet.member?(gone, key) end)
-    Enum.each(failed, &restore_key/1)
-    length(claimed) - length(failed)
+    {done, failed} = Enum.split_with(claimed, fn {_id, key} -> MapSet.member?(gone, key) end)
+
+    reaped =
+      finalize(done, claimed_at,
+        set: [storage_key: nil, blob_gc_claimed_at: nil],
+        label: "deleted"
+      )
+
+    _ = finalize(failed, claimed_at, set: [blob_gc_claimed_at: nil], label: "released")
+    reaped
   end
 
-  defp restore_key({id, key}) do
-    Repo.cross_tenant(fn ->
-      Repo.maintenance().update_all(
-        from(a in Attachment,
-          where: a.id == ^id and is_nil(a.storage_key) and not is_nil(a.deleted_at)
-        ),
-        set: [storage_key: key]
+  defp finalize([], _claimed_at, _opts), do: 0
+
+  defp finalize(rows, claimed_at, set: set, label: label) do
+    ids = Enum.map(rows, &elem(&1, 0))
+    keys = Enum.map(rows, &elem(&1, 1))
+
+    {_n, matched} =
+      Repo.cross_tenant(fn ->
+        Repo.maintenance().update_all(
+          from(a in Attachment,
+            where:
+              a.id in ^ids and a.storage_key in ^keys and a.blob_gc_claimed_at == ^claimed_at,
+            select: a.id
+          ),
+          set: set
+        )
+      end)
+
+    if length(matched) < length(rows) do
+      Logger.warning(
+        "attachment_blob_gc: finalize matched fewer rows than it #{label}",
+        Metadata.with_category(:warning, :oban,
+          key_count: length(rows),
+          total_count: length(matched)
+        )
       )
-    end)
+    end
+
+    length(matched)
   end
 
   # The keys whose blob is gone. One batched call; if any key in it failed,
