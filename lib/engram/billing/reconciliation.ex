@@ -368,7 +368,7 @@ defmodule Engram.Billing.Reconciliation do
   @stalled_scan_window_seconds 5 * 60
 
   @doc "Width of one stalled-scan window, equal to the scan's cron interval."
-  @spec stalled_scan_window_seconds() :: pos_integer()
+  @spec stalled_scan_window_seconds() :: 300
   def stalled_scan_window_seconds, do: @stalled_scan_window_seconds
 
   @doc """
