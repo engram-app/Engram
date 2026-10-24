@@ -105,7 +105,7 @@ defmodule Engram.MCP.HandlersInsertSectionTest do
     assert {:error, "heading is required for mode insert_section"} =
              insert_section(u, v, %{"content" => "y"})
 
-    assert {:error, "Note not found: Gone.md"} =
+    assert {:error, {:note_not_found, "Note not found: Gone.md"}} =
              Handlers.handle("edit_note", u, v, %{
                "path" => "Gone.md",
                "mode" => "insert_section",

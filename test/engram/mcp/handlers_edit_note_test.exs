@@ -91,7 +91,7 @@ defmodule Engram.MCP.HandlersEditNoteTest do
     big = String.duplicate("x", Notes.max_note_bytes() - 10)
     {:ok, _} = Notes.upsert_note(u, v, %{"path" => "N.md", "content" => big}, actor: "api")
 
-    assert {:error, msg} =
+    assert {:error, {:note_too_large, msg}} =
              Handlers.handle("append_to_note", u, v, %{
                "path" => "N.md",
                "text" => String.duplicate("y", 100)

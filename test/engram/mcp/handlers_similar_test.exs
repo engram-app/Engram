@@ -173,7 +173,7 @@ defmodule Engram.MCP.HandlersSimilarTest do
     other_vault = insert(:vault, user: other_user)
     note_with_points(other_user, other_vault, "S.md", 1, true)
 
-    assert {:error, "Note not found: S.md"} =
+    assert {:error, {:note_not_found, "Note not found: S.md"}} =
              Handlers.handle("search_notes", u, v, %{"similar_to" => "S.md"})
   end
 
@@ -184,7 +184,7 @@ defmodule Engram.MCP.HandlersSimilarTest do
     other = insert(:vault, user: u)
     note_with_points(u, other, "S.md", 1, true)
 
-    assert {:error, "Note not found: S.md"} =
+    assert {:error, {:note_not_found, "Note not found: S.md"}} =
              Handlers.handle("search_notes", u, v, %{"similar_to" => "S.md"})
   end
 
@@ -195,7 +195,7 @@ defmodule Engram.MCP.HandlersSimilarTest do
     other = insert(:vault, user: u)
     note_with_points(u, other, "S.md", 1, true)
 
-    assert {:error, "Note not found: S.md"} =
+    assert {:error, {:note_not_found, "Note not found: S.md"}} =
              Handlers.handle("search_notes", u, {:cross_vault, [v]}, %{"similar_to" => "S.md"})
   end
 
@@ -284,7 +284,7 @@ defmodule Engram.MCP.HandlersSimilarTest do
     assert {:error, "similar_to must be a note path"} =
              Handlers.handle("search_notes", u, v, %{"similar_to" => " "})
 
-    assert {:error, "Note not found: Gone.md"} =
+    assert {:error, {:note_not_found, "Note not found: Gone.md"}} =
              Handlers.handle("search_notes", u, v, %{"similar_to" => "Gone.md"})
   end
 

@@ -28,7 +28,7 @@ defmodule Engram.MCP.HandlersCreateNoteNoOverwriteTest do
         actor: "api"
       )
 
-    assert {:error, msg} =
+    assert {:error, {:path_conflict, msg}} =
              Handlers.handle("create_note", user, vault, %{
                "title" => "Meeting Notes",
                "content" => "model text",

@@ -92,7 +92,7 @@ defmodule Engram.MCP.HandlersEchoStoredPathTest do
           {:ok, _} =
             Notes.upsert_note(user, vault, %{"path" => p, "content" => "x"}, actor: "api")
 
-    assert {:error, msg} =
+    assert {:error, {:path_conflict, msg}} =
              Handlers.handle("rename_note", user, vault, %{
                "old_path" => "d.md",
                "new_path" => "a/../e.md"

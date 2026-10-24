@@ -37,7 +37,7 @@ defmodule Engram.MCP.HandlersWriteContractTest do
       # own text said "Error:" while the envelope said success.
       big = String.duplicate("x", Notes.max_note_bytes() + 1)
 
-      assert {:error, msg} =
+      assert {:error, {:note_too_large, msg}} =
                Handlers.handle("write_note", user, vault, %{"path" => "b.md", "content" => big})
 
       assert msg =~ "maximum size"
@@ -57,7 +57,7 @@ defmodule Engram.MCP.HandlersWriteContractTest do
     end
 
     test "patch_note reports a missing note", %{user: user, vault: vault} do
-      assert {:error, msg} =
+      assert {:error, {:note_not_found, msg}} =
                Handlers.handle("patch_note", user, vault, %{
                  "path" => "gone.md",
                  "find" => "a",
@@ -84,7 +84,7 @@ defmodule Engram.MCP.HandlersWriteContractTest do
       :ok = note!(user, vault, "a.md", "a")
       :ok = note!(user, vault, "b.md", "b")
 
-      assert {:error, msg} =
+      assert {:error, {:path_conflict, msg}} =
                Handlers.handle("rename_note", user, vault, %{
                  "old_path" => "a.md",
                  "new_path" => "b.md"
