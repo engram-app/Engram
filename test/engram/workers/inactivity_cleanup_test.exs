@@ -373,8 +373,9 @@ defmodule Engram.Workers.InactivityCleanupTest do
     end
 
     # A hard delete that RETURNS an error was only logged, so the sweep-failure
-    # counter never saw it. A rolled-back purge returns `{:error, :pg_failed}`,
-    # which no real input produces, so the classification is driven directly.
+    # counter never saw it. A rolled-back purge returns `{:error, :pg_failed}`;
+    # only a failed vector-purge enqueue causes that and there is no seam to
+    # force it, so the classification is driven directly.
     test "a hard delete that returns :pg_failed is counted as an error" do
       user = insert(:user)
 

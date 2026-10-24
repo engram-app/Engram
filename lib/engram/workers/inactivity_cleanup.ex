@@ -298,9 +298,9 @@ defmodule Engram.Workers.InactivityCleanup do
   def __sweep_soft__, do: sweep_soft_delete()
   @doc false
   def __sweep_hard__, do: sweep_hard_delete()
-  # `{:error, :pg_failed}` needs a rolled-back purge, which no real input
-  # produces (the transaction only fails via `rollback/1`, which nothing
-  # calls), so the classification is driven directly.
+  # `{:error, :pg_failed}` needs a rolled-back purge: only a failed
+  # vector-purge enqueue (`Oban.insert` error) rolls it back, and there is no
+  # seam to force that, so the classification is driven directly.
   @doc false
   def __per_user__(user, step, fun), do: per_user(user, step, fun)
 
