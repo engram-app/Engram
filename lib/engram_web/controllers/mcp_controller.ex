@@ -16,6 +16,7 @@ defmodule EngramWeb.McpController do
   alias Engram.MCP.Tools
 
   require Logger
+  require OpenTelemetry.Tracer
 
   @capabilities %{
     "tools" => %{"listChanged" => false},
@@ -763,6 +764,7 @@ defmodule EngramWeb.McpController do
 
   defp dispatch(conn, "tools/call", %{"name" => name, "arguments" => args}) do
     start_mono = System.monotonic_time()
+    trace_tool(name)
 
     # OriginStats runs for every call against a KNOWN tool regardless of whether
     # its arguments turn out to be valid — a client that always sends malformed
@@ -803,6 +805,16 @@ defmodule EngramWeb.McpController do
         # unchanged: the handler still never runs.
         error_result(msg)
     end
+  end
+
+  # Which tool, on the request span (OTel MCP semconv names), so Tempo
+  # answers "which tool, which user" with `app.user_id` (`TraceUserAttrs`).
+  # Bounded: a name off the roster is `unknown`, never client text.
+  defp trace_tool(name) do
+    OpenTelemetry.Tracer.set_attributes([
+      {"mcp.method.name", "tools/call"},
+      {"gen_ai.tool.name", @tool_atoms |> Map.get(name, :unknown) |> Atom.to_string()}
+    ])
   end
 
   defp dispatch(_conn, "tools/call", _params) do
