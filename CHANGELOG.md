@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.63.2](https://github.com/engram-app/Engram/compare/0.63.1...0.63.2) (2026-10-24)
+
+
+### Bug Fixes
+
+* **accounts:** account delete never waits on Qdrant ([#2188](https://github.com/engram-app/Engram/issues/2188)) ([ad73780](https://github.com/engram-app/Engram/commit/ad7378039eb119601ccaae169910b2d9fbf4dc7a))
+* **attachments:** blob lifecycle, chunked folder ops ([#2160](https://github.com/engram-app/Engram/issues/2160)) ([bbe0f83](https://github.com/engram-app/Engram/commit/bbe0f83a56091484f74b4ad385f73914aeecbf61))
+* blob GC re-checks live keys under lock ([#2181](https://github.com/engram-app/Engram/issues/2181)) ([4652c97](https://github.com/engram-app/Engram/commit/4652c97a8e7cf12ed18472a5c92f638a77e987cc))
+* **index:** chunk stale-claim releases at 2,000 ([#2170](https://github.com/engram-app/Engram/issues/2170)) ([f4d019c](https://github.com/engram-app/Engram/commit/f4d019c5be8ab5cc4862bbf5aa440188fe9c80e0))
+* isolate every inactivity sweep, count it ([#2192](https://github.com/engram-app/Engram/issues/2192)) ([958adb7](https://github.com/engram-app/Engram/commit/958adb733f1858b6d050e2179b7185b4127dab5d))
+* **test:** hold checkpoint in failed-append ack test ([#2167](https://github.com/engram-app/Engram/issues/2167)) ([52c2897](https://github.com/engram-app/Engram/commit/52c28974ce3d9fbd03f2c9f6e9b505046734852c)), closes [#2166](https://github.com/engram-app/Engram/issues/2166)
+
 ## [0.63.1](https://github.com/engram-app/Engram/compare/0.63.0...0.63.1) (2026-10-24)
 
 
