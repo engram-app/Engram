@@ -1519,9 +1519,9 @@ defmodule Engram.Vector.Qdrant do
 
   @doc """
   Delete every point owned by `user_id` across all of their vaults. Used by
-  account delete (soft and hard) and by OrphanSweep — single Qdrant call
-  regardless of vault count. `purpose` picks the `req_opts/1` profile: a user
-  or Clerk delete runs in a request and passes `:search` to fail fast.
+  account delete (via the `Engram.Workers.DropUserVectors` job, never inline in
+  a request) and by OrphanSweep — single Qdrant call regardless of vault
+  count. `purpose` picks the `req_opts/1` profile.
   """
   def delete_by_user(col \\ nil, user_id, purpose \\ :indexing) do
     col = col || collection()

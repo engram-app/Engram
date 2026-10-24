@@ -3,9 +3,14 @@ defmodule Engram.Accounts.Lifecycle do
   Soft + hard account-delete pipeline shared by user-initiated delete,
   Clerk `user.deleted` webhook, and the inactivity sweep.
 
-  Soft = reversible (sets `deleted_at`, drops Qdrant, revokes tokens, emails).
-  Hard = cascade purge of every store (sessions, Paddle, Qdrant, S3, PG, Clerk,
-  PostHog).
+  Soft = reversible (sets `deleted_at`, queues the Qdrant drop, revokes tokens,
+  emails). Hard = cascade purge of every store (sessions, Paddle, S3, PG, Clerk,
+  PostHog), then queues the Qdrant drop.
+
+  Qdrant is never called inline: both entry points run inside the DELETE
+  /api/me request (and the Clerk webhook), so the drop is an Oban job,
+  `Engram.Workers.DropUserVectors`, inserted only after the delete it serves
+  has taken effect.
 
   Both are idempotent.
   """
@@ -23,7 +28,7 @@ defmodule Engram.Accounts.Lifecycle do
   alias Engram.Mailer
   alias Engram.Repo
   alias Engram.Storage
-  alias Engram.Vector.Qdrant
+  alias Engram.Workers.DropUserVectors
   alias Engram.Workers.PaddleCancelSubscription
 
   require Logger
@@ -31,31 +36,36 @@ defmodule Engram.Accounts.Lifecycle do
   @type reason :: :user | :clerk | :inactivity
 
   @doc """
-  Soft-deletes a user: drops Qdrant points, stamps `users.deleted_at`,
+  Soft-deletes a user: stamps `users.deleted_at`, queues the Qdrant drop,
   revokes refresh tokens, and emails the account-deleted notice.
 
   No-op on a user that already carries `deleted_at` — idempotent.
 
-  Qdrant failures are best-effort: logged and swallowed. The user's
-  vector data becomes unreachable anyway once `deleted_at` is set, and
-  the hard-delete sweep wipes it later either way.
+  The user's vector data is unreachable once `deleted_at` is set; the queued
+  drop retries until Qdrant takes it.
   """
   @spec soft_delete(User.t(), reason()) :: :ok
   def soft_delete(%User{deleted_at: %DateTime{}} = user, _reason) do
     # Idempotent retry path: tokens may have been re-issued between attempts
     # (e.g. delete_self crashed after soft_delete, user retried). Revoke
-    # again — `revoke_all_user_tokens` is idempotent. Skip Qdrant drop,
-    # email, and telemetry; those already fired on the first call.
+    # again — `revoke_all_user_tokens` is idempotent. Skip the Qdrant drop
+    # enqueue, email, and telemetry; those already fired on the first call.
     Accounts.revoke_all_user_tokens(user)
     :ok
   end
 
   def soft_delete(%User{} = user, reason) do
-    _ = drop_qdrant_for_user(user, reason)
-
     user
     |> Ecto.Changeset.change(%{deleted_at: DateTime.utc_now()})
     |> Repo.update!(skip_tenant_check: true)
+
+    # The points outlive this call until the job runs, and the chunk rows
+    # survive it (the hard-delete sweep collects them). A row whose point is
+    # gone but whose `context_hmac` is intact makes a later re-index "reuse" an
+    # id that no longer exists in Qdrant, so the markers go now, before the
+    # drop. See `Indexing.forget_chunk_reuse_for_user/1`.
+    :ok = Indexing.forget_chunk_reuse_for_user(user.id)
+    _ = enqueue_qdrant_drop(user.id)
 
     Accounts.evict_user(user.id)
     Accounts.revoke_all_user_tokens(user)
@@ -78,8 +88,9 @@ defmodule Engram.Accounts.Lifecycle do
   @doc """
   Hard-deletes a user: cascade-purges every store the account touches.
 
-  Ordering (spec §7.2) is best-effort, not transactional — it spans Qdrant +
-  S3 + Postgres + Paddle + Clerk, none of which share a commit boundary.
+  Ordering (spec §7.2) is best-effort, not transactional — it spans S3 +
+  Postgres + Paddle + Clerk (+ the queued Qdrant drop), none of which share a
+  commit boundary.
   `Repo.delete!` is the commitment point; everything before it is logged-and-
   continued on error, and Clerk afterward is fire-and-forget.
 
@@ -162,8 +173,9 @@ defmodule Engram.Accounts.Lifecycle do
     # retry would later cancel a paying, non-deleted user's subscription.
     paddle_retry = cancel_paddle_subscription(user, sub)
 
-    # Step 2: Qdrant vectors (best-effort).
-    _ = drop_qdrant_for_user(user, reason)
+    # Step 2 (Qdrant vectors) is queued in the `{:ok, _}` branch below, for
+    # the Paddle-retry reason: a drop queued before Step 4 would outlive a
+    # rolled-back delete.
 
     # Step 3: S3 prefixes — user blobs + exports. Retry once on failure.
     _ = wipe_storage_prefix(user, "#{user.id}/")
@@ -233,6 +245,11 @@ defmodule Engram.Accounts.Lifecycle do
         # The commit landed, so the account really is gone — safe to enqueue
         # the Paddle retry now (see the Step 1 comment above).
         _ = maybe_enqueue_paddle_retry(user.id, paddle_retry)
+
+        # Same rule. After a soft_delete in the same call this dedupes into
+        # the job soft_delete queued; after an inactivity soft delete weeks
+        # ago it is a fresh, idempotent safety-net drop.
+        _ = enqueue_qdrant_drop(user.id)
 
         # Step 5: Clerk delete (saas only). Best-effort; Clerk row may
         # outlive ours. Future Clerk webhooks find_by_external_id →
@@ -438,47 +455,23 @@ defmodule Engram.Accounts.Lifecycle do
     Application.get_env(:engram, :clerk_api, Engram.Auth.Clerk.HttpApi)
   end
 
-  defp drop_qdrant_for_user(user, reason) do
-    # Unconditionally, before the outcome is known: the chunk rows survive this
-    # call (the hard-delete sweep collects them later), and a row whose point is
-    # gone but whose `context_hmac` is intact makes a later re-index "reuse" an
-    # id that no longer exists in Qdrant. See `Indexing.forget_chunk_reuse_for_user/1`.
-    # A partial Qdrant delete is exactly the case that must not keep markers.
-    _ = Indexing.forget_chunk_reuse_for_user(user.id)
-
-    # A user or Clerk delete runs inside a request: fail fast (the `:search`
-    # profile), since the patient indexing retries held it ~7s per call during
-    # a Qdrant outage. The inactivity sweep is a background job with no request
-    # to hold, and nothing retries a swallowed failure, so it keeps them.
-    # Whatever a failure leaves is collected by OrphanSweep once the user row
-    # is gone (after the hard delete).
-    purpose = if reason == :inactivity, do: :indexing, else: :search
-
-    case Qdrant.delete_by_user(nil, user.id, purpose) do
-      :ok ->
+  # Best-effort like every other post-commit step: an insert failure is logged
+  # and OrphanSweep collects the points once the user row is gone.
+  defp enqueue_qdrant_drop(user_id) do
+    case DropUserVectors.enqueue(user_id) do
+      {:ok, _job} ->
         :ok
 
       {:error, reason} ->
         Logger.error(
-          "Qdrant clear failed during soft-delete",
+          "Qdrant drop enqueue failed during account delete",
           Metadata.with_category(:error, :lifecycle,
-            user_id: user.id,
-            reason: inspect(reason)
+            user_id: user_id,
+            reason: Metadata.safe_reason(reason)
           )
         )
 
         :error
     end
-  rescue
-    e ->
-      Logger.error(
-        "Qdrant clear raised during soft-delete",
-        Metadata.with_category(:error, :lifecycle,
-          user_id: user.id,
-          exception: inspect(e)
-        )
-      )
-
-      :error
   end
 end
