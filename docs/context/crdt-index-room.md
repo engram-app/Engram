@@ -1,6 +1,6 @@
 # The per-vault CRDT index room: shape, wire, residency, projection
 
-_Last verified: 2026-10-03_
+_Last verified: 2026-10-23_
 
 **TL;DR:** `{:global, {:crdt_index, vault_id}}`, one `Y.Map` named `filemeta_v0`
 (`path -> %{note_id, type, hash}`), riding the existing per-vault `crdt:` channel as
@@ -17,6 +17,12 @@ the claim names a note that will never exist. `ProjectVaultIndex` releases such 
 UUIDv7 mint time is older than an hour (`@stale_claim_grace_ms`, #1550,
 `Engram.Workers.ReleaseIndexEntries`). A younger in-flight create is reported `unresolved`, not
 released.
+
+A run sends ALL its stale ids as ONE release job (one notes read, one index-room change) and logs
+one summary line. Per-id jobs pinned prod on 2026-10-23 (14k+ jobs for one first-sync vault). The
+grace counts from the id's MINT time, so a re-claim of an old id is stale on arrival; released ids
+are remembered per node for an hour (`:released_index_claims` in `Engram.Cache.Registry`) and
+re-claims inside that window are skipped (`index_projection_release_skipped_total`).
 
 Shipped: PR #1383 (`feat/crdt-index-room`). Refs #1150, #1146, #1152, #1550,
 engram-app/engram-workspace#167.

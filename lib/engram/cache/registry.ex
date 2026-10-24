@@ -226,6 +226,21 @@ defmodule Engram.Cache.Registry do
       cache_nil: false,
       evict_match: :first_elem,
       pg_channel: nil
+    },
+    # {vault_id, note_id} => true: a stale index claim ProjectVaultIndex
+    # enqueued a release for. A client that re-claims the id is not released
+    # again until the TTL passes (the 2026-10-23 storm). Node-local on
+    # purpose: a pass on another node may release the same id once more per
+    # window, so the ceiling is one extra release per node per hour, and each
+    # is a batched job, not a job per id. ~200 B a row, so a 15k-id vault is
+    # ~3 MB per node until the sweep reaps it. Short in the suite so the
+    # window test does not sleep an hour.
+    %{
+      name: :released_index_claims,
+      ttl: if(Mix.env() == :test, do: 3_000, else: 3_600_000),
+      cache_nil: false,
+      evict_match: :key,
+      pg_channel: nil
     }
   ]
 

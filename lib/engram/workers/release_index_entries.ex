@@ -108,18 +108,14 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   defp release(user, vault_id, note_ids) do
     # See "Consistency" above: a note this job was told is gone may have
     # arrived since it was enqueued. `%{id: vault_id}` is the same
-    # bare-map-as-vault shape `ProjectVaultIndex` uses — `get_note_by_id/3`
-    # only ever reads `vault.id`.
-    vault = %{id: vault_id}
-
-    still_gone =
-      Enum.reject(note_ids, fn note_id ->
-        match?({:ok, _note}, Notes.get_note_by_id(user, vault, note_id))
-      end)
-
-    case Identity.release(user, vault_id, still_gone) do
-      :ok -> :ok
-      {:error, reason} -> {:error, reason}
+    # bare-map-as-vault shape `ProjectVaultIndex` uses.
+    #
+    # ONE metadata read for the whole list, not a full-row fetch and content
+    # decrypt per id: `ProjectVaultIndex` now sends a run's every stale id in
+    # one job (15k in the 2026-10-23 storm). A read failure fails the whole
+    # batch so Oban retries it; the other ids wait for the retry.
+    with {:ok, present} <- Notes.get_note_meta_by_ids(user, %{id: vault_id}, note_ids) do
+      Identity.release(user, vault_id, Enum.reject(note_ids, &Map.has_key?(present, &1)))
     end
   end
 end
