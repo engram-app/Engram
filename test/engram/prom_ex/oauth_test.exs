@@ -38,7 +38,8 @@ defmodule Engram.PromEx.OAuthTest do
   # client sends after one (2026-10-24 triage).
   test "declares engram_prom_ex_oauth_family_revoked_total by client_agent and reason" do
     assert m = Enum.find(metrics(), &(&1.event_name == [:engram, :oauth, :family_revoked]))
-    assert %Telemetry.Metrics.Counter{} = m
+    # Sum of :count so the ZeroInit boot seed exports 0, not 1.
+    assert %Telemetry.Metrics.Sum{measurement: :count} = m
     assert m.name == [:engram, :prom_ex, :oauth, :family_revoked, :total]
     assert m.tags == [:client_agent, :reason]
   end

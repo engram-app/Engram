@@ -76,6 +76,12 @@ defmodule Engram.Analytics.McpClient do
   def agent("openai-mcp/" <> _, _family), do: "chatgpt"
   def agent(_user_agent, family), do: family
 
+  @doc "Every value `agent/2` can return: the families, `codex` and `other`."
+  @spec agents() :: [String.t(), ...]
+  def agents do
+    (Enum.map(@families, &elem(&1, 1)) ++ ["codex", "other"]) |> Enum.uniq()
+  end
+
   @doc """
   The client's `major.minor` version, from its MCP `clientInfo.version` or,
   failing that, the version token of its User-Agent (`codex-mcp-client/
