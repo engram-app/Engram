@@ -75,7 +75,7 @@ defmodule Engram.Workers.ProjectVaultIndex do
     max_attempts: 3,
     unique: [keys: [:vault_id], states: :incomplete]
 
-  alias Engram.{Accounts, Crypto, Notes, Repo}
+  alias Engram.{Accounts, Cache, Crypto, Notes, Repo}
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
   alias Engram.Notes.{CrdtIndexDoc, Enqueue, VaultIndexState}
@@ -103,6 +103,13 @@ defmodule Engram.Workers.ProjectVaultIndex do
   @stale_claim_grace_ms :timer.hours(1)
 
   @event [:engram, :crdt, :index_projection]
+
+  # See `Engram.Cache.Registry` for the window and its per-node ceiling.
+  @released_cache :released_index_claims
+
+  # Ids named in the one summary line per run. Bounded so a 15k-id storm is
+  # one short line, not a 15k-element list.
+  @log_sample 5
 
   # BEST-EFFORT here, unlike every other worker. Oban implements `timeout/1`
   # with `:timer.exit_after/2`, and an exit signal is only handled when the
@@ -212,7 +219,16 @@ defmodule Engram.Workers.ProjectVaultIndex do
            vault_id,
            entries,
            @max_passes,
-           %{applied: 0, passes: 0, unknown_note: 0, malformed: 0, released: 0, conflict: 0}
+           %{
+             applied: 0,
+             passes: 0,
+             unknown_note: 0,
+             malformed: 0,
+             released: 0,
+             release_skipped: 0,
+             conflict: 0,
+             stale: []
+           }
          ) do
       {:error, reason} ->
         Logger.error(
@@ -224,6 +240,7 @@ defmodule Engram.Workers.ProjectVaultIndex do
         {:error, reason}
 
       totals ->
+        totals = release_stale_claims(user, vault_id, totals)
         report(vault_id, user.id, totals, duplicate_ids)
         :ok
     end
@@ -278,15 +295,16 @@ defmodule Engram.Workers.ProjectVaultIndex do
   end
 
   defp pass(user, vault, vault_id, entries, notes, passes_left, acc) do
-    {outcome, retry} =
-      Enum.reduce(entries, {blank_outcome(), []}, fn entry, {o, retry} ->
+    {outcome, retry, stale} =
+      Enum.reduce(entries, {blank_outcome(), [], []}, fn entry, {o, retry, stale} ->
         case apply_entry(user, vault, vault_id, entry, notes) do
-          :conflict = result -> {tally(o, result), [entry | retry]}
-          result -> {tally(o, result), retry}
+          :conflict = result -> {tally(o, result), [entry | retry], stale}
+          {:stale, note_id} -> {o, retry, [note_id | stale]}
+          result -> {tally(o, result), retry, stale}
         end
       end)
 
-    # `unknown_note`/`malformed`/`released` are terminal per entry — an entry
+    # `unknown_note`/`malformed`/`stale` are terminal per entry — an entry
     # classified as one of them is never retried, so it can only ever appear in
     # THIS pass's outcome and must be summed in, not overwritten. `conflict` is
     # the opposite: it means "still stuck as of the pass that just ran", so the
@@ -297,7 +315,7 @@ defmodule Engram.Workers.ProjectVaultIndex do
       | applied: acc.applied + outcome.applied,
         unknown_note: acc.unknown_note + outcome.unknown_note,
         malformed: acc.malformed + outcome.malformed,
-        released: acc.released + outcome.released,
+        stale: stale ++ acc.stale,
         conflict: outcome.conflict,
         passes: acc.passes + 1
     }
@@ -308,12 +326,12 @@ defmodule Engram.Workers.ProjectVaultIndex do
     # genuine disagreement, and another identical pass would only churn.
     #
     # Retrying the full `entries` list here used to re-run every already-
-    # settled entry too, on every pass. Harmless for a :noop or :malformed, but
-    # #1550's `:released` has a real side effect (an Oban insert) that must not
-    # repeat per pass — re-running only what's still stuck fixes that and every
-    # other redundant-reprocessing case at once. That is also exactly why the
-    # counters above must accumulate: a terminal outcome from an EARLIER pass
-    # would otherwise vanish the moment its entry drops out of the retry list.
+    # settled entry too, on every pass. Harmless for a :noop or :malformed, and
+    # it would double-collect a stale id — re-running only what's still stuck
+    # fixes that and every other redundant-reprocessing case at once. That is
+    # also exactly why the counters above must accumulate: a terminal outcome
+    # from an EARLIER pass would otherwise vanish the moment its entry drops out
+    # of the retry list.
     if outcome.applied > 0 and outcome.conflict > 0 and passes_left > 1 do
       pass(user, vault, vault_id, Enum.reverse(retry), passes_left - 1, acc)
     else
@@ -322,7 +340,7 @@ defmodule Engram.Workers.ProjectVaultIndex do
   end
 
   defp blank_outcome,
-    do: %{applied: 0, noop: 0, conflict: 0, unknown_note: 0, malformed: 0, released: 0}
+    do: %{applied: 0, noop: 0, conflict: 0, unknown_note: 0, malformed: 0}
 
   defp tally(outcome, key), do: Map.update!(outcome, key, &(&1 + 1))
 
@@ -357,7 +375,9 @@ defmodule Engram.Workers.ProjectVaultIndex do
         # available to tell "still in flight" from "never coming" apart — see
         # `@stale_claim_grace_ms`.
         if stale_claim?(note_id) do
-          release_stale_claim(user, vault_id, note_id)
+          # Collected, not released here: the whole run's stale ids go out as
+          # ONE job after the loop (`release_stale_claims/3`).
+          {:stale, note_id}
         else
           # Logged, unlike before. An index naming rows we do not have IS the
           # drift class #167 exists to eliminate; making it the one outcome
@@ -411,58 +431,76 @@ defmodule Engram.Workers.ProjectVaultIndex do
   # losing it. Nothing else ever releases this claim: a create that never
   # lands is not a delete, so `Notes.delete_note`'s release never fires for it.
   #
-  # KNOWN LIMIT: `ReleaseIndexEntries` has no `unique` key. Its only documented
-  # non-transient failure is rotation-in-progress, which SNOOZES rather than
-  # discards — but a snoozed job still occupies its note_id until it succeeds,
-  # and a rotation can span several checkpoints on an active vault. Each of
-  # those checkpoints re-detects the same stale entry and enqueues its own
-  # fresh release job while the earlier ones are still snoozed, so the actual
-  # bound is one job per checkpoint that runs before the prior release
-  # succeeds — proportional to rotation length, not flatly "one extra job".
-  # Still self-resolving (every one of them eventually runs and releasing is
-  # idempotent) and not fixed here for the same reason as before: `unique`
-  # lives on the shared worker's `use Oban.Worker` options, and every other
-  # call site (delete, batch delete) would inherit whatever window is chosen
-  # without asking for it.
-  defp release_stale_claim(user, vault_id, note_id) do
+  # ONE job per run, carrying every stale id, and ONE summary log line. The
+  # 2026-10-23 storm (vault f4cd93e6, a first sync whose creates died in a DB
+  # pool exhaustion) enqueued one job and logged one line PER id: 4,792 jobs,
+  # then 14,437+, each its own notes read, index-room edit (a full map copy)
+  # and encrypted tail append. It pinned a web task, then a worker. The job
+  # applies the list as one index-room change, so the cost is O(ids) once.
+  #
+  # Not chunked. What bounds the batch is the index itself: every id here is
+  # an entry in a snapshot capped at 16 MB (`CrdtIndexPersistence`), and the
+  # args are ~40 B per id (15k ids ~ 600 KB of JSONB, well inside Postgres).
+  # A retry re-runs the same one read and one change, and both are idempotent
+  # (releasing an absent entry is a no-op), so chunking would only multiply
+  # the per-job fixed cost this exists to remove.
+  #
+  # Backoff for re-claims: the grace is measured from the UUIDv7 MINT time, not
+  # from when the claim was written, so a client that re-claims an id older
+  # than an hour is "stale" again immediately and would be released on every
+  # checkpoint. An id is remembered (`@released_cache`) once its release is
+  # ENQUEUED, never before, so an enqueue failure cannot suppress the retry;
+  # a job that later fails is retried by Oban itself (`max_attempts: 5`), and
+  # one that is discarded gets a fresh release once the window passes.
+  defp release_stale_claims(_user, _vault_id, %{stale: []} = totals), do: totals
+
+  defp release_stale_claims(user, vault_id, %{stale: stale} = totals) do
+    {repeat, fresh} = Enum.split_with(stale, &recently_released?(vault_id, &1))
+
     case Enqueue.enqueue(
-           ReleaseIndexEntries.new_for(user.id, vault_id, [note_id]),
+           ReleaseIndexEntries.new_for(user.id, vault_id, fresh),
            "release_index_entries"
          ) do
-      {:ok, _job} ->
+      {:ok, _job_or_skipped} ->
+        Enum.each(fresh, &Cache.put(@released_cache, {vault_id, &1}, true))
+
         Logger.warning(
-          "vault index projection released a stale claim for a note that never arrived",
+          "vault index projection released #{length(fresh)} stale claim(s) for notes that " <>
+            "never arrived, skipped #{length(repeat)} released within the last hour",
           Metadata.with_category(:warning, :sync,
             user_id: user.id,
             vault_id: vault_id,
-            note_id: note_id
+            note_ids: Enum.take(fresh ++ repeat, @log_sample)
           )
         )
 
-        :released
+        %{totals | released: length(fresh), release_skipped: length(repeat)}
 
       {:error, reason} ->
         # Enqueue.enqueue/2 already logged its own generic failure line, but
-        # without a note_id or vault_id — every OTHER outcome in apply_entry
-        # logs with that metadata, and this is the one branch a vault-scoped
-        # log search would otherwise miss. Reporting :released here anyway
-        # would tell a dashboard the claim is resolved when the job to resolve
-        # it was never queued — fall back to the ordinary unresolved path so
-        # the next run gets another chance instead of the claim silently going
-        # unfixed.
+        # without a vault_id. Reporting these as released would tell a
+        # dashboard the claims are resolved when the job to resolve them was
+        # never queued, so they count as unresolved and the next run retries.
         Logger.warning(
-          "vault index projection could not enqueue a stale-claim release: " <>
-            "#{Metadata.safe_reason(reason)}",
+          "vault index projection could not enqueue a release of #{length(fresh)} stale " <>
+            "claim(s): #{Metadata.safe_reason(reason)}",
           Metadata.with_category(:warning, :sync,
             user_id: user.id,
             vault_id: vault_id,
-            note_id: note_id
+            note_ids: Enum.take(fresh, @log_sample)
           )
         )
 
-        :unknown_note
+        %{
+          totals
+          | unknown_note: totals.unknown_note + length(fresh),
+            release_skipped: length(repeat)
+        }
     end
   end
+
+  defp recently_released?(vault_id, note_id),
+    do: match?({:ok, _}, Cache.get(@released_cache, {vault_id, note_id}))
 
   defp rename(user, vault, note, path, vault_id) do
     # `note_id:`: `note.path` is from this pass's snapshot. If the note moved
@@ -502,7 +540,8 @@ defmodule Engram.Workers.ProjectVaultIndex do
            conflict: conflict,
            unknown_note: unknown_note,
            malformed: malformed,
-           released: released
+           released: released,
+           release_skipped: release_skipped
          },
          duplicates
        ) do
@@ -518,6 +557,7 @@ defmodule Engram.Workers.ProjectVaultIndex do
         malformed: malformed,
         duplicate_note_ids: duplicates,
         released: released,
+        release_skipped: release_skipped,
         passes: passes
       },
       %{phase: if(unresolved == 0, do: :converged, else: :unresolved)}
@@ -540,7 +580,7 @@ defmodule Engram.Workers.ProjectVaultIndex do
   defp emit(phase) do
     :telemetry.execute(
       @event,
-      %{applied: 0, unresolved: 0, released: 0, passes: 0},
+      %{applied: 0, unresolved: 0, released: 0, release_skipped: 0, passes: 0},
       %{phase: phase}
     )
 

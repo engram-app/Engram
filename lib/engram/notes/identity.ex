@@ -390,12 +390,13 @@ defmodule Engram.Notes.Identity do
   defp mutate(doc, targets) do
     map = Yex.Doc.get_map(doc, CrdtIndexDoc.map_name())
     current = Yex.Map.to_map(map)
+    by_note = entries_by_note(current)
 
     case refusal(current, targets) do
       nil ->
         Yex.Doc.transaction(doc, @origin, fn ->
           Enum.each(targets, fn {note_id, path} ->
-            stale = stale_entries(current, note_id, path)
+            stale = stale_entries(by_note, note_id, path)
             Enum.each(stale, fn {key, _value} -> Yex.Map.delete(map, key) end)
 
             if path != :gone do
@@ -451,14 +452,21 @@ defmodule Engram.Notes.Identity do
     |> Enum.find_value(fn {path, count} -> if count > 1, do: path end)
   end
 
-  # Every entry naming this note EXCEPT one already at its target path. A
+  # note_id => every entry naming it, in map order, built ONCE per batch.
+  # Scanning `current` per target made a batch O(targets x entries): a 15k-id
+  # release against a 15k-entry index is ~225M compares inside the room
+  # process, well past the 5s `GenServer.call` a room write runs under. A
   # non-map value never matches, so a malformed entry is left alone rather than
   # crashing a rename.
-  defp stale_entries(current, note_id, path) do
-    Enum.filter(current, fn
-      {key, %{"note_id" => ^note_id}} -> key != path
-      _ -> false
-    end)
+  defp entries_by_note(current) do
+    current
+    |> Enum.filter(&match?({_key, %{"note_id" => _}}, &1))
+    |> Enum.group_by(fn {_key, %{"note_id" => id}} -> id end)
+  end
+
+  # Every entry naming this note EXCEPT one already at its target path.
+  defp stale_entries(by_note, note_id, path) do
+    by_note |> Map.get(note_id, []) |> Enum.reject(fn {key, _value} -> key == path end)
   end
 
   # Carry the moved entry's other fields across. The doc shape is

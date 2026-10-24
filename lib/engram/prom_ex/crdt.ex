@@ -39,6 +39,7 @@ defmodule Engram.PromEx.Crdt do
     * `engram_prom_ex_crdt_index_projection_total` — tags `[:phase]`.
     * `engram_prom_ex_crdt_index_projection_unresolved_total` — tags `[:phase]`.
     * `engram_prom_ex_crdt_index_projection_released_total` — tags `[:phase]`.
+    * `engram_prom_ex_crdt_index_projection_release_skipped_total` — tags `[:phase]`.
 
   `[:engram, :crdt, :index_projection]` — one event per projection run
   (`Engram.Workers.ProjectVaultIndex`), `%{phase: :converged | :unresolved | …}`.
@@ -494,6 +495,17 @@ defmodule Engram.PromEx.Crdt do
           measurement: :released,
           description:
             "Index entries naming a note that never arrived, released once stale (#1550).",
+          tags: [:phase]
+        ),
+        # Stale claims NOT released because the same id was released within
+        # the window (`:released_index_claims`): a client re-claiming it. The
+        # mint-time grace makes every such re-claim stale on arrival.
+        sum(
+          metric_prefix ++ [:index_projection, :release_skipped, :total],
+          event_name: @projection_event,
+          measurement: :release_skipped,
+          description:
+            "Stale index claims skipped because the same id was released within the last hour.",
           tags: [:phase]
         )
       ]
