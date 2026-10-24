@@ -50,7 +50,9 @@ export default function BillingHistoryTable({
 										>
 											{t("Download")}
 										</Button>
-									) : null}
+									) : (
+										"\u2014"
+									)}
 								</td>
 							</tr>
 						))}
