@@ -682,10 +682,14 @@ defmodule Engram.Vector.QdrantReconcileTest do
     ref = make_ref()
     test_pid = self()
 
+    # Telemetry handlers are global and run in the emitting process. The async
+    # qdrant_collection_test reconciles its own 1.19.2 collections at the same
+    # time (an `optimizers_config` change, which is what CI received here), so
+    # forward only this test's own emit: reconcile_config/1 runs in the caller.
     :telemetry.attach(
       {__MODULE__, ref},
       [:engram, :qdrant, :config_reconciled],
-      fn _e, m, meta, _ -> send(test_pid, {:reconciled, m, meta}) end,
+      fn _e, m, meta, _ -> if self() == test_pid, do: send(test_pid, {:reconciled, m, meta}) end,
       nil
     )
 
