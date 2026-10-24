@@ -81,14 +81,11 @@ defmodule EngramWeb.Plugs.PreAuthRateLimit do
         |> put_resp_header("x-ratelimit-remaining", Integer.to_string(remaining))
 
       {:deny, retry_after_ms} ->
-        retry_after_s = retry_after_ms |> div(1000) |> max(1)
-
         conn
-        |> put_resp_header("retry-after", Integer.to_string(retry_after_s))
         |> put_resp_header("x-ratelimit-limit", Integer.to_string(limit))
         |> put_resp_header("x-ratelimit-remaining", "0")
         |> put_resp_header("x-engram-error", "rate_limited")
-        |> Halt.json(429, %{error: "rate_limited"})
+        |> Halt.rate_limited(retry_after_ms)
     end
   end
 

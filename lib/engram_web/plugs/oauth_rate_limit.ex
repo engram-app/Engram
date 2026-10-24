@@ -104,7 +104,7 @@ defmodule EngramWeb.Plugs.OAuthRateLimit do
   end
 
   defp deny(conn, "/oauth/token", retry_after_ms) do
-    seconds = retry_after_seconds(retry_after_ms)
+    seconds = Halt.retry_after_seconds(retry_after_ms)
 
     conn
     |> Plug.Conn.put_resp_header("retry-after", Integer.to_string(seconds))
@@ -114,17 +114,7 @@ defmodule EngramWeb.Plugs.OAuthRateLimit do
     })
   end
 
-  defp deny(conn, _path, retry_after_ms) do
-    conn
-    |> Plug.Conn.put_resp_header(
-      "retry-after",
-      Integer.to_string(retry_after_seconds(retry_after_ms))
-    )
-    |> Halt.json(429, %{error: "rate_limited"})
-  end
-
-  defp retry_after_seconds(ms) when is_integer(ms) and ms > 0, do: div(ms + 999, 1000)
-  defp retry_after_seconds(_ms), do: 1
+  defp deny(conn, _path, retry_after_ms), do: Halt.rate_limited(conn, retry_after_ms)
 
   if @is_test_build do
     defp primary_limit(default), do: Application.get_env(:engram, :rate_limit_override) || default

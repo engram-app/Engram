@@ -76,6 +76,24 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
       }
     end
 
+    test "undeleting through the single route broadcasts the original id", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      post(conn, "/api/folders", %{"folder" => "Back"})
+      assert_receive %Phoenix.Socket.Broadcast{payload: %{markers: [%{id: id}]}}
+      {:ok, :deleted} = Notes.delete_folder_marker(Repo.reload!(user), vault, "Back")
+
+      assert conn |> post("/api/folders", %{"folder" => "Back"}) |> json_response(201)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "folders.batch",
+        payload: %{op: "create", markers: [%{id: ^id, name: "Back"}]}
+      }
+    end
+
     # #2121 through the REST route: a name holding only tombstones revives the
     # most recently deleted one, whatever order Postgres returns the rows in.
     test "with two tombstones, re-create revives the newest", %{
