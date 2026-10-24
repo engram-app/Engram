@@ -23,13 +23,8 @@ from urllib3.util.retry import Retry
 
 API_URL = os.environ.get("ENGRAM_API_URL") or "http://localhost:8100/api"
 
-# read=0: a read timeout means the request REACHED the server, so replaying
-# it repeats a non-idempotent write. A DELETE /me that ran but answered after
-# the 10s timeout was replayed and got 410 account_deleted (PR #2175 e2e-crdt,
-# run 40076612253). Connect errors and 502/503/504 still retry.
 _RETRY = Retry(
     total=3,
-    read=0,
     backoff_factor=0.2,
     status_forcelist=(502, 503, 504),
     allowed_methods=frozenset(["GET", "POST", "PUT", "DELETE", "PATCH"]),
