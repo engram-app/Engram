@@ -98,6 +98,8 @@ defmodule Engram.Folders do
   arrives as `POST /api/mcp` and a path-shaped plug cannot see it
   (docs/context/mcp-bypasses-path-shaped-plugs.md). One unit per call, not per
   folder: the cost being bounded is the transaction, and a batch is one.
+  A call that can write nothing (empty, all-root, or over the batch cap)
+  spends nothing.
 
   A re-create of a live folder changes nothing, so it broadcasts nothing; a
   peer would only re-poll `/folders/explicit` for it.
