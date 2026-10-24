@@ -18,6 +18,8 @@ defmodule Engram.Feedback do
 
   alias Engram.Accounts.User
   alias Engram.Analytics
+  alias Engram.Analytics.Event
+  alias Engram.Analytics.EventLog
   alias Engram.Billing
   alias Engram.Repo
 
@@ -170,6 +172,65 @@ defmodule Engram.Feedback do
   end
 
   def submit(_user, _kind, _params), do: {:error, :invalid_kind}
+
+  @doc """
+  File a cancel reason for a cancel that came with none. Only the in-app
+  dialog asks why; a cancel through Paddle's hosted portal (or its dashboard)
+  arrives with no reason, and this marker keeps that gap visible in the
+  cancel-reason counts.
+
+  A reason counts when it was filed since the subscription started and after
+  the user's last in-app reversal (`cancel_reversed`), so a reason given for a
+  cancel the user took back does not cover a later one. With `scheduled_at`
+  (the check for a scheduled cancel), nothing is filed when the user undid
+  the cancel after it was scheduled. Skipped when our event log is off:
+  without it every cancel would look reasonless.
+  """
+  @spec record_missing_cancel_reason(User.t(), DateTime.t(), String.t(), DateTime.t() | nil) ::
+          :ok
+  def record_missing_cancel_reason(user, started_at, reason, scheduled_at \\ nil) do
+    reversed_at = if EventLog.enabled?(), do: last_reversal(user)
+
+    cond do
+      not EventLog.enabled?() ->
+        :ok
+
+      # The cancel was undone after it was scheduled: there is nothing to explain.
+      scheduled_at && reversed_at && DateTime.compare(reversed_at, scheduled_at) == :gt ->
+        :ok
+
+      reason_since?(user, Enum.max([started_at, reversed_at || started_at], DateTime)) ->
+        :ok
+
+      true ->
+        capture(user, "subscription_cancel_reason", %{
+          "reason" => reason,
+          "source" => "webhook",
+          "$set" => %{"cancel_reason" => reason}
+        })
+    end
+  end
+
+  defp last_reversal(user) do
+    Repo.one(
+      from(e in Event,
+        where:
+          e.user_id == ^user.id and e.event == "subscription_changed" and
+            fragment("?->>'kind'", e.props) == "cancel_reversed",
+        select: max(e.inserted_at)
+      )
+    )
+  end
+
+  defp reason_since?(user, since) do
+    Repo.exists?(
+      from(e in Event,
+        where:
+          e.user_id == ^user.id and e.event == "subscription_cancel_reason" and
+            e.inserted_at >= ^since
+      )
+    )
+  end
 
   @doc """
   Send the answer stashed by a `delete_account` submit, given the user's
