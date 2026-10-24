@@ -156,7 +156,7 @@ Real case, 2026-10-24 triage: the bloat alert fired on a 5.7x ratio for a
 3.4 KB note. It was one human editing in Obsidian. A small note's ratio
 swings hard on a few tombstones; the bytes involved were trivial.
 
-What changed (Engram#2175, open as of 2026-10-24; alert rule engram-infra#1578,
+What changed (Engram#2175, merged to main 2026-10-24, not yet released; alert rule engram-infra#1578,
 merges only after #2175 reaches prod):
 
 - `notes_over_threshold` counts a note only when ratio > 5 **and** stored state
