@@ -22,7 +22,8 @@ A run sends ALL its stale ids as ONE release job and logs one summary line. Per-
 on 2026-10-23 (14k+ jobs for one first-sync vault). The job releases its ids in chunks of at most
 2,000 (`ReleaseIndexEntries.chunk_size/0`; one notes read and one index-room change each), in series.
 After a minute (`link_budget_ms/0`) it enqueues what is left as its successor, so a chain runs one
-link at a time and never meets the 5 minute job timeout; a 34k storm is one job. Other release jobs
+link at a time and each link (budget plus one chunk) stays far inside the 5 minute job timeout; a
+34k storm is one job. Other release jobs
 for the vault (folder or note deletes) can still run beside a chain. Enqueueing every chunk up front
 (the first shape of #2170) let 17 chunks fill all 6 `crdt_checkpoint` slots, each waiting on the
 vault's fold lock while holding a DB connection. The size is measured, not assumed: a link's cost is mostly a fixed part that scales with

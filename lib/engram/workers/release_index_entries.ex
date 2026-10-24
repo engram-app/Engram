@@ -110,8 +110,12 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   One job however many ids, on purpose. `perform/1` releases its ids
   `chunk_size/0` at a time, one index-room change per chunk, in series. If
   the job outlives `link_budget_ms/0` with ids left, it enqueues them as its
-  successor and stops, so a chain never runs into the job timeout and a retry
-  redoes at most one budget of (no-op) releases. A chain runs one link at a
+  successor and stops. The budget is checked between chunks, so a link runs
+  for the budget plus one chunk (including any wait on the fold lock), far
+  inside the 5 min timeout at ~0.8 s a chunk. A retry restarts from the top
+  of the job's args, so it redoes up to one budget plus the failed chunk;
+  each redone chunk re-reads which notes exist, so a re-release is a no-op
+  and a note that arrived in between is skipped. A chain runs one link at a
   time. Enqueueing every chunk up front instead let a storm (17 chunks at 34k
   ids) fill every `crdt_checkpoint` slot with jobs that all wait on the same
   per-vault fold lock in `CrdtIndexPersistence`, each holding a pooled DB
@@ -191,6 +195,11 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   # A 34k storm is one link (no successor). The worst case the 16 MB index
   # allows (~400k ids) is a few links of up to 16 MB each. Upgrade path if
   # that shows up: a cursor over a table of pending releases.
+  #
+  # The insert commits on its own. If the node dies after it but before Oban
+  # acks this job, the rescued retry inserts a second successor, so two links
+  # can briefly run for one vault. Safe (the fold lock serializes them and
+  # releases are idempotent), just not "one link at a time" in that window.
   defp enqueue_successor(user, vault_id, rest) do
     case Enqueue.enqueue(new_for(user.id, vault_id, rest), "release_index_entries") do
       {:ok, _job} -> :ok
