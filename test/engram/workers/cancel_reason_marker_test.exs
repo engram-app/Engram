@@ -96,6 +96,32 @@ defmodule Engram.Workers.CancelReasonMarkerTest do
     assert DateTime.compare(job.scheduled_at, first_job.scheduled_at) == :gt
   end
 
+  # The first check is already due but no queue has run it yet: the re-cancel
+  # still swaps in its args, but keeps the run time (moving it would run now).
+  test "a re-schedule replaces the args of an already-due check", %{user: user} do
+    started = DateTime.add(DateTime.utc_now(), -30 * 86_400)
+    first = DateTime.add(DateTime.utc_now(), -900)
+    second = DateTime.utc_now()
+    due_at = DateTime.add(DateTime.utc_now(), -60)
+
+    {:ok, first_job} =
+      Oban.insert(CancelReasonMarker.new_for(user.id, started, "2027-10-01T00:00:00Z", first))
+
+    {1, _} =
+      Repo.update_all(from(j in Oban.Job, where: j.id == ^first_job.id),
+        set: [state: "available", scheduled_at: due_at]
+      )
+
+    {:ok, _} =
+      Oban.insert(CancelReasonMarker.new_for(user.id, started, "2027-10-01T00:00:00Z", second))
+
+    assert [job] = all_enqueued(worker: CancelReasonMarker)
+    assert job.id == first_job.id
+    assert job.state == "available"
+    assert job.args["scheduled_at"] == DateTime.to_iso8601(second)
+    assert DateTime.compare(job.scheduled_at, due_at) == :eq
+  end
+
   test "a deleted user files nothing" do
     assert :ok = perform_job(CancelReasonMarker, args(%{id: Ecto.UUID.generate()}))
   end
