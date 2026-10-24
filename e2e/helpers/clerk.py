@@ -14,7 +14,8 @@ import time
 
 import requests
 from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+
+from helpers import http_retry
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +72,9 @@ class ClerkClient:
         # Retry 429 + transient 5xx with exponential backoff, honoring the
         # Retry-After header. POST/DELETE are included: a 429'd request was
         # rejected (not processed), and create_user already handles the
-        # idempotent "identifier taken" case, so retrying is safe.
-        retry = Retry(
+        # idempotent "identifier taken" case, so retrying is safe. A read
+        # timeout is NOT retried (`http_retry.retry`): Clerk may have done it.
+        retry = http_retry.retry(
             total=5,
             backoff_factor=1.0,  # 1s, 2s, 4s, 8s, 16s
             status_forcelist=(429, 500, 502, 503, 504),
