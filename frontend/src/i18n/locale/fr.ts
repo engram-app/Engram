@@ -120,13 +120,13 @@ export default {
 		"Le paiement n'a pas été effectué. Veuillez réessayer.",
 	"Simulate failure": "Simuler un échec",
 	"Choose a Plan": "Choisir un abonnement",
-	"Both plans include a 7-day free trial.":
-		"Les deux abonnements incluent une période d'essai gratuite de 7 jours.",
+	"Both plans come with a 14-day money-back guarantee.":
+		"Les deux abonnements incluent une garantie de remboursement de 14 jours.",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"Coffres illimités · 50 Go · recherche multi-coffres + API",
 	"Choose Pro": "Choisir l'abonnement Pro",
-	"7-day free trial · cancel anytime":
-		"Période d'essai gratuite de 7 jours · possibilité de résilier à tout moment",
+	"14-day money-back guarantee · cancel anytime":
+		"Garantie de remboursement de 14 jours · tu peux annuler à tout moment",
 	"10 vaults · 10 GB · unlimited AI": "10 coffres · 10 Go · IA illimitée",
 	"Choose Starter": "Choisir l'abonnement Starter",
 	"Choose Free": "Choisis Gratuit",
@@ -245,6 +245,7 @@ export default {
 	"Reopen checkout": "Rouvrir le processus de paiement",
 	"Payment received": "Paiement reçu",
 	"Open Engram": "Ouvrir Engram",
+	"Try again": "Réessayer",
 	"Need help? Contact {support}.": "Besoin d'aide ? Contacte {support}.",
 	"Payment method": "Méthode de paiement",
 	"Opening…": "Ouverture…",
@@ -272,7 +273,6 @@ export default {
 	"Most popular": "Le plus populaire",
 	"Your current plan": "Ton abonnement actuel",
 	"You're on this plan": "Tu es sur cet abonnement",
-	"Start free trial": "Démarre un essai gratuit",
 	Popular: "Populaire",
 	"20 AI searches a day": "20 recherches IA par jour",
 	"1 vault": "1 coffre",
@@ -410,7 +410,6 @@ export default {
 		"Pas de prélèvements pendant ton essai. La facturation commence à la fin de ton essai.",
 	"An invoice will be created for this amount.": "Une facture sera créée pour ce montant.",
 	"per {interval}": "par {interval}",
-	"{trialPeriod} free trial": "Essai gratuit de {trialPeriod}",
 	"Dismiss alert": "Fermer l'alerte",
 	"Expires {date}": "Expiration le {date}",
 	Payment: "Paiement",
@@ -1003,8 +1002,8 @@ export default {
 	"Couldn't save your answers, please try again.":
 		"Impossible de sauvegarder tes réponses, essaie à nouveau.",
 	"Choose your plan": "Choisis ton abonnement",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"Essai gratuit de 7 jours sur les abonnements payants. Carte requise, aucun prélèvement tant que l'essai n'est pas terminé.",
+	"Paid plans come with a 14-day money-back guarantee.":
+		"Les abonnements payants incluent une garantie de remboursement de 14 jours.",
 	"Continue with Free →": "Continuer avec l'offre gratuite →",
 	"{summary} · upgrade anytime":
 		"{summary} · possibilité de passer à une version supérieure à tout moment",
@@ -1365,7 +1364,6 @@ export default {
 		"Aucun dossier pour l'instant. Les fichiers vont en haut de ton coffre.",
 	"Uploading {name}": "Téléchargement de {name}",
 	"{pct}%": "{pct}%",
-	"Try again": "Réessayer",
 	"Upload more": "Télécharger plus",
 	Upload: "Téléverser",
 	"Upgrade to upload attachments": "Mettre à niveau pour télécharger les pièces jointes",

@@ -120,12 +120,13 @@ export default {
 	"Payment did not go through. Please try again.": "Pembayaran gagal. Sila cuba lagi.",
 	"Simulate failure": "Simulasikan kegagalan",
 	"Choose a Plan": "Pilih Pelan",
-	"Both plans include a 7-day free trial.": "Kedua-dua pelan termasuk tempoh percubaan 7 hari.",
+	"Both plans come with a 14-day money-back guarantee.":
+		"Kedua-dua pakej ini disertakan dengan jaminan wang kembali selama 14 hari.",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"Peti nota tanpa had · 50 GB · carian lintas peti nota + API",
 	"Choose Pro": "Pilih Pro",
-	"7-day free trial · cancel anytime":
-		"Tempoh percubaan 7 hari · boleh dibatalkan pada bila-bila masa",
+	"14-day money-back guarantee · cancel anytime":
+		"Jaminan wang kembali 14 hari · batalkan pada bila-bila masa",
 	"10 vaults · 10 GB · unlimited AI": "10 peti nota · 10 GB · AI tanpa had",
 	"Choose Starter": "Pilih Starter",
 	"Choose Free": "Pilih Percuma",
@@ -236,6 +237,7 @@ export default {
 	"Reopen checkout": "Buka semula semakan",
 	"Payment received": "Pembayaran diterima",
 	"Open Engram": "Buka Engram",
+	"Try again": "Cuba lagi",
 	"Need help? Contact {support}.": "Perlukan bantuan? Hubungi {support}.",
 	"Payment method": "Kaedah pembayaran",
 	"Opening…": "Membuka…",
@@ -263,7 +265,6 @@ export default {
 	"Most popular": "Paling popular",
 	"Your current plan": "Pelan anda sekarang",
 	"You're on this plan": "Anda menggunakan pelan ini",
-	"Start free trial": "Mulakan percubaan percuma",
 	Popular: "Popular",
 	"20 AI searches a day": "20 carian AI sehari",
 	"1 vault": "1 peti nota",
@@ -395,7 +396,6 @@ export default {
 		"Tiada caj semasa tempoh percubaan anda. Pembayaran bermula apabila tempoh percubaan anda tamat.",
 	"An invoice will be created for this amount.": "Invois akan dibuat untuk jumlah ini.",
 	"per {interval}": "setiap {interval}",
-	"{trialPeriod} free trial": "percubaan percuma {trialPeriod}",
 	"Dismiss alert": "Tutup amaran",
 	"Expires {date}": "Tamat pada {date}",
 	Payment: "Pembayaran",
@@ -957,8 +957,8 @@ export default {
 	"Couldn't save your answers, please try again.":
 		"Tidak dapat menyimpan jawapan anda, sila cuba lagi.",
 	"Choose your plan": "Pilih pelan anda",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"Tempoh percubaan 7 hari untuk pelan berbayar. Kad diperlukan, tiada caj sehingga tamat.",
+	"Paid plans come with a 14-day money-back guarantee.":
+		"Pakej berbayar disertakan dengan jaminan wang kembali selama 14 hari.",
 	"Continue with Free →": "Teruskan dengan Percuma →",
 	"{summary} · upgrade anytime": "{summary} · tingkatkan pada bila-bila masa",
 	"Step {step} of {total}": "Langkah {step} daripada {total}",
@@ -1308,7 +1308,6 @@ export default {
 		"Tiada folder lagi. Fail akan berada di bahagian atas peti nota anda.",
 	"Uploading {name}": "Memuat naik {name}",
 	"{pct}%": "{pct}%",
-	"Try again": "Cuba lagi",
 	"Upload more": "Muat naik lebih banyak",
 	Upload: "Muat naik",
 	"Upgrade to upload attachments": "Tingkatkan untuk memuat naik lampiran",

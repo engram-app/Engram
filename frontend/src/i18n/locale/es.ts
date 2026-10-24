@@ -121,12 +121,13 @@ export default {
 		"El pago no se completó. Por favor, inténtalo de nuevo.",
 	"Simulate failure": "Simular fallo",
 	"Choose a Plan": "Elige un plan",
-	"Both plans include a 7-day free trial.": "Ambos planes incluyen una prueba gratuita de 7 días.",
+	"Both plans come with a 14-day money-back guarantee.":
+		"Ambos planes incluyen una garantía de devolución de dinero de 14 días.",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"Bóvedas ilimitadas · 50 GB · búsqueda entre bóvedas + API",
 	"Choose Pro": "Elige la versión Pro",
-	"7-day free trial · cancel anytime":
-		"Prueba gratuita de 7 días · puedes cancelar en cualquier momento",
+	"14-day money-back guarantee · cancel anytime":
+		"Garantía de devolución de dinero de 14 días · cancela cuando quieras",
 	"10 vaults · 10 GB · unlimited AI": "10 bóvedas · 10 GB · IA ilimitada",
 	"Choose Starter": "Elige la versión Starter",
 	"Choose Free": "Elige Gratuito",
@@ -243,6 +244,7 @@ export default {
 	"Reopen checkout": "Reabrir el proceso de pago",
 	"Payment received": "Pago recibido",
 	"Open Engram": "Abrir Engram",
+	"Try again": "Inténtalo de nuevo",
 	"Need help? Contact {support}.": "¿Necesitas ayuda? Contacta a {support}.",
 	"Payment method": "Método de pago",
 	"Opening…": "Abriendo…",
@@ -270,7 +272,6 @@ export default {
 	"Most popular": "Más popular",
 	"Your current plan": "Tu plan actual",
 	"You're on this plan": "Estás en este plan",
-	"Start free trial": "Empieza la prueba gratuita",
 	Popular: "Popular",
 	"20 AI searches a day": "20 búsquedas de IA al día",
 	"1 vault": "1 bóveda",
@@ -409,7 +410,6 @@ export default {
 		"No hay cargos durante tu prueba. La facturación comienza cuando finaliza tu prueba.",
 	"An invoice will be created for this amount.": "Se creará una factura por este importe.",
 	"per {interval}": "por {interval}",
-	"{trialPeriod} free trial": "Prueba gratuita de {trialPeriod}",
 	"Dismiss alert": "Descartar alerta",
 	"Expires {date}": "Vence el {date}",
 	Payment: "Pago",
@@ -1002,8 +1002,8 @@ export default {
 	"Couldn't save your answers, please try again.":
 		"No se pudieron guardar tus respuestas, por favor intenta de nuevo.",
 	"Choose your plan": "Elige tu plan",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"Prueba gratuita de 7 días en los planes de pago. Se requiere tarjeta, no se te cobrará hasta que finalice.",
+	"Paid plans come with a 14-day money-back guarantee.":
+		"Los planes de pago incluyen una garantía de devolución de dinero de 14 días.",
 	"Continue with Free →": "Continuar con la versión gratuita →",
 	"{summary} · upgrade anytime": "{summary} · puedes actualizar en cualquier momento",
 	"Step {step} of {total}": "Paso {step} de {total}",
@@ -1368,7 +1368,6 @@ export default {
 		"Aún no hay carpetas. Los archivos van al principio de tu bóveda.",
 	"Uploading {name}": "Subiendo {name}",
 	"{pct}%": "{pct}%",
-	"Try again": "Inténtalo de nuevo",
 	"Upload more": "Subir más",
 	Upload: "Subir",
 	"Upgrade to upload attachments": "Actualiza para subir adjuntos",

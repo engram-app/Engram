@@ -118,12 +118,13 @@ export default {
 	"Payment did not go through. Please try again.": "Płatność nie powiodła się. Spróbuj ponownie.",
 	"Simulate failure": "Symuluj niepowodzenie",
 	"Choose a Plan": "Wybierz plan",
-	"Both plans include a 7-day free trial.": "Oba plany zawierają 7-dniowy okres próbny.",
+	"Both plans come with a 14-day money-back guarantee.":
+		"Oba plany oferują 14-dniową gwarancję zwrotu pieniędzy.",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"Nieograniczona liczba sejfów · 50 GB · wyszukiwanie między sejfami + API",
 	"Choose Pro": "Wybierz Pro",
-	"7-day free trial · cancel anytime":
-		"7-dniowy okres próbny · możesz zrezygnować w dowolnym momencie",
+	"14-day money-back guarantee · cancel anytime":
+		"14-dniowa gwarancja zwrotu pieniędzy · anuluj w dowolnym momencie",
 	"10 vaults · 10 GB · unlimited AI": "10 sejfów · 10 GB · nieograniczone użycie AI",
 	"Choose Starter": "Wybierz Starter",
 	"Choose Free": "Wybierz darmowy plan",
@@ -244,6 +245,7 @@ export default {
 	"Reopen checkout": "Ponowne otwarcie strony płatności",
 	"Payment received": "Płatność odebrana",
 	"Open Engram": "Otwórz Engram",
+	"Try again": "Spróbuj ponownie",
 	"Need help? Contact {support}.": "Potrzebujesz pomocy? Skontaktuj się z {support}.",
 	"Payment method": "Metoda płatności",
 	"Opening…": "Otwieranie…",
@@ -271,7 +273,6 @@ export default {
 	"Most popular": "Najpopularniejszy",
 	"Your current plan": "Twój aktualny plan",
 	"You're on this plan": "Jesteś na tym planie",
-	"Start free trial": "Rozpocznij darmowy okres próbny",
 	Popular: "Popularny",
 	"20 AI searches a day": "20 zapytań AI dziennie",
 	"1 vault": "1 sejf",
@@ -410,7 +411,6 @@ export default {
 		"Brak opłat w okresie próbny. Rozliczenia rozpoczynają się po zakończeniu okresu próbnego.",
 	"An invoice will be created for this amount.": "Zostanie wygenerowana faktura na tę kwotę.",
 	"per {interval}": "na {interval}",
-	"{trialPeriod} free trial": "{trialPeriod} darmowy okres próbny",
 	"Dismiss alert": "Zamknij powiadomienie",
 	"Expires {date}": "Wygasa {date}",
 	Payment: "Płatność",
@@ -1037,8 +1037,8 @@ export default {
 	"Couldn't save your answers, please try again.":
 		"Nie udało się zapisać odpowiedzi, spróbuj ponownie.",
 	"Choose your plan": "Wybierz swój plan",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"7-dniowy okres próbny w płatnych planach. Wymagana karta, bez opłat do momentu zakończenia.",
+	"Paid plans come with a 14-day money-back guarantee.":
+		"Płatne plany oferują 14-dniową gwarancję zwrotu pieniędzy.",
 	"Continue with Free →": "Kontynuuj z darmowym planem →",
 	"{summary} · upgrade anytime": "{summary} · możesz uaktualnić w dowolnym momencie",
 	"Step {step} of {total}": "Krok {step} z {total}",
@@ -1403,7 +1403,6 @@ export default {
 		"Jeszcze brak folderów. Pliki trafiają na górę twojego sejfu.",
 	"Uploading {name}": "Wgrywanie {name}",
 	"{pct}%": "{pct}%",
-	"Try again": "Spróbuj ponownie",
 	"Upload more": "Wgraj więcej",
 	Upload: "Wgraj",
 	"Upgrade to upload attachments": "Zaktualizuj, aby móc przesyłać załączniki",

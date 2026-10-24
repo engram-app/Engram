@@ -119,13 +119,13 @@ export default {
 		"Il pagamento non è andato a buon fine. Riprova.",
 	"Simulate failure": "Simula un errore",
 	"Choose a Plan": "Scegli un piano",
-	"Both plans include a 7-day free trial.":
-		"Entrambi i piani includono una prova gratuita di 7 giorni.",
+	"Both plans come with a 14-day money-back guarantee.":
+		"Entrambi i piani includono una garanzia di rimborso di 14 giorni.",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"Vault illimitati · 50 GB · ricerca tra vault + API",
 	"Choose Pro": "Scegli Pro",
-	"7-day free trial · cancel anytime":
-		"Prova gratuita di 7 giorni · puoi cancellare in qualsiasi momento",
+	"14-day money-back guarantee · cancel anytime":
+		"Garanzia di rimborso di 14 giorni · puoi cancellare quando vuoi",
 	"10 vaults · 10 GB · unlimited AI": "10 vault · 10 GB · AI illimitata",
 	"Choose Starter": "Scegli Starter",
 	"Choose Free": "Scegli Gratuito",
@@ -242,6 +242,7 @@ export default {
 	"Reopen checkout": "Riapri il processo di pagamento",
 	"Payment received": "Pagamento ricevuto",
 	"Open Engram": "Apri Engram",
+	"Try again": "Riprova",
 	"Need help? Contact {support}.": "Hai bisogno di aiuto? Contatta {support}.",
 	"Payment method": "Metodo di pagamento",
 	"Opening…": "Apertura…",
@@ -269,7 +270,6 @@ export default {
 	"Most popular": "Più popolare",
 	"Your current plan": "Il tuo piano attuale",
 	"You're on this plan": "Sei su questo piano",
-	"Start free trial": "Inizia la prova gratuita",
 	Popular: "Popolare",
 	"20 AI searches a day": "20 ricerche AI al giorno",
 	"1 vault": "1 vault",
@@ -405,7 +405,6 @@ export default {
 		"Nessun addebito durante la tua prova. La fatturazione inizia quando la prova termina.",
 	"An invoice will be created for this amount.": "Verrà creata una fattura per questo importo.",
 	"per {interval}": "ogni {interval}",
-	"{trialPeriod} free trial": "prova gratuita di {trialPeriod}",
 	"Dismiss alert": "Annulla l'avviso",
 	"Expires {date}": "Scade il {date}",
 	Payment: "Pagamento",
@@ -999,8 +998,8 @@ export default {
 	"Pick one to continue.": "Scegli una opzione per continuare.",
 	"Couldn't save your answers, please try again.": "Impossibile salvare le tue risposte, riprova.",
 	"Choose your plan": "Scegli il tuo piano",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"Prova gratuita di 7 giorni sui piani a pagamento. È necessaria una carta, non verrà addebitato nulla fino alla scadenza.",
+	"Paid plans come with a 14-day money-back guarantee.":
+		"I piani a pagamento includono una garanzia di rimborso di 14 giorni.",
 	"Continue with Free →": "Continua con la versione gratuita →",
 	"{summary} · upgrade anytime":
 		"{summary} · puoi passare a un piano a pagamento in qualsiasi momento",
@@ -1363,7 +1362,6 @@ export default {
 		"Nessuna cartella ancora. I file vanno in cima al tuo vault.",
 	"Uploading {name}": "Caricamento di {name}",
 	"{pct}%": "{pct}%",
-	"Try again": "Riprova",
 	"Upload more": "Carica altro",
 	Upload: "Carica",
 	"Upgrade to upload attachments": "Aggiorna per caricare allegati",

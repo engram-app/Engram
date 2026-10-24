@@ -123,12 +123,13 @@ export default {
 		"Оплата не прошла. Пожалуйста, попробуйте еще раз.",
 	"Simulate failure": "Имитировать ошибку",
 	"Choose a Plan": "Выберите тарифный план",
-	"Both plans include a 7-day free trial.":
-		"Оба тарифа включают 7-дневный бесплатный пробный период.",
+	"Both plans come with a 14-day money-back guarantee.":
+		"Оба плана включают 14-дневную гарантию возврата денег.",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"Неограниченное количество хранилищ · 50 ГБ · поиск по всем хранилищам + API",
 	"Choose Pro": 'Выбрать тариф "Pro"',
-	"7-day free trial · cancel anytime": "7-дневный бесплатный пробный период · отмена в любое время",
+	"14-day money-back guarantee · cancel anytime":
+		"14-дневная гарантия возврата денег · отмена в любое время",
 	"10 vaults · 10 GB · unlimited AI": "10 хранилищ · 10 ГБ · неограниченное использование ИИ",
 	"Choose Starter": 'Выбрать тариф "Starter"',
 	"Choose Free": 'Выберите "Бесплатно"',
@@ -249,6 +250,7 @@ export default {
 	"Reopen checkout": "Повторно открыть страницу оплаты",
 	"Payment received": "Платеж получен",
 	"Open Engram": "Открыть Engram",
+	"Try again": "Повторить попытку",
 	"Need help? Contact {support}.": "Нужна помощь? Свяжитесь с {support}.",
 	"Payment method": "Способ оплаты",
 	"Opening…": "Открывается…",
@@ -276,7 +278,6 @@ export default {
 	"Most popular": "Самый популярный",
 	"Your current plan": "Ваш текущий тарифный план",
 	"You're on this plan": "Вы используете этот тарифный план",
-	"Start free trial": "Начать бесплатный пробный период",
 	Popular: "Популярный",
 	"20 AI searches a day": "20 AI-запросов в день",
 	"1 vault": "1 хранилище",
@@ -418,7 +419,6 @@ export default {
 		"Никаких списаний во время пробного периода. Оплата начинается после окончания пробного периода.",
 	"An invoice will be created for this amount.": "Будет создан счёт на эту сумму.",
 	"per {interval}": "за {interval}",
-	"{trialPeriod} free trial": "{trialPeriod} дней бесплатного пробного периода",
 	"Dismiss alert": "Закрыть уведомление",
 	"Expires {date}": "Срок действия: {date}",
 	Payment: "Оплата",
@@ -1051,8 +1051,8 @@ export default {
 	"Couldn't save your answers, please try again.":
 		"Не удалось сохранить ваши ответы, попробуйте ещё раз.",
 	"Choose your plan": "Выберите свой тарифный план",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"7-дневный бесплатный пробный период для платных планов. Требуется карта, списание средств не произойдет до окончания пробного периода.",
+	"Paid plans come with a 14-day money-back guarantee.":
+		"Платные планы включают 14-дневную гарантию возврата денег.",
 	"Continue with Free →": "Продолжить с бесплатным тарифом →",
 	"{summary} · upgrade anytime": "{summary} · можно обновить в любое время",
 	"Step {step} of {total}": "Шаг {step} из {total}",
@@ -1422,7 +1422,6 @@ export default {
 		"Пока нет папок. Файлы отображаются вверху вашего хранилища.",
 	"Uploading {name}": "Загрузка {name}",
 	"{pct}%": "{pct}%",
-	"Try again": "Повторить попытку",
 	"Upload more": "Загрузить ещё",
 	Upload: "Загрузить",
 	"Upgrade to upload attachments": "Обновите подписку, чтобы загружать вложения",

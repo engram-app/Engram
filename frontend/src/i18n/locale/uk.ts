@@ -122,11 +122,13 @@ export default {
 		"Оплата не пройшла. Будь ласка, спробуйте ще раз.",
 	"Simulate failure": "Імітувати помилку",
 	"Choose a Plan": "Оберіть тарифний план",
-	"Both plans include a 7-day free trial.": "Обидва плани включають 7-денний пробний період.",
+	"Both plans come with a 14-day money-back guarantee.":
+		"Обидва плани передбачають 14-денну гарантію повернення коштів.",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"Необмежена кількість сховищ · 50 ГБ · пошук між сховищами + API",
 	"Choose Pro": "Оберіть Pro",
-	"7-day free trial · cancel anytime": "7-денний пробний період · можна скасувати в будь-який час",
+	"14-day money-back guarantee · cancel anytime":
+		"14-денна гарантія повернення коштів · скасувати в будь-який час",
 	"10 vaults · 10 GB · unlimited AI": "10 сховищ · 10 ГБ · необмежений доступ до ШІ",
 	"Choose Starter": "Оберіть Starter",
 	"Choose Free": "Оберіть безкоштовний тариф",
@@ -247,6 +249,7 @@ export default {
 	"Reopen checkout": "Відкрити сторінку оплати знову",
 	"Payment received": "Отримано оплату",
 	"Open Engram": "Відкрити Engram",
+	"Try again": "Спробувати ще раз",
 	"Need help? Contact {support}.": "Потрібна допомога? Зв'яжіться з {support}.",
 	"Payment method": "Спосіб оплати",
 	"Opening…": "Відкривається…",
@@ -274,7 +277,6 @@ export default {
 	"Most popular": "Найпопулярніший",
 	"Your current plan": "Ваш поточний тарифний план",
 	"You're on this plan": "Ви користуєтеся цим тарифним планом",
-	"Start free trial": "Почніть безкоштовний пробний період",
 	Popular: "Популярні",
 	"20 AI searches a day": "20 AI-запитів на день",
 	"1 vault": "1 сховище",
@@ -415,7 +417,6 @@ export default {
 		"Під час пробного періоду списання не здійснюються. Оплата починається після закінчення пробного періоду.",
 	"An invoice will be created for this amount.": "Буде створено рахунок на цю суму.",
 	"per {interval}": "за {interval}",
-	"{trialPeriod} free trial": "{trialPeriod} днів безкоштовно",
 	"Dismiss alert": "Закрити сповіщення",
 	"Expires {date}": "Закінчується {date}",
 	Payment: "Оплата",
@@ -1046,8 +1047,8 @@ export default {
 	"Couldn't save your answers, please try again.":
 		"Не вдалося зберегти ваші відповіді, будь ласка, спробуйте ще раз.",
 	"Choose your plan": "Оберіть свій план",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"7-денний безкоштовний пробний період для платних планів. Потрібна картка, зняття коштів не відбудеться до закінчення пробного періоду.",
+	"Paid plans come with a 14-day money-back guarantee.":
+		"Платні плани передбачають 14-денну гарантію повернення коштів.",
 	"Continue with Free →": "Продовжити з безкоштовного →",
 	"{summary} · upgrade anytime": "{summary} · можливість оновлення в будь-який час",
 	"Step {step} of {total}": "Крок {step} з {total}",
@@ -1416,7 +1417,6 @@ export default {
 		"Поки що немає папок. Файли відображаються у верхній частині вашого сховища.",
 	"Uploading {name}": "Завантаження {name}",
 	"{pct}%": "{pct}%",
-	"Try again": "Спробувати ще раз",
 	"Upload more": "Завантажити ще",
 	Upload: "Завантажити",
 	"Upgrade to upload attachments": "Оновіть підписку, щоб завантажувати вкладення",
