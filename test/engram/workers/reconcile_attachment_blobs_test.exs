@@ -20,6 +20,8 @@ defmodule Engram.Workers.ReconcileAttachmentBlobsTest do
   alias Engram.Vaults.Vault
   alias Engram.Workers.ReconcileAttachmentBlobs
 
+  require Logger
+
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
     vault = insert(:vault, user: user)
@@ -324,6 +326,154 @@ defmodule Engram.Workers.ReconcileAttachmentBlobsTest do
 
     refute_received {:restored, _}
     refute log =~ "probe failed"
+  end
+
+  describe "bucket versions unavailable (no grant, no versioning)" do
+    # Self-host and staging may lack ListBucketVersions, or run MinIO/S3 with
+    # versioning off. That is a configuration, not a failure: the job must not
+    # fail and retry forever, and the daily cron must not storm alerts.
+    setup do
+      :ok = ReconcileAttachmentBlobs.reset_unavailable()
+      on_exit(&ReconcileAttachmentBlobs.reset_unavailable/0)
+
+      handler = {__MODULE__, make_ref()}
+      test_pid = self()
+
+      :telemetry.attach(
+        handler,
+        [:engram, :attachments, :reconcile_unavailable],
+        fn _, m, meta, _ -> send(test_pid, {:unavailable, m, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      previous_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous_level) end)
+      :ok
+    end
+
+    test "AccessDenied on the listing is a no-op, logged once, counted per job", %{
+      user: user,
+      vault: vault
+    } do
+      att = put_att(user, vault, "a.png", "bytes")
+      :ok = Storage.adapter().delete(att.storage_key)
+      use_mock_storage()
+      test_pid = self()
+
+      Mox.stub(Engram.MockStorage, :list_versions, fn _, _ ->
+        {:error, {:unsupported, :access_denied}}
+      end)
+
+      Mox.stub(Engram.MockStorage, :restore_version, fn key, _ ->
+        send(test_pid, {:restored, key})
+        :ok
+      end)
+
+      log =
+        capture_log([level: :info], fn ->
+          assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault))
+          assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault))
+        end)
+
+      refute_received {:restored, _}
+      assert length(String.split(log, "bucket versions unavailable")) == 2
+      assert_received {:unavailable, %{count: 1}, %{reason: :access_denied}}
+      assert_received {:unavailable, %{count: 1}, %{reason: :access_denied}}
+    end
+
+    test "the daily fan-out is skipped once this node knows versions are unavailable", %{
+      user: user,
+      vault: vault
+    } do
+      put_att(user, vault, "a.png", "bytes")
+      use_mock_storage()
+      Mox.stub(Engram.MockStorage, :list_versions, fn _, _ -> {:error, :unsupported} end)
+
+      assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault))
+      assert :ok = perform_job(ReconcileAttachmentBlobs, %{})
+      refute_enqueued(worker: ReconcileAttachmentBlobs, args: args(user, vault))
+    end
+
+    test "a bucket with versioning off (only null version ids) is a no-op, not unrecoverable",
+         %{user: user, vault: vault} do
+      att = put_att(user, vault, "a.png", "bytes")
+      lost = "#{user.id}/#{vault.id}/objects/#{Ecto.UUID.generate()}"
+      use_mock_storage()
+
+      {1, _} =
+        Repo.update_all(from(a in Attachment, where: a.id == ^att.id), [set: [storage_key: lost]],
+          skip_tenant_check: true
+        )
+
+      other = put_att(user, vault, "b.png", "bytes")
+
+      Mox.stub(Engram.MockStorage, :list_versions, fn _, _ ->
+        {:ok,
+         [
+           %{
+             key: other.storage_key,
+             version_id: "null",
+             last_modified: "2026-10-23T00:00:00.000Z",
+             latest?: true,
+             delete_marker?: false
+           }
+         ], nil}
+      end)
+
+      log =
+        capture_log([level: :info], fn ->
+          assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault))
+        end)
+
+      refute log =~ "attachment blob unrecoverable"
+      assert_received {:unavailable, _, %{reason: :versioning_off}}
+    end
+
+    test "an empty listing does not latch versions off", %{user: user, vault: vault} do
+      put_att(user, vault, "a.png", "bytes")
+      use_mock_storage()
+      Mox.stub(Engram.MockStorage, :list_versions, fn _, _ -> {:ok, [], nil} end)
+
+      assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault))
+      refute_received {:unavailable, _, _}
+      assert :ok = perform_job(ReconcileAttachmentBlobs, %{})
+      assert_enqueued(worker: ReconcileAttachmentBlobs, args: args(user, vault))
+    end
+
+    test "a 5xx on the listing still fails the job so Oban retries", %{user: user, vault: vault} do
+      put_att(user, vault, "a.png", "bytes")
+      use_mock_storage()
+
+      Mox.stub(Engram.MockStorage, :list_versions, fn _, _ ->
+        {:error, {:http_error, 503, %{body: "SlowDown"}}}
+      end)
+
+      assert {:error, {:http_error, 503, _}} =
+               perform_job(ReconcileAttachmentBlobs, args(user, vault))
+
+      refute_received {:unavailable, _, _}
+    end
+
+    test "a later successful listing clears the latch and restores", %{user: user, vault: vault} do
+      att = put_att(user, vault, "a.png", "original bytes")
+      :ok = Storage.adapter().delete(att.storage_key)
+      use_mock_storage()
+      Mox.stub(Engram.MockStorage, :list_versions, fn _, _ -> {:error, :unsupported} end)
+      assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault))
+
+      # The grant lands: back to the real (versioned) listing.
+      Mox.stub(Engram.MockStorage, :list_versions, &InMemory.list_versions/2)
+      assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault))
+
+      assert {:ok, %{content: "original bytes"}} =
+               Attachments.get_attachment(user, vault, "a.png")
+
+      assert :ok = perform_job(ReconcileAttachmentBlobs, %{})
+      assert_enqueued(worker: ReconcileAttachmentBlobs, args: args(user, vault))
+    end
   end
 
   test "a read of a missing blob enqueues a reconcile for the vault", %{

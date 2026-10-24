@@ -122,10 +122,17 @@ defmodule Engram.Storage.S3 do
 
         {:ok, page.versions, next}
 
-      # S3-compatible stores without versioning (Cloudflare R2, some MinIO
-      # modes) answer 501 NotImplemented: unsupported, not a failure to retry.
+      # Unsupported, not a failure to retry: S3-compatible stores without
+      # versioning (Cloudflare R2, some MinIO modes) answer 501, and a role
+      # without s3:ListBucketVersions (self-host, staging) answers 403
+      # AccessDenied. Any other 403 (a bad signature) stays an error.
       {:error, {:http_error, 501, _}} ->
-        {:error, :unsupported}
+        {:error, {:unsupported, :not_implemented}}
+
+      {:error, {:http_error, 403, %{body: body}} = reason} ->
+        if is_binary(body) and body =~ "<Code>AccessDenied</Code>",
+          do: {:error, {:unsupported, :access_denied}},
+          else: {:error, reason}
 
       {:error, reason} ->
         {:error, reason}

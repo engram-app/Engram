@@ -31,8 +31,17 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
     * a daily cron runs the job with no args, which fans out one job per
       vault holding live attachments.
 
-  An unversioned backend (`Engram.Storage.Database`) answers
-  `{:error, :unsupported}` and the job is a no-op.
+  Versions unavailable is a configuration, not a failure (an upgrade must
+  need no operator action): the Database adapter, a store without versioning
+  (501), a role without `s3:ListBucketVersions` (403 AccessDenied), or a
+  bucket with versioning off (every listed version id is `"null"`). The job
+  returns `:ok`, counts `[:engram, :attachments, :reconcile_unavailable]`
+  (`reason` tag, scraped via `Engram.PromEx.Reliability`), and logs at info
+  once per node boot. While this node knows versions are unavailable the
+  daily fan-out is skipped; the read-triggered per-vault job still lists
+  (one request), so a grant added later is picked up by the next one, which
+  clears the latch. Any other listing error (network, 5xx) fails the job and
+  Oban retries it.
   """
   use Oban.Worker,
     queue: :maintenance,
@@ -48,6 +57,9 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
   alias Engram.Storage
 
   require Logger
+
+  # Set once this node learns bucket versions are unavailable (see moduledoc).
+  @latch {__MODULE__, :unavailable}
 
   # Jobs per `Oban.insert_all` in the fan-out (same bound as the notes path).
   @insert_chunk 2_000
@@ -81,7 +93,8 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
 
       {:error, :tenancy_unsafe}
     else
-      fan_out()
+      # Bounded: without versions every per-vault job would be a no-op.
+      if :persistent_term.get(@latch, nil), do: :ok, else: fan_out()
     end
   end
 
@@ -107,9 +120,19 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
   # truncated page is carried into the next one before it is decided.
   defp reconcile(user_id, vault_id) do
     prefix = "#{user_id}/#{vault_id}/objects/"
+    acc = %{seen: MapSet.new(), restored: 0, versioned?: false, listed?: false}
 
-    case pages(user_id, vault_id, prefix, nil, [], MapSet.new(), 0) do
-      {:ok, seen, restored} ->
+    case pages(user_id, vault_id, prefix, nil, [], acc) do
+      {:ok, %{listed?: true, versioned?: false}} ->
+        # Entries, but every one a "null" version and no delete marker:
+        # versioning is off, so a missing blob has nothing to come back from.
+        # Not an unrecoverable alert per key; the client copy is the way back.
+        # (An EMPTY listing proves nothing about versioning, so it is not
+        # classified here: it would latch a versioned node off.)
+        unavailable(:versioning_off)
+
+      {:ok, %{seen: seen, restored: restored}} ->
+        :ok = clear_unavailable()
         # Live keys with no entry at all, read AFTER the listing finished, so
         # an upload that landed meanwhile is caught by the exists? re-check.
         missing = for {id, key} <- live_keys(user_id, vault_id), key not in seen, do: {id, key}
@@ -117,29 +140,71 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
         log_restored(vault_id, restored)
 
       {:error, :unsupported} ->
-        :ok
+        unavailable(:unsupported)
+
+      {:error, {:unsupported, reason}} when is_atom(reason) ->
+        unavailable(reason)
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp pages(user_id, vault_id, prefix, marker, carry, seen, restored) do
+  defp pages(user_id, vault_id, prefix, marker, carry, acc) do
     case Storage.adapter().list_versions(prefix, marker: marker, max_keys: page_size()) do
       {:ok, entries, next} ->
         {ready, carry} = split_carry(carry ++ entries, next)
         by_key = Enum.group_by(ready, & &1.key)
-        restored = restored + restore_page(user_id, vault_id, by_key)
-        seen = MapSet.union(seen, by_key |> Map.keys() |> MapSet.new())
+
+        acc = %{
+          acc
+          | restored: acc.restored + restore_page(user_id, vault_id, by_key),
+            seen: MapSet.union(acc.seen, by_key |> Map.keys() |> MapSet.new()),
+            versioned?: acc.versioned? or Enum.any?(entries, &versioned_entry?/1),
+            listed?: acc.listed? or entries != []
+        }
 
         if next,
-          do: pages(user_id, vault_id, prefix, next, carry, seen, restored),
-          else: {:ok, seen, restored}
+          do: pages(user_id, vault_id, prefix, next, carry, acc),
+          else: {:ok, acc}
 
       {:error, _} = err ->
         err
     end
   end
+
+  # S3 gives "null" as the version id of an object written while versioning
+  # was off. A delete marker or a real id means the bucket keeps versions.
+  defp versioned_entry?(%{delete_marker?: true}), do: true
+  defp versioned_entry?(%{version_id: id}), do: id != "null"
+
+  # :ok, counted every time, logged once per node boot. persistent_term: one
+  # write per boot (and one erase when it clears), read on every fan-out.
+  defp unavailable(reason) do
+    :telemetry.execute([:engram, :attachments, :reconcile_unavailable], %{count: 1}, %{
+      reason: reason
+    })
+
+    if :persistent_term.get(@latch, nil) != reason do
+      :persistent_term.put(@latch, reason)
+
+      Logger.info(
+        "attachment reconcile: bucket versions unavailable, restore from versions is off",
+        Metadata.with_category(:info, :sync, reason: reason)
+      )
+    end
+
+    :ok
+  end
+
+  defp clear_unavailable do
+    if :persistent_term.get(@latch, nil), do: :persistent_term.erase(@latch)
+    :ok
+  end
+
+  @doc false
+  # Tests: forget what this node learned.
+  def reset_unavailable, do: clear_unavailable()
 
   # Holds back the last key of a truncated page: its next entries may be on
   # the following page.

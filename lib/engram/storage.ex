@@ -51,11 +51,13 @@ defmodule Engram.Storage do
   `opts[:marker]`, or nil on the last page. A key's entries may span two
   pages. Used by `Engram.Workers.ReconcileAttachmentBlobs` to find a live
   row's blob behind a delete marker, a page at a time. `{:error,
-  :unsupported}` from a backend without versioning, which makes the
-  reconciler a no-op.
+  :unsupported}` (or `{:error, {:unsupported, reason}}`) when versions cannot
+  be listed here at all, which makes the reconciler a no-op: a backend
+  without versioning, or a role without the list permission.
   """
   @callback list_versions(prefix :: String.t(), opts :: keyword()) ::
-              {:ok, [version()], next :: term() | nil} | {:error, :unsupported | term()}
+              {:ok, [version()], next :: term() | nil}
+              | {:error, :unsupported | {:unsupported, atom()} | term()}
 
   @doc """
   Makes `version_id` of `key` its current version again by copying it on top

@@ -236,14 +236,33 @@ defmodule Engram.Storage.S3Test do
     end
   end
 
-  test "list_versions/2 maps a backend without versioning (501) to :unsupported", %{
-    bypass: bypass
-  } do
+  test "list_versions/2 maps a backend without versioning (501) to {:unsupported, :not_implemented}",
+       %{
+         bypass: bypass
+       } do
     Bypass.expect_once(bypass, "GET", "/#{@bucket}/", fn conn ->
       Plug.Conn.resp(conn, 501, "<Error><Code>NotImplemented</Code></Error>")
     end)
 
-    assert {:error, :unsupported} = S3.list_versions("u/v/objects/", [])
+    assert {:error, {:unsupported, :not_implemented}} = S3.list_versions("u/v/objects/", [])
+  end
+
+  test "list_versions/2 maps AccessDenied (403) to {:unsupported, :access_denied}", %{
+    bypass: bypass
+  } do
+    Bypass.expect_once(bypass, "GET", "/#{@bucket}/", fn conn ->
+      Plug.Conn.resp(conn, 403, "<Error><Code>AccessDenied</Code><Message>no</Message></Error>")
+    end)
+
+    assert {:error, {:unsupported, :access_denied}} = S3.list_versions("u/v/objects/", [])
+  end
+
+  test "list_versions/2 keeps any other 403 an error", %{bypass: bypass} do
+    Bypass.expect_once(bypass, "GET", "/#{@bucket}/", fn conn ->
+      Plug.Conn.resp(conn, 403, "<Error><Code>SignatureDoesNotMatch</Code></Error>")
+    end)
+
+    assert {:error, {:http_error, 403, _}} = S3.list_versions("u/v/objects/", [])
   end
 
   describe "restore_version/2" do
