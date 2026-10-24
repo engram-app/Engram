@@ -143,12 +143,22 @@ defmodule Engram.IndexingHugeNotesTest do
            &(&1 <= String.to_integer(System.get_env("HUGE_MAX_MB", "#{@cap_mb}")))
          )
 
-  for size <- @sizes,
-      shape <- @shapes,
-      headings <- [false, true],
-      tier <- @tiers,
-      {size, headings, tier} != {1, false, :paid} do
+  @huge_cases for size <- @sizes,
+                  shape <- @shapes,
+                  headings <- [false, true],
+                  tier <- @tiers,
+                  {size, headings, tier} != {1, false, :paid},
+                  do: {size, shape, headings, tier}
+
+  # CI splits the `:huge` cases over HUGE_SHARDS parallel jobs, each running
+  # `--only shard:<i>`. Round-robin over the size-ordered list, so every shard
+  # gets ~1/N of each size (the 10 MB cases are most of the wall time).
+  # Default 1: every case is `shard: 0`.
+  @huge_shards String.to_integer(System.get_env("HUGE_SHARDS", "1"))
+
+  for {{size, shape, headings, tier}, i} <- Enum.with_index(@huge_cases) do
     @tag :huge
+    @tag shard: rem(i, @huge_shards)
     @tag size: size, shape: shape, headings: headings, tier: tier
     # The ExUnit default (60 s) is the harness's, not the pipeline's: the
     # bound under test is `@seconds_per_mb` x size, asserted below.
@@ -161,6 +171,7 @@ defmodule Engram.IndexingHugeNotesTest do
   # 15 bind parameters and its ciphertext, and the insert still fits the
   # 65,535-parameter cap and the per-job memory bound.
   @tag :huge
+  @tag shard: rem(length(@huge_cases), @huge_shards)
   @tag size: @cap_mb, shape: :tiny_sections, headings: true, tier: :selfhost
   @tag timeout: (@seconds_per_mb * @cap_mb + 60) * 1_000
   test "#{@cap_mb} MB tiny_sections selfhost with chunk text in postgres", ctx do
@@ -262,6 +273,7 @@ defmodule Engram.IndexingHugeNotesTest do
   # Links are extracted from the same content by ExtractNoteLinks, not the
   # index pass: 3 MB is ~120k wikilinks and embeds.
   @tag :huge
+  @tag shard: rem(length(@huge_cases) + 1, @huge_shards)
   @tag timeout: 120_000
   test "3 MB of wikilinks: extract and store the edges", %{user: user, vault: vault} do
     {content, _} = generate(:wikilinks, 3 * @mib, false, 1)
