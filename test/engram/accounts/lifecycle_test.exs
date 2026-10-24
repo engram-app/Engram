@@ -11,6 +11,7 @@ defmodule Engram.Accounts.LifecycleTest do
   alias Engram.Storage.InMemory
   alias Engram.Test.LogCapture
   alias Engram.Workers.PaddleCancelSubscription
+  alias Engram.Workers.PurgeUserVectors
 
   setup :verify_on_exit!
 
@@ -72,33 +73,8 @@ defmodule Engram.Accounts.LifecycleTest do
   end
 
   describe "soft_delete/2" do
-    # Account delete runs inside the user's DELETE /api/me request, and its
-    # Qdrant drop is best-effort (OrphanSweep collects what a failure leaves),
-    # so it must not sit in the patient indexing retries: a Qdrant outage held
-    # the request ~7s per call.
-    test "tries the Qdrant drop once, with retries on, when Qdrant fails" do
-      bypass = Bypass.open()
-      Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
-      Engram.ServiceConfig.put_override(:qdrant_retry, :transient)
-      # Attempt COUNT is asserted, not latency: a wide budget keeps a starved
-      # scheduler from reading as a timeout.
-      Engram.ServiceConfig.put_override(:qdrant_search_timeout, 30_000)
-      {:ok, attempts} = Agent.start_link(fn -> 0 end)
-
-      Bypass.stub(bypass, "POST", "/collections/:col/points/delete", fn conn ->
-        Agent.update(attempts, &(&1 + 1))
-        Plug.Conn.send_resp(conn, 503, ~s({"status":"overloaded"}))
-      end)
-
-      stub(Engram.Email.ProviderMock, :send, fn _to, _subject, _html, _opts -> :ok end)
-      user = insert(:user)
-
-      ExUnit.CaptureLog.capture_log(fn -> assert :ok = Lifecycle.soft_delete(user, :user) end)
-
-      assert Agent.get(attempts, & &1) == 1
-      assert %DateTime{} = Repo.reload!(user).deleted_at
-    end
-
+    # The inactivity sweep is the one caller left that drops Qdrant before the
+    # hard delete; a user or Clerk delete goes through `delete_account/2`.
     # The inactivity sweep is a background job: no request to hold, and nothing
     # retries a swallowed failure, so it keeps the patient indexing retries.
     test "inactivity soft-delete retries a failed Qdrant drop" do
@@ -226,6 +202,41 @@ defmodule Engram.Accounts.LifecycleTest do
 
       # No telemetry on retry (already fired on attempt 1).
       refute_received {[:engram, :account, :soft_deleted], ^ref, _, _}
+    end
+  end
+
+  describe "delete_account/2" do
+    # #2182: the soft-then-hard path cleared Qdrant twice inside the user's
+    # request. It must not call Qdrant at all; the purge is a job queued once
+    # the account is gone.
+    test "never calls Qdrant inline, and queues the purge once the account is gone" do
+      bypass = Bypass.open()
+      Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+      test_pid = self()
+
+      Bypass.stub(bypass, "POST", "/collections/:col/points/delete", fn conn ->
+        send(test_pid, :qdrant_delete)
+        Plug.Conn.send_resp(conn, 503, ~s({"status":"overloaded"}))
+      end)
+
+      stub(Engram.Email.ProviderMock, :send, fn _to, _subject, _html, _opts -> :ok end)
+      user = insert(:user, external_id: nil)
+
+      assert :ok = Lifecycle.delete_account(user, :user)
+
+      refute_received :qdrant_delete
+      refute Repo.get(User, user.id, skip_tenant_check: true)
+      assert_enqueued(worker: PurgeUserVectors, args: %{"user_id" => user.id})
+    end
+
+    test "queues no purge when the hard delete refuses (last admin)" do
+      stub(Engram.Email.ProviderMock, :send, fn _to, _subject, _html, _opts -> :ok end)
+      admin = insert(:user, role: "admin", external_id: nil)
+
+      assert {:error, :last_admin} = Lifecycle.delete_account(admin, :clerk)
+
+      assert %DateTime{} = Repo.reload!(admin).deleted_at
+      refute_enqueued(worker: PurgeUserVectors)
     end
   end
 

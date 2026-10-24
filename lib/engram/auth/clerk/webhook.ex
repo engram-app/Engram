@@ -35,7 +35,7 @@ defmodule Engram.Auth.Clerk.Webhook do
   # branch in `apply_user_created/3`), or when a user self-deletes via the
   # Clerk account portal. In every case the upstream identity is already
   # gone, so the local row must follow — drive the full
-  # `soft_delete` + `hard_delete` cascade immediately. Step 0 of
+  # `Lifecycle.delete_account/2` cascade immediately. Step 0 of
   # `hard_delete` kicks live sockets, so the JWT cached in
   # `socket.assigns.current_user` cannot keep streaming data.
   #
@@ -49,9 +49,7 @@ defmodule Engram.Auth.Clerk.Webhook do
   defp handle_user_deleted(%{"id" => clerk_id}) when is_binary(clerk_id) do
     case Accounts.find_by_external_id(clerk_id) do
       {:ok, user} ->
-        :ok = Engram.Accounts.Lifecycle.soft_delete(user, :clerk)
-
-        case Engram.Accounts.Lifecycle.hard_delete(user, :clerk) do
+        case Engram.Accounts.Lifecycle.delete_account(user, :clerk) do
           :ok ->
             :ok
 
@@ -73,7 +71,7 @@ defmodule Engram.Auth.Clerk.Webhook do
             :ok
 
           {:error, _other} ->
-            # PG cascade failed; soft_delete already fired, retry will be
+            # PG cascade failed; the delete mark already landed, retry will be
             # driven by the next inactivity sweep or an operator.
             :ok
         end

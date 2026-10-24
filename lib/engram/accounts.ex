@@ -401,10 +401,9 @@ defmodule Engram.Accounts do
   Self-delete flow for local-auth users:
     1. verify password
     2. block if this is the last active admin
-    3. drive the shared `Engram.Accounts.Lifecycle` cascade —
-       `soft_delete/2` stamps `deleted_at` + revokes tokens + emails,
-       then `hard_delete/2` purges every store (Paddle, Qdrant, S3,
-       Postgres cascade, Clerk).
+    3. `Engram.Accounts.Lifecycle.delete_account/2` — stamps `deleted_at` +
+       revokes tokens + emails, then `hard_delete/2` purges every store
+       (Paddle, S3, Postgres cascade, Clerk; Qdrant by a job after commit).
 
   Previously this set `deleted_at` and waited 30 days for the inactivity
   sweep to purge. The account-lifecycle work removes that wait — user-
@@ -428,12 +427,7 @@ defmodule Engram.Accounts do
   def delete_self(%User{} = user, password) when is_binary(password) do
     with {:ok, _} <- verify_password(user.email, password),
          :ok <- guard_last_admin(user) do
-      Lifecycle.soft_delete(user, :user)
-
-      case Lifecycle.hard_delete(user, :user) do
-        :ok -> :ok
-        {:error, reason} -> {:error, reason}
-      end
+      Lifecycle.delete_account(user, :user)
     else
       {:error, :invalid_credentials} -> {:error, :invalid_password}
       {:error, :last_admin} -> {:error, :last_admin}

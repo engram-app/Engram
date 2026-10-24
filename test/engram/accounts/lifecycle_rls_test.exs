@@ -6,10 +6,10 @@ defmodule Engram.Accounts.LifecycleRlsTest.TenantClearingStorage do
   unreachable, and it is the only way this bug can be tested through the real
   `hard_delete/2` entry point.
 
-  `do_hard_delete/2` calls `drop_qdrant_for_user/1` (Step 2) before its commit
-  point (Step 4). That leg runs `Repo.with_tenant/2`, whose `SET LOCAL` is
-  scoped to its own transaction — in production it dies when that transaction
-  ends, so the commit point runs with NO tenant. Under the Ecto sandbox every
+  `do_hard_delete/2` reads the subscription under `Repo.with_tenant!/2` before
+  its commit point (Step 4). That `SET LOCAL` is scoped to its own transaction
+  — in production it dies when that transaction ends, so the commit point runs
+  with NO tenant. Under the Ecto sandbox every
   test is wrapped in one enclosing transaction, so the same `SET LOCAL` LEAKS
   FORWARD and is still in force at the commit point, where it satisfies the
   vaults policy and lets the delete succeed. That is the documented
