@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.63.1](https://github.com/engram-app/Engram/compare/0.63.0...0.63.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* batch stale index-claim releases per run ([#2164](https://github.com/engram-app/Engram/issues/2164)) ([085415a](https://github.com/engram-app/Engram/commit/085415a136446ce94ad1839051eaf3d7b104dae8))
+
 ## [0.63.0](https://github.com/engram-app/Engram/compare/0.62.0...0.63.0) (2026-10-24)
 
 
