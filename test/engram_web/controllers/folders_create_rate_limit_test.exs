@@ -37,6 +37,15 @@ defmodule EngramWeb.FoldersCreateRateLimitTest do
     assert other |> post(~p"/api/folders", %{folder: "C"}) |> json_response(201)
   end
 
+  test "the 429 carries Retry-After", %{conn: conn} do
+    for f <- ~w(A B), do: post(conn, ~p"/api/folders", %{folder: f})
+    resp = post(conn, ~p"/api/folders", %{folder: "C"})
+
+    assert resp.status == 429
+    assert [secs] = get_resp_header(resp, "retry-after")
+    assert String.to_integer(secs) in 1..60
+  end
+
   # MCP create_folder arrives as POST /api/mcp, so only a budget in the shared
   # create path can see it (docs/context/mcp-bypasses-path-shaped-plugs.md).
   test "MCP create_folder spends the same per-user budget", %{

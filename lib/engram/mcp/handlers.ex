@@ -264,8 +264,10 @@ defmodule Engram.MCP.Handlers do
       {:ok, %{rejected: [_]}} ->
         {:error, "folder must be a non-empty path"}
 
-      {:error, {:rate_limited, _retry_after_ms}} ->
-        {:error, "rate limited: too many folder creates, retry later"}
+      {:error, {:rate_limited, retry_after_ms}} ->
+        {:error,
+         "rate limited: too many folder creates, retry after " <>
+           "#{EngramWeb.Plugs.Halt.retry_after_seconds(retry_after_ms)}s"}
 
       {:error, atom} when is_atom(atom) ->
         {:error, "Failed: #{atom}"}

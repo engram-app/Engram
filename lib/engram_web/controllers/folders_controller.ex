@@ -5,6 +5,7 @@ defmodule EngramWeb.FoldersController do
   alias Engram.Folders
   alias Engram.Notes
   alias EngramWeb.BatchOps
+  alias EngramWeb.Plugs.Halt
   alias EngramWeb.Schemas
 
   action_fallback EngramWeb.FallbackController
@@ -119,7 +120,10 @@ defmodule EngramWeb.FoldersController do
       {"Folder path", "application/json", Schemas.CreateFolderRequest, required: true},
     responses: [
       created: {"Created", "application/json", Schemas.FolderResponse},
-      unprocessable_entity: {"Empty/root folder rejected", "application/json", Schemas.Error}
+      unprocessable_entity: {"Empty/root folder rejected", "application/json", Schemas.Error},
+      too_many_requests:
+        {"`rate_limited`: the per-user folder-create budget is spent; retry after " <>
+           "`retry-after` seconds", "application/json", Schemas.Error}
     ]
   )
 
@@ -135,8 +139,8 @@ defmodule EngramWeb.FoldersController do
         |> put_status(422)
         |> json(%{error: "folder must not be empty"})
 
-      {:error, {:rate_limited, _retry_after_ms}} ->
-        conn |> put_status(429) |> json(%{error: "rate_limited"})
+      {:error, {:rate_limited, retry_after_ms}} ->
+        Halt.rate_limited(conn, retry_after_ms)
 
       {:error, reason} ->
         conn
@@ -164,7 +168,10 @@ defmodule EngramWeb.FoldersController do
     responses: [
       created: {"Created", "application/json", Schemas.BatchCreateFoldersResponse},
       unprocessable_entity:
-        {"Invalid input or too many folders", "application/json", Schemas.Error}
+        {"Invalid input or too many folders", "application/json", Schemas.Error},
+      too_many_requests:
+        {"`rate_limited`: the per-user folder-create budget is spent (one unit per call); " <>
+           "retry after `retry-after` seconds", "application/json", Schemas.Error}
     ]
   )
 
@@ -190,8 +197,8 @@ defmodule EngramWeb.FoldersController do
       {:error, :batch_too_large} ->
         conn |> put_status(422) |> json(%{error: "batch_too_large", max: 500})
 
-      {:error, {:rate_limited, _retry_after_ms}} ->
-        conn |> put_status(429) |> json(%{error: "rate_limited"})
+      {:error, {:rate_limited, retry_after_ms}} ->
+        Halt.rate_limited(conn, retry_after_ms)
 
       {:error, reason} ->
         conn |> put_status(500) |> json(%{error: format_error(reason)})

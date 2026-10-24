@@ -4008,6 +4008,16 @@
               }
             },
             "description": "Invalid input or too many folders"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "`rate_limited`: the per-user folder-create budget is spent (one unit per call); retry after `retry-after` seconds"
           }
         },
         "summary": "Create many folders",
@@ -4842,6 +4852,16 @@
               }
             },
             "description": "Empty/root folder rejected"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "`rate_limited`: the per-user folder-create budget is spent; retry after `retry-after` seconds"
           }
         },
         "summary": "Create a folder",
