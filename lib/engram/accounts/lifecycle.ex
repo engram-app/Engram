@@ -104,7 +104,7 @@ defmodule Engram.Accounts.Lifecycle do
 
   Ordering (spec §7.2) is best-effort, not transactional — it spans Qdrant +
   S3 + Postgres + Paddle + Clerk, none of which share a commit boundary.
-  `Repo.delete!` is the commitment point; everything before it is logged-and-
+  The user-row delete is the commitment point; everything before it is logged-and-
   continued on error, and Clerk afterward is fire-and-forget.
 
   Idempotent: re-entry against an already-deleted user_id short-circuits at
@@ -213,14 +213,14 @@ defmodule Engram.Accounts.Lifecycle do
     # `attachments.user_id`, and `chunks.user_id` reference users WITHOUT
     # ON DELETE CASCADE (verified: `confdeltype = 'a'`). Deleting the user's
     # vaults transitively cascades notes/attachments/chunks (their `vault_id`
-    # FKs are `'c'`), clearing the path for the final `Repo.delete!(user)`.
+    # FKs are `'c'`), clearing the path for the final user-row delete.
     # Everything else hanging off `users` (api_keys, subscriptions,
     # refresh_tokens, usage_meters, …) does cascade directly.
     #
     # `with_tenant/2`, NOT a bare `Repo.transaction`: `vaults` carries FORCE
     # ROW LEVEL SECURITY, so under a role the policy applies to, an unscoped
     # `delete_all` is FILTERED to zero rows and reports `{0, nil}` WITHOUT
-    # raising. Nothing then cascades, and the `Repo.delete!(user)` below dies
+    # raising. Nothing then cascades, and the user-row delete below dies
     # on `notes_user_id_fkey` — account deletion could not complete at all,
     # and the operator saw a Postgres FK error about `notes` rather than
     # anything naming tenant scoping. `skip_tenant_check: true` did not and
@@ -251,6 +251,11 @@ defmodule Engram.Accounts.Lifecycle do
            end
          ) do
       {:error, :already_deleted} ->
+        Logger.info(
+          "account hard-delete lost a race to a concurrent delete; already gone",
+          Metadata.with_category(:info, :lifecycle, user_id: user.id, reason: reason)
+        )
+
         :ok
 
       {:ok, _} ->
