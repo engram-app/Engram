@@ -112,9 +112,8 @@ defmodule Engram.Workers.ReleaseIndexEntries do
     #
     # ONE metadata read for the whole list, not a full-row fetch and content
     # decrypt per id: `ProjectVaultIndex` now sends a run's every stale id in
-    # one job (15k in the 2026-10-23 storm). A read failure fails the job so
-    # Oban retries it; the per-id version counted an unreadable note as gone
-    # and released it.
+    # one job (15k in the 2026-10-23 storm). A read failure fails the whole
+    # batch so Oban retries it; the other ids wait for the retry.
     with {:ok, present} <- Notes.get_note_meta_by_ids(user, %{id: vault_id}, note_ids) do
       Identity.release(user, vault_id, Enum.reject(note_ids, &Map.has_key?(present, &1)))
     end
