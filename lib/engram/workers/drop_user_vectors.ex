@@ -8,8 +8,11 @@ defmodule Engram.Workers.DropUserVectors do
   the 5s fail-fast profile and no retry, twice per delete: a slow Qdrant held
   the request ~10s and a failed drop was simply lost until OrphanSweep.
 
-  Unique per `user_id` while a job is pending, so the soft + hard pair of one
-  delete call inserts one job. `Qdrant.delete_by_user/3` is a filter delete,
+  Unique per `user_id` while a job is waiting to run, so the soft + hard pair
+  of one delete call inserts one job. `executing` is deliberately NOT a unique
+  state: a hard delete that commits while the soft-delete job is mid-call must
+  still queue its own drop, or a job that started before the purge would be
+  the last word. `Qdrant.delete_by_user/3` is a filter delete,
   so a repeat run (Oban retry, or a hard delete long after an inactivity
   soft delete) is a no-op.
 
@@ -19,9 +22,10 @@ defmodule Engram.Workers.DropUserVectors do
   """
 
   use Oban.Worker,
-    queue: :maintenance,
+    # User-triggered follow-up, not a cron backstop (ObanQueueConfigTest).
+    queue: :events,
     max_attempts: 10,
-    unique: [keys: [:user_id], period: :infinity, states: :incomplete]
+    unique: [keys: [:user_id], period: :infinity, states: [:available, :scheduled, :retryable]]
 
   alias Engram.Accounts
   alias Engram.Accounts.User

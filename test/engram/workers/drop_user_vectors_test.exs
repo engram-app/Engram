@@ -77,4 +77,16 @@ defmodule Engram.Workers.DropUserVectorsTest do
 
     assert [_] = all_enqueued(worker: DropUserVectors, args: %{"user_id" => user_id})
   end
+
+  # A hard delete committing while the soft-delete job is mid-call must queue
+  # its own drop, not dedupe into a job that started before the purge.
+  test "enqueue/1 does not dedupe against an executing drop" do
+    user_id = Ecto.UUID.generate()
+    {:ok, first} = DropUserVectors.enqueue(user_id)
+
+    Repo.update_all(from(j in Oban.Job, where: j.id == ^first.id), set: [state: "executing"])
+
+    assert {:ok, %{conflict?: false} = second} = DropUserVectors.enqueue(user_id)
+    refute second.id == first.id
+  end
 end
