@@ -187,71 +187,74 @@ defmodule Engram.Workers.InactivityCleanup do
   # raise mid-loop leaves every later user for tomorrow, and a crash that
   # repeats daily (one bad row) starves them forever. Lifecycle itself still
   # raises, so a request-path caller (delete_self, the Clerk webhook) fails
-  # loudly and its retry re-runs it. Exits and throws too: a linked Task or a
-  # GenServer call timing out inside a step must not take the sweep down
-  # either. Counted by `Engram.PromEx.Reliability`
-  # (`..._inactivity_sweep_failed_total`, tags `[:step, :kind]`).
+  # loudly and its retry re-runs it.
+  #
+  # Catches what the step's own process raises, exits or throws (an exit from
+  # a GenServer call that timed out, say). It does NOT catch a crash in a
+  # process LINKED to this one: that kills the sweep job outright, and only
+  # the next daily run picks the rest up.
+  #
+  # A step that returns `{:error, reason}` is a failure too (a hard delete that
+  # rolled back, or refused the last admin), counted as kind `:error`. The sweep
+  # still returns `:ok`: failing the job would make Oban retry the whole run and
+  # resend every warning email. The counter is the signal, on
+  # `Engram.PromEx.Reliability` (`..._inactivity_sweep_failed_total`, tags
+  # `[:step, :kind]`); its alert is engram-infra#1584.
   defp per_user(user, step, fun) do
-    fun.()
+    case fun.() do
+      {:error, reason} -> sweep_failed(user, step, :error, Metadata.safe_reason(reason))
+      _ok -> :ok
+    end
   catch
     kind, reason ->
-      :telemetry.execute(
-        [:engram, :abuse, :inactivity_sweep_failed],
-        %{count: 1},
-        %{user_id: user.id, step: step, kind: kind}
+      sweep_failed(
+        user,
+        step,
+        kind,
+        "#{Metadata.safe_reason(reason)} at=#{Metadata.format_location(__STACKTRACE__)}"
       )
-
-      Logger.error(
-        "Inactivity sweep step failed for one user, continuing",
-        Metadata.with_category(:error, :lifecycle,
-          user_id: user.id,
-          step: step,
-          kind: kind,
-          reason: Metadata.safe_reason(reason)
-        )
-      )
-
-      :error
   end
 
+  # `reason` is already redacted: `safe_reason/1` for the value and
+  # `format_location/1` (no argument values) for the stacktrace.
+  defp sweep_failed(user, step, kind, reason) do
+    :telemetry.execute(
+      [:engram, :abuse, :inactivity_sweep_failed],
+      %{count: 1},
+      %{user_id: user.id, step: step, kind: kind}
+    )
+
+    Logger.error(
+      "Inactivity sweep step failed for one user, continuing",
+      Metadata.with_category(:error, :lifecycle,
+        user_id: user.id,
+        step: step,
+        kind: kind,
+        reason: reason
+      )
+    )
+
+    :error
+  end
+
+  # `{:error, _}` is returned to `per_user/3`, which logs and counts it. That
+  # includes `:last_admin`: a stranded last admin recurs daily until ops
+  # promotes another admin, so it should stay visible on the counter.
   defp hard_delete(user) do
-    case Lifecycle.hard_delete(user, :inactivity) do
-      :ok ->
-        :telemetry.execute(
-          [:engram, :abuse, :inactivity_hard_delete],
-          %{count: 1},
-          %{user_id: user.id}
-        )
+    with :ok <- Lifecycle.hard_delete(user, :inactivity) do
+      :telemetry.execute(
+        [:engram, :abuse, :inactivity_hard_delete],
+        %{count: 1},
+        %{user_id: user.id}
+      )
 
-        Logger.warning(
-          "Inactivity hard-delete fired",
-          Metadata.with_category(:warning, :lifecycle,
-            user_id: user.id,
-            reason_label: :inactivity_120d
-          )
+      Logger.warning(
+        "Inactivity hard-delete fired",
+        Metadata.with_category(:warning, :lifecycle,
+          user_id: user.id,
+          reason_label: :inactivity_120d
         )
-
-      {:error, :last_admin} ->
-        # Don't crash the sweep — log and move on. The sweep runs daily,
-        # but a stranded last-admin will keep recurring until ops promotes
-        # another admin and the next pass purges them.
-        Logger.warning(
-          "Inactivity hard-delete skipped — last admin protected",
-          Metadata.with_category(:warning, :oban,
-            user_id: user.id,
-            reason_label: :inactivity_120d
-          )
-        )
-
-      {:error, other} ->
-        Logger.error(
-          "Inactivity hard-delete failed",
-          Metadata.with_category(:error, :oban,
-            user_id: user.id,
-            reason_label: :inactivity_120d,
-            reason: Metadata.safe_reason(other)
-          )
-        )
+      )
     end
   end
 

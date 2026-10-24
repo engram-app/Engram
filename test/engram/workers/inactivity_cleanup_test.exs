@@ -95,6 +95,28 @@ defmodule Engram.Workers.InactivityCleanupTest do
       assert Enum.sort(kinds) == [:error, :exit]
     end
 
+    test "a throw in one user's warning is caught and counted" do
+      user = insert(:user)
+      set_last_active(user.id, 65)
+
+      stub(Engram.Email.ProviderMock, :send, fn _to, _subject, _html, _opts -> throw(:boom) end)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :abuse, :inactivity_sweep_failed]
+        ])
+
+      {_, events} = Engram.Test.LogCapture.with_events(fn -> InactivityCleanup.__sweep_60__() end)
+
+      assert_receive {[:engram, :abuse, :inactivity_sweep_failed], ^ref, _,
+                      %{step: :warning_60, kind: :throw}}
+
+      # The reason carries the argument-free stacktrace location.
+      failure = Enum.find(events, &(&1.level == :error and &1.meta[:step] == :warning_60))
+      assert failure.meta[:kind] == :throw
+      assert failure.meta[:reason] =~ ~r/^:boom at=Engram\./
+    end
+
     test "does not re-send when warning already stamped" do
       user = insert(:user, inactivity_warning_60_at: DateTime.utc_now())
       set_last_active(user.id, 65)
@@ -347,6 +369,28 @@ defmodule Engram.Workers.InactivityCleanupTest do
               {[:engram, :abuse, :inactivity_sweep_failed], ^ref, _,
                %{step: :soft_delete, kind: :error}}
             )
+    end
+
+    # A hard delete that RETURNS an error (here the last-admin refusal; a
+    # rolled-back purge returns `{:error, :pg_failed}` the same way) was only
+    # logged, so the sweep-failure counter never saw it.
+    test "a hard delete that returns an error is counted as a sweep failure" do
+      admin =
+        insert(:user, role: "admin")
+        |> Ecto.Changeset.change(%{deleted_at: DateTime.add(DateTime.utc_now(), -31 * 86_400)})
+        |> Repo.update!(skip_tenant_check: true)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :abuse, :inactivity_sweep_failed]
+        ])
+
+      ExUnit.CaptureLog.capture_log(fn -> InactivityCleanup.__sweep_hard__() end)
+
+      assert_receive {[:engram, :abuse, :inactivity_sweep_failed], ^ref, %{count: 1},
+                      %{step: :hard_delete, kind: :error}}
+
+      assert Repo.get(Engram.Accounts.User, admin.id, skip_tenant_check: true)
     end
 
     test "legacy :abuse telemetry still fires alongside" do
