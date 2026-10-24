@@ -154,22 +154,28 @@ defmodule EngramWeb.FoldersController do
     )
   end
 
+  # The batch upsert with one entry: it reports whether this call created (or
+  # undeleted) the marker, which the single upsert does not. A re-create of a
+  # live folder changes nothing, so it broadcasts nothing, same as an
+  # all-existing batch (#2161).
   defp do_create(conn, user, vault, folder) do
-    case Notes.create_folder_marker(user, vault, folder) do
-      {:ok, marker} ->
-        # Same event the batch ops emit — lets connected devices (plugin/web)
-        # materialize the empty folder live instead of on the next pull.
-        BatchOps.broadcast_batch(user, vault, "folders.batch", %{
-          op: "create",
-          folder: marker.folder,
-          markers: [%{id: marker.id, name: marker.folder}]
-        })
+    case Notes.create_folder_markers(user, vault, [folder]) do
+      {:ok, %{folders: [%{name: name} = entry]}} ->
+        # Lets connected devices (plugin/web) materialize the empty folder live
+        # instead of on the next pull.
+        if entry.created do
+          BatchOps.broadcast_batch(user, vault, "folders.batch", %{
+            op: "create",
+            folder: name,
+            markers: [%{id: entry.id, name: name}]
+          })
+        end
 
         conn
         |> put_status(:created)
-        |> json(%{folder: %{name: marker.folder, count: 0}})
+        |> json(%{folder: %{name: name, count: 0}})
 
-      {:error, :root_folder_not_marker} ->
+      {:ok, %{rejected: [_]}} ->
         conn
         |> put_status(422)
         |> json(%{error: "folder must not be empty"})
