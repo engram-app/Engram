@@ -646,7 +646,7 @@ defmodule Engram.OAuth do
          :ok <- check_code_client(code_row, params["client_id"]),
          :ok <- check_code_redirect_uri(code_row, params["redirect_uri"]),
          :ok <- check_pkce_verifier(code_row, params["code_verifier"]),
-         :ok <- check_unconsumed(code_row),
+         :ok <- check_unconsumed(code_row, opts[:user_agent]),
          {:ok, user} <- fetch_user(code_row.user_id),
          :ok <- consume_code(code_row),
          # The family is the code's own id, so a replay of the code can find
@@ -729,15 +729,13 @@ defmodule Engram.OAuth do
   RFC 6749 §10.4. A refusal is `{:error, {:invalid_grant, grant_reason()}}`.
   """
   def rotate_refresh_token(raw_token, client_id, opts \\ []) do
-    ip = Keyword.get(opts, :ip)
-
     case refresh_token_by_raw(raw_token) do
       nil ->
         grant_error(:refresh_token_unknown)
 
       %RefreshToken{} = rt ->
         put_grant_user_id(rt.user_id)
-        rotate_existing(rt, internal_client_id(client_id, rt.client_id), ip)
+        rotate_existing(rt, internal_client_id(client_id, rt.client_id), opts)
     end
   end
 
@@ -773,21 +771,22 @@ defmodule Engram.OAuth do
   #
   # A refusal that revokes (reuse) must commit, so the transaction returns the
   # result instead of rolling back. Logging and analytics run after it.
-  defp rotate_existing(%RefreshToken{client_id: actual}, requested, _ip) when actual != requested,
-    do: grant_error(:client_mismatch)
+  defp rotate_existing(%RefreshToken{client_id: actual}, requested, _opts)
+       when actual != requested,
+       do: grant_error(:client_mismatch)
 
-  defp rotate_existing(%RefreshToken{} = rt, _client_id, ip) do
+  defp rotate_existing(%RefreshToken{} = rt, _client_id, opts) do
     {:ok, outcome} =
       Repo.transaction_after_commit(fn ->
         lock_grants!(rt.user_id)
 
         case lock_row(rt) do
           nil -> {:error, :refresh_token_unknown}
-          locked -> decide(locked, ip)
+          locked -> decide(locked, opts[:ip])
         end
       end)
 
-    report(outcome, rt)
+    report(outcome, rt, opts[:user_agent])
   end
 
   @doc """
@@ -802,29 +801,41 @@ defmodule Engram.OAuth do
   @spec lock_grants!(Ecto.UUID.t()) :: :ok
   def lock_grants!(user_id), do: Repo.advisory_lock!("oauth_grants:#{user_id}")
 
-  defp report({:ok, response}, _rt), do: {:ok, response}
+  defp report({:ok, response}, _rt, _ua), do: {:ok, response}
 
-  defp report({:ok, response, {:grace, ip_matched}}, rt) do
+  defp report({:ok, response, {:grace, ip_matched}}, rt, _ua) do
     log_reuse(rt, within_grace: true, ip_matched: ip_matched)
     {:ok, response}
   end
 
-  defp report({:error, :refresh_token_reuse}, rt) do
-    log_reuse(rt, within_grace: false)
+  defp report({:error, :refresh_token_reuse}, rt, ua) do
+    log_reuse(rt, within_grace: false, killed: :refresh_reuse, user_agent: ua)
     grant_error(:refresh_token_reuse)
   end
 
-  defp report({:error, :revoked_after_use}, rt) do
-    log_reuse(rt, within_grace: false, reason: "family_revoked")
+  defp report({:error, :revoked_after_use}, rt, ua) do
+    log_reuse(rt,
+      within_grace: false,
+      reason: "family_revoked",
+      killed: :revoked_after_use,
+      user_agent: ua
+    )
+
     grant_error(:refresh_token_revoked)
   end
 
-  defp report({:error, :superseded_reuse}, rt) do
-    log_reuse(rt, within_grace: false, reason: "superseded_reuse")
+  defp report({:error, :superseded_reuse}, rt, ua) do
+    log_reuse(rt,
+      within_grace: false,
+      reason: "superseded_reuse",
+      killed: :superseded_reuse,
+      user_agent: ua
+    )
+
     grant_error(:refresh_token_revoked)
   end
 
-  defp report({:error, reason}, _rt), do: grant_error(reason)
+  defp report({:error, reason}, _rt, _ua), do: grant_error(reason)
 
   # Revoked first, even when also consumed: Disconnect, RFC 7009 or an
   # earlier replay. Each revokes every row of the family, consumed ones
@@ -1064,6 +1075,25 @@ defmodule Engram.OAuth do
       if(within_grace, do: "oauth_refresh_grace_reissue", else: "oauth_refresh_reuse"),
       Metadata.with_category(:warning, :lifecycle, metadata)
     )
+
+    if opts[:killed], do: emit_family_revoked(opts[:killed], family, opts[:user_agent])
+  end
+
+  @typedoc "Why reuse detection killed a family: the `reason` tag of `family_revoked`."
+  @type kill_reason :: :refresh_reuse | :revoked_after_use | :superseded_reuse | :code_replay
+
+  # One event per family a reuse check KILLED (2026-10-24 triage): the alert
+  # keyed on rejected refresh exchanges fired on one kill, because a client
+  # retries the dead token forever and every retry is a rejection. A family
+  # is counted here once, by the presentation whose revoke changed rows.
+  # Tags are closed sets: `client_agent` is `McpClient.agent/2`, `reason` a
+  # `kill_reason()`. PromEx: `engram_prom_ex_oauth_family_revoked_total`.
+  @spec emit_family_revoked(kill_reason(), String.t(), String.t() | nil) :: :ok
+  defp emit_family_revoked(reason, family, user_agent) do
+    :telemetry.execute([:engram, :oauth, :family_revoked], %{count: 1}, %{
+      reason: reason,
+      client_agent: McpClient.agent(user_agent, family)
+    })
   end
 
   @typedoc """
@@ -1148,7 +1178,7 @@ defmodule Engram.OAuth do
   # Runs AFTER the client, redirect and PKCE checks, so only the client that
   # holds the verifier can reach the replay branch. A stolen code without it is
   # refused earlier and revokes nothing, so it cannot be used to cut a user off.
-  defp check_unconsumed(%AuthorizationCode{consumed_at: nil} = code) do
+  defp check_unconsumed(%AuthorizationCode{consumed_at: nil} = code, _user_agent) do
     if DateTime.compare(DateTime.utc_now(), code.expires_at) == :gt,
       do: grant_error(:code_expired),
       else: :ok
@@ -1160,15 +1190,18 @@ defmodule Engram.OAuth do
   # grant its first exchange just gave it. Nor once the code has expired: a
   # callback page reloaded hours later is not an attack, and must not cut off
   # the connection that page set up.
-  defp check_unconsumed(%AuthorizationCode{consumed_at: consumed_at} = code) do
+  defp check_unconsumed(%AuthorizationCode{consumed_at: consumed_at} = code, user_agent) do
     now = DateTime.utc_now()
 
     if DateTime.diff(now, consumed_at) > @refresh_reuse_grace_seconds and
          DateTime.compare(now, code.expires_at) != :gt do
-      _ =
+      {revoked, _changed} =
         revoke_refresh_tokens(from(r in RefreshToken, where: r.family_id == ^code.id),
           skip_tenant_check: true
         )
+
+      # Counted only when this replay is what killed the family.
+      if revoked > 0, do: emit_code_replay_kill(code, user_agent)
 
       Logger.warning(
         "oauth_code_replay_revoked",
@@ -1182,6 +1215,13 @@ defmodule Engram.OAuth do
     else
       grant_error(:code_consumed)
     end
+  end
+
+  defp emit_code_replay_kill(code, user_agent) do
+    {family, _registration} =
+      Client |> Repo.get(code.client_id, skip_tenant_check: true) |> McpClient.of_client()
+
+    emit_family_revoked(:code_replay, family, user_agent)
   end
 
   # A CIMD client presents its document URL here while the code row stores the
