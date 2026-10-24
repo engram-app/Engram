@@ -34,4 +34,4 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 # used before md_outline), so section boundaries did not move in the port.
 comrak = { version = "=0.56.0", default-features = false }
 # Base64 for the CRDT channel frames (b64_decode / b64_encode).
-base64 = "0.22"
+base64 = "0.23"
