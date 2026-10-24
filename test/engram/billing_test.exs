@@ -720,7 +720,9 @@ defmodule Engram.BillingTest do
       {:ok, urls: urls}
     end
 
-    test "returns the cancel deep link", %{urls: urls} do
+    # Cancels go through the in-app dialog, which asks for a reason; the
+    # portal's cancel page skips it.
+    test "never hands out the cancel deep link", %{urls: urls} do
       user = insert(:user)
 
       insert(:subscription,
@@ -730,7 +732,7 @@ defmodule Engram.BillingTest do
       )
 
       expect(Engram.Paddle.ClientMock, :get_portal_session, fn "ctm_dev" -> {:ok, urls} end)
-      assert {:ok, "https://p/cancel"} = Billing.portal_action_url(user, "cancel")
+      assert {:ok, "https://p/overview"} = Billing.portal_action_url(user, "cancel")
     end
 
     test "returns the update-payment deep link", %{urls: urls} do

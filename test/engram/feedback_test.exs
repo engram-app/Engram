@@ -2,6 +2,8 @@ defmodule Engram.FeedbackTest do
   use Engram.DataCase, async: false
 
   alias Engram.Accounts.User
+  alias Engram.Analytics.Event
+  alias Engram.Analytics.EventLog
   alias Engram.Feedback
 
   setup do
@@ -155,6 +157,51 @@ defmodule Engram.FeedbackTest do
     test "requires a known reason", %{user: user} do
       assert {:error, :invalid_reason} = Feedback.submit(user, "cancel", %{})
       assert {:error, :invalid_reason} = Feedback.submit(user, "cancel", %{"reason" => "meh"})
+    end
+  end
+
+  describe "record_missing_cancel_reason/3" do
+    setup do
+      prior = Application.get_env(:engram, :analytics_event_log)
+      Application.put_env(:engram, :analytics_event_log, true)
+      on_exit(fn -> Application.put_env(:engram, :analytics_event_log, prior) end)
+      :ok
+    end
+
+    defp reasons(user) do
+      :ok = EventLog.flush()
+
+      Repo.all(
+        from(e in Event,
+          where: e.user_id == ^user.id and e.event == "subscription_cancel_reason",
+          select: e.props["reason"]
+        )
+      )
+    end
+
+    test "files the marker when no reason was given since the subscription started",
+         %{user: user} do
+      since = DateTime.add(DateTime.utc_now(), -3600)
+      assert :ok = Feedback.record_missing_cancel_reason(user, since, "portal_no_reason")
+      assert reasons(user) == ["portal_no_reason"]
+    end
+
+    test "files nothing when the in-app dialog already captured a reason", %{user: user} do
+      since = DateTime.add(DateTime.utc_now(), -3600)
+      :ok = Feedback.submit(user, "cancel", %{"reason" => "too_expensive"})
+      :ok = EventLog.flush()
+
+      assert :ok = Feedback.record_missing_cancel_reason(user, since, "portal_no_reason")
+      assert reasons(user) == ["too_expensive"]
+    end
+
+    test "a reason from before this subscription started does not count", %{user: user} do
+      :ok = Feedback.submit(user, "cancel", %{"reason" => "too_expensive"})
+      :ok = EventLog.flush()
+      since = DateTime.add(DateTime.utc_now(), 3600)
+
+      assert :ok = Feedback.record_missing_cancel_reason(user, since, "portal_no_reason")
+      assert Enum.sort(reasons(user)) == ["portal_no_reason", "too_expensive"]
     end
   end
 

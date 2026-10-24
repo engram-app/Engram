@@ -666,7 +666,7 @@ defmodule Engram.Observability.EmittersTest do
         | previous: %{tier: "pro", status: "active"}
       }
 
-      expect_capture(bypass)
+      expect_captures(bypass)
 
       :ok =
         PostHogForwarder.forward_paddle_event(
@@ -674,10 +674,50 @@ defmodule Engram.Observability.EmittersTest do
           sub
         )
 
-      assert_receive {:posthog_body, body}, 1_500
-      assert body["event"] == "subscription_canceled"
+      assert_receive {:posthog_body, %{"event" => "subscription_canceled"} = body}, 1_500
       assert body["properties"]["from_tier"] == "pro"
       assert body["properties"]["status"] == "canceled"
+    end
+
+    # The in-app dialog is the only place a reason is asked; a cancel made in
+    # Paddle's hosted portal arrives with none. File a marker so the gap shows.
+    test "subscription.canceled with no reason on file files portal_no_reason",
+         %{bypass: bypass} do
+      sub = %{
+        insert(:subscription, user: user_with_clerk_id(), tier: "starter", status: "canceled")
+        | previous: %{tier: "starter", status: "active"}
+      }
+
+      expect_captures(bypass)
+
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{"event_type" => "subscription.canceled", "data" => %{}},
+          sub
+        )
+
+      assert_receive {:posthog_body, %{"event" => "subscription_cancel_reason"} = body}, 1_500
+      assert body["properties"]["reason"] == "portal_no_reason"
+      assert body["properties"]["source"] == "webhook"
+    end
+
+    test "subscription.canceled out of past_due files payment_failed, not a portal gap",
+         %{bypass: bypass} do
+      sub = %{
+        insert(:subscription, user: user_with_clerk_id(), tier: "starter", status: "canceled")
+        | previous: %{tier: "starter", status: "past_due"}
+      }
+
+      expect_captures(bypass)
+
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{"event_type" => "subscription.canceled", "data" => %{}},
+          sub
+        )
+
+      assert_receive {:posthog_body, %{"event" => "subscription_cancel_reason"} = body}, 1_500
+      assert body["properties"]["reason"] == "payment_failed"
     end
 
     test "subscription.past_due is subscription_past_due", %{bypass: bypass} do
