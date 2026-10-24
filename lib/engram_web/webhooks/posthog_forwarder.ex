@@ -31,6 +31,7 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   alias Engram.Feedback
   alias Engram.Logger.Metadata
   alias Engram.Webhooks.Idempotency
+  alias Engram.Workers.CancelReasonMarker
 
   require Logger
 
@@ -86,7 +87,9 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
     * `subscription.updated`: `subscription_changed{kind}` when the tier moved
       (`upgrade`/`downgrade`), a cancel was scheduled (`cancel_scheduled`), or
       a lapsed status returned to active (`reactivated`). A renewal or any
-      other state-sync update sends nothing.
+      other state-sync update sends nothing. `cancel_scheduled` also enqueues
+      `Engram.Workers.CancelReasonMarker`, which files `portal_no_reason`
+      if the cancel came with no reason.
     * `subscription.canceled`, `subscription.past_due`: same names. A cancel
       with no reason on file (since the subscription started and the last
       in-app reversal) also files
@@ -133,12 +136,15 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
         :ok
 
       kind ->
-        track_sub(sub, "subscription_changed", %{
-          kind: kind,
-          from_tier: from,
-          to_tier: sub.tier,
-          status: sub.status
-        })
+        :ok =
+          track_sub(sub, "subscription_changed", %{
+            kind: kind,
+            from_tier: from,
+            to_tier: sub.tier,
+            status: sub.status
+          })
+
+        if kind == "cancel_scheduled", do: enqueue_cancel_reason_check(data, sub), else: :ok
     end
   end
 
@@ -234,6 +240,28 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   end
 
   defp rank(tier), do: Map.get(@tier_rank, tier, 0)
+
+  # Analytics only, like the rest of this module: a failed insert is logged,
+  # never raised into the webhook, whose subscription write already landed.
+  defp enqueue_cancel_reason_check(data, sub) do
+    job =
+      CancelReasonMarker.new_for(
+        sub.user_id,
+        started_at(data, sub),
+        get_in(data, ["scheduled_change", "effective_at"])
+      )
+
+    case Oban.insert(job) do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "cancel_reason_check_enqueue_failed",
+          Metadata.with_category(:error, :billing, reason: Metadata.safe_reason(reason))
+        )
+    end
+  end
 
   # Paddle mints a new subscription (new started_at) on resubscribe, so a
   # reason given for an earlier subscription does not count for this one.

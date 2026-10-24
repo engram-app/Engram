@@ -20,8 +20,7 @@ defmodule Engram.Workers.CancelReasonMarkerTest do
     %{
       "user_id" => user.id,
       "started_at" => now |> DateTime.add(-30 * 86_400) |> DateTime.to_iso8601(),
-      "scheduled_at" =>
-        now |> DateTime.add(-scheduled_seconds_ago) |> DateTime.to_iso8601(),
+      "scheduled_at" => now |> DateTime.add(-scheduled_seconds_ago) |> DateTime.to_iso8601(),
       "effective_at" => "2027-10-01T00:00:00Z"
     }
   end

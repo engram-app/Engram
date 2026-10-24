@@ -179,7 +179,17 @@ defmodule Engram.Billing.Subscriptions do
     # Ends the cancel episode, so the reason given for it is not counted for
     # a later cancel (`Engram.Feedback.record_missing_cancel_reason/3`).
     with {:ok, _} <- result do
-      :ok = Engram.Analytics.track(user, "subscription_changed", %{kind: "cancel_reversed"})
+      sub = Billing.get_subscription(user)
+
+      # Same props as the other `subscription_changed` kinds.
+      :ok =
+        Engram.Analytics.track(user, "subscription_changed", %{
+          kind: "cancel_reversed",
+          from_tier: sub.tier,
+          to_tier: sub.tier,
+          status: sub.status
+        })
+
       result
     end
   end
