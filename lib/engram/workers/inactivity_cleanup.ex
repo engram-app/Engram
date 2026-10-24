@@ -195,15 +195,25 @@ defmodule Engram.Workers.InactivityCleanup do
   # the next daily run picks the rest up.
   #
   # A step that returns `{:error, reason}` is a failure too (a hard delete that
-  # rolled back, or refused the last admin), counted as kind `:error`. The sweep
-  # still returns `:ok`: failing the job would make Oban retry the whole run and
-  # resend every warning email. The counter is the signal, on
+  # rolled back with `:pg_failed`), counted as kind `:error`. The one expected
+  # refusal, the last-admin guard, is kind `:refused` at warning level: it
+  # recurs daily until ops promotes another admin, so it stays on the counter
+  # but must not page (the alert excludes `kind="refused"`).
+  #
+  # The sweep still returns `:ok`: failing the job would make Oban retry the
+  # whole run and resend every warning email. The counter is the signal, on
   # `Engram.PromEx.Reliability` (`..._inactivity_sweep_failed_total`, tags
   # `[:step, :kind]`); its alert is engram-infra#1584.
   defp per_user(user, step, fun) do
     case fun.() do
-      {:error, reason} -> sweep_failed(user, step, :error, Metadata.safe_reason(reason))
-      _ok -> :ok
+      {:error, :last_admin} ->
+        sweep_failed(user, step, :refused, ":last_admin", :warning)
+
+      {:error, reason} ->
+        sweep_failed(user, step, :error, Metadata.safe_reason(reason), :error)
+
+      _ok ->
+        :ok
     end
   catch
     kind, reason ->
@@ -211,22 +221,24 @@ defmodule Engram.Workers.InactivityCleanup do
         user,
         step,
         kind,
-        "#{Metadata.safe_reason(reason)} at=#{Metadata.format_location(__STACKTRACE__)}"
+        "#{Metadata.safe_reason(reason)} at=#{Metadata.format_location(__STACKTRACE__)}",
+        :error
       )
   end
 
   # `reason` is already redacted: `safe_reason/1` for the value and
   # `format_location/1` (no argument values) for the stacktrace.
-  defp sweep_failed(user, step, kind, reason) do
+  defp sweep_failed(user, step, kind, reason, level) do
     :telemetry.execute(
       [:engram, :abuse, :inactivity_sweep_failed],
       %{count: 1},
       %{user_id: user.id, step: step, kind: kind}
     )
 
-    Logger.error(
+    Logger.log(
+      level,
       "Inactivity sweep step failed for one user, continuing",
-      Metadata.with_category(:error, :lifecycle,
+      Metadata.with_category(level, :lifecycle,
         user_id: user.id,
         step: step,
         kind: kind,
@@ -237,9 +249,8 @@ defmodule Engram.Workers.InactivityCleanup do
     :error
   end
 
-  # `{:error, _}` is returned to `per_user/3`, which logs and counts it. That
-  # includes `:last_admin`: a stranded last admin recurs daily until ops
-  # promotes another admin, so it should stay visible on the counter.
+  # `{:error, _}` is returned to `per_user/3`, which logs and counts it
+  # (`:last_admin` as a `:refused` warning, anything else as an `:error`).
   defp hard_delete(user) do
     with :ok <- Lifecycle.hard_delete(user, :inactivity) do
       :telemetry.execute(
@@ -287,6 +298,11 @@ defmodule Engram.Workers.InactivityCleanup do
   def __sweep_soft__, do: sweep_soft_delete()
   @doc false
   def __sweep_hard__, do: sweep_hard_delete()
+  # `{:error, :pg_failed}` needs a rolled-back purge, which no real input
+  # produces (the transaction only fails via `rollback/1`, which nothing
+  # calls), so the classification is driven directly.
+  @doc false
+  def __per_user__(user, step, fun), do: per_user(user, step, fun)
 
   # Last_active is on usage_meters; UsageMeters wraps the read.
   @doc false

@@ -37,10 +37,13 @@ defmodule Engram.PromEx.Reliability do
       means the IAM grant is missing.
     * `[:engram, :abuse, :inactivity_sweep_failed]` →
       `..._inactivity_sweep_failed_total`, tags `[:step, :kind]` — one user's
-      step in the daily inactivity sweep raised, exited or threw, and the
-      sweep moved on (`step`: `warning_60`, `warning_80`, `soft_delete`,
-      `hard_delete`). A failing user is retried only on the next daily run,
-      so a non-zero rate that persists is a stuck account.
+      step in the daily inactivity sweep raised, exited, threw or returned an
+      error, and the sweep moved on (`step`: `warning_60`, `warning_80`,
+      `soft_delete`, `hard_delete`; `kind`: `error`, `exit`, `throw`, or
+      `refused` for the last-admin guard). A failing user is retried only on
+      the next daily run, so a non-zero rate that persists is a stuck
+      account. Alert on everything except `kind="refused"`, which is an
+      expected daily repeat, not a fault.
     * `[:engram, :fanout_pacer, :drain]` → `..._fanout_pacer_queue_depth`,
       `..._fanout_pacer_queued`, `..._fanout_pacer_topics` (#1004) — the
       vault-channel pacer's cold-queue state, sampled on every drain tick.

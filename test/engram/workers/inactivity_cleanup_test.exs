@@ -8,6 +8,7 @@ defmodule Engram.Workers.InactivityCleanupTest do
   alias Engram.Accounts
   alias Engram.Repo
   alias Engram.Storage.InMemory
+  alias Engram.Test.LogCapture
   alias Engram.UsageMeters
   alias Engram.UsageMeters.Meter
   alias Engram.Workers.InactivityCleanup
@@ -106,7 +107,7 @@ defmodule Engram.Workers.InactivityCleanupTest do
           [:engram, :abuse, :inactivity_sweep_failed]
         ])
 
-      {_, events} = Engram.Test.LogCapture.with_events(fn -> InactivityCleanup.__sweep_60__() end)
+      {_, events} = LogCapture.with_events(fn -> InactivityCleanup.__sweep_60__() end)
 
       assert_receive {[:engram, :abuse, :inactivity_sweep_failed], ^ref, _,
                       %{step: :warning_60, kind: :throw}}
@@ -371,10 +372,31 @@ defmodule Engram.Workers.InactivityCleanupTest do
             )
     end
 
-    # A hard delete that RETURNS an error (here the last-admin refusal; a
-    # rolled-back purge returns `{:error, :pg_failed}` the same way) was only
-    # logged, so the sweep-failure counter never saw it.
-    test "a hard delete that returns an error is counted as a sweep failure" do
+    # A hard delete that RETURNS an error was only logged, so the sweep-failure
+    # counter never saw it. A rolled-back purge returns `{:error, :pg_failed}`,
+    # which no real input produces, so the classification is driven directly.
+    test "a hard delete that returns :pg_failed is counted as an error" do
+      user = insert(:user)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :abuse, :inactivity_sweep_failed]
+        ])
+
+      {_, events} =
+        LogCapture.with_events(fn ->
+          InactivityCleanup.__per_user__(user, :hard_delete, fn -> {:error, :pg_failed} end)
+        end)
+
+      assert_receive {[:engram, :abuse, :inactivity_sweep_failed], ^ref, %{count: 1},
+                      %{step: :hard_delete, kind: :error}}
+
+      assert Enum.any?(events, &(&1.level == :error and &1.meta[:reason] == ":pg_failed"))
+    end
+
+    # The last-admin guard recurs every day until ops promotes another admin:
+    # counted (a stranded account), but as `refused` at warning, never paging.
+    test "the last-admin refusal is counted as refused, logged at warning" do
       admin =
         insert(:user, role: "admin")
         |> Ecto.Changeset.change(%{deleted_at: DateTime.add(DateTime.utc_now(), -31 * 86_400)})
@@ -385,11 +407,16 @@ defmodule Engram.Workers.InactivityCleanupTest do
           [:engram, :abuse, :inactivity_sweep_failed]
         ])
 
-      ExUnit.CaptureLog.capture_log(fn -> InactivityCleanup.__sweep_hard__() end)
+      {_, events} =
+        LogCapture.with_events(fn -> InactivityCleanup.__sweep_hard__() end)
 
       assert_receive {[:engram, :abuse, :inactivity_sweep_failed], ^ref, %{count: 1},
-                      %{step: :hard_delete, kind: :error}}
+                      %{step: :hard_delete, kind: :refused}}
 
+      failure = Enum.find(events, &(&1.meta[:step] == :hard_delete))
+      assert failure.level == :warning
+      assert failure.meta[:kind] == :refused
+      refute Enum.any?(events, &(&1.level == :error))
       assert Repo.get(Engram.Accounts.User, admin.id, skip_tenant_check: true)
     end
 
