@@ -20,6 +20,8 @@ defmodule EngramWeb.McpToolCallRateLimitTest do
   setup do
     user = insert(:user)
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    # OAuth access tokens resolve their user by external id.
+    user = ensure_external_id(user)
     {:ok, _vault, _} = Engram.Vaults.register_vault(user, "V", Ecto.UUID.generate())
     %{user: user}
   end
