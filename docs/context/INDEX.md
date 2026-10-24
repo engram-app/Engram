@@ -160,6 +160,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Invalid UTF-8 at rest (bytea bypasses PG validation) → `Jason.encode` 500 at every JSON egress; fix + backfill task → `docs/context/invalid-utf8-at-rest-json-500.md`
 
 **Perf & Quality**
+- Measuring prod endpoint latency (PromEx buckets make p95 useless; use sum/count + Tempo, rank by total time), the 2026-10-24 per-route baseline, or slow requests with seconds of untraced time before the first DB query → `docs/context/endpoint-latency-audit-2026-10-24.md`
 - Read-path decrypt perf — parallel_map economics, when it helps vs hurts → `docs/context/read-path-decrypt-perf.md`
 - Perf caches + invalidation contracts (2026-06-12 audit wave) → `docs/context/perf-caching-invalidation.md`
 - Replacing hand-rolled code with a shared helper (consolidating a PARSER silently drops accepted input shapes no test names — CRLF frontmatter read as "no frontmatter"), or a log metadata key built inside a helper that Credo cannot see → `docs/context/consolidation-drops-undocumented-tolerances.md`
