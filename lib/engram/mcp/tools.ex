@@ -289,7 +289,15 @@ defmodule Engram.MCP.Tools do
                 # client at the one handle that does not would be a
                 # wrong-target write.
                 "slug" => %{"type" => "string", "description" => "URL-safe handle"},
-                "is_default" => %{"type" => "boolean"}
+                "is_default" => %{"type" => "boolean"},
+                # Present only when set. The vault's Obsidian plugin is below
+                # the minimum version, so its sync is refused until updated.
+                "sync_blocked" => %{
+                  "type" => "string",
+                  "enum" => ["plugin_upgrade_required"],
+                  "description" =>
+                    "Present when this vault's Obsidian plugin must be updated before it syncs again"
+                }
               },
               "required" => ["id", "name", "slug", "is_default"]
             }
