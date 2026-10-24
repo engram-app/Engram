@@ -14,6 +14,7 @@ defmodule Engram.Workers.AttachmentBlobGCTest do
 
   alias Engram.{Attachments, Folders, Repo, Storage}
   alias Engram.Attachments.Attachment
+  alias Engram.Storage.InMemory
   alias Engram.Workers.AttachmentBlobGC
 
   setup do
@@ -211,7 +212,7 @@ defmodule Engram.Workers.AttachmentBlobGCTest do
     prev = Application.get_env(:engram, :storage)
     Application.put_env(:engram, :storage, Engram.MockStorage)
     on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
-    Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+    Mox.stub_with(Engram.MockStorage, InMemory)
     prev
   end
 
@@ -239,7 +240,9 @@ defmodule Engram.Workers.AttachmentBlobGCTest do
     prev = use_mock_storage()
     Mox.stub(Engram.MockStorage, :delete_many, fn _keys -> raise "node lost" end)
 
-    assert_raise RuntimeError, "node lost", fn -> AttachmentBlobGC.sweep() end
+    # Rescued per vault and logged; the claim is left for the stale threshold,
+    # exactly as if the run had died here.
+    capture_log(fn -> assert AttachmentBlobGC.sweep() == 0 end)
 
     claimed = reload(att)
     assert claimed.storage_key == att.storage_key
@@ -255,6 +258,83 @@ defmodule Engram.Workers.AttachmentBlobGCTest do
     assert AttachmentBlobGC.sweep() == 1
     refute blob?(att.storage_key)
     assert %{storage_key: nil, blob_gc_claimed_at: nil} = reload(att)
+  end
+
+  test "finalize leaves a row undeleted between claim and finalize alone", %{
+    user: user,
+    vault: vault
+  } do
+    att = put_att(user, vault, "a.png")
+    :ok = Attachments.delete_attachment(user, vault, "a.png")
+    backdate!(att, 48)
+    use_mock_storage()
+
+    Mox.stub(Engram.MockStorage, :delete_many, fn keys ->
+      # A (hypothetical) undelete brings the row back mid-run.
+      Repo.update_all(
+        from(a in Attachment, where: a.id == ^att.id),
+        [set: [deleted_at: nil]],
+        skip_tenant_check: true
+      )
+
+      InMemory.delete_many(keys)
+    end)
+
+    capture_log(fn -> AttachmentBlobGC.sweep() end)
+    assert reload(att).storage_key == att.storage_key
+  end
+
+  test "a delete that raises in one vault does not stop the others", %{
+    user: user,
+    vault: vault
+  } do
+    bad = put_att(user, vault, "a.png")
+    :ok = Attachments.delete_attachment(user, vault, "a.png")
+    backdate!(bad, 48)
+
+    other = insert(:vault, user: user)
+    good = put_att(user, other, "b.png")
+    :ok = Attachments.delete_attachment(user, other, "b.png")
+    backdate!(good, 48)
+    use_mock_storage()
+
+    Mox.stub(Engram.MockStorage, :delete_many, fn keys ->
+      if Enum.any?(keys, &String.contains?(&1, vault.id)),
+        do: raise("storage exploded"),
+        else: InMemory.delete_many(keys)
+    end)
+
+    log = capture_log(fn -> assert AttachmentBlobGC.sweep() == 1 end)
+
+    assert log =~ "attachment_blob_gc: blob delete raised"
+    # safe_reason/1: the exception type; its message is only rendered for
+    # types vetted to carry no user data.
+    assert log =~ "reason=RuntimeError"
+    assert is_nil(reload(good).storage_key)
+    assert reload(bad).storage_key == bad.storage_key
+  end
+
+  # Only the storage call is rescued: a database error is not "nothing to
+  # reap", and the job must fail so Oban records it.
+  test "a database error in the claim fails the sweep", %{user: user, vault: vault} do
+    att = put_att(user, vault, "a.png")
+    :ok = Attachments.delete_attachment(user, vault, "a.png")
+    backdate!(att, 48)
+
+    Repo.query!("""
+    CREATE FUNCTION test_fail_gc_claim() RETURNS trigger AS $$
+    BEGIN
+      IF NEW.blob_gc_claimed_at IS NOT NULL THEN RAISE EXCEPTION 'injected db failure'; END IF;
+      RETURN NEW;
+    END $$ LANGUAGE plpgsql
+    """)
+
+    Repo.query!(
+      "CREATE TRIGGER test_fail_gc_claim BEFORE UPDATE ON attachments " <>
+        "FOR EACH ROW EXECUTE FUNCTION test_fail_gc_claim()"
+    )
+
+    assert_raise Postgrex.Error, ~r/injected db failure/, fn -> AttachmentBlobGC.sweep() end
   end
 
   test "finalize does not clear a key that changed after the claim", %{
@@ -275,7 +355,7 @@ defmodule Engram.Workers.AttachmentBlobGCTest do
         skip_tenant_check: true
       )
 
-      Engram.Storage.InMemory.delete_many(keys)
+      InMemory.delete_many(keys)
     end)
 
     log = capture_log(fn -> assert AttachmentBlobGC.sweep() == 0 end)

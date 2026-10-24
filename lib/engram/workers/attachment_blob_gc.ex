@@ -109,8 +109,14 @@ defmodule Engram.Workers.AttachmentBlobGC do
         reaped
 
       {claimed, claimed_at, last} ->
-        n = reaped + finish(claimed, claimed_at)
-        if last, do: sweep_vault(vault_id, cutoff, last, n), else: n
+        case finish(claimed, claimed_at) do
+          {:ok, n} when is_binary(last) -> sweep_vault(vault_id, cutoff, last, reaped + n)
+          {:ok, n} -> reaped + n
+          # The storage client raised: stop this vault (pages already reaped
+          # count), leave this batch's claims for the stale threshold, and go
+          # on to the next vault.
+          :storage_raised -> reaped
+        end
     end
   end
 
@@ -127,7 +133,9 @@ defmodule Engram.Workers.AttachmentBlobGC do
   # path copies a tombstone's key onto a live row. Writers commit key changes
   # under the vault row lock (via `next_seq!`/`lock_seq!`). A future path that
   # copies a tombstone's key must read it AFTER taking that lock, or this
-  # re-check cannot see it.
+  # re-check cannot see it. Likewise a future undelete must take the vault
+  # lock and must not revive a row that carries a fresh `blob_gc_claimed_at`
+  # (its blob may be mid-delete); finalize also refuses to touch a live row.
   defp claim(vault_id, cutoff, after_id) do
     repo = Repo.maintenance()
     claimed_at = DateTime.utc_now()
@@ -191,17 +199,22 @@ defmodule Engram.Workers.AttachmentBlobGC do
   # retries. A crash anywhere here leaves the stamp and the key, and the
   # stale threshold brings the row back. Returns how many were reaped.
   defp finish(claimed, claimed_at) do
-    gone = deleted_keys(claimed)
-    {done, failed} = Enum.split_with(claimed, fn {_id, key} -> MapSet.member?(gone, key) end)
+    case deleted_keys(claimed) do
+      {:ok, gone} ->
+        {done, failed} = Enum.split_with(claimed, fn {_id, key} -> MapSet.member?(gone, key) end)
 
-    reaped =
-      finalize(done, claimed_at,
-        set: [storage_key: nil, blob_gc_claimed_at: nil],
-        label: "deleted"
-      )
+        reaped =
+          finalize(done, claimed_at,
+            set: [storage_key: nil, blob_gc_claimed_at: nil],
+            label: "deleted"
+          )
 
-    _ = finalize(failed, claimed_at, set: [blob_gc_claimed_at: nil], label: "released")
-    reaped
+        _ = finalize(failed, claimed_at, set: [blob_gc_claimed_at: nil], label: "released")
+        {:ok, reaped}
+
+      :storage_raised ->
+        :storage_raised
+    end
   end
 
   defp finalize([], _claimed_at, _opts), do: 0
@@ -215,7 +228,8 @@ defmodule Engram.Workers.AttachmentBlobGC do
         Repo.maintenance().update_all(
           from(a in Attachment,
             where:
-              a.id in ^ids and a.storage_key in ^keys and a.blob_gc_claimed_at == ^claimed_at,
+              a.id in ^ids and a.storage_key in ^keys and a.blob_gc_claimed_at == ^claimed_at and
+                not is_nil(a.deleted_at),
             select: a.id
           ),
           set: set
@@ -237,13 +251,31 @@ defmodule Engram.Workers.AttachmentBlobGC do
 
   # The keys whose blob is gone. One batched call; if any key in it failed,
   # fall back to one call per key so the batch's good keys still count.
+  #
+  # Only this storage call is rescued: a client that raises is the S3 side
+  # failing, and it must not stop the other vaults. Database errors in the
+  # claim and finalize are NOT rescued, so the job fails and Oban records it.
   defp deleted_keys(rows) do
     keys = rows |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
 
-    case Storage.adapter().delete_many(keys) do
-      {:ok, n} when n == length(keys) -> MapSet.new(keys)
-      _ -> keys |> Enum.filter(&delete_one/1) |> MapSet.new()
-    end
+    gone =
+      case Storage.adapter().delete_many(keys) do
+        {:ok, n} when n == length(keys) -> MapSet.new(keys)
+        _ -> keys |> Enum.filter(&delete_one/1) |> MapSet.new()
+      end
+
+    {:ok, gone}
+  rescue
+    e ->
+      Logger.warning(
+        "attachment_blob_gc: blob delete raised, its claims retry after the stale threshold",
+        Metadata.with_category(:warning, :oban,
+          key_count: length(rows),
+          reason: Metadata.safe_reason(e)
+        )
+      )
+
+      :storage_raised
   end
 
   defp delete_one(key) do
