@@ -29,6 +29,12 @@ defmodule Engram.PromEx.Reliability do
       wedged jobs shows a rising timeout rate long before anything is
       discarded, and occupancy metrics show nothing at all — `executing` sits
       pinned at the limit and looks maximally healthy. Alert on the rate.
+    * `[:engram, :attachments, :reconcile_unavailable]` →
+      `..._attachment_reconcile_unavailable_total`, tags `[:reason]`
+      (`access_denied`, `not_implemented`, `unsupported`, `versioning_off`) —
+      a reconcile job that found bucket versions unavailable (#2159). A
+      configuration state on self-host and staging, not an error; on prod it
+      means the IAM grant is missing.
     * `[:engram, :fanout_pacer, :drain]` → `..._fanout_pacer_queue_depth`,
       `..._fanout_pacer_queued`, `..._fanout_pacer_topics` (#1004) — the
       vault-channel pacer's cold-queue state, sampled on every drain tick.
@@ -125,6 +131,12 @@ defmodule Engram.PromEx.Reliability do
           event_name: [:engram, :oban, :discarded],
           description: "Oban jobs discarded after max_attempts.",
           tags: [:worker, :queue, :error_kind]
+        ),
+        counter(
+          metric_prefix ++ [:attachment_reconcile_unavailable, :total],
+          event_name: [:engram, :attachments, :reconcile_unavailable],
+          description: "Attachment reconcile runs that found bucket versions unavailable.",
+          tags: [:reason]
         ),
         counter(
           metric_prefix ++ [:oban, :timeout, :total],

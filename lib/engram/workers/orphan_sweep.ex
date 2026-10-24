@@ -73,7 +73,7 @@ defmodule Engram.Workers.OrphanSweep do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
-    if tenancy_unsafe?() do
+    if Repo.tenancy_unsafe?() do
       # REFUSE rather than sweep blind. This worker diffs Qdrant against
       # `chunks`, and `chunks` carries FORCE ROW LEVEL SECURITY — so where RLS
       # is enforced and no maintenance pool is configured, `chunk_point_ids/1`
@@ -103,9 +103,6 @@ defmodule Engram.Workers.OrphanSweep do
   # One query per daily run. Deliberately not cached: the answer depends on
   # the credential this node connected with, and a node that gets a new pool
   # gets a new boot.
-  defp tenancy_unsafe? do
-    Repo.maintenance() == Repo and Engram.Repo.TenancyGuard.enforced?()
-  end
 
   defp do_perform(args) do
     live_ids = live_user_ids()

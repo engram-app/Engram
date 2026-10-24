@@ -36,7 +36,7 @@ defmodule Engram.Workers.FinalizeRevisionSweep do
 
   @impl Oban.Worker
   def perform(%Oban.Job{}) do
-    if tenancy_unsafe?() do
+    if Repo.tenancy_unsafe?() do
       Logger.error(
         "finalize_revision_sweep refusing to run: RLS enforcement could not be ruled out " <>
           "and no maintenance pool is configured, so the read would return zero rows",
@@ -74,9 +74,5 @@ defmodule Engram.Workers.FinalizeRevisionSweep do
 
     _ = if jobs != [], do: Oban.insert_all(jobs)
     :ok
-  end
-
-  defp tenancy_unsafe? do
-    Repo.maintenance() == Repo and Engram.Repo.TenancyGuard.enforced?()
   end
 end

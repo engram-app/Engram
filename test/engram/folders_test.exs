@@ -268,38 +268,270 @@ defmodule Engram.FoldersTest do
       # Note move rolled back.
       assert note_path(user, vault, note.id) == "Docs/n.md"
     end
+  end
 
-    test "batch_delete/3 runs both legs in one transaction (atomic across tables)", %{
+  # #2159: a 7,440-attachment folder delete ran as ONE transaction, held the
+  # vault seq lock through it, and hit the 15 s checkout kill. A cascade is now
+  # a run of short transactions (attachments, then notes, then markers), so a
+  # failure keeps what committed and a retry finishes the rest.
+  describe "chunked delete cascade (#2159)" do
+    setup do
+      prev = Application.get_env(:engram, :folder_delete_chunk)
+      Application.put_env(:engram, :folder_delete_chunk, 1)
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:engram, :folder_delete_chunk, prev),
+          else: Application.delete_env(:engram, :folder_delete_chunk)
+      end)
+
+      :ok
+    end
+
+    defp att_id(user, vault, path) do
+      {:ok, metas} = Attachments.list_attachments(user, vault)
+      Enum.find(metas, &(&1.path == path)).id
+    end
+
+    # A DB error on the soft delete of one attachment row, mid-cascade.
+    defp fail_deleting!(att_id) do
+      Engram.Repo.query!("""
+      CREATE FUNCTION test_fail_2159() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.id = '#{att_id}'::uuid AND NEW.deleted_at IS NOT NULL THEN
+          RAISE EXCEPTION 'injected failure';
+        END IF;
+        RETURN NEW;
+      END $$ LANGUAGE plpgsql
+      """)
+
+      Engram.Repo.query!(
+        "CREATE TRIGGER test_fail_2159 BEFORE UPDATE ON attachments " <>
+          "FOR EACH ROW EXECUTE FUNCTION test_fail_2159()"
+      )
+    end
+
+    defp stop_failing!, do: Engram.Repo.query!("DROP TRIGGER test_fail_2159 ON attachments")
+
+    defp seed(user, vault) do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"}, actor: "api")
+
+      for p <- ["Docs/a.png", "Docs/b.png", "Docs/c.png"], do: put_att(user, vault, p)
+      note
+    end
+
+    test "delete/4: a failure keeps earlier chunks, the folder stays, a retry finishes", %{
       user: user,
       vault: vault
     } do
-      # Bug 6: batch_delete deleted notes (committed) then attachments; an
-      # attachment-leg failure left notes gone and a retry 404'd. The
-      # attachment leg cannot be made to fail on demand, so assert the
-      # executed statements: both legs' writes share one transaction. The
-      # rollback half of atomic/1 is exercised by the batch_move/4 conflict
-      # test above, which goes through the same wrapper.
+      note = seed(user, vault)
+      fail_deleting!(att_id(user, vault, "Docs/b.png"))
+
+      assert_raise Postgrex.Error, ~r/injected failure/, fn ->
+        Folders.delete(user, vault, "Docs", recursive: true)
+      end
+
+      # Chunk 1 (a) committed; b failed; c and the note never ran.
+      assert att_paths(user, vault) == ["Docs/b.png", "Docs/c.png"]
+      assert note_path(user, vault, note.id) == "Docs/n.md"
+
+      stop_failing!()
+
+      assert {:ok, %{notes: 1, attachments: 2}} =
+               Folders.delete(user, vault, "Docs", recursive: true)
+
+      assert att_paths(user, vault) == []
+      assert {:error, :not_found} = Notes.get_note(user, vault, "Docs/n.md")
+    end
+
+    test "batch_delete/3: the marker goes last, so a retry by id still finds it", %{
+      user: user,
+      vault: vault
+    } do
       {:ok, marker} = Notes.create_folder_marker(user, vault, "Docs")
+      seed(user, vault)
+      fail_deleting!(att_id(user, vault, "Docs/b.png"))
 
-      {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"}, actor: "api")
+      assert_raise Postgrex.Error, ~r/injected failure/, fn ->
+        Folders.batch_delete(user, vault, [marker.id])
+      end
 
-      put_att(user, vault, "Docs/a.png")
+      stop_failing!()
 
-      {{:ok, %{attachments: 1}}, queries} =
-        Engram.QueryRecorder.record(fn -> Folders.batch_delete(user, vault, [marker.id]) end)
+      assert {:ok, %{attachments: 2}} = Folders.batch_delete(user, vault, [marker.id])
+      assert att_paths(user, vault) == []
+    end
 
-      writes_to = fn txn, table ->
-        # The attachment leg is raw SQL, so the table name may be unquoted.
+    test "each chunk is its own transaction; none holds the seq lock across chunks", %{
+      user: user,
+      vault: vault
+    } do
+      seed(user, vault)
+
+      {{:ok, %{notes: 1, attachments: 3}}, queries} =
+        Engram.QueryRecorder.record(fn -> Folders.delete(user, vault, "Docs", recursive: true) end)
+
+      txns = Engram.QueryRecorder.transactions(queries)
+      seq_bumps = fn txn -> Enum.count(txn, &(&1 =~ "change_seq = change_seq +")) end
+
+      writes = fn txn, table ->
         Enum.any?(txn, &(&1 =~ ~r/^(UPDATE|DELETE FROM) "?#{table}\b/))
       end
 
-      assert Enum.any?(
-               Engram.QueryRecorder.transactions(queries),
-               &(writes_to.(&1, "notes") and writes_to.(&1, "attachments"))
-             ),
-             "the notes and attachments legs must commit in one transaction (Bug 6)\n" <>
+      assert Enum.count(txns, &(seq_bumps.(&1) > 0)) >= 4,
+             "3 attachment chunks + 1 note chunk, each with its own seq\n" <>
                Engram.QueryRecorder.format(queries)
+
+      for txn <- txns do
+        assert seq_bumps.(txn) <= 1, Engram.QueryRecorder.format(queries)
+        refute writes.(txn, "notes") and writes.(txn, "attachments")
+      end
+    end
+
+    test "a derived folder (notes only, no marker) deletes fully, every delete in the feed", %{
+      user: user,
+      vault: vault
+    } do
+      notes =
+        for p <- ["Derived/a.md", "Derived/Sub/b.md"] do
+          {:ok, n} =
+            Notes.upsert_note(user, vault, %{"path" => p, "content" => "x"}, actor: "api")
+
+          n
+        end
+
+      before = Engram.Vaults.current_seq(user.id, vault.id)
+
+      assert {:ok, %{notes: 2}} = Folders.delete(user, vault, "Derived", recursive: true)
+
+      for n <- notes do
+        row = Engram.Repo.get!(Engram.Notes.Note, n.id, skip_tenant_check: true)
+        assert row.deleted_at
+        assert row.seq > before
+      end
+    end
+  end
+
+  # #2159: MCP rename_folder on the same 7,440-attachment vault hit the 15 s
+  # checkout kill 4 times: one repoint + tombstone + job per attachment, all
+  # in one transaction, with the decrypt-scan inside it too.
+  describe "folder rename batches the attachment leg (#2159)" do
+    test "statement count in the rename transaction does not grow with attachments", %{
+      user: user,
+      vault: vault
+    } do
+      for i <- 1..30, do: put_att(user, vault, "Docs/f#{i}.png")
+
+      {{:ok, %{attachments: 30}}, queries} =
+        Engram.QueryRecorder.record(fn -> Folders.rename(user, vault, "Docs", "Archive") end)
+
+      largest =
+        queries |> Engram.QueryRecorder.transactions() |> Enum.map(&length/1) |> Enum.max()
+
+      assert largest < 30,
+             "the rename transaction ran #{largest} statements for 30 attachments\n" <>
+               Engram.QueryRecorder.format(queries)
+
+      assert att_paths(user, vault) == Enum.sort(for i <- 1..30, do: "Archive/f#{i}.png")
+    end
+
+    # ~7,500 attachments scaled down: 75 rows in chunks of 10 is the same
+    # shape (8 chunks) as 7,500 in chunks of 500 (15). The attachment leg is
+    # a fixed handful of statements per chunk, so the transaction stays
+    # O(chunks) however many attachments the folder holds.
+    test "a large rename's transaction is O(chunks), not O(attachments)", %{
+      user: user,
+      vault: vault
+    } do
+      prev = Application.get_env(:engram, :attachments_bulk_chunk)
+      Application.put_env(:engram, :attachments_bulk_chunk, 10)
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:engram, :attachments_bulk_chunk, prev),
+          else: Application.delete_env(:engram, :attachments_bulk_chunk)
+      end)
+
+      for i <- 1..75, do: put_att(user, vault, "Big/f#{i}.png")
+
+      {{:ok, %{attachments: 75}}, queries} =
+        Engram.QueryRecorder.record(fn -> Folders.rename(user, vault, "Big", "Moved") end)
+
+      txn = queries |> Engram.QueryRecorder.transactions() |> Enum.max_by(&length/1)
+      on_attachments = Enum.count(txn, &(&1 =~ ~r/^(UPDATE|INSERT INTO) "?attachments\b/))
+
+      # 8 repoint UPDATEs + 8 tombstone INSERTs; per-item would be 150.
+      assert on_attachments == 16, Engram.QueryRecorder.format(queries)
+      assert length(txn) < 75, Engram.QueryRecorder.format(queries)
+    end
+
+    test "a source deleted after the scan is skipped and reported, not a failed rename", %{
+      user: user,
+      vault: vault
+    } do
+      put_att(user, vault, "Docs/a.png")
+      put_att(user, vault, "Docs/b.png")
+      {:ok, pairs} = Attachments.folder_rename_pairs(user, vault, "Docs", "Archive")
+
+      # A syncing client deletes b between the scan and the rename transaction.
+      :ok = Attachments.delete_attachment(user, vault, "Docs/b.png")
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, 1} = Attachments.move_folder_pairs(user, vault, pairs)
+        end)
+
+      assert log =~ "attachments skipped, deleted or moved after the scan"
+      assert log =~ "total_count=1"
+      assert att_paths(user, vault) == ["Archive/a.png"]
+    end
+
+    # A delete committing between the source read and the UPDATE would make
+    # the UPDATE match one row fewer and raise; the lock makes it wait.
+    test "the source read locks the rows it will move", %{user: user, vault: vault} do
+      put_att(user, vault, "Docs/a.png")
+
+      {{:ok, %{attachments: 1}}, queries} =
+        Engram.QueryRecorder.record(fn -> Folders.rename(user, vault, "Docs", "Archive") end)
+
+      assert Enum.any?(queries, &(&1.sql =~ ~r/FROM "attachments".*FOR UPDATE/s)),
+             Engram.QueryRecorder.format(queries)
+    end
+
+    test "a user's explicit batch_move still refuses a missing source", %{
+      user: user,
+      vault: vault
+    } do
+      put_att(user, vault, "Docs/a.png")
+
+      assert {:error, {:not_found, "Docs/gone.png"}} =
+               Attachments.batch_move(user, vault, ["Docs/a.png", "Docs/gone.png"], "Archive")
+
+      assert att_paths(user, vault) == ["Docs/a.png"]
+    end
+
+    # #614: a repoint and its tombstone share ONE seq, so a cursor pull never
+    # sees one without the other; distinct items keep distinct seqs.
+    test "every moved attachment leaves an old-path tombstone at its own seq", %{
+      user: user,
+      vault: vault
+    } do
+      put_att(user, vault, "Docs/a.png")
+      put_att(user, vault, "Docs/Sub/b.png")
+
+      assert {:ok, %{attachments: 2}} = Folders.rename(user, vault, "Docs", "Archive")
+
+      rows =
+        Engram.Repo.all(
+          from(a in Engram.Attachments.Attachment, where: a.vault_id == ^vault.id),
+          skip_tenant_check: true
+        )
+
+      {live, tombs} = Enum.split_with(rows, &is_nil(&1.deleted_at))
+      assert length(live) == 2 and length(tombs) == 2
+      assert Enum.all?(tombs, &is_nil(&1.storage_key))
+      assert rows |> Enum.frequencies_by(& &1.seq) |> Map.values() == [2, 2]
     end
   end
 

@@ -804,6 +804,50 @@ defmodule EngramWeb.AttachmentsControllerTest do
   # GET /attachments/changes — retired timestamp feed
   # ---------------------------------------------------------------------------
 
+  # #2159: a live row whose blob is gone is permanent until restored, so a
+  # client must not retry it as a transient 5xx.
+  describe "GET /attachments/*path with the blob missing" do
+    import ExUnit.CaptureLog
+
+    setup %{conn: conn, user: user, vault: vault} do
+      post(conn, "/api/attachments", %{path: "gone.png", content_base64: @sample_base64})
+      {:ok, att} = Attachments.get_attachment(user, vault, "gone.png")
+      :ok = Engram.Storage.adapter().delete(att.storage_key)
+      :ok
+    end
+
+    test "returns 410 with code blob_missing", %{conn: conn} do
+      body = conn |> get("/api/attachments/gone.png") |> json_response(410)
+      assert body["code"] == "blob_missing"
+      assert is_binary(body["error"])
+    end
+
+    test "?raw=1 returns the same 410", %{conn: conn} do
+      body = conn |> get("/api/attachments/gone.png?raw=1") |> json_response(410)
+      assert body["code"] == "blob_missing"
+    end
+
+    # engram-infra alert rules match this literal line; renaming it silences them.
+    test "logs the alerted line", %{conn: conn} do
+      log = capture_log(fn -> get(conn, "/api/attachments/gone.png") end)
+      assert log =~ "Attachment blob missing for live row"
+    end
+  end
+
+  describe "GET /attachments/*path on a transient storage error" do
+    test "stays 502", %{conn: conn} do
+      post(conn, "/api/attachments", %{path: "flaky.png", content_base64: @sample_base64})
+
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      Mox.stub(Engram.MockStorage, :get, fn _key -> {:error, :timeout} end)
+
+      body = conn |> get("/api/attachments/flaky.png") |> json_response(502)
+      refute Map.has_key?(body, "code")
+    end
+  end
+
   describe "GET /attachments/changes (retired)" do
     test "returns 410 Gone regardless of params", %{conn: conn} do
       resp =

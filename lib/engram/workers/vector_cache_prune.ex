@@ -22,7 +22,7 @@ defmodule Engram.Workers.VectorCachePrune do
   def perform(_job) do
     # A single-pool install that enforces RLS cannot see across tenants; the
     # delete would match zero rows. Skip quietly rather than fail daily.
-    if Repo.maintenance() == Repo and Engram.Repo.TenancyGuard.enforced?() do
+    if Repo.tenancy_unsafe?() do
       Logger.info("vector_cache_prune skipped: no maintenance pool")
     else
       deleted = VectorCache.prune(Repo.maintenance())

@@ -176,6 +176,108 @@ defmodule Engram.Storage.S3Test do
     end
   end
 
+  describe "list_versions/2" do
+    test "keeps versions and delete markers apart, across pages", %{bypass: bypass} do
+      page = fn conn, body -> Plug.Conn.resp(conn, 200, body) end
+
+      Bypass.expect(bypass, "GET", "/#{@bucket}/", fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+        assert Map.has_key?(conn.query_params, "versions")
+        assert conn.query_params["prefix"] == "u/v/objects/"
+
+        if conn.query_params["key-marker"] == "u/v/objects/a" do
+          page.(conn, """
+          <ListVersionsResult><IsTruncated>false</IsTruncated>
+            <Version><Key>u/v/objects/b</Key><VersionId>b1</VersionId><IsLatest>true</IsLatest>
+              <LastModified>2026-10-23T18:00:00.000Z</LastModified></Version>
+          </ListVersionsResult>
+          """)
+        else
+          page.(conn, """
+          <ListVersionsResult><IsTruncated>true</IsTruncated>
+            <NextKeyMarker>u/v/objects/a</NextKeyMarker><NextVersionIdMarker>a1</NextVersionIdMarker>
+            <DeleteMarker><Key>u/v/objects/a</Key><VersionId>m1</VersionId><IsLatest>true</IsLatest>
+              <LastModified>2026-10-24T00:38:00.000Z</LastModified></DeleteMarker>
+            <Version><Key>u/v/objects/a</Key><VersionId>a1</VersionId><IsLatest>false</IsLatest>
+              <LastModified>2026-10-23T18:00:00.000Z</LastModified></Version>
+          </ListVersionsResult>
+          """)
+        end
+      end)
+
+      assert {:ok, first, next} = S3.list_versions("u/v/objects/", [])
+      assert next == [key_marker: "u/v/objects/a", version_id_marker: "a1"]
+      assert {:ok, second, nil} = S3.list_versions("u/v/objects/", marker: next)
+      versions = first ++ second
+
+      assert Enum.sort_by(versions, & &1.version_id) == [
+               %{
+                 key: "u/v/objects/a",
+                 version_id: "a1",
+                 last_modified: "2026-10-23T18:00:00.000Z",
+                 latest?: false,
+                 delete_marker?: false
+               },
+               %{
+                 key: "u/v/objects/b",
+                 version_id: "b1",
+                 last_modified: "2026-10-23T18:00:00.000Z",
+                 latest?: true,
+                 delete_marker?: false
+               },
+               %{
+                 key: "u/v/objects/a",
+                 version_id: "m1",
+                 last_modified: "2026-10-24T00:38:00.000Z",
+                 latest?: true,
+                 delete_marker?: true
+               }
+             ]
+    end
+  end
+
+  test "list_versions/2 maps a backend without versioning (501) to {:unsupported, :not_implemented}",
+       %{
+         bypass: bypass
+       } do
+    Bypass.expect_once(bypass, "GET", "/#{@bucket}/", fn conn ->
+      Plug.Conn.resp(conn, 501, "<Error><Code>NotImplemented</Code></Error>")
+    end)
+
+    assert {:error, {:unsupported, :not_implemented}} = S3.list_versions("u/v/objects/", [])
+  end
+
+  test "list_versions/2 maps AccessDenied (403) to {:unsupported, :access_denied}", %{
+    bypass: bypass
+  } do
+    Bypass.expect_once(bypass, "GET", "/#{@bucket}/", fn conn ->
+      Plug.Conn.resp(conn, 403, "<Error><Code>AccessDenied</Code><Message>no</Message></Error>")
+    end)
+
+    assert {:error, {:unsupported, :access_denied}} = S3.list_versions("u/v/objects/", [])
+  end
+
+  test "list_versions/2 keeps any other 403 an error", %{bypass: bypass} do
+    Bypass.expect_once(bypass, "GET", "/#{@bucket}/", fn conn ->
+      Plug.Conn.resp(conn, 403, "<Error><Code>SignatureDoesNotMatch</Code></Error>")
+    end)
+
+    assert {:error, {:http_error, 403, _}} = S3.list_versions("u/v/objects/", [])
+  end
+
+  describe "restore_version/2" do
+    test "copies the version onto its own key with versionId in the source", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "PUT", "/#{@bucket}/u/v/objects/a", fn conn ->
+        assert Plug.Conn.get_req_header(conn, "x-amz-copy-source") ==
+                 ["/#{@bucket}/u/v/objects/a?versionId=v%2B1"]
+
+        Plug.Conn.resp(conn, 200, "<CopyObjectResult/>")
+      end)
+
+      assert :ok = S3.restore_version("u/v/objects/a", "v+1")
+    end
+  end
+
   describe "exists?/1" do
     test "returns true when object exists", %{bypass: bypass} do
       Bypass.expect_once(bypass, "HEAD", "/#{@bucket}/#{@key}", fn conn ->

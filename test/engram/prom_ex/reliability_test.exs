@@ -39,6 +39,10 @@ defmodule Engram.PromEx.ReliabilityTest do
       assert Enum.any?(metrics(), fn m -> Enum.at(m.name, 2) == :reliability end)
     end
 
+    test "counts attachment reconcile runs with versions unavailable, by reason" do
+      assert %{tags: [:reason]} = counter_for([:engram, :attachments, :reconcile_unavailable])
+    end
+
     test "counts auth rejections tagged by reason + source" do
       m = counter_for([:engram, :auth, :rejected])
       assert m, "expected a counter on [:engram, :auth, :rejected]"

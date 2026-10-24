@@ -266,7 +266,14 @@ defmodule EngramWeb.Schemas.MessageError do
   OpenApiSpex.schema(%{
     title: "MessageError",
     type: :object,
-    properties: %{error: %Schema{type: :string, example: "not found"}},
+    properties: %{
+      error: %Schema{type: :string, example: "not found"},
+      code: %Schema{
+        type: :string,
+        description: "Stable machine-readable reason, where one is defined.",
+        example: "blob_missing"
+      }
+    },
     required: [:error]
   })
 end

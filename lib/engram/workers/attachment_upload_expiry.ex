@@ -27,7 +27,7 @@ defmodule Engram.Workers.AttachmentUploadExpiry do
 
   @impl Oban.Worker
   def perform(_job) do
-    if Repo.maintenance() == Repo and Engram.Repo.TenancyGuard.enforced?() do
+    if Repo.tenancy_unsafe?() do
       # Filtered by the tenant policy, the scan would return [] and report success.
       Logger.error(
         "attachment_upload_expiry refusing to run: RLS is enforced and no maintenance pool is configured",

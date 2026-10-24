@@ -10,6 +10,8 @@ defmodule Engram.AttachmentsTest do
   alias Engram.Crypto
   alias Engram.Storage.InMemory
 
+  require Logger
+
   @path "photos/test.png"
   @valid_content Base.encode64("test image content")
 
@@ -234,6 +236,12 @@ defmodule Engram.AttachmentsTest do
   # cap). `content_hash` is already computed and stored on every write — this
   # makes the write path consult it.
   describe "upsert_attachment/3 — identical-content short-circuit" do
+    # The short-circuit now HEADs the blob first (#2159): present = no write.
+    setup do
+      Mox.stub(Engram.MockStorage, :exists?, fn _key -> true end)
+      :ok
+    end
+
     test "re-uploading identical bytes does not touch storage again", %{
       user: user,
       vault: vault
@@ -265,6 +273,47 @@ defmodule Engram.AttachmentsTest do
       # loop was writing ~1/s; without this the fan-out is the second bill.
       assert second.seq == first.seq
       assert second.updated_at == first.updated_at
+    end
+
+    # #2159: the client's matching local copy is the only source left on a
+    # backend with no versions (self-host, Database adapter), so an identical
+    # upload onto a live row whose blob is gone must write it back.
+    test "an identical upload heals a live row whose blob is missing, once", %{
+      user: user,
+      vault: vault
+    } do
+      Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+      params = %{"path" => @path, "content_base64" => @valid_content}
+
+      {:ok, first} = Attachments.upsert_attachment(user, vault, params)
+      :ok = Engram.Storage.InMemory.delete(first.storage_key)
+      assert {:error, {:storage, :blob_missing}} = Attachments.get_attachment(user, vault, @path)
+
+      # config/test.exs sets :warning; this module is async: false.
+      previous_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous_level) end)
+
+      log =
+        capture_log([level: :info], fn ->
+          assert {:ok, _} = Attachments.upsert_attachment(user, vault, params)
+        end)
+
+      Logger.configure(level: previous_level)
+      assert log =~ "attachment blob healed from client"
+      assert {:ok, healed} = Attachments.get_attachment(user, vault, @path)
+      assert healed.content == Base.decode64!(@valid_content)
+
+      # Present again, so the next identical upload writes nothing.
+      test_pid = self()
+
+      Mox.stub(Engram.MockStorage, :put, fn _key, _bin, _opts ->
+        send(test_pid, :put)
+        :ok
+      end)
+
+      assert {:ok, _} = Attachments.upsert_attachment(user, vault, params)
+      refute_received :put
     end
 
     test "different bytes at the same path still write", %{user: user, vault: vault} do
@@ -1135,11 +1184,13 @@ defmodule Engram.AttachmentsTest do
       assert {:ok, b} = upsert(user, vault, "a.txt", "replacement")
       refute b.id == a.id
       assert content(user, vault, "a.txt") == "replacement"
-      assert blobs(user, vault) == [b.storage_key]
+      # a's blob stays with its tombstone for AttachmentBlobGC (#2159); the
+      # point is that nothing ELSE is left behind.
+      assert blobs(user, vault) == Enum.sort([a.storage_key, b.storage_key])
     end
 
     test "a raise after the PUT still deletes the fresh blob", %{user: user, vault: vault} do
-      {:ok, _} = upsert(user, vault, "a.txt", "original")
+      {:ok, original} = upsert(user, vault, "a.txt", "original")
       puts = :counters.new(1, [])
 
       # First PUT: the row is deleted under it. Second (the re-PUT for a fresh
@@ -1161,7 +1212,9 @@ defmodule Engram.AttachmentsTest do
         upsert(user, vault, "a.txt", "replacement")
       end
 
-      assert blobs(user, vault) == []
+      # Only the deleted original's blob, held by its tombstone until
+      # AttachmentBlobGC reaps it (#2159). Both fresh PUTs are gone.
+      assert blobs(user, vault) == [original.storage_key]
     end
   end
 

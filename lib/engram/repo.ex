@@ -51,6 +51,15 @@ defmodule Engram.Repo do
   end
 
   @doc """
+  `true` when a cross-tenant sweep would read blind: RLS is enforced and no
+  maintenance pool is configured, so `maintenance/0` is this repo and every
+  tenant-table read comes back filtered to zero rows. A sweep that deletes on
+  absence ("no row references this") must refuse rather than act on that.
+  """
+  @spec tenancy_unsafe?() :: boolean()
+  def tenancy_unsafe?, do: maintenance() == __MODULE__ and Engram.Repo.TenancyGuard.enforced?()
+
+  @doc """
   Take a transaction-scoped Postgres advisory lock keyed on a string id (a
   note/attachment/source-note UUID, etc). Released automatically at
   commit/rollback — the caller must already be inside a transaction (e.g.

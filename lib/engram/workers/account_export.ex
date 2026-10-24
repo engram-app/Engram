@@ -81,7 +81,7 @@ defmodule Engram.Workers.AccountExport do
   # returns nil, which is indistinguishable from "row gone", and the export
   # would sit :pending forever behind `account_exports_one_active_per_user`.
   defp owner(%{"export_id" => id}) do
-    if Repo.maintenance() == Repo and Engram.Repo.TenancyGuard.enforced?() do
+    if Repo.tenancy_unsafe?() do
       {:error, :tenancy_unsafe}
     else
       Repo.cross_tenant(fn ->

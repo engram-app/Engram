@@ -10,6 +10,10 @@ defmodule Engram.Storage.InMemory do
   @behaviour Engram.Storage
 
   @table :engram_test_storage_in_memory
+  # Version history, like a versioned S3 bucket: every put adds a data
+  # version, every delete a delete marker. `{key, {seq, version}}` rows in a
+  # bag; `seq` is monotonic, so the highest is the latest.
+  @versions :engram_test_storage_in_memory_versions
 
   @doc """
   Ensures the blob and multipart ETS tables exist. Idempotent and safe to
@@ -22,6 +26,7 @@ defmodule Engram.Storage.InMemory do
   """
   def ensure_table do
     ensure_multipart_table()
+    ensure_versions_table()
 
     case :ets.whereis(@table) do
       :undefined ->
@@ -41,6 +46,7 @@ defmodule Engram.Storage.InMemory do
   def put(key, binary, _opts \\ []) do
     ensure_table()
     :ets.insert(@table, {key, binary})
+    add_version(key, {:data, binary})
     :ok
   end
 
@@ -67,14 +73,86 @@ defmodule Engram.Storage.InMemory do
   def delete(key) do
     ensure_table()
     :ets.delete(@table, key)
+    add_version(key, :delete_marker)
     :ok
   end
 
   @impl true
   def delete_many(keys) when is_list(keys) do
-    ensure_table()
-    Enum.each(keys, &:ets.delete(@table, &1))
+    Enum.each(keys, &delete/1)
     {:ok, length(keys)}
+  end
+
+  # Paged like S3: key order, newest first within a key, `max_keys` entries
+  # per page, `next` = the last entry returned.
+  @impl true
+  def list_versions(prefix, opts) do
+    ensure_table()
+    max = Keyword.get(opts, :max_keys, 1_000)
+
+    versions =
+      :ets.foldl(
+        fn {key, {seq, version}}, acc ->
+          if String.starts_with?(key, prefix), do: [{key, seq, version} | acc], else: acc
+        end,
+        [],
+        @versions
+      )
+      |> Enum.sort_by(fn {key, seq, _} -> {key, -seq} end)
+
+    latest =
+      Enum.reduce(versions, %{}, fn {k, seq, _}, acc -> Map.update(acc, k, seq, &max(&1, seq)) end)
+
+    rest =
+      case Keyword.get(opts, :marker) do
+        nil -> versions
+        {key, seq} -> Enum.drop_while(versions, fn {k, s, _} -> {k, -s} <= {key, -seq} end)
+      end
+
+    {page, more} = Enum.split(rest, max)
+
+    entries =
+      for {key, seq, version} <- page do
+        %{
+          key: key,
+          version_id: Integer.to_string(seq),
+          last_modified: seq,
+          latest?: latest[key] == seq,
+          delete_marker?: version == :delete_marker
+        }
+      end
+
+    next = if more != [], do: page |> List.last() |> then(fn {k, s, _} -> {k, s} end)
+    {:ok, entries, next}
+  end
+
+  @impl true
+  def restore_version(key, version_id) do
+    ensure_table()
+    seq = String.to_integer(version_id)
+
+    case Enum.find(:ets.lookup(@versions, key), &match?({_, {^seq, {:data, _}}}, &1)) do
+      {_, {_, {:data, binary}}} -> put(key, binary)
+      nil -> {:error, :not_found}
+    end
+  end
+
+  defp add_version(key, version),
+    do: :ets.insert(@versions, {key, {System.unique_integer([:monotonic, :positive]), version}})
+
+  defp ensure_versions_table do
+    case :ets.whereis(@versions) do
+      :undefined ->
+        try do
+          :ets.new(@versions, [:public, :named_table, :bag])
+          :ok
+        rescue
+          ArgumentError -> :ok
+        end
+
+      _ ->
+        :ok
+    end
   end
 
   @impl true
@@ -94,7 +172,7 @@ defmodule Engram.Storage.InMemory do
         @table
       )
 
-    Enum.each(keys, &:ets.delete(@table, &1))
+    Enum.each(keys, &delete/1)
     {:ok, length(keys)}
   end
 

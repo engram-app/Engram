@@ -6682,9 +6682,10 @@ defmodule Engram.Notes do
       # Release every deleted note's claim — markers hold no path claim, so only
       # real notes.
       #
-      # MUST be a job here, not an inline call. Both callers of this function
-      # (Folders.delete/4 and batch_delete_folders/3) wrap it in a transaction,
-      # and Identity joins an in-flight transaction through Repo.with_tenant.
+      # MUST be a job here, not an inline call. batch_delete_folders/3 wraps
+      # this in a transaction (Folders' chunked cascade no longer does, #2159,
+      # but any caller may), and Identity joins an in-flight transaction
+      # through Repo.with_tenant.
       # Inline, a live-room release would NOT roll back with a failing
       # attachment leg, so the notes would come back with their entries gone —
       # live notes the authority does not mention, which projection can never
@@ -6808,40 +6809,40 @@ defmodule Engram.Notes do
     # only once this transaction really commits (a room stopped earlier can be
     # re-bound to the still-live row and survive the delete).
     Repo.transaction_after_commit(fn ->
-      with {:ok, user} <- Crypto.ensure_user_dek(user),
-           {:ok, dek} <- Crypto.get_dek(user) do
-        # Resolve every marker first (cheap indexed lookups), then run ONE
-        # shared-scan cascade for all folders — the old per-id shape
-        # re-fetched and re-decrypted the entire vault once per marker.
-        marker_ids
-        |> Enum.reduce_while([], fn id, acc ->
-          case get_folder_marker_by_id(user, vault, id) do
-            {:ok, marker} ->
-              {:cont, [hydrate_folder_marker(marker, dek).folder | acc]}
-
-            {:error, :not_found} ->
-              {:halt, {:rollback, {:not_found, id}}}
-          end
-        end)
-        |> case do
-          {:rollback, reason} ->
-            Repo.rollback(reason)
-
-          folders ->
-            # do_delete_folders/3 can now return {:error, {:dek_unavailable, _}}
-            # (scan_folders re-checks the DEK, and a rotation can land between
-            # this function's own get_dek and that one). Hard-matching turned
-            # that into a MatchError + 500 instead of the clean rollback this
-            # transaction is shaped to give.
-            case do_delete_folders(user, vault, folders) do
-              {:ok, %{deleted: n}} -> %{deleted: n, folders: folders}
-              {:error, reason} -> Repo.rollback(reason)
-            end
-        end
+      # Resolve every marker first (cheap indexed lookups), then run ONE
+      # shared-scan cascade for all folders — the old per-id shape
+      # re-fetched and re-decrypted the entire vault once per marker.
+      with {:ok, folders} <- resolve_folder_markers(user, vault, marker_ids),
+           # do_delete_folders/3 can return {:error, {:dek_unavailable, _}}
+           # (scan_folders re-checks the DEK, and a rotation can land between
+           # the resolve's get_dek and that one). Hard-matching turned that
+           # into a MatchError + 500 instead of the clean rollback this
+           # transaction is shaped to give.
+           {:ok, %{deleted: n}} <- do_delete_folders(Crypto.fresh_user(user), vault, folders) do
+        %{deleted: n, folders: folders}
       else
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+  end
+
+  @doc """
+  The decrypted folder path of each folder marker in `marker_ids`
+  (ownership-checked). `{:error, {:not_found, id}}` for the first id that is
+  not a live marker in this vault.
+  """
+  @spec resolve_folder_markers(map(), map(), [String.t()]) ::
+          {:ok, [String.t()]} | {:error, {:not_found, String.t()} | term()}
+  def resolve_folder_markers(user, vault, marker_ids) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, dek} <- Crypto.get_dek(user) do
+      Enum.reduce_while(marker_ids, {:ok, []}, fn id, {:ok, acc} ->
+        case get_folder_marker_by_id(user, vault, id) do
+          {:ok, marker} -> {:cont, {:ok, [hydrate_folder_marker(marker, dek).folder | acc]}}
+          {:error, :not_found} -> {:halt, {:error, {:not_found, id}}}
+        end
+      end)
+    end
   end
 
   @doc """

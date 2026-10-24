@@ -19,18 +19,23 @@ defmodule Engram.Folders do
   because a folder with no marker of its own — one the server only derives from
   the paths of the notes inside it — cannot be removed any other way.
 
-  Consistency is atomic across BOTH tables: each op wraps the notes leg and the
-  attachment leg in a single `Repo.transaction` (the legs' own
+  Rename and move are atomic across BOTH tables: each wraps the notes leg and
+  the attachment leg in a single `Repo.transaction` (the legs' own
   `Repo.with_tenant` transactions nest as savepoints). Any leg error rolls both
   tables back together, so a conflict can never leave notes moved with
-  attachments stranded (Bug 3/6).
+  attachments stranded (Bug 3/6). Their broadcasts are deferred to commit
+  (Fix #1): `atomic/1` brackets the outer transaction with
+  `Engram.Sync.Broadcast.deferred/1`, so a cascade a later conflict unwinds
+  emits nothing.
 
-  Broadcasts are deferred to commit (Fix #1): `atomic/1` brackets the outer
-  transaction with `Engram.Sync.Broadcast.deferred/1`, so every per-item
-  `note_changed` event the legs emit (routed through `Sync.Broadcast.emit/3`)
-  is buffered and flushed ONLY after the outer transaction commits — and
-  discarded entirely on rollback. No more phantom delete/upsert events for a
-  cascade that a later conflict unwinds.
+  Delete is NOT one transaction (#2159). A 7,440-attachment folder held one
+  transaction, and the vault seq lock, past the 15 s checkout limit and was
+  killed. Delete now scans once outside any transaction, then soft-deletes
+  in chunks (`Attachments.delete_chunk_size/0`), each chunk its own short
+  transaction: attachments first, then content notes, then folder markers
+  last. The contract is idempotent and resumable instead of all-or-nothing:
+  a failure leaves the folder visible with what remains under it, and a
+  retry rescans and finishes. Each chunk broadcasts once it commits.
   """
 
   alias Engram.Attachments
@@ -85,10 +90,17 @@ defmodule Engram.Folders do
   def rename(user, vault, old_folder, new_folder) do
     # Sanitize the target once here: it is the only entry for REST and MCP
     # folder renames, and both legs below would otherwise write it verbatim.
-    with {:ok, new_folder} <- PathSanitizer.sanitize_target(new_folder) do
+    #
+    # The attachment scan + decrypt runs BEFORE the transaction (#2159): held
+    # inside it, it was part of what pushed a large rename past the 15 s
+    # checkout limit. An attachment added under the folder in between stays
+    # at its path, the same outcome as one added just after the rename.
+    with {:ok, new_folder} <- PathSanitizer.sanitize_target(new_folder),
+         {:ok, att_pairs} <-
+           Attachments.folder_rename_pairs(user, vault, old_folder, new_folder) do
       atomic(fn ->
         with {:ok, notes} <- Notes.rename_folder(user, vault, old_folder, new_folder),
-             {:ok, atts} <- Attachments.rename_folder(user, vault, old_folder, new_folder) do
+             {:ok, atts} <- Attachments.move_folder_pairs(user, vault, att_pairs) do
           {:ok, %{notes: notes, attachments: atts}}
         end
       end)
@@ -140,50 +152,63 @@ defmodule Engram.Folders do
       # each reloads defensively. Doing it up front makes those no-ops.
       user = Crypto.fresh_user(user)
 
-      atomic(fn ->
-        with {:ok, note_rows} <- Notes.scan_folders(user, vault, [folder]),
-             {:ok, %{paths: att_paths, undecryptable: unreadable}} <-
-               Attachments.scan_folder_paths(user, vault, folder) do
-          # Markers are not content: an empty folder matches only its own
-          # marker row, which must not make it look non-empty.
-          notes = Enum.count(note_rows, &(&1.kind == "note"))
-          atts = length(att_paths)
+      # No outer transaction (#2159): the scans and the decrypt run outside
+      # one, and `delete_scanned/4` commits chunk by chunk.
+      with {:ok, note_rows} <- Notes.scan_folders(user, vault, [folder]),
+           {:ok, %{paths: att_paths, undecryptable: unreadable}} <-
+             Attachments.scan_folder_paths(user, vault, folder) do
+        # Markers are not content: an empty folder matches only its own
+        # marker row, which must not make it look non-empty.
+        notes = Enum.count(note_rows, &(&1.kind == "note"))
+        atts = length(att_paths)
 
-          cond do
-            notes + atts > 0 and not recursive ->
-              {:error, {:not_empty, %{notes: notes, attachments: atts}}}
+        cond do
+          notes + atts > 0 and not recursive ->
+            {:error, {:not_empty, %{notes: notes, attachments: atts}}}
 
-            # We cannot PROVE this folder is empty. An unreadable row has no
-            # decryptable path, so it may or may not live here — and the
-            # non-recursive delete exists precisely to refuse when content
-            # might be present. `recursive: true` is an explicit "remove
-            # whatever is under here", so it proceeds (and logs the orphans
-            # below) rather than leaving the user with no way to delete
-            # anything at all.
-            unreadable > 0 and not recursive ->
-              {:error, {:unverifiable, %{undecryptable_attachments: unreadable}}}
+          # We cannot PROVE this folder is empty. An unreadable row has no
+          # decryptable path, so it may or may not live here — and the
+          # non-recursive delete exists precisely to refuse when content
+          # might be present. `recursive: true` is an explicit "remove
+          # whatever is under here", so it proceeds (and logs the orphans
+          # below) rather than leaving the user with no way to delete
+          # anything at all.
+          unreadable > 0 and not recursive ->
+            {:error, {:unverifiable, %{undecryptable_attachments: unreadable}}}
 
-            true ->
-              log_orphaned_attachments(user, vault, folder, unreadable)
-              delete_scanned(user, vault, note_rows, att_paths, notes)
-          end
+          true ->
+            log_orphaned_attachments(user, vault, folder, unreadable)
+            {:ok, %{notes: n, attachments: a}} = delete_scanned(user, vault, note_rows, att_paths)
+            {:ok, %{notes: n, attachments: a}}
         end
-      end)
+      end
     end
   end
 
-  defp delete_scanned(user, vault, note_rows, att_paths, _scanned_notes) do
-    with {:ok, %{notes: notes}} <- Notes.delete_scanned(user, vault, note_rows),
-         {:ok, a} <- Attachments.delete_scanned_paths(user, vault, att_paths) do
-      # `notes` comes from what was ACTUALLY deleted, not from the pre-delete
-      # scan. Since #1346 the membership fence can skip a row that moved in the
-      # gap, so the scan count is aspirational — a concurrent folder rename
-      # re-keys every descendant's folder_hmac and the delete legitimately
-      # removes nothing, while the scan still said 3. The attachment leg on the
-      # same tuple has always counted real removals; reporting one true number
-      # beside one hopeful one is worse than either.
-      {:ok, %{notes: notes, attachments: a}}
-    end
+  # Attachments, then content notes, then folder markers: each leg in
+  # chunks, each chunk its own transaction (#2159). Markers go last so a
+  # failure anywhere leaves the folder in place for a retry to find.
+  #
+  # `notes` counts content notes; `deleted` every notes row (markers too),
+  # both from what was ACTUALLY deleted, not the scan. Since #1346 the
+  # membership fence can skip a row that moved in the gap, so the scan count
+  # is aspirational.
+  defp delete_scanned(user, vault, note_rows, att_paths) do
+    {:ok, attachments} = Attachments.delete_scanned_paths(user, vault, att_paths)
+    {content, markers} = Enum.split_with(note_rows, &(&1.kind == "note"))
+
+    %{deleted: d1, notes: n} = delete_note_chunks(user, vault, content)
+    %{deleted: d2} = delete_note_chunks(user, vault, markers)
+    {:ok, %{notes: n, deleted: d1 + d2, attachments: attachments}}
+  end
+
+  defp delete_note_chunks(user, vault, rows) do
+    rows
+    |> Enum.chunk_every(Attachments.delete_chunk_size())
+    |> Enum.reduce(%{deleted: 0, notes: 0}, fn chunk, acc ->
+      {:ok, %{deleted: d, notes: n}} = Notes.delete_scanned(user, vault, chunk)
+      %{deleted: acc.deleted + d, notes: acc.notes + n}
+    end)
   end
 
   # A recursive/batch delete removes what it can READ. Rows whose path will not
@@ -210,14 +235,20 @@ defmodule Engram.Folders do
   @spec batch_delete(map(), map(), [String.t()]) :: {:ok, counts()} | {:error, term()}
   def batch_delete(_user, _vault, []), do: {:ok, %{notes: 0, attachments: 0}}
 
+  # Same chunked, resumable cascade as `delete/4` (#2159). `notes` here is
+  # every notes row removed, markers included (the batch endpoint's contract).
   def batch_delete(user, vault, marker_ids) do
-    atomic(fn ->
-      with {:ok, %{deleted: notes, folders: folders}} <-
-             Notes.batch_delete_folders(user, vault, marker_ids),
-           {:ok, atts} <- delete_attachments_for(user, vault, folders) do
-        {:ok, %{notes: notes, attachments: atts}}
-      end
-    end)
+    user = Crypto.fresh_user(user)
+
+    with {:ok, folders} <- Notes.resolve_folder_markers(user, vault, marker_ids),
+         user = Crypto.fresh_user(user),
+         {:ok, note_rows} <- Notes.scan_folders(user, vault, folders),
+         {:ok, att_paths} <- attachment_paths_under(user, vault, folders) do
+      {:ok, %{deleted: notes, attachments: atts}} =
+        delete_scanned(user, vault, note_rows, att_paths)
+
+      {:ok, %{notes: notes, attachments: atts}}
+    end
   end
 
   @spec batch_move(map(), map(), [String.t()], String.t() | {:path, String.t()}) ::
@@ -225,13 +256,16 @@ defmodule Engram.Folders do
   def batch_move(_user, _vault, [], _target), do: {:ok, %{notes: 0, attachments: 0}}
 
   def batch_move(user, vault, marker_ids, target) do
-    atomic(fn ->
-      with {:ok, %{moved: notes, pairs: pairs}} <-
-             Notes.batch_move_folders(user, vault, marker_ids, target),
-           {:ok, atts} <- rename_attachments_for(user, vault, pairs) do
-        {:ok, %{notes: notes, attachments: atts}}
-      end
-    end)
+    # Attachment scan before the transaction (#2159), like `rename/4`.
+    with {:ok, metas} <- Attachments.list_attachments(user, vault) do
+      atomic(fn ->
+        with {:ok, %{moved: notes, pairs: pairs}} <-
+               Notes.batch_move_folders(user, vault, marker_ids, target),
+             {:ok, atts} <- rename_attachments_for(user, vault, metas, pairs) do
+          {:ok, %{notes: notes, attachments: atts}}
+        end
+      end)
+    end
   end
 
   # Perf (finding #9): scan the vault's attachments ONCE per batch op, then
@@ -239,12 +273,11 @@ defmodule Engram.Folders do
   # `Attachments.delete_folder`/`rename_folder` per folder, each of which ran its
   # own full `list_attachments` scan (O(N × total_attachments) wasted DB work).
   # The pre-filtered paths feed the leaner explicit-list attachment entry points
-  # (`batch_delete/3` for delete; `move_folder_pairs/3` for rename) so the whole
-  # batch still commits inside the coordinator's `atomic/1` transaction.
+  # (`delete_scanned_paths/3` for delete; `move_folder_pairs/3` for rename).
 
-  defp delete_attachments_for(_user, _vault, []), do: {:ok, 0}
+  defp attachment_paths_under(_user, _vault, []), do: {:ok, []}
 
-  defp delete_attachments_for(user, vault, folders) do
+  defp attachment_paths_under(user, vault, folders) do
     # Batch delete is recursive by nature — it removes the named folders and
     # everything under them — so it takes the same reading as `recursive: true`
     # above: delete what is readable, and LOG what is not. Silently returning
@@ -260,26 +293,22 @@ defmodule Engram.Folders do
         |> Enum.filter(fn path -> Enum.any?(prefixes, &String.starts_with?(path, &1)) end)
 
       log_orphaned_attachments(user, vault, Enum.join(folders, ","), unreadable)
-
-      {:ok, %{deleted: n}} = Attachments.batch_delete(user, vault, paths)
-      {:ok, n}
+      {:ok, paths}
     end
   end
 
-  defp rename_attachments_for(_user, _vault, []), do: {:ok, 0}
+  defp rename_attachments_for(_user, _vault, _metas, []), do: {:ok, 0}
 
-  defp rename_attachments_for(user, vault, pairs) do
-    with {:ok, metas} <- Attachments.list_attachments(user, vault) do
-      move_pairs =
-        Enum.flat_map(metas, fn %{path: old_path} ->
-          case rename_target(old_path, pairs) do
-            {:ok, new_path} -> [{old_path, new_path}]
-            :no_match -> []
-          end
-        end)
+  defp rename_attachments_for(user, vault, metas, pairs) do
+    move_pairs =
+      Enum.flat_map(metas, fn %{path: old_path} ->
+        case rename_target(old_path, pairs) do
+          {:ok, new_path} -> [{old_path, new_path}]
+          :no_match -> []
+        end
+      end)
 
-      Attachments.move_folder_pairs(user, vault, move_pairs)
-    end
+    Attachments.move_folder_pairs(user, vault, move_pairs)
   end
 
   defp folder_prefix(folder), do: String.trim_trailing(folder, "/") <> "/"

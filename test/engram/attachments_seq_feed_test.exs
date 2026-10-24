@@ -52,6 +52,17 @@ defmodule Engram.AttachmentsSeqFeedTest do
     assert after_row.seq == before.seq
   end
 
+  # #2159: the client compares this against its local copy to skip a
+  # download or to re-push the bytes when the server lost its blob.
+  test "a live feed row carries the row's content_hash", %{user: user, vault: vault} do
+    {:ok, a} = put(user, vault, "a.png")
+    {:ok, %{changes: [row]}} = Attachments.list_changes_by_seq(user, vault, 0)
+
+    assert row.id == a.id
+    assert is_binary(row.content_hash)
+    assert row.content_hash == att_row(user, a.id).content_hash
+  end
+
   test "attachment seq feed returns seq>cursor incl tombstones", %{user: user, vault: vault} do
     {:ok, _a} = put(user, vault, "a.png")
     :ok = Attachments.delete_attachment(user, vault, "a.png")
