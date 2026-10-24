@@ -78,10 +78,13 @@ defmodule Engram.MCP.HandlersPartialReadTest do
   end
 
   test "a missing section is a fixable error that lists the headings", %{user: u, vault: v} do
-    assert {:error, msg} = get(u, v, %{"paths" => ["P.md"], "section" => "Nope"})
+    assert {:error, {:section_not_found, msg}} =
+             get(u, v, %{"paths" => ["P.md"], "section" => "Nope"})
+
     assert msg == "Heading not found in P.md: Nope. Headings: T, Todo, Sub, Done"
 
-    assert {:error, "Heading not found in Q.md: Nope. This note has no headings."} =
+    assert {:error,
+            {:section_not_found, "Heading not found in Q.md: Nope. This note has no headings."}} =
              get(u, v, %{"paths" => ["Q.md"], "section" => "Nope"})
   end
 
@@ -95,7 +98,9 @@ defmodule Engram.MCP.HandlersPartialReadTest do
         actor: "api"
       )
 
-    assert {:error, msg} = get(u, v, %{"paths" => ["Many.md"], "section" => "Nope"})
+    assert {:error, {:section_not_found, msg}} =
+             get(u, v, %{"paths" => ["Many.md"], "section" => "Nope"})
+
     assert msg =~ "and 10 more"
     assert Enum.all?(Enum.take(headings, 50), &(msg =~ &1))
     refute msg =~ "H51"
@@ -108,7 +113,9 @@ defmodule Engram.MCP.HandlersPartialReadTest do
         actor: "api"
       )
 
-    assert {:error, msg2} = get(u, v, %{"paths" => ["Long.md"], "section" => "Nope"})
+    assert {:error, {:section_not_found, msg2}} =
+             get(u, v, %{"paths" => ["Long.md"], "section" => "Nope"})
+
     assert msg2 =~ "#{String.duplicate("x", 100)}..."
     refute msg2 =~ String.duplicate("x", 101)
   end
