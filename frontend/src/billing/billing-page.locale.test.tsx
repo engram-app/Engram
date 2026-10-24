@@ -136,10 +136,14 @@ function startButton(): HTMLElement {
 
 // $0 checkouts (trial start, payment-method update) leave out both wallets,
 // which stall at action_required there in prod (#2203), and keep the rest.
-function expectZeroAmountMethods(methods: string[]) {
-	expect(methods).not.toContain("apple_pay");
-	expect(methods).not.toContain("google_pay");
-	expect(methods).toEqual(expect.arrayContaining(["card", "paypal"]));
+// Pure (no expect) so each test owns the assertion.
+const ZERO_AMOUNT_EXPECTED = { wallets: [], card: true, paypal: true };
+function zeroAmountMethods(methods: string[]) {
+	return {
+		wallets: methods.filter((m) => m === "apple_pay" || m === "google_pay"),
+		card: methods.includes("card"),
+		paypal: methods.includes("paypal"),
+	};
 }
 
 describe("BillingPage locale", () => {
@@ -169,7 +173,9 @@ describe("BillingPage locale", () => {
 			allowedPaymentMethods: expect.any(Array),
 			locale: "zh-Hans",
 		});
-		expectZeroAmountMethods(open.mock.calls[0]?.[0].settings.allowedPaymentMethods);
+		expect(zeroAmountMethods(open.mock.calls[0]?.[0].settings.allowedPaymentMethods)).toEqual(
+			ZERO_AMOUNT_EXPECTED,
+		);
 	});
 
 	it("passes the mapped rendered locale with the full settings to the payment-method update checkout", async () => {
@@ -194,7 +200,9 @@ describe("BillingPage locale", () => {
 				locale: "zh-Hans",
 			},
 		});
-		expectZeroAmountMethods(open.mock.calls[0]?.[0].settings.allowedPaymentMethods);
+		expect(zeroAmountMethods(open.mock.calls[0]?.[0].settings.allowedPaymentMethods)).toEqual(
+			ZERO_AMOUNT_EXPECTED,
+		);
 	});
 
 	it("sends the current locale after a switch, without re-initializing Paddle", async () => {
@@ -217,7 +225,9 @@ describe("BillingPage locale", () => {
 			allowedPaymentMethods: expect.any(Array),
 			locale: "de",
 		});
-		expectZeroAmountMethods(open.mock.calls[0]?.[0].settings.allowedPaymentMethods);
+		expect(zeroAmountMethods(open.mock.calls[0]?.[0].settings.allowedPaymentMethods)).toEqual(
+			ZERO_AMOUNT_EXPECTED,
+		);
 		expect(initializePaddleMock).toHaveBeenCalledTimes(1);
 	});
 });
