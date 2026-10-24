@@ -3084,6 +3084,10 @@ jobs:
           HUGE_SHARDS: ${{ strategy.job-total }}
           HUGE_MAX_MB: ${{ github.event_name == 'push' && '3' || '10' }}
         run: |
+          # `--only shard:<i>` silently skips a `:huge` test with no shard tag.
+          f=test/engram/indexing_huge_notes_test.exs
+          [ "$(grep -c '^ *@tag :huge$' "$f")" = "$(grep -c '^ *@tag shard:' "$f")" ] ||
+            { echo "::error::every @tag :huge in $f needs a @tag shard:"; exit 1; }
           mix do ecto.create + engram.prepare_database + ecto.migrate
           # One case at a time: each peaks at up to ~250 MB and the per-case
           # memory assertion reads the node-wide peak.
