@@ -51,18 +51,25 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
       assert %{"id" => ^id} = Enum.find(tree["folders"], &(&1["name"] == "Live/New"))
     end
 
-    test "broadcasts folders.batch create on idempotent re-create too", %{
+    # #2161: a re-create of a live folder changes nothing, so like the batch
+    # endpoint it must not make every peer re-poll /folders/explicit (a loop
+    # of those re-polls is the suspected POST storm amplifier).
+    test "idempotent re-create sends no broadcast, a new folder still does", %{
       conn: conn,
       user: user,
       vault: vault
     } do
       _ = post(conn, "/api/folders", %{"folder" => "Twice"})
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
-      post(conn, "/api/folders", %{"folder" => "Twice"})
+
+      assert conn |> post("/api/folders", %{"folder" => "Twice"}) |> json_response(201)
+      refute_receive %Phoenix.Socket.Broadcast{event: "folders.batch"}, 100
+
+      post(conn, "/api/folders", %{"folder" => "Fresh"})
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "folders.batch",
-        payload: %{op: "create", folder: "Twice"}
+        payload: %{op: "create", folder: "Fresh"}
       }
     end
 
