@@ -1195,10 +1195,14 @@ defmodule Engram.OAuth do
 
     if DateTime.diff(now, consumed_at) > @refresh_reuse_grace_seconds and
          DateTime.compare(now, code.expires_at) != :gt do
-      {revoked, _changed} =
+      {revoked, changed} =
         revoke_refresh_tokens(from(r in RefreshToken, where: r.family_id == ^code.id),
           skip_tenant_check: true
         )
+
+      # Like every other revoke: the grant's access tokens stop at once on
+      # this node (the NOTIFY evicts peers), and the owner's sockets drop.
+      :ok = grants_changed(changed)
 
       # Counted only when this replay is what killed the family.
       if revoked > 0, do: emit_code_replay_kill(code, user_agent)
