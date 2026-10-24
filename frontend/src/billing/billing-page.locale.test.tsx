@@ -154,7 +154,14 @@ describe("BillingPage locale", () => {
 			await Promise.resolve();
 		});
 		await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
-		expect(open.mock.calls[0]?.[0].settings).toEqual({ ...INLINE_SETTINGS, locale: "zh-Hans" });
+		// A plan purchase is a $0-first-charge trial checkout: it also restricts
+		// payment methods (no Google Pay; see paddle-checkout.ts).
+		expect(open.mock.calls[0]?.[0].settings).toEqual({
+			...INLINE_SETTINGS,
+			allowedPaymentMethods: expect.not.arrayContaining(["google_pay"]),
+			locale: "zh-Hans",
+		});
+		expect(open.mock.calls[0]?.[0].settings.allowedPaymentMethods).toContain("card");
 	});
 
 	it("passes the mapped rendered locale with the full settings to the payment-method update checkout", async () => {
