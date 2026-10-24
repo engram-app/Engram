@@ -40,7 +40,7 @@ export function PricingSelectCardStacked({
 	className,
 }: PricingSelectCardStackedProps) {
 	const { t } = useT();
-	const { total, originalTotal, interval, trialPeriod } = priceData ?? {};
+	const { total, originalTotal, interval } = priceData ?? {};
 
 	const showBadges = badge || isCurrent;
 
@@ -93,11 +93,6 @@ export function PricingSelectCardStacked({
 						{Boolean(showInterval && interval) && (
 							<div className="text-muted-foreground text-sm">
 								{t("per {interval}", { interval: interval ?? "" })}
-							</div>
-						)}
-						{Boolean(trialPeriod) && (
-							<div className="mt-1 text-muted-foreground text-xs">
-								{t("{trialPeriod} free trial", { trialPeriod: trialPeriod ?? "" })}
 							</div>
 						)}
 					</CardHeader>

@@ -127,9 +127,9 @@ const INLINE_SETTINGS = {
 const OVERLAY_SETTINGS = { displayMode: "overlay", theme: "light", variant: "one-page" };
 
 function startButton(): HTMLElement {
-	const [first] = screen.getAllByRole("button", { name: "Start free trial" });
+	const [first] = screen.getAllByRole("button", { name: "Choose Starter" });
 	if (!first) {
-		throw new Error("no Start free trial button");
+		throw new Error("no Choose Starter button");
 	}
 	return first;
 }

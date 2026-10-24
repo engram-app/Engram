@@ -150,7 +150,7 @@ export function formatPlanPrice(
 // card never promises caps the backend is not enforcing.
 export type PlanLimits = "legacy" | "v5";
 
-// Single catalog source-of-truth: both onboarding (trial signup) and the
+// Single catalog source-of-truth: both onboarding (signup) and the
 // change-plan panel read display prices from here. Keep in sync with the
 // pricing model lock (Free / $7 / $14 monthly + $70/$140 annual — see
 // memory project_pricing_model). Updating Paddle prices means updating here.
@@ -312,7 +312,7 @@ export function PlanCard({
 							variant={filled ? "default" : "outline"}
 							className="w-full"
 						>
-							{ctaLabel ?? t("Start free trial")}
+							{ctaLabel ?? (tier === "pro" ? t("Choose Pro") : t("Choose Starter"))}
 						</Button>
 						{Boolean(selected && ctaSubLabel) && (
 							<p className="text-center text-muted-foreground text-xs">{ctaSubLabel}</p>

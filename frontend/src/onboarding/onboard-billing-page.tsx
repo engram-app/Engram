@@ -105,7 +105,7 @@ export default function OnboardBillingPage() {
 							{t("Choose your plan")}
 						</h1>
 						<p className="mx-auto mt-1.5 max-w-md text-balance text-muted-foreground text-sm sm:mt-3 sm:text-base">
-							{t("7-day free trial on paid plans. Card required, no charge until it ends.")}
+							{t("Paid plans come with a 14-day money-back guarantee.")}
 						</p>
 					</header>
 				)}
