@@ -409,4 +409,82 @@ defmodule Engram.Workers.InactivityCleanupTest do
       assert_receive {[:engram, :abuse, :inactivity_soft_delete], ^ref, _, _}
     end
   end
+
+  # The core claim: a LATER user is still processed after an EARLIER one fails.
+  # The sweeps have no ORDER BY, so the failure is keyed on call order, not on
+  # a user: whichever user the sweep reaches first fails, and the other must
+  # still get the step's effect. On main the first failure escapes the sweep,
+  # so the second user is never reached.
+  describe "a later user is processed after an earlier one fails" do
+    # Runs `fail.()` on the first call and `ok.(arg)` on every later one,
+    # recording the args that succeeded.
+    defp first_call_fails(fail, ok) do
+      {:ok, agent} = Agent.start_link(fn -> {0, []} end)
+
+      handler = fn arg ->
+        n = Agent.get_and_update(agent, fn {n, done} -> {n, {n + 1, done}} end)
+
+        if n == 0 do
+          fail.()
+        else
+          Agent.update(agent, fn {n, done} -> {n, [arg | done]} end)
+          ok.(arg)
+        end
+      end
+
+      {handler, fn -> agent |> Agent.get(& &1) |> elem(1) end}
+    end
+
+    test "warning sweep" do
+      users = for _ <- 1..2, do: insert(:user)
+      Enum.each(users, &set_last_active(&1.id, 65))
+
+      {handler, succeeded} = first_call_fails(fn -> raise "provider down" end, fn _ -> :ok end)
+      stub(Engram.Email.ProviderMock, :send, fn to, _subject, _html, _opts -> handler.(to) end)
+
+      ExUnit.CaptureLog.capture_log(fn -> InactivityCleanup.__sweep_60__() end)
+
+      assert [email] = succeeded.()
+      healthy = Enum.find(users, &(&1.email == email))
+      assert %DateTime{} = Accounts.get_user!(healthy.id).inactivity_warning_60_at
+    end
+
+    test "soft-delete sweep" do
+      users = for _ <- 1..2, do: insert(:user)
+      Enum.each(users, &set_last_active(&1.id, 95))
+
+      {handler, succeeded} = first_call_fails(fn -> raise "provider down" end, fn _ -> :ok end)
+      stub(Engram.Email.ProviderMock, :send, fn to, _subject, _html, _opts -> handler.(to) end)
+
+      ExUnit.CaptureLog.capture_log(fn -> InactivityCleanup.__sweep_soft__() end)
+
+      # The deleted-account notice is the soft delete's last step: reaching it
+      # means the second user's soft delete ran to completion.
+      assert [email] = succeeded.()
+      healthy = Enum.find(users, &(&1.email == email))
+      assert %DateTime{} = Repo.reload!(healthy).deleted_at
+    end
+
+    test "hard-delete sweep" do
+      cutoff = DateTime.add(DateTime.utc_now(), -31 * 86_400)
+
+      users =
+        for i <- 1..2 do
+          insert(:user, external_id: "user_clerk_sweep_#{i}")
+          |> Ecto.Changeset.change(%{deleted_at: cutoff})
+          |> Repo.update!(skip_tenant_check: true)
+        end
+
+      # An exit, not a raise: Lifecycle rescues exceptions from the Clerk call,
+      # so only an exit or throw reaches the sweep.
+      {handler, succeeded} = first_call_fails(fn -> exit(:clerk_timeout) end, fn _ -> :ok end)
+      stub(Engram.Auth.Clerk.ApiMock, :delete_user, fn clerk_id -> handler.(clerk_id) end)
+
+      ExUnit.CaptureLog.capture_log(fn -> InactivityCleanup.__sweep_hard__() end)
+
+      assert [clerk_id] = succeeded.()
+      healthy = Enum.find(users, &(&1.external_id == clerk_id))
+      refute Repo.get(Engram.Accounts.User, healthy.id, skip_tenant_check: true)
+    end
+  end
 end
