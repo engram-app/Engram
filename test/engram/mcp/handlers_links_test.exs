@@ -198,6 +198,29 @@ defmodule Engram.MCP.HandlersLinksTest do
       assert other["backlinks"] == []
     end
 
+    # Adversarial review of #2175: read one at a time, each note's backlink
+    # check saw only its own row, so the suffix matched both and one link was
+    # credited to two notes.
+    test "a suffix link is a backlink of exactly one note, read one at a time",
+         %{user: u, a: a} do
+      # The root Note.md is what hides a/y/Note.md: the keyed lookup fetches
+      # only the shortest same-named rows, and that is Note.md alone.
+      seed(u, a, [
+        {"Note.md", "root"},
+        {"a/y/Note.md", "first"},
+        {"x/y/Note.md", "second"},
+        {"Source.md", "see [[y/Note]]"}
+      ])
+
+      backlinks = fn path ->
+        {:ok, _, %{"notes" => [n]}} = get(u, a, %{"paths" => [path]})
+        n["backlinks"]
+      end
+
+      assert backlinks.("a/y/Note.md") == ["Source.md"]
+      assert backlinks.("x/y/Note.md") == []
+    end
+
     test "a bare name still takes the shortest same-named note", %{user: u, a: a} do
       seed(u, a, [
         {"Deep/Folder/Note.md", "long"},

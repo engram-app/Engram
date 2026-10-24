@@ -1039,7 +1039,11 @@ defmodule Engram.Links do
     # ponytail: a hub basename (733 `index.md`) costs one fetch + decrypt of
     # all its rows when a qualified link to it misses; a suffix key per path
     # depth would make it an index probe if that ever shows up in traces.
-    case for({h, t} <- pathed, resolve_prefetched(indexed, h, t) == :dangling, uniq: true, do: h) do
+    # Any qualified target without an EXACT path hit, not only a dangling one:
+    # a suffix match against the partial set above can pick a row that loses
+    # to a shorter one the keyed lookup never fetched, and backlinks would
+    # then credit one link to two notes.
+    case for({h, t} <- pathed, not exact_path_hit?(indexed, h, t), uniq: true, do: h) do
       [] ->
         indexed
 
@@ -1051,6 +1055,17 @@ defmodule Engram.Links do
         end)
         |> index_groups()
     end
+  end
+
+  defp exact_path_hit?(indexed, hmac, target) do
+    variants = Enum.map(["" | @note_exts], &String.downcase(target <> &1))
+
+    Enum.any?(Map.values(indexed), fn by_hmac ->
+      case by_hmac do
+        %{^hmac => %{by_path: by_path}} -> Enum.any?(variants, &Map.has_key?(by_path, &1))
+        _ -> false
+      end
+    end)
   end
 
   defp index_groups(raw),
