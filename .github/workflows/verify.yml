@@ -68,6 +68,11 @@ on:
         required: false
         type: boolean
         default: false
+      huge:
+        description: "Also run the huge-note matrix (5 parallel shards, ~15 min on the heavy pool)"
+        required: false
+        type: boolean
+        default: false
 
 # A newer push to the same branch cancels the older run. Without this, 53 of
 # 221 branch runs (Oct 12-18) kept running after being superseded, ~1,460 wall-
@@ -78,7 +83,10 @@ concurrency:
   # main/nightly get a per-run group (run_id): a shared group with
   # cancel-in-progress=false would still serialize them, and GitHub replaces a
   # PENDING run when a newer one queues, cancelling intermediate main commits.
-  group: verify-${{ github.event_name }}-${{ (github.ref == 'refs/heads/main' && github.event_name != 'repository_dispatch') && github.run_id || github.event.client_payload.plugin_branch || github.ref }}
+  # workflow_dispatch is per-run too: a dispatch is a deliberate run (a release
+  # gate, a manual `-f huge=true`), never a superseded one. Grouping it by ref
+  # let a second dispatch on the same branch or tag cancel the first.
+  group: verify-${{ github.event_name }}-${{ (github.event_name == 'workflow_dispatch' || (github.ref == 'refs/heads/main' && github.event_name != 'repository_dispatch')) && github.run_id || github.event.client_payload.plugin_branch || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -2989,23 +2997,30 @@ jobs:
 
   # The huge-note matrix (test/engram/indexing_huge_notes_test.exs, `@tag
   # :huge`): 1, 3 MB and the 10 MiB note-size cap (no bigger note can be
-  # stored), too slow for every push. Nightly and on manual dispatch: all
-  # sizes (~1.2 h). On a push whose HEAD commit says `[huge]`: 1 and 3 MB
-  # only (~17 min), so a push never holds a heavy runner for an hour. 10 MB
-  # alone is ~112 cases x ~25 s, ~47 min.
+  # stored), too slow for every push. Nightly and on `gh workflow run
+  # verify.yml -f huge=true`: all sizes. On a push whose HEAD commit says
+  # `[huge]`: 1 and 3 MB only. Any other dispatch (the release e2e gate in
+  # deploy-prod.yml, which reads only e2e-* conclusions) skips it.
+  # 324 cases, 3 s, 6 s and ~25 s a case at 1, 3 and 10 MB: ~1.2 h serial,
+  # so they are split round-robin over 5 shards (`@tag shard:`), one per
+  # heavy runner, each its own BEAM and Postgres.
   # Postgres only: Qdrant is a recording Bypass there. Report-only, like e2e:
-  # not in the `ci` aggregate.
+  # not in the `ci` aggregate; any red shard turns this job red.
   huge-notes:
     needs: [fingerprint, prebuild-mix]
     if: >-
-      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.huge) ||
       (github.event_name == 'push' && contains(github.event.head_commit.message, '[huge]'))
     runs-on: [self-hosted, linux, x64, isolated, heavy]
-    # ~340 cases, one at a time: ~1.2 h measured (3 s, 6 s and ~25 s a case
-    # at 1, 3 and 10 MB).
-    timeout-minutes: ${{ github.event_name == 'push' && 45 || 150 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4]
+    # A shard: ~65 cases, ~23 of them 10 MB, ~15 min.
+    timeout-minutes: ${{ github.event_name == 'push' && 20 || 40 }}
     env:
-      PG_CONTAINER: engram-huge-test-${{ github.run_id }}
+      PG_CONTAINER: engram-huge-test-${{ github.run_id }}-${{ matrix.shard }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -3065,8 +3080,14 @@ jobs:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_test
           MIX_TEST_PARTITION: "1"
           HUGE_TESTS: "1"
+          # The matrix size: one source of truth, so no shard index goes unrun.
+          HUGE_SHARDS: ${{ strategy.job-total }}
           HUGE_MAX_MB: ${{ github.event_name == 'push' && '3' || '10' }}
         run: |
+          # `--only shard:<i>` silently skips a `:huge` test with no shard tag.
+          f=test/engram/indexing_huge_notes_test.exs
+          [ "$(grep -c '^ *@tag :huge$' "$f")" = "$(grep -c '^ *@tag shard:' "$f")" ] ||
+            { echo "::error::every @tag :huge in $f needs a @tag shard:"; exit 1; }
           mix do ecto.create + engram.prepare_database + ecto.migrate
           # One case at a time: each peaks at up to ~250 MB and the per-case
           # memory assertion reads the node-wide peak.
@@ -3074,11 +3095,11 @@ jobs:
           # run still shows every case it finished. mix's own exit code, not
           # tee's (PIPESTATUS).
           set +e
-          mix test --warnings-as-errors --max-cases 1 --only huge test/engram/indexing_huge_notes_test.exs 2>&1 | tee huge.log
+          mix test --warnings-as-errors --max-cases 1 --only "shard:${{ matrix.shard }}" test/engram/indexing_huge_notes_test.exs 2>&1 | tee huge.log
           rc=${PIPESTATUS[0]}
           # One `HUGE {json}` line per case: the matrix, in the job summary.
           # `-o`: ExUnit's progress dots can share the line.
-          { echo '```'; grep -o 'HUGE {.*}' huge.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "shard ${{ matrix.shard }}"; echo '```'; grep -o 'HUGE {.*}' huge.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"
 
       - name: Stop ephemeral postgres
