@@ -63,10 +63,13 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   """
   use Oban.Worker, queue: :crdt_checkpoint, max_attempts: 5
 
+  import Ecto.Query, only: [from: 2]
+
   alias Engram.Accounts
   alias Engram.Crypto.RotationGate
   alias Engram.Notes
   alias Engram.Notes.{Enqueue, Identity}
+  alias Engram.Repo
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
@@ -133,6 +136,66 @@ defmodule Engram.Workers.ReleaseIndexEntries do
 
   def new_for(user_id, vault_id, note_ids),
     do: new(%{user_id: user_id, vault_id: vault_id, note_ids: note_ids})
+
+  @doc """
+  Queue the release of `note_ids` for `vault_id`. Every release goes through
+  here, so they coalesce per vault: when the vault already has a release job
+  waiting to run, the ids join it instead of queueing a job of their own.
+
+  Each job rewrites the whole index once per chunk, a fixed cost that scales
+  with the index, so the number of JOBS is what costs. Deleting K notes one
+  request at a time used to queue K jobs: K full rewrites (2026-10-24 speed
+  audit, `Notes.finish_tombstone/5`). Now a burst of deletes lands in the one
+  pending job, and the queue stays the throttle (`oban-scheduling-model.md`):
+  the busier the vault, the bigger each job.
+
+  Only a job still `available` or `scheduled` is joined. One already running
+  read its args at fetch, so it is never extended; the ids then get a fresh
+  job. The pending row is taken `FOR UPDATE SKIP LOCKED`, and the UPDATE
+  re-checks the state under that lock, so a job Oban fetches meanwhile is not
+  joined either. Inside a caller's transaction the joined args commit or roll
+  back with it, exactly like the insert they replace.
+  """
+  @spec enqueue(String.t(), String.t(), [String.t()]) :: {:ok, term()} | {:error, term()}
+  def enqueue(_user_id, _vault_id, []), do: {:ok, :skipped}
+
+  def enqueue(user_id, vault_id, note_ids) do
+    case join_pending(user_id, vault_id, note_ids) do
+      {1, _} -> {:ok, :joined}
+      {0, _} -> Enqueue.enqueue(new_for(user_id, vault_id, note_ids), "release_index_entries")
+    end
+  end
+
+  @pending_states ~w(available scheduled)
+
+  # `args @>` is served by Oban's GIN index on args.
+  defp join_pending(user_id, vault_id, note_ids) do
+    pending =
+      from(j in Oban.Job,
+        where: j.worker == ^inspect(__MODULE__) and j.state in ^@pending_states,
+        where: fragment("? @> ?", j.args, ^%{"user_id" => user_id, "vault_id" => vault_id}),
+        order_by: j.id,
+        limit: 1,
+        lock: "FOR UPDATE SKIP LOCKED",
+        select: j.id
+      )
+
+    from(j in Oban.Job,
+      where: j.id in subquery(pending) and j.state in ^@pending_states,
+      update: [
+        set: [
+          args:
+            fragment(
+              "jsonb_set(?, '{note_ids}', coalesce(? -> 'note_ids', '[]'::jsonb) || to_jsonb(?::text[]))",
+              j.args,
+              j.args,
+              ^note_ids
+            )
+        ]
+      ]
+    )
+    |> Repo.update_all([])
+  end
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"user_id" => user_id, "vault_id" => vault_id} = args}) do
@@ -206,6 +269,9 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   # ids, ~200 chunks at a few s each) is tens of links and a few hundred MB
   # of args over the whole chain: the price of a short slot hold. Upgrade
   # path if that shows up: a cursor over a table of pending releases.
+  #
+  # Always its own job, never joined (`enqueue/3`): the chain stays one link
+  # at a time, and a link never extends itself.
   #
   # The insert commits on its own. If the node dies after it but before Oban
   # acks this job, the rescued retry inserts a second successor, so two links

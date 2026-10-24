@@ -78,7 +78,7 @@ defmodule Engram.Workers.ProjectVaultIndex do
   alias Engram.{Accounts, Cache, Crypto, Notes, Repo}
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtIndexDoc, Enqueue, VaultIndexState}
+  alias Engram.Notes.{CrdtIndexDoc, VaultIndexState}
   alias Engram.Workers.ReleaseIndexEntries
 
   require Logger
@@ -457,10 +457,7 @@ defmodule Engram.Workers.ProjectVaultIndex do
   defp release_stale_claims(user, vault_id, %{stale: stale} = totals) do
     {repeat, fresh} = Enum.split_with(stale, &recently_released?(vault_id, &1))
 
-    case Enqueue.enqueue(
-           ReleaseIndexEntries.new_for(user.id, vault_id, fresh),
-           "release_index_entries"
-         ) do
+    case ReleaseIndexEntries.enqueue(user.id, vault_id, fresh) do
       {:ok, _job_or_skipped} ->
         Enum.each(fresh, &Cache.put(@released_cache, {vault_id, &1}, true))
 
