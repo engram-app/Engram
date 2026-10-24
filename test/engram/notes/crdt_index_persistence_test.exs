@@ -34,7 +34,15 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
   import Ecto.Query, only: [from: 2]
 
   alias Engram.{Crypto, Repo, Vaults}
-  alias Engram.Notes.{CrdtIndexDoc, CrdtIndexRegistry, VaultIndexState, VaultIndexUpdateLog}
+
+  alias Engram.Notes.{
+    CrdtIndexDoc,
+    CrdtIndexPersistence,
+    CrdtIndexRegistry,
+    VaultIndexState,
+    VaultIndexUpdateLog
+  }
+
   alias Yex.Sync.SharedDoc
 
   setup do
@@ -664,6 +672,50 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
       stop_room_and_wait(room)
 
       refute_enqueued(worker: Engram.Workers.ProjectVaultIndex)
+    end
+  end
+
+  # Roomless folds are load -> mutate -> REPLACE the snapshot row, with no merge.
+  # Two of them racing for one vault (chunked ReleaseIndexEntries jobs land on
+  # the queue together, and the projection that enqueues them runs right after
+  # the room exits, so they are roomless by construction) both load the same
+  # snapshot and the later upsert silently drops the earlier one's change.
+  # The sandbox shares one connection, so the race itself cannot run here; this
+  # pins the per-vault lock that prevents it and that it is taken before the
+  # snapshot is read.
+  describe "fold_roomless serialization" do
+    test "takes a per-vault advisory lock before reading the snapshot", ctx do
+      test_pid = self()
+      ref = make_ref()
+
+      :telemetry.attach(
+        {__MODULE__, ref},
+        [:engram, :repo, :query],
+        fn _e, _m, meta, _ -> send(test_pid, {ref, meta[:query], meta[:params]}) end,
+        nil
+      )
+
+      try do
+        assert :ok = CrdtIndexPersistence.fold_roomless(ctx.user, ctx.vault.id, fn _ -> :ok end)
+      after
+        :telemetry.detach({__MODULE__, ref})
+      end
+
+      queries = drain_queries(ref, [])
+      lock_at = Enum.find_index(queries, fn {q, _} -> q =~ "pg_advisory_xact_lock" end)
+      read_at = Enum.find_index(queries, fn {q, _} -> q =~ "vault_index_state" end)
+
+      assert lock_at, "fold_roomless took no advisory lock"
+      assert lock_at < read_at
+      assert elem(Enum.at(queries, lock_at), 1) == ["crdt_index_fold:" <> ctx.vault.id]
+    end
+  end
+
+  defp drain_queries(ref, acc) do
+    receive do
+      {^ref, query, params} -> drain_queries(ref, [{query, params} | acc])
+    after
+      0 -> Enum.reverse(acc)
     end
   end
 

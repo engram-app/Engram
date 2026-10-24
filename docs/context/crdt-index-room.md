@@ -24,7 +24,9 @@ on 2026-10-23 (14k+ jobs for one first-sync vault). The size is measured, not as
 is mostly a fixed part that scales with the whole index (~0.2-0.5 s at 20-40k entries), each id
 adds ~0.05 ms, and a worst-case delete-set broadcast is ~4 B per id. At 20k stale ids, 500 per job
 took 20 s total and 2,000 took 5.7 s with the same ~0.8 s slowest job. It is not the 500-row SQL
-chunk in `Engram.Notes`, which bounds bind params. The
+chunk in `Engram.Notes`, which bounds bind params. The chunks run concurrently and usually
+roomless; `CrdtIndexPersistence.fold_roomless/3` takes a per-vault advisory lock because its upsert
+REPLACES the snapshot, so two unserialized folds lose one another's change. The
 grace counts from the id's MINT time, so a re-claim of an old id is stale on arrival; released ids
 are remembered per node for an hour (`:released_index_claims` in `Engram.Cache.Registry`) and
 re-claims inside that window are skipped (`index_projection_release_skipped_total`).
