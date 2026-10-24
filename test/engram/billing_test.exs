@@ -1036,6 +1036,85 @@ defmodule Engram.BillingTest do
       end
     end
 
+    # 14-day money-back guarantee: a full refund ends the plan. Paddle does not
+    # cancel a subscription when its transaction is refunded, so we cancel it
+    # and the canceled entity runs through the subscription.canceled path.
+    defp refund_event(type, sub_id, overrides) do
+      %{
+        "event_type" => type,
+        "data" =>
+          Map.merge(
+            %{
+              "id" => "adj_full_1",
+              "action" => "refund",
+              "type" => "full",
+              "status" => "approved",
+              "subscription_id" => sub_id
+            },
+            overrides
+          )
+      }
+    end
+
+    defp canceled_entity(sub_id) do
+      %{
+        "id" => sub_id,
+        "status" => "canceled",
+        "customer_id" => "ctm_x",
+        "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
+        "current_billing_period" => nil
+      }
+    end
+
+    test "an approved full refund cancels the subscription now and drops the user to Free" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_refund_1", status: "active")
+
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn "sub_refund_1",
+                                                                :immediately,
+                                                                opts ->
+        assert is_binary(Keyword.fetch!(opts, :idempotency_key))
+        {:ok, canceled_entity("sub_refund_1")}
+      end)
+
+      for type <- ~w(adjustment.created adjustment.updated) do
+        assert {:ok, %Subscription{status: "canceled"}} =
+                 Billing.upsert_from_paddle_event(refund_event(type, "sub_refund_1", %{}))
+      end
+
+      user = Engram.Repo.reload!(user, skip_tenant_check: true)
+      assert Billing.tier(user) == :free
+    end
+
+    test "a partial, pending or credit adjustment leaves the subscription alone" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_refund_2", status: "active")
+
+      for overrides <- [
+            %{"type" => "partial"},
+            %{"status" => "pending_approval"},
+            %{"status" => "rejected"},
+            %{"action" => "credit"}
+          ] do
+        assert {:ok, %Subscription{status: "active"}} =
+                 Billing.upsert_from_paddle_event(
+                   refund_event("adjustment.updated", "sub_refund_2", overrides)
+                 )
+      end
+    end
+
+    test "a full refund whose Paddle cancel fails is reported as an error" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_refund_3", status: "active")
+
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ -> {:error, :timeout} end)
+
+      assert {:error, {:refund_cancel_failed, :paddle_unavailable}} =
+               Billing.upsert_from_paddle_event(
+                 refund_event("adjustment.updated", "sub_refund_3", %{})
+               )
+    end
+
     test "adjustment.* with no known subscription is ignored" do
       for data <- [%{"subscription_id" => "sub_nope"}, %{"subscription_id" => nil}] do
         event = %{"event_type" => "adjustment.created", "data" => data}
