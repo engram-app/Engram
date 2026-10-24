@@ -214,6 +214,18 @@ defmodule Engram.ServiceConfig.OverridesTest do
       assert :ok = ServiceConfig.override(:qdrant_active_cluster, "v2", by: "t")
     end
 
+    # With LEGACY_FILTER_FIELDS=false a legacy-format write is invisible to
+    # the DEK sweep, search and delete, so the v5 writer cannot be turned off.
+    test "write_v5_layout=false is refused while LEGACY_FILTER_FIELDS=false" do
+      ServiceConfig.put_override(:legacy_filter_fields, false)
+      ServiceConfig.put_override(:write_v5_layout, true)
+
+      assert {:error, {:invariant, _}} =
+               ServiceConfig.override(:write_v5_layout, false, by: "t")
+
+      assert :ok = ServiceConfig.override(:write_v5_layout, true, by: "t")
+    end
+
     # An env change under a live override can leave the effective config
     # violating an invariant. That must not refuse every later write: a kill
     # switch (INDEX_REBUILD=off) is exactly the write an incident needs.

@@ -288,9 +288,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     assert reload(note).payload_hash == nil
   end
 
-  # A v5 note whose row no longer decrypts cannot be healed. Left NULL, the
-  # daily re-check would requeue its user forever; it is marked (never
-  # deleted), counted, and skipped by the re-check until a pass rewrites it.
+  # The v3 index set has no legacy index: a legacy key in the heal scroll 400s.
   test "on the v3 cluster the heal filters on v5 keys only (no strict 400)", ctx do
     v3_on(ctx)
 
@@ -308,6 +306,9 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     assert reload(ctx.stale).payload_hash == ReconcileNotePayloads.undecryptable_stamp()
   end
 
+  # A v5 note whose row no longer decrypts cannot be healed. Left NULL, the
+  # daily re-check would requeue its user forever; it is marked (never
+  # deleted), counted, and skipped by the re-check until a pass rewrites it.
   test "an undecryptable v5 note is marked, counted, and not re-picked", ctx do
     v5_on(ctx)
 

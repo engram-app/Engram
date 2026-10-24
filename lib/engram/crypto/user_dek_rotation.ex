@@ -2215,7 +2215,7 @@ defmodule Engram.Crypto.UserDekRotation do
         {:ok, etf_bin} ->
           # ETF special case: re-encode the decoded term and encrypt THAT,
           # exactly as before (not the raw decrypted binary).
-          tags = :erlang.binary_to_term(etf_bin, [:safe])
+          tags = Engram.Notes.TagsTerm.decode!(etf_bin)
           new_etf = :erlang.term_to_binary(tags)
           {new_ct, new_nonce} = Envelope.encrypt(new_etf, new_dek, new_aad)
 

@@ -1838,7 +1838,9 @@ defmodule Engram.Vector.Qdrant do
   defp v5_value(_field, b64), do: hmac_id(b64)
 
   # A legacy filter value that is not a full base64 HMAC (a test literal, a
-  # malformed opt) has no v5 form; the legacy condition alone then applies.
+  # malformed opt) has no v5 form. `match_filter/2` then sends the legacy
+  # condition alone while legacy filters are on, and fails closed on the v5
+  # key once they are off.
   defp hmac_id(b64) when is_binary(b64) do
     case Base.decode64(b64) do
       {:ok, <<_::binary-size(16), _::binary>> = hmac} -> FilterId.from_hmac(hmac)

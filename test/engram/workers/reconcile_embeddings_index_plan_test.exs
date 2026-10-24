@@ -12,6 +12,12 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
   # Only when IndexVersions is done: while a version is open the version arm
   # (a parameter) is in the OR and no partial index can be implied. That is
   # the rare case and is left alone here.
+  #
+  # The table is seeded in prod's shape (the vault's notes mostly indexed, one
+  # due) and ANALYZEd before the EXPLAIN. On a one-row table the partial index
+  # and a `notes_folder` scan of the vault cost the same to within 1% (16.32 vs
+  # 16.46), so the plan followed whatever stats the shared test DB held from
+  # earlier tests, and CI picked `notes_folder` on some runs.
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
@@ -21,6 +27,10 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
   alias Engram.QueryRecorder
   alias Engram.Workers.ReconcileEmbeddings
 
+  # Indexed notes beside the one due: enough that scanning the vault costs
+  # clearly more than the partial index.
+  @indexed 200
+
   setup do
     DataMigrations.reset_cache()
     :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
@@ -29,7 +39,17 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
 
   test "the sweep UPDATE's eligible subquery uses notes_reconcile_due" do
     user = insert(:user)
-    note = insert(:note, user: user, vault: insert(:vault, user: user), embed_hash: nil)
+    vault = insert(:vault, user: user)
+    note = insert(:note, user: user, vault: vault, embed_hash: nil)
+
+    done = :crypto.hash(:sha256, "# Test note content") |> Base.encode16(case: :lower)
+
+    insert_list(@indexed, :note,
+      user: user,
+      vault: vault,
+      embed_hash: done,
+      dense_indexed_hash: done
+    )
 
     tick = DateTime.new!(Date.utc_today(), ~T[03:57:00])
 
@@ -44,7 +64,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
     sweeps = for %{sql: "WITH \"reconcile_eligible\"" <> _ = sql} <- queries, do: sql
     assert [sql | _] = sweeps, "recorded no reconcile UPDATE on notes"
 
-    plan = QueryPlan.generic_plan(sql)
+    plan = QueryPlan.generic_plan(sql, analyze: ~w(notes vaults))
     assert plan =~ "notes_reconcile_due", "plan:\n#{plan}\n\nsql:\n#{sql}"
   end
 end
