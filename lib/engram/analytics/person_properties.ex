@@ -20,6 +20,7 @@ defmodule Engram.Analytics.PersonProperties do
   alias Engram.Billing
   alias Engram.Billing.Subscription
   alias Engram.Notes.Note
+  alias Engram.Notes.NoteBody
   alias Engram.OAuth.Client
   alias Engram.OAuth.RefreshToken
   alias Engram.Onboarding.Action
@@ -81,12 +82,10 @@ defmodule Engram.Analytics.PersonProperties do
         where: is_nil(n.deleted_at) and n.kind == "note",
         group_by: n.vault_id,
         # Stored size: encrypted and possibly compressed, not plaintext.
-        select: %{
-          vault_id: n.vault_id,
-          n: count(n.id),
-          bytes: sum(fragment("octet_length(?)", n.content_ciphertext))
-        }
+        select: %{vault_id: n.vault_id, n: count(n.id)}
       )
+      |> NoteBody.join()
+      |> select_merge(^%{bytes: dynamic([n], sum(^NoteBody.byte_length(:content)))})
 
     attachments =
       from(a in Attachment,

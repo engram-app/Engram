@@ -30,6 +30,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
     Enqueue,
     Helpers,
     Note,
+    NoteBody,
     Revisions
   }
 
@@ -237,7 +238,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
             # Without this, extract_title falls back to the UUID and
             # inject_phase_b_fields_pub gets nil path/folder → corrupts
             # path_hmac/folder_hmac so the row stops resolving by path.
-            case Repo.get(Note, note_id) do
+            case NoteBody.get(note_id) do
               # Deleted note (vault force-purge race): quiet skip, see checkpoint/5.
               nil ->
                 {:skip, :note_deleted}

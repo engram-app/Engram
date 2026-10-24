@@ -39,7 +39,7 @@ defmodule Engram.Notes.CrdtDeliver do
 
   alias Engram.{Accounts, Crypto, Repo}
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtTransport, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtTransport, Note, NoteBody}
   alias Yex.Sync.SharedDoc
 
   require Logger
@@ -379,7 +379,7 @@ defmodule Engram.Notes.CrdtDeliver do
 
     result =
       Repo.with_tenant(user_id, fn ->
-        case Repo.get(Note, note_id) do
+        case NoteBody.get(note_id) do
           nil -> {:error, :missing_row}
           %Note{} = note -> merged_state_of(note, user)
         end

@@ -29,7 +29,7 @@ defmodule Engram.Crypto.UserDekRotation do
   See `docs/encryption-tier-3-audit.md` § Phase T3.7.
   """
 
-  import Ecto.Query, only: [from: 2]
+  import Ecto.Query, only: [dynamic: 2, from: 2, where: 3]
 
   alias Engram.Accounts.User
   alias Engram.Attachments.SegmentedCipher
@@ -44,6 +44,7 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Notes.FieldCatalog
   alias Engram.Notes.FlatFields
   alias Engram.Notes.FrontmatterKeys
+  alias Engram.Notes.NoteBody
   alias Engram.Repo
   alias Engram.Vector.Qdrant
   alias Engram.Workers.{EmbedNote, ReconcileNotePayloads, RotationTextGuard}
@@ -229,11 +230,15 @@ defmodule Engram.Crypto.UserDekRotation do
       Engram.Notes.Note,
       fn batch_ids ->
         Repo.transaction(fn ->
+          # Bodies from `note_bodies`; the lock is on the notes row only
+          # (`OF n0`: no row lock on an outer join's nullable side). Every
+          # body write goes through a notes UPDATE, so that row serializes them.
           notes =
             from(n in Engram.Notes.Note,
               where: n.id in ^batch_ids,
-              lock: "FOR UPDATE"
+              lock: "FOR UPDATE OF n0"
             )
+            |> NoteBody.select_note()
             |> Repo.all(skip_tenant_check: true)
 
           rewrap_crdt_tail(batch_ids, old_dek, new_dek)
@@ -1131,7 +1136,11 @@ defmodule Engram.Crypto.UserDekRotation do
       fn batch_ids ->
         {:ok, notes} =
           Repo.with_tenant(user_id, fn ->
-            Repo.all(from(n in Engram.Notes.Note, where: n.id in ^batch_ids))
+            Repo.all(
+              Engram.Notes.Note
+              |> where([n], n.id in ^batch_ids)
+              |> NoteBody.select_note(NoteBody.without_crdt())
+            )
           end)
 
         rewrite_note_attrs(user_id, notes, note_flats(user_id, notes, new_dek, new_filter_key))
@@ -1292,14 +1301,27 @@ defmodule Engram.Crypto.UserDekRotation do
   defp derived_display([], _dek), do: %{}
 
   defp derived_display(note_ids, dek) do
-    from(n in Engram.Notes.Note,
-      where: n.id in ^note_ids,
-      select:
-        {n.id, n.content_ciphertext, n.content_nonce, n.path_ciphertext, n.path_nonce,
-         fragment("(SELECT count(*) FROM chunk_points p WHERE p.note_id = ?)", n.id)}
+    Engram.Notes.Note
+    |> where([n], n.id in ^note_ids)
+    |> NoteBody.select_map(
+      [:id, :content_ciphertext, :content_nonce, :path_ciphertext, :path_nonce],
+      %{
+        points__:
+          dynamic(
+            [n],
+            fragment("(SELECT count(*) FROM chunk_points p WHERE p.note_id = ?)", n.id)
+          )
+      }
     )
     |> Repo.all()
-    |> Enum.flat_map(fn {id, content_ct, content_nonce, path_ct, path_nonce, count} ->
+    |> Enum.flat_map(fn %{
+                          id: id,
+                          content_ciphertext: content_ct,
+                          content_nonce: content_nonce,
+                          path_ciphertext: path_ct,
+                          path_nonce: path_nonce,
+                          points__: count
+                        } ->
       with true <- is_binary(content_ct) and is_binary(path_ct),
            {:ok, content} <-
              Envelope.decrypt(
@@ -1381,7 +1403,10 @@ defmodule Engram.Crypto.UserDekRotation do
   defp remap_batch(user_id, batch_ids, new_dek, {old_key, new_key}) do
     {:ok, notes} =
       Repo.with_tenant(user_id, fn ->
-        Repo.all(from(n in Engram.Notes.Note, where: n.id in ^batch_ids and n.kind == "note"))
+        Repo.all(
+          from(n in Engram.Notes.Note, where: n.id in ^batch_ids and n.kind == "note")
+          |> NoteBody.select_note(NoteBody.without_crdt())
+        )
       end)
 
     Enum.each(notes, fn note ->

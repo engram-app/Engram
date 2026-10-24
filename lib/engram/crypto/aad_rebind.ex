@@ -37,6 +37,7 @@ defmodule Engram.Crypto.AadRebind do
   alias Engram.Crypto.KeyProvider.Resolver
   alias Engram.Crypto.MigrationRunner
   alias Engram.Notes.Note
+  alias Engram.Notes.NoteBody
   alias Engram.Repo
   alias Engram.Vaults.Vault
 
@@ -190,10 +191,8 @@ defmodule Engram.Crypto.AadRebind do
     legacy_version = Crypto.row_version_legacy()
 
     rows =
-      from(n in Note,
-        where: n.user_id == ^user_id and n.dek_version == ^legacy_version,
-        select: n
-      )
+      from(n in Note, where: n.user_id == ^user_id and n.dek_version == ^legacy_version)
+      |> NoteBody.select_note()
       |> Repo.all()
 
     Enum.reduce_while(rows, {:ok, 0}, fn note, {:ok, n} ->

@@ -34,6 +34,7 @@ defmodule Engram.Notes.FieldCatalog do
   alias Engram.Notes.Frontmatter
   alias Engram.Notes.FrontmatterKey
   alias Engram.Notes.FrontmatterKeys
+  alias Engram.Notes.NoteBody
   alias Engram.Notes.OkfFields
   alias Engram.Repo
   alias Engram.Vaults.Vault
@@ -97,7 +98,7 @@ defmodule Engram.Notes.FieldCatalog do
   """
 
   # Everything a note decrypt reads, without the CRDT state (the Y-doc).
-  @fields Engram.Notes.Note.__schema__(:fields) -- [:crdt_state_ciphertext, :crdt_state_nonce]
+  @fields NoteBody.without_crdt()
 
   @named_names Map.new(FrontmatterKeys.named(), fn {name, id} -> {id, Atom.to_string(name)} end)
 
@@ -251,7 +252,8 @@ defmodule Engram.Notes.FieldCatalog do
     ids = values |> Enum.map(&List.last/1) |> Enum.uniq() |> Enum.map(&Ecto.UUID.load!/1)
 
     query =
-      from(n in Notes.scoped_live(user, vault), where: n.id in ^ids, select: struct(n, ^@fields))
+      from(n in Notes.scoped_live(user, vault), where: n.id in ^ids)
+      |> NoteBody.select_note(@fields)
 
     notes = Repo.with_tenant!(user.id, fn -> Repo.all(query) end)
 
