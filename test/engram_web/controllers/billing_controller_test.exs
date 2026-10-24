@@ -325,7 +325,8 @@ defmodule EngramWeb.BillingControllerTest do
   describe "GET /api/billing/portal?action=" do
     @describetag :session_auth
 
-    test "returns the cancel deep link", %{conn: conn, user: user} do
+    test "answers action=cancel with the overview, not the cancel deep link",
+         %{conn: conn, user: user} do
       insert(:subscription,
         user: user,
         paddle_customer_id: "ctm_dev",
@@ -343,7 +344,7 @@ defmodule EngramWeb.BillingControllerTest do
       end)
 
       body = conn |> get("/api/billing/portal?action=cancel") |> json_response(200)
-      assert body["url"] == "https://p/cancel"
+      assert body["url"] == "https://p/overview"
     end
   end
 
