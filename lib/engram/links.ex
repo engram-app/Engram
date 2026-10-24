@@ -1057,16 +1057,23 @@ defmodule Engram.Links do
     end
   end
 
+  # Settled only when the row the read-time rules pick IS an exact path
+  # match: an exact hit in the table route_resolution/3 tries second does
+  # not stop a suffix hit in the first from winning on a partial set.
   defp exact_path_hit?(indexed, hmac, target) do
     variants = Enum.map(["" | @note_exts], &String.downcase(target <> &1))
 
-    Enum.any?(Map.values(indexed), fn by_hmac ->
-      case by_hmac do
-        %{^hmac => %{by_path: by_path}} -> Enum.any?(variants, &Map.has_key?(by_path, &1))
-        _ -> false
-      end
-    end)
+    with {tag, id} <- resolve_prefetched(indexed, hmac, target),
+         %{sorted: sorted} <- get_in(indexed, [table_of(tag), hmac]),
+         {_id, path} <- List.keyfind(sorted, id, 0) do
+      String.downcase(path) in variants
+    else
+      _ -> false
+    end
   end
+
+  defp table_of(:note), do: :notes
+  defp table_of(:attachment), do: :attachments
 
   defp index_groups(raw),
     do: Map.new(raw, fn {table, groups} -> {table, index_by_hmac(groups)} end)
@@ -1492,7 +1499,34 @@ defmodule Engram.Links do
     names
     |> Enum.group_by(& &1.vault_id)
     |> Enum.flat_map(fn {vault_id, vault_names} ->
-      spelled = Enum.map(vault_names, &{&1, target_spellings(&1.path)})
+      used = used_target_keys(user, vault_id, Enum.map(vault_names, & &1.hmac))
+      filter_key = Crypto.dek_filter_key_from_bytes(dek)
+
+      # Only the spellings some incoming link actually uses. A note three
+      # folders deep has tail spellings (`b/index`) that rarely hit an exact
+      # path, and each such miss costs a fetch of every same-named row (733
+      # for the `index.md` hub). A spelling no edge uses credits no backlink,
+      # so dropping it changes no answer. Unkeyed edges are matched by text,
+      # so a basename that has any keeps every spelling.
+      spelled =
+        Enum.map(vault_names, fn name ->
+          texts =
+            case Map.get(used, name.hmac) do
+              {:stale, _keys} ->
+                target_spellings(name.path)
+
+              {:keyed, keys} ->
+                Enum.filter(
+                  target_spellings(name.path),
+                  &MapSet.member?(keys, target_key_hmac(filter_key, &1))
+                )
+
+              nil ->
+                []
+            end
+
+          {name, texts}
+        end)
 
       pairs = for {name, texts} <- spelled, text <- texts, uniq: true, do: {name.hmac, text}
       candidates = target_candidates(user, vault_id, pairs, dek)
@@ -1507,6 +1541,32 @@ defmodule Engram.Links do
       end
     end)
   end
+
+  # Per basename hmac: the distinct current target keys its incoming edges
+  # carry, or `:stale` when any edge's keys are missing or stale. One
+  # indexed query for every name in the vault.
+  defp used_target_keys(_user, _vault_id, []), do: %{}
+
+  defp used_target_keys(user, vault_id, hmacs) do
+    from(l in NoteLink,
+      where:
+        l.user_id == ^user.id and l.vault_id == ^vault_id and
+          l.target_basename_hmac in ^Enum.uniq(hmacs),
+      distinct: true,
+      select:
+        {l.target_basename_hmac, l.target_key_hmac,
+         keys_stale(l.link_keys_stamp, l.target_text_nonce)}
+    )
+    |> Repo.all(skip_tenant_check: true)
+    |> Enum.reduce(%{}, fn {hmac, key, stale?}, acc ->
+      Map.update(acc, hmac, tag_used(stale?, MapSet.new([key])), fn {state, keys} ->
+        tag_used(stale? or state == :stale, MapSet.put(keys, key))
+      end)
+    end)
+  end
+
+  defp tag_used(true, keys), do: {:stale, keys}
+  defp tag_used(false, keys), do: {:keyed, keys}
 
   defp target_spellings(path) do
     key = basename_key(path)
