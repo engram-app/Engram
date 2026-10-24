@@ -154,11 +154,10 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
         do: "payment_failed",
         else: "portal_no_reason"
 
-    with %User{} = user <- Accounts.get_user(sub.user_id) do
-      Feedback.record_missing_cancel_reason(user, started_at(data, sub), reason)
+    case Accounts.get_user(sub.user_id) do
+      %User{} = user -> Feedback.record_missing_cancel_reason(user, started_at(data, sub), reason)
+      nil -> :ok
     end
-
-    :ok
   rescue
     # Analytics only: the cancel is already saved, so a failed read here must
     # not report the webhook as failed.
