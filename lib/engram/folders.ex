@@ -86,6 +86,63 @@ defmodule Engram.Folders do
     end)
   end
 
+  @doc """
+  Creates explicit folder markers and tells connected devices about the ones
+  this call created or undeleted. The one create path for REST single, REST
+  batch and MCP `create_folder`.
+
+  Each call spends one unit of the user's `:folder_create_rate_limit` budget
+  BEFORE any tenant transaction (#2161): every create can take the vault
+  `change_seq` row lock in a pooled transaction, so an unbounded caller drains
+  the Ecto pool for all tenants. It lives here, not in a plug, because MCP
+  arrives as `POST /api/mcp` and a path-shaped plug cannot see it
+  (docs/context/mcp-bypasses-path-shaped-plugs.md). One unit per call, not per
+  folder: the cost being bounded is the transaction, and a batch is one.
+
+  A re-create of a live folder changes nothing, so it broadcasts nothing; a
+  peer would only re-poll `/folders/explicit` for it.
+  """
+  @spec create_markers(map(), map(), [String.t()]) ::
+          {:ok, %{folders: [map()], rejected: [String.t()]}}
+          | {:error, {:rate_limited, non_neg_integer()} | term()}
+  def create_markers(user, vault, inputs) when is_list(inputs) do
+    with :ok <- spend_create_budget(user),
+         {:ok, %{folders: entries}} = ok <- Notes.create_folder_markers(user, vault, inputs) do
+      broadcast_created(user, vault, entries)
+      ok
+    end
+  end
+
+  defp spend_create_budget(user) do
+    opts = Application.fetch_env!(:engram, :folder_create_rate_limit)
+
+    case EngramWeb.RateLimiter.hit(
+           "folder_create:#{user.id}",
+           Keyword.fetch!(opts, :period_ms),
+           Keyword.fetch!(opts, :limit),
+           :folder_create
+         ) do
+      {:allow, _} -> :ok
+      {:deny, retry_after_ms} -> {:error, {:rate_limited, retry_after_ms}}
+    end
+  end
+
+  # `markers` carries each row's id so the web app can patch its tree instead
+  # of re-fetching the vault; `folder` is kept for a single create, the shape
+  # POST /folders and MCP always sent.
+  defp broadcast_created(user, vault, entries) do
+    case for %{created: true, name: n, id: id} <- entries, uniq: true, do: %{id: id, name: n} do
+      [] ->
+        :ok
+
+      created ->
+        names = Enum.map(created, & &1.name)
+        payload = %{op: "create", folders: names, markers: created}
+        payload = if match?([_], names), do: Map.put(payload, :folder, hd(names)), else: payload
+        Broadcast.emit("sync:#{user.id}:#{vault.id}", "folders.batch", payload)
+    end
+  end
+
   @spec rename(map(), map(), String.t(), String.t()) :: {:ok, counts()} | {:error, term()}
   def rename(user, vault, old_folder, new_folder) do
     # Sanitize the target once here: it is the only entry for REST and MCP

@@ -124,53 +124,8 @@ defmodule EngramWeb.FoldersController do
   )
 
   def create(conn, %{"folder" => folder}) when is_binary(folder) do
-    user = conn.assigns.current_user
-    vault = conn.assigns.current_vault
-
-    if within_create_budget?(user),
-      do: do_create(conn, user, vault, folder),
-      else: conn |> put_status(429) |> json(%{error: "rate_limited"})
-  end
-
-  def create(conn, _params) do
-    conn |> put_status(422) |> json(%{error: "folder parameter is required"})
-  end
-
-  # #2161: every single create runs in a pooled tenant transaction and may take
-  # the vault change_seq row lock, so one client looping on this route drained
-  # the Ecto pool on every web task. Refuse before any of that. Bulk creates
-  # belong on POST /folders/batch, which is one transaction for up to 500.
-  defp within_create_budget?(user) do
-    opts = Application.fetch_env!(:engram, :folder_create_rate_limit)
-
-    match?(
-      {:allow, _},
-      EngramWeb.RateLimiter.hit(
-        "folder_create:#{user.id}",
-        Keyword.fetch!(opts, :period_ms),
-        Keyword.fetch!(opts, :limit),
-        :folder_create
-      )
-    )
-  end
-
-  # The batch upsert with one entry: it reports whether this call created (or
-  # undeleted) the marker, which the single upsert does not. A re-create of a
-  # live folder changes nothing, so it broadcasts nothing, same as an
-  # all-existing batch (#2161).
-  defp do_create(conn, user, vault, folder) do
-    case Notes.create_folder_markers(user, vault, [folder]) do
-      {:ok, %{folders: [%{name: name} = entry]}} ->
-        # Lets connected devices (plugin/web) materialize the empty folder live
-        # instead of on the next pull.
-        if entry.created do
-          BatchOps.broadcast_batch(user, vault, "folders.batch", %{
-            op: "create",
-            folder: name,
-            markers: [%{id: entry.id, name: name}]
-          })
-        end
-
+    case Folders.create_markers(conn.assigns.current_user, conn.assigns.current_vault, [folder]) do
+      {:ok, %{folders: [%{name: name}]}} ->
         conn
         |> put_status(:created)
         |> json(%{folder: %{name: name, count: 0}})
@@ -180,11 +135,18 @@ defmodule EngramWeb.FoldersController do
         |> put_status(422)
         |> json(%{error: "folder must not be empty"})
 
+      {:error, {:rate_limited, _retry_after_ms}} ->
+        conn |> put_status(429) |> json(%{error: "rate_limited"})
+
       {:error, reason} ->
         conn
         |> put_status(500)
         |> json(%{error: format_error(reason)})
     end
+  end
+
+  def create(conn, _params) do
+    conn |> put_status(422) |> json(%{error: "folder parameter is required"})
   end
 
   operation(:batch_create,
@@ -212,23 +174,7 @@ defmodule EngramWeb.FoldersController do
 
     with true <- Enum.all?(folders, &is_binary/1),
          {:ok, %{folders: entries, rejected: rejected}} <-
-           Notes.create_folder_markers(user, vault, folders) do
-      # One event for the batch, not N, naming only folders this call created
-      # or undeleted: an all-existing batch (a reconnect re-seed) changes
-      # nothing, so it must not make every peer re-poll /folders/explicit.
-      # `markers` carries each row's id so the web app can patch its tree
-      # instead of re-fetching the whole vault per batch.
-      created =
-        for %{created: true, name: name, id: id} <- entries, uniq: true, do: %{id: id, name: name}
-
-      if created != [] do
-        BatchOps.broadcast_batch(user, vault, "folders.batch", %{
-          op: "create",
-          folders: Enum.map(created, & &1.name),
-          markers: created
-        })
-      end
-
+           Folders.create_markers(user, vault, folders) do
       # `input` echoes what the client sent and `name` is what was stored, so a
       # client can map a folder the sanitizer rewrote to its server name.
       conn
@@ -243,6 +189,9 @@ defmodule EngramWeb.FoldersController do
 
       {:error, :batch_too_large} ->
         conn |> put_status(422) |> json(%{error: "batch_too_large", max: 500})
+
+      {:error, {:rate_limited, _retry_after_ms}} ->
+        conn |> put_status(429) |> json(%{error: "rate_limited"})
 
       {:error, reason} ->
         conn |> put_status(500) |> json(%{error: format_error(reason)})
