@@ -401,10 +401,41 @@ defmodule Engram.Vaults do
   @spec record_plugin_version(map(), Ecto.UUID.t(), String.t() | nil) :: :ok
   def record_plugin_version(_user, _vault_id, nil), do: :ok
 
-  def record_plugin_version(%{id: user_id}, vault_id, version) when is_binary(version) do
+  def record_plugin_version(%{id: user_id} = user, vault_id, version) when is_binary(version) do
     now = DateTime.utc_now(:second)
     stale = DateTime.add(now, -3600)
 
+    # The cached vault list answers the common case (same version, stamped
+    # within the hour) with no transaction at all.
+    if Enum.any?(list_vaults(user), &(&1.id == vault_id and current_stamp?(&1, version, stale))),
+      do: :ok,
+      else: write_plugin_version(user_id, vault_id, version, now, stale)
+  end
+
+  defp current_stamp?(vault, version, stale),
+    do:
+      vault.plugin_version == version and is_struct(vault.plugin_version_seen_at, DateTime) and
+        DateTime.compare(vault.plugin_version_seen_at, stale) != :lt
+
+  # A blocked version stops counting a week after it was last seen: the
+  # device that reported it may be gone, and a stale "update your plugin"
+  # would send the user chasing nothing.
+  @sync_blocked_window_s 7 * 86_400
+
+  @doc """
+  Whether `vault`'s Obsidian plugin last reported (within a week) a version
+  below `Engram.PluginVersion.minimum/0`, so its sync joins are refused.
+  """
+  @spec plugin_sync_blocked?(Vault.t()) :: boolean()
+  def plugin_sync_blocked?(%Vault{plugin_version: v, plugin_version_seen_at: %DateTime{} = at})
+      when is_binary(v) do
+    DateTime.diff(DateTime.utc_now(), at) <= @sync_blocked_window_s and
+      not Engram.PluginVersion.supported?(v)
+  end
+
+  def plugin_sync_blocked?(_vault), do: false
+
+  defp write_plugin_version(user_id, vault_id, version, now, stale) do
     {:ok, {n, _}} =
       Repo.with_tenant(user_id, fn ->
         from(v in scoped(user_id),
