@@ -1038,8 +1038,14 @@ defmodule EngramWeb.McpController do
   # because the tool-analytics call sites are several frames below any conn.
   @client_family_key :engram_mcp_client_family
 
+  # `client_agent` and `client_version` (2026-10-24): Codex reports as
+  # `chatgpt` or `other` by name, and only Codex >= 0.164 stops racing
+  # refresh rotation, so the share on a fixed release is read from here.
+  # Both are bounded (`McpClient.agent/2`, `McpClient.version/2`).
   defp emit_client_connected(conn, envelope) do
-    family = request_client_family(conn, envelope)
+    info = request_client_info(envelope)
+    ua = conn |> get_req_header("user-agent") |> List.first()
+    family = client_family(info["name"], ua)
     Process.put(@client_family_key, family)
 
     case conn.assigns[:current_user] do
@@ -1048,14 +1054,31 @@ defmodule EngramWeb.McpController do
 
       user ->
         Engram.Analytics.track_activity(user, :mcp)
+        agent = McpClient.agent(ua, family)
 
-        Engram.Analytics.track_throttled(user, "mcp_client_connected", family, :timer.hours(1), %{
-          client: family
-        })
+        # Lazy: built only when the throttle lets the event through.
+        props = fn ->
+          maybe_put_prop(
+            %{client: family, client_agent: agent},
+            :client_version,
+            McpClient.version(info["version"], ua)
+          )
+        end
+
+        Engram.Analytics.track_throttled(
+          user,
+          "mcp_client_connected",
+          "#{family}:#{agent}",
+          :timer.hours(1),
+          props
+        )
 
         emit_api_key_connected(user, conn.assigns[:current_api_key], family)
     end
   end
+
+  defp maybe_put_prop(props, _key, nil), do: props
+  defp maybe_put_prop(props, key, value), do: Map.put(props, key, value)
 
   defp emit_api_key_connected(_user, nil, _family), do: :ok
 
@@ -1071,20 +1094,23 @@ defmodule EngramWeb.McpController do
 
   defp emit_api_key_connected(_user, _key, _family), do: :ok
 
-  # The client's own name wins (legacy `initialize` clientInfo, or the
-  # modern per-request `_meta`), then its user agent. Bucketed either way.
-  defp request_client_family(conn, envelope) do
+  # The client's own `clientInfo` (legacy `initialize`, or the modern
+  # per-request `_meta`), or `%{}`. Its fields are client text: callers
+  # bucket them (`McpClient`), never pass them on raw.
+  defp request_client_info(envelope) do
     inner = if is_non_struct_map(envelope), do: envelope["params"], else: nil
 
-    name =
-      case inner do
-        %{"clientInfo" => %{"name" => name}} when is_binary(name) -> name
-        %{"_meta" => %{@meta_client_info => %{"name" => name}}} when is_binary(name) -> name
-        _ -> nil
-      end
+    case inner do
+      %{"clientInfo" => info} when is_non_struct_map(info) -> info
+      %{"_meta" => %{@meta_client_info => info}} when is_non_struct_map(info) -> info
+      _ -> %{}
+    end
+  end
 
+  # The client's own name wins, then its user agent. Bucketed either way.
+  defp client_family(name, ua) do
     case McpClient.family(name) do
-      "other" -> conn |> get_req_header("user-agent") |> List.first() |> McpClient.family()
+      "other" -> McpClient.family(ua)
       family -> family
     end
   end
