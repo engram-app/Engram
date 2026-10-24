@@ -1570,16 +1570,30 @@ defmodule EngramWeb.CrdtChannelTest do
       _ = handshake_room(socket, note.id)
       failing = delta_frame(socket, note.id, "LOST-")
       fine = delta_frame(other, note.id, "KEPT-")
+      timer = CheckpointInterleave.timer_of(CrdtRegistry.lookup(note.id))
+
+      # The failure schedules a checkpoint at once. Once that commits, `failing`
+      # IS durable and acking is correct, so an unheld checkpoint makes the
+      # second ack below a race (it lost under load). Hold it BEFORE its
+      # transaction: parked inside one, it would hold the sandbox connection
+      # that `fine`'s own append needs.
+      on_exit(CheckpointInterleave.arm(:after_room_snapshot))
 
       # Only the first append fails: `failing`, pushed alone first.
       fail_appends(1)
       ref = push_edit(socket, note.id, failing)
       assert_reply ref, :error, %{reason: "room_unavailable"}, 3000
+      parked = CheckpointInterleave.await_parked(:after_room_snapshot, timer)
 
       # The other socket's own append succeeds, but its confirmation must not
       # clear the failure: `failing` is still only in the room's memory.
       ref_other = push_edit(other, note.id, fine)
       assert_reply ref_other, :error, %{reason: "room_unavailable"}, 3000
+
+      # The checkpoint commits `failing`: from then on, edits are acked again.
+      CheckpointInterleave.release(:after_room_snapshot, parked)
+      _ = :sys.get_state(timer)
+      assert_reply push_edit(other, note.id, fine), :ok, %{}, 3000
     end
 
     test "a retry after a failed append is not acked until a checkpoint commits", ctx do
@@ -1587,13 +1601,7 @@ defmodule EngramWeb.CrdtChannelTest do
       _ = handshake_room(socket, note.id)
       frame = delta_frame(socket, note.id, "RETRY-")
 
-      room = CrdtRegistry.lookup(note.id)
-      me = self()
-
-      :ok =
-        SharedDoc.update_doc(room, fn _ -> send(me, {:timer, Process.get(:crdt_timer_pid)}) end)
-
-      assert_receive {:timer, timer}
+      timer = CheckpointInterleave.timer_of(CrdtRegistry.lookup(note.id))
 
       # The failure schedules a checkpoint at once; hold it mid-transaction.
       on_exit(CheckpointInterleave.arm(:after_row_read))

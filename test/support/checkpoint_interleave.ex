@@ -67,6 +67,7 @@ defmodule Engram.CheckpointInterleave do
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
   alias Engram.Repo
+  alias Yex.Sync.SharedDoc
 
   @hook_key :checkpoint_interleave_hook
 
@@ -149,6 +150,26 @@ defmodule Engram.CheckpointInterleave do
       @park_timeout ->
         raise "checkpoint never parked at #{inspect(point)} — the interleave did not happen, " <>
                 "so any assertion after this point would be vacuous"
+    end
+  end
+
+  @doc """
+  The checkpoint timer of a live note `room`: the pid `await_parked/2` expects
+  for a timer-driven checkpoint.
+
+  The room is a `:sensitive` process (crypto), so its dictionary is not readable
+  through `Process.info/2`. Ask it from inside.
+  """
+  def timer_of(room) when is_pid(room) do
+    me = self()
+    ref = make_ref()
+    :ok = SharedDoc.update_doc(room, fn _ -> send(me, {ref, Process.get(:crdt_timer_pid)}) end)
+
+    receive do
+      {^ref, pid} when is_pid(pid) -> pid
+      {^ref, other} -> raise "room #{inspect(room)} has no checkpoint timer: #{inspect(other)}"
+    after
+      @park_timeout -> raise "room #{inspect(room)} did not answer for its checkpoint timer"
     end
   end
 

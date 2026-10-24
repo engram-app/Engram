@@ -884,20 +884,6 @@ defmodule Engram.Notes.CrdtPersistenceTest do
       room
     end
 
-    # The room is a :sensitive process (crypto), so its dictionary is not
-    # readable through Process.info/2. Ask it from inside.
-    defp timer_of(room) do
-      me = self()
-
-      :ok =
-        SharedDoc.update_doc(room, fn _ ->
-          send(me, {:timer, Process.get(:crdt_timer_pid)})
-        end)
-
-      assert_receive {:timer, pid} when is_pid(pid)
-      pid
-    end
-
     test "writes no tail row, pushes nothing and schedules no checkpoint", ctx do
       %{user: user, vault: vault, note: note} = ctx
       # A tail row too, so the replay has something to echo as well.
@@ -911,7 +897,9 @@ defmodule Engram.Notes.CrdtPersistenceTest do
 
       assert tail_count(user, note.id) == 1
       refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 100
-      assert %{settle_timer: nil, first_dirty_at: nil} = :sys.get_state(timer_of(room))
+
+      assert %{settle_timer: nil, first_dirty_at: nil} =
+               :sys.get_state(Engram.CheckpointInterleave.timer_of(room))
     end
 
     # The load is dropped by its transaction origin, not by counting: an edit
@@ -949,7 +937,7 @@ defmodule Engram.Notes.CrdtPersistenceTest do
       )
 
       room = start_room(user, vault, note)
-      timer = timer_of(room)
+      timer = Engram.CheckpointInterleave.timer_of(room)
 
       :ok =
         SharedDoc.update_doc(room, fn doc ->
@@ -984,7 +972,7 @@ defmodule Engram.Notes.CrdtPersistenceTest do
       )
 
       room = start_room(user, vault, note)
-      timer = timer_of(room)
+      timer = Engram.CheckpointInterleave.timer_of(room)
 
       :ok =
         SharedDoc.update_doc(room, fn doc ->

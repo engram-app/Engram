@@ -475,18 +475,6 @@ defmodule Engram.QueryBudgetTest do
       assert_push "crdt_msg", %{"doc_id" => _}, 3000
     end
 
-    defp timer_of(room) do
-      me = self()
-
-      :ok =
-        Yex.Sync.SharedDoc.update_doc(room, fn _ ->
-          send(me, {:timer, Process.get(:crdt_timer_pid)})
-        end)
-
-      assert_receive {:timer, pid} when is_pid(pid)
-      pid
-    end
-
     defp await_no_room(note_id, attempts \\ 300) do
       cond do
         is_nil(Engram.Notes.CrdtRegistry.lookup(note_id)) -> :ok
@@ -528,7 +516,7 @@ defmodule Engram.QueryBudgetTest do
       step1(socket, note.id)
       ref = chan_push(socket, "crdt_msg", %{"doc_id" => note.id, "b64" => Base.encode64(frame)})
       assert_reply ref, :ok, _, 3000
-      timer = timer_of(Engram.Notes.CrdtRegistry.lookup(note.id))
+      timer = Engram.CheckpointInterleave.timer_of(Engram.Notes.CrdtRegistry.lookup(note.id))
 
       measure("CRDT checkpoint tick", fn -> warm_room_lookups(user) end, fn ->
         send(timer, :tick)
