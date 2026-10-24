@@ -15,7 +15,10 @@ defmodule EngramWeb.Plugs.AccountLifecycle do
   every endpoint but one: `DELETE /api/me`, so a delete that stamped
   `deleted_at` and then failed its hard delete can be finished by its owner
   (`Engram.Accounts.delete_self/2`, password required). It can only move the
-  account further toward gone. The path forward is re-signup.
+  account further toward gone, so it is open to a suspended account too. Only
+  reachable while the access token lives (refresh tokens are revoked at the
+  mark); after that the inactivity sweep's hard-delete pass finishes it. The
+  path forward is re-signup.
 
   ## Suspended (`suspended_at`)
 

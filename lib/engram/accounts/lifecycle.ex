@@ -186,7 +186,7 @@ defmodule Engram.Accounts.Lifecycle do
     # retry would later cancel a paying, non-deleted user's subscription.
     paddle_retry = cancel_paddle_subscription(user, sub)
 
-    # Step 2 (Qdrant) runs after the commit point, as a job: see below.
+    # Step 2 (Qdrant) is a job queued inside the Step 4 transaction.
 
     # Step 3: S3 prefixes — user blobs + exports. Retry once on failure.
     _ = wipe_storage_prefix(user, "#{user.id}/")
@@ -236,9 +236,23 @@ defmodule Engram.Accounts.Lifecycle do
              # (`EngramWeb.RateLimiter`), and the table is dropped. An ETS
              # bucket keyed on a deleted user id ages out with its window and
              # orphans nothing.
-             Repo.delete!(user, skip_tenant_check: true)
+             #
+             # `delete_all`, not `delete!`: a second delete racing this one
+             # (a replayed or double-clicked DELETE /api/me) blocks on the
+             # first's row locks, then finds the row gone. `delete!` raised
+             # StaleEntryError there and the client saw a 500 for an account
+             # that was deleted. The winner already ran the side effects.
+             case Repo.delete_all(from(u in User, where: u.id == ^user.id),
+                    skip_tenant_check: true
+                  ) do
+               {1, _} -> enqueue_vector_purge!(user.id)
+               {0, _} -> Repo.rollback(:already_deleted)
+             end
            end
          ) do
+      {:error, :already_deleted} ->
+        :ok
+
       {:ok, _} ->
         Accounts.evict_user(user.id)
 
@@ -256,12 +270,6 @@ defmodule Engram.Accounts.Lifecycle do
         # The commit landed, so the account really is gone — safe to enqueue
         # the Paddle retry now (see the Step 1 comment above).
         _ = maybe_enqueue_paddle_retry(user.id, paddle_retry)
-
-        # Step 2: Qdrant vectors, off the request (#2182). Retried by the job,
-        # and OrphanSweep reaps them if the insert itself fails, since the user
-        # row is gone. Not before the commit: a rolled-back delete would leave
-        # a live user whose points are already gone.
-        _ = enqueue_vector_purge(user.id)
 
         # Step 5: Clerk delete (saas only). Best-effort; Clerk row may
         # outlive ours. Future Clerk webhooks find_by_external_id →
@@ -467,18 +475,15 @@ defmodule Engram.Accounts.Lifecycle do
     Application.get_env(:engram, :clerk_api, Engram.Auth.Clerk.HttpApi)
   end
 
-  defp enqueue_vector_purge(user_id) do
+  # Step 2: Qdrant vectors, off the request (#2182). Inserted inside the
+  # commit-point transaction, so the job exists if and only if the account is
+  # gone: a rolled-back delete keeps a live user's points, and a crash after
+  # the commit cannot lose the purge. A failed insert rolls the delete back
+  # (`{:error, :pg_failed}`, retryable) rather than strand the points.
+  defp enqueue_vector_purge!(user_id) do
     case PurgeUserVectors.enqueue(user_id) do
-      {:ok, _job} ->
-        :ok
-
-      {:error, reason} ->
-        Logger.error(
-          "Qdrant purge could not be queued after hard-delete; OrphanSweep will collect it",
-          Metadata.with_category(:error, :lifecycle, user_id: user_id, reason: inspect(reason))
-        )
-
-        :error
+      {:ok, job} -> job
+      {:error, reason} -> Repo.rollback({:vector_purge_enqueue, reason})
     end
   end
 

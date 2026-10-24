@@ -45,6 +45,13 @@ defmodule EngramWeb.Plugs.AccountLifecycleTest do
       refute run(conn, user, "DELETE", "/api/me").halted
     end
 
+    # Deliberate: deleting only moves the account further toward gone, so a
+    # suspension does not get to block it once `deleted_at` is set.
+    test "a deleted AND suspended account can still finish its delete", %{conn: conn} do
+      user = %User{id: 1, deleted_at: DateTime.utc_now(), suspended_at: DateTime.utc_now()}
+      refute run(conn, user, "DELETE", "/api/me").halted
+    end
+
     test "deleted takes precedence over suspended", %{conn: conn} do
       user = %User{id: 1, deleted_at: DateTime.utc_now(), suspended_at: DateTime.utc_now()}
       assert json_response(run(conn, user), 410)["error"] == "account_deleted"

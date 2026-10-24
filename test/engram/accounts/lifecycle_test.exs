@@ -1,3 +1,33 @@
+defmodule Engram.Accounts.LifecycleTest.RacingStorage do
+  @moduledoc """
+  Storage adapter that deletes the user row mid-cascade, standing in for a
+  concurrent hard delete that commits first. Runs in Step 3, after the
+  `Repo.get` guard and before the commit point.
+  """
+
+  import Ecto.Query
+
+  alias Engram.Repo
+
+  def delete_prefix(prefix) do
+    case Process.delete(:race_delete_user_id) do
+      nil ->
+        :ok
+
+      user_id ->
+        Repo.delete_all(from(v in Engram.Vaults.Vault, where: v.user_id == ^user_id),
+          skip_tenant_check: true
+        )
+
+        Repo.delete_all(from(u in Engram.Accounts.User, where: u.id == ^user_id),
+          skip_tenant_check: true
+        )
+    end
+
+    Engram.Storage.InMemory.delete_prefix(prefix)
+  end
+end
+
 defmodule Engram.Accounts.LifecycleTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
@@ -74,9 +104,8 @@ defmodule Engram.Accounts.LifecycleTest do
 
   describe "soft_delete/2" do
     # The inactivity sweep is the one caller left that drops Qdrant before the
-    # hard delete; a user or Clerk delete goes through `delete_account/2`.
-    # The inactivity sweep is a background job: no request to hold, and nothing
-    # retries a swallowed failure, so it keeps the patient indexing retries.
+    # hard delete (a user or Clerk delete goes through `delete_account/2`). It
+    # is a background job, so it keeps the patient indexing retries.
     test "inactivity soft-delete retries a failed Qdrant drop" do
       bypass = Bypass.open()
       Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
@@ -241,6 +270,21 @@ defmodule Engram.Accounts.LifecycleTest do
   end
 
   describe "hard_delete/2" do
+    # Two deletes racing (a replayed or double-clicked DELETE /api/me): the
+    # loser passes the `Repo.get` guard, then finds the row gone at the commit
+    # point. It must answer :ok, not raise StaleEntryError (a 500), and must
+    # queue nothing: the rolled-back transaction takes its purge job with it.
+    test "a delete that loses a race to another answers :ok and queues no purge" do
+      user = insert(:user, external_id: nil)
+      Process.put(:race_delete_user_id, user.id)
+      Application.put_env(:engram, :storage, __MODULE__.RacingStorage)
+
+      assert :ok = Lifecycle.hard_delete(user, :user)
+
+      refute Repo.get(User, user.id, skip_tenant_check: true)
+      refute_enqueued(worker: PurgeUserVectors)
+    end
+
     test "no-op when user already deleted (re-entry guard)" do
       user = insert(:user)
       Repo.delete!(user, skip_tenant_check: true)

@@ -2,9 +2,10 @@ defmodule Engram.Workers.PurgeUserVectors do
   @moduledoc """
   Deletes every Qdrant point a deleted account owned.
 
-  Enqueued by `Engram.Accounts.Lifecycle.hard_delete/2` once the Postgres
-  delete has committed, so account deletion never waits on Qdrant inside the
-  user's request (#2182: a stalled Qdrant held `DELETE /api/me` for 10 s).
+  Inserted by `Engram.Accounts.Lifecycle.hard_delete/2` inside the Postgres
+  delete's transaction, so it exists only once the account is gone, and
+  account deletion never waits on Qdrant inside the user's request (#2182: a
+  stalled Qdrant held `DELETE /api/me` for 10 s).
   Until it runs the points are unreachable: every search is scoped to a live
   user, and this user no longer exists.
 
