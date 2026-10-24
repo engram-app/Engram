@@ -1089,8 +1089,8 @@ defmodule Engram.Attachments do
   for deletes — the soft-deleted row itself is the change signal, so the #614
   same-seq cursor-skip concern (a moved row + its same-seq tombstone) simply does
   not arise (delete has no tombstone). Cross-table + cross-item atomicity is
-  provided by the `Engram.Folders` coordinator's `atomic/1` wrapper, so a
-  mid-loop failure still rolls the whole op back. Reusing `batch_delete/3` keeps
+  NOT provided (#2159): each chunk commits on its own, so a mid-loop failure
+  keeps the chunks before it and a retry finishes the rest. Reusing `batch_delete/3` keeps
   one delete path instead of a bespoke single-seq `update_all`.
   """
   # Cheap request-size guard (chunk-stamping and the legacy feed it protected
@@ -1137,18 +1137,32 @@ defmodule Engram.Attachments do
   end
 
   @doc """
-  Soft-deletes the paths produced by `scan_folder_paths/3`. Returns the count.
+  Rows per transaction in a folder delete cascade (#2159), for both the
+  attachment and the notes legs. Capped at `batch_delete/3`'s limit;
+  `:folder_delete_chunk` lowers it (tests).
+  """
+  @spec delete_chunk_size() :: pos_integer()
+  def delete_chunk_size,
+    do:
+      min(
+        Application.get_env(:engram, :folder_delete_chunk, @max_batch_entries),
+        @max_batch_entries
+      )
+
+  @doc """
+  Soft-deletes the paths produced by `scan_folder_paths/3`, in sorted order,
+  one `batch_delete/3` transaction per `delete_chunk_size/0` chunk. Each
+  chunk commits on its own (#2159): a failure keeps the chunks before it,
+  and a retry rescans and deletes the rest. Returns the count.
   """
   # No error branch: `batch_delete/3` is hard-matched below, so this either
   # returns a count or raises.
   @spec delete_scanned_paths(map(), map(), [String.t()]) :: {:ok, non_neg_integer()}
   def delete_scanned_paths(user, vault, paths) do
-    # The @max_batch_entries cap on batch_delete/3 is a REQUEST-boundary
-    # guard; this folder cascade is server-internal, so chunk under the
-    # cap instead of crashing on a >500-attachment folder.
     deleted =
       paths
-      |> Enum.chunk_every(@max_batch_entries)
+      |> Enum.sort()
+      |> Enum.chunk_every(delete_chunk_size())
       |> Enum.reduce(0, fn chunk, acc ->
         {:ok, %{deleted: n}} = batch_delete(user, vault, chunk)
         acc + n

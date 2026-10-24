@@ -244,7 +244,9 @@ defmodule Engram.NotesBatchTest do
 
     # A room stopped before the REAL commit can be re-bound while the tombstone
     # is still uncommitted and survive on a deleted note. The stop must wait
-    # for the outermost commit, for this entry point and Folders' (its caller).
+    # for the commit of the transaction that deleted the note, for this entry
+    # point and Folders' (which, since #2159, commits chunk by chunk, so later
+    # commits rightly see the room gone).
     test "stops the deleted notes' rooms only after the outer commit", ctx do
       %{user: user, vault: vault} = ctx
 
@@ -264,9 +266,13 @@ defmodule Engram.NotesBatchTest do
           handler,
           [:engram, :repo, :query],
           fn _, _, %{query: q}, _ ->
-            # The handler is global: count only this test's own commits.
-            if q == "commit" and self() == test,
-              do: send(test, {:commit, Process.alive?(room)})
+            # The handler is global: count only this test's own queries.
+            cond do
+              self() != test -> :ok
+              q == "commit" -> send(test, {:commit, Process.alive?(room)})
+              q =~ ~r/^UPDATE "notes"/ -> send(test, :note_write)
+              true -> :ok
+            end
           end,
           nil
         )
@@ -277,9 +283,17 @@ defmodule Engram.NotesBatchTest do
           :telemetry.detach(handler)
         end
 
-        commits = for {:commit, alive?} <- flush_commits(), do: alive?
-        assert commits != []
-        assert Enum.all?(commits), "#{folder}: room stopped before a commit #{inspect(commits)}"
+        events = flush_commits()
+        # The first commit after the note's soft delete is the one that made
+        # the delete durable; the room must still be alive at it.
+        after_write = Enum.drop_while(events, &(&1 != :note_write))
+
+        assert [{:commit, alive_at_delete_commit?} | _] =
+                 Enum.reject(after_write, &(&1 == :note_write))
+
+        assert alive_at_delete_commit?,
+               "#{folder}: room stopped before a commit #{inspect(events)}"
+
         refute Process.alive?(room)
       end
     end
@@ -570,6 +584,7 @@ defmodule Engram.NotesBatchTest do
   defp flush_commits(acc \\ []) do
     receive do
       {:commit, _} = m -> flush_commits([m | acc])
+      :note_write = m -> flush_commits([m | acc])
     after
       0 -> Enum.reverse(acc)
     end

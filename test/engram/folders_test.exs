@@ -268,38 +268,148 @@ defmodule Engram.FoldersTest do
       # Note move rolled back.
       assert note_path(user, vault, note.id) == "Docs/n.md"
     end
+  end
 
-    test "batch_delete/3 runs both legs in one transaction (atomic across tables)", %{
+  # #2159: a 7,440-attachment folder delete ran as ONE transaction, held the
+  # vault seq lock through it, and hit the 15 s checkout kill. A cascade is now
+  # a run of short transactions (attachments, then notes, then markers), so a
+  # failure keeps what committed and a retry finishes the rest.
+  describe "chunked delete cascade (#2159)" do
+    setup do
+      prev = Application.get_env(:engram, :folder_delete_chunk)
+      Application.put_env(:engram, :folder_delete_chunk, 1)
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:engram, :folder_delete_chunk, prev),
+          else: Application.delete_env(:engram, :folder_delete_chunk)
+      end)
+
+      :ok
+    end
+
+    defp att_id(user, vault, path) do
+      {:ok, metas} = Attachments.list_attachments(user, vault)
+      Enum.find(metas, &(&1.path == path)).id
+    end
+
+    # A DB error on the soft delete of one attachment row, mid-cascade.
+    defp fail_deleting!(att_id) do
+      Engram.Repo.query!("""
+      CREATE FUNCTION test_fail_2159() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.id = '#{att_id}'::uuid AND NEW.deleted_at IS NOT NULL THEN
+          RAISE EXCEPTION 'injected failure';
+        END IF;
+        RETURN NEW;
+      END $$ LANGUAGE plpgsql
+      """)
+
+      Engram.Repo.query!(
+        "CREATE TRIGGER test_fail_2159 BEFORE UPDATE ON attachments " <>
+          "FOR EACH ROW EXECUTE FUNCTION test_fail_2159()"
+      )
+    end
+
+    defp stop_failing!, do: Engram.Repo.query!("DROP TRIGGER test_fail_2159 ON attachments")
+
+    defp seed(user, vault) do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"}, actor: "api")
+
+      for p <- ["Docs/a.png", "Docs/b.png", "Docs/c.png"], do: put_att(user, vault, p)
+      note
+    end
+
+    test "delete/4: a failure keeps earlier chunks, the folder stays, a retry finishes", %{
       user: user,
       vault: vault
     } do
-      # Bug 6: batch_delete deleted notes (committed) then attachments; an
-      # attachment-leg failure left notes gone and a retry 404'd. The
-      # attachment leg cannot be made to fail on demand, so assert the
-      # executed statements: both legs' writes share one transaction. The
-      # rollback half of atomic/1 is exercised by the batch_move/4 conflict
-      # test above, which goes through the same wrapper.
+      note = seed(user, vault)
+      fail_deleting!(att_id(user, vault, "Docs/b.png"))
+
+      assert_raise Postgrex.Error, ~r/injected failure/, fn ->
+        Folders.delete(user, vault, "Docs", recursive: true)
+      end
+
+      # Chunk 1 (a) committed; b failed; c and the note never ran.
+      assert att_paths(user, vault) == ["Docs/b.png", "Docs/c.png"]
+      assert note_path(user, vault, note.id) == "Docs/n.md"
+
+      stop_failing!()
+
+      assert {:ok, %{notes: 1, attachments: 2}} =
+               Folders.delete(user, vault, "Docs", recursive: true)
+
+      assert att_paths(user, vault) == []
+      assert {:error, :not_found} = Notes.get_note(user, vault, "Docs/n.md")
+    end
+
+    test "batch_delete/3: the marker goes last, so a retry by id still finds it", %{
+      user: user,
+      vault: vault
+    } do
       {:ok, marker} = Notes.create_folder_marker(user, vault, "Docs")
+      seed(user, vault)
+      fail_deleting!(att_id(user, vault, "Docs/b.png"))
 
-      {:ok, _} =
-        Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"}, actor: "api")
+      assert_raise Postgrex.Error, ~r/injected failure/, fn ->
+        Folders.batch_delete(user, vault, [marker.id])
+      end
 
-      put_att(user, vault, "Docs/a.png")
+      stop_failing!()
 
-      {{:ok, %{attachments: 1}}, queries} =
-        Engram.QueryRecorder.record(fn -> Folders.batch_delete(user, vault, [marker.id]) end)
+      assert {:ok, %{attachments: 2}} = Folders.batch_delete(user, vault, [marker.id])
+      assert att_paths(user, vault) == []
+    end
 
-      writes_to = fn txn, table ->
-        # The attachment leg is raw SQL, so the table name may be unquoted.
+    test "each chunk is its own transaction; none holds the seq lock across chunks", %{
+      user: user,
+      vault: vault
+    } do
+      seed(user, vault)
+
+      {{:ok, %{notes: 1, attachments: 3}}, queries} =
+        Engram.QueryRecorder.record(fn -> Folders.delete(user, vault, "Docs", recursive: true) end)
+
+      txns = Engram.QueryRecorder.transactions(queries)
+      seq_bumps = fn txn -> Enum.count(txn, &(&1 =~ "change_seq = change_seq +")) end
+
+      writes = fn txn, table ->
         Enum.any?(txn, &(&1 =~ ~r/^(UPDATE|DELETE FROM) "?#{table}\b/))
       end
 
-      assert Enum.any?(
-               Engram.QueryRecorder.transactions(queries),
-               &(writes_to.(&1, "notes") and writes_to.(&1, "attachments"))
-             ),
-             "the notes and attachments legs must commit in one transaction (Bug 6)\n" <>
+      assert Enum.count(txns, &(seq_bumps.(&1) > 0)) >= 4,
+             "3 attachment chunks + 1 note chunk, each with its own seq\n" <>
                Engram.QueryRecorder.format(queries)
+
+      for txn <- txns do
+        assert seq_bumps.(txn) <= 1, Engram.QueryRecorder.format(queries)
+        refute writes.(txn, "notes") and writes.(txn, "attachments")
+      end
+    end
+
+    test "a derived folder (notes only, no marker) deletes fully, every delete in the feed", %{
+      user: user,
+      vault: vault
+    } do
+      notes =
+        for p <- ["Derived/a.md", "Derived/Sub/b.md"] do
+          {:ok, n} =
+            Notes.upsert_note(user, vault, %{"path" => p, "content" => "x"}, actor: "api")
+
+          n
+        end
+
+      before = Engram.Vaults.current_seq(user.id, vault.id)
+
+      assert {:ok, %{notes: 2}} = Folders.delete(user, vault, "Derived", recursive: true)
+
+      for n <- notes do
+        row = Engram.Repo.get!(Engram.Notes.Note, n.id, skip_tenant_check: true)
+        assert row.deleted_at
+        assert row.seq > before
+      end
     end
   end
 
