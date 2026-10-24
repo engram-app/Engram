@@ -73,7 +73,45 @@ defmodule Engram.Analytics.McpClient do
   @spec agent(String.t() | nil, String.t()) :: String.t()
   def agent("codex-mcp-client/" <> _, _family), do: "codex"
   def agent("openai-connectors-oauth/" <> _, _family), do: "chatgpt"
+  def agent("openai-mcp/" <> _, _family), do: "chatgpt"
   def agent(_user_agent, family), do: family
+
+  @doc "Every value `agent/2` can return: the families, `codex` and `other`."
+  @spec agents() :: [String.t(), ...]
+  def agents do
+    (Enum.map(@families, &elem(&1, 1)) ++ ["codex", "other"]) |> Enum.uniq()
+  end
+
+  @doc """
+  The client's `major.minor` version, from its MCP `clientInfo.version` or,
+  failing that, the version token of its User-Agent (`codex-mcp-client/
+  0.163.0-alpha.11` is `"0.163"`). Digits only, at most 3 + 4 of them, so the
+  value is bounded whatever the client sends; nil when neither parses.
+
+  Exists to answer "what share of Codex is on >= 0.164", the release that
+  stopped racing refresh-token rotation (openai/codex#46028).
+  """
+  @spec version(term(), String.t() | nil) :: String.t() | nil
+  def version(client_info_version, user_agent),
+    do: major_minor(client_info_version) || major_minor(ua_version(user_agent))
+
+  defp ua_version(ua) when is_binary(ua) do
+    case ua |> String.slice(0, 256) |> String.split([" ", "/"], parts: 3) do
+      [_product, version | _] -> version
+      _ -> nil
+    end
+  end
+
+  defp ua_version(_ua), do: nil
+
+  defp major_minor(text) when is_binary(text) do
+    case Regex.run(~r/\A(\d{1,3})\.(\d{1,4})(?!\d)/, text) do
+      [_, major, minor] -> "#{String.to_integer(major)}.#{String.to_integer(minor)}"
+      _ -> nil
+    end
+  end
+
+  defp major_minor(_text), do: nil
 
   @known_scopes ~w(mcp mcp:read offline_access openid profile email)
 

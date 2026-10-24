@@ -19,6 +19,7 @@ credential called; cost is metered where it is incurred.
 | `index_points_cap` (search points, chunk rows) | 12,000 | 120,000 | 240,000 | `Indexing` floor + 04:00 budget sweep; OFF until the v5 pass (`INDEX_BUDGET_ENABLED`) |
 | `note_points_cap` (points per note, merged past it) | 128 | 1,024 | 1,024 | `Indexing.cap_chunks/3`; OFF until the v5 pass |
 | `api_rps_cap` (API-key traffic, per user per second) | 30 | 30 | 30 | `RequireApiRpsBudget`; `0` also refuses API-key sockets (`ChannelGate.api_access/2`) |
+| `mcp_tool_calls_per_min` (MCP `tools/call` without an API key, i.e. OAuth) | 120 | 120 | 120 | `McpController.handle/2`, 429 + `Retry-After`; off when limits are not enforced (self-host) |
 | `PreAuthRateLimit` (per endpoint family) | 600/min | 600/min | 600/min | `:authed_api` pipeline |
 | `obsidian_connections_cap` / `concurrent_devices` | 2 | unlimited | unlimited | OAuth consent / device-flow authorize (UNCHANGED) |
 | MCP connections | unlimited | unlimited | unlimited | none (removed) |

@@ -522,6 +522,52 @@ defmodule Engram.OAuthGrantStateTest do
 
   # ── item 11: replay revokes the family ─────────────────────────────
 
+  describe "authorization-code replay" do
+    # 2026-10-24: the code-replay revoke was the one revoke that skipped
+    # `grants_changed/1`, so a warm `:oauth_grant` entry kept the grant's
+    # access tokens working on this node until the NOTIFY arrived (and the
+    # owner's sockets stayed up).
+    test "revokes the family's access tokens at once, even with the grant cached", ctx do
+      {verifier, challenge} = pkce_pair()
+
+      {:ok, validated} =
+        OAuth.validate_authorization_request(%{
+          "client_id" => ctx.client.client_id,
+          "redirect_uri" => @redirect,
+          "response_type" => "code",
+          "code_challenge" => challenge,
+          "code_challenge_method" => "S256",
+          "scope" => "mcp"
+        })
+
+      {:ok, url} = OAuth.mint_authorization_code(ctx.user, validated, :all, nil)
+
+      params = %{
+        "code" => code_from_redirect(url),
+        "redirect_uri" => @redirect,
+        "client_id" => ctx.client.client_id,
+        "code_verifier" => verifier
+      }
+
+      {:ok, tokens} = OAuth.exchange_authorization_code(params)
+      # Warms the cache.
+      assert read(tokens.access_token, ctx.a) == :ok
+
+      hash = Engram.Crypto.sha256_hex(params["code"])
+
+      {1, _} =
+        Repo.update_all(
+          from(c in Engram.OAuth.AuthorizationCode, where: c.code_hash == ^hash),
+          set: [consumed_at: DateTime.truncate(ago(61), :second)]
+        )
+
+      assert {:error, {:invalid_grant, :code_replay_revoked}} =
+               OAuth.exchange_authorization_code(params)
+
+      assert read(tokens.access_token, ctx.a) == 401
+    end
+  end
+
   describe "refresh-token replay" do
     test "revokes the family and every access token minted from it", ctx do
       first = grant(ctx, :all)

@@ -32,6 +32,14 @@ defmodule Engram.PromEx.OAuth do
       `:unsupported_grant_type`, `:grant_type_missing`, `:token_persist_failed`,
       `:client_auth_failed`, `:client_auth_unavailable`.
 
+    * `[:engram, :oauth, :family_revoked]` →
+      `engram_prom_ex_oauth_family_revoked_total`, tags `[:client_agent,
+      :reason]`, one per refresh-token family a reuse check KILLED
+      (`Engram.OAuth`). Retries of an already-dead token are not counted
+      here (they are `reason="refresh_token_revoked"` rejections on the token
+      counter), so one kill is one increment however long the client retries.
+      `reason` is `Engram.OAuth.kill_reason()`.
+
     * `[:engram, :cimd, :fetch]` → `engram_prom_ex_cimd_fetch_total`, tags
       `[:kind, :result, :reason]`.
       `kind` is `:jwks | :doc`; `result` is `:ok | :stale | :error` (stale =
@@ -66,6 +74,16 @@ defmodule Engram.PromEx.OAuth do
           event_name: [:engram, :oauth, :token],
           description: "OAuth token-endpoint outcomes by grant type, result and reason.",
           tags: [:grant_type, :result, :reason, :client, :client_agent]
+        ),
+        # A sum of :count, not a counter: `Engram.PromEx.ZeroInit` seeds every
+        # series with a 0 at boot so `increase()` sees the first kill, and a
+        # counter would count that seed as one.
+        sum(
+          metric_prefix ++ [:family_revoked, :total],
+          event_name: [:engram, :oauth, :family_revoked],
+          measurement: :count,
+          description: "OAuth grants (refresh-token families) killed by reuse detection.",
+          tags: [:client_agent, :reason]
         ),
         counter(
           metric_prefix ++ [:consent, :total],

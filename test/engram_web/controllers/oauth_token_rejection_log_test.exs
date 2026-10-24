@@ -369,4 +369,105 @@ defmodule EngramWeb.OAuthTokenRejectionLogTest do
 
     assert_received {:oauth_token, %{result: :issued, client_agent: "codex"}}
   end
+
+  # 2026-10-24 triage: engram-prod-oauth-refresh-loop counted rejected refresh
+  # exchanges, so ONE killed family paged, because the client retries the dead
+  # token forever. `[:engram, :oauth, :family_revoked]` counts the kill once,
+  # by the presentation whose revoke changed rows, tagged by client_agent.
+  describe "families killed by reuse detection" do
+    @codex "codex-mcp-client/0.163.0"
+
+    setup do
+      test_pid = self()
+      handler = "oauth-family-revoked-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :oauth, :family_revoked],
+        fn _e, m, meta, _ ->
+          if self() == test_pid, do: send(test_pid, {:family_revoked, m, meta})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      :ok
+    end
+
+    defp codex_post(params) do
+      build_conn()
+      |> put_req_header("user-agent", @codex)
+      |> post("/oauth/token", params)
+    end
+
+    defp refresh_params(client, rt),
+      do: %{
+        "grant_type" => "refresh_token",
+        "refresh_token" => rt,
+        "client_id" => client.client_id
+      }
+
+    defp age(schema, column, raw) do
+      hash = Engram.Crypto.sha256_hex(raw)
+      past = DateTime.utc_now() |> DateTime.add(-61) |> DateTime.truncate(:second)
+
+      {1, _} =
+        Repo.update_all(
+          from(r in schema, where: field(r, ^column) == ^hash),
+          [set: [consumed_at: past]],
+          skip_tenant_check: true
+        )
+    end
+
+    test "a reuse kill is counted once, however often the client retries" do
+      client = register_client()
+      rt = refresh_token_for(client)
+      json_response(codex_post(refresh_params(client, rt)), 200)
+      age(Engram.OAuth.RefreshToken, :token_hash, rt)
+
+      json_response(codex_post(refresh_params(client, rt)), 400)
+
+      assert_received {:family_revoked, %{count: 1},
+                       %{reason: :refresh_reuse, client_agent: "codex"}}
+
+      # The Codex retry loop: every presentation after the kill is rejected
+      # as revoked and kills nothing.
+      for _ <- 1..3, do: json_response(codex_post(refresh_params(client, rt)), 400)
+      refute_received {:family_revoked, _, _}
+    end
+
+    test "a grace-superseded successor turning up is counted as superseded_reuse" do
+      client = register_client()
+      rt1 = refresh_token_for(client)
+      %{"refresh_token" => rt2} = json_response(codex_post(refresh_params(client, rt1)), 200)
+      # Lost-response retry inside the grace window: re-issues, kills nothing.
+      json_response(codex_post(refresh_params(client, rt1)), 200)
+      refute_received {:family_revoked, _, _}
+
+      json_response(codex_post(refresh_params(client, rt2)), 400)
+
+      assert_received {:family_revoked, _, %{reason: :superseded_reuse, client_agent: "codex"}}
+    end
+
+    test "a replayed authorization code past the grace window is counted as code_replay" do
+      params = code_params(register_client())
+      json_response(codex_post(params), 200)
+      age(Engram.OAuth.AuthorizationCode, :code_hash, params["code"])
+
+      json_response(codex_post(params), 400)
+      assert_received {:family_revoked, _, %{reason: :code_replay, client_agent: "codex"}}
+
+      json_response(codex_post(params), 400)
+      refute_received {:family_revoked, _, _}
+    end
+
+    test "a token revoked by Disconnect is not a kill" do
+      client = register_client()
+      rt = refresh_token_for(client)
+      :ok = OAuth.revoke_token(rt, client.client_id, nil)
+
+      json_response(codex_post(refresh_params(client, rt)), 400)
+      refute_received {:family_revoked, _, _}
+    end
+  end
 end

@@ -209,4 +209,23 @@ defmodule EngramWeb.McpActivityTest do
     connected = Enum.find(drain(), &(&1["event"] == "mcp_client_connected"))
     assert connected["properties"]["client"] == "other"
   end
+
+  test "a Codex request reports client_agent and its major.minor version", %{conn: conn} do
+    conn
+    |> put_req_header("user-agent", "codex-mcp-client/0.164.0")
+    |> call("list_vaults")
+
+    connected = Enum.find(drain(), &(&1["event"] == "mcp_client_connected"))
+    assert connected["properties"]["client_agent"] == "codex"
+    assert connected["properties"]["client_version"] == "0.164"
+  end
+
+  test "initialize clientInfo.version wins over the User-Agent", %{conn: conn} do
+    conn
+    |> put_req_header("user-agent", "codex-mcp-client/0.163.0")
+    |> initialize(%{"name" => "codex-mcp-client", "version" => "0.164.1"})
+
+    connected = Enum.find(drain(), &(&1["event"] == "mcp_client_connected"))
+    assert connected["properties"]["client_version"] == "0.164"
+  end
 end
