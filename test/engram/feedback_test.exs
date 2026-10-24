@@ -240,7 +240,12 @@ defmodule Engram.FeedbackTest do
     end
 
     test "an in-app reverse ends the cancel episode", %{user: user} do
-      insert(:subscription, user: user, paddle_subscription_id: "sub_reverse_episode")
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_reverse_episode",
+        tier: "pro",
+        status: "active"
+      )
 
       Mox.expect(Engram.Paddle.ClientMock, :update_subscription, fn _, _, _ ->
         {:ok, %{"scheduled_change" => nil}}
@@ -249,7 +254,14 @@ defmodule Engram.FeedbackTest do
       assert {:ok, _} = Engram.Billing.Subscriptions.reverse_cancel(user)
       :ok = EventLog.flush()
 
-      assert [%{"kind" => "cancel_reversed"}] =
+      assert [
+               %{
+                 "kind" => "cancel_reversed",
+                 "from_tier" => "pro",
+                 "to_tier" => "pro",
+                 "status" => "active"
+               }
+             ] =
                Repo.all(
                  from(e in Event,
                    where: e.user_id == ^user.id and e.event == "subscription_changed",
