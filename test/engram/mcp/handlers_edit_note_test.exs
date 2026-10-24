@@ -309,7 +309,7 @@ defmodule Engram.MCP.HandlersEditNoteTest do
   end
 
   test "a heading not found is reported, via edit_note", %{user: u, vault: v} do
-    assert {:error, msg} =
+    assert {:error, {:section_not_found, msg}} =
              Handlers.handle("edit_note", u, v, %{
                "path" => "N.md",
                "mode" => "replace_section",
