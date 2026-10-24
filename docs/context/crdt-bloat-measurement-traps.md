@@ -144,6 +144,32 @@ self-hosted Grafana. Dashboards reference it by *name*. Query it by uid.
 Query the sweep gauges over a 14d window: use a step of at least 1h (the cadence)
 or the panel aliases to gaps.
 
+## Trap 5: `version` counts checkpoints, not edits
+
+`notes.version` bumps once per **checkpoint**, and a checkpoint is debounced:
+one typing burst in Obsidian folds many keystrokes into about two checkpoints.
+REST and MCP writes bump it too. So "this note has N versions" means N saves,
+not N edits, and a high bloat ratio on a small note is usually one person
+typing, not a loop.
+
+Real case, 2026-10-24 triage: the bloat alert fired on a 5.7x ratio for a
+3.4 KB note. It was one human editing in Obsidian. A small note's ratio
+swings hard on a few tombstones; the bytes involved were trivial.
+
+What changed (Engram#2175, open as of 2026-10-24; alert rule engram-infra#1578,
+merges only after #2175 reaches prod):
+
+- `notes_over_threshold` counts a note only when ratio > 5 **and** stored state
+  >= 64 KB (`CrdtBloat.alert_min_state_bytes/0`). Small notes can no longer
+  page on ratio alone.
+- New gauges `notes_save_rate_over_threshold` (notes saved > 120 times/hour,
+  `CrdtBloat.save_rate_threshold/0`) and `save_rate_max_per_hour`, from
+  `notes.version` deltas against the previous sweep's node-local baseline.
+  With no baseline (first sweep after a deploy) the keys are omitted, not 0.
+- A save loop (a client rewriting a note forever) is what actually costs
+  money; alert on the save rate for that, and on the byte-floored count for
+  real bloat.
+
 ## Cron placement
 
 `10 * * * *`: hourly, at :10 (`config/config.exs`).

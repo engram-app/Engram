@@ -37,7 +37,9 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - The per-vault index room (`filemeta_v0`): wire, projection onto `notes.path_*`, why it drains with no off switch → `docs/context/crdt-index-room.md`
 - A CRDT room won't go away, resident rooms climb, or tuning `CRDT_IDLE_EXIT_MS`/`CRDT_MAX_RESIDENT_ROOMS` → `docs/context/crdt-room-lifetime-and-drain.md`
 - Background worker processed stale note content (facade vs `authoritative_content`) → `docs/context/worker-reads-stale-content-facade.md`
+- Worker CPU pegged and "nothing alerted", or assuming a `severity=page` alert woke someone (CloudWatch twin did fire; `page` routes only to Discord) → `docs/context/worker-oom-regex-backtrack-2026-10-03.md`
 - Measuring CRDT doc bloat, or reading the engram-crdt dashboard (the checkpoint flatten was removed in 0.60.1 because it doubles bodies; never reintroduce a server reset) → `docs/context/crdt-bloat-measurement-traps.md`
+- The CRDT bloat alert fires on a small note, or reading `notes.version` as an edit count (it counts debounced checkpoints, ~2 per typing burst; 64 KB floor + save-rate gauges, #2175) → `docs/context/crdt-bloat-measurement-traps.md`
 - Note content doubled or interleaved, or the server holds a note TWICE (one-encoder invariant, frontmatter re-seed, flatten boundary #958) → `docs/context/crdt-lineage-doubling.md`
 - Note version history, the outbox write path, adding a content-write path or an MCP write tool → `docs/context/note-revisions-history.md`
 - Every `crdt_create` returns `create_failed` on a NEW vault, or a create leg drops a re-minted note id → `docs/context/crdt-create-cross-vault-id-reuse.md`
@@ -48,6 +50,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Oban indexing pipeline — dedup/debounce, retry, re-indexing → `docs/context/async-indexing-pipeline.md`
 - Adding an Oban worker or cron, or code that marks rows for later processing (queue it when due; the queue throttles, crons are backstops; no two crons share a minute) → `docs/context/oban-scheduling-model.md`
 - Stranded Qdrant points after a rename → delete race → `docs/context/qdrant-orphan-points-rename-delete-race.md`
+- `DELETE /api/me` slow or 410 on retry, adding Qdrant work to a request path, or `test_62 test_member_delete_blocks_future_login` red on every branch at once (shared CI Qdrant stalled; e2e retry policy is `e2e/helpers/http_retry.py`) → `docs/context/account-delete-off-qdrant.md`
 - Qdrant payload indexes missing or rejected under strict mode (`ensure_collection/2` reconciles them on every boot) → `docs/context/qdrant-payload-indexes-strict-mode.md`
 - A Qdrant scroll/search/filter 400s on every retry (prod strict mode refuses unindexed payload keys; `ReconcileNotePayloads` v5 key `u`, #2138; build filters via `Qdrant.match_filter(:user, ...)`, index a key before any reader uses it) → `docs/context/qdrant-strict-mode-unindexed-filter.md`
 - An edit re-embeds far more chunks than it changed, or you are about to change how `split_text/2` packs chunks (boundaries cascade to the end of the heading section; paragraph-granularity looks like a free fix and is not) → `docs/context/chunk-boundary-stability.md`
@@ -68,6 +71,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Gating a Phoenix **channel** on onboarding/billing, or a paywalled account is syncing anyway (`RequireOnboarding` is a Plug and never runs on a socket; `user:` must stay UNGATED) → `docs/context/onboarding-gate-is-http-only.md`
 - A test asserting paywall/tier/onboarding behavior passes but shouldn't (`config/runtime.exs` clobbers `billing_enabled` to false for the whole suite) → `docs/context/onboarding-gate-is-http-only.md`
 - OAuth 2.1 + DCR on `/api/mcp` — wire flow, endpoints, token model, scopes → `docs/context/mcp-oauth.md`
+- Codex MCP connections die and retry a dead refresh token forever, or the OAuth refresh-loop alert fires on one family kill (Codex <= 0.163 race; alert on families killed, not rejections) → `docs/context/mcp-oauth.md`
 - OAuth discovery advertises a `:80` port, or an MCP client can't reach the auth server behind edge-terminated TLS → `docs/context/oauth-discovery-urls-behind-edge-tls.md`
 - What the MCP conformance suite does and does not prove (green means a lenient client coped; CIMD coverage is one vendor's document; OAuth stage runs on staging only) → `docs/context/mcp-conformance-suite-limits.md`
 - CIMD documents are negotiated, DCR registrations are policed, don't share the changeset (the 2026-08-04 outage: every Claude connect died on `invalid_client`) → `docs/context/cimd-vs-dcr-validation-policy.md`
