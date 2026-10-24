@@ -108,19 +108,49 @@ defmodule Engram.Notes.Revisions do
       :error
   end
 
+  # ONE statement whatever the case: the touch of the common write (same
+  # writer, inside the session gap) is a data-modifying CTE, and the same
+  # statement returns the open version, so a miss decides from it without a
+  # second read. (It was a read, then the touch.)
   defp do_record_write(existing, actor, now) do
-    case open_version(existing.id) do
-      %Revision{actor: ^actor} = open ->
+    case touch_or_open(existing.id, actor, now) do
+      {%Revision{}, true} ->
+        :ok
+
+      {%Revision{actor: ^actor} = open, false} ->
         if within_gap?(open.updated_at, now),
           do: touch(open, now),
           else: close_and_open(open, existing, actor, now)
 
-      %Revision{} = open ->
+      {%Revision{} = open, false} ->
         close_and_open(open, existing, actor, now)
 
       nil ->
         first_or_orphaned(existing, actor, now)
     end
+  end
+
+  # `{open_version, touched?}`, or nil when the note has no open version. The
+  # CTE's UPDATE is the touch; the outer SELECT reads the pre-statement
+  # snapshot, so it sees the open row either way.
+  defp touch_or_open(note_id, actor, now) do
+    since = DateTime.add(now, -session_gap_seconds(), :second)
+
+    touch =
+      Revision
+      |> where(
+        [r],
+        r.note_id == ^note_id and is_nil(r.closed_at) and r.actor == ^actor and
+          r.updated_at >= ^since
+      )
+      |> update([r], set: [updated_at: ^now])
+      |> select([r], %{id: r.id})
+
+    Revision
+    |> with_cte("touched_revision", as: ^touch, operation: :update_all)
+    |> where([r], r.note_id == ^note_id and is_nil(r.closed_at))
+    |> select([r], {r, fragment("EXISTS (SELECT 1 FROM touched_revision)")})
+    |> Repo.one(@savepoint)
   end
 
   # The session gap runs from the open version's own last write, not from
@@ -219,13 +249,6 @@ defmodule Engram.Notes.Revisions do
     )
 
     :error
-  end
-
-  defp open_version(note_id) do
-    Repo.one(
-      from(r in Revision, where: r.note_id == ^note_id and is_nil(r.closed_at)),
-      @savepoint
-    )
   end
 
   # The outbox copy: the note's own ciphertext, still bound to the notes AAD of
