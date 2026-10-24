@@ -14,9 +14,12 @@ defmodule Engram.Repo.Migrations.AddAttachmentsBlobGcClaimedAtExpand do
   # `attachments_blob_gc_tombstones_index` (deleted_at, partial on
   # `deleted_at IS NOT NULL AND storage_key IS NOT NULL`), and claimed rows
   # still hold their key, so the stamp is a filter on those few rows.
+  #
+  # :timestamptz for Squawk (prefer-timestamp-tz); the field is
+  # :utc_datetime_usec.
   def change do
     alter table(:attachments) do
-      add :blob_gc_claimed_at, :utc_datetime_usec
+      add :blob_gc_claimed_at, :timestamptz
     end
   end
 end
