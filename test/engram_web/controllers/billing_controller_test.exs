@@ -327,18 +327,48 @@ defmodule EngramWeb.BillingControllerTest do
     end
   end
 
-  describe "other Paddle 404s" do
+  # Only the invoice fetch has an expected 404 (a $0 transaction has no
+  # invoice). Every other Paddle 404 addresses an id we stored, so it means our
+  # data or config is wrong: it must keep paging billing-error.
+  describe "Paddle failures outside the invoice 404" do
     @describetag :session_auth
 
-    test "map to 404 instead of 502", %{conn: conn, user: user} do
+    test "a non-invoice Paddle 404 still returns 502 and logs at error",
+         %{conn: conn, user: user} do
       insert(:subscription, user: user, paddle_subscription_id: "sub_gone")
 
       expect(Engram.Paddle.ClientMock, :get_update_payment_transaction, fn "sub_gone" ->
         {:error, {:paddle_error, 404, %{}}}
       end)
 
-      conn = get(conn, "/api/billing/payment-update-transaction")
-      assert json_response(conn, 404)["error"] == "not found at payment provider"
+      log =
+        ExUnit.CaptureLog.capture_log([level: :error], fn ->
+          conn = get(conn, "/api/billing/payment-update-transaction")
+          assert json_response(conn, 502)["error"] == "payment provider error"
+        end)
+
+      assert log =~ "Paddle billing error"
+    end
+
+    test "a Paddle 5xx on the invoice fetch still returns 502 and logs at error",
+         %{conn: conn, user: user} do
+      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+        {:ok, [%{"id" => "txn_2", "payments" => []}]}
+      end)
+
+      expect(Engram.Paddle.ClientMock, :get_transaction_invoice, fn "txn_2" ->
+        {:error, {:paddle_error, 500, %{}}}
+      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :error], fn ->
+          conn = get(conn, "/api/billing/transactions/txn_2/invoice")
+          assert json_response(conn, 502)["error"] == "payment provider error"
+        end)
+
+      assert log =~ "Paddle billing error"
     end
   end
 

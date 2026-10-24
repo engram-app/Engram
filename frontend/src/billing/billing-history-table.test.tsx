@@ -56,5 +56,7 @@ describe("BillingHistoryTable", () => {
 		};
 		render(<BillingHistoryTable transactions={[trial]} onDownload={() => {}} />);
 		expect(screen.queryByRole("button", { name: /download/iu })).not.toBeInTheDocument();
+		// Same placeholder as the other empty cells, not a blank cell.
+		expect(screen.getAllByRole("cell").at(-1)).toHaveTextContent("\u2014");
 	});
 });

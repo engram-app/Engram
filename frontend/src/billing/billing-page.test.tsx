@@ -696,6 +696,58 @@ describe("BillingPage — Paddle effect cleanup", () => {
 				([e]) => e === "checkout_stalled" || e === "checkout_abandoned",
 			);
 			expect(exits).toEqual([]);
+			// The push won, so the completion is reported from it, once: a late
+			// checkout.completed from Paddle.js must not count it twice.
+			await act(async () => {
+				captured!({ name: "checkout.completed", data: {} });
+				await Promise.resolve();
+			});
+			expect(mockTrack.mock.calls.filter(([e]) => e === "checkout_completed")).toEqual([
+				["checkout_completed", { method: "unknown" }],
+			]);
+		});
+
+		// subscription_activated is user-scoped and also fires for an OLD
+		// subscription's update or cancel. Only a push that shows a paying
+		// subscription counts as this checkout's completion; anything else must
+		// leave a real stall reported.
+		it("still reports the stall when the push is not a paying subscription", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return {
+					Checkout: {
+						open: vi.fn(),
+						close: vi.fn(() => captured!({ name: "checkout.closed", data: {} })),
+					},
+				};
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+
+			await act(async () => {
+				captured!({ name: "checkout.loaded", data: {} });
+				captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+				await Promise.resolve();
+			});
+			await act(async () => {
+				channelHandlers.subscription_activated!({
+					tier: "starter",
+					status: "canceled",
+					subscription_id: "sub_old",
+				});
+				await Promise.resolve();
+			});
+
+			expect(mockTrack).toHaveBeenCalledWith(
+				"checkout_stalled",
+				{ method: "unknown", reason: "payment_unfinished" },
+				{ beacon: false },
+			);
+			expect(mockTrack).not.toHaveBeenCalledWith("checkout_completed", expect.anything());
 		});
 	});
 

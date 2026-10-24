@@ -702,6 +702,35 @@ defmodule Engram.BillingTest do
       # get_transaction_invoice must NOT be called for a foreign id.
       assert {:error, :not_found} = Billing.transaction_invoice_url(user, "txn_999")
     end
+
+    # Paddle issues no invoice for a zero-value transaction (every $0 trial
+    # start) and answers the invoice fetch with 404 not_found.
+    test "maps a Paddle 404 on the invoice fetch of an owned transaction to :no_invoice" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+        {:ok, [%{"id" => "txn_trial", "payments" => []}]}
+      end)
+
+      expect(Engram.Paddle.ClientMock, :get_transaction_invoice, fn "txn_trial" ->
+        {:error, {:paddle_error, 404, %{"error" => %{"code" => "not_found"}}}}
+      end)
+
+      assert {:error, :no_invoice} = Billing.transaction_invoice_url(user, "txn_trial")
+    end
+
+    test "a Paddle 404 on the transaction list stays a Paddle error, not :no_invoice" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+        {:error, {:paddle_error, 404, %{}}}
+      end)
+
+      assert {:error, {:paddle_error, 404, %{}}} =
+               Billing.transaction_invoice_url(user, "txn_trial")
+    end
   end
 
   describe "portal_action_url/2" do
