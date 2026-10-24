@@ -405,12 +405,7 @@ defmodule Engram.MCP.Handlers do
     filename = String.replace(title, "/", "-") <> ".md"
     path = if folder != "", do: "#{folder}/#{filename}", else: filename
 
-    content =
-      if String.starts_with?(String.trim(content), "# ") do
-        content
-      else
-        "# #{title}\n\n#{content}"
-      end
+    content = with_title_heading(content, title)
 
     # create_note is advertised non-destructive, so it must never replace a note
     # at its derived path. Upsert sanitizes the path, so check the same form.
@@ -1258,7 +1253,7 @@ defmodule Engram.MCP.Handlers do
 
     case found do
       {:error, :not_found} ->
-        content = "# #{Path.basename(path, ".md")}\n\n#{text}"
+        content = with_title_heading(text, Path.basename(path, ".md"))
 
         Notes.upsert_note(
           user,
@@ -1854,6 +1849,19 @@ defmodule Engram.MCP.Handlers do
           ""
       end
     end
+  end
+
+  # A new note gets `# title` on top unless the content already opens with
+  # its own H1 or with frontmatter. Frontmatter is only properties when it
+  # starts at byte 0, so a heading above the `---` fence silently turned the
+  # block into body text in Obsidian (user feedback 2026-10-24). Content that
+  # carries frontmatter is therefore stored exactly as given.
+  defp with_title_heading(content, title) do
+    {fm, _body} = content |> String.replace_prefix("\uFEFF", "") |> Frontmatter.split()
+
+    if fm != nil or String.starts_with?(String.trim(content), "# "),
+      do: content,
+      else: "# #{title}\n\n#{content}"
   end
 
   defp now, do: :os.system_time(:second) |> Kernel./(1) |> Float.round(1)
