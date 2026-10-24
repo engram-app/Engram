@@ -88,7 +88,8 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
       a lapsed status returned to active (`reactivated`). A renewal or any
       other state-sync update sends nothing.
     * `subscription.canceled`, `subscription.past_due`: same names. A cancel
-      with no reason on file since the subscription started also files
+      with no reason on file (since the subscription started and the last
+      in-app reversal) also files
       `subscription_cancel_reason` as `portal_no_reason` (or `payment_failed`
       out of `past_due`), so cancels made in Paddle's portal stay countable
     * `transaction.completed`: `payment_completed` with bucketed amount

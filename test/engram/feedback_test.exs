@@ -217,11 +217,11 @@ defmodule Engram.FeedbackTest do
       assert Enum.sort(reasons(user)) == ["portal_no_reason", "too_expensive"]
     end
 
-    test "a dialog reason filed just after the scheduled-cancel event still counts",
-         %{user: user} do
+    test "a dialog reason counts however late the cancel webhook arrives", %{user: user} do
       started = DateTime.add(DateTime.utc_now(), -30 * 86_400)
-      log_event(user, "subscription_cancel_reason", %{"reason" => "not_using"}, 2 * 86_400 + 5)
-      log_event(user, "subscription_changed", %{"kind" => "cancel_scheduled"}, 2 * 86_400)
+      log_event(user, "subscription_cancel_reason", %{"reason" => "not_using"}, 2 * 86_400)
+      # Paddle retried the webhook for a day.
+      log_event(user, "subscription_changed", %{"kind" => "cancel_scheduled"}, 86_400)
 
       assert :ok = Feedback.record_missing_cancel_reason(user, started, "portal_no_reason")
       assert reasons(user) == ["not_using"]
@@ -258,12 +258,30 @@ defmodule Engram.FeedbackTest do
                )
     end
 
-    test "payment_failed is filed even when a reason is on file", %{user: user} do
+    test "a dunning churn with a reason on file is not counted twice", %{user: user} do
       started = DateTime.add(DateTime.utc_now(), -30 * 86_400)
       log_event(user, "subscription_cancel_reason", %{"reason" => "too_expensive"}, 86_400)
 
       assert :ok = Feedback.record_missing_cancel_reason(user, started, "payment_failed")
-      assert Enum.sort(reasons(user)) == ["payment_failed", "too_expensive"]
+      assert reasons(user) == ["too_expensive"]
+    end
+
+    test "a failed reverse does not end the cancel episode", %{user: user} do
+      insert(:subscription, user: user, paddle_subscription_id: "sub_reverse_fail")
+
+      Mox.expect(Engram.Paddle.ClientMock, :update_subscription, fn _, _, _ ->
+        {:error, :http_500}
+      end)
+
+      assert {:error, _} = Engram.Billing.Subscriptions.reverse_cancel(user)
+      :ok = EventLog.flush()
+
+      assert [] ==
+               Repo.all(
+                 from(e in Event,
+                   where: e.user_id == ^user.id and e.event == "subscription_changed"
+                 )
+               )
     end
 
     test "files nothing when the event log is off, since every cancel would look reasonless",

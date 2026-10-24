@@ -179,16 +179,14 @@ defmodule Engram.Feedback do
   arrives with no reason, and this marker keeps that gap visible in the
   cancel-reason counts.
 
-  `"payment_failed"` (the subscription ended out of `past_due`) is always
-  filed: a reason given for an earlier, reversed cancel says nothing about a
-  dunning failure. Any other `reason` is filed only when no reason was given
-  for the latest scheduled cancel (see `reason_filed?/2`). Skipped when our
+  A reason counts when it was filed since the subscription started and after
+  the user's last in-app reversal (`cancel_reversed`), so a reason given for a
+  cancel the user took back does not cover a later one. Skipped when our
   event log is off: without it every cancel would look reasonless.
   """
   @spec record_missing_cancel_reason(User.t(), DateTime.t(), String.t()) :: :ok
   def record_missing_cancel_reason(user, started_at, reason) do
-    if EventLog.enabled?() and
-         (reason == "payment_failed" or not reason_filed?(user, started_at)) do
+    if EventLog.enabled?() and not reason_filed?(user, started_at) do
       capture(user, "subscription_cancel_reason", %{
         "reason" => reason,
         "source" => "webhook",
@@ -199,40 +197,18 @@ defmodule Engram.Feedback do
     end
   end
 
-  # The dialog files its reason just AFTER the cancel call returns, so it can
-  # land before or after the `cancel_scheduled` event the webhook records:
-  # count from an hour before the cancel. Paddle re-sends `cancel_scheduled`
-  # on every update while the cancel is pending, so the cancel is the EARLIEST
-  # one since the last reversal, and never earlier than that reversal, so a
-  # reason given for a cancel the user reversed does not count.
-  @reason_slack_s 3_600
-
   defp reason_filed?(user, started_at) do
-    changes =
-      Repo.all(
+    reversed_at =
+      Repo.one(
         from(e in Event,
           where:
             e.user_id == ^user.id and e.event == "subscription_changed" and
-              e.inserted_at >= ^started_at and
-              fragment("?->>'kind'", e.props) in ["cancel_scheduled", "cancel_reversed"],
-          select: {fragment("?->>'kind'", e.props), e.inserted_at},
-          order_by: e.inserted_at
+              fragment("?->>'kind'", e.props) == "cancel_reversed",
+          select: max(e.inserted_at)
         )
       )
 
-    reversed_at =
-      changes
-      |> Enum.filter(&(elem(&1, 0) == "cancel_reversed"))
-      |> List.last({nil, started_at})
-      |> elem(1)
-
-    since =
-      case Enum.find(changes, fn {kind, at} ->
-             kind == "cancel_scheduled" and DateTime.compare(at, reversed_at) != :lt
-           end) do
-        {_, at} -> Enum.max([DateTime.add(at, -@reason_slack_s), reversed_at], DateTime)
-        nil -> reversed_at
-      end
+    since = if reversed_at, do: Enum.max([reversed_at, started_at], DateTime), else: started_at
 
     Repo.exists?(
       from(e in Event,
