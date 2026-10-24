@@ -178,8 +178,15 @@ describe("BillingPage locale", () => {
 		await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
 		expect(open.mock.calls[0]?.[0]).toEqual({
 			transactionId: "txn_1",
-			settings: { ...OVERLAY_SETTINGS, locale: "zh-Hans" },
+			// An active subscription's payment-method update is a $0 transaction:
+			// same method allowlist as a trial checkout (no Google Pay).
+			settings: {
+				...OVERLAY_SETTINGS,
+				allowedPaymentMethods: expect.not.arrayContaining(["google_pay"]),
+				locale: "zh-Hans",
+			},
 		});
+		expect(open.mock.calls[0]?.[0].settings.allowedPaymentMethods).toContain("card");
 	});
 
 	it("sends the current locale after a switch, without re-initializing Paddle", async () => {
@@ -197,7 +204,11 @@ describe("BillingPage locale", () => {
 			await Promise.resolve();
 		});
 		await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
-		expect(open.mock.calls[0]?.[0].settings).toEqual({ ...OVERLAY_SETTINGS, locale: "de" });
+		expect(open.mock.calls[0]?.[0].settings).toEqual({
+			...OVERLAY_SETTINGS,
+			allowedPaymentMethods: expect.not.arrayContaining(["google_pay"]),
+			locale: "de",
+		});
 		expect(initializePaddleMock).toHaveBeenCalledTimes(1);
 	});
 });
