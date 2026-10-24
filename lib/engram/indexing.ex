@@ -444,35 +444,56 @@ defmodule Engram.Indexing do
   defp merged_rows?(rows), do: Enum.any?(rows, &(elem(&1, 3) != nil))
 
   @doc """
-  Whether the v5 index budget is on: the per-note cap merge, the index
-  points budget and its floor, the per-pass embed budget, and the 04:00
-  UTC recap and budget sweeps (`ReconcileEmbeddings`). Off by default
+  Whether the v5 index budget is on: the per-note cap merge (also on
+  alone through `note_cap_enabled?/0`), the index points budget and its
+  floor, the per-pass embed budget, and the 04:00 UTC budget sweep
+  (`ReconcileEmbeddings`). Off by default
   (review H2): the caps are sized for chunker v5 (~5.2 points a note), so
   on v3-chunked data they would demote and re-embed notes the v5 pass
   re-embeds anyway. `INDEX_BUDGET_ENABLED=true` turns it on as a step of
-  the v5 go sequence, after the pass and with the v5 stamp. Off, a pass
-  plans exactly as before the budget existed.
+  the v5 go sequence, after the pass and with the v5 stamp. Off (and the
+  cap flag off), a pass plans exactly as before the budget existed.
   """
   @spec budget_enabled?() :: boolean()
   def budget_enabled?, do: Engram.ServiceConfig.get(:index_budget_enabled, false)
+
+  @doc """
+  Whether every index plan applies the per-note cap (`cap_chunks/3` at the
+  owner's `note_points_cap`), and the 04:00 UTC recap runs: with the budget,
+  or alone with `NOTE_POINTS_CAP_ENABLED=true`. On alone before the v5 dry
+  run, the dry run prices capped notes and the pass writes each one once,
+  capped; turning the budget on after the pass then merges nothing again.
+  Off (the default), plans are as before the flag existed.
+  """
+  @spec note_cap_enabled?() :: boolean()
+  def note_cap_enabled?,
+    do: budget_enabled?() or Engram.ServiceConfig.get(:note_points_cap_enabled, false)
+
+  # The owner's per-note cap when it applies, else nil (no merge).
+  defp note_cap(user), do: if(note_cap_enabled?(), do: note_points_cap(user))
+
+  # The per-note cap, then the position limit: what every plan stores.
+  defp fit_note(chunks, cap, merged?),
+    do: chunks |> cap_chunks(cap, merged?) |> fit_positions(merged?)
 
   # The per-note cap runs first, so the points budget below counts the points
   # a full pass would actually write.
   defp plan_index(note, user, chunks, content_key, opts) do
     if budget_enabled?() or floor_tier(note, opts),
       do: plan_budgeted(note, user, chunks, content_key, opts),
-      else: plan_unbudgeted(note, chunks, content_key, opts)
+      else: plan_unbudgeted(note, user, chunks, content_key, opts)
   end
 
-  # The pre-budget plan: one point a chunk, metered in full.
-  defp plan_unbudgeted(note, chunks, content_key, opts) do
+  # The pre-budget plan: one point a chunk (merged to the per-note cap when
+  # `note_cap_enabled?/0`), metered in full.
+  defp plan_unbudgeted(note, user, chunks, content_key, opts) do
     rows = indexed_rows(note)
 
     {dense?, plan, retained} =
       plan_within_budget(
         note,
         rows,
-        fit_positions(chunks, merged_rows?(rows)),
+        fit_note(chunks, note_cap(user), merged_rows?(rows)),
         content_key,
         Keyword.get(opts, :dense, true),
         opts
@@ -491,8 +512,7 @@ defmodule Engram.Indexing do
         do: chunks,
         else:
           chunks
-          |> cap_chunks(cap, merged_rows?(rows))
-          |> fit_positions(merged_rows?(rows))
+          |> fit_note(cap, merged_rows?(rows))
           |> within_pass_embed_budget(opts)
 
     case forced || over_note_cap_tier(note, capped, cap) ||
@@ -1972,7 +1992,7 @@ defmodule Engram.Indexing do
   defp with_charge(plan, rows, opts) do
     texts = embed_texts(plan)
     cache = Keyword.get(opts, :vector_cache)
-    user_bytes = if cache && budget_enabled?(), do: changed_bytes_per_text(plan, rows)
+    user_bytes = if cache && note_cap_enabled?(), do: changed_bytes_per_text(plan, rows)
     plan = with_cache_lookup(plan, texts, cache, user_bytes)
     sent = Map.get_lazy(plan, :embed_bytes, fn -> text_bytes(texts) end)
     total = UsageMeters.estimate_tokens(sent)
@@ -1982,7 +2002,9 @@ defmodule Engram.Indexing do
         Map.has_key?(plan, :charge_bytes) ->
           min(UsageMeters.estimate_tokens(plan.charge_bytes), total)
 
-        budget_enabled?() ->
+        # Adversarial V3 rides with the merge, so the cap flag alone charges
+        # changed members only, as the budget does.
+        note_cap_enabled?() ->
           min(changed_tokens(plan, rows), total)
 
         true ->
@@ -2074,11 +2096,11 @@ defmodule Engram.Indexing do
   end
 
   # The tokens each sent text charges the user, in `embed_texts/1` order: its
-  # changed bytes with the index budget on, else all of it; a vector cache
-  # hit charges nothing.
+  # changed bytes with the per-note cap on (`note_cap_enabled?/0`), else all
+  # of it; a vector cache hit charges nothing.
   defp text_charges(plan, rows) do
     bytes =
-      if budget_enabled?(),
+      if note_cap_enabled?(),
         do: changed_bytes_per_text(plan, rows),
         else: Enum.map(embed_texts(plan), &IO.iodata_length/1)
 
@@ -2406,8 +2428,8 @@ defmodule Engram.Indexing do
   # to the pass byte budget; any left over make the pass `:continues`.
   defp with_cache_lookup(plan, _texts, nil, _user_bytes), do: plan
 
-  # `user_bytes`: each text's chargeable bytes (budget on), or nil for
-  # "all of it" (budget off: the user pays for everything sent).
+  # `user_bytes`: each text's chargeable bytes (cap on), or nil for
+  # "all of it" (cap off: the user pays for everything sent).
   defp with_cache_lookup(plan, texts, cache, user_bytes) do
     user_bytes = user_bytes || Enum.map(texts, &IO.iodata_length/1)
 
@@ -3062,10 +3084,7 @@ defmodule Engram.Indexing do
     rows = indexed_rows(note)
     merged? = merged_rows?(rows)
 
-    capped =
-      if budget_enabled?(),
-        do: chunks |> cap_chunks(note_points_cap(user), merged?) |> fit_positions(merged?),
-        else: fit_positions(chunks, merged?)
+    capped = fit_note(chunks, note_cap(user), merged?)
 
     # As `prepare_index/4` plans it: dense unless the opts say otherwise.
     dense? = Keyword.get(version_rebuild_opts(note), :dense, true)

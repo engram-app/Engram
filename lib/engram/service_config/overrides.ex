@@ -46,7 +46,7 @@ defmodule Engram.ServiceConfig.Overrides do
 
   @boolean_keys ~w(write_v5_layout v5_payload_format chunk_text_write chunk_text_read
                    vector_cache_enabled embed_models_per_plan index_budget_enabled tenant_idf
-                   qdrant_tenant_graph)a
+                   qdrant_tenant_graph note_points_cap_enabled)a
 
   @types Map.merge(Map.new(@boolean_keys, &{&1, :boolean}), %{
            index_rebuild: {:enum, ~w(off dry_run on)},
@@ -352,6 +352,11 @@ defmodule Engram.ServiceConfig.Overrides do
         "index_rebuild=#{rebuild} needs write_v5_layout=true",
       rebuild == "on" and get.(:vector_cache_enabled) != true &&
         "index_rebuild=on needs vector_cache_enabled=true",
+      # The sealed budget priced notes capped or not: a flip under a dry run
+      # or a pass would have the pass pay for what was not priced. Stop the
+      # rebuild (`index_rebuild=off`) first.
+      changed == :note_points_cap_enabled and rebuild in ["dry_run", "on"] &&
+        "note_points_cap_enabled cannot change while index_rebuild=#{rebuild}",
       get.(:qdrant_tenant_graph) == true and
         ServiceConfig.env(:legacy_filter_fields, true) != false &&
         "qdrant_tenant_graph=true needs LEGACY_FILTER_FIELDS=false",

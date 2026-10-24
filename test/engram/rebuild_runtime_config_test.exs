@@ -14,7 +14,8 @@ defmodule Engram.RebuildRuntimeConfigTest do
     "V5_PAYLOAD_FORMAT" => :v5_payload_format,
     "CHUNK_TEXT_WRITE" => :chunk_text_write,
     "CHUNK_TEXT_READ" => :chunk_text_read,
-    "QDRANT_TENANT_GRAPH" => :qdrant_tenant_graph
+    "QDRANT_TENANT_GRAPH" => :qdrant_tenant_graph,
+    "NOTE_POINTS_CAP_ENABLED" => :note_points_cap_enabled
   }
 
   setup do
@@ -117,5 +118,10 @@ defmodule Engram.RebuildRuntimeConfigTest do
 
     System.put_env("QDRANT_TENANT_GRAPH", "maybe")
     assert_raise RuntimeError, ~r/QDRANT_TENANT_GRAPH must be true or false/, &read_runtime/0
+  end
+
+  test "NOTE_POINTS_CAP_ENABLED is a switch" do
+    assert with_env("NOTE_POINTS_CAP_ENABLED", "true") == true
+    assert with_env("NOTE_POINTS_CAP_ENABLED", "false") == false
   end
 end
