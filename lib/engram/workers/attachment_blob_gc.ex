@@ -9,10 +9,22 @@ defmodule Engram.Workers.AttachmentBlobGC do
   bytes go later, here, the way GitLab LFS, Nextcloud and Immich do it.
 
   A tombstone is reaped once it is `@grace_hours` old, still holds a
-  `storage_key`, and no live row references that key. Its blob is deleted,
-  then its `storage_key` is set to NULL, so a later run skips it. A key whose
-  delete fails keeps its `storage_key` and is retried on the next run. Pages
-  are keyset by id, so a stuck key never blocks the rows after it.
+  `storage_key`, and no live row references that key. Per vault and batch,
+  in three phases so no transaction is held across S3 and no crash orphans
+  a blob:
+
+    1. claim: one short transaction locks the vault row, then the tombstones
+       `FOR UPDATE SKIP LOCKED`, re-checks the live-row condition under those
+       locks, and stamps `blob_gc_claimed_at`. The key stays on the row.
+    2. delete the claimed blobs, outside any transaction.
+    3. finalize: clear `storage_key` and the stamp for the keys S3 confirmed,
+       guarded by key and stamp; clear only the stamp for failed keys so the
+       next run retries.
+
+  A run that dies between 1 and 3 leaves stamp and key in place; once the
+  stamp is older than `@stale_claim_minutes` the row is eligible again and
+  is re-claimed (re-checked) and re-deleted, which is idempotent. Pages are
+  keyset by id, so a stuck key never blocks the rows after it.
 
   Recovery window: `@grace_hours`, plus the bucket's noncurrent-version
   retention once the blob is gone.
@@ -31,10 +43,14 @@ defmodule Engram.Workers.AttachmentBlobGC do
   alias Engram.Logger.Metadata
   alias Engram.Repo
   alias Engram.Storage
+  alias Engram.Vaults.Vault
 
   require Logger
 
   @grace_hours 24
+  # Well above the 15 min job timeout: a claim this old belongs to a run
+  # that died, so it may be taken again.
+  @stale_claim_minutes 60
   @batch 1_000
 
   @impl Oban.Worker
@@ -66,73 +82,216 @@ defmodule Engram.Workers.AttachmentBlobGC do
   @spec sweep() :: non_neg_integer()
   def sweep do
     cutoff = DateTime.add(DateTime.utc_now(), -@grace_hours * 3600, :second)
-    sweep(cutoff, nil, 0)
+
+    cutoff
+    |> candidate_vaults()
+    |> Enum.reduce(0, fn vault_id, reaped -> reaped + sweep_vault(vault_id, cutoff, nil, 0) end)
   end
 
-  defp sweep(cutoff, after_id, reaped) do
-    case page(cutoff, after_id) do
-      [] ->
-        reaped
+  # Unlocked, and only to find work: every decision is re-made under the
+  # locks in `claim/3`.
+  defp candidate_vaults(cutoff) do
+    stale = DateTime.add(DateTime.utc_now(), -@stale_claim_minutes * 60, :second)
 
-      rows ->
-        n = reap(rows)
-        {last_id, _key} = List.last(rows)
-        if length(rows) < @batch, do: reaped + n, else: sweep(cutoff, last_id, reaped + n)
-    end
-  end
-
-  defp page(cutoff, after_id) do
     query =
-      from(a in Attachment,
-        as: :tomb,
-        where:
-          not is_nil(a.deleted_at) and a.deleted_at < ^cutoff and not is_nil(a.storage_key) and
-            not exists(
-              from(l in Attachment,
-                where: l.storage_key == parent_as(:tomb).storage_key and is_nil(l.deleted_at),
-                select: 1
-              )
-            ),
-        order_by: a.id,
-        limit: @batch,
-        select: {a.id, a.storage_key}
+      from(a in eligible(cutoff, stale),
+        distinct: true,
+        order_by: a.vault_id,
+        select: a.vault_id
       )
 
-    query = if after_id, do: where(query, [a], a.id > ^after_id), else: query
     Repo.cross_tenant(fn -> Repo.maintenance().all(query) end)
   end
 
-  defp reap(rows) do
-    deleted_ids =
-      rows
-      |> deleted_keys()
-      |> then(fn keys -> for {id, key} <- rows, MapSet.member?(keys, key), do: id end)
+  defp sweep_vault(vault_id, cutoff, after_id, reaped) do
+    case claim(vault_id, cutoff, after_id) do
+      {[], _claimed_at, _last} ->
+        reaped
 
-    # Counted from RETURNING: `Repo.maintenance/0` picks the repo at runtime,
-    # so update_all's count is untyped and would widen the spec to number().
-    {_n, reaped} =
+      {claimed, claimed_at, last} ->
+        case finish(claimed, claimed_at) do
+          {:ok, n} when is_binary(last) -> sweep_vault(vault_id, cutoff, last, reaped + n)
+          {:ok, n} -> reaped + n
+          # The storage client raised: stop this vault (pages already reaped
+          # count), leave this batch's claims for the stale threshold, and go
+          # on to the next vault.
+          :storage_raised -> reaped
+        end
+    end
+  end
+
+  # Phase 1, the claim: ONE short transaction with no I/O.
+  #   1. the vault row, FOR NO KEY UPDATE (see the invariant below);
+  #   2. the eligible tombstones, FOR UPDATE SKIP LOCKED, with the "no live
+  #      row has this key" check re-made as a fresh statement under the lock;
+  #   3. `blob_gc_claimed_at` stamped on them. `storage_key` is KEPT.
+  # Returns `{[{id, key}], claimed_at, last_id}`; `last_id` is nil on the
+  # vault's last page.
+  #
+  # Invariant the vault lock relies on: a key is only ever minted fresh (every
+  # upload) or kept by its own live row (rename, restore, DEK rotation); no
+  # path copies a tombstone's key onto a live row. Writers commit key changes
+  # under the vault row lock (via `next_seq!`/`lock_seq!`). A future path that
+  # copies a tombstone's key must read it AFTER taking that lock, or this
+  # re-check cannot see it. Likewise a future undelete must take the vault
+  # lock and must not revive a row that carries a fresh `blob_gc_claimed_at`
+  # (its blob may be mid-delete); finalize also refuses to touch a live row.
+  defp claim(vault_id, cutoff, after_id) do
+    repo = Repo.maintenance()
+    claimed_at = DateTime.utc_now()
+    stale = DateTime.add(claimed_at, -@stale_claim_minutes * 60, :second)
+
+    {:ok, result} =
+      Repo.cross_tenant(fn ->
+        repo.transaction(fn ->
+          _ =
+            repo.all(
+              from(v in Vault, where: v.id == ^vault_id, lock: "FOR NO KEY UPDATE", select: v.id)
+            )
+
+          query =
+            from(a in eligible(cutoff, stale),
+              where: a.vault_id == ^vault_id,
+              order_by: a.id,
+              limit: @batch,
+              lock: "FOR UPDATE SKIP LOCKED",
+              select: {a.id, a.storage_key}
+            )
+
+          query = if after_id, do: where(query, [a], a.id > ^after_id), else: query
+          rows = repo.all(query)
+          ids = Enum.map(rows, &elem(&1, 0))
+
+          {_n, _} =
+            repo.update_all(from(a in Attachment, where: a.id in ^ids),
+              set: [blob_gc_claimed_at: claimed_at]
+            )
+
+          {rows, claimed_at, if(length(rows) == @batch, do: List.last(ids))}
+        end)
+      end)
+
+    result
+  end
+
+  # A tombstone past the grace window that still holds a key no live row
+  # has, unclaimed or holding a claim older than the stale threshold (a run
+  # that died between claim and finalize).
+  defp eligible(cutoff, stale) do
+    from(a in Attachment,
+      as: :tomb,
+      where:
+        not is_nil(a.deleted_at) and a.deleted_at < ^cutoff and not is_nil(a.storage_key) and
+          (is_nil(a.blob_gc_claimed_at) or a.blob_gc_claimed_at < ^stale) and
+          not exists(
+            from(l in Attachment,
+              where: l.storage_key == parent_as(:tomb).storage_key and is_nil(l.deleted_at),
+              select: 1
+            )
+          )
+    )
+  end
+
+  # Phases 2 and 3: delete the claimed blobs outside any transaction, then
+  # finalize. Deleted keys: `storage_key` and the stamp cleared, guarded by
+  # the key AND this run's stamp, so a row that changed or was re-claimed
+  # since is left alone. Failed keys: the stamp cleared, so the next run
+  # retries. A crash anywhere here leaves the stamp and the key, and the
+  # stale threshold brings the row back. Returns how many were reaped.
+  defp finish(claimed, claimed_at) do
+    case deleted_keys(claimed) do
+      {:ok, gone} ->
+        {done, failed} = Enum.split_with(claimed, fn {_id, key} -> MapSet.member?(gone, key) end)
+
+        reaped =
+          finalize(done, claimed_at,
+            set: [storage_key: nil, blob_gc_claimed_at: nil],
+            label: "deleted"
+          )
+
+        _ = finalize(failed, claimed_at, set: [blob_gc_claimed_at: nil], label: "released")
+        {:ok, reaped}
+
+      :storage_raised ->
+        :storage_raised
+    end
+  end
+
+  defp finalize([], _claimed_at, _opts), do: 0
+
+  defp finalize(rows, claimed_at, set: set, label: label) do
+    ids = Enum.map(rows, &elem(&1, 0))
+    keys = Enum.map(rows, &elem(&1, 1))
+
+    {_n, matched} =
       Repo.cross_tenant(fn ->
         Repo.maintenance().update_all(
           from(a in Attachment,
-            where: a.id in ^deleted_ids and not is_nil(a.deleted_at),
+            where:
+              a.id in ^ids and a.storage_key in ^keys and a.blob_gc_claimed_at == ^claimed_at and
+                not is_nil(a.deleted_at),
             select: a.id
           ),
-          set: [storage_key: nil]
+          set: set
         )
       end)
 
-    length(reaped)
+    if length(matched) < length(rows), do: log_unmatched(label, ids -- matched, length(rows))
+
+    length(matched)
+  end
+
+  # A deleted key whose row no longer matches (went live, changed key, or was
+  # re-claimed) may be a live row whose blob is now gone: error, with the ids,
+  # so it can be restored from the bucket's noncurrent versions.
+  defp log_unmatched("deleted", unmatched, key_count) do
+    Logger.error(
+      "attachment_blob_gc: blob deleted but its row was not finalized; check these rows",
+      Metadata.with_category(:error, :oban,
+        key_count: key_count,
+        # Joined: the console formatter drops list values.
+        attachment_ids: unmatched |> Enum.take(50) |> Enum.join(",")
+      )
+    )
+  end
+
+  defp log_unmatched(label, unmatched, key_count) do
+    Logger.warning(
+      "attachment_blob_gc: finalize matched fewer rows than it #{label}",
+      Metadata.with_category(:warning, :oban,
+        key_count: key_count,
+        total_count: key_count - length(unmatched)
+      )
+    )
   end
 
   # The keys whose blob is gone. One batched call; if any key in it failed,
   # fall back to one call per key so the batch's good keys still count.
+  #
+  # Only this storage call is rescued: a client that raises is the S3 side
+  # failing, and it must not stop the other vaults. Database errors in the
+  # claim and finalize are NOT rescued, so the job fails and Oban records it.
   defp deleted_keys(rows) do
     keys = rows |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
 
-    case Storage.adapter().delete_many(keys) do
-      {:ok, n} when n == length(keys) -> MapSet.new(keys)
-      _ -> keys |> Enum.filter(&delete_one/1) |> MapSet.new()
-    end
+    gone =
+      case Storage.adapter().delete_many(keys) do
+        {:ok, n} when n == length(keys) -> MapSet.new(keys)
+        _ -> keys |> Enum.filter(&delete_one/1) |> MapSet.new()
+      end
+
+    {:ok, gone}
+  rescue
+    e ->
+      Logger.warning(
+        "attachment_blob_gc: blob delete raised, its claims retry after the stale threshold",
+        Metadata.with_category(:warning, :oban,
+          key_count: length(rows),
+          reason: Metadata.safe_reason(e)
+        )
+      )
+
+      :storage_raised
   end
 
   defp delete_one(key) do
