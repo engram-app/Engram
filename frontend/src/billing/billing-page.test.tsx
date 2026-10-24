@@ -696,6 +696,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 				([e]) => e === "checkout_stalled" || e === "checkout_abandoned",
 			);
 			expect(exits).toEqual([]);
+			expect(mockTrack).toHaveBeenCalledWith("checkout_completed", { method: "unknown" });
 			// The push won, so the completion is reported from it, once: a late
 			// checkout.completed from Paddle.js must not count it twice.
 			await act(async () => {
