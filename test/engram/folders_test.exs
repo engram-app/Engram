@@ -487,6 +487,18 @@ defmodule Engram.FoldersTest do
       assert att_paths(user, vault) == ["Archive/a.png"]
     end
 
+    # A delete committing between the source read and the UPDATE would make
+    # the UPDATE match one row fewer and raise; the lock makes it wait.
+    test "the source read locks the rows it will move", %{user: user, vault: vault} do
+      put_att(user, vault, "Docs/a.png")
+
+      {{:ok, %{attachments: 1}}, queries} =
+        Engram.QueryRecorder.record(fn -> Folders.rename(user, vault, "Docs", "Archive") end)
+
+      assert Enum.any?(queries, &(&1.sql =~ ~r/FROM "attachments".*FOR UPDATE/s)),
+             Engram.QueryRecorder.format(queries)
+    end
+
     test "a user's explicit batch_move still refuses a missing source", %{
       user: user,
       vault: vault

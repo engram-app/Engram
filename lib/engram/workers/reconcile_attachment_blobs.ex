@@ -16,10 +16,11 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
   blob is `Engram.Workers.AttachmentBlobGC`'s to reap.
 
   Guards: the listing is paged (1,000 entries) and decided page by page, so
-  memory is one page plus the keys seen. Rows are read after each page is
-  listed and each key is re-checked with `exists?` right before a copy or
-  an "unrecoverable" report, so an upload that lands mid-run is neither
-  overwritten nor misreported. Nothing is restored for a soft-deleted user
+  memory is one page plus the keys seen. Right before each copy or
+  "unrecoverable" report, the object is probed (a storage error means skip,
+  not "missing") and the row, vault and user are re-checked in one query, so
+  an upload or a client heal that lands mid-run is neither overwritten nor
+  misreported. Nothing is restored for a soft-deleted user
   or a deleted or purging vault: account deletion wipes the prefix before
   it deletes the rows, and a copy in that window would leave current
   objects no lifecycle rule expires (OrphanSweep would be the only backstop).
@@ -172,7 +173,9 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
         restored =
           user_id
           |> live_keys(vault_id, Map.keys(broken))
-          |> Enum.filter(fn {id, key} -> restore_key(id, key, Map.fetch!(broken, key)) end)
+          |> Enum.filter(fn {id, key} ->
+            restore_key({user_id, vault_id, id}, key, Map.fetch!(broken, key))
+          end)
           |> Enum.map(&elem(&1, 0))
 
         Attachments.bump_seqs(user_id, vault_id, restored)
@@ -218,12 +221,7 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
   defp report_unrecoverable(user_id, vault_id, missing) do
     if leaving?(user_id, vault_id),
       do: :ok,
-      else: Enum.each(missing, &unrecoverable_unless_present/1)
-  end
-
-  # Re-checked: an upload may have put the object there since the listing.
-  defp unrecoverable_unless_present({id, key}) do
-    if Storage.adapter().exists?(key), do: :ok, else: copy_back(id, key, nil)
+      else: Enum.each(missing, fn {id, key} -> restore_key({user_id, vault_id, id}, key, []) end)
   end
 
   defp live_keys(user_id, vault_id, keys \\ nil) do
@@ -239,19 +237,53 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
     Repo.with_tenant!(user_id, fn -> Repo.all(query) end)
   end
 
-  # true when the key was restored. Re-checked at copy time: an upload or an
-  # earlier restore may have put a current object there since the listing.
-  defp restore_key(id, key, versions) do
-    if Storage.adapter().exists?(key) do
-      false
-    else
+  # true when the key was restored. Decided at copy time, per key:
+  #   * the object is checked first: present (an upload or an earlier
+  #     restore put one there) means nothing to do, and a storage error
+  #     means "do not know", so neither a copy nor an alerted report;
+  #   * then the row and account are re-checked in one query, so a client
+  #     heal that moved the row to a new key, or an account deletion that
+  #     began mid-page, stops this copy (both would leave a current object
+  #     no row references).
+  defp restore_key({user_id, vault_id, id}, key, versions) do
+    with :missing <- presence(key),
+         true <- still_restorable?(user_id, vault_id, id, key) do
       newest_data =
         versions
         |> Enum.reject(& &1.delete_marker?)
         |> Enum.max_by(& &1.last_modified, fn -> nil end)
 
       copy_back(id, key, newest_data)
+    else
+      _ -> false
     end
+  end
+
+  # Tri-state, unlike `exists?/1` (which answers false on any error): a
+  # one-byte ranged GET tells "not found" from a transient failure.
+  defp presence(key) do
+    case Storage.adapter().get_range(key, 0, 1) do
+      {:ok, _} -> :present
+      {:error, :not_found} -> :missing
+      {:error, _} -> :unknown
+    end
+  end
+
+  defp still_restorable?(user_id, vault_id, id, key) do
+    Repo.with_tenant!(user_id, fn ->
+      Repo.exists?(
+        from(a in Attachment,
+          join: v in Engram.Vaults.Vault,
+          on: v.id == a.vault_id,
+          join: u in Engram.Accounts.User,
+          on: u.id == a.user_id,
+          where:
+            a.id == ^id and a.vault_id == ^vault_id and a.storage_key == ^key and
+              is_nil(a.deleted_at) and is_nil(v.deleted_at) and is_nil(v.purge_started_at) and
+              is_nil(u.deleted_at)
+        )
+      )
+    end)
   end
 
   defp copy_back(id, _key, nil) do

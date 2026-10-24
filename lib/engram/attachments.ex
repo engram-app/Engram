@@ -1081,8 +1081,13 @@ defmodule Engram.Attachments do
   # Resolves each source to its live row. A source that is gone refuses the
   # batch (`:refuse`) or is dropped and counted (`:skip`).
   defp move_sources(user, vault, items, on_error, missing) do
+    # FOR UPDATE: a delete committing between this read and the UPDATE would
+    # make the UPDATE match one row fewer; locked, it waits for this commit.
     live =
-      from(a in scoped_live(user, vault), where: a.path_hmac in ^Enum.map(items, & &1.old_hmac))
+      from(a in scoped_live(user, vault),
+        where: a.path_hmac in ^Enum.map(items, & &1.old_hmac),
+        lock: "FOR UPDATE"
+      )
       |> Repo.all()
       |> Map.new(&{&1.path_hmac, &1})
 
@@ -1493,6 +1498,15 @@ defmodule Engram.Attachments do
   defp reconcile_blobs(%Attachment{user_id: user_id, vault_id: vault_id}),
     do: Repo.after_commit(fn -> ReconcileAttachmentBlobs.enqueue(user_id, vault_id) end)
 
+  # Live rows carry `content_hash` (#2159), the same HMAC the single GET
+  # returns: a client compares it with its local copy to skip a download, or
+  # to re-push its bytes when the server lost the blob. Already loaded with
+  # the row, so it costs one field per feed row, no extra read.
+  defp put_live_content_hash(meta, %Attachment{deleted_at: nil, content_hash: hash}),
+    do: Map.put(meta, :content_hash, hash)
+
+  defp put_live_content_hash(meta, _att), do: meta
+
   @doc """
   Gives each live row in `ids` a fresh seq (one contiguous block), so sync
   clients pull it again. Used after its blob is restored
@@ -1740,6 +1754,7 @@ defmodule Engram.Attachments do
             |> Map.put(:seq, att.seq)
             |> Map.put(:version, att.version)
             |> Map.put(:deleted, not is_nil(att.deleted_at))
+            |> put_live_content_hash(att)
             |> Map.delete(:deleted_at)
           end)
 

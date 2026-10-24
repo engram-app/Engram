@@ -2,7 +2,7 @@ defmodule Engram.Workers.ReconcileAttachmentBlobsTest do
   @moduledoc """
   #2159: a live row whose blob sits behind delete markers in a versioned
   bucket is restored by copying its newest data version back. The test
-  storage (`Engram.Storage.InMemory`) keeps versions like S3 does.
+  storage (`InMemory`) keeps versions like S3 does.
   """
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
@@ -11,8 +11,13 @@ defmodule Engram.Workers.ReconcileAttachmentBlobsTest do
   import ExUnit.CaptureLog
   import Engram.RlsCase, only: [as_prod_role: 1]
 
-  alias Engram.{Attachments, Repo, Storage}
+  alias Engram.Accounts.User
+  alias Engram.Attachments
   alias Engram.Attachments.Attachment
+  alias Engram.Repo
+  alias Engram.Storage
+  alias Engram.Storage.InMemory
+  alias Engram.Vaults.Vault
   alias Engram.Workers.ReconcileAttachmentBlobs
 
   setup do
@@ -149,7 +154,7 @@ defmodule Engram.Workers.ReconcileAttachmentBlobsTest do
     # hard_delete's window: soft-deleted, prefix wiped, rows not yet gone.
     {1, _} =
       Repo.update_all(
-        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        from(u in User, where: u.id == ^user.id),
         [set: [deleted_at: DateTime.utc_now()]],
         skip_tenant_check: true
       )
@@ -166,7 +171,7 @@ defmodule Engram.Workers.ReconcileAttachmentBlobsTest do
 
     {1, _} =
       Repo.update_all(
-        from(v in Engram.Vaults.Vault, where: v.id == ^vault.id),
+        from(v in Vault, where: v.id == ^vault.id),
         [set: [purge_started_at: DateTime.utc_now(:second)]],
         skip_tenant_check: true
       )
@@ -184,14 +189,106 @@ defmodule Engram.Workers.ReconcileAttachmentBlobsTest do
     prev = Application.get_env(:engram, :storage)
     Application.put_env(:engram, :storage, Engram.MockStorage)
     on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
-    Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+    Mox.stub_with(Engram.MockStorage, InMemory)
 
     Mox.stub(Engram.MockStorage, :list_versions, fn prefix, opts ->
-      listed = Engram.Storage.InMemory.list_versions(prefix, opts)
+      listed = InMemory.list_versions(prefix, opts)
       # Commits between the listing and the decision.
       put_att(user, vault, "late.png", "late bytes")
       listed
     end)
+
+    log =
+      capture_log(fn -> assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault)) end)
+
+    refute log =~ "attachment blob unrecoverable"
+  end
+
+  defp use_mock_storage do
+    prev = Application.get_env(:engram, :storage)
+    Application.put_env(:engram, :storage, Engram.MockStorage)
+    on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+    Mox.stub_with(Engram.MockStorage, InMemory)
+  end
+
+  test "a key change (client heal) between listing and copy makes no copy", %{
+    user: user,
+    vault: vault
+  } do
+    att = put_att(user, vault, "a.png", "bytes")
+    :ok = Storage.adapter().delete(att.storage_key)
+    use_mock_storage()
+
+    old_key = att.storage_key
+
+    # The client re-pushes its copy AFTER the reconciler read the row and
+    # right before its copy: the row moves to a fresh key, the old one stays
+    # gone.
+    Mox.stub(Engram.MockStorage, :get_range, fn
+      ^old_key, _, _ ->
+        healed = "#{user.id}/#{vault.id}/objects/#{Ecto.UUID.generate()}"
+        :ok = InMemory.put(healed, "sealed")
+
+        {1, _} =
+          Repo.update_all(
+            from(a in Attachment, where: a.id == ^att.id),
+            [set: [storage_key: healed]],
+            skip_tenant_check: true
+          )
+
+        {:error, :not_found}
+
+      key, offset, len ->
+        InMemory.get_range(key, offset, len)
+    end)
+
+    assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault))
+    refute InMemory.exists?(old_key)
+  end
+
+  test "an account deletion that starts mid-page stops the remaining copies", %{
+    user: user,
+    vault: vault
+  } do
+    atts = for p <- ["a.png", "b.png"], do: put_att(user, vault, p, "bytes of " <> p)
+    for att <- atts, do: :ok = Storage.adapter().delete(att.storage_key)
+    use_mock_storage()
+    test_pid = self()
+
+    Mox.stub(Engram.MockStorage, :restore_version, fn key, vid ->
+      send(test_pid, {:restored, key})
+      :ok = InMemory.restore_version(key, vid)
+
+      # Account deletion begins after the first copy.
+      Repo.update_all(
+        from(u in User, where: u.id == ^user.id),
+        [set: [deleted_at: DateTime.utc_now()]],
+        skip_tenant_check: true
+      )
+
+      :ok
+    end)
+
+    assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault))
+    assert_received {:restored, _}
+    refute_received {:restored, _}
+  end
+
+  test "a transient storage error is not reported as unrecoverable", %{
+    user: user,
+    vault: vault
+  } do
+    att = put_att(user, vault, "a.png", "bytes")
+    lost = "#{user.id}/#{vault.id}/objects/#{Ecto.UUID.generate()}"
+
+    {1, _} =
+      Repo.update_all(from(a in Attachment, where: a.id == ^att.id), [set: [storage_key: lost]],
+        skip_tenant_check: true
+      )
+
+    use_mock_storage()
+    Mox.stub(Engram.MockStorage, :exists?, fn _ -> false end)
+    Mox.stub(Engram.MockStorage, :get_range, fn _, _, _ -> {:error, :timeout} end)
 
     log =
       capture_log(fn -> assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault)) end)
