@@ -14,7 +14,7 @@ crate-type = ["cdylib", "rlib"]
 test-hooks = []
 
 [dependencies]
-rustler = "0.38"
+rustler = "0.39"
 # The envelope engine (pure Rust, shared with the wasm clients).
 engram_core = { path = "../engram_core" }
 getrandom = "0.4"
