@@ -80,8 +80,10 @@ defmodule Engram.QueryBudgetTest do
     "mcp append_to_note" => 14,
     "mcp edit_note" => 14,
     # rotation lock, begin, enter, the note row (found once), seq bump,
-    # tombstone, usage_meters, two job inserts + their pg_notify, commit.
-    "mcp delete_note" => 12,
+    # tombstone, usage_meters, the index-delete job insert + its pg_notify,
+    # the release joining the warm-up's pending release job (one UPDATE, no
+    # insert: ReleaseIndexEntries.enqueue/3 coalesces per vault), commit.
+    "mcp delete_note" => 11,
     # Read target 5; floor 6: begin, enter, change_seq (it decides whether the
     # rows are read at all), notes rows, attachments rows, commit.
     "GET sync/manifest" => 6,
@@ -107,9 +109,11 @@ defmodule Engram.QueryBudgetTest do
     #  22-27 post-commit jobs (one unique, own txn). 28-32 idle-room fanout
     #  (fresh users row + note read). 33-36 links txn.
     "POST notes/rename" => 36,
-    # rotation lock, begin, enter, the note row, seq bump, tombstone,
-    # usage_meters, two job inserts + their pg_notify, commit.
-    "DELETE notes/*path" => 11,
+    # begin, enter, the note row, seq bump, tombstone, usage_meters, the
+    # index-delete job insert + its pg_notify, the release joining the
+    # warm-up's pending release job (one UPDATE, no insert), commit. With no
+    # release pending it is the UPDATE (0 rows) + insert + notify instead.
+    "DELETE notes/*path" => 10,
     # Warm: every loader is a cache hit; what remains is the controller's one
     # tenant block (begin, enter, commit), opened unconditionally (fix round 1
     # ruling: bootstrap's DB work runs in ONE block).
