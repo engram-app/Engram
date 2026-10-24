@@ -275,9 +275,10 @@ defmodule EngramWeb.BillingController do
   defp cap_json(_), do: nil
 
   @doc """
-  Customer-portal redirect. Without an `action` param this returns the generic
-  overview URL; with `action=cancel` / `action=update_payment` it returns the
-  matching per-subscription deep link so the UI can offer distinct buttons.
+  Customer-portal redirect. `action=update_payment` returns that
+  per-subscription deep link; anything else (including `action=cancel`)
+  returns the overview URL. Cancels go through the in-app dialog, which asks
+  for a reason (`Billing.portal_action_url/2`).
   """
   def customer_portal(conn, params) do
     with_billing(conn, fn ->

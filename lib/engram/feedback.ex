@@ -19,6 +19,7 @@ defmodule Engram.Feedback do
   alias Engram.Accounts.User
   alias Engram.Analytics
   alias Engram.Analytics.Event
+  alias Engram.Analytics.EventLog
   alias Engram.Billing
   alias Engram.Repo
 
@@ -173,31 +174,59 @@ defmodule Engram.Feedback do
   def submit(_user, _kind, _params), do: {:error, :invalid_kind}
 
   @doc """
-  File `reason` as the cancel reason when `user` gave none since `since` (the
-  subscription's start). Only the in-app dialog asks why; a cancel through
-  Paddle's hosted portal, or a dunning failure, arrives with no reason, and
-  this marker keeps that gap visible in the cancel-reason counts.
+  File a cancel reason for a cancel that came with none. Only the in-app
+  dialog asks why; a cancel through Paddle's hosted portal (or its dashboard)
+  arrives with no reason, and this marker keeps that gap visible in the
+  cancel-reason counts.
+
+  `"payment_failed"` (the subscription ended out of `past_due`) is always
+  filed: a reason given for an earlier, reversed cancel says nothing about a
+  dunning failure. Any other `reason` is filed only when no reason was given
+  for the latest scheduled cancel (see `reason_filed?/2`). Skipped when our
+  event log is off: without it every cancel would look reasonless.
   """
   @spec record_missing_cancel_reason(User.t(), DateTime.t(), String.t()) :: :ok
-  def record_missing_cancel_reason(user, since, reason) do
-    given? =
-      Repo.exists?(
-        from(e in Event,
-          where:
-            e.user_id == ^user.id and e.event == "subscription_cancel_reason" and
-              e.inserted_at >= ^since
-        )
-      )
-
-    if given? do
-      :ok
-    else
+  def record_missing_cancel_reason(user, started_at, reason) do
+    if EventLog.enabled?() and
+         (reason == "payment_failed" or not reason_filed?(user, started_at)) do
       capture(user, "subscription_cancel_reason", %{
         "reason" => reason,
         "source" => "webhook",
         "$set" => %{"cancel_reason" => reason}
       })
+    else
+      :ok
     end
+  end
+
+  # The dialog files its reason just AFTER the cancel call returns, so it can
+  # land before or after the `cancel_scheduled` event the webhook records.
+  # Counting from an hour before the latest scheduled cancel catches both,
+  # and drops a reason given for an earlier cancel the user reversed.
+  @reason_slack_s 3_600
+
+  defp reason_filed?(user, started_at) do
+    scheduled_at =
+      Repo.one(
+        from(e in Event,
+          where:
+            e.user_id == ^user.id and e.event == "subscription_changed" and
+              e.inserted_at >= ^started_at and
+              fragment("?->>'kind'", e.props) == "cancel_scheduled",
+          select: max(e.inserted_at)
+        )
+      )
+
+    since =
+      if scheduled_at, do: DateTime.add(scheduled_at, -@reason_slack_s), else: started_at
+
+    Repo.exists?(
+      from(e in Event,
+        where:
+          e.user_id == ^user.id and e.event == "subscription_cancel_reason" and
+            e.inserted_at >= ^since
+      )
+    )
   end
 
   @doc """

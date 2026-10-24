@@ -56,6 +56,7 @@ defmodule Engram.Paddle.Client do
   `create_customer_portal_session/1` (which returns only the overview URL),
   this returns the whole `data.urls` structure including the per-subscription
   `cancel_subscription` and `update_subscription_payment_method` deep links.
+  `Engram.Billing.portal_action_url/2` never passes the cancel one on.
   """
   @callback get_portal_session(customer_id :: String.t()) ::
               {:ok, map()} | {:error, term()}
