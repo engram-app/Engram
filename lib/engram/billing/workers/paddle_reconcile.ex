@@ -1,7 +1,7 @@
 defmodule Engram.Billing.Workers.PaddleReconcile do
   @moduledoc """
   Oban cron worker for Paddle reconciliation. Daily: calls
-  `Engram.Billing.Reconciliation.run/1` with a 7-day window. Every 15
+  `Engram.Billing.Reconciliation.run/1` with a 7-day window. Every 5
   minutes (args `%{"scan" => "stalled_checkouts"}`): reports checkouts stuck
   at `action_required` via `Reconciliation.report_stalled_checkouts/1`. Drift is logged at `:error` and captured by Sentry —
   the worker itself always returns `:ok` so Oban doesn't mark the job
@@ -28,7 +28,7 @@ defmodule Engram.Billing.Workers.PaddleReconcile do
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(15)
 
-  # Stalled-checkout scan (args `%{"scan" => "stalled_checkouts"}`, every 15
+  # Stalled-checkout scan (args `%{"scan" => "stalled_checkouts"}`, every 5
   # min): see `Reconciliation.report_stalled_checkouts/1`. Anchored on the
   # job's cron tick so a retry re-reads the same window.
   @impl Oban.Worker
@@ -56,8 +56,8 @@ defmodule Engram.Billing.Workers.PaddleReconcile do
 
   @doc """
   The scan's anchor: the cron tick the job was inserted for, rounded to the
-  nearest minute. Ticks are exactly 15 minutes apart, so windows anchored on
-  them tile, and the window end (anchor - 15m) is never later than 15 minutes
+  nearest minute. Ticks are exactly one window apart (5 minutes), so windows
+  anchored on them tile, and the window end (anchor - 15m) is never later than 15 minutes
   before the run: nothing younger than the grace is reported. Rounding (not
   flooring) absorbs a DB clock that inserts the job a hair before its minute.
   """

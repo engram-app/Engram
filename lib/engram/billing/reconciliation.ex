@@ -361,8 +361,15 @@ defmodule Engram.Billing.Reconciliation do
   # A payment parked at `action_required` this long is a stalled checkout,
   # not a 3DS challenge still in progress (the alert's own grace period).
   @stalled_after_seconds 15 * 60
-  # The scan's cron interval: each run owns exactly one window of this width.
-  @stalled_scan_window_seconds 15 * 60
+  # The scan's cron interval (config.exs `4-59/5`): each run owns exactly one
+  # window of this width, so the windows tile. Pinned against the crontab by
+  # paddle_reconcile_test.exs. 5 min, not 15: with the grace that puts the
+  # worst-case report at 20 min after the attempt, not 30 (#2203).
+  @stalled_scan_window_seconds 5 * 60
+
+  @doc "Width of one stalled-scan window, equal to the scan's cron interval."
+  @spec stalled_scan_window_seconds() :: pos_integer()
+  def stalled_scan_window_seconds, do: @stalled_scan_window_seconds
 
   @doc """
   Reports `ready` Paddle transactions whose newest payment parked at
@@ -371,7 +378,7 @@ defmodule Engram.Billing.Reconciliation do
   stalled-checkout alert never sees the line it needs.
 
   Dedupe without state: a run anchored at `anchor` (its cron tick, to the
-  minute) owns payments created in `[anchor - 30m, anchor - 15m)`. Consecutive ticks
+  minute) owns payments created in `[anchor - 20m, anchor - 15m)`. Consecutive ticks
   tile the timeline, so each stalled payment is reported by exactly one run,
   and a retry of the same job (same anchor) re-reads the same window.
   ponytail: a tick that never runs (whole cluster down) skips its window; a
