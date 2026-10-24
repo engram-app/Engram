@@ -301,6 +301,45 @@ defmodule EngramWeb.BillingControllerTest do
       conn = get(conn, "/api/billing/transactions/txn_999/invoice")
       assert json_response(conn, 404)["error"] == "transaction not found"
     end
+
+    # A $0 trial transaction has no invoice, so Paddle 404s the invoice fetch.
+    # That is not a provider outage: 404 to the caller, logged below error
+    # level so the billing-error page alert stays quiet.
+    test "Paddle 404 on the invoice fetch returns 404 no invoice, not a 502",
+         %{conn: conn, user: user} do
+      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+        {:ok, [%{"id" => "txn_trial", "payments" => []}]}
+      end)
+
+      expect(Engram.Paddle.ClientMock, :get_transaction_invoice, fn "txn_trial" ->
+        {:error, {:paddle_error, 404, %{"error" => %{"code" => "not_found"}}}}
+      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :error], fn ->
+          conn = get(conn, "/api/billing/transactions/txn_trial/invoice")
+          assert json_response(conn, 404)["error"] == "no invoice for this transaction"
+        end)
+
+      refute log =~ "Paddle billing error"
+    end
+  end
+
+  describe "other Paddle 404s" do
+    @describetag :session_auth
+
+    test "map to 404 instead of 502", %{conn: conn, user: user} do
+      insert(:subscription, user: user, paddle_subscription_id: "sub_gone")
+
+      expect(Engram.Paddle.ClientMock, :get_update_payment_transaction, fn "sub_gone" ->
+        {:error, {:paddle_error, 404, %{}}}
+      end)
+
+      conn = get(conn, "/api/billing/payment-update-transaction")
+      assert json_response(conn, 404)["error"] == "not found at payment provider"
+    end
   end
 
   describe "GET /api/billing/payment-update-transaction" do
