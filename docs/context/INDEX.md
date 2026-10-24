@@ -39,7 +39,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Background worker processed stale note content (facade vs `authoritative_content`) → `docs/context/worker-reads-stale-content-facade.md`
 - Worker CPU pegged and "nothing alerted", or assuming a `severity=page` alert woke someone (CloudWatch twin did fire; `page` routes only to Discord) → `docs/context/worker-oom-regex-backtrack-2026-10-03.md`
 - Measuring CRDT doc bloat, or reading the engram-crdt dashboard (the checkpoint flatten was removed in 0.60.1 because it doubles bodies; never reintroduce a server reset) → `docs/context/crdt-bloat-measurement-traps.md`
-- The CRDT bloat alert fires on a small note, or reading `notes.version` as an edit count (it counts debounced checkpoints, ~2 per typing burst; 64 KB floor + save-rate gauges, #2175) → `docs/context/crdt-bloat-measurement-traps.md`
+- The CRDT bloat alert fires on a small note, or reading `notes.version` as an edit count (it counts debounced checkpoints, Trap 0; 64 KB floor + save-rate gauges, #2175) → `docs/context/crdt-bloat-measurement-traps.md`
 - Note content doubled or interleaved, or the server holds a note TWICE (one-encoder invariant, frontmatter re-seed, flatten boundary #958) → `docs/context/crdt-lineage-doubling.md`
 - Note version history, the outbox write path, adding a content-write path or an MCP write tool → `docs/context/note-revisions-history.md`
 - Every `crdt_create` returns `create_failed` on a NEW vault, or a create leg drops a re-minted note id → `docs/context/crdt-create-cross-vault-id-reuse.md`
