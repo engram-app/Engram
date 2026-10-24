@@ -323,7 +323,11 @@ defmodule EngramWeb.BillingController do
         {:ok, url} -> json(conn, %{url: url})
         {:error, :no_subscription} -> not_found(conn, "no subscription")
         {:error, :not_found} -> not_found(conn, "transaction not found")
-        {:error, reason} -> paddle_error(conn, reason, "no invoice for this transaction")
+        # $0 transactions (every trial start) have no Paddle invoice. Not a
+        # provider failure: the HTTP client already logged the Paddle 404 at
+        # warning, below the billing-error page alert's severity filter.
+        {:error, :no_invoice} -> not_found(conn, "no invoice for this transaction")
+        {:error, reason} -> paddle_error(conn, reason)
       end
     end)
   end
@@ -492,22 +496,7 @@ defmodule EngramWeb.BillingController do
 
   defp not_found(conn, message), do: conn |> put_status(404) |> json(%{error: message})
 
-  # A Paddle 404 means the resource does not exist there (a $0 trial
-  # transaction has no invoice, for one). Retrying cannot help and it is not a
-  # provider outage, so it answers 404 and logs at warning, below the
-  # billing-error page alert's `severity=~"error|..."` filter.
-  defp paddle_error(conn, reason, not_found_message \\ "not found at payment provider")
-
-  defp paddle_error(conn, {:paddle_error, 404, _body} = reason, not_found_message) do
-    Logger.warning(
-      "Paddle resource not found",
-      Engram.Logger.Metadata.with_category(:warning, :billing, reason_label: inspect(reason))
-    )
-
-    not_found(conn, not_found_message)
-  end
-
-  defp paddle_error(conn, reason, _not_found_message) do
+  defp paddle_error(conn, reason) do
     Logger.error(
       "Paddle billing error",
       Engram.Logger.Metadata.with_category(:error, :billing, reason_label: inspect(reason))

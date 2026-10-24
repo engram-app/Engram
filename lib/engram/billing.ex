@@ -616,14 +616,15 @@ defmodule Engram.Billing do
   @doc """
   Mint the hosted invoice URL for one of the user's transactions. Verifies the
   transaction belongs to the user's subscription before minting (IDOR guard) —
-  Paddle transaction IDs are otherwise enumerable across customers.
+  Paddle transaction IDs are otherwise enumerable across customers. Returns
+  `{:error, :no_invoice}` when Paddle has no invoice for it ($0 transactions).
   """
   def transaction_invoice_url(user, transaction_id) do
     with_paddle_subscription(user, fn sub ->
       case Client.impl().list_transactions(sub.paddle_subscription_id) do
         {:ok, txns} ->
           if Enum.any?(txns, &(&1["id"] == transaction_id)) do
-            Client.impl().get_transaction_invoice(transaction_id)
+            transaction_invoice(transaction_id)
           else
             {:error, :not_found}
           end
@@ -632,6 +633,16 @@ defmodule Engram.Billing do
           {:error, reason}
       end
     end)
+  end
+
+  # Paddle issues no invoice for a zero-value transaction (every $0 trial
+  # start) and answers 404 not_found. For a transaction we just confirmed is
+  # the caller's, that 404 means "no invoice", not a provider failure.
+  defp transaction_invoice(transaction_id) do
+    case Client.impl().get_transaction_invoice(transaction_id) do
+      {:error, {:paddle_error, 404, _body}} -> {:error, :no_invoice}
+      other -> other
+    end
   end
 
   @doc """
