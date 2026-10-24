@@ -37,13 +37,6 @@
   # one `contract_supertype`, so (file, warning_type) stays narrow.
   {"lib/engram/links.ex", :contract_supertype},
 
-  # `ReleaseIndexEntries.chunk_size/0`: same case as `backlinks_limit/0`. The
-  # spec is the contract (a positive id count), not the measured value of the
-  # day. Scoped by (file, short description) so it names the function and any
-  # other `contract_supertype` in the file still fails the gate.
-  {"lib/engram/workers/release_index_entries.ex",
-   "Type specification for chunk_size is a supertype of the success typing."},
-
   # `EmbedNote.backfill_priority/0` is intentionally specced as `pos_integer()`
   # rather than the literal `9` dialyzer infers from `@backfill_priority` — the
   # spec documents the contract ("some priority that loses to interactive"),

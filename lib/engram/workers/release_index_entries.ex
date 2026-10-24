@@ -86,8 +86,9 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   # a different limit this job never reaches.
   @chunk_size 2_000
 
+  # No @spec: dialyzer infers the exact `2000`, and a wider `pos_integer()`
+  # is a `contract_supertype` it rejects.
   @doc "Max note ids per release job, i.e. per index-room change."
-  @spec chunk_size() :: pos_integer()
   def chunk_size, do: @chunk_size
 
   @doc """
