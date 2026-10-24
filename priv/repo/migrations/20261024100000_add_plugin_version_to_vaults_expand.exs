@@ -23,7 +23,13 @@ defmodule Engram.Repo.Migrations.AddPluginVersionToVaultsExpand do
 
   @new_cols @old_cols ++ ~w(plugin_version plugin_version_seen_at)
 
+  # lock_timeout FIRST, before the column add: both statements take an
+  # ACCESS EXCLUSIVE lock on vaults, and an add queued behind a long
+  # transaction would stall every note write (the seq bump updates vaults).
+  # A busy table fails the migration (retried on next boot) instead.
   def up do
+    execute "SET LOCAL lock_timeout = '5s'"
+
     alter table(:vaults) do
       add :plugin_version, :text
       add :plugin_version_seen_at, :timestamptz
@@ -34,6 +40,7 @@ defmodule Engram.Repo.Migrations.AddPluginVersionToVaultsExpand do
   end
 
   def down do
+    execute "SET LOCAL lock_timeout = '5s'"
     replace_trigger(@old_cols)
 
     alter table(:vaults) do
@@ -45,8 +52,6 @@ defmodule Engram.Repo.Migrations.AddPluginVersionToVaultsExpand do
   defp replace_trigger(cols) do
     old = Enum.map_join(cols, ", ", &"OLD.#{&1}")
     new = Enum.map_join(cols, ", ", &"NEW.#{&1}")
-
-    execute "SET LOCAL lock_timeout = '5s'"
 
     execute """
     CREATE OR REPLACE TRIGGER vaults_cache_notify_1
