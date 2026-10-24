@@ -70,7 +70,7 @@ defmodule Engram.MCP.HandlersWriteContractTest do
     test "update_section reports a heading it could not find", %{user: user, vault: vault} do
       :ok = note!(user, vault, "a.md", "# A\n\nbody")
 
-      assert {:error, msg} =
+      assert {:error, {:section_not_found, msg}} =
                Handlers.handle("update_section", user, vault, %{
                  "path" => "a.md",
                  "heading" => "Nope",

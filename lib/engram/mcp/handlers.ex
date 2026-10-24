@@ -946,7 +946,10 @@ defmodule Engram.MCP.Handlers do
           {:error, section_error(heading, reason)}
 
         :error ->
-          {:error, "Heading not found: #{String.duplicate("#", level)} #{heading}"}
+          ToolError.error(
+            :section_not_found,
+            "Heading not found: #{String.duplicate("#", level)} #{heading}"
+          )
       end
     end
 
@@ -1159,7 +1162,10 @@ defmodule Engram.MCP.Handlers do
     case Sections.find(current, heading, level, ParseGate.call_opts()) do
       :error ->
         # The section was not updated, so this is not a success. Was `:ok`.
-        {:error, "Heading not found: #{String.duplicate("#", level)} #{heading}"}
+        ToolError.error(
+          :section_not_found,
+          "Heading not found: #{String.duplicate("#", level)} #{heading}"
+        )
 
       {:error, reason} ->
         {:error, section_error(heading, reason)}

@@ -74,7 +74,10 @@ defmodule Engram.MCP.HandlersInsertSectionTest do
 
   test "a missing heading refuses and writes nothing", %{user: u, vault: v} do
     before = body(u, v)
-    assert {:error, msg} = insert_section(u, v, %{"heading" => "Nope", "content" => "y"})
+
+    assert {:error, {:section_not_found, msg}} =
+             insert_section(u, v, %{"heading" => "Nope", "content" => "y"})
+
     assert msg =~ "Heading not found: ## Nope"
     assert body(u, v) == before
   end
