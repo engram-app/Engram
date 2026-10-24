@@ -12,6 +12,7 @@ defmodule Engram.Attachments do
   import Ecto.Query
 
   alias Engram.Attachments.Attachment
+  alias Engram.Attachments.BulkUpdate
   alias Engram.Attachments.SegmentedCipher
   alias Engram.Billing
   alias Engram.Crypto
@@ -25,6 +26,7 @@ defmodule Engram.Attachments do
   alias Engram.Storage
   alias Engram.Storage.MimeWhitelist
   alias Engram.Sync.Broadcast
+  alias Engram.Workers.ReconcileAttachmentBlobs
 
   @doc """
   Composable tenant-scope query: `Attachment` rows owned by `user` in `vault`
@@ -467,6 +469,7 @@ defmodule Engram.Attachments do
               )
             )
 
+            :ok = reconcile_blobs(att)
             {:error, {:storage, :blob_missing}}
 
           {:error, reason} ->
@@ -545,6 +548,10 @@ defmodule Engram.Attachments do
         {:ok, sealed} ->
           with :error <- SegmentedCipher.open_segment(sealed, key, att.upload_id, i, count),
                do: {:error, :segment_corrupt}
+
+        {:error, :not_found} ->
+          :ok = reconcile_blobs(att)
+          {:error, {:storage, :not_found}}
 
         {:error, reason} ->
           {:error, {:storage, reason}}
@@ -1237,60 +1244,48 @@ defmodule Engram.Attachments do
         {[], []}
       else
         n = length(rows)
-
-        # Contiguous block of N seqs in ONE statement — mirrors next_seq!/1's
-        # raw-SQL idiom (the returned value is the LAST seq of the block).
-        %{rows: [[last_seq]]} =
-          Repo.query!(
-            "UPDATE vaults SET change_seq = change_seq + $2 WHERE id = $1 RETURNING change_seq",
-            [Ecto.UUID.dump!(vault.id), n]
-          )
+        last_seq = Engram.Vaults.next_seq_block!(vault.id, n)
 
         id_seqs =
           rows
           |> Enum.with_index(last_seq - n + 1)
           |> Enum.map(fn {{id, _hmac}, seq} -> {id, seq} end)
 
-        # One UPDATE for all rows. `deleted_at IS NULL` re-guard: a row a
-        # concurrent transaction deleted between our SELECT and this UPDATE is
-        # skipped (its allocated seq goes unused — gaps are fine, the feed
-        # only needs monotonic-unique). RETURNING tells us which rows this
-        # statement actually transitioned so the count + broadcasts stay
-        # truthful. Runs under the with_tenant RLS role like every other raw
-        # statement in this transaction.
-        values_sql =
-          id_seqs
-          |> Enum.with_index()
-          |> Enum.map_join(", ", fn {_pair, i} ->
-            "($#{i * 2 + 2}::uuid, $#{i * 2 + 3}::bigint)"
-          end)
-
-        params = [
-          DateTime.to_naive(now)
-          | Enum.flat_map(id_seqs, fn {id, seq} -> [Ecto.UUID.dump!(id), seq] end)
-        ]
-
-        %{rows: returned} =
-          Repo.query!(
-            """
-            UPDATE attachments AS a
-            SET deleted_at = $1, updated_at = $1, seq = v.seq
-            FROM (VALUES #{values_sql}) AS v(id, seq)
-            WHERE a.id = v.id AND a.deleted_at IS NULL
-            RETURNING a.id, a.path_hmac
-            """,
-            params
-          )
-
-        # `a.id` comes back as raw 16-byte postgres uuid bytes via the
-        # low-level query (unlike the Ecto-typed `rows` select above);
-        # load!/1 converts it back to the normal dashed string form.
-        deleted_ids = for [id, _hmac] <- returned, do: Ecto.UUID.load!(id)
-        deleted_hmacs = returned |> Enum.map(fn [_id, hmac] -> hmac end) |> Enum.uniq()
+        returned = BulkUpdate.stamp_seqs!(id_seqs, :delete, now)
+        deleted_ids = Enum.map(returned, &elem(&1, 0))
+        deleted_hmacs = returned |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
         {deleted_ids, deleted_hmacs}
       end
     end)
     |> unwrap_tenant()
+  end
+
+  # A live row's blob is missing: queue a restore from bucket versions for
+  # its vault (#2159). After commit, and deduped per vault for 10 minutes, so
+  # a client reading thousands of them queues one job.
+  defp reconcile_blobs(%Attachment{user_id: user_id, vault_id: vault_id}),
+    do: Repo.after_commit(fn -> ReconcileAttachmentBlobs.enqueue(user_id, vault_id) end)
+
+  @doc """
+  Gives each live row in `ids` a fresh seq (one contiguous block), so sync
+  clients pull it again. Used after its blob is restored
+  (`Engram.Workers.ReconcileAttachmentBlobs`). Returns how many rows moved.
+  """
+  @spec bump_seqs(String.t(), String.t(), [String.t()]) :: non_neg_integer()
+  def bump_seqs(_user_id, _vault_id, []), do: 0
+
+  def bump_seqs(user_id, vault_id, ids) do
+    now = DateTime.utc_now(:second)
+
+    Repo.with_tenant!(user_id, fn ->
+      last_seq = Engram.Vaults.next_seq_block!(vault_id, length(ids))
+
+      ids
+      |> Enum.sort()
+      |> Enum.with_index(last_seq - length(ids) + 1)
+      |> BulkUpdate.stamp_seqs!(:touch, now)
+      |> length()
+    end)
   end
 
   # Real-time parity: reuse the existing `note_changed` socket event the plugin

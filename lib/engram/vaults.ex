@@ -74,11 +74,29 @@ defmodule Engram.Vaults do
   `mode: :savepoint` so a failed bump (e.g. bigint overflow) rolls back to a
   per-statement savepoint instead of poisoning the shared batch transaction.
   """
+  # Its own literal statement, not `next_seq_block!(id, 1)`: tests and query
+  # budgets locate the single-seq bump by this exact SQL.
   def next_seq!(vault_id, opts \\ []) do
     %{rows: [[seq]]} =
       Repo.query!(
         "UPDATE vaults SET change_seq = change_seq + 1 WHERE id = $1 RETURNING change_seq",
         [Ecto.UUID.dump!(vault_id)],
+        opts
+      )
+
+    seq
+  end
+
+  @doc """
+  Allocates `n` contiguous seqs in one statement and returns the LAST of the
+  block (`last - n + 1 .. last`). Same contract as `next_seq!/2`: call it
+  inside the caller's `Repo.with_tenant/2` write transaction.
+  """
+  def next_seq_block!(vault_id, n, opts \\ []) when is_integer(n) and n > 0 do
+    %{rows: [[seq]]} =
+      Repo.query!(
+        "UPDATE vaults SET change_seq = change_seq + $2 WHERE id = $1 RETURNING change_seq",
+        [Ecto.UUID.dump!(vault_id), n],
         opts
       )
 

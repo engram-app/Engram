@@ -32,6 +32,35 @@ defmodule Engram.Storage do
   @callback exists?(key :: String.t()) ::
               boolean()
 
+  @typedoc """
+  One entry of a versioned bucket's history. `last_modified` orders a key's
+  entries (newest is greatest); `latest?` marks the current one.
+  """
+  @type version :: %{
+          key: String.t(),
+          version_id: String.t(),
+          last_modified: term(),
+          latest?: boolean(),
+          delete_marker?: boolean()
+        }
+
+  @doc """
+  Every version and delete marker under `prefix` (S3 `ListObjectVersions`).
+  Used by `Engram.Workers.ReconcileAttachmentBlobs` to find a live row's
+  blob behind a delete marker. `{:error, :unsupported}` from an unversioned
+  backend, which makes the reconciler a no-op.
+  """
+  @callback list_versions(prefix :: String.t()) ::
+              {:ok, [version()]} | {:error, :unsupported | term()}
+
+  @doc """
+  Makes `version_id` of `key` its current version again by copying it on top
+  (a new version). Never deletes a version or marker, so the app needs no
+  permanent-delete permission.
+  """
+  @callback restore_version(key :: String.t(), version_id :: String.t()) ::
+              :ok | {:error, :unsupported | term()}
+
   @callback delete_prefix(prefix :: String.t()) ::
               {:ok, non_neg_integer()} | {:error, term()}
 

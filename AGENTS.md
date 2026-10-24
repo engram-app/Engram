@@ -46,7 +46,7 @@ Engram is a single Elixir/Phoenix OTP application — search, MCP server, note s
 | Billing | `lib/engram/billing/`, `lib/engram/paddle/` | Paddle webhook receiver, billing config endpoint, subscriptions |
 | Crypto | `lib/engram/crypto/`, `lib/engram/encryption/` | Per-user DEKs, AAD bind, master-key rotation, boot canary |
 | MCP OAuth | `lib/engram_web/oauth/` | OAuth 2.1 + Dynamic Client Registration for Claude Desktop Connectors |
-| Oban Workers | `lib/engram/workers/`, `lib/engram/billing/workers/` | EmbedNote, ReconcileEmbeddings, DataMigrationsRunner, WarmCrdtHeads, DeleteNoteIndex, RotateUserDek, RotateUserMasterKey, AccountExport, InactivityCleanup, MigrateUserProvider, OrphanSweep, AttachmentBlobGC, CleanupVault, VaultDeletedEmail, CleanupDeviceAuthWorker, OriginAbuseSweep, PaddleReconcile, OverrideExpirySweep |
+| Oban Workers | `lib/engram/workers/`, `lib/engram/billing/workers/` | EmbedNote, ReconcileEmbeddings, DataMigrationsRunner, WarmCrdtHeads, DeleteNoteIndex, RotateUserDek, RotateUserMasterKey, AccountExport, InactivityCleanup, MigrateUserProvider, OrphanSweep, AttachmentBlobGC, ReconcileAttachmentBlobs, CleanupVault, VaultDeletedEmail, CleanupDeviceAuthWorker, OriginAbuseSweep, PaddleReconcile, OverrideExpirySweep |
 
 ### Key Patterns
 

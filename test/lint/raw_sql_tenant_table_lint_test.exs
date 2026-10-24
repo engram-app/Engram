@@ -40,12 +40,13 @@ defmodule Engram.RawSqlTenantTableLintTest do
     # the @doc), so it DOES run under RLS tenant context — the raw SQL is needed
     # for the single-round-trip read-modify-write + row lock, not to bypass RLS.
     "engram/vaults.ex",
-    # Attachments.batch_soft_delete_rows/3 — the batch-delete seq-block bump
-    # (next_seq!'s idiom with `+ $2`) and the multi-row `UPDATE ... FROM
-    # (VALUES ...)` soft delete where every row gets a DISTINCT seq — a shape
-    # `update_all` cannot express. Both statements run inside the enclosing
-    # `Repo.with_tenant/2` transaction, so RLS tenant context is active.
-    "engram/attachments.ex",
+    # Attachments.BulkUpdate.stamp_seqs!/3: the multi-row `UPDATE ... FROM
+    # (VALUES ...)` where every row gets a DISTINCT seq (batch soft delete,
+    # seq bump after a blob restore), a shape `update_all` cannot express.
+    # Runs inside the caller's `Repo.with_tenant/2` transaction, so RLS
+    # tenant context is active. Moved out of attachments.ex (#2159) so that
+    # file needs no exemption.
+    "engram/attachments/bulk_update.ex",
     # Notes.BulkRename.update!/3 — the folder-rename cascade's batched
     # `UPDATE notes ... FROM (VALUES ...)`: each row carries distinct
     # re-encrypted ciphertexts (per-row values, one statement). Runs inside

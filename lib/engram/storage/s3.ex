@@ -5,6 +5,8 @@ defmodule Engram.Storage.S3 do
 
   @behaviour Engram.Storage
 
+  import SweetXml, only: [sigil_x: 2]
+
   alias Engram.Logger.Metadata
 
   defp bucket, do: Application.fetch_env!(:engram, :storage_bucket)
@@ -102,6 +104,97 @@ defmodule Engram.Storage.S3 do
   end
 
   defp count_delete_errors(_), do: 0
+
+  @impl true
+  def list_versions(prefix) when is_binary(prefix) and prefix != "",
+    do: list_versions(prefix, [], [])
+
+  # Paged by hand rather than via `ExAws.stream!`: the stream flattens
+  # versions and delete markers into one list and drops which is which. And
+  # parsed here: ExAws's parser crashes on an entry with no <Owner>.
+  defp list_versions(prefix, markers, acc) do
+    op = %{ExAws.S3.list_object_versions(bucket(), [prefix: prefix] ++ markers) | parser: & &1}
+
+    case ExAws.request(op) do
+      {:ok, %{body: xml}} ->
+        page = parse_versions(xml)
+        acc = page.versions ++ acc
+
+        if page.truncated?,
+          do:
+            list_versions(
+              prefix,
+              [key_marker: page.next_key, version_id_marker: page.next_version],
+              acc
+            ),
+          else: {:ok, acc}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp parse_versions(xml) do
+    entry = [
+      key: ~x"./Key/text()"s,
+      version_id: ~x"./VersionId/text()"s,
+      is_latest: ~x"./IsLatest/text()"s,
+      # ISO 8601 UTC, all the same width, so string order is time order.
+      last_modified: ~x"./LastModified/text()"s
+    ]
+
+    page =
+      SweetXml.xpath(xml, ~x"//ListVersionsResult",
+        truncated: ~x"./IsTruncated/text()"s,
+        next_key: ~x"./NextKeyMarker/text()"s,
+        next_version: ~x"./NextVersionIdMarker/text()"s,
+        versions: [~x"./Version"l | entry],
+        markers: [~x"./DeleteMarker"l | entry]
+      )
+
+    %{
+      truncated?: page.truncated == "true",
+      next_key: page.next_key,
+      next_version: page.next_version,
+      versions:
+        Enum.map(page.versions, &version(&1, false)) ++ Enum.map(page.markers, &version(&1, true))
+    }
+  end
+
+  defp version(v, marker?),
+    do: %{
+      key: v.key,
+      version_id: v.version_id,
+      last_modified: v.last_modified,
+      latest?: v.is_latest == "true",
+      delete_marker?: marker?
+    }
+
+  # CopyObject onto the same key, built by hand: `ExAws.S3.put_object_copy/5`
+  # URL-encodes the whole source, so a `?versionId=` cannot be passed. Keys
+  # are `<uuid>/<uuid>/objects/<uuid>`, so segment-encoding them is exact.
+  # One CopyObject handles up to 5 GB, above any attachment size cap.
+  @impl true
+  def restore_version(key, version_id) do
+    source =
+      "/" <>
+        Enum.map_join([bucket() | String.split(key, "/")], "/", fn segment ->
+          URI.encode(segment, &URI.char_unreserved?/1)
+        end) <>
+        "?versionId=" <> URI.encode_www_form(version_id)
+
+    %ExAws.Operation.S3{
+      http_method: :put,
+      bucket: bucket(),
+      path: key,
+      headers: %{"x-amz-copy-source" => source}
+    }
+    |> ExAws.request()
+    |> case do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   @impl true
   def list_user_prefixes do

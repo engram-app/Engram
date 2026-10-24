@@ -201,7 +201,7 @@ config :engram, Oban,
       # hourly jobs sit on :x3/:x8 or :10 (data-migrations runner :33, legal notices :18,
       # attachment blob GC :03,
       # CRDT head re-warm :48),
-      # dailies on :00/:16/:25/:30/:40.
+      # dailies on :00/:16/:25/:30/:40/:45.
       crontab: [
         # Every 5 min. Work is also queued the moment it is due (`kick/0`).
         {"2-59/5 * * * *", Engram.Workers.ReconcileEmbeddings},
@@ -260,6 +260,10 @@ config :engram, Oban,
         {"30 3 * * *", Engram.Workers.InactivityCleanup},
         # Fair-use over 3 consecutive DAYS: a daily question.
         {"0 4 * * *", Engram.Workers.OriginAbuseSweep},
+        # Live attachment rows whose blob sits behind a delete marker: one
+        # job per vault, restores from bucket versions (#2159). Also queued
+        # on the read that finds a blob missing.
+        {"45 4 * * *", Engram.Workers.ReconcileAttachmentBlobs},
         # Cross-store reconciliation (#1576): a note whose points are gone is
         # unsearchable until this finds it. Daily because a pass is
         # O(collection); revisit around 1M points with a resumable cursor.

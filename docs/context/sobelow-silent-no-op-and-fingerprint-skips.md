@@ -72,7 +72,7 @@ filenames from `File.ls!` filtered by an anchored `^\d{14}_.+\.exs$` regex.
 
 ### `SQL.Query` x2
 
-`attachments.ex`, `notes/bulk_rename.ex`.
+`attachments/bulk_update.ex`, `notes/bulk_rename.ex`.
 
 Interpolation builds query **shape** only: `$N` placeholder tuples from
 `Enum.with_index`, column names from the compile-time module attributes
