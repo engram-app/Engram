@@ -66,7 +66,8 @@ defmodule EngramWeb.McpToolCallRateLimitTest do
     |> post("/api/mcp", %{"jsonrpc" => "2.0", "id" => 7, "method" => method, "params" => params})
   end
 
-  defp tool_call(token), do: rpc(token, "tools/call", %{"name" => "list_vaults", "arguments" => %{}})
+  defp tool_call(token),
+    do: rpc(token, "tools/call", %{"name" => "list_vaults", "arguments" => %{}})
 
   # The limiter's windows are epoch-aligned; a burst must not straddle an edge
   # (`EngramWeb.RateLimiter.fresh_window_wait_ms/1`), or the denied call lands

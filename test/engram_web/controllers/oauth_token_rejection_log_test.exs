@@ -401,14 +401,19 @@ defmodule EngramWeb.OAuthTokenRejectionLogTest do
     end
 
     defp refresh_params(client, rt),
-      do: %{"grant_type" => "refresh_token", "refresh_token" => rt, "client_id" => client.client_id}
+      do: %{
+        "grant_type" => "refresh_token",
+        "refresh_token" => rt,
+        "client_id" => client.client_id
+      }
 
     defp age(schema, column, raw) do
       hash = Engram.Crypto.sha256_hex(raw)
       past = DateTime.utc_now() |> DateTime.add(-61) |> DateTime.truncate(:second)
 
       {1, _} =
-        Repo.update_all(from(r in schema, where: field(r, ^column) == ^hash),
+        Repo.update_all(
+          from(r in schema, where: field(r, ^column) == ^hash),
           [set: [consumed_at: past]],
           skip_tenant_check: true
         )
@@ -441,8 +446,7 @@ defmodule EngramWeb.OAuthTokenRejectionLogTest do
 
       json_response(codex_post(refresh_params(client, rt2)), 400)
 
-      assert_received {:family_revoked, _,
-                       %{reason: :superseded_reuse, client_agent: "codex"}}
+      assert_received {:family_revoked, _, %{reason: :superseded_reuse, client_agent: "codex"}}
     end
 
     test "a replayed authorization code past the grace window is counted as code_replay" do
