@@ -227,7 +227,8 @@ defmodule Engram.MCP.HandlersTest do
       assert msg =~ "No attachment at: nope.png"
     end
 
-    test "removes the stored blob", %{user: user, vault: vault} do
+    # #2159: the blob outlives the soft delete; AttachmentBlobGC reaps it.
+    test "keeps the stored blob for the GC", %{user: user, vault: vault} do
       {:ok, att} =
         Attachments.upsert_attachment(user, vault, %{
           "path" => "b.png",
@@ -245,7 +246,7 @@ defmodule Engram.MCP.HandlersTest do
                Handlers.handle("delete_attachment", user, vault, %{"path" => "b.png"})
 
       storage_key = att.storage_key
-      assert_receive {:blob_deleted, ^storage_key}
+      refute_received {:blob_deleted, ^storage_key}
     end
 
     test "reports the sanitized path that was deleted", %{user: user, vault: vault} do

@@ -576,9 +576,10 @@ defmodule Engram.Attachments do
   Soft-deletes an attachment. Idempotent — returns :ok even if already deleted or nonexistent;
   `{:error, reason}` only when the delete could not run (DEK unwrap or tenant transaction failed).
 
-  Ordering: soft-delete the DB row first (reversible), then delete the blob (permanent).
-  If the blob delete fails, the row stays deleted and we log a warning — a zombie blob
-  wastes storage but doesn't cause data loss, unlike the reverse (ghost row pointing to nothing).
+  The blob is NOT deleted here (#2159): the tombstone keeps its `storage_key`
+  and `Engram.Workers.AttachmentBlobGC` reaps it after a grace window, so a
+  delete that rolls back (or is undone) can never leave a live row without
+  bytes.
   """
   @spec delete_attachment(Engram.Accounts.User.t(), map(), String.t(), keyword()) ::
           :ok | {:error, term()}
@@ -625,32 +626,24 @@ defmodule Engram.Attachments do
             if Repo.exists?(live) do
               seq = Engram.Vaults.next_seq!(vault.id)
 
-              {count, rows} =
-                from(a in live, select: a.storage_key)
-                |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
+              {count, _} =
+                Repo.update_all(live, set: [deleted_at: now, updated_at: now, seq: seq])
 
               if count > 0, do: :ok = evict_counts(user.id)
-              {count, List.first(rows)}
+              count
             else
-              {0, nil}
+              0
             end
           end)
           |> unwrap_tenant()
 
-        # Best-effort blob cleanup — row is already soft-deleted so safe to retry.
+        # The blob stays for AttachmentBlobGC (#2159).
         status =
           case result do
-            {:ok, {count, key}} when count > 0 ->
-              if is_binary(key), do: delete_external(key)
+            {:ok, count} when count > 0 ->
               :deleted
 
-            # {count, nil}: count is always 0 here — the select always returns
-            # the {id, storage_key, basename_hmac} 3-tuple (storage_key may
-            # itself be nil for a legacy row, but that still matches the
-            # first branch above and unpacks fine). List.first(rows) is only
-            # nil when rows == [], i.e. no live row matched path_hmac
-            # (absent or already-deleted path).
-            {:ok, {0, _}} ->
+            {:ok, 0} ->
               :absent
 
             {:error, reason} ->
@@ -1080,7 +1073,7 @@ defmodule Engram.Attachments do
   @doc """
   Cascades a folder delete across attachments: soft-deletes every live attachment
   whose path sits under `folder` (incl. nested). Reuses `batch_delete/3` so each
-  delete broadcasts + runs best-effort blob cleanup. Returns `{:ok, count}` (0 =
+  delete broadcasts (its blob is left for `AttachmentBlobGC`). Returns `{:ok, count}` (0 =
   no attachments, idempotent).
 
   Seq note (DRY-by-design, diverges from a literal "one transaction under one
@@ -1164,9 +1157,10 @@ defmodule Engram.Attachments do
   ONE transaction for the whole batch (was one per path): resolve every
   path_hmac up front, allocate a contiguous per-row seq block from the vault
   counter, soft-delete via a single VALUES-join UPDATE, then run the
-  post-commit side effects — one batched blob delete plus the same per-path
-  `note_changed` delete broadcast `do_delete_attachment/4` emits (payload
-  shape identical; batch calls carry no origin device, same as before).
+  post-commit side effects: the same per-path `note_changed` delete broadcast
+  `do_delete_attachment/4` emits (payload shape identical; batch calls carry
+  no origin device, same as before). Blobs stay for
+  `Engram.Workers.AttachmentBlobGC` (#2159).
 
   Capped at 500 paths per batch (`{:error, :batch_too_large}` above that).
   """
@@ -1191,15 +1185,12 @@ defmodule Engram.Attachments do
         # the WHOLE batch. All-or-nothing is deliberate — a change from the
         # old per-path independent transactions — and callers see the raise,
         # never a fake `deleted: 0` success.
-        {:ok, {deleted_ids, deleted_hmacs, storage_keys}} =
+        {:ok, {deleted_ids, deleted_hmacs}} =
           batch_soft_delete_rows(user, vault, Map.values(hmac_by_path))
 
-        # Post-commit side effects — batched blob cleanup (best-effort,
-        # rows are already soft-deleted so a failure only leaks a zombie
-        # blob, exactly like the single-delete path), then one broadcast
-        # per deleted path in input order.
-        delete_external_many(storage_keys)
-
+        # One broadcast per deleted path in input order. No blob delete
+        # (#2159): this can run nested in a folder cascade that still rolls
+        # back, and a deleted blob cannot.
         if deleted_ids != [], do: :ok = evict_counts(user.id)
 
         deleted_set = MapSet.new(deleted_hmacs)
@@ -1227,9 +1218,8 @@ defmodule Engram.Attachments do
   # soft-delete every row via a single VALUES-join UPDATE that stamps each row
   # its OWN seq (the `(seq, id)` keyset feed requires per-row-distinct,
   # monotonic seqs — N rows must never share one). Returns
-  # `{:ok, {deleted_ids, deleted_path_hmacs, storage_keys}}` for the
-  # actually-deleted rows.
-  defp batch_soft_delete_rows(_user, _vault, []), do: {:ok, {[], [], []}}
+  # `{:ok, {deleted_ids, deleted_path_hmacs}}` for the actually-deleted rows.
+  defp batch_soft_delete_rows(_user, _vault, []), do: {:ok, {[], []}}
 
   defp batch_soft_delete_rows(user, vault, hmacs) do
     now = DateTime.utc_now(:second)
@@ -1239,12 +1229,12 @@ defmodule Engram.Attachments do
         from(a in scoped_live(user, vault),
           where: a.path_hmac in ^hmacs,
           order_by: a.id,
-          select: {a.id, a.path_hmac, a.storage_key}
+          select: {a.id, a.path_hmac}
         )
         |> Repo.all()
 
       if rows == [] do
-        {[], [], []}
+        {[], []}
       else
         n = length(rows)
 
@@ -1259,7 +1249,7 @@ defmodule Engram.Attachments do
         id_seqs =
           rows
           |> Enum.with_index(last_seq - n + 1)
-          |> Enum.map(fn {{id, _hmac, _key}, seq} -> {id, seq} end)
+          |> Enum.map(fn {{id, _hmac}, seq} -> {id, seq} end)
 
         # One UPDATE for all rows. `deleted_at IS NULL` re-guard: a row a
         # concurrent transaction deleted between our SELECT and this UPDATE is
@@ -1287,7 +1277,7 @@ defmodule Engram.Attachments do
             SET deleted_at = $1, updated_at = $1, seq = v.seq
             FROM (VALUES #{values_sql}) AS v(id, seq)
             WHERE a.id = v.id AND a.deleted_at IS NULL
-            RETURNING a.id, a.path_hmac, a.storage_key
+            RETURNING a.id, a.path_hmac
             """,
             params
           )
@@ -1295,36 +1285,12 @@ defmodule Engram.Attachments do
         # `a.id` comes back as raw 16-byte postgres uuid bytes via the
         # low-level query (unlike the Ecto-typed `rows` select above);
         # load!/1 converts it back to the normal dashed string form.
-        deleted_ids = for [id, _hmac, _key] <- returned, do: Ecto.UUID.load!(id)
-        deleted_hmacs = returned |> Enum.map(fn [_id, hmac, _key] -> hmac end) |> Enum.uniq()
-        storage_keys = for [_id, _hmac, key] <- returned, is_binary(key), do: key
-        {deleted_ids, deleted_hmacs, storage_keys}
+        deleted_ids = for [id, _hmac] <- returned, do: Ecto.UUID.load!(id)
+        deleted_hmacs = returned |> Enum.map(fn [_id, hmac] -> hmac end) |> Enum.uniq()
+        {deleted_ids, deleted_hmacs}
       end
     end)
     |> unwrap_tenant()
-  end
-
-  # Batched counterpart of delete_external/1 — same best-effort contract.
-  defp delete_external_many([]), do: :ok
-
-  defp delete_external_many(storage_keys) do
-    case Storage.adapter().delete_many(storage_keys) do
-      {:ok, _count} ->
-        :ok
-
-      {:error, reason} ->
-        require Logger
-
-        Logger.warning(
-          "Failed to batch-delete blobs (rows already soft-deleted)",
-          Metadata.with_category(:warning, :sync,
-            key_count: length(storage_keys),
-            reason: Metadata.safe_reason(reason)
-          )
-        )
-
-        :ok
-    end
   end
 
   # Real-time parity: reuse the existing `note_changed` socket event the plugin

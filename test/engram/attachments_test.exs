@@ -1135,11 +1135,13 @@ defmodule Engram.AttachmentsTest do
       assert {:ok, b} = upsert(user, vault, "a.txt", "replacement")
       refute b.id == a.id
       assert content(user, vault, "a.txt") == "replacement"
-      assert blobs(user, vault) == [b.storage_key]
+      # a's blob stays with its tombstone for AttachmentBlobGC (#2159); the
+      # point is that nothing ELSE is left behind.
+      assert blobs(user, vault) == Enum.sort([a.storage_key, b.storage_key])
     end
 
     test "a raise after the PUT still deletes the fresh blob", %{user: user, vault: vault} do
-      {:ok, _} = upsert(user, vault, "a.txt", "original")
+      {:ok, original} = upsert(user, vault, "a.txt", "original")
       puts = :counters.new(1, [])
 
       # First PUT: the row is deleted under it. Second (the re-PUT for a fresh
@@ -1161,7 +1163,9 @@ defmodule Engram.AttachmentsTest do
         upsert(user, vault, "a.txt", "replacement")
       end
 
-      assert blobs(user, vault) == []
+      # Only the deleted original's blob, held by its tombstone until
+      # AttachmentBlobGC reaps it (#2159). Both fresh PUTs are gone.
+      assert blobs(user, vault) == [original.storage_key]
     end
   end
 

@@ -9,6 +9,8 @@ defmodule Engram.Attachments.FormatMatrixTest do
   # async: false: rotation swaps the Qdrant URL env; uploads use InMemory.
   use EngramWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Engram.Attachments
   alias Engram.Attachments.Attachment
   alias Engram.Attachments.Uploads
@@ -112,19 +114,19 @@ defmodule Engram.Attachments.FormatMatrixTest do
       test "delete_attachment", %{user: user, vault: vault, att: att} do
         assert :ok = Attachments.delete_attachment(user, vault, "f/a.png")
         assert download(user, vault, "f/a.png") == nil
-        refute InMemory.exists?(att.storage_key)
+        reaped_by_gc!(att)
       end
 
       test "batch_delete", %{user: user, vault: vault, att: att} do
         assert {:ok, %{deleted: 1}} = Attachments.batch_delete(user, vault, ["f/a.png"])
         assert live_paths(user, vault) == []
-        refute InMemory.exists?(att.storage_key)
+        reaped_by_gc!(att)
       end
 
       test "delete_folder", %{user: user, vault: vault, att: att} do
         assert {:ok, _} = Attachments.delete_folder(user, vault, "f")
         assert live_paths(user, vault) == []
-        refute InMemory.exists?(att.storage_key)
+        reaped_by_gc!(att)
       end
 
       test "list", %{user: user, vault: vault} do
@@ -189,5 +191,20 @@ defmodule Engram.Attachments.FormatMatrixTest do
       assert get_resp_header(conn, "accept-ranges") == ["bytes"]
       assert :counters.get(reads, 1) == 0
     end
+  end
+
+  # #2159: a delete keeps the blob; AttachmentBlobGC reaps it after 24 h.
+  defp reaped_by_gc!(att) do
+    assert InMemory.exists?(att.storage_key)
+
+    {1, _} =
+      Repo.update_all(
+        from(a in Attachment, where: a.id == ^att.id),
+        [set: [deleted_at: DateTime.add(DateTime.utc_now(:second), -2, :day)]],
+        skip_tenant_check: true
+      )
+
+    assert Engram.Workers.AttachmentBlobGC.sweep() == 1
+    refute InMemory.exists?(att.storage_key)
   end
 end
