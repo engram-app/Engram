@@ -807,6 +807,14 @@ defmodule EngramWeb.McpController do
     end
   end
 
+  defp dispatch(_conn, "tools/call", _params) do
+    {:error, -32_602, "Invalid params: name and arguments required"}
+  end
+
+  defp dispatch(_conn, _method, _params) do
+    {:error, -32_601, "Method not found"}
+  end
+
   # Which tool, on the request span (OTel MCP semconv names), so Tempo
   # answers "which tool, which user" with `app.user_id` (`TraceUserAttrs`).
   # Bounded: a name off the roster is `unknown`, never client text.
@@ -815,14 +823,6 @@ defmodule EngramWeb.McpController do
       {"mcp.method.name", "tools/call"},
       {"gen_ai.tool.name", @tool_atoms |> Map.get(name, :unknown) |> Atom.to_string()}
     ])
-  end
-
-  defp dispatch(_conn, "tools/call", _params) do
-    {:error, -32_602, "Invalid params: name and arguments required"}
-  end
-
-  defp dispatch(_conn, _method, _params) do
-    {:error, -32_601, "Method not found"}
   end
 
   # Enforced at call time, not only by hiding the tool from `tools/list`: a
