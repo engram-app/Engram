@@ -39,12 +39,16 @@ defmodule Engram.Notes.CrdtPersistence do
   alias Engram.Notes.{
     CheckpointGate,
     CrdtBridge,
+    CrdtCheckpoint,
     CrdtCheckpointTimer,
     CrdtTransport,
     CrdtUpdateLog,
     Enqueue,
-    Note
+    Note,
+    NoteBody
   }
+
+  alias Engram.Workers.CheckpointNote
 
   require Logger
 
@@ -52,6 +56,19 @@ defmodule Engram.Notes.CrdtPersistence do
   # subsequent `update_v1/4` and `unbind/3` call. We resolve the user ONCE here
   # and cache it in the state so the per-update hot path does NOT do an
   # `Accounts.get_user!` DB round-trip on every keystroke.
+  # What bind reads: ownership, the snapshot (and its AAD inputs) and the
+  # stored content hash `projects?/3` compares. Never the content body.
+  @bind_fields [
+    :id,
+    :user_id,
+    :vault_id,
+    :deleted_at,
+    :dek_version,
+    :content_hash,
+    :crdt_state_ciphertext,
+    :crdt_state_nonce
+  ]
+
   @impl true
   def bind(%{user_id: user_id, vault_id: vault_id, note_id: note_id} = state, _doc_name, doc) do
     # bind/3 runs INSIDE the room (SharedDoc.init). Trapping exits here makes
@@ -80,7 +97,7 @@ defmodule Engram.Notes.CrdtPersistence do
         # This read is also the existence check (it replaced a separate
         # `Notes.note_in_vault?/3` transaction on the room-free path): a note
         # outside this user's vault, or deleted, gets no room. See below.
-        case Repo.get(Note, note_id) do
+        case NoteBody.get(note_id, @bind_fields) do
           %Note{user_id: ^user_id, vault_id: ^vault_id, deleted_at: nil} = note ->
             # Hydrate the snapshot when present. Absent one, the doc stays
             # empty: nothing here re-seeds it from `notes.content` (see the
@@ -167,6 +184,10 @@ defmodule Engram.Notes.CrdtPersistence do
             # checkpoint materializer.
 
             :ok = CrdtBridge.normalize_doc(doc)
+
+            if in_room?(),
+              do: Process.put(:crdt_clean, applied == [] and projects?(doc, note, user))
+
             :present
 
           _absent ->
@@ -361,6 +382,15 @@ defmodule Engram.Notes.CrdtPersistence do
   # decrypt or a row another writer appended: those stay in the tail.
   defp remember_tail_id(id), do: Process.put(:crdt_tail_ids, [id | known_tail_ids()])
 
+  # Whether the bound doc projects the row's stored content (so a checkpoint
+  # of it would change nothing). A key error answers no: checkpoint as before.
+  defp projects?(doc, %Note{content_hash: hash}, user) do
+    case Crypto.dek_content_hash_key(user) do
+      {:ok, key} -> Crypto.hmac_content_hash(key, CrdtBridge.text_of(doc)) == hash
+      _ -> false
+    end
+  end
+
   @doc false
   # Whether this room was bound for `user_id`'s note in `vault_id`. Runs in the
   # room.
@@ -421,29 +451,39 @@ defmodule Engram.Notes.CrdtPersistence do
   @impl true
   def unbind(%{user_id: user_id, vault_id: vault_id, note_id: note_id}, _doc_name, doc) do
     _ =
-      if CheckpointGate.acquire() do
-        try do
-          # Prunes exactly the rows this doc holds (known_tail_ids/0). Rows
-          # it never folded (another writer's, or undecryptable at bind) stay.
-          Engram.Notes.CrdtCheckpoint.checkpoint(user_id, vault_id, note_id, doc,
-            prune_ids: known_tail_ids()
-          )
-        after
-          CheckpointGate.release()
-        end
+      cond do
+        # Nothing to fold: bind found the row clean (no tail, the snapshot
+        # projects the stored content), the room appended nothing and no
+        # update failed to append. The doc IS the stored snapshot, so the
+        # checkpoint would only rewrite it: a whole tenant transaction (6-7
+        # round trips) for a read-only open.
+        Process.get(:crdt_clean, false) and known_tail_ids() == [] and append_failures() == 0 ->
+          CheckpointNote.retime_snoozed(note_id)
 
-        # A job snoozed behind this room would otherwise read as owed for up
-        # to a minute after the room is gone.
-        Engram.Workers.CheckpointNote.retime_snoozed(note_id)
-      else
-        Enqueue.enqueue(
-          Engram.Workers.CheckpointNote.for_room_exit(%{
-            user_id: user_id,
-            vault_id: vault_id,
-            note_id: note_id
-          }),
-          "crdt_checkpoint"
-        )
+        CheckpointGate.acquire() ->
+          try do
+            # Prunes exactly the rows this doc holds (known_tail_ids/0). Rows
+            # it never folded (another writer's, or undecryptable at bind) stay.
+            CrdtCheckpoint.checkpoint(user_id, vault_id, note_id, doc,
+              prune_ids: known_tail_ids()
+            )
+          after
+            CheckpointGate.release()
+          end
+
+          # A job snoozed behind this room would otherwise read as owed for up
+          # to a minute after the room is gone.
+          CheckpointNote.retime_snoozed(note_id)
+
+        true ->
+          Enqueue.enqueue(
+            CheckpointNote.for_room_exit(%{
+              user_id: user_id,
+              vault_id: vault_id,
+              note_id: note_id
+            }),
+            "crdt_checkpoint"
+          )
       end
 
     :ok
