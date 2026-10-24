@@ -1271,6 +1271,13 @@
       },
       "MessageError": {
         "properties": {
+          "code": {
+            "description": "Stable machine-readable reason, where one is defined.",
+            "example": "blob_missing",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "error": {
             "example": "not found",
             "type": "string",
@@ -3871,6 +3878,16 @@
               }
             },
             "description": "`use_raw_download`: the file is too large for the JSON body; use `?raw=1`."
+          },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "The row is live but its stored bytes are missing (`code: \"blob_missing\"`). Permanent until the server restores them; do not retry as a transient error."
           },
           "416": {
             "content": {

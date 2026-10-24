@@ -606,6 +606,10 @@ defmodule EngramWeb.AttachmentsController do
       requested_range_not_satisfiable:
         {"The range starts at or past the end of the file.", "application/json",
          Schemas.MessageError},
+      gone:
+        {"The row is live but its stored bytes are missing (`code: \"blob_missing\"`). " <>
+           "Permanent until the server restores them; do not retry as a transient error.",
+         "application/json", Schemas.MessageError},
       bad_gateway: {"Storage fetch failed", "application/json", Schemas.MessageError},
       internal_server_error: {"Fetch error", "application/json", Schemas.MessageError}
     ]
@@ -634,6 +638,14 @@ defmodule EngramWeb.AttachmentsController do
         fetch_error(conn, reason)
     end
   end
+
+  # A live row with no blob (#2159): permanent, not a storage outage, so not
+  # a 5xx a client retries. A segment read reports the same as `:not_found`.
+  defp fetch_error(conn, {:storage, reason}) when reason in [:blob_missing, :not_found],
+    do:
+      conn
+      |> put_status(410)
+      |> json(%{error: "attachment content missing", code: "blob_missing"})
 
   defp fetch_error(conn, {:storage, _reason}),
     do: conn |> put_status(502) |> json(%{error: "failed to fetch attachment from storage"})
