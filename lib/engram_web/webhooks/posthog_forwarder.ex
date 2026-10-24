@@ -128,7 +128,7 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   end
 
   def forward_paddle_event(
-        %{"event_type" => "subscription.updated", "data" => data},
+        %{"event_type" => "subscription.updated", "data" => data} = event,
         %Subscription{previous: %{tier: from, status: prev_status}} = sub
       ) do
     case change_kind(from, prev_status, sub, data) do
@@ -144,7 +144,9 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
             status: sub.status
           })
 
-        if kind == "cancel_scheduled", do: enqueue_cancel_reason_check(data, sub), else: :ok
+        if kind == "cancel_scheduled",
+          do: enqueue_cancel_reason_check(event, sub),
+          else: :ok
     end
   end
 
@@ -243,24 +245,34 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
 
   # Analytics only, like the rest of this module: a failed insert is logged,
   # never raised into the webhook, whose subscription write already landed.
-  defp enqueue_cancel_reason_check(data, sub) do
+  defp enqueue_cancel_reason_check(%{"data" => data} = event, sub) do
+    scheduled_at =
+      case DateTime.from_iso8601(event["occurred_at"] || "") do
+        {:ok, at, _} -> at
+        _ -> DateTime.utc_now()
+      end
+
     job =
       CancelReasonMarker.new_for(
         sub.user_id,
         started_at(data, sub),
-        get_in(data, ["scheduled_change", "effective_at"])
+        get_in(data, ["scheduled_change", "effective_at"]),
+        scheduled_at
       )
 
     case Oban.insert(job) do
-      {:ok, _} ->
-        :ok
-
-      {:error, reason} ->
-        Logger.error(
-          "cancel_reason_check_enqueue_failed",
-          Metadata.with_category(:error, :billing, reason: Metadata.safe_reason(reason))
-        )
+      {:ok, _} -> :ok
+      {:error, reason} -> log_enqueue_failure(reason)
     end
+  rescue
+    error -> log_enqueue_failure(error)
+  end
+
+  defp log_enqueue_failure(reason) do
+    Logger.error(
+      "cancel_reason_check_enqueue_failed",
+      Metadata.with_category(:error, :billing, reason: Metadata.safe_reason(reason))
+    )
   end
 
   # Paddle mints a new subscription (new started_at) on resubscribe, so a

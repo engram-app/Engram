@@ -759,6 +759,7 @@ defmodule Engram.Observability.EmittersTest do
         PostHogForwarder.forward_paddle_event(
           %{
             "event_type" => "subscription.updated",
+            "occurred_at" => "2026-10-24T08:00:00.123Z",
             "data" => %{
               "started_at" => "2026-01-01T00:00:00Z",
               "scheduled_change" => %{
@@ -775,6 +776,9 @@ defmodule Engram.Observability.EmittersTest do
         args: %{
           "user_id" => user.id,
           "started_at" => "2026-01-01T00:00:00Z",
+          # Paddle's own time for the change, not when we processed it: a
+          # retried delivery after an undo must not look newer than the undo.
+          "scheduled_at" => "2026-10-24T08:00:00.123Z",
           "effective_at" => "2027-01-01T00:00:00Z"
         }
       )

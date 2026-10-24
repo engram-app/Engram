@@ -77,6 +77,23 @@ defmodule Engram.Workers.CancelReasonMarkerTest do
     assert reasons(user) == ["portal_no_reason"]
   end
 
+  # Undo then re-cancel inside the unique window: the re-cancel must get its
+  # own check, not be dropped as a duplicate of the first schedule.
+  test "a re-schedule replaces the pending check with the newest one", %{user: user} do
+    started = DateTime.add(DateTime.utc_now(), -30 * 86_400)
+    first = DateTime.add(DateTime.utc_now(), -300)
+    second = DateTime.utc_now()
+
+    {:ok, _} =
+      Oban.insert(CancelReasonMarker.new_for(user.id, started, "2027-10-01T00:00:00Z", first))
+
+    {:ok, _} =
+      Oban.insert(CancelReasonMarker.new_for(user.id, started, "2027-10-01T00:00:00Z", second))
+
+    assert [job] = all_enqueued(worker: CancelReasonMarker)
+    assert job.args["scheduled_at"] == DateTime.to_iso8601(second)
+  end
+
   test "a deleted user files nothing" do
     assert :ok = perform_job(CancelReasonMarker, args(%{id: Ecto.UUID.generate()}))
   end
