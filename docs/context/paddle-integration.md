@@ -1,6 +1,6 @@
 # Paddle integration
 
-_Last verified: 2026-10-03_
+_Last verified: 2026-10-24_
 
 How Engram talks to Paddle Billing. Owner: billing / monetization. Status: shipped end-to-end (PR #132; Stripe removed entirely). Billing is live, `RequireOnboarding` gates the vault pipeline, and the Paddle.js overlay is wired.
 
@@ -86,6 +86,15 @@ Whatever the overlay sends becomes `data.custom_data` on every subscription webh
 | anything else | `{:ok, :ignored}` + a `paddle_webhook_unhandled_event` debug line | Invoices, payment methods, adjustments, etc. — out of scope for the subscription row. The debug line exists so the next gap is greppable; #1737 was invisible for four months because this branch was silent. |
 
 `tier` is derived from `data.items[0].price.id` matched against the four price-ID config keys (`:paddle_starter_monthly_price_id`, `:paddle_starter_annual_price_id`, `:paddle_pro_monthly_price_id`, `:paddle_pro_annual_price_id`) via `Engram.Billing.tier_from_subscription/1`. Anything unrecognized returns `{:error, :unknown_price_id}`: the upserter leaves the existing tier UNCHANGED, logs `paddle_unknown_price_id` and captures a Sentry message ("Unknown Paddle price_id, tier unchanged"). It does NOT fall back to `"starter"`. Tier comes only from the price ID, never from `custom_data`.
+
+## Cancel reasons and the portal
+
+Cancels go through the in-app dialog (`frontend/src/billing/cancel-panel.tsx`), which requires a reason and files `subscription_cancel_reason`. `Billing.portal_action_url/2` never hands out Paddle's `cancel_subscription` deep link (`action=cancel` gets the overview). Paddle's portal overview still offers its own cancel button, and Paddle's emails link to it, because Paddle requires customers to have a way to cancel; there is no setting to hide it. A cancel made there reaches us only as webhooks with no reason. Paddle sends `subscription.updated` with `scheduled_change.action: "cancel"` the moment an end-of-period cancel is scheduled, and `subscription.canceled` only when it takes effect (or at once, for an immediate cancel). So the check runs in two places, both through `Feedback.record_missing_cancel_reason/4`:
+
+- **When the cancel is scheduled.** `PostHogForwarder` enqueues `Engram.Workers.CancelReasonMarker` on every `cancel_scheduled` update. The job runs 10 minutes later: the dialog sends its reason only after the cancel call returns, and the event log buffers writes, so a check on the webhook itself would race the dialog's own reason. If no reason is on file it files `subscription_cancel_reason` with `reason: "portal_no_reason"` and `source: "webhook"`. It files nothing if the user undid the cancel (`cancel_reversed`) after it was scheduled. Paddle re-sends the update while the cancel is pending. The job is unique over PENDING jobs only and a re-insert replaces its args and run time, so the last delivered schedule wins and an undo then re-cancel gets its own check. That window, not the marker lookup, is what stops near-simultaneous double filing (the event log buffers writes for a few seconds); once a job has run, a later resend's job finds the marker. `scheduled_at` is the event's `occurred_at`, so a retried delivery never looks newer than a later undo.
+- **When the subscription ends** (`subscription.canceled`): the same check, which catches immediate cancels that were never scheduled. It files `"payment_failed"` instead when the sub was `past_due` (dunning). A marker filed at schedule time counts as a reason here, so nothing is filed twice.
+
+A reason counts when it was filed since the subscription's `started_at` and after the user's last in-app reversal (`subscription_changed{kind: cancel_reversed}` with tier and status, filed by `Subscriptions.reverse_cancel/1`), so a reason for a cancel the user took back does not cover a later one, however late Paddle delivers the webhooks. A reversal made in Paddle's portal (if it offers one) is not seen. Nothing is filed when the event log is off (it would make every cancel look reasonless) or when the user row is gone. Known mislabel: a cancel made in the Paddle dashboard, or an account delete in the seconds before the user row is removed, also reads as `portal_no_reason`. Insights' `cancel_reasons` counts the gap. A failure is logged and never fails the webhook: `cancel_reason_marker_failed` on the `subscription.canceled` path (that rescue also covers its `subscription_canceled` event), `cancel_reason_check_enqueue_failed` when the scheduled-time job cannot be enqueued.
 
 ## Trial
 

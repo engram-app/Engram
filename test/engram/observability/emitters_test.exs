@@ -17,12 +17,15 @@ defmodule Engram.Observability.EmittersTest do
   """
 
   use EngramWeb.ConnCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   import Ecto.Query, only: [from: 2]
   import Mox
 
+  alias Engram.Analytics.Event
   alias Engram.Notes
   alias Engram.Observability.PostHog
+  alias Engram.Repo
   alias Engram.Search
   alias EngramWeb.Webhooks.PostHogForwarder
 
@@ -66,6 +69,13 @@ defmodule Engram.Observability.EmittersTest do
       send(parent, {:posthog_body, Jason.decode!(body)})
       Plug.Conn.resp(conn, 200, "1")
     end)
+  end
+
+  # The cancel-reason marker reads our event log, which is off in test.
+  defp enable_event_log do
+    prior = Application.get_env(:engram, :analytics_event_log)
+    Application.put_env(:engram, :analytics_event_log, true)
+    on_exit(fn -> Application.put_env(:engram, :analytics_event_log, prior) end)
   end
 
   defp user_with_clerk_id(opts \\ []) do
@@ -666,7 +676,7 @@ defmodule Engram.Observability.EmittersTest do
         | previous: %{tier: "pro", status: "active"}
       }
 
-      expect_capture(bypass)
+      expect_captures(bypass)
 
       :ok =
         PostHogForwarder.forward_paddle_event(
@@ -674,10 +684,125 @@ defmodule Engram.Observability.EmittersTest do
           sub
         )
 
-      assert_receive {:posthog_body, body}, 1_500
-      assert body["event"] == "subscription_canceled"
+      assert_receive {:posthog_body, %{"event" => "subscription_canceled"} = body}, 1_500
       assert body["properties"]["from_tier"] == "pro"
       assert body["properties"]["status"] == "canceled"
+    end
+
+    # The in-app dialog is the only place a reason is asked; a cancel made in
+    # Paddle's hosted portal arrives with none. File a marker so the gap shows.
+    test "subscription.canceled with no reason on file files portal_no_reason",
+         %{bypass: bypass} do
+      enable_event_log()
+
+      sub = %{
+        insert(:subscription, user: user_with_clerk_id(), tier: "starter", status: "canceled")
+        | previous: %{tier: "starter", status: "active"}
+      }
+
+      expect_captures(bypass)
+
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{"event_type" => "subscription.canceled", "data" => %{}},
+          sub
+        )
+
+      assert_receive {:posthog_body, %{"event" => "subscription_cancel_reason"} = body}, 1_500
+      assert body["properties"]["reason"] == "portal_no_reason"
+      assert body["properties"]["source"] == "webhook"
+    end
+
+    test "subscription.canceled files no marker when the dialog's reason is on file",
+         %{bypass: bypass} do
+      enable_event_log()
+      user = user_with_clerk_id()
+
+      sub = %{
+        insert(:subscription, user: user, tier: "starter", status: "canceled")
+        | previous: %{tier: "starter", status: "active"}
+      }
+
+      Repo.insert!(%Event{
+        user_id: user.id,
+        event: "subscription_cancel_reason",
+        props: %{"reason" => "not_using"}
+      })
+
+      expect_captures(bypass)
+      started_at = DateTime.utc_now() |> DateTime.add(-86_400) |> DateTime.to_iso8601()
+
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{"event_type" => "subscription.canceled", "data" => %{"started_at" => started_at}},
+          sub
+        )
+
+      assert_receive {:posthog_body, %{"event" => "subscription_canceled"}}, 1_500
+      refute_receive {:posthog_body, %{"event" => "subscription_cancel_reason"}}, 300
+    end
+
+    # Paddle sends subscription.updated with a cancel scheduled_change the
+    # moment a cancel is scheduled, so the marker need not wait for period end.
+    # The check runs later: the dialog files its reason after the cancel call.
+    test "a scheduled cancel enqueues the cancel-reason check", %{bypass: bypass} do
+      user = user_with_clerk_id()
+
+      sub = %{
+        insert(:subscription, user: user, tier: "starter", status: "active")
+        | previous: %{tier: "starter", status: "active"}
+      }
+
+      expect_captures(bypass)
+
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{
+            "event_type" => "subscription.updated",
+            "occurred_at" => "2026-10-24T08:00:00.123Z",
+            "data" => %{
+              "started_at" => "2026-01-01T00:00:00Z",
+              "scheduled_change" => %{
+                "action" => "cancel",
+                "effective_at" => "2027-01-01T00:00:00Z"
+              }
+            }
+          },
+          sub
+        )
+
+      assert_enqueued(
+        worker: Engram.Workers.CancelReasonMarker,
+        args: %{
+          "user_id" => user.id,
+          "started_at" => "2026-01-01T00:00:00Z",
+          # Paddle's own time for the change, not when we processed it: a
+          # retried delivery after an undo must not look newer than the undo.
+          "scheduled_at" => "2026-10-24T08:00:00.123Z",
+          "effective_at" => "2027-01-01T00:00:00Z"
+        }
+      )
+    end
+
+    test "subscription.canceled out of past_due files payment_failed, not a portal gap",
+         %{bypass: bypass} do
+      enable_event_log()
+
+      sub = %{
+        insert(:subscription, user: user_with_clerk_id(), tier: "starter", status: "canceled")
+        | previous: %{tier: "starter", status: "past_due"}
+      }
+
+      expect_captures(bypass)
+
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{"event_type" => "subscription.canceled", "data" => %{}},
+          sub
+        )
+
+      assert_receive {:posthog_body, %{"event" => "subscription_cancel_reason"} = body}, 1_500
+      assert body["properties"]["reason"] == "payment_failed"
     end
 
     test "subscription.past_due is subscription_past_due", %{bypass: bypass} do
@@ -771,7 +896,7 @@ defmodule Engram.Observability.EmittersTest do
       sub = insert(:subscription, user: user_with_clerk_id(), tier: "pro", status: "past_due")
 
       set_policy_effective = fn date ->
-        Engram.Repo.update_all(
+        Repo.update_all(
           from(v in Engram.Legal.TermsVersion,
             where: v.document == "privacy_policy" and v.version == "2026-10-12"
           ),

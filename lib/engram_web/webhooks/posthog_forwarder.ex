@@ -25,9 +25,15 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   """
 
   alias Engram.Accounts
+  alias Engram.Accounts.User
   alias Engram.Analytics.PersonProperties
   alias Engram.Billing.Subscription
+  alias Engram.Feedback
+  alias Engram.Logger.Metadata
   alias Engram.Webhooks.Idempotency
+  alias Engram.Workers.CancelReasonMarker
+
+  require Logger
 
   @doc """
   Forward a verified Clerk webhook event. Returns `:ok` for every input
@@ -81,8 +87,14 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
     * `subscription.updated`: `subscription_changed{kind}` when the tier moved
       (`upgrade`/`downgrade`), a cancel was scheduled (`cancel_scheduled`), or
       a lapsed status returned to active (`reactivated`). A renewal or any
-      other state-sync update sends nothing.
-    * `subscription.canceled`, `subscription.past_due`: same names
+      other state-sync update sends nothing. `cancel_scheduled` also enqueues
+      `Engram.Workers.CancelReasonMarker`, which files `portal_no_reason`
+      if the cancel came with no reason.
+    * `subscription.canceled`, `subscription.past_due`: same names. A cancel
+      with no reason on file (since the subscription started and the last
+      in-app reversal) also files
+      `subscription_cancel_reason` as `portal_no_reason` (or `payment_failed`
+      out of `past_due`), so cancels made in Paddle's portal stay countable
     * `transaction.completed`: `payment_completed` with bucketed amount
     * `adjustment.*` approved refund or chargeback: `refund_issued`, once
       per adjustment id
@@ -116,7 +128,7 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   end
 
   def forward_paddle_event(
-        %{"event_type" => "subscription.updated", "data" => data},
+        %{"event_type" => "subscription.updated", "data" => data} = event,
         %Subscription{previous: %{tier: from, status: prev_status}} = sub
       ) do
     case change_kind(from, prev_status, sub, data) do
@@ -124,18 +136,47 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
         :ok
 
       kind ->
-        track_sub(sub, "subscription_changed", %{
-          kind: kind,
-          from_tier: from,
-          to_tier: sub.tier,
-          status: sub.status
-        })
+        :ok =
+          track_sub(sub, "subscription_changed", %{
+            kind: kind,
+            from_tier: from,
+            to_tier: sub.tier,
+            status: sub.status
+          })
+
+        if kind == "cancel_scheduled",
+          do: enqueue_cancel_reason_check(event, sub),
+          else: :ok
     end
   end
 
-  def forward_paddle_event(%{"event_type" => "subscription.canceled"}, %Subscription{} = sub) do
+  def forward_paddle_event(
+        %{"event_type" => "subscription.canceled", "data" => data},
+        %Subscription{} = sub
+      ) do
     from = if sub.previous, do: sub.previous.tier, else: sub.tier
-    track_sub(sub, "subscription_canceled", %{from_tier: from, status: sub.status})
+    :ok = track_sub(sub, "subscription_canceled", %{from_tier: from, status: sub.status})
+
+    # A dunning failure is involuntary churn, not a portal cancel.
+    reason =
+      if sub.previous && sub.previous.status == "past_due",
+        do: "payment_failed",
+        else: "portal_no_reason"
+
+    case Accounts.get_user(sub.user_id) do
+      %User{} = user -> Feedback.record_missing_cancel_reason(user, started_at(data, sub), reason)
+      nil -> :ok
+    end
+  rescue
+    # Analytics only: the cancel is already saved, so a failed read here must
+    # not report the webhook as failed.
+    error ->
+      Logger.error(
+        "cancel_reason_marker_failed",
+        Metadata.with_category(:error, :billing, reason: Metadata.safe_reason(error))
+      )
+
+      :ok
   end
 
   def forward_paddle_event(%{"event_type" => "subscription.past_due"}, %Subscription{} = sub) do
@@ -201,6 +242,47 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   end
 
   defp rank(tier), do: Map.get(@tier_rank, tier, 0)
+
+  # Analytics only, like the rest of this module: a failed insert is logged,
+  # never raised into the webhook, whose subscription write already landed.
+  defp enqueue_cancel_reason_check(%{"data" => data} = event, sub) do
+    scheduled_at =
+      case DateTime.from_iso8601(event["occurred_at"] || "") do
+        {:ok, at, _} -> at
+        _ -> DateTime.utc_now()
+      end
+
+    job =
+      CancelReasonMarker.new_for(
+        sub.user_id,
+        started_at(data, sub),
+        get_in(data, ["scheduled_change", "effective_at"]),
+        scheduled_at
+      )
+
+    case Oban.insert(job) do
+      {:ok, _} -> :ok
+      {:error, reason} -> log_enqueue_failure(reason)
+    end
+  rescue
+    error -> log_enqueue_failure(error)
+  end
+
+  defp log_enqueue_failure(reason) do
+    Logger.error(
+      "cancel_reason_check_enqueue_failed",
+      Metadata.with_category(:error, :billing, reason: Metadata.safe_reason(reason))
+    )
+  end
+
+  # Paddle mints a new subscription (new started_at) on resubscribe, so a
+  # reason given for an earlier subscription does not count for this one.
+  defp started_at(data, sub) do
+    case DateTime.from_iso8601(data["started_at"] || "") do
+      {:ok, at, _} -> at
+      _ -> sub.created_at
+    end
+  end
 
   defp cycle_props(data) do
     %{

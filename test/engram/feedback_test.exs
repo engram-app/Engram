@@ -2,7 +2,11 @@ defmodule Engram.FeedbackTest do
   use Engram.DataCase, async: false
 
   alias Engram.Accounts.User
+  alias Engram.Analytics.Event
+  alias Engram.Analytics.EventLog
+  alias Engram.Billing.Subscriptions
   alias Engram.Feedback
+  alias Engram.Paddle.ClientMock
 
   setup do
     prior_key = Application.get_env(:engram, :posthog_key)
@@ -155,6 +159,191 @@ defmodule Engram.FeedbackTest do
     test "requires a known reason", %{user: user} do
       assert {:error, :invalid_reason} = Feedback.submit(user, "cancel", %{})
       assert {:error, :invalid_reason} = Feedback.submit(user, "cancel", %{"reason" => "meh"})
+    end
+  end
+
+  describe "record_missing_cancel_reason/3" do
+    setup do
+      prior = Application.get_env(:engram, :analytics_event_log)
+      Application.put_env(:engram, :analytics_event_log, true)
+      on_exit(fn -> Application.put_env(:engram, :analytics_event_log, prior) end)
+      :ok
+    end
+
+    defp reasons(user) do
+      :ok = EventLog.flush()
+
+      Repo.all(
+        from(e in Event,
+          where: e.user_id == ^user.id and e.event == "subscription_cancel_reason",
+          select: e.props["reason"]
+        )
+      )
+    end
+
+    test "files the marker when no reason was given since the subscription started",
+         %{user: user} do
+      since = DateTime.add(DateTime.utc_now(), -3600)
+      assert :ok = Feedback.record_missing_cancel_reason(user, since, "portal_no_reason")
+      assert reasons(user) == ["portal_no_reason"]
+    end
+
+    test "files nothing when the in-app dialog already captured a reason", %{user: user} do
+      since = DateTime.add(DateTime.utc_now(), -3600)
+      :ok = Feedback.submit(user, "cancel", %{"reason" => "too_expensive"})
+      :ok = EventLog.flush()
+
+      assert :ok = Feedback.record_missing_cancel_reason(user, since, "portal_no_reason")
+      assert reasons(user) == ["too_expensive"]
+    end
+
+    defp log_event(user, event, props, seconds_ago) do
+      Repo.insert!(%Event{
+        user_id: user.id,
+        event: event,
+        props: props,
+        inserted_at: DateTime.add(DateTime.utc_now(), -seconds_ago)
+      })
+    end
+
+    test "a reason given for an earlier, reversed cancel does not cover a later one",
+         %{user: user} do
+      started = DateTime.add(DateTime.utc_now(), -30 * 86_400)
+      log_event(user, "subscription_changed", %{"kind" => "cancel_scheduled"}, 20 * 86_400)
+      log_event(user, "subscription_cancel_reason", %{"reason" => "too_expensive"}, 20 * 86_400)
+      # Reversed, then cancelled again in the portal: no reason this time.
+      log_event(user, "subscription_changed", %{"kind" => "cancel_reversed"}, 10 * 86_400)
+      log_event(user, "subscription_changed", %{"kind" => "cancel_scheduled"}, 2 * 86_400)
+
+      assert :ok = Feedback.record_missing_cancel_reason(user, started, "portal_no_reason")
+      assert Enum.sort(reasons(user)) == ["portal_no_reason", "too_expensive"]
+    end
+
+    test "a dialog reason counts however late the cancel webhook arrives", %{user: user} do
+      started = DateTime.add(DateTime.utc_now(), -30 * 86_400)
+      log_event(user, "subscription_cancel_reason", %{"reason" => "not_using"}, 2 * 86_400)
+      # Paddle retried the webhook for a day.
+      log_event(user, "subscription_changed", %{"kind" => "cancel_scheduled"}, 86_400)
+
+      assert :ok = Feedback.record_missing_cancel_reason(user, started, "portal_no_reason")
+      assert reasons(user) == ["not_using"]
+    end
+
+    test "a reason given after the latest of several reversals counts", %{user: user} do
+      started = DateTime.add(DateTime.utc_now(), -30 * 86_400)
+      log_event(user, "subscription_changed", %{"kind" => "cancel_reversed"}, 20 * 86_400)
+      log_event(user, "subscription_changed", %{"kind" => "cancel_reversed"}, 5 * 86_400)
+      log_event(user, "subscription_cancel_reason", %{"reason" => "not_using"}, 86_400)
+
+      assert :ok = Feedback.record_missing_cancel_reason(user, started, "portal_no_reason")
+      assert reasons(user) == ["not_using"]
+    end
+
+    test "a reason between two reversals does not count", %{user: user} do
+      started = DateTime.add(DateTime.utc_now(), -30 * 86_400)
+      log_event(user, "subscription_changed", %{"kind" => "cancel_reversed"}, 20 * 86_400)
+      log_event(user, "subscription_cancel_reason", %{"reason" => "not_using"}, 10 * 86_400)
+      log_event(user, "subscription_changed", %{"kind" => "cancel_reversed"}, 5 * 86_400)
+
+      assert :ok = Feedback.record_missing_cancel_reason(user, started, "portal_no_reason")
+      assert Enum.sort(reasons(user)) == ["not_using", "portal_no_reason"]
+    end
+
+    test "an in-app reverse ends the cancel episode", %{user: user} do
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_reverse_episode",
+        tier: "pro",
+        status: "active"
+      )
+
+      Mox.expect(ClientMock, :update_subscription, fn _, _, _ ->
+        {:ok, %{"scheduled_change" => nil}}
+      end)
+
+      assert {:ok, _} = Subscriptions.reverse_cancel(user)
+      :ok = EventLog.flush()
+
+      assert [
+               %{
+                 "kind" => "cancel_reversed",
+                 "from_tier" => "pro",
+                 "to_tier" => "pro",
+                 "status" => "active"
+               }
+             ] =
+               Repo.all(
+                 from(e in Event,
+                   where: e.user_id == ^user.id and e.event == "subscription_changed",
+                   select: e.props
+                 )
+               )
+    end
+
+    test "a dunning churn with a reason on file is not counted twice", %{user: user} do
+      started = DateTime.add(DateTime.utc_now(), -30 * 86_400)
+      log_event(user, "subscription_cancel_reason", %{"reason" => "too_expensive"}, 86_400)
+
+      assert :ok = Feedback.record_missing_cancel_reason(user, started, "payment_failed")
+      assert reasons(user) == ["too_expensive"]
+    end
+
+    test "a reverse whose subscription row is gone records nothing and does not crash",
+         %{user: user} do
+      sub = insert(:subscription, user: user, paddle_subscription_id: "sub_reverse_gone")
+
+      Mox.expect(ClientMock, :update_subscription, fn _, _, _ ->
+        Repo.delete!(sub, skip_tenant_check: true)
+        # The trigger that evicts this cache fires on commit, which the sandbox never does.
+        :ok = Engram.Cache.evict(:subscription, user.id)
+        {:ok, %{"scheduled_change" => nil}}
+      end)
+
+      assert {:ok, _} = Subscriptions.reverse_cancel(user)
+      :ok = EventLog.flush()
+
+      assert [] ==
+               Repo.all(
+                 from(e in Event,
+                   where: e.user_id == ^user.id and e.event == "subscription_changed"
+                 )
+               )
+    end
+
+    test "a failed reverse does not end the cancel episode", %{user: user} do
+      insert(:subscription, user: user, paddle_subscription_id: "sub_reverse_fail")
+
+      Mox.expect(ClientMock, :update_subscription, fn _, _, _ ->
+        {:error, :http_500}
+      end)
+
+      assert {:error, _} = Subscriptions.reverse_cancel(user)
+      :ok = EventLog.flush()
+
+      assert [] ==
+               Repo.all(
+                 from(e in Event,
+                   where: e.user_id == ^user.id and e.event == "subscription_changed"
+                 )
+               )
+    end
+
+    test "files nothing when the event log is off, since every cancel would look reasonless",
+         %{user: user} do
+      Application.put_env(:engram, :analytics_event_log, false)
+      since = DateTime.add(DateTime.utc_now(), -3600)
+
+      assert :ok = Feedback.record_missing_cancel_reason(user, since, "portal_no_reason")
+      refute_receive {:posthog, %{"event" => "subscription_cancel_reason"}}, 300
+    end
+
+    test "a reason from before this subscription started does not count", %{user: user} do
+      :ok = Feedback.submit(user, "cancel", %{"reason" => "too_expensive"})
+      :ok = EventLog.flush()
+      since = DateTime.add(DateTime.utc_now(), 3600)
+
+      assert :ok = Feedback.record_missing_cancel_reason(user, since, "portal_no_reason")
+      assert Enum.sort(reasons(user)) == ["portal_no_reason", "too_expensive"]
     end
   end
 
