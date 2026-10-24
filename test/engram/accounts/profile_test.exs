@@ -188,7 +188,7 @@ defmodule Engram.Accounts.ProfileTest do
       assert is_nil(reloaded.deleted_at)
     end
 
-    test "half-state recovery: already soft-deleted user can retry without password" do
+    test "half-state recovery: already soft-deleted user can retry with the password" do
       {:ok, _admin} =
         Accounts.create_user_with_password("keep-admin-hsr@example.com", "password123")
 
@@ -202,8 +202,13 @@ defmodule Engram.Accounts.ProfileTest do
 
       reloaded = Engram.Repo.get!(Engram.Accounts.User, user.id, skip_tenant_check: true)
 
-      # Password is ignored on the recovery branch.
-      assert :ok = Accounts.delete_self(reloaded, "doesnt-matter")
+      # Still password-gated: AccountLifecycle lets DELETE /api/me through for
+      # a deleted account so this branch is reachable, and a token alone must
+      # not be enough to purge it.
+      assert {:error, :invalid_password} = Accounts.delete_self(reloaded, "doesnt-matter")
+      assert Engram.Repo.get(Engram.Accounts.User, user.id, skip_tenant_check: true)
+
+      assert :ok = Accounts.delete_self(reloaded, "password123")
       refute Engram.Repo.get(Engram.Accounts.User, user.id, skip_tenant_check: true)
     end
 

@@ -27,6 +27,24 @@ defmodule EngramWeb.Plugs.AccountLifecycleTest do
       assert json_response(conn, 410)["error"] == "account_deleted"
     end
 
+    # #2182: a user-requested delete got the inactivity-sweep copy. The row
+    # does not record why it was deleted, so the copy must hold for every path.
+    test "the 410 message does not claim an inactivity auto-delete", %{conn: conn} do
+      user = %User{id: 1, deleted_at: DateTime.utc_now()}
+      message = json_response(run(conn, user, "GET", "/api/me"), 410)["message"]
+
+      assert message =~ "deleted"
+      refute message =~ "inactivity"
+    end
+
+    # A delete that stamped `deleted_at` and then failed its hard delete must
+    # be finishable by its owner: `Accounts.delete_self/2` has a clause for
+    # exactly that, unreachable while this gate 410'd the route.
+    test "DELETE /api/me passes, so a half-done delete can finish", %{conn: conn} do
+      user = %User{id: 1, deleted_at: DateTime.utc_now()}
+      refute run(conn, user, "DELETE", "/api/me").halted
+    end
+
     test "deleted takes precedence over suspended", %{conn: conn} do
       user = %User{id: 1, deleted_at: DateTime.utc_now(), suspended_at: DateTime.utc_now()}
       assert json_response(run(conn, user), 410)["error"] == "account_deleted"

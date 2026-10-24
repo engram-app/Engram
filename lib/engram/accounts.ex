@@ -410,18 +410,19 @@ defmodule Engram.Accounts do
   initiated delete is now immediate-cascade. Audit/reason atom flows
   through to `[:engram, :account, :deleted]` telemetry as `:user`.
   """
-  def delete_self(%User{deleted_at: %DateTime{}} = user, _password) do
-    # Half-state recovery. The user already passed the password gate +
-    # admin guard on attempt 1; soft_delete stamped `deleted_at` but
-    # something between then and `hard_delete` failed (network glitch,
-    # PG txn rollback, process crash). `verify_password` now rejects
-    # them with `{:error, :deleted}`, so without this clause they'd be
-    # permanently stuck. Both `soft_delete` and `hard_delete` are
-    # idempotent — re-run the cascade and let the next failure surface.
-    case Lifecycle.hard_delete(user, :user) do
-      :ok -> :ok
-      {:error, reason} -> {:error, reason}
-    end
+  def delete_self(%User{deleted_at: %DateTime{}, password_hash: hash} = user, password)
+      when is_binary(password) do
+    # Half-state recovery. Attempt 1 stamped `deleted_at` but something
+    # between then and `hard_delete` failed (network glitch, PG txn
+    # rollback, process crash). `verify_password` now rejects them with
+    # `{:error, :deleted}`, so without this clause they'd wait for the
+    # inactivity sweep's hard-delete pass. The password is still checked
+    # here: `AccountLifecycle` lets only this route through for a deleted
+    # account, and a token alone must not be enough to purge it.
+    # `hard_delete` is idempotent; re-run it and let the next failure surface.
+    if is_binary(hash) and Bcrypt.verify_pass(password, hash),
+      do: Lifecycle.hard_delete(user, :user),
+      else: {:error, :invalid_password}
   end
 
   def delete_self(%User{} = user, password) when is_binary(password) do

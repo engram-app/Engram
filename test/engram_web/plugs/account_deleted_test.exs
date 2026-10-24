@@ -13,7 +13,9 @@ defmodule EngramWeb.Plugs.AccountDeletedTest do
         |> AccountDeleted.call([])
 
       assert conn.halted
-      assert json_response(conn, 410)["error"] == "account_deleted"
+      body = json_response(conn, 410)
+      assert body["error"] == "account_deleted"
+      refute body["message"] =~ "inactivity"
     end
 
     test "passes through for active users", %{conn: conn} do

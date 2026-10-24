@@ -199,6 +199,22 @@ defmodule EngramWeb.UsersControllerTest do
       assert %{"error" => "password_required"} = json_response(conn, 400)
     end
 
+    # The half-state: `deleted_at` stamped, hard delete failed. Its owner can
+    # finish it, but only with the password, like the first attempt.
+    test "a half-deleted account finishes its delete with the password", %{user: user} do
+      Engram.Repo.update!(Ecto.Changeset.change(user, deleted_at: DateTime.utc_now()),
+        skip_tenant_check: true
+      )
+
+      conn = auth_conn(user) |> delete("/api/me", %{password: "wrong"})
+      assert %{"error" => "invalid_password"} = json_response(conn, 403)
+      assert Engram.Repo.get(Engram.Accounts.User, user.id, skip_tenant_check: true)
+
+      conn = auth_conn(user) |> delete("/api/me", %{password: "password123"})
+      assert %{"ok" => true} = json_response(conn, 200)
+      refute Engram.Repo.get(Engram.Accounts.User, user.id, skip_tenant_check: true)
+    end
+
     # #2182: a stalled CI Qdrant held this request 10 s (two in-request clears,
     # each on a 5 s budget), the client retried the DELETE, and the replay got
     # 410. The request must not touch Qdrant at all; the purge runs as a job
