@@ -180,11 +180,58 @@ defmodule EngramWeb.McpController do
     emit_client_connected(conn, params)
     header = List.first(get_req_header(conn, "mcp-protocol-version"))
 
-    if modern_request?(header, params) do
-      modern_handle(conn, header, params)
-    else
-      legacy_gate(conn, header, params)
+    case tool_call_budget(conn, params) do
+      {:deny, limit, retry_after_ms} -> tool_call_rate_exceeded(conn, limit, retry_after_ms)
+      :ok -> if modern_request?(header, params),
+          do: modern_handle(conn, header, params),
+          else: legacy_gate(conn, header, params)
     end
+  end
+
+  # Per-user `tools/call` budget (`mcp_tool_calls_per_min`) for requests
+  # without an API key: API-key traffic is already under `api_rps_cap`
+  # (`RequireApiRpsBudget`), and OAuth MCP had only the 600/min pre-auth
+  # bucket. Counted before era validation, so a malformed call still spends.
+  # `Billing.cap/2` is nil when limits are not enforced (self-host): no
+  # limiter call at all.
+  @tool_call_window_ms 60_000
+
+  defp tool_call_budget(
+         %{assigns: %{current_user: %{} = user} = assigns},
+         %{"method" => "tools/call"}
+       )
+       when not is_map_key(assigns, :current_api_key) do
+    case Engram.Billing.cap(user, :mcp_tool_calls_per_min) do
+      limit when is_integer(limit) and limit >= 0 ->
+        "mcp_tool_call:#{user.id}"
+        |> EngramWeb.RateLimiter.hit(@tool_call_window_ms, limit, :mcp_tool_call)
+        |> case do
+          {:allow, _count} -> :ok
+          {:deny, retry_after_ms} -> {:deny, limit, retry_after_ms}
+        end
+
+      _unlimited ->
+        :ok
+    end
+  end
+
+  defp tool_call_budget(_conn, _params), do: :ok
+
+  # The REST refusal shape; `McpErrorEnvelope` turns it into a JSON-RPC error
+  # (status kept, body in `data`), like every other MCP pipeline refusal.
+  defp tool_call_rate_exceeded(conn, limit, retry_after_ms) do
+    retry_after_s = max(div(retry_after_ms + 999, 1_000), 1)
+
+    conn
+    |> put_resp_header("retry-after", Integer.to_string(retry_after_s))
+    |> EngramWeb.Plugs.Halt.json(429, %{
+      error: "mcp_tool_rate_exceeded",
+      message:
+        "Rate limit: #{limit} tool calls per minute. Retry after #{retry_after_s} seconds.",
+      limit: limit,
+      period_ms: @tool_call_window_ms,
+      retry_after_ms: retry_after_ms
+    })
   end
 
   # A request is modern when it carries the era's own `_meta` keys, or when the

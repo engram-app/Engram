@@ -32,6 +32,7 @@ defmodule EngramWeb.RateLimiter do
           | :cimd_fetch
           | :ai_search
           | :mcp_complete
+          | :mcp_tool_call
           | :analytics_activity
           | :feedback
           | :client_logs
