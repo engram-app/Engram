@@ -267,16 +267,27 @@ defmodule Engram.Vector.QdrantLayout do
   sets (bare `"keyword"` / `"integer"` schemas, `note_id` while v5 is off).
   On 1.19.2 every index is on disk, `u` is the tenant field, and only the two
   tenant fields build HNSW edges.
+
+  `legacy?` is `:legacy_filter_fields`. With the v5 format on and it off,
+  every filter is v5-only (`Qdrant.match_filter/2`), so no legacy index is
+  listed and a new (v3) collection never builds one. An existing legacy index
+  is left alone: boot only creates missing indexes, it never deletes one.
+  With the v5 format off every filter is legacy, so `legacy?` is moot.
   """
-  @spec payload_indexes(Version.t() | nil, boolean()) :: [{String.t(), String.t() | map()}]
-  def payload_indexes(version, v5?) do
+  @spec payload_indexes(Version.t() | nil, boolean(), boolean()) ::
+          [{String.t(), String.t() | map()}]
+  def payload_indexes(version, v5?, legacy? \\ true) do
     tenant? = tenant_layout?(version)
     legacy_only = if v5? or tenant?, do: [], else: @legacy_only
 
-    indexes =
-      Enum.map(@legacy_keyword ++ legacy_only, &{&1, "keyword"}) ++
-        Enum.map(@legacy_integer, &{&1, "integer"}) ++
-        if(v5?, do: PayloadKeys.index_fields(), else: [])
+    legacy =
+      if v5? and not legacy?,
+        do: [],
+        else:
+          Enum.map(@legacy_keyword ++ legacy_only, &{&1, "keyword"}) ++
+            Enum.map(@legacy_integer, &{&1, "integer"})
+
+    indexes = legacy ++ if(v5?, do: PayloadKeys.index_fields(), else: [])
 
     if tenant?, do: Enum.map(indexes, &tenant_schema/1), else: indexes
   end

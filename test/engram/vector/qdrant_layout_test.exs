@@ -491,6 +491,27 @@ defmodule Engram.Vector.QdrantLayoutTest do
       end
     end
 
+    # A v3 (legacy-off) collection must not carry the legacy indexes: no
+    # filter reads them there, and each costs disk on every point.
+    test "legacy filters off with v5 on: no legacy index; otherwise all of them" do
+      legacy =
+        ~w(user_id vault_id path_hmac type_hmac folder_hmac tags_hmac fm_timestamp fm_created note_id)
+
+      for v <- [@v1182, @v1192, nil] do
+        off = for {f, _} <- QdrantLayout.payload_indexes(v, true, false), do: f
+        assert off != []
+        assert off -- legacy == off, "legacy index left in #{inspect(off)}"
+        assert Enum.all?(Engram.Vector.PayloadKeys.index_fields(), fn {f, _} -> f in off end)
+
+        assert QdrantLayout.payload_indexes(v, true, true) ==
+                 QdrantLayout.payload_indexes(v, true)
+
+        # With the v5 format off every filter is legacy, so the flag is moot.
+        assert QdrantLayout.payload_indexes(v, false, false) ==
+                 QdrantLayout.payload_indexes(v, false)
+      end
+    end
+
     test "1.19.2: one tenant field, every index on disk, no other graph, no note_id" do
       for v5? <- [false, true] do
         indexes = Map.new(QdrantLayout.payload_indexes(@v1192, v5?))

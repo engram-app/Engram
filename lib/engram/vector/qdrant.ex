@@ -445,7 +445,7 @@ defmodule Engram.Vector.Qdrant do
   defp ensure_payload_indexes(col, indexed, version) do
     missing =
       version
-      |> QdrantLayout.payload_indexes(v5_payload_format?())
+      |> QdrantLayout.payload_indexes(v5_payload_format?(), legacy_filter_fields?())
       |> Enum.reject(fn {field, _} -> MapSet.member?(indexed, field) end)
 
     last = length(missing) - 1
