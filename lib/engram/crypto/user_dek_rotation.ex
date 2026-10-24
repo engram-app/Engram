@@ -2219,11 +2219,8 @@ defmodule Engram.Crypto.UserDekRotation do
           new_etf = :erlang.term_to_binary(tags)
           {new_ct, new_nonce} = Envelope.encrypt(new_etf, new_dek, new_aad)
 
-          tags_hmac =
-            case tags do
-              ts when is_list(ts) -> Enum.map(ts, &Crypto.hmac_field(new_filter_key, &1))
-              _ -> []
-            end
+          # `TagsTerm.decode!/1` returns the stored tag list.
+          tags_hmac = Enum.map(tags, &Crypto.hmac_field(new_filter_key, &1))
 
           [
             {:tags_ciphertext, new_ct},

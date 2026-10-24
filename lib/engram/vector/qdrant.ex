@@ -1689,6 +1689,9 @@ defmodule Engram.Vector.Qdrant do
   # `must` is still an AND with the other conditions, so tenant scoping is
   # unchanged.
 
+  @type match_field :: :user | :vault | :path | :folder | :type | :tags
+  @type key_condition :: %{key: String.t(), match: map()}
+
   @legacy_keys %{
     user: "user_id",
     vault: "vault_id",
@@ -1754,7 +1757,7 @@ defmodule Engram.Vector.Qdrant do
   legacy-format points (the DEK sweep). Use only while `legacy_points?/0`:
   the v3 cluster has no index on these keys, and strict mode 400s.
   """
-  @spec legacy_match_filter(:user | :vault | :path | :folder | :type | :tags, term()) :: map()
+  @spec legacy_match_filter(match_field(), term()) :: key_condition()
   def legacy_match_filter(field, value),
     do: %{key: Map.fetch!(@legacy_keys, field), match: match(value)}
 
@@ -1768,7 +1771,7 @@ defmodule Engram.Vector.Qdrant do
   (the v3 cluster has no index for one). A value with no v5 form there (an
   empty list, a malformed HMAC) matches nothing on the v5 key: fail closed.
   """
-  @spec match_filter(:user | :vault | :path | :folder | :type | :tags, term()) :: map()
+  @spec match_filter(match_field(), term()) :: key_condition() | %{should: [key_condition()]}
   def match_filter(field, value) do
     legacy = legacy_match_filter(field, value)
     v5_key = PayloadKeys.short(Map.fetch!(@v5_keys, field))
