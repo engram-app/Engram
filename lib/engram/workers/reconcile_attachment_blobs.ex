@@ -261,11 +261,33 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
 
   # Tri-state, unlike `exists?/1` (which answers false on any error): a
   # one-byte ranged GET tells "not found" from a transient failure.
+  # A 0-byte object cannot serve byte 0: S3 answers 416 InvalidRange (the
+  # test adapter :invalid_range). It exists, so it is present. Sealed
+  # objects are never empty; this keeps the edge from reading as a failure.
   defp presence(key) do
     case Storage.adapter().get_range(key, 0, 1) do
-      {:ok, _} -> :present
-      {:error, :not_found} -> :missing
-      {:error, _} -> :unknown
+      {:ok, _} ->
+        :present
+
+      {:error, :not_found} ->
+        :missing
+
+      {:error, {:http_error, 416, _}} ->
+        :present
+
+      {:error, :invalid_range} ->
+        :present
+
+      {:error, reason} ->
+        Logger.warning(
+          "attachment blob probe failed, retrying on the next run",
+          Metadata.with_category(:warning, :sync,
+            storage_key: key,
+            reason: Metadata.safe_reason(reason)
+          )
+        )
+
+        :unknown
     end
   end
 

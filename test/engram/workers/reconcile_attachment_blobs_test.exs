@@ -294,6 +294,35 @@ defmodule Engram.Workers.ReconcileAttachmentBlobsTest do
       capture_log(fn -> assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault)) end)
 
     refute log =~ "attachment blob unrecoverable"
+    # Not silent: a persistent error (an IAM change) must be visible.
+    assert log =~ "attachment blob probe failed, retrying on the next run"
+    refute log =~ lost
+  end
+
+  # A 0-byte object answers a ranged GET with 416 InvalidRange: it exists.
+  test "a 416 on the probe counts as present: no copy, no warning", %{
+    user: user,
+    vault: vault
+  } do
+    att = put_att(user, vault, "a.png", "bytes")
+    :ok = Storage.adapter().delete(att.storage_key)
+    use_mock_storage()
+    test_pid = self()
+
+    Mox.stub(Engram.MockStorage, :get_range, fn _, _, _ ->
+      {:error, {:http_error, 416, %{body: "InvalidRange"}}}
+    end)
+
+    Mox.stub(Engram.MockStorage, :restore_version, fn key, _ ->
+      send(test_pid, {:restored, key})
+      :ok
+    end)
+
+    log =
+      capture_log(fn -> assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault)) end)
+
+    refute_received {:restored, _}
+    refute log =~ "probe failed"
   end
 
   test "a read of a missing blob enqueues a reconcile for the vault", %{

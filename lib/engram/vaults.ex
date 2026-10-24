@@ -61,6 +61,14 @@ defmodule Engram.Vaults do
   end
 
   # ── Seq allocator ────────────────────────────────────────────────────────────
+  #
+  # LOCK ORDER (#2159): any transaction that locks both the vault row and
+  # attachment (or note) rows takes the VAULT row first. `next_seq!/2` and
+  # `next_seq_block!/3` lock it as a side effect of the `change_seq` UPDATE;
+  # a writer that must lock content rows BEFORE it knows how many seqs it
+  # needs calls `lock_seq!/1` first. Locking rows first and the vault second
+  # (as an early batch move did) cycles with every upload and delete, which
+  # go vault then row, and Postgres aborts one side with 40P01.
 
   @doc """
   Allocates the next monotonic change sequence for a vault.
@@ -85,6 +93,22 @@ defmodule Engram.Vaults do
       )
 
     seq
+  end
+
+  @doc """
+  Takes the vault row's seq lock without allocating a seq: the same row lock
+  mode (`FOR NO KEY UPDATE`) the `change_seq` UPDATE takes, so a later
+  `next_seq!`/`next_seq_block!` in the same transaction re-enters it. Call it
+  before locking content rows (see LOCK ORDER above). Same contract: inside
+  the caller's `Repo.with_tenant/2` transaction.
+  """
+  def lock_seq!(vault_id) do
+    %{num_rows: 1} =
+      Repo.query!("SELECT 1 FROM vaults WHERE id = $1 FOR NO KEY UPDATE", [
+        Ecto.UUID.dump!(vault_id)
+      ])
+
+    :ok
   end
 
   @doc """

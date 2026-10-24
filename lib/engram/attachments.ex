@@ -1055,6 +1055,9 @@ defmodule Engram.Attachments do
         end)
 
       Repo.with_tenant(user.id, fn ->
+        # Vault first, then the source rows (LOCK ORDER, `Engram.Vaults`).
+        :ok = Engram.Vaults.lock_seq!(vault.id)
+
         with {:ok, live, items} <- move_sources(user, vault, items, on_error, missing),
              moving = Enum.reject(items, &(&1.old_path == &1.new_path)),
              :ok <- move_targets_free(user, vault, moving, on_error) do
@@ -1083,6 +1086,7 @@ defmodule Engram.Attachments do
   defp move_sources(user, vault, items, on_error, missing) do
     # FOR UPDATE: a delete committing between this read and the UPDATE would
     # make the UPDATE match one row fewer; locked, it waits for this commit.
+    # The caller already holds the vault lock, so the order is vault, rows.
     live =
       from(a in scoped_live(user, vault),
         where: a.path_hmac in ^Enum.map(items, & &1.old_hmac),
