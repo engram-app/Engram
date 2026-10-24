@@ -264,6 +264,17 @@ defmodule Engram.MCP.HandlersLinksTest do
         )
 
       assert queries == [], "unexpected full fetch:\n#{Enum.join(queries, "\n")}"
+
+      # Control: once a link DOES use the tail spelling, the same matcher must
+      # see the fetch, or a reworded query would leave the assert above
+      # passing while checking nothing.
+      seed(u, a, [{"Other.md", "see [[b/Note]]"}])
+
+      assert [_ | _] =
+               Engram.TenantQueryCounter.count_matching_queries(
+                 fn -> get(u, a, %{"paths" => ["a/b/Note.md"]}) end,
+                 full_fetch?
+               )
     end
 
     test "a bare name still takes the shortest same-named note", %{user: u, a: a} do

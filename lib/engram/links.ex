@@ -474,16 +474,23 @@ defmodule Engram.Links do
   # second table unless the first came back dangling) while the batch
   # caller can pass thunks that just return already-fetched candidates.
   defp route_resolution(ext, note_resolver, attachment_resolver) do
-    if ext != "" and ext not in @note_exts do
-      with :dangling <- attachment_resolver.() do
-        note_resolver.()
-      end
-    else
-      with :dangling <- note_resolver.() do
-        attachment_resolver.()
-      end
+    case first_table(ext) do
+      :attachment ->
+        with :dangling <- attachment_resolver.() do
+          note_resolver.()
+        end
+
+      :note ->
+        with :dangling <- note_resolver.() do
+          attachment_resolver.()
+        end
     end
   end
+
+  # Which table a target's extension tries first. The one rule both
+  # route_resolution/3 and exact_path_hit?/3 read.
+  defp first_table(ext) when ext != "" and ext not in @note_exts, do: :attachment
+  defp first_table(_ext), do: :note
 
   defp resolve_note_target(user, vault, target, hmac, dek) do
     fetch_decrypted_candidates(user, vault, hmac, :notes, dek)
@@ -1063,8 +1070,7 @@ defmodule Engram.Links do
   # partial set the first may hold a suffix match it never fetched.
   defp exact_path_hit?(indexed, hmac, target) do
     variants = Enum.map(["" | @note_exts], &String.downcase(target <> &1))
-    ext = target |> Path.basename() |> Path.extname() |> String.downcase()
-    first = if ext != "" and ext not in @note_exts, do: :attachment, else: :note
+    first = target |> Path.basename() |> Path.extname() |> String.downcase() |> first_table()
 
     with {^first = tag, id} <- resolve_prefetched(indexed, hmac, target),
          %{sorted: sorted} <- get_in(indexed, [table_of(tag), hmac]),
