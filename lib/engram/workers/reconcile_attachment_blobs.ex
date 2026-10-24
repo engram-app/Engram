@@ -36,11 +36,13 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
   (501), a role without `s3:ListBucketVersions` (403 AccessDenied), or a
   bucket with versioning off (every listed version id is `"null"`). The job
   returns `:ok`, counts `[:engram, :attachments, :reconcile_unavailable]`
-  (`reason` tag, scraped via `Engram.PromEx.Reliability`), and logs at info
-  once per node boot. While this node knows versions are unavailable the
-  daily fan-out is skipped; the read-triggered per-vault job still lists
-  (one request), so a grant added later is picked up by the next one, which
-  clears the latch. Any other listing error (network, 5xx) fails the job and
+  (`reason` tag, scraped via `Engram.PromEx.Reliability`). Only the
+  bucket-wide reasons (Database, 501, AccessDenied) latch the node and log at
+  info once per boot; "versioning off" is read from one vault's listing, so
+  it only counts. While latched, the daily cron enqueues ONE probe job (a
+  one-entry listing of one vault) instead of the fan-out; a successful probe,
+  or any successful per-vault listing, clears the latch so the next cron fans
+  out again. Any other listing error (network, 5xx) fails the job and
   Oban retries it.
   """
   use Oban.Worker,
@@ -80,6 +82,9 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
   end
 
   @impl Oban.Worker
+  def perform(%Oban.Job{args: %{"probe" => true, "user_id" => user_id, "vault_id" => vault_id}}),
+    do: probe(user_id, vault_id)
+
   def perform(%Oban.Job{args: %{"user_id" => user_id, "vault_id" => vault_id}}),
     do: reconcile(user_id, vault_id)
 
@@ -93,20 +98,50 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
 
       {:error, :tenancy_unsafe}
     else
-      # Bounded: without versions every per-vault job would be a no-op.
-      if :persistent_term.get(@latch, nil), do: :ok, else: fan_out()
+      # Bounded: while versions are unavailable every per-vault job would be
+      # a no-op, so one cheap probe asks whether that is still true instead.
+      if :persistent_term.get(@latch, nil), do: enqueue_probe(), else: fan_out()
     end
   end
 
-  defp fan_out do
-    query =
+  defp live_vaults_query,
+    do:
       from(a in Attachment,
         where: is_nil(a.deleted_at) and not is_nil(a.storage_key),
         distinct: true,
         select: {a.user_id, a.vault_id}
       )
 
-    Repo.cross_tenant(fn -> Repo.maintenance().all(query) end)
+  defp enqueue_probe do
+    case Repo.cross_tenant(fn -> Repo.maintenance().one(limit(live_vaults_query(), 1)) end) do
+      nil ->
+        :ok
+
+      # Enqueue logs and counts its own failure; the next cron retries.
+      {user_id, vault_id} ->
+        _ =
+          Engram.Notes.Enqueue.enqueue(
+            new(%{"user_id" => user_id, "vault_id" => vault_id, "probe" => true}),
+            "reconcile_attachment_blobs"
+          )
+
+        :ok
+    end
+  end
+
+  # One listing request, one entry: does this node still lack versions? A
+  # success clears the latch, so the next daily cron fans out again.
+  defp probe(user_id, vault_id) do
+    case Storage.adapter().list_versions("#{user_id}/#{vault_id}/objects/", max_keys: 1) do
+      {:ok, _entries, _next} -> clear_unavailable()
+      {:error, :unsupported} -> unavailable(:unsupported, latch: true)
+      {:error, {:unsupported, reason}} when is_atom(reason) -> unavailable(reason, latch: true)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp fan_out do
+    Repo.cross_tenant(fn -> Repo.maintenance().all(live_vaults_query()) end)
     |> Enum.map(fn {user_id, vault_id} ->
       new(%{"user_id" => user_id, "vault_id" => vault_id})
     end)
@@ -128,8 +163,9 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
         # versioning is off, so a missing blob has nothing to come back from.
         # Not an unrecoverable alert per key; the client copy is the way back.
         # (An EMPTY listing proves nothing about versioning, so it is not
-        # classified here: it would latch a versioned node off.)
-        unavailable(:versioning_off)
+        # classified here.) Per vault, never latched: one vault's history
+        # says nothing about the bucket.
+        unavailable(:versioning_off, latch: false)
 
       {:ok, %{seen: seen, restored: restored}} ->
         :ok = clear_unavailable()
@@ -139,11 +175,12 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
         :ok = report_unrecoverable(user_id, vault_id, missing)
         log_restored(vault_id, restored)
 
+      # Bucket-wide (the backend, a 501, a missing grant): latch the node.
       {:error, :unsupported} ->
-        unavailable(:unsupported)
+        unavailable(:unsupported, latch: true)
 
       {:error, {:unsupported, reason}} when is_atom(reason) ->
-        unavailable(reason)
+        unavailable(reason, latch: true)
 
       {:error, reason} ->
         {:error, reason}
@@ -178,12 +215,19 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
   defp versioned_entry?(%{delete_marker?: true}), do: true
   defp versioned_entry?(%{version_id: id}), do: id != "null"
 
-  # :ok, counted every time, logged once per node boot. persistent_term: one
-  # write per boot (and one erase when it clears), read on every fan-out.
-  defp unavailable(reason) do
+  # :ok, counted every time. A bucket-wide reason latches the node and logs
+  # once per boot; persistent_term: one write per boot (and one erase when it
+  # clears), read on every fan-out. A per-vault reason only counts.
+  defp unavailable(reason, latch: false) do
     :telemetry.execute([:engram, :attachments, :reconcile_unavailable], %{count: 1}, %{
       reason: reason
     })
+
+    :ok
+  end
+
+  defp unavailable(reason, latch: true) do
+    :ok = unavailable(reason, latch: false)
 
     if :persistent_term.get(@latch, nil) != reason do
       :persistent_term.put(@latch, reason)

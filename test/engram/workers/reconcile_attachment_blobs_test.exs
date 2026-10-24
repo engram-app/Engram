@@ -384,17 +384,105 @@ defmodule Engram.Workers.ReconcileAttachmentBlobsTest do
       assert_received {:unavailable, %{count: 1}, %{reason: :access_denied}}
     end
 
-    test "the daily fan-out is skipped once this node knows versions are unavailable", %{
+    test "a latched node's daily cron enqueues exactly one probe, not the fan-out", %{
       user: user,
       vault: vault
     } do
       put_att(user, vault, "a.png", "bytes")
+      other = insert(:vault, user: user)
+      put_att(user, other, "b.png", "bytes")
       use_mock_storage()
       Mox.stub(Engram.MockStorage, :list_versions, fn _, _ -> {:error, :unsupported} end)
 
       assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault))
       assert :ok = perform_job(ReconcileAttachmentBlobs, %{})
-      refute_enqueued(worker: ReconcileAttachmentBlobs, args: args(user, vault))
+
+      assert [%{args: %{"probe" => true}}] = all_enqueued(worker: ReconcileAttachmentBlobs)
+    end
+
+    test "a successful probe clears the latch: the next cron fans out", %{
+      user: user,
+      vault: vault
+    } do
+      put_att(user, vault, "a.png", "bytes")
+      use_mock_storage()
+      test_pid = self()
+      Mox.stub(Engram.MockStorage, :list_versions, fn _, _ -> {:error, :unsupported} end)
+      assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault))
+
+      # The grant lands. The probe lists ONE page.
+      Mox.stub(Engram.MockStorage, :list_versions, fn prefix, opts ->
+        send(test_pid, {:listed, opts[:max_keys]})
+        InMemory.list_versions(prefix, opts)
+      end)
+
+      assert :ok =
+               perform_job(ReconcileAttachmentBlobs, Map.put(args(user, vault), "probe", true))
+
+      assert_received {:listed, 1}
+      refute_received {:listed, _}
+
+      assert :ok = perform_job(ReconcileAttachmentBlobs, %{})
+      assert_enqueued(worker: ReconcileAttachmentBlobs, args: args(user, vault))
+    end
+
+    test "a failed probe keeps the latch", %{user: user, vault: vault} do
+      put_att(user, vault, "a.png", "bytes")
+      use_mock_storage()
+
+      Mox.stub(Engram.MockStorage, :list_versions, fn _, _ ->
+        {:error, {:unsupported, :access_denied}}
+      end)
+
+      assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault))
+
+      assert :ok =
+               perform_job(ReconcileAttachmentBlobs, Map.put(args(user, vault), "probe", true))
+
+      assert :ok = perform_job(ReconcileAttachmentBlobs, %{})
+      # Still latched: the cron queued a probe again, not the fan-out.
+      assert [%{args: %{"probe" => true}}] = all_enqueued(worker: ReconcileAttachmentBlobs)
+    end
+
+    # Versioning off is read from ONE vault's listing, so it says nothing
+    # about the bucket: counted for that vault, never latched node-wide.
+    test "an all-null vault does not stop other vaults from being reconciled", %{
+      user: user,
+      vault: vault
+    } do
+      put_att(user, vault, "a.png", "bytes")
+      other = insert(:vault, user: user)
+      broken = put_att(user, other, "b.png", "original bytes")
+      :ok = Storage.adapter().delete(broken.storage_key)
+      use_mock_storage()
+
+      Mox.stub(Engram.MockStorage, :list_versions, fn prefix, opts ->
+        if String.contains?(prefix, vault.id) do
+          {:ok,
+           [
+             %{
+               key: "#{prefix}x",
+               version_id: "null",
+               last_modified: "2026-10-23T00:00:00.000Z",
+               latest?: true,
+               delete_marker?: false
+             }
+           ], nil}
+        else
+          InMemory.list_versions(prefix, opts)
+        end
+      end)
+
+      assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault))
+      assert_received {:unavailable, _, %{reason: :versioning_off}}
+
+      assert :ok = perform_job(ReconcileAttachmentBlobs, %{})
+      assert_enqueued(worker: ReconcileAttachmentBlobs, args: args(user, other))
+
+      assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, other))
+
+      assert {:ok, %{content: "original bytes"}} =
+               Attachments.get_attachment(user, other, "b.png")
     end
 
     test "a bucket with versioning off (only null version ids) is a no-op, not unrecoverable",
