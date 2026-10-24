@@ -44,7 +44,7 @@ defmodule EngramWeb.Plugs.VaultPlugTest do
 
       assert conn.halted
       assert conn.status == 404
-      assert Jason.decode!(conn.resp_body)["error"] =~ "No vault configured"
+      assert Jason.decode!(conn.resp_body)["error"] == EngramWeb.FrontendUrl.no_vault_message()
     end
   end
 

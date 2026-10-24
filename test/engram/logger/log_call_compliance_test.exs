@@ -205,6 +205,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # Pure function from conn assigns to an actor string ("api:<key id>" or
     # "sync"). No Logger call, never touches content, path, title or a query.
     "lib/engram_web/write_actor.ex",
+    # Builds web-app URLs from config and the no-vault copy. No Logger call,
+    # never touches content, path, title or a query.
+    "lib/engram_web/frontend_url.ex",
     # A bare `use Ecto.Repo` — the second connection pool for cross-tenant
     # work. No function bodies, no Logger call, nothing to render. Listed as
     # the specific file rather than `lib/engram/repo/`, so its sibling

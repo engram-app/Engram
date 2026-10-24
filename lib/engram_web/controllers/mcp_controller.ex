@@ -1480,7 +1480,7 @@ defmodule EngramWeb.McpController do
   # Empty accessible set: distinguish "user has no vaults at all" (sync to make
   # one) from "the credential can reach none of the user's vaults" (a scope /
   # deleted-vault problem that syncing won't fix).
-  defp no_vault_message_for([]), do: "No vault found. Sync from Obsidian to create one."
+  defp no_vault_message_for([]), do: EngramWeb.FrontendUrl.no_vault_message()
 
   defp no_vault_message_for(_vaults),
     do:
