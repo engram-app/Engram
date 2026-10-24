@@ -9,10 +9,14 @@ defmodule Engram.Workers.AttachmentBlobGC do
   bytes go later, here, the way GitLab LFS, Nextcloud and Immich do it.
 
   A tombstone is reaped once it is `@grace_hours` old, still holds a
-  `storage_key`, and no live row references that key. Its blob is deleted,
-  then its `storage_key` is set to NULL, so a later run skips it. A key whose
-  delete fails keeps its `storage_key` and is retried on the next run. Pages
-  are keyset by id, so a stuck key never blocks the rows after it.
+  `storage_key`, and no live row references that key. Per vault, per batch,
+  one transaction locks the vault row (the lock every key-assigning write
+  takes first), locks the tombstones `FOR UPDATE SKIP LOCKED`, re-checks the
+  live-row condition under those locks and clears their `storage_key`. Only
+  after that commits are exactly those blobs deleted, so the destructive
+  call never races a live row gaining the key. A key whose delete fails is
+  written back onto its tombstone and retried on the next run. Pages are
+  keyset by id, so a stuck key never blocks the rows after it.
 
   Recovery window: `@grace_hours`, plus the bucket's noncurrent-version
   retention once the blob is gone.
@@ -31,6 +35,7 @@ defmodule Engram.Workers.AttachmentBlobGC do
   alias Engram.Logger.Metadata
   alias Engram.Repo
   alias Engram.Storage
+  alias Engram.Vaults.Vault
 
   require Logger
 
@@ -66,62 +71,117 @@ defmodule Engram.Workers.AttachmentBlobGC do
   @spec sweep() :: non_neg_integer()
   def sweep do
     cutoff = DateTime.add(DateTime.utc_now(), -@grace_hours * 3600, :second)
-    sweep(cutoff, nil, 0)
+
+    cutoff
+    |> candidate_vaults()
+    |> Enum.reduce(0, fn vault_id, reaped -> reaped + sweep_vault(vault_id, cutoff, nil, 0) end)
   end
 
-  defp sweep(cutoff, after_id, reaped) do
-    case page(cutoff, after_id) do
-      [] ->
-        reaped
-
-      rows ->
-        n = reap(rows)
-        {last_id, _key} = List.last(rows)
-        if length(rows) < @batch, do: reaped + n, else: sweep(cutoff, last_id, reaped + n)
-    end
-  end
-
-  defp page(cutoff, after_id) do
+  # Unlocked, and only to find work: every decision is re-made under the
+  # locks in `claim/3`.
+  defp candidate_vaults(cutoff) do
     query =
-      from(a in Attachment,
-        as: :tomb,
-        where:
-          not is_nil(a.deleted_at) and a.deleted_at < ^cutoff and not is_nil(a.storage_key) and
-            not exists(
-              from(l in Attachment,
-                where: l.storage_key == parent_as(:tomb).storage_key and is_nil(l.deleted_at),
-                select: 1
-              )
-            ),
-        order_by: a.id,
-        limit: @batch,
-        select: {a.id, a.storage_key}
+      from(a in eligible(cutoff),
+        distinct: true,
+        order_by: a.vault_id,
+        select: a.vault_id
       )
 
-    query = if after_id, do: where(query, [a], a.id > ^after_id), else: query
     Repo.cross_tenant(fn -> Repo.maintenance().all(query) end)
   end
 
-  defp reap(rows) do
-    deleted_ids =
-      rows
-      |> deleted_keys()
-      |> then(fn keys -> for {id, key} <- rows, MapSet.member?(keys, key), do: id end)
+  defp sweep_vault(vault_id, cutoff, after_id, reaped) do
+    case claim(vault_id, cutoff, after_id) do
+      {[], _last} ->
+        reaped
 
-    # Counted from RETURNING: `Repo.maintenance/0` picks the repo at runtime,
-    # so update_all's count is untyped and would widen the spec to number().
-    {_n, reaped} =
+      {claimed, last} ->
+        n = reaped + delete_claimed(claimed)
+        if last, do: sweep_vault(vault_id, cutoff, last, n), else: n
+    end
+  end
+
+  # ONE transaction per batch, so each key has one owner who commits before
+  # the destructive call (#2159 follow-up):
+  #   1. the vault row, FOR NO KEY UPDATE: the same lock every write that
+  #      gives a row a key takes first (LOCK ORDER, `Engram.Vaults`), so no
+  #      live row can gain a key in this vault until this commits;
+  #   2. the tombstones, FOR UPDATE SKIP LOCKED, re-checked under those locks
+  #      that no live row holds the key;
+  #   3. their storage_key cleared; the keys read in step 2 are now this
+  #      batch's.
+  # Only after commit are those blobs deleted (`delete_claimed/1`). Returns
+  # `{claimed, last_id}`, `last_id` nil when this was the vault's last page.
+  defp claim(vault_id, cutoff, after_id) do
+    repo = Repo.maintenance()
+
+    {:ok, result} =
       Repo.cross_tenant(fn ->
-        Repo.maintenance().update_all(
-          from(a in Attachment,
-            where: a.id in ^deleted_ids and not is_nil(a.deleted_at),
-            select: a.id
-          ),
-          set: [storage_key: nil]
-        )
+        repo.transaction(fn ->
+          _ =
+            repo.all(
+              from(v in Vault, where: v.id == ^vault_id, lock: "FOR NO KEY UPDATE", select: v.id)
+            )
+
+          query =
+            from(a in eligible(cutoff),
+              where: a.vault_id == ^vault_id,
+              order_by: a.id,
+              limit: @batch,
+              lock: "FOR UPDATE SKIP LOCKED",
+              select: {a.id, a.storage_key}
+            )
+
+          query = if after_id, do: where(query, [a], a.id > ^after_id), else: query
+          # Keys read under the lock: RETURNING would give the new (nil) value.
+          rows = repo.all(query)
+          ids = Enum.map(rows, &elem(&1, 0))
+
+          {_n, _} =
+            repo.update_all(from(a in Attachment, where: a.id in ^ids), set: [storage_key: nil])
+
+          {rows, if(length(rows) == @batch, do: List.last(ids))}
+        end)
       end)
 
-    length(reaped)
+    result
+  end
+
+  # A tombstone past the grace window that still holds a key no live row has.
+  defp eligible(cutoff) do
+    from(a in Attachment,
+      as: :tomb,
+      where:
+        not is_nil(a.deleted_at) and a.deleted_at < ^cutoff and not is_nil(a.storage_key) and
+          not exists(
+            from(l in Attachment,
+              where: l.storage_key == parent_as(:tomb).storage_key and is_nil(l.deleted_at),
+              select: 1
+            )
+          )
+    )
+  end
+
+  # Deletes the blobs whose keys this batch committed. A key whose delete
+  # fails goes back on its tombstone, so the next run retries it with the
+  # same claim protocol (no pending table: the tombstone is the record).
+  # Returns how many blobs are gone.
+  defp delete_claimed(claimed) do
+    gone = deleted_keys(claimed)
+    failed = Enum.reject(claimed, fn {_id, key} -> MapSet.member?(gone, key) end)
+    Enum.each(failed, &restore_key/1)
+    length(claimed) - length(failed)
+  end
+
+  defp restore_key({id, key}) do
+    Repo.cross_tenant(fn ->
+      Repo.maintenance().update_all(
+        from(a in Attachment,
+          where: a.id == ^id and is_nil(a.storage_key) and not is_nil(a.deleted_at)
+        ),
+        set: [storage_key: key]
+      )
+    end)
   end
 
   # The keys whose blob is gone. One batched call; if any key in it failed,

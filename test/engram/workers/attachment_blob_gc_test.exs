@@ -150,9 +150,60 @@ defmodule Engram.Workers.AttachmentBlobGCTest do
       Mox.stub(Engram.MockStorage, :delete_many, fn _keys -> {:ok, 0} end)
       Mox.stub(Engram.MockStorage, :delete, fn _key -> {:error, :boom} end)
 
+      # The key was cleared and committed before the delete; the failed
+      # delete writes it back so the next run owns it again.
       assert AttachmentBlobGC.sweep() == 0
       assert reload(att).storage_key == att.storage_key
+
+      Application.put_env(:engram, :storage, prev)
+      assert blob?(att.storage_key)
+      assert AttachmentBlobGC.sweep() == 1
+      refute blob?(att.storage_key)
+      assert is_nil(reload(att).storage_key)
     end
+  end
+
+  # A live row that gains a tombstone's key after the GC first reads its
+  # candidates must keep its blob: the "no live row has this key" check has
+  # to hold at the moment the key is cleared, not at the first read.
+  test "a live row gaining the key mid-sweep keeps its blob", %{user: user, vault: vault} do
+    tomb = put_att(user, vault, "gone.png")
+    :ok = Attachments.delete_attachment(user, vault, "gone.png")
+    backdate!(tomb, 48)
+    live = put_att(user, vault, "live.png")
+    key = tomb.storage_key
+
+    test_pid = self()
+    handler = {__MODULE__, make_ref()}
+    fired = :counters.new(1, [])
+
+    :telemetry.attach(
+      handler,
+      [:engram, :repo, :query],
+      fn _, _, meta, _ ->
+        if self() == test_pid and meta[:source] == "attachments" and
+             :counters.get(fired, 1) == 0 do
+          :counters.add(fired, 1, 1)
+
+          # The race: a live row now points at the tombstone's key.
+          Repo.update_all(
+            from(a in Attachment, where: a.id == ^live.id),
+            [set: [storage_key: key]],
+            skip_tenant_check: true
+          )
+        end
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    assert AttachmentBlobGC.sweep() == 0
+    :telemetry.detach(handler)
+
+    assert :counters.get(fired, 1) == 1
+    assert blob?(key)
+    assert reload(tomb).storage_key == key
   end
 
   describe "under enforced RLS with no maintenance pool" do
