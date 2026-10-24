@@ -31,6 +31,27 @@ defmodule Engram.Notes.CrdtBloat do
   @doc "Smallest projected content, in bytes, for which the bloat ratio is meaningful."
   def min_content_bytes, do: @min_content_bytes
 
+  # 64 KB. A note only counts as bloated (the sweep's `notes_over_threshold`,
+  # the alert behind it) when its ratio is over 5x AND its state is at least
+  # this big. #2097: the alert fired on one note with 712 checkpoints in 10h,
+  # 19 KB of state over 3.4 KB of content (5.7x). Each checkpoint leaves ~27 B
+  # of deletion history, which is normal heavy editing and costs nothing; 64 KB
+  # is where bloat starts to cost bytes and where the flatten-gate work (#1707)
+  # would be worth reopening.
+  @alert_min_state_bytes 65_536
+
+  @doc "Smallest stored CRDT state, in bytes, that `notes_over_threshold` counts."
+  def alert_min_state_bytes, do: @alert_min_state_bytes
+
+  # Writes per note per hour (each bumps `notes.version`: a checkpoint, or a
+  # REST/MCP write) above which the sweep counts a note as being in a save
+  # loop. The heaviest real editor #2097 found averaged ~71/h (712 in 10h);
+  # 120 leaves headroom over that, and a machine edit loop runs far past it.
+  @save_rate_threshold 120
+
+  @doc "Per-note writes per hour that `notes_save_rate_over_threshold` counts."
+  def save_rate_threshold, do: @save_rate_threshold
+
   @doc """
   Bloat ratio for a doc, or `nil` when the content is too small to divide by.
 

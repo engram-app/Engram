@@ -15,7 +15,8 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
   import Engram.RlsCase, only: [as_prod_role: 1]
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, Note}
+  alias Engram.Crypto.Envelope
+  alias Engram.Notes.{CrdtBloat, CrdtBridge, CrdtCheckpoint, Note}
   alias Engram.Workers.CrdtBloatSweep
 
   setup do
@@ -258,5 +259,77 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
 
     assert {:returned, {:error, :tenancy_unsafe}} =
              as_prod_role(fn -> perform_job(CrdtBloatSweep, %{}) end)
+  end
+
+  # Overwrite a note's stored sizes directly: the sweep reads only column
+  # lengths, so random bytes of a chosen length are an exact fixture.
+  defp sized!(user, note, state_bytes, content_bytes) do
+    tag = Envelope.tag_bytes()
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^note.id),
+          set: [
+            crdt_state_ciphertext: :crypto.strong_rand_bytes(state_bytes + tag),
+            content_ciphertext: :crypto.strong_rand_bytes(content_bytes + tag)
+          ]
+        )
+      end)
+  end
+
+  defp bump_version!(user, note, by) do
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^note.id),
+          inc: [version: by],
+          set: [updated_at: NaiveDateTime.utc_now()]
+        )
+      end)
+  end
+
+  describe "#2097 alert thresholds" do
+    setup do
+      Engram.Cache.evict(:crdt_sweep_versions, :last)
+      on_exit(fn -> Engram.Cache.evict(:crdt_sweep_versions, :last) end)
+    end
+
+    test "over 5x counts only at or above the 64 KB state floor", ctx do
+      %{user: user, vault: vault} = ctx
+      floor = CrdtBloat.alert_min_state_bytes()
+
+      # #2097's note: 5.7x but 19 KB of state. Heavy editing, costs nothing.
+      small = seeded_note(user, vault, "small.md", noisy(150))
+      sized!(user, small, 19_000, 3_400)
+
+      big = seeded_note(user, vault, "big.md", noisy(150))
+      sized!(user, big, floor, 3_400)
+
+      attach()
+      assert :ok = perform_job(CrdtBloatSweep, %{})
+      assert_receive {:sweep, m, _}
+      assert m.notes_over_threshold == 1
+    end
+
+    test "per-note write rate is a delta against the previous sweep", ctx do
+      %{user: user, vault: vault} = ctx
+      looping = seeded_note(user, vault, "loop.md", noisy(150))
+      steady = seeded_note(user, vault, "steady.md", noisy(150))
+
+      attach()
+
+      # No baseline on the first run: the keys are absent, not a fake 0.
+      assert :ok = perform_job(CrdtBloatSweep, %{})
+      assert_receive {:sweep, first, _}
+      refute Map.has_key?(first, :save_rate_max_per_hour)
+      refute Map.has_key?(first, :notes_save_rate_over_threshold)
+
+      bump_version!(user, looping, 200)
+      bump_version!(user, steady, 50)
+
+      assert :ok = perform_job(CrdtBloatSweep, %{})
+      assert_receive {:sweep, second, _}
+      assert second.save_rate_max_per_hour == 200
+      assert second.notes_save_rate_over_threshold == 1
+    end
   end
 end

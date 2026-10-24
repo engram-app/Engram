@@ -163,6 +163,18 @@ defmodule Engram.Cache.Registry do
       evict_match: :key,
       pg_channel: nil
     },
+    # :last => the previous CrdtBloatSweep's {taken_at, %{note_id => version}}
+    # for the notes written in its window, the baseline the next sweep's
+    # per-note write rate is a delta against. Node-local like the sweep's own
+    # last_value gauges: a run on another node has no baseline and skips the
+    # rate for that hour. 3h TTL so a stale baseline is never diffed.
+    %{
+      name: :crdt_sweep_versions,
+      ttl: 3 * 3_600_000,
+      cache_nil: false,
+      evict_match: :key,
+      pg_channel: nil
+    },
     # :all => the runtime config overrides (`Engram.ServiceConfig.Overrides`),
     # the whole `service_overrides` table. A write evicts it cluster-wide; the
     # TTL bounds a lost eviction and a raw-SQL edit. Short in the suite so the
