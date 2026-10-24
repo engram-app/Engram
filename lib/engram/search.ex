@@ -1039,12 +1039,13 @@ defmodule Engram.Search do
   defp rehydrate_display_fields(results, fields_by_qid) do
     Enum.flat_map(results, fn result ->
       case Map.get(fields_by_qid, Map.get(result, :qdrant_id)) do
-        %{source_path: source_path, title: title, tags: tags} ->
+        %{source_path: source_path, title: title, tags: tags} = fields ->
           [
             result
             |> Map.put(:source_path, source_path)
             |> Map.put(:title, title)
             |> Map.put(:tags, tags)
+            |> Map.put(:note_id, fields[:note_id])
           ]
 
         :deleted ->
@@ -1086,6 +1087,8 @@ defmodule Engram.Search do
       %{
         source_path: path,
         vault_id: vault_id,
+        # The hit's note row id, from rehydration (nil for a payload-only hit).
+        note_id: Map.get(best, :note_id),
         title: Map.get(best, :title),
         heading_path: Map.get(best, :heading_path),
         text: Map.get(best, :text),
