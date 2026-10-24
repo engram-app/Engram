@@ -1656,7 +1656,8 @@ defmodule Engram.Crypto.UserDekRotation do
   # cursor after `:max_pages` pages. `:on_page` runs after each page.
   defp sweep_qdrant(%User{id: user_id}, old_dek, new_dek, opts) do
     collection = Qdrant.collection_name()
-    filter = %{must: [%{key: "user_id", match: %{value: user_id}}]}
+    # Layout-aware (#2198): a bare `user_id` matches no v5 point.
+    filter = %{must: [Qdrant.match_filter(:user, user_id)]}
 
     walk = %{
       on_page: Keyword.get(opts, :on_page, fn -> :ok end),

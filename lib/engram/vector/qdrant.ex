@@ -1930,11 +1930,12 @@ defmodule Engram.Vector.Qdrant do
   # document count n is already per tenant; what changes is N, from the
   # shard to the user's points, which compresses the IDF of terms common in
   # the user's own vault toward 0. Independent of the retrieval filter.
-  # ponytail: matches the v3 `user_id` key; PR-15b's short key `u` must be
-  # matched too (reuse build_tenant_filter's user clause) once it lands.
+  # The user clause follows the layout (`match_filter/2`): v5 points carry
+  # the tenant under `u`, so a bare `user_id` corpus is empty once the legacy
+  # fields are dropped (#2198).
   defp maybe_tenant_idf(leg, search_opts) do
     if Keyword.get(search_opts, :tenant_idf, false) do
-      user = %{key: "user_id", match: %{value: Keyword.fetch!(search_opts, :user_id)}}
+      user = match_filter(:user, Keyword.fetch!(search_opts, :user_id))
       idf = %{idf: %{corpus: %{must: [user]}}}
       Map.update(leg, :params, idf, &Map.merge(&1, idf))
     else

@@ -81,6 +81,38 @@ defmodule Engram.Crypto.UserDekRotationTest do
   # The `:user` cache holds `encrypted_dek`. A user struct cached before the
   # flip must never put the retired DEK back into DekCache: anything written
   # under it becomes unreadable once that entry expires.
+  # #2198: a raw `user_id` filter matches zero v5 points once the legacy
+  # fields are dropped, so the rotation would silently skip every point.
+  test "the Qdrant sweep scrolls on `u` under the v5 layout with legacy filters off",
+       %{user: user} do
+    bypass = Bypass.open()
+    Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+    Engram.ServiceConfig.put_override(:v5_payload_format, true)
+    Engram.ServiceConfig.put_override(:legacy_filter_fields, false)
+    # Recorded in ETS: a message from the stub did not survive to the assert.
+    filters = :ets.new(:scroll_filters, [:bag, :public])
+    collection = Qdrant.collection_name()
+
+    Bypass.stub(bypass, "POST", "/collections/#{collection}/points/scroll", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      :ets.insert(filters, {:filter, Jason.decode!(body)["filter"]})
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(
+        200,
+        Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => nil}})
+      )
+    end)
+
+    assert :ok = UserDekRotation.rotate_user(user.id)
+
+    uid = FilterId.uuid(user.id)
+
+    assert [{:filter, %{"must" => [%{"key" => "u", "match" => %{"value" => ^uid}}]}}] =
+             :ets.lookup(filters, :filter)
+  end
+
   describe "rotate_user/1 vs the :user cache" do
     test "final_flip evicts the cached user on the writing node", %{user: user} do
       before = Engram.Accounts.get_user(user.id)
