@@ -56,6 +56,7 @@ defmodule Engram.Workers.InactivityCleanup do
     sweep_warning(
       @days_60,
       @days_80,
+      :warning_60,
       :inactivity_warning_60_at,
       &Mailer.send_inactivity_warning_60/1
     )
@@ -65,6 +66,7 @@ defmodule Engram.Workers.InactivityCleanup do
     sweep_warning(
       @days_80,
       @days_90,
+      :warning_80,
       :inactivity_warning_80_at,
       &Mailer.send_inactivity_warning_80/1
     )
@@ -75,7 +77,7 @@ defmodule Engram.Workers.InactivityCleanup do
   # stamp `warned_field`. The floor keeps the rungs disjoint — a user already
   # past the next rung's threshold gets that rung's (sterner) email instead of
   # both.
-  defp sweep_warning(days, floor_days, warned_field, mailer_fun) do
+  defp sweep_warning(days, floor_days, step, warned_field, mailer_fun) do
     cutoff = days_ago(days)
     floor_cutoff = days_ago(floor_days)
 
@@ -94,20 +96,23 @@ defmodule Engram.Workers.InactivityCleanup do
       )
 
     Enum.each(users, fn user ->
-      if warn_enabled?(user) do
-        _ = mailer_fun.(user)
-
-        user
-        |> Ecto.Changeset.change(%{warned_field => DateTime.utc_now()})
-        |> Repo.update!(skip_tenant_check: true)
-
-        :telemetry.execute(
-          [:engram, :abuse, :inactivity_warning],
-          %{count: 1, days: days},
-          %{user_id: user.id}
-        )
-      end
+      if warn_enabled?(user),
+        do: per_user(user, step, fn -> warn(user, days, warned_field, mailer_fun) end)
     end)
+  end
+
+  defp warn(user, days, warned_field, mailer_fun) do
+    _ = mailer_fun.(user)
+
+    user
+    |> Ecto.Changeset.change(%{warned_field => DateTime.utc_now()})
+    |> Repo.update!(skip_tenant_check: true)
+
+    :telemetry.execute(
+      [:engram, :abuse, :inactivity_warning],
+      %{count: 1, days: days},
+      %{user_id: user.id}
+    )
   end
 
   defp sweep_soft_delete do
@@ -177,19 +182,23 @@ defmodule Engram.Workers.InactivityCleanup do
     Enum.each(users, fn user -> per_user(user, :hard_delete, fn -> hard_delete(user) end) end)
   end
 
-  # One user's failure must not abort the rest of the run: the sweep only
-  # re-finds users by state, so a raise mid-loop leaves every later user for
-  # tomorrow, and a crash that repeats daily (one bad row) starves them
-  # forever. Lifecycle itself still raises, so a request-path caller
-  # (delete_self, the Clerk webhook) fails loudly and its retry re-runs it.
+  # Every sweep's per-user step runs through here. One user's failure must not
+  # abort the rest of the run: the sweeps only re-find users by state, so a
+  # raise mid-loop leaves every later user for tomorrow, and a crash that
+  # repeats daily (one bad row) starves them forever. Lifecycle itself still
+  # raises, so a request-path caller (delete_self, the Clerk webhook) fails
+  # loudly and its retry re-runs it. Exits and throws too: a linked Task or a
+  # GenServer call timing out inside a step must not take the sweep down
+  # either. Counted by `Engram.PromEx.Reliability`
+  # (`..._inactivity_sweep_failed_total`, tags `[:step, :kind]`).
   defp per_user(user, step, fun) do
     fun.()
-  rescue
-    e ->
+  catch
+    kind, reason ->
       :telemetry.execute(
         [:engram, :abuse, :inactivity_sweep_failed],
         %{count: 1},
-        %{user_id: user.id, step: step}
+        %{user_id: user.id, step: step, kind: kind}
       )
 
       Logger.error(
@@ -197,7 +206,8 @@ defmodule Engram.Workers.InactivityCleanup do
         Metadata.with_category(:error, :lifecycle,
           user_id: user.id,
           step: step,
-          reason: Metadata.safe_reason(e)
+          kind: kind,
+          reason: Metadata.safe_reason(reason)
         )
       )
 

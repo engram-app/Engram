@@ -63,6 +63,38 @@ defmodule Engram.Workers.InactivityCleanupTest do
       assert %DateTime{} = reloaded.inactivity_warning_60_at
     end
 
+    # A raise or exit in one user's warning used to abort the whole run, so
+    # every later user went unwarned (and stayed so while the bad row did).
+    test "one user's failing warning does not abort the sweep, raise or exit" do
+      a = insert(:user)
+      b = insert(:user)
+      set_last_active(a.id, 65)
+      set_last_active(b.id, 65)
+      a_email = a.email
+
+      stub(Engram.Email.ProviderMock, :send, fn
+        ^a_email, _subject, _html, _opts -> raise "provider down"
+        _to, _subject, _html, _opts -> exit(:provider_timeout)
+      end)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :abuse, :inactivity_sweep_failed]
+        ])
+
+      ExUnit.CaptureLog.capture_log(fn -> InactivityCleanup.__sweep_60__() end)
+
+      kinds =
+        for _ <- 1..2 do
+          assert_receive {[:engram, :abuse, :inactivity_sweep_failed], ^ref, %{count: 1},
+                          %{step: :warning_60, kind: kind}}
+
+          kind
+        end
+
+      assert Enum.sort(kinds) == [:error, :exit]
+    end
+
     test "does not re-send when warning already stamped" do
       user = insert(:user, inactivity_warning_60_at: DateTime.utc_now())
       set_last_active(user.id, 65)
@@ -312,7 +344,8 @@ defmodule Engram.Workers.InactivityCleanupTest do
       for _ <- 1..2,
           do:
             assert_receive(
-              {[:engram, :abuse, :inactivity_sweep_failed], ^ref, _, %{step: :soft_delete}}
+              {[:engram, :abuse, :inactivity_sweep_failed], ^ref, _,
+               %{step: :soft_delete, kind: :error}}
             )
     end
 
