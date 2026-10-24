@@ -82,7 +82,7 @@ defmodule Engram.Storage.Database do
 
   # Unversioned: a deleted row is gone, there is nothing to restore.
   @impl true
-  def list_versions(_prefix), do: {:error, :unsupported}
+  def list_versions(_prefix, _opts), do: {:error, :unsupported}
 
   @impl true
   def restore_version(_key, _version_id), do: {:error, :unsupported}

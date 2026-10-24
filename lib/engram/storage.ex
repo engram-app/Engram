@@ -45,13 +45,17 @@ defmodule Engram.Storage do
         }
 
   @doc """
-  Every version and delete marker under `prefix` (S3 `ListObjectVersions`).
-  Used by `Engram.Workers.ReconcileAttachmentBlobs` to find a live row's
-  blob behind a delete marker. `{:error, :unsupported}` from an unversioned
-  backend, which makes the reconciler a no-op.
+  One page of the versions and delete markers under `prefix` (S3
+  `ListObjectVersions`), at most `opts[:max_keys]` (default 1,000) entries,
+  in key order. Returns the page and the `next` marker to pass back as
+  `opts[:marker]`, or nil on the last page. A key's entries may span two
+  pages. Used by `Engram.Workers.ReconcileAttachmentBlobs` to find a live
+  row's blob behind a delete marker, a page at a time. `{:error,
+  :unsupported}` from a backend without versioning, which makes the
+  reconciler a no-op.
   """
-  @callback list_versions(prefix :: String.t()) ::
-              {:ok, [version()]} | {:error, :unsupported | term()}
+  @callback list_versions(prefix :: String.t(), opts :: keyword()) ::
+              {:ok, [version()], next :: term() | nil} | {:error, :unsupported | term()}
 
   @doc """
   Makes `version_id` of `key` its current version again by copying it on top

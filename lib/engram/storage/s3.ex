@@ -106,28 +106,26 @@ defmodule Engram.Storage.S3 do
   defp count_delete_errors(_), do: 0
 
   @impl true
-  def list_versions(prefix) when is_binary(prefix) and prefix != "",
-    do: list_versions(prefix, [], [])
-
-  # Paged by hand rather than via `ExAws.stream!`: the stream flattens
-  # versions and delete markers into one list and drops which is which. And
-  # parsed here: ExAws's parser crashes on an entry with no <Owner>.
-  defp list_versions(prefix, markers, acc) do
-    op = %{ExAws.S3.list_object_versions(bucket(), [prefix: prefix] ++ markers) | parser: & &1}
+  def list_versions(prefix, opts) when is_binary(prefix) and prefix != "" do
+    marker = Keyword.get(opts, :marker) || []
+    params = [prefix: prefix, max_keys: Keyword.get(opts, :max_keys, 1_000)] ++ marker
+    # Parsed here: ExAws's parser crashes on an entry with no <Owner>.
+    op = %{ExAws.S3.list_object_versions(bucket(), params) | parser: & &1}
 
     case ExAws.request(op) do
       {:ok, %{body: xml}} ->
         page = parse_versions(xml)
-        acc = page.versions ++ acc
 
-        if page.truncated?,
-          do:
-            list_versions(
-              prefix,
-              [key_marker: page.next_key, version_id_marker: page.next_version],
-              acc
-            ),
-          else: {:ok, acc}
+        next =
+          if page.truncated?,
+            do: [key_marker: page.next_key, version_id_marker: page.next_version]
+
+        {:ok, page.versions, next}
+
+      # S3-compatible stores without versioning (Cloudflare R2, some MinIO
+      # modes) answer 501 NotImplemented: unsupported, not a failure to retry.
+      {:error, {:http_error, 501, _}} ->
+        {:error, :unsupported}
 
       {:error, reason} ->
         {:error, reason}

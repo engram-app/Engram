@@ -83,9 +83,12 @@ defmodule Engram.Storage.InMemory do
     {:ok, length(keys)}
   end
 
+  # Paged like S3: key order, newest first within a key, `max_keys` entries
+  # per page, `next` = the last entry returned.
   @impl true
-  def list_versions(prefix) do
+  def list_versions(prefix, opts) do
     ensure_table()
+    max = Keyword.get(opts, :max_keys, 1_000)
 
     versions =
       :ets.foldl(
@@ -95,20 +98,32 @@ defmodule Engram.Storage.InMemory do
         [],
         @versions
       )
+      |> Enum.sort_by(fn {key, seq, _} -> {key, -seq} end)
 
     latest =
       Enum.reduce(versions, %{}, fn {k, seq, _}, acc -> Map.update(acc, k, seq, &max(&1, seq)) end)
 
-    {:ok,
-     for {key, seq, version} <- versions do
-       %{
-         key: key,
-         version_id: Integer.to_string(seq),
-         last_modified: seq,
-         latest?: latest[key] == seq,
-         delete_marker?: version == :delete_marker
-       }
-     end}
+    rest =
+      case Keyword.get(opts, :marker) do
+        nil -> versions
+        {key, seq} -> Enum.drop_while(versions, fn {k, s, _} -> {k, -s} <= {key, -seq} end)
+      end
+
+    {page, more} = Enum.split(rest, max)
+
+    entries =
+      for {key, seq, version} <- page do
+        %{
+          key: key,
+          version_id: Integer.to_string(seq),
+          last_modified: seq,
+          latest?: latest[key] == seq,
+          delete_marker?: version == :delete_marker
+        }
+      end
+
+    next = if more != [], do: page |> List.last() |> then(fn {k, s, _} -> {k, s} end)
+    {:ok, entries, next}
   end
 
   @impl true

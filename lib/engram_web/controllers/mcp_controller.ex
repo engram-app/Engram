@@ -1116,10 +1116,11 @@ defmodule EngramWeb.McpController do
   # nest for free; side effects wait for commit via Repo.after_commit/1). The
   # response goes out after this returns, so after commit. These tools stay
   # outside one: a transaction must not hold a connection and row locks across
-  # external I/O (Voyage/Qdrant for search_notes and suggest_folder, S3 deletes
-  # for delete_folder), and a rename claims its path in the vault index room
-  # (`Notes.Identity`), a separate process whose claim must commit before the
-  # row transaction.
+  # external I/O (Voyage/Qdrant for search_notes and suggest_folder),
+  # delete_folder commits its cascade chunk by chunk (#2159) and an outer
+  # transaction would turn that back into one long one, and a rename claims
+  # its path in the vault index room (`Notes.Identity`), a separate process
+  # whose claim must commit before the row transaction.
   @no_request_txn ~w(search_notes suggest_folder delete_folder rename_note rename_folder)
 
   @doc false

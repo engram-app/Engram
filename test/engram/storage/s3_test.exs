@@ -176,7 +176,7 @@ defmodule Engram.Storage.S3Test do
     end
   end
 
-  describe "list_versions/1" do
+  describe "list_versions/2" do
     test "keeps versions and delete markers apart, across pages", %{bypass: bypass} do
       page = fn conn, body -> Plug.Conn.resp(conn, 200, body) end
 
@@ -205,7 +205,10 @@ defmodule Engram.Storage.S3Test do
         end
       end)
 
-      assert {:ok, versions} = S3.list_versions("u/v/objects/")
+      assert {:ok, first, next} = S3.list_versions("u/v/objects/", [])
+      assert next == [key_marker: "u/v/objects/a", version_id_marker: "a1"]
+      assert {:ok, second, nil} = S3.list_versions("u/v/objects/", marker: next)
+      versions = first ++ second
 
       assert Enum.sort_by(versions, & &1.version_id) == [
                %{
@@ -231,6 +234,16 @@ defmodule Engram.Storage.S3Test do
                }
              ]
     end
+  end
+
+  test "list_versions/2 maps a backend without versioning (501) to :unsupported", %{
+    bypass: bypass
+  } do
+    Bypass.expect_once(bypass, "GET", "/#{@bucket}/", fn conn ->
+      Plug.Conn.resp(conn, 501, "<Error><Code>NotImplemented</Code></Error>")
+    end)
+
+    assert {:error, :unsupported} = S3.list_versions("u/v/objects/", [])
   end
 
   describe "restore_version/2" do

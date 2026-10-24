@@ -17,8 +17,11 @@ defmodule Engram.Workers.AttachmentBlobGC do
   Recovery window: `@grace_hours`, plus the bucket's noncurrent-version
   retention once the blob is gone.
 
-  Refuses under `Repo.tenancy_unsafe?/0`: a blind read makes "no live row
-  references this key" true for every key, which would delete live blobs.
+  Refuses under `Repo.tenancy_unsafe?/0`. A blind role reads zero rows, so
+  today that would reap nothing rather than something wrong; the guard keeps
+  it that way if the tombstone read and the live-row check ever stop being
+  blind together (one on a pool that sees, one that does not), and makes the
+  misconfiguration loud instead of a silent no-op.
   """
   use Oban.Worker, queue: :maintenance, max_attempts: 1
 
@@ -105,15 +108,20 @@ defmodule Engram.Workers.AttachmentBlobGC do
       |> deleted_keys()
       |> then(fn keys -> for {id, key} <- rows, MapSet.member?(keys, key), do: id end)
 
-    {n, _} =
+    # Counted from RETURNING: `Repo.maintenance/0` picks the repo at runtime,
+    # so update_all's count is untyped and would widen the spec to number().
+    {_n, reaped} =
       Repo.cross_tenant(fn ->
         Repo.maintenance().update_all(
-          from(a in Attachment, where: a.id in ^deleted_ids and not is_nil(a.deleted_at)),
+          from(a in Attachment,
+            where: a.id in ^deleted_ids and not is_nil(a.deleted_at),
+            select: a.id
+          ),
           set: [storage_key: nil]
         )
       end)
 
-    n
+    length(reaped)
   end
 
   # The keys whose blob is gone. One batched call; if any key in it failed,

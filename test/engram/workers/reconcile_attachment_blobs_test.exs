@@ -110,9 +110,93 @@ defmodule Engram.Workers.ReconcileAttachmentBlobsTest do
     prev = Application.get_env(:engram, :storage)
     Application.put_env(:engram, :storage, Engram.MockStorage)
     on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
-    Mox.stub(Engram.MockStorage, :list_versions, fn _ -> {:error, :unsupported} end)
+    Mox.stub(Engram.MockStorage, :list_versions, fn _, _ -> {:error, :unsupported} end)
 
     assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault))
+  end
+
+  test "pages the listing; a key split across pages is still restored", %{
+    user: user,
+    vault: vault
+  } do
+    prev = Application.get_env(:engram, :reconcile_versions_page)
+    Application.put_env(:engram, :reconcile_versions_page, 1)
+
+    on_exit(fn ->
+      if prev,
+        do: Application.put_env(:engram, :reconcile_versions_page, prev),
+        else: Application.delete_env(:engram, :reconcile_versions_page)
+    end)
+
+    atts = for p <- ["a.png", "b.png"], do: put_att(user, vault, p, "bytes of " <> p)
+    # Each key: data version + two markers, so every key spans three pages.
+    for att <- atts, _ <- 1..2, do: :ok = Storage.adapter().delete(att.storage_key)
+
+    log =
+      capture_log(fn -> assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault)) end)
+
+    refute log =~ "attachment blob unrecoverable"
+
+    for p <- ["a.png", "b.png"] do
+      assert {:ok, %{content: content}} = Attachments.get_attachment(user, vault, p)
+      assert content == "bytes of " <> p
+    end
+  end
+
+  test "makes no copy while the account is being deleted", %{user: user, vault: vault} do
+    att = put_att(user, vault, "a.png", "bytes")
+
+    # hard_delete's window: soft-deleted, prefix wiped, rows not yet gone.
+    {1, _} =
+      Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        [set: [deleted_at: DateTime.utc_now()]],
+        skip_tenant_check: true
+      )
+
+    {:ok, _} = Storage.adapter().delete_prefix("#{user.id}/")
+
+    assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault))
+    refute Storage.adapter().exists?(att.storage_key)
+  end
+
+  test "makes no copy for a vault being purged", %{user: user, vault: vault} do
+    att = put_att(user, vault, "a.png", "bytes")
+    :ok = Storage.adapter().delete(att.storage_key)
+
+    {1, _} =
+      Repo.update_all(
+        from(v in Engram.Vaults.Vault, where: v.id == ^vault.id),
+        [set: [purge_started_at: DateTime.utc_now(:second)]],
+        skip_tenant_check: true
+      )
+
+    assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault))
+    refute Storage.adapter().exists?(att.storage_key)
+  end
+
+  test "an upload landing after the listing is not called unrecoverable", %{
+    user: user,
+    vault: vault
+  } do
+    put_att(user, vault, "a.png", "bytes")
+
+    prev = Application.get_env(:engram, :storage)
+    Application.put_env(:engram, :storage, Engram.MockStorage)
+    on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+    Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+
+    Mox.stub(Engram.MockStorage, :list_versions, fn prefix, opts ->
+      listed = Engram.Storage.InMemory.list_versions(prefix, opts)
+      # Commits between the listing and the decision.
+      put_att(user, vault, "late.png", "late bytes")
+      listed
+    end)
+
+    log =
+      capture_log(fn -> assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault)) end)
+
+    refute log =~ "attachment blob unrecoverable"
   end
 
   test "a read of a missing blob enqueues a reconcile for the vault", %{

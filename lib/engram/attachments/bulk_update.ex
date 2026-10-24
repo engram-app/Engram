@@ -16,8 +16,12 @@ defmodule Engram.Attachments.BulkUpdate do
 
   alias Engram.Repo
 
-  # 500 rows x 2 params, far under Postgres's 65535-bind-param limit.
+  # 500 rows x at most 9 params, far under Postgres's 65535-bind-param limit.
   @chunk 500
+
+  @doc "Rows per statement. `:attachments_bulk_chunk` lowers it (tests)."
+  @spec chunk_size() :: pos_integer()
+  def chunk_size, do: min(Application.get_env(:engram, :attachments_bulk_chunk, @chunk), @chunk)
 
   @set %{
     delete: "deleted_at = $1, updated_at = $1, seq = v.seq",
@@ -48,7 +52,7 @@ defmodule Engram.Attachments.BulkUpdate do
     width = length(@move_cols) + 2
 
     rows
-    |> Enum.chunk_every(@chunk)
+    |> Enum.chunk_every(chunk_size())
     |> Enum.reduce(0, fn chunk, acc ->
       values_sql =
         chunk
@@ -99,7 +103,7 @@ defmodule Engram.Attachments.BulkUpdate do
     set_sql = Map.fetch!(@set, mode)
 
     id_seqs
-    |> Enum.chunk_every(@chunk)
+    |> Enum.chunk_every(chunk_size())
     |> Enum.flat_map(fn chunk ->
       values_sql =
         chunk

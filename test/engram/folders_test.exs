@@ -436,6 +436,69 @@ defmodule Engram.FoldersTest do
       assert att_paths(user, vault) == Enum.sort(for i <- 1..30, do: "Archive/f#{i}.png")
     end
 
+    # ~7,500 attachments scaled down: 75 rows in chunks of 10 is the same
+    # shape (8 chunks) as 7,500 in chunks of 500 (15). The attachment leg is
+    # a fixed handful of statements per chunk, so the transaction stays
+    # O(chunks) however many attachments the folder holds.
+    test "a large rename's transaction is O(chunks), not O(attachments)", %{
+      user: user,
+      vault: vault
+    } do
+      prev = Application.get_env(:engram, :attachments_bulk_chunk)
+      Application.put_env(:engram, :attachments_bulk_chunk, 10)
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:engram, :attachments_bulk_chunk, prev),
+          else: Application.delete_env(:engram, :attachments_bulk_chunk)
+      end)
+
+      for i <- 1..75, do: put_att(user, vault, "Big/f#{i}.png")
+
+      {{:ok, %{attachments: 75}}, queries} =
+        Engram.QueryRecorder.record(fn -> Folders.rename(user, vault, "Big", "Moved") end)
+
+      txn = queries |> Engram.QueryRecorder.transactions() |> Enum.max_by(&length/1)
+      on_attachments = Enum.count(txn, &(&1 =~ ~r/^(UPDATE|INSERT INTO) "?attachments\b/))
+
+      # 8 repoint UPDATEs + 8 tombstone INSERTs; per-item would be 150.
+      assert on_attachments == 16, Engram.QueryRecorder.format(queries)
+      assert length(txn) < 75, Engram.QueryRecorder.format(queries)
+    end
+
+    test "a source deleted after the scan is skipped and reported, not a failed rename", %{
+      user: user,
+      vault: vault
+    } do
+      put_att(user, vault, "Docs/a.png")
+      put_att(user, vault, "Docs/b.png")
+      {:ok, pairs} = Attachments.folder_rename_pairs(user, vault, "Docs", "Archive")
+
+      # A syncing client deletes b between the scan and the rename transaction.
+      :ok = Attachments.delete_attachment(user, vault, "Docs/b.png")
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, 1} = Attachments.move_folder_pairs(user, vault, pairs)
+        end)
+
+      assert log =~ "attachments skipped, deleted or moved after the scan"
+      assert log =~ "total_count=1"
+      assert att_paths(user, vault) == ["Archive/a.png"]
+    end
+
+    test "a user's explicit batch_move still refuses a missing source", %{
+      user: user,
+      vault: vault
+    } do
+      put_att(user, vault, "Docs/a.png")
+
+      assert {:error, {:not_found, "Docs/gone.png"}} =
+               Attachments.batch_move(user, vault, ["Docs/a.png", "Docs/gone.png"], "Archive")
+
+      assert att_paths(user, vault) == ["Docs/a.png"]
+    end
+
     # #614: a repoint and its tombstone share ONE seq, so a cursor pull never
     # sees one without the other; distinct items keep distinct seqs.
     test "every moved attachment leaves an old-path tombstone at its own seq", %{
