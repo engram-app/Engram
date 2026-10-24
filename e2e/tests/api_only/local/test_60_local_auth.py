@@ -19,53 +19,12 @@ import time
 import uuid
 
 import pytest
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+
+from helpers.http_retry import RetryClient
 
 API_URL = os.environ.get("ENGRAM_API_URL") or "http://localhost:8100/api"
 
-
-_RETRY = Retry(
-    total=3,
-    backoff_factor=0.2,
-    status_forcelist=(502, 503, 504),
-    allowed_methods=frozenset(["GET", "POST", "PUT", "DELETE"]),
-    raise_on_status=False,
-)
-
-
-class _RetryClient:
-    """Fresh ``requests.Session`` per call.
-
-    A shared Session persists cookies across calls, which breaks the refresh
-    tests: a rotated cookie from the session jar would override the
-    per-call ``cookies=`` kwarg. New Session per call = empty jar, so the
-    test's explicit cookies (or absence of them) reach the server verbatim.
-    Retry adapter still covers transient network/5xx without bleeding state.
-    """
-
-    def _session(self) -> requests.Session:
-        s = requests.Session()
-        adapter = HTTPAdapter(max_retries=_RETRY)
-        s.mount("http://", adapter)
-        s.mount("https://", adapter)
-        return s
-
-    def post(self, url, **kw):
-        return self._session().post(url, **kw)
-
-    def get(self, url, **kw):
-        return self._session().get(url, **kw)
-
-    def put(self, url, **kw):
-        return self._session().put(url, **kw)
-
-    def delete(self, url, **kw):
-        return self._session().delete(url, **kw)
-
-
-http = _RetryClient()
+http = RetryClient()
 
 
 def unique_email(label: str) -> str:

@@ -17,43 +17,12 @@ import os
 import time
 import uuid
 
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+
+from helpers.http_retry import RetryClient
 
 API_URL = os.environ.get("ENGRAM_API_URL") or "http://localhost:8100/api"
 
-_RETRY = Retry(
-    total=3,
-    backoff_factor=0.2,
-    status_forcelist=(502, 503, 504),
-    allowed_methods=frozenset(["GET", "POST", "PUT", "DELETE", "PATCH"]),
-    raise_on_status=False,
-)
-
-
-class _RetryClient:
-    def _session(self) -> requests.Session:
-        s = requests.Session()
-        adapter = HTTPAdapter(max_retries=_RETRY)
-        s.mount("http://", adapter)
-        s.mount("https://", adapter)
-        return s
-
-    def post(self, url, **kw):
-        return self._session().post(url, **kw)
-
-    def get(self, url, **kw):
-        return self._session().get(url, **kw)
-
-    def patch(self, url, **kw):
-        return self._session().patch(url, **kw)
-
-    def delete(self, url, **kw):
-        return self._session().delete(url, **kw)
-
-
-http = _RetryClient()
+http = RetryClient()
 
 PASSWORD = "E2eTestPass!99"
 NEW_PASSWORD = "E2eTestPassNew!42"

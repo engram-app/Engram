@@ -11,9 +11,14 @@ defmodule EngramWeb.Plugs.AccountLifecycle do
 
   ## Deleted (`deleted_at`)
 
-  Terminal. Returns **410 Gone** on every endpoint, no exemptions — the vault
-  was auto-deleted after 90 days of inactivity; the path forward is re-signup
-  (the Clerk identity is untouched).
+  Terminal. Returns **410 Gone** (`EngramWeb.Plugs.AccountDeleted.deny/1`) on
+  every endpoint but one: `DELETE /api/me`, so a delete that stamped
+  `deleted_at` and then failed its hard delete can be finished by its owner
+  (`Engram.Accounts.delete_self/2`, password required). It can only move the
+  account further toward gone, so it is open to a suspended account too. Only
+  reachable while the access token lives (refresh tokens are revoked at the
+  mark); after that the inactivity sweep's hard-delete pass finishes it. The
+  path forward is re-signup.
 
   ## Suspended (`suspended_at`)
 
@@ -27,18 +32,23 @@ defmodule EngramWeb.Plugs.AccountLifecycle do
   Deleted takes precedence over suspended.
   """
 
+  alias EngramWeb.Plugs.AccountDeleted
   alias EngramWeb.Plugs.Halt
 
   def init(opts), do: opts
 
-  def call(%Plug.Conn{assigns: %{current_user: %{deleted_at: %DateTime{}}}} = conn, _opts) do
-    deny(
-      conn,
-      410,
-      "account_deleted",
-      "Your vault was auto-deleted after 90 days of inactivity. You can re-signup."
-    )
-  end
+  def call(
+        %Plug.Conn{
+          assigns: %{current_user: %{deleted_at: %DateTime{}}},
+          method: "DELETE",
+          request_path: "/api/me"
+        } = conn,
+        _opts
+      ),
+      do: conn
+
+  def call(%Plug.Conn{assigns: %{current_user: %{deleted_at: %DateTime{}}}} = conn, _opts),
+    do: AccountDeleted.deny(conn)
 
   def call(%Plug.Conn{assigns: %{current_user: %{suspended_at: %DateTime{}}}} = conn, _opts) do
     if suspension_exempt?(conn) do

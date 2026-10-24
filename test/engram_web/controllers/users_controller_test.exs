@@ -1,5 +1,6 @@
 defmodule EngramWeb.UsersControllerTest do
   use EngramWeb.ConnCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   import Mox
 
@@ -196,6 +197,62 @@ defmodule EngramWeb.UsersControllerTest do
     test "400 when password param is missing", %{user: user} do
       conn = auth_conn(user) |> delete("/api/me")
       assert %{"error" => "password_required"} = json_response(conn, 400)
+    end
+
+    # The half-state: `deleted_at` stamped, hard delete failed. Its owner can
+    # finish it, but only with the password, like the first attempt.
+    test "a half-deleted account finishes its delete with the password", %{user: user} do
+      Engram.Repo.update!(Ecto.Changeset.change(user, deleted_at: DateTime.utc_now()),
+        skip_tenant_check: true
+      )
+
+      conn = auth_conn(user) |> delete("/api/me", %{password: "wrong"})
+      assert %{"error" => "invalid_password"} = json_response(conn, 403)
+      assert Engram.Repo.get(Engram.Accounts.User, user.id, skip_tenant_check: true)
+
+      conn = auth_conn(user) |> delete("/api/me", %{password: "password123"})
+      assert %{"ok" => true} = json_response(conn, 200)
+      refute Engram.Repo.get(Engram.Accounts.User, user.id, skip_tenant_check: true)
+    end
+
+    # #2182: a stalled CI Qdrant held this request 10 s (two in-request clears,
+    # each on a 5 s budget), the client retried the DELETE, and the replay got
+    # 410. The request must not touch Qdrant at all; the purge runs as a job
+    # once the account is gone, and still removes every point.
+    test "a stalled Qdrant does not hold the request; the points are purged after", %{
+      user: user
+    } do
+      bypass = Bypass.open()
+      Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+      Engram.ServiceConfig.put_override(:qdrant_search_timeout, 10_000)
+      test_pid = self()
+      {:ok, stalled} = Agent.start_link(fn -> true end)
+
+      Bypass.stub(bypass, "POST", "/collections/:col/points/delete", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:qdrant_delete, Jason.decode!(body)})
+        # Stalled while the request is in flight, healthy for the job after.
+        if Agent.get(stalled, & &1), do: Process.sleep(3_000)
+        Plug.Conn.send_resp(conn, 200, ~s({"status":"ok","result":{}}))
+      end)
+
+      {elapsed_us, conn} =
+        :timer.tc(fn -> auth_conn(user) |> delete("/api/me", %{password: "password123"}) end)
+
+      assert %{"ok" => true} = json_response(conn, 200)
+      refute_received {:qdrant_delete, _}, "DELETE /api/me called Qdrant inside the request"
+      assert elapsed_us < 2_500_000, "DELETE /api/me took #{div(elapsed_us, 1000)} ms"
+      refute Engram.Repo.get(Engram.Accounts.User, user.id, skip_tenant_check: true)
+
+      Agent.update(stalled, fn _ -> false end)
+
+      assert [job] = all_enqueued(worker: Engram.Workers.PurgeUserVectors)
+      assert job.args == %{"user_id" => user.id}
+      assert :ok = perform_job(Engram.Workers.PurgeUserVectors, job.args)
+
+      expected = Engram.Vector.Qdrant.match_filter(:user, user.id) |> Jason.encode!()
+      assert_received {:qdrant_delete, %{"filter" => %{"must" => [user_filter]}}}
+      assert user_filter == Jason.decode!(expected)
     end
   end
 end
