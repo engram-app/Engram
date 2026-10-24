@@ -76,7 +76,10 @@ defmodule EngramWeb.OAuthTokenController do
     # rather than the body, and the grant check compares the code's client
     # against this param. Reading the body directly would fail every
     # Basic-authenticated exchange that omits the redundant body field.
-    OAuth.exchange_authorization_code(Map.put(params, "client_id", client_id), ip: ip)
+    OAuth.exchange_authorization_code(Map.put(params, "client_id", client_id),
+      ip: ip,
+      user_agent: RequestMeta.get_user_agent(conn)
+    )
     |> grant_result(conn, :authorization_code, client_id)
   end
 
@@ -85,7 +88,10 @@ defmodule EngramWeb.OAuthTokenController do
       raw when is_binary(raw) and raw != "" ->
         ip = RequestMeta.format_ip(RemoteIp.resolve(conn))
 
-        OAuth.rotate_refresh_token(raw, client_id, ip: ip)
+        OAuth.rotate_refresh_token(raw, client_id,
+          ip: ip,
+          user_agent: RequestMeta.get_user_agent(conn)
+        )
         |> grant_result(conn, :refresh_token, client_id)
 
       _ ->
