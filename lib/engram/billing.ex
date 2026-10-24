@@ -635,8 +635,11 @@ defmodule Engram.Billing do
   end
 
   @doc """
-  Resolve a customer-portal deep link for a given action: `"cancel"`,
-  `"update_payment"`, or anything else (→ the general overview URL).
+  Resolve a customer-portal deep link: `"update_payment"`, or anything else
+  (→ the general overview URL). There is deliberately no cancel deep link:
+  cancels go through the in-app dialog, which asks why. The overview still
+  offers Paddle's own cancel (Paddle requires one); a cancel made there is
+  marked `portal_no_reason` when its webhook lands.
   """
   def portal_action_url(user, action) do
     case get_subscription(user) do
@@ -728,7 +731,6 @@ defmodule Engram.Billing do
     sub_urls = Enum.find(urls["subscriptions"] || [], &(&1["id"] == sub_id)) || %{}
 
     case action do
-      "cancel" -> sub_urls["cancel_subscription"] || overview_url(urls)
       "update_payment" -> sub_urls["update_subscription_payment_method"] || overview_url(urls)
       _ -> overview_url(urls)
     end

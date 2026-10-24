@@ -25,8 +25,10 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   """
 
   alias Engram.Accounts
+  alias Engram.Accounts.User
   alias Engram.Analytics.PersonProperties
   alias Engram.Billing.Subscription
+  alias Engram.Feedback
   alias Engram.Webhooks.Idempotency
 
   @doc """
@@ -82,7 +84,10 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
       (`upgrade`/`downgrade`), a cancel was scheduled (`cancel_scheduled`), or
       a lapsed status returned to active (`reactivated`). A renewal or any
       other state-sync update sends nothing.
-    * `subscription.canceled`, `subscription.past_due`: same names
+    * `subscription.canceled`, `subscription.past_due`: same names. A cancel
+      with no reason on file since the subscription started also files
+      `subscription_cancel_reason` as `portal_no_reason` (or `payment_failed`
+      out of `past_due`), so cancels made in Paddle's portal stay countable
     * `transaction.completed`: `payment_completed` with bucketed amount
     * `adjustment.*` approved refund or chargeback: `refund_issued`, once
       per adjustment id
@@ -133,9 +138,24 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
     end
   end
 
-  def forward_paddle_event(%{"event_type" => "subscription.canceled"}, %Subscription{} = sub) do
+  def forward_paddle_event(
+        %{"event_type" => "subscription.canceled", "data" => data},
+        %Subscription{} = sub
+      ) do
     from = if sub.previous, do: sub.previous.tier, else: sub.tier
-    track_sub(sub, "subscription_canceled", %{from_tier: from, status: sub.status})
+    :ok = track_sub(sub, "subscription_canceled", %{from_tier: from, status: sub.status})
+
+    # A dunning failure is involuntary churn, not a portal cancel.
+    reason =
+      if sub.previous && sub.previous.status == "past_due",
+        do: "payment_failed",
+        else: "portal_no_reason"
+
+    with %User{} = user <- Accounts.get_user(sub.user_id) do
+      Feedback.record_missing_cancel_reason(user, started_at(data, sub), reason)
+    end
+
+    :ok
   end
 
   def forward_paddle_event(%{"event_type" => "subscription.past_due"}, %Subscription{} = sub) do
@@ -201,6 +221,15 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   end
 
   defp rank(tier), do: Map.get(@tier_rank, tier, 0)
+
+  # Paddle mints a new subscription (new started_at) on resubscribe, so a
+  # reason given for an earlier subscription does not count for this one.
+  defp started_at(data, sub) do
+    case DateTime.from_iso8601(data["started_at"] || "") do
+      {:ok, at, _} -> at
+      _ -> sub.created_at
+    end
+  end
 
   defp cycle_props(data) do
     %{

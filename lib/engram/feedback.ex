@@ -18,6 +18,7 @@ defmodule Engram.Feedback do
 
   alias Engram.Accounts.User
   alias Engram.Analytics
+  alias Engram.Analytics.Event
   alias Engram.Billing
   alias Engram.Repo
 
@@ -130,6 +131,34 @@ defmodule Engram.Feedback do
   end
 
   def submit(_user, "cancel", _params), do: {:error, :invalid_reason}
+
+  @doc """
+  File `reason` as the cancel reason when `user` gave none since `since` (the
+  subscription's start). Only the in-app dialog asks why; a cancel through
+  Paddle's hosted portal, or a dunning failure, arrives with no reason, and
+  this marker keeps that gap visible in the cancel-reason counts.
+  """
+  @spec record_missing_cancel_reason(User.t(), DateTime.t(), String.t()) :: :ok
+  def record_missing_cancel_reason(user, since, reason) do
+    given? =
+      Repo.exists?(
+        from(e in Event,
+          where:
+            e.user_id == ^user.id and e.event == "subscription_cancel_reason" and
+              e.inserted_at >= ^since
+        )
+      )
+
+    if given? do
+      :ok
+    else
+      capture(user, "subscription_cancel_reason", %{
+        "reason" => reason,
+        "source" => "webhook",
+        "$set" => %{"cancel_reason" => reason}
+      })
+    end
+  end
 
   # Stashed on the user row, not sent: the browser sends this BEFORE the
   # delete (afterwards there is no session to send it with), so sending now
