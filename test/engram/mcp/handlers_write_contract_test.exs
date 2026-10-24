@@ -37,7 +37,7 @@ defmodule Engram.MCP.HandlersWriteContractTest do
       # own text said "Error:" while the envelope said success.
       big = String.duplicate("x", Notes.max_note_bytes() + 1)
 
-      assert {:error, msg} =
+      assert {:error, {:note_too_large, msg}} =
                Handlers.handle("write_note", user, vault, %{"path" => "b.md", "content" => big})
 
       assert msg =~ "maximum size"
@@ -57,7 +57,7 @@ defmodule Engram.MCP.HandlersWriteContractTest do
     end
 
     test "patch_note reports a missing note", %{user: user, vault: vault} do
-      assert {:error, msg} =
+      assert {:error, {:note_not_found, msg}} =
                Handlers.handle("patch_note", user, vault, %{
                  "path" => "gone.md",
                  "find" => "a",
@@ -70,7 +70,7 @@ defmodule Engram.MCP.HandlersWriteContractTest do
     test "update_section reports a heading it could not find", %{user: user, vault: vault} do
       :ok = note!(user, vault, "a.md", "# A\n\nbody")
 
-      assert {:error, msg} =
+      assert {:error, {:section_not_found, msg}} =
                Handlers.handle("update_section", user, vault, %{
                  "path" => "a.md",
                  "heading" => "Nope",
@@ -84,7 +84,7 @@ defmodule Engram.MCP.HandlersWriteContractTest do
       :ok = note!(user, vault, "a.md", "a")
       :ok = note!(user, vault, "b.md", "b")
 
-      assert {:error, msg} =
+      assert {:error, {:path_conflict, msg}} =
                Handlers.handle("rename_note", user, vault, %{
                  "old_path" => "a.md",
                  "new_path" => "b.md"
@@ -94,7 +94,7 @@ defmodule Engram.MCP.HandlersWriteContractTest do
     end
 
     test "move_attachment reports a missing attachment", %{user: user, vault: vault} do
-      assert {:error, msg} =
+      assert {:error, {:attachment_not_found, msg}} =
                Handlers.handle("move_attachment", user, vault, %{
                  "old_path" => "gone.png",
                  "new_path" => "img/gone.png"

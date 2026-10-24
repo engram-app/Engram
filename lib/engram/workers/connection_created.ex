@@ -77,13 +77,6 @@ defmodule Engram.Workers.ConnectionCreated do
     end
   end
 
-  # The SPA host (app.engram.page in SaaS), not this endpoint's api/mcp host;
-  # self-host serves both from one origin. Same choice as
-  # `EngramWeb.Plugs.RequireOnboarding`.
-  defp app_url do
-    case Application.get_env(:engram, :frontend_base_url) do
-      url when is_binary(url) and url != "" -> url
-      _ -> EngramWeb.Endpoint.url()
-    end
-  end
+  # The SPA host (app.engram.page in SaaS), not this endpoint's api/mcp host.
+  defp app_url, do: EngramWeb.FrontendUrl.url("/")
 end

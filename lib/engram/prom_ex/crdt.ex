@@ -384,11 +384,32 @@ defmodule Engram.PromEx.Crdt do
           event_name: @sweep_event,
           measurement: :notes_over_threshold,
           description:
-            "Notes whose state exceeds 5x their content. Counted " <>
+            "Notes whose state exceeds 5x their content AND is at least 64 KB stored (#2097: " <>
+              "ratio alone flagged heavy editing that cost nothing). Counted " <>
               "over `notes_measured`, so notes under the 100-byte content floor are NOT " <>
               "included: a note written then fully emptied has tiny content and large " <>
               "tombstone state, and lands in the excluded cohort rather than here. Sizes are " <>
               "STORED bytes (after compression), unlike the checkpoint-stream ratio."
+        ),
+        # Save-loop signal (#2097). "Writes" are `notes.version` bumps: every
+        # CRDT checkpoint plus every REST/MCP write. Absent until a node has a
+        # baseline from its previous sweep; never reported as a fake 0.
+        last_value(
+          metric_prefix ++ [:state_sweep, :notes_save_rate_over_threshold],
+          event_name: @sweep_event,
+          measurement: :notes_save_rate_over_threshold,
+          description:
+            "Notes written more than 120 times in the hour since the previous sweep " <>
+              "(checkpoints plus REST/MCP writes, from notes.version deltas). A machine edit " <>
+              "loop shows here long before it shows in bytes. Aggregate with max."
+        ),
+        last_value(
+          metric_prefix ++ [:state_sweep, :save_rate_max_per_hour],
+          event_name: @sweep_event,
+          measurement: :save_rate_max_per_hour,
+          description:
+            "Most writes any one note took per hour since the previous sweep " <>
+              "(notes.version delta). Aggregate with max."
         ),
         last_value(
           metric_prefix ++ [:state_sweep, :state_bytes_total],

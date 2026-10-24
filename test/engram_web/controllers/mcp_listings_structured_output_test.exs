@@ -164,7 +164,9 @@ defmodule EngramWeb.McpListingsStructuredOutputTest do
     end
 
     test "a spent plan budget stays a distinguishable error" do
-      assert {:error, msg} = Handlers.render_search({:error, :search_cap_exceeded, 50}, %{})
+      assert {:error, {:rate_limited, msg}} =
+               Handlers.render_search({:error, :search_cap_exceeded, 50}, %{})
+
       assert msg =~ "ai_searches_per_day"
     end
   end

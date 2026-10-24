@@ -474,16 +474,23 @@ defmodule Engram.Links do
   # second table unless the first came back dangling) while the batch
   # caller can pass thunks that just return already-fetched candidates.
   defp route_resolution(ext, note_resolver, attachment_resolver) do
-    if ext != "" and ext not in @note_exts do
-      with :dangling <- attachment_resolver.() do
-        note_resolver.()
-      end
-    else
-      with :dangling <- note_resolver.() do
-        attachment_resolver.()
-      end
+    case first_table(ext) do
+      :attachment ->
+        with :dangling <- attachment_resolver.() do
+          note_resolver.()
+        end
+
+      :note ->
+        with :dangling <- note_resolver.() do
+          attachment_resolver.()
+        end
     end
   end
+
+  # Which table a target's extension tries first. The one rule both
+  # route_resolution/3 and exact_path_hit?/3 read.
+  defp first_table(ext) when ext != "" and ext not in @note_exts, do: :attachment
+  defp first_table(_ext), do: :note
 
   defp resolve_note_target(user, vault, target, hmac, dek) do
     fetch_decrypted_candidates(user, vault, hmac, :notes, dek)
@@ -619,15 +626,17 @@ defmodule Engram.Links do
   # target takes the best-ranked same-basename candidate.
   defp resolve_from_candidates(%{sorted: sorted, by_path: by_path}, target, tag) do
     if String.contains?(target, "/") do
-      [target | Enum.map(@note_exts, &(target <> &1))]
+      variants = Enum.map(["" | @note_exts], &String.downcase(target <> &1))
+
+      variants
       |> Enum.flat_map(fn variant ->
-        case Map.fetch(by_path, String.downcase(variant)) do
+        case Map.fetch(by_path, variant) do
           {:ok, hit} -> [hit]
           :error -> []
         end
       end)
       |> case do
-        [] -> :dangling
+        [] -> suffix_match(sorted, variants, tag)
         hits -> {tag, hits |> Enum.min() |> elem(1)}
       end
     else
@@ -635,6 +644,21 @@ defmodule Engram.Links do
         [] -> :dangling
         [{id, _path} | _] -> {tag, id}
       end
+    end
+  end
+
+  # Obsidian resolves a qualified link that names no exact path to a file
+  # whose path ENDS with it at a folder boundary, so `[[Folder/Note]]` finds
+  # `Projects/Folder/Note.md`. `sorted` is shortest first, so the first hit
+  # is the same winner the bare-name rule would pick among those paths.
+  defp suffix_match(sorted, variants, tag) do
+    suffixes = Enum.map(variants, &("/" <> &1))
+
+    case Enum.find(sorted, fn {_id, path} ->
+           String.ends_with?(String.downcase(path), suffixes)
+         end) do
+      nil -> :dangling
+      {id, _path} -> {tag, id}
     end
   end
 
@@ -1008,16 +1032,60 @@ defmodule Engram.Links do
       |> Repo.all(skip_tenant_check: true)
       |> Enum.uniq_by(&{&1.table, &1.id})
 
-    for {table, tag} <- [notes: 1, attachments: 2], into: %{} do
-      group =
-        rows
-        |> Enum.filter(&(&1.table == tag))
-        |> decrypt_and_group(dek, table)
-        |> index_by_hmac()
+    raw =
+      for {table, tag} <- [notes: 1, attachments: 2], into: %{} do
+        {table, rows |> Enum.filter(&(&1.table == tag)) |> decrypt_and_group(dek, table)}
+      end
 
-      {table, group}
+    indexed = index_groups(raw)
+
+    # A folder-qualified link that names no exact path can still name the
+    # END of one (`[[Folder/Note]]` -> `Projects/Folder/Note.md`), which the
+    # keyed lookup above cannot see: a suffix has no HMAC. Only those misses
+    # pay for every same-named row of their basename, once per call.
+    # ponytail: a hub basename (733 `index.md`) costs one fetch + decrypt of
+    # all its rows when a qualified link to it misses; a suffix key per path
+    # depth would make it an index probe if that ever shows up in traces.
+    # Any qualified target without an EXACT path hit, not only a dangling one:
+    # a suffix match against the partial set above can pick a row that loses
+    # to a shorter one the keyed lookup never fetched, and backlinks would
+    # then credit one link to two notes.
+    case for({h, t} <- pathed, not exact_path_hit?(indexed, h, t), uniq: true, do: h) do
+      [] ->
+        indexed
+
+      missed ->
+        raw
+        |> Map.new(fn {table, groups} ->
+          all = fetch_candidates_by_hmac(user, %{id: vault_id}, missed, table, dek)
+          {table, Map.merge(groups, all, fn _hmac, a, b -> Enum.uniq(a ++ b) end)}
+        end)
+        |> index_groups()
     end
   end
+
+  # Settled only when the row the read-time rules pick IS an exact path
+  # match in the table route_resolution/3 tries FIRST. An exact hit in the
+  # second table only wins because the first came back dangling, and on a
+  # partial set the first may hold a suffix match it never fetched.
+  defp exact_path_hit?(indexed, hmac, target) do
+    variants = Enum.map(["" | @note_exts], &String.downcase(target <> &1))
+    first = target |> Path.basename() |> Path.extname() |> String.downcase() |> first_table()
+
+    with {^first = tag, id} <- resolve_prefetched(indexed, hmac, target),
+         %{sorted: sorted} <- get_in(indexed, [table_of(tag), hmac]),
+         {_id, path} <- List.keyfind(sorted, id, 0) do
+      String.downcase(path) in variants
+    else
+      _ -> false
+    end
+  end
+
+  defp table_of(:note), do: :notes
+  defp table_of(:attachment), do: :attachments
+
+  defp index_groups(raw),
+    do: Map.new(raw, fn {table, groups} -> {table, index_by_hmac(groups)} end)
 
   # The `path_ci_hmac`s a folder-qualified `target` can match: the target as
   # written, and with each note extension appended.
@@ -1440,7 +1508,34 @@ defmodule Engram.Links do
     names
     |> Enum.group_by(& &1.vault_id)
     |> Enum.flat_map(fn {vault_id, vault_names} ->
-      spelled = Enum.map(vault_names, &{&1, target_spellings(&1.path)})
+      used = used_target_keys(user, vault_id, Enum.map(vault_names, & &1.hmac))
+      filter_key = Crypto.dek_filter_key_from_bytes(dek)
+
+      # Only the spellings some incoming link actually uses. A note three
+      # folders deep has tail spellings (`b/index`) that rarely hit an exact
+      # path, and each such miss costs a fetch of every same-named row (733
+      # for the `index.md` hub). A spelling no edge uses credits no backlink,
+      # so dropping it changes no answer. Unkeyed edges are matched by text,
+      # so a basename that has any keeps every spelling.
+      spelled =
+        Enum.map(vault_names, fn name ->
+          texts =
+            case Map.get(used, name.hmac) do
+              {:stale, _keys} ->
+                target_spellings(name.path)
+
+              {:keyed, keys} ->
+                Enum.filter(
+                  target_spellings(name.path),
+                  &MapSet.member?(keys, target_key_hmac(filter_key, &1))
+                )
+
+              nil ->
+                []
+            end
+
+          {name, texts}
+        end)
 
       pairs = for {name, texts} <- spelled, text <- texts, uniq: true, do: {name.hmac, text}
       candidates = target_candidates(user, vault_id, pairs, dek)
@@ -1456,25 +1551,53 @@ defmodule Engram.Links do
     end)
   end
 
+  # Per basename hmac: the distinct current target keys its incoming edges
+  # carry, or `:stale` when any edge's keys are missing or stale. One
+  # indexed query for every name in the vault.
+  defp used_target_keys(_user, _vault_id, []), do: %{}
+
+  defp used_target_keys(user, vault_id, hmacs) do
+    from(l in NoteLink,
+      where:
+        l.user_id == ^user.id and l.vault_id == ^vault_id and
+          l.target_basename_hmac in ^Enum.uniq(hmacs),
+      distinct: true,
+      select:
+        {l.target_basename_hmac, l.target_key_hmac,
+         keys_stale(l.link_keys_stamp, l.target_text_nonce)}
+    )
+    |> Repo.all(skip_tenant_check: true)
+    |> Enum.reduce(%{}, fn {hmac, key, stale?}, acc ->
+      Map.update(acc, hmac, tag_used(stale?, MapSet.new([key])), fn {state, keys} ->
+        tag_used(stale? or state == :stale, MapSet.put(keys, key))
+      end)
+    end)
+  end
+
+  defp tag_used(true, keys), do: {:stale, keys}
+  defp tag_used(false, keys), do: {:keyed, keys}
+
   defp target_spellings(path) do
     key = basename_key(path)
     bare = [key | Enum.map(@note_exts, &(key <> &1))]
 
-    pathed =
-      if String.contains?(path, "/") do
-        full = String.downcase(path)
+    # The full path and every shorter tail of it that still has a folder
+    # (`a/b/note.md` -> `a/b/note.md`, `b/note.md`), each with and without a
+    # note extension: a qualified link can name any of them (suffix_match/3).
+    segments = path |> String.downcase() |> String.split("/")
 
-        [
-          full
-          | for(
-              ext <- @note_exts,
-              String.ends_with?(full, ext),
-              do: String.replace_suffix(full, ext, "")
-            )
-        ]
-      else
-        []
-      end
+    pathed =
+      for n <- (length(segments) - 1)..1//-1,
+          full = segments |> Enum.take(-(n + 1)) |> Enum.join("/"),
+          spelling <- [
+            full
+            | for(
+                ext <- @note_exts,
+                String.ends_with?(full, ext),
+                do: String.replace_suffix(full, ext, "")
+              )
+          ],
+          do: spelling
 
     Enum.uniq(bare ++ pathed)
   end

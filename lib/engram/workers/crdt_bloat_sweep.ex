@@ -112,6 +112,8 @@ defmodule Engram.Workers.CrdtBloatSweep do
   hardcoded key list, so both have to be edited by hand.
   """
   @type measurements :: %{
+          optional(:notes_save_rate_over_threshold) => non_neg_integer(),
+          optional(:save_rate_max_per_hour) => non_neg_integer(),
           notes: non_neg_integer(),
           notes_with_state: non_neg_integer(),
           notes_measured: non_neg_integer(),
@@ -126,6 +128,9 @@ defmodule Engram.Workers.CrdtBloatSweep do
         }
 
   @event [:engram, :crdt, :state_sweep]
+
+  # With no baseline, the first window is the last hour plus slack.
+  @first_window_s 3_900
 
   # Matches the `>5x` panel on the engram-crdt dashboard. Changing it here
   # without changing the `le` bucket there makes the two disagree silently.
@@ -199,6 +204,9 @@ defmodule Engram.Workers.CrdtBloatSweep do
   @spec measure() :: measurements()
   defp measure do
     tag = Envelope.tag_bytes()
+    now = DateTime.utc_now()
+    baseline = baseline(now)
+    since = if baseline, do: elem(baseline, 0), else: DateTime.add(now, -@first_window_s)
 
     %Postgrex.Result{rows: [row]} =
       Repo.maintenance().query!(
@@ -219,9 +227,18 @@ defmodule Engram.Workers.CrdtBloatSweep do
           coalesce(max(ratio) FILTER (WHERE has_state AND big), 0)::float8,
           coalesce(sum(state_bytes), 0)::bigint,
           coalesce(sum(content_bytes), 0)::bigint,
-          count(*) FILTER (WHERE has_state AND big AND ratio > $2::float8)::bigint
+          count(*) FILTER (
+            WHERE has_state AND big AND ratio > $2::float8 AND state_bytes >= $4::int
+          )::bigint,
+          -- Both ORDER BY id: two aggregates have no shared order otherwise,
+          -- and the arrays are zipped id to version.
+          coalesce(array_agg(id ORDER BY id) FILTER (WHERE written), '{}'),
+          coalesce(array_agg(version ORDER BY id) FILTER (WHERE written), '{}')
         FROM (
           SELECT
+            n.id,
+            n.version,
+            n.updated_at >= $5 AS written,
             n.crdt_state_ciphertext IS NOT NULL AS has_state,
             greatest(octet_length(n.crdt_state_ciphertext) - $1::int, 0) AS state_bytes,
             greatest(octet_length(n.content_ciphertext) - $1::int, 0) AS content_bytes,
@@ -233,11 +250,35 @@ defmodule Engram.Workers.CrdtBloatSweep do
             AND n.kind = 'note'
         ) sized
         """,
-        [tag, @bloat_threshold * 1.0, CrdtBloat.min_content_bytes()],
+        [
+          tag,
+          @bloat_threshold * 1.0,
+          CrdtBloat.min_content_bytes(),
+          CrdtBloat.alert_min_state_bytes(),
+          # `notes.updated_at` is `timestamp without time zone`, written in UTC.
+          DateTime.to_naive(since)
+        ],
         timeout: :timer.minutes(5)
       )
 
-    [notes, with_state, measured, p50, p90, p99, max, state_bytes, content_bytes, over] = row
+    [
+      notes,
+      with_state,
+      measured,
+      p50,
+      p90,
+      p99,
+      max,
+      state_bytes,
+      content_bytes,
+      over,
+      ids,
+      versions
+    ] =
+      row
+
+    versions = Map.new(Enum.zip(Enum.map(ids, &Ecto.UUID.load!/1), versions))
+    Engram.Cache.put(:crdt_sweep_versions, :last, {now, versions})
 
     %{
       notes: notes,
@@ -255,6 +296,46 @@ defmodule Engram.Workers.CrdtBloatSweep do
       # panels could say "absent means it has not run"; nothing could say
       # "frozen". `time() - this` is that missing signal, and it costs a field.
       measured_at_unix: System.system_time(:second)
+    }
+    |> Map.merge(save_rate(baseline, now, versions))
+  end
+
+  # The previous sweep's baseline, when this node has one young enough to diff.
+  defp baseline(now) do
+    case Engram.Cache.get(:crdt_sweep_versions, :last) do
+      {:ok, {%DateTime{} = at, %{} = versions}} ->
+        if DateTime.diff(now, at) <= 3 * 3_600, do: {at, versions}
+
+      _ ->
+        nil
+    end
+  end
+
+  # Per-note writes per hour (#2097's "edits" are these: every checkpoint and
+  # every REST/MCP write bumps `notes.version`), as the version delta of each
+  # note written since the last sweep against that sweep's baseline. A
+  # machine edit loop shows here long before it shows in bytes.
+  #
+  # Without a baseline (first run on this node, or the cache expired) both
+  # keys are left OUT rather than reported as 0, so the gauges keep their last
+  # value instead of claiming "no loop" about an hour nobody measured.
+  #
+  # ponytail: a note first written in this window has no baseline version, so
+  # a loop that starts mid-hour shows one sweep later. The baseline only holds
+  # notes written in the previous window, which keeps it small.
+  defp save_rate(nil, _now, _versions), do: %{}
+
+  defp save_rate({at, before}, now, versions) do
+    # Per hour, never faster: the cron is hourly, and a hand-run sweep minutes
+    # after the last must not divide a few writes by a few minutes.
+    hours = max(DateTime.diff(now, at), 3_600) / 3_600
+
+    rates =
+      for {id, v} <- versions, prev = before[id], is_integer(prev), do: round((v - prev) / hours)
+
+    %{
+      notes_save_rate_over_threshold: Enum.count(rates, &(&1 > CrdtBloat.save_rate_threshold())),
+      save_rate_max_per_hour: Enum.max(rates, fn -> 0 end)
     }
   end
 

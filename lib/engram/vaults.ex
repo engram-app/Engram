@@ -387,6 +387,77 @@ defmodule Engram.Vaults do
       else: list
   end
 
+  @doc """
+  Records the Obsidian-plugin version a `sync:` join reported for `vault_id`,
+  so `list_vaults` can say when that vault's sync is blocked on an update.
+
+  Writes only when the version changed or the stamp is over an hour old, so a
+  client rejoining in a loop costs an indexed read, not a write per join. A
+  vault that is not the user's matches no row. `nil` (the web SPA and every
+  plugin that predates reporting) records nothing.
+  """
+  # ponytail: last writer wins per vault; two devices on different versions
+  # flip it on each join. Per-device rows if that ever confuses anyone.
+  @spec record_plugin_version(map(), Ecto.UUID.t(), String.t() | nil) :: :ok
+  def record_plugin_version(_user, _vault_id, nil), do: :ok
+
+  def record_plugin_version(%{id: user_id}, vault_id, version) when is_binary(version) do
+    now = DateTime.utc_now(:second)
+    stale = DateTime.add(now, -3600)
+
+    # A WARM vault list answers the common case (same version, stamped within
+    # the hour) with no transaction. Only peeked, never loaded: a miss would
+    # decrypt every vault name just to skip one cheap conditional UPDATE.
+    cached =
+      case Engram.Cache.get(:vaults, user_id) do
+        {:ok, vaults} when is_list(vaults) -> vaults
+        _ -> []
+      end
+
+    if Enum.any?(cached, &(&1.id == vault_id and current_stamp?(&1, version, stale))),
+      do: :ok,
+      else: write_plugin_version(user_id, vault_id, version, now, stale)
+  end
+
+  defp current_stamp?(vault, version, stale),
+    do:
+      vault.plugin_version == version and is_struct(vault.plugin_version_seen_at, DateTime) and
+        DateTime.compare(vault.plugin_version_seen_at, stale) != :lt
+
+  # A blocked version stops counting a week after it was last seen: the
+  # device that reported it may be gone, and a stale "update your plugin"
+  # would send the user chasing nothing.
+  @sync_blocked_window_s 7 * 86_400
+
+  @doc """
+  Whether `vault`'s Obsidian plugin last reported (within a week) a version
+  below `Engram.PluginVersion.minimum/0`, so its sync joins are refused.
+  """
+  @spec plugin_sync_blocked?(Vault.t()) :: boolean()
+  def plugin_sync_blocked?(%Vault{plugin_version: v, plugin_version_seen_at: %DateTime{} = at})
+      when is_binary(v) do
+    DateTime.diff(DateTime.utc_now(), at) <= @sync_blocked_window_s and
+      not Engram.PluginVersion.supported?(v)
+  end
+
+  def plugin_sync_blocked?(_vault), do: false
+
+  defp write_plugin_version(user_id, vault_id, version, now, stale) do
+    {:ok, {n, _}} =
+      Repo.with_tenant(user_id, fn ->
+        from(v in scoped(user_id),
+          where: v.id == ^vault_id,
+          where:
+            fragment("? IS DISTINCT FROM ?", v.plugin_version, ^version) or
+              is_nil(v.plugin_version_seen_at) or v.plugin_version_seen_at < ^stale
+        )
+        |> Repo.update_all(set: [plugin_version: version, plugin_version_seen_at: now])
+      end)
+
+    if n > 0, do: evict_vaults(user_id)
+    :ok
+  end
+
   # Local + cluster broadcast, after the write's transaction: the trigger's
   # NOTIFY covers every node on commit; this makes the writing node coherent
   # for the rest of its own request without waiting for that round trip.

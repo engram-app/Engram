@@ -61,7 +61,7 @@ defmodule EngramWeb.Plugs.VaultPlug do
         reject(conn, "vault_not_found", "Vault not found")
 
       {:error, :no_default_vault} ->
-        reject(conn, "no_default_vault", "No vault configured. Sync from Obsidian to create one.")
+        reject(conn, "no_default_vault", EngramWeb.FrontendUrl.no_vault_message())
     end
   end
 

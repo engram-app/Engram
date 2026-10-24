@@ -1,6 +1,6 @@
 # Context Doc: Measuring CRDT doc bloat — the traps in the numbers
 
-_Last verified: 2026-10-03_
+_Last verified: 2026-10-24_
 
 ## Status
 
@@ -13,6 +13,32 @@ the tripwire.
 Reopen when any of these holds on the engram-crdt dashboard:
 `notes_over_threshold` non-zero and sustained, `bloat_ratio_p99` above ~3, or
 `state_bytes_total` above 1.5x `content_bytes_total`.
+
+## Trap 0 — ratio alone flags heavy editing that costs nothing (#2097)
+
+On 2026-10-20 the over-threshold alert fired for one note: 712 checkpoints in
+10 hours, 19 KB of state over 3.4 KB of content (ratio 5.7). Each checkpoint
+leaves ~27 B of deletion history; that is normal heavy editing and no bytes
+worth reclaiming. So `notes_over_threshold` now counts a note only when the
+ratio is over 5x **and** the stored state is at least 64 KB
+(`Engram.Notes.CrdtBloat.alert_min_state_bytes/0`, the one source of truth).
+
+"Edits" in that issue means **checkpoints**, i.e. `notes.version` bumps, not
+keystrokes: the debounce folds many keystrokes into one checkpoint, and REST /
+MCP writes bump `version` too. The rate signal for a runaway writer is its own
+pair of gauges, `notes_save_rate_over_threshold` (notes written more than
+`CrdtBloat.save_rate_threshold/0` = 120 times in the hour) and
+`save_rate_max_per_hour`. The sweep computes them in its one aggregate pass:
+the ids and versions of notes whose `updated_at` is past the previous sweep,
+diffed against that sweep's baseline (`:crdt_sweep_versions` cache,
+node-local, 3h TTL). Two consequences:
+
+- No baseline (first run on a node, a run that landed on a different ECS task,
+  or a gap over 3h) leaves both keys **out** of the event, so the gauges keep
+  their last value instead of reporting a fake 0. Read them with
+  `measured_at_unix` like every other sweep gauge.
+- A note first written in this window has no baseline version, so a loop that
+  starts mid-hour shows one sweep later.
 
 ## What This Is
 
@@ -155,7 +181,8 @@ at the worker instead of at the schedule.
   measurement added with no matching PromEx gauge — nothing does. Four lists
   must be edited together by hand: the map in `measure/0`, the `@type`, the
   `last_value` list in `Engram.PromEx.Crdt`, and the hardcoded key list in
-  `Engram.PromEx.CrdtTest`.
+  `Engram.PromEx.CrdtTest`. The two save-rate keys are `optional` in the type
+  because they are omitted without a baseline.
 - `CrdtBloatSweep.measure_and_emit/0` is public so the sweep can be run by hand
   without waiting for a cron slot — and it carries the tenancy guard **itself**
   for that reason. The guard used to live in `perform/1`, which left the
