@@ -25,7 +25,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
   alias Engram.Notes.{CrdtIndexDoc, CrdtIndexRegistry}
-  alias Engram.Workers.ProjectVaultIndex
+  alias Engram.Workers.{ProjectVaultIndex, ReleaseIndexEntries}
   alias Yex.Sync.SharedDoc
 
   setup do
@@ -107,7 +107,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
     row && row.state_ciphertext
   end
 
-  # Releases go through Engram.Workers.ReleaseIndexEntries so they commit with
+  # Releases go through ReleaseIndexEntries so they commit with
   # the caller's transaction and run after it — see that worker's moduledoc.
   defp drain_releases do
     jobs =
@@ -118,7 +118,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       )
 
     Enum.each(jobs, fn job ->
-      assert :ok = perform_job(Engram.Workers.ReleaseIndexEntries, job.args)
+      assert :ok = perform_job(ReleaseIndexEntries, job.args)
     end)
 
     Repo.delete_all(from(j in Oban.Job, where: j.id in ^Enum.map(jobs, & &1.id)))
@@ -155,7 +155,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
 
     test "ReleaseIndexEntries snoozes", ctx do
       assert {:snooze, 30} =
-               perform_job(Engram.Workers.ReleaseIndexEntries, %{
+               perform_job(ReleaseIndexEntries, %{
                  "user_id" => ctx.user.id,
                  "vault_id" => ctx.vault.id,
                  "note_ids" => []
@@ -791,16 +791,16 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
     # series, so a storm holds at most one `crdt_checkpoint` slot (and one DB
     # connection) instead of every slot queueing on the vault's fold lock.
     defp drain_chain(max_links \\ 1_000) do
-      Enum.reduce_while(1..max_links, {0, 0}, fn _, {links, peak_mem} ->
+      Enum.reduce_while(1..max_links, {0, 0}, fn _, {links, max_mem} ->
         case release_jobs() do
           [] ->
-            {:halt, {links, peak_mem}}
+            {:halt, {links, max_mem}}
 
           [job] ->
-            assert :ok = perform_job(Engram.Workers.ReleaseIndexEntries, job.args)
+            assert :ok = perform_job(ReleaseIndexEntries, job.args)
             Repo.delete_all(from(j in Oban.Job, where: j.id == ^job.id))
             {:memory, mem} = Process.info(self(), :memory)
-            {:cont, {links + 1, max(peak_mem, mem)}}
+            {:cont, {links + 1, max(max_mem, mem)}}
 
           jobs ->
             flunk("#{length(jobs)} release jobs runnable at once for one vault, expected 1")
@@ -811,10 +811,18 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
     # Each link is ONE index-room change of at most chunk_size ids, so the chunk
     # bounds the read, the delete set broadcast to every client, and what a
     # retry redoes. 20,000 ids is the shape the 2026-10-23 storm was heading for.
+    # A zero budget makes every link hand off after one chunk, so the chain
+    # and its one-link-at-a-time property are exercised at a test-sized cost.
+    defp force_chain do
+      Application.put_env(:engram, :release_index_link_budget_ms, 0)
+      on_exit(fn -> Application.delete_env(:engram, :release_index_link_budget_ms) end)
+    end
+
     test "20,000 stale claims release as ONE chain, a chunk per link, one link at a time",
          ctx do
+      force_chain()
       attach_projection_telemetry()
-      chunk = Engram.Workers.ReleaseIndexEntries.chunk_size()
+      chunk = ReleaseIndexEntries.chunk_size()
       ids = stale_ids(20_000)
       seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
 
@@ -825,7 +833,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       assert_receive {:projection, %{released: 20_000, unresolved: 0}, _}, 5_000
 
       attach_release_telemetry()
-      {drain_us, {links, peak_mem}} = :timer.tc(fn -> drain_chain() end)
+      {drain_us, {links, max_mem}} = :timer.tc(fn -> drain_chain() end)
 
       assert links == div(20_000 + chunk - 1, chunk)
 
@@ -835,10 +843,24 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       assert index_entries(ctx) == %{}
       # Generous ceilings for a loaded CI box; a regression to per-id work or an
       # unbounded copy in the job blows through both by an order of magnitude.
-      # Memory is THIS process (perform_job runs the worker inline), not the
-      # whole VM, so other tests cannot move it.
+      # Memory is THIS process after each link (perform_job runs the worker
+      # inline), not the whole VM, so other tests cannot move it. It catches
+      # retained growth, not a transient peak.
       assert run_us + drain_us < 120_000_000
-      assert peak_mem < 256 * 1_048_576
+      assert max_mem < 256 * 1_048_576
+    end
+
+    test "within the link budget, ONE job releases every chunk and enqueues no successor",
+         ctx do
+      chunk = ReleaseIndexEntries.chunk_size()
+      ids = stale_ids(chunk * 2 + 1)
+      seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
+      assert :ok = run(ctx)
+
+      attach_release_telemetry()
+      assert {1, _} = drain_chain()
+      assert count_messages(:index_release, 0) == 3, "one index-room change per chunk"
+      assert index_entries(ctx) == %{}
     end
 
     # A real read failure: the user's DEK no longer unwraps (the shape a KMS
@@ -846,7 +868,8 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
     # returns an error. The link must release nothing, enqueue no successor
     # (or the rest would run past an unread chunk), and resume on retry.
     test "a failed link keeps the rest of the chain and resumes on retry", ctx do
-      chunk = Engram.Workers.ReleaseIndexEntries.chunk_size()
+      force_chain()
+      chunk = ReleaseIndexEntries.chunk_size()
       ids = stale_ids(chunk * 2)
       seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
       assert :ok = run(ctx)
@@ -857,7 +880,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       <<head::binary-size(last), byte>> = original_dek
       set_dek!(ctx.user, <<head::binary, Bitwise.bxor(byte, 0xFF)>>)
 
-      assert {:error, _} = perform_job(Engram.Workers.ReleaseIndexEntries, job.args)
+      assert {:error, _} = perform_job(ReleaseIndexEntries, job.args)
       assert [^job] = release_jobs(), "a failed link must not enqueue its successor"
 
       set_dek!(ctx.user, original_dek)
@@ -895,7 +918,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       )
 
       try do
-        assert :ok = perform_job(Engram.Workers.ReleaseIndexEntries, job.args)
+        assert :ok = perform_job(ReleaseIndexEntries, job.args)
       after
         :telemetry.detach({__MODULE__, ref})
       end

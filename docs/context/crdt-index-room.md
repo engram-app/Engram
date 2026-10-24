@@ -19,12 +19,13 @@ UUIDv7 mint time is older than an hour (`@stale_claim_grace_ms`, #1550,
 released.
 
 A run sends ALL its stale ids as ONE release job and logs one summary line. Per-id jobs pinned prod
-on 2026-10-23 (14k+ jobs for one first-sync vault). The job is a chain: each link releases at most
-2,000 ids (`ReleaseIndexEntries.chunk_size/0`; one notes read and one index-room change), then
-enqueues the rest as its successor, only after its own release succeeded. One link per vault runs at
-a time, so a storm holds one `crdt_checkpoint` slot. Enqueueing every chunk up front (the first shape
-of #2170) let 17 chunks fill all 6 slots, each waiting on the vault's fold lock while holding a DB
-connection. The size is measured, not assumed: a link's cost is mostly a fixed part that scales with
+on 2026-10-23 (14k+ jobs for one first-sync vault). The job releases its ids in chunks of at most
+2,000 (`ReleaseIndexEntries.chunk_size/0`; one notes read and one index-room change each), in series.
+After a minute (`link_budget_ms/0`) it enqueues what is left as its successor, so a chain runs one
+link at a time and never meets the 5 minute job timeout; a 34k storm is one job. Other release jobs
+for the vault (folder or note deletes) can still run beside a chain. Enqueueing every chunk up front
+(the first shape of #2170) let 17 chunks fill all 6 `crdt_checkpoint` slots, each waiting on the
+vault's fold lock while holding a DB connection. The size is measured, not assumed: a link's cost is mostly a fixed part that scales with
 the whole index (~0.2-0.5 s at 20-40k entries), each id adds ~0.05 ms, and a worst-case delete-set
 broadcast is ~4 B per id. At 20k stale ids, 500 per job took 20 s total and 2,000 took 5.7 s with the
 same ~0.8 s slowest job. It is not the 500-row SQL chunk in `Engram.Notes`, which bounds bind params.
