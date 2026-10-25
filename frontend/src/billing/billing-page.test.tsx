@@ -715,6 +715,99 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 			expect(mockTrack).not.toHaveBeenCalledWith("checkout_abandoned", expect.anything());
 		});
+
+		// The activation push can beat Paddle.js's checkout.completed. Our own
+		// Checkout.close() then fires checkout.closed on a paid checkout, which
+		// must not read as a stall or an abandon (#2203).
+		it("does not emit checkout_stalled/abandoned when the activation push closes the checkout first", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return {
+					Checkout: {
+						open: vi.fn(),
+						close: vi.fn(() => captured!({ name: "checkout.closed", data: {} })),
+					},
+				};
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+
+			await act(async () => {
+				captured!({ name: "checkout.loaded", data: {} });
+				captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+				await Promise.resolve();
+			});
+			await act(async () => {
+				channelHandlers.subscription_activated!({
+					tier: "starter",
+					status: "trialing",
+					subscription_id: "sub_1",
+				});
+				await Promise.resolve();
+			});
+
+			const exits = mockTrack.mock.calls.filter(
+				([e]) => e === "checkout_stalled" || e === "checkout_abandoned",
+			);
+			expect(exits).toEqual([]);
+			expect(mockTrack).toHaveBeenCalledWith("checkout_completed", { method: "unknown" });
+			// The push won, so the completion is reported from it, once: a late
+			// checkout.completed from Paddle.js must not count it twice.
+			await act(async () => {
+				captured!({ name: "checkout.completed", data: {} });
+				await Promise.resolve();
+			});
+			expect(mockTrack.mock.calls.filter(([e]) => e === "checkout_completed")).toEqual([
+				["checkout_completed", { method: "unknown" }],
+			]);
+		});
+
+		// subscription_activated is user-scoped and also fires for an OLD
+		// subscription's update or cancel. Only a push that shows a paying
+		// subscription counts as this checkout's completion; anything else must
+		// leave a real stall reported.
+		it("still reports the stall when the push is not a paying subscription", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return {
+					Checkout: {
+						open: vi.fn(),
+						close: vi.fn(() => captured!({ name: "checkout.closed", data: {} })),
+					},
+				};
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+
+			await act(async () => {
+				captured!({ name: "checkout.loaded", data: {} });
+				captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+				await Promise.resolve();
+			});
+			await act(async () => {
+				channelHandlers.subscription_activated!({
+					tier: "starter",
+					status: "canceled",
+					subscription_id: "sub_old",
+				});
+				await Promise.resolve();
+			});
+
+			expect(mockTrack).toHaveBeenCalledWith(
+				"checkout_stalled",
+				{ method: "unknown", reason: "payment_unfinished" },
+				{ beacon: false },
+			);
+			expect(mockTrack).not.toHaveBeenCalledWith("checkout_completed", expect.anything());
+		});
 	});
 
 	it("onboarding (inline): CHECKOUT_PAYMENT_FAILED keeps Paddle's frame open so the decline reason + retry stay visible", async () => {
