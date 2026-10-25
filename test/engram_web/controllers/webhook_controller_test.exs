@@ -3,6 +3,9 @@ defmodule EngramWeb.WebhookControllerTest do
   use Oban.Testing, repo: Engram.Repo
 
   import Ecto.Query
+  import Mox
+
+  alias Engram.Webhooks.Idempotency
 
   describe "POST /webhooks/paddle" do
     test "returns 400 when signature is missing", %{conn: conn} do
@@ -508,13 +511,13 @@ defmodule EngramWeb.WebhookControllerTest do
         sub_event("subscription.created", "ntf_transient", "sub_transient", user, "active")
 
       assert json_response(send_payload(payload), 500)["status"] == "error"
-      assert Engram.Webhooks.Idempotency.check(:paddle, "ntf_transient") == :proceed
+      assert Idempotency.check(:paddle, "ntf_transient") == :proceed
 
       Engram.Repo.query!("DROP TRIGGER fail_sub_write ON subscriptions")
 
       assert json_response(send_payload(payload), 200)["status"] == "ok"
       assert %{status: "active"} = Engram.Billing.get_subscription(user)
-      assert Engram.Webhooks.Idempotency.check(:paddle, "ntf_transient") == :duplicate
+      assert Idempotency.check(:paddle, "ntf_transient") == :duplicate
     end
 
     test "a permanent bad payload (no custom_data.user_id) answers 200 so Paddle stops" do
@@ -658,7 +661,7 @@ defmodule EngramWeb.WebhookControllerTest do
           ] do
         conn = send_payload(sub_event(type, id, "sub_gone", user, "canceled"))
         assert json_response(conn, 200)["status"] == "ok"
-        assert Engram.Webhooks.Idempotency.check(:paddle, id) == :duplicate
+        assert Idempotency.check(:paddle, id) == :duplicate
       end
 
       assert Sentry.Test.pop_sentry_reports() == []
@@ -667,7 +670,6 @@ defmodule EngramWeb.WebhookControllerTest do
 
   describe "POST /webhooks/paddle: refund cancel rejected by Paddle" do
     test "answers 200 so Paddle stops retrying a cancel it will never accept" do
-      import Mox
       user = insert(:user)
 
       insert(:subscription,
@@ -736,7 +738,7 @@ defmodule EngramWeb.WebhookControllerTest do
         )
 
       assert json_response(conn, 200)["status"] == "ok"
-      assert Engram.Webhooks.Idempotency.check(:paddle, "ntf_s1_retry") == :duplicate
+      assert Idempotency.check(:paddle, "ntf_s1_retry") == :duplicate
       assert %{paddle_subscription_id: "sub_s2"} = Engram.Billing.get_subscription(user)
     end
 
@@ -759,7 +761,7 @@ defmodule EngramWeb.WebhookControllerTest do
         )
 
       assert json_response(send_payload(early_update), 500)["status"] == "error"
-      assert Engram.Webhooks.Idempotency.check(:paddle, "ntf_w3") == :proceed
+      assert Idempotency.check(:paddle, "ntf_w3") == :proceed
 
       send_payload(
         sub_event("subscription.created", "ntf_w2", "sub_w_new", user, "active",
