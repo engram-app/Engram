@@ -125,8 +125,7 @@ export default {
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"Kho lưu trữ không giới hạn · 50 GB · tìm kiếm đa kho lưu trữ + API",
 	"Choose Pro": "Chọn gói Pro",
-	"14-day money-back guarantee · cancel anytime":
-		"Chính sách hoàn tiền 14 ngày · hủy bất cứ lúc nào",
+	"14-day money-back guarantee · cancel anytime": "Bảo hành hoàn tiền 14 ngày · hủy bất cứ lúc nào",
 	"10 vaults · 10 GB · unlimited AI": "10 kho lưu trữ · 10 GB · AI không giới hạn",
 	"Choose Starter": "Chọn gói Starter",
 	"Choose Free": "Chọn Miễn phí",

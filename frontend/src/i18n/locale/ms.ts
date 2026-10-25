@@ -128,7 +128,7 @@ export default {
 		"Peti nota tanpa had · 50 GB · carian lintas peti nota + API",
 	"Choose Pro": "Pilih Pro",
 	"14-day money-back guarantee · cancel anytime":
-		"Jaminan wang kembali 14 hari · batalkan pada bila-bila masa",
+		"Jaminan wang kembali 14 hari · batalkan bila-bila masa",
 	"10 vaults · 10 GB · unlimited AI": "10 peti nota · 10 GB · AI tanpa had",
 	"Choose Starter": "Pilih Starter",
 	"Choose Free": "Pilih Percuma",

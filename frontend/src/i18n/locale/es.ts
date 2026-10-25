@@ -129,7 +129,7 @@ export default {
 		"Bóvedas ilimitadas · 50 GB · búsqueda entre bóvedas + API",
 	"Choose Pro": "Elige la versión Pro",
 	"14-day money-back guarantee · cancel anytime":
-		"Garantía de devolución de dinero de 14 días · cancela cuando quieras",
+		"Garantía de devolución de dinero en 14 días · cancela cuando quieras",
 	"10 vaults · 10 GB · unlimited AI": "10 bóvedas · 10 GB · IA ilimitada",
 	"Choose Starter": "Elige la versión Starter",
 	"Choose Free": "Elige Gratuito",

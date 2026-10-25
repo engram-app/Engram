@@ -126,6 +126,7 @@ export default {
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"無制限の保管庫 · 50 GB · 保管庫間の検索 + API",
 	"Choose Pro": "Proプランを選択",
+	"14-day money-back guarantee · cancel anytime": "14日間返金保証 · いつでもキャンセル可能",
 	"10 vaults · 10 GB · unlimited AI": "10個の保管庫 · 10 GB · 無制限のAI",
 	"Choose Starter": "Starterプランを選択",
 	"Choose Free": "無料版を選択",

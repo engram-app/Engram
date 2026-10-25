@@ -130,7 +130,7 @@ export default {
 		"Cofres ilimitados · 50 GB · busca entre cofres + API",
 	"Choose Pro": "Escolher plano Pro",
 	"14-day money-back guarantee · cancel anytime":
-		"Garantia de reembolso de 14 dias · cancele a qualquer momento",
+		"Garantia de reembolso em 14 dias · cancele a qualquer momento",
 	"10 vaults · 10 GB · unlimited AI": "10 cofres · 10 GB · IA ilimitada",
 	"Choose Starter": "Escolher plano Starter",
 	"Choose Free": "Escolha Gratuito",

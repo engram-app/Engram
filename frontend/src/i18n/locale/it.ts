@@ -128,7 +128,7 @@ export default {
 		"Vault illimitati · 50 GB · ricerca tra vault + API",
 	"Choose Pro": "Scegli Pro",
 	"14-day money-back guarantee · cancel anytime":
-		"Garanzia di rimborso di 14 giorni · puoi cancellare quando vuoi",
+		"Garanzia di rimborso di 14 giorni · puoi disdire quando vuoi",
 	"10 vaults · 10 GB · unlimited AI": "10 vault · 10 GB · AI illimitata",
 	"Choose Starter": "Scegli Starter",
 	"Choose Free": "Scegli Gratuito",

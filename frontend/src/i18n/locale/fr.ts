@@ -128,7 +128,7 @@ export default {
 		"Coffres illimités · 50 Go · recherche multi-coffres + API",
 	"Choose Pro": "Choisir l'abonnement Pro",
 	"14-day money-back guarantee · cancel anytime":
-		"Garantie de remboursement de 14 jours · tu peux annuler à tout moment",
+		"Garantie de remboursement de 14 jours · annulation possible à tout moment",
 	"10 vaults · 10 GB · unlimited AI": "10 coffres · 10 Go · IA illimitée",
 	"Choose Starter": "Choisir l'abonnement Starter",
 	"Choose Free": "Choisis Gratuit",

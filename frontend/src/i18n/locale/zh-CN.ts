@@ -114,7 +114,7 @@ export default {
 	"Both plans come with a 14-day money-back guarantee.": "两个方案都提供 14 天退款保证。",
 	"Unlimited vaults · 50 GB · cross-vault search + API": "无限仓库 · 50 GB · 跨仓库搜索 + API",
 	"Choose Pro": "选择 Pro 版",
-	"14-day money-back guarantee · cancel anytime": "14 天退款保证 · 随时取消",
+	"14-day money-back guarantee · cancel anytime": "14天无条件退款 · 随时取消",
 	"10 vaults · 10 GB · unlimited AI": "10个仓库 · 10 GB · 无限制 AI",
 	"Choose Starter": "选择 Starter",
 	"Choose Free": "选择免费",
