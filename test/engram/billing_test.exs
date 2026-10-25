@@ -1354,6 +1354,22 @@ defmodule Engram.BillingTest do
       assert Billing.tier(user) == :starter
     end
 
+    # Our refund cancel, then Paddle's own subscription.canceled for the same
+    # change: one downgrade, not two.
+    test "a repeat cancel of an already canceled row emits no second downgrade" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_twice", status: "active")
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :tier_downgraded]])
+
+      event = %{"event_type" => "subscription.canceled", "data" => canceled_entity("sub_twice")}
+
+      assert {:ok, %Subscription{status: "canceled"}} = Billing.upsert_from_paddle_event(event)
+      assert {:ok, %Subscription{status: "canceled"}} = Billing.upsert_from_paddle_event(event)
+
+      assert_received {[:engram, :tier_downgraded], ^ref, _, _}
+      refute_received {[:engram, :tier_downgraded], ^ref, _, _}
+    end
+
     test "a full refund whose transaction cannot be looked up is reported as an error" do
       user = insert(:user)
       insert(:subscription, user: user, paddle_subscription_id: "sub_refund_4", status: "active")

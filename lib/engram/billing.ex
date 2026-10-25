@@ -1240,6 +1240,11 @@ defmodule Engram.Billing do
            occurred_at,
            stamp_free
          ) do
+      # Already canceled (our refund cancel, then Paddle's own canceled; or a
+      # replay): the row write is idempotent, the side effects are not.
+      {:ok, %{previous: %{status: "canceled"}} = updated} ->
+        {:ok, updated}
+
       {:ok, updated} ->
         broadcast_subscription_activated(updated.user_id, updated)
 
