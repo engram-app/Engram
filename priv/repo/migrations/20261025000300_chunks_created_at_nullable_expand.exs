@@ -1,6 +1,9 @@
 defmodule Engram.Repo.Migrations.ChunksCreatedAtNullableExpand do
   use Ecto.Migration
 
+  # squawk-ignore: ban-drop-not-null
+  # Nothing reads the column (no client to break); this is the expand step.
+
   # `chunks.created_at` has no reader. This release stops writing it; the
   # previous release still does, which a nullable column accepts, so a
   # rolling deploy and a rollback both keep working. The contract release

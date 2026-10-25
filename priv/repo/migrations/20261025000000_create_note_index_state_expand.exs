@@ -37,8 +37,8 @@ defmodule Engram.Repo.Migrations.CreateNoteIndexStateExpand do
     # the boot migrator retries.
     execute "SET lock_timeout = '5s'"
 
-    # squawk-ignore prefer-bigint-over-smallint
-    # Bounded stamps (versions, crash count), clamped on write.
+    # squawk-ignore: prefer-bigint-over-smallint, prefer-bigint-over-int
+    # Bounded stamps (versions, crash count, a note's chunk count), clamped on write.
     execute """
     CREATE TABLE note_index_state (
       embed_retry_after timestamptz,
