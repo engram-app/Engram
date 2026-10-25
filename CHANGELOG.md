@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.65.2](https://github.com/engram-app/Engram/compare/0.65.1...0.65.2) (2026-10-25)
+
+
+### Bug Fixes
+
+* 0.60.3 DEK timeout herd, folds leak, empty-bucket wake ([#2123](https://github.com/engram-app/Engram/issues/2123)) ([078d730](https://github.com/engram-app/Engram/commit/078d730fdd8033652d1298b998d5d0bdac41afdf))
+
 ## [0.65.1](https://github.com/engram-app/Engram/compare/0.65.0...0.65.1) (2026-10-25)
 
 
