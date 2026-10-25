@@ -35,8 +35,15 @@ channel never crashes on unknown frames, same posture as #862's stub).
 
 | Event | Payload | When | Purpose |
 |-------|---------|------|---------|
-| `note_changed` (upsert) | `{event_type: "upsert", id, path, vault_id, content?, content_hash, title, folder, tags, mtime, updated_at, version}` | After a single-note upsert by ANY device | Real-time sync notification |
-| `note_changed` (delete) | `{event_type: "delete", path, vault_id}` | After a delete/rename-away | Tombstone notification |
+| `note_changed` (upsert) | `{event_type: "upsert", id, path, vault_id, content?, content_hash, title, folder, tags, mtime, updated_at, version, seq}` | After a single-note upsert by ANY device | Real-time sync notification |
+| `note_changed` (delete) | `{event_type: "delete", path, vault_id, folder, id?, seq?, device_id?}` | After a delete/rename-away | Tombstone notification |
+
+`seq` (additive, #609 / Engram-obsidian#642) is the committed seq of the write
+the event announces: the upserted row's, or for a delete the tombstone's (a
+rename-away delete carries the rename's seq). It equals what a later seq replay
+returns for that row, so a client can fence a stale pre-delete upsert against a
+delete exactly. Set in the one builder, `Notes.broadcast_change/6`; older
+clients ignore it.
 | `note_changed` (attachment) | attachment upsert/delete payloads (`attachments.ex`) | After an attachment write | Same topic as notes |
 | `notes.batch` (delete/move) | `{op: "delete"\|"move", ids, target_folder_id?}` | After batch delete / batch move | Batch-op notification |
 | `vault_created` | `{vault_id, ...}` (topic `user:{user_id}`) | A vault is created (`Engram.Vaults.broadcast_vault_created/2`) | FTUX listener — onboarding waits for this alongside `vault_populated` |

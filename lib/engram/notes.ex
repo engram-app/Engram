@@ -1522,7 +1522,8 @@ defmodule Engram.Notes do
 
             _ =
               if old_path != note.path do
-                :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
+                :ok =
+                  broadcast_change(user.id, vault.id, "delete", old_path, note.id, seq: note.seq)
 
                 # #1612 — same repath rename_note enqueues (#746). Without it the
                 # points keep the old path/folder hmacs and folder-filtered search
@@ -4030,7 +4031,7 @@ defmodule Engram.Notes do
         decrypted = decrypt_or_raise!(note, user)
 
         :ok = broadcast_change(user.id, vault.id, "upsert", note.path, decrypted, [])
-        :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
+        :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, seq: note.seq)
         {:ok, decrypted}
 
       {:ok, {:no_change, note}} ->
@@ -4204,7 +4205,8 @@ defmodule Engram.Notes do
          folder: new_folder,
          title: new_title,
          embed_hash: nil,
-         updated_at: now
+         updated_at: now,
+         seq: seq
        )}
     else
       # Zero rows means one of two things, and they want different handling:
@@ -4288,7 +4290,7 @@ defmodule Engram.Notes do
     # announced, and the caller hears :absent.
     if updated == 0,
       do: :absent,
-      else: finish_tombstone(user, vault, path, note, opts)
+      else: finish_tombstone(user, vault, path, note, Keyword.put(opts, :seq, seq))
   end
 
   defp finish_tombstone(user, vault, path, note, opts) do
@@ -4437,7 +4439,7 @@ defmodule Engram.Notes do
               |> Enum.chunk_every(@job_insert_chunk)
               |> Enum.each(&Oban.insert_all/1)
 
-              {:ok, %{deleted: updated, notes: notes}}
+              {:ok, %{deleted: updated, notes: notes, seq: seq}}
 
             missing ->
               {:error, {:not_found, missing}}
@@ -4445,7 +4447,7 @@ defmodule Engram.Notes do
         end)
 
       case result do
-        {:ok, %{deleted: deleted, notes: notes}} ->
+        {:ok, %{deleted: deleted, notes: notes, seq: seq}} ->
           # Release every deleted note's claim, for the same reason delete_note/4
           # does — and at N scale. A stale entry naming a dead note is not just
           # `unresolved` noise: Identity.claim/3 refuses that path for every LIVE
@@ -4460,7 +4462,7 @@ defmodule Engram.Notes do
 
           Enum.each(zipped, fn
             {{:ok, note}, raw} ->
-              broadcast_change(user.id, vault.id, "delete", note.path, raw.id, [])
+              broadcast_change(user.id, vault.id, "delete", note.path, raw.id, seq: seq)
 
             {{:error, reason}, raw} ->
               # The tombstone committed; only the broadcast is lost. Fail
@@ -6328,7 +6330,7 @@ defmodule Engram.Notes do
             # seq is allocated inside the txn that holds the vault row lock; the
             # tombstone rows are built from in-memory data (no re-query of committed
             # state) so they fold cleanly into the same transaction.
-            {:ok, _seq} =
+            {:ok, seq} =
               Repo.with_tenant(user.id, fn ->
                 seq = Engram.Vaults.next_seq!(vault.id)
 
@@ -6490,12 +6492,14 @@ defmodule Engram.Notes do
                     note
                     | path: new_path,
                       folder: new_note_folder,
-                      content: Map.get(broadcast_contents, note.id)
+                      content: Map.get(broadcast_contents, note.id),
+                      seq: seq
                   },
                   []
                 )
 
-              :ok = broadcast_change(user.id, vault.id, "delete", old_note_path, note.id, [])
+              :ok =
+                broadcast_change(user.id, vault.id, "delete", old_note_path, note.id, seq: seq)
             end)
 
             {:ok, length(notes)}
@@ -6671,7 +6675,7 @@ defmodule Engram.Notes do
     else
       now = DateTime.utc_now()
 
-      {:ok, deleted_ids} =
+      {:ok, {deleted_ids, seq}} =
         Repo.with_tenant(user.id, fn ->
           seq = Engram.Vaults.next_seq!(vault.id)
 
@@ -6708,7 +6712,7 @@ defmodule Engram.Notes do
 
           if real_count > 0, do: :ok = UsageMeters.dec_notes_count(user.id, real_count)
           :ok = stop_rooms_after_commit(MapSet.to_list(deleted))
-          deleted
+          {deleted, seq}
         end)
 
       log_fenced_skips(user, vault, matches, deleted_ids)
@@ -6738,7 +6742,7 @@ defmodule Engram.Notes do
       Enum.each(real_notes, fn note ->
         _ = Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
 
-        :ok = broadcast_change(user.id, vault.id, "delete", note.path, note.id, [])
+        :ok = broadcast_change(user.id, vault.id, "delete", note.path, note.id, seq: seq)
       end)
 
       # Root cause of the empty-folder-lingers-in-tab-B bug: an empty folder's
@@ -6750,7 +6754,7 @@ defmodule Engram.Notes do
       # emission style and position as the real-note loop above: after the
       # Repo.with_tenant transaction returns, so it never fires on rollback.
       Enum.each(markers, fn marker ->
-        :ok = broadcast_change(user.id, vault.id, "delete", marker.folder, nil, [])
+        :ok = broadcast_change(user.id, vault.id, "delete", marker.folder, nil, seq: seq)
       end)
 
       # The counts the caller reports to the user. `length(matches)` was the
@@ -7528,7 +7532,11 @@ defmodule Engram.Notes do
       "tags" => note.tags || [],
       "mtime" => note.mtime,
       "updated_at" => note.updated_at,
-      "version" => note.version
+      "version" => note.version,
+      # The row's committed seq, the same value a later seq replay returns, so
+      # a receiver can fence a stale pre-delete upsert against a delete
+      # exactly (Engram-obsidian#642). Additive: older plugins ignore it.
+      "seq" => note.seq
     }
 
     base = if is_binary(note.content), do: Map.put(base, "content", note.content), else: base
@@ -7609,6 +7617,14 @@ defmodule Engram.Notes do
     }
 
     payload = if id, do: Map.put(payload, "id", id), else: payload
+
+    # The committed seq of the write this event announces (the tombstone, or
+    # the rename that vacated the path). Same reason as the upsert's "seq".
+    payload =
+      case Keyword.get(opts, :seq) do
+        seq when is_integer(seq) -> Map.put(payload, "seq", seq)
+        _ -> payload
+      end
 
     # Origin attribution (#970): REST-driven changes have no socket pid to
     # exclude via broadcast_from, so the fanout reaches the very device that
