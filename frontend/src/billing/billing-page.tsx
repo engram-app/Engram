@@ -481,11 +481,12 @@ export default function BillingPage({
 				}
 				case CheckoutEventNames.CHECKOUT_PAYMENT_INITIATED: {
 					paymentAttemptedRef.current = true;
-					// Belt-and-suspenders: either PAYMENT_INITIATED or COMPLETED may
-					// drop on trial-signup redirects. Arm the cooldown timer on
-					// whichever fires first (`?? Date.now()` guards against reset)
-					// so a dropped COMPLETED still surfaces the recovery banner
-					// instead of stranding the user on Paddle's inline frame.
+					// Do NOT arm the activation cooldown here. Paddle fires this when
+					// the buyer taps Apple Pay or Google Pay, before the wallet sheet
+					// opens, so a cooldown armed here closed the checkout under a
+					// live wallet sheet and claimed "Payment received". Only
+					// CHECKOUT_COMPLETED arms it; a dropped COMPLETED is covered by
+					// the subscription_activated push over the user channel.
 					const data: unknown = event.data;
 					const txn =
 						typeof data === "object" &&
@@ -495,7 +496,6 @@ export default function BillingPage({
 							? data.transaction_id
 							: null;
 					setTransactionId(txn);
-					setCompletedAt((prev) => prev ?? Date.now());
 					invalidateBillingState(qc);
 					break;
 				}
@@ -503,8 +503,8 @@ export default function BillingPage({
 					// Don't close Paddle — its built-in "Payment successful" screen
 					// is the visible confirmation while we wait for the backend
 					// webhook to fire the subscription_activated push. The cooldown
-					// timer is the fallback if the push never arrives (and is also
-					// armed here in case PAYMENT_INITIATED dropped).
+					// timer is the fallback if the push never arrives. This is the
+					// only place it is armed (see PAYMENT_INITIATED).
 					setCompletedAt((prev) => prev ?? Date.now());
 					invalidateBillingState(qc);
 					checkoutCompletedRef.current = true;

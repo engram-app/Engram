@@ -810,38 +810,66 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(initializePaddleMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("onboarding (inline): cooldown arms on CHECKOUT_PAYMENT_INITIATED so a dropped COMPLETED still surfaces the recovery banner", async () => {
-		// Pre-#440 belt-and-suspenders: PAYMENT_INITIATED may drop on trial-signup
-		// redirects (and so may COMPLETED). The cooldown timer must be anchored
-		// to whichever event fires first, otherwise a missing COMPLETED leaves
-		// the user stuck on Paddle's inline frame forever with no recovery.
+	// Paddle fires PAYMENT_INITIATED when the buyer taps Apple Pay / Google Pay,
+	// before the wallet sheet opens. Arming the cooldown there closed the
+	// checkout under an open wallet sheet at ~15 s and claimed the payment was
+	// received. Only CHECKOUT_COMPLETED may arm it.
+	it("onboarding (inline): PAYMENT_INITIATED alone never closes checkout or claims payment received", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		mockBillingApi();
+		const closeMock = vi.fn();
 		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
 		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
 			captured = opts.eventCallback;
-			return { Checkout: { open: vi.fn(), close: vi.fn() } };
+			return { Checkout: { open: vi.fn(), close: closeMock } };
+		});
+
+		const { container, queryAllByText } = renderBilling({ inline: true });
+		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+		const startBtn = Array.from(container.querySelectorAll("button")).find(
+			(b) => b.textContent === "Start free trial",
+		)!;
+		await act(async () => {
+			startBtn.click();
+			await Promise.resolve();
+		});
+
+		await act(async () => {
+			captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_wallet" } });
+			await Promise.resolve();
+		});
+		await act(async () => {
+			vi.advanceTimersByTime(20_000);
+			await Promise.resolve();
+		});
+
+		expect(closeMock).not.toHaveBeenCalled();
+		expect(screen.queryByText(/received|activating|activation/iu)).not.toBeInTheDocument();
+		expect(container.querySelector(".paddle-checkout")).toBeInTheDocument();
+	});
+
+	it("onboarding (inline): COMPLETED with no activation push closes Paddle and shows the recovery banner after the cooldown", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		mockBillingApi();
+		const closeMock = vi.fn();
+		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+			captured = opts.eventCallback;
+			return { Checkout: { open: vi.fn(), close: closeMock } };
 		});
 
 		renderBilling({ inline: true });
-
 		await waitFor(() => expect(captured).toBeDefined());
-		// Let the initializePaddle .then() resolve.
 		await act(async () => {
 			await Promise.resolve();
 			await Promise.resolve();
 		});
 
-		// PAYMENT_INITIATED fires; COMPLETED never does (the drop case).
 		await act(async () => {
-			captured!({
-				name: "checkout.payment.initiated",
-				data: { transaction_id: "txn_drop_99" },
-			});
+			captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_99" } });
+			captured!({ name: "checkout.completed", data: {} });
 			await Promise.resolve();
 		});
-
-		// Past the 15s cooldown window, recovery banner must appear.
 		await act(async () => {
 			vi.advanceTimersByTime(15_500);
 			await Promise.resolve();
@@ -852,6 +880,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 				screen.queryByText(/Payment received\. We're finishing your activation/iu),
 			).toBeInTheDocument(),
 		);
+		expect(closeMock).toHaveBeenCalled();
 	});
 
 	it("onboarding (inline): the recovery banner (slow) does NOT get the forced-light frame treatment, even though the wrapper is still told checkout is active", async () => {
@@ -902,6 +931,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		await act(async () => {
 			captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+			captured!({ name: "checkout.completed", data: {} });
 			await Promise.resolve();
 		});
 		await act(async () => {
