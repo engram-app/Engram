@@ -35,3 +35,6 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 comrak = { version = "=0.56.0", default-features = false }
 # Base64 for the CRDT channel frames (b64_decode / b64_encode).
 base64 = "0.22"
+# Rival-lineage audit (yjs_lineage.rs): walks a stored Yjs update with yrs's
+# public decoder. Same version as y_ex, so both read the same wire format.
+yrs = "0.25"

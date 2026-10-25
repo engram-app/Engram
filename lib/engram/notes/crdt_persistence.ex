@@ -567,18 +567,29 @@ defmodule Engram.Notes.CrdtPersistence do
     end
   end
 
-  # apply_tail_rows/4 in @load_origin transactions: the applied row ids.
-  defp replay_loaded(doc, user, note_id, rows) do
-    rows
-    |> Enum.reduce([], fn row, applied ->
-      shaped = %Note{
+  @doc """
+  Decrypts one tail row's update, as `apply_tail_rows/4` does:
+  `Crypto.decrypt_crdt_state/2`'s result. For a caller that must tell a row
+  that will not decrypt from one that decrypts but will not apply.
+  """
+  @spec decrypt_tail_row(struct(), map(), String.t()) :: {:ok, binary() | nil} | {:error, term()}
+  def decrypt_tail_row(row, user, note_id) do
+    Crypto.decrypt_crdt_state(
+      %Note{
         id: note_id,
         dek_version: Crypto.row_version_aad_bound(),
         crdt_state_ciphertext: row.update_ciphertext,
         crdt_state_nonce: row.update_nonce
-      }
+      },
+      user
+    )
+  end
 
-      case Crypto.decrypt_crdt_state(shaped, user) do
+  # apply_tail_rows/4 in @load_origin transactions: the applied row ids.
+  defp replay_loaded(doc, user, note_id, rows) do
+    rows
+    |> Enum.reduce([], fn row, applied ->
+      case decrypt_tail_row(row, user, note_id) do
         {:ok, upd} when is_binary(upd) ->
           if apply_loaded(doc, upd) == :ok do
             [row.id | applied]

@@ -147,30 +147,6 @@ describe("crdt session", () => {
 		}
 	});
 
-	// Finding 1: flattenIfBloated must be skipped for an open note
-	it("flatten is skipped while a doc is open and runs after it is closed", async () => {
-		startCrdtSession({ vaultId: VAULT, push: () => {} });
-		// openDoc marks the note as open
-		await openDoc("note.md");
-		enroll("note.md");
-		// The enrollment onAfterEnroll fires flattenIfBloated; since the note is
-		// open it should return false (no-op). We verify indirectly: the doc
-		// object returned by a subsequent openDoc must be the SAME instance
-		// (not a rebuilt one), proving the old doc was not destroyed.
-		const before = (await openDoc("note.md"))!.ytext.doc;
-		// Close the note to remove the open guard
-		closeDoc("note.md");
-		// After close the guard is lifted; a direct flattenIfBloated call on a
-		// non-open note should execute normally (returns false because thresholds
-		// are not crossed in a fresh test doc, but must NOT be skipped by the guard).
-		// We re-open to verify the note is no longer protected.
-		await openDoc("note.md");
-		const after = (await openDoc("note.md"))!.ytext.doc;
-		// Both accesses must return valid doc objects (not null/destroyed)
-		expect(before).toBeTruthy();
-		expect(after).toBeTruthy();
-	});
-
 	describe("openDoc lifecycle hardening", () => {
 		it("openDoc called before startCrdtSession resolves once the session starts", async () => {
 			stopCrdtSession();
@@ -205,8 +181,7 @@ describe("crdt session", () => {
 		it("rapid close→reopen mid-load keeps the reopened doc's open marker", async () => {
 			// openDoc A is mid-load; closeDoc bumps the epoch + drops A's marker;
 			// openDoc B re-adds its OWN marker. When A resumes and bails on the
-			// epoch mismatch, it must NOT delete B's marker (that would strip B's
-			// flattenIfBloated open-editor protection).
+			// epoch mismatch, it must NOT delete B's marker.
 			startCrdtSession({ vaultId: "v1", push: () => {} });
 			const a = openDoc("note-race"); // A: awaits the initial load
 			// Let A pass its FIRST guard (waitForSessionStart) and mark the note
