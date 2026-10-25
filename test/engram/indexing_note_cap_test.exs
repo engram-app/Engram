@@ -53,8 +53,7 @@ defmodule Engram.IndexingNoteCapTest do
   defp insert_note(user, vault, content, path \\ "Big.md") do
     note = Engram.Fixtures.insert_note!(user, vault, %{path: path, content: content})
     {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
-    # As a prior EmbedNote pass leaves it, so reuse applies (#2199).
-    stamped(note)
+    note
   end
 
   defp rows_for(note) do

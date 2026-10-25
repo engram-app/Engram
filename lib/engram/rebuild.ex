@@ -190,16 +190,29 @@ defmodule Engram.Rebuild do
   def behind?(version, target), do: version < target
 
   @doc """
-  True when either of `note`'s `{chunker, keyword}` stamps is behind
-  `target_versions/0`: its points were not all built at the target, so none
-  may be kept in place (#2199).
-  """
-  @spec stamp_behind?(map()) :: boolean()
-  def stamp_behind?(note) do
-    {chunker, keyword} = target_versions()
+  The `{chunker, keyword}` stamp a full index pass of `note` writes: the
+  target, except where the pass kept points in place (`reused?`) while that
+  stamp was behind (#2199). A reused point still holds the vectors it was
+  built with, so its stamp stays behind and that version's own heal runs:
 
-    behind?(Map.get(note, :chunker_version), chunker) or
-      behind?(Map.get(note, :keyword_version), keyword)
+    * keyword: `Engram.Workers.RefreshKeywordVectors` re-encodes every point
+      in place, with no embedder call.
+    * chunker, only while `on`: the v5 rebuild rewrites the note, copying
+      dense vectors from the old points, on the ledger. Under `off` the
+      target is stamped: a reused point's text already matches the current
+      chunker by fingerprint, and staying behind would loop the version
+      rebuild.
+  """
+  @spec pass_stamp(map(), boolean()) :: {integer() | nil, integer() | nil}
+  def pass_stamp(note, reused?) do
+    {chunker, keyword} = target_versions()
+    old_chunker = Map.get(note, :chunker_version)
+    old_keyword = Map.get(note, :keyword_version)
+
+    {if(reused? and mode() == :on and behind?(old_chunker, chunker),
+       do: old_chunker,
+       else: chunker
+     ), if(reused? and behind?(old_keyword, keyword), do: old_keyword, else: keyword)}
   end
 
   @doc """

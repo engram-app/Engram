@@ -1074,7 +1074,9 @@ defmodule Engram.Workers.EmbedNote do
           [dense_indexed_hash: nil, embed_model: nil] ++ budget_park_set(note, need, next)
       end
 
-    # A full pass encodes the current keyword version too, so it stamps both.
+    # A full pass encodes the current keyword version too, so it stamps both,
+    # except a stamp the pass's reused points do not meet (`Rebuild.pass_stamp/2`,
+    # #2199): those keep the vectors they were built with.
     # The TARGET versions, not the build's: before `INDEX_REBUILD=on` they are
     # the pins, so a note edited then keeps a pre-v5 stamp and the v5 pass
     # still rewrites it in the pass's layout and encoding (pinned avgdl).
@@ -1083,7 +1085,7 @@ defmodule Engram.Workers.EmbedNote do
     # ponytail: read at stamp time, so an off->on flip DURING this index
     # stamps the build for a pass that did not use the pinned avgdl; capture
     # the target before indexing if that window ever matters.
-    {chunker, keyword} = Rebuild.target_versions()
+    {chunker, keyword} = Rebuild.pass_stamp(note, Map.get(pass, :reused, 0) > 0)
 
     set =
       [

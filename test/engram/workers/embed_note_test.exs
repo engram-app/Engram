@@ -75,6 +75,53 @@ defmodule Engram.Workers.EmbedNoteTest do
     end
   end
 
+  # Over 512 B a section: the chunker's min512 merge leaves each one alone.
+  @section_pad String.duplicate(" filler words here", 30)
+
+  defp sectioned_content(first) do
+    "# Plan\n\n## One\n\n#{first}#{@section_pad}\n\n" <>
+      "## Two\n\nThe second section stays.#{@section_pad}\n\n" <>
+      "## Three\n\nThe third section stays.#{@section_pad}\n"
+  end
+
+  defp sectioned_note(ctx, first) do
+    Engram.Fixtures.insert_note!(ctx.user, ctx.vault, %{
+      path: "Test/Plan.md",
+      content: sectioned_content(first)
+    })
+  end
+
+  defp edit_section(ctx, first) do
+    {:ok, _} =
+      Notes.upsert_note(
+        ctx.user,
+        ctx.vault,
+        %{"path" => "Test/Plan.md", "content" => sectioned_content(first), "mtime" => 2_000.0},
+        actor: "api"
+      )
+  end
+
+  defp set_stamp(note, chunker, keyword) do
+    from(n in Note, where: n.id == ^note.id)
+    |> Repo.update_all([set: [chunker_version: chunker, keyword_version: keyword]],
+      skip_tenant_check: true
+    )
+  end
+
+  # Runs EmbedNote and returns the texts it sent the embedder.
+  defp index_counting(bypass, note) do
+    parent = self()
+
+    stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+      send(parent, {:embedded, texts})
+      {:ok, Enum.map(texts, fn _ -> List.duplicate(0.1, 3) end)}
+    end)
+
+    stub_qdrant_optional(bypass)
+    assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+    drain_embedded()
+  end
+
   describe "perform/1" do
     test "indexes note and returns :ok", %{bypass: bypass, note: note} do
       Engram.MockEmbedder
@@ -300,6 +347,51 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert Repo.get!(Note, note.id, skip_tenant_check: true).keyword_version ==
                Engram.KeywordIndex.version()
+    end
+
+    # #2199: a reused point keeps the keyword vector it was built with. A
+    # pass that reused points on a note whose keyword stamp is behind must
+    # leave that stamp behind, so the keyword sweep re-encodes the points
+    # with no embedder call, instead of stamping stale vectors current.
+    test "a reused pass leaves a behind keyword stamp behind; the resparse then repairs it",
+         ctx do
+      {chunker, keyword} = Engram.Rebuild.target_versions()
+      assert {3, 2} < {chunker, keyword}
+
+      note = sectioned_note(ctx, "The first section is unchanged.")
+      index_counting(ctx.bypass, note)
+      set_stamp(note, 3, 2)
+
+      edit_section(ctx, "The first section was edited.")
+      sent = index_counting(ctx.bypass, note)
+      assert sent != [] and length(sent) < 3, "the pass must reuse the unchanged sections"
+
+      row = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert row.embed_hash == row.content_hash
+      assert {row.chunker_version, row.keyword_version} == {chunker, 2}
+
+      stub(Engram.MockEmbedder, :embed_texts, fn _ -> flunk("the resparse must not embed") end)
+
+      assert :ok =
+               perform_job(Engram.Workers.RefreshKeywordVectors, %{
+                 note_id: note.id,
+                 user_id: ctx.user.id
+               })
+
+      assert Repo.get!(Note, note.id, skip_tenant_check: true).keyword_version == keyword
+    end
+
+    test "a reused pass on a note at the target stamps the target", ctx do
+      target = Engram.Rebuild.target_versions()
+      note = sectioned_note(ctx, "The first section is unchanged.")
+      index_counting(ctx.bypass, note)
+
+      edit_section(ctx, "The first section was edited.")
+      sent = index_counting(ctx.bypass, note)
+      assert sent != [] and length(sent) < 3, "the pass must reuse the unchanged sections"
+
+      row = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert {row.chunker_version, row.keyword_version} == target
     end
 
     test "backfills dense vectors for a Free note inside the cap", %{

@@ -63,6 +63,32 @@ defmodule Engram.RebuildTest do
     )
   end
 
+  # #2199: a pass that kept points in place must not stamp past them.
+  describe "pass_stamp/2" do
+    test "off: a reused pass keeps a behind keyword stamp, stamps the chunker" do
+      {chunker, keyword} = Rebuild.target_versions()
+      behind = %{chunker_version: chunker - 1, keyword_version: keyword - 1}
+
+      assert Rebuild.pass_stamp(behind, true) == {chunker, keyword - 1}
+      assert Rebuild.pass_stamp(behind, false) == {chunker, keyword}
+
+      assert Rebuild.pass_stamp(%{chunker_version: nil, keyword_version: nil}, true) ==
+               {chunker, nil}
+    end
+
+    test "on: a reused pass keeps both behind stamps for the rebuild" do
+      Rebuild.set_budget(10)
+      mode!("on")
+      {chunker, keyword} = Rebuild.target_versions()
+      behind = %{chunker_version: chunker - 1, keyword_version: keyword - 1}
+
+      assert Rebuild.pass_stamp(behind, true) == {chunker - 1, keyword - 1}
+      assert Rebuild.pass_stamp(behind, false) == {chunker, keyword}
+      at = %{chunker_version: chunker, keyword_version: keyword}
+      assert Rebuild.pass_stamp(at, true) == {chunker, keyword}
+    end
+  end
+
   describe "mode/0" do
     test "defaults to :off and reads dry_run / on" do
       assert Rebuild.mode() == :off
