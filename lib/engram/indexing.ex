@@ -1114,9 +1114,7 @@ defmodule Engram.Indexing do
          # PATCH refreshes the lot — the values are identical across a note's
          # points, which is why `chunk_index` no longer lives in the payload.
          :ok <- refresh_payload(refresh_ids, note_payload) do
-      # Wholesale rewrite rather than a row-level diff: the rows are local and
-      # cheap, and replacing them all sidesteps every ordering problem with
-      # `chunks_note_id_position_index` when positions shift. One transaction
+      # Only the rows that changed (`write_chunk_rows/2`). One transaction
       # so OrphanSweep can never scroll a live point during the window where
       # its row is momentarily absent.
       #
@@ -1139,13 +1137,7 @@ defmodule Engram.Indexing do
           with {:ok, tier} <- Map.fetch(prepared, :index_tier),
                do: stamp_index_tier(note, tier, Map.get(prepared, :chunk_count))
 
-          Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
-          # Batched inside the same transaction: one statement for a big note
-          # overflows the protocol's bind cap and kills the connection.
-          chunk_rows
-          |> Enum.chunk_every(@insert_batch)
-          |> Enum.each(&Repo.insert_all(Chunk, &1, skip_tenant_check: true))
-
+          write_chunk_rows(note, chunk_rows)
           write_point_rows(note, Map.get(prepared, :point_rows))
 
           stamp_payload_hash(note, payload_hash)
@@ -1179,8 +1171,108 @@ defmodule Engram.Indexing do
     end
   end
 
-  # Delete-then-insert per note, like `chunks`; nil (text off) leaves the
-  # note's `chunk_points` as they are.
+  # The columns a chunk row is compared and rewritten on. `note_id`,
+  # `user_id` and `vault_id` are the note's, so they never differ.
+  @chunk_diff_fields [
+    :char_start,
+    :char_end,
+    :token_count,
+    :qdrant_point_id,
+    :context_hmac,
+    :member_hmacs
+  ]
+
+  # Writes the note's chunk rows by position, touching only what changed:
+  # a position the new rows no longer have is deleted, a new one inserted,
+  # and one whose content differs is updated in place (one statement for
+  # all of them). Was a delete of every row and a reinsert: a one-chunk
+  # edit of a 17-chunk note (prod average) cost 17 deletes, 17 inserts and
+  # 85 index entries (5 indexes); now one UPDATE. A row never changes its
+  # position, so `chunks_note_id_position_index` can never collide mid-way.
+  # An offset-only update (an edit shifts every later section) touches no
+  # indexed column, so it is HOT where the page has room (fillfactor 90).
+  defp write_chunk_rows(note, rows) do
+    old =
+      from(c in Chunk,
+        where: c.note_id == ^note.id,
+        select: map(c, [:position | @chunk_diff_fields])
+      )
+      |> Repo.all(skip_tenant_check: true)
+      |> Map.new(&{&1.position, Map.delete(&1, :position)})
+
+    new = Map.new(rows, &{&1.position, &1})
+
+    gone = for p <- Map.keys(old), not Map.has_key?(new, p), do: p
+
+    {added, changed} =
+      Enum.reduce(rows, {[], []}, fn row, {added, changed} ->
+        case Map.fetch(old, row.position) do
+          :error ->
+            {[row | added], changed}
+
+          {:ok, prev} ->
+            if prev == Map.take(row, @chunk_diff_fields),
+              do: {added, changed},
+              else: {added, [row | changed]}
+        end
+      end)
+
+    if gone != [] do
+      Repo.delete_all(
+        from(c in Chunk,
+          where:
+            c.note_id == ^note.id and
+              fragment("? = ANY(?)", c.position, type(^gone, {:array, :integer}))
+        ),
+        skip_tenant_check: true
+      )
+    end
+
+    changed |> Enum.chunk_every(@insert_batch) |> Enum.each(&update_chunk_rows(note, &1))
+
+    # Batched: one statement for a big note overflows the protocol's bind
+    # cap and kills the connection.
+    added
+    |> Enum.reverse()
+    |> Enum.chunk_every(@insert_batch)
+    |> Enum.each(&Repo.insert_all(Chunk, &1, skip_tenant_check: true))
+  end
+
+  # One statement per batch, the new values as arrays (one bind each). A
+  # merged row's `member_hmacs` (ragged, so not a 2-D array) rides as JSON
+  # text.
+  defp update_chunk_rows(note, rows) do
+    col = fn key -> Enum.map(rows, &Map.get(&1, key)) end
+
+    Repo.query!(
+      """
+      UPDATE chunks c SET char_start = u.cs, char_end = u.ce, token_count = u.tc,
+        qdrant_point_id = u.pid, context_hmac = u.h,
+        member_hmacs = CASE WHEN u.mh IS NULL THEN NULL
+          ELSE ARRAY(SELECT jsonb_array_elements_text(u.mh::jsonb)) END
+      FROM unnest($2::int4[], $3::int4[], $4::int4[], $5::int8[], $6::uuid[], $7::text[],
+                  $8::text[]) AS u(pos, cs, ce, tc, pid, h, mh)
+      WHERE c.note_id = $1 AND c.position = u.pos
+      """,
+      [
+        Ecto.UUID.dump!(note.id),
+        col.(:position),
+        col.(:char_start),
+        col.(:char_end),
+        col.(:token_count),
+        Enum.map(col.(:qdrant_point_id), &Ecto.UUID.dump!/1),
+        col.(:context_hmac),
+        Enum.map(col.(:member_hmacs), &(&1 && Jason.encode!(&1)))
+      ]
+    )
+
+    :ok
+  end
+
+  # Delete-then-insert per note; nil (text off) leaves the note's
+  # `chunk_points` as they are. ponytail: wholesale, unlike `chunks`: its
+  # primary key is the point id, so a position diff would collide when a
+  # kept point moves; off in prod until the v5 pass, diff it by point id then.
   defp write_point_rows(_note, nil), do: :ok
 
   defp write_point_rows(note, rows) do
