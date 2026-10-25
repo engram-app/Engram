@@ -235,7 +235,6 @@ export default {
 	"Reopen checkout": "Mở lại trang thanh toán",
 	"Payment received": "Thanh toán đã nhận",
 	"Open Engram": "Mở Engram",
-	"Try again": "Thử lại",
 	"Need help? Contact {support}.": "Cần trợ giúp? Liên hệ với {support}.",
 	"Payment method": "Phương thức thanh toán",
 	"Opening…": "Đang mở...",

@@ -253,7 +253,6 @@ export default {
 	"Reopen checkout": "Повторно открыть страницу оплаты",
 	"Payment received": "Платеж получен",
 	"Open Engram": "Открыть Engram",
-	"Try again": "Повторить попытку",
 	"Need help? Contact {support}.": "Нужна помощь? Свяжитесь с {support}.",
 	"Payment method": "Способ оплаты",
 	"Opening…": "Открывается…",

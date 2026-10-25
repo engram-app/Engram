@@ -230,7 +230,6 @@ export default {
 	"Reopen checkout": "결제 재개",
 	"Payment received": "결제 완료되었습니다",
 	"Open Engram": "Engram 열기",
-	"Try again": "다시 시도",
 	"Need help? Contact {support}.": "도움이 필요하신가요? {support}에 문의하세요.",
 	"Payment method": "결제 방법",
 	"Opening…": "로딩 중…",

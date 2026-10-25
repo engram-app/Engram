@@ -247,7 +247,6 @@ export default {
 	"Reopen checkout": "Bestellvorgang wieder öffnen",
 	"Payment received": "Zahlung erhalten",
 	"Open Engram": "Öffne Engram",
-	"Try again": "Wiederholen",
 	"Need help? Contact {support}.": "Benötigst du Hilfe? Kontaktiere {support}.",
 	"Payment method": "Zahlungsmethode",
 	"Opening…": "Öffnen…",

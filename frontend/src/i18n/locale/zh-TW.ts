@@ -216,7 +216,6 @@ export default {
 	"Reopen checkout": "重新開啟結帳",
 	"Payment received": "已收到付款",
 	"Open Engram": "開啟 Engram",
-	"Try again": "重新嘗試",
 	"Need help? Contact {support}.": "需要協助？請聯絡 {support}。",
 	"Payment method": "付款方式",
 	"Opening…": "正在開啟…",

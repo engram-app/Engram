@@ -246,7 +246,6 @@ export default {
 	"Reopen checkout": "Znovu otevřít platbu",
 	"Payment received": "Platba přijata",
 	"Open Engram": "Otevřít Engram",
-	"Try again": "Zkuste to znovu",
 	"Need help? Contact {support}.": "Potřebujete pomoc? Kontaktujte {support}.",
 	"Payment method": "Způsob platby",
 	"Opening…": "Otevírání…",

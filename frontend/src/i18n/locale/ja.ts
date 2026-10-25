@@ -234,7 +234,6 @@ export default {
 	"Reopen checkout": "決済を再開",
 	"Payment received": "支払いが完了しました",
 	"Open Engram": "Engramを開く",
-	"Try again": "再試行",
 	"Need help? Contact {support}.": "お困りですか？{support}までお問い合わせください。",
 	"Payment method": "支払い方法",
 	"Opening…": "読み込み中…",

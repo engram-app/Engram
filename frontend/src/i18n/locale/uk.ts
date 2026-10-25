@@ -252,7 +252,6 @@ export default {
 	"Reopen checkout": "Відкрити сторінку оплати знову",
 	"Payment received": "Отримано оплату",
 	"Open Engram": "Відкрити Engram",
-	"Try again": "Спробувати ще раз",
 	"Need help? Contact {support}.": "Потрібна допомога? Зв'яжіться з {support}.",
 	"Payment method": "Спосіб оплати",
 	"Opening…": "Відкривається…",

@@ -243,7 +243,6 @@ export default {
 	"Reopen checkout": "Ödeme işlemini yeniden açın",
 	"Payment received": "Ödeme alındı",
 	"Open Engram": "Engram bölümünü açın",
-	"Try again": "Lütfen tekrar deneyin",
 	"Need help? Contact {support}.": "Yardım mı gerekiyor? {support} ile iletişime geçin.",
 	"Payment method": "Ödeme yöntemi",
 	"Opening…": "Açılıyor…",

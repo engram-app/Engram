@@ -216,7 +216,6 @@ export default {
 	"Reopen checkout": "重新打开支付页面",
 	"Payment received": "已收到付款",
 	"Open Engram": "打开 Engram",
-	"Try again": "重试",
 	"Need help? Contact {support}.": "需要帮助？联系 {support}。",
 	"Payment method": "支付方式",
 	"Opening…": "正在打开…",

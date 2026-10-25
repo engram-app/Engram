@@ -239,7 +239,6 @@ export default {
 	"Reopen checkout": "Buka kembali proses pembayaran",
 	"Payment received": "Pembayaran diterima",
 	"Open Engram": "Buka Engram",
-	"Try again": "Coba lagi",
 	"Need help? Contact {support}.": "Butuh bantuan? Hubungi {support}.",
 	"Payment method": "Metode pembayaran",
 	"Opening…": "Membuka…",
