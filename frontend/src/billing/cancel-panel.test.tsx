@@ -104,7 +104,7 @@ describe("CancelPanel", () => {
 		expect(post).toHaveBeenCalledWith("/billing/cancel-subscription");
 	});
 
-	it("cancels with no reason and no typed sentence, and files no feedback", async () => {
+	it("cancels with no reason and no typed sentence, filed as in_app_no_reason", async () => {
 		post.mockResolvedValue({});
 		const onClose = vi.fn();
 		render(<CancelPanel detail={detail()} tier="pro" onClose={onClose} />, { wrapper: Wrapper });
@@ -115,8 +115,29 @@ describe("CancelPanel", () => {
 
 		await waitFor(() => expect(onClose).toHaveBeenCalled());
 		expect(post).toHaveBeenCalledWith("/billing/cancel-subscription");
-		// No reason: the backend's CancelReasonMarker files it as `portal_no_reason`.
-		expect(post).not.toHaveBeenCalledWith("/feedback", expect.anything());
+		// Filed now, so the marker's later check finds it and files no
+		// `portal_no_reason` (that label is for real portal cancels).
+		expect(post).toHaveBeenCalledWith("/feedback", {
+			kind: "cancel",
+			reason: "in_app_no_reason",
+			detail: "",
+		});
+	});
+
+	it("sends typed text with no picked reason as other", async () => {
+		post.mockResolvedValue({});
+		const onClose = vi.fn();
+		render(<CancelPanel detail={detail()} tier="pro" onClose={onClose} />, { wrapper: Wrapper });
+
+		fireEvent.change(screen.getByLabelText(/tell us more/iu), { target: { value: " too slow " } });
+		fireEvent.click(screen.getByRole("button", { name: /cancel at period end/iu }));
+
+		await waitFor(() => expect(onClose).toHaveBeenCalled());
+		expect(post).toHaveBeenCalledWith("/feedback", {
+			kind: "cancel",
+			reason: "other",
+			detail: "too slow",
+		});
 	});
 
 	it("sends a picked reason without requiring a sentence", async () => {

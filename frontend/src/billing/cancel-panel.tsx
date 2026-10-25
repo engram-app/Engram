@@ -9,6 +9,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { IN_APP_NO_REASON } from "@/feedback/options";
 import { EMPTY_REASON, ReasonFields } from "@/feedback/reason-fields";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
@@ -57,11 +58,16 @@ export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps)
 			// Only once the cancel landed, so a failed or retried cancel never
 			// files a reason. Fire-and-forget: a React Query mutation outlives
 			// the panel unmounting below. The reason is optional (Minnesota
-			// 325G.60, California 17602(d) bar extra cancel steps): with none,
-			// the backend's CancelReasonMarker files `portal_no_reason`.
-			if (reason !== null) {
-				submitFeedback.mutate({ kind: "cancel", reason, detail: text.trim() });
-			}
+			// 325G.60, California 17602(d) bar extra cancel steps). Something is
+			// always filed, so the backend's CancelReasonMarker never labels an
+			// in-app cancel `portal_no_reason`: typed text alone counts as
+			// `other`, and nothing at all as `in_app_no_reason`.
+			const detailText = text.trim();
+			submitFeedback.mutate({
+				kind: "cancel",
+				reason: reason ?? (detailText ? "other" : IN_APP_NO_REASON),
+				detail: detailText,
+			});
 			notify.success(t("Subscription scheduled to cancel."));
 			onClose();
 		} catch {

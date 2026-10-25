@@ -41,6 +41,10 @@ export const CANCEL_REASONS: FeedbackOption[] = [
 	{ slug: "other", label: msg("Something else") },
 ];
 
+// Sent by the cancel dialog when no reason was picked and nothing typed. Not
+// an option the user sees; the backend keeps it apart from `portal_no_reason`.
+export const IN_APP_NO_REASON = "in_app_no_reason";
+
 export const FEEDBACK_CATEGORIES: (FeedbackOption & { emoji: string })[] = [
 	{ slug: "bug", emoji: "🐛", label: msg("Bug") },
 	{ slug: "idea", emoji: "💡", label: msg("Idea") },
