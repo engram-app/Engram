@@ -217,7 +217,7 @@ defmodule Engram.Billing do
   retention, unlimited cannot mean "keep forever" without the blob GC never
   reaping anything.
   """
-  @spec trash_retention_days(term()) :: integer()
+  @spec trash_retention_days(term()) :: pos_integer()
   def trash_retention_days(user) do
     case cap(user, :trash_retention_days) || LimitKeys.default_for(:trash_retention_days, :pro) do
       days when is_integer(days) and days >= 1 -> days
