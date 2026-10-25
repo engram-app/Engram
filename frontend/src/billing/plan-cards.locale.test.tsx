@@ -32,6 +32,8 @@ describe("PlanCard prices in other locales", () => {
 		renderCard("ru", ru, "annual");
 		const line = await screen.findByText(/5,83\s\$/u);
 		expect(line.textContent).not.toMatch(/руб/u);
+		expect(line.textContent).toContain(` · ${ru["billed yearly"]}`);
+		expect(line.textContent).not.toMatch(/billed/u);
 		expect(screen.getByText(/70\s\$/u).textContent).not.toMatch(/руб/u);
 	});
 
@@ -39,6 +41,8 @@ describe("PlanCard prices in other locales", () => {
 		renderCard("de", de, "monthly");
 		const line = await screen.findByText(/84\s\$/u);
 		expect(line.textContent).not.toMatch(/€/u);
+		expect(line.textContent).toContain(` · ${de["billed monthly"]}`);
+		expect(line.textContent).not.toMatch(/billed/u);
 		expect(screen.getByText(/7\s\$/u).textContent).not.toMatch(/€/u);
 	});
 });

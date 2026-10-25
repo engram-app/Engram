@@ -5,9 +5,12 @@ import { msg } from "@/i18n/msg";
 import type { Translate } from "@/i18n/translate";
 import type { MsgKey } from "@/i18n/ui-text";
 import { intlLocale } from "@/lib/intl-locale";
+import { formatMoney } from "@/lib/paddle-format";
 import { cn } from "@/lib/utils";
 import { type BillingCadence, useBillingConfig } from "../api/queries";
-import { formatUsd } from "./format";
+
+// Plan prices read "$7", not "$7.00"; Intl writes the sign for the reader's locale.
+const WHOLE = { dropWholeCents: true };
 
 // Feature checklist shared by the full card and the accordion row. `className`
 // merges extra layout (e.g. `flex-1` on the full card).
@@ -143,8 +146,8 @@ export function formatPlanPrice(
 	locale?: string,
 ): string {
 	return cadence === "monthly"
-		? t("{price}/mo", { price: formatUsd(catalog.monthlyPrice, locale) })
-		: t("{price}/yr", { price: formatUsd(catalog.annualPrice, locale) });
+		? t("{price}/mo", { price: formatMoney(catalog.monthlyPrice, "USD", locale, WHOLE) })
+		: t("{price}/yr", { price: formatMoney(catalog.annualPrice, "USD", locale, WHOLE) });
 }
 
 // Which note caps the copy states: the set the backend enforces
@@ -250,11 +253,12 @@ export function PlanCard({
 	const locale = intlLocale(renderedLocale, "en-US");
 	const price = formatPlanPrice({ monthlyPrice, annualPrice }, cadence, t, locale);
 	// The amount and the billing words are separate strings, so no translation
-	// holds the price (see formatUsd).
+	// holds the price: a model given "{price}/mo billed yearly" decorated the
+	// amount with a currency of its own ("$5.83 руб./мес.").
 	const subPrice =
 		cadence === "annual"
-			? `${t("{price}/mo", { price: formatUsd(Math.round((annualPrice / 12) * 100) / 100, locale) })} · ${t("billed yearly")}`
-			: `${t("{price}/yr", { price: formatUsd(monthlyPrice * 12, locale) })} · ${t("billed monthly")}`;
+			? `${t("{price}/mo", { price: formatMoney(Math.round((annualPrice / 12) * 100) / 100, "USD", locale, WHOLE) })} · ${t("billed yearly")}`
+			: `${t("{price}/yr", { price: formatMoney(monthlyPrice * 12, "USD", locale, WHOLE) })} · ${t("billed monthly")}`;
 
 	// Effective state precedence — current beats selected beats recommended.
 	// Avoids the "everything is highlighted" failure mode if a parent passes
