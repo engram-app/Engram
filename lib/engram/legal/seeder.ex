@@ -31,7 +31,15 @@ defmodule Engram.Legal.Seeder do
   # version date (ToS §13); `notice_violations/0` enforces it in CI.
   @version_meta %{
     "terms_of_service" => %{
-      "2026-05-19" => %{material: true, effective_date: nil, changelog: "Initial version."}
+      "2026-05-19" => %{material: true, effective_date: nil, changelog: "Initial version."},
+      # Silent on purpose: an additive clause in the user's favor, no new
+      # processing. Not material, so the gate floor stays at 2026-05-19 and
+      # nobody is asked to re-accept; new signups accept this version.
+      "2026-10-24" => %{
+        material: false,
+        effective_date: nil,
+        changelog: "Added a Refunds section: the 14-day money-back guarantee."
+      }
     },
     "privacy_policy" => %{
       "2026-06-20" => %{
