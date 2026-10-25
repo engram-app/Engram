@@ -26,7 +26,6 @@ defmodule Engram.Attachments do
   alias Engram.Storage
   alias Engram.Storage.MimeWhitelist
   alias Engram.Sync.Broadcast
-  alias Engram.Workers.AttachmentBlobGC
   alias Engram.Workers.ReconcileAttachmentBlobs
 
   @doc """
@@ -1564,9 +1563,11 @@ defmodule Engram.Attachments do
 
   Takes the vault row lock first (`next_seq_block!/2`), the same lock
   `Engram.Workers.AttachmentBlobGC` claims under, so the two serialize. A row
-  is revived only if it still holds its `storage_key`, carries no GC claim
-  younger than the GC's stale threshold (its blob may be mid-delete), and no
-  live row holds its path. Everything else comes back in `unrestored`, so a
+  is revived only if it still holds its `storage_key`, carries NO GC claim at
+  all, and no live row holds its path. A stale claim is refused too: it only
+  says the GC run died, not before or after its S3 delete, so the blob may
+  be gone. That costs nothing, since the GC only claims rows already past
+  their owner's retention; its next run re-claims and finalizes the row. Everything else comes back in `unrestored`, so a
   restore either has its blob or is refused; it never leaves a live row
   pointing at nothing.
 
@@ -1580,7 +1581,6 @@ defmodule Engram.Attachments do
   def revive_tombstones(user, vault, ids) do
     ids = Enum.uniq(ids)
     now = DateTime.utc_now(:second)
-    stale = DateTime.add(now, -AttachmentBlobGC.stale_claim_minutes() * 60, :second)
 
     Repo.with_tenant(user.id, fn ->
       # The lock BEFORE the eligibility read, or a claim that commits in
@@ -1593,7 +1593,7 @@ defmodule Engram.Attachments do
             as: :tomb,
             where:
               a.id in ^ids and not is_nil(a.deleted_at) and not is_nil(a.storage_key) and
-                (is_nil(a.blob_gc_claimed_at) or a.blob_gc_claimed_at < ^stale) and
+                is_nil(a.blob_gc_claimed_at) and
                 not exists(
                   from(l in Attachment,
                     where:
@@ -1605,7 +1605,7 @@ defmodule Engram.Attachments do
                 ),
             select: a.id
           ),
-          set: [deleted_at: nil, delete_op_id: nil, blob_gc_claimed_at: nil, updated_at: now]
+          set: [deleted_at: nil, delete_op_id: nil, updated_at: now]
         )
 
       # Now live, so `stamp_seqs!`'s live-row guard admits them. Unused seqs

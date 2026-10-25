@@ -3,8 +3,9 @@ defmodule Engram.Workers.AttachmentBlobGCTest do
   #2159: a soft delete used to remove the S3 blob in the same request. Nested
   in a folder cascade that later rolled back, that left live rows with no
   bytes. A soft delete now never touches storage; this worker reaps a
-  tombstone's blob once it is past the owner's trash retention
-  (`trash_retention_days`: 7 days Free, 30 paid, 30 self-host).
+  tombstone's blob once it is past its window: 24 h, or for a row an undoable
+  delete stamped, the owner's trash retention (`trash_retention_days`: 7 days
+  Free, 30 paid, 30 self-host).
   """
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
@@ -99,13 +100,44 @@ defmodule Engram.Workers.AttachmentBlobGCTest do
     end
   end
 
-  describe "trash retention (trash_retention_days)" do
+  defp op, do: Ecto.UUID.generate()
+
+  # An undoable (MCP) delete stamps `delete_op_id` and keeps its blob for the
+  # owner's trash retention; every other delete keeps the 24 h grace.
+  describe "trash retention (trash_retention_days), stamped deletes only" do
+    test "a stamped Free tombstone is kept past 24 h and reaped past 7 days", %{
+      user: user,
+      vault: vault
+    } do
+      att = put_att(user, vault, "a.png")
+      :ok = Attachments.delete_attachment(user, vault, "a.png", op_id: op())
+      backdate!(att, 25)
+      assert AttachmentBlobGC.sweep() == 0
+      assert blob?(att.storage_key)
+
+      backdate!(att, 7 * 24 + 1)
+      assert AttachmentBlobGC.sweep() == 1
+    end
+
+    test "an unstamped tombstone keeps the 24 h grace even on a 30-day plan", %{
+      user: user,
+      vault: vault
+    } do
+      insert(:user_limit_override, user: user, key: "trash_retention_days", value: %{"v" => 30})
+      att = put_att(user, vault, "a.png")
+      :ok = Attachments.delete_attachment(user, vault, "a.png")
+      backdate!(att, 25)
+
+      assert AttachmentBlobGC.sweep() == 1
+      refute blob?(att.storage_key)
+    end
+
     test "a per-user retention moves the reap point", %{user: user, vault: vault} do
       insert(:user_limit_override, user: user, key: "trash_retention_days", value: %{"v" => 2})
       kept = put_att(user, vault, "kept.png")
       gone = put_att(user, vault, "gone.png")
-      :ok = Attachments.delete_attachment(user, vault, "kept.png")
-      :ok = Attachments.delete_attachment(user, vault, "gone.png")
+      :ok = Attachments.delete_attachment(user, vault, "kept.png", op_id: op())
+      :ok = Attachments.delete_attachment(user, vault, "gone.png", op_id: op())
       backdate!(kept, 47)
       backdate!(gone, 49)
 
@@ -120,7 +152,7 @@ defmodule Engram.Workers.AttachmentBlobGCTest do
     } do
       insert(:user_limit_override, user: user, key: "trash_retention_days", value: %{"v" => 30})
       att = put_att(user, vault, "a.png")
-      :ok = Attachments.delete_attachment(user, vault, "a.png")
+      :ok = Attachments.delete_attachment(user, vault, "a.png", op_id: op())
       backdate!(att, 8 * 24)
 
       assert AttachmentBlobGC.sweep() == 0
@@ -139,7 +171,7 @@ defmodule Engram.Workers.AttachmentBlobGCTest do
       on_exit(fn -> Application.put_env(:engram, :limits_enforced, prev) end)
 
       att = put_att(user, vault, "a.png")
-      :ok = Attachments.delete_attachment(user, vault, "a.png")
+      :ok = Attachments.delete_attachment(user, vault, "a.png", op_id: op())
       backdate!(att, 8 * 24)
       assert AttachmentBlobGC.sweep() == 0
 
@@ -149,13 +181,13 @@ defmodule Engram.Workers.AttachmentBlobGCTest do
   end
 
   describe "sweep/0" do
-    test "reaps a Free tombstone past 7 days, then has nothing to do", %{
+    test "reaps an unstamped tombstone past 24 h, then has nothing to do", %{
       user: user,
       vault: vault
     } do
       att = put_att(user, vault, "a.png")
       :ok = Attachments.delete_attachment(user, vault, "a.png")
-      backdate!(att, 7 * 24 + 1)
+      backdate!(att, 25)
 
       assert AttachmentBlobGC.sweep() == 1
       refute blob?(att.storage_key)
@@ -164,10 +196,10 @@ defmodule Engram.Workers.AttachmentBlobGCTest do
       assert AttachmentBlobGC.sweep() == 0
     end
 
-    test "keeps a Free tombstone inside 7 days", %{user: user, vault: vault} do
+    test "keeps an unstamped tombstone inside 24 h", %{user: user, vault: vault} do
       att = put_att(user, vault, "a.png")
       :ok = Attachments.delete_attachment(user, vault, "a.png")
-      backdate!(att, 7 * 24 - 1)
+      backdate!(att, 23)
 
       assert AttachmentBlobGC.sweep() == 0
       assert blob?(att.storage_key)

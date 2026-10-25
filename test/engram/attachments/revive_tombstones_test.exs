@@ -119,20 +119,45 @@ defmodule Engram.Attachments.ReviveTombstonesTest do
     assert reload(att).deleted_at
   end
 
-  test "a stale claim (dead GC run) does not block the restore", %{user: user, vault: vault} do
-    att = put_att(user, vault, "a.png")
-    :ok = Attachments.delete_attachment(user, vault, "a.png")
-    stale = DateTime.add(DateTime.utc_now(), -2 * 3600, :second)
-
+  defp stamp_claim!(att, at) do
     {1, _} =
       Repo.update_all(
         from(a in Attachment, where: a.id == ^att.id),
-        [set: [blob_gc_claimed_at: stale]],
+        [set: [blob_gc_claimed_at: at]],
         skip_tenant_check: true
       )
+  end
 
-    assert {:ok, %{restored: [_]}} = Attachments.revive_tombstones(user, vault, [att.id])
-    assert is_nil(reload(att).deleted_at)
+  # A stale claim only says the GC run died, not whether it died before or
+  # after its S3 delete. Reviving it could leave a live row with no bytes, so
+  # every claimed row is refused and left for the next GC run to finalize.
+  test "a stale claim whose blob the dead run already deleted is refused", %{
+    user: user,
+    vault: vault
+  } do
+    att = put_att(user, vault, "a.png")
+    :ok = Attachments.delete_attachment(user, vault, "a.png")
+    stamp_claim!(att, DateTime.add(DateTime.utc_now(), -2 * 3600, :second))
+    :ok = Storage.adapter().delete(att.storage_key)
+
+    assert {:ok, %{restored: [], unrestored: [_]}} =
+             Attachments.revive_tombstones(user, vault, [att.id])
+
+    assert reload(att).deleted_at, "a live row whose blob is gone"
+  end
+
+  test "a stale claim is refused even while its blob is still there", %{
+    user: user,
+    vault: vault
+  } do
+    att = put_att(user, vault, "a.png")
+    :ok = Attachments.delete_attachment(user, vault, "a.png")
+    stamp_claim!(att, DateTime.add(DateTime.utc_now(), -2 * 3600, :second))
+
+    assert {:ok, %{restored: [], unrestored: [_]}} =
+             Attachments.revive_tombstones(user, vault, [att.id])
+
+    assert reload(att).deleted_at
   end
 
   test "a path a live row now holds is refused, not a unique-index crash", %{
