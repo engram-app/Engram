@@ -382,6 +382,22 @@ defmodule Engram.IndexingTest do
 
       assert {:ok, 0} = Indexing.index_note(note, vault)
     end
+
+    # The emptied-note branch fetches the DEK on its own; a transient failure
+    # there is the pass's error (Oban retries), not a CaseClauseError.
+    test "an empty note's stalled DEK load is an error, not a crash", %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(
+          user,
+          vault,
+          %{"path" => "Test/Empty.md", "content" => "", "mtime" => 1_000.0},
+          actor: "api"
+        )
+
+      user = Repo.get!(Engram.Accounts.User, user.id)
+      _token = Engram.StalledDekLoad.stall!(user.id)
+      assert {:error, :dek_load_timeout} = Indexing.index_note(note, vault, user)
+    end
   end
 
   # ---------------------------------------------------------------------------

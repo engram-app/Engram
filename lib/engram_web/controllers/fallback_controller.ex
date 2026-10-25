@@ -23,6 +23,7 @@ defmodule EngramWeb.FallbackController do
   | `{:error, :conflict}`          | 409    | `%{error: "conflict"}`                   |
   | `{:error, {:conflict, id}}`    | 409    | `%{error: "conflict", item_id: id}`      |
   | `{:error, :last_admin}`        | 409    | `%{error: "last_admin"}`                 |
+  | `{:error, transient DEK}`      | 503    | `%{error: "dek_unavailable"}`            |
   | `{:error, _}` (terminal)       | 500    | `%{error: "internal"}`                   |
 
   The terminal `{:error, _}` clause mirrors the `%{error: "internal"}`
@@ -61,7 +62,15 @@ defmodule EngramWeb.FallbackController do
     conn |> put_status(409) |> json(%{error: "last_admin"})
   end
 
-  def call(conn, {:error, _reason}) do
-    conn |> put_status(500) |> json(%{error: "internal"})
+  # A stalled or contended DEK load (`Engram.Crypto.transient_dek_error?/1`)
+  # clears on retry, so it must not read as the terminal 500. Its Retry-After
+  # comes from `EngramWeb.Plugs.RetryAfter`, as every 503's does. Same body as
+  # `Engram.Crypto.DekUnavailableError` renders for the raising paths.
+  def call(conn, {:error, reason}) do
+    if Engram.Crypto.transient_dek_error?(reason) do
+      conn |> put_status(503) |> json(%{error: "dek_unavailable"})
+    else
+      conn |> put_status(500) |> json(%{error: "internal"})
+    end
   end
 end

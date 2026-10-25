@@ -308,22 +308,19 @@ defmodule Engram.Crypto.DekCacheTest do
       assert new != old
     end
 
-    test "a waiter past the await budget claims over, monitored" do
-      Application.put_env(:engram, :dek_await_ms, 50)
-      on_exit(fn -> Application.delete_env(:engram, :dek_await_ms) end)
-      {:claimed, old} = DekCache.claim_or_await(1)
+    # Every waiter parked on one stalled loader times out at about the same
+    # moment. Claiming over on timeout made them each replace the last one's
+    # claim and each call KMS: the herd single flight exists to stop.
+    test "waiters past the await budget fail instead of claiming over" do
+      :ok = Engram.ServiceConfig.put_override(:dek_await_ms, 50)
+      {:claimed, token} = DekCache.claim_or_await(1)
 
-      waiter =
-        Task.async(fn ->
-          {:claimed, token} = DekCache.claim_or_await(1)
-          token
-        end)
+      waiters = for _ <- 1..3, do: Task.async(fn -> DekCache.claim_or_await(1) end)
 
-      token = Task.await(waiter)
-      assert token != old
-      # The claim-over is monitored: its loader (the finished task) is gone,
-      # so the slot is cleared rather than left claimed for @pending_ms.
-      await(fn -> :ets.lookup(:engram_dek_cache, 1) == [] end)
+      assert [{:error, :dek_load_timeout}] = waiters |> Task.await_many() |> Enum.uniq()
+      # The stalled loader still holds the slot and can still fill it.
+      assert :ok = DekCache.put_if_claimed(1, token, @dek)
+      assert {:ok, @dek} = DekCache.get(1)
     end
 
     test "a served waiter emits outcome :coalesced" do

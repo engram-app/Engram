@@ -108,7 +108,8 @@ defmodule EngramWeb.VaultTreeController do
         # failure) is a real crypto fault, not "no notes yet" — rendering an
         # empty tree here would tell the user their vault is gone when it
         # isn't. Log with enough to diagnose and let it fail loudly (500)
-        # instead of disguising it as an empty vault.
+        # instead of disguising it as an empty vault. A transient load
+        # failure (a stalled KMS call) raises as a retryable 503 instead.
         Logger.error(
           "vault tree: DEK unavailable, refusing to render",
           Metadata.with_category(:error, :crypto,
@@ -118,7 +119,7 @@ defmodule EngramWeb.VaultTreeController do
           )
         )
 
-        raise "vault tree: DEK unavailable (#{Crypto.format_dek_error(reason)})"
+        raise Crypto.DekUnavailableError, reason
     end
   end
 

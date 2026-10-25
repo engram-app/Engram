@@ -465,6 +465,33 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       refute_enqueued(worker: EmbedNote)
     end
 
+    # The queue's wake-up runs every tick for every user with a parked note.
+    # An empty bucket can wake nothing, so it must not open the tenant
+    # transaction and read the queue at all. The full-bucket user is the
+    # control: it proves the counter sees the queue read.
+    test "the wake-up skips the queue read for a user whose bucket is empty" do
+      empty = insert(:user)
+      full = insert(:user)
+
+      for user <- [empty, full] do
+        note_for(user,
+          content_hash: "abc123",
+          embed_hash: "abc123",
+          dense_indexed_hash: nil,
+          embed_retry_after: DateTime.add(DateTime.utc_now(), 3600, :second),
+          embed_budget_parked: true,
+          embed_budget_need: 10
+        )
+      end
+
+      {:ok, _} = Engram.UsageMeters.bucket_take(empty.id, 6_000_000, 6_000_000)
+
+      reads = queue_reads(fn -> assert :ok = perform_job(ReconcileEmbeddings, %{}) end)
+
+      assert reads[full.id] == 1
+      refute Map.has_key?(reads, empty.id)
+    end
+
     test "an unentitled subscription does not skip a budget park" do
       user = insert(:user)
       insert(:subscription, user: user, tier: "pro", status: "canceled")
@@ -823,4 +850,35 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
   end
 
   defp tick(time), do: DateTime.new!(Date.utc_today(), time)
+
+  # Wake-up queue reads (the oldest-first page of parked notes), by tenant.
+  defp queue_reads(fun) do
+    test_pid = self()
+    handler_id = "wake-queue-reads-#{System.unique_integer([:positive])}"
+    {:ok, reads} = Agent.start_link(fn -> %{} end)
+
+    :telemetry.attach(
+      handler_id,
+      [:engram, :repo, :query],
+      fn _event, _measurements, meta, _config ->
+        query = meta[:query] || ""
+
+        if self() == test_pid and String.starts_with?(query, "SELECT") and
+             String.contains?(query, "embed_budget_parked_at") and
+             String.contains?(query, "ORDER BY") do
+          tenant = Process.get(:engram_tenant)
+          Agent.update(reads, &Map.update(&1, tenant, 1, fn n -> n + 1 end))
+        end
+      end,
+      nil
+    )
+
+    try do
+      fun.()
+      Agent.get(reads, & &1)
+    after
+      :telemetry.detach(handler_id)
+      Agent.stop(reads)
+    end
+  end
 end

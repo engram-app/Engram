@@ -6592,7 +6592,8 @@ defmodule Engram.Notes do
 
   Returns `{:error, {:dek_unavailable, reason}}` rather than an empty list when
   the vault cannot be read — an unreadable vault is not an empty folder, and
-  this feeds a delete guard.
+  this feeds a delete guard. A transient load failure returns its bare reason
+  (`{:error, :dek_load_timeout}`), which the web layer answers with a 503.
   """
   @spec scan_folders(map(), map(), [String.t()]) :: {:ok, [map()]} | {:error, term()}
   def scan_folders(user, vault, folders) do
@@ -6616,7 +6617,11 @@ defmodule Engram.Notes do
           )
         )
 
-        {:error, {:dek_unavailable, Crypto.format_dek_error(reason)}}
+        # A transient one keeps its reason, so the web layer answers the
+        # retryable 503 (`Crypto.transient_dek_error?/1`) rather than a 500.
+        if Crypto.transient_dek_error?(reason),
+          do: {:error, reason},
+          else: {:error, {:dek_unavailable, Crypto.format_dek_error(reason)}}
     end
   end
 

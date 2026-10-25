@@ -1,5 +1,12 @@
 defmodule EngramWeb.WebhookControllerTest do
-  use EngramWeb.ConnCase, async: true
+  # async: false. "a transient DB failure returns 500" runs CREATE/DROP
+  # TRIGGER on `subscriptions` in its sandbox transaction. The sandbox does
+  # not isolate table locks: CREATE holds SHARE ROW EXCLUSIVE and DROP waits
+  # for ACCESS EXCLUSIVE until the test ends, against every concurrent test
+  # that reads or writes subscriptions (every authed conn test does). Under
+  # async that queued DROP past the 15s ownership timeout in CI and took a
+  # neighbouring test down with it.
+  use EngramWeb.ConnCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
   import Ecto.Query

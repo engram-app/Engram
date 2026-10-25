@@ -9,6 +9,7 @@ defmodule Engram.Notes.NoteFieldsTest do
   import Mox
 
   alias Engram.Crypto
+  alias Engram.Crypto.DekCache
   alias Engram.Indexing
   alias Engram.Notes
   alias Engram.Notes.FrontmatterKey
@@ -172,6 +173,64 @@ defmodule Engram.Notes.NoteFieldsTest do
     assert d.(:expires) == [DateTime.to_unix(~U[2026-12-01 00:00:00Z])]
     assert d.(:due) == [DateTime.to_unix(~U[2026-11-01 00:00:00Z])]
     assert for(r <- rows, r.key_id == named(:priority), do: r.n) == [2.0]
+  end
+
+  # A pass used to fetch the DEK again for the user-added key ids and swallow
+  # any error there. A reload that timed out (a stalled loader holding the
+  # claim) and then filled in time for the next fetch committed the note
+  # WITHOUT its user-added keys, with payload_hash stamped, so it never healed.
+  # The pass now fetches the DEK once for its keys, and a later fetch that
+  # fails fails the pass rather than leaving it half-built.
+  test "a DEK reload stalled mid-pass does not drop the user-added keys",
+       %{user: user, vault: vault} do
+    {:ok, note} =
+      Notes.upsert_note(
+        user,
+        vault,
+        %{"path" => "F/Fields.md", "content" => @full, "mtime" => 1.0},
+        actor: "api"
+      )
+
+    user = Repo.get!(Engram.Accounts.User, user.id)
+    {:ok, dek} = Crypto.get_dek(user)
+    pass = self()
+    on_exit(fn -> :telemetry.detach("stalled-reload") end)
+
+    # Mid-pass (the embed call), evict the DEK and have another process hold
+    # the reload claim. The first miss after that times out; the second finds
+    # the loader's DEK.
+    stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+      token = Engram.StalledDekLoad.stall!(user.id)
+      Process.put(:dek_misses, 0)
+
+      :telemetry.attach(
+        "stalled-reload",
+        [:engram, :crypto, :dek_cache],
+        fn _, _, meta, _ ->
+          if self() == pass and meta.outcome == :miss do
+            before = Process.put(:dek_misses, Process.get(:dek_misses) + 1)
+            if before == 1, do: :ok = DekCache.put_if_claimed(user.id, token, dek)
+          end
+        end,
+        nil
+      )
+
+      {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+    end)
+
+    # Either outcome is fine but one: a committed, stamped pass without the key.
+    case Indexing.prepare_index(note, vault, user) do
+      {:ok, prepared} ->
+        {:ok, _} = Indexing.commit_index(prepared)
+        {:ok, fk} = Crypto.dek_filter_key(user)
+        mood = ids(user.id)[FilterId.key_hmac(fk, "mood")]
+        assert mood, "the pass committed without an id for the user-added key"
+        assert Enum.any?(attrs(note.id), &(&1.key_id == mood))
+
+      {:error, :dek_load_timeout} ->
+        assert attrs(note.id) == []
+        assert is_nil(Repo.get!(Note, note.id, skip_tenant_check: true).payload_hash)
+    end
   end
 
   test "user-added keys get dictionary ids; numbers and dates stay plaintext",

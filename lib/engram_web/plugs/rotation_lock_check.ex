@@ -15,6 +15,7 @@ defmodule EngramWeb.Plugs.RotationLockCheck do
 
   alias Engram.Accounts.User
   alias Engram.Crypto.RotationGate
+  alias Engram.Crypto.RotationInProgressError
   alias Engram.MCP.Tools
   alias EngramWeb.Plugs.Halt
 
@@ -74,16 +75,19 @@ defmodule EngramWeb.Plugs.RotationLockCheck do
 
   # The gate is process state, and a keep-alive connection serves its next
   # request from the same process, so the response clears it. The before_send
-  # also gives the 503 its Retry-After (the error renderer sets no headers).
+  # also gives a rotation refusal's 503 its 60s Retry-After (the error renderer
+  # sets no headers, and assigns the raised error as `:reason`). Any other 503
+  # keeps `EngramWeb.Plugs.RetryAfter`'s.
   defp gate_request(conn) do
     Process.put(:engram_write_gate, true)
 
     register_before_send(conn, fn conn ->
       Process.delete(:engram_write_gate)
 
-      if conn.status == 503 and get_resp_header(conn, "retry-after") == [],
-        do: put_resp_header(conn, "retry-after", "60"),
-        else: conn
+      if match?(%RotationInProgressError{}, conn.assigns[:reason]) and
+           get_resp_header(conn, "retry-after") == [],
+         do: put_resp_header(conn, "retry-after", "60"),
+         else: conn
     end)
   end
 

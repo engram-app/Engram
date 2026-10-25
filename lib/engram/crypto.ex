@@ -218,6 +218,18 @@ defmodule Engram.Crypto do
 
   @dek_load_retries 2
 
+  # DEK load failures that clear on retry: the load stalled behind another
+  # loader (a slow KMS call) or kept losing its claim. Not a crypto fault.
+  @transient_dek_errors [:dek_load_timeout, :dek_load_contended]
+
+  @doc """
+  True for a `get_dek/1` error that a retry can clear (`#{inspect(@transient_dek_errors)}`).
+  The web layer answers these with a retryable 503, every other DEK error
+  with a 500.
+  """
+  @spec transient_dek_error?(term()) :: boolean()
+  def transient_dek_error?(reason), do: reason in @transient_dek_errors
+
   @doc """
   Returns the plaintext DEK for a user, unwrapping via the provider if not cached.
   """
