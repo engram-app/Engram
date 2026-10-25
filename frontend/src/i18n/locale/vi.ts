@@ -254,6 +254,10 @@ export default {
 	"Your plan resumes on {date}": "Gói của bạn được kích hoạt lại vào ngày {date}",
 	"{price}/mo": "{price}/tháng",
 	"{price}/yr": "{price}/năm",
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Tự động gia hạn hàng tháng với giá {price} cho đến khi bạn hủy. Bạn có thể hủy bất cứ lúc nào trong Cài đặt > Thanh toán.",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Tự động gia hạn hàng năm với giá {price} cho đến khi bạn hủy. Bạn có thể hủy bất cứ lúc nào trong Cài đặt > Thanh toán.",
 	"Billing cadence": "Chu kỳ thanh toán",
 	Monthly: "Hàng tháng",
 	Annual: "Hàng năm",

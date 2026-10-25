@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { track } from "../analytics/track";
@@ -275,6 +275,34 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
 		expect(queryAllByText("Starter")).toHaveLength(0);
 		expect(openMock).toHaveBeenCalledTimes(1);
+	});
+
+	// California BPC 17602(a)(1) and ROSCA: the renewal terms sit next to the
+	// button that asks for consent, on every paid CTA (desktop card + mobile row).
+	it("states the renewal terms beside every paid CTA, per cadence", async () => {
+		mockBillingApi();
+		initializePaddleMock.mockImplementation(async () => ({
+			Checkout: { open: vi.fn(), close: vi.fn() },
+		}));
+		renderBilling({ inline: true });
+		await screen.findAllByRole("button", { name: "Choose Starter" });
+
+		const notice = (period: string, price: string) =>
+			`Renews automatically every ${period} at ${price} until you cancel. Cancel anytime in Settings > Billing.`;
+		const ctaHasNotice = (cta: string, text: string) => {
+			const buttons = screen.getAllByRole("button", { name: cta, hidden: true });
+			expect(buttons).toHaveLength(2);
+			for (const b of buttons) {
+				expect(within(b.closest("li")!).getByText(text)).toBeInTheDocument();
+			}
+		};
+
+		ctaHasNotice("Choose Starter", notice("year", "$70"));
+		ctaHasNotice("Choose Pro", notice("year", "$140"));
+
+		fireEvent.click(screen.getByRole("radio", { name: /monthly/iu }));
+		ctaHasNotice("Choose Starter", notice("month", "$7"));
+		ctaHasNotice("Choose Pro", notice("month", "$14"));
 	});
 
 	// #2202 hid Apple Pay and Google Pay, but the wallet stalls were our own

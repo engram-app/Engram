@@ -249,6 +249,10 @@ export default {
 	"Your plan resumes on {date}": "구독이 {date}부터 다시 시작됩니다",
 	"{price}/mo": "{price}/월",
 	"{price}/yr": "{price}/년",
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"매달 {price}에 자동으로 갱신되며, 취소 시까지 유지됩니다. 설정 > 결제에서 언제든지 취소할 수 있습니다.",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"매년 {price}에 자동으로 갱신되며, 취소 시까지 유지됩니다. 설정 > 결제에서 언제든지 취소할 수 있습니다.",
 	"Billing cadence": "결제 주기",
 	Monthly: "매월",
 	Annual: "연간",

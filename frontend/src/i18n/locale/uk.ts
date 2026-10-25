@@ -271,6 +271,10 @@ export default {
 	"Your plan resumes on {date}": "Ваш план відновлюється {date}",
 	"{price}/mo": "{price}/міс",
 	"{price}/yr": "{price}/рік",
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Автоматично поновлюється щомісяця за ціною {price}, доки ви не скасуєте. Скасувати можна в будь-який час у розділі Налаштування > Оплата.",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Автоматично поновлюється щороку за ціною {price}, доки ви не скасуєте. Скасувати можна в будь-який час у розділі Налаштування > Оплата.",
 	"Billing cadence": "Періодичність оплати",
 	Monthly: "Щомісяця",
 	Annual: "Щорічно",

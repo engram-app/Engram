@@ -32,7 +32,14 @@ import EmbedBucketRow from "./embed-bucket-row";
 import { checkoutSettings, INLINE_FRAME_TARGET, initPaddle } from "./paddle-checkout";
 import PaymentMethodCard from "./payment-method-card";
 import PendingChangeBanner from "./pending-change-banner";
-import { CadenceToggle, formatPlanPrice, PlanAccordionRow, PlanCard, planCopy } from "./plan-cards";
+import {
+	CadenceToggle,
+	formatPlanPrice,
+	PlanAccordionRow,
+	PlanCard,
+	planCopy,
+	useRenewalNotice,
+} from "./plan-cards";
 import PlanChangePanel from "./plan-change-panel";
 import { upgradeSource } from "./upgrade-source";
 import { UsagePanel } from "./usage-limits";
@@ -262,6 +269,7 @@ export default function BillingPage({
 	const { data: billing, isLoading } = useBillingStatus();
 	const { data: config } = useBillingConfig();
 	const { freeTier, catalog } = planCopy(config?.plan_limits);
+	const renewal = useRenewalNotice();
 	const { data: me } = useMe();
 	const hasSubscription = Boolean(billing?.subscription);
 	const { data: detail } = useBillingSubscriptionDetail(hasSubscription);
@@ -1063,6 +1071,7 @@ export default function BillingPage({
 									summary={t("Unlimited vaults · 50 GB · cross-vault search + API")}
 									features={catalog.pro.features}
 									ctaLabel={t("Choose Pro")}
+									renewalNote={renewal(catalog.pro, cadence)}
 									ctaNote={t("14-day money-back guarantee · cancel anytime")}
 									onClick={() => handleStartCheckout("pro")}
 									disabled={!checkoutReady}
@@ -1076,6 +1085,7 @@ export default function BillingPage({
 									summary={t("10 vaults · 10 GB · unlimited AI")}
 									features={catalog.starter.features}
 									ctaLabel={t("Choose Starter")}
+									renewalNote={renewal(catalog.starter, cadence)}
 									ctaNote={t("14-day money-back guarantee · cancel anytime")}
 									onClick={() => handleStartCheckout("starter")}
 									disabled={!checkoutReady}

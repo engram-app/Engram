@@ -272,6 +272,10 @@ export default {
 	"Your plan resumes on {date}": "Ваш план возобновляется {date}",
 	"{price}/mo": "{price}/месяц",
 	"{price}/yr": "{price}/год",
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Продлевается автоматически каждый месяц за {price}, пока вы не отмените. Отменить можно в любое время в разделе Настройки > Оплата.",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Продлевается автоматически каждый год за {price}, пока вы не отмените. Отменить можно в любое время в разделе Настройки > Оплата.",
 	"Billing cadence": "Периодичность оплаты",
 	Monthly: "Ежемесячно",
 	Annual: "Годовой",

@@ -267,6 +267,10 @@ export default {
 	"Your plan resumes on {date}": "Seu plano é retomado em {date}",
 	"{price}/mo": "{price}/mês",
 	"{price}/yr": "{price}/ano",
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Renova automaticamente a cada mês por {price} até você cancelar. Cancele a qualquer momento em Configurações > Faturamento.",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Renova automaticamente a cada ano por {price} até você cancelar. Cancele a qualquer momento em Configurações > Faturamento.",
 	"Billing cadence": "Periodicidade de cobrança",
 	Monthly: "Mensal",
 	Annual: "Anual",

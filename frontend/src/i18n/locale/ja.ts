@@ -253,6 +253,10 @@ export default {
 	"Your plan resumes on {date}": "プランは{date}に再開されます",
 	"{price}/mo": "{price}/月",
 	"{price}/yr": "{price}/年",
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"解約されるまで、毎月{price}で自動更新されます。設定 > 課金でいつでもキャンセルできます。",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"解約されるまで、毎年{price}で自動更新されます。設定 > 課金でいつでもキャンセルできます。",
 	"Billing cadence": "支払いサイクル",
 	Monthly: "月額",
 	Annual: "年間",

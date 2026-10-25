@@ -265,6 +265,10 @@ export default {
 	"Your plan resumes on {date}": "Il tuo piano riprende il {date}",
 	"{price}/mo": "{price}/mese",
 	"{price}/yr": "{price}/anno",
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Rinnova automaticamente ogni mese a {price} fino a quando non lo disattivi. Puoi disattivarlo in qualsiasi momento in Impostazioni > Abbonamento.",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Rinnova automaticamente ogni anno a {price} fino a quando non lo disattivi. Puoi disattivarlo in qualsiasi momento in Impostazioni > Abbonamento.",
 	"Billing cadence": "Frequenza di addebito",
 	Monthly: "Mensile",
 	Annual: "Annuale",

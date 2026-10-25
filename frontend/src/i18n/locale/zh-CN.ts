@@ -233,6 +233,10 @@ export default {
 	"Your plan resumes on {date}": "您的计划于 {date} 恢复",
 	"{price}/mo": "{price}/月",
 	"{price}/yr": "{price}/年",
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"自动续订，每月 {price} 美元，直至您取消。随时在 设置 > 账单 中取消。",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"自动续订，每年 {price} 美元，直至您取消。随时在 设置 > 账单 中取消。",
 	"Billing cadence": "账单周期",
 	Monthly: "每月",
 	Annual: "年度",

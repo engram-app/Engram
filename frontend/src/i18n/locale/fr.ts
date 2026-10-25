@@ -268,6 +268,10 @@ export default {
 	"Your plan resumes on {date}": "Ton abonnement reprend le {date}",
 	"{price}/mo": "{price}/mois",
 	"{price}/yr": "{price}/an",
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Renouvellement automatique chaque mois à {price} jusqu'à ce que tu annules. Annule à tout moment dans Paramètres > Facturation.",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Renouvellement automatique chaque année à {price} jusqu'à ce que tu annules. Annule à tout moment dans Paramètres > Facturation.",
 	"Billing cadence": "Fréquence de facturation",
 	Monthly: "Mensuel",
 	Annual: "Annuel",

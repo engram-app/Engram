@@ -267,6 +267,10 @@ export default {
 	"Your plan resumes on {date}": "Twój plan zostanie wznowiony {date}",
 	"{price}/mo": "{price}/mies",
 	"{price}/yr": "{price}/rok",
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Odnawia się automatycznie co miesiąc za {price}, do momentu anulowania. Możesz anulować w dowolnym momencie w Ustawieniach > Płatności.",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Odnawia się automatycznie co rok za {price}, do momentu anulowania. Możesz anulować w dowolnym momencie w Ustawieniach > Płatności.",
 	"Billing cadence": "Cykl płatności",
 	Monthly: "Miesięcznie",
 	Annual: "Rocznie",

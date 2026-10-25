@@ -262,6 +262,10 @@ export default {
 	"Your plan resumes on {date}": "Planınız {date} tarihinde yeniden başlıyor",
 	"{price}/mo": "{price}/ay",
 	"{price}/yr": "{price}/yıl",
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Her ay otomatik olarak {price} TL'ye yenilenir, iptal edebilirsiniz. İptal için Ayarlar > Ödeme bölümüne gidin.",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Her yıl otomatik olarak {price} TL'ye yenilenir, iptal edebilirsiniz. İptal için Ayarlar > Ödeme bölümüne gidin.",
 	"Billing cadence": "Ödeme sıklığı",
 	Monthly: "Aylık",
 	Annual: "Yıllık",

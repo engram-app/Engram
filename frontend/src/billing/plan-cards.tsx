@@ -150,6 +150,44 @@ export function formatPlanPrice(
 		: t("{price}/yr", { price: formatMoney(catalog.annualPrice, "USD", locale, WHOLE) });
 }
 
+// The auto-renewal terms shown beside every paid CTA (California BPC
+// 17602(a)(1), ROSCA 15 USC 8403): the recurring charge, its interval, that
+// it continues until canceled, and how to cancel. Catalog prices are whole
+// USD, so formatMoney, not formatMinorUnits (which takes Paddle minor units).
+export function renewalNotice(
+	catalog: Pick<PlanCardCatalog, "monthlyPrice" | "annualPrice">,
+	cadence: BillingCadence,
+	t: Translate,
+	locale?: string,
+): string {
+	const monthly = cadence === "monthly";
+	const price = formatMoney(
+		monthly ? catalog.monthlyPrice : catalog.annualPrice,
+		"USD",
+		locale,
+		WHOLE,
+	);
+	return monthly
+		? t(
+				"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.",
+				{ price },
+			)
+		: t(
+				"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.",
+				{ price },
+			);
+}
+
+/** `renewalNotice/4` in the UI locale. */
+export function useRenewalNotice() {
+	const { t, renderedLocale } = useT();
+	const locale = intlLocale(renderedLocale, "en-US");
+	return (
+		catalog: Pick<PlanCardCatalog, "monthlyPrice" | "annualPrice">,
+		cadence: BillingCadence,
+	) => renewalNotice(catalog, cadence, t, locale);
+}
+
 // Which note caps the copy states: the set the backend enforces
 // (`/billing/config` `plan_limits`, `Engram.Billing.LimitKeys.plan_limits/0`).
 // "legacy" until the v5 go flag is on, and while the config loads, so a
@@ -251,6 +289,7 @@ export function PlanCard({
 }: PlanCardProps) {
 	const { t, renderedLocale } = useT();
 	const locale = intlLocale(renderedLocale, "en-US");
+	const renewal = useRenewalNotice();
 	const price = formatPlanPrice({ monthlyPrice, annualPrice }, cadence, t, locale);
 	// The amount and the billing words are separate strings, so no translation
 	// holds the price: a model given "{price}/mo billed yearly" decorated the
@@ -327,6 +366,9 @@ export function PlanCard({
 						{Boolean(selected && ctaSubLabel) && (
 							<p className="text-center text-muted-foreground text-xs">{ctaSubLabel}</p>
 						)}
+						<p className="text-center font-medium text-foreground text-xs">
+							{renewal({ monthlyPrice, annualPrice }, cadence)}
+						</p>
 					</>
 				)}
 			</div>
@@ -346,6 +388,7 @@ export function PlanAccordionRow({
 	summary,
 	features,
 	ctaLabel,
+	renewalNote,
 	ctaNote,
 	onClick,
 	open,
@@ -359,6 +402,8 @@ export function PlanAccordionRow({
 	summary: string;
 	features: readonly MsgKey[];
 	ctaLabel: string;
+	// The auto-renewal terms (renewalNotice/4); paid rows only.
+	renewalNote?: string;
 	ctaNote?: string;
 	onClick: () => void;
 	open: boolean;
@@ -428,6 +473,11 @@ export function PlanAccordionRow({
 						>
 							{ctaLabel}
 						</Button>
+						{Boolean(renewalNote) && (
+							<p className="mt-1.5 text-center font-medium text-foreground text-xs">
+								{renewalNote}
+							</p>
+						)}
 						{Boolean(ctaNote) && (
 							<p className="mt-1.5 text-center text-muted-foreground text-xs">{ctaNote}</p>
 						)}

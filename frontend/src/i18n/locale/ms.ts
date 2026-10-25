@@ -259,6 +259,10 @@ export default {
 	"Your plan resumes on {date}": "Pelan anda aktif semula pada {date}",
 	"{price}/mo": "{price}/bulan",
 	"{price}/yr": "{price}/tahun",
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Diperbaharui secara automatik setiap bulan pada {price} sehingga anda membatalkannya. Batalkan pada bila-bila masa dalam Tetapan > Bayaran.",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Diperbaharui secara automatik setiap tahun pada {price} sehingga anda membatalkannya. Batalkan pada bila-bila masa dalam Tetapan > Bayaran.",
 	"Billing cadence": "Tempoh pembayaran",
 	Monthly: "Bulanan",
 	Annual: "Tahunan",
