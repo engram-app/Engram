@@ -381,6 +381,31 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert Repo.get!(Note, note.id, skip_tenant_check: true).keyword_version == keyword
     end
 
+    # #2216 L1: a heal request (a NULL-clear by payload drift, a cluster
+    # diff or a DEK rotation) that lands while a pass is running survives
+    # the pass's stamp, so the cheap heal still runs.
+    test "a NULL-clear landing mid-pass is not overwritten by the stamp", ctx do
+      note = sectioned_note(ctx, "The first section is unchanged.")
+      index_counting(ctx.bypass, note)
+      edit_section(ctx, "The first section was edited.")
+
+      stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+        from(n in Note, where: n.id == ^note.id)
+        |> Repo.update_all([set: [keyword_version: nil, chunker_version: nil]],
+          skip_tenant_check: true
+        )
+
+        {:ok, Enum.map(texts, fn _ -> List.duplicate(0.1, 3) end)}
+      end)
+
+      stub_qdrant_optional(ctx.bypass)
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      row = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert row.embed_hash == row.content_hash
+      assert {row.chunker_version, row.keyword_version} == {nil, nil}
+    end
+
     test "a reused pass on a note at the target stamps the target", ctx do
       target = Engram.Rebuild.target_versions()
       note = sectioned_note(ctx, "The first section is unchanged.")

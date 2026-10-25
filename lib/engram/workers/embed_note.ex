@@ -1140,8 +1140,6 @@ defmodule Engram.Workers.EmbedNote do
     set =
       [
         embed_hash: note.content_hash,
-        chunker_version: chunker,
-        keyword_version: keyword,
         # A full pass read the frontmatter under the current key alias table.
         key_alias_version: Engram.Notes.KeyAliases.version()
       ] ++ set
@@ -1150,12 +1148,38 @@ defmodule Engram.Workers.EmbedNote do
     # Unscoped this stamps NOTHING, so the note re-embeds on every sweep and
     # pays Voyage each time, while `count == 0` below is logged as a benign
     # "concurrent edit" — a silent, recurring bill.
+    #
+    # The version stamps are compare-and-set on the values this job loaded
+    # (#2216 L1): a NULL-clear that landed during the pass (payload drift,
+    # a cluster diff, a DEK rotation asking for a cheap heal) is kept, not
+    # overwritten with a stamp vouching for points the pass may have reused.
     {:ok, {count, _}} =
       Repo.with_tenant(note.user_id, fn ->
         from(n in Note,
-          where: n.id == ^note.id and n.content_hash == ^note.content_hash
+          where: n.id == ^note.id and n.content_hash == ^note.content_hash,
+          update: [set: ^set]
         )
-        |> Repo.update_all(set: set)
+        |> update([n],
+          set: [
+            chunker_version:
+              fragment(
+                "CASE WHEN ? IS NOT DISTINCT FROM ? THEN ? ELSE ? END",
+                n.chunker_version,
+                type(^note.chunker_version, :integer),
+                type(^chunker, :integer),
+                n.chunker_version
+              ),
+            keyword_version:
+              fragment(
+                "CASE WHEN ? IS NOT DISTINCT FROM ? THEN ? ELSE ? END",
+                n.keyword_version,
+                type(^note.keyword_version, :integer),
+                type(^keyword, :integer),
+                n.keyword_version
+              )
+          ]
+        )
+        |> Repo.update_all([])
       end)
 
     if count == 0 do
