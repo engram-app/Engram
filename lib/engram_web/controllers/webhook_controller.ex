@@ -84,6 +84,11 @@ defmodule EngramWeb.WebhookController do
                 _ = PostHogForwarder.forward_paddle_event(event, result)
                 {ok, %{event_type: event_type, event_id: event_id, result: :ok}}
 
+              # An event waiting for its subscription's created is expected and
+              # retried; Billing already logs it at warning.
+              {:error, :awaiting_subscription_created} = err ->
+                {err, %{event_type: event_type, event_id: event_id, result: :error}}
+
               {:error, reason} = err ->
                 Logger.error(
                   "paddle_webhook_handler_error",

@@ -828,6 +828,31 @@ defmodule EngramWeb.WebhookControllerTest do
                Engram.Billing.get_subscription(user)
     end
 
+    # Waiting is expected and retried ~60 times if the created never lands:
+    # not an error line (and a Sentry event) per retry.
+    test "a wait for the created is logged below error" do
+      user = insert(:user)
+
+      send_payload(
+        sub_event("subscription.created", "ntf_q1", "sub_q_old", user, "active",
+          occurred_at: "2026-10-01T00:00:00Z"
+        )
+      )
+
+      early =
+        sub_event("subscription.updated", "ntf_q2", "sub_q_new", user, "past_due",
+          occurred_at: "2026-10-06T00:00:00Z",
+          created_at: "2026-10-05T00:00:00Z"
+        )
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :error], fn ->
+          assert json_response(send_payload(early), 500)["status"] == "error"
+        end)
+
+      refute log =~ "paddle_webhook_handler_error"
+    end
+
     test "a late event for an OLD subscription (created before the live row) is acked" do
       user = insert(:user)
 
