@@ -187,9 +187,31 @@ defmodule Engram.Billing.Workers.PaddleReconcileTest do
             do: minutes
 
       gaps = Enum.zip_with(minutes, tl(minutes) ++ [hd(minutes) + 60], &(&2 - &1))
+      window_min = div(Reconciliation.stalled_scan_window_seconds(), 60)
 
-      assert gaps == List.duplicate(5, 12)
-      assert Reconciliation.stalled_scan_window_seconds() == 5 * 60
+      assert window_min == 5
+      assert gaps == List.duplicate(window_min, div(60, window_min))
+
+      # Every cron tick is an anchor, and a job inserted up to just under half
+      # a window late (busy leader, DB pool wait) or early still anchors on its
+      # own tick, so a delayed insert neither skips nor repeats a window.
+      half = div(Reconciliation.stalled_scan_window_seconds(), 2)
+
+      for m <- minutes do
+        tick = DateTime.new!(~D[2026-10-23], Time.new!(12, m, 0))
+        assert PaddleReconcile.scan_anchor(tick) == tick
+        assert PaddleReconcile.scan_anchor(DateTime.add(tick, half - 1, :second)) == tick
+        assert PaddleReconcile.scan_anchor(DateTime.add(tick, -half, :second)) == tick
+      end
+    end
+
+    # At 15-min cadence a 15-min timeout could not stack scans; at 5 min a hung
+    # Paddle call could pile three into the 2-slot maintenance queue.
+    test "a scan times out before the next tick; the daily run keeps its long timeout" do
+      scan = %Oban.Job{args: %{"scan" => "stalled_checkouts"}}
+
+      assert PaddleReconcile.timeout(scan) < Reconciliation.stalled_scan_window_seconds() * 1000
+      assert PaddleReconcile.timeout(%Oban.Job{args: %{}}) == :timer.minutes(15)
     end
 
     test "a Paddle fetch failure errors the job so Oban retries the same window" do
@@ -204,11 +226,14 @@ defmodule Engram.Billing.Workers.PaddleReconcileTest do
 
     # The grace: a window anchored on the tick ends 15 minutes before the run,
     # so a payment younger than that can never be reported.
-    test "anchors on the cron tick, to the minute, so windows tile and keep the grace" do
+    test "anchors on the cron tick, even when inserted late, so windows tile and keep the grace" do
       assert PaddleReconcile.scan_anchor(~U[2026-10-23 12:14:00.020Z]) == ~U[2026-10-23 12:14:00Z]
       # DB clock a hair early: still that tick, not the previous minute.
       assert PaddleReconcile.scan_anchor(~U[2026-10-23 12:13:59.990Z]) == ~U[2026-10-23 12:14:00Z]
       assert PaddleReconcile.scan_anchor(~U[2026-10-23 12:19:00.400Z]) == ~U[2026-10-23 12:19:00Z]
+      # Inserted 2m20s late: still the 12:14 tick, not 12:16 (the old
+      # nearest-minute rounding shifted the window by the delay).
+      assert PaddleReconcile.scan_anchor(~U[2026-10-23 12:16:20Z]) == ~U[2026-10-23 12:14:00Z]
     end
 
     test "is a no-op on self-host" do
