@@ -18,6 +18,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Reading `TenancyGuard`'s boot line / re-verifying RLS enforcement on a deploy, or touching the probe (`:savepoint` outermost, sandbox can't test it, `reltuples`, `$1::regclass`) → `docs/context/rls-tenancy-probe-boot-log.md`
 - Widening a column type without rewriting the table (`varchar[]` → `text[]` DOES rewrite; how to measure with relfilenode; when `# squawk-ignore-file` is justified) → `docs/context/migration-column-type-rewrites.md`
 - All env vars by category → `docs/context/environment-variables.md`
+- Undoing a delete, `delete_op_id`/`restore_deleted`, trash retention (`trash_retention_days`), or writing `deleted_at: nil` on an attachment (the GC revive race, #2195) → `docs/context/safer-delete-trash-ops.md`
 - Rate limiter + `ai_searches_per_day` budget: BEAM-only (Hammer ETS + PubSub), zero Redis; why NOT Mnesia → `docs/context/rate-limiter-architecture.md`
 - Gating API keys or MCP by plan, re-adding a connection cap, or "is the API Pro-only?" (no: keys work everywhere on every tier; one cost meter + rate limits; removing a limit key needs no migration) → `docs/context/api-access-and-mcp-limits.md`
 - Adding a plan-limit / abuse gate as a plug, or a Free cap is not firing for a user clearly over it (a `request_path` guard cannot see MCP — every tool is one route, named in the JSON-RPC body) → `docs/context/mcp-bypasses-path-shaped-plugs.md`
