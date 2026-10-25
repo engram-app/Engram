@@ -11,7 +11,8 @@ defmodule Engram.Vector.QdrantLayout do
 
   On Qdrant >= 1.19.2 (`tenant_layout?/1`, Task 8.1) `u` is the `is_tenant`
   index, every other payload index sets `enable_hnsw: false`, every payload
-  index is on disk, and segments are capped. The per-tenant graph (`m: 0`,
+  index is on disk, and a new collection caps its segments (create-time
+  only, `@max_segment_size_kb`). The per-tenant graph (`m: 0`,
   `payload_m: 16`, one graph per `u` value) waits for `tenant_graph?/3`:
   while legacy `user_id` points and v5 `u` points coexist, m 0 would split
   one user into two disconnected subgraphs. Below 1.19.2 (prod's old 1.18.2
@@ -63,11 +64,23 @@ defmodule Engram.Vector.QdrantLayout do
     "optimizers_config" => %{"max_optimization_threads" => 1}
   }
 
-  # Task 8.1, Qdrant >= 1.19.2. `max_segment_size` is in KB (1 KB = one
-  # 256-dim f32 vector), so about 1 GB per segment.
+  # Task 8.1, Qdrant >= 1.19.2.
   @tenant_version "1.19.2"
   @tenant_hnsw %{"m" => 0, "payload_m" => 16, "max_indexing_threads" => 1}
-  @max_segment_size_kb 1_000_000
+
+  # KB of the segment's largest vector storage (Qdrant 1.19.2
+  # `max_available_vectors_size_in_bytes`): ~2 KB a point for dense f16 1024,
+  # so ~64k points. A segment build holds its whole sparse inverted index in
+  # RAM (12 B per non-zero, ~526 a point), ~13 KB a point all in, so the
+  # worst merge is ~1 GB: room on a 4 GiB node (mx1). It also caps each
+  # appendable segment, whose sparse index stays in RAM until indexed, at
+  # ~170 MB. Half Qdrant's own default for one indexing thread (256,000).
+  #
+  # CREATE-TIME ONLY: `storage/2` (the reconcile) never sends it. Collections
+  # created at 1,000,000 (prod v2, the revert target) keep their value. A
+  # lower cap does not rebuild anything (no optimizer splits a segment), but
+  # the serving cluster is not where to find out.
+  @max_segment_size_kb 128_000
 
   # Payload fields every tenant-scoped op filters on. Qdrant Cloud strict-mode
   # rejects (400) a filter on an un-indexed field, so each must have an index
@@ -248,14 +261,12 @@ defmodule Engram.Vector.QdrantLayout do
     if tenant_layout?(version) do
       @storage
       |> then(&if graph?, do: Map.put(&1, "hnsw_config", @tenant_hnsw), else: &1)
-      |> Map.update!("optimizers_config", fn o ->
-        Map.merge(o, %{
-          "max_segment_size" => @max_segment_size_kb,
-          # A float, as Qdrant echoes it: an integer config (1) would read
-          # back 1.0 and drift every boot.
-          "deleted_threshold" => ServiceConfig.get(:qdrant_deleted_threshold, 0.2) / 1
-        })
-      end)
+      # A float, as Qdrant echoes it: an integer config (1) would read back
+      # 1.0 and drift every boot.
+      |> put_in(
+        ["optimizers_config", "deleted_threshold"],
+        ServiceConfig.get(:qdrant_deleted_threshold, 0.2) / 1
+      )
     else
       @storage
     end
@@ -449,7 +460,11 @@ defmodule Engram.Vector.QdrantLayout do
     # datatype, so an existing float32 collection is not drift and boot never
     # PATCHes it (Qdrant cannot convert in place).
     dense = if float16?, do: Map.put(dense, "datatype", "float16"), else: dense
-    put_in(storage(version, false), ["vectors", "dense"], dense)
+    body = put_in(storage(version, false), ["vectors", "dense"], dense)
+
+    if tenant_layout?(version),
+      do: put_in(body, ["optimizers_config", "max_segment_size"], @max_segment_size_kb),
+      else: body
   end
 
   @doc """

@@ -73,7 +73,7 @@ defmodule Engram.Native.LinkExtractTest do
     end
 
     test "extract emits [:engram, :nif, :call, :stop]" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      ref = Engram.NativeScheduled.attach_nif_events()
       Parser.extract("[[a]]")
 
       assert_receive {[:engram, :nif, :call, :stop], ^ref, %{input_bytes: 5},

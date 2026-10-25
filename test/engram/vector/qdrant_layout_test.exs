@@ -420,13 +420,39 @@ defmodule Engram.Vector.QdrantLayoutTest do
 
       assert want["optimizers_config"] == %{
                "max_optimization_threads" => 1,
-               "max_segment_size" => 1_000_000,
                "deleted_threshold" => 0.2
              }
 
       body = QdrantLayout.create_params(1024, true, @v1192)
       refute Map.has_key?(body, "hnsw_config")
-      assert body["optimizers_config"] == want["optimizers_config"]
+
+      assert body["optimizers_config"] ==
+               Map.put(want["optimizers_config"], "max_segment_size", 128_000)
+    end
+
+    # mx1 (4 GiB) OOMed on merges of ~250k-point segments: a segment build
+    # holds the whole sparse inverted index in RAM. 128,000 KB caps a segment
+    # at ~64k dense f16 points, about 1 GB of merge heap.
+    test "a new 1.19.2 collection caps segments at 128,000 KB" do
+      assert QdrantLayout.create_params(1024, true, @v1192)["optimizers_config"][
+               "max_segment_size"
+             ] == 128_000
+    end
+
+    # The cap is create-time only. v2 (the serving cluster and revert target)
+    # and the v3 collection were created at 1,000,000 KB; the boot reconcile
+    # must not PATCH them to the new cap.
+    test "a v2-shaped live collection gets no optimizer or hnsw PATCH" do
+      v2 =
+        @tenant_info["config"]
+        |> put_in(["hnsw_config", "m"], 16)
+        |> put_in(["optimizer_config", "max_segment_size"], 1_000_000)
+
+      for strict? <- [true, false], deployment <- [:self_host, :cloud] do
+        diff = QdrantLayout.diff(v2, QdrantLayout.desired(@v1192, nil, strict?, deployment))
+        refute Map.has_key?(diff, "optimizers_config"), inspect(diff)
+        refute Map.has_key?(diff, "hnsw_config"), inspect(diff)
+      end
     end
 
     test "the per-tenant graph only once tenant_graph? holds" do

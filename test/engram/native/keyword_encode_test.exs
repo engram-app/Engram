@@ -68,7 +68,7 @@ defmodule Engram.Native.KeywordEncodeTest do
     end
 
     test "every call emits [:engram, :nif, :call, :stop]" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      ref = Engram.NativeScheduled.attach_nif_events()
       Engram.Native.encode_documents(["hello world"], @key, 3.0, nil)
 
       assert_receive {[:engram, :nif, :call, :stop], ^ref,

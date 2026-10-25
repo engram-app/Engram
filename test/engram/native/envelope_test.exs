@@ -117,7 +117,7 @@ defmodule Engram.Native.EnvelopeTest do
     end
 
     test "a format-1 seal emits per call even inline" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      ref = Engram.NativeScheduled.attach_nif_events()
       Native.envelope_seal("abc", @key, @aad, :zstd)
       assert_received {_, ^ref, %{input_bytes: 3}, %{nif: :envelope_seal, dirty: false}}
     end
@@ -151,7 +151,7 @@ defmodule Engram.Native.EnvelopeTest do
       assert byte_size(ct) < 200
       assert {:reschedule, _} = Native.envelope_open_nif(ct, nonce, @key, @aad)
 
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      ref = Engram.NativeScheduled.attach_nif_events()
       before = counts()[:envelope_open]
       for _ <- 1..@reps, do: assert(Native.envelope_open(ct, nonce, @key, @aad) == {:ok, plain})
       # Double counting (inline try + dirty rerun) would be 2 x @reps.
@@ -166,7 +166,7 @@ defmodule Engram.Native.EnvelopeTest do
         plain = String.duplicate("a", n)
         {ct, nonce} = Native.envelope_seal(plain, @key, @aad, :zstd)
         assert byte_size(ct) < 100
-        ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+        ref = Engram.NativeScheduled.attach_nif_events()
         assert Native.envelope_open(ct, nonce, @key, @aad) == {:ok, plain}
 
         if dirty,
@@ -182,7 +182,7 @@ defmodule Engram.Native.EnvelopeTest do
         plain = :crypto.strong_rand_bytes(n)
         {ct, <<1, _::binary-size(12)>> = nonce} = Native.envelope_seal(plain, @key, @aad, :auto)
         assert byte_size(ct) == n + 17
-        ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+        ref = Engram.NativeScheduled.attach_nif_events()
         assert Native.envelope_open(ct, nonce, @key, @aad) == {:ok, plain}
 
         if dirty,
@@ -302,7 +302,7 @@ defmodule Engram.Native.EnvelopeTest do
     end
 
     test "inline format-0 calls are counted, not emitted" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      ref = Engram.NativeScheduled.attach_nif_events()
       before = counts()
 
       for _ <- 1..@reps do
@@ -326,7 +326,7 @@ defmodule Engram.Native.EnvelopeTest do
   # by this test's own calls, and the upper bound (1.5x) stays tight enough
   # to catch double counting. The dirty call is attributed by its event.
   defp assert_counted_then_dirty(nif, call) do
-    ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+    ref = Engram.NativeScheduled.attach_nif_events()
     before = counts()[nif]
     for _ <- 1..@reps, do: call.(16_384)
     inline = counts()[nif]
@@ -341,7 +341,7 @@ defmodule Engram.Native.EnvelopeTest do
 
   # `call` runs inline: counted in the NIF @reps times, no per-call event.
   defp assert_counted_inline(nif, bytes, call) do
-    ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+    ref = Engram.NativeScheduled.attach_nif_events()
     before = counts()[nif]
     for _ <- 1..@reps, do: call.()
     assert_delta(counts()[nif], before, {@reps, bytes * @reps})

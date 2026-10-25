@@ -133,7 +133,7 @@ defmodule Engram.Native.VectorJsonTest do
     end
 
     test "every call emits [:engram, :nif, :call, :stop]" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      ref = Engram.NativeScheduled.attach_nif_events()
       Native.pack_f32([1.0])
       Native.dense_json(<<1.0::float-32-little>>)
       Native.sparse_json(<<1::32>>, <<1.0::float-64>>)

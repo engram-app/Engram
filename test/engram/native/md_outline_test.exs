@@ -89,7 +89,7 @@ defmodule Engram.Native.MdOutlineTest do
     end
 
     test "emits the NIF telemetry, always dirty" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      ref = Engram.NativeScheduled.attach_nif_events()
       Native.md_outline("# a\n")
       assert_receive {_, ^ref, %{input_bytes: 4}, %{nif: :md_outline, dirty: true}}
       :telemetry.detach(ref)

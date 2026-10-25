@@ -174,7 +174,7 @@ defmodule Engram.Native.ChunkerTest do
 
       for content <- [tree.(12_000), tree.(30_000), "---\na: 1\n---\n" <> tree.(12_000)] do
         assert byte_size(content) > 262_144
-        ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+        ref = Engram.NativeScheduled.attach_nif_events()
         sliced = Engram.Native.chunk(content, "f", "T", ["al"], "Type: d")
         {whole, _peak} = Engram.Native.chunk_dirty_nif(content, "f", "T", ["al"], "Type: d")
         assert sliced == whole
@@ -189,7 +189,7 @@ defmodule Engram.Native.ChunkerTest do
     end
 
     test "parse emits [:engram, :nif, :call, :stop]" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      ref = Engram.NativeScheduled.attach_nif_events()
       Markdown.parse("# a\n\nb", "x.md")
       assert_receive {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :chunk}}
     end

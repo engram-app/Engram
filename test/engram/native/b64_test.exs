@@ -94,7 +94,7 @@ defmodule Engram.Native.B64Test do
     # Inline calls skip the per-call event (it would cost more than the
     # decode); a dirty call emits it like every other NIF.
     test "inline calls emit no event, dirty calls do" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      ref = Engram.NativeScheduled.attach_nif_events()
 
       Native.decode64(String.duplicate("A", 16_384))
       Native.encode64(:binary.copy("a", 16_384))

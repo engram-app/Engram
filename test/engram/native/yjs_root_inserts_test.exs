@@ -88,7 +88,7 @@ defmodule Engram.Native.YjsRootInsertsTest do
   end
 
   test "emits the NIF telemetry, always dirty" do
-    ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+    ref = Engram.NativeScheduled.attach_nif_events()
     update = state(seeded("x"))
     Native.yjs_root_inserts(update, "content")
     size = byte_size(update)

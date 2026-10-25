@@ -35,7 +35,7 @@ defmodule Engram.Native.FrontmatterSplitTest do
   end
 
   test "split emits [:engram, :nif, :call, :stop]" do
-    ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+    ref = Engram.NativeScheduled.attach_nif_events()
     Frontmatter.split("---\na: 1\n---\nb")
     assert_receive {_, ^ref, _, %{nif: :frontmatter_split}}
   end
