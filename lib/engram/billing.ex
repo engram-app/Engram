@@ -1027,12 +1027,24 @@ defmodule Engram.Billing do
 
   # Refunds and chargebacks. An adjustment carries no custom_data, so the owner
   # is found through its subscription and handed to the analytics forwarder.
-  # Nothing is written: Paddle's subscription events carry any state change.
+  #
+  # An approved FULL refund (the 14-day money-back guarantee) or an approved
+  # chargeback of any size ends the plan. A refund starts as pending_approval
+  # and may end rejected: neither ends anything, nor does a
+  # chargeback_warning. A row already canceled is left alone, so a repeat or
+  # late event never calls Paddle twice or errors.
+  # Paddle does not cancel a subscription when its transaction is refunded,
+  # so we cancel it now, then run the canceled entity Paddle returns through
+  # the subscription.canceled clause: the one path that drops a user to
+  # Free. The later subscription.canceled webhook repeats it harmlessly.
+  # Everything else writes nothing.
   def upsert_from_paddle_event(%{"event_type" => type, "data" => data})
       when type in ~w(adjustment.created adjustment.updated) do
     with id when is_binary(id) <- data["subscription_id"],
          %Subscription{} = sub <- get_subscription_by_paddle_id(id) do
-      {:ok, sub}
+      if ends_plan?(data) and sub.status != "canceled",
+        do: cancel_for_adjustment(sub, data["id"]),
+        else: {:ok, sub}
     else
       _ -> {:ok, :ignored}
     end
@@ -1049,6 +1061,32 @@ defmodule Engram.Billing do
   end
 
   def upsert_from_paddle_event(_event), do: {:ok, :ignored}
+
+  defp ends_plan?(%{"status" => "approved", "action" => "refund", "type" => "full"}), do: true
+  defp ends_plan?(%{"status" => "approved", "action" => "chargeback"}), do: true
+  defp ends_plan?(_data), do: false
+
+  # The user-facing cancel with `:immediately`: same Paddle call, same
+  # deterministic idempotency key, so created + updated cancel once.
+  defp cancel_for_adjustment(sub, adjustment_id) do
+    user = %Engram.Accounts.User{id: sub.user_id, subscription: sub}
+
+    case Engram.Billing.Subscriptions.cancel(user, :immediately) do
+      {:ok, canceled} ->
+        Logger.info(
+          "paddle_adjustment_canceled_subscription",
+          Metadata.with_category(:info, :billing,
+            adjustment_id: adjustment_id,
+            paddle_subscription_id: sub.paddle_subscription_id
+          )
+        )
+
+        upsert_from_paddle_event(%{"event_type" => "subscription.canceled", "data" => canceled})
+
+      {:error, reason} ->
+        {:error, {:adjustment_cancel_failed, reason}}
+    end
+  end
 
   @doc """
   Emits `checkout_payment_stalled` / `checkout_payment_action_required` (log +
@@ -1204,7 +1242,7 @@ defmodule Engram.Billing do
           "free stamp at cancel found no user row",
           Metadata.with_category(:warning, :billing,
             user_id: user.id,
-            subscription_id: sub.paddle_subscription_id
+            paddle_subscription_id: sub.paddle_subscription_id
           )
         )
 

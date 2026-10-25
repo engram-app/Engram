@@ -306,6 +306,7 @@ config :logger,
 config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
   metadata: [
+    :adjustment_id,
     :attachment_id,
     :attachment_ids,
     :attempt,
