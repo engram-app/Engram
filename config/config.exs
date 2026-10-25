@@ -201,7 +201,7 @@ config :engram, Oban,
       # :x4/:x9, hourly jobs sit on :x3/:x8 or :10/:25/:55 (data-migrations
       # runner :33, legal notices :18, attachment blob GC :03,
       # CRDT head re-warm :48),
-      # dailies on :00/:16/:25/:30/:40/:45.
+      # dailies on :00/:15/:30/:40/:45.
       crontab: [
         # Every 5 min. Work is also queued the moment it is due (`kick/0`).
         {"2-59/5 * * * *", Engram.Workers.ReconcileEmbeddings},
