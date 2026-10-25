@@ -290,7 +290,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		const { container, queryAllByText } = renderBilling({ inline: true });
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
 		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Start free trial",
+			(b) => b.textContent === "Choose Starter",
 		)!;
 		await act(async () => {
 			startBtn.click();
@@ -323,7 +323,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		const { container, queryAllByText } = renderBilling({ inline: true });
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
 		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Start free trial",
+			(b) => b.textContent === "Choose Starter",
 		)!;
 		await act(async () => {
 			startBtn.click();
@@ -951,7 +951,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		const { container, queryAllByText } = renderBilling({ inline: true });
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
 		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Start free trial",
+			(b) => b.textContent === "Choose Starter",
 		)!;
 		await act(async () => {
 			startBtn.click();
@@ -984,7 +984,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		const { container, queryAllByText } = renderBilling({ inline: true });
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
 		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Start free trial",
+			(b) => b.textContent === "Choose Starter",
 		)!;
 		await act(async () => {
 			startBtn.click();
@@ -1025,7 +1025,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		const { container, queryAllByText } = renderBilling({ inline: true });
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
 		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Start free trial",
+			(b) => b.textContent === "Choose Starter",
 		)!;
 		await act(async () => {
 			startBtn.click();
