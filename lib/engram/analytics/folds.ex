@@ -30,11 +30,15 @@ defmodule Engram.Analytics.Folds do
   """
   @spec add(term(), %{atom() => non_neg_integer()}, map()) :: :ok
   def add(key, counts, props \\ %{}) do
-    true = :ets.insert(@table, {{:props, key}, props})
-
+    # Counters first, props last: a `take/2` landing between the two steps
+    # then strands at most a props row (until that key's next take), never
+    # counts with no props, which would roll up without their tool/surface.
     Enum.each(counts, fn {name, n} ->
       :ets.update_counter(@table, {key, name}, n, {{key, name}, 0})
     end)
+
+    true = :ets.insert(@table, {{:props, key}, props})
+    :ok
   end
 
   @doc """

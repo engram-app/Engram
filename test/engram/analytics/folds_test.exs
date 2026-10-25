@@ -19,4 +19,18 @@ defmodule Engram.Analytics.FoldsTest do
     assert %{calls: 2, errors: 1} = Folds.take(key, [:calls, :errors])
     assert rows_for(key) == []
   end
+
+  # add/3 is two ETS writes, and a take/2 on another process can land between
+  # them. ETS offers no seam to pause there (and its BIFs cannot be call
+  # traced), so this pins the ORDER instead: a counter write that raises shows
+  # whether props were already written. Props first would let that take strand
+  # counts with no props, and their rollup would ship without its tool/surface.
+  test "add/3 writes the counters before the props row" do
+    key = {"mcp_tool_called", Ecto.UUID.generate(), "list_vaults"}
+    true = :ets.insert(@table, {{key, :calls}, :not_a_counter})
+
+    assert_raise ArgumentError, fn -> Folds.add(key, %{calls: 1}, %{tool: "list_vaults"}) end
+    assert :ets.lookup(@table, {:props, key}) == []
+    :ets.delete(@table, {key, :calls})
+  end
 end
