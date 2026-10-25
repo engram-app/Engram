@@ -670,9 +670,9 @@ defmodule Engram.Attachments do
                 )
 
               if count > 0, do: :ok = evict_counts(user.id)
-              count
+              {count, seq}
             else
-              0
+              {0, nil}
             end
           end)
           |> unwrap_tenant()
@@ -680,10 +680,10 @@ defmodule Engram.Attachments do
         # The blob stays for AttachmentBlobGC (#2159).
         status =
           case result do
-            {:ok, count} when count > 0 ->
+            {:ok, {count, _seq}} when count > 0 ->
               :deleted
 
-            {:ok, 0} ->
+            {:ok, {0, _seq}} ->
               :absent
 
             {:error, reason} ->
@@ -704,22 +704,8 @@ defmodule Engram.Attachments do
         # trash are sent.
         _ =
           if status == :deleted do
-            payload = %{
-              "event_type" => "delete",
-              "kind" => "attachment",
-              "path" => path,
-              "vault_id" => vault.id
-            }
-
-            # Origin attribution (#970) — same contract as the notes delete
-            # broadcast: lets the originating device drop its own fanout echo.
-            payload =
-              case Keyword.get(opts, :origin_device_id) do
-                device_id when is_binary(device_id) -> Map.put(payload, "device_id", device_id)
-                _ -> payload
-              end
-
-            Broadcast.emit("sync:#{user.id}:#{vault.id}", "note_changed", payload)
+            {:ok, {_count, seq}} = result
+            broadcast_delete(user.id, vault.id, path, seq, opts)
           end
 
         status
@@ -1441,7 +1427,7 @@ defmodule Engram.Attachments do
         # the WHOLE batch. All-or-nothing is deliberate — a change from the
         # old per-path independent transactions — and callers see the raise,
         # never a fake `deleted: 0` success.
-        {:ok, {deleted_ids, deleted_hmacs}} =
+        {:ok, {deleted_ids, seq_by_hmac}} =
           batch_soft_delete_rows(user, vault, Map.values(hmac_by_path), opts[:op_id])
 
         # One broadcast per deleted path in input order. No blob delete
@@ -1449,18 +1435,11 @@ defmodule Engram.Attachments do
         # back, and a deleted blob cannot.
         if deleted_ids != [], do: :ok = evict_counts(user.id)
 
-        deleted_set = MapSet.new(deleted_hmacs)
-
-        for path <- sanitized, MapSet.member?(deleted_set, hmac_by_path[path]) do
-          Broadcast.emit("sync:#{user.id}:#{vault.id}", "note_changed", %{
-            "event_type" => "delete",
-            "kind" => "attachment",
-            "path" => path,
-            "vault_id" => vault.id
-          })
+        for path <- sanitized, seq = seq_by_hmac[hmac_by_path[path]], seq != nil do
+          broadcast_delete(user.id, vault.id, path, seq, [])
         end
 
-        {:ok, %{deleted: length(deleted_hmacs)}}
+        {:ok, %{deleted: map_size(seq_by_hmac)}}
 
       {:error, :no_dek} ->
         # No DEK = no attachments to delete; mirror do_delete_attachment.
@@ -1475,7 +1454,7 @@ defmodule Engram.Attachments do
   # its OWN seq (the `(seq, id)` keyset feed requires per-row-distinct,
   # monotonic seqs — N rows must never share one). Returns
   # `{:ok, {deleted_ids, deleted_path_hmacs}}` for the actually-deleted rows.
-  defp batch_soft_delete_rows(_user, _vault, [], _op_id), do: {:ok, {[], []}}
+  defp batch_soft_delete_rows(_user, _vault, [], _op_id), do: {:ok, {[], %{}}}
 
   defp batch_soft_delete_rows(user, vault, hmacs, op_id) do
     now = DateTime.utc_now(:second)
@@ -1490,7 +1469,7 @@ defmodule Engram.Attachments do
         |> Repo.all()
 
       if rows == [] do
-        {[], []}
+        {[], %{}}
       else
         n = length(rows)
         last_seq = Engram.Vaults.next_seq_block!(vault.id, n)
@@ -1513,8 +1492,8 @@ defmodule Engram.Attachments do
               )
           end
 
-        deleted_hmacs = returned |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
-        {deleted_ids, deleted_hmacs}
+        seq_of = Map.new(id_seqs)
+        {deleted_ids, Map.new(returned, fn {id, hmac} -> {hmac, seq_of[id]} end)}
       end
     end)
     |> unwrap_tenant()
@@ -1566,17 +1545,26 @@ defmodule Engram.Attachments do
   is revived only if it still holds its `storage_key`, carries NO GC claim at
   all, and no live row holds its path. A stale claim is refused too: it only
   says the GC run died, not before or after its S3 delete, so the blob may
-  be gone. That costs nothing, since the GC only claims rows already past
-  their owner's retention; its next run re-claims and finalizes the row. Everything else comes back in `unrestored`, so a
+  be gone. The GC settles it: a row still past its window is re-claimed and
+  finalized; one that is no longer due (retention went up after the claim)
+  has its blob checked, then its claim dropped (blob there, restorable
+  again) or the row finalized (blob gone). Everything else comes back in `unrestored`, so a
   restore either has its blob or is refused; it never leaves a live row
   pointing at nothing.
 
-  Returns `{:ok, %{restored: ids, unrestored: ids}}`. Broadcasting is the
+  Returns `{:ok, %{restored: ids, unrestored: ids, seqs: %{id => seq}}}`,
+  `seqs` holding each restored row's committed seq. Broadcasting is the
   caller's (it has the decrypted paths).
   """
   @spec revive_tombstones(map(), map(), [String.t()]) ::
-          {:ok, %{restored: [String.t()], unrestored: [String.t()]}} | {:error, term()}
-  def revive_tombstones(_user, _vault, []), do: {:ok, %{restored: [], unrestored: []}}
+          {:ok,
+           %{
+             restored: [String.t()],
+             unrestored: [String.t()],
+             seqs: %{String.t() => integer()}
+           }}
+          | {:error, term()}
+  def revive_tombstones(_user, _vault, []), do: {:ok, %{restored: [], unrestored: [], seqs: %{}}}
 
   def revive_tombstones(user, vault, ids) do
     ids = Enum.uniq(ids)
@@ -1610,14 +1598,15 @@ defmodule Engram.Attachments do
 
       # Now live, so `stamp_seqs!`'s live-row guard admits them. Unused seqs
       # in the block are gaps, which the feed allows.
-      _ =
+      id_seqs =
         revived
         |> Enum.sort()
         |> Enum.with_index(last_seq - length(ids) + 1)
-        |> BulkUpdate.stamp_seqs!(:touch, now)
+
+      _ = BulkUpdate.stamp_seqs!(id_seqs, :touch, now)
 
       if revived != [], do: :ok = evict_counts(user.id)
-      %{restored: revived, unrestored: ids -- revived}
+      %{restored: revived, unrestored: ids -- revived, seqs: Map.new(id_seqs)}
     end)
     |> unwrap_tenant()
   end
@@ -1631,6 +1620,9 @@ defmodule Engram.Attachments do
       "kind" => "attachment",
       "path" => path,
       "vault_id" => vault_id,
+      # The row's committed seq, as on note events (#609): what a later seq
+      # replay returns for it. Additive; a client without it does not fence.
+      "seq" => att.seq,
       "mime_type" => att.mime_type,
       "size_bytes" => att.size_bytes,
       "mtime" => att.mtime,
@@ -1643,6 +1635,29 @@ defmodule Engram.Attachments do
     }
 
     _ = Broadcast.emit("sync:#{user_id}:#{vault_id}", "note_changed", with_row_id(payload, att))
+    :ok
+  end
+
+  # A tombstone's event: only the discriminators a client needs to trash the
+  # path, plus the tombstone's committed seq. The one delete builder for both
+  # the single and the batch delete. `origin_device_id:` stamps the caller's
+  # device (#970) so it can drop its own echo.
+  defp broadcast_delete(user_id, vault_id, path, seq, opts) do
+    payload = %{
+      "event_type" => "delete",
+      "kind" => "attachment",
+      "path" => path,
+      "vault_id" => vault_id,
+      "seq" => seq
+    }
+
+    payload =
+      case Keyword.get(opts, :origin_device_id) do
+        device_id when is_binary(device_id) -> Map.put(payload, "device_id", device_id)
+        _ -> payload
+      end
+
+    _ = Broadcast.emit("sync:#{user_id}:#{vault_id}", "note_changed", payload)
     :ok
   end
 
@@ -1838,14 +1853,14 @@ defmodule Engram.Attachments do
     |> Enum.chunk_every(delete_chunk_size())
     |> Enum.reduce_while({:ok, %{restored: [], skipped: []}}, fn chunk, {:ok, acc} ->
       case revive_tombstones(user, vault, Enum.map(chunk, & &1.id)) do
-        {:ok, %{restored: ids}} ->
+        {:ok, %{restored: ids, seqs: seqs}} ->
           back = MapSet.new(ids)
           {restored, refused} = Enum.split_with(chunk, &MapSet.member?(back, &1.id))
           now = DateTime.utc_now(:second)
 
           for m <- restored do
-            att =
-              struct(Attachment, Map.put(Map.take(m, @tree_attachment_fields), :updated_at, now))
+            fields = Map.take(m, @tree_attachment_fields)
+            att = struct(Attachment, Map.merge(fields, %{updated_at: now, seq: seqs[m.id]}))
 
             broadcast_attachment(user.id, vault.id, "upsert", m.path, att)
           end

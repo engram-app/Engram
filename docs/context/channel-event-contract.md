@@ -43,7 +43,9 @@ the event announces: the upserted row's, or for a delete the tombstone's (a
 rename-away delete carries the rename's seq). It equals what a later seq replay
 returns for that row, so a client can fence a stale pre-delete upsert against a
 delete exactly. Set in the one builder, `Notes.broadcast_change/6`; older
-clients ignore it.
+clients ignore it. Attachment events carry it too, from
+`Attachments.broadcast_attachment/5` (upserts, move legs) and
+`broadcast_delete/5` (tombstones).
 | `note_changed` (attachment) | attachment upsert/delete payloads (`attachments.ex`) | After an attachment write | Same topic as notes |
 | `notes.batch` (delete/move) | `{op: "delete"\|"move", ids, target_folder_id?}` | After batch delete / batch move | Batch-op notification |
 | `vault_created` | `{vault_id, ...}` (topic `user:{user_id}`) | A vault is created (`Engram.Vaults.broadcast_vault_created/2`) | FTUX listener — onboarding waits for this alongside `vault_populated` |
