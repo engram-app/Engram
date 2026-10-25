@@ -4,7 +4,6 @@ import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { Translate } from "@/i18n/translate";
 import { intlLocale } from "@/lib/intl-locale";
 import { notify } from "@/lib/notify";
 import { SUPPORT_MAILTO } from "@/lib/support";
@@ -27,6 +26,7 @@ import { paddleLocale } from "../i18n/vendor-locales";
 import BillingHistoryTable from "./billing-history-table";
 import CancelPanel from "./cancel-panel";
 import CurrentPlanCard from "./current-plan-card";
+import { downloadInvoice } from "./download-invoice";
 import EmbedBucketRow from "./embed-bucket-row";
 import { checkoutSettings, INLINE_FRAME_TARGET, initPaddle } from "./paddle-checkout";
 import PaymentMethodCard from "./payment-method-card";
@@ -98,17 +98,6 @@ function paymentMethodFrom(data: unknown): string | undefined {
 	}
 	const { type } = method_details;
 	return typeof type === "string" ? type : undefined;
-}
-
-async function downloadInvoice(transactionId: string, t: Translate) {
-	try {
-		const { url } = await api.get<{ url: string }>(
-			`/billing/transactions/${transactionId}/invoice`,
-		);
-		window.open(url, "_blank", "noopener");
-	} catch {
-		notify.error(t("Could not fetch that invoice. Please try again."));
-	}
 }
 
 interface BillingPageProps {
