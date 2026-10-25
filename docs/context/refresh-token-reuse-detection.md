@@ -31,7 +31,7 @@ benign retries.
     as benign on next presentation. A `Logger.warning` records the breach
     (`family_id` + `user_id`) so the audit trail survives row deletion.
 - **Leeway policy** — `Engram.Auth.RefreshLeeway` (`@seconds 30`,
-  boundary-inclusive `benign?/2`). The 2026-10-24 speed audit found 27 plugin
+  boundary-inclusive `within_window?/2`, used by `benign?/2`). The 2026-10-24 speed audit found 27 plugin
   users logged out by reuse detection in 7 days and proposed 60 s like MCP
   OAuth. Rejected for now (review of #2209): within the window this path
   mints a child with no successor-unused check, no revoke of the live
@@ -90,12 +90,13 @@ revoke leaves none. That holds only because of the lock below.
   `token_hash`; issued tokens inherit `old_token.user_id`/`vault_id`, so a token
   can only mint tokens for its own owner. Family invalidation `delete_all` is
   scoped by `family_id`, also owner-bound (a family never crosses users).
-- Concurrency: two concurrent refreshes of the same active token both pass the
-  lookup before either stamps `revoked_at`. Acceptable within leeway (both are
-  the "previous token"); they fork into the same family, and the unused branch
-  ages out. A `FOR UPDATE` row lock was tried in #2209 and cut: the second
-  refresh still takes the benign branch and mints a child, so the fork and
-  every user-visible outcome stay the same. The real fix is MCP's
+- Concurrency: two concurrent refreshes of the same active token now
+  serialize on `RefreshLeeway.lock_user!/1` (#2231); the second sees the
+  first's rotation and takes the benign branch. Both succeed and fork into the
+  same family; the unused branch ages out. The lock exists to stop a revoke
+  racing a rotation, not the fork: as #2209 found with a `FOR UPDATE` row
+  lock, serializing alone leaves the fork and every user-visible outcome the
+  same. The real fix is MCP's
   successor-unused check and re-issue cap (#2211).
 - Client (plugin) already: persists access token (PR #84), dedups concurrent
   refreshes via `inflightRefresh`, awaits rotation persistence before use.
