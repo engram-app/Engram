@@ -1153,11 +1153,12 @@ defmodule Engram.Workers.EmbedNote do
     # (#2216 L1): a NULL-clear that landed during the pass (payload drift,
     # a cluster diff, a DEK rotation asking for a cheap heal) is kept, not
     # overwritten with a stamp vouching for points the pass may have reused.
-    {:ok, {count, _}} =
+    {:ok, {count, stamped}} =
       Repo.with_tenant(note.user_id, fn ->
         from(n in Note,
           where: n.id == ^note.id and n.content_hash == ^note.content_hash,
-          update: [set: ^set]
+          update: [set: ^set],
+          select: n.chunker_version
         )
         |> update([n],
           set: [
@@ -1189,9 +1190,43 @@ defmodule Engram.Workers.EmbedNote do
       )
     end
 
+    parked? = count > 0 and Keyword.get(set, :embed_budget_parked) == true
+    if parked?, do: :ok = back_off_stale_park(note, stamped)
+
     :ok = CrashGuard.clear(note, :ok)
-    if count > 0 and Keyword.get(set, :embed_budget_parked) == true, do: :parked, else: :ok
+    if parked?, do: :parked, else: :ok
   end
+
+  # Review M3: the sweep lets a budget park through on its sentinel while
+  # its index version is stale (#2197). A park that leaves the version
+  # stale anyway (a NULL-clear landed mid-pass and the stamp kept it) would
+  # be selected and rebuilt again on every tick, Voyage-free but a full
+  # Qdrant rewrite each time. Its park gets the sweep's backoff instead of
+  # the sentinel: the version arm skips it, and the backoff arm retries it
+  # once per window, with the queue place and need kept.
+  defp back_off_stale_park(note, [chunker]) do
+    {target, _keyword} = Rebuild.target_versions()
+
+    if Rebuild.behind?(chunker, target) do
+      until =
+        DateTime.add(
+          DateTime.utc_now(),
+          Engram.Workers.ReconcileEmbeddings.backoff_seconds(),
+          :second
+        )
+
+      {:ok, {_, _}} =
+        Repo.with_tenant(note.user_id, fn ->
+          Repo.update_all(from(n in Note, where: n.id == ^note.id),
+            set: [embed_retry_after: until]
+          )
+        end)
+    end
+
+    :ok
+  end
+
+  defp back_off_stale_park(_note, _stamped), do: :ok
 
   @doc """
   Build a debounced EmbedNote job — embed only once the note has been quiet.

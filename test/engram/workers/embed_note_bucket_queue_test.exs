@@ -484,6 +484,56 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
       %{note: note, need: parked.embed_budget_need, kept: kept}
     end
 
+    # Review M3: a rebuild that leaves the version stale (a NULL-clear
+    # landed mid-pass and the stamp kept it) must not be re-run every tick.
+    test "a park left version-stale backs off instead of rebuilding every tick", %{note: note} do
+      stub(Engram.MockEmbedder, :embed_texts, fn _ -> flunk("a parked rebuild must not embed") end)
+
+      # Behind on a real stamp (not NULL), so a clear is a change the CAS sees.
+      Repo.update_all(from(n in Note, where: n.id == ^note.id), [set: [chunker_version: 3]],
+        skip_tenant_check: true
+      )
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert [job] = all_enqueued(worker: Engram.Workers.RebuildStaleNote)
+
+      # The NULL-clear lands mid-pass, as a DEK rotation or cluster diff
+      # would: on the pass's first NIF call (fingerprints, before the
+      # commit), in the job's own process.
+      id = "m3-mid-pass-clear-#{note.id}"
+      note_id = note.id
+
+      :telemetry.attach(
+        id,
+        [:engram, :nif, :call, :stop],
+        fn _event, _measure, _meta, _config ->
+          :telemetry.detach(id)
+
+          Repo.update_all(
+            from(n in Note, where: n.id == ^note_id),
+            [set: [chunker_version: nil]],
+            skip_tenant_check: true
+          )
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(id) end)
+
+      assert :ok = perform_job(Engram.Workers.RebuildStaleNote, job.args)
+
+      row = reload(note)
+      assert row.chunker_version == nil, "the mid-pass clear must survive the stamp"
+      assert row.embed_budget_parked == true
+      assert DateTime.compare(row.embed_retry_after, DateTime.utc_now()) == :gt
+      refute row.embed_retry_after == EmbedNote.parked_until_edited()
+
+      # The next tick does nothing.
+      Repo.delete_all(Oban.Job)
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert all_enqueued(args: %{"note_id" => note.id}) == []
+    end
+
     for cache? <- [false, true] do
       test "rebuilds keyword-only, keeps the park and its dense points (vector cache #{cache?})",
            %{note: note, need: need, kept: kept} do
