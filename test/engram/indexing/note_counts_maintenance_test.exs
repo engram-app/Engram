@@ -66,6 +66,8 @@ defmodule Engram.Indexing.NoteCountsMaintenanceTest do
         )
 
         Repo.delete!(user, skip_tenant_check: true)
+        # The upsert's committed embed/link jobs would leak into later tests.
+        Repo.delete_all(from(j in Oban.Job, where: j.args["user_id"] == ^user.id))
       end)
     end)
 
