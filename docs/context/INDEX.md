@@ -57,6 +57,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 **Billing & Pricing**
 - Paddle MoR integration, webhook signature, event lifecycle, `custom_data`, affiliate flow, list pagination (stop on `has_more`, never `next`) → `docs/context/paddle-integration.md`
 - `tier` values contract (default `free`, gate on `!active`) → `docs/context/billing-tier-frontend-contract.md`
+- Apple Pay / Google Pay checkout stuck at Paddle `action_required` with no error, or adding a timer/close/redirect on a Paddle checkout event (never arm one on `PAYMENT_INITIATED`) → `docs/context/paddle-wallet-checkout-closed-mid-sheet.md`
 - Attachment executable blocklist (was the MIME whitelist, Pricing v2 §H) → `docs/context/attachment-mime-whitelist.md`
 - Attachments over the 11 MB request ceiling, resumable `/api/attachment-uploads` parts protocol, content format v2, rotation gate on attachment writes → `docs/context/attachment-chunked-upload.md`
 - Self-host silently drops attachments, or you are renaming/adding a boolean plan-limit key (`true` must always mean GRANTED) → `docs/context/self-host-capability-polarity.md`
