@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.65.0](https://github.com/engram-app/Engram/compare/0.64.0...0.65.0) (2026-10-25)
+
+
+### Features
+
+* **crdt:** read-only rival-lineage audit; drop web flatten ([#2113](https://github.com/engram-app/Engram/issues/2113)) ([ceb8a02](https://github.com/engram-app/Engram/commit/ceb8a0223c3314d6e2dc721e939ac3b567c68c11))
+
+
+### Bug Fixes
+
+* **qdrant:** cap new segments at 128 MB, create-only ([#2229](https://github.com/engram-app/Engram/issues/2229)) ([b335bc5](https://github.com/engram-app/Engram/commit/b335bc54120802a1f4b21a61ca9a23ce1d34bc9e))
+
 ## [0.64.0](https://github.com/engram-app/Engram/compare/0.63.2...0.64.0) (2026-10-25)
 
 
