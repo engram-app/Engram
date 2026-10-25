@@ -182,6 +182,35 @@ defmodule Engram.FoldersRestoreOpTest do
     assert {:error, :not_found} = Notes.get_note(user, vault, "old.md")
   end
 
+  test "a row past trash retention is skipped as expired", %{user: user, vault: vault} do
+    note = put_note(user, vault, "old.md")
+    att = put_att(user, vault, "old.png")
+    op = Ecto.UUID.generate()
+    :deleted = Notes.delete_note_reporting(user, vault, "old.md", op_id: op)
+    :deleted = Attachments.delete_attachment_reporting(user, vault, "old.png", op_id: op)
+    # Free keeps trash 7 days.
+    long_ago = DateTime.add(DateTime.utc_now(:second), -8, :day)
+
+    {1, _} =
+      Repo.update_all(from(n in Note, where: n.id == ^note.id), [set: [deleted_at: long_ago]],
+        skip_tenant_check: true
+      )
+
+    {1, _} =
+      Repo.update_all(
+        from(a in Attachment, where: a.id == ^att.id),
+        [set: [deleted_at: long_ago]],
+        skip_tenant_check: true
+      )
+
+    assert {:ok, %{notes: 0, attachments: 0, skipped: skipped}} =
+             Folders.restore_op(user, vault, op)
+
+    assert %{id: note.id, kind: "note", reason: :expired} in skipped
+    assert %{id: att.id, kind: "attachment", reason: :expired} in skipped
+    assert note_row(note.id).deleted_at
+  end
+
   test "a malformed op id is refused", %{user: user, vault: vault} do
     assert {:error, :invalid_op_id} = Folders.restore_op(user, vault, "not-a-uuid")
   end

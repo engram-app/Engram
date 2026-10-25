@@ -1769,14 +1769,15 @@ defmodule Engram.Attachments do
   @doc """
   The attachments half of `Engram.Folders.restore_op/3`, read-only: the rows
   op `op_id` tombstoned in this vault, split into what can come back and what
-  is skipped (`:path_taken` when a live attachment holds the path).
+  is skipped (`:path_taken` when a live attachment holds the path,
+  `:expired` when deleted before `cutoff`, past trash retention).
 
   Refuses with `{:error, {:limit_reached, :attachment_bytes_cap, limit,
   used}}` when the restorable bytes would take the user past their quota.
   """
-  @spec plan_restore(map(), map(), Ecto.UUID.t()) ::
+  @spec plan_restore(map(), map(), Ecto.UUID.t(), DateTime.t()) ::
           {:ok, %{attachments: [map()], skipped: [map()]}} | {:error, term()}
-  def plan_restore(user, vault, op_id) do
+  def plan_restore(user, vault, op_id, cutoff) do
     user = fresh_user(user)
 
     with {:ok, rows} <-
@@ -1789,6 +1790,7 @@ defmodule Engram.Attachments do
              )
            end)
            |> unwrap_tenant() do
+      {rows, expired} = Enum.split_with(rows, &(DateTime.compare(&1.deleted_at, cutoff) != :lt))
       hmac_of = Map.new(rows, &{&1.id, &1.path_hmac})
       metas = Enum.map(decrypt_tree_rows(rows, user), &Map.put(&1, :path_hmac, hmac_of[&1.id]))
       taken = live_hmacs(user, vault, Map.values(hmac_of))
@@ -1800,7 +1802,9 @@ defmodule Engram.Attachments do
           {:ok,
            %{
              attachments: free,
-             skipped: Enum.map(taken, &%{path: &1.path, kind: "attachment", reason: :path_taken})
+             skipped:
+               Enum.map(taken, &%{path: &1.path, kind: "attachment", reason: :path_taken}) ++
+                 Enum.map(expired, &%{id: &1.id, kind: "attachment", reason: :expired})
            }}
 
         {:error, {:storage_cap_reached, used, limit}} ->
@@ -1821,7 +1825,7 @@ defmodule Engram.Attachments do
   end
 
   @doc """
-  Brings back `metas` (from `plan_restore/3`) through `revive_tombstones/3`,
+  Brings back `metas` (from `plan_restore/4`) through `revive_tombstones/3`,
   in chunks, and announces each restored path. Rows the revive refuses (blob
   reaped or mid-reap, path taken since the plan) come back as skipped
   `:unavailable`.

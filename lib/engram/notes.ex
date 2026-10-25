@@ -6772,25 +6772,26 @@ defmodule Engram.Notes do
   The notes half of `Engram.Folders.restore_op/3`, read-only: the rows op
   `op_id` tombstoned in this vault, split into what can come back and what
   is skipped. A note whose path a live note now holds is skipped as
-  `:path_taken`. Folder markers come back as folder names.
+  `:path_taken`; a row deleted before `cutoff` (past trash retention) as
+  `:expired`. Folder markers come back as folder names.
 
   Refuses with `{:error, {:limit_reached, :notes_cap, limit, current}}` when
   the restorable notes would take the user past `notes_cap`.
   """
-  @spec plan_restore(map(), map(), Ecto.UUID.t()) ::
+  @spec plan_restore(map(), map(), Ecto.UUID.t(), DateTime.t()) ::
           {:ok, %{notes: [Note.t()], folders: [String.t()], skipped: [map()]}}
           | {:error, term()}
-  def plan_restore(user, vault, op_id) do
+  def plan_restore(user, vault, op_id, cutoff) do
     user = Crypto.fresh_user(user)
 
     case Crypto.get_dek(user) do
-      {:ok, dek} -> plan_restore(user, vault, op_id, dek)
+      {:ok, dek} -> plan_restore(user, vault, op_id, cutoff, dek)
       {:error, :no_dek} -> {:ok, %{notes: [], folders: [], skipped: []}}
       {:error, reason} -> {:error, {:dek_unavailable, Crypto.format_dek_error(reason)}}
     end
   end
 
-  defp plan_restore(user, vault, op_id, dek) do
+  defp plan_restore(user, vault, op_id, cutoff, dek) do
     rows =
       Repo.with_tenant!(user.id, fn ->
         Repo.all(
@@ -6801,6 +6802,7 @@ defmodule Engram.Notes do
         )
       end)
 
+    {rows, expired} = Enum.split_with(rows, &(DateTime.compare(&1.deleted_at, cutoff) != :lt))
     {markers, real} = Enum.split_with(rows, &(&1.kind == "folder"))
     real = decrypt_or_raise!(real, user)
 
@@ -6812,7 +6814,9 @@ defmodule Engram.Notes do
          %{
            notes: free,
            folders: markers |> Enum.map(&hydrate_folder_marker(&1, dek).folder) |> Enum.uniq(),
-           skipped: Enum.map(taken, &%{path: &1.path, kind: "note", reason: :path_taken})
+           skipped:
+             Enum.map(taken, &%{path: &1.path, kind: "note", reason: :path_taken}) ++
+               Enum.map(expired, &%{id: &1.id, kind: &1.kind, reason: :expired})
          }}
       end
     end
@@ -6833,7 +6837,7 @@ defmodule Engram.Notes do
   end
 
   @doc """
-  Brings back `notes` (from `plan_restore/3`) at their own paths, through the
+  Brings back `notes` (from `plan_restore/4`) at their own paths, through the
   same `move_note/7` resurrect leg an id-keyed re-push takes, minus the
   delete-wins window (`recent_same_path_tombstone?/3`): an undo is the user
   asking for the note back, not a stale device.

@@ -193,14 +193,14 @@ defmodule Engram.Attachments.FormatMatrixTest do
     end
   end
 
-  # #2159: a delete keeps the blob; AttachmentBlobGC reaps it after 24 h.
+  # #2159: a delete keeps the blob; AttachmentBlobGC reaps it past trash retention.
   defp reaped_by_gc!(att) do
     assert InMemory.exists?(att.storage_key)
 
     {1, _} =
       Repo.update_all(
         from(a in Attachment, where: a.id == ^att.id),
-        [set: [deleted_at: DateTime.add(DateTime.utc_now(:second), -2, :day)]],
+        [set: [deleted_at: DateTime.add(DateTime.utc_now(:second), -31, :day)]],
         skip_tenant_check: true
       )
 

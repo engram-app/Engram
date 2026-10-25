@@ -8,8 +8,10 @@ defmodule Engram.Workers.AttachmentBlobGC do
   was live rows with no bytes. Now the database reference goes first and the
   bytes go later, here, the way GitLab LFS, Nextcloud and Immich do it.
 
-  A tombstone is reaped once it is `@grace_hours` old, still holds a
-  `storage_key`, and no live row references that key. Per vault and batch,
+  A tombstone is reaped once it is older than its owner's trash retention
+  (`Engram.Billing.trash_retention_days/1`, #609: until then a restore can
+  bring it back), still holds a `storage_key`, and no live row references
+  that key. Per vault and batch,
   in three phases so no transaction is held across S3 and no crash orphans
   a blob:
 
@@ -26,8 +28,8 @@ defmodule Engram.Workers.AttachmentBlobGC do
   is re-claimed (re-checked) and re-deleted, which is idempotent. Pages are
   keyset by id, so a stuck key never blocks the rows after it.
 
-  Recovery window: `@grace_hours`, plus the bucket's noncurrent-version
-  retention once the blob is gone.
+  Recovery window: the owner's trash retention, plus the bucket's
+  noncurrent-version retention once the blob is gone.
 
   Refuses under `Repo.tenancy_unsafe?/0`. A blind role reads zero rows, so
   today that would reap nothing rather than something wrong; the guard keeps
@@ -39,7 +41,9 @@ defmodule Engram.Workers.AttachmentBlobGC do
 
   import Ecto.Query
 
+  alias Engram.Accounts.User
   alias Engram.Attachments.Attachment
+  alias Engram.Billing
   alias Engram.Logger.Metadata
   alias Engram.Repo
   alias Engram.Storage
@@ -47,7 +51,10 @@ defmodule Engram.Workers.AttachmentBlobGC do
 
   require Logger
 
-  @grace_hours 24
+  # Candidate discovery only: no retention is shorter than a day
+  # (`Billing.trash_retention_days/1` floors at 1), so nothing younger can be
+  # due. The real cutoff is per vault owner.
+  @min_retention_days 1
   # Well above the 15 min job timeout: a claim this old belongs to a run
   # that died, so it may be taken again.
   @stale_claim_minutes 60
@@ -89,11 +96,28 @@ defmodule Engram.Workers.AttachmentBlobGC do
   @doc "Reaps every eligible tombstone blob. Returns how many were reaped."
   @spec sweep() :: non_neg_integer()
   def sweep do
-    cutoff = DateTime.add(DateTime.utc_now(), -@grace_hours * 3600, :second)
+    now = DateTime.utc_now()
 
-    cutoff
+    now
+    |> DateTime.add(-@min_retention_days, :day)
     |> candidate_vaults()
-    |> Enum.reduce(0, fn vault_id, reaped -> reaped + sweep_vault(vault_id, cutoff, nil, 0) end)
+    |> Enum.reduce(0, fn {vault_id, user_id}, reaped ->
+      case retention_cutoff(user_id, now) do
+        nil -> reaped
+        cutoff -> reaped + sweep_vault(vault_id, cutoff, nil, 0)
+      end
+    end)
+  end
+
+  # The owner's retention, read through the same resolver a restore uses so
+  # the two windows cannot disagree. Read on the maintenance pool: the GC
+  # has no tenant. A vanished owner reaps nothing here; account deletion
+  # owns that cleanup.
+  defp retention_cutoff(user_id, now) do
+    case Repo.cross_tenant(fn -> Repo.maintenance().get(User, user_id) end) do
+      %User{} = user -> DateTime.add(now, -Billing.trash_retention_days(user), :day)
+      nil -> nil
+    end
   end
 
   # Unlocked, and only to find work: every decision is re-made under the
@@ -105,7 +129,7 @@ defmodule Engram.Workers.AttachmentBlobGC do
       from(a in eligible(cutoff, stale),
         distinct: true,
         order_by: a.vault_id,
-        select: a.vault_id
+        select: {a.vault_id, a.user_id}
       )
 
     Repo.cross_tenant(fn -> Repo.maintenance().all(query) end)
@@ -183,7 +207,7 @@ defmodule Engram.Workers.AttachmentBlobGC do
     result
   end
 
-  # A tombstone past the grace window that still holds a key no live row
+  # A tombstone past the retention cutoff that still holds a key no live row
   # has, unclaimed or holding a claim older than the stale threshold (a run
   # that died between claim and finalize).
   defp eligible(cutoff, stale) do

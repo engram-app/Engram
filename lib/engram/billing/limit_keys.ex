@@ -194,6 +194,13 @@ defmodule Engram.Billing.LimitKeys do
       defaults: %{free: false, starter: true, pro: true}
     },
     inactivity_delete_days: %{type: :integer, defaults: %{free: 90, starter: nil, pro: nil}},
+    # Safer delete (#609): days a deleted note, folder or attachment stays
+    # restorable (`Engram.Folders.restore_op/3`) and its blob is kept
+    # (`Engram.Workers.AttachmentBlobGC`). Read ONLY through
+    # `Billing.trash_retention_days/1`: "no cap" (nil, -1, self-host's
+    # :unlimited) cannot mean "keep forever", or the GC never reaps, so it
+    # falls back to the Pro window. Defaults pending product confirmation.
+    trash_retention_days: %{type: :integer, defaults: %{free: 7, starter: 30, pro: 30}},
     # Gated in `Engram.Search.cross_vault_allowed/2`; the MCP transport bypasses
     # it deliberately (product decision 2026-07-10).
     cross_vault_search: %{type: :boolean, defaults: %{free: false, starter: false, pro: true}},

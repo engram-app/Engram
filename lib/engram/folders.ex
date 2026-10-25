@@ -39,6 +39,7 @@ defmodule Engram.Folders do
   """
 
   alias Engram.Attachments
+  alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Logger.Metadata
   alias Engram.Notes
@@ -346,8 +347,8 @@ defmodule Engram.Folders do
   `notes_cap` or `attachment_bytes_cap`, the way `Vaults.restore_vault/2`
   refuses past `vaults_cap`. Then folder markers, notes, attachments, so a
   parent folder is back before its children. A row whose path a live row
-  now holds, and an attachment whose blob the GC has claimed or reaped, are
-  skipped and listed in `skipped`.
+  now holds, a row past the owner's trash retention, and an attachment whose
+  blob the GC has claimed or reaped, are skipped and listed in `skipped`.
 
   Idempotent: a restored row leaves the op, so a repeat restores nothing.
   An unknown op id, including another user's, restores nothing too.
@@ -361,8 +362,10 @@ defmodule Engram.Folders do
   end
 
   defp do_restore_op(user, vault, op_id) do
-    with {:ok, notes} <- Notes.plan_restore(user, vault, op_id),
-         {:ok, atts} <- Attachments.plan_restore(user, vault, op_id),
+    cutoff = DateTime.add(DateTime.utc_now(), -Billing.trash_retention_days(user), :day)
+
+    with {:ok, notes} <- Notes.plan_restore(user, vault, op_id, cutoff),
+         {:ok, atts} <- Attachments.plan_restore(user, vault, op_id, cutoff),
          {:ok, folders} <- restore_markers(user, vault, notes.folders),
          {:ok, n} <- Notes.restore_notes(user, vault, op_id, notes.notes),
          {:ok, a} <- Attachments.restore_attachments(user, vault, atts.attachments) do
@@ -375,6 +378,15 @@ defmodule Engram.Folders do
        }}
     end
   end
+
+  @doc """
+  When a delete made now stops being restorable for `user`: now plus
+  `Billing.trash_retention_days/1`. What a delete reports as
+  `restorable_until`.
+  """
+  @spec restorable_until(map()) :: DateTime.t()
+  def restorable_until(user),
+    do: DateTime.add(DateTime.utc_now(:second), Billing.trash_retention_days(user), :day)
 
   # The marker create path already revives a tombstoned marker in place
   # (and leaves a live one alone), so a restore is a create of the names.

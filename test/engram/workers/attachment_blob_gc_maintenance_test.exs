@@ -49,7 +49,7 @@ defmodule Engram.Workers.AttachmentBlobGCMaintenanceTest do
             user: user,
             vault: vault,
             storage_key: key,
-            deleted_at: DateTime.add(DateTime.utc_now(:second), -2, :day)
+            deleted_at: DateTime.add(DateTime.utc_now(:second), -31, :day)
           )
 
         {user, att}
