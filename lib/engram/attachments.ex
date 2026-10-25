@@ -1767,6 +1767,100 @@ defmodule Engram.Attachments do
   end
 
   @doc """
+  The attachments half of `Engram.Folders.restore_op/3`, read-only: the rows
+  op `op_id` tombstoned in this vault, split into what can come back and what
+  is skipped (`:path_taken` when a live attachment holds the path).
+
+  Refuses with `{:error, {:limit_reached, :attachment_bytes_cap, limit,
+  used}}` when the restorable bytes would take the user past their quota.
+  """
+  @spec plan_restore(map(), map(), Ecto.UUID.t()) ::
+          {:ok, %{attachments: [map()], skipped: [map()]}} | {:error, term()}
+  def plan_restore(user, vault, op_id) do
+    user = fresh_user(user)
+
+    with {:ok, rows} <-
+           Repo.with_tenant(user.id, fn ->
+             Repo.all(
+               from(a in scoped(user, vault),
+                 where: a.delete_op_id == ^op_id and not is_nil(a.deleted_at),
+                 select: struct(a, [:deleted_at, :path_hmac | @tree_attachment_fields])
+               )
+             )
+           end)
+           |> unwrap_tenant() do
+      hmac_of = Map.new(rows, &{&1.id, &1.path_hmac})
+      metas = Enum.map(decrypt_tree_rows(rows, user), &Map.put(&1, :path_hmac, hmac_of[&1.id]))
+      taken = live_hmacs(user, vault, Map.values(hmac_of))
+      {taken, free} = Enum.split_with(metas, &MapSet.member?(taken, &1.path_hmac))
+      bytes = free |> Enum.map(& &1.size_bytes) |> Enum.sum()
+
+      case validate_storage_cap(user, nil, bytes) do
+        :ok ->
+          {:ok,
+           %{
+             attachments: free,
+             skipped: Enum.map(taken, &%{path: &1.path, kind: "attachment", reason: :path_taken})
+           }}
+
+        {:error, {:storage_cap_reached, used, limit}} ->
+          {:error, {:limit_reached, :attachment_bytes_cap, limit, used}}
+      end
+    end
+  end
+
+  defp live_hmacs(_user, _vault, []), do: MapSet.new()
+
+  defp live_hmacs(user, vault, hmacs) do
+    Repo.with_tenant!(user.id, fn ->
+      Repo.all(
+        from(a in scoped_live(user, vault), where: a.path_hmac in ^hmacs, select: a.path_hmac)
+      )
+    end)
+    |> MapSet.new()
+  end
+
+  @doc """
+  Brings back `metas` (from `plan_restore/3`) through `revive_tombstones/3`,
+  in chunks, and announces each restored path. Rows the revive refuses (blob
+  reaped or mid-reap, path taken since the plan) come back as skipped
+  `:unavailable`.
+  """
+  @spec restore_attachments(map(), map(), [map()]) ::
+          {:ok, %{restored: [String.t()], skipped: [map()]}} | {:error, term()}
+  def restore_attachments(user, vault, metas) do
+    metas
+    |> Enum.chunk_every(delete_chunk_size())
+    |> Enum.reduce_while({:ok, %{restored: [], skipped: []}}, fn chunk, {:ok, acc} ->
+      case revive_tombstones(user, vault, Enum.map(chunk, & &1.id)) do
+        {:ok, %{restored: ids}} ->
+          back = MapSet.new(ids)
+          {restored, refused} = Enum.split_with(chunk, &MapSet.member?(back, &1.id))
+          now = DateTime.utc_now(:second)
+
+          for m <- restored do
+            att =
+              struct(Attachment, Map.put(Map.take(m, @tree_attachment_fields), :updated_at, now))
+
+            broadcast_attachment(user.id, vault.id, "upsert", m.path, att)
+          end
+
+          {:cont,
+           {:ok,
+            %{
+              restored: acc.restored ++ Enum.map(restored, & &1.path),
+              skipped:
+                acc.skipped ++
+                  Enum.map(refused, &%{path: &1.path, kind: "attachment", reason: :unavailable})
+            }}}
+
+        {:error, _} = err ->
+          {:halt, err}
+      end
+    end)
+  end
+
+  @doc """
   Lists attachment metadata directly inside `folder` (non-recursive), mirroring
   `Notes.list_notes_in_folder/3`. Root is `""`. Returns `{:ok, metas}`.
   """

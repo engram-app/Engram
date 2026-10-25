@@ -327,6 +327,72 @@ defmodule Engram.Folders do
     end
   end
 
+  @typedoc "What `restore_op/3` brought back, and what it could not."
+  @type restored :: %{
+          notes: non_neg_integer(),
+          folders: non_neg_integer(),
+          attachments: non_neg_integer(),
+          skipped: [map()]
+        }
+
+  @doc """
+  Undoes one undoable delete (#609): brings back every row that the delete
+  stamped with `op_id` (`delete/4`, `batch_delete/4`, `Notes.delete_note/4`
+  and `Attachments.delete_attachment/4` given `op_id:`), at the paths they
+  had. The one restore entry point.
+
+  Plans BOTH tables first and refuses with `{:error, {:limit_reached, key,
+  limit, current}}` before restoring anything if the result would pass
+  `notes_cap` or `attachment_bytes_cap`, the way `Vaults.restore_vault/2`
+  refuses past `vaults_cap`. Then folder markers, notes, attachments, so a
+  parent folder is back before its children. A row whose path a live row
+  now holds, and an attachment whose blob the GC has claimed or reaped, are
+  skipped and listed in `skipped`.
+
+  Idempotent: a restored row leaves the op, so a repeat restores nothing.
+  An unknown op id, including another user's, restores nothing too.
+  """
+  @spec restore_op(map(), map(), String.t()) :: {:ok, restored()} | {:error, term()}
+  def restore_op(user, vault, op_id) do
+    case Ecto.UUID.cast(op_id) do
+      {:ok, op_id} -> do_restore_op(Crypto.fresh_user(user), vault, op_id)
+      :error -> {:error, :invalid_op_id}
+    end
+  end
+
+  defp do_restore_op(user, vault, op_id) do
+    with {:ok, notes} <- Notes.plan_restore(user, vault, op_id),
+         {:ok, atts} <- Attachments.plan_restore(user, vault, op_id),
+         {:ok, folders} <- restore_markers(user, vault, notes.folders),
+         {:ok, n} <- Notes.restore_notes(user, vault, op_id, notes.notes),
+         {:ok, a} <- Attachments.restore_attachments(user, vault, atts.attachments) do
+      {:ok,
+       %{
+         notes: length(n.restored),
+         folders: folders,
+         attachments: length(a.restored),
+         skipped: notes.skipped ++ atts.skipped ++ n.skipped ++ a.skipped
+       }}
+    end
+  end
+
+  # The marker create path already revives a tombstoned marker in place
+  # (and leaves a live one alone), so a restore is a create of the names.
+  defp restore_markers(user, vault, names) do
+    names
+    |> Enum.chunk_every(Notes.max_batch_folders())
+    |> Enum.reduce_while({:ok, 0}, fn chunk, {:ok, n} ->
+      case Notes.create_folder_markers(user, vault, chunk) do
+        {:ok, %{folders: entries}} ->
+          broadcast_created(user, vault, entries)
+          {:cont, {:ok, n + Enum.count(entries, & &1.created)}}
+
+        {:error, _} = err ->
+          {:halt, err}
+      end
+    end)
+  end
+
   @spec batch_move(map(), map(), [String.t()], String.t() | {:path, String.t()}) ::
           {:ok, counts()} | {:error, term()}
   def batch_move(_user, _vault, [], _target), do: {:ok, %{notes: 0, attachments: 0}}

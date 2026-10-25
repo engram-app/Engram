@@ -497,6 +497,10 @@ defmodule Engram.Notes do
 
   @max_batch_folders 500
 
+  @doc "Folders per `create_folder_markers/3` call."
+  @spec max_batch_folders() :: pos_integer()
+  def max_batch_folders, do: @max_batch_folders
+
   # Rows per folder-marker `insert_all`. A marker row binds 14 parameters
   # (upsert_folder_markers/6), so 65535 allows 4681; 2000 is the same
   # half-margin Links uses so a new column cannot re-arm the overflow.
@@ -6754,6 +6758,173 @@ defmodule Engram.Notes do
       # `:notes` excludes markers so `Folders.delete/4` can report content
       # notes without recounting a set it no longer owns.
       {:ok, %{deleted: MapSet.size(deleted_ids), notes: length(real_notes)}}
+    end
+  end
+
+  # ── Restore an undoable delete (#609) ──────────────────────────────────────
+
+  # Notes per restore transaction. Each one goes through `move_note/7`
+  # (decrypt, CRDT merge, re-encrypt), far heavier than a delete's flag flip,
+  # so the chunk is well under `Attachments.delete_chunk_size/0`.
+  @restore_chunk 100
+
+  @doc """
+  The notes half of `Engram.Folders.restore_op/3`, read-only: the rows op
+  `op_id` tombstoned in this vault, split into what can come back and what
+  is skipped. A note whose path a live note now holds is skipped as
+  `:path_taken`. Folder markers come back as folder names.
+
+  Refuses with `{:error, {:limit_reached, :notes_cap, limit, current}}` when
+  the restorable notes would take the user past `notes_cap`.
+  """
+  @spec plan_restore(map(), map(), Ecto.UUID.t()) ::
+          {:ok, %{notes: [Note.t()], folders: [String.t()], skipped: [map()]}}
+          | {:error, term()}
+  def plan_restore(user, vault, op_id) do
+    user = Crypto.fresh_user(user)
+
+    case Crypto.get_dek(user) do
+      {:ok, dek} -> plan_restore(user, vault, op_id, dek)
+      {:error, :no_dek} -> {:ok, %{notes: [], folders: [], skipped: []}}
+      {:error, reason} -> {:error, {:dek_unavailable, Crypto.format_dek_error(reason)}}
+    end
+  end
+
+  defp plan_restore(user, vault, op_id, dek) do
+    rows =
+      Repo.with_tenant!(user.id, fn ->
+        Repo.all(
+          from(n in scoped(user, vault),
+            where: n.delete_op_id == ^op_id and not is_nil(n.deleted_at),
+            select: struct(n, @note_meta_fields)
+          )
+        )
+      end)
+
+    {markers, real} = Enum.split_with(rows, &(&1.kind == "folder"))
+    real = decrypt_or_raise!(real, user)
+
+    with held when is_map(held) <- note_ids_at(user, vault, Enum.map(real, & &1.path)) do
+      {free, taken} = Enum.split_with(real, &(not Map.has_key?(held, &1.path)))
+
+      with :ok <- restore_cap(user, length(free)) do
+        {:ok,
+         %{
+           notes: free,
+           folders: markers |> Enum.map(&hydrate_folder_marker(&1, dek).folder) |> Enum.uniq(),
+           skipped: Enum.map(taken, &%{path: &1.path, kind: "note", reason: :path_taken})
+         }}
+      end
+    end
+  end
+
+  # Restoring is not exempt from `notes_cap` the way a sync resurrect is: an
+  # undo of a 5,000-note delete brings back 5,000 notes at once.
+  defp restore_cap(_user, 0), do: :ok
+
+  defp restore_cap(user, n) do
+    case check_notes_cap(user, n - 1) do
+      :ok ->
+        :ok
+
+      {:error, {:notes_cap_reached, limit, current}} ->
+        {:error, {:limit_reached, :notes_cap, limit, current}}
+    end
+  end
+
+  @doc """
+  Brings back `notes` (from `plan_restore/3`) at their own paths, through the
+  same `move_note/7` resurrect leg an id-keyed re-push takes, minus the
+  delete-wins window (`recent_same_path_tombstone?/3`): an undo is the user
+  asking for the note back, not a stale device.
+
+  The paths are claimed in the index authority FIRST, outside any
+  transaction (see `docs/context/crdt-create-is-a-rename.md`), then the rows
+  come back in chunks of #{@restore_chunk}, each its own transaction, each
+  row re-checked against `op_id` so a row that changed since the plan is
+  left alone. Each restored note gets a fresh seq, an upsert broadcast and
+  a re-embed (its Qdrant points went with the delete).
+
+  Returns the restored notes and any that could not come back (`:changed`).
+  """
+  @spec restore_notes(map(), map(), Ecto.UUID.t(), [Note.t()]) ::
+          {:ok, %{restored: [Note.t()], skipped: [map()]}} | {:error, term()}
+  def restore_notes(_user, _vault, _op_id, []), do: {:ok, %{restored: [], skipped: []}}
+
+  def restore_notes(user, vault, op_id, notes) do
+    user = Crypto.fresh_user(user)
+
+    with :ok <- claim_cascade(user, vault, Enum.map(notes, &{&1.path, &1.id}), MapSet.new()) do
+      {restored, skipped} =
+        notes
+        |> Enum.chunk_every(@restore_chunk)
+        |> Enum.reduce({[], []}, fn chunk, {restored, skipped} ->
+          {r, s} = restore_chunk(user, vault, op_id, chunk)
+          {restored ++ r, skipped ++ s}
+        end)
+
+      {:ok, %{restored: restored, skipped: skipped}}
+    end
+  end
+
+  defp restore_chunk(user, vault, op_id, chunk) do
+    ids = Enum.map(chunk, & &1.id)
+
+    {:ok, results} =
+      Repo.with_tenant(user.id, fn ->
+        from(n in scoped(user, vault),
+          where:
+            n.id in ^ids and n.kind == "note" and n.delete_op_id == ^op_id and
+              not is_nil(n.deleted_at)
+        )
+        |> Repo.all()
+        |> Enum.map(&restore_one(user, &1))
+      end)
+
+    restored = for {:ok, note} <- results, do: note
+    gone = MapSet.new(restored, & &1.id)
+
+    # After commit, like every other upsert broadcast.
+    Enum.each(restored, &(:ok = broadcast_change(user, vault.id, "upsert", &1.path, &1, [])))
+
+    {restored,
+     for(
+       n <- chunk,
+       not MapSet.member?(gone, n.id),
+       do: %{path: n.path, kind: "note", reason: :changed}
+     )}
+  end
+
+  defp restore_one(user, tomb) do
+    prior = decrypt_or_raise!(tomb, user)
+
+    base_attrs = %{
+      content: prior.content,
+      title: prior.title,
+      tags: prior.tags,
+      content_hash: prior.content_hash,
+      mtime: prior.mtime
+    }
+
+    folder = Helpers.extract_folder(prior.path)
+
+    case move_note(prior, base_attrs, user, prior.path, folder, "restore", false) do
+      {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
+        # The delete cleared embed_hash and dropped the points, so this
+        # re-embeds. Joins the transaction: a rolled-back chunk queues nothing.
+        _ =
+          ContentCommit.enqueue_jobs(updated.id, user.id,
+            embed_priority: EmbedNote.priority_for(updated),
+            finalize?: false
+          )
+
+        {:ok, decrypt_or_raise!(updated, user)}
+
+      {:error, _} ->
+        :skipped
+
+      :stale_snapshot ->
+        :skipped
     end
   end
 
