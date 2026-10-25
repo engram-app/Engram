@@ -142,6 +142,9 @@ const PINNED: Partial<Record<Target, readonly string[]>> = {
 	vi: ["Light", "Outline", "Reading", "Reading view", "Strikethrough"],
 	"zh-CN": ["Dark", "Outline", "Reading"],
 	"zh-TW": ["Math", "Redo edit"],
+	// The committed answers, which are right: with the {price} note the model still
+	// adds "грн" after a dollar amount (2026-10-24).
+	uk: ["{price}/mo billed yearly", "{price}/yr billed monthly"],
 };
 
 // What a short label means where it shows, for the translator (see Profile).
@@ -150,6 +153,12 @@ const PINNED: Partial<Record<Target, readonly string[]>> = {
 // (on 2026-10-12 it turned ms "Light" into "lightweight"), so keep only notes
 // whose output you reviewed.
 const DESCRIPTIONS: Readonly<Record<string, string>> = {
+	// {price} already holds "$5.83": de/es/fr/it appended "€", ja "ドル", ru "руб.",
+	// zh-CN "元", so the card read "$5.83 €/Monat" (2026-10-24).
+	"{price}/mo billed yearly":
+		"Price on a plan card. {price} is a full amount that already starts with its currency sign, such as $5.83. Add no currency sign or currency name.",
+	"{price}/yr billed monthly":
+		"Price on a plan card. {price} is a full amount that already starts with its currency sign, such as $5.83. Add no currency sign or currency name.",
 	// Email small print under a "you're connected" email. ja read it as "is not
 	// connected to {client}" and de capitalised the link mid-sentence (2026-10-19).
 	"If you didn't connect {client}, {link}.":
