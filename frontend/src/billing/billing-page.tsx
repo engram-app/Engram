@@ -1,4 +1,4 @@
-import { CheckoutEventNames, type Paddle } from "@paddle/paddle-js";
+import { CheckoutEventNames, type CheckoutOpenOptions, type Paddle } from "@paddle/paddle-js";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -281,6 +281,9 @@ export default function BillingPage({
 	const checkoutIdRef = useRef<string | null>(null);
 	const paymentAttemptedRef = useRef(false);
 	const checkoutExitReportedRef = useRef(false);
+	// The options the current tier checkout opened with. A stale customer id
+	// fails as checkout.error, so that handler reopens these once by email.
+	const checkoutOptionsRef = useRef<CheckoutOpenOptions | null>(null);
 
 	// A checkout ended without completing. In the frame (checkout.closed): a
 	// payment already started means the buyer got stuck mid-payment (a
@@ -603,6 +606,24 @@ export default function BillingPage({
 				}
 				case CheckoutEventNames.CHECKOUT_PAYMENT_ERROR:
 				case CheckoutEventNames.CHECKOUT_ERROR: {
+					// A saved customer id can be stale (archived customer, or an id
+					// from another env in a copied DB), and every retry with it fails
+					// the same way. Reopen once by email; the next error is real.
+					const opened = checkoutOptionsRef.current;
+					if (
+						event.name === CheckoutEventNames.CHECKOUT_ERROR &&
+						opened?.customer &&
+						"id" in opened.customer &&
+						config.customer_email
+					) {
+						console.warn("Paddle checkout.error with a saved customer id, reopening by email", {
+							customer_id: opened.customer.id,
+						});
+						const retry = { ...opened, customer: { email: config.customer_email } };
+						checkoutOptionsRef.current = retry;
+						paddleRef.current?.Checkout.open(retry);
+						break;
+					}
 					// Genuine checkout-level error (not a routine decline) — the frame
 					// may be in a broken state, so close it and surface a message.
 					setCheckingOut(false);
@@ -666,7 +687,7 @@ export default function BillingPage({
 			// React 18 batches state into the same commit, so the DOM is ready by
 			// the time Paddle queries it on the next microtask.
 			queueMicrotask(() => {
-				paddle.Checkout.open({
+				const options: CheckoutOpenOptions = {
 					// Fall back to monthly when the annual id is absent. BillingConfig
 					// types `annual: string`, but billing_controller returns nil when the
 					// env var is unset, and annual is now the DEFAULT cadence — so an env
@@ -685,7 +706,9 @@ export default function BillingPage({
 						: { email: config.customer_email },
 					customData: config.custom_data,
 					settings: { ...checkoutSettings(isInline), locale: checkoutLocale },
-				});
+				};
+				checkoutOptionsRef.current = options;
+				paddle.Checkout.open(options);
 			});
 		},
 		[paddle, config, cadence, isInline, checkoutLocale],

@@ -898,6 +898,56 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(queryAllByText("Starter").length).toBe(0);
 	});
 
+	// A stale customer id (archived customer, or a sandbox id in a DB copied
+	// from another env) makes Paddle fire checkout.error, and a retry with the
+	// same id fails the same way. Reopen once by email instead.
+	it("onboarding (inline): a CHECKOUT_ERROR on a customer-id open reopens once by email", async () => {
+		mockBillingApi();
+		const base = get.getMockImplementation()!;
+		get.mockImplementation(async (url: string) => {
+			const body = await base(url);
+			return url === "/billing/config" ? { ...body, customer_id: "ctm_stale" } : body;
+		});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const openMock = vi.fn();
+		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+			captured = opts.eventCallback;
+			return { Checkout: { open: openMock, close: vi.fn() } };
+		});
+
+		const { container, queryAllByText } = renderBilling({ inline: true });
+		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+		const startBtn = Array.from(container.querySelectorAll("button")).find(
+			(b) => b.textContent === "Choose Starter",
+		)!;
+		await act(async () => {
+			startBtn.click();
+			await Promise.resolve();
+		});
+		await waitFor(() => expect(openMock).toHaveBeenCalledTimes(1));
+		expect(openMock.mock.calls[0]![0].customer).toEqual({ id: "ctm_stale" });
+
+		await act(async () => {
+			captured!({ name: "checkout.error", data: {} });
+			await Promise.resolve();
+		});
+		expect(openMock).toHaveBeenCalledTimes(2);
+		expect(openMock.mock.calls[1]![0].customer).toEqual({ email: "u@example.com" });
+		expect(openMock.mock.calls[1]![0].items).toEqual(openMock.mock.calls[0]![0].items);
+		expect(warn).toHaveBeenCalled();
+		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
+
+		// Only once: a second error on the email open is a real error.
+		await act(async () => {
+			captured!({ name: "checkout.error", data: {} });
+			await Promise.resolve();
+		});
+		expect(openMock).toHaveBeenCalledTimes(2);
+		expect(container.querySelector(".paddle-checkout")).toBeNull();
+		warn.mockRestore();
+	});
+
 	it("onboarding (inline): a genuine CHECKOUT_ERROR closes the frame and surfaces a message", async () => {
 		mockBillingApi();
 		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
