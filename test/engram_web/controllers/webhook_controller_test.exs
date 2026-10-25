@@ -740,6 +740,61 @@ defmodule EngramWeb.WebhookControllerTest do
       assert %{paddle_subscription_id: "sub_s2"} = Engram.Billing.get_subscription(user)
     end
 
+    # A NEW subscription's update can beat its own created while the old row
+    # is still live. Acking it would lose it; a 500 lets Paddle retry it once
+    # the created has landed.
+    test "an update for a subscription newer than the live row waits for its created" do
+      user = insert(:user)
+
+      send_payload(
+        sub_event("subscription.created", "ntf_w1", "sub_w_old", user, "active",
+          occurred_at: "2026-10-01T00:00:00Z"
+        )
+      )
+
+      early_update =
+        sub_event("subscription.updated", "ntf_w3", "sub_w_new", user, "past_due",
+          occurred_at: "2026-10-06T00:00:00Z",
+          created_at: "2026-10-05T00:00:00Z"
+        )
+
+      assert json_response(send_payload(early_update), 500)["status"] == "error"
+      assert Engram.Webhooks.Idempotency.check(:paddle, "ntf_w3") == :proceed
+
+      send_payload(
+        sub_event("subscription.created", "ntf_w2", "sub_w_new", user, "active",
+          occurred_at: "2026-10-05T00:00:00Z",
+          created_at: "2026-10-05T00:00:00Z"
+        )
+      )
+
+      assert json_response(send_payload(early_update), 200)["status"] == "ok"
+
+      assert %{paddle_subscription_id: "sub_w_new", status: "past_due"} =
+               Engram.Billing.get_subscription(user)
+    end
+
+    test "a late event for an OLD subscription (created before the live row) is acked" do
+      user = insert(:user)
+
+      send_payload(
+        sub_event("subscription.created", "ntf_l1", "sub_l_new", user, "active",
+          occurred_at: "2026-10-05T00:00:00Z"
+        )
+      )
+
+      conn =
+        send_payload(
+          sub_event("subscription.canceled", "ntf_l2", "sub_l_old", user, "canceled",
+            occurred_at: "2026-10-06T00:00:00Z",
+            created_at: "2026-09-01T00:00:00Z"
+          )
+        )
+
+      assert json_response(conn, 200)["status"] == "ok"
+      assert %{paddle_subscription_id: "sub_l_new"} = Engram.Billing.get_subscription(user)
+    end
+
     test "a resubscribe after a cancel still replaces the row" do
       user = insert(:user)
 
@@ -766,14 +821,18 @@ defmodule EngramWeb.WebhookControllerTest do
       "event_type" => type,
       "event_id" => event_id,
       "occurred_at" => Keyword.get(opts, :occurred_at, "2026-10-24T00:00:00Z"),
-      "data" => %{
-        "id" => sub_id,
-        "status" => status,
-        "customer_id" => "ctm_#{sub_id}",
-        "items" => [%{"price" => %{"id" => "pri_pro_monthly_test"}}],
-        "current_billing_period" => %{"ends_at" => "2026-11-24T00:00:00Z"},
-        "custom_data" => %{"user_id" => user.id}
-      }
+      "data" =>
+        %{
+          "id" => sub_id,
+          "status" => status,
+          "customer_id" => "ctm_#{sub_id}",
+          "items" => [%{"price" => %{"id" => "pri_pro_monthly_test"}}],
+          "current_billing_period" => %{"ends_at" => "2026-11-24T00:00:00Z"},
+          "custom_data" => %{"user_id" => user.id}
+        }
+        |> then(
+          &if(opts[:created_at], do: Map.put(&1, "created_at", opts[:created_at]), else: &1)
+        )
     })
   end
 

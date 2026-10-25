@@ -1172,9 +1172,14 @@ defmodule Engram.Billing do
 
           {:error, %Ecto.Changeset{errors: errors} = changeset} ->
             cond do
-              error_opt(errors, :user_id, :constraint) == :foreign -> skip_owner_missing(data)
-              error_opt(errors, :last_event_occurred_at, :stale) -> skip_stale_event(data)
-              true -> {:error, changeset}
+              error_opt(errors, :user_id, :constraint) == :foreign ->
+                skip_owner_missing(data)
+
+              error_opt(errors, :last_event_occurred_at, :stale) ->
+                stale_or_wait(type, data, user_id)
+
+              true ->
+                {:error, changeset}
             end
         end
 
@@ -1379,6 +1384,33 @@ defmodule Engram.Billing do
 
     {:ok, :stale}
   end
+
+  # The guard refused a non-created event for a different subscription than
+  # the live row's. If that subscription was created after the row's newest
+  # event it is the user's NEW one, ahead of its own created: answer
+  # transient so Paddle retries it once the created lands, rather than ack
+  # it and lose it. An older subscription's late event is a real no-op.
+  defp stale_or_wait("subscription.created", data, _user_id), do: skip_stale_event(data)
+
+  defp stale_or_wait(_type, %{"id" => sub_id} = data, user_id) do
+    row = Repo.with_tenant!(user_id, fn -> Repo.get_by(Subscription, user_id: user_id) end)
+
+    with %Subscription{paddle_subscription_id: row_sub, last_event_occurred_at: %DateTime{} = at}
+         when row_sub != sub_id <- row,
+         {:ok, created_at, _} <- DateTime.from_iso8601(data["created_at"] || ""),
+         :gt <- DateTime.compare(created_at, at) do
+      Logger.warning(
+        "paddle_webhook_awaiting_created",
+        Metadata.with_category(:warning, :billing, subscription_id: sub_id)
+      )
+
+      {:error, :awaiting_subscription_created}
+    else
+      _ -> skip_stale_event(data)
+    end
+  end
+
+  defp stale_or_wait(_type, data, _user_id), do: skip_stale_event(data)
 
   defp error_opt(errors, field, key) do
     case errors[field] do
