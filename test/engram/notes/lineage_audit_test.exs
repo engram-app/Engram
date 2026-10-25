@@ -181,7 +181,7 @@ defmodule Engram.Notes.LineageAuditTest do
     assert {:ok, %{scanned: 0}} = LineageAudit.run(user_id: user.id)
   end
 
-  test "a log-only note whose rows are all in a foreign vault is not scanned clean", ctx do
+  test "a log-only note whose rows are all in a foreign vault is named :not_found", ctx do
     %{user: user, vault: vault} = ctx
     {:ok, foreign, _} = Engram.Vaults.register_vault(user, "Foreign", Ecto.UUID.generate())
     n = note(user, vault, "A/Foreign.md", "body\n")
@@ -191,7 +191,12 @@ defmodule Engram.Notes.LineageAuditTest do
 
     capture_log(fn ->
       assert {:error, :not_found} = LineageAudit.scan_note(user, vault, n.id)
-      assert {:ok, %{scanned: 0}} = LineageAudit.run(user_id: user.id)
+
+      # Selected, not dropped: the run names it instead of omitting it.
+      assert {:ok, %{scanned: 1, rivals: [], suspects: [], unreadable: unreadable}} =
+               LineageAudit.run(user_id: user.id)
+
+      assert unreadable == [%{note_id: n.id, reason: :not_found}]
     end)
   end
 
@@ -263,15 +268,22 @@ defmodule Engram.Notes.LineageAuditTest do
     assert all_enqueued() == jobs
   end
 
-  # What a write would move: the row's updated_at and crdt_head, and the log.
+  # What a write would move: the row's updated_at and crdt_head, the stored
+  # snapshot (a flatten rewrites ciphertext + nonce without touching
+  # updated_at), and the log.
   defp persisted(user, note_id) do
     {:ok, state} =
       Repo.with_tenant(user.id, fn ->
-        {updated_at, head} =
-          Repo.one!(from(n in Note, where: n.id == ^note_id, select: {n.updated_at, n.crdt_head}))
+        row =
+          Repo.one!(
+            from(n in Note,
+              where: n.id == ^note_id,
+              select: {n.updated_at, n.crdt_head, n.crdt_state_ciphertext, n.crdt_state_nonce}
+            )
+          )
 
         log = Repo.aggregate(from(l in CrdtUpdateLog, where: l.note_id == ^note_id), :count)
-        {updated_at, head, log}
+        {row, log}
       end)
 
     state

@@ -30,7 +30,10 @@ defmodule Engram.Notes.LineageAudit do
     * weak links: engram_native's yrs is built without the "weak" feature, so a
       doc holding one does not decode and is reported `:undecodable`.
 
-  From prod (Mix tasks are not in the release):
+  From prod (Mix tasks are not in the release), on a WORKER task
+  (`ENGRAM_NODE_ROLE=worker`), never a web one: each note costs a dirty NIF
+  call plus a `Yex.apply_update` replay on a normal scheduler, one note at a
+  time, and that load belongs off the request path:
 
       bin/engram rpc 'Engram.Notes.LineageAudit.run() |> IO.inspect(limit: :infinity)'
       bin/engram rpc 'Engram.Notes.LineageAudit.run(user_id: "...") |> IO.inspect()'
@@ -186,8 +189,9 @@ defmodule Engram.Notes.LineageAudit do
   end
 
   # No snapshot and no tail in this vault: nothing to scan. Without this an
-  # empty doc would scan as a clean note (a log-only note whose rows sit in a
-  # foreign vault, #1318 shape, would read as healthy).
+  # empty doc would scan as a clean note. `targets/1` selects on log rows in
+  # ANY vault on purpose, so a log-only note whose rows all sit in a foreign
+  # vault (#1318 shape) lands here and is named `:not_found`, not dropped.
   defp present(nil, []), do: {:error, :not_found}
   defp present(_snapshot, _rows), do: :ok
 
@@ -280,13 +284,7 @@ defmodule Engram.Notes.LineageAudit do
         where:
           n.kind == "note" and is_nil(n.deleted_at) and
             (not is_nil(n.crdt_state_ciphertext) or
-               exists(
-                 from(l in CrdtUpdateLog,
-                   where:
-                     l.note_id == parent_as(:note).id and
-                       l.vault_id == parent_as(:note).vault_id
-                 )
-               )),
+               exists(from(l in CrdtUpdateLog, where: l.note_id == parent_as(:note).id))),
         order_by: n.id,
         select: {n.user_id, n.vault_id, n.id}
       )
