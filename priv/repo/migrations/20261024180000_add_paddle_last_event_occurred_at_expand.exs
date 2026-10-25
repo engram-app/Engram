@@ -20,7 +20,7 @@ defmodule Engram.Repo.Migrations.AddPaddleLastEventOccurredAtExpand do
     execute "SET LOCAL lock_timeout = '5s'"
 
     alter table(:subscriptions) do
-      add :last_event_occurred_at, :utc_datetime_usec
+      add :last_event_occurred_at, :timestamptz
     end
   end
 
