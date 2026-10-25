@@ -45,10 +45,26 @@ defmodule EngramWeb.Plugs.RotationLockCheckCacheTest do
       end
 
       # The response clears the gate (a keep-alive connection reuses the
-      # process) and gives a 503 its Retry-After.
-      sent = conn |> put_status(503) |> Plug.Conn.send_resp(503, "")
+      # process) and gives the rotation refusal's 503 its Retry-After.
+      sent =
+        conn
+        |> assign(:reason, %Engram.Crypto.RotationInProgressError{})
+        |> Plug.Conn.send_resp(503, "")
+
       assert ["60"] = Plug.Conn.get_resp_header(sent, "retry-after")
       assert {:ok, :read} = Engram.Repo.with_tenant(user.id, fn -> :read end)
+    end
+
+    # Any other 503 on a write (a stalled DEK load, say) is not a rotation:
+    # it keeps the endpoint's Retry-After (EngramWeb.Plugs.RetryAfter).
+    test "a write's non-rotation 503 gets no rotation Retry-After", %{conn: conn, user: user} do
+      sent =
+        %{conn | method: "POST"}
+        |> assign(:current_user, user)
+        |> RotationLockCheck.call([])
+        |> Plug.Conn.send_resp(503, "")
+
+      assert Plug.Conn.get_resp_header(sent, "retry-after") == []
     end
 
     test "a refused write renders the halt's body" do

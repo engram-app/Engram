@@ -362,9 +362,9 @@ defmodule EngramWeb.NotesController do
     end
   end
 
+  # Retry-After: EngramWeb.Plugs.RetryAfter.
   defp retry_later(conn, reason) do
     conn
-    |> put_resp_header("retry-after", "30")
     |> put_status(503)
     |> json(%{error: "temporarily unavailable", reason: reason})
   end

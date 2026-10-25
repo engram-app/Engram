@@ -234,9 +234,8 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
 
       conn = delete(conn, ~p"/api/folders/Derived?recursive=true")
       assert json_response(conn, 503) == %{"error" => "dek_unavailable"}
-      # Present whatever its value: a write's 503 takes RotationLockCheck's 60
-      # before EngramWeb.Plugs.RetryAfter's 30 fills a missing one.
-      assert [_secs] = get_resp_header(conn, "retry-after")
+      # EngramWeb.Plugs.RetryAfter's, not RotationLockCheck's rotation 60.
+      assert get_resp_header(conn, "retry-after") == ["30"]
       Engram.Crypto.DekCache.invalidate(user.id)
       assert {:ok, _} = Engram.Notes.get_note_by_id(user, vault, child.id)
     end
