@@ -323,6 +323,8 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
         skip_tenant_check: true
       )
 
+    Engram.Fixtures.mirror_body!(ctx.stale.id)
+
     ref =
       :telemetry_test.attach_event_handlers(self(), [[:engram, :indexing, :payload_reconcile]])
 

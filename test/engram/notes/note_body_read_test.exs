@@ -58,7 +58,12 @@ defmodule Engram.Notes.NoteBodyReadTest do
       merged
     ])
 
-    NoteBody.get(note.id, [:id, :content_ciphertext, :content_nonce])
+    read!(note.user_id, note.id, [:id, :content_ciphertext, :content_nonce])
+  end
+
+  defp read!(user_id, id, fields) do
+    {:ok, row} = Repo.with_tenant(user_id, fn -> NoteBody.get(id, fields) end)
+    row
   end
 
   describe "reads the body from note_bodies" do
@@ -99,7 +104,7 @@ defmodule Engram.Notes.NoteBodyReadTest do
         digest
       ])
 
-      assert NoteBody.get(ctx.note.id, [:id, :crdt_head]).crdt_head ==
+      assert read!(ctx.user.id, ctx.note.id, [:id, :crdt_head]).crdt_head ==
                Base.url_encode64(digest, padding: false)
     end
   end

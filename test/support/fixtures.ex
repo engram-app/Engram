@@ -365,6 +365,37 @@ defmodule Engram.Fixtures do
   end
 
   @doc """
+  Copies a note's `notes` body columns into its `note_bodies` row, merged as
+  the `notes_sync_body` trigger stores them. Readers take the body from
+  `note_bodies`, and the trigger skips a write whose nonce did not change, so
+  a test that tampers with a `notes` ciphertext at rest calls this to put the
+  tampered bytes where they are read.
+  """
+  def mirror_body!(note_id) do
+    merged = fn ct, nonce ->
+      """
+      CASE WHEN n.#{ct} IS NULL THEN NULL
+           WHEN n.#{nonce} IS NULL THEN n.#{ct}
+           WHEN length(n.#{nonce}) = 13 THEN n.#{nonce} || n.#{ct}
+           ELSE '\\x00'::bytea || n.#{nonce} || n.#{ct} END
+      """
+    end
+
+    Engram.Repo.query!(
+      """
+      UPDATE note_bodies b
+      SET content_ct = #{merged.("content_ciphertext", "content_nonce")},
+          crdt_ct = #{merged.("crdt_state_ciphertext", "crdt_state_nonce")}
+      FROM notes n
+      WHERE n.id = b.note_id AND b.note_id = $1
+      """,
+      [Ecto.UUID.dump!(note_id)]
+    )
+
+    :ok
+  end
+
+  @doc """
   Inserts an active subscription for a user.
 
   Accepts optional attribute overrides (status, tier, etc.).

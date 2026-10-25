@@ -156,6 +156,8 @@ defmodule Engram.Notes.EncryptionTest do
           |> Engram.Repo.update()
         end)
 
+      Engram.Fixtures.mirror_body!(raw.id)
+
       # Clear DEK cache to force a fresh unwrap (removes a confounding variable)
       Engram.Crypto.DekCache.invalidate(user.id)
 

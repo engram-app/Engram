@@ -2595,6 +2595,8 @@ defmodule Engram.Crypto.UserDekRotationTest do
         skip_tenant_check: true
       )
 
+      Engram.Fixtures.mirror_body!(note.id)
+
       assert_raise RuntimeError,
                    ~r/T3\.7 sweep_notes: decrypt failed under both old and new DEK/,
                    fn ->
@@ -2826,6 +2828,8 @@ defmodule Engram.Crypto.UserDekRotationTest do
         [set: [content_ciphertext: <<0::128>>]],
         skip_tenant_check: true
       )
+
+      Engram.Fixtures.mirror_body!(note.id)
 
       # Attach a telemetry handler to capture the event.
       handler_id = "test-b5-rescue-#{:erlang.unique_integer([:positive])}"

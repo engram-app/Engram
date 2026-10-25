@@ -406,6 +406,8 @@ defmodule Engram.Notes.CrdtDeliverTest do
           )
         end)
 
+      Engram.Fixtures.mirror_body!(note.id)
+
       room = start_bare_room(note.id, "orig")
       ref = Process.monitor(room)
       EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")

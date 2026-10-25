@@ -237,6 +237,8 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
         |> Engram.Repo.update()
       end)
 
+    Engram.Fixtures.mirror_body!(note.id)
+
     Crypto.DekCache.invalidate(user.id)
 
     assert {:error, _reason} =
