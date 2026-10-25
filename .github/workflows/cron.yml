@@ -5,8 +5,9 @@ name: cron
 # One schedule (03:15 UTC) fires one run; every daily task is a job in it and
 # the weekly ones gate on `needs.when.outputs.dow`. Was nine schedules (one
 # hourly) = ~30 runs a day in the Actions list, and GitHub dropped most of the
-# hourly firings anyway (23 of ~96 ran 10-17..10-20). 03:15 keeps clear of the
-# 06:00 nightly e2e run (verify.yml).
+# hourly firings anyway (23 of ~96 ran 10-17..10-20). GitHub starts the 03:15
+# slot 4-5h late (07-08 UTC, week of 10-18); the verify.yml nightly (06:00)
+# starts about 10 UTC, so this run still lands before it, as one burst.
 #
 # Runner disk hygiene is NOT here: it is the runner-disk-guard systemd timer
 # on every runner VM (homelab ansible role runner_vm), which every new runner
@@ -804,8 +805,9 @@ jobs:
     # `heavy`, for the same reason verify.yml pins unit-tests there (#355): a
     # cold `mix compile` of the whole app saturates a VM for minutes, and on a
     # generic slot it lands next to e2e suites whose delivery budgets are
-    # timing-bounded. The 03:15 daily run keeps it clear of verify.yml's 06:00
-    # nightly e2e convergence run — an earlier draft sat 10 minutes inside it.
+    # timing-bounded. The 03:15 slot actually starts about 07-08 UTC and the
+    # verify.yml nightly about 10 UTC, so it runs before the nightly e2e
+    # convergence run, not inside it (an earlier draft sat 10 minutes inside it).
     runs-on: [self-hosted, linux, x64, isolated, heavy]
     # deps.get against hex.pm and a cold compile are both open-ended; the
     # vendor HTTP itself is bounded at 5s inside HttpFetcher. Without this the

@@ -338,7 +338,7 @@ def auth_provider():
     if _WORKER == 0:
         # Scope sweep to THIS run+job namespace — never touch sibling runs'
         # OR sibling jobs' users (issues #160, #869). Orphans from crashed
-        # runs are reaped out-of-band by .github/workflows/clerk-orphans.yml.
+        # runs are reaped out-of-band by the daily e2e-orphans job in .github/workflows/cron.yml.
         #
         # min_age_seconds guards the worker-level race (run 29670308705): the
         # run+job marker matches every worker, so without an age floor worker

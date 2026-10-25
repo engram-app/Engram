@@ -164,10 +164,14 @@ not relax it.
 
 ## Runner-side image prune
 
-The registry is not the only place images pile up. `cron.yml`'s nightly runner
-prune keeps only the newest `*/engram-ci:*` and `*/engram-deps:*` on each runner.
-The old `reference=engram-ci:*` filter never matched, because pulled tags are
-registry-qualified (`10.0.20.214:5001/engram-ci:...`); match on `*/<repo>:*`.
+The registry is not the only place images pile up. Runner disk hygiene lives on
+each runner VM, not in `cron.yml`: the hourly `runner-disk-guard` systemd timer
+(homelab ansible role `runner_vm`, `runner-disk-guard.sh` steps 3/3b/3c). It runs
+an idle-gated `docker system prune -af` (skipped while a job is running, forced
+at 85% disk) and reaps leaked compose stacks. There is no keep-newest-tag rule.
+If you ever filter images by name, note pulled tags are registry-qualified
+(`10.0.20.214:5001/engram-ci:...`), so `reference=engram-ci:*` never matches;
+match on `*/<repo>:*`.
 
 ## Related
 
