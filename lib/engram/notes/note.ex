@@ -82,6 +82,9 @@ defmodule Engram.Notes.Note do
     field :mtime, :float
     field :ctime, :float
     field :deleted_at, :utc_datetime_usec
+    # The undoable delete that tombstoned this row (#609), restored by
+    # `Engram.Folders.restore_op/3`. Nil on live rows and rename tombstones.
+    field :delete_op_id, Ecto.UUID
     field :content_ciphertext, :binary
     field :content_nonce, :binary
     field :title_ciphertext, :binary

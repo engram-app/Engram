@@ -8,8 +8,13 @@ defmodule Engram.Workers.AttachmentBlobGC do
   was live rows with no bytes. Now the database reference goes first and the
   bytes go later, here, the way GitLab LFS, Nextcloud and Immich do it.
 
-  A tombstone is reaped once it is `@grace_hours` old, still holds a
-  `storage_key`, and no live row references that key. Per vault and batch,
+  A tombstone is reaped once it is past its window, still holds a
+  `storage_key`, and no live row references that key. The window: the
+  owner's trash retention (`Engram.Billing.trash_retention_days/1`, #609)
+  for a row an undoable delete stamped (`delete_op_id`), since a restore can
+  bring it back until then; `@grace_hours` for every other tombstone (plugin
+  and REST deletes), which nothing can restore, so holding its bytes longer
+  would only cost storage. Per vault and batch,
   in three phases so no transaction is held across S3 and no crash orphans
   a blob:
 
@@ -26,8 +31,8 @@ defmodule Engram.Workers.AttachmentBlobGC do
   is re-claimed (re-checked) and re-deleted, which is idempotent. Pages are
   keyset by id, so a stuck key never blocks the rows after it.
 
-  Recovery window: `@grace_hours`, plus the bucket's noncurrent-version
-  retention once the blob is gone.
+  Recovery window: the window above, plus the bucket's
+  noncurrent-version retention once the blob is gone.
 
   Refuses under `Repo.tenancy_unsafe?/0`. A blind role reads zero rows, so
   today that would reap nothing rather than something wrong; the guard keeps
@@ -39,7 +44,9 @@ defmodule Engram.Workers.AttachmentBlobGC do
 
   import Ecto.Query
 
+  alias Engram.Accounts.User
   alias Engram.Attachments.Attachment
+  alias Engram.Billing
   alias Engram.Logger.Metadata
   alias Engram.Repo
   alias Engram.Storage
@@ -47,6 +54,8 @@ defmodule Engram.Workers.AttachmentBlobGC do
 
   require Logger
 
+  # Unstamped tombstones. Also the floor for candidate discovery: no
+  # retention is shorter (`Billing.trash_retention_days/1` floors at 1 day).
   @grace_hours 24
   # Well above the 15 min job timeout: a claim this old belongs to a run
   # that died, so it may be taken again.
@@ -81,11 +90,145 @@ defmodule Engram.Workers.AttachmentBlobGC do
   @doc "Reaps every eligible tombstone blob. Returns how many were reaped."
   @spec sweep() :: non_neg_integer()
   def sweep do
-    cutoff = DateTime.add(DateTime.utc_now(), -@grace_hours * 3600, :second)
+    now = DateTime.utc_now()
+    grace = DateTime.add(now, -@grace_hours * 3600, :second)
+    _ = settle_stranded_claims(now, grace)
 
-    cutoff
+    {grace, grace}
     |> candidate_vaults()
-    |> Enum.reduce(0, fn vault_id, reaped -> reaped + sweep_vault(vault_id, cutoff, nil, 0) end)
+    |> Enum.reduce(0, fn {vault_id, user_id}, reaped ->
+      reaped + sweep_vault(vault_id, {grace, retention_cutoff(user_id, now, grace)}, nil, 0)
+    end)
+  end
+
+  # The owner's retention, read through the same resolver a restore uses so
+  # the two windows cannot disagree. Read on the maintenance pool: the GC
+  # has no tenant. A vanished owner has nobody to restore for: the grace.
+  defp retention_cutoff(user_id, now, grace) do
+    case Repo.cross_tenant(fn -> Repo.maintenance().get(User, user_id) end) do
+      %User{} = user -> DateTime.add(now, -Billing.trash_retention_days(user), :day)
+      nil -> grace
+    end
+  end
+
+  # A STALE claim on a row that is no longer due: the run died or its S3 call
+  # raised, and the owner's retention went up since (an upgrade, an override).
+  # The normal path never re-claims it (it is inside its window), and
+  # `Attachments.revive_tombstones/3` refuses every claimed row, so without
+  # this it would stay unrestorable for the rest of its window while its
+  # bytes may well exist. Settle it by asking storage: blob gone, finalize the
+  # row the way a finished delete would (`storage_key` cleared); blob there,
+  # drop the claim so the row is restorable (and reapable once due) again.
+  # The write is guarded by the observed claim stamp, under the vault lock,
+  # so a run that re-claimed in between is left alone. A storage error is
+  # "unknown": the row keeps its claim and key, and the next run asks again.
+  #
+  # ponytail: the query takes @batch rows unordered and drops the due ones in
+  # Elixir, so past @batch stale due claims a not-due row can wait one run
+  # (the normal sweep clears the due ones meanwhile). Filter `due?` in SQL if
+  # that ever matters.
+  defp settle_stranded_claims(now, grace) do
+    stale = DateTime.add(now, -@stale_claim_minutes * 60, :second)
+
+    query =
+      from(a in Attachment,
+        where:
+          not is_nil(a.deleted_at) and not is_nil(a.storage_key) and
+            a.blob_gc_claimed_at < ^stale,
+        limit: @batch,
+        select: %{
+          id: a.id,
+          vault_id: a.vault_id,
+          user_id: a.user_id,
+          key: a.storage_key,
+          claimed_at: a.blob_gc_claimed_at,
+          deleted_at: a.deleted_at,
+          stamped?: not is_nil(a.delete_op_id)
+        }
+      )
+
+    rows = Repo.cross_tenant(fn -> Repo.maintenance().all(query) end)
+
+    retention =
+      rows
+      |> Enum.map(& &1.user_id)
+      |> Enum.uniq()
+      |> Map.new(&{&1, retention_cutoff(&1, now, grace)})
+
+    rows
+    |> Enum.reject(&due?(&1, grace, retention[&1.user_id]))
+    |> Enum.group_by(& &1.vault_id)
+    |> Enum.reduce(0, fn {vault_id, stranded}, n -> n + settle_vault(vault_id, stranded) end)
+  end
+
+  # `eligible/2`'s window, for one row already in hand.
+  defp due?(row, grace, retention) do
+    DateTime.compare(row.deleted_at, grace) == :lt and
+      (not row.stamped? or DateTime.compare(row.deleted_at, retention) == :lt)
+  end
+
+  defp settle_vault(vault_id, stranded) do
+    # Storage first, outside the transaction (no I/O under the lock).
+    checked =
+      Enum.flat_map(stranded, fn row ->
+        case Storage.presence(row.key) do
+          {:error, reason} -> unknown(row, reason)
+          presence -> [{row, presence}]
+        end
+      end)
+
+    repo = Repo.maintenance()
+
+    {:ok, settled} =
+      Repo.cross_tenant(fn ->
+        repo.transaction(fn ->
+          _ =
+            repo.all(
+              from(v in Vault, where: v.id == ^vault_id, lock: "FOR NO KEY UPDATE", select: v.id)
+            )
+
+          Enum.reduce(checked, 0, fn {row, presence}, n ->
+            set =
+              if presence == :present,
+                do: [blob_gc_claimed_at: nil],
+                else: [storage_key: nil, blob_gc_claimed_at: nil]
+
+            {count, _} =
+              repo.update_all(
+                from(a in Attachment,
+                  where:
+                    a.id == ^row.id and a.blob_gc_claimed_at == ^row.claimed_at and
+                      not is_nil(a.deleted_at)
+                ),
+                set: set
+              )
+
+            n + count
+          end)
+        end)
+      end)
+
+    if settled > 0 do
+      Logger.info(
+        "attachment_blob_gc: settled stale claims on rows no longer due",
+        Metadata.with_category(:info, :oban, total_count: settled)
+      )
+    end
+
+    settled
+  end
+
+  defp unknown(row, reason) do
+    Logger.warning(
+      "attachment_blob_gc: blob probe failed, settling the stale claim next run",
+      Metadata.with_category(:warning, :oban,
+        vault_id: row.vault_id,
+        attachment_id: row.id,
+        reason: Metadata.safe_reason(reason)
+      )
+    )
+
+    []
   end
 
   # Unlocked, and only to find work: every decision is re-made under the
@@ -97,7 +240,7 @@ defmodule Engram.Workers.AttachmentBlobGC do
       from(a in eligible(cutoff, stale),
         distinct: true,
         order_by: a.vault_id,
-        select: a.vault_id
+        select: {a.vault_id, a.user_id}
       )
 
     Repo.cross_tenant(fn -> Repo.maintenance().all(query) end)
@@ -135,7 +278,9 @@ defmodule Engram.Workers.AttachmentBlobGC do
   # copies a tombstone's key must read it AFTER taking that lock, or this
   # re-check cannot see it. Likewise a future undelete must take the vault
   # lock and must not revive a row that carries a fresh `blob_gc_claimed_at`
-  # (its blob may be mid-delete); finalize also refuses to touch a live row.
+  # (its blob may be mid-delete, or gone if the run died after it);
+  # `Attachments.revive_tombstones/3` is that path, takes the lock and refuses
+  # every claimed row (#2195). Finalize also refuses to touch a live row.
   defp claim(vault_id, cutoff, after_id) do
     repo = Repo.maintenance()
     claimed_at = DateTime.utc_now()
@@ -174,14 +319,18 @@ defmodule Engram.Workers.AttachmentBlobGC do
     result
   end
 
-  # A tombstone past the grace window that still holds a key no live row
+  # A tombstone past its window (`grace` for every row, and `retention` too
+  # for one an undoable delete stamped) that still holds a key no live row
   # has, unclaimed or holding a claim older than the stale threshold (a run
-  # that died between claim and finalize).
-  defp eligible(cutoff, stale) do
+  # that died between claim and finalize). `retention` is never after
+  # `grace` (retention floors at a day).
+  defp eligible({grace, retention}, stale) do
     from(a in Attachment,
       as: :tomb,
       where:
-        not is_nil(a.deleted_at) and a.deleted_at < ^cutoff and not is_nil(a.storage_key) and
+        not is_nil(a.deleted_at) and a.deleted_at < ^grace and
+          (is_nil(a.delete_op_id) or a.deleted_at < ^retention) and
+          not is_nil(a.storage_key) and
           (is_nil(a.blob_gc_claimed_at) or a.blob_gc_claimed_at < ^stale) and
           not exists(
             from(l in Attachment,

@@ -497,6 +497,10 @@ defmodule Engram.Notes do
 
   @max_batch_folders 500
 
+  @doc "Folders per `create_folder_markers/3` call."
+  @spec max_batch_folders() :: 500
+  def max_batch_folders, do: @max_batch_folders
+
   # Rows per folder-marker `insert_all`. A marker row binds 14 parameters
   # (upsert_folder_markers/6), so 65535 allows 4681; 2000 is the same
   # half-margin Links uses so a new column cannot re-arm the overflow.
@@ -628,7 +632,12 @@ defmodule Engram.Notes do
         {_, rows} =
           from(n in scoped(user, vault), where: n.id in ^dead_ids, select: n)
           |> Repo.update_all(
-            set: [deleted_at: nil, updated_at: DateTime.utc_now(), seq: seq_fun.()]
+            set: [
+              deleted_at: nil,
+              delete_op_id: nil,
+              updated_at: DateTime.utc_now(),
+              seq: seq_fun.()
+            ]
           )
 
         rows
@@ -724,7 +733,11 @@ defmodule Engram.Notes do
 
       {:ok, %Note{} = soft_deleted} ->
         soft_deleted
-        |> Ecto.Changeset.change(deleted_at: nil, updated_at: DateTime.utc_now())
+        |> Ecto.Changeset.change(
+          deleted_at: nil,
+          delete_op_id: nil,
+          updated_at: DateTime.utc_now()
+        )
         |> Ecto.Changeset.put_change(:seq, seq_fun.())
         |> Repo.update()
         |> case do
@@ -741,12 +754,15 @@ defmodule Engram.Notes do
   # Crypto.maybe_decrypt_note_fields/2 short-circuits (needs path or
   # content present). Decrypt the folder field directly here.
   defp hydrate_folder_marker(%Note{} = marker, dek) do
-    folder_aad = row_aad(:notes, :folder, marker.id, marker.dek_version)
-
-    case Envelope.decrypt(marker.folder_ciphertext, marker.folder_nonce, dek, folder_aad) do
+    case marker_folder(marker, dek) do
       {:ok, folder} -> %{marker | folder: folder}
       :error -> raise "failed to decrypt folder marker id=#{marker.id}"
     end
+  end
+
+  defp marker_folder(%Note{} = marker, dek) do
+    folder_aad = row_aad(:notes, :folder, marker.id, marker.dek_version)
+    Envelope.decrypt(marker.folder_ciphertext, marker.folder_nonce, dek, folder_aad)
   end
 
   # Tombstones included on purpose: upsert_folder_marker/6 revives one in
@@ -1509,7 +1525,8 @@ defmodule Engram.Notes do
 
             _ =
               if old_path != note.path do
-                :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
+                :ok =
+                  broadcast_change(user.id, vault.id, "delete", old_path, note.id, seq: note.seq)
 
                 # #1612 — same repath rename_note enqueues (#746). Without it the
                 # points keep the old path/folder hmacs and folder-filtered search
@@ -2413,7 +2430,7 @@ defmodule Engram.Notes do
   # constraint, so a rare race (another live note grabbed the target path
   # between the lookup and this update) surfaces as `{:error, changeset}`
   # instead of raising and aborting the tenant transaction.
-  defp move_note(prior, base_attrs, user, sanitized_path, folder, actor, recording) do
+  defp move_note(prior, base_attrs, user, sanitized_path, folder, actor, recording, db_opts \\ []) do
     was_tombstoned = not is_nil(prior.deleted_at)
 
     with {:ok, crdt} <-
@@ -2458,6 +2475,9 @@ defmodule Engram.Notes do
           |> Note.changeset(Map.put(phase_b, :version, prior.version + 1))
           |> Ecto.Changeset.put_change(:seq, seq)
           |> Ecto.Changeset.put_change(:deleted_at, nil)
+          # Any undelete leaves the op that deleted it (#609), so a later
+          # restore of that op cannot reach a row that has lived since.
+          |> Ecto.Changeset.put_change(:delete_op_id, nil)
 
         # Same snapshot fence as do_rewrite_note, for the same reason: this
         # merges CRDT state from `prior.crdt_state` and then writes both
@@ -2468,7 +2488,7 @@ defmodule Engram.Notes do
         #
         # `put_change(:deleted_at, nil)` means this can also resurrect a
         # tombstone, so the fence carries the whole pre-image, not just the id.
-        case fenced_update(snapshot_fenced(changeset, prior)) do
+        case fenced_update(snapshot_fenced(changeset, prior), db_opts) do
           {:ok, updated} ->
             _ =
               if was_tombstoned do
@@ -2914,7 +2934,7 @@ defmodule Engram.Notes do
   # read or reports a conflict. The UPDATE itself succeeded (it matched no
   # rows), so there is no aborted-statement state and the enclosing transaction
   # stays usable, including on the `mode: :savepoint` batch path.
-  defp fenced_update(changeset, db_opts \\ []) do
+  defp fenced_update(changeset, db_opts) do
     Repo.update(changeset, db_opts)
   rescue
     Ecto.StaleEntryError -> :stale_snapshot
@@ -4014,7 +4034,7 @@ defmodule Engram.Notes do
         decrypted = decrypt_or_raise!(note, user)
 
         :ok = broadcast_change(user.id, vault.id, "upsert", note.path, decrypted, [])
-        :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
+        :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, seq: note.seq)
         {:ok, decrypted}
 
       {:ok, {:no_change, note}} ->
@@ -4188,7 +4208,8 @@ defmodule Engram.Notes do
          folder: new_folder,
          title: new_title,
          embed_hash: nil,
-         updated_at: now
+         updated_at: now,
+         seq: seq
        )}
     else
       # Zero rows means one of two things, and they want different handling:
@@ -4216,6 +4237,8 @@ defmodule Engram.Notes do
     * `:origin_device_id` — opaque device identity of the caller (from the
       X-Device-Id header), stamped into the `note_changed` broadcast so the
       originating device can drop its own echo (#970).
+    * `:op_id` — undo id stamped on the tombstone (#609), restored by
+      `Engram.Folders.restore_op/3`.
   """
   @spec delete_note(Engram.Accounts.User.t(), map(), String.t(), keyword()) :: :ok
   def delete_note(user, vault, path, opts \\ []) do
@@ -4260,7 +4283,8 @@ defmodule Engram.Notes do
           updated_at: now,
           seq: seq,
           embed_hash: nil,
-          dense_indexed_hash: nil
+          dense_indexed_hash: nil,
+          delete_op_id: Keyword.get(opts, :op_id)
         ]
       )
 
@@ -4269,7 +4293,7 @@ defmodule Engram.Notes do
     # announced, and the caller hears :absent.
     if updated == 0,
       do: :absent,
-      else: finish_tombstone(user, vault, path, note, opts)
+      else: finish_tombstone(user, vault, path, note, Keyword.put(opts, :seq, seq))
   end
 
   defp finish_tombstone(user, vault, path, note, opts) do
@@ -4418,7 +4442,7 @@ defmodule Engram.Notes do
               |> Enum.chunk_every(@job_insert_chunk)
               |> Enum.each(&Oban.insert_all/1)
 
-              {:ok, %{deleted: updated, notes: notes}}
+              {:ok, %{deleted: updated, notes: notes, seq: seq}}
 
             missing ->
               {:error, {:not_found, missing}}
@@ -4426,7 +4450,7 @@ defmodule Engram.Notes do
         end)
 
       case result do
-        {:ok, %{deleted: deleted, notes: notes}} ->
+        {:ok, %{deleted: deleted, notes: notes, seq: seq}} ->
           # Release every deleted note's claim, for the same reason delete_note/4
           # does — and at N scale. A stale entry naming a dead note is not just
           # `unresolved` noise: Identity.claim/3 refuses that path for every LIVE
@@ -4441,7 +4465,7 @@ defmodule Engram.Notes do
 
           Enum.each(zipped, fn
             {{:ok, note}, raw} ->
-              broadcast_change(user.id, vault.id, "delete", note.path, raw.id, [])
+              broadcast_change(user.id, vault.id, "delete", note.path, raw.id, seq: seq)
 
             {{:error, reason}, raw} ->
               # The tombstone committed; only the broadcast is lost. Fail
@@ -6309,7 +6333,7 @@ defmodule Engram.Notes do
             # seq is allocated inside the txn that holds the vault row lock; the
             # tombstone rows are built from in-memory data (no re-query of committed
             # state) so they fold cleanly into the same transaction.
-            {:ok, _seq} =
+            {:ok, seq} =
               Repo.with_tenant(user.id, fn ->
                 seq = Engram.Vaults.next_seq!(vault.id)
 
@@ -6471,12 +6495,14 @@ defmodule Engram.Notes do
                     note
                     | path: new_path,
                       folder: new_note_folder,
-                      content: Map.get(broadcast_contents, note.id)
+                      content: Map.get(broadcast_contents, note.id),
+                      seq: seq
                   },
                   []
                 )
 
-              :ok = broadcast_change(user.id, vault.id, "delete", old_note_path, note.id, [])
+              :ok =
+                broadcast_change(user.id, vault.id, "delete", old_note_path, note.id, seq: seq)
             end)
 
             {:ok, length(notes)}
@@ -6634,11 +6660,14 @@ defmodule Engram.Notes do
   caller never named. `:deleted` counts every row removed (notes + markers),
   `:notes` only the content notes — both measured from what the write actually
   touched, which is what the side effects here are driven from.
+
+  `op_id:` stamps every row this call deletes with that undo id (#609, see
+  `Engram.Folders.restore_op/3`).
   """
   # No error branch: every failure inside is a raise, not a tuple.
-  @spec delete_scanned(map(), map(), [map()]) ::
+  @spec delete_scanned(map(), map(), [map()], keyword()) ::
           {:ok, %{deleted: non_neg_integer(), notes: non_neg_integer()}}
-  def delete_scanned(user, vault, matches) do
+  def delete_scanned(user, vault, matches, opts \\ []) do
     # `Links.basename_hmac/2` below needs the DEK, and callers reach here with
     # the struct they started with — the same staleness `scan_folders/3`
     # reloads for. Reload rather than let a stale copy fail mid-cascade.
@@ -6649,7 +6678,7 @@ defmodule Engram.Notes do
     else
       now = DateTime.utc_now()
 
-      {:ok, deleted_ids} =
+      {:ok, {deleted_ids, seq}} =
         Repo.with_tenant(user.id, fn ->
           seq = Engram.Vaults.next_seq!(vault.id)
 
@@ -6672,7 +6701,8 @@ defmodule Engram.Notes do
                     updated_at: now,
                     seq: seq,
                     embed_hash: nil,
-                    dense_indexed_hash: nil
+                    dense_indexed_hash: nil,
+                    delete_op_id: Keyword.get(opts, :op_id)
                   ]
                 )
 
@@ -6685,7 +6715,7 @@ defmodule Engram.Notes do
 
           if real_count > 0, do: :ok = UsageMeters.dec_notes_count(user.id, real_count)
           :ok = stop_rooms_after_commit(MapSet.to_list(deleted))
-          deleted
+          {deleted, seq}
         end)
 
       log_fenced_skips(user, vault, matches, deleted_ids)
@@ -6715,7 +6745,7 @@ defmodule Engram.Notes do
       Enum.each(real_notes, fn note ->
         _ = Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
 
-        :ok = broadcast_change(user.id, vault.id, "delete", note.path, note.id, [])
+        :ok = broadcast_change(user.id, vault.id, "delete", note.path, note.id, seq: seq)
       end)
 
       # Root cause of the empty-folder-lingers-in-tab-B bug: an empty folder's
@@ -6727,7 +6757,7 @@ defmodule Engram.Notes do
       # emission style and position as the real-note loop above: after the
       # Repo.with_tenant transaction returns, so it never fires on rollback.
       Enum.each(markers, fn marker ->
-        :ok = broadcast_change(user.id, vault.id, "delete", marker.folder, nil, [])
+        :ok = broadcast_change(user.id, vault.id, "delete", marker.folder, nil, seq: seq)
       end)
 
       # The counts the caller reports to the user. `length(matches)` was the
@@ -6735,6 +6765,277 @@ defmodule Engram.Notes do
       # `:notes` excludes markers so `Folders.delete/4` can report content
       # notes without recounting a set it no longer owns.
       {:ok, %{deleted: MapSet.size(deleted_ids), notes: length(real_notes)}}
+    end
+  end
+
+  # ── Restore an undoable delete (#609) ──────────────────────────────────────
+
+  # Notes per restore transaction. Each one goes through `move_note/7`
+  # (decrypt, CRDT merge, re-encrypt), far heavier than a delete's flag flip,
+  # so the chunk is well under `Attachments.delete_chunk_size/0`.
+  @restore_chunk 100
+
+  @doc """
+  The notes half of `Engram.Folders.restore_op/3`, read-only: the rows op
+  `op_id` tombstoned in this vault, split into what can come back and what
+  is skipped. A note whose path a live note now holds is skipped as
+  `:path_taken`; a row deleted before `cutoff` (past trash retention) as
+  `:expired`. Folder markers come back as folder names.
+
+  Refuses with `{:error, {:limit_reached, :notes_cap, limit, current}}` when
+  the restorable notes would take the user past `notes_cap`.
+  """
+  @spec plan_restore(map(), map(), Ecto.UUID.t(), DateTime.t()) ::
+          {:ok, %{notes: [Note.t()], folders: [String.t()], skipped: [map()]}}
+          | {:error, term()}
+  def plan_restore(user, vault, op_id, cutoff) do
+    user = Crypto.fresh_user(user)
+
+    case Crypto.get_dek(user) do
+      {:ok, dek} -> plan_restore(user, vault, op_id, cutoff, dek)
+      {:error, :no_dek} -> {:ok, %{notes: [], folders: [], skipped: []}}
+      {:error, reason} -> {:error, {:dek_unavailable, Crypto.format_dek_error(reason)}}
+    end
+  end
+
+  defp plan_restore(user, vault, op_id, cutoff, dek) do
+    rows =
+      Repo.with_tenant!(user.id, fn ->
+        Repo.all(
+          from(n in scoped(user, vault),
+            where: n.delete_op_id == ^op_id and not is_nil(n.deleted_at),
+            select: struct(n, @note_meta_fields)
+          )
+        )
+      end)
+
+    {rows, expired} = Enum.split_with(rows, &(DateTime.compare(&1.deleted_at, cutoff) != :lt))
+    {markers, real} = Enum.split_with(rows, &(&1.kind == "folder"))
+
+    # Non-raising (#609 review N2): one damaged row is a skip, not a restore
+    # that fails at the same row on every retry.
+    {real, bad_notes} =
+      real
+      |> Crypto.decrypt_notes_batch(user)
+      |> Enum.zip(real)
+      |> Enum.split_with(&match?({{:ok, _}, _}, &1))
+
+    real = Enum.map(real, fn {{:ok, note}, _raw} -> note end)
+
+    {folders, bad_markers} =
+      markers
+      |> Enum.map(&{marker_folder(&1, dek), &1})
+      |> Enum.split_with(&match?({{:ok, _}, _}, &1))
+
+    unreadable =
+      Enum.map(bad_notes ++ bad_markers, fn {_err, row} ->
+        %{id: row.id, kind: row.kind, reason: :unreadable}
+      end)
+
+    with held when is_map(held) <- note_ids_at(user, vault, Enum.map(real, & &1.path)) do
+      {free, taken} = Enum.split_with(real, &(not Map.has_key?(held, &1.path)))
+
+      with :ok <- restore_cap(user, length(free)) do
+        {:ok,
+         %{
+           notes: free,
+           folders: folders |> Enum.map(fn {{:ok, f}, _} -> f end) |> Enum.uniq(),
+           skipped:
+             Enum.map(taken, &%{path: &1.path, kind: "note", reason: :path_taken}) ++
+               Enum.map(expired, &%{id: &1.id, kind: &1.kind, reason: :expired}) ++ unreadable
+         }}
+      end
+    end
+  end
+
+  # Restoring is not exempt from `notes_cap` the way a sync resurrect is: an
+  # undo of a 5,000-note delete brings back 5,000 notes at once.
+  defp restore_cap(_user, 0), do: :ok
+
+  defp restore_cap(user, n) do
+    case check_notes_cap(user, n - 1) do
+      :ok ->
+        :ok
+
+      {:error, {:notes_cap_reached, limit, current}} ->
+        {:error, {:limit_reached, :notes_cap, limit, current}}
+    end
+  end
+
+  @doc """
+  Brings back `notes` (from `plan_restore/4`) at their own paths, through the
+  same `move_note/7` resurrect leg an id-keyed re-push takes, minus the
+  delete-wins window (`recent_same_path_tombstone?/3`): an undo is the user
+  asking for the note back, not a stale device.
+
+  The paths are claimed in the index authority FIRST, outside any
+  transaction (see `docs/context/crdt-create-is-a-rename.md`), then the rows
+  come back in chunks of #{@restore_chunk}, each its own transaction, each
+  row re-checked against `op_id` so a row that changed since the plan is
+  left alone. Each restored note gets a fresh seq, an upsert broadcast and
+  a re-embed (its Qdrant points went with the delete).
+
+  Returns the restored notes and any that could not come back (`:changed`).
+  """
+  @spec restore_notes(map(), map(), Ecto.UUID.t(), [Note.t()]) ::
+          {:ok, %{restored: [Note.t()], skipped: [map()]}} | {:error, term()}
+  def restore_notes(_user, _vault, _op_id, []), do: {:ok, %{restored: [], skipped: []}}
+
+  def restore_notes(user, vault, op_id, notes) do
+    user = Crypto.fresh_user(user)
+
+    with {:ok, claimed, taken} <- claim_restore_paths(user, vault, Enum.sort_by(notes, & &1.path)) do
+      {restored, skipped} = restore_chunks(user, vault, op_id, claimed)
+      {:ok, %{restored: restored, skipped: Enum.map(taken, &path_taken/1) ++ skipped}}
+    end
+  end
+
+  # Every path was claimed up front, so a row that does not come back (a skip,
+  # or every row from a chunk that raised on) would leave a durable claim
+  # naming a tombstone: a path nothing can be renamed into again
+  # (crdt-create-is-a-rename.md). Release those after each chunk, and for the
+  # rest on a raise. `ReleaseIndexEntries` re-checks the note is still gone,
+  # so a later retry that restores the row is not undone.
+  defp restore_chunks(user, vault, op_id, claimed) do
+    claimed
+    |> Enum.chunk_every(restore_chunk_size())
+    |> Enum.reduce({[], [], claimed}, fn chunk, {restored, skipped, pending} ->
+      rest = Enum.drop(pending, length(chunk))
+
+      {r, s} =
+        try do
+          restore_chunk(user, vault, op_id, chunk)
+        rescue
+          e ->
+            release_claims(user, vault, pending)
+            reraise e, __STACKTRACE__
+        end
+
+      back = MapSet.new(r, & &1.id)
+      release_claims(user, vault, Enum.reject(chunk, &MapSet.member?(back, &1.id)))
+      {restored ++ r, skipped ++ s, rest}
+    end)
+    |> then(fn {restored, skipped, _pending} -> {restored, skipped} end)
+  end
+
+  defp release_claims(_user, _vault, []), do: :ok
+
+  defp release_claims(user, vault, notes) do
+    _ = ReleaseIndexEntries.enqueue(user.id, vault.id, Enum.map(notes, & &1.id))
+    :ok
+  end
+
+  # `:restore_chunk` lowers it (tests).
+  defp restore_chunk_size, do: Application.get_env(:engram, :restore_chunk, @restore_chunk)
+
+  defp path_taken(note), do: %{path: note.path, kind: "note", reason: :path_taken}
+
+  # One batch claim, outside any transaction. The batch is refused whole when
+  # ANY path is held in the index by another note (a map-only collision the
+  # plan's row check cannot see), so on that refusal claim one by one and skip
+  # the held paths: one stale index entry must not fail the whole undo. Returns
+  # `{:ok, claimed, taken}`.
+  defp claim_restore_paths(user, vault, notes) do
+    case claim_cascade(user, vault, Enum.map(notes, &{&1.path, &1.id}), MapSet.new()) do
+      :ok ->
+        {:ok, notes, []}
+
+      {:error, :conflict} ->
+        Enum.reduce_while(notes, {:ok, [], []}, fn note, {:ok, claimed, taken} ->
+          case claim_cascade(user, vault, [{note.path, note.id}], MapSet.new()) do
+            :ok -> {:cont, {:ok, claimed ++ [note], taken}}
+            {:error, :conflict} -> {:cont, {:ok, claimed, taken ++ [note]}}
+            {:error, _} = err -> {:halt, err}
+          end
+        end)
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # One transaction per chunk, and every row in its own savepoint
+  # (`restore_one/2`), so a path a live note took since the plan is a skip,
+  # not an aborted chunk. Broadcasts go out after the chunk commits.
+  defp restore_chunk(user, vault, op_id, chunk) do
+    ids = Enum.map(chunk, & &1.id)
+
+    {:ok, results} =
+      Repo.with_tenant(user.id, fn ->
+        from(n in scoped(user, vault),
+          where:
+            n.id in ^ids and n.kind == "note" and n.delete_op_id == ^op_id and
+              not is_nil(n.deleted_at)
+        )
+        |> Repo.all()
+        |> Map.new(&{&1.id, restore_one(user, &1)})
+      end)
+
+    restored = for {_id, {:ok, note}} <- results, do: note
+    Enum.each(restored, &(:ok = broadcast_change(user, vault.id, "upsert", &1.path, &1, [])))
+
+    skipped =
+      for n <- chunk,
+          reason = skip_reason(Map.get(results, n.id)),
+          reason != nil,
+          do: %{path: n.path, kind: "note", reason: reason}
+
+    {restored, skipped}
+  end
+
+  # Gone from the op since the plan (restored or deleted again elsewhere).
+  defp skip_reason(nil), do: :changed
+  defp skip_reason({:ok, _note}), do: nil
+  defp skip_reason({:skip, reason}), do: reason
+
+  defp restore_one(user, tomb) do
+    case Crypto.maybe_decrypt_note_fields(tomb, user) do
+      {:ok, prior} ->
+        restore_decrypted(user, prior)
+
+      {:error, reason} ->
+        DecryptFailure.log("decrypt_failed", reason, user_id: user.id, note_id: tomb.id)
+        {:skip, :unreadable}
+    end
+  end
+
+  defp restore_decrypted(user, prior) do
+    base_attrs = %{
+      content: prior.content,
+      title: prior.title,
+      tags: prior.tags,
+      content_hash: prior.content_hash,
+      mtime: prior.mtime
+    }
+
+    folder = Helpers.extract_folder(prior.path)
+
+    # `mode: :savepoint`: a unique violation (a live note took the path after
+    # the plan) rolls back this row only. Without it Postgres aborts the whole
+    # chunk transaction and the next statement raises 25P02.
+    case move_note(prior, base_attrs, user, prior.path, folder, "restore", false,
+           mode: :savepoint
+         ) do
+      {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
+        # The delete cleared embed_hash and dropped the points, so this
+        # re-embeds. Joins the transaction: a rolled-back chunk queues nothing.
+        _ =
+          ContentCommit.enqueue_jobs(updated.id, user.id,
+            embed_priority: EmbedNote.priority_for(updated),
+            finalize?: false
+          )
+
+        {:ok, decrypt_or_raise!(updated, user)}
+
+      {:error, %Ecto.Changeset{}} ->
+        {:skip, :path_taken}
+
+      # The CRDT merge or re-encrypt refused the row; it stays in trash.
+      {:error, _reason} ->
+        {:skip, :unreadable}
+
+      :stale_snapshot ->
+        {:skip, :changed}
     end
   end
 
@@ -7290,7 +7591,11 @@ defmodule Engram.Notes do
       "tags" => note.tags || [],
       "mtime" => note.mtime,
       "updated_at" => note.updated_at,
-      "version" => note.version
+      "version" => note.version,
+      # The row's committed seq, the same value a later seq replay returns, so
+      # a receiver can fence a stale pre-delete upsert against a delete
+      # exactly (Engram-obsidian#642). Additive: older plugins ignore it.
+      "seq" => note.seq
     }
 
     base = if is_binary(note.content), do: Map.put(base, "content", note.content), else: base
@@ -7371,6 +7676,14 @@ defmodule Engram.Notes do
     }
 
     payload = if id, do: Map.put(payload, "id", id), else: payload
+
+    # The committed seq of the write this event announces (the tombstone, or
+    # the rename that vacated the path). Same reason as the upsert's "seq".
+    payload =
+      case Keyword.get(opts, :seq) do
+        seq when is_integer(seq) -> Map.put(payload, "seq", seq)
+        _ -> payload
+      end
 
     # Origin attribution (#970): REST-driven changes have no socket pid to
     # exclude via broadcast_from, so the fanout reaches the very device that

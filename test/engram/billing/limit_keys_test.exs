@@ -4,15 +4,16 @@ defmodule Engram.Billing.LimitKeysTest do
   alias Engram.Billing.LimitKeys
 
   describe "all/0" do
-    test "returns the 27 catalog keys" do
+    test "returns the 28 catalog keys" do
       keys = LimitKeys.all()
-      assert length(keys) == 27
+      assert length(keys) == 28
       assert :notes_cap in keys
       assert :vaults_cap in keys
       assert :reranker_enabled in keys
       assert :cross_vault_search in keys
       assert :history_enabled in keys
       assert :mcp_tool_calls_per_min in keys
+      assert :trash_retention_days in keys
     end
   end
 
@@ -74,6 +75,10 @@ defmodule Engram.Billing.LimitKeysTest do
       refute LimitKeys.defined?(:api_write_enabled)
       assert LimitKeys.default_for(:inactivity_warnings_exempt, :free) == false
       assert LimitKeys.default_for(:inactivity_delete_days, :free) == 90
+      # Safer delete (#609): how long a deleted item stays restorable.
+      assert LimitKeys.default_for(:trash_retention_days, :free) == 7
+      assert LimitKeys.default_for(:trash_retention_days, :starter) == 30
+      assert LimitKeys.default_for(:trash_retention_days, :pro) == 30
     end
 
     test "starter tier matrix matches spec §9.2" do

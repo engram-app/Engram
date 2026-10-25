@@ -1223,8 +1223,11 @@ defmodule EngramWeb.McpController do
   # delete_folder commits its cascade chunk by chunk (#2159) and an outer
   # transaction would turn that back into one long one, and a rename claims
   # its path in the vault index room (`Notes.Identity`), a separate process
-  # whose claim must commit before the row transaction.
-  @no_request_txn ~w(search_notes suggest_folder delete_folder rename_note rename_folder)
+  # whose claim must commit before the row transaction. restore_deleted does
+  # both: it claims restored paths in the index first, then commits its rows
+  # chunk by chunk and broadcasts each chunk after it commits (#609).
+  @no_request_txn ~w(search_notes suggest_folder delete_folder rename_note rename_folder
+                     restore_deleted)
 
   @doc false
   def run_tool_handler(tool, user, vault, args) do

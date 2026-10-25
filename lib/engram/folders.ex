@@ -39,6 +39,7 @@ defmodule Engram.Folders do
   """
 
   alias Engram.Attachments
+  alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Logger.Metadata
   alias Engram.Notes
@@ -182,6 +183,9 @@ defmodule Engram.Folders do
 
   Returns `{:ok, %{notes: n, attachments: a}}` where n/a are the content rows
   removed (0/0 when only a marker was cleared, or the folder did not exist).
+
+  `op_id:` stamps every row this call deletes with that undo id (#609); see
+  `restore_op/3`.
   """
   @spec delete(map(), map(), String.t(), keyword()) ::
           {:ok, counts()} | {:error, {:not_empty, counts()} | term()}
@@ -243,7 +247,10 @@ defmodule Engram.Folders do
 
           true ->
             log_orphaned_attachments(user, vault, folder, unreadable)
-            {:ok, %{notes: n, attachments: a}} = delete_scanned(user, vault, note_rows, att_paths)
+
+            {:ok, %{notes: n, attachments: a}} =
+              delete_scanned(user, vault, note_rows, att_paths, opts)
+
             {:ok, %{notes: n, attachments: a}}
         end
       end
@@ -258,20 +265,21 @@ defmodule Engram.Folders do
   # both from what was ACTUALLY deleted, not the scan. Since #1346 the
   # membership fence can skip a row that moved in the gap, so the scan count
   # is aspirational.
-  defp delete_scanned(user, vault, note_rows, att_paths) do
-    {:ok, attachments} = Attachments.delete_scanned_paths(user, vault, att_paths)
+  defp delete_scanned(user, vault, note_rows, att_paths, opts) do
+    op = Keyword.take(opts, [:op_id])
+    {:ok, attachments} = Attachments.delete_scanned_paths(user, vault, att_paths, op)
     {content, markers} = Enum.split_with(note_rows, &(&1.kind == "note"))
 
-    %{deleted: d1, notes: n} = delete_note_chunks(user, vault, content)
-    %{deleted: d2} = delete_note_chunks(user, vault, markers)
+    %{deleted: d1, notes: n} = delete_note_chunks(user, vault, content, op)
+    %{deleted: d2} = delete_note_chunks(user, vault, markers, op)
     {:ok, %{notes: n, deleted: d1 + d2, attachments: attachments}}
   end
 
-  defp delete_note_chunks(user, vault, rows) do
+  defp delete_note_chunks(user, vault, rows, op) do
     rows
     |> Enum.chunk_every(Attachments.delete_chunk_size())
     |> Enum.reduce(%{deleted: 0, notes: 0}, fn chunk, acc ->
-      {:ok, %{deleted: d, notes: n}} = Notes.delete_scanned(user, vault, chunk)
+      {:ok, %{deleted: d, notes: n}} = Notes.delete_scanned(user, vault, chunk, op)
       %{deleted: acc.deleted + d, notes: acc.notes + n}
     end)
   end
@@ -297,12 +305,16 @@ defmodule Engram.Folders do
     :ok
   end
 
-  @spec batch_delete(map(), map(), [String.t()]) :: {:ok, counts()} | {:error, term()}
-  def batch_delete(_user, _vault, []), do: {:ok, %{notes: 0, attachments: 0}}
+  @spec batch_delete(map(), map(), [String.t()], keyword()) ::
+          {:ok, counts()} | {:error, term()}
+  def batch_delete(user, vault, marker_ids, opts \\ [])
 
-  # Same chunked, resumable cascade as `delete/4` (#2159). `notes` here is
-  # every notes row removed, markers included (the batch endpoint's contract).
-  def batch_delete(user, vault, marker_ids) do
+  def batch_delete(_user, _vault, [], _opts), do: {:ok, %{notes: 0, attachments: 0}}
+
+  # Same chunked, resumable cascade as `delete/4` (#2159), `op_id:` included.
+  # `notes` here is every notes row removed, markers included (the batch
+  # endpoint's contract).
+  def batch_delete(user, vault, marker_ids, opts) do
     user = Crypto.fresh_user(user)
 
     with {:ok, folders} <- Notes.resolve_folder_markers(user, vault, marker_ids),
@@ -310,10 +322,87 @@ defmodule Engram.Folders do
          {:ok, note_rows} <- Notes.scan_folders(user, vault, folders),
          {:ok, att_paths} <- attachment_paths_under(user, vault, folders) do
       {:ok, %{deleted: notes, attachments: atts}} =
-        delete_scanned(user, vault, note_rows, att_paths)
+        delete_scanned(user, vault, note_rows, att_paths, opts)
 
       {:ok, %{notes: notes, attachments: atts}}
     end
+  end
+
+  @typedoc "What `restore_op/3` brought back, and what it could not."
+  @type restored :: %{
+          notes: non_neg_integer(),
+          folders: non_neg_integer(),
+          attachments: non_neg_integer(),
+          skipped: [map()]
+        }
+
+  @doc """
+  Undoes one undoable delete (#609): brings back every row that the delete
+  stamped with `op_id` (`delete/4`, `batch_delete/4`, `Notes.delete_note/4`
+  and `Attachments.delete_attachment/4` given `op_id:`), at the paths they
+  had. The one restore entry point.
+
+  Plans BOTH tables first and refuses with `{:error, {:limit_reached, key,
+  limit, current}}` before restoring anything if the result would pass
+  `notes_cap` or `attachment_bytes_cap`, the way `Vaults.restore_vault/2`
+  refuses past `vaults_cap`. Then folder markers, notes, attachments, so a
+  parent folder is back before its children. A row whose path a live row
+  now holds, a row past the owner's trash retention, and an attachment whose
+  blob the GC has claimed or reaped, are skipped and listed in `skipped`.
+
+  Idempotent: a restored row leaves the op, so a repeat restores nothing.
+  An unknown op id, including another user's, restores nothing too.
+  """
+  @spec restore_op(map(), map(), String.t()) :: {:ok, restored()} | {:error, term()}
+  def restore_op(user, vault, op_id) do
+    case Ecto.UUID.cast(op_id) do
+      {:ok, op_id} -> do_restore_op(Crypto.fresh_user(user), vault, op_id)
+      :error -> {:error, :invalid_op_id}
+    end
+  end
+
+  defp do_restore_op(user, vault, op_id) do
+    cutoff = DateTime.add(DateTime.utc_now(), -Billing.trash_retention_days(user), :day)
+
+    with {:ok, notes} <- Notes.plan_restore(user, vault, op_id, cutoff),
+         {:ok, atts} <- Attachments.plan_restore(user, vault, op_id, cutoff),
+         {:ok, folders} <- restore_markers(user, vault, notes.folders),
+         {:ok, n} <- Notes.restore_notes(user, vault, op_id, notes.notes),
+         {:ok, a} <- Attachments.restore_attachments(user, vault, atts.attachments) do
+      {:ok,
+       %{
+         notes: length(n.restored),
+         folders: folders,
+         attachments: length(a.restored),
+         skipped: notes.skipped ++ atts.skipped ++ n.skipped ++ a.skipped
+       }}
+    end
+  end
+
+  @doc """
+  When a delete made now stops being restorable for `user`: now plus
+  `Billing.trash_retention_days/1`. What a delete reports as
+  `restorable_until`.
+  """
+  @spec restorable_until(map()) :: DateTime.t()
+  def restorable_until(user),
+    do: DateTime.add(DateTime.utc_now(:second), Billing.trash_retention_days(user), :day)
+
+  # The marker create path already revives a tombstoned marker in place
+  # (and leaves a live one alone), so a restore is a create of the names.
+  defp restore_markers(user, vault, names) do
+    names
+    |> Enum.chunk_every(Notes.max_batch_folders())
+    |> Enum.reduce_while({:ok, 0}, fn chunk, {:ok, n} ->
+      case Notes.create_folder_markers(user, vault, chunk) do
+        {:ok, %{folders: entries}} ->
+          broadcast_created(user, vault, entries)
+          {:cont, {:ok, n + Enum.count(entries, & &1.created)}}
+
+        {:error, _} = err ->
+          {:halt, err}
+      end
+    end)
   end
 
   @spec batch_move(map(), map(), [String.t()], String.t() | {:path, String.t()}) ::

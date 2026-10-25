@@ -301,31 +301,4 @@ defmodule Engram.Storage.S3 do
   end
 
   defp fetch_etag(_), do: nil
-
-  @impl true
-  def exists?(key) do
-    case ExAws.S3.head_object(bucket(), key) |> ExAws.request() do
-      {:ok, _} ->
-        true
-
-      {:error, {:http_error, 404, _}} ->
-        false
-
-      {:error, {:http_error, 404}} ->
-        false
-
-      {:error, reason} ->
-        require Logger
-
-        Logger.error(
-          "S3.exists? failed",
-          Metadata.with_category(:error, :sync,
-            storage_key: key,
-            reason: Metadata.safe_reason(reason)
-          )
-        )
-
-        false
-    end
-  end
 end

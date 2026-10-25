@@ -57,10 +57,21 @@ defmodule Engram.Storage.Database do
     e -> {:error, e}
   end
 
-  # Ranged reads serve segmented (v2) attachments, which only multipart
-  # backends can write; this adapter is not one (`multipart?/0`).
+  # Segmented (v2) attachments need multipart, which this adapter lacks
+  # (`multipart?/0`); the range read still serves `Storage.presence/1`.
+  # substring/3 is 1-based; a range past the end answers the bytes there are.
   @impl true
-  def get_range(_key, _offset, _length), do: {:error, :unsupported}
+  def get_range(key, offset, length) when is_binary(key) do
+    case Repo.query!(
+           "SELECT substring(data from $2 for $3) FROM storage_objects WHERE storage_key = $1",
+           [key, offset + 1, length]
+         ) do
+      %{rows: [[data]]} -> {:ok, data}
+      %{rows: []} -> {:error, :not_found}
+    end
+  rescue
+    e -> {:error, e}
+  end
 
   @impl true
   def delete(key) when is_binary(key) do
@@ -86,30 +97,6 @@ defmodule Engram.Storage.Database do
 
   @impl true
   def restore_version(_key, _version_id), do: {:error, :unsupported}
-
-  @impl true
-  def exists?(key) when is_binary(key) do
-    # Log-and-return-false on DB errors, matching S3.exists?/1 exactly — a
-    # deliberate adapter-parity decision (98a94976): the @callback contract
-    # promises a boolean, and callers must not crash on a transient DB
-    # error, but the failure must be LOUD in logs (never a bare
-    # `rescue _ -> false`).
-    case Repo.query!("SELECT 1 FROM storage_objects WHERE storage_key = $1 LIMIT 1", [key]) do
-      %{rows: [[1]]} -> true
-      %{rows: []} -> false
-    end
-  rescue
-    e ->
-      Logger.error(
-        "Database.exists? failed",
-        Engram.Logger.Metadata.with_category(:error, :sync,
-          storage_key: key,
-          reason: Engram.Logger.Metadata.safe_reason(e)
-        )
-      )
-
-      false
-  end
 
   @impl true
   def delete_prefix(prefix) when is_binary(prefix) and prefix != "" do

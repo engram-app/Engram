@@ -210,6 +210,22 @@ defmodule Engram.Billing do
   end
 
   @doc """
+  Days a deleted item stays restorable for `user` (#609), at least 1.
+
+  `trash_retention_days` read through `cap/2`. Every "no cap" spelling,
+  self-host's enforcement-off included, takes the Pro default instead: for
+  retention, unlimited cannot mean "keep forever" without the blob GC never
+  reaping anything.
+  """
+  @spec trash_retention_days(term()) :: pos_integer()
+  def trash_retention_days(user) do
+    case cap(user, :trash_retention_days) || LimitKeys.default_for(:trash_retention_days, :pro) do
+      days when is_integer(days) and days >= 1 -> days
+      _ -> 1
+    end
+  end
+
+  @doc """
   `cap/2` for a whole tier, ignoring per-user overrides: the env override,
   else the catalog default. nil means no ceiling. For reports over many users
   that read the overrides in one query instead of one lookup per user.
