@@ -31,6 +31,7 @@ defmodule Engram.Workers.CleanupVault do
   alias Engram.Accounts.ApiKey
   alias Engram.Attachments.Attachment
   alias Engram.Attachments.Upload
+  alias Engram.Indexing.ChunkRows
   alias Engram.Logger.Metadata
   alias Engram.Notes.{Chunk, Note}
   alias Engram.Permissions
@@ -206,7 +207,15 @@ defmodule Engram.Workers.CleanupVault do
     # instead of the remaining batches (and the final vault delete) wiping a
     # vault the user has taken back and may be syncing into.
     with :ok <- mark_purge_started(vault),
-         :ok <- delete_batches(vault, Chunk, [:id], fn _rows -> :ok end),
+         # Each batch recounts the notes it emptied, in its own transaction
+         # (chunks, then their note_index_state rows: `ChunkRows` lock
+         # order), so a restore landing mid-purge never keeps counters for
+         # chunks that are gone.
+         :ok <-
+           delete_batches(vault, Chunk, [:id, :note_id], fn rows ->
+             _ = rows |> Enum.map(& &1.note_id) |> Enum.uniq() |> ChunkRows.recount!()
+             :ok
+           end),
          :ok <-
            delete_batches(vault, Note, [:id, :kind, :deleted_at], &dec_live_notes(vault, &1)),
          :ok <-
