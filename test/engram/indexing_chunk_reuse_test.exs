@@ -107,14 +107,16 @@ defmodule Engram.IndexingChunkReuseTest do
     recorder |> deletes() |> Enum.flat_map(&Map.get(&1.body, "points", []))
   end
 
-  # The stored row, decrypted: what EmbedNote hands to `index_note/2`.
+  # The stored row, decrypted: what EmbedNote hands to `index_note/2`. Every
+  # note here is `stamped/1` at the target, as a prior EmbedNote pass leaves
+  # it, so reuse applies; the stamped-behind case sets its own stamp.
   defp fresh(note, user) do
     {:ok, note} =
       note
       |> Repo.reload!(skip_tenant_check: true)
       |> Engram.Crypto.maybe_decrypt_note_fields(Repo.reload!(user, skip_tenant_check: true))
 
-    note
+    stamped(note)
   end
 
   defp chunk_rows(note) do
@@ -136,7 +138,7 @@ defmodule Engram.IndexingChunkReuseTest do
         actor: "api"
       )
 
-    note
+    stamped(note)
   end
 
   defp put_raw(user, vault, path, content) do
@@ -152,7 +154,7 @@ defmodule Engram.IndexingChunkReuseTest do
         actor: "api"
       )
 
-    note
+    stamped(note)
   end
 
   # Embeds every text handed over, recording them so a test can assert on
@@ -230,6 +232,49 @@ defmodule Engram.IndexingChunkReuseTest do
       kept = for {pos, id} <- now, Map.get(before, pos) == id, do: id
       assert length(kept) == map_size(now) - 1, "every unchanged chunk must keep its point"
       assert deleted_ids(ctx.recorder) == replaced, "the replaced point must be deleted"
+    end
+  end
+
+  # #2199: reused points keep the keyword vectors they were built with. A
+  # note stamped behind the target versions must rebuild every point, or
+  # its stamp says "current" over vectors from an older encoding.
+  describe "a note stamped behind the target versions" do
+    test "an edit rebuilds every point, reusing none", ctx do
+      {chunker, keyword} = Engram.Rebuild.pinned_versions()
+      assert {chunker, keyword} < Engram.Rebuild.target_versions()
+
+      note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
+      stub_embedder(self())
+
+      assert {:ok, count} = Indexing.index_note(note, ctx.vault)
+      first_ids = note |> chunk_rows() |> Enum.map(& &1.qdrant_point_id)
+      _ = embedded_texts()
+      reset(ctx.recorder)
+
+      edited = put_note(ctx.user, ctx.vault, "Ferritin levels recovered to 90 ng/mL.")
+      behind = %{edited | chunker_version: chunker, keyword_version: keyword}
+      assert {:ok, ^count} = Indexing.index_note(behind, ctx.vault)
+
+      assert length(upserts(ctx.recorder)) == count, "every point must be rewritten"
+      assert Enum.sort(deleted_ids(ctx.recorder)) == Enum.sort(first_ids)
+      now = edited |> chunk_rows() |> Enum.map(& &1.qdrant_point_id)
+      assert MapSet.disjoint?(MapSet.new(now), MapSet.new(first_ids))
+    end
+
+    test "a note at the target still reuses its unchanged chunks", ctx do
+      note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
+      stub_embedder(self())
+
+      assert {:ok, count} = Indexing.index_note(note, ctx.vault)
+      _ = embedded_texts()
+      reset(ctx.recorder)
+
+      edited = put_note(ctx.user, ctx.vault, "Ferritin levels recovered to 90 ng/mL.")
+      assert {:ok, ^count} = Indexing.index_note(stamped(edited), ctx.vault)
+
+      sent = embedded_texts()
+      assert sent != [] and Enum.all?(sent, &(&1 =~ "Ferritin levels recovered"))
+      assert length(deleted_ids(ctx.recorder)) == 1, "only the edited chunk is replaced"
     end
   end
 
@@ -490,7 +535,7 @@ defmodule Engram.IndexingChunkReuseTest do
       _ = embedded_texts()
       reset(ctx.recorder)
 
-      assert {:ok, ^count} = Indexing.index_note(note, ctx.vault)
+      assert {:ok, ^count} = Indexing.index_note(stamped(note), ctx.vault)
       assert embedded_texts() == []
 
       assert note |> chunk_rows() |> Enum.map(& &1.qdrant_point_id) |> Enum.sort() ==
