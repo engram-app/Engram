@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.64.0](https://github.com/engram-app/Engram/compare/0.63.2...0.64.0) (2026-10-25)
+
+
+### Features
+
+* **legal:** terms 2026-10-24 with a Refunds section ([#2222](https://github.com/engram-app/Engram/issues/2222)) ([565cb3a](https://github.com/engram-app/Engram/commit/565cb3abb84232e6b4f5bae1f2bf862ddf718b0b))
+
+
+### Bug Fixes
+
+* **billing:** wallet stall, webhook reliability, Paddle conformance ([#2221](https://github.com/engram-app/Engram/issues/2221)) ([080baa1](https://github.com/engram-app/Engram/commit/080baa17bc9d1caa89bab129b1472d5e6709f232))
+* **i18n:** reject added currency signs ([#2217](https://github.com/engram-app/Engram/issues/2217)) ([2661a8e](https://github.com/engram-app/Engram/commit/2661a8e4a5566104f0c76c174ced49991168caa3))
+
 ## [0.63.2](https://github.com/engram-app/Engram/compare/0.63.1...0.63.2) (2026-10-25)
 
 
