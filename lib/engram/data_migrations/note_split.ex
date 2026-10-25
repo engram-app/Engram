@@ -93,7 +93,7 @@ defmodule Engram.DataMigrations.NoteSplit do
     cond do
       touched > 0 -> {:more, rows: touched}
       left?.() -> {:more, rows: 0}
-      true -> tap(:done, fn _ -> drift.() end)
+      true -> tap(:done, fn _ -> safe_drift(drift) end)
     end
   end
 
@@ -143,10 +143,33 @@ defmodule Engram.DataMigrations.NoteSplit do
   # trusted `notes` would overwrite it with stale or NULL data. A non-zero
   # count is an alert and a runbook step, and contract may not drop the
   # notes columns while it is non-zero.
+  # A drift scan that raises (a statement timeout, a pool exit) is logged
+  # and counted (`[:engram, :note_split, :body_drift_error]`) and never
+  # changes the pass outcome: a pass that closes the ledger stays `:done`,
+  # or a report would keep the Keys ids off.
+  defp safe_drift(drift) do
+    drift.()
+  rescue
+    e -> drift_failed(e)
+  catch
+    :exit, reason -> drift_failed(reason)
+  end
+
+  defp drift_failed(reason) do
+    :telemetry.execute([:engram, :note_split, :body_drift_error], %{count: 1}, %{})
+
+    Logger.error(
+      "note_split: body drift scan failed",
+      Metadata.with_category(:error, :sync, reason: Metadata.safe_reason(reason))
+    )
+  end
+
   @drift_batch 5_000
   @drift_logged_ids 20
 
   defp report_drift(repo, user_id, after_id \\ nil, found \\ []) do
+    drift_fault()
+
     q =
       from(n in Note, where: n.kind == "note", order_by: n.id, limit: @drift_batch)
       |> NoteBody.join()
@@ -163,6 +186,14 @@ defmodule Engram.DataMigrations.NoteSplit do
     if length(rows) == @drift_batch,
       do: report_drift(repo, user_id, List.last(rows).id, found),
       else: emit_drift(found, user_id)
+  end
+
+  # Test-only fault seam: nil outside tests.
+  defp drift_fault do
+    case Application.get_env(:engram, :note_split_drift_fault) do
+      nil -> :ok
+      fun when is_function(fun, 0) -> fun.()
+    end
   end
 
   defp emit_drift(ids, user_id) do
