@@ -671,10 +671,14 @@ defmodule Engram.Billing do
   def checkout_transaction_status(user, transaction_id) do
     # The id goes into the Paddle API path under our server key, and Phoenix
     # decodes `%2F`/`%3F`: only Paddle's own id pattern reaches it.
-    with true <- Regex.match?(@paddle_transaction_id, transaction_id) || {:error, :invalid_id},
+    with :ok <- validate_transaction_id(transaction_id),
          :ok <- spend_checkout_status_budget(user.id) do
       fetch_checkout_status(user.id, transaction_id)
     end
+  end
+
+  defp validate_transaction_id(id) do
+    if Regex.match?(@paddle_transaction_id, id), do: :ok, else: {:error, :invalid_id}
   end
 
   defp spend_checkout_status_budget(user_id) do
