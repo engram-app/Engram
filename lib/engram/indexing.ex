@@ -818,21 +818,12 @@ defmodule Engram.Indexing do
   def points_budget_ok?(user, note_id, planned_points, overshoot_pct \\ 0) do
     case Engram.Billing.effective_limit(user, :index_points_cap) do
       cap when is_integer(cap) and cap >= 0 ->
-        # All the user's rows minus this note's, not one `note_id !=` count:
-        # that filter is not in `idx_chunks_user`, so it read every row from
-        # the heap. The user count can be index-only on `idx_chunks_user`; the
-        # note count reads only the note's own rows (at most its point cap).
-        {:ok, [all, own]} =
+        # All the user's points (the counters) minus this note's rows (at
+        # most its point cap).
+        {:ok, {all, own}} =
           Repo.with_tenant(user.id, fn ->
-            Repo.one(
-              from(c in Chunk,
-                where: c.user_id == ^user.id,
-                select: [
-                  count(),
-                  subquery(from(o in Chunk, where: o.note_id == ^note_id, select: count()))
-                ]
-              )
-            )
+            {point_count(user.id),
+             Repo.one(from(o in Chunk, where: o.note_id == ^note_id, select: count()))}
           end)
 
         all - own + planned_points <= cap + div(cap * overshoot_pct, 100)
@@ -843,15 +834,49 @@ defmodule Engram.Indexing do
     end
   end
 
-  @doc "The account's search points: its `chunks` rows, one per Qdrant point."
+  @doc """
+  The account's search points: its `chunks` rows, one per Qdrant point.
+  Read from the per-vault `chunk_stats` counters (migration
+  20261025000200); a vault with no counter row yet is counted from its
+  chunks, as before.
+  """
   @spec point_count(Ecto.UUID.t()) :: non_neg_integer()
   def point_count(user_id) do
     {:ok, n} =
       Repo.with_tenant(user_id, fn ->
-        Repo.one(from(c in Chunk, where: c.user_id == ^user_id, select: count()))
+        points_by_user() |> where([v], v.user_id == ^user_id) |> Repo.one()
       end)
 
-    n
+    case n do
+      nil -> 0
+      {_user_id, points} -> points
+    end
+  end
+
+  @doc """
+  `{user_id, points}` per user with any vault, from the `chunk_stats`
+  counters with a per-vault `count(*)` where a vault has none yet. The one
+  source of the point count (`point_count/1`, the index budget sweep).
+  """
+  @spec points_by_user() :: Ecto.Query.t()
+  def points_by_user do
+    from(v in Engram.Vaults.Vault,
+      left_join: s in "chunk_stats",
+      on: s.vault_id == v.id,
+      group_by: v.user_id,
+      select:
+        {v.user_id,
+         type(
+           sum(
+             fragment(
+               "coalesce(?, (SELECT count(*) FROM chunks c WHERE c.vault_id = ?))",
+               s.points,
+               v.id
+             )
+           ),
+           :integer
+         )}
+    )
   end
 
   @doc "How many of the account's notes are on keyword-only search (a floor tier)."

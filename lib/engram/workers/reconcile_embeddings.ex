@@ -549,7 +549,12 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     tick = div(DateTime.to_unix(now), 300)
     per_user = fn query -> Repo.cross_tenant(fn -> repo.all(query) end) end
 
-    counts = per_user.(from(c in Chunk, group_by: c.user_id, select: {c.user_id, count()}))
+    # The per-vault counters (`Indexing.points_by_user/0`), not a GROUP BY
+    # over every chunk row; users with no points have nothing to budget.
+    counts =
+      Indexing.points_by_user()
+      |> per_user.()
+      |> Enum.reject(fn {_id, points} -> points == 0 end)
 
     # A floor note's promotion cost, and a merged note's natural chunk count
     # (`chunk_count` is set on a full-tier note only when it merged): the
@@ -664,7 +669,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       # full note at most its per-note cap,
       # and a queued promotion at its estimate.
       projected =
-        Enum.reduce(notes, Repo.aggregate(Chunk, :count), fn n, acc ->
+        Enum.reduce(notes, Indexing.point_count(user.id), fn n, acc ->
           cond do
             floored?(n) -> acc
             n.tier != nil -> acc - max(n.rows - Indexing.floor_points(n.span), 0)
