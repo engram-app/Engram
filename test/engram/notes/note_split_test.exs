@@ -190,6 +190,37 @@ defmodule Engram.Notes.NoteSplitTest do
       assert :done = NoteSplit.run_pass()
     end
 
+    # Readers serve the body row, so one that disagrees with notes (a write
+    # that kept its nonce leaves the trigger skipping it) is found, counted
+    # and re-copied by the next pass.
+    test "a drifted body row is counted and re-copied from notes", %{user: u, vault: v} do
+      note = write!(u, v, "drift.md", "drift")
+      id = Ecto.UUID.dump!(note.id)
+      good = row(note.id)["b_content"]
+
+      Repo.query!("UPDATE note_bodies SET content_ct = $2 WHERE note_id = $1", [
+        id,
+        <<1>> <> :crypto.strong_rand_bytes(40)
+      ])
+
+      ref = make_ref()
+      me = self()
+
+      :telemetry.attach(
+        "drift-#{inspect(ref)}",
+        [:engram, :note_split, :body_drift],
+        fn _, %{count: c}, _, _ -> if self() == me, do: send(me, {ref, c}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("drift-#{inspect(ref)}") end)
+
+      NoteSplit.run_pass()
+
+      assert_received {^ref, 1}
+      assert row(note.id)["b_content"] == good
+    end
+
     test "keyset-pages across batches without rescanning", %{user: u, vault: v} do
       notes = for p <- ~w(p1.md p2.md p3.md), do: write!(u, v, p, p)
 

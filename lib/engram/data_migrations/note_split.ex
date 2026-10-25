@@ -25,7 +25,10 @@ defmodule Engram.DataMigrations.NoteSplit do
 
   alias Engram.Backfill.TenantScan
   alias Engram.Notes.Note
+  alias Engram.Logger.Metadata
   alias Engram.Repo
+
+  require Logger
 
   @batch 1_000
   # Rows per pass: a pass is one bounded slice; the next run takes the rest.
@@ -56,6 +59,8 @@ defmodule Engram.DataMigrations.NoteSplit do
           touched =
             users
             |> Enum.map(fn user_id ->
+              Repo.with_tenant!(user_id, fn -> heal_drift(Repo, user_id) end)
+
               batches(batch, fn after_id ->
                 Repo.with_tenant!(user_id, fn ->
                   touch(Repo, needing(user_id, after_id, batch))
@@ -73,6 +78,8 @@ defmodule Engram.DataMigrations.NoteSplit do
           {touched, left?}
 
         maintenance ->
+          heal_drift(maintenance, nil)
+
           {batches(batch, fn after_id -> touch(maintenance, needing(nil, after_id, batch)) end),
            fn -> left?(maintenance, nil) end}
       end
@@ -114,6 +121,78 @@ defmodule Engram.DataMigrations.NoteSplit do
       )
 
     if after_id, do: where(q, [n], field(n, :id) > type(^after_id, Ecto.UUID)), else: q
+  end
+
+  # Readers take the body from `note_bodies` (`Engram.Notes.NoteBody`), so a
+  # body row that disagrees with its notes row would be served. The trigger
+  # rewrites a body column only when its nonce changes, so a write that
+  # changed a ciphertext but kept its nonce (no writer does; a restore or a
+  # hand edit could) leaves the body stale. Every pass compares the nonce
+  # fields (13-byte slices, no de-TOAST) and the head; a drifted body row is
+  # deleted, which makes the note `unfixed`, so the same pass re-copies it
+  # through the trigger. Reads fall back to the notes columns in between.
+  # Counted (`[:engram, :note_split, :body_drift]`) and logged: contract may
+  # not drop the notes columns while this is ever non-zero.
+  defp heal_drift(repo, user_id) do
+    drifted =
+      from(b in "note_bodies",
+        join: n in "notes",
+        on: n.id == b.note_id,
+        where: n.kind == "note",
+        where:
+          fragment(
+            """
+            substring(? FROM 1 FOR 13) IS DISTINCT FROM (CASE WHEN ? IS NULL THEN NULL
+              WHEN ? IS NULL THEN substring(? FROM 1 FOR 13)
+              WHEN length(?) = 13 THEN ? ELSE '\\x00'::bytea || ? END)
+            OR substring(? FROM 1 FOR 13) IS DISTINCT FROM (CASE WHEN ? IS NULL THEN NULL
+              WHEN ? IS NULL THEN substring(? FROM 1 FOR 13)
+              WHEN length(?) = 13 THEN ? ELSE '\\x00'::bytea || ? END)
+            OR ? IS DISTINCT FROM (CASE WHEN ? ~ '^[A-Za-z0-9_-]{43}$'
+              THEN decode(translate(?, '-_', '+/') || '=', 'base64') END)
+            """,
+            b.content_ct,
+            n.content_ciphertext,
+            n.content_nonce,
+            n.content_ciphertext,
+            n.content_nonce,
+            n.content_nonce,
+            n.content_nonce,
+            b.crdt_ct,
+            n.crdt_state_ciphertext,
+            n.crdt_state_nonce,
+            n.crdt_state_ciphertext,
+            n.crdt_state_nonce,
+            n.crdt_state_nonce,
+            n.crdt_state_nonce,
+            b.crdt_head,
+            n.crdt_head,
+            n.crdt_head
+          ),
+        select: b.note_id
+      )
+
+    drifted =
+      if user_id,
+        do: where(drifted, [_b, n], n.user_id == type(^user_id, Ecto.UUID)),
+        else: drifted
+
+    {count, _} =
+      repo.delete_all(
+        from(b in "note_bodies", where: b.note_id in subquery(drifted)),
+        []
+      )
+
+    :telemetry.execute([:engram, :note_split, :body_drift], %{count: count}, %{})
+
+    if count > 0 do
+      Logger.warning(
+        "note_split: #{count} note body row(s) disagreed with notes; re-copying",
+        Metadata.with_category(:warning, :sync, count: count)
+      )
+    end
+
+    count
   end
 
   # Any row still needing work, locked or not: no lock, so a held row counts.
