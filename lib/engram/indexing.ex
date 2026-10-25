@@ -2028,11 +2028,10 @@ defmodule Engram.Indexing do
             maintenance_tokens(total - charged)
             {true, plan, nil}
 
-          # ponytail: a refused rebuild re-plans sparse whole, since its
-          # vectors are sourced after planning (`priced_rebuild/6`). Make it
-          # partial too if Free rebuilds are ever refused in practice.
+          # A refused rebuild: `priced_rebuild/6` keeps what it already
+          # sourced dense and re-plans only the texts it would send.
           Keyword.get(opts, :rebuild, false) ->
-            {false, plan_chunks(chunks, rows, content_key, false), nil}
+            {false, {:refused, plan}, nil}
 
           true ->
             partial_plan(rows, chunks, content_key, plan, opts)
@@ -2149,16 +2148,17 @@ defmodule Engram.Indexing do
   defp text_charges(plan, rows) do
     bytes = changed_bytes_per_text(plan, rows)
 
-    hit? =
-      case plan do
-        %{cache: %{keys: keys, hits: hits}} -> Enum.map(keys, &Map.has_key?(hits, &1))
-        _ -> Enum.map(bytes, fn _ -> false end)
-      end
-
-    Enum.zip_with(bytes, hit?, fn b, hit ->
+    Enum.zip_with(bytes, cache_hits(plan), fn b, hit ->
       if hit, do: 0, else: UsageMeters.estimate_tokens(b)
     end)
   end
+
+  # Per sent text, in `embed_texts/1` order: whether the vector cache holds
+  # it (all false without the cache).
+  defp cache_hits(%{cache: %{keys: keys, hits: hits}}),
+    do: Enum.map(keys, &Map.has_key?(hits, &1))
+
+  defp cache_hits(plan), do: Enum.map(sent_entry_indexes(plan), fn _ -> false end)
 
   # What `retain/1` holds for a pass: the vectors under the key its retry will
   # look up. A partial pass is keyed by the full plan, `<<>>` marking each
@@ -2218,12 +2218,46 @@ defmodule Engram.Indexing do
     do: {:ok, dense?, plan, retained}
 
   # Priced like any pass (the reservation is maintenance for a dense note),
-  # over only what is left to send. A refusal re-plans sparse-only, and that
-  # plan is a rebuild too.
+  # over only what is left to send. A refusal (a Free note parked on its
+  # bucket, #2197) keeps every vector it sourced: only the chunks it would
+  # send are re-planned keyword-only, the rebuild runs again over that (now
+  # sending nothing), and the deferred tokens are its park's need. It used
+  # to re-plan the whole note sparse, which deleted the dense vectors the
+  # rebuild had just copied for free.
   defp priced_rebuild(note, rows, chunks, ck, plan, opts) do
     case Repo.with_tenant!(note.user_id, fn -> price(note, rows, chunks, ck, plan, opts) end) do
-      {false, sparse, nil} ->
-        rebuild_sources(note, false, Map.put(sparse, :rebuild, {rows, chunks}), nil, ck, opts)
+      {false, {:refused, priced}, nil} ->
+        # A vector cache hit costs nothing and stays dense; every other
+        # sent text waits, so the re-run sends Voyage nothing.
+        deferred =
+          for {i, cost, false} <-
+                Enum.zip([
+                  sent_entry_indexes(priced),
+                  text_charges(priced, rows),
+                  cache_hits(priced)
+                ]),
+              do: {i, cost}
+
+        costs = Enum.map(deferred, &elem(&1, 1))
+        skip = MapSet.new(deferred, &elem(&1, 0))
+
+        kept =
+          chunks
+          |> Enum.with_index()
+          |> Enum.map(fn {c, i} ->
+            if MapSet.member?(skip, i), do: Map.put(c, :sparse_only, true), else: c
+          end)
+
+        replan = kept |> plan_chunks(rows, ck, true) |> Map.put(:rebuild, {rows, kept})
+
+        with {:ok, dense?, plan, retained} <- rebuild_sources(note, true, replan, nil, ck, opts) do
+          {:ok, dense?,
+           Map.merge(plan, %{
+             partial?: deferred != [],
+             deferred_tokens: Enum.sum(costs),
+             next_deferred_tokens: List.first(costs)
+           }), retained}
+        end
 
       {dense?, plan, retained} ->
         {:ok, dense?, plan, retained}

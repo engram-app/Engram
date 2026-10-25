@@ -292,6 +292,41 @@ defmodule Engram.IndexingV5RebuildTest do
     assert est_b > est_a and sent_b == 0
   end
 
+  # #2197: a refused rebuild (a Free note parked on an empty bucket) keeps
+  # every vector it copied and defers only what it would have sent, with
+  # that need recorded. It used to re-plan the whole note sparse (every
+  # copied dense vector deleted) and report a need of 0.
+  for cache? <- [false, true] do
+    test "a refused rebuild keeps its copied vectors and defers the rest (cache #{cache?})",
+         ctx do
+      Application.put_env(:engram, :vector_cache_enabled, unquote(cache?))
+      on_exit(fn -> Application.delete_env(:engram, :vector_cache_enabled) end)
+
+      note = indexed(ctx)
+
+      changed = %{
+        note
+        | content: String.replace(sections(3), "section2 body", "section2 new body")
+      }
+
+      parent = self()
+
+      assert {:ok, _count, 0, false} =
+               Indexing.index_note_with_usage(changed, ctx.vault, ctx.user,
+                 rebuild: true,
+                 reserve_tokens: fn _ -> false end,
+                 in_commit: fn _count, _dense?, pass -> send(parent, {:pass, pass}) end
+               )
+
+      assert embedded() == []
+      assert_received {:pass, %{deferred_tokens: need}}
+      assert need > 0
+
+      dense = dense_by_position(changed, ctx.store)
+      assert Enum.count(dense, fn {_pos, d} -> d != nil end) == 2
+    end
+  end
+
   test "a capped group of all-dense members gets a unit-norm mean and 0 tokens", ctx do
     note = indexed(ctx, 200)
 

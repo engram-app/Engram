@@ -178,10 +178,19 @@ defmodule Engram.Workers.EmbedNote do
           #
           # While the v5 rebuild is `on`, its tokens go through the ledger
           # (`rebuild: true`, see `index/5`).
+          #
+          # A note waiting in the Free bucket queue that the wake did not
+          # send (no `budget_cap`) keeps its place (#2197): rebuilt without
+          # spending the bucket, its dense vectors kept and the rest
+          # keyword-only, then parked again with its need.
           version_stale?(note) ->
+            queued = note.embed_budget_parked_at != nil and is_nil(args["budget_cap"])
+
             load_for_run(
               note,
-              Indexing.version_rebuild_opts(note) ++ [rebuild: Rebuild.mode() == :on]
+              Indexing.version_rebuild_opts(note) ++
+                [rebuild: Rebuild.mode() == :on] ++
+                if(queued and note.dense_indexed_hash != hash, do: [budget_spent: true], else: [])
             )
 
           # Holds more chunks than its tier's per-note cap (ReconcileEmbeddings
@@ -659,7 +668,7 @@ defmodule Engram.Workers.EmbedNote do
   # A note parked before the queue existed has no need recorded: the whole
   # note is the upper bound.
   defp park_over_budget(%Note{} = note, user) do
-    need = note.embed_budget_need || UsageMeters.estimate_tokens(note.content_ciphertext || "")
+    need = park_need(note)
 
     {:ok, _} =
       Repo.with_tenant(note.user_id, fn ->
@@ -670,6 +679,11 @@ defmodule Engram.Workers.EmbedNote do
 
     newly_parked(note, user)
   end
+
+  # The need a park records when the pass priced nothing: the one already
+  # recorded, else the whole note (an upper bound).
+  defp park_need(%Note{} = note),
+    do: note.embed_budget_need || UsageMeters.estimate_tokens(note.content_ciphertext || "")
 
   # Logged once, when a note joins the queue, not on every pass that finds it
   # still waiting.
@@ -1096,9 +1110,17 @@ defmodule Engram.Workers.EmbedNote do
             embed_retry_after: @parked_until_edited
           ] ++ @queue_clear
 
+        # A park always records a real need: a pass that deferred nothing
+        # it priced keeps the note's own (#2197: 0 woke it on the next tick
+        # and spent the bucket it was parked to protect).
         true ->
-          need = Map.get(pass, :deferred_tokens) || 0
-          next = Map.get(pass, :next_deferred_tokens)
+          need =
+            case Map.get(pass, :deferred_tokens) do
+              tokens when is_integer(tokens) and tokens > 0 -> tokens
+              _ -> park_need(note)
+            end
+
+          next = Map.get(pass, :next_deferred_tokens) || note.embed_budget_next
           [dense_indexed_hash: nil, embed_model: nil] ++ budget_park_set(note, need, next)
       end
 
