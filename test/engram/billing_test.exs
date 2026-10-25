@@ -1530,6 +1530,7 @@ defmodule Engram.BillingTest do
             {409, "subscription_locked_processing"},
             {409, "subscription_locked_consent_review_period"},
             {400, "subscription_locked_pending_changes"},
+            {400, "subscription_outstanding_pending_refund"},
             {409, nil}
           ] do
         expect_history("sub_lock")
@@ -1538,6 +1539,9 @@ defmodule Engram.BillingTest do
         expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ ->
           {:error, {:paddle_error, status, body}}
         end)
+
+        # Retryable: the follow-up read that settles a permanent 4xx never runs.
+        expect(Engram.Paddle.ClientMock, :get_subscription, 0, fn _ -> {:ok, %{}} end)
 
         assert {:error, {:adjustment_cancel_failed, {:paddle_error, ^status, _}}} =
                  Billing.upsert_from_paddle_event(

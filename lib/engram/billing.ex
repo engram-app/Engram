@@ -1050,6 +1050,12 @@ defmodule Engram.Billing do
   defp retryable_cancel_error?(_status, %{"error" => %{"code" => "subscription_locked_" <> _}}),
     do: true
 
+  # Clears once Paddle decides the pending refund, so waiting works.
+  defp retryable_cancel_error?(_status, %{
+         "error" => %{"code" => "subscription_outstanding_pending_refund"}
+       }),
+       do: true
+
   defp retryable_cancel_error?(_status, _body), do: false
 
   # Any other 4xx never succeeds on retry. Usually Paddle has already
