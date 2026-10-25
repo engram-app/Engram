@@ -19,17 +19,17 @@ defmodule Engram.Indexing.ChunkRows do
 
   ## Lock order
 
-  Every writer of a note's chunks takes, in this order: the note's `notes`
-  row, its `chunks` rows, then its `note_index_state` row. `commit_index`
-  locks the note (`content_current!`), writes the chunks, recounts, and
-  only then stamps (the stamps reach `note_index_state` through the notes
-  trigger); `delete_note_index` and the resparse write lock the note first
-  (`lock_notes!/2`); a note delete's FK cascade starts at the note; the
-  `NoteIndexState` ledger locks notes, then reads chunks and writes state.
-  `CleanupVault`'s chunk batches take no note lock but still go chunks
-  before state. With the note first wherever it is taken, two writers on
-  one note queue on it, and no path holds the state row while waiting for
-  chunk rows, so no cycle exists.
+  Every writer of a note's chunks or counters locks the note's `notes` row
+  first. `commit_index` locks it (`content_current!`), writes the chunks,
+  recounts, and only then stamps (the stamps reach `note_index_state`
+  through the notes trigger); `delete_note_index`, the resparse write and
+  each `CleanupVault` chunk batch lock it with `lock_notes!/2`; a note
+  delete's FK cascade starts at the note; the `NoteIndexState` ledger locks
+  notes (`skip_locked`), then reads chunks and writes state; a plain notes
+  UPDATE (the DEK rotation's reuse clear included) holds the note before the
+  trigger takes state. After the note, chunks and state may come in either
+  order (the rotation's clear takes state, then chunks): the note lock
+  already queues every other writer of that note, so no cycle exists.
 
   Its own module so its raw statements (the per-row-values UPDATE and the
   recount, shapes `update_all` cannot express) are the only raw SQL here,
