@@ -64,6 +64,36 @@ defmodule Engram.MCP.HandlersPartialReadTest do
     assert only["content"] == big
   end
 
+  # The cut skips, it does not stop: a note past the budget is reported, and a
+  # smaller note after it still comes back. The big note is incompressible so
+  # its STORED size is over the budget too (the one-statement read cuts on
+  # stored sizes, then carries on greedily).
+  test "get_notes skips a note over the budget and still returns a smaller one after it", %{
+    user: u,
+    vault: v
+  } do
+    big = :crypto.strong_rand_bytes(div(Handlers.get_notes_budget() * 9, 8)) |> Base.encode64()
+
+    for {p, content} <- [
+          {"S1.md", "# S1\n\nsmall one"},
+          {"Big.md", big},
+          {"S2.md", "# S2\n\nsmall two"}
+        ] do
+      {:ok, _} =
+        Notes.upsert_note(u, v, %{"path" => p, "content" => content, "mtime" => 1.0},
+          actor: "api"
+        )
+    end
+
+    assert {:ok, _text, %{"notes" => [s1, b, s2]}} =
+             get(u, v, %{"paths" => ["S1.md", "Big.md", "S2.md"]})
+
+    assert s1["content"] =~ "small one"
+    refute Map.has_key?(b, "content")
+    assert b["found"] == true and b["error"] =~ "own call"
+    assert s2["content"] =~ "small two"
+  end
+
   # Review Focus 5
   test "section returns only that section, through fences, stopping at the next same-level heading",
        %{user: u, vault: v} do

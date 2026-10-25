@@ -5035,7 +5035,7 @@ defmodule Engram.Notes do
         ord2__: dynamic([n], n.id)
       })
 
-    {notes, total} = budget_cut(page, user, max_bytes)
+    {notes, total, _spent} = budget_cut(page, user, max_bytes)
     fits = length(notes)
     {notes, fits <= limit and total > fits}
   end
@@ -5050,8 +5050,8 @@ defmodule Engram.Notes do
   # de-TOASTed, and `octet_length` reads only varlena headers. The window
   # runs over `page` as a subquery, so a LIMIT in it bounds the scan.
   #
-  # Returns `{notes, total}`: the kept rows in order, and how many `page`
-  # matched.
+  # Returns `{notes, total, spent}`: the kept rows in order, how many `page`
+  # matched, and the kept rows' summed stored size.
   defp budget_cut(page, user, max_bytes) do
     windowed =
       from(p in subquery(page),
@@ -5074,8 +5074,8 @@ defmodule Engram.Notes do
     {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
 
     extras = [:size__, :ord1__, :ord2__, :run__, :rn__, :total__]
-    total = Enum.reduce(rows, 0, fn row, _ -> row.total__ end)
-    {Enum.map(rows, &elem(NoteBody.to_note(&1, extras), 0)), total}
+    {total, spent} = Enum.reduce(rows, {0, 0}, fn row, _ -> {row.total__, row.run__} end)
+    {Enum.map(rows, &elem(NoteBody.to_note(&1, extras), 0)), total, spent}
   end
 
   @doc """
@@ -5085,8 +5085,14 @@ defmodule Engram.Notes do
   decrypts the note on demand (so a caller holds one plaintext at a time:
   stored sizes are compressed, plaintext can be far larger), or answers
   `nil` for a path with no live note and `:over_budget` for a note past the
-  budget, which is not read. Only a call that overflows the budget pays a
-  second, narrow statement to tell those two apart.
+  budget, which is not read.
+
+  The cut in that statement is a prefix (`budget_cut/3`). A call whose
+  notes do not all fit then continues greedily, as the per-path reads did: a
+  note past the budget is skipped and a smaller one after it still ships if
+  it fits. That costs two more statements in the same transaction, and only
+  on overflow: one narrow read of the unread paths' ids and stored sizes,
+  one read of the notes the greedy pass picks.
 
   Each path's own read used to make a 20-path call 20 statements.
   """
@@ -5115,31 +5121,71 @@ defmodule Engram.Notes do
         ord2__: dynamic([n], n.id)
       })
 
-    {notes, total} = budget_cut(page, user, max_bytes)
+    {notes, total, spent} = budget_cut(page, user, max_bytes)
     by_hmac = Map.new(notes, &{&1.path_hmac, &1})
 
-    # Past the cut: which of the unread paths hold a note (over budget) and
-    # which hold none.
-    over =
-      if total > length(notes) do
-        unread =
-          for {path, hmac} <- Enum.zip(paths, hmacs), not is_map_key(by_hmac, hmac), do: path
-
-        case note_ids_at(user, vault, unread) do
-          %{} = ids -> ids
-          {:error, _} -> %{}
-        end
-      else
-        %{}
-      end
+    {by_hmac, over} =
+      if total > length(notes),
+        do: past_the_cut(user, vault, Enum.zip(paths, hmacs), by_hmac, spent, max_bytes, ids?),
+        else: {by_hmac, MapSet.new()}
 
     Enum.zip_with(paths, hmacs, fn path, hmac ->
       case by_hmac do
-        %{^hmac => note} -> {path, fn -> decrypt_or_raise!(note, user) end}
-        _ when is_map_key(over, path) -> {path, fn -> :over_budget end}
-        _ -> {path, fn -> nil end}
+        %{^hmac => note} ->
+          {path, fn -> decrypt_or_raise!(note, user) end}
+
+        _ ->
+          if MapSet.member?(over, hmac),
+            do: {path, fn -> :over_budget end},
+            else: {path, fn -> nil end}
       end
     end)
+  end
+
+  # The unread paths, in request order: each note that still fits the budget
+  # (stored sizes, `spent` so far) is read; the rest are over budget. Returns
+  # the read notes merged into `by_hmac`, and the over-budget HMACs.
+  defp past_the_cut(user, vault, pairs, by_hmac, spent, max_bytes, ids?) do
+    unread = for {_path, hmac} <- pairs, not is_map_key(by_hmac, hmac), uniq: true, do: hmac
+
+    sizes =
+      from(n in live_notes(user, vault, ids?), where: ^Keys.in_any(:path, unread, ids?))
+      |> NoteBody.join()
+      |> select([n], %{id: n.id, hmac: n.path_hmac})
+      |> select_merge(^%{size: NoteBody.byte_length(:content)})
+
+    {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(sizes) end)
+    by_unread = Map.new(rows, &{&1.hmac, &1})
+
+    {pick, over, _spent} =
+      Enum.reduce(unread, {[], MapSet.new(), spent}, fn hmac, {pick, over, spent} ->
+        case by_unread do
+          %{^hmac => %{size: size, id: id}} when spent + size <= max_bytes ->
+            {[id | pick], over, spent + size}
+
+          %{^hmac => _} ->
+            {pick, MapSet.put(over, hmac), spent}
+
+          _ ->
+            {pick, over, spent}
+        end
+      end)
+
+    read =
+      if pick == [] do
+        []
+      else
+        {:ok, notes} =
+          Repo.with_tenant(user.id, fn ->
+            Repo.all(
+              NoteBody.select_note(from(n in live_notes(user, vault, ids?), where: n.id in ^pick))
+            )
+          end)
+
+        notes
+      end
+
+    {Enum.into(read, by_hmac, &{&1.path_hmac, &1}), over}
   end
 
   # Resolves the authority for every note on this page whose façade lags,
