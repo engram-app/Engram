@@ -1,4 +1,4 @@
-// i18n-core 6c1c0909
+// i18n-core 3aeef01b
 // The translategemma pipeline shared by the web app, the Obsidian plugin and the
 // marketing site: prompts, the checks an answer must pass, and catalog state.
 // Canonical copy: engram-app/Engram frontend/src/i18n/core/. The other repos
@@ -74,9 +74,11 @@ const SYMBOL = /\p{Extended_Pictographic}|[✓✕✔✖•]/gu;
 // A middle dot that separates joined parts ("{count} files · 12 MB"), not one
 // inside a word ("en·gram", which a language may spell "engrama").
 const SEPARATOR_DOT = /(?:^|[^\p{L}])·|·(?:[^\p{L}]|$)/u;
-// Currency signs. The model localizes the currency: "$7" came back as "7 €" in de
-// and it, a false price. Spelling the source's currency out ("7ドル") is fine.
-const CURRENCY = /\p{Sc}/gu;
+// Currency signs, with up to three capitals glued on, so "R$" (real) and "NT$"
+// (Taiwan dollar) are not taken for "$". The model localizes the currency: "$7"
+// came back as "7 €" in de and it, a false price. "US$" for "$" and spelling the
+// source's currency out ("7ドル") are fine; a fullwidth "＄" is not.
+const CURRENCY = /\p{Lu}{0,3}\p{Sc}/gu;
 const LEAD = /^[ \t]*/u;
 const TRAIL = /[ \t]*$/u;
 
@@ -505,7 +507,9 @@ function translator<T extends string>(profile: Profile<T>) {
 			// Both ways: a label keeps its emoji, and a sentence does not gain one.
 			symbols: symbols(src) !== symbols(out),
 			edges: !spaceless && (lead(out) !== lead(src) || trail(out) !== trail(src)),
-			currency: (out.match(CURRENCY) ?? []).some((c) => !src.includes(c)),
+			currency: (out.match(CURRENCY) ?? []).some(
+				(c) => !(src.includes(c) || (c === "US$" && src.includes("$"))),
+			),
 			length: out.length > 3 * src.length + 15,
 			register: Boolean(formal?.test(out)),
 			// Only sentences: "ID:", "A → Z" or a bare "{status}: {message}" may stay Latin.
