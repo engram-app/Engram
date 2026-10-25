@@ -168,4 +168,15 @@ defmodule Engram.DataCase do
       end)
     end)
   end
+
+  @doc """
+  `note` as a prior full pass leaves it: stamped at
+  `Engram.Rebuild.target_versions/0`, as `EmbedNote` stamps it. A note
+  indexed straight through `Engram.Indexing` carries no stamp, so its next
+  index reuses no point (#2199); a test of reuse indexes `stamped(note)`.
+  """
+  def stamped(note) do
+    {chunker, keyword} = Engram.Rebuild.target_versions()
+    %{note | chunker_version: chunker, keyword_version: keyword}
+  end
 end

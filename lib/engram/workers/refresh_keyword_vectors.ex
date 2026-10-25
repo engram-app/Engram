@@ -83,7 +83,7 @@ defmodule Engram.Workers.RefreshKeywordVectors do
   # Only an OLDER (or missing) stamp is the chunker rebuild's. A newer one,
   # after a rollback, is left alone by the rebuild, so it is ours to report.
   # Against `Rebuild.target_versions/0`, as every version check.
-  defp stale_chunker?(v), do: is_nil(v) or v < elem(Engram.Rebuild.target_versions(), 0)
+  defp stale_chunker?(v), do: Engram.Rebuild.behind?(v, elem(Engram.Rebuild.target_versions(), 0))
 
   # Every point now carries the current keyword encoding, so the note leaves
   # ReconcileEmbeddings' keyword sweep. Stamped with the TARGET version (the

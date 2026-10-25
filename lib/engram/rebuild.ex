@@ -181,6 +181,28 @@ defmodule Engram.Rebuild do
   end
 
   @doc """
+  True when a `chunker_version` or `keyword_version` stamp is behind `target`.
+  NULL predates the stamp (or was cleared to force a rebuild), so it is
+  behind; a NEWER stamp is current, so a rollback rebuilds nothing.
+  """
+  @spec behind?(integer() | nil, pos_integer()) :: boolean()
+  def behind?(nil, _target), do: true
+  def behind?(version, target), do: version < target
+
+  @doc """
+  True when either of `note`'s `{chunker, keyword}` stamps is behind
+  `target_versions/0`: its points were not all built at the target, so none
+  may be kept in place (#2199).
+  """
+  @spec stamp_behind?(map()) :: boolean()
+  def stamp_behind?(note) do
+    {chunker, keyword} = target_versions()
+
+    behind?(Map.get(note, :chunker_version), chunker) or
+      behind?(Map.get(note, :keyword_version), keyword)
+  end
+
+  @doc """
   The vault's `avgdl` pinned by the dry run, or nil. Cached per node: every
   keyword encode reads it while `on`.
   """

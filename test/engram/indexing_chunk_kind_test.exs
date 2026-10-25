@@ -80,7 +80,8 @@ defmodule Engram.IndexingChunkKindTest do
       )
 
     {:ok, note} = Crypto.maybe_decrypt_note_fields(note, ctx.user)
-    note
+    # As a prior EmbedNote pass leaves it, so reuse applies (#2199).
+    stamped(note)
   end
 
   defp drain(tag) do

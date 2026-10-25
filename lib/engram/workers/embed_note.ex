@@ -459,12 +459,10 @@ defmodule Engram.Workers.EmbedNote do
     not chunker_stale?(note.chunker_version, chunker) and model_stale?(note, paid?)
   end
 
-  # Explicit nil: Erlang orders numbers below atoms, so `nil < 3` is false.
-  # A newer chunker counts as current (see `IndexVersions.stale_dynamic/0`).
-  # The target is `Rebuild.target_versions/0`'s: the pin while the v5
-  # rebuild is not `on`, so a stamp bump alone rebuilds nothing.
-  defp chunker_stale?(nil, _target), do: true
-  defp chunker_stale?(version, target), do: version < target
+  # `Rebuild.behind?/2`: nil is stale, a newer chunker is current. The
+  # target is `Rebuild.target_versions/0`'s: the pin while the v5 rebuild is
+  # not `on`, so a stamp bump alone rebuilds nothing.
+  defp chunker_stale?(version, target), do: Rebuild.behind?(version, target)
 
   defp model_stale?(note, paid?) do
     note.dense_indexed_hash == note.content_hash and

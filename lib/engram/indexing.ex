@@ -1938,21 +1938,33 @@ defmodule Engram.Indexing do
     if Keyword.get(opts, :rebuild, false),
       do:
         {dense?,
-         chunks |> plan_chunks(rows, content_key, dense?) |> Map.put(:rebuild, {rows, chunks}),
-         nil},
+         chunks
+         |> plan_chunks(rows, content_key, dense?, true)
+         |> Map.put(:rebuild, {rows, chunks}), nil},
       else: budget_plan(note, rows, chunks, content_key, dense?, opts)
   end
 
-  defp budget_plan(_note, rows, chunks, content_key, false, _opts),
-    do: {false, plan_chunks(chunks, rows, content_key, false), nil}
+  defp budget_plan(note, rows, chunks, content_key, false, _opts),
+    do: {false, plan_chunks(chunks, rows, content_key, false, reuse_points?(note)), nil}
 
   #
   # The user is charged for the chunks whose content changed, not for how we
   # grouped them (adversarial V3): a re-embedded merged group meters only its
   # members whose own fingerprint no stored row or member has. The rest of
   # what Voyage is sent is our maintenance, `[:engram, :embed, :maintenance]`.
-  defp budget_plan(note, rows, chunks, content_key, true, opts),
-    do: price(note, rows, chunks, content_key, plan_chunks(chunks, rows, content_key, true), opts)
+  defp budget_plan(note, rows, chunks, content_key, true, opts) do
+    plan = plan_chunks(chunks, rows, content_key, true, reuse_points?(note))
+    price(note, rows, chunks, content_key, plan, opts)
+  end
+
+  # In-place reuse keeps a point's vectors as they were built, keyword
+  # vector included, and the pass then stamps the note at the target. So a
+  # note stamped behind the target reuses nothing (#2199): every point is
+  # rebuilt, with dense vectors from the vector cache where it has them and
+  # the charge still counting only changed chunks (`with_charge/3` prices
+  # against `rows`). A v5 rebuild writes every point fresh anyway and passes
+  # `true`: its reuse entries only name the old point to copy a vector from.
+  defp reuse_points?(note), do: not Rebuild.stamp_behind?(note)
 
   defp price(note, rows, chunks, content_key, plan, opts) do
     texts = embed_texts(plan)
@@ -1976,7 +1988,7 @@ defmodule Engram.Indexing do
           # vectors are sourced after planning (`priced_rebuild/6`). Make it
           # partial too if Free rebuilds are ever refused in practice.
           Keyword.get(opts, :rebuild, false) ->
-            {false, plan_chunks(chunks, rows, content_key, false), nil}
+            {false, plan_chunks(chunks, rows, content_key, false, true), nil}
 
           true ->
             partial_plan(rows, chunks, content_key, plan, opts)
@@ -2074,7 +2086,7 @@ defmodule Engram.Indexing do
     |> Enum.map(fn {chunk, i} ->
       if MapSet.member?(skip, i), do: Map.put(chunk, :sparse_only, true), else: chunk
     end)
-    |> plan_chunks(rows, content_key, true)
+    |> plan_chunks(rows, content_key, true, plan.reuse?)
     |> Map.merge(%{
       partial?: deferred != [],
       deferred_tokens: deferred |> Enum.map(&elem(&1, 1)) |> Enum.sum(),
@@ -2747,7 +2759,11 @@ defmodule Engram.Indexing do
   # A chunk with no match under the pass model's fingerprint may keep a point
   # made by a higher-tier model (`reuse_models/0`): its `context_hmac` then
   # names THAT model, so the row stays truthful about the vector it holds.
-  defp plan_chunks(chunks, rows, content_key, dense?) do
+  #
+  # `reuse?` false matches nothing: every chunk is embedded and every stored
+  # point is stale (`reuse_points?/1`, #2199). Required, so no caller can
+  # forget it; the plan carries it for a re-plan of the same pass.
+  defp plan_chunks(chunks, rows, content_key, dense?, reuse?) do
     alts =
       reuse_models()
       |> Enum.map(&plan_fingerprints(content_key, chunks, dense?, &1))
@@ -2770,7 +2786,7 @@ defmodule Engram.Indexing do
     # cleaned up, so it stays in `existing` — it just can never be matched.
     by_hmac =
       existing
-      |> Enum.reject(fn {hmac, _point_id, _tokens} -> is_nil(hmac) end)
+      |> Enum.reject(fn {hmac, _point_id, _tokens} -> is_nil(hmac) or not reuse? end)
       |> Enum.group_by(
         fn {hmac, _point_id, _tokens} -> hmac end,
         fn {_hmac, point_id, tokens} -> {point_id, tokens} end
@@ -2798,6 +2814,7 @@ defmodule Engram.Indexing do
     %{
       entries: entries,
       dense?: dense?,
+      reuse?: reuse?,
       reused_point_ids: reused,
       stale_point_ids: Enum.map(existing, fn {_h, id, _t} -> id end) -- reused
     }
@@ -3088,7 +3105,8 @@ defmodule Engram.Indexing do
 
     # As `prepare_index/4` plans it: dense unless the opts say otherwise.
     dense? = Keyword.get(version_rebuild_opts(note), :dense, true)
-    plan = plan_chunks(capped, rows, content_key, dense?)
+    # A rebuild estimate: the rebuild copies a reused point's vector.
+    plan = plan_chunks(capped, rows, content_key, dense?, true)
 
     # C13 averages each member's OWN stored vector: a fingerprint that lives
     # only as a member of a merged point has none, so it is not counted, and
