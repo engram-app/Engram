@@ -9,8 +9,10 @@ interface TimePeriodLike {
 	interval: string;
 }
 
-// Paddle-supported zero-decimal currencies — amounts are already whole units.
-// https://developer.paddle.com/concepts/payment-methods/currencies
+// Paddle-supported zero-decimal currencies (decimal_places 0 in GET /currencies):
+// amounts are already whole units. Paddle, not Intl, is the authority here:
+// Intl calls HUF and COP zero-decimal, Paddle bills both with two.
+// https://developer.paddle.com/concepts/sell/supported-currencies
 const ZERO_DECIMAL_CURRENCIES = new Set(["JPY", "KRW", "VND", "CLP"]);
 
 const INTERVAL_LABELS: Record<string, { noun: MsgKey; adjective: MsgKey }> = {
@@ -126,6 +128,23 @@ export function parseAmount(raw: string, currencyCode: string): number {
 		return value;
 	}
 	return value / 100;
+}
+
+/**
+ * Formats a raw Paddle amount (lowest denomination string, e.g. "2000") for
+ * display: `parseAmount` then `formatMoney`. Null when the amount or currency
+ * is missing or the amount is not a number, so callers can show a placeholder.
+ */
+export function formatMinorUnits(
+	raw: string | null | undefined,
+	currencyCode: string | null | undefined,
+	locale?: string,
+): string | null {
+	if (raw === null || raw === undefined || currencyCode === null || currencyCode === undefined) {
+		return null;
+	}
+	const amount = parseAmount(raw, currencyCode);
+	return Number.isNaN(amount) ? null : formatMoney(amount, currencyCode, locale);
 }
 
 /**
