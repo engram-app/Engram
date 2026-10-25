@@ -804,188 +804,37 @@ defmodule Engram.Billing do
 
   # ── Webhook Event Processing ───────────────────────────────────
 
+  @subscription_events ~w(subscription.created subscription.activated subscription.updated
+                          subscription.past_due subscription.canceled)
+
   @doc """
   Upsert a Subscription row from a verified Paddle notification.
 
-  Handles `subscription.created` (insert), `subscription.activated`,
-  `subscription.updated`, `subscription.past_due`, and
-  `subscription.canceled` (update by paddle_subscription_id). All other
-  event types are accepted but ignored.
+  Handles `subscription.created`, `subscription.activated`,
+  `subscription.updated`, `subscription.past_due` and `subscription.canceled`.
+  All other event types are accepted but ignored.
+
+  Paddle delivers at-least-once and out of order, so every subscription event:
+
+    * is skipped as `{:ok, :stale}` when its `occurred_at` is older than the
+      row's `last_event_occurred_at` (a delayed `subscription.updated` must
+      not re-grant a canceled user), and stamps that column when applied;
+    * creates the row from `custom_data.user_id` (the `subscription.created`
+      path) when no row holds its `paddle_subscription_id` yet, so an update
+      or cancel delivered before the create is not dropped.
   """
-  def upsert_from_paddle_event(%{"event_type" => "subscription.created", "data" => data}) do
-    case extract_user_id(data) do
-      {:ok, user_id} ->
-        base_attrs = %{
-          user_id: user_id,
-          paddle_customer_id: data["customer_id"],
-          paddle_subscription_id: data["id"],
-          status: data["status"],
-          current_period_end: parse_period_end(data),
-          custom_data: data["custom_data"] || %{}
-        }
+  def upsert_from_paddle_event(%{"event_type" => type, "data" => data} = event)
+      when type in @subscription_events do
+    occurred_at = event_occurred_at(event)
 
-        attrs = attrs_with_tier(base_attrs, data, user_id)
+    existing =
+      if type != "subscription.created" and is_binary(data["id"]),
+        do: get_subscription_by_paddle_id(data["id"])
 
-        # Omit :custom_data from the replace list. Paddle delivers at-least-once,
-        # so a retried subscription.created must NOT clobber the affiliate /
-        # utm attribution captured on first delivery.
-        #
-        # Scoped to the user the checkout named, so the insert passes the
-        # tenant policy's WITH CHECK (#1758). `mode: :savepoint` because a
-        # paddle_subscription_id already held by another row trips a unique
-        # index: without it that error aborts the tenant transaction and the
-        # role reset dies with 25P02 instead of returning the changeset error.
-        result =
-          Repo.with_tenant!(user_id, fn ->
-            %Subscription{}
-            |> Subscription.changeset(attrs)
-            |> Repo.insert(
-              on_conflict:
-                {:replace,
-                 [
-                   :paddle_customer_id,
-                   :paddle_subscription_id,
-                   :tier,
-                   :status,
-                   :current_period_end,
-                   :updated_at
-                 ]},
-              conflict_target: :user_id,
-              mode: :savepoint
-            )
-          end)
-
-        case result do
-          {:ok, sub} ->
-            broadcast_subscription_activated(user_id, sub)
-            # A new plan can lift the index cap: the backfill starts now.
-            _ = Engram.Workers.ReconcileEmbeddings.kick()
-            # A connector signup's vault waits for a passing plan, and a paid
-            # plan passes here rather than in the wizard. Created events only:
-            # renewals and cancellations must not recreate a deleted vault.
-            # Last, and it never raises, so the side effects above always run.
-            with %Engram.Accounts.User{} = user <- Engram.Accounts.get_user(user_id) do
-              :ok = Engram.Onboarding.maybe_provision_connector_vault(user)
-            end
-
-            {:ok, sub}
-
-          err ->
-            err
-        end
-
-      :error ->
-        {:error, :missing_user_id}
-    end
-  end
-
-  def upsert_from_paddle_event(%{"event_type" => "subscription.canceled", "data" => data}) do
-    case get_subscription_by_paddle_id(data["id"]) do
-      %Subscription{} = sub ->
-        sub_with_user = Repo.preload(sub, :user, skip_tenant_check: true)
-        user = sub_with_user.user
-        # `sub` IS the user's subscription row (user_id is unique), so resolve
-        # the tier from it rather than re-reading it through `get_subscription/1`.
-        prev_tier = if user, do: tier(%{user | subscription: sub}), else: :free
-
-        base_attrs = %{
-          status: data["status"],
-          current_period_end: parse_period_end(data)
-        }
-
-        update_attrs = attrs_with_tier(base_attrs, data, sub.user_id)
-
-        # Flip the user to Free at cancellation (period end per Paddle's engine).
-        # `free_tier_accepted_at` is stamped only when nil so a user who had
-        # originally accepted Free, upgraded, then canceled keeps the original
-        # acceptance timestamp. Wrap both writes in a transaction so a partial
-        # failure rolls back together; it is the owner's tenant transaction,
-        # so the subscription write passes the tenant policy (#1758).
-        result =
-          Repo.with_tenant(sub.user_id, fn ->
-            updated_sub =
-              sub
-              |> Subscription.changeset(update_attrs)
-              |> Repo.update!()
-
-            if user && is_nil(user.free_tier_accepted_at),
-              do: :ok = stamp_free_at_cancel(user, sub)
-
-            updated_sub
-          end)
-
-        case result do
-          {:ok, updated} ->
-            broadcast_subscription_activated(updated.user_id, updated)
-
-            # Force-disconnect open sockets so the next reconnect re-runs the
-            # tier gate with the canceled subscription. Mirrors the behaviour
-            # in subscription.updated/activated when tier or status flips.
-            Engram.Auth.SessionInvalidator.disconnect_user(updated.user_id)
-
-            if user do
-              :telemetry.execute(
-                [:engram, :tier_downgraded],
-                %{count: 1},
-                %{user_id: user.id, from: prev_tier, to: :free}
-              )
-            end
-
-            {:ok, %{updated | previous: %{tier: sub.tier, status: sub.status}}}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-
-      nil ->
-        {:error, :subscription_not_found}
-    end
-  end
-
-  def upsert_from_paddle_event(%{"event_type" => type, "data" => data})
-      when type in ~w(subscription.activated subscription.updated subscription.past_due) do
-    case get_subscription_by_paddle_id(data["id"]) do
-      %Subscription{tier: prev_tier, status: prev_status} = sub ->
-        base_attrs = %{
-          status: data["status"],
-          current_period_end: parse_period_end(data)
-        }
-
-        update_attrs = attrs_with_tier(base_attrs, data, sub.user_id)
-
-        # Written under the owner's tenant, discovered from the row (#1758).
-        result =
-          Repo.with_tenant!(sub.user_id, fn ->
-            sub
-            |> Subscription.changeset(update_attrs)
-            |> Repo.update()
-          end)
-
-        case result do
-          {:ok, updated} ->
-            # Same broadcast event for activated/updated — the frontend
-            # listener re-fetches /onboarding/status to decide what to do,
-            # so plan changes and trial→active flips both push downstream UI.
-            broadcast_subscription_activated(updated.user_id, updated)
-            # An upgrade lifts the embed budget: the dense backfill starts now.
-            _ = Engram.Workers.ReconcileEmbeddings.kick()
-
-            # Realtime sync (and other tier-gated features) are evaluated at
-            # channel-join, so an open SyncChannel keeps streaming after a
-            # tier or status change. Force-disconnect when either changed so
-            # the next reconnect re-runs the gate with the fresh subscription.
-            if updated.tier != prev_tier or updated.status != prev_status do
-              Engram.Auth.SessionInvalidator.disconnect_user(updated.user_id)
-            end
-
-            {:ok, %{updated | previous: %{tier: prev_tier, status: prev_status}}}
-
-          err ->
-            err
-        end
-
-      nil ->
-        {:error, :subscription_not_found}
+    case {type, existing} do
+      {_, nil} -> upsert_subscription(type, data, occurred_at)
+      {"subscription.canceled", sub} -> cancel_subscription(sub, data, occurred_at)
+      {_, sub} -> update_subscription(sub, data, occurred_at)
     end
   end
 
@@ -1244,6 +1093,260 @@ defmodule Engram.Billing do
     )
   end
 
+  # The insert path: `subscription.created`, and any other subscription event
+  # for a paddle id no row holds yet (Paddle can deliver it first). Upserts on
+  # `user_id`; the conflict update runs only when `upsert_conflict_guard/1`
+  # passes, and a guarded no-op comes back as a stale changeset error.
+  defp upsert_subscription(type, data, occurred_at) do
+    case extract_user_id(data) do
+      {:ok, user_id} ->
+        attrs =
+          data
+          |> event_attrs(occurred_at, user_id)
+          |> Map.merge(%{
+            user_id: user_id,
+            paddle_customer_id: data["customer_id"],
+            paddle_subscription_id: data["id"],
+            custom_data: data["custom_data"] || %{}
+          })
+
+        # :custom_data is not in the conflict update. Paddle delivers
+        # at-least-once, so a retried subscription.created must NOT clobber the
+        # affiliate / utm attribution captured on first delivery.
+        #
+        # Scoped to the user the checkout named, so the insert passes the
+        # tenant policy's WITH CHECK (#1758). `mode: :savepoint` because a
+        # paddle_subscription_id already held by another row trips a unique
+        # index: without it that error aborts the tenant transaction and the
+        # role reset dies with 25P02 instead of returning the changeset error.
+        result =
+          Repo.with_tenant!(user_id, fn ->
+            %Subscription{}
+            |> Subscription.changeset(attrs)
+            |> Repo.insert(
+              on_conflict: upsert_conflict_query(type),
+              conflict_target: :user_id,
+              mode: :savepoint,
+              stale_error_field: :last_event_occurred_at
+            )
+          end)
+
+        case result do
+          {:ok, sub} ->
+            broadcast_subscription_activated(user_id, sub)
+            # A new plan can lift the index cap: the backfill starts now.
+            _ = Engram.Workers.ReconcileEmbeddings.kick()
+            # A connector signup's vault waits for a passing plan, and a paid
+            # plan passes here rather than in the wizard. Only the insert path
+            # gets here, so renewals and cancellations of a known row never
+            # recreate a deleted vault (and a canceled first event fails the
+            # plan check inside). Last, and it never raises.
+            with %Engram.Accounts.User{} = user <- Engram.Accounts.get_user(user_id) do
+              :ok = Engram.Onboarding.maybe_provision_connector_vault(user)
+            end
+
+            {:ok, sub}
+
+          {:error, %Ecto.Changeset{errors: errors} = changeset} ->
+            case errors[:last_event_occurred_at] do
+              {_, opts} when is_list(opts) ->
+                if opts[:stale], do: skip_stale_event(data), else: {:error, changeset}
+
+              _ ->
+                {:error, changeset}
+            end
+        end
+
+      :error ->
+        {:error, :missing_user_id}
+    end
+  end
+
+  # The `user_id` conflict update. Same paddle id: apply unless the event is
+  # older than the stored stamp. Different paddle id (a resubscribe): created
+  # replaces the row as it always has; any other first event replaces it only
+  # when the row holds no live subscription, so a late cancel for the user's
+  # OLD subscription cannot overwrite the new one.
+  defp upsert_conflict_query(type) do
+    same_sub =
+      dynamic(
+        [s],
+        fragment(
+          "? IS NOT DISTINCT FROM EXCLUDED.paddle_subscription_id",
+          s.paddle_subscription_id
+        ) and
+          (is_nil(s.last_event_occurred_at) or
+             fragment("EXCLUDED.last_event_occurred_at IS NULL") or
+             s.last_event_occurred_at <= fragment("EXCLUDED.last_event_occurred_at"))
+      )
+
+    other_sub =
+      if type == "subscription.created",
+        do: dynamic([s], true),
+        else: dynamic([s], is_nil(s.paddle_subscription_id) or s.status == "canceled")
+
+    other_sub =
+      dynamic(
+        [s],
+        fragment("? IS DISTINCT FROM EXCLUDED.paddle_subscription_id", s.paddle_subscription_id) and
+          ^other_sub
+      )
+
+    from(s in Subscription,
+      where: ^dynamic([s], ^same_sub or ^other_sub),
+      update: [
+        set: [
+          paddle_customer_id: fragment("EXCLUDED.paddle_customer_id"),
+          paddle_subscription_id: fragment("EXCLUDED.paddle_subscription_id"),
+          tier: fragment("EXCLUDED.tier"),
+          status: fragment("EXCLUDED.status"),
+          current_period_end: fragment("EXCLUDED.current_period_end"),
+          last_event_occurred_at:
+            fragment("COALESCE(EXCLUDED.last_event_occurred_at, ?)", s.last_event_occurred_at),
+          updated_at: fragment("EXCLUDED.updated_at")
+        ]
+      ]
+    )
+  end
+
+  defp cancel_subscription(sub, data, occurred_at) do
+    user = Repo.preload(sub, :user, skip_tenant_check: true).user
+    # `sub` IS the user's subscription row (user_id is unique), so resolve
+    # the tier from it rather than re-reading it through `get_subscription/1`.
+    prev_tier = if user, do: tier(%{user | subscription: sub}), else: :free
+
+    # Flip the user to Free at cancellation (period end per Paddle's engine).
+    # `free_tier_accepted_at` is stamped only when nil so a user who had
+    # originally accepted Free, upgraded, then canceled keeps the original
+    # acceptance timestamp. Same transaction as the subscription write.
+    stamp_free = fn locked ->
+      if user && is_nil(user.free_tier_accepted_at),
+        do: stamp_free_at_cancel(user, locked),
+        else: :ok
+    end
+
+    case update_existing(
+           sub,
+           event_attrs(data, occurred_at, sub.user_id),
+           occurred_at,
+           stamp_free
+         ) do
+      {:ok, updated} ->
+        broadcast_subscription_activated(updated.user_id, updated)
+
+        # Force-disconnect open sockets so the next reconnect re-runs the
+        # tier gate with the canceled subscription. Mirrors the behaviour
+        # in subscription.updated/activated when tier or status flips.
+        Engram.Auth.SessionInvalidator.disconnect_user(updated.user_id)
+
+        if user do
+          :telemetry.execute(
+            [:engram, :tier_downgraded],
+            %{count: 1},
+            %{user_id: user.id, from: prev_tier, to: :free}
+          )
+        end
+
+        {:ok, updated}
+
+      {:error, :stale} ->
+        skip_stale_event(data)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp update_subscription(sub, data, occurred_at) do
+    attrs = event_attrs(data, occurred_at, sub.user_id)
+
+    case update_existing(sub, attrs, occurred_at, fn _ -> :ok end) do
+      {:ok, %{previous: %{tier: prev_tier, status: prev_status}} = updated} ->
+        # Same broadcast event for activated/updated: the frontend
+        # listener re-fetches /onboarding/status to decide what to do,
+        # so plan changes and trial→active flips both push downstream UI.
+        broadcast_subscription_activated(updated.user_id, updated)
+        # An upgrade lifts the embed budget: the dense backfill starts now.
+        _ = Engram.Workers.ReconcileEmbeddings.kick()
+
+        # Realtime sync (and other tier-gated features) are evaluated at
+        # channel-join, so an open SyncChannel keeps streaming after a
+        # tier or status change. Force-disconnect when either changed so
+        # the next reconnect re-runs the gate with the fresh subscription.
+        if updated.tier != prev_tier or updated.status != prev_status do
+          Engram.Auth.SessionInvalidator.disconnect_user(updated.user_id)
+        end
+
+        {:ok, updated}
+
+      {:error, :stale} ->
+        skip_stale_event(data)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Every write to a known row goes through here, under the owner's tenant
+  # (discovered from the row, #1758). The row is re-read FOR UPDATE so two
+  # deliveries for one subscription cannot both pass the occurred_at check
+  # and land in the wrong order. Returns the updated row with `previous` set,
+  # `{:error, :stale}`, or `{:error, changeset}`.
+  defp update_existing(sub, attrs, occurred_at, in_transaction) do
+    Repo.with_tenant(sub.user_id, fn ->
+      locked = Repo.one!(from(s in Subscription, where: s.id == ^sub.id, lock: "FOR UPDATE"))
+
+      if stale_event?(locked, occurred_at), do: Repo.rollback(:stale)
+
+      case locked |> Subscription.changeset(attrs) |> Repo.update() do
+        {:ok, updated} ->
+          :ok = in_transaction.(locked)
+          %{updated | previous: %{tier: locked.tier, status: locked.status}}
+
+        {:error, changeset} ->
+          Repo.rollback(changeset)
+      end
+    end)
+  end
+
+  # The attrs every subscription event writes: status, period, the stamp (when
+  # the event carries one) and the tier (unless the price_id is unknown).
+  defp event_attrs(data, occurred_at, user_id) do
+    base = %{status: data["status"], current_period_end: parse_period_end(data)}
+    base = if occurred_at, do: Map.put(base, :last_event_occurred_at, occurred_at), else: base
+    attrs_with_tier(base, data, user_id)
+  end
+
+  defp event_occurred_at(%{"occurred_at" => ts}) when is_binary(ts) do
+    case DateTime.from_iso8601(ts) do
+      {:ok, dt, _offset} -> dt
+      _ -> nil
+    end
+  end
+
+  defp event_occurred_at(_event), do: nil
+
+  # Equal timestamps are applied: Paddle emits subscription.updated and
+  # subscription.canceled for one change with the same occurred_at.
+  defp stale_event?(
+         %Subscription{last_event_occurred_at: %DateTime{} = stored},
+         %DateTime{} = at
+       ),
+       do: DateTime.compare(at, stored) == :lt
+
+  defp stale_event?(_sub, _occurred_at), do: false
+
+  # A skipped stale event is a permanent no-op, not an error: the caller acks
+  # it 200 and marks it processed.
+  defp skip_stale_event(data) do
+    Logger.info(
+      "paddle_webhook_stale_skipped",
+      Metadata.with_category(:info, :billing, subscription_id: data["id"])
+    )
+
+    {:ok, :stale}
+  end
+
   # Resolve the tier from the event's price_id and merge it into `base_attrs`.
   # An unknown price_id leaves the tier UNCHANGED (attrs without :tier) rather
   # than downgrading — a misconfigured price map must never strip a paying
@@ -1277,8 +1380,8 @@ defmodule Engram.Billing do
   end
 
   # A Free stamp that finds no row must not roll back the cancel beside it:
-  # Paddle's state is the truth, and a webhook answered with an error is not
-  # retried. Logged so the missing stamp is visible.
+  # Paddle's state is the truth, and a retry would find the same missing row.
+  # Logged so the missing stamp is visible.
   defp stamp_free_at_cancel(user, sub) do
     case Engram.Onboarding.stamp_free_tier(user) do
       {:ok, _user, _won_or_lost} ->

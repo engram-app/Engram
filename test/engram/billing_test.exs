@@ -1161,7 +1161,7 @@ defmodule Engram.BillingTest do
                )
     end
 
-    test "subscription.updated for unknown id returns :subscription_not_found" do
+    test "subscription.updated for unknown id without custom_data.user_id returns :missing_user_id" do
       event = %{
         "event_type" => "subscription.updated",
         "data" => %{
@@ -1173,7 +1173,7 @@ defmodule Engram.BillingTest do
         }
       }
 
-      assert {:error, :subscription_not_found} = Billing.upsert_from_paddle_event(event)
+      assert {:error, :missing_user_id} = Billing.upsert_from_paddle_event(event)
     end
 
     test "unknown event types return {:ok, :ignored}" do

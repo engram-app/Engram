@@ -202,9 +202,8 @@ defmodule EngramWeb.WebhookControllerTest do
       refute_received {[:engram, :paddle, :webhook, :stop], ^ref, _, _}
     end
 
-    test "subscription.canceled before subscription.created answers 500 so Paddle retries", %{
-      conn: conn
-    } do
+    test "subscription.canceled before subscription.created creates the row from custom_data",
+         %{conn: conn} do
       user = insert(:user)
 
       payload =
@@ -214,6 +213,7 @@ defmodule EngramWeb.WebhookControllerTest do
           "data" => %{
             "id" => "sub_never_created",
             "status" => "canceled",
+            "customer_id" => "ctm_never_created",
             "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
             "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
             "custom_data" => %{"user_id" => user.id}
@@ -229,8 +229,12 @@ defmodule EngramWeb.WebhookControllerTest do
         |> put_req_header("paddle-signature", "ts=#{timestamp};h1=#{signature}")
         |> post("/webhooks/paddle", payload)
 
-      assert json_response(conn, 500)["status"] == "error"
-      refute Engram.Billing.get_subscription(user)
+      assert json_response(conn, 200)["status"] == "ok"
+
+      assert %{status: "canceled", paddle_subscription_id: "sub_never_created"} =
+               Engram.Billing.get_subscription(user)
+
+      assert Engram.Billing.tier(Engram.Repo.reload(user)) == :free
     end
 
     test "subscription.activated event updates an existing subscription", %{conn: _conn} do
@@ -485,7 +489,7 @@ defmodule EngramWeb.WebhookControllerTest do
     end
   end
 
-  describe "POST /webhooks/paddle: retries" do
+  describe "POST /webhooks/paddle: retries, ordering, first-event upsert" do
     test "a transient DB failure returns 500, is not marked processed, and the retry succeeds" do
       user = insert(:user)
       # A real DB error on write. DDL inside the sandbox transaction rolls back
@@ -528,6 +532,114 @@ defmodule EngramWeb.WebhookControllerTest do
         })
 
       assert json_response(send_payload(payload), 200)["status"] == "ok"
+    end
+
+    test "a delayed subscription.updated older than the stored cancel is skipped" do
+      user = insert(:user)
+
+      send_payload(
+        sub_event("subscription.created", "ntf_o1", "sub_order", user, "active",
+          occurred_at: "2026-10-01T00:00:00.000001Z"
+        )
+      )
+
+      send_payload(
+        sub_event("subscription.canceled", "ntf_o3", "sub_order", user, "canceled",
+          occurred_at: "2026-10-03T00:00:00.000001Z"
+        )
+      )
+
+      # Occurred between the two above, delivered last.
+      conn =
+        send_payload(
+          sub_event("subscription.updated", "ntf_o2", "sub_order", user, "active",
+            occurred_at: "2026-10-02T00:00:00.000001Z"
+          )
+        )
+
+      assert json_response(conn, 200)["status"] == "ok"
+      assert %{status: "canceled"} = Engram.Billing.get_subscription(user)
+      assert Engram.Billing.tier(Engram.Repo.reload(user)) == :free
+    end
+
+    test "a stale subscription.created retry does not undo a newer update" do
+      user = insert(:user)
+
+      send_payload(
+        sub_event("subscription.updated", "ntf_c2", "sub_cretry", user, "past_due",
+          occurred_at: "2026-10-02T00:00:00Z"
+        )
+      )
+
+      send_payload(
+        sub_event("subscription.created", "ntf_c1", "sub_cretry", user, "active",
+          occurred_at: "2026-10-01T00:00:00Z"
+        )
+      )
+
+      assert %{status: "past_due"} = Engram.Billing.get_subscription(user)
+    end
+
+    test "subscription.updated before subscription.created creates the row and grants the tier" do
+      user = insert(:user)
+
+      conn =
+        send_payload(
+          sub_event("subscription.updated", "ntf_first_upd", "sub_first", user, "active")
+        )
+
+      assert json_response(conn, 200)["status"] == "ok"
+
+      assert %{status: "active", tier: "pro", paddle_customer_id: "ctm_sub_first"} =
+               Engram.Billing.get_subscription(user)
+
+      assert Engram.Billing.tier(Engram.Repo.reload(user)) == :pro
+    end
+
+    test "a first event for an OLD subscription does not replace the user's live one" do
+      user = insert(:user)
+      send_payload(sub_event("subscription.created", "ntf_new", "sub_new", user, "active"))
+
+      # The previous subscription's cancel, never seen before (its row was
+      # replaced by the resubscribe), arrives afterwards.
+      conn =
+        send_payload(sub_event("subscription.canceled", "ntf_old", "sub_old", user, "canceled"))
+
+      assert json_response(conn, 200)["status"] == "ok"
+
+      assert %{paddle_subscription_id: "sub_new", status: "active"} =
+               Engram.Billing.get_subscription(user)
+    end
+
+    test "non-trial first checkout: created(active) + transaction.completed grants the tier" do
+      user = insert(:user)
+
+      created =
+        sub_event("subscription.created", "ntf_paid_1", "sub_paid", user, "active",
+          occurred_at: "2026-10-24T10:00:00.000001Z"
+        )
+
+      completed =
+        Jason.encode!(%{
+          "event_type" => "transaction.completed",
+          "event_id" => "ntf_paid_2",
+          "occurred_at" => "2026-10-24T10:00:01.000001Z",
+          "data" => %{
+            "id" => "txn_paid",
+            "status" => "completed",
+            "origin" => "web",
+            "customer_id" => "ctm_sub_paid",
+            "subscription_id" => "sub_paid",
+            "details" => %{"totals" => %{"total" => "1000", "grand_total" => "1000"}},
+            "custom_data" => %{"user_id" => user.id}
+          }
+        })
+
+      assert json_response(send_payload(created), 200)["status"] == "ok"
+      assert json_response(send_payload(completed), 200)["status"] == "ok"
+
+      assert %{status: "active", tier: "pro"} = Engram.Billing.get_subscription(user)
+      assert Engram.Billing.tier(Engram.Repo.reload(user)) == :pro
     end
   end
 
