@@ -49,16 +49,22 @@ defmodule Engram.Notes.LockedReadBodyTest do
     end)
   end
 
-  defp await_lock_wait(tries \\ 150)
-  defp await_lock_wait(0), do: flunk("the locked read never waited on the row lock")
+  # Waits until the READER's own backend is blocked on a lock (its pid, so
+  # another session's wait, a CI partition on the same server, cannot
+  # satisfy the probe and let the holder commit before the reader waited).
+  defp await_lock_wait(pid, tries \\ 150)
+  defp await_lock_wait(_pid, 0), do: flunk("the locked read never waited on the row lock")
 
-  defp await_lock_wait(tries) do
+  defp await_lock_wait(pid, tries) do
     %{rows: [[n]]} =
       Sandbox.unboxed_run(Repo, fn ->
-        Repo.query!("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'")
+        Repo.query!(
+          "SELECT count(*) FROM pg_stat_activity WHERE pid = $1 AND wait_event_type = 'Lock'",
+          [pid]
+        )
       end)
 
-    if n > 0, do: :ok, else: Process.sleep(20) && await_lock_wait(tries - 1)
+    if n > 0, do: :ok, else: Process.sleep(20) && await_lock_wait(pid, tries - 1)
   end
 
   test "get_note_for_update after a wait returns the committed CRDT state", ctx do
@@ -87,13 +93,17 @@ defmodule Engram.Notes.LockedReadBodyTest do
     reader =
       Task.async(fn ->
         Sandbox.unboxed_run(Repo, fn ->
+          %{rows: [[pid]]} = Repo.query!("SELECT pg_backend_pid()")
+          send(parent, {:reader_pid, pid})
+
           Repo.with_tenant(ctx.user.id, fn ->
             Notes.get_note_for_update(ctx.user, ctx.vault, "L.md")
           end)
         end)
       end)
 
-    await_lock_wait()
+    assert_receive {:reader_pid, reader_pid}, 5_000
+    await_lock_wait(reader_pid)
     send(holder.pid, :commit)
     Task.await(holder, 10_000)
 
