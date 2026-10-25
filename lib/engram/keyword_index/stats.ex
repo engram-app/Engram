@@ -49,8 +49,8 @@ defmodule Engram.KeywordIndex.Stats do
   defp compute_avgdl(user_id, vault_id) do
     Repo.with_tenant!(user_id, fn ->
       counted =
-        from(s in "chunk_stats",
-          where: s.vault_id == type(^vault_id, Ecto.UUID),
+        from(s in Engram.Notes.ChunkStat,
+          where: s.vault_id == ^vault_id,
           select: fragment("?::float8 / nullif(?, 0)", s.len_sum, s.len_rows)
         )
 
