@@ -20,6 +20,13 @@ BASE_REF="${BASE_REF:-origin/main}"
 SQUAWK="${SQUAWK_BIN:-squawk}"
 MIG_DIR="priv/repo/migrations"
 
+# It migrates whatever database the env resolves to. Without MIX_ENV=test that
+# is the shared engram_dev DB (2026-10-25: 36 migrations applied to it by mistake).
+if [ "${MIX_ENV:-}" != "test" ] || [ -z "${DATABASE_URL:-}" ]; then
+  echo "::error::lint_migrations: set MIX_ENV=test and DATABASE_URL to a fresh, empty database" >&2
+  exit 1
+fi
+
 # Migrations in the working tree newer than the base branch's tip.
 # Capture stdout AND check exit explicitly — `mapfile -t arr < <(cmd)`
 # does NOT propagate cmd's exit code, so we'd silently no-op the gate
