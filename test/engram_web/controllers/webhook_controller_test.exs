@@ -665,6 +665,51 @@ defmodule EngramWeb.WebhookControllerTest do
     end
   end
 
+  describe "POST /webhooks/paddle: late created for an old subscription" do
+    test "a redelivered created for the OLD subscription does not replace the live new one" do
+      user = insert(:user)
+
+      for {id, sub, at} <- [
+            {"ntf_s1", "sub_s1", "2026-10-01T00:00:00Z"},
+            {"ntf_s2", "sub_s2", "2026-10-05T00:00:00Z"}
+          ] do
+        send_payload(sub_event("subscription.created", id, sub, user, "active", occurred_at: at))
+      end
+
+      # Paddle's retry of S1's created, after a 500, lands last.
+      conn =
+        send_payload(
+          sub_event("subscription.created", "ntf_s1_retry", "sub_s1", user, "active",
+            occurred_at: "2026-10-01T00:00:00Z"
+          )
+        )
+
+      assert json_response(conn, 200)["status"] == "ok"
+      assert Engram.Webhooks.Idempotency.check(:paddle, "ntf_s1_retry") == :duplicate
+      assert %{paddle_subscription_id: "sub_s2"} = Engram.Billing.get_subscription(user)
+    end
+
+    test "a resubscribe after a cancel still replaces the row" do
+      user = insert(:user)
+
+      send_payload(
+        sub_event("subscription.canceled", "ntf_r1", "sub_r1", user, "canceled",
+          occurred_at: "2026-10-05T00:00:00Z"
+        )
+      )
+
+      # Older stamp than the cancel, but the old row is canceled: a real resubscribe.
+      send_payload(
+        sub_event("subscription.created", "ntf_r2", "sub_r2", user, "active",
+          occurred_at: "2026-10-04T00:00:00Z"
+        )
+      )
+
+      assert %{paddle_subscription_id: "sub_r2", status: "active"} =
+               Engram.Billing.get_subscription(user)
+    end
+  end
+
   defp sub_event(type, event_id, sub_id, user, status, opts \\ []) do
     Jason.encode!(%{
       "event_type" => type,

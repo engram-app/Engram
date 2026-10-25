@@ -1161,27 +1161,34 @@ defmodule Engram.Billing do
   end
 
   # The `user_id` conflict update. Same paddle id: apply unless the event is
-  # older than the stored stamp. Different paddle id (a resubscribe): created
-  # replaces the row as it always has; any other first event replaces it only
-  # when the row holds no live subscription, so a late cancel for the user's
-  # OLD subscription cannot overwrite the new one.
+  # older than the stored stamp. Different paddle id (a resubscribe): replace
+  # the row only when it holds no live subscription, or (created only) when
+  # the event is newer than the row. So a late cancel, or a retried created,
+  # for the user's OLD subscription cannot overwrite the new one.
   defp upsert_conflict_query(type) do
+    not_older =
+      dynamic(
+        [s],
+        is_nil(s.last_event_occurred_at) or
+          fragment("EXCLUDED.last_event_occurred_at IS NULL") or
+          s.last_event_occurred_at <= fragment("EXCLUDED.last_event_occurred_at")
+      )
+
     same_sub =
       dynamic(
         [s],
         fragment(
           "? IS NOT DISTINCT FROM EXCLUDED.paddle_subscription_id",
           s.paddle_subscription_id
-        ) and
-          (is_nil(s.last_event_occurred_at) or
-             fragment("EXCLUDED.last_event_occurred_at IS NULL") or
-             s.last_event_occurred_at <= fragment("EXCLUDED.last_event_occurred_at"))
+        ) and ^not_older
       )
+
+    not_live = dynamic([s], is_nil(s.paddle_subscription_id) or s.status == "canceled")
 
     other_sub =
       if type == "subscription.created",
-        do: dynamic([s], true),
-        else: dynamic([s], is_nil(s.paddle_subscription_id) or s.status == "canceled")
+        do: dynamic([s], ^not_live or ^not_older),
+        else: not_live
 
     other_sub =
       dynamic(
