@@ -1242,11 +1242,29 @@ defmodule Engram.Indexing do
   # built from it, reused ones were just PATCHed (or already held it).
   defp stamp_payload_hash(%Note{payload_hash: hash}, hash), do: :ok
 
+  #
+  # Compare-and-set on the hash this pass loaded (review L1): a NULL-clear
+  # that landed mid-pass (payload drift, a cluster diff, a DEK rotation) or
+  # another writer's stamp leaves NULL, so the next pass refreshes the
+  # payload instead of this stamp vouching for points it did not check.
   defp stamp_payload_hash(note, hash) do
     {_, _} =
       Repo.update_all(
-        from(n in Note, where: n.kind == "note" and n.id == ^note.id),
-        set: [payload_hash: hash]
+        from(n in Note,
+          where: n.kind == "note" and n.id == ^note.id,
+          update: [
+            set: [
+              payload_hash:
+                fragment(
+                  "CASE WHEN ? IS NOT DISTINCT FROM ? THEN ? ELSE NULL END",
+                  n.payload_hash,
+                  type(^note.payload_hash, :binary),
+                  type(^hash, :binary)
+                )
+            ]
+          ]
+        ),
+        []
       )
 
     :ok

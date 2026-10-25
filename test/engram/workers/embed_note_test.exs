@@ -391,12 +391,17 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       stub(Engram.MockEmbedder, :embed_texts, fn texts ->
         from(n in Note, where: n.id == ^note.id)
-        |> Repo.update_all([set: [keyword_version: nil, chunker_version: nil]],
+        |> Repo.update_all([set: [keyword_version: nil, chunker_version: nil, payload_hash: nil]],
           skip_tenant_check: true
         )
 
         {:ok, Enum.map(texts, fn _ -> List.duplicate(0.1, 3) end)}
       end)
+
+      # Loaded with a stale payload stamp, so the pass rewrites it and the
+      # clear is a change it must keep (review L1).
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all([set: [payload_hash: <<1>>]], skip_tenant_check: true)
 
       stub_qdrant_optional(ctx.bypass)
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
@@ -404,6 +409,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       row = Repo.get!(Note, note.id, skip_tenant_check: true)
       assert row.embed_hash == row.content_hash
       assert {row.chunker_version, row.keyword_version} == {nil, nil}
+      assert row.payload_hash == nil
     end
 
     test "a reused pass on a note at the target stamps the target", ctx do
