@@ -32,6 +32,30 @@ defmodule Engram.Auth.RefreshLeeway do
   def seconds, do: @seconds
 
   @doc """
+  The `revoked_at` an admin-side revoke stamps (logout-everywhere, password
+  reset, account delete, a local-auth breach kill). Epoch 0: outside any
+  leeway, and never read as a user's Disconnect by the device-swap cooldown
+  (`Engram.Connections.most_recent_device_revoke/1`).
+  """
+  def admin_revoked_at, do: ~U[1970-01-01 00:00:00Z]
+
+  @doc """
+  Serializes, for one user, every refresh rotation with every revoke of that
+  user's refresh tokens (#2231). Without it a refresh that read its token
+  live before a Disconnect committed still mints a live child. A
+  transaction-scoped advisory lock (`pg_advisory_xact_lock`), so it cannot
+  leak on an error path: call it inside a transaction, before reading or
+  writing any refresh-token row.
+  """
+  @spec lock_user!(Ecto.UUID.t()) :: :ok
+  def lock_user!(user_id) do
+    if not Engram.Repo.in_transaction?(),
+      do: raise(ArgumentError, "lock_user!/1 needs a transaction")
+
+    Engram.Repo.advisory_lock!("refresh_tokens:#{user_id}")
+  end
+
+  @doc """
   Returns true when a revoked refresh token may still rotate: it was revoked
   within the leeway window AND its family still has a live token.
 

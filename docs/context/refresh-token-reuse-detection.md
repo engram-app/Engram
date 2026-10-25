@@ -56,18 +56,33 @@ revoked by logout-everywhere (epoch-0 sentinel) had the same hole: it was
 rotated with a real timestamp seconds earlier.
 
 `RefreshLeeway.benign?/2` now takes the token row and also requires its
-family to hold an unrevoked token. A rotation always leaves a live successor;
-every revoke leaves none. No column needed. Consequences:
+family to hold an unrevoked token. A rotation leaves a live successor; a
+revoke leaves none. That holds only because of the lock below.
 
-- Device rotation runs the revoke and the child insert in ONE transaction, so
-  a concurrent retry never sees a family with zero live rows.
+- **Per-user lock.** `RefreshLeeway.lock_user!/1` (`pg_advisory_xact_lock`,
+  transaction-scoped, raises outside a transaction) is taken first by every
+  rotation (device refresh, `Accounts.consume_refresh_token/1`) and every
+  revoke (`Connections.revoke_device_family/2`, `revoke_by_vault/2`,
+  `Accounts.revoke_all_user_tokens/1`, `revoke_token_family/1`). Rotation
+  re-reads and classifies the token under it, so a refresh that read the
+  token live before a Disconnect can no longer mint a child the Disconnect
+  never saw. Cost: one extra round trip per refresh (~2 ms on the loaded dev
+  VM; a device refreshes every 15 min). Proven on real connections by
+  `test/engram/device_refresh_race_test.exs`.
 - A device token of a dead family is refused without deleting rows, so
   Disconnect stays idempotent and the swap cooldown still sees the revoke.
 - `Accounts.revoke_all_user_tokens/1` (logout-everywhere, password reset,
   account delete) also revokes `device_refresh_tokens`, with the epoch
-  sentinel so it starts no device-swap cooldown.
+  sentinel (`RefreshLeeway.admin_revoked_at/0`).
+- **Swap cooldown** (`Connections.most_recent_device_revoke/1`) counts only
+  DEAD families, dated by their newest row, and skips the sentinel. Before,
+  it took `max(revoked_at)` over all rows, so every rotation stamp put an
+  active Free user "in cooldown" and `/link` refused a second device.
 - Device refresh refuses deleted or suspended users (query joins `users`).
-- MCP OAuth was never affected: a revoked row gets no grace there.
+  **Suspend revokes nothing, by design**: the refusal is enough, and the rows
+  survive so unsuspend restores the devices.
+- MCP OAuth was never affected: a revoked row gets no grace there. It is NOT
+  revoked by logout-everywhere (separate product call).
 
 ## Notes / gotchas
 

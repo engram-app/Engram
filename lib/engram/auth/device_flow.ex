@@ -240,8 +240,30 @@ defmodule Engram.Auth.DeviceFlow do
 
   def refresh_access_token(raw_refresh_token) do
     token_hash = hash_token(raw_refresh_token)
-    now = DateTime.utc_now()
 
+    # The owner, unlocked, only to take their lock; everything that decides is
+    # re-read under it.
+    owner =
+      from(rt in DeviceRefreshToken, where: rt.token_hash == ^token_hash, select: rt.user_id)
+
+    case Repo.one(owner, skip_tenant_check: true) do
+      nil ->
+        {:error, :invalid_refresh_token}
+
+      user_id ->
+        {:ok, result} =
+          Repo.transaction(fn ->
+            RefreshLeeway.lock_user!(user_id)
+            classify_refresh(token_hash, DateTime.utc_now())
+          end)
+
+        result
+    end
+  end
+
+  # Runs under `RefreshLeeway.lock_user!/1`, so no revoke of this user's
+  # tokens can commit between this read and the child insert.
+  defp classify_refresh(token_hash, now) do
     # Look the token up regardless of revocation state — a *revoked* token still
     # has to be classified (benign retry within leeway vs. reuse breach), not
     # silently rejected. Expired tokens are out of scope entirely. A deleted or
@@ -262,18 +284,15 @@ defmodule Engram.Auth.DeviceFlow do
       %{revoked_at: nil} = old_token ->
         # Active token: normal single-use rotation. Stamp revoked_at so the
         # leeway is measured from this first rotation and can't be slid forward.
-        # One transaction with the child insert: a concurrent retry must never
-        # see the family with no live token, or the leeway refuses it (#2231).
-        {:ok, result} =
-          Repo.transaction(fn ->
-            old_token
-            |> Ecto.Changeset.change(%{revoked_at: DateTime.truncate(now, :second)})
-            |> Repo.update!(skip_tenant_check: true)
+        # Same transaction as the child insert: a concurrent retry never sees
+        # the family with no live token.
+        {1, _} =
+          from(rt in DeviceRefreshToken, where: rt.id == ^old_token.id and is_nil(rt.revoked_at))
+          |> Repo.update_all([set: [revoked_at: DateTime.truncate(now, :second)]],
+            skip_tenant_check: true
+          )
 
-            issue_child(old_token)
-          end)
-
-        result
+        issue_child(old_token)
 
       old_token ->
         cond do

@@ -6,7 +6,15 @@ defmodule Engram.Accounts do
   import Ecto.Query
   alias Bcrypt
   alias Engram.Accounts.{ApiKey, Lifecycle, User}
-  alias Engram.Auth.{DeviceRefreshToken, EmailNormalizer, RefreshToken, SessionInvalidator}
+
+  alias Engram.Auth.{
+    DeviceRefreshToken,
+    EmailNormalizer,
+    RefreshLeeway,
+    RefreshToken,
+    SessionInvalidator
+  }
+
   alias Engram.Logger.Metadata
   alias Engram.Repo
 
@@ -440,15 +448,10 @@ defmodule Engram.Accounts do
 
   defp guard_last_admin(_user), do: :ok
 
-  # Sentinel revocation timestamp used by admin and breach paths. Pinned at
-  # epoch 0 so it always falls OUTSIDE `Engram.Auth.RefreshLeeway` — without
-  # this the next request after a logout-everywhere or family breach would
-  # land inside the leeway window, get misread as a benign rotation race,
-  # and silently re-issue a fresh token (defeating the revocation). Keeping
-  # the rows preserves audit history for `Engram.Connections.any_history?`
-  # and `device_history?`, which distinguish "already revoked" from "never
-  # existed" by row presence.
-  @admin_revoked_at ~U[1970-01-01 00:00:00Z]
+  # Admin and breach paths stamp `RefreshLeeway.admin_revoked_at/0` (epoch 0)
+  # rather than deleting rows: `Engram.Connections.any_history?` and
+  # `device_history?` tell "already revoked" from "never existed" by row
+  # presence, and the swap cooldown ignores the sentinel.
 
   @doc """
   Spec §8/§10 — revokes all of a user's refresh tokens (logout-everywhere,
@@ -457,15 +460,24 @@ defmodule Engram.Accounts do
   and starts no device-swap cooldown (`Connections.most_recent_device_revoke/1`).
   """
   def revoke_all_user_tokens(%User{id: user_id}) do
-    result =
-      RefreshToken
-      |> where([rt], rt.user_id == ^user_id and is_nil(rt.revoked_at))
-      |> Repo.update_all([set: [revoked_at: @admin_revoked_at]], skip_tenant_check: true)
+    {:ok, result} =
+      Repo.transaction(fn ->
+        RefreshLeeway.lock_user!(user_id)
 
-    # Not a tenant table: no RLS (see `DeviceFlow.cleanup_expired/0`).
-    DeviceRefreshToken
-    |> where([rt], rt.user_id == ^user_id and is_nil(rt.revoked_at))
-    |> Repo.update_all(set: [revoked_at: @admin_revoked_at])
+        result =
+          RefreshToken
+          |> where([rt], rt.user_id == ^user_id and is_nil(rt.revoked_at))
+          |> Repo.update_all([set: [revoked_at: RefreshLeeway.admin_revoked_at()]],
+            skip_tenant_check: true
+          )
+
+        # Not a tenant table: no RLS (see `DeviceFlow.cleanup_expired/0`).
+        DeviceRefreshToken
+        |> where([rt], rt.user_id == ^user_id and is_nil(rt.revoked_at))
+        |> Repo.update_all(set: [revoked_at: RefreshLeeway.admin_revoked_at()])
+
+        result
+      end)
 
     SessionInvalidator.disconnect_user(user_id)
     result
@@ -528,11 +540,23 @@ defmodule Engram.Accounts do
 
   def consume_refresh_token(raw_token) do
     token_hash = hash_refresh_token(raw_token)
+
+    owner =
+      from(rt in RefreshToken, where: rt.token_hash == ^token_hash, select: rt.user_id)
+      |> Repo.one(skip_tenant_check: true)
+
+    if owner, do: consume_owned_refresh_token(token_hash, owner), else: {:error, :invalid_token}
+  end
+
+  defp consume_owned_refresh_token(token_hash, user_id) do
     now = DateTime.utc_now(:second)
 
     tx_result =
       Repo.transaction(
         fn ->
+          # Serialize with every revoke of this user's tokens (#2231).
+          RefreshLeeway.lock_user!(user_id)
+
           # Atomically revoke: only succeeds if token exists and is not yet revoked
           revoke_query =
             from(rt in RefreshToken,
@@ -613,7 +637,7 @@ defmodule Engram.Accounts do
         Repo.rollback(:invalid_token)
 
       %RefreshToken{revoked_at: revoked, user: user} = revoked_token when revoked != nil ->
-        if Engram.Auth.RefreshLeeway.benign?(revoked_token, now) do
+        if RefreshLeeway.benign?(revoked_token, now) do
           rotate_into_child(revoked_token, user)
         else
           Repo.rollback({:token_reused, token_hash})
@@ -645,7 +669,7 @@ defmodule Engram.Accounts do
     )
 
     # Mark every still-live member of the family as revoked using the
-    # `@admin_revoked_at` sentinel (epoch 0). Stamping with `now` would put
+    # `RefreshLeeway.admin_revoked_at/0` sentinel (epoch 0). Stamping with `now` would put
     # them inside the leeway window so a follow-up request with the current
     # child would be mistaken for a benign rotation race and re-issue tokens —
     # defeating the revocation. Deleting (the prior approach) broke
@@ -655,19 +679,31 @@ defmodule Engram.Accounts do
     # Snapshot the distinct user_ids in the family BEFORE revoke so we can
     # force-disconnect every affected user's live sockets — the realtime
     # gate in UserSocket is connect-time only.
-    affected_user_ids =
-      Repo.all(
-        from(rt in RefreshToken,
-          where: rt.family_id == ^family_id and is_nil(rt.revoked_at),
-          select: rt.user_id,
-          distinct: true
-        ),
-        skip_tenant_check: true
-      )
+    {:ok, {affected_user_ids, result}} =
+      Repo.transaction(fn ->
+        affected_user_ids =
+          Repo.all(
+            from(rt in RefreshToken,
+              where: rt.family_id == ^family_id and is_nil(rt.revoked_at),
+              select: rt.user_id,
+              distinct: true,
+              order_by: rt.user_id
+            ),
+            skip_tenant_check: true
+          )
 
-    result =
-      from(rt in RefreshToken, where: rt.family_id == ^family_id and is_nil(rt.revoked_at))
-      |> Repo.update_all([set: [revoked_at: @admin_revoked_at]], skip_tenant_check: true)
+        # Serialize with an in-flight rotation, which would otherwise mint a
+        # child this UPDATE never saw (#2231). Sorted: two revokes agree.
+        Enum.each(affected_user_ids, &RefreshLeeway.lock_user!/1)
+
+        result =
+          from(rt in RefreshToken, where: rt.family_id == ^family_id and is_nil(rt.revoked_at))
+          |> Repo.update_all([set: [revoked_at: RefreshLeeway.admin_revoked_at()]],
+            skip_tenant_check: true
+          )
+
+        {affected_user_ids, result}
+      end)
 
     Enum.each(affected_user_ids, &SessionInvalidator.disconnect_user/1)
     result
