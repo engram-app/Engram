@@ -100,6 +100,9 @@ export default {
 	Refresh: "Odśwież",
 	"Contact support": "Skontaktuj się z pomocą techniczną",
 	"Reference number: {id}": "Numer referencyjny: {id}",
+	"Your payment did not finish, so you have not been subscribed.":
+		"Twoja płatność nie została zakończona, więc nie masz aktywnego abonamentu.",
+	"Try again": "Spróbuj ponownie",
 	"Loading billing": "Ładowanie faktury",
 	"Could not open the billing portal. Please try again.":
 		"Nie udało się otworzyć panelu płatności. Spróbuj ponownie.",

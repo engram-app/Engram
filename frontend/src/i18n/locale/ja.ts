@@ -102,6 +102,9 @@ export default {
 	Refresh: "更新",
 	"Contact support": "サポートへ連絡",
 	"Reference number: {id}": "参照番号: {id}",
+	"Your payment did not finish, so you have not been subscribed.":
+		"支払いが完了しなかったため、登録されていません。",
+	"Try again": "再試行",
 	"Loading billing": "課金情報を読み込み中",
 	"Could not open the billing portal. Please try again.":
 		"課金ポータルを開けませんでした。再度お試しください。",

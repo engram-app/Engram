@@ -846,6 +846,83 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(container.querySelector(".paddle-checkout")).toBeInTheDocument();
 	});
 
+	it("onboarding (inline): closing checkout mid-payment says the buyer is not subscribed and Try again reopens it", async () => {
+		mockBillingApi();
+		const openMock = vi.fn();
+		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+			captured = opts.eventCallback;
+			return { Checkout: { open: openMock, close: vi.fn() } };
+		});
+
+		const { container, queryAllByText } = renderBilling({ inline: true });
+		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+		const startBtn = Array.from(container.querySelectorAll("button")).find(
+			(b) => b.textContent === "Start free trial",
+		)!;
+		await act(async () => {
+			startBtn.click();
+			await Promise.resolve();
+		});
+		await waitFor(() => expect(openMock).toHaveBeenCalledTimes(1));
+
+		await act(async () => {
+			captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+			captured!({ name: "checkout.closed", data: {} });
+			await Promise.resolve();
+		});
+
+		expect(
+			screen.getByText("Your payment did not finish, so you have not been subscribed."),
+		).toBeInTheDocument();
+		expect(screen.queryByText(/received|activating/iu)).not.toBeInTheDocument();
+
+		await act(async () => {
+			screen.getByRole("button", { name: "Try again" }).click();
+			await Promise.resolve();
+		});
+		await waitFor(() => expect(openMock).toHaveBeenCalledTimes(2));
+		expect(openMock.mock.calls[1]![0].items).toEqual(openMock.mock.calls[0]![0].items);
+		expect(
+			screen.queryByText("Your payment did not finish, so you have not been subscribed."),
+		).not.toBeInTheDocument();
+	});
+
+	it("onboarding (inline): our own close after an activation push is not reported as an unfinished payment", async () => {
+		mockBillingApi();
+		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+			captured = opts.eventCallback;
+			return { Checkout: { open: vi.fn(), close: vi.fn() } };
+		});
+
+		const { container, queryAllByText } = renderBilling({ inline: true });
+		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+		const startBtn = Array.from(container.querySelectorAll("button")).find(
+			(b) => b.textContent === "Start free trial",
+		)!;
+		await act(async () => {
+			startBtn.click();
+			await Promise.resolve();
+		});
+
+		await act(async () => {
+			captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+			await Promise.resolve();
+		});
+		await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
+		await act(async () => {
+			channelHandlers.subscription_activated!({ tier: "starter", status: "active" });
+			// The push handler's Checkout.close() makes Paddle emit checkout.closed.
+			captured!({ name: "checkout.closed", data: {} });
+			await Promise.resolve();
+		});
+
+		expect(
+			screen.queryByText("Your payment did not finish, so you have not been subscribed."),
+		).not.toBeInTheDocument();
+	});
+
 	it("onboarding (inline): COMPLETED with no activation push closes Paddle and shows the recovery banner after the cooldown", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		mockBillingApi();

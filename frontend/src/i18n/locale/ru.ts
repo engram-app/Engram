@@ -104,6 +104,9 @@ export default {
 	Refresh: "Обновить",
 	"Contact support": "Связаться со службой поддержки",
 	"Reference number: {id}": "Номер запроса: {id}",
+	"Your payment did not finish, so you have not been subscribed.":
+		"Ваша оплата не завершена, поэтому вы не подписаны.",
+	"Try again": "Повторить попытку",
 	"Loading billing": "Загрузка информации о платежах",
 	"Could not open the billing portal. Please try again.":
 		"Не удалось открыть страницу оплаты. Пожалуйста, попробуйте ещё раз.",

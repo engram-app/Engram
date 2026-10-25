@@ -102,6 +102,9 @@ export default {
 	Refresh: "Segarkan",
 	"Contact support": "Hubungi dukungan",
 	"Reference number: {id}": "Nomor referensi: {id}",
+	"Your payment did not finish, so you have not been subscribed.":
+		"Pembayaran Anda belum selesai, jadi Anda belum berlangganan.",
+	"Try again": "Coba lagi",
 	"Loading billing": "Memuat informasi penagihan",
 	"Could not open the billing portal. Please try again.":
 		"Tidak dapat membuka portal penagihan. Silakan coba lagi.",

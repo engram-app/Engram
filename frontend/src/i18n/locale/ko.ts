@@ -98,6 +98,9 @@ export default {
 	Refresh: "새로 고침",
 	"Contact support": "지원팀에 문의",
 	"Reference number: {id}": "참조 번호: {id}",
+	"Your payment did not finish, so you have not been subscribed.":
+		"결제가 완료되지 않아 구독이 적용되지 않았습니다.",
+	"Try again": "다시 시도",
 	"Loading billing": "결제 정보 불러오는 중",
 	"Could not open the billing portal. Please try again.":
 		"결제 페이지를 열 수 없습니다. 다시 시도해주세요.",

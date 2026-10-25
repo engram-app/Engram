@@ -92,6 +92,8 @@ export default {
 	Refresh: "重新整理",
 	"Contact support": "聯絡支援",
 	"Reference number: {id}": "參考編號：{id}",
+	"Your payment did not finish, so you have not been subscribed.": "您的付款未完成，因此尚未訂閱。",
+	"Try again": "重新嘗試",
 	"Loading billing": "載入付款資訊",
 	"Could not open the billing portal. Please try again.": "無法開啟付款頁面。請再試一次。",
 	"Could not start the payment update. Please try again.": "無法啟動付款更新。請再試一次。",

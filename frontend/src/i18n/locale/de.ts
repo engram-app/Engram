@@ -104,6 +104,9 @@ export default {
 	Refresh: "Aktualisieren",
 	"Contact support": "Support kontaktieren",
 	"Reference number: {id}": "Referenznummer: {id}",
+	"Your payment did not finish, so you have not been subscribed.":
+		"Deine Zahlung konnte nicht abgeschlossen werden, daher bist du nicht angemeldet.",
+	"Try again": "Wiederholen",
 	"Loading billing": "Abrechnung wird geladen",
 	"Could not open the billing portal. Please try again.":
 		"Es konnte nicht auf das Abrechnungsportal zugegriffen werden. Bitte versuche es erneut.",

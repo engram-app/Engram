@@ -92,6 +92,9 @@ export default {
 	Refresh: "刷新",
 	"Contact support": "联系支持",
 	"Reference number: {id}": "参考编号：{id}",
+	"Your payment did not finish, so you have not been subscribed.":
+		"您的支付未完成，因此未订阅成功。",
+	"Try again": "重试",
 	"Loading billing": "加载账单信息",
 	"Could not open the billing portal. Please try again.": "无法打开账单页面。请重试。",
 	"Could not start the payment update. Please try again.": "无法启动支付更新。请重试。",

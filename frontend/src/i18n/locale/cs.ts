@@ -101,6 +101,9 @@ export default {
 	Refresh: "Obnovit",
 	"Contact support": "Kontaktujte podporu",
 	"Reference number: {id}": "Referenční číslo: {id}",
+	"Your payment did not finish, so you have not been subscribed.":
+		"Vaše platba nebyla dokončena, takže nemáte aktivní předplatné.",
+	"Try again": "Zkuste to znovu",
 	"Loading billing": "Načítání fakturace",
 	"Could not open the billing portal. Please try again.":
 		"Nepodařilo se otevřít portál fakturace. Zkuste to znovu.",

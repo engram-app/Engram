@@ -100,6 +100,9 @@ export default {
 	Refresh: "Yenile",
 	"Contact support": "Destek ile iletişime geç",
 	"Reference number: {id}": "Referans numarası: {id}",
+	"Your payment did not finish, so you have not been subscribed.":
+		"Ödemeniz tamamlanmadığı için aboneliğiniz gerçekleşmedi.",
+	"Try again": "Lütfen tekrar deneyin",
 	"Loading billing": "Fatura bilgileri yükleniyor",
 	"Could not open the billing portal. Please try again.":
 		"Fatura portalını açamadık. Lütfen tekrar deneyin.",

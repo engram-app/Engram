@@ -172,6 +172,25 @@ function SlowActivationBanner({
 	);
 }
 
+// The buyer closed Paddle after starting a payment but before COMPLETED (a
+// dismissed wallet sheet, an abandoned 3DS challenge). Nothing was activated,
+// so say so plainly; never "received" or "activating" here.
+function UnfinishedPaymentBanner({ onRetry }: { onRetry: () => void }) {
+	const { t } = useT();
+	return (
+		<div role="alert" className="rounded-lg border border-border bg-muted/50 p-4 text-sm">
+			<p className="font-medium text-foreground">
+				{t("Your payment did not finish, so you have not been subscribed.")}
+			</p>
+			<div className="mt-3">
+				<Button size="sm" onClick={onRetry}>
+					{t("Try again")}
+				</Button>
+			</div>
+		</div>
+	);
+}
+
 // Skeleton placeholder that matches the post-load layout so the page does
 // not jump when billing status + Paddle init resolve. Shape: optional
 // heading, cadence toggle row, two cards in the same grid as the real cards.
@@ -327,6 +346,12 @@ export default function BillingPage({
 	const [checkingOut, setCheckingOut] = useState(false);
 	const [completedAt, setCompletedAt] = useState<number | null>(null);
 	const [slow, setSlow] = useState(false);
+	// checkout.closed after PAYMENT_INITIATED with no COMPLETED: show the
+	// "not subscribed, try again" banner.
+	const [unfinished, setUnfinished] = useState(false);
+	// Set by the activation push, so the checkout.closed that our own
+	// Checkout.close() triggers there is not read as an unfinished payment.
+	const activatedRef = useRef(false);
 	// Onboarding-only bridge: held from activation until the redirect fires, so we
 	// show a single steady "finishing up" view instead of flashing the empty plan
 	// picker while queries invalidate + status refetches.
@@ -376,6 +401,8 @@ export default function BillingPage({
 		if (onActivatedRef.current && !onActivatedFiredRef.current) {
 			setFinalizing(true);
 		}
+		activatedRef.current = true;
+		setUnfinished(false);
 		paddleRef.current?.Checkout.close();
 		setCheckingOut(false);
 		setCompletedAt(null);
@@ -541,6 +568,16 @@ export default function BillingPage({
 					break;
 				}
 				case CheckoutEventNames.CHECKOUT_CLOSED: {
+					// Read before reportCheckoutExit, which only reads these refs.
+					if (
+						checkoutTierRef.current &&
+						paymentAttemptedRef.current &&
+						!checkoutCompletedRef.current &&
+						!activatedRef.current
+					) {
+						setCheckingOut(false);
+						setUnfinished(true);
+					}
 					reportCheckoutExit(false);
 					checkoutOpenRef.current = false;
 					break;
@@ -600,6 +637,8 @@ export default function BillingPage({
 			checkoutIdRef.current = null;
 			paymentAttemptedRef.current = false;
 			checkoutExitReportedRef.current = false;
+			activatedRef.current = false;
+			setUnfinished(false);
 			if (isInline) {
 				setCheckingOut(true);
 			}
@@ -790,6 +829,15 @@ export default function BillingPage({
 						<SlowActivationBanner
 							transactionId={transactionId}
 							onRefresh={() => window.location.reload()}
+						/>
+					) : unfinished ? (
+						<UnfinishedPaymentBanner
+							onRetry={() => {
+								const tier = checkoutTierRef.current;
+								if (tier) {
+									handleStartCheckout(tier);
+								}
+							}}
 						/>
 					) : isInline && checkingOut ? (
 						<>

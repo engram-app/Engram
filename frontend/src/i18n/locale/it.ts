@@ -100,6 +100,9 @@ export default {
 	Refresh: "Ricarica",
 	"Contact support": "Contatta l'assistenza",
 	"Reference number: {id}": "Numero di riferimento: {id}",
+	"Your payment did not finish, so you have not been subscribed.":
+		"Il tuo pagamento non è stato completato, quindi non sei stato abbonato.",
+	"Try again": "Riprova",
 	"Loading billing": "Caricamento fatturazione",
 	"Could not open the billing portal. Please try again.":
 		"Impossibile aprire il portale di fatturazione. Riprova.",

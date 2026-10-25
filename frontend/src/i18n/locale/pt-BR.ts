@@ -103,6 +103,9 @@ export default {
 	Refresh: "Atualizar",
 	"Contact support": "Entre em contato com o suporte",
 	"Reference number: {id}": "Número de referência: {id}",
+	"Your payment did not finish, so you have not been subscribed.":
+		"Seu pagamento não foi concluído, então você não foi inscrito.",
+	"Try again": "Tentar novamente",
 	"Loading billing": "Carregando informações de pagamento",
 	"Could not open the billing portal. Please try again.":
 		"Não foi possível abrir o portal de pagamento. Tente novamente.",

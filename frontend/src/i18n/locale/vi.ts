@@ -99,6 +99,9 @@ export default {
 	Refresh: "Tải lại",
 	"Contact support": "Liên hệ hỗ trợ",
 	"Reference number: {id}": "Mã tham chiếu: {id}",
+	"Your payment did not finish, so you have not been subscribed.":
+		"Thanh toán của bạn chưa hoàn tất, vì vậy bạn chưa được đăng ký.",
+	"Try again": "Thử lại",
 	"Loading billing": "Đang tải thông tin thanh toán",
 	"Could not open the billing portal. Please try again.":
 		"Không thể mở trang thanh toán. Vui lòng thử lại.",

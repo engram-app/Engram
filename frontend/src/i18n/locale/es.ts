@@ -102,6 +102,9 @@ export default {
 	Refresh: "Refrescar",
 	"Contact support": "Contacta con soporte",
 	"Reference number: {id}": "Número de referencia: {id}",
+	"Your payment did not finish, so you have not been subscribed.":
+		"Tu pago no se completó, por lo que no has sido suscrito.",
+	"Try again": "Inténtalo de nuevo",
 	"Loading billing": "Cargando la información de facturación",
 	"Could not open the billing portal. Please try again.":
 		"No se pudo abrir el portal de facturación. Inténtalo de nuevo.",

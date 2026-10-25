@@ -103,6 +103,9 @@ export default {
 	Refresh: "Оновити",
 	"Contact support": "Зв'язатися з підтримкою",
 	"Reference number: {id}": "Номер запису: {id}",
+	"Your payment did not finish, so you have not been subscribed.":
+		"Ваш платіж не завершено, тому ви не підписані.",
+	"Try again": "Спробувати ще раз",
 	"Loading billing": "Завантаження інформації про оплату",
 	"Could not open the billing portal. Please try again.":
 		"Не вдалося відкрити сторінку оплати. Спробуйте ще раз.",
