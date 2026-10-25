@@ -63,9 +63,12 @@ defmodule Engram.Storage.InMemory do
   @impl true
   def get_range(key, offset, length) do
     with {:ok, binary} <- get(key) do
-      if offset + length <= byte_size(binary),
-        do: {:ok, binary_part(binary, offset, length)},
-        else: {:error, :invalid_range}
+      cond do
+        offset + length <= byte_size(binary) -> {:ok, binary_part(binary, offset, length)}
+        # What S3 answers when not one byte of the range exists.
+        offset >= byte_size(binary) -> {:error, {:http_error, 416, %{body: "InvalidRange"}}}
+        true -> {:error, :invalid_range}
+      end
     end
   end
 
@@ -155,7 +158,7 @@ defmodule Engram.Storage.InMemory do
     end
   end
 
-  @impl true
+  # Test inspection helper, not part of the behaviour (use Storage.presence/1).
   def exists?(key) do
     ensure_table()
     :ets.member(@table, key)

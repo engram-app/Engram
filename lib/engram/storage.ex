@@ -29,9 +29,6 @@ defmodule Engram.Storage do
   @callback delete_many(keys :: [String.t()]) ::
               {:ok, non_neg_integer()} | {:error, term()}
 
-  @callback exists?(key :: String.t()) ::
-              boolean()
-
   @typedoc """
   One entry of a versioned bucket's history. `last_modified` orders a key's
   entries (newest is greatest); `latest?` marks the current one.
@@ -136,6 +133,26 @@ defmodule Engram.Storage do
 
   @doc "Returns the configured storage adapter module."
   def adapter, do: Application.get_env(:engram, :storage, __MODULE__.S3)
+
+  @doc """
+  Whether `key` holds an object: `:present`, `:missing`, or `{:error, reason}`
+  when the store could not answer. An error is "unknown", never "missing":
+  a caller that read it as absent finalized rows whose blob was still there
+  (#2233). The one presence check; there is no boolean `exists?`.
+
+  A one-byte ranged GET, on any adapter. A 0-byte object cannot serve byte 0:
+  S3 answers 416 InvalidRange. It exists, so it is present. Sealed objects are
+  never empty; this keeps the edge from reading as a failure.
+  """
+  @spec presence(String.t(), module()) :: :present | :missing | {:error, term()}
+  def presence(key, adapter \\ adapter()) when is_binary(key) do
+    case adapter.get_range(key, 0, 1) do
+      {:ok, _} -> :present
+      {:error, :not_found} -> :missing
+      {:error, {:http_error, 416, _}} -> :present
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   @doc """
   Build an attachment blob key from a UUID: a fresh one per stored blob

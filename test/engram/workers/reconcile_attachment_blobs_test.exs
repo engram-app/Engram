@@ -84,7 +84,7 @@ defmodule Engram.Workers.ReconcileAttachmentBlobsTest do
     assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault))
 
     assert reload(att).deleted_at
-    refute Storage.adapter().exists?(att.storage_key)
+    assert Storage.presence(att.storage_key) == :missing
   end
 
   test "a healthy row is left alone", %{user: user, vault: vault} do
@@ -164,7 +164,7 @@ defmodule Engram.Workers.ReconcileAttachmentBlobsTest do
     {:ok, _} = Storage.adapter().delete_prefix("#{user.id}/")
 
     assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault))
-    refute Storage.adapter().exists?(att.storage_key)
+    assert Storage.presence(att.storage_key) == :missing
   end
 
   test "makes no copy for a vault being purged", %{user: user, vault: vault} do
@@ -179,7 +179,7 @@ defmodule Engram.Workers.ReconcileAttachmentBlobsTest do
       )
 
     assert :ok = perform_job(ReconcileAttachmentBlobs, args(user, vault))
-    refute Storage.adapter().exists?(att.storage_key)
+    assert Storage.presence(att.storage_key) == :missing
   end
 
   test "an upload landing after the listing is not called unrecoverable", %{
@@ -289,7 +289,6 @@ defmodule Engram.Workers.ReconcileAttachmentBlobsTest do
       )
 
     use_mock_storage()
-    Mox.stub(Engram.MockStorage, :exists?, fn _ -> false end)
     Mox.stub(Engram.MockStorage, :get_range, fn _, _, _ -> {:error, :timeout} end)
 
     log =

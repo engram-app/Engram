@@ -236,9 +236,9 @@ defmodule Engram.AttachmentsTest do
   # cap). `content_hash` is already computed and stored on every write — this
   # makes the write path consult it.
   describe "upsert_attachment/3 — identical-content short-circuit" do
-    # The short-circuit now HEADs the blob first (#2159): present = no write.
+    # The short-circuit probes the blob first (#2159): present = no write.
     setup do
-      Mox.stub(Engram.MockStorage, :exists?, fn _key -> true end)
+      Mox.stub(Engram.MockStorage, :get_range, fn _key, 0, 1 -> {:ok, <<0>>} end)
       :ok
     end
 
@@ -314,6 +314,41 @@ defmodule Engram.AttachmentsTest do
 
       assert {:ok, _} = Attachments.upsert_attachment(user, vault, params)
       refute_received :put
+    end
+
+    # A storage error is "unknown", not "missing": the bytes are in hand, so
+    # the upload writes them again (safe, idempotent) and the request
+    # succeeds, rather than crashing on the error or logging a heal that may
+    # not have been needed (#2233).
+    test "an identical upload during a storage error rewrites the bytes and succeeds", %{
+      user: user,
+      vault: vault
+    } do
+      test_pid = self()
+      params = %{"path" => @path, "content_base64" => @valid_content}
+      expect(Engram.MockStorage, :put, 1, fn _key, _binary, _opts -> :ok end)
+      {:ok, _first} = Attachments.upsert_attachment(user, vault, params)
+
+      Mox.stub(Engram.MockStorage, :get_range, fn _key, _, _ -> {:error, :timeout} end)
+      Mox.stub(Engram.MockStorage, :delete, fn _key -> :ok end)
+
+      Mox.stub(Engram.MockStorage, :put, fn _key, _bin, _opts ->
+        send(test_pid, :put)
+        :ok
+      end)
+
+      previous_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous_level) end)
+
+      log =
+        capture_log([level: :info], fn ->
+          assert {:ok, _} = Attachments.upsert_attachment(user, vault, params)
+        end)
+
+      Logger.configure(level: previous_level)
+      assert_received :put
+      refute log =~ "attachment blob healed from client"
     end
 
     test "different bytes at the same path still write", %{user: user, vault: vault} do

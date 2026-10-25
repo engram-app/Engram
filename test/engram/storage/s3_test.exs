@@ -278,45 +278,6 @@ defmodule Engram.Storage.S3Test do
     end
   end
 
-  describe "exists?/1" do
-    test "returns true when object exists", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "HEAD", "/#{@bucket}/#{@key}", fn conn ->
-        Plug.Conn.resp(conn, 200, "")
-      end)
-
-      assert S3.exists?(@key) == true
-    end
-
-    test "returns false when object does not exist", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "HEAD", "/#{@bucket}/#{@key}", fn conn ->
-        Plug.Conn.resp(conn, 404, "")
-      end)
-
-      assert S3.exists?(@key) == false
-    end
-
-    test "logs a shippable :sync error on non-404 failure", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "HEAD", "/#{@bucket}/#{@key}", fn conn ->
-        Plug.Conn.resp(conn, 500, "")
-      end)
-
-      {result, events} = LogCapture.with_events(fn -> S3.exists?(@key) end)
-
-      assert result == false
-
-      event = Enum.find(events, fn e -> render_msg(e.msg) =~ "S3.exists? failed" end)
-
-      assert event, "expected an S3.exists? failure log event"
-      assert event.level == :error
-      assert event.meta[:category] == :sync
-      assert event.meta[:loki_ship] == true
-      # storage_key is a redacted metadata key (embeds user/vault ids), so the
-      # filter scrubs it before the sink — assert it's present-but-redacted
-      # rather than leaking the raw key.
-      assert event.meta[:storage_key] == "[REDACTED]"
-    end
-  end
-
   describe "start_multipart/1" do
     test "returns the upload id parsed from the XML body", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/#{@bucket}/#{@key}", fn conn ->

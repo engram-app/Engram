@@ -347,7 +347,29 @@ defmodule Engram.Attachments do
   defp identical_or_changed(_user, _existing, _plaintext, _path, _explicit_mime), do: :changed
 
   defp blob_present?(%Attachment{storage_key: key} = att) when is_binary(key) do
-    Storage.adapter().exists?(key) or blob_healing(att)
+    case Storage.presence(key) do
+      :present ->
+        true
+
+      :missing ->
+        blob_healing(att)
+
+      # Treat as absent: the bytes are in hand, so a full write is safe
+      # (idempotent, re-seals the blob) and the upload still succeeds.
+      # Skipping the write on an unknown answer could leave a lost blob lost.
+      {:error, reason} ->
+        require Logger
+
+        Logger.warning(
+          "attachment blob probe failed, rewriting the identical upload",
+          Metadata.with_category(:warning, :sync,
+            attachment_id: att.id,
+            reason: Metadata.safe_reason(reason)
+          )
+        )
+
+        false
+    end
   end
 
   defp blob_present?(att), do: blob_healing(att)

@@ -84,12 +84,15 @@ sweep and restore time, not stamped at delete time. A Pro user who deletes
    before or after its S3 delete. The GC settles every stale claim: a row
    still past its window is re-claimed and finalized; a row no longer due
    (retention went UP after the claim, e.g. Free to Pro) has its blob checked
-   with `Storage.exists?/1` under the vault lock, then the claim is dropped
-   (blob there: restorable again) or the row finalized (blob gone). Limit:
-   the S3 adapter reports a storage error as "absent", so an outage during
-   that check finalizes a row whose blob still exists (orphaned object,
-   unrestorable row, never a live row without bytes). Never write
-   `deleted_at: nil` on an attachment anywhere else.
+   with `Storage.presence/1`, then, under the vault lock and guarded by the
+   observed claim stamp, the claim is dropped (`:present`: restorable again)
+   or the row finalized (`:missing`). A storage error (`{:error, _}`) is
+   unknown: the row keeps its claim and key, and the next run asks again.
+   `presence/1` is the only presence check (there is no boolean `exists?`);
+   every caller must handle `{:error, _}` as unknown. Accepted low: the
+   settle query takes 1,000 stale claims unordered and drops due ones
+   afterwards, so past 1,000 a not-due row can wait one run (self-heals).
+   Never write `deleted_at: nil` on an attachment anywhere else.
 2. **Every claimed-but-not-restored path is released.** The restore claims
    all paths up front; a row that then does not come back (`path_taken`,
    `changed`, `unreadable`, or every row from a chunk that raised) would leave

@@ -120,12 +120,13 @@ defmodule Engram.Workers.AttachmentBlobGC do
   # row the way a finished delete would (`storage_key` cleared); blob there,
   # drop the claim so the row is restorable (and reapable once due) again.
   # The write is guarded by the observed claim stamp, under the vault lock,
-  # so a run that re-claimed in between is left alone.
+  # so a run that re-claimed in between is left alone. A storage error is
+  # "unknown": the row keeps its claim and key, and the next run asks again.
   #
-  # ponytail: `exists?/1` reports a storage error as "absent" (S3 adapter),
-  # so an outage here finalizes a row whose blob is still there: an orphaned
-  # object (storage cost) and an unrestorable row, never a live row with no
-  # bytes. Split the adapter's error from absence if that ever shows up.
+  # ponytail: the query takes @batch rows unordered and drops the due ones in
+  # Elixir, so past @batch stale due claims a not-due row can wait one run
+  # (the normal sweep clears the due ones meanwhile). Filter `due?` in SQL if
+  # that ever matters.
   defp settle_stranded_claims(now, grace) do
     stale = DateTime.add(now, -@stale_claim_minutes * 60, :second)
 
@@ -168,7 +169,14 @@ defmodule Engram.Workers.AttachmentBlobGC do
 
   defp settle_vault(vault_id, stranded) do
     # Storage first, outside the transaction (no I/O under the lock).
-    checked = Enum.map(stranded, &{&1, Storage.adapter().exists?(&1.key)})
+    checked =
+      Enum.flat_map(stranded, fn row ->
+        case Storage.presence(row.key) do
+          {:error, reason} -> unknown(row, reason)
+          presence -> [{row, presence}]
+        end
+      end)
+
     repo = Repo.maintenance()
 
     {:ok, settled} =
@@ -179,9 +187,9 @@ defmodule Engram.Workers.AttachmentBlobGC do
               from(v in Vault, where: v.id == ^vault_id, lock: "FOR NO KEY UPDATE", select: v.id)
             )
 
-          Enum.reduce(checked, 0, fn {row, present?}, n ->
+          Enum.reduce(checked, 0, fn {row, presence}, n ->
             set =
-              if present?,
+              if presence == :present,
                 do: [blob_gc_claimed_at: nil],
                 else: [storage_key: nil, blob_gc_claimed_at: nil]
 
@@ -208,6 +216,19 @@ defmodule Engram.Workers.AttachmentBlobGC do
     end
 
     settled
+  end
+
+  defp unknown(row, reason) do
+    Logger.warning(
+      "attachment_blob_gc: blob probe failed, settling the stale claim next run",
+      Metadata.with_category(:warning, :oban,
+        vault_id: row.vault_id,
+        attachment_id: row.id,
+        reason: Metadata.safe_reason(reason)
+      )
+    )
+
+    []
   end
 
   # Unlocked, and only to find work: every decision is re-made under the

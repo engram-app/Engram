@@ -208,6 +208,48 @@ defmodule Engram.Workers.AttachmentBlobGCTest do
       assert {:ok, %{restored: [_]}} = Attachments.revive_tombstones(user, vault, [att.id])
     end
 
+    # A storage error is "unknown": the row must not be finalized (its blob
+    # may well be there) and must stay settleable on the next pass.
+    test "is left alone on a storage error, and settled on the next pass", %{
+      user: user,
+      vault: vault
+    } do
+      att = stranded!(user, vault, "a.png")
+      use_mock_storage()
+      Mox.stub(Engram.MockStorage, :get_range, fn _key, _, _ -> {:error, :timeout} end)
+
+      assert AttachmentBlobGC.sweep() == 0
+      row = reload(att)
+      assert row.storage_key == att.storage_key
+      assert row.blob_gc_claimed_at
+
+      Mox.stub_with(Engram.MockStorage, InMemory)
+      assert AttachmentBlobGC.sweep() == 0
+      assert %{blob_gc_claimed_at: nil} = reload(att)
+      assert reload(att).storage_key == att.storage_key
+    end
+
+    # A run that re-claims the row between the probe and the write owns it
+    # now: the settle's write is guarded by the claim stamp it observed.
+    test "is left alone when re-claimed between the probe and the write", %{
+      user: user,
+      vault: vault
+    } do
+      att = stranded!(user, vault, "a.png")
+      use_mock_storage()
+
+      Mox.stub(Engram.MockStorage, :get_range, fn _key, _, _ ->
+        backdate_claim!(att, 0)
+        {:error, :not_found}
+      end)
+
+      before = DateTime.add(DateTime.utc_now(), -60, :second)
+      assert AttachmentBlobGC.sweep() == 0
+      row = reload(att)
+      assert row.storage_key == att.storage_key
+      assert DateTime.compare(row.blob_gc_claimed_at, before) == :gt
+    end
+
     test "is finalized when its blob is already gone", %{user: user, vault: vault} do
       att = stranded!(user, vault, "a.png")
       :ok = Storage.adapter().delete(att.storage_key)

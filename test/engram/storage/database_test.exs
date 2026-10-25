@@ -27,11 +27,35 @@ defmodule Engram.Storage.DatabaseTest do
     end
   end
 
-  describe "exists?/1" do
-    test "true when present, false when absent" do
+  describe "get_range/3" do
+    test "reads the bytes in range, and what exists past the end" do
+      assert :ok = Database.put("1/2/a.png", "abcdef")
+      assert {:ok, "bcd"} = Database.get_range("1/2/a.png", 1, 3)
+      assert {:ok, "ef"} = Database.get_range("1/2/a.png", 4, 9)
+      assert {:error, :not_found} = Database.get_range("1/2/missing.png", 0, 1)
+    end
+  end
+
+  # Storage.presence/1 on the self-host adapter: same three answers as S3.
+  describe "Storage.presence/1 on Database" do
+    test "present, a 0-byte object present, absent missing" do
       assert :ok = Database.put("1/2/a.png", @binary)
-      assert Database.exists?("1/2/a.png") == true
-      assert Database.exists?("1/2/missing.png") == false
+      assert :ok = Database.put("1/2/empty.png", "")
+      assert Engram.Storage.presence("1/2/a.png", Database) == :present
+      assert Engram.Storage.presence("1/2/empty.png", Database) == :present
+      assert Engram.Storage.presence("1/2/missing.png", Database) == :missing
+    end
+
+    # A read error (here: the connection's transaction is aborted) is
+    # unknown, never missing.
+    test "a read error is {:error, _}, not :missing" do
+      assert :ok = Database.put("1/2/a.png", @binary)
+
+      Engram.Repo.transaction(fn ->
+        {:error, _} = Engram.Repo.query("SELECT 1/0")
+        assert {:error, _} = Engram.Storage.presence("1/2/a.png", Database)
+        Engram.Repo.rollback(:done)
+      end)
     end
   end
 
