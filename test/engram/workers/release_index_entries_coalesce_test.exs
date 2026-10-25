@@ -110,6 +110,35 @@ defmodule Engram.Workers.ReleaseIndexEntriesCoalesceTest do
 
   defp ids(n), do: for(_ <- 1..n, do: Ecto.UUID.generate())
 
+  # Delta check of #2209 (M1): a retried job is staged back to `available`
+  # with its spent attempts. Joining it would hand new ids a job one failure
+  # from discard, losing their releases with it.
+  test "a retried job does not absorb new note ids", ctx do
+    [first] = ids(1)
+    [second] = ids(1)
+    {:ok, _} = ReleaseIndexEntries.enqueue(ctx.user.id, ctx.vault.id, [first])
+    [retried] = release_jobs()
+    Repo.update_all(from(j in Oban.Job, where: j.id == ^retried.id), set: [attempt: 4])
+
+    {:ok, _} = ReleaseIndexEntries.enqueue(ctx.user.id, ctx.vault.id, [second])
+
+    assert Enum.map(release_jobs(), & &1.args["note_ids"]) == [[first], [second]]
+  end
+
+  # Oban's snooze gives the attempt back, so a job waiting out a key rotation
+  # is still at attempt 0 and still joinable.
+  test "a job snoozed (scheduled, attempt 0) still absorbs new note ids", ctx do
+    [first] = ids(1)
+    [second] = ids(1)
+    {:ok, _} = ReleaseIndexEntries.enqueue(ctx.user.id, ctx.vault.id, [first])
+    [snoozed] = release_jobs()
+    Repo.update_all(from(j in Oban.Job, where: j.id == ^snoozed.id), set: [state: "scheduled"])
+
+    {:ok, _} = ReleaseIndexEntries.enqueue(ctx.user.id, ctx.vault.id, [second])
+
+    assert Enum.map(release_jobs(), & &1.args["note_ids"]) == [[first, second]]
+  end
+
   # Review of #2209 (M3): a pending job, a chain successor included, kept
   # absorbing ids without bound. A job holds at most one chunk's worth of
   # joined ids; past that a release queues its own job.

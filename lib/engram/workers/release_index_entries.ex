@@ -178,6 +178,11 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   # worth. A full one (a chain successor carrying the rest of a storm, a
   # folder delete) is left alone and the release gets its own job, so no
   # pending job grows without bound while its vault keeps deleting.
+  #
+  # Only a job at attempt 0 is joined. A retried job comes back `available`
+  # with its spent attempts, so ids joined into it would be discarded with it
+  # on its next failure. Oban's snooze gives the attempt back, so a job
+  # waiting out a key rotation still qualifies.
   defp join_pending(_user_id, _vault_id, note_ids) when length(note_ids) >= @chunk_size,
     do: {0, nil}
 
@@ -187,7 +192,7 @@ defmodule Engram.Workers.ReleaseIndexEntries do
 
     pending =
       from(j in Oban.Job,
-        where: j.state in ^@pending_states and j.queue == ^queue,
+        where: j.state in ^@pending_states and j.queue == ^queue and j.attempt == 0,
         where: j.worker == ^inspect(__MODULE__),
         where: fragment("? @> ?", j.args, ^%{"user_id" => user_id, "vault_id" => vault_id}),
         where:
