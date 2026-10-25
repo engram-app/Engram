@@ -336,4 +336,23 @@ defmodule Engram.Fixtures do
       skip_tenant_check: true
     )
   end
+
+  @doc """
+  A Paddle transaction as `GET /transactions` returns it: completed and
+  nonzero by default, so it has an invoice. Override `status` or
+  `grand_total` for the invoice-less shapes ($0 trial start, draft, ...).
+  """
+  def paddle_transaction(id, attrs \\ %{}) do
+    %{
+      "id" => id,
+      "status" => Map.get(attrs, :status, "completed"),
+      "details" => %{
+        "totals" => %{
+          "grand_total" => Map.get(attrs, :grand_total, "2000"),
+          "currency_code" => "USD"
+        }
+      },
+      "payments" => []
+    }
+  end
 end

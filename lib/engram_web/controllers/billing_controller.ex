@@ -9,6 +9,7 @@ defmodule EngramWeb.BillingController do
   alias Engram.Connections
   alias Engram.UsageMeters
   alias Engram.Vaults
+  alias EngramWeb.Plugs.Halt
 
   require Logger
 
@@ -241,6 +242,7 @@ defmodule EngramWeb.BillingController do
           }
         },
         customer_email: user.email,
+        customer_id: Billing.paddle_customer_id(user),
         custom_data: %{user_id: user.id},
         vaults_cap: cap_json(Billing.cap(user, :vaults_cap)),
         # Which note-cap set is enforced ("legacy" or "v5"): the plan cards
@@ -316,6 +318,31 @@ defmodule EngramWeb.BillingController do
     end)
   end
 
+  @doc """
+  `GET /api/billing/checkout-transactions/:id`: the Paddle status of a
+  checkout the caller opened. Only the status: no amounts, no PII.
+  """
+  def checkout_transaction(conn, %{"id" => transaction_id}) do
+    with_billing(conn, fn ->
+      case Billing.checkout_transaction_status(conn.assigns.current_user, transaction_id) do
+        {:ok, status} ->
+          json(conn, %{status: status})
+
+        {:error, :invalid_id} ->
+          conn |> put_status(400) |> json(%{error: "invalid transaction id"})
+
+        {:error, :not_found} ->
+          not_found(conn, "transaction not found")
+
+        {:error, {:rate_limited, retry_after_ms}} ->
+          Halt.rate_limited(conn, retry_after_ms)
+
+        {:error, reason} ->
+          paddle_error(conn, reason)
+      end
+    end)
+  end
+
   @doc "Mint the hosted invoice URL for one of the user's own transactions."
   def transaction_invoice(conn, %{"id" => transaction_id}) do
     with_billing(conn, fn ->
@@ -323,6 +350,10 @@ defmodule EngramWeb.BillingController do
         {:ok, url} -> json(conn, %{url: url})
         {:error, :no_subscription} -> not_found(conn, "no subscription")
         {:error, :not_found} -> not_found(conn, "transaction not found")
+        # $0 transactions (every trial start) have no Paddle invoice. Not a
+        # provider failure: the HTTP client already logged the Paddle 404 at
+        # warning, below the billing-error page alert's severity filter.
+        {:error, :no_invoice} -> not_found(conn, "no invoice for this transaction")
         {:error, reason} -> paddle_error(conn, reason)
       end
     end)

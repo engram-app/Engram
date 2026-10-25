@@ -51,6 +51,14 @@ defmodule Engram.Workers.CancelReasonMarkerTest do
     assert reasons(user) == ["portal_no_reason"]
   end
 
+  test "an in-app cancel with no reason is filed once, as in_app_no_reason", %{user: user} do
+    assert :ok = Engram.Feedback.submit(user, "cancel", %{"reason" => "in_app_no_reason"})
+    :ok = EventLog.flush()
+
+    assert :ok = perform_job(CancelReasonMarker, args(user, 5))
+    assert reasons(user) == ["in_app_no_reason"]
+  end
+
   test "files nothing when the dialog's reason is on file", %{user: user} do
     log_event(user, "subscription_cancel_reason", %{"reason" => "not_using"}, 590)
 

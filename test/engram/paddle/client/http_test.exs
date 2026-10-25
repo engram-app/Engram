@@ -221,6 +221,59 @@ defmodule Engram.Paddle.Client.HTTPTest do
     end
   end
 
+  # Paddle caps the transactions list at 30 per page ("the default and
+  # maximum"). Reading only the first page hid every older transaction from
+  # history and from the invoice ownership check.
+  describe "list_transactions/1 pagination" do
+    test "walks every page on has_more, asking for 30 per page", %{bypass: bypass} do
+      base = "http://localhost:#{bypass.port}"
+      first = for i <- 1..30, do: %{"id" => "txn_#{i}"}
+
+      Bypass.expect(bypass, "GET", "/transactions", fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+
+        body =
+          case conn.query_params do
+            %{"after" => "txn_30"} ->
+              %{
+                "data" => [%{"id" => "txn_31"}],
+                "meta" => %{
+                  "pagination" => %{
+                    "next" => "#{base}/transactions?after=txn_31",
+                    "has_more" => false
+                  }
+                }
+              }
+
+            params ->
+              assert params["per_page"] == "30"
+              assert params["customer_id"] == "ctm_dev"
+              refute Map.has_key?(params, "subscription_id")
+              # draft and ready are unpaid checkouts, not history.
+              assert params["status"] == "billed,paid,completed,past_due,canceled"
+
+              %{
+                "data" => first,
+                "meta" => %{
+                  "pagination" => %{
+                    "next" => "#{base}/transactions?after=txn_30",
+                    "has_more" => true
+                  }
+                }
+              }
+          end
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(body))
+      end)
+
+      assert {:ok, txns} = HTTP.list_transactions("ctm_dev")
+      assert length(txns) == 31
+      assert List.last(txns)["id"] == "txn_31"
+    end
+  end
+
   describe "cancel_subscription/3" do
     test "POSTs effective_from + forwards idempotency key", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/subscriptions/sub_abc/cancel", fn conn ->

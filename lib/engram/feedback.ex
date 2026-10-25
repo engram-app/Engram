@@ -26,6 +26,10 @@ defmodule Engram.Feedback do
   @heard_from ~w(search reddit youtube obsidian_community obsidian_plugins friend ai_assistant social other)
   @use_cases ~w(ai_memory obsidian_sync web_access search backup sharing other)
   @cancel_reasons ~w(too_expensive missing_feature sync_issues switched_tool not_using other)
+  # Filed by the in-app dialog when the user canceled without picking a
+  # reason. Not a dialog option, and distinct from `portal_no_reason` (a
+  # cancel made outside the app), so insights can tell the two apart.
+  @in_app_no_reason "in_app_no_reason"
   @categories ~w(bug idea confusing love missing_capability)
   @sources ~w(web plugin mcp)
   @initiators ~w(user model)
@@ -123,7 +127,8 @@ defmodule Engram.Feedback do
     end
   end
 
-  def submit(user, "cancel", %{"reason" => reason} = params) when reason in @cancel_reasons do
+  def submit(user, "cancel", %{"reason" => reason} = params)
+      when reason in @cancel_reasons or reason == @in_app_no_reason do
     capture(user, "subscription_cancel_reason", %{
       "reason" => reason,
       "detail" => text(params["detail"]),
@@ -175,9 +180,10 @@ defmodule Engram.Feedback do
 
   @doc """
   File a cancel reason for a cancel that came with none. Only the in-app
-  dialog asks why; a cancel through Paddle's hosted portal (or its dashboard)
-  arrives with no reason, and this marker keeps that gap visible in the
-  cancel-reason counts.
+  dialog asks why, and it always files something (`in_app_no_reason` when
+  the user skipped the question); a cancel through Paddle's hosted portal (or
+  its dashboard) arrives with no reason, and this marker keeps that gap
+  visible in the cancel-reason counts.
 
   A reason counts when it was filed since the subscription started and after
   the user's last in-app reversal (`cancel_reversed`), so a reason given for a

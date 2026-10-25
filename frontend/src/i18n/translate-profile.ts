@@ -172,6 +172,15 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
 	// The pre-v5 caps' summary, shown until the v5 go flag is on.
 	"3,000 notes · 20 AI searches a day · 1 vault":
 		"Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+	// ja replaced the separator with 。 (2026-10-24).
+	"14-day money-back guarantee · cancel anytime":
+		"Line under a checkout button: two short items. Keep the ' · ' separator between them exactly as written.",
+	// The renewal line beside every paid CTA. tr appended "TL" (a false price)
+	// and zh-CN/zh-TW "美元" after {price}, which already holds "$70" (2026-10-24).
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$7'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$70'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
 	// Properties help, under a field: either key name works in the frontmatter.
 	"use {alias} or {key}":
 		"Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",

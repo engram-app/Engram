@@ -53,10 +53,13 @@
 			"Manage your profile, password, and account.": "Verwalte dein Profil, dein Passwort und dein Konto."
 		},
 		"descriptions": {
+			"14-day money-back guarantee · cancel anytime": "Line under a checkout button: two short items. Keep the ' · ' separator between them exactly as written.",
 			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
 			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$7'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
+			"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$70'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -131,10 +134,13 @@
 			"Manage your profile, password, and account.": "Gestiona tu perfil, tu contraseña y tu cuenta."
 		},
 		"descriptions": {
+			"14-day money-back guarantee · cancel anytime": "Line under a checkout button: two short items. Keep the ' · ' separator between them exactly as written.",
 			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
 			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$7'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
+			"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$70'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -211,10 +217,13 @@
 			"Manage your profile, password, and account.": "Gère ton profil, ton mot de passe et ton compte."
 		},
 		"descriptions": {
+			"14-day money-back guarantee · cancel anytime": "Line under a checkout button: two short items. Keep the ' · ' separator between them exactly as written.",
 			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
 			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$7'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
+			"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$70'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -291,10 +300,13 @@
 			"Manage your profile, password, and account.": "Gestisci il tuo profilo, la password e l'account."
 		},
 		"descriptions": {
+			"14-day money-back guarantee · cancel anytime": "Line under a checkout button: two short items. Keep the ' · ' separator between them exactly as written.",
 			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
 			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$7'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
+			"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$70'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -369,10 +381,13 @@
 			"Manage your profile, password, and account.": "プロフィール、パスワード、アカウントを管理します。"
 		},
 		"descriptions": {
+			"14-day money-back guarantee · cancel anytime": "Line under a checkout button: two short items. Keep the ' · ' separator between them exactly as written.",
 			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
 			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$7'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
+			"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$70'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -447,10 +462,13 @@
 			"Manage your profile, password, and account.": "프로필, 비밀번호, 계정을 관리하세요."
 		},
 		"descriptions": {
+			"14-day money-back guarantee · cancel anytime": "Line under a checkout button: two short items. Keep the ' · ' separator between them exactly as written.",
 			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
 			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$7'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
+			"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$70'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -527,10 +545,13 @@
 			"Manage your profile, password, and account.": "Urus profil, kata laluan dan akaun anda."
 		},
 		"descriptions": {
+			"14-day money-back guarantee · cancel anytime": "Line under a checkout button: two short items. Keep the ' · ' separator between them exactly as written.",
 			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
 			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$7'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
+			"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$70'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -607,10 +628,13 @@
 			"Manage your profile, password, and account.": "Gerencie seu perfil, sua senha e sua conta."
 		},
 		"descriptions": {
+			"14-day money-back guarantee · cancel anytime": "Line under a checkout button: two short items. Keep the ' · ' separator between them exactly as written.",
 			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
 			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$7'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
+			"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$70'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -686,10 +710,13 @@
 			"Manage your profile, password, and account.": "Управляйте профилем, паролем и учётной записью."
 		},
 		"descriptions": {
+			"14-day money-back guarantee · cancel anytime": "Line under a checkout button: two short items. Keep the ' · ' separator between them exactly as written.",
 			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
 			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$7'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
+			"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$70'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -766,10 +793,13 @@
 			"Manage your profile, password, and account.": "Quản lý hồ sơ mật khẩu và tài khoản của bạn."
 		},
 		"descriptions": {
+			"14-day money-back guarantee · cancel anytime": "Line under a checkout button: two short items. Keep the ' · ' separator between them exactly as written.",
 			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
 			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$7'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
+			"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$70'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -844,10 +874,13 @@
 			"Manage your profile, password, and account.": "管理你的资料、密码和账号。"
 		},
 		"descriptions": {
+			"14-day money-back guarantee · cancel anytime": "Line under a checkout button: two short items. Keep the ' · ' separator between them exactly as written.",
 			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
 			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$7'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
+			"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$70'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -922,10 +955,13 @@
 			"Manage your profile, password, and account.": "管理你的個人資料、密碼與帳號。"
 		},
 		"descriptions": {
+			"14-day money-back guarantee · cancel anytime": "Line under a checkout button: two short items. Keep the ' · ' separator between them exactly as written.",
 			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
 			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$7'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
+			"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$70'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -1000,10 +1036,13 @@
 			"Manage your profile, password, and account.": "Kelola profil kata sandi dan akun Anda."
 		},
 		"descriptions": {
+			"14-day money-back guarantee · cancel anytime": "Line under a checkout button: two short items. Keep the ' · ' separator between them exactly as written.",
 			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
 			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$7'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
+			"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$70'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -1080,10 +1119,13 @@
 			"Manage your profile, password, and account.": "Zarządzaj swoim profilem, hasłem i kontem."
 		},
 		"descriptions": {
+			"14-day money-back guarantee · cancel anytime": "Line under a checkout button: two short items. Keep the ' · ' separator between them exactly as written.",
 			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
 			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$7'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
+			"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$70'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -1158,10 +1200,13 @@
 			"Manage your profile, password, and account.": "Profilinizi, şifrenizi ve hesabınızı yönetin."
 		},
 		"descriptions": {
+			"14-day money-back guarantee · cancel anytime": "Line under a checkout button: two short items. Keep the ' · ' separator between them exactly as written.",
 			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
 			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$7'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
+			"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$70'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -1237,10 +1282,13 @@
 			"Manage your profile, password, and account.": "Spravujte svůj profil heslo a účet."
 		},
 		"descriptions": {
+			"14-day money-back guarantee · cancel anytime": "Line under a checkout button: two short items. Keep the ' · ' separator between them exactly as written.",
 			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
 			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$7'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
+			"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$70'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -1316,10 +1364,13 @@
 			"Manage your profile, password, and account.": "Керуйте вашим профілем паролем та обліковим записом."
 		},
 		"descriptions": {
+			"14-day money-back guarantee · cancel anytime": "Line under a checkout button: two short items. Keep the ' · ' separator between them exactly as written.",
 			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
 			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
 			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$7'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
+			"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.": "Auto-renewal terms under a checkout button. {price} is a finished amount that already carries its currency sign, like '$70'. Keep {price} exactly as written and add no currency name, sign or unit around it.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",

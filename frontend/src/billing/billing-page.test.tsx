@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { track } from "../analytics/track";
+import { ApiError } from "../api/client";
 import { type AuthAdapter, AuthContext } from "../auth/auth-context";
 import { ThemeProvider, useTheme } from "../theme/theme-provider";
 import BillingPage from "./billing-page";
@@ -15,6 +16,7 @@ vi.mock("@paddle/paddle-js", () => ({
 	initializePaddle: (...args: unknown[]) => initializePaddleMock(...args),
 	CheckoutEventNames: {
 		CHECKOUT_LOADED: "checkout.loaded",
+		CHECKOUT_UPDATED: "checkout.updated",
 		CHECKOUT_CLOSED: "checkout.closed",
 		CHECKOUT_COMPLETED: "checkout.completed",
 		CHECKOUT_PAYMENT_INITIATED: "checkout.payment.initiated",
@@ -26,7 +28,8 @@ vi.mock("@paddle/paddle-js", () => ({
 }));
 
 const { get } = vi.hoisted(() => ({ get: vi.fn() }));
-vi.mock("../api/client", () => ({
+vi.mock("../api/client", async (importOriginal) => ({
+	ApiError: (await importOriginal<typeof import("../api/client")>()).ApiError,
 	api: { get, post: vi.fn(), patch: vi.fn(), del: vi.fn() },
 	setTokenGetter: vi.fn(),
 }));
@@ -263,7 +266,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
 
 		const startButtons = container.querySelectorAll("button");
-		const startBtn = Array.from(startButtons).find((b) => b.textContent === "Start free trial");
+		const startBtn = Array.from(startButtons).find((b) => b.textContent === "Choose Starter");
 		expect(startBtn).toBeDefined();
 
 		await act(async () => {
@@ -277,8 +280,100 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(openMock).toHaveBeenCalledTimes(1);
 	});
 
-	// Wallets hidden pending real-charge data (#2203).
-	it("plan checkout offers every payment method except the wallets", async () => {
+	// California BPC 17602(a)(1) and ROSCA: the renewal terms sit next to the
+	// button that asks for consent, on every paid CTA (desktop card + mobile row).
+	it("states the renewal terms beside every paid CTA, per cadence", async () => {
+		mockBillingApi();
+		initializePaddleMock.mockImplementation(async () => ({
+			Checkout: { open: vi.fn(), close: vi.fn() },
+		}));
+		renderBilling({ inline: true });
+		await screen.findAllByRole("button", { name: "Choose Starter" });
+
+		const notice = (period: string, price: string) =>
+			`Renews automatically every ${period} at ${price} until you cancel. Cancel anytime in Settings > Billing.`;
+		const ctaHasNotice = (cta: string, text: string) => {
+			const buttons = screen.getAllByRole("button", { name: cta, hidden: true });
+			expect(buttons).toHaveLength(2);
+			for (const b of buttons) {
+				expect(within(b.closest("li")!).getByText(text)).toBeInTheDocument();
+			}
+		};
+
+		ctaHasNotice("Choose Starter", notice("year", "$70"));
+		ctaHasNotice("Choose Pro", notice("year", "$140"));
+
+		fireEvent.click(screen.getByRole("radio", { name: /monthly/iu }));
+		ctaHasNotice("Choose Starter", notice("month", "$7"));
+		ctaHasNotice("Choose Pro", notice("month", "$14"));
+	});
+
+	// Paddle: an inline frame shows no items, totals or recurring terms, so the
+	// page must. Catalog price first, then Paddle's tax-inclusive totals.
+	it("onboarding (inline): shows an order summary beside the frame, updated from Paddle's totals", async () => {
+		mockBillingApi();
+		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+			captured = opts.eventCallback;
+			return { Checkout: { open: vi.fn(), close: vi.fn() } };
+		});
+		const { container } = renderBilling({ inline: true });
+		const [startBtn] = await screen.findAllByRole("button", { name: "Choose Starter" });
+		await act(async () => {
+			startBtn!.click();
+			await Promise.resolve();
+		});
+		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
+
+		const summary = () => within(screen.getByRole("region", { name: "Order summary" }));
+		const renews = (price: string) =>
+			`Renews automatically every year at ${price} until you cancel. Cancel anytime in Settings > Billing.`;
+		expect(summary().getByText("Starter plan")).toBeInTheDocument();
+		expect(summary().getByText(renews("$70"))).toBeInTheDocument();
+		// No amount due until Paddle's taxed, localized total arrives: the USD
+		// list price would read as the charge in a taxed or non-USD market.
+		expect(summary().queryByText("$70")).toBeNull();
+		expect(summary().getByText("Due today").nextElementSibling).toHaveAttribute(
+			"aria-busy",
+			"true",
+		);
+
+		await act(async () => {
+			captured!({
+				name: "checkout.loaded",
+				data: {
+					id: "che_1",
+					currency_code: "EUR",
+					totals: { subtotal: 70, tax: 14, discount: 0, total: 84 },
+					recurring_totals: { subtotal: 70, tax: 14, discount: 0, total: 84 },
+					items: [],
+				},
+			});
+		});
+		expect(summary().getByText(renews("€84.00"))).toBeInTheDocument();
+		expect(summary().getByText("€84.00")).toBeInTheDocument();
+
+		// A discount on the first charge: today's total differs from the renewal.
+		await act(async () => {
+			captured!({
+				name: "checkout.updated",
+				data: {
+					id: "che_1",
+					currency_code: "EUR",
+					totals: { subtotal: 70, tax: 7, discount: 35, total: 42 },
+					recurring_totals: { subtotal: 70, tax: 14, discount: 0, total: 84 },
+					items: [],
+				},
+			});
+		});
+		expect(summary().getByText(renews("€84.00"))).toBeInTheDocument();
+		expect(summary().getByText("€42.00")).toBeInTheDocument();
+	});
+
+	// #2202 hid Apple Pay and Google Pay, but the wallet stalls were our own
+	// cooldown closing the checkout under the wallet sheet (armed on
+	// PAYMENT_INITIATED), not the wallets. In-app checkout offers every method.
+	it("plan checkout does not restrict payment methods (wallets offered)", async () => {
 		mockBillingApi();
 		const openMock = vi.fn();
 		initializePaddleMock.mockImplementation(async () => ({
@@ -288,26 +383,55 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		const { container, queryAllByText } = renderBilling({ inline: true });
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
 		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Start free trial",
+			(b) => b.textContent === "Choose Starter",
 		)!;
 		await act(async () => {
 			startBtn.click();
 			await Promise.resolve();
 		});
 
-		const methods: string[] = openMock.mock.calls[0]![0].settings.allowedPaymentMethods;
-		expect(methods).not.toContain("google_pay");
-		expect(methods).not.toContain("apple_pay");
-		expect(methods).toEqual(expect.arrayContaining(["card", "paypal"]));
-		// Init defaults (which the /pay auto-open inherits) stay unrestricted.
+		expect(openMock.mock.calls[0]![0].settings.allowedPaymentMethods).toBeUndefined();
 		const { settings } = initializePaddleMock.mock.calls[0]![0].checkout;
 		expect(settings.allowedPaymentMethods).toBeUndefined();
+	});
+
+	// Paddle: pass customer id OR email, not both. With a known id the buyer
+	// stays one Paddle customer; allowLogout:false stops them switching email
+	// inside checkout and splitting into a second one.
+	it.each([
+		["known Paddle customer: prefills by id", "ctm_known", { id: "ctm_known" }],
+		["new buyer: prefills by email", null, { email: "u@example.com" }],
+	])("plan checkout %s and blocks logout", async (_label, customerId, expected) => {
+		mockBillingApi();
+		const base = get.getMockImplementation()!;
+		get.mockImplementation(async (url: string) => {
+			const body = await base(url);
+			return url === "/billing/config" ? { ...body, customer_id: customerId } : body;
+		});
+		const openMock = vi.fn();
+		initializePaddleMock.mockImplementation(async () => ({
+			Checkout: { open: openMock, close: vi.fn() },
+		}));
+
+		const { container, queryAllByText } = renderBilling({ inline: true });
+		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+		const startBtn = Array.from(container.querySelectorAll("button")).find(
+			(b) => b.textContent === "Choose Starter",
+		)!;
+		await act(async () => {
+			startBtn.click();
+			await Promise.resolve();
+		});
+		await waitFor(() => expect(openMock).toHaveBeenCalledTimes(1));
+
+		expect(openMock.mock.calls[0]![0].customer).toEqual(expected);
+		expect(openMock.mock.calls[0]![0].settings.allowLogout).toBe(false);
 	});
 
 	describe("checkout funnel tracking", () => {
 		function startCheckout(container: HTMLElement) {
 			const startBtn = Array.from(container.querySelectorAll("button")).find(
-				(b) => b.textContent === "Start free trial",
+				(b) => b.textContent === "Choose Starter",
 			)!;
 			return act(async () => {
 				startBtn.click();
@@ -684,7 +808,148 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 			expect(mockTrack).not.toHaveBeenCalledWith("checkout_abandoned", expect.anything());
 		});
+
+		// The activation push can beat Paddle.js's checkout.completed. Our own
+		// Checkout.close() then fires checkout.closed on a paid checkout, which
+		// must not read as a stall or an abandon (#2203).
+		it("does not emit checkout_stalled/abandoned when the activation push closes the checkout first", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return {
+					Checkout: {
+						open: vi.fn(),
+						close: vi.fn(() => captured!({ name: "checkout.closed", data: {} })),
+					},
+				};
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+
+			await act(async () => {
+				captured!({ name: "checkout.loaded", data: {} });
+				captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+				await Promise.resolve();
+			});
+			await act(async () => {
+				channelHandlers.subscription_activated!({
+					tier: "starter",
+					status: "trialing",
+					subscription_id: "sub_1",
+				});
+				await Promise.resolve();
+			});
+
+			const exits = mockTrack.mock.calls.filter(
+				([e]) => e === "checkout_stalled" || e === "checkout_abandoned",
+			);
+			expect(exits).toEqual([]);
+			expect(mockTrack).toHaveBeenCalledWith("checkout_completed", { method: "unknown" });
+			// The push won, so the completion is reported from it, once: a late
+			// checkout.completed from Paddle.js must not count it twice.
+			await act(async () => {
+				captured!({ name: "checkout.completed", data: {} });
+				await Promise.resolve();
+			});
+			expect(mockTrack.mock.calls.filter(([e]) => e === "checkout_completed")).toEqual([
+				["checkout_completed", { method: "unknown" }],
+			]);
+		});
+
+		// subscription_activated is user-scoped and also fires for an OLD
+		// subscription's update or cancel. Only a push that shows a paying
+		// subscription counts as this checkout's completion; anything else must
+		// leave a real stall reported.
+		it("still reports the stall when the push is not a paying subscription", async () => {
+			mockBillingApi();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return {
+					Checkout: {
+						open: vi.fn(),
+						close: vi.fn(() => captured!({ name: "checkout.closed", data: {} })),
+					},
+				};
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			await startCheckout(container);
+
+			await act(async () => {
+				captured!({ name: "checkout.loaded", data: {} });
+				captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+				await Promise.resolve();
+			});
+			await act(async () => {
+				channelHandlers.subscription_activated!({
+					tier: "starter",
+					status: "canceled",
+					subscription_id: "sub_old",
+				});
+				await Promise.resolve();
+			});
+			// The push leaves the checkout open; the buyer then closes it.
+			await act(async () => {
+				captured!({ name: "checkout.closed", data: {} });
+				await Promise.resolve();
+			});
+
+			expect(mockTrack).toHaveBeenCalledWith(
+				"checkout_stalled",
+				{ method: "unknown", reason: "payment_unfinished" },
+				{ beacon: false },
+			);
+			expect(mockTrack).not.toHaveBeenCalledWith("checkout_completed", expect.anything());
+		});
 	});
+
+	// subscription_activated fires on every subscription mutation, including an
+	// older subscription going canceled or past_due. Closing Paddle on those
+	// killed a live wallet sheet mid-payment.
+	it.each(["canceled", "past_due"])(
+		"onboarding (inline): a %s push during an open checkout does not close Paddle",
+		async (status) => {
+			mockBillingApi();
+			const closeMock = vi.fn();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: closeMock } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			const startBtn = Array.from(container.querySelectorAll("button")).find(
+				(b) => b.textContent === "Choose Starter",
+			)!;
+			await act(async () => {
+				startBtn.click();
+				await Promise.resolve();
+			});
+			await act(async () => {
+				captured!({ name: "checkout.loaded", data: {} });
+				captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+				await Promise.resolve();
+			});
+			await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
+			await act(async () => {
+				channelHandlers.subscription_activated!({
+					tier: "starter",
+					status,
+					subscription_id: "sub_old",
+				});
+				await Promise.resolve();
+			});
+
+			expect(closeMock).not.toHaveBeenCalled();
+			expect(container.querySelector(".paddle-checkout")).toBeInTheDocument();
+		},
+	);
 
 	it("onboarding (inline): CHECKOUT_PAYMENT_FAILED keeps Paddle's frame open so the decline reason + retry stay visible", async () => {
 		// A declined card is a normal, retryable state: Paddle keeps its inline
@@ -704,7 +969,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		// "Starter" renders twice (desktop card + mobile accordion); assert count.
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
 		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Start free trial",
+			(b) => b.textContent === "Choose Starter",
 		)!;
 		await act(async () => {
 			startBtn.click();
@@ -726,6 +991,56 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(queryAllByText("Starter").length).toBe(0);
 	});
 
+	// A stale customer id (archived customer, or a sandbox id in a DB copied
+	// from another env) makes Paddle fire checkout.error, and a retry with the
+	// same id fails the same way. Reopen once by email instead.
+	it("onboarding (inline): a CHECKOUT_ERROR on a customer-id open reopens once by email", async () => {
+		mockBillingApi();
+		const base = get.getMockImplementation()!;
+		get.mockImplementation(async (url: string) => {
+			const body = await base(url);
+			return url === "/billing/config" ? { ...body, customer_id: "ctm_stale" } : body;
+		});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const openMock = vi.fn();
+		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+			captured = opts.eventCallback;
+			return { Checkout: { open: openMock, close: vi.fn() } };
+		});
+
+		const { container, queryAllByText } = renderBilling({ inline: true });
+		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+		const startBtn = Array.from(container.querySelectorAll("button")).find(
+			(b) => b.textContent === "Choose Starter",
+		)!;
+		await act(async () => {
+			startBtn.click();
+			await Promise.resolve();
+		});
+		await waitFor(() => expect(openMock).toHaveBeenCalledTimes(1));
+		expect(openMock.mock.calls[0]![0].customer).toEqual({ id: "ctm_stale" });
+
+		await act(async () => {
+			captured!({ name: "checkout.error", data: {} });
+			await Promise.resolve();
+		});
+		expect(openMock).toHaveBeenCalledTimes(2);
+		expect(openMock.mock.calls[1]![0].customer).toEqual({ email: "u@example.com" });
+		expect(openMock.mock.calls[1]![0].items).toEqual(openMock.mock.calls[0]![0].items);
+		expect(warn).toHaveBeenCalled();
+		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
+
+		// Only once: a second error on the email open is a real error.
+		await act(async () => {
+			captured!({ name: "checkout.error", data: {} });
+			await Promise.resolve();
+		});
+		expect(openMock).toHaveBeenCalledTimes(2);
+		expect(container.querySelector(".paddle-checkout")).toBeNull();
+		warn.mockRestore();
+	});
+
 	it("onboarding (inline): a genuine CHECKOUT_ERROR closes the frame and surfaces a message", async () => {
 		mockBillingApi();
 		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
@@ -738,7 +1053,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
 		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Start free trial",
+			(b) => b.textContent === "Choose Starter",
 		)!;
 		await act(async () => {
 			startBtn.click();
@@ -810,12 +1125,237 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(initializePaddleMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("onboarding (inline): cooldown arms on CHECKOUT_PAYMENT_INITIATED so a dropped COMPLETED still surfaces the recovery banner", async () => {
-		// Pre-#440 belt-and-suspenders: PAYMENT_INITIATED may drop on trial-signup
-		// redirects (and so may COMPLETED). The cooldown timer must be anchored
-		// to whichever event fires first, otherwise a missing COMPLETED leaves
-		// the user stuck on Paddle's inline frame forever with no recovery.
+	// Paddle fires PAYMENT_INITIATED when the buyer taps Apple Pay / Google Pay,
+	// before the wallet sheet opens. Arming the cooldown there closed the
+	// checkout under an open wallet sheet at ~15 s and claimed the payment was
+	// received. Only CHECKOUT_COMPLETED may arm it.
+	it("onboarding (inline): PAYMENT_INITIATED alone never closes checkout or claims payment received", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
+		mockBillingApi();
+		const closeMock = vi.fn();
+		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+			captured = opts.eventCallback;
+			return { Checkout: { open: vi.fn(), close: closeMock } };
+		});
+
+		const { container, queryAllByText } = renderBilling({ inline: true });
+		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+		const startBtn = Array.from(container.querySelectorAll("button")).find(
+			(b) => b.textContent === "Choose Starter",
+		)!;
+		await act(async () => {
+			startBtn.click();
+			await Promise.resolve();
+		});
+
+		await act(async () => {
+			captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_wallet" } });
+			await Promise.resolve();
+		});
+		await act(async () => {
+			vi.advanceTimersByTime(20_000);
+			await Promise.resolve();
+		});
+
+		expect(closeMock).not.toHaveBeenCalled();
+		expect(screen.queryByText(/received|activating|activation/iu)).not.toBeInTheDocument();
+		expect(container.querySelector(".paddle-checkout")).toBeInTheDocument();
+	});
+
+	// A close after PAYMENT_INITIATED with no COMPLETED is ambiguous: a wallet
+	// sheet the buyer dismissed, or a redirect flow (3DS, PayPal) that DID take
+	// the money and dropped COMPLETED. Check first, claim "not subscribed" only
+	// once the activation push and billing state have both had their chance.
+	describe("checkout closed mid-payment", () => {
+		const NOT_SUBSCRIBED = "Your payment did not finish, so you have not been subscribed.";
+		const CHECKING = "Checking your payment…";
+
+		// `paid.value` flips /billing/status to a paying subscription;
+		// `paid.txn` is what Paddle reports for the checkout's transaction.
+		function mockBillingApiWithPayment() {
+			const paid: { value: boolean; txn: string | null } = { value: false, txn: "ready" };
+			mockBillingApi();
+			const base = get.getMockImplementation()!;
+			get.mockImplementation(async (url: string) => {
+				if (url === "/billing/checkout-transactions/txn_1") {
+					if (paid.txn === null) {
+						throw new ApiError(404, "transaction not found");
+					}
+					return { status: paid.txn };
+				}
+				if (url === "/billing/status" && paid.value) {
+					return {
+						tier: "starter",
+						active: true,
+						trial_days_remaining: 0,
+						subscription: {
+							status: "active",
+							tier: "starter",
+							current_period_end: "2026-11-24T00:00:00Z",
+						},
+						caps: {},
+					};
+				}
+				return base(url);
+			});
+			return paid;
+		}
+
+		async function closeMidPayment() {
+			const openMock = vi.fn();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: openMock, close: vi.fn() } };
+			});
+			const utils = renderBilling({ inline: true });
+			await waitFor(() => expect(utils.queryAllByText("Starter").length).toBeGreaterThan(0));
+			const startBtn = Array.from(utils.container.querySelectorAll("button")).find(
+				(b) => b.textContent === "Choose Starter",
+			)!;
+			await act(async () => {
+				startBtn.click();
+				await Promise.resolve();
+			});
+			await waitFor(() => expect(openMock).toHaveBeenCalledTimes(1));
+			await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
+			await act(async () => {
+				captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+				captured!({ name: "checkout.closed", data: {} });
+				await Promise.resolve();
+			});
+			return { ...utils, openMock };
+		}
+
+		async function advance(ms: number) {
+			await act(async () => {
+				vi.advanceTimersByTime(ms);
+				await Promise.resolve();
+			});
+		}
+
+		it("shows the activated path, never 'not subscribed', when the push lands 10 s after close", async () => {
+			vi.useFakeTimers({ shouldAdvanceTime: true });
+			mockBillingApiWithPayment();
+			await closeMidPayment();
+
+			expect(screen.getByText(CHECKING)).toBeInTheDocument();
+			expect(screen.queryByText(NOT_SUBSCRIBED)).not.toBeInTheDocument();
+
+			await advance(10_000);
+			expect(screen.queryByText(NOT_SUBSCRIBED)).not.toBeInTheDocument();
+			await act(async () => {
+				channelHandlers.subscription_activated!({
+					tier: "starter",
+					status: "active",
+					subscription_id: "sub_1",
+				});
+				await Promise.resolve();
+			});
+			await advance(30_000);
+
+			expect(screen.queryByText(NOT_SUBSCRIBED)).not.toBeInTheDocument();
+			expect(screen.queryByText(CHECKING)).not.toBeInTheDocument();
+			expect(screen.getByText("Setting up your account…")).toBeInTheDocument();
+		});
+
+		it("shows the activated path when billing state turns paying while checking", async () => {
+			vi.useFakeTimers({ shouldAdvanceTime: true });
+			const paid = mockBillingApiWithPayment();
+			await closeMidPayment();
+
+			paid.value = true;
+			await advance(10_000);
+			await waitFor(() => expect(screen.queryByText(CHECKING)).not.toBeInTheDocument());
+			await advance(30_000);
+
+			expect(screen.queryByText(NOT_SUBSCRIBED)).not.toBeInTheDocument();
+		});
+
+		it("says 'not subscribed' only after 30 s with no push, and Try again reopens checkout", async () => {
+			vi.useFakeTimers({ shouldAdvanceTime: true });
+			mockBillingApiWithPayment();
+			const { openMock } = await closeMidPayment();
+
+			await advance(29_000);
+			expect(screen.queryByText(NOT_SUBSCRIBED)).not.toBeInTheDocument();
+			expect(screen.getByText(CHECKING)).toBeInTheDocument();
+			await advance(2000);
+			expect(screen.getByText(NOT_SUBSCRIBED)).toBeInTheDocument();
+			expect(screen.queryByText(/received|activating/iu)).not.toBeInTheDocument();
+
+			await act(async () => {
+				screen.getByRole("button", { name: "Try again" }).click();
+				await Promise.resolve();
+			});
+			await waitFor(() => expect(openMock).toHaveBeenCalledTimes(2));
+			expect(openMock.mock.calls[1]![0].items).toEqual(openMock.mock.calls[0]![0].items);
+			expect(screen.queryByText(NOT_SUBSCRIBED)).not.toBeInTheDocument();
+		});
+
+		// Our webhook can sit in Paddle's backoff for longer than the 30 s check.
+		// Paddle's own transaction status is the truth: paid means no second
+		// checkout, only the "payment received" recovery banner.
+		it("Try again does not open checkout when Paddle says the transaction was paid", async () => {
+			vi.useFakeTimers({ shouldAdvanceTime: true });
+			const paid = mockBillingApiWithPayment();
+			const { openMock } = await closeMidPayment();
+			await advance(31_000);
+			expect(screen.getByText(NOT_SUBSCRIBED)).toBeInTheDocument();
+
+			paid.txn = "completed";
+			await act(async () => {
+				screen.getByRole("button", { name: "Try again" }).click();
+				await Promise.resolve();
+			});
+			await advance(1000);
+
+			await waitFor(() =>
+				expect(
+					screen.getByText("Payment received. We're finishing your activation in the background."),
+				).toBeInTheDocument(),
+			);
+			expect(screen.queryByText(NOT_SUBSCRIBED)).not.toBeInTheDocument();
+			expect(openMock).toHaveBeenCalledTimes(1);
+			expect(get).toHaveBeenCalledWith("/billing/checkout-transactions/txn_1");
+		});
+
+		it("Try again still reopens checkout when the backend does not know the transaction", async () => {
+			vi.useFakeTimers({ shouldAdvanceTime: true });
+			const paid = mockBillingApiWithPayment();
+			paid.txn = null;
+			const { openMock } = await closeMidPayment();
+			await advance(31_000);
+
+			await act(async () => {
+				screen.getByRole("button", { name: "Try again" }).click();
+				await Promise.resolve();
+			});
+			await waitFor(() => expect(openMock).toHaveBeenCalledTimes(2));
+		});
+
+		it("Try again does not open checkout when the subscription is already active", async () => {
+			vi.useFakeTimers({ shouldAdvanceTime: true });
+			const paid = mockBillingApiWithPayment();
+			const { openMock } = await closeMidPayment();
+			await advance(31_000);
+			expect(screen.getByText(NOT_SUBSCRIBED)).toBeInTheDocument();
+
+			// Paid in the meantime (a late webhook); nothing has refetched yet.
+			paid.value = true;
+			await act(async () => {
+				screen.getByRole("button", { name: "Try again" }).click();
+				await Promise.resolve();
+			});
+			await advance(1000);
+
+			await waitFor(() => expect(screen.queryByText(NOT_SUBSCRIBED)).not.toBeInTheDocument());
+			expect(openMock).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	it("onboarding (inline): our own close after an activation push is not reported as an unfinished payment", async () => {
 		mockBillingApi();
 		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
 		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
@@ -823,25 +1363,55 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			return { Checkout: { open: vi.fn(), close: vi.fn() } };
 		});
 
+		const { container, queryAllByText } = renderBilling({ inline: true });
+		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+		const startBtn = Array.from(container.querySelectorAll("button")).find(
+			(b) => b.textContent === "Choose Starter",
+		)!;
+		await act(async () => {
+			startBtn.click();
+			await Promise.resolve();
+		});
+
+		await act(async () => {
+			captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+			await Promise.resolve();
+		});
+		await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
+		await act(async () => {
+			channelHandlers.subscription_activated!({ tier: "starter", status: "active" });
+			// The push handler's Checkout.close() makes Paddle emit checkout.closed.
+			captured!({ name: "checkout.closed", data: {} });
+			await Promise.resolve();
+		});
+
+		expect(
+			screen.queryByText("Your payment did not finish, so you have not been subscribed."),
+		).not.toBeInTheDocument();
+	});
+
+	it("onboarding (inline): COMPLETED with no activation push closes Paddle and shows the recovery banner after the cooldown", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		mockBillingApi();
+		const closeMock = vi.fn();
+		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+			captured = opts.eventCallback;
+			return { Checkout: { open: vi.fn(), close: closeMock } };
+		});
+
 		renderBilling({ inline: true });
-
 		await waitFor(() => expect(captured).toBeDefined());
-		// Let the initializePaddle .then() resolve.
 		await act(async () => {
 			await Promise.resolve();
 			await Promise.resolve();
 		});
 
-		// PAYMENT_INITIATED fires; COMPLETED never does (the drop case).
 		await act(async () => {
-			captured!({
-				name: "checkout.payment.initiated",
-				data: { transaction_id: "txn_drop_99" },
-			});
+			captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_99" } });
+			captured!({ name: "checkout.completed", data: {} });
 			await Promise.resolve();
 		});
-
-		// Past the 15s cooldown window, recovery banner must appear.
 		await act(async () => {
 			vi.advanceTimersByTime(15_500);
 			await Promise.resolve();
@@ -852,6 +1422,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 				screen.queryByText(/Payment received\. We're finishing your activation/iu),
 			).toBeInTheDocument(),
 		);
+		expect(closeMock).toHaveBeenCalled();
 	});
 
 	it("onboarding (inline): the recovery banner (slow) does NOT get the forced-light frame treatment, even though the wrapper is still told checkout is active", async () => {
@@ -890,7 +1461,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
 		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Start free trial",
+			(b) => b.textContent === "Choose Starter",
 		)!;
 		await act(async () => {
 			startBtn.click();
@@ -902,6 +1473,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		await act(async () => {
 			captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+			captured!({ name: "checkout.completed", data: {} });
 			await Promise.resolve();
 		});
 		await act(async () => {

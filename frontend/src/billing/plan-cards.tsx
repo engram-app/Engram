@@ -1,5 +1,7 @@
+import type { CheckoutEventsData } from "@paddle/paddle-js";
 import { ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import type { Translate } from "@/i18n/translate";
@@ -102,6 +104,14 @@ function planCatalog(limits: PlanLimits): Record<PlanTier, PlanCardCatalog> {
 	};
 }
 
+// The catalog price at a cadence, in whole USD.
+function listPrice(
+	catalog: Pick<PlanCardCatalog, "monthlyPrice" | "annualPrice">,
+	cadence: BillingCadence,
+): number {
+	return cadence === "monthly" ? catalog.monthlyPrice : catalog.annualPrice;
+}
+
 const PLAN_CATALOG: Record<PlanLimits, Record<PlanTier, PlanCardCatalog>> = {
 	legacy: planCatalog("legacy"),
 	v5: planCatalog("v5"),
@@ -150,13 +160,102 @@ export function formatPlanPrice(
 		: t("{price}/yr", { price: formatMoney(catalog.annualPrice, "USD", locale, WHOLE) });
 }
 
+// The auto-renewal terms shown beside every paid CTA and the inline checkout
+// (California BPC 17602(a)(1), ROSCA 15 USC 8403): the recurring charge, its
+// interval, that it continues until canceled, and how to cancel. `price` is
+// already formatted.
+export function renewalNotice(price: string, cadence: BillingCadence, t: Translate): string {
+	return cadence === "monthly"
+		? t(
+				"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.",
+				{ price },
+			)
+		: t(
+				"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.",
+				{ price },
+			);
+}
+
+/** `renewalNotice/3` at a catalog price, in the UI locale. Catalog prices are
+ *  whole USD, so formatMoney, not formatMinorUnits (Paddle minor units). */
+export function useRenewalNotice() {
+	const { t, renderedLocale } = useT();
+	const locale = intlLocale(renderedLocale, "en-US");
+	return (
+		catalog: Pick<PlanCardCatalog, "monthlyPrice" | "annualPrice">,
+		cadence: BillingCadence,
+	) => renewalNotice(formatMoney(listPrice(catalog, cadence), "USD", locale, WHOLE), cadence, t);
+}
+
+/** Totals from Paddle's checkout.loaded / checkout.updated (decimal units, tax included). */
+export interface CheckoutTotals {
+	currency: string;
+	total: number;
+	recurring: number;
+}
+
+export function checkoutTotals(data: CheckoutEventsData | undefined): CheckoutTotals | null {
+	return data?.totals
+		? {
+				currency: data.currency_code,
+				total: data.totals.total,
+				recurring: data.recurring_totals?.total ?? data.totals.total,
+			}
+		: null;
+}
+
+// Paddle's inline frame shows no items, totals or recurring terms; Paddle's
+// inline checkout docs require the page to.
+// The renewal line shows the catalog price until Paddle's first event brings
+// the localized, taxed totals; "Due today" shows no amount until then, so the
+// USD list price is never read as the charge.
+// Fixed light colors: it sits on the forced-light checkout card.
+export function CheckoutSummary({
+	tier,
+	cadence,
+	totals,
+}: {
+	tier: PlanTier;
+	cadence: BillingCadence;
+	totals: CheckoutTotals | null;
+}) {
+	const { t, renderedLocale } = useT();
+	const { catalog } = usePlanCopy();
+	const locale = intlLocale(renderedLocale, "en-US");
+	const plan = catalog[tier];
+	const list = listPrice(plan, cadence);
+	// The catalog price reads as on the plan card ("$70"); Paddle's totals are
+	// a real charge and keep their cents.
+	const money = (n: number) =>
+		totals ? formatMoney(n, totals.currency, locale) : formatMoney(n, "USD", locale, WHOLE);
+	return (
+		<section
+			aria-label={t("Order summary")}
+			className="flex flex-col gap-2 rounded-lg border border-gray-200 bg-gray-50 p-4 text-gray-900 text-sm"
+		>
+			<h3 className="font-semibold">{t("{plan} plan", { plan: t(plan.name) })}</h3>
+			<p className="font-medium">{renewalNotice(money(totals?.recurring ?? list), cadence, t)}</p>
+			<dl className="flex justify-between border-gray-200 border-t pt-2">
+				<dt>{t("Due today")}</dt>
+				{totals ? (
+					<dd className="font-semibold">{money(totals.total)}</dd>
+				) : (
+					<dd aria-busy="true">
+						<Skeleton className="h-5 w-16 bg-gray-200" />
+					</dd>
+				)}
+			</dl>
+		</section>
+	);
+}
+
 // Which note caps the copy states: the set the backend enforces
 // (`/billing/config` `plan_limits`, `Engram.Billing.LimitKeys.plan_limits/0`).
 // "legacy" until the v5 go flag is on, and while the config loads, so a
 // card never promises caps the backend is not enforcing.
 export type PlanLimits = "legacy" | "v5";
 
-// Single catalog source-of-truth: both onboarding (trial signup) and the
+// Single catalog source-of-truth: both onboarding (signup) and the
 // change-plan panel read display prices from here. Keep in sync with the
 // pricing model lock (Free / $7 / $14 monthly + $70/$140 annual — see
 // memory project_pricing_model). Updating Paddle prices means updating here.
@@ -251,6 +350,7 @@ export function PlanCard({
 }: PlanCardProps) {
 	const { t, renderedLocale } = useT();
 	const locale = intlLocale(renderedLocale, "en-US");
+	const renewal = useRenewalNotice();
 	const price = formatPlanPrice({ monthlyPrice, annualPrice }, cadence, t, locale);
 	// The amount and the billing words are separate strings, so no translation
 	// holds the price: a model given "{price}/mo billed yearly" decorated the
@@ -322,11 +422,14 @@ export function PlanCard({
 							variant={filled ? "default" : "outline"}
 							className="w-full"
 						>
-							{ctaLabel ?? t("Start free trial")}
+							{ctaLabel ?? (tier === "pro" ? t("Choose Pro") : t("Choose Starter"))}
 						</Button>
 						{Boolean(selected && ctaSubLabel) && (
 							<p className="text-center text-muted-foreground text-xs">{ctaSubLabel}</p>
 						)}
+						<p className="text-center font-medium text-foreground text-xs">
+							{renewal({ monthlyPrice, annualPrice }, cadence)}
+						</p>
 					</>
 				)}
 			</div>
@@ -346,6 +449,7 @@ export function PlanAccordionRow({
 	summary,
 	features,
 	ctaLabel,
+	renewalNote,
 	ctaNote,
 	onClick,
 	open,
@@ -359,6 +463,8 @@ export function PlanAccordionRow({
 	summary: string;
 	features: readonly MsgKey[];
 	ctaLabel: string;
+	// The auto-renewal terms (renewalNotice/4); paid rows only.
+	renewalNote?: string;
 	ctaNote?: string;
 	onClick: () => void;
 	open: boolean;
@@ -428,6 +534,11 @@ export function PlanAccordionRow({
 						>
 							{ctaLabel}
 						</Button>
+						{Boolean(renewalNote) && (
+							<p className="mt-1.5 text-center font-medium text-foreground text-xs">
+								{renewalNote}
+							</p>
+						)}
 						{Boolean(ctaNote) && (
 							<p className="mt-1.5 text-center text-muted-foreground text-xs">{ctaNote}</p>
 						)}

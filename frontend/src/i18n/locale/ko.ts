@@ -89,8 +89,6 @@ export default {
 	Status: "상태",
 	Invoice: "송장",
 	Download: "다운로드",
-	"Could not fetch that invoice. Please try again.":
-		"해당 송장을 가져오지 못했습니다. 다시 시도해주세요.",
 	"Payment received. We're finishing your activation in the background.":
 		"결제가 완료되었습니다. 백그라운드에서 활성화를 완료하고 있습니다.",
 	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
@@ -98,6 +96,10 @@ export default {
 	Refresh: "새로 고침",
 	"Contact support": "지원팀에 문의",
 	"Reference number: {id}": "참조 번호: {id}",
+	"Checking your payment…": "결제 진행 중입니다…",
+	"Your payment did not finish, so you have not been subscribed.":
+		"결제가 완료되지 않아 구독이 적용되지 않았습니다.",
+	"Try again": "다시 시도",
 	"Loading billing": "결제 정보 불러오는 중",
 	"Could not open the billing portal. Please try again.":
 		"결제 페이지를 열 수 없습니다. 다시 시도해주세요.",
@@ -116,11 +118,11 @@ export default {
 	"Payment did not go through. Please try again.": "결제가 실패했습니다. 다시 시도해주세요.",
 	"Simulate failure": "결제 실패 시뮬레이션",
 	"Choose a Plan": "요금제 선택",
-	"Both plans include a 7-day free trial.": "모든 요금제에 7일 무료 체험이 포함되어 있습니다.",
+	"Both plans come with a 14-day money-back guarantee.": "두 가지 플랜 모두 14일 환불 보장.",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"무제한 보관함 · 50GB · 보관함 간 검색 + API",
 	"Choose Pro": "Pro 요금제 선택",
-	"7-day free trial · cancel anytime": "7일 무료 체험 · 언제든지 해지 가능",
+	"14-day money-back guarantee · cancel anytime": "14일 환불 보장 · 언제든지 해지 가능",
 	"10 vaults · 10 GB · unlimited AI": "10개의 보관함 · 10GB · 무제한 AI",
 	"Choose Starter": "Starter 요금제 선택",
 	"Choose Free": "무료 버전 선택",
@@ -144,7 +146,7 @@ export default {
 		"무료 제한을 초과하는 보관함 또는 노트는 읽기 전용으로 변경됩니다.",
 	"You can reverse this any time before the effective date.":
 		"언제든지 유효일자 이전까지 이 설정을 변경할 수 있습니다.",
-	"Why are you canceling?": "해지하시려는 이유가 무엇인가요?",
+	"Why are you canceling? (optional)": "해지 이유를 알려주세요 (선택 사항)",
 	"Keep my subscription": "구독을 유지합니다",
 	"Canceling…": "해지 중입니다…",
 	"Cancel at period end": "다음 결제 주기 종료 시 해지",
@@ -157,6 +159,9 @@ export default {
 	"Current Plan": "현재 요금제",
 	Free: "무료",
 	"{count} days remaining in your free trial.": { other: "무료 체험은 {count}일 남았습니다." },
+	"No invoice is available for this transaction.": "해당 거래에 대한 송장이 없습니다.",
+	"Could not fetch that invoice. Please try again.":
+		"해당 송장을 가져오지 못했습니다. 다시 시도해주세요.",
 	"Indexing budget": "인덱싱 용량",
 	"{available} of {capacity} tokens left": "{available} 토큰 남음 ({capacity} 토큰 중)",
 	"Refills {perDay} tokens a day. Full again on {date}.":
@@ -227,7 +232,6 @@ export default {
 	"Reopen checkout": "결제 재개",
 	"Payment received": "결제 완료되었습니다",
 	"Open Engram": "Engram 열기",
-	"Try again": "다시 시도",
 	"Need help? Contact {support}.": "도움이 필요하신가요? {support}에 문의하세요.",
 	"Payment method": "결제 방법",
 	"Opening…": "로딩 중…",
@@ -245,6 +249,13 @@ export default {
 	"Your plan resumes on {date}": "구독이 {date}부터 다시 시작됩니다",
 	"{price}/mo": "{price}/월",
 	"{price}/yr": "{price}/년",
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"매달 {price}에 자동으로 갱신되며, 취소 시까지 유지됩니다. 설정 > 결제에서 언제든지 취소할 수 있습니다.",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"매년 {price}에 자동으로 갱신되며, 취소 시까지 유지됩니다. 설정 > 결제에서 언제든지 취소할 수 있습니다.",
+	"Order summary": "주문 요약",
+	"{plan} plan": "{plan} 요금제",
+	"Due today": "오늘 결제 예정",
 	"Billing cadence": "결제 주기",
 	Monthly: "매월",
 	Annual: "연간",
@@ -255,7 +266,6 @@ export default {
 	"Most popular": "가장 인기 있는 요금제",
 	"Your current plan": "현재 요금제",
 	"You're on this plan": "현재 이 요금제를 사용 중입니다",
-	"Start free trial": "무료 체험 시작",
 	Popular: "인기 요금제",
 	"20 AI searches a day": "하루 20회 AI 검색",
 	"1 vault": "1개의 보관함",
@@ -386,7 +396,6 @@ export default {
 		"체험 기간 동안은 요금이 부과되지 않습니다. 체험 기간이 끝나면 결제가 시작됩니다.",
 	"An invoice will be created for this amount.": "해당 금액으로 청구서가 생성됩니다.",
 	"per {interval}": "{interval}당",
-	"{trialPeriod} free trial": "{trialPeriod} 무료 체험",
 	"Dismiss alert": "알림 닫기",
 	"Expires {date}": "만료일: {date}",
 	Payment: "결제",
@@ -941,8 +950,7 @@ export default {
 	"Pick one to continue.": "계속하려면 하나를 선택하세요.",
 	"Couldn't save your answers, please try again.": "답변을 저장하지 못했습니다. 다시 시도해주세요.",
 	"Choose your plan": "요금제를 선택하세요",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"유료 요금제의 경우 7일 무료 체험 제공. 카드 정보 필요하며, 종료 시까지 요금이 부과되지 않습니다.",
+	"Paid plans come with a 14-day money-back guarantee.": "유료 플랜은 14일 환불 보장.",
 	"Continue with Free →": "무료로 시작하기 →",
 	"{summary} · upgrade anytime": "{summary} · 언제든지 업그레이드 가능",
 	"Step {step} of {total}": "{step}단계 / {total}단계",

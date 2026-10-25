@@ -93,8 +93,6 @@ export default {
 	Status: "Status",
 	Invoice: "Invois",
 	Download: "Muat turun",
-	"Could not fetch that invoice. Please try again.":
-		"Tidak dapat mendapatkan invois itu. Sila cuba lagi.",
 	"Payment received. We're finishing your activation in the background.":
 		"Pembayaran diterima. Kami sedang menyelesaikan aktivasi anda.",
 	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
@@ -102,6 +100,10 @@ export default {
 	Refresh: "Segarkan semula",
 	"Contact support": "Hubungi sokongan",
 	"Reference number: {id}": "Nombor rujukan: {id}",
+	"Checking your payment…": "Memeriksa pembayaran anda…",
+	"Your payment did not finish, so you have not been subscribed.":
+		"Bayaran anda belum selesai, jadi anda belum dilanggan.",
+	"Try again": "Cuba lagi",
 	"Loading billing": "Memuatkan maklumat pembayaran",
 	"Could not open the billing portal. Please try again.":
 		"Tidak dapat membuka portal pembayaran. Sila cuba lagi.",
@@ -120,12 +122,13 @@ export default {
 	"Payment did not go through. Please try again.": "Pembayaran gagal. Sila cuba lagi.",
 	"Simulate failure": "Simulasikan kegagalan",
 	"Choose a Plan": "Pilih Pelan",
-	"Both plans include a 7-day free trial.": "Kedua-dua pelan termasuk tempoh percubaan 7 hari.",
+	"Both plans come with a 14-day money-back guarantee.":
+		"Kedua-dua pakej ini disertakan dengan jaminan wang kembali selama 14 hari.",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"Peti nota tanpa had · 50 GB · carian lintas peti nota + API",
 	"Choose Pro": "Pilih Pro",
-	"7-day free trial · cancel anytime":
-		"Tempoh percubaan 7 hari · boleh dibatalkan pada bila-bila masa",
+	"14-day money-back guarantee · cancel anytime":
+		"Jaminan wang kembali 14 hari · batalkan bila-bila masa",
 	"10 vaults · 10 GB · unlimited AI": "10 peti nota · 10 GB · AI tanpa had",
 	"Choose Starter": "Pilih Starter",
 	"Choose Free": "Pilih Percuma",
@@ -149,7 +152,7 @@ export default {
 		"Peti nota atau nota yang melebihi had percuma akan menjadi baca sahaja.",
 	"You can reverse this any time before the effective date.":
 		"Anda boleh membatalkan ini pada bila-bila masa sebelum tarikh berkuatkuasa.",
-	"Why are you canceling?": "Mengapa anda membatalkan?",
+	"Why are you canceling? (optional)": "Mengapa anda membatalkannya? (pilihan)",
 	"Keep my subscription": "Pertahankan langganan saya",
 	"Canceling…": "Membatalkan…",
 	"Cancel at period end": "Batalkan pada akhir tempoh",
@@ -164,6 +167,9 @@ export default {
 	"{count} days remaining in your free trial.": {
 		other: "{count} hari lagi untuk tempoh percubaan percuma anda.",
 	},
+	"No invoice is available for this transaction.": "Tiada invois untuk transaksi ini.",
+	"Could not fetch that invoice. Please try again.":
+		"Tidak dapat mendapatkan invois itu. Sila cuba lagi.",
 	"Indexing budget": "Bajet pengindeksan",
 	"{available} of {capacity} tokens left": "{available} daripada {capacity} token tinggal",
 	"Refills {perDay} tokens a day. Full again on {date}.":
@@ -236,7 +242,6 @@ export default {
 	"Reopen checkout": "Buka semula semakan",
 	"Payment received": "Pembayaran diterima",
 	"Open Engram": "Buka Engram",
-	"Try again": "Cuba lagi",
 	"Need help? Contact {support}.": "Perlukan bantuan? Hubungi {support}.",
 	"Payment method": "Kaedah pembayaran",
 	"Opening…": "Membuka…",
@@ -254,6 +259,13 @@ export default {
 	"Your plan resumes on {date}": "Pelan anda aktif semula pada {date}",
 	"{price}/mo": "{price}/bulan",
 	"{price}/yr": "{price}/tahun",
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Diperbaharui secara automatik setiap bulan pada {price} sehingga anda membatalkannya. Batalkan pada bila-bila masa dalam Tetapan > Bayaran.",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Diperbaharui secara automatik setiap tahun pada {price} sehingga anda membatalkannya. Batalkan pada bila-bila masa dalam Tetapan > Bayaran.",
+	"Order summary": "Ringkasan pesanan",
+	"{plan} plan": "Pakej {plan}",
+	"Due today": "Tarikh pembayaran hari ini",
 	"Billing cadence": "Tempoh pembayaran",
 	Monthly: "Bulanan",
 	Annual: "Tahunan",
@@ -264,7 +276,6 @@ export default {
 	"Most popular": "Paling popular",
 	"Your current plan": "Pelan anda sekarang",
 	"You're on this plan": "Anda menggunakan pelan ini",
-	"Start free trial": "Mulakan percubaan percuma",
 	Popular: "Popular",
 	"20 AI searches a day": "20 carian AI sehari",
 	"1 vault": "1 peti nota",
@@ -396,7 +407,6 @@ export default {
 		"Tiada caj semasa tempoh percubaan anda. Pembayaran bermula apabila tempoh percubaan anda tamat.",
 	"An invoice will be created for this amount.": "Invois akan dibuat untuk jumlah ini.",
 	"per {interval}": "setiap {interval}",
-	"{trialPeriod} free trial": "percubaan percuma {trialPeriod}",
 	"Dismiss alert": "Tutup amaran",
 	"Expires {date}": "Tamat pada {date}",
 	Payment: "Pembayaran",
@@ -958,8 +968,8 @@ export default {
 	"Couldn't save your answers, please try again.":
 		"Tidak dapat menyimpan jawapan anda, sila cuba lagi.",
 	"Choose your plan": "Pilih pelan anda",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"Tempoh percubaan 7 hari untuk pelan berbayar. Kad diperlukan, tiada caj sehingga tamat.",
+	"Paid plans come with a 14-day money-back guarantee.":
+		"Pakej berbayar disertakan dengan jaminan wang kembali selama 14 hari.",
 	"Continue with Free →": "Teruskan dengan Percuma →",
 	"{summary} · upgrade anytime": "{summary} · tingkatkan pada bila-bila masa",
 	"Step {step} of {total}": "Langkah {step} daripada {total}",

@@ -5,8 +5,6 @@ export interface PriceData {
 	originalTotal?: string;
 	/** Billing frequency, e.g. "month", "year", "3 months" */
 	interval?: string;
-	/** Trial period length, e.g. "7 days", "1 month" */
-	trialPeriod?: string;
 }
 
 // ---

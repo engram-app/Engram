@@ -3,44 +3,11 @@
 // payment link). One init and one settings shape, so a checkout opened from a
 // Paddle email link behaves like one opened in the app.
 import {
-	type AvailablePaymentMethod,
 	type CheckoutSettings,
 	initializePaddle,
 	type Paddle,
 	type PaddleEventData,
 } from "@paddle/paddle-js";
-
-// Payment methods offered when wallets are hidden. Mapped over the
-// `AvailablePaymentMethod` union, so a paddle-js bump that adds a method fails
-// the type check here rather than silently hiding it, and each value must be
-// its own key. Paddle still shows only the methods enabled and available on
-// the account.
-// Wallets hidden pending real-charge data, see #2203: on $0 trial checkouts
-// Apple Pay stalled at `action_required` with no error on 4 of 8 attempts and
-// Google Pay on 3 of 3, against PayPal 0 of 7 and card 1 of about 17.
-// Reversible: set each back to its own name.
-const WITHOUT_WALLETS: { [M in AvailablePaymentMethod]: M | false } = {
-	alipay: "alipay",
-	apple_pay: false,
-	bancontact: "bancontact",
-	blik: "blik",
-	card: "card",
-	google_pay: false,
-	ideal: "ideal",
-	kakao_pay: "kakao_pay",
-	south_korea_local_card: "south_korea_local_card",
-	mb_way: "mb_way",
-	naver_pay: "naver_pay",
-	payco: "payco",
-	paypal: "paypal",
-	pix: "pix",
-	samsung_pay: "samsung_pay",
-	saved_payment_methods: "saved_payment_methods",
-	upi: "upi",
-	wechat_pay: "wechat_pay",
-};
-
-const NO_WALLET_METHODS = Object.values(WITHOUT_WALLETS).filter((m) => m !== false);
 
 /** What Paddle.js needs to boot: the public client-side token + environment. */
 export interface PaddleClientConfig {
@@ -49,11 +16,6 @@ export interface PaddleClientConfig {
 }
 
 export const INLINE_FRAME_TARGET = "paddle-checkout";
-
-export interface CheckoutOptions {
-	/** Leave out Apple Pay and Google Pay (see WITHOUT_WALLETS). */
-	hideWallets?: boolean;
-}
 
 // Paddle's branded-inline-checkout dashboard config (Paddle > Checkout
 // > Branded inline checkout) is a single static color set with no
@@ -66,13 +28,10 @@ export interface CheckoutOptions {
 // the locale is layered on at call time. Each Checkout.open gets the FULL
 // object, because Paddle.js's merge of partial per-open settings over the
 // init defaults is undocumented and this is the payments path.
-// `hideWallets` is per-open only, never in the init defaults, so the /pay
-// page (Paddle email links) keeps every method.
-export function checkoutSettings(
-	isInline: boolean,
-	{ hideWallets = false }: CheckoutOptions = {},
-): CheckoutSettings {
-	const display: CheckoutSettings = isInline
+// `allowLogout: false` on every checkout: the buyer cannot switch email inside
+// Paddle and split into a second Paddle customer from the signed-in account.
+export function checkoutSettings(isInline: boolean): CheckoutSettings {
+	return isInline
 		? {
 				displayMode: "inline",
 				frameTarget: INLINE_FRAME_TARGET,
@@ -85,9 +44,9 @@ export function checkoutSettings(
 				frameStyle: "width:100%; min-width:312px; background:transparent; border:none;",
 				theme: "light",
 				variant: "one-page",
+				allowLogout: false,
 			}
-		: { displayMode: "overlay", theme: "light", variant: "one-page" };
-	return hideWallets ? { ...display, allowedPaymentMethods: NO_WALLET_METHODS } : display;
+		: { displayMode: "overlay", theme: "light", variant: "one-page", allowLogout: false };
 }
 
 // `locale: "en"` is only the default; every Checkout.open passes the full

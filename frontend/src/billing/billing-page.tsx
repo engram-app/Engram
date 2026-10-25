@@ -1,18 +1,18 @@
-import { CheckoutEventNames, type Paddle } from "@paddle/paddle-js";
+import { CheckoutEventNames, type CheckoutOpenOptions, type Paddle } from "@paddle/paddle-js";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { Translate } from "@/i18n/translate";
 import { intlLocale } from "@/lib/intl-locale";
 import { notify } from "@/lib/notify";
 import { SUPPORT_MAILTO } from "@/lib/support";
 import type { CheckoutMethod } from "../analytics/events";
 import { track } from "../analytics/track";
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
 import {
 	type BillingCadence,
+	type BillingStatus,
 	invalidateBillingState,
 	type OnboardingStatus,
 	useBillingConfig,
@@ -27,21 +27,63 @@ import { paddleLocale } from "../i18n/vendor-locales";
 import BillingHistoryTable from "./billing-history-table";
 import CancelPanel from "./cancel-panel";
 import CurrentPlanCard from "./current-plan-card";
+import { downloadInvoice } from "./download-invoice";
 import EmbedBucketRow from "./embed-bucket-row";
 import { checkoutSettings, INLINE_FRAME_TARGET, initPaddle } from "./paddle-checkout";
 import PaymentMethodCard from "./payment-method-card";
 import PendingChangeBanner from "./pending-change-banner";
-import { CadenceToggle, formatPlanPrice, PlanAccordionRow, PlanCard, planCopy } from "./plan-cards";
+import {
+	CadenceToggle,
+	CheckoutSummary,
+	type CheckoutTotals,
+	checkoutTotals,
+	formatPlanPrice,
+	PlanAccordionRow,
+	PlanCard,
+	type PlanTier,
+	planCopy,
+	useRenewalNotice,
+} from "./plan-cards";
 import PlanChangePanel from "./plan-change-panel";
 import { upgradeSource } from "./upgrade-source";
 import { UsagePanel } from "./usage-limits";
-import { useSubscriptionActivatedEvents } from "./use-subscription-activated-events";
+import {
+	type SubscriptionActivatedPayload,
+	useSubscriptionActivatedEvents,
+} from "./use-subscription-activated-events";
 
 // Time after CHECKOUT_COMPLETED we keep Paddle's own "Payment successful"
 // screen visible while waiting for the backend subscription_activated push.
 // Past this we close Paddle and surface a small recovery banner — the push
 // listener stays connected, so a late broadcast still routes the user.
 const COOLDOWN_MS = 15_000;
+
+// A checkout closed after PAYMENT_INITIATED with no COMPLETED may still have
+// taken the money (redirect flows like 3DS or PayPal can drop COMPLETED). Wait
+// this long for the activation push or a paying billing state, refetching
+// every CONFIRM_POLL_MS, before saying the buyer is not subscribed.
+const CONFIRM_WINDOW_MS = 30_000;
+const CONFIRM_POLL_MS = 5000;
+
+// Paddle transaction statuses that mean the money was taken (or invoiced).
+const PAID_TRANSACTION_STATUSES = new Set(["billed", "paid", "completed"]);
+
+// Paddle's status for the caller's checkout transaction; null when the backend
+// does not know it (404), "error" when the check itself failed.
+async function checkoutTransactionStatus(transactionId: string): Promise<string | null> {
+	try {
+		const { status } = await api.get<{ status: string }>(
+			`/billing/checkout-transactions/${encodeURIComponent(transactionId)}`,
+		);
+		return status;
+	} catch (err) {
+		return err instanceof ApiError && err.status === 404 ? null : "error";
+	}
+}
+
+function isPayingStatus(status: string | undefined): status is "active" | "trialing" {
+	return status === "active" || status === "trialing";
+}
 
 // Dev-only: Paddle's checkout iframe can't embed on a non-default-port
 // localhost origin (its frame-ancestors only allows the bare host at :80/:443),
@@ -98,17 +140,6 @@ function paymentMethodFrom(data: unknown): string | undefined {
 	}
 	const { type } = method_details;
 	return typeof type === "string" ? type : undefined;
-}
-
-async function downloadInvoice(transactionId: string, t: Translate) {
-	try {
-		const { url } = await api.get<{ url: string }>(
-			`/billing/transactions/${transactionId}/invoice`,
-		);
-		window.open(url, "_blank", "noopener");
-	} catch {
-		notify.error(t("Could not fetch that invoice. Please try again."));
-	}
 }
 
 interface BillingPageProps {
@@ -172,6 +203,38 @@ function SlowActivationBanner({
 	);
 }
 
+// The buyer closed Paddle after starting a payment but before COMPLETED (a
+// dismissed wallet sheet, an abandoned 3DS challenge). Nothing was activated,
+// so say so plainly; never "received" or "activating" here.
+function CheckingPaymentNotice() {
+	const { t } = useT();
+	return (
+		<section
+			aria-live="polite"
+			className="flex flex-col items-center justify-center gap-3 py-16 text-center"
+		>
+			<Loader2 className="size-6 animate-spin text-primary-ink" aria-hidden="true" />
+			<p className="text-muted-foreground text-sm">{t("Checking your payment…")}</p>
+		</section>
+	);
+}
+
+function UnfinishedPaymentBanner({ onRetry }: { onRetry: () => void }) {
+	const { t } = useT();
+	return (
+		<div role="alert" className="rounded-lg border border-border bg-muted/50 p-4 text-sm">
+			<p className="font-medium text-foreground">
+				{t("Your payment did not finish, so you have not been subscribed.")}
+			</p>
+			<div className="mt-3">
+				<Button size="sm" onClick={onRetry}>
+					{t("Try again")}
+				</Button>
+			</div>
+		</div>
+	);
+}
+
 // Skeleton placeholder that matches the post-load layout so the page does
 // not jump when billing status + Paddle init resolve. Shape: optional
 // heading, cadence toggle row, two cards in the same grid as the real cards.
@@ -226,6 +289,7 @@ export default function BillingPage({
 	const { data: billing, isLoading } = useBillingStatus();
 	const { data: config } = useBillingConfig();
 	const { freeTier, catalog } = planCopy(config?.plan_limits);
+	const renewal = useRenewalNotice();
 	const { data: me } = useMe();
 	const hasSubscription = Boolean(billing?.subscription);
 	const { data: detail } = useBillingSubscriptionDetail(hasSubscription);
@@ -256,7 +320,7 @@ export default function BillingPage({
 	// checkout_stalled can report it — Paddle's own COMPLETED/FAILED payloads
 	// don't reliably carry method_details, but PAYMENT_SELECTED always does.
 	const checkoutMethodRef = useRef<CheckoutMethod>("unknown");
-	// True once CHECKOUT_COMPLETED has fired for the open checkout — the only
+	// True once CHECKOUT_COMPLETED (or the activation push) marks the open checkout paid, the only
 	// thing that tells CHECKOUT_CLOSED apart from an abandon: our OWN code
 	// calls Checkout.close() after a successful activation too (see
 	// handleSubscriptionActivated below), and that close event mustn't read as
@@ -270,6 +334,9 @@ export default function BillingPage({
 	const checkoutIdRef = useRef<string | null>(null);
 	const paymentAttemptedRef = useRef(false);
 	const checkoutExitReportedRef = useRef(false);
+	// The options the current tier checkout opened with. A stale customer id
+	// fails as checkout.error, so that handler reopens these once by email.
+	const checkoutOptionsRef = useRef<CheckoutOpenOptions | null>(null);
 
 	// A checkout ended without completing. In the frame (checkout.closed): a
 	// payment already started means the buyer got stuck mid-payment (a
@@ -325,8 +392,23 @@ export default function BillingPage({
 	//   checkout  → inline mode: Paddle frame mounted; overlay mode: modal open
 	//   slow      → cooldown elapsed without a push event; show recovery banner
 	const [checkingOut, setCheckingOut] = useState(false);
+	// The open tier checkout and Paddle's latest totals for it, for the inline
+	// order summary (CheckoutSummary).
+	const [summaryTier, setSummaryTier] = useState<PlanTier | null>(null);
+	const [summaryTotals, setSummaryTotals] = useState<CheckoutTotals | null>(null);
 	const [completedAt, setCompletedAt] = useState<number | null>(null);
 	const [slow, setSlow] = useState(false);
+	// checkout.closed after PAYMENT_INITIATED with no COMPLETED: show the
+	// "not subscribed, try again" banner.
+	const [unfinished, setUnfinished] = useState(false);
+	// Between that close and the banner: checking whether the payment landed
+	// after all (see CONFIRM_WINDOW_MS). Ref-mirrored for the push handler.
+	const [confirming, setConfirming] = useState(false);
+	const confirmingRef = useRef(false);
+	confirmingRef.current = confirming;
+	// Set by the activation push, so the checkout.closed that our own
+	// Checkout.close() triggers there is not read as an unfinished payment.
+	const activatedRef = useRef(false);
 	// Onboarding-only bridge: held from activation until the redirect fires, so we
 	// show a single steady "finishing up" view instead of flashing the empty plan
 	// picker while queries invalidate + status refetches.
@@ -367,45 +449,100 @@ export default function BillingPage({
 	// the user channel just told us. Close Paddle, refresh local query state,
 	// and (in onboarding mode) fetch the fresh onboarding/status to decide
 	// where to route the user next.
-	const handleSubscriptionActivated = useCallback(async () => {
-		// Onboarding: hold a steady "finishing up" view across the async work below
-		// so we never flash the empty plan picker before the redirect. Gate on the
-		// fire latch too: a duplicate/late activation broadcast after the first
-		// fire must NOT re-raise `finalizing` (the reset/navigate path below is
-		// skipped once fired, which would otherwise strand the spinner forever).
-		if (onActivatedRef.current && !onActivatedFiredRef.current) {
-			setFinalizing(true);
-		}
-		paddleRef.current?.Checkout.close();
-		setCheckingOut(false);
-		setCompletedAt(null);
-		setSlow(false);
-		await invalidateBillingState(qc);
-		await qc.invalidateQueries({ queryKey: ["onboarding", "status"] });
-
-		if (onActivatedRef.current && !onActivatedFiredRef.current) {
-			try {
-				const status = await qc.fetchQuery<OnboardingStatus>({
-					queryKey: ["onboarding", "status"],
-					queryFn: () => api.get<OnboardingStatus>("/onboarding/status"),
-					staleTime: 0,
-				});
-				if (!onActivatedFiredRef.current) {
-					onActivatedFiredRef.current = true;
-					onActivatedRef.current(status);
-				}
-			} catch (err) {
-				console.error("failed to refetch onboarding/status after activation", err);
-				setFinalizing(false);
+	const handleSubscriptionActivated = useCallback(
+		async (payload: Pick<SubscriptionActivatedPayload, "status">) => {
+			const paying = isPayingStatus(payload.status);
+			// The push fires on every subscription mutation, including an older
+			// subscription going canceled or past_due. While a checkout is open,
+			// closing Paddle on one of those kills a live wallet sheet and hides
+			// the unfinished-payment banner, so only refresh state. Same while
+			// checking a closed payment: it must not end the check as "activated".
+			if ((checkoutOpenRef.current || confirmingRef.current) && !paying) {
+				await invalidateBillingState(qc);
+				return;
 			}
-		}
-	}, [qc]);
+			// Onboarding: hold a steady "finishing up" view across the async work below
+			// so we never flash the empty plan picker before the redirect. Gate on the
+			// fire latch too: a duplicate/late activation broadcast after the first
+			// fire must NOT re-raise `finalizing` (the reset/navigate path below is
+			// skipped once fired, which would otherwise strand the spinner forever).
+			if (onActivatedRef.current && !onActivatedFiredRef.current) {
+				setFinalizing(true);
+			}
+			// The push can beat Paddle.js's checkout.completed. It carries no
+			// transaction id, and it also fires for an older subscription's update or
+			// cancel. A checkout only opens for a user with no paying plan, so a
+			// paying status while one is open is the subscription it created: report
+			// the completion from here (Paddle's late event is then skipped) and mark
+			// it before closing, so the checkout.closed our close fires is not
+			// reported as a stall/abandon. A non-paying push returned above.
+			if (checkoutOpenRef.current && !checkoutCompletedRef.current) {
+				checkoutCompletedRef.current = true;
+				track("checkout_completed", { method: checkoutMethodRef.current });
+			}
+			activatedRef.current = true;
+			setConfirming(false);
+			setUnfinished(false);
+			paddleRef.current?.Checkout.close();
+			setCheckingOut(false);
+			setCompletedAt(null);
+			setSlow(false);
+			await invalidateBillingState(qc);
+			await qc.invalidateQueries({ queryKey: ["onboarding", "status"] });
+
+			if (onActivatedRef.current && !onActivatedFiredRef.current) {
+				try {
+					const status = await qc.fetchQuery<OnboardingStatus>({
+						queryKey: ["onboarding", "status"],
+						queryFn: () => api.get<OnboardingStatus>("/onboarding/status"),
+						staleTime: 0,
+					});
+					if (!onActivatedFiredRef.current) {
+						onActivatedFiredRef.current = true;
+						onActivatedRef.current(status);
+					}
+				} catch (err) {
+					console.error("failed to refetch onboarding/status after activation", err);
+					setFinalizing(false);
+				}
+			}
+		},
+		[qc],
+	);
 
 	useSubscriptionActivatedEvents({
 		userId: me?.id ?? null,
 		enabled: true,
 		onActivated: handleSubscriptionActivated,
 	});
+
+	// Checking a closed mid-payment checkout: refetch billing state until the
+	// window ends, then say the payment did not finish.
+	useEffect(() => {
+		if (!confirming) {
+			return;
+		}
+		const poll = setInterval(() => {
+			invalidateBillingState(qc);
+		}, CONFIRM_POLL_MS);
+		const giveUp = setTimeout(() => {
+			setConfirming(false);
+			setUnfinished(true);
+		}, CONFIRM_WINDOW_MS);
+		return () => {
+			clearInterval(poll);
+			clearTimeout(giveUp);
+		};
+	}, [confirming, qc]);
+
+	// Billing state showing a paying subscription while checking (or after the
+	// banner) is the payment landing without a push: take the activated path.
+	const billingSubStatus = billing?.subscription?.status;
+	useEffect(() => {
+		if ((confirming || unfinished) && isPayingStatus(billingSubStatus)) {
+			handleSubscriptionActivated({ status: billingSubStatus });
+		}
+	}, [confirming, unfinished, billingSubStatus, handleSubscriptionActivated]);
 
 	// Mount-time cache check: if the user lands on billing with a cached
 	// onboarding status already past 'billing' AND has a paid subscription,
@@ -466,6 +603,7 @@ export default function BillingPage({
 					// signup/upgrade funnel this event exists to measure.
 					const tier = checkoutTierRef.current;
 					if (tier) {
+						setSummaryTotals(checkoutTotals(event.data));
 						track("checkout_opened", {
 							method: "unknown",
 							tier,
@@ -475,17 +613,26 @@ export default function BillingPage({
 					}
 					break;
 				}
+				case CheckoutEventNames.CHECKOUT_UPDATED: {
+					// Address or discount changed: tax and totals move with it.
+					const totals = checkoutTotals(event.data);
+					if (totals) {
+						setSummaryTotals(totals);
+					}
+					break;
+				}
 				case CheckoutEventNames.CHECKOUT_PAYMENT_SELECTED: {
 					checkoutMethodRef.current = toCheckoutMethod(paymentMethodFrom(event.data));
 					break;
 				}
 				case CheckoutEventNames.CHECKOUT_PAYMENT_INITIATED: {
 					paymentAttemptedRef.current = true;
-					// Belt-and-suspenders: either PAYMENT_INITIATED or COMPLETED may
-					// drop on trial-signup redirects. Arm the cooldown timer on
-					// whichever fires first (`?? Date.now()` guards against reset)
-					// so a dropped COMPLETED still surfaces the recovery banner
-					// instead of stranding the user on Paddle's inline frame.
+					// Do NOT arm the activation cooldown here. Paddle fires this when
+					// the buyer taps Apple Pay or Google Pay, before the wallet sheet
+					// opens, so a cooldown armed here closed the checkout under a
+					// live wallet sheet and claimed "Payment received". Only
+					// CHECKOUT_COMPLETED arms it; a dropped COMPLETED is covered by
+					// the subscription_activated push over the user channel.
 					const data: unknown = event.data;
 					const txn =
 						typeof data === "object" &&
@@ -495,16 +642,19 @@ export default function BillingPage({
 							? data.transaction_id
 							: null;
 					setTransactionId(txn);
-					setCompletedAt((prev) => prev ?? Date.now());
 					invalidateBillingState(qc);
 					break;
 				}
 				case CheckoutEventNames.CHECKOUT_COMPLETED: {
+					// The activation push already reported (and closed) this checkout.
+					if (checkoutCompletedRef.current) {
+						break;
+					}
 					// Don't close Paddle — its built-in "Payment successful" screen
 					// is the visible confirmation while we wait for the backend
 					// webhook to fire the subscription_activated push. The cooldown
-					// timer is the fallback if the push never arrives (and is also
-					// armed here in case PAYMENT_INITIATED dropped).
+					// timer is the fallback if the push never arrives. This is the
+					// only place it is armed (see PAYMENT_INITIATED).
 					setCompletedAt((prev) => prev ?? Date.now());
 					invalidateBillingState(qc);
 					checkoutCompletedRef.current = true;
@@ -541,12 +691,41 @@ export default function BillingPage({
 					break;
 				}
 				case CheckoutEventNames.CHECKOUT_CLOSED: {
+					// Read before reportCheckoutExit, which only reads these refs.
+					if (
+						checkoutTierRef.current &&
+						paymentAttemptedRef.current &&
+						!checkoutCompletedRef.current &&
+						!activatedRef.current
+					) {
+						setCheckingOut(false);
+						setConfirming(true);
+						invalidateBillingState(qc);
+					}
 					reportCheckoutExit(false);
 					checkoutOpenRef.current = false;
 					break;
 				}
 				case CheckoutEventNames.CHECKOUT_PAYMENT_ERROR:
 				case CheckoutEventNames.CHECKOUT_ERROR: {
+					// A saved customer id can be stale (archived customer, or an id
+					// from another env in a copied DB), and every retry with it fails
+					// the same way. Reopen once by email; the next error is real.
+					const opened = checkoutOptionsRef.current;
+					if (
+						event.name === CheckoutEventNames.CHECKOUT_ERROR &&
+						opened?.customer &&
+						"id" in opened.customer &&
+						config.customer_email
+					) {
+						console.warn("Paddle checkout.error with a saved customer id, reopening by email", {
+							customer_id: opened.customer.id,
+						});
+						const retry = { ...opened, customer: { email: config.customer_email } };
+						checkoutOptionsRef.current = retry;
+						paddleRef.current?.Checkout.open(retry);
+						break;
+					}
 					// Genuine checkout-level error (not a routine decline) — the frame
 					// may be in a broken state, so close it and surface a message.
 					setCheckingOut(false);
@@ -581,6 +760,8 @@ export default function BillingPage({
 	// div is in the DOM before Paddle tries to find it.
 	const handleStartCheckout = useCallback(
 		(tier: "starter" | "pro") => {
+			setSummaryTier(tier);
+			setSummaryTotals(null);
 			// Dev stub: skip the (un-embeddable) Paddle frame, show the stand-in.
 			if (DEV_FAKE_CHECKOUT) {
 				setCheckingOut(true);
@@ -600,6 +781,9 @@ export default function BillingPage({
 			checkoutIdRef.current = null;
 			paymentAttemptedRef.current = false;
 			checkoutExitReportedRef.current = false;
+			activatedRef.current = false;
+			setConfirming(false);
+			setUnfinished(false);
 			if (isInline) {
 				setCheckingOut(true);
 			}
@@ -608,7 +792,7 @@ export default function BillingPage({
 			// React 18 batches state into the same commit, so the DOM is ready by
 			// the time Paddle queries it on the next microtask.
 			queueMicrotask(() => {
-				paddle.Checkout.open({
+				const options: CheckoutOpenOptions = {
 					// Fall back to monthly when the annual id is absent. BillingConfig
 					// types `annual: string`, but billing_controller returns nil when the
 					// env var is unset, and annual is now the DEFAULT cadence — so an env
@@ -620,17 +804,57 @@ export default function BillingPage({
 							quantity: 1,
 						},
 					],
-					customer: { email: config.customer_email },
+					// Paddle takes id OR email, not both. A known id keeps a returning
+					// buyer on their existing Paddle customer.
+					customer: config.customer_id
+						? { id: config.customer_id }
+						: { email: config.customer_email },
 					customData: config.custom_data,
-					settings: {
-						...checkoutSettings(isInline, { hideWallets: true }),
-						locale: checkoutLocale,
-					},
-				});
+					settings: { ...checkoutSettings(isInline), locale: checkoutLocale },
+				};
+				checkoutOptionsRef.current = options;
+				paddle.Checkout.open(options);
 			});
 		},
 		[paddle, config, cadence, isInline, checkoutLocale],
 	);
+
+	// Try again after an unfinished payment: re-check billing state first, so a
+	// payment that landed late never opens a second checkout (and a second
+	// subscription). If the check itself fails, do not open blind.
+	const handleRetryCheckout = useCallback(async () => {
+		const tier = checkoutTierRef.current;
+		if (!tier) {
+			return;
+		}
+		await qc.refetchQueries({ queryKey: ["billing", "status"] });
+		const state = qc.getQueryState<BillingStatus>(["billing", "status"]);
+		if (state?.status === "error") {
+			notify.error(tLater(msg("Something went wrong with checkout. Please try again.")));
+			return;
+		}
+		const status = state?.data?.subscription?.status;
+		if (isPayingStatus(status)) {
+			await handleSubscriptionActivated({ status });
+			return;
+		}
+		// Our webhook can still be in Paddle's retry backoff, longer than
+		// CONFIRM_WINDOW_MS. Paddle's own transaction status is the truth: paid
+		// means show "payment received", never a second checkout.
+		if (transactionId) {
+			const paddleStatus = await checkoutTransactionStatus(transactionId);
+			if (paddleStatus === "error") {
+				notify.error(tLater(msg("Something went wrong with checkout. Please try again.")));
+				return;
+			}
+			if (paddleStatus && PAID_TRANSACTION_STATUSES.has(paddleStatus)) {
+				setUnfinished(false);
+				setSlow(true);
+				return;
+			}
+		}
+		handleStartCheckout(tier);
+	}, [qc, tLater, transactionId, handleSubscriptionActivated, handleStartCheckout]);
 
 	// Dev stub success: satisfy the backend onboarding gate via the free-tier
 	// path (the only billing decision we can make without Paddle) so the wizard
@@ -710,7 +934,7 @@ export default function BillingPage({
 			);
 			paddle.Checkout.open({
 				transactionId: transaction_id,
-				settings: { ...checkoutSettings(isInline, { hideWallets: true }), locale: checkoutLocale },
+				settings: { ...checkoutSettings(isInline), locale: checkoutLocale },
 			});
 		} catch {
 			notify.error(t("Could not start the payment update. Please try again."));
@@ -794,6 +1018,10 @@ export default function BillingPage({
 							transactionId={transactionId}
 							onRefresh={() => window.location.reload()}
 						/>
+					) : confirming ? (
+						<CheckingPaymentNotice />
+					) : unfinished ? (
+						<UnfinishedPaymentBanner onRetry={handleRetryCheckout} />
 					) : isInline && checkingOut ? (
 						<>
 							<button
@@ -810,6 +1038,9 @@ export default function BillingPage({
 							>
 								{t("← Choose a different plan")}
 							</button>
+							{summaryTier ? (
+								<CheckoutSummary tier={summaryTier} cadence={cadence} totals={summaryTotals} />
+							) : null}
 							{DEV_FAKE_CHECKOUT ? (
 								// Fixed light colors throughout, not theme tokens: this stub
 								// only ever renders inside the forced-light checkout card (see
@@ -854,7 +1085,7 @@ export default function BillingPage({
 								<>
 									<h2 className="font-semibold text-foreground text-lg">{t("Choose a Plan")}</h2>
 									<p className="text-muted-foreground text-sm">
-										{t("Both plans include a 7-day free trial.")}
+										{t("Both plans come with a 14-day money-back guarantee.")}
 									</p>
 								</>
 							)}
@@ -893,7 +1124,8 @@ export default function BillingPage({
 									summary={t("Unlimited vaults · 50 GB · cross-vault search + API")}
 									features={catalog.pro.features}
 									ctaLabel={t("Choose Pro")}
-									ctaNote={t("7-day free trial · cancel anytime")}
+									renewalNote={renewal(catalog.pro, cadence)}
+									ctaNote={t("14-day money-back guarantee · cancel anytime")}
 									onClick={() => handleStartCheckout("pro")}
 									disabled={!checkoutReady}
 									recommended
@@ -906,7 +1138,8 @@ export default function BillingPage({
 									summary={t("10 vaults · 10 GB · unlimited AI")}
 									features={catalog.starter.features}
 									ctaLabel={t("Choose Starter")}
-									ctaNote={t("7-day free trial · cancel anytime")}
+									renewalNote={renewal(catalog.starter, cadence)}
+									ctaNote={t("14-day money-back guarantee · cancel anytime")}
 									onClick={() => handleStartCheckout("starter")}
 									disabled={!checkoutReady}
 									open={openTier === "starter"}

@@ -197,17 +197,18 @@ config :engram, Oban,
       # missed. No two entries share a minute (ObanCronTest): they share the
       # 2-slot maintenance queue and one database.
       #
-      # Minutes: reconcile owns every :x2/:x7, device-auth :04/:19/:34/:49,
-      # hourly jobs sit on :x3/:x8 or :10 (data-migrations runner :33, legal notices :18,
-      # attachment blob GC :03,
+      # Minutes: reconcile owns every :x2/:x7, the stalled-checkout scan every
+      # :x4/:x9, hourly jobs sit on :x3/:x8 or :10/:25/:55 (data-migrations
+      # runner :33, legal notices :18, attachment blob GC :03,
       # CRDT head re-warm :48),
-      # dailies on :00/:16/:25/:30/:40/:45.
+      # dailies on :00/:15/:30/:40/:45.
       crontab: [
         # Every 5 min. Work is also queued the moment it is due (`kick/0`).
         {"2-59/5 * * * *", Engram.Workers.ReconcileEmbeddings},
-        # Expired device-flow and OAuth codes/tokens. Cheap DELETEs; every 15
-        # min keeps the tables small.
-        {"4-59/15 * * * *", Engram.Workers.CleanupDeviceAuthWorker},
+        # Expired device-flow and OAuth codes/tokens. Cheap DELETEs. Hourly:
+        # lookups already refuse expired rows and the cutoffs are 1 h / 7 d, so
+        # this only bounds table size. Moved off :x4 for the 5-min scan (#2203).
+        {"55 * * * *", Engram.Workers.CleanupDeviceAuthWorker},
         # Whole-population CRDT doc bloat gauges (#1706): one aggregate query.
         # Hourly because `last_value` gauges only exist on the node that ran
         # the job, so a deploy leaves every panel empty until the next run.
@@ -243,7 +244,7 @@ config :engram, Oban,
         # Export archives past the 7-day download window (#859).
         {"53 * * * *", Engram.Workers.ExportExpirySweep},
         # Chunked-upload sessions idle for 24h.
-        {"9 * * * *", Engram.Workers.AttachmentUploadExpiry},
+        {"25 * * * *", Engram.Workers.AttachmentUploadExpiry},
         # Blobs of attachments soft-deleted over 24h ago (#2159): a soft
         # delete never touches storage, this reaps the bytes later.
         {"3 * * * *", Engram.Workers.AttachmentBlobGC},
@@ -252,10 +253,11 @@ config :engram, Oban,
         {"0 2 * * *", Engram.Billing.Workers.PaddleReconcile},
         # Stalled-checkout scan: Paddle sends no webhook for a payment parked at
         # action_required (3DS / Apple Pay approval), so poll for it (#1157).
-        # :14/:29/:44/:59, the one 15-minute phase no other cron shares (after
-        # moving TelemetryHeartbeat off 05:14). Windows are anchored on the tick
-        # itself (PaddleReconcile.scan_anchor/1), so they tile the hour.
-        {"14-59/15 * * * *", Engram.Billing.Workers.PaddleReconcile,
+        # Every 5 min on :x4/:x9 (device-auth cleanup and upload expiry moved
+        # off it). The interval must equal Reconciliation's
+        # @stalled_scan_window_seconds; windows are anchored on the tick itself
+        # (PaddleReconcile.scan_anchor/1), so they tile the hour (#2203).
+        {"4-59/5 * * * *", Engram.Billing.Workers.PaddleReconcile,
          args: %{"scan" => "stalled_checkouts"}},
         {"30 3 * * *", Engram.Workers.InactivityCleanup},
         # Fair-use over 3 consecutive DAYS: a daily question.
@@ -278,7 +280,8 @@ config :engram, Oban,
         # Yesterday's account and vault snapshots for the operator insights.
         {"40 0 * * *", Engram.Workers.DailySnapshot},
         # Account facts onto PostHog persons; no-op unless PostHog is configured.
-        {"25 6 * * *", Engram.Workers.PostHogPersonSync}
+        # 06:15, not 06:25: :25 is upload expiry's hourly minute.
+        {"15 6 * * *", Engram.Workers.PostHogPersonSync}
       ]
     }
   ]
@@ -303,6 +306,7 @@ config :logger,
 config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
   metadata: [
+    :adjustment_id,
     :attachment_id,
     :attachment_ids,
     :attempt,
@@ -526,6 +530,11 @@ config :engram, :client_logs_retention_days, 30
 # REST batch, MCP create_folder). Keyed per USER, not per vault: first-syncing
 # two vaults at once shares the one budget.
 config :engram, :folder_create_rate_limit, limit: 120, period_ms: 60_000
+
+# GET /api/billing/checkout-transactions/:id makes one live Paddle call per
+# request, against the API quota the webhook follow-ups and reconciliation
+# share. The SPA calls it once per "Try again". Keyed per user.
+config :engram, :checkout_transaction_rate_limit, limit: 10, period_ms: 60_000
 
 # ex_aws HTTP client: Req (first-party in ex_aws 2.7). Req uses its own default
 # Finch pool, so the backend carries no hackney dependency. :req_opts sets the

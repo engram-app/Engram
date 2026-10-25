@@ -511,6 +511,8 @@ defmodule EngramWeb.Router do
     get "/billing/status", BillingController, :status
     get "/billing/usage", BillingController, :usage
     get "/billing/config", BillingController, :config
+    # Status only, of a checkout the caller opened: read during onboarding.
+    get "/billing/checkout-transactions/:id", BillingController, :checkout_transaction
     post "/billing/plan-change/preview", BillingController, :plan_change_preview
   end
 

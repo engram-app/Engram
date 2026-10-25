@@ -76,7 +76,7 @@ defmodule Engram.Billing.Workers.PaddleReconcileTest do
   describe "stalled-checkout scan" do
     alias Engram.Billing.Reconciliation
 
-    # Tick 12:00 owns payments created in [11:30, 11:45).
+    # Tick 12:00 owns payments created in [11:40, 11:45): 15 to 20 minutes old.
     @anchor ~U[2026-10-23 12:00:00Z]
 
     defp txn(id, payments, extra \\ %{}) do
@@ -111,22 +111,22 @@ defmodule Engram.Billing.Workers.PaddleReconcileTest do
 
       Engram.Paddle.ClientMock
       |> expect(:list_ready_transactions, fn since ->
-        assert since == ~U[2026-10-23 11:30:00Z]
+        assert since == ~U[2026-10-23 11:40:00Z]
 
         {:ok,
          [
-           txn("txn_stalled", [payment("action_required", "2026-10-23T11:40:00Z")]),
+           txn("txn_stalled", [payment("action_required", "2026-10-23T11:42:00Z")]),
            # Newer than 15 min: a 3DS challenge still in progress.
            txn("txn_fresh", [payment("action_required", "2026-10-23T11:50:00Z")]),
            # Older than the window: the previous tick already reported it.
-           txn("txn_prev_window", [payment("action_required", "2026-10-23T11:20:00Z")]),
+           txn("txn_prev_window", [payment("action_required", "2026-10-23T11:36:00Z")]),
            # Newest attempt is a capture in flight, not a stall.
            txn("txn_retried", [
-             payment("action_required", "2026-10-23T11:31:00Z"),
-             payment("authorized", "2026-10-23T11:41:00Z")
+             payment("action_required", "2026-10-23T11:41:00Z"),
+             payment("authorized", "2026-10-23T11:43:00Z")
            ]),
            # Renewal: dunning, owned by subscription.past_due.
-           txn("txn_renewal", [payment("action_required", "2026-10-23T11:40:00Z")], %{
+           txn("txn_renewal", [payment("action_required", "2026-10-23T11:42:00Z")], %{
              "origin" => "subscription_recurring"
            }),
            txn("txn_no_payments", [])
@@ -149,10 +149,69 @@ defmodule Engram.Billing.Workers.PaddleReconcileTest do
     test "the next tick does not re-report the same transaction" do
       Engram.Paddle.ClientMock
       |> expect(:list_ready_transactions, fn _since ->
-        {:ok, [txn("txn_stalled", [payment("action_required", "2026-10-23T11:40:00Z")])]}
+        {:ok, [txn("txn_stalled", [payment("action_required", "2026-10-23T11:42:00Z")])]}
       end)
 
-      assert Reconciliation.report_stalled_checkouts(DateTime.add(@anchor, 900, :second)) == 0
+      assert Reconciliation.report_stalled_checkouts(DateTime.add(@anchor, 300, :second)) == 0
+    end
+
+    # Half-open [anchor - 20m, anchor - 15m): an attempt exactly on a boundary
+    # belongs to exactly one tick, so consecutive ticks neither miss nor
+    # double-report it (#2203).
+    test "window boundaries: exactly 20 minutes old is in, exactly 15 is the next tick's" do
+      on_start = txn("txn_start", [payment("action_required", "2026-10-23T11:40:00Z")])
+      on_end = txn("txn_end", [payment("action_required", "2026-10-23T11:45:00Z")])
+
+      Engram.Paddle.ClientMock
+      |> expect(:list_ready_transactions, 3, fn _since -> {:ok, [on_start, on_end]} end)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        # Tick 12:00 reports the 20-minute-old attempt only.
+        assert Reconciliation.report_stalled_checkouts(@anchor) == 1
+        # Tick 12:05 reports the one that was exactly 15 minutes old at 12:00.
+        assert Reconciliation.report_stalled_checkouts(DateTime.add(@anchor, 300, :second)) == 1
+        # Tick 11:55 reports neither: its window ends at 11:40, exclusive.
+        assert Reconciliation.report_stalled_checkouts(DateTime.add(@anchor, -300, :second)) == 0
+      end)
+    end
+
+    # The windows only tile if each tick owns exactly one cron interval: a
+    # wider window double-reports, a narrower one skips attempts (#2203).
+    test "runs every 5 minutes and the window width equals the cron interval" do
+      # PaddleReconcile has two entries: the daily drift run (one minute) and
+      # the scan (many).
+      [minutes] =
+        for {expr, PaddleReconcile} <- Engram.Test.ObanWorkers.crontab(),
+            minutes = Enum.sort(Oban.Cron.Expression.parse!(expr).minutes),
+            length(minutes) > 1,
+            do: minutes
+
+      gaps = Enum.zip_with(minutes, tl(minutes) ++ [hd(minutes) + 60], &(&2 - &1))
+      window_min = div(Reconciliation.stalled_scan_window_seconds(), 60)
+
+      assert window_min == 5
+      assert gaps == List.duplicate(window_min, div(60, window_min))
+
+      # Every cron tick is an anchor, and a job inserted up to just under half
+      # a window late (busy leader, DB pool wait) or early still anchors on its
+      # own tick, so a delayed insert neither skips nor repeats a window.
+      half = div(Reconciliation.stalled_scan_window_seconds(), 2)
+
+      for m <- minutes do
+        tick = DateTime.new!(~D[2026-10-23], Time.new!(12, m, 0))
+        assert PaddleReconcile.scan_anchor(tick) == tick
+        assert PaddleReconcile.scan_anchor(DateTime.add(tick, half - 1, :second)) == tick
+        assert PaddleReconcile.scan_anchor(DateTime.add(tick, -half, :second)) == tick
+      end
+    end
+
+    # At 15-min cadence a 15-min timeout could not stack scans; at 5 min a hung
+    # Paddle call could pile three into the 2-slot maintenance queue.
+    test "a scan times out before the next tick; the daily run keeps its long timeout" do
+      scan = %Oban.Job{args: %{"scan" => "stalled_checkouts"}}
+
+      assert PaddleReconcile.timeout(scan) < Reconciliation.stalled_scan_window_seconds() * 1000
+      assert PaddleReconcile.timeout(%Oban.Job{args: %{}}) == :timer.minutes(15)
     end
 
     test "a Paddle fetch failure errors the job so Oban retries the same window" do
@@ -167,11 +226,14 @@ defmodule Engram.Billing.Workers.PaddleReconcileTest do
 
     # The grace: a window anchored on the tick ends 15 minutes before the run,
     # so a payment younger than that can never be reported.
-    test "anchors on the cron tick, to the minute, so windows tile and keep the grace" do
+    test "anchors on the cron tick, even when inserted late, so windows tile and keep the grace" do
       assert PaddleReconcile.scan_anchor(~U[2026-10-23 12:14:00.020Z]) == ~U[2026-10-23 12:14:00Z]
       # DB clock a hair early: still that tick, not the previous minute.
       assert PaddleReconcile.scan_anchor(~U[2026-10-23 12:13:59.990Z]) == ~U[2026-10-23 12:14:00Z]
-      assert PaddleReconcile.scan_anchor(~U[2026-10-23 12:29:00.400Z]) == ~U[2026-10-23 12:29:00Z]
+      assert PaddleReconcile.scan_anchor(~U[2026-10-23 12:19:00.400Z]) == ~U[2026-10-23 12:19:00Z]
+      # Inserted 2m20s late: still the 12:14 tick, not 12:16 (the old
+      # nearest-minute rounding shifted the window by the delay).
+      assert PaddleReconcile.scan_anchor(~U[2026-10-23 12:16:20Z]) == ~U[2026-10-23 12:14:00Z]
     end
 
     test "is a no-op on self-host" do

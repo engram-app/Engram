@@ -94,8 +94,6 @@ export default {
 	Status: "Статус",
 	Invoice: "Рахунок",
 	Download: "Завантажити",
-	"Could not fetch that invoice. Please try again.":
-		"Не вдалося отримати цей рахунок. Спробуйте ще раз.",
 	"Payment received. We're finishing your activation in the background.":
 		"Отримано оплату. Ми завершуємо активацію у фоновому режимі.",
 	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
@@ -103,6 +101,10 @@ export default {
 	Refresh: "Оновити",
 	"Contact support": "Зв'язатися з підтримкою",
 	"Reference number: {id}": "Номер запису: {id}",
+	"Checking your payment…": "Перевірка вашого платежу…",
+	"Your payment did not finish, so you have not been subscribed.":
+		"Ваш платіж не завершено, тому ви не підписані.",
+	"Try again": "Спробувати ще раз",
 	"Loading billing": "Завантаження інформації про оплату",
 	"Could not open the billing portal. Please try again.":
 		"Не вдалося відкрити сторінку оплати. Спробуйте ще раз.",
@@ -122,11 +124,13 @@ export default {
 		"Оплата не пройшла. Будь ласка, спробуйте ще раз.",
 	"Simulate failure": "Імітувати помилку",
 	"Choose a Plan": "Оберіть тарифний план",
-	"Both plans include a 7-day free trial.": "Обидва плани включають 7-денний пробний період.",
+	"Both plans come with a 14-day money-back guarantee.":
+		"Обидва плани передбачають 14-денну гарантію повернення коштів.",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"Необмежена кількість сховищ · 50 ГБ · пошук між сховищами + API",
 	"Choose Pro": "Оберіть Pro",
-	"7-day free trial · cancel anytime": "7-денний пробний період · можна скасувати в будь-який час",
+	"14-day money-back guarantee · cancel anytime":
+		"Гарантія повернення грошей протягом 14 днів · скасувати в будь-який час",
 	"10 vaults · 10 GB · unlimited AI": "10 сховищ · 10 ГБ · необмежений доступ до ШІ",
 	"Choose Starter": "Оберіть Starter",
 	"Choose Free": "Оберіть безкоштовний тариф",
@@ -150,7 +154,7 @@ export default {
 		"Сховища або замітки, які перевищують безкоштовний ліміт, стають доступними лише для перегляду.",
 	"You can reverse this any time before the effective date.":
 		"Ви можете скасувати це рішення в будь-який час до дати скасування.",
-	"Why are you canceling?": "Чому ви скасовуєте?",
+	"Why are you canceling? (optional)": "Чому ви скасовуєте? (необов'язково)",
 	"Keep my subscription": "Зберегти мою підписку",
 	"Canceling…": "Скасування…",
 	"Cancel at period end": "Скасувати в кінці періоду",
@@ -168,6 +172,9 @@ export default {
 		many: "До кінця безкоштовного пробного періоду залишилося {count} днів.",
 		other: "До кінця безкоштовного пробного періоду залишилося {count} дні.",
 	},
+	"No invoice is available for this transaction.": "Для цієї транзакції немає рахунку.",
+	"Could not fetch that invoice. Please try again.":
+		"Не вдалося отримати цей рахунок. Спробуйте ще раз.",
 	"Indexing budget": "Обсяг індексування",
 	"{available} of {capacity} tokens left": "{available} з {capacity} токенів залишилося",
 	"Refills {perDay} tokens a day. Full again on {date}.":
@@ -247,7 +254,6 @@ export default {
 	"Reopen checkout": "Відкрити сторінку оплати знову",
 	"Payment received": "Отримано оплату",
 	"Open Engram": "Відкрити Engram",
-	"Try again": "Спробувати ще раз",
 	"Need help? Contact {support}.": "Потрібна допомога? Зв'яжіться з {support}.",
 	"Payment method": "Спосіб оплати",
 	"Opening…": "Відкривається…",
@@ -265,6 +271,13 @@ export default {
 	"Your plan resumes on {date}": "Ваш план відновлюється {date}",
 	"{price}/mo": "{price}/міс",
 	"{price}/yr": "{price}/рік",
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Автоматично поновлюється щомісяця за ціною {price}, доки ви не скасуєте. Скасувати можна в будь-який час у розділі Налаштування > Оплата.",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Автоматично поновлюється щороку за ціною {price}, доки ви не скасуєте. Скасувати можна в будь-який час у розділі Налаштування > Оплата.",
+	"Order summary": "Підсумок замовлення",
+	"{plan} plan": "План {plan}",
+	"Due today": "Оплата сьогодні",
 	"Billing cadence": "Періодичність оплати",
 	Monthly: "Щомісяця",
 	Annual: "Щорічно",
@@ -275,7 +288,6 @@ export default {
 	"Most popular": "Найпопулярніший",
 	"Your current plan": "Ваш поточний тарифний план",
 	"You're on this plan": "Ви користуєтеся цим тарифним планом",
-	"Start free trial": "Почніть безкоштовний пробний період",
 	Popular: "Популярні",
 	"20 AI searches a day": "20 AI-запитів на день",
 	"1 vault": "1 сховище",
@@ -416,7 +428,6 @@ export default {
 		"Під час пробного періоду списання не здійснюються. Оплата починається після закінчення пробного періоду.",
 	"An invoice will be created for this amount.": "Буде створено рахунок на цю суму.",
 	"per {interval}": "за {interval}",
-	"{trialPeriod} free trial": "{trialPeriod} днів безкоштовно",
 	"Dismiss alert": "Закрити сповіщення",
 	"Expires {date}": "Закінчується {date}",
 	Payment: "Оплата",
@@ -1047,8 +1058,8 @@ export default {
 	"Couldn't save your answers, please try again.":
 		"Не вдалося зберегти ваші відповіді, будь ласка, спробуйте ще раз.",
 	"Choose your plan": "Оберіть свій план",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"7-денний безкоштовний пробний період для платних планів. Потрібна картка, зняття коштів не відбудеться до закінчення пробного періоду.",
+	"Paid plans come with a 14-day money-back guarantee.":
+		"Платні плани передбачають 14-денну гарантію повернення коштів.",
 	"Continue with Free →": "Продовжити з безкоштовного →",
 	"{summary} · upgrade anytime": "{summary} · можливість оновлення в будь-який час",
 	"Step {step} of {total}": "Крок {step} з {total}",

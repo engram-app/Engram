@@ -91,8 +91,6 @@ export default {
 	Status: "Durum",
 	Invoice: "Fatura",
 	Download: "İndir",
-	"Could not fetch that invoice. Please try again.":
-		"Faturayı yükleyemedik. Lütfen tekrar deneyin.",
 	"Payment received. We're finishing your activation in the background.":
 		"Ödeme alındı. Aktivasyonunuz arka planda tamamlanıyor.",
 	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
@@ -100,6 +98,10 @@ export default {
 	Refresh: "Yenile",
 	"Contact support": "Destek ile iletişime geç",
 	"Reference number: {id}": "Referans numarası: {id}",
+	"Checking your payment…": "Ödemeniz kontrol ediliyor…",
+	"Your payment did not finish, so you have not been subscribed.":
+		"Ödemeniz tamamlanmadığı için aboneliğiniz gerçekleşmedi.",
+	"Try again": "Lütfen tekrar deneyin",
 	"Loading billing": "Fatura bilgileri yükleniyor",
 	"Could not open the billing portal. Please try again.":
 		"Fatura portalını açamadık. Lütfen tekrar deneyin.",
@@ -119,11 +121,13 @@ export default {
 		"Ödeme işlemi başarısız oldu. Lütfen tekrar deneyin.",
 	"Simulate failure": "Başarısızlığı simüle et",
 	"Choose a Plan": "Bir plan seçin",
-	"Both plans include a 7-day free trial.": "Her iki plan da 7 günlük ücretsiz deneme içerir.",
+	"Both plans come with a 14-day money-back guarantee.":
+		"Her iki plan da 14 günlük para iade garantisi ile gelir.",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"Sınırsız kasa · 50 GB · kasa arası arama + API",
 	"Choose Pro": "Pro seçin",
-	"7-day free trial · cancel anytime": "7 günlük ücretsiz deneme · istediğiniz zaman iptal edin",
+	"14-day money-back guarantee · cancel anytime":
+		"14 günlük para iade garantisi · istediğiniz zaman iptal edin",
 	"10 vaults · 10 GB · unlimited AI": "10 kasa · 10 GB · sınırsız yapay zeka",
 	"Choose Starter": "Starter seçin",
 	"Choose Free": "Ücretsiz seçin",
@@ -147,7 +151,7 @@ export default {
 		"Ücretsiz sınırları aşan kasalar veya notlar sadece okunabilir hale gelir.",
 	"You can reverse this any time before the effective date.":
 		"Bu durumu, geçerlilik tarihinden önce istediğiniz zaman geri alabilirsiniz.",
-	"Why are you canceling?": "Neden aboneliğinizi iptal ediyorsunuz?",
+	"Why are you canceling? (optional)": "Neden aboneliğinizi iptal ediyorsunuz? (isteğe bağlı)",
 	"Keep my subscription": "Aboneliğimi koru",
 	"Canceling…": "İptal ediliyor…",
 	"Cancel at period end": "Dönem sonunda iptal et",
@@ -163,6 +167,9 @@ export default {
 		one: "Ücretsiz denemeniz sona ermeye {count} gün kaldı.",
 		other: "Ücretsiz denemenize {count} gün kaldı.",
 	},
+	"No invoice is available for this transaction.": "Bu işlem için fatura bulunmuyor.",
+	"Could not fetch that invoice. Please try again.":
+		"Faturayı yükleyemedik. Lütfen tekrar deneyin.",
 	"Indexing budget": "İndeksleme kotası",
 	"{available} of {capacity} tokens left": "{available} {capacity} token kaldı",
 	"Refills {perDay} tokens a day. Full again on {date}.":
@@ -238,7 +245,6 @@ export default {
 	"Reopen checkout": "Ödeme işlemini yeniden açın",
 	"Payment received": "Ödeme alındı",
 	"Open Engram": "Engram bölümünü açın",
-	"Try again": "Lütfen tekrar deneyin",
 	"Need help? Contact {support}.": "Yardım mı gerekiyor? {support} ile iletişime geçin.",
 	"Payment method": "Ödeme yöntemi",
 	"Opening…": "Açılıyor…",
@@ -256,6 +262,13 @@ export default {
 	"Your plan resumes on {date}": "Planınız {date} tarihinde yeniden başlıyor",
 	"{price}/mo": "{price}/ay",
 	"{price}/yr": "{price}/yıl",
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Her ay otomatik olarak {price} fiyata yenilenir, iptal edebilirsiniz. İptal için Ayarlar > Ödeme'ye gidin.",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Her yıl otomatik olarak {price} fiyata yenilenir, iptal edebilirsiniz. İptal için Ayarlar > Ödeme'ye gidin.",
+	"Order summary": "Sipariş özeti",
+	"{plan} plan": "{plan} planı",
+	"Due today": "Bugün ödenecek",
 	"Billing cadence": "Ödeme sıklığı",
 	Monthly: "Aylık",
 	Annual: "Yıllık",
@@ -266,7 +279,6 @@ export default {
 	"Most popular": "En popüler",
 	"Your current plan": "Mevcut aboneliğiniz",
 	"You're on this plan": "Şu paketi kullanıyorsunuz",
-	"Start free trial": "Ücretsiz denemeye başlayın",
 	Popular: "Popüler",
 	"20 AI searches a day": "Günde 20 yapay zeka sorgusu",
 	"1 vault": "1 kasa",
@@ -400,7 +412,6 @@ export default {
 		"Deneme süreniz boyunca herhangi bir ücret alınmaz. Ücretlendirme, deneme sürenizin bitmesiyle başlar.",
 	"An invoice will be created for this amount.": "Bu tutar için bir fatura oluşturulacaktır.",
 	"per {interval}": "{interval} başına",
-	"{trialPeriod} free trial": "{trialPeriod} ücretsiz deneme",
 	"Dismiss alert": "Uyarıyı kapat",
 	"Expires {date}": "Süresi {date} tarihinde doluyor",
 	Payment: "Ödeme",
@@ -964,8 +975,8 @@ export default {
 	"Couldn't save your answers, please try again.":
 		"Cevaplarınızı kaydedemedik, lütfen tekrar deneyin.",
 	"Choose your plan": "Planınızı seçin",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"Ücretli planlarda 7 günlük ücretsiz deneme. Kredi kartı gereklidir, deneme süresi dolana kadar ücret alınmaz.",
+	"Paid plans come with a 14-day money-back guarantee.":
+		"Ücretli planlar 14 günlük para iade garantisi ile gelir.",
 	"Continue with Free →": "Ücretsiz sürümle devam et →",
 	"{summary} · upgrade anytime": "{summary} · istediğiniz zaman yükseltin",
 	"Step {step} of {total}": "{step} adımı, {total} toplam",

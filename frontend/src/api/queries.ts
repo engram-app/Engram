@@ -1456,6 +1456,9 @@ export interface BillingConfig extends PaddleClientConfig {
 		pro: { monthly: string; annual: string };
 	};
 	customer_email: string;
+	// The user's Paddle customer id (`ctm_…`) once they have one, else null.
+	// Absent on an older backend.
+	customer_id?: string | null;
 	custom_data: {
 		user_id: string;
 	};
@@ -1510,6 +1513,9 @@ export interface BillingTransaction {
 	currency: string | null;
 	status: string;
 	invoice_id: string | null;
+	// Server-side rule: completed (or billed) and nonzero. Paddle has no PDF otherwise.
+	// Optional: a backend older than this field omits it (the SPA ships first).
+	invoice_available?: boolean;
 }
 
 export interface BillingHistory {

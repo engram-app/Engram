@@ -91,8 +91,6 @@ export default {
 	Status: "Status",
 	Invoice: "Faktura",
 	Download: "Pobierz",
-	"Could not fetch that invoice. Please try again.":
-		"Nie udało się pobrać tej faktury. Spróbuj ponownie.",
 	"Payment received. We're finishing your activation in the background.":
 		"Płatność odebrana. Kończymy aktywację w tle.",
 	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
@@ -100,6 +98,10 @@ export default {
 	Refresh: "Odśwież",
 	"Contact support": "Skontaktuj się z pomocą techniczną",
 	"Reference number: {id}": "Numer referencyjny: {id}",
+	"Checking your payment…": "Sprawdzam płatność…",
+	"Your payment did not finish, so you have not been subscribed.":
+		"Twoja płatność nie została zakończona, więc nie masz aktywnego abonamentu.",
+	"Try again": "Spróbuj ponownie",
 	"Loading billing": "Ładowanie faktury",
 	"Could not open the billing portal. Please try again.":
 		"Nie udało się otworzyć panelu płatności. Spróbuj ponownie.",
@@ -118,12 +120,13 @@ export default {
 	"Payment did not go through. Please try again.": "Płatność nie powiodła się. Spróbuj ponownie.",
 	"Simulate failure": "Symuluj niepowodzenie",
 	"Choose a Plan": "Wybierz plan",
-	"Both plans include a 7-day free trial.": "Oba plany zawierają 7-dniowy okres próbny.",
+	"Both plans come with a 14-day money-back guarantee.":
+		"Oba plany oferują 14-dniową gwarancję zwrotu pieniędzy.",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"Nieograniczona liczba sejfów · 50 GB · wyszukiwanie między sejfami + API",
 	"Choose Pro": "Wybierz Pro",
-	"7-day free trial · cancel anytime":
-		"7-dniowy okres próbny · możesz zrezygnować w dowolnym momencie",
+	"14-day money-back guarantee · cancel anytime":
+		"14-dniowa gwarancja zwrotu pieniędzy · anuluj w dowolnym momencie",
 	"10 vaults · 10 GB · unlimited AI": "10 sejfów · 10 GB · nieograniczone użycie AI",
 	"Choose Starter": "Wybierz Starter",
 	"Choose Free": "Wybierz darmowy plan",
@@ -147,7 +150,7 @@ export default {
 		"Sejfy lub notatki, które przekraczają limity darmowej wersji, stają się tylko do odczytu.",
 	"You can reverse this any time before the effective date.":
 		"Możesz to zmienić w dowolnym momencie przed datą wejścia w życie anulowania.",
-	"Why are you canceling?": "Dlaczego chcesz anulować?",
+	"Why are you canceling? (optional)": "Dlaczego rezygnujesz? (opcjonalne)",
 	"Keep my subscription": "Zachowaj moją subskrypcję",
 	"Canceling…": "Anulowanie…",
 	"Cancel at period end": "Anuluj na koniec okresu",
@@ -165,6 +168,9 @@ export default {
 		many: "Zostało {count} dni do końca darmowego okresu próbnego.",
 		other: "Pozostało {count} dnia w bezpłatnym okresie próbnym.",
 	},
+	"No invoice is available for this transaction.": "Brak faktury dla tej transakcji.",
+	"Could not fetch that invoice. Please try again.":
+		"Nie udało się pobrać tej faktury. Spróbuj ponownie.",
 	"Indexing budget": "Budżet indeksowania",
 	"{available} of {capacity} tokens left": "{available} z {capacity} tokenów pozostało",
 	"Refills {perDay} tokens a day. Full again on {date}.":
@@ -244,7 +250,6 @@ export default {
 	"Reopen checkout": "Ponowne otwarcie strony płatności",
 	"Payment received": "Płatność odebrana",
 	"Open Engram": "Otwórz Engram",
-	"Try again": "Spróbuj ponownie",
 	"Need help? Contact {support}.": "Potrzebujesz pomocy? Skontaktuj się z {support}.",
 	"Payment method": "Metoda płatności",
 	"Opening…": "Otwieranie…",
@@ -262,6 +267,13 @@ export default {
 	"Your plan resumes on {date}": "Twój plan zostanie wznowiony {date}",
 	"{price}/mo": "{price}/mies",
 	"{price}/yr": "{price}/rok",
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Odnawia się automatycznie co miesiąc za {price}, do momentu anulowania. Możesz anulować w dowolnym momencie w Ustawieniach > Płatności.",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Odnawia się automatycznie co rok za {price}, do momentu anulowania. Możesz anulować w dowolnym momencie w Ustawieniach > Płatności.",
+	"Order summary": "Podsumowanie zamówienia",
+	"{plan} plan": "Plan {plan}",
+	"Due today": "Do zapłaty dzisiaj",
 	"Billing cadence": "Cykl płatności",
 	Monthly: "Miesięcznie",
 	Annual: "Rocznie",
@@ -272,7 +284,6 @@ export default {
 	"Most popular": "Najpopularniejszy",
 	"Your current plan": "Twój aktualny plan",
 	"You're on this plan": "Jesteś na tym planie",
-	"Start free trial": "Rozpocznij darmowy okres próbny",
 	Popular: "Popularny",
 	"20 AI searches a day": "20 zapytań AI dziennie",
 	"1 vault": "1 sejf",
@@ -411,7 +422,6 @@ export default {
 		"Brak opłat w okresie próbny. Rozliczenia rozpoczynają się po zakończeniu okresu próbnego.",
 	"An invoice will be created for this amount.": "Zostanie wygenerowana faktura na tę kwotę.",
 	"per {interval}": "na {interval}",
-	"{trialPeriod} free trial": "{trialPeriod} darmowy okres próbny",
 	"Dismiss alert": "Zamknij powiadomienie",
 	"Expires {date}": "Wygasa {date}",
 	Payment: "Płatność",
@@ -1038,8 +1048,8 @@ export default {
 	"Couldn't save your answers, please try again.":
 		"Nie udało się zapisać odpowiedzi, spróbuj ponownie.",
 	"Choose your plan": "Wybierz swój plan",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"7-dniowy okres próbny w płatnych planach. Wymagana karta, bez opłat do momentu zakończenia.",
+	"Paid plans come with a 14-day money-back guarantee.":
+		"Płatne plany oferują 14-dniową gwarancję zwrotu pieniędzy.",
 	"Continue with Free →": "Kontynuuj z darmowym planem →",
 	"{summary} · upgrade anytime": "{summary} · możesz uaktualnić w dowolnym momencie",
 	"Step {step} of {total}": "Krok {step} z {total}",

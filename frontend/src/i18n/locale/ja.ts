@@ -93,8 +93,6 @@ export default {
 	Status: "ステータス",
 	Invoice: "請求書",
 	Download: "ダウンロード",
-	"Could not fetch that invoice. Please try again.":
-		"請求書を読み込めませんでした。もう一度お試しください。",
 	"Payment received. We're finishing your activation in the background.":
 		"支払いが完了しました。バックグラウンドでアクティベーションを完了しています。",
 	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
@@ -102,6 +100,10 @@ export default {
 	Refresh: "更新",
 	"Contact support": "サポートへ連絡",
 	"Reference number: {id}": "参照番号: {id}",
+	"Checking your payment…": "支払い状況を確認しています…",
+	"Your payment did not finish, so you have not been subscribed.":
+		"支払いが完了しなかったため、登録されていません。",
+	"Try again": "再試行",
 	"Loading billing": "課金情報を読み込み中",
 	"Could not open the billing portal. Please try again.":
 		"課金ポータルを開けませんでした。再度お試しください。",
@@ -120,11 +122,11 @@ export default {
 	"Payment did not go through. Please try again.": "決済が完了しませんでした。再度お試しください。",
 	"Simulate failure": "決済失敗をシミュレート",
 	"Choose a Plan": "プランを選択",
-	"Both plans include a 7-day free trial.": "両プランとも7日間の無料トライアルが含まれます。",
+	"Both plans come with a 14-day money-back guarantee.": "両プランとも14日間の返金保証付きです。",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"無制限の保管庫 · 50 GB · 保管庫間の検索 + API",
 	"Choose Pro": "Proプランを選択",
-	"7-day free trial · cancel anytime": "7日間の無料トライアル · いつでも解約可能",
+	"14-day money-back guarantee · cancel anytime": "14日間返金保証 · いつでもキャンセル可能",
 	"10 vaults · 10 GB · unlimited AI": "10個の保管庫 · 10 GB · 無制限のAI",
 	"Choose Starter": "Starterプランを選択",
 	"Choose Free": "無料版を選択",
@@ -147,7 +149,7 @@ export default {
 		"無料版の制限を超える保管庫またはノートは、読み取り専用になります。",
 	"You can reverse this any time before the effective date.":
 		"いつでも、有効期限になる前にこの操作を元に戻せます。",
-	"Why are you canceling?": "なぜ解約されますか？",
+	"Why are you canceling? (optional)": "キャンセル理由は何ですか？（任意）",
 	"Keep my subscription": "購読を継続します",
 	"Canceling…": "解約中…",
 	"Cancel at period end": "期間満了時に解約",
@@ -160,6 +162,9 @@ export default {
 	"Current Plan": "現在のプラン",
 	Free: "無料",
 	"{count} days remaining in your free trial.": { other: "無料トライアルは残り{count}日です。" },
+	"No invoice is available for this transaction.": "この取引の請求書は利用できません。",
+	"Could not fetch that invoice. Please try again.":
+		"請求書を読み込めませんでした。もう一度お試しください。",
 	"Indexing budget": "インデックス作成の制限",
 	"{available} of {capacity} tokens left": "{available}トークン残 {capacity}トークン中",
 	"Refills {perDay} tokens a day. Full again on {date}.":
@@ -232,7 +237,6 @@ export default {
 	"Reopen checkout": "決済を再開",
 	"Payment received": "支払いが完了しました",
 	"Open Engram": "Engramを開く",
-	"Try again": "再試行",
 	"Need help? Contact {support}.": "お困りですか？{support}までお問い合わせください。",
 	"Payment method": "支払い方法",
 	"Opening…": "読み込み中…",
@@ -250,6 +254,13 @@ export default {
 	"Your plan resumes on {date}": "プランは{date}に再開されます",
 	"{price}/mo": "{price}/月",
 	"{price}/yr": "{price}/年",
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"解約されるまで、毎月{price}で自動更新されます。設定 > 課金でいつでもキャンセルできます。",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"解約されるまで、毎年{price}で自動更新されます。設定 > 課金でいつでもキャンセルできます。",
+	"Order summary": "注文概要",
+	"{plan} plan": "{plan} プラン",
+	"Due today": "支払期日: 今日",
 	"Billing cadence": "支払いサイクル",
 	Monthly: "月額",
 	Annual: "年間",
@@ -260,7 +271,6 @@ export default {
 	"Most popular": "最も人気",
 	"Your current plan": "現在のプラン",
 	"You're on this plan": "このプランを利用中",
-	"Start free trial": "無料トライアル開始",
 	Popular: "人気",
 	"20 AI searches a day": "1日20回AI検索",
 	"1 vault": "1つの保管庫",
@@ -392,7 +402,6 @@ export default {
 		"試用期間中は料金は発生しません。試用期間終了後に課金が開始されます。",
 	"An invoice will be created for this amount.": "この金額で請求書が作成されます。",
 	"per {interval}": "1つあたり {interval}",
-	"{trialPeriod} free trial": "{trialPeriod} の無料トライアル",
 	"Dismiss alert": "アラートを閉じる",
 	"Expires {date}": "期限: {date}",
 	Payment: "支払い",
@@ -955,8 +964,7 @@ export default {
 	"Couldn't save your answers, please try again.":
 		"回答を保存できませんでした。もう一度お試しください。",
 	"Choose your plan": "プランを選択してください",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"有料プランでは、7日間の無料トライアルがあります。カード情報が必要ですが、終了するまでは料金は発生しません。",
+	"Paid plans come with a 14-day money-back guarantee.": "有料プランは14日間の返金保証付きです。",
 	"Continue with Free →": "無料版で続ける →",
 	"{summary} · upgrade anytime": "{summary} · いつでもアップグレード可能",
 	"Step {step} of {total}": "{total} の {step} 段階",

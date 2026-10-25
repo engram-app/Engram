@@ -104,23 +104,61 @@ describe("CancelPanel", () => {
 		expect(post).toHaveBeenCalledWith("/billing/cancel-subscription");
 	});
 
-	it("keeps Cancel disabled until a reason is picked and text is written", () => {
-		render(<CancelPanel detail={detail()} tier="pro" onClose={vi.fn()} />, { wrapper: Wrapper });
+	it("cancels with no reason and no typed sentence, filed as in_app_no_reason", async () => {
+		post.mockResolvedValue({});
+		const onClose = vi.fn();
+		render(<CancelPanel detail={detail()} tier="pro" onClose={onClose} />, { wrapper: Wrapper });
 		const cancelButton = screen.getByRole("button", { name: /cancel at period end/iu });
 
-		expect(cancelButton).toBeDisabled();
+		expect(cancelButton).toBeEnabled();
 		fireEvent.click(cancelButton);
-		expect(post).not.toHaveBeenCalled();
+
+		await waitFor(() => expect(onClose).toHaveBeenCalled());
+		expect(post).toHaveBeenCalledWith("/billing/cancel-subscription");
+		// Filed now, so the marker's later check finds it and files no
+		// `portal_no_reason` (that label is for real portal cancels).
+		expect(post).toHaveBeenCalledWith("/feedback", {
+			kind: "cancel",
+			reason: "in_app_no_reason",
+			detail: "",
+		});
+	});
+
+	it("sends typed text with no picked reason as other", async () => {
+		post.mockResolvedValue({});
+		const onClose = vi.fn();
+		render(<CancelPanel detail={detail()} tier="pro" onClose={onClose} />, { wrapper: Wrapper });
+
+		fireEvent.change(screen.getByLabelText(/tell us more/iu), { target: { value: " too slow " } });
+		fireEvent.click(screen.getByRole("button", { name: /cancel at period end/iu }));
+
+		await waitFor(() => expect(onClose).toHaveBeenCalled());
+		expect(post).toHaveBeenCalledWith("/feedback", {
+			kind: "cancel",
+			reason: "other",
+			detail: "too slow",
+		});
+	});
+
+	it("sends a picked reason without requiring a sentence", async () => {
+		post.mockResolvedValue({});
+		const onClose = vi.fn();
+		render(<CancelPanel detail={detail()} tier="pro" onClose={onClose} />, { wrapper: Wrapper });
 
 		fireEvent.click(screen.getByRole("radio", { name: /too expensive/iu }));
-		expect(cancelButton).toBeDisabled();
+		fireEvent.click(screen.getByRole("button", { name: /cancel at period end/iu }));
 
-		const box = screen.getByLabelText(/tell us more/iu);
-		fireEvent.change(box, { target: { value: "   " } });
-		expect(cancelButton).toBeDisabled();
+		await waitFor(() => expect(onClose).toHaveBeenCalled());
+		expect(post).toHaveBeenCalledWith("/feedback", {
+			kind: "cancel",
+			reason: "too_expensive",
+			detail: "",
+		});
+	});
 
-		fireEvent.change(box, { target: { value: "too pricey for me" } });
-		expect(cancelButton).toBeEnabled();
+	it("labels the reason question optional", () => {
+		render(<CancelPanel detail={detail()} tier="pro" onClose={vi.fn()} />, { wrapper: Wrapper });
+		expect(screen.getByText(/why are you canceling\? \(optional\)/iu)).toBeInTheDocument();
 	});
 
 	it("sends no reason when the cancel itself fails", async () => {

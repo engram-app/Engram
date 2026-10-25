@@ -92,8 +92,6 @@ export default {
 	Status: "Stav",
 	Invoice: "Faktura",
 	Download: "Stáhnout",
-	"Could not fetch that invoice. Please try again.":
-		"Nepodařilo se načíst tuto fakturu. Zkuste to znovu.",
 	"Payment received. We're finishing your activation in the background.":
 		"Platba přijata. Dokončujeme vaši aktivaci na pozadí.",
 	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
@@ -101,6 +99,10 @@ export default {
 	Refresh: "Obnovit",
 	"Contact support": "Kontaktujte podporu",
 	"Reference number: {id}": "Referenční číslo: {id}",
+	"Checking your payment…": "Kontrola vaší platby…",
+	"Your payment did not finish, so you have not been subscribed.":
+		"Vaše platba nebyla dokončena, takže nemáte aktivní předplatné.",
+	"Try again": "Zkuste to znovu",
 	"Loading billing": "Načítání fakturace",
 	"Could not open the billing portal. Please try again.":
 		"Nepodařilo se otevřít portál fakturace. Zkuste to znovu.",
@@ -119,11 +121,13 @@ export default {
 	"Payment did not go through. Please try again.": "Platba nebyla provedena. Zkuste to znovu.",
 	"Simulate failure": "Simulovat chybu",
 	"Choose a Plan": "Vyberte plán",
-	"Both plans include a 7-day free trial.": "Oba plány zahrnují 7denní zkušební verzi.",
+	"Both plans come with a 14-day money-back guarantee.":
+		"Oba plány zahrnují 14denní garanci vrácení peněz.",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"Neomezený počet trezorů · 50 GB · vyhledávání mezi trezory + API",
 	"Choose Pro": "Vyberte Pro",
-	"7-day free trial · cancel anytime": "7denní zkušební verze · můžete kdykoli zrušit",
+	"14-day money-back guarantee · cancel anytime":
+		"14denní garance vrácení peněz · můžete zrušit kdykoli",
 	"10 vaults · 10 GB · unlimited AI": "10 trezorů · 10 GB · neomezené AI",
 	"Choose Starter": "Vyberte Starter",
 	"Choose Free": "Vyberte Zdarma",
@@ -146,7 +150,7 @@ export default {
 		"Poznámky a trezory, které překračují limity bezplatného plánu, jsou pouze pro čtení.",
 	"You can reverse this any time before the effective date.":
 		"Můžete to kdykoli zrušit před datem zrušení.",
-	"Why are you canceling?": "Proč rušíte?",
+	"Why are you canceling? (optional)": "Proč rušíte? (volitelné)",
 	"Keep my subscription": "Zachovat mé předplatné",
 	"Canceling…": "Rušení…",
 	"Cancel at period end": "Zrušit na konci období",
@@ -164,6 +168,10 @@ export default {
 		many: "Zbývá {count} dne vaší bezplatné zkušební verze.",
 		other: "Zbývá {count} dní vaší bezplatné zkušební verze.",
 	},
+	"No invoice is available for this transaction.":
+		"Pro tuto transakci není k dispozici žádná faktura.",
+	"Could not fetch that invoice. Please try again.":
+		"Nepodařilo se načíst tuto fakturu. Zkuste to znovu.",
 	"Indexing budget": "Limit indexování",
 	"{available} of {capacity} tokens left": "{available} z {capacity} tokenů zbývá",
 	"Refills {perDay} tokens a day. Full again on {date}.":
@@ -241,7 +249,6 @@ export default {
 	"Reopen checkout": "Znovu otevřít platbu",
 	"Payment received": "Platba přijata",
 	"Open Engram": "Otevřít Engram",
-	"Try again": "Zkuste to znovu",
 	"Need help? Contact {support}.": "Potřebujete pomoc? Kontaktujte {support}.",
 	"Payment method": "Způsob platby",
 	"Opening…": "Otevírání…",
@@ -259,6 +266,13 @@ export default {
 	"Your plan resumes on {date}": "Váš plán bude obnoven dne {date}",
 	"{price}/mo": "{price}/měs",
 	"{price}/yr": "{price}/rok",
+	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Automaticky obnovuje se každý měsíc za {price}, dokud ji nezrušíte. Zrušení je možné kdykoli v Nastavení > Platby.",
+	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
+		"Automaticky obnovuje se každý rok za {price}, dokud ji nezrušíte. Zrušení je možné kdykoli v Nastavení > Platby.",
+	"Order summary": "Souhrn objednávky",
+	"{plan} plan": "{plan} plán",
+	"Due today": "Splatné dnes",
 	"Billing cadence": "Frekvence fakturace",
 	Monthly: "Měsíčně",
 	Annual: "Ročně",
@@ -269,7 +283,6 @@ export default {
 	"Most popular": "Nejpopulárnější",
 	"Your current plan": "Váš aktuální tarif",
 	"You're on this plan": "Používáte tento tarif",
-	"Start free trial": "Začněte bezplatnou zkušební verzi",
 	Popular: "Oblíbené",
 	"20 AI searches a day": "20 AI vyhledávání denně",
 	"1 vault": "1 trezor",
@@ -409,7 +422,6 @@ export default {
 		"Během zkušební doby nejsou žádné poplatky. Fakturace začíná po skončení zkušební doby.",
 	"An invoice will be created for this amount.": "Bude vytvořena faktura za tuto částku.",
 	"per {interval}": "za {interval}",
-	"{trialPeriod} free trial": "{trialPeriod} zkušební verze zdarma",
 	"Dismiss alert": "Ignorovat upozornění",
 	"Expires {date}": "Platnost do {date}",
 	Payment: "Platba",
@@ -1038,8 +1050,8 @@ export default {
 	"Couldn't save your answers, please try again.":
 		"Nepodařilo se uložit vaše odpovědi, zkuste to znovu.",
 	"Choose your plan": "Vyberte si svůj tarif",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"7denní zkušební verze u placených tarifů. Vyžaduje se platební karta, poplatek bude stržen až po skončení zkušební doby.",
+	"Paid plans come with a 14-day money-back guarantee.":
+		"Placené plány zahrnují 14denní garanci vrácení peněz.",
 	"Continue with Free →": "Pokračovat s bezplatnou verzí →",
 	"{summary} · upgrade anytime": "{summary} · můžete kdykoli upgradovat",
 	"Step {step} of {total}": "Krok {step} z {total}",

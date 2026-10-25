@@ -1,8 +1,9 @@
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import { intlLocale } from "@/lib/intl-locale";
+import { formatMinorUnits } from "@/lib/paddle-format";
 import type { BillingTransaction } from "../api/queries";
-import { formatMoney, statusLabel } from "./format";
+import { statusLabel } from "./format";
 
 export default function BillingHistoryTable({
 	transactions,
@@ -37,17 +38,25 @@ export default function BillingHistoryTable({
 								<td className="py-2">
 									{txn.billed_at ? new Date(txn.billed_at).toLocaleDateString(localeTag) : "—"}
 								</td>
-								<td className="py-2">{formatMoney(txn.amount, txn.currency, localeTag) ?? "—"}</td>
+								<td className="py-2">
+									{formatMinorUnits(txn.amount, txn.currency, localeTag) ?? "\u2014"}
+								</td>
 								<td className="py-2 capitalize">{statusLabel(txn.status, t)}</td>
 								<td className="py-2 text-right">
-									<Button
-										variant="ghost"
-										size="sm"
-										onClick={() => onDownload(txn.id)}
-										disabled={downloadingId === txn.id}
-									>
-										{t("Download")}
-									</Button>
+									{/* No PDF for a $0 or not-completed transaction (backend rule).
+									    Missing = an older backend, which offered Download on every row. */}
+									{(txn.invoice_available ?? true) ? (
+										<Button
+											variant="ghost"
+											size="sm"
+											onClick={() => onDownload(txn.id)}
+											disabled={downloadingId === txn.id}
+										>
+											{t("Download")}
+										</Button>
+									) : (
+										"\u2014"
+									)}
 								</td>
 							</tr>
 						))}
