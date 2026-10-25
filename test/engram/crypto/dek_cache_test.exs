@@ -312,8 +312,7 @@ defmodule Engram.Crypto.DekCacheTest do
     # moment. Claiming over on timeout made them each replace the last one's
     # claim and each call KMS: the herd single flight exists to stop.
     test "waiters past the await budget fail instead of claiming over" do
-      Application.put_env(:engram, :dek_await_ms, 50)
-      on_exit(fn -> Application.delete_env(:engram, :dek_await_ms) end)
+      :ok = Engram.ServiceConfig.put_override(:dek_await_ms, 50)
       {:claimed, token} = DekCache.claim_or_await(1)
 
       waiters = for _ <- 1..3, do: Task.async(fn -> DekCache.claim_or_await(1) end)

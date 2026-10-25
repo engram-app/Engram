@@ -114,7 +114,8 @@ defmodule Engram.Crypto.DekCache do
   @spec claim_or_await(user_id :: String.t()) ::
           {:ok, <<_::256>>} | {:claimed, reference()} | {:error, term()} | :retry
   def claim_or_await(user_id) do
-    await_ms = Application.get_env(:engram, :dek_await_ms, @await_ms)
+    # ServiceConfig: a test overrides it per process (async-safe).
+    await_ms = Engram.ServiceConfig.get(:dek_await_ms, @await_ms)
     GenServer.call(__MODULE__, {:claim_or_await, user_id}, await_ms)
   catch
     # A loader stuck past the await budget (a stalled KMS call). Fail rather
