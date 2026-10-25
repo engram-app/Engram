@@ -666,13 +666,29 @@ defmodule Engram.Billing do
   Paddle does not know.
   """
   @spec checkout_transaction_status(Engram.Accounts.User.t(), String.t()) ::
-          {:ok, String.t()} | {:error, :invalid_id | :not_found | term()}
+          {:ok, String.t()}
+          | {:error, :invalid_id | :not_found | {:rate_limited, non_neg_integer()} | term()}
   def checkout_transaction_status(user, transaction_id) do
     # The id goes into the Paddle API path under our server key, and Phoenix
     # decodes `%2F`/`%3F`: only Paddle's own id pattern reaches it.
-    if Regex.match?(@paddle_transaction_id, transaction_id),
-      do: fetch_checkout_status(user.id, transaction_id),
-      else: {:error, :invalid_id}
+    with true <- Regex.match?(@paddle_transaction_id, transaction_id) || {:error, :invalid_id},
+         :ok <- spend_checkout_status_budget(user.id) do
+      fetch_checkout_status(user.id, transaction_id)
+    end
+  end
+
+  defp spend_checkout_status_budget(user_id) do
+    opts = Application.fetch_env!(:engram, :checkout_transaction_rate_limit)
+
+    case EngramWeb.RateLimiter.hit(
+           "checkout_status:#{user_id}",
+           Keyword.fetch!(opts, :period_ms),
+           Keyword.fetch!(opts, :limit),
+           :checkout_status
+         ) do
+      {:allow, _} -> :ok
+      {:deny, retry_after_ms} -> {:error, {:rate_limited, retry_after_ms}}
+    end
   end
 
   defp fetch_checkout_status(user_id, transaction_id) do

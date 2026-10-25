@@ -294,6 +294,28 @@ defmodule EngramWeb.BillingControllerTest do
       end
     end
 
+    # One live Paddle call per request, against a quota the webhooks share.
+    test "is rate limited per user", %{conn: conn, user: user} do
+      prev = Application.get_env(:engram, :checkout_transaction_rate_limit)
+      Application.put_env(:engram, :checkout_transaction_rate_limit, limit: 2, period_ms: 60_000)
+      on_exit(fn -> Application.put_env(:engram, :checkout_transaction_rate_limit, prev) end)
+      EngramWeb.RateLimiter.reset_buckets!()
+
+      id = "txn_01mine0000000000000000000a"
+
+      expect(Engram.Paddle.ClientMock, :get_transaction, 2, fn ^id ->
+        {:ok, %{"id" => id, "status" => "ready", "custom_data" => %{"user_id" => user.id}}}
+      end)
+
+      for _ <- 1..2,
+          do:
+            assert(conn |> get("/api/billing/checkout-transactions/#{id}") |> json_response(200))
+
+      resp = get(conn, "/api/billing/checkout-transactions/#{id}")
+      assert json_response(resp, 429)["error"] == "rate_limited"
+      assert [_secs] = get_resp_header(resp, "retry-after")
+    end
+
     test "404s a transaction Paddle does not know", %{conn: conn} do
       expect(Engram.Paddle.ClientMock, :get_transaction, fn "txn_01nope0000000000000000000a" ->
         {:error, {:paddle_error, 404, %{"error" => %{"code" => "not_found"}}}}

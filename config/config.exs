@@ -531,6 +531,11 @@ config :engram, :client_logs_retention_days, 30
 # two vaults at once shares the one budget.
 config :engram, :folder_create_rate_limit, limit: 120, period_ms: 60_000
 
+# GET /api/billing/checkout-transactions/:id makes one live Paddle call per
+# request, against the API quota the webhook follow-ups and reconciliation
+# share. The SPA calls it once per "Try again". Keyed per user.
+config :engram, :checkout_transaction_rate_limit, limit: 10, period_ms: 60_000
+
 # ex_aws HTTP client: Req (first-party in ex_aws 2.7). Req uses its own default
 # Finch pool, so the backend carries no hackney dependency. :req_opts sets the
 # per-request timeout, mirroring the old adapter's 30s recv_timeout. Req handles

@@ -9,6 +9,7 @@ defmodule EngramWeb.BillingController do
   alias Engram.Connections
   alias Engram.UsageMeters
   alias Engram.Vaults
+  alias EngramWeb.Plugs.Halt
 
   require Logger
 
@@ -332,6 +333,9 @@ defmodule EngramWeb.BillingController do
 
         {:error, :not_found} ->
           not_found(conn, "transaction not found")
+
+        {:error, {:rate_limited, retry_after_ms}} ->
+          Halt.rate_limited(conn, retry_after_ms)
 
         {:error, reason} ->
           paddle_error(conn, reason)
