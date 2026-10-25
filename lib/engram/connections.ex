@@ -21,7 +21,7 @@ defmodule Engram.Connections do
 
   import Ecto.Query
   alias Engram.Accounts.{ApiKey, User}
-  alias Engram.Auth.DeviceRefreshToken
+  alias Engram.Auth.{DeviceRefreshToken, RefreshLeeway}
   alias Engram.Connections.LogoAllowlist
   alias Engram.OAuth
   alias Engram.OAuth.{Client, RefreshToken}
@@ -90,19 +90,37 @@ defmodule Engram.Connections do
   end
 
   @doc """
-  Returns the most recent `revoked_at` timestamp across the user's device
-  refresh tokens, or `nil` if no device family has ever been revoked.
+  Returns when the user last took a device away (Disconnect, vault delete),
+  or `nil` if never.
 
-  Used by `EngramWeb.Plugs.EnforceDeviceCap` to detect whether a Free user
-  is inside the `device_swap_cooldown_hours` window after revoking a
-  device. Family-grain (not row-grain): one revoke per swap.
+  Used by `EngramWeb.Plugs.EnforceDeviceCap` and `/link` to detect whether a
+  Free user is inside the `device_swap_cooldown_hours` window. Rotation also
+  stamps `revoked_at`, so a row's stamp alone is no signal: only a DEAD family
+  counts (no unrevoked row), dated by its newest row, the one the revoke hit.
+  Admin-side revokes stamp `RefreshLeeway.admin_revoked_at/0` and are skipped.
   """
   @spec most_recent_device_revoke(Ecto.UUID.t()) :: DateTime.t() | nil
   def most_recent_device_revoke(user_id) do
-    from(rt in DeviceRefreshToken,
-      where: rt.user_id == ^user_id,
-      where: not is_nil(rt.revoked_at),
-      select: max(rt.revoked_at)
+    # Newest row per family; ids are UUIDv7, so time-ordered.
+    newest =
+      from(rt in DeviceRefreshToken,
+        where: rt.user_id == ^user_id,
+        distinct: rt.family_id,
+        order_by: [asc: rt.family_id, desc: rt.id],
+        select: %{family_id: rt.family_id, revoked_at: rt.revoked_at}
+      )
+
+    from(n in subquery(newest),
+      as: :newest,
+      where: n.revoked_at > ^RefreshLeeway.admin_revoked_at(),
+      where:
+        not exists(
+          from(rt in DeviceRefreshToken,
+            where: rt.family_id == parent_as(:newest).family_id and is_nil(rt.revoked_at),
+            select: 1
+          )
+        ),
+      select: max(n.revoked_at)
     )
     |> Repo.one()
   end
@@ -325,15 +343,19 @@ defmodule Engram.Connections do
   """
   @spec revoke_by_vault(Ecto.UUID.t(), Ecto.UUID.t()) :: :ok
   def revoke_by_vault(user_id, vault_id) do
-    {devices, _} =
-      Repo.update_all(
-        from(rt in DeviceRefreshToken,
-          where: rt.user_id == ^user_id,
-          where: rt.vault_id == ^vault_id,
-          where: is_nil(rt.revoked_at)
-        ),
-        set: [revoked_at: DateTime.utc_now(:second)]
-      )
+    {:ok, {devices, _}} =
+      Repo.transaction(fn ->
+        RefreshLeeway.lock_user!(user_id)
+
+        Repo.update_all(
+          from(rt in DeviceRefreshToken,
+            where: rt.user_id == ^user_id,
+            where: rt.vault_id == ^vault_id,
+            where: is_nil(rt.revoked_at)
+          ),
+          set: [revoked_at: DateTime.utc_now(:second)]
+        )
+      end)
 
     _ = drop_vault_from_grants(user_id, vault_id, kick_owner: devices > 0)
     :ok
@@ -448,7 +470,7 @@ defmodule Engram.Connections do
 
   @doc """
   Revokes (sets `revoked_at = now`) all active device refresh tokens for
-  `(user_id, family_id)`.
+  `(user_id, family_id)`, under `RefreshLeeway.lock_user!/1`.
 
   Idempotent: a second call after all tokens are already revoked returns `:ok`.
   Unknown `(user_id, family_id)` combinations return `{:error, :not_found}`.
@@ -464,7 +486,15 @@ defmodule Engram.Connections do
         where: is_nil(rt.revoked_at)
       )
 
-    case Repo.update_all(query, set: [revoked_at: now]) do
+    {:ok, revoked} =
+      Repo.transaction(fn ->
+        # Serialize with an in-flight refresh, which would otherwise mint a
+        # child this UPDATE never saw (#2231).
+        RefreshLeeway.lock_user!(user_id)
+        Repo.update_all(query, set: [revoked_at: now])
+      end)
+
+    case revoked do
       {0, _} -> if device_history?(user_id, family_id), do: :ok, else: {:error, :not_found}
       {_, _} -> :ok
     end

@@ -254,6 +254,19 @@ defmodule Engram.AccountsTest do
       assert {:error, :token_reused} = Accounts.consume_refresh_token(new_raw)
     end
 
+    # #2231 guard: logout-everywhere (also account delete and password reset)
+    # must not be undone by a refresh inside the rotation leeway.
+    test "revoke_all_user_tokens: a refresh right after it is refused", %{user: user} do
+      {:ok, raw_token, _record} = Accounts.create_refresh_token(user)
+      {:ok, _user, current, _} = Accounts.consume_refresh_token(raw_token)
+
+      Accounts.revoke_all_user_tokens(user)
+
+      for raw <- [current, raw_token] do
+        assert {:error, :token_reused} = Accounts.consume_refresh_token(raw)
+      end
+    end
+
     test "revoke_all_user_tokens force-disconnects live sockets", %{user: user} do
       {:ok, _raw, _record} = Accounts.create_refresh_token(user)
       topic = "user_socket:#{user.id}"

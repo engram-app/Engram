@@ -8,7 +8,7 @@ defmodule Engram.Auth.DeviceFlow do
   import Ecto.Query
 
   alias Engram.{Accounts, Vaults}
-  alias Engram.Auth.{DeviceAuthorization, DeviceRefreshToken}
+  alias Engram.Auth.{DeviceAuthorization, DeviceRefreshToken, RefreshLeeway}
   alias Engram.Repo
 
   require Logger
@@ -240,15 +240,41 @@ defmodule Engram.Auth.DeviceFlow do
 
   def refresh_access_token(raw_refresh_token) do
     token_hash = hash_token(raw_refresh_token)
-    now = DateTime.utc_now()
 
+    # The owner, unlocked, only to take their lock; everything that decides is
+    # re-read under it.
+    owner =
+      from(rt in DeviceRefreshToken, where: rt.token_hash == ^token_hash, select: rt.user_id)
+
+    case Repo.one(owner, skip_tenant_check: true) do
+      nil ->
+        {:error, :invalid_refresh_token}
+
+      user_id ->
+        {:ok, result} =
+          Repo.transaction(fn ->
+            RefreshLeeway.lock_user!(user_id)
+            classify_refresh(token_hash, DateTime.utc_now())
+          end)
+
+        result
+    end
+  end
+
+  # Runs under `RefreshLeeway.lock_user!/1`, so no revoke of this user's
+  # tokens can commit between this read and the child insert.
+  defp classify_refresh(token_hash, now) do
     # Look the token up regardless of revocation state — a *revoked* token still
     # has to be classified (benign retry within leeway vs. reuse breach), not
-    # silently rejected. Expired tokens are out of scope entirely.
+    # silently rejected. Expired tokens are out of scope entirely. A deleted or
+    # suspended account mints nothing (same chokepoint as
+    # `Accounts.verify_password/2`); its rows are left for the revoke paths.
     query =
       from(rt in DeviceRefreshToken,
+        join: u in assoc(rt, :user),
         where: rt.token_hash == ^token_hash and rt.expires_at > ^now,
-        preload: [:user]
+        where: is_nil(u.deleted_at) and is_nil(u.suspended_at),
+        preload: [user: u]
       )
 
     case Repo.one(query, skip_tenant_check: true) do
@@ -258,23 +284,34 @@ defmodule Engram.Auth.DeviceFlow do
       %{revoked_at: nil} = old_token ->
         # Active token: normal single-use rotation. Stamp revoked_at so the
         # leeway is measured from this first rotation and can't be slid forward.
-        old_token
-        |> Ecto.Changeset.change(%{revoked_at: DateTime.truncate(now, :second)})
-        |> Repo.update!(skip_tenant_check: true)
+        # Same transaction as the child insert: a concurrent retry never sees
+        # the family with no live token.
+        {1, _} =
+          from(rt in DeviceRefreshToken, where: rt.id == ^old_token.id and is_nil(rt.revoked_at))
+          |> Repo.update_all([set: [revoked_at: DateTime.truncate(now, :second)]],
+            skip_tenant_check: true
+          )
 
         issue_child(old_token)
 
       old_token ->
-        if Engram.Auth.RefreshLeeway.benign?(old_token.revoked_at, now) do
-          # Revoked within the leeway: benign retry (lost rotation, concurrent
-          # request). Issue a child in the same family without re-revoking.
-          issue_child(old_token)
-        else
-          # Reuse of a token revoked outside the leeway → breach (RFC 9700
+        cond do
+          # Revoked within the leeway, family still live: benign retry (lost
+          # rotation, concurrent request). Issue a child without re-revoking.
+          RefreshLeeway.benign?(old_token, now) ->
+            issue_child(old_token)
+
+          # Reuse of a rotated token outside the leeway → breach (RFC 9700
           # §4.14.2). Invalidate the whole family so the legitimate holder of
           # the current token is forced to re-authenticate.
-          invalidate_family(old_token, now)
-          {:error, :invalid_refresh_token}
+          RefreshLeeway.family_live?(old_token) ->
+            invalidate_family(old_token, now)
+            {:error, :invalid_refresh_token}
+
+          # Family already dead (Disconnect, vault delete): refuse, and keep the
+          # rows, which Disconnect's idempotency and the swap cooldown read.
+          true ->
+            {:error, :invalid_refresh_token}
         end
     end
   end
