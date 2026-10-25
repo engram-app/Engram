@@ -40,14 +40,19 @@ export default function BillingHistoryTable({
 								<td className="py-2">{formatMoney(txn.amount, txn.currency, localeTag) ?? "—"}</td>
 								<td className="py-2 capitalize">{statusLabel(txn.status, t)}</td>
 								<td className="py-2 text-right">
-									<Button
-										variant="ghost"
-										size="sm"
-										onClick={() => onDownload(txn.id)}
-										disabled={downloadingId === txn.id}
-									>
-										{t("Download")}
-									</Button>
+									{/* Paddle issues no invoice for a $0 transaction (every trial start). */}
+									{txn.invoice_id ? (
+										<Button
+											variant="ghost"
+											size="sm"
+											onClick={() => onDownload(txn.id)}
+											disabled={downloadingId === txn.id}
+										>
+											{t("Download")}
+										</Button>
+									) : (
+										"\u2014"
+									)}
 								</td>
 							</tr>
 						))}

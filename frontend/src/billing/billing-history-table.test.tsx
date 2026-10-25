@@ -42,4 +42,21 @@ describe("BillingHistoryTable", () => {
 		fireEvent.click(firstDownload as HTMLElement);
 		expect(onDownload).toHaveBeenCalledWith("txn_2");
 	});
+
+	// Paddle has no invoice for a $0 transaction (every trial start), so a
+	// Download there could only fail.
+	it("renders no Download for a row without an invoice", () => {
+		const trial: BillingTransaction = {
+			id: "txn_trial",
+			billed_at: "2026-10-24T22:20:53Z",
+			amount: "0",
+			currency: "USD",
+			status: "completed",
+			invoice_id: null,
+		};
+		render(<BillingHistoryTable transactions={[trial]} onDownload={() => {}} />);
+		expect(screen.queryByRole("button", { name: /download/iu })).not.toBeInTheDocument();
+		// Same placeholder as the other empty cells, not a blank cell.
+		expect(screen.getAllByRole("cell").at(-1)).toHaveTextContent("\u2014");
+	});
 });
