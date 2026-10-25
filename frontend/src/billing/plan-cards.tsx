@@ -1,6 +1,7 @@
 import type { CheckoutEventsData } from "@paddle/paddle-js";
 import { ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import type { Translate } from "@/i18n/translate";
@@ -205,7 +206,9 @@ export function checkoutTotals(data: CheckoutEventsData | undefined): CheckoutTo
 
 // Paddle's inline frame shows no items, totals or recurring terms; Paddle's
 // inline checkout docs require the page to.
-// Catalog price until Paddle's first event brings the localized, taxed totals.
+// The renewal line shows the catalog price until Paddle's first event brings
+// the localized, taxed totals; "Due today" shows no amount until then, so the
+// USD list price is never read as the charge.
 // Fixed light colors: it sits on the forced-light checkout card.
 export function CheckoutSummary({
 	tier,
@@ -236,7 +239,13 @@ export function CheckoutSummary({
 			<p className="font-medium">{renewalNotice(money(totals?.recurring ?? list), cadence, t)}</p>
 			<dl className="flex justify-between border-gray-200 border-t pt-2">
 				<dt>{t("Due today")}</dt>
-				<dd className="font-semibold">{money(totals?.total ?? list)}</dd>
+				{totals ? (
+					<dd className="font-semibold">{money(totals.total)}</dd>
+				) : (
+					<dd aria-busy="true">
+						<Skeleton className="h-5 w-16 bg-gray-200" />
+					</dd>
+				)}
 			</dl>
 		</section>
 	);

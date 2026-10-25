@@ -328,7 +328,13 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			`Renews automatically every year at ${price} until you cancel. Cancel anytime in Settings > Billing.`;
 		expect(summary().getByText("Starter plan")).toBeInTheDocument();
 		expect(summary().getByText(renews("$70"))).toBeInTheDocument();
-		expect(summary().getByText("$70")).toBeInTheDocument();
+		// No amount due until Paddle's taxed, localized total arrives: the USD
+		// list price would read as the charge in a taxed or non-USD market.
+		expect(summary().queryByText("$70")).toBeNull();
+		expect(summary().getByText("Due today").nextElementSibling).toHaveAttribute(
+			"aria-busy",
+			"true",
+		);
 
 		await act(async () => {
 			captured!({
