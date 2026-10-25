@@ -1,6 +1,6 @@
 # Sobelow was a silent no-op, and the fingerprint skips that hid it
 
-_Last verified: 2026-10-23 (sobelow 0.16.0, 17 entries in `.sobelow-skips`)_
+_Last verified: 2026-10-24 (sobelow 0.16.0, 16 entries in `.sobelow-skips`)_
 
 ## The one idea
 
@@ -29,17 +29,18 @@ invocation, config, or version changes.
 Recorded so nobody re-derives the triage, and so the invariants each skip rests
 on are written down. Line numbers live in `.sobelow-skips`, not here.
 
-### `Misc.BinToTerm` x3
+### `Misc.BinToTerm` x1
 
-`crypto.ex`, `crypto/user_dek_rotation.ex`, `notes/tags_term.ex` (both of
-`notes.ex`'s tag decodes call it).
+`notes/tags_term.ex`, the **only** `binary_to_term` call site in `lib/`. Both
+of `notes.ex`'s tag decodes and the DEK rotation's tag rewrap
+(`crypto/user_dek_rotation.ex`, moved there in #2200 after its own pin broke
+on a line shift) call `TagsTerm.decode!/1`.
 
-All pass `[:safe]`, and all only decode bytes that just passed AES-GCM
-authentication under a per-user DEK with row-bound AAD (the
+It passes `[:safe]`, and every caller only decodes bytes that just passed
+AES-GCM authentication under a per-user DEK with row-bound AAD (the
 `notes.tags_ciphertext` column, which holds `:erlang.term_to_binary(tags)`). An
 attacker-substituted byte string fails the GCM tag check and returns `:error`
-before `binary_to_term` is reached. These three are the **only** `binary_to_term`
-call sites in `lib/`.
+before `binary_to_term` is reached.
 
 ### `XSS.ContentType` + `XSS.SendResp` x3
 

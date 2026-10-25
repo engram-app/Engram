@@ -29,6 +29,20 @@ defmodule Engram.SearchTenantIdfTest do
              }
     end
 
+    # #2198: v5 points carry the tenant under `u`, so once the legacy fields
+    # are dropped a `user_id` corpus is empty and per-tenant IDF is garbage.
+    test "v5 layout with legacy filters off: the IDF corpus filters on `u`" do
+      ServiceConfig.put_override(:v5_payload_format, true)
+      ServiceConfig.put_override(:legacy_filter_fields, false)
+      uid = "11111111-2222-3333-4444-555555555555"
+
+      body = Qdrant.sparse_search_body(@sparse, user_id: uid, tenant_idf: true)
+
+      assert body.params.idf.corpus == %{
+               must: [%{key: "u", match: %{value: "11111111222233334444555555555555"}}]
+             }
+    end
+
     test "sparse search has no params by default" do
       refute Map.has_key?(Qdrant.sparse_search_body(@sparse, user_id: "u1"), :params)
     end

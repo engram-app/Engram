@@ -486,14 +486,35 @@ defmodule Engram.Vector.QdrantLayoutTest do
           Engram.Vector.PayloadKeys.index_fields()
 
       for v <- [@v1182, Version.parse!("1.19.1"), nil] do
-        assert QdrantLayout.payload_indexes(v, false) == today
-        assert QdrantLayout.payload_indexes(v, true) == v5_today
+        assert QdrantLayout.payload_indexes(v, false, true) == today
+        assert QdrantLayout.payload_indexes(v, true, true) == v5_today
+      end
+    end
+
+    # A v3 (legacy-off) collection must not carry the legacy indexes: no
+    # filter reads them there, and each costs disk on every point.
+    test "legacy filters off with v5 on: no legacy index; otherwise all of them" do
+      legacy =
+        ~w(user_id vault_id path_hmac type_hmac folder_hmac tags_hmac fm_timestamp fm_created note_id)
+
+      for v <- [@v1182, @v1192, nil] do
+        off = for {f, _} <- QdrantLayout.payload_indexes(v, true, false), do: f
+        assert off != []
+        assert off -- legacy == off, "legacy index left in #{inspect(off)}"
+        assert Enum.all?(Engram.Vector.PayloadKeys.index_fields(), fn {f, _} -> f in off end)
+
+        assert QdrantLayout.payload_indexes(v, true, true) ==
+                 QdrantLayout.payload_indexes(v, true, true)
+
+        # With the v5 format off every filter is legacy, so the flag is moot.
+        assert QdrantLayout.payload_indexes(v, false, false) ==
+                 QdrantLayout.payload_indexes(v, false, true)
       end
     end
 
     test "1.19.2: one tenant field, every index on disk, no other graph, no note_id" do
       for v5? <- [false, true] do
-        indexes = Map.new(QdrantLayout.payload_indexes(@v1192, v5?))
+        indexes = Map.new(QdrantLayout.payload_indexes(@v1192, v5?, true))
 
         refute Map.has_key?(indexes, "note_id")
         assert Enum.all?(indexes, fn {_f, s} -> s["on_disk"] == true end)
@@ -531,13 +552,13 @@ defmodule Engram.Vector.QdrantLayoutTest do
     test "the 1.19.2 GET echoes every index schema as created" do
       schema = @tenant_info["payload_schema"]
 
-      for {field, want} <- QdrantLayout.payload_indexes(@v1192, true) do
+      for {field, want} <- QdrantLayout.payload_indexes(@v1192, true, true) do
         have = schema[field]["params"]
         assert have, "#{field} missing from the 1.19.2 fixture"
         assert Enum.all?(want, fn {k, v} -> have[k] == v end), "#{field}: #{inspect(have)}"
       end
 
-      assert map_size(schema) == length(QdrantLayout.payload_indexes(@v1192, true))
+      assert map_size(schema) == length(QdrantLayout.payload_indexes(@v1192, true, true))
     end
   end
 

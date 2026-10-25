@@ -66,6 +66,7 @@ defmodule Engram.RebuildRuntimeConfigTest do
   end
 
   test "LEGACY_FILTER_FIELDS is a switch" do
+    System.put_env("WRITE_V5_LAYOUT", "true")
     assert with_env("LEGACY_FILTER_FIELDS", "false") == false
     assert with_env("LEGACY_FILTER_FIELDS", "true") == true
     System.put_env("LEGACY_FILTER_FIELDS", "maybe")
@@ -100,6 +101,24 @@ defmodule Engram.RebuildRuntimeConfigTest do
     assert Engram.Vector.Qdrant.v5_payload_format?()
   end
 
+  # A legacy-format point written with legacy filters off is invisible to the
+  # DEK sweep (its ciphertext would stay under the retired key), search and
+  # delete. V5_PAYLOAD_FORMAT does not change the writer, so it is not enough.
+  test "LEGACY_FILTER_FIELDS=false refuses to boot unless WRITE_V5_LAYOUT=true" do
+    System.put_env("LEGACY_FILTER_FIELDS", "false")
+    msg = ~r/LEGACY_FILTER_FIELDS=false needs WRITE_V5_LAYOUT=true/
+    assert_raise RuntimeError, msg, &read_runtime/0
+
+    System.put_env("V5_PAYLOAD_FORMAT", "true")
+    assert_raise RuntimeError, msg, &read_runtime/0
+
+    System.put_env("WRITE_V5_LAYOUT", "false")
+    assert_raise RuntimeError, msg, &read_runtime/0
+
+    System.put_env("WRITE_V5_LAYOUT", "true")
+    assert engram(:legacy_filter_fields) == false
+  end
+
   test "QDRANT_TENANT_GRAPH is a switch, true only after drop-legacy-fields" do
     assert with_env("QDRANT_TENANT_GRAPH", "false") == false
 
@@ -114,6 +133,7 @@ defmodule Engram.RebuildRuntimeConfigTest do
     assert_raise RuntimeError, ~r/QDRANT_TENANT_GRAPH/, &read_runtime/0
 
     System.put_env("LEGACY_FILTER_FIELDS", "false")
+    System.put_env("WRITE_V5_LAYOUT", "true")
     assert engram(:qdrant_tenant_graph) == true
 
     System.put_env("QDRANT_TENANT_GRAPH", "maybe")

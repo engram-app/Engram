@@ -360,6 +360,11 @@ defmodule Engram.ServiceConfig.Overrides do
       get.(:qdrant_tenant_graph) == true and
         ServiceConfig.env(:legacy_filter_fields, true) != false &&
         "qdrant_tenant_graph=true needs LEGACY_FILTER_FIELDS=false",
+      # The boot twin is in config/runtime.exs: with legacy filters off a
+      # legacy-format write is skipped by the DEK sweep, search and delete.
+      ServiceConfig.env(:legacy_filter_fields, true) == false and
+        get.(:write_v5_layout) != true &&
+        "LEGACY_FILTER_FIELDS=false needs write_v5_layout=true",
       get.(:qdrant_active_cluster) == "v2" &&
         v2_violation(changed == :qdrant_active_cluster, opts)
     ]

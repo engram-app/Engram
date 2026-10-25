@@ -462,6 +462,16 @@ if qdrant_switch.("QDRANT_TENANT_GRAPH") == true and
   raise "QDRANT_TENANT_GRAPH=true needs LEGACY_FILTER_FIELDS=false (after the v5 pass, PR-18)"
 end
 
+# Legacy filters off only while new points are written in the v5 layout. A
+# legacy-format point carries ciphertext under `user_id`, and with legacy
+# filters off the DEK rotation sweep, search and account/vault delete no
+# longer see `user_id`: such a point would be written and then skipped.
+# V5_PAYLOAD_FORMAT alone is not enough, it changes filters, not the writer.
+if qdrant_switch.("LEGACY_FILTER_FIELDS") == false and
+     qdrant_switch.("WRITE_V5_LAYOUT") != true do
+  raise "LEGACY_FILTER_FIELDS=false needs WRITE_V5_LAYOUT=true (legacy points would be written unswept)"
+end
+
 # Comma-separated user ids the v5 pass rebuilds last (`Rebuild.rebuild_order/1`).
 if last_users = System.get_env("REBUILD_LAST_USERS") do
   ids =

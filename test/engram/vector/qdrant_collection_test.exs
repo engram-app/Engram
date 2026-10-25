@@ -305,6 +305,30 @@ defmodule Engram.Vector.QdrantCollectionTest do
   # #1609: indexes were only created on a fresh collection, so any field added
   # to the list later never reached a collection that already existed. Prod
   # carried only these four, and strict mode 400s a filter on the rest.
+  # LEGACY_FILTER_FIELDS=false (the v3 cluster): boot creates only the v5
+  # indexes, and an existing legacy index is left alone, never deleted (a
+  # DELETE would hit Bypass unstubbed and fail the test).
+  test "legacy filters off: boot creates no legacy index and deletes none", %{bypass: bypass} do
+    ServiceConfig.put_override(:legacy_filter_fields, false)
+    test_pid = self()
+
+    expect_existing(bypass, "c1", schema_for(~w(user_id vault_id), "keyword"))
+
+    Bypass.expect(bypass, "PUT", "/collections/c1/index", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:index, Jason.decode!(body)["field_name"]})
+      Plug.Conn.send_resp(conn, 200, ~s({"status":"ok"}))
+    end)
+
+    assert :ok = Qdrant.ensure_collection("c1", 1024)
+
+    for {field, _} <- @v5_fields, do: assert_receive({:index, ^field})
+
+    for field <- @indexed_fields ++ @integer_indexed_fields ++ ["note_id"] do
+      refute_received {:index, ^field}
+    end
+  end
+
   test "creates the payload indexes an existing collection is missing", %{bypass: bypass} do
     test_pid = self()
     present = ~w(user_id vault_id note_id path_hmac)

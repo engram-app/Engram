@@ -26,7 +26,7 @@ The 400 follows the unindexed key, not the filter shape or the collection.
 ## Rules
 - Build every user/tenant filter through `Qdrant.match_filter(:user, ...)`. Never hand-write the filter map.
 - A new filter key needs its payload index created BEFORE any reader uses it. That includes v5 flag flips: turning a flag on must not be the first moment a key is queried.
-- The fake Qdrant in `test/engram/workers/reconcile_note_payloads_test.exs` refuses unindexed scroll filters the way prod does (index list from `QdrantLayout.payload_indexes/2`). It is the ONLY strict fake: other suites' Bypass fakes accept any filter, so a new filter key elsewhere is not caught by tests. Do not loosen it.
+- The fake Qdrant in `test/engram/workers/reconcile_note_payloads_test.exs` refuses unindexed scroll filters the way prod does (index list from `QdrantLayout.payload_indexes/3`). It is the ONLY strict fake: other suites' Bypass fakes accept any filter, so a new filter key elsewhere is not caught by tests. Do not loosen it.
 - Payload indexes are not created at boot. `Qdrant.ensure_collection/2` creates missing ones, and its only caller is `Indexing` (first note indexed per node, memoised). After a deploy that turns the v5 format on, any reader that runs before the first index (search, the `:33` reconcile) filters on `u` with no index yet and gets a 400.
 - Staging runs self-hosted Qdrant without strict mode, so e2e cannot catch this (see the related doc).
 

@@ -1654,9 +1654,21 @@ defmodule Engram.Crypto.UserDekRotation do
 
   # `{:ok, skipped, next}`: `next` is nil once the scroll is done, else the
   # cursor after `:max_pages` pages. `:on_page` runs after each page.
+  #
+  # Only legacy-format points hold ciphertext (a v5 payload has none,
+  # `Engram.Indexing.PayloadV5`), so the scroll is on the legacy `user_id` key
+  # alone: paging the user's v5 points would find nothing to rewrap. Once no
+  # legacy point can exist (v5 on, legacy filters off: the v3 cluster, which
+  # has no `user_id` index) there is nothing to sweep and no call is made.
   defp sweep_qdrant(%User{id: user_id}, old_dek, new_dek, opts) do
+    if Qdrant.legacy_points?(),
+      do: sweep_legacy_points(user_id, old_dek, new_dek, opts),
+      else: {:ok, [], nil}
+  end
+
+  defp sweep_legacy_points(user_id, old_dek, new_dek, opts) do
     collection = Qdrant.collection_name()
-    filter = %{must: [%{key: "user_id", match: %{value: user_id}}]}
+    filter = %{must: [Qdrant.legacy_match_filter(:user, user_id)]}
 
     walk = %{
       on_page: Keyword.get(opts, :on_page, fn -> :ok end),
@@ -2203,15 +2215,12 @@ defmodule Engram.Crypto.UserDekRotation do
         {:ok, etf_bin} ->
           # ETF special case: re-encode the decoded term and encrypt THAT,
           # exactly as before (not the raw decrypted binary).
-          tags = :erlang.binary_to_term(etf_bin, [:safe])
+          tags = Engram.Notes.TagsTerm.decode!(etf_bin)
           new_etf = :erlang.term_to_binary(tags)
           {new_ct, new_nonce} = Envelope.encrypt(new_etf, new_dek, new_aad)
 
-          tags_hmac =
-            case tags do
-              ts when is_list(ts) -> Enum.map(ts, &Crypto.hmac_field(new_filter_key, &1))
-              _ -> []
-            end
+          # `TagsTerm.decode!/1` returns the stored tag list.
+          tags_hmac = Enum.map(tags, &Crypto.hmac_field(new_filter_key, &1))
 
           [
             {:tags_ciphertext, new_ct},

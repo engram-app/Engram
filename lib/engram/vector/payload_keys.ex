@@ -59,7 +59,7 @@ defmodule Engram.Vector.PayloadKeys do
   @doc """
   The v5 payload indexes as `{field, schema}`. All on disk, so the heap cost is
   near zero. Created only while `:v5_payload_format` is on (see `Qdrant`). On
-  Qdrant >= 1.19.2 `QdrantLayout.payload_indexes/2` adds `is_tenant` to `u`
+  Qdrant >= 1.19.2 `QdrantLayout.payload_indexes/3` adds `is_tenant` to `u`
   and `enable_hnsw: false` to the rest (Task 8.1). The source flags are
   payload only.
   """

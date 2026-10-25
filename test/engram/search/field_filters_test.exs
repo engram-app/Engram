@@ -20,6 +20,17 @@ defmodule Engram.Search.FieldFiltersTest do
 
   defp run(ctx, filters), do: FieldFilters.to_conditions(ctx.user.id, ctx.fk, filters)
 
+  # `in: []` names no value, so it is a bad filter, never a legacy-key or
+  # match-nothing condition (v3 has no legacy index; strict mode 400s).
+  test "in with an empty list is an invalid filter, legacy fields off", ctx do
+    Engram.ServiceConfig.put_override(:legacy_filter_fields, false)
+
+    for key <- ~w(type tags status phase) do
+      assert run(ctx, [%{"key" => key, "op" => "in", "value" => []}]) ==
+               {:error, {:invalid_field_filter, key}}
+    end
+  end
+
   test "eq on a string is an exact match on its value id, key case-insensitive", ctx do
     assert run(ctx, [%{"key" => "phase", "op" => "eq", "value" => "Draft"}]) ==
              {:ok,

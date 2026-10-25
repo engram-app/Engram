@@ -9,7 +9,7 @@ defmodule Engram.Vector.QdrantStrictModeTest do
 
   This turns strict mode ON for one throwaway collection and filters on every
   key `Qdrant.search/3` can send. A key missing from
-  `QdrantLayout.payload_indexes/2` fails here the way prod fails, not silently.
+  `QdrantLayout.payload_indexes/3` fails here the way prod fails, not silently.
   """
   use ExUnit.Case, async: false
 
@@ -78,7 +78,7 @@ defmodule Engram.Vector.QdrantStrictModeTest do
     for {label, opts} <- cases do
       assert {:ok, _results} = Qdrant.search(col, @vector, base ++ opts),
              "#{label}: strict mode rejected this filter, so its payload index is missing. " <>
-               "Add the key to QdrantLayout.payload_indexes/2 " <>
+               "Add the key to QdrantLayout.payload_indexes/3 " <>
                "in lib/engram/vector/qdrant_layout.ex."
     end
   end

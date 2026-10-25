@@ -37,7 +37,7 @@ defmodule Engram.Vector.Qdrant do
   @default_collection "obsidian_notes"
 
   # The payload indexes (legacy and v5, by server version) are
-  # `QdrantLayout.payload_indexes/2`.
+  # `QdrantLayout.payload_indexes/3`.
 
   # The largest request shapes any caller sends, so the Qdrant Cloud strict
   # limits (`QdrantLayout.desired_strict/1`) can sit above them with headroom.
@@ -445,7 +445,7 @@ defmodule Engram.Vector.Qdrant do
   defp ensure_payload_indexes(col, indexed, version) do
     missing =
       version
-      |> QdrantLayout.payload_indexes(v5_payload_format?())
+      |> QdrantLayout.payload_indexes(v5_payload_format?(), legacy_filter_fields?())
       |> Enum.reject(fn {field, _} -> MapSet.member?(indexed, field) end)
 
     last = length(missing) - 1
@@ -1331,7 +1331,7 @@ defmodule Engram.Vector.Qdrant do
     col = col || collection()
 
     legacy =
-      if legacy_filter_fields?() or not v5_payload_format?(),
+      if legacy_points?(),
         do: [{legacy_note_filter(user_id, vault_id, path_hmac), payload, []}],
         else: []
 
@@ -1689,6 +1689,9 @@ defmodule Engram.Vector.Qdrant do
   # `must` is still an AND with the other conditions, so tenant scoping is
   # unchanged.
 
+  @type match_field :: :user | :vault | :path | :folder | :type | :tags
+  @type key_condition :: %{key: String.t(), match: map()}
+
   @legacy_keys %{
     user: "user_id",
     vault: "vault_id",
@@ -1737,27 +1740,51 @@ defmodule Engram.Vector.Qdrant do
   def chunk_text_read?,
     do: ServiceConfig.get(:chunk_text_read, false) == true or write_v5_layout?()
 
-  defp legacy_filter_fields?, do: ServiceConfig.get(:legacy_filter_fields, true)
+  @doc "Whether filters still match the legacy (v3/v4) keys (`LEGACY_FILTER_FIELDS`)."
+  @spec legacy_filter_fields?() :: boolean()
+  def legacy_filter_fields?, do: ServiceConfig.get(:legacy_filter_fields, true)
+
+  @doc """
+  Whether legacy-format points can exist and be filtered: legacy filters on,
+  or the v5 format off (every point is legacy then). Only these points carry
+  ciphertext; a v5 payload has none (`Engram.Indexing.PayloadV5`).
+  """
+  @spec legacy_points?() :: boolean()
+  def legacy_points?, do: legacy_filter_fields?() or not v5_payload_format?()
+
+  @doc """
+  The legacy-key condition alone, for a caller that must touch only
+  legacy-format points (the DEK sweep). Use only while `legacy_points?/0`:
+  the v3 cluster has no index on these keys, and strict mode 400s.
+  """
+  @spec legacy_match_filter(match_field(), term()) :: key_condition()
+  def legacy_match_filter(field, value),
+    do: %{key: Map.fetch!(@legacy_keys, field), match: match(value)}
 
   @doc """
   One filter condition for `field` equal to `value` (a list matches any), in
   both payload formats. `:user`/`:vault` take ids as stored in Postgres;
   `:path`/`:folder`/`:type`/`:tags` take the base64 HMACs the legacy filters
   use.
+
+  With the v5 format on and legacy filters off it never emits a legacy key
+  (the v3 cluster has no index for one). A value with no v5 form there (an
+  empty list, a malformed HMAC) matches nothing on the v5 key: fail closed.
   """
-  @spec match_filter(:user | :vault | :path | :folder | :type | :tags, term()) :: map()
+  @spec match_filter(match_field(), term()) :: key_condition() | %{should: [key_condition()]}
   def match_filter(field, value) do
-    legacy = %{key: Map.fetch!(@legacy_keys, field), match: match(value)}
+    legacy = legacy_match_filter(field, value)
+    v5_key = PayloadKeys.short(Map.fetch!(@v5_keys, field))
 
     case v5_payload_format?() && v5_value(field, value) do
-      v when v in [nil, false] ->
-        legacy
-
-      v ->
-        v5 = %{key: PayloadKeys.short(Map.fetch!(@v5_keys, field)), match: match(v)}
-        if legacy_filter_fields?(), do: %{should: [legacy, v5]}, else: v5
+      false -> legacy
+      nil -> if legacy_filter_fields?(), do: legacy, else: %{key: v5_key, match: %{any: []}}
+      v -> v5_or_both(legacy, %{key: v5_key, match: match(v)})
     end
   end
+
+  defp v5_or_both(legacy, v5),
+    do: if(legacy_filter_fields?(), do: %{should: [legacy, v5]}, else: v5)
 
   @doc "A range condition on `fm_timestamp` / `fm_created`, in both formats."
   @spec range_filter(:fm_timestamp | :fm_created, map()) :: map()
@@ -1814,7 +1841,9 @@ defmodule Engram.Vector.Qdrant do
   defp v5_value(_field, b64), do: hmac_id(b64)
 
   # A legacy filter value that is not a full base64 HMAC (a test literal, a
-  # malformed opt) has no v5 form; the legacy condition alone then applies.
+  # malformed opt) has no v5 form. `match_filter/2` then sends the legacy
+  # condition alone while legacy filters are on, and fails closed on the v5
+  # key once they are off.
   defp hmac_id(b64) when is_binary(b64) do
     case Base.decode64(b64) do
       {:ok, <<_::binary-size(16), _::binary>> = hmac} -> FilterId.from_hmac(hmac)
@@ -1827,9 +1856,9 @@ defmodule Engram.Vector.Qdrant do
   defp legacy_note_filter(user_id, vault_id, path_hmac) do
     %{
       must: [
-        %{key: "user_id", match: %{value: user_id}},
-        %{key: "vault_id", match: %{value: vault_id}},
-        %{key: "path_hmac", match: %{value: path_hmac}}
+        legacy_match_filter(:user, user_id),
+        legacy_match_filter(:vault, vault_id),
+        legacy_match_filter(:path, path_hmac)
       ]
     }
   end
@@ -1865,7 +1894,7 @@ defmodule Engram.Vector.Qdrant do
     # OAuth grant (and a subset-restricted API key) needs: without it the only
     # options were one query per vault or dropping the filter entirely, and
     # dropping it leaks every vault the credential was scoped away from (#729).
-    # `vault_id` is already a payload index (`QdrantLayout.payload_indexes/2`), so
+    # `vault_id` is already a payload index (`QdrantLayout.payload_indexes/3`), so
     # `any` needs no new index — same shape as tags_hmac below.
     must =
       case vault_id do
@@ -1930,11 +1959,12 @@ defmodule Engram.Vector.Qdrant do
   # document count n is already per tenant; what changes is N, from the
   # shard to the user's points, which compresses the IDF of terms common in
   # the user's own vault toward 0. Independent of the retrieval filter.
-  # ponytail: matches the v3 `user_id` key; PR-15b's short key `u` must be
-  # matched too (reuse build_tenant_filter's user clause) once it lands.
+  # The user clause follows the layout (`match_filter/2`): v5 points carry
+  # the tenant under `u`, so a bare `user_id` corpus is empty once the legacy
+  # fields are dropped (#2198).
   defp maybe_tenant_idf(leg, search_opts) do
     if Keyword.get(search_opts, :tenant_idf, false) do
-      user = %{key: "user_id", match: %{value: Keyword.fetch!(search_opts, :user_id)}}
+      user = match_filter(:user, Keyword.fetch!(search_opts, :user_id))
       idf = %{idf: %{corpus: %{must: [user]}}}
       Map.update(leg, :params, idf, &Map.merge(&1, idf))
     else
