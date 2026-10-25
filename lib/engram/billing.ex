@@ -654,6 +654,9 @@ defmodule Engram.Billing do
     end)
   end
 
+  # Paddle's documented transaction id pattern.
+  @paddle_transaction_id ~r/\Atxn_[a-z\d]{26}\z/
+
   @doc """
   The Paddle status of a checkout transaction the caller opened (its
   `custom_data.user_id`, set by `/billing/config`, names the caller). Lets
@@ -663,10 +666,16 @@ defmodule Engram.Billing do
   Paddle does not know.
   """
   @spec checkout_transaction_status(Engram.Accounts.User.t(), String.t()) ::
-          {:ok, String.t()} | {:error, :not_found | term()}
+          {:ok, String.t()} | {:error, :invalid_id | :not_found | term()}
   def checkout_transaction_status(user, transaction_id) do
-    user_id = user.id
+    # The id goes into the Paddle API path under our server key, and Phoenix
+    # decodes `%2F`/`%3F`: only Paddle's own id pattern reaches it.
+    if Regex.match?(@paddle_transaction_id, transaction_id),
+      do: fetch_checkout_status(user.id, transaction_id),
+      else: {:error, :invalid_id}
+  end
 
+  defp fetch_checkout_status(user_id, transaction_id) do
     case Client.impl().get_transaction(transaction_id) do
       {:ok, %{"status" => status, "custom_data" => %{"user_id" => ^user_id}}} -> {:ok, status}
       {:ok, _other} -> {:error, :not_found}

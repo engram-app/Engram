@@ -324,9 +324,17 @@ defmodule EngramWeb.BillingController do
   def checkout_transaction(conn, %{"id" => transaction_id}) do
     with_billing(conn, fn ->
       case Billing.checkout_transaction_status(conn.assigns.current_user, transaction_id) do
-        {:ok, status} -> json(conn, %{status: status})
-        {:error, :not_found} -> not_found(conn, "transaction not found")
-        {:error, reason} -> paddle_error(conn, reason)
+        {:ok, status} ->
+          json(conn, %{status: status})
+
+        {:error, :invalid_id} ->
+          conn |> put_status(400) |> json(%{error: "invalid transaction id"})
+
+        {:error, :not_found} ->
+          not_found(conn, "transaction not found")
+
+        {:error, reason} ->
+          paddle_error(conn, reason)
       end
     end)
   end

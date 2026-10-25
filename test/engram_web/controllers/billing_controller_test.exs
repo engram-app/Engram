@@ -247,35 +247,59 @@ defmodule EngramWeb.BillingControllerTest do
   # a second checkout (and a second subscription).
   describe "GET /api/billing/checkout-transactions/:id" do
     test "returns the status of the caller's own checkout transaction", %{conn: conn, user: user} do
-      expect(Engram.Paddle.ClientMock, :get_transaction, fn "txn_mine" ->
+      expect(Engram.Paddle.ClientMock, :get_transaction, fn "txn_01mine0000000000000000000a" ->
         {:ok,
-         %{"id" => "txn_mine", "status" => "completed", "custom_data" => %{"user_id" => user.id}}}
+         %{
+           "id" => "txn_01mine0000000000000000000a",
+           "status" => "completed",
+           "custom_data" => %{"user_id" => user.id}
+         }}
       end)
 
-      body = conn |> get("/api/billing/checkout-transactions/txn_mine") |> json_response(200)
+      body =
+        conn
+        |> get("/api/billing/checkout-transactions/txn_01mine0000000000000000000a")
+        |> json_response(200)
+
       assert body == %{"status" => "completed"}
     end
 
     test "404s another user's transaction", %{conn: conn} do
-      expect(Engram.Paddle.ClientMock, :get_transaction, fn "txn_theirs" ->
+      expect(Engram.Paddle.ClientMock, :get_transaction, fn "txn_01theirs00000000000000000a" ->
         {:ok,
          %{
-           "id" => "txn_theirs",
+           "id" => "txn_01theirs00000000000000000a",
            "status" => "completed",
            "custom_data" => %{"user_id" => Ecto.UUID.generate()}
          }}
       end)
 
-      conn = get(conn, "/api/billing/checkout-transactions/txn_theirs")
+      conn = get(conn, "/api/billing/checkout-transactions/txn_01theirs00000000000000000a")
       assert json_response(conn, 404)["error"] == "transaction not found"
     end
 
+    # The id goes into the Paddle API path with our server key: anything but
+    # Paddle's id pattern (a decoded `/` or `?`) is refused before any call.
+    test "400s an id that is not a Paddle transaction id, with no Paddle call", %{conn: conn} do
+      expect(Engram.Paddle.ClientMock, :get_transaction, 0, fn _ -> {:ok, %{}} end)
+
+      for id <- [
+            "..%2Fcustomers%2Fctm_x",
+            "txn_1%3Finclude%3Dcustomer",
+            "txn_short",
+            "TXN_01AAAAAAAAAAAAAAAAAAAAAAAA"
+          ] do
+        conn = get(conn, "/api/billing/checkout-transactions/#{id}")
+        assert json_response(conn, 400)["error"] == "invalid transaction id"
+      end
+    end
+
     test "404s a transaction Paddle does not know", %{conn: conn} do
-      expect(Engram.Paddle.ClientMock, :get_transaction, fn "txn_nope" ->
+      expect(Engram.Paddle.ClientMock, :get_transaction, fn "txn_01nope0000000000000000000a" ->
         {:error, {:paddle_error, 404, %{"error" => %{"code" => "not_found"}}}}
       end)
 
-      conn = get(conn, "/api/billing/checkout-transactions/txn_nope")
+      conn = get(conn, "/api/billing/checkout-transactions/txn_01nope0000000000000000000a")
       assert json_response(conn, 404)["error"] == "transaction not found"
     end
   end
