@@ -1,36 +1,73 @@
 defmodule Engram.Analytics.FoldsTest do
-  # The node-local ETS table must not grow with every key ever folded: a
-  # key whose counts an event took leaves nothing behind.
-  use ExUnit.Case, async: false
+  # The node-local ETS table must not grow with every key ever folded, and a
+  # key's counts must never ship without their props. Both hold because a key
+  # is ONE row (props and counters together) and add/take/flush are each one
+  # atomic ETS op on it, so no interleaving of them can split the row: the
+  # only orders are "before" and "after", and these tests run both.
+  # DataCase: flush/0 tracks through Engram.Analytics, which reads users.
+  use Engram.DataCase, async: false
 
   alias Engram.Analytics.Folds
 
   @table :engram_analytics_folds
 
-  defp rows_for(key) do
-    :ets.match_object(@table, {{:props, key}, :_}) ++
-      :ets.match_object(@table, {{key, :_}, :_})
-  end
+  defp new_key, do: {"mcp_tool_called", Ecto.UUID.generate(), "list_vaults"}
 
-  test "take/2 clears the key's props row along with its counters" do
-    key = {"mcp_tool_called", Ecto.UUID.generate(), "list_vaults"}
+  defp rows_for(key), do: Enum.filter(:ets.tab2list(@table), &(elem(elem(&1, 0), 0) == key))
+
+  test "add/3 keeps a key's counts and props in one row" do
+    key = new_key()
     :ok = Folds.add(key, %{calls: 2, errors: 1}, %{tool: "list_vaults"})
 
-    assert %{calls: 2, errors: 1} = Folds.take(key, [:calls, :errors])
+    assert [row] = rows_for(key)
+    assert elem(row, 1) == %{tool: "list_vaults"}
+    Folds.take(key, [:calls, :errors])
+  end
+
+  test "take/2 clears the key's row" do
+    key = new_key()
+    :ok = Folds.add(key, %{calls: 2, errors: 1}, %{tool: "list_vaults"})
+
+    assert %{calls: 2, errors: 1} = Folds.take(key, [:errors, :calls])
+    assert rows_for(key) == []
+    assert %{calls: 0} = Folds.take(key, [:calls])
+  end
+
+  test "a take between two adds splits the counts, each add's row whole" do
+    key = new_key()
+    :ok = Folds.add(key, %{calls: 1}, %{tool: "a"})
+    assert %{calls: 1} = Folds.take(key, [:calls])
+
+    :ok = Folds.add(key, %{calls: 2}, %{tool: "b"})
+    assert [row] = rows_for(key)
+    assert elem(row, 1) == %{tool: "b"}
+    assert %{calls: 2} = Folds.take(key, [:calls])
     assert rows_for(key) == []
   end
 
-  # add/3 is two ETS writes, and a take/2 on another process can land between
-  # them. ETS offers no seam to pause there (and its BIFs cannot be call
-  # traced), so this pins the ORDER instead: a counter write that raises shows
-  # whether props were already written. Props first would let that take strand
-  # counts with no props, and their rollup would ship without its tool/surface.
-  test "add/3 writes the counters before the props row" do
-    key = {"mcp_tool_called", Ecto.UUID.generate(), "list_vaults"}
-    true = :ets.insert(@table, {{key, :calls}, :not_a_counter})
+  test "a flush between two adds leaves nothing behind, and the next add is whole" do
+    key = new_key()
+    :ok = Folds.add(key, %{calls: 1}, %{tool: "a"})
+    :ok = Folds.flush()
+    assert rows_for(key) == []
 
-    assert_raise ArgumentError, fn -> Folds.add(key, %{calls: 1}, %{tool: "list_vaults"}) end
-    assert :ets.lookup(@table, {:props, key}) == []
-    :ets.delete(@table, {key, :calls})
+    :ok = Folds.add(key, %{calls: 2}, %{tool: "b"})
+    assert [row] = rows_for(key)
+    assert elem(row, 1) == %{tool: "b"}
+    :ok = Folds.flush()
+    assert rows_for(key) == []
+  end
+
+  # The trade for one atomic op: props are written only when the row is
+  # created, so a rollup carries the first occurrence's props since the last
+  # send, not the latest.
+  test "an add to a pending key adds its counts and keeps the row's props" do
+    key = new_key()
+    :ok = Folds.add(key, %{calls: 1}, %{tool: "a"})
+    :ok = Folds.add(key, %{calls: 2}, %{tool: "b"})
+
+    assert [row] = rows_for(key)
+    assert elem(row, 1) == %{tool: "a"}
+    assert %{calls: 3} = Folds.take(key, [:calls])
   end
 end

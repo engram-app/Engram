@@ -8,8 +8,9 @@ defmodule Engram.Analytics.Folds do
   Counts no next event picks up are sent on their own: every 5 minutes and on
   shutdown, each key with pending counts becomes one `<event>_rollup` event
   (`mcp_tool_called_rollup`, `surface_active_rollup`) carrying the counts and
-  the props of the last occurrence. Summed with the events, the counts are
-  exact and land within 5 minutes of the occurrence, on its day.
+  the props of the first occurrence since the key was last sent. Summed with
+  the events, the counts are exact and land within 5 minutes of the
+  occurrence, on its day.
 
   Per node, in ETS. Remaining loss: a hard crash (OOM kill, `kill -9`, power)
   skips the shutdown flush and loses up to 5 minutes of that node's counts.
@@ -24,37 +25,41 @@ defmodule Engram.Analytics.Folds do
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
+  # A key is ONE row, `{{key, names}, props, n1, n2, ...}`, `names` sorted and
+  # the counters in that order. add/take/flush are each one atomic ETS op on
+  # it, so no interleaving can ship counts without their props or strand a
+  # row: a take or flush lands wholly before or after an add. `names` is in
+  # the row key, so a call with another set of counters is its own row
+  # rather than a misaligned one.
+
   @doc """
-  Add `counts` (`%{name => n}`) to `key` (`{event, user_id, dedupe}`), and
-  keep `props` as what its rollup event carries.
+  Add `counts` (`%{name => n}`) to `key` (`{event, user_id, dedupe}`). `props`
+  is what its rollup event carries. One `update_counter`, so `props` is
+  written only when this call creates the row: a rollup carries the props of
+  the first occurrence since the key was last sent.
   """
   @spec add(term(), %{atom() => non_neg_integer()}, map()) :: :ok
   def add(key, counts, props \\ %{}) do
-    # Counters first, props last: a `take/2` landing between the two steps
-    # then strands at most a props row (until that key's next take), never
-    # counts with no props, which would roll up without their tool/surface.
-    Enum.each(counts, fn {name, n} ->
-      :ets.update_counter(@table, {key, name}, n, {{key, name}, 0})
-    end)
-
-    true = :ets.insert(@table, {{:props, key}, props})
+    {names, ns} = counts |> Enum.sort() |> Enum.unzip()
+    ops = ns |> Enum.with_index(3) |> Enum.map(fn {n, pos} -> {pos, n} end)
+    default = List.to_tuple([{key, names}, props | Enum.map(ns, fn _ -> 0 end)])
+    _ = :ets.update_counter(@table, {key, names}, ops, default)
     :ok
   end
 
   @doc """
-  Read and reset `names` for `key`, as `%{name => n}`. Clears the key's props
-  too, so a key the next event picked up leaves nothing in the table.
+  Read and reset `names` for `key`, as `%{name => n}`. Takes the key's whole
+  row, props included, so a key the next event picked up leaves nothing in
+  the table.
   """
   @spec take(term(), [atom()]) :: %{atom() => non_neg_integer()}
   def take(key, names) do
-    true = :ets.delete(@table, {:props, key})
+    names = Enum.sort(names)
 
-    Map.new(names, fn name ->
-      case :ets.take(@table, {key, name}) do
-        [{_, n}] -> {name, n}
-        [] -> {name, 0}
-      end
-    end)
+    case :ets.take(@table, {key, names}) do
+      [row] -> counts(row)
+      [] -> Map.new(names, &{&1, 0})
+    end
   end
 
   @doc """
@@ -63,23 +68,17 @@ defmodule Engram.Analytics.Folds do
   """
   @spec flush() :: :ok
   def flush do
-    # Counter rows only: `{{key, name}, n}` with an atom name. `{:props, key}`
-    # rows have a tuple in that place.
-    pending =
-      @table
-      |> :ets.select([{{{:"$1", :"$2"}, :_}, [{:is_atom, :"$2"}], [{{:"$1", :"$2"}}]}])
-      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    row_keys = :ets.select(@table, [{:"$1", [], [{:element, 1, :"$1"}]}])
 
-    for {{event, user_id, _dedupe} = key, names} <- pending do
-      # Props first: take/2 clears them.
-      props = take_props(key)
-      counts = take(key, names)
+    for {{event, user_id, _dedupe}, _names} = row_key <- row_keys,
+        [row] <- [:ets.take(@table, row_key)] do
+      counts = counts(row)
 
       if Enum.any?(counts, fn {_name, n} -> n > 0 end) do
         Engram.Analytics.track(
           %Engram.Accounts.User{id: user_id},
           event <> "_rollup",
-          Map.merge(props, counts)
+          Map.merge(elem(row, 1), counts)
         )
       end
     end
@@ -87,11 +86,9 @@ defmodule Engram.Analytics.Folds do
     :ok
   end
 
-  defp take_props(key) do
-    case :ets.take(@table, {:props, key}) do
-      [{_, props}] -> props
-      [] -> %{}
-    end
+  defp counts(row) do
+    [{_key, names}, _props | ns] = Tuple.to_list(row)
+    Map.new(Enum.zip(names, ns))
   end
 
   @impl true
