@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.65.1](https://github.com/engram-app/Engram/compare/0.65.0...0.65.1) (2026-10-25)
+
+
+### Bug Fixes
+
+* **auth:** grant refresh leeway only to rotations ([#2234](https://github.com/engram-app/Engram/issues/2234)) ([b181a5d](https://github.com/engram-app/Engram/commit/b181a5d4995fc5deb01029a7a6e072da4c32a0ce))
+
+
+### Performance Improvements
+
+* speed-audit fixes (release coalescing, body-read span, reuse log) ([#2209](https://github.com/engram-app/Engram/issues/2209)) ([3967d1c](https://github.com/engram-app/Engram/commit/3967d1c27d78442cc2fb2a1ea3bd3d8d05223558))
+
 ## [0.65.0](https://github.com/engram-app/Engram/compare/0.64.0...0.65.0) (2026-10-25)
 
 
