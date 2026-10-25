@@ -166,6 +166,8 @@ defmodule Engram.Workers.ReleaseIndexEntriesCoalesceTest do
     assert plan =~ ~r/LockRows\s+.*\n\s+->\s+Index Scan using oban_jobs_state_\w+ on oban_jobs/,
            plan
 
-    assert plan =~ ~r/Index Cond: \(state = /, plan
+    # `(state = ...)` alone, or `((state = ...) AND (queue = ...))` when the
+    # planner picks the `(state, queue, ...)` index: both lead on state.
+    assert plan =~ ~r/Index Cond: \(+state = /, plan
   end
 end
