@@ -1370,6 +1370,43 @@ defmodule Engram.BillingTest do
       refute_received {[:engram, :tier_downgraded], ^ref, _, _}
     end
 
+    # The refund cancel must stamp the ordering column, or a subscription.updated
+    # from before the refund, delivered late, passes the guard and re-grants.
+    test "a delayed pre-refund subscription.updated does not re-grant after the refund cancel" do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_refund_order",
+        status: "active",
+        last_event_occurred_at: ~U[2026-08-01 10:00:00.000000Z]
+      )
+
+      expect_history("sub_refund_order")
+
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn "sub_refund_order", _, _ ->
+        {:ok,
+         Map.merge(canceled_entity("sub_refund_order"), %{
+           "updated_at" => "2026-08-05T10:00:00.000000Z",
+           "canceled_at" => "2026-08-05T10:00:00.000000Z"
+         })}
+      end)
+
+      assert {:ok, %Subscription{status: "canceled"}} =
+               Billing.upsert_from_paddle_event(
+                 refund_event("adjustment.updated", "sub_refund_order", %{})
+               )
+
+      late_update = %{
+        "event_type" => "subscription.updated",
+        "occurred_at" => "2026-08-03T10:00:00.000000Z",
+        "data" => Map.put(canceled_entity("sub_refund_order"), "status", "active")
+      }
+
+      assert {:ok, :stale} = Billing.upsert_from_paddle_event(late_update)
+      assert %{status: "canceled"} = Billing.get_subscription(user)
+    end
+
     test "a full refund whose transaction cannot be looked up is reported as an error" do
       user = insert(:user)
       insert(:subscription, user: user, paddle_subscription_id: "sub_refund_4", status: "active")

@@ -981,7 +981,13 @@ defmodule Engram.Billing do
           )
         )
 
-        upsert_from_paddle_event(%{"event_type" => "subscription.canceled", "data" => canceled})
+        # Stamped with the entity's own update time, so a subscription.updated
+        # from before the refund, delivered late, is skipped as stale.
+        upsert_from_paddle_event(%{
+          "event_type" => "subscription.canceled",
+          "occurred_at" => canceled["updated_at"] || canceled["canceled_at"],
+          "data" => canceled
+        })
 
       {:error, reason} ->
         {:error, {:adjustment_cancel_failed, reason}}
