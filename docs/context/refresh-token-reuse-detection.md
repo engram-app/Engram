@@ -1,6 +1,6 @@
 # Refresh token rotation — reuse detection + leeway (as-built)
 
-_Last verified: 2026-10-24_
+_Last verified: 2026-10-25_
 
 Applies to the device-flow (`Engram.Auth.DeviceFlow`) and local-auth
 (`Engram.Accounts`) refresh paths, which share `Engram.Auth.RefreshLeeway`. MCP
@@ -45,6 +45,29 @@ benign retries.
   rotation chain, reuse within leeway → ok, **reuse outside leeway → whole family
   revoked (the current valid token also rejected)**, the leeway boundary,
   expired-AND-revoked rejected, unknown token → invalid.
+
+## Revoke vs rotation (#2231)
+
+Both rotation and every revoke stamp `revoked_at`, so the timestamp alone
+cannot tell them apart. Disconnect and vault delete stamp `now`, which lands
+inside the leeway: before #2231 the disconnected plugin's next refresh was
+read as a benign retry and minted a live token. The predecessor of a token
+revoked by logout-everywhere (epoch-0 sentinel) had the same hole: it was
+rotated with a real timestamp seconds earlier.
+
+`RefreshLeeway.benign?/2` now takes the token row and also requires its
+family to hold an unrevoked token. A rotation always leaves a live successor;
+every revoke leaves none. No column needed. Consequences:
+
+- Device rotation runs the revoke and the child insert in ONE transaction, so
+  a concurrent retry never sees a family with zero live rows.
+- A device token of a dead family is refused without deleting rows, so
+  Disconnect stays idempotent and the swap cooldown still sees the revoke.
+- `Accounts.revoke_all_user_tokens/1` (logout-everywhere, password reset,
+  account delete) also revokes `device_refresh_tokens`, with the epoch
+  sentinel so it starts no device-swap cooldown.
+- Device refresh refuses deleted or suspended users (query joins `users`).
+- MCP OAuth was never affected: a revoked row gets no grace there.
 
 ## Notes / gotchas
 

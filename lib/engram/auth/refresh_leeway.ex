@@ -32,12 +32,38 @@ defmodule Engram.Auth.RefreshLeeway do
   def seconds, do: @seconds
 
   @doc """
-  Returns true when `revoked_at` is within the leeway window relative to
-  `now` — i.e. a legitimate concurrent rotation race. Outside the window =
-  reuse breach. Boundary inclusive (`revoked_at == now - leeway` is still
-  benign) so 1-second rounding can't flip a benign retry into a breach.
+  Returns true when a revoked refresh token may still rotate: it was revoked
+  within the leeway window AND its family still has a live token.
+
+  The family check is what separates a rotation from a revoke (#2231). A
+  rotation always leaves a live successor in the family; Disconnect, vault
+  delete, logout-everywhere, account delete and a breach kill revoke every
+  live row. Without it, a token revoked "now" by a user, or its predecessor
+  rotated seconds earlier, lands inside the window and mints a fresh live
+  token, so the disconnected device comes back.
+
+  Works on any refresh-token schema with `revoked_at` and `family_id`.
   """
-  def benign?(%DateTime{} = revoked_at, %DateTime{} = now) do
+  def benign?(%schema{revoked_at: %DateTime{} = revoked_at} = token, %DateTime{} = now) do
+    within_window?(revoked_at, now) and family_live?(schema, token.family_id)
+  end
+
+  @doc "True when some token of the family is unrevoked."
+  def family_live?(%schema{family_id: family_id}), do: family_live?(schema, family_id)
+
+  defp family_live?(schema, family_id) do
+    import Ecto.Query
+
+    from(t in schema, where: t.family_id == ^family_id and is_nil(t.revoked_at))
+    |> Engram.Repo.exists?(skip_tenant_check: true)
+  end
+
+  @doc """
+  True when `revoked_at` is inside the leeway window relative to `now`.
+  Boundary inclusive (`revoked_at == now - leeway` is still inside) so
+  1-second rounding can't flip a benign retry into a breach.
+  """
+  def within_window?(%DateTime{} = revoked_at, %DateTime{} = now) do
     cutoff =
       now
       |> DateTime.add(-@seconds, :second)

@@ -6,9 +6,7 @@ defmodule Engram.Accounts do
   import Ecto.Query
   alias Bcrypt
   alias Engram.Accounts.{ApiKey, Lifecycle, User}
-  alias Engram.Auth.EmailNormalizer
-  alias Engram.Auth.RefreshToken
-  alias Engram.Auth.SessionInvalidator
+  alias Engram.Auth.{DeviceRefreshToken, EmailNormalizer, RefreshToken, SessionInvalidator}
   alias Engram.Logger.Metadata
   alias Engram.Repo
 
@@ -452,12 +450,22 @@ defmodule Engram.Accounts do
   # existed" by row presence.
   @admin_revoked_at ~U[1970-01-01 00:00:00Z]
 
-  @doc "Spec §8/§10 — revokes all of a user's refresh tokens (logout-everywhere)."
+  @doc """
+  Spec §8/§10 — revokes all of a user's refresh tokens (logout-everywhere,
+  password reset, account delete): session tokens and plugin device tokens.
+  Device rows take the sentinel too, so this never reads as a Disconnect
+  and starts no device-swap cooldown (`Connections.most_recent_device_revoke/1`).
+  """
   def revoke_all_user_tokens(%User{id: user_id}) do
     result =
       RefreshToken
       |> where([rt], rt.user_id == ^user_id and is_nil(rt.revoked_at))
       |> Repo.update_all([set: [revoked_at: @admin_revoked_at]], skip_tenant_check: true)
+
+    # Not a tenant table: no RLS (see `DeviceFlow.cleanup_expired/0`).
+    DeviceRefreshToken
+    |> where([rt], rt.user_id == ^user_id and is_nil(rt.revoked_at))
+    |> Repo.update_all(set: [revoked_at: @admin_revoked_at])
 
     SessionInvalidator.disconnect_user(user_id)
     result
@@ -605,7 +613,7 @@ defmodule Engram.Accounts do
         Repo.rollback(:invalid_token)
 
       %RefreshToken{revoked_at: revoked, user: user} = revoked_token when revoked != nil ->
-        if Engram.Auth.RefreshLeeway.benign?(revoked, now) do
+        if Engram.Auth.RefreshLeeway.benign?(revoked_token, now) do
           rotate_into_child(revoked_token, user)
         else
           Repo.rollback({:token_reused, token_hash})
