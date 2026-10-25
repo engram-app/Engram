@@ -754,12 +754,15 @@ defmodule Engram.Notes do
   # Crypto.maybe_decrypt_note_fields/2 short-circuits (needs path or
   # content present). Decrypt the folder field directly here.
   defp hydrate_folder_marker(%Note{} = marker, dek) do
-    folder_aad = row_aad(:notes, :folder, marker.id, marker.dek_version)
-
-    case Envelope.decrypt(marker.folder_ciphertext, marker.folder_nonce, dek, folder_aad) do
+    case marker_folder(marker, dek) do
       {:ok, folder} -> %{marker | folder: folder}
       :error -> raise "failed to decrypt folder marker id=#{marker.id}"
     end
+  end
+
+  defp marker_folder(%Note{} = marker, dek) do
+    folder_aad = row_aad(:notes, :folder, marker.id, marker.dek_version)
+    Envelope.decrypt(marker.folder_ciphertext, marker.folder_nonce, dek, folder_aad)
   end
 
   # Tombstones included on purpose: upsert_folder_marker/6 revives one in
@@ -6808,7 +6811,26 @@ defmodule Engram.Notes do
 
     {rows, expired} = Enum.split_with(rows, &(DateTime.compare(&1.deleted_at, cutoff) != :lt))
     {markers, real} = Enum.split_with(rows, &(&1.kind == "folder"))
-    real = decrypt_or_raise!(real, user)
+
+    # Non-raising (#609 review N2): one damaged row is a skip, not a restore
+    # that fails at the same row on every retry.
+    {real, bad_notes} =
+      real
+      |> Crypto.decrypt_notes_batch(user)
+      |> Enum.zip(real)
+      |> Enum.split_with(&match?({{:ok, _}, _}, &1))
+
+    real = Enum.map(real, fn {{:ok, note}, _raw} -> note end)
+
+    {folders, bad_markers} =
+      markers
+      |> Enum.map(&{marker_folder(&1, dek), &1})
+      |> Enum.split_with(&match?({{:ok, _}, _}, &1))
+
+    unreadable =
+      Enum.map(bad_notes ++ bad_markers, fn {_err, row} ->
+        %{id: row.id, kind: row.kind, reason: :unreadable}
+      end)
 
     with held when is_map(held) <- note_ids_at(user, vault, Enum.map(real, & &1.path)) do
       {free, taken} = Enum.split_with(real, &(not Map.has_key?(held, &1.path)))
@@ -6817,10 +6839,10 @@ defmodule Engram.Notes do
         {:ok,
          %{
            notes: free,
-           folders: markers |> Enum.map(&hydrate_folder_marker(&1, dek).folder) |> Enum.uniq(),
+           folders: folders |> Enum.map(fn {{:ok, f}, _} -> f end) |> Enum.uniq(),
            skipped:
              Enum.map(taken, &%{path: &1.path, kind: "note", reason: :path_taken}) ++
-               Enum.map(expired, &%{id: &1.id, kind: &1.kind, reason: :expired})
+               Enum.map(expired, &%{id: &1.id, kind: &1.kind, reason: :expired}) ++ unreadable
          }}
       end
     end
@@ -6863,16 +6885,44 @@ defmodule Engram.Notes do
     user = Crypto.fresh_user(user)
 
     with {:ok, claimed, taken} <- claim_restore_paths(user, vault, Enum.sort_by(notes, & &1.path)) do
-      {restored, skipped} =
-        claimed
-        |> Enum.chunk_every(restore_chunk_size())
-        |> Enum.reduce({[], []}, fn chunk, {restored, skipped} ->
-          {r, s} = restore_chunk(user, vault, op_id, chunk)
-          {restored ++ r, skipped ++ s}
-        end)
-
+      {restored, skipped} = restore_chunks(user, vault, op_id, claimed)
       {:ok, %{restored: restored, skipped: Enum.map(taken, &path_taken/1) ++ skipped}}
     end
+  end
+
+  # Every path was claimed up front, so a row that does not come back (a skip,
+  # or every row from a chunk that raised on) would leave a durable claim
+  # naming a tombstone: a path nothing can be renamed into again
+  # (crdt-create-is-a-rename.md). Release those after each chunk, and for the
+  # rest on a raise. `ReleaseIndexEntries` re-checks the note is still gone,
+  # so a later retry that restores the row is not undone.
+  defp restore_chunks(user, vault, op_id, claimed) do
+    claimed
+    |> Enum.chunk_every(restore_chunk_size())
+    |> Enum.reduce({[], [], claimed}, fn chunk, {restored, skipped, pending} ->
+      rest = Enum.drop(pending, length(chunk))
+
+      {r, s} =
+        try do
+          restore_chunk(user, vault, op_id, chunk)
+        rescue
+          e ->
+            release_claims(user, vault, pending)
+            reraise e, __STACKTRACE__
+        end
+
+      back = MapSet.new(r, & &1.id)
+      release_claims(user, vault, Enum.reject(chunk, &MapSet.member?(back, &1.id)))
+      {restored ++ r, skipped ++ s, rest}
+    end)
+    |> then(fn {restored, skipped, _pending} -> {restored, skipped} end)
+  end
+
+  defp release_claims(_user, _vault, []), do: :ok
+
+  defp release_claims(user, vault, notes) do
+    _ = ReleaseIndexEntries.enqueue(user.id, vault.id, Enum.map(notes, & &1.id))
+    :ok
   end
 
   # `:restore_chunk` lowers it (tests).
@@ -6939,8 +6989,17 @@ defmodule Engram.Notes do
   defp skip_reason({:skip, reason}), do: reason
 
   defp restore_one(user, tomb) do
-    prior = decrypt_or_raise!(tomb, user)
+    case Crypto.maybe_decrypt_note_fields(tomb, user) do
+      {:ok, prior} ->
+        restore_decrypted(user, prior)
 
+      {:error, reason} ->
+        DecryptFailure.log("decrypt_failed", reason, user_id: user.id, note_id: tomb.id)
+        {:skip, :unreadable}
+    end
+  end
+
+  defp restore_decrypted(user, prior) do
     base_attrs = %{
       content: prior.content,
       title: prior.title,

@@ -12,8 +12,9 @@ defmodule EngramWeb.McpRestoreDeletedTxnTest do
 
     * while chunk 2 runs, a SECOND connection already sees chunk 1's note
       restored (under one request transaction it would still be in trash);
-    * chunk 2 then fails (its note's content is corrupted), the first stays
-      restored, and the agent is told the retry is safe.
+    * chunk 2's note is damaged (content will not decrypt): it is skipped as
+      `unreadable` and everything after it still comes back, so one damaged
+      note cannot stop every retry at the same row.
   """
   use Engram.DataCase, async: false
 
@@ -93,7 +94,7 @@ defmodule EngramWeb.McpRestoreDeletedTxnTest do
     |> Task.await(5_000)
   end
 
-  test "chunks commit one by one, and a failure keeps the ones before it", %{
+  test "chunks commit one by one; a damaged note is skipped, the rest restored", %{
     user: user,
     vault: vault
   } do
@@ -104,6 +105,7 @@ defmodule EngramWeb.McpRestoreDeletedTxnTest do
     Sandbox.unboxed_run(Repo, fn ->
       a = put_note(user, vault, "Docs/a.md")
       b = put_note(user, vault, "Docs/b.md")
+      c = put_note(user, vault, "Docs/c.md")
 
       {:ok, %{"structuredContent" => %{"delete_op_id" => op}}} =
         call("delete_folder", user, vault, %{"folder" => "Docs", "recursive" => true})
@@ -140,22 +142,23 @@ defmodule EngramWeb.McpRestoreDeletedTxnTest do
 
       log =
         capture_log(fn ->
-          assert {:ok, %{"isError" => true, "content" => [%{"text" => text}]}} =
+          assert {:ok, %{"structuredContent" => result}} =
                    call("restore_deleted", user, vault, %{"op_id" => op})
 
-          assert text =~ "safe to call again"
-          refute text =~ "Postgrex"
+          assert result["notes"] == 2
+          assert [%{"path" => "Docs/b.md", "reason" => "unreadable"}] = result["skipped"]
         end)
 
       :telemetry.detach(handler)
       :telemetry.detach(claim_handler)
 
-      assert log =~ "restore_deleted"
+      assert log =~ "decrypt_failed"
       assert_received {:seen_elsewhere, nil}, "chunk 1 was not committed while chunk 2 ran"
       assert :counters.get(in_txn_claims, 1) == 0, "the index claim ran inside a transaction"
 
       assert is_nil(Repo.get!(Note, a.id, skip_tenant_check: true).deleted_at)
       assert Repo.get!(Note, b.id, skip_tenant_check: true).deleted_at
+      assert is_nil(Repo.get!(Note, c.id, skip_tenant_check: true).deleted_at)
     end)
   end
 end

@@ -37,6 +37,29 @@ defmodule Engram.FoldersRestoreOpTest do
   end
 
   defp note_row(id), do: Repo.get!(Note, id, skip_tenant_check: true)
+
+  defp corrupt!(schema, id, field) do
+    ct = Map.fetch!(Repo.get!(schema, id, skip_tenant_check: true), field)
+    last = byte_size(ct) - 1
+    <<head::binary-size(last), byte>> = ct
+
+    {1, _} =
+      Repo.update_all(
+        from(r in schema, where: r.id == ^id),
+        [set: [{field, <<head::binary, Bitwise.bxor(byte, 0xFF)>>}]],
+        skip_tenant_check: true
+      )
+  end
+
+  # Runs the queued index releases, the delete's and the restore's.
+  defp drain_index_releases do
+    for job <- all_enqueued(worker: Engram.Workers.ReleaseIndexEntries) do
+      perform_job(Engram.Workers.ReleaseIndexEntries, job.args)
+    end
+
+    Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.ReleaseIndexEntries"))
+  end
+
   defp att_row(id), do: Repo.get!(Attachment, id, skip_tenant_check: true)
 
   defp live_paths(user, vault) do
@@ -273,6 +296,46 @@ defmodule Engram.FoldersRestoreOpTest do
     assert {:ok, %{notes: 1, skipped: skipped}} = Folders.restore_op(user, vault, op)
     assert %{path: "Docs/a.md", kind: "note", reason: :path_taken} in skipped
     assert note_row(a.id).deleted_at
+    assert is_nil(note_row(b.id).deleted_at)
+  end
+
+  # A row the restore claimed and then skipped must not keep its index
+  # claim, or nothing can ever be renamed into that path again.
+  test "a skipped row's path is released, so a note can be renamed into it", %{
+    user: user,
+    vault: vault
+  } do
+    _a = put_note(user, vault, "a.md")
+    b = put_note(user, vault, "b.md")
+    op = Ecto.UUID.generate()
+    :deleted = Notes.delete_note_reporting(user, vault, "a.md", op_id: op)
+    :deleted = Notes.delete_note_reporting(user, vault, "b.md", op_id: op)
+    drain_index_releases()
+    corrupt!(Note, b.id, :content_ciphertext)
+
+    assert {:ok, %{notes: 1, skipped: skipped}} = Folders.restore_op(user, vault, op)
+
+    assert %{id: b.id, kind: "note", reason: :unreadable} in skipped or
+             %{path: "b.md", kind: "note", reason: :unreadable} in skipped
+
+    drain_index_releases()
+    _c = put_note(user, vault, "c.md", "a different note")
+    assert {:ok, _} = Notes.rename_note(user, vault, "c.md", "b.md")
+  end
+
+  test "a note whose path will not decrypt is skipped as unreadable", %{
+    user: user,
+    vault: vault
+  } do
+    a = put_note(user, vault, "a.md")
+    b = put_note(user, vault, "b.md")
+    op = Ecto.UUID.generate()
+    :deleted = Notes.delete_note_reporting(user, vault, "a.md", op_id: op)
+    :deleted = Notes.delete_note_reporting(user, vault, "b.md", op_id: op)
+    corrupt!(Note, a.id, :path_ciphertext)
+
+    assert {:ok, %{notes: 1, skipped: skipped}} = Folders.restore_op(user, vault, op)
+    assert %{id: a.id, kind: "note", reason: :unreadable} in skipped
     assert is_nil(note_row(b.id).deleted_at)
   end
 
