@@ -25,6 +25,8 @@ defmodule Engram.Billing.Workers.PaddleReconcile do
     # within the 60 s period (a manual run, a retry, a future schedule move).
     unique: [period: 60, fields: [:worker, :args]]
 
+  alias Engram.Billing.Reconciliation
+
   # The scan is one Paddle page in practice. Under the 5-min cadence so a hung
   # call cannot stack scans in the 2-slot maintenance queue (#2203).
   @impl Oban.Worker
@@ -36,16 +38,14 @@ defmodule Engram.Billing.Workers.PaddleReconcile do
   # job's cron tick so a retry re-reads the same window.
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"scan" => "stalled_checkouts"}, inserted_at: inserted_at}) do
-    case Engram.Billing.Reconciliation.report_stalled_checkouts(
-           scan_anchor(inserted_at || DateTime.utc_now())
-         ) do
+    case Reconciliation.report_stalled_checkouts(scan_anchor(inserted_at || DateTime.utc_now())) do
       {:error, _reason} = error -> error
       _count -> :ok
     end
   end
 
   def perform(_job) do
-    result = Engram.Billing.Reconciliation.run(7)
+    result = Reconciliation.run(7)
     outcome = result.skipped || :ok
 
     :telemetry.execute(
@@ -71,7 +71,7 @@ defmodule Engram.Billing.Workers.PaddleReconcile do
   """
   @spec scan_anchor(DateTime.t()) :: DateTime.t()
   def scan_anchor(%DateTime{} = inserted_at) do
-    window = Engram.Billing.Reconciliation.stalled_scan_window_seconds()
+    window = Reconciliation.stalled_scan_window_seconds()
     since_phase = DateTime.to_unix(inserted_at) - @scan_phase_seconds
 
     DateTime.from_unix!(div(since_phase + div(window, 2), window) * window + @scan_phase_seconds)
