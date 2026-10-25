@@ -180,6 +180,43 @@ defmodule Engram.Workers.AttachmentBlobGCTest do
     end
   end
 
+  # A run claimed the row, then died or its S3 call raised; the owner's
+  # retention went up before the claim went stale, so the row is no longer
+  # due and the normal path never re-claims it. The sweep settles it.
+  describe "a stale claim on a row no longer due" do
+    defp stranded!(user, vault, path) do
+      insert(:user_limit_override, user: user, key: "trash_retention_days", value: %{"v" => 30})
+      att = put_att(user, vault, path)
+      :ok = Attachments.delete_attachment(user, vault, path, op_id: op())
+      backdate!(att, 8 * 24)
+      backdate_claim!(att, 2)
+      att
+    end
+
+    test "is released when its blob is there, so the row is restorable", %{
+      user: user,
+      vault: vault
+    } do
+      att = stranded!(user, vault, "a.png")
+
+      assert AttachmentBlobGC.sweep() == 0
+      row = reload(att)
+      assert is_nil(row.blob_gc_claimed_at)
+      assert row.storage_key == att.storage_key
+      assert blob?(att.storage_key)
+
+      assert {:ok, %{restored: [_]}} = Attachments.revive_tombstones(user, vault, [att.id])
+    end
+
+    test "is finalized when its blob is already gone", %{user: user, vault: vault} do
+      att = stranded!(user, vault, "a.png")
+      :ok = Storage.adapter().delete(att.storage_key)
+
+      assert AttachmentBlobGC.sweep() == 0
+      assert %{storage_key: nil, blob_gc_claimed_at: nil} = reload(att)
+    end
+  end
+
   describe "sweep/0" do
     test "reaps an unstamped tombstone past 24 h, then has nothing to do", %{
       user: user,

@@ -81,10 +81,24 @@ sweep and restore time, not stamped at delete time. A Pro user who deletes
    vault lock FIRST (`next_seq_block!`, the lock the GC claim takes) and revives
    only rows with a `storage_key`, NO claim at all, and no live row at the
    path. A STALE claim is refused too: it only says the run died, not whether
-   before or after its S3 delete. A claimed row is past retention anyway, so
-   this costs nothing; the next GC run re-claims and finalizes it. Never write
+   before or after its S3 delete. The GC settles every stale claim: a row
+   still past its window is re-claimed and finalized; a row no longer due
+   (retention went UP after the claim, e.g. Free to Pro) has its blob checked
+   with `Storage.exists?/1` under the vault lock, then the claim is dropped
+   (blob there: restorable again) or the row finalized (blob gone). Limit:
+   the S3 adapter reports a storage error as "absent", so an outage during
+   that check finalizes a row whose blob still exists (orphaned object,
+   unrestorable row, never a live row without bytes). Never write
    `deleted_at: nil` on an attachment anywhere else.
-2. **A path taken mid-restore.** Each row's `move_note` write runs with
+2. **Every claimed-but-not-restored path is released.** The restore claims
+   all paths up front; a row that then does not come back (`path_taken`,
+   `changed`, `unreadable`, or every row from a chunk that raised) would leave
+   a durable claim naming a tombstone, a path nothing can be renamed into.
+   After each chunk (and for the rest on a raise) `ReleaseIndexEntries` is
+   enqueued for them; it re-checks the note is still gone. A damaged note
+   (path or content will not decrypt) is a skip as `unreadable`, never a
+   raise, so it cannot stop every retry at the same row.
+2b. **A path taken mid-restore.** Each row's `move_note` write runs with
    `mode: :savepoint`, so a unique violation is a `:path_taken` skip, not an
    aborted chunk (25P02 on the next statement). A path the index MAP holds for
    another note (a stale entry the row check cannot see) makes the batch claim

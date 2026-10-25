@@ -92,6 +92,7 @@ defmodule Engram.Workers.AttachmentBlobGC do
   def sweep do
     now = DateTime.utc_now()
     grace = DateTime.add(now, -@grace_hours * 3600, :second)
+    _ = settle_stranded_claims(now, grace)
 
     {grace, grace}
     |> candidate_vaults()
@@ -108,6 +109,105 @@ defmodule Engram.Workers.AttachmentBlobGC do
       %User{} = user -> DateTime.add(now, -Billing.trash_retention_days(user), :day)
       nil -> grace
     end
+  end
+
+  # A STALE claim on a row that is no longer due: the run died or its S3 call
+  # raised, and the owner's retention went up since (an upgrade, an override).
+  # The normal path never re-claims it (it is inside its window), and
+  # `Attachments.revive_tombstones/3` refuses every claimed row, so without
+  # this it would stay unrestorable for the rest of its window while its
+  # bytes may well exist. Settle it by asking storage: blob gone, finalize the
+  # row the way a finished delete would (`storage_key` cleared); blob there,
+  # drop the claim so the row is restorable (and reapable once due) again.
+  # The write is guarded by the observed claim stamp, under the vault lock,
+  # so a run that re-claimed in between is left alone.
+  #
+  # ponytail: `exists?/1` reports a storage error as "absent" (S3 adapter),
+  # so an outage here finalizes a row whose blob is still there: an orphaned
+  # object (storage cost) and an unrestorable row, never a live row with no
+  # bytes. Split the adapter's error from absence if that ever shows up.
+  defp settle_stranded_claims(now, grace) do
+    stale = DateTime.add(now, -@stale_claim_minutes * 60, :second)
+
+    query =
+      from(a in Attachment,
+        where:
+          not is_nil(a.deleted_at) and not is_nil(a.storage_key) and
+            a.blob_gc_claimed_at < ^stale,
+        limit: @batch,
+        select: %{
+          id: a.id,
+          vault_id: a.vault_id,
+          user_id: a.user_id,
+          key: a.storage_key,
+          claimed_at: a.blob_gc_claimed_at,
+          deleted_at: a.deleted_at,
+          stamped?: not is_nil(a.delete_op_id)
+        }
+      )
+
+    rows = Repo.cross_tenant(fn -> Repo.maintenance().all(query) end)
+
+    retention =
+      rows
+      |> Enum.map(& &1.user_id)
+      |> Enum.uniq()
+      |> Map.new(&{&1, retention_cutoff(&1, now, grace)})
+
+    rows
+    |> Enum.reject(&due?(&1, grace, retention[&1.user_id]))
+    |> Enum.group_by(& &1.vault_id)
+    |> Enum.reduce(0, fn {vault_id, stranded}, n -> n + settle_vault(vault_id, stranded) end)
+  end
+
+  # `eligible/2`'s window, for one row already in hand.
+  defp due?(row, grace, retention) do
+    DateTime.compare(row.deleted_at, grace) == :lt and
+      (not row.stamped? or DateTime.compare(row.deleted_at, retention) == :lt)
+  end
+
+  defp settle_vault(vault_id, stranded) do
+    # Storage first, outside the transaction (no I/O under the lock).
+    checked = Enum.map(stranded, &{&1, Storage.adapter().exists?(&1.key)})
+    repo = Repo.maintenance()
+
+    {:ok, settled} =
+      Repo.cross_tenant(fn ->
+        repo.transaction(fn ->
+          _ =
+            repo.all(
+              from(v in Vault, where: v.id == ^vault_id, lock: "FOR NO KEY UPDATE", select: v.id)
+            )
+
+          Enum.reduce(checked, 0, fn {row, present?}, n ->
+            set =
+              if present?,
+                do: [blob_gc_claimed_at: nil],
+                else: [storage_key: nil, blob_gc_claimed_at: nil]
+
+            {count, _} =
+              repo.update_all(
+                from(a in Attachment,
+                  where:
+                    a.id == ^row.id and a.blob_gc_claimed_at == ^row.claimed_at and
+                      not is_nil(a.deleted_at)
+                ),
+                set: set
+              )
+
+            n + count
+          end)
+        end)
+      end)
+
+    if settled > 0 do
+      Logger.info(
+        "attachment_blob_gc: settled stale claims on rows no longer due",
+        Metadata.with_category(:info, :oban, total_count: settled)
+      )
+    end
+
+    settled
   end
 
   # Unlocked, and only to find work: every decision is re-made under the
