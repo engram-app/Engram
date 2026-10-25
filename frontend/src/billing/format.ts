@@ -50,6 +50,17 @@ export function formatMoney(
 	return new Intl.NumberFormat(locale, { style: "currency", currency }).format(major);
 }
 
+// A plan price in US dollars, written by Intl for the reader's locale ("$7",
+// "5,83 $"). Kept out of translated sentences: a model given "{price}/mo billed
+// yearly" decorated the amount with a currency of its own ("$5.83 руб./мес.").
+export function formatUsd(amount: number, locale?: string): string {
+	return new Intl.NumberFormat(locale, {
+		style: "currency",
+		currency: "USD",
+		minimumFractionDigits: Number.isInteger(amount) ? 0 : 2,
+	}).format(amount);
+}
+
 export function statusLabel(status: string, t: Translate): string {
 	const label = STATUS_LABELS[status];
 	return t(label ?? msg("Unknown"));

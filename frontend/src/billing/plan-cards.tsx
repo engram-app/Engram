@@ -4,8 +4,10 @@ import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import type { Translate } from "@/i18n/translate";
 import type { MsgKey } from "@/i18n/ui-text";
+import { intlLocale } from "@/lib/intl-locale";
 import { cn } from "@/lib/utils";
 import { type BillingCadence, useBillingConfig } from "../api/queries";
+import { formatUsd } from "./format";
 
 // Feature checklist shared by the full card and the accordion row. `className`
 // merges extra layout (e.g. `flex-1` on the full card).
@@ -138,10 +140,11 @@ export function formatPlanPrice(
 	catalog: Pick<PlanCardCatalog, "monthlyPrice" | "annualPrice">,
 	cadence: BillingCadence,
 	t: Translate,
+	locale?: string,
 ): string {
 	return cadence === "monthly"
-		? t("{price}/mo", { price: `$${catalog.monthlyPrice}` })
-		: t("{price}/yr", { price: `$${catalog.annualPrice}` });
+		? t("{price}/mo", { price: formatUsd(catalog.monthlyPrice, locale) })
+		: t("{price}/yr", { price: formatUsd(catalog.annualPrice, locale) });
 }
 
 // Which note caps the copy states: the set the backend enforces
@@ -243,12 +246,15 @@ export function PlanCard({
 	ctaLabel,
 	ctaSubLabel,
 }: PlanCardProps) {
-	const { t } = useT();
-	const price = formatPlanPrice({ monthlyPrice, annualPrice }, cadence, t);
+	const { t, renderedLocale } = useT();
+	const locale = intlLocale(renderedLocale, "en-US");
+	const price = formatPlanPrice({ monthlyPrice, annualPrice }, cadence, t, locale);
+	// The amount and the billing words are separate strings, so no translation
+	// holds the price (see formatUsd).
 	const subPrice =
 		cadence === "annual"
-			? t("{price}/mo billed yearly", { price: `$${(annualPrice / 12).toFixed(2)}` })
-			: t("{price}/yr billed monthly", { price: `$${monthlyPrice * 12}` });
+			? `${t("{price}/mo", { price: formatUsd(Math.round((annualPrice / 12) * 100) / 100, locale) })} · ${t("billed yearly")}`
+			: `${t("{price}/yr", { price: formatUsd(monthlyPrice * 12, locale) })} · ${t("billed monthly")}`;
 
 	// Effective state precedence — current beats selected beats recommended.
 	// Avoids the "everything is highlighted" failure mode if a parent passes
