@@ -275,6 +275,9 @@ export default {
 		"Автоматично поновлюється щомісяця за ціною {price}, доки ви не скасуєте. Скасувати можна в будь-який час у розділі Налаштування > Оплата.",
 	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
 		"Автоматично поновлюється щороку за ціною {price}, доки ви не скасуєте. Скасувати можна в будь-який час у розділі Налаштування > Оплата.",
+	"Order summary": "Підсумок замовлення",
+	"{plan} plan": "План {plan}",
+	"Due today": "Оплата сьогодні",
 	"Billing cadence": "Періодичність оплати",
 	Monthly: "Щомісяця",
 	Annual: "Щорічно",

@@ -34,9 +34,13 @@ import PaymentMethodCard from "./payment-method-card";
 import PendingChangeBanner from "./pending-change-banner";
 import {
 	CadenceToggle,
+	CheckoutSummary,
+	type CheckoutTotals,
+	checkoutTotals,
 	formatPlanPrice,
 	PlanAccordionRow,
 	PlanCard,
+	type PlanTier,
 	planCopy,
 	useRenewalNotice,
 } from "./plan-cards";
@@ -372,6 +376,10 @@ export default function BillingPage({
 	//   checkout  → inline mode: Paddle frame mounted; overlay mode: modal open
 	//   slow      → cooldown elapsed without a push event; show recovery banner
 	const [checkingOut, setCheckingOut] = useState(false);
+	// The open tier checkout and Paddle's latest totals for it, for the inline
+	// order summary (CheckoutSummary).
+	const [summaryTier, setSummaryTier] = useState<PlanTier | null>(null);
+	const [summaryTotals, setSummaryTotals] = useState<CheckoutTotals | null>(null);
 	const [completedAt, setCompletedAt] = useState<number | null>(null);
 	const [slow, setSlow] = useState(false);
 	// checkout.closed after PAYMENT_INITIATED with no COMPLETED: show the
@@ -579,12 +587,21 @@ export default function BillingPage({
 					// signup/upgrade funnel this event exists to measure.
 					const tier = checkoutTierRef.current;
 					if (tier) {
+						setSummaryTotals(checkoutTotals(event.data));
 						track("checkout_opened", {
 							method: "unknown",
 							tier,
 							cadence: checkoutCadenceRef.current,
 							source: upgradeSource(),
 						});
+					}
+					break;
+				}
+				case CheckoutEventNames.CHECKOUT_UPDATED: {
+					// Address or discount changed: tax and totals move with it.
+					const totals = checkoutTotals(event.data);
+					if (totals) {
+						setSummaryTotals(totals);
 					}
 					break;
 				}
@@ -727,6 +744,8 @@ export default function BillingPage({
 	// div is in the DOM before Paddle tries to find it.
 	const handleStartCheckout = useCallback(
 		(tier: "starter" | "pro") => {
+			setSummaryTier(tier);
+			setSummaryTotals(null);
 			// Dev stub: skip the (un-embeddable) Paddle frame, show the stand-in.
 			if (DEV_FAKE_CHECKOUT) {
 				setCheckingOut(true);
@@ -988,6 +1007,9 @@ export default function BillingPage({
 							>
 								{t("← Choose a different plan")}
 							</button>
+							{summaryTier ? (
+								<CheckoutSummary tier={summaryTier} cadence={cadence} totals={summaryTotals} />
+							) : null}
 							{DEV_FAKE_CHECKOUT ? (
 								// Fixed light colors throughout, not theme tokens: this stub
 								// only ever renders inside the forced-light checkout card (see

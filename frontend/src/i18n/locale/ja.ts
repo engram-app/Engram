@@ -257,6 +257,9 @@ export default {
 		"解約されるまで、毎月{price}で自動更新されます。設定 > 課金でいつでもキャンセルできます。",
 	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
 		"解約されるまで、毎年{price}で自動更新されます。設定 > 課金でいつでもキャンセルできます。",
+	"Order summary": "注文概要",
+	"{plan} plan": "{plan} プラン",
+	"Due today": "支払期日: 今日",
 	"Billing cadence": "支払いサイクル",
 	Monthly: "月額",
 	Annual: "年間",

@@ -1,3 +1,4 @@
+import type { CheckoutEventsData } from "@paddle/paddle-js";
 import { ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
@@ -102,6 +103,14 @@ function planCatalog(limits: PlanLimits): Record<PlanTier, PlanCardCatalog> {
 	};
 }
 
+// The catalog price at a cadence, in whole USD.
+function listPrice(
+	catalog: Pick<PlanCardCatalog, "monthlyPrice" | "annualPrice">,
+	cadence: BillingCadence,
+): number {
+	return cadence === "monthly" ? catalog.monthlyPrice : catalog.annualPrice;
+}
+
 const PLAN_CATALOG: Record<PlanLimits, Record<PlanTier, PlanCardCatalog>> = {
 	legacy: planCatalog("legacy"),
 	v5: planCatalog("v5"),
@@ -150,24 +159,12 @@ export function formatPlanPrice(
 		: t("{price}/yr", { price: formatMoney(catalog.annualPrice, "USD", locale, WHOLE) });
 }
 
-// The auto-renewal terms shown beside every paid CTA (California BPC
-// 17602(a)(1), ROSCA 15 USC 8403): the recurring charge, its interval, that
-// it continues until canceled, and how to cancel. Catalog prices are whole
-// USD, so formatMoney, not formatMinorUnits (which takes Paddle minor units).
-export function renewalNotice(
-	catalog: Pick<PlanCardCatalog, "monthlyPrice" | "annualPrice">,
-	cadence: BillingCadence,
-	t: Translate,
-	locale?: string,
-): string {
-	const monthly = cadence === "monthly";
-	const price = formatMoney(
-		monthly ? catalog.monthlyPrice : catalog.annualPrice,
-		"USD",
-		locale,
-		WHOLE,
-	);
-	return monthly
+// The auto-renewal terms shown beside every paid CTA and the inline checkout
+// (California BPC 17602(a)(1), ROSCA 15 USC 8403): the recurring charge, its
+// interval, that it continues until canceled, and how to cancel. `price` is
+// already formatted.
+export function renewalNotice(price: string, cadence: BillingCadence, t: Translate): string {
+	return cadence === "monthly"
 		? t(
 				"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.",
 				{ price },
@@ -178,14 +175,71 @@ export function renewalNotice(
 			);
 }
 
-/** `renewalNotice/4` in the UI locale. */
+/** `renewalNotice/3` at a catalog price, in the UI locale. Catalog prices are
+ *  whole USD, so formatMoney, not formatMinorUnits (Paddle minor units). */
 export function useRenewalNotice() {
 	const { t, renderedLocale } = useT();
 	const locale = intlLocale(renderedLocale, "en-US");
 	return (
 		catalog: Pick<PlanCardCatalog, "monthlyPrice" | "annualPrice">,
 		cadence: BillingCadence,
-	) => renewalNotice(catalog, cadence, t, locale);
+	) => renewalNotice(formatMoney(listPrice(catalog, cadence), "USD", locale, WHOLE), cadence, t);
+}
+
+/** Totals from Paddle's checkout.loaded / checkout.updated (decimal units, tax included). */
+export interface CheckoutTotals {
+	currency: string;
+	total: number;
+	recurring: number;
+}
+
+export function checkoutTotals(data: CheckoutEventsData | undefined): CheckoutTotals | null {
+	return data?.totals
+		? {
+				currency: data.currency_code,
+				total: data.totals.total,
+				recurring: data.recurring_totals?.total ?? data.totals.total,
+			}
+		: null;
+}
+
+// Paddle's inline frame shows no items, totals or recurring terms; Paddle's
+// inline checkout docs require the page to.
+// Catalog price until Paddle's first event brings the localized, taxed totals.
+// Fixed light colors: it sits on the forced-light checkout card.
+export function CheckoutSummary({
+	tier,
+	cadence,
+	totals,
+}: {
+	tier: PlanTier;
+	cadence: BillingCadence;
+	totals: CheckoutTotals | null;
+}) {
+	const { t, renderedLocale } = useT();
+	const { catalog } = usePlanCopy();
+	const locale = intlLocale(renderedLocale, "en-US");
+	const plan = catalog[tier];
+	const list = listPrice(plan, cadence);
+	// The catalog price reads as on the plan card ("$70"); Paddle's totals are
+	// a real charge and keep their cents.
+	const money = (n: number) =>
+		totals
+			? formatMoney(n, totals.currency, locale)
+			: formatMoney(n, "USD", locale, WHOLE);
+	return (
+		<section
+			aria-label={t("Order summary")}
+			className="flex flex-col gap-2 rounded-lg border border-gray-200 bg-gray-50 p-4 text-gray-900 text-sm"
+		>
+			<h3 className="font-semibold">{t("{plan} plan", { plan: t(plan.name) })}</h3>
+			<p className="font-medium">{renewalNotice(money(totals?.recurring ?? list), cadence, t)}</p>
+			<dl className="flex justify-between border-gray-200 border-t pt-2">
+				<dt>{t("Due today")}</dt>
+				<dd className="font-semibold">{money(totals?.total ?? list)}</dd>
+			</dl>
+		</section>
+	);
 }
 
 // Which note caps the copy states: the set the backend enforces

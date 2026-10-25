@@ -263,6 +263,9 @@ export default {
 		"Diperbaharui secara automatik setiap bulan pada {price} sehingga anda membatalkannya. Batalkan pada bila-bila masa dalam Tetapan > Bayaran.",
 	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
 		"Diperbaharui secara automatik setiap tahun pada {price} sehingga anda membatalkannya. Batalkan pada bila-bila masa dalam Tetapan > Bayaran.",
+	"Order summary": "Ringkasan pesanan",
+	"{plan} plan": "Pakej {plan}",
+	"Due today": "Tarikh pembayaran hari ini",
 	"Billing cadence": "Tempoh pembayaran",
 	Monthly: "Bulanan",
 	Annual: "Tahunan",

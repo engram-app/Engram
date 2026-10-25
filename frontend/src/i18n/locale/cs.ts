@@ -270,6 +270,9 @@ export default {
 		"Automaticky obnovuje se každý měsíc za {price}, dokud ji nezrušíte. Zrušení je možné kdykoli v Nastavení > Platby.",
 	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
 		"Automaticky obnovuje se každý rok za {price}, dokud ji nezrušíte. Zrušení je možné kdykoli v Nastavení > Platby.",
+	"Order summary": "Souhrn objednávky",
+	"{plan} plan": "{plan} plán",
+	"Due today": "Splatné dnes",
 	"Billing cadence": "Frekvence fakturace",
 	Monthly: "Měsíčně",
 	Annual: "Ročně",

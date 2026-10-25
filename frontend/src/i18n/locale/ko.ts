@@ -253,6 +253,9 @@ export default {
 		"매달 {price}에 자동으로 갱신되며, 취소 시까지 유지됩니다. 설정 > 결제에서 언제든지 취소할 수 있습니다.",
 	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
 		"매년 {price}에 자동으로 갱신되며, 취소 시까지 유지됩니다. 설정 > 결제에서 언제든지 취소할 수 있습니다.",
+	"Order summary": "주문 요약",
+	"{plan} plan": "{plan} 요금제",
+	"Due today": "오늘 결제 예정",
 	"Billing cadence": "결제 주기",
 	Monthly: "매월",
 	Annual: "연간",

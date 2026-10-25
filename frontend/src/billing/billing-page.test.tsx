@@ -15,6 +15,7 @@ vi.mock("@paddle/paddle-js", () => ({
 	initializePaddle: (...args: unknown[]) => initializePaddleMock(...args),
 	CheckoutEventNames: {
 		CHECKOUT_LOADED: "checkout.loaded",
+		CHECKOUT_UPDATED: "checkout.updated",
 		CHECKOUT_CLOSED: "checkout.closed",
 		CHECKOUT_COMPLETED: "checkout.completed",
 		CHECKOUT_PAYMENT_INITIATED: "checkout.payment.initiated",
@@ -303,6 +304,62 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		fireEvent.click(screen.getByRole("radio", { name: /monthly/iu }));
 		ctaHasNotice("Choose Starter", notice("month", "$7"));
 		ctaHasNotice("Choose Pro", notice("month", "$14"));
+	});
+
+	// Paddle: an inline frame shows no items, totals or recurring terms, so the
+	// page must. Catalog price first, then Paddle's tax-inclusive totals.
+	it("onboarding (inline): shows an order summary beside the frame, updated from Paddle's totals", async () => {
+		mockBillingApi();
+		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+			captured = opts.eventCallback;
+			return { Checkout: { open: vi.fn(), close: vi.fn() } };
+		});
+		const { container } = renderBilling({ inline: true });
+		const [startBtn] = await screen.findAllByRole("button", { name: "Choose Starter" });
+		await act(async () => {
+			startBtn!.click();
+			await Promise.resolve();
+		});
+		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
+
+		const summary = () => within(screen.getByRole("region", { name: "Order summary" }));
+		const renews = (price: string) =>
+			`Renews automatically every year at ${price} until you cancel. Cancel anytime in Settings > Billing.`;
+		expect(summary().getByText("Starter plan")).toBeInTheDocument();
+		expect(summary().getByText(renews("$70"))).toBeInTheDocument();
+		expect(summary().getByText("$70")).toBeInTheDocument();
+
+		await act(async () => {
+			captured!({
+				name: "checkout.loaded",
+				data: {
+					id: "che_1",
+					currency_code: "EUR",
+					totals: { subtotal: 70, tax: 14, discount: 0, total: 84 },
+					recurring_totals: { subtotal: 70, tax: 14, discount: 0, total: 84 },
+					items: [],
+				},
+			});
+		});
+		expect(summary().getByText(renews("€84.00"))).toBeInTheDocument();
+		expect(summary().getByText("€84.00")).toBeInTheDocument();
+
+		// A discount on the first charge: today's total differs from the renewal.
+		await act(async () => {
+			captured!({
+				name: "checkout.updated",
+				data: {
+					id: "che_1",
+					currency_code: "EUR",
+					totals: { subtotal: 70, tax: 7, discount: 35, total: 42 },
+					recurring_totals: { subtotal: 70, tax: 14, discount: 0, total: 84 },
+					items: [],
+				},
+			});
+		});
+		expect(summary().getByText(renews("€84.00"))).toBeInTheDocument();
+		expect(summary().getByText("€42.00")).toBeInTheDocument();
 	});
 
 	// #2202 hid Apple Pay and Google Pay, but the wallet stalls were our own

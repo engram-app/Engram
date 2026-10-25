@@ -269,6 +269,9 @@ export default {
 		"Rinnova automaticamente ogni mese a {price} fino a quando non lo disattivi. Puoi disattivarlo in qualsiasi momento in Impostazioni > Abbonamento.",
 	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
 		"Rinnova automaticamente ogni anno a {price} fino a quando non lo disattivi. Puoi disattivarlo in qualsiasi momento in Impostazioni > Abbonamento.",
+	"Order summary": "Riepilogo dell'ordine",
+	"{plan} plan": "Piano {plan}",
+	"Due today": "Scadenza oggi",
 	"Billing cadence": "Frequenza di addebito",
 	Monthly: "Mensile",
 	Annual: "Annuale",

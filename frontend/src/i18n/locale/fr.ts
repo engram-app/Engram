@@ -272,6 +272,9 @@ export default {
 		"Renouvellement automatique chaque mois à {price} jusqu'à ce que tu annules. Annule à tout moment dans Paramètres > Facturation.",
 	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
 		"Renouvellement automatique chaque année à {price} jusqu'à ce que tu annules. Annule à tout moment dans Paramètres > Facturation.",
+	"Order summary": "Résumé de la commande",
+	"{plan} plan": "Abonnement {plan}",
+	"Due today": "Échéance aujourd'hui",
 	"Billing cadence": "Fréquence de facturation",
 	Monthly: "Mensuel",
 	Annual: "Annuel",

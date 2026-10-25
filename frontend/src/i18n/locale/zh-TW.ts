@@ -238,6 +238,9 @@ export default {
 		"每月自動續訂，費用為 {price} 美元，直到您取消。您可以在「設定」>「帳單」隨時取消。",
 	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
 		"每年自動續訂，費用為 {price} 美元，直到您取消。您可以在「設定」>「帳單」隨時取消。",
+	"Order summary": "訂單摘要",
+	"{plan} plan": "{plan} 方案",
+	"Due today": "今日到期",
 	"Billing cadence": "帳單週期",
 	Monthly: "每月",
 	Annual: "年度",

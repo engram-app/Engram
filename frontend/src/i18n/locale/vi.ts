@@ -258,6 +258,9 @@ export default {
 		"Tự động gia hạn hàng tháng với giá {price} cho đến khi bạn hủy. Bạn có thể hủy bất cứ lúc nào trong Cài đặt > Thanh toán.",
 	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
 		"Tự động gia hạn hàng năm với giá {price} cho đến khi bạn hủy. Bạn có thể hủy bất cứ lúc nào trong Cài đặt > Thanh toán.",
+	"Order summary": "Tóm tắt đơn hàng",
+	"{plan} plan": "Gói {plan}",
+	"Due today": "Đến hạn hôm nay",
 	"Billing cadence": "Chu kỳ thanh toán",
 	Monthly: "Hàng tháng",
 	Annual: "Hàng năm",

@@ -271,6 +271,9 @@ export default {
 		"Verlängert sich automatisch jeden Monat für {price}, bis du es kündigst. Kündige jederzeit unter Einstellungen > Abrechnung.",
 	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
 		"Verlängert sich automatisch jedes Jahr für {price}, bis du es kündigst. Kündige jederzeit unter Einstellungen > Abrechnung.",
+	"Order summary": "Bestellübersicht",
+	"{plan} plan": "{plan} Plan",
+	"Due today": "Fällig heute",
 	"Billing cadence": "Abrechnungsfrequenz",
 	Monthly: "Monatlich",
 	Annual: "Jährlich",

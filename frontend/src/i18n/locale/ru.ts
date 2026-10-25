@@ -276,6 +276,9 @@ export default {
 		"Продлевается автоматически каждый месяц за {price}, пока вы не отмените. Отменить можно в любое время в разделе Настройки > Оплата.",
 	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
 		"Продлевается автоматически каждый год за {price}, пока вы не отмените. Отменить можно в любое время в разделе Настройки > Оплата.",
+	"Order summary": "Краткое описание заказа",
+	"{plan} plan": "План {plan}",
+	"Due today": "Оплата сегодня",
 	"Billing cadence": "Периодичность оплаты",
 	Monthly: "Ежемесячно",
 	Annual: "Годовой",

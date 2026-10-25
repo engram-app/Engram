@@ -271,6 +271,9 @@ export default {
 		"Odnawia się automatycznie co miesiąc za {price}, do momentu anulowania. Możesz anulować w dowolnym momencie w Ustawieniach > Płatności.",
 	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
 		"Odnawia się automatycznie co rok za {price}, do momentu anulowania. Możesz anulować w dowolnym momencie w Ustawieniach > Płatności.",
+	"Order summary": "Podsumowanie zamówienia",
+	"{plan} plan": "Plan {plan}",
+	"Due today": "Do zapłaty dzisiaj",
 	"Billing cadence": "Cykl płatności",
 	Monthly: "Miesięcznie",
 	Annual: "Rocznie",
