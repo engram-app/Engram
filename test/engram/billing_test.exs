@@ -1222,31 +1222,83 @@ defmodule Engram.BillingTest do
     end
 
     # The customer's billed history as Paddle lists it, newest first: the
-    # checkout charge that started `sub_id`, then one renewal of it.
-    defp expect_history(sub_id) do
+    # checkout charge that started `sub_id`, then one renewal of it. `extra`
+    # is appended (older entries).
+    defp expect_history(sub_id, extra \\ []) do
       expect(Engram.Paddle.ClientMock, :list_transactions, fn _customer_id ->
         {:ok,
          [
-           %{
-             "id" => "txn_renew",
-             "subscription_id" => sub_id,
-             "origin" => "subscription_recurring",
-             "billed_at" => "2026-09-01T10:00:00Z"
-           },
-           %{
-             "id" => "txn_other_sub",
-             "subscription_id" => "sub_older",
-             "origin" => "web",
-             "billed_at" => "2026-01-01T10:00:00Z"
-           },
-           %{
-             "id" => "txn_first",
-             "subscription_id" => sub_id,
-             "origin" => "web",
-             "billed_at" => "2026-08-01T10:00:00Z"
-           }
-         ]}
+           paid_txn("txn_renew", sub_id, "subscription_recurring", "2026-09-01T10:00:00Z"),
+           paid_txn("txn_other_sub", "sub_older", "web", "2026-01-01T10:00:00Z"),
+           paid_txn("txn_first", sub_id, "web", "2026-08-01T10:00:00Z")
+         ] ++ extra}
       end)
+    end
+
+    defp paid_txn(id, sub_id, origin, billed_at, grand_total \\ "1500") do
+      %{
+        "id" => id,
+        "status" => "completed",
+        "subscription_id" => sub_id,
+        "origin" => origin,
+        "billed_at" => billed_at,
+        "details" => %{"totals" => %{"grand_total" => grand_total}}
+      }
+    end
+
+    # A trial (or 100%-off) checkout bills $0 first; the money-back refund is
+    # of the first PAID charge, so the $0 one must not count as "first".
+    test "a $0 trial transaction before the first paid charge does not hide it" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_trial_1", status: "active")
+
+      trial = paid_txn("txn_trial", "sub_trial_1", "web", "2026-07-18T10:00:00Z", "0")
+      expect_history("sub_trial_1", [trial])
+
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn "sub_trial_1", :immediately, _ ->
+        {:ok, canceled_entity("sub_trial_1")}
+      end)
+
+      assert {:ok, %Subscription{status: "canceled"}} =
+               Billing.upsert_from_paddle_event(
+                 refund_event("adjustment.updated", "sub_trial_1", %{})
+               )
+    end
+
+    test "with a $0 trial first, a full refund of a renewal still keeps the plan" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_trial_2", status: "active")
+
+      trial = paid_txn("txn_trial", "sub_trial_2", "web", "2026-07-18T10:00:00Z", "0")
+      expect_history("sub_trial_2", [trial])
+
+      assert {:ok, %Subscription{status: "active"}} =
+               Billing.upsert_from_paddle_event(
+                 refund_event("adjustment.updated", "sub_trial_2", %{
+                   "transaction_id" => "txn_renew"
+                 })
+               )
+    end
+
+    test "an unpaid past_due transaction is not the first charge" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_pd_1", status: "active")
+
+      unpaid =
+        "txn_unpaid"
+        |> paid_txn("sub_pd_1", "web", "2026-07-18T10:00:00Z")
+        |> Map.put("status", "past_due")
+
+      expect_history("sub_pd_1", [unpaid])
+
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn "sub_pd_1", :immediately, _ ->
+        {:ok, canceled_entity("sub_pd_1")}
+      end)
+
+      assert {:ok, %Subscription{status: "canceled"}} =
+               Billing.upsert_from_paddle_event(
+                 refund_event("adjustment.updated", "sub_pd_1", %{})
+               )
     end
 
     defp canceled_entity(sub_id) do

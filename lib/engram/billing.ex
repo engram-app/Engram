@@ -942,9 +942,11 @@ defmodule Engram.Billing do
     end
   end
 
-  # The subscription's first charge is its earliest billed transaction in the
-  # customer's history (the checkout, origin web); renewals and upgrades bill
-  # later. Paddle's billed_at is RFC 3339 UTC, so the strings sort by time.
+  # The subscription's first charge is its earliest billed, paid or completed
+  # transaction with a non-zero total (the checkout, origin web); renewals and
+  # upgrades bill later. A $0 trial or 100%-off transaction is not a charge,
+  # nor is an unpaid one. Paddle's billed_at is RFC 3339 UTC, so the strings
+  # sort by time.
   defp first_charge?(%Subscription{paddle_customer_id: customer_id}, _txn_id)
        when not is_binary(customer_id),
        do: {:error, :no_customer_id}
@@ -954,7 +956,9 @@ defmodule Engram.Billing do
       first =
         transactions
         |> Enum.filter(
-          &(&1["subscription_id"] == sub.paddle_subscription_id and is_binary(&1["billed_at"]))
+          &(&1["subscription_id"] == sub.paddle_subscription_id and is_binary(&1["billed_at"]) and
+              &1["status"] in ~w(billed paid completed) and
+              not zero_amount?(get_in(&1, ["details", "totals", "grand_total"])))
         )
         |> Enum.min_by(& &1["billed_at"], fn -> nil end)
 
