@@ -45,11 +45,12 @@ defmodule EngramWeb.FallbackControllerTest do
 
   # A stalled or contended DEK load is transient: a retryable 503, not the
   # terminal 500 a real crypto fault gets.
-  test "{:error, :dek_load_timeout | :dek_load_contended} -> 503 with Retry-After" do
+  # (Its Retry-After is EngramWeb.Plugs.RetryAfter's, asserted end to end in
+  # folders_create_delete_test and sync_controller_test.)
+  test "{:error, :dek_load_timeout | :dek_load_contended} -> 503 dek_unavailable" do
     for reason <- [:dek_load_timeout, :dek_load_contended] do
       conn = render({:error, reason})
       assert json_response(conn, 503) == %{"error" => "dek_unavailable"}
-      assert get_resp_header(conn, "retry-after") == ["30"]
     end
   end
 

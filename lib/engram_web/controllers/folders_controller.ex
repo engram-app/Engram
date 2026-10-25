@@ -278,8 +278,11 @@ defmodule EngramWeb.FoldersController do
       {:error, :root_delete_refused} ->
         conn |> put_status(422) |> json(%{error: "Refusing to delete the vault root."})
 
-      {:error, reason} ->
-        conn |> put_status(500) |> json(%{error: format_error(reason)})
+      {:error, reason} = err ->
+        # A transient DEK failure is the shared retryable 503.
+        if Engram.Crypto.transient_dek_error?(reason),
+          do: EngramWeb.FallbackController.call(conn, err),
+          else: conn |> put_status(500) |> json(%{error: format_error(reason)})
     end
   end
 

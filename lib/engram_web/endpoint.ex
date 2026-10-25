@@ -201,6 +201,7 @@ defmodule EngramWeb.Endpoint do
   plug :mark_head
   plug Plug.Head
   plug EngramWeb.Plugs.CORS
+  plug EngramWeb.Plugs.RetryAfter
   # Drains a body the route left unread, after the response (raw uploads).
   plug EngramWeb.Plugs.SettleUnreadBody, EngramWeb.Router
 

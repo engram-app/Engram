@@ -3,7 +3,8 @@ defmodule Engram.Crypto.DekUnavailableError do
   Raised by a request that cannot go on without the user's DEK. Rendered as a
   503 `dek_unavailable` when the failure is transient
   (`Engram.Crypto.transient_dek_error?/1`), so the client retries, and as a
-  500 for a real crypto fault.
+  500 for a real crypto fault. The 503's Retry-After comes from
+  `EngramWeb.Plugs.RetryAfter`.
   """
   defexception [:reason, plug_status: 500]
 

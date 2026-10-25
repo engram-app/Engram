@@ -222,6 +222,25 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
       assert {:error, :not_found} = Engram.Notes.get_note_by_id(user, vault, child.id)
     end
 
+    # A stalled DEK load is transient: a retryable 503, never the 500 a real
+    # crypto fault gets, and nothing is deleted.
+    test "recursive=true on a stalled DEK load is a retryable 503", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, child} = Engram.Notes.upsert_note(user, vault, %{path: "Derived/a.md"}, actor: "api")
+      _token = Engram.StalledDekLoad.stall!(user.id)
+
+      conn = delete(conn, ~p"/api/folders/Derived?recursive=true")
+      assert json_response(conn, 503) == %{"error" => "dek_unavailable"}
+      # Present whatever its value: a write's 503 takes RotationLockCheck's 60
+      # before EngramWeb.Plugs.RetryAfter's 30 fills a missing one.
+      assert [_secs] = get_resp_header(conn, "retry-after")
+      Engram.Crypto.DekCache.invalidate(user.id)
+      assert {:ok, _} = Engram.Notes.get_note_by_id(user, vault, child.id)
+    end
+
     test "recursive=true broadcasts folders.batch delete", %{
       conn: conn,
       user: user,
