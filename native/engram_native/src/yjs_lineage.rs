@@ -37,13 +37,16 @@ struct Lineage {
     clocks: Range<u32>,
 }
 
-/// `(client, live_utf16_len, total_utf16_len)` for EVERY root insert into the
+/// `(client, live_utf16_len, total_utf16_len)` of one root lineage.
+pub type RootLineage = (u64, u32, u32);
+
+/// A [`RootLineage`] for EVERY root insert into the
 /// root-level type named `root` (map entries excluded), wholly deleted ones
 /// included. One entry per root struct, so two entries from one client are two
 /// lineages. Live alone cannot tell "rival deleted, original live" from
 /// "original deleted, rival live" (a cleared note a fresh device re-seeded):
 /// both leave one live lineage, so the caller needs the dead ones too.
-pub fn root_inserts(update: &[u8], root: &str) -> Result<Vec<(u64, u32, u32)>, Error> {
+pub fn root_inserts(update: &[u8], root: &str) -> Result<Vec<RootLineage>, Error> {
     let mut d = DecoderV1::new(Cursor::new(update));
     let clients: u32 = d.read_var()?;
     let mut lineages: Vec<Lineage> = Vec::new();
@@ -145,7 +148,7 @@ fn covered<'a>(ranges: impl Iterator<Item = &'a Range<u32>>, span: &Range<u32>) 
 
 #[cfg(test)]
 mod tests {
-    use super::root_inserts;
+    use super::{root_inserts, RootLineage};
     use yrs::updates::decoder::Decode;
     use yrs::{Doc, GetString, Map, ReadTxn, StateVector, Text, Transact, Update};
 
@@ -155,7 +158,7 @@ mod tests {
     }
 
     /// Sorted `(client, live, total)`.
-    fn roots(doc: &Doc) -> Vec<(u64, u32, u32)> {
+    fn roots(doc: &Doc) -> Vec<RootLineage> {
         let mut r = root_inserts(&state(doc), "content").unwrap();
         r.sort();
         r
@@ -287,7 +290,7 @@ mod tests {
 
     #[test]
     fn empty_and_malformed_updates() {
-        assert_eq!(roots(&Doc::new()), Vec::<(u64, u32, u32)>::new());
+        assert_eq!(roots(&Doc::new()), Vec::<RootLineage>::new());
         assert!(root_inserts(&[0xff, 0xff, 0xff], "content").is_err());
     }
 }

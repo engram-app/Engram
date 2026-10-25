@@ -609,7 +609,10 @@ fn md_outline_nif(content: &str) -> NifResult<(Option<outline::Outline>, usize)>
 /// must be yrs's own fresh re-encode, never client bytes (yjs_lineage.rs says
 /// why). Always dirty: an ops audit over whole stored docs.
 #[rustler::nif(schedule = "DirtyCpu")]
-fn yjs_root_inserts_nif(update: Binary, root: &str) -> (Option<Vec<(u64, u32, u32)>>, usize) {
+fn yjs_root_inserts_nif(
+    update: Binary,
+    root: &str,
+) -> (Option<Vec<yjs_lineage::RootLineage>>, usize) {
     let (r, peak) = memory::measured(|| yjs_lineage::root_inserts(update.as_slice(), root));
     (r.ok(), peak)
 }
