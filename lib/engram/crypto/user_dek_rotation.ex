@@ -230,15 +230,17 @@ defmodule Engram.Crypto.UserDekRotation do
       Engram.Notes.Note,
       fn batch_ids ->
         Repo.transaction(fn ->
-          # Bodies from `note_bodies`; the lock is on the notes row only
-          # (`OF n0`: no row lock on an outer join's nullable side). Every
-          # body write goes through a notes UPDATE, so that row serializes them.
+          # Bodies from the `notes` columns under this lock, never a joined
+          # `note_bodies` row: a read that waits on the row lock re-fetches
+          # only the locked relation (EvalPlanQual), so a joined body would
+          # be the pre-wait version (see `Notes.lock_for_write/2`). This
+          # release still writes the notes columns in step; the rewrap
+          # writes them and the trigger mirrors the bodies.
           notes =
             from(n in Engram.Notes.Note,
               where: n.id in ^batch_ids,
-              lock: "FOR UPDATE OF n0"
+              lock: "FOR UPDATE"
             )
-            |> NoteBody.select_note()
             |> Repo.all(skip_tenant_check: true)
 
           rewrap_crdt_tail(batch_ids, old_dek, new_dek)

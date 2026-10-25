@@ -2735,12 +2735,22 @@ defmodule Engram.Notes do
         type(^vault_id, Ecto.UUID)
       )
     )
-    # `OF n0` (the notes row, Ecto's alias for the first source): a body read
-    # LEFT JOINs `note_bodies`, and Postgres refuses a row lock on the
-    # nullable side of an outer join. The body row is locked by the write
-    # itself (the `notes_sync_body` trigger updates it).
+    |> locked_body_from_notes()
     |> lock("FOR NO KEY UPDATE OF n0")
   end
+
+  # A row-locked read takes the body from the `notes` columns, not from
+  # `note_bodies`. When the read WAITS on the row lock, Postgres re-fetches
+  # only the locked relation at its newest version (EvalPlanQual, READ
+  # COMMITTED); a joined body row comes back as the statement first read it,
+  # so a fresh notes row would pair with a stale body and the write behind it
+  # would lose its snapshot fence whenever it waited. This release still
+  # writes every notes body column in step. The contract release, which stops
+  # writing them, must lock in one statement and read the body in a fresh
+  # one (LockedReadBodyTest pins this). Any select the query carried is
+  # replaced; the unused LEFT JOIN is removed by the planner (unique key).
+  # `OF n0` (Ecto's alias for the first source) keeps the lock on notes.
+  defp locked_body_from_notes(query), do: query |> exclude(:select) |> select([n], n)
 
   defp interleave_hook(point) do
     case Application.get_env(:engram, :checkpoint_interleave_hook) do
