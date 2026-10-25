@@ -28,9 +28,10 @@ defmodule Engram.Repo.Migrations.CreateNoteIndexStateExpand do
   It also holds the note's chunk counters (`points`, `len_rows`, `len_sum`:
   rows, rows with a `token_count`, their sum), written by this release's
   chunk writers in the same transaction as the chunk rows, under the note's
-  own lock (`Indexing.ChunkRows.recount!/1`): per note, so no shared row and
-  no new lock order. The trigger never touches them. Vault and user totals
-  are SUMs over the vault (`note_index_state_vault`, next migration), read
+  own lock (`Indexing.ChunkRows.recount!/1`): per note, so no shared row.
+  Every writer locks note, chunks, then this row (`Indexing.ChunkRows`,
+  "Lock order"). The trigger never touches them. Vault and user totals
+  are SUMs over the vault (`note_index_state_vault`, a later migration), read
   once the `NoteIndexState` ledger has counted every note; it also re-counts
   daily, healing what a previous-release writer left behind.
 

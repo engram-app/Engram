@@ -17,6 +17,20 @@ defmodule Engram.Indexing.ChunkRows do
   (`recount!/1`): every chunk writer of this release calls it in the same
   transaction as its chunk statements.
 
+  ## Lock order
+
+  Every writer of a note's chunks takes, in this order: the note's `notes`
+  row, its `chunks` rows, then its `note_index_state` row. `commit_index`
+  locks the note (`content_current!`), writes the chunks, recounts, and
+  only then stamps (the stamps reach `note_index_state` through the notes
+  trigger); `delete_note_index` and the resparse write lock the note first
+  (`lock_notes!/2`); a note delete's FK cascade starts at the note; the
+  `NoteIndexState` ledger locks notes, then reads chunks and writes state.
+  `CleanupVault`'s chunk batches take no note lock but still go chunks
+  before state. With the note first wherever it is taken, two writers on
+  one note queue on it, and no path holds the state row while waiting for
+  chunk rows, so no cycle exists.
+
   Its own module so its raw statements (the per-row-values UPDATE and the
   recount, shapes `update_all` cannot express) are the only raw SQL here,
   as `Notes.BulkRename` does for notes.
@@ -126,5 +140,25 @@ defmodule Engram.Indexing.ChunkRows do
       )
 
     n
+  end
+
+  @doc """
+  Locks the notes' `notes` rows (`FOR UPDATE`, in id order) before a chunk
+  write, the first lock of the order above. `skip_locked: true` (the
+  ledger) returns only the ids it got and passes over any a writer holds.
+  Inside the caller's transaction.
+  """
+  @spec lock_notes!([Ecto.UUID.t()], keyword()) :: :ok | [Ecto.UUID.t()]
+  def lock_notes!(note_ids, opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+    skip = if Keyword.get(opts, :skip_locked, false), do: " SKIP LOCKED", else: ""
+
+    %{rows: rows} =
+      repo.query!(
+        "SELECT id::text FROM notes WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE" <> skip,
+        [Enum.map(note_ids, &Ecto.UUID.dump!/1)]
+      )
+
+    if skip == "", do: :ok, else: Enum.map(rows, &hd/1)
   end
 end

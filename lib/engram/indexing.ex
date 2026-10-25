@@ -1152,13 +1152,16 @@ defmodule Engram.Indexing do
       # the comment above depends on is unchanged.
       committed =
         Repo.with_tenant(note.user_id, fn ->
+          # Lock order (`ChunkRows`): the note, its chunks, then its
+          # note_index_state row. The tier stamp writes that row (through
+          # the notes trigger), so it follows the chunk writes.
           content_current!(note)
+          :ok = ChunkRows.write!(note.id, chunk_rows, @insert_batch)
+          _ = ChunkRows.recount!([note.id])
 
           with {:ok, tier} <- Map.fetch(prepared, :index_tier),
                do: stamp_index_tier(note, tier, Map.get(prepared, :chunk_count))
 
-          :ok = ChunkRows.write!(note.id, chunk_rows, @insert_batch)
-          _ = ChunkRows.recount!([note.id])
           write_point_rows(note, Map.get(prepared, :point_rows))
 
           stamp_payload_hash(note, payload_hash)
@@ -1318,7 +1321,8 @@ defmodule Engram.Indexing do
     :ok
   end
 
-  defp content_current!(_note), do: :ok
+  # No hash to compare: still the note lock, first (`ChunkRows` lock order).
+  defp content_current!(note), do: ChunkRows.lock_notes!([note.id])
 
   # With the chunk rows, so the tier always names the rows that exist, and
   # compare-and-set on the tier this pass was planned from: if the index
@@ -1743,6 +1747,7 @@ defmodule Engram.Indexing do
       # which is all this needs.
       {:ok, _} =
         Repo.with_tenant(note.user_id, fn ->
+          :ok = ChunkRows.lock_notes!([note.id])
           Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id))
           _ = ChunkRows.recount!([note.id])
           Repo.delete_all(from(p in ChunkPoint, where: p.note_id == ^note.id))
@@ -3244,6 +3249,8 @@ defmodule Engram.Indexing do
 
     {:ok, {updated, _}} =
       Repo.with_tenant(note.user_id, fn ->
+        :ok = ChunkRows.lock_notes!([note.id])
+
         Chunk
         |> join(
           :inner,

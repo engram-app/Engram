@@ -25,6 +25,7 @@ defmodule Engram.DataMigrations.NoteIndexState do
   @behaviour Engram.DataMigration
 
   alias Engram.Backfill.TenantScan
+  alias Engram.Indexing.ChunkRows
   alias Engram.Repo
 
   @batch 1_000
@@ -156,13 +157,8 @@ defmodule Engram.DataMigrations.NoteIndexState do
 
     ids = Enum.map(rows, &hd/1)
 
-    %{rows: locked} =
-      repo.query!(
-        "SELECT id::text FROM notes WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE SKIP LOCKED",
-        [Enum.map(ids, &dump/1)]
-      )
-
-    _ = Engram.Indexing.ChunkRows.recount!(Enum.map(locked, &hd/1), repo)
+    locked = ChunkRows.lock_notes!(ids, repo: repo, skip_locked: true)
+    _ = ChunkRows.recount!(locked, repo)
     ids
   end
 
