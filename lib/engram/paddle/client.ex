@@ -34,8 +34,7 @@ defmodule Engram.Paddle.Client do
   List the transactions for a subscription, most recent first.
 
   Paddle endpoint: `GET /transactions?subscription_id={id}`. Returns the
-  decoded `data` list verbatim. Pagination beyond the first page is not
-  followed — the billing-history view shows the most recent page.
+  decoded `data` list verbatim, every page (Paddle caps a page at 30).
   """
   @callback list_transactions(subscription_id :: String.t()) ::
               {:ok, [map()]} | {:error, term()}

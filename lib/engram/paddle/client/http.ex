@@ -47,16 +47,23 @@ defmodule Engram.Paddle.Client.HTTP do
 
   @impl true
   def list_transactions(subscription_id) when is_binary(subscription_id) do
-    request(
-      :get,
-      "/transactions",
-      "transactions",
-      fn
-        %Req.Response{status: 200, body: %{"data" => data}} when is_list(data) -> {:ok, data}
-        _ -> :error
-      end,
-      params: [subscription_id: subscription_id, order_by: "billed_at[DESC]", per_page: 50]
-    )
+    with {:ok, api_key} <- fetch_api_key() do
+      url = base_url() <> "/transactions"
+      # 30 is the transactions list maximum (Paddle returns 30 for anything
+      # higher), so history and the invoice ownership check need every page.
+      params = [
+        {"subscription_id", subscription_id},
+        {"order_by", "billed_at[DESC]"},
+        {"per_page", 30}
+      ]
+
+      case list_pages("transactions", url, params, headers(api_key), [], MapSet.new([url]), 1) do
+        # Page cap or loop: list_pages already logged it at error. What we
+        # have is still the user's own history, newest first.
+        {:partial, data, _reason} -> {:ok, data}
+        other -> other
+      end
+    end
   end
 
   @impl true
