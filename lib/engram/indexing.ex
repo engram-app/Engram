@@ -10,6 +10,7 @@ defmodule Engram.Indexing do
 
   alias Engram.Billing
   alias Engram.Crypto
+  alias Engram.DataMigrations.NoteIndexState, as: NoteIndexStateLedger
   alias Engram.Embedders.UsageLabels
   alias Engram.EmbedModels
   alias Engram.Indexing.ChunkRows
@@ -837,9 +838,8 @@ defmodule Engram.Indexing do
 
   @doc """
   The account's search points: its `chunks` rows, one per Qdrant point.
-  Read from the per-vault `chunk_stats` counters (migration
-  20261025000200); a vault with no counter row yet is counted from its
-  chunks, as before.
+  Once every note is counted (`DataMigrations.NoteIndexState.counted?/0`) a SUM of its notes'
+  `note_index_state.points` by vault, else the `count(*)` over its chunks.
   """
   @spec point_count(Ecto.UUID.t()) :: non_neg_integer()
   def point_count(user_id) do
@@ -855,29 +855,22 @@ defmodule Engram.Indexing do
   end
 
   @doc """
-  `{user_id, points}` per user with any vault, from the `chunk_stats`
-  counters with a per-vault `count(*)` where a vault has none yet. The one
-  source of the point count (`point_count/1`, the index budget sweep).
+  `{user_id, points}` per user with any points: the one source of the point
+  count (`point_count/1`, the index budget sweep).
   """
   @spec points_by_user() :: Ecto.Query.t()
   def points_by_user do
-    from(v in Engram.Vaults.Vault,
-      left_join: s in Engram.Notes.ChunkStat,
-      on: s.vault_id == v.id,
-      group_by: v.user_id,
-      select:
-        {v.user_id,
-         type(
-           sum(
-             fragment(
-               "coalesce(?, (SELECT count(*) FROM chunks c WHERE c.vault_id = ?))",
-               s.points,
-               v.id
-             )
-           ),
-           :integer
-         )}
-    )
+    if NoteIndexStateLedger.counted?() do
+      from(v in Engram.Vaults.Vault,
+        join: s in Engram.Notes.NoteIndexState,
+        on: s.vault_id == v.id,
+        group_by: v.user_id,
+        having: sum(s.points) > 0,
+        select: {v.user_id, type(sum(s.points), :integer)}
+      )
+    else
+      from(c in Chunk, as: :v, group_by: c.user_id, select: {c.user_id, count()})
+    end
   end
 
   @doc "How many of the account's notes are on keyword-only search (a floor tier)."
@@ -1164,6 +1157,7 @@ defmodule Engram.Indexing do
                do: stamp_index_tier(note, tier, Map.get(prepared, :chunk_count))
 
           :ok = ChunkRows.write!(note.id, chunk_rows, @insert_batch)
+          _ = ChunkRows.recount!([note.id])
           write_point_rows(note, Map.get(prepared, :point_rows))
 
           stamp_payload_hash(note, payload_hash)
@@ -1729,6 +1723,7 @@ defmodule Engram.Indexing do
       {:ok, _} =
         Repo.with_tenant(note.user_id, fn ->
           Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id))
+          _ = ChunkRows.recount!([note.id])
           Repo.delete_all(from(p in ChunkPoint, where: p.note_id == ^note.id))
         end)
 
@@ -3238,6 +3233,7 @@ defmodule Engram.Indexing do
         |> where([c], c.note_id == ^note.id)
         |> update([c, v], set: [token_count: v.n])
         |> Repo.update_all([])
+        |> tap(fn _ -> ChunkRows.recount!([note.id]) end)
       end)
 
     # Fewer rows than points: a concurrent EmbedNote replaced the note's chunk

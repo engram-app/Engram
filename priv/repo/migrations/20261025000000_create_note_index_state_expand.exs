@@ -25,11 +25,21 @@ defmodule Engram.Repo.Migrations.CreateNoteIndexStateExpand do
   checkpoint never touches this table. Rows written before the trigger are
   filled by the `NoteIndexState` data migration through the same function.
 
-  Nothing reads this table yet (rollback-safe: the previous release ignores
-  it and the trigger keeps it current while that release writes notes).
+  It also holds the note's chunk counters (`points`, `len_rows`, `len_sum`:
+  rows, rows with a `token_count`, their sum), written by this release's
+  chunk writers in the same transaction as the chunk rows, under the note's
+  own lock (`Indexing.ChunkRows.recount!/1`): per note, so no shared row and
+  no new lock order. The trigger never touches them. Vault and user totals
+  are SUMs over the vault (`note_index_state_vault`, next migration), read
+  once the `NoteIndexState` ledger has counted every note; it also re-counts
+  daily, healing what a previous-release writer left behind.
 
-  Primary key only. fillfactor 80: every embed run updates the row, and the
-  slack keeps those updates HOT with no index entry.
+  The embed columns are not read yet (rollback-safe: the previous release
+  ignores the table and the trigger keeps it current while that release
+  writes notes).
+
+  fillfactor 80: every embed run updates the row, and the slack keeps those
+  updates HOT.
   """
 
   def up do
@@ -47,8 +57,12 @@ defmodule Engram.Repo.Migrations.CreateNoteIndexStateExpand do
       embed_budget_parked_at timestamptz,
       embed_budget_need bigint,
       embed_budget_next bigint,
+      len_sum bigint NOT NULL DEFAULT 0,
       note_id uuid PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE,
       user_id uuid NOT NULL,
+      vault_id uuid NOT NULL,
+      points integer NOT NULL DEFAULT 0,
+      len_rows integer NOT NULL DEFAULT 0,
       chunk_count integer,
       chunker_version smallint,
       keyword_version smallint,
@@ -89,13 +103,13 @@ defmodule Engram.Repo.Migrations.CreateNoteIndexStateExpand do
     LANGUAGE plpgsql SET search_path = '' AS $$
     BEGIN
       INSERT INTO public.note_index_state AS s (
-        note_id, user_id, embed_retry_after, embed_started_at, rebuild_paid_at,
+        note_id, user_id, vault_id, embed_retry_after, embed_started_at, rebuild_paid_at,
         embed_budget_parked_at, embed_budget_need, embed_budget_next, chunk_count,
         chunker_version, keyword_version, key_alias_version, embed_crashes,
         embed_budget_parked, index_tier, embed_model, embed_started_by, embed_hash,
         dense_indexed_hash, embed_started_hash, payload_hash)
       VALUES (
-        n.id, n.user_id, n.embed_retry_after, n.embed_started_at, n.rebuild_paid_at,
+        n.id, n.user_id, n.vault_id, n.embed_retry_after, n.embed_started_at, n.rebuild_paid_at,
         n.embed_budget_parked_at, n.embed_budget_need, n.embed_budget_next,
         (CASE WHEN n.chunk_count < -2147483648 THEN -2147483648 WHEN n.chunk_count > 2147483647 THEN 2147483647 ELSE n.chunk_count END)::integer,
         (CASE WHEN n.chunker_version < -32768 THEN -32768 WHEN n.chunker_version > 32767 THEN 32767 ELSE n.chunker_version END)::smallint,
@@ -106,6 +120,7 @@ defmodule Engram.Repo.Migrations.CreateNoteIndexStateExpand do
         n.embed_hash, n.dense_indexed_hash, n.embed_started_hash, n.payload_hash)
       ON CONFLICT (note_id) DO UPDATE SET
         user_id = EXCLUDED.user_id,
+        vault_id = EXCLUDED.vault_id,
         embed_retry_after = EXCLUDED.embed_retry_after,
         embed_started_at = EXCLUDED.embed_started_at,
         rebuild_paid_at = EXCLUDED.rebuild_paid_at,
@@ -125,7 +140,21 @@ defmodule Engram.Repo.Migrations.CreateNoteIndexStateExpand do
         dense_indexed_hash = EXCLUDED.dense_indexed_hash,
         embed_started_hash = EXCLUDED.embed_started_hash,
         payload_hash = EXCLUDED.payload_hash
-      WHERE overwrite AND (s.*) IS DISTINCT FROM (EXCLUDED.*);
+      WHERE overwrite AND (
+        s.user_id, s.vault_id, s.embed_retry_after, s.embed_started_at, s.rebuild_paid_at,
+        s.embed_budget_parked_at, s.embed_budget_need, s.embed_budget_next, s.chunk_count,
+        s.chunker_version, s.keyword_version, s.key_alias_version, s.embed_crashes,
+        s.embed_budget_parked, s.index_tier, s.embed_model, s.embed_started_by, s.embed_hash,
+        s.dense_indexed_hash, s.embed_started_hash, s.payload_hash
+      ) IS DISTINCT FROM (
+        EXCLUDED.user_id, EXCLUDED.vault_id, EXCLUDED.embed_retry_after, EXCLUDED.embed_started_at,
+        EXCLUDED.rebuild_paid_at, EXCLUDED.embed_budget_parked_at, EXCLUDED.embed_budget_need,
+        EXCLUDED.embed_budget_next, EXCLUDED.chunk_count, EXCLUDED.chunker_version,
+        EXCLUDED.keyword_version, EXCLUDED.key_alias_version, EXCLUDED.embed_crashes,
+        EXCLUDED.embed_budget_parked, EXCLUDED.index_tier, EXCLUDED.embed_model,
+        EXCLUDED.embed_started_by, EXCLUDED.embed_hash, EXCLUDED.dense_indexed_hash,
+        EXCLUDED.embed_started_hash, EXCLUDED.payload_hash
+      );
     END
     $$
     """
@@ -146,7 +175,7 @@ defmodule Engram.Repo.Migrations.CreateNoteIndexStateExpand do
         embed_budget_parked_at, embed_budget_need, embed_budget_next, chunk_count,
         chunker_version, keyword_version, key_alias_version, embed_crashes,
         embed_budget_parked, index_tier, embed_model, embed_started_by, embed_hash,
-        dense_indexed_hash, embed_started_hash, payload_hash, kind, user_id
+        dense_indexed_hash, embed_started_hash, payload_hash, kind, user_id, vault_id
       ON notes FOR EACH ROW WHEN (NEW.kind = 'note')
       EXECUTE FUNCTION notes_sync_index_state()
     """

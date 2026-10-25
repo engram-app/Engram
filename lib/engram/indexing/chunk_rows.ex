@@ -13,9 +13,13 @@ defmodule Engram.Indexing.ChunkRows do
   indexed column, so it is HOT where the page has room (fillfactor 90,
   migration 20261025000100).
 
-  Its own module so the one raw statement (the per-row-values UPDATE, a
-  shape `update_all` cannot express) is the only raw SQL here, as
-  `Notes.BulkRename` does for notes.
+  Also keeps each note's chunk counters on `note_index_state`
+  (`recount!/1`): every chunk writer of this release calls it in the same
+  transaction as its chunk statements.
+
+  Its own module so its raw statements (the per-row-values UPDATE and the
+  recount, shapes `update_all` cannot express) are the only raw SQL here,
+  as `Notes.BulkRename` does for notes.
   """
 
   import Ecto.Query
@@ -91,5 +95,36 @@ defmodule Engram.Indexing.ChunkRows do
     )
 
     :ok
+  end
+
+  @doc """
+  Sets each note's `points`, `len_rows`, `len_sum` on `note_index_state` to
+  what its `chunks` rows hold now: one statement, the note's own rows by
+  `(note_id, position)`, and a row that already agrees is not rewritten.
+  Inside a chunk writer's transaction (the caller's tenant, or the
+  maintenance pool via `repo`). Counted, not adjusted, so it is exact
+  whatever wrote the rows before; under `commit_index`'s note lock no other
+  pass writes the note's chunks between the write and the count.
+  """
+  @spec recount!([Ecto.UUID.t()], module()) :: non_neg_integer()
+  def recount!(note_ids, repo \\ Repo)
+  def recount!([], _repo), do: 0
+
+  def recount!(note_ids, repo) do
+    %{num_rows: n} =
+      repo.query!(
+        """
+        UPDATE note_index_state s SET points = c.p, len_rows = c.lr, len_sum = c.ls
+        FROM (SELECT x.id, count(ch.note_id)::int AS p, count(ch.token_count)::int AS lr,
+                     coalesce(sum(ch.token_count), 0)::bigint AS ls
+              FROM unnest($1::uuid[]) AS x(id)
+              LEFT JOIN chunks ch ON ch.note_id = x.id
+              GROUP BY x.id) c
+        WHERE s.note_id = c.id AND (s.points, s.len_rows, s.len_sum) IS DISTINCT FROM (c.p, c.lr, c.ls)
+        """,
+        [Enum.map(note_ids, &Ecto.UUID.dump!/1)]
+      )
+
+    n
   end
 end

@@ -594,8 +594,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     tick = div(DateTime.to_unix(now), 300)
     per_user = fn query -> Repo.cross_tenant(fn -> repo.all(query) end) end
 
-    # The per-vault counters (`Indexing.points_by_user/0`), not a GROUP BY
-    # over every chunk row; users with no points have nothing to budget.
+    # The per-note counters summed per user (`Indexing.points_by_user/0`),
+    # not a GROUP BY over every chunk row; users with no points have
+    # nothing to budget.
     counts =
       Indexing.points_by_user()
       |> per_user.()
