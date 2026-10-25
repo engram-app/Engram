@@ -520,6 +520,109 @@ defmodule Engram.Auth.DeviceFlowTest do
     end
   end
 
+  # #2231: Disconnect and vault delete stamp `revoked_at = now`, which lands
+  # inside `RefreshLeeway`. Unless the leeway also requires a live family, the
+  # disconnected plugin's next refresh is read as a benign rotation retry and
+  # mints a fresh live token: the device comes back connected.
+  describe "a revoked device stays revoked inside the leeway (#2231)" do
+    defp linked_device do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+      {:ok, _} = DeviceFlow.authorize_device(auth.user_code, user, vault.id)
+      {:ok, initial} = DeviceFlow.exchange_device_code(auth.device_code)
+      {:ok, current} = DeviceFlow.refresh_access_token(initial.refresh_token)
+      family_id = Repo.one!(from(rt in DeviceRefreshToken, select: rt.family_id, limit: 1))
+      %{user: user, vault: vault, family_id: family_id, initial: initial, current: current}
+    end
+
+    defp live_tokens(family_id) do
+      Repo.aggregate(
+        from(rt in DeviceRefreshToken,
+          where: rt.family_id == ^family_id and is_nil(rt.revoked_at)
+        ),
+        :count
+      )
+    end
+
+    test "Disconnect: the current token is refused at once and mints nothing" do
+      d = linked_device()
+      :ok = Engram.Connections.revoke_device_family(d.user.id, d.family_id)
+
+      assert {:error, :invalid_refresh_token} =
+               DeviceFlow.refresh_access_token(d.current.refresh_token)
+
+      assert live_tokens(d.family_id) == 0
+      # The rows survive (Disconnect stays idempotent, the swap cooldown still
+      # sees the revoke): refusing a dead family deletes nothing.
+      assert :ok = Engram.Connections.revoke_device_family(d.user.id, d.family_id)
+      assert %DateTime{} = Engram.Connections.most_recent_device_revoke(d.user.id)
+    end
+
+    test "Disconnect: the just-rotated predecessor cannot resurrect the family" do
+      d = linked_device()
+      :ok = Engram.Connections.revoke_device_family(d.user.id, d.family_id)
+
+      assert {:error, :invalid_refresh_token} =
+               DeviceFlow.refresh_access_token(d.initial.refresh_token)
+
+      assert live_tokens(d.family_id) == 0
+    end
+
+    test "vault delete: the device's token is refused at once and mints nothing" do
+      d = linked_device()
+      :ok = Engram.Connections.revoke_by_vault(d.user.id, d.vault.id)
+
+      assert {:error, :invalid_refresh_token} =
+               DeviceFlow.refresh_access_token(d.current.refresh_token)
+
+      assert live_tokens(d.family_id) == 0
+    end
+
+    # logout-everywhere, password reset and account delete all route through
+    # `Accounts.revoke_all_user_tokens/1`; a plugin must not outlive them.
+    test "logout-everywhere revokes the device too" do
+      d = linked_device()
+      before = Engram.Connections.most_recent_device_revoke(d.user.id)
+      Engram.Accounts.revoke_all_user_tokens(d.user)
+
+      for raw <- [d.current.refresh_token, d.initial.refresh_token] do
+        assert {:error, :invalid_refresh_token} = DeviceFlow.refresh_access_token(raw)
+      end
+
+      assert live_tokens(d.family_id) == 0
+      # Not a Disconnect: it must not start the Free plan's device-swap cooldown.
+      assert Engram.Connections.most_recent_device_revoke(d.user.id) == before
+    end
+
+    for field <- [:deleted_at, :suspended_at] do
+      test "a #{field} user's device cannot refresh" do
+        d = linked_device()
+
+        d.user
+        |> Ecto.Changeset.change(%{unquote(field) => DateTime.utc_now()})
+        |> Repo.update!(skip_tenant_check: true)
+
+        assert {:error, :invalid_refresh_token} =
+                 DeviceFlow.refresh_access_token(d.current.refresh_token)
+
+        assert live_tokens(d.family_id) == 1
+      end
+    end
+
+    # The leeway's reason to exist must survive the fix: a plugin that lost the
+    # rotation response (or raced itself) retries the old token and recovers.
+    test "a rotation retry inside the leeway still succeeds, repeatedly" do
+      d = linked_device()
+
+      assert {:ok, r1} = DeviceFlow.refresh_access_token(d.initial.refresh_token)
+      assert {:ok, r2} = DeviceFlow.refresh_access_token(d.initial.refresh_token)
+      assert {:ok, _} = DeviceFlow.refresh_access_token(r1.refresh_token)
+      assert {:ok, _} = DeviceFlow.refresh_access_token(r2.refresh_token)
+      assert {:ok, _} = DeviceFlow.refresh_access_token(d.current.refresh_token)
+    end
+  end
+
   describe "plugin_connected onboarding hook" do
     test "records plugin_connected on successful exchange" do
       user = insert(:user)
