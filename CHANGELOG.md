@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.63.2](https://github.com/engram-app/Engram/compare/0.63.1...0.63.2) (2026-10-25)
+
+
+### Bug Fixes
+
+* **accounts:** account delete never waits on Qdrant ([#2188](https://github.com/engram-app/Engram/issues/2188)) ([ad73780](https://github.com/engram-app/Engram/commit/ad7378039eb119601ccaae169910b2d9fbf4dc7a))
+* **attachments:** blob lifecycle, chunked folder ops ([#2160](https://github.com/engram-app/Engram/issues/2160)) ([bbe0f83](https://github.com/engram-app/Engram/commit/bbe0f83a56091484f74b4ad385f73914aeecbf61))
+* **billing:** capture a reason for every cancel ([#2174](https://github.com/engram-app/Engram/issues/2174)) ([b5fb37f](https://github.com/engram-app/Engram/commit/b5fb37f140c8404871ac4a81e991708e6be37723))
+* **billing:** hide wallets on in-app checkouts ([#2202](https://github.com/engram-app/Engram/issues/2202)) ([735cdeb](https://github.com/engram-app/Engram/commit/735cdeb31731dad0234501b6471cd3086ac44dff))
+* blob GC re-checks live keys under lock ([#2181](https://github.com/engram-app/Engram/issues/2181)) ([4652c97](https://github.com/engram-app/Engram/commit/4652c97a8e7cf12ed18472a5c92f638a77e987cc))
+* **folders:** per-user rate limit on POST /api/folders ([#2162](https://github.com/engram-app/Engram/issues/2162)) ([80a060a](https://github.com/engram-app/Engram/commit/80a060a3a3fa97645bf0b48a7cdfee9a73d5bf16))
+* **index:** chunk stale-claim releases at 2,000 ([#2170](https://github.com/engram-app/Engram/issues/2170)) ([f4d019c](https://github.com/engram-app/Engram/commit/f4d019c5be8ab5cc4862bbf5aa440188fe9c80e0))
+* **indexing:** rebuild chunks when the index version is behind ([#2216](https://github.com/engram-app/Engram/issues/2216)) ([f2d4df1](https://github.com/engram-app/Engram/commit/f2d4df15f2b36a021413ae73c48db40658cd4807))
+* isolate every inactivity sweep, count it ([#2192](https://github.com/engram-app/Engram/issues/2192)) ([958adb7](https://github.com/engram-app/Engram/commit/958adb733f1858b6d050e2179b7185b4127dab5d))
+* **mcp:** feedback bundle (frontmatter, error codes, links, plugin floor, no-vault copy, bloat alert) ([#2175](https://github.com/engram-app/Engram/issues/2175)) ([1546a2f](https://github.com/engram-app/Engram/commit/1546a2f3dec2e184cad65dea8b09d10964f62810))
+* **oauth:** MCP OAuth hardening after the 10-24 triage ([#2185](https://github.com/engram-app/Engram/issues/2185)) ([76700f7](https://github.com/engram-app/Engram/commit/76700f76e9b188fcf8f928bce5c38b435ebf5c09))
+* **qdrant:** gate legacy indexes, layout-aware tenant filters ([#2200](https://github.com/engram-app/Engram/issues/2200)) ([d25603b](https://github.com/engram-app/Engram/commit/d25603ba311f25e613fbc8f9b4f23525c1116aca))
+* **test:** hold checkpoint in failed-append ack test ([#2167](https://github.com/engram-app/Engram/issues/2167)) ([52c2897](https://github.com/engram-app/Engram/commit/52c28974ce3d9fbd03f2c9f6e9b505046734852c)), closes [#2166](https://github.com/engram-app/Engram/issues/2166)
+
 ## [0.63.1](https://github.com/engram-app/Engram/compare/0.63.0...0.63.1) (2026-10-24)
 
 
