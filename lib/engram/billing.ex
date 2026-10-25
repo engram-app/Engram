@@ -613,8 +613,8 @@ defmodule Engram.Billing do
   card payment. Returns `%{payment_method: pm | nil, transactions: [...]}`.
   """
   def billing_history(user) do
-    with_paddle_subscription(user, fn sub ->
-      case Client.impl().list_transactions(sub.paddle_subscription_id) do
+    with_paddle_customer(user, fn customer_id ->
+      case Client.impl().list_transactions(customer_id) do
         {:ok, txns} ->
           {:ok,
            %{
@@ -630,13 +630,13 @@ defmodule Engram.Billing do
 
   @doc """
   Mint the hosted invoice URL for one of the user's transactions. Verifies the
-  transaction belongs to the user's subscription before minting (IDOR guard) —
+  transaction belongs to the user's Paddle customer before minting (IDOR guard):
   Paddle transaction IDs are otherwise enumerable across customers. Returns
   `{:error, :no_invoice}` when Paddle has no invoice for it ($0 transactions).
   """
   def transaction_invoice_url(user, transaction_id) do
-    with_paddle_subscription(user, fn sub ->
-      case Client.impl().list_transactions(sub.paddle_subscription_id) do
+    with_paddle_customer(user, fn customer_id ->
+      case Client.impl().list_transactions(customer_id) do
         {:ok, txns} ->
           case Enum.find(txns, &(&1["id"] == transaction_id)) do
             nil ->
@@ -723,6 +723,18 @@ defmodule Engram.Billing do
     case get_subscription(user) do
       %Subscription{paddle_subscription_id: sub_id} = sub when is_binary(sub_id) ->
         fun.(sub)
+
+      _ ->
+        {:error, :no_subscription}
+    end
+  end
+
+  # History and invoices follow the Paddle customer, so they survive a
+  # cancel-and-resubscribe (the subscription id changes, the customer does not).
+  defp with_paddle_customer(user, fun) do
+    case get_subscription(user) do
+      %Subscription{paddle_customer_id: customer_id} when is_binary(customer_id) ->
+        fun.(customer_id)
 
       _ ->
         {:error, :no_subscription}

@@ -247,7 +247,10 @@ defmodule Engram.Paddle.Client.HTTPTest do
 
             params ->
               assert params["per_page"] == "30"
-              assert params["subscription_id"] == "sub_dev"
+              assert params["customer_id"] == "ctm_dev"
+              refute Map.has_key?(params, "subscription_id")
+              # draft and ready are unpaid checkouts, not history.
+              assert params["status"] == "billed,paid,completed,past_due,canceled"
 
               %{
                 "data" => first,
@@ -265,7 +268,7 @@ defmodule Engram.Paddle.Client.HTTPTest do
         |> Plug.Conn.send_resp(200, Jason.encode!(body))
       end)
 
-      assert {:ok, txns} = HTTP.list_transactions("sub_dev")
+      assert {:ok, txns} = HTTP.list_transactions("ctm_dev")
       assert length(txns) == 31
       assert List.last(txns)["id"] == "txn_31"
     end

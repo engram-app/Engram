@@ -547,7 +547,12 @@ defmodule Engram.BillingTest do
   describe "subscription_detail/1" do
     test "normalizes the Paddle subscription for the user" do
       user = insert(:user)
-      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_dev",
+        paddle_customer_id: "ctm_dev"
+      )
 
       expect(Engram.Paddle.ClientMock, :get_subscription, fn "sub_dev" ->
         {:ok,
@@ -610,9 +615,14 @@ defmodule Engram.BillingTest do
   describe "billing_history/1" do
     test "normalizes transactions and extracts the card from the latest payment" do
       user = insert(:user)
-      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
 
-      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_dev",
+        paddle_customer_id: "ctm_dev"
+      )
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "ctm_dev" ->
         {:ok,
          [
            %{
@@ -661,9 +671,14 @@ defmodule Engram.BillingTest do
 
     test "flags zero-value and not-completed transactions as having no invoice" do
       user = insert(:user)
-      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
 
-      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_dev",
+        paddle_customer_id: "ctm_dev"
+      )
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "ctm_dev" ->
         {:ok,
          [
            Engram.Fixtures.paddle_transaction("txn_trial", %{grand_total: "0"}),
@@ -676,6 +691,29 @@ defmodule Engram.BillingTest do
 
       assert Enum.map(txns, &{&1.id, &1.invoice_available}) ==
                [{"txn_trial", false}, {"txn_due", false}, {"txn_paid", true}]
+    end
+
+    # History follows the Paddle customer, not the current subscription: a
+    # resubscribed user still sees the canceled subscription's transactions.
+    test "lists by customer, so a prior subscription's transactions show" do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_new",
+        paddle_customer_id: "ctm_dev"
+      )
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "ctm_dev" ->
+        {:ok,
+         [
+           Engram.Fixtures.paddle_transaction("txn_new"),
+           Engram.Fixtures.paddle_transaction("txn_old_sub")
+         ]}
+      end)
+
+      assert {:ok, %{transactions: txns}} = Billing.billing_history(user)
+      assert Enum.map(txns, & &1.id) == ["txn_new", "txn_old_sub"]
     end
 
     test "payment_method is nil when no card payment is present" do
@@ -697,9 +735,14 @@ defmodule Engram.BillingTest do
   describe "transaction_invoice_url/2" do
     test "returns the invoice URL when the transaction belongs to the user" do
       user = insert(:user)
-      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
 
-      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_dev",
+        paddle_customer_id: "ctm_dev"
+      )
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "ctm_dev" ->
         {:ok,
          [
            Engram.Fixtures.paddle_transaction("txn_2"),
@@ -717,9 +760,14 @@ defmodule Engram.BillingTest do
 
     test "rejects a transaction id that does not belong to the user (IDOR guard)" do
       user = insert(:user)
-      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
 
-      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_dev",
+        paddle_customer_id: "ctm_dev"
+      )
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "ctm_dev" ->
         {:ok, [Engram.Fixtures.paddle_transaction("txn_2")]}
       end)
 
@@ -731,9 +779,14 @@ defmodule Engram.BillingTest do
     # start) and answers the invoice fetch with 404 not_found.
     test "maps a Paddle 404 on the invoice fetch of an owned transaction to :no_invoice" do
       user = insert(:user)
-      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
 
-      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_dev",
+        paddle_customer_id: "ctm_dev"
+      )
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "ctm_dev" ->
         {:ok, [Engram.Fixtures.paddle_transaction("txn_trial")]}
       end)
 
@@ -757,9 +810,14 @@ defmodule Engram.BillingTest do
         ] do
       test "returns :no_invoice without calling Paddle for #{label}" do
         user = insert(:user)
-        insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
 
-        expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+        insert(:subscription,
+          user: user,
+          paddle_subscription_id: "sub_dev",
+          paddle_customer_id: "ctm_dev"
+        )
+
+        expect(Engram.Paddle.ClientMock, :list_transactions, fn "ctm_dev" ->
           {:ok, [Engram.Fixtures.paddle_transaction("txn_x", unquote(Macro.escape(attrs)))]}
         end)
 
@@ -769,9 +827,14 @@ defmodule Engram.BillingTest do
 
     test "a billed (manual collection) transaction fetches its invoice" do
       user = insert(:user)
-      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
 
-      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_dev",
+        paddle_customer_id: "ctm_dev"
+      )
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "ctm_dev" ->
         {:ok, [Engram.Fixtures.paddle_transaction("txn_b", %{status: "billed"})]}
       end)
 
@@ -784,9 +847,14 @@ defmodule Engram.BillingTest do
 
     test "a Paddle 404 on the transaction list stays a Paddle error, not :no_invoice" do
       user = insert(:user)
-      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
 
-      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_dev",
+        paddle_customer_id: "ctm_dev"
+      )
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "ctm_dev" ->
         {:error, {:paddle_error, 404, %{}}}
       end)
 
@@ -860,7 +928,12 @@ defmodule Engram.BillingTest do
   describe "update_payment_transaction/1" do
     test "returns the Paddle transaction id for the in-app overlay" do
       user = insert(:user)
-      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_dev",
+        paddle_customer_id: "ctm_dev"
+      )
 
       expect(Engram.Paddle.ClientMock, :get_update_payment_transaction, fn "sub_dev" ->
         {:ok, %{"id" => "txn_update_1", "checkout" => %{"url" => "https://pay.paddle.com/x"}}}

@@ -207,7 +207,11 @@ defmodule EngramWeb.BillingControllerTest do
     @describetag :session_auth
 
     test "returns normalized detail for a subscribed user", %{conn: conn, user: user} do
-      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_dev",
+        paddle_customer_id: "ctm_dev"
+      )
 
       expect(Engram.Paddle.ClientMock, :get_subscription, fn "sub_dev" ->
         {:ok,
@@ -242,9 +246,13 @@ defmodule EngramWeb.BillingControllerTest do
     @describetag :session_auth
 
     test "returns history and the latest card", %{conn: conn, user: user} do
-      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_dev",
+        paddle_customer_id: "ctm_dev"
+      )
 
-      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "ctm_dev" ->
         {:ok,
          [
            %{
@@ -287,9 +295,13 @@ defmodule EngramWeb.BillingControllerTest do
     @describetag :session_auth
 
     test "returns the invoice URL for the user's own transaction", %{conn: conn, user: user} do
-      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_dev",
+        paddle_customer_id: "ctm_dev"
+      )
 
-      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "ctm_dev" ->
         {:ok, [Engram.Fixtures.paddle_transaction("txn_2")]}
       end)
 
@@ -302,9 +314,13 @@ defmodule EngramWeb.BillingControllerTest do
     end
 
     test "returns 404 for a transaction not belonging to the user", %{conn: conn, user: user} do
-      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_dev",
+        paddle_customer_id: "ctm_dev"
+      )
 
-      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "ctm_dev" ->
         {:ok, [Engram.Fixtures.paddle_transaction("txn_2")]}
       end)
 
@@ -317,9 +333,13 @@ defmodule EngramWeb.BillingControllerTest do
     # level so the billing-error page alert stays quiet.
     test "Paddle 404 on the invoice fetch returns 404 no invoice, not a 502",
          %{conn: conn, user: user} do
-      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_dev",
+        paddle_customer_id: "ctm_dev"
+      )
 
-      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "ctm_dev" ->
         {:ok, [Engram.Fixtures.paddle_transaction("txn_trial")]}
       end)
 
@@ -362,9 +382,13 @@ defmodule EngramWeb.BillingControllerTest do
 
     test "a Paddle 5xx on the invoice fetch still returns 502 and logs at error",
          %{conn: conn, user: user} do
-      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_dev",
+        paddle_customer_id: "ctm_dev"
+      )
 
-      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "ctm_dev" ->
         {:ok, [Engram.Fixtures.paddle_transaction("txn_2")]}
       end)
 
@@ -386,7 +410,11 @@ defmodule EngramWeb.BillingControllerTest do
     @describetag :session_auth
 
     test "returns the transaction id for the overlay", %{conn: conn, user: user} do
-      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_dev",
+        paddle_customer_id: "ctm_dev"
+      )
 
       expect(Engram.Paddle.ClientMock, :get_update_payment_transaction, fn "sub_dev" ->
         {:ok, %{"id" => "txn_update_1"}}
