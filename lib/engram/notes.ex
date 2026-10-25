@@ -2426,7 +2426,7 @@ defmodule Engram.Notes do
   # constraint, so a rare race (another live note grabbed the target path
   # between the lookup and this update) surfaces as `{:error, changeset}`
   # instead of raising and aborting the tenant transaction.
-  defp move_note(prior, base_attrs, user, sanitized_path, folder, actor, recording) do
+  defp move_note(prior, base_attrs, user, sanitized_path, folder, actor, recording, db_opts \\ []) do
     was_tombstoned = not is_nil(prior.deleted_at)
 
     with {:ok, crdt} <-
@@ -2484,7 +2484,7 @@ defmodule Engram.Notes do
         #
         # `put_change(:deleted_at, nil)` means this can also resurrect a
         # tombstone, so the fence carries the whole pre-image, not just the id.
-        case fenced_update(snapshot_fenced(changeset, prior)) do
+        case fenced_update(snapshot_fenced(changeset, prior), db_opts) do
           {:ok, updated} ->
             _ =
               if was_tombstoned do
@@ -2930,7 +2930,7 @@ defmodule Engram.Notes do
   # read or reports a conflict. The UPDATE itself succeeded (it matched no
   # rows), so there is no aborted-statement state and the enclosing transaction
   # stays usable, including on the `mode: :savepoint` batch path.
-  defp fenced_update(changeset, db_opts \\ []) do
+  defp fenced_update(changeset, db_opts) do
     Repo.update(changeset, db_opts)
   rescue
     Ecto.StaleEntryError -> :stale_snapshot
@@ -6858,19 +6858,51 @@ defmodule Engram.Notes do
   def restore_notes(user, vault, op_id, notes) do
     user = Crypto.fresh_user(user)
 
-    with :ok <- claim_cascade(user, vault, Enum.map(notes, &{&1.path, &1.id}), MapSet.new()) do
+    with {:ok, claimed, taken} <- claim_restore_paths(user, vault, Enum.sort_by(notes, & &1.path)) do
       {restored, skipped} =
-        notes
-        |> Enum.chunk_every(@restore_chunk)
+        claimed
+        |> Enum.chunk_every(restore_chunk_size())
         |> Enum.reduce({[], []}, fn chunk, {restored, skipped} ->
           {r, s} = restore_chunk(user, vault, op_id, chunk)
           {restored ++ r, skipped ++ s}
         end)
 
-      {:ok, %{restored: restored, skipped: skipped}}
+      {:ok, %{restored: restored, skipped: Enum.map(taken, &path_taken/1) ++ skipped}}
     end
   end
 
+  # `:restore_chunk` lowers it (tests).
+  defp restore_chunk_size, do: Application.get_env(:engram, :restore_chunk, @restore_chunk)
+
+  defp path_taken(note), do: %{path: note.path, kind: "note", reason: :path_taken}
+
+  # One batch claim, outside any transaction. The batch is refused whole when
+  # ANY path is held in the index by another note (a map-only collision the
+  # plan's row check cannot see), so on that refusal claim one by one and skip
+  # the held paths: one stale index entry must not fail the whole undo. Returns
+  # `{:ok, claimed, taken}`.
+  defp claim_restore_paths(user, vault, notes) do
+    case claim_cascade(user, vault, Enum.map(notes, &{&1.path, &1.id}), MapSet.new()) do
+      :ok ->
+        {:ok, notes, []}
+
+      {:error, :conflict} ->
+        Enum.reduce_while(notes, {:ok, [], []}, fn note, {:ok, claimed, taken} ->
+          case claim_cascade(user, vault, [{note.path, note.id}], MapSet.new()) do
+            :ok -> {:cont, {:ok, claimed ++ [note], taken}}
+            {:error, :conflict} -> {:cont, {:ok, claimed, taken ++ [note]}}
+            {:error, _} = err -> {:halt, err}
+          end
+        end)
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # One transaction per chunk, and every row in its own savepoint
+  # (`restore_one/2`), so a path a live note took since the plan is a skip,
+  # not an aborted chunk. Broadcasts go out after the chunk commits.
   defp restore_chunk(user, vault, op_id, chunk) do
     ids = Enum.map(chunk, & &1.id)
 
@@ -6882,22 +6914,25 @@ defmodule Engram.Notes do
               not is_nil(n.deleted_at)
         )
         |> Repo.all()
-        |> Enum.map(&restore_one(user, &1))
+        |> Map.new(&{&1.id, restore_one(user, &1)})
       end)
 
-    restored = for {:ok, note} <- results, do: note
-    gone = MapSet.new(restored, & &1.id)
-
-    # After commit, like every other upsert broadcast.
+    restored = for {_id, {:ok, note}} <- results, do: note
     Enum.each(restored, &(:ok = broadcast_change(user, vault.id, "upsert", &1.path, &1, [])))
 
-    {restored,
-     for(
-       n <- chunk,
-       not MapSet.member?(gone, n.id),
-       do: %{path: n.path, kind: "note", reason: :changed}
-     )}
+    skipped =
+      for n <- chunk,
+          reason = skip_reason(Map.get(results, n.id)),
+          reason != nil,
+          do: %{path: n.path, kind: "note", reason: reason}
+
+    {restored, skipped}
   end
+
+  # Gone from the op since the plan (restored or deleted again elsewhere).
+  defp skip_reason(nil), do: :changed
+  defp skip_reason({:ok, _note}), do: nil
+  defp skip_reason({:skip, reason}), do: reason
 
   defp restore_one(user, tomb) do
     prior = decrypt_or_raise!(tomb, user)
@@ -6912,7 +6947,12 @@ defmodule Engram.Notes do
 
     folder = Helpers.extract_folder(prior.path)
 
-    case move_note(prior, base_attrs, user, prior.path, folder, "restore", false) do
+    # `mode: :savepoint`: a unique violation (a live note took the path after
+    # the plan) rolls back this row only. Without it Postgres aborts the whole
+    # chunk transaction and the next statement raises 25P02.
+    case move_note(prior, base_attrs, user, prior.path, folder, "restore", false,
+           mode: :savepoint
+         ) do
       {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
         # The delete cleared embed_hash and dropped the points, so this
         # re-embeds. Joins the transaction: a rolled-back chunk queues nothing.
@@ -6924,11 +6964,15 @@ defmodule Engram.Notes do
 
         {:ok, decrypt_or_raise!(updated, user)}
 
-      {:error, _} ->
-        :skipped
+      {:error, %Ecto.Changeset{}} ->
+        {:skip, :path_taken}
+
+      # The CRDT merge or re-encrypt refused the row; it stays in trash.
+      {:error, _reason} ->
+        {:skip, :unreadable}
 
       :stale_snapshot ->
-        :skipped
+        {:skip, :changed}
     end
   end
 

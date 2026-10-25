@@ -19,6 +19,10 @@ defmodule Engram.MCP.Handlers do
   # `vaults` is pre-scoped by the controller to the set THIS credential can use
   # (OAuth binding + API-key restrictions), so we never advertise a vault the
   # caller can't actually read or write (#729).
+  @restore_retry "The restore stopped partway. What it brought back is kept. " <>
+                   "restore_deleted is safe to call again with the same op_id: it only " <>
+                   "restores what is still in trash."
+
   def handle("list_vaults", _user, vaults, _args) when is_list(vaults) do
     # Structured as well as rendered (#1660). The empty case still carries
     # `vaults: []` rather than dropping the key — the outputSchema requires it,
@@ -717,7 +721,7 @@ defmodule Engram.MCP.Handlers do
   end
 
   def handle("restore_deleted", user, vault, args) do
-    case Engram.Folders.restore_op(user, vault, args["op_id"] || "") do
+    case restore_op(user, vault, args["op_id"] || "") do
       {:ok, %{notes: n, folders: f, attachments: a, skipped: skipped}} ->
         skipped = Enum.map(skipped, &wire_skip/1)
 
@@ -744,7 +748,7 @@ defmodule Engram.MCP.Handlers do
         {:error, "#{key}: restoring would pass your plan's limit of #{limit}."}
 
       {:error, reason} ->
-        log_and_error("restore_deleted", reason, "Could not restore that delete")
+        log_and_error("restore_deleted", reason, @restore_retry)
     end
   end
 
@@ -1893,6 +1897,16 @@ defmodule Engram.MCP.Handlers do
 
   defp skip_label(%{"path" => path, "reason" => reason}), do: "#{path} (#{reason})"
   defp skip_label(%{"kind" => kind, "reason" => reason}), do: "a #{kind} (#{reason})"
+
+  # Restore commits chunk by chunk outside the request transaction, so a raise
+  # midway keeps the chunks before it (#609). Turn it into an answer the agent
+  # can act on (retry) instead of the controller's generic trapped error. The
+  # raise is logged with its kind, never inspected into the reply.
+  defp restore_op(user, vault, op_id) do
+    Engram.Folders.restore_op(user, vault, op_id)
+  rescue
+    e -> {:error, e}
+  end
 
   defp log_and_error(op, reason, message) do
     require Logger

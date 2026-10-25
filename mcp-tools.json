@@ -1093,7 +1093,7 @@
         "readOnlyHint": false,
         "title": "Delete Note"
       },
-      "description": "Delete one note by path: it moves to trash, restorable with restore_deleted for 7 days on Free and 30 on paid plans (the result says until when). The deletion syncs to all connected Obsidian devices. Deleting a path that holds no note succeeds and reports deleted: false. To remove a whole folder use delete_folder. To move a note instead use rename_note. For an image, PDF, or other binary file use delete_attachment.",
+      "description": "Delete one note by path: it moves to trash, restorable with restore_deleted for 7 days on Free and 30 on paid plans, following your plan at the time (a downgrade shortens it; the result says until when). The deletion syncs to all connected Obsidian devices. Deleting a path that holds no note succeeds and reports deleted: false. To remove a whole folder use delete_folder. To move a note instead use rename_note. For an image, PDF, or other binary file use delete_attachment.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1129,7 +1129,7 @@
             "type": "string"
           },
           "restorable_until": {
-            "description": "ISO 8601 time this delete stops being restorable",
+            "description": "ISO 8601 time this delete stops being restorable on your current plan; a plan change moves it",
             "type": [
               "string",
               "null"
@@ -1154,7 +1154,7 @@
         "readOnlyHint": false,
         "title": "Delete Folder"
       },
-      "description": "Delete a folder. Empty-only by default: if the folder contains notes or attachments, the call is refused and reports the counts. Pass recursive: true to delete the folder and everything under it. Everything removed moves to trash, restorable with restore_deleted for 7 days on Free and 30 on paid plans (the result says until when). Syncs to all connected devices.",
+      "description": "Delete a folder. Empty-only by default: if the folder contains notes or attachments, the call is refused and reports the counts. Pass recursive: true to delete the folder and everything under it. Everything removed moves to trash, restorable with restore_deleted for 7 days on Free and 30 on paid plans, following your plan at the time (a downgrade shortens it; the result says until when). Syncs to all connected devices.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1198,7 +1198,7 @@
             "type": "integer"
           },
           "restorable_until": {
-            "description": "ISO 8601 time this delete stops being restorable",
+            "description": "ISO 8601 time this delete stops being restorable on your current plan; a plan change moves it",
             "type": [
               "string",
               "null"
@@ -1273,7 +1273,7 @@
         "readOnlyHint": false,
         "title": "Delete Attachment"
       },
-      "description": "Delete a single attachment (image, PDF, or other binary file) by path: it moves to trash, restorable with restore_deleted for 7 days on Free and 30 on paid plans (the result says until when). Syncs the delete to all connected Obsidian devices. Deleting a path with no attachment succeeds and reports deleted: false. For notes use delete_note; to remove a whole folder use delete_folder.",
+      "description": "Delete a single attachment (image, PDF, or other binary file) by path: it moves to trash, restorable with restore_deleted for 7 days on Free and 30 on paid plans, following your plan at the time (a downgrade shortens it; the result says until when). Syncs the delete to all connected Obsidian devices. Deleting a path with no attachment succeeds and reports deleted: false. For notes use delete_note; to remove a whole folder use delete_folder.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1308,7 +1308,7 @@
             "type": "string"
           },
           "restorable_until": {
-            "description": "ISO 8601 time this delete stops being restorable",
+            "description": "ISO 8601 time this delete stops being restorable on your current plan; a plan change moves it",
             "type": [
               "string",
               "null"
@@ -1367,7 +1367,7 @@
             "type": "integer"
           },
           "skipped": {
-            "description": "Items not restored and why (path_taken, expired, unavailable)",
+            "description": "Items not restored and why: path_taken (another file holds the path), expired (past trash retention), unavailable (attachment bytes already reaped), changed (the item changed since the delete), unreadable",
             "items": {
               "properties": {
                 "id": {

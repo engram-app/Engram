@@ -55,7 +55,8 @@ defmodule Engram.MCP.Tools do
                   "#{Engram.Billing.LimitKeys.default_for(:trash_retention_days, :free)} days on " <>
                   "Free and " <>
                   "#{Engram.Billing.LimitKeys.default_for(:trash_retention_days, :pro)} on paid " <>
-                  "plans (the result says until when)."
+                  "plans, following your plan at the time (a downgrade shortens it; the result " <>
+                  "says until when)."
 
   @undo_properties %{
     "delete_op_id" => %{
@@ -64,7 +65,9 @@ defmodule Engram.MCP.Tools do
     },
     "restorable_until" => %{
       "type" => ["string", "null"],
-      "description" => "ISO 8601 time this delete stops being restorable"
+      "description" =>
+        "ISO 8601 time this delete stops being restorable on your current plan; a plan " <>
+          "change moves it"
     }
   }
 
@@ -1519,7 +1522,10 @@ defmodule Engram.MCP.Tools do
           "attachments" => %{"type" => "integer", "description" => "Attachments restored"},
           "skipped" => %{
             "type" => "array",
-            "description" => "Items not restored and why (path_taken, expired, unavailable)",
+            "description" =>
+              "Items not restored and why: path_taken (another file holds the path), " <>
+                "expired (past trash retention), unavailable (attachment bytes already " <>
+                "reaped), changed (the item changed since the delete), unreadable",
             "items" => %{
               "type" => "object",
               "properties" => %{

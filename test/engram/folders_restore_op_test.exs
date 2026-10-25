@@ -211,6 +211,71 @@ defmodule Engram.FoldersRestoreOpTest do
     assert note_row(note.id).deleted_at
   end
 
+  # The plan saw the path free; a live note took it before the row write. The
+  # unique violation must be a per-row skip (savepoint), not an aborted chunk.
+  test "a path taken mid-restore is a clean skip, the rest still restores", %{
+    user: user,
+    vault: vault
+  } do
+    a = put_note(user, vault, "a.md", "old a")
+    b = put_note(user, vault, "b.md", "old b")
+    op = Ecto.UUID.generate()
+    :deleted = Notes.delete_note_reporting(user, vault, "a.md", op_id: op)
+    :deleted = Notes.delete_note_reporting(user, vault, "b.md", op_id: op)
+
+    # Fires on the restore chunk's own load (the only op-id query with an
+    # id list), i.e. after the plan and the index claim.
+    test_pid = self()
+    handler = {__MODULE__, make_ref()}
+    fired = :counters.new(1, [])
+
+    :telemetry.attach(
+      handler,
+      [:engram, :repo, :query],
+      fn _, _, meta, _ ->
+        q = meta[:query] || ""
+
+        if self() == test_pid and q =~ "delete_op_id" and q =~ "ANY(" and
+             :counters.get(fired, 1) == 0 do
+          :counters.add(fired, 1, 1)
+          put_note(user, vault, "a.md", "a squatter")
+        end
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    assert {:ok, %{notes: 1, skipped: skipped}} = Folders.restore_op(user, vault, op)
+    :telemetry.detach(handler)
+
+    assert :counters.get(fired, 1) == 1
+    assert %{path: "a.md", kind: "note", reason: :path_taken} in skipped
+    assert note_row(a.id).deleted_at
+    assert is_nil(note_row(b.id).deleted_at)
+    assert {:ok, %{content: "a squatter"}} = Notes.get_note(user, vault, "a.md")
+  end
+
+  # The index map can hold a path the rows do not (a stale entry), which the
+  # plan's row check cannot see. That row is skipped and reported; the rest
+  # of the op, folders included, still comes back.
+  test "a path the vault index holds for another note is skipped, not fatal", %{
+    user: user,
+    vault: vault
+  } do
+    a = put_note(user, vault, "Docs/a.md")
+    b = put_note(user, vault, "Docs/b.md")
+    squatter = put_note(user, vault, "elsewhere.md")
+    op = Ecto.UUID.generate()
+    {:ok, _} = Folders.delete(user, vault, "Docs", recursive: true, op_id: op)
+    :ok = Engram.Notes.Identity.claim(user, vault.id, [{"Docs/a.md", squatter.id}])
+
+    assert {:ok, %{notes: 1, skipped: skipped}} = Folders.restore_op(user, vault, op)
+    assert %{path: "Docs/a.md", kind: "note", reason: :path_taken} in skipped
+    assert note_row(a.id).deleted_at
+    assert is_nil(note_row(b.id).deleted_at)
+  end
+
   test "a malformed op id is refused", %{user: user, vault: vault} do
     assert {:error, :invalid_op_id} = Folders.restore_op(user, vault, "not-a-uuid")
   end
