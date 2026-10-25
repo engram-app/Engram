@@ -820,15 +820,21 @@ defmodule Engram.Indexing do
   def points_budget_ok?(user, note_id, planned_points, overshoot_pct \\ 0) do
     case Engram.Billing.effective_limit(user, :index_points_cap) do
       cap when is_integer(cap) and cap >= 0 ->
-        # All the user's points (the counters) minus this note's rows (at
-        # most its point cap).
-        {:ok, {all, own}} =
-          Repo.with_tenant(user.id, fn ->
-            {point_count(user.id),
-             Repo.one(from(o in Chunk, where: o.note_id == ^note_id, select: count()))}
-          end)
+        # All the user's points minus this note's rows (at most its point
+        # cap). The counters first; a refusal floors the note and drops its
+        # dense vectors, so it is re-checked on the real chunk count, which
+        # only a user at the cap pays.
+        fits? = fn opts ->
+          {:ok, {all, own}} =
+            Repo.with_tenant(user.id, fn ->
+              {point_count(user.id, opts),
+               Repo.one(from(o in Chunk, where: o.note_id == ^note_id, select: count()))}
+            end)
 
-        all - own + planned_points <= cap + div(cap * overshoot_pct, 100)
+          all - own + planned_points <= cap + div(cap * overshoot_pct, 100)
+        end
+
+        fits?.([]) or fits?.(exact: true)
 
       # nil / :unlimited / a negative sentinel: no ceiling.
       _ ->
