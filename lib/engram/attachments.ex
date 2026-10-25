@@ -611,6 +611,9 @@ defmodule Engram.Attachments do
   and `Engram.Workers.AttachmentBlobGC` reaps it after a grace window, so a
   delete that rolls back (or is undone) can never leave a live row without
   bytes.
+
+  `op_id:` stamps the tombstone with that undo id (#609); see
+  `Engram.Folders.restore_op/3`.
   """
   @spec delete_attachment(Engram.Accounts.User.t(), map(), String.t(), keyword()) ::
           :ok | {:error, term()}
@@ -658,7 +661,14 @@ defmodule Engram.Attachments do
               seq = Engram.Vaults.next_seq!(vault.id)
 
               {count, _} =
-                Repo.update_all(live, set: [deleted_at: now, updated_at: now, seq: seq])
+                Repo.update_all(live,
+                  set: [
+                    deleted_at: now,
+                    updated_at: now,
+                    seq: seq,
+                    delete_op_id: Keyword.get(opts, :op_id)
+                  ]
+                )
 
               if count > 0, do: :ok = evict_counts(user.id)
               count
@@ -1380,14 +1390,14 @@ defmodule Engram.Attachments do
   """
   # No error branch: `batch_delete/3` is hard-matched below, so this either
   # returns a count or raises.
-  @spec delete_scanned_paths(map(), map(), [String.t()]) :: {:ok, non_neg_integer()}
-  def delete_scanned_paths(user, vault, paths) do
+  @spec delete_scanned_paths(map(), map(), [String.t()], keyword()) :: {:ok, non_neg_integer()}
+  def delete_scanned_paths(user, vault, paths, opts \\ []) do
     deleted =
       paths
       |> Enum.sort()
       |> Enum.chunk_every(delete_chunk_size())
       |> Enum.reduce(0, fn chunk, acc ->
-        {:ok, %{deleted: n}} = batch_delete(user, vault, chunk)
+        {:ok, %{deleted: n}} = batch_delete(user, vault, chunk, opts)
         acc + n
       end)
 
@@ -1407,16 +1417,19 @@ defmodule Engram.Attachments do
   `Engram.Workers.AttachmentBlobGC` (#2159).
 
   Capped at 500 paths per batch (`{:error, :batch_too_large}` above that).
+  `op_id:` stamps every row it deletes with that undo id (#609).
   """
-  @spec batch_delete(map(), map(), [String.t()]) ::
+  @spec batch_delete(map(), map(), [String.t()], keyword()) ::
           {:ok, %{deleted: non_neg_integer()}} | {:error, :batch_too_large}
-  def batch_delete(_user, _vault, []), do: {:ok, %{deleted: 0}}
+  def batch_delete(user, vault, paths, opts \\ [])
 
-  def batch_delete(_user, _vault, paths)
+  def batch_delete(_user, _vault, [], _opts), do: {:ok, %{deleted: 0}}
+
+  def batch_delete(_user, _vault, paths, _opts)
       when is_list(paths) and length(paths) > @max_batch_entries,
       do: {:error, :batch_too_large}
 
-  def batch_delete(user, vault, paths) when is_list(paths) do
+  def batch_delete(user, vault, paths, opts) when is_list(paths) do
     user = fresh_user(user)
 
     case Crypto.dek_filter_key(user) do
@@ -1430,7 +1443,7 @@ defmodule Engram.Attachments do
         # old per-path independent transactions — and callers see the raise,
         # never a fake `deleted: 0` success.
         {:ok, {deleted_ids, deleted_hmacs}} =
-          batch_soft_delete_rows(user, vault, Map.values(hmac_by_path))
+          batch_soft_delete_rows(user, vault, Map.values(hmac_by_path), opts[:op_id])
 
         # One broadcast per deleted path in input order. No blob delete
         # (#2159): this can run nested in a folder cascade that still rolls
@@ -1463,9 +1476,9 @@ defmodule Engram.Attachments do
   # its OWN seq (the `(seq, id)` keyset feed requires per-row-distinct,
   # monotonic seqs — N rows must never share one). Returns
   # `{:ok, {deleted_ids, deleted_path_hmacs}}` for the actually-deleted rows.
-  defp batch_soft_delete_rows(_user, _vault, []), do: {:ok, {[], []}}
+  defp batch_soft_delete_rows(_user, _vault, [], _op_id), do: {:ok, {[], []}}
 
-  defp batch_soft_delete_rows(user, vault, hmacs) do
+  defp batch_soft_delete_rows(user, vault, hmacs, op_id) do
     now = DateTime.utc_now(:second)
 
     Repo.with_tenant(user.id, fn ->
@@ -1490,6 +1503,16 @@ defmodule Engram.Attachments do
 
         returned = BulkUpdate.stamp_seqs!(id_seqs, :delete, now)
         deleted_ids = Enum.map(returned, &elem(&1, 0))
+
+        # A second statement rather than a column in `stamp_seqs!`'s VALUES:
+        # same transaction, and it keeps that file's pinned Sobelow lines put.
+        if op_id do
+          {_n, _} =
+            Repo.update_all(from(a in Attachment, where: a.id in ^deleted_ids),
+              set: [delete_op_id: op_id]
+            )
+        end
+
         deleted_hmacs = returned |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
         {deleted_ids, deleted_hmacs}
       end
@@ -1581,7 +1604,7 @@ defmodule Engram.Attachments do
                 ),
             select: a.id
           ),
-          set: [deleted_at: nil, blob_gc_claimed_at: nil, updated_at: now]
+          set: [deleted_at: nil, delete_op_id: nil, blob_gc_claimed_at: nil, updated_at: now]
         )
 
       # Now live, so `stamp_seqs!`'s live-row guard admits them. Unused seqs

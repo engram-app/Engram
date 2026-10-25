@@ -182,6 +182,9 @@ defmodule Engram.Folders do
 
   Returns `{:ok, %{notes: n, attachments: a}}` where n/a are the content rows
   removed (0/0 when only a marker was cleared, or the folder did not exist).
+
+  `op_id:` stamps every row this call deletes with that undo id (#609); see
+  `restore_op/3`.
   """
   @spec delete(map(), map(), String.t(), keyword()) ::
           {:ok, counts()} | {:error, {:not_empty, counts()} | term()}
@@ -243,7 +246,10 @@ defmodule Engram.Folders do
 
           true ->
             log_orphaned_attachments(user, vault, folder, unreadable)
-            {:ok, %{notes: n, attachments: a}} = delete_scanned(user, vault, note_rows, att_paths)
+
+            {:ok, %{notes: n, attachments: a}} =
+              delete_scanned(user, vault, note_rows, att_paths, opts)
+
             {:ok, %{notes: n, attachments: a}}
         end
       end
@@ -258,20 +264,21 @@ defmodule Engram.Folders do
   # both from what was ACTUALLY deleted, not the scan. Since #1346 the
   # membership fence can skip a row that moved in the gap, so the scan count
   # is aspirational.
-  defp delete_scanned(user, vault, note_rows, att_paths) do
-    {:ok, attachments} = Attachments.delete_scanned_paths(user, vault, att_paths)
+  defp delete_scanned(user, vault, note_rows, att_paths, opts) do
+    op = Keyword.take(opts, [:op_id])
+    {:ok, attachments} = Attachments.delete_scanned_paths(user, vault, att_paths, op)
     {content, markers} = Enum.split_with(note_rows, &(&1.kind == "note"))
 
-    %{deleted: d1, notes: n} = delete_note_chunks(user, vault, content)
-    %{deleted: d2} = delete_note_chunks(user, vault, markers)
+    %{deleted: d1, notes: n} = delete_note_chunks(user, vault, content, op)
+    %{deleted: d2} = delete_note_chunks(user, vault, markers, op)
     {:ok, %{notes: n, deleted: d1 + d2, attachments: attachments}}
   end
 
-  defp delete_note_chunks(user, vault, rows) do
+  defp delete_note_chunks(user, vault, rows, op) do
     rows
     |> Enum.chunk_every(Attachments.delete_chunk_size())
     |> Enum.reduce(%{deleted: 0, notes: 0}, fn chunk, acc ->
-      {:ok, %{deleted: d, notes: n}} = Notes.delete_scanned(user, vault, chunk)
+      {:ok, %{deleted: d, notes: n}} = Notes.delete_scanned(user, vault, chunk, op)
       %{deleted: acc.deleted + d, notes: acc.notes + n}
     end)
   end
@@ -297,12 +304,16 @@ defmodule Engram.Folders do
     :ok
   end
 
-  @spec batch_delete(map(), map(), [String.t()]) :: {:ok, counts()} | {:error, term()}
-  def batch_delete(_user, _vault, []), do: {:ok, %{notes: 0, attachments: 0}}
+  @spec batch_delete(map(), map(), [String.t()], keyword()) ::
+          {:ok, counts()} | {:error, term()}
+  def batch_delete(user, vault, marker_ids, opts \\ [])
 
-  # Same chunked, resumable cascade as `delete/4` (#2159). `notes` here is
-  # every notes row removed, markers included (the batch endpoint's contract).
-  def batch_delete(user, vault, marker_ids) do
+  def batch_delete(_user, _vault, [], _opts), do: {:ok, %{notes: 0, attachments: 0}}
+
+  # Same chunked, resumable cascade as `delete/4` (#2159), `op_id:` included.
+  # `notes` here is every notes row removed, markers included (the batch
+  # endpoint's contract).
+  def batch_delete(user, vault, marker_ids, opts) do
     user = Crypto.fresh_user(user)
 
     with {:ok, folders} <- Notes.resolve_folder_markers(user, vault, marker_ids),
@@ -310,7 +321,7 @@ defmodule Engram.Folders do
          {:ok, note_rows} <- Notes.scan_folders(user, vault, folders),
          {:ok, att_paths} <- attachment_paths_under(user, vault, folders) do
       {:ok, %{deleted: notes, attachments: atts}} =
-        delete_scanned(user, vault, note_rows, att_paths)
+        delete_scanned(user, vault, note_rows, att_paths, opts)
 
       {:ok, %{notes: notes, attachments: atts}}
     end

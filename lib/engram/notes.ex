@@ -628,7 +628,12 @@ defmodule Engram.Notes do
         {_, rows} =
           from(n in scoped(user, vault), where: n.id in ^dead_ids, select: n)
           |> Repo.update_all(
-            set: [deleted_at: nil, updated_at: DateTime.utc_now(), seq: seq_fun.()]
+            set: [
+              deleted_at: nil,
+              delete_op_id: nil,
+              updated_at: DateTime.utc_now(),
+              seq: seq_fun.()
+            ]
           )
 
         rows
@@ -724,7 +729,11 @@ defmodule Engram.Notes do
 
       {:ok, %Note{} = soft_deleted} ->
         soft_deleted
-        |> Ecto.Changeset.change(deleted_at: nil, updated_at: DateTime.utc_now())
+        |> Ecto.Changeset.change(
+          deleted_at: nil,
+          delete_op_id: nil,
+          updated_at: DateTime.utc_now()
+        )
         |> Ecto.Changeset.put_change(:seq, seq_fun.())
         |> Repo.update()
         |> case do
@@ -2458,6 +2467,9 @@ defmodule Engram.Notes do
           |> Note.changeset(Map.put(phase_b, :version, prior.version + 1))
           |> Ecto.Changeset.put_change(:seq, seq)
           |> Ecto.Changeset.put_change(:deleted_at, nil)
+          # Any undelete leaves the op that deleted it (#609), so a later
+          # restore of that op cannot reach a row that has lived since.
+          |> Ecto.Changeset.put_change(:delete_op_id, nil)
 
         # Same snapshot fence as do_rewrite_note, for the same reason: this
         # merges CRDT state from `prior.crdt_state` and then writes both
@@ -4216,6 +4228,8 @@ defmodule Engram.Notes do
     * `:origin_device_id` — opaque device identity of the caller (from the
       X-Device-Id header), stamped into the `note_changed` broadcast so the
       originating device can drop its own echo (#970).
+    * `:op_id` — undo id stamped on the tombstone (#609), restored by
+      `Engram.Folders.restore_op/3`.
   """
   @spec delete_note(Engram.Accounts.User.t(), map(), String.t(), keyword()) :: :ok
   def delete_note(user, vault, path, opts \\ []) do
@@ -4260,7 +4274,8 @@ defmodule Engram.Notes do
           updated_at: now,
           seq: seq,
           embed_hash: nil,
-          dense_indexed_hash: nil
+          dense_indexed_hash: nil,
+          delete_op_id: Keyword.get(opts, :op_id)
         ]
       )
 
@@ -6634,11 +6649,14 @@ defmodule Engram.Notes do
   caller never named. `:deleted` counts every row removed (notes + markers),
   `:notes` only the content notes — both measured from what the write actually
   touched, which is what the side effects here are driven from.
+
+  `op_id:` stamps every row this call deletes with that undo id (#609, see
+  `Engram.Folders.restore_op/3`).
   """
   # No error branch: every failure inside is a raise, not a tuple.
-  @spec delete_scanned(map(), map(), [map()]) ::
+  @spec delete_scanned(map(), map(), [map()], keyword()) ::
           {:ok, %{deleted: non_neg_integer(), notes: non_neg_integer()}}
-  def delete_scanned(user, vault, matches) do
+  def delete_scanned(user, vault, matches, opts \\ []) do
     # `Links.basename_hmac/2` below needs the DEK, and callers reach here with
     # the struct they started with — the same staleness `scan_folders/3`
     # reloads for. Reload rather than let a stale copy fail mid-cascade.
@@ -6672,7 +6690,8 @@ defmodule Engram.Notes do
                     updated_at: now,
                     seq: seq,
                     embed_hash: nil,
-                    dense_indexed_hash: nil
+                    dense_indexed_hash: nil,
+                    delete_op_id: Keyword.get(opts, :op_id)
                   ]
                 )
 
