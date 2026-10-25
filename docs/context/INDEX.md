@@ -56,6 +56,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 
 **Billing & Pricing**
 - Paddle MoR integration, webhook signature, event lifecycle, `custom_data`, affiliate flow, list pagination (stop on `has_more`, never `next`) → `docs/context/paddle-integration.md`
+- Checking our Paddle integration against Paddle's docs, or "are we doing what Paddle recommends?" (webhook retry/ordering, checkout success signal, wallets, invoices, per_page max 30; gap table with owners) → `docs/context/paddle-conformance-audit.md`
 - `tier` values contract (default `free`, gate on `!active`) → `docs/context/billing-tier-frontend-contract.md`
 - Apple Pay / Google Pay checkout stuck at Paddle `action_required` with no error, or adding a timer/close/redirect on a Paddle checkout event (never arm one on `PAYMENT_INITIATED`) → `docs/context/paddle-wallet-checkout-closed-mid-sheet.md`
 - Attachment executable blocklist (was the MIME whitelist, Pricing v2 §H) → `docs/context/attachment-mime-whitelist.md`
