@@ -536,6 +536,9 @@ defmodule EngramWeb.VaultAccessAttackTest do
       "delete_attachment" ->
         %{"vault_id" => v, "path" => "a.png"}
 
+      "restore_deleted" ->
+        %{"vault_id" => v, "op_id" => Ecto.UUID.generate()}
+
       "get_attachment_upload_target" ->
         %{"vault_id" => v}
 

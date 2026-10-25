@@ -48,6 +48,26 @@ defmodule Engram.MCP.Tools do
         "vault. Call list_vaults if a name does not resolve."
   }
 
+  # How long a delete stays undoable, from the plan catalog (#609). Static
+  # because tools/list is not per user; each delete's result carries the
+  # caller's own `restorable_until`.
+  @trash_window "restorable with restore_deleted for " <>
+                  "#{Engram.Billing.LimitKeys.default_for(:trash_retention_days, :free)} days on " <>
+                  "Free and " <>
+                  "#{Engram.Billing.LimitKeys.default_for(:trash_retention_days, :pro)} on paid " <>
+                  "plans (the result says until when)."
+
+  @undo_properties %{
+    "delete_op_id" => %{
+      "type" => ["string", "null"],
+      "description" => "Pass to restore_deleted to undo this call; null when nothing was removed"
+    },
+    "restorable_until" => %{
+      "type" => ["string", "null"],
+      "description" => "ISO 8601 time this delete stops being restorable"
+    }
+  }
+
   # MCP tool annotations, keyed by tool name. The Claude and ChatGPT app
   # directories reject a server without them, and clients use `readOnlyHint` to
   # skip the confirmation prompt. `destructive` = overwrites or removes content
@@ -79,6 +99,9 @@ defmodule Engram.MCP.Tools do
     "delete_folder" => {"Delete Folder", false, true, true},
     "move_attachment" => {"Move Attachment", false, false, false},
     "delete_attachment" => {"Delete Attachment", false, true, true},
+    # Undoes a delete; brings back only what that delete removed, and a repeat
+    # restores nothing more. Writes vault data, so not read-only.
+    "restore_deleted" => {"Restore Deleted", false, false, true},
     # Not read-only: it hands out where to UPLOAD with this credential (#174).
     "get_attachment_upload_target" => {"Get Attachment Upload Target", false, false, true}
   }
@@ -124,6 +147,7 @@ defmodule Engram.MCP.Tools do
       delete_folder_def(),
       move_attachment_def(),
       delete_attachment_def(),
+      restore_deleted_def(),
       get_attachment_upload_target_def(),
       send_feedback_def()
     ]
@@ -1294,7 +1318,9 @@ defmodule Engram.MCP.Tools do
     %{
       name: "delete_note",
       description:
-        "Permanently delete one note by path; the deletion syncs to all connected Obsidian " <>
+        "Delete one note by path: it moves to trash, " <>
+          @trash_window <>
+          " The deletion syncs to all connected Obsidian " <>
           "devices. Deleting a path that holds no note succeeds and reports deleted: false. " <>
           "To remove a whole folder use delete_folder. To move a note instead use rename_note. " <>
           "For an image, PDF, or other binary file use delete_attachment.",
@@ -1310,16 +1336,18 @@ defmodule Engram.MCP.Tools do
       },
       outputSchema: %{
         "type" => "object",
-        "properties" => %{
-          "path" => %{"type" => "string"},
-          # The delete is idempotent, so deleting an absent note still
-          # succeeds. This says which of the two actually happened.
-          "deleted" => %{
-            "type" => "boolean",
-            "description" => "false when no note existed at that path"
+        "properties" =>
+          %{
+            "path" => %{"type" => "string"},
+            # The delete is idempotent, so deleting an absent note still
+            # succeeds. This says which of the two actually happened.
+            "deleted" => %{
+              "type" => "boolean",
+              "description" => "false when no note existed at that path"
+            }
           }
-        },
-        "required" => ["path", "deleted"]
+          |> Map.merge(@undo_properties),
+        "required" => ["path", "deleted", "delete_op_id", "restorable_until"]
       },
       handler: &Handlers.handle("delete_note", &1, &2, &3)
     }
@@ -1331,7 +1359,8 @@ defmodule Engram.MCP.Tools do
       description:
         "Delete a folder. Empty-only by default: if the folder contains notes or " <>
           "attachments, the call is refused and reports the counts. Pass recursive: true " <>
-          "to delete the folder and everything under it. Syncs to all connected devices.",
+          "to delete the folder and everything under it. Everything removed moves to " <>
+          "trash, " <> @trash_window <> " Syncs to all connected devices.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -1349,12 +1378,14 @@ defmodule Engram.MCP.Tools do
       },
       outputSchema: %{
         "type" => "object",
-        "properties" => %{
-          "folder" => %{"type" => "string"},
-          "notes" => %{"type" => "integer", "description" => "Notes removed"},
-          "attachments" => %{"type" => "integer"}
-        },
-        "required" => ["folder", "notes", "attachments"]
+        "properties" =>
+          %{
+            "folder" => %{"type" => "string"},
+            "notes" => %{"type" => "integer", "description" => "Notes removed"},
+            "attachments" => %{"type" => "integer"}
+          }
+          |> Map.merge(@undo_properties),
+        "required" => ["folder", "notes", "attachments", "delete_op_id", "restorable_until"]
       },
       handler: &Handlers.handle("delete_folder", &1, &2, &3)
     }
@@ -1434,9 +1465,10 @@ defmodule Engram.MCP.Tools do
     %{
       name: "delete_attachment",
       description:
-        "Permanently delete a single attachment (image, PDF, or other binary file) by " <>
-          "path; the stored file is removed and cannot be restored. Syncs the delete to " <>
-          "all connected Obsidian devices. Deleting a path " <>
+        "Delete a single attachment (image, PDF, or other binary file) by path: it " <>
+          "moves to trash, " <>
+          @trash_window <>
+          " Syncs the delete to all connected Obsidian devices. Deleting a path " <>
           "with no attachment succeeds and reports deleted: false. For notes use " <>
           "delete_note; to remove a whole folder use delete_folder.",
       inputSchema: %{
@@ -1448,13 +1480,61 @@ defmodule Engram.MCP.Tools do
       },
       outputSchema: %{
         "type" => "object",
-        "properties" => %{
-          "path" => %{"type" => "string"},
-          "deleted" => %{"type" => "boolean"}
-        },
-        "required" => ["path", "deleted"]
+        "properties" =>
+          %{
+            "path" => %{"type" => "string"},
+            "deleted" => %{"type" => "boolean"}
+          }
+          |> Map.merge(@undo_properties),
+        "required" => ["path", "deleted", "delete_op_id", "restorable_until"]
       },
       handler: &Handlers.handle("delete_attachment", &1, &2, &3)
+    }
+  end
+
+  defp restore_deleted_def do
+    %{
+      name: "restore_deleted",
+      description:
+        "Undo a delete_note, delete_folder or delete_attachment call: pass the " <>
+          "delete_op_id it returned and everything that call removed comes back at its " <>
+          "old path, while still in trash. An item whose path is now taken by another " <>
+          "file, or whose trash window has passed, is skipped and listed. Safe to repeat: " <>
+          "a second call restores nothing more. Refused if restoring would pass a plan limit.",
+      inputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "op_id" => %{
+            "type" => "string",
+            "description" => "The delete_op_id a delete tool returned"
+          }
+        },
+        "required" => ["op_id"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "notes" => %{"type" => "integer", "description" => "Notes restored"},
+          "folders" => %{"type" => "integer", "description" => "Empty folders restored"},
+          "attachments" => %{"type" => "integer", "description" => "Attachments restored"},
+          "skipped" => %{
+            "type" => "array",
+            "description" => "Items not restored and why (path_taken, expired, unavailable)",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "path" => %{"type" => "string"},
+                "id" => %{"type" => "string"},
+                "kind" => %{"type" => "string"},
+                "reason" => %{"type" => "string"}
+              },
+              "required" => ["kind", "reason"]
+            }
+          }
+        },
+        "required" => ["notes", "folders", "attachments", "skipped"]
+      },
+      handler: &Handlers.handle("restore_deleted", &1, &2, &3)
     }
   end
 end

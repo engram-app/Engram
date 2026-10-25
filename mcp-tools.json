@@ -1093,7 +1093,7 @@
         "readOnlyHint": false,
         "title": "Delete Note"
       },
-      "description": "Permanently delete one note by path; the deletion syncs to all connected Obsidian devices. Deleting a path that holds no note succeeds and reports deleted: false. To remove a whole folder use delete_folder. To move a note instead use rename_note. For an image, PDF, or other binary file use delete_attachment.",
+      "description": "Delete one note by path: it moves to trash, restorable with restore_deleted for 7 days on Free and 30 on paid plans (the result says until when). The deletion syncs to all connected Obsidian devices. Deleting a path that holds no note succeeds and reports deleted: false. To remove a whole folder use delete_folder. To move a note instead use rename_note. For an image, PDF, or other binary file use delete_attachment.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1114,17 +1114,33 @@
       "name": "delete_note",
       "outputSchema": {
         "properties": {
+          "delete_op_id": {
+            "description": "Pass to restore_deleted to undo this call; null when nothing was removed",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "deleted": {
             "description": "false when no note existed at that path",
             "type": "boolean"
           },
           "path": {
             "type": "string"
+          },
+          "restorable_until": {
+            "description": "ISO 8601 time this delete stops being restorable",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "path",
-          "deleted"
+          "deleted",
+          "delete_op_id",
+          "restorable_until"
         ],
         "type": "object"
       },
@@ -1138,7 +1154,7 @@
         "readOnlyHint": false,
         "title": "Delete Folder"
       },
-      "description": "Delete a folder. Empty-only by default: if the folder contains notes or attachments, the call is refused and reports the counts. Pass recursive: true to delete the folder and everything under it. Syncs to all connected devices.",
+      "description": "Delete a folder. Empty-only by default: if the folder contains notes or attachments, the call is refused and reports the counts. Pass recursive: true to delete the folder and everything under it. Everything removed moves to trash, restorable with restore_deleted for 7 days on Free and 30 on paid plans (the result says until when). Syncs to all connected devices.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1167,18 +1183,34 @@
           "attachments": {
             "type": "integer"
           },
+          "delete_op_id": {
+            "description": "Pass to restore_deleted to undo this call; null when nothing was removed",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "folder": {
             "type": "string"
           },
           "notes": {
             "description": "Notes removed",
             "type": "integer"
+          },
+          "restorable_until": {
+            "description": "ISO 8601 time this delete stops being restorable",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "folder",
           "notes",
-          "attachments"
+          "attachments",
+          "delete_op_id",
+          "restorable_until"
         ],
         "type": "object"
       },
@@ -1241,7 +1273,7 @@
         "readOnlyHint": false,
         "title": "Delete Attachment"
       },
-      "description": "Permanently delete a single attachment (image, PDF, or other binary file) by path; the stored file is removed and cannot be restored. Syncs the delete to all connected Obsidian devices. Deleting a path with no attachment succeeds and reports deleted: false. For notes use delete_note; to remove a whole folder use delete_folder.",
+      "description": "Delete a single attachment (image, PDF, or other binary file) by path: it moves to trash, restorable with restore_deleted for 7 days on Free and 30 on paid plans (the result says until when). Syncs the delete to all connected Obsidian devices. Deleting a path with no attachment succeeds and reports deleted: false. For notes use delete_note; to remove a whole folder use delete_folder.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1262,20 +1294,113 @@
       "name": "delete_attachment",
       "outputSchema": {
         "properties": {
+          "delete_op_id": {
+            "description": "Pass to restore_deleted to undo this call; null when nothing was removed",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "deleted": {
             "type": "boolean"
           },
           "path": {
             "type": "string"
+          },
+          "restorable_until": {
+            "description": "ISO 8601 time this delete stops being restorable",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "path",
-          "deleted"
+          "deleted",
+          "delete_op_id",
+          "restorable_until"
         ],
         "type": "object"
       },
       "title": "Delete Attachment"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Restore Deleted"
+      },
+      "description": "Undo a delete_note, delete_folder or delete_attachment call: pass the delete_op_id it returned and everything that call removed comes back at its old path, while still in trash. An item whose path is now taken by another file, or whose trash window has passed, is skipped and listed. Safe to repeat: a second call restores nothing more. Refused if restoring would pass a plan limit.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "op_id": {
+            "description": "The delete_op_id a delete tool returned",
+            "type": "string"
+          },
+          "vault_id": {
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "op_id"
+        ],
+        "type": "object"
+      },
+      "name": "restore_deleted",
+      "outputSchema": {
+        "properties": {
+          "attachments": {
+            "description": "Attachments restored",
+            "type": "integer"
+          },
+          "folders": {
+            "description": "Empty folders restored",
+            "type": "integer"
+          },
+          "notes": {
+            "description": "Notes restored",
+            "type": "integer"
+          },
+          "skipped": {
+            "description": "Items not restored and why (path_taken, expired, unavailable)",
+            "items": {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "reason"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "notes",
+          "folders",
+          "attachments",
+          "skipped"
+        ],
+        "type": "object"
+      },
+      "title": "Restore Deleted"
     },
     {
       "annotations": {

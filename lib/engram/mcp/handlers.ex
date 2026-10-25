@@ -595,10 +595,11 @@ defmodule Engram.MCP.Handlers do
     # a no-op, since an idempotent delete of an absent note is not a failure.
     # `delete_note_reporting/3` never decrypts, so a damaged note stays
     # deletable (the one case where you most want the delete to work).
-    existed? = Notes.delete_note_reporting(user, vault, path) == :deleted
+    op = Ecto.UUID.generate()
+    existed? = Notes.delete_note_reporting(user, vault, path, op_id: op) == :deleted
 
     text = if existed?, do: "Note deleted: #{path}", else: "No note at: #{path}"
-    {:ok, text, %{"path" => path, "deleted" => existed?}}
+    deleted_result(user, text, %{"path" => path, "deleted" => existed?}, existed?, op)
   end
 
   def handle("delete_folder", user, vault, args) do
@@ -608,7 +609,9 @@ defmodule Engram.MCP.Handlers do
     if folder == "" do
       {:error, "Refusing to delete the vault root."}
     else
-      case Engram.Folders.delete(user, vault, folder, recursive: recursive) do
+      op = Ecto.UUID.generate()
+
+      case Engram.Folders.delete(user, vault, folder, recursive: recursive, op_id: op) do
         {:ok, %{notes: n, attachments: a}} ->
           # Same event as DELETE /folders/*path, on every success (0/0 included,
           # see FoldersController.delete_recursive/4): a cleared empty-folder
@@ -621,8 +624,15 @@ defmodule Engram.MCP.Handlers do
           counts =
             if n == 0 and a == 0, do: "", else: " (#{n} notes, #{a} attachments removed)"
 
-          {:ok, "Folder deleted: #{folder}#{counts}",
-           %{"folder" => folder, "notes" => n, "attachments" => a}}
+          # Reported as restorable even at 0/0: the marker alone may have been
+          # stamped, and restoring an op that stamped nothing is a no-op.
+          deleted_result(
+            user,
+            "Folder deleted: #{folder}#{counts}",
+            %{"folder" => folder, "notes" => n, "attachments" => a},
+            true,
+            op
+          )
 
         # A refusal to act, not a completed delete. The caller must re-issue
         # with recursive: true, which it will not do if we report success.
@@ -679,16 +689,62 @@ defmodule Engram.MCP.Handlers do
       path ->
         # Same contract as delete_note: an absent path is a successful no-op,
         # and the payload says whether anything was there.
-        case Engram.Attachments.delete_attachment_reporting(user, vault, raw) do
+        op = Ecto.UUID.generate()
+
+        case Engram.Attachments.delete_attachment_reporting(user, vault, raw, op_id: op) do
           :deleted ->
-            {:ok, "Attachment deleted: #{path}", %{"path" => path, "deleted" => true}}
+            deleted_result(
+              user,
+              "Attachment deleted: #{path}",
+              %{"path" => path, "deleted" => true},
+              true,
+              op
+            )
 
           :absent ->
-            {:ok, "No attachment at: #{path}", %{"path" => path, "deleted" => false}}
+            deleted_result(
+              user,
+              "No attachment at: #{path}",
+              %{"path" => path, "deleted" => false},
+              false,
+              op
+            )
 
           {:error, reason} ->
             log_and_error("delete_attachment", reason, "Could not delete attachment: #{path}")
         end
+    end
+  end
+
+  def handle("restore_deleted", user, vault, args) do
+    case Engram.Folders.restore_op(user, vault, args["op_id"] || "") do
+      {:ok, %{notes: n, folders: f, attachments: a, skipped: skipped}} ->
+        skipped = Enum.map(skipped, &wire_skip/1)
+
+        skip_text =
+          case skipped do
+            [] -> ""
+            _ -> "\nNot restored: " <> Enum.map_join(skipped, ", ", &skip_label/1)
+          end
+
+        {:ok, "Restored #{n} notes, #{a} attachments and #{f} folders.#{skip_text}",
+         %{"notes" => n, "folders" => f, "attachments" => a, "skipped" => skipped}}
+
+      {:error, :invalid_op_id} ->
+        ToolError.error(:invalid_arguments, "op_id must be the delete_op_id a delete returned")
+
+      {:error, {:limit_reached, :notes_cap, limit, _current}} ->
+        ToolError.error(
+          :notes_cap_exceeded,
+          "notes_cap: restoring would pass your plan's limit of #{limit} notes. Delete " <>
+            "notes or upgrade, then restore again."
+        )
+
+      {:error, {:limit_reached, key, limit, _current}} ->
+        {:error, "#{key}: restoring would pass your plan's limit of #{limit}."}
+
+      {:error, reason} ->
+        log_and_error("restore_deleted", reason, "Could not restore that delete")
     end
   end
 
@@ -1809,6 +1865,35 @@ defmodule Engram.MCP.Handlers do
   # A reason from deep in Notes/Folders/Attachments can carry decrypted struct
   # fields, so it is logged with a low-cardinality label and never rendered
   # into the response. Replaces four `inspect(reason)`-into-the-body sites.
+  # Every delete tool's result: the payload plus the undo handle (#609). An
+  # absent delete removed nothing, so it has nothing to undo.
+  defp deleted_result(user, text, payload, removed?, op) do
+    if removed? do
+      until = Engram.Folders.restorable_until(user)
+
+      {:ok,
+       text <>
+         "\nMoved to trash until #{Date.to_iso8601(DateTime.to_date(until))}: " <>
+         "call restore_deleted with op_id #{op} to undo.",
+       Map.merge(payload, %{
+         "delete_op_id" => op,
+         "restorable_until" => DateTime.to_iso8601(until)
+       })}
+    else
+      {:ok, text, Map.merge(payload, %{"delete_op_id" => nil, "restorable_until" => nil})}
+    end
+  end
+
+  defp wire_skip(skip) do
+    skip
+    |> Map.new(fn {k, v} ->
+      {Atom.to_string(k), if(is_atom(v), do: Atom.to_string(v), else: v)}
+    end)
+  end
+
+  defp skip_label(%{"path" => path, "reason" => reason}), do: "#{path} (#{reason})"
+  defp skip_label(%{"kind" => kind, "reason" => reason}), do: "a #{kind} (#{reason})"
+
   defp log_and_error(op, reason, message) do
     require Logger
 
