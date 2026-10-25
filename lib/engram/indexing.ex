@@ -1063,7 +1063,10 @@ defmodule Engram.Indexing do
       index_tier: Map.get(prepared, :index_tier),
       held_model: Map.get(prepared, :held_model),
       deferred_tokens: Map.get(prepared, :deferred_tokens, 0),
-      next_deferred_tokens: Map.get(prepared, :next_deferred_tokens)
+      next_deferred_tokens: Map.get(prepared, :next_deferred_tokens),
+      # Points kept in place: they keep the vectors they were built with,
+      # so the caller's version stamp must not vouch for them (#2199).
+      reused: length(Map.get(prepared, :reused_point_ids, []))
     }
   end
 
