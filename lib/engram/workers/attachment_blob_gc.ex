@@ -65,7 +65,7 @@ defmodule Engram.Workers.AttachmentBlobGC do
   the age below which `Engram.Attachments.revive_tombstones/3` refuses a
   claimed row (#2195): a younger claim may be mid-delete.
   """
-  @spec stale_claim_minutes() :: pos_integer()
+  @spec stale_claim_minutes() :: 60
   def stale_claim_minutes, do: @stale_claim_minutes
 
   @impl Oban.Worker

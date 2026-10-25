@@ -1506,12 +1506,13 @@ defmodule Engram.Attachments do
 
         # A second statement rather than a column in `stamp_seqs!`'s VALUES:
         # same transaction, and it keeps that file's pinned Sobelow lines put.
-        if op_id do
-          {_n, _} =
-            Repo.update_all(from(a in Attachment, where: a.id in ^deleted_ids),
-              set: [delete_op_id: op_id]
-            )
-        end
+        _ =
+          if op_id do
+            {_n, _} =
+              Repo.update_all(from(a in Attachment, where: a.id in ^deleted_ids),
+                set: [delete_op_id: op_id]
+              )
+          end
 
         deleted_hmacs = returned |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
         {deleted_ids, deleted_hmacs}

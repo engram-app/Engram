@@ -498,7 +498,7 @@ defmodule Engram.Notes do
   @max_batch_folders 500
 
   @doc "Folders per `create_folder_markers/3` call."
-  @spec max_batch_folders() :: pos_integer()
+  @spec max_batch_folders() :: 500
   def max_batch_folders, do: @max_batch_folders
 
   # Rows per folder-marker `insert_all`. A marker row binds 14 parameters
