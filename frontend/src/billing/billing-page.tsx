@@ -386,6 +386,15 @@ export default function BillingPage({
 	// where to route the user next.
 	const handleSubscriptionActivated = useCallback(
 		async (payload: SubscriptionActivatedPayload) => {
+			const paying = payload.status === "active" || payload.status === "trialing";
+			// The push fires on every subscription mutation, including an older
+			// subscription going canceled or past_due. While a checkout is open,
+			// closing Paddle on one of those kills a live wallet sheet and hides
+			// the unfinished-payment banner, so only refresh state.
+			if (checkoutOpenRef.current && !paying) {
+				await invalidateBillingState(qc);
+				return;
+			}
 			// Onboarding: hold a steady "finishing up" view across the async work below
 			// so we never flash the empty plan picker before the redirect. Gate on the
 			// fire latch too: a duplicate/late activation broadcast after the first
@@ -400,12 +409,8 @@ export default function BillingPage({
 			// paying status while one is open is the subscription it created: report
 			// the completion from here (Paddle's late event is then skipped) and mark
 			// it before closing, so the checkout.closed our close fires is not
-			// reported as a stall/abandon. Any other push leaves a real stall reported.
-			if (
-				checkoutOpenRef.current &&
-				!checkoutCompletedRef.current &&
-				(payload.status === "active" || payload.status === "trialing")
-			) {
+			// reported as a stall/abandon. A non-paying push returned above.
+			if (checkoutOpenRef.current && !checkoutCompletedRef.current) {
 				checkoutCompletedRef.current = true;
 				track("checkout_completed", { method: checkoutMethodRef.current });
 			}

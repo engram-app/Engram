@@ -800,6 +800,11 @@ describe("BillingPage — Paddle effect cleanup", () => {
 				});
 				await Promise.resolve();
 			});
+			// The push leaves the checkout open; the buyer then closes it.
+			await act(async () => {
+				captured!({ name: "checkout.closed", data: {} });
+				await Promise.resolve();
+			});
 
 			expect(mockTrack).toHaveBeenCalledWith(
 				"checkout_stalled",
@@ -809,6 +814,49 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			expect(mockTrack).not.toHaveBeenCalledWith("checkout_completed", expect.anything());
 		});
 	});
+
+	// subscription_activated fires on every subscription mutation, including an
+	// older subscription going canceled or past_due. Closing Paddle on those
+	// killed a live wallet sheet mid-payment.
+	it.each(["canceled", "past_due"])(
+		"onboarding (inline): a %s push during an open checkout does not close Paddle",
+		async (status) => {
+			mockBillingApi();
+			const closeMock = vi.fn();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: vi.fn(), close: closeMock } };
+			});
+
+			const { container, queryAllByText } = renderBilling({ inline: true });
+			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+			const startBtn = Array.from(container.querySelectorAll("button")).find(
+				(b) => b.textContent === "Choose Starter",
+			)!;
+			await act(async () => {
+				startBtn.click();
+				await Promise.resolve();
+			});
+			await act(async () => {
+				captured!({ name: "checkout.loaded", data: {} });
+				captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+				await Promise.resolve();
+			});
+			await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
+			await act(async () => {
+				channelHandlers.subscription_activated!({
+					tier: "starter",
+					status,
+					subscription_id: "sub_old",
+				});
+				await Promise.resolve();
+			});
+
+			expect(closeMock).not.toHaveBeenCalled();
+			expect(container.querySelector(".paddle-checkout")).toBeInTheDocument();
+		},
+	);
 
 	it("onboarding (inline): CHECKOUT_PAYMENT_FAILED keeps Paddle's frame open so the decline reason + retry stay visible", async () => {
 		// A declined card is a normal, retryable state: Paddle keeps its inline
