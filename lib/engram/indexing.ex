@@ -1061,7 +1061,7 @@ defmodule Engram.Indexing do
     )
   end
 
-  # Rows per chunk `insert_all`. A row binds 15 parameters (chunk_row/5 plus
+  # Rows per chunk `insert_all`. A row binds 15 parameters (`chunk_row/4` plus
   # the four chunk-text columns) against the protocol's 65535 cap, which
   # leaves room for 4369; 3000 keeps a margin (as Links' @insert_chunk) so a
   # new column cannot silently re-arm the overflow. Prod hit it at 73040
@@ -3394,8 +3394,6 @@ defmodule Engram.Indexing do
   defp build_prepared(note, plan, vectors, dek, avgdl) do
     filter_key = Crypto.dek_filter_key_from_bytes(dek)
 
-    now = DateTime.utc_now(:second)
-
     # Language is a property of the NOTE, not of each chunk. Detecting per chunk
     # meant one full Lingua detector build per chunk (the NIF rebuilds the
     # detector on every call — deps/lingua/native/lingua_nif/src/lib.rs), i.e.
@@ -3436,7 +3434,7 @@ defmodule Engram.Indexing do
     rebuild? = Map.get(plan, :rebuild?, false)
     flat = note.content |> FlatFields.extract(filter_key) |> with_key_ids(note, dek)
     note_payload = PayloadV5.build(note, flat)
-    ctx = {note, note_payload, now}
+    ctx = {note, note_payload}
     point_ids = v5_point_ids(note, plan)
 
     # The whole note in one call so the encoder can share per-note work (the
@@ -3577,14 +3575,14 @@ defmodule Engram.Indexing do
   # A reused chunk costs nothing but a row: no embed, no tokenizer pass, no
   # encryption. Its `token_count` rides along from the row it replaces rather
   # than being recomputed from text that has not changed.
-  defp build_entry({:reuse, chunk, point_id, tokens}, {{note, _p, now}, _id}, pending) do
-    {%{row: chunk_row(note, chunk, point_id, tokens, now), point: nil}, pending}
+  defp build_entry({:reuse, chunk, point_id, tokens}, {{note, _p}, _id}, pending) do
+    {%{row: chunk_row(note, chunk, point_id, tokens), point: nil}, pending}
   end
 
   # `doc_len` is the raw token count from the same tokenization pass as the
   # sparse vector, also persisted as `chunks.token_count`.
   defp build_entry({:embed, chunk}, {ctx, point_id}, [{vector, {sparse, doc_len}} | rest]) do
-    {note, note_payload, now} = ctx
+    {note, note_payload} = ctx
 
     # A v5 point carries filter fields and ids only: its text, title and
     # heading live in Postgres (Task 11), so there is nothing to encrypt. No
@@ -3605,7 +3603,7 @@ defmodule Engram.Indexing do
     token_count = if capped_length?(chunk), do: nil, else: doc_len
 
     built = %{
-      row: chunk_row(note, chunk, point_id, token_count, now),
+      row: chunk_row(note, chunk, point_id, token_count),
       point: %{id: point_id, vector: named_vectors, payload: note_payload},
       kind: metric_kind(note.path, chunk.kind),
       dense?: vector != nil
@@ -3626,7 +3624,7 @@ defmodule Engram.Indexing do
     end
   end
 
-  defp chunk_row(note, chunk, point_id, token_count, now) do
+  defp chunk_row(note, chunk, point_id, token_count) do
     %{
       note_id: note.id,
       user_id: note.user_id,
@@ -3641,8 +3639,7 @@ defmodule Engram.Indexing do
       token_count: token_count,
       qdrant_point_id: point_id,
       context_hmac: chunk.context_hmac,
-      member_hmacs: Map.get(chunk, :member_hmacs),
-      created_at: now
+      member_hmacs: Map.get(chunk, :member_hmacs)
     }
   end
 
