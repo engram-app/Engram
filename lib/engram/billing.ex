@@ -679,7 +679,9 @@ defmodule Engram.Billing do
   # the PDF "is available for transactions that are completed" (`billed` for
   # manual collection, where the invoice is issued before payment). Shared by
   # the invoice fetch and the history rows, so the Download button and the
-  # endpoint agree.
+  # endpoint agree. `past_due` is deliberately absent: Paddle's
+  # get-transaction-invoice docs list only `billed` and `completed` (checked
+  # 2026-10-24), and an automatic past_due transaction is an unpaid renewal.
   defp invoice_available?(txn) do
     txn["status"] in ~w(completed billed) and
       not zero_amount?(get_in(txn, ["details", "totals", "grand_total"]))
