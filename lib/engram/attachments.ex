@@ -26,6 +26,7 @@ defmodule Engram.Attachments do
   alias Engram.Storage
   alias Engram.Storage.MimeWhitelist
   alias Engram.Sync.Broadcast
+  alias Engram.Workers.AttachmentBlobGC
   alias Engram.Workers.ReconcileAttachmentBlobs
 
   @doc """
@@ -1531,6 +1532,70 @@ defmodule Engram.Attachments do
       |> BulkUpdate.stamp_seqs!(:touch, now)
       |> length()
     end)
+  end
+
+  @doc """
+  Brings soft-deleted rows `ids` back to life with a fresh seq each (#2195).
+  The only undelete path for attachments: every restore goes through here.
+
+  Takes the vault row lock first (`next_seq_block!/2`), the same lock
+  `Engram.Workers.AttachmentBlobGC` claims under, so the two serialize. A row
+  is revived only if it still holds its `storage_key`, carries no GC claim
+  younger than the GC's stale threshold (its blob may be mid-delete), and no
+  live row holds its path. Everything else comes back in `unrestored`, so a
+  restore either has its blob or is refused; it never leaves a live row
+  pointing at nothing.
+
+  Returns `{:ok, %{restored: ids, unrestored: ids}}`. Broadcasting is the
+  caller's (it has the decrypted paths).
+  """
+  @spec revive_tombstones(map(), map(), [String.t()]) ::
+          {:ok, %{restored: [String.t()], unrestored: [String.t()]}} | {:error, term()}
+  def revive_tombstones(_user, _vault, []), do: {:ok, %{restored: [], unrestored: []}}
+
+  def revive_tombstones(user, vault, ids) do
+    ids = Enum.uniq(ids)
+    now = DateTime.utc_now(:second)
+    stale = DateTime.add(now, -AttachmentBlobGC.stale_claim_minutes() * 60, :second)
+
+    Repo.with_tenant(user.id, fn ->
+      # The lock BEFORE the eligibility read, or a claim that commits in
+      # between is invisible to it.
+      last_seq = Engram.Vaults.next_seq_block!(vault.id, length(ids))
+
+      {_n, revived} =
+        Repo.update_all(
+          from(a in scoped(user, vault),
+            as: :tomb,
+            where:
+              a.id in ^ids and not is_nil(a.deleted_at) and not is_nil(a.storage_key) and
+                (is_nil(a.blob_gc_claimed_at) or a.blob_gc_claimed_at < ^stale) and
+                not exists(
+                  from(l in Attachment,
+                    where:
+                      l.user_id == parent_as(:tomb).user_id and
+                        l.vault_id == parent_as(:tomb).vault_id and
+                        l.path_hmac == parent_as(:tomb).path_hmac and is_nil(l.deleted_at),
+                    select: 1
+                  )
+                ),
+            select: a.id
+          ),
+          set: [deleted_at: nil, blob_gc_claimed_at: nil, updated_at: now]
+        )
+
+      # Now live, so `stamp_seqs!`'s live-row guard admits them. Unused seqs
+      # in the block are gaps, which the feed allows.
+      _ =
+        revived
+        |> Enum.sort()
+        |> Enum.with_index(last_seq - length(ids) + 1)
+        |> BulkUpdate.stamp_seqs!(:touch, now)
+
+      if revived != [], do: :ok = evict_counts(user.id)
+      %{restored: revived, unrestored: ids -- revived}
+    end)
+    |> unwrap_tenant()
   end
 
   # Real-time parity: reuse the existing `note_changed` socket event the plugin

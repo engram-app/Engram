@@ -53,6 +53,14 @@ defmodule Engram.Workers.AttachmentBlobGC do
   @stale_claim_minutes 60
   @batch 1_000
 
+  @doc """
+  Minutes after which a claim is treated as belonging to a dead run. Also
+  the age below which `Engram.Attachments.revive_tombstones/3` refuses a
+  claimed row (#2195): a younger claim may be mid-delete.
+  """
+  @spec stale_claim_minutes() :: pos_integer()
+  def stale_claim_minutes, do: @stale_claim_minutes
+
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(15)
 
@@ -135,7 +143,8 @@ defmodule Engram.Workers.AttachmentBlobGC do
   # copies a tombstone's key must read it AFTER taking that lock, or this
   # re-check cannot see it. Likewise a future undelete must take the vault
   # lock and must not revive a row that carries a fresh `blob_gc_claimed_at`
-  # (its blob may be mid-delete); finalize also refuses to touch a live row.
+  # (its blob may be mid-delete); `Attachments.revive_tombstones/3` is that
+  # path and does both (#2195). Finalize also refuses to touch a live row.
   defp claim(vault_id, cutoff, after_id) do
     repo = Repo.maintenance()
     claimed_at = DateTime.utc_now()
