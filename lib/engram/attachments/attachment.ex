@@ -29,6 +29,9 @@ defmodule Engram.Attachments.Attachment do
     field :mtime, :float
     field :storage_key, :string
     field :deleted_at, :utc_datetime
+    # The undoable delete that tombstoned this row (#609), restored by
+    # `Engram.Folders.restore_op/3`. Nil on live rows and move tombstones.
+    field :delete_op_id, Ecto.UUID
     # Set while `Engram.Workers.AttachmentBlobGC` owns this tombstone's blob
     # delete; cleared when it finishes (a stale stamp is re-claimed).
     field :blob_gc_claimed_at, :utc_datetime_usec
