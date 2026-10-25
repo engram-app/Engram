@@ -12,6 +12,7 @@ import { track } from "../analytics/track";
 import { api } from "../api/client";
 import {
 	type BillingCadence,
+	type BillingStatus,
 	invalidateBillingState,
 	type OnboardingStatus,
 	useBillingConfig,
@@ -45,6 +46,17 @@ import {
 // Past this we close Paddle and surface a small recovery banner — the push
 // listener stays connected, so a late broadcast still routes the user.
 const COOLDOWN_MS = 15_000;
+
+// A checkout closed after PAYMENT_INITIATED with no COMPLETED may still have
+// taken the money (redirect flows like 3DS or PayPal can drop COMPLETED). Wait
+// this long for the activation push or a paying billing state, refetching
+// every CONFIRM_POLL_MS, before saying the buyer is not subscribed.
+const CONFIRM_WINDOW_MS = 30_000;
+const CONFIRM_POLL_MS = 5000;
+
+function isPayingStatus(status: string | undefined): status is "active" | "trialing" {
+	return status === "active" || status === "trialing";
+}
 
 // Dev-only: Paddle's checkout iframe can't embed on a non-default-port
 // localhost origin (its frame-ancestors only allows the bare host at :80/:443),
@@ -167,6 +179,19 @@ function SlowActivationBanner({
 // The buyer closed Paddle after starting a payment but before COMPLETED (a
 // dismissed wallet sheet, an abandoned 3DS challenge). Nothing was activated,
 // so say so plainly; never "received" or "activating" here.
+function CheckingPaymentNotice() {
+	const { t } = useT();
+	return (
+		<section
+			aria-live="polite"
+			className="flex flex-col items-center justify-center gap-3 py-16 text-center"
+		>
+			<Loader2 className="size-6 animate-spin text-primary-ink" aria-hidden="true" />
+			<p className="text-muted-foreground text-sm">{t("Checking your payment…")}</p>
+		</section>
+	);
+}
+
 function UnfinishedPaymentBanner({ onRetry }: { onRetry: () => void }) {
 	const { t } = useT();
 	return (
@@ -344,6 +369,11 @@ export default function BillingPage({
 	// checkout.closed after PAYMENT_INITIATED with no COMPLETED: show the
 	// "not subscribed, try again" banner.
 	const [unfinished, setUnfinished] = useState(false);
+	// Between that close and the banner: checking whether the payment landed
+	// after all (see CONFIRM_WINDOW_MS). Ref-mirrored for the push handler.
+	const [confirming, setConfirming] = useState(false);
+	const confirmingRef = useRef(false);
+	confirmingRef.current = confirming;
 	// Set by the activation push, so the checkout.closed that our own
 	// Checkout.close() triggers there is not read as an unfinished payment.
 	const activatedRef = useRef(false);
@@ -388,13 +418,14 @@ export default function BillingPage({
 	// and (in onboarding mode) fetch the fresh onboarding/status to decide
 	// where to route the user next.
 	const handleSubscriptionActivated = useCallback(
-		async (payload: SubscriptionActivatedPayload) => {
-			const paying = payload.status === "active" || payload.status === "trialing";
+		async (payload: Pick<SubscriptionActivatedPayload, "status">) => {
+			const paying = isPayingStatus(payload.status);
 			// The push fires on every subscription mutation, including an older
 			// subscription going canceled or past_due. While a checkout is open,
 			// closing Paddle on one of those kills a live wallet sheet and hides
-			// the unfinished-payment banner, so only refresh state.
-			if (checkoutOpenRef.current && !paying) {
+			// the unfinished-payment banner, so only refresh state. Same while
+			// checking a closed payment: it must not end the check as "activated".
+			if ((checkoutOpenRef.current || confirmingRef.current) && !paying) {
 				await invalidateBillingState(qc);
 				return;
 			}
@@ -418,6 +449,7 @@ export default function BillingPage({
 				track("checkout_completed", { method: checkoutMethodRef.current });
 			}
 			activatedRef.current = true;
+			setConfirming(false);
 			setUnfinished(false);
 			paddleRef.current?.Checkout.close();
 			setCheckingOut(false);
@@ -451,6 +483,34 @@ export default function BillingPage({
 		enabled: true,
 		onActivated: handleSubscriptionActivated,
 	});
+
+	// Checking a closed mid-payment checkout: refetch billing state until the
+	// window ends, then say the payment did not finish.
+	useEffect(() => {
+		if (!confirming) {
+			return;
+		}
+		const poll = setInterval(() => {
+			invalidateBillingState(qc);
+		}, CONFIRM_POLL_MS);
+		const giveUp = setTimeout(() => {
+			setConfirming(false);
+			setUnfinished(true);
+		}, CONFIRM_WINDOW_MS);
+		return () => {
+			clearInterval(poll);
+			clearTimeout(giveUp);
+		};
+	}, [confirming, qc]);
+
+	// Billing state showing a paying subscription while checking (or after the
+	// banner) is the payment landing without a push: take the activated path.
+	const billingSubStatus = billing?.subscription?.status;
+	useEffect(() => {
+		if ((confirming || unfinished) && isPayingStatus(billingSubStatus)) {
+			handleSubscriptionActivated({ status: billingSubStatus });
+		}
+	}, [confirming, unfinished, billingSubStatus, handleSubscriptionActivated]);
 
 	// Mount-time cache check: if the user lands on billing with a cached
 	// onboarding status already past 'billing' AND has a paid subscription,
@@ -598,7 +658,8 @@ export default function BillingPage({
 						!activatedRef.current
 					) {
 						setCheckingOut(false);
-						setUnfinished(true);
+						setConfirming(true);
+						invalidateBillingState(qc);
 					}
 					reportCheckoutExit(false);
 					checkoutOpenRef.current = false;
@@ -678,6 +739,7 @@ export default function BillingPage({
 			paymentAttemptedRef.current = false;
 			checkoutExitReportedRef.current = false;
 			activatedRef.current = false;
+			setConfirming(false);
 			setUnfinished(false);
 			if (isInline) {
 				setCheckingOut(true);
@@ -713,6 +775,28 @@ export default function BillingPage({
 		},
 		[paddle, config, cadence, isInline, checkoutLocale],
 	);
+
+	// Try again after an unfinished payment: re-check billing state first, so a
+	// payment that landed late never opens a second checkout (and a second
+	// subscription). If the check itself fails, do not open blind.
+	const handleRetryCheckout = useCallback(async () => {
+		const tier = checkoutTierRef.current;
+		if (!tier) {
+			return;
+		}
+		await qc.refetchQueries({ queryKey: ["billing", "status"] });
+		const state = qc.getQueryState<BillingStatus>(["billing", "status"]);
+		if (state?.status === "error") {
+			notify.error(tLater(msg("Something went wrong with checkout. Please try again.")));
+			return;
+		}
+		const status = state?.data?.subscription?.status;
+		if (isPayingStatus(status)) {
+			await handleSubscriptionActivated({ status });
+			return;
+		}
+		handleStartCheckout(tier);
+	}, [qc, tLater, handleSubscriptionActivated, handleStartCheckout]);
 
 	// Dev stub success: satisfy the backend onboarding gate via the free-tier
 	// path (the only billing decision we can make without Paddle) so the wizard
@@ -876,15 +960,10 @@ export default function BillingPage({
 							transactionId={transactionId}
 							onRefresh={() => window.location.reload()}
 						/>
+					) : confirming ? (
+						<CheckingPaymentNotice />
 					) : unfinished ? (
-						<UnfinishedPaymentBanner
-							onRetry={() => {
-								const tier = checkoutTierRef.current;
-								if (tier) {
-									handleStartCheckout(tier);
-								}
-							}}
-						/>
+						<UnfinishedPaymentBanner onRetry={handleRetryCheckout} />
 					) : isInline && checkingOut ? (
 						<>
 							<button

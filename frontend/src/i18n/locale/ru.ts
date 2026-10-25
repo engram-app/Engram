@@ -95,8 +95,6 @@ export default {
 	Status: "Статус",
 	Invoice: "Счёт",
 	Download: "Скачать",
-	"Could not fetch that invoice. Please try again.":
-		"Не удалось получить этот счёт. Пожалуйста, попробуйте ещё раз.",
 	"Payment received. We're finishing your activation in the background.":
 		"Платеж получен. Мы завершаем активацию в фоновом режиме.",
 	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
@@ -104,6 +102,7 @@ export default {
 	Refresh: "Обновить",
 	"Contact support": "Связаться со службой поддержки",
 	"Reference number: {id}": "Номер запроса: {id}",
+	"Checking your payment…": "Проверка вашего платежа…",
 	"Your payment did not finish, so you have not been subscribed.":
 		"Ваша оплата не завершена, поэтому вы не подписаны.",
 	"Try again": "Повторить попытку",
@@ -174,6 +173,9 @@ export default {
 		many: "До окончания бесплатного пробного периода осталось {count} дней.",
 		other: "До окончания бесплатного пробного периода осталось {count} дня.",
 	},
+	"No invoice is available for this transaction.": "Для этой транзакции нет счета.",
+	"Could not fetch that invoice. Please try again.":
+		"Не удалось получить этот счёт. Пожалуйста, попробуйте ещё раз.",
 	"Indexing budget": "Лимит индексации",
 	"{available} of {capacity} tokens left": "{available} из {capacity} токенов осталось",
 	"Refills {perDay} tokens a day. Full again on {date}.":

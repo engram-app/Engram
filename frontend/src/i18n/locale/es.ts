@@ -93,8 +93,6 @@ export default {
 	Status: "Estado",
 	Invoice: "Factura",
 	Download: "Descargar",
-	"Could not fetch that invoice. Please try again.":
-		"No se pudo obtener esa factura. Inténtalo de nuevo.",
 	"Payment received. We're finishing your activation in the background.":
 		"Pago recibido. Estamos finalizando tu activación en segundo plano.",
 	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
@@ -102,6 +100,7 @@ export default {
 	Refresh: "Refrescar",
 	"Contact support": "Contacta con soporte",
 	"Reference number: {id}": "Número de referencia: {id}",
+	"Checking your payment…": "Verificando tu pago…",
 	"Your payment did not finish, so you have not been subscribed.":
 		"Tu pago no se completó, por lo que no has sido suscrito.",
 	"Try again": "Inténtalo de nuevo",
@@ -171,6 +170,10 @@ export default {
 		many: "Te quedan {count} días en tu prueba gratuita.",
 		other: "Quedan {count} días en tu prueba gratuita.",
 	},
+	"No invoice is available for this transaction.":
+		"No hay factura disponible para esta transacción.",
+	"Could not fetch that invoice. Please try again.":
+		"No se pudo obtener esa factura. Inténtalo de nuevo.",
 	"Indexing budget": "Presupuesto de indexación",
 	"{available} of {capacity} tokens left": "{available} de {capacity} tokens restantes",
 	"Refills {perDay} tokens a day. Full again on {date}.":

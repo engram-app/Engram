@@ -84,7 +84,6 @@ export default {
 	Status: "状态",
 	Invoice: "发票",
 	Download: "下载",
-	"Could not fetch that invoice. Please try again.": "无法获取该发票。请重试。",
 	"Payment received. We're finishing your activation in the background.":
 		"支付已收到。我们正在后台完成您的激活。",
 	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
@@ -92,6 +91,7 @@ export default {
 	Refresh: "刷新",
 	"Contact support": "联系支持",
 	"Reference number: {id}": "参考编号：{id}",
+	"Checking your payment…": "正在检查支付…",
 	"Your payment did not finish, so you have not been subscribed.":
 		"您的支付未完成，因此未订阅成功。",
 	"Try again": "重试",
@@ -148,6 +148,8 @@ export default {
 	"Current Plan": "当前方案",
 	Free: "免费",
 	"{count} days remaining in your free trial.": { other: "免费试用剩余{count}天。" },
+	"No invoice is available for this transaction.": "此交易没有发票。",
+	"Could not fetch that invoice. Please try again.": "无法获取该发票。请重试。",
 	"Indexing budget": "索引配额",
 	"{available} of {capacity} tokens left": "剩余 {available} 个 {capacity} 个 token",
 	"Refills {perDay} tokens a day. Full again on {date}.":

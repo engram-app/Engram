@@ -93,8 +93,6 @@ export default {
 	Status: "Status",
 	Invoice: "Faktur",
 	Download: "Unduh",
-	"Could not fetch that invoice. Please try again.":
-		"Tidak dapat mengambil faktur tersebut. Silakan coba lagi.",
 	"Payment received. We're finishing your activation in the background.":
 		"Pembayaran diterima. Kami sedang menyelesaikan aktivasi Anda.",
 	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
@@ -102,6 +100,7 @@ export default {
 	Refresh: "Segarkan",
 	"Contact support": "Hubungi dukungan",
 	"Reference number: {id}": "Nomor referensi: {id}",
+	"Checking your payment…": "Memeriksa pembayaran Anda…",
 	"Your payment did not finish, so you have not been subscribed.":
 		"Pembayaran Anda belum selesai, jadi Anda belum berlangganan.",
 	"Try again": "Coba lagi",
@@ -168,6 +167,9 @@ export default {
 	"{count} days remaining in your free trial.": {
 		other: "Sisa {count} hari dalam uji coba gratis Anda.",
 	},
+	"No invoice is available for this transaction.": "Tidak ada faktur untuk transaksi ini.",
+	"Could not fetch that invoice. Please try again.":
+		"Tidak dapat mengambil faktur tersebut. Silakan coba lagi.",
 	"Indexing budget": "Kuota pengindeksan",
 	"{available} of {capacity} tokens left": "{available} dari {capacity} token tersisa",
 	"Refills {perDay} tokens a day. Full again on {date}.":

@@ -89,8 +89,6 @@ export default {
 	Status: "상태",
 	Invoice: "송장",
 	Download: "다운로드",
-	"Could not fetch that invoice. Please try again.":
-		"해당 송장을 가져오지 못했습니다. 다시 시도해주세요.",
 	"Payment received. We're finishing your activation in the background.":
 		"결제가 완료되었습니다. 백그라운드에서 활성화를 완료하고 있습니다.",
 	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
@@ -98,6 +96,7 @@ export default {
 	Refresh: "새로 고침",
 	"Contact support": "지원팀에 문의",
 	"Reference number: {id}": "참조 번호: {id}",
+	"Checking your payment…": "결제 진행 중입니다…",
 	"Your payment did not finish, so you have not been subscribed.":
 		"결제가 완료되지 않아 구독이 적용되지 않았습니다.",
 	"Try again": "다시 시도",
@@ -160,6 +159,9 @@ export default {
 	"Current Plan": "현재 요금제",
 	Free: "무료",
 	"{count} days remaining in your free trial.": { other: "무료 체험은 {count}일 남았습니다." },
+	"No invoice is available for this transaction.": "해당 거래에 대한 송장이 없습니다.",
+	"Could not fetch that invoice. Please try again.":
+		"해당 송장을 가져오지 못했습니다. 다시 시도해주세요.",
 	"Indexing budget": "인덱싱 용량",
 	"{available} of {capacity} tokens left": "{available} 토큰 남음 ({capacity} 토큰 중)",
 	"Refills {perDay} tokens a day. Full again on {date}.":

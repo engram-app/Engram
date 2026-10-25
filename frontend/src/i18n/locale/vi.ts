@@ -91,7 +91,6 @@ export default {
 	Status: "Trạng thái",
 	Invoice: "Hóa đơn",
 	Download: "Tải xuống",
-	"Could not fetch that invoice. Please try again.": "Không thể tải hóa đơn này. Vui lòng thử lại.",
 	"Payment received. We're finishing your activation in the background.":
 		"Đã nhận thanh toán. Chúng tôi đang hoàn tất quá trình kích hoạt của bạn.",
 	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
@@ -99,6 +98,7 @@ export default {
 	Refresh: "Tải lại",
 	"Contact support": "Liên hệ hỗ trợ",
 	"Reference number: {id}": "Mã tham chiếu: {id}",
+	"Checking your payment…": "Đang kiểm tra thanh toán của bạn…",
 	"Your payment did not finish, so you have not been subscribed.":
 		"Thanh toán của bạn chưa hoàn tất, vì vậy bạn chưa được đăng ký.",
 	"Try again": "Thử lại",
@@ -164,6 +164,8 @@ export default {
 	"{count} days remaining in your free trial.": {
 		other: "Còn {count} ngày trong thời gian dùng thử miễn phí của bạn.",
 	},
+	"No invoice is available for this transaction.": "Không có hóa đơn cho giao dịch này.",
+	"Could not fetch that invoice. Please try again.": "Không thể tải hóa đơn này. Vui lòng thử lại.",
 	"Indexing budget": "Ngân sách lập chỉ mục",
 	"{available} of {capacity} tokens left": "{available} trong {capacity} token còn lại",
 	"Refills {perDay} tokens a day. Full again on {date}.":

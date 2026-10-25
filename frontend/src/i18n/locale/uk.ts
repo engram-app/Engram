@@ -94,8 +94,6 @@ export default {
 	Status: "Статус",
 	Invoice: "Рахунок",
 	Download: "Завантажити",
-	"Could not fetch that invoice. Please try again.":
-		"Не вдалося отримати цей рахунок. Спробуйте ще раз.",
 	"Payment received. We're finishing your activation in the background.":
 		"Отримано оплату. Ми завершуємо активацію у фоновому режимі.",
 	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
@@ -103,6 +101,7 @@ export default {
 	Refresh: "Оновити",
 	"Contact support": "Зв'язатися з підтримкою",
 	"Reference number: {id}": "Номер запису: {id}",
+	"Checking your payment…": "Перевірка вашого платежу…",
 	"Your payment did not finish, so you have not been subscribed.":
 		"Ваш платіж не завершено, тому ви не підписані.",
 	"Try again": "Спробувати ще раз",
@@ -173,6 +172,9 @@ export default {
 		many: "До кінця безкоштовного пробного періоду залишилося {count} днів.",
 		other: "До кінця безкоштовного пробного періоду залишилося {count} дні.",
 	},
+	"No invoice is available for this transaction.": "Для цієї транзакції немає рахунку.",
+	"Could not fetch that invoice. Please try again.":
+		"Не вдалося отримати цей рахунок. Спробуйте ще раз.",
 	"Indexing budget": "Обсяг індексування",
 	"{available} of {capacity} tokens left": "{available} з {capacity} токенів залишилося",
 	"Refills {perDay} tokens a day. Full again on {date}.":

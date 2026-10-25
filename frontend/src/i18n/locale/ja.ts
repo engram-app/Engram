@@ -93,8 +93,6 @@ export default {
 	Status: "ステータス",
 	Invoice: "請求書",
 	Download: "ダウンロード",
-	"Could not fetch that invoice. Please try again.":
-		"請求書を読み込めませんでした。もう一度お試しください。",
 	"Payment received. We're finishing your activation in the background.":
 		"支払いが完了しました。バックグラウンドでアクティベーションを完了しています。",
 	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
@@ -102,6 +100,7 @@ export default {
 	Refresh: "更新",
 	"Contact support": "サポートへ連絡",
 	"Reference number: {id}": "参照番号: {id}",
+	"Checking your payment…": "支払い状況を確認しています…",
 	"Your payment did not finish, so you have not been subscribed.":
 		"支払いが完了しなかったため、登録されていません。",
 	"Try again": "再試行",
@@ -162,6 +161,9 @@ export default {
 	"Current Plan": "現在のプラン",
 	Free: "無料",
 	"{count} days remaining in your free trial.": { other: "無料トライアルは残り{count}日です。" },
+	"No invoice is available for this transaction.": "この取引の請求書は利用できません。",
+	"Could not fetch that invoice. Please try again.":
+		"請求書を読み込めませんでした。もう一度お試しください。",
 	"Indexing budget": "インデックス作成の制限",
 	"{available} of {capacity} tokens left": "{available}トークン残 {capacity}トークン中",
 	"Refills {perDay} tokens a day. Full again on {date}.":

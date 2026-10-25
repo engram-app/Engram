@@ -91,8 +91,6 @@ export default {
 	Status: "Durum",
 	Invoice: "Fatura",
 	Download: "İndir",
-	"Could not fetch that invoice. Please try again.":
-		"Faturayı yükleyemedik. Lütfen tekrar deneyin.",
 	"Payment received. We're finishing your activation in the background.":
 		"Ödeme alındı. Aktivasyonunuz arka planda tamamlanıyor.",
 	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
@@ -100,6 +98,7 @@ export default {
 	Refresh: "Yenile",
 	"Contact support": "Destek ile iletişime geç",
 	"Reference number: {id}": "Referans numarası: {id}",
+	"Checking your payment…": "Ödemeniz kontrol ediliyor…",
 	"Your payment did not finish, so you have not been subscribed.":
 		"Ödemeniz tamamlanmadığı için aboneliğiniz gerçekleşmedi.",
 	"Try again": "Lütfen tekrar deneyin",
@@ -168,6 +167,9 @@ export default {
 		one: "Ücretsiz denemeniz sona ermeye {count} gün kaldı.",
 		other: "Ücretsiz denemenize {count} gün kaldı.",
 	},
+	"No invoice is available for this transaction.": "Bu işlem için fatura bulunmuyor.",
+	"Could not fetch that invoice. Please try again.":
+		"Faturayı yükleyemedik. Lütfen tekrar deneyin.",
 	"Indexing budget": "İndeksleme kotası",
 	"{available} of {capacity} tokens left": "{available} {capacity} token kaldı",
 	"Refills {perDay} tokens a day. Full again on {date}.":

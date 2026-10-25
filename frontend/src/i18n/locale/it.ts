@@ -92,7 +92,6 @@ export default {
 	Status: "Stato",
 	Invoice: "Fattura",
 	Download: "Scarica",
-	"Could not fetch that invoice. Please try again.": "Impossibile recuperare la fattura. Riprova.",
 	"Payment received. We're finishing your activation in the background.":
 		"Pagamento ricevuto. Stiamo completando l'attivazione in background.",
 	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
@@ -100,6 +99,7 @@ export default {
 	Refresh: "Ricarica",
 	"Contact support": "Contatta l'assistenza",
 	"Reference number: {id}": "Numero di riferimento: {id}",
+	"Checking your payment…": "Controllo del pagamento…",
 	"Your payment did not finish, so you have not been subscribed.":
 		"Il tuo pagamento non è stato completato, quindi non sei stato abbonato.",
 	"Try again": "Riprova",
@@ -168,6 +168,9 @@ export default {
 		many: "Rimangono {count} giorni alla fine della tua prova gratuita.",
 		other: "Rimangono {count} giorni alla fine della tua prova gratuita.",
 	},
+	"No invoice is available for this transaction.":
+		"Nessuna fattura disponibile per questa transazione.",
+	"Could not fetch that invoice. Please try again.": "Impossibile recuperare la fattura. Riprova.",
 	"Indexing budget": "Budget di indicizzazione",
 	"{available} of {capacity} tokens left": "{available} di {capacity} token rimasti",
 	"Refills {perDay} tokens a day. Full again on {date}.":

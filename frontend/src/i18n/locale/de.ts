@@ -95,8 +95,6 @@ export default {
 	Status: "Status",
 	Invoice: "Rechnung",
 	Download: "Herunterladen",
-	"Could not fetch that invoice. Please try again.":
-		"Die Rechnung konnte nicht abgerufen werden. Bitte versuche es erneut.",
 	"Payment received. We're finishing your activation in the background.":
 		"Zahlung erhalten. Wir aktivieren dein Konto im Hintergrund.",
 	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
@@ -104,6 +102,7 @@ export default {
 	Refresh: "Aktualisieren",
 	"Contact support": "Support kontaktieren",
 	"Reference number: {id}": "Referenznummer: {id}",
+	"Checking your payment…": "Zahlung wird überprüft…",
 	"Your payment did not finish, so you have not been subscribed.":
 		"Deine Zahlung konnte nicht abgeschlossen werden, daher bist du nicht angemeldet.",
 	"Try again": "Wiederholen",
@@ -172,6 +171,10 @@ export default {
 		one: "Noch {count} Tag in deiner kostenlosen Testphase.",
 		other: "Noch {count} Tage in deiner kostenlosen Testphase.",
 	},
+	"No invoice is available for this transaction.":
+		"Für diese Transaktion ist keine Rechnung verfügbar.",
+	"Could not fetch that invoice. Please try again.":
+		"Die Rechnung konnte nicht abgerufen werden. Bitte versuche es erneut.",
 	"Indexing budget": "Indexierungsbudget",
 	"{available} of {capacity} tokens left": "{available} von {capacity} Tokens übrig",
 	"Refills {perDay} tokens a day. Full again on {date}.":

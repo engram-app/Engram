@@ -92,8 +92,6 @@ export default {
 	Status: "Stav",
 	Invoice: "Faktura",
 	Download: "Stáhnout",
-	"Could not fetch that invoice. Please try again.":
-		"Nepodařilo se načíst tuto fakturu. Zkuste to znovu.",
 	"Payment received. We're finishing your activation in the background.":
 		"Platba přijata. Dokončujeme vaši aktivaci na pozadí.",
 	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
@@ -101,6 +99,7 @@ export default {
 	Refresh: "Obnovit",
 	"Contact support": "Kontaktujte podporu",
 	"Reference number: {id}": "Referenční číslo: {id}",
+	"Checking your payment…": "Kontrola vaší platby…",
 	"Your payment did not finish, so you have not been subscribed.":
 		"Vaše platba nebyla dokončena, takže nemáte aktivní předplatné.",
 	"Try again": "Zkuste to znovu",
@@ -169,6 +168,10 @@ export default {
 		many: "Zbývá {count} dne vaší bezplatné zkušební verze.",
 		other: "Zbývá {count} dní vaší bezplatné zkušební verze.",
 	},
+	"No invoice is available for this transaction.":
+		"Pro tuto transakci není k dispozici žádná faktura.",
+	"Could not fetch that invoice. Please try again.":
+		"Nepodařilo se načíst tuto fakturu. Zkuste to znovu.",
 	"Indexing budget": "Limit indexování",
 	"{available} of {capacity} tokens left": "{available} z {capacity} tokenů zbývá",
 	"Refills {perDay} tokens a day. Full again on {date}.":

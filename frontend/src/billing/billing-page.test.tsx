@@ -1070,46 +1070,148 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(container.querySelector(".paddle-checkout")).toBeInTheDocument();
 	});
 
-	it("onboarding (inline): closing checkout mid-payment says the buyer is not subscribed and Try again reopens it", async () => {
-		mockBillingApi();
-		const openMock = vi.fn();
-		let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
-		initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
-			captured = opts.eventCallback;
-			return { Checkout: { open: openMock, close: vi.fn() } };
+	// A close after PAYMENT_INITIATED with no COMPLETED is ambiguous: a wallet
+	// sheet the buyer dismissed, or a redirect flow (3DS, PayPal) that DID take
+	// the money and dropped COMPLETED. Check first, claim "not subscribed" only
+	// once the activation push and billing state have both had their chance.
+	describe("checkout closed mid-payment", () => {
+		const NOT_SUBSCRIBED = "Your payment did not finish, so you have not been subscribed.";
+		const CHECKING = "Checking your payment…";
+
+		// `paid.value` flips /billing/status to a paying subscription.
+		function mockBillingApiWithPayment() {
+			const paid = { value: false };
+			mockBillingApi();
+			const base = get.getMockImplementation()!;
+			get.mockImplementation(async (url: string) => {
+				if (url === "/billing/status" && paid.value) {
+					return {
+						tier: "starter",
+						active: true,
+						trial_days_remaining: 0,
+						subscription: {
+							status: "active",
+							tier: "starter",
+							current_period_end: "2026-11-24T00:00:00Z",
+						},
+						caps: {},
+					};
+				}
+				return base(url);
+			});
+			return paid;
+		}
+
+		async function closeMidPayment() {
+			const openMock = vi.fn();
+			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
+			initializePaddleMock.mockImplementation(async (opts: { eventCallback?: typeof captured }) => {
+				captured = opts.eventCallback;
+				return { Checkout: { open: openMock, close: vi.fn() } };
+			});
+			const utils = renderBilling({ inline: true });
+			await waitFor(() => expect(utils.queryAllByText("Starter").length).toBeGreaterThan(0));
+			const startBtn = Array.from(utils.container.querySelectorAll("button")).find(
+				(b) => b.textContent === "Choose Starter",
+			)!;
+			await act(async () => {
+				startBtn.click();
+				await Promise.resolve();
+			});
+			await waitFor(() => expect(openMock).toHaveBeenCalledTimes(1));
+			await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
+			await act(async () => {
+				captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
+				captured!({ name: "checkout.closed", data: {} });
+				await Promise.resolve();
+			});
+			return { ...utils, openMock };
+		}
+
+		async function advance(ms: number) {
+			await act(async () => {
+				vi.advanceTimersByTime(ms);
+				await Promise.resolve();
+			});
+		}
+
+		it("shows the activated path, never 'not subscribed', when the push lands 10 s after close", async () => {
+			vi.useFakeTimers({ shouldAdvanceTime: true });
+			mockBillingApiWithPayment();
+			await closeMidPayment();
+
+			expect(screen.getByText(CHECKING)).toBeInTheDocument();
+			expect(screen.queryByText(NOT_SUBSCRIBED)).not.toBeInTheDocument();
+
+			await advance(10_000);
+			expect(screen.queryByText(NOT_SUBSCRIBED)).not.toBeInTheDocument();
+			await act(async () => {
+				channelHandlers.subscription_activated!({
+					tier: "starter",
+					status: "active",
+					subscription_id: "sub_1",
+				});
+				await Promise.resolve();
+			});
+			await advance(30_000);
+
+			expect(screen.queryByText(NOT_SUBSCRIBED)).not.toBeInTheDocument();
+			expect(screen.queryByText(CHECKING)).not.toBeInTheDocument();
+			expect(screen.getByText("Setting up your account…")).toBeInTheDocument();
 		});
 
-		const { container, queryAllByText } = renderBilling({ inline: true });
-		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Choose Starter",
-		)!;
-		await act(async () => {
-			startBtn.click();
-			await Promise.resolve();
-		});
-		await waitFor(() => expect(openMock).toHaveBeenCalledTimes(1));
+		it("shows the activated path when billing state turns paying while checking", async () => {
+			vi.useFakeTimers({ shouldAdvanceTime: true });
+			const paid = mockBillingApiWithPayment();
+			await closeMidPayment();
 
-		await act(async () => {
-			captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
-			captured!({ name: "checkout.closed", data: {} });
-			await Promise.resolve();
+			paid.value = true;
+			await advance(10_000);
+			await waitFor(() => expect(screen.queryByText(CHECKING)).not.toBeInTheDocument());
+			await advance(30_000);
+
+			expect(screen.queryByText(NOT_SUBSCRIBED)).not.toBeInTheDocument();
 		});
 
-		expect(
-			screen.getByText("Your payment did not finish, so you have not been subscribed."),
-		).toBeInTheDocument();
-		expect(screen.queryByText(/received|activating/iu)).not.toBeInTheDocument();
+		it("says 'not subscribed' only after 30 s with no push, and Try again reopens checkout", async () => {
+			vi.useFakeTimers({ shouldAdvanceTime: true });
+			mockBillingApiWithPayment();
+			const { openMock } = await closeMidPayment();
 
-		await act(async () => {
-			screen.getByRole("button", { name: "Try again" }).click();
-			await Promise.resolve();
+			await advance(29_000);
+			expect(screen.queryByText(NOT_SUBSCRIBED)).not.toBeInTheDocument();
+			expect(screen.getByText(CHECKING)).toBeInTheDocument();
+			await advance(2000);
+			expect(screen.getByText(NOT_SUBSCRIBED)).toBeInTheDocument();
+			expect(screen.queryByText(/received|activating/iu)).not.toBeInTheDocument();
+
+			await act(async () => {
+				screen.getByRole("button", { name: "Try again" }).click();
+				await Promise.resolve();
+			});
+			await waitFor(() => expect(openMock).toHaveBeenCalledTimes(2));
+			expect(openMock.mock.calls[1]![0].items).toEqual(openMock.mock.calls[0]![0].items);
+			expect(screen.queryByText(NOT_SUBSCRIBED)).not.toBeInTheDocument();
 		});
-		await waitFor(() => expect(openMock).toHaveBeenCalledTimes(2));
-		expect(openMock.mock.calls[1]![0].items).toEqual(openMock.mock.calls[0]![0].items);
-		expect(
-			screen.queryByText("Your payment did not finish, so you have not been subscribed."),
-		).not.toBeInTheDocument();
+
+		it("Try again does not open checkout when the subscription is already active", async () => {
+			vi.useFakeTimers({ shouldAdvanceTime: true });
+			const paid = mockBillingApiWithPayment();
+			const { openMock } = await closeMidPayment();
+			await advance(31_000);
+			expect(screen.getByText(NOT_SUBSCRIBED)).toBeInTheDocument();
+
+			// Paid in the meantime (a late webhook); nothing has refetched yet.
+			paid.value = true;
+			await act(async () => {
+				screen.getByRole("button", { name: "Try again" }).click();
+				await Promise.resolve();
+			});
+			await advance(1000);
+
+			await waitFor(() => expect(screen.queryByText(NOT_SUBSCRIBED)).not.toBeInTheDocument());
+			expect(openMock).toHaveBeenCalledTimes(1);
+		});
 	});
 
 	it("onboarding (inline): our own close after an activation push is not reported as an unfinished payment", async () => {
