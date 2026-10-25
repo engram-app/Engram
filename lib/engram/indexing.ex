@@ -1232,7 +1232,9 @@ defmodule Engram.Indexing do
   def unstamp_payload_hash(note) do
     {:ok, _} =
       Repo.with_tenant(note.user_id, fn ->
-        from(n in Note, where: n.id == ^note.id and not is_nil(n.payload_hash))
+        from(n in Note,
+          where: n.kind == "note" and n.id == ^note.id and not is_nil(n.payload_hash)
+        )
         |> Repo.update_all(set: [payload_hash: nil])
       end)
 
