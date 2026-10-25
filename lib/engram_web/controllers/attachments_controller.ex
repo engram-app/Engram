@@ -226,7 +226,10 @@ defmodule EngramWeb.AttachmentsController do
   # Bandit error (a malformed chunk, a client that hung up) still raises.
   @doc false
   def read_raw_body(conn, length) do
-    read_body(conn, [length: length] ++ EngramWeb.Endpoint.body_read_opts())
+    EngramWeb.Plugs.CacheRawBody.read_traced(
+      conn,
+      [length: length] ++ EngramWeb.Endpoint.body_read_opts()
+    )
   rescue
     e in Bandit.HTTPError ->
       if e.plug_status == :request_timeout,

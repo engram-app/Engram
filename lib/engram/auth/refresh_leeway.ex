@@ -15,6 +15,13 @@ defmodule Engram.Auth.RefreshLeeway do
   cushion without leaving the breach detection meaningfully softer (a stolen
   token replayed minutes later is still caught).
 
+  MCP OAuth (`Engram.OAuth`) uses 60s, but its grace re-issue revokes the live
+  successor, refuses once a successor was used, and caps re-issues. Within
+  this window both paths here mint a child with none of that, so a token
+  stolen and rotated inside it forks the family undetected; a wider window
+  widens that. Follow-up: port MCP's successor-unused check and re-issue cap
+  into one shared rotation-grace module (#2211), then raise this to 60s with it.
+
   Keeping the policy in one module means widening or narrowing the window
   changes both code paths atomically.
   """

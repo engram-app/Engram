@@ -273,7 +273,7 @@ defmodule Engram.Auth.DeviceFlow do
           # Reuse of a token revoked outside the leeway → breach (RFC 9700
           # §4.14.2). Invalidate the whole family so the legitimate holder of
           # the current token is forced to re-authenticate.
-          invalidate_family(old_token)
+          invalidate_family(old_token, now)
           {:error, :invalid_refresh_token}
         end
     end
@@ -361,12 +361,17 @@ defmodule Engram.Auth.DeviceFlow do
   # fall inside the leeway window and be mistaken for a benign retry, defeating
   # the revocation. Scoped by family_id (owner-bound, a family never crosses
   # users), so only the compromised lineage is touched.
-  defp invalidate_family(old_token) do
+  #
+  # `seconds_since_revoked` splits the causes apart: seconds means a concurrent
+  # duplicate presentation, hours means a second device sharing a synced token
+  # or a rotation the client never persisted.
+  defp invalidate_family(old_token, now) do
     Logger.warning(
       "device refresh-token reuse detected; revoking family",
       Engram.Logger.Metadata.with_category(:warning, :auth,
         family_id: old_token.family_id,
-        user_id: old_token.user_id
+        user_id: old_token.user_id,
+        seconds_since_revoked: DateTime.diff(now, old_token.revoked_at)
       )
     )
 

@@ -25,7 +25,12 @@ After 10 s (`link_budget_ms/0`) it enqueues what is left as its successor, so a 
 at a time, each link (budget plus one chunk) stays far inside the 5 minute job timeout, and a link
 gives its queue slot back to waiting checkpoints every ~10 s; a 34k storm is two links. A rotation
 that starts mid-link snoozes the job instead of spending an attempt. Other release jobs for the
-vault (folder or note deletes) can still run beside a chain. Enqueueing every chunk up front
+vault (folder or note deletes) can still run beside a chain. Every release goes through
+`ReleaseIndexEntries.enqueue/3`, which joins the vault's job that is still `available`/`scheduled`
+instead of queueing its own (2026-10-24): deleting K notes one request at a time is one job, not K
+full index rewrites. A running job is never joined, and a pending job takes joined ids only up to
+`chunk_size/0` (a chain successor carrying more than a chunk takes none); past that a release gets
+its own job. The lookup probes Oban's `(state, queue, ...)` index. Enqueueing every chunk up front
 (the first shape of #2170) let 17 chunks fill all 6 `crdt_checkpoint` slots, each waiting on the
 vault's fold lock while holding a DB connection. The size is measured, not assumed: a chunk's cost
 is mostly a fixed part that scales with the whole index (~0.2-0.5 s at 20-40k entries), each id adds ~0.05 ms, and a worst-case delete-set

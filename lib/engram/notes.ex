@@ -4292,13 +4292,11 @@ defmodule Engram.Notes do
     #
     # A job rather than an inline call, uniformly with the bulk paths: the
     # enqueue joins this transaction, so the release cannot outrun the
-    # delete, and a failure retries instead of being discarded. See
-    # ReleaseIndexEntries.
+    # delete, and a failure retries instead of being discarded. It joins the
+    # vault's pending release, so deleting K notes one request at a time is
+    # one index rewrite, not K. See ReleaseIndexEntries.enqueue/3.
     _ =
-      Enqueue.enqueue(
-        ReleaseIndexEntries.new_for(user.id, vault.id, [note.id]),
-        "release_index_entries"
-      )
+      ReleaseIndexEntries.enqueue(user.id, vault.id, [note.id])
 
     broadcast_change(user.id, vault.id, "delete", path, note.id, opts)
     :deleted
@@ -4435,14 +4433,7 @@ defmodule Engram.Notes do
           # note forever, even though the rows are free. Skipping it turns a
           # 200-note folder delete into 200 permanent path reservations.
           _ =
-            Enqueue.enqueue(
-              ReleaseIndexEntries.new_for(
-                user.id,
-                vault.id,
-                Enum.map(notes, & &1.id)
-              ),
-              "release_index_entries"
-            )
+            ReleaseIndexEntries.enqueue(user.id, vault.id, Enum.map(notes, & &1.id))
 
           # Post-commit: same per-note delete events clients already handle.
           # Meta rows decrypt cheaply (path envelope only — no content).
@@ -6711,14 +6702,7 @@ defmodule Engram.Notes do
       # live notes the authority does not mention, which projection can never
       # fix because it never acts on absence.
       _ =
-        Enqueue.enqueue(
-          ReleaseIndexEntries.new_for(
-            user.id,
-            vault.id,
-            Enum.map(real_notes, & &1.id)
-          ),
-          "release_index_entries"
-        )
+        ReleaseIndexEntries.enqueue(user.id, vault.id, Enum.map(real_notes, & &1.id))
 
       # Side effects outside the transaction context, so they never fire if
       # the update_all above rolled back. Qdrant cleanup + broadcasts.
