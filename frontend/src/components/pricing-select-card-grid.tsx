@@ -36,7 +36,7 @@ export function PricingSelectCardGrid({
 	className,
 }: PricingSelectCardGridProps) {
 	const { t } = useT();
-	const { total, originalTotal, interval, trialPeriod } = priceData ?? {};
+	const { total, originalTotal, interval } = priceData ?? {};
 
 	const showBadges = badge || isCurrent;
 
@@ -90,11 +90,6 @@ export function PricingSelectCardGrid({
 					{Boolean(showInterval && interval) && (
 						<div className="text-muted-foreground text-xs">
 							{t("per {interval}", { interval: interval ?? "" })}
-						</div>
-					)}
-					{Boolean(trialPeriod) && (
-						<div className="mt-1 text-muted-foreground text-xs">
-							{t("{trialPeriod} free trial", { trialPeriod: trialPeriod ?? "" })}
 						</div>
 					)}
 				</CardHeader>

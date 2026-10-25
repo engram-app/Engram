@@ -208,9 +208,9 @@ describe("OnboardBillingPage — push activation", () => {
 
 		renderOnboardBilling();
 
-		// Plan picker visible — both "Start free trial" buttons present.
+		// Plan picker visible — both "Choose" buttons present.
 		await waitFor(() =>
-			expect(screen.getAllByRole("button", { name: /start free trial/iu }).length).toBeGreaterThan(
+			expect(screen.getAllByRole("button", { name: /^choose (starter|pro)$/iu }).length).toBeGreaterThan(
 				0,
 			),
 		);
@@ -266,7 +266,7 @@ describe("OnboardBillingPage — push activation", () => {
 		renderOnboardBilling();
 
 		await waitFor(() =>
-			expect(screen.getAllByRole("button", { name: /start free trial/iu }).length).toBeGreaterThan(
+			expect(screen.getAllByRole("button", { name: /^choose (starter|pro)$/iu }).length).toBeGreaterThan(
 				0,
 			),
 		);
@@ -375,15 +375,15 @@ describe("OnboardBillingPage — push activation", () => {
 		const { container } = renderOnboardBilling();
 
 		await waitFor(() =>
-			expect(screen.getAllByRole("button", { name: /start free trial/iu }).length).toBeGreaterThan(
+			expect(screen.getAllByRole("button", { name: /^choose (starter|pro)$/iu }).length).toBeGreaterThan(
 				0,
 			),
 		);
 		await waitFor(() => expect(capturedEventCallback).toBeDefined());
 
-		// Click "Start free trial" — inline mount target replaces plan cards.
+		// Click "Choose Starter" — inline mount target replaces plan cards.
 		await act(async () => {
-			screen.getAllByRole("button", { name: /start free trial/iu })[0]!.click();
+			screen.getAllByRole("button", { name: /^choose (starter|pro)$/iu })[0]!.click();
 			await Promise.resolve();
 		});
 		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
@@ -396,7 +396,7 @@ describe("OnboardBillingPage — push activation", () => {
 		});
 
 		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
-		expect(screen.queryAllByRole("button", { name: /start free trial/iu }).length).toBe(0);
+		expect(screen.queryAllByRole("button", { name: /^choose (starter|pro)$/iu }).length).toBe(0);
 		// The user can still back out manually.
 		expect(screen.getByRole("button", { name: /choose a different plan/iu })).toBeInTheDocument();
 	});
@@ -498,7 +498,7 @@ describe("OnboardBillingPage — revisit after the billing step", () => {
 		renderOnboardBilling();
 
 		await waitFor(() =>
-			expect(screen.getAllByRole("button", { name: /start free trial/iu }).length).toBeGreaterThan(
+			expect(screen.getAllByRole("button", { name: /^choose (starter|pro)$/iu }).length).toBeGreaterThan(
 				0,
 			),
 		);
@@ -517,7 +517,7 @@ describe("OnboardBillingPage — revisit after the billing step", () => {
 		renderOnboardBilling();
 
 		await waitFor(() =>
-			expect(screen.getAllByRole("button", { name: /start free trial/iu }).length).toBeGreaterThan(
+			expect(screen.getAllByRole("button", { name: /^choose (starter|pro)$/iu }).length).toBeGreaterThan(
 				0,
 			),
 		);
@@ -566,7 +566,7 @@ describe("OnboardBillingPage — revisit after the billing step", () => {
 			await Promise.resolve();
 		});
 		await waitFor(() =>
-			expect(screen.getAllByRole("button", { name: /start free trial/iu }).length).toBeGreaterThan(
+			expect(screen.getAllByRole("button", { name: /^choose (starter|pro)$/iu }).length).toBeGreaterThan(
 				0,
 			),
 		);

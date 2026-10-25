@@ -133,9 +133,9 @@ const OVERLAY_SETTINGS = {
 };
 
 function startButton(): HTMLElement {
-	const [first] = screen.getAllByRole("button", { name: "Start free trial" });
+	const [first] = screen.getAllByRole("button", { name: "Choose Starter" });
 	if (!first) {
-		throw new Error("no Start free trial button");
+		throw new Error("no Choose Starter button");
 	}
 	return first;
 }

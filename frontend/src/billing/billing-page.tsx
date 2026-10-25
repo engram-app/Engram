@@ -917,7 +917,7 @@ export default function BillingPage({
 								<>
 									<h2 className="font-semibold text-foreground text-lg">{t("Choose a Plan")}</h2>
 									<p className="text-muted-foreground text-sm">
-										{t("Both plans include a 7-day free trial.")}
+										{t("Both plans come with a 14-day money-back guarantee.")}
 									</p>
 								</>
 							)}
@@ -956,7 +956,7 @@ export default function BillingPage({
 									summary={t("Unlimited vaults · 50 GB · cross-vault search + API")}
 									features={catalog.pro.features}
 									ctaLabel={t("Choose Pro")}
-									ctaNote={t("7-day free trial · cancel anytime")}
+									ctaNote={t("14-day money-back guarantee · cancel anytime")}
 									onClick={() => handleStartCheckout("pro")}
 									disabled={!checkoutReady}
 									recommended
@@ -969,7 +969,7 @@ export default function BillingPage({
 									summary={t("10 vaults · 10 GB · unlimited AI")}
 									features={catalog.starter.features}
 									ctaLabel={t("Choose Starter")}
-									ctaNote={t("7-day free trial · cancel anytime")}
+									ctaNote={t("14-day money-back guarantee · cancel anytime")}
 									onClick={() => handleStartCheckout("starter")}
 									disabled={!checkoutReady}
 									open={openTier === "starter"}

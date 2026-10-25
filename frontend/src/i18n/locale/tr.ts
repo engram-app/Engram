@@ -122,11 +122,13 @@ export default {
 		"Ödeme işlemi başarısız oldu. Lütfen tekrar deneyin.",
 	"Simulate failure": "Başarısızlığı simüle et",
 	"Choose a Plan": "Bir plan seçin",
-	"Both plans include a 7-day free trial.": "Her iki plan da 7 günlük ücretsiz deneme içerir.",
+	"Both plans come with a 14-day money-back guarantee.":
+		"Her iki plan da 14 günlük para iade garantisi ile gelir.",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"Sınırsız kasa · 50 GB · kasa arası arama + API",
 	"Choose Pro": "Pro seçin",
-	"7-day free trial · cancel anytime": "7 günlük ücretsiz deneme · istediğiniz zaman iptal edin",
+	"14-day money-back guarantee · cancel anytime":
+		"14 günlük para iade garantisi · istediğiniz zaman iptal edin",
 	"10 vaults · 10 GB · unlimited AI": "10 kasa · 10 GB · sınırsız yapay zeka",
 	"Choose Starter": "Starter seçin",
 	"Choose Free": "Ücretsiz seçin",
@@ -269,7 +271,6 @@ export default {
 	"Most popular": "En popüler",
 	"Your current plan": "Mevcut aboneliğiniz",
 	"You're on this plan": "Şu paketi kullanıyorsunuz",
-	"Start free trial": "Ücretsiz denemeye başlayın",
 	Popular: "Popüler",
 	"20 AI searches a day": "Günde 20 yapay zeka sorgusu",
 	"1 vault": "1 kasa",
@@ -403,7 +404,6 @@ export default {
 		"Deneme süreniz boyunca herhangi bir ücret alınmaz. Ücretlendirme, deneme sürenizin bitmesiyle başlar.",
 	"An invoice will be created for this amount.": "Bu tutar için bir fatura oluşturulacaktır.",
 	"per {interval}": "{interval} başına",
-	"{trialPeriod} free trial": "{trialPeriod} ücretsiz deneme",
 	"Dismiss alert": "Uyarıyı kapat",
 	"Expires {date}": "Süresi {date} tarihinde doluyor",
 	Payment: "Ödeme",
@@ -967,8 +967,8 @@ export default {
 	"Couldn't save your answers, please try again.":
 		"Cevaplarınızı kaydedemedik, lütfen tekrar deneyin.",
 	"Choose your plan": "Planınızı seçin",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"Ücretli planlarda 7 günlük ücretsiz deneme. Kredi kartı gereklidir, deneme süresi dolana kadar ücret alınmaz.",
+	"Paid plans come with a 14-day money-back guarantee.":
+		"Ücretli planlar 14 günlük para iade garantisi ile gelir.",
 	"Continue with Free →": "Ücretsiz sürümle devam et →",
 	"{summary} · upgrade anytime": "{summary} · istediğiniz zaman yükseltin",
 	"Step {step} of {total}": "{step} adımı, {total} toplam",

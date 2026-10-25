@@ -263,7 +263,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
 
 		const startButtons = container.querySelectorAll("button");
-		const startBtn = Array.from(startButtons).find((b) => b.textContent === "Start free trial");
+		const startBtn = Array.from(startButtons).find((b) => b.textContent === "Choose Starter");
 		expect(startBtn).toBeDefined();
 
 		await act(async () => {
@@ -338,7 +338,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 	describe("checkout funnel tracking", () => {
 		function startCheckout(container: HTMLElement) {
 			const startBtn = Array.from(container.querySelectorAll("button")).find(
-				(b) => b.textContent === "Start free trial",
+				(b) => b.textContent === "Choose Starter",
 			)!;
 			return act(async () => {
 				startBtn.click();
@@ -828,7 +828,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		// "Starter" renders twice (desktop card + mobile accordion); assert count.
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
 		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Start free trial",
+			(b) => b.textContent === "Choose Starter",
 		)!;
 		await act(async () => {
 			startBtn.click();
@@ -862,7 +862,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
 		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Start free trial",
+			(b) => b.textContent === "Choose Starter",
 		)!;
 		await act(async () => {
 			startBtn.click();
@@ -1120,7 +1120,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
 		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Start free trial",
+			(b) => b.textContent === "Choose Starter",
 		)!;
 		await act(async () => {
 			startBtn.click();

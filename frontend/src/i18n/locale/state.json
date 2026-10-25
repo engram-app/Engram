@@ -319,7 +319,9 @@
 	},
 	"ja": {
 		"translator": "202d8f78",
-		"failed": {},
+		"failed": {
+			"14-day money-back guarantee · cancel anytime": "2026-10-24"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"{count} notes have keyword search only, until {date}.": "{count} note has keyword search only, until {date}.",

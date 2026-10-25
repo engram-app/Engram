@@ -120,11 +120,13 @@ export default {
 	"Payment did not go through. Please try again.": "Thanh toán không thành công. Vui lòng thử lại.",
 	"Simulate failure": "Mô phỏng lỗi",
 	"Choose a Plan": "Chọn gói",
-	"Both plans include a 7-day free trial.": "Cả hai gói đều có bản dùng thử miễn phí 7 ngày.",
+	"Both plans come with a 14-day money-back guarantee.":
+		"Cả hai gói đều có chính sách hoàn tiền 14 ngày.",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"Kho lưu trữ không giới hạn · 50 GB · tìm kiếm đa kho lưu trữ + API",
 	"Choose Pro": "Chọn gói Pro",
-	"7-day free trial · cancel anytime": "Bản dùng thử miễn phí 7 ngày · hủy bất cứ lúc nào",
+	"14-day money-back guarantee · cancel anytime":
+		"Chính sách hoàn tiền 14 ngày · hủy bất cứ lúc nào",
 	"10 vaults · 10 GB · unlimited AI": "10 kho lưu trữ · 10 GB · AI không giới hạn",
 	"Choose Starter": "Chọn gói Starter",
 	"Choose Free": "Chọn Miễn phí",
@@ -261,7 +263,6 @@ export default {
 	"Most popular": "Phổ biến nhất",
 	"Your current plan": "Gói hiện tại của bạn",
 	"You're on this plan": "Bạn đang sử dụng gói này",
-	"Start free trial": "Bắt đầu dùng thử miễn phí",
 	Popular: "Phổ biến",
 	"20 AI searches a day": "20 lượt tìm kiếm AI mỗi ngày",
 	"1 vault": "1 kho lưu trữ",
@@ -395,7 +396,6 @@ export default {
 		"Không có phí trong thời gian dùng thử. Thanh toán bắt đầu khi thời gian dùng thử kết thúc.",
 	"An invoice will be created for this amount.": "Một hóa đơn sẽ được tạo cho số tiền này.",
 	"per {interval}": "mỗi {interval}",
-	"{trialPeriod} free trial": "dùng thử miễn phí {trialPeriod}",
 	"Dismiss alert": "Bỏ qua cảnh báo",
 	"Expires {date}": "Hết hạn {date}",
 	Payment: "Thanh toán",
@@ -960,8 +960,8 @@ export default {
 	"Couldn't save your answers, please try again.":
 		"Không thể lưu lại câu trả lời của bạn, vui lòng thử lại.",
 	"Choose your plan": "Chọn gói của bạn",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"Thử nghiệm miễn phí 7 ngày cho các gói trả phí. Cần thẻ, không tính phí cho đến khi hết hạn.",
+	"Paid plans come with a 14-day money-back guarantee.":
+		"Các gói trả phí đều có chính sách hoàn tiền 14 ngày.",
 	"Continue with Free →": "Tiếp tục với gói Miễn phí →",
 	"{summary} · upgrade anytime": "{summary} · nâng cấp bất cứ lúc nào",
 	"Step {step} of {total}": "Bước {step} trong {total}",

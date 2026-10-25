@@ -123,11 +123,13 @@ export default {
 	"Payment did not go through. Please try again.": "Pembayaran tidak berhasil. Silakan coba lagi.",
 	"Simulate failure": "Simulasikan kegagalan",
 	"Choose a Plan": "Pilih Paket",
-	"Both plans include a 7-day free trial.": "Kedua paket termasuk uji coba gratis 7 hari.",
+	"Both plans come with a 14-day money-back guarantee.":
+		"Kedua paket hadir dengan jaminan uang kembali 14 hari.",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"Vault tanpa batas · 50 GB · pencarian lintas vault + API",
 	"Choose Pro": "Pilih Pro",
-	"7-day free trial · cancel anytime": "Uji coba gratis 7 hari · dapat dibatalkan kapan saja",
+	"14-day money-back guarantee · cancel anytime":
+		"Jaminan uang kembali 14 hari · batalkan kapan saja",
 	"10 vaults · 10 GB · unlimited AI": "10 vault · 10 GB · AI tanpa batas",
 	"Choose Starter": "Pilih Starter",
 	"Choose Free": "Pilih Gratis",
@@ -265,7 +267,6 @@ export default {
 	"Most popular": "Paling populer",
 	"Your current plan": "Paket langganan Anda saat ini",
 	"You're on this plan": "Anda menggunakan paket ini",
-	"Start free trial": "Mulai uji coba gratis",
 	Popular: "Populer",
 	"20 AI searches a day": "20 pencarian AI per hari",
 	"1 vault": "1 vault",
@@ -398,7 +399,6 @@ export default {
 		"Tidak ada biaya selama masa percobaan Anda. Penagihan dimulai setelah masa percobaan berakhir.",
 	"An invoice will be created for this amount.": "Faktur akan dibuat untuk jumlah ini.",
 	"per {interval}": "per {interval}",
-	"{trialPeriod} free trial": "{trialPeriod} uji coba gratis",
 	"Dismiss alert": "Tutup peringatan",
 	"Expires {date}": "Berakhir pada {date}",
 	Payment: "Pembayaran",
@@ -963,8 +963,8 @@ export default {
 	"Couldn't save your answers, please try again.":
 		"Tidak dapat menyimpan jawaban Anda, silakan coba lagi.",
 	"Choose your plan": "Pilih paket Anda",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"Uji coba gratis 7 hari untuk paket berbayar. Kartu diperlukan, tidak ada biaya sampai selesai.",
+	"Paid plans come with a 14-day money-back guarantee.":
+		"Paket berbayar hadir dengan jaminan uang kembali 14 hari.",
 	"Continue with Free →": "Lanjutkan dengan Gratis →",
 	"{summary} · upgrade anytime": "{summary} · tingkatkan kapan saja",
 	"Step {step} of {total}": "Langkah {step} dari {total}",

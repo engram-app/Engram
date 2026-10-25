@@ -126,12 +126,13 @@ export default {
 		"Die Zahlung ist fehlgeschlagen. Bitte versuche es erneut.",
 	"Simulate failure": "Fehler simulieren",
 	"Choose a Plan": "Wähle einen Plan",
-	"Both plans include a 7-day free trial.":
-		"Beide Pläne beinhalten eine 7-tägige kostenlose Testphase.",
+	"Both plans come with a 14-day money-back guarantee.":
+		"Beide Pläne haben eine 14-tägige Geld-zurück-Garantie.",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"Unbegrenzte Vaults · 50 GB · Suche über Vaults + API",
 	"Choose Pro": "Pro wählen",
-	"7-day free trial · cancel anytime": "7-tägige kostenlose Testphase · jederzeit kündigen",
+	"14-day money-back guarantee · cancel anytime":
+		"14-tägige Geld-zurück-Garantie · jederzeit kündigen",
 	"10 vaults · 10 GB · unlimited AI": "10 Vaults · 10 GB · unbegrenzte KI",
 	"Choose Starter": "Starter wählen",
 	"Choose Free": "Kostenlose Version wählen",
@@ -274,7 +275,6 @@ export default {
 	"Most popular": "Beliebtest",
 	"Your current plan": "Dein aktueller Plan",
 	"You're on this plan": "Du nutzt diesen Plan",
-	"Start free trial": "Kostenlose Testphase starten",
 	Popular: "Beliebt",
 	"20 AI searches a day": "20 KI-Suchen pro Tag",
 	"1 vault": "1 Vault",
@@ -410,7 +410,6 @@ export default {
 		"Keine Gebühren während deiner Testphase. Die Abrechnung beginnt, wenn deine Testphase endet.",
 	"An invoice will be created for this amount.": "Eine Rechnung wird für diesen Betrag erstellt.",
 	"per {interval}": "pro {interval}",
-	"{trialPeriod} free trial": "{trialPeriod} kostenlose Testphase",
 	"Dismiss alert": "Warnung schließen",
 	"Expires {date}": "Gültig bis {date}",
 	Payment: "Zahlung",
@@ -985,8 +984,8 @@ export default {
 	"Couldn't save your answers, please try again.":
 		"Deine Antworten konnten nicht gespeichert werden, bitte versuche es erneut.",
 	"Choose your plan": "Wähle deinen Plan",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"7-tägige kostenlose Testphase für kostenpflichtige Pläne. Kreditkarte erforderlich, keine Gebühr bis zum Ende.",
+	"Paid plans come with a 14-day money-back guarantee.":
+		"Bezahlte Pläne haben eine 14-tägige Geld-zurück-Garantie.",
 	"Continue with Free →": "Mit kostenloser Version fortfahren →",
 	"{summary} · upgrade anytime": "{summary} · jederzeit upgraden",
 	"Step {step} of {total}": "Schritt {step} von {total}",

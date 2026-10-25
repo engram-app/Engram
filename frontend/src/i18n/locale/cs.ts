@@ -122,11 +122,13 @@ export default {
 	"Payment did not go through. Please try again.": "Platba nebyla provedena. Zkuste to znovu.",
 	"Simulate failure": "Simulovat chybu",
 	"Choose a Plan": "Vyberte plán",
-	"Both plans include a 7-day free trial.": "Oba plány zahrnují 7denní zkušební verzi.",
+	"Both plans come with a 14-day money-back guarantee.":
+		"Oba plány zahrnují 14denní garanci vrácení peněz.",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"Neomezený počet trezorů · 50 GB · vyhledávání mezi trezory + API",
 	"Choose Pro": "Vyberte Pro",
-	"7-day free trial · cancel anytime": "7denní zkušební verze · můžete kdykoli zrušit",
+	"14-day money-back guarantee · cancel anytime":
+		"14denní garance vrácení peněz · můžete zrušit kdykoli",
 	"10 vaults · 10 GB · unlimited AI": "10 trezorů · 10 GB · neomezené AI",
 	"Choose Starter": "Vyberte Starter",
 	"Choose Free": "Vyberte Zdarma",
@@ -272,7 +274,6 @@ export default {
 	"Most popular": "Nejpopulárnější",
 	"Your current plan": "Váš aktuální tarif",
 	"You're on this plan": "Používáte tento tarif",
-	"Start free trial": "Začněte bezplatnou zkušební verzi",
 	Popular: "Oblíbené",
 	"20 AI searches a day": "20 AI vyhledávání denně",
 	"1 vault": "1 trezor",
@@ -412,7 +413,6 @@ export default {
 		"Během zkušební doby nejsou žádné poplatky. Fakturace začíná po skončení zkušební doby.",
 	"An invoice will be created for this amount.": "Bude vytvořena faktura za tuto částku.",
 	"per {interval}": "za {interval}",
-	"{trialPeriod} free trial": "{trialPeriod} zkušební verze zdarma",
 	"Dismiss alert": "Ignorovat upozornění",
 	"Expires {date}": "Platnost do {date}",
 	Payment: "Platba",
@@ -1041,8 +1041,8 @@ export default {
 	"Couldn't save your answers, please try again.":
 		"Nepodařilo se uložit vaše odpovědi, zkuste to znovu.",
 	"Choose your plan": "Vyberte si svůj tarif",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"7denní zkušební verze u placených tarifů. Vyžaduje se platební karta, poplatek bude stržen až po skončení zkušební doby.",
+	"Paid plans come with a 14-day money-back guarantee.":
+		"Placené plány zahrnují 14denní garanci vrácení peněz.",
 	"Continue with Free →": "Pokračovat s bezplatnou verzí →",
 	"{summary} · upgrade anytime": "{summary} · můžete kdykoli upgradovat",
 	"Step {step} of {total}": "Krok {step} z {total}",

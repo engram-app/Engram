@@ -125,13 +125,13 @@ export default {
 		"O pagamento não foi processado. Por favor, tente novamente.",
 	"Simulate failure": "Simular falha",
 	"Choose a Plan": "Escolha um plano",
-	"Both plans include a 7-day free trial.":
-		"Ambos os planos incluem um período de teste gratuito de 7 dias.",
+	"Both plans come with a 14-day money-back guarantee.":
+		"Ambos os planos incluem uma garantia de reembolso de 14 dias.",
 	"Unlimited vaults · 50 GB · cross-vault search + API":
 		"Cofres ilimitados · 50 GB · busca entre cofres + API",
 	"Choose Pro": "Escolher plano Pro",
-	"7-day free trial · cancel anytime":
-		"Período de teste gratuito de 7 dias · cancele a qualquer momento",
+	"14-day money-back guarantee · cancel anytime":
+		"Garantia de reembolso de 14 dias · cancele a qualquer momento",
 	"10 vaults · 10 GB · unlimited AI": "10 cofres · 10 GB · IA ilimitada",
 	"Choose Starter": "Escolher plano Starter",
 	"Choose Free": "Escolha Gratuito",
@@ -276,7 +276,6 @@ export default {
 	"Most popular": "Mais popular",
 	"Your current plan": "Seu plano atual",
 	"You're on this plan": "Você está neste plano",
-	"Start free trial": "Comece o teste gratuito",
 	Popular: "Popular",
 	"20 AI searches a day": "20 buscas por IA por dia",
 	"1 vault": "1 cofre",
@@ -412,7 +411,6 @@ export default {
 		"Sem cobranças durante seu período de teste. A cobrança começa quando seu período de teste termina.",
 	"An invoice will be created for this amount.": "Uma fatura será criada para este valor.",
 	"per {interval}": "por {interval}",
-	"{trialPeriod} free trial": "{trialPeriod} de teste gratuito",
 	"Dismiss alert": "Cancelar alerta",
 	"Expires {date}": "Expira em {date}",
 	Payment: "Pagamento",
@@ -1005,8 +1003,8 @@ export default {
 	"Couldn't save your answers, please try again.":
 		"Não foi possível salvar suas respostas, por favor, tente novamente.",
 	"Choose your plan": "Escolha seu plano",
-	"7-day free trial on paid plans. Card required, no charge until it ends.":
-		"Teste gratuito de 7 dias nos planos pagos. Cartão necessário, sem cobrança até o término.",
+	"Paid plans come with a 14-day money-back guarantee.":
+		"Os planos pagos incluem uma garantia de reembolso de 14 dias.",
 	"Continue with Free →": "Continuar com a versão Gratuita →",
 	"{summary} · upgrade anytime": "{summary} · faça upgrade a qualquer momento",
 	"Step {step} of {total}": "Etapa {step} de {total}",
