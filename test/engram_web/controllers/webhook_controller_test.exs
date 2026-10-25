@@ -665,6 +665,57 @@ defmodule EngramWeb.WebhookControllerTest do
     end
   end
 
+  describe "POST /webhooks/paddle: refund cancel rejected by Paddle" do
+    test "answers 200 so Paddle stops retrying a cancel it will never accept" do
+      import Mox
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_rej",
+        paddle_customer_id: "ctm_rej",
+        status: "active"
+      )
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn _ ->
+        {:ok,
+         [
+           %{
+             "id" => "txn_rej",
+             "status" => "completed",
+             "subscription_id" => "sub_rej",
+             "billed_at" => "2026-10-01T00:00:00Z",
+             "details" => %{"totals" => %{"grand_total" => "1500"}}
+           }
+         ]}
+      end)
+
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ ->
+        {:error, {:paddle_error, 422, %{}}}
+      end)
+
+      expect(Engram.Paddle.ClientMock, :get_subscription, fn _ ->
+        {:ok, %{"id" => "sub_rej", "status" => "active"}}
+      end)
+
+      payload =
+        Jason.encode!(%{
+          "event_type" => "adjustment.updated",
+          "event_id" => "ntf_rej",
+          "data" => %{
+            "id" => "adj_rej",
+            "action" => "refund",
+            "type" => "full",
+            "status" => "approved",
+            "subscription_id" => "sub_rej",
+            "transaction_id" => "txn_rej"
+          }
+        })
+
+      assert json_response(send_payload(payload), 200)["status"] == "ok"
+    end
+  end
+
   describe "POST /webhooks/paddle: late created for an old subscription" do
     test "a redelivered created for the OLD subscription does not replace the live new one" do
       user = insert(:user)

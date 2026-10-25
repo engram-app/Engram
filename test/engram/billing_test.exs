@@ -1490,6 +1490,65 @@ defmodule Engram.BillingTest do
                )
     end
 
+    # Paddle refuses the cancel because the subscription is already canceled
+    # there (a concurrent duplicate adjustment, or a lost canceled webhook):
+    # apply Paddle's state instead of retrying for two days.
+    test "a 4xx on the refund cancel applies Paddle's canceled state" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_4xx_1", status: "active")
+
+      expect_history("sub_4xx_1")
+
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ ->
+        {:error, {:paddle_error, 400, %{"error" => %{"code" => "subscription_locked_canceled"}}}}
+      end)
+
+      expect(Engram.Paddle.ClientMock, :get_subscription, fn "sub_4xx_1" ->
+        {:ok, canceled_entity("sub_4xx_1")}
+      end)
+
+      assert {:ok, %Subscription{status: "canceled"}} =
+               Billing.upsert_from_paddle_event(
+                 refund_event("adjustment.updated", "sub_4xx_1", %{})
+               )
+    end
+
+    test "a 4xx on the refund cancel for a sub Paddle still holds live is rejected" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_4xx_2", status: "active")
+
+      expect_history("sub_4xx_2")
+
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ ->
+        {:error, {:paddle_error, 422, %{}}}
+      end)
+
+      expect(Engram.Paddle.ClientMock, :get_subscription, fn "sub_4xx_2" ->
+        {:ok, Map.put(canceled_entity("sub_4xx_2"), "status", "active")}
+      end)
+
+      assert {:error, {:adjustment_cancel_rejected, 422}} =
+               Billing.upsert_from_paddle_event(
+                 refund_event("adjustment.updated", "sub_4xx_2", %{})
+               )
+    end
+
+    test "a 429 on the refund cancel stays transient" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_429", status: "active")
+
+      expect_history("sub_429")
+
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ ->
+        {:error, {:paddle_error, 429, %{}}}
+      end)
+
+      assert {:error, {:adjustment_cancel_failed, {:paddle_error, 429, _}}} =
+               Billing.upsert_from_paddle_event(
+                 refund_event("adjustment.updated", "sub_429", %{})
+               )
+    end
+
     test "adjustment.* with no known subscription is ignored" do
       for data <- [%{"subscription_id" => "sub_nope"}, %{"subscription_id" => nil}] do
         event = %{"event_type" => "adjustment.created", "data" => data}

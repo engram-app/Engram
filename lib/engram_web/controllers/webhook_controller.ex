@@ -144,12 +144,16 @@ defmodule EngramWeb.WebhookController do
     end
   end
 
-  # Permanent: the payload has no owner, or fails validation (bad status, a
-  # paddle id another user holds, an unknown price on a first insert). The
-  # same bytes fail the same way on every retry. Everything else (a raised
-  # exception, a DB error, an unknown reason) is treated as transient.
+  # Permanent: the payload has no owner, fails validation (bad status, a
+  # paddle id another user holds, an unknown price on a first insert), or
+  # asks for a cancel Paddle rejects. The same bytes fail the same way on
+  # every retry. Everything else (a raised exception, a DB error, an unknown
+  # reason) is treated as transient.
   defp permanent_paddle_error?(:missing_user_id), do: true
   defp permanent_paddle_error?(%Ecto.Changeset{}), do: true
+  # Paddle refused our refund cancel with a 4xx and still holds the
+  # subscription live: logged at error above, for a human.
+  defp permanent_paddle_error?({:adjustment_cancel_rejected, _status}), do: true
   defp permanent_paddle_error?(_reason), do: false
 
   def resend(conn, _params) do

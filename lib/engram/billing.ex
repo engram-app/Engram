@@ -981,17 +981,30 @@ defmodule Engram.Billing do
           )
         )
 
-        # Stamped with the entity's own update time, so a subscription.updated
-        # from before the refund, delivered late, is skipped as stale.
-        upsert_from_paddle_event(%{
-          "event_type" => "subscription.canceled",
-          "occurred_at" => canceled["updated_at"] || canceled["canceled_at"],
-          "data" => canceled
-        })
+        apply_paddle_cancel(canceled)
+
+      # A 4xx (not 429) never succeeds on retry. Usually Paddle has already
+      # canceled it (a concurrent duplicate adjustment, a lost canceled
+      # webhook): apply Paddle's state. Otherwise it is permanent.
+      {:error, {:paddle_error, status, _body}} when status in 400..499 and status != 429 ->
+        case Client.impl().get_subscription(sub.paddle_subscription_id) do
+          {:ok, %{"status" => "canceled"} = canceled} -> apply_paddle_cancel(canceled)
+          _ -> {:error, {:adjustment_cancel_rejected, status}}
+        end
 
       {:error, reason} ->
         {:error, {:adjustment_cancel_failed, reason}}
     end
+  end
+
+  # Stamped with the entity's own update time, so a subscription.updated
+  # from before the refund, delivered late, is skipped as stale.
+  defp apply_paddle_cancel(canceled) do
+    upsert_from_paddle_event(%{
+      "event_type" => "subscription.canceled",
+      "occurred_at" => canceled["updated_at"] || canceled["canceled_at"],
+      "data" => canceled
+    })
   end
 
   @doc """
