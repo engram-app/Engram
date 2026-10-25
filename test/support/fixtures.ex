@@ -372,26 +372,11 @@ defmodule Engram.Fixtures do
   tampered bytes where they are read.
   """
   def mirror_body!(note_id) do
-    merged = fn ct, nonce ->
-      """
-      CASE WHEN n.#{ct} IS NULL THEN NULL
-           WHEN n.#{nonce} IS NULL THEN n.#{ct}
-           WHEN length(n.#{nonce}) = 13 THEN n.#{nonce} || n.#{ct}
-           ELSE '\\x00'::bytea || n.#{nonce} || n.#{ct} END
-      """
-    end
-
-    Engram.Repo.query!(
-      """
-      UPDATE note_bodies b
-      SET content_ct = #{merged.("content_ciphertext", "content_nonce")},
-          crdt_ct = #{merged.("crdt_state_ciphertext", "crdt_state_nonce")}
-      FROM notes n
-      WHERE n.id = b.note_id AND b.note_id = $1
-      """,
-      [Ecto.UUID.dump!(note_id)]
-    )
-
+    id = Ecto.UUID.dump!(note_id)
+    # The trigger's own copy: with no body row, a write listing `kind`
+    # re-inserts it from the notes columns (what `NoteSplit` does).
+    Engram.Repo.query!("DELETE FROM note_bodies WHERE note_id = $1", [id])
+    Engram.Repo.query!("UPDATE notes SET kind = kind WHERE id = $1", [id])
     :ok
   end
 

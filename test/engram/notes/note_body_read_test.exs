@@ -109,6 +109,35 @@ defmodule Engram.Notes.NoteBodyReadTest do
     end
   end
 
+  describe "budgeted reads" do
+    # The budget counts content only, and every kept note stays referenced
+    # for the whole MCP call: the CRDT state (often larger) must not ride.
+    test "get_notes_within never loads the CRDT state", ctx do
+      assert is_binary(notes_row(ctx.note)["crdt_state_ciphertext"])
+
+      assert [{"Body.md", fetch}] =
+               Notes.get_notes_within(ctx.user, ctx.vault, ["Body.md"], 4_096)
+
+      assert %{content: @content, crdt_state_ciphertext: nil, crdt_state_nonce: nil} = fetch.()
+    end
+
+    # The window that cuts the page runs over a NARROW pass (id, order,
+    # size): the body expressions sit only in the outer select, which reads
+    # the kept ids, so a row past the budget is never de-TOASTed.
+    test "the catch-up page reads bodies only after the cut", ctx do
+      {_, recorded} =
+        Engram.QueryRecorder.record(fn ->
+          {:ok, _} = Notes.list_changes_by_seq(ctx.user, ctx.vault, 0)
+        end)
+
+      [sql] = for %{sql: sql} <- recorded, sql =~ "OVER", do: sql
+      [outer | inner] = String.split(sql, "OVER")
+
+      assert outer =~ "substring("
+      refute Enum.join(inner) =~ "substring(", "a body expression is inside the windowed pass"
+    end
+  end
+
   describe "the merged layout splits back to the notes pair" do
     setup ctx do
       nonce = :crypto.strong_rand_bytes(12)

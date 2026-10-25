@@ -126,7 +126,7 @@ defmodule Engram.Crypto.Envelope do
 
   @doc """
   Splits a merged envelope (`nonce || ciphertext`, one column instead of
-  two; `note_bodies` and, from a later release, the `notes` text columns) into
+  two; `note_bodies`, see `Engram.Notes.NoteBody`) into
   `{:ok, ciphertext, nonce_field}`. The first byte says the format: a format
   1 nonce field is 13 bytes starting with 1; a format 0 one (12 bytes) is
   stored behind a leading 0. Every reader accepts it from this release on,

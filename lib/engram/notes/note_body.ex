@@ -6,7 +6,7 @@ defmodule Engram.Notes.NoteBody do
   fires (this release, the previous one, raw SQL, backfills).
 
   Wave 3 migrate-data (`docs/context/notes-chunks-hyperopt.md` 6.1 step 2):
-  every READ of a body column goes through `select/2` (or `join/1` +
+  every READ of a body column goes through `select_note/2` (or `join/1` +
   `fields/1` where a caller builds its own select), so the body comes from
   this table. The `notes` columns are still written (the previous release
   reads them: `docs/context/migrate-data-rollback-trap.md`); a later
@@ -25,7 +25,23 @@ defmodule Engram.Notes.NoteBody do
   So no ledger gate is needed: a skip-release self-host reads right while
   its ledger runs, and a re-verify that finds a missed row costs nothing.
   The fallback is a `CASE` branch, so when the body row exists Postgres
-  never de-TOASTs the `notes` copy.
+  never de-TOASTs the `notes` copy. `NoteSplit` re-copies, every pass, a
+  body row that disagrees with its notes row (`heal_drift/2`).
+
+  Two rules the contract release (stop writing the notes body columns, drop
+  them) must change in the same release:
+
+    * Row-locked reads (`Notes.lock_for_write/2`, DEK rotation) read the
+      body from the `notes` columns, not from here: a read that waits on the
+      notes row lock re-fetches only the locked relation (EvalPlanQual), so
+      a joined body row would be the pre-wait version. Contract must lock in
+      one statement and read the body in a fresh one (LockedReadBodyTest).
+    * Write fences (`snapshot_fence`, `rename_fence`, `snapshot_fenced`)
+      compare the `notes.crdt_state_nonce` column against the nonce a read
+      split from here. That holds while `notes` keeps its own nonce column,
+      which every release up to contract writes. `notes` never gets the
+      merged layout: the release that stops writing it moves the fences to
+      a `note_bodies` comparison at the same time.
   """
   use Ecto.Schema
 
@@ -120,66 +136,40 @@ defmodule Engram.Notes.NoteBody do
 
   # The ciphertext starts at byte 14 in both merged formats: a format 1
   # nonce field is 13 bytes (leading 1), a format 0 nonce (12 bytes) sits
-  # behind a 0 byte. `substring` reads a slice of an EXTERNAL value, so the
-  # nonce costs a 13-byte fetch, not a de-TOAST.
-  defp field_expr(:content_ciphertext) do
+  # behind a 0 byte. `substring ... FOR n` reads a slice of an EXTERNAL
+  # value, so the nonce costs a 13-byte fetch; the ciphertext (`FROM 14`,
+  # no length) is the full value.
+  defp field_expr(:content_ciphertext), do: ct_expr(:content_ct, :content_ciphertext)
+  defp field_expr(:content_nonce), do: nonce_expr(:content_ct, :content_nonce)
+  defp field_expr(:crdt_state_ciphertext), do: ct_expr(:crdt_ct, :crdt_state_ciphertext)
+  defp field_expr(:crdt_state_nonce), do: nonce_expr(:crdt_ct, :crdt_state_nonce)
+
+  defp ct_expr(body, notes) do
     dynamic(
       [n, note_body: b],
       type(
         fragment(
           "CASE WHEN ? IS NULL THEN ? ELSE substring(? FROM 14) END",
           b.note_id,
-          n.content_ciphertext,
-          b.content_ct
+          field(n, ^notes),
+          field(b, ^body)
         ),
         :binary
       )
     )
   end
 
-  defp field_expr(:content_nonce) do
+  defp nonce_expr(body, notes) do
     dynamic(
       [n, note_body: b],
       type(
         fragment(
           "CASE WHEN ? IS NULL THEN ? WHEN substring(? FROM 1 FOR 1) = '\\x01'::bytea THEN substring(? FROM 1 FOR 13) ELSE substring(? FROM 2 FOR 12) END",
           b.note_id,
-          n.content_nonce,
-          b.content_ct,
-          b.content_ct,
-          b.content_ct
-        ),
-        :binary
-      )
-    )
-  end
-
-  defp field_expr(:crdt_state_ciphertext) do
-    dynamic(
-      [n, note_body: b],
-      type(
-        fragment(
-          "CASE WHEN ? IS NULL THEN ? ELSE substring(? FROM 14) END",
-          b.note_id,
-          n.crdt_state_ciphertext,
-          b.crdt_ct
-        ),
-        :binary
-      )
-    )
-  end
-
-  defp field_expr(:crdt_state_nonce) do
-    dynamic(
-      [n, note_body: b],
-      type(
-        fragment(
-          "CASE WHEN ? IS NULL THEN ? WHEN substring(? FROM 1 FOR 1) = '\\x01'::bytea THEN substring(? FROM 1 FOR 13) ELSE substring(? FROM 2 FOR 12) END",
-          b.note_id,
-          n.crdt_state_nonce,
-          b.crdt_ct,
-          b.crdt_ct,
-          b.crdt_ct
+          field(n, ^notes),
+          field(b, ^body),
+          field(b, ^body),
+          field(b, ^body)
         ),
         :binary
       )
@@ -210,26 +200,17 @@ defmodule Engram.Notes.NoteBody do
   de-TOASTed. For byte budgets and size metrics on a query through `join/1`.
   """
   @spec byte_length(:content | :crdt) :: Ecto.Query.dynamic_expr()
-  def byte_length(:content) do
-    dynamic(
-      [n, note_body: b],
-      fragment(
-        "coalesce(CASE WHEN ? IS NULL THEN octet_length(?) ELSE octet_length(?) - 13 END, 0)",
-        b.note_id,
-        n.content_ciphertext,
-        b.content_ct
-      )
-    )
-  end
+  def byte_length(:content), do: length_expr(:content_ct, :content_ciphertext)
+  def byte_length(:crdt), do: length_expr(:crdt_ct, :crdt_state_ciphertext)
 
-  def byte_length(:crdt) do
+  defp length_expr(body, notes) do
     dynamic(
       [n, note_body: b],
       fragment(
         "coalesce(CASE WHEN ? IS NULL THEN octet_length(?) ELSE octet_length(?) - 13 END, 0)",
         b.note_id,
-        n.crdt_state_ciphertext,
-        b.crdt_ct
+        field(n, ^notes),
+        field(b, ^body)
       )
     )
   end
