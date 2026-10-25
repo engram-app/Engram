@@ -374,6 +374,29 @@ defmodule EngramWeb.SyncControllerTest do
 
       assert log =~ "sync manifest: DEK unavailable"
     end
+
+    # A DEK load stalled behind another loader (a slow KMS call) is transient:
+    # the plugin should retry, so it is a 503, not the 500 above.
+    test "a stalled DEK load is a retryable 503", %{conn: conn, user: user} do
+      Application.put_env(:engram, :dek_await_ms, 20)
+      on_exit(fn -> Application.delete_env(:engram, :dek_await_ms) end)
+      {:ok, _} = Engram.Crypto.ensure_user_dek(user)
+      :ok = Engram.Crypto.DekCache.invalidate(user.id)
+      test = self()
+
+      holder =
+        spawn(fn ->
+          send(test, {:claimed, Engram.Crypto.DekCache.claim(user.id)})
+          Process.sleep(:infinity)
+        end)
+
+      on_exit(fn -> Process.exit(holder, :kill) end)
+      assert_receive {:claimed, _token}
+
+      capture_log(fn ->
+        assert_error_sent(503, fn -> get(conn, "/api/sync/manifest") end)
+      end)
+    end
   end
 end
 

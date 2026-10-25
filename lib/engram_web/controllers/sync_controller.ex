@@ -145,7 +145,7 @@ defmodule EngramWeb.SyncController do
             )
           )
 
-          raise "sync manifest: DEK unavailable (#{Crypto.format_dek_error(reason)})"
+          raise Crypto.DekUnavailableError, reason
       end
     end
   end

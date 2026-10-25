@@ -20,6 +20,10 @@ defmodule EngramWeb.ErrorJSON do
   def render("503.json", %{reason: %Engram.Crypto.RotationInProgressError{}}),
     do: %{error: "rotation_in_progress"}
 
+  # Same body as FallbackController's transient DEK clause.
+  def render("503.json", %{reason: %Engram.Crypto.DekUnavailableError{}}),
+    do: %{error: "dek_unavailable"}
+
   def render(template, _assigns) do
     %{errors: %{detail: Phoenix.Controller.status_message_from_template(template)}}
   end
