@@ -89,6 +89,31 @@ defmodule Engram.Indexing.NoteCountsTest do
         skip_tenant_check: true
       )
 
+  # `ChunkRows` lock order: the tier stamp writes note_index_state (through
+  # the notes trigger), so commit_index runs it after the chunk writes and
+  # the recount. Before it would hold the state row while waiting for chunk
+  # rows that delete_note_index or the resparse hold (review D1).
+  test "commit_index stamps the tier after the chunk writes", ctx do
+    a = index!(ctx.user, ctx.vault, "A.md", content(3, "alpha"))
+
+    # A chunk_count the next pass will change, so the stamp writes.
+    Repo.query!("UPDATE notes SET chunk_count = 99 WHERE id = $1", [Ecto.UUID.dump!(a.id)])
+
+    {_, queries} =
+      Engram.QueryRecorder.record(fn ->
+        index!(ctx.user, ctx.vault, "A.md", content(4, "alphA"))
+      end)
+
+    sqls = Enum.map(queries, & &1.sql)
+    chunk_write = Enum.find_index(sqls, &(&1 =~ ~r/^(INSERT INTO|UPDATE|DELETE FROM) "?chunks"?/))
+    tier_stamp = Enum.find_index(sqls, &(&1 =~ ~r/^UPDATE "notes" .*"index_tier" = /s))
+    recount = Enum.find_index(sqls, &(&1 =~ "UPDATE note_index_state"))
+
+    assert chunk_write && recount && tier_stamp
+    assert chunk_write < recount and recount < tier_stamp
+    assert Repo.reload!(a, skip_tenant_check: true).chunk_count == nil
+  end
+
   test "every chunk writer keeps its note's counters exact", ctx do
     _a = index!(ctx.user, ctx.vault, "A.md", content(5, "alpha"))
     _b = index!(ctx.user, ctx.vault, "B.md", content(3, "bravo"))
