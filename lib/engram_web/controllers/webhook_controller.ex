@@ -151,8 +151,9 @@ defmodule EngramWeb.WebhookController do
   # reason) is treated as transient.
   defp permanent_paddle_error?(:missing_user_id), do: true
   defp permanent_paddle_error?(%Ecto.Changeset{}), do: true
-  # Paddle refused our refund cancel with a 4xx and still holds the
-  # subscription live: logged at error above, for a human.
+  # Paddle refused our refund cancel with a non-retryable 4xx and still
+  # holds the subscription live: logged at error above, for a human. Lock
+  # errors never get here (Billing keeps them transient).
   defp permanent_paddle_error?({:adjustment_cancel_rejected, _status}), do: true
   defp permanent_paddle_error?(_reason), do: false
 

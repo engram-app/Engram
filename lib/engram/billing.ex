@@ -1006,17 +1006,36 @@ defmodule Engram.Billing do
 
         apply_paddle_cancel(canceled)
 
-      # A 4xx (not 429) never succeeds on retry. Usually Paddle has already
-      # canceled it (a concurrent duplicate adjustment, a lost canceled
-      # webhook): apply Paddle's state. Otherwise it is permanent.
-      {:error, {:paddle_error, status, _body}} when status in 400..499 and status != 429 ->
-        case Client.impl().get_subscription(sub.paddle_subscription_id) do
-          {:ok, %{"status" => "canceled"} = canceled} -> apply_paddle_cancel(canceled)
-          _ -> {:error, {:adjustment_cancel_rejected, status}}
-        end
+      {:error, {:paddle_error, status, body} = reason} when status in 400..499 ->
+        if retryable_cancel_error?(status, body),
+          do: {:error, {:adjustment_cancel_failed, reason}},
+          else: settle_rejected_cancel(sub, status)
 
       {:error, reason} ->
         {:error, {:adjustment_cancel_failed, reason}}
+    end
+  end
+
+  # Paddle's "wait, then try again" answers: 429, 409 (the renewal,
+  # processing and consent-review locks), any `subscription_locked_*` code
+  # (400 pending changes included), and 401/403, which is our key or config
+  # and heals when we fix it. Retried (500) so Paddle redelivers.
+  defp retryable_cancel_error?(status, _body) when status in [401, 403, 409, 429], do: true
+
+  defp retryable_cancel_error?(_status, %{"error" => %{"code" => "subscription_locked_" <> _}}),
+    do: true
+
+  defp retryable_cancel_error?(_status, _body), do: false
+
+  # Any other 4xx never succeeds on retry. Usually Paddle has already
+  # canceled it (`subscription_is_canceled_action_invalid`: a concurrent
+  # duplicate adjustment, a lost canceled webhook), so apply Paddle's state.
+  # Live at Paddle is permanent; a failed read is transient.
+  defp settle_rejected_cancel(sub, status) do
+    case Client.impl().get_subscription(sub.paddle_subscription_id) do
+      {:ok, %{"status" => "canceled"} = canceled} -> apply_paddle_cancel(canceled)
+      {:ok, _live} -> {:error, {:adjustment_cancel_rejected, status}}
+      {:error, reason} -> {:error, {:adjustment_cancel_failed, reason}}
     end
   end
 

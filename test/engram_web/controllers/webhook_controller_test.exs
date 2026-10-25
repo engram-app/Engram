@@ -718,6 +718,58 @@ defmodule EngramWeb.WebhookControllerTest do
     end
   end
 
+  describe "POST /webhooks/paddle: refund cancel locked at Paddle" do
+    test "answers 500 so Paddle retries once the lock clears" do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_lock409",
+        paddle_customer_id: "ctm_lock409",
+        status: "active"
+      )
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn _ ->
+        {:ok,
+         [
+           %{
+             "id" => "txn_lock409",
+             "status" => "completed",
+             "subscription_id" => "sub_lock409",
+             "billed_at" => "2026-10-01T00:00:00Z",
+             "details" => %{"totals" => %{"grand_total" => "1500"}}
+           }
+         ]}
+      end)
+
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ ->
+        {:error, {:paddle_error, 409, %{"error" => %{"code" => "subscription_locked_renewal"}}}}
+      end)
+
+      # Paddle still reports it live while locked.
+      stub(Engram.Paddle.ClientMock, :get_subscription, fn _ ->
+        {:ok, %{"id" => "sub_lock409", "status" => "active"}}
+      end)
+
+      payload =
+        Jason.encode!(%{
+          "event_type" => "adjustment.updated",
+          "event_id" => "ntf_lock409",
+          "data" => %{
+            "id" => "adj_lock409",
+            "action" => "refund",
+            "type" => "full",
+            "status" => "approved",
+            "subscription_id" => "sub_lock409",
+            "transaction_id" => "txn_lock409"
+          }
+        })
+
+      assert json_response(send_payload(payload), 500)["status"] == "error"
+      assert Idempotency.check(:paddle, "ntf_lock409") == :proceed
+    end
+  end
+
   describe "POST /webhooks/paddle: late created for an old subscription" do
     test "a redelivered created for the OLD subscription does not replace the live new one" do
       user = insert(:user)

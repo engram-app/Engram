@@ -1500,7 +1500,9 @@ defmodule Engram.BillingTest do
       expect_history("sub_4xx_1")
 
       expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ ->
-        {:error, {:paddle_error, 400, %{"error" => %{"code" => "subscription_locked_canceled"}}}}
+        {:error,
+         {:paddle_error, 400,
+          %{"error" => %{"code" => "subscription_is_canceled_action_invalid"}}}}
       end)
 
       expect(Engram.Paddle.ClientMock, :get_subscription, fn "sub_4xx_1" ->
@@ -1510,6 +1512,57 @@ defmodule Engram.BillingTest do
       assert {:ok, %Subscription{status: "canceled"}} =
                Billing.upsert_from_paddle_event(
                  refund_event("adjustment.updated", "sub_4xx_1", %{})
+               )
+
+      # Access is removed, not just the row flipped.
+      assert Billing.tier(Engram.Repo.reload!(user, skip_tenant_check: true)) == :free
+    end
+
+    # Paddle's lock errors say "wait, then try again" (409 renewal/processing/
+    # consent lock, 400 pending changes): they must stay retryable, and the
+    # follow-up read is skipped since its answer would only say "active".
+    test "a Paddle lock error on the refund cancel stays transient" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_lock", status: "active")
+
+      for {status, code} <- [
+            {409, "subscription_locked_renewal"},
+            {409, "subscription_locked_processing"},
+            {409, "subscription_locked_consent_review_period"},
+            {400, "subscription_locked_pending_changes"},
+            {409, nil}
+          ] do
+        expect_history("sub_lock")
+        body = if code, do: %{"error" => %{"code" => code}}, else: %{}
+
+        expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ ->
+          {:error, {:paddle_error, status, body}}
+        end)
+
+        assert {:error, {:adjustment_cancel_failed, {:paddle_error, ^status, _}}} =
+                 Billing.upsert_from_paddle_event(
+                   refund_event("adjustment.updated", "sub_lock", %{})
+                 )
+      end
+    end
+
+    test "a failed follow-up read after a 4xx on the refund cancel stays transient" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_4xx_get", status: "active")
+
+      expect_history("sub_4xx_get")
+
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ ->
+        {:error,
+         {:paddle_error, 400,
+          %{"error" => %{"code" => "subscription_is_canceled_action_invalid"}}}}
+      end)
+
+      expect(Engram.Paddle.ClientMock, :get_subscription, fn _ -> {:error, :timeout} end)
+
+      assert {:error, {:adjustment_cancel_failed, :timeout}} =
+               Billing.upsert_from_paddle_event(
+                 refund_event("adjustment.updated", "sub_4xx_get", %{})
                )
     end
 
