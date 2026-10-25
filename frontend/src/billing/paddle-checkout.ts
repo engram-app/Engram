@@ -28,6 +28,8 @@ export const INLINE_FRAME_TARGET = "paddle-checkout";
 // the locale is layered on at call time. Each Checkout.open gets the FULL
 // object, because Paddle.js's merge of partial per-open settings over the
 // init defaults is undocumented and this is the payments path.
+// `allowLogout: false` on every checkout: the buyer cannot switch email inside
+// Paddle and split into a second Paddle customer from the signed-in account.
 export function checkoutSettings(isInline: boolean): CheckoutSettings {
 	return isInline
 		? {
@@ -42,8 +44,9 @@ export function checkoutSettings(isInline: boolean): CheckoutSettings {
 				frameStyle: "width:100%; min-width:312px; background:transparent; border:none;",
 				theme: "light",
 				variant: "one-page",
+				allowLogout: false,
 			}
-		: { displayMode: "overlay", theme: "light", variant: "one-page" };
+		: { displayMode: "overlay", theme: "light", variant: "one-page", allowLogout: false };
 }
 
 // `locale: "en"` is only the default; every Checkout.open passes the full

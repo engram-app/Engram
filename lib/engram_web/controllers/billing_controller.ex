@@ -241,6 +241,7 @@ defmodule EngramWeb.BillingController do
           }
         },
         customer_email: user.email,
+        customer_id: Billing.paddle_customer_id(user),
         custom_data: %{user_id: user.id},
         vaults_cap: cap_json(Billing.cap(user, :vaults_cap)),
         # Which note-cap set is enforced ("legacy" or "v5"): the plan cards

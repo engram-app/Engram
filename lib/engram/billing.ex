@@ -554,6 +554,21 @@ defmodule Engram.Billing do
     end
   end
 
+  @doc """
+  The user's Paddle customer id (`ctm_...`), or nil before their first
+  checkout. Not a secret: checkout prefills with it so a returning buyer stays
+  one Paddle customer.
+  """
+  def paddle_customer_id(user) do
+    case get_subscription(user) do
+      %Subscription{paddle_customer_id: customer_id} when is_binary(customer_id) ->
+        customer_id
+
+      _ ->
+        nil
+    end
+  end
+
   # ── Customer Portal ────────────────────────────────────────────
 
   @doc """

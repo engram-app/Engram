@@ -123,8 +123,14 @@ const INLINE_SETTINGS = {
 	frameStyle: "width:100%; min-width:312px; background:transparent; border:none;",
 	theme: "light",
 	variant: "one-page",
+	allowLogout: false,
 };
-const OVERLAY_SETTINGS = { displayMode: "overlay", theme: "light", variant: "one-page" };
+const OVERLAY_SETTINGS = {
+	displayMode: "overlay",
+	theme: "light",
+	variant: "one-page",
+	allowLogout: false,
+};
 
 function startButton(): HTMLElement {
 	const [first] = screen.getAllByRole("button", { name: "Start free trial" });

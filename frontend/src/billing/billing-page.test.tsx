@@ -302,6 +302,39 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(settings.allowedPaymentMethods).toBeUndefined();
 	});
 
+	// Paddle: pass customer id OR email, not both. With a known id the buyer
+	// stays one Paddle customer; allowLogout:false stops them switching email
+	// inside checkout and splitting into a second one.
+	it.each([
+		["known Paddle customer: prefills by id", "ctm_known", { id: "ctm_known" }],
+		["new buyer: prefills by email", null, { email: "u@example.com" }],
+	])("plan checkout %s and blocks logout", async (_label, customerId, expected) => {
+		mockBillingApi();
+		const base = get.getMockImplementation()!;
+		get.mockImplementation(async (url: string) => {
+			const body = await base(url);
+			return url === "/billing/config" ? { ...body, customer_id: customerId } : body;
+		});
+		const openMock = vi.fn();
+		initializePaddleMock.mockImplementation(async () => ({
+			Checkout: { open: openMock, close: vi.fn() },
+		}));
+
+		const { container, queryAllByText } = renderBilling({ inline: true });
+		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
+		const startBtn = Array.from(container.querySelectorAll("button")).find(
+			(b) => b.textContent === "Start free trial",
+		)!;
+		await act(async () => {
+			startBtn.click();
+			await Promise.resolve();
+		});
+		await waitFor(() => expect(openMock).toHaveBeenCalledTimes(1));
+
+		expect(openMock.mock.calls[0]![0].customer).toEqual(expected);
+		expect(openMock.mock.calls[0]![0].settings.allowLogout).toBe(false);
+	});
+
 	describe("checkout funnel tracking", () => {
 		function startCheckout(container: HTMLElement) {
 			const startBtn = Array.from(container.querySelectorAll("button")).find(

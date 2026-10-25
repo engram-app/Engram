@@ -187,6 +187,16 @@ defmodule EngramWeb.BillingControllerTest do
       assert body["vaults_cap"] == nil
     end
 
+    # Checkout prefills by Paddle customer id when one exists, so a returning
+    # buyer is not split into a second Paddle customer.
+    test "exposes the Paddle customer id once the user has one", %{conn: conn, user: user} do
+      assert json_response(get(conn, "/api/billing/config"), 200)["customer_id"] == nil
+
+      insert(:subscription, user: user, paddle_customer_id: "ctm_known", status: "canceled")
+      Engram.Cache.evict(:subscription, user.id)
+      assert json_response(get(conn, "/api/billing/config"), 200)["customer_id"] == "ctm_known"
+    end
+
     test "returns 401 without auth" do
       conn = build_conn() |> get("/api/billing/config")
       assert json_response(conn, 401)

@@ -1456,6 +1456,9 @@ export interface BillingConfig extends PaddleClientConfig {
 		pro: { monthly: string; annual: string };
 	};
 	customer_email: string;
+	// The user's Paddle customer id (`ctm_…`) once they have one, else null.
+	// Absent on an older backend.
+	customer_id?: string | null;
 	custom_data: {
 		user_id: string;
 	};

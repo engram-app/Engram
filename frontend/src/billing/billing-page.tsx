@@ -659,7 +659,11 @@ export default function BillingPage({
 							quantity: 1,
 						},
 					],
-					customer: { email: config.customer_email },
+					// Paddle takes id OR email, not both. A known id keeps a returning
+					// buyer on their existing Paddle customer.
+					customer: config.customer_id
+						? { id: config.customer_id }
+						: { email: config.customer_email },
 					customData: config.custom_data,
 					settings: { ...checkoutSettings(isInline), locale: checkoutLocale },
 				});
