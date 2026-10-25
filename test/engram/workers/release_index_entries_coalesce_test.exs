@@ -107,4 +107,65 @@ defmodule Engram.Workers.ReleaseIndexEntriesCoalesceTest do
     assert [job] = release_jobs()
     assert job.args["note_ids"] == [a.id]
   end
+
+  defp ids(n), do: for(_ <- 1..n, do: Ecto.UUID.generate())
+
+  # Review of #2209 (M3): a pending job, a chain successor included, kept
+  # absorbing ids without bound. A job holds at most one chunk's worth of
+  # joined ids; past that a release queues its own job.
+  test "a pending job holding a full chunk is not extended", ctx do
+    full = ids(ReleaseIndexEntries.chunk_size())
+    {:ok, _} = ReleaseIndexEntries.enqueue(ctx.user.id, ctx.vault.id, full)
+    [extra] = ids(1)
+    {:ok, _} = ReleaseIndexEntries.enqueue(ctx.user.id, ctx.vault.id, [extra])
+
+    assert [first, second] = release_jobs()
+    assert first.args["note_ids"] == full
+    assert second.args["note_ids"] == [extra]
+  end
+
+  test "a release that would overflow the pending job queues its own", ctx do
+    almost = ids(ReleaseIndexEntries.chunk_size() - 1)
+    two = ids(2)
+    {:ok, _} = ReleaseIndexEntries.enqueue(ctx.user.id, ctx.vault.id, almost)
+    {:ok, _} = ReleaseIndexEntries.enqueue(ctx.user.id, ctx.vault.id, two)
+
+    assert Enum.map(release_jobs(), &length(&1.args["note_ids"])) ==
+             [ReleaseIndexEntries.chunk_size() - 1, 2]
+  end
+
+  test "a release filling the pending job exactly joins it", ctx do
+    almost = ids(ReleaseIndexEntries.chunk_size() - 1)
+    [last] = ids(1)
+    {:ok, _} = ReleaseIndexEntries.enqueue(ctx.user.id, ctx.vault.id, almost)
+    {:ok, :joined} = ReleaseIndexEntries.enqueue(ctx.user.id, ctx.vault.id, [last])
+
+    assert [job] = release_jobs()
+    assert length(job.args["note_ids"]) == ReleaseIndexEntries.chunk_size()
+  end
+
+  # Review of #2209 (M2): the lookup runs on every note delete, usually to find
+  # nothing. Without a queue predicate and with ORDER BY id it invited a walk
+  # of oban_jobs by primary key. It must be an index probe on a state-leading
+  # Oban index, filtered by queue. (On this near-empty table the planner picks
+  # `oban_jobs_state_discarded_at_index`; a busy table can prefer the
+  # `(state, queue, ...)` one. Either is a state probe, never a pkey walk.)
+  test "the pending-job lookup is a state index probe filtered by queue", ctx do
+    {_, queries} =
+      Engram.QueryRecorder.record(fn ->
+        ReleaseIndexEntries.enqueue(ctx.user.id, ctx.vault.id, ids(1))
+      end)
+
+    [sql] =
+      for sql <- Engram.QueryPlan.reading(queries, "oban_jobs"), sql =~ "jsonb_set", do: sql
+
+    refute sql =~ "ORDER BY", sql
+    assert sql =~ ~s("queue" = ), sql
+    plan = Engram.QueryPlan.generic_plan(sql, analyze: ["oban_jobs"], bitmapscan: false)
+
+    assert plan =~ ~r/LockRows\s+.*\n\s+->\s+Index Scan using oban_jobs_state_\w+ on oban_jobs/,
+           plan
+
+    assert plan =~ ~r/Index Cond: \(state = /, plan
+  end
 end

@@ -149,9 +149,10 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   pending job, and the queue stays the throttle (`oban-scheduling-model.md`):
   the busier the vault, the bigger each job.
 
-  Only a job still `available` or `scheduled` is joined. One already running
-  read its args at fetch, so it is never extended; the ids then get a fresh
-  job. The pending row is taken `FOR UPDATE SKIP LOCKED`, and the UPDATE
+  Only a job still `available` or `scheduled`, holding room for the ids
+  within `chunk_size/0`, is joined. One already running read its args at
+  fetch, so it is never extended; a full one is left alone. Either way the
+  ids then get a fresh job. The pending row is taken `FOR UPDATE SKIP LOCKED`, and the UPDATE
   re-checks the state under that lock, so a job Oban fetches meanwhile is not
   joined either. Inside a caller's transaction the joined args commit or roll
   back with it, exactly like the insert they replace.
@@ -168,13 +169,29 @@ defmodule Engram.Workers.ReleaseIndexEntries do
 
   @pending_states ~w(available scheduled)
 
-  # `args @>` is served by Oban's GIN index on args.
+  # Runs on every note delete, usually to find nothing, so it must stay an
+  # index probe: state + queue are the leading columns of Oban's
+  # `oban_jobs_state_queue_priority_scheduled_at_id_index`. No ORDER BY: any
+  # pending job of the vault will do (QueryPlan test in the coalesce suite).
+  #
+  # A job takes joined ids only up to `chunk_size/0`, one index-room change's
+  # worth. A full one (a chain successor carrying the rest of a storm, a
+  # folder delete) is left alone and the release gets its own job, so no
+  # pending job grows without bound while its vault keeps deleting.
+  defp join_pending(_user_id, _vault_id, note_ids) when length(note_ids) >= @chunk_size,
+    do: {0, nil}
+
   defp join_pending(user_id, vault_id, note_ids) do
+    room = @chunk_size - length(note_ids)
+    queue = __opts__() |> Keyword.fetch!(:queue) |> to_string()
+
     pending =
       from(j in Oban.Job,
-        where: j.worker == ^inspect(__MODULE__) and j.state in ^@pending_states,
+        where: j.state in ^@pending_states and j.queue == ^queue,
+        where: j.worker == ^inspect(__MODULE__),
         where: fragment("? @> ?", j.args, ^%{"user_id" => user_id, "vault_id" => vault_id}),
-        order_by: j.id,
+        where:
+          fragment("jsonb_array_length(coalesce(? -> 'note_ids', '[]'::jsonb))", j.args) <= ^room,
         limit: 1,
         lock: "FOR UPDATE SKIP LOCKED",
         select: j.id
@@ -270,8 +287,10 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   # of args over the whole chain: the price of a short slot hold. Upgrade
   # path if that shows up: a cursor over a table of pending releases.
   #
-  # Always its own job, never joined (`enqueue/3`): the chain stays one link
-  # at a time, and a link never extends itself.
+  # Inserted as its own job, never joined into another (a link never extends
+  # itself). Once queued, later releases for the vault may join it, but only
+  # up to `chunk_size/0` ids (`enqueue/3`), so a successor already carrying
+  # more than a chunk takes nothing more.
   #
   # The insert commits on its own. If the node dies after it but before Oban
   # acks this job, the rescued retry inserts a second successor, so two links
