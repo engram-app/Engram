@@ -302,9 +302,13 @@ defmodule Engram.Indexing do
     # Nothing after it queries but a refusal's meter read for its log line;
     # the sparse re-plan reuses the rows already read (`plan_within_budget/5`).
     # Move the reservation past the commit if that ever contends.
+    #
+    # ONE DEK fetch per pass, and every key below derives from it. A second
+    # fetch mid-pass could miss (an eviction) and fail while the first had
+    # succeeded, committing a pass built from half its inputs.
     with :ok <- ensure_collection(),
-         {:ok, filter_key} <- Crypto.dek_filter_key(user),
-         {:ok, content_key} <- Crypto.dek_content_hash_key(user),
+         {:ok, dek} <- Crypto.get_dek(user),
+         content_key = Crypto.dek_content_hash_key_from_bytes(dek),
          {:ok, opts} <- with_vector_cache(user, note, content_key, dims, opts),
          {tier, dense?, plan, retained} <-
            Repo.with_tenant!(note.user_id, fn ->
@@ -320,7 +324,7 @@ defmodule Engram.Indexing do
          :ok = collect_garbage(n),
          avgdl = avgdl(note.user_id, note.vault_id),
          {:ok, prepared} <-
-           build_prepared(note, user, plan, vectors, filter_key, avgdl) do
+           build_prepared(note, user, plan, vectors, dek, avgdl) do
       # What the embedder was actually sent (#1618): reused chunks and
       # sparse-only passes cost nothing, so the meter must not bill them.
       # Retained vectors were paid for by the attempt that kept them.
@@ -3472,7 +3476,9 @@ defmodule Engram.Indexing do
   # Encrypt-first: build payloads + encrypt in memory BEFORE any mutation.
   # If any chunk's encryption fails, no Postgres row or Qdrant point is touched
   # and prior state survives for the next Oban retry.
-  defp build_prepared(note, user, plan, vectors, filter_key, avgdl) do
+  defp build_prepared(note, user, plan, vectors, dek, avgdl) do
+    filter_key = Crypto.dek_filter_key_from_bytes(dek)
+
     now = DateTime.utc_now(:second)
 
     # Language is a property of the NOTE, not of each chunk. Detecting per chunk
@@ -3523,7 +3529,7 @@ defmodule Engram.Indexing do
 
     flat =
       if v5_format?,
-        do: note.content |> FlatFields.extract(filter_key) |> with_key_ids(note, user)
+        do: note.content |> FlatFields.extract(filter_key) |> with_key_ids(note, dek)
 
     note_payload = if v5?, do: PayloadV5.build(note, flat), else: note_payload(note)
     ctx = {note, user, note_payload, now, v5?}
@@ -3567,9 +3573,7 @@ defmodule Engram.Indexing do
         true -> :sum
       end
 
-    with {:ok, reversed, _spent} <- prepared,
-         {:ok, dek} <-
-           if(v5_format? or mode != :none, do: Crypto.get_dek(user), else: {:ok, nil}) do
+    with {:ok, reversed, _spent} <- prepared do
       built = Enum.reverse(reversed)
       qdrant_points = for(%{point: p} <- built, p != nil, do: p)
 
@@ -3601,15 +3605,11 @@ defmodule Engram.Indexing do
 
   # Past the per-user cap a new key is skipped (left out of the payload and
   # `note_attrs`, counted by `FrontmatterKeys`), never an indexing error.
-  defp with_key_ids(flat, note, user) do
-    case Crypto.get_dek(user) do
-      {:ok, dek} ->
-        {ids, _skipped} = FrontmatterKeys.resolve(note.user_id, dek, flat.names)
-        FlatFields.put_key_ids(flat, ids)
-
-      _no_dek ->
-        flat
-    end
+  # Takes the pass's DEK rather than fetching one: a fetch here that failed
+  # would leave the keys out of a pass that still commits and stamps.
+  defp with_key_ids(flat, note, dek) do
+    {ids, _skipped} = FrontmatterKeys.resolve(note.user_id, dek, flat.names)
+    FlatFields.put_key_ids(flat, ids)
   end
 
   # Task 11.2, hybrid (notes-chunks-hyperopt 2.4/2.4b): with text on, every
@@ -3817,13 +3817,19 @@ defmodule Engram.Indexing do
   The v5 note-level payload `note`'s v5 points must carry: `PayloadV5.build/2`
   over the frontmatter filter fields, extracted and keyed exactly as a pass
   does (`build_prepared/6`). For `ReconcileNotePayloads`. `note` is
-  decrypted; `{:error, :no_dek}` when `user` has none.
+  decrypted; `{:error, reason}` when the DEK is unavailable (`:no_dek`, or a
+  load failure such as `:dek_load_timeout`). Never a payload without the
+  user-added keys.
   """
   @spec expected_v5_payload(Note.t(), Engram.Accounts.User.t()) ::
-          {:ok, map()} | {:error, :no_dek}
+          {:ok, map()} | {:error, term()}
   def expected_v5_payload(note, user) do
-    with {:ok, filter_key} <- Crypto.dek_filter_key(user) do
-      flat = (note.content || "") |> FlatFields.extract(filter_key) |> with_key_ids(note, user)
+    with {:ok, dek} <- Crypto.get_dek(user) do
+      flat =
+        (note.content || "")
+        |> FlatFields.extract(Crypto.dek_filter_key_from_bytes(dek))
+        |> with_key_ids(note, dek)
+
       {:ok, PayloadV5.build(note, flat)}
     end
   end
