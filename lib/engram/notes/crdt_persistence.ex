@@ -215,7 +215,12 @@ defmodule Engram.Notes.CrdtPersistence do
   # Uses the user cached by bind/3 when present (the live room path); falls back
   # to a lazy fetch when called with a bare state map (direct unit-test calls).
   @impl true
-  def update_v1(state, update, name, doc), do: append_update(state, update, name, doc)
+  def update_v1(state, update, name, doc) do
+    # Any doc change after bind ends the read-only close skip (`unbind/3`),
+    # even one whose append raises before it is counted.
+    Process.put(:crdt_clean, false)
+    append_update(state, update, name, doc)
+  end
 
   # A row this big is a whole body inserted through the room (genesis
   # fallback, a reseed), not a keystroke: checkpoint now, so it folds into the
