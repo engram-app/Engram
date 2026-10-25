@@ -170,12 +170,23 @@ defmodule Engram.Notes.NoteIndexStateTest do
     test "the trigger writes under the app role inside the tenant", %{user: u, vault: v} do
       n = write!(u, v, "A.md", "# A\n\nbody")
 
-      assert {:returned, {:ok, {1, nil}}} =
+      # Read back under the same role: a trigger write filtered to zero rows
+      # by RLS would leave the state row's old value (review L4).
+      assert {:returned, {:ok, {{1, nil}, 4}}} =
                as_prod_role(fn ->
                  Repo.with_tenant(u.id, fn ->
-                   Repo.update_all(from(x in Note, where: x.id == ^n.id),
-                     set: [chunker_version: 4]
-                   )
+                   updated =
+                     Repo.update_all(from(x in Note, where: x.id == ^n.id),
+                       set: [chunker_version: 4]
+                     )
+
+                   {updated,
+                    Repo.one(
+                      from(s in NoteIndexState,
+                        where: s.note_id == ^n.id,
+                        select: s.chunker_version
+                      )
+                    )}
                  end)
                end)
     end
