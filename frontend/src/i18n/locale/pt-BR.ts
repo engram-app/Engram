@@ -154,7 +154,7 @@ export default {
 		"Cofres ou notas que excederem os limites do plano Gratuito se tornarão somente leitura.",
 	"You can reverse this any time before the effective date.":
 		"Você pode reverter isso a qualquer momento antes da data de vigência.",
-	"Why are you canceling?": "Por que você está cancelando?",
+	"Why are you canceling? (optional)": "Por que você está cancelando? (opcional)",
 	"Keep my subscription": "Manter minha assinatura",
 	"Canceling…": "Cancelando…",
 	"Cancel at period end": "Cancelar no final do período",

@@ -154,7 +154,7 @@ export default {
 		"Сховища або замітки, які перевищують безкоштовний ліміт, стають доступними лише для перегляду.",
 	"You can reverse this any time before the effective date.":
 		"Ви можете скасувати це рішення в будь-який час до дати скасування.",
-	"Why are you canceling?": "Чому ви скасовуєте?",
+	"Why are you canceling? (optional)": "Чому ви скасовуєте? (необов'язково)",
 	"Keep my subscription": "Зберегти мою підписку",
 	"Canceling…": "Скасування…",
 	"Cancel at period end": "Скасувати в кінці періоду",

@@ -146,7 +146,7 @@ export default {
 		"무료 제한을 초과하는 보관함 또는 노트는 읽기 전용으로 변경됩니다.",
 	"You can reverse this any time before the effective date.":
 		"언제든지 유효일자 이전까지 이 설정을 변경할 수 있습니다.",
-	"Why are you canceling?": "해지하시려는 이유가 무엇인가요?",
+	"Why are you canceling? (optional)": "해지 이유를 알려주세요 (선택 사항)",
 	"Keep my subscription": "구독을 유지합니다",
 	"Canceling…": "해지 중입니다…",
 	"Cancel at period end": "다음 결제 주기 종료 시 해지",

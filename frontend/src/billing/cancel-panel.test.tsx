@@ -104,23 +104,40 @@ describe("CancelPanel", () => {
 		expect(post).toHaveBeenCalledWith("/billing/cancel-subscription");
 	});
 
-	it("keeps Cancel disabled until a reason is picked and text is written", () => {
-		render(<CancelPanel detail={detail()} tier="pro" onClose={vi.fn()} />, { wrapper: Wrapper });
+	it("cancels with no reason and no typed sentence, and files no feedback", async () => {
+		post.mockResolvedValue({});
+		const onClose = vi.fn();
+		render(<CancelPanel detail={detail()} tier="pro" onClose={onClose} />, { wrapper: Wrapper });
 		const cancelButton = screen.getByRole("button", { name: /cancel at period end/iu });
 
-		expect(cancelButton).toBeDisabled();
+		expect(cancelButton).toBeEnabled();
 		fireEvent.click(cancelButton);
-		expect(post).not.toHaveBeenCalled();
+
+		await waitFor(() => expect(onClose).toHaveBeenCalled());
+		expect(post).toHaveBeenCalledWith("/billing/cancel-subscription");
+		// No reason: the backend's CancelReasonMarker files it as `portal_no_reason`.
+		expect(post).not.toHaveBeenCalledWith("/feedback", expect.anything());
+	});
+
+	it("sends a picked reason without requiring a sentence", async () => {
+		post.mockResolvedValue({});
+		const onClose = vi.fn();
+		render(<CancelPanel detail={detail()} tier="pro" onClose={onClose} />, { wrapper: Wrapper });
 
 		fireEvent.click(screen.getByRole("radio", { name: /too expensive/iu }));
-		expect(cancelButton).toBeDisabled();
+		fireEvent.click(screen.getByRole("button", { name: /cancel at period end/iu }));
 
-		const box = screen.getByLabelText(/tell us more/iu);
-		fireEvent.change(box, { target: { value: "   " } });
-		expect(cancelButton).toBeDisabled();
+		await waitFor(() => expect(onClose).toHaveBeenCalled());
+		expect(post).toHaveBeenCalledWith("/feedback", {
+			kind: "cancel",
+			reason: "too_expensive",
+			detail: "",
+		});
+	});
 
-		fireEvent.change(box, { target: { value: "too pricey for me" } });
-		expect(cancelButton).toBeEnabled();
+	it("labels the reason question optional", () => {
+		render(<CancelPanel detail={detail()} tier="pro" onClose={vi.fn()} />, { wrapper: Wrapper });
+		expect(screen.getByText(/why are you canceling\? \(optional\)/iu)).toBeInTheDocument();
 	});
 
 	it("sends no reason when the cancel itself fails", async () => {

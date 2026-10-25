@@ -151,7 +151,7 @@ export default {
 		"Ücretsiz sınırları aşan kasalar veya notlar sadece okunabilir hale gelir.",
 	"You can reverse this any time before the effective date.":
 		"Bu durumu, geçerlilik tarihinden önce istediğiniz zaman geri alabilirsiniz.",
-	"Why are you canceling?": "Neden aboneliğinizi iptal ediyorsunuz?",
+	"Why are you canceling? (optional)": "Neden aboneliğinizi iptal ediyorsunuz? (isteğe bağlı)",
 	"Keep my subscription": "Aboneliğimi koru",
 	"Canceling…": "İptal ediliyor…",
 	"Cancel at period end": "Dönem sonunda iptal et",

@@ -152,7 +152,7 @@ export default {
 		"Les coffres ou les notes qui dépassent les limites de la version gratuite deviennent en lecture seule.",
 	"You can reverse this any time before the effective date.":
 		"Tu peux revenir en arrière à tout moment avant la date d'effet.",
-	"Why are you canceling?": "Pourquoi annuleras-tu ?",
+	"Why are you canceling? (optional)": "Pourquoi annuleras-tu ? (facultatif)",
 	"Keep my subscription": "Conserve mon abonnement",
 	"Canceling…": "Annulation en cours…",
 	"Cancel at period end": "Annuler à la fin de la période",

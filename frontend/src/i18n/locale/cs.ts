@@ -150,7 +150,7 @@ export default {
 		"Poznámky a trezory, které překračují limity bezplatného plánu, jsou pouze pro čtení.",
 	"You can reverse this any time before the effective date.":
 		"Můžete to kdykoli zrušit před datem zrušení.",
-	"Why are you canceling?": "Proč rušíte?",
+	"Why are you canceling? (optional)": "Proč rušíte? (volitelné)",
 	"Keep my subscription": "Zachovat mé předplatné",
 	"Canceling…": "Rušení…",
 	"Cancel at period end": "Zrušit na konci období",

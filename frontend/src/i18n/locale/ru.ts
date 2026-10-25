@@ -155,7 +155,7 @@ export default {
 		"Хранилища или заметки, превышающие ограничения бесплатной версии, станут доступными только для чтения.",
 	"You can reverse this any time before the effective date.":
 		"Вы можете изменить это решение в любое время до даты вступления изменений в силу.",
-	"Why are you canceling?": "Почему вы отменяете?",
+	"Why are you canceling? (optional)": "Почему вы отменяете? (необязательно)",
 	"Keep my subscription": "Сохранить подписку",
 	"Canceling…": "Отмена…",
 	"Cancel at period end": "Отмена в конце периода",

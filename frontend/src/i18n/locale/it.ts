@@ -151,7 +151,7 @@ export default {
 		"I vault o le note che superano i limiti gratuiti diventano di sola lettura.",
 	"You can reverse this any time before the effective date.":
 		"Puoi cambiare idea in qualsiasi momento prima della data di effettiva disdetta.",
-	"Why are you canceling?": "Perché stai cancellando?",
+	"Why are you canceling? (optional)": "Perché stai annullando? (opzionale)",
 	"Keep my subscription": "Mantieni l'abbonamento",
 	"Canceling…": "Cancellazione in corso…",
 	"Cancel at period end": "Cancella alla fine del periodo",

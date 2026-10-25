@@ -17,13 +17,8 @@ export interface Reason {
 
 export const EMPTY_REASON: Reason = { reason: null, detail: "" };
 
-// A reason AND a sentence: the cancel flow requires both. Account deletion
-// does not, since erasure must never be gated on giving feedback.
-export function reasonComplete(answer: Reason): answer is Reason & { reason: string } {
-	return answer.reason !== null && answer.detail.trim() !== "";
-}
-
-// Shared by the subscription cancel panel and account deletion.
+// Shared by the subscription cancel panel and account deletion. Both are
+// optional: neither a cancel nor an erasure may be gated on giving feedback.
 export function ReasonFields({ legend, value, onChange }: ReasonFieldsProps) {
 	const { t } = useT();
 	return (

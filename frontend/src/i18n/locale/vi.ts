@@ -149,7 +149,7 @@ export default {
 		"Các kho lưu trữ hoặc ghi chú vượt quá giới hạn của gói Miễn phí sẽ chỉ cho phép đọc.",
 	"You can reverse this any time before the effective date.":
 		"Bạn có thể thay đổi điều này bất cứ lúc nào trước ngày có hiệu lực.",
-	"Why are you canceling?": "Tại sao bạn lại hủy?",
+	"Why are you canceling? (optional)": "Tại sao bạn lại hủy? (tùy chọn)",
 	"Keep my subscription": "Giữ lại gói đăng ký của tôi",
 	"Canceling…": "Đang hủy...",
 	"Cancel at period end": "Hủy vào cuối kỳ",

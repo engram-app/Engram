@@ -150,7 +150,7 @@ export default {
 		"Sejfy lub notatki, które przekraczają limity darmowej wersji, stają się tylko do odczytu.",
 	"You can reverse this any time before the effective date.":
 		"Możesz to zmienić w dowolnym momencie przed datą wejścia w życie anulowania.",
-	"Why are you canceling?": "Dlaczego chcesz anulować?",
+	"Why are you canceling? (optional)": "Dlaczego rezygnujesz? (opcjonalne)",
 	"Keep my subscription": "Zachowaj moją subskrypcję",
 	"Canceling…": "Anulowanie…",
 	"Cancel at period end": "Anuluj na koniec okresu",

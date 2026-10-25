@@ -153,7 +153,7 @@ export default {
 		"Las bóvedas o notas que excedan los límites de la versión Gratuita se vuelven de solo lectura.",
 	"You can reverse this any time before the effective date.":
 		"Puedes revertir esto en cualquier momento antes de la fecha de efectividad.",
-	"Why are you canceling?": "¿Por qué estás cancelando?",
+	"Why are you canceling? (optional)": "¿Por qué estás cancelando? (opcional)",
 	"Keep my subscription": "Mantén mi suscripción",
 	"Canceling…": "Cancelando…",
 	"Cancel at period end": "Cancelar al final del período",

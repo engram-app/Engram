@@ -152,7 +152,7 @@ export default {
 		"Vault atau catatan yang melebihi batas Gratis menjadi hanya baca.",
 	"You can reverse this any time before the effective date.":
 		"Anda dapat membatalkan ini kapan saja sebelum tanggal efektif.",
-	"Why are you canceling?": "Mengapa Anda membatalkan?",
+	"Why are you canceling? (optional)": "Mengapa Anda membatalkannya? (opsional)",
 	"Keep my subscription": "Pertahankan langganan saya",
 	"Canceling…": "Membatalkan…",
 	"Cancel at period end": "Batalkan pada akhir periode",

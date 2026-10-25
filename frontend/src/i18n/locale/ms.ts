@@ -152,7 +152,7 @@ export default {
 		"Peti nota atau nota yang melebihi had percuma akan menjadi baca sahaja.",
 	"You can reverse this any time before the effective date.":
 		"Anda boleh membatalkan ini pada bila-bila masa sebelum tarikh berkuatkuasa.",
-	"Why are you canceling?": "Mengapa anda membatalkan?",
+	"Why are you canceling? (optional)": "Mengapa anda membatalkannya? (pilihan)",
 	"Keep my subscription": "Pertahankan langganan saya",
 	"Canceling…": "Membatalkan…",
 	"Cancel at period end": "Batalkan pada akhir tempoh",

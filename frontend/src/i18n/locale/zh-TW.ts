@@ -135,7 +135,7 @@ export default {
 		"超出免費限制的儲存庫或筆記將變成唯讀。",
 	"You can reverse this any time before the effective date.":
 		"您可以在生效日期之前隨時取消此操作。",
-	"Why are you canceling?": "為什麼要取消？",
+	"Why are you canceling? (optional)": "為什麼要取消？（可選）",
 	"Keep my subscription": "保留我的訂閱",
 	"Canceling…": "正在取消…",
 	"Cancel at period end": "在週期結束時取消",

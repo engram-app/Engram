@@ -155,7 +155,7 @@ export default {
 		"Vaults oder Notizen, die die Grenzen der kostenlosen Version überschreiten, werden schreibgeschützt.",
 	"You can reverse this any time before the effective date.":
 		"Du kannst dies jederzeit vor dem Gültigkeitsbeginn rückgängig machen.",
-	"Why are you canceling?": "Warum kündigst du?",
+	"Why are you canceling? (optional)": "Warum kündigst du? (optional)",
 	"Keep my subscription": "Behalte mein Abonnement",
 	"Canceling…": "Kündigen…",
 	"Cancel at period end": "Kündigung am Ende des Zeitraums",

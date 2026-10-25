@@ -9,7 +9,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
-import { EMPTY_REASON, ReasonFields, reasonComplete } from "@/feedback/reason-fields";
+import { EMPTY_REASON, ReasonFields } from "@/feedback/reason-fields";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { Trans } from "@/i18n/trans";
@@ -50,22 +50,18 @@ export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps)
 	const tierKey = TIER_LABELS[tier];
 	const tierLabel = tierKey ? t(tierKey) : t("paid");
 
-	const canCancel = reasonComplete(answer);
-
 	async function confirm() {
-		if (!reasonComplete(answer)) {
-			return;
-		}
+		const { reason, detail: text } = answer;
 		try {
 			await cancel.mutateAsync();
 			// Only once the cancel landed, so a failed or retried cancel never
 			// files a reason. Fire-and-forget: a React Query mutation outlives
-			// the panel unmounting below.
-			submitFeedback.mutate({
-				kind: "cancel",
-				reason: answer.reason,
-				detail: answer.detail.trim(),
-			});
+			// the panel unmounting below. The reason is optional (Minnesota
+			// 325G.60, California 17602(d) bar extra cancel steps): with none,
+			// the backend's CancelReasonMarker files `portal_no_reason`.
+			if (reason !== null) {
+				submitFeedback.mutate({ kind: "cancel", reason, detail: text.trim() });
+			}
 			notify.success(t("Subscription scheduled to cancel."));
 			onClose();
 		} catch {
@@ -101,12 +97,16 @@ export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps)
 					<li>{t("Vaults or notes that exceed Free limits become read-only.")}</li>
 					<li>{t("You can reverse this any time before the effective date.")}</li>
 				</ul>
-				<ReasonFields legend={t("Why are you canceling?")} value={answer} onChange={setAnswer} />
+				<ReasonFields
+					legend={t("Why are you canceling? (optional)")}
+					value={answer}
+					onChange={setAnswer}
+				/>
 				<DialogFooter>
 					<Button variant="outline" onClick={onClose} disabled={cancel.isPending}>
 						{t("Keep my subscription")}
 					</Button>
-					<Button variant="destructive" onClick={confirm} disabled={!canCancel || cancel.isPending}>
+					<Button variant="destructive" onClick={confirm} disabled={cancel.isPending}>
 						{Boolean(cancel.isPending) && (
 							<Loader2 data-icon="inline-start" aria-hidden className="animate-spin" />
 						)}

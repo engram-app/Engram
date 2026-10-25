@@ -135,7 +135,7 @@ export default {
 		"超过免费限制的仓库或笔记将变为只读。",
 	"You can reverse this any time before the effective date.":
 		"您可以随时在生效日期之前撤销此操作。",
-	"Why are you canceling?": "为什么取消？",
+	"Why are you canceling? (optional)": "为什么取消？(可选)",
 	"Keep my subscription": "保留我的订阅",
 	"Canceling…": "取消中…",
 	"Cancel at period end": "在到期时取消",

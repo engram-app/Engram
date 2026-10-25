@@ -148,7 +148,7 @@ export default {
 		"無料版の制限を超える保管庫またはノートは、読み取り専用になります。",
 	"You can reverse this any time before the effective date.":
 		"いつでも、有効期限になる前にこの操作を元に戻せます。",
-	"Why are you canceling?": "なぜ解約されますか？",
+	"Why are you canceling? (optional)": "キャンセル理由は何ですか？（任意）",
 	"Keep my subscription": "購読を継続します",
 	"Canceling…": "解約中…",
 	"Cancel at period end": "期間満了時に解約",
