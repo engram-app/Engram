@@ -134,18 +134,6 @@ function startButton(): HTMLElement {
 	return first;
 }
 
-// In-app checkouts (plan purchase, payment-method update) hide both wallets
-// pending real-charge data (#2203) and keep the rest.
-// Pure (no expect) so each test owns the assertion.
-const NO_WALLETS = { wallets: [], card: true, paypal: true };
-function walletView(methods: string[]) {
-	return {
-		wallets: methods.filter((m) => m === "apple_pay" || m === "google_pay"),
-		card: methods.includes("card"),
-		paypal: methods.includes("paypal"),
-	};
-}
-
 describe("BillingPage locale", () => {
 	beforeEach(() => {
 		window.localStorage.clear();
@@ -166,14 +154,7 @@ describe("BillingPage locale", () => {
 			await Promise.resolve();
 		});
 		await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
-		// In-app checkouts also restrict payment methods (no Apple Pay or Google
-		// Pay; see paddle-checkout.ts).
-		expect(open.mock.calls[0]?.[0].settings).toEqual({
-			...INLINE_SETTINGS,
-			allowedPaymentMethods: expect.any(Array),
-			locale: "zh-Hans",
-		});
-		expect(walletView(open.mock.calls[0]?.[0].settings.allowedPaymentMethods)).toEqual(NO_WALLETS);
+		expect(open.mock.calls[0]?.[0].settings).toEqual({ ...INLINE_SETTINGS, locale: "zh-Hans" });
 	});
 
 	it("passes the mapped rendered locale with the full settings to the payment-method update checkout", async () => {
@@ -190,14 +171,8 @@ describe("BillingPage locale", () => {
 		await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
 		expect(open.mock.calls[0]?.[0]).toEqual({
 			transactionId: "txn_1",
-			// Same wallet-free method list as the plan checkout.
-			settings: {
-				...OVERLAY_SETTINGS,
-				allowedPaymentMethods: expect.any(Array),
-				locale: "zh-Hans",
-			},
+			settings: { ...OVERLAY_SETTINGS, locale: "zh-Hans" },
 		});
-		expect(walletView(open.mock.calls[0]?.[0].settings.allowedPaymentMethods)).toEqual(NO_WALLETS);
 	});
 
 	it("sends the current locale after a switch, without re-initializing Paddle", async () => {
@@ -215,12 +190,7 @@ describe("BillingPage locale", () => {
 			await Promise.resolve();
 		});
 		await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
-		expect(open.mock.calls[0]?.[0].settings).toEqual({
-			...OVERLAY_SETTINGS,
-			allowedPaymentMethods: expect.any(Array),
-			locale: "de",
-		});
-		expect(walletView(open.mock.calls[0]?.[0].settings.allowedPaymentMethods)).toEqual(NO_WALLETS);
+		expect(open.mock.calls[0]?.[0].settings).toEqual({ ...OVERLAY_SETTINGS, locale: "de" });
 		expect(initializePaddleMock).toHaveBeenCalledTimes(1);
 	});
 });

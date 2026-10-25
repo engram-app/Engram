@@ -277,8 +277,10 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(openMock).toHaveBeenCalledTimes(1);
 	});
 
-	// Wallets hidden pending real-charge data (#2203).
-	it("plan checkout offers every payment method except the wallets", async () => {
+	// #2202 hid Apple Pay and Google Pay, but the wallet stalls were our own
+	// cooldown closing the checkout under the wallet sheet (armed on
+	// PAYMENT_INITIATED), not the wallets. In-app checkout offers every method.
+	it("plan checkout does not restrict payment methods (wallets offered)", async () => {
 		mockBillingApi();
 		const openMock = vi.fn();
 		initializePaddleMock.mockImplementation(async () => ({
@@ -295,11 +297,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			await Promise.resolve();
 		});
 
-		const methods: string[] = openMock.mock.calls[0]![0].settings.allowedPaymentMethods;
-		expect(methods).not.toContain("google_pay");
-		expect(methods).not.toContain("apple_pay");
-		expect(methods).toEqual(expect.arrayContaining(["card", "paypal"]));
-		// Init defaults (which the /pay auto-open inherits) stay unrestricted.
+		expect(openMock.mock.calls[0]![0].settings.allowedPaymentMethods).toBeUndefined();
 		const { settings } = initializePaddleMock.mock.calls[0]![0].checkout;
 		expect(settings.allowedPaymentMethods).toBeUndefined();
 	});
