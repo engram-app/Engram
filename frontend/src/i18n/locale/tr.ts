@@ -263,9 +263,9 @@ export default {
 	"{price}/mo": "{price}/ay",
 	"{price}/yr": "{price}/yıl",
 	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
-		"Her ay otomatik olarak {price} TL'ye yenilenir, iptal edebilirsiniz. İptal için Ayarlar > Ödeme bölümüne gidin.",
+		"Her ay otomatik olarak {price} fiyata yenilenir, iptal edebilirsiniz. İptal için Ayarlar > Ödeme'ye gidin.",
 	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
-		"Her yıl otomatik olarak {price} TL'ye yenilenir, iptal edebilirsiniz. İptal için Ayarlar > Ödeme bölümüne gidin.",
+		"Her yıl otomatik olarak {price} fiyata yenilenir, iptal edebilirsiniz. İptal için Ayarlar > Ödeme'ye gidin.",
 	"Order summary": "Sipariş özeti",
 	"{plan} plan": "{plan} planı",
 	"Due today": "Bugün ödenecek",

@@ -235,9 +235,9 @@ export default {
 	"{price}/mo": "{price}/月",
 	"{price}/yr": "{price}/年",
 	"Renews automatically every month at {price} until you cancel. Cancel anytime in Settings > Billing.":
-		"每月自動續訂，費用為 {price} 美元，直到您取消。您可以在「設定」>「帳單」隨時取消。",
+		"每月自動續訂，費用為 {price}，直到您取消。您可以在「設定」>「帳單」中隨時取消。",
 	"Renews automatically every year at {price} until you cancel. Cancel anytime in Settings > Billing.":
-		"每年自動續訂，費用為 {price} 美元，直到您取消。您可以在「設定」>「帳單」隨時取消。",
+		"每年自動續訂，費用為 {price}，直到您取消。您可以在「設定」>「帳單」中隨時取消。",
 	"Order summary": "訂單摘要",
 	"{plan} plan": "{plan} 方案",
 	"Due today": "今日到期",
