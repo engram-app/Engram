@@ -91,7 +91,7 @@ defmodule Engram.Vector.QdrantCollectionTest do
 
       # The global graph stays until Task 18.1 flips :qdrant_tenant_graph.
       refute Map.has_key?(create, "hnsw_config")
-      assert create["optimizers_config"]["max_segment_size"] == 1_000_000
+      assert create["optimizers_config"]["max_segment_size"] == 128_000
       assert indexes["u"] == %{"type" => "uuid", "is_tenant" => true, "on_disk" => true}
       assert indexes["vault_id"]["enable_hnsw"] == false
       refute Map.has_key?(indexes, "note_id")

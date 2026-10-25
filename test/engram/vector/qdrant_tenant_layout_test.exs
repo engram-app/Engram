@@ -51,6 +51,8 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
 
     # The global graph stays while legacy and v5 points coexist (Task 18.1).
     assert info["config"]["hnsw_config"]["m"] == 16
+    # The create-time segment cap reaches the server (desired/5 omits it).
+    assert info["config"]["optimizer_config"]["max_segment_size"] == 128_000
 
     for {field, schema} <- QdrantLayout.payload_indexes(ctx.version, true, true) do
       have = info["payload_schema"][field]["params"]
