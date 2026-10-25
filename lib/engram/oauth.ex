@@ -713,6 +713,9 @@ defmodule Engram.OAuth do
   # How long after a refresh token is consumed a replay of it may still
   # re-issue (see grace_reissue/2). Long enough for a client to time out and
   # retry once; short enough that a stolen token is useless soon after.
+  # Deliberately wider than `Engram.Auth.RefreshLeeway` (30s, device and local
+  # auth): the re-issue here is guarded by the successor-unused check and the
+  # cap below, which those paths do not have yet.
   @refresh_reuse_grace_seconds 60
 
   # How many times one consumed token may be re-issued inside its window. The

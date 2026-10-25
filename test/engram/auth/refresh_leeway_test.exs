@@ -22,6 +22,12 @@ defmodule Engram.Auth.RefreshLeewayTest do
       refute RefreshLeeway.benign?(revoked, now)
     end
 
+    # Plugin and email/password refresh stay at 30s: within the window they
+    # mint a child with no successor-unused check or cap (review of #2209).
+    test "a token revoked 31s ago is outside the window", %{now: now} do
+      refute RefreshLeeway.benign?(DateTime.add(now, -31, :second), now)
+    end
+
     test "false at the epoch sentinel used for admin/breach revocations", %{now: now} do
       refute RefreshLeeway.benign?(~U[1970-01-01 00:00:00Z], now)
     end

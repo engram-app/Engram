@@ -1,6 +1,6 @@
 # Refresh token rotation — reuse detection + leeway (as-built)
 
-_Last verified: 2026-10-03_
+_Last verified: 2026-10-24_
 
 Applies to the device-flow (`Engram.Auth.DeviceFlow`) and local-auth
 (`Engram.Accounts`) refresh paths, which share `Engram.Auth.RefreshLeeway`. MCP
@@ -30,8 +30,16 @@ benign retries.
     current token would otherwise land *inside* the leeway and be misclassified
     as benign on next presentation. A `Logger.warning` records the breach
     (`family_id` + `user_id`) so the audit trail survives row deletion.
-- **Leeway policy** — extracted into `Engram.Auth.RefreshLeeway` (`@seconds 30`,
-  boundary-inclusive `benign?/2`). The old `@refresh_grace_seconds 60` is gone.
+- **Leeway policy** — `Engram.Auth.RefreshLeeway` (`@seconds 30`,
+  boundary-inclusive `benign?/2`). The 2026-10-24 speed audit found 27 plugin
+  users logged out by reuse detection in 7 days and proposed 60 s like MCP
+  OAuth. Rejected for now (review of #2209): within the window this path
+  mints a child with no successor-unused check, no revoke of the live
+  successor and no cap, so a wider window widens an undetected family fork.
+  Raise it together with porting MCP's checks into one shared module.
+- **Reuse log** carries `seconds_since_revoked`: seconds = duplicate concurrent
+  presentation, hours = a second device sharing a synced token or a rotation
+  the client never persisted.
 - **Tests** — `test/engram/auth/device_flow_test.exs` +
   `test/engram_web/controllers/device_auth_controller_test.exs` cover: normal
   rotation chain, reuse within leeway → ok, **reuse outside leeway → whole family
@@ -47,6 +55,9 @@ benign retries.
 - Concurrency: two concurrent refreshes of the same active token both pass the
   lookup before either stamps `revoked_at`. Acceptable within leeway (both are
   the "previous token"); they fork into the same family, and the unused branch
-  ages out. Document it; don't try to serialize at the DB layer unless it bites.
+  ages out. A `FOR UPDATE` row lock was tried in #2209 and cut: the second
+  refresh still takes the benign branch and mints a child, so the fork and
+  every user-visible outcome stay the same. The real fix is MCP's
+  successor-unused check and re-issue cap (#2211).
 - Client (plugin) already: persists access token (PR #84), dedups concurrent
   refreshes via `inflightRefresh`, awaits rotation persistence before use.

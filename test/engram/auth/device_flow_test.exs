@@ -462,6 +462,64 @@ defmodule Engram.Auth.DeviceFlowTest do
     end
   end
 
+  describe "refresh_access_token/1 grace window" do
+    # The plugin window stays 30s (`Engram.Auth.RefreshLeeway`) while MCP OAuth
+    # uses 60s: within the window device flow mints a child without MCP's
+    # successor-unused check or re-issue cap, so widening it widens an
+    # undetected fork (adversarial review of #2209). These pin the 30s edges.
+    defp rotated_family do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+      {:ok, _} = DeviceFlow.authorize_device(auth.user_code, user, vault.id)
+      {:ok, initial} = DeviceFlow.exchange_device_code(auth.device_code)
+      {:ok, current} = DeviceFlow.refresh_access_token(initial.refresh_token)
+      {initial, current}
+    end
+
+    defp age_revocations(seconds) do
+      at = DateTime.utc_now() |> DateTime.add(-seconds, :second) |> DateTime.truncate(:second)
+
+      Repo.update_all(
+        from(rt in DeviceRefreshToken, where: not is_nil(rt.revoked_at)),
+        [set: [revoked_at: at]],
+        skip_tenant_check: true
+      )
+    end
+
+    test "a replay just inside the window (29s) is a benign retry" do
+      {initial, current} = rotated_family()
+      age_revocations(29)
+
+      assert {:ok, _} = DeviceFlow.refresh_access_token(initial.refresh_token)
+      assert {:ok, _} = DeviceFlow.refresh_access_token(current.refresh_token)
+    end
+
+    test "a replay 31s after rotation revokes the family (not MCP's 60s)" do
+      {initial, current} = rotated_family()
+      age_revocations(31)
+
+      assert {:error, :invalid_refresh_token} =
+               DeviceFlow.refresh_access_token(initial.refresh_token)
+
+      assert {:error, :invalid_refresh_token} =
+               DeviceFlow.refresh_access_token(current.refresh_token)
+    end
+
+    test "reuse detection logs how long ago the token was revoked" do
+      {initial, _current} = rotated_family()
+      age_revocations(600)
+
+      log =
+        ExUnit.CaptureLog.capture_log([metadata: [:seconds_since_revoked]], fn ->
+          DeviceFlow.refresh_access_token(initial.refresh_token)
+        end)
+
+      assert log =~ "device refresh-token reuse detected"
+      assert log =~ ~r/seconds_since_revoked=(599|600|601)/
+    end
+  end
+
   describe "plugin_connected onboarding hook" do
     test "records plugin_connected on successful exchange" do
       user = insert(:user)
