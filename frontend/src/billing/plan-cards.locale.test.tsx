@@ -34,7 +34,10 @@ describe("PlanCard prices in other locales", () => {
 		expect(line.textContent).not.toMatch(/руб/u);
 		expect(line.textContent).toContain(` · ${ru["billed yearly"]}`);
 		expect(line.textContent).not.toMatch(/billed/u);
-		expect(screen.getByText(/70\s\$/u).textContent).not.toMatch(/руб/u);
+		// The card price and the renewal line both hold it.
+		for (const el of screen.getAllByText(/70\s\$/u)) {
+			expect(el.textContent).not.toMatch(/руб/u);
+		}
 	});
 
 	it("de: the amount is a dollar amount Intl wrote, with no euro", async () => {
@@ -43,6 +46,9 @@ describe("PlanCard prices in other locales", () => {
 		expect(line.textContent).not.toMatch(/€/u);
 		expect(line.textContent).toContain(` · ${de["billed monthly"]}`);
 		expect(line.textContent).not.toMatch(/billed/u);
-		expect(screen.getByText(/7\s\$/u).textContent).not.toMatch(/€/u);
+		// The card price and the renewal line both hold it.
+		for (const el of screen.getAllByText(/7\s\$/u)) {
+			expect(el.textContent).not.toMatch(/€/u);
+		}
 	});
 });

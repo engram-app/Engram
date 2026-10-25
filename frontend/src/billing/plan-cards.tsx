@@ -227,9 +227,7 @@ export function CheckoutSummary({
 	// The catalog price reads as on the plan card ("$70"); Paddle's totals are
 	// a real charge and keep their cents.
 	const money = (n: number) =>
-		totals
-			? formatMoney(n, totals.currency, locale)
-			: formatMoney(n, "USD", locale, WHOLE);
+		totals ? formatMoney(n, totals.currency, locale) : formatMoney(n, "USD", locale, WHOLE);
 	return (
 		<section
 			aria-label={t("Order summary")}
