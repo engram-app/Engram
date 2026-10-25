@@ -317,6 +317,20 @@ defmodule EngramWeb.BillingController do
     end)
   end
 
+  @doc """
+  `GET /api/billing/checkout-transactions/:id`: the Paddle status of a
+  checkout the caller opened. Only the status: no amounts, no PII.
+  """
+  def checkout_transaction(conn, %{"id" => transaction_id}) do
+    with_billing(conn, fn ->
+      case Billing.checkout_transaction_status(conn.assigns.current_user, transaction_id) do
+        {:ok, status} -> json(conn, %{status: status})
+        {:error, :not_found} -> not_found(conn, "transaction not found")
+        {:error, reason} -> paddle_error(conn, reason)
+      end
+    end)
+  end
+
   @doc "Mint the hosted invoice URL for one of the user's own transactions."
   def transaction_invoice(conn, %{"id" => transaction_id}) do
     with_billing(conn, fn ->

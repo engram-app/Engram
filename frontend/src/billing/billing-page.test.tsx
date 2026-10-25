@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { track } from "../analytics/track";
+import { ApiError } from "../api/client";
 import { type AuthAdapter, AuthContext } from "../auth/auth-context";
 import { ThemeProvider, useTheme } from "../theme/theme-provider";
 import BillingPage from "./billing-page";
@@ -27,7 +28,8 @@ vi.mock("@paddle/paddle-js", () => ({
 }));
 
 const { get } = vi.hoisted(() => ({ get: vi.fn() }));
-vi.mock("../api/client", () => ({
+vi.mock("../api/client", async (importOriginal) => ({
+	ApiError: (await importOriginal<typeof import("../api/client")>()).ApiError,
 	api: { get, post: vi.fn(), patch: vi.fn(), del: vi.fn() },
 	setTokenGetter: vi.fn(),
 }));
@@ -1169,12 +1171,19 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		const NOT_SUBSCRIBED = "Your payment did not finish, so you have not been subscribed.";
 		const CHECKING = "Checking your payment…";
 
-		// `paid.value` flips /billing/status to a paying subscription.
+		// `paid.value` flips /billing/status to a paying subscription;
+		// `paid.txn` is what Paddle reports for the checkout's transaction.
 		function mockBillingApiWithPayment() {
-			const paid = { value: false };
+			const paid: { value: boolean; txn: string | null } = { value: false, txn: "ready" };
 			mockBillingApi();
 			const base = get.getMockImplementation()!;
 			get.mockImplementation(async (url: string) => {
+				if (url === "/billing/checkout-transactions/txn_1") {
+					if (paid.txn === null) {
+						throw new ApiError(404, "transaction not found");
+					}
+					return { status: paid.txn };
+				}
 				if (url === "/billing/status" && paid.value) {
 					return {
 						tier: "starter",
@@ -1283,6 +1292,47 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			await waitFor(() => expect(openMock).toHaveBeenCalledTimes(2));
 			expect(openMock.mock.calls[1]![0].items).toEqual(openMock.mock.calls[0]![0].items);
 			expect(screen.queryByText(NOT_SUBSCRIBED)).not.toBeInTheDocument();
+		});
+
+		// Our webhook can sit in Paddle's backoff for longer than the 30 s check.
+		// Paddle's own transaction status is the truth: paid means no second
+		// checkout, only the "payment received" recovery banner.
+		it("Try again does not open checkout when Paddle says the transaction was paid", async () => {
+			vi.useFakeTimers({ shouldAdvanceTime: true });
+			const paid = mockBillingApiWithPayment();
+			const { openMock } = await closeMidPayment();
+			await advance(31_000);
+			expect(screen.getByText(NOT_SUBSCRIBED)).toBeInTheDocument();
+
+			paid.txn = "completed";
+			await act(async () => {
+				screen.getByRole("button", { name: "Try again" }).click();
+				await Promise.resolve();
+			});
+			await advance(1000);
+
+			await waitFor(() =>
+				expect(
+					screen.getByText("Payment received. We're finishing your activation in the background."),
+				).toBeInTheDocument(),
+			);
+			expect(screen.queryByText(NOT_SUBSCRIBED)).not.toBeInTheDocument();
+			expect(openMock).toHaveBeenCalledTimes(1);
+			expect(get).toHaveBeenCalledWith("/billing/checkout-transactions/txn_1");
+		});
+
+		it("Try again still reopens checkout when the backend does not know the transaction", async () => {
+			vi.useFakeTimers({ shouldAdvanceTime: true });
+			const paid = mockBillingApiWithPayment();
+			paid.txn = null;
+			const { openMock } = await closeMidPayment();
+			await advance(31_000);
+
+			await act(async () => {
+				screen.getByRole("button", { name: "Try again" }).click();
+				await Promise.resolve();
+			});
+			await waitFor(() => expect(openMock).toHaveBeenCalledTimes(2));
 		});
 
 		it("Try again does not open checkout when the subscription is already active", async () => {

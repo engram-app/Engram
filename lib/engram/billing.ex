@@ -654,6 +654,27 @@ defmodule Engram.Billing do
     end)
   end
 
+  @doc """
+  The Paddle status of a checkout transaction the caller opened (its
+  `custom_data.user_id`, set by `/billing/config`, names the caller). Lets
+  "Try again" after an unfinished payment see a payment that landed while
+  our webhook was still in Paddle's retry backoff, instead of opening a
+  second checkout. `{:error, :not_found}` for anyone else's id, or an id
+  Paddle does not know.
+  """
+  @spec checkout_transaction_status(Engram.Accounts.User.t(), String.t()) ::
+          {:ok, String.t()} | {:error, :not_found | term()}
+  def checkout_transaction_status(user, transaction_id) do
+    user_id = user.id
+
+    case Client.impl().get_transaction(transaction_id) do
+      {:ok, %{"status" => status, "custom_data" => %{"user_id" => ^user_id}}} -> {:ok, status}
+      {:ok, _other} -> {:error, :not_found}
+      {:error, {:paddle_error, 404, _}} -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   # Paddle: "Invoice PDFs aren't available for zero-value transactions", and
   # the PDF "is available for transactions that are completed" (`billed` for
   # manual collection, where the invoice is issued before payment). Shared by

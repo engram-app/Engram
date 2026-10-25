@@ -242,6 +242,44 @@ defmodule EngramWeb.BillingControllerTest do
     end
   end
 
+  # "Try again" after an unfinished payment asks this first: a checkout whose
+  # money landed while our webhook was still in Paddle's backoff must not open
+  # a second checkout (and a second subscription).
+  describe "GET /api/billing/checkout-transactions/:id" do
+    test "returns the status of the caller's own checkout transaction", %{conn: conn, user: user} do
+      expect(Engram.Paddle.ClientMock, :get_transaction, fn "txn_mine" ->
+        {:ok,
+         %{"id" => "txn_mine", "status" => "completed", "custom_data" => %{"user_id" => user.id}}}
+      end)
+
+      body = conn |> get("/api/billing/checkout-transactions/txn_mine") |> json_response(200)
+      assert body == %{"status" => "completed"}
+    end
+
+    test "404s another user's transaction", %{conn: conn} do
+      expect(Engram.Paddle.ClientMock, :get_transaction, fn "txn_theirs" ->
+        {:ok,
+         %{
+           "id" => "txn_theirs",
+           "status" => "completed",
+           "custom_data" => %{"user_id" => Ecto.UUID.generate()}
+         }}
+      end)
+
+      conn = get(conn, "/api/billing/checkout-transactions/txn_theirs")
+      assert json_response(conn, 404)["error"] == "transaction not found"
+    end
+
+    test "404s a transaction Paddle does not know", %{conn: conn} do
+      expect(Engram.Paddle.ClientMock, :get_transaction, fn "txn_nope" ->
+        {:error, {:paddle_error, 404, %{"error" => %{"code" => "not_found"}}}}
+      end)
+
+      conn = get(conn, "/api/billing/checkout-transactions/txn_nope")
+      assert json_response(conn, 404)["error"] == "transaction not found"
+    end
+  end
+
   describe "GET /api/billing/transactions" do
     @describetag :session_auth
 

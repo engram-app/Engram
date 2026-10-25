@@ -9,7 +9,7 @@ import { notify } from "@/lib/notify";
 import { SUPPORT_MAILTO } from "@/lib/support";
 import type { CheckoutMethod } from "../analytics/events";
 import { track } from "../analytics/track";
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
 import {
 	type BillingCadence,
 	type BillingStatus,
@@ -64,6 +64,22 @@ const COOLDOWN_MS = 15_000;
 // every CONFIRM_POLL_MS, before saying the buyer is not subscribed.
 const CONFIRM_WINDOW_MS = 30_000;
 const CONFIRM_POLL_MS = 5000;
+
+// Paddle transaction statuses that mean the money was taken (or invoiced).
+const PAID_TRANSACTION_STATUSES = new Set(["billed", "paid", "completed"]);
+
+// Paddle's status for the caller's checkout transaction; null when the backend
+// does not know it (404), "error" when the check itself failed.
+async function checkoutTransactionStatus(transactionId: string): Promise<string | null> {
+	try {
+		const { status } = await api.get<{ status: string }>(
+			`/billing/checkout-transactions/${encodeURIComponent(transactionId)}`,
+		);
+		return status;
+	} catch (err) {
+		return err instanceof ApiError && err.status === 404 ? null : "error";
+	}
+}
 
 function isPayingStatus(status: string | undefined): status is "active" | "trialing" {
 	return status === "active" || status === "trialing";
@@ -822,8 +838,23 @@ export default function BillingPage({
 			await handleSubscriptionActivated({ status });
 			return;
 		}
+		// Our webhook can still be in Paddle's retry backoff, longer than
+		// CONFIRM_WINDOW_MS. Paddle's own transaction status is the truth: paid
+		// means show "payment received", never a second checkout.
+		if (transactionId) {
+			const paddleStatus = await checkoutTransactionStatus(transactionId);
+			if (paddleStatus === "error") {
+				notify.error(tLater(msg("Something went wrong with checkout. Please try again.")));
+				return;
+			}
+			if (paddleStatus && PAID_TRANSACTION_STATUSES.has(paddleStatus)) {
+				setUnfinished(false);
+				setSlow(true);
+				return;
+			}
+		}
 		handleStartCheckout(tier);
-	}, [qc, tLater, handleSubscriptionActivated, handleStartCheckout]);
+	}, [qc, tLater, transactionId, handleSubscriptionActivated, handleStartCheckout]);
 
 	// Dev stub success: satisfy the backend onboarding gate via the free-tier
 	// path (the only billing decision we can make without Paddle) so the wizard

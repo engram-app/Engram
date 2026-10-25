@@ -41,6 +41,15 @@ defmodule Engram.Paddle.Client do
               {:ok, [map()]} | {:error, term()}
 
   @doc """
+  Fetch one transaction.
+
+  Paddle endpoint: `GET /transactions/{id}`. Returns the decoded `data` map
+  verbatim.
+  """
+  @callback get_transaction(transaction_id :: String.t()) ::
+              {:ok, map()} | {:error, term()}
+
+  @doc """
   Fetch the hosted invoice/receipt URL for a completed transaction.
 
   Paddle endpoint: `GET /transactions/{id}/invoice`. The URL is short-lived,

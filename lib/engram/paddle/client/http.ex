@@ -70,6 +70,14 @@ defmodule Engram.Paddle.Client.HTTP do
   end
 
   @impl true
+  def get_transaction(transaction_id) when is_binary(transaction_id) do
+    request(:get, "/transactions/" <> transaction_id, "transaction", fn
+      %Req.Response{status: 200, body: %{"data" => data}} -> {:ok, data}
+      _ -> :error
+    end)
+  end
+
+  @impl true
   def get_transaction_invoice(transaction_id) when is_binary(transaction_id) do
     request(:get, "/transactions/" <> transaction_id <> "/invoice", "transaction-invoice", fn
       %Req.Response{status: 200, body: %{"data" => %{"url" => invoice_url}}} -> {:ok, invoice_url}
