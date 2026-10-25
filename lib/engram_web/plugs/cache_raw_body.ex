@@ -32,26 +32,46 @@ defmodule EngramWeb.Plugs.CacheRawBody do
   @doc """
   `Plug.Conn.read_body/2` inside an `http.request.body_read` span carrying
   `http.request.body.size` (bytes this call read) and
-  `engram.body_read.result` (`ok`, `more` or `error`). The one body read
-  every parsed request and the raw attachment upload go through.
+  `engram.body_read.result` (`ok`, `more`, `error` or `timeout`). An error or
+  a raise (Bandit's HTTP/1 read timeout) also sets the span's error status,
+  then the raise propagates. The one body read every parsed request and the
+  raw attachment upload go through.
   """
   def read_traced(conn, opts) do
     Tracer.with_span "http.request.body_read" do
-      result = Plug.Conn.read_body(conn, opts)
+      result = read_or_mark(conn, opts)
 
-      {status, bytes} =
-        case result do
-          {:ok, body, _conn} -> {"ok", byte_size(body)}
-          {:more, body, _conn} -> {"more", byte_size(body)}
-          {:error, _reason} -> {"error", 0}
-        end
-
-      Tracer.set_attributes(%{
-        HTTPAttributes.http_request_body_size() => bytes,
-        "engram.body_read.result": status
-      })
+      case result do
+        {:ok, body, _conn} -> record("ok", byte_size(body))
+        {:more, body, _conn} -> record("more", byte_size(body))
+        {:error, reason} -> record_error("error", inspect(reason))
+      end
 
       result
     end
+  end
+
+  # A raise still ends the span (`with_span` is try/after); this marks it first.
+  defp read_or_mark(conn, opts) do
+    Plug.Conn.read_body(conn, opts)
+  rescue
+    e ->
+      record_error(timeout_or_error(e), Exception.message(e))
+      reraise e, __STACKTRACE__
+  end
+
+  defp timeout_or_error(%{plug_status: :request_timeout}), do: "timeout"
+  defp timeout_or_error(_e), do: "error"
+
+  defp record(status, bytes) do
+    Tracer.set_attributes(%{
+      HTTPAttributes.http_request_body_size() => bytes,
+      "engram.body_read.result": status
+    })
+  end
+
+  defp record_error(status, message) do
+    record(status, 0)
+    Tracer.set_status(OpenTelemetry.status(:error, message))
   end
 end
