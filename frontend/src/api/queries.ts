@@ -1514,7 +1514,8 @@ export interface BillingTransaction {
 	status: string;
 	invoice_id: string | null;
 	// Server-side rule: completed (or billed) and nonzero. Paddle has no PDF otherwise.
-	invoice_available: boolean;
+	// Optional: a backend older than this field omits it (the SPA ships first).
+	invoice_available?: boolean;
 }
 
 export interface BillingHistory {

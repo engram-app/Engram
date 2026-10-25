@@ -78,4 +78,19 @@ describe("BillingHistoryTable", () => {
 		render(<BillingHistoryTable transactions={[pastDue]} onDownload={() => {}} />);
 		expect(screen.queryByRole("button", { name: /download/iu })).not.toBeInTheDocument();
 	});
+
+	// The SPA is promoted separately from the backend, so a new SPA can read a
+	// response from a backend that predates invoice_available. Keep Download.
+	it("renders Download when the backend omits invoice_available (older backend)", () => {
+		const legacy: BillingTransaction = {
+			id: "txn_old",
+			billed_at: "2026-05-27T07:00:00Z",
+			amount: "2000",
+			currency: "USD",
+			status: "completed",
+			invoice_id: "inv_old",
+		};
+		render(<BillingHistoryTable transactions={[legacy]} onDownload={() => {}} />);
+		expect(screen.getByRole("button", { name: /download/iu })).toBeInTheDocument();
+	});
 });

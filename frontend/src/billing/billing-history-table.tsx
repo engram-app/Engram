@@ -43,8 +43,9 @@ export default function BillingHistoryTable({
 								</td>
 								<td className="py-2 capitalize">{statusLabel(txn.status, t)}</td>
 								<td className="py-2 text-right">
-									{/* No PDF for a $0 or not-completed transaction (backend rule). */}
-									{txn.invoice_available ? (
+									{/* No PDF for a $0 or not-completed transaction (backend rule).
+									    Missing = an older backend, which offered Download on every row. */}
+									{(txn.invoice_available ?? true) ? (
 										<Button
 											variant="ghost"
 											size="sm"
