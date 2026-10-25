@@ -1054,12 +1054,13 @@ defmodule Engram.Indexing do
     )
   end
 
-  # Rows per chunk `insert_all`. A row binds 15 parameters (`chunk_row/4` plus
-  # the four chunk-text columns) against the protocol's 65535 cap, which
-  # leaves room for 4369; 3000 keeps a margin (as Links' @insert_chunk) so a
-  # new column cannot silently re-arm the overflow. Prod hit it at 73040
-  # params (7,304 chunks, one note). The text columns add bytes, not
-  # parameters: a batch carries at most the note's own text.
+  # Rows per `chunks` statement (`ChunkRows.write!/3`) and per
+  # `chunk_points` / `note_attrs` insert. A chunk row binds 10 parameters
+  # (`chunk_row/4`) and a `chunk_points` row 10 against the protocol's
+  # 65535 cap, which leaves room for 6553; 3000 keeps a margin (as Links'
+  # @insert_chunk) so a new column cannot silently re-arm the overflow.
+  # Prod hit it at 73040 params (7,304 chunks, one note). The update batch
+  # binds one array per column, so its size is bytes, not parameters.
   @insert_batch 3000
 
   @doc """

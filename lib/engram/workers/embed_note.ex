@@ -182,7 +182,10 @@ defmodule Engram.Workers.EmbedNote do
           # A note waiting in the Free bucket queue that the wake did not
           # send (no `budget_cap`) keeps its place (#2197): rebuilt without
           # spending the bucket, its dense vectors kept and the rest
-          # keyword-only, then parked again with its need.
+          # keyword-only, then parked again with its need. One whose
+          # current content is fully dense is not `budget_spent`: its
+          # rebuild is `maintenance` (`version_rebuild_opts/1`), which never
+          # reserves from the bucket, and keeps its dense leg (review L2).
           version_stale?(note) ->
             queued = note.embed_budget_parked_at != nil and is_nil(args["budget_cap"])
 

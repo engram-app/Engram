@@ -19,6 +19,10 @@ defmodule Engram.Repo.Migrations.ChunksCreatedAtNullableExpand do
   end
 
   # Rows written by this release carry NULL: backfill before restoring it.
+  # Rollback cost (review L6): this UPDATE rewrites every row written since
+  # (most of the table, 305k rows in prod 2026-10-24) under ROW EXCLUSIVE.
+  # Down-only, and nothing reads the column, so a rollback can leave this
+  # migration applied: the previous release writes the nullable column fine.
   # Unforced for the UPDATE (FORCE RLS would filter it to zero rows), and
   # SET NOT NULL fails loud if any row was missed.
   def down do
