@@ -1148,12 +1148,10 @@ defmodule Engram.Billing do
             {:ok, sub}
 
           {:error, %Ecto.Changeset{errors: errors} = changeset} ->
-            case errors[:last_event_occurred_at] do
-              {_, opts} when is_list(opts) ->
-                if opts[:stale], do: skip_stale_event(data), else: {:error, changeset}
-
-              _ ->
-                {:error, changeset}
+            cond do
+              error_opt(errors, :user_id, :constraint) == :foreign -> skip_owner_missing(data)
+              error_opt(errors, :last_event_occurred_at, :stale) -> skip_stale_event(data)
+              true -> {:error, changeset}
             end
         end
 
@@ -1345,6 +1343,28 @@ defmodule Engram.Billing do
     )
 
     {:ok, :stale}
+  end
+
+  defp error_opt(errors, field, key) do
+    case errors[field] do
+      {_msg, opts} when is_list(opts) -> opts[key]
+      _ -> nil
+    end
+  end
+
+  # The owner named in custom_data no longer exists (a hard-deleted paying
+  # account: Paddle's follow-up updated/canceled still carry its user_id). No
+  # retry can ever find that user, so it is acked and marked processed.
+  defp skip_owner_missing(data) do
+    Logger.info(
+      "paddle_webhook_owner_missing_skipped",
+      Metadata.with_category(:info, :billing,
+        subscription_id: data["id"],
+        reason: :owner_deleted
+      )
+    )
+
+    {:ok, :ignored}
   end
 
   # Resolve the tier from the event's price_id and merge it into `base_attrs`.

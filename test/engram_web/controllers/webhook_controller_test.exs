@@ -643,6 +643,28 @@ defmodule EngramWeb.WebhookControllerTest do
     end
   end
 
+  describe "POST /webhooks/paddle: owner deleted" do
+    # Hard delete cancels at Paddle, then cascades the row. Paddle's follow-up
+    # events still name the deleted user: an FK raise would 500 them for days.
+    test "an event for a deleted user answers 200, is marked processed, and reports nothing" do
+      Sentry.Test.setup_sentry()
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_gone")
+      Engram.Repo.delete!(user, skip_tenant_check: true)
+
+      for {type, id} <- [
+            {"subscription.canceled", "ntf_gone_1"},
+            {"subscription.created", "ntf_gone_2"}
+          ] do
+        conn = send_payload(sub_event(type, id, "sub_gone", user, "canceled"))
+        assert json_response(conn, 200)["status"] == "ok"
+        assert Engram.Webhooks.Idempotency.check(:paddle, id) == :duplicate
+      end
+
+      assert Sentry.Test.pop_sentry_reports() == []
+    end
+  end
+
   defp sub_event(type, event_id, sub_id, user, status, opts \\ []) do
     Jason.encode!(%{
       "event_type" => type,

@@ -39,6 +39,7 @@ defmodule Engram.Billing.Subscription do
     |> validate_required([:user_id, :paddle_customer_id, :tier, :status])
     |> validate_inclusion(:tier, ~w(free starter pro))
     |> validate_inclusion(:status, ~w(trialing active past_due paused canceled))
+    |> foreign_key_constraint(:user_id)
     |> unique_constraint(:user_id)
     |> unique_constraint(:paddle_subscription_id)
   end
