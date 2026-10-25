@@ -194,22 +194,13 @@ defmodule Engram.Notes.NoteFieldsTest do
     user = Repo.get!(Engram.Accounts.User, user.id)
     {:ok, dek} = Crypto.get_dek(user)
     pass = self()
-    Application.put_env(:engram, :dek_await_ms, 20)
-    on_exit(fn -> Application.delete_env(:engram, :dek_await_ms) end)
     on_exit(fn -> :telemetry.detach("stalled-reload") end)
 
     # Mid-pass (the embed call), evict the DEK and have another process hold
     # the reload claim. The first miss after that times out; the second finds
     # the loader's DEK.
     stub(Engram.MockEmbedder, :embed_texts, fn texts ->
-      :ok = DekCache.invalidate(user.id)
-
-      spawn(fn ->
-        send(pass, {:claim, DekCache.claim(user.id)})
-        Process.sleep(:infinity)
-      end)
-
-      assert_receive {:claim, token}
+      token = Engram.StalledDekLoad.stall!(user.id)
       Process.put(:dek_misses, 0)
 
       :telemetry.attach(

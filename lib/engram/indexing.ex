@@ -213,6 +213,11 @@ defmodule Engram.Indexing do
           {:error, :no_dek} = err ->
             emit_no_dek_telemetry(note)
             err
+
+          # A transient load failure (`:dek_load_timeout`): the pass's error,
+          # so the job retries; nothing was cleared or stamped.
+          {:error, _reason} = err ->
+            err
         end
 
       {:ok, prepared} ->
@@ -303,13 +308,15 @@ defmodule Engram.Indexing do
     # the sparse re-plan reuses the rows already read (`plan_within_budget/5`).
     # Move the reservation past the commit if that ever contends.
     #
-    # ONE DEK fetch per pass, and every key below derives from it. A second
-    # fetch mid-pass could miss (an eviction) and fail while the first had
-    # succeeded, committing a pass built from half its inputs.
+    # ONE DEK fetch for everything the pass derives from it (filter and
+    # content keys, vector cache, frontmatter key ids). A second fetch that
+    # missed (an eviction) and failed while this one had succeeded used to be
+    # swallowed, committing a pass built from half its inputs. The payload
+    # encryption still fetches its own, and fails the pass on an error.
     with :ok <- ensure_collection(),
          {:ok, dek} <- Crypto.get_dek(user),
          content_key = Crypto.dek_content_hash_key_from_bytes(dek),
-         {:ok, opts} <- with_vector_cache(user, note, content_key, dims, opts),
+         {:ok, opts} <- with_vector_cache(user, note, dek, content_key, dims, opts),
          {tier, dense?, plan, retained} <-
            Repo.with_tenant!(note.user_id, fn ->
              with :ok <- tier_unchanged(note),
@@ -2403,28 +2410,26 @@ defmodule Engram.Indexing do
 
   # Off: `opts` unchanged, and nothing below runs, so the pass is the
   # pre-cache one byte for byte.
-  defp with_vector_cache(user, note, content_key, dims, opts) do
+  defp with_vector_cache(user, note, dek, content_key, dims, opts) do
     if VectorCache.enabled?() and Keyword.get(opts, :dense, true) do
-      with {:ok, dek} <- Crypto.get_dek(user) do
-        cache = %{
-          user_id: note.user_id,
-          note_id: note.id,
-          dek: dek,
-          dek_version: user.dek_version || 1,
-          content_key: content_key,
-          key_opts: [model: pass_model(), dims: dims, dtype: "float", input_type: "document"]
-        }
+      cache = %{
+        user_id: note.user_id,
+        note_id: note.id,
+        dek: dek,
+        dek_version: user.dek_version || 1,
+        content_key: content_key,
+        key_opts: [model: pass_model(), dims: dims, dtype: "float", input_type: "document"]
+      }
 
-        # A higher-tier model's cached vector is as good (`reuse_models/0`).
-        cache =
-          Map.put(
-            cache,
-            :reuse_key_opts,
-            Enum.map(reuse_models(), &Keyword.put(cache.key_opts, :model, &1))
-          )
+      # A higher-tier model's cached vector is as good (`reuse_models/0`).
+      cache =
+        Map.put(
+          cache,
+          :reuse_key_opts,
+          Enum.map(reuse_models(), &Keyword.put(cache.key_opts, :model, &1))
+        )
 
-        {:ok, Keyword.put(opts, :vector_cache, cache)}
-      end
+      {:ok, Keyword.put(opts, :vector_cache, cache)}
     else
       {:ok, opts}
     end
