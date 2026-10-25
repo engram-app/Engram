@@ -3840,26 +3840,33 @@ defmodule Engram.Indexing do
   # Inside the chunk-row transaction, from the same extraction as the payload.
   # The note's rows are replaced wholesale, like the chunk rows, so an absent
   # key leaves no row.
+  #
+  # Compared before writing: most passes leave the frontmatter alone, and
+  # rewriting identical rows cost a delete and an insert per field (each
+  # with its indexes) on every pass (notes-chunks-hyperopt 4.2). The check
+  # is the rows themselves, not a stored hash of them: same read the delete
+  # did, no new column, no collision.
   defp stamp_flat_fields(%{note: note, attr_rows: rows}) do
-    :ok = hold_key_ids!(note, rows)
-
-    {_n, old} =
-      Repo.delete_all(
-        from(a in NoteAttr,
-          where: a.note_id == ^note.id,
-          select: {a.key_id, a.ord, a.h, a.n, a.d}
-        )
+    old =
+      from(a in NoteAttr,
+        where: a.note_id == ^note.id,
+        select: {a.key_id, a.ord, a.h, a.n, a.d}
       )
+      |> Repo.all()
+      |> MapSet.new()
 
-    _ = rows |> Enum.chunk_every(@insert_batch) |> Enum.each(&Repo.insert_all(NoteAttr, &1))
+    if old == MapSet.new(rows, &{&1.key_id, &1.ord, &1.h, &1.n, &1.d}) do
+      :ok
+    else
+      :ok = hold_key_ids!(note, rows)
+      _ = Repo.delete_all(from(a in NoteAttr, where: a.note_id == ^note.id))
+      _ = rows |> Enum.chunk_every(@insert_batch) |> Enum.each(&Repo.insert_all(NoteAttr, &1))
 
-    # The field catalog is cached on change_seq, which this pass does not
-    # move, so a pass that changed the rows evicts it (after this transaction
-    # commits). Most re-index passes leave the frontmatter alone: no eviction,
-    # no cluster broadcast.
-    if MapSet.new(old) != MapSet.new(rows, &{&1.key_id, &1.ord, &1.h, &1.n, &1.d}),
-      do: FieldCatalog.evict(note.vault_id),
-      else: :ok
+      # The field catalog is cached on change_seq, which this pass does not
+      # move, so a pass that changed the rows evicts it (after this
+      # transaction commits).
+      FieldCatalog.evict(note.vault_id)
+    end
   end
 
   defp stamp_flat_fields(_prepared), do: :ok
