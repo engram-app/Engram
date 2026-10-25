@@ -545,7 +545,7 @@ config :engram, :checkout_transaction_rate_limit, limit: 10, period_ms: 60_000
 # ex_aws HTTP client: Req (first-party in ex_aws 2.7). Req uses its own default
 # Finch pool, so the backend carries no hackney dependency. :req_opts sets the
 # per-request timeout, mirroring the old adapter's 30s recv_timeout. Req handles
-# body-less (HEAD) responses natively, so no shim is needed for S3.exists?.
+# body-less (HEAD) responses natively, so no shim is needed for HEAD requests.
 config :ex_aws, :http_client, Engram.Aws.ReqClient
 config :ex_aws, :req_opts, receive_timeout: 30_000
 

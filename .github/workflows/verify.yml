@@ -3180,9 +3180,10 @@ jobs:
               Engram.Storage.Database = Engram.Storage.adapter()
               :ok = Engram.Storage.adapter().put(key, data)
               {:ok, ^data} = Engram.Storage.adapter().get(key)
-              true = Engram.Storage.adapter().exists?(key)
+              :present = Engram.Storage.presence(key)
               {:ok, 1} = Engram.Storage.adapter().delete_prefix("999/")
               {:error, :not_found} = Engram.Storage.adapter().get(key)
+              :missing = Engram.Storage.presence(key)
               IO.puts("STORAGE_DATABASE_ROUNDTRIP_OK")
             ')
           echo "$OUT"
