@@ -579,11 +579,20 @@ defmodule Engram.Auth.DeviceFlowTest do
       assert live_tokens(d.family_id) == 0
     end
 
+    # The swap cooldown is for a device the user took away. Rotation also
+    # stamps `revoked_at`, and must not read as one, or a Free user with one
+    # active plugin can never link a second device.
+    test "an actively rotating device starts no swap cooldown" do
+      d = linked_device()
+      {:ok, _} = DeviceFlow.refresh_access_token(d.current.refresh_token)
+
+      assert Engram.Connections.most_recent_device_revoke(d.user.id) == nil
+    end
+
     # logout-everywhere, password reset and account delete all route through
     # `Accounts.revoke_all_user_tokens/1`; a plugin must not outlive them.
     test "logout-everywhere revokes the device too" do
       d = linked_device()
-      before = Engram.Connections.most_recent_device_revoke(d.user.id)
       Engram.Accounts.revoke_all_user_tokens(d.user)
 
       for raw <- [d.current.refresh_token, d.initial.refresh_token] do
@@ -592,7 +601,7 @@ defmodule Engram.Auth.DeviceFlowTest do
 
       assert live_tokens(d.family_id) == 0
       # Not a Disconnect: it must not start the Free plan's device-swap cooldown.
-      assert Engram.Connections.most_recent_device_revoke(d.user.id) == before
+      assert Engram.Connections.most_recent_device_revoke(d.user.id) == nil
     end
 
     for field <- [:deleted_at, :suspended_at] do
