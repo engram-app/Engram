@@ -202,7 +202,7 @@ defmodule EngramWeb.WebhookControllerTest do
       refute_received {[:engram, :paddle, :webhook, :stop], ^ref, _, _}
     end
 
-    test "subscription.canceled before subscription.created returns 200 without crashing", %{
+    test "subscription.canceled before subscription.created answers 500 so Paddle retries", %{
       conn: conn
     } do
       user = insert(:user)
@@ -229,7 +229,7 @@ defmodule EngramWeb.WebhookControllerTest do
         |> put_req_header("paddle-signature", "ts=#{timestamp};h1=#{signature}")
         |> post("/webhooks/paddle", payload)
 
-      assert json_response(conn, 200)["status"] == "ok"
+      assert json_response(conn, 500)["status"] == "error"
       refute Engram.Billing.get_subscription(user)
     end
 
@@ -483,6 +483,68 @@ defmodule EngramWeb.WebhookControllerTest do
                skip_tenant_check: true
              )
     end
+  end
+
+  describe "POST /webhooks/paddle: retries" do
+    test "a transient DB failure returns 500, is not marked processed, and the retry succeeds" do
+      user = insert(:user)
+      # A real DB error on write. DDL inside the sandbox transaction rolls back
+      # with the test, so no other test sees the trigger.
+      Engram.Repo.query!("""
+      CREATE FUNCTION pg_temp.fail_sub_write() RETURNS trigger AS $$
+      BEGIN RAISE EXCEPTION 'simulated outage'; END $$ LANGUAGE plpgsql
+      """)
+
+      Engram.Repo.query!("""
+      CREATE TRIGGER fail_sub_write BEFORE INSERT OR UPDATE ON subscriptions
+      FOR EACH ROW EXECUTE FUNCTION pg_temp.fail_sub_write()
+      """)
+
+      payload =
+        sub_event("subscription.created", "ntf_transient", "sub_transient", user, "active")
+
+      assert json_response(send_payload(payload), 500)["status"] == "error"
+      assert Engram.Webhooks.Idempotency.check(:paddle, "ntf_transient") == :proceed
+
+      Engram.Repo.query!("DROP TRIGGER fail_sub_write ON subscriptions")
+
+      assert json_response(send_payload(payload), 200)["status"] == "ok"
+      assert %{status: "active"} = Engram.Billing.get_subscription(user)
+      assert Engram.Webhooks.Idempotency.check(:paddle, "ntf_transient") == :duplicate
+    end
+
+    test "a permanent bad payload (no custom_data.user_id) answers 200 so Paddle stops" do
+      payload =
+        Jason.encode!(%{
+          "event_type" => "subscription.created",
+          "event_id" => "ntf_no_owner",
+          "data" => %{
+            "id" => "sub_no_owner",
+            "status" => "active",
+            "customer_id" => "ctm_no_owner",
+            "items" => [%{"price" => %{"id" => "pri_pro_monthly_test"}}],
+            "custom_data" => %{}
+          }
+        })
+
+      assert json_response(send_payload(payload), 200)["status"] == "ok"
+    end
+  end
+
+  defp sub_event(type, event_id, sub_id, user, status, opts \\ []) do
+    Jason.encode!(%{
+      "event_type" => type,
+      "event_id" => event_id,
+      "occurred_at" => Keyword.get(opts, :occurred_at, "2026-10-24T00:00:00Z"),
+      "data" => %{
+        "id" => sub_id,
+        "status" => status,
+        "customer_id" => "ctm_#{sub_id}",
+        "items" => [%{"price" => %{"id" => "pri_pro_monthly_test"}}],
+        "current_billing_period" => %{"ends_at" => "2026-11-24T00:00:00Z"},
+        "custom_data" => %{"user_id" => user.id}
+      }
+    })
   end
 
   defp build_created_payload(user, affiliate_ref) do

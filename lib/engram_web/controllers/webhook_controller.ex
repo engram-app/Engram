@@ -99,9 +99,8 @@ defmodule EngramWeb.WebhookController do
               # log structurally with stacktrace, capture in Sentry, then
               # surface as {:error, :exception} so the :telemetry stop
               # event fires with result: :error (instead of :exception,
-              # which dashboards built on stop.duration miss). Silent-200
-              # ack still goes to Paddle; reconciliation catches any
-              # resulting drift within 24h.
+              # which dashboards built on stop.duration miss). Answered 500
+              # below, so Paddle retries it.
               stacktrace = __STACKTRACE__
 
               Logger.error(
@@ -132,10 +131,26 @@ defmodule EngramWeb.WebhookController do
         _ = WebhookIdempotency.mark_processed(:paddle, event_id)
         json(conn, %{status: "ok"})
 
-      {:error, _} ->
-        json(conn, %{status: "ok"})
+      {:error, reason} ->
+        if permanent_paddle_error?(reason) do
+          # Retrying the same payload can never succeed: ack so Paddle stops.
+          # Not marked processed, so a dashboard replay after a fix still runs.
+          json(conn, %{status: "ok"})
+        else
+          # Paddle retries only non-2xx (up to ~2 days). Not marked processed,
+          # so the retry runs the handler again.
+          conn |> put_status(500) |> json(%{status: "error"})
+        end
     end
   end
+
+  # Permanent: the payload has no owner, or fails validation (bad status, a
+  # paddle id another user holds, an unknown price on a first insert). The
+  # same bytes fail the same way on every retry. Everything else (a raised
+  # exception, a DB error, an unknown reason) is treated as transient.
+  defp permanent_paddle_error?(:missing_user_id), do: true
+  defp permanent_paddle_error?(%Ecto.Changeset{}), do: true
+  defp permanent_paddle_error?(_reason), do: false
 
   def resend(conn, _params) do
     with {:ok, sig_header} <- get_header(conn, "svix-signature"),
