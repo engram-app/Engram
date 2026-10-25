@@ -638,10 +638,14 @@ defmodule Engram.Billing do
     with_paddle_subscription(user, fn sub ->
       case Client.impl().list_transactions(sub.paddle_subscription_id) do
         {:ok, txns} ->
-          if Enum.any?(txns, &(&1["id"] == transaction_id)) do
-            transaction_invoice(transaction_id)
-          else
-            {:error, :not_found}
+          case Enum.find(txns, &(&1["id"] == transaction_id)) do
+            nil ->
+              {:error, :not_found}
+
+            txn ->
+              if invoice_available?(txn),
+                do: transaction_invoice(transaction_id),
+                else: {:error, :no_invoice}
           end
 
         {:error, reason} ->
@@ -650,9 +654,30 @@ defmodule Engram.Billing do
     end)
   end
 
-  # Paddle issues no invoice for a zero-value transaction (every $0 trial
-  # start) and answers 404 not_found. For a transaction we just confirmed is
-  # the caller's, that 404 means "no invoice", not a provider failure.
+  # Paddle: "Invoice PDFs aren't available for zero-value transactions", and
+  # the PDF "is available for transactions that are completed" (`billed` for
+  # manual collection, where the invoice is issued before payment). Shared by
+  # the invoice fetch and the history rows, so the Download button and the
+  # endpoint agree.
+  defp invoice_available?(txn) do
+    txn["status"] in ~w(completed billed) and
+      not zero_amount?(get_in(txn, ["details", "totals", "grand_total"]))
+  end
+
+  # Paddle amounts are strings in the lowest currency unit. Unparseable or
+  # missing counts as zero: never offer an invoice we cannot vouch for.
+  defp zero_amount?(amount) when is_binary(amount) do
+    case Integer.parse(amount) do
+      {n, ""} -> n == 0
+      _ -> true
+    end
+  end
+
+  defp zero_amount?(_), do: true
+
+  # Belt to the check above: Paddle answers 404 not_found when it has no
+  # invoice anyway. For a transaction we just confirmed is the caller's, that
+  # means "no invoice", not a provider failure.
   defp transaction_invoice(transaction_id) do
     case Client.impl().get_transaction_invoice(transaction_id) do
       {:error, {:paddle_error, 404, _body}} -> {:error, :no_invoice}
@@ -731,7 +756,8 @@ defmodule Engram.Billing do
       amount: get_in(t, ["details", "totals", "grand_total"]),
       currency: get_in(t, ["details", "totals", "currency_code"]),
       status: t["status"],
-      invoice_id: t["invoice_id"]
+      invoice_id: t["invoice_id"],
+      invoice_available: invoice_available?(t)
     }
   end
 

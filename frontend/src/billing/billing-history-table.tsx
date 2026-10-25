@@ -40,8 +40,8 @@ export default function BillingHistoryTable({
 								<td className="py-2">{formatMoney(txn.amount, txn.currency, localeTag) ?? "—"}</td>
 								<td className="py-2 capitalize">{statusLabel(txn.status, t)}</td>
 								<td className="py-2 text-right">
-									{/* Paddle issues no invoice for a $0 transaction (every trial start). */}
-									{txn.invoice_id ? (
+									{/* No PDF for a $0 or not-completed transaction (backend rule). */}
+									{txn.invoice_available ? (
 										<Button
 											variant="ghost"
 											size="sm"

@@ -656,6 +656,26 @@ defmodule Engram.BillingTest do
       assert hd(txns).amount == "2000"
       assert hd(txns).currency == "USD"
       assert hd(txns).status == "completed"
+      assert hd(txns).invoice_available == true
+    end
+
+    test "flags zero-value and not-completed transactions as having no invoice" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+        {:ok,
+         [
+           Engram.Fixtures.paddle_transaction("txn_trial", %{grand_total: "0"}),
+           Engram.Fixtures.paddle_transaction("txn_due", %{status: "past_due"}),
+           Engram.Fixtures.paddle_transaction("txn_paid")
+         ]}
+      end)
+
+      assert {:ok, %{transactions: txns}} = Billing.billing_history(user)
+
+      assert Enum.map(txns, &{&1.id, &1.invoice_available}) ==
+               [{"txn_trial", false}, {"txn_due", false}, {"txn_paid", true}]
     end
 
     test "payment_method is nil when no card payment is present" do
@@ -680,7 +700,11 @@ defmodule Engram.BillingTest do
       insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
 
       expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
-        {:ok, [%{"id" => "txn_2", "payments" => []}, %{"id" => "txn_1", "payments" => []}]}
+        {:ok,
+         [
+           Engram.Fixtures.paddle_transaction("txn_2"),
+           Engram.Fixtures.paddle_transaction("txn_1")
+         ]}
       end)
 
       expect(Engram.Paddle.ClientMock, :get_transaction_invoice, fn "txn_2" ->
@@ -696,7 +720,7 @@ defmodule Engram.BillingTest do
       insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
 
       expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
-        {:ok, [%{"id" => "txn_2", "payments" => []}]}
+        {:ok, [Engram.Fixtures.paddle_transaction("txn_2")]}
       end)
 
       # get_transaction_invoice must NOT be called for a foreign id.
@@ -710,7 +734,7 @@ defmodule Engram.BillingTest do
       insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
 
       expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
-        {:ok, [%{"id" => "txn_trial", "payments" => []}]}
+        {:ok, [Engram.Fixtures.paddle_transaction("txn_trial")]}
       end)
 
       expect(Engram.Paddle.ClientMock, :get_transaction_invoice, fn "txn_trial" ->
@@ -718,6 +742,44 @@ defmodule Engram.BillingTest do
       end)
 
       assert {:error, :no_invoice} = Billing.transaction_invoice_url(user, "txn_trial")
+    end
+
+    # Paddle: "Invoice PDFs aren't available for zero-value transactions" and
+    # the PDF "is available for transactions that are completed". Asking for
+    # any other invoice can only fail, so it must not reach Paddle at all
+    # (get_transaction_invoice has no expectation: a call fails the test).
+    for {label, attrs} <- [
+          {"a zero-value transaction", %{grand_total: "0"}},
+          {"a draft transaction", %{status: "draft"}},
+          {"a ready transaction", %{status: "ready"}},
+          {"a past_due transaction", %{status: "past_due"}},
+          {"a canceled transaction", %{status: "canceled"}}
+        ] do
+      test "returns :no_invoice without calling Paddle for #{label}" do
+        user = insert(:user)
+        insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+
+        expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+          {:ok, [Engram.Fixtures.paddle_transaction("txn_x", unquote(Macro.escape(attrs)))]}
+        end)
+
+        assert {:error, :no_invoice} = Billing.transaction_invoice_url(user, "txn_x")
+      end
+    end
+
+    test "a billed (manual collection) transaction fetches its invoice" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
+        {:ok, [Engram.Fixtures.paddle_transaction("txn_b", %{status: "billed"})]}
+      end)
+
+      expect(Engram.Paddle.ClientMock, :get_transaction_invoice, fn "txn_b" ->
+        {:ok, "https://paddle.com/invoice/txn_b.pdf"}
+      end)
+
+      assert {:ok, _} = Billing.transaction_invoice_url(user, "txn_b")
     end
 
     test "a Paddle 404 on the transaction list stays a Paddle error, not :no_invoice" do

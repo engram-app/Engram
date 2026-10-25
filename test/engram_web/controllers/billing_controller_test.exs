@@ -290,7 +290,7 @@ defmodule EngramWeb.BillingControllerTest do
       insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
 
       expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
-        {:ok, [%{"id" => "txn_2", "payments" => []}]}
+        {:ok, [Engram.Fixtures.paddle_transaction("txn_2")]}
       end)
 
       expect(Engram.Paddle.ClientMock, :get_transaction_invoice, fn "txn_2" ->
@@ -305,7 +305,7 @@ defmodule EngramWeb.BillingControllerTest do
       insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
 
       expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
-        {:ok, [%{"id" => "txn_2", "payments" => []}]}
+        {:ok, [Engram.Fixtures.paddle_transaction("txn_2")]}
       end)
 
       conn = get(conn, "/api/billing/transactions/txn_999/invoice")
@@ -320,7 +320,7 @@ defmodule EngramWeb.BillingControllerTest do
       insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
 
       expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
-        {:ok, [%{"id" => "txn_trial", "payments" => []}]}
+        {:ok, [Engram.Fixtures.paddle_transaction("txn_trial")]}
       end)
 
       expect(Engram.Paddle.ClientMock, :get_transaction_invoice, fn "txn_trial" ->
@@ -365,7 +365,7 @@ defmodule EngramWeb.BillingControllerTest do
       insert(:subscription, user: user, paddle_subscription_id: "sub_dev")
 
       expect(Engram.Paddle.ClientMock, :list_transactions, fn "sub_dev" ->
-        {:ok, [%{"id" => "txn_2", "payments" => []}]}
+        {:ok, [Engram.Fixtures.paddle_transaction("txn_2")]}
       end)
 
       expect(Engram.Paddle.ClientMock, :get_transaction_invoice, fn "txn_2" ->

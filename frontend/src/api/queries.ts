@@ -1513,6 +1513,8 @@ export interface BillingTransaction {
 	currency: string | null;
 	status: string;
 	invoice_id: string | null;
+	// Server-side rule: completed (or billed) and nonzero. Paddle has no PDF otherwise.
+	invoice_available: boolean;
 }
 
 export interface BillingHistory {
