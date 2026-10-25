@@ -1029,8 +1029,7 @@
 	"pl": {
 		"translator": "83e5a7f5",
 		"failed": {
-			"OK": "2026-10-21",
-			"{folder} already has files with these {count} names": "2026-10-21"
+			"OK": "2026-10-21"
 		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
@@ -1061,6 +1060,7 @@
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
 			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
 			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
@@ -1187,7 +1187,6 @@
 	"cs": {
 		"translator": "8cd06f57",
 		"failed": {
-			"OK": "2026-10-21",
 			"{folder} already has files with these {count} names": "2026-10-21"
 		},
 		"one": {

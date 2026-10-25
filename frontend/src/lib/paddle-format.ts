@@ -81,16 +81,25 @@ export function formatBillingCycle(
  * @param currencyCode - ISO 4217 currency code (e.g. "USD", "GBP")
  * @param locale - Optional BCP 47 locale tag (e.g. "en-GB"). Defaults to "en-US" so SSR
  *   and client produce identical output (required for React hydration).
+ * @param options.dropWholeCents - Drop the decimals on a whole amount ("$7", not "$7.00"),
+ *   as plan prices are shown.
  * @returns Formatted currency string, e.g. "$29.99" or "£12.00"
  *
  * @example
  * formatMoney(29.99, "USD") // "$29.99"
  * formatMoney(12, "GBP", "en-GB") // "£12.00"
+ * formatMoney(7, "USD", "en-US", { dropWholeCents: true }) // "$7"
  */
-export function formatMoney(amount: number, currencyCode: string, locale = "en-US"): string {
+export function formatMoney(
+	amount: number,
+	currencyCode: string,
+	locale = "en-US",
+	{ dropWholeCents = false }: { dropWholeCents?: boolean } = {},
+): string {
 	return new Intl.NumberFormat(locale, {
 		style: "currency",
 		currency: currencyCode,
+		...(dropWholeCents && Number.isInteger(amount) ? { minimumFractionDigits: 0 } : {}),
 	}).format(amount);
 }
 

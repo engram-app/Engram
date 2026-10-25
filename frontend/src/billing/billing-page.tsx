@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Translate } from "@/i18n/translate";
+import { intlLocale } from "@/lib/intl-locale";
 import { notify } from "@/lib/notify";
 import { SUPPORT_MAILTO } from "@/lib/support";
 import type { CheckoutMethod } from "../analytics/events";
@@ -235,6 +236,7 @@ export default function BillingPage({
 	const { t, renderedLocale } = useT();
 	const { t: tLater } = useStableT();
 	const checkoutLocale = paddleLocale(renderedLocale);
+	const priceLocale = intlLocale(renderedLocale, "en-US");
 	// Ref mirror: the Paddle init effect must not re-run (and strand an open
 	// checkout) when the UI language changes, so its eventCallback reads t here.
 	const tRef = useRef(t);
@@ -887,7 +889,7 @@ export default function BillingPage({
 							<ul className="flex flex-col gap-2 sm:hidden">
 								<PlanAccordionRow
 									name={catalog.pro.name}
-									price={formatPlanPrice(catalog.pro, cadence, t)}
+									price={formatPlanPrice(catalog.pro, cadence, t, priceLocale)}
 									summary={t("Unlimited vaults · 50 GB · cross-vault search + API")}
 									features={catalog.pro.features}
 									ctaLabel={t("Choose Pro")}
@@ -900,7 +902,7 @@ export default function BillingPage({
 								/>
 								<PlanAccordionRow
 									name={catalog.starter.name}
-									price={formatPlanPrice(catalog.starter, cadence, t)}
+									price={formatPlanPrice(catalog.starter, cadence, t, priceLocale)}
 									summary={t("10 vaults · 10 GB · unlimited AI")}
 									features={catalog.starter.features}
 									ctaLabel={t("Choose Starter")}

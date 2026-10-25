@@ -71,5 +71,8 @@ describe("dates and money follow the app language", () => {
 	it("keeps English money exactly as before", () => {
 		expect(formatMoney(29.99, "USD")).toBe("$29.99");
 		expect(formatMoney(29.99, "USD", intlLocale("en", "en-US"))).toBe("$29.99");
+		expect(formatMoney(7, "USD", "en-US", { dropWholeCents: true })).toBe("$7");
+		expect(formatMoney(5.83, "USD", "en-US", { dropWholeCents: true })).toBe("$5.83");
+		expect(formatMoney(7, "USD", "en-US")).toBe("$7.00");
 	});
 });

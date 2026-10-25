@@ -117,6 +117,16 @@ describe("problems", () => {
 		expect(tr.problems("Obsidian's flavour", "Obsidians Stil", "de")).toEqual([]);
 	});
 
+	it("adds no currency sign the source lacks", () => {
+		expect(tr.problems("or $70/year", "oder 70 €/Jahr", "de")).toEqual(["currency"]);
+		expect(tr.problems("or $70/year", "oder 70 $/Jahr", "de")).toEqual([]);
+		expect(tr.problems("or $70/year", "または 70 ドル/年", "ja")).toEqual([]);
+		expect(tr.problems("or $70/year", "o R$70/año", "es")).toEqual(["currency"]);
+		expect(tr.problems("or $70/year", "或 NT$70/年", "zh")).toEqual(["currency"]);
+		expect(tr.problems("or $70/year", "o US$70/año", "es")).toEqual([]);
+		expect(tr.problems("or $70/year", "または ＄70/年", "ja")).toEqual(["currency"]);
+	});
+
 	it("keeps a label's emoji or mark, and adds none to a sentence", () => {
 		expect(tr.problems("🔄 Sync Center", "Sync-Zentrale", "de")).toEqual(["symbols"]);
 		expect(tr.problems("Open sync center", "Buka 🔄 Pusat Sync", "ms")).toEqual(["symbols"]);
