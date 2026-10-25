@@ -840,12 +840,14 @@ defmodule Engram.Indexing do
   The account's search points: its `chunks` rows, one per Qdrant point.
   Once every note is counted (`DataMigrations.NoteIndexState.counted?/0`) a SUM of its notes'
   `note_index_state.points` by vault, else the `count(*)` over its chunks.
+  `exact: true` always counts the chunks: for a caller that drops dense
+  vectors on the answer, where a counter drifted too high must never act.
   """
-  @spec point_count(Ecto.UUID.t()) :: non_neg_integer()
-  def point_count(user_id) do
+  @spec point_count(Ecto.UUID.t(), keyword()) :: non_neg_integer()
+  def point_count(user_id, opts \\ []) do
     {:ok, n} =
       Repo.with_tenant(user_id, fn ->
-        points_by_user() |> where([v], v.user_id == ^user_id) |> Repo.one()
+        points_by_user(opts) |> where([v], v.user_id == ^user_id) |> Repo.one()
       end)
 
     case n do
@@ -858,9 +860,9 @@ defmodule Engram.Indexing do
   `{user_id, points}` per user with any points: the one source of the point
   count (`point_count/1`, the index budget sweep).
   """
-  @spec points_by_user() :: Ecto.Query.t()
-  def points_by_user do
-    if NoteIndexStateLedger.counted?() do
+  @spec points_by_user(keyword()) :: Ecto.Query.t()
+  def points_by_user(opts \\ []) do
+    if not Keyword.get(opts, :exact, false) and NoteIndexStateLedger.counted?() do
       from(v in Engram.Vaults.Vault,
         join: s in Engram.Notes.NoteIndexState,
         on: s.vault_id == v.id,

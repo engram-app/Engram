@@ -710,12 +710,15 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       jobs = budget_jobs(user.id, now)
       pending = for j <- jobs, j.pending, not j.shrink, into: %{}, do: {j.note_id, j.points}
 
-      # `Indexing.points_budget_ok?/3`'s count (every chunk row), with each note at what it will
+      # The user's real chunk count (`exact: true`, not the per-note
+      # counters: one drifted too high would demote on phantom points and
+      # drop dense vectors; only users this sweep acts on pay the count),
+      # with each note at what it will
       # hold: a floor note its floor points (one per MiB, `floor_points/1`), a
       # full note at most its per-note cap,
       # and a queued promotion at its estimate.
       projected =
-        Enum.reduce(notes, Indexing.point_count(user.id), fn n, acc ->
+        Enum.reduce(notes, Indexing.point_count(user.id, exact: true), fn n, acc ->
           cond do
             floored?(n) -> acc
             n.tier != nil -> acc - max(n.rows - Indexing.floor_points(n.span), 0)

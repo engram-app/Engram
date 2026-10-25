@@ -479,6 +479,39 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
       assert demoted > 0
     end
 
+    test "a counter drifted too high never demotes: the sweep counts the chunks", %{
+      user: user,
+      vault: vault
+    } do
+      [id | _] = full_notes(user, vault, 2, 100, real: true)
+      assert points(user) == 200
+
+      # The counted readers on, and one note's counter drifted over the cap
+      # (an old-release writer that never recounted).
+      Repo.insert!(
+        %Engram.DataMigrations.Entry{
+          name: Engram.DataMigrations.NoteIndexState.name(),
+          version: Engram.DataMigrations.NoteIndexState.version(),
+          completed_at: DateTime.utc_now()
+        },
+        skip_tenant_check: true
+      )
+
+      Engram.DataMigrations.reset_cache()
+      on_exit(&Engram.DataMigrations.reset_cache/0)
+
+      Repo.query!("UPDATE note_index_state SET points = $2 WHERE note_id = $1", [
+        Ecto.UUID.dump!(id),
+        2 * cap()
+      ])
+
+      assert Indexing.point_count(user.id) > cap()
+
+      assert {:ok, %{demoted: 0}} = ReconcileEmbeddings.budget_sweep(20)
+      assert budget_jobs(key: "index_budget", value: "demote") == []
+      assert Enum.all?(Map.values(tiers(user, [id])), &is_nil/1)
+    end
+
     test "1,000 over-cap notes demote 200 per tick across five ticks; red pauses", %{
       user: user,
       vault: vault,
