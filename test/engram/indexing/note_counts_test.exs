@@ -90,14 +90,34 @@ defmodule Engram.Indexing.NoteCountsTest do
       )
 
   test "every chunk writer keeps its note's counters exact", ctx do
-    a = index!(ctx.user, ctx.vault, "A.md", content(5, "alpha"))
+    _a = index!(ctx.user, ctx.vault, "A.md", content(5, "alpha"))
     _b = index!(ctx.user, ctx.vault, "B.md", content(3, "bravo"))
     assert drifted() == 0
 
     # Re-indexes that edit, add and drop chunks (the diffed write).
     index!(ctx.user, ctx.vault, "A.md", content(7, "alphA"))
     assert drifted() == 0
-    index!(ctx.user, ctx.vault, "A.md", content(2, "alpha"))
+    a = index!(ctx.user, ctx.vault, "A.md", content(2, "alpha"))
+    assert drifted() == 0
+
+    # The resparse rewrites lengths: start from rows with none, counted.
+    Repo.query!("UPDATE chunks SET token_count = NULL WHERE note_id = $1", [
+      Ecto.UUID.dump!(a.id)
+    ])
+
+    _ = Indexing.ChunkRows.recount!([a.id])
+    assert drifted() == 0
+    assert {:ok, n, _} = Indexing.resparse_note(a, ctx.user)
+    assert n > 0
+
+    assert Repo.one(
+             from(c in Chunk,
+               where: c.note_id == ^a.id and not is_nil(c.token_count),
+               select: count()
+             ),
+             skip_tenant_check: true
+           ) > 0
+
     assert drifted() == 0
 
     # The purge of a note's index.
