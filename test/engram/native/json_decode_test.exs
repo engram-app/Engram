@@ -78,7 +78,7 @@ defmodule Engram.Native.JsonDecodeTest do
     end
 
     test "every call emits [:engram, :nif, :call, :stop]" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      ref = Engram.NativeScheduled.attach_nif_events()
       Native.json_decode("[1]")
       assert_received {_, ^ref, %{input_bytes: 3}, %{nif: :json_decode}}
     end

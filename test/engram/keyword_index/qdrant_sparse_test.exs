@@ -140,7 +140,7 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
     # The NIF takes b and the length cap itself (review 2094 (a)): a merged
     # or floor document is ONE encode, not an encode plus a re-encode.
     test "b and the length cap cost one NIF call", %{key_a: key} do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      ref = Engram.NativeScheduled.attach_nif_events()
       QdrantSparse.encode_documents([@long], key, 7.5, :en, b: 0.25, cap_doc_len: true)
       assert_receive {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :keyword_encode}}
       refute_receive {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :keyword_encode}}, 50
@@ -215,13 +215,12 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
     end
 
     test "a note is encoded at most 256 chunks per NIF call", %{key_a: key} do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      ref = Engram.NativeScheduled.attach_nif_events()
       texts = for i <- 1..300, do: "chunk #{i} text"
 
       assert length(QdrantSparse.encode_documents(texts, key, 7.5, nil)) == 300
 
-      # The handler hears every process's NIF calls (this file is async), so
-      # match THIS call's batches by their exact input sizes.
+      # Match each batch by its exact input size: proves the 256-text split.
       first = :erlang.iolist_size(Enum.take(texts, 256))
       rest = :erlang.iolist_size(Enum.drop(texts, 256))
       assert_receive {[:engram, :nif, :call, :stop], ^ref, %{input_bytes: ^first}, _}

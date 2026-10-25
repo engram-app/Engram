@@ -47,7 +47,7 @@ defmodule Engram.Native.HmacHexManyTest do
     end
 
     test "every call emits [:engram, :nif, :call, :stop]" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      ref = Engram.NativeScheduled.attach_nif_events()
       Native.hmac_hex_many(@key, "ab", ["xyz"])
       assert_received {_, ^ref, %{input_bytes: 5}, %{nif: :hmac_hex_many}}
     end

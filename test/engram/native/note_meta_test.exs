@@ -92,7 +92,7 @@ defmodule Engram.Native.NoteMetaTest do
     end
 
     test "title and tags emit [:engram, :nif, :call, :stop]" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      ref = Engram.NativeScheduled.attach_nif_events()
       Helpers.extract_title("# a", "x.md")
       Helpers.extract_title_and_tags("#a", "x.md")
       assert_receive {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :note_title}}

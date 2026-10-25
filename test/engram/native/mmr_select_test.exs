@@ -30,7 +30,7 @@ defmodule Engram.Native.MmrSelectTest do
     end
 
     test "every call emits [:engram, :nif, :call, :stop]" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      ref = Engram.NativeScheduled.attach_nif_events()
       Engram.Native.mmr_select([[1.0, 0.0], nil], [0.9, 0.8], [0, 1], 2, 0.5)
 
       assert_received {[:engram, :nif, :call, :stop], ^ref, %{input_bytes: 48},
