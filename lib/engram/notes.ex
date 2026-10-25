@@ -5035,57 +5035,64 @@ defmodule Engram.Notes do
   end
 
   # The next page (up to `limit + 1` rows of `base`), cut at the byte budget
-  # (`budget_cut/4`), and whether the budget (not the row limit) is what
+  # (`budget_cut/5`), and whether the budget (not the row limit) is what
   # stopped it.
   defp budgeted_page(base, user, limit, max_bytes) do
-    page =
-      NoteBody.select_map(base, @note_fields_without_crdt, %{
-        size__: NoteBody.byte_length(:content),
-        ord1__: dynamic([n], n.seq),
-        ord2__: dynamic([n], n.id)
-      })
+    {notes, total, _spent} =
+      budget_cut(base, dynamic([n], n.seq), @note_fields_without_crdt, user, max_bytes)
 
-    {notes, total, _spent} = budget_cut(page, user, max_bytes)
     fits = length(notes)
     {notes, fits <= limit and total > fits}
   end
 
-  # ONE statement for a byte-budgeted read: `page` (a `NoteBody.select_map/3`
-  # query carrying `size__`, the stored content size, and `ord1__`/`ord2__`,
-  # the order) with the running sum of the sizes over that order. A row is
-  # kept while the sum stays within `max_bytes`; the first row always ships,
-  # however large (a catch-up page of zero rows with has_more never drains;
-  # a read of one huge note returns it). The sum only grows, so the cut is a
-  # prefix. A row past it is never returned, so its body is never
-  # de-TOASTed, and `octet_length` reads only varlena headers. The window
-  # runs over `page` as a subquery, so a LIMIT in it bounds the scan.
+  # ONE statement for a byte-budgeted read of `base` (a notes query, maybe
+  # LIMITed) in the order (`ord1`, id): a NARROW pass (id, order, stored
+  # content size; `octet_length` reads varlena headers, nothing is
+  # de-TOASTed) takes the running sum of the sizes over that order, and the
+  # rows are kept while it stays within `max_bytes`. The first row always
+  # ships, however large (a catch-up page of zero rows with has_more never
+  # drains; a read of one huge note returns it). The sum only grows, so the
+  # cut is a prefix. Only the kept ids are then joined back for `fields`, so
+  # only kept rows' bodies are read; the window buffers narrow rows only.
   #
-  # Returns `{notes, total, spent}`: the kept rows in order, how many `page`
+  # Returns `{notes, total, spent}`: the kept rows in order, how many `base`
   # matched, and the kept rows' summed stored size.
-  defp budget_cut(page, user, max_bytes) do
+  defp budget_cut(base, ord1, fields, user, max_bytes) do
+    sized =
+      base
+      |> NoteBody.join()
+      |> select([n], %{id: n.id})
+      |> select_merge(^%{ord1__: ord1, size__: NoteBody.byte_length(:content)})
+
     windowed =
-      from(p in subquery(page),
-        windows: [w: [order_by: [asc: p.ord1__, asc: p.ord2__]]],
-        select: p,
-        select_merge: %{
+      from(p in subquery(sized),
+        windows: [w: [order_by: [asc: p.ord1__, asc: p.id]]],
+        select: %{
+          id: p.id,
+          ord1__: p.ord1__,
           run__: over(sum(p.size__), :w),
           rn__: over(row_number(), :w),
-          total__: over(count(p.ord2__))
+          total__: over(count(p.id))
         }
       )
 
+    kept = from(w in subquery(windowed), where: w.run__ <= ^max_bytes or w.rn__ == 1)
+
     query =
-      from(p in subquery(windowed),
-        where: p.run__ <= ^max_bytes or p.rn__ == 1,
-        order_by: [asc: p.ord1__, asc: p.ord2__],
-        select: p
+      from(n in Note,
+        join: k in subquery(kept),
+        on: k.id == n.id,
+        order_by: [asc: k.ord1__, asc: n.id]
       )
+      |> NoteBody.select_map(fields, %{
+        run__: dynamic([_, k], k.run__),
+        total__: dynamic([_, k], k.total__)
+      })
 
     {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
 
-    extras = [:size__, :ord1__, :ord2__, :run__, :rn__, :total__]
     {total, spent} = Enum.reduce(rows, {0, 0}, fn row, _ -> {row.total__, row.run__} end)
-    {Enum.map(rows, &elem(NoteBody.to_note(&1, extras), 0)), total, spent}
+    {Enum.map(rows, &elem(NoteBody.to_note(&1, [:run__, :total__]), 0)), total, spent}
   end
 
   @doc """
@@ -5100,9 +5107,10 @@ defmodule Engram.Notes do
   The cut in that statement is a prefix (`budget_cut/3`). A call whose
   notes do not all fit then continues greedily, as the per-path reads did: a
   note past the budget is skipped and a smaller one after it still ships if
-  it fits. That costs two more statements in the same transaction, and only
-  on overflow: one narrow read of the unread paths' ids and stored sizes,
-  one read of the notes the greedy pass picks.
+  it fits. That costs two more statements, only on overflow: one narrow read
+  of the unread paths' ids and stored sizes, one read of the notes the
+  greedy pass picks. Each runs in a tenant block; inside an MCP tool call
+  (one tenant transaction) all three share it.
 
   Each path's own read used to make a 20-path call 20 statements.
   """
@@ -5119,19 +5127,17 @@ defmodule Engram.Notes do
     hmacs = Enum.map(paths, &Crypto.hmac_field(filter_key, &1))
     ids? = Keys.ids?()
 
-    page =
-      from(n in live_notes(user, vault, ids?), where: ^Keys.in_any(:path, hmacs, ids?))
-      |> NoteBody.select_map(Note.__schema__(:fields), %{
-        size__: NoteBody.byte_length(:content),
-        ord1__:
-          dynamic(
-            [n],
-            fragment("array_position(?, ?)", type(^hmacs, {:array, :binary}), n.path_hmac)
-          ),
-        ord2__: dynamic([n], n.id)
-      })
+    base = from(n in live_notes(user, vault, ids?), where: ^Keys.in_any(:path, hmacs, ids?))
 
-    {notes, total, spent} = budget_cut(page, user, max_bytes)
+    ord =
+      dynamic(
+        [n],
+        fragment("array_position(?, ?)", type(^hmacs, {:array, :binary}), n.path_hmac)
+      )
+
+    # No CRDT state: nothing on the render path reads it, and every kept
+    # note stays referenced for the whole call.
+    {notes, total, spent} = budget_cut(base, ord, @note_fields_without_crdt, user, max_bytes)
     by_hmac = Map.new(notes, &{&1.path_hmac, &1})
 
     {by_hmac, over} =
@@ -5188,7 +5194,10 @@ defmodule Engram.Notes do
         {:ok, notes} =
           Repo.with_tenant(user.id, fn ->
             Repo.all(
-              NoteBody.select_note(from(n in live_notes(user, vault, ids?), where: n.id in ^pick))
+              NoteBody.select_note(
+                from(n in live_notes(user, vault, ids?), where: n.id in ^pick),
+                @note_fields_without_crdt
+              )
             )
           end)
 
