@@ -1213,11 +1213,40 @@ defmodule Engram.BillingTest do
               "action" => "refund",
               "type" => "full",
               "status" => "approved",
-              "subscription_id" => sub_id
+              "subscription_id" => sub_id,
+              "transaction_id" => "txn_first"
             },
             overrides
           )
       }
+    end
+
+    # The customer's billed history as Paddle lists it, newest first: the
+    # checkout charge that started `sub_id`, then one renewal of it.
+    defp expect_history(sub_id) do
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn _customer_id ->
+        {:ok,
+         [
+           %{
+             "id" => "txn_renew",
+             "subscription_id" => sub_id,
+             "origin" => "subscription_recurring",
+             "billed_at" => "2026-09-01T10:00:00Z"
+           },
+           %{
+             "id" => "txn_other_sub",
+             "subscription_id" => "sub_older",
+             "origin" => "web",
+             "billed_at" => "2026-01-01T10:00:00Z"
+           },
+           %{
+             "id" => "txn_first",
+             "subscription_id" => sub_id,
+             "origin" => "web",
+             "billed_at" => "2026-08-01T10:00:00Z"
+           }
+         ]}
+      end)
     end
 
     defp canceled_entity(sub_id) do
@@ -1234,6 +1263,8 @@ defmodule Engram.BillingTest do
       user = insert(:user)
       insert(:subscription, user: user, paddle_subscription_id: "sub_refund_1", status: "active")
 
+      expect_history("sub_refund_1")
+
       expect(Engram.Paddle.ClientMock, :cancel_subscription, fn "sub_refund_1",
                                                                 :immediately,
                                                                 opts ->
@@ -1248,6 +1279,41 @@ defmodule Engram.BillingTest do
 
       user = Engram.Repo.reload!(user, skip_tenant_check: true)
       assert Billing.tier(user) == :free
+    end
+
+    # Only the money-back case ends the plan: a full refund of the charge that
+    # started the subscription. Support can fully refund one renewal, upgrade
+    # or duplicate charge and the plan must stay.
+    test "a full refund of a renewal does not cancel the subscription" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_renew_1", status: "active")
+
+      expect_history("sub_renew_1")
+      # No cancel_subscription expectation: calling Paddle here fails the test.
+
+      assert {:ok, %Subscription{status: "active"}} =
+               Billing.upsert_from_paddle_event(
+                 refund_event("adjustment.updated", "sub_renew_1", %{
+                   "transaction_id" => "txn_renew"
+                 })
+               )
+
+      user = Engram.Repo.reload!(user, skip_tenant_check: true)
+      assert Billing.tier(user) == :starter
+    end
+
+    test "a full refund whose transaction cannot be looked up is reported as an error" do
+      user = insert(:user)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_refund_4", status: "active")
+
+      expect(Engram.Paddle.ClientMock, :list_transactions, fn _ ->
+        {:error, :paddle_unavailable}
+      end)
+
+      assert {:error, {:adjustment_lookup_failed, :paddle_unavailable}} =
+               Billing.upsert_from_paddle_event(
+                 refund_event("adjustment.updated", "sub_refund_4", %{})
+               )
     end
 
     test "a partial, pending or credit adjustment leaves the subscription alone" do
@@ -1310,6 +1376,7 @@ defmodule Engram.BillingTest do
       user = insert(:user)
       insert(:subscription, user: user, paddle_subscription_id: "sub_refund_3", status: "active")
 
+      expect_history("sub_refund_3")
       expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ -> {:error, :timeout} end)
 
       assert {:error, {:adjustment_cancel_failed, :paddle_unavailable}} =

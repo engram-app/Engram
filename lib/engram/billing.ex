@@ -1028,8 +1028,11 @@ defmodule Engram.Billing do
   # Refunds and chargebacks. An adjustment carries no custom_data, so the owner
   # is found through its subscription and handed to the analytics forwarder.
   #
-  # An approved FULL refund (the 14-day money-back guarantee) or an approved
-  # chargeback of any size ends the plan. A refund starts as pending_approval
+  # An approved chargeback of any size ends the plan. An approved FULL refund
+  # ends it only when it refunds the subscription's first charge (the 14-day
+  # money-back guarantee): `type: "full"` is per transaction, and support can
+  # fully refund one renewal, upgrade or duplicate charge while the plan
+  # should stay. Those are logged and change nothing. A refund starts as pending_approval
   # and may end rejected: neither ends anything, nor does a
   # chargeback_warning. A row already canceled is left alone, so a repeat or
   # late event never calls Paddle twice or errors.
@@ -1042,9 +1045,11 @@ defmodule Engram.Billing do
       when type in ~w(adjustment.created adjustment.updated) do
     with id when is_binary(id) <- data["subscription_id"],
          %Subscription{} = sub <- get_subscription_by_paddle_id(id) do
-      if ends_plan?(data) and sub.status != "canceled",
-        do: cancel_for_adjustment(sub, data["id"]),
-        else: {:ok, sub}
+      cond do
+        sub.status == "canceled" or not ends_plan?(data) -> {:ok, sub}
+        data["action"] == "chargeback" -> cancel_for_adjustment(sub, data["id"])
+        true -> refund_full_charge(sub, data)
+      end
     else
       _ -> {:ok, :ignored}
     end
@@ -1065,6 +1070,48 @@ defmodule Engram.Billing do
   defp ends_plan?(%{"status" => "approved", "action" => "refund", "type" => "full"}), do: true
   defp ends_plan?(%{"status" => "approved", "action" => "chargeback"}), do: true
   defp ends_plan?(_data), do: false
+
+  defp refund_full_charge(sub, data) do
+    case first_charge?(sub, data["transaction_id"]) do
+      {:ok, true} ->
+        cancel_for_adjustment(sub, data["id"])
+
+      {:ok, false} ->
+        Logger.info(
+          "paddle_full_refund_kept_plan",
+          Metadata.with_category(:info, :billing,
+            adjustment_id: data["id"],
+            transaction_id: data["transaction_id"],
+            paddle_subscription_id: sub.paddle_subscription_id
+          )
+        )
+
+        {:ok, sub}
+
+      {:error, reason} ->
+        {:error, {:adjustment_lookup_failed, reason}}
+    end
+  end
+
+  # The subscription's first charge is its earliest billed transaction in the
+  # customer's history (the checkout, origin web); renewals and upgrades bill
+  # later. Paddle's billed_at is RFC 3339 UTC, so the strings sort by time.
+  defp first_charge?(%Subscription{paddle_customer_id: customer_id}, _txn_id)
+       when not is_binary(customer_id),
+       do: {:error, :no_customer_id}
+
+  defp first_charge?(sub, transaction_id) do
+    with {:ok, transactions} <- Client.impl().list_transactions(sub.paddle_customer_id) do
+      first =
+        transactions
+        |> Enum.filter(
+          &(&1["subscription_id"] == sub.paddle_subscription_id and is_binary(&1["billed_at"]))
+        )
+        |> Enum.min_by(& &1["billed_at"], fn -> nil end)
+
+      {:ok, is_binary(transaction_id) and match?(%{"id" => ^transaction_id}, first)}
+    end
+  end
 
   # The user-facing cancel with `:immediately`: same Paddle call, same
   # deterministic idempotency key, so created + updated cancel once.
