@@ -23,6 +23,7 @@ import pytest
 import requests
 
 from helpers.device_flow import start_device_flow, poll_for_tokens
+from helpers.clerk import e2e_email
 from helpers.oauth import restore_auth, swap_to_oauth
 from helpers.vault import write_note
 
@@ -41,7 +42,7 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 def test_email():
     ts = datetime.now().strftime("%Y%m%d%H%M%S")
-    return f"e2e-clerk-{ts}+clerk_test@example.com"
+    return e2e_email("clerk", ts)
 
 
 @pytest.fixture

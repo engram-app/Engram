@@ -214,3 +214,126 @@ def test_token_mint_plain_404_fails_fast_no_recreate(
 
     assert calls["sessions"] == 1
     assert len(calls["token_urls"]) == 1
+
+
+# --- named quota failures ---------------------------------------------------
+# Run 39329248754 errored 13 tests on POST /v1/users with a bare HTTPError,
+# indistinguishable from a product bug. Quota/limit failures must be named.
+# Real observed non-quota codes: 400 username_exists, 422 form_param_format_invalid.
+
+
+def _create_client(monkeypatch: pytest.MonkeyPatch, resp: requests.Response) -> ClerkClient:
+    client = ClerkClient("sk_test_fake")
+    monkeypatch.setattr(client.session, "post", lambda url, **_kw: resp)
+    return client
+
+
+def test_429_after_retries_is_clerk_quota(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _create_client(monkeypatch, _resp(429, {"errors": [{"code": "rate_limit_exceeded"}]}))
+
+    with pytest.raises(clerk_mod.ClerkQuotaError, match=r"^Clerk quota: .*429"):
+        client.create_user("a@example.com", "pw")
+
+
+def test_422_user_limit_is_clerk_quota(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _create_client(monkeypatch, _resp(422, {"errors": [{"code": "user_quota_exceeded"}]}))
+
+    with pytest.raises(clerk_mod.ClerkQuotaError, match=r"Clerk quota: .*422.*user_quota_exceeded"):
+        client.create_user("a@example.com", "pw")
+
+
+def test_400_limit_code_is_clerk_quota(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _create_client(monkeypatch, _resp(400, {"errors": [{"code": "resource_limit_reached"}]}))
+
+    with pytest.raises(clerk_mod.ClerkQuotaError):
+        client.create_user("a@example.com", "pw")
+
+
+def test_422_identifier_taken_still_reuses_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _create_client(monkeypatch, _resp(422, {"errors": [{"code": "form_identifier_exists"}]}))
+    monkeypatch.setattr(client, "find_user_by_email", lambda email: "user_existing")
+
+    assert client.create_user("a@example.com", "pw") == "user_existing"
+    assert "user_existing" in client.created_user_ids
+
+
+def test_other_400_is_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _create_client(monkeypatch, _resp(400, {"errors": [{"code": "username_exists"}]}))
+
+    with pytest.raises(requests.HTTPError) as exc:
+        client.create_user("a@example.com", "pw")
+    assert not isinstance(exc.value, clerk_mod.ClerkQuotaError)
+
+
+# --- username derivation ------------------------------------------------------
+# Run 39329248754: 400 username_exists when emails shared a base before "+".
+
+
+def _posted_username(monkeypatch: pytest.MonkeyPatch, email: str) -> str:
+    client = ClerkClient("sk_test_fake")
+    sent: dict = {}
+
+    def fake_post(url: str, **kw: object) -> requests.Response:
+        if url.endswith("/users"):
+            sent.update(kw["json"])  # type: ignore[arg-type]
+            return _resp(200, {"id": "user_x"})
+        return _resp(200, {"id": "sess"})
+
+    monkeypatch.setattr(client.session, "post", fake_post)
+    client.create_user(email, "pw")
+    return sent["username"]
+
+
+def test_usernames_differ_for_emails_differing_after_plus(monkeypatch: pytest.MonkeyPatch) -> None:
+    a = _posted_username(monkeypatch, "same+one@example.com")
+    b = _posted_username(monkeypatch, "same+two@example.com")
+    assert a != b
+
+
+def test_username_is_clerk_valid_for_long_and_odd_emails(monkeypatch: pytest.MonkeyPatch) -> None:
+    import re
+
+    for email in (
+        "e2e-vacc-u1-2c97b0-20261016082322730191r38871097532je2e-clerkw1+clerk_test@example.com",
+        "Weird.Name!#$@Example.com",
+        "x" * 200 + "@example.com",
+    ):
+        u = _posted_username(monkeypatch, email)
+        assert re.fullmatch(r"[a-z0-9_-]{1,64}", u), u
+
+
+def test_username_is_stable_for_same_email(monkeypatch: pytest.MonkeyPatch) -> None:
+    e = "stable+tag@example.com"
+    assert _posted_username(monkeypatch, e) == _posted_username(monkeypatch, e)
+
+
+# --- shared e2e email builder -------------------------------------------------
+# Clerk 422 form_param_format_invalid (param email_address) on local parts > 64.
+
+_LONG_TS = "20261016082322730191r389999999999j" + "e2e-clerk" + "w12"  # 12-digit run id
+
+
+def test_e2e_email_local_part_within_64() -> None:
+    for label in ("sync", "iso", "onboarding-envelope", "vacc-u1-2c97b0"):
+        email = clerk_mod.e2e_email(label, _LONG_TS)
+        assert len(email.split("@")[0]) <= 64, email
+
+
+def test_e2e_email_unique_per_parts() -> None:
+    a = clerk_mod.e2e_email("sync", "20261016082322730191r1j1w0")
+    b = clerk_mod.e2e_email("sync", "20261016082322730192r1j1w0")
+    c = clerk_mod.e2e_email("iso", "20261016082322730191r1j1w0")
+    assert len({a, b, c}) == 3
+
+
+def test_e2e_email_stays_inside_reaper_and_sweep_patterns() -> None:
+    from helpers.clerk_constants import is_e2e_clerk_email
+
+    email = clerk_mod.e2e_email("onboarding-envelope", _LONG_TS)
+    assert is_e2e_clerk_email(email)
+    assert email.endswith(f"{_LONG_TS}+clerk_test@example.com")  # w{N}/r..j.. scoping intact
+
+
+def test_e2e_email_raises_when_ts_alone_cannot_fit() -> None:
+    with pytest.raises(ValueError):
+        clerk_mod.e2e_email("x", "9" * 80)

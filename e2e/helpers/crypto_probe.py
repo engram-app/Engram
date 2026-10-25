@@ -122,44 +122,104 @@ def _looks_base64(s: str) -> bool:
     return bool(re.fullmatch(r"[A-Za-z0-9+/=]+", s))
 
 
-def wait_for_qdrant_indexed(
-    vault_id: str, path_hmac_b64: str, path: str | None = None, timeout: float = 30.0
-) -> None:
-    """Poll Qdrant for a point whose `path_hmac` matches. Raises TimeoutError on
-    timeout. Needed before probing Qdrant in tests because the embed worker is
-    async.
+_B64_RE = re.compile(r"[A-Za-z0-9+/=]+")
+_ALIVE_STATES = {"available", "scheduled", "executing", "retryable"}
+_DEAD_STATES = {"discarded", "cancelled"}
 
-    #590: matches on the non-sensitive `path_hmac` (base64) rather than the
-    removed plaintext `source_path`. Get `path_hmac_b64` from
-    `latest_note_path_hmac/1` right after seeding. `path` is plaintext for the
-    error message only.
-    """
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            resp = requests.post(
-                f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/scroll",
-                json={
-                    "filter": {
-                        "must": [
-                            {"key": "vault_id", "match": {"value": str(vault_id)}},
-                            {"key": "path_hmac", "match": {"value": path_hmac_b64}},
-                        ]
-                    },
-                    "limit": 1,
-                    "with_payload": False,
-                    "with_vector": False,
+
+def _qdrant_has_point(vault_id: str, path_hmac_b64: str) -> bool:
+    try:
+        resp = requests.post(
+            f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/scroll",
+            json={
+                "filter": {
+                    "must": [
+                        {"key": "vault_id", "match": {"value": str(vault_id)}},
+                        {"key": "path_hmac", "match": {"value": path_hmac_b64}},
+                    ]
                 },
-                timeout=5,
+                "limit": 1,
+                "with_payload": False,
+                "with_vector": False,
+            },
+            timeout=5,
+        )
+        return bool(resp.ok and resp.json()["result"]["points"])
+    except (requests.ConnectionError, requests.Timeout, KeyError):
+        return False
+
+
+def _embed_job_state(vault_id: str, path_hmac_b64: str) -> tuple[str | None, str]:
+    """(state, errors_text) of the newest EmbedNote job for the note, or (None, "")."""
+    if not _UUID_RE.match(vault_id):
+        raise ValueError(f"Unsafe vault_id rejected: {vault_id!r}")
+    if not _B64_RE.fullmatch(path_hmac_b64):
+        raise ValueError(f"Unsafe path_hmac rejected: {path_hmac_b64!r}")
+
+    sql = (
+        "SELECT j.state, j.errors::text FROM oban_jobs j JOIN notes n "
+        "ON j.args->>'note_id' = n.id::text "
+        f"WHERE n.vault_id = '{vault_id}' "
+        f"AND n.path_hmac = decode('{path_hmac_b64}', 'base64') "
+        "AND j.worker = 'Engram.Workers.EmbedNote' "
+        "ORDER BY j.id DESC LIMIT 1;"
+    )
+    result = subprocess.run(
+        ["docker", "exec", "-i", CI_POSTGRES_CONTAINER,
+         "psql", "-U", "engram", "-d", "engram", "-tA", "-F", "\t", "-c", sql],
+        capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"_embed_job_state({vault_id}) failed: {result.stderr.strip()}")
+    out = result.stdout.strip()
+    if not out:
+        return None, ""
+    state, _, errors = out.partition("\t")
+    return state, errors
+
+
+def wait_for_qdrant_indexed(
+    vault_id: str,
+    path_hmac_b64: str,
+    path: str | None = None,
+    timeout: float = 30.0,
+    hard_cap: float = 120.0  # < pytest-timeout 180s so this error fires first,
+) -> None:
+    """Wait for a Qdrant point whose `path_hmac` matches, following the EmbedNote job.
+
+    #590: matches on the non-sensitive `path_hmac` (base64); get it from
+    `latest_note_path_hmac/1` right after seeding. `path` is for messages only.
+
+    `timeout` is "no progress for this long": while the embed job is alive
+    (available/scheduled/executing/retryable) the wait continues up to
+    `hard_cap`; a discarded/cancelled job raises RuntimeError at once with its
+    errors; a completed or missing job with no point after `timeout` raises
+    TimeoutError.
+    """
+    start = time.monotonic()
+    idle_deadline = start + timeout
+    state: str | None = None
+    while True:
+        if _qdrant_has_point(vault_id, path_hmac_b64):
+            return
+        state, errors = _embed_job_state(vault_id, path_hmac_b64)
+        now = time.monotonic()
+        if state in _DEAD_STATES:
+            raise RuntimeError(
+                f"EmbedNote job {state} for vault_id={vault_id} path={path!r} "
+                f"(path_hmac={path_hmac_b64}): {errors}"
             )
-            if resp.ok and resp.json()["result"]["points"]:
-                return
-        except (requests.ConnectionError, requests.Timeout, KeyError):
-            pass
+        if state in _ALIVE_STATES:
+            idle_deadline = now + timeout
+            if now - start >= hard_cap:
+                break
+        elif now >= idle_deadline:
+            break
         time.sleep(1)
     raise TimeoutError(
         f"Qdrant never indexed vault_id={vault_id} path={path!r} "
-        f"(path_hmac={path_hmac_b64}) within {timeout}s"
+        f"(path_hmac={path_hmac_b64}); last embed job state={state!r} "
+        f"after {time.monotonic() - start:.0f}s"
     )
 
 

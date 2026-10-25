@@ -1,13 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import { clerk } from "@clerk/testing/playwright";
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
+import { clerkFetch } from "./support/clerk-fetch";
 
 // Shared by the Clerk specs. clerk-auth.spec.ts keeps its own no-retry sign-in
 // on purpose (a "No user found" there must surface immediately, see its
 // comment); it shares only loadAuthState.
 
 const AUTH_STATE_PATH = path.join(__dirname, ".auth-state.json");
+const CLERK_API = "https://api.clerk.com/v1";
+
+function onboardStep(page: Page): string {
+	return new URL(page.url()).pathname;
+}
 
 export interface AuthState {
 	email: string;
@@ -67,4 +73,132 @@ export async function clerkSignIn(page: Page, email: string, landOn = "/"): Prom
 	}
 
 	await page.goto(landOn);
+}
+
+/**
+ * A fresh Clerk user with NO onboarding performed. The onboarding specs
+ * consume it: finishing the wizard is the thing under test, so each attempt
+ * (Playwright retries included) needs its own.
+ *
+ * No readiness probe here. Clerk's user-list and sign-in-token endpoints can
+ * sit on different read replicas (#455), but `clerkSignIn` already rides that
+ * out: it retries on "No user found" with backoff.
+ */
+export async function createUnonboardedUser(
+	prefix = "e2e-browser-pending",
+): Promise<{ email: string; id: string }> {
+	const ts = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+	const email = `${prefix}-${ts}@test.com`;
+
+	const resp = await clerkFetch(`${CLERK_API}/users`, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${process.env.E2E_CLERK_SECRET_KEY ?? ""}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({
+			email_address: [email],
+			username: `${prefix.replace(/^e2e-browser-/u, "e2e-")}-${ts}`,
+			password: `pw-${ts}-${Math.random().toString(36).slice(2)}`,
+			skip_password_checks: true,
+		}),
+	});
+
+	if (!resp.ok) {
+		throw new Error(`Clerk pending-user creation failed: ${resp.status} ${await resp.text()}`);
+	}
+
+	const user = await resp.json();
+	return { email, id: user.id as string };
+}
+
+/**
+ * Teardown must not fail the test, but it must not be mute either. A Clerk 429
+ * RESOLVES with a non-ok Response rather than throwing, so a bare `.catch()`
+ * sees nothing and the user leaks silently into the instance's 100-user cap.
+ */
+export async function deleteClerkUser(id: string): Promise<void> {
+	await clerkFetch(`${CLERK_API}/users/${id}`, {
+		method: "DELETE",
+		headers: { Authorization: `Bearer ${process.env.E2E_CLERK_SECRET_KEY ?? ""}` },
+	})
+		.then((resp) => {
+			if (!resp.ok) {
+				console.warn(`clerk teardown failed for ${id}: ${resp.status}`);
+			}
+		})
+		.catch((err) => console.warn(`clerk teardown errored for ${id}: ${String(err)}`));
+}
+
+/**
+ * Where the SPA and the API live. The CI stack serves them on local ports; a
+ * staging or prod-canary run points E2E_APP_URL / E2E_API_URL at the real hosts.
+ */
+export const APP_URL =
+	process.env.E2E_APP_URL ?? `http://localhost:${process.env.PW_CLERK_VITE_PORT ?? "5174"}`;
+export const API_URL =
+	process.env.E2E_API_URL ?? `http://localhost:${process.env.PW_CLERK_BACKEND_PORT ?? "4001"}`;
+
+/**
+ * Which stack the run targets. Only the CI stack runs billing off; every other
+ * target (staging, prod canary) shows the terms and heard-from steps.
+ */
+export const E2E_TARGET = process.env.E2E_TARGET ?? "ci";
+
+/** Terms step. Runs when the wizard shows it; mandatory off the CI target. */
+export async function acceptTerms(page: Page): Promise<void> {
+	if (E2E_TARGET !== "ci") {
+		expect(onboardStep(page)).toBe("/onboard/agreement");
+	} else if (onboardStep(page) !== "/onboard/agreement") {
+		return;
+	}
+	await page.getByLabel(/I have read and agree/iu).click();
+	await page.getByRole("button", { name: /^continue$/iu }).click();
+	await page.waitForURL(/\/onboard\/(?:heard|vault)/u, { timeout: 25_000 });
+}
+
+/** How-did-you-hear step. Same rule as the terms step. */
+export async function answerHeard(page: Page): Promise<void> {
+	if (E2E_TARGET !== "ci") {
+		expect(onboardStep(page)).toBe("/onboard/heard");
+	} else if (onboardStep(page) !== "/onboard/heard") {
+		return;
+	}
+	await page.getByRole("radio", { name: "Search engine" }).click();
+	await page.getByRole("button", { name: /^continue$/iu }).click();
+	await page.waitForURL(/\/onboard\/vault/u, { timeout: 25_000 });
+}
+
+/** Vault step, "starting fresh" branch; resolves once the app shell is up. */
+export async function createWizardVault(page: Page, vaultName: string): Promise<void> {
+	await page.getByRole("button", { name: /starting fresh/iu }).click();
+	await page.getByLabel("Vault name").fill(vaultName);
+	await page.getByRole("button", { name: /create vault & continue/iu }).click();
+	await expect(page.getByRole("navigation", { name: "App navigation" })).toBeVisible({
+		timeout: 25_000,
+	});
+}
+
+/** Walk the whole wizard for a freshly signed-in, un-onboarded user. */
+export async function completeWebOnboarding(page: Page, vaultName: string): Promise<void> {
+	await page.waitForURL(/\/onboard\//u, { timeout: 25_000 });
+	await acceptTerms(page);
+	await answerHeard(page);
+	await createWizardVault(page, vaultName);
+}
+
+/** Bearer token and active vault the SPA itself sends, for direct API calls. */
+export async function spaApiHeaders(page: Page): Promise<Record<string, string>> {
+	const token = await page.evaluate(() =>
+		(
+			window as unknown as {
+				Clerk?: { session?: { getToken: () => Promise<string | null> } };
+			}
+		).Clerk?.session?.getToken(),
+	);
+	if (!token) {
+		throw new Error("spaApiHeaders: no Clerk session token in page");
+	}
+	const vaultId = await page.evaluate(() => localStorage.getItem("engram.activeVaultId"));
+	return { Authorization: `Bearer ${token}`, ...(vaultId ? { "X-Vault-ID": vaultId } : {}) };
 }
