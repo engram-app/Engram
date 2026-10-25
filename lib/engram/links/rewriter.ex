@@ -230,16 +230,7 @@ defmodule Engram.Links.Rewriter do
               n.id == ^id and n.user_id == ^user.id and n.vault_id == ^vault.id and
                 n.kind == "note" and is_nil(n.deleted_at),
             # The path only: never the body.
-            select:
-              struct(n, [
-                :id,
-                :kind,
-                :user_id,
-                :vault_id,
-                :dek_version,
-                :path_ciphertext,
-                :path_nonce
-              ])
+            select: struct(n, ^Note.path_fields())
           )
         )
       end)

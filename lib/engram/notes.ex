@@ -3613,7 +3613,7 @@ defmodule Engram.Notes do
     query =
       from(n in scoped_live(user, vault),
         where: n.id == ^note_id,
-        select: struct(n, [:id, :kind, :user_id, :dek_version, :path_ciphertext, :path_nonce])
+        select: struct(n, ^Note.path_fields())
       )
 
     case Repo.with_tenant(user.id, fn -> Repo.one(query) end) do

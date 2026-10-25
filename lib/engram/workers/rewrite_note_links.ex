@@ -270,16 +270,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
             order_by: [desc: n.seq],
             limit: 1,
             # The path only: never the body.
-            select:
-              struct(n, [
-                :id,
-                :kind,
-                :user_id,
-                :vault_id,
-                :dek_version,
-                :path_ciphertext,
-                :path_nonce
-              ])
+            select: struct(n, ^Note.path_fields())
           )
         )
       end)
