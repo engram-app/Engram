@@ -514,4 +514,43 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
       end
     end
   end
+
+  # Review M2: the sweep keeps the park flag on a content-current Free park
+  # it selects (here through an elapsed backoff, versions current). The job
+  # it queues re-parks the note with its need, spends nothing, and the next
+  # tick leaves it alone.
+  test "a current Free park selected by an elapsed backoff is re-parked, not run", %{
+    user: user,
+    vault: vault
+  } do
+    note = dense_note(user, vault, 10)
+    set_bucket(user.id, 0)
+    edit(user, vault, note, edit_sections(10, [7]))
+    assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+    parked = reload(note)
+    assert parked.embed_budget_parked == true
+
+    Repo.update_all(
+      from(n in Note, where: n.id == ^note.id),
+      [set: [embed_retry_after: DateTime.add(DateTime.utc_now(), -60, :second)]],
+      skip_tenant_check: true
+    )
+
+    Repo.delete_all(Oban.Job)
+    stub(Engram.MockEmbedder, :embed_texts, fn _ -> flunk("a parked note must not embed") end)
+
+    assert :ok = perform_job(ReconcileEmbeddings, %{})
+    assert reload(note).embed_budget_parked == true
+    assert [job] = all_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+    assert :ok = perform_job(EmbedNote, job.args)
+
+    row = reload(note)
+    assert row.embed_budget_parked == true
+    assert row.embed_budget_need == parked.embed_budget_need
+    assert row.embed_retry_after == EmbedNote.parked_until_edited()
+
+    Repo.delete_all(Oban.Job)
+    assert :ok = perform_job(ReconcileEmbeddings, %{})
+    assert all_enqueued(args: %{"note_id" => note.id}) == []
+  end
 end
