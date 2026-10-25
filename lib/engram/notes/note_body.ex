@@ -25,8 +25,9 @@ defmodule Engram.Notes.NoteBody do
   So no ledger gate is needed: a skip-release self-host reads right while
   its ledger runs, and a re-verify that finds a missed row costs nothing.
   The fallback is a `CASE` branch, so when the body row exists Postgres
-  never de-TOASTs the `notes` copy. `NoteSplit` re-copies, every pass, a
-  body row that disagrees with its notes row (`heal_drift/2`).
+  never de-TOASTs the `notes` copy. `NoteSplit` REPORTS a body row that
+  disagrees with its notes row (`drift/0`) and never repairs it: from the
+  next release on, the body is the newer side.
 
   Two rules the contract release (stop writing the notes body columns, drop
   them) must change in the same release:
@@ -144,6 +145,23 @@ defmodule Engram.Notes.NoteBody do
   defp field_expr(:crdt_state_ciphertext), do: ct_expr(:crdt_ct, :crdt_state_ciphertext)
   defp field_expr(:crdt_state_nonce), do: nonce_expr(:crdt_ct, :crdt_state_nonce)
 
+  # The 32-byte digest as the url-safe, unpadded base64 `notes.crdt_head`
+  # holds (a 32-byte base64 is 44 chars, one `=`, no line break).
+  defp field_expr(:crdt_head) do
+    dynamic(
+      [n, note_body: b],
+      type(
+        fragment(
+          "CASE WHEN ? IS NULL THEN ? ELSE rtrim(translate(encode(?, 'base64'), '+/', '-_'), '=') END",
+          b.note_id,
+          n.crdt_head,
+          b.crdt_head
+        ),
+        :string
+      )
+    )
+  end
+
   defp ct_expr(body, notes) do
     dynamic(
       [n, note_body: b],
@@ -176,23 +194,6 @@ defmodule Engram.Notes.NoteBody do
     )
   end
 
-  # The 32-byte digest as the url-safe, unpadded base64 `notes.crdt_head`
-  # holds (a 32-byte base64 is 44 chars, one `=`, no line break).
-  defp field_expr(:crdt_head) do
-    dynamic(
-      [n, note_body: b],
-      type(
-        fragment(
-          "CASE WHEN ? IS NULL THEN ? ELSE rtrim(translate(encode(?, 'base64'), '+/', '-_'), '=') END",
-          b.note_id,
-          n.crdt_head,
-          b.crdt_head
-        ),
-        :string
-      )
-    )
-  end
-
   @doc """
   The byte length of a note's content (`:content`) or CRDT state (`:crdt`)
   ciphertext, from its body row (less the merged nonce field), else from
@@ -212,6 +213,42 @@ defmodule Engram.Notes.NoteBody do
         field(n, ^notes),
         field(b, ^body)
       )
+    )
+  end
+
+  @doc """
+  True when a note's body row disagrees with its `notes` row, for a query
+  through `join/1` restricted to rows that HAVE a body: the nonce each side
+  carries (the read's own split, `nonce_expr/2`), the AEAD tag (the last 16
+  bytes, which differ for any other ciphertext under the same nonce), and
+  the head. Slices and varlena headers only, nothing is de-TOASTed. For
+  `Engram.DataMigrations.NoteSplit`'s drift report.
+  """
+  @spec drift() :: Ecto.Query.dynamic_expr()
+  def drift do
+    content = differs(:content_ct, :content_nonce, :content_ciphertext)
+    crdt = differs(:crdt_ct, :crdt_state_nonce, :crdt_state_ciphertext)
+    head = field_expr(:crdt_head)
+
+    dynamic(
+      [n],
+      ^content or ^crdt or fragment("? IS DISTINCT FROM ?", ^head, n.crdt_head)
+    )
+  end
+
+  defp differs(body, notes_nonce, notes_ct) do
+    nonce = nonce_expr(body, notes_nonce)
+
+    dynamic(
+      [n, note_body: b],
+      fragment("? IS DISTINCT FROM ?", ^nonce, field(n, ^notes_nonce)) or
+        fragment(
+          "substring(? FROM greatest(octet_length(?) - 15, 1)) IS DISTINCT FROM substring(? FROM greatest(octet_length(?) - 15, 1))",
+          field(b, ^body),
+          field(b, ^body),
+          field(n, ^notes_ct),
+          field(n, ^notes_ct)
+        )
     )
   end
 end
