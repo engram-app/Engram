@@ -324,6 +324,10 @@ defmodule EngramWeb.BillingController do
         {:ok, url} -> json(conn, %{url: url})
         {:error, :no_subscription} -> not_found(conn, "no subscription")
         {:error, :not_found} -> not_found(conn, "transaction not found")
+        # $0 transactions (every trial start) have no Paddle invoice. Not a
+        # provider failure: the HTTP client already logged the Paddle 404 at
+        # warning, below the billing-error page alert's severity filter.
+        {:error, :no_invoice} -> not_found(conn, "no invoice for this transaction")
         {:error, reason} -> paddle_error(conn, reason)
       end
     end)
