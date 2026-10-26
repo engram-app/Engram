@@ -676,6 +676,13 @@ defmodule Engram.Vector.QdrantLayoutTest do
                QdrantLayout.strict_limits(uncapped, @opts)
     end
 
+    test "an unknown or zero point count, or no cap, keeps 0.35x" do
+      for sizes <- [%{@v3 | points: 0}, %{@v3 | points: nil}, %{@v3 | segment_points: nil}] do
+        assert %{disk: %{percent: 88, reserve: 1_925_846_699}} =
+                 QdrantLayout.strict_limits(sizes, @opts)
+      end
+    end
+
     test "segment_points/1 reads the cap in points from GET /collections" do
       info =
         @prod_info

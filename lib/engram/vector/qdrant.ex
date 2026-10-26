@@ -706,7 +706,11 @@ defmodule Engram.Vector.Qdrant do
   `QdrantLayout.segment_points/1`); nil keeps the 0.35x disk reserve.
   """
   # ponytail: no fetch for `info`; the poller and the boot reconcile hold
-  # one, and only a pressure/0 cache miss between ticks reads 0.35x.
+  # one. A pressure/0 cache miss reads 0.35x, and misses are routine (the
+  # :qdrant_pressure TTL equals the 60 s poll), so the app preflight can run
+  # off the 0.35x limit for up to a minute (v3: 88 vs 86). Qdrant's own
+  # guard still refuses at the real limit; fetch `collection_info` on a miss
+  # if the preflight must match it exactly.
   def strict_limits(col, volume, memory \\ :fetch, info \\ nil) do
     collection_bytes =
       case if(memory == :fetch, do: collection_memory(col), else: memory) do
