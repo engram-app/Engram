@@ -7,7 +7,7 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
   `is_tenant` on a `uuid` index and `enable_hnsw: false`, and that 1.18.3
   (the self-host pin) takes the bare v5 set.
 
-  CI runs the first test on both (`QDRANT_EXPECT_VERSION` names the one it
+  CI runs the layout test on both (`QDRANT_EXPECT_VERSION` names the one it
   started, so a silently different image fails here).
   """
   use ExUnit.Case, async: false
@@ -101,7 +101,10 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
   @min_recall 0.9
   @rounds 3
 
+  # `:qdrant_recall`: minutes long and version-blind, so CI's 1.18.3 pass
+  # skips it.
   @tag timeout: 300_000
+  @tag :qdrant_recall
   test "mixed-format tenant search over the global graph keeps recall" do
     for round <- 1..@rounds do
       {recall, approx, exact} = graph_recall(round)

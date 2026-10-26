@@ -2884,7 +2884,8 @@ jobs:
       # v5 writer and its payload-index builds against that older server. The
       # real-Qdrant tests that cover boot (create + reconcile), indexing and
       # search run once more on 1.18.3, one partition. The recall test
-      # (minutes, version-blind) stays on 1.19.2 only.
+      # (minutes, version-blind) stays on 1.19.2 only. No `--only`: in ExUnit
+      # an include beats an exclude, so the recall exclude would lose.
       - name: Qdrant-backed tests on the self-host pin (1.18.3)
         env:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_test
@@ -2906,8 +2907,8 @@ jobs:
             [ "$i" = 30 ] && { echo "::error::Qdrant 1.18.3 did not become ready"; docker logs "$C" | tail -20; exit 1; }
             sleep 1
           done
-          QDRANT_URL="http://127.0.0.1:${PORT}" mix test --warnings-as-errors --only qdrant_integration \
-            test/engram/vector/qdrant_tenant_layout_test.exs:40 \
+          QDRANT_URL="http://127.0.0.1:${PORT}" mix test --warnings-as-errors --exclude qdrant_recall \
+            test/engram/vector/qdrant_tenant_layout_test.exs \
             test/engram/vector/filter_roundtrip_test.exs \
             test/engram/vector/qdrant_strict_mode_test.exs \
             test/engram/vector/qdrant_dense_point_ids_test.exs \
