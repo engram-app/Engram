@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useT } from "@/i18n/locale-provider";
+import { formatPropertyDate } from "@/lib/format-date";
 import { FIELD_TEXT } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import type { PropertyType } from "./property-types";
@@ -35,9 +36,15 @@ const inputCls = `w-full rounded-md border-0 bg-transparent px-0 py-1 pr-2 text-
 const CELL_BUTTON = `block min-w-0 cursor-text self-stretch truncate text-left ${inputCls}`;
 
 function ScalarField({ type, value, onCommit, label }: FieldProps) {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
 	const [editing, setEditing] = useState(false);
 	const initial = value === null || value === undefined ? "" : String(value);
+	// At rest a date reads the way the native date input showed it; the raw
+	// stored string is what the input edits.
+	const shown =
+		(type === "date" || type === "datetime") && initial !== ""
+			? formatPropertyDate(initial, type, renderedLocale)
+			: initial;
 	const name = label ? t("{label} value", { label }) : t("Value");
 
 	if (!editing) {
@@ -48,21 +55,25 @@ function ScalarField({ type, value, onCommit, label }: FieldProps) {
 				className={CELL_BUTTON}
 				onClick={() => setEditing(true)}
 			>
-				{initial}
+				{shown}
 			</button>
 		);
 	}
 
 	// RenameInput owns Enter (commit), Escape (abandon), commit-on-blur and
-	// committing only a real change, so opening and closing a value without
-	// typing writes nothing back.
+	// committing only a real change. trim false: the value must round-trip
+	// byte-exact, so opening and closing " foo" or a block scalar's trailing
+	// newline writes nothing back, and an edit is stored as typed. A window
+	// blur (app switch) commits, as every blur here always did.
 	return (
 		<RenameInput
 			initial={initial}
 			label={name}
 			type={htmlInputType(type)}
 			allowEmpty
+			trim={false}
 			commitOnBlur
+			commitOnWindowBlur
 			className={inputCls}
 			onCommit={(next) => {
 				setEditing(false);
@@ -90,6 +101,9 @@ function ListField({ value, onCommit, label }: ListFieldProps) {
 	// The adder is a button until tapped, for the same prev/next reason as
 	// CELL_BUTTON. It stays open across Enter so several items go in at once.
 	const [adding, setAdding] = useState(false);
+	// Escape has to survive the blur it triggers: the blur handler still sees
+	// the typed text (state updates are async), so a flag tells it to drop it.
+	const discard = useRef(false);
 	const name = label ? t("{label} value", { label }) : t("Value");
 
 	const add = () => {
@@ -132,8 +146,15 @@ function ListField({ value, onCommit, label }: ListFieldProps) {
 					enterKeyHint="done"
 					value={pending}
 					onChange={(e) => setPending(e.target.value)}
+					// Leaving with a typed item keeps it, the way a scalar value
+					// commits on blur; on a phone, tapping outside is how you finish.
 					onBlur={() => {
-						setPending("");
+						if (discard.current) {
+							discard.current = false;
+							setPending("");
+						} else {
+							add();
+						}
 						setAdding(false);
 					}}
 					onKeyDown={(e) => {
@@ -142,6 +163,7 @@ function ListField({ value, onCommit, label }: ListFieldProps) {
 							add();
 						} else if (e.key === "Escape") {
 							e.preventDefault();
+							discard.current = true;
 							e.currentTarget.blur();
 						}
 					}}

@@ -88,6 +88,58 @@ describe("PropertyField", () => {
 		expect(onCommit).toHaveBeenLastCalledWith(null);
 	});
 
+	// YAML block scalars keep a trailing newline and values can carry edge
+	// spaces. Opening and closing the cell must not rewrite them.
+	test.each([" foo", "a\nb\n"])("a no-op open and close of %j writes nothing", (stored) => {
+		const onCommit = vi.fn();
+		render(<PropertyField type="text" value={stored} label="x" onCommit={onCommit} />);
+		fireEvent.blur(tapToEdit());
+		expect(onCommit).not.toHaveBeenCalled();
+	});
+
+	test("an edit is committed verbatim, without trimming", () => {
+		const onCommit = vi.fn();
+		render(<PropertyField type="text" value="a" label="x" onCommit={onCommit} />);
+		const input = tapToEdit();
+		fireEvent.change(input, { target: { value: " padded " } });
+		fireEvent.blur(input);
+		expect(onCommit).toHaveBeenCalledWith(" padded ");
+	});
+
+	// Switching apps mid-edit used to commit (blur always committed). It must
+	// not throw the typed value away.
+	test("commits the typed value when the window loses focus", () => {
+		const onCommit = vi.fn();
+		render(<PropertyField type="text" value="a" label="x" onCommit={onCommit} />);
+		const input = tapToEdit();
+		fireEvent.change(input, { target: { value: "typed" } });
+		const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+		fireEvent.blur(input);
+		hasFocus.mockRestore();
+		expect(onCommit).toHaveBeenCalledWith("typed");
+	});
+
+	// At rest a date reads the way the native date input showed it, not ISO.
+	test("shows a date formatted at rest and the raw value when editing", () => {
+		render(<PropertyField type="date" value="2026-06-30" label="x" onCommit={() => {}} />);
+		expect(screen.getByRole("button", { name: "x value" })).toHaveTextContent("06/30/2026");
+		expect(tapToEdit()).toHaveValue("2026-06-30");
+	});
+
+	test("shows a datetime formatted at rest", () => {
+		render(
+			<PropertyField type="datetime" value="2026-06-30T14:05" label="x" onCommit={() => {}} />,
+		);
+		const text = screen.getByRole("button", { name: "x value" }).textContent ?? "";
+		expect(text).toContain("06/30/2026");
+		expect(text).toMatch(/2:05/);
+	});
+
+	test("shows an unparseable date as stored", () => {
+		render(<PropertyField type="date" value="someday" label="x" onCommit={() => {}} />);
+		expect(screen.getByRole("button", { name: "x value" })).toHaveTextContent("someday");
+	});
+
 	test("checkbox commits immediately", () => {
 		const onCommit = vi.fn();
 		render(<PropertyField type="checkbox" value={false} onCommit={onCommit} />);
@@ -106,6 +158,28 @@ describe("PropertyField", () => {
 		fireEvent.change(input, { target: { value: "b" } });
 		fireEvent.keyDown(input, { key: "Enter" });
 		expect(onCommit).toHaveBeenCalledWith(["a", "b"]);
+	});
+
+	test("Escape in the list adder discards the pending item", () => {
+		const onCommit = vi.fn();
+		render(<PropertyField type="list" value={["a"]} label="x" onCommit={onCommit} />);
+		fireEvent.click(screen.getByRole("button", { name: "x value" }));
+		const input = screen.getByPlaceholderText("Add item...");
+		fireEvent.change(input, { target: { value: "c" } });
+		fireEvent.keyDown(input, { key: "Escape" });
+		fireEvent.blur(input);
+		expect(onCommit).not.toHaveBeenCalled();
+	});
+
+	// Tapping outside after typing a tag (instead of Done) used to drop it.
+	test("list adder commits the pending item on blur", () => {
+		const onCommit = vi.fn();
+		render(<PropertyField type="list" value={["a"]} label="x" onCommit={onCommit} />);
+		fireEvent.click(screen.getByRole("button", { name: "x value" }));
+		const input = screen.getByPlaceholderText("Add item...");
+		fireEvent.change(input, { target: { value: "c" } });
+		fireEvent.blur(input);
+		expect(onCommit).toHaveBeenCalledWith(["a", "c"]);
 	});
 
 	// A zone suffix the datetime-local input cannot represent must not be

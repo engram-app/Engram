@@ -148,6 +148,98 @@ describe("RenameInput", () => {
 		});
 	});
 
+	// A window blur (alt-tab, devtools, an iPhone app switch) is not the user
+	// leaving the field. The comment in the component promised the edit stays
+	// open; it used to cancel, and the caller unmounted the typed text.
+	it("keeps the edit open with its draft when the WINDOW loses focus", () => {
+		const onCommit = vi.fn();
+		const onCancel = vi.fn();
+		render(
+			<RenameInput initial="a" kind="file" commitOnBlur onCommit={onCommit} onCancel={onCancel} />,
+		);
+		const input = screen.getByRole("textbox");
+		fireEvent.change(input, { target: { value: "typed" } });
+		const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+		fireEvent.blur(input);
+		hasFocus.mockRestore();
+		expect(onCommit).not.toHaveBeenCalled();
+		expect(onCancel).not.toHaveBeenCalled();
+		expect(input).toHaveValue("typed");
+	});
+
+	it("commits on a window blur when asked to (property values)", () => {
+		const onCommit = vi.fn();
+		render(
+			<RenameInput
+				initial="a"
+				kind="file"
+				commitOnBlur
+				commitOnWindowBlur
+				onCommit={onCommit}
+				onCancel={() => {}}
+			/>,
+		);
+		const input = screen.getByRole("textbox");
+		fireEvent.change(input, { target: { value: "typed" } });
+		const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+		fireEvent.blur(input);
+		hasFocus.mockRestore();
+		expect(onCommit).toHaveBeenCalledWith("typed");
+	});
+
+	// Paths are trimmed; property values must round-trip byte-exact.
+	describe("trim={false}", () => {
+		it("writes nothing when a value with edge whitespace is opened and closed", () => {
+			const onCommit = vi.fn();
+			const onCancel = vi.fn();
+			render(
+				<RenameInput
+					initial=" foo "
+					trim={false}
+					allowEmpty
+					commitOnBlur
+					onCommit={onCommit}
+					onCancel={onCancel}
+				/>,
+			);
+			fireEvent.blur(screen.getByRole("textbox"));
+			expect(onCommit).not.toHaveBeenCalled();
+			expect(onCancel).toHaveBeenCalled();
+		});
+
+		it("commits an edit verbatim, whitespace included", () => {
+			const onCommit = vi.fn();
+			render(
+				<RenameInput
+					initial="a"
+					trim={false}
+					commitOnBlur
+					onCommit={onCommit}
+					onCancel={() => {}}
+				/>,
+			);
+			const input = screen.getByRole("textbox");
+			fireEvent.change(input, { target: { value: "  b " } });
+			fireEvent.keyDown(input, { key: "Enter" });
+			expect(onCommit).toHaveBeenCalledWith("  b ");
+		});
+	});
+
+	// A remote change to the value being edited (Obsidian, another tab) must not
+	// select the draft: the next keystroke would replace everything typed.
+	it("leaves the draft and its caret alone when `initial` changes mid-edit", () => {
+		const { rerender } = render(
+			<RenameInput initial="a" kind="file" onCommit={() => {}} onCancel={() => {}} />,
+		);
+		const input = screen.getByRole("textbox") as HTMLInputElement;
+		fireEvent.change(input, { target: { value: "draft" } });
+		input.setSelectionRange(5, 5);
+		rerender(<RenameInput initial="remote" kind="file" onCommit={() => {}} onCancel={() => {}} />);
+		expect(input.value).toBe("draft");
+		expect(input.selectionStart).toBe(5);
+		expect(input.selectionEnd).toBe(5);
+	});
+
 	it("renders inline error when error prop set", () => {
 		render(
 			<RenameInput
