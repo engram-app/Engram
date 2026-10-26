@@ -489,3 +489,27 @@ async def test_fuzz_seed11_discovered_note_edit_then_offline_in_debounce(gauntle
     logger.warning("GAUNTLET seed11: final files %s", sorted(server))
     assert all("conflict" in p.lower() for p in stray), f"unexpected notes: {stray}"
     assert not stray, f"merged correctly, but a conflict copy appeared: {stray}"
+
+
+@pytest.mark.timeout(600)
+async def test_remote_rename_while_device_offline(gauntlet):
+    """B is offline while A renames a note and keeps editing it. B
+    reconnects. B ends with the note at the NEW path, holding A's edits,
+    and nothing at the old path (a remote rename must not be ignored)."""
+    pair = await gauntlet("grr")
+    a, b = pair.a, pair.b
+    root = _root("rr")
+    old, new = f"{root}/before.md", f"{root}/after.md"
+    seed = f"seed-{root}"
+    await create_notes(a.cdp, {old: f"# Note\n\n{seed}\n"})
+    await await_converged(pair.api, pair.vaults, root, Expect({old: [seed]}))
+
+    b.net.refuse()
+    assert await rename(a.cdp, old, new)
+    edits = [f"after-rename-{i}-{root}" for i in range(3)]
+    for e in edits:
+        await asyncio.sleep(1)
+        assert await append_lines(a.cdp, {new: e}) == []
+    await asyncio.sleep(3)
+    b.net.restore()
+    await await_converged(pair.api, pair.vaults, root, Expect({new: [seed, *edits]}, absent={old}))
