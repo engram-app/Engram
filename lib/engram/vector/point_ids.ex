@@ -5,9 +5,7 @@ defmodule Engram.Vector.PointIds do
   (`known/1`), and which of them does Qdrant hold (`present/2`). Plus the
   keyset page of live chunk rows both directions walk (`chunk_page/3`).
 
-  Used by `Engram.Workers.OrphanSweep` (the daily sweep, against the active
-  cluster) and `Engram.Vector.ClusterDiff` (old vs v2, against the cluster
-  pinned with `Qdrant.with_cluster/2`).
+  Used by `Engram.Workers.OrphanSweep` (the daily sweep).
 
   The Postgres reads run on `Repo.maintenance()`: these are cross-tenant
   reconciliations and RLS would hide exactly the rows that prove a point is
@@ -149,7 +147,7 @@ defmodule Engram.Vector.PointIds do
   # Qdrant ids are whatever the collection holds; ours are uuids, but one
   # malformed value would raise `Ecto.Query.CastError` out of a
   # `max_attempts: 1` worker and kill the pass mid-walk. Same guard as
-  # `Notes.display_fields_by_qdrant_points/2` on the identical query.
+  # `Notes.search_hits_by_qdrant_points/2` on the identical query.
   defp cast_uuids(ids) do
     Enum.flat_map(ids, fn id ->
       case Ecto.UUID.cast(id) do
