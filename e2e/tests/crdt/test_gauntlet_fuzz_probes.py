@@ -12,6 +12,8 @@ the server byte for byte, each marker exactly once, no conflict copy.
 from __future__ import annotations
 
 import asyncio
+import datetime
+import json
 import logging
 import time
 import uuid
@@ -22,10 +24,12 @@ from helpers.convergence import Expect, await_converged
 from helpers.gauntlet import (
     append_lines,
     create_notes,
+    creates_seen,
     hook_creates,
     release_creates,
     rename,
     replace_text,
+    set_create_rest,
     unhook_creates,
 )
 from helpers.vault import wait_for_file
@@ -207,3 +211,69 @@ async def test_fuzz_bug7_two_devices_edit_different_lines_of_fresh_note(gauntlet
     )
     body = (a.vault / path).read_text(encoding="utf-8")
     assert lines[1] not in body and lines[3] not in body, f"a replaced line survived: {body!r}"
+
+
+# -- bug 8: an open note re-created by the orphaned-claim repair, no genesis ----
+
+
+async def _type(cdp, text: str) -> str:
+    """Type at the end of the ACTIVE editor (through the CodeMirror binding)."""
+    return await cdp.evaluate(
+        f"""(() => {{
+            const ed = app.workspace.activeEditor?.editor;
+            if (!ed) return 'no-editor';
+            const end = {{line: ed.lastLine(), ch: ed.getLine(ed.lastLine()).length}};
+            ed.replaceRange({json.dumps(text)}, end);
+            return app.workspace.activeEditor.file.path;
+        }})()"""
+    )
+
+
+@pytest.mark.timeout(900)
+async def test_fuzz_bug8_open_note_recreated_by_orphan_repair(gauntlet):
+    """B creates a note and types into it while OPEN; every crdt_create is
+    dropped, through an offline restart, so the server never gets the row.
+    Back online, enroll's STEP1 meets note_not_found and the orphaned-claim
+    repair re-enqueues the create (without a genesis frame: the note is live
+    bound). Creates are let through only once that repair has logged. B types
+    more. The server and A must hold all of B's text."""
+    pair = await gauntlet("gb8")
+    b = pair.b
+    root = _root("8")
+    path = f"{root}/open.md"
+    first, second, third = (f"{w}-{root}" for w in ("typed-first", "typed-before-restart", "typed-after"))
+    since = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    await b.cdp.wait_for_stream_connected()
+    await hook_creates(b.cdp, [], rest="drop")
+    await b.cdp.vault_write(path, f"# Open\n\n{first}\n")
+    assert await b.cdp.open_note_in_live_preview(path) == path
+    assert await _type(b.cdp, f"\n{second}") == path
+    await asyncio.sleep(12)  # past the first create's 10 s timeout, workspace saved
+
+    b.net.refuse()
+    b.inst.kill()
+    await b.inst.relaunch()
+    await hook_creates(b.cdp, [], rest="drop")  # offline: nothing has gone out yet
+    active = await b.cdp.evaluate("app.workspace.activeEditor?.file?.path ?? null")
+    logger.warning("GAUNTLET fuzz bug8: active editor after relaunch %r", active)
+    if active != path:
+        assert await b.cdp.open_note_in_live_preview(path) == path
+    b.net.restore()
+
+    end = time.monotonic() + 120
+    orphan = []
+    while not orphan:
+        assert time.monotonic() < end, (
+            f"scenario not reached: no 'Orphaned index claim' log in 120 s; creates: {await creates_seen(b.cdp)}"
+        )
+        await asyncio.sleep(3)
+        orphan = pair.api.list_logs(limit=500, since=since, query="Orphaned index claim")
+    logger.warning("GAUNTLET fuzz bug8: orphan repair ran: %s", orphan[0].get("message"))
+    await set_create_rest(b.cdp, "pass")
+    await asyncio.sleep(5)
+    assert await _type(b.cdp, f"\n{third}") == path
+    calls = await unhook_creates(b.cdp)
+    logger.warning("GAUNTLET fuzz bug8: crdt_create calls after relaunch %s", calls)
+
+    await await_converged(pair.api, pair.vaults, root, Expect({path: [first, second, third]}), deadline_s=240)
