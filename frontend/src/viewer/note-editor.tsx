@@ -22,6 +22,7 @@ import { indentKeymap } from "./editor/format-commands";
 import { frontmatterShortcut } from "./editor/frontmatter-shortcut";
 import { headingFoldWith, noParagraphFold } from "./editor/heading-fold";
 import { itemDrop } from "./editor/item-drop";
+import { toolbarScrollMargin } from "./editor/keyboard-bar";
 import { livePreviewExtensions } from "./editor/live-preview";
 import { translator, translatorCompartment } from "./editor/translator";
 import { type DraggedVaultItem, linkTextFor } from "./vault-item-drag";
@@ -172,6 +173,8 @@ export function buildEditorState(
 				const t = state.facet(translator);
 				return { "aria-label": t("Note text") };
 			}),
+			// Scroll the caret into view above the mobile formatting toolbar.
+			toolbarScrollMargin,
 			drawSelection(),
 			EditorView.lineWrapping,
 			// Base, not the mode compartment: the fold service comes from

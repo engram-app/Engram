@@ -2,6 +2,13 @@
 @plugin "@tailwindcss/typography";
 
 @custom-variant dark (&:where(.dark, .dark *));
+/* iOS WebKit (Safari, and Chrome on iPhone, which is WebKit too). The only
+   engine that supports -webkit-touch-callout; macOS Safari does not. */
+@custom-variant ios {
+	@supports (-webkit-touch-callout: none) {
+		@slot;
+	}
+}
 
 /* highlight.js + KaTeX styles moved to viewer/markdown.css (imported by
  * note-view.tsx) so they ride the lazy viewer chunk, not the render-blocking

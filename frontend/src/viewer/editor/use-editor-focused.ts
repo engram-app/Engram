@@ -8,7 +8,10 @@ import { useEffect, useState } from "react";
  * (see keyboard-bar.tsx), and treating that as a blur unmounted the toolbar out
  * from under the finger mid-drag.
  */
-const FOCUS_HOLDERS = ".cm-editor, [data-editor-toolbar]";
+/** The mobile formatting toolbar (keyboard-bar.tsx). */
+export const EDITOR_TOOLBAR = "[data-editor-toolbar]";
+
+const FOCUS_HOLDERS = `.cm-editor, ${EDITOR_TOOLBAR}`;
 
 /**
  * True while focus is inside a CodeMirror editor — i.e. while the on-screen

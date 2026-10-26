@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 
 /**
- * Height in px the on-screen keyboard covers at the bottom of the viewport,
- * or 0 when it's down.
+ * Where the on-screen keyboard is, read from `window.visualViewport`.
  *
  * This is the ONLY part of the keyboard toolbar that depends on the real
  * device. Isolating it to a number means every consumer is testable by passing
@@ -58,26 +57,49 @@ function readKeyboardOpen(): boolean {
 	return tallest.height - vv.height >= KEYBOARD_MIN_PX;
 }
 
-function readInset(): number {
-	if (typeof window === "undefined") {
-		return 0;
-	}
-	if (devKeyboardFlag()) {
-		return DEV_INSET_PX;
-	}
-	const vv = window.visualViewport;
-	if (!vv) {
-		return 0;
-	}
-	// What the layout viewport has that the visual one doesn't, below the fold.
-	// offsetTop matters when the page is pinch-zoomed or scrolled under the
-	// keyboard; without it the inset reads short and the bar sits too low.
-	const obscured = window.innerHeight - (vv.height + vv.offsetTop);
-	return obscured >= KEYBOARD_MIN_PX ? Math.round(obscured) : 0;
+/** The part of the window the user can actually see, in layout-viewport px. */
+export interface ViewportBox {
+	top: number;
+	height: number;
 }
 
-/** Subscribe `read` to the visual viewport's resize/scroll events. */
-function useViewportValue<T>(read: () => T): T {
+/**
+ * The visual viewport's top and height: the visible area above the keyboard
+ * and whatever rows iOS stacks on it.
+ *
+ * This replaces lifting a bottom-pinned bar by a computed inset. On iOS 26 a
+ * fixed element moved with a transform drifts out of step with the visual
+ * viewport when the keyboard opens, closes or the viewport scrolls (WebKit
+ * bugs 297779 and 300523); a fixed frame sized to this box does not. On
+ * Android with `interactive-widget=resizes-content` the layout viewport
+ * shrinks too, `offsetTop` is 0 and `height` is the shrunk window, so the same
+ * box is right there as well.
+ */
+export function readViewportBox(): ViewportBox {
+	if (typeof window === "undefined") {
+		return { top: 0, height: 0 };
+	}
+	if (devKeyboardFlag()) {
+		return { top: 0, height: window.innerHeight - DEV_INSET_PX };
+	}
+	const vv = window.visualViewport;
+	return vv ? { top: vv.offsetTop, height: vv.height } : { top: 0, height: window.innerHeight };
+}
+
+/** How long to keep sampling after a keyboard-shaped event. The iOS keyboard
+ *  animates for ~300ms and the QuickType row can arrive after it. */
+const SETTLE_MS = 600;
+
+/**
+ * Subscribe `read` to the visual viewport, and keep sampling it every frame
+ * for SETTLE_MS after each change or focus move.
+ *
+ * Events alone are not enough on iOS: rows that appear or grow above the
+ * keyboard after it opens (QuickType, AutoFill, the accessory bar) can change
+ * the visual viewport without firing a resize. The per-frame sampling costs
+ * one layout read per frame, and only while the keyboard is moving.
+ */
+function useViewportValue<T>(read: () => T, same: (a: T, b: T) => boolean = Object.is): T {
 	const [value, setValue] = useState(read);
 
 	useEffect(() => {
@@ -85,31 +107,55 @@ function useViewportValue<T>(read: () => T): T {
 		if (!vv) {
 			return;
 		}
-		const update = () => setValue(read());
-		// resize fires when the keyboard opens/closes; scroll fires when the
-		// visual viewport pans under it, which changes offsetTop and therefore
-		// the inset even though nothing resized.
-		vv.addEventListener("resize", update);
-		vv.addEventListener("scroll", update);
-		return () => {
-			vv.removeEventListener("resize", update);
-			vv.removeEventListener("scroll", update);
+		const update = () => {
+			const next = read();
+			setValue((prev) => (same(prev, next) ? prev : next));
 		};
-		// `read` is a module-level function, stable across renders.
-	}, [read]);
+		let raf = 0;
+		let until = 0;
+		const tick = () => {
+			update();
+			raf = performance.now() < until ? requestAnimationFrame(tick) : 0;
+		};
+		const settle = () => {
+			update();
+			until = performance.now() + SETTLE_MS;
+			if (!raf) {
+				raf = requestAnimationFrame(tick);
+			}
+		};
+		// resize fires when the keyboard opens/closes; scroll fires when the
+		// visual viewport pans under it, which changes offsetTop even though
+		// nothing resized. Focus moving is when the keyboard is about to move.
+		vv.addEventListener("resize", settle);
+		vv.addEventListener("scroll", settle);
+		document.addEventListener("focusin", settle);
+		document.addEventListener("focusout", settle);
+		return () => {
+			cancelAnimationFrame(raf);
+			vv.removeEventListener("resize", settle);
+			vv.removeEventListener("scroll", settle);
+			document.removeEventListener("focusin", settle);
+			document.removeEventListener("focusout", settle);
+		};
+		// `read` and `same` are module-level functions, stable across renders.
+	}, [read, same]);
 
 	return value;
 }
 
-export function useKeyboardInset(): number {
-	return useViewportValue(readInset);
+const sameBox = (a: ViewportBox, b: ViewportBox) => a.top === b.top && a.height === b.height;
+
+/** The visible area, live. See readViewportBox. */
+export function useVisualViewportBox(): ViewportBox {
+	return useViewportValue(readViewportBox, sameBox);
 }
 
 /**
  * Whether the on-screen keyboard is up.
  *
- * Deliberately NOT `useKeyboardInset() > 0`: on browsers that resize the layout
- * viewport the inset is 0 with the keyboard fully open, which is why the
+ * Deliberately NOT "the visible box is shorter than the window": on browsers
+ * that resize the layout viewport the two are equal with the keyboard open, which is why the
  * toolbar used to gate on focus alone — and that in turn left the bar stranded
  * over the document whenever the editor kept focus after the keyboard was
  * dismissed. This compares against the tallest viewport seen instead, which
