@@ -183,23 +183,31 @@ async def test_chaos_soak_converges(gauntlet):
             note(f"{name} link restored (quiesce)")
 
         stable = [n for n in notes if not n.ever_deleted]
+        deleted_anchors = {n.anchor for n in notes if n.ever_deleted}
         markers = {m for n in notes for m in n.markers}
         expect = Expect(
             {n.path: [n.anchor, *n.markers] for n in stable},
             exact=False,
             absent={p for n in stable for p in n.old_paths},
             at_most_once=markers | {n.anchor for n in notes},
+            identities={n.anchor for n in notes},
+            # Keep-both from an edit racing a delete: the copy holds a note
+            # that was deleted at some point. Legitimate, not a sync error.
+            copy_ok=lambda body: any(a in body for a in deleted_anchors),
         )
         await await_converged(api, pair.vaults, root, expect, deadline_s=360)
 
         known = {p for n in notes for p in n.all_paths}
         server, _ = server_state(api, root)
-        stray = sorted(set(server) - known)
+        stray = sorted(p for p in set(server) - known if "conflict" not in p.lower())
         assert not stray, f"paths no op created: {stray}"
         logger.warning(
             "GAUNTLET soak seed=%d: %d ops, %d stable notes, %d deleted at some point",
             seed, seq, len(stable), NOTES - len(stable),
         )
+    except AssertionError as e:
+        print(f"GAUNTLET soak seed={seed} op log:\n  " + "\n  ".join(log))
+        raise AssertionError(f"soak seed={seed} (rerun: E2E_SOAK_SEED={seed}): {e}") from e
     except BaseException:
         print(f"GAUNTLET soak seed={seed} op log:\n  " + "\n  ".join(log))
         raise

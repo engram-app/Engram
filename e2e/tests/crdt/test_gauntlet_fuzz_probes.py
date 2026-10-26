@@ -33,7 +33,6 @@ from helpers.gauntlet import (
     release_creates,
     rename,
     replace_text,
-    set_create_rest,
     unhook_creates,
 )
 from helpers.log_oracle import receiver_device_id
@@ -259,7 +258,24 @@ async def test_fuzz_bug8_open_note_recreated_by_orphan_repair(gauntlet):
     b.net.refuse()
     b.inst.kill()
     await b.inst.relaunch()
-    await hook_creates(b.cdp, [], rest="drop")  # offline: nothing has gone out yet
+    # The channel object is not built while offline, so after the relaunch the
+    # drop sits one layer down: every outbound frame naming crdt_create is
+    # swallowed at WebSocket.send (its request then times out, as a lost push
+    # does) until window.__e2eAllowCreates.
+    await b.cdp.evaluate(
+        """(() => {
+            const send = WebSocket.prototype.send;
+            window.__e2eDroppedCreates = 0;
+            WebSocket.prototype.send = function (data) {
+                if (!window.__e2eAllowCreates && typeof data === 'string' && data.includes('"crdt_create"')) {
+                    window.__e2eDroppedCreates++;
+                    return;
+                }
+                return send.call(this, data);
+            };
+            return true;
+        })()"""
+    )
     active = await b.cdp.evaluate("app.workspace.activeEditor?.file?.path ?? null")
     logger.warning("GAUNTLET fuzz bug8: active editor after relaunch %r", active)
     if active != path:
@@ -270,16 +286,16 @@ async def test_fuzz_bug8_open_note_recreated_by_orphan_repair(gauntlet):
     orphan = []
     while not orphan:
         assert time.monotonic() < end, (
-            f"scenario not reached: no 'Orphaned index claim' log in 120 s; creates: {await creates_seen(b.cdp)}"
+            "scenario not reached: no 'Orphaned index claim' log in 120 s; "
+            f"crdt_create frames dropped: {await b.cdp.evaluate('window.__e2eDroppedCreates')}"
         )
         await asyncio.sleep(3)
         orphan = pair.api.list_logs(limit=500, since=since, query="Orphaned index claim")
     logger.warning("GAUNTLET fuzz bug8: orphan repair ran: %s", orphan[0].get("message"))
-    await set_create_rest(b.cdp, "pass")
+    dropped = await b.cdp.evaluate("window.__e2eAllowCreates = true; window.__e2eDroppedCreates")
+    logger.warning("GAUNTLET fuzz bug8: %s crdt_create frames dropped after relaunch", dropped)
     await asyncio.sleep(5)
     assert await _type(b.cdp, f"\n{third}") == path
-    calls = await unhook_creates(b.cdp)
-    logger.warning("GAUNTLET fuzz bug8: crdt_create calls after relaunch %s", calls)
 
     await await_converged(pair.api, pair.vaults, root, Expect({path: [first, second, third]}), deadline_s=240)
 

@@ -213,19 +213,18 @@ class RoomBudget:
 #   lateack:<ms>    send, resolve the reply <ms> late
 #   holdack         send, resolve the reply only once window.__e2eRelease is set
 # Every call is recorded in window.__e2eCreates ({path, action, at}).
-# set_create_rest() switches the action for every later call.
 
 _HOOK = """(() => {
     const ch = %(plugin)s.noteStream;
     const orig = ch.__e2eOrigSendRequest || ch.sendRequest.bind(ch);
     ch.__e2eOrigSendRequest = orig;
     const plan = %(plan)s, rest = %(rest)s;
-    window.__e2eCreates = []; window.__e2eRelease = false; window.__e2eRestOverride = null;
+    window.__e2eCreates = []; window.__e2eRelease = false;
     const sleep = ms => new Promise(r => setTimeout(r, ms));
     ch.sendRequest = (event, payload, timeoutMs = 10000) => {
         if (event !== 'crdt_create') return orig(event, payload, timeoutMs);
         const i = window.__e2eCreates.length;
-        const action = i < plan.length ? plan[i] : (window.__e2eRestOverride || rest);
+        const action = i < plan.length ? plan[i] : rest;
         window.__e2eCreates.push({path: payload.path, docId: payload.doc_id, action, at: Date.now()});
         if (window.__e2eBufferOnCreate) window.__e2eBuffering = true;
         const [kind, arg] = action.split(':');
@@ -262,10 +261,6 @@ async def hook_creates(cdp, plan: list[str], rest: str = "pass", timeout: float 
 
 async def creates_seen(cdp) -> list[dict]:
     return json.loads(await cdp.evaluate("JSON.stringify(window.__e2eCreates || [])"))
-
-
-async def set_create_rest(cdp, action: str) -> None:
-    await cdp.evaluate(f"window.__e2eRestOverride = {json.dumps(action)}")
 
 
 async def release_creates(cdp) -> None:
