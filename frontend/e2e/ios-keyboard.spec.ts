@@ -3,9 +3,9 @@ import { createVault, registerAndLogin, signInForNote, upsertNote } from "./supp
 import { openContextMenu, pickAction, row } from "./support/tree";
 
 /**
- * iPhone editing guards, run in WebKit with an iPhone device descriptor (the
- * `ios-webkit` project in playwright.config.ts). Every iPhone browser is
- * WebKit, so this is the closest CI gets to Safari and Chrome on iOS.
+ * iPhone editing guards, run with the iPhone 15 descriptor (the `ios` project
+ * in playwright.config.ts). It runs in Chromium for now: see that project for
+ * why not WebKit. What it asserts does not depend on the engine.
  *
  * It cannot raise a soft keyboard, so it guards the causes rather than the
  * symptoms: text fields under 16px make iOS zoom the page, an editor with

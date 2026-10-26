@@ -54,12 +54,18 @@ export default defineConfig({
 			},
 		},
 		{
-			// iPhone in WebKit: every iPhone browser (Safari, Chrome) is WebKit, so
-			// this is CI's stand-in for both. Same local stack as `local`.
-			name: "ios-webkit",
+			// iPhone geometry and touch (iPhone 15 descriptor), run in CHROMIUM.
+			// WebKit would be the faithful engine, but it needs gstreamer and
+			// other system libraries the CI runner VMs lack, and the job user has
+			// no sudo to `playwright install --with-deps` them per run. The spec
+			// asserts DOM attributes, computed font sizes and element roles,
+			// which do not differ by engine. Switch to webkit once the runner
+			// image has `playwright install-deps webkit` baked in.
+			name: "ios",
 			testMatch: /\/ios-keyboard\.spec\.ts$/u,
 			use: {
 				...devices["iPhone 15"],
+				browserName: "chromium",
 				locale: "en-US",
 				baseURL: `http://localhost:${LOCAL_VITE_PORT}`,
 			},
