@@ -209,11 +209,12 @@ defmodule Engram.IndexingTest do
       # prod shipped batches at 1.39 — see the constant's comment.
       #
       # Every chunk distinct: a pass sends a text repeated in the note once,
-      # so identical slices would all ride one input. Base 36 has no lower
-      # case, so the chunker's blob filter keeps it. No per-note cap
-      # (self-host shape), so the note keeps one point a slice.
+      # so identical slices would all ride one input. Upper-case letters only
+      # (base 26 digits as A-Z): one word to the chunker, so it stays prose
+      # (dense), and the blob filter keeps it. No per-note cap (self-host
+      # shape), so the note keeps one point a slice.
       insert(:user_limit_override, user: user, key: "note_points_cap", value: %{"v" => 10_000})
-      blob = Enum.map_join(1..80_000, &Integer.to_string(&1, 36))
+      blob = Enum.map_join(1..70_000, fn i -> i |> Integer.digits(26) |> Enum.map(&(?A + &1)) end)
 
       {:ok, dense_note} =
         Notes.upsert_note(

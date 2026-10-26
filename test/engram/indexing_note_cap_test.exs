@@ -1094,7 +1094,7 @@ defmodule Engram.IndexingNoteCapTest do
     test "billing disabled: never selected", %{user: user, vault: vault} do
       note = insert_note(user, vault, sections(500))
       index_uncapped(note)
-      Application.put_env(:engram, :limits_enforced, false)
+      with_limits_enforced(false)
 
       assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
       refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
