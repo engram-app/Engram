@@ -79,6 +79,23 @@ describe("PropertiesWidget", () => {
 		);
 	});
 
+	// The type menu hands focus back to the property's name so the next
+	// keystroke renames it. With the name a button at rest, that has to open
+	// the editor, or typing after a type change goes nowhere.
+	test("picking a type leaves a caret in the property's name", async () => {
+		const doc = new Y.Doc();
+		addKey(doc, "status", "text");
+		render(<PropertiesWidget doc={doc} />);
+		const row = await screen.findByTestId("property-row-status");
+		const trigger = within(row).getByRole("button", { name: /property type/i });
+		fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+		fireEvent.click(trigger);
+		fireEvent.click(await screen.findByRole("menuitem", { name: "number" }));
+		await waitFor(() =>
+			expect(screen.getByRole("textbox", { name: "Rename status" })).toHaveFocus(),
+		);
+	});
+
 	describe("renaming a property", () => {
 		const openRow = async (doc: Y.Doc) => {
 			addKey(doc, "status", "text");

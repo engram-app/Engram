@@ -23,7 +23,7 @@ import {
 	setValue,
 } from "../crdt/frontmatter-doc";
 import { htmlInputType, PropertyField } from "./property-fields";
-import { PropertyTypeMenu } from "./property-type-menu";
+import { type Focusable, PropertyTypeMenu } from "./property-type-menu";
 import { coerceValue, effectiveType, type PropertyType } from "./property-types";
 import { RenameInput } from "./tree-actions/rename-input";
 
@@ -65,17 +65,23 @@ function PropertyKeyInput({
 	doc,
 	name,
 	okf,
-	elRef,
+	handleRef,
 }: {
 	doc: Y.Doc;
 	name: string;
 	/** Key Engram reads AND whose value is the shape that field needs. */
 	okf: boolean;
-	/** Hands the key control up to the row, which is where the type menu lives. */
-	elRef?: (el: HTMLElement | null) => void;
+	/** Hands the row (where the type menu lives) a way to put the caret in
+	 *  this name. Focusing it OPENS the editor: the name is a button at rest,
+	 *  and focusing the button would leave the next keystroke nowhere. */
+	handleRef?: (handle: Focusable | null) => void;
 }) {
 	const { t } = useT();
 	const [editing, setEditing] = useState(false);
+	useEffect(() => {
+		handleRef?.({ focus: () => setEditing(true) });
+		return () => handleRef?.(null);
+	}, [handleRef]);
 	const label = t("Rename {name}", { name });
 	// Highlighted when Engram READS the key rather than merely storing it.
 	// No tooltip: the `?` beside the heading is where the explanation lives,
@@ -85,7 +91,6 @@ function PropertyKeyInput({
 	if (!editing) {
 		return (
 			<button
-				ref={elRef}
 				type="button"
 				aria-label={label}
 				className={cn(look, "cursor-text text-left")}
@@ -225,7 +230,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 	// Key inputs by property name, so choosing a type can put the caret on the
 	// name it belongs to. Keyed by name rather than index: a rename swaps the
 	// key and an index would then point at a different row.
-	const keyEls = useRef(new Map<string, HTMLElement>());
+	const keyEls = useRef(new Map<string, Focusable>());
 
 	useEffect(() => {
 		const refresh = () => setRows(readRows(doc));
@@ -466,9 +471,9 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 										doc={doc}
 										name={row.key}
 										okf={isOkfMatch(row.key, type, row.value)}
-										elRef={(el) => {
-											if (el) {
-												keyEls.current.set(row.key, el);
+										handleRef={(handle) => {
+											if (handle) {
+												keyEls.current.set(row.key, handle);
 											} else {
 												keyEls.current.delete(row.key);
 											}
