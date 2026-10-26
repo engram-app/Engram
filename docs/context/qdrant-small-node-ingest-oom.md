@@ -18,7 +18,8 @@ Prod Qdrant Cloud mx1 node (0.5 vCPU, 4 GiB), Qdrant 1.19.2. Seen during the v2 
 - Steady state is small: 185k points with the optimizer idle is ~0.3 GB anon. The danger is only the build/merge window.
 
 ## Copy pacing (ClusterDiff)
-- `Engram.Vector.ClusterDiff.run(source, target, opts)` walks PG chunk ids and copies only ids missing on the target, so a rerun skips what is already there. `pause_ms` also slows the skip phase.
+`Engram.Vector.ClusterDiff` and the second cluster slot were removed after the v3 move (engram-app/Engram#2253); a future copy needs a new tool. The pacing numbers below still hold.
+- `Engram.Vector.ClusterDiff.run(source, target, opts)` (removed) walks PG chunk ids and copies only ids missing on the target, so a rerun skips what is already there. `pause_ms` also slows the skip phase.
 - Full speed (2,375 pts/s) tripped backpressure within a minute; ~300 pts/s was fine.
 - Pace by heap in a loop: resume when heap is 35% or below, stop at 65%, then rerun from the cursor in `{:error, _, %{last_chunk_id: id}}` via `after: id` (that cursor lives only in the returned partial report; after a kill, rerun from zero, see above).
 
