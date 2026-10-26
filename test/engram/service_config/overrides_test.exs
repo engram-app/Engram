@@ -181,7 +181,7 @@ defmodule Engram.ServiceConfig.OverridesTest do
   describe "keys this release does not allow" do
     # The retired v5 flags and the Qdrant cluster switch left the allowlist
     # (their behaviour is the code's only one now). A row an old node writes
-    # mid-rollout, or one the cleanup migration has not reached, is ignored.
+    # mid-rollout, or one still in the table (a later contract step deletes them), is ignored.
     # The value is a JSON literal (`~s("v2")`, `false`), as the column stores it.
     defp insert_row(key, json),
       do:
