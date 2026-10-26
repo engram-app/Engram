@@ -98,6 +98,9 @@ function useViewportValue<T>(read: () => T, same: (a: T, b: T) => boolean, enabl
 		// resize fires when the keyboard opens/closes; scroll fires when the
 		// visual viewport pans under it, which changes offsetTop even though
 		// nothing resized. Focus moving is when the keyboard is about to move.
+		// Read once now: a hook re-enabled (crossing the desktop breakpoint)
+		// would otherwise hold the value from mount until the next event.
+		update();
 		vv.addEventListener("resize", settle);
 		vv.addEventListener("scroll", settle);
 		document.addEventListener("focusin", settle);

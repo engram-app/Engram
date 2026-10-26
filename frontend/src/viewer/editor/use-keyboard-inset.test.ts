@@ -117,6 +117,19 @@ describe("useVisualViewportBox", () => {
 		add.mockRestore();
 	});
 
+	// Crossing the desktop breakpoint (iPad split view) re-enables the hook;
+	// it must not keep the box it read at mount until the next event.
+	it("re-reads the viewport when it is re-enabled", () => {
+		setLayoutHeight(800);
+		const vv = stubViewport(800);
+		const { result, rerender } = renderHook(({ on }) => useVisualViewportBox(on), {
+			initialProps: { on: false },
+		});
+		vv.height = 500;
+		rerender({ on: true });
+		expect(result.current).toEqual({ top: 0, height: 500 });
+	});
+
 	it("leaves a simulated keyboard's worth of room for ?keyboard in dev", () => {
 		setLayoutHeight(800);
 		stubViewport(800);
