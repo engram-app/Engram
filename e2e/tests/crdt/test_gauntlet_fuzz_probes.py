@@ -446,7 +446,10 @@ async def test_fuzz_seed6_create_reply_then_update_back_to_back(gauntlet):
 async def test_fuzz_seed11_discovered_note_edit_then_offline_in_debounce(gauntlet):
     """A edits a DISCOVERED note (arrived by catch-up, never opened) while it
     is closed and drops offline inside the debounce; B edits a different
-    line; A reconnects. Merged body and NO conflict copy."""
+    line; A reconnects. Each line exactly once (no doubled body). A conflict
+    copy is recorded and asserted separately, last, so the two outcomes stay
+    distinguishable. Reached: the server's AUTHORITATIVE text lacks A's edit
+    after A went offline (it was not pushed in time)."""
     pair = await gauntlet("gs11")
     a, b = pair.a, pair.b
     root = _root("s11")
@@ -462,11 +465,27 @@ async def test_fuzz_seed11_discovered_note_edit_then_offline_in_debounce(gauntle
     assert await replace_text(a.cdp, path, lines[1], edit_a)
     await asyncio.sleep(0.1)  # inside the debounce: the push has not fired
     a.net.refuse()
+    await asyncio.sleep(2)
+    server_now, _ = server_state(pair.api, root)
+    assert edit_a not in server_now.get(path, ""), (
+        "scenario not reached: A's edit reached the server before A went offline"
+    )
     assert await replace_text(b.cdp, path, lines[3], edit_b)
     await asyncio.sleep(10)
     a.net.restore()
+
     keep = [lines[0], lines[2], lines[4]]
     await await_converged(
         pair.api, pair.vaults, root,
-        Expect({path: [*keep, edit_a, edit_b]}, at_most_once={lines[1], lines[3]}),
+        Expect(
+            {path: [*keep, edit_a, edit_b]},
+            exact=False,
+            at_most_once={lines[1], lines[3]},
+            copy_ok=lambda body: True,  # recorded and asserted separately below
+        ),
     )
+    server, _ = server_state(pair.api, root)
+    stray = sorted(set(server) - {path})
+    logger.warning("GAUNTLET seed11: final files %s", sorted(server))
+    assert all("conflict" in p.lower() for p in stray), f"unexpected notes: {stray}"
+    assert not stray, f"merged correctly, but a conflict copy appeared: {stray}"
