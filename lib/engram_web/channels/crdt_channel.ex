@@ -1332,7 +1332,7 @@ defmodule EngramWeb.CrdtChannel do
   defp fold_row_and_tail(user, vault, note_id, doc) do
     {:ok, result} =
       Repo.with_tenant(user.id, fn ->
-        with {:ok, note} <- Notes.get_note_by_id(user, vault, note_id),
+        with {:ok, note} <- Notes.get_note_row_by_id(user, vault, note_id),
              {:ok, snapshot} <- Engram.Crypto.decrypt_crdt_state(note, user) do
           if is_binary(snapshot), do: :ok = Yex.apply_update(doc, snapshot)
 
@@ -1529,7 +1529,7 @@ defmodule EngramWeb.CrdtChannel do
   # establish emptiness, and the cost of being wrong is one adopt round trip
   # versus a permanently doubled note.
   defp row_state_after_write(user, vault, note_id, expected) do
-    case Notes.get_note_by_id(user, vault, note_id) do
+    case Notes.get_note_row_by_id(user, vault, note_id) do
       {:ok, %{content: ^expected} = row} -> {:stored, row}
       {:ok, %{content: ""} = row} -> {:empty, row}
       {:ok, row} -> {:occupied, row}

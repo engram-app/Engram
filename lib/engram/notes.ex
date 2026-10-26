@@ -3097,18 +3097,50 @@ defmodule Engram.Notes do
 
   @doc """
   Gets a note by path for a user. Returns {:ok, note} or {:error, :not_found}.
+
+  The note carries its CURRENT text: `content`, `content_hash`, `title` and
+  `tags` include edits still in the CRDT tail (see `current_note/3`), so a
+  reader right after a user's keystroke sees them, and the hash it gets is
+  the hash of exactly that text (a `base_hash` for a later write).
   """
   @spec get_note(map(), map(), String.t()) :: {:ok, Note.t()} | {:error, :not_found}
   def get_note(user, vault, path) do
-    case find_note_by_path(user, vault, path) do
-      {:ok, nil} -> {:error, :not_found}
-      {:ok, note} -> {:ok, decrypt_or_raise!(note, user)}
-      _ -> {:error, :not_found}
+    with {:ok, note, tail} <- get_note_with_tail(user, vault, path),
+         do: {:ok, current_note(user, note, tail)}
+  end
+
+  # The row as the user sees it now. An empty tail means the row IS current
+  # (the hot path: no extra work). A tail means edits the checkpoint has not
+  # folded yet, so the body is resolved exactly as the sync change feed
+  # resolves it (`resolve_one/4`, with its tolerances: an unreadable snapshot,
+  # a partial tail replay or an empty projection over a body all serve the
+  # row). The hash, title and tags are then derived from that body the way the
+  # checkpoint derives them (`CrdtCheckpoint.do_markdown_checkpoint/7`), so a
+  # checkpoint of identical text stores the hash this read returned. Unlike the
+  # feed, whose `content_hash` stays the row's, a reader's hash must name the
+  # text it was served: it comes back as write_note's `base_hash`.
+  defp current_note(_user, note, []), do: note
+
+  # A structural doc (`.canvas`) never projects to `content`.
+  defp current_note(user, note, tail) do
+    if CrdtBridge.markdown_path?(note.path), do: rebuilt_note(user, note, tail), else: note
+  end
+
+  defp rebuilt_note(user, note, tail) do
+    :telemetry.execute([:engram, :notes, :read_rebuild], %{count: 1}, %{})
+    %Note{content: text} = resolve_one(user, note, note, tail)
+
+    if text == note.content do
+      note
+    else
+      {:ok, hash} = content_hash(user, text)
+      {title, tags} = Helpers.extract_title_and_tags(text, note.path)
+      %{note | content: text, content_hash: hash, title: title, tags: tags}
     end
   end
 
-  # get_note/3 plus the note's tail rows, from the same statement (see
-  # with_tail/1).
+  # The note row (facade content) plus its tail rows, from the same statement
+  # (see with_tail/1).
   defp get_note_with_tail(user, vault, path) do
     with {:ok, query} <- note_by_path_query(user, vault, path, :raw),
          {:ok, {%Note{} = note, tail}} <-
@@ -3349,9 +3381,10 @@ defmodule Engram.Notes do
   ops committed since the last checkpoint are part of the current text.
 
   Called per debounced extraction by the link-extraction worker
-  (`Engram.Workers.ExtractNoteLinks`), so it is no longer off the hot path —
-  it decrypts and rebuilds a Yjs doc, so plain reads should still use
-  `get_note/3` instead.
+  (`Engram.Workers.ExtractNoteLinks`). Plain reads use `get_note/3` /
+  `get_note_by_id/3`, which already serve this text (they rebuild only when
+  the tail is non-empty, from the row and tail read in one statement), so they
+  need no second read through here.
   """
   @spec authoritative_content(map(), Note.t()) :: {:ok, String.t()} | {:error, term()}
   def authoritative_content(user, %Note{} = note) do
@@ -3432,6 +3465,17 @@ defmodule Engram.Notes do
   """
   @spec get_note_by_id(map(), map(), String.t()) :: {:ok, Note.t()} | {:error, :not_found}
   def get_note_by_id(user, vault, id) when is_binary(id) do
+    fetch_note_by_id(user, vault, id, :current)
+  end
+
+  @doc """
+  `get_note_by_id/3` as STORED: `content`/`content_hash` are the facade the
+  last checkpoint wrote, without the tail. For CRDT internals that fold the
+  snapshot and tail themselves, or compare against what was written to the
+  row; a user-facing read wants `get_note_by_id/3`.
+  """
+  @spec get_note_row_by_id(map(), map(), String.t()) :: {:ok, Note.t()} | {:error, :not_found}
+  def get_note_row_by_id(user, vault, id) when is_binary(id) do
     fetch_note_by_id(user, vault, id, :all)
   end
 
@@ -3653,17 +3697,24 @@ defmodule Engram.Notes do
         case fields do
           :meta -> from(n in base, select: struct(n, @note_meta_fields))
           :all -> NoteBody.select_note(base)
+          :current -> with_tail(base)
         end
 
       {:ok, result} =
         Repo.with_tenant(user.id, fn ->
           case Repo.one(query) do
             %Note{} = note -> {:ok, decrypt_or_raise!(note, user)}
+            {%Note{}, _ids, _cts, _nonces} = row -> {:ok, tail_result(row)}
             nil -> {:error, :not_found}
           end
         end)
 
-      result
+      # The rebuild runs after the transaction, so no pooled connection is held
+      # across a doc rebuild.
+      case result do
+        {:ok, {note, tail}} -> {:ok, current_note(user, decrypt_or_raise!(note, user), tail)}
+        other -> other
+      end
     end
   end
 
@@ -4379,7 +4430,7 @@ defmodule Engram.Notes do
   @spec delete_note_by_id(Engram.Accounts.User.t(), map(), String.t(), keyword()) ::
           :ok | {:error, :not_found}
   def delete_note_by_id(user, vault, id, opts \\ []) when is_binary(id) do
-    case get_note_by_id(user, vault, id) do
+    case get_note_row_by_id(user, vault, id) do
       {:ok, note} -> delete_note(user, vault, note.path, opts)
       {:error, :not_found} -> {:error, :not_found}
     end
@@ -5232,7 +5283,7 @@ defmodule Engram.Notes do
     candidates =
       Enum.filter(
         notes,
-        &(&1.kind == "note" and markdown_path?(&1.path) and is_nil(&1.deleted_at))
+        &(&1.kind == "note" and CrdtBridge.markdown_path?(&1.path) and is_nil(&1.deleted_at))
       )
 
     case candidates do
@@ -5491,10 +5542,6 @@ defmodule Engram.Notes do
         fresh
     end
   end
-
-  # Same rule `CrdtCheckpoint.markdown?/1` uses: only a `.md` note keeps its
-  # body in the markdown Y.Text that `project_doc/1` reads.
-  defp markdown_path?(path), do: is_binary(path) and String.ends_with?(path, ".md")
 
   # `fields: :meta` promises `content: nil` AND the row's `content_hash` — its
   # projection selects the hash on purpose, and a hash-free feed reads as "every
@@ -7630,7 +7677,12 @@ defmodule Engram.Notes do
 
   defp validate_path(path), do: {:ok, path}
 
-  defp content_hash(user, content) do
+  @doc """
+  The `content_hash` of `content` for `user`: what reads return and what a
+  writer's `base_hash` is compared against.
+  """
+  @spec content_hash(map(), String.t()) :: {:ok, String.t()} | {:error, term()}
+  def content_hash(user, content) do
     with {:ok, key} <- Crypto.dek_content_hash_key(user) do
       {:ok, Crypto.hmac_content_hash(key, content)}
     end

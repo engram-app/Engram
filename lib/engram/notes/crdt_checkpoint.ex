@@ -254,7 +254,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
                 interleave_hook(:after_row_read)
 
                 result =
-                  if markdown?(note.path) do
+                  if CrdtBridge.markdown_path?(note.path) do
                     do_markdown_checkpoint(note, vault_id, note_id, live_state, prune, opts, user)
                   else
                     do_structural_checkpoint(note, vault_id, note_id, live_state, prune, user)
@@ -406,11 +406,6 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
   defp live_state(state) when is_binary(state), do: {:ok, state}
   defp live_state(%Yex.Doc{} = doc), do: encode(doc)
-
-  # A CRDT room only ever holds a markdown (`.md`) doc or a structural doc
-  # (`.canvas`). Only markdown projects to/from `notes.content`. Mirrors
-  # CrdtDeliver's `.md` gate.
-  defp markdown?(path), do: is_binary(path) and String.ends_with?(path, ".md")
 
   # Markdown checkpoint (unchanged behaviour): materialize the projected body into
   # content/content_hash/title/tags, bump version/seq on a real change, else

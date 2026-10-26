@@ -819,6 +819,15 @@ defmodule Engram.MCP.Tools do
     }
   end
 
+  # What a read returns as `content_hash` and write_note takes back as
+  # `base_hash`. One definition so the two cannot describe it differently.
+  @content_hash_prop %{
+    "type" => ["string", "null"],
+    "description" =>
+      "Hash of exactly the content returned (the whole note, even for a section read). " <>
+        "Pass it to write_note as base_hash so the write refuses if the note changed since."
+  }
+
   defp get_note_def do
     %{
       name: "get_note",
@@ -842,7 +851,8 @@ defmodule Engram.MCP.Tools do
           "title" => %{"type" => ["string", "null"]},
           "folder" => %{"type" => "string"},
           "tags" => %{"type" => "array", "items" => %{"type" => "string"}},
-          "content" => %{"type" => "string"}
+          "content" => %{"type" => "string"},
+          "content_hash" => @content_hash_prop
         },
         "required" => ["path", "title", "folder", "tags", "content"]
       },
@@ -912,6 +922,7 @@ defmodule Engram.MCP.Tools do
                   "type" => "string",
                   "description" => "Absent when outline: true was requested"
                 },
+                "content_hash" => @content_hash_prop,
                 "outline" => %{
                   "type" => "array",
                   "description" =>
@@ -1007,7 +1018,9 @@ defmodule Engram.MCP.Tools do
           "To add text without touching existing content use append_to_note. To change one " <>
           "passage, or one heading's section, use edit_note. To create a " <>
           "note with no risk of overwriting an existing one use create_note; create_note " <>
-          "takes a title and picks the folder, not a path.",
+          "takes a title and picks the folder, not a path. When replacing a note you read, " <>
+          "pass its content_hash from get_notes as base_hash: if the user edited it since, " <>
+          "the write is refused instead of erasing their edit.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -1015,7 +1028,14 @@ defmodule Engram.MCP.Tools do
             "type" => "string",
             "description" => "Full path for the note (e.g. \"Health/New Note.md\")"
           },
-          "content" => %{"type" => "string", "description" => "Full markdown content"}
+          "content" => %{"type" => "string", "description" => "Full markdown content"},
+          "base_hash" => %{
+            "type" => "string",
+            "description" =>
+              "content_hash from your get_notes read of this note. If the note changed " <>
+                "since, nothing is written and you get a version_conflict: read it again " <>
+                "and retry. Omit only to overwrite whatever the note holds."
+          }
         },
         "required" => ["path", "content"]
       },

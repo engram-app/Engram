@@ -438,7 +438,7 @@ defmodule EngramWeb.NotesController do
     vault = conn.assigns.current_vault
 
     with {:ok, id} <- Ecto.UUID.cast(id_str),
-         {:ok, _note} <- Notes.get_note_by_id(user, vault, id) do
+         {:ok, _note} <- Notes.get_note_row_by_id(user, vault, id) do
       json(conn, %{backlinks: Links.backlinks_for_note(user, id)})
     else
       :error -> conn |> put_status(400) |> json(%{error: "invalid id"})

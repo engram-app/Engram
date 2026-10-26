@@ -18,9 +18,16 @@ defmodule Engram.PromEx.Notes do
       so its magnitude over-counts notes. For a true corrupt-note count use
       `Engram.Notes.Utf8Backfill.scan/1`.
 
+    * `[:engram, :notes, :read_rebuild]`: `%{count: 1}`, no metadata. A
+      user-facing read (`Notes.get_note/3`, `get_note_by_id/3`) found
+      un-checkpointed tail rows and rebuilt the note's text from its CRDT
+      snapshot and tail (a decrypt plus a Yjs doc rebuild). Its rate against
+      the read rate is the share of reads paying that cost.
+
   Metrics:
 
     * `engram_prom_ex_notes_utf8_scrub_total` — tags `[:boundary]`.
+    * `engram_prom_ex_notes_read_rebuild_total`: no tags.
 
   Also declared in `EngramWeb.Telemetry.metrics/0`, but that list feeds
   LiveDashboard only — this plugin is what puts it on the scraped `/metrics`
@@ -33,6 +40,7 @@ defmodule Engram.PromEx.Notes do
   use PromEx.Plugin
 
   @utf8_scrub_event [:engram, :notes, :utf8_scrub]
+  @read_rebuild_event [:engram, :notes, :read_rebuild]
 
   @impl true
   def event_metrics(opts) do
@@ -48,6 +56,11 @@ defmodule Engram.PromEx.Notes do
           description:
             "Invalid-UTF-8 scrubs by boundary (write | read | search | backfill | broadcast).",
           tags: [:boundary]
+        ),
+        counter(
+          metric_prefix ++ [:read_rebuild, :total],
+          event_name: @read_rebuild_event,
+          description: "Note reads that rebuilt the text from the CRDT snapshot and tail."
         )
       ]
     )
