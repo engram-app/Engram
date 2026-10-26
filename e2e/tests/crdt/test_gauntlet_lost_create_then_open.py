@@ -84,18 +84,26 @@ async def test_lost_first_create_then_open_before_retry(gauntlet):
         opened = await b.cdp.open_note_in_live_preview(path)
         assert opened == path, opened
         await asyncio.sleep(3)  # let the editor bind before the retry goes out
+        opened_at = await b.cdp.evaluate("window.__e2eOpenedAt = Date.now()")
         await b.cdp.evaluate("window.__e2eReleaseCreates = true")
         await asyncio.sleep(5)
     finally:
         creates = await b.cdp.evaluate(_DISARM)
     logger.warning("GAUNTLET lost-create: crdt_create calls on B %s", creates)
+    calls = json.loads(creates)
+    # The scenario only holds if the durable retry really was a crdt_create
+    # (held by the hook until after the editor bound); otherwise this proves
+    # a different path. Each call's time vs the open is in the message.
+    assert calls and calls[0]["path"] == path, calls
+    assert len(calls) >= 2, f"no crdt_create retry at all: {calls}"
+    retry_vs_open = [c["at"] - opened_at for c in calls[1:]]
 
     try:
         await await_converged(pair.api, pair.vaults, root, Expect({path: [f"body-{root}"]}), deadline_s=180)
     except AssertionError as e:
         server = pair.api.get_note(path)
         raise AssertionError(
-            f"{e}\ncrdt_create calls on B: {json.loads(creates)}\n"
+            f"{e}\ncrdt_create calls on B: {calls} (retry ms after open: {retry_vs_open})\n"
             f"server content: {server and server.get('content')!r}\n"
             f"B disk: {(b.vault / path).read_text() if (b.vault / path).exists() else None!r}"
         ) from None
