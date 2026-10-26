@@ -14,6 +14,7 @@ import math
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from helpers.cdp import PLUGIN_PATH
 from helpers.room_probe import RoomStarts, arm_room_starts, read_room_starts
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,25 @@ async def append_lines(cdp, edits: dict[str, str]) -> list[str]:
             await_promise=True,
         )
     return missing
+
+
+async def replace_text(cdp, path: str, old: str, new: str) -> bool:
+    """Replace the first `old` with `new` in one note via vault.process.
+    False if the note or the text is not on this device."""
+    return await cdp.evaluate(
+        f"""(async () => {{
+            const f = app.vault.getFileByPath({json.dumps(path)});
+            if (!f) return false;
+            let hit = false;
+            await app.vault.process(f, s => {{
+                if (!s.includes({json.dumps(old)})) return s;
+                hit = true;
+                return s.replace({json.dumps(old)}, {json.dumps(new)});
+            }});
+            return hit;
+        }})()""",
+        await_promise=True,
+    )
 
 
 async def rename(cdp, old: str, new: str) -> bool:
@@ -176,3 +196,66 @@ class RoomBudget:
                 f"({d}), over the {cap} a {devices}-device heal budget allows"
             )
         return None
+
+
+# -- crdt_create interception -------------------------------------------------
+#
+# Fault injection on ONE channel request type, the way a lossy link or a slow
+# server would shape it, without touching the rest of the socket. Each
+# crdt_create the device makes takes the next action from `plan` (then
+# `rest`). Actions:
+#   pass            send normally
+#   drop            never send; reject after the request's own timeout (a lost push)
+#   delay:<ms>      send after <ms>
+#   hold            send once window.__e2eRelease is set
+#   noreply         send, but never resolve (the server stores it, the ack is lost)
+#   lateack:<ms>    send, resolve the reply <ms> late
+# Every call is recorded in window.__e2eCreates ({path, action, at}).
+
+_HOOK = """(() => {
+    const ch = %(plugin)s.noteStream;
+    const orig = ch.__e2eOrigSendRequest || ch.sendRequest.bind(ch);
+    ch.__e2eOrigSendRequest = orig;
+    const plan = %(plan)s, rest = %(rest)s;
+    window.__e2eCreates = []; window.__e2eRelease = false;
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    ch.sendRequest = (event, payload, timeoutMs = 10000) => {
+        if (event !== 'crdt_create') return orig(event, payload, timeoutMs);
+        const i = window.__e2eCreates.length;
+        const action = i < plan.length ? plan[i] : rest;
+        window.__e2eCreates.push({path: payload.path, action, at: Date.now()});
+        const [kind, arg] = action.split(':');
+        const ms = Number(arg || 0);
+        if (kind === 'drop') return sleep(timeoutMs).then(() => { throw new Error('sendRequest timeout: crdt_create'); });
+        if (kind === 'delay') return sleep(ms).then(() => orig(event, payload, timeoutMs));
+        if (kind === 'hold') return (async () => { while (!window.__e2eRelease) await sleep(100); return orig(event, payload, timeoutMs); })();
+        if (kind === 'noreply') { orig(event, payload, timeoutMs).catch(() => {}); return new Promise(() => {}); }
+        if (kind === 'lateack') return orig(event, payload, timeoutMs).then(async r => { await sleep(ms); return r; });
+        return orig(event, payload, timeoutMs);
+    };
+    return 'armed';
+})()"""
+
+_UNHOOK = """(() => {
+    const ch = %(plugin)s.noteStream;
+    if (ch.__e2eOrigSendRequest) { ch.sendRequest = ch.__e2eOrigSendRequest; delete ch.__e2eOrigSendRequest; }
+    window.__e2eRelease = true;
+    return JSON.stringify(window.__e2eCreates || []);
+})()"""
+
+
+async def hook_creates(cdp, plan: list[str], rest: str = "pass") -> None:
+    out = await cdp.evaluate(_HOOK % {"plugin": PLUGIN_PATH, "plan": json.dumps(plan), "rest": json.dumps(rest)})
+    assert out == "armed", out
+
+
+async def creates_seen(cdp) -> list[dict]:
+    return json.loads(await cdp.evaluate("JSON.stringify(window.__e2eCreates || [])"))
+
+
+async def release_creates(cdp) -> None:
+    await cdp.evaluate("window.__e2eRelease = true")
+
+
+async def unhook_creates(cdp) -> list[dict]:
+    return json.loads(await cdp.evaluate(_UNHOOK % {"plugin": PLUGIN_PATH}))
