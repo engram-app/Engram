@@ -298,33 +298,41 @@ class CdpClient:
         with a NAMED failure. On timeout the socket is dropped so a late
         reply for this msg id cannot be consumed by the next evaluate.
         """
+        result = await self.command(
+            "Runtime.evaluate",
+            {"expression": expr, "returnByValue": True, "awaitPromise": await_promise},
+            timeout=timeout,
+            label=f"evaluate (awaitPromise={await_promise}): {expr[:200]}",
+        )
+        result = result.get("result", {})
+        if result.get("type") == "undefined":
+            return None
+        if "value" in result:
+            return result["value"]
+        if result.get("subtype") == "error":
+            raise CdpError(f"JS error: {result.get('description', result)}")
+        return result
+
+    async def command(
+        self, method: str, params: dict | None = None, *, timeout: float = 120, label: str = ""
+    ) -> dict:
+        """Send one CDP command to the app window and return its `result`.
+
+        `evaluate` is this plus result unwrapping; other domains (e.g.
+        `Page.setWebLifecycleState`) call it directly. No CDP events are
+        enabled on this socket, so every frame read is the reply to the one
+        command in flight.
+        """
         self._msg_id += 1
         msg_id = self._msg_id
+        what = label or method
 
-        async def _send_recv() -> Any:
-            msg = {
-                "id": msg_id,
-                "method": "Runtime.evaluate",
-                "params": {
-                    "expression": expr,
-                    "returnByValue": True,
-                    "awaitPromise": await_promise,
-                },
-            }
-            await self._ws.send(json.dumps(msg))
+        async def _send_recv() -> dict:
+            await self._ws.send(json.dumps({"id": msg_id, "method": method, "params": params or {}}))
             resp = json.loads(await self._ws.recv())
-
             if "error" in resp:
                 raise CdpError(f"CDP error: {resp['error']}")
-
-            result = resp.get("result", {}).get("result", {})
-            if result.get("type") == "undefined":
-                return None
-            if "value" in result:
-                return result["value"]
-            if result.get("subtype") == "error":
-                raise CdpError(f"JS error: {result.get('description', result)}")
-            return result
+            return resp.get("result", {})
 
         # `timeout` is a TOTAL budget across the initial attempt and the one
         # connection-level retry: a late first-attempt failure must not double
@@ -337,8 +345,7 @@ class CdpClient:
         except asyncio.TimeoutError:
             await self._close()
             raise CdpError(
-                f"CDP evaluate timed out after {timeout}s "
-                f"(awaitPromise={await_promise}) on port {self.port}: {expr[:200]}"
+                f"CDP {what} timed out after {timeout}s on port {self.port}"
             ) from None
         except CdpError:
             raise
@@ -352,9 +359,8 @@ class CdpClient:
             except asyncio.TimeoutError:
                 await self._close()
                 raise CdpError(
-                    f"CDP evaluate timed out after {timeout}s total (retry window "
-                    f"{remaining:.0f}s, awaitPromise={await_promise}) on port "
-                    f"{self.port}: {expr[:200]}"
+                    f"CDP {what} timed out after {timeout}s total (retry window "
+                    f"{remaining:.0f}s) on port {self.port}"
                 ) from None
 
     async def wait_for_plugin_ready(self, timeout: float = 30) -> None:
@@ -1453,6 +1459,73 @@ class CdpClient:
                 return
         logger.warning("Stream did not reconnect within 10s on CDP port %d", self.port)
 
+
+    async def set_visibility(self, state: str) -> None:
+        """Fire the page-visibility transition a phone fires on lock/unlock.
+
+        The plugin's mobile lifecycle hangs off `visibilitychange`: hidden
+        flushes and persists, visible runs `noteStream.onResume()`, which
+        probes a socket that may have died during the suspend. Electron under
+        Xvfb never changes visibility on its own, so the state is overridden
+        on `document` and the event dispatched, which is all the handler reads.
+        """
+        await self.evaluate(
+            f"""(() => {{
+                window.__e2eVisibility = {json.dumps(state)};
+                for (const prop of ['visibilityState', 'hidden']) {{
+                    Object.defineProperty(document, prop, {{
+                        configurable: true,
+                        get: () => prop === 'hidden'
+                            ? window.__e2eVisibility === 'hidden'
+                            : window.__e2eVisibility,
+                    }});
+                }}
+                document.dispatchEvent(new Event('visibilitychange'));
+                return document.visibilityState;
+            }})()"""
+        )
+
+    async def suspend(self) -> None:
+        """App goes to the background: hidden, then the renderer is FROZEN.
+
+        `Page.setWebLifecycleState frozen` stops all JS (timers, socket
+        handlers, heartbeats) the way iOS suspends a backgrounded WKWebView.
+        Pair with resume().
+        """
+        await self.set_visibility("hidden")
+        await self.command("Page.setWebLifecycleState", {"state": "frozen"})
+
+    async def resume(self) -> None:
+        """Back to the foreground: unfreeze, then visible (fires onResume)."""
+        await self.command("Page.setWebLifecycleState", {"state": "active"})
+        await self.set_visibility("visible")
+
+    async def emulate_mobile(self, timeout: float = 60) -> None:
+        """Reload Obsidian in its built-in mobile emulation and wait for the plugin.
+
+        `app.emulateMobile(true)` sets `Platform.isMobile` (and clears
+        `isDesktop`) at boot and refuses Node modules to plugins, as on a
+        phone. It does NOT make `isIosApp` true and does not swap in iOS
+        networking or storage: requestUrl, WebSocket and IndexedDB are still
+        Electron's.
+        """
+        try:
+            await self.evaluate("app.emulateMobile(true)", timeout=10)
+        except Exception:  # noqa: BLE001 - the reload tears the socket down mid-reply
+            pass
+        await self._close()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                if await self.evaluate(
+                    "document.body.classList.contains('emulate-mobile') && "
+                    f"!!{PLUGIN_PATH}?.syncEngine?.ready"
+                ):
+                    return
+            except Exception:  # noqa: BLE001 - renderer reloading
+                pass
+            await asyncio.sleep(1)
+        raise TimeoutError(f"plugin not ready in mobile emulation after {timeout}s")
 
     async def simulate_offline(self) -> None:
         """Override API methods to throw, simulating network failure.

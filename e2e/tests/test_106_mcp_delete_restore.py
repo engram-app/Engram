@@ -30,12 +30,6 @@ TINY_PNG = (
 SETTLE_SECONDS = 5
 
 
-def _structured(response: dict) -> dict:
-    result = response["result"]
-    assert not result.get("isError"), result["content"][0]["text"]
-    return result["structuredContent"]
-
-
 def _dump_receiver_logs(api_sync, vault, since: str) -> None:
     """Print the receiver's own client log since the delete, for a failure.
 
@@ -74,9 +68,7 @@ async def test_mcp_delete_folder_then_restore_reappears(vault_b, cdp_b, api_sync
     assert wait_for_binary_delivery(vault_b, att, api_sync) == TINY_PNG
 
     since = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    resp, status = api_sync.mcp_call("delete_folder", {"folder": folder, "recursive": True})
-    assert status == 200
-    deleted = _structured(resp)
+    deleted = api_sync.mcp_tool("delete_folder", {"folder": folder, "recursive": True})
     assert deleted["notes"] == 3 and deleted["attachments"] == 1, deleted
     op_id = deleted["delete_op_id"]
     assert op_id and deleted["restorable_until"]
@@ -84,9 +76,7 @@ async def test_mcp_delete_folder_then_restore_reappears(vault_b, cdp_b, api_sync
     for path in [*notes, att]:
         wait_for_file_gone(vault_b, path)
 
-    resp, status = api_sync.mcp_call("restore_deleted", {"op_id": op_id})
-    assert status == 200
-    restored = _structured(resp)
+    restored = api_sync.mcp_tool("restore_deleted", {"op_id": op_id})
     assert restored["notes"] == 3, restored
     assert restored["attachments"] == 1, restored
     assert restored["skipped"] == [], restored
@@ -109,6 +99,5 @@ async def test_mcp_delete_folder_then_restore_reappears(vault_b, cdp_b, api_sync
         assert (vault_b / path).read_text(encoding="utf-8").count(content.splitlines()[1]) == 1
 
     # A second restore brings back nothing more (idempotent).
-    resp, _ = api_sync.mcp_call("restore_deleted", {"op_id": op_id})
-    again = _structured(resp)
+    again = api_sync.mcp_tool("restore_deleted", {"op_id": op_id})
     assert again["notes"] == 0 and again["attachments"] == 0, again

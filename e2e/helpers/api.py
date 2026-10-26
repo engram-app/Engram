@@ -327,6 +327,22 @@ class ApiClient:
         )
         return resp.json(), resp.status_code
 
+    def mcp_tool(self, tool_name: str, arguments: dict) -> dict:
+        """mcp_call that must succeed; returns the tool's structuredContent."""
+        out = self.mcp_try(tool_name, arguments)
+        assert "error" not in out, f"{tool_name}: {out['error']}"
+        return out
+
+    def mcp_try(self, tool_name: str, arguments: dict) -> dict:
+        """mcp_call returning structuredContent, or {"error": text} when the
+        TOOL refused (isError). A transport failure still raises."""
+        resp, status = self.mcp_call(tool_name, arguments)
+        assert status == 200, f"{tool_name} -> HTTP {status}: {resp}"
+        result = resp["result"]
+        if result.get("isError"):
+            return {"error": result["content"][0]["text"]}
+        return result["structuredContent"]
+
     def search_response(self, query: str, **body_extra) -> requests.Response:
         """POST /search, returning the raw response instead of raising.
 
