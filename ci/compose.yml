@@ -194,8 +194,8 @@ services:
       # nothing. The sweep interval matters as much as the cap — it defaults to
       # 30s, and most e2e tests finish inside that, so a low cap alone would arm
       # the LRU and never fire it.
-      CRDT_MAX_RESIDENT_ROOMS: ${CRDT_MAX_RESIDENT_ROOMS:-3}
-      CRDT_LRU_SWEEP_MS: ${CRDT_LRU_SWEEP_MS:-3000}
+      CRDT_MAX_RESIDENT_ROOMS: ${CRDT_MAX_RESIDENT_ROOMS:-64}
+      CRDT_LRU_SWEEP_MS: ${CRDT_LRU_SWEEP_MS:-30000}
       # Free-tier launch test_72_cancel_to_free_overlimit signs a synthetic
       # subscription.canceled webhook with this fixed secret so the e2e
       # exercises the real verify_signature → upsert_from_paddle_event path
