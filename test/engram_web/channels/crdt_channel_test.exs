@@ -351,6 +351,62 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_receive {:genesis_reply, %{outcome: :occupied, client: :obsidian_sync}, %{count: 1}}
     end
 
+    # genesis_reply_tags/0 is hand-kept and seeds the 0 series. Every pair a
+    # real create path emits must be in it, or that pair skips the seed and
+    # its first increment after a deploy is invisible to increase().
+    test "every pair emitted by every create path, both clients, is a seeded tag pair", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, _, web} =
+        subscribe_and_join(
+          user_socket(user),
+          EngramWeb.CrdtChannel,
+          "crdt:#{user.id}:#{vault.id}",
+          %{
+            "crdt_proto" => 2,
+            "client_type" => "web"
+          }
+        )
+
+      Sandbox.allow(Repo, self(), web.channel_pid)
+      seeded = Engram.PromEx.Crdt.genesis_reply_tags()
+
+      for {sock, client} <- [{socket, "obsidian"}, {web, "web"}] do
+        {:ok, held} =
+          Notes.upsert_note(user, vault, %{"path" => "Notes/#{client}-held.md", "content" => "x"},
+            actor: "api"
+          )
+
+        pushes = [
+          # stored
+          %{
+            "doc_id" => Ecto.UUID.generate(),
+            "path" => "Notes/#{client}-s.md",
+            "b64" => frame_for_content("body")
+          },
+          # absent
+          %{"doc_id" => Ecto.UUID.generate(), "path" => "Notes/#{client}-a.md"},
+          # occupied: duplicate create over a row that holds a body
+          %{"doc_id" => held.id, "path" => "Notes/#{client}-held.md"},
+          # occupied: ADOPT, path owned by another note
+          %{
+            "doc_id" => Ecto.UUID.generate(),
+            "path" => "Notes/#{client}-held.md",
+            "b64" => frame_for_content("ours")
+          }
+        ]
+
+        for payload <- pushes do
+          ref = push(sock, "crdt_create", payload)
+          assert_reply ref, :ok, _
+          assert_receive {:genesis_reply, meta, _}
+          assert meta in seeded, "emitted #{inspect(meta)} is not in genesis_reply_tags/0"
+        end
+      end
+    end
+
     test "metadata carries only the two bounded tags, never an id", %{socket: socket} do
       ref =
         push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "Notes/r.md"})

@@ -151,6 +151,18 @@ defmodule Engram.PromEx.Crdt do
   @update_event [:engram, :crdt, :update_appended]
   @sweep_event [:engram, :crdt, :state_sweep]
 
+  @doc """
+  Every `{outcome, client}` tag pair `EngramWeb.CrdtChannel` emits on
+  `[:engram, :crdt, :genesis_reply]`. `Engram.PromEx.ZeroInit` seeds each at 0
+  so the first `occupied` after a deploy shows in `increase()`. A channel test
+  asserts every emitted pair is listed here.
+  """
+  def genesis_reply_tags do
+    for outcome <- [:stored, :absent, :occupied],
+        client <- [:web, :obsidian_sync],
+        do: %{outcome: outcome, client: client}
+  end
+
   @impl true
   def event_metrics(opts) do
     otp_app = Keyword.fetch!(opts, :otp_app)

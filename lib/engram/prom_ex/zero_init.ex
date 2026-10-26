@@ -94,7 +94,7 @@ defmodule Engram.PromEx.ZeroInit do
           do: {@family_revoked, %{count: 0}, %{client_agent: agent, reason: reason}}
 
     genesis_reply_series =
-      for tags <- EngramWeb.CrdtChannel.genesis_reply_tags(),
+      for tags <- Engram.PromEx.Crdt.genesis_reply_tags(),
           do: {@genesis_reply, %{count: 0}, tags}
 
     search_series ++
