@@ -2,6 +2,9 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 import { PropertyField } from "./property-fields";
 
+/** A YAML block scalar: `desc: |` keeps one trailing newline. */
+const BLOCK_SCALAR = "a\nb\n";
+
 /** Values are buttons until tapped; tap one open and return the live input. */
 function tapToEdit(label = "x value"): HTMLInputElement {
 	fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${label}`) }));
@@ -110,6 +113,29 @@ describe("PropertyField", () => {
 		render(<PropertyField type="text" value={stored} label="x" onCommit={onCommit} />);
 		fireEvent.blur(tapToEdit());
 		expect(onCommit).not.toHaveBeenCalled();
+	});
+
+	test("an untouched open value does not overwrite a remote change", () => {
+		const onCommit = vi.fn();
+		const { rerender } = render(
+			<PropertyField type="text" value="old" label="x" onCommit={onCommit} />,
+		);
+		const input = tapToEdit();
+		rerender(<PropertyField type="text" value="remote" label="x" onCommit={onCommit} />);
+		fireEvent.blur(input);
+		expect(onCommit).not.toHaveBeenCalled();
+		expect(screen.getByRole("button", { name: /^x value/ })).toHaveTextContent("remote");
+	});
+
+	test("a multi-line value edits in a textarea and keeps its newlines", () => {
+		const onCommit = vi.fn();
+		render(<PropertyField type="text" value={BLOCK_SCALAR} label="x" onCommit={onCommit} />);
+		const box = tapToEdit();
+		expect(box.tagName).toBe("TEXTAREA");
+		expect(box.className).toMatch(/text-base/);
+		fireEvent.change(box, { target: { value: "a\nbc\n" } });
+		fireEvent.blur(box);
+		expect(onCommit).toHaveBeenCalledWith("a\nbc\n");
 	});
 
 	test("an edit is committed verbatim, without trimming", () => {

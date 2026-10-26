@@ -2,6 +2,9 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { RenameInput } from "./rename-input";
 
+/** A YAML block scalar: `desc: |` keeps one trailing newline. */
+const BLOCK_SCALAR = "a\nb\n";
+
 describe("RenameInput", () => {
 	it("autofocuses and selects the whole name", () => {
 		render(<RenameInput initial="my-note" kind="file" onCommit={() => {}} onCancel={() => {}} />);
@@ -238,6 +241,45 @@ describe("RenameInput", () => {
 		expect(input.value).toBe("draft");
 		expect(input.selectionStart).toBe(5);
 		expect(input.selectionEnd).toBe(5);
+	});
+
+	// An untouched draft must not write the value it opened with over a
+	// remote change that landed while it was open.
+	it("cancels an untouched draft even after `initial` changed under it", () => {
+		const onCommit = vi.fn();
+		const onCancel = vi.fn();
+		const { rerender } = render(
+			<RenameInput initial="old" commitOnBlur onCommit={onCommit} onCancel={onCancel} />,
+		);
+		rerender(<RenameInput initial="remote" commitOnBlur onCommit={onCommit} onCancel={onCancel} />);
+		fireEvent.blur(screen.getByRole("textbox"));
+		expect(onCommit).not.toHaveBeenCalled();
+		expect(onCancel).toHaveBeenCalled();
+	});
+
+	// Block-scalar values carry newlines; an <input> strips them on the first
+	// keystroke, so a multi-line box is a textarea.
+	it("edits a multi-line value in a textarea, newlines kept", () => {
+		const onCommit = vi.fn();
+		render(
+			<RenameInput
+				initial={BLOCK_SCALAR}
+				multiline
+				trim={false}
+				commitOnBlur
+				onCommit={onCommit}
+				onCancel={() => {}}
+			/>,
+		);
+		const box = screen.getByRole("textbox");
+		expect(box.tagName).toBe("TEXTAREA");
+		expect(box).toHaveValue("a\nb\n");
+		// Enter is a newline here, not a commit.
+		fireEvent.keyDown(box, { key: "Enter" });
+		expect(onCommit).not.toHaveBeenCalled();
+		fireEvent.change(box, { target: { value: "a\nbc\n" } });
+		fireEvent.blur(box);
+		expect(onCommit).toHaveBeenCalledWith("a\nbc\n");
 	});
 
 	it("renders inline error when error prop set", () => {

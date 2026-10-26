@@ -74,6 +74,8 @@ function ScalarField({ type, value, onCommit, label }: FieldProps) {
 			type={htmlInputType(type)}
 			allowEmpty
 			trim={false}
+			// A YAML block scalar holds newlines an <input> would strip.
+			multiline={type === "text" && initial.includes("\n")}
 			commitOnBlur
 			commitOnWindowBlur
 			className={inputCls}
