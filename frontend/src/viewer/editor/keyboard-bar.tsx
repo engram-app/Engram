@@ -250,7 +250,9 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 		if (!visible) {
 			return;
 		}
-		return () => document.documentElement.style.removeProperty(TOOLBAR_OFFSET_VAR);
+		return () => {
+			document.documentElement.style.removeProperty(TOOLBAR_OFFSET_VAR);
+		};
 	}, [visible]);
 
 	if (!visible) {
