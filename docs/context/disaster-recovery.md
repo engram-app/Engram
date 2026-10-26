@@ -1,6 +1,6 @@
 # Context Doc: Disaster Recovery & Backup Readiness
 
-_Last verified: 2026-09-05 (live AWS + Qdrant Cloud read, launch-minimum)_
+_Last verified: 2026-09-05 (live AWS + Qdrant Cloud read, launch-minimum). Qdrant section updated 2026-10-25 from TF._
 
 > **Why this exists:** "A backup that's never been restored isn't a backup." This is the launch-minimum DR runbook for engram prod (AWS account `751667630925`, region `us-east-1`). One paragraph per failure scenario; it **links** to the existing rotation runbooks rather than restating them. Tracks issue #255.
 
@@ -10,7 +10,7 @@ _Last verified: 2026-09-05 (live AWS + Qdrant Cloud read, launch-minimum)_
 |-------|----------|------------------|------------------------------|
 | **RDS Postgres** | `engram-prod` (PG 18.3, db.t4g.small, 20 GB, single-AZ) | Daily automated snapshots + PITR, 7-day retention, window 08:00–09:00 UTC | ✅ retention = 7d; **restore drill PASSED — RTO 7m34s, PITR RPO ~4 min, schema byte-identical** |
 | **S3 attachments** | `engram-saas-prod-attachments-751667630925` | Bucket versioning, noncurrent versions expire at 30 days | ✅ versioning **Enabled**; delete→restore proof **PASSED** (see below) |
-| **Qdrant Cloud** | `engram-saas-prod` cluster `0a4bef59-…`, free tier, 1 node, v1.18.2 | **NONE** — free tier has no scheduled backups | ❌ **no backups exist**; recovery is re-embed from Postgres (see below) |
+| **Qdrant Cloud** | `engram-saas-prod-v3` (serves `QDRANT_URL`; mx1, 1 node, v1.19.2), plus `engram-saas-prod` and `-v2` | Cloud backups (volume snapshots), daily 15:00 UTC, 14-day retention, every prod cluster | ✅ schedules in TF with `delete_backups_on_destroy = false` (engram-infra `main/envs/prod/qdrant.tf`, checked 2026-10-25); **restore not drilled**. Re-embed from Postgres is the fallback (see below) |
 
 Single-AZ is intentional at launch (RPO/RTO acceptable for a low-customer-count launch; multi-AZ promoted post-launch when traffic/SLO justify it — explicitly out of scope here).
 
@@ -47,16 +47,22 @@ Proof run 2026-09-05 with the `engram-breakglass` identity: put, delete, confirm
 
 **Recovery window is 30 days, not forever.** The bucket lifecycle rule `expire-noncurrent-versions` sets `NoncurrentDays: 30`, so a deleted or overwritten attachment is recoverable for 30 days and then gone permanently. No cross-region replication at launch.
 
-### Qdrant Cloud — NO backups; recovery is re-embed from Postgres
+### Qdrant Cloud: daily Cloud backups; re-embed is the fallback
 
-Verified live 2026-09-05 via the Qdrant Cloud management API and the cluster data API:
+Read 2026-10-25 from engram-infra `origin/main:main/envs/prod/qdrant.tf` (TF config, not a live API read):
 
-- Cluster config reports `"snapshotStorageClass": "emptyDir"` — snapshot storage is node-ephemeral, so even a manual snapshot does not survive node replacement.
-- The management API's backup / backup-schedule endpoints return `404` for this account. Free tier does not include scheduled backups (see `engram-infra/docs/context/qdrant-prod-cluster.md` — "Standard tier unlocks scheduled backups"; paid tier is the fix if this ever needs to be a real backup).
-- `GET /collections/engram_notes/snapshots` and `GET /snapshots` both return `[]`. **Zero snapshots exist.**
-- Collection `engram_notes` holds **76,352 points**, status `green`.
+- Every prod cluster (`engram`, `engram_v2`, `engram_v3`; v3 is the one behind `QDRANT_URL`) has a `qdrant-cloud_accounts_backup_schedule`: `cron_expression = "0 15 * * *"` (daily 15:00 UTC), `retention_period = "336h"` (14 days).
+- `delete_backups_on_destroy = false` on each cluster AND each schedule, so destroying either keeps the restore points.
+- Cloud backups are CSI volume snapshots taken by the cloud layer, not the Qdrant snapshot API, so they use no cluster-local disk ([Qdrant docs: migration and recovery options](https://qdrant.tech/documentation/migration-recovery-options/)). RPO is up to 24 h.
+- **No restore has been drilled.** Until one is, treat the RTO as unknown.
 
-This is acceptable **only because vectors are derived data** — Postgres is ground truth for note content, and every vector is reconstructable by re-embedding. It is not acceptable to treat Qdrant as a store of record for anything.
+**Restore route (cluster lost or collection corrupted):**
+
+1. Restore the newest good Cloud backup **into a NEW cluster**. A restore resets the package AND the Qdrant version to what the backup recorded, and the restore must stay on the same provider and region; restoring in place also takes the cluster down for the duration (see the comment on `engram` in `qdrant.tf`).
+2. Re-point Terraform in an engram-infra PR: `QDRANT_URL` to the new cluster, and its API key in SOPS (`qdrant_api_key`) / SSM. Prod moves when that PR applies and ECS rolls.
+3. Let the app reconcile: the boot reconcile re-applies strict mode, quotas and the layout, and `Engram.Workers.OrphanSweep` repairs what changed after the backup (enqueue it; the `force` override in the Postgres-restore paragraph below applies if a day-old backup trips its 10% abort). Writes between the backup and the loss are re-indexed only for notes the sweep flags.
+
+If no backup is usable, fall back to the full rebuild below. That fallback is acceptable **only because vectors are derived data**: Postgres is ground truth for note content, and every vector is reconstructable by re-embedding. It is not acceptable to treat Qdrant as a store of record for anything.
 
 **Do not wait on `mix engram.reindex` (#173) — it does not exist.** The recovery path below uses mechanisms that are already deployed.
 
@@ -106,7 +112,7 @@ Without that flag, the sweep aborts every tick and the notes are never repaired 
 
 **S3 attachment loss / accidental delete.** Versioning is on — remove the delete marker (or restore the prior version) for the affected key; proven above. Bulk loss: re-list versions and restore. Recoverable for 30 days only; no cross-region replication at launch.
 
-**Qdrant Cloud cluster lost or account compromised.** Rotate the Qdrant API key (`engram-infra/docs/context/qdrant-prod-cluster.md`), then rebuild via the procedure above — there is nothing to restore from. Search is keyword-only until the rebuild completes; reads and writes of note content are unaffected (Postgres is ground truth).
+**Qdrant Cloud cluster lost or account compromised.** Rotate the Qdrant API key (`engram-infra/docs/context/qdrant-prod-cluster.md`), then restore the newest good Cloud backup into a new cluster and re-point TF (the restore route above). Fall back to the full rebuild only when no backup is usable. Search is keyword-only until the rebuild completes; reads and writes of note content are unaffected (Postgres is ground truth).
 
 **Voyage AI key leaked.** Rotate via SOPS — see `engram-infra/docs/context/sops-pattern.md` (atomic env rotation). Embedding pauses until the new key propagates; existing vectors are unaffected.
 
