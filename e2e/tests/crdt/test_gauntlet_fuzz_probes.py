@@ -513,3 +513,31 @@ async def test_remote_rename_while_device_offline(gauntlet):
     await asyncio.sleep(3)
     b.net.restore()
     await await_converged(pair.api, pair.vaults, root, Expect({new: [seed, *edits]}, absent={old}))
+
+
+@pytest.mark.timeout(600)
+async def test_undo_on_closed_note_sticks(gauntlet):
+    """A appends a line to a CLOSED note, waits for it to sync, then removes
+    that same line (the file returns to its earlier text, as an undo or a
+    revert from another app does). The removal must reach the server and B,
+    and the line must not come back on A."""
+    pair = await gauntlet("gundo")
+    a = pair.a
+    root = _root("undo")
+    path = f"{root}/note.md"
+    seed = f"seed-{root}"
+    before = f"# Note\n\n{seed}\n"
+    await create_notes(a.cdp, {path: before})
+    await await_converged(pair.api, pair.vaults, root, Expect({path: [seed]}))
+
+    added = f"undo-me-{root}"
+    assert await append_lines(a.cdp, {path: added}) == []
+    await await_converged(pair.api, pair.vaults, root, Expect({path: [seed, added]}))
+
+    await create_notes(a.cdp, {path: before})  # vault.modify back to the earlier text
+    await await_converged(pair.api, pair.vaults, root, Expect({path: [seed]}, at_most_once={added}))
+    await asyncio.sleep(10)
+    body = (a.vault / path).read_text(encoding="utf-8")
+    assert added not in body, f"the undone line came back on A: {body!r}"
+    server, _ = server_state(pair.api, root)
+    assert added not in server.get(path, ""), f"the undone line is back on the server: {server.get(path)!r}"
