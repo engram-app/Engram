@@ -4741,7 +4741,8 @@ jobs:
         run: |
           export PATH="$HOME/.bun/bin:$PATH"
           bun install --frozen-lockfile --registry http://10.0.20.214:4873
-          bunx playwright install chromium
+          # webkit for the ios-webkit project (e2e/ios-keyboard.spec.ts).
+          bunx playwright install chromium webkit
 
       # e2e/lighthouse.spec.ts audits the PRODUCTION bundle Phoenix serves at
       # `/` (priv/static/app): the Vite dev server injects CSS from JS and

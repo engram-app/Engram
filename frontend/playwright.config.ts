@@ -54,6 +54,17 @@ export default defineConfig({
 			},
 		},
 		{
+			// iPhone in WebKit: every iPhone browser (Safari, Chrome) is WebKit, so
+			// this is CI's stand-in for both. Same local stack as `local`.
+			name: "ios-webkit",
+			testMatch: /\/ios-keyboard\.spec\.ts$/u,
+			use: {
+				...devices["iPhone 15"],
+				locale: "en-US",
+				baseURL: `http://localhost:${LOCAL_VITE_PORT}`,
+			},
+		},
+		{
 			// Audits the production bundle Phoenix serves, not the Vite dev server
 			// (see the spec), so its baseURL is the backend.
 			name: "lighthouse",
