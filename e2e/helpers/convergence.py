@@ -1,5 +1,9 @@
 """Whole-folder convergence oracle: every device's disk equals the server, byte for byte.
 
+Server bodies are the CRDT AUTHORITY (snapshot + update-log tail), not the
+`notes.content` facade GET /notes serves; a failure also reports where the
+two disagree.
+
 The per-note waiters (`wait_for_content`, `wait_for_note_content`) prove a
 marker arrived somewhere. They cannot see a duplicated paragraph, a stray
 conflict copy, a resurrected file, or a device whose copy is a superset of the
@@ -21,6 +25,8 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from helpers.authority_probe import authoritative_notes
 
 logger = logging.getLogger(__name__)
 
@@ -48,20 +54,38 @@ class Expect:
     attachments: dict[str, bytes] = field(default_factory=dict)
 
 
+def _vault_id(api) -> str:
+    """The id of the api client's ONE vault (gauntlet users have exactly one)."""
+    if not getattr(api, "_gauntlet_vault_id", None):
+        vaults = api.list_vaults()
+        assert len(vaults) == 1, f"convergence needs a single-vault user, got {len(vaults)}"
+        api._gauntlet_vault_id = vaults[0]["id"]
+    return api._gauntlet_vault_id
+
+
 def server_state(api, prefix: str) -> tuple[dict[str, str], set[str]]:
-    """(markdown path -> content, attachment paths) on the server under prefix."""
+    """(markdown path -> AUTHORITATIVE content, attachment paths) on the server.
+
+    Note bodies come from `Notes.authoritative_content` (helpers/authority_probe),
+    not from GET /notes or MCP get_notes: those read the `notes.content`
+    facade, which lags every CRDT write until the next checkpoint.
+    """
     manifest = api.get_manifest()
-    paths = sorted(n["path"] for n in manifest.get("notes", []) if n["path"].startswith(prefix))
     attachments = {a["path"] for a in manifest.get("attachments", []) if a["path"].startswith(prefix)}
+    notes = {p: t for p, t in authoritative_notes(_vault_id(api), prefix).items() if p.endswith(".md")}
+    return notes, attachments
+
+
+def facade_state(api, prefix: str) -> dict[str, str]:
+    """markdown path -> the `notes.content` FACADE (what GET /notes serves).
+    Diagnostic only: compared with the authority when a wait fails."""
+    paths = sorted(n["path"] for n in api.get_manifest().get("notes", []) if n["path"].startswith(prefix))
     notes: dict[str, str] = {}
     for i in range(0, len(paths), GET_NOTES_BATCH):
         for n in api.mcp_tool("get_notes", {"paths": paths[i : i + GET_NOTES_BATCH]})["notes"]:
-            if not n.get("found"):
-                continue  # deleted between the manifest and the read; next poll sees it
-            if "content" not in n:
-                raise AssertionError(f"get_notes returned no content for {n['path']}: {n.get('error')}")
-            notes[n["path"]] = n["content"]
-    return notes, attachments
+            if n.get("found") and "content" in n:
+                notes[n["path"]] = n["content"]
+    return notes
 
 
 def disk_state(vault: Path, prefix: str) -> tuple[dict[str, str], dict[str, bytes]]:
@@ -161,6 +185,15 @@ async def await_converged(
             logger.warning("GAUNTLET converged %s in %.0fs", prefix, took)
             return took
         await asyncio.sleep(poll_s)
+    # Name any path where the facade (GET /notes) and the authority disagree,
+    # so a reader can tell "not checkpointed yet" from "lost".
+    try:
+        authority, _ = server_state(api, prefix)
+        facade = facade_state(api, prefix)
+        lag = sorted(p for p in authority if facade.get(p) != authority[p])
+        found.insert(0, f"facade lags authority on {len(lag)} notes: {lag[:10]}")
+    except Exception as e:  # noqa: BLE001 - diagnostics must not mask the real failure
+        found.insert(0, f"facade comparison failed: {e!r}")
     shown = "\n  ".join(found[:60])
     more = f"\n  ... and {len(found) - 60} more" if len(found) > 60 else ""
     raise AssertionError(
