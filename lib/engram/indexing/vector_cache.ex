@@ -7,8 +7,7 @@ defmodule Engram.Indexing.VectorCache do
   rebuild pass all read the vector back instead of paying Voyage again. It is
   NOT a permanent second copy of the index: unchanged chunks are already
   reused by the `plan_chunks` fingerprint, so a row is worth keeping only for
-  as long as a retry can still come. Rows expire 72 h after insert. Off unless
-  `:vector_cache_enabled` (`VECTOR_CACHE_ENABLED=true`); off, nothing here runs.
+  as long as a retry can still come. Rows expire 72 h after insert.
 
   ## Key
 
@@ -95,10 +94,6 @@ defmodule Engram.Indexing.VectorCache do
 
   @type key :: <<_::256>>
   @type digest :: <<_::256>>
-
-  @doc "True when the cache is on. Default off."
-  @spec enabled?() :: boolean()
-  def enabled?, do: Engram.ServiceConfig.get(:vector_cache_enabled, false)
 
   @doc "NFC, then every `\\p{Cf}` (format) code point removed."
   @spec normalize(iodata()) :: binary()
