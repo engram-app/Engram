@@ -223,6 +223,25 @@ async def await_converged(
         found.insert(0, f"facade lags authority on {len(lag)} notes: {lag[:10]}")
     except Exception as e:  # noqa: BLE001 - diagnostics must not mask the real failure
         found.insert(0, f"facade comparison failed: {e!r}")
+    # Conflict copies first: their content, and which device holds each copy
+    # earliest (by file mtime, the best available sign of who created it).
+    try:
+        server, _ = server_state(api, prefix)
+        for cp in sorted({p for p in server if _is_copy(p)} | {
+            (vault / q).relative_to(vault).as_posix()
+            for vault in vaults.values() for q in disk_state(vault, prefix)[0] if _is_copy(q)
+        }):
+            held = {
+                name: (vault / cp).stat().st_mtime
+                for name, vault in vaults.items() if (vault / cp).exists()
+            }
+            first = min(held, key=held.get) if held else "none"
+            found.insert(0, (
+                f"COPY {cp}: on {sorted(held)}, earliest on {first}; "
+                f"server body {server.get(cp)!r}"
+            ))
+    except Exception as e:  # noqa: BLE001 - diagnostics must not mask the real failure
+        found.insert(0, f"conflict-copy dump failed: {e!r}")
     shown = "\n  ".join(found[:60])
     more = f"\n  ... and {len(found) - 60} more" if len(found) > 60 else ""
     raise AssertionError(
