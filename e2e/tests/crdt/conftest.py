@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -76,6 +77,9 @@ def gauntlet(ts, auth_provider):
 
     async def make(label: str, *, plugin_a: Path | None = None, plugin_b: Path | None = None,
              with_b: bool = True, start: bool = True) -> Pair:
+        # Unique per call: the session `ts` alone repeats across parametrized
+        # cases and a second register of one email 422s.
+        label = f"{label}{uuid.uuid4().hex[:3]}"
         email = e2e_email(label, ts)
         user_id, api_key = auth_provider.provision_user(email, secrets.token_urlsafe(32))
         grant_test_plan(email)
