@@ -61,6 +61,26 @@ native wrapper can.
 covers, measured from the live `[data-editor-toolbar]` element at scroll time,
 so the caret is never scrolled to a spot behind the bar.
 
+## Prediction attributes, and what they do NOT control
+
+`note-editor.tsx` sets `autocorrect="on"`, `autocapitalize="sentences"` and
+`writingsuggestions="true"` on the content DOM (CodeMirror defaults all three
+off). With prediction off, iOS filled the empty QuickType row with a site
+AutoFill suggestion that closed the keyboard when tapped.
+
+iOS smart quotes and smart dashes (`--` to an em dash, curly quotes inside
+backticks) are NOT controlled by `autocorrect`. WebKit turns them off only
+when spellcheck is off: `WKContentViewInteraction.mm`,
+`if (!_focusedElementInformation.isSpellCheckingEnabled) { traits.smartQuotesType = UITextSmartQuotesTypeNo; traits.smartDashesType = UITextSmartDashesTypeNo; ... }`
+(WebKit main, checked 2026-10-25). The editor has had `spellcheck="true"`
+since before the keyboard work, so smart punctuation was already on and
+turning autocorrect on did not change it. Spellcheck stays on (red squiggles
+are the only misspelling signal). The only web-side lever left is rewriting
+the substitution in `beforeinput`; not done, because which `inputType` iOS
+uses for a smart substitution is not verified on a device. Autocorrect itself
+can rewrite a `[[link target]]` on space, the same tradeoff Obsidian iOS
+ships. The raw YAML frontmatter editor keeps all of these off.
+
 ## `touch-action` silently disarms `preventDefault` on pointerdown
 
 The bar keeps the keyboard up by cancelling `pointerdown` on its `nav` — a
