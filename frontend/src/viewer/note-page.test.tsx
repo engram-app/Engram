@@ -824,7 +824,9 @@ describe("NotePage (CRDT)", () => {
 		renderPage();
 
 		// Widget should appear in the default rendered mode
-		await waitFor(() => expect(screen.getByDisplayValue("status")).toBeInTheDocument());
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "Rename status" })).toBeInTheDocument(),
+		);
 	});
 
 	// Inline rename from the header — same semantics as the tree's rename
@@ -939,7 +941,9 @@ describe("NotePage (CRDT)", () => {
 		renderPage();
 
 		// Default "rendered" mode: pills visible, editor visible, no raw YAML region.
-		await waitFor(() => expect(screen.getByDisplayValue("status")).toBeInTheDocument());
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "Rename status" })).toBeInTheDocument(),
+		);
 		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
 		expect(screen.queryByLabelText(/Frontmatter \(raw YAML\)/i)).not.toBeInTheDocument();
 		await openMenu();
@@ -950,7 +954,7 @@ describe("NotePage (CRDT)", () => {
 		await waitFor(() =>
 			expect(screen.getByLabelText(/Frontmatter \(raw YAML\)/i)).toBeInTheDocument(),
 		);
-		expect(screen.queryByDisplayValue("status")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Rename status" })).not.toBeInTheDocument();
 		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
 
 		// Switch to "reading": NoteView visible, neither frontmatter surface shown.
@@ -958,7 +962,7 @@ describe("NotePage (CRDT)", () => {
 		fireEvent.click(screen.getByRole("menuitem", { name: "Reading" }));
 		await waitFor(() => expect(screen.getByTestId("note-view")).toBeInTheDocument());
 		expect(screen.queryByLabelText(/Frontmatter \(raw YAML\)/i)).not.toBeInTheDocument();
-		expect(screen.queryByDisplayValue("status")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Rename status" })).not.toBeInTheDocument();
 		expect(screen.queryByTestId("note-editor")).not.toBeInTheDocument();
 	});
 

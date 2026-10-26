@@ -79,9 +79,13 @@ what the popular snippets do.
 - **Row actions.** Obsidian puts move/remove in a right-click menu and shows
   nothing in the row. We keep the `^ v x` buttons but reveal them on
   hover/focus, so the resting state matches without losing the capability.
-- **Key text is not editable.** Obsidian's key is an `input`
-  (`.metadata-property-key-input`) you can retype to rename the property. Ours
-  is a `<span>`. Renaming a key was out of scope.
+- **Cells are buttons until tapped.** Obsidian's key and value are live
+  `input`s. Ours render as plain-text buttons and swap to an input
+  (`RenameInput`, the same swap as the inline title) on click, for keys,
+  scalar values and the list "Add item..." adder. Reason: iOS's prev/next
+  arrows above the keyboard walk the page's text inputs, and these sit right
+  above the editor, so "previous" from the note body landed in a property and
+  zoomed the page. A button is not on that walk. Checkboxes stay real.
 - **Semantics.** Obsidian uses divs throughout; we keep `dl`/`dt`/`dd`, with
   each row a `div` wrapping its `dt`+`dd` (valid since HTML 5.2) so the row
   still has a box to carry radius and hover state.

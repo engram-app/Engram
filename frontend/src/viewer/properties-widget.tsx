@@ -25,6 +25,7 @@ import {
 import { htmlInputType, PropertyField } from "./property-fields";
 import { PropertyTypeMenu } from "./property-type-menu";
 import { coerceValue, effectiveType, type PropertyType } from "./property-types";
+import { RenameInput } from "./tree-actions/rename-input";
 
 // Obsidian's --metadata-label-width is 9em against the 16px root, so 144px,
 // and it does NOT shrink — long values never squeeze the key column. The right
@@ -53,10 +54,12 @@ const PORTALLED_SURFACES =
 /**
  * The property's name, editable in place like Obsidian's key input.
  *
- * Keeps its own draft so a remote edit elsewhere in the doc cannot rewrite the
- * text under the caret — the same guard the value fields use. A rejected
- * rename (empty, unchanged, or a name already taken) snaps back rather than
- * leaving the input showing a name the doc does not have.
+ * A button until tapped, then RenameInput, the same swap the inline title
+ * does: see CELL_BUTTON in property-fields.tsx for why a live input at rest
+ * broke iOS's prev/next arrows. RenameInput keeps its own draft, so a remote
+ * edit elsewhere in the doc cannot rewrite the text under the caret. A
+ * rejected rename (a name already taken) closes back to the old name with a
+ * toast rather than leaving a name the doc does not have.
  */
 function PropertyKeyInput({
 	doc,
@@ -68,58 +71,47 @@ function PropertyKeyInput({
 	name: string;
 	/** Key Engram reads AND whose value is the shape that field needs. */
 	okf: boolean;
-	/** Hands the live input up to the row, which is where the type menu lives. */
-	elRef?: (el: HTMLInputElement | null) => void;
+	/** Hands the key control up to the row, which is where the type menu lives. */
+	elRef?: (el: HTMLElement | null) => void;
 }) {
 	const { t } = useT();
-	const [draft, setDraft] = useState(name);
-	const ref = useRef<HTMLInputElement>(null);
-	useEffect(() => {
-		if (document.activeElement !== ref.current) {
-			setDraft(name);
-		}
-	}, [name]);
+	const [editing, setEditing] = useState(false);
+	const label = t("Rename {name}", { name });
+	// Highlighted when Engram READS the key rather than merely storing it.
+	// No tooltip: the `?` beside the heading is where the explanation lives,
+	// and a per-key hover repeating it is noise on every row.
+	const look = cn(KEY_INPUT, "truncate", okf ? "text-primary-ink" : "text-muted-foreground");
 
-	const commit = () => {
-		const next = draft.trim();
-		if (next === name) {
-			setDraft(name);
-			return;
-		}
-		if (!renameKey(doc, name, draft)) {
-			// Refusing is right; refusing in silence is not. In a chromeless input
-			// a value snapping back is easy to miss, and the user walks away
-			// believing the rename landed.
-			if (next !== "") {
-				notify.error(t("A property named \u0022{name}\u0022 already exists", { name: next }));
-			}
-			setDraft(name);
-		}
-	};
+	if (!editing) {
+		return (
+			<button
+				ref={elRef}
+				type="button"
+				aria-label={label}
+				className={cn(look, "cursor-text text-left")}
+				onClick={() => setEditing(true)}
+			>
+				{name}
+			</button>
+		);
+	}
 
 	return (
-		<input
-			ref={(el) => {
-				ref.current = el;
-				elRef?.(el);
-			}}
-			aria-label={t("Rename {name}", { name })}
-			// Highlighted when Engram READS the key rather than merely storing it.
-			// No tooltip: the `?` beside the heading is where the explanation
-			// lives, and a per-key hover repeating it is noise on every row.
-			className={cn(KEY_INPUT, "truncate", okf ? "text-primary-ink" : "text-muted-foreground")}
-			value={draft}
-			onChange={(e) => setDraft(e.target.value)}
-			onBlur={commit}
-			onKeyDown={(e) => {
-				if (e.key === "Enter") {
-					e.preventDefault();
-					commit();
-				} else if (e.key === "Escape") {
-					e.preventDefault();
-					setDraft(name);
+		<RenameInput
+			initial={name}
+			label={label}
+			commitOnBlur
+			className={cn(look, "rounded-none")}
+			onCommit={(next) => {
+				setEditing(false);
+				// Refusing is right; refusing in silence is not. In a chromeless
+				// field a name snapping back is easy to miss, and the user walks away
+				// believing the rename landed.
+				if (!renameKey(doc, name, next)) {
+					notify.error(t("A property named \u0022{name}\u0022 already exists", { name: next }));
 				}
 			}}
+			onCancel={() => setEditing(false)}
 		/>
 	);
 }
@@ -233,7 +225,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 	// Key inputs by property name, so choosing a type can put the caret on the
 	// name it belongs to. Keyed by name rather than index: a rename swaps the
 	// key and an index would then point at a different row.
-	const keyEls = useRef(new Map<string, HTMLInputElement>());
+	const keyEls = useRef(new Map<string, HTMLElement>());
 
 	useEffect(() => {
 		const refresh = () => setRows(readRows(doc));
@@ -523,6 +515,9 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 										"text-muted-foreground placeholder:text-muted-foreground/60",
 									)}
 									placeholder={t("Property name")}
+									autoComplete="off"
+									// Enter moves on to the value; see onKeyDown.
+									enterKeyHint="next"
 									value={newKey}
 									onChange={(e) => setNewKey(e.target.value)}
 									// Enter moves ALONG the row rather than committing —
@@ -578,6 +573,8 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 										// (mm/dd/yyyy, the spinner); a placeholder on top of that
 										// is noise, and browsers ignore it anyway.
 										placeholder={newType === "text" || newType === "list" ? t("Value") : undefined}
+										autoComplete="off"
+										enterKeyHint="done"
 										value={newValue}
 										onChange={(e) => setNewValue(e.target.value)}
 										onKeyDown={(e) => {

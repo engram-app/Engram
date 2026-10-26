@@ -5,7 +5,15 @@ import { cn } from "@/lib/utils";
 
 interface Props {
 	initial: string;
-	kind: "file" | "folder";
+	/** Names the box "Rename file" / "Rename folder". Ignored when `label` is set. */
+	kind?: "file" | "folder";
+	/** Accessible name, for a box that edits something other than a path. */
+	label?: string;
+	/** Native input type. Property values pass number/date/datetime-local. */
+	type?: string;
+	/** Commit an emptied box instead of treating it as a cancel. A path cannot
+	 *  be empty; a property value can. */
+	allowEmpty?: boolean;
 	error?: string;
 	// Fired on every keystroke, in addition to onCommit. Headless-tree's own
 	// hotkeys-core feature listens for Enter/Escape on the tree container in
@@ -42,7 +50,10 @@ interface Props {
 
 export function RenameInput({
 	initial,
-	kind,
+	kind = "file",
+	label,
+	type = "text",
+	allowEmpty,
 	error,
 	onChange,
 	onCommit,
@@ -67,8 +78,11 @@ export function RenameInput({
 		settled.current = false;
 		el.focus();
 		// Whole value: every caller seeds this with a base name, never a leaf
-		// with an extension, so a dot in "Node.js guide" is title text.
-		el.setSelectionRange(0, initial.length);
+		// with an extension, so a dot in "Node.js guide" is title text. Only text
+		// boxes have a selection; number and date inputs throw on this.
+		if (el.type === "text") {
+			el.setSelectionRange(0, initial.length);
+		}
 	}, [initial]);
 
 	// `commit` false means "abandon", whatever triggered it.
@@ -82,7 +96,7 @@ export function RenameInput({
 		// look like.
 		const next = value.trim();
 		settled.current = true;
-		if (commit && next && next !== initial) {
+		if (commit && (next || allowEmpty) && next !== initial) {
 			onCommit(next);
 		} else {
 			onCancel();
@@ -94,8 +108,12 @@ export function RenameInput({
 			<input
 				ref={inputRef}
 				data-testid="tree-rename-input"
-				aria-label={kind === "file" ? t("Rename file") : t("Rename folder")}
-				type="text"
+				aria-label={label ?? (kind === "file" ? t("Rename file") : t("Rename folder"))}
+				type={type}
+				// Every caller commits on Enter. autocomplete off keeps iOS from
+				// offering contact or password AutoFill for a name or a value.
+				autoComplete="off"
+				enterKeyHint="done"
 				value={value}
 				onChange={(e) => {
 					setValue(e.target.value);

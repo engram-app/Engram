@@ -1,15 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useT } from "@/i18n/locale-provider";
 import { FIELD_TEXT } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import type { PropertyType } from "./property-types";
+import { RenameInput } from "./tree-actions/rename-input";
 
 interface FieldProps {
 	type: PropertyType;
 	value: unknown;
 	onCommit: (value: unknown) => void;
-	onFocusChange?: (focused: boolean) => void;
 	/** Property name, so the field announces as more than "edit text". */
 	label?: string;
 }
@@ -20,69 +20,60 @@ interface FieldProps {
 // and only the inputs can carry their own padding — chips and the checkbox are
 // not inputs, so they sat flush against the divider. The `dd` owns the inset now
 // (properties-widget), which makes the next field type correct by default.
-const inputCls = `w-full rounded-md border-0 bg-transparent py-1 pr-2 text-foreground outline-none ${FIELD_TEXT}`;
+const inputCls = `w-full rounded-md border-0 bg-transparent px-0 py-1 pr-2 text-foreground outline-none ${FIELD_TEXT}`;
 
-function ScalarField({ type, value, onCommit, onFocusChange, label }: FieldProps) {
+/**
+ * The at-rest look of a tap-to-edit cell: the value as plain text in a button,
+ * on the same box as the input it turns into, so tapping does not shift it.
+ *
+ * Why not a live input: iOS's prev/next arrows walk the page's text inputs,
+ * and these render right above the editor, so "previous" from the note body
+ * landed in the last property value. A button is not on that walk. Same
+ * pattern as the inline title (inline-title.tsx): a button that swaps to
+ * RenameInput while editing.
+ */
+const CELL_BUTTON = `block min-w-0 cursor-text self-stretch truncate text-left ${inputCls}`;
+
+function ScalarField({ type, value, onCommit, label }: FieldProps) {
 	const { t } = useT();
+	const [editing, setEditing] = useState(false);
 	const initial = value === null || value === undefined ? "" : String(value);
-	const [draft, setDraft] = useState(initial);
-	const inputRef = useRef<HTMLInputElement>(null);
-	useEffect(() => {
-		if (document.activeElement !== inputRef.current) {
-			setDraft(initial);
-		}
-	}, [initial]);
+	const name = label ? t("{label} value", { label }) : t("Value");
 
-	const htmlType = htmlInputType(type);
+	if (!editing) {
+		return (
+			<button
+				type="button"
+				aria-label={name}
+				className={CELL_BUTTON}
+				onClick={() => setEditing(true)}
+			>
+				{initial}
+			</button>
+		);
+	}
 
-	const commit = () => {
-		if (type === "number") {
-			const n = Number(draft);
-			onCommit(draft.trim() === "" || !Number.isFinite(n) ? null : n);
-		} else {
-			onCommit(draft);
-		}
-	};
-
-	// Escape has to survive a round trip through blur. Reverting the draft and
-	// blurring in the same handler would not work: the state update is async, so
-	// the blur handler's `commit` still closes over the typed text and writes the
-	// value Escape was meant to throw away. The flag lets blur decide instead.
-	const cancelled = useRef(false);
-
+	// RenameInput owns Enter (commit), Escape (abandon), commit-on-blur and
+	// committing only a real change, so opening and closing a value without
+	// typing writes nothing back.
 	return (
-		<input
-			ref={inputRef}
-			type={htmlType}
-			aria-label={label ? t("{label} value", { label }) : undefined}
+		<RenameInput
+			initial={initial}
+			label={name}
+			type={htmlInputType(type)}
+			allowEmpty
+			commitOnBlur
 			className={inputCls}
-			value={draft}
-			onChange={(e) => setDraft(e.target.value)}
-			onFocus={() => onFocusChange?.(true)}
-			// Enter and Escape both leave the field, and blur is already the commit
-			// point — so they route through it rather than duplicating the write.
-			// Every other input in this widget (the list chips, the adder row, the
-			// key rename box) takes both keys; the value field was the one place
-			// where Enter did nothing at all.
-			onKeyDown={(e) => {
-				if (e.key === "Enter") {
-					e.preventDefault();
-					e.currentTarget.blur();
-				} else if (e.key === "Escape") {
-					e.preventDefault();
-					cancelled.current = true;
-					e.currentTarget.blur();
-				}
-			}}
-			onBlur={() => {
-				if (cancelled.current) {
-					cancelled.current = false;
-					setDraft(initial);
+			onCommit={(next) => {
+				setEditing(false);
+				if (type === "number") {
+					const n = Number(next);
+					onCommit(next === "" || !Number.isFinite(n) ? null : n);
 				} else {
-					commit();
+					onCommit(next);
 				}
-				onFocusChange?.(false);
 			}}
+			onCancel={() => setEditing(false)}
 		/>
 	);
 }
@@ -90,13 +81,16 @@ function ScalarField({ type, value, onCommit, onFocusChange, label }: FieldProps
 interface ListFieldProps {
 	value: string[];
 	onCommit: (v: unknown) => void;
-	onFocusChange?: (focused: boolean) => void;
 	label?: string;
 }
 
-function ListField({ value, onCommit, onFocusChange, label }: ListFieldProps) {
+function ListField({ value, onCommit, label }: ListFieldProps) {
 	const { t } = useT();
 	const [pending, setPending] = useState("");
+	// The adder is a button until tapped, for the same prev/next reason as
+	// CELL_BUTTON. It stays open across Enter so several items go in at once.
+	const [adding, setAdding] = useState(false);
+	const name = label ? t("{label} value", { label }) : t("Value");
 
 	const add = () => {
 		const item = pending.trim();
@@ -126,26 +120,47 @@ function ListField({ value, onCommit, onFocusChange, label }: ListFieldProps) {
 					</button>
 				</span>
 			))}
-			<input
-				aria-label={label ? t("{label} value", { label }) : undefined}
-				className={cn(inputCls, "w-24 flex-1")}
-				placeholder={t("Add item...")}
-				value={pending}
-				onChange={(e) => setPending(e.target.value)}
-				onFocus={() => onFocusChange?.(true)}
-				onBlur={() => onFocusChange?.(false)}
-				onKeyDown={(e) => {
-					if (e.key === "Enter") {
-						e.preventDefault();
-						add();
-					}
-				}}
-			/>
+			{adding ? (
+				<input
+					// Focus on mount, inside the tap that opened it, which is what lets
+					// iOS raise the keyboard for a programmatic focus.
+					ref={(el) => el?.focus()}
+					aria-label={name}
+					className={cn(inputCls, "w-24 flex-1")}
+					placeholder={t("Add item...")}
+					autoComplete="off"
+					enterKeyHint="done"
+					value={pending}
+					onChange={(e) => setPending(e.target.value)}
+					onBlur={() => {
+						setPending("");
+						setAdding(false);
+					}}
+					onKeyDown={(e) => {
+						if (e.key === "Enter") {
+							e.preventDefault();
+							add();
+						} else if (e.key === "Escape") {
+							e.preventDefault();
+							e.currentTarget.blur();
+						}
+					}}
+				/>
+			) : (
+				<button
+					type="button"
+					aria-label={name}
+					className={cn(CELL_BUTTON, "w-24 flex-1 text-muted-foreground/60")}
+					onClick={() => setAdding(true)}
+				>
+					{t("Add item...")}
+				</button>
+			)}
 		</div>
 	);
 }
 
-export function PropertyField({ type, value, onCommit, onFocusChange, label }: FieldProps) {
+export function PropertyField({ type, value, onCommit, label }: FieldProps) {
 	const { t } = useT();
 	if (type === "checkbox") {
 		return (
@@ -161,20 +176,11 @@ export function PropertyField({ type, value, onCommit, onFocusChange, label }: F
 			<ListField
 				value={Array.isArray(value) ? value.map(String) : []}
 				onCommit={onCommit}
-				onFocusChange={onFocusChange}
 				label={label}
 			/>
 		);
 	}
-	return (
-		<ScalarField
-			type={type}
-			value={value}
-			onCommit={onCommit}
-			onFocusChange={onFocusChange}
-			label={label}
-		/>
-	);
+	return <ScalarField type={type} value={value} onCommit={onCommit} label={label} />;
 }
 
 /** The native input type a property type is edited with.

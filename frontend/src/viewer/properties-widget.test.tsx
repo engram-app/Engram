@@ -8,13 +8,63 @@ import type { PropertyType } from "./property-types";
 const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: toastError } }));
 
+/**
+ * Property cells are buttons until tapped, so iOS's prev/next arrows have no
+ * input to hop into from the editor. Tap one open and hand back the live input,
+ * which carries the same accessible name the button did.
+ */
+async function tapToEdit(name: string): Promise<HTMLInputElement> {
+	fireEvent.click(await screen.findByRole("button", { name }));
+	return screen.getByLabelText(name) as HTMLInputElement;
+}
+
 describe("PropertiesWidget", () => {
+	// iOS prev/next walks the page's text inputs, and these sit right above the
+	// editor: "previous" from the note body landed in the last property value,
+	// which then zoomed the page. At rest there must be nothing to land on.
+	test("holds no text inputs until a cell is tapped", async () => {
+		const doc = new Y.Doc();
+		addKey(doc, "title", "text");
+		setValue(doc, "title", "Hi");
+		addKey(doc, "tags", "list");
+		setValue(doc, "tags", ["a"]);
+		addKey(doc, "done", "checkbox");
+		setValue(doc, "done", true);
+		render(<PropertiesWidget doc={doc} />);
+		const section = await screen.findByTestId("note-properties");
+		await screen.findByRole("button", { name: "Rename title" });
+		expect(section.querySelectorAll("input:not([type=checkbox]), textarea")).toHaveLength(0);
+		expect(screen.getByRole("button", { name: "title value" })).toHaveTextContent("Hi");
+	});
+
+	test("a tapped cell is a real field that iOS will not AutoFill", async () => {
+		const doc = new Y.Doc();
+		addKey(doc, "email", "text");
+		setValue(doc, "email", "a@b.c");
+		render(<PropertiesWidget doc={doc} />);
+		const value = await tapToEdit("email value");
+		expect(value).toHaveFocus();
+		expect(value).toHaveAttribute("autocomplete", "off");
+		expect(value).toHaveAttribute("enterkeyhint", "done");
+	});
+
+	test("the new-property row labels Enter as next, then done", () => {
+		const doc = new Y.Doc();
+		render(<PropertiesWidget doc={doc} draft />);
+		const name = screen.getByPlaceholderText("Property name");
+		const value = screen.getByPlaceholderText("Value");
+		expect(name).toHaveAttribute("enterkeyhint", "next");
+		expect(name).toHaveAttribute("autocomplete", "off");
+		expect(value).toHaveAttribute("enterkeyhint", "done");
+		expect(value).toHaveAttribute("autocomplete", "off");
+	});
+
 	test("renders rows from the doc and writes value edits back", async () => {
 		const doc = new Y.Doc();
 		addKey(doc, "title", "text");
 		setValue(doc, "title", "Hi");
 		render(<PropertiesWidget doc={doc} />);
-		const input = await screen.findByDisplayValue("Hi");
+		const input = await tapToEdit("title value");
 		fireEvent.change(input, { target: { value: "Bye" } });
 		fireEvent.blur(input);
 		expect(readRows(doc).find((r) => r.key === "title")?.value).toBe("Bye");
@@ -24,7 +74,9 @@ describe("PropertiesWidget", () => {
 		const doc = new Y.Doc();
 		render(<PropertiesWidget doc={doc} />);
 		addKey(doc, "author", "text"); // simulate remote mutation
-		await waitFor(() => expect(screen.getByDisplayValue("author")).toBeInTheDocument());
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "Rename author" })).toBeInTheDocument(),
+		);
 	});
 
 	describe("renaming a property", () => {
@@ -32,7 +84,7 @@ describe("PropertiesWidget", () => {
 			addKey(doc, "status", "text");
 			setValue(doc, "status", "draft");
 			render(<PropertiesWidget doc={doc} />);
-			return (await screen.findByDisplayValue("status")) as HTMLInputElement;
+			return tapToEdit("Rename status");
 		};
 
 		test("commits the new name on Enter, keeping the value", async () => {
@@ -60,7 +112,7 @@ describe("PropertiesWidget", () => {
 			fireEvent.change(key, { target: { value: "state" } });
 			fireEvent.keyDown(key, { key: "Escape" });
 
-			expect(key.value).toBe("status");
+			expect(screen.getByRole("button", { name: "Rename status" })).toHaveTextContent("status");
 			expect(readRows(doc).map((r) => r.key)).toEqual(["status"]);
 		});
 
@@ -72,7 +124,9 @@ describe("PropertiesWidget", () => {
 			fireEvent.change(key, { target: { value: "taken" } });
 			fireEvent.keyDown(key, { key: "Enter" });
 
-			await waitFor(() => expect(key.value).toBe("status"));
+			await waitFor(() =>
+				expect(screen.getByRole("button", { name: "Rename status" })).toHaveTextContent("status"),
+			);
 			expect(
 				readRows(doc)
 					.map((r) => r.key)
@@ -87,7 +141,7 @@ describe("PropertiesWidget", () => {
 		const doc = new Y.Doc();
 		addKey(doc, "title", "text");
 		render(<PropertiesWidget doc={doc} />);
-		await screen.findByDisplayValue("title");
+		await screen.findByRole("button", { name: "Rename title" });
 		expect(screen.queryByPlaceholderText("Property name")).not.toBeInTheDocument();
 
 		fireEvent.click(screen.getByRole("button", { name: /add property/i }));
@@ -100,7 +154,7 @@ describe("PropertiesWidget", () => {
 		const doc = new Y.Doc();
 		addKey(doc, "title", "text");
 		render(<PropertiesWidget doc={doc} />);
-		await screen.findByDisplayValue("title");
+		await screen.findByRole("button", { name: "Rename title" });
 		fireEvent.click(screen.getByRole("button", { name: /add property/i }));
 
 		const name = screen.getByPlaceholderText("Property name");
@@ -310,8 +364,7 @@ describe("PropertiesWidget", () => {
 		addKey(doc, "title", "text");
 		setValue(doc, "title", "Hi");
 		render(<PropertiesWidget doc={doc} />);
-		const input = (await screen.findByDisplayValue("Hi")) as HTMLInputElement;
-		input.focus();
+		const input = await tapToEdit("title value");
 		fireEvent.change(input, { target: { value: "Draft" } });
 		setValue(doc, "title", "RemoteWins"); // remote update while focused
 		await waitFor(() =>
@@ -333,7 +386,7 @@ describe("property order", () => {
 			setValue(doc, key, `${key}-value`);
 		}
 		render(<PropertiesWidget doc={doc} />);
-		await screen.findByDisplayValue("zeta-value");
+		await screen.findByRole("button", { name: "zeta value" });
 
 		const rendered = screen
 			.getAllByTestId(/^property-row-/)
@@ -348,7 +401,7 @@ describe("the collapsible Properties heading", () => {
 		const doc = new Y.Doc();
 		addKey(doc, "title", "text");
 		render(<PropertiesWidget doc={doc} />);
-		await screen.findByDisplayValue("title");
+		await screen.findByRole("button", { name: "Rename title" });
 
 		const summary = screen.getByTestId("note-properties-toggle");
 		expect(summary).toHaveTextContent("Properties");
@@ -372,7 +425,7 @@ describe("the collapsible Properties heading", () => {
 
 		// And a remote edit arriving while collapsed still lands.
 		setValue(doc, "title", "Bye");
-		await waitFor(() => expect(screen.getByDisplayValue("Bye")).toBeInTheDocument());
+		await waitFor(() => expect(screen.getByLabelText("title value")).toHaveTextContent("Bye"));
 	});
 });
 
@@ -433,7 +486,7 @@ describe("the new-property row follows the chosen type", () => {
 		// and there is no "Add property" button to click.
 		addKey(doc, "title", "text");
 		render(<PropertiesWidget doc={doc} />);
-		await screen.findByDisplayValue("title");
+		await screen.findByRole("button", { name: "Rename title" });
 		fireEvent.click(screen.getByRole("button", { name: /add property/i }));
 		await pickType("date");
 		await waitFor(() =>
@@ -516,14 +569,14 @@ describe("collapsed-block and checkbox edge cases", () => {
 // counts", the panel says why. Both read the same table, so they cannot
 // disagree about which keys count or what shape each wants.
 describe("OKF keys are highlighted", () => {
-	const keyInput = (name: string) => screen.getByRole("textbox", { name: `Rename ${name}` });
+	const keyInput = (name: string) => screen.getByRole("button", { name: `Rename ${name}` });
 
 	const renderWith = async (key: string, type: PropertyType, value: unknown) => {
 		const doc = new Y.Doc();
 		addKey(doc, key, type);
 		setValue(doc, key, value);
 		render(<PropertiesWidget doc={doc} />);
-		await screen.findByDisplayValue(key);
+		await screen.findByRole("button", { name: `Rename ${key}` });
 	};
 
 	// WIRING only. Which key/type/value combinations count is `isOkfMatch`'s
@@ -558,7 +611,7 @@ describe("the Properties help panel", () => {
 		const doc = new Y.Doc();
 		addKey(doc, "title", "text");
 		render(<PropertiesWidget doc={doc} />);
-		await screen.findByDisplayValue("title");
+		await screen.findByRole("button", { name: "Rename title" });
 		fireEvent.click(screen.getByRole("button", { name: "About properties" }));
 		return screen.findByRole("dialog", { name: "About properties" });
 	};
