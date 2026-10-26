@@ -1,10 +1,14 @@
 defmodule Engram.Vector.QdrantTenantLayoutTest do
   @moduledoc """
-  Task 8.1 against a real Qdrant (CI pins 1.19.2): a collection created with
-  the tenant layout reads back as no drift, so a boot sends no PATCH, and
-  every payload index comes back with the schema it was created with. Bypass
+  Task 8.1 against a real Qdrant: a collection created with the layout for
+  that server reads back as no drift, so a boot sends no PATCH, and every
+  payload index comes back with the schema it was created with. Bypass
   answers 200 to anything, so only a real server proves the 1.19.2 API takes
-  `is_tenant` on a `uuid` index and `enable_hnsw: false`.
+  `is_tenant` on a `uuid` index and `enable_hnsw: false`, and that 1.18.3
+  (the self-host pin) takes the bare v5 set.
+
+  CI runs the first test on both (`QDRANT_EXPECT_VERSION` names the one it
+  started, so a silently different image fails here).
   """
   use ExUnit.Case, async: false
 
@@ -40,8 +44,8 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
   test "created with the desired layout, the GET round-trips: no drift, no PATCH", ctx do
     col = collection!("engram_tenant", @dims)
 
-    assert QdrantLayout.tenant_layout?(ctx.version),
-           "CI pins Qdrant 1.19.2; got #{inspect(ctx.version)}"
+    if expected = System.get_env("QDRANT_EXPECT_VERSION"),
+      do: assert(to_string(ctx.version) == expected)
 
     {:ok, info} = Qdrant.collection_info(col)
 
@@ -51,16 +55,27 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
     # The global graph stays while legacy and v5 points may coexist (legacy
     # filters on, the default).
     assert info["config"]["hnsw_config"]["m"] == 16
-    # The create-time segment cap reaches the server (desired/5 omits it).
-    assert info["config"]["optimizer_config"]["max_segment_size"] == 128_000
+    # The create-time segment cap reaches a 1.19.2 server (desired/5 omits it).
+    if QdrantLayout.tenant_layout?(ctx.version),
+      do: assert(info["config"]["optimizer_config"]["max_segment_size"] == 128_000)
 
+    # A bare schema ("keyword") reads back as its data_type, no params.
     for {field, schema} <- QdrantLayout.payload_indexes(ctx.version, true) do
-      have = info["payload_schema"][field]["params"]
-      assert Enum.all?(schema, fn {k, v} -> have[k] == v end), "#{field}: #{inspect(have)}"
+      have = info["payload_schema"][field]
+
+      if is_binary(schema),
+        do: assert(have["data_type"] == schema, "#{field}: #{inspect(have)}"),
+        else:
+          assert(
+            Enum.all?(schema, fn {k, v} -> have["params"][k] == v end),
+            "#{field}: #{inspect(have)}"
+          )
     end
 
     refute Map.has_key?(info["payload_schema"], "note_id")
-    assert QdrantLayout.tenant_graph?(info, ctx.version, true)
+
+    assert QdrantLayout.tenant_graph?(info, ctx.version, true) ==
+             QdrantLayout.tenant_layout?(ctx.version)
 
     # The boot after creation (strict mode applied by the first) is a no-op.
     assert {:ok, []} = Qdrant.reconcile_config(col)
