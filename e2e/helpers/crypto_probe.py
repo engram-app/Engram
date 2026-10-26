@@ -8,14 +8,16 @@ Phase B.4: toggle helpers (`wait_for_encryption_status`, `backdate_*`,
 `set_user_cooldown_days`, `assert_note_plaintext_at_rest`) and the
 plaintext-path probes (`_fetch_note_row`, `_fetch_attachment_row`,
 `assert_note_ciphertext_at_rest`, `assert_attachment_ciphertext_at_rest`)
-were retired with the encryption toggle. The Qdrant probes survive
-unchanged. To restore plaintext-path → row probes, add a release rpc
+were retired with the encryption toggle. The Qdrant probes match the
+v5 payload (`v5_path_id/1`, `v5_uuid/1`); a v5 point carries no text, so the
+payload-ciphertext probe went with the legacy writer. To restore plaintext-path → row probes, add a release rpc
 that translates the path under the user's filter_key and fetches by
 path_hmac.
 """
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
 import re
@@ -72,54 +74,15 @@ def latest_note_path_hmac(vault_id: str) -> str:
     return val
 
 
-def _qdrant_scroll(vault_id: str, limit: int = 100) -> list[dict]:
-    """POST /collections/{coll}/points/scroll with a vault_id filter."""
-    resp = requests.post(
-        f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/scroll",
-        json={
-            "filter": {"must": [{"key": "vault_id", "match": {"value": str(vault_id)}}]},
-            "limit": limit,
-            "with_payload": True,
-            "with_vector": False,
-        },
-        timeout=10,
-    )
-    resp.raise_for_status()
-    return resp.json()["result"]["points"]
+def v5_path_id(path_hmac_b64: str) -> str:
+    """The v5 payload's path id (`p`) for a base64 path HMAC: its first 128
+    bits as 32 lowercase hex digits (`Engram.Vector.FilterId.from_hmac/1`)."""
+    return base64.b64decode(path_hmac_b64)[:16].hex()
 
 
-def assert_qdrant_ciphertext(vault_id: str, min_chunks: int = 1) -> None:
-    """Assert Qdrant payload for this vault contains ciphertext, not plaintext.
-    Phase 4 spec: every encrypted vault has its text/title/heading_path
-    replaced with *_ciphertext + *_nonce. Plaintext keys are absent."""
-    points = _qdrant_scroll(vault_id)
-    assert len(points) >= min_chunks, (
-        f"Expected >= {min_chunks} Qdrant points for vault_id={vault_id}, got {len(points)}"
-    )
-    failures = []
-    for i, p in enumerate(points[:min_chunks]):
-        payload = p.get("payload", {})
-        if "text_nonce" not in payload:
-            failures.append(f"point[{i}] payload missing 'text_nonce'; keys: {sorted(payload.keys())}")
-        if "title_nonce" not in payload:
-            failures.append(f"point[{i}] payload missing 'title_nonce'")
-        if "heading_path_nonce" not in payload:
-            failures.append(f"point[{i}] payload missing 'heading_path_nonce'")
-        text_val = payload.get("text", "")
-        if text_val and not _looks_base64(text_val):
-            failures.append(f"point[{i}] 'text' looks like plaintext: {text_val[:80]!r}")
-    assert not failures, (
-        f"Expected Qdrant ciphertext for vault_id={vault_id}; failures: {failures}"
-    )
-
-
-def _looks_base64(s: str) -> bool:
-    """Base64 heuristic: only [A-Za-z0-9+/=], length multiple of 4, no spaces."""
-    if " " in s or "\n" in s:
-        return False
-    if len(s) % 4 != 0:
-        return False
-    return bool(re.fullmatch(r"[A-Za-z0-9+/=]+", s))
+def v5_uuid(id_: str) -> str:
+    """A user or vault id as the v5 payload stores it (`FilterId.uuid/1`)."""
+    return str(id_).replace("-", "")
 
 
 _B64_RE = re.compile(r"[A-Za-z0-9+/=]+")
@@ -132,10 +95,12 @@ def _qdrant_has_point(vault_id: str, path_hmac_b64: str) -> bool:
         resp = requests.post(
             f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/scroll",
             json={
+                # Every point is written in the v5 layout: short keys, ids
+                # as 32 hex digits.
                 "filter": {
                     "must": [
-                        {"key": "vault_id", "match": {"value": str(vault_id)}},
-                        {"key": "path_hmac", "match": {"value": path_hmac_b64}},
+                        {"key": "v", "match": {"value": v5_uuid(vault_id)}},
+                        {"key": "p", "match": {"value": v5_path_id(path_hmac_b64)}},
                     ]
                 },
                 "limit": 1,
