@@ -21,18 +21,22 @@ import uuid
 import pytest
 
 from helpers.cdp import ENGINE_PATH as ENGINE
-from helpers.convergence import Expect, await_converged
+from helpers.convergence import Expect, await_converged, server_state
 from helpers.gauntlet import (
     append_lines,
+    buffer_inbound,
     create_notes,
+    flush_inbound,
     creates_seen,
     hook_creates,
+    inbound_held,
     release_creates,
     rename,
     replace_text,
     set_create_rest,
     unhook_creates,
 )
+from helpers.log_oracle import receiver_device_id
 from helpers.vault import wait_for_file
 
 logger = logging.getLogger(__name__)
@@ -322,3 +326,131 @@ async def test_fuzz_bug2_catchup_fills_doc_before_create_ack(gauntlet):
         calls = await unhook_creates(a.cdp)
     logger.warning("GAUNTLET fuzz bug2c: crdt_create calls on A %s", calls)
     await await_converged(pair.api, pair.vaults, root, Expect({path: [body, mcp]}))
+
+
+# -- narrower orderings the fuzz author traced (seeds 1, 6, 11) -----------------
+#
+# Each first asserts its ordering was REACHED. "scenario not reached" is its
+# own outcome: it says how hard the ordering is to hit in the real app, not
+# that the bug is absent.
+
+
+def _first_ts(entries: list[dict], needle: str) -> str | None:
+    hits = sorted(e.get("timestamp", "") for e in entries if needle in e.get("message", ""))
+    return hits[0] if hits else None
+
+
+@pytest.mark.timeout(600)
+async def test_fuzz_seed1_create_then_move_inside_first_push(gauntlet):
+    """B creates a note and moves it while its first crdt_create is still in
+    flight (templates / QuickAdd moving a new note into a folder). Reached:
+    two crdt_create calls for ONE doc_id at two paths. Then A, holding the
+    note idle and history-less, is force-quit and relaunched. Not doubled."""
+    pair = await gauntlet("gs1")
+    a, b = pair.a, pair.b
+    root = _root("s1")
+    old, new = f"{root}/Untitled.md", f"{root}/Inbox/Moved.md"
+    seed = f"seed-{root}"
+    await b.cdp.wait_for_stream_connected()
+    await hook_creates(b.cdp, ["hold"], rest="hold")
+    try:
+        await b.cdp.vault_write(old, f"# New\n\n{seed}\n")
+        end = time.monotonic() + 30
+        while not await creates_seen(b.cdp):
+            assert time.monotonic() < end, "scenario not reached: B never sent a crdt_create"
+            await asyncio.sleep(0.2)
+        assert await rename(b.cdp, old, new)
+        await asyncio.sleep(2)
+        await release_creates(b.cdp)
+        await asyncio.sleep(5)
+    finally:
+        calls = await unhook_creates(b.cdp)
+    on_disk = sorted(p.relative_to(b.vault).as_posix() for p in (b.vault / root).rglob("*.md"))
+    logger.warning("GAUNTLET seed1: creates %s, B files %s", calls, on_disk)
+    ids = {c["docId"] for c in calls}
+    assert len(calls) >= 2 and len(ids) == 1 and len({c["path"] for c in calls}) >= 2, (
+        f"scenario not reached: want 2+ crdt_create for one doc_id at two paths, got {calls}"
+    )
+
+    await asyncio.sleep(5)
+    a.inst.kill()
+    await a.inst.relaunch()
+    await await_converged(pair.api, pair.vaults, root, Expect({}, exact=False, at_most_once={seed}))
+    server, _ = server_state(pair.api, root)
+    assert len(server) == 1, f"want one note, server has {sorted(server)}"
+    (body,) = server.values()
+    assert body.count(seed) == 1, f"server body doubled: {body!r} (B files {on_disk})"
+
+
+@pytest.mark.timeout(600)
+async def test_fuzz_seed6_create_reply_then_update_back_to_back(gauntlet):
+    """A creates a note. Everything the server sends A is held from the moment
+    the crdt_create goes out; an MCP edit commits and its broadcast queues
+    behind the reply; then both are delivered back to back, reply first.
+    Reached: A logs "gap-heal fired" or "load interlock" BEFORE "CRDT create
+    ok". No "(conflict" copy, MCP edit everywhere."""
+    pair = await gauntlet("gs6")
+    a = pair.a
+    root = _root("s6")
+    path = f"{root}/note.md"
+    body, mcp = f"anchor-{root}", f"mcp-{root}"
+    since = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    await a.cdp.wait_for_stream_connected()
+    await hook_creates(a.cdp, ["pass"])
+    await buffer_inbound(a.cdp, on_create=True)
+    try:
+        await a.cdp.vault_write(path, f"# Note\n\n{body}\n")
+        await _wait_server_note(pair.api, path)
+        pair.api.mcp_tool("edit_note", {"path": path, "mode": "replace_text", "find": body, "replace": f"{body}\n{mcp}"})
+        await asyncio.sleep(2)
+        held = await inbound_held(a.cdp)
+    finally:
+        flushed = await flush_inbound(a.cdp)
+        await unhook_creates(a.cdp)
+    logger.warning("GAUNTLET seed6: delivered %d held frames back to back (%d when checked)", flushed, held)
+
+    device = receiver_device_id(a.vault)
+    end = time.monotonic() + 90
+    while True:
+        logs = pair.api.list_logs(limit=1000, since=since, device_id=device or "")
+        ok = _first_ts(logs, "CRDT create ok")
+        early = [t for t in (_first_ts(logs, "gap-heal fired"), _first_ts(logs, "load interlock")) if t]
+        if ok or time.monotonic() > end:
+            break
+        await asyncio.sleep(3)
+    assert ok, f"no 'CRDT create ok' from A in 90 s (held {held} frames)"
+    assert early and min(early) < ok, (
+        f"scenario not reached: no gap-heal/load-interlock before 'CRDT create ok' ({ok}); "
+        f"early={early}, held frames={held}"
+    )
+    await await_converged(pair.api, pair.vaults, root, Expect({path: [body, mcp]}))
+
+
+@pytest.mark.timeout(600)
+async def test_fuzz_seed11_discovered_note_edit_then_offline_in_debounce(gauntlet):
+    """A edits a DISCOVERED note (arrived by catch-up, never opened) while it
+    is closed and drops offline inside the debounce; B edits a different
+    line; A reconnects. Merged body and NO conflict copy."""
+    pair = await gauntlet("gs11")
+    a, b = pair.a, pair.b
+    root = _root("s11")
+    path = f"{root}/note.md"
+    lines = [f"line{i}-{root}" for i in range(1, 6)]
+    a.net.refuse()
+    pair.api.create_note(path, "# Note\n\n" + "\n".join(lines) + "\n")
+    wait_for_file(b.vault, path)
+    a.net.restore()
+    wait_for_file(a.vault, path)
+
+    edit_a, edit_b = f"A-edited-{root}", f"B-edited-{root}"
+    assert await replace_text(a.cdp, path, lines[1], edit_a)
+    await asyncio.sleep(0.1)  # inside the debounce: the push has not fired
+    a.net.refuse()
+    assert await replace_text(b.cdp, path, lines[3], edit_b)
+    await asyncio.sleep(10)
+    a.net.restore()
+    keep = [lines[0], lines[2], lines[4]]
+    await await_converged(
+        pair.api, pair.vaults, root,
+        Expect({path: [*keep, edit_a, edit_b]}, at_most_once={lines[1], lines[3]}),
+    )

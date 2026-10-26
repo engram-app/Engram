@@ -226,7 +226,8 @@ _HOOK = """(() => {
         if (event !== 'crdt_create') return orig(event, payload, timeoutMs);
         const i = window.__e2eCreates.length;
         const action = i < plan.length ? plan[i] : (window.__e2eRestOverride || rest);
-        window.__e2eCreates.push({path: payload.path, action, at: Date.now()});
+        window.__e2eCreates.push({path: payload.path, docId: payload.doc_id, action, at: Date.now()});
+        if (window.__e2eBufferOnCreate) window.__e2eBuffering = true;
         const [kind, arg] = action.split(':');
         const ms = Number(arg || 0);
         if (kind === 'drop') return sleep(timeoutMs).then(() => { throw new Error('sendRequest timeout: crdt_create'); });
@@ -273,3 +274,48 @@ async def release_creates(cdp) -> None:
 
 async def unhook_creates(cdp) -> list[dict]:
     return json.loads(await cdp.evaluate(_UNHOOK % {"plugin": PLUGIN_PATH}))
+
+
+# -- inbound frame buffering ----------------------------------------------------
+#
+# Hold every frame the server sends this device, then deliver them in arrival
+# order back to back. With `on_create=True` buffering starts the moment the
+# next crdt_create goes out (needs hook_creates armed), so its reply and any
+# broadcast that follows land together, reply first.
+
+_BUFFER = """(() => {
+    const ch = %(plugin)s.noteStream;
+    if (!ch.__e2eOrigHandle) {
+        const orig = ch.handleMessage.bind(ch);
+        ch.__e2eOrigHandle = orig;
+        window.__e2eInbound = [];
+        ch.handleMessage = raw => window.__e2eBuffering ? window.__e2eInbound.push(raw) : orig(raw);
+    }
+    window.__e2eBufferOnCreate = %(on_create)s;
+    window.__e2eBuffering = !%(on_create)s;
+    return 'buffering';
+})()"""
+
+_FLUSH = """(() => {
+    const ch = %(plugin)s.noteStream;
+    window.__e2eBuffering = false; window.__e2eBufferOnCreate = false;
+    const held = window.__e2eInbound || [];
+    window.__e2eInbound = [];
+    for (const raw of held) ch.__e2eOrigHandle(raw);
+    if (ch.__e2eOrigHandle) { ch.handleMessage = ch.__e2eOrigHandle; delete ch.__e2eOrigHandle; }
+    return held.length;
+})()"""
+
+
+async def buffer_inbound(cdp, *, on_create: bool = False) -> None:
+    out = await cdp.evaluate(_BUFFER % {"plugin": PLUGIN_PATH, "on_create": json.dumps(on_create)})
+    assert out == "buffering", out
+
+
+async def inbound_held(cdp) -> int:
+    return await cdp.evaluate("(window.__e2eInbound || []).length")
+
+
+async def flush_inbound(cdp) -> int:
+    """Deliver the held frames in arrival order and stop buffering."""
+    return await cdp.evaluate(_FLUSH % {"plugin": PLUGIN_PATH})
