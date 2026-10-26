@@ -262,12 +262,10 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     |> Enum.chunk_every(Qdrant.max_ids())
     |> Enum.reduce_while({:ok, %{}}, fn chunk, {:ok, acc} ->
       case Qdrant.scroll(Qdrant.collection_name(),
-             # The tenant condition every reader uses: `user_id` alone while
-             # the v5 format is off, `user_id` OR `u` once it is on. Never a
-             # hand-built `u` condition: strict mode answers 400 to a filter
-             # on an unindexed key, and `u` is only indexed with v5 on
-             # (#2138). A v5 point exists only with v5 on, so both layouts
-             # still come back.
+             # The tenant condition every reader uses: `user_id` OR `u` while
+             # legacy filters are on, `u` alone once they are off. Never a
+             # hand-built condition: strict mode answers 400 to a filter on
+             # an unindexed key (#2138). Both layouts still come back.
              filter: %{must: [%{has_id: chunk}, Qdrant.match_filter(:user, user_id)]},
              with_payload: keys,
              limit: length(chunk)

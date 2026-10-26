@@ -1161,8 +1161,7 @@ defmodule Engram.Crypto.UserDekRotation do
   end
 
   # `note_attrs` HMACs are under the old key, so the rows are rebuilt from
-  # the decrypted frontmatter under the new one (dropped when the v5 format
-  # is off: any leftover row is under the old key and could never match).
+  # the decrypted frontmatter under the new one.
   defp rewrite_note_attrs(user_id, notes, flats) do
     ids = Enum.map(notes, & &1.id)
 

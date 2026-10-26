@@ -246,9 +246,9 @@ defmodule Engram.Indexing do
 
   @doc """
   Phase 1 of the indexing pipeline. Parses the note, calls the embedder, and
-  builds the encrypted Qdrant payloads + chunk row inserts in memory.
+  builds the Qdrant points + chunk row inserts in memory.
 
-  Writes no index rows. Its one DB write (v5 format on) is the frontmatter
+  Writes no index rows. Its one DB write is the frontmatter
   key dictionary (`FrontmatterKeys.resolve/3`), committed in its own short
   transaction, so this must NOT run inside a caller's transaction: the
   dictionary's advisory lock would then be held across the slow Voyage AI
@@ -504,10 +504,7 @@ defmodule Engram.Indexing do
     capped =
       if forced,
         do: chunks,
-        else:
-          chunks
-          |> fit_note(cap, merged_rows?(rows))
-          |> within_pass_embed_budget(opts)
+        else: fit_note(chunks, cap, merged_rows?(rows))
 
     case forced || over_note_cap_tier(note, capped, cap) ||
            over_points_budget_tier(note, user, capped) do
@@ -543,43 +540,15 @@ defmodule Engram.Indexing do
   # Voyage's 3M TPM a pass is >= ~1.4 min even for CJK at a token a char.
   #
   # Only a note over ~12 MB of prose reaches it: a paid 30 MB note (1,024
-  # groups x 30 KB) or a self-host one. Prose past the budget is indexed
-  # keyword-only, in note order, so the dense part is the note's first 12
-  # MiB of prose and is the same on every pass: unchanged content reuses its
-  # points, nothing flaps, and no word leaves the keyword leg. Free cannot
-  # reach it (128 x 30 KB is ~3.8 MB). ponytail: a prefix, not a spread;
-  # split the embed across jobs (needs the per-batch vector cache, PR-12) to
-  # cover the rest densely.
+  # groups x 30 KB) or a self-host one. The budget binds on vector cache
+  # MISSES (`with_cache_lookup/3`): a pass embeds up to it, caches what it
+  # paid and snoozes, and the next pass finds those as hits. So every prose
+  # byte goes dense, over as many passes as it takes. Free cannot reach it
+  # (128 x 30 KB is ~3.8 MB).
   @max_pass_embed_bytes 12 * 1024 * 1024
 
   defp max_pass_embed_bytes,
     do: Application.get_env(:engram, :max_pass_embed_bytes, @max_pass_embed_bytes)
-
-  # With the vector cache on the budget binds on cache MISSES instead
-  # (`with_cache_lookup/3`): a pass embeds up to the budget, caches it and
-  # snoozes, and the next pass finds those as hits. So every prose byte goes
-  # dense, over as many passes as it takes.
-  defp within_pass_embed_budget(chunks, opts) do
-    if Keyword.has_key?(opts, :vector_cache),
-      do: chunks,
-      else: within_pass_embed_budget(chunks)
-  end
-
-  defp within_pass_embed_budget(chunks) do
-    budget = max_pass_embed_bytes()
-
-    {chunks, _used} =
-      Enum.map_reduce(chunks, 0, fn chunk, used ->
-        if Markdown.dense_kind?(chunk.kind) do
-          used = used + IO.iodata_length(chunk.embed_text)
-          {if(used > budget, do: Map.put(chunk, :sparse_only, true), else: chunk), used}
-        else
-          {chunk, used}
-        end
-      end)
-
-    chunks
-  end
 
   # Decided BEFORE any token reservation, so a floored pass reserves nothing.
   # A full plan writes one point per chunk, reused or not.
