@@ -62,7 +62,7 @@ async def test_chaos_soak_converges(gauntlet):
     seed = int(os.environ.get("E2E_SOAK_SEED") or random.randrange(1 << 30))
     logger.warning("GAUNTLET soak seed=%d", seed)
     rng = random.Random(seed)
-    pair = gauntlet("gsoak")
+    pair = await gauntlet("gsoak")
     api = pair.api
     devices = {d.name: d for d in pair.devices}
     root = f"Soak-{uuid.uuid4().hex[:6]}"

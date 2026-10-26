@@ -39,7 +39,7 @@ KILL_AFTER_HEALED = 20
 
 @pytest.mark.timeout(1800)
 async def test_kill_mid_heal_backlog_then_relaunch_converges(gauntlet):
-    pair = gauntlet("gkill", with_b=False)
+    pair = await gauntlet("gkill", with_b=False)
     a = pair.a
     rng = random.Random(1000)
     root = f"Backlog-{uuid.uuid4().hex[:6]}"

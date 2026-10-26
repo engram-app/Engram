@@ -33,7 +33,7 @@ from helpers.vault import wait_for_file, wait_for_file_gone
 
 @pytest.mark.timeout(900)
 async def test_restore_round_trip_with_device_offline(gauntlet):
-    pair = gauntlet("grst")
+    pair = await gauntlet("grst")
     a, b, api = pair.a, pair.b, pair.api
     root = f"RestoreOff-{uuid.uuid4().hex[:6]}"
     r, d = f"{root}/R", f"{root}/D"

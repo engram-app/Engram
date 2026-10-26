@@ -52,7 +52,7 @@ ONLINE_GAP_S = 10
 
 @pytest.mark.timeout(1200)
 async def test_mobile_suspend_resume_cycles_bounded_and_converged(gauntlet):
-    pair = gauntlet("gmob")
+    pair = await gauntlet("gmob")
     a, b = pair.a, pair.b
     await a.cdp.emulate_mobile()
     rng = random.Random(2242)

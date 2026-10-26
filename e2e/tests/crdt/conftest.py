@@ -65,7 +65,7 @@ class Pair:
 
 @pytest.fixture
 def gauntlet(ts, auth_provider):
-    """Factory: `pair = gauntlet("g1", plugin_a=..., with_b=True)`.
+    """Async factory: `pair = await gauntlet("g1", plugin_a=..., with_b=True)`.
 
     Instances are built but only started when `start=True` (the default), so
     an upgrade test can seed a vault on disk or pick a build first.
@@ -74,7 +74,7 @@ def gauntlet(ts, auth_provider):
         pytest.skip("gauntlet pairs use fixed displays; run serially")
     made: list[tuple[str, Pair]] = []
 
-    def make(label: str, *, plugin_a: Path | None = None, plugin_b: Path | None = None,
+    async def make(label: str, *, plugin_a: Path | None = None, plugin_b: Path | None = None,
              with_b: bool = True, start: bool = True) -> Pair:
         email = e2e_email(label, ts)
         user_id, api_key = auth_provider.provision_user(email, secrets.token_urlsafe(32))
@@ -107,7 +107,9 @@ def gauntlet(ts, auth_provider):
         made.append((user_id, pair))
         if start:
             for d in pair.devices:
-                d.inst.start()
+                # async_start, not start(): start() drives the plugin enable
+                # through asyncio.run, which cannot nest in the test's loop.
+                await d.inst.async_start()
         return pair
 
     yield make

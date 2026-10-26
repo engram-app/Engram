@@ -51,7 +51,7 @@ async def test_upgrade_from_previous_release_on_kept_profile(gauntlet):
     logger.warning(
         "GAUNTLET upgrade %s -> candidate %s", PREVIOUS_VERSION, plugin_version(candidate)
     )
-    pair = gauntlet("gup", plugin_a=previous)
+    pair = await gauntlet("gup", plugin_a=previous)
     a, b = pair.a, pair.b
     rng = random.Random(1390)
     root = f"Upgrade-{uuid.uuid4().hex[:6]}"
