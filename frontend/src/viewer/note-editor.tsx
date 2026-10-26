@@ -145,11 +145,22 @@ export function buildEditorState(
 			// Sidebar note/attachment dropped on the text becomes a link/embed. Base
 			// (not the mode compartment) so it also works in Raw mode.
 			...(drop ? [itemDrop(drop)] : []),
-			// CodeMirror's content DOM sets spellcheck="false" by default (it's
-			// built for code, not prose). This is a markdown/prose editor, so
-			// override it back on — the browser's native spellcheck is the only
-			// squiggly-underline signal this editor gets, there's no in-app one.
-			EditorView.contentAttributes.of({ spellcheck: "true" }),
+			// CodeMirror's content DOM turns spellcheck, autocorrect,
+			// autocapitalize and writing suggestions off by default (it's built
+			// for code, not prose). This is a markdown/prose editor, so turn them
+			// back on. Spellcheck is the only squiggly-underline signal this
+			// editor gets. The other three matter most on iPhone: with prediction
+			// off, iOS fills the empty QuickType row with a site AutoFill
+			// suggestion, and tapping it closes the keyboard. No `autocomplete`:
+			// it is only defined for form controls, not a contenteditable. The
+			// raw frontmatter editor keeps CodeMirror's defaults (YAML keys must
+			// not be capitalised or corrected).
+			EditorView.contentAttributes.of({
+				spellcheck: "true",
+				autocorrect: "on",
+				autocapitalize: "sentences",
+				writingsuggestions: "true",
+			}),
 			// The editable region is a textbox; unnamed, a screen reader says only
 			// "edit text". Read from the translator facet so a language switch
 			// (which swaps the compartment) renames it without a rebuild.
