@@ -294,8 +294,6 @@ defmodule Engram.Indexing.CommitIndexRlsTest do
 
   describe "the v5 flat-field writes under enforced RLS" do
     setup %{note: note, user: user, vault: vault} do
-      Engram.ServiceConfig.put_override(:v5_payload_format, true)
-
       content =
         "---\nstatus: draft\nmood: calm\n---\n# Commit Index\n\nBody text that yields a chunk.\n"
 

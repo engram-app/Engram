@@ -1,8 +1,8 @@
 defmodule Engram.Vector.QdrantWithPayloadTest do
   @moduledoc """
-  Task 15.8: one accessor (`Qdrant.result_payload/1`) decides the payload
-  include list of every search body, for both `:chunk_text_read` states and
-  both payload formats; no body asks for the whole payload or for vectors.
+  Task 15.8: every ranked search body asks for no payload (search reads the
+  text from Postgres); only the text fallback names payload keys
+  (`Qdrant.fallback_payload/0`). No body asks for the whole payload.
   """
   use ExUnit.Case, async: true
 
@@ -23,57 +23,27 @@ defmodule Engram.Vector.QdrantWithPayloadTest do
     ]
   end
 
-  test "the include list per text source and payload format" do
-    ServiceConfig.put_override(:v5_payload_format, false)
-    assert Qdrant.result_payload(:payload) == ["vault_id" | @text_keys]
-    assert Qdrant.result_payload(:fallback) == @text_keys
-    assert Qdrant.result_payload(:postgres) == false
-
-    ServiceConfig.put_override(:v5_payload_format, true)
-    assert Qdrant.result_payload(:payload) == ["vault_id" | @text_keys] ++ ["u"]
-    assert Qdrant.result_payload(:fallback) == @text_keys ++ ["u"]
-    assert Qdrant.result_payload(:postgres) == false
+  test "the fallback include list: the v3/v4 text keys and u" do
+    assert Qdrant.fallback_payload() == @text_keys ++ ["u"]
   end
 
-  for v5? <- [false, true] do
-    test "chunk_text_read off, v5 #{v5?}: the text keys and vault_id, no vectors" do
-      ServiceConfig.put_override(:v5_payload_format, unquote(v5?))
-
-      for body <- bodies(chunk_text_read: false) do
-        assert body.with_payload == Qdrant.result_payload(:payload)
-        refute Map.has_key?(body, :with_vector)
-      end
-    end
-
-    test "chunk_text_read on, v5 #{v5?}: no payload, no vectors" do
-      ServiceConfig.put_override(:v5_payload_format, unquote(v5?))
-
-      for body <- bodies(chunk_text_read: true) do
-        assert body.with_payload == false
-        refute Map.has_key?(body, :with_vector)
-      end
+  test "every ranked body asks for no payload and no vectors" do
+    for body <- bodies([]) do
+      assert body.with_payload == false
+      refute Map.has_key?(body, :with_vector)
     end
   end
 
   test "with_vector (MMR) puts the dense vector on the pool query itself" do
-    for read? <- [false, true], body <- bodies(chunk_text_read: read?, with_vector: true) do
-      assert body.with_vector == ["dense"]
-    end
+    for body <- bodies(with_vector: true), do: assert(body.with_vector == ["dense"])
   end
 
   test "hybrid legs carry ids and scores only" do
-    for read? <- [false, true] do
-      body =
-        Qdrant.hybrid_search_body([0.1], @sparse,
-          user_id: "u1",
-          chunk_text_read: read?,
-          with_vector: true
-        )
+    body = Qdrant.hybrid_search_body([0.1], @sparse, user_id: "u1", with_vector: true)
 
-      for leg <- body.searches do
-        assert leg.with_payload == false
-        refute Map.has_key?(leg, :with_vector)
-      end
+    for leg <- body.searches do
+      assert leg.with_payload == false
+      refute Map.has_key?(leg, :with_vector)
     end
   end
 

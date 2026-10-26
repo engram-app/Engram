@@ -78,11 +78,6 @@ defmodule Engram.Search.FieldFilters do
           | {:reserved_field, String.t()}
           | {:invalid_field_filter, String.t()}
           | {:too_many_field_filters, pos_integer()}
-          | :field_filters_unavailable
-
-  @doc "Field filters work only once the v5 payload format and the v5 layout are both on."
-  @spec available?() :: boolean()
-  def available?, do: Qdrant.v5_payload_format?() and Qdrant.write_v5_layout?()
 
   @doc "Longest key echoed back in an error message."
   def max_echo, do: @max_echo

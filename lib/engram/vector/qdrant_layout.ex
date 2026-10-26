@@ -13,9 +13,9 @@ defmodule Engram.Vector.QdrantLayout do
   index, every other payload index sets `enable_hnsw: false`, every payload
   index is on disk, and a new collection caps its segments (create-time
   only, `@max_segment_size_kb`). The per-tenant graph (`m: 0`,
-  `payload_m: 16`, one graph per `u` value) waits for `tenant_graph?/3`:
-  while legacy `user_id` points and v5 `u` points coexist, m 0 would split
-  one user into two disconnected subgraphs. Below 1.19.2 (prod's old 1.18.2
+  `payload_m: 16`, one graph per `u` value) waits for `tenant_graph?/3`
+  (legacy filters off): while legacy `user_id` points and v5 `u` points
+  coexist, m 0 would split one user into two disconnected subgraphs. Below 1.19.2 (prod's old 1.18.2
   cluster, self-host compose) the layout is exactly the pre-8.1 one, so the
   reconcile never PATCHes those collections for it.
 
@@ -86,17 +86,13 @@ defmodule Engram.Vector.QdrantLayout do
   # rejects (400) a filter on an un-indexed field, so each must have an index
   # before any upsert/search/delete (#626). `type_hmac` is the OKF frontmatter
   # `type` blind index (spec 2026-07-02); `folder_hmac`/`tags_hmac` are the
-  # folder and tag search filters (#1609). These are the legacy (v3/v4) names;
-  # the v5 short-key indexes come from `PayloadKeys.index_fields/0`, and both
-  # sets live until the pass drops the legacy fields (Task 18.1).
+  # folder and tag search filters (#1609). These are the legacy (v3/v4) names,
+  # indexed only while `:legacy_filter_fields` is on (a collection that may
+  # still hold v3/v4 points); the v5 short-key indexes come from
+  # `PayloadKeys.index_fields/0`.
   @legacy_keyword ~w(user_id vault_id path_hmac type_hmac folder_hmac tags_hmac)
   # OKF frontmatter dates, plaintext so Qdrant can range-filter on them.
   @legacy_integer ~w(fm_timestamp fm_created)
-  # No read path filters on `note_id` and v5 points do not carry it (spec
-  # 3.3b). Created only on a pre-1.19.2 server with the v5 format off, so such
-  # a collection is exactly what main creates. An index that already exists
-  # is left alone; the new cluster simply never gets one (Task 8.2).
-  @legacy_only ~w(note_id)
   # The tenant field of each format. Legacy `user_id` gets no `is_tenant`
   # (one tenant field per collection), but keeps `enable_hnsw` so copied
   # v3/v4 points still have a per-user graph while the pass runs.
@@ -244,8 +240,8 @@ defmodule Engram.Vector.QdrantLayout do
 
   @doc """
   True when the collection may drop its global graph for the per-tenant one
-  (`m: 0`): `switch?` (`:qdrant_tenant_graph`, flipped by Task 18.1 after
-  drop-legacy-fields, so no legacy `user_id` point is left), a 1.19.2+
+  (`m: 0`): `switch?` (legacy filters off, so no legacy `user_id` point is
+  left), a 1.19.2+
   server, and `info` (a GET `result`) proving `u` is the `is_tenant` index,
   i.e. the collection was created with the tenant layout. Version alone is
   not enough: an older collection on a 1.19.2 server has bare indexes, and m 0
@@ -274,33 +270,29 @@ defmodule Engram.Vector.QdrantLayout do
 
   @doc """
   The payload indexes to create, `[{field, schema}]`, for a server at
-  `version` with the v5 format on or off. Below 1.19.2 these are the pre-8.1
-  sets (bare `"keyword"` / `"integer"` schemas, `note_id` while v5 is off).
-  On 1.19.2 every index is on disk, `u` is the tenant field, and only the two
-  tenant fields build HNSW edges.
+  `version`: the v5 short-key set (`PayloadKeys.index_fields/0`), plus the
+  legacy set while `legacy?` (`:legacy_filter_fields`) is on. Below 1.19.2
+  the schemas are bare `"keyword"` / `"integer"`. On 1.19.2 every index is on
+  disk, `u` is the tenant field, and only the two tenant fields build HNSW
+  edges.
 
-  `legacy?` is `:legacy_filter_fields`. With the v5 format on and it off,
-  every filter is v5-only (`Qdrant.match_filter/2`), so no legacy index is
-  listed and a new (v3) collection never builds one. An existing legacy index
-  is left alone: boot only creates missing indexes, it never deletes one.
-  With the v5 format off every filter is legacy, so `legacy?` is moot.
+  With `legacy?` off every filter is v5-only (`Qdrant.match_filter/2`), so no
+  legacy index is listed and a new collection never builds one. An existing
+  index is left alone: boot only creates missing indexes, it never deletes
+  one (so an old collection keeps a `note_id` index nothing reads).
   """
-  @spec payload_indexes(Version.t() | nil, boolean(), boolean()) ::
-          [{String.t(), String.t() | map()}]
-  def payload_indexes(version, v5?, legacy?) do
-    tenant? = tenant_layout?(version)
-    legacy_only = if v5? or tenant?, do: [], else: @legacy_only
-
+  @spec payload_indexes(Version.t() | nil, boolean()) :: [{String.t(), String.t() | map()}]
+  def payload_indexes(version, legacy?) do
     legacy =
-      if v5? and not legacy?,
-        do: [],
-        else:
-          Enum.map(@legacy_keyword ++ legacy_only, &{&1, "keyword"}) ++
-            Enum.map(@legacy_integer, &{&1, "integer"})
+      if legacy?,
+        do:
+          Enum.map(@legacy_keyword, &{&1, "keyword"}) ++
+            Enum.map(@legacy_integer, &{&1, "integer"}),
+        else: []
 
-    indexes = legacy ++ if(v5?, do: PayloadKeys.index_fields(), else: [])
+    indexes = legacy ++ PayloadKeys.index_fields()
 
-    if tenant?, do: Enum.map(indexes, &tenant_schema/1), else: indexes
+    if tenant_layout?(version), do: Enum.map(indexes, &tenant_schema/1), else: indexes
   end
 
   # `on_disk` is deprecated from 1.19 in favour of `memory: "cold"` (same
@@ -488,15 +480,13 @@ defmodule Engram.Vector.QdrantLayout do
   def on_disk_keys, do: ["vectors", "sparse_vectors", "hnsw_config"]
 
   @doc "Create-collection body: the desired storage params for `version` plus shape."
-  @spec create_params(pos_integer(), boolean(), Version.t() | nil) :: map()
-  def create_params(dims, float16? \\ false, version \\ nil) do
-    dense = %{"size" => dims, "distance" => "Cosine", "on_disk" => true}
-
-    # float16 halves dense storage (Task 15.1), only with the v5 payload
-    # format on. Only a NEW collection gets it: `diff/2` never compares the
-    # datatype, so an existing float32 collection is not drift and boot never
-    # PATCHes it (Qdrant cannot convert in place).
-    dense = if float16?, do: Map.put(dense, "datatype", "float16"), else: dense
+  @spec create_params(pos_integer(), Version.t() | nil) :: map()
+  def create_params(dims, version \\ nil) do
+    # float16 halves dense storage (Task 15.1). Only a NEW collection gets
+    # it: `diff/2` never compares the datatype, so an existing float32
+    # collection is not drift and boot never PATCHes it (Qdrant cannot
+    # convert in place).
+    dense = %{"size" => dims, "distance" => "Cosine", "on_disk" => true, "datatype" => "float16"}
     body = put_in(storage(version, false), ["vectors", "dense"], dense)
 
     if tenant_layout?(version),

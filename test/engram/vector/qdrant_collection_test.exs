@@ -7,37 +7,7 @@ defmodule Engram.Vector.QdrantCollectionTest do
   setup do
     bypass = Bypass.open()
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
-    ServiceConfig.put_override(:v5_payload_format, true)
     %{bypass: bypass}
-  end
-
-  test "with the v5 format off, a new collection is exactly main's", %{bypass: bypass} do
-    ServiceConfig.put_override(:v5_payload_format, false)
-    test_pid = self()
-
-    Bypass.expect_once(bypass, "PUT", "/collections/c1", fn conn ->
-      {:ok, body, conn} = Plug.Conn.read_body(conn)
-      refute Map.has_key?(Jason.decode!(body)["vectors"]["dense"], "datatype")
-      Plug.Conn.send_resp(conn, 200, "{}")
-    end)
-
-    Bypass.expect(bypass, "PUT", "/collections/c1/index", fn conn ->
-      {:ok, body, conn} = Plug.Conn.read_body(conn)
-      send(test_pid, {:index, Jason.decode!(body)["field_name"]})
-      Plug.Conn.send_resp(conn, 200, ~s({"status":"ok"}))
-    end)
-
-    assert :ok = Qdrant.ensure_collection("c1", 1024)
-
-    # The 6 legacy keyword, note_id and 2 integer indexes (main's set).
-    fields =
-      for _ <- 1..9 do
-        assert_receive {:index, field}
-        field
-      end
-
-    refute_receive {:index, _}
-    assert "note_id" in fields
   end
 
   describe "tenant layout by server version (Task 8.1)" do
@@ -89,7 +59,8 @@ defmodule Engram.Vector.QdrantCollectionTest do
          %{bypass: bypass} do
       {create, indexes} = create_on(bypass, "1.19.2")
 
-      # The global graph stays until Task 18.1 flips :qdrant_tenant_graph.
+      # Create never sets the graph; the reconcile moves it to m 0 once
+      # legacy filters are off (`QdrantLayout.tenant_graph?/3`).
       refute Map.has_key?(create, "hnsw_config")
       assert create["optimizers_config"]["max_segment_size"] == 128_000
       assert indexes["u"] == %{"type" => "uuid", "is_tenant" => true, "on_disk" => true}
@@ -138,15 +109,19 @@ defmodule Engram.Vector.QdrantCollectionTest do
       end)
     end
 
-    test "1.18.2 (prod's old cluster): today's create body and indexes", %{bypass: bypass} do
-      ServiceConfig.put_override(:v5_payload_format, false)
+    # Self-host compose pins 1.18.3: no tenant layout, legacy and v5 indexes
+    # side by side (legacy filters default on), never `note_id`.
+    test "1.18.2: no tenant layout, bare legacy schemas next to the v5 ones",
+         %{bypass: bypass} do
       {create, indexes} = create_on(bypass, "1.18.2")
 
       refute Map.has_key?(create, "hnsw_config")
       assert create["optimizers_config"] == %{"max_optimization_threads" => 1}
+      assert create["vectors"]["dense"]["datatype"] == "float16"
       assert indexes["user_id"] == "keyword"
-      assert indexes["note_id"] == "keyword"
       assert indexes["fm_timestamp"] == "integer"
+      assert indexes["u"] == %{"type" => "uuid", "on_disk" => true}
+      refute Map.has_key?(indexes, "note_id")
     end
   end
 

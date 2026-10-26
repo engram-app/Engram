@@ -237,16 +237,12 @@ defmodule Engram.IndexingV5RebuildTest do
     assert est.est_tokens == sent |> Enum.map(&UsageMeters.estimate_tokens/1) |> Enum.sum()
   end
 
-  # What the staging rehearsal (2026-10-22) actually saw: the pass runs with
-  # the vector cache on (`index_rebuild=on` requires it), and the cache is
+  # What the staging rehearsal (2026-10-22) actually saw: the cache is
   # per USER, so a text two notes share is paid once. The estimate is per
   # note and counts it in both: per note it is exact, summed over a user's
   # notes it is an upper bound. Staging's one paid user: 13,189 new points,
   # 1,381 texts cached (sent), spend 0.144x the manifest.
-  test "with the vector cache on, a text two notes share is sent once", ctx do
-    Application.put_env(:engram, :vector_cache_enabled, true)
-    on_exit(fn -> Application.delete_env(:engram, :vector_cache_enabled) end)
-
+  test "a text two notes share is sent once (the vector cache)", ctx do
     shared = sections(3) <> "\n\n## New\n\nshared new text. #{@pad}"
     a = indexed(ctx)
     b = Engram.Fixtures.insert_note!(ctx.user, ctx.vault, %{path: "B.md", content: shared})
@@ -289,7 +285,6 @@ defmodule Engram.IndexingV5RebuildTest do
   # pass): the pass caps an uncapped note from its stored vectors, no Voyage.
   test "with only the note cap flag, a capped group is mean-pooled for 0 tokens", ctx do
     note = indexed(ctx, 200)
-    ServiceConfig.put_override(:note_points_cap_enabled, true)
     refute Indexing.budget_enabled?()
 
     assert {:ok, count, 0, true} = rebuild(note, ctx.vault, ctx.user)
@@ -329,7 +324,6 @@ defmodule Engram.IndexingV5RebuildTest do
   end
 
   test "flat fields and note_attrs are re-extracted from the current frontmatter", ctx do
-    ServiceConfig.put_override(:v5_payload_format, true)
     note = indexed(ctx)
 
     attrs = fn ->
@@ -343,7 +337,6 @@ defmodule Engram.IndexingV5RebuildTest do
 
     # Stale: as if extracted before the mapping existed.
     tenant(ctx.user, fn -> Repo.delete_all(from(a in NoteAttr, where: a.note_id == ^note.id)) end)
-    ServiceConfig.put_override(:v5_payload_format, false)
 
     assert {:ok, _, 0, true} = rebuild(note, ctx.vault, ctx.user)
     assert attrs.() == fresh

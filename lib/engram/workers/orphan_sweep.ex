@@ -622,7 +622,7 @@ defmodule Engram.Workers.OrphanSweep do
       filter: %{},
       limit: @qdrant_scroll_limit,
       # `u` is the v5 point's user id (undashed, `PayloadKeys`).
-      with_payload: if(Qdrant.v5_payload_format?(), do: ["user_id", "u"], else: ["user_id"]),
+      with_payload: ["user_id", "u"],
       with_vector: false
     ]
 

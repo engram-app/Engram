@@ -1140,11 +1140,8 @@ defmodule Engram.Crypto.UserDekRotation do
     )
   end
 
-  defp note_flats(user_id, notes, new_dek, new_filter_key) do
-    if Qdrant.v5_payload_format?(),
-      do: Map.new(notes, &{&1.id, flat_fields(user_id, &1, new_dek, new_filter_key)}),
-      else: %{}
-  end
+  defp note_flats(user_id, notes, new_dek, new_filter_key),
+    do: Map.new(notes, &{&1.id, flat_fields(user_id, &1, new_dek, new_filter_key)})
 
   # Key ids survive a rotation (`sweep_frontmatter_keys/4` already rekeyed
   # the dictionary), so resolving under the new filter key finds the same ids.
@@ -1658,10 +1655,10 @@ defmodule Engram.Crypto.UserDekRotation do
   # Only legacy-format points hold ciphertext (a v5 payload has none,
   # `Engram.Indexing.PayloadV5`), so the scroll is on the legacy `user_id` key
   # alone: paging the user's v5 points would find nothing to rewrap. Once no
-  # legacy point can exist (v5 on, legacy filters off: the v3 cluster, which
-  # has no `user_id` index) there is nothing to sweep and no call is made.
+  # legacy point can exist (legacy filters off: the v3 cluster, which has no
+  # `user_id` index) there is nothing to sweep and no call is made.
   defp sweep_qdrant(%User{id: user_id}, old_dek, new_dek, opts) do
-    if Qdrant.legacy_points?(),
+    if Qdrant.legacy_filter_fields?(),
       do: sweep_legacy_points(user_id, old_dek, new_dek, opts),
       else: {:ok, [], nil}
   end

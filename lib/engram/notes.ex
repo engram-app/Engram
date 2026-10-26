@@ -167,70 +167,13 @@ defmodule Engram.Notes do
   end
 
   @doc """
-  #590: maps Qdrant point ids → the owning note's decrypted display fields
-  (`source_path`, `tags`).
-
-  Search payloads no longer carry plaintext `source_path`/`folder`/`tags`
-  (Qdrant Cloud is a separate breach surface). The canonical values live
-  only in the encrypted `notes` row, so search rehydrates them here keyed by
-  the `chunks.qdrant_point_id → note_id` mapping. Tenant-scoped + decrypted
-  as one instrumented batch. Point ids with no note row are omitted — the
-  caller leaves such candidates' display fields untouched. A point whose note
-  is soft-deleted maps to `:deleted` so the caller can drop the hit (#1608).
-  """
-  @spec display_fields_by_qdrant_points(Engram.Accounts.User.t(), [String.t()]) ::
-          %{
-            String.t() =>
-              %{source_path: String.t() | nil, title: String.t() | nil, tags: [String.t()]}
-              | :deleted
-          }
-  def display_fields_by_qdrant_points(_user, []), do: %{}
-
-  def display_fields_by_qdrant_points(user, qdrant_ids) when is_list(qdrant_ids) do
-    uuids =
-      for id <- qdrant_ids, is_binary(id), {:ok, u} <- [Ecto.UUID.cast(id)], uniq: true, do: u
-
-    {:ok, pairs} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(c in Chunk,
-            join: n in ^notes_only(),
-            on: n.id == c.note_id,
-            where: c.qdrant_point_id in ^uuids,
-            select: {c.qdrant_point_id, struct(n, @note_meta_fields)}
-          )
-        )
-      end)
-
-    {qids, notes} = Enum.unzip(pairs)
-
-    notes
-    |> Crypto.decrypt_notes_batch(user)
-    |> Enum.zip(qids)
-    |> Enum.reduce(%{}, fn
-      {{:ok, %{deleted_at: %DateTime{}}}, qid}, acc ->
-        Map.put(acc, to_string(qid), :deleted)
-
-      {{:ok, note}, qid}, acc ->
-        Map.put(acc, to_string(qid), %{
-          source_path: note.path,
-          title: note.title,
-          tags: note.tags || []
-        })
-
-      {{:error, _}, _qid}, acc ->
-        acc
-    end)
-  end
-
-  @doc """
   Task 11.3: everything a search hit shows, from Postgres, keyed by the hits'
   point ids: the hit's vault (from its note), its display text and heading,
   and the note's display fields. ONE query for the hits (`chunks`, joined to
   the note and to the point's `chunk_points` row), plus ONE notes query for
   the content of the hit notes that slice their text (below). `chunks` stays
   the existence check, so a point written before `chunk_points` keeps its
-  hit and falls back to the payload; PR-18 moves the base to `chunk_points`.
+  hit and falls back to the payload.
 
   Display text (hybrid, notes-chunks-hyperopt 2.4b), from `chunk_points`:
     * a row with `display_ct` (a note at or over the display threshold) opens it;
@@ -241,8 +184,9 @@ defmodule Engram.Notes do
       whose checksum differs (the note was edited since its index) still
       shows the current chunk at that position, counted
       `[:engram, :search, :text_stale]`;
-    * no `chunk_points` row (written with the write flag off): `text` and
-      `heading_path` are nil and the caller falls back to the payload.
+    * no `chunk_points` row (a v3/v4 point, indexed before chunk text moved
+      to Postgres): `text` and `heading_path` are nil and the caller falls
+      back to the payload.
 
   `{:ok, map}`: a point id with no chunk row is absent (a stale point the
   caller drops); a soft-deleted note maps to `:deleted`; a row whose text

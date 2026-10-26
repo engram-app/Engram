@@ -32,7 +32,6 @@ defmodule Engram.SearchTenantIdfTest do
     # #2198: v5 points carry the tenant under `u`, so once the legacy fields
     # are dropped a `user_id` corpus is empty and per-tenant IDF is garbage.
     test "v5 layout with legacy filters off: the IDF corpus filters on `u`" do
-      ServiceConfig.put_override(:v5_payload_format, true)
       ServiceConfig.put_override(:legacy_filter_fields, false)
       uid = "11111111-2222-3333-4444-555555555555"
 

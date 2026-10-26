@@ -68,9 +68,6 @@ defmodule Engram.PromEx.Search do
         # results are silently going missing), `text_undecryptable`,
         # `note_undecryptable`, `payload_undecryptable` (a pre-text-column
         # row whose payload fallback failed), `vault_inactive`.
-        # NOT alerted on yet: the engram-infra ratio alert over search hits
-        # (PR #2089 "Infra follow-up") is owed before `:chunk_text_read`
-        # flips on, since that flag is what makes these drops reachable.
         sum(
           metric_prefix ++ [:hits_dropped, :total],
           event_name: @hit_dropped_event,
@@ -97,8 +94,8 @@ defmodule Engram.PromEx.Search do
           measurement: :count,
           description: "Search hits shown with text re-derived after an edit since index."
         ),
-        # Every Qdrant candidate on the `:chunk_text_read` path, before any
-        # drop: the denominator for the two counters above.
+        # Every Qdrant candidate search reads from Postgres, before any drop:
+        # the denominator for the two counters above.
         sum(
           metric_prefix ++ [:hits, :total],
           event_name: @hits_event,

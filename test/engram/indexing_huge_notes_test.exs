@@ -175,7 +175,6 @@ defmodule Engram.IndexingHugeNotesTest do
   @tag size: @cap_mb, shape: :tiny_sections, headings: true, tier: :selfhost
   @tag timeout: (@seconds_per_mb * @cap_mb + 60) * 1_000
   test "#{@cap_mb} MB tiny_sections selfhost with chunk text in postgres", ctx do
-    ServiceConfig.put_override(:chunk_text_write, true)
     run_case(ctx)
 
     rows = Repo.all(from(c in Chunk, where: c.user_id == ^ctx.user.id), skip_tenant_check: true)

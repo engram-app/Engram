@@ -83,7 +83,6 @@ defmodule Engram.Crypto.UserDekRotationTest do
     setup %{user: user} do
       bypass = Bypass.open()
       Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
-      Engram.ServiceConfig.put_override(:v5_payload_format, true)
       # Recorded in ETS rather than sent as messages: the assertion reads
       # every scroll the rotation made.
       filters = :ets.new(:scroll_filters, [:bag, :public])
@@ -1286,8 +1285,6 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
     test "a v5 point is rebuilt under the new key and note_attrs rewritten from the frontmatter",
          %{user: user, note: note, point: point} do
-      Engram.ServiceConfig.put_override(:v5_payload_format, true)
-
       capture_payload_writes(self(), [%{"id" => point, "payload" => %{"u" => "x", "y" => "b2xk"}}])
 
       assert :ok = UserDekRotation.rotate_user(user.id)

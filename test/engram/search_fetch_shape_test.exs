@@ -256,8 +256,7 @@ defmodule Engram.SearchFetchShapeTest do
     {:similar, 0.3}
   ]
 
-  # Recorded on ed0564746 (before Task 15.8), the same for both
-  # `:chunk_text_read` states.
+  # Recorded on ed0564746 (before Task 15.8).
   @golden %{
     {:vector, 0.3} => ["00", "03", "04", "06", "01"],
     {:vector, 0.0} => ["00", "01", "02", "03", "04"],
@@ -267,72 +266,49 @@ defmodule Engram.SearchFetchShapeTest do
     {:similar, 0.3} => ["N0.md", "N2.md", "N3.md", "N1.md", "N4.md"]
   }
 
-  for read? <- [false, true] do
-    test "ranked ids and texts are unchanged on every path (chunk_text_read #{read?})", ctx do
-      ServiceConfig.put_override(:chunk_text_read, unquote(read?))
+  test "ranked ids and texts are unchanged on every path", ctx do
+    actual =
+      Map.new(@paths, fn {mode, d} = key ->
+        result = run(mode, ctx, limit: 5, diversity: d)
+        assert_texts(result)
+        {key, ranked(mode, result)}
+      end)
 
-      actual =
-        Map.new(@paths, fn {mode, d} = key ->
-          result = run(mode, ctx, limit: 5, diversity: d)
-          assert_texts(result)
-          {key, ranked(mode, result)}
-        end)
-
-      assert actual == @golden
-    end
+    assert actual == @golden
   end
 
-  # Response bytes and Qdrant calls per search on ed0564746, by
-  # `:chunk_text_read`: {bytes, calls}.
+  # Response bytes and Qdrant calls per search on ed0564746, text from
+  # Postgres: {bytes, calls}.
   @before %{
-    false => %{
-      {:vector, 0.3} => {271_852, 1},
-      {:vector, 0.0} => {9_925, 1},
-      {:keyword, 0.3} => {271_876, 1},
-      {:hybrid, 0.3} => {274_060, 2},
-      {:hybrid, 0.0} => {10_474, 2},
-      {:similar, 0.3} => {271_864, 1}
-    },
-    true => %{
-      {:vector, 0.3} => {270_852, 1},
-      {:vector, 0.0} => {9_675, 1},
-      {:keyword, 0.3} => {270_876, 1},
-      {:hybrid, 0.3} => {273_060, 2},
-      {:hybrid, 0.0} => {10_224, 2},
-      {:similar, 0.3} => {270_864, 1}
-    }
+    {:vector, 0.3} => {270_852, 1},
+    {:vector, 0.0} => {9_675, 1},
+    {:keyword, 0.3} => {270_876, 1},
+    {:hybrid, 0.3} => {273_060, 2},
+    {:hybrid, 0.0} => {10_224, 2},
+    {:similar, 0.3} => {270_864, 1}
   }
 
   # `MEASURE=1` prints the numbers (Task 15.8 PR body).
-  for read? <- [false, true] do
-    test "bytes and calls against before (chunk_text_read #{read?})", ctx do
-      ServiceConfig.put_override(:chunk_text_read, unquote(read?))
-      requests()
+  test "bytes and calls against before", ctx do
+    requests()
 
-      for {mode, d} = key <- @paths do
-        {:ok, _} = run(mode, ctx, limit: 5, diversity: d)
-        reqs = requests()
-        total = reqs |> Enum.map(&elem(&1, 2).bytes) |> Enum.sum()
-        vectors = reqs |> Enum.map(&elem(&1, 2).vector_bytes) |> Enum.sum()
-        {before, calls} = @before[unquote(read?)][key]
+    for {mode, d} = key <- @paths do
+      {:ok, _} = run(mode, ctx, limit: 5, diversity: d)
+      reqs = requests()
+      total = reqs |> Enum.map(&elem(&1, 2).bytes) |> Enum.sum()
+      vectors = reqs |> Enum.map(&elem(&1, 2).vector_bytes) |> Enum.sum()
+      {before, calls} = @before[key]
 
-        if unquote(read?) do
-          assert total <= before, "#{inspect(key)}: #{total} bytes, #{before} before"
-          # A page holding rows without Postgres text adds ONE fallback
-          # call; hybrid loses its fused retrieve when it has nothing to
-          # fetch (no MMR).
-          assert length(reqs) <= calls + 1, "#{inspect(key)}: #{length(reqs)} calls"
-        else
-          # Flag off is main, byte for byte and call for call.
-          assert {total, length(reqs)} == {before, calls}, inspect(key)
-        end
+      assert total <= before, "#{inspect(key)}: #{total} bytes, #{before} before"
+      # A page holding rows without Postgres text adds ONE fallback call;
+      # hybrid loses its fused retrieve when it has nothing to fetch (no MMR).
+      assert length(reqs) <= calls + 1, "#{inspect(key)}: #{length(reqs)} calls"
 
-        if System.get_env("MEASURE"),
-          do:
-            IO.puts(
-              "MEASURE read=#{unquote(read?)} #{inspect(key)} total=#{total} vectors=#{vectors} requests=#{length(reqs)}"
-            )
-      end
+      if System.get_env("MEASURE"),
+        do:
+          IO.puts(
+            "MEASURE #{inspect(key)} total=#{total} vectors=#{vectors} requests=#{length(reqs)}"
+          )
     end
   end
 
@@ -348,9 +324,8 @@ defmodule Engram.SearchFetchShapeTest do
 
   @text_keys ~w(text text_nonce title title_nonce heading_path heading_path_nonce aad_version)
 
-  for read? <- [false, true], {mode, d} <- @paths do
-    test "#{mode} diversity #{d}, chunk_text_read #{read?}: include lists only", ctx do
-      ServiceConfig.put_override(:chunk_text_read, unquote(read?))
+  for {mode, d} <- @paths do
+    test "#{mode} diversity #{d}: include lists only", ctx do
       {_result, reqs} = requests_of(ctx, unquote(mode), limit: 5, diversity: unquote(d))
 
       for {_kind, body} <- reqs, b <- Map.get(body, "searches", [body]) do
@@ -368,9 +343,7 @@ defmodule Engram.SearchFetchShapeTest do
     end
   end
 
-  test "chunk_text_read on: no text keys except a fallback for rows without text", ctx do
-    ServiceConfig.put_override(:chunk_text_read, true)
-
+  test "no text keys except a fallback for rows without text", ctx do
     for {mode, d} <- @paths do
       {_result, reqs} = requests_of(ctx, mode, limit: 5, diversity: d)
 
@@ -399,20 +372,11 @@ defmodule Engram.SearchFetchShapeTest do
     end
   end
 
-  test "chunk_text_read off: result requests carry the text keys and vault_id", ctx do
-    ServiceConfig.put_override(:chunk_text_read, false)
-    {_result, reqs} = requests_of(ctx, :vector, limit: 5, diversity: 0.0)
-    assert [{:query, body}] = reqs
-    assert "vault_id" in body["with_payload"]
-    assert Enum.all?(@text_keys, &(&1 in body["with_payload"]))
-  end
-
   test "MMR: the vectors come with the pool, in the same call", ctx do
-    for read? <- [false, true], {mode, d} <- @paths, d > 0 do
-      ServiceConfig.put_override(:chunk_text_read, read?)
+    for {mode, d} <- @paths, d > 0 do
       {_result, reqs} = requests_of(ctx, mode, limit: 5, diversity: d)
 
-      assert [{kind, body}] = Enum.filter(reqs, &vector_request?/1), inspect({mode, read?})
+      assert [{kind, body}] = Enum.filter(reqs, &vector_request?/1), inspect(mode)
 
       # The pool: 20 (max(limit * 4, 20)).
       case kind do
@@ -423,8 +387,7 @@ defmodule Engram.SearchFetchShapeTest do
   end
 
   test "no vectors when diversity is 0", ctx do
-    for read? <- [false, true], {mode, d} <- @paths, d == 0.0 do
-      ServiceConfig.put_override(:chunk_text_read, read?)
+    for {mode, d} <- @paths, d == 0.0 do
       {_result, reqs} = requests_of(ctx, mode, limit: 5, diversity: 0.0)
       refute Enum.any?(reqs, &vector_request?/1)
     end

@@ -33,10 +33,7 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
     :ok
   end
 
-  defp mode!(mode, layout? \\ true) do
-    ServiceConfig.put_override(:write_v5_layout, layout?)
-    ServiceConfig.put_override(:index_rebuild, mode)
-  end
+  defp mode!(mode), do: ServiceConfig.put_override(:index_rebuild, mode)
 
   defp stamped_note(chunker, keyword) do
     user = insert(:user)
@@ -87,14 +84,6 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
         refute_enqueued(worker: worker, args: %{"note_id" => note.id})
       end
     end
-  end
-
-  test "INDEX_REBUILD=on without WRITE_V5_LAYOUT is off and keeps the pins" do
-    Rebuild.set_budget(1_000)
-    mode!("on", false)
-
-    assert Rebuild.mode() == :off
-    assert Rebuild.target_versions() == {3, 2}
   end
 
   test "on targets the build: chunker 5, keyword 4" do

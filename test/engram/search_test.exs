@@ -540,7 +540,6 @@ defmodule Engram.SearchTest do
     # it used to send the legacy `tags_hmac` key, which v3 has no index for.
     test "empty tags (MCP [] and REST [\"\"]) add no tag condition, legacy off",
          %{bypass: bypass, user: user, vault: vault} do
-      Engram.ServiceConfig.put_override(:v5_payload_format, true)
       Engram.ServiceConfig.put_override(:legacy_filter_fields, false)
       Engram.MockEmbedder |> expect(:embed_texts, 2, fn _, _ -> {:ok, [[0.1, 0.1, 0.1]]} end)
       test_pid = self()

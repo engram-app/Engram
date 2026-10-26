@@ -15,7 +15,6 @@ defmodule Engram.RebuildRlsTest do
   setup do
     Engram.Cache.clear_local(:rebuild)
     # `seal/0` runs only in dry_run.
-    Engram.ServiceConfig.put_override(:write_v5_layout, true)
     Engram.ServiceConfig.put_override(:index_rebuild, "dry_run")
     user = insert(:user)
     vault = insert(:vault, user: user)

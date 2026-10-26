@@ -14,6 +14,9 @@ defmodule Engram.MCP.Handlers do
   @too_large "note would exceed the maximum size of 10MB"
   @write_opts [actor: "mcp"]
 
+  @fields_hint ~s(Filter with search_notes `fields`: [{"key": <field>, "op": "eq" | "in" | "gt" | ) <>
+                 ~s("gte" | "lt" | "lte" | "after" | "before", "value": ...}].)
+
   # -- Vault tools --
 
   # `vaults` is pre-scoped by the controller to the set THIS credential can use
@@ -202,7 +205,6 @@ defmodule Engram.MCP.Handlers do
 
   def handle("list_fields", user, vault, _args) do
     {:ok, fields} = Engram.Notes.FieldCatalog.list(user, vault)
-    filterable = Engram.Search.FieldFilters.available?()
 
     text =
       if fields == [] do
@@ -210,11 +212,11 @@ defmodule Engram.MCP.Handlers do
       else
         ["| Field | Kinds | Notes | Range | Top values |", "|---|---|---|---|---|"]
         |> Kernel.++(Enum.map(fields, &field_row/1))
-        |> Kernel.++(["", fields_hint(filterable)])
+        |> Kernel.++(["", @fields_hint])
         |> Enum.join("\n")
       end
 
-    {:ok, text, %{"fields" => Enum.map(fields, &field_json/1), "filterable" => filterable}}
+    {:ok, text, %{"fields" => Enum.map(fields, &field_json/1), "filterable" => true}}
   end
 
   def handle("list_folders", user, vault, _args) do
@@ -858,14 +860,6 @@ defmodule Engram.MCP.Handlers do
         "|" -> "\\|"
         _ -> " "
       end)
-
-  defp fields_hint(true),
-    do:
-      ~s(Filter with search_notes `fields`: [{"key": <field>, "op": "eq" | "in" | "gt" | ) <>
-        ~s("gte" | "lt" | "lte" | "after" | "before", "value": ...}].)
-
-  defp fields_hint(false),
-    do: "search_notes cannot filter on these fields on this server yet."
 
   defp field_json(f) do
     range = fn

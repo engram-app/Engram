@@ -279,7 +279,6 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
 
   test "perform runs every registered migration" do
     # KeyAliases runs only while the v5 rebuild is on.
-    Engram.ServiceConfig.put_override(:write_v5_layout, true)
     Engram.ServiceConfig.put_override(:index_rebuild, "on")
     # `on` needs an open ledger (no budget reads as halted).
     Engram.Cache.clear_local(:rebuild)

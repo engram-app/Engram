@@ -22,7 +22,6 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
   setup do
     ServiceConfig.put_override(:qdrant_url, qdrant_url())
     ServiceConfig.put_override(:qdrant_reconcile_config, true)
-    ServiceConfig.put_override(:v5_payload_format, true)
     %{version: Qdrant.server_version()}
   end
 
@@ -49,12 +48,13 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
     want = QdrantLayout.desired(ctx.version)
     assert Map.drop(QdrantLayout.diff(info["config"], want), ["strict_mode_config"]) == %{}
 
-    # The global graph stays while legacy and v5 points coexist (Task 18.1).
+    # The global graph stays while legacy and v5 points may coexist (legacy
+    # filters on, the default).
     assert info["config"]["hnsw_config"]["m"] == 16
     # The create-time segment cap reaches the server (desired/5 omits it).
     assert info["config"]["optimizer_config"]["max_segment_size"] == 128_000
 
-    for {field, schema} <- QdrantLayout.payload_indexes(ctx.version, true, true) do
+    for {field, schema} <- QdrantLayout.payload_indexes(ctx.version, true) do
       have = info["payload_schema"][field]["params"]
       assert Enum.all?(schema, fn {k, v} -> have[k] == v end), "#{field}: #{inspect(have)}"
     end

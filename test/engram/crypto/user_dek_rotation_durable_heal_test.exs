@@ -61,8 +61,6 @@ defmodule Engram.Crypto.UserDekRotationDurableHealTest do
       skip_tenant_check: true
     )
 
-    Engram.ServiceConfig.put_override(:v5_payload_format, true)
-
     # A rotation and its heals never reach the embedder.
     Mox.stub(Engram.MockEmbedder, :embed_texts, fn _ -> flunk("embed during a rotation heal") end)
 

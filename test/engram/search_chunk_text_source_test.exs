@@ -1,6 +1,6 @@
 defmodule Engram.SearchChunkTextSourceTest do
   @moduledoc """
-  Task 11.3 + 15.7 step 2: with `:chunk_text_read` on, search reads each
+  Task 11.3 + 15.7 step 2: search reads each
   hit's text, heading, vault and display fields from Postgres in ONE query
   keyed by the hit's point id, and the payload is only a fallback for rows
   written before the text columns. A hit with no chunk row (a stale point) is
@@ -20,7 +20,6 @@ defmodule Engram.SearchChunkTextSourceTest do
   setup do
     bypass = Bypass.open()
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
-    ServiceConfig.put_override(:chunk_text_read, true)
 
     stub(Engram.MockEmbedder, :embed_texts, fn _texts, _opts ->
       {:ok, [List.duplicate(0.1, 3)]}
@@ -604,21 +603,9 @@ defmodule Engram.SearchChunkTextSourceTest do
 
     assert {:ok, [_, _]} = search(ctx)
     assert_received {:retrieve_body, %{"ids" => [^without], "with_payload" => keys}}
-    assert keys == Engram.Vector.Qdrant.result_payload(:fallback)
+    assert keys == Engram.Vector.Qdrant.fallback_payload()
     refute "vault_id" in keys
     refute Engram.Vector.PayloadKeys.short(:vault_id) in keys
     assert "text_nonce" in keys
-  end
-
-  test "flag off: vault_id is still read from the payload", ctx do
-    ServiceConfig.put_override(:chunk_text_read, false)
-    id = Ecto.UUID.generate()
-    insert_chunk!(ctx, id, 0, "Ferritin from postgres.")
-    answer(ctx, [legacy_point(ctx, id, "Ferritin from the payload.", 0.9)])
-
-    assert {:ok, [hit]} = search(ctx)
-    assert hit.text == "Ferritin from the payload."
-    assert_received {:query_body, %{"with_payload" => keys}}
-    assert "vault_id" in keys
   end
 end

@@ -851,8 +851,11 @@ defmodule Engram.Crypto do
   end
 
   @doc """
-  Encrypts `text`, `title`, `heading_path` in the Qdrant payload map using
-  the user's DEK. Adds `text_nonce`, `title_nonce`, `heading_path_nonce`
+  The v3/v4 (legacy) point payload: encrypts `text`, `title`, `heading_path`
+  in the Qdrant payload map using the user's DEK. The indexer no longer
+  writes this layout (v5 points carry no text); it is the inverse of
+  `decrypt_qdrant_candidates/4`, which still reads v3/v4 points a collection
+  holds from before the v5 layout. Adds `text_nonce`, `title_nonce`, `heading_path_nonce`
   keys; all six crypto fields are base64-encoded binaries. Other keys
   (user_id, vault_id, chunk_index, and the `*_hmac` filter fields) are
   untouched. As of #590 the payload carries NO plaintext
@@ -882,9 +885,7 @@ defmodule Engram.Crypto do
       {title_ct, title_nonce} = Envelope.encrypt(Map.get(payload, :title) || "", dek, title_aad)
       {hp_ct, hp_nonce} = Envelope.encrypt(Map.get(payload, :heading_path) || "", dek, hp_aad)
 
-      # Base64 on purpose: `Indexing.unpack_point/1` splices these fields
-      # into the Qdrant request as unescaped JSON fragments (it falls back
-      # to Jason for any value that would need escaping).
+      # Base64: the v3/v4 point layout `decrypt_qdrant_candidates/4` reads.
       {:ok,
        payload
        |> Map.put(:text, Base.encode64(text_ct))

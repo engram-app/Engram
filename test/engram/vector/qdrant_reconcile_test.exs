@@ -291,11 +291,31 @@ defmodule Engram.Vector.QdrantReconcileTest do
     end
   end
 
-  describe "per-tenant graph (m 0), Task 18.1's :qdrant_tenant_graph switch" do
+  # The per-tenant graph follows LEGACY_FILTER_FIELDS: on (the default) a
+  # collection may hold legacy `user_id` points and keeps the global graph;
+  # off (SaaS prod, the v3 cluster) it moves to m 0 once `u` is is_tenant.
+  describe "per-tenant graph (m 0), on once legacy filters are off" do
     @tenant_u %{
       "data_type" => "uuid",
       "params" => %{"type" => "uuid", "is_tenant" => true, "on_disk" => true}
     }
+
+    # The v3 cluster (prod since 2026-10-26) as it was created: the 1.19.2
+    # tenant fixture's layout (m 0, payload_m 16, one indexing thread, `u`
+    # is_tenant), only the 21 v5 payload indexes, segments capped at 128,000
+    # KB, two default segments, f16 sparse values.
+    @legacy_index_keys ~w(user_id vault_id path_hmac type_hmac folder_hmac tags_hmac
+                          fm_timestamp fm_created)
+    @v3_info "test/support/fixtures/qdrant/collection_info_tenant_1_19_2.json"
+             |> File.read!()
+             |> Jason.decode!()
+             |> Map.update!("payload_schema", &Map.drop(&1, @legacy_index_keys))
+             |> put_in(["config", "optimizer_config", "max_segment_size"], 128_000)
+             |> put_in(["config", "optimizer_config", "default_segment_number"], 2)
+             |> put_in(
+               ["config", "params", "sparse_vectors", "keyword", "index", "datatype"],
+               "float16"
+             )
 
     defp boot_1192(bypass, info) do
       stub_version(bypass, "1.19.2")
@@ -305,23 +325,43 @@ defmodule Engram.Vector.QdrantReconcileTest do
       assert {:ok, _} = Qdrant.reconcile_config("engram_notes")
     end
 
-    test "switch off (default): never PATCHes the graph", %{bypass: bypass} do
+    test "legacy filters on (default): never PATCHes the graph", %{bypass: bypass} do
       boot_1192(bypass, put_in(@prod_info, ["payload_schema", "u"], @tenant_u))
       refute_receive {:patch, %{"hnsw_config" => _}}
     end
 
-    test "switch on, but `u` is not the tenant index: graph untouched", %{bypass: bypass} do
-      ServiceConfig.put_override(:qdrant_tenant_graph, true)
+    test "legacy filters off, but `u` is not the tenant index: graph untouched",
+         %{bypass: bypass} do
+      ServiceConfig.put_override(:legacy_filter_fields, false)
       boot_1192(bypass, @prod_info)
       refute_receive {:patch, %{"hnsw_config" => _}}
     end
 
-    test "switch on and `u` is_tenant: m 0 once, then no drift", %{bypass: bypass} do
-      ServiceConfig.put_override(:qdrant_tenant_graph, true)
+    test "legacy filters off and `u` is_tenant: m 0 once, then no drift", %{bypass: bypass} do
+      ServiceConfig.put_override(:legacy_filter_fields, false)
       boot_1192(bypass, put_in(@prod_info, ["payload_schema", "u"], @tenant_u))
 
       assert_receive {:patch, %{"hnsw_config" => %{"m" => 0, "payload_m" => 16}}}
       assert {:ok, []} = Qdrant.reconcile_config("engram_notes")
+    end
+
+    # Prod's config: LEGACY_FILTER_FIELDS=false on the v3 cluster. The graph
+    # it wants is the one v3 was created with, so no reconcile (boot or the
+    # poller) ever PATCHes hnsw_config there, and the 0.5 vCPU node never
+    # rebuilds its HNSW for this.
+    test "the v3 cluster's shape: no hnsw_config PATCH, ever", %{bypass: bypass} do
+      ServiceConfig.put_override(:legacy_filter_fields, false)
+      assert @v3_info["config"]["hnsw_config"]["m"] == 0
+      assert map_size(@v3_info["payload_schema"]) == 21
+
+      boot_1192(bypass, @v3_info)
+      assert {:ok, _} = Qdrant.reconcile_config("engram_notes")
+
+      for {:patch, body} <- flush() do
+        refute Map.has_key?(body, "hnsw_config"), inspect(body)
+        refute Map.has_key?(body, "vectors"), inspect(body)
+        refute Map.has_key?(body, "sparse_vectors"), inspect(body)
+      end
     end
   end
 
@@ -740,7 +780,6 @@ defmodule Engram.Vector.QdrantReconcileTest do
     test "boot creates the payload indexes, then refuses unindexed reads", %{bypass: bypass} do
       test_pid = self()
       # The v5 short keys are missing from the fixture: index creates happen.
-      ServiceConfig.put_override(:v5_payload_format, true)
       fake_collection(bypass, "engram_notes", without_refusal(@prod_info))
 
       Bypass.expect_once(bypass, "PUT", "/collections/engram_notes", fn conn ->

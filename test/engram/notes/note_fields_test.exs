@@ -46,7 +46,6 @@ defmodule Engram.Notes.NoteFieldsTest do
     bypass = Bypass.open()
     Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
-    Engram.ServiceConfig.put_override(:v5_payload_format, true)
 
     test_pid = self()
 
@@ -349,22 +348,7 @@ defmodule Engram.Notes.NoteFieldsTest do
     assert Enum.map(attrs(note.id), & &1.key_id) == [named(:author)]
   end
 
-  test "with the v5 format off, a pass writes nothing new to Postgres", %{
-    user: user,
-    vault: vault
-  } do
-    Engram.ServiceConfig.put_override(:v5_payload_format, false)
-    {note, _user} = index!(user, vault, @full)
-    assert attrs(note.id) == []
-    assert dictionary(user.id) == []
-  end
-
   describe "Postgres and the v5 Qdrant payload agree" do
-    setup do
-      Application.put_env(:engram, :write_v5_layout, true)
-      on_exit(fn -> Application.delete_env(:engram, :write_v5_layout) end)
-    end
-
     # YAML reads `status: 2` as a number and `reviewed_by: true` as a
     # boolean; a named exact field must still hold their text, or a filter
     # for "2" finds nothing. Date-shaped strings stay text too.

@@ -1,12 +1,9 @@
 defmodule Engram.RebuildExclusionTest do
   @moduledoc """
-  Task 16.4: while the v5 rebuild is `on`, other bulk writers wait, and
-  `on` itself needs the v5 write layout.
+  Task 16.4: while the v5 rebuild is `on`, other bulk writers wait.
   """
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
-
-  import ExUnit.CaptureLog
 
   alias Engram.Rebuild
   alias Engram.ServiceConfig
@@ -16,55 +13,30 @@ defmodule Engram.RebuildExclusionTest do
     Engram.Cache.clear_local(:rebuild)
     Repo.query!("DELETE FROM rebuild_ledger")
     Rebuild.set_budget(1_000_000)
-    :persistent_term.erase({Rebuild, :v5_layout_off_warned})
     :ok
   end
 
-  defp on!(v5? \\ true) do
-    ServiceConfig.put_override(:write_v5_layout, v5?)
-    ServiceConfig.put_override(:index_rebuild, "on")
-  end
+  defp on!, do: ServiceConfig.put_override(:index_rebuild, "on")
 
-  describe "the v5 layout guard" do
-    test "on with the v5 layout reads :on" do
+  # Every point is written in the v5 layout now, so `on` and the seal need
+  # nothing but the switch (and, for `on`, a budget).
+  describe "the switch alone" do
+    test "on reads :on" do
       on!()
       assert Rebuild.mode() == :on
     end
 
-    test "on without the v5 layout reads :off and warns once" do
-      on!(false)
-
-      log =
-        capture_log(fn ->
-          assert Rebuild.mode() == :off
-          assert Rebuild.mode() == :off
-        end)
-
-      assert [_one] = Regex.scan(~r/rebuild_v5_layout_off/, log)
-    end
-
-    test "v5_payload_format alone is not enough" do
-      ServiceConfig.put_override(:v5_payload_format, true)
-      on!(false)
-      assert Rebuild.mode() == :off
-    end
-
-    test "a dry run seals only with the v5 layout" do
+    test "a dry run seals" do
       ServiceConfig.put_override(:index_rebuild, "dry_run")
-      ServiceConfig.put_override(:write_v5_layout, false)
       assert Rebuild.mode() == :dry_run
-      assert Rebuild.seal() == {:error, :v5_layout_off}
-
-      ServiceConfig.put_override(:write_v5_layout, true)
       assert {:ok, _budget} = Rebuild.seal()
     end
 
-    test "the dry-run coordinator completes without sealing when the layout is off" do
+    test "the dry-run coordinator seals a budget" do
       ServiceConfig.put_override(:index_rebuild, "dry_run")
-      ServiceConfig.put_override(:write_v5_layout, false)
       Repo.query!("DELETE FROM rebuild_ledger")
       assert :ok = perform_job(RebuildDryRun, %{})
-      assert Rebuild.ledger() == nil
+      assert Rebuild.ledger() != nil
     end
   end
 
