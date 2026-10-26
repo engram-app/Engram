@@ -57,7 +57,7 @@ export function PropertyTypeMenu({
 	 *  picking a type leaves the caret where the next keystroke belongs. Radix
 	 *  restores focus to the trigger on close, so this has to be done in
 	 *  `onCloseAutoFocus`; focusing from `onSelect` is overwritten a tick later. */
-	focusAfterSelect?: () => HTMLInputElement | null;
+	focusAfterSelect?: () => HTMLElement | null;
 	/** Adds a Delete item at the bottom. The menu is the row's only remove
 	 *  control, the way Obsidian's property icon menu carries it. */
 	onRemove?: () => void;

@@ -57,35 +57,6 @@ function readKeyboardOpen(): boolean {
 	return tallest.height - vv.height >= KEYBOARD_MIN_PX;
 }
 
-/** The part of the window the user can actually see, in layout-viewport px. */
-export interface ViewportBox {
-	top: number;
-	height: number;
-}
-
-/**
- * The visual viewport's top and height: the visible area above the keyboard
- * and whatever rows iOS stacks on it.
- *
- * This replaces lifting a bottom-pinned bar by a computed inset. On iOS 26 a
- * fixed element moved with a transform drifts out of step with the visual
- * viewport when the keyboard opens, closes or the viewport scrolls (WebKit
- * bugs 297779 and 300523); a fixed frame sized to this box does not. On
- * Android with `interactive-widget=resizes-content` the layout viewport
- * shrinks too, `offsetTop` is 0 and `height` is the shrunk window, so the same
- * box is right there as well.
- */
-export function readViewportBox(): ViewportBox {
-	if (typeof window === "undefined") {
-		return { top: 0, height: 0 };
-	}
-	if (devKeyboardFlag()) {
-		return { top: 0, height: window.innerHeight - DEV_INSET_PX };
-	}
-	const vv = window.visualViewport;
-	return vv ? { top: vv.offsetTop, height: vv.height } : { top: 0, height: window.innerHeight };
-}
-
 /** How long to keep sampling after a keyboard-shaped event. The iOS keyboard
  *  animates for ~300ms and the QuickType row can arrive after it. */
 const SETTLE_MS = 600;
@@ -145,6 +116,35 @@ function useViewportValue<T>(read: () => T, same: (a: T, b: T) => boolean = Obje
 }
 
 const sameBox = (a: ViewportBox, b: ViewportBox) => a.top === b.top && a.height === b.height;
+
+/** The part of the window the user can actually see, in layout-viewport px. */
+export interface ViewportBox {
+	top: number;
+	height: number;
+}
+
+/**
+ * The visual viewport's top and height: the visible area above the keyboard
+ * and whatever rows iOS stacks on it.
+ *
+ * This replaces lifting a bottom-pinned bar by a computed inset. On iOS 26 a
+ * fixed element moved with a transform drifts out of step with the visual
+ * viewport when the keyboard opens, closes or the viewport scrolls (WebKit
+ * bugs 297779 and 300523); a fixed frame sized to this box does not. On
+ * Android with `interactive-widget=resizes-content` the layout viewport
+ * shrinks too, `offsetTop` is 0 and `height` is the shrunk window, so the same
+ * box is right there as well.
+ */
+export function readViewportBox(): ViewportBox {
+	if (typeof window === "undefined") {
+		return { top: 0, height: 0 };
+	}
+	if (devKeyboardFlag()) {
+		return { top: 0, height: window.innerHeight - DEV_INSET_PX };
+	}
+	const vv = window.visualViewport;
+	return vv ? { top: vv.offsetTop, height: vv.height } : { top: 0, height: window.innerHeight };
+}
 
 /** The visible area, live. See readViewportBox. */
 export function useVisualViewportBox(): ViewportBox {

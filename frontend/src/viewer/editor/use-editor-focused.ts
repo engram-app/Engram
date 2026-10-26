@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
  * from under the finger mid-drag.
  */
 /** The mobile formatting toolbar (keyboard-bar.tsx). */
-export const EDITOR_TOOLBAR = "[data-editor-toolbar]";
+const EDITOR_TOOLBAR = "[data-editor-toolbar]";
 
 const FOCUS_HOLDERS = `.cm-editor, ${EDITOR_TOOLBAR}`;
 
@@ -45,3 +45,5 @@ export function useEditorFocused(): boolean {
 
 	return focused;
 }
+
+export { EDITOR_TOOLBAR };

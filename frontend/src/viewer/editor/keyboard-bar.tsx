@@ -37,7 +37,12 @@ import {
 	toggleWrap,
 } from "./format-commands";
 import { EDITOR_TOOLBAR, useEditorFocused } from "./use-editor-focused";
-import { readViewportBox, useKeyboardOpen, useVisualViewportBox } from "./use-keyboard-inset";
+import {
+	readViewportBox,
+	useKeyboardOpen,
+	useVisualViewportBox,
+	type ViewportBox,
+} from "./use-keyboard-inset";
 
 /**
  * History lives in Yjs, not CodeMirror. The editor installs yCollab, which owns
@@ -147,6 +152,11 @@ const COMMAND_GROUPS: ReadonlyArray<
  */
 const TOOLBAR_OFFSET_VAR = "--editor-toolbar-offset";
 
+/** How much of the visible area, from its bottom edge up, the bar covers. */
+function coveredByBar(bar: HTMLElement, box: ViewportBox): number {
+	return Math.max(0, box.top + box.height - bar.getBoundingClientRect().top);
+}
+
 /**
  * Tells CodeMirror how much of the visible area the bar covers, so scrolling
  * the caret into view keeps it above the bar. CodeMirror measures against the
@@ -159,11 +169,7 @@ const TOOLBAR_OFFSET_VAR = "--editor-toolbar-offset";
  */
 export const toolbarScrollMargin = EditorView.scrollMargins.of(() => {
 	const bar = document.querySelector<HTMLElement>(EDITOR_TOOLBAR);
-	if (!bar) {
-		return null;
-	}
-	const { top, height } = readViewportBox();
-	return { bottom: Math.max(0, top + height - bar.getBoundingClientRect().top) };
+	return bar ? { bottom: coveredByBar(bar, readViewportBox()) } : null;
 });
 
 /**
@@ -219,12 +225,14 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 			root.style.removeProperty(TOOLBAR_OFFSET_VAR);
 			return;
 		}
-		// From the bar's top to the bottom of the window: the bottom-anchored FAB
-		// is fixed to the layout viewport, so this is what it has to clear.
+		// The FAB is fixed to the bottom of the LAYOUT viewport, so it has to
+		// clear whatever is below the visible area (the keyboard, on iOS) plus
+		// what the bar covers inside it.
 		const publish = () => {
+			const belowVisible = window.innerHeight - (box.top + box.height);
 			root.style.setProperty(
 				TOOLBAR_OFFSET_VAR,
-				`${Math.round(window.innerHeight - bar.getBoundingClientRect().top)}px`,
+				`${Math.round(belowVisible + coveredByBar(bar, box))}px`,
 			);
 		};
 		publish();
@@ -234,7 +242,7 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 			observer.disconnect();
 			root.style.removeProperty(TOOLBAR_OFFSET_VAR);
 		};
-	}, [visible, box.top, box.height]);
+	}, [visible, box]);
 
 	if (!visible) {
 		return null;
@@ -271,7 +279,7 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 				// Android docks flat against the keyboard. iOS floats it as a rounded
 				// pill with a gap: iOS 26 draws its AutoFill/accessory row as a
 				// separate floating bubble, and a flush bar reads as swallowed by it.
-				className="pointer-events-auto absolute inset-x-0 bottom-0 flex flex-col border-border border-t bg-card ios:inset-x-2 ios:bottom-2 ios:overflow-hidden ios:rounded-2xl ios:border ios:shadow-lg"
+				className="pointer-events-auto absolute inset-x-0 ios:inset-x-2 bottom-0 ios:bottom-2 flex flex-col ios:overflow-hidden ios:rounded-2xl ios:border border-border border-t bg-card ios:shadow-lg"
 				// Marks this subtree as still "the editor" for useEditorFocused, so a
 				// pan that lands focus on the bar does not unmount it mid-drag.
 				data-editor-toolbar=""
