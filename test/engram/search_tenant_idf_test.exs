@@ -12,6 +12,7 @@ defmodule Engram.SearchTenantIdfTest do
   import ExUnit.CaptureLog
 
   alias Engram.Notes.Chunk
+  alias Engram.QdrantFilterView
   alias Engram.QdrantStub
   alias Engram.Repo
   alias Engram.Search
@@ -24,9 +25,10 @@ defmodule Engram.SearchTenantIdfTest do
     test "sparse search carries the user's IDF corpus when asked" do
       body = Qdrant.sparse_search_body(@sparse, user_id: "u1", tenant_idf: true)
 
-      assert body.params == %{
-               idf: %{corpus: %{must: [%{key: "user_id", match: %{value: "u1"}}]}}
-             }
+      assert QdrantFilterView.legacy_view(body.params.idf.corpus) ==
+               %{must: [%{key: "user_id", match: %{value: "u1"}}]}
+
+      assert Map.keys(body.params) == [:idf]
     end
 
     # #2198: v5 points carry the tenant under `u`, so once the legacy fields
@@ -50,7 +52,9 @@ defmodule Engram.SearchTenantIdfTest do
       %{searches: [dense, sparse]} =
         Qdrant.hybrid_search_body([0.1], @sparse, user_id: "u1", tenant_idf: true)
 
-      assert sparse.params.idf.corpus == %{must: [%{key: "user_id", match: %{value: "u1"}}]}
+      assert QdrantFilterView.legacy_view(sparse.params.idf.corpus) ==
+               %{must: [%{key: "user_id", match: %{value: "u1"}}]}
+
       refute get_in(dense, [:params, :idf])
 
       %{searches: [_, plain]} = Qdrant.hybrid_search_body([0.1], @sparse, user_id: "u1")
@@ -201,7 +205,7 @@ defmodule Engram.SearchTenantIdfTest do
       capture(b, "/points/query")
       assert {:ok, []} = Search.search(u, v, "paddle", mode: :keyword)
       assert_received {:qdrant_body, %{"using" => "keyword"} = json}
-      assert json["params"]["idf"]["corpus"] == corpus(u)
+      assert QdrantFilterView.legacy_view(json["params"]["idf"]["corpus"]) == corpus(u)
     end
 
     test "hybrid mode: only the keyword leg carries it", %{bypass: b, user: u, vault: v} do
@@ -209,7 +213,7 @@ defmodule Engram.SearchTenantIdfTest do
       capture(b, "/points/query/batch")
       assert {:ok, []} = Search.search(u, v, "paddle", mode: :hybrid)
       assert_received {:qdrant_body, %{"searches" => [dense, sparse]}}
-      assert sparse["params"]["idf"]["corpus"] == corpus(u)
+      assert QdrantFilterView.legacy_view(sparse["params"]["idf"]["corpus"]) == corpus(u)
       refute get_in(dense, ["params", "idf"])
     end
 

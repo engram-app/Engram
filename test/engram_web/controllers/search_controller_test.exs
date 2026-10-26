@@ -53,35 +53,8 @@ defmodule EngramWeb.SearchControllerTest do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
-      {:ok, enc} =
-        Engram.Crypto.encrypt_qdrant_payload(
-          %{text: "Ferritin levels.", title: "Iron Panel", heading_path: "Iron Panel"},
-          user,
-          "engram_notes",
-          "uuid-1"
-        )
-
-      qdrant_result = %{
-        "result" => [
-          %{
-            "id" => "uuid-1",
-            "score" => 0.95,
-            "payload" => %{
-              "text" => enc.text,
-              "title" => enc.title,
-              "heading_path" => enc.heading_path,
-              "text_nonce" => enc.text_nonce,
-              "title_nonce" => enc.title_nonce,
-              "heading_path_nonce" => enc.heading_path_nonce,
-              "aad_version" => enc.aad_version,
-              "source_path" => "Health/Iron Panel.md",
-              "tags" => ["health"],
-              "user_id" => to_string(user.id),
-              "vault_id" => to_string(vault.id)
-            }
-          }
-        ]
-      }
+      note = note!(user, vault, "Health/Iron Panel.md", "Iron Panel")
+      qdrant_result = %{"result" => [chunk(user, note, 0.95, "Ferritin levels.")]}
 
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         c
@@ -125,35 +98,7 @@ defmodule EngramWeb.SearchControllerTest do
           actor: "api"
         )
 
-      {:ok, enc} =
-        Engram.Crypto.encrypt_qdrant_payload(
-          %{text: "Ferritin levels.", title: "Iron Panel", heading_path: "Iron Panel"},
-          user,
-          "engram_notes",
-          "uuid-1"
-        )
-
-      qdrant_result = %{
-        "result" => [
-          %{
-            "id" => "uuid-1",
-            "score" => 0.95,
-            "payload" => %{
-              "text" => enc.text,
-              "title" => enc.title,
-              "heading_path" => enc.heading_path,
-              "text_nonce" => enc.text_nonce,
-              "title_nonce" => enc.title_nonce,
-              "heading_path_nonce" => enc.heading_path_nonce,
-              "aad_version" => enc.aad_version,
-              "source_path" => "Health/Iron Panel.md",
-              "tags" => ["health"],
-              "user_id" => to_string(user.id),
-              "vault_id" => to_string(vault.id)
-            }
-          }
-        ]
-      }
+      qdrant_result = %{"result" => [chunk(user, note, 0.95, "Ferritin levels.")]}
 
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         c
@@ -349,26 +294,22 @@ defmodule EngramWeb.SearchControllerTest do
     end
 
     test "Search groups repeated chunks from the same note into one result with match_count",
-         %{conn: conn, bypass: bypass, user: user} do
+         %{conn: conn, bypass: bypass, user: user, vault: vault} do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      iron = note!(user, vault, "Health/Iron Panel.md", "Iron Panel")
+      vitd = note!(user, vault, "Health/Vitamin D.md", "Vitamin D")
 
       # Three top hits all point at the same note plus one different note —
       # Search.collapse_to_notes groups them by {vault_id, source_path} and
       # keeps the best chunk's score as the representative, with match_count.
       qdrant_result = %{
         "result" => [
-          chunk("uuid-a1", 0.95, "Health/Iron Panel.md", "Iron Panel", "Ferritin section.", user),
-          chunk("uuid-a2", 0.91, "Health/Iron Panel.md", "Iron Panel", "TIBC section.", user),
-          chunk(
-            "uuid-a3",
-            0.88,
-            "Health/Iron Panel.md",
-            "Iron Panel",
-            "Notes on saturation.",
-            user
-          ),
-          chunk("uuid-b1", 0.80, "Health/Vitamin D.md", "Vitamin D", "Levels by season.", user)
+          chunk(user, iron, 0.95, "Ferritin section.", 0),
+          chunk(user, iron, 0.91, "TIBC section.", 1),
+          chunk(user, iron, 0.88, "Notes on saturation.", 2),
+          chunk(user, vitd, 0.80, "Levels by season.")
         ]
       }
 
@@ -470,21 +411,15 @@ defmodule EngramWeb.SearchControllerTest do
     end
 
     test "honors the requested note limit — Search returns at most note_limit note-reps",
-         %{conn: conn, bypass: bypass, user: user} do
+         %{conn: conn, bypass: bypass, user: user, vault: vault} do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       result = %{
         "result" =>
           for i <- 1..10 do
-            chunk(
-              "uuid-#{i}",
-              1.0 - i * 0.01,
-              "F/Note #{i}.md",
-              "Note #{i}",
-              "snippet #{i}",
-              user
-            )
+            note = note!(user, vault, "F/Note #{i}.md", "Note #{i}")
+            chunk(user, note, 1.0 - i * 0.01, "snippet #{i}")
           end
       }
 
@@ -506,16 +441,19 @@ defmodule EngramWeb.SearchControllerTest do
     test "a merged hit's snippet is a window of at most 1,500 chars around the match", %{
       conn: conn,
       bypass: bypass,
-      user: user
+      user: user,
+      vault: vault
     } do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
-      text = merged_text("quixotic")
+      result = %{
+        "result" => [
+          chunk(user, note!(user, vault, "Big.md", "Big"), 0.9, merged_text("quixotic"))
+        ]
+      }
 
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
-        result = %{"result" => [chunk("uuid-m", 0.9, "Big.md", "Big", text, user)]}
-
         c
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(c, result)))
@@ -575,23 +513,18 @@ defmodule EngramWeb.SearchControllerTest do
       stub(Engram.MockEmbedder, :embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
       test_pid = self()
 
+      points = [
+        chunk(user, note!(user, vault, "A/a.md", "A"), 0.9, "findme"),
+        chunk(user, note!(user, vault_b, "B/b.md", "B"), 0.8, "findme")
+      ]
+
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         {:ok, raw, c} = Plug.Conn.read_body(c)
         send(test_pid, {:qdrant_body, Jason.decode!(raw)})
 
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(
-          200,
-          Jason.encode!(
-            QdrantStub.batch(c, %{
-              "result" => [
-                chunk("uuid-a", 0.9, "A/a.md", "A", "findme", user, vault.id),
-                chunk("uuid-b", 0.8, "B/b.md", "B", "findme", user, vault_b.id)
-              ]
-            })
-          )
-        )
+        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(c, %{"result" => points})))
       end)
 
       conn = post(conn, "/api/search", %{query: "findme", cross_vault: true})
@@ -622,7 +555,6 @@ defmodule EngramWeb.SearchControllerTest do
     test "cross_vault=false stays single-vault instead of reading as truthy", %{
       restricted: conn,
       bypass: bypass,
-      user: user,
       vault: vault,
       vault_b: vault_b
     } do
@@ -638,7 +570,7 @@ defmodule EngramWeb.SearchControllerTest do
         |> Plug.Conn.send_resp(
           200,
           Jason.encode!(%{
-            "result" => [chunk("uuid-a", 0.9, "A/a.md", "A", "findme", user, vault.id)]
+            "result" => [%{"id" => Ecto.UUID.generate(), "score" => 0.9}]
           })
         )
       end)
@@ -674,17 +606,12 @@ defmodule EngramWeb.SearchControllerTest do
       permitted = Engram.Fixtures.insert_note!(user, vault, %{"path" => "Inbox.md"})
       out_of_scope = Engram.Fixtures.insert_note!(user, vault_c, %{"path" => "Inbox.md"})
 
+      result = %{"result" => [chunk(user, permitted, 0.9, "findme")]}
+
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(
-          200,
-          Jason.encode!(
-            QdrantStub.batch(c, %{
-              "result" => [chunk("uuid-a", 0.9, "Inbox.md", "Inbox", "findme", user, vault.id)]
-            })
-          )
-        )
+        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(c, result)))
       end)
 
       conn = post(conn, "/api/search", %{query: "findme", cross_vault: true})
@@ -696,12 +623,7 @@ defmodule EngramWeb.SearchControllerTest do
 
     # The over-block is as much a bug as the leak: an unrestricted credential is
     # entitled to search everything, so it must emit NO vault filter.
-    test "an unrestricted key still searches every vault", %{
-      conn: conn,
-      bypass: bypass,
-      user: user,
-      vault: vault
-    } do
+    test "an unrestricted key still searches every vault", %{conn: conn, bypass: bypass} do
       stub(Engram.MockEmbedder, :embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
       test_pid = self()
 
@@ -714,7 +636,7 @@ defmodule EngramWeb.SearchControllerTest do
         |> Plug.Conn.send_resp(
           200,
           Jason.encode!(%{
-            "result" => [chunk("uuid-a", 0.9, "A/a.md", "A", "findme", user, vault.id)]
+            "result" => [%{"id" => Ecto.UUID.generate(), "score" => 0.9}]
           })
         )
       end)
@@ -730,36 +652,16 @@ defmodule EngramWeb.SearchControllerTest do
     end
   end
 
-  defp chunk(id, score, source_path, title, text, user) do
-    chunk(id, score, source_path, title, text, user, default_vault_id(user))
-  end
+  defp note!(user, vault, path, title),
+    do: Engram.Fixtures.insert_note!(user, vault, %{path: path, title: title})
 
-  defp chunk(id, score, source_path, title, text, user, vault_id) do
-    {:ok, enc} =
-      Engram.Crypto.encrypt_qdrant_payload(
-        %{text: text, title: title, heading_path: title},
-        user,
-        "engram_notes",
-        id
-      )
+  # A hit on `note` at chunk position `pos`: its chunk row holds the text,
+  # the note row the path, title and vault.
+  defp chunk(user, note, score, text, pos \\ 0) do
+    id =
+      Engram.Fixtures.insert_chunk!(user, note, Ecto.UUID.generate(), position: pos, text: text)
 
-    %{
-      "id" => id,
-      "score" => score,
-      "payload" => %{
-        "text" => enc.text,
-        "title" => enc.title,
-        "heading_path" => enc.heading_path,
-        "text_nonce" => enc.text_nonce,
-        "title_nonce" => enc.title_nonce,
-        "heading_path_nonce" => enc.heading_path_nonce,
-        "aad_version" => enc.aad_version,
-        "source_path" => source_path,
-        "tags" => [],
-        "user_id" => to_string(user.id),
-        "vault_id" => to_string(vault_id)
-      }
-    }
+    %{"id" => id, "score" => score}
   end
 
   # ~30 KB of filler paragraphs with `word` in one near the end.
@@ -770,14 +672,7 @@ defmodule EngramWeb.SearchControllerTest do
     end)
   end
 
-  defp default_vault_id(user) do
-    user
-    |> Engram.Vaults.list_vaults()
-    |> Enum.find(& &1.is_default)
-    |> Map.fetch!(:id)
-  end
-
-  # Like `chunk/6` but includes a dense vector so the MMR path can run
+  # A payload point with a dense vector so the MMR path can run
   # (diversity > 0 requests `with_vector: ["dense"]` from Qdrant and MMR
   # then calls cosine similarity on the returned vectors).
   defp diverse_chunk(user, vault, qid, score, vector, text) do

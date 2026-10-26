@@ -142,6 +142,53 @@ defmodule Engram.Fixtures do
   end
 
   @doc """
+  Inserts the `chunks` row search keys a Qdrant hit on: `point_id` must be
+  the hit's point id (a UUID); a hit with no row is dropped. The vault and
+  the display fields come from `note`.
+
+  Without `:text` the row has no `chunk_points` text, so search takes the
+  hit's text from the payload fallback retrieve (answer it with
+  `Engram.QdrantStub.stub_retrieve/2`). With `:text` (and `:heading`) the
+  text is in Postgres, encrypted under the user's DEK, and no retrieve runs.
+  `:position` defaults to 0 and is unique per note.
+  """
+  def insert_chunk!(user, note, point_id, opts \\ []) do
+    pos = Keyword.get(opts, :position, 0)
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        %Engram.Notes.Chunk{}
+        |> Engram.Notes.Chunk.changeset(%{
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: note.vault_id,
+          position: pos,
+          char_start: 0,
+          char_end: 1,
+          qdrant_point_id: point_id
+        })
+        |> Repo.insert!()
+
+        if opts[:text] do
+          {:ok, dek} = Engram.Crypto.get_dek(user)
+
+          %{display_ct: ct} =
+            Engram.Crypto.encrypt_chunk_text(opts[:text], opts[:heading], dek, point_id)
+
+          Repo.insert!(%Engram.Notes.ChunkPoint{
+            point_id: point_id,
+            note_id: note.id,
+            user_id: user.id,
+            position: pos,
+            display_ct: ct
+          })
+        end
+      end)
+
+    point_id
+  end
+
+  @doc """
   Inserts a Vault row directly with valid phase-B ciphertext, bypassing
   billing checks and Oban side effects. The name is encrypted with empty
   AAD (legacy dek_version: 1) so rotation tests start with a row that

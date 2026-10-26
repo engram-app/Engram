@@ -35,30 +35,10 @@ defmodule Engram.SearchTenantIdfDbErrorTest do
 
   test "a DB error in the count uses global IDF and still returns results",
        %{bypass: bypass, user: user, vault: vault} do
-    {:ok, enc} =
-      Engram.Crypto.encrypt_qdrant_payload(
-        %{text: "paddle rotation", title: "Ops", heading_path: "Ops"},
-        user,
-        "engram_notes",
-        "uuid-db-1"
-      )
-
-    point = %{
-      "id" => "uuid-db-1",
-      "score" => 0.5,
-      "payload" => %{
-        "text" => enc.text,
-        "title" => enc.title,
-        "heading_path" => enc.heading_path,
-        "text_nonce" => enc.text_nonce,
-        "title_nonce" => enc.title_nonce,
-        "heading_path_nonce" => enc.heading_path_nonce,
-        "aad_version" => enc.aad_version,
-        "source_path" => "Ops.md",
-        "user_id" => to_string(user.id),
-        "vault_id" => to_string(vault.id)
-      }
-    }
+    # The hit's chunk row (with its text) is read after the table is back.
+    note = Engram.Fixtures.insert_note!(user, vault, %{path: "Ops.md", title: "Ops"})
+    id = Engram.Fixtures.insert_chunk!(user, note, Ecto.UUID.generate(), text: "paddle rotation")
+    point = %{"id" => id, "score" => 0.5}
 
     test = self()
 

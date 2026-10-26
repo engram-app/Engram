@@ -105,30 +105,14 @@ defmodule Engram.Search.FreeSemanticTest do
     Engram.MockEmbedder
     |> expect(:embed_texts, fn _texts, _opts -> {:ok, [List.duplicate(0.1, 3)]} end)
 
-    {:ok, enc} =
-      Engram.Crypto.encrypt_qdrant_payload(
-        %{text: "Ferritin levels.", title: "Iron Panel", heading_path: "Iron Panel"},
-        user,
-        "engram_notes",
-        "uuid-1"
-      )
+    note =
+      Engram.Fixtures.insert_note!(user, vault, %{
+        path: "Health/Iron Panel.md",
+        title: "Iron Panel"
+      })
 
-    point = %{
-      "id" => "uuid-1",
-      "score" => 0.9,
-      "payload" => %{
-        "text" => enc.text,
-        "title" => enc.title,
-        "heading_path" => enc.heading_path,
-        "text_nonce" => enc.text_nonce,
-        "title_nonce" => enc.title_nonce,
-        "heading_path_nonce" => enc.heading_path_nonce,
-        "aad_version" => enc.aad_version,
-        "source_path" => "Health/Iron Panel.md",
-        "user_id" => to_string(user.id),
-        "vault_id" => to_string(vault.id)
-      }
-    }
+    id = Engram.Fixtures.insert_chunk!(user, note, Ecto.UUID.generate(), text: "Ferritin levels.")
+    point = %{"id" => id, "score" => 0.9}
 
     Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)

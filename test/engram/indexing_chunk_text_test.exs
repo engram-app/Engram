@@ -10,6 +10,7 @@ defmodule Engram.IndexingChunkTextTest do
   use Engram.DataCase, async: false
 
   import Ecto.Query
+  import Engram.IndexingTestHelpers
   import Mox
 
   alias Engram.{Indexing, Notes, ServiceConfig}
@@ -137,7 +138,9 @@ defmodule Engram.IndexingChunkTextTest do
       big = content("Ferritin levels are low.") <> "\n## Appendix\n\n" <> filler
       assert byte_size(big) > 300_000
       note = put_note(ctx.user, ctx.vault, nil, big)
-      assert {:ok, _count} = Indexing.index_note(note, ctx.vault)
+      # Uncapped: ~150 chunks would merge to the Free cap, and a merged group
+      # shows no heading. The heading is what this test reads.
+      assert {:ok, _count} = without_limits(fn -> Indexing.index_note(note, ctx.vault) end)
 
       assert Enum.all?(points(note), &(is_binary(&1.display_ct) and is_integer(&1.slice_sum)))
 

@@ -4,6 +4,9 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   every point kept the old filter HMACs. The reconcile reads the points,
   rewrites only the drifted ones with `set_payload` (no upsert, no embed) and
   stamps every checked note so the migration converges.
+
+  The notes start on v3 points (`Engram.LegacyPoints`), the layout the
+  `set_payload` heal serves; the v5 tests put v5 points over them.
   """
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
@@ -64,6 +67,8 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
 
         {:ok, plain} = Crypto.maybe_decrypt_note_fields(note, user)
         assert {:ok, _} = Indexing.index_note(plain, vault)
+        # Indexed before the v5 layout: v3 points.
+        Engram.LegacyPoints.rekey!(note, user, store)
         note
       end
 
@@ -222,9 +227,10 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     assert reload(ctx.healthy).payload_hash
   end
 
-  # The same race on the index pass: it PATCHes its reused points, then an
-  # edit commits (and stamps) first and the pass rolls back superseded. Its
-  # PATCH may have replaced the edit's payload, so the row is unstamped.
+  # The same race on the index pass: it overwrites its reused points' payload,
+  # then an edit commits (and stamps) first and the pass rolls back
+  # superseded. Its write may have replaced the edit's payload, so the row is
+  # unstamped.
   test "a pass superseded after refreshing reused points leaves the row unstamped", ctx do
     id = ctx.healthy.id
 
@@ -245,7 +251,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     {:ok, plain} = Crypto.maybe_decrypt_note_fields(reload(ctx.healthy), ctx.user)
 
     assert {:error, :superseded} = Indexing.index_note(plain, vault)
-    assert [_] = Agent.get(ctx.store, & &1.set_payloads)
+    assert [_] = Agent.get(ctx.store, & &1.overwrites)
     assert reload(ctx.healthy).payload_hash == nil
   end
 

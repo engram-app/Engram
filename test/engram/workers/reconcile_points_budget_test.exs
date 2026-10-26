@@ -825,8 +825,10 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
       assert :ok = perform_job(RebuildStaleNote, demote_args(note))
       assert [%{token_count: nil, qdrant_point_id: new_floor}] = rows_for(note)
 
-      [by_id, by_path] = writes(qdrant, :delete)
-      assert by_id["points"] == [floor_id]
+      # The retry rewrites the floor under the same v5 id (same fingerprint),
+      # so nothing is deleted by id: one delete by path, sparing the floor.
+      assert new_floor == floor_id
+      assert [by_path] = writes(qdrant, :delete)
       assert by_path["filter"]["must_not"] == [%{"has_id" => [new_floor]}]
       refute new_floor in old_ids
     end

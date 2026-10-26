@@ -13,6 +13,7 @@ defmodule Engram.IndexingV5RebuildTest do
 
   import Ecto.Query
   import Engram.IndexBudgetHelpers
+  import Engram.IndexingTestHelpers
   import Mox
 
   alias Engram.Crypto
@@ -168,13 +169,10 @@ defmodule Engram.IndexingV5RebuildTest do
   # writes the v5 layout now, so its index is re-keyed to random ids.
   defp indexed(ctx, n \\ 3) do
     note = insert_note(ctx.user, ctx.vault, sections(n))
-    Application.put_env(:engram, :limits_enforced, false)
 
-    try do
+    without_limits(fn ->
       assert {:ok, _, _, true} = Indexing.index_note_with_usage(note, ctx.vault, ctx.user)
-    after
-      Application.put_env(:engram, :limits_enforced, true)
-    end
+    end)
 
     legacy_ids!(note, ctx.store)
     _ = embedded()
@@ -247,6 +245,9 @@ defmodule Engram.IndexingV5RebuildTest do
     note = insert_note(ctx.user, ctx.vault, first)
     assert {:ok, _, _, true} = Indexing.index_note_with_usage(note, ctx.vault, ctx.user)
     _ = embedded()
+    # The estimate is per note and knows no cache (see the next test): with
+    # the cache empty, every text it counts is one the pass must send.
+    clear_vector_cache()
 
     # Two sections reworded, one added, the repeated block now three times.
     content =
@@ -393,6 +394,7 @@ defmodule Engram.IndexingV5RebuildTest do
   test "the Voyage-paid stamp: set when Voyage returns, cleared by the commit", ctx do
     note = indexed(ctx)
     drop_dense(ctx.store)
+    clear_vector_cache()
     refuse(ctx.store, true)
 
     assert {:error, :qdrant_backpressure} = rebuild(note, ctx.vault, ctx.user)
@@ -426,6 +428,7 @@ defmodule Engram.IndexingV5RebuildTest do
   test "a second Voyage call for an already-paid note parks it rebuild_double_pay", ctx do
     note = indexed(ctx)
     drop_dense(ctx.store)
+    clear_vector_cache()
 
     tenant(ctx.user, fn ->
       Repo.update_all(from(n in Note, where: n.id == ^note.id),

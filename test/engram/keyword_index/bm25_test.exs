@@ -39,8 +39,7 @@ defmodule Engram.KeywordIndex.Bm25Test do
   end
 
   # Which b a chunk's keyword vector uses. Merged v5 groups (more than one
-  # section) use the `:bm25_b_merged` knob, but only when the v5 layout is
-  # written: until then every write is byte-identical to v3.
+  # section) use the `:bm25_b_merged` knob.
   describe "Indexing.sparse_opts/1" do
     alias Engram.Indexing
     alias Engram.ServiceConfig
@@ -50,16 +49,11 @@ defmodule Engram.KeywordIndex.Bm25Test do
       assert Indexing.sparse_opts(%{text: "no section_count (v3)"}) == []
     end
 
-    test "v3 layout: a merged group keeps b 0.75" do
-      assert Indexing.sparse_opts(%{section_count: 3}) == []
-      assert Indexing.sparse_opts(%{merged: true, section_count: 4}) == [cap_doc_len: true]
-    end
-
-    test "v5 layout: a merged group uses b 0.25 by default" do
+    test "a merged group uses b 0.25 by default" do
       assert Indexing.sparse_opts(%{section_count: 3}) == [b: 0.25]
     end
 
-    test "v5 layout: a capped group is length-capped and uses the merged b" do
+    test "a capped group is length-capped and uses the merged b" do
       assert Indexing.sparse_opts(%{merged: true, section_count: 4}) ==
                [cap_doc_len: true, b: 0.25]
     end

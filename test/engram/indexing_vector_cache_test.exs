@@ -9,6 +9,7 @@ defmodule Engram.IndexingVectorCacheTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  import Engram.IndexingTestHelpers
   import Mox
 
   alias Engram.Indexing
@@ -158,7 +159,7 @@ defmodule Engram.IndexingVectorCacheTest do
       [Ecto.UUID.dump!(note.id)]
     )
 
-    Repo.query!("DELETE FROM embedding_cache")
+    clear_vector_cache()
   end
 
   defp cache_rows,
@@ -242,8 +243,13 @@ defmodule Engram.IndexingVectorCacheTest do
     stub_embedder(&(&1 == 2))
     note = put_note(ctx.user, ctx.vault, "Meter.md", body(300))
     opts = meter_opts(ctx.user)
+    # Uncapped, one point a chunk: a merged group is charged its members'
+    # bytes, not what it sends, and this test is about what is sent.
+    index = fn ->
+      without_limits(fn -> Indexing.index_note_with_usage(note, ctx.vault, nil, opts) end)
+    end
 
-    assert {:error, {429, _}} = Indexing.index_note_with_usage(note, ctx.vault, nil, opts)
+    assert {:error, {429, _}} = index.()
     first = calls()
     assert [_one_batch] = first
     reserved = drained(:reserved)
@@ -252,7 +258,7 @@ defmodule Engram.IndexingVectorCacheTest do
     assert UsageMeters.lifetime_embed_tokens(ctx.user.id) == tokens(first)
 
     RetainedVectors.forget({note.id, nil})
-    assert {:ok, count, _bytes, true} = Indexing.index_note_with_usage(note, ctx.vault, nil, opts)
+    assert {:ok, count, _bytes, true} = index.()
     retry = calls()
     assert drained(:reserved) == tokens(retry)
     assert drained(:released) == 0

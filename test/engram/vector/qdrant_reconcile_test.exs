@@ -822,12 +822,16 @@ defmodule Engram.Vector.QdrantReconcileTest do
       refute Map.has_key?(info["config"]["strict_mode_config"], "unindexed_filtering_update")
     end
 
-    # The boot ensure now runs on every node, web tier included. At default
-    # flags it must find every payload index prod already has and create
-    # none, and never set `unindexed_filtering_update` (prod leaves it unset).
-    test "default flags: the ensure on prod creates no payload index", %{bypass: bypass} do
+    # The boot ensure now runs on every node, web tier included. At prod's
+    # flags (LEGACY_FILTER_FIELDS=false on the v3 cluster) it must find every
+    # payload index prod already has and create none, and never set
+    # `unindexed_filtering_update` (prod leaves it unset). The 2026-10-18
+    # fixture predates the v5 indexes, so its schema is the v3 cluster's.
+    test "prod flags: the ensure on prod creates no payload index", %{bypass: bypass} do
       test_pid = self()
-      fake_collection(bypass, "engram_notes", @prod_info)
+      ServiceConfig.put_override(:legacy_filter_fields, false)
+      prod_v3 = Map.put(@prod_info, "payload_schema", @v3_info["payload_schema"])
+      fake_collection(bypass, "engram_notes", prod_v3)
 
       Bypass.expect_once(bypass, "PUT", "/collections/engram_notes", fn conn ->
         json(conn, 409, %{status: %{error: "already exists"}})

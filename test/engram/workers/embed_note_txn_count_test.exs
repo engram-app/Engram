@@ -43,7 +43,7 @@ defmodule Engram.Workers.EmbedNoteTxnCountTest do
     %{user: user, vault: vault, note: note, bypass: bypass}
   end
 
-  test "a full EmbedNote job opens at most 4 tenant transactions",
+  test "a full EmbedNote job opens at most 5 tenant transactions",
        %{user: user, vault: vault, note: note} do
     # avgdl is cached per vault (10 min), so a steady stream of jobs reads it
     # once per vault, not once per job. Warm it so the budget counts per-job
@@ -55,10 +55,13 @@ defmodule Engram.Workers.EmbedNoteTxnCountTest do
         assert :ok = perform_job(EmbedNote, %{note_id: note.id, user_id: user.id})
       end)
 
-    # Reads (note, user, vault), crash-guard stamp, chunk plan, then the
-    # chunk write carrying the hash stamp and the crash-guard clear. Was 9.
-    assert length(enters) <= 4,
-           "EmbedNote opened #{length(enters)} tenant transactions, budget is 4"
+    # Reads (note, user, vault), crash-guard stamp, chunk plan (the vector
+    # cache lookup rides it), the vector cache write for the one Voyage batch
+    # (`VectorCache.put_many/5`, committed as the batch returns so a retry
+    # pays nothing), then the chunk write carrying the hash stamp and the
+    # crash-guard clear. Was 9.
+    assert length(enters) <= 5,
+           "EmbedNote opened #{length(enters)} tenant transactions, budget is 5"
 
     note = Repo.reload!(note, skip_tenant_check: true)
     assert note.embed_hash == note.content_hash

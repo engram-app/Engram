@@ -2,8 +2,8 @@ defmodule Engram.IndexBudgetFlagTest do
   @moduledoc """
   Review H2: nothing in the v5 index budget may change prod before the v5
   pass. With `:index_budget_enabled` off (the default), indexing and the
-  04:00 UTC sweep behave as on main: no per-note merge, no floor, no
-  points budget, no recap or budget jobs.
+  04:00 UTC sweep run no floor, no points budget and no budget jobs. The
+  per-note cap merge is not part of the budget: it applies either way.
   """
   # async: false: limits_enforced and the flag are global app env.
   use Engram.DataCase, async: false
@@ -75,10 +75,12 @@ defmodule Engram.IndexBudgetFlagTest do
     t
   end
 
-  test "a 500-chunk Free note indexes one point a chunk, unmerged", %{user: user, vault: vault} do
+  test "a 500-chunk Free note merges to its per-note cap, densely, not floored",
+       %{user: user, vault: vault} do
     note = insert_note(user, vault, sections(500))
-    assert {:ok, 500, _, true} = Indexing.index_note_with_usage(note, vault, user)
-    assert rows(note) == 500
+    assert {:ok, points, _, true} = Indexing.index_note_with_usage(note, vault, user)
+    assert points in 2..128
+    assert rows(note) == points
     assert tier(note) == nil
   end
 
@@ -94,7 +96,8 @@ defmodule Engram.IndexBudgetFlagTest do
     note = insert_note(user, vault, sections(500))
     # The real job, so the note is stamped indexed like any prod note.
     assert :ok = perform_job(EmbedNote, %{"note_id" => note.id, "user_id" => user.id})
-    assert rows(note) == 500
+    # Over the points cap of 3, so only the budget would act on it.
+    assert rows(note) > 3
 
     tick = DateTime.new!(Date.utc_today(), ~T[04:02:00])
     assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick)

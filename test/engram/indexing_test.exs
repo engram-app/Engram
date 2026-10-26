@@ -8,6 +8,7 @@ defmodule Engram.IndexingTest do
   alias Engram.Crypto.DekCache
   alias Engram.Indexing
   alias Engram.Notes
+  alias Engram.Vector.FilterId
 
   # Mox requires that expectations are verified after each test
   setup :verify_on_exit!
@@ -206,13 +207,21 @@ defmodule Engram.IndexingTest do
       # 1:1 on purpose. A token never spans less than one byte, so that bound
       # holds for any content. The earlier 200,000 assumed 2 bytes/token and
       # prod shipped batches at 1.39 — see the constant's comment.
+      #
+      # Every chunk distinct: a pass sends a text repeated in the note once,
+      # so identical slices would all ride one input. Base 36 has no lower
+      # case, so the chunker's blob filter keeps it. No per-note cap
+      # (self-host shape), so the note keeps one point a slice.
+      insert(:user_limit_override, user: user, key: "note_points_cap", value: %{"v" => 10_000})
+      blob = Enum.map_join(1..80_000, &Integer.to_string(&1, 36))
+
       {:ok, dense_note} =
         Notes.upsert_note(
           user,
           vault,
           %{
             "path" => "Big/Dense.md",
-            "content" => "# Dense\n\n" <> String.duplicate("A", 300_000),
+            "content" => "# Dense\n\n" <> blob,
             "mtime" => 1_000.0
           },
           actor: "api"
@@ -448,18 +457,16 @@ defmodule Engram.IndexingTest do
       points = body["points"]
       assert points != []
 
+      # The v5 payload carries no text, title or heading at all, plain or
+      # sealed: they live in Postgres (`chunk_points`, the note row).
       Enum.each(points, fn p ->
         payload = p["payload"]
-        assert Map.has_key?(payload, "text_nonce")
-        assert Map.has_key?(payload, "title_nonce")
-        assert Map.has_key?(payload, "heading_path_nonce")
-        # text should be base64-encoded ciphertext, not the plaintext
-        refute payload["text"] == "Classified body."
-        refute payload["text"] =~ "Classified"
-        assert is_binary(payload["text_nonce"])
-        # base64 round-trip should succeed
-        assert {:ok, _} = Base.decode64(payload["text"])
-        assert {:ok, _} = Base.decode64(payload["text_nonce"])
+
+        for key <- ~w(text text_nonce title title_nonce heading_path heading_path_nonce),
+            do: refute(Map.has_key?(payload, key), "payload carries #{key}")
+
+        refute Jason.encode!(payload) =~ "Classified"
+        refute Jason.encode!(payload) =~ "Secret"
       end)
     end
 
@@ -513,16 +520,16 @@ defmodule Engram.IndexingTest do
         refute Map.has_key?(payload, "source_path")
         refute Map.has_key?(payload, "folder")
         refute Map.has_key?(payload, "tags")
-        # HMAC filter fields retained — scoped vector search must keep working.
-        assert Map.has_key?(payload, "path_hmac")
-        assert Map.has_key?(payload, "folder_hmac")
-        assert Map.has_key?(payload, "tags_hmac")
-        # Encrypted display field retained (title still rendered from payload).
-        assert Map.has_key?(payload, "title_nonce")
+        # HMAC-derived filter ids retained: scoped vector search must keep working.
+        assert Map.has_key?(payload, "p")
+        assert Map.has_key?(payload, "f")
+        assert Map.has_key?(payload, "g")
+        # No display field: the title is rendered from Postgres.
+        refute Map.has_key?(payload, "title_nonce")
       end)
     end
 
-    test "Phase B: payload includes base64-encoded path/folder/tags hmacs",
+    test "Phase B: payload includes the path/folder/tags hmac filter ids",
          %{bypass: bypass, user: user} do
       DekCache.invalidate_all()
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
@@ -561,18 +568,15 @@ defmodule Engram.IndexingTest do
       assert_received {:upsert_body, body}
 
       {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
-      expected_path_hmac = Base.encode64(Engram.Crypto.hmac_field(filter_key, "Health/iron.md"))
-      expected_folder_hmac = Base.encode64(Engram.Crypto.hmac_field(filter_key, "Health"))
-      expected_labs_hmac = Base.encode64(Engram.Crypto.hmac_field(filter_key, "labs"))
-      expected_ferritin_hmac = Base.encode64(Engram.Crypto.hmac_field(filter_key, "ferritin"))
+      id = &FilterId.from_hmac(Engram.Crypto.hmac_field(filter_key, &1))
 
       Enum.each(body["points"], fn p ->
         payload = p["payload"]
-        assert payload["path_hmac"] == expected_path_hmac
-        assert payload["folder_hmac"] == expected_folder_hmac
-        assert is_list(payload["tags_hmac"])
-        assert expected_labs_hmac in payload["tags_hmac"]
-        assert expected_ferritin_hmac in payload["tags_hmac"]
+        assert payload["p"] == id.("Health/iron.md")
+        assert payload["f"] == id.("Health")
+        assert is_list(payload["g"])
+        assert id.("labs") in payload["g"]
+        assert id.("ferritin") in payload["g"]
       end)
     end
 

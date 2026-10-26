@@ -221,7 +221,9 @@ defmodule Engram.Notes.NoteFieldsTest do
     case Indexing.prepare_index(note, vault, user) do
       {:ok, prepared} ->
         {:ok, _} = Indexing.commit_index(prepared)
-        {:ok, fk} = Crypto.dek_filter_key(user)
+        # From the DEK in hand: the pass holds its DEK and fetches none after
+        # the embed, so a fetch here would be the stalled reload's first miss.
+        fk = Crypto.dek_filter_key_from_bytes(dek)
         mood = ids(user.id)[FilterId.key_hmac(fk, "mood")]
         assert mood, "the pass committed without an id for the user-added key"
         assert Enum.any?(attrs(note.id), &(&1.key_id == mood))
