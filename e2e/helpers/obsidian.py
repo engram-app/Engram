@@ -280,17 +280,9 @@ class ObsidianInstance:
         if self.vault_path.exists():
             shutil.rmtree(self.vault_path)
 
-        plugin_dir = self.vault_path / ".obsidian" / "plugins" / "engram-vault-sync"
+        plugin_dir = self._plugin_dir()
         plugin_dir.mkdir(parents=True)
-
-        for fname in ("main.js", "manifest.json", "styles.css"):
-            src = self.plugin_src / fname
-            if src.exists():
-                shutil.copy2(src, plugin_dir / fname)
-            elif fname == "styles.css":
-                (plugin_dir / fname).write_text("")
-            else:
-                raise FileNotFoundError(f"Plugin file not found: {src}")
+        self.install_plugin(self.plugin_src)
 
         settings = {
             "apiUrl": re.sub(r"/api/?$", "", self.api_url),
@@ -328,6 +320,83 @@ class ObsidianInstance:
         )
 
         logger.info("[%s] Vault prepared at %s", self.name, self.vault_path)
+
+    def _plugin_dir(self) -> Path:
+        return self.vault_path / ".obsidian" / "plugins" / "engram-vault-sync"
+
+    def install_plugin(self, src: Path) -> None:
+        """Copy a plugin build into the vault, the way an update lands on disk.
+
+        Called by _prepare_vault for the first install, and directly by
+        upgrade tests to swap builds between kill() and relaunch().
+        """
+        self.plugin_src = src
+        plugin_dir = self._plugin_dir()
+        for fname in ("main.js", "manifest.json", "styles.css"):
+            path = src / fname
+            if path.exists():
+                shutil.copy2(path, plugin_dir / fname)
+            elif fname == "styles.css":
+                (plugin_dir / fname).write_text("")
+            else:
+                raise FileNotFoundError(f"Plugin file not found: {path}")
+
+    def kill(self) -> None:
+        """Hard-kill Obsidian mid-flight and keep EVERYTHING it left behind.
+
+        stop() and async_start(restart=True) both wipe the Electron profile,
+        which holds the plugin's IndexedDB (each note's Y.Doc and its
+        persisted server-acked snapshot) and localStorage. So every "restart"
+        they produce is a fresh install that happens to keep the vault folder,
+        and the paths a real relaunch exercises (hydrating hundreds of docs
+        from IndexedDB, a half-written data.json) never run. kill() leaves
+        the vault, profile and Xvfb alone; relaunch() boots onto them.
+        """
+        logger.info("[%s] Hard kill (profile kept)", self.name)
+        subprocess.run(
+            ["pkill", "-9", "-f", f"user-data-dir={self.config_dir}"],
+            capture_output=True,
+        )
+        if self._obsidian_proc is not None:
+            try:
+                self._obsidian_proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                logger.warning("[%s] launcher pid %d outlived SIGKILL", self.name, self._obsidian_proc.pid)
+        # Chromium rewrites this on boot; a stale one points _wait_for_cdp at
+        # the dead process's port, or at whatever reuses it.
+        (self.config_dir / DEVTOOLS_ACTIVE_PORT).unlink(missing_ok=True)
+
+    async def relaunch(self, plugin_src: Path | None = None, timeout: float = 60) -> None:
+        """Boot Obsidian again on the profile and vault kill() left behind.
+
+        The profile still has `enable-plugin-<appId>`, so Obsidian loads the
+        plugin itself at startup, as it does for a user. Calling loadPlugin
+        while that load is still in flight would load it twice, so this waits
+        for Obsidian's own load and only falls back to loadPlugin if it never
+        starts.
+        """
+        if plugin_src is not None:
+            self.install_plugin(plugin_src)
+        if self._xvfb_proc is None or self._xvfb_proc.poll() is not None:
+            self._start_xvfb()
+        self._start_obsidian()
+        self._wait_for_cdp()
+        cdp = self.cdp
+        deadline = time.monotonic() + timeout
+        loaded = False
+        while time.monotonic() < deadline:
+            try:
+                loaded = await cdp.evaluate("!!app.plugins.plugins['engram-vault-sync']") is True
+            except Exception:  # noqa: BLE001 - renderer still booting
+                loaded = False
+            if loaded:
+                break
+            await asyncio.sleep(1)
+        if not loaded:
+            await self._enable_plugin_async()
+            return
+        await cdp.wait_for_plugin_ready(timeout=timeout)
+        logger.info("[%s] Relaunched on kept profile", self.name)
 
     def _prepare_config(self) -> None:
         """Create isolated Obsidian config directory with our vault registered."""
