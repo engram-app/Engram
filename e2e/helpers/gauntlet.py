@@ -210,6 +210,7 @@ class RoomBudget:
 #   hold            send once window.__e2eRelease is set
 #   noreply         send, but never resolve (the server stores it, the ack is lost)
 #   lateack:<ms>    send, resolve the reply <ms> late
+#   holdack         send, resolve the reply only once window.__e2eRelease is set
 # Every call is recorded in window.__e2eCreates ({path, action, at}).
 # set_create_rest() switches the action for every later call.
 
@@ -231,6 +232,7 @@ _HOOK = """(() => {
         if (kind === 'delay') return sleep(ms).then(() => orig(event, payload, timeoutMs));
         if (kind === 'hold') return (async () => { while (!window.__e2eRelease) await sleep(100); return orig(event, payload, timeoutMs); })();
         if (kind === 'noreply') { orig(event, payload, timeoutMs).catch(() => {}); return new Promise(() => {}); }
+        if (kind === 'holdack') return orig(event, payload, timeoutMs).then(async r => { window.__e2eAckHeld = true; while (!window.__e2eRelease) await sleep(100); return r; });
         if (kind === 'lateack') return orig(event, payload, timeoutMs).then(async r => { await sleep(ms); return r; });
         return orig(event, payload, timeoutMs);
     };

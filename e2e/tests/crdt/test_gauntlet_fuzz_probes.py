@@ -20,6 +20,7 @@ import uuid
 
 import pytest
 
+from helpers.cdp import ENGINE_PATH as ENGINE
 from helpers.convergence import Expect, await_converged
 from helpers.gauntlet import (
     append_lines,
@@ -277,3 +278,47 @@ async def test_fuzz_bug8_open_note_recreated_by_orphan_repair(gauntlet):
     logger.warning("GAUNTLET fuzz bug8: crdt_create calls after relaunch %s", calls)
 
     await await_converged(pair.api, pair.vaults, root, Expect({path: [first, second, third]}), deadline_s=240)
+
+
+@pytest.mark.timeout(600)
+async def test_fuzz_bug2_catchup_fills_doc_before_create_ack(gauntlet):
+    """The narrower bug 2 path: A's create is STORED, an MCP edit lands, A
+    takes that edit into its Y.Doc through catch-up, and only THEN does A
+    process its create-ack (whose drift merge diffs disk onto the doc). The
+    create-ack reply is held, not the request. The MCP edit must survive."""
+    pair = await gauntlet("gb2c")
+    a = pair.a
+    root = _root("2c")
+    path = f"{root}/note.md"
+    body = f"anchor-{root}"
+    mcp = f"mcp-{root}"
+    await a.cdp.wait_for_stream_connected()
+    await hook_creates(a.cdp, ["holdack"])
+    try:
+        await a.cdp.vault_write(path, f"# Note\n\n{body}\n")
+        await _wait_server_note(pair.api, path)
+        assert await a.cdp.evaluate("!!window.__e2eAckHeld"), "create reply not held"
+        pair.api.mcp_tool("edit_note", {"path": path, "mode": "replace_text", "find": body, "replace": f"{body}\n{mcp}"})
+        note_id = await a.cdp.wait_for_note_id_for_path(path)
+        in_doc = False
+        end = time.monotonic() + 60
+        while not in_doc and time.monotonic() < end:
+            await a.cdp.trigger_catch_up()
+            text = await a.cdp.evaluate(
+                f"(async () => {{ const c = {ENGINE}.crdt; "
+                f"return c?.getText ? await c.getText({json.dumps(note_id)}) : 'NO getText on syncEngine.crdt'; }})()",
+                await_promise=True,
+            )
+            in_doc = bool(text) and mcp in text
+            if not in_doc:
+                await asyncio.sleep(2)
+        assert in_doc, (
+            f"ordering not forced: the MCP edit never reached A's Y.Doc before the ack (doc text {text!r})"
+        )
+        logger.warning("GAUNTLET fuzz bug2c: MCP edit in A's doc before the ack; releasing the ack")
+        await release_creates(a.cdp)
+        await asyncio.sleep(5)
+    finally:
+        calls = await unhook_creates(a.cdp)
+    logger.warning("GAUNTLET fuzz bug2c: crdt_create calls on A %s", calls)
+    await await_converged(pair.api, pair.vaults, root, Expect({path: [body, mcp]}))
