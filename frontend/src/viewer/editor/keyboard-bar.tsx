@@ -188,8 +188,9 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 	const { t } = useT();
 	const isDesktop = useMediaQuery("(min-width: 768px)");
 	const focused = useEditorFocused();
-	const box = useVisualViewportBox();
-	const keyboardOpen = useKeyboardOpen();
+	// Desktop never shows the bar, so it does not sample the viewport either.
+	const box = useVisualViewportBox(!isDesktop);
+	const keyboardOpen = useKeyboardOpen(!isDesktop);
 	const [headingsOpen, setHeadingsOpen] = useState(false);
 	const [gesturing, setGesturing] = useState(false);
 	const barRef = useRef<HTMLElement>(null);
@@ -219,30 +220,38 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 	// real thing, which is the rendered height — and would silently miss the next
 	// cause (a wrapped row, a late-loading font, a third row).
 	useLayoutEffect(() => {
-		const root = document.documentElement;
 		const bar = barRef.current;
 		if (!(visible && bar)) {
-			root.style.removeProperty(TOOLBAR_OFFSET_VAR);
 			return;
 		}
 		// The FAB is fixed to the bottom of the LAYOUT viewport, so it has to
 		// clear whatever is below the visible area (the keyboard, on iOS) plus
-		// what the bar covers inside it.
+		// what the bar covers inside it. Written only when it changes: the box
+		// moves every frame of a visual-viewport scroll, and each write to a
+		// root variable restyles the whole document.
 		const publish = () => {
+			const root = document.documentElement;
 			const belowVisible = window.innerHeight - (box.top + box.height);
-			root.style.setProperty(
-				TOOLBAR_OFFSET_VAR,
-				`${Math.round(belowVisible + coveredByBar(bar, box))}px`,
-			);
+			const next = `${Math.round(belowVisible + coveredByBar(bar, box))}px`;
+			if (root.style.getPropertyValue(TOOLBAR_OFFSET_VAR) !== next) {
+				root.style.setProperty(TOOLBAR_OFFSET_VAR, next);
+			}
 		};
 		publish();
 		const observer = new ResizeObserver(publish);
 		observer.observe(bar);
-		return () => {
-			observer.disconnect();
-			root.style.removeProperty(TOOLBAR_OFFSET_VAR);
-		};
+		return () => observer.disconnect();
 	}, [visible, box]);
+
+	// Stop reserving the space once the bar goes away (keyboard down, blur,
+	// unmount). Separate from the publish effect so a box change does not
+	// clear and rewrite the variable.
+	useLayoutEffect(() => {
+		if (!visible) {
+			return;
+		}
+		return () => document.documentElement.style.removeProperty(TOOLBAR_OFFSET_VAR);
+	}, [visible]);
 
 	if (!visible) {
 		return null;

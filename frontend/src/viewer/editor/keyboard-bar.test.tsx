@@ -258,6 +258,17 @@ describe("KeyboardBar", () => {
 			vi.restoreAllMocks();
 		});
 
+		// The box changes on every frame of a visual-viewport scroll; rewriting a
+		// root CSS variable each time restyles the whole document.
+		it("does not rewrite the variable when the value is unchanged", () => {
+			const { rerender } = mount("hello");
+			const setProperty = vi.spyOn(document.documentElement.style, "setProperty");
+			boxValue.current = { ...boxValue.current };
+			rerender(<KeyboardBar getView={() => view} />);
+			expect(setProperty).not.toHaveBeenCalled();
+			setProperty.mockRestore();
+		});
+
 		it("clears the offset when the editor loses focus", () => {
 			const { unmount } = mount("hello");
 			unmount();

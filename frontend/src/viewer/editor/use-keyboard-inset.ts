@@ -70,12 +70,12 @@ const SETTLE_MS = 600;
  * the visual viewport without firing a resize. The per-frame sampling costs
  * one layout read per frame, and only while the keyboard is moving.
  */
-function useViewportValue<T>(read: () => T, same: (a: T, b: T) => boolean = Object.is): T {
+function useViewportValue<T>(read: () => T, same: (a: T, b: T) => boolean, enabled: boolean): T {
 	const [value, setValue] = useState(read);
 
 	useEffect(() => {
 		const vv = window.visualViewport;
-		if (!vv) {
+		if (!(enabled && vv)) {
 			return;
 		}
 		const update = () => {
@@ -110,7 +110,7 @@ function useViewportValue<T>(read: () => T, same: (a: T, b: T) => boolean = Obje
 			document.removeEventListener("focusout", settle);
 		};
 		// `read` and `same` are module-level functions, stable across renders.
-	}, [read, same]);
+	}, [read, same, enabled]);
 
 	return value;
 }
@@ -147,8 +147,8 @@ export function readViewportBox(): ViewportBox {
 }
 
 /** The visible area, live. See readViewportBox. */
-export function useVisualViewportBox(): ViewportBox {
-	return useViewportValue(readViewportBox, sameBox);
+export function useVisualViewportBox(enabled = true): ViewportBox {
+	return useViewportValue(readViewportBox, sameBox, enabled);
 }
 
 /**
@@ -161,6 +161,6 @@ export function useVisualViewportBox(): ViewportBox {
  * dismissed. This compares against the tallest viewport seen instead, which
  * shrinks under both models.
  */
-export function useKeyboardOpen(): boolean {
-	return useViewportValue(readKeyboardOpen);
+export function useKeyboardOpen(enabled = true): boolean {
+	return useViewportValue(readKeyboardOpen, Object.is, enabled);
 }

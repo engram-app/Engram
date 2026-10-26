@@ -105,6 +105,18 @@ describe("useVisualViewportBox", () => {
 		expect(vv.removeEventListener.mock.calls.map((c) => c[0])).toEqual(["resize", "scroll"]);
 	});
 
+	// Desktop never shows the toolbar; it should not sample the viewport on
+	// every focus change either.
+	it("does not subscribe at all when disabled", () => {
+		setLayoutHeight(800);
+		const vv = stubViewport(800);
+		const add = vi.spyOn(document, "addEventListener");
+		renderHook(() => useVisualViewportBox(false));
+		expect(vv.addEventListener).not.toHaveBeenCalled();
+		expect(add.mock.calls.map((c) => c[0])).not.toContain("focusin");
+		add.mockRestore();
+	});
+
 	it("leaves a simulated keyboard's worth of room for ?keyboard in dev", () => {
 		setLayoutHeight(800);
 		stubViewport(800);
