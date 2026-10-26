@@ -199,7 +199,7 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 	// after the keyboard was dismissed with the platform's hide button, which
 	// leaves the editor focused. A non-zero inset alone hid the bar outright on
 	// browsers that resize the LAYOUT viewport, where the inset is 0 with the
-	// keyboard fully open — so useKeyboardOpen compares viewport heights
+	// keyboard fully open, so useKeyboardOpen compares viewport heights
 	// instead, and the box is used only to position.
 	//
 	// `gesturing` overrides both for the duration of a touch. Panning the command
@@ -285,21 +285,21 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 				data-editor-toolbar=""
 				// Keep the keyboard up. A pointerdown that reaches the document blurs
 				// the editor, iOS dismisses the keyboard, and the bar this lives on
-				// slides away mid-tap — so the press must never move focus. The heading
+				// slides away mid-tap, so the press must never move focus. The heading
 				// row lives INSIDE this nav rather than in a portalled popover so it is
 				// covered by the same guard.
 				//
 				// This is NOT sufficient on its own. `touch-action: pan-x` on the
 				// command row is what lets it scroll, and it also makes pointerdown
-				// non-cancelable for touch in Chrome — the browser reserves the right
-				// to start a pan — so preventDefault silently becomes a no-op there and
+				// non-cancelable for touch in Chrome (the browser reserves the right
+				// to start a pan), so preventDefault silently becomes a no-op there and
 				// the drag blurs the editor anyway. Hence the hold and the repair.
 				onPointerDown={(e) => {
 					e.preventDefault();
 					setGesturing(true);
 				}}
 				// BOTH endings are needed: a tap ends in pointerup, but a pan the
-				// browser takes over ends in pointercancel and never fires pointerup —
+				// browser takes over ends in pointercancel and never fires pointerup,
 				// which is why repairing focus on pointerup alone did not help.
 				onPointerUp={endGesture}
 				onPointerCancel={endGesture}
