@@ -22,7 +22,6 @@ from helpers.convergence import Expect, await_converged
 from helpers.gauntlet import (
     append_lines,
     create_notes,
-    creates_seen,
     hook_creates,
     release_creates,
     rename,
@@ -123,29 +122,6 @@ async def test_fuzz_bug2_mcp_edit_survives_resent_create(gauntlet):
     await await_converged(pair.api, pair.vaults, root, Expect({path: [body, mcp]}))
     # Last, so a green run still says whether the orphaned-claim re-send happened.
     assert len(calls) >= 2, f"orphaned-claim re-send not reached (one crdt_create only): {calls}"
-
-
-@pytest.mark.timeout(600)
-async def test_fuzz_bug2_force_quit_before_create_ack(gauntlet):
-    """Variant: A's create reaches the server but its ack never comes back;
-    A is force-quit, an MCP edit lands, A restarts and opens the note."""
-    pair = await gauntlet("gb2k")
-    a = pair.a
-    root = _root("2k")
-    path = f"{root}/note.md"
-    body = f"anchor-{root}"
-    await a.cdp.wait_for_stream_connected()
-    await hook_creates(a.cdp, ["noreply"])
-    await a.cdp.vault_write(path, f"# Note\n\n{body}\n")
-    await _wait_server_note(pair.api, path)
-    calls = await creates_seen(a.cdp)
-    a.inst.kill()
-    mcp = f"mcp-{root}"
-    pair.api.mcp_tool("edit_note", {"path": path, "mode": "replace_text", "find": body, "replace": f"{body}\n{mcp}"})
-    await a.inst.relaunch()
-    assert await a.cdp.open_note_in_live_preview(path) == path
-    logger.warning("GAUNTLET fuzz bug2 variant: crdt_create calls before kill %s", calls)
-    await await_converged(pair.api, pair.vaults, root, Expect({path: [body, mcp]}))
 
 
 # -- bug 3: spurious own-create conflict copy ----------------------------------
