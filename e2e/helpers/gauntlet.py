@@ -8,6 +8,7 @@ a user's edits fire.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -247,7 +248,13 @@ _UNHOOK = """(() => {
 })()"""
 
 
-async def hook_creates(cdp, plan: list[str], rest: str = "pass") -> None:
+async def hook_creates(cdp, plan: list[str], rest: str = "pass", timeout: float = 60) -> None:
+    # After a relaunch the channel object is built a moment after the plugin
+    # reports ready; hooking a null noteStream would throw.
+    end = time.monotonic() + timeout
+    while not await cdp.evaluate(f"!!{PLUGIN_PATH}.noteStream"):
+        assert time.monotonic() < end, f"no noteStream after {timeout}s"
+        await asyncio.sleep(0.2)
     out = await cdp.evaluate(_HOOK % {"plugin": PLUGIN_PATH, "plan": json.dumps(plan), "rest": json.dumps(rest)})
     assert out == "armed", out
 
