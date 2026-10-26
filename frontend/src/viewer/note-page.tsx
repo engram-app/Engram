@@ -788,6 +788,10 @@ export default function NotePage() {
 
 					{readyHandle && mode === "rendered" ? (
 						<PropertiesWidget
+							// Remount per doc. Rows are keyed by property name, so a value
+							// open in one note stayed open when the next note (same key)
+							// arrived, its commit now closing over the new doc.
+							key={readyHandle.doc.guid}
 							doc={readyHandle.doc}
 							draft={frontmatterDraft}
 							onAbandonDraft={() => setFrontmatterDraft(false)}
