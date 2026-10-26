@@ -3010,7 +3010,7 @@ defmodule Engram.Indexing do
     rows = indexed_rows(note)
     merged? = merged_rows?(rows)
 
-    capped = fit_note(chunks, note_cap(user), merged?)
+    capped = fit_note(chunks, note_points_cap(user), merged?)
 
     # As `prepare_index/4` plans it: dense unless the opts say otherwise.
     dense? = Keyword.get(version_rebuild_opts(note), :dense, true)
@@ -3495,9 +3495,10 @@ defmodule Engram.Indexing do
     FlatFields.put_key_ids(flat, ids)
   end
 
-  # Task 11.2, hybrid (notes-chunks-hyperopt 2.4/2.4b): every point also gets a `chunk_points` row (written in the same transaction as
-  # its `chunks` row, `commit_index/2`) carrying `slice_sum`, the checksum of
-  # its chunk's display text; search derives the text from the note content
+  # Task 11.2, hybrid (notes-chunks-hyperopt 2.4/2.4b): every point also
+  # gets a `chunk_points` row (written in the same transaction as its
+  # `chunks` row, `commit_index/2`) carrying `slice_sum`, the checksum of its
+  # chunk's display text; search derives the text from the note content
   # (`display_chunks/3`). Only a note at or over `display_ct_threshold/0` also
   # stores the text and heading, sealed as ONE envelope bound to the point
   # id, so a hit there never decrypts and re-chunks the whole note. A reused

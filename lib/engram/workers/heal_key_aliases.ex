@@ -9,9 +9,10 @@ defmodule Engram.Workers.HealKeyAliases do
   what is indexed: the named-field `note_attrs` rows and the row's `type`
   blind index and `description`. A note indexed before the v5 layout has no
   rows, so one with named fields reads as changed and is re-indexed into the
-  v5 layout. Unchanged: the note is just stamped, its index untouched. Changed: the row's OKF fields are rewritten from the
-  content and a `RebuildStaleNote` (`key_aliases: true`) re-indexes it,
-  paced by the maintenance token bucket: every unchanged vector is reused
+  v5 layout. Unchanged: the note is just stamped, its index untouched.
+  Changed: the row's OKF fields are rewritten from the content and a
+  `RebuildStaleNote` (`key_aliases: true`) re-indexes it, paced by the
+  maintenance token bucket: every unchanged vector is reused
   (0 Voyage) and the payload refreshed; only a changed chunk-0 lead line
   (a `type`/`description` alias) re-embeds. That pass stamps the version.
 

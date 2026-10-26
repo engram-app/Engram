@@ -163,13 +163,42 @@ defmodule Engram.IndexingV5RebuildTest do
   defp rebuild(note, vault, user),
     do: Indexing.index_note_with_usage(note, vault, user, rebuild: true)
 
-  # A first index the pre-v5 way: random ids, one point a chunk.
+  # A first index the pre-v5 way (the pass's input): random point ids, one
+  # point a chunk (no cap applied), no `chunk_points` rows. The writer only
+  # writes the v5 layout now, so its index is re-keyed to random ids.
   defp indexed(ctx, n \\ 3) do
     note = insert_note(ctx.user, ctx.vault, sections(n))
-    assert {:ok, _, _, true} = Indexing.index_note_with_usage(note, ctx.vault, ctx.user)
+    Application.put_env(:engram, :limits_enforced, false)
+
+    try do
+      assert {:ok, _, _, true} = Indexing.index_note_with_usage(note, ctx.vault, ctx.user)
+    after
+      Application.put_env(:engram, :limits_enforced, true)
+    end
+
+    legacy_ids!(note, ctx.store)
     _ = embedded()
     clear_log(ctx.store)
     note
+  end
+
+  defp legacy_ids!(note, store) do
+    remap = Map.new(rows(note), &{&1.qdrant_point_id, Ecto.UUID.generate()})
+
+    tenant(%{id: note.user_id}, fn ->
+      Repo.delete_all(from(p in ChunkPoint, where: p.note_id == ^note.id))
+
+      for {old, new} <- remap do
+        Repo.update_all(
+          from(c in Chunk, where: c.note_id == ^note.id and c.qdrant_point_id == ^old),
+          set: [qdrant_point_id: new]
+        )
+      end
+    end)
+
+    Agent.update(store, fn s ->
+      %{s | points: Map.new(s.points, fn {id, p} -> {Map.get(remap, id, id), p} end)}
+    end)
   end
 
   test "an unchanged note copies every vector: 0 tokens, fresh v5 points, old ids gone", ctx do
@@ -281,9 +310,9 @@ defmodule Engram.IndexingV5RebuildTest do
     end
   end
 
-  # NOTE_POINTS_CAP_ENABLED alone (the budget still off, as during the v5
-  # pass): the pass caps an uncapped note from its stored vectors, no Voyage.
-  test "with only the note cap flag, a capped group is mean-pooled for 0 tokens", ctx do
+  # The budget still off, as during the v5 pass: the pass caps an uncapped
+  # note from its stored vectors, no Voyage.
+  test "with the budget off, a capped group is mean-pooled for 0 tokens", ctx do
     note = indexed(ctx, 200)
     refute Indexing.budget_enabled?()
 
