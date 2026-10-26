@@ -72,6 +72,17 @@ defmodule Engram.PromEx.CrdtTest do
     assert cap == CrdtRoomLru.max_resident()
   end
 
+  # engram-app/Engram-obsidian#645. The channel emits the crdt_create reply
+  # outcome; without this counter it never reaches /metrics.
+  test "genesis_reply is exported as a counter tagged by outcome and client" do
+    metrics = PromExMetrics.of(Plugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+    m = Enum.find(metrics, &(&1.event_name == [:engram, :crdt, :genesis_reply]))
+
+    assert %Telemetry.Metrics.Counter{} = m
+    assert m.name == [:engram, :prom_ex, :crdt, :genesis_reply, :total]
+    assert m.tags == [:outcome, :client]
+  end
+
   # #1706. The emit is useless if the plugin never exports it: nothing in the
   # checkpoint path would fail, and the Grafana panel would just be empty.
   test "checkpoint_doc bloat distributions are exported, untagged" do

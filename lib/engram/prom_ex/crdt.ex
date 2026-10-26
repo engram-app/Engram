@@ -35,6 +35,10 @@ defmodule Engram.PromEx.Crdt do
 
     * `engram_prom_ex_crdt_room_start_total`, tags `[:source]`.
     * `engram_prom_ex_crdt_room_drain_total` — tags `[:phase]`.
+    * `engram_prom_ex_crdt_genesis_reply_total`, tags `[:outcome, :client]`.
+      One per `crdt_create` reply: `outcome` is `stored | absent | occupied`,
+      `client` is `web | obsidian_sync`. `occupied` on a duplicate create is
+      the reply engram-app/Engram-obsidian#645 loses an edit on.
     * `engram_prom_ex_crdt_index_checkpoint_total` — tags `[:phase]`.
     * `engram_prom_ex_crdt_index_projection_total` — tags `[:phase]`.
     * `engram_prom_ex_crdt_index_projection_unresolved_total` — tags `[:phase]`.
@@ -138,6 +142,7 @@ defmodule Engram.PromEx.Crdt do
   @tail_event [:engram, :crdt, :index_tail]
   @drain_event [:engram, :crdt, :room_drain]
   @start_event [:engram, :crdt, :room_start]
+  @genesis_reply_event [:engram, :crdt, :genesis_reply]
   @checkpoint_event [:engram, :crdt, :index_checkpoint]
   @abort_event [:engram, :crdt, :checkpoint_abort]
   @projection_event [:engram, :crdt, :index_projection]
@@ -169,6 +174,13 @@ defmodule Engram.PromEx.Crdt do
           event_name: @start_event,
           description: "CRDT note rooms started (process actually created), by call path.",
           tags: [:source]
+        ),
+        counter(
+          metric_prefix ++ [:genesis_reply, :total],
+          event_name: @genesis_reply_event,
+          description:
+            "crdt_create replies by genesis outcome (stored | absent | occupied) and client.",
+          tags: [:outcome, :client]
         ),
         counter(
           metric_prefix ++ [:room_drain, :total],

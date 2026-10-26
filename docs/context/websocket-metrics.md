@@ -35,6 +35,12 @@ Read this when adding or reading a WebSocket metric, or when a socket panel read
 
 8. **Worktree test runs share `engram_test`.** Other worktrees use the same test DB at different migration states, producing `duplicate_object` errors. Set `MIX_TEST_PARTITION=_<name>` for an isolated DB.
 
+## CRDT channel metrics
+Channel-level CRDT counters live in `lib/engram/prom_ex/crdt.ex` (`Engram.PromEx.Crdt`), not in the WebSocket plugin.
+
+- `engram_prom_ex_crdt_genesis_reply_total{outcome, client}`: one per `crdt_create` reply. `outcome` is `stored | absent | occupied`, `client` is `web | obsidian_sync`. Emitted from `reply_created/3` in `crdt_channel.ex`, which every create arm (ADOPT included) goes through. `occupied` on a duplicate create is where the plugin can lose an edit (engram-app/Engram-obsidian#645); read it as `sum by (outcome) (rate(...[5m]))`.
+- `[:engram, :crdt, :genesis_seed]` (`reason`, why a genesis body was or was not seeded roomlessly) is still telemetry-only; it has no PromEx handler and does not reach `/metrics`.
+
 ## Failed Approaches / Dead Ends
 - Counting frames in `fastlane!/1` alone (see gotcha 2): reports one frame per broadcast regardless of subscriber count.
 - Testing serializer metrics with `Phoenix.ChannelTest` (see gotcha 3): passes without the serializer ever running.

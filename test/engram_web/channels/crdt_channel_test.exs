@@ -268,6 +268,99 @@ defmodule EngramWeb.CrdtChannelTest do
     end
   end
 
+  # engram-app/Engram-obsidian#645: a duplicate crdt_create that gets an
+  # `occupied` reply can lose the client's edit, and nothing server-side said
+  # how often that answer goes out. `[:engram, :crdt, :genesis_reply]` is the
+  # reply itself (stored | absent | occupied), exported by Engram.PromEx.Crdt.
+  # Every arm that answers a create must emit it, the ADOPT arm included.
+  describe "genesis_reply telemetry" do
+    setup do
+      test_pid = self()
+      handler = "genesis-reply-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :crdt, :genesis_reply],
+        fn _event, measurements, meta, _ ->
+          send(test_pid, {:genesis_reply, meta, measurements})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      :ok
+    end
+
+    test "a seeded create reports stored", %{socket: socket} do
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => Ecto.UUID.generate(),
+          "path" => "Notes/reply-stored.md",
+          "b64" => frame_for_content("body")
+        })
+
+      assert_reply ref, :ok, %{genesis: "stored"}
+      assert_receive {:genesis_reply, %{outcome: :stored, client: :obsidian_sync}, %{count: 1}}
+    end
+
+    test "a bodyless create on an empty row reports absent", %{socket: socket} do
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => Ecto.UUID.generate(),
+          "path" => "Notes/reply-absent.md"
+        })
+
+      assert_reply ref, :ok, %{genesis: "absent"}
+      assert_receive {:genesis_reply, %{outcome: :absent, client: :obsidian_sync}, %{count: 1}}
+    end
+
+    test "a duplicate create over a row that holds a body reports occupied", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/reply-dup.md", "content" => "x"},
+          actor: "api"
+        )
+
+      ref = push(socket, "crdt_create", %{"doc_id" => note.id, "path" => "Notes/reply-dup.md"})
+
+      assert_reply ref, :ok, %{genesis: "occupied"}
+      assert_receive {:genesis_reply, %{outcome: :occupied, client: :obsidian_sync}, %{count: 1}}
+    end
+
+    test "an ADOPT (path owned by another note) reports occupied", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/reply-adopt.md", "content" => "x"},
+          actor: "api"
+        )
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => Ecto.UUID.generate(),
+          "path" => "Notes/reply-adopt.md",
+          "b64" => frame_for_content("ours")
+        })
+
+      assert_reply ref, :ok, %{genesis: "occupied"}
+      assert_receive {:genesis_reply, %{outcome: :occupied, client: :obsidian_sync}, %{count: 1}}
+    end
+
+    test "metadata carries only the two bounded tags, never an id", %{socket: socket} do
+      ref =
+        push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "Notes/r.md"})
+
+      assert_reply ref, :ok, _
+      assert_receive {:genesis_reply, meta, _}
+      assert Enum.sort(Map.keys(meta)) == [:client, :outcome]
+    end
+  end
+
   describe "crdt_create with b64 (detached genesis seed)" do
     test "persists the body and creates NO room", %{socket: socket, user: user, vault: vault} do
       id = Ecto.UUID.generate()
