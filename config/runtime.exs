@@ -101,8 +101,7 @@ if config_env() == :dev do
   config :logger, level: String.to_existing_atom(System.get_env("LOG_LEVEL", "debug"))
 end
 
-# Model per plan (SaaS, billing on, `EMBED_MODELS_PER_PLAN=true`):
-# `{DOC,QUERY}_EMBED_MODEL_{FREE,STARTER,PRO}`.
+# Model per plan (SaaS, billing on): `{DOC,QUERY}_EMBED_MODEL_{FREE,STARTER,PRO}`.
 # Only the set ones are configured; an unset or blank plan reads its default
 # in `Engram.EmbedModels` (`plan_defaults/0`, the one copy: Free
 # voyage-4-lite, Starter and Pro voyage-4-large). Self-host ignores them.
@@ -112,12 +111,6 @@ plan_models = fn prefix ->
       model != "",
       into: %{},
       do: {plan, model}
-end
-
-# The switch: unset or anything but "true" keeps one model for every plan
-# (the global ones), as before v5. Flipped at v5 go time.
-if per_plan = System.get_env("EMBED_MODELS_PER_PLAN") do
-  config :engram, :embed_models_per_plan, per_plan == "true"
 end
 
 config :engram, :plan_doc_embed_models, plan_models.("DOC_EMBED_MODEL")
@@ -287,41 +280,6 @@ if config_env() != :test do
     config :engram, :qdrant_api_key, qdrant_api_key
   end
 
-  # The second Qdrant cluster for the v5 move. Unset, nothing changes: the
-  # client talks to QDRANT_URL. Set, `:qdrant_active_cluster` (a runtime
-  # override, `Engram.ServiceConfig.override/3`) picks `old` or `v2` per call.
-  # The key needs manage rights (collection create, payload indexes, config
-  # PATCH), as QDRANT_API_KEY does.
-  if qdrant_url_v2 = System.get_env("QDRANT_URL_V2") do
-    config :engram, :qdrant_url_v2, qdrant_url_v2
-  end
-
-  if qdrant_api_key_v2 = System.get_env("QDRANT_API_KEY_V2") do
-    config :engram, :qdrant_api_key_v2, qdrant_api_key_v2
-  end
-
-  # The env side of `:qdrant_active_cluster`, for once the cutover is done:
-  # pin `v2` here so a task that boots with the DB unreachable (no override
-  # read yet, so env) still writes v2, and the override can be cleared. The
-  # override, when set, still wins.
-  case System.get_env("QDRANT_ACTIVE_CLUSTER") do
-    nil ->
-      :ok
-
-    "old" ->
-      config :engram, :qdrant_active_cluster, "old"
-
-    "v2" ->
-      for var <- ["QDRANT_URL_V2", "QDRANT_API_KEY_V2"],
-          System.get_env(var) in [nil, ""],
-          do: raise("QDRANT_ACTIVE_CLUSTER=v2 needs #{var}")
-
-      config :engram, :qdrant_active_cluster, "v2"
-
-    other ->
-      raise "QDRANT_ACTIVE_CLUSTER must be old or v2, got #{inspect(other)}"
-  end
-
   # Binary quantization — requires AVX2+ CPU. Disable on older hardware.
   if System.get_env("QDRANT_BINARY_QUANTIZATION") == "false" do
     config :engram, :qdrant_binary_quantization, false
@@ -352,6 +310,22 @@ qdrant_switch = fn var ->
     v when v in ["false", "0"] -> false
     _ -> raise "#{var} must be true or false"
   end
+end
+
+# QDRANT_ACTIVE_CLUSTER (and QDRANT_URL_V2 / QDRANT_API_KEY_V2) are retired:
+# there is one cluster, QDRANT_URL. "old" is the expected value until
+# engram-infra drops the pin; any other value is ignored with a warning,
+# never a refusal to boot.
+case System.get_env("QDRANT_ACTIVE_CLUSTER") do
+  stale when stale not in [nil, "old"] ->
+    IO.puts(
+      :stderr,
+      "warning: QDRANT_ACTIVE_CLUSTER=#{inspect(stale)} is retired and ignored; " <>
+        "Qdrant is QDRANT_URL"
+    )
+
+  _ ->
+    :ok
 end
 
 # false = never PATCH the collection config (boot reconcile and the poller).
@@ -429,47 +403,14 @@ if min_points = System.get_env("TENANT_IDF_MIN_POINTS") do
   end
 end
 
-# true = filters also match the v3 `*_hmac` payload fields; false only after
-# the v5 pass has rewritten every point (PR-18).
+# true (default) = filters also match the v3 `*_hmac` payload fields, for a
+# collection that may still hold v3/v4 points (self-host, written before the
+# v5 layout). false only once no such point is left (prod after the v5 pass):
+# filters, indexes and the DEK sweep are then v5-only, and the reconcile
+# moves the collection to the per-tenant HNSW graph (Qdrant 1.19.2+).
 case qdrant_switch.("LEGACY_FILTER_FIELDS") do
   nil -> :ok
   on? -> config :engram, :legacy_filter_fields, on?
-end
-
-# The v5 layout switches (chunker v5 plan), all off by default; unset leaves
-# the key unconfigured so the code default (off, today's behaviour) applies.
-# WRITE_V5_LAYOUT implies the v5 payload format (`Qdrant.v5_payload_format?/0`)
-# and chunk text reads (`Qdrant.chunk_text_read?/0`; v5 points hold no text
-# in Qdrant), and is what `INDEX_REBUILD=on` requires (`Rebuild.mode/0` reads `off`
-# without it).
-for {var, key} <- [
-      {"WRITE_V5_LAYOUT", :write_v5_layout},
-      {"V5_PAYLOAD_FORMAT", :v5_payload_format},
-      {"CHUNK_TEXT_WRITE", :chunk_text_write},
-      {"CHUNK_TEXT_READ", :chunk_text_read},
-      {"QDRANT_TENANT_GRAPH", :qdrant_tenant_graph}
-    ] do
-  case qdrant_switch.(var) do
-    nil -> :ok
-    on? -> config :engram, key, on?
-  end
-end
-
-# The per-tenant HNSW graph only after drop-legacy-fields (PR-18): with legacy
-# points left, one user would be two disconnected subgraphs.
-if qdrant_switch.("QDRANT_TENANT_GRAPH") == true and
-     qdrant_switch.("LEGACY_FILTER_FIELDS") != false do
-  raise "QDRANT_TENANT_GRAPH=true needs LEGACY_FILTER_FIELDS=false (after the v5 pass, PR-18)"
-end
-
-# Legacy filters off only while new points are written in the v5 layout. A
-# legacy-format point carries ciphertext under `user_id`, and with legacy
-# filters off the DEK rotation sweep, search and account/vault delete no
-# longer see `user_id`: such a point would be written and then skipped.
-# V5_PAYLOAD_FORMAT alone is not enough, it changes filters, not the writer.
-if qdrant_switch.("LEGACY_FILTER_FIELDS") == false and
-     qdrant_switch.("WRITE_V5_LAYOUT") != true do
-  raise "LEGACY_FILTER_FIELDS=false needs WRITE_V5_LAYOUT=true (legacy points would be written unswept)"
 end
 
 # Comma-separated user ids the v5 pass rebuilds last (`Rebuild.rebuild_order/1`).
@@ -694,26 +635,11 @@ if System.get_env("ATTACHMENT_MIME_BYPASS") in ["1", "true"] do
   config :engram, :attachment_mime_bypass, true
 end
 
-# Vault-channel CRDT fan-out pacer (engram-app/Engram#1002) rollback knob.
-# Default is pacing ON; set to "false" to fall back to unpaced inline
-# broadcast for every note if the pacer ever needs to be disabled in prod.
-#
-# KEEP until #1004 is closed. This is deliberately a documented config path
-# rather than a per-node remote-console `Application.put_env` — that was the
-# explicit ask in #1004. The queue-depth gauge shipped (#1487); the alarm in
-# #1004 is still open.
-# The v5 index budget (`Engram.Indexing.budget_enabled?/0`): per-note cap
-# merge, points budget and floor, the 04:00 UTC recap and budget sweeps.
+# The v5 index budget (`Engram.Indexing.budget_enabled?/0`): points budget
+# and floor and the budget sweeps (the per-note cap applies either way).
 # Off until the v5 pass completes; turned on with the v5 stamp.
 if budget = System.get_env("INDEX_BUDGET_ENABLED") do
   config :engram, :index_budget_enabled, budget == "true"
-end
-
-# The per-note cap merge on its own (`Engram.Indexing.note_cap_enabled?/0`),
-# and the 04:00 UTC recap. On before the v5 dry run, so the pass embeds each
-# over-cap note once, capped.
-if note_cap = System.get_env("NOTE_POINTS_CAP_ENABLED") do
-  config :engram, :note_points_cap_enabled, note_cap == "true"
 end
 
 # The one-time v5 index rebuild switch (`Engram.Rebuild`, chunker v5 Task
@@ -723,13 +649,14 @@ if rebuild = System.get_env("INDEX_REBUILD") do
   config :engram, :index_rebuild, rebuild
 end
 
-# The encrypted per-user vector cache (`Engram.Indexing.VectorCache`, chunker
-# v5 Task 12): a text is paid to Voyage once. Off by default; off, the embed
-# path never reads or writes `embedding_cache`.
-if cache = System.get_env("VECTOR_CACHE_ENABLED") do
-  config :engram, :vector_cache_enabled, cache == "true"
-end
-
+# Vault-channel CRDT fan-out pacer (engram-app/Engram#1002) rollback knob.
+# Default is pacing ON; set to "false" to fall back to unpaced inline
+# broadcast for every note if the pacer ever needs to be disabled in prod.
+#
+# KEEP until #1004 is closed. This is deliberately a documented config path
+# rather than a per-node remote-console `Application.put_env` — that was the
+# explicit ask in #1004. The queue-depth gauge shipped (#1487); the alarm in
+# #1004 is still open.
 if pacing = System.get_env("FANOUT_PACING_ENABLED") do
   config :engram, :fanout_pacing_enabled, pacing == "true"
 end

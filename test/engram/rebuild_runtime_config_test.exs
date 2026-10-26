@@ -9,18 +9,27 @@ defmodule Engram.RebuildRuntimeConfigTest do
     "BM25_B_MERGED" => :bm25_b_merged,
     "TENANT_IDF_MIN_POINTS" => :tenant_idf_min_points,
     "LEGACY_FILTER_FIELDS" => :legacy_filter_fields,
-    "REBUILD_LAST_USERS" => :rebuild_last_users,
+    "REBUILD_LAST_USERS" => :rebuild_last_users
+  }
+
+  # The v5 switches whose prod value is now the code's only behaviour. A task
+  # def still setting one (engram-infra drops them after this ships) must
+  # boot, whatever the value.
+  @retired %{
     "WRITE_V5_LAYOUT" => :write_v5_layout,
     "V5_PAYLOAD_FORMAT" => :v5_payload_format,
     "CHUNK_TEXT_WRITE" => :chunk_text_write,
     "CHUNK_TEXT_READ" => :chunk_text_read,
     "QDRANT_TENANT_GRAPH" => :qdrant_tenant_graph,
-    "NOTE_POINTS_CAP_ENABLED" => :note_points_cap_enabled
+    "NOTE_POINTS_CAP_ENABLED" => :note_points_cap_enabled,
+    "VECTOR_CACHE_ENABLED" => :vector_cache_enabled,
+    "EMBED_MODELS_PER_PLAN" => :embed_models_per_plan
   }
 
   setup do
-    previous = Map.new(Map.keys(@vars), &{&1, System.get_env(&1)})
-    Enum.each(Map.keys(@vars), &System.delete_env/1)
+    vars = Map.keys(@vars) ++ Map.keys(@retired)
+    previous = Map.new(vars, &{&1, System.get_env(&1)})
+    Enum.each(vars, &System.delete_env/1)
 
     on_exit(fn ->
       for {var, value} <- previous,
@@ -65,8 +74,9 @@ defmodule Engram.RebuildRuntimeConfigTest do
     end
   end
 
+  # On its own: every new point is written in the v5 layout now, so turning
+  # legacy filters off no longer needs WRITE_V5_LAYOUT next to it.
   test "LEGACY_FILTER_FIELDS is a switch" do
-    System.put_env("WRITE_V5_LAYOUT", "true")
     assert with_env("LEGACY_FILTER_FIELDS", "false") == false
     assert with_env("LEGACY_FILTER_FIELDS", "true") == true
     System.put_env("LEGACY_FILTER_FIELDS", "maybe")
@@ -84,64 +94,12 @@ defmodule Engram.RebuildRuntimeConfigTest do
     assert_raise RuntimeError, ~r/REBUILD_LAST_USERS/, &read_runtime/0
   end
 
-  # The v5 layout flags: off unless set ("unset" above), strict switches.
-  for var <- ["WRITE_V5_LAYOUT", "V5_PAYLOAD_FORMAT", "CHUNK_TEXT_WRITE", "CHUNK_TEXT_READ"] do
-    test "#{var} is a switch" do
-      assert with_env(unquote(var), "true") == true
-      assert with_env(unquote(var), "1") == true
-      assert with_env(unquote(var), "false") == false
-      System.put_env(unquote(var), "yes")
-      assert_raise RuntimeError, ~r/#{unquote(var)} must be true or false/, &read_runtime/0
-    end
-  end
-
-  test "WRITE_V5_LAYOUT implies the v5 payload format" do
-    Engram.ServiceConfig.put_override(:write_v5_layout, true)
-    Engram.ServiceConfig.put_override(:v5_payload_format, false)
-    assert Engram.Vector.Qdrant.v5_payload_format?()
-  end
-
-  # A legacy-format point written with legacy filters off is invisible to the
-  # DEK sweep (its ciphertext would stay under the retired key), search and
-  # delete. V5_PAYLOAD_FORMAT does not change the writer, so it is not enough.
-  test "LEGACY_FILTER_FIELDS=false refuses to boot unless WRITE_V5_LAYOUT=true" do
-    System.put_env("LEGACY_FILTER_FIELDS", "false")
-    msg = ~r/LEGACY_FILTER_FIELDS=false needs WRITE_V5_LAYOUT=true/
-    assert_raise RuntimeError, msg, &read_runtime/0
-
-    System.put_env("V5_PAYLOAD_FORMAT", "true")
-    assert_raise RuntimeError, msg, &read_runtime/0
-
-    System.put_env("WRITE_V5_LAYOUT", "false")
-    assert_raise RuntimeError, msg, &read_runtime/0
-
-    System.put_env("WRITE_V5_LAYOUT", "true")
-    assert engram(:legacy_filter_fields) == false
-  end
-
-  test "QDRANT_TENANT_GRAPH is a switch, true only after drop-legacy-fields" do
-    assert with_env("QDRANT_TENANT_GRAPH", "false") == false
-
-    # Only with LEGACY_FILTER_FIELDS=false (PR-18): unset or true refuses.
-    System.put_env("QDRANT_TENANT_GRAPH", "true")
-
-    assert_raise RuntimeError,
-                 ~r/QDRANT_TENANT_GRAPH=true needs LEGACY_FILTER_FIELDS=false/,
-                 &read_runtime/0
-
+  test "a retired v5 switch configures nothing and never refuses to boot" do
+    for {var, _key} <- @retired, do: System.put_env(var, "yes")
     System.put_env("LEGACY_FILTER_FIELDS", "true")
-    assert_raise RuntimeError, ~r/QDRANT_TENANT_GRAPH/, &read_runtime/0
+    config = read_runtime()
 
-    System.put_env("LEGACY_FILTER_FIELDS", "false")
-    System.put_env("WRITE_V5_LAYOUT", "true")
-    assert engram(:qdrant_tenant_graph) == true
-
-    System.put_env("QDRANT_TENANT_GRAPH", "maybe")
-    assert_raise RuntimeError, ~r/QDRANT_TENANT_GRAPH must be true or false/, &read_runtime/0
-  end
-
-  test "NOTE_POINTS_CAP_ENABLED is a switch" do
-    assert with_env("NOTE_POINTS_CAP_ENABLED", "true") == true
-    assert with_env("NOTE_POINTS_CAP_ENABLED", "false") == false
+    for {_var, key} <- @retired,
+        do: assert(get_in(config, [:engram, key]) == nil, "#{key} configured")
   end
 end

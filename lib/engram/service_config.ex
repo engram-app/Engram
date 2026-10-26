@@ -32,8 +32,8 @@ defmodule Engram.ServiceConfig do
 
   ## Runtime overrides (every build)
 
-  The keys in `Engram.ServiceConfig.Overrides.keys/0` (the v5 rollout flags
-  and `:qdrant_active_cluster`) can be overridden at runtime from a remote
+  The keys in `Engram.ServiceConfig.Overrides.keys/0` (the v5 rebuild kill
+  switch and the v5 steps not taken yet) can be overridden at runtime from a remote
   shell, cluster-wide and durably, through a DB row: `override/3`, `clear/2`,
   `list/0`. An override beats env; with none set the env value is returned
   unchanged. See `Engram.ServiceConfig.Overrides` for the cache, the
