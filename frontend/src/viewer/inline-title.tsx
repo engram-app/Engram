@@ -50,8 +50,10 @@ export function InlineTitle({
 					commitOnBlur
 					// Chromeless: no border, no fill, no padding of its own, so the
 					// caret simply appears in the title. p-0 also keeps the text on
-					// the same left edge as the button it replaced.
-					className={`${TITLE_TYPE} rounded-none border-0 bg-transparent p-0`}
+					// the same left edge as the button it replaced. md:text-3xl because
+					// RenameInput's FIELD_TEXT carries an `md:` size a bare text-3xl does
+					// not replace; without it the title shrinks to 14px on desktop.
+					className={`${TITLE_TYPE} rounded-none border-0 bg-transparent p-0 md:text-3xl`}
 					onCommit={onCommitRename}
 					onCancel={onCancelRename}
 				/>

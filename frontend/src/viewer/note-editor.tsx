@@ -52,6 +52,9 @@ const editorTheme = EditorView.theme({
 	},
 	".cm-gutters": { backgroundColor: "transparent", border: "none" },
 	".cm-content": { fontSize: "16px", padding: "20px 20px 30vh" },
+	// The find/replace fields. CodeMirror's base theme sets them to 70% (~11px),
+	// which iOS zooms on focus; 16px matches .cm-content for the same reason.
+	".cm-textfield": { fontSize: "16px" },
 });
 
 export type EditorMode = "rendered" | "raw";

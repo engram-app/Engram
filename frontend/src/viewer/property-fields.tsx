@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useT } from "@/i18n/locale-provider";
+import { FIELD_TEXT } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import type { PropertyType } from "./property-types";
 
@@ -19,8 +20,7 @@ interface FieldProps {
 // and only the inputs can carry their own padding — chips and the checkbox are
 // not inputs, so they sat flush against the divider. The `dd` owns the inset now
 // (properties-widget), which makes the next field type correct by default.
-const inputCls =
-	"w-full rounded-md border-0 bg-transparent py-1 pr-2 text-foreground text-sm outline-none";
+const inputCls = `w-full rounded-md border-0 bg-transparent py-1 pr-2 text-foreground outline-none ${FIELD_TEXT}`;
 
 function ScalarField({ type, value, onCommit, onFocusChange, label }: FieldProps) {
 	const { t } = useT();

@@ -7,6 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useT } from "@/i18n/locale-provider";
 import { Trans } from "@/i18n/trans";
 import { notify } from "@/lib/notify";
+import { FIELD_TEXT } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import {
 	addKey,
@@ -39,8 +40,7 @@ const ROW = "col-span-2 grid grid-cols-subgrid items-stretch rounded-md border b
 
 // A key's name, committed or being authored. field-sizing-content sizes the
 // input to its text, which is what lets the key column fit the longest key.
-const KEY_INPUT =
-	"field-sizing-content min-w-0 max-w-full border-0 bg-transparent px-2 py-1 text-sm outline-none";
+const KEY_INPUT = `field-sizing-content min-w-0 max-w-full border-0 bg-transparent px-2 py-1 outline-none ${FIELD_TEXT}`;
 
 // The value side of a row.
 const VALUE_CELL = "flex min-h-7 items-center gap-1 pl-2";
@@ -570,7 +570,10 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 										}}
 										type={htmlInputType(newType)}
 										aria-label={t("New property value")}
-										className="w-full min-w-0 border-0 bg-transparent py-1 pr-2 text-foreground text-sm outline-none placeholder:text-muted-foreground/60"
+										className={cn(
+											"w-full min-w-0 border-0 bg-transparent py-1 pr-2 text-foreground outline-none placeholder:text-muted-foreground/60",
+											FIELD_TEXT,
+										)}
 										// A date/datetime/number input draws its own skeleton
 										// (mm/dd/yyyy, the spinner); a placeholder on top of that
 										// is noise, and browsers ignore it anyway.

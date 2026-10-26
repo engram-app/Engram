@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useT } from "@/i18n/locale-provider";
+import { FIELD_TEXT } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -118,7 +119,8 @@ export function RenameInput({
 				// place. Alt-tabbing away now leaves the edit open, exactly where it was.
 				onBlur={() => settle(Boolean(commitOnBlur) && document.hasFocus())}
 				className={cn(
-					"w-full rounded border border-ring bg-background px-1 py-0.5 text-foreground text-sm outline-none",
+					"w-full rounded border border-ring bg-background px-1 py-0.5 text-foreground outline-none",
+					FIELD_TEXT,
 					className,
 				)}
 			/>

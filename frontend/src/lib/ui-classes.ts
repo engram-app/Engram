@@ -9,6 +9,12 @@ const listRowMultiSelected = "bg-row-multi-selected text-foreground";
 // Single source of truth for repeated Tailwind class patterns across the
 // auth / onboarding / consent / settings surfaces. Keep visual changes here.
 
+/** Text size for every text field: 16px on phones, 14px from `md` up. iOS
+ *  zooms the page when a focused field is under 16px and never zooms back out,
+ *  so a field below that on mobile breaks the layout. Guarded by
+ *  lib/control-height.test.ts. */
+export const FIELD_TEXT = "text-base md:text-sm";
+
 // Section/page heading used on the branded surfaces.
 export const heading = "text-2xl font-bold tracking-tight text-foreground sm:text-3xl";
 
