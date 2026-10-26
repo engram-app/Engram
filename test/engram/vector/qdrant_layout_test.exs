@@ -644,6 +644,61 @@ defmodule Engram.Vector.QdrantLayoutTest do
                QdrantLayout.strict_limits(vol, %{@opts | memory_reserve: 100 * @mib})
     end
 
+    # v3 on 2026-10-25: mx1 16 GiB volume, /memory disk_bytes 5,502,419,140,
+    # 307,869 points, max_segment_size 128,000 KB of f16 1024 = 64,000 points.
+    # Qdrant starts an optimization only with 2x its input segments free
+    # (`check_segments_size`, lib/shard/src/optimize.rs), and a capped
+    # collection's largest optimization is one capped segment. 0.35x gave 88.
+    @v3 %{
+      capacity: 16 * @gib,
+      collection: 5_502_419_140,
+      points: 307_869,
+      segment_points: 64_000,
+      memory_limit: nil
+    }
+
+    test "a capped collection reserves 2x one capped segment, not 0.35x" do
+      assert %{disk: %{percent: 86, reserve: 2_287_692_654}} =
+               QdrantLayout.strict_limits(@v3, @opts)
+    end
+
+    test "the capped reserve does not grow with the collection (600k points)" do
+      grown = %{@v3 | collection: 10_723_559_319, points: 600_000}
+
+      assert %{disk: %{percent: 86, reserve: 2_287_692_654}} =
+               QdrantLayout.strict_limits(grown, @opts)
+    end
+
+    test "a cap above the point count reserves 2x the whole collection" do
+      uncapped = %{@v3 | segment_points: 500_000}
+
+      assert %{disk: %{percent: 70, reserve: 11_004_838_280}} =
+               QdrantLayout.strict_limits(uncapped, @opts)
+    end
+
+    test "an unknown or zero point count, or no cap, keeps 0.35x" do
+      for sizes <- [%{@v3 | points: 0}, %{@v3 | points: nil}, %{@v3 | segment_points: nil}] do
+        assert %{disk: %{percent: 88, reserve: 1_925_846_699}} =
+                 QdrantLayout.strict_limits(sizes, @opts)
+      end
+    end
+
+    test "segment_points/1 reads the cap in points from GET /collections" do
+      info =
+        @prod_info
+        |> put_in(["config", "optimizer_config", "max_segment_size"], 128_000)
+        |> put_in(["config", "params", "vectors", "dense", "datatype"], "float16")
+
+      assert QdrantLayout.segment_points(info) == 64_000
+
+      f32 = put_in(info, ["config", "params", "vectors", "dense", "datatype"], "float32")
+      assert QdrantLayout.segment_points(f32) == 32_000
+
+      # Unset cap (Qdrant picks one per CPU count): unknown, keeps 0.35x.
+      assert QdrantLayout.segment_points(@prod_info) == nil
+      assert QdrantLayout.segment_points(nil) == nil
+    end
+
     test "unknown sizes keep the configured static percent" do
       unknown = %{capacity: nil, collection: 4_890_000_000, memory_limit: nil}
 

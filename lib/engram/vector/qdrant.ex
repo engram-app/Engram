@@ -646,7 +646,7 @@ defmodule Engram.Vector.Qdrant do
 
       Logger.info("qdrant strict profile #{deployment(base_url())} (#{deployment_source()})")
 
-      limits = strict_limits(col, volume_stats())
+      limits = strict_limits(col, volume_stats(), :fetch, info)
 
       diff =
         QdrantLayout.diff(
@@ -701,9 +701,17 @@ defmodule Engram.Vector.Qdrant do
   `QDRANT_MEMORY_LIMIT_BYTES`. Unknown sizes fall back to
   `QDRANT_STRICT_DISK_PERCENT` / `QDRANT_STRICT_MEMORY_PERCENT` (85).
   `memory`: a `collection_memory/1` result already in hand (the poller
-  shares one per tick), or `:fetch`.
+  shares one per tick), or `:fetch`. `info`: the caller's GET
+  `/collections/{name}` result (points and segment cap,
+  `QdrantLayout.segment_points/1`); nil keeps the 0.35x disk reserve.
   """
-  def strict_limits(col, volume, memory \\ :fetch) do
+  # ponytail: no fetch for `info`; the poller and the boot reconcile hold
+  # one. A pressure/0 cache miss reads 0.35x, and misses are routine (the
+  # :qdrant_pressure TTL equals the 60 s poll), so the app preflight can run
+  # off the 0.35x limit for up to a minute (v3: 88 vs 86). Qdrant's own
+  # guard still refuses at the real limit; fetch `collection_info` on a miss
+  # if the preflight must match it exactly.
+  def strict_limits(col, volume, memory \\ :fetch, info \\ nil) do
     collection_bytes =
       case if(memory == :fetch, do: collection_memory(col), else: memory) do
         {:ok, %{"total" => %{"disk_bytes" => b}}} when is_integer(b) -> b
@@ -714,6 +722,8 @@ defmodule Engram.Vector.Qdrant do
       %{
         capacity: volume && volume.capacity,
         collection: collection_bytes,
+        points: if(is_map(info), do: info["points_count"]),
+        segment_points: QdrantLayout.segment_points(info),
         memory_limit: ServiceConfig.get(:qdrant_memory_limit_bytes)
       },
       %{
@@ -1074,19 +1084,20 @@ defmodule Engram.Vector.Qdrant do
   def forget_pressure, do: Engram.Cache.evict_local(:qdrant_pressure, base_url())
 
   @doc """
-  A fresh `pressure/0` reading (the poller), refreshing the cache. `memory`:
-  a `collection_memory/1` result to reuse, or `:fetch`.
+  A fresh `pressure/0` reading (the poller), refreshing the cache. `memory`
+  and `info`: a `collection_memory/1` / `collection_info/2` result to reuse,
+  or `:fetch` / nil (see `strict_limits/4`).
   """
   # ponytail: every node reads /sys_metrics, /metrics and /memory once a
   # minute. Cheap at a handful of nodes; share the poller's reading over
   # PubSub if the fleet grows.
-  def read_pressure(memory \\ :fetch) do
+  def read_pressure(memory \\ :fetch, info \\ nil) do
     volume = volume_stats()
 
     reading = %{
       disk: disk_percent(volume),
       heap: heap_percent(),
-      limits: strict_limits(collection(), volume, memory)
+      limits: strict_limits(collection(), volume, memory, info)
     }
 
     Engram.Cache.put(:qdrant_pressure, base_url(), reading)

@@ -177,7 +177,7 @@ defmodule Engram.PromEx.Qdrant do
       stage("memory", fn -> poll_memory(memory) end)
 
       stage("pressure", fn ->
-        reading = poll_pressure(memory)
+        reading = poll_pressure(memory, info)
 
         if is_map(info) and poller?(),
           do: Qdrant.reconcile_strict_mode(col, info, reading.limits, version)
@@ -262,8 +262,8 @@ defmodule Engram.PromEx.Qdrant do
   end
 
   # An unknown kind publishes nothing (absent, not a misleading 0).
-  defp poll_pressure(memory) do
-    reading = Qdrant.read_pressure(memory)
+  defp poll_pressure(memory, info) do
+    reading = Qdrant.read_pressure(memory, info)
 
     for kind <- [:disk, :heap] do
       tags = %{kind: Atom.to_string(kind)}
