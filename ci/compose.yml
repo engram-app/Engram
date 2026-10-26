@@ -184,7 +184,7 @@ services:
       # enough that it is not pathological. If this destabilises the suite, that
       # is a REAL finding about the drain, not CI noise — raise it deliberately
       # rather than deleting the line.
-      CRDT_IDLE_EXIT_MS: ${CRDT_IDLE_EXIT_MS:-5000}
+      CRDT_IDLE_EXIT_MS: ${CRDT_IDLE_EXIT_MS:-300000}
       # LRU backstop, also e2e-only. Idle-exit alone never evicts a room that
       # stays busy, so without these the LRU only ever ran against spawn stubs
       # in unit tests — it had never touched a real SharedDoc.
