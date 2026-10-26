@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -43,8 +44,16 @@ class Expect:
     exact:     the folder's markdown paths must be exactly `notes`' keys
                (False when a test cannot predict every path, e.g. the soak).
     absent:    paths that must not exist anywhere (deleted, renamed away).
-    at_most_once: markers that may be gone, but must never be duplicated.
-    attachments: path -> bytes every device and the server must hold.
+    at_most_once: markers that may be gone, but never appear twice in one note
+               or in two notes.
+    identities: one marker per logical note (its creation anchor). A note's
+               identity in two non-copy files is ONE event, "note duplicated";
+               the markers inside the extra file are not counted again.
+    copy_ok:   body -> True when a "(conflict" copy holding that body is a
+               legitimate outcome (keep-both from an edit racing a delete).
+
+    Conflict copies are reported once each, as events; their bodies never
+    count toward a marker's duplicates.
     """
 
     notes: dict[str, list[str]] = field(default_factory=dict)
@@ -52,6 +61,12 @@ class Expect:
     absent: set[str] = field(default_factory=set)
     at_most_once: set[str] = field(default_factory=set)
     attachments: dict[str, bytes] = field(default_factory=dict)
+    identities: set[str] = field(default_factory=set)
+    copy_ok: Callable[[str], bool] | None = None
+
+
+def _is_copy(path: str) -> bool:
+    return "conflict" in path.lower()
 
 
 def _vault_id(api) -> str:
@@ -135,7 +150,10 @@ def problems(api, vaults: dict[str, Path], prefix: str, expect: Expect) -> list[
             if others.get(path) != data:
                 out.append(f"{name}: attachment {path} bytes wrong or missing")
 
-    out += [f"conflict copy {p}" for p in sorted(every_path) if "conflict" in p.lower()]
+    for p in sorted(p for p in every_path if _is_copy(p)):
+        body = server.get(p)
+        if not (expect.copy_ok and body is not None and expect.copy_ok(body)):
+            out.append(f"conflict copy {p}")
 
     if expect.exact:
         for path in sorted(set(server) ^ set(expect.notes)):
@@ -143,7 +161,17 @@ def problems(api, vaults: dict[str, Path], prefix: str, expect: Expect) -> list[
     for path in sorted(expect.absent & every_path):
         out.append(f"{path} should not exist")
 
-    corpus = "\n".join(server.values())
+    canonical = {p: b for p, b in server.items() if not _is_copy(p)}
+    # One event per duplicated note; its extra files leave the marker count.
+    extra: set[str] = set()
+    for ident in sorted(expect.identities):
+        files = sorted(p for p, b in canonical.items() if ident in b)
+        if len(files) > 1:
+            out.append(f"note duplicated: {ident!r} in {files}")
+            keep = next((p for p in files if p in expect.notes), files[0])
+            extra |= set(files) - {keep}
+    counted = {p: b for p, b in canonical.items() if p not in extra}
+    corpus = "\n".join(counted.values())
     for path, markers in expect.notes.items():
         body = server.get(path)
         if body is None:
@@ -153,9 +181,10 @@ def problems(api, vaults: dict[str, Path], prefix: str, expect: Expect) -> list[
                 out.append(f"{path}: marker {m!r} appears {n}x (want 1)")
             elif (total := corpus.count(m)) != 1:
                 out.append(f"marker {m!r} appears {total}x across the folder (want 1)")
-    for m in expect.at_most_once:
+    for m in sorted(expect.at_most_once):
         if (n := corpus.count(m)) > 1:
-            out.append(f"marker {m!r} duplicated {n}x")
+            where = [p for p, b in counted.items() if m in b]
+            out.append(f"marker {m!r} duplicated {n}x in {where}")
     return out
 
 
