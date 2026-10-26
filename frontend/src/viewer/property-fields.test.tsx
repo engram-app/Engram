@@ -138,6 +138,21 @@ describe("PropertyField", () => {
 		expect(onCommit).toHaveBeenCalledWith("a\nbc\n");
 	});
 
+	// Swapping input for textarea mid-edit would unmount the focused box and
+	// drop the draft. The kind of box is decided once, when it opens.
+	test("a remote newline change does not swap the open box", () => {
+		const onCommit = vi.fn();
+		const { rerender } = render(
+			<PropertyField type="text" value="one line" label="x" onCommit={onCommit} />,
+		);
+		const input = tapToEdit();
+		fireEvent.change(input, { target: { value: "typed" } });
+		rerender(<PropertyField type="text" value={BLOCK_SCALAR} label="x" onCommit={onCommit} />);
+		expect(input).toBeInTheDocument();
+		expect(input).toHaveFocus();
+		expect(input).toHaveValue("typed");
+	});
+
 	test("an edit is committed verbatim, without trimming", () => {
 		const onCommit = vi.fn();
 		render(<PropertyField type="text" value="a" label="x" onCommit={onCommit} />);

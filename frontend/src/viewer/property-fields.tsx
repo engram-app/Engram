@@ -37,7 +37,10 @@ const CELL_BUTTON = `block min-w-0 cursor-text self-stretch truncate text-left $
 
 function ScalarField({ type, value, onCommit, label }: FieldProps) {
 	const { t, renderedLocale } = useT();
-	const [editing, setEditing] = useState(false);
+	// null at rest; otherwise the kind of box, decided ONCE when it opens. A
+	// remote edit that adds or removes a newline mid-edit must not swap input
+	// for textarea: that unmounts the focused box and drops the draft.
+	const [editing, setEditing] = useState<null | "line" | "multiline">(null);
 	const initial = value === null || value === undefined ? "" : String(value);
 	// At rest a date reads the way the native date input showed it; the raw
 	// stored string is what the input edits.
@@ -55,7 +58,8 @@ function ScalarField({ type, value, onCommit, label }: FieldProps) {
 				// the key in front says which property it is.
 				aria-label={shown === "" ? name : `${name}: ${shown}`}
 				className={CELL_BUTTON}
-				onClick={() => setEditing(true)}
+				// A YAML block scalar holds newlines an <input> would strip.
+				onClick={() => setEditing(type === "text" && initial.includes("\n") ? "multiline" : "line")}
 			>
 				{shown}
 			</button>
@@ -74,13 +78,12 @@ function ScalarField({ type, value, onCommit, label }: FieldProps) {
 			type={htmlInputType(type)}
 			allowEmpty
 			trim={false}
-			// A YAML block scalar holds newlines an <input> would strip.
-			multiline={type === "text" && initial.includes("\n")}
+			multiline={editing === "multiline"}
 			commitOnBlur
 			commitOnWindowBlur
 			className={inputCls}
 			onCommit={(next) => {
-				setEditing(false);
+				setEditing(null);
 				if (type === "number") {
 					const n = Number(next);
 					onCommit(next === "" || !Number.isFinite(n) ? null : n);
@@ -88,7 +91,7 @@ function ScalarField({ type, value, onCommit, label }: FieldProps) {
 					onCommit(next);
 				}
 			}}
-			onCancel={() => setEditing(false)}
+			onCancel={() => setEditing(null)}
 		/>
 	);
 }
