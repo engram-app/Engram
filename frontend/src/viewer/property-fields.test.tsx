@@ -4,7 +4,7 @@ import { PropertyField } from "./property-fields";
 
 /** Values are buttons until tapped; tap one open and return the live input. */
 function tapToEdit(label = "x value"): HTMLInputElement {
-	fireEvent.click(screen.getByRole("button", { name: label }));
+	fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${label}`) }));
 	return screen.getByLabelText(label) as HTMLInputElement;
 }
 
@@ -14,10 +14,25 @@ describe("PropertyField", () => {
 	test("shows the value as a button, not an input, until tapped", () => {
 		render(<PropertyField type="text" value="hi" label="x" onCommit={() => {}} />);
 		expect(screen.queryByRole("textbox")).toBeNull();
-		expect(screen.getByRole("button", { name: "x value" })).toHaveTextContent("hi");
+		expect(screen.getByRole("button", { name: /^x value/ })).toHaveTextContent("hi");
 		const input = tapToEdit();
 		expect(input).toHaveFocus();
 		expect(input).toHaveValue("hi");
+	});
+
+	// WCAG 2.5.3 label-in-name (Lighthouse label-content-name-mismatch): a
+	// control's accessible name must contain the text it shows.
+	test("the at-rest cell's name contains the value it shows", () => {
+		render(<PropertyField type="text" value="draft" label="status" onCommit={() => {}} />);
+		expect(screen.getByRole("button", { name: "status value: draft" })).toHaveTextContent("draft");
+	});
+
+	test("the list adder's name contains its visible text, at full contrast", () => {
+		render(<PropertyField type="list" value={[]} label="tags" onCommit={() => {}} />);
+		const adder = screen.getByRole("button", { name: "tags value: Add item..." });
+		expect(adder).toHaveTextContent("Add item...");
+		// A placeholder is exempt from the contrast audit; a button's text is not.
+		expect(adder.className).not.toMatch(/text-muted-foreground\/\d+/);
 	});
 
 	test("text commits on blur and goes back to a button", () => {
@@ -47,7 +62,7 @@ describe("PropertyField", () => {
 		fireEvent.keyDown(input, { key: "Escape" });
 		fireEvent.blur(input);
 		expect(onCommit).not.toHaveBeenCalled();
-		expect(screen.getByRole("button", { name: "x value" })).toHaveTextContent("hi");
+		expect(screen.getByRole("button", { name: /^x value/ })).toHaveTextContent("hi");
 	});
 
 	// The cancel must not leak into the next edit: a field that was once
@@ -122,7 +137,7 @@ describe("PropertyField", () => {
 	// At rest a date reads the way the native date input showed it, not ISO.
 	test("shows a date formatted at rest and the raw value when editing", () => {
 		render(<PropertyField type="date" value="2026-06-30" label="x" onCommit={() => {}} />);
-		expect(screen.getByRole("button", { name: "x value" })).toHaveTextContent("06/30/2026");
+		expect(screen.getByRole("button", { name: /^x value/ })).toHaveTextContent("06/30/2026");
 		expect(tapToEdit()).toHaveValue("2026-06-30");
 	});
 
@@ -130,14 +145,14 @@ describe("PropertyField", () => {
 		render(
 			<PropertyField type="datetime" value="2026-06-30T14:05" label="x" onCommit={() => {}} />,
 		);
-		const text = screen.getByRole("button", { name: "x value" }).textContent ?? "";
+		const text = screen.getByRole("button", { name: /^x value/ }).textContent ?? "";
 		expect(text).toContain("06/30/2026");
 		expect(text).toMatch(/2:05/);
 	});
 
 	test("shows an unparseable date as stored", () => {
 		render(<PropertyField type="date" value="someday" label="x" onCommit={() => {}} />);
-		expect(screen.getByRole("button", { name: "x value" })).toHaveTextContent("someday");
+		expect(screen.getByRole("button", { name: /^x value/ })).toHaveTextContent("someday");
 	});
 
 	test("checkbox commits immediately", () => {
@@ -151,7 +166,7 @@ describe("PropertyField", () => {
 		const onCommit = vi.fn();
 		render(<PropertyField type="list" value={["a"]} label="x" onCommit={onCommit} />);
 		expect(screen.queryByRole("textbox")).toBeNull();
-		fireEvent.click(screen.getByRole("button", { name: "x value" }));
+		fireEvent.click(screen.getByRole("button", { name: /^x value/ }));
 		const input = screen.getByPlaceholderText("Add item...");
 		expect(input).toHaveFocus();
 		expect(input).toHaveAttribute("autocomplete", "off");
@@ -163,7 +178,7 @@ describe("PropertyField", () => {
 	test("Escape in the list adder discards the pending item", () => {
 		const onCommit = vi.fn();
 		render(<PropertyField type="list" value={["a"]} label="x" onCommit={onCommit} />);
-		fireEvent.click(screen.getByRole("button", { name: "x value" }));
+		fireEvent.click(screen.getByRole("button", { name: /^x value/ }));
 		const input = screen.getByPlaceholderText("Add item...");
 		fireEvent.change(input, { target: { value: "c" } });
 		fireEvent.keyDown(input, { key: "Escape" });
@@ -175,7 +190,7 @@ describe("PropertyField", () => {
 	test("list adder commits the pending item on blur", () => {
 		const onCommit = vi.fn();
 		render(<PropertyField type="list" value={["a"]} label="x" onCommit={onCommit} />);
-		fireEvent.click(screen.getByRole("button", { name: "x value" }));
+		fireEvent.click(screen.getByRole("button", { name: /^x value/ }));
 		const input = screen.getByPlaceholderText("Add item...");
 		fireEvent.change(input, { target: { value: "c" } });
 		fireEvent.blur(input);

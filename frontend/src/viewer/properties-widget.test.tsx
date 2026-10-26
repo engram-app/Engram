@@ -14,7 +14,7 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: toastError } }));
  * which carries the same accessible name the button did.
  */
 async function tapToEdit(name: string): Promise<HTMLInputElement> {
-	fireEvent.click(await screen.findByRole("button", { name }));
+	fireEvent.click(await screen.findByRole("button", { name: new RegExp(`^${name}`) }));
 	return screen.getByLabelText(name) as HTMLInputElement;
 }
 
@@ -34,7 +34,7 @@ describe("PropertiesWidget", () => {
 		const section = await screen.findByTestId("note-properties");
 		await screen.findByRole("button", { name: "Rename title" });
 		expect(section.querySelectorAll("input:not([type=checkbox]), textarea")).toHaveLength(0);
-		expect(screen.getByRole("button", { name: "title value" })).toHaveTextContent("Hi");
+		expect(screen.getByRole("button", { name: /^title value/ })).toHaveTextContent("Hi");
 	});
 
 	test("a tapped cell is a real field that iOS will not AutoFill", async () => {
@@ -403,7 +403,7 @@ describe("property order", () => {
 			setValue(doc, key, `${key}-value`);
 		}
 		render(<PropertiesWidget doc={doc} />);
-		await screen.findByRole("button", { name: "zeta value" });
+		await screen.findByRole("button", { name: /^zeta value/ });
 
 		const rendered = screen
 			.getAllByTestId(/^property-row-/)
@@ -442,7 +442,11 @@ describe("the collapsible Properties heading", () => {
 
 		// And a remote edit arriving while collapsed still lands.
 		setValue(doc, "title", "Bye");
-		await waitFor(() => expect(screen.getByLabelText("title value")).toHaveTextContent("Bye"));
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: /^title value/, hidden: true })).toHaveTextContent(
+				"Bye",
+			),
+		);
 	});
 });
 

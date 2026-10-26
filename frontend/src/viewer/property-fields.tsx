@@ -51,7 +51,9 @@ function ScalarField({ type, value, onCommit, label }: FieldProps) {
 		return (
 			<button
 				type="button"
-				aria-label={name}
+				// The name must contain the text shown (WCAG 2.5.3 label-in-name);
+				// the key in front says which property it is.
+				aria-label={shown === "" ? name : `${name}: ${shown}`}
 				className={CELL_BUTTON}
 				onClick={() => setEditing(true)}
 			>
@@ -171,8 +173,10 @@ function ListField({ value, onCommit, label }: ListFieldProps) {
 			) : (
 				<button
 					type="button"
-					aria-label={name}
-					className={cn(CELL_BUTTON, "w-24 flex-1 text-muted-foreground/60")}
+					aria-label={`${name}: ${t("Add item...")}`}
+					// Full muted, not /60: as a placeholder this text was exempt from
+					// the contrast audit; as a button's text it is not.
+					className={cn(CELL_BUTTON, "w-24 flex-1 text-muted-foreground")}
 					onClick={() => setAdding(true)}
 				>
 					{t("Add item...")}
