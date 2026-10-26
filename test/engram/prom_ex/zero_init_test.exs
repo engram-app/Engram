@@ -70,6 +70,14 @@ defmodule Engram.PromEx.ZeroInitTest do
     end
   end
 
+  test "covers every crdt_create genesis reply series (outcome x client)" do
+    series = ZeroInit.prometheus_series()
+
+    for outcome <- ~w(stored absent occupied), client <- ~w(web obsidian_sync) do
+      assert {"engram_prom_ex_crdt_genesis_reply_total", %{outcome: outcome, client: client}} in series
+    end
+  end
+
   test "covers the rebuild counters the v5 alerts select" do
     series = ZeroInit.prometheus_series()
 

@@ -38,7 +38,7 @@ Read this when adding or reading a WebSocket metric, or when a socket panel read
 ## CRDT channel metrics
 Channel-level CRDT counters live in `lib/engram/prom_ex/crdt.ex` (`Engram.PromEx.Crdt`), not in the WebSocket plugin.
 
-- `engram_prom_ex_crdt_genesis_reply_total{outcome, client}`: one per `crdt_create` reply. `outcome` is `stored | absent | occupied`, `client` is `web | obsidian_sync`. Emitted from `reply_created/3` in `crdt_channel.ex`, which every create arm (ADOPT included) goes through. `occupied` on a duplicate create is where the plugin can lose an edit (engram-app/Engram-obsidian#645); read it as `sum by (outcome) (rate(...[5m]))`.
+- `engram_prom_ex_crdt_genesis_reply_total{outcome, client}`: one per SUCCESSFUL `crdt_create` reply (error replies are not counted). `outcome` is `stored | absent | occupied`, `client` is `web | obsidian_sync`. All six series are seeded at 0 on boot by `Engram.PromEx.ZeroInit`, so `increase()` sees the first `occupied` after a deploy (which is why it is a `sum` of `:count`, not a `counter`). Emitted from `reply_created/3` in `crdt_channel.ex`, which every create arm (ADOPT included) goes through. `occupied` on a duplicate create is where the plugin can lose an edit (engram-app/Engram-obsidian#645); read it as `sum by (outcome) (rate(...[5m]))`.
 - `[:engram, :crdt, :genesis_seed]` (`reason`, why a genesis body was or was not seeded roomlessly) is still telemetry-only; it has no PromEx handler and does not reach `/metrics`.
 
 ## Failed Approaches / Dead Ends

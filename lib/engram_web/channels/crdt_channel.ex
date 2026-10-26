@@ -922,7 +922,8 @@ defmodule EngramWeb.CrdtChannel do
   # `seeded` is retained for older plugins, but it is a LOSSY view of `genesis`
   # and must never again be the only thing on the wire (#476).
   #
-  # Every create reply goes through here, so the reply OUTCOME is counted here
+  # Every SUCCESSFUL create reply goes through here (error replies do not), so
+  # the reply OUTCOME is counted here
   # (Engram.PromEx.Crdt, `genesis_reply_total`). An `occupied` answer to a
   # duplicate create is where the plugin can drop an edit
   # (engram-app/Engram-obsidian#645). Tags are two closed atom sets; never ids.
@@ -2047,6 +2048,18 @@ defmodule EngramWeb.CrdtChannel do
   # client is an older plugin, so only an explicit "web" leaves obsidian_sync.
   defp activity_surface("web"), do: :web
   defp activity_surface(_client_type), do: :obsidian_sync
+
+  @doc """
+  Every `{outcome, client}` tag pair `reply_created/3` can emit on
+  `[:engram, :crdt, :genesis_reply]`. `Engram.PromEx.ZeroInit` seeds each at 0
+  so the first `occupied` after a deploy shows in `increase()`. Keep in step
+  with `reply_created/3` and `activity_surface/1`.
+  """
+  def genesis_reply_tags do
+    for outcome <- [:stored, :absent, :occupied],
+        client <- [:web, :obsidian_sync],
+        do: %{outcome: outcome, client: client}
+  end
 
   defp frame_class_b64(<<prefix::binary-size(4), _::binary>> = b64) do
     case Base.decode64(prefix) do

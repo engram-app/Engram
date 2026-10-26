@@ -36,7 +36,8 @@ defmodule Engram.PromEx.Crdt do
     * `engram_prom_ex_crdt_room_start_total`, tags `[:source]`.
     * `engram_prom_ex_crdt_room_drain_total` — tags `[:phase]`.
     * `engram_prom_ex_crdt_genesis_reply_total`, tags `[:outcome, :client]`.
-      One per `crdt_create` reply: `outcome` is `stored | absent | occupied`,
+      One per SUCCESSFUL `crdt_create` reply (error replies are not
+      counted): `outcome` is `stored | absent | occupied`,
       `client` is `web | obsidian_sync`. `occupied` on a duplicate create is
       the reply engram-app/Engram-obsidian#645 loses an edit on.
     * `engram_prom_ex_crdt_index_checkpoint_total` — tags `[:phase]`.
@@ -175,11 +176,16 @@ defmodule Engram.PromEx.Crdt do
           description: "CRDT note rooms started (process actually created), by call path.",
           tags: [:source]
         ),
-        counter(
+        # A sum of :count, not a counter: `Engram.PromEx.ZeroInit` seeds all six
+        # outcome x client series with a 0 at boot so `increase()` sees the
+        # first `occupied` after a deploy, and a counter would count the seed.
+        sum(
           metric_prefix ++ [:genesis_reply, :total],
           event_name: @genesis_reply_event,
+          measurement: :count,
           description:
-            "crdt_create replies by genesis outcome (stored | absent | occupied) and client.",
+            "Successful crdt_create replies by genesis outcome (stored | absent | occupied) " <>
+              "and client.",
           tags: [:outcome, :client]
         ),
         counter(
