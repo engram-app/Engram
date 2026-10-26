@@ -415,21 +415,27 @@ defmodule Engram.Vector.QdrantLayout do
   Strict-mode refusal limits, in whole percent, from an absolute reserve so
   they scale with the cluster instead of sitting at a fixed 85:
 
-    * disk: reserve `max(1 GiB, 0.35 x collection disk_bytes)` of the
-      volume's capacity (0.35 = the on-disk rewrite's measured 0.26x peak
-      plus margin);
+    * disk: reserve `max(1 GiB, 2 x the largest single optimization)` of
+      the volume's capacity. Qdrant starts an optimization (merge, vacuum,
+      config-mismatch rebuild, one segment set at a time) only with 2x its
+      input segments' disk size free (`check_segments_size`,
+      lib/shard/src/optimize.rs), and no input set exceeds one capped
+      segment, so the largest is `collection x min(segment_points, points) /
+      points` (`segment_points/1`). With the cap or point count unknown it
+      falls back to 0.35x the collection (the uncapped on-disk rewrite's
+      measured 0.26x peak plus margin);
     * heap: reserve `max(256 MiB, opts.memory_reserve)` of the container
       memory limit (a rewrite's measured heap spike is ~0.25 GB).
 
-  `floor(100 * (size - reserve) / size)`, clamped to 70..95. An unknown size
-  keeps `opts.static`. Returns `%{disk: %{percent:, reserve:}, heap: ...}`
+  `/memory` disk_bytes is the logical size, above the block count Qdrant's
+  check reads, so the disk estimate errs high. `floor(100 * (size -
+  reserve) / size)`, clamped to 70..95. An unknown size keeps
+  `opts.static`. Returns `%{disk: %{percent:, reserve:}, heap: ...}`
   (`reserve` nil when static).
   """
   @spec strict_limits(map(), map()) :: map()
-  def strict_limits(%{capacity: cap, collection: coll, memory_limit: mem}, opts) do
-    # ponytail: 0.35x is the whole-collection rewrite budget; switch the disk
-    # reserve to 2 x max_segment_size once segments are capped.
-    disk_reserve = if is_integer(coll), do: max(@gib, div(coll * 35, 100))
+  def strict_limits(%{capacity: cap, collection: coll, memory_limit: mem} = sizes, opts) do
+    disk_reserve = disk_reserve(coll, sizes[:points], sizes[:segment_points])
     heap_reserve = max(@min_memory_reserve, opts.memory_reserve)
 
     %{
@@ -442,6 +448,37 @@ defmodule Engram.Vector.QdrantLayout do
     do: %{percent: (100 * (size - reserve)) |> div(size) |> max(70) |> min(95), reserve: reserve}
 
   defp limit(_size, _reserve, static), do: %{percent: static, reserve: nil}
+
+  defp disk_reserve(coll, points, seg)
+       when is_integer(coll) and is_integer(points) and points > 0 and is_integer(seg),
+       do: max(@gib, div(2 * coll * min(seg, points), points))
+
+  defp disk_reserve(coll, _points, _seg) when is_integer(coll),
+    do: max(@gib, div(coll * 35, 100))
+
+  defp disk_reserve(_coll, _points, _seg), do: nil
+
+  @doc """
+  Points in one capped segment of the collection in `info` (a GET
+  `/collections/{name}` result): `optimizer_config.max_segment_size` KB over
+  the bytes of one `dense` vector (Qdrant caps a segment by its largest
+  vector storage). nil when the cap is unset (Qdrant then picks one per CPU
+  count) or the shape is unknown.
+  """
+  @spec segment_points(map() | nil) :: non_neg_integer() | nil
+  def segment_points(%{"config" => config}) do
+    kb = get_in(config, ["optimizer_config", "max_segment_size"])
+    dense = get_in(config, ["params", "vectors", "dense"]) || %{}
+
+    if is_integer(kb) and is_integer(dense["size"]) and dense["size"] > 0,
+      do: div(kb * 1024, dense["size"] * vector_bytes(dense["datatype"]))
+  end
+
+  def segment_points(_info), do: nil
+
+  defp vector_bytes("float16"), do: 2
+  defp vector_bytes("uint8"), do: 1
+  defp vector_bytes(_float32), do: 4
 
   @doc """
   PATCH keys that rewrite data on disk (headroom-gated by the caller).
