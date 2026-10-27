@@ -336,6 +336,24 @@ defmodule Engram.Folders.Rows do
     end
   end
 
+  @doc "The ids of the live rows at exactly `folders` (no descendants)."
+  @spec ids_at(map(), Ecto.UUID.t(), [String.t()]) :: [Ecto.UUID.t()]
+  def ids_at(user, vault_id, folders) do
+    case Crypto.dek_filter_key(user) do
+      {:ok, fk} ->
+        hmacs = folders |> Enum.reject(&(&1 == "")) |> Enum.map(&path_hmac(fk, &1))
+
+        from(f in Folder,
+          where: f.vault_id == ^vault_id and f.full_path_hmac in ^hmacs and is_nil(f.deleted_at),
+          select: f.id
+        )
+        |> Repo.all()
+
+      {:error, _} ->
+        []
+    end
+  end
+
   defp subtree_query(_vault_id, []), do: from(f in Folder, where: false)
 
   defp subtree_query(vault_id, root_hmacs) do
@@ -487,37 +505,38 @@ defmodule Engram.Folders.Rows do
   # The target of the rename already has a live row: fold each source row into
   # the row that holds its new place, or move it there.
   defp merge_subtree(ctx, rows, paths, root_id, occupant, new_parent) do
-    Enum.reduce(rows, %{root_id => occupant}, fn row, placed ->
-      case Map.fetch(paths, row.id) do
-        :error ->
-          placed
+    _ =
+      Enum.reduce(rows, %{root_id => occupant}, fn row, placed ->
+        case Map.fetch(paths, row.id) do
+          :error ->
+            placed
 
-        {:ok, _path} when row.id == root_id ->
-          retire(row, occupant)
-          placed
+          {:ok, _path} when row.id == root_id ->
+            retire(row, occupant)
+            placed
 
-        {:ok, path} ->
-          parent = Map.get(placed, row.parent_id, new_parent)
+          {:ok, path} ->
+            parent = Map.get(placed, row.parent_id, new_parent)
 
-          case live_child(ctx.vault_id, parent, row.name_hmac) do
-            %{id: taken} when taken != row.id ->
-              retire(row, taken)
-              Map.put(placed, row.id, taken)
+            case live_child(ctx.vault_id, parent, row.name_hmac) do
+              %{id: taken} when taken != row.id ->
+                retire(row, taken)
+                Map.put(placed, row.id, taken)
 
-            _ ->
-              from(f in Folder, where: f.id == ^row.id)
-              |> Repo.update_all(
-                set: [
-                  parent_id: parent,
-                  full_path_hmac: path_hmac(ctx.fk, path),
-                  updated_at: now()
-                ]
-              )
+              _ ->
+                from(f in Folder, where: f.id == ^row.id)
+                |> Repo.update_all(
+                  set: [
+                    parent_id: parent,
+                    full_path_hmac: path_hmac(ctx.fk, path),
+                    updated_at: now()
+                  ]
+                )
 
-              Map.put(placed, row.id, row.id)
-          end
-      end
-    end)
+                Map.put(placed, row.id, row.id)
+            end
+        end
+      end)
 
     :ok
   end

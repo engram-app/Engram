@@ -20,6 +20,7 @@ defmodule Engram.Attachments do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Crypto.RotationGate
+  alias Engram.DataMigrations.FolderTable
   alias Engram.Folders.Rows
   alias Engram.Links
   alias Engram.Logger.Metadata
@@ -1301,14 +1302,11 @@ defmodule Engram.Attachments do
   def folder_rename_pairs(user, vault, old_folder, new_folder) do
     old_folder = String.trim_trailing(old_folder, "/")
     new_folder = String.trim_trailing(new_folder, "/")
-    prefix = old_folder <> "/"
     old_len = String.length(old_folder)
 
-    with {:ok, metas} <- list_attachments(user, vault) do
+    with {:ok, %{metas: metas}} <- scan_under(user, vault, [old_folder]) do
       {:ok,
-       metas
-       |> Enum.filter(&String.starts_with?(&1.path, prefix))
-       |> Enum.map(fn %{path: old_path} ->
+       Enum.map(metas, fn %{path: old_path} ->
          {old_path, new_folder <> String.slice(old_path, old_len..-1//1)}
        end)}
     end
@@ -1373,25 +1371,20 @@ defmodule Engram.Attachments do
   Returns `%{paths: [...], undecryptable: n}` from ONE scan, so the
   folder-delete guard can count and then delete the same rows.
 
-  `undecryptable` is vault-wide and CANNOT be narrowed to the folder: a row
-  whose path fails to decrypt has no readable path, so there is no way to tell
-  whether it lives here. That is the whole point — it is unknown, not absent.
-  Reporting the count lets the caller decide, which is the only correct split
-  of responsibility. An earlier revision refused outright whenever any row in
-  the vault was unreadable, which bricked EVERY folder delete (including
-  `recursive: true`) over one corrupt row somewhere else entirely.
+  `undecryptable` counts the candidate rows that would not decrypt (`scan_under/4`
+  says which rows are candidates). A row whose path fails to decrypt has no
+  readable path, so there is no way to tell whether it lives here: it is
+  unknown, not absent, and reporting the count lets the caller decide. A row the
+  folder reference vouches for as living elsewhere is not a candidate. An
+  earlier revision refused outright whenever any row in the vault was
+  unreadable, which bricked EVERY folder delete (including `recursive: true`)
+  over one corrupt row somewhere else entirely.
   """
   @spec scan_folder_paths(map(), map(), String.t()) ::
           {:ok, %{paths: [String.t()], undecryptable: non_neg_integer()}} | {:error, term()}
   def scan_folder_paths(user, vault, folder) do
-    prefix = String.trim_trailing(folder, "/") <> "/"
-
-    with {:ok, rows, metas} <- scan_attachments(user, vault) do
-      {:ok,
-       %{
-         paths: metas |> Enum.map(& &1.path) |> Enum.filter(&String.starts_with?(&1, prefix)),
-         undecryptable: length(rows) - length(metas)
-       }}
+    with {:ok, %{metas: metas, unreadable: unreadable}} <- scan_under(user, vault, [folder]) do
+      {:ok, %{paths: Enum.map(metas, & &1.path), undecryptable: unreadable}}
     end
   end
 
@@ -1739,19 +1732,6 @@ defmodule Engram.Attachments do
     end
   end
 
-  @doc """
-  One scan: decrypted metas plus the number of rows that would not decrypt.
-
-  `{:ok, metas, dropped}`. For callers that must not mistake "could not read
-  it" for "it is not there" — see `list_attachments_strict/2`.
-  """
-  @spec scan_with_drops(map(), map()) :: {:ok, [map()], non_neg_integer()} | {:error, term()}
-  def scan_with_drops(user, vault) do
-    with {:ok, rows, metas} <- scan_attachments(user, vault) do
-      {:ok, metas, length(rows) - length(metas)}
-    end
-  end
-
   # decrypt_metadata/2 (via maybe_decrypt_attachment_fields/2) and the
   # extra.() closure below only ever read these columns — everything else on
   # the schema (ciphertext/nonce/hmac fields besides path, storage_key,
@@ -1964,10 +1944,93 @@ defmodule Engram.Attachments do
   """
   @spec list_in_folder(map(), map(), String.t()) :: {:ok, [map()]} | {:error, term()}
   def list_in_folder(user, vault, folder) do
-    with {:ok, metas} <- list_attachments(user, vault) do
-      {:ok, Enum.filter(metas, fn m -> attachment_folder(m.path) == folder end)}
+    with {:ok, %{metas: metas}} <- scan_under(user, vault, [folder], direct: true),
+         do: {:ok, metas}
+  end
+
+  @doc """
+  The live attachments in `folders` (each folder and everything under it, or only
+  directly in it with `direct: true`), decrypted, plus how many candidate rows
+  would not decrypt: `{:ok, %{metas: [...], unreadable: n}}`.
+
+  The one place a folder operation (rename, delete, move, listing) finds the
+  attachments it concerns. It decrypts the folder's own rows, not the vault's:
+
+    * rows whose `folder_ref_id` is in the folder's subtree AND that have not been
+      written since `FolderTable.verified_until/0` are trusted by reference;
+    * every row written since then is checked against its decrypted path, because
+      a task still on the previous release writes a NULL reference (an upload) or
+      leaves a stale one (a move) and nothing has re-verified it yet;
+    * while the backfill has never completed (or a re-verify reopened it) nothing
+      is trusted and the scan is the old whole-vault decrypt.
+
+  Whatever the route, a row is kept only if its DECRYPTED path is in `folders`: the
+  stored path stays authoritative, the reference only narrows what is read.
+  """
+  @spec scan_under(map(), map(), [String.t()], keyword()) ::
+          {:ok, %{metas: [map()], unreadable: non_neg_integer()}} | {:error, term()}
+  def scan_under(user, vault, folders, opts \\ [])
+  def scan_under(_user, _vault, [], _opts), do: {:ok, %{metas: [], unreadable: 0}}
+
+  def scan_under(user, vault, folders, opts) do
+    user = fresh_user(user)
+    direct? = Keyword.get(opts, :direct, false)
+    folders = Enum.map(folders, &String.trim_trailing(&1, "/"))
+    verified = FolderTable.verified_until()
+
+    Repo.with_tenant(user.id, fn -> candidate_rows(user, vault, folders, verified, direct?) end)
+    |> unwrap_tenant()
+    |> case do
+      {:ok, rows} ->
+        decrypted = decrypt_tree_rows(rows, user)
+
+        {:ok,
+         %{
+           metas: Enum.filter(decrypted, &in_folders?(&1.path, folders, direct?)),
+           unreadable: length(rows) - length(decrypted)
+         }}
+
+      err ->
+        err
     end
   end
+
+  # Everything is a candidate when nothing is verified or the root is asked for
+  # as a subtree; otherwise the folders' referenced rows plus the unverified ones.
+  defp candidate_rows(user, vault, folders, verified, direct?) do
+    base = from(a in scoped_live(user, vault), select: struct(a, @tree_attachment_fields))
+
+    if is_nil(verified) or (not direct? and "" in folders) do
+      Repo.all(base)
+    else
+      verified = DateTime.truncate(verified, :second)
+      ids = folder_ids(user, vault, folders, direct?)
+      root? = direct? and "" in folders
+
+      trusted =
+        if root?,
+          do: dynamic([a], is_nil(a.folder_ref_id) or a.folder_ref_id in ^ids),
+          else: dynamic([a], a.folder_ref_id in ^ids)
+
+      Repo.all(
+        from(a in base,
+          where:
+            ^dynamic([a], (^trusted and a.updated_at <= ^verified) or a.updated_at > ^verified)
+        )
+      )
+    end
+  end
+
+  defp folder_ids(user, vault, folders, true), do: Rows.ids_at(user, vault.id, folders)
+
+  defp folder_ids(user, vault, folders, false),
+    do: user |> Rows.subtree_refs(vault.id, folders) |> Enum.map(& &1.id)
+
+  defp in_folders?(path, folders, true), do: attachment_folder(path) in folders
+  defp in_folders?(path, folders, false), do: Enum.any?(folders, &under?(path, &1))
+
+  defp under?(_path, ""), do: true
+  defp under?(path, folder), do: String.starts_with?(path, folder <> "/")
 
   defp attachment_folder(path) do
     case Path.dirname(path) do

@@ -35,7 +35,7 @@ defmodule Engram.DataMigrations.FolderTable do
   here (writers own that); a marker created after a derived row of the same
   name exists makes that row `explicit` and keeps ITS id.
 
-  Nothing reads the new column yet.
+  Readers trust a row's `folder_ref_id` only up to `verified_until/0`.
   """
   @behaviour Engram.DataMigration
 
@@ -45,6 +45,7 @@ defmodule Engram.DataMigrations.FolderTable do
   alias Engram.Crypto.Envelope
   alias Engram.Crypto.RotationGate
   alias Engram.Crypto.RotationInProgressError
+  alias Engram.DataMigrations
   alias Engram.Folders.Folder
   alias Engram.Folders.Rows
   alias Engram.Logger.Metadata
@@ -71,7 +72,37 @@ defmodule Engram.DataMigrations.FolderTable do
 
   @doc "True once every note and attachment has its folder resolved."
   @spec done?() :: boolean()
-  def done?, do: Engram.DataMigrations.done?(name(), version())
+  def done?, do: DataMigrations.done?(name(), version())
+
+  # Rows written this close to a verification may have been written by a task
+  # still running the previous release while the pass was reading them.
+  @verify_margin_s 3_600
+
+  @doc """
+  The instant up to which a row's `folder_ref_id` is vouched for, or `nil` while
+  nothing is. A reader trusts the reference of a row it has not touched since
+  then and checks every newer row against its stored path.
+
+  Why a time and not `done?/0`: the ledger only saves work (see
+  `docs/context/data-migrations-ledger.md`). After it closes, a task on the
+  previous release can still write an attachment (reference NULL) or move one
+  (reference stale), and `done?/0` stays true until the daily re-verify finds
+  them. `completed_at` is rewritten by every re-verify, and reset the moment one
+  finds work, so a row's `updated_at` against it says whether the pass has seen
+  the row's current state. The margin covers a write that landed while the pass
+  was still running (`:folder_ref_verify_margin_s` lowers it, tests).
+  """
+  @spec verified_until() :: DateTime.t() | nil
+  def verified_until do
+    case DataMigrations.completed_at(name(), version()) do
+      nil ->
+        nil
+
+      %DateTime{} = at ->
+        margin = Application.get_env(:engram, :folder_ref_verify_margin_s, @verify_margin_s)
+        DateTime.add(at, -margin, :second)
+    end
+  end
 
   @doc false
   # `batch:` overrides the batch size (tests page over a few rows), `user_ids:`

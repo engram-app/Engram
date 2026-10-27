@@ -5748,39 +5748,14 @@ defmodule Engram.Notes do
   end
 
   @doc """
-  Returns unique non-empty folder paths for a user's notes.
+  Returns unique non-empty folder paths for a user's notes: the folders that hold
+  a live note or marker. The same set as `list_folders_with_counts/2`, minus the
+  root and the counts.
   """
   @spec list_folders(map(), map()) :: {:ok, [String.t()]}
   def list_folders(user, vault) do
-    case Crypto.dek_filter_key(user) do
-      {:ok, filter_key} ->
-        {:ok, dek} = Crypto.get_dek(user)
-        empty_hmac = Crypto.hmac_field(filter_key, "")
-
-        {:ok, rows} =
-          Repo.with_tenant(user.id, fn ->
-            Repo.all(
-              from(n in scoped_live(user, vault),
-                where: not is_nil(n.folder_hmac) and n.folder_hmac != ^empty_hmac,
-                distinct: n.folder_hmac,
-                select: {n.id, n.dek_version, n.folder_ciphertext, n.folder_nonce}
-              )
-            )
-          end)
-
-        folders =
-          rows
-          |> Enum.map(fn {id, dv, ct, nonce} ->
-            decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :folder, id, dv))
-          end)
-          |> Enum.sort()
-
-        {:ok, folders}
-
-      # No DEK = user has no encrypted data possible = no folders.
-      {:error, :no_dek} ->
-        {:ok, []}
-    end
+    {:ok, counts} = list_folders_with_counts(user, vault)
+    {:ok, for(%{folder: folder} <- counts, folder != "", do: folder)}
   end
 
   @doc """
@@ -6151,33 +6126,68 @@ defmodule Engram.Notes do
   """
   @spec raw_folder_count_rows(map(), map()) :: [map()]
   def raw_folder_count_rows(user, vault) do
-    # Per folder_hmac, pick any one row (for envelope decryption) and
-    # count only kind='note' rows. Marker-only folders yield count 0;
-    # mixed folders yield the note count (markers excluded).
+    # Three kinds of row, each cheap in Postgres and decrypted outside it:
+    #
+    #  * `%{ref:, count:}`: live notes grouped by `folder_ref_id`, the folder
+    #    ROW they sit in (no folder envelope is touched for them);
+    #  * `%{folder_row: ...}`: the vault's folder rows, which name those
+    #    references (a folder's name is one segment, so a path is assembled
+    #    from its ancestors);
+    #  * `%{id:, dv:, ct:, nonce:, count:}`: everything with NO reference, grouped
+    #    by `folder_hmac` with one representative row to decrypt, as before:
+    #    folder markers (they never carry a reference), root notes, and notes the
+    #    previous release filed into a folder that has no row yet. The group
+    #    needs no ledger flag: the stored hash classifies it.
     #
     # GROUP BY + any_value(ROW(...)) (one row's fields, kept together) is a
     # HashAggregate; the old DISTINCT ON + window COUNT sorted every live
     # row first. 50k notes / 2k folders, PG 18 local: 112 ms vs 257 ms, and
     # the sort spilled 5.7 MB to disk at the default work_mem.
-    from(n in scoped_live(user, vault),
-      where: not is_nil(n.folder_hmac),
-      group_by: n.folder_hmac,
-      select: {
-        fragment(
-          "any_value(ROW(?, ?, ?, ?))",
-          n.id,
-          n.dek_version,
-          n.folder_ciphertext,
-          n.folder_nonce
-        ),
-        fragment("COUNT(*) FILTER (WHERE ? = 'note')", n.kind)
-      }
-    )
-    |> Repo.all()
-    |> Enum.map(fn {{id, dv, ct, nonce}, count} ->
-      # A record's fields skip Ecto's type casting, so the uuid is raw bytes.
-      %{id: Ecto.UUID.load!(id), dv: dv, ct: ct, nonce: nonce, count: count}
-    end)
+    by_ref =
+      from(n in scoped_live(user, vault),
+        where: n.kind == "note" and not is_nil(n.folder_ref_id),
+        group_by: n.folder_ref_id,
+        select: {n.folder_ref_id, count()}
+      )
+      |> Repo.all()
+      |> Enum.map(fn {ref, count} -> %{ref: ref, count: count} end)
+
+    folder_rows =
+      from(f in Engram.Folders.Folder,
+        where: f.vault_id == ^vault.id,
+        select: %{
+          id: f.id,
+          parent_id: f.parent_id,
+          dv: f.dek_version,
+          ct: f.name_ciphertext,
+          nonce: f.name_nonce
+        }
+      )
+      |> Repo.all()
+      |> Enum.map(&%{folder_row: &1})
+
+    unreferenced =
+      from(n in scoped_live(user, vault),
+        where: not is_nil(n.folder_hmac) and is_nil(n.folder_ref_id),
+        group_by: n.folder_hmac,
+        select: {
+          fragment(
+            "any_value(ROW(?, ?, ?, ?))",
+            n.id,
+            n.dek_version,
+            n.folder_ciphertext,
+            n.folder_nonce
+          ),
+          fragment("COUNT(*) FILTER (WHERE ? = 'note')", n.kind)
+        }
+      )
+      |> Repo.all()
+      |> Enum.map(fn {{id, dv, ct, nonce}, count} ->
+        # A record's fields skip Ecto's type casting, so the uuid is raw bytes.
+        %{id: Ecto.UUID.load!(id), dv: dv, ct: ct, nonce: nonce, count: count}
+      end)
+
+    by_ref ++ if(by_ref == [], do: [], else: folder_rows) ++ unreferenced
   end
 
   @doc """
@@ -6207,14 +6217,54 @@ defmodule Engram.Notes do
   @doc "Decrypts `raw_folder_count_rows/2`'s rows. Pure — no DB access."
   @spec decrypt_folder_count_rows([map()], binary()) :: [%{folder: String.t(), count: integer()}]
   def decrypt_folder_count_rows(rows, dek) do
+    names = folder_row_paths(rows, dek)
+
     rows
-    |> Enum.map(fn %{id: id, dv: dv, ct: ct, nonce: nonce, count: count} ->
-      %{
-        folder: decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :folder, id, dv)),
-        count: count
-      }
+    |> Enum.flat_map(fn
+      %{folder_row: _} ->
+        []
+
+      %{ref: ref, count: count} ->
+        [{Map.fetch!(names, ref), count}]
+
+      %{id: id, dv: dv, ct: ct, nonce: nonce, count: count} ->
+        [{decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :folder, id, dv)), count}]
     end)
+    # One folder can arrive twice (a reference group and a marker or hash group),
+    # so sum by name.
+    |> Enum.reduce(%{}, fn {folder, count}, acc ->
+      Map.update(acc, folder, count, &(&1 + count))
+    end)
+    |> Enum.map(fn {folder, count} -> %{folder: folder, count: count} end)
     |> Enum.sort_by(& &1.folder)
+  end
+
+  # id => full path, assembled from the folder rows' segment names.
+  defp folder_row_paths(rows, dek) do
+    by_id = for %{folder_row: row} <- rows, into: %{}, do: {row.id, row}
+
+    Enum.reduce(by_id, %{}, fn {id, _row}, memo ->
+      elem(folder_row_path(id, by_id, dek, memo), 1)
+    end)
+  end
+
+  defp folder_row_path(id, by_id, dek, memo) do
+    case memo do
+      %{^id => path} ->
+        {path, memo}
+
+      _ ->
+        row = Map.fetch!(by_id, id)
+
+        {parent_path, memo} =
+          if row.parent_id,
+            do: folder_row_path(row.parent_id, by_id, dek, memo),
+            else: {nil, memo}
+
+        name = decrypt_envelope!(row.ct, row.nonce, dek, row_aad(:folders, :name, id, row.dv))
+        path = if parent_path, do: parent_path <> "/" <> name, else: name
+        {path, Map.put(memo, id, path)}
+    end
   end
 
   @doc """
@@ -6449,11 +6499,14 @@ defmodule Engram.Notes do
   end
 
   # Fetch + decrypt the live rows in `folders` or under them, at any depth,
-  # for a folder cascade (rename, move, delete). Plaintext `folder` is gone
-  # (Phase B.3), so the prefix match runs on decrypted folders: but on ONE
-  # row per distinct folder_hmac (grouped in Postgres), and then only the
-  # rows in the matching folders are fetched, by the folder_hmac index. A
-  # rename used to fetch and decrypt every row of the vault.
+  # for a folder cascade (rename, move, delete). The folders are found by their
+  # rows (`Folders.Rows.subtree_refs/3`: a walk over folder rows, no decrypt) and
+  # the notes by `folder_ref_id`; folder markers have no reference and join on
+  # the row's path hash. Only notes the rows cannot vouch for (`unresolved_hmacs/4`:
+  # no reference, because the previous release made their folder) still go
+  # through a decrypt of one envelope per distinct folder, and in steady state
+  # there are none. The final `folder_in?` filter keeps the stored path
+  # authoritative: a reference only narrows what is read.
   # Markers hydrate their single folder envelope; real notes go through the
   # parallel batch decryptor. Always meta-projected (#863): callers only need
   # path/folder/kind; content decrypt is targeted per-id where actually
@@ -6461,16 +6514,40 @@ defmodule Engram.Notes do
   defp fetch_decrypted_live_rows(user, vault, folders) do
     {:ok, dek} = Crypto.get_dek(user)
 
-    hmacs = folder_hmacs_under(user, vault, folders, dek)
+    {refs, stray} =
+      Repo.with_tenant!(user.id, fn ->
+        {Rows.subtree_refs(user, vault.id, folders), raw_unresolved_rows(user, vault)}
+      end)
 
+    ids = Enum.map(refs, & &1.id)
+    row_hmacs = for %{full_path_hmac: h} when is_binary(h) <- refs, do: h
+    stray_hmacs = unresolved_hmacs(stray, folders, dek)
+
+    # One indexed read per kind of evidence (not one OR: each arm then has its
+    # own index, `notes_folder_ref` for the references), skipped when empty.
     rows =
       Repo.with_tenant!(user.id, fn ->
-        Repo.all(
-          from(n in scoped_live(user, vault),
-            where: ^Keys.in_any(:folder, hmacs),
-            select: struct(n, @note_meta_fields)
-          )
-        )
+        live = from(n in scoped_live(user, vault), select: struct(n, @note_meta_fields))
+
+        by_ref = if ids == [], do: [], else: Repo.all(where(live, [n], n.folder_ref_id in ^ids))
+
+        markers =
+          if row_hmacs == [],
+            do: [],
+            else:
+              Repo.all(
+                from(n in live,
+                  where: n.kind == "folder",
+                  where: ^Keys.in_any(:folder, row_hmacs)
+                )
+              )
+
+        strays =
+          if stray_hmacs == [],
+            do: [],
+            else: Repo.all(from(n in live, where: ^Keys.in_any(:folder, stray_hmacs)))
+
+        Enum.uniq_by(by_ref ++ markers ++ strays, & &1.id)
       end)
 
     # Marker rows have nil path_ciphertext, so the standard decrypt path
@@ -6482,26 +6559,50 @@ defmodule Engram.Notes do
     |> Enum.filter(&folder_in?(&1.folder || "", folders))
   end
 
-  # The folder_hmacs of the vault's live rows whose folder is one of
-  # `folders` or under one. Every folder_hmac, not just this filter key's: a
-  # filter-key rotation leaves rows with another hmac for the same folder.
-  defp folder_hmacs_under(user, vault, folders, dek) do
-    Repo.with_tenant!(user.id, fn ->
-      Repo.all(
-        from(n in scoped_live(user, vault),
-          group_by: n.folder_hmac,
-          select:
-            {n.folder_hmac,
-             fragment(
-               "any_value(ROW(?, ?, ?, ?))",
-               n.id,
-               n.dek_version,
-               n.folder_ciphertext,
-               n.folder_nonce
-             )}
-        )
+  # One representative row per folder hash among the live rows the folder rows
+  # cannot vouch for, with no decrypt:
+  #   * NOTES with no `folder_ref_id` that are not at the root. The previous
+  #     release filed them into a folder that had no row. The reference is NULL
+  #     for a root note too, so the stored folder hash tells them apart.
+  #   * folder MARKERS with no live row at their path (markers never carry a
+  #     reference; the row, if there is one, is found by the path hash).
+  defp raw_unresolved_rows(user, vault) do
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+    root = Crypto.hmac_field(filter_key, "")
+
+    live_row =
+      from(f in Engram.Folders.Folder,
+        where:
+          f.vault_id == parent_as(:n).vault_id and f.full_path_hmac == parent_as(:n).folder_hmac and
+            is_nil(f.deleted_at)
       )
-    end)
+
+    Repo.all(
+      from(n in scoped_live(user, vault),
+        as: :n,
+        where: not is_nil(n.folder_hmac),
+        where:
+          (n.kind == "note" and is_nil(n.folder_ref_id) and n.folder_hmac != ^root) or
+            (n.kind == "folder" and not exists(live_row)),
+        group_by: n.folder_hmac,
+        select:
+          {n.folder_hmac,
+           fragment(
+             "any_value(ROW(?, ?, ?, ?))",
+             n.id,
+             n.dek_version,
+             n.folder_ciphertext,
+             n.folder_nonce
+           )}
+      )
+    )
+  end
+
+  # The folder hashes, from `raw_unresolved_rows/2`, whose folder is one of
+  # `folders` or under one. Every hash, not just this filter key's: a filter-key
+  # rotation leaves rows with another hash for the same folder.
+  defp unresolved_hmacs(rows, folders, dek) do
+    rows
     |> Enum.filter(fn {_hmac, {id, dv, ct, nonce}} ->
       # A record's fields skip Ecto's type casting, so the uuid is raw bytes.
       aad = row_aad(:notes, :folder, Ecto.UUID.load!(id), dv)
