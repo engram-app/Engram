@@ -1123,16 +1123,23 @@ defmodule Engram.Vector.Qdrant do
   `chunks` rows, and an orphaned row must not fail a rotation or a refresh.
   A `points` list answers 404 for a missing id; a `has_id` filter does not.
   """
-  def set_payload(col \\ nil, point_ids, payload)
-  def set_payload(_col, [], _payload), do: :ok
+  def set_payload(col \\ nil, point_ids, payload),
+    do: set_payload(col, point_ids, payload, [])
 
-  def set_payload(col, point_ids, payload) when is_list(point_ids) and is_map(payload) do
+  @doc """
+  `set_payload/3` with `caller:` (one of `payload_callers/0`), the
+  `payload_write` telemetry tag that says which code path wrote.
+  """
+  def set_payload(_col, [], _payload, _opts), do: :ok
+
+  def set_payload(col, point_ids, payload, opts)
+      when is_list(point_ids) and is_map(payload) and is_list(opts) do
     col = col || collection()
-    opts = write_opts(%{filter: ids_filter(point_ids), payload: payload})
-    payload_write(:set_payload, length(point_ids), payload)
+    req = write_opts(%{filter: ids_filter(point_ids), payload: payload})
+    payload_write(:set_payload, length(point_ids), payload, opts)
 
     instrument(:set_payload, fn ->
-      case Req.post("#{base_url()}/collections/#{col}/points/payload", opts) do
+      case Req.post("#{base_url()}/collections/#{col}/points/payload", req) do
         {:ok, %{status: 200, body: body}} -> applied(body)
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
@@ -1150,28 +1157,32 @@ defmodule Engram.Vector.Qdrant do
   while the POST routes stayed ~12 ms, so the same end state is reached with
   the two fast ones. Empty `point_ids` is a no-op; missing ids are skipped.
   """
-  def overwrite_payload(col \\ nil, point_ids, payload)
-  def overwrite_payload(_col, [], _payload), do: :ok
+  def overwrite_payload(col \\ nil, point_ids, payload),
+    do: overwrite_payload(col, point_ids, payload, [])
 
-  def overwrite_payload(col, point_ids, payload) when is_list(point_ids) and is_map(payload) do
+  @doc "`overwrite_payload/3` with `caller:` (see `set_payload/4`)."
+  def overwrite_payload(_col, [], _payload, _opts), do: :ok
+
+  def overwrite_payload(col, point_ids, payload, opts)
+      when is_list(point_ids) and is_map(payload) and is_list(opts) do
     col = col || collection()
     stale = PayloadKeys.note_keys() -- Enum.map(Map.keys(payload), &to_string/1)
 
-    with :ok <- set_payload(col, point_ids, payload) do
-      delete_payload_keys_on(col, point_ids, stale)
+    with :ok <- set_payload(col, point_ids, payload, opts) do
+      delete_payload_keys_on(col, point_ids, stale, opts)
     end
   end
 
   # Delete `keys` from the listed points only (`delete_payload_keys/2` hits
   # every point). Missing ids are skipped, as in `set_payload/3`.
-  defp delete_payload_keys_on(_col, _point_ids, []), do: :ok
+  defp delete_payload_keys_on(_col, _point_ids, [], _opts), do: :ok
 
-  defp delete_payload_keys_on(col, point_ids, keys) do
-    opts = write_opts(%{keys: keys, filter: ids_filter(point_ids)})
-    payload_write(:delete_payload, length(point_ids), keys)
+  defp delete_payload_keys_on(col, point_ids, keys, opts) do
+    req = write_opts(%{keys: keys, filter: ids_filter(point_ids)})
+    payload_write(:delete_payload, length(point_ids), keys, opts)
 
     instrument(:delete_payload, fn ->
-      case Req.post("#{base_url()}/collections/#{col}/points/payload/delete", opts) do
+      case Req.post("#{base_url()}/collections/#{col}/points/payload/delete", req) do
         {:ok, %{status: 200, body: body}} -> applied(body)
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
@@ -1179,14 +1190,23 @@ defmodule Engram.Vector.Qdrant do
     end)
   end
 
+  @payload_callers [:refresh, :reconcile, :repath, :dek_rotation, :other]
+
+  @doc "The values of the `caller` tag on `[:engram, :qdrant, :payload_write]`."
+  def payload_callers, do: @payload_callers
+
   # Ids and (approximate, pre-JSON) size of every payload write: a PUT whose
   # latency grew with them went unseen until it hit p95 3 s. Counts only,
   # never ids or values (cardinality and privacy contract of `instrument/2`).
-  defp payload_write(op, id_count, payload) do
+  # `caller` is the one fixed enum below, so the tag stays low-cardinality.
+  defp payload_write(op, id_count, payload, opts) do
+    caller = Keyword.get(opts, :caller, :other)
+    caller = if caller in @payload_callers, do: caller, else: :other
+
     :telemetry.execute(
       [:engram, :qdrant, :payload_write],
       %{ids: id_count, bytes: :erlang.external_size(payload)},
-      %{op: op}
+      %{op: op, caller: caller}
     )
   end
 
@@ -1203,11 +1223,13 @@ defmodule Engram.Vector.Qdrant do
   # Never written, so the barrier delete changes nothing.
   @barrier_key "__engram_write_barrier"
 
-  def set_payloads(col \\ nil, pairs)
-  def set_payloads(_col, []), do: :ok
+  def set_payloads(col \\ nil, pairs), do: set_payloads(col, pairs, [])
 
-  def set_payloads(col, pairs) when is_list(pairs) do
+  def set_payloads(_col, [], _opts), do: :ok
+
+  def set_payloads(col, pairs, opts) when is_list(pairs) and is_list(opts) do
     col = col || collection()
+    payload_write(:set_payload, length(pairs), Map.new(pairs), opts)
     ops = for {id, payload} <- pairs, do: %{set_payload: %{points: [id], payload: payload}}
     batch = [json: %{operations: ops}, params: [wait: false]] ++ req_opts()
     barrier = write_opts(%{keys: [@barrier_key], points: Enum.map(pairs, &elem(&1, 0))})
@@ -1292,6 +1314,8 @@ defmodule Engram.Vector.Qdrant do
   def set_payload_by_filter(col \\ nil, user_id, vault_id, path_hmac, payload)
       when is_map(payload) do
     col = col || collection()
+    # The filter's id count is unknown, so 0.
+    payload_write(:set_payload, 0, payload, caller: :repath)
 
     legacy =
       if legacy_filter_fields?(),

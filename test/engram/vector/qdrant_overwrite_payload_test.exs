@@ -93,4 +93,43 @@ defmodule Engram.Vector.QdrantOverwritePayloadTest do
     assert_receive {[:engram, :qdrant, :payload_write], ^ref, %{ids: 2}, %{op: :set_payload}}
     assert_receive {[:engram, :qdrant, :payload_write], ^ref, %{ids: 2}, %{op: :delete_payload}}
   end
+
+  describe "the caller tag on payload_write" do
+    setup do
+      %{ref: :telemetry_test.attach_event_handlers(self(), [[:engram, :qdrant, :payload_write]])}
+    end
+
+    test "names the call site on both the set and the delete step", %{ref: ref} do
+      assert :ok = Qdrant.overwrite_payload(@col, ["p1"], %{"u" => "x"}, caller: :refresh)
+
+      assert_receive {_, ^ref, _, %{op: :set_payload, caller: :refresh}}
+      assert_receive {_, ^ref, _, %{op: :delete_payload, caller: :refresh}}
+    end
+
+    test "defaults to other, and an unknown caller cannot widen the tag", %{ref: ref} do
+      assert :ok = Qdrant.set_payload(@col, ["p1"], %{"u" => "x"})
+      assert_receive {_, ^ref, _, %{caller: :other}}
+
+      assert :ok = Qdrant.set_payload(@col, ["p1"], %{"u" => "x"}, caller: :"note/secret.md")
+      assert_receive {_, ^ref, _, %{caller: :other}}
+    end
+
+    test "every enum value is accepted as is", %{ref: ref} do
+      for c <- Qdrant.payload_callers() do
+        assert :ok = Qdrant.set_payload(@col, ["p1"], %{"u" => "x"}, caller: c)
+        assert_receive {_, ^ref, _, %{caller: ^c}}
+      end
+    end
+
+    test "the PromEx distributions carry it" do
+      metrics =
+        Engram.Test.PromExMetrics.of(Engram.PromEx.Qdrant)
+        |> List.wrap()
+        |> Enum.flat_map(& &1.metrics)
+        |> Enum.filter(&(Enum.at(&1.name, -2) == :payload_write))
+
+      assert length(metrics) == 2
+      assert Enum.all?(metrics, &(:caller in &1.tags))
+    end
+  end
 end

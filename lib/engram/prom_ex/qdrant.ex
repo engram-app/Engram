@@ -380,7 +380,7 @@ defmodule Engram.PromEx.Qdrant do
           description:
             "Point ids per payload write, to tell a growing target list from a slow server.",
           reporter_options: Buckets.opts(Engram.PromEx.Qdrant.PayloadWriteIdsBuckets),
-          tags: [:op]
+          tags: [:op, :caller]
         ),
         distribution(
           metric_prefix ++ [:payload_write, :bytes],
@@ -388,7 +388,7 @@ defmodule Engram.PromEx.Qdrant do
           measurement: :bytes,
           description: "Approximate payload bytes per payload write.",
           reporter_options: Buckets.opts(Engram.PromEx.Qdrant.PayloadWriteBytesBuckets),
-          tags: [:op]
+          tags: [:op, :caller]
         )
       ]
     )
@@ -402,7 +402,7 @@ end
 
 defmodule Engram.PromEx.Qdrant.PayloadWriteIdsBuckets do
   @moduledoc false
-  use Engram.PromEx.Buckets, [1, 4, 16, 64, 256, 1_024, 4_096]
+  use Engram.PromEx.Buckets, [1, 10, 100, 1_000, 10_000]
 end
 
 defmodule Engram.PromEx.Qdrant.PayloadWriteBytesBuckets do

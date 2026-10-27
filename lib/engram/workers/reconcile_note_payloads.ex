@@ -395,9 +395,9 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   end
 
   defp write({op, ids, payload}) do
-    fun = if op == :set, do: &Qdrant.set_payload/3, else: &Qdrant.overwrite_payload/3
+    fun = if op == :set, do: &Qdrant.set_payload/4, else: &Qdrant.overwrite_payload/4
 
-    case fun.(Qdrant.collection_name(), ids, payload) do
+    case fun.(Qdrant.collection_name(), ids, payload, caller: :reconcile) do
       :ok -> {:cont, :ok}
       err -> {:halt, err}
     end
