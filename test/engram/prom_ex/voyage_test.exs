@@ -5,7 +5,7 @@ defmodule Engram.PromEx.VoyageTest do
   subscribes to are actually emitted by `Engram.Embedders.Voyage`.
 
   Cardinality contract: tags MUST NOT include user_id, vault_id, or any
-  per-tenant identifier. Only bounded labels (status, purpose) are allowed.
+  per-tenant identifier. Only bounded labels (status, purpose, model) are allowed.
   """
   use ExUnit.Case, async: true
 
@@ -66,6 +66,19 @@ defmodule Engram.PromEx.VoyageTest do
     end
   end
 
+  describe "model tag" do
+    test "is on every Voyage metric so any purpose x model x status combination is queryable" do
+      metrics =
+        PromExMetrics.of(VoyagePlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
+      assert metrics != []
+
+      for m <- metrics do
+        assert :model in m.tags, "#{inspect(m.name)} is missing the :model tag"
+      end
+    end
+  end
+
   describe "telemetry events emitted by Embedders.Voyage" do
     test "embed_texts/1 emits [:engram, :voyage, :embed, :stop] with status + duration" do
       ref = make_ref()
@@ -108,6 +121,7 @@ defmodule Engram.PromEx.VoyageTest do
 
       assert_receive {:embed_stop, ^ref, measurements, metadata}, 5_000
       assert is_integer(measurements[:duration])
+      assert is_binary(metadata[:model])
       # The Voyage worker emits :throttled when a prior call left the
       # in-process rate limiter saturated — same telemetry shape as a
       # network success/failure, so it's a valid status the test cares

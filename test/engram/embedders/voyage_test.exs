@@ -333,9 +333,22 @@ defmodule Engram.Embedders.VoyageTest do
       assert {:ok, _} = Voyage.embed_texts(["hello"])
 
       # Second call must NOT hit Bypass — synthetic 429 instead.
-      assert {:error, {429, body}} = Voyage.embed_texts(["world"])
+      ref = make_ref()
+      test_pid = self()
+
+      :telemetry.attach(
+        {__MODULE__, ref},
+        [:engram, :embed, :client_rate_limited],
+        fn _name, _measurements, metadata, _ -> send(test_pid, {:throttled, ref, metadata}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
+
+      assert {:error, {429, body}} = Voyage.embed_texts(["world"], model: "voyage-4-lite")
       assert body["detail"] == "client_rate_limited"
       assert is_integer(body["retry_after_ms"])
+      assert_receive {:throttled, ^ref, %{model: "voyage-4-lite"}}
     end
 
     test "allows calls when bucket has tokens", %{bypass: bypass} do
