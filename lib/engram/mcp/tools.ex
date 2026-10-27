@@ -824,8 +824,9 @@ defmodule Engram.MCP.Tools do
   @content_hash_prop %{
     "type" => ["string", "null"],
     "description" =>
-      "Hash of exactly the content returned (the whole note, even for a section read). " <>
-        "Pass it to write_note as base_hash so the write refuses if the note changed since."
+      "Hash of exactly the content returned. Pass it to write_note as base_hash so the " <>
+        "write refuses if the note changed since. Null for a section read: the hash would " <>
+        "name the whole note, not the section."
   }
 
   defp get_note_def do

@@ -416,6 +416,23 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     assert count(text, "AGENT") == 0, inspect(text)
   end
 
+  test "a section read hands back no hash, so a section cannot authorize a whole-note write",
+       ctx do
+    body =
+      ctx.conn
+      |> call_tool("get_notes", %{"paths" => ["a.md"], "section" => "Body"})
+      |> tool_ok!()
+      |> json_response(200)
+
+    [note] = body["result"]["structuredContent"]["notes"]
+    assert note["content"] =~ "body text"
+    refute note["content"] =~ "# A"
+    # The hash names the whole note; returning it beside a section would let
+    # write_note(section, base_hash) pass the guard and truncate the note.
+    assert note["content_hash"] == nil
+    refute result_text(body) =~ "Content hash"
+  end
+
   test "write_note with a fresh base_hash writes across a checkpoint of the same text", ctx do
     %{conn: conn, user: user, vault: vault} = ctx
     {id, doc} = base_doc(user, vault)

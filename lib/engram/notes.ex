@@ -3156,8 +3156,12 @@ defmodule Engram.Notes do
   # checkpoint committing in between (it rewrites crdt_state AND prunes the
   # rows it folded) gives the old snapshot with no tail: edits vanish. Three
   # array subqueries, aligned by the same total order.
-  defp with_tail(query) do
-    NoteBody.select_map(query, Note.__schema__(:fields), %{
+  defp with_tail(query), do: NoteBody.select_map(query, Note.__schema__(:fields), tail_columns())
+
+  # The three tail arrays as `select_map` extras (keys `@tail_keys`).
+  @tail_keys [:tail_ids__, :tail_cts__, :tail_nonces__]
+  defp tail_columns do
+    %{
       tail_ids__:
         dynamic(
           [n],
@@ -3185,23 +3189,22 @@ defmodule Engram.Notes do
             n.vault_id
           )
         )
-    })
+    }
   end
 
   defp tail_result(nil), do: nil
 
   defp tail_result(row) do
-    {note, %{tail_ids__: ids, tail_cts__: cts, tail_nonces__: nonces}} =
-      NoteBody.to_note(row, [:tail_ids__, :tail_cts__, :tail_nonces__])
+    {note, extras} = NoteBody.to_note(row, @tail_keys)
+    {note, tail_rows(extras)}
+  end
 
-    rows =
-      [ids, cts, nonces]
-      |> Enum.zip()
-      |> Enum.map(fn {id, ct, nonce} ->
-        %{id: Ecto.UUID.load!(id), update_ciphertext: ct, update_nonce: nonce}
-      end)
-
-    {note, rows}
+  defp tail_rows(%{tail_ids__: ids, tail_cts__: cts, tail_nonces__: nonces}) do
+    [ids, cts, nonces]
+    |> Enum.zip()
+    |> Enum.map(fn {id, ct, nonce} ->
+      %{id: Ecto.UUID.load!(id), update_ciphertext: ct, update_nonce: nonce}
+    end)
   end
 
   @doc """
@@ -3704,7 +3707,7 @@ defmodule Engram.Notes do
         Repo.with_tenant(user.id, fn ->
           case Repo.one(query) do
             %Note{} = note -> {:ok, decrypt_or_raise!(note, user)}
-            {%Note{}, _ids, _cts, _nonces} = row -> {:ok, tail_result(row)}
+            %{tail_ids__: _} = row -> {:ok, tail_result(row)}
             nil -> {:error, :not_found}
           end
         end)
@@ -3735,7 +3738,7 @@ defmodule Engram.Notes do
     match?({:ok, %Note{}}, find_note_by_path(user, vault, path, [:id]))
   end
 
-  defp find_note_by_path(user, vault, path, fields \\ :all) do
+  defp find_note_by_path(user, vault, path, fields) do
     case note_by_path_query(user, vault, path, fields) do
       {:ok, query} ->
         Repo.with_tenant(user.id, fn -> Repo.one(query) end)
@@ -5109,6 +5112,13 @@ defmodule Engram.Notes do
   # Returns `{notes, total, spent}`: the kept rows in order, how many `base`
   # matched, and the kept rows' summed stored size.
   defp budget_cut(base, ord1, fields, user, max_bytes) do
+    {rows, total, spent} = budget_cut_rows(base, ord1, fields, user, max_bytes, %{})
+    {Enum.map(rows, &elem(&1, 0)), total, spent}
+  end
+
+  # `budget_cut/5` with `extra` (`select_map` extras) read in the same
+  # statement: the kept rows come back as `{note, extras}`.
+  defp budget_cut_rows(base, ord1, fields, user, max_bytes, extra) do
     sized =
       base
       |> NoteBody.join()
@@ -5135,15 +5145,19 @@ defmodule Engram.Notes do
         on: k.id == n.id,
         order_by: [asc: k.ord1__, asc: n.id]
       )
-      |> NoteBody.select_map(fields, %{
-        run__: dynamic([_, k], k.run__),
-        total__: dynamic([_, k], k.total__)
-      })
+      |> NoteBody.select_map(
+        fields,
+        Map.merge(extra, %{
+          run__: dynamic([_, k], k.run__),
+          total__: dynamic([_, k], k.total__)
+        })
+      )
 
     {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
 
     {total, spent} = Enum.reduce(rows, {0, 0}, fn row, _ -> {row.total__, row.run__} end)
-    {Enum.map(rows, &elem(NoteBody.to_note(&1, [:run__, :total__]), 0)), total, spent}
+    keys = [:run__, :total__ | Map.keys(extra)]
+    {Enum.map(rows, &NoteBody.to_note(&1, keys)), total, spent}
   end
 
   @doc """
@@ -5188,18 +5202,27 @@ defmodule Engram.Notes do
 
     # No CRDT state: nothing on the render path reads it, and every kept
     # note stays referenced for the whole call.
-    {notes, total, spent} = budget_cut(base, ord, @note_fields_without_crdt, user, max_bytes)
-    by_hmac = Map.new(notes, &{&1.path_hmac, &1})
+    #
+    # The tail rides in the same statement: `get_notes` serves the current text
+    # (`current_note/3`), and a separate read of it would break the statement
+    # budget of this hot path.
+    {rows, total, spent} =
+      budget_cut_rows(base, ord, @note_fields_without_crdt, user, max_bytes, tail_columns())
+
+    by_hmac = Map.new(rows, fn {n, extras} -> {n.path_hmac, {n, tail_rows(extras)}} end)
+    notes = Enum.map(rows, &elem(&1, 0))
 
     {by_hmac, over} =
       if total > length(notes),
         do: past_the_cut(user, vault, Enum.zip(paths, hmacs), by_hmac, spent, max_bytes, ids?),
         else: {by_hmac, MapSet.new()}
 
+    by_hmac = with_unfolded_state(user, by_hmac)
+
     Enum.zip_with(paths, hmacs, fn path, hmac ->
       case by_hmac do
-        %{^hmac => note} ->
-          {path, fn -> decrypt_or_raise!(note, user) end}
+        %{^hmac => {note, tail}} ->
+          {path, fn -> note |> decrypt_or_raise!(user) |> then(&current_note(user, &1, tail)) end}
 
         _ ->
           if MapSet.member?(over, hmac),
@@ -5207,6 +5230,40 @@ defmodule Engram.Notes do
             else: {path, fn -> nil end}
       end
     end)
+  end
+
+  # The batch rows carry no CRDT state, which a rebuild replays the tail on.
+  # Read it, in one statement, only for the notes that HAVE a tail; a normal
+  # call has none and costs nothing.
+  defp with_unfolded_state(user, by_hmac) do
+    ids = for {_, {%Note{id: id}, [_ | _]}} <- by_hmac, do: id
+
+    if ids == [] do
+      by_hmac
+    else
+      {:ok, states} =
+        Repo.with_tenant(user.id, fn ->
+          from(n in Note, where: n.id in ^ids)
+          |> NoteBody.select_note([:id, :crdt_state_ciphertext, :crdt_state_nonce])
+          |> Repo.all()
+          |> Map.new(&{&1.id, &1})
+        end)
+
+      Map.new(by_hmac, fn {hmac, {note, tail}} ->
+        case Map.fetch(states, note.id) do
+          {:ok, s} ->
+            {hmac,
+             {%{
+                note
+                | crdt_state_ciphertext: s.crdt_state_ciphertext,
+                  crdt_state_nonce: s.crdt_state_nonce
+              }, tail}}
+
+          :error ->
+            {hmac, {note, tail}}
+        end
+      end)
+    end
   end
 
   # The unread paths, in request order: each note that still fits the budget
@@ -5244,18 +5301,21 @@ defmodule Engram.Notes do
       else
         {:ok, notes} =
           Repo.with_tenant(user.id, fn ->
-            Repo.all(
-              NoteBody.select_note(
-                from(n in live_notes(user, vault, ids?), where: n.id in ^pick),
-                @note_fields_without_crdt
-              )
-            )
+            from(n in live_notes(user, vault, ids?), where: n.id in ^pick)
+            |> NoteBody.select_map(@note_fields_without_crdt, tail_columns())
+            |> Repo.all()
           end)
 
         notes
       end
 
-    {Enum.into(read, by_hmac, &{&1.path_hmac, &1}), over}
+    fresh =
+      Map.new(read, fn row ->
+        {n, extras} = NoteBody.to_note(row, @tail_keys)
+        {n.path_hmac, {n, tail_rows(extras)}}
+      end)
+
+    {Map.merge(by_hmac, fresh), over}
   end
 
   # Resolves the authority for every note on this page whose façade lags,

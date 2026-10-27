@@ -2170,8 +2170,11 @@ defmodule Engram.MCP.Handlers do
 
   defp narrow_to_section([{path, note}], section, gate) do
     case Sections.section(note.content || "", section, gate) do
+      # content_hash: nil. The hash names the WHOLE note; beside a section it
+      # would let write_note(section, base_hash) pass the guard and replace the
+      # note with the section. A section read cannot set up a guarded write.
       {:ok, text} ->
-        {:ok, [{path, %{note | content: text}}]}
+        {:ok, [{path, %{note | content: text, content_hash: nil}}]}
 
       {:error, {:not_found, hs}} ->
         ToolError.error(:section_not_found, heading_missing_msg(path, section, hs))
