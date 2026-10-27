@@ -176,7 +176,7 @@ defmodule Engram.Notes.Identity do
   defp route_targets(user, vault_id, targets, op) do
     case :global.whereis_name({:crdt_index, vault_id}) do
       pid when is_pid(pid) ->
-        case via_room(pid, targets) do
+        case via_room(pid, vault_id, targets) do
           {:error, {:room_exit, _}} = err ->
             # The room died or stopped answering. Its checkpoint may or may not
             # have run, so the snapshot is the only place left to write.
@@ -236,11 +236,13 @@ defmodule Engram.Notes.Identity do
   # and exits first. `:mailbox_empty` after an `:ok` therefore means a y_ex
   # contract change, and should fail loudly rather than masquerade as a slow
   # room.
-  defp via_room(room, targets) do
+  defp via_room(room, vault_id, targets) do
     caller = self()
     ref = make_ref()
 
-    case CrdtRoom.update_doc(room, fn doc -> send(caller, {ref, mutate(doc, targets)}) end) do
+    write = fn doc -> send(caller, {ref, mutate(doc, targets)}) end
+
+    case CrdtRoom.update_doc(room, write, metadata: [vault_id: vault_id]) do
       :ok ->
         receive do
           {^ref, result} -> result
@@ -377,7 +379,7 @@ defmodule Engram.Notes.Identity do
   defp recheck_room(user, vault_id, targets, op) do
     case :global.whereis_name({:crdt_index, vault_id}) do
       pid when is_pid(pid) ->
-        result = via_room(pid, targets)
+        result = via_room(pid, vault_id, targets)
 
         # A DISTINCT event, not another `index_claim`. `do_via_snapshot` already
         # emitted the outcome for this claim; counting again here made a single

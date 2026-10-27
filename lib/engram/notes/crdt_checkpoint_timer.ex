@@ -459,7 +459,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     # Prune EXACTLY those (#1146 spec 0a). A row anyone else appended after the
     # room bound, or one that failed to decrypt at bind, is in no snapshot and
     # is not in the list, so it stays. Same rule #1391 set for the index room.
-    with {:ok, encoded, ids, failures} <- room_snapshot(room_pid),
+    with {:ok, encoded, ids, failures} <- room_snapshot(room_pid, room_log_meta(state)),
          :ok <- interleave_hook(:after_room_snapshot),
          {:written, pruned} <-
            CrdtCheckpoint.checkpoint_pruning(
@@ -472,7 +472,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
       # The snapshot is durable: the room stops offering the pruned rows (rows
       # it appended since stay on its list) and, if every append that failed
       # before the snapshot is in it, acknowledges updates again.
-      mark_checkpointed(room_pid, pruned, failures)
+      mark_checkpointed(room_pid, pruned, failures, room_log_meta(state))
     end
   rescue
     err -> log_read_failure(state, err)
@@ -493,15 +493,17 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   # The room routinely exits between the checkpoint and this call; then there
   # is nothing left to tell (its own unbind checkpointed), so that is not a
   # failure and logs only at debug.
-  @spec mark_checkpointed(pid(), [Ecto.UUID.t()], non_neg_integer()) :: :ok
+  @spec mark_checkpointed(pid(), [Ecto.UUID.t()], non_neg_integer(), keyword()) :: :ok
   #
   # If `checkpointed/2` raises in the room, CrdtRoom logs it and the room keeps
   # offering the rows; the next checkpoint prunes them. Nothing more to do here.
-  def mark_checkpointed(room_pid, pruned, failures) do
+  def mark_checkpointed(room_pid, pruned, failures, log_meta \\ []) do
     _ =
-      CrdtRoom.update_doc(room_pid, fn _doc ->
-        CrdtPersistence.checkpointed(pruned, failures)
-      end)
+      CrdtRoom.update_doc(
+        room_pid,
+        fn _doc -> CrdtPersistence.checkpointed(pruned, failures) end,
+        metadata: log_meta
+      )
 
     :ok
   catch
@@ -524,20 +526,24 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     :ok
   end
 
-  defp room_snapshot(room_pid) do
+  # do_checkpoint/1 runs for note rooms only, so `room_key` is the note id.
+  defp room_log_meta(state), do: [vault_id: state.vault_id, note_id: state.room_key]
+
+  defp room_snapshot(room_pid, log_meta) do
     parent = self()
     ref = make_ref()
 
     # A raise in the room (logged by CrdtRoom) skips this checkpoint; the next
     # tick retries.
-    with :ok <-
-           CrdtRoom.update_doc(room_pid, fn doc ->
-             send(
-               parent,
-               {ref, Yex.encode_state_as_update(doc), CrdtPersistence.known_tail_ids(),
-                CrdtPersistence.append_failures()}
-             )
-           end) do
+    snapshot = fn doc ->
+      send(
+        parent,
+        {ref, Yex.encode_state_as_update(doc), CrdtPersistence.known_tail_ids(),
+         CrdtPersistence.append_failures()}
+      )
+    end
+
+    with :ok <- CrdtRoom.update_doc(room_pid, snapshot, metadata: log_meta) do
       receive_snapshot(ref)
     end
   end
