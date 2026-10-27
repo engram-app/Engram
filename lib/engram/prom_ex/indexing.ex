@@ -56,6 +56,9 @@ defmodule Engram.PromEx.Indexing do
       Sizes each embed-less lever. `drawing` stays 0 while drawing data is
       dropped; canvas and base are labelled from the note path.
 
+    * `engram_prom_ex_indexing_chunks_total`: chunks per committed pass, tagged
+      by `:outcome` (`embedded | reused`); the reuse ratio is
+      `reused / (embedded + reused)`.
     * `engram_prom_ex_indexing_frontmatter_keys_skipped_total`: new
       user-added frontmatter keys left out of the payload and `note_attrs`
       because the user is at the per-user key cap (`FrontmatterKeys.cap/0`).
@@ -95,6 +98,7 @@ defmodule Engram.PromEx.Indexing do
   @rebuild_ledger_event [:engram, :rebuild, :ledger]
   @maintenance_embed_event [:engram, :embed, :maintenance]
   @points_written_event [:engram, :indexing, :points_written]
+  @chunks_event [:engram, :indexing, :chunks]
   @keys_skipped_event [:engram, :frontmatter_keys, :skipped]
   @vector_cache_lookup_event [:engram, :vector_cache, :lookup]
   @vector_cache_write_event [:engram, :vector_cache, :write]
@@ -213,6 +217,14 @@ defmodule Engram.PromEx.Indexing do
             "Qdrant points written by a commit (reused excluded), by chunk kind and " <>
               "whether the point carries a dense vector.",
           tags: [:kind, :dense]
+        ),
+        sum(
+          metric_prefix ++ [:chunks, :total],
+          event_name: @chunks_event,
+          measurement: :count,
+          description:
+            "Chunks a committed indexing pass wrote, by outcome: embedded (new point) or reused (kept in place). reused / (embedded + reused) is the reuse ratio.",
+          tags: [:outcome]
         ),
         sum(
           metric_prefix ++ [:frontmatter_keys_skipped, :total],

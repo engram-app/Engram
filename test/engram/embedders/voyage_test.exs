@@ -405,6 +405,46 @@ defmodule Engram.Embedders.VoyageTest do
       end
     end
 
+    test "labels tokens with the pass's tier and trigger, and emits tokens per chunk", %{
+      bypass: bypass
+    } do
+      Bypass.expect(bypass, "POST", "/v1/embeddings", fn conn ->
+        body = %{
+          "data" => [%{"embedding" => [0.1]}, %{"embedding" => [0.2]}],
+          "usage" => %{"total_tokens" => 90}
+        }
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(body))
+      end)
+
+      handler_id = {__MODULE__, :labels_handler, System.unique_integer()}
+      test_pid = self()
+
+      :telemetry.attach_many(
+        handler_id,
+        [[:engram, :voyage, :embed, :tokens], [:engram, :voyage, :embed, :tokens_per_chunk]],
+        fn event, m, meta, _ -> send(test_pid, {:ev, List.last(event), m, meta}) end,
+        nil
+      )
+
+      try do
+        Engram.Embedders.UsageLabels.with_labels(:free, :rebuild, fn ->
+          assert {:ok, _} = Voyage.embed_texts(["a", "b"])
+        end)
+
+        assert_received {:ev, :tokens, %{total_tokens: 90}, %{tier: :free, trigger: :rebuild}}
+        assert_received {:ev, :tokens_per_chunk, %{tokens: 45}, %{tier: :free}}
+
+        # Outside a pass (a search query) both read :none.
+        assert {:ok, _} = Voyage.embed_texts(["a", "b"], purpose: :query)
+        assert_received {:ev, :tokens, _, %{tier: :none, trigger: :none}}
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
     test "defaults purpose tag to :index when caller omits opts", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/v1/embeddings", fn conn ->
         body = %{

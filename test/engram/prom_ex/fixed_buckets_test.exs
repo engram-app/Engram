@@ -113,6 +113,17 @@ defmodule Engram.PromEx.FixedBucketsTest do
       1_000,
       5_000
     ],
+    "engram_prom_ex_voyage_embed_tokens_per_chunk" => [
+      25,
+      50,
+      100,
+      200,
+      400,
+      800,
+      1_600,
+      3_200,
+      8_000
+    ],
     "engram_prom_ex_voyage_embed_duration_milliseconds" => [
       50,
       100,

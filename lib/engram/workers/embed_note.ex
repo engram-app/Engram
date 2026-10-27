@@ -98,7 +98,15 @@ defmodule Engram.Workers.EmbedNote do
     case load(args, old_path_hmac_b64) do
       {:run, note, user, vault, opts} ->
         opts = if cap = args["budget_cap"], do: [{:budget_cap, cap} | opts], else: opts
-        run_and_stamp(note, user, vault, old_path_hmac_b64, job, opts ++ embed_purpose(job))
+
+        run_and_stamp(
+          note,
+          user,
+          vault,
+          old_path_hmac_b64,
+          job,
+          opts ++ embed_purpose(job) ++ [embed_trigger: embed_trigger(job)]
+        )
 
       other ->
         other
@@ -111,6 +119,20 @@ defmodule Engram.Workers.EmbedNote do
     do: [embed_purpose: :maintenance]
 
   defp embed_purpose(_job), do: []
+
+  # Why this pass runs, for the Voyage token metric's closed `trigger` enum
+  # (`Engram.Embedders.UsageLabels`). A RebuildStaleNote is a version rebuild
+  # or, with `upgrade: true`, a plan-model upgrade; a re-attempt is a retry;
+  # backfill priority is the reconcile sweep; the rest is a user edit.
+  @doc false
+  @spec embed_trigger(Oban.Job.t()) :: :edit | :rebuild | :upgrade | :retry | :reconcile
+  def embed_trigger(%Oban.Job{worker: "Engram.Workers.RebuildStaleNote", args: args}),
+    do: if(args["upgrade"], do: :upgrade, else: :rebuild)
+
+  def embed_trigger(%Oban.Job{attempt: attempt}) when attempt > 1, do: :retry
+
+  def embed_trigger(%Oban.Job{priority: priority}),
+    do: if(priority == backfill_priority(), do: :reconcile, else: :edit)
 
   # Every read the job needs before it embeds, in ONE tenant transaction: the
   # note, the user and the vault used to open one each (3 round trips
@@ -798,7 +820,13 @@ defmodule Engram.Workers.EmbedNote do
 
         index_opts =
           budget ++
-            Keyword.take(opts, [:index_tier, :keep_dense, :embed_purpose, :rebuild]) ++
+            Keyword.take(opts, [
+              :index_tier,
+              :keep_dense,
+              :embed_purpose,
+              :embed_trigger,
+              :rebuild
+            ]) ++
             [
               doc_model: model,
               # `held_model`: the cheapest model among the vectors the note
