@@ -251,11 +251,21 @@ defmodule Engram.MCP.Handlers do
     # `list_folders_with_counts/2` aggregates the WHOLE vault, not just
     # `folder`'s children — one query per call regardless of folder depth,
     # then `subfolders/3` slices it down in BEAM.
-    with {:ok, notes} <- Notes.list_notes_in_folder(user, vault, folder),
-         {:ok, atts} <- Engram.Attachments.list_in_folder(user, vault, folder),
-         {:ok, all_folders} <- Notes.list_folders_with_counts(user, vault) do
-      render_folder({:ok, notes, atts, subfolders(all_folders, folder, recursive?)}, folder)
+    # Notes are paged (`cursor`, `limit`; no cursor = first page). Attachments
+    # and subfolders are listed in full on the first page only, so a client
+    # following `next_cursor` does not get them again.
+    with {:ok, %{notes: notes, next_cursor: next}} <-
+           Notes.list_notes_in_folder_page(user, vault, folder, Engram.Pager.opts(args)),
+         {:ok, atts} <-
+           first_page_only(args, fn -> Engram.Attachments.list_in_folder(user, vault, folder) end),
+         {:ok, all_folders} <-
+           first_page_only(args, fn -> Notes.list_folders_with_counts(user, vault) end) do
+      render_folder(
+        {:ok, notes, atts, subfolders(all_folders, folder, recursive?), next},
+        folder
+      )
     else
+      {:error, :invalid_cursor} -> {:error, "Invalid cursor: restart list_folder without one."}
       error -> render_folder(error, folder)
     end
   end
@@ -1598,11 +1608,17 @@ defmodule Engram.MCP.Handlers do
     Map.merge(payload, %{"vault_id" => id, "vault" => id && names[id]})
   end
 
+  defp first_page_only(%{"cursor" => cursor}, _fun) when cursor not in [nil, ""], do: {:ok, []}
+  defp first_page_only(_args, fun), do: fun.()
+
   @doc false
   # Render list_folder output. Public (doc: false) so both branches — including
   # the failure one, which no fixture can force through Notes — are directly
   # testable, the same reason `render_search/2` is public.
-  def render_folder({:ok, notes, atts, folders}, folder) do
+  def render_folder({:ok, notes, atts, folders}, folder),
+    do: render_folder({:ok, notes, atts, folders, nil}, folder)
+
+  def render_folder({:ok, notes, atts, folders, next_cursor}, folder) do
     label = folder_label(folder)
 
     text =
@@ -1635,7 +1651,12 @@ defmodule Engram.MCP.Handlers do
             ["", "**Subfolders:**", "", "| Folder | Notes |", "|--------|-------|"] ++ rows
           end
 
-        Enum.join(["**Folder:** #{label}"] ++ entry_rows ++ folder_rows, "\n")
+        more_rows =
+          if next_cursor,
+            do: ["", "More notes: call list_folder again with cursor: #{next_cursor}"],
+            else: []
+
+        Enum.join(["**Folder:** #{label}"] ++ entry_rows ++ folder_rows ++ more_rows, "\n")
       end
 
     structured = %{
@@ -1647,7 +1668,8 @@ defmodule Engram.MCP.Handlers do
         end),
       "attachments" =>
         Enum.map(atts, fn a -> %{"name" => Path.basename(a.path), "path" => a.path} end),
-      "folders" => folders
+      "folders" => folders,
+      "next_cursor" => next_cursor
     }
 
     {:ok, text, structured}

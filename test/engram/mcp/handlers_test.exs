@@ -490,6 +490,65 @@ defmodule Engram.MCP.HandlersTest do
     end
   end
 
+  describe "list_folder paging" do
+    test "pages notes by cursor; attachments and subfolders only on page one", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      for i <- 1..3 do
+        {:ok, _} =
+          Notes.upsert_note(
+            user,
+            vault,
+            %{"path" => "Pg/n#{i}.md", "content" => "x", "mtime" => 1.0},
+            actor: "api"
+          )
+      end
+
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "Pg/p.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      args = %{"folder" => "Pg", "limit" => 2}
+      {:ok, text1, page1} = Handlers.handle("list_folder", user, vault, args)
+      assert length(page1["notes"]) == 2
+      assert is_binary(page1["next_cursor"])
+      assert length(page1["attachments"]) == 1
+      assert text1 =~ page1["next_cursor"]
+
+      {:ok, _, page2} =
+        Handlers.handle("list_folder", user, vault, Map.put(args, "cursor", page1["next_cursor"]))
+
+      assert length(page2["notes"]) == 1
+      assert page2["next_cursor"] == nil
+      assert page2["attachments"] == []
+
+      paths = Enum.map(page1["notes"] ++ page2["notes"], & &1["path"])
+      assert Enum.sort(paths) == ["Pg/n1.md", "Pg/n2.md", "Pg/n3.md"]
+    end
+
+    test "no cursor on a small folder: everything, next_cursor null", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "S/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
+
+      assert {:ok, _, %{"notes" => [_], "next_cursor" => nil}} =
+               Handlers.handle("list_folder", user, vault, %{"folder" => "S"})
+    end
+
+    test "a forged cursor is an error, not an empty folder", %{user: user, vault: vault} do
+      assert {:error, "Invalid cursor" <> _} =
+               Handlers.handle("list_folder", user, vault, %{"folder" => "S", "cursor" => "x"})
+    end
+  end
+
   describe "list_folder subfolders (absorbs list_folders, #1660 3.5)" do
     test "reports direct subfolders; recursive reports every descendant with counts", %{
       user: user,

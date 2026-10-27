@@ -1873,6 +1873,102 @@ defmodule Engram.NotesTest do
   # list_notes_in_folder/3
   # ---------------------------------------------------------------------------
 
+  describe "list_notes_in_folder_page/4" do
+    alias Engram.Pager
+
+    defp seed_folder(user, vault, folder, n, from \\ 1) do
+      for i <- from..(from + n - 1)//1 do
+        {:ok, note} =
+          Notes.upsert_note(
+            user,
+            vault,
+            %{"path" => "#{folder}/n#{i}.md", "content" => "# #{i}", "mtime" => 1_000.0},
+            actor: "api"
+          )
+
+        note.id
+      end
+    end
+
+    defp drain_pages(user, vault, folder, opts, acc \\ []) do
+      {:ok, %{notes: notes, next_cursor: next}} =
+        Notes.list_notes_in_folder_page(user, vault, folder, opts)
+
+      acc = acc ++ [Enum.map(notes, & &1.id)]
+
+      if next,
+        do: drain_pages(user, vault, folder, Keyword.put(opts, :cursor, next), acc),
+        else: acc
+    end
+
+    test "pages a folder with no duplicate or gap, even when a note lands between pages",
+         %{user: user, vault: vault} do
+      ids = seed_folder(user, vault, "Big", 5)
+      seed_folder(user, vault, "Other", 2)
+
+      {:ok, %{notes: first, next_cursor: cursor}} =
+        Notes.list_notes_in_folder_page(user, vault, "Big", limit: 2)
+
+      assert length(first) == 2 and is_binary(cursor)
+
+      # A note created after page one must not shift page two.
+      [late] = seed_folder(user, vault, "Big", 1, 100)
+
+      {:ok, %{notes: second, next_cursor: c2}} =
+        Notes.list_notes_in_folder_page(user, vault, "Big", limit: 2, cursor: cursor)
+
+      {:ok, %{notes: third, next_cursor: nil}} =
+        Notes.list_notes_in_folder_page(user, vault, "Big", limit: 2, cursor: c2)
+
+      seen = Enum.map(first ++ second ++ third, & &1.id)
+      assert Enum.sort(seen) == Enum.sort([late | ids])
+      assert length(seen) == length(Enum.uniq(seen))
+    end
+
+    test "no cursor returns the first page plus a cursor; the full read still sees everything",
+         %{user: user, vault: vault} do
+      seed_folder(user, vault, "F", 3)
+
+      assert {:ok, %{notes: all, next_cursor: nil}} =
+               Notes.list_notes_in_folder_page(user, vault, "F")
+
+      assert length(all) == 3
+      assert {:ok, full} = Notes.list_notes_in_folder(user, vault, "F")
+      assert length(full) == 3
+      assert [[_, _], [_]] = drain_pages(user, vault, "F", limit: 2)
+    end
+
+    test "a forged cursor is refused", %{user: user, vault: vault} do
+      seed_folder(user, vault, "F", 3)
+
+      assert {:error, :invalid_cursor} =
+               Notes.list_notes_in_folder_page(user, vault, "F", cursor: "not-a-cursor")
+    end
+
+    test "a cursor from tenant A cannot read tenant B", %{user: user, vault: vault} do
+      seed_folder(user, vault, "Shared", 3)
+      {:ok, other} = Engram.Crypto.ensure_user_dek(insert(:user))
+      other_vault = insert(:vault, user: other)
+      seed_folder(other, other_vault, "Shared", 3)
+
+      {:ok, %{next_cursor: cursor}} =
+        Notes.list_notes_in_folder_page(user, vault, "Shared", limit: 1)
+
+      assert {:error, :invalid_cursor} =
+               Notes.list_notes_in_folder_page(other, other_vault, "Shared", cursor: cursor)
+
+      # Control: B's own cursor works, so the refusal above is the scope check.
+      {:ok, %{next_cursor: own}} =
+        Notes.list_notes_in_folder_page(other, other_vault, "Shared", limit: 1)
+
+      assert {:ok, %{notes: [_ | _]}} =
+               Notes.list_notes_in_folder_page(other, other_vault, "Shared", cursor: own)
+
+      assert Pager.scope(:folder_notes, user, vault) !=
+               Pager.scope(:folder_notes, other, other_vault)
+    end
+  end
+
   describe "list_notes_in_folder/3" do
     test "returns notes in a specific folder", %{user: user, vault: vault} do
       Notes.upsert_note(
@@ -2515,7 +2611,7 @@ defmodule Engram.NotesTest do
     end
   end
 
-  describe "list_folder_notes_by_id/3" do
+  describe "list_folder_notes_by_id/4" do
     test "returns notes whose folder matches the marker's folder", %{user: user, vault: vault} do
       {:ok, marker} = Notes.create_folder_marker(user, vault, "Projects")
 
@@ -2555,7 +2651,7 @@ defmodule Engram.NotesTest do
           actor: "api"
         )
 
-      {:ok, notes} = Notes.list_folder_notes_by_id(user, vault, marker.id)
+      {:ok, %{notes: notes}} = Notes.list_folder_notes_by_id(user, vault, marker.id)
       paths = Enum.map(notes, & &1.path) |> Enum.sort()
       assert paths == ["Projects/a.md", "Projects/b.md"]
     end
@@ -2594,7 +2690,7 @@ defmodule Engram.NotesTest do
           actor: "api"
         )
 
-      {:ok, notes} = Notes.list_folder_notes_by_id(user, vault, marker.id)
+      {:ok, %{notes: notes}} = Notes.list_folder_notes_by_id(user, vault, marker.id)
       assert Enum.map(notes, & &1.path) == ["Projects/a.md"]
     end
   end

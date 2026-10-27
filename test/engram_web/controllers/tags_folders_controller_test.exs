@@ -134,6 +134,34 @@ defmodule EngramWeb.TagsFoldersControllerTest do
       assert body["notes"] == []
     end
 
+    test "pages with cursor and limit; no cursor is the first page plus next_cursor", %{
+      conn: conn
+    } do
+      for i <- 1..3,
+          do: post(conn, "/api/notes", %{path: "Pg/n#{i}.md", content: "# #{i}", mtime: 1_000.0})
+
+      page1 = conn |> get("/api/folders/list", %{folder: "Pg", limit: 2}) |> json_response(200)
+      assert length(page1["notes"]) == 2
+      assert is_binary(page1["next_cursor"])
+
+      page2 =
+        conn
+        |> get("/api/folders/list", %{folder: "Pg", limit: 2, cursor: page1["next_cursor"]})
+        |> json_response(200)
+
+      assert length(page2["notes"]) == 1
+      assert page2["next_cursor"] == nil
+
+      unpaged = conn |> get("/api/folders/list", %{folder: "Pg"}) |> json_response(200)
+      assert length(unpaged["notes"]) == 3
+      assert unpaged["next_cursor"] == nil
+    end
+
+    test "a forged cursor is a 400", %{conn: conn} do
+      conn2 = get(conn, "/api/folders/list", %{folder: "Pg", cursor: "nope"})
+      assert %{"error" => "invalid_cursor"} = json_response(conn2, 400)
+    end
+
     test "GET folder-notes list includes id on each note", %{conn: conn} do
       post(conn, "/api/notes", %{path: "src/a.md", content: "# A", mtime: 1_000.0})
 

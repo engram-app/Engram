@@ -55,24 +55,33 @@ defmodule EngramWeb.FoldersController do
     summary: "List notes in a folder (metadata only)",
     description:
       "Returns metadata (no content) for the notes in the folder named by the required `folder` " <>
-        "query param. Returns 400 when the param is missing.",
+        "query param, one page at a time (`cursor`, `limit`; follow `next_cursor`). Returns 400 " <>
+        "when the param is missing or the cursor is invalid.",
     tags: ["Folders"],
-    parameters: [folder: [in: :query, type: :string, required: true, description: "Folder path"]],
+    parameters:
+      [folder: [in: :query, type: :string, required: true, description: "Folder path"]] ++
+        EngramWeb.Schemas.Paging.parameters(),
     responses: [
       ok: {"Folder notes", "application/json", Schemas.FolderListResponse},
-      bad_request: {"Missing folder param", "application/json", Schemas.Error}
+      bad_request: {"Missing folder param or bad cursor", "application/json", Schemas.Error}
     ]
   )
 
-  def list(conn, %{"folder" => folder}) do
+  def list(conn, %{"folder" => folder} = params) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
-    {:ok, notes} = Notes.list_notes_in_folder(user, vault, folder)
 
-    json(conn, %{
-      folder: folder,
-      notes: Enum.map(notes, &note_summary/1)
-    })
+    case Notes.list_notes_in_folder_page(user, vault, folder, Engram.Pager.opts(params)) do
+      {:ok, %{notes: notes, next_cursor: next}} ->
+        json(conn, %{
+          folder: folder,
+          notes: Enum.map(notes, &note_summary/1),
+          next_cursor: next
+        })
+
+      {:error, :invalid_cursor} ->
+        conn |> put_status(400) |> json(%{error: "invalid_cursor"})
+    end
   end
 
   def list(conn, _params) do
@@ -83,10 +92,13 @@ defmodule EngramWeb.FoldersController do
     operation_id: "folders-list-notes",
     summary: "List notes in a folder by id (metadata only)",
     description:
-      "Returns metadata (no content) for the notes in the folder identified by its marker UUID. " <>
-        "Returns 400 for a malformed UUID and 404 when no such folder exists.",
+      "Returns metadata (no content) for the notes in the folder identified by its marker UUID, " <>
+        "one page at a time (`cursor`, `limit`; follow `next_cursor`). Returns 400 for a " <>
+        "malformed UUID or invalid cursor and 404 when no such folder exists.",
     tags: ["Folders"],
-    parameters: [id: [in: :path, type: :string, required: true, description: "Folder UUID"]],
+    parameters:
+      [id: [in: :path, type: :string, required: true, description: "Folder UUID"]] ++
+        EngramWeb.Schemas.Paging.parameters(),
     responses: [
       ok: {"Folder notes", "application/json", Schemas.FolderNotesResponse},
       bad_request: {"Invalid UUID", "application/json", Schemas.Error},
@@ -94,17 +106,19 @@ defmodule EngramWeb.FoldersController do
     ]
   )
 
-  def list_notes(conn, %{"id" => id_str}) do
+  def list_notes(conn, %{"id" => id_str} = params) do
     with {:ok, id} <- Ecto.UUID.cast(id_str),
-         {:ok, notes} <-
+         {:ok, %{notes: notes, next_cursor: next}} <-
            Notes.list_folder_notes_by_id(
              conn.assigns.current_user,
              conn.assigns.current_vault,
-             id
+             id,
+             Engram.Pager.opts(params)
            ) do
-      json(conn, %{notes: Enum.map(notes, &note_summary/1)})
+      json(conn, %{notes: Enum.map(notes, &note_summary/1), next_cursor: next})
     else
       {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "not_found"})
+      {:error, :invalid_cursor} -> conn |> put_status(400) |> json(%{error: "invalid_cursor"})
       _ -> conn |> put_status(400) |> json(%{error: "bad_id"})
     end
   end

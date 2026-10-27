@@ -57,9 +57,10 @@ defmodule EngramWeb.Schemas.FolderListResponse do
     type: :object,
     properties: %{
       folder: %Schema{type: :string},
-      notes: %Schema{type: :array, items: EngramWeb.Schemas.NoteMeta}
+      notes: %Schema{type: :array, items: EngramWeb.Schemas.NoteMeta},
+      next_cursor: EngramWeb.Schemas.Paging.next_cursor()
     },
-    required: [:folder, :notes]
+    required: [:folder, :notes, :next_cursor]
   })
 end
 
@@ -71,8 +72,11 @@ defmodule EngramWeb.Schemas.FolderNotesResponse do
   OpenApiSpex.schema(%{
     title: "FolderNotesResponse",
     type: :object,
-    properties: %{notes: %Schema{type: :array, items: EngramWeb.Schemas.NoteMeta}},
-    required: [:notes]
+    properties: %{
+      notes: %Schema{type: :array, items: EngramWeb.Schemas.NoteMeta},
+      next_cursor: EngramWeb.Schemas.Paging.next_cursor()
+    },
+    required: [:notes, :next_cursor]
   })
 end
 
