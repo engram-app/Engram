@@ -57,14 +57,15 @@ defmodule Engram.Notes.Enqueue do
   end
 
   @doc """
-  Bulk form of `enqueue/3` for a post-commit side effect: one chunked
-  `Engram.Jobs.insert_chunked/1` instead of one insert (one pool checkout)
-  per job. Same contract as `enqueue/3`: it never raises. A failed chunk logs
-  and emits the failure telemetry (`count` = jobs lost); the rest still go in.
+  Bulk form of `enqueue/3` for a post-commit side effect: one
+  `Oban.insert_all/1` per `Engram.Batch.insert_rows/0` jobs instead of one
+  insert (one pool checkout) per job. Same contract as `enqueue/3`: it never
+  raises. A failed chunk is retried once; if it fails again it logs and emits
+  the failure telemetry (`count` = jobs lost) and the rest still go in.
   `:skip` entries are dropped, as in `enqueue/3`.
 
   `Oban.insert_all/1` ignores `unique`: callers that relied on it drop
-  already-pending ids first (`Engram.Jobs.reject_pending/3`).
+  already-pending ids first (`reject_pending/4`).
   """
   @spec enqueue_all([term()], String.t()) :: :ok
   def enqueue_all(changesets, worker_label) when is_binary(worker_label) do
@@ -75,7 +76,15 @@ defmodule Engram.Notes.Enqueue do
   end
 
   defp insert_chunk(chunk, worker_label) do
-    Jobs.insert_chunked(chunk)
+    Oban.insert_all(chunk)
+    :ok
+  rescue
+    _first ->
+      retry_chunk(chunk, worker_label)
+  end
+
+  defp retry_chunk(chunk, worker_label) do
+    Oban.insert_all(chunk)
     :ok
   rescue
     e ->
@@ -91,6 +100,32 @@ defmodule Engram.Notes.Enqueue do
       )
 
       :ok
+  end
+
+  @doc """
+  `Engram.Jobs.reject_pending/3` that never raises, for the same post-commit
+  callers as `enqueue_all/2`. If the lookup fails, every id is returned: a
+  duplicate job is harmless, a lost one is not. The failure logs and emits the
+  same telemetry.
+  """
+  @spec reject_pending(module(), [term()], keyword(), String.t()) :: [term()]
+  def reject_pending(worker, ids, opts, worker_label) do
+    lookup = Application.get_env(:engram, :enqueue_reject_pending, &Jobs.reject_pending/3)
+    lookup.(worker, ids, opts)
+  rescue
+    e ->
+      Logger.error(
+        "oban pending lookup failed worker=#{worker_label} reason=#{Exception.message(e)}; queueing all",
+        Engram.Logger.Metadata.with_category(:error, :search, worker: worker_label)
+      )
+
+      :telemetry.execute(
+        [:engram, :notes, :enqueue, :failed],
+        %{count: 0},
+        %{worker: worker_label}
+      )
+
+      ids
   end
 
   defp format_reason(%Ecto.Changeset{errors: errors}), do: inspect(errors)

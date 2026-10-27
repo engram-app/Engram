@@ -97,6 +97,87 @@ defmodule Engram.NotesFanoutBoundsTest do
     end
   end
 
+  describe "rename cascade resilience" do
+    test "a failing pending-job lookup queues every note and never fails the rename", ctx do
+      %{user: user, vault: vault} = ctx
+      seed(user, vault, "Docs")
+      {:ok, _} = Notes.rename_folder(user, vault, "Docs", "Archive")
+      assert length(all_enqueued(worker: RepathNoteIndex)) == @n
+
+      Application.put_env(:engram, :enqueue_reject_pending, fn _, _, _ -> raise "pool gone" end)
+      on_exit(fn -> Application.delete_env(:engram, :enqueue_reject_pending) end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, _} = Notes.rename_folder(user, vault, "Archive", "Docs")
+        end)
+
+      assert log =~ "pending lookup failed"
+      # Fell back to queueing every note: a duplicate is harmless, a lost job is not.
+      assert length(all_enqueued(worker: RepathNoteIndex)) == 2 * @n
+    end
+
+    test "an executing repath job does not suppress a new one", ctx do
+      %{user: user, vault: vault} = ctx
+      [first | _] = seed(user, vault, "Docs", 2)
+
+      {:ok, running} =
+        Oban.insert(RepathNoteIndex.new_debounced(first.id, user.id, old_path_hmac: "stale"))
+
+      {1, _} =
+        Repo.update_all(
+          from(j in Oban.Job, where: j.id == ^running.id),
+          [set: [state: "executing"]],
+          skip_tenant_check: true
+        )
+
+      {:ok, _} = Notes.rename_folder(user, vault, "Docs", "Archive")
+
+      mine = Enum.filter(all_enqueued(worker: RepathNoteIndex), &(&1.args["note_id"] == first.id))
+      assert length(mine) == 1
+      assert [%{args: %{"old_path_hmac" => hmac}}] = mine
+      assert hmac != "stale"
+    end
+  end
+
+  describe "Enqueue.enqueue_all/2 and Jobs.insert_chunked/1" do
+    test "a chunk that keeps failing is logged with telemetry, not raised" do
+      test = self()
+      handler = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        handler,
+        [:engram, :notes, :enqueue, :failed],
+        fn _, m, meta, _ -> send(test, {:failed, m, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :ok = Engram.Notes.Enqueue.enqueue_all([:not_a_changeset], "probe")
+      end)
+
+      assert_received {:failed, %{count: 1}, %{worker: "probe"}}
+    end
+
+    test "inserts past the chunk size take one statement per chunk" do
+      n = Engram.Batch.insert_rows() + 1
+
+      jobs =
+        for _ <- 1..n do
+          DeleteNoteIndex.new(%{
+            note_id: Ecto.UUID.generate(),
+            user_id: Ecto.UUID.generate(),
+            vault_id: Ecto.UUID.generate(),
+            path_hmac: "x"
+          })
+        end
+
+      assert {^n, 2} = ObanInsertCount.count(fn -> Engram.Jobs.insert_chunked(jobs) end)
+    end
+  end
+
   describe "restore_op/3 (undo of a folder delete)" do
     test "queues embed + link jobs for the chunk in bulk, one of each per note", ctx do
       %{user: user, vault: vault} = ctx

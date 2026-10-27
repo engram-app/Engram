@@ -6821,7 +6821,11 @@ defmodule Engram.Notes do
   defp enqueue_rename_cascade_jobs(user, vault, moves, bulk_repath?) do
     to_repath =
       RepathNoteIndex
-      |> Jobs.reject_pending(Enum.map(moves, fn {n, _, _, _, _} -> n.id end), executing: false)
+      |> Enqueue.reject_pending(
+        Enum.map(moves, fn {n, _, _, _, _} -> n.id end),
+        [executing: false],
+        "repath_note_index"
+      )
       |> MapSet.new()
 
     moves
