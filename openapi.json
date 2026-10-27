@@ -619,10 +619,18 @@
             "type": "array",
             "x-struct": null,
             "x-validate": null
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` to get the next page; null when this is the last page. A client that sends no cursor gets the first page only and must follow this to see the rest.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
           }
         },
         "required": [
-          "attachments"
+          "attachments",
+          "next_cursor"
         ],
         "title": "AttachmentsResponse",
         "type": "object",
@@ -1146,6 +1154,13 @@
       },
       "FolderNotesResponse": {
         "properties": {
+          "next_cursor": {
+            "description": "Pass as `cursor` to get the next page; null when this is the last page. A client that sends no cursor gets the first page only and must follow this to see the rest.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "notes": {
             "items": {
               "$ref": "#/components/schemas/NoteMeta"
@@ -1156,7 +1171,8 @@
           }
         },
         "required": [
-          "notes"
+          "notes",
+          "next_cursor"
         ],
         "title": "FolderNotesResponse",
         "type": "object",
@@ -3098,6 +3114,13 @@
             "x-struct": null,
             "x-validate": null
           },
+          "next_cursor": {
+            "description": "Pass as `cursor` to get the next page; null when this is the last page. A client that sends no cursor gets the first page only and must follow this to see the rest.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "notes": {
             "items": {
               "$ref": "#/components/schemas/NoteMeta"
@@ -3109,7 +3132,8 @@
         },
         "required": [
           "folder",
-          "notes"
+          "notes",
+          "next_cursor"
         ],
         "title": "FolderListResponse",
         "type": "object",
@@ -5798,9 +5822,32 @@
     "/api/attachments": {
       "get": {
         "callbacks": {},
-        "description": "Returns metadata (path, MIME type, size, timestamps — no bytes) for every attachment in the current vault. Returns 500 if the listing fails.",
+        "description": "Returns metadata (path, MIME type, size, timestamps — no bytes) for the attachments in the current vault, one page at a time (`cursor`, `limit`; follow `next_cursor`). Returns 400 for an invalid cursor and 500 if the listing fails.",
         "operationId": "attachments-index",
-        "parameters": [],
+        "parameters": [
+          {
+            "description": "Opaque `next_cursor` from the previous page. Omit for the first page. A forged or foreign cursor is a 400 `invalid_cursor`.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "Rows per page. Defaults to 200, clamped to 500.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -5811,6 +5858,16 @@
               }
             },
             "description": "Attachments"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid cursor"
           },
           "500": {
             "content": {
@@ -6348,7 +6405,7 @@
     "/api/folders/list": {
       "get": {
         "callbacks": {},
-        "description": "Returns metadata (no content) for the notes in the folder named by the required `folder` query param. Returns 400 when the param is missing.",
+        "description": "Returns metadata (no content) for the notes in the folder named by the required `folder` query param, one page at a time (`cursor`, `limit`; follow `next_cursor`). Returns 400 when the param is missing or the cursor is invalid.",
         "operationId": "folders-list",
         "parameters": [
           {
@@ -6358,6 +6415,28 @@
             "required": true,
             "schema": {
               "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "Opaque `next_cursor` from the previous page. Omit for the first page. A forged or foreign cursor is a 400 `invalid_cursor`.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "Rows per page. Defaults to 200, clamped to 500.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
               "x-struct": null,
               "x-validate": null
             }
@@ -6382,7 +6461,7 @@
                 }
               }
             },
-            "description": "Missing folder param"
+            "description": "Missing folder param or bad cursor"
           }
         },
         "summary": "List notes in a folder (metadata only)",
@@ -6636,7 +6715,7 @@
     "/api/folders/by-id/{id}/notes": {
       "get": {
         "callbacks": {},
-        "description": "Returns metadata (no content) for the notes in the folder identified by its marker UUID. Returns 400 for a malformed UUID and 404 when no such folder exists.",
+        "description": "Returns metadata (no content) for the notes in the folder identified by its marker UUID, one page at a time (`cursor`, `limit`; follow `next_cursor`). Returns 400 for a malformed UUID or invalid cursor and 404 when no such folder exists.",
         "operationId": "folders-list-notes",
         "parameters": [
           {
@@ -6646,6 +6725,28 @@
             "required": true,
             "schema": {
               "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "Opaque `next_cursor` from the previous page. Omit for the first page. A forged or foreign cursor is a 400 `invalid_cursor`.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "Rows per page. Defaults to 200, clamped to 500.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
               "x-struct": null,
               "x-validate": null
             }
