@@ -2,7 +2,7 @@ defmodule Engram.Workers.ClientLogsPruner do
   @moduledoc """
   Hourly retention sweep for `client_logs` (the plugin remote-log sink).
 
-  Deletes rows older than `:client_logs_retention_days` (config.exs, 7 days) in bounded
+  Deletes rows older than `:client_logs_retention_days` (default 30) in bounded
   batches, so the DELETE never holds a long lock on this write-hot table.
 
   Added after the 2026-06-29 DB audit found client_logs unbounded at ~98% of
@@ -24,7 +24,7 @@ defmodule Engram.Workers.ClientLogsPruner do
 
   @impl Oban.Worker
   def perform(%Oban.Job{}) do
-    days = Application.fetch_env!(:engram, :client_logs_retention_days)
+    days = Application.get_env(:engram, :client_logs_retention_days, 30)
     # NaiveDateTime to match the physical `timestamp without time zone` column.
     cutoff = NaiveDateTime.utc_now() |> NaiveDateTime.add(-days * 24 * 3600, :second)
     n = prune(cutoff, 0)

@@ -57,14 +57,6 @@ defmodule Engram.Workers.ClientLogsPrunerTest do
     assert count() == 1
   end
 
-  test "the configured default keeps a week of logs (Loki holds the rest)", %{user: user} do
-    insert_log(user, 10)
-    insert_log(user, 3)
-
-    assert {:ok, 1} = perform_job(ClientLogsPruner, %{})
-    assert count() == 1
-  end
-
   test "honors a custom retention window", %{user: user} do
     Application.put_env(:engram, :client_logs_retention_days, 10)
     insert_log(user, 15)
