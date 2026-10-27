@@ -118,6 +118,44 @@ describe("Clerk logout", () => {
 		}
 	});
 
+	it("clears the timeout when signOut succeeds in time", async () => {
+		vi.useFakeTimers();
+		try {
+			await mountAdapter().logout();
+			expect(vi.getTimerCount()).toBe(0);
+			await vi.advanceTimersByTimeAsync(15_000);
+
+			expect(toast.error).not.toHaveBeenCalled();
+			expect(hoisted.captureError).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("dismisses the timeout error when signOut succeeds late", async () => {
+		vi.useFakeTimers();
+		try {
+			let finish: () => void = () => undefined;
+			hoisted.signOut.mockReturnValue(
+				new Promise<void>((resolve) => {
+					finish = resolve;
+				}),
+			);
+			const first = mountAdapter().logout();
+			await vi.advanceTimersByTimeAsync(15_000);
+			await first;
+			expect(toast.error).toHaveBeenCalledWith("Could not sign out", { id: "sign-out" });
+			expect(toast.dismiss).not.toHaveBeenCalled();
+
+			finish();
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(toast.dismiss).toHaveBeenCalledWith("sign-out");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("shows an error and reports it when Clerk's signOut rejects", async () => {
 		const failure = new Error("network");
 		hoisted.signOut.mockRejectedValue(failure);
