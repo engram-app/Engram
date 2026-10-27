@@ -292,13 +292,13 @@ export default {
 	"Your current plan": "Ваш текущий тарифный план",
 	"You're on this plan": "Вы используете этот тарифный план",
 	Popular: "Популярный",
+	"2,000 notes · 20 AI searches a day · 1 vault":
+		"2000 заметок · 20 запросов к ИИ в день · 1 хранилище",
+	"2,000 notes, all searchable": "2000 заметок, все доступны для поиска",
 	"20 AI searches a day": "20 AI-запросов в день",
 	"1 vault": "1 хранилище",
 	"1 GB attachments": "1 ГБ вложений",
 	"2 devices": "2 устройства",
-	"2,000 notes · 20 AI searches a day · 1 vault":
-		"2000 заметок · 20 запросов к ИИ в день · 1 хранилище",
-	"2,000 notes, all searchable": "2000 заметок, все доступны для поиска",
 	"20,000 notes": "20000 заметок",
 	"10 vaults": "10 хранилищ",
 	"Unlimited devices": "Неограниченное количество устройств",
