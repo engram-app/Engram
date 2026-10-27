@@ -3,7 +3,7 @@
 _Last verified: 2026-10-26_
 
 ## Status
-Mitigated in code (PR 2261, 3d08eab9f), root cause NOT proven. Verify after the next prod deploy (follow-up issue).
+Mitigated in code (PR 2261, 3d08eab9f), root cause NOT proven. Verify after the next prod deploy (issue 2263).
 
 ## What This Is
 Client metric `op=set_payload` (`engram_prom_ex_qdrant_request_duration_milliseconds`) rose from ~10ms p95 (before 10-17) to 3-4s hourly p95 on `role=worker` by 10-26.
@@ -14,8 +14,8 @@ Client metric `op=set_payload` (`engram_prom_ex_qdrant_request_duration_millisec
 
 ## Diagnosis method (reuse it)
 Use Qdrant's own `rest_responses_duration_seconds` by endpoint + method (`service="qdrant"`, job `prometheus.scrape.qdrant_cluster`). It split PUT from POST on `/collections/{c}/points/payload`:
-- PUT: p95 0.27s -> 3.9s, avg 0.10 -> 0.29s
-- POST: ~12ms (unchanged)
+- PUT: p95 0.27s -> 3.9s, avg 0.10 -> 0.29s (figures from the 10-26 triage, hourly windows; re-query rather than trust, the daily p95 I re-read was 0.7s on 10-25 and 2.9s on 10-26, PUT series first appears 10-25)
+- POST: ~12ms in the triage window (hourly p95 since ranges 1-260ms)
 
 Ruled out: optimizer queue (`collection_running_optimizations=0`, `collection_update_queue_length=0` during slow periods).
 Correlates: `payload_io_write` rate rose 5-10x after the v3 move (10-24).
