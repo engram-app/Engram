@@ -2019,7 +2019,7 @@ defmodule Engram.Attachments do
   # Everything is a candidate when nothing is verified or the root is asked for
   # as a subtree; otherwise the folders' referenced rows plus the unverified ones.
   defp candidate_rows(user, vault, folders, verified, direct?) do
-    base = from(a in scoped_live(user, vault), select: struct(a, @tree_attachment_fields))
+    base = from(a in scoped_live(user, vault), as: :a, select: struct(a, @tree_attachment_fields))
 
     if is_nil(verified) or (not direct? and "" in folders) do
       Repo.all(base)
@@ -2033,10 +2033,22 @@ defmodule Engram.Attachments do
           do: dynamic([a], is_nil(a.folder_ref_id) or a.folder_ref_id in ^ids),
           else: dynamic([a], a.folder_ref_id in ^ids)
 
+      # A reference to a deleted or missing folder row vouches for nothing,
+      # whatever the row's age (an undo that could not revive the row; a crash
+      # between a restore and its re-point): such a row is read by its path.
+      live_ref =
+        from(f in Engram.Folders.Folder,
+          where: f.id == parent_as(:a).folder_ref_id and is_nil(f.deleted_at)
+        )
+
       Repo.all(
         from(a in base,
           where:
-            ^dynamic([a], (^trusted and a.updated_at <= ^verified) or a.updated_at > ^verified)
+            ^dynamic(
+              [a],
+              (^trusted and a.updated_at <= ^verified) or a.updated_at > ^verified or
+                (not is_nil(a.folder_ref_id) and not exists(live_ref))
+            )
         )
       )
     end

@@ -412,9 +412,34 @@ defmodule Engram.Folders.Rows do
       do: {:error, :invalid_path}
 
   def rename(user, vault_id, old_folder, new_folder) do
-    if into_own_subtree?(old_folder, new_folder),
-      do: {:error, :invalid_path},
-      else: do_rename(user, vault_id, old_folder, new_folder)
+    with :ok <- check_move(user, vault_id, old_folder, new_folder),
+         do: do_rename(user, vault_id, old_folder, new_folder)
+  end
+
+  @doc """
+  `:ok` when moving `old_folder` to `new_folder` cannot make a folder its own
+  ancestor, else `{:error, :invalid_path}`. Checked by path (the new path is the
+  old one or inside it) AND by row: the row that would become the new parent
+  must not be one of the moving subtree's rows, which a stale path hash could
+  otherwise let through. Runs inside the caller's tenant transaction.
+  """
+  @spec check_move(map(), Ecto.UUID.t(), String.t(), String.t()) ::
+          :ok | {:error, :invalid_path}
+  def check_move(user, vault_id, old_folder, new_folder) do
+    parent_path = new_folder |> String.split("/") |> Enum.drop(-1) |> Enum.join("/")
+
+    cond do
+      old_folder == "" or new_folder == "" ->
+        {:error, :invalid_path}
+
+      into_own_subtree?(old_folder, new_folder) ->
+        {:error, :invalid_path}
+
+      true ->
+        moving = user |> subtree_refs(vault_id, [old_folder]) |> MapSet.new(& &1.id)
+        parents = ids_at(user, vault_id, [parent_path])
+        if Enum.any?(parents, &MapSet.member?(moving, &1)), do: {:error, :invalid_path}, else: :ok
+    end
   end
 
   @doc """

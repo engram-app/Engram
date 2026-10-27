@@ -6149,9 +6149,14 @@ defmodule Engram.Notes do
     # HashAggregate; the old DISTINCT ON + window COUNT sorted every live
     # row first. 50k notes / 2k folders, PG 18 local: 112 ms vs 257 ms, and
     # the sort spilled 5.7 MB to disk at the default work_mem.
+    # A reference counts only while its folder row is live: one naming a deleted
+    # row (a delete racing a write) is unresolved, like every other scan.
+    live_ref = live_folder_ref()
+
     by_ref =
       from(n in scoped_live(user, vault),
-        where: n.kind == "note" and not is_nil(n.folder_ref_id),
+        as: :n,
+        where: n.kind == "note" and not is_nil(n.folder_ref_id) and exists(live_ref),
         group_by: n.folder_ref_id,
         select: {n.folder_ref_id, count()}
       )
@@ -6174,7 +6179,8 @@ defmodule Engram.Notes do
 
     unreferenced =
       from(n in scoped_live(user, vault),
-        where: not is_nil(n.folder_hmac) and is_nil(n.folder_ref_id),
+        as: :n,
+        where: not is_nil(n.folder_hmac) and (is_nil(n.folder_ref_id) or not exists(live_ref)),
         group_by: n.folder_hmac,
         select: {
           fragment(
@@ -6266,18 +6272,34 @@ defmodule Engram.Notes do
         {:error, memo}
 
       _ ->
-        with %{} = row <- Map.get(by_id, id),
-             true <- depth < 512,
-             {:ok, parent_path, memo} <- parent_path(row, by_id, dek, memo, depth),
-             {:ok, name} <-
-               Envelope.decrypt(row.ct, row.nonce, dek, row_aad(:folders, :name, id, row.dv)) do
-          path = if parent_path, do: parent_path <> "/" <> name, else: name
-          {:ok, path, Map.put(memo, id, {:ok, path})}
-        else
-          _ ->
-            report_undecryptable_folder(id)
-            {:error, Map.put(memo, id, :error)}
-        end
+        folder_row_path_uncached(id, by_id, dek, memo, depth)
+    end
+  end
+
+  # The first folder on a chain that cannot be read is reported; everything
+  # below it is marked failed silently, so a bad row with K children logs once.
+  defp folder_row_path_uncached(id, by_id, dek, memo, depth) do
+    with %{} = row <- Map.get(by_id, id),
+         true <- depth < 512 do
+      case parent_path(row, by_id, dek, memo, depth) do
+        {:ok, parent_path, memo} ->
+          case Envelope.decrypt(row.ct, row.nonce, dek, row_aad(:folders, :name, id, row.dv)) do
+            {:ok, name} ->
+              path = if parent_path, do: parent_path <> "/" <> name, else: name
+              {:ok, path, Map.put(memo, id, {:ok, path})}
+
+            :error ->
+              report_undecryptable_folder(id)
+              {:error, Map.put(memo, id, :error)}
+          end
+
+        {:error, memo} ->
+          {:error, Map.put(memo, id, :error)}
+      end
+    else
+      _ ->
+        report_undecryptable_folder(id)
+        {:error, Map.put(memo, id, :error)}
     end
   end
 
@@ -6474,8 +6496,12 @@ defmodule Engram.Notes do
 
     cond do
       # A folder cannot move into itself or its own subtree (it would become
-      # its own ancestor). Refused before anything is read or written.
-      old_folder != new_folder and Rows.into_own_subtree?(old_folder, new_folder) ->
+      # its own ancestor), by path or by row. Refused before anything is read
+      # or written: past the claim below, a refusal would leave it committed.
+      old_folder != new_folder and
+          Repo.with_tenant!(user.id, fn ->
+            Rows.check_move(user, vault.id, old_folder, new_folder)
+          end) != :ok ->
         {:error, :invalid_path}
 
       # No-op rename: same folder. Skip the target conflict check so the
@@ -6597,6 +6623,14 @@ defmodule Engram.Notes do
     |> Enum.filter(&folder_in?(&1.folder || "", folders))
   end
 
+  # The live folder row a note's `folder_ref_id` names; for `exists/1` on a query
+  # whose notes binding is named `:n`.
+  defp live_folder_ref do
+    from(f in Engram.Folders.Folder,
+      where: f.id == parent_as(:n).folder_ref_id and is_nil(f.deleted_at)
+    )
+  end
+
   # One representative row per folder hash among the live rows the folder rows
   # cannot vouch for, with no decrypt:
   #   * NOTES with no `folder_ref_id` that are not at the root. The previous
@@ -6617,10 +6651,7 @@ defmodule Engram.Notes do
 
     # A reference to a deleted or missing row vouches for nothing either (an
     # undo that could not revive the row, a write racing a delete).
-    live_ref =
-      from(f in Engram.Folders.Folder,
-        where: f.id == parent_as(:n).folder_ref_id and is_nil(f.deleted_at)
-      )
+    live_ref = live_folder_ref()
 
     Repo.all(
       from(n in scoped_live(user, vault),
@@ -7931,12 +7962,14 @@ defmodule Engram.Notes do
               tf -> tf <> "/" <> leaf
             end
 
-          # rename_folder_gated's only error is :conflict — the batch entry
+          # rename_folder_gated's errors are :conflict and (unreachable here, the
+          # batch has its own :cycle guard above) :invalid_path — the batch entry
           # point already ran ensure_user_dek, so rename_folder/4's wider
           # error surface can't arise here (dialyzer proves the coverage).
           case rename_folder_gated(user, vault, source_folder, new_folder, rows) do
             {:ok, _count} -> {:ok, {source_folder, new_folder}}
             {:error, :conflict} -> {:error, :conflict}
+            {:error, :invalid_path} -> {:error, :cycle}
           end
         end
 
