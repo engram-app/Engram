@@ -912,7 +912,11 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert length(page2["attachments"]) == 1
       assert page2["next_cursor"] == nil
 
-      paths = Enum.map(page1["attachments"] ++ page2["attachments"], & &1["path"])
+      both = page1["attachments"] ++ page2["attachments"]
+      ids = Enum.map(both, & &1["id"])
+      assert ids == Enum.sort(ids), "pages are ordered by id"
+
+      paths = Enum.map(both, & &1["path"])
       assert Enum.sort(paths) == ["pg/a1.png", "pg/a2.png", "pg/a3.png"]
 
       unpaged = conn |> get("/api/attachments") |> json_response(200)

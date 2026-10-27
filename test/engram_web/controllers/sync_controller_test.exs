@@ -73,7 +73,7 @@ defmodule EngramWeb.SyncControllerTest do
       vault: vault
     } do
       now = DateTime.utc_now()
-      over = Engram.Batch.quiescence_cap() + 1
+      over = 1_001
 
       Engram.Repo.insert_all(
         "oban_jobs",
@@ -100,7 +100,7 @@ defmodule EngramWeb.SyncControllerTest do
       )
 
       body = conn |> get("/api/sync/quiescence") |> json_response(200)
-      assert body["pending_checkpoints"] == Engram.Batch.quiescence_cap()
+      assert body["pending_checkpoints"] == 1_000
     end
 
     # A checkpoint for a note with a live room snoozes until the room closes
