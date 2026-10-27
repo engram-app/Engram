@@ -7,7 +7,7 @@ defmodule Engram.NotesFanoutBoundsTest do
 
   import Ecto.Query
 
-  alias Engram.{Folders, Notes, Repo}
+  alias Engram.{Folders, Notes, ObanInsertCount, Repo}
   alias Engram.Workers.{
     DeleteNoteIndex,
     EmbedNote,
@@ -39,36 +39,6 @@ defmodule Engram.NotesFanoutBoundsTest do
     end
   end
 
-  # Number of `INSERT INTO "oban_jobs"` statements `fun` issues from this process.
-  defp oban_insert_statements(fun) do
-    test = self()
-    handler = {__MODULE__, make_ref()}
-
-    :telemetry.attach(
-      handler,
-      [:engram, :repo, :query],
-      fn _, _, %{query: q}, _ ->
-        if self() == test and q =~ ~r/^INSERT INTO .*"oban_jobs"/, do: send(test, :oban_insert)
-      end,
-      nil
-    )
-
-    try do
-      result = fun.()
-      {result, drain_inserts(0)}
-    after
-      :telemetry.detach(handler)
-    end
-  end
-
-  defp drain_inserts(n) do
-    receive do
-      :oban_insert -> drain_inserts(n + 1)
-    after
-      0 -> n
-    end
-  end
-
   defp job_note_ids(worker),
     do: [worker: worker] |> all_enqueued() |> Enum.map(& &1.args["note_id"]) |> Enum.sort()
 
@@ -79,7 +49,7 @@ defmodule Engram.NotesFanoutBoundsTest do
       {:ok, matches} = Notes.scan_folders(user, vault, ["Docs"])
 
       {{:ok, %{notes: @n}}, inserts} =
-        oban_insert_statements(fn -> Notes.delete_scanned(user, vault, matches) end)
+        ObanInsertCount.count(fn -> Notes.delete_scanned(user, vault, matches) end)
 
       # ReleaseIndexEntries.enqueue is one more insert; the cleanup jobs are
       # one. Per-note inserts would be at least @n.
@@ -95,7 +65,7 @@ defmodule Engram.NotesFanoutBoundsTest do
       ids = notes |> Enum.map(& &1.id) |> Enum.sort()
 
       {{:ok, _}, inserts} =
-        oban_insert_statements(fn -> Notes.rename_folder(user, vault, "Docs", "Archive") end)
+        ObanInsertCount.count(fn -> Notes.rename_folder(user, vault, "Docs", "Archive") end)
 
       # Per-note inserts would be 2 * @n.
       assert inserts <= 2
@@ -143,7 +113,7 @@ defmodule Engram.NotesFanoutBoundsTest do
       )
 
       {{:ok, %{notes: @n}}, inserts} =
-        oban_insert_statements(fn -> Folders.restore_op(user, vault, op) end)
+        ObanInsertCount.count(fn -> Folders.restore_op(user, vault, op) end)
 
       # Per-row enqueue was 2 * @n; the rest is the claim release.
       assert inserts <= 3

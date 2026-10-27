@@ -75,6 +75,7 @@ defmodule Engram.Workers.BackfillCrdtState do
   alias Engram.Crypto
   alias Engram.Crypto.AadRebind
   alias Engram.Crypto.RotationGate
+  alias Engram.Jobs
   alias Engram.Logger.Metadata
   alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtUpdateLog, Note, NoteBody}
   alias Engram.Repo
@@ -119,9 +120,11 @@ defmodule Engram.Workers.BackfillCrdtState do
       |> IdWindows.all()
       |> Enum.uniq()
 
-    Enum.each(pairs, fn {user_id, vault_id} -> {:ok, _} = enqueue_vault(user_id, vault_id) end)
-
-    length(pairs)
+    # Same job `enqueue_vault/2` builds; this worker has no `unique`, so bulk
+    # insert drops nothing (#2169).
+    pairs
+    |> Enum.map(fn {user_id, vault_id} -> vault_job(user_id, vault_id) end)
+    |> Jobs.insert_chunked()
   end
 
   @doc """
@@ -129,11 +132,10 @@ defmodule Engram.Workers.BackfillCrdtState do
   one empty batch select.
   """
   @spec enqueue_vault(Ecto.UUID.t(), Ecto.UUID.t()) :: {:ok, Oban.Job.t()} | {:error, term()}
-  def enqueue_vault(user_id, vault_id) do
-    %{"user_id" => user_id, "vault_id" => vault_id, "cursor" => @start_cursor}
-    |> __MODULE__.new()
-    |> Oban.insert()
-  end
+  def enqueue_vault(user_id, vault_id), do: user_id |> vault_job(vault_id) |> Oban.insert()
+
+  defp vault_job(user_id, vault_id),
+    do: __MODULE__.new(%{"user_id" => user_id, "vault_id" => vault_id, "cursor" => @start_cursor})
 
   @doc "Notes this worker seeds: live, NULL state, and no un-checkpointed tail."
   @spec seedable() :: Ecto.Query.t()

@@ -370,6 +370,19 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
     assert_enqueued(worker: BackfillCrdtState, args: %{"user_id" => user.id})
   end
 
+  test "enqueue_missing/0 queues every pair in one bulk insert (#2169)", ctx do
+    %{user: user, vault: vault} = ctx
+    _ = legacy_note(user, vault, "a.md", "A")
+
+    for i <- 1..2 do
+      {:ok, v, _} = Vaults.register_vault(user, "Extra#{i}", Ecto.UUID.generate())
+      _ = legacy_note(user, v, "b#{i}.md", "B")
+    end
+
+    assert {3, 1} = Engram.ObanInsertCount.count(fn -> BackfillCrdtState.enqueue_missing() end)
+    assert length(all_enqueued(worker: BackfillCrdtState)) == 3
+  end
+
   test "enqueue_missing/0 enqueues nothing when every note already has state", ctx do
     %{user: user, vault: vault} = ctx
 

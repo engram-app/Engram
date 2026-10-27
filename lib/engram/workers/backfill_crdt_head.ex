@@ -31,6 +31,7 @@ defmodule Engram.Workers.BackfillCrdtHead do
   alias Engram.Accounts
   alias Engram.Backfill.IdWindows
   alias Engram.Crypto.RotationGate
+  alias Engram.Jobs
   alias Engram.Notes.{CrdtTransport, Note}
   alias Engram.Repo
   alias Engram.Vaults
@@ -77,13 +78,13 @@ defmodule Engram.Workers.BackfillCrdtHead do
       |> IdWindows.all()
       |> Enum.uniq()
 
-    Enum.each(pairs, fn {user_id, vault_id} ->
-      %{"user_id" => user_id, "vault_id" => vault_id, "cursor" => @start_cursor}
-      |> __MODULE__.new()
-      |> Oban.insert()
+    # No `unique` on this worker, so bulk insert drops nothing a single one
+    # deduped (#2169: one hourly tick must not be one insert per vault).
+    pairs
+    |> Enum.map(fn {user_id, vault_id} ->
+      __MODULE__.new(%{"user_id" => user_id, "vault_id" => vault_id, "cursor" => @start_cursor})
     end)
-
-    length(pairs)
+    |> Jobs.insert_chunked()
   end
 
   @doc """
@@ -102,11 +103,9 @@ defmodule Engram.Workers.BackfillCrdtHead do
         |> Repo.all(skip_tenant_check: true)
       end)
 
-    Enum.each(vault_ids, fn vault_id ->
-      %{"user_id" => user_id, "vault_id" => vault_id}
-      |> __MODULE__.new()
-      |> Oban.insert()
-    end)
+    vault_ids
+    |> Enum.map(&__MODULE__.new(%{"user_id" => user_id, "vault_id" => &1}))
+    |> Jobs.insert_chunked()
 
     :ok
   end
