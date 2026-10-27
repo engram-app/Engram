@@ -121,6 +121,19 @@ defmodule Engram.Vector.QdrantOverwritePayloadTest do
       end
     end
 
+    test "the by-filter repath write is tagged repath", %{ref: ref} do
+      assert :ok = Qdrant.set_payload_by_filter(@col, 1, 2, "hmac", %{"path_hmac" => "x"})
+      assert_receive {_, ^ref, _, %{op: :set_payload, caller: :repath}}
+    end
+
+    test "set_payloads carries the caller and defaults to other", %{ref: ref} do
+      Qdrant.set_payloads(@col, [{"p1", %{"u" => "x"}}], caller: :dek_rotation)
+      assert_receive {_, ^ref, %{ids: 1}, %{op: :set_payload, caller: :dek_rotation}}
+
+      Qdrant.set_payloads(@col, [{"p1", %{"u" => "x"}}])
+      assert_receive {_, ^ref, _, %{caller: :other}}
+    end
+
     test "the PromEx distributions carry it" do
       metrics =
         Engram.Test.PromExMetrics.of(Engram.PromEx.Qdrant)
