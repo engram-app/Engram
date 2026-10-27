@@ -212,6 +212,10 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # that number. No function body beyond a constant, no Logger call, never
     # touches content, path, title or a query.
     "lib/engram/batch.ex",
+    # Signs and checks list cursors (user id, vault id, a sort key: ids and
+    # numbers only) and clamps page sizes. No Logger call, never touches
+    # content, path, title or a query.
+    "lib/engram/pager.ex",
     # Pure function from conn assigns to an actor string ("api:<key id>" or
     # "sync"). No Logger call, never touches content, path, title or a query.
     "lib/engram_web/write_actor.ex",

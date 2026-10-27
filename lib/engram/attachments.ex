@@ -10,6 +10,7 @@ defmodule Engram.Attachments do
   """
 
   import Ecto.Query
+  import Engram.Pager, only: [keyset_gt: 4]
 
   alias Engram.Attachments.Attachment
   alias Engram.Attachments.BulkUpdate
@@ -1962,7 +1963,7 @@ defmodule Engram.Attachments do
         # form is an index range on (vault_id, seq, id), so a page seeks to its
         # cursor instead of walking the feed from seq 0 (SeqFeedKeysetPlanTest).
         from(a in base,
-          where: fragment("(?, ?) > (?, ?)", a.seq, a.id, ^after_seq, type(^after_id, Ecto.UUID))
+          where: keyset_gt(a.seq, a.id, after_seq, after_id)
         )
       else
         from(a in base, where: a.seq > ^after_seq)

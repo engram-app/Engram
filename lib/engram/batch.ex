@@ -36,6 +36,18 @@ defmodule Engram.Batch do
   # statement timeout that the 7,440-attachment delete (2026-10-24) hit.
   @folder_delete 500
 
+  # Rows per page of a client-facing list (`Engram.Pager`). Metadata only, so
+  # a page is a few hundred KB at most; the cap bounds decrypt CPU and memory
+  # per request. A 7.4k-note folder (the largest in prod, 2026-10) is 15
+  # default pages.
+  @page_default 200
+  @page_max 500
+
+  # Pending checkpoint ids `GET /sync/quiescence` reads per call. It needs
+  # "is anything owed", not the full backlog (10k+ during a storm), and the
+  # live-room split only matters for the ids it can see.
+  @quiescence_cap 1_000
+
   @doc "Rows or jobs per bulk `insert_all` statement (bind-parameter bound)."
   @spec insert_rows() :: 2_000
   def insert_rows, do: @insert_rows
@@ -51,4 +63,16 @@ defmodule Engram.Batch do
   @doc "Rows per folder-delete transaction and per `batch_delete/3` call."
   @spec folder_delete() :: 500
   def folder_delete, do: @folder_delete
+
+  @doc "Default rows per page of a paged list when the client sends no limit."
+  @spec page_default() :: 200
+  def page_default, do: @page_default
+
+  @doc "Hard ceiling on rows per page of a paged list; a larger `limit` is clamped."
+  @spec page_max() :: 500
+  def page_max, do: @page_max
+
+  @doc "Max pending checkpoint ids read by one quiescence probe."
+  @spec quiescence_cap() :: 1_000
+  def quiescence_cap, do: @quiescence_cap
 end
