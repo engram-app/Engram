@@ -35,6 +35,11 @@ defmodule Engram.PromEx.Crdt do
 
     * `engram_prom_ex_crdt_room_start_total`, tags `[:source]`.
     * `engram_prom_ex_crdt_room_drain_total` — tags `[:phase]`.
+    * `engram_prom_ex_crdt_genesis_reply_total`, tags `[:outcome, :client]`.
+      One per SUCCESSFUL `crdt_create` reply (error replies are not
+      counted): `outcome` is `stored | absent | occupied`,
+      `client` is `web | obsidian_sync`. `occupied` on a duplicate create is
+      the reply engram-app/Engram-obsidian#645 loses an edit on.
     * `engram_prom_ex_crdt_index_checkpoint_total` — tags `[:phase]`.
     * `engram_prom_ex_crdt_index_projection_total` — tags `[:phase]`.
     * `engram_prom_ex_crdt_index_projection_unresolved_total` — tags `[:phase]`.
@@ -138,12 +143,25 @@ defmodule Engram.PromEx.Crdt do
   @tail_event [:engram, :crdt, :index_tail]
   @drain_event [:engram, :crdt, :room_drain]
   @start_event [:engram, :crdt, :room_start]
+  @genesis_reply_event [:engram, :crdt, :genesis_reply]
   @checkpoint_event [:engram, :crdt, :index_checkpoint]
   @abort_event [:engram, :crdt, :checkpoint_abort]
   @projection_event [:engram, :crdt, :index_projection]
   @doc_event [:engram, :crdt, :checkpoint_doc]
   @update_event [:engram, :crdt, :update_appended]
   @sweep_event [:engram, :crdt, :state_sweep]
+
+  @doc """
+  Every `{outcome, client}` tag pair `EngramWeb.CrdtChannel` emits on
+  `[:engram, :crdt, :genesis_reply]`. `Engram.PromEx.ZeroInit` seeds each at 0
+  so the first `occupied` after a deploy shows in `increase()`. A channel test
+  asserts every emitted pair is listed here.
+  """
+  def genesis_reply_tags do
+    for outcome <- [:stored, :absent, :occupied],
+        client <- [:web, :obsidian_sync],
+        do: %{outcome: outcome, client: client}
+  end
 
   @impl true
   def event_metrics(opts) do
@@ -169,6 +187,18 @@ defmodule Engram.PromEx.Crdt do
           event_name: @start_event,
           description: "CRDT note rooms started (process actually created), by call path.",
           tags: [:source]
+        ),
+        # A sum of :count, not a counter: `Engram.PromEx.ZeroInit` seeds all six
+        # outcome x client series with a 0 at boot so `increase()` sees the
+        # first `occupied` after a deploy, and a counter would count the seed.
+        sum(
+          metric_prefix ++ [:genesis_reply, :total],
+          event_name: @genesis_reply_event,
+          measurement: :count,
+          description:
+            "Successful crdt_create replies by genesis outcome (stored | absent | occupied) " <>
+              "and client.",
+          tags: [:outcome, :client]
         ),
         counter(
           metric_prefix ++ [:room_drain, :total],

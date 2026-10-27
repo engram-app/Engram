@@ -26,6 +26,8 @@ defmodule Engram.PromEx.ZeroInit do
   @rebuild_double_pay [:engram, :rebuild, :double_pay_parked]
   # engram-prod-oauth-refresh-loop: families killed, per agent and reason.
   @family_revoked [:engram, :oauth, :family_revoked]
+  # crdt_create genesis replies (engram-app/Engram-obsidian#645).
+  @genesis_reply [:engram, :crdt, :genesis_reply]
 
   # The 4xx statuses Qdrant answers a request it will refuse on every retry:
   # 400 (strict mode's unindexed filter, #2138, or a bad shape), 404 (no
@@ -91,7 +93,12 @@ defmodule Engram.PromEx.ZeroInit do
           reason <- Engram.OAuth.kill_reasons(),
           do: {@family_revoked, %{count: 0}, %{client_agent: agent, reason: reason}}
 
+    genesis_reply_series =
+      for tags <- Engram.PromEx.Crdt.genesis_reply_tags(),
+          do: {@genesis_reply, %{count: 0}, tags}
+
     search_series ++
+      genesis_reply_series ++
       rotate_series ++
       reconcile_series ++
       cancelled_series ++
@@ -113,6 +120,7 @@ defmodule Engram.PromEx.ZeroInit do
           @rebuild_meter_failed -> "engram_prom_ex_indexing_rebuild_meter_failed_total"
           @rebuild_double_pay -> "engram_prom_ex_indexing_rebuild_double_pay_parked_total"
           @family_revoked -> "engram_prom_ex_oauth_family_revoked_total"
+          @genesis_reply -> "engram_prom_ex_crdt_genesis_reply_total"
         end
 
       {metric, Map.new(meta, fn {k, v} -> {k, to_string(v)} end)}

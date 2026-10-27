@@ -427,7 +427,7 @@ defmodule EngramWeb.CrdtChannel do
           # `occupied`, not `absent`: the row at this path holds ANOTHER note's
           # body. The ADOPT path transfers ours onto that lineage deliberately;
           # a blind push would union two bodies into one note (#476).
-          {:reply, {:ok, %{doc_id: note.id, seeded: false, genesis: "occupied"}}, socket}
+          reply_created(note, :occupied, socket)
 
         {:error, :id_conflict, note} ->
           sync_error(socket, :id_conflict)
@@ -921,7 +921,21 @@ defmodule EngramWeb.CrdtChannel do
   # actually holds anything.
   # `seeded` is retained for older plugins, but it is a LOSSY view of `genesis`
   # and must never again be the only thing on the wire (#476).
+  #
+  # Every SUCCESSFUL create reply goes through here (error replies do not), so
+  # the reply OUTCOME is counted here
+  # (Engram.PromEx.Crdt, `genesis_reply_total`). An `occupied` answer to a
+  # duplicate create is where the plugin can drop an edit
+  # (engram-app/Engram-obsidian#645). Tags are two closed atom sets; never ids.
+  # The full set of pairs is `Engram.PromEx.Crdt.genesis_reply_tags/0` (seeded
+  # at 0 on boot); a new outcome or client here must be added there, which the
+  # "genesis_reply telemetry" channel tests enforce.
   defp reply_created(note, genesis, socket) do
+    :telemetry.execute([:engram, :crdt, :genesis_reply], %{count: 1}, %{
+      outcome: genesis,
+      client: activity_surface(socket.assigns[:client_type])
+    })
+
     {:reply,
      {:ok, %{doc_id: note.id, seeded: genesis == :stored, genesis: Atom.to_string(genesis)}},
      socket}

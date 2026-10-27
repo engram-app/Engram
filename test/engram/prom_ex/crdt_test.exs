@@ -72,6 +72,43 @@ defmodule Engram.PromEx.CrdtTest do
     assert cap == CrdtRoomLru.max_resident()
   end
 
+  # engram-app/Engram-obsidian#645. The channel emits the crdt_create reply
+  # outcome; without this counter it never reaches /metrics.
+  test "genesis_reply is exported as a counter tagged by outcome and client" do
+    metrics = PromExMetrics.of(Plugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+    m = Enum.find(metrics, &(&1.event_name == [:engram, :crdt, :genesis_reply]))
+
+    # A sum, not a counter: ZeroInit's boot 0 must not count as a reply.
+    assert %Telemetry.Metrics.Sum{measurement: :count} = m
+    assert m.name == [:engram, :prom_ex, :crdt, :genesis_reply, :total]
+    assert m.tags == [:outcome, :client]
+  end
+
+  test "genesis_reply reaches /metrics with its outcome and client labels" do
+    before = genesis_reply_value("occupied", "web")
+
+    :telemetry.execute([:engram, :crdt, :genesis_reply], %{count: 1}, %{
+      outcome: :occupied,
+      client: :web
+    })
+
+    # >=, not ==: async channel tests can emit the same pair concurrently.
+    assert genesis_reply_value("occupied", "web") >= before + 1
+  end
+
+  # Label order on the line is the storage adapter's choice, so match each.
+  defp genesis_reply_value(outcome, client) do
+    Engram.PromEx
+    |> PromEx.get_metrics()
+    |> IO.iodata_to_binary()
+    |> String.split("\n")
+    |> Enum.find_value(0, fn line ->
+      String.starts_with?(line, "engram_prom_ex_crdt_genesis_reply_total{") and
+        line =~ ~s(outcome="#{outcome}") and line =~ ~s(client="#{client}") and
+        line |> String.split(" ") |> List.last() |> String.to_integer()
+    end)
+  end
+
   # #1706. The emit is useless if the plugin never exports it: nothing in the
   # checkpoint path would fail, and the Grafana panel would just be empty.
   test "checkpoint_doc bloat distributions are exported, untagged" do
