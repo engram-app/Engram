@@ -1,6 +1,6 @@
 # Context Doc: WebSocket metrics (Prometheus)
 
-_Last verified: 2026-10-08_
+_Last verified: 2026-10-27_
 
 ## Status
 Working (introduced on `feat/websocket-prom-metrics`, PR engram-app/Engram#1914).
@@ -19,7 +19,9 @@ Read this when adding or reading a WebSocket metric, or when a socket panel read
 
 1. **`EngramWeb.Telemetry.metrics/0` is NOT Prometheus.** Metrics registered only there feed LiveDashboard. `engram.websocket.count` / `socket_bytes` existed there for months and never reached `/metrics`. Only PromEx plugins (`lib/engram/prom_ex/*.ex`, listed in `Engram.PromEx.plugins/0`) are scraped. A panel reading "No data" for a metric you can see in LiveDashboard means it was never added to a PromEx plugin.
 
-2. **Phoenix encodes a broadcast ONCE per node per serializer.** `Phoenix.Channel.Server.dispatch/3` caches the encoded message by serializer, so counting `fastlane!/1` calls counts broadcasts, not deliveries. `MeteredSerializer` therefore counts local fastlane subscribers via `Registry.select` on `Engram.PubSub`, excluding subscribers that intercept the event (those push via `encode!/1` and are counted there). Known error: overcounts by 1 on `broadcast_from` (the sender is excluded from delivery but still in the Registry).
+2. **Phoenix encodes a broadcast ONCE per node per serializer.** `Phoenix.Channel.Server.send/4` (phoenix >= 1.8.16; `dispatch/3` before) caches the encoded message by serializer, so counting `fastlane!/1` calls counts broadcasts, not deliveries. `MeteredSerializer` therefore counts local fastlane subscribers via `Registry.select` on `Engram.PubSub`, excluding subscribers that intercept the event (those push via `encode!/1` and are counted there). Known error: overcounts by 1 on `broadcast_from` (the sender is excluded from delivery but still in the Registry).
+
+   The select matches Phoenix's private subscription value, which changed in phoenix 1.8.16 from `{:fastlane, pid, serializer, intercepts}` to `[Phoenix.Channel.Server | {transport_pid, serializer, intercepts}]` (the `:sender` option of `Phoenix.PubSub.subscribe/3`). The old matcher silently reported `count: 0` for every broadcast while the hand-built-subscription unit tests stayed green. `test/engram_web/channels/metered_serializer_channel_test.exs` joins a real channel and pins the shape; keep it.
 
 3. **`Phoenix.ChannelTest` bypasses the serializer.** Channel tests never exercise `MeteredSerializer`. Verify with a real client: start the endpoint with `server: true` on a spare port under `MIX_ENV=test` via `mix run --no-start script.exs`, then connect a Bun `WebSocket` to `/socket/device/websocket?vsn=2.0.0` and send a heartbeat (`[null,"1","phoenix","heartbeat",{}]`). No token or DB needed.
 
@@ -39,4 +41,4 @@ Read this when adding or reading a WebSocket metric, or when a socket panel read
 
 ## References
 - PR engram-app/Engram#1914
-- `deps/phoenix/lib/phoenix/channel/server.ex` (`dispatch/3`), `deps/phoenix/lib/phoenix/socket.ex` (`__init__/1`)
+- `deps/phoenix/lib/phoenix/channel/server.ex` (`send/4`, subscription in `handle_info({:join, ...})`), `deps/phoenix_pubsub/lib/phoenix/pubsub.ex` (`subscribe/3` `:sender`), `deps/phoenix/lib/phoenix/socket.ex` (`__init__/1`)

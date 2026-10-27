@@ -39,8 +39,7 @@ defmodule Engram.Notes.CrdtDeliver do
 
   alias Engram.{Accounts, Crypto, Repo}
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtTransport, Note, NoteBody}
-  alias Yex.Sync.SharedDoc
+  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtRoom, CrdtTransport, Note, NoteBody}
 
   require Logger
 
@@ -281,8 +280,15 @@ defmodule Engram.Notes.CrdtDeliver do
   # signal and is logged at :error rather than swallowed: with
   # `restart: :temporary` a crashed room drops all observers, and a repeating
   # crash loop would otherwise produce zero log lines from this module.
+  #
+  # A fun that RAISES inside the room (y_ex >= 0.13 returns it instead of
+  # crashing the room) leaves a room that may hold a partly applied state it
+  # did not converge to: quarantined, like a failed apply.
   defp room_apply(room, note_id, fun) do
-    SharedDoc.update_doc(room, fun)
+    case CrdtRoom.update_doc(room, fun, metadata: [note_id: note_id]) do
+      :ok -> :ok
+      {:error, {:room_raised, _}} -> quarantine_room(room, note_id, :room_raised)
+    end
   catch
     :exit, {:noproc, _} ->
       :ok

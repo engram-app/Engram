@@ -27,6 +27,7 @@ defmodule EngramWeb.CrdtChannel do
   alias Engram.Notes.CrdtIndexRegistry
   alias Engram.Notes.CrdtPersistence
   alias Engram.Notes.CrdtRegistry
+  alias Engram.Notes.CrdtRoom
   alias Engram.Notes.CrdtTransport
   alias EngramWeb.ChannelGate
   alias Yex.Sync.SharedDoc
@@ -1836,8 +1837,7 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   defp room_responsive?(room) do
-    SharedDoc.update_doc(room, fn _doc -> :ok end, room_probe_ms())
-    true
+    CrdtRoom.update_doc(room, fn _doc -> :ok end, timeout: room_probe_ms()) == :ok
   catch
     :exit, _ -> false
   end

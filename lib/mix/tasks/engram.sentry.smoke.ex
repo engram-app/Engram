@@ -20,17 +20,23 @@ defmodule Mix.Tasks.Engram.Sentry.Smoke do
   def run(_argv) do
     Mix.Task.run("app.start")
 
-    _ =
-      Sentry.capture_message(
-        "engram.sentry.smoke — pipeline test",
-        level: :error,
-        tags: %{smoke_marker: "engram.sentry.smoke"}
-      )
+    # `result: :sync` posts the envelope before returning. The default (`:none`)
+    # hands it to Sentry 14's async TelemetryProcessor, so a fixed sleep would
+    # only guess at delivery and could exit before the buffer flushes.
+    case Sentry.capture_message(
+           "engram.sentry.smoke: pipeline test",
+           level: :error,
+           tags: %{smoke_marker: "engram.sentry.smoke"},
+           result: :sync
+         ) do
+      {:ok, event_id} ->
+        Mix.shell().info(
+          "Sentry smoke event #{event_id} accepted. Check the project for tag " <>
+            "smoke_marker=engram.sentry.smoke."
+        )
 
-    Process.sleep(1_500)
-
-    Mix.shell().info(
-      "Sentry smoke event dispatched. Check the project for tag smoke_marker=engram.sentry.smoke."
-    )
+      other ->
+        Mix.raise("Sentry smoke event was not sent: #{inspect(other)}")
+    end
   end
 end
