@@ -32,8 +32,8 @@ defmodule Engram.ServiceConfig do
 
   ## Runtime overrides (every build)
 
-  The keys in `Engram.ServiceConfig.Overrides.keys/0` (the v5 rollout flags
-  and `:qdrant_active_cluster`) can be overridden at runtime from a remote
+  The keys in `Engram.ServiceConfig.Overrides.keys/0` (the v5 rebuild kill
+  switch and the v5 steps not taken yet) can be overridden at runtime from a remote
   shell, cluster-wide and durably, through a DB row: `override/3`, `clear/2`,
   `list/0`. An override beats env; with none set the env value is returned
   unchanged. See `Engram.ServiceConfig.Overrides` for the cache, the
@@ -48,11 +48,12 @@ defmodule Engram.ServiceConfig do
   Sets a runtime override of an allowlisted key, cluster-wide. `by:` names the
   operator for the log. Release-safe: `bin/engram rpc` can call it.
   """
-  @spec override(atom() | String.t(), term(), keyword()) :: :ok | {:error, term()}
+  @spec override(atom() | String.t(), term(), keyword()) ::
+          :ok | {:error, {:unknown_key, term()} | {:invalid_value, term(), term()}}
   def override(key, value, opts \\ []), do: Overrides.put(key, value, opts)
 
   @doc "Removes a runtime override; the key reads its env value again."
-  @spec clear(atom() | String.t(), keyword()) :: :ok | {:error, term()}
+  @spec clear(atom() | String.t(), keyword()) :: :ok | {:error, {:unknown_key, term()}}
   def clear(key, opts \\ []), do: Overrides.delete(key, opts)
 
   @doc "Every runtime override set now, read from the DB (not the cache)."

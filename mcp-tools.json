@@ -189,6 +189,37 @@
             "minimum": 0,
             "type": "number"
           },
+          "fields": {
+            "description": "Optional filters on any frontmatter key, all must match: user-added keys and the built-in status, author, reviewed_by, source, project, type, tags (exact) and created, updated, reviewed, expires, due, priority (range). op: eq, in (a list, at most 100), gt/gte/lt/lte (numbers or ISO dates), after/before (ISO dates; a bare date is the whole UTC day). A quoted number is text. created/updated fall back to the note's real times when the key is missing. A key no note has is an error.",
+            "items": {
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "op": {
+                  "default": "eq",
+                  "enum": [
+                    "eq",
+                    "in",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "after",
+                    "before"
+                  ],
+                  "type": "string"
+                },
+                "value": {}
+              },
+              "required": [
+                "key",
+                "value"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
           "folder": {
             "description": "Optional folder path to scope the search to (exact match)",
             "type": "string"
@@ -357,6 +388,138 @@
         "type": "object"
       },
       "title": "List Tags"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "List Fields"
+      },
+      "description": "List every frontmatter field used in the vault: its name, value kinds (string, boolean, number, date), how many notes carry it, whether notes hold a list of values, the number or date range, and the most used values with counts. Call this before filtering search_notes by frontmatter: pass a field's name as the key of a search_notes `fields` filter, with one of its values (exact match) or a bound inside its range.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "vault_id": {
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_fields",
+      "outputSchema": {
+        "properties": {
+          "fields": {
+            "items": {
+              "properties": {
+                "date_range": {
+                  "description": "ISO dates or datetimes (UTC)",
+                  "properties": {
+                    "max": {
+                      "type": "string"
+                    },
+                    "min": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "min",
+                    "max"
+                  ],
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "kinds": {
+                  "items": {
+                    "enum": [
+                      "string",
+                      "boolean",
+                      "number",
+                      "date"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "list": {
+                  "description": "Some note holds several values for this field",
+                  "type": "boolean"
+                },
+                "name": {
+                  "description": "The key to pass in a search_notes fields filter",
+                  "type": "string"
+                },
+                "note_count": {
+                  "description": "Notes carrying it",
+                  "type": "integer"
+                },
+                "number_range": {
+                  "properties": {
+                    "max": {
+                      "type": "number"
+                    },
+                    "min": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "min",
+                    "max"
+                  ],
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "values": {
+                  "description": "Most used exact values (at most 50), most notes first",
+                  "items": {
+                    "properties": {
+                      "count": {
+                        "type": "integer"
+                      },
+                      "value": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "value",
+                      "count"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "name",
+                "kinds",
+                "list",
+                "note_count",
+                "number_range",
+                "date_range",
+                "values"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "filterable": {
+            "description": "Whether search_notes accepts fields filters on this server yet",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "fields",
+          "filterable"
+        ],
+        "type": "object"
+      },
+      "title": "List Fields"
     },
     {
       "annotations": {

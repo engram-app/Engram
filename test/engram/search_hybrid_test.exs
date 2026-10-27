@@ -3,6 +3,7 @@ defmodule Engram.SearchHybridTest do
 
   import Mox
   import Ecto.Query
+  import Engram.Fixtures, only: [insert_chunk!: 4, insert_note!: 3]
 
   alias Engram.Crypto.DekCache
   alias Engram.QdrantStub
@@ -32,37 +33,8 @@ defmodule Engram.SearchHybridTest do
     Engram.MockEmbedder
     |> expect(:embed_texts, fn ["paddle_api_key"], _opts -> {:ok, [[0.1, 0.2, 0.3]]} end)
 
-    {:ok, enc} =
-      Engram.Crypto.encrypt_qdrant_payload(
-        %{text: "PADDLE_API_KEY rotation", title: "Ops", heading_path: "Ops"},
-        user,
-        "engram_notes",
-        "uuid-1"
-      )
-
-    fused = %{
-      "result" => %{
-        "points" => [
-          %{
-            "id" => "uuid-1",
-            "score" => 0.0163,
-            "payload" =>
-              Map.merge(
-                %{
-                  "text" => enc.text,
-                  "title" => enc.title,
-                  "heading_path" => enc.heading_path,
-                  "text_nonce" => enc.text_nonce,
-                  "title_nonce" => enc.title_nonce,
-                  "heading_path_nonce" => enc.heading_path_nonce,
-                  "aad_version" => enc.aad_version
-                },
-                %{"user_id" => to_string(user.id), "vault_id" => to_string(vault.id)}
-              )
-          }
-        ]
-      }
-    }
+    point = hit_point(user, vault, "Ops", Ecto.UUID.generate(), 0.0163, "PADDLE_API_KEY rotation")
+    fused = %{"result" => %{"points" => [point]}}
 
     Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -80,31 +52,12 @@ defmodule Engram.SearchHybridTest do
     assert hit.score == QdrantStub.rrf(0)
   end
 
-  defp hit_point(user, vault, id, score) do
-    {:ok, enc} =
-      Engram.Crypto.encrypt_qdrant_payload(
-        %{text: "text #{id}", title: id, heading_path: id},
-        user,
-        "engram_notes",
-        id
-      )
-
-    %{
-      "id" => id,
-      "score" => score,
-      "payload" => %{
-        "text" => enc.text,
-        "title" => enc.title,
-        "heading_path" => enc.heading_path,
-        "text_nonce" => enc.text_nonce,
-        "title_nonce" => enc.title_nonce,
-        "heading_path_nonce" => enc.heading_path_nonce,
-        "aad_version" => enc.aad_version,
-        "source_path" => "#{id}.md",
-        "user_id" => to_string(user.id),
-        "vault_id" => to_string(vault.id)
-      }
-    }
+  # A point on its own note `<name>.md`: the chunk row holds the text, the
+  # note row the title.
+  defp hit_point(user, vault, name, id, score, text \\ nil) do
+    note = insert_note!(user, vault, %{path: "#{name}.md", title: name})
+    insert_chunk!(user, note, id, text: text || "text #{name}")
+    %{"id" => id, "score" => score}
   end
 
   # End to end through Search: a point in BOTH legs is returned once with the
@@ -115,9 +68,13 @@ defmodule Engram.SearchHybridTest do
     Engram.MockEmbedder
     |> expect(:embed_texts, fn ["iron"], _opts -> {:ok, [[0.1, 0.2, 0.3]]} end)
 
-    both_dense = hit_point(user, vault, "mm-both", 0.9)
-    dense = [both_dense, hit_point(user, vault, "aa-dense", 0.8)]
-    keyword = [%{both_dense | "score" => 12.0}, hit_point(user, vault, "zz-kw", 9.0)]
+    # Fixed ids, ordered as the names: the tie breaks on the id.
+    [aa, mm, zz] =
+      for d <- ~w(1 5 9), do: String.duplicate(d, 8) <> "-0000-4000-8000-000000000000"
+
+    both_dense = hit_point(user, vault, "mm-both", mm, 0.9)
+    dense = [both_dense, hit_point(user, vault, "aa-dense", aa, 0.8)]
+    keyword = [%{both_dense | "score" => 12.0}, hit_point(user, vault, "zz-kw", zz, 9.0)]
 
     Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
       conn
@@ -132,8 +89,8 @@ defmodule Engram.SearchHybridTest do
     assert Enum.map(results, & &1.title) == ["mm-both", "aa-dense", "zz-kw"]
     assert hd(results).score == QdrantStub.rrf(0) * 2
 
-    assert QdrantStub.last_retrieve(bypass)["ids"] |> Enum.sort() ==
-             ["aa-dense", "mm-both", "zz-kw"]
+    # The text is in Postgres and MMR is off: no retrieve at all.
+    assert QdrantStub.last_retrieve(bypass) == nil
   end
 
   # The default is what MCP's `suggest_folder` and note auto-placement get,
@@ -181,37 +138,8 @@ defmodule Engram.SearchHybridTest do
     # Keyword mode must NOT call the embedder at all.
     Mox.expect(Engram.MockEmbedder, :embed_texts, 0, fn _, _ -> {:ok, []} end)
 
-    {:ok, enc} =
-      Engram.Crypto.encrypt_qdrant_payload(
-        %{text: "paddle_api_key rotation", title: "Ops", heading_path: "Ops"},
-        user,
-        "engram_notes",
-        "uuid-kw-1"
-      )
-
-    sparse_result = %{
-      "result" => %{
-        "points" => [
-          %{
-            "id" => "uuid-kw-1",
-            "score" => 0.85,
-            "payload" =>
-              Map.merge(
-                %{
-                  "text" => enc.text,
-                  "title" => enc.title,
-                  "heading_path" => enc.heading_path,
-                  "text_nonce" => enc.text_nonce,
-                  "title_nonce" => enc.title_nonce,
-                  "heading_path_nonce" => enc.heading_path_nonce,
-                  "aad_version" => enc.aad_version
-                },
-                %{"user_id" => to_string(user.id), "vault_id" => to_string(vault.id)}
-              )
-          }
-        ]
-      }
-    }
+    point = hit_point(user, vault, "Ops", Ecto.UUID.generate(), 0.85, "paddle_api_key rotation")
+    sparse_result = %{"result" => %{"points" => [point]}}
 
     Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)

@@ -8,7 +8,6 @@ defmodule Engram.Search.FieldFiltersTest do
   alias Engram.Vector.Qdrant
 
   setup do
-    Engram.ServiceConfig.put_override(:v5_payload_format, true)
     {:ok, user} = Crypto.ensure_user_dek(insert(:user))
     {:ok, dek} = Crypto.get_dek(user)
     {:ok, fk} = Crypto.dek_filter_key(user)
@@ -240,8 +239,7 @@ defmodule Engram.Search.FieldFiltersTest do
              {:error, {:field_not_indexed, "skipped"}}
   end
 
-  # M1: one accessor gates `fields` on the v5 format AND the v5 layout.
-  describe "Search.search/4 gate" do
+  describe "Search.search/4" do
     setup ctx do
       %{vault: insert(:vault, user: ctx.user)}
     end
@@ -250,28 +248,12 @@ defmodule Engram.Search.FieldFiltersTest do
       do:
         Engram.Search.search(ctx.user, ctx.vault, "q", fields: [%{"key" => "nope", "value" => 1}])
 
-    test "format and layout off: unavailable, not unknown", ctx do
-      Engram.ServiceConfig.put_override(:v5_payload_format, false)
-      Engram.ServiceConfig.put_override(:write_v5_layout, false)
-      refute FieldFilters.available?()
-      assert search(ctx) == {:error, :field_filters_unavailable}
-    end
-
-    test "format on, layout off: unavailable (v3 points carry no fa)", ctx do
-      Engram.ServiceConfig.put_override(:write_v5_layout, false)
-      refute FieldFilters.available?()
-      assert search(ctx) == {:error, :field_filters_unavailable}
-    end
-
-    test "both on: the key is resolved (unknown here), before any search runs", ctx do
-      Engram.ServiceConfig.put_override(:write_v5_layout, true)
-      assert FieldFilters.available?()
+    test "the key is resolved (unknown here), before any search runs", ctx do
       assert search(ctx) == {:error, {:unknown_field, "nope"}}
     end
 
     test "every error has a caller-facing message" do
       for reason <- [
-            :field_filters_unavailable,
             {:unknown_field, "k"},
             {:field_not_indexed, "k"},
             {:reserved_field, "k"},

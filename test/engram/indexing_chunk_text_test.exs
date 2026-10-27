@@ -4,13 +4,13 @@ defmodule Engram.IndexingChunkTextTest do
   in the same transaction as its `chunks` row, with the display-text
   checksum (`slice_sum`), and for a note over the display threshold its text
   and heading as ONE envelope (`display_ct`).
-  Search shows a small note's chunk re-derived from the note content. Behind
-  `:chunk_text_write` (off), and always on for the v5 layout, whose payload
-  carries no text.
+  Search shows a small note's chunk re-derived from the note content. Every
+  pass writes it: a v5 point's payload carries no text.
   """
   use Engram.DataCase, async: false
 
   import Ecto.Query
+  import Engram.IndexingTestHelpers
   import Mox
 
   alias Engram.{Indexing, Notes, ServiceConfig}
@@ -92,19 +92,7 @@ defmodule Engram.IndexingChunkTextTest do
     for id <- ids, do: {hits[id].text, hits[id].heading_path}
   end
 
-  test "flag off: rows carry no text (prod writes unchanged)", ctx do
-    note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
-    assert {:ok, count} = Indexing.index_note(note, ctx.vault)
-    assert count > 2
-    assert points(note) == []
-  end
-
-  describe "flag on" do
-    setup do
-      ServiceConfig.put_override(:chunk_text_write, true)
-      :ok
-    end
-
+  describe "chunk text in Postgres" do
     test "a small note stores checksums only and displays from its content", ctx do
       note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
       assert {:ok, count} = Indexing.index_note(note, ctx.vault)
@@ -150,7 +138,9 @@ defmodule Engram.IndexingChunkTextTest do
       big = content("Ferritin levels are low.") <> "\n## Appendix\n\n" <> filler
       assert byte_size(big) > 300_000
       note = put_note(ctx.user, ctx.vault, nil, big)
-      assert {:ok, _count} = Indexing.index_note(note, ctx.vault)
+      # Uncapped: ~150 chunks would merge to the Free cap, and a merged group
+      # shows no heading. The heading is what this test reads.
+      assert {:ok, _count} = without_limits(fn -> Indexing.index_note(note, ctx.vault) end)
 
       assert Enum.all?(points(note), &(is_binary(&1.display_ct) and is_integer(&1.slice_sum)))
 
@@ -252,21 +242,5 @@ defmodule Engram.IndexingChunkTextTest do
       kept = Enum.count(rows(edited), &Map.has_key?(before, &1.qdrant_point_id))
       assert kept >= 2
     end
-  end
-
-  test "the v5 layout writes text even with the flag off", ctx do
-    prev = Application.get_env(:engram, :write_v5_layout)
-    Application.put_env(:engram, :write_v5_layout, true)
-
-    on_exit(fn ->
-      if is_nil(prev),
-        do: Application.delete_env(:engram, :write_v5_layout),
-        else: Application.put_env(:engram, :write_v5_layout, prev)
-    end)
-
-    note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
-    assert {:ok, _} = Indexing.index_note(note, ctx.vault)
-
-    assert Enum.any?(texts(note, ctx.user), fn {t, _} -> t =~ "Ferritin levels are low." end)
   end
 end

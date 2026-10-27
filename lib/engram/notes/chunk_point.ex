@@ -2,8 +2,7 @@ defmodule Engram.Notes.ChunkPoint do
   @moduledoc """
   One row per Qdrant point: what search shows for a hit (Task 11, lean
   table, notes-chunks-hyperopt 2.4/2.4b). Written next to `chunks`, in the
-  same transaction, behind `:chunk_text_write`; read behind
-  `:chunk_text_read`.
+  same transaction; read by search (`Notes.search_hits_by_qdrant_points/2`).
 
   `slice_sum` is the keyed checksum of the chunk's display text (`Indexing.text_sum/2`);
   search re-derives a small note's chunk from its content and checks it.

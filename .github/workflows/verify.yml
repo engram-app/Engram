@@ -2819,6 +2819,7 @@ jobs:
           # 127.0.0.1, not localhost: the container publishes on IPv4 and the
           # BEAM would try ::1 first.
           QDRANT_URL: http://127.0.0.1:${{ steps.qdrant.outputs.qdrant_port }}
+          QDRANT_EXPECT_VERSION: "1.19.2"
           PARTITIONS: "3"
         run: |
           for i in $(seq 1 30); do
@@ -2877,6 +2878,44 @@ jobs:
           # Failures again, outside the collapsed groups.
           [ "$rc" -eq 0 ] || grep -hE -A30 '^\s+[0-9]+\) (test|property) ' partition-*.log || true
           exit "$rc"
+
+      # The self-host compose pins Qdrant 1.18.3 (docker-compose.yml) while
+      # SaaS and the suite above run 1.19.2, and a self-host upgrade boots the
+      # v5 writer and its payload-index builds against that older server. The
+      # real-Qdrant tests that cover boot (create + reconcile), indexing and
+      # search run once more on 1.18.3, one partition. The recall test
+      # (minutes, version-blind) stays on 1.19.2 only. No `--only`: in ExUnit
+      # an include beats an exclude, so the recall exclude would lose.
+      - name: Qdrant-backed tests on the self-host pin (1.18.3)
+        env:
+          DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_test
+          QDRANT_INTEGRATION: "1"
+          QDRANT_EXPECT_VERSION: "1.18.3"
+          MIX_TEST_PARTITION: "1"
+        run: |
+          C="${QDRANT_CONTAINER}-118"
+          trap 'docker rm -fv "$C" > /dev/null 2>&1 || true' EXIT
+          IMAGE="qdrant/qdrant:v1.18.3"
+          if [ -n "${LOCAL_REGISTRY:-}" ] && docker pull "${LOCAL_REGISTRY}/${IMAGE}" 2>/dev/null; then
+            IMAGE="${LOCAL_REGISTRY}/${IMAGE}"
+          fi
+          docker run -d --name "$C" -p 127.0.0.1:0:6333 \
+            --tmpfs /qdrant/storage:rw,size=2g --tmpfs /qdrant/snapshots:rw,size=256m "$IMAGE"
+          PORT=$(docker port "$C" 6333/tcp | head -1 | awk -F: '{print $NF}')
+          for i in $(seq 1 30); do
+            curl -sf --max-time 2 "http://127.0.0.1:${PORT}/healthz" > /dev/null 2>&1 && break
+            [ "$i" = 30 ] && { echo "::error::Qdrant 1.18.3 did not become ready"; docker logs "$C" | tail -20; exit 1; }
+            sleep 1
+          done
+          QDRANT_URL="http://127.0.0.1:${PORT}" mix test --warnings-as-errors --exclude qdrant_recall \
+            test/engram/vector/qdrant_tenant_layout_test.exs \
+            test/engram/vector/filter_roundtrip_test.exs \
+            test/engram/vector/qdrant_strict_mode_test.exs \
+            test/engram/vector/qdrant_dense_point_ids_test.exs \
+            test/engram/vector/qdrant_missing_point_ids_test.exs \
+            test/engram/search_integration_test.exs \
+            test/engram/indexing_floor_test.exs \
+            test/engram/notes/rest_write_interleave_test.exs
 
       - name: Qdrant state after a test failure
         if: failure()

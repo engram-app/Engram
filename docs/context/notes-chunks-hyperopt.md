@@ -528,7 +528,7 @@ Attribute count: `notes` stays under 73 attributes through the whole sequence on
 
 The v5 pass rewrites every row anyway ("rechunk once"), so do not ALTER `chunks` in place (type changes rewrite the table under ACCESS EXCLUSIVE; dropped columns leave their attribute slots). Instead:
 - Create `points` with the 2.4 layout (PK `point_id`, 2 indexes, no `id`/`vault_id`/`created_at`/`heading_path`, one `display_ct`, `member_fps bytea`, int4 `token_count`) in step 1.
-- Every v5-layout writer (`:write_v5_layout`, v5 plan 15.1) writes `points`; v3 writers keep writing `chunks`.
+- Every v5-layout writer (v5 plan 15.1; the only writer since the `:write_v5_layout` flag was removed, engram-app/Engram#2253) writes `points`; v3 writers keep writing `chunks`.
 - Readers (hydrate, reuse, delete, repath, orphan sweep, budget) read `points` first, then `chunks` (v5 already has dual-format readers for payload and text: Tasks 11.3, 15.4).
 - When `IndexVersions.done?` and `chunks` is empty for live notes, PR-18 drops `chunks`. No backfill, no rewrite, no lock.
 - Self-host on an older Qdrant (no v5 layout) keeps `chunks` until its own pass; the gate is the same `done?`.

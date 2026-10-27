@@ -39,42 +39,30 @@ defmodule Engram.KeywordIndex.Bm25Test do
   end
 
   # Which b a chunk's keyword vector uses. Merged v5 groups (more than one
-  # section) use the `:bm25_b_merged` knob, but only when the v5 layout is
-  # written: until then every write is byte-identical to v3.
+  # section) use the `:bm25_b_merged` knob.
   describe "Indexing.sparse_opts/1" do
     alias Engram.Indexing
     alias Engram.ServiceConfig
 
     test "a single chunk keeps the plain encoding" do
-      ServiceConfig.put_override(:write_v5_layout, true)
       assert Indexing.sparse_opts(%{section_count: 1}) == []
       assert Indexing.sparse_opts(%{text: "no section_count (v3)"}) == []
     end
 
-    test "v3 layout: a merged group keeps b 0.75" do
-      assert Indexing.sparse_opts(%{section_count: 3}) == []
-      assert Indexing.sparse_opts(%{merged: true, section_count: 4}) == [cap_doc_len: true]
-    end
-
-    test "v5 layout: a merged group uses b 0.25 by default" do
-      ServiceConfig.put_override(:write_v5_layout, true)
+    test "a merged group uses b 0.25 by default" do
       assert Indexing.sparse_opts(%{section_count: 3}) == [b: 0.25]
     end
 
-    test "v5 layout: a capped group is length-capped and uses the merged b" do
-      ServiceConfig.put_override(:write_v5_layout, true)
-
+    test "a capped group is length-capped and uses the merged b" do
       assert Indexing.sparse_opts(%{merged: true, section_count: 4}) ==
                [cap_doc_len: true, b: 0.25]
     end
 
     test "a floor point is length-capped at b 0.75" do
-      ServiceConfig.put_override(:write_v5_layout, true)
       assert Indexing.sparse_opts(%{floor: true}) == [cap_doc_len: true]
     end
 
     test "the merged b is the :bm25_b_merged knob" do
-      ServiceConfig.put_override(:write_v5_layout, true)
       ServiceConfig.put_override(:bm25_b_merged, 0.5)
       assert Indexing.sparse_opts(%{section_count: 2}) == [b: 0.5]
     end

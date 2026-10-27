@@ -4,9 +4,9 @@ defmodule Engram.SearchTest do
   import Engram.QdrantFilterView
 
   import Bitwise, only: [bxor: 2]
+  import Engram.Fixtures, only: [insert_chunk!: 3, insert_chunk!: 4, insert_note!: 3]
   import Mox
 
-  alias Engram.Notes.Chunk
   alias Engram.QdrantStub
   alias Engram.Search
 
@@ -30,18 +30,22 @@ defmodule Engram.SearchTest do
         {:ok, [List.duplicate(0.1, 3)]}
       end)
 
+      # Search keys each hit on its chunk row; the note row gives the path.
+      note = insert_note!(user, vault, %{path: "Health/Iron Panel.md", tags: ["health"]})
+      point_id = insert_chunk!(user, note, Ecto.UUID.generate())
+
       {:ok, enc} =
         Engram.Crypto.encrypt_qdrant_payload(
           %{text: "Ferritin levels.", title: "Iron Panel", heading_path: "Iron Panel"},
           user,
           "engram_notes",
-          "uuid-1"
+          point_id
         )
 
       qdrant_result = %{
         "result" => [
           %{
-            "id" => "uuid-1",
+            "id" => point_id,
             "score" => 0.95,
             "payload" => %{
               "text" => enc.text,
@@ -87,19 +91,22 @@ defmodule Engram.SearchTest do
       # the prod corruption that crashed Jason.encode with a 500. Encryption is
       # byte-preserving, so the invalid byte survives decrypt.
       bad_text = "PRs #71" <> <<0xE2>> <> "#85 ferritin"
+      # The title is the note row's; the text comes from the payload fallback.
+      note = insert_note!(user, vault, %{path: "Health/Iron.md", title: "Iron" <> <<0xE2>>})
+      point_id = insert_chunk!(user, note, Ecto.UUID.generate())
 
       {:ok, enc} =
         Engram.Crypto.encrypt_qdrant_payload(
           %{text: bad_text, title: "Iron" <> <<0xE2>>, heading_path: "Iron Panel"},
           user,
           "engram_notes",
-          "uuid-1"
+          point_id
         )
 
       qdrant_result = %{
         "result" => [
           %{
-            "id" => "uuid-1",
+            "id" => point_id,
             "score" => 0.9,
             "payload" => %{
               "text" => enc.text,
@@ -156,22 +163,7 @@ defmodule Engram.SearchTest do
           actor: "api"
         )
 
-      point_id = Ecto.UUID.generate()
-
-      {:ok, _} =
-        Engram.Repo.with_tenant(user.id, fn ->
-          %Chunk{}
-          |> Chunk.changeset(%{
-            note_id: note.id,
-            user_id: user.id,
-            vault_id: vault.id,
-            position: 0,
-            char_start: 0,
-            char_end: 10,
-            qdrant_point_id: point_id
-          })
-          |> Engram.Repo.insert!()
-        end)
+      point_id = insert_chunk!(user, note, Ecto.UUID.generate())
 
       {:ok, enc} =
         Engram.Crypto.encrypt_qdrant_payload(
@@ -294,22 +286,7 @@ defmodule Engram.SearchTest do
           actor: "api"
         )
 
-      point_id = Ecto.UUID.generate()
-
-      {:ok, _} =
-        Engram.Repo.with_tenant(user.id, fn ->
-          %Chunk{}
-          |> Chunk.changeset(%{
-            note_id: note.id,
-            user_id: user.id,
-            vault_id: vault.id,
-            position: 0,
-            char_start: 0,
-            char_end: 10,
-            qdrant_point_id: point_id
-          })
-          |> Engram.Repo.insert!()
-        end)
+      point_id = insert_chunk!(user, note, Ecto.UUID.generate())
 
       Engram.Repo.update_all(
         from(n in Engram.Notes.Note, where: n.id == ^note.id),
@@ -380,24 +357,7 @@ defmodule Engram.SearchTest do
               actor: "api"
             )
 
-          point_id = Ecto.UUID.generate()
-
-          {:ok, _} =
-            Engram.Repo.with_tenant(user.id, fn ->
-              %Chunk{}
-              |> Chunk.changeset(%{
-                note_id: note.id,
-                user_id: user.id,
-                vault_id: vault.id,
-                position: 0,
-                char_start: 0,
-                char_end: 10,
-                qdrant_point_id: point_id
-              })
-              |> Engram.Repo.insert!()
-            end)
-
-          %{note: note, point_id: point_id}
+          %{note: note, point_id: insert_chunk!(user, note, Ecto.UUID.generate())}
         end
 
       Engram.Repo.update_all(
@@ -540,7 +500,6 @@ defmodule Engram.SearchTest do
     # it used to send the legacy `tags_hmac` key, which v3 has no index for.
     test "empty tags (MCP [] and REST [\"\"]) add no tag condition, legacy off",
          %{bypass: bypass, user: user, vault: vault} do
-      Engram.ServiceConfig.put_override(:v5_payload_format, true)
       Engram.ServiceConfig.put_override(:legacy_filter_fields, false)
       Engram.MockEmbedder |> expect(:embed_texts, 2, fn _, _ -> {:ok, [[0.1, 0.1, 0.1]]} end)
       test_pid = self()
@@ -712,6 +671,13 @@ defmodule Engram.SearchTest do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
+      results =
+        for i <- 0..3 do
+          note = insert_note!(user, vault, %{path: "test/note#{i}.md", title: "Note #{i}"})
+          qid = insert_chunk!(user, note, Ecto.UUID.generate(), text: "Result #{i}")
+          %{"id" => qid, "score" => 0.9 - i * 0.1}
+        end
+
       Bypass.expect_once(
         bypass,
         "POST",
@@ -721,37 +687,6 @@ defmodule Engram.SearchTest do
           decoded = Jason.decode!(body)
           # With limit=2, should request 4x = 8, but min 20
           assert Enum.map(decoded["searches"], & &1["limit"]) == [20, 20]
-
-          results =
-            for i <- 0..3 do
-              qid = "uuid-#{i}"
-
-              {:ok, enc} =
-                Engram.Crypto.encrypt_qdrant_payload(
-                  %{text: "Result #{i}", title: "Note #{i}", heading_path: "Section"},
-                  user,
-                  "engram_notes",
-                  qid
-                )
-
-              %{
-                "id" => qid,
-                "score" => 0.9 - i * 0.1,
-                "payload" => %{
-                  "text" => enc.text,
-                  "title" => enc.title,
-                  "heading_path" => enc.heading_path,
-                  "text_nonce" => enc.text_nonce,
-                  "title_nonce" => enc.title_nonce,
-                  "heading_path_nonce" => enc.heading_path_nonce,
-                  "aad_version" => enc.aad_version,
-                  "source_path" => "test/note#{i}.md",
-                  "tags" => [],
-                  "user_id" => to_string(user.id),
-                  "vault_id" => to_string(vault.id)
-                }
-              }
-            end
 
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
@@ -803,6 +738,13 @@ defmodule Engram.SearchTest do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
+      note = insert_note!(user, vault, %{path: "test/free.md", title: "Plain"})
+
+      result = %{
+        "id" => insert_chunk!(user, note, Ecto.UUID.generate(), text: "Plain"),
+        "score" => 0.5
+      }
+
       # Free user → reranker_enabled=false → fetch_limit should equal the
       # requested limit (2), NOT 4× / @min_candidates. Verifies that Qdrant
       # isn't being asked for the rerank-sized candidate set.
@@ -814,34 +756,6 @@ defmodule Engram.SearchTest do
           {:ok, body, conn} = Plug.Conn.read_body(conn)
           decoded = Jason.decode!(body)
           assert Enum.map(decoded["searches"], & &1["limit"]) == [2, 2]
-
-          qid = "uuid-free"
-
-          {:ok, enc} =
-            Engram.Crypto.encrypt_qdrant_payload(
-              %{text: "Plain", title: "Plain", heading_path: "Plain"},
-              user,
-              "engram_notes",
-              qid
-            )
-
-          result = %{
-            "id" => qid,
-            "score" => 0.5,
-            "payload" => %{
-              "text" => enc.text,
-              "title" => enc.title,
-              "heading_path" => enc.heading_path,
-              "text_nonce" => enc.text_nonce,
-              "title_nonce" => enc.title_nonce,
-              "heading_path_nonce" => enc.heading_path_nonce,
-              "aad_version" => enc.aad_version,
-              "source_path" => "test/free.md",
-              "tags" => [],
-              "user_id" => to_string(user.id),
-              "vault_id" => to_string(vault.id)
-            }
-          }
 
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
@@ -1060,7 +974,7 @@ defmodule Engram.SearchTest do
       # the real note, none for the marker).
       {:ok, _marker} = Engram.Notes.create_folder_marker(user, vault, "Findable")
 
-      {:ok, _note} =
+      {:ok, note} =
         Engram.Notes.upsert_note(
           user,
           vault,
@@ -1075,35 +989,8 @@ defmodule Engram.SearchTest do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
-      {:ok, enc} =
-        Engram.Crypto.encrypt_qdrant_payload(
-          %{text: "Findable target body", title: "Real", heading_path: "Real"},
-          user,
-          "engram_notes",
-          "uuid-real"
-        )
-
-      qdrant_result = %{
-        "result" => [
-          %{
-            "id" => "uuid-real",
-            "score" => 0.9,
-            "payload" => %{
-              "text" => enc.text,
-              "title" => enc.title,
-              "heading_path" => enc.heading_path,
-              "text_nonce" => enc.text_nonce,
-              "title_nonce" => enc.title_nonce,
-              "heading_path_nonce" => enc.heading_path_nonce,
-              "aad_version" => enc.aad_version,
-              "source_path" => "Findable/Real.md",
-              "tags" => [],
-              "user_id" => to_string(user.id),
-              "vault_id" => to_string(vault.id)
-            }
-          }
-        ]
-      }
+      qid = insert_chunk!(user, note, Ecto.UUID.generate(), text: "Findable target body")
+      qdrant_result = %{"result" => [%{"id" => qid, "score" => 0.9}]}
 
       Bypass.expect_once(
         bypass,
@@ -1130,35 +1017,16 @@ defmodule Engram.SearchTest do
 
   describe "search/4 diversity (MMR)" do
     # Build a Qdrant point whose dense vector is preserved (Task 5) so MMR can
-    # measure inter-candidate similarity. text/title/heading are encrypted so
-    # the real decrypt path runs end-to-end.
-    defp diverse_point(user, vault, qid, score, vector, body) do
-      {:ok, enc} =
-        Engram.Crypto.encrypt_qdrant_payload(
-          %{text: body, title: qid, heading_path: qid},
-          user,
-          "engram_notes",
-          qid
-        )
+    # measure inter-candidate similarity: one note `<name>.md` whose chunk row
+    # holds the encrypted text, so the real decrypt path runs end-to-end.
+    defp diverse_point(user, vault, name, score, vector, body) do
+      note = insert_note!(user, vault, %{path: "#{name}.md", title: name})
+      chunk_point(user, note, 0, score, vector, body)
+    end
 
-      %{
-        "id" => qid,
-        "score" => score,
-        "vector" => %{"dense" => vector},
-        "payload" => %{
-          "text" => enc.text,
-          "title" => enc.title,
-          "heading_path" => enc.heading_path,
-          "text_nonce" => enc.text_nonce,
-          "title_nonce" => enc.title_nonce,
-          "heading_path_nonce" => enc.heading_path_nonce,
-          "aad_version" => enc.aad_version,
-          "source_path" => "#{qid}.md",
-          "tags" => [],
-          "user_id" => to_string(user.id),
-          "vault_id" => to_string(vault.id)
-        }
-      }
+    defp chunk_point(user, note, pos, score, vector, body) do
+      qid = insert_chunk!(user, note, Ecto.UUID.generate(), position: pos, text: body)
+      %{"id" => qid, "score" => score, "vector" => %{"dense" => vector}}
     end
 
     test "diversity: 1.0 opt pulls in a non-top-relevance candidate", %{
@@ -1277,6 +1145,8 @@ defmodule Engram.SearchTest do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
+      points = [diverse_point(user, vault, "m", 0.9, [1.0, 0.0], "mmr")]
+
       Bypass.expect_once(
         bypass,
         "POST",
@@ -1287,7 +1157,6 @@ defmodule Engram.SearchTest do
 
           assert length(decoded["searches"]) == 2
           refute Enum.any?(decoded["searches"], &Map.has_key?(&1, "with_vector"))
-          points = [diverse_point(user, vault, "m", 0.9, [1.0, 0.0], "mmr")]
 
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
@@ -1306,37 +1175,6 @@ defmodule Engram.SearchTest do
   end
 
   describe "search/4 group_by_note" do
-    # Build a Qdrant point with an explicit source_path so several chunks can
-    # share one note. Mirrors diverse_point/6 but lets path != qid.
-    defp note_chunk(user, vault, qid, path, score, vector, body) do
-      {:ok, enc} =
-        Engram.Crypto.encrypt_qdrant_payload(
-          %{text: body, title: qid, heading_path: qid},
-          user,
-          "engram_notes",
-          qid
-        )
-
-      %{
-        "id" => qid,
-        "score" => score,
-        "vector" => %{"dense" => vector},
-        "payload" => %{
-          "text" => enc.text,
-          "title" => enc.title,
-          "heading_path" => enc.heading_path,
-          "text_nonce" => enc.text_nonce,
-          "title_nonce" => enc.title_nonce,
-          "heading_path_nonce" => enc.heading_path_nonce,
-          "aad_version" => enc.aad_version,
-          "source_path" => path,
-          "tags" => [],
-          "user_id" => to_string(user.id),
-          "vault_id" => to_string(vault.id)
-        }
-      }
-    end
-
     test "note-level MMR pulls a topically-distinct note over near-duplicate-topic notes",
          %{bypass: bypass, user: user, vault: vault} do
       Engram.MockEmbedder
@@ -1350,10 +1188,12 @@ defmodule Engram.SearchTest do
       #   Note-MMR collapses first: noteA is one rep (best chunk, [1,0]), orth is
       #   a separate rep ([0,1]); MMR then pulls orth in. So grouping is what
       #   surfaces orth.md and yields two DISTINCT notes.
+      note_a = insert_note!(user, vault, %{path: "noteA.md"})
+
       points = [
-        note_chunk(user, vault, "noteA1", "noteA.md", 0.90, [1.0, 0.0], "noteA primary"),
-        note_chunk(user, vault, "noteA2", "noteA.md", 0.80, [0.0, 1.0], "noteA aside"),
-        note_chunk(user, vault, "orth1", "orth.md", 0.60, [0.0, 1.0], "orthogonal")
+        chunk_point(user, note_a, 0, 0.90, [1.0, 0.0], "noteA primary"),
+        chunk_point(user, note_a, 1, 0.80, [0.0, 1.0], "noteA aside"),
+        diverse_point(user, vault, "orth", 0.60, [0.0, 1.0], "orthogonal")
       ]
 
       Bypass.expect_once(
@@ -1451,15 +1291,17 @@ defmodule Engram.SearchTest do
       user: user,
       enc_vault: vault
     } do
+      # No text in the chunk row: the payload fallback decrypts the text.
+      note = insert_note!(user, vault, %{path: "a.md", title: "Alpha"})
+      qid = insert_chunk!(user, note, Ecto.UUID.generate())
+
       {:ok, enc} =
         Engram.Crypto.encrypt_qdrant_payload(
           %{text: "alpha body", title: "Alpha", heading_path: "root"},
           user,
           "engram_notes",
-          "qid-a"
+          qid
         )
-
-      _ = vault
 
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
@@ -1467,7 +1309,7 @@ defmodule Engram.SearchTest do
       qdrant_result = %{
         "result" => [
           %{
-            "id" => "qid-a",
+            "id" => qid,
             "score" => 0.95,
             "payload" => %{
               "text" => enc.text,
@@ -1509,15 +1351,16 @@ defmodule Engram.SearchTest do
       user: user,
       enc_vault: vault
     } do
+      note = insert_note!(user, vault, %{path: "b.md", title: "Beta"})
+      qid = insert_chunk!(user, note, Ecto.UUID.generate())
+
       {:ok, enc} =
         Engram.Crypto.encrypt_qdrant_payload(
           %{text: "beta body", title: "Beta", heading_path: "root"},
           user,
           "engram_notes",
-          "qid-b"
+          qid
         )
-
-      _ = vault
 
       # Tamper: flip one bit of the decoded ciphertext.
       <<first, rest::binary>> = Base.decode64!(enc.text)
@@ -1529,7 +1372,7 @@ defmodule Engram.SearchTest do
       qdrant_result = %{
         "result" => [
           %{
-            "id" => "qid-b",
+            "id" => qid,
             "score" => 0.9,
             "payload" => %{
               "text" => tampered_text,
@@ -1603,24 +1446,7 @@ defmodule Engram.SearchTest do
         actor: "api"
       )
 
-    point_id = Ecto.UUID.generate()
-
-    {:ok, _} =
-      Engram.Repo.with_tenant(user.id, fn ->
-        %Chunk{}
-        |> Chunk.changeset(%{
-          note_id: note.id,
-          user_id: user.id,
-          vault_id: vault.id,
-          position: 0,
-          char_start: 0,
-          char_end: 10,
-          qdrant_point_id: point_id
-        })
-        |> Engram.Repo.insert!()
-      end)
-
-    %{id: note.id, point_id: point_id}
+    %{id: note.id, point_id: insert_chunk!(user, note, Ecto.UUID.generate())}
   end
 
   defp expect_one_point(bypass, point_id, user, vault, payload) do

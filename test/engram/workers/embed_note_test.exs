@@ -774,17 +774,17 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      # Confirms the worker loaded the (encrypted) vault and passed it into the
-      # indexing pipeline: payloads must carry nonces and ciphertext, not plaintext.
+      # The worker indexed the decrypted note: the v5 payloads carry its
+      # HMAC-derived filter ids and no text or title at all, plain or sealed.
       assert_received {:upsert_body, body}
       points = body["points"]
       assert points != []
 
       Enum.each(points, fn p ->
         payload = p["payload"]
-        assert Map.has_key?(payload, "text_nonce")
-        assert Map.has_key?(payload, "title_nonce")
-        refute payload["text"] =~ "Classified"
+        assert Map.has_key?(payload, "p")
+        refute Enum.any?(~w(text text_nonce title title_nonce), &Map.has_key?(payload, &1))
+        refute Jason.encode!(payload) =~ "Classified"
       end)
 
       # embed_hash should be stamped, confirming the job ran to completion
@@ -1747,13 +1747,12 @@ defmodule Engram.Workers.EmbedNoteTest do
     setup do
       prev =
         Map.new(
-          [:billing_enabled, :embed_model, :embed_models_per_plan],
+          [:billing_enabled, :embed_model],
           &{&1, Application.get_env(:engram, &1)}
         )
 
       Application.put_env(:engram, :billing_enabled, true)
       Application.put_env(:engram, :embed_model, "voyage-4-large")
-      Application.put_env(:engram, :embed_models_per_plan, true)
 
       on_exit(fn ->
         for {k, v} <- prev,

@@ -96,19 +96,19 @@ defmodule EngramWeb.McpControllerTest do
       assert resp["result"]["capabilities"]["tools"]
     end
 
-    test "tools/list returns 20 tools with field filters off", %{conn: conn} do
+    test "tools/list returns 21 tools", %{conn: conn} do
       conn = jsonrpc(conn, "tools/list")
       resp = json_response(conn, 200)
 
       tools = resp["result"]["tools"]
-      assert length(tools) == 20
+      assert length(tools) == 21
 
       names = Enum.map(tools, & &1["name"])
       assert "list_vaults" in names
       assert "delete_attachment" in names
       assert "restore_deleted" in names
       assert "search_notes" in names
-      refute "list_fields" in names
+      assert "list_fields" in names
       assert "get_notes" in names
       assert "write_note" in names
       assert "edit_note" in names
@@ -1297,6 +1297,7 @@ defmodule EngramWeb.McpControllerTest do
       end)
 
       test_pid = self()
+      points = [hit(user, va), hit(user, vb)]
 
       Bypass.expect_once(
         bypass,
@@ -1310,11 +1311,7 @@ defmodule EngramWeb.McpControllerTest do
           |> Plug.Conn.put_resp_content_type("application/json")
           |> Plug.Conn.send_resp(
             200,
-            Jason.encode!(
-              QdrantStub.batch(bconn, %{
-                "result" => [hit(user, va, "uuid-a"), hit(user, vb, "uuid-b")]
-              })
-            )
+            Jason.encode!(QdrantStub.batch(bconn, %{"result" => points}))
           )
         end
       )
@@ -1347,31 +1344,16 @@ defmodule EngramWeb.McpControllerTest do
       refute text =~ to_string(vc.id)
     end
 
-    # A Qdrant point for `vault`, payload-encrypted the way the real indexer
-    # writes it, so the search path can decrypt it back out.
-    defp hit(user, vault, point_id) do
-      {:ok, enc} =
-        Engram.Crypto.encrypt_qdrant_payload(
-          %{text: "findme in #{vault.id}", title: "Findme", heading_path: "Findme"},
-          user,
-          "engram_notes",
-          point_id
-        )
+    # A Qdrant point on a note in `vault`: search reads its text from the
+    # chunk row (encrypted the way the real indexer writes it) and its vault
+    # from the row, never the payload.
+    defp hit(user, vault) do
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "Findme.md", title: "Findme"})
+      text = "findme in #{vault.id}"
 
       %{
-        "id" => point_id,
-        "score" => 0.9,
-        "payload" => %{
-          "text" => enc.text,
-          "title" => enc.title,
-          "heading_path" => enc.heading_path,
-          "text_nonce" => enc.text_nonce,
-          "title_nonce" => enc.title_nonce,
-          "heading_path_nonce" => enc.heading_path_nonce,
-          "aad_version" => enc.aad_version,
-          "user_id" => to_string(user.id),
-          "vault_id" => to_string(vault.id)
-        }
+        "id" => Engram.Fixtures.insert_chunk!(user, note, Ecto.UUID.generate(), text: text),
+        "score" => 0.9
       }
     end
   end

@@ -246,9 +246,9 @@ defmodule Engram.Indexing do
 
   @doc """
   Phase 1 of the indexing pipeline. Parses the note, calls the embedder, and
-  builds the encrypted Qdrant payloads + chunk row inserts in memory.
+  builds the Qdrant points + chunk row inserts in memory.
 
-  Writes no index rows. Its one DB write (v5 format on) is the frontmatter
+  Writes no index rows. Its one DB write is the frontmatter
   key dictionary (`FrontmatterKeys.resolve/3`), committed in its own short
   transaction, so this must NOT run inside a caller's transaction: the
   dictionary's advisory lock would then be held across the slow Voyage AI
@@ -331,7 +331,7 @@ defmodule Engram.Indexing do
          :ok = collect_garbage(n),
          avgdl = avgdl(note.user_id, note.vault_id),
          {:ok, prepared} <-
-           build_prepared(note, user, plan, vectors, dek, avgdl) do
+           build_prepared(note, plan, vectors, dek, avgdl) do
       # What the embedder was actually sent (#1618): reused chunks and
       # sparse-only passes cost nothing, so the meter must not bill them.
       # Retained vectors were paid for by the attempt that kept them.
@@ -455,33 +455,16 @@ defmodule Engram.Indexing do
   defp merged_rows?(rows), do: Enum.any?(rows, &(elem(&1, 3) != nil))
 
   @doc """
-  Whether the v5 index budget is on: the per-note cap merge (also on
-  alone through `note_cap_enabled?/0`), the index points budget and its
+  Whether the v5 index budget is on: the index points budget and its
   floor, the per-pass embed budget, and the 04:00 UTC budget sweep
-  (`ReconcileEmbeddings`). Off by default
-  (review H2): the caps are sized for chunker v5 (~5.2 points a note), so
-  on v3-chunked data they would demote and re-embed notes the v5 pass
-  re-embeds anyway. `INDEX_BUDGET_ENABLED=true` turns it on as a step of
-  the v5 go sequence, after the pass and with the v5 stamp. Off (and the
-  cap flag off), a pass plans exactly as before the budget existed.
+  (`ReconcileEmbeddings`). The per-note cap merge applies either way. Off by
+  default (review H2): the caps are sized for chunker v5 (~5.2 points a
+  note), so on v3-chunked data they would demote and re-embed notes the v5
+  pass re-embeds anyway. `INDEX_BUDGET_ENABLED=true` turns it on as a step
+  of the v5 go sequence, after the pass and with the v5 stamp.
   """
   @spec budget_enabled?() :: boolean()
   def budget_enabled?, do: Engram.ServiceConfig.get(:index_budget_enabled, false)
-
-  @doc """
-  Whether every index plan applies the per-note cap (`cap_chunks/3` at the
-  owner's `note_points_cap`), and the 04:00 UTC recap runs: with the budget,
-  or alone with `NOTE_POINTS_CAP_ENABLED=true`. On alone before the v5 dry
-  run, the dry run prices capped notes and the pass writes each one once,
-  capped; turning the budget on after the pass then merges nothing again.
-  Off (the default), plans are as before the flag existed.
-  """
-  @spec note_cap_enabled?() :: boolean()
-  def note_cap_enabled?,
-    do: budget_enabled?() or Engram.ServiceConfig.get(:note_points_cap_enabled, false)
-
-  # The owner's per-note cap when it applies, else nil (no merge).
-  defp note_cap(user), do: if(note_cap_enabled?(), do: note_points_cap(user))
 
   # The per-note cap, then the position limit: what every plan stores.
   defp fit_note(chunks, cap, merged?),
@@ -495,8 +478,8 @@ defmodule Engram.Indexing do
       else: plan_unbudgeted(note, user, chunks, content_key, opts)
   end
 
-  # The pre-budget plan: one point a chunk (merged to the per-note cap when
-  # `note_cap_enabled?/0`), metered in full.
+  # The pre-budget plan: one point a chunk, merged to the owner's per-note cap
+  # (`cap_chunks/3` at `note_points_cap`; none with enforcement off).
   defp plan_unbudgeted(note, user, chunks, content_key, opts) do
     rows = indexed_rows(note)
 
@@ -504,7 +487,7 @@ defmodule Engram.Indexing do
       plan_within_budget(
         note,
         rows,
-        fit_note(chunks, note_cap(user), merged_rows?(rows)),
+        fit_note(chunks, note_points_cap(user), merged_rows?(rows)),
         content_key,
         Keyword.get(opts, :dense, true),
         opts
@@ -521,10 +504,7 @@ defmodule Engram.Indexing do
     capped =
       if forced,
         do: chunks,
-        else:
-          chunks
-          |> fit_note(cap, merged_rows?(rows))
-          |> within_pass_embed_budget(opts)
+        else: fit_note(chunks, cap, merged_rows?(rows))
 
     case forced || over_note_cap_tier(note, capped, cap) ||
            over_points_budget_tier(note, user, capped) do
@@ -560,43 +540,15 @@ defmodule Engram.Indexing do
   # Voyage's 3M TPM a pass is >= ~1.4 min even for CJK at a token a char.
   #
   # Only a note over ~12 MB of prose reaches it: a paid 30 MB note (1,024
-  # groups x 30 KB) or a self-host one. Prose past the budget is indexed
-  # keyword-only, in note order, so the dense part is the note's first 12
-  # MiB of prose and is the same on every pass: unchanged content reuses its
-  # points, nothing flaps, and no word leaves the keyword leg. Free cannot
-  # reach it (128 x 30 KB is ~3.8 MB). ponytail: a prefix, not a spread;
-  # split the embed across jobs (needs the per-batch vector cache, PR-12) to
-  # cover the rest densely.
+  # groups x 30 KB) or a self-host one. The budget binds on vector cache
+  # MISSES (`with_cache_lookup/3`): a pass embeds up to it, caches what it
+  # paid and snoozes, and the next pass finds those as hits. So every prose
+  # byte goes dense, over as many passes as it takes. Free cannot reach it
+  # (128 x 30 KB is ~3.8 MB).
   @max_pass_embed_bytes 12 * 1024 * 1024
 
   defp max_pass_embed_bytes,
     do: Application.get_env(:engram, :max_pass_embed_bytes, @max_pass_embed_bytes)
-
-  # With the vector cache on the budget binds on cache MISSES instead
-  # (`with_cache_lookup/3`): a pass embeds up to the budget, caches it and
-  # snoozes, and the next pass finds those as hits. So every prose byte goes
-  # dense, over as many passes as it takes.
-  defp within_pass_embed_budget(chunks, opts) do
-    if Keyword.has_key?(opts, :vector_cache),
-      do: chunks,
-      else: within_pass_embed_budget(chunks)
-  end
-
-  defp within_pass_embed_budget(chunks) do
-    budget = max_pass_embed_bytes()
-
-    {chunks, _used} =
-      Enum.map_reduce(chunks, 0, fn chunk, used ->
-        if Markdown.dense_kind?(chunk.kind) do
-          used = used + IO.iodata_length(chunk.embed_text)
-          {if(used > budget, do: Map.put(chunk, :sparse_only, true), else: chunk), used}
-        else
-          {chunk, used}
-        end
-      end)
-
-    chunks
-  end
 
   # Decided BEFORE any token reservation, so a floored pass reserves nothing.
   # A full plan writes one point per chunk, reused or not.
@@ -1197,7 +1149,7 @@ defmodule Engram.Indexing do
          # other point still answers tag filters with the pre-edit tags. One
          # PATCH refreshes the lot — the values are identical across a note's
          # points, which is why `chunk_index` no longer lives in the payload.
-         :ok <- refresh_payload(prepared, refresh_ids, note_payload) do
+         :ok <- refresh_payload(refresh_ids, note_payload) do
       # Wholesale rewrite rather than a row-level diff: the rows are local and
       # cheap, and replacing them all sidesteps every ordering problem with
       # `chunks_note_id_position_index` when positions shift. One transaction
@@ -1240,12 +1192,10 @@ defmodule Engram.Indexing do
         end)
 
       # Lost to a newer pass after writing points it shares with it: PATCHed
-      # reused points, or (v5 layout, deterministic ids) upserted ones. That
-      # pass may have stamped a payload our write just replaced, so the stamp
-      # no longer vouches for the points. NULL makes them refreshed. (v3
-      # upserts are fresh random ids: strays for OrphanSweep, never shared.)
-      shared_write? =
-        refresh_ids != [] or (Map.get(prepared, :v5_layout?, false) and qdrant_points != [])
+      # reused points, or upserted ones (deterministic v5 ids). That pass may
+      # have stamped a payload our write just replaced, so the stamp no longer
+      # vouches for the points. NULL makes them refreshed.
+      shared_write? = refresh_ids != [] or qdrant_points != []
 
       if committed == {:error, :superseded} and shared_write?,
         do: unstamp_payload_hash(note)
@@ -2006,24 +1956,17 @@ defmodule Engram.Indexing do
   defp with_charge(plan, rows, opts) do
     texts = embed_texts(plan)
     cache = Keyword.get(opts, :vector_cache)
-    user_bytes = if cache && note_cap_enabled?(), do: changed_bytes_per_text(plan, rows)
+    user_bytes = if cache, do: changed_bytes_per_text(plan, rows)
     plan = with_cache_lookup(plan, texts, cache, user_bytes)
     sent = Map.get_lazy(plan, :embed_bytes, fn -> text_bytes(texts) end)
     total = UsageMeters.estimate_tokens(sent)
 
+    # Without the cache's `:charge_bytes`, changed members only (adversarial
+    # V3 rides with the merge).
     charged =
-      cond do
-        Map.has_key?(plan, :charge_bytes) ->
-          min(UsageMeters.estimate_tokens(plan.charge_bytes), total)
-
-        # Adversarial V3 rides with the merge, so the cap flag alone charges
-        # changed members only, as the budget does.
-        note_cap_enabled?() ->
-          min(changed_tokens(plan, rows), total)
-
-        true ->
-          total
-      end
+      if Map.has_key?(plan, :charge_bytes),
+        do: min(UsageMeters.estimate_tokens(plan.charge_bytes), total),
+        else: min(changed_tokens(plan, rows), total)
 
     {Map.put(plan, :charge, {charged, total - charged}), charged, total}
   end
@@ -2110,13 +2053,9 @@ defmodule Engram.Indexing do
   end
 
   # The tokens each sent text charges the user, in `embed_texts/1` order: its
-  # changed bytes with the per-note cap on (`note_cap_enabled?/0`), else all
-  # of it; a vector cache hit charges nothing.
+  # changed bytes; a vector cache hit charges nothing.
   defp text_charges(plan, rows) do
-    bytes =
-      if note_cap_enabled?(),
-        do: changed_bytes_per_text(plan, rows),
-        else: Enum.map(embed_texts(plan), &IO.iodata_length/1)
+    bytes = changed_bytes_per_text(plan, rows)
 
     hit? =
       case plan do
@@ -2408,10 +2347,9 @@ defmodule Engram.Indexing do
   # Vector cache (chunker v5 Task 12, `Engram.Indexing.VectorCache`)
   # ---------------------------------------------------------------------------
 
-  # Off: `opts` unchanged, and nothing below runs, so the pass is the
-  # pre-cache one byte for byte.
+  # A sparse-only pass (`dense: false`) embeds nothing: `opts` unchanged.
   defp with_vector_cache(user, note, dek, content_key, dims, opts) do
-    if VectorCache.enabled?() and Keyword.get(opts, :dense, true) do
+    if Keyword.get(opts, :dense, true) do
       cache = %{
         user_id: note.user_id,
         note_id: note.id,
@@ -2598,60 +2536,9 @@ defmodule Engram.Indexing do
   # fragment. Unpacking to a float list and letting Jason walk it was the heap
   # peak of indexing (~26 MB per 64-point batch): a list cell, a boxed float
   # and a formatted binary per element, all live until the request was sent.
-  #
-  # The encrypted payload fields are base64 (`Crypto.encrypt_qdrant_payload/4`),
-  # whose alphabet never needs a JSON escape, so they go out as fragments too:
-  # Jason's escape scan over them cost ~35-45 ms per 2,000 chunks (#1877).
-  # Byte-identical output; `test/engram/indexing/unpack_point_test.exs` pins it.
   @doc false
-  def unpack_point(%{vector: named} = point) do
-    point = %{point | vector: Map.new(named, fn {name, v} -> {name, vector_json(v)} end)}
-
-    case point do
-      %{payload: payload} -> %{point | payload: base64_fragments(payload)}
-      _ -> point
-    end
-  end
-
-  @base64_payload_keys [
-    :text,
-    :text_nonce,
-    :title,
-    :title_nonce,
-    :heading_path,
-    :heading_path_nonce
-  ]
-
-  # A value holding a byte JSON must escape is not the base64
-  # `encrypt_qdrant_payload/4` promises, so it goes through Jason rather than
-  # being spliced raw into the request body. The `:binary.match` scan keeps
-  # about 40% of the fragment gain (2,000 chunks, min of 7, three runs:
-  # Jason 33-34 ms, guarded 25-27 ms, unguarded 10-11 ms); the rest is the
-  # price of not trusting the caller. Compiling the pattern costs ~70 us,
-  # more than a scan, so it is compiled once per node.
-  defp base64_fragments(payload) do
-    escape = json_escape_pattern()
-
-    Enum.reduce(@base64_payload_keys, payload, fn key, acc ->
-      case acc do
-        %{^key => b64} when is_binary(b64) ->
-          if :binary.match(b64, escape) == :nomatch,
-            do: %{acc | key => Jason.Fragment.new([?", b64, ?"])},
-            else: acc
-
-        _ ->
-          acc
-      end
-    end)
-  end
-
-  defp json_escape_pattern do
-    with nil <- :persistent_term.get(__MODULE__.JsonEscape, nil) do
-      pattern = :binary.compile_pattern([~s("), "\\" | Enum.map(0..31, &<<&1>>)])
-      :persistent_term.put(__MODULE__.JsonEscape, pattern)
-      pattern
-    end
-  end
+  def unpack_point(%{vector: named} = point),
+    do: %{point | vector: Map.new(named, fn {name, v} -> {name, vector_json(v)} end)}
 
   # Formatted in Rust (`Engram.Native.dense_json/1`): no per-float term at all,
   # and each value printed as its shortest f32 decimal, half the text of the
@@ -3009,22 +2896,18 @@ defmodule Engram.Indexing do
 
   @doc """
   Keyword encoder options for a chunk (plan Task 14.1). Floor and capped
-  groups encode length-capped (`cap_doc_len`). When the v5 layout is
-  written (`:write_v5_layout`), a chunk joining more than one section
-  (`section_count > 1`: a v5 min512 chunk or a capped group) scores with
-  BM25 `b` = `ServiceConfig.get(:bm25_b_merged, 0.25)`; everything else, and
-  every v3 write, keeps the encoder's 0.75, byte-identical to before.
+  groups encode length-capped (`cap_doc_len`). A chunk joining more than one
+  section (`section_count > 1`: a v5 min512 chunk or a capped group) scores
+  with BM25 `b` = `ServiceConfig.get(:bm25_b_merged, 0.25)`; everything else
+  keeps the encoder's 0.75.
   """
   @spec sparse_opts(map()) :: keyword()
   def sparse_opts(chunk) do
     cap = if capped_length?(chunk), do: [cap_doc_len: true], else: []
 
-    # The same flag as `Qdrant.write_v5_layout?/0` (PR-15b); switch to that
-    # accessor when both are on one branch.
-    if Engram.ServiceConfig.get(:write_v5_layout, false) == true and
-         Map.get(chunk, :section_count, 1) > 1,
-       do: cap ++ [b: Engram.ServiceConfig.get(:bm25_b_merged, 0.25)],
-       else: cap
+    if Map.get(chunk, :section_count, 1) > 1,
+      do: cap ++ [b: Engram.ServiceConfig.get(:bm25_b_merged, 0.25)],
+      else: cap
   end
 
   @doc """
@@ -3096,7 +2979,7 @@ defmodule Engram.Indexing do
     rows = indexed_rows(note)
     merged? = merged_rows?(rows)
 
-    capped = fit_note(chunks, note_cap(user), merged?)
+    capped = fit_note(chunks, note_points_cap(user), merged?)
 
     # As `prepare_index/4` plans it: dense unless the opts say otherwise.
     dense? = Keyword.get(version_rebuild_opts(note), :dense, true)
@@ -3478,10 +3361,8 @@ defmodule Engram.Indexing do
 
   defp vector_model({:embed, _chunk}), do: pass_model()
 
-  # Encrypt-first: build payloads + encrypt in memory BEFORE any mutation.
-  # If any chunk's encryption fails, no Postgres row or Qdrant point is touched
-  # and prior state survives for the next Oban retry.
-  defp build_prepared(note, user, plan, vectors, dek, avgdl) do
+  # Builds every row, point and payload in memory BEFORE any mutation.
+  defp build_prepared(note, plan, vectors, dek, avgdl) do
     filter_key = Crypto.dek_filter_key_from_bytes(dek)
 
     now = DateTime.utc_now(:second)
@@ -3519,28 +3400,15 @@ defmodule Engram.Indexing do
 
     # ONE extraction of the v5 frontmatter filter fields, two sinks: the
     # `note_attrs` rows (the source of truth, written in the chunk-row
-    # transaction by `stamp_flat_fields/1`) and, once `:write_v5_layout` is
-    # on, the v5 Qdrant payload. User-added keys get their per-user
-    # dictionary ids first (allocated here, committed on their own: an id
-    # for a key whose pass then fails is harmless). Both behind flags that
-    # are off, so with them off a pass does exactly what main does: no
-    # extraction, no Postgres writes, the v3 payload.
-    # A v5 rebuild writes the v5 layout whatever the flags say: the pass IS
-    # the move to it, and it re-extracts the flat fields from the current
-    # frontmatter for every note it touches (Task 16.3).
+    # transaction by `stamp_flat_fields/1`) and the v5 Qdrant payload.
+    # User-added keys get their per-user dictionary ids first (allocated
+    # here, committed on their own: an id for a key whose pass then fails is
+    # harmless).
     rebuild? = Map.get(plan, :rebuild?, false)
-    v5_format? = rebuild? or Qdrant.v5_payload_format?()
-    v5? = rebuild? or write_v5_layout?()
-
-    flat =
-      if v5_format?,
-        do: note.content |> FlatFields.extract(filter_key) |> with_key_ids(note, dek)
-
-    note_payload = if v5?, do: PayloadV5.build(note, flat), else: note_payload(note)
-    ctx = {note, user, note_payload, now, v5?}
-
-    point_ids =
-      if v5?, do: v5_point_ids(note, plan), else: Enum.map(plan.entries, fn _ -> nil end)
+    flat = note.content |> FlatFields.extract(filter_key) |> with_key_ids(note, dek)
+    note_payload = PayloadV5.build(note, flat)
+    ctx = {note, note_payload, now}
+    point_ids = v5_point_ids(note, plan)
 
     # The whole note in one call so the encoder can share per-note work (the
     # token -> dim memo) across chunks. One sparse vector per :embed entry, in
@@ -3556,56 +3424,35 @@ defmodule Engram.Indexing do
     sparse =
       encode_sparse(for({:embed, chunk} <- plan.entries, do: chunk), filter_key, avgdl, language)
 
-    prepared =
-      Enum.reduce_while(
-        Enum.zip(plan.entries, point_ids),
-        {:ok, [], Enum.zip(entry_vectors(plan, vectors), sparse)},
-        fn
-          {entry, point_id}, {:ok, acc, pending} ->
-            case build_entry(entry, {ctx, point_id}, pending) do
-              {:ok, built, rest} -> {:cont, {:ok, [built | acc], rest}}
-              {:error, _reason} = err -> {:halt, err}
-            end
-        end
+    {built, _spent} =
+      plan.entries
+      |> Enum.zip(point_ids)
+      |> Enum.map_reduce(
+        Enum.zip(entry_vectors(plan, vectors), sparse),
+        fn {entry, point_id}, pending -> build_entry(entry, {ctx, point_id}, pending) end
       )
 
-    text? = v5? or chunk_text_write?()
+    mode = if display_ct?(note), do: :sealed, else: :sum
+    qdrant_points = for(%{point: p} <- built, p != nil, do: p)
 
-    mode =
-      cond do
-        not text? -> :none
-        display_ct?(note) -> :sealed
-        true -> :sum
-      end
-
-    with {:ok, reversed, _spent} <- prepared do
-      built = Enum.reverse(reversed)
-      qdrant_points = for(%{point: p} <- built, p != nil, do: p)
-
-      {:ok,
-       %{
-         note: note,
-         chunk_rows: Enum.map(built, & &1.row),
-         point_rows: point_rows(plan.entries, built, dek, mode),
-         qdrant_points: qdrant_points,
-         point_kinds: for(%{kind: k, dense?: d} <- built, do: {k, d}),
-         # Straight from the plan, not re-derived from `built`. Two independent
-         # derivations of the same list is how "reused" and "not deleted" drift
-         # apart, and the drift is silent: an id in one list but not the other
-         # is either a stray or a row pointing at nothing.
-         reused_point_ids: plan.reused_point_ids,
-         stale_point_ids: unrewritten(plan.stale_point_ids, qdrant_points, v5?),
-         note_payload: note_payload,
-         payload_hash: payload_hash(note_payload),
-         v5_layout?: v5?,
-         rebuild?: rebuild?
-       }
-       |> then(fn p ->
-         if v5_format?,
-           do: Map.put(p, :attr_rows, FlatFields.attr_rows(flat, note)),
-           else: p
-       end)}
-    end
+    {:ok,
+     %{
+       note: note,
+       chunk_rows: Enum.map(built, & &1.row),
+       point_rows: point_rows(plan.entries, built, dek, mode),
+       qdrant_points: qdrant_points,
+       point_kinds: for(%{kind: k, dense?: d} <- built, do: {k, d}),
+       # Straight from the plan, not re-derived from `built`. Two independent
+       # derivations of the same list is how "reused" and "not deleted" drift
+       # apart, and the drift is silent: an id in one list but not the other
+       # is either a stray or a row pointing at nothing.
+       reused_point_ids: plan.reused_point_ids,
+       stale_point_ids: unrewritten(plan.stale_point_ids, qdrant_points),
+       note_payload: note_payload,
+       payload_hash: payload_hash(note_payload),
+       rebuild?: rebuild?,
+       attr_rows: FlatFields.attr_rows(flat, note)
+     }}
   end
 
   # Past the per-user cap a new key is skipped (left out of the payload and
@@ -3617,17 +3464,15 @@ defmodule Engram.Indexing do
     FlatFields.put_key_ids(flat, ids)
   end
 
-  # Task 11.2, hybrid (notes-chunks-hyperopt 2.4/2.4b): with text on, every
-  # point also gets a `chunk_points` row (written in the same transaction as
-  # its `chunks` row, `commit_index/2`) carrying `slice_sum`, the checksum of
-  # its chunk's display text; search derives the text from the note content
+  # Task 11.2, hybrid (notes-chunks-hyperopt 2.4/2.4b): every point also
+  # gets a `chunk_points` row (written in the same transaction as its
+  # `chunks` row, `commit_index/2`) carrying `slice_sum`, the checksum of its
+  # chunk's display text; search derives the text from the note content
   # (`display_chunks/3`). Only a note at or over `display_ct_threshold/0` also
   # stores the text and heading, sealed as ONE envelope bound to the point
   # id, so a hit there never decrypts and re-chunks the whole note. A reused
   # point is sealed afresh from the chunk in hand: rows are rewritten
-  # wholesale anyway. nil: text off, `chunk_points` untouched.
-  defp point_rows(_entries, _built, _dek, :none), do: nil
-
+  # wholesale anyway.
   defp point_rows(entries, built, dek, mode) do
     ck = Crypto.dek_content_hash_key_from_bytes(dek)
 
@@ -3700,79 +3545,44 @@ defmodule Engram.Indexing do
     Map.new(chunks, &{&1.position, Map.take(&1, [:text, :heading_path])})
   end
 
-  # Off until the v5 rollout turns it on; the v5 layout writes text
-  # regardless, since its payload has none.
-  defp chunk_text_write?, do: Engram.ServiceConfig.get(:chunk_text_write, false)
-
   # A reused chunk costs nothing but a row: no embed, no tokenizer pass, no
   # encryption. Its `token_count` rides along from the row it replaces rather
   # than being recomputed from text that has not changed.
-  defp build_entry({:reuse, chunk, point_id, tokens}, {{note, _u, _p, now, _v5}, _id}, pending) do
-    {:ok, %{row: chunk_row(note, chunk, point_id, tokens, now), point: nil}, pending}
+  defp build_entry({:reuse, chunk, point_id, tokens}, {{note, _p, now}, _id}, pending) do
+    {%{row: chunk_row(note, chunk, point_id, tokens, now), point: nil}, pending}
   end
 
   # `doc_len` is the raw token count from the same tokenization pass as the
   # sparse vector, also persisted as `chunks.token_count`.
-  defp build_entry({:embed, chunk}, {ctx, v5_id}, [{vector, {sparse, doc_len}} | rest]) do
-    {note, user, note_payload, now, v5?} = ctx
-    point_id = v5_id || Ecto.UUID.generate()
-
-    # `chunk_index` used to live here. Nothing ever read it, and dropping it is
-    # what lets a reused point be refreshed for the whole note in ONE
-    # `set_payload` — with a per-chunk key in the payload, every reused point
-    # would need its own call. See `commit_index/1`.
-    base_payload =
-      Map.merge(note_payload, %{
-        title: note.title,
-        heading_path: chunk.heading_path,
-        text: chunk.text
-      })
+  defp build_entry({:embed, chunk}, {ctx, point_id}, [{vector, {sparse, doc_len}} | rest]) do
+    {note, note_payload, now} = ctx
 
     # A v5 point carries filter fields and ids only: its text, title and
-    # heading live in Postgres (Task 11), so there is nothing to encrypt.
-    encrypted =
-      if v5?,
-        do: {:ok, note_payload},
-        else: Crypto.encrypt_qdrant_payload(base_payload, user, collection(), point_id)
+    # heading live in Postgres (Task 11), so there is nothing to encrypt. No
+    # per-chunk key either, so a reused point is refreshed for the whole note
+    # in ONE payload write (`commit_index/1`).
+    #
+    # Omit the dense named vector entirely when there is none — Qdrant
+    # rejects a null vector, and a partial named-vector upsert is the
+    # supported way to store sparse-only points.
+    named_vectors =
+      case vector do
+        nil -> %{"keyword" => sparse}
+        v -> %{"dense" => v, "keyword" => sparse}
+      end
 
-    case encrypted do
-      {:ok, payload} ->
-        # Omit the dense named vector entirely when there is none — Qdrant
-        # rejects a null vector, and a partial named-vector upsert is the
-        # supported way to store sparse-only points.
-        named_vectors =
-          case vector do
-            nil -> %{"keyword" => sparse}
-            v -> %{"dense" => v, "keyword" => sparse}
-          end
+    # A floor or merged row's length stays out of `avgdl` (see
+    # `floor_plan/2`, `cap_chunks/3`).
+    token_count = if capped_length?(chunk), do: nil, else: doc_len
 
-        # A floor or merged row's length stays out of `avgdl` (see
-        # `floor_plan/2`, `cap_chunks/3`).
-        token_count = if capped_length?(chunk), do: nil, else: doc_len
+    built = %{
+      row: chunk_row(note, chunk, point_id, token_count, now),
+      point: %{id: point_id, vector: named_vectors, payload: note_payload},
+      kind: metric_kind(note.path, chunk.kind),
+      dense?: vector != nil
+    }
 
-        built = %{
-          row: chunk_row(note, chunk, point_id, token_count, now),
-          point: %{id: point_id, vector: named_vectors, payload: payload},
-          kind: metric_kind(note.path, chunk.kind),
-          dense?: vector != nil
-        }
-
-        {:ok, built, rest}
-
-      {:error, reason} = err ->
-        :telemetry.execute(
-          [:engram, :indexing, :encrypt_failed],
-          %{count: 1},
-          %{
-            user_id: note.user_id,
-            vault_id: note.vault_id,
-            note_id: note.id,
-            reason: Metadata.safe_reason(reason)
-          }
-        )
-
-        err
-    end
+    {built, rest}
   end
 
   # Canvas and base chunks are "data" to the chunker; the metric wants them
@@ -3921,23 +3731,15 @@ defmodule Engram.Indexing do
   end
 
   # v5 points are REPLACED, not merged: their payload omits absent and default
-  # keys, so a merge would keep a removed key (or an old folder id) forever.
-  defp refresh_payload(%{v5_layout?: true}, ids, payload),
-    do: Qdrant.overwrite_payload(collection(), ids, payload)
-
-  defp refresh_payload(_prepared, ids, payload),
-    do: Qdrant.set_payload(collection(), ids, payload)
-
-  # UUIDv5 ids and the text-free payload (Task 15.1/15.3), off until PR-17:
-  # until then every write keeps random ids and payload text.
-  defp write_v5_layout?, do: Qdrant.write_v5_layout?()
+  # keys, so a merge would keep a removed key (or an old folder id) forever. A
+  # reused v3/v4 point gets the v5 payload too (its text is in `chunk_points`
+  # from this pass on).
+  defp refresh_payload(ids, payload), do: Qdrant.overwrite_payload(collection(), ids, payload)
 
   # A deterministic id can equal a stale id of the previous pass (same
   # fingerprint and ordinal, not reused because the plan regrouped). The point
   # was just rewritten, so deleting it as stale would delete the new point.
-  defp unrewritten(stale, _points, false), do: stale
-
-  defp unrewritten(stale, points, true) do
+  defp unrewritten(stale, points) do
     written = MapSet.new(points, & &1.id)
     Enum.reject(stale, &MapSet.member?(written, &1))
   end

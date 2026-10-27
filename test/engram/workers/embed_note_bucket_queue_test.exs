@@ -6,6 +6,7 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
   use Oban.Testing, repo: Engram.Repo
 
   import Ecto.Query, only: [from: 2]
+  import Engram.IndexingTestHelpers
   import Mox
 
   alias Engram.Notes
@@ -426,6 +427,9 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
                  Engram.Indexing.flag_notes_for_rebuild([note.id], Repo)
                end)
 
+      # The rebuild must reach Voyage for "unmetered" to mean anything: no
+      # cached vectors to answer from.
+      clear_vector_cache()
       capture_embeds()
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 

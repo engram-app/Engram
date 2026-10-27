@@ -7,11 +7,12 @@ defmodule Engram.Workers.HealKeyAliases do
   For each content-current note stamped with another version (NULL: never
   read under a stamp), it compares what the frontmatter gives TODAY with
   what is indexed: the named-field `note_attrs` rows and the row's `type`
-  blind index and `description` (the rows only once the v5 payload format
-  writes them; before it the v5 rebuild re-extracts every note). Unchanged: the note is just stamped, its
-  index untouched. Changed: the row's OKF fields are rewritten from the
-  content and a `RebuildStaleNote` (`key_aliases: true`) re-indexes it,
-  paced by the maintenance token bucket: every unchanged vector is reused
+  blind index and `description`. A note indexed before the v5 layout has no
+  rows, so one with named fields reads as changed and is re-indexed into the
+  v5 layout. Unchanged: the note is just stamped, its index untouched.
+  Changed: the row's OKF fields are rewritten from the content and a
+  `RebuildStaleNote` (`key_aliases: true`) re-indexes it, paced by the
+  maintenance token bucket: every unchanged vector is reused
   (0 Voyage) and the payload refreshed; only a changed chunk-0 lead line
   (a `type`/`description` alias) re-embeds. That pass stamps the version.
 
@@ -35,7 +36,6 @@ defmodule Engram.Workers.HealKeyAliases do
   alias Engram.Notes
   alias Engram.Notes.{FlatFields, Frontmatter, FrontmatterKeys, KeyAliases, NoteAttr, OkfFields}
   alias Engram.Repo
-  alias Engram.Vector.Qdrant
   alias Engram.Workers.{EmbedNote, RebuildStaleNote}
 
   @batch 200
@@ -124,7 +124,7 @@ defmodule Engram.Workers.HealKeyAliases do
       |> Enum.sort()
 
     type_hmac != note.type_hmac or okf.description != note.description or
-      (Qdrant.v5_payload_format?() and expected != named_rows(note))
+      expected != named_rows(note)
   end
 
   # The named fields' rows (type and tags come from the note row).

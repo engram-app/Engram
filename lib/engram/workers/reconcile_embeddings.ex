@@ -248,7 +248,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # deletes can wait a day.
     _ =
       if daily_reverify?(scheduled_at) do
-        if Indexing.note_cap_enabled?(), do: :ok = sweep_over_note_cap(now)
+        :ok = sweep_over_note_cap(now)
         if Indexing.budget_enabled?(), do: {:ok, _} = budget_sweep(@budget_users, now)
       end
 
@@ -294,8 +294,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # Dense notes only: a sparse-only note reaches the dense backfill (term 2 of
   # the main sweep), whose pass caps it.
   #
-  # Runs with the cap (`Indexing.note_cap_enabled?/0`), not only the budget,
-  # but only over notes at THIS BUILD's versions: a note behind them is the
+  # Runs whether or not the budget is on, but only over notes at THIS BUILD's versions: a note behind them is the
   # v5 pass's, which re-embeds it capped anyway, and a recap first would pay
   # for it twice. Before and during the pass that leaves the recap nothing
   # but notes the pass already wrote; after it, downgrades and lowered

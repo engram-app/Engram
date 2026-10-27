@@ -1,8 +1,8 @@
 defmodule Engram.Vector.EnsureCollectionAtBootTest do
-  # The collection's payload indexes, for the boot's flag state, are ensured
-  # at boot rather than on the first index: a deploy that turns the v5 flags
-  # on (a dry run never indexes) must not leave search and the reconcile
-  # 400ing on the v5 keys under strict mode. A Qdrant outage at boot is
+  # The collection's payload indexes are ensured at boot rather than on the
+  # first index: an upgrade that adds an index (a dry run never indexes) must
+  # not leave search and the reconcile 400ing on the new keys under strict
+  # mode. A Qdrant outage at boot is
   # logged and retried, never a crashed app.
   use ExUnit.Case, async: false
 
@@ -13,12 +13,7 @@ defmodule Engram.Vector.EnsureCollectionAtBootTest do
   setup do
     bypass = Bypass.open()
     Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
-    Application.put_env(:engram, :v5_payload_format, true)
-
-    on_exit(fn ->
-      Application.delete_env(:engram, :qdrant_url)
-      Application.delete_env(:engram, :v5_payload_format)
-    end)
+    on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
 
     test_pid = self()
 

@@ -7,7 +7,6 @@ defmodule Engram.MCP.HandlersSimilarTest do
 
   alias Engram.MCP.Handlers
   alias Engram.Notes
-  alias Engram.Notes.Chunk
 
   setup :verify_on_exit!
 
@@ -39,26 +38,13 @@ defmodule Engram.MCP.HandlersSimilarTest do
         actor: "api"
       )
 
+    # Each point's chunk row holds its text, so a hit on it reads from Postgres.
     ids =
       for pos <- 0..(n - 1)//1 do
-        id = Ecto.UUID.generate()
-
-        {:ok, _} =
-          Engram.Repo.with_tenant(user.id, fn ->
-            %Chunk{}
-            |> Chunk.changeset(%{
-              note_id: note.id,
-              user_id: user.id,
-              vault_id: vault.id,
-              position: pos,
-              char_start: 0,
-              char_end: 4,
-              qdrant_point_id: id
-            })
-            |> Engram.Repo.insert!()
-          end)
-
-        id
+        Engram.Fixtures.insert_chunk!(user, note, Ecto.UUID.generate(),
+          position: pos,
+          text: "body"
+        )
       end
 
     if embedded? do
@@ -72,31 +58,8 @@ defmodule Engram.MCP.HandlersSimilarTest do
     ids
   end
 
-  defp hit(user, vault, point_id) do
-    {:ok, enc} =
-      Engram.Crypto.encrypt_qdrant_payload(
-        %{text: "body", title: "O", heading_path: "O"},
-        user,
-        "engram_notes",
-        point_id
-      )
-
-    %{
-      "id" => point_id,
-      "score" => 0.8,
-      "payload" => %{
-        "text" => enc.text,
-        "title" => enc.title,
-        "heading_path" => enc.heading_path,
-        "text_nonce" => enc.text_nonce,
-        "title_nonce" => enc.title_nonce,
-        "heading_path_nonce" => enc.heading_path_nonce,
-        "aad_version" => enc.aad_version,
-        "user_id" => to_string(user.id),
-        "vault_id" => to_string(vault.id)
-      }
-    }
-  end
+  # The ranked query returns ids and scores only (no payload).
+  defp hit(point_id), do: %{"id" => point_id, "score" => 0.8}
 
   defp respond(conn, points) do
     conn
@@ -154,7 +117,7 @@ defmodule Engram.MCP.HandlersSimilarTest do
                json["filter"]["must"]
              )
 
-      respond(conn, [hit(u, v, o_id)])
+      respond(conn, [hit(o_id)])
     end)
 
     assert {:ok, _text, %{"results" => [r]}} =
@@ -242,7 +205,7 @@ defmodule Engram.MCP.HandlersSimilarTest do
       positive = Jason.decode!(body)["query"]["recommend"]["positive"]
       assert Enum.sort(positive) == Enum.sort(prose)
       refute frontmatter in positive
-      respond(conn, [hit(u, v, o_id)])
+      respond(conn, [hit(o_id)])
     end)
 
     assert {:ok, _text, %{"results" => [r]}} =
@@ -356,7 +319,7 @@ defmodule Engram.MCP.HandlersSimilarTest do
       # A stray point still tagged to S.md's own chunks — as if a failed
       # delete_points_for_note left it behind and Qdrant's must_not exclusion
       # somehow missed it. The grouped result must still not include S.md.
-      respond(conn, [hit(u, v, stray_id), hit(u, v, o_id)])
+      respond(conn, [hit(stray_id), hit(o_id)])
     end)
 
     assert {:ok, _text, %{"results" => results}} =

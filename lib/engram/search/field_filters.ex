@@ -2,9 +2,9 @@ defmodule Engram.Search.FieldFilters do
   @moduledoc """
   Search filters on any frontmatter key (2026-10-20 rulings): each filter is
   `%{key, op, value}` with `op` one of `eq` (default), `in`, `gt`, `gte`,
-  `lt`, `lte`, `after`, `before`. Available only once the v5 payload format
-  AND the v5 layout are on (`available?/0`); before that every `fields`
-  request is an explicit error, never an empty result.
+  `lt`, `lte`, `after`, `before`. They match v5 points only (a v3/v4 point
+  carries no `fa`); an unknown key is an explicit error, never an empty
+  result.
 
   **Named fields** (and their aliases) route to the payload keys v5 already
   writes: `type`, `tags`, `status`, `author`, `reviewed_by`, `source` (alias
@@ -78,11 +78,6 @@ defmodule Engram.Search.FieldFilters do
           | {:reserved_field, String.t()}
           | {:invalid_field_filter, String.t()}
           | {:too_many_field_filters, pos_integer()}
-          | :field_filters_unavailable
-
-  @doc "Field filters work only once the v5 payload format and the v5 layout are both on."
-  @spec available?() :: boolean()
-  def available?, do: Qdrant.v5_payload_format?() and Qdrant.write_v5_layout?()
 
   @doc "Longest key echoed back in an error message."
   def max_echo, do: @max_echo

@@ -6,9 +6,6 @@ defmodule Engram.Vector.Qdrant do
   Config:
   - :qdrant_url — base URL (default http://localhost:6333)
   - QDRANT_API_KEY env var — API key for Qdrant Cloud (optional for local)
-  - :qdrant_url_v2 / :qdrant_api_key_v2 (QDRANT_URL_V2 / QDRANT_API_KEY_V2) —
-    the second cluster, used while `:qdrant_active_cluster` is `v2`
-    (`active_cluster/0`)
 
   Ops kill switches (env, read at boot in every environment; all default on;
   `false`/`0` to turn off, then restart):
@@ -37,7 +34,7 @@ defmodule Engram.Vector.Qdrant do
   @default_collection "obsidian_notes"
 
   # The payload indexes (legacy and v5, by server version) are
-  # `QdrantLayout.payload_indexes/3`.
+  # `QdrantLayout.payload_indexes/2`.
 
   # The largest request shapes any caller sends, so the Qdrant Cloud strict
   # limits (`QdrantLayout.desired_strict/1`) can sit above them with headroom.
@@ -60,86 +57,12 @@ defmodule Engram.Vector.Qdrant do
   @doc "Largest point batch one upsert or vector update sends."
   def max_write_batch, do: @max_write_batch
 
-  @cluster_pin {__MODULE__, :cluster}
-
   @doc """
-  The Qdrant base URL this node talks to (a cache key for per-server values):
-  the active cluster's. Every per-cluster cache (ensure-collection memo,
-  version, pressure, tenant IDF) is keyed by it, so a cluster flip starts
-  each one cold instead of serving the other cluster's answer.
+  The Qdrant base URL this node talks to (`:qdrant_url`), also the cache key
+  for per-server values (ensure-collection memo, version, pressure, tenant
+  IDF).
   """
-  def base_url, do: elem(endpoint(), 0)
-
-  @doc """
-  `old` (QDRANT_URL / QDRANT_API_KEY, the default) or `v2` (QDRANT_URL_V2 /
-  QDRANT_API_KEY_V2): the runtime override `:qdrant_active_cluster`, unless
-  this process pinned one with `with_cluster/2`. Resolved per call, so a flip
-  reaches every node within the override cache TTL.
-  """
-  @spec active_cluster() :: String.t()
-  def active_cluster,
-    do: Process.get(@cluster_pin) || ServiceConfig.get(:qdrant_active_cluster, "old")
-
-  @doc """
-  Runs `fun` with every Qdrant call in this process sent to `cluster`
-  (`"old"` or `"v2"`), whatever the active cluster is. For the cross-cluster
-  diff and copy (`Engram.Vector.ClusterDiff`). Raises when `"v2"` has no URL,
-  so a diff can never quietly compare a cluster with itself.
-  """
-  def with_cluster(cluster, fun) when cluster in ["old", "v2"] and is_function(fun, 0) do
-    if cluster == "v2" and ServiceConfig.get(:qdrant_url_v2) in [nil, ""],
-      do: raise(ArgumentError, "QDRANT_URL_V2 is not configured")
-
-    previous = Process.put(@cluster_pin, cluster)
-
-    try do
-      fun.()
-    after
-      if previous, do: Process.put(@cluster_pin, previous), else: Process.delete(@cluster_pin)
-    end
-  end
-
-  # {url, api_key} of the active cluster. `v2` without a URL reads `old`:
-  # `ServiceConfig.override/3` refuses that flip while any connected node
-  # lacks the URL, so it takes a task booted later without it (TF drift on
-  # one tier) to get here. That node then writes the old cluster while its
-  # peers write v2, so it logs an error (at most once a minute).
-  defp endpoint do
-    case active_cluster() do
-      "v2" ->
-        case ServiceConfig.get(:qdrant_url_v2) do
-          url when url not in [nil, ""] -> {url, ServiceConfig.get(:qdrant_api_key_v2)}
-          _ -> v2_unconfigured()
-        end
-
-      _ ->
-        old_endpoint()
-    end
-  end
-
-  defp old_endpoint,
-    do: {ServiceConfig.get(:qdrant_url, @default_url), ServiceConfig.get(:qdrant_api_key)}
-
-  @v2_unconfigured_key {__MODULE__, :v2_unconfigured_logged_at}
-
-  # ponytail: persistent_term write at most once a minute, and only on a
-  # misconfigured node, so the global GC it triggers is noise.
-  defp v2_unconfigured do
-    now = System.monotonic_time(:second)
-    last = :persistent_term.get(@v2_unconfigured_key, nil)
-
-    if is_nil(last) or now - last >= 60 do
-      :persistent_term.put(@v2_unconfigured_key, now)
-
-      Logger.error(
-        "qdrant_active_cluster=v2 but QDRANT_URL_V2 is unset on this node: " <>
-          "writing the OLD cluster (split brain)",
-        Metadata.with_category(:error, :data)
-      )
-    end
-
-    old_endpoint()
-  end
+  def base_url, do: ServiceConfig.get(:qdrant_url, @default_url)
 
   defp collection, do: ServiceConfig.get(:qdrant_collection, @default_collection)
 
@@ -228,7 +151,7 @@ defmodule Engram.Vector.Qdrant do
   def server_timeout_s(:indexing), do: 25
 
   defp put_api_key(base) do
-    case elem(endpoint(), 1) do
+    case ServiceConfig.get(:qdrant_api_key) do
       nil -> base
       key -> Keyword.put(base, :headers, [{"api-key", key}])
     end
@@ -402,7 +325,7 @@ defmodule Engram.Vector.Qdrant do
   defp create_collection(col, dims, version) do
     body =
       dims
-      |> QdrantLayout.create_params(v5_payload_format?(), version)
+      |> QdrantLayout.create_params(version)
       |> then(fn b ->
         if binary_quantization_enabled?() do
           Map.put(b, "quantization_config", %{"binary" => %{"always_ram" => true}})
@@ -445,7 +368,7 @@ defmodule Engram.Vector.Qdrant do
   defp ensure_payload_indexes(col, indexed, version) do
     missing =
       version
-      |> QdrantLayout.payload_indexes(v5_payload_format?(), legacy_filter_fields?())
+      |> QdrantLayout.payload_indexes(legacy_filter_fields?())
       |> Enum.reject(fn {field, _} -> MapSet.member?(indexed, field) end)
 
     last = length(missing) - 1
@@ -682,11 +605,11 @@ defmodule Engram.Vector.Qdrant do
     |> tap(&log_reconcile_failure/1)
   end
 
-  # Task 18.1 flips `:qdrant_tenant_graph` once drop-legacy-fields leaves no
-  # legacy `user_id` point; until then the global graph stays (one user would
-  # otherwise be two disconnected subgraphs, legacy and v5).
+  # The per-tenant graph once no legacy `user_id` point is left
+  # (`LEGACY_FILTER_FIELDS=false`); until then the global graph stays (one
+  # user would otherwise be two disconnected subgraphs, legacy and v5).
   defp tenant_graph?(info, version) do
-    switch? = ServiceConfig.get(:qdrant_tenant_graph, false)
+    switch? = not legacy_filter_fields?()
     graph? = QdrantLayout.tenant_graph?(info, version, switch?)
 
     if switch? and not graph? and QdrantLayout.tenant_layout?(version),
@@ -1342,13 +1265,13 @@ defmodule Engram.Vector.Qdrant do
     col = col || collection()
 
     legacy =
-      if legacy_points?(),
+      if legacy_filter_fields?(),
         do: [{legacy_note_filter(user_id, vault_id, path_hmac), payload, []}],
         else: []
 
     v5 =
-      case v5_payload_format?() && hmac_id(path_hmac) do
-        v when v in [nil, false] ->
+      case hmac_id(path_hmac) do
+        nil ->
           []
 
         old_id ->
@@ -1655,7 +1578,7 @@ defmodule Engram.Vector.Qdrant do
       using: "dense",
       filter: build_tenant_filter(search_opts),
       limit: Keyword.get(search_opts, :limit, 5),
-      with_payload: result_payload_for(search_opts)
+      with_payload: false
     }
 
     case quantization_params(search_opts) do
@@ -1690,15 +1613,15 @@ defmodule Engram.Vector.Qdrant do
 
   # -- Dual-format filters (Task 15.4) -----------------------------------
   #
-  # During the v5 pass a vault holds v3/v4 points (long `*_hmac` keys, base64
-  # HMACs, dashed uuids) and v5 points (short `PayloadKeys` keys, 128-bit hex
-  # ids). Every filter condition goes through `match_filter/2` or
-  # `range_filter/2`. With `:v5_payload_format` on, they match EITHER format
-  # with a `should` while `:legacy_filter_fields` is on (the default), and
-  # only the v5 format once
-  # the pass has dropped the legacy fields (Task 18.1). A `should` nested in a
-  # `must` is still an AND with the other conditions, so tenant scoping is
-  # unchanged.
+  # A collection that predates the v5 layout holds v3/v4 points (long
+  # `*_hmac` keys, base64 HMACs, dashed uuids) next to v5 points (short
+  # `PayloadKeys` keys, 128-bit hex ids). Every filter condition goes through
+  # `match_filter/2` or `range_filter/2`: they match EITHER format with a
+  # `should` while `:legacy_filter_fields` is on (the default: a self-host
+  # collection keeps its v3/v4 points until each note is rewritten), and only
+  # the v5 format once no legacy point is left (prod, after the v5 pass). A
+  # `should` nested in a `must` is still an AND with the other conditions, so
+  # tenant scoping is unchanged.
 
   @type match_field :: :user | :vault | :path | :folder | :type | :tags
   @type key_condition :: %{key: String.t(), match: map()}
@@ -1721,51 +1644,18 @@ defmodule Engram.Vector.Qdrant do
   }
   @range_keys %{fm_timestamp: :fm_timestamp, fm_created: :fm_created}
 
-  # OFF until flipped in code, before any v5 write (PR-17 also flips
-  # `:write_v5_layout`; the two go together or v5 points are unfindable).
-  # While off, nothing about Qdrant changes: no v5 indexes, legacy-only
-  # filters. It gates the indexes because their disk footprint is unmeasured:
-  # 20 more payload indexes per collection SIGBUSed CI's 2 GB tmpfs Qdrant,
-  # and prod's disk is tight. Measure on dev 1.19.2, then flip the default.
   @doc """
-  Whether the v5 payload format is on (see the comment above). Writing the v5
-  layout IMPLIES it: a v5 point only carries short keys, so writing one with
-  legacy-only filters would make it unfindable. One accessor, so the two
-  flags cannot disagree and no operator has to set both.
+  Whether filters still match the legacy (v3/v4) keys
+  (`LEGACY_FILTER_FIELDS`, default on): the collection may hold legacy-format
+  points. Only these points carry ciphertext; a v5 payload has none
+  (`Engram.Indexing.PayloadV5`).
   """
-  @spec v5_payload_format?() :: boolean()
-  def v5_payload_format?,
-    do: ServiceConfig.get(:v5_payload_format, false) == true or write_v5_layout?()
-
-  @doc "Whether new points are written in the v5 layout (UUIDv5 ids, v5 payload)."
-  @spec write_v5_layout?() :: boolean()
-  def write_v5_layout?, do: ServiceConfig.get(:write_v5_layout, false) == true
-
-  @doc """
-  Whether search reads chunk text from Postgres. Writing the v5 layout IMPLIES
-  it (same pattern as `v5_payload_format?/0`): v5 points store no text in
-  Qdrant, so with it off their hits would be dropped and edited notes would
-  vanish from search. `CHUNK_TEXT_READ=false` cannot override that.
-  """
-  @spec chunk_text_read?() :: boolean()
-  def chunk_text_read?,
-    do: ServiceConfig.get(:chunk_text_read, false) == true or write_v5_layout?()
-
-  @doc "Whether filters still match the legacy (v3/v4) keys (`LEGACY_FILTER_FIELDS`)."
   @spec legacy_filter_fields?() :: boolean()
   def legacy_filter_fields?, do: ServiceConfig.get(:legacy_filter_fields, true)
 
   @doc """
-  Whether legacy-format points can exist and be filtered: legacy filters on,
-  or the v5 format off (every point is legacy then). Only these points carry
-  ciphertext; a v5 payload has none (`Engram.Indexing.PayloadV5`).
-  """
-  @spec legacy_points?() :: boolean()
-  def legacy_points?, do: legacy_filter_fields?() or not v5_payload_format?()
-
-  @doc """
   The legacy-key condition alone, for a caller that must touch only
-  legacy-format points (the DEK sweep). Use only while `legacy_points?/0`:
+  legacy-format points (the DEK sweep). Use only while `legacy_filter_fields?/0`:
   the v3 cluster has no index on these keys, and strict mode 400s.
   """
   @spec legacy_match_filter(match_field(), term()) :: key_condition()
@@ -1778,7 +1668,7 @@ defmodule Engram.Vector.Qdrant do
   `:path`/`:folder`/`:type`/`:tags` take the base64 HMACs the legacy filters
   use.
 
-  With the v5 format on and legacy filters off it never emits a legacy key
+  With legacy filters off it never emits a legacy key
   (the v3 cluster has no index for one). A value with no v5 form there (an
   empty list, a malformed HMAC) matches nothing on the v5 key: fail closed.
   """
@@ -1787,8 +1677,7 @@ defmodule Engram.Vector.Qdrant do
     legacy = legacy_match_filter(field, value)
     v5_key = PayloadKeys.short(Map.fetch!(@v5_keys, field))
 
-    case v5_payload_format?() && v5_value(field, value) do
-      false -> legacy
+    case v5_value(field, value) do
       nil -> if legacy_filter_fields?(), do: legacy, else: %{key: v5_key, match: %{any: []}}
       v -> v5_or_both(legacy, %{key: v5_key, match: match(v)})
     end
@@ -1803,11 +1692,7 @@ defmodule Engram.Vector.Qdrant do
     legacy = %{key: Atom.to_string(field), range: range}
     v5 = %{key: PayloadKeys.short(Map.fetch!(@range_keys, field)), range: range}
 
-    cond do
-      not v5_payload_format?() -> legacy
-      legacy_filter_fields?() -> %{should: [legacy, v5]}
-      true -> v5
-    end
+    if legacy_filter_fields?(), do: %{should: [legacy, v5]}, else: v5
   end
 
   @doc """
@@ -1905,7 +1790,7 @@ defmodule Engram.Vector.Qdrant do
     # OAuth grant (and a subset-restricted API key) needs: without it the only
     # options were one query per vault or dropping the filter entirely, and
     # dropping it leaks every vault the credential was scoped away from (#729).
-    # `vault_id` is already a payload index (`QdrantLayout.payload_indexes/3`), so
+    # `vault_id` is already a payload index (`QdrantLayout.payload_indexes/2`), so
     # `any` needs no new index — same shape as tags_hmac below.
     must =
       case vault_id do
@@ -1958,7 +1843,7 @@ defmodule Engram.Vector.Qdrant do
       using: "keyword",
       filter: build_tenant_filter(search_opts),
       limit: Keyword.get(search_opts, :limit, 5),
-      with_payload: result_payload_for(search_opts)
+      with_payload: false
     }
     |> maybe_tenant_idf(search_opts)
     |> maybe_with_vector(search_opts)
@@ -1993,9 +1878,8 @@ defmodule Engram.Vector.Qdrant do
   them arbitrarily). `sparse` is `%{indices, values}`. Tenant filter is
   applied to BOTH legs (load-bearing: the sparse inverted index is global).
   Each leg fetches `:limit` ids and scores only; the fused `:limit` points
-  then come back in one retrieve with the payload fields results use and
-  the dense vector when `:with_vector` asks (MMR); with neither to fetch
-  (`:chunk_text_read` on, no MMR) there is no retrieve at all.
+  then come back in one retrieve with the dense vector when `:with_vector`
+  asks (MMR); without it there is no retrieve at all.
   The legs carrying payload and vectors returned up to 2x the bytes for
   points fusion drops.
   """
@@ -2021,49 +1905,28 @@ defmodule Engram.Vector.Qdrant do
     end)
   end
 
-  # The payload keys `search_results/1` reads for a hit's text and display
-  # fields (Task 15.7). `u` only marks a v5 point (its AAD is implied bound),
-  # so it is asked for only with the v5 format on.
-  @text_payload ~w(text title heading_path source_path tags text_nonce
-                   title_nonce heading_path_nonce aad_version)
+  # The payload keys `search_results/1` reads for a v3/v4 hit's text and
+  # display fields (Task 15.7), plus `u`, which only marks a v5 point (its AAD
+  # is implied bound).
+  @fallback_payload ~w(text title heading_path source_path tags text_nonce
+                       title_nonce heading_path_nonce aad_version u)
 
   @doc """
-  THE payload include list of every search path (Task 15.8), by where the
-  hits' text is read from:
-
-    * `:payload` (`:chunk_text_read` off): the text keys and `vault_id`.
-    * `:postgres` (`:chunk_text_read` on): nothing. The chunk row holds the
-      text, heading and vault, and the note row the display fields.
-    * `:fallback`: the text keys, for the hits whose chunk row has no text
-      (rows written before the text columns); the row gives the vault.
-
-  Never `true`.
+  The payload include list of search's text fallback: the text keys, for the
+  hits whose chunk row has no text (v3/v4 points, rows written before the
+  text columns); the row gives the vault. Every ranked query asks for no
+  payload: the chunk row holds the text, heading and vault, and the note row
+  the display fields.
   """
-  @spec result_payload(:payload | :postgres | :fallback) :: [String.t()] | false
-  def result_payload(:payload), do: ["vault_id" | result_payload(:fallback)]
-  def result_payload(:postgres), do: false
-
-  def result_payload(:fallback),
-    do: if(v5_payload_format?(), do: @text_payload ++ ["u"], else: @text_payload)
-
-  # `:chunk_text_read` comes from the caller's search opts, read ONCE per
-  # request by `Engram.Search`, so the keys asked for here and how search
-  # reads the hits never disagree mid-flip.
-  defp result_payload_for(search_opts),
-    do:
-      result_payload(
-        if Keyword.get(search_opts, :chunk_text_read, false), do: :postgres, else: :payload
-      )
+  @spec fallback_payload() :: [String.t()]
+  def fallback_payload, do: @fallback_payload
 
   # With nothing to fetch, the fused ids are the result: a point deleted
   # since the legs has no chunk row either, and search drops it there.
   defp fused_points(col, ids, search_opts) do
-    keys = result_payload_for(search_opts)
-    vector? = Keyword.get(search_opts, :with_vector, false)
-
-    if keys == false and not vector?,
-      do: {:ok, Enum.map(ids, &%{qdrant_id: &1})},
-      else: do_retrieve(col, ids, with_payload: keys, with_vector: vector?)
+    if Keyword.get(search_opts, :with_vector, false),
+      do: do_retrieve(col, ids, with_vector: true),
+      else: {:ok, Enum.map(ids, &%{qdrant_id: &1})}
   end
 
   @doc """
@@ -2160,7 +2023,7 @@ defmodule Engram.Vector.Qdrant do
       using: "dense",
       filter: Map.put(build_tenant_filter(search_opts), :must_not, has_ids(point_ids)),
       limit: Keyword.get(search_opts, :limit, 5),
-      with_payload: result_payload_for(search_opts)
+      with_payload: false
     }
     |> then(fn b ->
       case quantization_params(search_opts) do

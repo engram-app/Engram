@@ -83,7 +83,6 @@ defmodule Engram.Crypto.UserDekRotationTest do
     setup %{user: user} do
       bypass = Bypass.open()
       Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
-      Engram.ServiceConfig.put_override(:v5_payload_format, true)
       # Recorded in ETS rather than sent as messages: the assertion reads
       # every scroll the rotation made.
       filters = :ets.new(:scroll_filters, [:bag, :public])
@@ -1158,6 +1157,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
       {ids, 0} = FrontmatterKeys.resolve(user.id, dek, flat.names)
       flat = FlatFields.put_key_ids(flat, ids)
       Repo.insert_all(NoteAttr, FlatFields.attr_rows(flat, note), skip_tenant_check: true)
+      old_rows = attr_view(note)
 
       assert :ok = UserDekRotation.rotate_user(user.id)
 
@@ -1177,13 +1177,33 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert mood.key_hmac == FilterId.key_hmac(new_fk, "mood")
       assert FrontmatterKeys.name(mood, new_dek) == {:ok, "Mood"}
 
-      # note_attrs held old-key HMACs; with the v5 format off nothing rebuilds
-      # them, so they are dropped.
-      assert Repo.all(from(a in NoteAttr, where: a.note_id == ^note.id),
-               skip_tenant_check: true
-             ) == []
+      # note_attrs held old-key HMACs: rebuilt from the frontmatter under the
+      # new key, on the same key ids.
+      new_flat = FlatFields.extract(content, new_fk)
+      id_by_name = Map.new(flat.names, fn {hmac, name} -> {name, ids[hmac]} end)
+      new_ids = Map.new(new_flat.names, fn {hmac, name} -> {hmac, id_by_name[name]} end)
+      raw = Repo.get!(Engram.Notes.Note, note.id, skip_tenant_check: true)
+
+      want =
+        new_flat
+        |> FlatFields.put_key_ids(new_ids)
+        |> FlatFields.attr_rows(raw)
+        |> Enum.map(&attr_tuple/1)
+        |> Enum.sort()
+
+      assert attr_view(note) == want
+      refute want == old_rows
     end
   end
+
+  defp attr_view(note) do
+    Repo.all(from(a in NoteAttr, where: a.note_id == ^note.id), skip_tenant_check: true)
+    |> Enum.map(&attr_tuple/1)
+    |> Enum.sort()
+  end
+
+  # A number reads back from Postgres as a float.
+  defp attr_tuple(a), do: {a.key_id, a.ord, a.h, a.n && a.n / 1, a.d}
 
   # Every filter key derives from the DEK, so a rotation must rewrite the
   # HMACs Qdrant filters on, or a type/tag/folder filter built with the new
@@ -1286,8 +1306,6 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
     test "a v5 point is rebuilt under the new key and note_attrs rewritten from the frontmatter",
          %{user: user, note: note, point: point} do
-      Engram.ServiceConfig.put_override(:v5_payload_format, true)
-
       capture_payload_writes(self(), [%{"id" => point, "payload" => %{"u" => "x", "y" => "b2xk"}}])
 
       assert :ok = UserDekRotation.rotate_user(user.id)

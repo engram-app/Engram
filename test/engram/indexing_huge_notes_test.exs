@@ -175,7 +175,6 @@ defmodule Engram.IndexingHugeNotesTest do
   @tag size: @cap_mb, shape: :tiny_sections, headings: true, tier: :selfhost
   @tag timeout: (@seconds_per_mb * @cap_mb + 60) * 1_000
   test "#{@cap_mb} MB tiny_sections selfhost with chunk text in postgres", ctx do
-    ServiceConfig.put_override(:chunk_text_write, true)
     run_case(ctx)
 
     rows = Repo.all(from(c in Chunk, where: c.user_id == ^ctx.user.id), skip_tenant_check: true)
@@ -226,14 +225,13 @@ defmodule Engram.IndexingHugeNotesTest do
 
     test "3 MB merged: the last sentinel is found, its snippet shows it", ctx do
       {hit, word} = index_and_search(ctx, :paragraph, [])
-      assert {:ok, [out]} = decrypt(ctx, hit)
-      assert Search.snippet(out.text, word) =~ word
+      assert %{text: text} = display(ctx, hit)
+      assert Search.snippet(text, word) =~ word
     end
 
     test "3 MB CJK floored: the last sentinel is found on its floor point", ctx do
       {hit, _word} = index_and_search(ctx, :cjk_emoji, index_tier: "floor")
-      assert {:ok, [out]} = decrypt(ctx, hit)
-      assert out.text == ""
+      assert %{text: ""} = display(ctx, hit)
     end
   end
 
@@ -267,8 +265,12 @@ defmodule Engram.IndexingHugeNotesTest do
       else: Process.sleep(100) && await_hits(col, user, vault, sparse, tries - 1)
   end
 
-  defp decrypt(%{user: user, vault: vault, collection: col}, hit),
-    do: Crypto.decrypt_qdrant_candidates([hit], user, %{to_string(vault.id) => vault}, col)
+  # What search shows for a hit: the v5 payload holds no text, so it comes
+  # from Postgres (the sealed `display_ct` past 32 KB; "" for a floor point).
+  defp display(%{user: user}, hit) do
+    {:ok, hits} = Engram.Notes.search_hits_by_qdrant_points(user, [hit.qdrant_id])
+    hits[hit.qdrant_id]
+  end
 
   # Links are extracted from the same content by ExtractNoteLinks, not the
   # index pass: 3 MB is ~120k wikilinks and embeds.

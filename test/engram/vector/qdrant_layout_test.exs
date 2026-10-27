@@ -364,14 +364,13 @@ defmodule Engram.Vector.QdrantLayoutTest do
     test "a fresh collection is created with the storage params directly" do
       body = QdrantLayout.create_params(1024)
 
-      # float32 (no datatype) until the v5 payload format is on.
+      # float16 halves dense storage (Task 15.1).
       assert body["vectors"]["dense"] == %{
                "size" => 1024,
                "distance" => "Cosine",
-               "on_disk" => true
+               "on_disk" => true,
+               "datatype" => "float16"
              }
-
-      assert QdrantLayout.create_params(1024, true)["vectors"]["dense"]["datatype"] == "float16"
 
       assert body["sparse_vectors"]["keyword"] == %{
                "modifier" => "idf",
@@ -404,10 +403,8 @@ defmodule Engram.Vector.QdrantLayoutTest do
     test "below 1.19.2 the desired layout is today's" do
       for v <- [@v1171, @v1181, @v1182, Version.parse!("1.19.1"), nil] do
         assert Map.delete(QdrantLayout.desired(v), "strict_mode_config") == @today_storage
-        refute Map.has_key?(QdrantLayout.create_params(1024, true, v), "hnsw_config")
-
-        assert QdrantLayout.create_params(1024, true, v) ==
-                 QdrantLayout.create_params(1024, true)
+        refute Map.has_key?(QdrantLayout.create_params(1024, v), "hnsw_config")
+        assert QdrantLayout.create_params(1024, v) == QdrantLayout.create_params(1024)
       end
     end
 
@@ -423,7 +420,7 @@ defmodule Engram.Vector.QdrantLayoutTest do
                "deleted_threshold" => 0.2
              }
 
-      body = QdrantLayout.create_params(1024, true, @v1192)
+      body = QdrantLayout.create_params(1024, @v1192)
       refute Map.has_key?(body, "hnsw_config")
 
       assert body["optimizers_config"] ==
@@ -434,7 +431,7 @@ defmodule Engram.Vector.QdrantLayoutTest do
     # holds the whole sparse inverted index in RAM. 128,000 KB caps a segment
     # at ~64k dense f16 points, about 1 GB of merge heap.
     test "a new 1.19.2 collection caps segments at 128,000 KB" do
-      assert QdrantLayout.create_params(1024, true, @v1192)["optimizers_config"][
+      assert QdrantLayout.create_params(1024, @v1192)["optimizers_config"][
                "max_segment_size"
              ] == 128_000
     end
@@ -499,92 +496,77 @@ defmodule Engram.Vector.QdrantLayoutTest do
       refute Map.has_key?(diff, "hnsw_config")
     end
 
-    test "payload indexes below 1.19.2 are today's sets" do
+    test "payload indexes below 1.19.2: bare legacy schemas, then the v5 set" do
       legacy = ~w(user_id vault_id path_hmac type_hmac folder_hmac tags_hmac)
 
-      today =
-        Enum.map(legacy ++ ["note_id"], &{&1, "keyword"}) ++
-          [{"fm_timestamp", "integer"}, {"fm_created", "integer"}]
-
-      v5_today =
+      want =
         Enum.map(legacy, &{&1, "keyword"}) ++
           [{"fm_timestamp", "integer"}, {"fm_created", "integer"}] ++
           Engram.Vector.PayloadKeys.index_fields()
 
       for v <- [@v1182, Version.parse!("1.19.1"), nil] do
-        assert QdrantLayout.payload_indexes(v, false, true) == today
-        assert QdrantLayout.payload_indexes(v, true, true) == v5_today
+        assert QdrantLayout.payload_indexes(v, true) == want
       end
     end
 
     # A v3 (legacy-off) collection must not carry the legacy indexes: no
     # filter reads them there, and each costs disk on every point.
-    test "legacy filters off with v5 on: no legacy index; otherwise all of them" do
+    test "legacy filters off: no legacy index; on: all of them, never note_id" do
       legacy =
-        ~w(user_id vault_id path_hmac type_hmac folder_hmac tags_hmac fm_timestamp fm_created note_id)
+        ~w(user_id vault_id path_hmac type_hmac folder_hmac tags_hmac fm_timestamp fm_created)
 
       for v <- [@v1182, @v1192, nil] do
-        off = for {f, _} <- QdrantLayout.payload_indexes(v, true, false), do: f
-        assert off != []
+        off = for {f, _} <- QdrantLayout.payload_indexes(v, false), do: f
+        on = for {f, _} <- QdrantLayout.payload_indexes(v, true), do: f
+
         assert off -- legacy == off, "legacy index left in #{inspect(off)}"
         assert Enum.all?(Engram.Vector.PayloadKeys.index_fields(), fn {f, _} -> f in off end)
-
-        assert QdrantLayout.payload_indexes(v, true, true) ==
-                 QdrantLayout.payload_indexes(v, true, true)
-
-        # With the v5 format off every filter is legacy, so the flag is moot.
-        assert QdrantLayout.payload_indexes(v, false, false) ==
-                 QdrantLayout.payload_indexes(v, false, true)
+        assert on -- off == legacy
+        refute "note_id" in on
       end
     end
 
     test "1.19.2: one tenant field, every index on disk, no other graph, no note_id" do
-      for v5? <- [false, true] do
-        indexes = Map.new(QdrantLayout.payload_indexes(@v1192, v5?, true))
+      indexes = Map.new(QdrantLayout.payload_indexes(@v1192, true))
 
-        refute Map.has_key?(indexes, "note_id")
-        assert Enum.all?(indexes, fn {_f, s} -> s["on_disk"] == true end)
+      refute Map.has_key?(indexes, "note_id")
+      assert Enum.all?(indexes, fn {_f, s} -> s["on_disk"] == true end)
 
-        # Legacy points keep their per-user graph (enable_hnsw default) while
-        # the pass runs; everything else builds no extra edges.
-        assert indexes["user_id"] == %{"type" => "keyword", "on_disk" => true}
+      # Legacy points keep their per-user graph (enable_hnsw default) while
+      # the pass runs; everything else builds no extra edges.
+      assert indexes["user_id"] == %{"type" => "keyword", "on_disk" => true}
 
-        for f <- ~w(vault_id path_hmac type_hmac folder_hmac tags_hmac) do
-          assert indexes[f] == %{"type" => "keyword", "on_disk" => true, "enable_hnsw" => false}
-        end
+      for f <- ~w(vault_id path_hmac type_hmac folder_hmac tags_hmac) do
+        assert indexes[f] == %{"type" => "keyword", "on_disk" => true, "enable_hnsw" => false}
+      end
 
-        for f <- ~w(fm_timestamp fm_created) do
-          assert indexes[f] == %{
-                   "type" => "integer",
-                   "lookup" => false,
-                   "range" => true,
-                   "on_disk" => true,
-                   "enable_hnsw" => false
-                 }
-        end
+      for f <- ~w(fm_timestamp fm_created) do
+        assert indexes[f] == %{
+                 "type" => "integer",
+                 "lookup" => false,
+                 "range" => true,
+                 "on_disk" => true,
+                 "enable_hnsw" => false
+               }
+      end
 
-        if v5? do
-          assert indexes["u"] == %{"type" => "uuid", "is_tenant" => true, "on_disk" => true}
+      assert indexes["u"] == %{"type" => "uuid", "is_tenant" => true, "on_disk" => true}
 
-          for {f, s} <- indexes, f not in ["u", "user_id"] do
-            assert s["enable_hnsw"] == false, "#{f} must not build HNSW edges"
-          end
-        else
-          refute Map.has_key?(indexes, "u")
-        end
+      for {f, s} <- indexes, f not in ["u", "user_id"] do
+        assert s["enable_hnsw"] == false, "#{f} must not build HNSW edges"
       end
     end
 
     test "the 1.19.2 GET echoes every index schema as created" do
       schema = @tenant_info["payload_schema"]
 
-      for {field, want} <- QdrantLayout.payload_indexes(@v1192, true, true) do
+      for {field, want} <- QdrantLayout.payload_indexes(@v1192, true) do
         have = schema[field]["params"]
         assert have, "#{field} missing from the 1.19.2 fixture"
         assert Enum.all?(want, fn {k, v} -> have[k] == v end), "#{field}: #{inspect(have)}"
       end
 
-      assert map_size(schema) == length(QdrantLayout.payload_indexes(@v1192, true, true))
+      assert map_size(schema) == length(QdrantLayout.payload_indexes(@v1192, true))
     end
   end
 

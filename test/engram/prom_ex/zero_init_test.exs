@@ -100,12 +100,6 @@ defmodule Engram.PromEx.ZeroInitTest do
     assert "drifted" in outcomes and "rewritten" in outcomes
   end
 
-  # A 0/1 gauge; seeded so the alert sees 0, not absent, before the first
-  # override load on a fresh node.
-  test "covers the active cluster mismatch gauge" do
-    assert {"engram_prom_ex_qdrant_active_cluster_mismatch", %{}} in ZeroInit.prometheus_series()
-  end
-
   test "covers the reconcile cancel statuses the alert selects" do
     statuses =
       for {"engram_prom_ex_indexing_payload_reconcile_cancelled_total", %{http_status: s}} <-

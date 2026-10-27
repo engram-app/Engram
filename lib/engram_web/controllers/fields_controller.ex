@@ -21,6 +21,6 @@ defmodule EngramWeb.FieldsController do
 
   def index(conn, _params) do
     {:ok, fields} = FieldCatalog.list(conn.assigns.current_user, conn.assigns.current_vault)
-    json(conn, %{fields: fields, filterable: Engram.Search.FieldFilters.available?()})
+    json(conn, %{fields: fields, filterable: true})
   end
 end

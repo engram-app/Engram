@@ -6,6 +6,7 @@ defmodule Engram.IndexingNoteCapTest do
   use Oban.Testing, repo: Engram.Repo
 
   import Engram.IndexBudgetHelpers
+  import Engram.IndexingTestHelpers
   import Ecto.Query
   import Mox
 
@@ -388,53 +389,6 @@ defmodule Engram.IndexingNoteCapTest do
       assert Crypto.dek_content_hash_key(user) != Crypto.dek_content_hash_key(other)
       assert [same, same] = bounds
       assert length(same) < 500
-    end
-  end
-
-  # Chunker v5 Task 9.2: one pass sends Voyage at most `max_pass_embed_bytes`
-  # (12 MiB in prod), so a huge note finishes inside EmbedNote's timeout.
-  # Lowered here so a small note crosses it.
-  describe "the per-pass embed budget" do
-    setup do
-      prev = Application.get_env(:engram, :max_pass_embed_bytes)
-      Application.put_env(:engram, :max_pass_embed_bytes, 2_000)
-
-      on_exit(fn ->
-        if is_nil(prev),
-          do: Application.delete_env(:engram, :max_pass_embed_bytes),
-          else: Application.put_env(:engram, :max_pass_embed_bytes, prev)
-      end)
-    end
-
-    test "prose past it is keyword-only; the first prose stays dense, and reuses", %{
-      user: user,
-      vault: vault
-    } do
-      note = insert_note(user, vault, sections(100))
-      stub_embedder()
-
-      # Every section is on the keyword leg, the dense part is a prefix.
-      {:ok, prepared} = Indexing.prepare_index(note, vault, user)
-      {:ok, key} = Crypto.dek_filter_key(user)
-      dim = QdrantSparse.dim(key, "section100")
-
-      assert Enum.any?(
-               prepared.qdrant_points,
-               &(dim in QdrantSparse.unpack(&1.vector["keyword"]).indices)
-             )
-
-      texts = embedded_texts()
-      assert texts != []
-      assert texts |> Enum.map(&byte_size/1) |> Enum.sum() <= 2_000
-      assert hd(texts) =~ "section1 body"
-      refute Enum.any?(texts, &(&1 =~ "section100 body"))
-
-      assert {:ok, 100, _, true} = Indexing.index_note_with_usage(note, vault, user)
-      assert embedded_texts() == texts
-
-      # Unchanged: every point reused, no embedder call.
-      assert {:ok, 100, 0, true} = Indexing.index_note_with_usage(note, vault, user)
-      assert embedded_texts() == []
     end
   end
 
@@ -1054,12 +1008,10 @@ defmodule Engram.IndexingNoteCapTest do
   describe "reconcile self-heal" do
     # Indexed uncapped (billing off), then the cap applies.
     defp index_uncapped(note) do
-      with_limits_enforced(false)
       stub_embedder()
-      assert :ok = embed(note)
+      without_limits(fn -> assert :ok = embed(note) end)
       assert length(rows_for(note)) == 500
       _ = embedded_texts()
-      Application.put_env(:engram, :limits_enforced, true)
     end
 
     test "a Free note of 500 live chunks is rebuilt to at most 128, unmetered", %{
@@ -1142,7 +1094,7 @@ defmodule Engram.IndexingNoteCapTest do
     test "billing disabled: never selected", %{user: user, vault: vault} do
       note = insert_note(user, vault, sections(500))
       index_uncapped(note)
-      Application.put_env(:engram, :limits_enforced, false)
+      with_limits_enforced(false)
 
       assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
       refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})

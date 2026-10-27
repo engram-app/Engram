@@ -12,8 +12,10 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
   healed after the flip (`ReconcileNotePayloads`, `RefreshKeywordVectors`).
 
   Qdrant is a small in-memory fake behind Bypass: it keeps each point's
-  payload and applies `set_payload`, so a search's filter can be evaluated
-  against what a point actually holds.
+  payload and applies `set_payload` and `overwrite_payload`, so a search's
+  filter can be evaluated against what a point actually holds. The writer
+  indexes v5 points; the v3 variants re-key them to the legacy layout
+  (`Engram.LegacyPoints`) that self-host collections still hold.
   """
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
@@ -27,6 +29,7 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
   alias Engram.Notes
   alias Engram.Notes.Chunk
   alias Engram.Search
+  alias Engram.Vector.PayloadKeys
   alias Engram.Workers.{ReconcileNotePayloads, RefreshKeywordVectors}
 
   setup :verify_on_exit!
@@ -101,35 +104,56 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
     %{user: user, vault: vault, note: note, store: store}
   end
 
-  test "a type/tag/folder search finds the note once the post-flip heal ran", ctx do
-    assert :ok = UserDekRotation.rotate_user(ctx.user.id)
-    user = reload_user(ctx.user)
+  for layout <- [:v5, :v3] do
+    @tag layout: layout
+    test "a type/tag/folder search finds the note once the post-flip heal ran (#{layout} points)",
+         ctx do
+      if ctx.layout == :v3, do: Engram.LegacyPoints.rekey!(ctx.note, ctx.user, ctx.store)
 
-    assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
-    assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      assert :ok = UserDekRotation.rotate_user(ctx.user.id)
+      user = reload_user(ctx.user)
 
-    for {opts, key} <- [
-          {[type: "Playbook"], "type_hmac"},
-          {[tags: ["ops"]], "tags_hmac"},
-          {[folder: "Ops"], "folder_hmac"}
-        ] do
-      assert {:ok, _} = Search.search(user, ctx.vault, "pager", [mode: :vector] ++ opts)
-      filter = last_query(ctx.store)["filter"]["must"]
-      assert Enum.any?(filter, &(&1["key"] == key)), "the search must filter on #{key}"
+      assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
 
-      ids = point_ids(ctx.note)
-      matched = for id <- ids, matches?(point(ctx.store, id), filter), do: id
+      for {opts, legacy_key, v5_field} <- [
+            {[type: "Playbook"], "type_hmac", :type_id},
+            {[tags: ["ops"]], "tags_hmac", :tags_id},
+            {[folder: "Ops"], "folder_hmac", :folder_id}
+          ] do
+        key = if ctx.layout == :v3, do: legacy_key, else: PayloadKeys.short(v5_field)
+        assert {:ok, _} = Search.search(user, ctx.vault, "pager", [mode: :vector] ++ opts)
+        filter = last_query(ctx.store)["filter"]["must"]
+        assert key in condition_keys(filter), "the search must filter on #{key}"
 
-      assert Enum.sort(matched) == Enum.sort(ids),
-             "#{key}: a #{inspect(opts)} search must still find every chunk of the note"
+        ids = point_ids(ctx.note)
+        matched = for id <- ids, matches?(point(ctx.store, id), filter), do: id
+
+        assert Enum.sort(matched) == Enum.sort(ids),
+               "#{key}: a #{inspect(opts)} search must still find every chunk of the note"
+      end
     end
   end
 
-  # The outage outlasts the post-flip retries, so the point text stays under
-  # the DEK the flip retired. The notes are queued for a rebuild as OUR
-  # maintenance (version-stale, fingerprints cleared): a Free user at the
-  # cap still gets dense vectors back, and their meter does not move.
-  test "a Qdrant outage during the rotation neither fails it nor strands the notes", ctx do
+  # The outage outlasts the post-flip retries, so the point keys (and, on v3
+  # points, the point text) stay under the DEK the flip retired. The notes
+  # are queued for a rebuild as OUR maintenance (version-stale, fingerprints
+  # cleared): a Free user at the cap still gets dense vectors back, and their
+  # meter does not move.
+  for layout <- [:v5, :v3] do
+    @tag layout: layout
+    test "a Qdrant outage during the rotation neither fails it nor strands the notes (#{layout} points)",
+         ctx do
+      legacy =
+        if ctx.layout == :v3,
+          do: Engram.LegacyPoints.rekey!(ctx.note, ctx.user, ctx.store) |> Map.values(),
+          else: []
+
+      outage_rebuild(ctx, legacy)
+    end
+  end
+
+  defp outage_rebuild(ctx, legacy_ids) do
     prev = Application.get_env(:engram, :limits_enforced)
     Application.put_env(:engram, :limits_enforced, true)
 
@@ -164,6 +188,9 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
     assert_enqueued(worker: Engram.Workers.EmbedNote, args: %{note_id: ctx.note.id})
 
     Agent.update(ctx.store, &%{&1 | fail: false})
+    # The vector cache (re-keyed by the rotation) would answer every text:
+    # empty, the rebuild must reach the embedder despite the cap.
+    Engram.IndexingTestHelpers.clear_vector_cache()
 
     assert :ok =
              perform_job(Engram.Workers.EmbedNote, %{
@@ -174,20 +201,15 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
     assert drain_embedded() != [], "the dense vectors are rebuilt, cap or not"
     assert Engram.UsageMeters.lifetime_embed_tokens(ctx.user.id) == used
 
-    {:ok, dek} = Crypto.get_dek(user)
+    # The rebuilt note is on fresh v5 points: no ciphertext in Qdrant under
+    # any DEK, and no row still names a v3 point under the retired one.
+    ids = point_ids(ctx.note)
+    assert ids != [] and MapSet.disjoint?(MapSet.new(ids), MapSet.new(legacy_ids))
 
-    for id <- point_ids(ctx.note) do
+    for id <- ids do
       p = point(ctx.store, id)
-      aad = Crypto.aad_for_qdrant(Engram.Vector.Qdrant.collection_name(), id, :text)
-
-      assert {:ok, _} =
-               Engram.Crypto.Envelope.decrypt(
-                 Base.decode64!(p["text"]),
-                 Base.decode64!(p["text_nonce"]),
-                 dek,
-                 aad
-               ),
-             "every point of the rebuilt note must decrypt under the new DEK"
+      assert Map.has_key?(p, PayloadKeys.short(:user_id)), "a v5 point"
+      refute Map.has_key?(p, "text"), "a v5 point carries no ciphertext"
     end
   end
 
@@ -281,17 +303,26 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
     body
   end
 
-  # Only the key/match conditions: the ones a filter HMAC answers.
-  defp matches?(payload, conditions) do
-    Enum.all?(conditions, fn
-      %{"key" => key, "match" => %{"value" => v}} ->
-        v in List.wrap(payload[key])
+  # The key/match conditions (the ones a filter HMAC or id answers), and the
+  # `should` that holds both formats' conditions while legacy filters are on.
+  defp matches?(payload, conditions), do: Enum.all?(conditions, &condition?(payload, &1))
 
-      %{"key" => key, "match" => %{"any" => vs}} ->
-        Enum.any?(vs, &(&1 in List.wrap(payload[key])))
+  defp condition?(payload, %{"should" => conditions}),
+    do: Enum.any?(conditions, &condition?(payload, &1))
 
-      _other ->
-        true
+  defp condition?(payload, %{"key" => key, "match" => %{"value" => v}}),
+    do: v in List.wrap(payload[key])
+
+  defp condition?(payload, %{"key" => key, "match" => %{"any" => vs}}),
+    do: Enum.any?(vs, &(&1 in List.wrap(payload[key])))
+
+  defp condition?(_payload, _other), do: true
+
+  defp condition_keys(conditions) do
+    Enum.flat_map(conditions, fn
+      %{"should" => nested} -> condition_keys(nested)
+      %{"key" => key} -> [key]
+      _other -> []
     end)
   end
 
@@ -344,6 +375,15 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
               end)
 
             %{s | points: points}
+          end)
+
+          %{"status" => "completed"}
+
+        {"PUT", "/collections/engram_notes/points/payload"} ->
+          ids = for %{"has_id" => ids} <- body["filter"]["should"], id <- ids, do: id
+
+          Agent.update(store, fn s ->
+            %{s | points: Enum.reduce(ids, s.points, &Map.put(&2, &1, body["payload"]))}
           end)
 
           %{"status" => "completed"}

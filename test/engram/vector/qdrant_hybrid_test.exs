@@ -59,7 +59,7 @@ defmodule Engram.Vector.QdrantHybridTest do
 
   defp point(id, score), do: %{id: id, score: score, payload: %{text: "t-#{id}"}}
 
-  test "hybrid fuses the legs client-side by RRF and keeps payload fields", %{bypass: bypass} do
+  defp fused_batch(bypass) do
     response_body =
       Jason.encode!(%{
         result: [
@@ -79,36 +79,59 @@ defmodule Engram.Vector.QdrantHybridTest do
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.send_resp(200, response_body)
     end)
+  end
 
-    # One retrieve, for the fused `limit` only, with the result fields and no
-    # vector (none asked). Answered out of order: the fused order must hold.
-    Bypass.expect_once(bypass, "POST", "/collections/c1/points", fn conn ->
-      {:ok, body, conn} = Plug.Conn.read_body(conn)
-      json = Jason.decode!(body)
-      assert json["ids"] == ["p2", "p1"]
-      assert "text" in json["with_payload"] and "aad_version" in json["with_payload"]
-      refute "user_id" in json["with_payload"]
-      refute Map.has_key?(json, "with_vector")
+  @sparse %{indices: [7], values: [1.0]}
 
-      points = Enum.map(["p1", "p2"], &%{id: &1, payload: %{text: "t-#{&1}"}})
+  test "hybrid fuses the legs client-side by RRF, with no retrieve", %{bypass: bypass} do
+    fused_batch(bypass)
 
-      conn
-      |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, Jason.encode!(%{result: points}))
-    end)
-
-    sparse = %{indices: [7], values: [1.0]}
+    # The text is in Postgres, so without vectors there is nothing to fetch:
+    # Bypass fails the test on any unexpected retrieve.
 
     assert {:ok, [first | _] = results} =
-             Qdrant.hybrid_search("c1", [0.1], sparse, user_id: "u1", vault_id: "v1", limit: 2)
+             Qdrant.hybrid_search("c1", [0.1], @sparse, user_id: "u1", vault_id: "v1", limit: 2)
 
     # p2: rank 1 in both legs = 1/3 + 1/3. p1 and p3 tie at 1/2 (rank 0 in
     # one leg each, best rank 0 both), so the id breaks it, never p3's larger
     # raw BM25 score. Only two survive.
     assert Enum.map(results, & &1.qdrant_id) == ["p2", "p1"]
     assert_in_delta first.score, 2 / 3, 1.0e-12
-    assert first.text == "t-p2"
+    refute Map.has_key?(first, :text)
     refute Map.has_key?(first, :id)
+  end
+
+  test "hybrid with :with_vector retrieves the fused points' vectors, no payload",
+       %{bypass: bypass} do
+    fused_batch(bypass)
+
+    # One retrieve, for the fused `limit` only. Answered out of order: the
+    # fused order must hold.
+    Bypass.expect_once(bypass, "POST", "/collections/c1/points", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      json = Jason.decode!(body)
+      assert json["ids"] == ["p2", "p1"]
+      assert json["with_payload"] == false
+      assert json["with_vector"] == ["dense"]
+
+      points = Enum.map(["p1", "p2"], &%{id: &1, vector: %{dense: [1.0, 0.0]}})
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, Jason.encode!(%{result: points}))
+    end)
+
+    assert {:ok, [first | _] = results} =
+             Qdrant.hybrid_search("c1", [0.1], @sparse,
+               user_id: "u1",
+               vault_id: "v1",
+               limit: 2,
+               with_vector: true
+             )
+
+    assert Enum.map(results, & &1.qdrant_id) == ["p2", "p1"]
+    assert_in_delta first.score, 2 / 3, 1.0e-12
+    assert first.vector == [1.0, 0.0]
   end
 
   test "hybrid answers an error, not a crash, when the batch result is not a list",

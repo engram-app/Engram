@@ -12,6 +12,7 @@ defmodule Engram.IndexingFloorTest do
   alias Engram.Crypto
   alias Engram.Indexing
   alias Engram.KeywordIndex.QdrantSparse
+  alias Engram.Notes
   alias Engram.Notes.Chunk
   alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
@@ -281,39 +282,22 @@ defmodule Engram.IndexingFloorTest do
       assert avg_token_count(user, vault) == avg_before
     end
 
-    test "the floor payload decrypts through decrypt_qdrant_candidates with empty text", %{
+    # The v5 payload holds no text; a search hit reads it from Postgres
+    # (`Notes.search_hits_by_qdrant_points/2`), where a floor point's display
+    # text is "" by construction.
+    test "the floor point has no payload text and its search hit shows empty text", %{
       user: user,
       vault: vault
     } do
       note = floor_note(user, vault)
       {:ok, prepared} = Indexing.prepare_index(note, vault, user, index_tier: "floor")
       [point] = prepared.qdrant_points
-      p = point.payload
+      refute Map.has_key?(point.payload, "text")
 
-      candidate = %{
-        score: 1.0,
-        qdrant_id: point.id,
-        vault_id: to_string(vault.id),
-        text: p.text,
-        text_nonce: p.text_nonce,
-        title: p.title,
-        title_nonce: p.title_nonce,
-        heading_path: p.heading_path,
-        heading_path_nonce: p.heading_path_nonce,
-        aad_version: p.aad_version
-      }
+      {:ok, 1, 0, false} = Indexing.index_note_with_usage(note, vault, user, index_tier: "floor")
+      [%{qdrant_point_id: id}] = chunk_rows(note)
 
-      collection = Application.get_env(:engram, :qdrant_collection, "obsidian_notes")
-
-      assert {:ok, [out]} =
-               Crypto.decrypt_qdrant_candidates(
-                 [candidate],
-                 user,
-                 %{to_string(vault.id) => vault},
-                 collection
-               )
-
-      assert out.text == ""
+      assert {:ok, %{^id => %{text: ""}}} = Notes.search_hits_by_qdrant_points(user, [id])
     end
 
     for tier <- [:free, :starter] do
@@ -490,7 +474,7 @@ defmodule Engram.IndexingFloorTest do
 
     defp point_id(note), do: hd(chunk_rows(note)).qdrant_point_id
 
-    test "a term only in section 3 finds the floor note; it decrypts to empty text", %{
+    test "a term only in section 3 finds the floor note; its hit shows empty text", %{
       user: user,
       vault: vault,
       collection: col
@@ -500,11 +484,9 @@ defmodule Engram.IndexingFloorTest do
 
       assert [hit] = await_hits(col, user, vault, "zymurgy", 1)
       assert hit.qdrant_id == point_id(note)
+      id = hit.qdrant_id
 
-      assert {:ok, [out]} =
-               Crypto.decrypt_qdrant_candidates([hit], user, %{to_string(vault.id) => vault}, col)
-
-      assert out.text == ""
+      assert {:ok, %{^id => %{text: ""}}} = Notes.search_hits_by_qdrant_points(user, [id])
     end
 
     # Review M3: the length cap keeps a penalty, so a short chunk holding

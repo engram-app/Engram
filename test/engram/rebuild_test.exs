@@ -39,7 +39,6 @@ defmodule Engram.RebuildTest do
 
   # `on` and the seal need the v5 write layout (Task 16.4).
   defp mode!(mode) do
-    ServiceConfig.put_override(:write_v5_layout, true)
     ServiceConfig.put_override(:index_rebuild, mode)
   end
 
@@ -491,6 +490,9 @@ defmodule Engram.RebuildTest do
       note = indexed!(user, vault, sections(6))
       enable_index_budget()
       insert(:user_limit_override, user: user, key: "note_points_cap", value: %{"v" => 2})
+      # The index above cached the plan cap; the NOTIFY eviction only fires on
+      # commit, which the sandbox never does.
+      Engram.Billing.OverrideCache.evict(user.id)
 
       est = estimate!(note, Repo.reload!(user, skip_tenant_check: true))
 
@@ -504,6 +506,9 @@ defmodule Engram.RebuildTest do
       note = %{indexed!(user, vault, sections(6)) | dense_indexed_hash: nil}
       enable_index_budget()
       insert(:user_limit_override, user: user, key: "note_points_cap", value: %{"v" => 2})
+      # The index above cached the plan cap; the NOTIFY eviction only fires on
+      # commit, which the sandbox never does.
+      Engram.Billing.OverrideCache.evict(user.id)
 
       est = estimate!(note, Repo.reload!(user, skip_tenant_check: true))
 

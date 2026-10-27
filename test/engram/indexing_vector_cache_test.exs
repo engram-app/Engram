@@ -9,6 +9,7 @@ defmodule Engram.IndexingVectorCacheTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  import Engram.IndexingTestHelpers
   import Mox
 
   alias Engram.Indexing
@@ -27,9 +28,6 @@ defmodule Engram.IndexingVectorCacheTest do
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.send_resp(200, ~s({"result": true}))
     end)
-
-    Application.put_env(:engram, :vector_cache_enabled, true)
-    on_exit(fn -> Application.delete_env(:engram, :vector_cache_enabled) end)
 
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
     vault = insert(:vault, user: user)
@@ -161,7 +159,7 @@ defmodule Engram.IndexingVectorCacheTest do
       [Ecto.UUID.dump!(note.id)]
     )
 
-    Repo.query!("DELETE FROM embedding_cache")
+    clear_vector_cache()
   end
 
   defp cache_rows,
@@ -240,28 +238,18 @@ defmodule Engram.IndexingVectorCacheTest do
     assert embedded() == count
   end
 
-  test "flag off: the cache is never read or written", ctx do
-    Application.put_env(:engram, :vector_cache_enabled, false)
-    stub_embedder()
-    content = body(2)
-
-    assert {:ok, n} =
-             Indexing.index_note(put_note(ctx.user, ctx.vault, "A/X.md", content), ctx.vault)
-
-    assert {:ok, ^n} =
-             Indexing.index_note(put_note(ctx.user, ctx.vault, "B/X.md", content), ctx.vault)
-
-    assert embedded() == 2 * n
-    assert cache_rows() == 0
-  end
-
   test "meter: a mid-note 429 keeps the paid batch charged; the retry charges the rest; total = sent, once",
        ctx do
     stub_embedder(&(&1 == 2))
     note = put_note(ctx.user, ctx.vault, "Meter.md", body(300))
     opts = meter_opts(ctx.user)
+    # Uncapped, one point a chunk: a merged group is charged its members'
+    # bytes, not what it sends, and this test is about what is sent.
+    index = fn ->
+      without_limits(fn -> Indexing.index_note_with_usage(note, ctx.vault, nil, opts) end)
+    end
 
-    assert {:error, {429, _}} = Indexing.index_note_with_usage(note, ctx.vault, nil, opts)
+    assert {:error, {429, _}} = index.()
     first = calls()
     assert [_one_batch] = first
     reserved = drained(:reserved)
@@ -270,7 +258,7 @@ defmodule Engram.IndexingVectorCacheTest do
     assert UsageMeters.lifetime_embed_tokens(ctx.user.id) == tokens(first)
 
     RetainedVectors.forget({note.id, nil})
-    assert {:ok, count, _bytes, true} = Indexing.index_note_with_usage(note, ctx.vault, nil, opts)
+    assert {:ok, count, _bytes, true} = index.()
     retry = calls()
     assert drained(:reserved) == tokens(retry)
     assert drained(:released) == 0
@@ -301,19 +289,6 @@ defmodule Engram.IndexingVectorCacheTest do
 
     assert [{2, _, _, _}] = calls(), "only the two maintenance misses go to Voyage"
     refute_received {:reserved, _}
-  end
-
-  test "flag off with the budget on: the pass budget still truncates to keyword-only", ctx do
-    Application.put_env(:engram, :vector_cache_enabled, false)
-    enable(:index_budget_enabled)
-    small_pass_budget()
-    stub_embedder()
-    note = put_note(ctx.user, ctx.vault, "Off.md", body(8))
-
-    assert {:ok, count} = Indexing.index_note(note, ctx.vault)
-    sent = embedded()
-    assert sent > 0 and sent < count
-    assert cache_rows() == 0
   end
 
   test "EmbedNote: the keyword-only fallback snoozes on :embed_continues, burning no attempt",

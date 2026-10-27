@@ -37,14 +37,6 @@ defmodule Engram.Rebuild do
   So `budget_tokens` times $0.12/M is the pass's budget in dollars. The
   drift park and the token bucket count raw tokens.
 
-  ## The v5 layout guard (Task 16.4)
-
-  `on` reads `:on` only while new points are written in the v5 layout
-  (`Qdrant.write_v5_layout?/0`, which implies `:v5_payload_format`), and a
-  dry run seals only then. Otherwise `on` reads `:off` and logs one warning
-  per node: a rebuilt v5 point would get an old-format payload merged onto
-  it by the note's next ordinary edit.
-
   ## Other writers while `on` (Task 16.4)
 
   A DEK rotation (`RotateUserDek`) snoozes an hour and writes nothing, and a
@@ -128,29 +120,7 @@ defmodule Engram.Rebuild do
     end
   end
 
-  defp on_mode do
-    cond do
-      halted?() -> :off
-      not Qdrant.write_v5_layout?() -> v5_layout_off()
-      true -> :on
-    end
-  end
-
-  @v5_warned_key {__MODULE__, :v5_layout_off_warned}
-
-  # `:off`, logging once per node: `mode/0` runs on every embed.
-  defp v5_layout_off do
-    unless :persistent_term.get(@v5_warned_key, false) do
-      :persistent_term.put(@v5_warned_key, true)
-
-      Logger.warning(
-        "rebuild_v5_layout_off",
-        Metadata.with_category(:warning, :oban)
-      )
-    end
-
-    :off
-  end
+  defp on_mode, do: if(halted?(), do: :off, else: :on)
 
   @doc "`{chunker, keyword}` versions `off` and `dry_run` target: prod's pre-v5 stamps."
   # No `@spec`, as `build_versions/0`.
@@ -637,20 +607,8 @@ defmodule Engram.Rebuild do
   late seal cannot move a running pass's avgdl. Per tenant, as
   `ReconcileEmbeddings` scans.
   """
-  @spec seal() :: {:ok, non_neg_integer()} | {:error, :not_dry_run | :v5_layout_off}
-  def seal do
-    cond do
-      mode() != :dry_run ->
-        {:error, :not_dry_run}
-
-      not Qdrant.write_v5_layout?() ->
-        _ = v5_layout_off()
-        {:error, :v5_layout_off}
-
-      true ->
-        do_seal()
-    end
-  end
+  @spec seal() :: {:ok, non_neg_integer()} | {:error, :not_dry_run}
+  def seal, do: if(mode() == :dry_run, do: do_seal(), else: {:error, :not_dry_run})
 
   defp do_seal do
     pins_conflict =

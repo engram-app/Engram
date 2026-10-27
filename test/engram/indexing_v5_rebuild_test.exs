@@ -13,6 +13,7 @@ defmodule Engram.IndexingV5RebuildTest do
 
   import Ecto.Query
   import Engram.IndexBudgetHelpers
+  import Engram.IndexingTestHelpers
   import Mox
 
   alias Engram.Crypto
@@ -163,13 +164,39 @@ defmodule Engram.IndexingV5RebuildTest do
   defp rebuild(note, vault, user),
     do: Indexing.index_note_with_usage(note, vault, user, rebuild: true)
 
-  # A first index the pre-v5 way: random ids, one point a chunk.
+  # A first index the pre-v5 way (the pass's input): random point ids, one
+  # point a chunk (no cap applied), no `chunk_points` rows. The writer only
+  # writes the v5 layout now, so its index is re-keyed to random ids.
   defp indexed(ctx, n \\ 3) do
     note = insert_note(ctx.user, ctx.vault, sections(n))
-    assert {:ok, _, _, true} = Indexing.index_note_with_usage(note, ctx.vault, ctx.user)
+
+    without_limits(fn ->
+      assert {:ok, _, _, true} = Indexing.index_note_with_usage(note, ctx.vault, ctx.user)
+    end)
+
+    legacy_ids!(note, ctx.store)
     _ = embedded()
     clear_log(ctx.store)
     note
+  end
+
+  defp legacy_ids!(note, store) do
+    remap = Map.new(rows(note), &{&1.qdrant_point_id, Ecto.UUID.generate()})
+
+    tenant(%{id: note.user_id}, fn ->
+      Repo.delete_all(from(p in ChunkPoint, where: p.note_id == ^note.id))
+
+      for {old, new} <- remap do
+        Repo.update_all(
+          from(c in Chunk, where: c.note_id == ^note.id and c.qdrant_point_id == ^old),
+          set: [qdrant_point_id: new]
+        )
+      end
+    end)
+
+    Agent.update(store, fn s ->
+      %{s | points: Map.new(s.points, fn {id, p} -> {Map.get(remap, id, id), p} end)}
+    end)
   end
 
   test "an unchanged note copies every vector: 0 tokens, fresh v5 points, old ids gone", ctx do
@@ -218,6 +245,9 @@ defmodule Engram.IndexingV5RebuildTest do
     note = insert_note(ctx.user, ctx.vault, first)
     assert {:ok, _, _, true} = Indexing.index_note_with_usage(note, ctx.vault, ctx.user)
     _ = embedded()
+    # The estimate is per note and knows no cache (see the next test): with
+    # the cache empty, every text it counts is one the pass must send.
+    clear_vector_cache()
 
     # Two sections reworded, one added, the repeated block now three times.
     content =
@@ -237,16 +267,12 @@ defmodule Engram.IndexingV5RebuildTest do
     assert est.est_tokens == sent |> Enum.map(&UsageMeters.estimate_tokens/1) |> Enum.sum()
   end
 
-  # What the staging rehearsal (2026-10-22) actually saw: the pass runs with
-  # the vector cache on (`index_rebuild=on` requires it), and the cache is
+  # What the staging rehearsal (2026-10-22) actually saw: the cache is
   # per USER, so a text two notes share is paid once. The estimate is per
   # note and counts it in both: per note it is exact, summed over a user's
   # notes it is an upper bound. Staging's one paid user: 13,189 new points,
   # 1,381 texts cached (sent), spend 0.144x the manifest.
-  test "with the vector cache on, a text two notes share is sent once", ctx do
-    Application.put_env(:engram, :vector_cache_enabled, true)
-    on_exit(fn -> Application.delete_env(:engram, :vector_cache_enabled) end)
-
+  test "a text two notes share is sent once (the vector cache)", ctx do
     shared = sections(3) <> "\n\n## New\n\nshared new text. #{@pad}"
     a = indexed(ctx)
     b = Engram.Fixtures.insert_note!(ctx.user, ctx.vault, %{path: "B.md", content: shared})
@@ -285,11 +311,10 @@ defmodule Engram.IndexingV5RebuildTest do
     end
   end
 
-  # NOTE_POINTS_CAP_ENABLED alone (the budget still off, as during the v5
-  # pass): the pass caps an uncapped note from its stored vectors, no Voyage.
-  test "with only the note cap flag, a capped group is mean-pooled for 0 tokens", ctx do
+  # The budget still off, as during the v5 pass: the pass caps an uncapped
+  # note from its stored vectors, no Voyage.
+  test "with the budget off, a capped group is mean-pooled for 0 tokens", ctx do
     note = indexed(ctx, 200)
-    ServiceConfig.put_override(:note_points_cap_enabled, true)
     refute Indexing.budget_enabled?()
 
     assert {:ok, count, 0, true} = rebuild(note, ctx.vault, ctx.user)
@@ -329,7 +354,6 @@ defmodule Engram.IndexingV5RebuildTest do
   end
 
   test "flat fields and note_attrs are re-extracted from the current frontmatter", ctx do
-    ServiceConfig.put_override(:v5_payload_format, true)
     note = indexed(ctx)
 
     attrs = fn ->
@@ -343,7 +367,6 @@ defmodule Engram.IndexingV5RebuildTest do
 
     # Stale: as if extracted before the mapping existed.
     tenant(ctx.user, fn -> Repo.delete_all(from(a in NoteAttr, where: a.note_id == ^note.id)) end)
-    ServiceConfig.put_override(:v5_payload_format, false)
 
     assert {:ok, _, 0, true} = rebuild(note, ctx.vault, ctx.user)
     assert attrs.() == fresh
@@ -371,6 +394,7 @@ defmodule Engram.IndexingV5RebuildTest do
   test "the Voyage-paid stamp: set when Voyage returns, cleared by the commit", ctx do
     note = indexed(ctx)
     drop_dense(ctx.store)
+    clear_vector_cache()
     refuse(ctx.store, true)
 
     assert {:error, :qdrant_backpressure} = rebuild(note, ctx.vault, ctx.user)
@@ -404,6 +428,7 @@ defmodule Engram.IndexingV5RebuildTest do
   test "a second Voyage call for an already-paid note parks it rebuild_double_pay", ctx do
     note = indexed(ctx)
     drop_dense(ctx.store)
+    clear_vector_cache()
 
     tenant(ctx.user, fn ->
       Repo.update_all(from(n in Note, where: n.id == ^note.id),

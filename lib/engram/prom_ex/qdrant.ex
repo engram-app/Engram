@@ -348,16 +348,6 @@ defmodule Engram.PromEx.Qdrant do
           tags: [:op, :status],
           unit: {:native, :millisecond}
         ),
-        # 0/1: the `:qdrant_active_cluster` override disagrees with the
-        # QDRANT_ACTIVE_CLUSTER env pin (`Engram.ServiceConfig.Overrides`),
-        # emitted on every override load; seeded 0 by `ZeroInit`.
-        last_value(
-          metric_prefix ++ [:active_cluster, :mismatch],
-          event_name: Engram.ServiceConfig.Overrides.mismatch_event(),
-          measurement: :mismatch,
-          description:
-            "1 when the qdrant_active_cluster override disagrees with QDRANT_ACTIVE_CLUSTER."
-        ),
         counter(
           metric_prefix ++ [:request, :total],
           event_name: @stop_event,

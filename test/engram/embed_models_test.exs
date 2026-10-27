@@ -27,7 +27,7 @@ defmodule Engram.EmbedModelsTest do
   setup do
     prev =
       Map.new(
-        [:billing_enabled, :embed_model, :embed_models_per_plan],
+        [:billing_enabled, :embed_model],
         &{&1, Application.get_env(:engram, &1)}
       )
 
@@ -48,7 +48,6 @@ defmodule Engram.EmbedModelsTest do
   defp saas! do
     Application.put_env(:engram, :billing_enabled, true)
     Application.put_env(:engram, :embed_model, @large)
-    Application.put_env(:engram, :embed_models_per_plan, true)
   end
 
   defp self_host! do
@@ -159,7 +158,6 @@ defmodule Engram.EmbedModelsTest do
     end
 
     test "the dry run records the plan model and the seal prices lite at a sixth" do
-      ServiceConfig.put_override(:write_v5_layout, true)
       ServiceConfig.put_override(:index_rebuild, "dry_run")
       Repo.query!("DELETE FROM rebuild_ledger")
 
@@ -250,30 +248,6 @@ defmodule Engram.EmbedModelsTest do
     end
   end
 
-  # The plain deploy: billing on, a nameable model, the switch unset. Prod
-  # must keep today's one doc model and one query model until v5 go time.
-  describe "SaaS with EMBED_MODELS_PER_PLAN unset keeps one model" do
-    setup do
-      saas!()
-      Application.delete_env(:engram, :embed_models_per_plan)
-    end
-
-    test "every plan gets the build's model and no per-plan query model" do
-      refute EmbedModels.per_plan?()
-
-      for user <- [free_user(), paid_user()] do
-        assert EmbedModels.doc_model(user) == @large
-        assert EmbedModels.query_model(user) == nil
-        assert EmbedModels.reuse_models(user, @large) == []
-      end
-    end
-
-    test "a large-model note is current for a Free owner and a paid one" do
-      refute EmbedNote.version_stale?(indexed_note(free_user(), @large))
-      refute EmbedNote.version_stale?(indexed_note(paid_user(), @large))
-    end
-  end
-
   describe "self-host keeps one configured model" do
     setup do: self_host!()
 
@@ -334,25 +308,10 @@ defmodule Engram.EmbedModelsTest do
           key
         ])
 
-    test "unset equals the defaults, and per-plan stays off" do
-      System.delete_env("EMBED_MODELS_PER_PLAN")
-      assert read(:embed_models_per_plan) == nil
+    test "unset equals the defaults" do
       # Nothing configured: `EmbedModels` holds the one copy of the defaults.
       assert read(:plan_doc_embed_models) == %{}
       assert read(:plan_query_embed_models) == %{}
-    end
-
-    test "EMBED_MODELS_PER_PLAN=true turns it on" do
-      prev = System.get_env("EMBED_MODELS_PER_PLAN")
-      System.put_env("EMBED_MODELS_PER_PLAN", "true")
-
-      on_exit(fn ->
-        if prev,
-          do: System.put_env("EMBED_MODELS_PER_PLAN", prev),
-          else: System.delete_env("EMBED_MODELS_PER_PLAN")
-      end)
-
-      assert read(:embed_models_per_plan) == true
     end
 
     test "each plan reads its own var; blank is the default" do

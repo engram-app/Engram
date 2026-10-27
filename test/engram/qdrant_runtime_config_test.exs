@@ -19,8 +19,10 @@ defmodule Engram.QdrantRuntimeConfigTest do
     {"QDRANT_PREFLIGHT_MARGIN_POINTS", :qdrant_preflight_margin_points}
   ]
 
+  @cluster_vars ~w(QDRANT_ACTIVE_CLUSTER QDRANT_URL_V2 QDRANT_API_KEY_V2)
+
   setup do
-    vars = Enum.map(@switches ++ @integers, &elem(&1, 0))
+    vars = Enum.map(@switches ++ @integers, &elem(&1, 0)) ++ @cluster_vars
     previous = Map.new(vars, &{&1, System.get_env(&1)})
     Enum.each(vars, &System.delete_env/1)
 
@@ -55,6 +57,44 @@ defmodule Engram.QdrantRuntimeConfigTest do
     test "#{var} is read as an integer" do
       System.put_env(unquote(var), "42")
       assert engram(unquote(key)) == 42
+    end
+  end
+
+  # The second-cluster slot is gone. Prod pins QDRANT_ACTIVE_CLUSTER=old until
+  # engram-infra drops it; a stale `v2` (with no V2 vars) must boot too.
+  describe "QDRANT_ACTIVE_CLUSTER (retired)" do
+    import ExUnit.CaptureIO
+
+    test "old boots silently and configures no cluster key" do
+      System.put_env("QDRANT_ACTIVE_CLUSTER", "old")
+
+      err =
+        capture_io(:stderr, fn ->
+          assert get_in(read_runtime(), [:engram, :qdrant_active_cluster]) == nil
+        end)
+
+      refute err =~ "QDRANT_ACTIVE_CLUSTER"
+    end
+
+    test "v2 with no V2 vars boots, configures nothing and warns" do
+      System.put_env("QDRANT_ACTIVE_CLUSTER", "v2")
+
+      err =
+        capture_io(:stderr, fn ->
+          config = read_runtime()
+
+          for key <- [:qdrant_active_cluster, :qdrant_url_v2, :qdrant_api_key_v2],
+              do: assert(get_in(config, [:engram, key]) == nil)
+        end)
+
+      assert err =~ "QDRANT_ACTIVE_CLUSTER=\"v2\" is retired"
+    end
+
+    test "V2 vars are ignored" do
+      System.put_env("QDRANT_URL_V2", "http://v2:6333")
+      System.put_env("QDRANT_API_KEY_V2", "k")
+      assert engram(:qdrant_url_v2) == nil
+      assert engram(:qdrant_api_key_v2) == nil
     end
   end
 end

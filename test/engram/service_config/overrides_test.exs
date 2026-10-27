@@ -18,9 +18,8 @@ defmodule Engram.ServiceConfig.OverridesTest do
     ServiceConfig.put_override(:service_overrides_enabled, true)
     # Env values these tests pin, so a stray app env cannot decide them.
     ServiceConfig.put_override(:tenant_idf, false)
-    ServiceConfig.put_override(:write_v5_layout, false)
-    ServiceConfig.put_override(:vector_cache_enabled, false)
     ServiceConfig.put_override(:index_rebuild, "off")
+    :persistent_term.erase({Engram.ServiceConfig.Overrides, :ignored})
     Cache.clear_local(:service_overrides)
     Cache.clear_local(:service_overrides_last_good)
     on_exit(fn -> Cache.clear_local(:service_overrides) end)
@@ -166,80 +165,6 @@ defmodule Engram.ServiceConfig.OverridesTest do
       assert [%{key: :tenant_idf, value: true, updated_by: "test"}] = ServiceConfig.list()
     end
 
-    test "the GO SEQUENCE invariants hold across override and env" do
-      assert {:error, {:invariant, _}} = ServiceConfig.override(:index_rebuild, "on", by: "t")
-
-      assert {:error, {:invariant, _}} =
-               ServiceConfig.override(:index_rebuild, "dry_run", by: "t")
-
-      :ok = ServiceConfig.override(:write_v5_layout, true, by: "t")
-      :ok = ServiceConfig.override(:index_rebuild, "dry_run", by: "t")
-      # `on` also needs the vector cache.
-      assert {:error, {:invariant, _}} = ServiceConfig.override(:index_rebuild, "on", by: "t")
-      :ok = ServiceConfig.override(:vector_cache_enabled, true, by: "t")
-      :ok = ServiceConfig.override(:index_rebuild, "on", by: "t")
-
-      # Turning the layout off under a running rebuild is refused too.
-      assert {:error, {:invariant, _}} = ServiceConfig.override(:write_v5_layout, false, by: "t")
-      assert {:error, {:invariant, _}} = ServiceConfig.clear(:write_v5_layout, by: "t")
-    end
-
-    # The dry run sealed a budget priced with the cap as it was: flipping it
-    # under a dry run or a pass is refused; stop the rebuild first.
-    test "the note cap flag only moves while the rebuild is off" do
-      assert :ok = ServiceConfig.override(:note_points_cap_enabled, true, by: "t")
-      :ok = ServiceConfig.override(:write_v5_layout, true, by: "t")
-      :ok = ServiceConfig.override(:index_rebuild, "dry_run", by: "t")
-
-      assert {:error, {:invariant, message}} =
-               ServiceConfig.override(:note_points_cap_enabled, false, by: "t")
-
-      assert message =~ "index_rebuild=dry_run"
-      assert {:error, {:invariant, _}} = ServiceConfig.clear(:note_points_cap_enabled, by: "t")
-      # Other writes under the dry run are unaffected.
-      assert :ok = ServiceConfig.override(:tenant_idf, true, by: "t")
-
-      :ok = ServiceConfig.override(:index_rebuild, "off", by: "t")
-      assert :ok = ServiceConfig.override(:note_points_cap_enabled, false, by: "t")
-    end
-
-    test "the v2 cluster is refused while its URL is not configured" do
-      ServiceConfig.put_override(:qdrant_url_v2, nil)
-
-      assert {:error, {:invariant, _}} =
-               ServiceConfig.override(:qdrant_active_cluster, "v2", by: "t")
-
-      ServiceConfig.put_override(:qdrant_url_v2, "http://v2")
-      ServiceConfig.put_override(:qdrant_api_key_v2, "v2-key")
-      assert :ok = ServiceConfig.override(:qdrant_active_cluster, "v2", by: "t")
-    end
-
-    # With LEGACY_FILTER_FIELDS=false a legacy-format write is invisible to
-    # the DEK sweep, search and delete, so the v5 writer cannot be turned off.
-    test "write_v5_layout=false is refused while LEGACY_FILTER_FIELDS=false" do
-      ServiceConfig.put_override(:legacy_filter_fields, false)
-      ServiceConfig.put_override(:write_v5_layout, true)
-
-      assert {:error, {:invariant, _}} =
-               ServiceConfig.override(:write_v5_layout, false, by: "t")
-
-      assert :ok = ServiceConfig.override(:write_v5_layout, true, by: "t")
-    end
-
-    # An env change under a live override can leave the effective config
-    # violating an invariant. That must not refuse every later write: a kill
-    # switch (INDEX_REBUILD=off) is exactly the write an incident needs.
-    test "a violation the write did not introduce does not block it" do
-      ServiceConfig.put_override(:legacy_filter_fields, false)
-      :ok = ServiceConfig.override(:qdrant_tenant_graph, true, by: "t")
-      ServiceConfig.put_override(:legacy_filter_fields, true)
-
-      assert :ok = ServiceConfig.override(:index_rebuild, "off", by: "t")
-      assert :ok = ServiceConfig.override(:tenant_idf, true, by: "t")
-      # A write that would ADD a violation is still refused.
-      assert {:error, {:invariant, _}} = ServiceConfig.override(:index_rebuild, "on", by: "t")
-    end
-
     test "every change is logged with operator, old and new value" do
       log =
         capture_log([level: :info], fn ->
@@ -253,169 +178,80 @@ defmodule Engram.ServiceConfig.OverridesTest do
     end
   end
 
-  describe "the v2 flip checks every connected node" do
-    # The peer list and the multicall are injected (as CompressionGate's are),
-    # so CI proves the refusal without a second BEAM node.
-    setup do
-      ServiceConfig.put_override(:qdrant_url_v2, "http://v2")
-      ServiceConfig.put_override(:qdrant_api_key_v2, "v2-key")
-      :ok
-    end
+  describe "keys this release does not allow" do
+    # The retired v5 flags and the Qdrant cluster switch left the allowlist
+    # (their behaviour is the code's only one now). A row an old node writes
+    # mid-rollout, or one still in the table (a later contract step deletes them), is ignored.
+    # The value is a JSON literal (`~s("v2")`, `false`), as the column stores it.
+    defp insert_row(key, json),
+      do:
+        Repo.query!(
+          "INSERT INTO service_overrides (key, value, updated_by) VALUES ('#{key}', '#{json}', 't')"
+        )
 
-    defp flip(answer) do
-      ServiceConfig.override(:qdrant_active_cluster, "v2",
-        by: "t",
-        peers: fn -> [:"peer@10.0.0.2"] end,
-        multicall: fn [:"peer@10.0.0.2"] -> [answer] end
-      )
-    end
+    test "a qdrant_active_cluster row is ignored, logged once per node" do
+      insert_row("qdrant_active_cluster", ~s("v2"))
+      insert_row("write_v5_layout", "false")
 
-    test "a node missing the URL or key is refused, by name" do
-      assert {:error, {:invariant, message}} = flip({:ok, false})
-      assert message =~ "peer@10.0.0.2 (missing)"
-    end
-
-    test "a node that does not answer is refused" do
-      assert {:error, {:invariant, message}} = flip({:error, {:erpc, :noconnection}})
-      assert message =~ "peer@10.0.0.2 (unreachable)"
-    end
-
-    test "a node on an older release (no v2_configured?/0) is refused" do
-      assert {:error, {:invariant, message}} = flip({:error, {:exception, :undef, []}})
-      assert message =~ "peer@10.0.0.2 (old_release)"
-    end
-
-    test "a multicall that answers for fewer nodes than asked fails closed" do
-      assert {:error, {:invariant, message}} =
-               ServiceConfig.override(:qdrant_active_cluster, "v2",
-                 by: "t",
-                 peers: fn -> [:"a@10.0.0.2", :"b@10.0.0.3"] end,
-                 multicall: fn _ -> [{:ok, true}] end
-               )
-
-      assert message =~ "b@10.0.0.3 (unreachable)"
-    end
-
-    test "every node configured: the flip goes through" do
-      assert :ok = flip({:ok, true})
-    end
-
-    test "this node needs QDRANT_API_KEY_V2 as well as the URL" do
-      ServiceConfig.put_override(:qdrant_api_key_v2, nil)
-      assert {:error, {:invariant, message}} = flip({:ok, true})
-      assert message =~ "(missing)"
-    end
-  end
-
-  describe "override vs the env pin" do
-    # The override wins whenever the table is readable; a node booted with the
-    # DB unreachable runs on env, so a mismatch is a latent split brain. It is
-    # read every 15s TTL, so the log fires once per distinct pair (a warning:
-    # an error is a Sentry event each time) and the gauge carries the state.
-    setup do
-      :persistent_term.erase({Engram.ServiceConfig.Overrides, :env_mismatch})
-      ServiceConfig.put_override(:qdrant_url_v2, "http://v2")
-      ServiceConfig.put_override(:qdrant_api_key_v2, "v2-key")
-      ref = make_ref()
-      test = self()
-
-      :telemetry.attach(
-        "mismatch-#{inspect(ref)}",
-        [:engram, :qdrant, :active_cluster],
-        fn _event, measurements, _meta, _ -> send(test, {ref, measurements}) end,
-        nil
-      )
-
-      on_exit(fn -> :telemetry.detach("mismatch-#{inspect(ref)}") end)
-      %{ref: ref}
-    end
-
-    defp reload do
-      Cache.clear_local(:service_overrides)
-      capture_log(fn -> ServiceConfig.get(:qdrant_active_cluster, "old") end)
-    end
-
-    test "logs one warning per distinct override/env pair, and again on a change", ctx do
-      ServiceConfig.put_override(:qdrant_active_cluster, "v2")
-      :ok = ServiceConfig.override(:qdrant_active_cluster, "old", by: "t")
-
-      first =
+      log =
         capture_log([level: :warning], fn ->
-          assert ServiceConfig.get(:qdrant_active_cluster, "old") == "old"
+          assert ServiceConfig.get(:tenant_idf, false) == false
+          assert Engram.ServiceConfig.Overrides.fetch(:qdrant_active_cluster) == :error
         end)
 
-      assert first =~ "disagrees with env"
-      assert first =~ "[warning]"
-      assert_receive {_, %{mismatch: 1}}
-      refute reload() =~ "disagrees with env"
-      assert_receive {r, %{mismatch: 1}} when r == ctx.ref
+      assert log =~ "service overrides ignored"
+      assert log =~ ~s("qdrant_active_cluster")
+      assert log =~ ~s("write_v5_layout")
+      assert ServiceConfig.list() == []
 
-      # Same override, env re-pinned the same way: still the same pair.
-      ServiceConfig.put_override(:qdrant_active_cluster, "old")
-      refute reload() =~ "disagrees with env"
-      assert_receive {_, %{mismatch: 0}}
-
-      ServiceConfig.put_override(:qdrant_active_cluster, "v2")
-      assert reload() =~ "disagrees with env"
+      # The same ignored set on the next load (TTL) is not logged again.
+      Cache.clear_local(:service_overrides)
+      refute capture_log(fn -> ServiceConfig.get(:tenant_idf, false) end) =~ "ignored"
     end
 
-    test "no env pin, or a matching one: gauge 0, no log", ctx do
-      :ok = ServiceConfig.override(:qdrant_active_cluster, "old", by: "t")
-      refute reload() =~ "disagrees"
-      assert_receive {r, %{mismatch: 0}} when r == ctx.ref
+    test "a stale v2 or old cluster row leaves Qdrant on QDRANT_URL" do
+      ServiceConfig.put_override(:qdrant_url, "http://v3:6333")
+
+      for value <- [~s("v2"), ~s("old")] do
+        Repo.query!("DELETE FROM service_overrides")
+        insert_row("qdrant_active_cluster", value)
+        Cache.clear_local(:service_overrides)
+
+        capture_log(fn ->
+          assert ServiceConfig.get(:tenant_idf, false) == false
+          assert Qdrant.base_url() == "http://v3:6333"
+        end)
+      end
+    end
+
+    test "the cluster switch can no longer be written" do
+      assert {:error, {:unknown_key, :qdrant_active_cluster}} =
+               ServiceConfig.override(:qdrant_active_cluster, "old", by: "t")
+    end
+
+    # The GO SEQUENCE invariants needed the v5 layout and the vector cache,
+    # which are now always on: the rebuild switch moves on its own.
+    test "index_rebuild moves to dry_run and on with nothing else set" do
+      assert :ok = ServiceConfig.override(:index_rebuild, "dry_run", by: "t")
+      assert :ok = ServiceConfig.override(:index_rebuild, "on", by: "t")
+      assert ServiceConfig.get(:index_rebuild, "off") == "on"
     end
   end
 
   describe "accessors read through the override" do
-    test "every v5 flag accessor sees a DB override" do
-      ServiceConfig.put_override(:embed_models_per_plan, false)
+    test "every overridable accessor sees a DB override" do
       ServiceConfig.put_override(:index_budget_enabled, false)
-      ServiceConfig.put_override(:chunk_text_write, false)
-      ServiceConfig.put_override(:chunk_text_read, false)
-      ServiceConfig.put_override(:v5_payload_format, false)
-      ServiceConfig.put_override(:qdrant_tenant_graph, false)
 
-      refute Engram.Indexing.VectorCache.enabled?()
       refute Engram.Indexing.budget_enabled?()
-      refute Engram.Indexing.note_cap_enabled?()
-      refute Qdrant.write_v5_layout?()
-      refute Qdrant.chunk_text_read?()
 
-      for key <- [
-            :vector_cache_enabled,
-            :note_points_cap_enabled,
-            :index_budget_enabled,
-            :embed_models_per_plan,
-            :tenant_idf
-          ],
+      for key <- [:index_budget_enabled, :tenant_idf],
           do: :ok = ServiceConfig.override(key, true, by: "t")
 
-      assert Engram.Indexing.VectorCache.enabled?()
       assert Engram.Indexing.budget_enabled?()
-      assert Engram.Indexing.note_cap_enabled?()
-      assert ServiceConfig.get(:embed_models_per_plan, false) == true
-
-      # write_v5_layout still implies the payload format and chunk text reads.
-      :ok = ServiceConfig.override(:write_v5_layout, true, by: "t")
-      assert Qdrant.write_v5_layout?()
-      assert Qdrant.v5_payload_format?()
-      assert Qdrant.chunk_text_read?()
+      assert ServiceConfig.get(:tenant_idf, false) == true
 
       :ok = ServiceConfig.override(:index_rebuild, "dry_run", by: "t")
       assert Engram.Rebuild.mode() == :dry_run
-    end
-
-    test "the active cluster override routes the Qdrant client" do
-      ServiceConfig.put_override(:qdrant_url, "http://old:6333")
-      ServiceConfig.put_override(:qdrant_url_v2, "http://v2:6333")
-      ServiceConfig.put_override(:qdrant_api_key_v2, "v2-key")
-      assert Qdrant.base_url() == "http://old:6333"
-
-      :ok = ServiceConfig.override(:qdrant_active_cluster, "v2", by: "t")
-      assert Qdrant.base_url() == "http://v2:6333"
-
-      :ok = ServiceConfig.override(:qdrant_active_cluster, "old", by: "t")
-      assert Qdrant.base_url() == "http://old:6333"
     end
   end
 end

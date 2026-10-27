@@ -2,9 +2,7 @@ defmodule Engram.Workers.VectorCachePrune do
   @moduledoc """
   Retention for `embedding_cache` (`Engram.Indexing.VectorCache.prune/1`):
   rows inserted more than 72 h ago, deleted in batches. Spans tenants, so it
-  runs on `Repo.maintenance/0`, whether or not the cache is on: a cache
-  switched off again still ages out (an empty table is one cheap DELETE). A
-  no-op only where just the RLS-filtered app pool exists (a self-host
+  runs on `Repo.maintenance/0`. A no-op only where just the RLS-filtered app pool exists (a self-host
   without a maintenance pool), which would delete nothing; there it logs at
   info, never an error.
   """

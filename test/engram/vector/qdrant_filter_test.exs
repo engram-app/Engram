@@ -59,53 +59,14 @@ defmodule Engram.Vector.QdrantFilterTest do
     refute Enum.any?(must, &(&1[:key] == "vault_id"))
   end
 
+  # Both formats while `:legacy_filter_fields` is on (the default): a
+  # collection may still hold v3/v4 points. v5-only once it is off.
   describe "dual format (Task 15.4)" do
     alias Engram.ServiceConfig
     alias Engram.Vector.FilterId
 
     @uuid "6f9619ff-8b86-d011-b42d-00c04fc964ff"
     @hmac :crypto.strong_rand_bytes(32)
-
-    setup do
-      ServiceConfig.put_override(:v5_payload_format, true)
-    end
-
-    test "writing the v5 layout implies the v5 format, so the flags cannot disagree" do
-      ServiceConfig.put_override(:v5_payload_format, false)
-      ServiceConfig.put_override(:write_v5_layout, true)
-      assert Qdrant.v5_payload_format?()
-      assert %{should: [_, %{key: "u"}]} = Qdrant.match_filter(:user, @uuid)
-
-      ServiceConfig.put_override(:write_v5_layout, false)
-      refute Qdrant.v5_payload_format?()
-    end
-
-    test "writing the v5 layout implies reading chunk text from Postgres" do
-      refute Qdrant.chunk_text_read?()
-
-      ServiceConfig.put_override(:write_v5_layout, true)
-      assert Qdrant.chunk_text_read?()
-
-      # An explicit off cannot hide v5 points (they store no text in Qdrant).
-      ServiceConfig.put_override(:chunk_text_read, false)
-      assert Qdrant.chunk_text_read?()
-
-      ServiceConfig.put_override(:write_v5_layout, false)
-      refute Qdrant.chunk_text_read?()
-
-      ServiceConfig.put_override(:chunk_text_read, true)
-      assert Qdrant.chunk_text_read?()
-    end
-
-    test "with the v5 format off, filters are legacy-only" do
-      ServiceConfig.put_override(:v5_payload_format, false)
-      assert Qdrant.match_filter(:user, @uuid) == %{key: "user_id", match: %{value: @uuid}}
-
-      assert Qdrant.range_filter(:fm_timestamp, %{gte: 1}) == %{
-               key: "fm_timestamp",
-               range: %{gte: 1}
-             }
-    end
 
     test "user and vault match the dashed legacy id or the undashed v5 id" do
       assert Qdrant.match_filter(:user, @uuid) == %{

@@ -103,16 +103,14 @@ defmodule Engram.Search do
 
   # `:fields` (frontmatter key filters) resolve to Qdrant conditions ONCE per
   # request, before the budget is spent: an unknown key is an explicit error,
-  # never an empty result, and so is asking before the v5 layout can answer
-  # (`Engram.Search.FieldFilters`).
+  # never an empty result (`Engram.Search.FieldFilters`).
   defp resolve_field_filters(user, opts) do
     case Keyword.get(opts, :fields, []) do
       [] ->
         {:ok, opts}
 
       fields ->
-        with true <- FieldFilters.available?() || {:error, :field_filters_unavailable},
-             {:ok, fk} <- field_filter_key(user, fields),
+        with {:ok, fk} <- field_filter_key(user, fields),
              {:ok, conditions} <- FieldFilters.to_conditions(to_string(user.id), fk, fields) do
           {:ok, Keyword.put(opts, :attr_filters, conditions)}
         end
@@ -180,9 +178,6 @@ defmodule Engram.Search do
 
   def input_error_message(:too_many_tags, _param),
     do: "tags: at most #{Engram.Vector.Qdrant.max_ids()} per search"
-
-  def input_error_message(:field_filters_unavailable, _param),
-    do: "fields: field filters are not available yet"
 
   def input_error_message({:unknown_field, key}, _param),
     do: "fields: no note in this account has the frontmatter key #{inspect(key)}"
@@ -555,8 +550,6 @@ defmodule Engram.Search do
     # (unchanged chunk-path behavior).
     rerank_keep = if group? or diversify?, do: pool, else: limit
 
-    read? = chunk_text_read?()
-
     case translate_phase_b_filters(user, folder, tags, type) do
       {:ok, phase_b_kw} ->
         search_opts =
@@ -567,18 +560,17 @@ defmodule Engram.Search do
           |> Keyword.put(:attr_filters, Keyword.get(opts, :attr_filters, []))
           |> Keyword.put(:with_vector, diversify?)
           |> Keyword.put(:full_precision, profile.full_precision)
-          |> Keyword.put(:chunk_text_read, read?)
           |> Keyword.put(:tenant_idf, mode in [:keyword, :hybrid] and tenant_idf?(user))
 
         with {:ok, candidates} <- run_legs(mode, user, query, search_opts, profile),
-             {:ok, {candidates, hits}} <- postgres_hits(candidates, user, read?),
+             {:ok, {candidates, hits}} <- postgres_hits(candidates, user),
              {:ok, candidates} <- payload_fallback(candidates, hits, user),
              vaults_by_id = load_candidate_vaults(user, vault, candidates),
              {:ok, decrypted} <- decrypt_candidates(candidates, user, vaults_by_id, hits) do
           rerank_module = if rerank_for_user?, do: reranker(), else: Engram.Rerankers.None
 
           with {:ok, ranked} <- rerank_module.rerank(query, decrypted, rerank_keep) do
-            ranked |> rehydrate_display_fields(user, hits) |> diversify(group?, limit, diversity)
+            ranked |> rehydrate_display_fields(hits) |> diversify(group?, limit, diversity)
           end
         end
 
@@ -872,12 +864,7 @@ defmodule Engram.Search do
     end
   end
 
-  # Task 11.3: off until the v5 rollout; off, search reads exactly as before.
-  # Read ONCE per request (`do_search/4`) and carried in the search opts, so
-  # the Qdrant key list and how the hits are read never disagree mid-flip.
-  defp chunk_text_read?, do: Qdrant.chunk_text_read?()
-
-  # With `:chunk_text_read` on: ONE query for every candidate's chunk row
+  # ONE query for every candidate's chunk row
   # (vault, text, heading) and note display fields, keyed by point id. The
   # vault comes from the row, not the payload (Task 15.7: Qdrant no longer
   # returns `vault_id`).
@@ -890,9 +877,7 @@ defmodule Engram.Search do
   #   own reason. If that leaves nothing, the search fails `:decrypt_failed`
   #   (a DEK or KMS outage), as the payload decrypt always has, rather than
   #   answering an empty page.
-  defp postgres_hits(candidates, _user, false), do: {:ok, {candidates, nil}}
-
-  defp postgres_hits(candidates, user, true) do
+  defp postgres_hits(candidates, user) do
     ids = Enum.map(candidates, & &1[:qdrant_id])
     # The denominator of the hits_dropped / text_missing ratio alert.
     :telemetry.execute([:engram, :search, :hits], %{count: length(ids)}, %{})
@@ -921,14 +906,12 @@ defmodule Engram.Search do
 
   defp bump(counts, reason), do: Map.update(counts, reason, 1, &(&1 + 1))
 
-  # With `:chunk_text_read` on the ranked query fetches no payload; the hits
+  # The ranked query fetches no payload; the hits
   # whose chunk row has no text (rows written before the text columns) get
   # their payload text keys here, in one retrieve of just those points (none
   # when every row has its text). A point deleted since the query is dropped
   # and counted (`point_gone`), as main never returned it. A failed retrieve
   # fails the search, as a failed query does.
-  defp payload_fallback(candidates, nil, _user), do: {:ok, candidates}
-
   defp payload_fallback(candidates, hits, user) do
     case for(c <- candidates, is_nil(hits[c.qdrant_id].text), do: c.qdrant_id) do
       [] -> {:ok, candidates}
@@ -937,7 +920,7 @@ defmodule Engram.Search do
   end
 
   defp merge_fallback(candidates, ids, user) do
-    keys = Qdrant.result_payload(:fallback)
+    keys = Qdrant.fallback_payload()
 
     with {:ok, points} <- Qdrant.retrieve(collection(), ids, with_payload: keys) do
       by_id = Map.new(points, &{&1.qdrant_id, &1})
@@ -969,9 +952,6 @@ defmodule Engram.Search do
       _ -> Logger.warning("search dropped #{count} hit(s): #{reason}", meta)
     end
   end
-
-  defp decrypt_candidates(candidates, user, vaults_by_id, nil),
-    do: Engram.Crypto.decrypt_qdrant_candidates(candidates, user, vaults_by_id, collection())
 
   # Postgres text first; a row written before the text columns falls back to
   # the payload (v3/v4 points); a row with neither keeps its hit, with empty
@@ -1054,20 +1034,9 @@ defmodule Engram.Search do
   # DeleteNoteIndex succeeds, and they must not answer searches meanwhile
   # (#1608).
   #
-  # With `:chunk_text_read` on, the fields were already loaded with the text
-  # (`postgres_hits/2`), so this is a lookup, not a second query.
-  defp rehydrate_display_fields([], _user, _hits), do: []
-
-  defp rehydrate_display_fields(results, user, nil) do
-    qdrant_ids =
-      results |> Enum.map(&Map.get(&1, :qdrant_id)) |> Enum.reject(&is_nil/1)
-
-    apply_display_fields(results, Engram.Notes.display_fields_by_qdrant_points(user, qdrant_ids))
-  end
-
-  defp rehydrate_display_fields(results, _user, hits), do: apply_display_fields(results, hits)
-
-  defp apply_display_fields(results, fields_by_qid) do
+  # The fields were already loaded with the text (`postgres_hits/2`), so this
+  # is a lookup, not a second query.
+  defp rehydrate_display_fields(results, fields_by_qid) do
     Enum.flat_map(results, fn result ->
       case Map.get(fields_by_qid, Map.get(result, :qdrant_id)) do
         %{source_path: source_path, title: title, tags: tags} ->

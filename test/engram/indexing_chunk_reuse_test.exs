@@ -9,11 +9,13 @@ defmodule Engram.IndexingChunkReuseTest do
   use Engram.DataCase, async: false
 
   import Ecto.Query
+  import Engram.IndexingTestHelpers
   import Mox
 
   alias Engram.Indexing
   alias Engram.Notes
   alias Engram.Notes.Chunk
+  alias Engram.Vector.FilterId
 
   setup :verify_on_exit!
 
@@ -234,7 +236,7 @@ defmodule Engram.IndexingChunkReuseTest do
   end
 
   describe "note-level payload on reused points" do
-    test "a frontmatter tag edit refreshes tags_hmac on every reused point", ctx do
+    test "a frontmatter tag edit refreshes the tag ids on every reused point", ctx do
       note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.", "[health]")
       stub_embedder(self())
 
@@ -245,7 +247,7 @@ defmodule Engram.IndexingChunkReuseTest do
       retagged = put_note(ctx.user, ctx.vault, "Ferritin levels are low.", "[health, labs]")
       assert {:ok, _} = Indexing.index_note(retagged, ctx.vault)
 
-      expected = Enum.map(retagged.tags_hmac || [], &Base.encode64/1)
+      expected = Enum.map(retagged.tags_hmac || [], &FilterId.from_hmac/1)
       assert length(expected) == 2, "fixture must carry both tags"
 
       reused_ids =
@@ -267,7 +269,7 @@ defmodule Engram.IndexingChunkReuseTest do
 
       assert Enum.sort(points) == Enum.sort(reused_ids)
 
-      assert Enum.sort(payload["tags_hmac"]) == Enum.sort(expected),
+      assert Enum.sort(payload["g"]) == Enum.sort(expected),
              "reused points would otherwise answer tag filters with the pre-edit tags"
     end
 
@@ -292,8 +294,9 @@ defmodule Engram.IndexingChunkReuseTest do
       assert {:ok, _} = Indexing.index_note(note, ctx.vault)
       reset(ctx.recorder)
 
-      # Same content, so every chunk is reused; only a note-level input moved.
-      moved = %{fresh(note, ctx.user) | fm_timestamp: ~U[2026-01-02 03:04:05Z]}
+      # Same content, so every chunk is reused; only a note-level input moved
+      # (no frontmatter `updated`, so the payload's `up` is the file mtime).
+      moved = %{fresh(note, ctx.user) | mtime: 2_000.0}
       assert {:ok, _} = Indexing.index_note(moved, ctx.vault)
 
       assert upserts(ctx.recorder) == []
@@ -345,7 +348,10 @@ defmodule Engram.IndexingChunkReuseTest do
       assert embedded_texts() == []
       assert upserts(ctx.recorder) == []
       unix = DateTime.to_unix(~U[2026-08-21 08:00:00Z])
-      assert [%{body: %{"payload" => %{"fm_timestamp" => ^unix}}}] = set_payloads(ctx.recorder)
+
+      assert [%{method: "PUT", body: %{"payload" => %{"up" => ^unix}}}] =
+               set_payloads(ctx.recorder)
+
       assert Repo.reload!(note, skip_tenant_check: true).fm_timestamp == ~U[2026-08-21 08:00:00Z]
     end
 
@@ -375,6 +381,8 @@ defmodule Engram.IndexingChunkReuseTest do
       # re-index would reuse ids that no longer exist in Qdrant.
       old_hmac = Base.encode64(note.path_hmac)
       assert :ok = Indexing.delete_points_by_path_hmac(note, old_hmac)
+      # Rebuilt means sent: no vector cache to answer from.
+      clear_vector_cache()
 
       reset(ctx.recorder)
       assert {:ok, ^count} = Indexing.index_note(note, ctx.vault)
@@ -401,6 +409,8 @@ defmodule Engram.IndexingChunkReuseTest do
         skip_tenant_check: true
       )
 
+      # Not reused means sent: no vector cache to answer from.
+      clear_vector_cache()
       reset(ctx.recorder)
       assert {:ok, ^count} = Indexing.index_note(note, ctx.vault)
 
@@ -439,6 +449,8 @@ defmodule Engram.IndexingChunkReuseTest do
         )
       end
 
+      # Not reused means sent: no vector cache to answer from.
+      clear_vector_cache()
       reset(ctx.recorder)
       assert {:ok, ^count} = Indexing.index_note(note, ctx.vault)
       # Every chunk but the frontmatter one, which is sparse-only.

@@ -1,10 +1,10 @@
 defmodule Engram.NotePointsCapFlagTest do
   @moduledoc """
-  `NOTE_POINTS_CAP_ENABLED` (`Indexing.note_cap_enabled?/0`): the per-note
-  cap merge on its own, ahead of the rest of the v5 index budget. On before
-  the dry run, the v5 pass prices and writes every over-cap note capped, so
-  each note is embedded once. Turning `INDEX_BUDGET_ENABLED` on after the
-  pass must not embed a capped note again.
+  The per-note cap merge on its own, without the rest of the v5 index budget
+  (it applies whether or not `INDEX_BUDGET_ENABLED` is on). The v5 pass
+  prices and writes every over-cap note capped, so each note is embedded
+  once. Turning `INDEX_BUDGET_ENABLED` on after the pass must not embed a
+  capped note again.
 
   async: false: global Mox mode, `limits_enforced` and the budget flag are
   global app env.
@@ -38,7 +38,6 @@ defmodule Engram.NotePointsCapFlagTest do
     Repo.query!("DELETE FROM rebuild_ledger")
     EngramWeb.RateLimiter.reset_buckets!()
     ServiceConfig.put_override(:rebuild_pinned_versions, @pins)
-    ServiceConfig.put_override(:write_v5_layout, true)
     Rebuild.set_budget(10_000_000)
 
     bypass = Bypass.open()
@@ -90,7 +89,17 @@ defmodule Engram.NotePointsCapFlagTest do
       "# Big\n\n" <>
         Enum.map_join(1..n, "\n\n", &"## S#{&1}\n\nsection#{&1} body text. #{@pad}")
 
-  defp cap_on, do: ServiceConfig.put_override(:note_points_cap_enabled, true)
+  # A note indexed while no cap applied (limits unenforced): over the cap, as
+  # one left by a downgrade or a lowered override is.
+  defp index_uncapped(note) do
+    Application.put_env(:engram, :limits_enforced, false)
+
+    try do
+      assert :ok = perform_job(EmbedNote, %{"note_id" => note.id, "user_id" => note.user_id})
+    after
+      Application.put_env(:engram, :limits_enforced, true)
+    end
+  end
 
   defp reverify_tick, do: DateTime.new!(Date.utc_today(), ~T[04:02:00])
 
@@ -163,30 +172,13 @@ defmodule Engram.NotePointsCapFlagTest do
              Indexing.index_note(note, vault, Repo.reload!(user, skip_tenant_check: true))
   end
 
-  describe "flag off" do
-    test "is off by default and plans as main: one point a chunk", %{user: user, vault: vault} do
-      refute Indexing.note_cap_enabled?()
-      note = insert_note(user, vault, sections(500))
-      assert {:ok, 500, _, true} = Indexing.index_note_with_usage(note, vault, user)
-      assert rows(note) == 500
-    end
-
-    test "the dry-run estimate prices every chunk", %{user: user, vault: vault} do
-      note = insert_note(user, vault, sections(500))
-      {:ok, est} = Repo.with_tenant!(user.id, fn -> Indexing.rebuild_estimate(note, user) end)
-      assert est.new_points == 500
-    end
-  end
-
-  describe "flag on, budget off" do
+  describe "budget off" do
     setup do
-      cap_on()
       refute Indexing.budget_enabled?()
       :ok
     end
 
     test "an edit caps a Free note to 128 points", %{user: user, vault: vault} do
-      assert Indexing.note_cap_enabled?()
       note = insert_note(user, vault, sections(500))
       assert {:ok, n, _, true} = Indexing.index_note_with_usage(note, vault, user)
       assert n <= 128 and rows(note) == n
@@ -254,26 +246,22 @@ defmodule Engram.NotePointsCapFlagTest do
     test "the recap leaves an over-cap note the pass will rebuild alone",
          %{user: user, vault: vault} do
       ServiceConfig.put_override(:index_rebuild, "dry_run")
-      ServiceConfig.put_override(:note_points_cap_enabled, false)
       note = insert_note(user, vault, sections(500))
-      assert :ok = perform_job(EmbedNote, %{"note_id" => note.id, "user_id" => user.id})
+      index_uncapped(note)
       assert rows(note) == 500
-      cap_on()
       stamp_pinned(note)
 
       assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
       refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id, "recap" => true})
     end
 
-    # After the pass (every note at the build), the cap flag alone recaps a
-    # note still over it, e.g. after a downgrade.
+    # After the pass (every note at the build), the recap caps a note still
+    # over it, e.g. after a downgrade.
     test "the recap still caps a build-current note over the cap", %{user: user, vault: vault} do
       ServiceConfig.put_override(:rebuild_pinned_versions, Rebuild.build_versions())
-      ServiceConfig.put_override(:note_points_cap_enabled, false)
       note = insert_note(user, vault, sections(500))
-      assert :ok = perform_job(EmbedNote, %{"note_id" => note.id, "user_id" => user.id})
+      index_uncapped(note)
       assert rows(note) == 500
-      cap_on()
       lapse_cooldown(note)
 
       assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())

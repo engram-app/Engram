@@ -87,10 +87,14 @@ defmodule Engram.SearchIntegrationTest do
     point = hd(resp.body["result"]["points"])
     payload = point["payload"]
 
-    assert payload["text_nonce"] != nil
-    assert payload["text"] != "# Journal"
-    assert payload["title"] != "Journal"
-    assert payload["vault_id"] == to_string(vault.id)
+    # A v5 payload holds keyed ids only: no note text or title at all, in
+    # plaintext or ciphertext. The text lives encrypted in Postgres.
+    refute Map.has_key?(payload, "text")
+    refute Map.has_key?(payload, "title")
+    refute Jason.encode!(payload) =~ "Sensitive"
+    refute Jason.encode!(payload) =~ "Journal"
+    vault_key = Engram.Vector.PayloadKeys.short(:vault_id)
+    assert payload[vault_key] == String.replace(to_string(vault.id), "-", "")
 
     {:ok, results} = Engram.Search.search(user, vault, "sensitive body")
 
@@ -100,6 +104,8 @@ defmodule Engram.SearchIntegrationTest do
       assert is_binary(r.text)
       refute Map.has_key?(r, :text_nonce)
     end)
+
+    assert Enum.any?(results, &(&1.text =~ "Sensitive body content."))
   end
 
   test "updated_after finds an OKF v0.2 note dated only by generated.at",

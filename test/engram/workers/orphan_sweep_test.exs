@@ -166,8 +166,8 @@ defmodule Engram.Workers.OrphanSweepTest do
   # second unpiped `Repo.one(...)` in the same function would have walked
   # straight past while both assertions stayed green.
   test "every authority read runs on the maintenance pool, not on Repo" do
-    # The chunk reads moved to Engram.Vector.PointIds (shared with
-    # ClusterDiff); the guard follows them there.
+    # The chunk reads live in Engram.Vector.PointIds; the guard follows them
+    # there.
     sweep = authority_bodies("lib/engram/workers/orphan_sweep.ex", :defp, [:live_user_ids])
     shared = authority_bodies("lib/engram/vector/point_ids.ex", :def, [:chunk_page, :known])
 

@@ -23,32 +23,13 @@ defmodule Engram.MCP.HandlersSearchSnippetTest do
     %{bypass: bypass, user: user, vault: vault}
   end
 
+  # A hit on Big.md whose chunk row holds `text`.
   defp hit(user, vault, text) do
-    id = Ecto.UUID.generate()
-
-    {:ok, enc} =
-      Engram.Crypto.encrypt_qdrant_payload(
-        %{text: text, title: "Big", heading_path: "Big"},
-        user,
-        "engram_notes",
-        id
-      )
+    note = Engram.Fixtures.insert_note!(user, vault, %{path: "Big.md", title: "Big"})
 
     %{
-      "id" => id,
-      "score" => 0.8,
-      "payload" => %{
-        "text" => enc.text,
-        "title" => enc.title,
-        "heading_path" => enc.heading_path,
-        "text_nonce" => enc.text_nonce,
-        "title_nonce" => enc.title_nonce,
-        "heading_path_nonce" => enc.heading_path_nonce,
-        "aad_version" => enc.aad_version,
-        "source_path" => "Big.md",
-        "user_id" => to_string(user.id),
-        "vault_id" => to_string(vault.id)
-      }
+      "id" => Engram.Fixtures.insert_chunk!(user, note, Ecto.UUID.generate(), text: text),
+      "score" => 0.8
     }
   end
 
@@ -63,13 +44,12 @@ defmodule Engram.MCP.HandlersSearchSnippetTest do
         i -> "Paragraph #{i} of ordinary filler text."
       end)
 
+    point = hit(user, vault, text)
+
     Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(
-        200,
-        Jason.encode!(QdrantStub.batch(conn, %{"result" => [hit(user, vault, text)]}))
-      )
+      |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(conn, %{"result" => [point]})))
     end)
 
     assert {:ok, markdown, %{"results" => [r]}} =
