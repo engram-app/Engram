@@ -37,12 +37,12 @@ import {
 	CheckoutSummary,
 	type CheckoutTotals,
 	checkoutTotals,
+	FREE_TIER,
 	formatPlanPrice,
+	PLAN_CATALOG,
 	PlanAccordionRow,
 	PlanCard,
 	type PlanTier,
-	FREE_TIER,
-	PLAN_CATALOG,
 	useRenewalNotice,
 } from "./plan-cards";
 import PlanChangePanel from "./plan-change-panel";

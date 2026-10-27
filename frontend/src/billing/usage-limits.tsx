@@ -1,11 +1,7 @@
 import { Link } from "react-router";
 import { useT } from "@/i18n/locale-provider";
 import type { UIText } from "@/i18n/ui-text";
-import {
-	type BillingUsage,
-	type UsageEntry,
-	useBillingUsage,
-} from "../api/queries";
+import { type BillingUsage, type UsageEntry, useBillingUsage } from "../api/queries";
 import { SettingsSectionCard } from "../settings/account/section-card";
 
 // No invisible limits (review H3 of #2067): the notes cap and the v5 search

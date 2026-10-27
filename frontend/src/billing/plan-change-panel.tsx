@@ -16,7 +16,7 @@ import {
 	useConfirmPlanChange,
 	usePlanChangePreview,
 } from "../api/queries";
-import { CadenceToggle, PLAN_TIERS, PLAN_CATALOG, PlanCard, type PlanTier } from "./plan-cards";
+import { CadenceToggle, PLAN_CATALOG, PLAN_TIERS, PlanCard, type PlanTier } from "./plan-cards";
 
 interface PlanChangePanelProps {
 	billing: BillingStatus;

@@ -39,6 +39,34 @@ interface FreeTierCopy {
 	features: readonly MsgKey[];
 }
 
+// The catalog price at a cadence, in whole USD.
+function listPrice(
+	catalog: Pick<PlanCardCatalog, "monthlyPrice" | "annualPrice">,
+	cadence: BillingCadence,
+): number {
+	return cadence === "monthly" ? catalog.monthlyPrice : catalog.annualPrice;
+}
+
+interface PlanCardProps {
+	name: MsgKey;
+	cadence: BillingCadence;
+	monthlyPrice: number;
+	annualPrice: number;
+	features: readonly MsgKey[];
+	tier: PlanTier;
+	onAction: (tier: PlanTier) => void;
+	disabled?: boolean;
+	// Visual states — pick at most one (current beats selected which beats
+	// recommended). Only one card per panel should render any of these.
+	recommended?: boolean;
+	selected?: boolean;
+	current?: boolean;
+	ctaLabel?: string;
+	// ctaSubLabel is shown under the CTA only on the selected card — used by
+	// PlanChangePanel to surface inline proration without a separate strip.
+	ctaSubLabel?: string;
+}
+
 // Free tier display copy. Not a PlanTier (no Paddle price / checkout), but
 // centralized here alongside the paid catalog so the onboarding accordion and
 // the desktop free-link can't drift. Every stored note is searchable; the
@@ -89,34 +117,6 @@ export const PLAN_CATALOG: Record<PlanTier, PlanCardCatalog> = {
 		],
 	},
 };
-
-// The catalog price at a cadence, in whole USD.
-function listPrice(
-	catalog: Pick<PlanCardCatalog, "monthlyPrice" | "annualPrice">,
-	cadence: BillingCadence,
-): number {
-	return cadence === "monthly" ? catalog.monthlyPrice : catalog.annualPrice;
-}
-
-interface PlanCardProps {
-	name: MsgKey;
-	cadence: BillingCadence;
-	monthlyPrice: number;
-	annualPrice: number;
-	features: readonly MsgKey[];
-	tier: PlanTier;
-	onAction: (tier: PlanTier) => void;
-	disabled?: boolean;
-	// Visual states — pick at most one (current beats selected which beats
-	// recommended). Only one card per panel should render any of these.
-	recommended?: boolean;
-	selected?: boolean;
-	current?: boolean;
-	ctaLabel?: string;
-	// ctaSubLabel is shown under the CTA only on the selected card — used by
-	// PlanChangePanel to surface inline proration without a separate strip.
-	ctaSubLabel?: string;
-}
 
 export type PlanTier = "starter" | "pro";
 
