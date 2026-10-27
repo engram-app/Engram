@@ -156,7 +156,7 @@ config :engram, Oban,
     #
     # The dedicated worker raises this to 6 in config/runtime.exs, under the
     # ENGRAM_NODE_ROLE=worker arm — NOT here. It can afford to: it never binds
-    # a room so it never runs the inline gate, and its pool is 25. Raising it
+    # a room so it never runs the inline gate, and its pool is 20 (engram-infra#1594). Raising it
     # here instead would put 6 + 3 = 9 on every unsplit node's pool of 15,
     # which with embed at 5 is the 2026-07-09 exhaustion shape. ObanQueueConfigTest
     # holds the 1..3 ceiling on this value as a tripwire.
