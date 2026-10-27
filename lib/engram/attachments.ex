@@ -1217,8 +1217,7 @@ defmodule Engram.Attachments do
         Base.encode64(item.old_basename_hmac)
       )
     end)
-    |> Enum.chunk_every(2_000)
-    |> Enum.each(&Oban.insert_all/1)
+    |> Engram.Jobs.insert_chunked()
 
     Enum.map(moved, fn {item, _seq, _cols, att} -> {item, att} end)
   end

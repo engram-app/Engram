@@ -54,7 +54,6 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
 
   alias Engram.Attachments
   alias Engram.Attachments.Attachment
-  alias Engram.Batch
   alias Engram.Logger.Metadata
   alias Engram.Repo
   alias Engram.Storage
@@ -63,9 +62,6 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
 
   # Set once this node learns bucket versions are unavailable (see moduledoc).
   @latch {__MODULE__, :unavailable}
-
-  # Jobs per `Oban.insert_all` in the fan-out (same bound as the notes path).
-  @insert_chunk Batch.insert_rows()
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(15)
@@ -146,8 +142,9 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
     |> Enum.map(fn {user_id, vault_id} ->
       new(%{"user_id" => user_id, "vault_id" => vault_id})
     end)
-    |> Enum.chunk_every(@insert_chunk)
-    |> Enum.each(&Oban.insert_all/1)
+    |> Engram.Jobs.insert_chunked()
+
+    :ok
   end
 
   # Pages through the vault's versions, deciding each page as it lands, so a

@@ -20,7 +20,7 @@ released.
 
 A run sends ALL its stale ids as ONE release job and logs one summary line. Per-id jobs pinned prod
 on 2026-10-23 (14k+ jobs for one first-sync vault). The job releases its ids in chunks of at most
-2,000 (`ReleaseIndexEntries.chunk_size/0`; one notes read and one index-room change each), in series.
+2,000 (`Engram.Batch.release_index_entries/0`; one notes read and one index-room change each), in series.
 After 10 s (`link_budget_ms/0`) it enqueues what is left as its successor, so a chain runs one link
 at a time, each link (budget plus one chunk) stays far inside the 5 minute job timeout, and a link
 gives its queue slot back to waiting checkpoints every ~10 s; a 34k storm is two links. A rotation
@@ -29,7 +29,7 @@ vault (folder or note deletes) can still run beside a chain. Every release goes 
 `ReleaseIndexEntries.enqueue/3`, which joins the vault's job that is still `available`/`scheduled`
 instead of queueing its own (2026-10-24): deleting K notes one request at a time is one job, not K
 full index rewrites. A running job is never joined, and a pending job takes joined ids only up to
-`chunk_size/0` (a chain successor carrying more than a chunk takes none); past that a release gets
+`Engram.Batch.release_index_entries/0` (a chain successor carrying more than a chunk takes none); past that a release gets
 its own job. The lookup probes Oban's `(state, queue, ...)` index. Enqueueing every chunk up front
 (the first shape of #2170) let 17 chunks fill all 6 `crdt_checkpoint` slots, each waiting on the
 vault's fold lock while holding a DB connection. The size is measured, not assumed: a chunk's cost
