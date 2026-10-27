@@ -17,9 +17,11 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   alias Engram.Crypto
   alias Engram.DataMigrations.NotePayloadStamps
   alias Engram.Indexing
+  alias Engram.Indexing.PayloadV6
   alias Engram.Notes
-  alias Engram.Notes.{Chunk, Note}
+  alias Engram.Notes.{Chunk, Note, NoteIndexState}
   alias Engram.Vector.{FilterId, QdrantLayout}
+  alias Engram.ServiceConfig
   alias Engram.Workers.ReconcileNotePayloads
 
   setup :verify_on_exit!
@@ -32,6 +34,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           upserts: 0,
           set_payloads: [],
           overwrites: [],
+          batches: [],
           on_scroll: nil,
           on_write: nil,
           on_upsert: nil,
@@ -490,6 +493,105 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   # The v5 format on, as prod runs it after the rebuild: `u` is indexed.
   # The v3 cluster: LEGACY_FILTER_FIELDS=false, so the fake has no legacy
   # index and refuses any filter on a legacy key, as v3 would.
+  describe "payload version sweep" do
+    # Both notes on v5 points written by a real v5 pass, stamped by it.
+    setup ctx do
+      vault = Repo.get!(Engram.Vaults.Vault, ctx.stale.vault_id, skip_tenant_check: true)
+
+      for note <- [ctx.stale, ctx.healthy] do
+        {:ok, plain} = Crypto.maybe_decrypt_note_fields(reload(note), ctx.user)
+        assert {:ok, _} = Indexing.index_note(plain, vault)
+      end
+
+      ids = point_ids(ctx.stale) ++ point_ids(ctx.healthy)
+      passed = Agent.get(ctx.store, &Map.take(&1.points, ids))
+      assert map_size(passed) == length(ids) and ids != []
+      assert reload(ctx.stale).payload_hash && reload(ctx.healthy).payload_hash
+      Agent.update(ctx.store, &%{&1 | set_payloads: [], overwrites: [], upserts: 0})
+      %{ids: ids, passed: passed}
+    end
+
+    defp payload_versions(ctx) do
+      Repo.all(
+        from(s in NoteIndexState, where: s.user_id == ^ctx.user.id, select: s.payload_version),
+        skip_tenant_check: true
+      )
+    end
+
+    defp no_embed, do: expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("embed") end)
+
+    test "with the version at the baseline the sweep selects nothing new", ctx do
+      assert PayloadV6.version() == PayloadV6.baseline()
+      assert ReconcileNotePayloads.enqueue_missing() == 0
+
+      Agent.update(ctx.store, fn s ->
+        put_in(s.points[hd(ctx.ids)], retired_v5(ctx))
+      end)
+
+      no_embed()
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      assert Agent.get(ctx.store, & &1.batches) == []
+      assert payload_versions(ctx) |> Enum.all?(&is_nil/1)
+    end
+
+    test "a bumped version rewrites stale points in one set_payloads batch, no embed", ctx do
+      %{ids: ids, passed: passed} = ctx
+      ServiceConfig.put_override(:payload_version, PayloadV6.baseline() + 1)
+      # A drifted point on each note.
+      for id <- [hd(point_ids(ctx.stale)), hd(point_ids(ctx.healthy))],
+          do: Agent.update(ctx.store, &put_in(&1.points[id], retired_v5(ctx)))
+
+      assert ReconcileNotePayloads.enqueue_missing() == 1
+      no_embed()
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+      # Merged back by one batch: not an upsert, not a PUT, not a POST per point.
+      assert [written] = Agent.get(ctx.store, & &1.batches)
+
+      assert Enum.sort(written) ==
+               Enum.sort([hd(point_ids(ctx.stale)), hd(point_ids(ctx.healthy))])
+
+      assert Agent.get(ctx.store, & &1.upserts) == 0
+      assert Agent.get(ctx.store, & &1.overwrites) == []
+      assert Agent.get(ctx.store, & &1.set_payloads) == []
+
+      # Same points, payloads exactly what the pass wrote, stamped.
+      assert Agent.get(ctx.store, &Map.take(&1.points, ids)) == passed
+      assert Agent.get(ctx.store, &map_size(&1.points)) == length(ids)
+      assert payload_versions(ctx) == [PayloadV6.baseline() + 1, PayloadV6.baseline() + 1]
+
+      # Converged: nothing left to select, nothing more written.
+      assert ReconcileNotePayloads.enqueue_missing() == 0
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      assert length(Agent.get(ctx.store, & &1.batches)) == 1
+    end
+
+    test "points already holding the payload are only stamped", ctx do
+      ServiceConfig.put_override(:payload_version, PayloadV6.baseline() + 1)
+      no_embed()
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+      assert Agent.get(ctx.store, & &1.batches) == []
+      assert payload_versions(ctx) == [PayloadV6.baseline() + 1, PayloadV6.baseline() + 1]
+    end
+
+    test "a newer stamp is current: a rollback selects nothing", ctx do
+      ServiceConfig.put_override(:payload_version, PayloadV6.baseline() + 1)
+
+      {2, _} =
+        Repo.update_all(
+          from(s in NoteIndexState, where: s.user_id == ^ctx.user.id),
+          [set: [payload_version: PayloadV6.baseline() + 1]],
+          skip_tenant_check: true
+        )
+
+      assert ReconcileNotePayloads.enqueue_missing() == 0
+      # And back on the baseline code, the newer stamp is still not behind.
+      ServiceConfig.put_override(:payload_version, PayloadV6.baseline())
+      assert ReconcileNotePayloads.enqueue_missing() == 0
+    end
+  end
+
   defp v3_on(ctx) do
     Engram.ServiceConfig.put_override(:legacy_filter_fields, false)
     Agent.update(ctx.store, &%{&1 | legacy_indexes: false})
@@ -608,6 +710,29 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           end)
 
           %{"status" => "completed"}
+
+        # `Qdrant.set_payloads/2`: one unwaited batch of per-point set_payload
+        # ops, then (below) a read-back of the keys it set.
+        {"POST", "/collections/engram_notes/points/batch"} ->
+          ops = for %{"set_payload" => op} <- body["operations"], do: op
+
+          Agent.update(store, fn s ->
+            points =
+              Enum.reduce(ops, s.points, fn %{"points" => [id], "payload" => pl}, acc ->
+                Map.update(acc, id, pl, &Map.merge(&1, pl))
+              end)
+
+            %{s | points: points, batches: [Enum.flat_map(ops, & &1["points"]) | s.batches]}
+          end)
+
+          Enum.map(ops, fn _ -> %{"status" => "completed"} end)
+
+        {"POST", "/collections/engram_notes/points"} ->
+          points = Agent.get(store, & &1.points)
+
+          for id <- body["ids"], Map.has_key?(points, id) do
+            %{"id" => id, "payload" => Map.take(points[id], body["with_payload"])}
+          end
 
         {"POST", "/collections/engram_notes/points/scroll"} ->
           if hook = Agent.get(store, & &1.on_scroll), do: hook.()

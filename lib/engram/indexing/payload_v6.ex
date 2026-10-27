@@ -25,8 +25,26 @@ defmodule Engram.Indexing.PayloadV6 do
   alias Engram.Indexing.PayloadV5
   alias Engram.Notes.FlatFields
   alias Engram.Notes.FrontmatterKeys
+  alias Engram.ServiceConfig
   alias Engram.Vector.FilterId
   alias Engram.Vector.PayloadKeys
+
+  # The payload shape a release writes. Bumping it makes
+  # `Engram.Workers.ReconcileNotePayloads` bring every note's points to the new
+  # shape, with no embedder call and no operator step. A note whose stamp
+  # (`note_index_state.payload_version`) is NULL was written before the stamp
+  # existed, which is `@baseline`; stamps are compared with `<`, so a newer
+  # stamp is current and a rollback rebuilds nothing.
+  @baseline 5
+  @version 5
+
+  @doc "The payload version this release writes (test builds: `:payload_version` override)."
+  @spec version() :: pos_integer()
+  def version, do: ServiceConfig.get(:payload_version, @version)
+
+  @doc "The version of a note whose stamp is NULL: the shape before the stamp existed."
+  @spec baseline() :: pos_integer()
+  def baseline, do: @baseline
 
   @doc "The v6 payload for a note and its extracted fields."
   @spec build(map(), FlatFields.t()) :: %{String.t() => term()}
