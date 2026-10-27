@@ -577,17 +577,22 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # Same versions the pass rebuilds to (`Rebuild.target_versions/0`): with
     # the rebuild `off` or `dry_run` that is the pins, so the guard never
     # waits on a rebuild that is not running. Notes the pass skips do not
-    # count: parked until edited or on a cooldown (`embed_retry_after` in the
-    # future, which includes a poison note that will never rebuild) and
-    # budget-parked ones, which wait on THIS sweep to free room.
+    # count: parked until edited or on a cooldown longer than the pass's own
+    # backoff (a poison note that will never rebuild, and budget-parked ones,
+    # which wait on THIS sweep to free room).
     {chunker, _keyword} = Rebuild.target_versions()
+
+    # The version pass stamps its own `backoff_seconds()` on a note it just
+    # queued, so a retry time within that window is a rebuild in flight and
+    # still counts. Only a later one (a poison cooldown, or a park, which
+    # `EmbedNote` sets to `parked_until_edited/0`) is a note it will skip.
+    reachable_until = DateTime.add(now, backoff_seconds(), :second)
 
     behind =
       IndexVersions.live_notes()
       |> where([n], not is_nil(n.embed_hash))
       |> where([n], is_nil(n.chunker_version) or n.chunker_version < ^chunker)
-      |> where([n], is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now)
-      |> where([n], is_nil(n.embed_budget_parked) or n.embed_budget_parked == false)
+      |> where([n], is_nil(n.embed_retry_after) or n.embed_retry_after <= ^reachable_until)
       |> distinct(true)
       |> select([n], n.user_id)
       |> per_user.()

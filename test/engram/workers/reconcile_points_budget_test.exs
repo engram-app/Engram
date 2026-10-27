@@ -408,6 +408,26 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
       end
     end
 
+    # The version pass stamps a short backoff on a note it just queued, so a
+    # retry time inside that window is a rebuild in flight: the owner stays
+    # unbudgeted. Without the `backoff_seconds()` allowance the guard opens
+    # here and the sweep demotes a note about to be rebuilt.
+    test "an old-chunker note with a rebuild queued (retry 10 minutes out) still blocks", %{
+      user: user,
+      vault: vault
+    } do
+      notes = div(cap() * 12, 1_000)
+      [legacy | _] = full_notes(user, vault, notes, 100, real: true)
+
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^legacy),
+          set: [chunker_version: nil, embed_retry_after: DateTime.add(DateTime.utc_now(), 600)]
+        )
+      end)
+
+      assert {:ok, %{demoted: 0, promoted: 0}} = ReconcileEmbeddings.budget_sweep(20)
+    end
+
     # Zero-rows CONTROL: the guard rejects per user. A second, all-current
     # user over the cap IS budgeted in the very sweep that skips the first.
     test "the stale-chunker guard is per user: an all-current user is budgeted alongside", %{
