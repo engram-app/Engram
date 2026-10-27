@@ -132,13 +132,13 @@ async def test_obsidian_frontmatter_reaches_web_when_note_is_closed(
     note_id = _note_id(api_sync, path)
 
     await web.open_note(note_id, sync_vault_id)
-    await expect(web.property_value_locator("status")).to_have_value(
+    await expect(web.property_value_locator("status")).to_have_text(
         "draft", timeout=MS
     )
 
     # Change the value from Obsidian while the note is not open there.
     write_note(vault_a, path, "---\nstatus: published\n---\n\nbody v1\n")
-    await expect(web.property_value_locator("status")).to_have_value(
+    await expect(web.property_value_locator("status")).to_have_text(
         "published", timeout=MS
     )
 
@@ -160,12 +160,12 @@ async def test_obsidian_frontmatter_reaches_web_when_note_is_open(
     await _open_in_obsidian(cdp_a, path)
 
     await web.open_note(note_id, sync_vault_id)
-    await expect(web.property_value_locator("status")).to_have_value(
+    await expect(web.property_value_locator("status")).to_have_text(
         "draft", timeout=MS
     )
 
     write_note(vault_a, path, "---\nstatus: published\n---\n\nbody v1\n")
-    await expect(web.property_value_locator("status")).to_have_value(
+    await expect(web.property_value_locator("status")).to_have_text(
         "published", timeout=MS
     )
 
@@ -224,7 +224,7 @@ async def test_unparseable_frontmatter_does_not_delete_existing_keys(
     note_id = _note_id(api_sync, path)
 
     await web.open_note(note_id, sync_vault_id)
-    await expect(web.property_value_locator("keep")).to_have_value("me", timeout=MS)
+    await expect(web.property_value_locator("keep")).to_have_text("me", timeout=MS)
 
     # A transiently-unparseable block: an unclosed flow sequence. This is what
     # sits on disk for as long as it takes to type the closing bracket.
@@ -249,8 +249,8 @@ async def test_unparseable_frontmatter_does_not_delete_existing_keys(
     # frontmatter this write produced. The good keys must have survived it --
     # asserted on the WEB APP, because a client-side wipe propagates and takes
     # the rows away here too.
-    await expect(web.property_value_locator("keep")).to_have_value("me", timeout=MS)
-    await expect(web.property_value_locator("also")).to_have_value("here", timeout=MS)
+    await expect(web.property_value_locator("keep")).to_have_text("me", timeout=MS)
+    await expect(web.property_value_locator("also")).to_have_text("here", timeout=MS)
 
     # And on disk, where the loss becomes permanent.
     final = read_note(vault_a, path)
@@ -282,7 +282,7 @@ async def test_typed_frontmatter_survives_close_and_reopen(
     await _open_in_obsidian(cdp_a, path)
 
     await web.open_note(note_id, sync_vault_id)
-    await expect(web.property_value_locator("keep")).to_have_value("me", timeout=MS)
+    await expect(web.property_value_locator("keep")).to_have_text("me", timeout=MS)
 
     # Type a second key into the OPEN note.
     await _type_into_open_editor(
@@ -292,7 +292,7 @@ async def test_typed_frontmatter_survives_close_and_reopen(
     # It reaches the web app. The user confirms this half works, and asserting
     # it here is what makes the failure below unambiguous: the doc HAS the key
     # at the moment the file is closed.
-    await expect(web.property_value_locator("status")).to_have_value(
+    await expect(web.property_value_locator("status")).to_have_text(
         "published", timeout=MS
     )
 
@@ -321,6 +321,6 @@ async def test_typed_frontmatter_survives_close_and_reopen(
     assert "keep:" in final and "status:" in final, (
         f"frontmatter vanished on reopen; file is now:\n{final!r}"
     )
-    await expect(web.property_value_locator("status")).to_have_value(
+    await expect(web.property_value_locator("status")).to_have_text(
         "published", timeout=MS
     )

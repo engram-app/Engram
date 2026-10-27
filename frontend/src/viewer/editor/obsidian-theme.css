@@ -365,6 +365,14 @@
 	color: var(--atomic-editor-fg);
 }
 
+/* Touch screens never fire the mousemove that reveals the chevron above, so
+   folding was undiscoverable on a phone. Show it faintly at rest there. */
+@media (hover: none) {
+	.cm-fold-chevron {
+		opacity: 0.5;
+	}
+}
+
 /* The `…` standing in for a folded section. Obsidian renders it as a quiet
    inline chip rather than bare punctuation, which is easy to miss mid-note. */
 .cm-editor .cm-foldPlaceholder {

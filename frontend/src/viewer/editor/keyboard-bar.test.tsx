@@ -5,14 +5,17 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { yCollab } from "y-codemirror.next";
 import * as Y from "yjs";
-import { KeyboardBar } from "./keyboard-bar";
+import { KeyboardBar, toolbarScrollMargin } from "./keyboard-bar";
 
-const { insetValue, keyboardOpen } = vi.hoisted(() => ({
-	insetValue: { current: 300 },
+const { boxValue, keyboardOpen } = vi.hoisted(() => ({
+	// What a phone reports with the keyboard up: the visible area is the top
+	// 500px of an 800px window.
+	boxValue: { current: { top: 0, height: 500 } },
 	keyboardOpen: { current: true },
 }));
 vi.mock("./use-keyboard-inset", () => ({
-	useKeyboardInset: () => insetValue.current,
+	readViewportBox: () => boxValue.current,
+	useVisualViewportBox: () => boxValue.current,
 	useKeyboardOpen: () => keyboardOpen.current,
 }));
 
@@ -67,7 +70,7 @@ function setViewport(kind: "desktop" | "mobile") {
 
 beforeEach(() => {
 	setViewport("mobile");
-	insetValue.current = 300;
+	boxValue.current = { top: 0, height: 500 };
 	keyboardOpen.current = true;
 });
 
@@ -89,13 +92,10 @@ describe("KeyboardBar", () => {
 	// interactive-widget=resizes-content) drop window.innerHeight by the same
 	// amount the visual viewport lost, so the inset reads 0 with the keyboard
 	// fully open. Visibility must therefore never be gated on a non-zero inset.
-	it("shows with the keyboard up even when the inset reads 0", () => {
-		insetValue.current = 0;
+	it("shows with the keyboard up even when the layout viewport shrank too", () => {
+		Object.defineProperty(window, "innerHeight", { value: 500, configurable: true });
 		mount("hello");
-		const bar = screen.getByRole("toolbar", { name: "Editor actions" });
-		expect(bar).toBeInTheDocument();
-		// bottom-0 with no lift is already correct there: the viewport shrank.
-		expect(bar.style.transform).toBe("translateY(-0px)");
+		expect(screen.getByRole("toolbar", { name: "Editor actions" })).toBeInTheDocument();
 	});
 
 	// Focus alone is not enough either: dismissing the keyboard with the
@@ -113,10 +113,17 @@ describe("KeyboardBar", () => {
 		expect(document.documentElement.style.getPropertyValue("--editor-toolbar-offset")).toBe("");
 	});
 
-	it("rides above the keyboard by the measured inset", () => {
+	// No transform lift: iOS 26 moves transform-lifted fixed bars out of step
+	// with the visual viewport. A fixed frame sized to the visual viewport, with
+	// the bar docked to its bottom, is the workaround that holds.
+	it("sits in a frame sized to the visual viewport, not lifted by a transform", () => {
+		boxValue.current = { top: 40, height: 460 };
 		mount("hello");
 		const bar = screen.getByRole("toolbar", { name: "Editor actions" });
-		expect(bar.style.transform).toBe("translateY(-300px)");
+		expect(bar.style.transform).toBe("");
+		const frame = bar.parentElement as HTMLElement;
+		expect(frame.style.top).toBe("40px");
+		expect(frame.style.height).toBe("460px");
 	});
 
 	// The whole feature collapses if a tap dismisses the keyboard: iOS blurs the
@@ -234,16 +241,32 @@ describe("KeyboardBar", () => {
 	// The setup-checklist FAB is fixed to the same bottom edge and was landing on
 	// top of the toolbar once the keyboard opened. It reads this variable rather
 	// than duplicating the inset measurement, so it clears the taller two-row
-	// layout too. (happy-dom has no layout engine, so the measured height is 0
-	// here and the value is the inset alone.)
+	// layout too. happy-dom has no layout engine, so the bar's rect is stubbed.
 	describe("--editor-toolbar-offset", () => {
 		function offset() {
 			return document.documentElement.style.getPropertyValue("--editor-toolbar-offset");
 		}
 
-		it("publishes the space it occupies while it is up", () => {
+		it("publishes the space from the bar's top to the window's bottom", () => {
+			Object.defineProperty(window, "innerHeight", { value: 800, configurable: true });
+			vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+				top: 444,
+				height: 56,
+			} as DOMRect);
 			mount("hello");
-			expect(offset()).toBe("300px");
+			expect(offset()).toBe("356px");
+			vi.restoreAllMocks();
+		});
+
+		// The box changes on every frame of a visual-viewport scroll; rewriting a
+		// root CSS variable each time restyles the whole document.
+		it("does not rewrite the variable when the value is unchanged", () => {
+			const { rerender } = mount("hello");
+			const setProperty = vi.spyOn(document.documentElement.style, "setProperty");
+			boxValue.current = { ...boxValue.current };
+			rerender(<KeyboardBar getView={() => view} />);
+			expect(setProperty).not.toHaveBeenCalled();
+			setProperty.mockRestore();
 		});
 
 		it("clears the offset when the editor loses focus", () => {
@@ -256,6 +279,42 @@ describe("KeyboardBar", () => {
 			setViewport("desktop");
 			mount("hello");
 			expect(offset()).toBe("");
+		});
+	});
+
+	// CodeMirror scrolls the caret into view against the visual viewport, which
+	// knows nothing about this bar, so typing on the last visible line put the
+	// caret behind it. The editor reads the bar's footprint as a scroll margin.
+	describe("toolbarScrollMargin", () => {
+		function marginBottom() {
+			const fns = view.state.facet(EditorView.scrollMargins);
+			return fns.map((fn) => fn(view)?.bottom).find((b) => b !== undefined);
+		}
+
+		it("reserves the space from the bar's top to the visible bottom", () => {
+			ydoc = new Y.Doc();
+			view = new EditorView({
+				state: EditorState.create({ doc: "hello", extensions: [toolbarScrollMargin] }),
+				parent: document.body,
+			});
+			view.focus();
+			render(<KeyboardBar getView={() => view} />);
+			vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+				top: 432,
+				height: 56,
+			} as DOMRect);
+			// Visible area ends at 500; the bar starts at 432.
+			expect(marginBottom()).toBe(68);
+			vi.restoreAllMocks();
+		});
+
+		it("reserves nothing while the bar is not shown", () => {
+			ydoc = new Y.Doc();
+			view = new EditorView({
+				state: EditorState.create({ doc: "hello", extensions: [toolbarScrollMargin] }),
+				parent: document.body,
+			});
+			expect(marginBottom()).toBeUndefined();
 		});
 	});
 

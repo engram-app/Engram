@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { foldable, forceParsing } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
@@ -90,5 +92,17 @@ describe("heading folding", () => {
 
 		expect(withFix).not.toContain("alpha one");
 		expect(without).toContain("alpha one");
+	});
+});
+
+// The chevron is revealed by mousemove, which a touch screen never fires, so
+// folding was undiscoverable on a phone. Touch screens show it faintly.
+describe("fold chevron on touch screens", () => {
+	it("is visible without hover where there is no hover", () => {
+		// Read from disk: vitest stubs CSS imports, `?raw` included, to "".
+		const themeCss = readFileSync(join(__dirname, "obsidian-theme.css"), "utf8");
+		expect(themeCss).toMatch(
+			/@media \(hover: none\)\s*\{\s*\.cm-fold-chevron\s*\{[^}]*opacity:\s*0?\.5/,
+		);
 	});
 });

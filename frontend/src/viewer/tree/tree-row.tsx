@@ -56,6 +56,10 @@ function rowClass(
 		// neighbouring row. `muted-foreground` rather than `border`, which is too
 		// faint against the light theme's white to read as a deliberate state.
 		menuOpen ? "ring-2 ring-muted-foreground/40 ring-inset" : "",
+		// Rows are links opened from a long-press drawer (use-long-press.ts). On
+		// iPhone the same long-press raised the system link preview and started
+		// a text selection; this suppresses only those, not our drawer.
+		"pointer-coarse:select-none pointer-coarse:[-webkit-touch-callout:none]",
 	].join(" ");
 }
 

@@ -122,8 +122,11 @@ class WebSpaPeer:
         return self._page.get_by_test_id("note-properties")
 
     def property_value_locator(self, key: str):
-        """The VALUE field of property `key`. `aria-label` is `"<key> value"`
-        (property-fields.tsx), which is stable across the type variants."""
+        """The VALUE cell of property `key`. `aria-label` is `"<key> value"`
+        (property-fields.tsx), which is stable across the type variants. At
+        rest the cell is a BUTTON showing the value (so iOS prev/next cannot
+        hop into it), so assert with `to_have_text`, not `to_have_value`; it
+        turns into an input of the same name only once clicked."""
         return self._page.get_by_test_id(f"property-row-{key}").get_by_label(
             f"{key} value"
         )
@@ -145,6 +148,7 @@ class WebSpaPeer:
     async def set_property(self, key: str, value: str) -> None:
         """Overwrite an EXISTING property's value and commit it (blur)."""
         field = self.property_value_locator(key)
+        await field.click()  # the button swaps to an input of the same name
         await field.fill(value)
         await field.blur()
 

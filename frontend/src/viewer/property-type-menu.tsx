@@ -44,6 +44,12 @@ const TYPE_ICONS: Record<PropertyType, LucideIcon> = {
 	datetime: Clock,
 };
 
+/** Anything the menu can hand focus to on close: an element, or a handle
+ *  whose focus() opens an editor (a property name is a button at rest). */
+export interface Focusable {
+	focus(): void;
+}
+
 export function PropertyTypeMenu({
 	value,
 	onChange,
@@ -57,20 +63,20 @@ export function PropertyTypeMenu({
 	 *  picking a type leaves the caret where the next keystroke belongs. Radix
 	 *  restores focus to the trigger on close, so this has to be done in
 	 *  `onCloseAutoFocus`; focusing from `onSelect` is overwritten a tick later. */
-	focusAfterSelect?: () => HTMLInputElement | null;
+	focusAfterSelect?: () => Focusable | null;
 	/** Adds a Delete item at the bottom. The menu is the row's only remove
 	 *  control, the way Obsidian's property icon menu carries it. */
 	onRemove?: () => void;
 	/** Element to hand focus to once the property is deleted. The trigger goes
 	 *  with its row, so Radix's own restore would land on <body>. */
-	focusAfterRemove?: () => HTMLElement | null;
+	focusAfterRemove?: () => Focusable | null;
 }) {
 	const { t } = useT();
 	const Icon = TYPE_ICONS[value];
 	// Where focus goes on close, set by the item chosen. Escape and click-away
 	// leave it null: that is the user backing out, and the trigger is the right
 	// place to land.
-	const focusTarget = useRef<(() => HTMLElement | null) | null>(null);
+	const focusTarget = useRef<(() => Focusable | null) | null>(null);
 	return (
 		<DropdownMenu
 			onOpenChange={(open) => {

@@ -122,12 +122,12 @@ async function signInForNote(
  * Wait for the PropertiesWidget to show the given key so we know the CRDT
  * frontmatter maps have been seeded from the backend.
  *
- * Matched on the rename box's accessible name, NOT the <dt>'s text: the key is
- * an editable input now, and an input's value is not text content, so a
- * hasText filter over the <dt> matches nothing however well the widget works.
+ * Matched on the key's accessible name, NOT the <dt>'s text. The key is a
+ * button until tapped (so iOS prev/next cannot hop into it from the editor),
+ * then a rename box; the name is the same in both states.
  */
 async function waitForProperty(page: Page, key: string): Promise<void> {
-	await expect(page.getByRole("textbox", { name: `Rename ${key}` })).toBeVisible({
+	await expect(page.getByRole("button", { name: `Rename ${key}` })).toBeVisible({
 		timeout: 10_000,
 	});
 }
@@ -163,9 +163,10 @@ test.describe("PropertiesWidget e2e", () => {
 		await waitForProperty(pageA, "title");
 		await waitForProperty(pageB, "title");
 
-		// In tab A: click into the "title" value field (the input in the title row's <dd>)
-		// and change the value, then blur to commit.
+		// In tab A: tap the "title" value (a button until tapped) to open its
+		// input, change the value, then blur to commit.
 		const rowA = pageA.getByTestId("property-row-title");
+		await rowA.getByRole("button", { name: "title value" }).click();
 		const valueInputA = rowA.locator("dd input");
 		await valueInputA.fill("Hello CRDT");
 		await valueInputA.blur();
@@ -174,8 +175,9 @@ test.describe("PropertiesWidget e2e", () => {
 		// Assert the value field reflects the new value within the CRDT propagation window.
 		// If this assertion times out it is a real CRDT convergence bug — do NOT weaken it.
 		const rowB = pageB.getByTestId("property-row-title");
-		const valueInputB = rowB.locator("dd input");
-		await expect(valueInputB).toHaveValue("Hello CRDT", { timeout: 10_000 });
+		await expect(rowB.getByRole("button", { name: "title value" })).toHaveText("Hello CRDT", {
+			timeout: 10_000,
+		});
 
 		await ctxA.close();
 		await ctxB.close();
@@ -212,9 +214,10 @@ test.describe("PropertiesWidget e2e", () => {
 		await typeButton.click();
 		await page.getByRole("menuitem", { name: "date", exact: true }).click();
 
-		// After override: the type button should now read "date" and the value
-		// input should be type="date" (the ScalarField renders htmlType="date").
+		// After override: the type button should now read "date" and the value,
+		// once tapped open, is a type="date" input (ScalarField's htmlInputType).
 		await expect(typeButton).toHaveAccessibleName("Property type: date", { timeout: 5000 });
+		await row.getByRole("button", { name: "due value" }).click();
 		const dateInput = row.locator('dd input[type="date"]');
 		await expect(dateInput).toBeVisible({ timeout: 5000 });
 
@@ -233,6 +236,7 @@ test.describe("PropertiesWidget e2e", () => {
 		await expect(typeButtonAfter).toHaveAccessibleName("Property type: date", {
 			timeout: 10_000,
 		});
+		await rowAfter.getByRole("button", { name: "due value" }).click();
 		const dateInputAfter = rowAfter.locator('dd input[type="date"]');
 		await expect(dateInputAfter).toBeVisible({ timeout: 5000 });
 

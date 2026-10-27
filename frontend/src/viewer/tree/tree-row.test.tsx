@@ -161,6 +161,20 @@ describe("TreeRow", () => {
 		expect(link.getAttribute("href")).toBe("/v/work/100");
 	});
 
+	// Rows are real links opened from a long-press drawer. On iPhone the same
+	// long-press also raised the system link preview and text selection.
+	it("suppresses the iOS link callout and text selection on touch", () => {
+		const instance = mockInstance({ data: noteItem });
+		render(
+			<MemoryRouter>
+				<TreeRow instance={instance} />
+			</MemoryRouter>,
+		);
+		const link = screen.getByRole("link");
+		expect(link).toHaveClass("pointer-coarse:[-webkit-touch-callout:none]");
+		expect(link).toHaveClass("pointer-coarse:select-none");
+	});
+
 	it("shows uppercase ext badge for non-md notes", () => {
 		const instance = mockInstance({ data: orgNote });
 		render(

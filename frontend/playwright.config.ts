@@ -54,6 +54,23 @@ export default defineConfig({
 			},
 		},
 		{
+			// iPhone geometry and touch (iPhone 15 descriptor), run in CHROMIUM.
+			// WebKit would be the faithful engine, but it needs gstreamer and
+			// other system libraries the CI runner VMs lack, and the job user has
+			// no sudo to `playwright install --with-deps` them per run. The spec
+			// asserts DOM attributes, computed font sizes and element roles,
+			// which do not differ by engine. Switch to webkit once the runner
+			// image has `playwright install-deps webkit` baked in.
+			name: "ios",
+			testMatch: /\/ios-keyboard\.spec\.ts$/u,
+			use: {
+				...devices["iPhone 15"],
+				browserName: "chromium",
+				locale: "en-US",
+				baseURL: `http://localhost:${LOCAL_VITE_PORT}`,
+			},
+		},
+		{
 			// Audits the production bundle Phoenix serves, not the Vite dev server
 			// (see the spec), so its baseURL is the backend.
 			name: "lighthouse",

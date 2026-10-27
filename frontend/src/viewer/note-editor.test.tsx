@@ -66,6 +66,67 @@ describe("buildEditorState", () => {
 		}
 	});
 
+	// CodeMirror also stamps autocorrect/autocapitalize="off" and
+	// writingsuggestions="false" on the content DOM. On iPhone that leaves the
+	// QuickType row with no word predictions, so iOS fills it with a site
+	// AutoFill suggestion instead, and tapping that closes the keyboard. Prose
+	// wants all three on, the way Obsidian iOS ships its CodeMirror.
+	it("turns autocorrect, autocapitalize and writing suggestions back on", () => {
+		const doc = new Y.Doc();
+		const view = new EditorView({
+			state: buildEditorState(
+				doc.getText("content"),
+				new Awareness(doc),
+				false,
+				"rendered",
+				resolveWikiLink,
+				openWikiLink,
+				wikiCompletionPaths,
+				openMarkdownLink,
+				englishT,
+			),
+		});
+		try {
+			expect(view.contentDOM.getAttribute("autocorrect")).toBe("on");
+			expect(view.contentDOM.getAttribute("autocapitalize")).toBe("sentences");
+			expect(view.contentDOM.getAttribute("writingsuggestions")).toBe("true");
+			// Not on a contenteditable: autocomplete is only defined for form
+			// controls, so it would be noise here.
+			expect(view.contentDOM.hasAttribute("autocomplete")).toBe(false);
+		} finally {
+			view.destroy();
+		}
+	});
+
+	// The mobile toolbar covers the bottom of the visible area; without a scroll
+	// margin CodeMirror scrolled the caret to just above the keyboard, behind it.
+	it("keeps the caret clear of the mobile formatting toolbar", () => {
+		const doc = new Y.Doc();
+		const state = buildEditorState(
+			doc.getText("content"),
+			new Awareness(doc),
+			false,
+			"rendered",
+			resolveWikiLink,
+			openWikiLink,
+			wikiCompletionPaths,
+			openMarkdownLink,
+			englishT,
+		);
+		const bar = document.createElement("nav");
+		bar.setAttribute("data-editor-toolbar", "");
+		bar.getBoundingClientRect = () => ({ top: window.innerHeight - 60 }) as DOMRect;
+		document.body.append(bar);
+		const view = new EditorView({ state });
+		try {
+			const bottoms = view.state.facet(EditorView.scrollMargins).map((fn) => fn(view)?.bottom ?? 0);
+			expect(Math.max(0, ...bottoms)).toBe(60);
+		} finally {
+			bar.remove();
+			view.destroy();
+		}
+	});
+
 	// Lighthouse aria-input-field-name: the editable region is a textbox, and an
 	// unnamed one is announced as just "edit text".
 	it("names the editable region for screen readers", () => {

@@ -35,6 +35,52 @@ document whenever the keyboard was dismissed with the platform's own hide
 button, which does not blur the editor. `KEYBOARD_MIN_PX = 120` keeps a
 collapsing mobile address bar (~60-90px) from reading as a keyboard.
 
+## Positioning: a frame sized to the visual viewport, not a lifted bar
+
+The bar used to be `fixed bottom-0` lifted by `translateY(-inset)`. On iPhone
+(Safari and Chrome, both WebKit) it ended up under Apple's rows, for three
+stacked reasons: rows that appear after the keyboard (QuickType/AutoFill, the
+accessory bar) change the visual viewport without a `resize` event; iOS 26
+moves transform-lifted fixed elements out of step with `visualViewport`
+(WebKit bugs 297779, 300523); and iOS 26 floats the AutoFill row as its own
+bubble, which swallows a flush bar visually.
+
+Now `useVisualViewportBox()` (`use-keyboard-inset.ts`) returns the visual
+viewport's `offsetTop`/`height`, and the bar sits at the bottom of a
+`pointer-events-none` fixed frame of exactly that size. The hook re-samples
+every animation frame for 600ms after any `resize`/`scroll`/`focusin`/
+`focusout`, which is what catches the late rows. On Android with
+`resizes-content` the box is just the shrunk window, so the same frame works
+and the bar keeps its flat docked look. On iOS the `ios:` variant (`main.css`,
+`@supports (-webkit-touch-callout: none)`) floats it as a rounded pill 8px
+above the keyboard. No web API can remove Apple's prev/next/Done bar; only a
+native wrapper can.
+
+`toolbarScrollMargin` (exported from `keyboard-bar.tsx`, registered in
+`note-editor.tsx`) tells CodeMirror how much of the visible area the bar
+covers, measured from the live `[data-editor-toolbar]` element at scroll time,
+so the caret is never scrolled to a spot behind the bar.
+
+## Prediction attributes, and what they do NOT control
+
+`note-editor.tsx` sets `autocorrect="on"`, `autocapitalize="sentences"` and
+`writingsuggestions="true"` on the content DOM (CodeMirror defaults all three
+off). With prediction off, iOS filled the empty QuickType row with a site
+AutoFill suggestion that closed the keyboard when tapped.
+
+iOS smart quotes and smart dashes (`--` to an em dash, curly quotes inside
+backticks) are NOT controlled by `autocorrect`. WebKit turns them off only
+when spellcheck is off: `WKContentViewInteraction.mm`,
+`if (!_focusedElementInformation.isSpellCheckingEnabled) { traits.smartQuotesType = UITextSmartQuotesTypeNo; traits.smartDashesType = UITextSmartDashesTypeNo; ... }`
+(WebKit main, checked 2026-10-25). The editor has had `spellcheck="true"`
+since before the keyboard work, so smart punctuation was already on and
+turning autocorrect on did not change it. Spellcheck stays on (red squiggles
+are the only misspelling signal). The only web-side lever left is rewriting
+the substitution in `beforeinput`; not done, because which `inputType` iOS
+uses for a smart substitution is not verified on a device. Autocorrect itself
+can rewrite a `[[link target]]` on space, the same tradeoff Obsidian iOS
+ships. The raw YAML frontmatter editor keeps all of these off.
+
 ## `touch-action` silently disarms `preventDefault` on pointerdown
 
 The bar keeps the keyboard up by cancelling `pointerdown` on its `nav` — a
@@ -65,7 +111,8 @@ pointerdown guard unreliable. Do not add one without a focus-restore path.
 
 The setup-checklist FAB is `position: fixed` on the same bottom edge and landed
 on top of the toolbar as soon as the keyboard opened. `KeyboardBar` publishes
-the space it occupies as the CSS variable `--editor-toolbar-offset` (a
+the space from its top edge to the bottom of the window as the CSS variable
+`--editor-toolbar-offset` (a
 `useLayoutEffect` with no dependency array, so it re-measures whenever the bar
 grows a second row), and the FAB clears it with
 `bottom-[calc(var(--editor-toolbar-offset,0px)+var(--spacing)*4)]`.

@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useKeyboardInset, useKeyboardOpen } from "./use-keyboard-inset";
+import { useKeyboardOpen, useVisualViewportBox } from "./use-keyboard-inset";
 
 interface FakeViewport {
 	height: number;
@@ -51,72 +51,98 @@ afterEach(() => {
 	window.history.replaceState(null, "", "/");
 });
 
-describe("useKeyboardInset", () => {
-	it("reports 0 when the visual viewport fills the window", () => {
+describe("useVisualViewportBox", () => {
+	it("is the visual viewport's top and height", () => {
 		setLayoutHeight(800);
-		stubViewport(800);
-		const { result } = renderHook(() => useKeyboardInset());
-		expect(result.current).toBe(0);
-	});
-
-	it("reports the obscured height when the keyboard is up", () => {
-		setLayoutHeight(800);
-		stubViewport(500);
-		const { result } = renderHook(() => useKeyboardInset());
-		expect(result.current).toBe(300);
-	});
-
-	// Mobile Safari's collapsing address bar moves the visual viewport by
-	// ~60-90px on scroll. Counting that as a keyboard flashes the bar on swipe.
-	it("ignores an inset too small to be a keyboard", () => {
-		setLayoutHeight(800);
-		stubViewport(730);
-		const { result } = renderHook(() => useKeyboardInset());
-		expect(result.current).toBe(0);
-	});
-
-	// Panning under the keyboard changes offsetTop without resizing anything;
-	// ignoring it leaves the bar floating below its correct position.
-	it("accounts for the visual viewport being scrolled", () => {
-		setLayoutHeight(800);
-		stubViewport(500, 100);
-		const { result } = renderHook(() => useKeyboardInset());
-		expect(result.current).toBe(200);
+		stubViewport(500, 40);
+		const { result } = renderHook(() => useVisualViewportBox());
+		expect(result.current).toEqual({ top: 40, height: 500 });
 	});
 
 	it("updates when the viewport resizes", () => {
 		setLayoutHeight(800);
 		const vv = stubViewport(800);
-		const { result } = renderHook(() => useKeyboardInset());
-		expect(result.current).toBe(0);
-
+		const { result } = renderHook(() => useVisualViewportBox());
 		vv.height = 500;
 		act(() => vv.fire());
-		expect(result.current).toBe(300);
+		expect(result.current).toEqual({ top: 0, height: 500 });
+	});
+
+	// iOS can grow the rows above the keyboard (QuickType, AutoFill, the
+	// accessory bar) after the keyboard appears, without firing a resize. So
+	// the box keeps sampling for a while after anything keyboard-shaped.
+	it("picks up a late change with no event while the keyboard settles", () => {
+		vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance"] });
+		try {
+			setLayoutHeight(800);
+			const vv = stubViewport(800);
+			const { result } = renderHook(() => useVisualViewportBox());
+			act(() => {
+				document.dispatchEvent(new Event("focusin"));
+			});
+			// The row lands a few frames after the focus, not on the first one.
+			act(() => vi.advanceTimersByTime(200));
+			vv.height = 460;
+			act(() => vi.advanceTimersByTime(100));
+			expect(result.current).toEqual({ top: 0, height: 460 });
+
+			// Sampling stops once the keyboard has had time to settle.
+			act(() => vi.advanceTimersByTime(1000));
+			vv.height = 300;
+			act(() => vi.advanceTimersByTime(100));
+			expect(result.current).toEqual({ top: 0, height: 460 });
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("subscribes to both resize and scroll, and unsubscribes on unmount", () => {
 		setLayoutHeight(800);
 		const vv = stubViewport(800);
-		const { unmount } = renderHook(() => useKeyboardInset());
+		const { unmount } = renderHook(() => useVisualViewportBox());
 		expect(vv.addEventListener.mock.calls.map((c) => c[0])).toEqual(["resize", "scroll"]);
 		unmount();
 		expect(vv.removeEventListener.mock.calls.map((c) => c[0])).toEqual(["resize", "scroll"]);
 	});
 
-	it("returns a simulated inset for ?keyboard so the bar can be driven in dev", () => {
+	// Desktop never shows the toolbar; it should not sample the viewport on
+	// every focus change either.
+	it("does not subscribe at all when disabled", () => {
+		setLayoutHeight(800);
+		const vv = stubViewport(800);
+		const add = vi.spyOn(document, "addEventListener");
+		renderHook(() => useVisualViewportBox(false));
+		expect(vv.addEventListener).not.toHaveBeenCalled();
+		expect(add.mock.calls.map((c) => c[0])).not.toContain("focusin");
+		add.mockRestore();
+	});
+
+	// Crossing the desktop breakpoint (iPad split view) re-enables the hook;
+	// it must not keep the box it read at mount until the next event.
+	it("re-reads the viewport when it is re-enabled", () => {
+		setLayoutHeight(800);
+		const vv = stubViewport(800);
+		const { result, rerender } = renderHook(({ on }) => useVisualViewportBox(on), {
+			initialProps: { on: false },
+		});
+		vv.height = 500;
+		rerender({ on: true });
+		expect(result.current).toEqual({ top: 0, height: 500 });
+	});
+
+	it("leaves a simulated keyboard's worth of room for ?keyboard in dev", () => {
 		setLayoutHeight(800);
 		stubViewport(800);
 		window.history.replaceState(null, "", "/?keyboard");
-		const { result } = renderHook(() => useKeyboardInset());
-		expect(result.current).toBeGreaterThan(0);
+		const { result } = renderHook(() => useVisualViewportBox());
+		expect(result.current.height).toBeLessThan(800);
 	});
 
-	it("survives a browser with no visualViewport at all", () => {
+	it("falls back to the window on a browser with no visualViewport at all", () => {
 		setLayoutHeight(800);
 		Object.defineProperty(window, "visualViewport", { value: undefined, configurable: true });
-		const { result } = renderHook(() => useKeyboardInset());
-		expect(result.current).toBe(0);
+		const { result } = renderHook(() => useVisualViewportBox());
+		expect(result.current).toEqual({ top: 0, height: 800 });
 	});
 });
 
@@ -155,7 +181,6 @@ describe("useKeyboardOpen", () => {
 		setLayoutHeight(500);
 		act(() => vv.fire());
 		expect(result.current).toBe(true);
-		expect(renderHook(() => useKeyboardInset()).result.current).toBe(0);
 	});
 
 	it("is false again once the viewport grows back", () => {

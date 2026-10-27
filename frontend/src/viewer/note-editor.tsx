@@ -22,6 +22,7 @@ import { indentKeymap } from "./editor/format-commands";
 import { frontmatterShortcut } from "./editor/frontmatter-shortcut";
 import { headingFoldWith, noParagraphFold } from "./editor/heading-fold";
 import { itemDrop } from "./editor/item-drop";
+import { toolbarScrollMargin } from "./editor/keyboard-bar";
 import { livePreviewExtensions } from "./editor/live-preview";
 import { translator, translatorCompartment } from "./editor/translator";
 import { type DraggedVaultItem, linkTextFor } from "./vault-item-drag";
@@ -52,6 +53,9 @@ const editorTheme = EditorView.theme({
 	},
 	".cm-gutters": { backgroundColor: "transparent", border: "none" },
 	".cm-content": { fontSize: "16px", padding: "20px 20px 30vh" },
+	// The find/replace fields. CodeMirror's base theme sets them to 70% (~11px),
+	// which iOS zooms on focus; 16px matches .cm-content for the same reason.
+	".cm-textfield": { fontSize: "16px" },
 });
 
 export type EditorMode = "rendered" | "raw";
@@ -145,11 +149,22 @@ export function buildEditorState(
 			// Sidebar note/attachment dropped on the text becomes a link/embed. Base
 			// (not the mode compartment) so it also works in Raw mode.
 			...(drop ? [itemDrop(drop)] : []),
-			// CodeMirror's content DOM sets spellcheck="false" by default (it's
-			// built for code, not prose). This is a markdown/prose editor, so
-			// override it back on — the browser's native spellcheck is the only
-			// squiggly-underline signal this editor gets, there's no in-app one.
-			EditorView.contentAttributes.of({ spellcheck: "true" }),
+			// CodeMirror's content DOM turns spellcheck, autocorrect,
+			// autocapitalize and writing suggestions off by default (it's built
+			// for code, not prose). This is a markdown/prose editor, so turn them
+			// back on. Spellcheck is the only squiggly-underline signal this
+			// editor gets. The other three matter most on iPhone: with prediction
+			// off, iOS fills the empty QuickType row with a site AutoFill
+			// suggestion, and tapping it closes the keyboard. No `autocomplete`:
+			// it is only defined for form controls, not a contenteditable. The
+			// raw frontmatter editor keeps CodeMirror's defaults (YAML keys must
+			// not be capitalised or corrected).
+			EditorView.contentAttributes.of({
+				spellcheck: "true",
+				autocorrect: "on",
+				autocapitalize: "sentences",
+				writingsuggestions: "true",
+			}),
 			// The editable region is a textbox; unnamed, a screen reader says only
 			// "edit text". Read from the translator facet so a language switch
 			// (which swaps the compartment) renames it without a rebuild.
@@ -158,6 +173,8 @@ export function buildEditorState(
 				const t = state.facet(translator);
 				return { "aria-label": t("Note text") };
 			}),
+			// Scroll the caret into view above the mobile formatting toolbar.
+			toolbarScrollMargin,
 			drawSelection(),
 			EditorView.lineWrapping,
 			// Base, not the mode compartment: the fold service comes from

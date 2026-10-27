@@ -824,7 +824,44 @@ describe("NotePage (CRDT)", () => {
 		renderPage();
 
 		// Widget should appear in the default rendered mode
-		await waitFor(() => expect(screen.getByDisplayValue("status")).toBeInTheDocument());
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "Rename status" })).toBeInTheDocument(),
+		);
+	});
+
+	// Rows are keyed by property name, so without a remount a value open in
+	// note A stayed open when B (same key) arrived, its commit now closing over
+	// B's doc. A navigation that does not blur (Alt+Left, an edge swipe) then
+	// wrote A's draft into B on the next blur.
+	it("closes an open property edit when the note's doc changes", async () => {
+		const withStatus = (value: string) => {
+			const doc = new Y.Doc();
+			doc.getMap("frontmatter").set("status", JSON.stringify(value));
+			doc.getArray("frontmatter_order").insert(0, ["status"]);
+			return { ytext: doc.getText("content"), awareness: new Awareness(doc), doc };
+		};
+		const a = withStatus("a-value");
+		const b = withStatus("b-value");
+		openDoc.mockResolvedValue(a);
+		const { rerender } = renderPage();
+		fireEvent.click(await screen.findByRole("button", { name: /^status value/ }));
+		fireEvent.change(screen.getByRole("textbox", { name: "status value" }), {
+			target: { value: "typed in A" },
+		});
+
+		openDoc.mockResolvedValue(b);
+		paramsMock.itemId = "note-2";
+		useNoteMock.mockReturnValue({
+			data: { ...NOTE, id: "note-2", path: "folder/other.md", title: "other" },
+			isLoading: false,
+			error: null,
+		});
+		rerender(pageTree());
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: /^status value/ })).toHaveTextContent("b-value"),
+		);
+		expect(screen.queryByRole("textbox", { name: "status value" })).toBeNull();
+		expect(JSON.parse(b.doc.getMap("frontmatter").get("status") as string)).toBe("b-value");
 	});
 
 	// Inline rename from the header — same semantics as the tree's rename
@@ -939,7 +976,9 @@ describe("NotePage (CRDT)", () => {
 		renderPage();
 
 		// Default "rendered" mode: pills visible, editor visible, no raw YAML region.
-		await waitFor(() => expect(screen.getByDisplayValue("status")).toBeInTheDocument());
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "Rename status" })).toBeInTheDocument(),
+		);
 		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
 		expect(screen.queryByLabelText(/Frontmatter \(raw YAML\)/i)).not.toBeInTheDocument();
 		await openMenu();
@@ -950,7 +989,7 @@ describe("NotePage (CRDT)", () => {
 		await waitFor(() =>
 			expect(screen.getByLabelText(/Frontmatter \(raw YAML\)/i)).toBeInTheDocument(),
 		);
-		expect(screen.queryByDisplayValue("status")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Rename status" })).not.toBeInTheDocument();
 		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
 
 		// Switch to "reading": NoteView visible, neither frontmatter surface shown.
@@ -958,7 +997,7 @@ describe("NotePage (CRDT)", () => {
 		fireEvent.click(screen.getByRole("menuitem", { name: "Reading" }));
 		await waitFor(() => expect(screen.getByTestId("note-view")).toBeInTheDocument());
 		expect(screen.queryByLabelText(/Frontmatter \(raw YAML\)/i)).not.toBeInTheDocument();
-		expect(screen.queryByDisplayValue("status")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Rename status" })).not.toBeInTheDocument();
 		expect(screen.queryByTestId("note-editor")).not.toBeInTheDocument();
 	});
 

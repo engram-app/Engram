@@ -38,7 +38,8 @@ const RAW_BUTTON_ALLOWLIST: Record<string, string> = {
 	"/src/viewer/tree-actions/action-drawer.tsx": "mobile sheet backdrop and menuitem rows",
 	"/src/viewer/tree-actions/context-menu.tsx": "role=menuitem rows",
 	"/src/viewer/tree/tree-row.tsx": "role=treeitem folder row",
-	"/src/viewer/property-fields.tsx": "list-value chip remove",
+	"/src/viewer/property-fields.tsx": "list-value chip remove and tap-to-edit value cells",
+	"/src/viewer/properties-widget.tsx": "tap-to-edit property key text",
 	"/src/viewer/inline-title.tsx": "undecorated click-to-rename title text",
 	"/src/viewer/note-page.tsx": "undecorated click-to-rename header name",
 };

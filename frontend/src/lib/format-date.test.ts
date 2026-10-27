@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { formatDate } from "./format-date";
+import { formatDate, formatPropertyDate } from "./format-date";
 
 describe("formatDate", () => {
 	test("formats an ISO timestamp as a short date in the given locale", () => {
@@ -15,5 +15,20 @@ describe("formatDate", () => {
 				day: "numeric",
 			}),
 		);
+	});
+});
+
+describe("formatPropertyDate", () => {
+	// Parsed as a local day: as UTC midnight it reads as the 29th west of UTC.
+	test("formats a date-only value as that local calendar day", () => {
+		expect(formatPropertyDate("2026-06-30", "date", "en-US")).toBe("06/30/2026");
+	});
+
+	test("formats a datetime with its time", () => {
+		expect(formatPropertyDate("2026-06-30T14:05", "datetime", "en-US")).toBe("06/30/2026, 2:05 PM");
+	});
+
+	test("returns an unparseable value as stored", () => {
+		expect(formatPropertyDate("someday", "date", "en-US")).toBe("someday");
 	});
 });

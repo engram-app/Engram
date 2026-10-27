@@ -1,5 +1,5 @@
 import { startCompletion } from "@codemirror/autocomplete";
-import type { EditorView } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import type { LucideIcon } from "lucide-react";
 import {
 	Bold,
@@ -36,8 +36,13 @@ import {
 	toggleQuote,
 	toggleWrap,
 } from "./format-commands";
-import { useEditorFocused } from "./use-editor-focused";
-import { useKeyboardInset, useKeyboardOpen } from "./use-keyboard-inset";
+import { EDITOR_TOOLBAR, useEditorFocused } from "./use-editor-focused";
+import {
+	readViewportBox,
+	useKeyboardOpen,
+	useVisualViewportBox,
+	type ViewportBox,
+} from "./use-keyboard-inset";
 
 /**
  * History lives in Yjs, not CodeMirror. The editor installs yCollab, which owns
@@ -147,6 +152,26 @@ const COMMAND_GROUPS: ReadonlyArray<
  */
 const TOOLBAR_OFFSET_VAR = "--editor-toolbar-offset";
 
+/** How much of the visible area, from its bottom edge up, the bar covers. */
+function coveredByBar(bar: HTMLElement, box: ViewportBox): number {
+	return Math.max(0, box.top + box.height - bar.getBoundingClientRect().top);
+}
+
+/**
+ * Tells CodeMirror how much of the visible area the bar covers, so scrolling
+ * the caret into view keeps it above the bar. CodeMirror measures against the
+ * visual viewport, which knows nothing about this bar; without the margin,
+ * typing on the last visible line put the caret behind it.
+ *
+ * Measured from the live element at scroll time rather than published from
+ * React: the bar's height changes with the heading row, and its position with
+ * the keyboard, and the DOM is the one place both are already true.
+ */
+export const toolbarScrollMargin = EditorView.scrollMargins.of(() => {
+	const bar = document.querySelector<HTMLElement>(EDITOR_TOOLBAR);
+	return bar ? { bottom: coveredByBar(bar, readViewportBox()) } : null;
+});
+
 /**
  * The strip of editor actions docked above the on-screen keyboard, Obsidian's
  * mobile toolbar in miniature.
@@ -163,19 +188,20 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 	const { t } = useT();
 	const isDesktop = useMediaQuery("(min-width: 768px)");
 	const focused = useEditorFocused();
-	const inset = useKeyboardInset();
-	const keyboardOpen = useKeyboardOpen();
+	// Desktop never shows the bar, so it does not sample the viewport either.
+	const box = useVisualViewportBox(!isDesktop);
+	const keyboardOpen = useKeyboardOpen(!isDesktop);
 	const [headingsOpen, setHeadingsOpen] = useState(false);
 	const [gesturing, setGesturing] = useState(false);
 	const barRef = useRef<HTMLElement>(null);
 
-	// Both conditions are load-bearing, and neither can be the inset. Focus alone
-	// stranded the bar over the document after the keyboard was dismissed with
-	// the platform's hide button, which leaves the editor focused. A non-zero
-	// inset alone hid the bar outright on browsers that resize the LAYOUT
-	// viewport, where the inset is 0 with the keyboard fully open — so
-	// useKeyboardOpen compares viewport heights instead, and the inset is used
-	// only to position.
+	// Both conditions are load-bearing, and neither can be "the visible box is
+	// shorter than the window". Focus alone stranded the bar over the document
+	// after the keyboard was dismissed with the platform's hide button, which
+	// leaves the editor focused. A non-zero inset alone hid the bar outright on
+	// browsers that resize the LAYOUT viewport, where the inset is 0 with the
+	// keyboard fully open, so useKeyboardOpen compares viewport heights
+	// instead, and the box is used only to position.
 	//
 	// `gesturing` overrides both for the duration of a touch. Panning the command
 	// row blurs the editor on browsers where pointerdown is not cancelable, which
@@ -194,23 +220,40 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 	// real thing, which is the rendered height — and would silently miss the next
 	// cause (a wrapped row, a late-loading font, a third row).
 	useLayoutEffect(() => {
-		const root = document.documentElement;
 		const bar = barRef.current;
 		if (!(visible && bar)) {
-			root.style.removeProperty(TOOLBAR_OFFSET_VAR);
 			return;
 		}
+		// The FAB is fixed to the bottom of the LAYOUT viewport, so it has to
+		// clear whatever is below the visible area (the keyboard, on iOS) plus
+		// what the bar covers inside it. Written only when it changes: the box
+		// moves every frame of a visual-viewport scroll, and each write to a
+		// root variable restyles the whole document.
 		const publish = () => {
-			root.style.setProperty(TOOLBAR_OFFSET_VAR, `${bar.getBoundingClientRect().height + inset}px`);
+			const root = document.documentElement;
+			const belowVisible = window.innerHeight - (box.top + box.height);
+			const next = `${Math.round(belowVisible + coveredByBar(bar, box))}px`;
+			if (root.style.getPropertyValue(TOOLBAR_OFFSET_VAR) !== next) {
+				root.style.setProperty(TOOLBAR_OFFSET_VAR, next);
+			}
 		};
 		publish();
 		const observer = new ResizeObserver(publish);
 		observer.observe(bar);
+		return () => observer.disconnect();
+	}, [visible, box]);
+
+	// Stop reserving the space once the bar goes away (keyboard down, blur,
+	// unmount). Separate from the publish effect so a box change does not
+	// clear and rewrite the variable.
+	useLayoutEffect(() => {
+		if (!visible) {
+			return;
+		}
 		return () => {
-			observer.disconnect();
-			root.style.removeProperty(TOOLBAR_OFFSET_VAR);
+			document.documentElement.style.removeProperty(TOOLBAR_OFFSET_VAR);
 		};
-	}, [visible, inset]);
+	}, [visible]);
 
 	if (!visible) {
 		return null;
@@ -232,63 +275,68 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 	};
 
 	return (
-		<nav
-			ref={barRef}
-			role="toolbar"
-			aria-label={t("Editor actions")}
-			// Docked to the bottom of the layout viewport and lifted by the measured
-			// inset. Where only the visual viewport shrank (iOS, Chrome 108+) the
-			// inset is the keyboard height and this lifts clear of it; where the
-			// layout viewport shrank too, the inset is 0 and bottom-0 is already
-			// sitting on top of the keyboard. One expression covers both.
-			className="fixed inset-x-0 bottom-0 z-40 flex flex-col border-border border-t bg-card"
-			style={{ transform: `translateY(-${inset}px)` }}
-			// Marks this subtree as still "the editor" for useEditorFocused, so a
-			// pan that lands focus on the bar does not unmount it mid-drag.
-			data-editor-toolbar=""
-			// Keep the keyboard up. A pointerdown that reaches the document blurs
-			// the editor, iOS dismisses the keyboard, and the bar this lives on
-			// slides away mid-tap — so the press must never move focus. The heading
-			// row lives INSIDE this nav rather than in a portalled popover so it is
-			// covered by the same guard.
-			//
-			// This is NOT sufficient on its own. `touch-action: pan-x` on the
-			// command row is what lets it scroll, and it also makes pointerdown
-			// non-cancelable for touch in Chrome — the browser reserves the right
-			// to start a pan — so preventDefault silently becomes a no-op there and
-			// the drag blurs the editor anyway. Hence the hold and the repair.
-			onPointerDown={(e) => {
-				e.preventDefault();
-				setGesturing(true);
-			}}
-			// BOTH endings are needed: a tap ends in pointerup, but a pan the
-			// browser takes over ends in pointercancel and never fires pointerup —
-			// which is why repairing focus on pointerup alone did not help.
-			onPointerUp={endGesture}
-			onPointerCancel={endGesture}
+		// A fixed frame exactly the size of the visible area, with the bar docked
+		// to its bottom: above the keyboard on every browser, with no transform.
+		// See readViewportBox for why not a bottom-0 bar lifted by an inset.
+		// pointer-events-none so the frame never eats a tap on the document.
+		<div
+			className="pointer-events-none fixed inset-x-0 z-40"
+			style={{ top: box.top, height: box.height }}
 		>
-			{headingsOpen ? (
-				<section
-					aria-label={t("Heading level")}
-					className="flex items-center justify-around border-border border-b px-2 py-1.5 [&>button]:size-11"
-				>
-					{HEADING_LEVELS.map((level) => (
-						<Button
-							key={level}
-							variant="ghost"
-							size="icon"
-							aria-label={t("Heading {level}", { level })}
-							onClick={run((v) => {
-								setHeading(v, level);
-								setHeadingsOpen(false);
-							})}
-						>
-							<span className="font-semibold text-base">H{level}</span>
-						</Button>
-					))}
-				</section>
-			) : null}
-			{/* A dozen buttons at a 44px target (WCAG 2.5.5) run past 600px, so the
+			<nav
+				ref={barRef}
+				role="toolbar"
+				aria-label={t("Editor actions")}
+				// Android docks flat against the keyboard. iOS floats it as a rounded
+				// pill with a gap: iOS 26 draws its AutoFill/accessory row as a
+				// separate floating bubble, and a flush bar reads as swallowed by it.
+				className="pointer-events-auto absolute inset-x-0 ios:inset-x-2 bottom-0 ios:bottom-2 flex flex-col ios:overflow-hidden ios:rounded-2xl ios:border border-border border-t bg-card ios:shadow-lg"
+				// Marks this subtree as still "the editor" for useEditorFocused, so a
+				// pan that lands focus on the bar does not unmount it mid-drag.
+				data-editor-toolbar=""
+				// Keep the keyboard up. A pointerdown that reaches the document blurs
+				// the editor, iOS dismisses the keyboard, and the bar this lives on
+				// slides away mid-tap, so the press must never move focus. The heading
+				// row lives INSIDE this nav rather than in a portalled popover so it is
+				// covered by the same guard.
+				//
+				// This is NOT sufficient on its own. `touch-action: pan-x` on the
+				// command row is what lets it scroll, and it also makes pointerdown
+				// non-cancelable for touch in Chrome (the browser reserves the right
+				// to start a pan), so preventDefault silently becomes a no-op there and
+				// the drag blurs the editor anyway. Hence the hold and the repair.
+				onPointerDown={(e) => {
+					e.preventDefault();
+					setGesturing(true);
+				}}
+				// BOTH endings are needed: a tap ends in pointerup, but a pan the
+				// browser takes over ends in pointercancel and never fires pointerup,
+				// which is why repairing focus on pointerup alone did not help.
+				onPointerUp={endGesture}
+				onPointerCancel={endGesture}
+			>
+				{headingsOpen ? (
+					<section
+						aria-label={t("Heading level")}
+						className="flex items-center justify-around border-border border-b px-2 py-1.5 [&>button]:size-11"
+					>
+						{HEADING_LEVELS.map((level) => (
+							<Button
+								key={level}
+								variant="ghost"
+								size="icon"
+								aria-label={t("Heading {level}", { level })}
+								onClick={run((v) => {
+									setHeading(v, level);
+									setHeadingsOpen(false);
+								})}
+							>
+								<span className="font-semibold text-base">H{level}</span>
+							</Button>
+						))}
+					</section>
+				) : null}
+				{/* A dozen buttons at a 44px target (WCAG 2.5.5) run past 600px, so the
 			    row pans under a finger rather than shrinking below thumb size --
 			    a phone gets full-size icons and scrolls, instead of a full set of
 			    cramped ones. The scrollbar is hidden because a visible track on a
@@ -296,24 +344,25 @@ export function KeyboardBar({ getView }: { getView: () => EditorView | null }) {
 			    affordance. touch-action keeps the pan working despite the nav's
 			    pointerdown preventDefault, which governs focus, not scrolling.
 			    Order is grouped by kind, since half the row is always off screen. */}
-			<section
-				aria-label={t("Editor commands")}
-				className="flex touch-pan-x items-center gap-2 overflow-x-auto px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>button]:size-11 [&>button]:shrink-0"
-			>
-				{COMMAND_GROUPS.flat().map(({ label, Icon, act }) => (
-					<Button
-						key={label}
-						variant="ghost"
-						size="icon"
-						aria-label={t(label)}
-						// No `act` means the panel button; see COMMAND_GROUPS.
-						aria-expanded={act ? undefined : headingsOpen}
-						onClick={act ? run(act) : () => setHeadingsOpen((open) => !open)}
-					>
-						<Icon className="size-6" />
-					</Button>
-				))}
-			</section>
-		</nav>
+				<section
+					aria-label={t("Editor commands")}
+					className="flex touch-pan-x items-center gap-2 overflow-x-auto px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>button]:size-11 [&>button]:shrink-0"
+				>
+					{COMMAND_GROUPS.flat().map(({ label, Icon, act }) => (
+						<Button
+							key={label}
+							variant="ghost"
+							size="icon"
+							aria-label={t(label)}
+							// No `act` means the panel button; see COMMAND_GROUPS.
+							aria-expanded={act ? undefined : headingsOpen}
+							onClick={act ? run(act) : () => setHeadingsOpen((open) => !open)}
+						>
+							<Icon className="size-6" />
+						</Button>
+					))}
+				</section>
+			</nav>
+		</div>
 	);
 }

@@ -13,10 +13,18 @@ in `frontend/src/main.css`, used as `h-control` / `size-control`.
   string. Layout (`mt-1 block`, `flex-1`, `shrink-0`) goes in `className`.
 - Raw `<input>` is fine for checkboxes, radios, `type="file"`, hidden inputs,
   chromeless inline-edit cells (rename input, property cells) and editor surfaces.
-- `<Input>` is `text-base md:text-sm` on purpose: 16px on mobile stops iOS zoom.
+- Every text field's size is `FIELD_TEXT` (`text-base md:text-sm`) from
+  `lib/ui-classes.ts`: 16px on mobile stops iOS zoom, which never zooms back out
+  and breaks the layout. `<Input>`, `<Textarea>`, `RenameInput` and the
+  chromeless property cells all use it. A caller that wants a bigger size must
+  override the `md:` size too (the inline title passes `md:text-3xl`), because
+  tailwind-merge does not let a bare `text-3xl` replace `md:text-sm`.
 
 Guard: `frontend/src/lib/control-height.test.ts` fails if `fieldInput` returns to
-`lib/ui-classes.ts` or a raw `<input>` outside `components/ui` carries `border-input`.
+`lib/ui-classes.ts`, a raw `<input>` outside `components/ui` carries `border-input`,
+or a raw `<input>` carries a bare `text-sm`/`text-xs`. It reads the `<input>` tag
+itself, so a class constant passed in by name is not checked; build those from
+`FIELD_TEXT`.
 
 ## Buttons
 
