@@ -199,7 +199,6 @@ defmodule Engram.Notes.Note do
   AAD inputs, and the path and folder envelopes (`Crypto` decrypts the two
   together). Never the body.
   """
-  @spec path_fields() :: [atom()]
   def path_fields,
     do: [
       :id,

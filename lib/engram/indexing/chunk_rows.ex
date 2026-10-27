@@ -86,27 +86,28 @@ defmodule Engram.Indexing.ChunkRows do
   defp update!(note_id, rows) do
     col = fn key -> Enum.map(rows, &Map.get(&1, key)) end
 
-    Repo.query!(
-      """
-      UPDATE chunks c SET char_start = u.cs, char_end = u.ce, token_count = u.tc,
-        qdrant_point_id = u.pid, context_hmac = u.h,
-        member_hmacs = CASE WHEN u.mh IS NULL THEN NULL
-          ELSE ARRAY(SELECT jsonb_array_elements_text(u.mh::jsonb)) END
-      FROM unnest($2::int4[], $3::int4[], $4::int4[], $5::int8[], $6::uuid[], $7::text[],
-                  $8::text[]) AS u(pos, cs, ce, tc, pid, h, mh)
-      WHERE c.note_id = $1 AND c.position = u.pos
-      """,
-      [
-        Ecto.UUID.dump!(note_id),
-        col.(:position),
-        col.(:char_start),
-        col.(:char_end),
-        col.(:token_count),
-        Enum.map(col.(:qdrant_point_id), &Ecto.UUID.dump!/1),
-        col.(:context_hmac),
-        Enum.map(col.(:member_hmacs), &(&1 && Jason.encode!(&1)))
-      ]
-    )
+    %{num_rows: _} =
+      Repo.query!(
+        """
+        UPDATE chunks c SET char_start = u.cs, char_end = u.ce, token_count = u.tc,
+          qdrant_point_id = u.pid, context_hmac = u.h,
+          member_hmacs = CASE WHEN u.mh IS NULL THEN NULL
+            ELSE ARRAY(SELECT jsonb_array_elements_text(u.mh::jsonb)) END
+        FROM unnest($2::int4[], $3::int4[], $4::int4[], $5::int8[], $6::uuid[], $7::text[],
+                    $8::text[]) AS u(pos, cs, ce, tc, pid, h, mh)
+        WHERE c.note_id = $1 AND c.position = u.pos
+        """,
+        [
+          Ecto.UUID.dump!(note_id),
+          col.(:position),
+          col.(:char_start),
+          col.(:char_end),
+          col.(:token_count),
+          Enum.map(col.(:qdrant_point_id), &Ecto.UUID.dump!/1),
+          col.(:context_hmac),
+          Enum.map(col.(:member_hmacs), &(&1 && Jason.encode!(&1)))
+        ]
+      )
 
     :ok
   end

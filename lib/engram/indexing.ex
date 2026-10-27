@@ -1330,7 +1330,7 @@ defmodule Engram.Indexing do
   end
 
   # No hash to compare: still the note lock, first (`ChunkRows` lock order).
-  defp content_current!(note), do: ChunkRows.lock_notes!([note.id])
+  defp content_current!(note), do: :ok = ChunkRows.lock_notes!([note.id])
 
   # With the chunk rows, so the tier always names the rows that exist, and
   # compare-and-set on the tier this pass was planned from: if the index

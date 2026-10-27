@@ -76,7 +76,6 @@ defmodule Engram.Notes.NoteBody do
   def without_crdt, do: Note.__schema__(:fields) -- [:crdt_state_ciphertext, :crdt_state_nonce]
 
   @doc "The `Note` fields that live in `note_bodies`."
-  @spec body_fields() :: [atom()]
   def body_fields, do: @body
 
   @doc """

@@ -1224,9 +1224,11 @@ defmodule Engram.Workers.EmbedNote do
             set: [embed_retry_after: until]
           )
         end)
-    end
 
-    :ok
+      :ok
+    else
+      :ok
+    end
   end
 
   defp back_off_stale_park(_note, _stamped), do: :ok
