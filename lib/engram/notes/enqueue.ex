@@ -14,6 +14,8 @@ defmodule Engram.Notes.Enqueue do
         measurements: %{count: 1}
         metadata:     %{worker: "<label>"}
   """
+  alias Engram.{Batch, Jobs}
+
   require Logger
 
   @type result :: {:ok, term()} | {:error, term()}
@@ -52,6 +54,43 @@ defmodule Engram.Notes.Enqueue do
 
         err
     end
+  end
+
+  @doc """
+  Bulk form of `enqueue/3` for a post-commit side effect: one chunked
+  `Engram.Jobs.insert_chunked/1` instead of one insert (one pool checkout)
+  per job. Same contract as `enqueue/3`: it never raises. A failed chunk logs
+  and emits the failure telemetry (`count` = jobs lost); the rest still go in.
+  `:skip` entries are dropped, as in `enqueue/3`.
+
+  `Oban.insert_all/1` ignores `unique`: callers that relied on it drop
+  already-pending ids first (`Engram.Jobs.reject_pending/3`).
+  """
+  @spec enqueue_all([term()], String.t()) :: :ok
+  def enqueue_all(changesets, worker_label) when is_binary(worker_label) do
+    changesets
+    |> Enum.reject(&(&1 == :skip))
+    |> Enum.chunk_every(Batch.insert_rows())
+    |> Enum.each(&insert_chunk(&1, worker_label))
+  end
+
+  defp insert_chunk(chunk, worker_label) do
+    Jobs.insert_chunked(chunk)
+    :ok
+  rescue
+    e ->
+      Logger.error(
+        "oban bulk enqueue failed worker=#{worker_label} jobs=#{length(chunk)} reason=#{Exception.message(e)}",
+        Engram.Logger.Metadata.with_category(:error, :search, worker: worker_label)
+      )
+
+      :telemetry.execute(
+        [:engram, :notes, :enqueue, :failed],
+        %{count: length(chunk)},
+        %{worker: worker_label}
+      )
+
+      :ok
   end
 
   defp format_reason(%Ecto.Changeset{errors: errors}), do: inspect(errors)

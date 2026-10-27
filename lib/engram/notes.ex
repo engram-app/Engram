@@ -6,11 +6,13 @@ defmodule Engram.Notes do
 
   import Ecto.Query
 
+  alias Engram.Batch
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Crypto.PathCrypto
   alias Engram.Crypto.RotationGate
+  alias Engram.Jobs
   alias Engram.Links
   alias Engram.Logger.DecryptFailure
   alias Engram.Logger.Metadata
@@ -469,11 +471,7 @@ defmodule Engram.Notes do
   @spec max_batch_folders() :: 500
   def max_batch_folders, do: @max_batch_folders
 
-  # Rows per folder-marker `insert_all`. A marker row binds 14 parameters
-  # (upsert_folder_markers/6), so 65535 allows 4681; 2000 is the same
-  # half-margin Links uses so a new column cannot re-arm the overflow.
-  @folder_insert_chunk 2000
-
+  # Rows per folder-marker `insert_all`: `Engram.Batch.insert_rows/0`.
   @doc """
   Batch `create_folder_marker/3`: one tenant transaction and at most one
   shared `seq` for the whole batch. Each folder goes through
@@ -652,7 +650,7 @@ defmodule Engram.Notes do
         # Batched so the protocol bind cap does not depend on the caller's
         # batch limit staying where it is today.
         rows
-        |> Enum.chunk_every(@folder_insert_chunk)
+        |> Enum.chunk_every(Batch.insert_rows())
         |> Enum.each(&Repo.insert_all(Note, &1, on_conflict: :nothing))
 
         user
@@ -4492,11 +4490,6 @@ defmodule Engram.Notes do
     end
   end
 
-  # Jobs per `Oban.insert_all` in batch_delete_notes/3. Oban's Basic engine
-  # binds up to 17 parameters per job (Oban.Job's permitted params), so 65535
-  # allows 3855; 2000 is the same half-margin. The id list is caller-sized.
-  @job_insert_chunk 2000
-
   @doc """
   Atomically soft-deletes a list of notes by id, scoped to the caller's
   user + vault. All-or-nothing: if any id fails to resolve to a live note
@@ -4574,11 +4567,7 @@ defmodule Engram.Notes do
               # the tombstones. insert_all trades Enqueue.enqueue's per-job
               # telemetry for one statement; {_count, _} match keeps failures
               # loud (insert_all raises on error).
-              jobs = Enum.map(notes, &delete_note_index_job/1)
-
-              jobs
-              |> Enum.chunk_every(@job_insert_chunk)
-              |> Enum.each(&Oban.insert_all/1)
+              _ = notes |> Enum.map(&delete_note_index_job/1) |> Jobs.insert_chunked()
 
               {:ok, %{deleted: updated, notes: notes, seq: seq}}
 
@@ -7041,9 +7030,14 @@ defmodule Engram.Notes do
       # Side effects outside the transaction context, so they never fire if
       # the update_all above rolled back. Qdrant cleanup + broadcasts.
       # Markers carry no embedding, so they skip the index-cleanup enqueue.
-      Enum.each(real_notes, fn note ->
-        _ = Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
+      #
+      # One chunked bulk insert, not one insert (pool checkout) per note
+      # (#2169). DeleteNoteIndex has no `unique`, so insert_all drops nothing
+      # the per-note insert deduped. The per-note delete EVENTS stay one per
+      # note: clients dispatch on each event's id and path.
+      Enqueue.enqueue_all(Enum.map(real_notes, &delete_note_index_job/1), "delete_note_index")
 
+      Enum.each(real_notes, fn note ->
         :ok = broadcast_change(user.id, vault.id, "delete", note.path, note.id, seq: seq)
       end)
 
