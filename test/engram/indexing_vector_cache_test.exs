@@ -140,11 +140,6 @@ defmodule Engram.IndexingVectorCacheTest do
     end
   end
 
-  defp enable(key) do
-    Application.put_env(:engram, key, true)
-    on_exit(fn -> Application.delete_env(:engram, key) end)
-  end
-
   defp small_pass_budget do
     Application.put_env(:engram, :max_pass_embed_bytes, 3_000)
     on_exit(fn -> Application.delete_env(:engram, :max_pass_embed_bytes) end)
