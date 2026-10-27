@@ -90,7 +90,9 @@ defmodule EngramWeb.BillingController do
 
   # The index budget (review H3, "no invisible limits"): the account's search
   # points against `index_points_cap`, and how many notes are on keyword-only
-  # search (the floor tier).
+  # search (the floor tier). Two counts over the user's own rows (indexed on
+  # `user_id`, at most `index_points_cap` chunks); the SPA calls this once per
+  # 60s staleTime window, so it is not cached.
   defp index_budget_usage(user) do
     %{
       index_points:

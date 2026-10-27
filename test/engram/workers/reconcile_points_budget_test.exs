@@ -353,6 +353,34 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
       assert all_enqueued(worker: RebuildStaleNote) == []
     end
 
+    # The v5 pass re-embeds a legacy-chunked note capped anyway; flooring its
+    # owner's notes first would pay Voyage twice. Without the guard in
+    # `budget_users/3` this user is demoted on the first sweep.
+    test "a user with a note still on an old chunker is not budgeted until it catches up", %{
+      user: user,
+      vault: vault
+    } do
+      notes = div(cap() * 12, 1_000)
+      [legacy | _] = ids = full_notes(user, vault, notes, 100, real: true)
+      assert points(user) > cap()
+
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^legacy), set: [chunker_version: nil])
+      end)
+
+      assert {:ok, %{demoted: 0, promoted: 0}} = ReconcileEmbeddings.budget_sweep(20)
+      assert tiers(user, ids) |> Map.values() |> Enum.all?(&is_nil/1)
+
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^legacy),
+          set: [chunker_version: Markdown.chunker_version()]
+        )
+      end)
+
+      assert {:ok, %{demoted: demoted}} = ReconcileEmbeddings.budget_sweep(20)
+      assert demoted > 0
+    end
+
     test "1,000 over-cap notes demote 200 per tick across five ticks; red pauses", %{
       user: user,
       vault: vault,

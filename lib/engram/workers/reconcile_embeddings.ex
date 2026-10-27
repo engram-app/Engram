@@ -294,7 +294,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # Dense notes only: a sparse-only note reaches the dense backfill (term 2 of
   # the main sweep), whose pass caps it.
   #
-  # Runs whether or not the budget is on, but only over notes at THIS BUILD's versions: a note behind them is the
+  # Only over notes at THIS BUILD's versions: a note behind them is the
   # v5 pass's, which re-embeds it capped anyway, and a recap first would pay
   # for it twice. Before and during the pass that leaves the recap nothing
   # but notes the pass already wrote; after it, downgrades and lowered
@@ -567,6 +567,24 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     floors = smallest.(dynamic([n], n.index_tier in ["floor", "floor_paid"]))
     merged = smallest.(dynamic([n], is_nil(n.index_tier) and not is_nil(n.chunk_count)))
+
+    # Users with an indexed note still behind this build's chunker: the v5
+    # pass re-embeds those capped anyway, and demoting them first would pay
+    # Voyage twice (the old `INDEX_BUDGET_ENABLED` gate existed for this).
+    # Their chunk counts are v3-sized, so they are not budgeted at all until
+    # the pass has caught up.
+    {chunker, _keyword} = Rebuild.build_versions()
+
+    behind =
+      IndexVersions.live_notes()
+      |> where([n], not is_nil(n.embed_hash))
+      |> where([n], is_nil(n.chunker_version) or n.chunker_version < ^chunker)
+      |> distinct(true)
+      |> select([n], n.user_id)
+      |> per_user.()
+      |> MapSet.new()
+
+    counts = Enum.reject(counts, fn {id, _} -> id in behind end)
     ids = Enum.map(counts, &elem(&1, 0))
 
     # `Billing.tier/1` in SQL: an entitled Pro, else Starter, else Free.
