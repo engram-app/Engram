@@ -1,4 +1,4 @@
-import { useClerk, useReverification, useUser } from "@clerk/react";
+import { useReverification, useUser } from "@clerk/react";
 import { isReverificationCancelledError } from "@clerk/react/errors";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ import { useT } from "@/i18n/locale-provider";
 import { notify } from "@/lib/notify";
 import { ROUTES } from "@/routes";
 import { useSubmitFeedback } from "../../api/queries";
-import { clearHttpCache } from "../../auth/clear-http-cache";
+import { useAuthAdapter } from "../../auth/use-auth-adapter";
 import { SettingsSectionCard } from "./section-card";
 
 const CONFIRM = "delete my account";
@@ -27,7 +27,7 @@ const FEEDBACK_TIMEOUT_MS = 3000;
 export function DangerZoneSection() {
 	const { t } = useT();
 	const { user, isLoaded } = useUser();
-	const clerk = useClerk();
+	const { logout } = useAuthAdapter();
 	const [open, setOpen] = useState(false);
 	const [phrase, setPhrase] = useState("");
 	const [answer, setAnswer] = useState(EMPTY_REASON);
@@ -65,8 +65,12 @@ export function DangerZoneSection() {
 		}
 		try {
 			await remove();
-			await clearHttpCache();
-			await clerk.signOut({ redirectUrl: ROUTES.SIGN_IN });
+			// The shared sign-out: cache clear, toast, tap guard, timeout.
+			await logout();
+			// Always a full load: logout() never rejects, and Clerk clears `user`
+			// before its network call, so nothing here can tell a hung sign-out
+			// from a clean one. The account is gone, so the load comes up signed out.
+			window.location.assign(ROUTES.SIGN_IN);
 		} catch (e) {
 			setDeleting(false);
 			if (isReverificationCancelledError(e)) {

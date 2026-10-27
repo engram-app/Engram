@@ -26,6 +26,8 @@ export default {
 	"Vault root": "Kasa kök dizini",
 	"Nothing was moved: a file with the same name is already there.":
 		"Hiçbir şey taşınmadı: Aynı isimde bir dosya zaten orada.",
+	"Signing out…": "Oturumu kapatılıyor…",
+	"Could not sign out": "Oturumu kapatılamadı",
 	"Couldn't load sign-in": "Giriş yüklenemedi",
 	"The sign-in service didn't load. Check your connection, then reload the page.":
 		"Giriş servisi yüklenemedi. Bağlantınızı kontrol edin, ardından sayfayı yeniden yükleyin.",

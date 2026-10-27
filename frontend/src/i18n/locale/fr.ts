@@ -27,6 +27,8 @@ export default {
 	"Vault root": "Racine du coffre",
 	"Nothing was moved: a file with the same name is already there.":
 		"Rien n'a été déplacé : un fichier avec le même nom existe déjà.",
+	"Signing out…": "Déconnexion…",
+	"Could not sign out": "Impossible de se déconnecter",
 	"Couldn't load sign-in": "Impossible de charger la connexion",
 	"The sign-in service didn't load. Check your connection, then reload the page.":
 		"Le service de connexion n'a pas été chargé. Vérifie ta connexion, puis recharge la page.",

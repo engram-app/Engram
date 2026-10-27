@@ -27,6 +27,8 @@ export default {
 	"Vault root": "Root vault",
 	"Nothing was moved: a file with the same name is already there.":
 		"Tidak ada yang dipindahkan: file dengan nama yang sama sudah ada di sana.",
+	"Signing out…": "Sedang keluar…",
+	"Could not sign out": "Tidak dapat keluar",
 	"Couldn't load sign-in": "Tidak dapat memuat login",
 	"The sign-in service didn't load. Check your connection, then reload the page.":
 		"Layanan login tidak dapat dimuat. Periksa koneksi Anda, lalu muat ulang halaman.",

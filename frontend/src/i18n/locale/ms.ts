@@ -27,6 +27,8 @@ export default {
 	"Vault root": "Punca peti nota",
 	"Nothing was moved: a file with the same name is already there.":
 		"Tiada fail yang dipindahkan: fail dengan nama yang sama sudah ada.",
+	"Signing out…": "Keluar…",
+	"Could not sign out": "Tidak dapat keluar",
 	"Couldn't load sign-in": "Tidak dapat memuat log masuk",
 	"The sign-in service didn't load. Check your connection, then reload the page.":
 		"Perkhidmatan log masuk tidak dapat dimuat. Semak sambungan anda, kemudian muat semula halaman.",

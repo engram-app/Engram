@@ -27,6 +27,8 @@ export default {
 	"Vault root": "Carpeta raíz de la bóveda",
 	"Nothing was moved: a file with the same name is already there.":
 		"Nada se movió: ya existe un archivo con el mismo nombre.",
+	"Signing out…": "Cerrando sesión…",
+	"Could not sign out": "No se pudo cerrar sesión",
 	"Couldn't load sign-in": "No se pudo cargar el inicio de sesión",
 	"The sign-in service didn't load. Check your connection, then reload the page.":
 		"El servicio de inicio de sesión no se cargó. Verifica tu conexión y vuelve a cargar la página.",

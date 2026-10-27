@@ -27,6 +27,8 @@ export default {
 	"Vault root": "Korzeń sejfu",
 	"Nothing was moved: a file with the same name is already there.":
 		"Nic nie zostało przeniesione: plik o tej samej nazwie już tam jest.",
+	"Signing out…": "Wylogowywanie…",
+	"Could not sign out": "Nie udało się wylogować",
 	"Couldn't load sign-in": "Nie można załadować logowania",
 	"The sign-in service didn't load. Check your connection, then reload the page.":
 		"Usługa logowania nie została załadowana. Sprawdź połączenie, a następnie odśwież stronę.",

@@ -12,6 +12,8 @@ type Notify = ((...args: Args) => void) & {
 	error: (...args: Args) => void;
 	success: (...args: Args) => void;
 	info: (...args: Args) => void;
+	loading: (...args: Args) => void;
+	dismiss: (id: string) => void;
 };
 
 // Looks `toast` up on each call, so a test's vi.mock("sonner") still applies, and
@@ -29,6 +31,12 @@ const notify: Notify = Object.assign(
 		},
 		info: (...args: Args) => {
 			toast.info(...args);
+		},
+		loading: (...args: Args) => {
+			toast.loading(...args);
+		},
+		dismiss: (id: string) => {
+			toast.dismiss(id);
 		},
 	},
 );

@@ -29,6 +29,8 @@ export default {
 	"Vault root": "保管庫のルート",
 	"Nothing was moved: a file with the same name is already there.":
 		"ファイルは移動されませんでした。同じ名前のファイルがすでに存在します。",
+	"Signing out…": "ログアウト中…",
+	"Could not sign out": "ログアウトできませんでした",
 	"Couldn't load sign-in": "ログインに失敗しました",
 	"The sign-in service didn't load. Check your connection, then reload the page.":
 		"ログインサービスが読み込まれませんでした。接続を確認し、ページを再読み込みしてください。",

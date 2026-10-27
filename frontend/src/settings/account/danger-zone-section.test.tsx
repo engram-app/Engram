@@ -5,13 +5,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DangerZoneSection } from "./danger-zone-section";
 import { makeUser } from "./section-test-helpers";
 
-const signOut = vi.fn().mockResolvedValue({});
+// The live Clerk singleton: `user` goes null once a sign-out lands.
+const clerk: { user: object | null; signOut: () => Promise<void> } = {
+	user: {},
+	signOut: vi.fn().mockResolvedValue(undefined),
+};
+const logout = vi.fn(() => {
+	clerk.user = null;
+	return Promise.resolve();
+});
 let user = makeUser();
 vi.mock("@clerk/react", () => ({
 	useUser: () => ({ user, isLoaded: true }),
 	useReverification: (fn: unknown) => fn,
-	useClerk: () => ({ signOut }),
+	useClerk: () => clerk,
 }));
+vi.mock("../../auth/use-auth-adapter", () => ({ useAuthAdapter: () => ({ logout }) }));
 vi.mock("@clerk/react/errors", () => ({
 	isClerkAPIResponseError: () => false,
 	isReverificationCancelledError: vi.fn(() => false),
@@ -41,6 +50,7 @@ describe("DangerZoneSection", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		user = makeUser();
+		clerk.user = {};
 		vi.mocked(isReverificationCancelledError).mockReturnValue(false);
 	});
 
@@ -118,7 +128,7 @@ describe("DangerZoneSection", () => {
 		expect(submitFeedback.mock.invocationCallOrder[0]).toBeLessThan(
 			vi.mocked(user.delete).mock.invocationCallOrder[0] ?? 0,
 		);
-		await waitFor(() => expect(signOut).toHaveBeenCalledWith({ redirectUrl: "/sign-in" }));
+		await waitFor(() => expect(logout).toHaveBeenCalledTimes(1));
 	});
 
 	it("still deletes when sending the reason fails", async () => {
@@ -137,6 +147,28 @@ describe("DangerZoneSection", () => {
 		fireEvent.click(screen.getByRole("button", { name: /delete my account/iu }));
 		await waitFor(() => expect(user.delete).toHaveBeenCalled());
 		expect(toast.error).not.toHaveBeenCalled();
-		expect(signOut).not.toHaveBeenCalled();
+		expect(logout).not.toHaveBeenCalled();
+	});
+
+	// Clerk's signOut() clears `user` BEFORE its network call, so a hung
+	// sign-out leaves `user` null and the shared logout resolves (after its
+	// timeout) with the session not actually ended. The delete must leave anyway.
+	it("reloads to sign-in after a delete, even when the sign-out hung", async () => {
+		logout.mockImplementationOnce(() => {
+			clerk.user = null;
+			return Promise.resolve();
+		});
+		const assign = vi.fn();
+		vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign });
+		try {
+			render(<DangerZoneSection />);
+			fillForm();
+			fireEvent.click(screen.getByRole("button", { name: /delete my account/iu }));
+
+			await waitFor(() => expect(assign).toHaveBeenCalledWith("/sign-in"));
+			expect(toast.error).not.toHaveBeenCalled();
+		} finally {
+			vi.restoreAllMocks();
+		}
 	});
 });

@@ -27,6 +27,8 @@ export default {
 	"Vault root": "Корневая папка хранилища",
 	"Nothing was moved: a file with the same name is already there.":
 		"Ничего не было перемещено: файл с таким же именем уже существует.",
+	"Signing out…": "Выход…",
+	"Could not sign out": "Не удалось выйти",
 	"Couldn't load sign-in": "Не удалось загрузить страницу входа",
 	"The sign-in service didn't load. Check your connection, then reload the page.":
 		"Сервис входа не загрузился. Проверьте подключение, затем перезагрузите страницу.",

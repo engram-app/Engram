@@ -24,6 +24,8 @@ export default {
 	"Vault root": "仓库根目录",
 	"Nothing was moved: a file with the same name is already there.":
 		"没有文件被移动：已经存在同名文件。",
+	"Signing out…": "正在退出…",
+	"Could not sign out": "退出失败",
 	"Couldn't load sign-in": "无法加载登录",
 	"The sign-in service didn't load. Check your connection, then reload the page.":
 		"登录服务加载失败。检查网络连接，然后重新加载页面。",

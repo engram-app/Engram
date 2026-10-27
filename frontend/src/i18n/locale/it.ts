@@ -27,6 +27,8 @@ export default {
 	"Vault root": "Cartella principale della vault",
 	"Nothing was moved: a file with the same name is already there.":
 		"Nessun file è stato spostato: un file con lo stesso nome è già presente.",
+	"Signing out…": "Disconnessione in corso…",
+	"Could not sign out": "Impossibile disconnettersi",
 	"Couldn't load sign-in": "Impossibile caricare l'accesso",
 	"The sign-in service didn't load. Check your connection, then reload the page.":
 		"Il servizio di accesso non è stato caricato. Controlla la connessione e ricarica la pagina.",
