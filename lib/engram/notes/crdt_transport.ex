@@ -213,7 +213,9 @@ defmodule Engram.Notes.CrdtTransport do
     # sent. The function-level `catch` cannot see body bindings at all, which is
     # what silently made that drain impossible to write.
     try do
-      apply_in_room_call(room, parent, ref, owner, update)
+      # A raise in the room returns `{:error, {:room_raised, _}}` (already
+      # logged) before any reply was sent, so drain_reply/1 below answers it.
+      _ = apply_in_room_call(room, parent, ref, owner, update)
 
       # Acknowledge only once the room's tail append committed: a success here
       # lets the client drop its queued copy.
