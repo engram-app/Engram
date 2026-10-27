@@ -72,6 +72,9 @@ defmodule EngramWeb.MeteredSerializerTest do
     assert_receive {:frame, _, %{topic_prefix: "other"}}
   end
 
+  # Subscriptions below mirror what `Phoenix.Channel.Server` registers on join
+  # (phoenix >= 1.8.16). `channels/metered_serializer_channel_test.exs` pins
+  # that shape against a real join, so these cannot drift from it silently.
   test "fastlane!/1 counts one frame per local subscriber that receives the encoding" do
     topic = "user:#{System.unique_integer([:positive])}"
     event = "vault_renamed"
@@ -81,7 +84,7 @@ defmodule EngramWeb.MeteredSerializerTest do
 
       spawn(fn ->
         Phoenix.PubSub.subscribe(Engram.PubSub, topic,
-          metadata: {:fastlane, self(), MeteredSerializer, intercepts}
+          sender: {Phoenix.Channel.Server, {self(), MeteredSerializer, intercepts}}
         )
 
         send(test_pid, :subscribed)
@@ -114,7 +117,7 @@ defmodule EngramWeb.MeteredSerializerTest do
 
     spawn(fn ->
       Phoenix.PubSub.subscribe(Engram.PubSub, topic,
-        metadata: {:fastlane, self(), MeteredSerializer, []}
+        sender: {Phoenix.Channel.Server, {self(), MeteredSerializer, []}}
       )
 
       send(test_pid, :subscribed)
@@ -124,7 +127,7 @@ defmodule EngramWeb.MeteredSerializerTest do
     assert_receive :subscribed
 
     Phoenix.PubSub.subscribe(Engram.PubSub, topic,
-      metadata: {:fastlane, self(), MeteredSerializer, []}
+      sender: {Phoenix.Channel.Server, {self(), MeteredSerializer, []}}
     )
 
     MeteredSerializer.fastlane!(%Broadcast{topic: topic, event: "crdt_doc_ready", payload: %{}})
