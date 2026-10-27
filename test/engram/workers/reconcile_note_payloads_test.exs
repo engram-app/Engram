@@ -305,6 +305,8 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
         skip_tenant_check: true
       )
 
+    Engram.Fixtures.mirror_body!(ctx.stale.id)
+
     assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
     assert reload(ctx.stale).payload_hash == ReconcileNotePayloads.undecryptable_stamp()
   end
