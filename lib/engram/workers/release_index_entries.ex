@@ -66,6 +66,7 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   import Ecto.Query, only: [from: 2]
 
   alias Engram.Accounts
+  alias Engram.Batch
   alias Engram.Crypto.RotationGate
   alias Engram.Notes
   alias Engram.Notes.{Enqueue, Identity}
@@ -74,25 +75,9 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
 
-  # Ids per link, and so per index-room change. Chosen by measurement (PR
-  # body of the chunking follow-up to #2164; 20k stale ids, 500/1k/2k/5k/10k
-  # per job): a job's cost is dominated by a FIXED part that scales with the
-  # whole index (snapshot decrypt/re-encrypt, or the room edit plus encrypted
-  # tail append), ~0.2-0.5 s at 20-40k entries, while each extra id adds ~0.05
-  # ms. So small chunks multiply that fixed cost: 20k ids took 20 s at 500 per
-  # job and 5.7 s at 2,000, with the slowest job the same (~0.8 s) at both.
-  # Above 2,000 the slowest job and the delete set broadcast to every
-  # connected client (~4 B per id worst case, 8 KB here) keep growing for a
-  # shrinking total-time win.
-  #
-  # Deliberately NOT `Notes`' 500-row chunk: that one bounds SQL bind params,
-  # a different limit this job never reaches.
-  @chunk_size 2_000
-
-  # No @spec: dialyzer infers the exact `2000`, and a wider `pos_integer()`
-  # is a `contract_supertype` it rejects.
-  @doc "Max note ids per link of a release chain, i.e. per index-room change."
-  def chunk_size, do: @chunk_size
+  # Ids per link, and so per index-room change; why 2,000 is in
+  # `Engram.Batch.release_index_entries/0`.
+  @chunk_size Batch.release_index_entries()
 
   # Wall time one link may spend before handing the rest to a successor. A
   # chunk costs ~0.8 s at 20-40k index entries but its fixed part grows with
@@ -113,7 +98,7 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   (`Enqueue.enqueue/3` no-ops on it).
 
   One job however many ids, on purpose. `perform/1` releases its ids
-  `chunk_size/0` at a time, one index-room change per chunk, in series. If
+  `Batch.release_index_entries/0` at a time, one index-room change per chunk, in series. If
   the job outlives `link_budget_ms/0` with ids left, it enqueues them as its
   successor and stops. The budget is checked between chunks, so a link runs
   for the budget plus one chunk (including any wait on the fold lock), far
@@ -150,7 +135,7 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   the busier the vault, the bigger each job.
 
   Only a job still `available` or `scheduled`, holding room for the ids
-  within `chunk_size/0`, is joined. One already running read its args at
+  within `Batch.release_index_entries/0`, is joined. One already running read its args at
   fetch, so it is never extended; a full one is left alone. Either way the
   ids then get a fresh job. The pending row is taken `FOR UPDATE SKIP LOCKED`, and the UPDATE
   re-checks the state under that lock, so a job Oban fetches meanwhile is not
@@ -174,7 +159,7 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   # `oban_jobs_state_queue_priority_scheduled_at_id_index`. No ORDER BY: any
   # pending job of the vault will do (QueryPlan test in the coalesce suite).
   #
-  # A job takes joined ids only up to `chunk_size/0`, one index-room change's
+  # A job takes joined ids only up to `Batch.release_index_entries/0`, one index-room change's
   # worth. A full one (a chain successor carrying the rest of a storm, a
   # folder delete) is left alone and the release gets its own job, so no
   # pending job grows without bound while its vault keeps deleting.
@@ -294,7 +279,7 @@ defmodule Engram.Workers.ReleaseIndexEntries do
   #
   # Inserted as its own job, never joined into another (a link never extends
   # itself). Once queued, later releases for the vault may join it, but only
-  # up to `chunk_size/0` ids (`enqueue/3`), so a successor already carrying
+  # up to `Batch.release_index_entries/0` ids (`enqueue/3`), so a successor already carrying
   # more than a chunk takes nothing more.
   #
   # The insert commits on its own. If the node dies after it but before Oban

@@ -38,6 +38,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
   alias Engram.Backfill.IdWindows
   alias Engram.Backfill.TenantScan
+  alias Engram.Batch
   alias Engram.Billing
   alias Engram.Billing.Subscription
   alias Engram.DataMigrations.IndexVersions
@@ -59,10 +60,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
   require Logger
 
-  # Notes stamped and enqueued per statement. Each page drops out of the next
-  # page's query (the stamp), so a loop of pages walks the whole backlog.
+  # Notes stamped and enqueued per statement (`Engram.Batch.reconcile_page/0`).
   # Tests pass a smaller `"page"` arg to exercise the loop.
-  @page 1_000
+  @page Batch.reconcile_page()
 
   # The index points budget (`index_points_cap`): users per tick, and notes
   # per user per tick.

@@ -54,6 +54,7 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
 
   alias Engram.Attachments
   alias Engram.Attachments.Attachment
+  alias Engram.Batch
   alias Engram.Logger.Metadata
   alias Engram.Repo
   alias Engram.Storage
@@ -64,7 +65,7 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
   @latch {__MODULE__, :unavailable}
 
   # Jobs per `Oban.insert_all` in the fan-out (same bound as the notes path).
-  @insert_chunk 2_000
+  @insert_chunk Batch.insert_rows()
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(15)
