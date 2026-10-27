@@ -86,6 +86,21 @@ const selectFolders = (tree: VaultTree): Folder[] =>
 
 const selectNotes = (data: { notes: NoteSummary[] }) => data.notes;
 
+// `/folders/list` returns one page (200 notes by default) and a `next_cursor`
+// until the last. Follow it so a big folder still shows every note.
+async function fetchAllFolderNotes(folder: string): Promise<{ notes: NoteSummary[] }> {
+	const base = `/folders/list?folder=${encodeURIComponent(folder)}`;
+	const notes: NoteSummary[] = [];
+	let cursor: string | null = null;
+	do {
+		const url: string = cursor ? `${base}&cursor=${encodeURIComponent(cursor)}` : base;
+		const page: { notes: NoteSummary[]; next_cursor?: string | null } = await api.get(url);
+		notes.push(...page.notes);
+		cursor = page.next_cursor ?? null;
+	} while (cursor);
+	return { notes };
+}
+
 const selectAttachments = (tree: VaultTree): AttachmentSummary[] => tree.attachments;
 
 // Every note in the vault, in the shape list consumers render. The sidebar
@@ -630,8 +645,7 @@ export function useFolderNotes(folder: string, options?: { enabled?: boolean }) 
 	const vaultId = useActiveVaultId();
 	return useQuery({
 		queryKey: ["folderNotes", vaultId, folder],
-		queryFn: () =>
-			api.get<{ notes: NoteSummary[] }>(`/folders/list?folder=${encodeURIComponent(folder)}`),
+		queryFn: () => fetchAllFolderNotes(folder),
 		select: selectNotes,
 		enabled: options?.enabled ?? folder.length > 0,
 		// Mutations + channel events

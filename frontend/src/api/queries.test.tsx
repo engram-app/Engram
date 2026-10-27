@@ -29,6 +29,7 @@ import {
 	useDeleteNote,
 	useDeleteVault,
 	useDuplicateNote,
+	useFolderNotes,
 	useMe,
 	useNote,
 	usePlanChangePreview,
@@ -2804,5 +2805,21 @@ describe("useUpdateConnectionAccess", () => {
 			result.current.mutateAsync({ connection: key, body: { default_access: "none" } }),
 		);
 		expect(api.patch).toHaveBeenCalledWith("/connections/pat/k1", { default_access: "none" });
+	});
+});
+
+describe("useFolderNotes", () => {
+	it("follows next_cursor so a folder over one page shows every note", async () => {
+		const n = (id: string) => ({ id, path: `Big/${id}.md`, title: id, tags: [] });
+		get
+			.mockResolvedValueOnce({ notes: [n("a"), n("b")], next_cursor: "c1" })
+			.mockResolvedValueOnce({ notes: [n("c")], next_cursor: null });
+
+		const { result } = renderHook(() => useFolderNotes("Big"), { wrapper });
+
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+		expect(result.current.data?.map((x) => x.id)).toEqual(["a", "b", "c"]);
+		expect(get).toHaveBeenNthCalledWith(1, "/folders/list?folder=Big");
+		expect(get).toHaveBeenNthCalledWith(2, "/folders/list?folder=Big&cursor=c1");
 	});
 });
