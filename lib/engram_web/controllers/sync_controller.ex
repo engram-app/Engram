@@ -47,7 +47,9 @@ defmodule EngramWeb.SyncController do
         "checkpoint. A client whose catch-up cursor has reached `change_seq` while " <>
         "both counts are 0 has seen every change the server will make on its own. " <>
         "`deferred_checkpoints` (held by a live room) is reported but is not " <>
-        "owed work.",
+        "owed work. `checkpoints_capped` is true when more pending checkpoints exist " <>
+        "than the server reads per call; `pending_checkpoints` is then at least 1, " <>
+        "never 0.",
     responses: [ok: {"Sync quiescence", "application/json", Schemas.SyncQuiescenceResponse}]
   )
 
@@ -63,13 +65,15 @@ defmodule EngramWeb.SyncController do
         {Engram.Vaults.raw_current_seq(vault.id), pending}
       end)
 
-    {owed, deferred} = checkpoint_counts(vault.id)
+    {owed, deferred, capped?} = checkpoint_counts(vault.id)
 
     json(conn, %{
       change_seq: current,
       pending_crdt_updates: pending_updates,
-      pending_checkpoints: owed,
-      deferred_checkpoints: deferred
+      # Past the cap the unread jobs may be owed, so never report quiet.
+      pending_checkpoints: if(capped?, do: max(owed, 1), else: owed),
+      deferred_checkpoints: deferred,
+      checkpoints_capped: capped?
     })
   end
 
@@ -80,7 +84,7 @@ defmodule EngramWeb.SyncController do
   # enqueue of a room exit that has since happened. A key rotation also snoozes
   # it, but this endpoint answers 503 for the whole rotation.
   defp checkpoint_counts(vault_id) do
-    note_ids =
+    {note_ids, capped?} =
       Engram.Jobs.pending_note_ids_for_vault(
         Engram.Workers.CheckpointNote,
         vault_id,
@@ -88,7 +92,7 @@ defmodule EngramWeb.SyncController do
       )
 
     owed = Enum.count(note_ids, &(is_binary(&1) and Engram.Notes.CrdtRegistry.lookup(&1) == nil))
-    {owed, length(note_ids) - owed}
+    {owed, length(note_ids) - owed, capped?}
   end
 
   def manifest(conn, params) do

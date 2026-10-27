@@ -110,8 +110,20 @@ defmodule EngramWeb.Schemas.SyncQuiescenceResponse do
         description:
           "Unfinished checkpoint jobs held by a live room, which materializes the " <>
             "note itself on exit. Not owed work."
+      },
+      checkpoints_capped: %Schema{
+        type: :boolean,
+        description:
+          "True when more pending checkpoints exist than one call reads; the counts are " <>
+            "then lower bounds and `pending_checkpoints` is at least 1."
       }
     },
-    required: [:change_seq, :pending_crdt_updates, :pending_checkpoints, :deferred_checkpoints]
+    required: [
+      :change_seq,
+      :pending_crdt_updates,
+      :pending_checkpoints,
+      :deferred_checkpoints,
+      :checkpoints_capped
+    ]
   })
 end

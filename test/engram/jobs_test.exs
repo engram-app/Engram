@@ -36,8 +36,15 @@ defmodule Engram.JobsTest do
       checkpoint!(Ecto.UUID.generate(), "available")
 
       states = ~w(available executing retryable scheduled)
-      assert length(Jobs.pending_note_ids_for_vault(CheckpointNote, vault_id, states)) == 5
-      assert length(Jobs.pending_note_ids_for_vault(CheckpointNote, vault_id, states, 3)) == 3
+      assert {ids, false} = Jobs.pending_note_ids_for_vault(CheckpointNote, vault_id, states)
+      assert length(ids) == 5
+
+      assert {first, true} = Jobs.pending_note_ids_for_vault(CheckpointNote, vault_id, states, 3)
+      assert length(first) == 3
+      # Stable subset: the same call returns the same ids.
+      assert {^first, true} = Jobs.pending_note_ids_for_vault(CheckpointNote, vault_id, states, 3)
+
+      assert {_, false} = Jobs.pending_note_ids_for_vault(CheckpointNote, vault_id, states, 5)
     end
   end
 
