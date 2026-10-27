@@ -1263,9 +1263,10 @@ defmodule Engram.Crypto.UserDekRotationTest do
         Plug.Conn.send_resp(conn, 200, ~s({"result": {"status": "completed"}, "status": "ok"}))
       end)
 
-      Bypass.stub(bypass, "PUT", "/collections/engram_notes/points/payload", fn conn ->
+      # An overwrite is a merge plus a delete of the keys it omits.
+      Bypass.stub(bypass, "POST", "/collections/engram_notes/points/payload/delete", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
-        send(test_pid, {:overwrite, Jason.decode!(body)})
+        send(test_pid, {:delete_keys, Jason.decode!(body)})
         Plug.Conn.send_resp(conn, 200, ~s({"result": {"status": "completed"}, "status": "ok"}))
       end)
 
@@ -1309,16 +1310,16 @@ defmodule Engram.Crypto.UserDekRotationTest do
       capture_payload_writes(self(), [%{"id" => point, "payload" => %{"u" => "x", "y" => "b2xk"}}])
 
       assert :ok = UserDekRotation.rotate_user(user.id)
-      refute_received {:overwrite, _}
+      refute_received {:set, _}
       assert :ok = perform_job(Engram.Workers.ReconcileNotePayloads, %{"user_id" => user.id})
       Mox.verify!()
 
       {:ok, new_fk} = Crypto.dek_filter_key(Repo.get!(Engram.Accounts.User, user.id))
 
-      assert_received {:overwrite,
+      assert_received {:set,
                        %{"filter" => %{"should" => [%{"has_id" => [^point]}]}, "payload" => p}}
 
-      refute_received {:set, %{"filter" => %{"should" => [%{"has_id" => [^point]}]}}}
+      assert_received {:delete_keys, %{"filter" => %{"should" => [%{"has_id" => [^point]}]}}}
       assert p["y"] == FilterId.from_hmac(Crypto.hmac_field(new_fk, "playbook"))
       assert p["s"] == FilterId.attr_value(new_fk, "draft")
 

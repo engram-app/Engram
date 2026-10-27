@@ -349,7 +349,7 @@ defmodule Engram.IndexingChunkReuseTest do
       assert upserts(ctx.recorder) == []
       unix = DateTime.to_unix(~U[2026-08-21 08:00:00Z])
 
-      assert [%{method: "PUT", body: %{"payload" => %{"up" => ^unix}}}] =
+      assert [%{method: "POST", body: %{"payload" => %{"up" => ^unix}}}] =
                set_payloads(ctx.recorder)
 
       assert Repo.reload!(note, skip_tenant_check: true).fm_timestamp == ~U[2026-08-21 08:00:00Z]

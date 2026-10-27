@@ -379,11 +379,16 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
 
           %{"status" => "completed"}
 
-        {"PUT", "/collections/engram_notes/points/payload"} ->
+        {"POST", "/collections/engram_notes/points/payload/delete"} ->
           ids = for %{"has_id" => ids} <- body["filter"]["should"], id <- ids, do: id
 
           Agent.update(store, fn s ->
-            %{s | points: Enum.reduce(ids, s.points, &Map.put(&2, &1, body["payload"]))}
+            points =
+              Enum.reduce(ids, s.points, fn id, acc ->
+                Map.update(acc, id, %{}, &Map.drop(&1, body["keys"]))
+              end)
+
+            %{s | points: points}
           end)
 
           %{"status" => "completed"}

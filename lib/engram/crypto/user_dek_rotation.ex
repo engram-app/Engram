@@ -1760,7 +1760,7 @@ defmodule Engram.Crypto.UserDekRotation do
       end)
 
     with {:ok, pairs, skipped} <- pairs do
-      case Qdrant.set_payloads(collection, Enum.reverse(pairs)) do
+      case Qdrant.set_payloads(collection, Enum.reverse(pairs), caller: :dek_rotation) do
         :ok ->
           {:ok, skipped}
 

@@ -3734,7 +3734,8 @@ defmodule Engram.Indexing do
   # keys, so a merge would keep a removed key (or an old folder id) forever. A
   # reused v3/v4 point gets the v5 payload too (its text is in `chunk_points`
   # from this pass on).
-  defp refresh_payload(ids, payload), do: Qdrant.overwrite_payload(collection(), ids, payload)
+  defp refresh_payload(ids, payload),
+    do: Qdrant.overwrite_payload(collection(), ids, payload, caller: :refresh)
 
   # A deterministic id can equal a stale id of the previous pass (same
   # fingerprint and ordinal, not reused because the plan regrouped). The point
