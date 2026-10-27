@@ -15,10 +15,15 @@ defmodule Engram.Embedders.Voyage do
     * `[:engram, :voyage, :embed, :tokens]` — emitted on a successful 200
       response when the Voyage payload includes `usage.total_tokens`.
       Measurements: `%{total_tokens: pos_integer()}`. Metadata:
-      `%{purpose: :index | :query, model: String.t()}`. Drives the
+      `%{purpose: :index | :query, model: String.t(), tier: :free | :paid |
+      :none, trigger: :edit | :rebuild | :upgrade | :retry | :reconcile |
+      :none}` (`tier`/`trigger` from `Engram.Embedders.UsageLabels`). Drives the
       `engram_prom_ex_voyage_embed_tokens_total` sum metric used by the
       Grafana cost / tokens-per-minute panels. Voyage publishes no usage
       API, so this is the only telemetry path for billing reconciliation.
+    * `[:engram, :voyage, :embed, :tokens_per_chunk]` — same moment and
+      metadata; `%{tokens: integer}`, the request's tokens divided by its
+      texts.
     * `[:engram, :embed, :client_rate_limited]` — synthetic-429s emitted
       when the in-process Hammer throttle fast-fails a request before
       reaching Voyage.
@@ -26,6 +31,7 @@ defmodule Engram.Embedders.Voyage do
 
   @behaviour Engram.Embedder
 
+  alias Engram.Embedders.UsageLabels
   alias Engram.ServiceConfig
 
   require OpenTelemetry.Tracer, as: Tracer
@@ -165,7 +171,7 @@ defmodule Engram.Embedders.Voyage do
     case result do
       {:ok, %{status: 200, body: %{"data" => data} = body}} ->
         vectors = Enum.map(data, &decode_embedding(&1["embedding"]))
-        emit_token_telemetry(body, Keyword.get(opts, :purpose, :index), model)
+        emit_token_telemetry(body, Keyword.get(opts, :purpose, :index), model, length(texts))
         {:ok, vectors}
 
       {:ok, %{status: 400, body: body}} ->
@@ -221,16 +227,26 @@ defmodule Engram.Embedders.Voyage do
   # the field is missing: a future endpoint shape change should not surface
   # as silently-zero tokens.
   # `model` prices the tokens (the v5 rebuild ledger, `Engram.EmbedModels`).
-  defp emit_token_telemetry(%{"usage" => %{"total_tokens" => total}}, purpose, model)
+  defp emit_token_telemetry(%{"usage" => %{"total_tokens" => total}}, purpose, model, texts)
        when is_integer(total) do
-    :telemetry.execute(
-      [:engram, :voyage, :embed, :tokens],
-      %{total_tokens: total},
-      %{purpose: purpose, model: model}
-    )
+    %{tier: tier, trigger: trigger} = UsageLabels.current()
+    meta = %{purpose: purpose, model: model, tier: tier, trigger: trigger}
+
+    :telemetry.execute([:engram, :voyage, :embed, :tokens], %{total_tokens: total}, meta)
+
+    # Tokens per chunk of this request: how long the embedded chunks are.
+    if texts > 0 do
+      :telemetry.execute(
+        [:engram, :voyage, :embed, :tokens_per_chunk],
+        %{tokens: div(total, texts)},
+        meta
+      )
+    end
+
+    :ok
   end
 
-  defp emit_token_telemetry(_body, _purpose, _model), do: :ok
+  defp emit_token_telemetry(_body, _purpose, _model, _texts), do: :ok
 
   # Client-side rate limit. Enabled when `:voyage_rpm` is set (env: VOYAGE_RPM).
   # When the bucket is empty we synthesize the same `{:error, {429, body}}`

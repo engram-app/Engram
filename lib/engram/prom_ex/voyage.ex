@@ -22,15 +22,22 @@ defmodule Engram.PromEx.Voyage do
     * `engram_prom_ex_voyage_client_rate_limited_total` — counter for the
       synthetic-429 path (`[:engram, :embed, :client_rate_limited]`,
       already emitted by the adapter), tagged by `:purpose`, `:model`.
+    * `engram_prom_ex_voyage_embed_tokens_per_chunk` — histogram of tokens
+      per chunk, batch-averaged, one observation per request (`tokens /
+      texts`), tags `[:purpose, :model]`.
     * `engram_prom_ex_voyage_embed_tokens_total` — sum of `total_tokens`
-      per request, tagged by `:purpose` and `:model`. Drives the Grafana
-      tokens/min + estimated-cost panels (the dashboard prices each `model`
-      series at its own per-1M-token list price: Free embeds on
-      voyage-4-lite, paid tiers on voyage-4-large). NOT per-tenant — see
-      `Engram.UsageMeters` for tenant-attributed token accounting.
+      per request, tagged by `:purpose`, `:model`, `:tier` (`free | paid |
+      none`) and `:trigger` (`edit | rebuild | upgrade | retry | reconcile |
+      none`; `none` = outside an indexing pass, e.g. search queries). Drives
+      the Grafana tokens/min + estimated-cost panels (the dashboard prices
+      each `model` series at its own per-1M-token list price: Free embeds on
+      voyage-4-lite, paid tiers on voyage-4-large). Existing `sum by
+      (purpose)` queries keep working: the added labels only split series.
+      NOT per-tenant — see `Engram.UsageMeters` for tenant-attributed token
+      accounting.
 
-  Cardinality contract: only bounded labels (`status`, `purpose`, `model`:
-  operator-configured model names, a handful). NEVER
+  Cardinality contract: only bounded labels (`status`, `purpose`, `tier`,
+  `trigger`, and `model`: operator-configured model names, a handful). NEVER
   add `user_id`, `vault_id`, or any per-tenant identifier — Voyage RPS ×
   user count would explode the time series.
   """
@@ -41,6 +48,7 @@ defmodule Engram.PromEx.Voyage do
 
   @embed_stop_event [:engram, :voyage, :embed, :stop]
   @embed_tokens_event [:engram, :voyage, :embed, :tokens]
+  @tokens_per_chunk_event [:engram, :voyage, :embed, :tokens_per_chunk]
   @client_rate_limited_event [:engram, :embed, :client_rate_limited]
 
   @impl true
@@ -79,6 +87,15 @@ defmodule Engram.PromEx.Voyage do
           measurement: :total_tokens,
           description:
             "Voyage embedding tokens billed, summed per request. Drives tokens/min and estimated-cost dashboard panels. Not per-tenant — see Engram.UsageMeters.",
+          tags: [:purpose, :model, :tier, :trigger]
+        ),
+        distribution(
+          metric_prefix ++ [:embed, :tokens_per_chunk],
+          event_name: @tokens_per_chunk_event,
+          measurement: :tokens,
+          description:
+            "Batch-averaged tokens per chunk (request tokens / texts), one observation per embed request.",
+          reporter_options: Buckets.opts(Engram.PromEx.Voyage.TokensPerChunkBuckets),
           tags: [:purpose, :model]
         )
       ]
@@ -89,4 +106,9 @@ end
 defmodule Engram.PromEx.Voyage.EmbedDurationBuckets do
   @moduledoc false
   use Engram.PromEx.Buckets, [50, 100, 250, 500, 1_000, 2_000, 3_000, 5_000, 10_000]
+end
+
+defmodule Engram.PromEx.Voyage.TokensPerChunkBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [25, 50, 100, 200, 400, 800, 1_600, 3_200, 8_000]
 end

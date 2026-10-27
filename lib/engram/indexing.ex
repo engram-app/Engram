@@ -8,7 +8,9 @@ defmodule Engram.Indexing do
 
   import Ecto.Query
 
+  alias Engram.Billing
   alias Engram.Crypto
+  alias Engram.Embedders.UsageLabels
   alias Engram.EmbedModels
   alias Engram.Indexing.PayloadV5
   alias Engram.Indexing.PointId
@@ -119,11 +121,16 @@ defmodule Engram.Indexing do
 
     # One re-resolve when the reaper deleted a key id mid-pass
     # (`hold_key_ids!/2`); the retained vectors make the retry Voyage-free.
-    with_pass_model(user, opts, fn ->
-      case index_once(note, vault, user, opts) do
-        {:error, :frontmatter_keys_gone} -> index_once(note, vault, user, opts)
-        other -> other
-      end
+    # The labels Voyage's token telemetry carries (`Embedders.UsageLabels`).
+    tier = if Billing.tier(user) == :free, do: :free, else: :paid
+
+    UsageLabels.with_labels(tier, Keyword.get(opts, :embed_trigger, :edit), fn ->
+      with_pass_model(user, opts, fn ->
+        case index_once(note, vault, user, opts) do
+          {:error, :frontmatter_keys_gone} -> index_once(note, vault, user, opts)
+          other -> other
+        end
+      end)
     end)
   end
 
@@ -1209,6 +1216,7 @@ defmodule Engram.Indexing do
         # Only once the rows are committed: a failed attempt is retried, and
         # counting its upsert too would count the same points twice.
         emit_points_written(prepared)
+        emit_chunks(prepared)
         {:ok, length(chunk_rows)}
       end
     end
@@ -1282,6 +1290,16 @@ defmodule Engram.Indexing do
         %{count: count},
         %{kind: kind, dense: to_string(dense?)}
       )
+    end
+
+    :ok
+  end
+
+  # One event per outcome per committed pass: `point_kinds` holds the points
+  # this commit built, `reused_point_ids` the ones kept in place.
+  defp emit_chunks(%{point_kinds: kinds, reused_point_ids: reused}) do
+    for {outcome, count} <- [embedded: length(kinds), reused: length(reused)], count > 0 do
+      :telemetry.execute([:engram, :indexing, :chunks], %{count: count}, %{outcome: outcome})
     end
 
     :ok

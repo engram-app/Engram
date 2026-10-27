@@ -53,6 +53,21 @@ defmodule Engram.PromEx.VoyageTest do
              "Must have a counter on the :stop event so error rate is derivable from `status` tag"
     end
 
+    test "tokens counter carries model, tier and trigger; per-chunk histogram is registered" do
+      metrics = PromExMetrics.of(VoyagePlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
+      tokens =
+        Enum.find(metrics, &(&1.name == [:engram, :prom_ex, :voyage, :embed, :tokens, :total]))
+
+      assert tokens.tags == [:purpose, :model, :tier, :trigger]
+
+      hist =
+        Enum.find(metrics, &(&1.name == [:engram, :prom_ex, :voyage, :embed, :tokens_per_chunk]))
+
+      assert %Telemetry.Metrics.Distribution{} = hist
+      assert hist.event_name == [:engram, :voyage, :embed, :tokens_per_chunk]
+    end
+
     test "never includes high-cardinality tags (user_id, vault_id)" do
       metrics =
         PromExMetrics.of(VoyagePlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
