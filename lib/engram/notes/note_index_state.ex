@@ -38,9 +38,13 @@ defmodule Engram.Notes.NoteIndexState do
     field :dense_indexed_hash, :string
     field :embed_started_hash, :string
     field :payload_hash, :binary
+    # The payload shape the points were last written with; NULL = baseline.
+    # Not mirrored from `notes` (`Engram.Workers.ReconcileNotePayloads` stamps it).
+    field :payload_version, :integer
   end
 
   @doc "The mirrored columns, for comparing a state row to its note."
   def mirrored,
-    do: __schema__(:fields) -- [:note_id, :user_id, :points, :len_rows, :len_sum]
+    do:
+      __schema__(:fields) -- [:note_id, :user_id, :points, :len_rows, :len_sum, :payload_version]
 end
