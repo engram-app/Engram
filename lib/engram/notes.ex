@@ -7292,6 +7292,7 @@ defmodule Engram.Notes do
         )
         |> Repo.all()
         |> Map.new(&{&1.id, restore_one(user, &1)})
+        |> tap(&enqueue_restored_jobs(user, &1))
       end)
 
     restored = for {_id, {:ok, note}} <- results, do: note
@@ -7310,6 +7311,15 @@ defmodule Engram.Notes do
   defp skip_reason(nil), do: :changed
   defp skip_reason({:ok, _note}), do: nil
   defp skip_reason({:skip, reason}), do: reason
+
+  # The delete cleared embed_hash and dropped the points, so every restored
+  # note re-embeds. One bulk insert for the chunk (#2169), inside its
+  # transaction: a rolled-back chunk queues nothing, and a row skipped above
+  # (its savepoint rolled back) is not in `results` as `{:ok, _}`.
+  defp enqueue_restored_jobs(user, results) do
+    entries = for {_id, {:ok, note}} <- results, do: {note.id, EmbedNote.priority_for(note)}
+    ContentCommit.enqueue_jobs_bulk(entries, user.id)
+  end
 
   defp restore_one(user, tomb) do
     case Crypto.maybe_decrypt_note_fields(tomb, user) do
@@ -7340,14 +7350,6 @@ defmodule Engram.Notes do
            mode: :savepoint
          ) do
       {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
-        # The delete cleared embed_hash and dropped the points, so this
-        # re-embeds. Joins the transaction: a rolled-back chunk queues nothing.
-        _ =
-          ContentCommit.enqueue_jobs(updated.id, user.id,
-            embed_priority: EmbedNote.priority_for(updated),
-            finalize?: false
-          )
-
         {:ok, decrypt_or_raise!(updated, user)}
 
       {:error, %Ecto.Changeset{}} ->

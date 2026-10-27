@@ -5,8 +5,16 @@ defmodule Engram.NotesFanoutBoundsTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
-  alias Engram.Notes
-  alias Engram.Workers.{DeleteNoteIndex, RepathNoteIndex, RewriteNoteLinks}
+  import Ecto.Query
+
+  alias Engram.{Folders, Notes, Repo}
+  alias Engram.Workers.{
+    DeleteNoteIndex,
+    EmbedNote,
+    ExtractNoteLinks,
+    RepathNoteIndex,
+    RewriteNoteLinks
+  }
 
   @n 8
 
@@ -115,6 +123,52 @@ defmodule Engram.NotesFanoutBoundsTest do
       assert length(all_enqueued(worker: RepathNoteIndex)) == @n
       # RewriteNoteLinks has no `unique`: one per real move, both renames.
       assert length(all_enqueued(worker: RewriteNoteLinks)) == 2 * @n
+    end
+  end
+
+  describe "restore_op/3 (undo of a folder delete)" do
+    test "queues embed + link jobs for the chunk in bulk, one of each per note", ctx do
+      %{user: user, vault: vault} = ctx
+      notes = seed(user, vault, "Docs")
+      ids = notes |> Enum.map(& &1.id) |> Enum.sort()
+      op = Ecto.UUID.generate()
+
+      {:ok, %{notes: @n}} = Folders.delete(user, vault, "Docs", recursive: true, op_id: op)
+
+      # Drop what the original writes queued, so only the restore's show.
+      Repo.delete_all(
+        from(j in Oban.Job,
+          where: j.worker in ["Engram.Workers.EmbedNote", "Engram.Workers.ExtractNoteLinks"]
+        )
+      )
+
+      {{:ok, %{notes: @n}}, inserts} =
+        oban_insert_statements(fn -> Folders.restore_op(user, vault, op) end)
+
+      # Per-row enqueue was 2 * @n; the rest is the claim release.
+      assert inserts <= 3
+      assert job_note_ids(EmbedNote) == ids
+      assert job_note_ids(ExtractNoteLinks) == ids
+      # Never embedded since the delete, so backfill priority, as before.
+      assert Enum.all?(all_enqueued(worker: EmbedNote), &(&1.priority == 9))
+    end
+
+    test "a note with a pending embed job is promoted, not duplicated", ctx do
+      %{user: user, vault: vault} = ctx
+      notes = seed(user, vault, "Docs", 2)
+      op = Ecto.UUID.generate()
+      {:ok, _} = Folders.delete(user, vault, "Docs", recursive: true, op_id: op)
+
+      Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.EmbedNote"))
+      [first | _] = notes
+      {:ok, _} = Oban.insert(EmbedNote.new_debounced(first.id, user.id, priority: 9))
+
+      {:ok, _} = Folders.restore_op(user, vault, op)
+
+      jobs = all_enqueued(worker: EmbedNote)
+      assert length(jobs) == 2
+      assert jobs |> Enum.map(& &1.args["note_id"]) |> Enum.sort() ==
+               notes |> Enum.map(& &1.id) |> Enum.sort()
     end
   end
 end
