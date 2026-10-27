@@ -27,6 +27,8 @@ export default {
 	"Vault root": "Kořen trezoru",
 	"Nothing was moved: a file with the same name is already there.":
 		"Nic nebylo přesunuto: soubor se stejným názvem již existuje.",
+	"Signing out…": "Odhlášení…",
+	"Could not sign out": "Nelze se odhlásit",
 	"Couldn't load sign-in": "Nelze načíst přihlášení",
 	"The sign-in service didn't load. Check your connection, then reload the page.":
 		"Služba přihlášení se nenačetla. Zkontrolujte připojení a obnovte stránku.",

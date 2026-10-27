@@ -7,7 +7,7 @@ import { getApiBase, joinApiUrl } from "../api/base";
  *  request outlive the page if the user closes the tab or a hard navigation
  *  follows. Best-effort: never throws, never blocks. */
 export function postClearingCache(path: string): void {
-	void fetch(joinApiUrl(getApiBase(), path), {
+	fetch(joinApiUrl(getApiBase(), path), {
 		method: "POST",
 		credentials: "include",
 		keepalive: true,

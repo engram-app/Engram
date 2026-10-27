@@ -1,8 +1,9 @@
 import { ClerkProvider, useAuth, useClerk } from "@clerk/react";
 import { dark } from "@clerk/themes";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import AuthPanel from "@/layout/auth-panel";
+import { notify } from "@/lib/notify";
 import { heading } from "@/lib/ui-classes";
 import { setTokenGetter } from "../api/client";
 import { useMe } from "../api/queries";
@@ -43,6 +44,9 @@ const clerkElements = {
 	card: "bg-card",
 	footer: "bg-transparent",
 };
+
+// One toast for the whole sign-out: loading, then dismissed or replaced by the error.
+const SIGN_OUT_TOAST = "sign-out";
 
 function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 	const { isLoaded, isSignedIn, getToken } = useAuth();
@@ -87,19 +91,40 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 		analyticsId: me?.analytics_id ?? undefined,
 		analyticsOptOut: me?.analytics_opt_out,
 	});
+	const { t } = useT();
+	// Every sign-out entry point routes here, so the guard lives here: a repeat
+	// tap while Clerk is still signing out is ignored, not queued.
+	const signingOut = useRef(false);
+	const logout = useCallback(async () => {
+		if (signingOut.current) {
+			return;
+		}
+		signingOut.current = true;
+		notify.loading(t("Signing out…"), { id: SIGN_OUT_TOAST });
+		// Never awaited: the browser holds the Clear-Site-Data reply until its
+		// cache wipe ends (minutes on Android), which used to block sign-out.
+		clearHttpCache();
+		try {
+			await clerk.signOut();
+			notify.dismiss(SIGN_OUT_TOAST);
+		} catch (err) {
+			captureError(err);
+			notify.error(t("Could not sign out"), { id: SIGN_OUT_TOAST });
+		} finally {
+			signingOut.current = false;
+		}
+	}, [clerk, t]);
+
 	const adapter: AuthAdapter = useMemo(
 		() => ({
 			isLoaded,
 			isSignedIn: isSignedIn ?? false,
 			user: isSignedIn && email ? { email, imageUrl } : null,
 			getToken: tokenGetter,
-			logout: async () => {
-				clearHttpCache();
-				await clerk.signOut();
-			},
+			logout,
 			hasBuiltInUI: true,
 		}),
-		[isLoaded, isSignedIn, clerk, email, imageUrl, tokenGetter],
+		[isLoaded, isSignedIn, email, imageUrl, tokenGetter, logout],
 	);
 
 	return <AuthContext.Provider value={adapter}>{children}</AuthContext.Provider>;

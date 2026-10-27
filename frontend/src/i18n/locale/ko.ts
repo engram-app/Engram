@@ -27,6 +27,8 @@ export default {
 	"Vault root": "보관함 루트",
 	"Nothing was moved: a file with the same name is already there.":
 		"아무것도 이동되지 않았습니다: 같은 이름의 파일이 이미 있습니다.",
+	"Signing out…": "로그아웃 중입니다…",
+	"Could not sign out": "로그아웃에 실패했습니다",
 	"Couldn't load sign-in": "로그인 불러오기 실패",
 	"The sign-in service didn't load. Check your connection, then reload the page.":
 		"로그인 서비스 로드에 실패했습니다. 연결 상태를 확인한 후 페이지를 다시 로드하세요.",

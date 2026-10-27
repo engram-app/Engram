@@ -27,6 +27,8 @@ export default {
 	"Vault root": "Коренева папка сховища",
 	"Nothing was moved: a file with the same name is already there.":
 		"Нічого не було переміщено: файл з таким самим іменем вже там.",
+	"Signing out…": "Вихід…",
+	"Could not sign out": "Не вдалося вийти",
 	"Couldn't load sign-in": "Не вдалося завантажити сторінку входу",
 	"The sign-in service didn't load. Check your connection, then reload the page.":
 		"Сервіс входу не завантажився. Перевірте ваше з'єднання, потім перезавантажте сторінку.",

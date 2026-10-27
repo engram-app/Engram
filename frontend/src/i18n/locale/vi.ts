@@ -26,6 +26,8 @@ export default {
 	"Vault root": "Thư mục gốc của Kho lưu trữ",
 	"Nothing was moved: a file with the same name is already there.":
 		"Không có gì được di chuyển: một tệp có cùng tên đã tồn tại.",
+	"Signing out…": "Đang đăng xuất…",
+	"Could not sign out": "Không thể đăng xuất",
 	"Couldn't load sign-in": "Không tải được trang đăng nhập",
 	"The sign-in service didn't load. Check your connection, then reload the page.":
 		"Dịch vụ đăng nhập không tải được. Kiểm tra kết nối của bạn, sau đó tải lại trang.",

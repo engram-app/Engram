@@ -142,12 +142,13 @@ export default function LocalAuthProvider({ children }: { children: React.ReactN
 		setUser({ email: data.user.email });
 	}, []);
 
-	const logout = useCallback(async () => {
+	const logout = useCallback(() => {
 		// The server revokes the refresh family before it answers; the answer
 		// then waits on the browser's Clear-Site-Data wipe, so don't block on it.
 		postClearingCache("/api/auth/logout");
 		setAccessToken(null);
 		setUser(null);
+		return Promise.resolve();
 	}, []);
 
 	const adapter: AuthAdapter = useMemo(

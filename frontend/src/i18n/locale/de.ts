@@ -30,6 +30,8 @@ export default {
 	"Vault root": "Vault-Wurzel",
 	"Nothing was moved: a file with the same name is already there.":
 		"Nichts wurde verschoben: eine Datei mit demselben Namen ist bereits vorhanden.",
+	"Signing out…": "Abmelden…",
+	"Could not sign out": "Abmeldung fehlgeschlagen",
 	"Couldn't load sign-in": "Anmeldung konnte nicht geladen werden",
 	"The sign-in service didn't load. Check your connection, then reload the page.":
 		"Der Anmeldedienst konnte nicht geladen werden. Überprüfe deine Verbindung und lade die Seite neu.",

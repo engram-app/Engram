@@ -27,6 +27,8 @@ export default {
 	"Vault root": "Raiz do Cofre",
 	"Nothing was moved: a file with the same name is already there.":
 		"Nada foi movido: um arquivo com o mesmo nome já está lá.",
+	"Signing out…": "Sair…",
+	"Could not sign out": "Não foi possível sair",
 	"Couldn't load sign-in": "Não foi possível carregar o login",
 	"The sign-in service didn't load. Check your connection, then reload the page.":
 		"O serviço de login não foi carregado. Verifique sua conexão e recarregue a página.",

@@ -24,6 +24,8 @@ export default {
 	"Vault root": "儲存庫根目錄",
 	"Nothing was moved: a file with the same name is already there.":
 		"沒有檔案被移動：已經存在同名的檔案。",
+	"Signing out…": "正在登出…",
+	"Could not sign out": "登出失敗",
 	"Couldn't load sign-in": "載入登入失敗",
 	"The sign-in service didn't load. Check your connection, then reload the page.":
 		"登入服務載入失敗。請檢查網路連線，然後重新載入頁面。",
