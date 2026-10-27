@@ -295,9 +295,6 @@ export default {
 	"1 vault": "1 сховище",
 	"1 GB attachments": "1 ГБ вкладень",
 	"2 devices": "2 пристрої",
-	"3,000 notes · 20 AI searches a day · 1 vault":
-		"3000 заміток · 20 запитів до ШІ на день · 1 сховище",
-	"3,000 notes, all searchable": "3000 заміток, усі доступні для пошуку",
 	"2,000 notes · 20 AI searches a day · 1 vault":
 		"2000 заміток · 20 запитів до ШІ на день · 1 сховище",
 	"2,000 notes, all searchable": "2000 заміток, усі доступні для пошуку",

@@ -1,18 +1,14 @@
 defmodule Engram.NotePointsCapFlagTest do
   @moduledoc """
-  The per-note cap merge on its own, without the rest of the v5 index budget
-  (it applies whether or not `INDEX_BUDGET_ENABLED` is on). The v5 pass
-  prices and writes every over-cap note capped, so each note is embedded
-  once. Turning `INDEX_BUDGET_ENABLED` on after the pass must not embed a
+  The per-note cap merge. The v5 pass prices and writes every over-cap note
+  capped, so each note is embedded once and the 04:00 tick must not embed a
   capped note again.
 
-  async: false: global Mox mode, `limits_enforced` and the budget flag are
-  global app env.
+  async: false: global Mox mode and `limits_enforced` are global app env.
   """
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
-  import Engram.IndexBudgetHelpers
   import Mox
 
   alias Engram.Crypto
@@ -172,12 +168,7 @@ defmodule Engram.NotePointsCapFlagTest do
              Indexing.index_note(note, vault, Repo.reload!(user, skip_tenant_check: true))
   end
 
-  describe "budget off" do
-    setup do
-      refute Indexing.budget_enabled?()
-      :ok
-    end
-
+  describe "per-note cap" do
     test "an edit caps a Free note to 128 points", %{user: user, vault: vault} do
       note = insert_note(user, vault, sections(500))
       assert {:ok, n, _, true} = Indexing.index_note_with_usage(note, vault, user)
@@ -231,8 +222,7 @@ defmodule Engram.NotePointsCapFlagTest do
       reindex(note, vault, user)
       assert embedded() == 0
 
-      # INDEX_BUDGET_ENABLED after the pass: the same.
-      enable_index_budget()
+      # The same on the next tick.
       lapse_cooldown(note)
       assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
       no_job_for(note)

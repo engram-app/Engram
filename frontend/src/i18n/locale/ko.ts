@@ -273,8 +273,6 @@ export default {
 	"1 vault": "1개의 보관함",
 	"1 GB attachments": "1GB 첨부 파일",
 	"2 devices": "2개의 기기",
-	"3,000 notes · 20 AI searches a day · 1 vault": "3,000개 노트 · 하루 20회 AI 검색 · 1개 보관함",
-	"3,000 notes, all searchable": "3,000개의 노트, 모두 검색 가능",
 	"2,000 notes · 20 AI searches a day · 1 vault": "2,000개 노트 · 하루 20회 AI 검색 · 1개 보관함",
 	"2,000 notes, all searchable": "2,000개의 노트, 모두 검색 가능",
 	"20,000 notes": "20,000개의 노트",

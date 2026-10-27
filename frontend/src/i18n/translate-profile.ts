@@ -169,9 +169,6 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
 	// ja joined the items with 、 and dropped the separators (2026-10-18).
 	"2,000 notes · 20 AI searches a day · 1 vault":
 		"Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
-	// The pre-v5 caps' summary, shown until the v5 go flag is on.
-	"3,000 notes · 20 AI searches a day · 1 vault":
-		"Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 	// ja replaced the separator with 。 (2026-10-24).
 	"14-day money-back guarantee · cancel anytime":
 		"Line under a checkout button: two short items. Keep the ' · ' separator between them exactly as written.",

@@ -291,9 +291,6 @@ export default {
 	"1 vault": "1 bóveda",
 	"1 GB attachments": "1 GB de adjuntos",
 	"2 devices": "2 dispositivos",
-	"3,000 notes · 20 AI searches a day · 1 vault":
-		"3000 notas · 20 búsquedas de IA al día · 1 bóveda",
-	"3,000 notes, all searchable": "3000 notas, todas buscables",
 	"2,000 notes · 20 AI searches a day · 1 vault":
 		"2.000 notas · 20 búsquedas con IA al día · 1 bóveda",
 	"2,000 notes, all searchable": "2000 notas, todas buscables",

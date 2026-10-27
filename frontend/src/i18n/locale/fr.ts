@@ -292,9 +292,6 @@ export default {
 	"1 vault": "1 coffre",
 	"1 GB attachments": "1 Go de pièces jointes",
 	"2 devices": "2 appareils",
-	"3,000 notes · 20 AI searches a day · 1 vault":
-		"3 000 notes · 20 recherches IA par jour · 1 coffre",
-	"3,000 notes, all searchable": "3 000 notes, toutes consultables",
 	"2,000 notes · 20 AI searches a day · 1 vault":
 		"2 000 notes · 20 recherches IA par jour · 1 coffre",
 	"2,000 notes, all searchable": "2 000 notes, toutes consultables",

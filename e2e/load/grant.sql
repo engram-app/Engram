@@ -2,7 +2,7 @@
 -- Run on the TARGET's Postgres after the first `sim.py --seed-only` pass has
 -- created the users (they exist only once they have made an API call).
 -- Same mechanism and sentinel as e2e/helpers/billing.py (-1 = unlimited).
---   whale (u00): notes_cap, so it can hold ~10k notes past Free's 3,000
+--   whale (u00): notes_cap, so it can hold ~10k notes past Free's 2,000
 --   all:         ai_searches_per_day (Free: 20/day), devices/connections (Free: 2)
 INSERT INTO user_limit_overrides (user_id, key, value, reason, set_by)
 SELECT u.id, k.key, '{"v": -1}'::jsonb, 'load-sim', 'load-sim'

@@ -1401,8 +1401,7 @@ export function useBillingStatus() {
 }
 
 // GET /billing/usage, the slice the usage meter and the embed-bucket row read.
-// `limit: null` is uncapped. `index_points` and `floor_notes` are present only
-// while the v5 index budget is on.
+// `limit: null` is uncapped.
 export interface UsageEntry {
 	used: number;
 	limit: number | null;
@@ -1464,9 +1463,6 @@ export interface BillingConfig extends PaddleClientConfig {
 	};
 	// Maximum number of active vaults the user may have, or null for unlimited.
 	vaults_cap: number | null;
-	// Which note-cap set the backend enforces (`LimitKeys.plan_limits/0`);
-	// the plan cards show its copy. Absent on an older backend: legacy.
-	plan_limits?: "legacy" | "v5";
 }
 
 export type BillingCadence = "monthly" | "annual";

@@ -291,8 +291,6 @@ export default {
 	"1 vault": "1 sejf",
 	"1 GB attachments": "1 GB załączników",
 	"2 devices": "2 urządzenia",
-	"3,000 notes · 20 AI searches a day · 1 vault": "3000 notatek · 20 zapytań AI dziennie · 1 sejf",
-	"3,000 notes, all searchable": "3000 notatek, wszystkie przeszukiwalne",
 	"2,000 notes · 20 AI searches a day · 1 vault": "2000 notatek · 20 zapytań AI dziennie · 1 sejf",
 	"2,000 notes, all searchable": "2000 notatek, wszystkie przeszukiwalne",
 	"20,000 notes": "20 000 notatek",

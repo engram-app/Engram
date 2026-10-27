@@ -363,7 +363,10 @@ defmodule Engram.Indexing do
          next_deferred_tokens: Map.get(plan, :next_deferred_tokens),
          index_tier: tier,
          okf_healed?: okf_healed?,
-         write_first: regroup?(note, plan),
+         # Every pass writes before it deletes (review L1): purging by path
+         # filter first let a stale pass, about to roll back as superseded,
+         # wipe the newer edit's points.
+         write_first: true,
          retain: if(dense?, do: retention(note, plan, texts, vectors)),
          chunk_count: chunk_count,
          held_model: held_model(plan.entries, dense?)
@@ -417,16 +420,6 @@ defmodule Engram.Indexing do
 
   @floor_tiers ["floor", "floor_paid"]
 
-  # A pass that changes how the note is grouped writes before it deletes,
-  # and with the budget on every pass does (review L1): purging by path
-  # filter first let a stale pass, about to roll back as superseded, wipe
-  # the newer edit's points. Deleting only after the locked content check
-  # commits closes that. Off, passes keep their pre-budget order.
-  defp regroup?(note, plan),
-    do:
-      budget_enabled?() or merged?(plan) or Map.get(note, :index_tier) != nil or
-        Map.get(note, :chunk_count) != nil or Map.get(plan, :rebuild?, false)
-
   defp merged?(plan), do: Enum.any?(plan.entries, &Map.get(entry_chunk(&1), :merged, false))
 
   # The index budget sweep may have demoted or promoted the note since it was
@@ -461,18 +454,6 @@ defmodule Engram.Indexing do
 
   defp merged_rows?(rows), do: Enum.any?(rows, &(elem(&1, 3) != nil))
 
-  @doc """
-  Whether the v5 index budget is on: the index points budget and its
-  floor, the per-pass embed budget, and the 04:00 UTC budget sweep
-  (`ReconcileEmbeddings`). The per-note cap merge applies either way. Off by
-  default (review H2): the caps are sized for chunker v5 (~5.2 points a
-  note), so on v3-chunked data they would demote and re-embed notes the v5
-  pass re-embeds anyway. `INDEX_BUDGET_ENABLED=true` turns it on as a step
-  of the v5 go sequence, after the pass and with the v5 stamp.
-  """
-  @spec budget_enabled?() :: boolean()
-  def budget_enabled?, do: Engram.ServiceConfig.get(:index_budget_enabled, false)
-
   # The per-note cap, then the position limit: what every plan stores.
   defp fit_note(chunks, cap, merged?),
     do: chunks |> cap_chunks(cap, merged?) |> fit_positions(merged?)
@@ -480,30 +461,6 @@ defmodule Engram.Indexing do
   # The per-note cap runs first, so the points budget below counts the points
   # a full pass would actually write.
   defp plan_index(note, user, chunks, content_key, opts) do
-    if budget_enabled?() or floor_tier(note, opts),
-      do: plan_budgeted(note, user, chunks, content_key, opts),
-      else: plan_unbudgeted(note, user, chunks, content_key, opts)
-  end
-
-  # The pre-budget plan: one point a chunk, merged to the owner's per-note cap
-  # (`cap_chunks/3` at `note_points_cap`; none with enforcement off).
-  defp plan_unbudgeted(note, user, chunks, content_key, opts) do
-    rows = indexed_rows(note)
-
-    {dense?, plan, retained} =
-      plan_within_budget(
-        note,
-        rows,
-        fit_note(chunks, note_points_cap(user), merged_rows?(rows)),
-        content_key,
-        Keyword.get(opts, :dense, true),
-        opts
-      )
-
-    {nil, dense?, plan, retained}
-  end
-
-  defp plan_budgeted(note, user, chunks, content_key, opts) do
     forced = floor_tier(note, opts)
     cap = note_points_cap(user)
     rows = if forced, do: [], else: indexed_rows(note)

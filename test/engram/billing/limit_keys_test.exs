@@ -54,7 +54,7 @@ defmodule Engram.Billing.LimitKeysTest do
       # 3,000 since 2026-10-17: Free stores 3,000 notes and all of them are
       # searchable. The search-coverage cap was removed, not lowered. The
       # 2026-10-19 caps wait for the v5 go flag (see "v5 plan limits").
-      assert LimitKeys.default_for(:notes_cap, :free) == 3_000
+      assert LimitKeys.default_for(:notes_cap, :free) == 2_000
       assert LimitKeys.default_for(:vaults_cap, :free) == 1
       assert LimitKeys.default_for(:attachment_bytes_cap, :free) == 1_073_741_824
       assert LimitKeys.default_for(:max_file_bytes, :free) == 10_485_760
@@ -82,7 +82,7 @@ defmodule Engram.Billing.LimitKeysTest do
     end
 
     test "starter tier matrix matches spec §9.2" do
-      assert LimitKeys.default_for(:notes_cap, :starter) == 50_000
+      assert LimitKeys.default_for(:notes_cap, :starter) == 20_000
       assert LimitKeys.default_for(:vaults_cap, :starter) == 10
       # 10 GiB. Raised from 3 GiB in pricing v3.1 (2026-09-03).
       assert LimitKeys.default_for(:attachment_bytes_cap, :starter) == 10_737_418_240
@@ -92,7 +92,7 @@ defmodule Engram.Billing.LimitKeysTest do
     end
 
     test "pro tier matrix matches spec §9.2" do
-      assert LimitKeys.default_for(:notes_cap, :pro) == nil
+      assert LimitKeys.default_for(:notes_cap, :pro) == 40_000
       # Unlimited as of pricing v3.1 — vaults are packaging, not a resource.
       # Rooms are demand-started with `auto_exit`, index rooms are not
       # LRU-tracked, and every quota is per-user. See the decision log.
@@ -238,11 +238,9 @@ defmodule Engram.Billing.LimitKeysTest do
     assert LimitKeys.default_for(:index_points_cap, :starter) == 120_000
     assert LimitKeys.default_for(:index_points_cap, :pro) == 240_000
 
-    # The points cap is enforced only with the index budget on, which is
-    # also what selects the v5 note caps: the rule binds that set.
     for tier <- [:free, :starter, :pro] do
       assert LimitKeys.default_for(:index_points_cap, tier) ==
-               LimitKeys.default_for(:notes_cap, tier, :v5) * 6
+               LimitKeys.default_for(:notes_cap, tier) * 6
     end
   end
 
@@ -254,29 +252,10 @@ defmodule Engram.Billing.LimitKeysTest do
     assert LimitKeys.default_for(:note_points_cap, :pro) == 1_024
   end
 
-  # The 2026-10-19 note caps are one set in the catalog, picked by the v5 go
-  # flag (`LimitKeys.plan_limits/0`, INDEX_BUDGET_ENABLED). Pure here: the
-  # flag-wired path is covered in CapabilitiesTest and BillingControllerTest.
-  describe "v5 plan limits" do
-    test "the legacy set is main's caps" do
-      assert LimitKeys.default_for(:notes_cap, :free, :legacy) == 3_000
-      assert LimitKeys.default_for(:notes_cap, :starter, :legacy) == 50_000
-      assert LimitKeys.default_for(:notes_cap, :pro, :legacy) == nil
-    end
-
-    test "the v5 set is the 2026-10-19 caps" do
-      assert LimitKeys.default_for(:notes_cap, :free, :v5) == 2_000
-      assert LimitKeys.default_for(:notes_cap, :starter, :v5) == 20_000
-      assert LimitKeys.default_for(:notes_cap, :pro, :v5) == 40_000
-    end
-
-    test "a key with one set answers the same in both" do
-      for tier <- LimitKeys.tiers(),
-          do:
-            assert(
-              LimitKeys.default_for(:vaults_cap, tier, :v5) ==
-                LimitKeys.default_for(:vaults_cap, tier, :legacy)
-            )
-    end
+  # Owner decisions 2026-10-19 and 2026-10-26: static defaults, no flag.
+  test "notes_cap defaults are 2,000 / 20,000 / 40,000" do
+    assert LimitKeys.default_for(:notes_cap, :free) == 2_000
+    assert LimitKeys.default_for(:notes_cap, :starter) == 20_000
+    assert LimitKeys.default_for(:notes_cap, :pro) == 40_000
   end
 end

@@ -258,8 +258,6 @@ export default {
 	"1 vault": "1 個儲存庫",
 	"1 GB attachments": "1 GB 附件",
 	"2 devices": "2 部裝置",
-	"3,000 notes · 20 AI searches a day · 1 vault": "3000 筆記 · 每日 20 次 AI 搜尋 · 1 個儲存庫",
-	"3,000 notes, all searchable": "3000 筆記，全部可搜尋",
 	"2,000 notes · 20 AI searches a day · 1 vault": "2000 筆記 · 每天 20 次 AI 搜尋 · 1 個儲存庫",
 	"2,000 notes, all searchable": "2000 筆記，全部可搜尋",
 	"20,000 notes": "20000 筆記",

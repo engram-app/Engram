@@ -283,8 +283,6 @@ export default {
 	"1 vault": "1 peti nota",
 	"1 GB attachments": "1 GB lampiran",
 	"2 devices": "2 peranti",
-	"3,000 notes · 20 AI searches a day · 1 vault": "3,000 nota · 20 carian AI sehari · 1 peti nota",
-	"3,000 notes, all searchable": "3,000 nota, semua boleh dicari",
 	"2,000 notes · 20 AI searches a day · 1 vault": "2,000 nota · 20 carian AI sehari · 1 peti nota",
 	"2,000 notes, all searchable": "2,000 nota, semua boleh dicari",
 	"20,000 notes": "20,000 nota",

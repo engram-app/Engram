@@ -4,7 +4,7 @@ existing notes stay readable/deletable, new creates 402 until under cap.
 Covers Phase 4 (cancel webhook → tier flip) end-to-end at the wire level:
   1. Provision a fresh user; SQL-seed an active Pro subscription.
   2. SQL-seed usage_meters.notes_count = 4_000 (over the Free
-     notes_cap of 3_000).
+     notes_cap of 2_000).
   3. POST /webhooks/paddle with a SIGNED subscription.canceled event —
      this exercises verify_signature → upsert_from_paddle_event → the
      Subscription row flips to status=canceled, which makes
@@ -12,7 +12,7 @@ Covers Phase 4 (cancel webhook → tier flip) end-to-end at the wire level:
   4. GET /api/billing/status returns tier=free.
   5. GET /sync/manifest still responds (read still works, not 402'd).
   6. POST /notes for a NEW path returns 402 reason=notes_cap_exceeded.
-  7. Delete enough notes via the API to drop usage under 3_000 — but
+  7. Delete enough notes via the API to drop usage under 2_000 — but
      since we never inserted real rows for the seeded count, the
      delete loop relies on a direct SQL decrement of usage_meters.
   8. POST /notes for a NEW path returns 200.
@@ -73,7 +73,7 @@ pytestmark = pytest.mark.skipif(
     reason="E2E_CLERK_SECRET_KEY not set — Clerk auth required",
 )
 
-FREE_NOTES_CAP = 3_000
+FREE_NOTES_CAP = 2_000
 SEED_NOTES_COUNT = 4_000
 
 

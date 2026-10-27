@@ -249,7 +249,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     _ =
       if daily_reverify?(scheduled_at) do
         :ok = sweep_over_note_cap(now)
-        if Indexing.budget_enabled?(), do: {:ok, _} = budget_sweep(@budget_users, now)
+        {:ok, _} = budget_sweep(@budget_users, now)
       end
 
     :ok = wake_budget_parked(backoff_until)
@@ -294,7 +294,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # Dense notes only: a sparse-only note reaches the dense backfill (term 2 of
   # the main sweep), whose pass caps it.
   #
-  # Runs whether or not the budget is on, but only over notes at THIS BUILD's versions: a note behind them is the
+  # Only over notes at THIS BUILD's versions: a note behind them is the
   # v5 pass's, which re-embeds it capped anyway, and a recap first would pay
   # for it twice. Before and during the pass that leaves the recap nothing
   # but notes the pass already wrote; after it, downgrades and lowered
@@ -567,6 +567,38 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     floors = smallest.(dynamic([n], n.index_tier in ["floor", "floor_paid"]))
     merged = smallest.(dynamic([n], is_nil(n.index_tier) and not is_nil(n.chunk_count)))
+
+    # Users with an indexed note the version pass can still reach and has not
+    # rebuilt: the pass re-embeds those capped anyway, and demoting first
+    # would pay Voyage twice (the old `INDEX_BUDGET_ENABLED` gate existed for
+    # this). Their chunk counts are v3-sized, so they are not budgeted until
+    # the pass has caught up.
+    #
+    # Same versions the pass rebuilds to (`Rebuild.target_versions/0`): with
+    # the rebuild `off` or `dry_run` that is the pins, so the guard never
+    # waits on a rebuild that is not running. Notes the pass skips do not
+    # count: parked until edited or on a cooldown longer than the pass's own
+    # backoff (a poison note that will never rebuild, and budget-parked ones,
+    # which wait on THIS sweep to free room).
+    {chunker, _keyword} = Rebuild.target_versions()
+
+    # The version pass stamps its own `backoff_seconds()` on a note it just
+    # queued, so a retry time within that window is a rebuild in flight and
+    # still counts. Only a later one (a poison cooldown, or a park, which
+    # `EmbedNote` sets to `parked_until_edited/0`) is a note it will skip.
+    reachable_until = DateTime.add(now, backoff_seconds(), :second)
+
+    behind =
+      IndexVersions.live_notes()
+      |> where([n], not is_nil(n.embed_hash))
+      |> where([n], is_nil(n.chunker_version) or n.chunker_version < ^chunker)
+      |> where([n], is_nil(n.embed_retry_after) or n.embed_retry_after <= ^reachable_until)
+      |> distinct(true)
+      |> select([n], n.user_id)
+      |> per_user.()
+      |> MapSet.new()
+
+    counts = Enum.reject(counts, fn {id, _} -> id in behind end)
     ids = Enum.map(counts, &elem(&1, 0))
 
     # `Billing.tier/1` in SQL: an entitled Pro, else Starter, else Free.

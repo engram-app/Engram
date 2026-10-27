@@ -257,8 +257,6 @@ export default {
 	"1 vault": "1 个仓库",
 	"1 GB attachments": "1 GB 附件",
 	"2 devices": "2 个设备",
-	"3,000 notes · 20 AI searches a day · 1 vault": "3000 笔记 · 每天 20 次 AI 搜索 · 1 个仓库",
-	"3,000 notes, all searchable": "3000 笔记，全部可搜索",
 	"2,000 notes · 20 AI searches a day · 1 vault": "2000 笔记 · 每天 20 次 AI 搜索 · 1 个仓库",
 	"2,000 notes, all searchable": "2000 笔记，全部可搜索",
 	"20,000 notes": "20000 笔记",

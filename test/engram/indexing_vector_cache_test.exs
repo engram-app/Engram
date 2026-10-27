@@ -140,11 +140,6 @@ defmodule Engram.IndexingVectorCacheTest do
     end
   end
 
-  defp enable(key) do
-    Application.put_env(:engram, key, true)
-    on_exit(fn -> Application.delete_env(:engram, key) end)
-  end
-
   defp small_pass_budget do
     Application.put_env(:engram, :max_pass_embed_bytes, 3_000)
     on_exit(fn -> Application.delete_env(:engram, :max_pass_embed_bytes) end)
@@ -267,8 +262,7 @@ defmodule Engram.IndexingVectorCacheTest do
     assert (first ++ retry) |> Enum.map(&elem(&1, 0)) |> Enum.sum() == count
   end
 
-  test "budget on: a changed chunk that is a cache hit is never charged", ctx do
-    enable(:index_budget_enabled)
+  test "a changed chunk that is a cache hit is never charged", ctx do
     stub_embedder()
     s3 = "## Fresh\n\nBrand new prose. #{String.duplicate("never seen before here ", 40)}\n\n"
 
@@ -293,7 +287,6 @@ defmodule Engram.IndexingVectorCacheTest do
 
   test "EmbedNote: the keyword-only fallback snoozes on :embed_continues, burning no attempt",
        ctx do
-    enable(:index_budget_enabled)
     small_pass_budget()
     stub_embedder()
     note = put_note(ctx.user, ctx.vault, "TooLong.md", body(8))
@@ -312,13 +305,11 @@ defmodule Engram.IndexingVectorCacheTest do
              perform_job(Engram.Workers.EmbedNote, %{note_id: note.id, user_id: ctx.user.id})
   end
 
-  describe "budget on: the user pays for changed text actually sent, once" do
+  describe "the user pays for changed text actually sent, once" do
     # No per-note merging (cap far above these notes), so every sent text is
     # one chunk and its changed bytes are exactly its bytes: the oracle below
     # can then read the charge straight off what the embedder received.
     setup ctx do
-      enable(:index_budget_enabled)
-
       insert(:user_limit_override,
         user: ctx.user,
         key: "note_points_cap",

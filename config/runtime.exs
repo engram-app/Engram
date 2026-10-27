@@ -635,13 +635,6 @@ if System.get_env("ATTACHMENT_MIME_BYPASS") in ["1", "true"] do
   config :engram, :attachment_mime_bypass, true
 end
 
-# The v5 index budget (`Engram.Indexing.budget_enabled?/0`): points budget
-# and floor and the budget sweeps (the per-note cap applies either way).
-# Off until the v5 pass completes; turned on with the v5 stamp.
-if budget = System.get_env("INDEX_BUDGET_ENABLED") do
-  config :engram, :index_budget_enabled, budget == "true"
-end
-
 # The one-time v5 index rebuild switch (`Engram.Rebuild`, chunker v5 Task
 # 16.1): `off` (default), `dry_run` or `on`. Off, a stamp bump rebuilds
 # nothing and nothing reads the rebuild tables.
