@@ -3772,6 +3772,22 @@ defmodule Engram.Notes do
     end
   end
 
+  @doc """
+  Whether a live NOTE (not a folder marker) with this id exists in the vault,
+  selecting nothing but the existence. For callers that need the yes/no only
+  (the backlinks endpoint): `get_note_by_id/3` loads the body and decrypts the
+  whole note to answer the same question.
+  """
+  @spec note_id_exists?(map(), map(), String.t()) :: boolean()
+  def note_id_exists?(user, vault, id) when is_binary(id) do
+    {:ok, found} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.exists?(from(n in scoped_live(user, vault), where: n.id == ^id and n.kind == "note"))
+      end)
+
+    found
+  end
+
   # Phase B.2: single normalization helper for path lookups.
   # All callers route through here so post-B.3 column drop is mechanical.
   # Opens its own tenant context — use note_by_path_query/3 directly when

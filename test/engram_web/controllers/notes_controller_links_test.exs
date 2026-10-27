@@ -41,6 +41,40 @@ defmodule EngramWeb.NotesControllerLinksTest do
     end
   end
 
+  describe "backlinks existence probe (#2169)" do
+    test "answers existence without loading the note body", %{conn: conn, user: user, vault: vault} do
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{path: "B.md", content: "# B", mtime: 1.0},
+          actor: "api"
+        )
+
+      test = self()
+
+      :telemetry.attach(
+        {__MODULE__, :bl},
+        [:engram, :repo, :query],
+        fn _, _, %{query: q}, _ ->
+          if self() == test and q =~ ~r/note_bodies/, do: send(test, {:body_read, q})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach({__MODULE__, :bl}) end)
+
+      body = conn |> get(~p"/api/notes/by-id/#{note.id}/backlinks") |> json_response(200)
+      assert body["backlinks"] == []
+
+      # The existence probe must not be what reads a body: the only body
+      # reads allowed are the backlink resolver's own (none for a lone note).
+      refute_received {:body_read, _}
+    end
+
+    test "404s for an unknown id", %{conn: conn} do
+      id = Ecto.UUID.generate()
+      assert conn |> get(~p"/api/notes/by-id/#{id}/backlinks") |> json_response(404)
+    end
+  end
+
   describe "GET /api/attachments/by-id/:id/backlinks" do
     test "returns the notes that embed the attachment", %{conn: conn, user: user, vault: vault} do
       att = Engram.Fixtures.insert_attachment!(user, vault, %{path: "files/a.zip"})

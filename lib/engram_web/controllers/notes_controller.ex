@@ -438,11 +438,12 @@ defmodule EngramWeb.NotesController do
     vault = conn.assigns.current_vault
 
     with {:ok, id} <- Ecto.UUID.cast(id_str),
-         {:ok, _note} <- Notes.get_note_row_by_id(user, vault, id) do
+         # Existence only: the body and its decrypt are not needed to answer.
+         true <- Notes.note_id_exists?(user, vault, id) do
       json(conn, %{backlinks: Links.backlinks_for_note(user, id)})
     else
       :error -> conn |> put_status(400) |> json(%{error: "invalid id"})
-      {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "not found"})
+      false -> conn |> put_status(404) |> json(%{error: "not found"})
     end
   end
 
