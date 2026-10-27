@@ -98,6 +98,26 @@ describe("Clerk logout", () => {
 		expect(hoisted.signOut).toHaveBeenCalledTimes(2);
 	});
 
+	it("gives up on a hung signOut after 15s: error shown, taps work again", async () => {
+		vi.useFakeTimers();
+		try {
+			hoisted.signOut.mockReturnValue(new Promise(() => undefined));
+			const { logout } = mountAdapter();
+
+			const first = logout();
+			await vi.advanceTimersByTimeAsync(14_999);
+			expect(toast.error).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(1);
+			await first;
+
+			expect(toast.error).toHaveBeenCalledWith("Could not sign out", { id: "sign-out" });
+			logout();
+			expect(hoisted.signOut).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("shows an error and reports it when Clerk's signOut rejects", async () => {
 		const failure = new Error("network");
 		hoisted.signOut.mockRejectedValue(failure);

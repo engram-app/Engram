@@ -1,4 +1,4 @@
-import { useClerk, useReverification, useUser } from "@clerk/react";
+import { useReverification, useUser } from "@clerk/react";
 import { isReverificationCancelledError } from "@clerk/react/errors";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -16,9 +16,8 @@ import { Input } from "@/components/ui/input";
 import { EMPTY_REASON, ReasonFields } from "@/feedback/reason-fields";
 import { useT } from "@/i18n/locale-provider";
 import { notify } from "@/lib/notify";
-import { ROUTES } from "@/routes";
 import { useSubmitFeedback } from "../../api/queries";
-import { clearHttpCache } from "../../auth/clear-http-cache";
+import { useAuthAdapter } from "../../auth/use-auth-adapter";
 import { SettingsSectionCard } from "./section-card";
 
 const CONFIRM = "delete my account";
@@ -27,7 +26,7 @@ const FEEDBACK_TIMEOUT_MS = 3000;
 export function DangerZoneSection() {
 	const { t } = useT();
 	const { user, isLoaded } = useUser();
-	const clerk = useClerk();
+	const { logout } = useAuthAdapter();
 	const [open, setOpen] = useState(false);
 	const [phrase, setPhrase] = useState("");
 	const [answer, setAnswer] = useState(EMPTY_REASON);
@@ -65,8 +64,9 @@ export function DangerZoneSection() {
 		}
 		try {
 			await remove();
-			clearHttpCache();
-			await clerk.signOut({ redirectUrl: ROUTES.SIGN_IN });
+			// The shared sign-out: cache clear, toast, tap guard, timeout. It
+			// lands on afterSignOutUrl, which is the sign-in page.
+			await logout();
 		} catch (e) {
 			setDeleting(false);
 			if (isReverificationCancelledError(e)) {

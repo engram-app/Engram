@@ -16,6 +16,7 @@ vi.mock("@clerk/react/errors", () => ({
 	isReverificationCancelledError: () => false,
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("@/auth/use-auth-adapter", () => ({ useAuthAdapter: () => ({ logout: vi.fn() }) }));
 vi.mock("@/theme/theme-provider", () => ({
 	useTheme: () => ({ theme: "system", resolved: "dark", setTheme: vi.fn() }),
 }));

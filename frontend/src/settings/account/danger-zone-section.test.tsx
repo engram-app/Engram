@@ -5,13 +5,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DangerZoneSection } from "./danger-zone-section";
 import { makeUser } from "./section-test-helpers";
 
-const signOut = vi.fn().mockResolvedValue({});
+const logout = vi.fn().mockResolvedValue(undefined);
 let user = makeUser();
 vi.mock("@clerk/react", () => ({
 	useUser: () => ({ user, isLoaded: true }),
 	useReverification: (fn: unknown) => fn,
-	useClerk: () => ({ signOut }),
 }));
+vi.mock("../../auth/use-auth-adapter", () => ({ useAuthAdapter: () => ({ logout }) }));
 vi.mock("@clerk/react/errors", () => ({
 	isClerkAPIResponseError: () => false,
 	isReverificationCancelledError: vi.fn(() => false),
@@ -118,7 +118,7 @@ describe("DangerZoneSection", () => {
 		expect(submitFeedback.mock.invocationCallOrder[0]).toBeLessThan(
 			vi.mocked(user.delete).mock.invocationCallOrder[0] ?? 0,
 		);
-		await waitFor(() => expect(signOut).toHaveBeenCalledWith({ redirectUrl: "/sign-in" }));
+		await waitFor(() => expect(logout).toHaveBeenCalledTimes(1));
 	});
 
 	it("still deletes when sending the reason fails", async () => {
@@ -137,6 +137,6 @@ describe("DangerZoneSection", () => {
 		fireEvent.click(screen.getByRole("button", { name: /delete my account/iu }));
 		await waitFor(() => expect(user.delete).toHaveBeenCalled());
 		expect(toast.error).not.toHaveBeenCalled();
-		expect(signOut).not.toHaveBeenCalled();
+		expect(logout).not.toHaveBeenCalled();
 	});
 });

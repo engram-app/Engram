@@ -47,6 +47,7 @@ const clerkElements = {
 
 // One toast for the whole sign-out: loading, then dismissed or replaced by the error.
 const SIGN_OUT_TOAST = "sign-out";
+const SIGN_OUT_TIMEOUT_MS = 15_000;
 
 function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 	const { isLoaded, isSignedIn, getToken } = useAuth();
@@ -104,13 +105,25 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 		// Never awaited: the browser holds the Clear-Site-Data reply until its
 		// cache wipe ends (minutes on Android), which used to block sign-out.
 		clearHttpCache();
+		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
-			await clerk.signOut();
+			// A hung signOut would leave the loading toast up and every later
+			// tap ignored until reload: give up, say so, and allow a retry.
+			await Promise.race([
+				clerk.signOut(),
+				new Promise((_, reject) => {
+					timer = setTimeout(
+						() => reject(new Error("clerk.signOut timed out")),
+						SIGN_OUT_TIMEOUT_MS,
+					);
+				}),
+			]);
 			notify.dismiss(SIGN_OUT_TOAST);
 		} catch (err) {
 			captureError(err);
 			notify.error(t("Could not sign out"), { id: SIGN_OUT_TOAST });
 		} finally {
+			clearTimeout(timer);
 			signingOut.current = false;
 		}
 	}, [clerk, t]);
