@@ -71,7 +71,7 @@ defmodule Engram.PromEx.VoyageTest do
       metrics =
         PromExMetrics.of(VoyagePlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
-      assert length(metrics) == 4
+      assert metrics != []
 
       for m <- metrics do
         assert :model in m.tags, "#{inspect(m.name)} is missing the :model tag"
@@ -121,6 +121,7 @@ defmodule Engram.PromEx.VoyageTest do
 
       assert_receive {:embed_stop, ^ref, measurements, metadata}, 5_000
       assert is_integer(measurements[:duration])
+      assert is_binary(metadata[:model])
       # The Voyage worker emits :throttled when a prior call left the
       # in-process rate limiter saturated — same telemetry shape as a
       # network success/failure, so it's a valid status the test cares

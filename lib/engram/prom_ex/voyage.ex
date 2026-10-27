@@ -30,7 +30,7 @@ defmodule Engram.PromEx.Voyage do
       `Engram.UsageMeters` for tenant-attributed token accounting.
 
   Cardinality contract: only bounded labels (`status`, `purpose`, `model`:
-  the `Engram.EmbedModels` names). NEVER
+  operator-configured model names, a handful). NEVER
   add `user_id`, `vault_id`, or any per-tenant identifier — Voyage RPS ×
   user count would explode the time series.
   """
