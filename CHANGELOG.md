@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.66.0](https://github.com/engram-app/Engram/compare/0.65.2...0.66.0) (2026-10-27)
+
+
+### Features
+
+* **i18n:** translate new web-app and email strings ([#2272](https://github.com/engram-app/Engram/issues/2272)) ([06090ab](https://github.com/engram-app/Engram/commit/06090ab12870b26a01b5560870b8928253aaa9d5))
+* **metrics:** count crdt_create genesis replies ([#2247](https://github.com/engram-app/Engram/issues/2247)) ([e9e884b](https://github.com/engram-app/Engram/commit/e9e884ba771b8d0f9df0f130de434e03a1c1b8ed))
+* **metrics:** Voyage embed cost labels and reuse ratio ([#2260](https://github.com/engram-app/Engram/issues/2260)) ([6b3f8ec](https://github.com/engram-app/Engram/commit/6b3f8ec9cdd57988baf577a6cff21a5ff796bd91))
+* safer delete phase 1 (undoable MCP deletes) ([#2233](https://github.com/engram-app/Engram/issues/2233)) ([c43d3b6](https://github.com/engram-app/Engram/commit/c43d3b67136114ccc83e776e2a9aee1148157387))
+
+
+### Bug Fixes
+
+* instant, unblocked sign-out ([#2267](https://github.com/engram-app/Engram/issues/2267)) ([057dd8f](https://github.com/engram-app/Engram/commit/057dd8fa6b14e75ff6604e2b9159f1486f3535ac))
+* make v5 plan limits static defaults, drop budget flag ([#2262](https://github.com/engram-app/Engram/issues/2262)) ([97f0f51](https://github.com/engram-app/Engram/commit/97f0f51462b968dffa1ab72231490aa1c56d621b))
+* **observability:** tag Voyage tokens metric with model ([#2259](https://github.com/engram-app/Engram/issues/2259)) ([02a0bf2](https://github.com/engram-app/Engram/commit/02a0bf29078976852cd285f26f489f058cf27b9c))
+* **qdrant:** overwrite payload via POST routes, not slow PUT ([#2261](https://github.com/engram-app/Engram/issues/2261)) ([3d08eab](https://github.com/engram-app/Engram/commit/3d08eab9f615993b11d01c85b45dd9dee6158df0))
+* **qdrant:** size disk reserve by one capped segment ([#2249](https://github.com/engram-app/Engram/issues/2249)) ([b114f9e](https://github.com/engram-app/Engram/commit/b114f9ebc0c9dd8c5c672059d2547a808ca8e003))
+* serve current note text, guard write_note ([#2251](https://github.com/engram-app/Engram/issues/2251)) ([39d3493](https://github.com/engram-app/Engram/commit/39d349362e6ab10f3c1c9e339faae747811fc286))
+* **web:** iOS keyboard toolbar, autofill and zoom ([#2254](https://github.com/engram-app/Engram/issues/2254)) ([8777331](https://github.com/engram-app/Engram/commit/87773311f117e466061be8cc43896125a03670fe))
+
+
+### Performance Improvements
+
+* **db:** note_bodies reads, changed-chunk writes and per-note index state ([#2208](https://github.com/engram-app/Engram/issues/2208)) ([3b93f86](https://github.com/engram-app/Engram/commit/3b93f86fb441ef3d7ef6a0d4b32b1c8471ef17f6))
+
 ## [0.65.2](https://github.com/engram-app/Engram/compare/0.65.1...0.65.2) (2026-10-25)
 
 
