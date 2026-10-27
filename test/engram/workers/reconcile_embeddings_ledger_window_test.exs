@@ -5,7 +5,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsLedgerWindowTest do
   # that day. This pins the two facts that make that impossible.
   use Engram.DataCase, async: false
 
-  alias Engram.Workers.{ReconcileEmbeddings, RebuildStaleNote}
+  alias Engram.Workers.{RebuildStaleNote, ReconcileEmbeddings}
 
   test "the pruner keeps completed jobs at least as long as the ledger looks back" do
     plugins = :engram |> Application.fetch_env!(Oban) |> Keyword.fetch!(:plugins)

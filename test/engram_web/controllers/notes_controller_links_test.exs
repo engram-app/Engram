@@ -42,7 +42,11 @@ defmodule EngramWeb.NotesControllerLinksTest do
   end
 
   describe "backlinks existence probe (#2169)" do
-    test "answers existence without loading the note body", %{conn: conn, user: user, vault: vault} do
+    test "answers existence without loading the note body", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
       {:ok, note} =
         Engram.Notes.upsert_note(user, vault, %{path: "B.md", content: "# B", mtime: 1.0},
           actor: "api"

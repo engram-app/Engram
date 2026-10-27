@@ -8,6 +8,7 @@ defmodule Engram.NotesFanoutBoundsTest do
   import Ecto.Query
 
   alias Engram.{Folders, Notes, ObanInsertCount, Repo}
+
   alias Engram.Workers.{
     DeleteNoteIndex,
     EmbedNote,
@@ -137,6 +138,7 @@ defmodule Engram.NotesFanoutBoundsTest do
 
       jobs = all_enqueued(worker: EmbedNote)
       assert length(jobs) == 2
+
       assert jobs |> Enum.map(& &1.args["note_id"]) |> Enum.sort() ==
                notes |> Enum.map(& &1.id) |> Enum.sort()
     end
