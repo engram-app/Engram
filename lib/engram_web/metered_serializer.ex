@@ -90,10 +90,24 @@ defmodule EngramWeb.MeteredSerializer do
   # topic ever holds thousands of sockets.
   defp fastlane_recipients(%Broadcast{topic: topic, event: event}) do
     @pubsub
-    |> Registry.select([
-      {{topic, :"$2", [Phoenix.Channel.Server | {:_, __MODULE__, :"$1"}]},
-       [{:"=/=", :"$2", self()}], [:"$1"]}
-    ])
+    |> Registry.select([{{topic, :"$2", :"$3"}, sender_guards(), [{:element, 3, {:tl, :"$3"}}]}])
     |> Enum.count(&(event not in &1))
+  end
+
+  # The value is the improper list `[Phoenix.Channel.Server | {pid, serializer,
+  # intercepts}]`. It is taken apart with `hd`/`tl` guards rather than an
+  # improper-list match pattern, which dialyzer rejects (improper_list_constr).
+  # A guard that hits a non-list just fails, so other subscriptions are skipped.
+  defp sender_guards do
+    meta = {:tl, :"$3"}
+
+    [
+      {:"=/=", :"$2", self()},
+      {:is_list, :"$3"},
+      {:"=:=", {:hd, :"$3"}, Phoenix.Channel.Server},
+      {:is_tuple, meta},
+      {:"=:=", {:tuple_size, meta}, 3},
+      {:"=:=", {:element, 2, meta}, __MODULE__}
+    ]
   end
 end
