@@ -102,14 +102,18 @@ defmodule Engram.Jobs do
 
   @doc """
   The `note_id` arg of every `worker` job for `vault_id` in one of `states`
-  (Oban state names, e.g. `~w(available executing retryable)`).
+  (Oban state names, e.g. `~w(available executing retryable)`), at most
+  `limit` of them (default `Engram.Batch.quiescence_cap/0`): a storm backlog
+  is 10k+ ids and the caller only needs to know whether any is owed.
   """
-  @spec pending_note_ids_for_vault(module(), String.t(), [String.t()]) :: [String.t()]
-  def pending_note_ids_for_vault(worker, vault_id, states) do
+  @spec pending_note_ids_for_vault(module(), String.t(), [String.t()], pos_integer()) ::
+          [String.t()]
+  def pending_note_ids_for_vault(worker, vault_id, states, limit \\ Batch.quiescence_cap()) do
     from(j in Oban.Job,
       where: j.worker == ^inspect(worker),
       where: j.state in ^states,
       where: fragment("? ->> 'vault_id'", j.args) == ^to_string(vault_id),
+      limit: ^limit,
       select: fragment("? ->> 'note_id'", j.args)
     )
     |> Repo.all()
