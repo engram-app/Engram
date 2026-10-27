@@ -22,9 +22,19 @@ defmodule EngramWeb.Schemas.Paging do
         type: :integer,
         required: false,
         description:
-          "Rows per page. Defaults to #{Batch.page_default()}, clamped to #{Batch.page_max()}."
+          "Rows per page. Defaults to #{Batch.rest_page_default()}, clamped to #{Batch.page_max()}."
       ]
     ]
+  end
+
+  @doc "The `truncated` response property: true when more pages remain."
+  def truncated do
+    %Schema{
+      type: :boolean,
+      description:
+        "True when this page is not the whole list (`next_cursor` is not null): keep " <>
+          "requesting with `cursor` until it is null. Rows are ordered by id, not title."
+    }
   end
 
   @doc "The `next_cursor` response property: null on the last page."

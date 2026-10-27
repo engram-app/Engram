@@ -14,6 +14,13 @@ defmodule Engram.Pager do
   * `paginate/4` turns `limit + 1` fetched rows into a page and its cursor.
 
   Callers fetch `limit + 1` rows ordered by the unique `(sort, id)` key.
+
+  Cursors do not expire. A keyset cursor is stateless: it names a position in
+  the sort order, not a snapshot, so an old one is as valid as a fresh one
+  (rows deleted or added since simply are or are not there). An expiry would
+  only turn a harmless resume into a client-visible error, and the signature
+  already stops forgery. Rotating `secret_key_base` invalidates every cursor,
+  which is the revocation lever.
   """
 
   alias Engram.Batch
@@ -23,27 +30,45 @@ defmodule Engram.Pager do
   # spending a signature check on it.
   @max_cursor_bytes 512
 
-  @type scope :: {atom(), term(), term()}
+  @type scope :: {term(), term(), term()}
 
   @doc "Page size for a requested `limit` (nil, integer or numeric string)."
-  @spec limit(term()) :: pos_integer()
-  def limit(n) when is_integer(n), do: n |> max(1) |> min(Batch.page_max())
+  @spec limit(term(), pos_integer()) :: pos_integer()
+  def limit(n, default \\ Batch.page_default())
 
-  def limit(n) when is_binary(n) do
+  def limit(n, _default) when is_integer(n), do: n |> max(1) |> min(Batch.page_max())
+
+  def limit(n, default) when is_binary(n) do
     case Integer.parse(n) do
-      {i, ""} -> limit(i)
-      _ -> Batch.page_default()
+      {i, ""} -> limit(i, default)
+      _ -> default
     end
   end
 
-  def limit(_), do: Batch.page_default()
+  def limit(_, default), do: default
 
-  @doc "The `:cursor` / `:limit` options out of request params (`cursor`, `limit`)."
-  @spec opts(map()) :: keyword()
-  def opts(params), do: [cursor: params["cursor"], limit: params["limit"]]
+  @doc """
+  The `:cursor` / `:limit` options out of request params (`cursor`, `limit`),
+  the limit already resolved against `default` (re-clamping it is idempotent).
+  """
+  @spec opts(map(), pos_integer()) :: keyword()
+  def opts(params, default \\ Batch.page_default()),
+    do: [cursor: params["cursor"], limit: limit(params["limit"], default)]
 
-  @doc "The scope a cursor is bound to: list kind, owning user and vault."
-  @spec scope(atom(), map(), map()) :: scope()
+  @doc "`opts/2` for a REST endpoint (larger default page than MCP)."
+  @spec rest_opts(map()) :: keyword()
+  def rest_opts(params), do: opts(params, Batch.rest_page_default())
+
+  @doc """
+  The paging fields every paged response carries. `truncated` is true when the
+  page is not the whole list, so a client that never reads `next_cursor` can
+  still tell its list is incomplete.
+  """
+  @spec page_meta(String.t() | nil) :: %{next_cursor: String.t() | nil, truncated: boolean()}
+  def page_meta(next_cursor), do: %{next_cursor: next_cursor, truncated: next_cursor != nil}
+
+  @doc "The scope a cursor is bound to: list kind (any term, e.g. include the folder), owning user and vault."
+  @spec scope(term(), map(), map()) :: scope()
   def scope(kind, user, vault), do: {kind, user.id, vault.id}
 
   @doc "Signs `key` (the last row's sort key) into an opaque cursor for `scope`."

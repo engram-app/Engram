@@ -517,6 +517,7 @@ defmodule Engram.MCP.HandlersTest do
       {:ok, text1, page1} = Handlers.handle("list_folder", user, vault, args)
       assert length(page1["notes"]) == 2
       assert is_binary(page1["next_cursor"])
+      assert page1["truncated"] == true
       assert length(page1["attachments"]) == 1
       assert text1 =~ page1["next_cursor"]
 
@@ -525,6 +526,7 @@ defmodule Engram.MCP.HandlersTest do
 
       assert length(page2["notes"]) == 1
       assert page2["next_cursor"] == nil
+      assert page2["truncated"] == false
       assert page2["attachments"] == []
 
       paths = Enum.map(page1["notes"] ++ page2["notes"], & &1["path"])
@@ -539,11 +541,18 @@ defmodule Engram.MCP.HandlersTest do
           actor: "api"
         )
 
-      assert {:ok, _, %{"notes" => [_], "next_cursor" => nil}} =
+      assert {:ok, _, %{"notes" => [_], "next_cursor" => nil, "truncated" => false}} =
                Handlers.handle("list_folder", user, vault, %{"folder" => "S"})
     end
 
     test "a forged cursor is an error, not an empty folder", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "S/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
+
       assert {:error, "Invalid cursor" <> _} =
                Handlers.handle("list_folder", user, vault, %{"folder" => "S", "cursor" => "x"})
     end

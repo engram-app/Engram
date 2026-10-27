@@ -76,9 +76,10 @@ defmodule EngramWeb.Schemas.AttachmentsResponse do
     type: :object,
     properties: %{
       attachments: %Schema{type: :array, items: EngramWeb.Schemas.AttachmentMeta},
-      next_cursor: EngramWeb.Schemas.Paging.next_cursor()
+      next_cursor: EngramWeb.Schemas.Paging.next_cursor(),
+      truncated: EngramWeb.Schemas.Paging.truncated()
     },
-    required: [:attachments, :next_cursor]
+    required: [:attachments, :next_cursor, :truncated]
   })
 end
 

@@ -3,11 +3,11 @@ defmodule EngramWeb.TagsFoldersControllerTest do
 
   setup %{conn: conn} do
     user = insert(:user)
-    _vault = insert(:vault, user: user, is_default: true)
+    vault = insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
     lift_api_rps_cap!(user)
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
-    %{conn: authed, user: user}
+    %{conn: authed, user: user, vault: vault}
   end
 
   describe "GET /tags" do
@@ -143,6 +143,7 @@ defmodule EngramWeb.TagsFoldersControllerTest do
       page1 = conn |> get("/api/folders/list", %{folder: "Pg", limit: 2}) |> json_response(200)
       assert length(page1["notes"]) == 2
       assert is_binary(page1["next_cursor"])
+      assert page1["truncated"] == true
 
       page2 =
         conn
@@ -151,13 +152,69 @@ defmodule EngramWeb.TagsFoldersControllerTest do
 
       assert length(page2["notes"]) == 1
       assert page2["next_cursor"] == nil
+      assert page2["truncated"] == false
 
       unpaged = conn |> get("/api/folders/list", %{folder: "Pg"}) |> json_response(200)
       assert length(unpaged["notes"]) == 3
       assert unpaged["next_cursor"] == nil
     end
 
+    test "a response over the default page is truncated and says so", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      over = Engram.Batch.rest_page_default() + 1
+
+      for i <- 1..over do
+        {:ok, _} =
+          Engram.Notes.upsert_note(
+            user,
+            vault,
+            %{"path" => "Huge/n#{i}.md", "content" => "x", "mtime" => 1.0},
+            actor: "api"
+          )
+      end
+
+      page = conn |> get("/api/folders/list", %{folder: "Huge"}) |> json_response(200)
+      assert length(page["notes"]) == Engram.Batch.rest_page_default()
+      assert page["truncated"] == true
+      assert is_binary(page["next_cursor"])
+
+      rest =
+        conn
+        |> get("/api/folders/list", %{folder: "Huge", cursor: page["next_cursor"]})
+        |> json_response(200)
+
+      assert length(rest["notes"]) == 1 and rest["truncated"] == false
+    end
+
+    test "junk and out-of-range limits fall back or clamp instead of failing", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "L/a.md", content: "# a", mtime: 1_000.0})
+
+      for limit <- ["0", "-1", "abc", "99999"] do
+        body =
+          conn |> get("/api/folders/list", %{folder: "L", limit: limit}) |> json_response(200)
+
+        assert length(body["notes"]) == 1
+      end
+    end
+
+    test "a cursor from folder A is a 400 on folder B", %{conn: conn} do
+      for f <- ["A", "B"],
+          i <- 1..3,
+          do: post(conn, "/api/notes", %{path: "#{f}/n#{i}.md", content: "# x", mtime: 1_000.0})
+
+      %{"next_cursor" => c} =
+        conn |> get("/api/folders/list", %{folder: "A", limit: 1}) |> json_response(200)
+
+      assert conn |> get("/api/folders/list", %{folder: "B", cursor: c}) |> json_response(400) ==
+               %{"error" => "invalid_cursor"}
+    end
+
     test "a forged cursor is a 400", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "Pg/a.md", content: "# a", mtime: 1_000.0})
       conn2 = get(conn, "/api/folders/list", %{folder: "Pg", cursor: "nope"})
       assert %{"error" => "invalid_cursor"} = json_response(conn2, 400)
     end

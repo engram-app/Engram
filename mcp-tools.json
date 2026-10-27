@@ -534,7 +534,7 @@
         "additionalProperties": false,
         "properties": {
           "cursor": {
-            "description": "next_cursor from the previous call, to get the next page of notes. Omit for the first page.",
+            "description": "next_cursor from the previous call, to get the next page of notes. Omit for the first page. Keep following until next_cursor is null.",
             "type": "string"
           },
           "folder": {
@@ -542,7 +542,7 @@
             "type": "string"
           },
           "limit": {
-            "description": "Notes per page. Defaults to 200, at most 500.",
+            "description": "Notes per page. Defaults to 200, at most 1000.",
             "type": "integer"
           },
           "recursive": {
@@ -636,6 +636,10 @@
               "type": "object"
             },
             "type": "array"
+          },
+          "truncated": {
+            "description": "True while more notes remain (next_cursor is not null): this page is not the whole folder.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -643,7 +647,8 @@
           "notes",
           "attachments",
           "folders",
-          "next_cursor"
+          "next_cursor",
+          "truncated"
         ],
         "type": "object"
       },

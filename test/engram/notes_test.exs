@@ -1938,6 +1938,18 @@ defmodule Engram.NotesTest do
       assert [[_, _], [_]] = drain_pages(user, vault, "F", limit: 2)
     end
 
+    test "a cursor from folder A is refused on folder B", %{user: user, vault: vault} do
+      seed_folder(user, vault, "A", 3)
+      seed_folder(user, vault, "B", 3)
+      {:ok, %{next_cursor: cursor}} = Notes.list_notes_in_folder_page(user, vault, "A", limit: 1)
+
+      assert {:error, :invalid_cursor} =
+               Notes.list_notes_in_folder_page(user, vault, "B", cursor: cursor)
+
+      assert {:ok, %{notes: [_ | _]}} =
+               Notes.list_notes_in_folder_page(user, vault, "A", cursor: cursor)
+    end
+
     test "a forged cursor is refused", %{user: user, vault: vault} do
       seed_folder(user, vault, "F", 3)
 

@@ -55,7 +55,7 @@ defmodule EngramWeb.FoldersController do
     summary: "List notes in a folder (metadata only)",
     description:
       "Returns metadata (no content) for the notes in the folder named by the required `folder` " <>
-        "query param, one page at a time (`cursor`, `limit`; follow `next_cursor`). Returns 400 " <>
+        "query param, one page at a time (`cursor`, `limit`; follow `next_cursor` until null, `truncated` says more remain; ordered by id). Returns 400 " <>
         "when the param is missing or the cursor is invalid.",
     tags: ["Folders"],
     parameters:
@@ -71,13 +71,15 @@ defmodule EngramWeb.FoldersController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    case Notes.list_notes_in_folder_page(user, vault, folder, Engram.Pager.opts(params)) do
+    case Notes.list_notes_in_folder_page(user, vault, folder, Engram.Pager.rest_opts(params)) do
       {:ok, %{notes: notes, next_cursor: next}} ->
-        json(conn, %{
-          folder: folder,
-          notes: Enum.map(notes, &note_summary/1),
-          next_cursor: next
-        })
+        json(
+          conn,
+          Map.merge(
+            %{folder: folder, notes: Enum.map(notes, &note_summary/1)},
+            Engram.Pager.page_meta(next)
+          )
+        )
 
       {:error, :invalid_cursor} ->
         conn |> put_status(400) |> json(%{error: "invalid_cursor"})
@@ -93,7 +95,7 @@ defmodule EngramWeb.FoldersController do
     summary: "List notes in a folder by id (metadata only)",
     description:
       "Returns metadata (no content) for the notes in the folder identified by its marker UUID, " <>
-        "one page at a time (`cursor`, `limit`; follow `next_cursor`). Returns 400 for a " <>
+        "one page at a time (`cursor`, `limit`; follow `next_cursor` until null, `truncated` says more remain; ordered by id). Returns 400 for a " <>
         "malformed UUID or invalid cursor and 404 when no such folder exists.",
     tags: ["Folders"],
     parameters:
@@ -113,9 +115,12 @@ defmodule EngramWeb.FoldersController do
              conn.assigns.current_user,
              conn.assigns.current_vault,
              id,
-             Engram.Pager.opts(params)
+             Engram.Pager.rest_opts(params)
            ) do
-      json(conn, %{notes: Enum.map(notes, &note_summary/1), next_cursor: next})
+      json(
+        conn,
+        Map.merge(%{notes: Enum.map(notes, &note_summary/1)}, Engram.Pager.page_meta(next))
+      )
     else
       {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "not_found"})
       {:error, :invalid_cursor} -> conn |> put_status(400) |> json(%{error: "invalid_cursor"})

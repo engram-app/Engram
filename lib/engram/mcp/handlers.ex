@@ -1653,7 +1653,11 @@ defmodule Engram.MCP.Handlers do
 
         more_rows =
           if next_cursor,
-            do: ["", "More notes: call list_folder again with cursor: #{next_cursor}"],
+            do: [
+              "",
+              "More notes remain (truncated). Call list_folder again with cursor: " <>
+                "#{next_cursor} until next_cursor is null."
+            ],
             else: []
 
         Enum.join(["**Folder:** #{label}"] ++ entry_rows ++ folder_rows ++ more_rows, "\n")
@@ -1669,7 +1673,8 @@ defmodule Engram.MCP.Handlers do
       "attachments" =>
         Enum.map(atts, fn a -> %{"name" => Path.basename(a.path), "path" => a.path} end),
       "folders" => folders,
-      "next_cursor" => next_cursor
+      "next_cursor" => next_cursor,
+      "truncated" => next_cursor != nil
     }
 
     {:ok, text, structured}

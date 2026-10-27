@@ -697,7 +697,7 @@ defmodule Engram.MCP.Tools do
           "cursor" => %{
             "type" => "string",
             "description" =>
-              "next_cursor from the previous call, to get the next page of notes. Omit for the first page."
+              "next_cursor from the previous call, to get the next page of notes. Omit for the first page. Keep following until next_cursor is null."
           },
           "limit" => %{
             "type" => "integer",
@@ -714,6 +714,11 @@ defmodule Engram.MCP.Tools do
             "type" => ["string", "null"],
             "description" =>
               "Pass as cursor to list the next page of notes; null on the last page. Attachments and subfolders are returned on the first page only."
+          },
+          "truncated" => %{
+            "type" => "boolean",
+            "description" =>
+              "True while more notes remain (next_cursor is not null): this page is not the whole folder."
           },
           "notes" => %{
             "type" => "array",
@@ -758,7 +763,7 @@ defmodule Engram.MCP.Tools do
             }
           }
         },
-        "required" => ["folder", "notes", "attachments", "folders", "next_cursor"]
+        "required" => ["folder", "notes", "attachments", "folders", "next_cursor", "truncated"]
       },
       handler: &Handlers.handle("list_folder", &1, &2, &3)
     }

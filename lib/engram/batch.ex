@@ -38,10 +38,14 @@ defmodule Engram.Batch do
 
   # Rows per page of a client-facing list (`Engram.Pager`). Metadata only, so
   # a page is a few hundred KB at most; the cap bounds decrypt CPU and memory
-  # per request. A 7.4k-note folder (the largest in prod, 2026-10) is 15
+  # per request. MCP pages default smaller (200) because the whole page lands
+  # in an LLM context; REST pages default to 500 so an older client that never
+  # sends `limit` is truncated as rarely as possible (it is told, via
+  # `truncated`). A 7.4k-note folder (the largest in prod, 2026-10) is 15 REST
   # default pages.
   @page_default 200
-  @page_max 500
+  @rest_page_default 500
+  @page_max 1_000
 
   # Pending checkpoint ids `GET /sync/quiescence` reads per call. It needs
   # "is anything owed", not the full backlog (10k+ during a storm), and the
@@ -64,12 +68,16 @@ defmodule Engram.Batch do
   @spec folder_delete() :: 500
   def folder_delete, do: @folder_delete
 
-  @doc "Default rows per page of a paged list when the client sends no limit."
+  @doc "Default rows per page of a paged MCP list when the client sends no limit."
   @spec page_default() :: 200
   def page_default, do: @page_default
 
+  @doc "Default rows per page of a paged REST list when the client sends no limit."
+  @spec rest_page_default() :: 500
+  def rest_page_default, do: @rest_page_default
+
   @doc "Hard ceiling on rows per page of a paged list; a larger `limit` is clamped."
-  @spec page_max() :: 500
+  @spec page_max() :: 1_000
   def page_max, do: @page_max
 
   @doc "Max pending checkpoint ids read by one quiescence probe."

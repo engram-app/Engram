@@ -626,11 +626,18 @@
             "type": "string",
             "x-struct": null,
             "x-validate": null
+          },
+          "truncated": {
+            "description": "True when this page is not the whole list (`next_cursor` is not null): keep requesting with `cursor` until it is null. Rows are ordered by id, not title.",
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
           }
         },
         "required": [
           "attachments",
-          "next_cursor"
+          "next_cursor",
+          "truncated"
         ],
         "title": "AttachmentsResponse",
         "type": "object",
@@ -695,6 +702,12 @@
             "x-struct": null,
             "x-validate": null
           },
+          "checkpoints_capped": {
+            "description": "True when more pending checkpoints exist than one call reads; the counts are then lower bounds and `pending_checkpoints` is at least 1.",
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
           "deferred_checkpoints": {
             "description": "Unfinished checkpoint jobs held by a live room, which materializes the note itself on exit. Not owed work.",
             "type": "integer",
@@ -718,7 +731,8 @@
           "change_seq",
           "pending_crdt_updates",
           "pending_checkpoints",
-          "deferred_checkpoints"
+          "deferred_checkpoints",
+          "checkpoints_capped"
         ],
         "title": "SyncQuiescenceResponse",
         "type": "object",
@@ -1168,11 +1182,18 @@
             "type": "array",
             "x-struct": null,
             "x-validate": null
+          },
+          "truncated": {
+            "description": "True when this page is not the whole list (`next_cursor` is not null): keep requesting with `cursor` until it is null. Rows are ordered by id, not title.",
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
           }
         },
         "required": [
           "notes",
-          "next_cursor"
+          "next_cursor",
+          "truncated"
         ],
         "title": "FolderNotesResponse",
         "type": "object",
@@ -3128,12 +3149,19 @@
             "type": "array",
             "x-struct": null,
             "x-validate": null
+          },
+          "truncated": {
+            "description": "True when this page is not the whole list (`next_cursor` is not null): keep requesting with `cursor` until it is null. Rows are ordered by id, not title.",
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
           }
         },
         "required": [
           "folder",
           "notes",
-          "next_cursor"
+          "next_cursor",
+          "truncated"
         ],
         "title": "FolderListResponse",
         "type": "object",
@@ -5619,7 +5647,7 @@
     "/api/sync/quiescence": {
       "get": {
         "callbacks": {},
-        "description": "The vault's `change_seq` plus how many CRDT updates still await their checkpoint. A client whose catch-up cursor has reached `change_seq` while both counts are 0 has seen every change the server will make on its own. `deferred_checkpoints` (held by a live room) is reported but is not owed work.",
+        "description": "The vault's `change_seq` plus how many CRDT updates still await their checkpoint. A client whose catch-up cursor has reached `change_seq` while both counts are 0 has seen every change the server will make on its own. `deferred_checkpoints` (held by a live room) is reported but is not owed work. `checkpoints_capped` is true when more pending checkpoints exist than the server reads per call; `pending_checkpoints` is then at least 1, never 0.",
         "operationId": "sync-quiescence",
         "parameters": [],
         "responses": {
@@ -5822,7 +5850,7 @@
     "/api/attachments": {
       "get": {
         "callbacks": {},
-        "description": "Returns metadata (path, MIME type, size, timestamps — no bytes) for the attachments in the current vault, one page at a time (`cursor`, `limit`; follow `next_cursor`). Returns 400 for an invalid cursor and 500 if the listing fails.",
+        "description": "Returns metadata (path, MIME type, size, timestamps — no bytes) for the attachments in the current vault, one page at a time (`cursor`, `limit`; follow `next_cursor` until null, `truncated` says more remain; ordered by id). Returns 400 for an invalid cursor and 500 if the listing fails.",
         "operationId": "attachments-index",
         "parameters": [
           {
@@ -5837,7 +5865,7 @@
             }
           },
           {
-            "description": "Rows per page. Defaults to 200, clamped to 500.",
+            "description": "Rows per page. Defaults to 500, clamped to 1000.",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -6405,7 +6433,7 @@
     "/api/folders/list": {
       "get": {
         "callbacks": {},
-        "description": "Returns metadata (no content) for the notes in the folder named by the required `folder` query param, one page at a time (`cursor`, `limit`; follow `next_cursor`). Returns 400 when the param is missing or the cursor is invalid.",
+        "description": "Returns metadata (no content) for the notes in the folder named by the required `folder` query param, one page at a time (`cursor`, `limit`; follow `next_cursor` until null, `truncated` says more remain; ordered by id). Returns 400 when the param is missing or the cursor is invalid.",
         "operationId": "folders-list",
         "parameters": [
           {
@@ -6431,7 +6459,7 @@
             }
           },
           {
-            "description": "Rows per page. Defaults to 200, clamped to 500.",
+            "description": "Rows per page. Defaults to 500, clamped to 1000.",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -6715,7 +6743,7 @@
     "/api/folders/by-id/{id}/notes": {
       "get": {
         "callbacks": {},
-        "description": "Returns metadata (no content) for the notes in the folder identified by its marker UUID, one page at a time (`cursor`, `limit`; follow `next_cursor`). Returns 400 for a malformed UUID or invalid cursor and 404 when no such folder exists.",
+        "description": "Returns metadata (no content) for the notes in the folder identified by its marker UUID, one page at a time (`cursor`, `limit`; follow `next_cursor` until null, `truncated` says more remain; ordered by id). Returns 400 for a malformed UUID or invalid cursor and 404 when no such folder exists.",
         "operationId": "folders-list-notes",
         "parameters": [
           {
@@ -6741,7 +6769,7 @@
             }
           },
           {
-            "description": "Rows per page. Defaults to 200, clamped to 500.",
+            "description": "Rows per page. Defaults to 500, clamped to 1000.",
             "in": "query",
             "name": "limit",
             "required": false,

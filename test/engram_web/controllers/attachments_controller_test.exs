@@ -903,6 +903,7 @@ defmodule EngramWeb.AttachmentsControllerTest do
       page1 = conn |> get("/api/attachments", %{limit: 2}) |> json_response(200)
       assert length(page1["attachments"]) == 2
       assert is_binary(page1["next_cursor"])
+      assert page1["truncated"] == true
 
       page2 =
         conn
@@ -911,6 +912,7 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
       assert length(page2["attachments"]) == 1
       assert page2["next_cursor"] == nil
+      assert page2["truncated"] == false
 
       both = page1["attachments"] ++ page2["attachments"]
       ids = Enum.map(both, & &1["id"])

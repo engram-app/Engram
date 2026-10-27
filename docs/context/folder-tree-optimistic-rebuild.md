@@ -183,6 +183,9 @@ error from a cumulative one.
   (`tags_ciphertext`), so adding them to `/vault/tree` means a second per-note
   decrypt across the whole vault, the cost the thin tree payload exists to
   avoid. Don't "finish the consolidation" here without measuring that.
+  `/folders/list` is paged (500 by default, id order, `next_cursor`/`truncated`);
+  `fetchAllFolderNotes` follows it (page cap, repeated-cursor check, abort
+  signal) and re-sorts by title.
 - **`GET /api/folders` stays**: the plugin calls it. `GET /api/attachments`
   has no web caller but is public REST surface.
 

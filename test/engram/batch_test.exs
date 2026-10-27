@@ -11,7 +11,8 @@ defmodule Engram.BatchTest do
     assert Batch.reconcile_page() == 1_000
     assert Batch.folder_delete() == 500
     assert Batch.page_default() == 200
-    assert Batch.page_max() == 500
+    assert Batch.rest_page_default() == 500
+    assert Batch.page_max() == 1_000
     assert Batch.quiescence_cap() == 1_000
   end
 

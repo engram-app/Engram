@@ -6236,18 +6236,22 @@ defmodule Engram.Notes do
           {:ok, %{notes: [Note.t()], next_cursor: String.t() | nil}}
           | {:error, :invalid_cursor}
   def list_notes_in_folder_page(user, vault, folder, opts \\ []) do
-    scope = Pager.scope(:folder_notes, user, vault)
     limit = Pager.limit(opts[:limit])
 
-    with {:ok, after_id} <- Pager.decode(scope, opts[:cursor]) do
-      # Phase B.2.6 — match by folder_hmac so the lookup survives B.3's drop of
-      # the plaintext `folder` column. Both root ("") and named folders go
-      # through the same HMAC equality check; the empty string has its own
-      # well-defined HMAC.
-      case Crypto.dek_filter_key(user) do
-        {:ok, filter_key} ->
-          target_hmac = Crypto.hmac_field(filter_key, folder)
+    # Phase B.2.6 — match by folder_hmac so the lookup survives B.3's drop of
+    # the plaintext `folder` column. Both root ("") and named folders go
+    # through the same HMAC equality check; the empty string has its own
+    # well-defined HMAC.
+    case Crypto.dek_filter_key(user) do
+      {:ok, filter_key} ->
+        target_hmac = Crypto.hmac_field(filter_key, folder)
 
+        # The cursor is bound to this folder (a short hash of its HMAC, never
+        # the path): a cursor from folder A used on folder B would silently
+        # skip B's rows with a smaller id.
+        scope = Pager.scope({:folder_notes, binary_part(target_hmac, 0, 16)}, user, vault)
+
+        with {:ok, after_id} <- Pager.decode(scope, opts[:cursor]) do
           # Metadata projection: every caller serializes summaries (path,
           # title, tags, ...) — content is never returned, so don't fetch
           # or decrypt it.
@@ -6264,16 +6268,18 @@ defmodule Engram.Notes do
           {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
           {page, next_cursor} = Pager.paginate(rows, limit, scope, & &1.id)
 
-          # Phase B.4: title is virtual — sort by decrypted title in BEAM
-          # since SQL can't order by encrypted columns deterministically.
+          # Phase B.4: title is virtual — sort the page by decrypted title in
+          # BEAM since SQL can't order by encrypted columns. Pages themselves
+          # are id-ordered; a client wanting a global title order sorts the
+          # concatenated pages.
           notes = page |> decrypt_or_raise!(user) |> Enum.sort_by(& &1.title)
           {:ok, %{notes: notes, next_cursor: next_cursor}}
+        end
 
-        {:error, :no_dek} ->
-          # Mirrors the list_folders (B.2.2) defensive empty: no DEK = no
-          # encrypted notes possible = empty result.
-          {:ok, %{notes: [], next_cursor: nil}}
-      end
+      {:error, :no_dek} ->
+        # Mirrors the list_folders (B.2.2) defensive empty: no DEK = no
+        # encrypted notes possible = empty result.
+        {:ok, %{notes: [], next_cursor: nil}}
     end
   end
 

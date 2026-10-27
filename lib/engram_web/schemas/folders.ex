@@ -49,6 +49,7 @@ end
 
 defmodule EngramWeb.Schemas.FolderListResponse do
   @moduledoc false
+  alias EngramWeb.Schemas.Paging
   alias OpenApiSpex.Schema
   require OpenApiSpex
 
@@ -58,14 +59,16 @@ defmodule EngramWeb.Schemas.FolderListResponse do
     properties: %{
       folder: %Schema{type: :string},
       notes: %Schema{type: :array, items: EngramWeb.Schemas.NoteMeta},
-      next_cursor: EngramWeb.Schemas.Paging.next_cursor()
+      next_cursor: Paging.next_cursor(),
+      truncated: Paging.truncated()
     },
-    required: [:folder, :notes, :next_cursor]
+    required: [:folder, :notes, :next_cursor, :truncated]
   })
 end
 
 defmodule EngramWeb.Schemas.FolderNotesResponse do
   @moduledoc false
+  alias EngramWeb.Schemas.Paging
   alias OpenApiSpex.Schema
   require OpenApiSpex
 
@@ -74,9 +77,10 @@ defmodule EngramWeb.Schemas.FolderNotesResponse do
     type: :object,
     properties: %{
       notes: %Schema{type: :array, items: EngramWeb.Schemas.NoteMeta},
-      next_cursor: EngramWeb.Schemas.Paging.next_cursor()
+      next_cursor: Paging.next_cursor(),
+      truncated: Paging.truncated()
     },
-    required: [:notes, :next_cursor]
+    required: [:notes, :next_cursor, :truncated]
   })
 end
 

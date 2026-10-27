@@ -9,6 +9,10 @@ defmodule Engram.PagerTest do
   describe "limit/1" do
     test "defaults, clamps to the one hard max, and tolerates junk" do
       assert Pager.limit(nil) == Batch.page_default()
+      assert Pager.limit(nil, Batch.rest_page_default()) == 500
+      assert Pager.limit("abc", 500) == 500
+      assert Pager.limit("0") == 1
+      assert Pager.limit("-1") == 1
       assert Pager.limit("abc") == Batch.page_default()
       assert Pager.limit("7") == 7
       assert Pager.limit(0) == 1
@@ -19,8 +23,12 @@ defmodule Engram.PagerTest do
   end
 
   test "opts/1 reads cursor and limit from request params" do
-    assert Pager.opts(%{"cursor" => "c", "limit" => "5", "x" => 1}) == [cursor: "c", limit: "5"]
-    assert Pager.opts(%{}) == [cursor: nil, limit: nil]
+    assert Pager.opts(%{"cursor" => "c", "limit" => "5", "x" => 1}) == [cursor: "c", limit: 5]
+    assert Pager.opts(%{}) == [cursor: nil, limit: 200]
+    assert Pager.rest_opts(%{}) == [cursor: nil, limit: 500]
+    assert Pager.rest_opts(%{"limit" => "900"}) == [cursor: nil, limit: 900]
+    assert Pager.page_meta("c") == %{next_cursor: "c", truncated: true}
+    assert Pager.page_meta(nil) == %{next_cursor: nil, truncated: false}
   end
 
   describe "cursor" do

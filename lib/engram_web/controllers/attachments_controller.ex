@@ -501,7 +501,7 @@ defmodule EngramWeb.AttachmentsController do
     summary: "List attachments (metadata only)",
     description:
       "Returns metadata (path, MIME type, size, timestamps — no bytes) for the attachments in " <>
-        "the current vault, one page at a time (`cursor`, `limit`; follow `next_cursor`). " <>
+        "the current vault, one page at a time (`cursor`, `limit`; follow `next_cursor` until null, `truncated` says more remain; ordered by id). " <>
         "Returns 400 for an invalid cursor and 500 if the listing fails.",
     tags: ["Attachments"],
     parameters: EngramWeb.Schemas.Paging.parameters(),
@@ -518,23 +518,25 @@ defmodule EngramWeb.AttachmentsController do
 
     # The whole tree sidebar depends on this; handle a list failure explicitly
     # (logged 500 body) instead of a bare-match MatchError stacktrace.
-    case Attachments.list_attachments_page(user, vault, Engram.Pager.opts(params)) do
+    case Attachments.list_attachments_page(user, vault, Engram.Pager.rest_opts(params)) do
       {:ok, %{attachments: atts, next_cursor: next}} ->
-        json(conn, %{
-          next_cursor: next,
-          attachments:
-            Enum.map(atts, fn a ->
-              %{
-                id: a.id,
-                path: a.path,
-                mime_type: a.mime_type,
-                size_bytes: a.size_bytes,
-                mtime: a.mtime,
-                content_hash: a.content_hash,
-                updated_at: a.updated_at
-              }
-            end)
-        })
+        json(
+          conn,
+          Map.merge(Engram.Pager.page_meta(next), %{
+            attachments:
+              Enum.map(atts, fn a ->
+                %{
+                  id: a.id,
+                  path: a.path,
+                  mime_type: a.mime_type,
+                  size_bytes: a.size_bytes,
+                  mtime: a.mtime,
+                  content_hash: a.content_hash,
+                  updated_at: a.updated_at
+                }
+              end)
+          })
+        )
 
       {:error, :invalid_cursor} ->
         conn |> put_status(400) |> json(%{error: "invalid_cursor"})
