@@ -17,7 +17,10 @@ defmodule Engram.Repo.Migrations.NoteIndexStatePayloadVersionExpand do
 
   def up do
     execute "SET lock_timeout = '5s'"
-    execute "ALTER TABLE note_index_state ADD COLUMN IF NOT EXISTS payload_version smallint"
+    # A version number, a handful of values ever: smallint on purpose.
+    execute "-- squawk-ignore prefer-bigint-over-smallint\n" <>
+              "ALTER TABLE note_index_state ADD COLUMN IF NOT EXISTS payload_version smallint"
+
     execute "RESET lock_timeout"
   end
 
