@@ -6,7 +6,7 @@ defmodule Engram.NotesFanoutBoundsTest do
   use Oban.Testing, repo: Engram.Repo
 
   alias Engram.Notes
-  alias Engram.Workers.DeleteNoteIndex
+  alias Engram.Workers.{DeleteNoteIndex, RepathNoteIndex, RewriteNoteLinks}
 
   @n 8
 
@@ -77,6 +77,44 @@ defmodule Engram.NotesFanoutBoundsTest do
       # one. Per-note inserts would be at least @n.
       assert inserts <= 2
       assert job_note_ids(DeleteNoteIndex) == notes |> Enum.map(& &1.id) |> Enum.sort()
+    end
+  end
+
+  describe "rename_folder/4 (folder rename cascade)" do
+    test "enqueues repath + link-rewrite jobs in two bulk inserts, one job each per note", ctx do
+      %{user: user, vault: vault} = ctx
+      notes = seed(user, vault, "Docs")
+      ids = notes |> Enum.map(& &1.id) |> Enum.sort()
+
+      {{:ok, _}, inserts} =
+        oban_insert_statements(fn -> Notes.rename_folder(user, vault, "Docs", "Archive") end)
+
+      # Per-note inserts would be 2 * @n.
+      assert inserts <= 2
+      assert job_note_ids(RepathNoteIndex) == ids
+
+      rewrites = all_enqueued(worker: RewriteNoteLinks)
+      assert rewrites |> Enum.map(& &1.args["target_id"]) |> Enum.sort() == ids
+
+      # Debounce kept: repath is scheduled a few seconds out, hmac-only args.
+      for job <- all_enqueued(worker: RepathNoteIndex) do
+        assert DateTime.compare(job.scheduled_at, DateTime.utc_now()) == :gt
+        assert is_binary(job.args["old_path_hmac"])
+      end
+    end
+
+    test "a note with a pending repath job is not queued a second one", ctx do
+      %{user: user, vault: vault} = ctx
+      seed(user, vault, "Docs")
+
+      {:ok, _} = Notes.rename_folder(user, vault, "Docs", "Archive")
+      {:ok, _} = Notes.rename_folder(user, vault, "Archive", "Docs")
+
+      # The first job reads the note's current path when it runs, so it covers
+      # the second rename (this is what the worker's `unique` did).
+      assert length(all_enqueued(worker: RepathNoteIndex)) == @n
+      # RewriteNoteLinks has no `unique`: one per real move, both renames.
+      assert length(all_enqueued(worker: RewriteNoteLinks)) == 2 * @n
     end
   end
 end

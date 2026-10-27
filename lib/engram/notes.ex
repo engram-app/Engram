@@ -6718,45 +6718,16 @@ defmodule Engram.Notes do
             # Side effects outside the transaction — broadcast + reindex + link
             # rewrite fan-out. T3.2 — hmac-only args, never plaintext.
             # Marker rows have no path / no embedding / no basename, skip everything.
-            Enum.each(real_note_updates, fn {note, old_note_path, new_path, new_note_folder,
-                                             _title} ->
-              old_path_hmac = old_path_hmac_b64!(user, old_note_path)
+            moves =
+              Enum.map(real_note_updates, fn {note, old_note_path, new_path, new_note_folder,
+                                              _title} ->
+                {note, old_note_path, new_path, new_note_folder,
+                 old_path_hmac_b64!(user, old_note_path)}
+              end)
 
-              _ =
-                Enqueue.enqueue(
-                  RepathNoteIndex.new_debounced(note.id, user.id,
-                    old_path_hmac: old_path_hmac,
-                    bulk: bulk_repath?
-                  ),
-                  "repath_note_index"
-                )
+            enqueue_rename_cascade_jobs(user, vault, moves, bulk_repath?)
 
-              # #648/#1231 Phase 3 — a folder rename is N note renames (basename
-              # unchanged), so each moved note reuses the Phase 1 rewrite job
-              # verbatim: qualified [[old-folder/…]] occurrences get the new
-              # prefix; bare [[basename]] occurrences plan no edit (idempotence
-              # guard in Rewriter.plan_edits/5). Old-path recovery = the tombstone
-              # this very cascade inserted in the same transaction — no ciphertext
-              # args. Origin safety is by construction: the plugin never calls the
-              # folder-rename REST surface (it renames per-file over CRDT, which
-              # Phase 2 gates), so every caller here is web/MCP and must rewrite.
-              # Gated on a real move: the idempotent same-folder branch of
-              # rename_folder_gated reaches this loop with old == new.
-              _ =
-                if old_note_path != new_path do
-                  Enqueue.enqueue(
-                    RewriteNoteLinks.new_for(
-                      user.id,
-                      vault.id,
-                      :note,
-                      note.id,
-                      old_path_hmac,
-                      Base.encode64(Links.basename_hmac(user, Links.basename_key(old_note_path)))
-                    ),
-                    "rewrite_note_links"
-                  )
-                end
-
+            Enum.each(moves, fn {note, old_note_path, new_path, new_note_folder, _old_hmac} ->
               # #976: carry the moved note's id on the old-path delete leg. The note
               # still exists (same id, new path, upsert leg below), so receivers can
               # correlate the delete+upsert pair by id instead of resolving by path
@@ -6801,6 +6772,65 @@ defmodule Engram.Notes do
           end
       end
     end
+  end
+
+  # The folder-rename cascade's reindex + link-rewrite jobs for every moved
+  # note, as two bulk inserts instead of 2N single ones (#2169).
+  #
+  # `moves` is `{note, old_path, new_path, new_folder, old_path_hmac_b64}`.
+  # T3.2 - hmac-only args, never plaintext.
+  #
+  # Repath: `Oban.insert_all/1` ignores the worker's `unique`, so notes that
+  # already have a pending RepathNoteIndex job are dropped with
+  # `Jobs.reject_pending/3` (what `unique: [keys: [:note_id, ...]]` did, one
+  # probe per 50 ids). A pending job reads the note's CURRENT path when it
+  # runs, so it also covers a second rename that landed before it ran; a job
+  # already EXECUTING may have read the older path, so it does not count
+  # (`executing: false`) and a fresh job is queued.
+  #
+  # Rewrite: RewriteNoteLinks has no `unique` (a cursor worker re-enqueues
+  # its own successor), so nothing to drop. #648/#1231 Phase 3 - a folder
+  # rename is N note renames (basename unchanged), so each moved note reuses
+  # the Phase 1 rewrite job verbatim: qualified [[old-folder/...]] occurrences
+  # get the new prefix; bare [[basename]] occurrences plan no edit
+  # (idempotence guard in Rewriter.plan_edits/5). Old-path recovery = the
+  # tombstone this cascade inserted in the same transaction. Origin safety is
+  # by construction: the plugin never calls the folder-rename REST surface,
+  # so every caller here is web/MCP and must rewrite. Gated on a real move:
+  # the idempotent same-folder branch reaches this with old == new.
+  #
+  # One job per folder rename was rejected: repath patches ONE note's Qdrant
+  # points under that note's own old hmac and retries/falls back per note, and
+  # the rewrite job's cursor and target are per note.
+  defp enqueue_rename_cascade_jobs(user, vault, moves, bulk_repath?) do
+    to_repath =
+      RepathNoteIndex
+      |> Jobs.reject_pending(Enum.map(moves, fn {n, _, _, _, _} -> n.id end), executing: false)
+      |> MapSet.new()
+
+    moves
+    |> Enum.filter(fn {n, _, _, _, _} -> MapSet.member?(to_repath, n.id) end)
+    |> Enum.map(fn {note, _old, _new, _folder, old_hmac} ->
+      RepathNoteIndex.new_debounced(note.id, user.id,
+        old_path_hmac: old_hmac,
+        bulk: bulk_repath?
+      )
+    end)
+    |> Enqueue.enqueue_all("repath_note_index")
+
+    moves
+    |> Enum.filter(fn {_n, old, new, _f, _h} -> old != new end)
+    |> Enum.map(fn {note, old, _new, _folder, old_hmac} ->
+      RewriteNoteLinks.new_for(
+        user.id,
+        vault.id,
+        :note,
+        note.id,
+        old_hmac,
+        Base.encode64(Links.basename_hmac(user, Links.basename_key(old)))
+      )
+    end)
+    |> Enqueue.enqueue_all("rewrite_note_links")
   end
 
   # Extracted from `do_rename_folder/6` so the claim above it can guard the row
