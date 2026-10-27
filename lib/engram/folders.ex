@@ -163,6 +163,8 @@ defmodule Engram.Folders do
     # checkout limit. An attachment added under the folder in between stays
     # at its path, the same outcome as one added just after the rename.
     with {:ok, new_folder} <- PathSanitizer.sanitize_target(new_folder),
+         # Never into its own subtree: refused before any scan or write.
+         :ok <- refuse_own_subtree(String.trim_trailing(old_folder, "/"), new_folder),
          {:ok, att_pairs} <-
            Attachments.folder_rename_pairs(user, vault, old_folder, new_folder) do
       atomic(fn ->
@@ -172,6 +174,10 @@ defmodule Engram.Folders do
         end
       end)
     end
+  end
+
+  defp refuse_own_subtree(old, new) do
+    if old != new and Rows.into_own_subtree?(old, new), do: {:error, :invalid_path}, else: :ok
   end
 
   @doc """

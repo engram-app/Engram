@@ -1915,6 +1915,7 @@ defmodule Engram.Attachments do
           back = MapSet.new(ids)
           {restored, refused} = Enum.split_with(chunk, &MapSet.member?(back, &1.id))
           now = DateTime.utc_now(:second)
+          :ok = repoint_folder_refs(user, vault, restored)
 
           for m <- restored do
             fields = Map.take(m, @tree_attachment_fields)
@@ -1936,6 +1937,26 @@ defmodule Engram.Attachments do
           {:halt, err}
       end
     end)
+  end
+
+  # A restored row keeps the reference it was deleted with, which may name a
+  # folder row the undo could not revive (a live sibling took the name). Point
+  # each at the live row for its path.
+  defp repoint_folder_refs(_user, _vault, []), do: :ok
+
+  defp repoint_folder_refs(user, vault, metas) do
+    by_folder = Enum.group_by(metas, &Helpers.extract_folder(&1.path), & &1.id)
+
+    Repo.with_tenant!(user.id, fn ->
+      {:ok, refs} = Rows.ensure_all(user, vault.id, Map.keys(by_folder))
+
+      for {folder, ids} <- by_folder do
+        from(a in Attachment, where: a.id in ^ids)
+        |> Repo.update_all(set: [folder_ref_id: Map.fetch!(refs, folder)])
+      end
+    end)
+
+    :ok
   end
 
   @doc """

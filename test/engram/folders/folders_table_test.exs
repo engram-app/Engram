@@ -98,6 +98,25 @@ defmodule Engram.Folders.FoldersTableTest do
                as_prod_role(fn -> Repo.query!("SELECT count(*)::int FROM folders") end)
     end
 
+    # The only statement that raises under a WITH CHECK: a SELECT is merely
+    # filtered. Writing a row for another tenant must be refused.
+    test "the app role cannot insert a folder for another tenant", %{user: u, vault: v} do
+      other = insert(:user)
+
+      assert {:raised, %Postgrex.Error{postgres: %{code: :insufficient_privilege}}} =
+               as_prod_role(fn ->
+                 Repo.with_tenant(u.id, fn ->
+                   Repo.query!(
+                     """
+                     INSERT INTO folders (vault_id, user_id, name_ciphertext, name_nonce, name_hmac, dek_version)
+                     VALUES ($1, $2, '\\x00', '\\x00', '\\x01', 2)
+                     """,
+                     [dump(v.id), dump(other.id)]
+                   )
+                 end)
+               end)
+    end
+
     test "a tenant sees only its own folders", %{user: u, vault: v} do
       mine = folder!(u, v, :crypto.strong_rand_bytes(32))
       other = insert(:user)

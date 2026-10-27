@@ -423,6 +423,8 @@ Worker uniqueness on `[:user_id]` collapses duplicate enqueues to the same job â
 
 `folders` (`Engram.Folders.Rows`) holds one encrypted segment name per folder (AAD `folders\0name\0<row id>`) plus `name_hmac` and `full_path_hmac` (equal to `notes.folder_hmac`). The rotation rewraps the names and recomputes both HMACs in one transaction per user (`sweep_folders/5`: the path HMAC needs the ancestors' plaintext, so it reads every folder of the user once). It runs BEFORE the notes sweep: rewriting a note's `folder_hmac` fires `notes_set_folder_ref`, which resolves the folder by the new `full_path_hmac`; folders left on the old hash would null every `folder_ref_id`. Not touched by the other sweeps, with reasons: master-key rotation and provider migration rewrap only `users.encrypted_dek`; `ReencodeEnvelopes` handles compressible columns only (folder names are not in its policy); `AadRebind` handles legacy rows (`dek_version` 1) and a folder row is never written legacy; the account export writes note content only; vault purge and account delete remove folder rows by the `vault_id` cascade (notes and attachments are deleted first, so the `ON DELETE SET NULL` lookups, served by the vault-leading indexes, find nothing).
 
+A mid-rotation crash is an operator restore, not a rerun. Every `rotate_user` call mints a NEW DEK, so rows a crashed run already rewrapped (folder rows commit first, in one transaction, then notes, vaults, attachments and the rest) sit under a key that was never stored in `users.encrypted_dek`; a rerun opens neither key on them and raises `both_deks_failed`. The "resume is best-effort" note below holds only for rows the crashed run did not reach. Recovery is a database snapshot taken before the rotation. (Persisting the new wrapped DEK before the sweeps would make a rerun possible; not done.)
+
 ### Expected duration
 
 - 1k notes: ~10s
@@ -443,7 +445,7 @@ Both must hold:
 - `dek_version` advanced by exactly 1 from the pre-rotation snapshot.
 - `dek_rotation_locked_at` is NULL.
 
-If `dek_version` did not advance OR `dek_rotation_locked_at` is still set, rotation failed mid-flight. Inspect Logger.error output (category `:crypto`) for the failing phase, fix the underlying cause, then re-run the same command. Resume is best-effort: the sweep loops use decrypt-as-discriminator (try old DEK, fall through to new DEK), so any rows already rotated by the failed run are tolerated on the retry; remaining rows finish under the new DEK.
+If `dek_version` did not advance OR `dek_rotation_locked_at` is still set, rotation failed mid-flight. Inspect Logger.error output (category `:crypto`) for the failing phase, fix the underlying cause. Do NOT assume a re-run resumes: each run generates a fresh DEK, so rows a failed run already rewrapped are under a key that was never stored and the re-run raises on them (see "Folder rows" above). The decrypt-as-discriminator only tolerates rows rotated under the SAME new DEK; recovery from a crash after the first sweep is a restore from the pre-rotation snapshot.
 
 ### Rollback
 

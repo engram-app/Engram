@@ -311,6 +311,7 @@ defmodule Engram.Folders.Rows do
         |> Enum.map(&path_hmac(fk, &1))
         |> then(&subtree_query(vault_id, &1))
         |> Repo.all()
+        |> Enum.uniq_by(& &1.id)
 
       {:error, _} ->
         []
@@ -330,6 +331,7 @@ defmodule Engram.Folders.Rows do
           select: %{id: f.id, full_path_hmac: f.full_path_hmac}
         )
         |> Repo.all()
+        |> Enum.uniq_by(& &1.id)
 
       {:error, _} ->
         []
@@ -356,6 +358,10 @@ defmodule Engram.Folders.Rows do
 
   defp subtree_query(_vault_id, []), do: from(f in Folder, where: false)
 
+  # A cycle in `parent_id` (never written by this module, but a bad row from any
+  # path must not pin a connection in an endless recursion) is cut at this depth.
+  @max_depth 512
+
   defp subtree_query(vault_id, root_hmacs) do
     roots =
       from(f in Folder,
@@ -368,7 +374,7 @@ defmodule Engram.Folders.Rows do
       from(f in Folder,
         join: t in "folder_subtree",
         on: f.parent_id == t.id,
-        where: f.vault_id == ^vault_id and is_nil(f.deleted_at),
+        where: f.vault_id == ^vault_id and is_nil(f.deleted_at) and t.depth < @max_depth,
         select: %{id: f.id, depth: fragment("? + 1", t.depth)}
       )
 
@@ -401,7 +407,25 @@ defmodule Engram.Folders.Rows do
   @spec rename(map(), Ecto.UUID.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def rename(_user, _vault_id, same, same), do: :ok
 
+  def rename(_user, _vault_id, old_folder, new_folder)
+      when old_folder == "" or new_folder == "",
+      do: {:error, :invalid_path}
+
   def rename(user, vault_id, old_folder, new_folder) do
+    if into_own_subtree?(old_folder, new_folder),
+      do: {:error, :invalid_path},
+      else: do_rename(user, vault_id, old_folder, new_folder)
+  end
+
+  @doc """
+  True when `new_folder` is `old_folder` or inside it: a move that would make a
+  folder its own ancestor. Every folder move checks this before touching a row.
+  """
+  @spec into_own_subtree?(String.t(), String.t()) :: boolean()
+  def into_own_subtree?(old_folder, new_folder),
+    do: new_folder == old_folder or String.starts_with?(new_folder, old_folder <> "/")
+
+  defp do_rename(user, vault_id, old_folder, new_folder) do
     with {:ok, dek} <- Crypto.get_dek(user),
          {:ok, fk} <- Crypto.dek_filter_key(user) do
       ctx = %{user_id: user.id, vault_id: vault_id, dek: dek, fk: fk}
@@ -557,23 +581,62 @@ defmodule Engram.Folders.Rows do
   @doc """
   Soft-deletes the live rows at `folders` and every descendant, stamping
   `op_id` (the undo id, nil for a plain delete). Returns how many rows.
+
+  A row that still has a live note or attachment pointing at it, and every
+  ancestor of such a row, is left alone: the delete's content legs commit in
+  their own transactions, so something written into the folder in between must
+  not end up attached to a deleted row. The next delete of the folder finishes it.
   """
   @spec soft_delete(map(), Ecto.UUID.t(), [String.t()], Ecto.UUID.t() | nil) :: non_neg_integer()
   def soft_delete(user, vault_id, folders, op_id) do
-    case subtree_refs(user, vault_id, folders) do
+    case subtree(user, vault_id, folders) do
       [] ->
         0
 
-      refs ->
-        ids = Enum.map(refs, & &1.id)
+      rows ->
+        ids = Enum.map(rows, & &1.id)
+        keep = with_ancestors(live_content_folders(ids), Map.new(rows, &{&1.id, &1.parent_id}))
+        doomed = Enum.reject(ids, &MapSet.member?(keep, &1))
 
         {n, _} =
-          from(f in Folder, where: f.id in ^ids and is_nil(f.deleted_at))
+          from(f in Folder, where: f.id in ^doomed and is_nil(f.deleted_at))
           |> Repo.update_all(
             set: [deleted_at: now(), delete_op_id: op_id, explicit: false, updated_at: now()]
           )
 
         n
+    end
+  end
+
+  # Folder ids (among `ids`) that a live note or attachment points at.
+  defp live_content_folders(ids) do
+    notes =
+      from(n in Engram.Notes.Note,
+        where: n.kind == "note" and n.folder_ref_id in ^ids and is_nil(n.deleted_at),
+        distinct: true,
+        select: n.folder_ref_id
+      )
+
+    attachments =
+      from(a in Engram.Attachments.Attachment,
+        where: a.folder_ref_id in ^ids and is_nil(a.deleted_at),
+        distinct: true,
+        select: a.folder_ref_id
+      )
+
+    MapSet.new(Repo.all(notes) ++ Repo.all(attachments))
+  end
+
+  defp with_ancestors(set, parents) do
+    Enum.reduce(set, set, fn id, acc -> climb(id, parents, acc, @max_depth) end)
+  end
+
+  defp climb(_id, _parents, acc, 0), do: acc
+
+  defp climb(id, parents, acc, budget) do
+    case Map.get(parents, id) do
+      nil -> acc
+      parent -> climb(parent, parents, MapSet.put(acc, parent), budget - 1)
     end
   end
 

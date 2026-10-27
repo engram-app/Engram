@@ -55,8 +55,11 @@ defmodule Engram.DataMigrations.FolderTable do
   require Logger
 
   @batch 1_000
-  # Pages per user per pass: a pass is one bounded slice; the next run takes the rest.
-  @max_batches 50
+  # Wall-clock budget for one user's attachment walk. The walk is keyset-paged
+  # and restarts from the first id every pass; unchanged rows cost a decrypt and
+  # nothing else, so this is far above the largest vault (34k paths decrypt in
+  # seconds) and only bounds a pathological one.
+  @attachment_budget_ms 20 * 60 * 1000
 
   @impl true
   def name, do: "folder_table"
@@ -76,6 +79,8 @@ defmodule Engram.DataMigrations.FolderTable do
 
   # Rows written this close to a verification may have been written by a task
   # still running the previous release while the pass was reading them.
+  # Must stay above the longest a pass can run: the attachment walk budget
+  # (20 min) and the runner job's own timeout (30 min).
   @verify_margin_s 3_600
 
   @doc """
@@ -109,31 +114,33 @@ defmodule Engram.DataMigrations.FolderTable do
   # restricts the pass to those users (tests prove the others are untouched).
   def run_pass(opts) do
     batch = Keyword.get(opts, :batch, @batch)
+    budget = Keyword.get(opts, :attachment_budget_ms, @attachment_budget_ms)
 
     stats =
       Keyword.get_lazy(opts, :user_ids, &TenantScan.user_ids/0)
-      |> Enum.map(&safe_migrate_user(&1, batch))
-      |> Enum.reduce(%{changed: 0, blocked: 0}, fn s, acc ->
-        %{changed: acc.changed + s.changed, blocked: acc.blocked + s.blocked}
-      end)
+      |> Enum.map(&safe_migrate_user(&1, batch, budget))
+      |> Enum.reduce(zero(), &add/2)
 
-    if stats.changed + stats.blocked == 0,
+    if stats.changed + stats.blocked + stats.more == 0,
       do: :done,
       else: {:more, rows: stats.changed, blocked: stats.blocked}
   end
 
   # ---- per user ------------------------------------------------------------
 
+  defp zero, do: %{changed: 0, blocked: 0, more: 0}
+  defp add(a, b), do: Map.merge(a, b, fn _key, x, y -> x + y end)
+
   # One user raising (a unique violation, a decrypt crash, a transaction
   # timeout) must not stop the users after it, on every pass: it is logged and
   # counted as blocked, which keeps the ledger open. Its steps are separate
   # transactions, so what it already wrote stays and the next pass resumes.
-  defp safe_migrate_user(user_id, batch) do
-    migrate_user(user_id, batch)
+  defp safe_migrate_user(user_id, batch, budget) do
+    migrate_user(user_id, batch, budget)
   rescue
     # Deferred, not failed: the rotation ends in minutes and the next pass
     # (the ledger stays open through `blocked`) finds the user unlocked.
-    RotationInProgressError -> %{changed: 0, blocked: 1}
+    RotationInProgressError -> %{zero() | blocked: 1}
     e -> user_failed(user_id, e)
   catch
     :exit, reason -> user_failed(user_id, reason)
@@ -148,10 +155,10 @@ defmodule Engram.DataMigrations.FolderTable do
       )
     )
 
-    %{changed: 0, blocked: 1}
+    %{zero() | blocked: 1}
   end
 
-  defp migrate_user(user_id, batch) do
+  defp migrate_user(user_id, batch, budget) do
     # Read the key's version BEFORE the key itself (`RotationGate.check/2`).
     dek_version = RotationGate.dek_version(user_id)
 
@@ -162,7 +169,8 @@ defmodule Engram.DataMigrations.FolderTable do
         dek: dek,
         dek_version: dek_version,
         fk: Crypto.dek_filter_key_from_bytes(dek),
-        batch: batch
+        batch: batch,
+        deadline: System.monotonic_time(:millisecond) + budget
       }
 
       tree = scope(ctx, &load_tree(&1, ctx))
@@ -171,16 +179,14 @@ defmodule Engram.DataMigrations.FolderTable do
       {tree, notes} = notes(ctx, tree)
       {_tree, attachments} = attachments(ctx, tree)
 
-      Enum.reduce([markers, notes, attachments], %{changed: 0, blocked: 0}, fn s, acc ->
-        %{changed: acc.changed + s.changed, blocked: acc.blocked + s.blocked}
-      end)
+      Enum.reduce([markers, notes, attachments], zero(), &add(&2, &1))
     else
       # No DEK, no encrypted rows.
       {:error, :no_dek} ->
-        %{changed: 0, blocked: 0}
+        zero()
 
       nil ->
-        %{changed: 0, blocked: 0}
+        zero()
 
       {:error, reason} ->
         Logger.error(
@@ -191,7 +197,7 @@ defmodule Engram.DataMigrations.FolderTable do
           )
         )
 
-        %{changed: 0, blocked: 1}
+        %{zero() | blocked: 1}
     end
   end
 
@@ -302,8 +308,24 @@ defmodule Engram.DataMigrations.FolderTable do
           tree = %{tree | by_key: Map.delete(tree.by_key, tree.by_id[id])}
           {id, {put(tree, key, id, full), bump(stats)}}
         else
-          insert_row(repo, ctx, row, explicit?)
-          {id, {put(tree, key, id, full), bump(stats)}}
+          case insert_row(repo, ctx, row, explicit?) do
+            1 ->
+              {id, {put(tree, key, id, full), bump(stats)}}
+
+            # A writer made the same folder after the tree was read, or the
+            # marker's UUID names a tombstoned row: read the winner, or revive
+            # that row here, instead of failing the user's whole pass.
+            0 ->
+              case live_row(repo, vault, parent, name_hmac) do
+                [found, found_full] ->
+                  tree = put(tree, key, found, found_full)
+                  ensure_one(repo, ctx, {tree, stats}, vault, parent, segment, full_path, leaf)
+
+                nil ->
+                  update_row(repo, ctx, row, true)
+                  {id, {put(tree, key, id, full), bump(stats)}}
+              end
+          end
         end
 
       %{id: id, full: ^full} when not explicit? ->
@@ -325,28 +347,47 @@ defmodule Engram.DataMigrations.FolderTable do
     end
   end
 
+  defp live_row(repo, vault, parent, name_hmac) do
+    case repo.query!(
+           """
+           SELECT id, full_path_hmac FROM folders
+           WHERE vault_id = $1 AND name_hmac = $2 AND deleted_at IS NULL
+             AND parent_id IS NOT DISTINCT FROM $3::uuid
+           """,
+           [vault, name_hmac, parent]
+         ) do
+      %{rows: [row | _]} -> row
+      _ -> nil
+    end
+  end
+
+  # Rows inserted (0 when a live folder of that name, or that id, exists).
   defp insert_row(repo, ctx, row, explicit?) do
     {ct, nonce} = encrypt_name(ctx, row.id, row.segment)
 
-    repo.query!(
-      """
-      INSERT INTO folders (id, vault_id, user_id, parent_id, name_ciphertext, name_nonce,
-                           name_hmac, full_path_hmac, dek_version, explicit)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-      """,
-      [
-        row.id,
-        row.vault,
-        dump(ctx.user_id),
-        row.parent,
-        ct,
-        nonce,
-        row.name_hmac,
-        row.full,
-        Crypto.row_version_aad_bound(),
-        explicit?
-      ]
-    )
+    %{num_rows: n} =
+      repo.query!(
+        """
+        INSERT INTO folders (id, vault_id, user_id, parent_id, name_ciphertext, name_nonce,
+                             name_hmac, full_path_hmac, dek_version, explicit)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT DO NOTHING
+        """,
+        [
+          row.id,
+          row.vault,
+          dump(ctx.user_id),
+          row.parent,
+          ct,
+          nonce,
+          row.name_hmac,
+          row.full,
+          Crypto.row_version_aad_bound(),
+          explicit?
+        ]
+      )
+
+    n
   end
 
   defp update_row(repo, ctx, row, explicit?) do
@@ -355,7 +396,8 @@ defmodule Engram.DataMigrations.FolderTable do
     repo.query!(
       """
       UPDATE folders SET parent_id = $2, name_ciphertext = $3, name_nonce = $4, name_hmac = $5,
-             full_path_hmac = $6, dek_version = $7, explicit = explicit OR $8, updated_at = now()
+             full_path_hmac = $6, dek_version = $7, explicit = explicit OR $8, updated_at = now(),
+             deleted_at = NULL, delete_op_id = NULL
       WHERE id = $1 AND vault_id = $9 AND user_id = $10
       """,
       [
@@ -393,9 +435,7 @@ defmodule Engram.DataMigrations.FolderTable do
       end)
 
     {_, state} =
-      in_chunks(ctx, rows, {tree, %{changed: 0, blocked: 0}}, fn repo,
-                                                                 [id, vault, dv, ct, nonce],
-                                                                 {tree, stats} ->
+      in_chunks(ctx, rows, {tree, zero()}, fn repo, [id, vault, dv, ct, nonce], {tree, stats} ->
         case decrypt_folder(ctx, id, dv, ct, nonce) do
           {:ok, ""} ->
             {[], {tree, stats}}
@@ -448,7 +488,7 @@ defmodule Engram.DataMigrations.FolderTable do
         )
       end)
 
-    stats = %{changed: 0, blocked: 0}
+    stats = zero()
 
     {folders, stats} =
       Enum.reduce(rows, {[], stats}, fn [vault, hmac, id, dv, ct, nonce], {acc, stats} ->
@@ -514,12 +554,18 @@ defmodule Engram.DataMigrations.FolderTable do
 
   # ---- 3. attachments ------------------------------------------------------
 
-  defp attachments(ctx, tree, after_id \\ nil, stats \\ %{changed: 0, blocked: 0}, rounds \\ 0)
+  defp attachments(ctx, tree, after_id \\ nil, stats \\ zero())
 
-  defp attachments(_ctx, tree, _after, stats, @max_batches),
-    do: {tree, %{stats | blocked: stats.blocked + 1}}
+  # Out of time: not a failure, the next pass walks again (`more`, not `blocked`).
+  defp attachments(%{deadline: deadline} = ctx, tree, after_id, stats) when after_id != nil do
+    if System.monotonic_time(:millisecond) > deadline,
+      do: {tree, %{stats | more: stats.more + 1}},
+      else: attachment_page(ctx, tree, after_id, stats)
+  end
 
-  defp attachments(ctx, tree, after_id, stats, rounds) do
+  defp attachments(ctx, tree, after_id, stats), do: attachment_page(ctx, tree, after_id, stats)
+
+  defp attachment_page(ctx, tree, after_id, stats) do
     {tree, stats, last, size} =
       scope(ctx, fn repo ->
         %{rows: rows} =
@@ -560,7 +606,7 @@ defmodule Engram.DataMigrations.FolderTable do
 
     if size < ctx.batch,
       do: {tree, stats},
-      else: attachments(ctx, tree, last, stats, rounds + 1)
+      else: attachments(ctx, tree, last, stats)
   end
 
   # By id, locked rows skipped. Returns the rows updated.
