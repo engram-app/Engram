@@ -30,7 +30,7 @@ defmodule Engram.Workers.CheckpointNote do
   alias Engram.{Accounts, Crypto, Repo}
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence, CrdtRegistry, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence, CrdtRegistry, Note, NoteBody}
 
   require Logger
 
@@ -145,7 +145,7 @@ defmodule Engram.Workers.CheckpointNote do
 
         {:ok, {has_state?, applied_ids}} =
           Repo.with_tenant(user_id, fn ->
-            case Repo.get(Note, note_id) do
+            case NoteBody.get(note_id) do
               nil ->
                 {false, []}
 

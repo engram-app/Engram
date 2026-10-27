@@ -34,6 +34,7 @@ defmodule Engram.Insights.Snapshot do
   alias Engram.Insights.VaultDailyMetric
   alias Engram.Links.NoteLink
   alias Engram.Notes.Note
+  alias Engram.Notes.NoteBody
   alias Engram.Repo
   alias Engram.Vaults.Vault
 
@@ -354,12 +355,10 @@ defmodule Engram.Insights.Snapshot do
       from(n in Note,
         where: n.vault_id in ^ids and is_nil(n.deleted_at) and n.kind == "note",
         group_by: n.vault_id,
-        select: %{
-          vault_id: n.vault_id,
-          n: count(n.id),
-          bytes: sum(fragment("octet_length(?)", n.content_ciphertext))
-        }
+        select: %{vault_id: n.vault_id, n: count(n.id)}
       )
+      |> NoteBody.join()
+      |> select_merge(^%{bytes: dynamic([n], sum(^NoteBody.byte_length(:content)))})
 
     # Derived folders and empty-folder markers alike.
     folders =

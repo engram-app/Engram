@@ -268,7 +268,9 @@ defmodule Engram.Workers.RewriteNoteLinks do
             # notes_path_tomb (vault_id, path_id, seq): a backward probe.
             where: ^Engram.Notes.Keys.eq(:path, old_path_hmac),
             order_by: [desc: n.seq],
-            limit: 1
+            limit: 1,
+            # The path only: never the body.
+            select: struct(n, ^Note.path_fields())
           )
         )
       end)

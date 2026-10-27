@@ -365,6 +365,22 @@ defmodule Engram.Fixtures do
   end
 
   @doc """
+  Copies a note's `notes` body columns into its `note_bodies` row, merged as
+  the `notes_sync_body` trigger stores them. Readers take the body from
+  `note_bodies`, and the trigger skips a write whose nonce did not change, so
+  a test that tampers with a `notes` ciphertext at rest calls this to put the
+  tampered bytes where they are read.
+  """
+  def mirror_body!(note_id) do
+    id = Ecto.UUID.dump!(note_id)
+    # The trigger's own copy: with no body row, a write listing `kind`
+    # re-inserts it from the notes columns (what `NoteSplit` does).
+    Engram.Repo.query!("DELETE FROM note_bodies WHERE note_id = $1", [id])
+    Engram.Repo.query!("UPDATE notes SET kind = kind WHERE id = $1", [id])
+    :ok
+  end
+
+  @doc """
   Inserts an active subscription for a user.
 
   Accepts optional attribute overrides (status, tier, etc.).

@@ -45,8 +45,7 @@ defmodule Engram.Notes.ChunkPointsRlsTest do
           position: 0,
           char_start: 0,
           char_end: 1,
-          qdrant_point_id: id,
-          created_at: DateTime.utc_now(:second)
+          qdrant_point_id: id
         }
       ],
       skip_tenant_check: true
@@ -144,8 +143,7 @@ defmodule Engram.Notes.ChunkPointsRlsTest do
           position: 0,
           char_start: 0,
           char_end: 1,
-          qdrant_point_id: id,
-          created_at: DateTime.utc_now(:second)
+          qdrant_point_id: id
         }
       ],
       skip_tenant_check: true

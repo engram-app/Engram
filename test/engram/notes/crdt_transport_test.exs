@@ -6,6 +6,12 @@ defmodule Engram.Notes.CrdtTransportTest do
   alias Engram.Notes
   alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtTransport, CrdtUpdateLog, Note}
 
+  # Heads are the url-safe base64 of a 32-byte digest (43 chars): readers
+  # take them from `note_bodies`, which stores the digest, so a test head
+  # must be one.
+  @head_x String.duplicate("A", 42) <> "E"
+  @head_manual String.duplicate("A", 42) <> "I"
+
   setup do
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
@@ -558,9 +564,9 @@ defmodule Engram.Notes.CrdtTransportTest do
       append_tail_row(user, vault, note.id)
       wm = CrdtTransport.tail_watermark(user, note.id)
 
-      assert {:ok, {1, nil}} = CrdtTransport.store_head_if_unchanged(user, note.id, "HEADX", wm)
+      assert {:ok, {1, nil}} = CrdtTransport.store_head_if_unchanged(user, note.id, @head_x, wm)
       {:ok, reloaded} = Notes.get_note_by_id(user, vault, note.id)
-      assert reloaded.crdt_head == "HEADX"
+      assert reloaded.crdt_head == @head_x
     end
 
     test "store_head_if_unchanged does NOT persist when the tail advanced under it (CAS reject)",
@@ -637,11 +643,11 @@ defmodule Engram.Notes.CrdtTransportTest do
       {:ok, {1, nil}} =
         Repo.with_tenant(user.id, fn ->
           from(n in Note, where: n.id == ^note.id)
-          |> Repo.update_all(set: [crdt_head: "MANUAL"])
+          |> Repo.update_all(set: [crdt_head: @head_manual])
         end)
 
       {:ok, reloaded} = Notes.get_note_by_id(user, vault, note.id)
-      assert reloaded.crdt_head == "MANUAL", "trigger must not fire on a crdt_head-only write"
+      assert reloaded.crdt_head == @head_manual, "trigger must not fire on a crdt_head-only write"
     end
   end
 

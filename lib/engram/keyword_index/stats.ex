@@ -1,8 +1,10 @@
 defmodule Engram.KeywordIndex.Stats do
   @moduledoc """
   Per-vault `avgdl` (average chunk token length) for BM25 length normalization
-  (#595). Computed from `chunks.token_count` — always reflects current vault
-  state, no counter bookkeeping. Used at index time only: a note's stored
+  (#595). The SUM of the vault's per-note counters on `note_index_state`
+  (`len_sum` / `len_rows`, one index range on `note_index_state_vault`)
+  once every note is counted (`DataMigrations.NoteIndexState.counted?/0`), else the `avg`
+  over its `chunks`. Used at index time only: a note's stored
   sparse weights re-normalize to a drifted avgdl on that note's next re-encode,
   and nothing re-normalizes the rest.
 
@@ -17,6 +19,7 @@ defmodule Engram.KeywordIndex.Stats do
 
   alias Engram.Cache
   alias Engram.Notes.Chunk
+  alias Engram.Notes.NoteIndexState
   alias Engram.Repo
 
   @default_avgdl 100.0
@@ -47,10 +50,18 @@ defmodule Engram.KeywordIndex.Stats do
   # writes"), which is what left this read unscoped.
   defp compute_avgdl(user_id, vault_id) do
     Repo.with_tenant!(user_id, fn ->
-      Chunk
-      |> where([c], c.vault_id == ^vault_id and not is_nil(c.token_count))
-      |> select([c], avg(c.token_count))
-      |> Repo.one()
+      if Engram.DataMigrations.NoteIndexState.counted?() do
+        from(s in NoteIndexState,
+          where: s.vault_id == ^vault_id,
+          select: fragment("sum(?)::float8 / nullif(sum(?), 0)", s.len_sum, s.len_rows)
+        )
+        |> Repo.one()
+      else
+        Chunk
+        |> where([c], c.vault_id == ^vault_id and not is_nil(c.token_count))
+        |> select([c], avg(c.token_count))
+        |> Repo.one()
+      end
     end)
     |> case do
       nil -> @default_avgdl

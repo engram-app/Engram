@@ -1403,6 +1403,8 @@ defmodule EngramWeb.CrdtChannelTest do
         |> Repo.update_all(set: [crdt_state_ciphertext: :crypto.strong_rand_bytes(64)])
       end)
 
+      Engram.Fixtures.mirror_body!(note.id)
+
       ref = push(socket, "crdt_doc_state", %{"doc_id" => note.id})
       assert_reply ref, :error, reply
       # Never echo the raw failure — it can embed a wrapped DEK or provider body.

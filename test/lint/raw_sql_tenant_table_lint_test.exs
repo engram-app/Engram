@@ -55,6 +55,17 @@ defmodule Engram.RawSqlTenantTableLintTest do
     # Lives in its own file (moved out of notes.ex) so notes.ex needs no
     # exemption at all.
     "engram/notes/bulk_rename.ex",
+    # Indexing.ChunkRows.update!/2: a note's changed chunk rows in one
+    # `UPDATE chunks ... FROM unnest(...)`, each row its own values. Runs
+    # inside commit_index's `Repo.with_tenant/2` transaction, so RLS tenant
+    # context is active; its own file so indexing.ex needs no exemption.
+    "engram/indexing/chunk_rows.ex",
+    # DataMigrations.NoteIndexState: the backfill calls the trigger's SQL
+    # function with a whole `notes` row (`note_index_state_sync(n, false)`),
+    # which Ecto cannot pass. Per tenant inside `Repo.with_tenant/2`, or on
+    # `Repo.maintenance()` (maintenance_all), never cross-tenant on the app
+    # pool, the same discovery NoteSplit uses.
+    "engram/data_migrations/note_index_state.ex",
     # CrdtBloatSweep.measure/0 — one whole-table aggregate over `notes`
     # computing size percentiles for the history/trash epic (#1706). Genuinely
     # cross-tenant by design: the question is "how much is CRDT state costing

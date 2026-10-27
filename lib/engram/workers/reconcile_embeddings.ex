@@ -168,12 +168,23 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         #
         # And a too-long park (keyword-only, `EmbedNote.parked_until_edited/0`)
         # ends when the content changes, not on a clock.
+        #
+        # And a budget park on an old index version, whoever owns it (#2197):
+        # left to wait, a Free note stays on the old layout until its bucket
+        # refills or it is edited (1,101 notes of 5 Free users in the v5
+        # rollout). EmbedNote rebuilds it without spending the bucket and
+        # keeps it parked. Only the park's own sentinel lets it through, so
+        # the #897 backoff stamped below still holds after a crash.
         |> where(
-          [n],
-          is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now or
-            (n.embed_budget_parked == true and exists(paid)) or
-            (n.embed_retry_after == ^EmbedNote.parked_until_edited() and
-               n.embed_hash != n.content_hash)
+          ^dynamic(
+            [n],
+            is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now or
+              (n.embed_budget_parked == true and exists(paid)) or
+              (n.embed_retry_after == ^EmbedNote.parked_until_edited() and
+                 n.embed_hash != n.content_hash) or
+              (n.embed_budget_parked == true and
+                 n.embed_retry_after == ^EmbedNote.parked_until_edited() and ^version_stale)
+          )
         )
         |> order_by([n], asc: n.updated_at)
         |> limit(^remaining)
@@ -219,9 +230,25 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         })
         # Clears the budget-park flag with it: the #897 backoff must hold for
         # this note even for a paying user, or a crash mid-embed re-selects it
-        # every tick.
-        |> repo.update_all(set: [embed_retry_after: backoff_until, embed_budget_parked: nil])
+        # every tick. Except a Free park let through only for its version
+        # (#2197, content unchanged): it keeps its flag, so it stays in the
+        # queue; the backoff stamp alone keeps the version arm from
+        # re-selecting it. A paid owner's park is cleared just below.
+        |> update([n],
+          set: [
+            embed_retry_after: ^backoff_until,
+            embed_budget_parked:
+              fragment(
+                "CASE WHEN ? IS DISTINCT FROM ? THEN NULL ELSE ? END",
+                n.embed_hash,
+                n.content_hash,
+                n.embed_budget_parked
+              )
+          ]
+        )
+        |> repo.update_all([])
 
+      :ok = clear_paid_parks(repo, rows)
       rows
     end
 
@@ -255,6 +282,24 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     :ok = wake_budget_parked(backoff_until)
     :ok = maybe_dry_run()
     if versions_done, do: :ok, else: sweep_keyword_stale(now, paid, page_size, versions)
+  end
+
+  # `exists/1` is not allowed in an UPDATE's SET, so the sweep's stamp
+  # keeps every content-current park and a paid owner's are cleared here:
+  # a statement only when there are any.
+  defp clear_paid_parks(repo, rows) do
+    case for %{paid: true, id: id} <- rows, do: id do
+      [] ->
+        :ok
+
+      ids ->
+        {_, _} =
+          repo.update_all(from(n in Note, where: n.kind == "note" and n.id in ^ids),
+            set: [embed_budget_parked: nil]
+          )
+
+        :ok
+    end
   end
 
   # `dry_run` plans the pass instead of running it: the dry run coordinator
@@ -549,7 +594,13 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     tick = div(DateTime.to_unix(now), 300)
     per_user = fn query -> Repo.cross_tenant(fn -> repo.all(query) end) end
 
-    counts = per_user.(from(c in Chunk, group_by: c.user_id, select: {c.user_id, count()}))
+    # The per-note counters summed per user (`Indexing.points_by_user/0`),
+    # not a GROUP BY over every chunk row; users with no points have
+    # nothing to budget.
+    counts =
+      Indexing.points_by_user()
+      |> per_user.()
+      |> Enum.reject(fn {_id, points} -> points == 0 end)
 
     # A floor note's promotion cost, and a merged note's natural chunk count
     # (`chunk_count` is set on a full-tier note only when it merged): the
@@ -659,12 +710,15 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       jobs = budget_jobs(user.id, now)
       pending = for j <- jobs, j.pending, not j.shrink, into: %{}, do: {j.note_id, j.points}
 
-      # `Indexing.points_budget_ok?/3`'s count (every chunk row), with each note at what it will
+      # The user's real chunk count (`exact: true`, not the per-note
+      # counters: one drifted too high would demote on phantom points and
+      # drop dense vectors; only users this sweep acts on pay the count),
+      # with each note at what it will
       # hold: a floor note its floor points (one per MiB, `floor_points/1`), a
       # full note at most its per-note cap,
       # and a queued promotion at its estimate.
       projected =
-        Enum.reduce(notes, Repo.aggregate(Chunk, :count), fn n, acc ->
+        Enum.reduce(notes, Indexing.point_count(user.id, exact: true), fn n, acc ->
           cond do
             floored?(n) -> acc
             n.tier != nil -> acc - max(n.rows - Indexing.floor_points(n.span), 0)

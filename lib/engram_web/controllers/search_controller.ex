@@ -167,10 +167,17 @@ defmodule EngramWeb.SearchController do
   # Qdrant returns `vault_id` on every hit and `collapse_to_notes` keys on it,
   # so the correct vault is already in hand. One query per distinct vault on the
   # page — exactly one for a single-vault search, as before.
+  #
+  # Rehydration already read each hit's note row, so a result normally
+  # carries its `note_id` and costs no lookup; only results without one (a
+  # payload-only hit) are resolved here.
   defp note_ids_by_vault(_user, []), do: %{}
 
   defp note_ids_by_vault(user, results) do
-    results
+    {known, unknown} = Enum.split_with(results, &is_binary(Map.get(&1, :note_id)))
+    ids = Map.new(known, &{{&1.vault_id, &1.source_path}, &1.note_id})
+
+    unknown
     |> Enum.group_by(& &1.vault_id, & &1.source_path)
     |> Enum.reject(fn {vault_id, _paths} -> is_nil(vault_id) end)
     |> Enum.flat_map(fn {vault_id, paths} ->
@@ -180,6 +187,7 @@ defmodule EngramWeb.SearchController do
       |> Enum.map(fn {path, id} -> {{vault_id, path}, id} end)
     end)
     |> Map.new()
+    |> Map.merge(ids)
   end
 
   defp derive_folder(path) do

@@ -27,7 +27,8 @@ defmodule Engram.Notes.Chunk do
     belongs_to :user, Engram.Accounts.User
     belongs_to :vault, Engram.Vaults.Vault
 
-    timestamps(type: :utc_datetime, inserted_at: :created_at, updated_at: false)
+    # No `created_at`: nothing reads it. Unwritten since 20261026000300
+    # made it nullable; the contract release drops the column.
   end
 
   def changeset(chunk, attrs) do

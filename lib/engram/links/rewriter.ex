@@ -62,7 +62,8 @@ defmodule Engram.Links.Rewriter do
     CrdtRegistry,
     CrdtUpdateLog,
     Enqueue,
-    Note
+    Note,
+    NoteBody
   }
 
   alias Yex.Sync.SharedDoc
@@ -227,7 +228,9 @@ defmodule Engram.Links.Rewriter do
           from(n in Note,
             where:
               n.id == ^id and n.user_id == ^user.id and n.vault_id == ^vault.id and
-                n.kind == "note" and is_nil(n.deleted_at)
+                n.kind == "note" and is_nil(n.deleted_at),
+            # The path only: never the body.
+            select: struct(n, ^Note.path_fields())
           )
         )
       end)
@@ -376,7 +379,7 @@ defmodule Engram.Links.Rewriter do
 
     {:ok, result} =
       Repo.with_tenant(user.id, fn ->
-        case Repo.get(Note, note_id) do
+        case NoteBody.get(note_id) do
           nil ->
             :skip
 

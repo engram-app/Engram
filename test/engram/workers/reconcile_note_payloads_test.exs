@@ -305,6 +305,8 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
         skip_tenant_check: true
       )
 
+    Engram.Fixtures.mirror_body!(ctx.stale.id)
+
     assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
     assert reload(ctx.stale).payload_hash == ReconcileNotePayloads.undecryptable_stamp()
   end
@@ -322,6 +324,8 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
         [set: [content_ciphertext: :crypto.strong_rand_bytes(48)]],
         skip_tenant_check: true
       )
+
+    Engram.Fixtures.mirror_body!(ctx.stale.id)
 
     ref =
       :telemetry_test.attach_event_handlers(self(), [[:engram, :indexing, :payload_reconcile]])

@@ -194,6 +194,24 @@ defmodule Engram.Notes.Note do
     :resource_nonce
   ]
 
+  @doc """
+  The columns a read that only shows a note's path selects: its keys, the
+  AAD inputs, and the path and folder envelopes (`Crypto` decrypts the two
+  together). Never the body.
+  """
+  def path_fields,
+    do: [
+      :id,
+      :kind,
+      :user_id,
+      :vault_id,
+      :dek_version,
+      :path_ciphertext,
+      :path_nonce,
+      :folder_ciphertext,
+      :folder_nonce
+    ]
+
   def changeset(note, attrs) do
     note
     |> cast(

@@ -31,6 +31,7 @@ defmodule Engram.Workers.CleanupVault do
   alias Engram.Accounts.ApiKey
   alias Engram.Attachments.Attachment
   alias Engram.Attachments.Upload
+  alias Engram.Indexing.ChunkRows
   alias Engram.Logger.Metadata
   alias Engram.Notes.{Chunk, Note}
   alias Engram.Permissions
@@ -206,7 +207,15 @@ defmodule Engram.Workers.CleanupVault do
     # instead of the remaining batches (and the final vault delete) wiping a
     # vault the user has taken back and may be syncing into.
     with :ok <- mark_purge_started(vault),
-         :ok <- delete_batches(vault, Chunk, [:id], fn _rows -> :ok end),
+         # Each batch locks the notes it empties before deleting their
+         # chunks and recounts them after (`ChunkRows` lock order), in its own
+         # transaction, so a restore landing mid-purge never keeps counters
+         # for chunks that are gone.
+         :ok <-
+           delete_batches(vault, Chunk, [:id, :note_id], fn rows ->
+             _ = rows |> Enum.map(& &1.note_id) |> Enum.uniq() |> ChunkRows.recount!()
+             :ok
+           end),
          :ok <-
            delete_batches(vault, Note, [:id, :kind, :deleted_at], &dec_live_notes(vault, &1)),
          :ok <-
@@ -415,6 +424,18 @@ defmodule Engram.Workers.CleanupVault do
     end
   end
 
+  # A chunk batch locks its notes first (`ChunkRows` lock order), and then
+  # deletes exactly the chunks it picked: the ids are fixed before the lock,
+  # so a chunk written meanwhile for an unlocked note is not in the batch.
+  defp lock_owners(Chunk, ids) do
+    picked = Repo.all(from(c in Chunk, where: c.id in subquery(ids), select: {c.id, c.note_id}))
+    :ok = picked |> Enum.map(&elem(&1, 1)) |> Enum.uniq() |> ChunkRows.lock_notes!()
+    ids = Enum.map(picked, &elem(&1, 0))
+    from(c in Chunk, where: c.id in ^ids, select: c.id)
+  end
+
+  defp lock_owners(_schema, ids), do: ids
+
   defp delete_batch(schema, vault_id, size, fields, in_txn) do
     ids =
       from(r in schema,
@@ -423,6 +444,8 @@ defmodule Engram.Workers.CleanupVault do
         limit: ^size,
         select: r.id
       )
+
+    ids = lock_owners(schema, ids)
 
     # A note's delete cascades into its op log, revisions and links, so a
     # batch costs more than its row count: allow it longer than the

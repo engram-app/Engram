@@ -30,6 +30,7 @@ defmodule Engram.Notes do
     Identity,
     Keys,
     Note,
+    NoteBody,
     OkfFields,
     PathSanitizer,
     Revisions,
@@ -63,8 +64,12 @@ defmodule Engram.Notes do
   # workers use the facade; the link worker's legacy path re-reads through
   # `authoritative_content/2`). Computed from the schema so a new column is
   # fed by default.
-  @note_fields_without_crdt Note.__schema__(:fields) --
-                              [:crdt_state_ciphertext, :crdt_state_nonce]
+  @note_fields_without_crdt NoteBody.without_crdt()
+
+  # Every column `notes` itself holds once the bodies are contracted away:
+  # what a read that never looks at content, CRDT state or head selects, so
+  # it neither joins `note_bodies` nor de-TOASTs anything.
+  @note_core_fields Note.__schema__(:fields) -- NoteBody.body_fields()
 
   # Every persisted Note column except content_ciphertext/content_nonce —
   # the metadata projection for reads that never serialize content (changes
@@ -226,7 +231,7 @@ defmodule Engram.Notes do
 
     with {:ok, dek} <- hits_dek(user, rows) do
       {chunks, notes} = Enum.unzip(rows)
-      decrypted = Crypto.decrypt_notes_batch(notes, user)
+      decrypted = decrypt_per_note(notes, user)
       ck = dek && Crypto.dek_content_hash_key_from_bytes(dek)
       derived = derived_chunks(user, Enum.zip(chunks, decrypted), ck)
 
@@ -239,6 +244,20 @@ defmodule Engram.Notes do
        end)
        |> tap(&emit_text_stale/1)}
     end
+  end
+
+  # Search rows are one per HIT, and the hits of a query cluster in a few
+  # notes (reranked / diversified searches fetch up to 4x the page). Decrypt
+  # each distinct note once and hand every hit its note's result.
+  defp decrypt_per_note(notes, user) do
+    unique = Enum.uniq_by(notes, & &1.id)
+
+    by_id =
+      unique
+      |> Enum.zip(Crypto.decrypt_notes_batch(unique, user))
+      |> Map.new(fn {n, r} -> {n.id, r} end)
+
+    Enum.map(notes, &Map.fetch!(by_id, &1.id))
   end
 
   # The DEK only when a row holds an envelope or a (keyed) checksum; a failed
@@ -278,20 +297,22 @@ defmodule Engram.Notes do
 
       {:ok, notes} =
         Repo.with_tenant(user.id, fn ->
-          Repo.all(
-            from(n in Note,
-              where: n.id in ^ids,
-              select:
-                {struct(n, [
-                   :id,
-                   :kind,
-                   :user_id,
-                   :dek_version,
-                   :content_ciphertext,
-                   :content_nonce
-                 ]), fragment("(SELECT count(*) FROM chunk_points p WHERE p.note_id = ?)", n.id)}
-            )
+          from(n in Note, where: n.id in ^ids)
+          |> NoteBody.select_map(
+            [:id, :kind, :user_id, :dek_version, :content_ciphertext, :content_nonce],
+            %{
+              points__:
+                dynamic(
+                  [n],
+                  fragment("(SELECT count(*) FROM chunk_points p WHERE p.note_id = ?)", n.id)
+                )
+            }
           )
+          |> Repo.all()
+          |> Enum.map(fn row ->
+            {note, %{points__: count}} = NoteBody.to_note(row, [:points__])
+            {note, count}
+          end)
         end)
 
       {structs, counts} = Enum.unzip(notes)
@@ -317,6 +338,7 @@ defmodule Engram.Notes do
   defp search_hit({:ok, note}, chunk, {dek, ck, derived}) do
     hit = %{
       vault_id: to_string(note.vault_id),
+      note_id: note.id,
       source_path: note.path,
       title: note.title,
       tags: note.tags || [],
@@ -1829,7 +1851,7 @@ defmodule Engram.Notes do
   # branching, which only needs the row-or-nil answer.
   defp classify_by_id(vault, id) do
     with {:ok, uuid} <- Ecto.UUID.cast(id),
-         %Note{} = row <- Repo.get(Note, uuid) do
+         %Note{} = row <- NoteBody.get(uuid) do
       case row do
         %Note{vault_id: vid, kind: "note", deleted_at: nil} = live when vid == vault.id ->
           {:live, live}
@@ -1934,7 +1956,7 @@ defmodule Engram.Notes do
   end
 
   defp genesis_relocate_live(live, user, vault, sanitized_path, folder, origin, recording) do
-    with {:ok, query} <- note_by_path_query(user, vault, sanitized_path) do
+    with {:ok, query} <- note_by_path_query(user, vault, sanitized_path, [:id]) do
       case Repo.one(query) do
         nil ->
           decrypted = decrypt_or_raise!(live, user)
@@ -2713,8 +2735,22 @@ defmodule Engram.Notes do
         type(^vault_id, Ecto.UUID)
       )
     )
-    |> lock("FOR NO KEY UPDATE")
+    |> locked_body_from_notes()
+    |> lock("FOR NO KEY UPDATE OF n0")
   end
+
+  # A row-locked read takes the body from the `notes` columns, not from
+  # `note_bodies`. When the read WAITS on the row lock, Postgres re-fetches
+  # only the locked relation at its newest version (EvalPlanQual, READ
+  # COMMITTED); a joined body row comes back as the statement first read it,
+  # so a fresh notes row would pair with a stale body and the write behind it
+  # would lose its snapshot fence whenever it waited. This release still
+  # writes every notes body column in step. The contract release, which stops
+  # writing them, must lock in one statement and read the body in a fresh
+  # one (LockedReadBodyTest pins this). Any select the query carried is
+  # replaced; the unused LEFT JOIN is removed by the planner (unique key).
+  # `OF n0` (Ecto's alias for the first source) keeps the lock on notes.
+  defp locked_body_from_notes(query), do: query |> exclude(:select) |> select([n], n)
 
   defp interleave_hook(point) do
     case Application.get_env(:engram, :checkpoint_interleave_hook) do
@@ -3074,7 +3110,7 @@ defmodule Engram.Notes do
   # get_note/3 plus the note's tail rows, from the same statement (see
   # with_tail/1).
   defp get_note_with_tail(user, vault, path) do
-    with {:ok, query} <- note_by_path_query(user, vault, path),
+    with {:ok, query} <- note_by_path_query(user, vault, path, :raw),
          {:ok, {%Note{} = note, tail}} <-
            Repo.with_tenant(user.id, fn -> query |> with_tail() |> Repo.one() |> tail_result() end) do
       {:ok, decrypt_or_raise!(note, user), tail}
@@ -3089,30 +3125,43 @@ defmodule Engram.Notes do
   # rows it folded) gives the old snapshot with no tail: edits vanish. Three
   # array subqueries, aligned by the same total order.
   defp with_tail(query) do
-    from(n in query,
-      select:
-        {n,
-         fragment(
-           "ARRAY(SELECT l.id FROM crdt_update_log l WHERE l.note_id = ? AND l.vault_id = ? ORDER BY l.inserted_at, l.id)",
-           n.id,
-           n.vault_id
-         ),
-         fragment(
-           "ARRAY(SELECT l.update_ciphertext FROM crdt_update_log l WHERE l.note_id = ? AND l.vault_id = ? ORDER BY l.inserted_at, l.id)",
-           n.id,
-           n.vault_id
-         ),
-         fragment(
-           "ARRAY(SELECT l.update_nonce FROM crdt_update_log l WHERE l.note_id = ? AND l.vault_id = ? ORDER BY l.inserted_at, l.id)",
-           n.id,
-           n.vault_id
-         )}
-    )
+    NoteBody.select_map(query, Note.__schema__(:fields), %{
+      tail_ids__:
+        dynamic(
+          [n],
+          fragment(
+            "ARRAY(SELECT l.id FROM crdt_update_log l WHERE l.note_id = ? AND l.vault_id = ? ORDER BY l.inserted_at, l.id)",
+            n.id,
+            n.vault_id
+          )
+        ),
+      tail_cts__:
+        dynamic(
+          [n],
+          fragment(
+            "ARRAY(SELECT l.update_ciphertext FROM crdt_update_log l WHERE l.note_id = ? AND l.vault_id = ? ORDER BY l.inserted_at, l.id)",
+            n.id,
+            n.vault_id
+          )
+        ),
+      tail_nonces__:
+        dynamic(
+          [n],
+          fragment(
+            "ARRAY(SELECT l.update_nonce FROM crdt_update_log l WHERE l.note_id = ? AND l.vault_id = ? ORDER BY l.inserted_at, l.id)",
+            n.id,
+            n.vault_id
+          )
+        )
+    })
   end
 
   defp tail_result(nil), do: nil
 
-  defp tail_result({note, ids, cts, nonces}) do
+  defp tail_result(row) do
+    {note, %{tail_ids__: ids, tail_cts__: cts, tail_nonces__: nonces}} =
+      NoteBody.to_note(row, [:tail_ids__, :tail_cts__, :tail_nonces__])
+
     rows =
       [ids, cts, nonces]
       |> Enum.zip()
@@ -3269,7 +3318,7 @@ defmodule Engram.Notes do
   """
   @spec get_note_metadata(map(), map(), String.t()) :: {:ok, Note.t()} | {:error, :not_found}
   def get_note_metadata(user, vault, path) do
-    case find_note_by_path(user, vault, path) do
+    case find_note_by_path(user, vault, path, @note_core_fields) do
       {:ok, nil} -> {:error, :not_found}
       {:ok, note} -> {:ok, note}
       _ -> {:error, :not_found}
@@ -3488,7 +3537,7 @@ defmodule Engram.Notes do
 
   # No CRDT state: see @note_fields_without_crdt.
   defp worker_note_query(note_id),
-    do: from(n in Note, where: n.id == ^note_id, select: struct(n, @note_fields_without_crdt))
+    do: Note |> where([n], n.id == ^note_id) |> NoteBody.select_note(@note_fields_without_crdt)
 
   @doc """
   `fetch_note_for_worker/2` plus the note's tail rows, from one statement (for
@@ -3560,6 +3609,35 @@ defmodule Engram.Notes do
     end
   end
 
+  @doc """
+  `note_in_vault?/3` and the note's path in ONE read: `{:ok, path}` for a
+  live row with `note_id` in `vault` (`path` nil on a folder marker, or when
+  it does not decrypt), `{:error, :not_found}` otherwise. Reads the path
+  columns only, never the body. The CRDT channel's room open (the ownership
+  check and the announce's path were two transactions and a full-row
+  decrypt).
+  """
+  @spec live_note_path(map(), map(), Ecto.UUID.t()) ::
+          {:ok, String.t() | nil} | {:error, :not_found}
+  def live_note_path(user, vault, note_id) do
+    query =
+      from(n in scoped_live(user, vault),
+        where: n.id == ^note_id,
+        select: struct(n, ^Note.path_fields())
+      )
+
+    case Repo.with_tenant(user.id, fn -> Repo.one(query) end) do
+      {:ok, %Note{} = note} ->
+        case Crypto.decrypt_notes_batch([note], user) do
+          [{:ok, %{path: path}}] -> {:ok, path}
+          _ -> {:ok, nil}
+        end
+
+      _ ->
+        {:error, :not_found}
+    end
+  end
+
   # Shared shell for by-id fetches; `fields: :meta` skips the content column
   # and its decrypt for callers that only need path/folder/tags (#863) —
   # same projection pattern the changes feeds use. `kind == "note"` excludes
@@ -3574,7 +3652,7 @@ defmodule Engram.Notes do
       query =
         case fields do
           :meta -> from(n in base, select: struct(n, @note_meta_fields))
-          :all -> base
+          :all -> NoteBody.select_note(base)
         end
 
       {:ok, result} =
@@ -3603,11 +3681,11 @@ defmodule Engram.Notes do
   """
   @spec note_exists?(Engram.Accounts.User.t(), map(), String.t()) :: boolean()
   def note_exists?(user, vault, path) do
-    match?({:ok, %Note{}}, find_note_by_path(user, vault, path))
+    match?({:ok, %Note{}}, find_note_by_path(user, vault, path, [:id]))
   end
 
-  defp find_note_by_path(user, vault, path) do
-    case note_by_path_query(user, vault, path) do
+  defp find_note_by_path(user, vault, path, fields \\ :all) do
+    case note_by_path_query(user, vault, path, fields) do
       {:ok, query} ->
         Repo.with_tenant(user.id, fn -> Repo.one(query) end)
 
@@ -3617,13 +3695,22 @@ defmodule Engram.Notes do
   end
 
   # Builds the HMAC-based note lookup query. Caller runs it inside their own
-  # tenant context (or via find_note_by_path/3 when none is active).
-  defp note_by_path_query(user, vault, path) do
+  # tenant context (or via find_note_by_path/3 when none is active). Selects
+  # the whole note, body from `note_bodies` (`NoteBody.select_note/2`), or
+  # just `fields`; `:raw` leaves the select to the caller.
+  defp note_by_path_query(user, vault, path, fields \\ :all) do
     with {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       hmac = Crypto.hmac_field(filter_key, path)
 
       ids? = Keys.ids?()
-      {:ok, from(n in live_notes(user, vault, ids?), where: ^Keys.eq(:path, hmac, ids?))}
+      query = from(n in live_notes(user, vault, ids?), where: ^Keys.eq(:path, hmac, ids?))
+
+      {:ok,
+       case fields do
+         :raw -> query
+         :all -> NoteBody.select_note(query)
+         fields -> NoteBody.select_note(query, fields)
+       end}
     end
   end
 
@@ -3914,7 +4001,7 @@ defmodule Engram.Notes do
     lookup_query =
       if note_id, do: from(n in lookup_query, where: n.id == ^note_id), else: lookup_query
 
-    {:ok, target_query} = note_by_path_query(user, vault, new_path)
+    {:ok, target_query} = note_by_path_query(user, vault, new_path, [:id])
 
     result =
       Repo.with_tenant(user.id, fn ->
@@ -4198,7 +4285,7 @@ defmodule Engram.Notes do
   @spec delete_note_reporting(map(), map(), String.t(), keyword()) :: :deleted | :absent
   def delete_note_reporting(user, vault, path, opts \\ []) do
     # The HMAC before the transaction: a DekCache miss unwraps through KMS.
-    case note_by_path_query(user, vault, path) do
+    case note_by_path_query(user, vault, path, @note_core_fields) do
       {:ok, query} ->
         Repo.with_tenant!(user.id, fn ->
           case Repo.one(query) do
@@ -4765,7 +4852,7 @@ defmodule Engram.Notes do
     query =
       case fields do
         :meta -> from(n in base, select: struct(n, @note_meta_fields))
-        :all -> from(n in base, select: struct(n, @note_fields_without_crdt))
+        :all -> NoteBody.select_note(base, @note_fields_without_crdt)
       end
 
     # Byte budget. `limit` caps ROWS; nothing capped BYTES, and POST /notes
@@ -4773,29 +4860,31 @@ defmodule Engram.Notes do
     # an 820 MB prod container, OOM the BEAM and take the ECS task down with
     # every other user on it.
     #
-    # The probe runs as its own query because the budget has to bound the READ.
-    # Trimming `notes` after Repo.all would already have transferred and (below)
-    # decrypted the rows it was meant to exclude, which is exactly where the
-    # memory goes. The probe selects sizes only — no content, no decrypt — so it
-    # is a few KB regardless of how fat the page would have been.
+    # The budget has to bound the READ: trimming after Repo.all would already
+    # have transferred and decrypted the rows it was meant to exclude. So the
+    # page query cuts itself (`budgeted_page/4`): the stored sizes and their
+    # running sum come from the same statement, and a row past the budget is
+    # never returned, so its body is never de-TOASTed. (This was a separate
+    # probe transaction, 4 round trips per page.)
     #
-    # The page reads no CRDT state (@note_fields_without_crdt), so content is the only
-    # large column it selects and this probe measures what is actually read.
+    # The page reads no CRDT state (@note_fields_without_crdt), so content is
+    # the only large column it selects and the budget measures what is read.
     #
-    # The probe bounds the STORED ciphertext read only. Stored size is NOT the
-    # plaintext size (format 1 rows are zstd-compressed, so a few KB can inflate
-    # to tens of MB); the plaintext budget is enforced incrementally while
-    # decrypting, see `decrypt_within_budget/4`.
+    # The budget bounds the STORED ciphertext read only. Stored size is NOT
+    # the plaintext size (format 1 rows are zstd-compressed, so a few KB can
+    # inflate to tens of MB); the plaintext budget is enforced incrementally
+    # while decrypting, see `decrypt_within_budget/4`.
     #
-    # :meta carries no content, so it has no byte hazard and skips the probe.
-    {row_limit, budget_more} =
+    # :meta carries no content, so it has no byte hazard and no budget.
+    {notes, budget_more} =
       case {fields, max_bytes} do
-        {:all, b} when is_integer(b) and b > 0 -> byte_budget_limit(base, user, limit, b)
-        _ -> {limit + 1, false}
-      end
+        {:all, b} when is_integer(b) and b > 0 ->
+          budgeted_page(base, user, limit, b)
 
-    {:ok, notes} =
-      Repo.with_tenant(user.id, fn -> Repo.all(from(q in query, limit: ^row_limit)) end)
+        _ ->
+          {:ok, notes} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
+          {notes, false}
+      end
 
     {page, has_more} =
       if length(notes) > limit do
@@ -4945,42 +5034,177 @@ defmodule Engram.Notes do
     Application.get_env(:engram, :sync_page_max_bytes, @default_page_max_bytes)
   end
 
-  # How many of the next rows fit the byte budget, and whether the budget (not
-  # the row limit) is what stopped the page.
-  #
-  # pg_column_size reads the stored size without detoasting the ciphertext, so
-  # the probe stays cheap even when the rows it is measuring are huge. This is
-  # the STORED size: a bound on the ciphertext read, NOT a proxy for plaintext
-  # (format 1 rows are compressed). The plaintext budget is applied while
-  # decrypting, in `decrypt_within_budget/4`.
-  defp byte_budget_limit(base, user, limit, max_bytes) do
-    {:ok, sizes} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(n in base,
-            select: fragment("coalesce(pg_column_size(?), 0)", n.content_ciphertext)
-          )
-        )
-      end)
+  # The next page (up to `limit + 1` rows of `base`), cut at the byte budget
+  # (`budget_cut/5`), and whether the budget (not the row limit) is what
+  # stopped it.
+  defp budgeted_page(base, user, limit, max_bytes) do
+    {notes, total, _spent} =
+      budget_cut(base, dynamic([n], n.seq), @note_fields_without_crdt, user, max_bytes)
 
-    fits = count_within_budget(sizes, max_bytes)
-    {min(fits, limit + 1), fits <= limit and length(sizes) > fits}
+    fits = length(notes)
+    {notes, fits <= limit and total > fits}
   end
 
-  defp count_within_budget(sizes, max_bytes) do
-    sizes
-    |> Enum.reduce_while({0, 0}, fn size, {n, acc} ->
-      cond do
-        # The first row always ships, however far over budget. A page of zero
-        # rows with has_more is a feed that never drains: walkOpLog's
-        # stuck-cursor guard breaks the loop and the note is stranded forever.
-        # One oversized note should sync slowly, not block everything behind it.
-        n == 0 -> {:cont, {1, size}}
-        acc + size > max_bytes -> {:halt, {n, acc}}
-        true -> {:cont, {n + 1, acc + size}}
+  # ONE statement for a byte-budgeted read of `base` (a notes query, maybe
+  # LIMITed) in the order (`ord1`, id): a NARROW pass (id, order, stored
+  # content size; `octet_length` reads varlena headers, nothing is
+  # de-TOASTed) takes the running sum of the sizes over that order, and the
+  # rows are kept while it stays within `max_bytes`. The first row always
+  # ships, however large (a catch-up page of zero rows with has_more never
+  # drains; a read of one huge note returns it). The sum only grows, so the
+  # cut is a prefix. Only the kept ids are then joined back for `fields`, so
+  # only kept rows' bodies are read; the window buffers narrow rows only.
+  #
+  # Returns `{notes, total, spent}`: the kept rows in order, how many `base`
+  # matched, and the kept rows' summed stored size.
+  defp budget_cut(base, ord1, fields, user, max_bytes) do
+    sized =
+      base
+      |> NoteBody.join()
+      |> select([n], %{id: n.id})
+      |> select_merge(^%{ord1__: ord1, size__: NoteBody.byte_length(:content)})
+
+    windowed =
+      from(p in subquery(sized),
+        windows: [w: [order_by: [asc: p.ord1__, asc: p.id]]],
+        select: %{
+          id: p.id,
+          ord1__: p.ord1__,
+          run__: over(sum(p.size__), :w),
+          rn__: over(row_number(), :w),
+          total__: over(count(p.id))
+        }
+      )
+
+    kept = from(w in subquery(windowed), where: w.run__ <= ^max_bytes or w.rn__ == 1)
+
+    query =
+      from(n in Note,
+        join: k in subquery(kept),
+        on: k.id == n.id,
+        order_by: [asc: k.ord1__, asc: n.id]
+      )
+      |> NoteBody.select_map(fields, %{
+        run__: dynamic([_, k], k.run__),
+        total__: dynamic([_, k], k.total__)
+      })
+
+    {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
+
+    {total, spent} = Enum.reduce(rows, {0, 0}, fn row, _ -> {row.total__, row.run__} end)
+    {Enum.map(rows, &elem(NoteBody.to_note(&1, [:run__, :total__]), 0)), total, spent}
+  end
+
+  @doc """
+  The live notes at `paths` (at most a few dozen; MCP `get_notes`), in ONE
+  statement while their stored content fits `max_bytes` (the first always
+  does). Returns `[{path, fetch}]` in `paths` order, where `fetch.()`
+  decrypts the note on demand (so a caller holds one plaintext at a time:
+  stored sizes are compressed, plaintext can be far larger), or answers
+  `nil` for a path with no live note and `:over_budget` for a note past the
+  budget, which is not read.
+
+  The cut in that statement is a prefix (`budget_cut/3`). A call whose
+  notes do not all fit then continues greedily, as the per-path reads did: a
+  note past the budget is skipped and a smaller one after it still ships if
+  it fits. That costs two more statements, only on overflow: one narrow read
+  of the unread paths' ids and stored sizes, one read of the notes the
+  greedy pass picks. Each runs in a tenant block; inside an MCP tool call
+  (one tenant transaction) all three share it.
+
+  Each path's own read used to make a 20-path call 20 statements.
+  """
+  @spec get_notes_within(map(), map(), [String.t()], pos_integer()) ::
+          [{String.t(), (-> Note.t() | nil | :over_budget)}]
+  def get_notes_within(user, vault, paths, max_bytes) do
+    case Crypto.dek_filter_key(user) do
+      {:ok, filter_key} -> notes_within(user, vault, paths, filter_key, max_bytes)
+      _ -> Enum.map(paths, &{&1, fn -> nil end})
+    end
+  end
+
+  defp notes_within(user, vault, paths, filter_key, max_bytes) do
+    hmacs = Enum.map(paths, &Crypto.hmac_field(filter_key, &1))
+    ids? = Keys.ids?()
+
+    base = from(n in live_notes(user, vault, ids?), where: ^Keys.in_any(:path, hmacs, ids?))
+
+    ord =
+      dynamic(
+        [n],
+        fragment("array_position(?, ?)", type(^hmacs, {:array, :binary}), n.path_hmac)
+      )
+
+    # No CRDT state: nothing on the render path reads it, and every kept
+    # note stays referenced for the whole call.
+    {notes, total, spent} = budget_cut(base, ord, @note_fields_without_crdt, user, max_bytes)
+    by_hmac = Map.new(notes, &{&1.path_hmac, &1})
+
+    {by_hmac, over} =
+      if total > length(notes),
+        do: past_the_cut(user, vault, Enum.zip(paths, hmacs), by_hmac, spent, max_bytes, ids?),
+        else: {by_hmac, MapSet.new()}
+
+    Enum.zip_with(paths, hmacs, fn path, hmac ->
+      case by_hmac do
+        %{^hmac => note} ->
+          {path, fn -> decrypt_or_raise!(note, user) end}
+
+        _ ->
+          if MapSet.member?(over, hmac),
+            do: {path, fn -> :over_budget end},
+            else: {path, fn -> nil end}
       end
     end)
-    |> elem(0)
+  end
+
+  # The unread paths, in request order: each note that still fits the budget
+  # (stored sizes, `spent` so far) is read; the rest are over budget. Returns
+  # the read notes merged into `by_hmac`, and the over-budget HMACs.
+  defp past_the_cut(user, vault, pairs, by_hmac, spent, max_bytes, ids?) do
+    unread = for {_path, hmac} <- pairs, not is_map_key(by_hmac, hmac), uniq: true, do: hmac
+
+    sizes =
+      from(n in live_notes(user, vault, ids?), where: ^Keys.in_any(:path, unread, ids?))
+      |> NoteBody.join()
+      |> select([n], %{id: n.id, hmac: n.path_hmac})
+      |> select_merge(^%{size: NoteBody.byte_length(:content)})
+
+    {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(sizes) end)
+    by_unread = Map.new(rows, &{&1.hmac, &1})
+
+    {pick, over, _spent} =
+      Enum.reduce(unread, {[], MapSet.new(), spent}, fn hmac, {pick, over, spent} ->
+        case by_unread do
+          %{^hmac => %{size: size, id: id}} when spent + size <= max_bytes ->
+            {[id | pick], over, spent + size}
+
+          %{^hmac => _} ->
+            {pick, MapSet.put(over, hmac), spent}
+
+          _ ->
+            {pick, over, spent}
+        end
+      end)
+
+    read =
+      if pick == [] do
+        []
+      else
+        {:ok, notes} =
+          Repo.with_tenant(user.id, fn ->
+            Repo.all(
+              NoteBody.select_note(
+                from(n in live_notes(user, vault, ids?), where: n.id in ^pick),
+                @note_fields_without_crdt
+              )
+            )
+          end)
+
+        notes
+      end
+
+    {Enum.into(read, by_hmac, &{&1.path_hmac, &1}), over}
   end
 
   # Resolves the authority for every note on this page whose façade lags,
@@ -5124,7 +5348,13 @@ defmodule Engram.Notes do
               Map.has_key?(tails, n) or (by_id[n].content || "") == "",
               do: n
 
-        {Repo.all(from(n in Note, where: n.id in ^refresh_ids)), tails}
+        # Nothing to refresh is common (no tail, no empty facade): no query.
+        rows =
+          if refresh_ids == [],
+            do: [],
+            else: Repo.all(NoteBody.select_note(from(n in Note, where: n.id in ^refresh_ids)))
+
+        {rows, tails}
       end)
 
     # Rebuild OUTSIDE the transaction. The race only requires that the note rows
@@ -6109,7 +6339,9 @@ defmodule Engram.Notes do
   defp fetch_note_contents(user, ids) do
     {:ok, rows} =
       Repo.with_tenant(user.id, fn ->
-        Repo.all(from(n in Note, where: n.id in ^ids))
+        Repo.all(
+          NoteBody.select_note(from(n in Note, where: n.id in ^ids), @note_fields_without_crdt)
+        )
       end)
 
     rows

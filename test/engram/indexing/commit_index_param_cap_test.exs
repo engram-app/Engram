@@ -46,8 +46,6 @@ defmodule Engram.Indexing.CommitIndexParamCapTest do
   end
 
   test "writes more chunk rows than one statement's parameter cap allows", %{note: note} do
-    now = DateTime.utc_now(:second)
-
     rows =
       for i <- 1..@rows do
         %{
@@ -59,8 +57,7 @@ defmodule Engram.Indexing.CommitIndexParamCapTest do
           char_end: i + 1,
           token_count: 1,
           qdrant_point_id: Ecto.UUID.generate(),
-          context_hmac: "h#{i}",
-          created_at: now
+          context_hmac: "h#{i}"
         }
       end
 

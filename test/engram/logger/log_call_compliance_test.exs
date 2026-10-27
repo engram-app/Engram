@@ -98,6 +98,8 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # key-based redactor cannot catch a value travelling under another name.
     "lib/engram/storage/",
     "lib/engram/indexing.ex",
+    # Writes the chunk rows (HMACs, offsets, point ids) of a note and recounts them.
+    "lib/engram/indexing/chunk_rows.ex",
     # Holds paid Voyage vectors of note text, keyed by a hash of that text.
     "lib/engram/indexing/retained_vectors.ex",
     # The v5 payload builder sees frontmatter-derived values; the point id
