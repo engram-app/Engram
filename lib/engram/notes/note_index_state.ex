@@ -1,6 +1,6 @@
 defmodule Engram.Notes.NoteIndexState do
   @moduledoc """
-  A note's embed bookkeeping, 1:1 with `notes` (migration 20261025000000):
+  A note's embed bookkeeping, 1:1 with `notes` (migration 20261026000000):
   hashes, version stamps, the crash guard, the Free bucket queue and the v5
   tier, same column names as `notes`, written only by the
   `notes_sync_index_state` trigger (and the `NoteIndexState` backfill);

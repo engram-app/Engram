@@ -11,7 +11,7 @@ defmodule Engram.Indexing.ChunkRows do
   position, so `chunks_note_id_position_index` cannot collide mid-statement.
   An offset-only update (an edit shifts every later section) touches no
   indexed column, so it is HOT where the page has room (fillfactor 90,
-  migration 20261025000100).
+  migration 20261026000100).
 
   Also keeps each note's chunk counters on `note_index_state`
   (`recount!/1`): every chunk writer of this release calls it in the same

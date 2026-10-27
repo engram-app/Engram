@@ -1,7 +1,7 @@
 defmodule Engram.DataMigrations.NoteIndexState do
   @moduledoc """
   Fills `note_index_state` for notes written before the
-  `notes_sync_index_state` trigger existed (migration 20261025000000). Every
+  `notes_sync_index_state` trigger existed (migration 20261026000000). Every
   later write fills it itself, from any release's code, so this only
   catches up.
 
