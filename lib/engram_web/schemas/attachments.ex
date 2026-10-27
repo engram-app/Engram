@@ -74,8 +74,11 @@ defmodule EngramWeb.Schemas.AttachmentsResponse do
   OpenApiSpex.schema(%{
     title: "AttachmentsResponse",
     type: :object,
-    properties: %{attachments: %Schema{type: :array, items: EngramWeb.Schemas.AttachmentMeta}},
-    required: [:attachments]
+    properties: %{
+      attachments: %Schema{type: :array, items: EngramWeb.Schemas.AttachmentMeta},
+      next_cursor: EngramWeb.Schemas.Paging.next_cursor()
+    },
+    required: [:attachments, :next_cursor]
   })
 end
 

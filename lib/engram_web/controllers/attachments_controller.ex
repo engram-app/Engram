@@ -500,24 +500,28 @@ defmodule EngramWeb.AttachmentsController do
     operation_id: "attachments-index",
     summary: "List attachments (metadata only)",
     description:
-      "Returns metadata (path, MIME type, size, timestamps — no bytes) for every attachment in " <>
-        "the current vault. Returns 500 if the listing fails.",
+      "Returns metadata (path, MIME type, size, timestamps — no bytes) for the attachments in " <>
+        "the current vault, one page at a time (`cursor`, `limit`; follow `next_cursor`). " <>
+        "Returns 400 for an invalid cursor and 500 if the listing fails.",
     tags: ["Attachments"],
+    parameters: EngramWeb.Schemas.Paging.parameters(),
     responses: [
       ok: {"Attachments", "application/json", Schemas.AttachmentsResponse},
+      bad_request: {"Invalid cursor", "application/json", Schemas.Error},
       internal_server_error: {"Listing failed", "application/json", Schemas.MessageError}
     ]
   )
 
-  def index(conn, _params) do
+  def index(conn, params) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
     # The whole tree sidebar depends on this; handle a list failure explicitly
     # (logged 500 body) instead of a bare-match MatchError stacktrace.
-    case Attachments.list_attachments(user, vault) do
-      {:ok, atts} ->
+    case Attachments.list_attachments_page(user, vault, Engram.Pager.opts(params)) do
+      {:ok, %{attachments: atts, next_cursor: next}} ->
         json(conn, %{
+          next_cursor: next,
           attachments:
             Enum.map(atts, fn a ->
               %{
@@ -531,6 +535,9 @@ defmodule EngramWeb.AttachmentsController do
               }
             end)
         })
+
+      {:error, :invalid_cursor} ->
+        conn |> put_status(400) |> json(%{error: "invalid_cursor"})
 
       {:error, reason} ->
         require Logger
