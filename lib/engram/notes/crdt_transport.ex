@@ -502,7 +502,7 @@ defmodule Engram.Notes.CrdtTransport do
   # dead pattern. `:not_found` keeps its own arm because the caller
   # distinguishes it.
   defp load_doc(user, vault, note_id) do
-    with {:ok, note} <- Notes.get_note_by_id(user, vault, note_id),
+    with {:ok, note} <- Notes.get_note_row_by_id(user, vault, note_id),
          {:ok, snapshot} <- Crypto.decrypt_crdt_state(note, user),
          {:ok, doc} <- CrdtBridge.doc_from_state(snapshot) do
       Repo.with_tenant(user.id, fn ->

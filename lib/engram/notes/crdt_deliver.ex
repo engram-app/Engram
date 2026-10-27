@@ -68,7 +68,7 @@ defmodule Engram.Notes.CrdtDeliver do
     # doc, flush it to disk (marking the path recently-flushed), and then SUPPRESS
     # the user's next real edit as an echo — silently dropping the write. Those
     # files sync via the legacy push path, so only deliver/announce for `.md`.
-    if String.ends_with?(path, ".md") do
+    if CrdtBridge.markdown_path?(path) do
       push_to_live_room(user, note, content)
       # fanout_idle ALWAYS runs, even when a live room exists. It is NOT redundant
       # with the room's `update_v1`: `update_v1` broadcasts a DELTA (converges a
@@ -170,7 +170,7 @@ defmodule Engram.Notes.CrdtDeliver do
   """
   @spec announce_ready(String.t(), String.t(), String.t(), String.t()) :: :ok
   def announce_ready(user_id, vault_id, path, note_id) do
-    if String.ends_with?(path, ".md"), do: announce(user_id, vault_id, path, note_id)
+    if CrdtBridge.markdown_path?(path), do: announce(user_id, vault_id, path, note_id)
     :ok
   end
 

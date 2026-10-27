@@ -462,12 +462,8 @@ defmodule Engram.MCP.Handlers do
     else
       stored = Notes.PathSanitizer.sanitize(path)
 
-      Notes.upsert_note(
-        user,
-        vault,
-        %{"path" => path, "content" => content, "mtime" => now()},
-        @write_opts
-      )
+      user
+      |> write_whole(vault, path, content, args["base_hash"])
       |> upsert_reply(
         [
           ok: "Note saved: #{stored}",
@@ -1372,6 +1368,43 @@ defmodule Engram.MCP.Handlers do
   defp rmw(user, vault, path, rebuild),
     do: Notes.rmw_note(user, vault, path, rebuild, [mtime: now()] ++ @write_opts)
 
+  # No base_hash: a blind replace, as before base_hash existed.
+  defp write_whole(user, vault, path, content, nil),
+    do:
+      Notes.upsert_note(
+        user,
+        vault,
+        %{"path" => path, "content" => content, "mtime" => now()},
+        @write_opts
+      )
+
+  # With base_hash: a read-modify-write that replaces the note only if its
+  # CURRENT text (the authority, tail included) still hashes to the base the
+  # agent read. Compared against the stored row's hash instead, a user edit
+  # still in the tail would pass, and the replace would delete it.
+  defp write_whole(user, vault, path, content, base_hash) do
+    rebuild = fn current ->
+      case Notes.content_hash(user, current) do
+        {:ok, ^base_hash} -> content
+        {:ok, _moved} -> {:error, stale_base_error(path)}
+        {:error, _} = err -> err
+      end
+    end
+
+    case rmw_upsert(user, vault, path, rebuild) do
+      # The agent read a note that is gone or moved: same answer, re-read.
+      {:error, :not_found} -> {:error, stale_base_error(path)}
+      result -> result
+    end
+  end
+
+  defp stale_base_error(path) do
+    {:version_conflict,
+     "#{Notes.PathSanitizer.sanitize(path)} changed since you read it (base_hash no longer " <>
+       "matches), so nothing was written. Call get_notes on it again, apply your change to " <>
+       "the content it returns, and call write_note with that content_hash as base_hash."}
+  end
+
   @doc false
   # Render Search.search/4 output for the search_notes tool. `names` maps
   # vault_id → vault name; when non-empty (cross-vault mode) each hit is labelled
@@ -2030,9 +2063,15 @@ defmodule Engram.MCP.Handlers do
 
     (title_lines ++
        tag_lines ++
-       ["**Path:** #{note.path}", "**Folder:** #{note.folder || ""}", "", content])
+       ["**Path:** #{note.path}", "**Folder:** #{note.folder || ""}"] ++
+       hash_lines(note) ++ ["", content])
     |> Enum.join("\n")
   end
+
+  # Text-only clients see no structuredContent, so the base_hash for a later
+  # write_note rides in the header too.
+  defp hash_lines(%{content_hash: hash}) when is_binary(hash), do: ["**Content hash:** #{hash}"]
+  defp hash_lines(_note), do: []
 
   defp fm_has_key?(nil, _key), do: false
   # `[ \t]*`, not `\s*`: `\s` crosses newlines, so a miss backtracked from
@@ -2122,16 +2161,22 @@ defmodule Engram.MCP.Handlers do
       "title" => note.title,
       "folder" => note.folder || "",
       "tags" => note.tags || [],
-      "content" => note.content || ""
+      "content" => note.content || "",
+      "content_hash" => note.content_hash
     }
   end
+
+  # A partial read (section or outline) carries no content_hash. The hash names
+  # the WHOLE note; beside part of it, it would let write_note(part, base_hash)
+  # pass the guard and replace the note with what the agent composed from part.
+  defp partial_read(note), do: %{note | content_hash: nil}
 
   defp narrow_to_section([{_path, nil}] = fetched, _section, _gate), do: {:ok, fetched}
 
   defp narrow_to_section([{path, note}], section, gate) do
     case Sections.section(note.content || "", section, gate) do
       {:ok, text} ->
-        {:ok, [{path, %{note | content: text}}]}
+        {:ok, [{path, partial_read(%{note | content: text})}]}
 
       {:error, {:not_found, hs}} ->
         ToolError.error(:section_not_found, heading_missing_msg(path, section, hs))
@@ -2358,7 +2403,7 @@ defmodule Engram.MCP.Handlers do
   # A parse refusal (busy, timeout, invalid UTF-8) is a per-note `error`
   # entry, so one note does not fail a whole multi-path call.
   defp outline_entry(note, gate) do
-    base = note |> note_payload() |> Map.delete("content")
+    base = note |> partial_read() |> note_payload() |> Map.delete("content")
 
     case Sections.headings(note.content || "", gate) do
       {:ok, hs} ->

@@ -97,6 +97,14 @@ defmodule Engram.Notes.CrdtBridge do
     end
   end
 
+  @doc """
+  Whether a note at `path` holds a MARKDOWN doc, whose text projects to and
+  from `notes.content`. A CRDT room only ever holds a markdown (`.md`) doc or
+  a structural doc (`.canvas`), and only markdown is content.
+  """
+  @spec markdown_path?(term()) :: boolean()
+  def markdown_path?(path), do: is_binary(path) and String.ends_with?(path, ".md")
+
   @doc "Rebuild full note plaintext from the doc's frontmatter + body."
   @spec project_doc(Yex.Doc.t()) :: String.t()
   def project_doc(%Yex.Doc{} = doc) do

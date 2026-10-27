@@ -295,6 +295,261 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     assert count(text, "TAILEDIT") == 1, inspect(text)
     assert count(text, "APPENDED") == 1, inspect(text)
   end
+
+  # -- Reads serve the authority, and write_note's base_hash guards it --
+
+  # Lands `edit` as a tail row on top of `doc` (the note's snapshot plus any
+  # tail landed before it), with no room and no checkpoint: exactly the window
+  # between a user's keystrokes and their checkpoint. Returns the advanced doc.
+  defp land_tail(user, vault, note_id, doc, edit) do
+    {:ok, sv} = Yex.encode_state_vector(doc)
+    text = Yex.Doc.get_text(doc, CrdtBridge.text_name())
+    CrdtBridge.diff_into_text(text, edit.(Yex.Text.to_string(text)))
+    {:ok, upd} = Yex.encode_state_as_update(doc, sv)
+    st = %{user_id: user.id, vault_id: vault.id, note_id: note_id}
+    _ = Engram.Notes.CrdtPersistence.update_v1(st, upd, note_id, doc)
+    doc
+  end
+
+  defp base_doc(user, vault, path \\ "a.md") do
+    {:ok, row} = Engram.Notes.get_note(user, vault, path)
+    {:ok, doc} = CrdtBridge.doc_from_state(snapshot_of(user, row))
+    {row.id, doc}
+  end
+
+  # Folds every tail row into the snapshot and prunes them, as the room's
+  # debounced checkpoint does.
+  defp checkpoint!(user, vault, note_id, doc) do
+    ids =
+      Engram.Repo.with_tenant!(user.id, fn ->
+        Engram.Repo.all(
+          from(l in Engram.Notes.CrdtUpdateLog, where: l.note_id == ^note_id, select: l.id)
+        )
+      end)
+
+    :ok = Engram.Notes.CrdtCheckpoint.checkpoint(user.id, vault.id, note_id, doc, prune_ids: ids)
+  end
+
+  defp read_note(conn) do
+    body =
+      conn |> call_tool("get_notes", %{"paths" => ["a.md"]}) |> tool_ok!() |> json_response(200)
+
+    [note] = body["result"]["structuredContent"]["notes"]
+    {result_text(body), note}
+  end
+
+  defp result_text(%{"result" => %{"content" => blocks}}),
+    do: Enum.map_join(blocks, " ", & &1["text"])
+
+  defp hash_of(user, text) do
+    {:ok, key} = Engram.Crypto.dek_content_hash_key(user)
+    Engram.Crypto.hmac_content_hash(key, text)
+  end
+
+  test "get_notes and REST GET serve an unfolded tail edit", ctx do
+    %{conn: conn, user: user, vault: vault} = ctx
+    {id, doc} = base_doc(user, vault)
+    land_tail(user, vault, id, doc, &(&1 <> "TAILEDIT\n"))
+
+    {text, note} = read_note(conn)
+    assert text =~ "TAILEDIT"
+    assert note["content"] =~ "TAILEDIT"
+    # The hash names exactly the text served, not the lagging row.
+    assert note["content_hash"] == hash_of(user, note["content"])
+
+    rest = conn |> get("/api/notes/a.md") |> json_response(200)
+    assert rest["content"] =~ "TAILEDIT"
+    assert rest["content_hash"] == hash_of(user, rest["content"])
+
+    by_id = conn |> get("/api/notes/by-id/#{id}") |> json_response(200)
+    assert by_id["content"] =~ "TAILEDIT"
+  end
+
+  test "a read with an empty tail serves the row without rebuilding the doc", ctx do
+    %{conn: conn} = ctx
+    ref = make_ref()
+    test = self()
+
+    :telemetry.attach(
+      "read-rebuild-#{inspect(ref)}",
+      [:engram, :notes, :read_rebuild],
+      fn _, _, _, _ -> send(test, {:rebuilt, ref}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach("read-rebuild-#{inspect(ref)}") end)
+
+    {_text, note} = read_note(conn)
+    assert note["content"] =~ "body text"
+    refute_received {:rebuilt, ^ref}
+
+    {id, doc} = base_doc(ctx.user, ctx.vault)
+    land_tail(ctx.user, ctx.vault, id, doc, &(&1 <> "TAILEDIT\n"))
+    read_note(conn)
+    assert_received {:rebuilt, ^ref}
+  end
+
+  test "write_note with a stale base_hash conflicts and keeps the user's edit", ctx do
+    %{conn: conn, user: user, vault: vault} = ctx
+    {id, doc} = base_doc(user, vault)
+    doc = land_tail(user, vault, id, doc, &(&1 <> "TAILEDIT\n"))
+    {_text, note} = read_note(conn)
+
+    # The user keeps typing after the agent read, then a checkpoint folds it.
+    doc = land_tail(user, vault, id, doc, &(&1 <> "USEREDIT\n"))
+    checkpoint!(user, vault, id, doc)
+
+    conn =
+      call_tool(conn, "write_note", %{
+        "path" => "a.md",
+        "content" => note["content"] <> "AGENT\n",
+        "base_hash" => note["content_hash"]
+      })
+
+    body = json_response(conn, 200)
+    assert body["result"]["isError"], inspect(body)
+    assert result_text(body) =~ "get_notes"
+    assert body["result"]["_meta"]["engram.page/error_code"] == "version_conflict"
+
+    text = text_of(user, vault, "a.md")
+    assert count(text, "USEREDIT") == 1, inspect(text)
+    assert count(text, "AGENT") == 0, inspect(text)
+  end
+
+  test "a section read hands back no hash, so a section cannot authorize a whole-note write",
+       ctx do
+    body =
+      ctx.conn
+      |> call_tool("get_notes", %{"paths" => ["a.md"], "section" => "Body"})
+      |> tool_ok!()
+      |> json_response(200)
+
+    [note] = body["result"]["structuredContent"]["notes"]
+    assert note["content"] =~ "body text"
+    refute note["content"] =~ "# A"
+    # The hash names the whole note; returning it beside a section would let
+    # write_note(section, base_hash) pass the guard and truncate the note.
+    assert note["content_hash"] == nil
+    refute result_text(body) =~ "Content hash"
+  end
+
+  test "an outline read hands back no hash either", ctx do
+    body =
+      ctx.conn
+      |> call_tool("get_notes", %{"paths" => ["a.md"], "outline" => true})
+      |> tool_ok!()
+      |> json_response(200)
+
+    [note] = body["result"]["structuredContent"]["notes"]
+    assert [_ | _] = note["outline"]
+    assert note["content_hash"] == nil
+    refute result_text(body) =~ "Content hash"
+  end
+
+  defp put_note(user, vault, path, content) do
+    {:ok, _} =
+      Engram.Notes.upsert_note(
+        user,
+        vault,
+        %{"path" => path, "content" => content, "mtime" => 1.0},
+        actor: "api"
+      )
+  end
+
+  test "a batch read serves each tailed note's current text in the same 4 statements", ctx do
+    %{conn: conn, user: user, vault: vault} = ctx
+    put_note(user, vault, "b.md", "# B\n\nbee\n")
+
+    for path <- ["a.md", "b.md"] do
+      {id, doc} = base_doc(user, vault, path)
+      land_tail(user, vault, id, doc, &(&1 <> "TAIL-#{path}\n"))
+    end
+
+    Engram.DataCase.clear_request_caches()
+    call = fn -> call_tool(conn, "get_notes", %{"paths" => ["a.md", "b.md"]}) |> tool_ok!() end
+    call.()
+    {conn2, qs} = QueryRecorder.record(call)
+
+    notes = json_response(conn2, 200)["result"]["structuredContent"]["notes"]
+    assert length(notes) == 2
+
+    for n <- notes do
+      assert n["content"] =~ "TAIL-#{n["path"]}", inspect(n)
+      assert n["content_hash"] == hash_of(user, n["content"])
+    end
+
+    qs = Enum.reject(qs, &(&1.source == "tenant_exit_sandbox"))
+    assert length(qs) == 4, QueryRecorder.format(qs)
+  end
+
+  test "a note past the byte budget still serves its tail via the greedy pass", ctx do
+    %{user: user, vault: vault} = ctx
+    put_note(user, vault, "c.md", "# C\n\nsee\n")
+    # Incompressible, so its stored size dwarfs the budget.
+    big = Base.encode64(:crypto.strong_rand_bytes(3_000))
+    put_note(user, vault, "big.md", "# Big\n\n" <> big)
+
+    for path <- ["a.md", "c.md"] do
+      {id, doc} = base_doc(user, vault, path)
+      land_tail(user, vault, id, doc, &(&1 <> "TAIL-#{path}\n"))
+    end
+
+    # a ships (first always does); big is cut; c fits what is left, so it is
+    # read by the greedy pass (past_the_cut), not the first statement.
+    [{_, fa}, {_, fbig}, {_, fc}] =
+      Engram.Notes.get_notes_within(user, vault, ["a.md", "big.md", "c.md"], 1_500)
+
+    assert fbig.() == :over_budget
+
+    for {fetch, path} <- [{fa, "a.md"}, {fc, "c.md"}] do
+      note = fetch.()
+      assert note.content =~ "TAIL-#{path}", inspect(note.content)
+      assert note.content_hash == hash_of(user, note.content)
+    end
+  end
+
+  test "write_note with a fresh base_hash writes across a checkpoint of the same text", ctx do
+    %{conn: conn, user: user, vault: vault} = ctx
+    {id, doc} = base_doc(user, vault)
+    doc = land_tail(user, vault, id, doc, &(&1 <> "TAILEDIT\n"))
+    {_text, note} = read_note(conn)
+
+    checkpoint!(user, vault, id, doc)
+
+    conn
+    |> call_tool("write_note", %{
+      "path" => "a.md",
+      "content" => note["content"] <> "AGENT\n",
+      "base_hash" => note["content_hash"]
+    })
+    |> tool_ok!()
+
+    text = text_of(user, vault, "a.md")
+    assert count(text, "TAILEDIT") == 1, inspect(text)
+    assert count(text, "AGENT") == 1, inspect(text)
+  end
+
+  test "write_note with a base_hash for a note that is gone conflicts", ctx do
+    %{conn: conn} = ctx
+
+    body =
+      conn
+      |> call_tool("write_note", %{"path" => "gone.md", "content" => "x", "base_hash" => "abc"})
+      |> json_response(200)
+
+    assert body["result"]["isError"], inspect(body)
+    assert body["result"]["_meta"]["engram.page/error_code"] == "version_conflict"
+  end
+
+  test "write_note without base_hash replaces the note as before", ctx do
+    %{conn: conn, user: user, vault: vault} = ctx
+
+    conn
+    |> call_tool("write_note", %{"path" => "a.md", "content" => "# A\n\nreplaced\n"})
+    |> tool_ok!()
+
+    assert text_of(user, vault, "a.md") == "# A\n\nreplaced\n"
+  end
 end
 
 defmodule Engram.MCP.HandlersSingleReadConcurrencyTest do

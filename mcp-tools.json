@@ -797,6 +797,13 @@
                   "description": "Absent when outline: true was requested",
                   "type": "string"
                 },
+                "content_hash": {
+                  "description": "Hash of exactly the content returned. Pass it to write_note as base_hash so the write refuses if the note changed since. Null for a section or outline read: the hash would name the whole note, not the part returned.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "error": {
                   "description": "Content or outline absent. With outline: true, the outline could not be computed: server busy, the call ran out of time, the note is too complex to parse, parsing failed, or the note has invalid UTF-8. Otherwise the call's 4 MB content budget was spent by earlier notes: fetch this one in its own call",
                   "type": "string"
@@ -935,10 +942,14 @@
         "readOnlyHint": false,
         "title": "Write Note"
       },
-      "description": "Replace a note's entire content, or create the note if it does not exist. Saves, indexes for search, and syncs to Obsidian. Overwrites whatever the note held. To add text without touching existing content use append_to_note. To change one passage, or one heading's section, use edit_note. To create a note with no risk of overwriting an existing one use create_note; create_note takes a title and picks the folder, not a path.",
+      "description": "Replace a note's entire content, or create the note if it does not exist. Saves, indexes for search, and syncs to Obsidian. Overwrites whatever the note held. To add text without touching existing content use append_to_note. To change one passage, or one heading's section, use edit_note. To create a note with no risk of overwriting an existing one use create_note; create_note takes a title and picks the folder, not a path. When replacing a note you read, pass its content_hash from get_notes as base_hash: if the user edited it since, the write is refused instead of erasing their edit.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "base_hash": {
+            "description": "content_hash from your get_notes read of this note. If the note changed since, nothing is written and you get a version_conflict: read it again and retry. Omit only to overwrite whatever the note holds.",
+            "type": "string"
+          },
           "content": {
             "description": "Full markdown content",
             "type": "string"
