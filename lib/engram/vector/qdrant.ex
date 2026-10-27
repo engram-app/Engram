@@ -1727,13 +1727,15 @@ defmodule Engram.Vector.Qdrant do
   One filter condition for `field` equal to `value` (a list matches any), in
   both payload formats. `:user`/`:vault` take ids as stored in Postgres;
   `:path`/`:folder`/`:type`/`:tags` take the base64 HMACs the legacy filters
-  use.
+  use. `:folder` also takes a folder row id (see `folder_filter/1`).
 
   With legacy filters off it never emits a legacy key
   (the v3 cluster has no index for one). A value with no v5 form there (an
   empty list, a malformed HMAC) matches nothing on the v5 key: fail closed.
   """
   @spec match_filter(match_field(), term()) :: key_condition() | %{should: [key_condition()]}
+  def match_filter(:folder, value), do: folder_filter(value)
+
   def match_filter(field, value) do
     legacy = legacy_match_filter(field, value)
     v5_key = PayloadKeys.short(Map.fetch!(@v5_keys, field))
@@ -1746,6 +1748,44 @@ defmodule Engram.Vector.Qdrant do
 
   defp v5_or_both(legacy, v5),
     do: if(legacy_filter_fields?(), do: %{should: [legacy, v5]}, else: v5)
+
+  # `:folder` takes the legacy base64 path HMAC AND a folder row id (a uuid,
+  # dashed or not), singly or mixed in a list: a point's `f` holds the HMAC
+  # form until the payload sweep rewrites it to the row id, so a search must
+  # match either. Both forms are uuid-shaped values of the same `f` index, so
+  # one `v5` condition covers them; the legacy key only knows the HMAC form.
+  defp folder_filter(value) do
+    {ids, hashes} = value |> List.wrap() |> Enum.split_with(&folder_row_id?/1)
+    v5_ids = Enum.map(ids, &FilterId.uuid/1) ++ Enum.flat_map(hashes, &List.wrap(hmac_id(&1)))
+    legacy? = hashes != [] and legacy_filter_fields?()
+    shape = fn values -> if is_list(value), do: values, else: hd(values) end
+
+    case {v5_ids, legacy?} do
+      {[], true} ->
+        legacy_match_filter(:folder, shape.(hashes))
+
+      {[], false} ->
+        %{key: v5_folder_key(), match: %{any: []}}
+
+      {_, true} ->
+        %{
+          should: [
+            legacy_match_filter(:folder, shape.(hashes)),
+            %{key: v5_folder_key(), match: match(shape.(v5_ids))}
+          ]
+        }
+
+      {_, false} ->
+        %{key: v5_folder_key(), match: match(shape.(v5_ids))}
+    end
+  end
+
+  defp v5_folder_key, do: PayloadKeys.short(Map.fetch!(@v5_keys, :folder))
+
+  defp folder_row_id?(value) when is_binary(value),
+    do: Regex.match?(~r/\A[0-9a-fA-F]{32}\z/, FilterId.uuid(value))
+
+  defp folder_row_id?(_), do: false
 
   @doc "A range condition on `fm_timestamp` / `fm_created`, in both formats."
   @spec range_filter(:fm_timestamp | :fm_created, map()) :: map()
