@@ -3,6 +3,7 @@ import { getApiBase, joinApiUrl } from "../api/base";
 import { setTokenGetter } from "../api/client";
 import { queryClient } from "../api/query-client";
 import { type AuthAdapter, AuthContext } from "./auth-context";
+import { postClearingCache } from "./clear-http-cache";
 import { useClearQueryCacheOnUserChange } from "./use-clear-query-cache-on-user-change";
 import { useWipeCrdtOnUserChange } from "./use-wipe-crdt-on-user-change";
 
@@ -142,10 +143,9 @@ export default function LocalAuthProvider({ children }: { children: React.ReactN
 	}, []);
 
 	const logout = useCallback(async () => {
-		await fetch(joinApiUrl(getApiBase(), "/api/auth/logout"), {
-			method: "POST",
-			credentials: "include",
-		}).catch((err) => console.error("Logout request failed:", err));
+		// The server revokes the refresh family before it answers; the answer
+		// then waits on the browser's Clear-Site-Data wipe, so don't block on it.
+		postClearingCache("/api/auth/logout");
 		setAccessToken(null);
 		setUser(null);
 	}, []);

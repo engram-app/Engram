@@ -65,7 +65,7 @@ export function DangerZoneSection() {
 		}
 		try {
 			await remove();
-			await clearHttpCache();
+			clearHttpCache();
 			await clerk.signOut({ redirectUrl: ROUTES.SIGN_IN });
 		} catch (e) {
 			setDeleting(false);

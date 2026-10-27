@@ -94,7 +94,7 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 			user: isSignedIn && email ? { email, imageUrl } : null,
 			getToken: tokenGetter,
 			logout: async () => {
-				await clearHttpCache();
+				clearHttpCache();
 				await clerk.signOut();
 			},
 			hasBuiltInUI: true,
