@@ -11,7 +11,7 @@ defmodule Engram.Embedders.Voyage do
   ## Telemetry
 
     * `[:engram, :voyage, :embed, :start | :stop | :exception]` — request
-      span. Stop metadata: `%{status: ..., purpose: ...}`.
+      span. Stop metadata: `%{status: ..., purpose: ..., model: ...}`.
     * `[:engram, :voyage, :embed, :tokens]` — emitted on a successful 200
       response when the Voyage payload includes `usage.total_tokens`.
       Measurements: `%{total_tokens: pos_integer()}`. Metadata:
@@ -57,6 +57,7 @@ defmodule Engram.Embedders.Voyage do
   @impl true
   def embed_texts(texts, opts) when is_list(texts) do
     purpose = Keyword.get(opts, :purpose, :index)
+    model = resolve_model(opts)
 
     # Span tracks every request reaching the network OR fast-failing the
     # client-side throttle. The synthetic-429 path emits its own
@@ -65,17 +66,20 @@ defmodule Engram.Embedders.Voyage do
     # the Voyage `embed_total` rate isn't dragged down by silent drops.
     :telemetry.span(
       [:engram, :voyage, :embed],
-      %{purpose: purpose, text_count: length(texts)},
+      %{purpose: purpose, model: model, text_count: length(texts)},
       fn ->
         result =
           with :ok <- throttle_check(opts) do
             do_embed_texts(texts, opts)
           end
 
-        {result, %{purpose: purpose, status: status_label(result)}}
+        {result, %{purpose: purpose, model: model, status: status_label(result)}}
       end
     )
   end
+
+  defp resolve_model(opts),
+    do: Keyword.get(opts, :model, ServiceConfig.get(:embed_model, @default_model))
 
   defp status_label({:ok, _}), do: :ok
   defp status_label({:error, {429, %{"detail" => "client_rate_limited"}}}), do: :throttled
@@ -118,7 +122,7 @@ defmodule Engram.Embedders.Voyage do
 
   defp do_embed_texts(texts, opts) do
     url = ServiceConfig.get(:voyage_url, @default_url)
-    model = Keyword.get(opts, :model, ServiceConfig.get(:embed_model, @default_model))
+    model = resolve_model(opts)
 
     api_key =
       ServiceConfig.get(:voyage_api_key) ||
@@ -267,7 +271,7 @@ defmodule Engram.Embedders.Voyage do
             :telemetry.execute(
               [:engram, :embed, :client_rate_limited],
               %{count: 1, retry_after_ms: retry_after_ms},
-              %{rpm: rpm, purpose: purpose}
+              %{rpm: rpm, purpose: purpose, model: resolve_model(opts)}
             )
 
             {:error,

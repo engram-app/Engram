@@ -14,14 +14,14 @@ defmodule Engram.PromEx.Voyage do
   Metrics:
 
     * `engram_prom_ex_voyage_embed_duration_milliseconds` — distribution,
-      tags `[:status, :purpose]`. Buckets tuned to observed Voyage latency
+      tags `[:status, :purpose, :model]`. Buckets tuned to observed Voyage latency
       (~100ms-3s).
     * `engram_prom_ex_voyage_embed_total` — counter (one per request); the
       `:status` tag lets `rate({status="error"}) / rate(*)` derive the
       error rate.
     * `engram_prom_ex_voyage_client_rate_limited_total` — counter for the
       synthetic-429 path (`[:engram, :embed, :client_rate_limited]`,
-      already emitted by the adapter), tagged by `:purpose`.
+      already emitted by the adapter), tagged by `:purpose`, `:model`.
     * `engram_prom_ex_voyage_embed_tokens_total` — sum of `total_tokens`
       per request, tagged by `:purpose` and `:model`. Drives the Grafana
       tokens/min + estimated-cost panels (the dashboard prices each `model`
@@ -29,8 +29,8 @@ defmodule Engram.PromEx.Voyage do
       voyage-4-lite, paid tiers on voyage-4-large). NOT per-tenant — see
       `Engram.UsageMeters` for tenant-attributed token accounting.
 
-  Cardinality contract: only bounded labels (`status`, `purpose`, and
-  `model` on the tokens sum: the two `Engram.EmbedModels` names). NEVER
+  Cardinality contract: only bounded labels (`status`, `purpose`, `model`:
+  the `Engram.EmbedModels` names). NEVER
   add `user_id`, `vault_id`, or any per-tenant identifier — Voyage RPS ×
   user count would explode the time series.
   """
@@ -57,21 +57,21 @@ defmodule Engram.PromEx.Voyage do
           measurement: :duration,
           description: "Voyage embedding request latency.",
           reporter_options: Buckets.opts(Engram.PromEx.Voyage.EmbedDurationBuckets),
-          tags: [:status, :purpose],
+          tags: [:status, :purpose, :model],
           unit: {:native, :millisecond}
         ),
         counter(
           metric_prefix ++ [:embed, :total],
           event_name: @embed_stop_event,
-          description: "Voyage embedding requests by status + purpose.",
-          tags: [:status, :purpose]
+          description: "Voyage embedding requests by status + purpose + model.",
+          tags: [:status, :purpose, :model]
         ),
         counter(
           metric_prefix ++ [:client_rate_limited, :total],
           event_name: @client_rate_limited_event,
           description:
             "Synthetic 429s from the local Hammer throttle — purpose-tagged for tuning :voyage_rpm vs :voyage_query_rpm.",
-          tags: [:purpose]
+          tags: [:purpose, :model]
         ),
         sum(
           metric_prefix ++ [:embed, :tokens, :total],

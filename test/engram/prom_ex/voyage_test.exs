@@ -66,13 +66,16 @@ defmodule Engram.PromEx.VoyageTest do
     end
   end
 
-  describe "tokens sum" do
-    test "is tagged by model so the dashboard can price lite and large separately" do
+  describe "model tag" do
+    test "is on every Voyage metric so any purpose x model x status combination is queryable" do
       metrics =
         PromExMetrics.of(VoyagePlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
-      tokens = Enum.find(metrics, &(&1.event_name == [:engram, :voyage, :embed, :tokens]))
-      assert :model in tokens.tags
+      assert length(metrics) == 4
+
+      for m <- metrics do
+        assert :model in m.tags, "#{inspect(m.name)} is missing the :model tag"
+      end
     end
   end
 
