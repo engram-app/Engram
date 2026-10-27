@@ -100,4 +100,116 @@ defmodule Engram.Folders.RowsTest do
     assert ensure!(u, v, "Legacy") == id
     assert Enum.find(rows(u, v), &(&1.id == id)).full_path_hmac == Rows.path_hmac(fk, "Legacy")
   end
+
+  describe "subtree, rename, delete and restore" do
+    defp by_path(user, vault, fk) do
+      rows(user, vault)
+      |> Enum.reject(& &1.deleted_at)
+      |> Map.new(&{&1.full_path_hmac, &1})
+      |> then(fn m -> fn path -> Map.get(m, Rows.path_hmac(fk, path)) end end)
+    end
+
+    defp in_tenant(user, fun) do
+      {:ok, result} = Repo.with_tenant(user.id, fun)
+      result
+    end
+
+    test "subtree is the folder and its descendants, not its siblings", %{user: u, vault: v} do
+      ensure!(u, v, "A/B/C")
+      ensure!(u, v, "A/D")
+      ensure!(u, v, "Other")
+
+      assert in_tenant(u, fn -> Rows.subtree(u, v.id, ["A/B"]) end) |> length() == 2
+      assert in_tenant(u, fn -> Rows.subtree(u, v.id, ["A"]) end) |> length() == 4
+      assert in_tenant(u, fn -> Rows.subtree(u, v.id, [""]) end) == []
+    end
+
+    test "rename moves one row and rewrites the descendants' path hashes", ctx do
+      %{user: u, vault: v, dek: dek, fk: fk} = ctx
+      leaf = ensure!(u, v, "A/B/C/D")
+      ensure!(u, v, "Z")
+      before_ids = rows(u, v) |> Enum.map(& &1.id) |> Enum.sort()
+
+      assert :ok = in_tenant(u, fn -> Rows.rename(u, v.id, "A/B", "Z/Y") end)
+
+      # No row was created or replaced: identity survives the rename.
+      assert rows(u, v) |> Enum.map(& &1.id) |> Enum.sort() == before_ids
+
+      at = by_path(u, v, fk)
+      assert at.("A/B") == nil
+      assert at.("A/B/C/D") == nil
+      assert %{id: ^leaf} = at.("Z/Y/C/D")
+      assert at.("Z/Y/C")
+      y = at.("Z/Y")
+      assert y.parent_id == at.("Z").id
+
+      assert {:ok, "Y"} =
+               Rows.decrypt_name(dek, y.id, y.dek_version, y.name_ciphertext, y.name_nonce)
+
+      assert y.name_hmac == Rows.name_hmac(fk, "Y")
+      # A descendant keeps its own name and parent.
+      c = at.("Z/Y/C")
+      assert c.parent_id == y.id
+      assert c.name_hmac == Rows.name_hmac(fk, "C")
+      # The old parent is untouched.
+      assert at.("A")
+    end
+
+    test "a rename onto a folder that already has a row merges into it", ctx do
+      %{user: u, vault: v, fk: fk} = ctx
+      ensure!(u, v, "A/Same")
+      moved = ensure!(u, v, "A/Only")
+      keeper = ensure!(u, v, "Z/Same")
+      marker = Ecto.UUID.generate()
+      ensure!(u, v, "A/Same/Deep", explicit: marker)
+
+      assert :ok = in_tenant(u, fn -> Rows.rename(u, v.id, "A", "Z") end)
+
+      at = by_path(u, v, fk)
+      assert %{id: ^keeper} = at.("Z/Same")
+      assert %{id: ^moved} = at.("Z/Only")
+      assert at.("Z/Same/Deep").id == marker
+      assert at.("A") == nil
+      # Exactly one live row per path.
+      live = rows(u, v) |> Enum.reject(& &1.deleted_at)
+      assert length(live) == length(Enum.uniq_by(live, & &1.full_path_hmac))
+    end
+
+    test "soft_delete stamps the subtree and restore_op brings it back", ctx do
+      %{user: u, vault: v, fk: fk} = ctx
+      ensure!(u, v, "A/B/C")
+      ensure!(u, v, "Keep")
+      op = Ecto.UUID.generate()
+
+      assert in_tenant(u, fn -> Rows.soft_delete(u, v.id, ["A"], op) end) == 3
+      at = by_path(u, v, fk)
+      assert at.("A") == nil and at.("A/B/C") == nil
+      assert at.("Keep")
+      assert Enum.count(rows(u, v), &(&1.delete_op_id == op and &1.deleted_at)) == 3
+
+      assert in_tenant(u, fn -> Rows.restore_op(v.id, op) end) == 3
+      assert by_path(u, v, fk).("A/B/C")
+      assert Enum.all?(rows(u, v), &is_nil(&1.deleted_at))
+    end
+
+    test "restore_op skips a row whose name a live sibling took", ctx do
+      %{user: u, vault: v, fk: fk} = ctx
+      ensure!(u, v, "A")
+      op = Ecto.UUID.generate()
+      in_tenant(u, fn -> Rows.soft_delete(u, v.id, ["A"], op) end)
+      taken = ensure!(u, v, "A")
+
+      assert in_tenant(u, fn -> Rows.restore_op(v.id, op) end) == 0
+      assert %{id: ^taken} = by_path(u, v, fk).("A")
+    end
+
+    test "unmark_explicit clears the flag and keeps the row", ctx do
+      %{user: u, vault: v, fk: fk} = ctx
+      id = ensure!(u, v, "M", explicit: Ecto.UUID.generate())
+      assert by_path(u, v, fk).("M").explicit
+
+      in_tenant(u, fn -> Rows.unmark_explicit(u, v.id, "M") end)
+      assert %{id: ^id, explicit: false} = by_path(u, v, fk).("M")
+    end
+  end
 end

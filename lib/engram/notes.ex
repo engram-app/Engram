@@ -41,6 +41,7 @@ defmodule Engram.Notes do
     VaultScanCache
   }
 
+  alias Engram.Folders.Rows
   alias Engram.Pager
   alias Engram.Repo
   alias Engram.Sync.Broadcast
@@ -421,6 +422,17 @@ defmodule Engram.Notes do
   @spec mint_id() :: Ecto.UUID.t()
   def mint_id, do: UUIDv7.generate()
 
+  # The folder row must exist before the note row that names it, in the same
+  # transaction: `notes_set_folder_ref` then finds it, and the note is born
+  # pointing at its folder. Call it after the vault seq lock is taken, so two
+  # writers creating the same new folder queue on that lock instead of racing
+  # for the unique index (`Rows.ensure/4` is safe against that race anyway).
+  # The stored `folder_*` columns stay authoritative and are still written.
+  defp ensure_folder_row!(user, vault_id, folder) do
+    {:ok, _id} = Rows.ensure(user, vault_id, folder)
+    :ok
+  end
+
   @doc """
   Creates an explicit empty-folder marker row (kind="folder").
 
@@ -457,9 +469,13 @@ defmodule Engram.Notes do
       # Repo.with_tenant wraps the fn return in {:ok, _} (transaction).
       # Unwrap once so the public contract is {:ok, note} | {:error, _}.
       case Repo.with_tenant(user.id, fn ->
-             upsert_folder_marker(user, vault, dek, folder, folder_hmac, fn ->
-               Engram.Vaults.next_seq!(vault.id)
-             end)
+             with {:ok, marker} <-
+                    upsert_folder_marker(user, vault, dek, folder, folder_hmac, fn ->
+                      Engram.Vaults.next_seq!(vault.id)
+                    end) do
+               :ok = Rows.ensure_markers(user, vault.id, [{folder, marker.id}])
+               {:ok, marker}
+             end
            end) do
         {:ok, inner} -> inner
         {:error, _} = err -> err
@@ -552,6 +568,7 @@ defmodule Engram.Notes do
 
         try do
           markers = upsert_folder_markers(user, vault, dek, filter_key, names, seq_fun)
+          :ok = Rows.ensure_markers(user, vault.id, Enum.map(markers, &{&1.folder, &1.id}))
           seq = Process.get(seq_key)
 
           # A marker carrying this call's seq is one this call wrote; a live
@@ -833,8 +850,14 @@ defmodule Engram.Notes do
                  |> Ecto.Changeset.put_change(:seq, Engram.Vaults.next_seq!(vault.id))
                  |> Repo.update()
                  |> case do
-                   {:ok, _} -> {:ok, :deleted}
-                   {:error, _} = err -> err
+                   {:ok, _} ->
+                     # Notes under the folder keep it alive; it is just no
+                     # longer an explicit one.
+                     :ok = Rows.unmark_explicit(user, vault.id, folder)
+                     {:ok, :deleted}
+
+                   {:error, _} = err ->
+                     err
                  end
 
                {:ok, _already_soft_deleted} ->
@@ -1308,6 +1331,7 @@ defmodule Engram.Notes do
       # first, so inserting first and locking after deadlocks against them
       # (Postgres 40P01). Pinned by crdt_create_query_budget_test.exs.
       seq = Engram.Vaults.next_seq!(insert_attrs.vault_id)
+      :ok = ensure_folder_row!(user, insert_attrs.vault_id, folder)
       changeset = Ecto.Changeset.put_change(changeset, :seq, seq)
 
       case Repo.insert(changeset, on_conflict: :nothing) do
@@ -2451,6 +2475,7 @@ defmodule Engram.Notes do
           |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
 
         seq = Engram.Vaults.next_seq!(prior.vault_id)
+        :ok = ensure_folder_row!(user, prior.vault_id, folder)
 
         changeset =
           prior
@@ -4275,6 +4300,7 @@ defmodule Engram.Notes do
       )
 
     seq = Engram.Vaults.next_seq!(note.vault_id)
+    :ok = ensure_folder_row!(user, note.vault_id, new_folder)
 
     # Fenced on the row pre-image this rename derived from. #1335, same class.
     # `full_kw` rebuilds ALL five ciphertext columns from `decrypted_note`,
@@ -6680,6 +6706,19 @@ defmodule Engram.Notes do
             {:ok, seq} =
               Repo.with_tenant(user.id, fn ->
                 seq = Engram.Vaults.next_seq!(vault.id)
+
+                # Folder rows first: the renamed subtree keeps its rows (and
+                # ids) under the new path hashes, so the trigger on the notes
+                # update below resolves every note straight back to its own
+                # folder. Descendant FOLDERS only; the notes join by id.
+                :ok = Rows.rename(user, vault.id, old_folder, new_folder)
+
+                {:ok, _} =
+                  Rows.ensure_all(
+                    user,
+                    vault.id,
+                    Enum.map(updates, fn {_n, _old, _new, folder, _t} -> folder end)
+                  )
 
                 # Batched write side: the old shape issued one update_all PER NOTE
                 # (each row carries its own re-encrypted envelopes, so a plain

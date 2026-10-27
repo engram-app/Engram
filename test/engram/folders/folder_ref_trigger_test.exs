@@ -21,6 +21,10 @@ defmodule Engram.Folders.FolderRefTriggerTest do
   defp folder!(user, vault, name_hmac, opts),
     do: Engram.FolderRows.insert!(user, vault, name_hmac, opts)
 
+  # The previous release's write: only the stored columns, no folder row.
+  defp old_release_write!(user, vault, path),
+    do: Engram.Fixtures.insert_note!(user, vault, %{path: path, content: "# T\n\nbody"})
+
   defp write!(user, vault, path) do
     {:ok, note} =
       Notes.upsert_note(user, vault, %{"path" => path, "content" => "# T\n\nbody"}, actor: "api")
@@ -73,7 +77,7 @@ defmodule Engram.Folders.FolderRefTriggerTest do
       )
 
       for path <- ["Nobody/A.md", "Root.md", "Other/B.md", "Gone/C.md"] do
-        assert folder_ref(write!(u, v, path).id) == nil, path
+        assert folder_ref(old_release_write!(u, v, path).id) == nil, path
       end
     end
 

@@ -20,9 +20,11 @@ defmodule Engram.Attachments do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Crypto.RotationGate
+  alias Engram.Folders.Rows
   alias Engram.Links
   alias Engram.Logger.Metadata
   alias Engram.Notes.Enqueue
+  alias Engram.Notes.Helpers
   alias Engram.Notes.PathSanitizer
   alias Engram.Pager
   alias Engram.Repo
@@ -207,7 +209,7 @@ defmodule Engram.Attachments do
       with :ok <- rotation_gate(user, dek_version),
            :ok <- validate_storage_cap(user, existing, size),
            {:ok, insert_id, attrs} <- build.(existing),
-           {:ok, att} <- write_row(user, existing, insert_id, attrs) do
+           {:ok, att} <- write_row(user, existing, insert_id, attrs, path) do
         # Phase B.3: path is virtual — splice the plaintext we already have
         # onto the returned struct so callers can read att.path without a
         # second decrypt round-trip.
@@ -401,15 +403,23 @@ defmodule Engram.Attachments do
     end
   end
 
-  defp write_row(user, existing, fallback_id, changeset_attrs) do
+  defp write_row(user, existing, fallback_id, changeset_attrs, path) do
     Repo.with_tenant(user.id, fn ->
       # Sync backbone: stamp a monotonic seq inside the same tenant txn so the
       # bump and the row write commit atomically. Applies to insert + update.
       # version mirrors notes.version for resurrection parity: an update sets
       # existing.version + 1; an insert leaves the schema default (1) untouched.
+      seq = Engram.Vaults.next_seq!(changeset_attrs.vault_id)
+
+      # The folder row (nil at the root) after the vault lock, like every
+      # writer: the attachment points at it by id next to its stored path.
+      {:ok, folder_ref} =
+        Rows.ensure(user, changeset_attrs.vault_id, Helpers.extract_folder(path))
+
       changeset_attrs =
         changeset_attrs
-        |> Map.put(:seq, Engram.Vaults.next_seq!(changeset_attrs.vault_id))
+        |> Map.put(:seq, seq)
+        |> Map.put(:folder_ref_id, folder_ref)
         |> then(fn attrs ->
           case existing do
             %Attachment{version: v} -> Map.put(attrs, :version, v + 1)
@@ -838,6 +848,7 @@ defmodule Engram.Attachments do
             # pull must never see the repoint at seq S, advance past S, and miss
             # the tombstone also at S.
             seq = Engram.Vaults.next_seq!(vault.id)
+            {:ok, folder_ref} = Rows.ensure(user, vault.id, Helpers.extract_folder(new_path))
 
             # Repoint the live row: re-encrypt path under the SAME id-AAD (id is
             # unchanged, so the AAD bind is unchanged), recompute path_hmac, bump
@@ -854,6 +865,7 @@ defmodule Engram.Attachments do
                     path_nonce: path_n,
                     path_hmac: new_hmac,
                     basename_hmac: new_basename_hmac,
+                    folder_ref_id: folder_ref,
                     updated_at: now,
                     seq: seq
                   ] ++ Links.path_keys(filter_key, new_path, path_n)
@@ -1174,6 +1186,10 @@ defmodule Engram.Attachments do
     n = length(moving)
     last_seq = Engram.Vaults.next_seq_block!(vault.id, n)
 
+    # One folder row per distinct destination folder, after the vault lock.
+    {:ok, refs} =
+      Rows.ensure_all(user, vault.id, Enum.map(moving, &Helpers.extract_folder(&1.new_path)))
+
     moved =
       moving
       |> Enum.with_index(last_seq - n + 1)
@@ -1188,7 +1204,8 @@ defmodule Engram.Attachments do
             path_ciphertext: path_ct,
             path_nonce: path_n,
             path_hmac: item.new_hmac,
-            basename_hmac: item.new_basename_hmac
+            basename_hmac: item.new_basename_hmac,
+            folder_ref_id: Map.fetch!(refs, Helpers.extract_folder(item.new_path))
           ] ++ Links.path_keys(filter_key, item.new_path, path_n)
 
         {item, seq, cols, struct(%{att | path: item.new_path, updated_at: now, seq: seq}, cols)}

@@ -107,8 +107,9 @@ defmodule Engram.QueryBudgetTest do
     # notes cap (usage_meters), path-collision probe, seq bump, INSERT, the
     # inserted row's re-read, usage_meters increment, EmbedNote and
     # ExtractNoteLinks unique check + insert (4), the vault_populated probe,
-    # the response's links read, commit.
-    "POST notes create" => 16,
+    # the response's links read, the folder row lookup (`Folders.Rows.ensure/4`:
+    # one indexed probe by path hash when the folder is not the root), commit.
+    "POST notes create" => 17,
     # As "mcp append_to_note" (1-13), plus the response's note_links read.
     "POST notes/append" => 13,
     # Not consolidated in Task 10b (no query-classify item; a rename claims its
@@ -120,10 +121,11 @@ defmodule Engram.QueryBudgetTest do
     #  so concurrent release chunks cannot overwrite each other's snapshot.
     #  The separate tail-ids read is gone (-1, #2306): the fold prunes exactly
     #  the ids its replay applied.
-    #  13-20 rename txn (2 note reads, seq, UPDATE, tombstone INSERT).
-    #  21-26 post-commit jobs (one unique, own txn). 27-31 idle-room fanout
-    #  (fresh users row + note read). 32-35 links txn.
-    "POST notes/rename" => 35,
+    #  13-21 rename txn (2 note reads, seq, the destination folder row probe,
+    #  UPDATE, tombstone INSERT).
+    #  22-27 post-commit jobs (one unique, own txn). 28-32 idle-room fanout
+    #  (fresh users row + note read). 33-36 links txn.
+    "POST notes/rename" => 36,
     # begin, enter, the note row, seq bump, tombstone, usage_meters, the
     # index-delete job insert + its pg_notify, the release joining the
     # warm-up's pending release job (one UPDATE, no insert), commit. With no

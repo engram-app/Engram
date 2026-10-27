@@ -16,7 +16,7 @@ defmodule Engram.Attachments.BulkUpdate do
 
   alias Engram.Repo
 
-  # 500 rows x at most 9 params, far under Postgres's 65535-bind-param limit.
+  # x at most 10 params per row: far under Postgres's 65535-bind-param limit
   @chunk 500
 
   @doc "Rows per statement. `:attachments_bulk_chunk` lowers it (tests)."
@@ -27,7 +27,6 @@ defmodule Engram.Attachments.BulkUpdate do
     delete: "deleted_at = $1, updated_at = $1, seq = v.seq",
     touch: "updated_at = $1, seq = v.seq"
   }
-
   # Columns a move rewrites, in VALUES order, with their SQL types.
   @move_cols [
     path_ciphertext: "bytea",
@@ -36,7 +35,8 @@ defmodule Engram.Attachments.BulkUpdate do
     basename_hmac: "bytea",
     path_ci_hmac: "bytea",
     path_length: "integer",
-    link_keys_stamp: "bytea"
+    link_keys_stamp: "bytea",
+    folder_ref_id: "uuid"
   ]
 
   @doc """
@@ -71,7 +71,7 @@ defmodule Engram.Attachments.BulkUpdate do
       params = [
         DateTime.to_naive(now)
         | Enum.flat_map(chunk, fn {id, seq, cols} ->
-            [Ecto.UUID.dump!(id), seq | Enum.map(names, &Keyword.fetch!(cols, &1))]
+            [Ecto.UUID.dump!(id), seq | Enum.map(names, &dump_col(&1, Keyword.fetch!(cols, &1)))]
           end)
       ]
 
@@ -131,4 +131,9 @@ defmodule Engram.Attachments.BulkUpdate do
       for [id, hmac] <- rows, do: {Ecto.UUID.load!(id), hmac}
     end)
   end
+
+  # The folder ref is a UUID string (or nil, the root) in the caller's columns.
+  defp dump_col(:folder_ref_id, nil), do: nil
+  defp dump_col(:folder_ref_id, id), do: Ecto.UUID.dump!(id)
+  defp dump_col(_name, value), do: value
 end

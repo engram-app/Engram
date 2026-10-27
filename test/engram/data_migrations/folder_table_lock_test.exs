@@ -14,7 +14,6 @@ defmodule Engram.DataMigrations.FolderTableLockTest do
 
   alias Engram.CheckpointInterleave
   alias Engram.DataMigrations.FolderTable
-  alias Engram.Notes
   alias Engram.Repo
 
   setup do
@@ -48,8 +47,8 @@ defmodule Engram.DataMigrations.FolderTableLockTest do
     user: user,
     vault: vault
   } do
-    {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "Dir/l.md", "content" => "x"}, actor: "api")
+    # The previous release's write (the app's own writers create the folder row).
+    note = Engram.Fixtures.insert_note!(user, vault, %{path: "Dir/l.md", content: "x"})
 
     test = self()
 

@@ -41,6 +41,7 @@ defmodule Engram.Folders do
   alias Engram.Attachments
   alias Engram.Billing
   alias Engram.Crypto
+  alias Engram.Folders.Rows
   alias Engram.Logger.Metadata
   alias Engram.Notes
   alias Engram.Notes.PathSanitizer
@@ -249,7 +250,7 @@ defmodule Engram.Folders do
             log_orphaned_attachments(user, vault, folder, unreadable)
 
             {:ok, %{notes: n, attachments: a}} =
-              delete_scanned(user, vault, note_rows, att_paths, opts)
+              delete_scanned(user, vault, [folder], note_rows, att_paths, opts)
 
             {:ok, %{notes: n, attachments: a}}
         end
@@ -265,13 +266,20 @@ defmodule Engram.Folders do
   # both from what was ACTUALLY deleted, not the scan. Since #1346 the
   # membership fence can skip a row that moved in the gap, so the scan count
   # is aspirational.
-  defp delete_scanned(user, vault, note_rows, att_paths, opts) do
+  defp delete_scanned(user, vault, folders, note_rows, att_paths, opts) do
     op = Keyword.take(opts, [:op_id])
     {:ok, attachments} = Attachments.delete_scanned_paths(user, vault, att_paths, op)
     {content, markers} = Enum.split_with(note_rows, &(&1.kind == "note"))
 
     %{deleted: d1, notes: n} = delete_note_chunks(user, vault, content, op)
     %{deleted: d2} = delete_note_chunks(user, vault, markers, op)
+
+    # The folder rows go last, like the markers: a failure above leaves the
+    # folder in place for a retry to find. Rows only; the notes and
+    # attachments were stamped by their own legs.
+    _ =
+      Repo.with_tenant!(user.id, fn -> Rows.soft_delete(user, vault.id, folders, op[:op_id]) end)
+
     {:ok, %{notes: n, deleted: d1 + d2, attachments: attachments}}
   end
 
@@ -322,7 +330,7 @@ defmodule Engram.Folders do
          {:ok, note_rows} <- Notes.scan_folders(user, vault, folders),
          {:ok, att_paths} <- attachment_paths_under(user, vault, folders) do
       {:ok, %{deleted: notes, attachments: atts}} =
-        delete_scanned(user, vault, note_rows, att_paths, opts)
+        delete_scanned(user, vault, folders, note_rows, att_paths, opts)
 
       {:ok, %{notes: notes, attachments: atts}}
     end
@@ -366,6 +374,9 @@ defmodule Engram.Folders do
 
     with {:ok, notes} <- Notes.plan_restore(user, vault, op_id, cutoff),
          {:ok, atts} <- Attachments.plan_restore(user, vault, op_id, cutoff),
+         # Folder rows before anything that points at them. The plans above
+         # refuse without writing, so a refused restore leaves them deleted.
+         _ = Repo.with_tenant!(user.id, fn -> Rows.restore_op(vault.id, op_id) end),
          {:ok, folders} <- restore_markers(user, vault, notes.folders),
          {:ok, n} <- Notes.restore_notes(user, vault, op_id, notes.notes),
          {:ok, a} <- Attachments.restore_attachments(user, vault, atts.attachments) do
