@@ -179,8 +179,7 @@ defmodule Engram.Accounts.LifecycleTest do
             char_end: 10,
             token_count: 3,
             qdrant_point_id: Ecto.UUID.generate(),
-            context_hmac: String.duplicate("a", 64),
-            created_at: DateTime.utc_now(:second)
+            context_hmac: String.duplicate("a", 64)
           },
           skip_tenant_check: true
         )

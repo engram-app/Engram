@@ -60,12 +60,12 @@ defmodule Engram.Links.Rewriter do
     CrdtDeliver,
     CrdtPersistence,
     CrdtRegistry,
+    CrdtRoom,
     CrdtUpdateLog,
     Enqueue,
-    Note
+    Note,
+    NoteBody
   }
-
-  alias Yex.Sync.SharedDoc
 
   require Logger
 
@@ -227,7 +227,9 @@ defmodule Engram.Links.Rewriter do
           from(n in Note,
             where:
               n.id == ^id and n.user_id == ^user.id and n.vault_id == ^vault.id and
-                n.kind == "note" and is_nil(n.deleted_at)
+                n.kind == "note" and is_nil(n.deleted_at),
+            # The path only: never the body.
+            select: struct(n, ^Note.path_fields())
           )
         )
       end)
@@ -376,7 +378,7 @@ defmodule Engram.Links.Rewriter do
 
     {:ok, result} =
       Repo.with_tenant(user.id, fn ->
-        case Repo.get(Note, note_id) do
+        case NoteBody.get(note_id) do
           nil ->
             :skip
 
@@ -468,6 +470,13 @@ defmodule Engram.Links.Rewriter do
             # (still the same object), and persist_roomless/7 re-checks the
             # tail head before its own append.
             persist_roomless(user, vault, note, doc, delta, head_at_load, rt)
+
+          {:error, {:room_raised, _}} = err ->
+            # The apply raised INSIDE a live room (logged by CrdtRoom). The
+            # delta did not land, and the room still owns the doc, so a
+            # roomless write next to it would fork the note. Report failure:
+            # note_links stay as they were rather than claim a rewrite.
+            err
         end
     end
   end
@@ -563,9 +572,10 @@ defmodule Engram.Links.Rewriter do
   # exit reason here returns `{:error, :room_gone}` and the caller falls
   # through to a fresh roomless attempt. Silently swallowing and reporting
   # success would durably desync note_links from the doc (see #1231 review).
+  # A fun that RAISES inside the room returns `{:error, {:room_raised, _}}`
+  # (y_ex >= 0.13 no longer crashes the room for it), which the caller fails on.
   defp room_apply(room, note_id, fun) do
-    SharedDoc.update_doc(room, fun)
-    :ok
+    CrdtRoom.update_doc(room, fun, metadata: [note_id: note_id])
   catch
     :exit, {reason, _} when reason in [:noproc, :normal, :shutdown] ->
       {:error, :room_gone}

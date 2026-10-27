@@ -190,6 +190,54 @@ defmodule Engram.Notes.NoteSplitTest do
       assert :done = NoteSplit.run_pass()
     end
 
+    # Drift is REPORTED, never repaired: the release that stops writing the
+    # notes body columns runs beside this one, and there the body row is the
+    # newer side. A body newer than notes must survive a pass untouched, and
+    # the pass still closes the ledger (the Keys ids do not depend on it).
+    test "a body row newer than notes is reported and left untouched", %{user: u, vault: v} do
+      note = write!(u, v, "drift.md", "drift")
+      newer = <<1>> <> :crypto.strong_rand_bytes(60)
+
+      Repo.query!("UPDATE note_bodies SET content_ct = $2 WHERE note_id = $1", [
+        Ecto.UUID.dump!(note.id),
+        newer
+      ])
+
+      ref = make_ref()
+      me = self()
+
+      :telemetry.attach(
+        "drift-#{inspect(ref)}",
+        [:engram, :note_split, :body_drift],
+        fn _, %{count: c}, _, _ -> if self() == me, do: send(me, {ref, c}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("drift-#{inspect(ref)}") end)
+
+      assert :done = NoteSplit.run_pass()
+      assert_received {^ref, 1}
+      assert row(note.id)["b_content"] == newer
+    end
+
+    test "a clean table reports no drift", %{user: u, vault: v} do
+      _ = write!(u, v, "clean.md", "clean")
+      ref = make_ref()
+      me = self()
+
+      :telemetry.attach(
+        "nodrift-#{inspect(ref)}",
+        [:engram, :note_split, :body_drift],
+        fn _, %{count: c}, _, _ -> if self() == me, do: send(me, {ref, c}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("nodrift-#{inspect(ref)}") end)
+
+      assert :done = NoteSplit.run_pass()
+      assert_received {^ref, 0}
+    end
+
     test "keyset-pages across batches without rescanning", %{user: u, vault: v} do
       notes = for p <- ~w(p1.md p2.md p3.md), do: write!(u, v, p, p)
 

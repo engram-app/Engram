@@ -10,6 +10,7 @@ defmodule EngramWeb.SyncController do
   alias Engram.Logger.Metadata
   alias Engram.Notes.CrdtUpdateLog
   alias Engram.Notes.Note
+  alias Engram.Notes.NoteBody
   alias Engram.Repo
   alias EngramWeb.Schemas
 
@@ -180,17 +181,25 @@ defmodule EngramWeb.SyncController do
     # them. Decrypt (render_manifest/4) stays OUTSIDE the block on purpose:
     # holding a DB connection across CPU-bound decrypt work is the shape
     # behind the 2026-07-09 CRDT pool-exhaustion incident.
+    # `crdt_head` from the note's body row (`NoteBody`), the rest from notes.
     notes =
-      Repo.all(
-        from(n in Note,
-          where:
-            n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-              n.kind == "note",
-          select:
-            {n.id, fragment("uuid_send(?)", n.id), n.dek_version, n.path_ciphertext, n.path_nonce,
-             n.content_hash, n.seq, n.crdt_head}
-        )
+      from(n in Note,
+        where:
+          n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
+            n.kind == "note",
+        select: %{
+          id: n.id,
+          raw: fragment("uuid_send(?)", n.id),
+          v: n.dek_version,
+          ct: n.path_ciphertext,
+          nonce: n.path_nonce,
+          hash: n.content_hash,
+          seq: n.seq
+        }
       )
+      |> NoteBody.join()
+      |> select_merge(^NoteBody.fields([:crdt_head]))
+      |> Repo.all()
 
     attachments =
       Repo.all(
@@ -212,12 +221,16 @@ defmodule EngramWeb.SyncController do
     # slower: copying results back rivals the AES-GCM work.
     notes =
       Crypto.measure_decrypt_batch(:manifest_notes, length(note_rows), fn ->
-        fields =
-          Enum.map(note_rows, fn {_, raw, v, ct, nonce, _, _, _} -> {raw, v, ct, nonce} end)
+        fields = Enum.map(note_rows, &{&1.raw, &1.v, &1.ct, &1.nonce})
 
-        Enum.zip_with(note_rows, PathCrypto.decrypt_many!(:notes, fields, dek), fn
-          {id, _, _, _, _, hash, seq, crdt_head}, path ->
-            %{id: id, path: path, content_hash: hash, seq: seq, crdt_head: crdt_head}
+        Enum.zip_with(note_rows, PathCrypto.decrypt_many!(:notes, fields, dek), fn row, path ->
+          %{
+            id: row.id,
+            path: path,
+            content_hash: row.hash,
+            seq: row.seq,
+            crdt_head: row.crdt_head
+          }
         end)
       end)
       |> Enum.sort_by(& &1.path)

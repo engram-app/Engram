@@ -406,6 +406,8 @@ defmodule Engram.Notes.CrdtDeliverTest do
           )
         end)
 
+      Engram.Fixtures.mirror_body!(note.id)
+
       room = start_bare_room(note.id, "orig")
       ref = Process.monitor(room)
       EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
@@ -423,6 +425,28 @@ defmodule Engram.Notes.CrdtDeliverTest do
 
       # The degradation is loud (Sentry captures Logger.error).
       assert log =~ "crdt deliver state load failed"
+    end
+
+    # y_ex >= 0.13 returns a raise inside the room from update_doc instead of
+    # crashing the room. A room that raised mid-apply may hold a partial state
+    # it never converged to, so it is quarantined exactly like a failed apply.
+    test "an apply that raises inside the room QUARANTINES the room",
+         %{user: user, vault: vault} do
+      Process.flag(:trap_exit, true)
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "orig"}, actor: "api")
+
+      room = start_bare_room(note.id, "")
+      ref = Process.monitor(room)
+      :sys.replace_state(room, &%{&1 | doc: :not_a_doc})
+
+      capture_log(fn ->
+        assert :ok = CrdtDeliver.deliver_out(user.id, vault.id, "r.md", note.id, "orig")
+      end)
+
+      assert_receive {:DOWN, ^ref, :process, ^room, :killed}, 1000
+      assert CrdtRegistry.lookup(note.id) == nil
     end
 
     test "a STALE apply-failed message in the caller's mailbox does not quarantine a healthy room (#953-review F4)",

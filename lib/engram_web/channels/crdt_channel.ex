@@ -27,6 +27,7 @@ defmodule EngramWeb.CrdtChannel do
   alias Engram.Notes.CrdtIndexRegistry
   alias Engram.Notes.CrdtPersistence
   alias Engram.Notes.CrdtRegistry
+  alias Engram.Notes.CrdtRoom
   alias Engram.Notes.CrdtTransport
   alias EngramWeb.ChannelGate
   alias Yex.Sync.SharedDoc
@@ -426,7 +427,7 @@ defmodule EngramWeb.CrdtChannel do
           # `occupied`, not `absent`: the row at this path holds ANOTHER note's
           # body. The ADOPT path transfers ours onto that lineage deliberately;
           # a blind push would union two bodies into one note (#476).
-          {:reply, {:ok, %{doc_id: note.id, seeded: false, genesis: "occupied"}}, socket}
+          reply_created(note, :occupied, socket)
 
         {:error, :id_conflict, note} ->
           sync_error(socket, :id_conflict)
@@ -920,7 +921,21 @@ defmodule EngramWeb.CrdtChannel do
   # actually holds anything.
   # `seeded` is retained for older plugins, but it is a LOSSY view of `genesis`
   # and must never again be the only thing on the wire (#476).
+  #
+  # Every SUCCESSFUL create reply goes through here (error replies do not), so
+  # the reply OUTCOME is counted here
+  # (Engram.PromEx.Crdt, `genesis_reply_total`). An `occupied` answer to a
+  # duplicate create is where the plugin can drop an edit
+  # (engram-app/Engram-obsidian#645). Tags are two closed atom sets; never ids.
+  # The full set of pairs is `Engram.PromEx.Crdt.genesis_reply_tags/0` (seeded
+  # at 0 on boot); a new outcome or client here must be added there, which the
+  # "genesis_reply telemetry" channel tests enforce.
   defp reply_created(note, genesis, socket) do
+    :telemetry.execute([:engram, :crdt, :genesis_reply], %{count: 1}, %{
+      outcome: genesis,
+      client: activity_surface(socket.assigns[:client_type])
+    })
+
     {:reply,
      {:ok, %{doc_id: note.id, seeded: genesis == :stored, genesis: Atom.to_string(genesis)}},
      socket}
@@ -1836,8 +1851,7 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   defp room_responsive?(room) do
-    SharedDoc.update_doc(room, fn _doc -> :ok end, room_probe_ms())
-    true
+    CrdtRoom.update_doc(room, fn _doc -> :ok end, timeout: room_probe_ms()) == :ok
   catch
     :exit, _ -> false
   end
@@ -2193,7 +2207,7 @@ defmodule EngramWeb.CrdtChannel do
     %{vault: vault} = socket.assigns
     user = socket.assigns.current_user
 
-    with {:ok, note_id} <- resolve_note_id(user, vault, doc_id),
+    with {:ok, note_id, path} <- resolve_note_id(user, vault, doc_id),
          {:ok, room} <- CrdtRegistry.ensure_observed(user.id, vault.id, note_id, source) do
       # Watch the room: if it dies (crash, node loss), evict it from the cache so
       # the next crdt_msg re-creates it. Without this, send_yjs_message casts to a
@@ -2236,12 +2250,6 @@ defmodule EngramWeb.CrdtChannel do
       # Scoped to the drain path on purpose: a crash/node-loss re-spin still
       # announces exactly as before, since that peer state is genuinely unknown.
       {announce?, socket} = consume_drained(socket, doc_id)
-
-      path =
-        case Notes.get_note_by_id(user, vault, note_id) do
-          {:ok, %{path: p}} when is_binary(p) -> p
-          _ -> nil
-        end
 
       if announce? or not backstopped?(path) do
         payload =
@@ -2301,15 +2309,13 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   # doc_id IS the note_id (client-minted UUIDv7). Validate the note exists in
-  # this vault before starting/observing its room. No path_hmac indirection.
+  # this vault before starting/observing its room, and read the path the
+  # announce carries in the same statement. No path_hmac indirection.
   defp resolve_note_id(user, vault, doc_id) do
     case Ecto.UUID.cast(doc_id) do
       {:ok, note_id} ->
-        if Notes.note_in_vault?(user, vault.id, note_id) do
-          {:ok, note_id}
-        else
-          {:error, :not_found}
-        end
+        with {:ok, path} <- Notes.live_note_path(user, vault, note_id),
+             do: {:ok, note_id, path}
 
       :error ->
         {:error, :bad_doc_id}

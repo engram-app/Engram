@@ -84,8 +84,7 @@ defmodule Engram.Notes.Identity do
   """
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtIndexDoc, CrdtIndexPersistence}
-  alias Yex.Sync.SharedDoc
+  alias Engram.Notes.{CrdtIndexDoc, CrdtIndexPersistence, CrdtRoom}
 
   require Logger
 
@@ -177,7 +176,7 @@ defmodule Engram.Notes.Identity do
   defp route_targets(user, vault_id, targets, op) do
     case :global.whereis_name({:crdt_index, vault_id}) do
       pid when is_pid(pid) ->
-        case via_room(pid, targets) do
+        case via_room(pid, vault_id, targets) do
           {:error, {:room_exit, _}} = err ->
             # The room died or stopped answering. Its checkpoint may or may not
             # have run, so the snapshot is the only place left to write.
@@ -193,6 +192,18 @@ defmodule Engram.Notes.Identity do
           {:error, :mailbox_empty} ->
             emit(op, :room, :mailbox_empty, targets)
             log(user, vault_id, op, "room gave no answer; falling back to snapshot")
+            via_snapshot(user, vault_id, targets, op)
+
+          # The write fun raised inside the room (y_ex >= 0.13 returns it
+          # instead of crashing the room; `CrdtRoom.update_doc/3` logged it).
+          # `mutate/2` builds every op before it opens the transaction, so a
+          # raise here is either before any write or a NIF failure mid-batch.
+          # The snapshot write re-applies the WHOLE batch and `recheck_room`
+          # re-applies it through the room; see `mutate/2` for what a failure
+          # that repeats leaves behind.
+          {:error, {:room_raised, _}} = err ->
+            emit(op, :room, :room_raised, targets)
+            log(user, vault_id, op, "room write raised: #{sanitize(err)}")
             via_snapshot(user, vault_id, targets, op)
 
           result ->
@@ -213,32 +224,41 @@ defmodule Engram.Notes.Identity do
     end
   end
 
-  # `update_doc/2` returns :ok and DISCARDS the fun's value, so a refusal has to
-  # be posted back out of the room process.
+  # `update_doc` returns `:ok` and DISCARDS the fun's value, so a refusal has
+  # to be posted back out of the room process. Since y_ex 0.13 a fun that
+  # raises no longer crashes the room; `CrdtRoom.update_doc/3` logs it and
+  # returns `{:error, {:room_raised, tag}}`, never a silent `:ok`.
   #
   # `after 0` is deliberate and is NOT a race: `handle_call({:update_doc, fun})`
-  # runs the fun and only then replies, so when this call returns the message is
-  # already in the mailbox. An earlier version used `after 5_000`, which was
-  # unreachable — the enclosing `GenServer.call` has its own 5s timeout and
-  # exits first. `:mailbox_empty` therefore means a y_ex contract change, and
-  # should fail loudly rather than masquerade as a slow room.
-  defp via_room(room, targets) do
+  # runs the fun and only then replies, so when `update_doc/2` returns `:ok` the
+  # message is already in the mailbox. An earlier version used `after 5_000`,
+  # which was unreachable: the enclosing `GenServer.call` has its own 5s timeout
+  # and exits first. `:mailbox_empty` after an `:ok` therefore means a y_ex
+  # contract change, and should fail loudly rather than masquerade as a slow
+  # room.
+  defp via_room(room, vault_id, targets) do
     caller = self()
     ref = make_ref()
 
-    SharedDoc.update_doc(room, fn doc -> send(caller, {ref, mutate(doc, targets)}) end)
+    write = fn doc -> send(caller, {ref, mutate(doc, targets)}) end
 
-    receive do
-      {^ref, result} -> result
-    after
-      0 -> {:error, :mailbox_empty}
+    case CrdtRoom.update_doc(room, write, metadata: [vault_id: vault_id]) do
+      :ok ->
+        receive do
+          {^ref, result} -> result
+        after
+          0 -> {:error, :mailbox_empty}
+        end
+
+      {:error, {:room_raised, _}} = err ->
+        err
     end
   catch
     # Broad, but never silent — the caller logs `reason` before falling back.
-    # This catches `:noproc` (room gone between the lookup and the call), a
-    # `:timeout` from an overloaded or cross-node room, AND `mutate/2` raising
-    # inside the room process, which kills the room for every client on that
-    # vault. Those must not be reduced to an anonymous slow request.
+    # This catches `:noproc` (room gone between the lookup and the call) and a
+    # `:timeout` from an overloaded or cross-node room. (`mutate/2` raising no
+    # longer lands here: y_ex 0.13 returns it from `update_doc/2`, see above.)
+    # Those must not be reduced to an anonymous slow request.
     #
     # KNOWN GAP on the timeout case: the room still has our message queued and
     # will apply it later, while we go on to mutate the persisted snapshot. Two
@@ -359,7 +379,7 @@ defmodule Engram.Notes.Identity do
   defp recheck_room(user, vault_id, targets, op) do
     case :global.whereis_name({:crdt_index, vault_id}) do
       pid when is_pid(pid) ->
-        result = via_room(pid, targets)
+        result = via_room(pid, vault_id, targets)
 
         # A DISTINCT event, not another `index_claim`. `do_via_snapshot` already
         # emitted the outcome for this claim; counting again here made a single
@@ -387,6 +407,18 @@ defmodule Engram.Notes.Identity do
   # auto-commits and a 200-note folder cascade broadcasts ~400 frames, letting an
   # observer read the map with a note deleted from its old path and not yet set
   # at its new one.
+  #
+  # Every op is computed BEFORE the transaction opens. Since y_ex 0.13 a
+  # transaction commits in `after`, so a raise inside it would commit and
+  # broadcast the ops applied so far. Building the list first leaves only the
+  # `Yex.Map` NIF calls inside. A NIF failure mid-batch that is transient
+  # converges: the room route falls back to the snapshot write, whose fold
+  # re-applies the whole batch, and `recheck_room` re-applies it through the
+  # room. A failure that repeats on the same op cannot converge, which is why
+  # each target SETS its new path before it DELETES the old ones (see
+  # `target_ops/3`): stopping between the two leaves the note claimed at both
+  # paths, a duplicate the next claim's `stale_entries/3` removes, rather than
+  # claimed nowhere.
   defp mutate(doc, targets) do
     map = Yex.Doc.get_map(doc, CrdtIndexDoc.map_name())
     current = Yex.Map.to_map(map)
@@ -394,14 +426,12 @@ defmodule Engram.Notes.Identity do
 
     case refusal(current, targets) do
       nil ->
-        Yex.Doc.transaction(doc, @origin, fn ->
-          Enum.each(targets, fn {note_id, path} ->
-            stale = stale_entries(by_note, note_id, path)
-            Enum.each(stale, fn {key, _value} -> Yex.Map.delete(map, key) end)
+        ops = Enum.flat_map(targets, &target_ops(&1, current, by_note))
 
-            if path != :gone do
-              Yex.Map.set(map, path, entry(current, stale, path, note_id))
-            end
+        Yex.Doc.transaction(doc, @origin, fn ->
+          Enum.each(ops, fn
+            {:delete, key} -> Yex.Map.delete(map, key)
+            {:set, key, value} -> Yex.Map.set(map, key, value)
           end)
         end)
 
@@ -465,6 +495,17 @@ defmodule Engram.Notes.Identity do
   end
 
   # Every entry naming this note EXCEPT one already at its target path.
+  defp target_ops({note_id, path}, current, by_note) do
+    stale = stale_entries(by_note, note_id, path)
+    deletes = Enum.map(stale, fn {key, _value} -> {:delete, key} end)
+
+    # Set FIRST (see `mutate/2`). Same final state either way: `stale` never
+    # contains `path`, so no delete below can remove the entry just set.
+    if path == :gone,
+      do: deletes,
+      else: [{:set, path, entry(current, stale, path, note_id)} | deletes]
+  end
+
   defp stale_entries(by_note, note_id, path) do
     by_note |> Map.get(note_id, []) |> Enum.reject(fn {key, _value} -> key == path end)
   end
@@ -492,6 +533,7 @@ defmodule Engram.Notes.Identity do
   defp phase({:error, :conflict}), do: :conflict
   defp phase({:error, :mailbox_empty}), do: :mailbox_empty
   defp phase({:error, {:room_exit, _}}), do: :room_exit
+  defp phase({:error, {:room_raised, _}}), do: :room_raised
   # Only reached from the snapshot route; the room route's shapes are all
   # matched above. Labelling a room failure `:persist_failed` sent an operator
   # hunting a DB or encryption fault on a path that never touched the snapshot.

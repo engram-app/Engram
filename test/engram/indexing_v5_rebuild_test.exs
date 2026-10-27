@@ -292,6 +292,113 @@ defmodule Engram.IndexingV5RebuildTest do
     assert est_b > est_a and sent_b == 0
   end
 
+  # #2197: a refused rebuild (a Free note parked on an empty bucket) keeps
+  # every vector it copied and defers only what it would have sent, with
+  # that need recorded. It used to re-plan the whole note sparse (every
+  # copied dense vector deleted) and report a need of 0.
+  for cache? <- [false, true] do
+    test "a refused rebuild keeps its copied vectors and defers the rest (cache #{cache?})",
+         ctx do
+      Application.put_env(:engram, :vector_cache_enabled, unquote(cache?))
+      on_exit(fn -> Application.delete_env(:engram, :vector_cache_enabled) end)
+
+      note = indexed(ctx)
+
+      changed = %{
+        note
+        | content: String.replace(sections(3), "section2 body", "section2 new body")
+      }
+
+      parent = self()
+
+      assert {:ok, _count, 0, false} =
+               Indexing.index_note_with_usage(changed, ctx.vault, ctx.user,
+                 rebuild: true,
+                 reserve_tokens: fn _ -> false end,
+                 in_commit: fn _count, _dense?, pass -> send(parent, {:pass, pass}) end
+               )
+
+      assert embedded() == []
+      assert_received {:pass, %{deferred_tokens: need}}
+      assert need > 0
+
+      dense = dense_by_position(changed, ctx.store)
+      assert Enum.count(dense, fn {_pos, d} -> d != nil end) == 2
+    end
+  end
+
+  # #2216 L2, end to end under INDEX_REBUILD=on: an edit of a note stamped
+  # behind reuses its unchanged points and so keeps the behind stamp; the
+  # rebuild then rewrites every point in the v5 layout by copying the dense
+  # vectors, with no Voyage call, and stamps the target.
+  for cache? <- [false, true] do
+    test "on: an edit stays behind, then the rebuild sends Voyage nothing (cache #{cache?})",
+         ctx do
+      Application.put_env(:engram, :vector_cache_enabled, unquote(cache?))
+      on_exit(fn -> Application.delete_env(:engram, :vector_cache_enabled) end)
+
+      note = indexed(ctx)
+
+      tenant(ctx.user, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^note.id),
+          set: [
+            embed_hash: note.content_hash,
+            dense_indexed_hash: note.content_hash,
+            embed_model: Indexing.embed_model(),
+            chunker_version: 3,
+            keyword_version: 2
+          ]
+        )
+      end)
+
+      Engram.DataMigrations.reset_cache()
+      Engram.Cache.clear_local(:rebuild)
+      Repo.query!("DELETE FROM rebuild_ledger")
+      Engram.Rebuild.set_budget(1_000_000)
+      ServiceConfig.put_override(:write_v5_layout, true)
+      ServiceConfig.put_override(:index_rebuild, "on")
+      target = Engram.Rebuild.target_versions()
+      assert target > {3, 2}
+
+      {:ok, _} =
+        Engram.Notes.upsert_note(
+          ctx.user,
+          ctx.vault,
+          %{
+            "path" => "Big.md",
+            "content" => String.replace(sections(3), "section2 body", "section2 new body")
+          },
+          actor: "api"
+        )
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id, user_id: ctx.user.id})
+      sent = embedded()
+      assert length(sent) == 1, "the edit must reuse the unchanged sections"
+
+      row = reload(note)
+      assert row.embed_hash == row.content_hash
+      assert {row.chunker_version, row.keyword_version} == {3, 2}
+
+      stub(Engram.MockEmbedder, :embed_texts, fn _ -> flunk("the rebuild must not embed") end)
+      stub(Engram.MockEmbedder, :embed_texts, fn _, _ -> flunk("the rebuild must not embed") end)
+
+      # What RebuildStaleNote runs once `Rebuild.gate/0` (Qdrant health and
+      # token pacing, not under test here) lets it through.
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id, user_id: ctx.user.id})
+
+      row = reload(note)
+      assert {row.chunker_version, row.keyword_version} == target
+      assert row.dense_indexed_hash == row.content_hash
+
+      fps = Enum.map(rows(note), & &1.context_hmac)
+
+      assert Enum.map(rows(note), & &1.qdrant_point_id) ==
+               Enum.zip_with(fps, PointId.ordinals(fps), &PointId.v5(note.id, &1, &2))
+
+      assert Engram.Rebuild.ledger().spent_tokens == 0
+    end
+  end
+
   test "a capped group of all-dense members gets a unit-norm mean and 0 tokens", ctx do
     note = indexed(ctx, 200)
 

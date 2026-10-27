@@ -24,8 +24,12 @@ defmodule Engram.DataMigrations.NoteSplit do
   import Ecto.Query
 
   alias Engram.Backfill.TenantScan
+  alias Engram.Logger.Metadata
   alias Engram.Notes.Note
+  alias Engram.Notes.NoteBody
   alias Engram.Repo
+
+  require Logger
 
   @batch 1_000
   # Rows per pass: a pass is one bounded slice; the next run takes the rest.
@@ -48,7 +52,7 @@ defmodule Engram.DataMigrations.NoteSplit do
   def run_pass(opts) do
     batch = Keyword.get(opts, :batch, @batch)
 
-    {touched, left?} =
+    {touched, left?, drift} =
       case Repo.maintenance() do
         Repo ->
           users = TenantScan.user_ids()
@@ -70,11 +74,17 @@ defmodule Engram.DataMigrations.NoteSplit do
             end)
           end
 
-          {touched, left?}
+          drift = fn ->
+            Enum.each(users, fn user_id ->
+              Repo.with_tenant!(user_id, fn -> report_drift(Repo, user_id) end)
+            end)
+          end
+
+          {touched, left?, drift}
 
         maintenance ->
           {batches(batch, fn after_id -> touch(maintenance, needing(nil, after_id, batch)) end),
-           fn -> left?(maintenance, nil) end}
+           fn -> left?(maintenance, nil) end, fn -> report_drift(maintenance, nil) end}
       end
 
     # SKIP LOCKED passes over a row a writer holds, so a pass that touched
@@ -83,7 +93,7 @@ defmodule Engram.DataMigrations.NoteSplit do
     cond do
       touched > 0 -> {:more, rows: touched}
       left?.() -> {:more, rows: 0}
-      true -> :done
+      true -> tap(:done, fn _ -> safe_drift(drift) end)
     end
   end
 
@@ -114,6 +124,93 @@ defmodule Engram.DataMigrations.NoteSplit do
       )
 
     if after_id, do: where(q, [n], field(n, :id) > type(^after_id, Ecto.UUID)), else: q
+  end
+
+  # Readers take the body from `note_bodies` (`Engram.Notes.NoteBody`), so a
+  # body row that disagrees with its notes row would be served. The trigger
+  # rewrites a body column only when its nonce changes, so a write that
+  # changed a ciphertext but kept its nonce (no writer does; a restore or a
+  # hand edit could) leaves the body stale. A pass that closes the ledger
+  # (the last catch-up pass, and every daily re-verify) compares the two
+  # (`NoteBody.drift/0`, slices only), in id-keyset batches so no single
+  # snapshot spans the table.
+  #
+  # REPORT ONLY: counted (`[:engram, :note_split, :body_drift]`) and logged
+  # with the note ids, never repaired, and it does not reopen the ledger
+  # (the Keys ids come from the core columns, not the bodies). The release
+  # that stops writing the notes body columns runs beside this one and can
+  # roll back to it; there the BODY is the newer side, so a repair that
+  # trusted `notes` would overwrite it with stale or NULL data. A non-zero
+  # count is an alert and a runbook step, and contract may not drop the
+  # notes columns while it is non-zero.
+  # A drift scan that raises (a statement timeout, a pool exit) is logged
+  # and counted (`[:engram, :note_split, :body_drift_error]`) and never
+  # changes the pass outcome: a pass that closes the ledger stays `:done`,
+  # or a report would keep the Keys ids off.
+  defp safe_drift(drift) do
+    drift.()
+  rescue
+    e -> drift_failed(e)
+  catch
+    :exit, reason -> drift_failed(reason)
+  end
+
+  defp drift_failed(reason) do
+    :telemetry.execute([:engram, :note_split, :body_drift_error], %{count: 1}, %{})
+
+    Logger.error(
+      "note_split: body drift scan failed",
+      Metadata.with_category(:error, :sync, reason: Metadata.safe_reason(reason))
+    )
+  end
+
+  @drift_batch 5_000
+  @drift_logged_ids 20
+
+  defp report_drift(repo, user_id, after_id \\ nil, found \\ []) do
+    drift_fault()
+
+    q =
+      from(n in Note, where: n.kind == "note", order_by: n.id, limit: @drift_batch)
+      |> NoteBody.join()
+      |> where([_n, note_body: b], not is_nil(b.note_id))
+      |> select([n], %{id: n.id})
+      |> select_merge(^%{drift: NoteBody.drift()})
+
+    q = if user_id, do: where(q, [n], field(n, :user_id) == type(^user_id, Ecto.UUID)), else: q
+    q = if after_id, do: where(q, [n], n.id > ^after_id), else: q
+
+    rows = repo.all(q)
+    found = for(%{id: id, drift: true} <- rows, do: id) ++ found
+
+    if length(rows) == @drift_batch,
+      do: report_drift(repo, user_id, List.last(rows).id, found),
+      else: emit_drift(found, user_id)
+  end
+
+  # Test-only fault seam: nil outside tests.
+  defp drift_fault do
+    case Application.get_env(:engram, :note_split_drift_fault) do
+      nil -> :ok
+      fun when is_function(fun, 0) -> fun.()
+    end
+  end
+
+  defp emit_drift(ids, user_id) do
+    :telemetry.execute([:engram, :note_split, :body_drift], %{count: length(ids)}, %{})
+
+    if ids != [] do
+      Logger.warning(
+        "note_split: #{length(ids)} note body row(s) disagree with notes (not repaired)",
+        Metadata.with_category(:warning, :sync,
+          user_id: user_id,
+          count: length(ids),
+          note_ids: Enum.take(ids, @drift_logged_ids)
+        )
+      )
+    end
+
+    length(ids)
   end
 
   # Any row still needing work, locked or not: no lock, so a held row counts.

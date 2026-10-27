@@ -95,6 +95,8 @@ defmodule Engram.Notes.CrdtPersistenceTest do
       |> Repo.update_all(set: [crdt_state_ciphertext: tampered])
     end)
 
+    Engram.Fixtures.mirror_body!(note.id)
+
     st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
     doc = CrdtBridge.new_doc()
 

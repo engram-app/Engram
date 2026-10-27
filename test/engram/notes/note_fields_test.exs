@@ -149,6 +149,34 @@ defmodule Engram.Notes.NoteFieldsTest do
     assert "mood" in Enum.map(fields, & &1.name)
   end
 
+  defp attr_writes do
+    %{rows: [[ins, del]]} =
+      Repo.query!("""
+      SELECT coalesce(sum(n_tup_ins), 0)::int, coalesce(sum(n_tup_del), 0)::int
+      FROM pg_stat_xact_user_tables WHERE relname = 'note_attrs'
+      """)
+
+    ins + del
+  end
+
+  # The rows are compared before they are written: a pass over unchanged
+  # frontmatter (a body edit, a rebuild) writes no note_attrs row.
+  test "a pass with unchanged fields leaves note_attrs alone", %{user: user, vault: vault} do
+    {note, user} = index!(user, vault, @full)
+    rows = attrs(note.id)
+    assert rows != []
+
+    before = attr_writes()
+    index!(user, vault, @full <> "\nA body edit.\n")
+    assert attr_writes() == before
+    assert attrs(note.id) == rows
+
+    # A field change still rewrites them.
+    index!(user, vault, String.replace(@full, "status: draft", "status: done"))
+    assert attr_writes() > before
+    refute attrs(note.id) == rows
+  end
+
   test "named fields land in note_attrs under their reserved ids", %{user: user, vault: vault} do
     {note, user} = index!(user, vault, @full)
     {:ok, fk} = Crypto.dek_filter_key(user)

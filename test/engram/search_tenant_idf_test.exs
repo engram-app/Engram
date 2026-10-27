@@ -81,8 +81,6 @@ defmodule Engram.SearchTenantIdfTest do
   end
 
   defp points(user, note, n) do
-    now = DateTime.utc_now(:second)
-
     rows =
       for pos <- 1..n//1 do
         %{
@@ -93,8 +91,7 @@ defmodule Engram.SearchTenantIdfTest do
           qdrant_point_id: Ecto.UUID.generate(),
           note_id: note.id,
           user_id: user.id,
-          vault_id: note.vault_id,
-          created_at: now
+          vault_id: note.vault_id
         }
       end
 

@@ -457,4 +457,150 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
       assert reload(note).dense_indexed_hash == reload(note).content_hash
     end
   end
+
+  # #2197: a version bump must reach a budget-parked Free note without
+  # spending the bucket it was parked to protect: rebuilt keyword-only for
+  # what it lacks, its dense vectors kept, still parked with its real need.
+  describe "a version bump over a budget park" do
+    setup %{user: user, vault: vault} do
+      note = dense_note(user, vault, 10)
+      before = MapSet.new(point_ids(note))
+
+      set_bucket(user.id, 0)
+      edit(user, vault, note, edit_sections(10, [7]))
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+      parked = reload(note)
+      assert parked.embed_budget_parked == true and parked.embed_budget_need > 0
+
+      # Behind the index version, content unchanged (NULL = before the stamp).
+      Repo.update_all(from(n in Note, where: n.id == ^note.id), [set: [chunker_version: nil]],
+        skip_tenant_check: true
+      )
+
+      Engram.DataMigrations.reset_cache()
+      # The edit's own debounced job: the sweep would leave the note to it.
+      Repo.delete_all(Oban.Job)
+      kept = MapSet.intersection(before, MapSet.new(point_ids(note)))
+      %{note: note, need: parked.embed_budget_need, kept: kept}
+    end
+
+    # Review M3: a rebuild that leaves the version stale (a NULL-clear
+    # landed mid-pass and the stamp kept it) must not be re-run every tick.
+    test "a park left version-stale backs off instead of rebuilding every tick", %{note: note} do
+      stub(Engram.MockEmbedder, :embed_texts, fn _ -> flunk("a parked rebuild must not embed") end)
+
+      # Behind on a real stamp (not NULL), so a clear is a change the CAS sees.
+      Repo.update_all(from(n in Note, where: n.id == ^note.id), [set: [chunker_version: 3]],
+        skip_tenant_check: true
+      )
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert [job] = all_enqueued(worker: Engram.Workers.RebuildStaleNote)
+
+      # The NULL-clear lands mid-pass, as a DEK rotation or cluster diff
+      # would: on the pass's first NIF call (fingerprints, before the
+      # commit), in the job's own process.
+      id = "m3-mid-pass-clear-#{note.id}"
+      note_id = note.id
+
+      :telemetry.attach(
+        id,
+        [:engram, :nif, :call, :stop],
+        fn _event, _measure, _meta, _config ->
+          :telemetry.detach(id)
+
+          Repo.update_all(
+            from(n in Note, where: n.id == ^note_id),
+            [set: [chunker_version: nil]],
+            skip_tenant_check: true
+          )
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(id) end)
+
+      assert :ok = perform_job(Engram.Workers.RebuildStaleNote, job.args)
+
+      row = reload(note)
+      assert row.chunker_version == nil, "the mid-pass clear must survive the stamp"
+      assert row.embed_budget_parked == true
+      assert DateTime.compare(row.embed_retry_after, DateTime.utc_now()) == :gt
+      refute row.embed_retry_after == EmbedNote.parked_until_edited()
+
+      # The next tick does nothing.
+      Repo.delete_all(Oban.Job)
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert all_enqueued(args: %{"note_id" => note.id}) == []
+    end
+
+    for cache? <- [false, true] do
+      test "rebuilds keyword-only, keeps the park and its dense points (vector cache #{cache?})",
+           %{note: note, need: need, kept: kept} do
+        Engram.ServiceConfig.put_override(:vector_cache_enabled, unquote(cache?))
+
+        stub(Engram.MockEmbedder, :embed_texts, fn _ ->
+          flunk("a parked rebuild must not embed")
+        end)
+
+        assert :ok = perform_job(ReconcileEmbeddings, %{})
+        assert [job] = all_enqueued(worker: Engram.Workers.RebuildStaleNote)
+        assert job.args["note_id"] == note.id
+
+        assert :ok = perform_job(Engram.Workers.RebuildStaleNote, job.args)
+
+        row = reload(note)
+        assert row.chunker_version == elem(Engram.Rebuild.target_versions(), 0)
+        assert row.embed_budget_parked == true
+        assert row.embed_budget_need == need
+        assert row.embed_retry_after == EmbedNote.parked_until_edited()
+        assert MapSet.subset?(kept, MapSet.new(point_ids(note))), "dense points were dropped"
+
+        # The next tick neither rebuilds nor wakes it: the bucket is empty.
+        Repo.delete_all(Oban.Job)
+        assert :ok = perform_job(ReconcileEmbeddings, %{})
+        assert all_enqueued(args: %{"note_id" => note.id}) == []
+        assert reload(note).embed_budget_parked == true
+      end
+    end
+  end
+
+  # Review M2: the sweep keeps the park flag on a content-current Free park
+  # it selects (here through an elapsed backoff, versions current). The job
+  # it queues re-parks the note with its need, spends nothing, and the next
+  # tick leaves it alone.
+  test "a current Free park selected by an elapsed backoff is re-parked, not run", %{
+    user: user,
+    vault: vault
+  } do
+    note = dense_note(user, vault, 10)
+    set_bucket(user.id, 0)
+    edit(user, vault, note, edit_sections(10, [7]))
+    assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+    parked = reload(note)
+    assert parked.embed_budget_parked == true
+
+    Repo.update_all(
+      from(n in Note, where: n.id == ^note.id),
+      [set: [embed_retry_after: DateTime.add(DateTime.utc_now(), -60, :second)]],
+      skip_tenant_check: true
+    )
+
+    Repo.delete_all(Oban.Job)
+    stub(Engram.MockEmbedder, :embed_texts, fn _ -> flunk("a parked note must not embed") end)
+
+    assert :ok = perform_job(ReconcileEmbeddings, %{})
+    assert reload(note).embed_budget_parked == true
+    assert [job] = all_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+    assert :ok = perform_job(EmbedNote, job.args)
+
+    row = reload(note)
+    assert row.embed_budget_parked == true
+    assert row.embed_budget_need == parked.embed_budget_need
+    assert row.embed_retry_after == EmbedNote.parked_until_edited()
+
+    Repo.delete_all(Oban.Job)
+    assert :ok = perform_job(ReconcileEmbeddings, %{})
+    assert all_enqueued(args: %{"note_id" => note.id}) == []
+  end
 end

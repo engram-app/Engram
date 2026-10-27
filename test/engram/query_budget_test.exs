@@ -3,7 +3,7 @@ defmodule Engram.QueryBudgetTest do
   use EngramWeb.ConnCase, async: false
 
   import Phoenix.ChannelTest,
-    only: [subscribe_and_join: 4, socket: 3, assert_reply: 4, assert_push: 3]
+    only: [subscribe_and_join: 4, socket: 3, assert_reply: 4, assert_push: 3, close: 1]
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Engram.Notes.CrdtBridge
@@ -50,9 +50,22 @@ defmodule Engram.QueryBudgetTest do
   # own tenant_enter (RotationGate.gated/1), not in a query before it (-1
   # each; MCP keeps the up-front read). The "rotation lock" lines below are
   # now that tenant_enter.
+  # Wave 3 migrate-data (note_bodies reads): get_notes reads every path in
+  # ONE statement (`Notes.get_notes_within/4`; it was one per path); a
+  # revision write touches the open version in ONE statement (a CTE that
+  # also returns it; it was a read, then the touch: -1 on every content write
+  # with history on); room open reads ownership and the announce's path in
+  # one narrow transaction (-4); a catch-up page carries its byte budget in
+  # the page query (the size probe's transaction is gone, -4) and a resolve
+  # chunk with nothing to refresh sends no refresh query (-1).
   @budgets %{
     # Read target 5. begin, tenant_enter, the note, commit.
     "mcp get_notes" => 4,
+    # Three paths, the same four: the notes come in one statement.
+    "mcp get_notes 3 paths" => 4,
+    # begin, enter, the page (rows + budget), commit; one resolve chunk:
+    # begin, enter, tail rows, commit.
+    "catch-up page" => 8,
     # As "mcp get_notes", plus the local auth provider's users lookup by
     # `sub` (not cached; an API key resolves through the :api_key cache). The
     # grant behind the token's `gid` is read from the `:oauth_grant` cache:
@@ -70,15 +83,15 @@ defmodule Engram.QueryBudgetTest do
     #  4 note row: the write's base. 5 crdt tail: the merge replays it.
     #  6 vault change_seq bump: the seq the write is stamped with.
     #  7 note UPDATE: the write itself.
-    #  8, 9 open revision read + touch: the revision row (history).
-    #  10, 11 EmbedNote unique check + scheduled_at replace: the debounce.
-    #  12, 13 ExtractNoteLinks / FinalizeRevision unique checks: Oban dedup.
-    "mcp write_note update" => 14,
+    #  8 open revision touch (it returns the open row): history.
+    #  9, 10 EmbedNote unique check + scheduled_at replace: the debounce.
+    #  11, 12 ExtractNoteLinks / FinalizeRevision unique checks: Oban dedup.
+    "mcp write_note update" => 13,
     # As write_note, with 4 the unlocked read and 5 the locked re-read of the
     # optimistic read-modify-write (Task 7 ruling F1) instead of the tail read
     # (the tail rides in the read statement).
-    "mcp append_to_note" => 14,
-    "mcp edit_note" => 14,
+    "mcp append_to_note" => 13,
+    "mcp edit_note" => 13,
     # rotation lock, begin, enter, the note row (found once), seq bump,
     # tombstone, usage_meters, the index-delete job insert + its pg_notify,
     # the release joining the warm-up's pending release job (one UPDATE, no
@@ -89,7 +102,7 @@ defmodule Engram.QueryBudgetTest do
     "GET sync/manifest" => 6,
     "GET notes/*path" => 5,
     # As "mcp write_note update" (1-13), plus the response's note_links read.
-    "POST notes update" => 14,
+    "POST notes update" => 13,
     # Write target 12; floor 17: rotation lock, begin, enter, path lookup,
     # notes cap (usage_meters), path-collision probe, seq bump, INSERT, the
     # inserted row's re-read, usage_meters increment, EmbedNote and
@@ -97,7 +110,7 @@ defmodule Engram.QueryBudgetTest do
     # the response's links read, commit.
     "POST notes create" => 16,
     # As "mcp append_to_note" (1-13), plus the response's note_links read.
-    "POST notes/append" => 14,
+    "POST notes/append" => 13,
     # Not consolidated in Task 10b (no query-classify item; a rename claims its
     # path in the vault index room, which must commit before the row txn):
     #  1-4 claim validation txn (note ids at the paths).
@@ -145,9 +158,9 @@ defmodule Engram.QueryBudgetTest do
     # re-time of a CheckpointNote snoozed behind this room (one UPDATE on
     # oban_jobs, `CheckpointNote.retime_snoozed/1`, #2085 review).
     "CRDT crdt_doc_update idle" => 22,
-    # open (was 25 at bee71923): the channel's note_in_vault? 4 + bind 5 +
-    # the announce's path read 4.
-    "CRDT room open" => 13
+    # open (was 25 at bee71923, 13 before wave 3): the channel's ownership +
+    # path read 4 (`Notes.live_note_path/3`) + bind 5.
+    "CRDT room open" => 9
   }
 
   setup %{conn: conn} do
@@ -236,6 +249,19 @@ defmodule Engram.QueryBudgetTest do
       measure("mcp get_notes", true, fn ->
         conn |> call_tool("get_notes", %{"paths" => ["Work/Existing.md"]}) |> tool_ok!()
       end)
+    end
+
+    test "mcp get_notes 3 paths", %{conn: conn} do
+      paths = ["Work/Existing.md", "Work/Other.md", "Missing.md"]
+
+      conn =
+        measure("mcp get_notes 3 paths", true, fn ->
+          conn |> call_tool("get_notes", %{"paths" => paths}) |> tool_ok!()
+        end)
+
+      text = tool_text(conn)
+      assert text =~ "body [[Other]]"
+      assert text =~ "Note not found: Missing.md"
     end
 
     test "mcp write_note update", %{conn: conn} do
@@ -424,6 +450,18 @@ defmodule Engram.QueryBudgetTest do
     end
   end
 
+  describe "sync" do
+    test "catch-up page", %{user: user, vault: vault} do
+      %{changes: changes} =
+        measure("catch-up page", true, fn ->
+          {:ok, page} = Engram.Notes.list_changes_by_seq(user, vault, 0)
+          page
+        end)
+
+      assert length(changes) == 5
+    end
+  end
+
   describe "CRDT channel" do
     # Plug.Conn also exports push/3, so go through the module.
     defp chan_push(socket, event, payload), do: Phoenix.ChannelTest.push(socket, event, payload)
@@ -548,6 +586,34 @@ defmodule Engram.QueryBudgetTest do
         assert_reply ref, :ok, _, 3000
         await_no_room(idle.id)
       end)
+    end
+
+    # A read-only open, then the room exits: nothing to fold, so the exit
+    # writes nothing (it was a whole compaction checkpoint transaction that
+    # rewrote the same snapshot).
+    test "CRDT read-only room exit writes no checkpoint", %{
+      user: user,
+      vault: vault,
+      notes: notes
+    } do
+      note = notes["Home/Third.md"]
+
+      xmin = fn ->
+        Engram.Repo.query!("SELECT xmin::text FROM notes WHERE id = $1", [
+          Ecto.UUID.dump!(note.id)
+        ]).rows
+      end
+
+      before = xmin.()
+
+      _ = join(user, vault)
+      socket = join(user, vault)
+      step1(socket, note.id)
+      Process.unlink(socket.channel_pid)
+      :ok = close(socket)
+      await_no_room(note.id)
+
+      assert xmin.() == before
     end
 
     # A read-only open: the handshake that starts a room on an existing note.

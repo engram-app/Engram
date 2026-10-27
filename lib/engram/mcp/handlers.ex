@@ -388,10 +388,13 @@ defmodule Engram.MCP.Handlers do
                  narrow_to_section([{hd(paths), fetch.(hd(paths))}], section, gate),
                do: render_notes(user, [{path, fn -> note end}], outline?, links?, gate)
         else
-          # Fetched one at a time as each entry renders, so a note's content
-          # is released once its entry is built (20 x 10 MB held at once was
-          # ~200 MB before the reply was even assembled).
-          render_notes(user, Enum.map(paths, &{&1, fn -> fetch.(&1) end}), outline?, links?, gate)
+          render_notes(
+            user,
+            get_notes_entries(user, vault, paths, outline?, fetch),
+            outline?,
+            links?,
+            gate
+          )
         end
     end
   end
@@ -2174,6 +2177,17 @@ defmodule Engram.MCP.Handlers do
   @doc false
   def get_notes_budget, do: @get_notes_budget
 
+  # Content reads: every path in ONE statement, cut at the content budget on
+  # the stored sizes (`Notes.get_notes_within/4`; a note past it is not read,
+  # so the call holds about the budget, not 20 x 10 MB). Outlines return no
+  # content and are never budgeted, so they fetch one note at a time as each
+  # entry renders, releasing its content once the entry is built.
+  defp get_notes_entries(user, vault, paths, false, _fetch),
+    do: Notes.get_notes_within(user, vault, paths, @get_notes_budget)
+
+  defp get_notes_entries(_user, _vault, paths, true, fetch),
+    do: Enum.map(paths, &{&1, fn -> fetch.(&1) end})
+
   # `entries` is [{path, fetch_fn}]. Each note is fetched, budgeted and
   # rendered before the next, so at most the kept content plus one note is
   # alive. Links are read afterwards for every rendered note in one batch.
@@ -2183,6 +2197,10 @@ defmodule Engram.MCP.Handlers do
         case fetch.() do
           nil ->
             {{"Note not found: #{path}", %{"path" => path, "found" => false}, nil}, spent}
+
+          :over_budget ->
+            {text, payload} = over_budget(path)
+            {{text, payload, nil}, spent}
 
           note ->
             size = if outline?, do: 0, else: byte_size(note.content || "")

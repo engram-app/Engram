@@ -32,6 +32,7 @@ defmodule Engram.Accounts.Export.Streamer do
 
   alias Engram.Accounts.Export.Schema
   alias Engram.Notes.Note
+  alias Engram.Notes.NoteBody
   alias Engram.Repo
   alias Engram.Storage
   alias Engram.Vaults.Vault
@@ -160,6 +161,8 @@ defmodule Engram.Accounts.Export.Streamer do
                 is_nil(n.deleted_at),
             order_by: [asc: n.id]
           )
+          # Only the content ciphertext is exported: not the CRDT state.
+          |> NoteBody.select_note([:id, :content_ciphertext])
         )
       end)
 

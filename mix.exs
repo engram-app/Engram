@@ -110,7 +110,7 @@ defmodule Engram.MixProject do
       # Yjs CRDT engine (Rust `yrs` via Rustler NIF). Stock Hex release with
       # precompiled binaries — NO fork, NO DirtyCpu (Gate 0 spike proved
       # bounded docs stay under the 1ms NIF budget). v1 wire format only.
-      {:y_ex, "~> 0.12.1"},
+      {:y_ex, "~> 0.13.0"},
 
       # Email template rendering (MJML → responsive HTML, via mrml Rust NIF)
       {:mjml, "~> 6.0"},
@@ -166,7 +166,7 @@ defmodule Engram.MixProject do
 
       # Error reporting (no-op when SENTRY_DSN is unset, i.e. in dev/test
       # and self-host)
-      {:sentry, "~> 13.2"},
+      {:sentry, "~> 14.0"},
 
       # S3 storage (MinIO local, Tigris prod)
       {:ex_aws, "~> 2.5"},

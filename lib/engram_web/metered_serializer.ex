@@ -12,7 +12,7 @@ defmodule EngramWeb.MeteredSerializer do
       socket, so `count: 1`.
     * `fastlane!/1` — `direction: :out`, `kind: :broadcast`. Phoenix encodes a
       broadcast ONCE per node and sends the same binary to every local
-      subscriber (`Phoenix.Channel.Server.dispatch/3`), so counting calls would
+      subscriber (`Phoenix.Channel.Server.send/4`), so counting calls would
       count broadcasts, not deliveries. `count` is the number of local
       subscribers that receive this encoding instead, and `bytes` is that many
       copies. Subscribers that intercept the event get the raw `Broadcast`,
@@ -79,14 +79,35 @@ defmodule EngramWeb.MeteredSerializer do
 
   defp frame_bytes({:socket_push, _opcode, data}), do: IO.iodata_length(data)
 
+  # Matches the subscription `Phoenix.Channel.Server` registers on join:
+  # `sender: {Phoenix.Channel.Server, {transport_pid, serializer, intercepts}}`,
+  # stored by phoenix_pubsub as `[Phoenix.Channel.Server | {...}]` (phoenix
+  # >= 1.8.16; before that it was `{:fastlane, pid, serializer, intercepts}`).
+  # A Phoenix internal: `metered_serializer_channel_test.exs` pins it.
+  #
   # ponytail: a second O(topic subscribers) walk per broadcast, next to
-  # dispatch/3's own. Fine at our fan-out; count inside dispatch if a topic
-  # ever holds thousands of sockets.
+  # PubSub dispatch's own. Fine at our fan-out; count inside dispatch if a
+  # topic ever holds thousands of sockets.
   defp fastlane_recipients(%Broadcast{topic: topic, event: event}) do
     @pubsub
-    |> Registry.select([
-      {{topic, :"$2", {:fastlane, :_, __MODULE__, :"$1"}}, [{:"=/=", :"$2", self()}], [:"$1"]}
-    ])
+    |> Registry.select([{{topic, :"$2", :"$3"}, sender_guards(), [{:element, 3, {:tl, :"$3"}}]}])
     |> Enum.count(&(event not in &1))
+  end
+
+  # The value is the improper list `[Phoenix.Channel.Server | {pid, serializer,
+  # intercepts}]`. It is taken apart with `hd`/`tl` guards rather than an
+  # improper-list match pattern, which dialyzer rejects (improper_list_constr).
+  # A guard that hits a non-list just fails, so other subscriptions are skipped.
+  defp sender_guards do
+    meta = {:tl, :"$3"}
+
+    [
+      {:"=/=", :"$2", self()},
+      {:is_list, :"$3"},
+      {:"=:=", {:hd, :"$3"}, Phoenix.Channel.Server},
+      {:is_tuple, meta},
+      {:"=:=", {:tuple_size, meta}, 3},
+      {:"=:=", {:element, 2, meta}, __MODULE__}
+    ]
   end
 end

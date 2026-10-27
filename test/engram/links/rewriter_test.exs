@@ -726,6 +726,42 @@ defmodule Engram.Links.RewriterTest do
       assert text == "[[Fresh]]"
     end
 
+    # y_ex >= 0.13 returns a raise inside the room from update_doc instead of
+    # crashing the room. Reporting `:ok` for it would claim a rewrite the room
+    # never applied and durably desync note_links from the doc.
+    test "a delta apply that raises inside the live room fails the rewrite", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, renamed} =
+        Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"}, actor: "api")
+
+      {:ok, source} =
+        Notes.upsert_note(user, vault, %{"path" => "Raise.md", "content" => "[[Old]]"},
+          actor: "api"
+        )
+
+      :ok = Links.replace_links(user, vault, source.id, Parser.extract("[[Old]]"))
+      {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
+      links_before = Links.links_for_note(user, source.id)
+
+      {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, source.id)
+      Sandbox.allow(Repo, self(), room)
+      on_exit(fn -> CrdtRegistry.terminate_room(source.id) end)
+
+      # A non-doc makes `Yex.apply_update/2` raise INSIDE the room process.
+      real_doc = :sys.get_state(room).doc
+      :sys.replace_state(room, &%{&1 | doc: :not_a_doc})
+
+      assert {:error, {:room_raised, _}} =
+               Rewriter.rewrite_source_note(user, vault, source.id, target)
+
+      assert Links.links_for_note(user, source.id) == links_before
+
+      :sys.replace_state(room, &%{&1 | doc: real_doc})
+      assert CrdtBridge.project_doc(SharedDoc.get_doc(room)) == "[[Old]]"
+    end
+
     test "a room that dies between lookup and the update call falls through to the roomless path",
          %{user: user, vault: vault} do
       {:ok, renamed} =

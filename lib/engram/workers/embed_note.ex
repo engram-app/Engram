@@ -178,10 +178,22 @@ defmodule Engram.Workers.EmbedNote do
           #
           # While the v5 rebuild is `on`, its tokens go through the ledger
           # (`rebuild: true`, see `index/5`).
+          #
+          # A note waiting in the Free bucket queue that the wake did not
+          # send (no `budget_cap`) keeps its place (#2197): rebuilt without
+          # spending the bucket, its dense vectors kept and the rest
+          # keyword-only, then parked again with its need. One whose
+          # current content is fully dense is not `budget_spent`: its
+          # rebuild is `maintenance` (`version_rebuild_opts/1`), which never
+          # reserves from the bucket, and keeps its dense leg (review L2).
           version_stale?(note) ->
+            queued = note.embed_budget_parked_at != nil and is_nil(args["budget_cap"])
+
             load_for_run(
               note,
-              Indexing.version_rebuild_opts(note) ++ [rebuild: Rebuild.mode() == :on]
+              Indexing.version_rebuild_opts(note) ++
+                [rebuild: Rebuild.mode() == :on] ++
+                if(queued and note.dense_indexed_hash != hash, do: [budget_spent: true], else: [])
             )
 
           # Holds more chunks than its tier's per-note cap (ReconcileEmbeddings
@@ -659,7 +671,7 @@ defmodule Engram.Workers.EmbedNote do
   # A note parked before the queue existed has no need recorded: the whole
   # note is the upper bound.
   defp park_over_budget(%Note{} = note, user) do
-    need = note.embed_budget_need || UsageMeters.estimate_tokens(note.content_ciphertext || "")
+    need = park_need(note)
 
     {:ok, _} =
       Repo.with_tenant(note.user_id, fn ->
@@ -670,6 +682,11 @@ defmodule Engram.Workers.EmbedNote do
 
     newly_parked(note, user)
   end
+
+  # The need a park records when the pass priced nothing: the one already
+  # recorded, else the whole note (an upper bound).
+  defp park_need(%Note{} = note),
+    do: note.embed_budget_need || UsageMeters.estimate_tokens(note.content_ciphertext || "")
 
   # Logged once, when a note joins the queue, not on every pass that finds it
   # still waiting.
@@ -1096,9 +1113,17 @@ defmodule Engram.Workers.EmbedNote do
             embed_retry_after: @parked_until_edited
           ] ++ @queue_clear
 
+        # A park always records a real need: a pass that deferred nothing
+        # it priced keeps the note's own (#2197: 0 woke it on the next tick
+        # and spent the bucket it was parked to protect).
         true ->
-          need = Map.get(pass, :deferred_tokens) || 0
-          next = Map.get(pass, :next_deferred_tokens)
+          need =
+            case Map.get(pass, :deferred_tokens) do
+              tokens when is_integer(tokens) and tokens > 0 -> tokens
+              _ -> park_need(note)
+            end
+
+          next = Map.get(pass, :next_deferred_tokens) || note.embed_budget_next
           [dense_indexed_hash: nil, embed_model: nil] ++ budget_park_set(note, need, next)
       end
 
@@ -1118,8 +1143,6 @@ defmodule Engram.Workers.EmbedNote do
     set =
       [
         embed_hash: note.content_hash,
-        chunker_version: chunker,
-        keyword_version: keyword,
         # A full pass read the frontmatter under the current key alias table.
         key_alias_version: Engram.Notes.KeyAliases.version()
       ] ++ set
@@ -1128,12 +1151,39 @@ defmodule Engram.Workers.EmbedNote do
     # Unscoped this stamps NOTHING, so the note re-embeds on every sweep and
     # pays Voyage each time, while `count == 0` below is logged as a benign
     # "concurrent edit" — a silent, recurring bill.
-    {:ok, {count, _}} =
+    #
+    # The version stamps are compare-and-set on the values this job loaded
+    # (#2216 L1): a NULL-clear that landed during the pass (payload drift,
+    # a cluster diff, a DEK rotation asking for a cheap heal) is kept, not
+    # overwritten with a stamp vouching for points the pass may have reused.
+    {:ok, {count, stamped}} =
       Repo.with_tenant(note.user_id, fn ->
         from(n in Note,
-          where: n.id == ^note.id and n.content_hash == ^note.content_hash
+          where: n.id == ^note.id and n.content_hash == ^note.content_hash,
+          update: [set: ^set],
+          select: n.chunker_version
         )
-        |> Repo.update_all(set: set)
+        |> update([n],
+          set: [
+            chunker_version:
+              fragment(
+                "CASE WHEN ? IS NOT DISTINCT FROM ? THEN ? ELSE ? END",
+                n.chunker_version,
+                type(^note.chunker_version, :integer),
+                type(^chunker, :integer),
+                n.chunker_version
+              ),
+            keyword_version:
+              fragment(
+                "CASE WHEN ? IS NOT DISTINCT FROM ? THEN ? ELSE ? END",
+                n.keyword_version,
+                type(^note.keyword_version, :integer),
+                type(^keyword, :integer),
+                n.keyword_version
+              )
+          ]
+        )
+        |> Repo.update_all([])
       end)
 
     if count == 0 do
@@ -1143,9 +1193,45 @@ defmodule Engram.Workers.EmbedNote do
       )
     end
 
+    parked? = count > 0 and Keyword.get(set, :embed_budget_parked) == true
+    if parked?, do: :ok = back_off_stale_park(note, stamped)
+
     :ok = CrashGuard.clear(note, :ok)
-    if count > 0 and Keyword.get(set, :embed_budget_parked) == true, do: :parked, else: :ok
+    if parked?, do: :parked, else: :ok
   end
+
+  # Review M3: the sweep lets a budget park through on its sentinel while
+  # its index version is stale (#2197). A park that leaves the version
+  # stale anyway (a NULL-clear landed mid-pass and the stamp kept it) would
+  # be selected and rebuilt again on every tick, Voyage-free but a full
+  # Qdrant rewrite each time. Its park gets the sweep's backoff instead of
+  # the sentinel: the version arm skips it, and the backoff arm retries it
+  # once per window, with the queue place and need kept.
+  defp back_off_stale_park(note, [chunker]) do
+    {target, _keyword} = Rebuild.target_versions()
+
+    if Rebuild.behind?(chunker, target) do
+      until =
+        DateTime.add(
+          DateTime.utc_now(),
+          Engram.Workers.ReconcileEmbeddings.backoff_seconds(),
+          :second
+        )
+
+      {:ok, {_, _}} =
+        Repo.with_tenant(note.user_id, fn ->
+          Repo.update_all(from(n in Note, where: n.id == ^note.id),
+            set: [embed_retry_after: until]
+          )
+        end)
+
+      :ok
+    else
+      :ok
+    end
+  end
+
+  defp back_off_stale_park(_note, _stamped), do: :ok
 
   @doc """
   Build a debounced EmbedNote job — embed only once the note has been quiet.

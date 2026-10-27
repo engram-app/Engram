@@ -10,8 +10,10 @@ defmodule Engram.Indexing do
 
   alias Engram.Billing
   alias Engram.Crypto
+  alias Engram.DataMigrations.NoteIndexState, as: NoteIndexStateLedger
   alias Engram.Embedders.UsageLabels
   alias Engram.EmbedModels
+  alias Engram.Indexing.ChunkRows
   alias Engram.Indexing.PayloadV5
   alias Engram.Indexing.PointId
   alias Engram.Indexing.RetainedVectors
@@ -818,24 +820,21 @@ defmodule Engram.Indexing do
   def points_budget_ok?(user, note_id, planned_points, overshoot_pct \\ 0) do
     case Engram.Billing.effective_limit(user, :index_points_cap) do
       cap when is_integer(cap) and cap >= 0 ->
-        # All the user's rows minus this note's, not one `note_id !=` count:
-        # that filter is not in `idx_chunks_user`, so it read every row from
-        # the heap. The user count can be index-only on `idx_chunks_user`; the
-        # note count reads only the note's own rows (at most its point cap).
-        {:ok, [all, own]} =
-          Repo.with_tenant(user.id, fn ->
-            Repo.one(
-              from(c in Chunk,
-                where: c.user_id == ^user.id,
-                select: [
-                  count(),
-                  subquery(from(o in Chunk, where: o.note_id == ^note_id, select: count()))
-                ]
-              )
-            )
-          end)
+        # All the user's points minus this note's rows (at most its point
+        # cap). The counters first; a refusal floors the note and drops its
+        # dense vectors, so it is re-checked on the real chunk count, which
+        # only a user at the cap pays.
+        fits? = fn opts ->
+          {:ok, {all, own}} =
+            Repo.with_tenant(user.id, fn ->
+              {point_count(user.id, opts),
+               Repo.one(from(o in Chunk, where: o.note_id == ^note_id, select: count()))}
+            end)
 
-        all - own + planned_points <= cap + div(cap * overshoot_pct, 100)
+          all - own + planned_points <= cap + div(cap * overshoot_pct, 100)
+        end
+
+        fits?.([]) or fits?.(exact: true)
 
       # nil / :unlimited / a negative sentinel: no ceiling.
       _ ->
@@ -843,15 +842,43 @@ defmodule Engram.Indexing do
     end
   end
 
-  @doc "The account's search points: its `chunks` rows, one per Qdrant point."
-  @spec point_count(Ecto.UUID.t()) :: non_neg_integer()
-  def point_count(user_id) do
+  @doc """
+  The account's search points: its `chunks` rows, one per Qdrant point.
+  Once every note is counted (`DataMigrations.NoteIndexState.counted?/0`) a SUM of its notes'
+  `note_index_state.points` by vault, else the `count(*)` over its chunks.
+  `exact: true` always counts the chunks: for a caller that drops dense
+  vectors on the answer, where a counter drifted too high must never act.
+  """
+  @spec point_count(Ecto.UUID.t(), keyword()) :: non_neg_integer()
+  def point_count(user_id, opts \\ []) do
     {:ok, n} =
       Repo.with_tenant(user_id, fn ->
-        Repo.one(from(c in Chunk, where: c.user_id == ^user_id, select: count()))
+        points_by_user(opts) |> where([v], v.user_id == ^user_id) |> Repo.one()
       end)
 
-    n
+    case n do
+      nil -> 0
+      {_user_id, points} -> points
+    end
+  end
+
+  @doc """
+  `{user_id, points}` per user with any points: the one source of the point
+  count (`point_count/1`, the index budget sweep).
+  """
+  @spec points_by_user(keyword()) :: Ecto.Query.t()
+  def points_by_user(opts \\ []) do
+    if not Keyword.get(opts, :exact, false) and NoteIndexStateLedger.counted?() do
+      from(v in Engram.Vaults.Vault,
+        join: s in Engram.Notes.NoteIndexState,
+        on: s.vault_id == v.id,
+        group_by: v.user_id,
+        having: sum(s.points) > 0,
+        select: {v.user_id, type(sum(s.points), :integer)}
+      )
+    else
+      from(c in Chunk, as: :v, group_by: c.user_id, select: {c.user_id, count()})
+    end
   end
 
   @doc "How many of the account's notes are on keyword-only search (a floor tier)."
@@ -1035,12 +1062,13 @@ defmodule Engram.Indexing do
     )
   end
 
-  # Rows per chunk `insert_all`. A row binds 15 parameters (chunk_row/5 plus
-  # the four chunk-text columns) against the protocol's 65535 cap, which
-  # leaves room for 4369; 3000 keeps a margin (as Links' @insert_chunk) so a
-  # new column cannot silently re-arm the overflow. Prod hit it at 73040
-  # params (7,304 chunks, one note). The text columns add bytes, not
-  # parameters: a batch carries at most the note's own text.
+  # Rows per `chunks` statement (`ChunkRows.write!/3`) and per
+  # `chunk_points` / `note_attrs` insert. A chunk row binds 10 parameters
+  # (`chunk_row/4`) and a `chunk_points` row 10 against the protocol's
+  # 65535 cap, which leaves room for 6553; 3000 keeps a margin (as Links'
+  # @insert_chunk) so a new column cannot silently re-arm the overflow.
+  # Prod hit it at 73040 params (7,304 chunks, one note). The update batch
+  # binds one array per column, so its size is bytes, not parameters.
   @insert_batch 3000
 
   @doc """
@@ -1114,9 +1142,7 @@ defmodule Engram.Indexing do
          # PATCH refreshes the lot — the values are identical across a note's
          # points, which is why `chunk_index` no longer lives in the payload.
          :ok <- refresh_payload(refresh_ids, note_payload) do
-      # Wholesale rewrite rather than a row-level diff: the rows are local and
-      # cheap, and replacing them all sidesteps every ordering problem with
-      # `chunks_note_id_position_index` when positions shift. One transaction
+      # Only the rows that changed (`ChunkRows.write!/3`). One transaction
       # so OrphanSweep can never scroll a live point during the window where
       # its row is momentarily absent.
       #
@@ -1134,17 +1160,15 @@ defmodule Engram.Indexing do
       # the comment above depends on is unchanged.
       committed =
         Repo.with_tenant(note.user_id, fn ->
+          # Lock order (`ChunkRows`): the note, its chunks, then its
+          # note_index_state row. The tier stamp writes that row (through
+          # the notes trigger), so it follows the chunk writes.
           content_current!(note)
+          :ok = ChunkRows.write!(note.id, chunk_rows, @insert_batch)
+          _ = ChunkRows.recount!([note.id])
 
           with {:ok, tier} <- Map.fetch(prepared, :index_tier),
                do: stamp_index_tier(note, tier, Map.get(prepared, :chunk_count))
-
-          Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
-          # Batched inside the same transaction: one statement for a big note
-          # overflows the protocol's bind cap and kills the connection.
-          chunk_rows
-          |> Enum.chunk_every(@insert_batch)
-          |> Enum.each(&Repo.insert_all(Chunk, &1, skip_tenant_check: true))
 
           write_point_rows(note, Map.get(prepared, :point_rows))
 
@@ -1179,8 +1203,10 @@ defmodule Engram.Indexing do
     end
   end
 
-  # Delete-then-insert per note, like `chunks`; nil (text off) leaves the
-  # note's `chunk_points` as they are.
+  # Delete-then-insert per note; nil (text off) leaves the note's
+  # `chunk_points` as they are. ponytail: wholesale, unlike `chunks`: its
+  # primary key is the point id, so a position diff would collide when a
+  # kept point moves; off in prod until the v5 pass, diff it by point id then.
   defp write_point_rows(_note, nil), do: :ok
 
   defp write_point_rows(note, rows) do
@@ -1217,7 +1243,9 @@ defmodule Engram.Indexing do
   def unstamp_payload_hash(note) do
     {:ok, _} =
       Repo.with_tenant(note.user_id, fn ->
-        from(n in Note, where: n.id == ^note.id and not is_nil(n.payload_hash))
+        from(n in Note,
+          where: n.kind == "note" and n.id == ^note.id and not is_nil(n.payload_hash)
+        )
         |> Repo.update_all(set: [payload_hash: nil])
       end)
 
@@ -1228,11 +1256,29 @@ defmodule Engram.Indexing do
   # built from it, reused ones were just PATCHed (or already held it).
   defp stamp_payload_hash(%Note{payload_hash: hash}, hash), do: :ok
 
+  #
+  # Compare-and-set on the hash this pass loaded (review L1): a NULL-clear
+  # that landed mid-pass (payload drift, a cluster diff, a DEK rotation) or
+  # another writer's stamp leaves NULL, so the next pass refreshes the
+  # payload instead of this stamp vouching for points it did not check.
   defp stamp_payload_hash(note, hash) do
     {_, _} =
       Repo.update_all(
-        from(n in Note, where: n.kind == "note" and n.id == ^note.id),
-        set: [payload_hash: hash]
+        from(n in Note,
+          where: n.kind == "note" and n.id == ^note.id,
+          update: [
+            set: [
+              payload_hash:
+                fragment(
+                  "CASE WHEN ? IS NOT DISTINCT FROM ? THEN ? ELSE NULL END",
+                  n.payload_hash,
+                  type(^note.payload_hash, :binary),
+                  type(^hash, :binary)
+                )
+            ]
+          ]
+        ),
+        []
       )
 
     :ok
@@ -1283,7 +1329,8 @@ defmodule Engram.Indexing do
     :ok
   end
 
-  defp content_current!(_note), do: :ok
+  # No hash to compare: still the note lock, first (`ChunkRows` lock order).
+  defp content_current!(note), do: :ok = ChunkRows.lock_notes!([note.id])
 
   # With the chunk rows, so the tier always names the rows that exist, and
   # compare-and-set on the tier this pass was planned from: if the index
@@ -1708,7 +1755,9 @@ defmodule Engram.Indexing do
       # which is all this needs.
       {:ok, _} =
         Repo.with_tenant(note.user_id, fn ->
+          :ok = ChunkRows.lock_notes!([note.id])
           Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id))
+          _ = ChunkRows.recount!([note.id])
           Repo.delete_all(from(p in ChunkPoint, where: p.note_id == ^note.id))
         end)
 
@@ -1911,11 +1960,10 @@ defmodule Engram.Indexing do
             maintenance_tokens(total - charged)
             {true, plan, nil}
 
-          # ponytail: a refused rebuild re-plans sparse whole, since its
-          # vectors are sourced after planning (`priced_rebuild/6`). Make it
-          # partial too if Free rebuilds are ever refused in practice.
+          # A refused rebuild: `priced_rebuild/6` keeps what it already
+          # sourced dense and re-plans only the texts it would send.
           Keyword.get(opts, :rebuild, false) ->
-            {false, plan_chunks(chunks, rows, content_key, false), nil}
+            {false, {:refused, plan}, nil}
 
           true ->
             partial_plan(rows, chunks, content_key, plan, opts)
@@ -2032,16 +2080,17 @@ defmodule Engram.Indexing do
   defp text_charges(plan, rows) do
     bytes = changed_bytes_per_text(plan, rows)
 
-    hit? =
-      case plan do
-        %{cache: %{keys: keys, hits: hits}} -> Enum.map(keys, &Map.has_key?(hits, &1))
-        _ -> Enum.map(bytes, fn _ -> false end)
-      end
-
-    Enum.zip_with(bytes, hit?, fn b, hit ->
+    Enum.zip_with(bytes, cache_hits(plan), fn b, hit ->
       if hit, do: 0, else: UsageMeters.estimate_tokens(b)
     end)
   end
+
+  # Per sent text, in `embed_texts/1` order: whether the vector cache holds
+  # it (all false without the cache).
+  defp cache_hits(%{cache: %{keys: keys, hits: hits}}),
+    do: Enum.map(keys, &Map.has_key?(hits, &1))
+
+  defp cache_hits(plan), do: Enum.map(sent_entry_indexes(plan), fn _ -> false end)
 
   # What `retain/1` holds for a pass: the vectors under the key its retry will
   # look up. A partial pass is keyed by the full plan, `<<>>` marking each
@@ -2101,12 +2150,46 @@ defmodule Engram.Indexing do
     do: {:ok, dense?, plan, retained}
 
   # Priced like any pass (the reservation is maintenance for a dense note),
-  # over only what is left to send. A refusal re-plans sparse-only, and that
-  # plan is a rebuild too.
+  # over only what is left to send. A refusal (a Free note parked on its
+  # bucket, #2197) keeps every vector it sourced: only the chunks it would
+  # send are re-planned keyword-only, the rebuild runs again over that (now
+  # sending nothing), and the deferred tokens are its park's need. It used
+  # to re-plan the whole note sparse, which deleted the dense vectors the
+  # rebuild had just copied for free.
   defp priced_rebuild(note, rows, chunks, ck, plan, opts) do
     case Repo.with_tenant!(note.user_id, fn -> price(note, rows, chunks, ck, plan, opts) end) do
-      {false, sparse, nil} ->
-        rebuild_sources(note, false, Map.put(sparse, :rebuild, {rows, chunks}), nil, ck, opts)
+      {false, {:refused, priced}, nil} ->
+        # A vector cache hit costs nothing and stays dense; every other
+        # sent text waits, so the re-run sends Voyage nothing.
+        deferred =
+          for {i, cost, false} <-
+                Enum.zip([
+                  sent_entry_indexes(priced),
+                  text_charges(priced, rows),
+                  cache_hits(priced)
+                ]),
+              do: {i, cost}
+
+        costs = Enum.map(deferred, &elem(&1, 1))
+        skip = MapSet.new(deferred, &elem(&1, 0))
+
+        kept =
+          chunks
+          |> Enum.with_index()
+          |> Enum.map(fn {c, i} ->
+            if MapSet.member?(skip, i), do: Map.put(c, :sparse_only, true), else: c
+          end)
+
+        replan = kept |> plan_chunks(rows, ck, true) |> Map.put(:rebuild, {rows, kept})
+
+        with {:ok, dense?, plan, retained} <- rebuild_sources(note, true, replan, nil, ck, opts) do
+          {:ok, dense?,
+           Map.merge(plan, %{
+             partial?: deferred != [],
+             deferred_tokens: Enum.sum(costs),
+             next_deferred_tokens: List.first(costs)
+           }), retained}
+        end
 
       {dense?, plan, retained} ->
         {:ok, dense?, plan, retained}
@@ -3174,6 +3257,8 @@ defmodule Engram.Indexing do
 
     {:ok, {updated, _}} =
       Repo.with_tenant(note.user_id, fn ->
+        :ok = ChunkRows.lock_notes!([note.id])
+
         Chunk
         |> join(
           :inner,
@@ -3184,6 +3269,7 @@ defmodule Engram.Indexing do
         |> where([c], c.note_id == ^note.id)
         |> update([c, v], set: [token_count: v.n])
         |> Repo.update_all([])
+        |> tap(fn _ -> ChunkRows.recount!([note.id]) end)
       end)
 
     # Fewer rows than points: a concurrent EmbedNote replaced the note's chunk
@@ -3340,8 +3426,6 @@ defmodule Engram.Indexing do
   defp build_prepared(note, plan, vectors, dek, avgdl) do
     filter_key = Crypto.dek_filter_key_from_bytes(dek)
 
-    now = DateTime.utc_now(:second)
-
     # Language is a property of the NOTE, not of each chunk. Detecting per chunk
     # meant one full Lingua detector build per chunk (the NIF rebuilds the
     # detector on every call — deps/lingua/native/lingua_nif/src/lib.rs), i.e.
@@ -3382,7 +3466,7 @@ defmodule Engram.Indexing do
     rebuild? = Map.get(plan, :rebuild?, false)
     flat = note.content |> FlatFields.extract(filter_key) |> with_key_ids(note, dek)
     note_payload = PayloadV5.build(note, flat)
-    ctx = {note, note_payload, now}
+    ctx = {note, note_payload}
     point_ids = v5_point_ids(note, plan)
 
     # The whole note in one call so the encoder can share per-note work (the
@@ -3523,14 +3607,14 @@ defmodule Engram.Indexing do
   # A reused chunk costs nothing but a row: no embed, no tokenizer pass, no
   # encryption. Its `token_count` rides along from the row it replaces rather
   # than being recomputed from text that has not changed.
-  defp build_entry({:reuse, chunk, point_id, tokens}, {{note, _p, now}, _id}, pending) do
-    {%{row: chunk_row(note, chunk, point_id, tokens, now), point: nil}, pending}
+  defp build_entry({:reuse, chunk, point_id, tokens}, {{note, _p}, _id}, pending) do
+    {%{row: chunk_row(note, chunk, point_id, tokens), point: nil}, pending}
   end
 
   # `doc_len` is the raw token count from the same tokenization pass as the
   # sparse vector, also persisted as `chunks.token_count`.
   defp build_entry({:embed, chunk}, {ctx, point_id}, [{vector, {sparse, doc_len}} | rest]) do
-    {note, note_payload, now} = ctx
+    {note, note_payload} = ctx
 
     # A v5 point carries filter fields and ids only: its text, title and
     # heading live in Postgres (Task 11), so there is nothing to encrypt. No
@@ -3551,7 +3635,7 @@ defmodule Engram.Indexing do
     token_count = if capped_length?(chunk), do: nil, else: doc_len
 
     built = %{
-      row: chunk_row(note, chunk, point_id, token_count, now),
+      row: chunk_row(note, chunk, point_id, token_count),
       point: %{id: point_id, vector: named_vectors, payload: note_payload},
       kind: metric_kind(note.path, chunk.kind),
       dense?: vector != nil
@@ -3572,7 +3656,7 @@ defmodule Engram.Indexing do
     end
   end
 
-  defp chunk_row(note, chunk, point_id, token_count, now) do
+  defp chunk_row(note, chunk, point_id, token_count) do
     %{
       note_id: note.id,
       user_id: note.user_id,
@@ -3587,8 +3671,7 @@ defmodule Engram.Indexing do
       token_count: token_count,
       qdrant_point_id: point_id,
       context_hmac: chunk.context_hmac,
-      member_hmacs: Map.get(chunk, :member_hmacs),
-      created_at: now
+      member_hmacs: Map.get(chunk, :member_hmacs)
     }
   end
 
@@ -3723,26 +3806,33 @@ defmodule Engram.Indexing do
   # Inside the chunk-row transaction, from the same extraction as the payload.
   # The note's rows are replaced wholesale, like the chunk rows, so an absent
   # key leaves no row.
+  #
+  # Compared before writing: most passes leave the frontmatter alone, and
+  # rewriting identical rows cost a delete and an insert per field (each
+  # with its indexes) on every pass (notes-chunks-hyperopt 4.2). The check
+  # is the rows themselves, not a stored hash of them: same read the delete
+  # did, no new column, no collision.
   defp stamp_flat_fields(%{note: note, attr_rows: rows}) do
-    :ok = hold_key_ids!(note, rows)
-
-    {_n, old} =
-      Repo.delete_all(
-        from(a in NoteAttr,
-          where: a.note_id == ^note.id,
-          select: {a.key_id, a.ord, a.h, a.n, a.d}
-        )
+    old =
+      from(a in NoteAttr,
+        where: a.note_id == ^note.id,
+        select: {a.key_id, a.ord, a.h, a.n, a.d}
       )
+      |> Repo.all()
+      |> MapSet.new()
 
-    _ = rows |> Enum.chunk_every(@insert_batch) |> Enum.each(&Repo.insert_all(NoteAttr, &1))
+    if old == MapSet.new(rows, &{&1.key_id, &1.ord, &1.h, &1.n, &1.d}) do
+      :ok
+    else
+      :ok = hold_key_ids!(note, rows)
+      _ = Repo.delete_all(from(a in NoteAttr, where: a.note_id == ^note.id))
+      _ = rows |> Enum.chunk_every(@insert_batch) |> Enum.each(&Repo.insert_all(NoteAttr, &1))
 
-    # The field catalog is cached on change_seq, which this pass does not
-    # move, so a pass that changed the rows evicts it (after this transaction
-    # commits). Most re-index passes leave the frontmatter alone: no eviction,
-    # no cluster broadcast.
-    if MapSet.new(old) != MapSet.new(rows, &{&1.key_id, &1.ord, &1.h, &1.n, &1.d}),
-      do: FieldCatalog.evict(note.vault_id),
-      else: :ok
+      # The field catalog is cached on change_seq, which this pass does not
+      # move, so a pass that changed the rows evicts it (after this
+      # transaction commits).
+      FieldCatalog.evict(note.vault_id)
+    end
   end
 
   defp stamp_flat_fields(_prepared), do: :ok

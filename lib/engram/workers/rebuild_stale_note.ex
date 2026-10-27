@@ -72,7 +72,10 @@ defmodule Engram.Workers.RebuildStaleNote do
         from(n in Note,
           where: n.kind == "note" and n.id == ^note_id,
           where: is_nil(n.chunker_version) or n.chunker_version < ^chunker,
-          where: n.embed_retry_after <= ^until
+          where: n.embed_retry_after <= ^until,
+          # A budget park's backoff is EmbedNote's (a park left version-stale
+          # waits a window instead of rebuilding every tick, review M3).
+          where: is_nil(n.embed_budget_parked) or not n.embed_budget_parked
         )
         |> Repo.update_all(set: [embed_retry_after: nil])
       end)

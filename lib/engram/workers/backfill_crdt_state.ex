@@ -76,7 +76,7 @@ defmodule Engram.Workers.BackfillCrdtState do
   alias Engram.Crypto.AadRebind
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtUpdateLog, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtUpdateLog, Note, NoteBody}
   alias Engram.Repo
   alias Engram.Vaults
   alias Engram.Vaults.Vault
@@ -238,7 +238,7 @@ defmodule Engram.Workers.BackfillCrdtState do
   defp seed_note(user, note_id) do
     {:ok, result} =
       Repo.with_tenant(user.id, fn ->
-        case Repo.get(Note, note_id) do
+        case NoteBody.get(note_id) do
           %Note{crdt_state_ciphertext: nil} = raw_note ->
             do_seed(user, note_id, raw_note)
 
@@ -350,7 +350,7 @@ defmodule Engram.Workers.BackfillCrdtState do
   # `seed_note/2`'s never-raise contract and strand the rest of the vault behind
   # a cursor that never advances.
   defp reread(note_id) do
-    case Repo.get(Note, note_id) do
+    case NoteBody.get(note_id) do
       %Note{} = fresh -> {:ok, fresh}
       nil -> {:error, :note_vanished}
     end

@@ -479,6 +479,34 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
       assert demoted > 0
     end
 
+    test "a counter drifted too high never demotes: the sweep counts the chunks", %{
+      user: user,
+      vault: vault
+    } do
+      [id | _] = full_notes(user, vault, 2, 100, real: true)
+      assert points(user) == 200
+
+      inflate_counter!(id)
+
+      assert Indexing.point_count(user.id) > cap()
+
+      assert {:ok, %{demoted: 0}} = ReconcileEmbeddings.budget_sweep(20)
+      assert budget_jobs(key: "index_budget", value: "demote") == []
+      assert Enum.all?(Map.values(tiers(user, [id])), &is_nil/1)
+    end
+
+    test "a counter drifted too high never floors the note being indexed", %{
+      user: user,
+      vault: vault
+    } do
+      [filler] = full_notes(user, vault, 1, 100, real: true)
+      inflate_counter!(filler)
+      assert Indexing.point_count(user.id) > cap()
+
+      note = dense_note(user, vault)
+      assert is_nil(note.index_tier)
+    end
+
     test "1,000 over-cap notes demote 200 per tick across five ticks; red pauses", %{
       user: user,
       vault: vault,
@@ -974,6 +1002,27 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
     assert :ok = perform_job(EmbedNote, %{"note_id" => note.id, "user_id" => user.id})
     assert length(rows_for(note)) == 5
     reload(note)
+  end
+
+  # The counted readers on, and `note_id`'s counter drifted to twice the
+  # cap (an old-release writer that never recounted).
+  defp inflate_counter!(note_id) do
+    Repo.insert!(
+      %Engram.DataMigrations.Entry{
+        name: Engram.DataMigrations.NoteIndexState.name(),
+        version: Engram.DataMigrations.NoteIndexState.version(),
+        completed_at: DateTime.utc_now()
+      },
+      skip_tenant_check: true
+    )
+
+    Engram.DataMigrations.reset_cache()
+    on_exit(&Engram.DataMigrations.reset_cache/0)
+
+    Repo.query!("UPDATE note_index_state SET points = $2 WHERE note_id = $1", [
+      Ecto.UUID.dump!(note_id),
+      2 * cap()
+    ])
   end
 
   defp demote_args(note),

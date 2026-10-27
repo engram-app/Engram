@@ -371,6 +371,67 @@ defmodule Engram.Workers.CleanupVaultTest do
       assert left == 3
     end
 
+    # The chunk batches run before any note batch, so a restore that stops
+    # the purge at its first note batch keeps notes whose chunks are gone:
+    # their counters must say so (too high would bill phantom points).
+    test "a restore after the chunk batches leaves the kept notes counted at zero", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      stub_qdrant(bypass)
+      Application.put_env(:engram, :cleanup_vault_batch_size, 2)
+      on_exit(fn -> Application.delete_env(:engram, :cleanup_vault_batch_size) end)
+      notes = for _ <- 1..3, do: insert(:note, user: user, vault: vault)
+
+      for n <- notes, pos <- 0..1 do
+        %Chunk{
+          note_id: n.id,
+          vault_id: vault.id,
+          user_id: user.id,
+          position: pos,
+          char_start: 0,
+          char_end: 10,
+          qdrant_point_id: Ecto.UUID.generate()
+        }
+        |> Repo.insert!(skip_tenant_check: true)
+      end
+
+      ids = Enum.map(notes, & &1.id)
+      _ = Engram.Indexing.ChunkRows.recount!(ids)
+      assert points(ids) == 6
+
+      test_pid = self()
+      handler = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        handler,
+        [:engram, :repo, :query],
+        fn _e, _m, %{query: sql}, _c ->
+          if self() == test_pid and sql =~ ~s(DELETE FROM "notes") do
+            :telemetry.detach(handler)
+
+            Repo.update_all(from(v in Vault, where: v.id == ^vault.id), [set: [deleted_at: nil]],
+              skip_tenant_check: true
+            )
+          end
+        end,
+        nil
+      )
+
+      try do
+        capture_log(fn -> assert :ok = CleanupVault.perform_cleanup(vault.id, user.id) end)
+      after
+        :telemetry.detach(handler)
+      end
+
+      refute Repo.exists?(from(c in Chunk, where: c.vault_id == ^vault.id),
+               skip_tenant_check: true
+             )
+
+      assert points(ids) == 0
+    end
+
     # A purge that dies mid-way (all attempts) leaves the vault soft-deleted
     # with some of its rows gone. Restoring it would hand back a partial vault
     # as if it were whole, so once the first batch runs the vault is stamped
@@ -733,5 +794,16 @@ defmodule Engram.Workers.CleanupVaultTest do
       assert :ok = CleanupVault.perform_cleanup(v.id, user.id, force: true)
       refute Repo.get(Vault, v.id, skip_tenant_check: true)
     end
+  end
+
+  # The kept notes' summed `note_index_state.points`.
+  defp points(ids) do
+    %{rows: [[n]]} =
+      Repo.query!(
+        "SELECT coalesce(sum(points), 0)::int FROM note_index_state WHERE note_id = ANY($1::uuid[])",
+        [Enum.map(ids, &Ecto.UUID.dump!/1)]
+      )
+
+    n
   end
 end

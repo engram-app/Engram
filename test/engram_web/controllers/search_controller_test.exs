@@ -112,6 +112,84 @@ defmodule EngramWeb.SearchControllerTest do
       assert is_binary(hit["id"])
     end
 
+    # Rehydration already read the hit's note row (chunks JOIN notes), so the
+    # id rides on the hit: no per-vault path -> id lookup on `notes` follows.
+    test "a hit with a chunk row takes its id from rehydration, with no notes lookup", %{
+      conn: conn,
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      {:ok, note} =
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{"path" => "Health/Iron.md", "content" => "# Iron\n\nFerritin.", "mtime" => 1.0},
+          actor: "api"
+        )
+
+      point_id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          %Engram.Notes.Chunk{}
+          |> Engram.Notes.Chunk.changeset(%{
+            note_id: note.id,
+            user_id: user.id,
+            vault_id: vault.id,
+            position: 0,
+            char_start: 0,
+            char_end: 1,
+            qdrant_point_id: point_id
+          })
+          |> Engram.Repo.insert!()
+        end)
+
+      {:ok, enc} =
+        Engram.Crypto.encrypt_qdrant_payload(
+          %{text: "Ferritin.", title: "Iron", heading_path: "Iron"},
+          user,
+          "engram_notes",
+          point_id
+        )
+
+      qdrant_result = %{
+        "result" => [
+          %{
+            "id" => point_id,
+            "score" => 0.95,
+            "payload" => %{
+              "text" => enc.text,
+              "title" => enc.title,
+              "heading_path" => enc.heading_path,
+              "text_nonce" => enc.text_nonce,
+              "title_nonce" => enc.title_nonce,
+              "heading_path_nonce" => enc.heading_path_nonce,
+              "aad_version" => enc.aad_version,
+              "user_id" => to_string(user.id),
+              "vault_id" => to_string(vault.id)
+            }
+          }
+        ]
+      }
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(c, qdrant_result)))
+      end)
+
+      {conn, recorded} =
+        Engram.QueryRecorder.record(fn -> post(conn, "/api/search", %{query: "iron"}) end)
+
+      assert %{"results" => [hit]} = json_response(conn, 200)
+      assert hit["id"] == note.id
+      refute Enum.any?(recorded, &(&1.source == "notes")), Engram.QueryRecorder.format(recorded)
+    end
+
     test "Search over-fetches a candidate pool so grouping can return the requested number of notes",
          %{conn: conn, bypass: bypass} do
       Engram.MockEmbedder

@@ -45,6 +45,7 @@ defmodule Engram.Notes.Utf8Backfill do
   alias Engram.Notes
   alias Engram.Notes.Helpers
   alias Engram.Notes.Note
+  alias Engram.Notes.NoteBody
   alias Engram.Repo
   alias Engram.Vaults
 
@@ -89,6 +90,7 @@ defmodule Engram.Notes.Utf8Backfill do
           Repo.with_tenant(user.id, fn ->
             # kind == "note" only: folder markers carry no content to scrub.
             from(n in Note, where: n.user_id == ^user.id and n.kind == "note")
+            |> NoteBody.select_note()
             |> Repo.stream(max_rows: @stream_batch)
             |> Enum.reduce(acc, fn note, acc -> scan_note(user, note, fix?, acc) end)
           end)

@@ -58,7 +58,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   alias Engram.Crypto.RotationGate
   alias Engram.Indexing
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{Chunk, Note}
+  alias Engram.Notes.{Chunk, Note, NoteBody}
   alias Engram.Repo
   alias Engram.Vector.PayloadKeys
   alias Engram.Vector.Qdrant
@@ -233,7 +233,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
     {:ok, result} =
       Repo.with_tenant(user_id, fn ->
-        notes = Repo.all(query)
+        notes = Repo.all(NoteBody.select_note(query))
         ids = Enum.map(notes, & &1.id)
 
         points =
