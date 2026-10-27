@@ -58,6 +58,9 @@ defmodule Engram.Notes.NoteFieldsTest do
       if conn.request_path =~ ~r{/points/payload$},
         do: send(test_pid, {:payload, conn.method, body})
 
+      if conn.request_path =~ ~r{/points/payload/delete$},
+        do: send(test_pid, {:payload_delete, body})
+
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.send_resp(200, ~s({"result": true, "status": "ok"}))
@@ -445,18 +448,25 @@ defmodule Engram.Notes.NoteFieldsTest do
       refute Map.has_key?(p, "text")
     end
 
-    # Review H2: a reused point is refreshed by REPLACING its payload, so a key
-    # removed from the frontmatter (or a move to the root) leaves no stale key.
+    # Review H2: a reused point is refreshed as a replace (merge the new payload,
+    # then delete the known keys it omits), so a key removed from the frontmatter
+    # (or a move to the root) leaves no stale key. Skipping the delete step
+    # would leave "s" on the point, which this test catches.
     test "a removed key disappears from a reused point", %{user: user, vault: vault} do
       body = "\n# Fields\n\nBody text that yields at least one chunk.\n"
       {_note, _user} = index!(user, vault, "---\nstatus: draft\ndue: 2026-11-01\n---" <> body)
       {_note, _user} = index!(user, vault, "---\ndue: 2026-11-01\n---" <> body)
 
-      assert_received {:payload, "PUT", refresh}
-      refute_received {:payload, "POST", _}
+      assert_received {:payload, "POST", refresh}
+      refute_received {:payload, _, _}
       payload = Jason.decode!(refresh)["payload"]
       refute Map.has_key?(payload, "s")
       assert Map.has_key?(payload, "du")
+
+      assert_received {:payload_delete, deleted}
+      keys = Jason.decode!(deleted)["keys"]
+      assert "s" in keys
+      refute "du" in keys
     end
 
     test "deterministic ids, no text", %{user: user, vault: vault} do
