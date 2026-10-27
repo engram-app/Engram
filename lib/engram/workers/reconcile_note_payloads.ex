@@ -65,8 +65,8 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
   alias Engram.Indexing
-  alias Engram.Logger.Metadata
   alias Engram.Indexing.PayloadV6
+  alias Engram.Logger.Metadata
   alias Engram.Notes.{Chunk, Note, NoteBody, NoteIndexState}
   alias Engram.Repo
   alias Engram.Vector.PayloadKeys
