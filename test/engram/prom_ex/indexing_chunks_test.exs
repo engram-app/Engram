@@ -103,6 +103,15 @@ defmodule Engram.PromEx.IndexingChunksTest do
     assert UsageLabels.current() == %{tier: :none, trigger: :none}
   end
 
+  test "a paid owner's pass is labelled tier :paid", ctx do
+    insert(:subscription, user: ctx.user, tier: "pro", status: "active")
+    user = Engram.Accounts.get_user_with_subscription!(ctx.user.id)
+    note = note_for(ctx, @content)
+
+    {:ok, _, _, _} = Indexing.index_note_with_usage(note, ctx.vault, user, [])
+    assert_received {:labels, %{tier: :paid}}
+  end
+
   test "embed_trigger/1 maps a job to the closed enum" do
     job = fn attrs ->
       struct(Oban.Job, Map.merge(%{worker: "Engram.Workers.EmbedNote"}, attrs))

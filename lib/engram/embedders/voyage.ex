@@ -234,7 +234,8 @@ defmodule Engram.Embedders.Voyage do
 
     :telemetry.execute([:engram, :voyage, :embed, :tokens], %{total_tokens: total}, meta)
 
-    # Tokens per chunk of this request: how long the embedded chunks are.
+    # Batch-averaged tokens per chunk (mean over this request's texts; Voyage
+    # reports only the request total, so per-chunk values are not available).
     if texts > 0 do
       :telemetry.execute(
         [:engram, :voyage, :embed, :tokens_per_chunk],
