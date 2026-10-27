@@ -372,6 +372,23 @@ defmodule Engram.PromEx.Qdrant do
           event_name: [:engram, :qdrant, :wait_timeout],
           description:
             "Writes whose wait=true outlived the server timeout: queued, not yet applied, so not stamped."
+        ),
+        distribution(
+          metric_prefix ++ [:payload_write, :ids],
+          event_name: [:engram, :qdrant, :payload_write],
+          measurement: :ids,
+          description:
+            "Point ids per payload write, to tell a growing target list from a slow server.",
+          reporter_options: Buckets.opts(Engram.PromEx.Qdrant.PayloadWriteIdsBuckets),
+          tags: [:op]
+        ),
+        distribution(
+          metric_prefix ++ [:payload_write, :bytes],
+          event_name: [:engram, :qdrant, :payload_write],
+          measurement: :bytes,
+          description: "Approximate payload bytes per payload write.",
+          reporter_options: Buckets.opts(Engram.PromEx.Qdrant.PayloadWriteBytesBuckets),
+          tags: [:op]
         )
       ]
     )
@@ -381,4 +398,14 @@ end
 defmodule Engram.PromEx.Qdrant.RequestDurationBuckets do
   @moduledoc false
   use Engram.PromEx.Buckets, [1, 5, 10, 25, 50, 100, 250, 500, 1_000, 5_000]
+end
+
+defmodule Engram.PromEx.Qdrant.PayloadWriteIdsBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [1, 4, 16, 64, 256, 1_024, 4_096]
+end
+
+defmodule Engram.PromEx.Qdrant.PayloadWriteBytesBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [128, 512, 2_048, 8_192, 32_768, 131_072]
 end

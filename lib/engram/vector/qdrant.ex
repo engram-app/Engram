@@ -1129,6 +1129,7 @@ defmodule Engram.Vector.Qdrant do
   def set_payload(col, point_ids, payload) when is_list(point_ids) and is_map(payload) do
     col = col || collection()
     opts = write_opts(%{filter: ids_filter(point_ids), payload: payload})
+    payload_write(:set_payload, length(point_ids), payload)
 
     instrument(:set_payload, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/payload", opts) do
@@ -1140,25 +1141,52 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
-  REPLACE the whole payload of the listed points (`PUT /points/payload`).
-  The v5 refresh path: a v5 payload omits absent and default keys, so a
-  merge (`set_payload/3`) would leave a removed key on the point forever.
-  Empty `point_ids` is a no-op; missing ids are skipped (`set_payload/3`).
+  Make the listed points carry exactly `payload` for every known key
+  (`PayloadKeys.note_keys/0`): merge `payload` (`set_payload/3`), then delete
+  the known keys it omits. The v5 refresh path: a v5 payload omits absent and
+  default keys, so a bare merge would leave a removed key on the point.
+
+  Not `PUT /points/payload`: that call went from ~10 ms to ~3 s p95 in prod
+  while the POST routes stayed ~12 ms, so the same end state is reached with
+  the two fast ones. Empty `point_ids` is a no-op; missing ids are skipped.
   """
   def overwrite_payload(col \\ nil, point_ids, payload)
   def overwrite_payload(_col, [], _payload), do: :ok
 
   def overwrite_payload(col, point_ids, payload) when is_list(point_ids) and is_map(payload) do
     col = col || collection()
-    opts = write_opts(%{filter: ids_filter(point_ids), payload: payload})
+    stale = PayloadKeys.note_keys() -- Enum.map(Map.keys(payload), &to_string/1)
 
-    instrument(:set_payload, fn ->
-      case Req.put("#{base_url()}/collections/#{col}/points/payload", opts) do
+    with :ok <- set_payload(col, point_ids, payload) do
+      delete_payload_keys_on(col, point_ids, stale)
+    end
+  end
+
+  # Delete `keys` from the listed points only (`delete_payload_keys/2` hits
+  # every point). Missing ids are skipped, as in `set_payload/3`.
+  defp delete_payload_keys_on(_col, _point_ids, []), do: :ok
+
+  defp delete_payload_keys_on(col, point_ids, keys) do
+    opts = write_opts(%{keys: keys, filter: ids_filter(point_ids)})
+
+    instrument(:delete_payload, fn ->
+      case Req.post("#{base_url()}/collections/#{col}/points/payload/delete", opts) do
         {:ok, %{status: 200, body: body}} -> applied(body)
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
+  end
+
+  # Ids and (approximate, pre-JSON) size of every payload write: a PUT whose
+  # latency grew with them went unseen until it hit p95 3 s. Counts only,
+  # never ids or values (cardinality and privacy contract of `instrument/2`).
+  defp payload_write(op, id_count, payload) do
+    :telemetry.execute(
+      [:engram, :qdrant, :payload_write],
+      %{ids: id_count, bytes: :erlang.external_size(payload)},
+      %{op: op}
+    )
   end
 
   @doc """

@@ -101,7 +101,7 @@ defmodule Engram.Crypto.UserDekRotationDurableHealTest do
       |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => result}))
     end)
 
-    for method <- ["POST", "PUT"] do
+    for method <- ["POST"] do
       Bypass.stub(bypass, method, "/collections/engram_notes/points/payload", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         send(test, {:payload_write, method, Jason.decode!(body)})
@@ -216,7 +216,7 @@ defmodule Engram.Crypto.UserDekRotationDurableHealTest do
     assert :ok = heal!(ctx.user)
     {:ok, new_fk} = new_filter_key(ctx.user)
 
-    assert_received {:payload_write, "PUT",
+    assert_received {:payload_write, "POST",
                      %{"filter" => %{"should" => [%{"has_id" => [point]}]}, "payload" => p}}
 
     assert point == ctx.point
@@ -239,7 +239,7 @@ defmodule Engram.Crypto.UserDekRotationDurableHealTest do
       )
 
     assert :ok = heal!(ctx.user)
-    assert_received {:payload_write, "PUT", %{"payload" => p}}
+    assert_received {:payload_write, "POST", %{"payload" => p}}
     assert p["y"] == FilterId.from_hmac(edited)
   end
 

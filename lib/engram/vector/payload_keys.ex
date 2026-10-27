@@ -40,6 +40,22 @@ defmodule Engram.Vector.PayloadKeys do
   @keyword %{"type" => "keyword", "on_disk" => true}
   @key_id %{"type" => "integer", "lookup" => true, "range" => false, "on_disk" => true}
 
+  # Everything a v3/v4 point's payload carries (`Indexing`'s legacy
+  # `note_payload/1` plus `Crypto.encrypt_qdrant_payload/4`'s per-chunk text,
+  # title, heading, nonces and AAD version, and `chunk_index`). A reused
+  # v3/v4 point can still hold them, and the v5 refresh must drop them all.
+  @legacy ~w(user_id vault_id path_hmac folder_hmac tags_hmac type_hmac fm_timestamp fm_created
+             text title heading_path text_nonce title_nonce heading_path_nonce aad_version
+             chunk_index)
+
+  @doc """
+  Every payload key a point may hold: the v5 short keys plus the legacy long
+  ones. What a payload refresh drops when the new payload omits it
+  (`Engram.Vector.Qdrant.overwrite_payload/3`).
+  """
+  @spec note_keys() :: [String.t()]
+  def note_keys, do: Map.keys(@long) ++ @legacy
+
   @doc "Logical names, in declaration order."
   @spec logical_names() :: [atom()]
   def logical_names, do: Keyword.keys(@keys)

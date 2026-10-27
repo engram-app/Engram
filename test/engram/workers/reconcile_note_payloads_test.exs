@@ -582,14 +582,25 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
 
           %{"status" => "completed"}
 
-        {"PUT", "/collections/engram_notes/points/payload"} ->
+        # An overwrite is a merge (recorded above) plus this delete of the keys
+        # the new payload omits: the delete turns that merge into an overwrite.
+        {"POST", "/collections/engram_notes/points/payload/delete"} ->
           if hook = Agent.get(store, & &1.on_write), do: hook.()
 
           ids = for %{"has_id" => ids} <- body["filter"]["should"], id <- ids, do: id
 
           Agent.update(store, fn s ->
-            points = Enum.reduce(ids, s.points, &Map.put(&2, &1, body["payload"]))
-            %{s | points: points, overwrites: [ids | s.overwrites]}
+            points =
+              Enum.reduce(ids, s.points, fn id, acc ->
+                Map.update(acc, id, %{}, &Map.drop(&1, body["keys"]))
+              end)
+
+            %{
+              s
+              | points: points,
+                set_payloads: List.delete(s.set_payloads, ids),
+                overwrites: [ids | s.overwrites]
+            }
           end)
 
           %{"status" => "completed"}
