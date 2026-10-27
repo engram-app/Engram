@@ -1168,6 +1168,7 @@ defmodule Engram.Vector.Qdrant do
 
   defp delete_payload_keys_on(col, point_ids, keys) do
     opts = write_opts(%{keys: keys, filter: ids_filter(point_ids)})
+    payload_write(:delete_payload, length(point_ids), keys)
 
     instrument(:delete_payload, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/payload/delete", opts) do
@@ -1358,7 +1359,7 @@ defmodule Engram.Vector.Qdrant do
   # #590: note-metadata fields that leaked as plaintext into payloads written
   # before the fix. Canonical list — the mix task and prod rpc both go through
   # delete_leaked_plaintext_keys/1 so this never drifts.
-  @leaked_plaintext_keys ["source_path", "folder", "tags"]
+  @leaked_plaintext_keys PayloadKeys.leaked_plaintext_keys()
 
   @doc """
   #590 backfill convenience: strip the known leaked plaintext keys

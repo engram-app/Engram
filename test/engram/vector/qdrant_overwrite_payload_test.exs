@@ -46,8 +46,31 @@ defmodule Engram.Vector.QdrantOverwritePayloadTest do
     refute "u" in keys
     refute "v" in keys
     assert "g" in keys and "path_hmac" in keys
+    # Pre-#590 plaintext and the oldest layout's note_id: the PUT wiped these.
+    for k <- ~w(source_path folder tags note_id), do: assert(k in keys)
     assert [%{"has_id" => ["p1", "p2"]}] = del["filter"]["should"]
     refute_received :put_payload
+  end
+
+  test "a failing set is returned and the delete is not sent" do
+    bypass = Bypass.open()
+    ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+    Bypass.expect_once(bypass, "POST", @path, &Plug.Conn.send_resp(&1, 500, "boom"))
+
+    assert {:error, {500, "boom"}} = Qdrant.overwrite_payload(@col, ["p1"], %{"u" => "x"})
+  end
+
+  test "a failing delete is returned, so the caller retries the whole overwrite" do
+    bypass = Bypass.open()
+    ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+
+    Bypass.expect_once(bypass, "POST", @path, fn conn ->
+      Plug.Conn.send_resp(conn, 200, ~s({"result":{"status":"completed"},"status":"ok"}))
+    end)
+
+    Bypass.expect_once(bypass, "POST", @path <> "/delete", &Plug.Conn.send_resp(&1, 500, "boom"))
+
+    assert {:error, {500, "boom"}} = Qdrant.overwrite_payload(@col, ["p1"], %{"u" => "x"})
   end
 
   test "an empty id list is a no-op" do
@@ -61,5 +84,13 @@ defmodule Engram.Vector.QdrantOverwritePayloadTest do
 
     assert_receive {[:engram, :qdrant, :payload_write], ^ref, %{ids: 3, bytes: bytes}, _meta}
     assert bytes > 0
+  end
+
+  test "the delete step is measured as op delete_payload" do
+    ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :qdrant, :payload_write]])
+    assert :ok = Qdrant.overwrite_payload(@col, ["p1", "p2"], %{"u" => "x"})
+
+    assert_receive {[:engram, :qdrant, :payload_write], ^ref, %{ids: 2}, %{op: :set_payload}}
+    assert_receive {[:engram, :qdrant, :payload_write], ^ref, %{ids: 2}, %{op: :delete_payload}}
   end
 end

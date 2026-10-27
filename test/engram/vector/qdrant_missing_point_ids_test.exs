@@ -14,6 +14,8 @@ defmodule Engram.Vector.QdrantMissingPointIdsTest do
   @moduletag :qdrant_integration
 
   @dims 8
+  # Known keys, incl. the pre-#590 plaintext ones and the oldest layout's note_id.
+  @seed %{"text" => "x", "source_path" => "p", "folder" => "f", "tags" => ["t"], "note_id" => 7}
 
   setup do
     ServiceConfig.put_override(:qdrant_url, qdrant_url())
@@ -28,7 +30,7 @@ defmodule Engram.Vector.QdrantMissingPointIdsTest do
 
     :ok =
       Qdrant.upsert_points(col, [
-        %{id: live, vector: %{"dense" => List.duplicate(0.1, @dims)}, payload: %{"a" => 1, "text" => "x"}}
+        %{id: live, vector: %{"dense" => List.duplicate(0.1, @dims)}, payload: @seed}
       ])
 
     %{col: col, live: live, missing: Ecto.UUID.generate()}
@@ -36,20 +38,19 @@ defmodule Engram.Vector.QdrantMissingPointIdsTest do
 
   test "set_payload merges onto the live point and skips a missing id", ctx do
     assert :ok = Qdrant.set_payload(ctx.col, [ctx.missing, ctx.live], %{"b" => 2})
-    assert payload(ctx.col, ctx.live) == %{"a" => 1, "text" => "x", "b" => 2}
+    assert payload(ctx.col, ctx.live) == Map.put(@seed, "b", 2)
   end
 
-  # "text" is a known payload key the new payload omits, so it goes; "a" is
-  # not one, so it stays.
-  test "overwrite_payload drops the known keys it omits and skips a missing id", ctx do
+  test "overwrite_payload replaces the payload: every known key it omits is dropped and skips a missing id",
+       ctx do
     assert :ok = Qdrant.overwrite_payload(ctx.col, [ctx.live, ctx.missing], %{"c" => 3})
-    assert payload(ctx.col, ctx.live) == %{"a" => 1, "c" => 3}
+    assert payload(ctx.col, ctx.live) == %{"c" => 3}
   end
 
   test "a list of only missing ids is a no-op", ctx do
     assert :ok = Qdrant.set_payload(ctx.col, [ctx.missing], %{"b" => 2})
     assert :ok = Qdrant.overwrite_payload(ctx.col, [ctx.missing], %{"c" => 3})
-    assert payload(ctx.col, ctx.live) == %{"a" => 1, "text" => "x"}
+    assert payload(ctx.col, ctx.live) == @seed
   end
 
   defp payload(col, id) do
