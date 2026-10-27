@@ -60,6 +60,24 @@ defmodule Engram.Indexing.PayloadV6Test do
              PayloadV6.build(note, flat)
   end
 
+  test "rows from before the last edit are not trusted: the extracting path answers" do
+    old = "---\nauthor: Ada\n---\nB" |> FlatFields.extract(@fk) |> with_key_ids()
+    new = "---\nauthor: Bo\nstatus: draft\n---\nB" |> FlatFields.extract(@fk) |> with_key_ids()
+    note = %{note(nil) | embed_hash: nil}
+    stale_rows = FlatFields.attr_rows(old, note)
+
+    assert PayloadV6.from_rows_or_extract(note, stale_rows, @fk, fn -> new end) ==
+             PayloadV6.build(note, new)
+
+    # And one whose pass finished on an older text.
+    behind = %{note(nil) | content_hash: "c2"}
+
+    assert PayloadV6.from_rows_or_extract(behind, stale_rows, @fk, fn -> new end) ==
+             PayloadV6.build(behind, new)
+
+    refute PayloadV6.build(note, new) == PayloadV6.build_from_rows(note, stale_rows, @fk)
+  end
+
   defp note(folder_ref_id) do
     %Note{
       id: "44444444-4444-4444-4444-444444444444",
@@ -70,6 +88,9 @@ defmodule Engram.Indexing.PayloadV6Test do
       folder_hmac: Crypto.hmac_field(@fk, "f"),
       type_hmac: Crypto.hmac_field(@fk, "playbook"),
       tags_hmac: for(t <- ~w(a/b a/b/c plain), do: Crypto.hmac_field(@fk, t)),
+      # An index pass finished on this text: its rows are current.
+      content_hash: "c1",
+      embed_hash: "c1",
       mtime: 1_700_000_000.0,
       updated_at: ~U[2026-10-02 00:00:00.000000Z],
       created_at: ~U[2026-10-01 00:00:00.000000Z]

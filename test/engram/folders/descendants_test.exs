@@ -54,21 +54,33 @@ defmodule Engram.Folders.DescendantsTest do
 
     assert {:ok, ids} = Folders.descendant_ids(v, a, 4)
     assert length(ids) == 4
-    assert {:error, :too_many} = Folders.descendant_ids(v, a, 3)
+    assert {:error, :folder_subtree_too_large} = Folders.descendant_ids(v, a, 3)
   end
 
-  test "a cycle in the data stays bounded", %{user: u, vault: v} do
+  test "a cycle is walked once: no duplicates, never reported as too large", %{user: u, vault: v} do
     a = ensure!(u, v, "A")
     b = ensure!(u, v, "A/B")
-
+    c = ensure!(u, v, "A/B/C")
+    d = ensure!(u, v, "A/B/C/D")
+    e = ensure!(u, v, "A/B/C/D/E")
+    # A 5-folder loop: A is now under E.
     Repo.query!("UPDATE folders SET parent_id = $1 WHERE id = $2", [
-      Ecto.UUID.dump!(b),
+      Ecto.UUID.dump!(e),
       Ecto.UUID.dump!(a)
     ])
 
-    task = Task.async(fn -> Folders.descendant_ids(v, a) end)
+    task = Task.async(fn -> Folders.descendant_ids(v, a, 5) end)
     assert {:ok, {:ok, ids}} = Task.yield(task, 5_000) || Task.shutdown(task)
-    assert length(ids) <= 513
+    assert Enum.sort(ids) == Enum.sort([a, b, c, d, e])
+  end
+
+  test "the caller contract: the refusal has a message and a 422 mapping", %{user: u, vault: v} do
+    a = ensure!(u, v, "A")
+    for n <- 1..2, do: ensure!(u, v, "A/F#{n}")
+
+    assert {:error, reason} = Folders.descendant_ids(v, a, 2)
+    assert is_binary(Engram.Search.input_error_message(reason))
+    assert Engram.Search.input_error_message(reason) =~ "subfolders"
   end
 
   test "subtree_filter matches any of the row ids, undashed", %{user: u, vault: v} do

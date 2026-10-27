@@ -93,22 +93,28 @@ defmodule Engram.Folders do
   The ids of the live folder `root_id` and all its live descendants, for a
   subtree search: a point carries its DIRECT folder's row id, so a subtree is
   the root's id plus every descendant's, expanded at query time (a move or
-  rename then changes no payload). `{:error, :too_many}` when the subtree is
-  over `Qdrant.max_ids/0`, the size of one `match any` list: the caller must
-  narrow the folder, there is no Qdrant-side path-prefix scan to fall back to
-  (the path is an encrypted blind index).
+  rename then changes no payload).
+
+  `{:error, :folder_subtree_too_large}` when the subtree is over
+  `Qdrant.max_ids/0`, the size of one `match any` list. The search layer must
+  pass it up as a refusal (`Search.input_error_message/1` has its text and
+  `SearchController` renders it as 422), never as an empty result: the caller
+  narrows the folder. There is no Qdrant-side path-prefix scan to fall back to
+  (the path is an encrypted blind index). Only meaningful once the payload
+  sweep has rewritten `f` to row ids (`docs/context/payload-v6.md`).
   """
   @spec descendant_ids(map(), Ecto.UUID.t(), pos_integer()) ::
-          {:ok, [Ecto.UUID.t()]} | {:error, :too_many}
+          {:ok, [Ecto.UUID.t()]} | {:error, :folder_subtree_too_large | term()}
   def descendant_ids(%{id: vault_id, user_id: user_id}, root_id, cap \\ Qdrant.max_ids()) do
-    {:ok, ids} =
-      Repo.with_tenant(user_id, fn -> Rows.descendant_ids(vault_id, root_id, cap + 1) end)
-
-    if length(ids) > cap, do: {:error, :too_many}, else: {:ok, ids}
+    with {:ok, ids} <-
+           Repo.with_tenant(user_id, fn -> Rows.descendant_ids(vault_id, root_id, cap + 1) end) do
+      if length(ids) > cap, do: {:error, :folder_subtree_too_large}, else: {:ok, ids}
+    end
   end
 
   @doc "The Qdrant condition for a folder and its whole subtree (`descendant_ids/2`)."
-  @spec subtree_filter(map(), Ecto.UUID.t()) :: {:ok, map()} | {:error, :too_many}
+  @spec subtree_filter(map(), Ecto.UUID.t()) ::
+          {:ok, map()} | {:error, :folder_subtree_too_large | term()}
   def subtree_filter(vault, root_id) do
     with {:ok, ids} <- descendant_ids(vault, root_id),
          do: {:ok, Qdrant.match_filter(:folder, ids)}

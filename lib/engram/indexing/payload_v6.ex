@@ -12,8 +12,7 @@ defmodule Engram.Indexing.PayloadV6 do
   row plus its `note_attrs` rows (the typed source of truth the indexing pass
   writes from the same extraction), so the rewrite sweep decrypts and parses
   no note body. `from_rows_or_extract/4` falls back to the extracting path for
-  a note that has no `note_attrs` rows yet (never indexed since the table
-  existed, or a note without frontmatter, which costs one extraction).
+  a note whose rows are missing or not provably current (`fresh?/1`).
 
   `fa` is sorted so the two paths agree byte for byte (the stamp
   `payload_hash` hashes the term, and extraction order is not row order).
@@ -63,13 +62,30 @@ defmodule Engram.Indexing.PayloadV6 do
   @spec build_from_rows(map(), [map()], binary()) :: %{String.t() => term()}
   def build_from_rows(note, rows, filter_key), do: build(note, flat_from_rows(rows, filter_key))
 
-  @doc "`build_from_rows/3`, or `build/2` on `extract.()` when the note has no rows."
+  @doc """
+  `build_from_rows/3`, or `build/2` on `extract.()` when the rows cannot be
+  trusted: the note has none, or they are not provably from its current text.
+
+  `note_attrs` rows are rewritten only by an index pass, while the note row
+  (`type_hmac`, `tags_hmac`, times) moves on every edit. A pass that finished
+  on the current text stamps `embed_hash = content_hash` (and an edit clears
+  it), so the rows are used only when `fresh?/1` holds. Otherwise the caller's
+  extraction (which decrypts the body) answers: slower, never stale.
+  """
   @spec from_rows_or_extract(map(), [map()], binary(), (-> FlatFields.t())) ::
           %{String.t() => term()}
-  def from_rows_or_extract(note, [], _filter_key, extract), do: build(note, extract.())
+  def from_rows_or_extract(note, rows, filter_key, extract) do
+    if rows != [] and fresh?(note),
+      do: build_from_rows(note, rows, filter_key),
+      else: build(note, extract.())
+  end
 
-  def from_rows_or_extract(note, rows, filter_key, _extract),
-    do: build_from_rows(note, rows, filter_key)
+  @doc "Whether the note's `note_attrs` rows come from an index pass on its current text."
+  @spec fresh?(map()) :: boolean()
+  def fresh?(note) do
+    hash = Map.get(note, :embed_hash)
+    hash != nil and hash == Map.get(note, :content_hash)
+  end
 
   defp put_folder(payload, ref_id) do
     payload = Map.delete(payload, PayloadKeys.short(:folder_id))

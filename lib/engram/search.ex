@@ -154,7 +154,7 @@ defmodule Engram.Search do
   """
   @spec validate_input(term(), keyword()) :: :ok | {:error, :query_too_long | :too_many_tags}
   def validate_input(query, opts) do
-    max_ids = Engram.Vector.Qdrant.max_ids()
+    max_ids = Qdrant.max_ids()
 
     cond do
       is_binary(query) and byte_size(query) > @max_query_bytes -> {:error, :query_too_long}
@@ -178,7 +178,12 @@ defmodule Engram.Search do
     do: "#{param}: at most #{@max_query_bytes} bytes; use a shorter #{param}"
 
   def input_error_message(:too_many_tags, _param),
-    do: "tags: at most #{Engram.Vector.Qdrant.max_ids()} per search"
+    do: "tags: at most #{Qdrant.max_ids()} per search"
+
+  def input_error_message(:folder_subtree_too_large, _param),
+    do:
+      "folder: more than #{Qdrant.max_ids()} subfolders; " <>
+        "search a deeper folder"
 
   def input_error_message({:unknown_field, key}, _param),
     do: "fields: no note in this account has the frontmatter key #{inspect(key)}"

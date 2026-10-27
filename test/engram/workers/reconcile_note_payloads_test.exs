@@ -566,6 +566,43 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       assert length(Agent.get(ctx.store, & &1.batches)) == 1
     end
 
+    # The merge alone would keep a key the new payload omits (a root-folder
+    # note's old `f`, an attr the note lost): it is deleted in the same batch.
+    test "a key the payload no longer has is deleted from the point", ctx do
+      ServiceConfig.put_override(:payload_version, PayloadV6.baseline() + 1)
+      id = hd(point_ids(ctx.stale))
+      Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.put(p, "o", ["gone"]) end))
+
+      no_embed()
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+      point = Agent.get(ctx.store, &Map.fetch!(&1.points, id))
+      refute Map.has_key?(point, "o")
+      assert Map.take(point, Map.keys(ctx.passed[id])) == ctx.passed[id]
+      assert Agent.get(ctx.store, & &1.overwrites) == []
+      assert payload_versions(ctx) == [PayloadV6.baseline() + 1, PayloadV6.baseline() + 1]
+    end
+
+    test "a note still on legacy points is healed, not stamped with the new version", ctx do
+      ServiceConfig.put_override(:payload_version, PayloadV6.baseline() + 1)
+
+      # Back on v3 points, with a hash from an earlier pass.
+      for note <- [ctx.stale, ctx.healthy] do
+        Engram.LegacyPoints.rekey!(reload(note), ctx.user, ctx.store)
+      end
+
+      Agent.update(ctx.store, &%{&1 | batches: []})
+      assert ReconcileNotePayloads.enqueue_missing() == 1
+
+      no_embed()
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+      assert Agent.get(ctx.store, & &1.batches) == []
+      assert Enum.all?(payload_versions(ctx), &is_nil/1)
+      # Still in view of the sweep: nothing claims the new shape was written.
+      assert ReconcileNotePayloads.enqueue_missing() == 1
+    end
+
     test "points already holding the payload are only stamped", ctx do
       ServiceConfig.put_override(:payload_version, PayloadV6.baseline() + 1)
       no_embed()
@@ -714,15 +751,22 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
         # `Qdrant.set_payloads/2`: one unwaited batch of per-point set_payload
         # ops, then (below) a read-back of the keys it set.
         {"POST", "/collections/engram_notes/points/batch"} ->
-          ops = for %{"set_payload" => op} <- body["operations"], do: op
+          ops = body["operations"]
 
           Agent.update(store, fn s ->
             points =
-              Enum.reduce(ops, s.points, fn %{"points" => [id], "payload" => pl}, acc ->
-                Map.update(acc, id, pl, &Map.merge(&1, pl))
+              Enum.reduce(ops, s.points, fn
+                %{"set_payload" => %{"points" => [id], "payload" => pl}}, acc ->
+                  Map.update(acc, id, pl, &Map.merge(&1, pl))
+
+                %{"delete_payload" => %{"points" => [id], "keys" => keys}}, acc ->
+                  Map.update(acc, id, %{}, &Map.drop(&1, keys))
               end)
 
-            %{s | points: points, batches: [Enum.flat_map(ops, & &1["points"]) | s.batches]}
+            ids =
+              Enum.flat_map(ops, fn op -> op |> Map.values() |> Enum.flat_map(& &1["points"]) end)
+
+            %{s | points: points, batches: [Enum.uniq(ids) | s.batches]}
           end)
 
           Enum.map(ops, fn _ -> %{"status" => "completed"} end)

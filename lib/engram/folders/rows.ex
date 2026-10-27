@@ -422,25 +422,13 @@ defmodule Engram.Folders.Rows do
     end
   end
 
-  defp subtree_query(_vault_id, []), do: from(f in Folder, where: false)
-
   # A cycle in `parent_id` (never written by this module, but a bad row from any
   # path must not pin a connection in an endless recursion) is cut at this depth.
   @max_depth 512
 
-  defp subtree_query(vault_id, root_hmacs) do
-    roots =
-      from(f in Folder,
-        where:
-          f.vault_id == ^vault_id and f.full_path_hmac in ^root_hmacs and is_nil(f.deleted_at),
-        select: %{id: f.id, depth: fragment("0")}
-      )
-
-    walk_down(vault_id, roots)
-  end
-
   # The recursive walk from `roots` (a query of `%{id, depth}`) down the live
-  # folders of `vault_id`.
+  # folders of `vault_id`: the CTE pieces, for `subtree_query/2` and
+  # `descendant_ids/3` to select from.
   defp walk_down(vault_id, roots) do
     walk =
       from(f in Folder,
@@ -450,20 +438,36 @@ defmodule Engram.Folders.Rows do
         select: %{id: f.id, depth: fragment("? + 1", t.depth)}
       )
 
+    union_all(roots, ^walk)
+  end
+
+  defp subtree_query(_vault_id, []), do: from(f in Folder, where: false)
+
+  defp subtree_query(vault_id, root_hmacs) do
+    roots =
+      from(f in Folder,
+        where:
+          f.vault_id == ^vault_id and f.full_path_hmac in ^root_hmacs and is_nil(f.deleted_at),
+        select: %{id: f.id, depth: fragment("0")}
+      )
+
     from(f in Folder,
       join: t in "folder_subtree",
       on: f.id == t.id,
       order_by: [asc: t.depth, asc: f.id]
     )
     |> recursive_ctes(true)
-    |> with_cte("folder_subtree", as: ^union_all(roots, ^walk))
+    |> with_cte("folder_subtree", as: ^walk_down(vault_id, roots))
   end
 
   @doc """
-  The ids of the live folder `root_id` and every live descendant, shallowest
-  first, at most `limit` of them (the caller passes its cap plus one to learn
-  the subtree is over it). Cycle-safe (`@max_depth`). A missing or deleted
-  root gives `[]`. Runs inside the caller's tenant transaction.
+  The ids of the live folder `root_id` and every live descendant, each once,
+  shallowest first, at most `limit` of them (the caller passes its cap plus
+  one to learn the subtree is over it). A cycle in `parent_id` is walked to
+  the depth cap and its repeats collapsed (a folder is in the subtree once),
+  so a cycle is never mistaken for a large subtree. A missing or deleted root
+  gives `[]`. Runs inside the caller's tenant transaction. The cap bounds the
+  answer, not the walk: Postgres still visits the whole subtree.
   """
   @spec descendant_ids(Ecto.UUID.t(), Ecto.UUID.t(), pos_integer()) :: [Ecto.UUID.t()]
   def descendant_ids(vault_id, root_id, limit) do
@@ -473,7 +477,15 @@ defmodule Engram.Folders.Rows do
         select: %{id: f.id, depth: fragment("0")}
       )
 
-    from(f in walk_down(vault_id, roots), select: f.id, limit: ^limit) |> Repo.all()
+    from(t in "folder_subtree",
+      group_by: t.id,
+      order_by: [asc: min(t.depth), asc: t.id],
+      limit: ^limit,
+      select: type(t.id, Ecto.UUID)
+    )
+    |> recursive_ctes(true)
+    |> with_cte("folder_subtree", as: ^walk_down(vault_id, roots))
+    |> Repo.all()
   end
 
   # ---- rename --------------------------------------------------------------

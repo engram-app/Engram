@@ -355,10 +355,18 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     # needs a rewrite, not the drift check a NULL stamp gets.
     {stale, unstamped} = Enum.split_with(notes, & &1.payload_hash)
 
-    with {:ok, counts} <- heal_unstamped(user, unstamped, points, stored, counts) do
+    # A note still holding legacy-layout (v3) points is healed as an unstamped
+    # one: the refresh below rewrites v5 points only, and stamping a note whose
+    # points were not written would vouch for a payload they do not hold.
+    {legacy, stale} = Enum.split_with(stale, &legacy_points?(&1, points, stored))
+
+    with {:ok, counts} <- heal_unstamped(user, unstamped ++ legacy, points, stored, counts) do
       refresh_stale(user, stale, points, stored, counts)
     end
   end
+
+  defp legacy_points?(note, points, stored),
+    do: Enum.any?(Map.get(points, note.id, []), &(stored[&1] && not v5?(stored[&1])))
 
   defp heal_unstamped(user, notes, points, stored, counts) do
     Enum.reduce_while(notes, {:ok, counts}, fn note, {:ok, counts} ->
@@ -368,7 +376,9 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
       case plan_note(user, note, v5_ids, v3_ids, stored) do
         {:ok, writes, payload} ->
-          heal_note(note, payload, writes, counts)
+          # Legacy points never take the new shape: their note is not stamped
+          # with a payload version, so the sweep keeps it in view.
+          heal_note(note, payload, writes, counts, v3_ids == [])
 
         :skip ->
           mark_undecryptable(note, user)
@@ -409,12 +419,15 @@ defmodule Engram.Workers.ReconcileNotePayloads do
          {:ok, v5} <- Indexing.expected_v5_payload(plain, user) do
       want = normalize(v5)
       drifted = Enum.reject(v5_ids, &(Map.take(stored[&1], v5_keys()) == want))
-      {:ok, v5, for(id <- drifted, do: {id, v5})}
+      # A key the new payload omits is deleted, not left behind by the merge.
+      {:ok, v5, for(id <- drifted, do: {id, v5, dropped(stored[id], want)})}
     else
       {:error, :decrypt_failed} -> :skip
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp dropped(point, want), do: Map.keys(Map.take(point, v5_keys())) -- Map.keys(want)
 
   defp write_refresh(plans, counts) do
     pairs = for {_note, {:ok, _payload, pairs}} <- plans, pair <- pairs, do: pair
@@ -435,7 +448,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   defp stamp_refreshed({note, {:ok, payload, pairs}}, counts) do
     counts = bump(counts, :checked)
-    stamp(note, payload, wrote?: pairs != [], resparse?: false)
+    stamp(note, payload, wrote?: pairs != [], resparse?: false, versioned?: true)
     if pairs == [], do: counts, else: counts |> bump(:drifted) |> bump(:rewritten)
   end
 
@@ -484,19 +497,19 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   defp v5_keys, do: Enum.map(PayloadKeys.logical_names(), &PayloadKeys.short/1)
 
-  defp heal_note(note, payload, [], counts) do
-    stamp(note, payload, wrote?: false, resparse?: false)
+  defp heal_note(note, payload, [], counts, versioned?) do
+    stamp(note, payload, wrote?: false, resparse?: false, versioned?: versioned?)
     {:cont, {:ok, counts}}
   end
 
-  defp heal_note(note, payload, writes, counts) do
+  defp heal_note(note, payload, writes, counts, versioned?) do
     counts = bump(counts, :drifted)
 
     case Enum.reduce_while(writes, :ok, fn w, :ok -> write(w) end) do
       :ok ->
         # Drifted filter keys mean a rotation, so the sparse vectors (keyed
         # on the same filter key) are stale too: the keyword sweep redoes them.
-        stamp(note, payload, wrote?: true, resparse?: true)
+        stamp(note, payload, wrote?: true, resparse?: true, versioned?: versioned?)
         {:cont, {:ok, bump(counts, :rewritten)}}
 
       # Logged once, with its class, where the hop answers Oban (`answer/2`).
@@ -531,7 +544,10 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     :fm_created
   ]
 
-  defp stamp(note, payload, wrote?: wrote?, resparse?: resparse?) do
+  defp stamp(note, payload, opts) do
+    wrote? = Keyword.fetch!(opts, :wrote?)
+    resparse? = Keyword.fetch!(opts, :resparse?)
+
     guard =
       Enum.reduce(@payload_columns, same_stamp(note), fn
         col, acc ->
@@ -552,7 +568,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
           # write may have replaced its fresher payload.
           {0, _} when wrote? -> Indexing.unstamp_payload_hash(note)
           {0, _} -> :ok
-          {_, _} -> put_version(note)
+          {_, _} -> if Keyword.fetch!(opts, :versioned?), do: put_version(note), else: :ok
         end
       end)
 

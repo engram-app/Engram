@@ -1235,18 +1235,38 @@ defmodule Engram.Vector.Qdrant do
 
   def set_payloads(_col, [], _opts), do: :ok
 
+  # An entry is `{id, payload}` or `{id, payload, gone}`: `gone` are payload
+  # keys to delete from that point in the same batch (`delete_payload`, the POST
+  # route; never a PUT), for a shape that DROPS a key a merge would keep.
   def set_payloads(col, pairs, opts) when is_list(pairs) and is_list(opts) do
     col = col || collection()
-    payload_write(:set_payload, length(pairs), Map.new(pairs), opts)
-    ops = for {id, payload} <- pairs, do: %{set_payload: %{points: [id], payload: payload}}
+
+    entries =
+      Enum.map(pairs, fn
+        {id, payload} -> {id, payload, []}
+        full -> full
+      end)
+
+    payload_write(:set_payload, length(entries), Map.new(entries, &{elem(&1, 0), elem(&1, 1)}), opts)
+
+    ops =
+      Enum.flat_map(entries, fn {id, payload, gone} ->
+        [
+          {payload != %{}, %{set_payload: %{points: [id], payload: payload}}},
+          {gone != [], %{delete_payload: %{points: [id], keys: gone}}}
+        ]
+        |> Enum.filter(&elem(&1, 0))
+        |> Enum.map(&elem(&1, 1))
+      end)
+
     batch = [json: %{operations: ops}, params: [wait: false]] ++ req_opts()
-    barrier = write_opts(%{keys: [@barrier_key], points: Enum.map(pairs, &elem(&1, 0))})
+    barrier = write_opts(%{keys: [@barrier_key], points: Enum.map(entries, &elem(&1, 0))})
 
     instrument(:set_payload, fn ->
       with :ok <-
              batch_accepted(Req.post("#{base_url()}/collections/#{col}/points/batch", batch)),
            :ok <- write(&Req.post/2, "/collections/#{col}/points/payload/delete", barrier) do
-        verify_applied(col, pairs)
+        verify_applied(col, entries)
       end
     end)
   end
@@ -1272,16 +1292,24 @@ defmodule Engram.Vector.Qdrant do
   # that). So read the page back and compare: a payload that did not land
   # fails the page, and the caller retries it (re-review N4). One retrieve
   # of the set keys only, no vectors.
-  defp verify_applied(col, pairs) do
-    want = Map.new(pairs, fn {id, payload} -> {id, Jason.decode!(Jason.encode!(payload))} end)
-    keys = want |> Map.values() |> Enum.flat_map(&Map.keys/1) |> Enum.uniq()
-    opts = [json: %{ids: Map.keys(want), with_payload: keys, with_vector: false}] ++ req_opts()
+  defp verify_applied(col, entries) do
+    want =
+      Map.new(entries, fn {id, payload, _} -> {id, Jason.decode!(Jason.encode!(payload))} end)
+
+    gone = Map.new(entries, fn {id, _, gone} -> {id, gone} end)
+
+    keys =
+      (Map.values(want) |> Enum.flat_map(&Map.keys/1)) ++ (Map.values(gone) |> List.flatten())
+
+    opts =
+      [json: %{ids: Map.keys(want), with_payload: Enum.uniq(keys), with_vector: false}] ++
+        req_opts()
 
     case Req.post("#{base_url()}/collections/#{col}/points", opts) do
       {:ok, %{status: 200, body: %{"result" => points}}} when is_list(points) ->
         stored = Map.new(points, &{&1["id"], &1["payload"] || %{}})
 
-        case for({id, _payload} <- pairs, not landed?(stored[id], want[id]), do: id) do
+        case for({id, _, _} <- entries, not landed?(stored[id], want[id], gone[id]), do: id) do
           [] -> :ok
           missing -> {:error, {:set_payloads_not_applied, missing}}
         end
@@ -1294,8 +1322,12 @@ defmodule Engram.Vector.Qdrant do
     end
   end
 
-  defp landed?(nil, _want), do: false
-  defp landed?(stored, want), do: Enum.all?(want, fn {k, v} -> stored[k] == v end)
+  defp landed?(nil, _want, _gone), do: false
+
+  defp landed?(stored, want, gone),
+    do:
+      Enum.all?(want, fn {k, v} -> stored[k] == v end) and
+        Enum.all?(gone, &(not Map.has_key?(stored, &1)))
 
   defp write(request, path, opts) do
     case request.("#{base_url()}#{path}", opts) do
