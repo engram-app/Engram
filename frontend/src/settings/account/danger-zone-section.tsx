@@ -1,4 +1,4 @@
-import { useClerk, useReverification, useUser } from "@clerk/react";
+import { useReverification, useUser } from "@clerk/react";
 import { isReverificationCancelledError } from "@clerk/react/errors";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -27,7 +27,6 @@ const FEEDBACK_TIMEOUT_MS = 3000;
 export function DangerZoneSection() {
 	const { t } = useT();
 	const { user, isLoaded } = useUser();
-	const clerk = useClerk();
 	const { logout } = useAuthAdapter();
 	const [open, setOpen] = useState(false);
 	const [phrase, setPhrase] = useState("");
@@ -66,15 +65,12 @@ export function DangerZoneSection() {
 		}
 		try {
 			await remove();
-			// The shared sign-out: cache clear, toast, tap guard, timeout. It
-			// lands on afterSignOutUrl, which is the sign-in page.
+			// The shared sign-out: cache clear, toast, tap guard, timeout.
 			await logout();
-			// The account is gone either way. If the sign-out failed or timed out,
-			// don't strand the user on Settings: a full load of the sign-in page
-			// comes up signed out, since the server session died with the user.
-			if (clerk.user) {
-				window.location.assign(ROUTES.SIGN_IN);
-			}
+			// Always a full load: logout() never rejects, and Clerk clears `user`
+			// before its network call, so nothing here can tell a hung sign-out
+			// from a clean one. The account is gone, so the load comes up signed out.
+			window.location.assign(ROUTES.SIGN_IN);
 		} catch (e) {
 			setDeleting(false);
 			if (isReverificationCancelledError(e)) {
