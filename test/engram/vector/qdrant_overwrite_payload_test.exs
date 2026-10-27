@@ -127,6 +127,11 @@ defmodule Engram.Vector.QdrantOverwritePayloadTest do
     end
 
     test "set_payloads carries the caller and defaults to other", %{ref: ref} do
+      # The event fires before any request; a dead port keeps the batch
+      # endpoints out of the shared Bypass stubs.
+      ServiceConfig.put_override(:qdrant_url, "http://127.0.0.1:1")
+      ServiceConfig.put_override(:qdrant_retry, false)
+
       Qdrant.set_payloads(@col, [{"p1", %{"u" => "x"}}], caller: :dek_rotation)
       assert_receive {_, ^ref, %{ids: 1}, %{op: :set_payload, caller: :dek_rotation}}
 
