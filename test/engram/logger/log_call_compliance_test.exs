@@ -208,6 +208,10 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # Logger call. (Its dry-run worker, which decrypts notes, is in workers/.)
     "lib/engram/rebuild.ex",
     "lib/engram/rebuild/",
+    # Integer batch sizes only (`Engram.Batch`), each with the reason it is
+    # that number. No function body beyond a constant, no Logger call, never
+    # touches content, path, title or a query.
+    "lib/engram/batch.ex",
     # Pure function from conn assigns to an actor string ("api:<key id>" or
     # "sync"). No Logger call, never touches content, path, title or a query.
     "lib/engram_web/write_actor.ex",

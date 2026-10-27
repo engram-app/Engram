@@ -107,10 +107,25 @@ defmodule Engram.NotesFanoutBoundsTest do
       Application.put_env(:engram, :enqueue_reject_pending, fn _, _, _ -> raise "pool gone" end)
       on_exit(fn -> Application.delete_env(:engram, :enqueue_reject_pending) end)
 
+      test = self()
+      handler = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        handler,
+        [:engram, :notes, :enqueue, :lookup_failed],
+        fn _, m, meta, _ -> send(test, {:lookup_failed, m, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
       log =
         ExUnit.CaptureLog.capture_log(fn ->
           assert {:ok, _} = Notes.rename_folder(user, vault, "Archive", "Docs")
         end)
+
+      # The number of notes that fell back, so a count-keyed alert fires.
+      assert_received {:lookup_failed, %{count: @n}, %{worker: "repath_note_index"}}
 
       assert log =~ "pending lookup failed"
       # Fell back to queueing every note: a duplicate is harmless, a lost job is not.

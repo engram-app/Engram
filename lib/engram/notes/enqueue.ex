@@ -11,10 +11,15 @@ defmodule Engram.Notes.Enqueue do
   ## Telemetry
 
       [:engram, :notes, :enqueue, :failed]
-        measurements: %{count: 1}
+        measurements: %{count: 1}   # jobs lost (a failed bulk chunk: its size)
+        metadata:     %{worker: "<label>"}
+
+      [:engram, :notes, :enqueue, :lookup_failed]
+        measurements: %{count: n}   # notes that fell back to unfiltered enqueue
         metadata:     %{worker: "<label>"}
   """
   alias Engram.{Batch, Jobs}
+  alias Engram.Logger.Metadata
 
   require Logger
 
@@ -43,7 +48,7 @@ defmodule Engram.Notes.Enqueue do
       {:error, reason} = err ->
         Logger.error(
           "oban enqueue failed worker=#{worker_label} reason=#{format_reason(reason)}",
-          Engram.Logger.Metadata.with_category(:error, :search, worker: worker_label)
+          Metadata.with_category(:error, :search, worker: worker_label)
         )
 
         :telemetry.execute(
@@ -63,6 +68,10 @@ defmodule Engram.Notes.Enqueue do
   raises. A failed chunk is retried once; if it fails again it logs and emits
   the failure telemetry (`count` = jobs lost) and the rest still go in.
   `:skip` entries are dropped, as in `enqueue/3`.
+
+  A retry after an ambiguous failure (the first insert committed but the
+  client saw an error) can double-insert, so every caller's job must be
+  idempotent. Callers are post-commit only, never inside a transaction.
 
   `Oban.insert_all/1` ignores `unique`: callers that relied on it drop
   already-pending ids first (`reject_pending/4`).
@@ -89,8 +98,8 @@ defmodule Engram.Notes.Enqueue do
   rescue
     e ->
       Logger.error(
-        "oban bulk enqueue failed worker=#{worker_label} jobs=#{length(chunk)} reason=#{Exception.message(e)}",
-        Engram.Logger.Metadata.with_category(:error, :search, worker: worker_label)
+        "oban bulk enqueue failed worker=#{worker_label} jobs=#{length(chunk)} reason=#{Metadata.safe_reason(e)}",
+        Metadata.with_category(:error, :search, worker: worker_label)
       )
 
       :telemetry.execute(
@@ -115,13 +124,13 @@ defmodule Engram.Notes.Enqueue do
   rescue
     e ->
       Logger.error(
-        "oban pending lookup failed worker=#{worker_label} reason=#{Exception.message(e)}; queueing all",
-        Engram.Logger.Metadata.with_category(:error, :search, worker: worker_label)
+        "oban pending lookup failed worker=#{worker_label} reason=#{Metadata.safe_reason(e)}; queueing all",
+        Metadata.with_category(:error, :search, worker: worker_label)
       )
 
       :telemetry.execute(
-        [:engram, :notes, :enqueue, :failed],
-        %{count: 0},
+        [:engram, :notes, :enqueue, :lookup_failed],
+        %{count: length(ids)},
         %{worker: worker_label}
       )
 
