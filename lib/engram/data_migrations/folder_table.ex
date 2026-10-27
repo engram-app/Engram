@@ -46,6 +46,7 @@ defmodule Engram.DataMigrations.FolderTable do
   alias Engram.Crypto.RotationGate
   alias Engram.Crypto.RotationInProgressError
   alias Engram.Folders.Folder
+  alias Engram.Folders.Rows
   alias Engram.Logger.Metadata
   alias Engram.Notes.Helpers
   alias Engram.Repo
@@ -245,7 +246,7 @@ defmodule Engram.DataMigrations.FolderTable do
   # `leaf` is `%{id: marker_id}` for a marker's own folder, else nil.
   defp ensure_one(repo, ctx, {tree, stats}, vault, parent, segment, full_path, leaf) do
     name_hmac = Folder.name_hmac(ctx.fk, segment)
-    full = Crypto.hmac_field(ctx.fk, full_path)
+    full = Rows.path_hmac(ctx.fk, full_path)
     key = {vault, parent, name_hmac}
     explicit? = leaf != nil
 
@@ -342,8 +343,7 @@ defmodule Engram.DataMigrations.FolderTable do
   end
 
   defp encrypt_name(ctx, id, segment),
-    do:
-      Envelope.encrypt(segment, ctx.dek, Crypto.aad_for_row(:folders, :name, Ecto.UUID.load!(id)))
+    do: Rows.encrypt_name(ctx.dek, Ecto.UUID.load!(id), segment)
 
   defp bump(stats), do: %{stats | changed: stats.changed + 1}
 

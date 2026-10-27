@@ -15,6 +15,9 @@ defmodule Engram.Attachments.Attachment do
     # Links foundation (Task 1/4) — HMAC of the lowercased basename (no
     # extension stripping for non-note files). Nullable until backfilled.
     field :basename_hmac, :binary
+    # The folder ROW this attachment sits in (migration 20261027000100). Set by
+    # the app next to the path; NULL = root, or a row the previous release wrote.
+    field :folder_ref_id, Ecto.UUID
     # Link resolution keys (`Engram.Links.path_keys/3`), trusted only while the stamp matches.
     field :path_ci_hmac, :binary
     field :path_length, :integer
@@ -68,6 +71,7 @@ defmodule Engram.Attachments.Attachment do
       :path_nonce,
       :path_hmac,
       :basename_hmac,
+      :folder_ref_id,
       :path_ci_hmac,
       :path_length,
       :link_keys_stamp,
