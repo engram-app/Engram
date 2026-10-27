@@ -67,6 +67,42 @@ defmodule EngramWeb.SyncControllerTest do
       assert body["change_seq"] > 0
     end
 
+    test "reads at most Batch.quiescence_cap pending checkpoints", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      now = DateTime.utc_now()
+      over = Engram.Batch.quiescence_cap() + 1
+
+      Engram.Repo.insert_all(
+        "oban_jobs",
+        for _ <- 1..over do
+          %{
+            state: "available",
+            queue: "default",
+            worker: inspect(Engram.Workers.CheckpointNote),
+            args: %{
+              "user_id" => user.id,
+              "vault_id" => vault.id,
+              "note_id" => Ecto.UUID.generate()
+            },
+            meta: %{},
+            errors: [],
+            tags: [],
+            attempt: 0,
+            max_attempts: 1,
+            priority: 0,
+            inserted_at: now,
+            scheduled_at: now
+          }
+        end
+      )
+
+      body = conn |> get("/api/sync/quiescence") |> json_response(200)
+      assert body["pending_checkpoints"] == Engram.Batch.quiescence_cap()
+    end
+
     # A checkpoint for a note with a live room snoozes until the room closes
     # (CheckpointNote), and a note open in an editor keeps its room for the
     # whole session. Counting it held the e2e barrier pending past its 60 s
