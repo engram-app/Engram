@@ -2166,15 +2166,17 @@ defmodule Engram.MCP.Handlers do
     }
   end
 
+  # A partial read (section or outline) carries no content_hash. The hash names
+  # the WHOLE note; beside part of it, it would let write_note(part, base_hash)
+  # pass the guard and replace the note with what the agent composed from part.
+  defp partial_read(note), do: %{note | content_hash: nil}
+
   defp narrow_to_section([{_path, nil}] = fetched, _section, _gate), do: {:ok, fetched}
 
   defp narrow_to_section([{path, note}], section, gate) do
     case Sections.section(note.content || "", section, gate) do
-      # content_hash: nil. The hash names the WHOLE note; beside a section it
-      # would let write_note(section, base_hash) pass the guard and replace the
-      # note with the section. A section read cannot set up a guarded write.
       {:ok, text} ->
-        {:ok, [{path, %{note | content: text, content_hash: nil}}]}
+        {:ok, [{path, partial_read(%{note | content: text})}]}
 
       {:error, {:not_found, hs}} ->
         ToolError.error(:section_not_found, heading_missing_msg(path, section, hs))
@@ -2401,7 +2403,7 @@ defmodule Engram.MCP.Handlers do
   # A parse refusal (busy, timeout, invalid UTF-8) is a per-note `error`
   # entry, so one note does not fail a whole multi-path call.
   defp outline_entry(note, gate) do
-    base = note |> note_payload() |> Map.delete("content")
+    base = note |> partial_read() |> note_payload() |> Map.delete("content")
 
     case Sections.headings(note.content || "", gate) do
       {:ok, hs} ->

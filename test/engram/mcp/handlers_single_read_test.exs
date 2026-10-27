@@ -311,8 +311,8 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     doc
   end
 
-  defp base_doc(user, vault) do
-    {:ok, row} = Engram.Notes.get_note(user, vault, "a.md")
+  defp base_doc(user, vault, path \\ "a.md") do
+    {:ok, row} = Engram.Notes.get_note(user, vault, path)
     {:ok, doc} = CrdtBridge.doc_from_state(snapshot_of(user, row))
     {row.id, doc}
   end
@@ -431,6 +431,81 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     # write_note(section, base_hash) pass the guard and truncate the note.
     assert note["content_hash"] == nil
     refute result_text(body) =~ "Content hash"
+  end
+
+  test "an outline read hands back no hash either", ctx do
+    body =
+      ctx.conn
+      |> call_tool("get_notes", %{"paths" => ["a.md"], "outline" => true})
+      |> tool_ok!()
+      |> json_response(200)
+
+    [note] = body["result"]["structuredContent"]["notes"]
+    assert [_ | _] = note["outline"]
+    assert note["content_hash"] == nil
+    refute result_text(body) =~ "Content hash"
+  end
+
+  defp put_note(user, vault, path, content) do
+    {:ok, _} =
+      Engram.Notes.upsert_note(
+        user,
+        vault,
+        %{"path" => path, "content" => content, "mtime" => 1.0},
+        actor: "api"
+      )
+  end
+
+  test "a batch read serves each tailed note's current text in the same 4 statements", ctx do
+    %{conn: conn, user: user, vault: vault} = ctx
+    put_note(user, vault, "b.md", "# B\n\nbee\n")
+
+    for path <- ["a.md", "b.md"] do
+      {id, doc} = base_doc(user, vault, path)
+      land_tail(user, vault, id, doc, &(&1 <> "TAIL-#{path}\n"))
+    end
+
+    Engram.DataCase.clear_request_caches()
+    call = fn -> call_tool(conn, "get_notes", %{"paths" => ["a.md", "b.md"]}) |> tool_ok!() end
+    call.()
+    {conn2, qs} = QueryRecorder.record(call)
+
+    notes = json_response(conn2, 200)["result"]["structuredContent"]["notes"]
+    assert length(notes) == 2
+
+    for n <- notes do
+      assert n["content"] =~ "TAIL-#{n["path"]}", inspect(n)
+      assert n["content_hash"] == hash_of(user, n["content"])
+    end
+
+    qs = Enum.reject(qs, &(&1.source == "tenant_exit_sandbox"))
+    assert length(qs) == 4, QueryRecorder.format(qs)
+  end
+
+  test "a note past the byte budget still serves its tail via the greedy pass", ctx do
+    %{user: user, vault: vault} = ctx
+    put_note(user, vault, "c.md", "# C\n\nsee\n")
+    # Incompressible, so its stored size dwarfs the budget.
+    big = Base.encode64(:crypto.strong_rand_bytes(3_000))
+    put_note(user, vault, "big.md", "# Big\n\n" <> big)
+
+    for path <- ["a.md", "c.md"] do
+      {id, doc} = base_doc(user, vault, path)
+      land_tail(user, vault, id, doc, &(&1 <> "TAIL-#{path}\n"))
+    end
+
+    # a ships (first always does); big is cut; c fits what is left, so it is
+    # read by the greedy pass (past_the_cut), not the first statement.
+    [{_, fa}, {_, fbig}, {_, fc}] =
+      Engram.Notes.get_notes_within(user, vault, ["a.md", "big.md", "c.md"], 1_500)
+
+    assert fbig.() == :over_budget
+
+    for {fetch, path} <- [{fa, "a.md"}, {fc, "c.md"}] do
+      note = fetch.()
+      assert note.content =~ "TAIL-#{path}", inspect(note.content)
+      assert note.content_hash == hash_of(user, note.content)
+    end
   end
 
   test "write_note with a fresh base_hash writes across a checkpoint of the same text", ctx do
