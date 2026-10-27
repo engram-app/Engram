@@ -100,11 +100,13 @@ defmodule Engram.Notes.CrdtDoc do
     %{
       id: {__MODULE__, Keyword.fetch!(opts, :note_id)},
       start: {__MODULE__, :start_link, [opts]},
-      # :temporary — a crashed room must NOT be auto-restarted: the restarted
-      # process would have zero observers and (auto_exit being :DOWN-driven)
-      # never exit — an immortal orphan. Rooms are ephemeral; channels restart
-      # them on demand via CrdtRegistry.ensure_observed (stale pids are evicted
-      # by the channel's monitor).
+      # :temporary: a crashed room must NOT be auto-restarted. A restart would
+      # come up with zero observers; since y_ex 0.13 such a room exits after
+      # `auto_exit_timeout` (5 s) rather than living forever, but a supervisor
+      # restart would still re-seed state nobody asked for and burn the
+      # restart budget. Rooms are ephemeral; channels restart them on demand
+      # via CrdtRegistry.ensure_observed (stale pids are evicted by the
+      # channel's monitor).
       restart: :temporary,
       # Rooms flush a full checkpoint in terminate/2. The OTP default of 5_000
       # can brutal-kill that flush mid-write on a deploy, when every room

@@ -162,9 +162,10 @@ defmodule Engram.Notes.CrdtIndexDoc do
     %{
       id: {__MODULE__, Keyword.fetch!(opts, :vault_id)},
       start: {__MODULE__, :start_link, [opts]},
-      # :temporary for the same reason note rooms are — a restarted room would
-      # have zero observers and (auto_exit being :DOWN-driven) never exit, i.e.
-      # an immortal orphan. Channels re-establish it on demand.
+      # :temporary for the same reason note rooms are: a restarted room would
+      # come up with zero observers (y_ex >= 0.13 exits it after 5 s, so it is
+      # no longer immortal, but the restart is still pointless work).
+      # Channels re-establish it on demand.
       restart: :temporary,
       # LONGER than a note room's 15 s, not shorter, and the OTP default of
       # 5_000 is badly wrong here.

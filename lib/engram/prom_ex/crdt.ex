@@ -437,14 +437,14 @@ defmodule Engram.PromEx.Crdt do
         #
         # Tagged by all three keys on purpose. `phase` alone would merge a room
         # `:conflict` with a snapshot `:conflict`, losing the only dimension
-        # that tells them apart. 2 ops x 5 routes x 8 phases bounds the series.
+        # that tells them apart. 2 ops x 5 routes x 9 phases bounds the series.
         counter(
           metric_prefix ++ [:index_claim, :total],
           event_name: @claim_event,
           description:
             "Server-side filemeta_v0 writes by op (claim | release), route " <>
               "(gate | room | snapshot | orphan) and phase (ok | conflict | rotation | " <>
-              "room_exit | mailbox_empty | load_failed | persist_failed | orphan_claim). " <>
+              "room_exit | mailbox_empty | room_raised | load_failed | persist_failed | orphan_claim). " <>
               "route=gate phase=rotation is a write REFUSED before routing because a DEK " <>
               "rotation is running — the caller got an error and did not commit.",
           tags: [:op, :route, :phase]
