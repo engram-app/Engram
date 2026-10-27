@@ -83,8 +83,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   use GenServer
 
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtCheckpoint, CrdtPersistence, CrdtRegistry, CrdtRoomLru}
-  alias Yex.Sync.SharedDoc
+  alias Engram.Notes.{CrdtCheckpoint, CrdtPersistence, CrdtRegistry, CrdtRoom, CrdtRoomLru}
 
   require Logger
 
@@ -495,8 +494,16 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   # is nothing left to tell (its own unbind checkpointed), so that is not a
   # failure and logs only at debug.
   @spec mark_checkpointed(pid(), [Ecto.UUID.t()], non_neg_integer()) :: :ok
+  #
+  # If `checkpointed/2` raises in the room, CrdtRoom logs it and the room keeps
+  # offering the rows; the next checkpoint prunes them. Nothing more to do here.
   def mark_checkpointed(room_pid, pruned, failures) do
-    SharedDoc.update_doc(room_pid, fn _doc -> CrdtPersistence.checkpointed(pruned, failures) end)
+    _ =
+      CrdtRoom.update_doc(room_pid, fn _doc ->
+        CrdtPersistence.checkpointed(pruned, failures)
+      end)
+
+    :ok
   catch
     :exit, reason ->
       Logger.debug(
@@ -521,15 +528,21 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     parent = self()
     ref = make_ref()
 
-    :ok =
-      SharedDoc.update_doc(room_pid, fn doc ->
-        send(
-          parent,
-          {ref, Yex.encode_state_as_update(doc), CrdtPersistence.known_tail_ids(),
-           CrdtPersistence.append_failures()}
-        )
-      end)
+    # A raise in the room (logged by CrdtRoom) skips this checkpoint; the next
+    # tick retries.
+    with :ok <-
+           CrdtRoom.update_doc(room_pid, fn doc ->
+             send(
+               parent,
+               {ref, Yex.encode_state_as_update(doc), CrdtPersistence.known_tail_ids(),
+                CrdtPersistence.append_failures()}
+             )
+           end) do
+      receive_snapshot(ref)
+    end
+  end
 
+  defp receive_snapshot(ref) do
     receive do
       {^ref, {:ok, encoded}, ids, failures} -> {:ok, encoded, ids, failures}
       {^ref, error, _ids, _failures} -> error

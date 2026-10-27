@@ -57,7 +57,7 @@ defmodule Engram.Notes.CrdtIndexDoc do
   to fall back to — the way back is a different number, not a switch.
   """
 
-  alias Engram.Notes.CrdtCheckpointTimer
+  alias Engram.Notes.{CrdtCheckpointTimer, CrdtRoom}
 
   @map_name "filemeta_v0"
 
@@ -135,9 +135,10 @@ defmodule Engram.Notes.CrdtIndexDoc do
       # Same channel as the note room: update_v1 runs INSIDE this process, so
       # it reads the timer pid straight out of the process dictionary rather
       # than doing a registry lookup on every update.
-      Yex.Sync.SharedDoc.update_doc(room_pid, fn _doc ->
-        Process.put(:crdt_timer_pid, timer_pid)
-      end)
+      :ok =
+        CrdtRoom.update_doc(room_pid, fn _doc ->
+          Process.put(:crdt_timer_pid, timer_pid)
+        end)
 
       result
     end

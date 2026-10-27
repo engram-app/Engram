@@ -16,8 +16,7 @@ defmodule Engram.Notes.CrdtTransport do
 
   alias Engram.{Crypto, Notes, Repo}
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBridge, CrdtPersistence, CrdtRegistry, CrdtUpdateLog, Note}
-  alias Yex.Sync.SharedDoc
+  alias Engram.Notes.{CrdtBridge, CrdtPersistence, CrdtRegistry, CrdtRoom, CrdtUpdateLog, Note}
 
   require Logger
 
@@ -277,7 +276,11 @@ defmodule Engram.Notes.CrdtTransport do
     #
     # The outer `Task.yield` already bounds the channel, which is the process
     # that actually needs bounding.
-    SharedDoc.update_doc(room, fn doc ->
+    #
+    # A raise inside the fun comes back as `{:error, {:room_raised, _}}`
+    # (logged by CrdtRoom) before the fun sent anything, so `drain_reply/1`
+    # answers `:room_unavailable` and the client resends.
+    CrdtRoom.update_doc(room, fn doc ->
       result =
         cond do
           not CrdtPersistence.owned_by?(user_id, vault_id) -> {:error, :not_found}
@@ -332,11 +335,14 @@ defmodule Engram.Notes.CrdtTransport do
     ref = make_ref()
 
     try do
-      SharedDoc.update_doc(
-        room,
-        fn _doc -> send(parent, {ref, CrdtPersistence.append_failures() > 0}) end,
-        timeout
-      )
+      # A raise is logged by CrdtRoom; nothing was sent, so drain_confirm/1
+      # answers `:room_unavailable`.
+      _ =
+        CrdtRoom.update_doc(
+          room,
+          fn _doc -> send(parent, {ref, CrdtPersistence.append_failures() > 0}) end,
+          timeout: timeout
+        )
 
       drain_confirm(ref)
     catch

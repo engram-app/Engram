@@ -20,7 +20,7 @@ defmodule Engram.Notes.CrdtDoc do
   once every 5 s idle / 60 s ceiling.
   """
 
-  alias Engram.Notes.CrdtCheckpointTimer
+  alias Engram.Notes.{CrdtCheckpointTimer, CrdtRoom}
 
   # Room ALLOCATION, the counterpart to `[:engram, :crdt, :room_drain]`. Until
   # #1409 this subsystem counted rooms leaving but never rooms arriving, so
@@ -84,9 +84,10 @@ defmodule Engram.Notes.CrdtDoc do
         # Store the timer pid in the room's process dictionary so that
         # CrdtPersistence.update_v1 (which runs inside the room GenServer)
         # can call notify_activity/1 without a separate registry lookup.
-        Yex.Sync.SharedDoc.update_doc(room_pid, fn _doc ->
-          Process.put(:crdt_timer_pid, timer_pid)
-        end)
+        :ok =
+          CrdtRoom.update_doc(room_pid, fn _doc ->
+            Process.put(:crdt_timer_pid, timer_pid)
+          end)
 
         result
 

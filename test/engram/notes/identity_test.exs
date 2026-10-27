@@ -377,6 +377,47 @@ defmodule Engram.Notes.IdentityTest do
     end
   end
 
+  describe "a write that raises inside the live room" do
+    # y_ex >= 0.13 returns a raise from `SharedDoc.update_doc/3` instead of
+    # crashing the room. Read as `:mailbox_empty` it was mislabelled, and any
+    # caller that ignored it reported success. Provoked for real: the live
+    # room's doc is swapped for a non-doc, so `mutate/2` raises INSIDE the room
+    # process while the persisted snapshot stays healthy.
+    test "falls back to the snapshot, labelled room_raised", ctx do
+      n = note(ctx, "old.md")
+      {:ok, room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
+      real_doc = :sys.get_state(room).doc
+      :sys.replace_state(room, &%{&1 | doc: :not_a_doc})
+
+      test_pid = self()
+      handler_id = {__MODULE__, make_ref()}
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:engram, :crdt, :index_claim],
+          fn _, _, meta, _ -> send(test_pid, {:index_claim, meta}) end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :ok = Identity.claim(ctx.user, ctx.vault.id, [{"new.md", n.id}])
+        end)
+
+      assert_received {:index_claim, %{route: :room, phase: :room_raised}}
+      assert_received {:index_claim, %{route: :snapshot, phase: :ok}}
+      assert log =~ "crdt room write raised inside the room"
+      assert index_entries(ctx)["new.md"]["note_id"] == n.id
+
+      # Hand the room its doc back so it drains normally when this observer
+      # exits, like every other live-room test here.
+      :sys.replace_state(room, &%{&1 | doc: real_doc})
+    end
+  end
+
   describe "a rotation refuses the claim outright" do
     test "a rename during a DEK rotation fails and moves nothing", ctx do
       n = note(ctx, "rot.md")
