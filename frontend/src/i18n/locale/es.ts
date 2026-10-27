@@ -287,13 +287,13 @@ export default {
 	"Your current plan": "Tu plan actual",
 	"You're on this plan": "Estás en este plan",
 	Popular: "Popular",
+	"2,000 notes · 20 AI searches a day · 1 vault":
+		"2.000 notas · 20 búsquedas con IA al día · 1 bóveda",
+	"2,000 notes, all searchable": "2000 notas, todas buscables",
 	"20 AI searches a day": "20 búsquedas de IA al día",
 	"1 vault": "1 bóveda",
 	"1 GB attachments": "1 GB de adjuntos",
 	"2 devices": "2 dispositivos",
-	"2,000 notes · 20 AI searches a day · 1 vault":
-		"2.000 notas · 20 búsquedas con IA al día · 1 bóveda",
-	"2,000 notes, all searchable": "2000 notas, todas buscables",
 	"20,000 notes": "20000 notas",
 	"10 vaults": "10 bóvedas",
 	"Unlimited devices": "Dispositivos ilimitados",

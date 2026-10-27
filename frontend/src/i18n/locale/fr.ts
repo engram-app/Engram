@@ -288,13 +288,13 @@ export default {
 	"Your current plan": "Ton abonnement actuel",
 	"You're on this plan": "Tu es sur cet abonnement",
 	Popular: "Populaire",
+	"2,000 notes · 20 AI searches a day · 1 vault":
+		"2 000 notes · 20 recherches IA par jour · 1 coffre",
+	"2,000 notes, all searchable": "2 000 notes, toutes consultables",
 	"20 AI searches a day": "20 recherches IA par jour",
 	"1 vault": "1 coffre",
 	"1 GB attachments": "1 Go de pièces jointes",
 	"2 devices": "2 appareils",
-	"2,000 notes · 20 AI searches a day · 1 vault":
-		"2 000 notes · 20 recherches IA par jour · 1 coffre",
-	"2,000 notes, all searchable": "2 000 notes, toutes consultables",
 	"20,000 notes": "20 000 notes",
 	"10 vaults": "10 coffres",
 	"Unlimited devices": "Appareils illimités",

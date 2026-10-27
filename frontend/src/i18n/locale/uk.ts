@@ -291,13 +291,13 @@ export default {
 	"Your current plan": "Ваш поточний тарифний план",
 	"You're on this plan": "Ви користуєтеся цим тарифним планом",
 	Popular: "Популярні",
+	"2,000 notes · 20 AI searches a day · 1 vault":
+		"2000 заміток · 20 запитів до ШІ на день · 1 сховище",
+	"2,000 notes, all searchable": "2000 заміток, усі доступні для пошуку",
 	"20 AI searches a day": "20 AI-запитів на день",
 	"1 vault": "1 сховище",
 	"1 GB attachments": "1 ГБ вкладень",
 	"2 devices": "2 пристрої",
-	"2,000 notes · 20 AI searches a day · 1 vault":
-		"2000 заміток · 20 запитів до ШІ на день · 1 сховище",
-	"2,000 notes, all searchable": "2000 заміток, усі доступні для пошуку",
 	"20,000 notes": "20000 заміток",
 	"10 vaults": "10 сховищ",
 	"Unlimited devices": "Необмежена кількість пристроїв",

@@ -282,13 +282,13 @@ export default {
 	"Your current plan": "Mevcut aboneliğiniz",
 	"You're on this plan": "Şu paketi kullanıyorsunuz",
 	Popular: "Popüler",
+	"2,000 notes · 20 AI searches a day · 1 vault":
+		"2.000 not · Günde 20 yapay zeka sorgusu · 1 kasa",
+	"2,000 notes, all searchable": "2.000 not, hepsi aranabilir",
 	"20 AI searches a day": "Günde 20 yapay zeka sorgusu",
 	"1 vault": "1 kasa",
 	"1 GB attachments": "1 GB ek",
 	"2 devices": "2 cihaz",
-	"2,000 notes · 20 AI searches a day · 1 vault":
-		"2.000 not · Günde 20 yapay zeka sorgusu · 1 kasa",
-	"2,000 notes, all searchable": "2.000 not, hepsi aranabilir",
 	"20,000 notes": "20.000 not",
 	"10 vaults": "10 kasa",
 	"Unlimited devices": "Sınırsız cihaz",

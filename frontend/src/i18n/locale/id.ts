@@ -278,13 +278,13 @@ export default {
 	"Your current plan": "Paket langganan Anda saat ini",
 	"You're on this plan": "Anda menggunakan paket ini",
 	Popular: "Populer",
+	"2,000 notes · 20 AI searches a day · 1 vault":
+		"2.000 catatan · 20 pencarian AI per hari · 1 vault",
+	"2,000 notes, all searchable": "2.000 catatan, semuanya dapat dicari",
 	"20 AI searches a day": "20 pencarian AI per hari",
 	"1 vault": "1 vault",
 	"1 GB attachments": "1 GB lampiran",
 	"2 devices": "2 perangkat",
-	"2,000 notes · 20 AI searches a day · 1 vault":
-		"2.000 catatan · 20 pencarian AI per hari · 1 vault",
-	"2,000 notes, all searchable": "2.000 catatan, semuanya dapat dicari",
 	"20,000 notes": "20.000 catatan",
 	"10 vaults": "10 vault",
 	"Unlimited devices": "Perangkat tanpa batas",
