@@ -291,8 +291,6 @@ export default {
 	"1 vault": "1 Vault",
 	"1 GB attachments": "1 GB Anhänge",
 	"2 devices": "2 Geräte",
-	"3,000 notes · 20 AI searches a day · 1 vault": "3.000 Notizen · 20 KI-Suchen pro Tag · 1 Vault",
-	"3,000 notes, all searchable": "3.000 Notizen, alle durchsuchbar",
 	"2,000 notes · 20 AI searches a day · 1 vault": "2.000 Notizen · 20 KI-Suchen pro Tag · 1 Vault",
 	"2,000 notes, all searchable": "2.000 Notizen, alle durchsuchbar",
 	"20,000 notes": "20.000 Notizen",

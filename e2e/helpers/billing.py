@@ -45,7 +45,7 @@ TEST_USER_OVERRIDES = {
     # the cap to unlimited. Tests that need to assert the 1-device gate
     # (test_71 connections cap) do NOT call grant_test_plan.
     "concurrent_devices": -1,
-    # Free `notes_cap` is 3,000. The session vault is shared by ~110 tests and
+    # Free `notes_cap` is 2,000. The session vault is shared by ~110 tests and
     # accumulates notes across a run, so a cap here 402s unrelated tests late.
     "notes_cap": -1,
 }

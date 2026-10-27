@@ -16,7 +16,7 @@ import {
 	useConfirmPlanChange,
 	usePlanChangePreview,
 } from "../api/queries";
-import { CadenceToggle, PLAN_TIERS, PlanCard, type PlanTier, planCopy } from "./plan-cards";
+import { CadenceToggle, PLAN_TIERS, PLAN_CATALOG, PlanCard, type PlanTier } from "./plan-cards";
 
 interface PlanChangePanelProps {
 	billing: BillingStatus;
@@ -56,7 +56,7 @@ function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClos
 	const { t, renderedLocale } = useT();
 
 	const { data: config } = useBillingConfig();
-	const { catalog } = planCopy(config?.plan_limits);
+	const catalog = PLAN_CATALOG;
 	const { data: detail } = useBillingSubscriptionDetail(Boolean(billing.subscription));
 	const currentTier = deriveCurrentTier(billing);
 	const currentCadence = deriveCurrentCadence(detail);

@@ -277,9 +277,6 @@ export default {
 	"1 vault": "1 kho lưu trữ",
 	"1 GB attachments": "1 GB tệp đính kèm",
 	"2 devices": "2 thiết bị",
-	"3,000 notes · 20 AI searches a day · 1 vault":
-		"3.000 ghi chú · 20 lượt tìm kiếm AI mỗi ngày · 1 kho lưu trữ",
-	"3,000 notes, all searchable": "3.000 ghi chú, tất cả đều có thể tìm kiếm",
 	"2,000 notes · 20 AI searches a day · 1 vault":
 		"2.000 ghi chú · 20 lượt tìm kiếm AI mỗi ngày · 1 kho lưu trữ",
 	"2,000 notes, all searchable": "2.000 ghi chú, tất cả đều có thể tìm kiếm",

@@ -249,7 +249,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     _ =
       if daily_reverify?(scheduled_at) do
         :ok = sweep_over_note_cap(now)
-        if Indexing.budget_enabled?(), do: {:ok, _} = budget_sweep(@budget_users, now)
+        {:ok, _} = budget_sweep(@budget_users, now)
       end
 
     :ok = wake_budget_parked(backoff_until)

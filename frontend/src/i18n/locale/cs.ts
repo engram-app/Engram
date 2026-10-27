@@ -290,9 +290,6 @@ export default {
 	"1 vault": "1 trezor",
 	"1 GB attachments": "1 GB příloh",
 	"2 devices": "2 zařízení",
-	"3,000 notes · 20 AI searches a day · 1 vault":
-		"3 000 poznámek · 20 AI vyhledávání denně · 1 trezor",
-	"3,000 notes, all searchable": "3 000 poznámek, vše vyhledávatelné",
 	"2,000 notes · 20 AI searches a day · 1 vault":
 		"2 000 poznámek · 20 AI vyhledávání denně · 1 trezor",
 	"2,000 notes, all searchable": "2 000 poznámek, všechny vyhledávatelné",

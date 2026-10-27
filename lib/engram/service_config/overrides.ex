@@ -7,8 +7,8 @@ defmodule Engram.ServiceConfig.Overrides do
   merge, and while it rolls old and new tasks serve side by side. A row here
   moves every node within seconds and a task booted later reads the same
   row, so there is no split brain between old and new tasks. The keys left
-  are the v5 rebuild kill switch (`index_rebuild`) and the two v5 steps not
-  taken yet (`index_budget_enabled`, `tenant_idf`).
+  are the v5 rebuild kill switch (`index_rebuild`) and the v5 step not
+  taken yet (`tenant_idf`).
 
   ## Reads
 
@@ -47,7 +47,6 @@ defmodule Engram.ServiceConfig.Overrides do
   require Logger
 
   @types %{
-    index_budget_enabled: :boolean,
     tenant_idf: :boolean,
     index_rebuild: {:enum, ~w(off dry_run on)}
   }

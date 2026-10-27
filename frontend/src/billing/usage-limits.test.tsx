@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,13 +29,8 @@ function Wrapper({ children }: { children: ReactNode }) {
 	);
 }
 
-// `/billing/config` reports which limit set is enforced; the banner and the
-// panel exist only with the v5 one (INDEX_BUDGET_ENABLED), as on main
-// before it.
-function serve(body: BillingUsage, limits: "v5" | "legacy" = "v5") {
-	get.mockImplementation((path: string) =>
-		Promise.resolve(path === "/billing/config" ? { plan_limits: limits } : body),
-	);
+function serve(body: BillingUsage) {
+	get.mockImplementation(() => Promise.resolve(body));
 }
 
 function usage(over: Partial<BillingUsage["usage"]> = {}): BillingUsage {
@@ -105,22 +100,5 @@ describe("UsageBanner", () => {
 				"Your full-search passages are used up. 4 older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
 			),
 		).toBeTruthy();
-	});
-});
-
-describe("with the legacy limits (INDEX_BUDGET_ENABLED off)", () => {
-	it("renders neither banner nor panel, and never asks for usage", async () => {
-		serve(usage({ notes: { used: 2900, limit: 3000 } }), "legacy");
-		const { container } = render(
-			<>
-				<UsageBanner />
-				<UsagePanel />
-			</>,
-			{ wrapper: Wrapper },
-		);
-
-		await waitFor(() => expect(get).toHaveBeenCalledWith("/billing/config"));
-		expect(container.innerHTML).toBe("");
-		expect(get).not.toHaveBeenCalledWith("/billing/usage");
 	});
 });

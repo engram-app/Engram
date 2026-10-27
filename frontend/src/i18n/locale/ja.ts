@@ -278,8 +278,6 @@ export default {
 	"1 vault": "1つの保管庫",
 	"1 GB attachments": "1 GBの添付ファイル",
 	"2 devices": "2台のデバイス",
-	"3,000 notes · 20 AI searches a day · 1 vault": "3000ノート · 1日20回AI検索 · 1つの保管庫",
-	"3,000 notes, all searchable": "3000ノート、すべて検索可能",
 	"2,000 notes · 20 AI searches a day · 1 vault": "2000ノート · 1日20回AI検索 · 1つの保管庫",
 	"2,000 notes, all searchable": "2000ノート、すべて検索可能",
 	"20,000 notes": "20000ノート",

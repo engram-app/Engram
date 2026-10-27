@@ -24,7 +24,6 @@ defmodule Engram.Workers.ReconcileIndexBudgetRlsTest do
 
   use Oban.Testing, repo: Engram.Repo
 
-  import Engram.IndexBudgetHelpers
   import Ecto.Query
   import Engram.RlsCase
 
@@ -38,9 +37,6 @@ defmodule Engram.Workers.ReconcileIndexBudgetRlsTest do
   @moduletag :rls_unsafe
 
   @email_prefix "reconcile-index-budget-rls-"
-
-  # The v5 index budget is off by default (review H2); these tests are about it.
-  setup :enable_index_budget
 
   setup do
     bypass = Bypass.open()

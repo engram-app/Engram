@@ -88,21 +88,15 @@ defmodule EngramWeb.BillingController do
     })
   end
 
-  # The v5 index budget (review H3, "no invisible limits"): the account's
-  # search points against `index_points_cap`, and how many notes are on
-  # keyword-only search (the floor tier). Only with the budget on
-  # (`Indexing.budget_enabled?/0`): off, the response is main's, and no
-  # count over the user's chunks runs on every call.
+  # The index budget (review H3, "no invisible limits"): the account's search
+  # points against `index_points_cap`, and how many notes are on keyword-only
+  # search (the floor tier).
   defp index_budget_usage(user) do
-    if Engram.Indexing.budget_enabled?() do
-      %{
-        index_points:
-          used_limit(Engram.Indexing.point_count(user.id), Billing.cap(user, :index_points_cap)),
-        floor_notes: Engram.Indexing.floor_note_count(user.id)
-      }
-    else
-      %{}
-    end
+    %{
+      index_points:
+        used_limit(Engram.Indexing.point_count(user.id), Billing.cap(user, :index_points_cap)),
+      floor_notes: Engram.Indexing.floor_note_count(user.id)
+    }
   end
 
   defp used_limit(used, limit), do: %{used: used, limit: cap_json(limit)}
@@ -244,10 +238,7 @@ defmodule EngramWeb.BillingController do
         customer_email: user.email,
         customer_id: Billing.paddle_customer_id(user),
         custom_data: %{user_id: user.id},
-        vaults_cap: cap_json(Billing.cap(user, :vaults_cap)),
-        # Which note-cap set is enforced ("legacy" or "v5"): the plan cards
-        # show the copy for it (`LimitKeys.plan_limits/0`).
-        plan_limits: Engram.Billing.LimitKeys.plan_limits()
+        vaults_cap: cap_json(Billing.cap(user, :vaults_cap))
       })
     )
   end

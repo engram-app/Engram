@@ -240,14 +240,8 @@ defmodule Engram.ServiceConfig.OverridesTest do
 
   describe "accessors read through the override" do
     test "every overridable accessor sees a DB override" do
-      ServiceConfig.put_override(:index_budget_enabled, false)
+      :ok = ServiceConfig.override(:tenant_idf, true, by: "t")
 
-      refute Engram.Indexing.budget_enabled?()
-
-      for key <- [:index_budget_enabled, :tenant_idf],
-          do: :ok = ServiceConfig.override(key, true, by: "t")
-
-      assert Engram.Indexing.budget_enabled?()
       assert ServiceConfig.get(:tenant_idf, false) == true
 
       :ok = ServiceConfig.override(:index_rebuild, "dry_run", by: "t")

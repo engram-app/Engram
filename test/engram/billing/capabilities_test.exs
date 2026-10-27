@@ -8,7 +8,6 @@ defmodule Engram.Billing.CapabilitiesTest do
   alias Engram.Billing
   alias Engram.Billing.EntitlementCache
   alias Engram.Billing.LimitKeys
-  alias Engram.IndexBudgetHelpers
 
   setup do
     on_exit(fn -> EntitlementCache.evict_all() end)
@@ -20,7 +19,7 @@ defmodule Engram.Billing.CapabilitiesTest do
     caps = Billing.capabilities(user)
 
     assert caps.tier == "free"
-    assert caps.limits["notes_cap"] == 3_000
+    assert caps.limits["notes_cap"] == 2_000
     assert caps.limits["vaults_cap"] == 1
     # #1974: API access is every tier's; there is no write flag any more.
     assert caps.limits["api_rps_cap"] == 30
@@ -35,7 +34,7 @@ defmodule Engram.Billing.CapabilitiesTest do
     caps = Billing.capabilities(user)
 
     assert caps.tier == "starter"
-    assert caps.limits["notes_cap"] == 50_000
+    assert caps.limits["notes_cap"] == 20_000
     assert caps.limits["vaults_cap"] == 10
     assert caps.limits["api_rps_cap"] == 30
   end
@@ -84,21 +83,12 @@ defmodule Engram.Billing.CapabilitiesTest do
     :ok = EntitlementCache.evict(user.id)
     caps = Billing.capabilities(user)
     assert caps.tier == "pro"
-    assert caps.limits["notes_cap"] == nil
+    assert caps.limits["notes_cap"] == 40_000
   end
 
-  # The v5 go flag (INDEX_BUDGET_ENABLED) switches the note caps for every
-  # reader at once; at its default they are main's.
-  describe "v5 plan limits" do
-    test "default: main's note caps" do
-      assert Billing.capabilities(insert(:user)).limits["notes_cap"] == 3_000
-      assert LimitKeys.plan_limits() == :legacy
-    end
-
-    test "flag on: the 2026-10-19 note caps", _ctx do
-      IndexBudgetHelpers.enable_index_budget()
-      assert LimitKeys.plan_limits() == :v5
-
+  # The note caps are the catalog defaults for every reader.
+  describe "plan note caps" do
+    test "the 2026-10-26 note caps" do
       free = insert(:user)
       starter = insert(:user)
       insert(:subscription, user: starter, tier: "starter", status: "active")

@@ -41,7 +41,8 @@ import {
 	PlanAccordionRow,
 	PlanCard,
 	type PlanTier,
-	planCopy,
+	FREE_TIER,
+	PLAN_CATALOG,
 	useRenewalNotice,
 } from "./plan-cards";
 import PlanChangePanel from "./plan-change-panel";
@@ -288,7 +289,7 @@ export default function BillingPage({
 
 	const { data: billing, isLoading } = useBillingStatus();
 	const { data: config } = useBillingConfig();
-	const { freeTier, catalog } = planCopy(config?.plan_limits);
+	const catalog = PLAN_CATALOG;
 	const renewal = useRenewalNotice();
 	const { data: me } = useMe();
 	const hasSubscription = Boolean(billing?.subscription);
@@ -1147,10 +1148,10 @@ export default function BillingPage({
 								/>
 								{freeOption ? (
 									<PlanAccordionRow
-										name={freeTier.name}
-										price={freeTier.price}
-										summary={t(freeTier.summary)}
-										features={[...freeTier.features]}
+										name={FREE_TIER.name}
+										price={FREE_TIER.price}
+										summary={t(FREE_TIER.summary)}
+										features={[...FREE_TIER.features]}
 										ctaLabel={t("Choose Free")}
 										onClick={freeOption.onContinue}
 										disabled={freeOption.loading}

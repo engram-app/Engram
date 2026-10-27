@@ -12,7 +12,6 @@ defmodule Engram.IndexingV5RebuildTest do
   use Oban.Testing, repo: Engram.Repo
 
   import Ecto.Query
-  import Engram.IndexBudgetHelpers
   import Engram.IndexingTestHelpers
   import Mox
 
@@ -295,7 +294,6 @@ defmodule Engram.IndexingV5RebuildTest do
 
   test "a capped group of all-dense members gets a unit-norm mean and 0 tokens", ctx do
     note = indexed(ctx, 200)
-    enable_index_budget()
 
     assert {:ok, count, 0, true} = rebuild(note, ctx.vault, ctx.user)
     assert count <= 128
@@ -309,18 +307,6 @@ defmodule Engram.IndexingV5RebuildTest do
       norm = :math.sqrt(Enum.reduce(dense, 0.0, &(&1 * &1 + &2)))
       assert abs(norm - 1.0) < 1.0e-3
     end
-  end
-
-  # The budget still off, as during the v5 pass: the pass caps an uncapped
-  # note from its stored vectors, no Voyage.
-  test "with the budget off, a capped group is mean-pooled for 0 tokens", ctx do
-    note = indexed(ctx, 200)
-    refute Indexing.budget_enabled?()
-
-    assert {:ok, count, 0, true} = rebuild(note, ctx.vault, ctx.user)
-    assert count <= 128
-    assert embedded() == []
-    assert Enum.any?(rows(note), &(&1.member_hmacs != nil))
   end
 
   test "H8: a refused upsert (507) keeps the old points searchable and the note retried", ctx do

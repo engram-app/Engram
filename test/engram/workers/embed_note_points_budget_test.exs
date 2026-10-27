@@ -5,7 +5,6 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
 
   use Oban.Testing, repo: Engram.Repo
 
-  import Engram.IndexBudgetHelpers
   import Ecto.Query
   import Engram.RlsCase, only: [as_prod_role: 1]
   import Mox
@@ -22,9 +21,6 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
   alias Engram.Workers.{EmbedNote, RebuildStaleNote, ReconcileEmbeddings}
 
   @endpoint EngramWeb.Endpoint
-
-  # The v5 index budget is off by default (review H2); these tests are about it.
-  setup :enable_index_budget
 
   setup :verify_on_exit!
 

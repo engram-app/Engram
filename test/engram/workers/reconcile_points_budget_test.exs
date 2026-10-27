@@ -5,7 +5,6 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
 
   use Oban.Testing, repo: Engram.Repo
 
-  import Engram.IndexBudgetHelpers
   import Ecto.Query
   import Engram.RlsCase, only: [as_prod_role: 1]
   import Mox
@@ -19,9 +18,6 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
   alias Engram.ServiceConfig
   alias Engram.UsageMeters
   alias Engram.Workers.{EmbedNote, RebuildStaleNote, ReconcileEmbeddings}
-
-  # The v5 index budget is off by default (review H2); these tests are about it.
-  setup :enable_index_budget
 
   setup :verify_on_exit!
 

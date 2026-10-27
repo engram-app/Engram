@@ -430,8 +430,6 @@ defmodule Engram.RebuildTest do
   end
 
   describe "rebuild_estimate/2 on indexed notes" do
-    import Engram.IndexBudgetHelpers
-
     setup do
       bypass = Bypass.open()
       ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
@@ -488,7 +486,6 @@ defmodule Engram.RebuildTest do
     test "a capped note whose members each have a stored vector is mean-pooled for 0 tokens",
          %{user: user, vault: vault} do
       note = indexed!(user, vault, sections(6))
-      enable_index_budget()
       insert(:user_limit_override, user: user, key: "note_points_cap", value: %{"v" => 2})
       # The index above cached the plan cap; the NOTIFY eviction only fires on
       # commit, which the sandbox never does.
@@ -504,7 +501,6 @@ defmodule Engram.RebuildTest do
     # has no stored vector to average: its merged groups are paid for.
     test "a capped sparse-only note is never counted as mean-pooled", %{user: user, vault: vault} do
       note = %{indexed!(user, vault, sections(6)) | dense_indexed_hash: nil}
-      enable_index_budget()
       insert(:user_limit_override, user: user, key: "note_points_cap", value: %{"v" => 2})
       # The index above cached the plan cap; the NOTIFY eviction only fires on
       # commit, which the sandbox never does.

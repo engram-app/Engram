@@ -282,9 +282,6 @@ export default {
 	"1 vault": "1 vault",
 	"1 GB attachments": "1 GB lampiran",
 	"2 devices": "2 perangkat",
-	"3,000 notes · 20 AI searches a day · 1 vault":
-		"3.000 catatan · 20 pencarian AI per hari · 1 vault",
-	"3,000 notes, all searchable": "3.000 catatan, semuanya dapat dicari",
 	"2,000 notes · 20 AI searches a day · 1 vault":
 		"2.000 catatan · 20 pencarian AI per hari · 1 vault",
 	"2,000 notes, all searchable": "2.000 catatan, semuanya dapat dicari",

@@ -4,7 +4,6 @@ import type { UIText } from "@/i18n/ui-text";
 import {
 	type BillingUsage,
 	type UsageEntry,
-	useBillingConfig,
 	useBillingUsage,
 } from "../api/queries";
 import { SettingsSectionCard } from "../settings/account/section-card";
@@ -13,18 +12,12 @@ import { SettingsSectionCard } from "../settings/account/section-card";
 // passage budget are shown where they are spent, and a banner says what
 // happens before and after either one binds. "Passages" are search points;
 // past the passage budget older notes drop to keyword-only search (the floor
-// tier), and nothing is deleted. Both exist only with the v5 limits
-// (`/billing/config` `plan_limits`, INDEX_BUDGET_ENABLED): before them the
-// app is main's, with no banner, no panel and no usage request.
+// tier), and nothing is deleted.
 
 const WARN_AT = 0.8;
 
 function percent(entry: UsageEntry | undefined): number | null {
 	return entry?.limit ? Math.floor((100 * entry.used) / entry.limit) : null;
-}
-
-function useV5Limits(): boolean {
-	return useBillingConfig().data?.plan_limits === "v5";
 }
 
 type T = ReturnType<typeof useT>;
@@ -149,9 +142,9 @@ function Panel() {
 }
 
 export function UsageBanner() {
-	return useV5Limits() ? <Banner /> : null;
+	return <Banner />;
 }
 
 export function UsagePanel() {
-	return useV5Limits() ? <Panel /> : null;
+	return <Panel />;
 }

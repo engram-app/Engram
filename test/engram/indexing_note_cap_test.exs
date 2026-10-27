@@ -5,7 +5,6 @@ defmodule Engram.IndexingNoteCapTest do
 
   use Oban.Testing, repo: Engram.Repo
 
-  import Engram.IndexBudgetHelpers
   import Engram.IndexingTestHelpers
   import Ecto.Query
   import Mox
@@ -20,9 +19,6 @@ defmodule Engram.IndexingNoteCapTest do
   alias Engram.ServiceConfig
   alias Engram.UsageMeters
   alias Engram.Workers.{EmbedNote, RebuildStaleNote, ReconcileEmbeddings}
-
-  # The v5 index budget is off by default (review H2); these tests are about it.
-  setup :enable_index_budget
 
   setup :verify_on_exit!
 
