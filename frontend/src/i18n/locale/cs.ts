@@ -1728,6 +1728,12 @@ export default {
 	"Keep both to move them with a number added to the name.":
 		"Zachovejte oba a přesouvejte je přidáním čísla do názvu.",
 	"Keep both": "Udržujte obojí",
+	"{folder} already has files with these {count} names": {
+		one: "{folder} již obsahuje soubor se stejným názvem",
+		few: "{folder} již obsahuje soubory s těmito {count} názvy",
+		many: "{folder} již obsahuje soubory s názvy {count}",
+		other: "{folder} již obsahuje soubory s těmito {count} názvy",
+	},
 	"These {count} files would share a name with others in {folder}": {
 		one: "Tento soubor by měl stejný název jako jiný v {folder}",
 		few: "Tyto {count} soubory by měly stejný název jako ostatní v {folder}",
