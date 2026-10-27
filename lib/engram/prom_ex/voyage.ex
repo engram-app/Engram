@@ -23,14 +23,16 @@ defmodule Engram.PromEx.Voyage do
       synthetic-429 path (`[:engram, :embed, :client_rate_limited]`,
       already emitted by the adapter), tagged by `:purpose`.
     * `engram_prom_ex_voyage_embed_tokens_total` — sum of `total_tokens`
-      per request, tagged by `:purpose`. Drives the Grafana tokens/min +
-      estimated-cost panels (the dashboard expr multiplies by the
-      per-1M-token price as a Grafana constant). NOT per-tenant — see
+      per request, tagged by `:purpose` and `:model`. Drives the Grafana
+      tokens/min + estimated-cost panels (the dashboard prices each `model`
+      series at its own per-1M-token list price: Free embeds on
+      voyage-4-lite, paid tiers on voyage-4-large). NOT per-tenant — see
       `Engram.UsageMeters` for tenant-attributed token accounting.
 
-  Cardinality contract: only bounded labels (`status`, `purpose`). NEVER
-  add `user_id`, `vault_id`, model strings, or any per-tenant identifier
-  — Voyage RPS × user count would explode the time series.
+  Cardinality contract: only bounded labels (`status`, `purpose`, and
+  `model` on the tokens sum: the two `Engram.EmbedModels` names). NEVER
+  add `user_id`, `vault_id`, or any per-tenant identifier — Voyage RPS ×
+  user count would explode the time series.
   """
 
   use PromEx.Plugin
@@ -77,7 +79,7 @@ defmodule Engram.PromEx.Voyage do
           measurement: :total_tokens,
           description:
             "Voyage embedding tokens billed, summed per request. Drives tokens/min and estimated-cost dashboard panels. Not per-tenant — see Engram.UsageMeters.",
-          tags: [:purpose]
+          tags: [:purpose, :model]
         )
       ]
     )

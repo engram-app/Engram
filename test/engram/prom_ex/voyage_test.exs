@@ -5,7 +5,7 @@ defmodule Engram.PromEx.VoyageTest do
   subscribes to are actually emitted by `Engram.Embedders.Voyage`.
 
   Cardinality contract: tags MUST NOT include user_id, vault_id, or any
-  per-tenant identifier. Only bounded labels (status, purpose) are allowed.
+  per-tenant identifier. Only bounded labels (status, purpose, model) are allowed.
   """
   use ExUnit.Case, async: true
 
@@ -63,6 +63,16 @@ defmodule Engram.PromEx.VoyageTest do
         refute tag in banned,
                "Voyage plugin metric #{inspect(m.name)} has banned high-cardinality tag #{inspect(tag)}"
       end
+    end
+  end
+
+  describe "tokens sum" do
+    test "is tagged by model so the dashboard can price lite and large separately" do
+      metrics =
+        PromExMetrics.of(VoyagePlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
+      tokens = Enum.find(metrics, &(&1.event_name == [:engram, :voyage, :embed, :tokens]))
+      assert :model in tokens.tags
     end
   end
 
