@@ -66,6 +66,12 @@ defmodule Engram.RawSqlTenantTableLintTest do
     # `Repo.maintenance()` (maintenance_all), never cross-tenant on the app
     # pool, the same discovery NoteSplit uses.
     "engram/data_migrations/note_index_state.ex",
+    # DataMigrations.FolderTable: raw SQL on `folders` (Ecto has no schema for
+    # it yet), `DISTINCT ON` folder discovery and `unnest` batch updates. Every
+    # statement filters `user_id` and runs per user inside `Repo.with_tenant/2`,
+    # or on `Repo.maintenance()` (maintenance_all); never cross-tenant on the
+    # app pool.
+    "engram/data_migrations/folder_table.ex",
     # CrdtBloatSweep.measure/0 — one whole-table aggregate over `notes`
     # computing size percentiles for the history/trash epic (#1706). Genuinely
     # cross-tenant by design: the question is "how much is CRDT state costing
