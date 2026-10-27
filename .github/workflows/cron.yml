@@ -1059,15 +1059,6 @@ jobs:
               core.info(`Closed #${issue.number}`)
             }
 
-  # Scheduled work fails silently by construction: nobody opens a cron run
-  # that nobody triggered. These jobs reap orphaned Clerk users and Qdrant
-  # collections, keep runner disks from filling, and check MCP conformance —
-  # all things that stay broken for weeks unless something says so.
-  #
-  # One aggregate rather than a step per job: `needs` every job, fire once if
-  # any of them failed, and name the failures in the message. A given cron
-  # expression only runs a subset (the rest skip), and `contains` ignores
-  # skipped, so this stays quiet unless something genuinely broke.
   # ── Deep checks on the in-house Rust NIFs (native/engram_native) that are
   # too slow or too noisy for every PR:
   #   * the segmented-parse fuzz at 2M cases on 3 seeds (PR CI runs 20k). It
@@ -1137,6 +1128,15 @@ jobs:
         # check reads the local sparse-index cache. The cargo test step above
         # just populated it with every crate in Cargo.lock, so it stays on.
 
+  # Scheduled work fails silently by construction: nobody opens a cron run
+  # that nobody triggered. These jobs reap orphaned Clerk users and Qdrant
+  # collections, check MCP and vendor conformance, and audit the native NIFs —
+  # all things that stay broken for weeks unless something says so.
+  #
+  # One aggregate rather than a step per job: `needs` every job, fire once if
+  # any of them failed, and name the failures in the message. A given cron
+  # expression only runs a subset (the rest skip), and `contains` ignores
+  # skipped, so this stays quiet unless something genuinely broke.
   alert-cron-failure:
     # A timeout reports as `cancelled`; native-deep timed out daily for a
     # week without one alert. Scheduled runs are never cancelled otherwise.
