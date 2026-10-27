@@ -568,17 +568,26 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     floors = smallest.(dynamic([n], n.index_tier in ["floor", "floor_paid"]))
     merged = smallest.(dynamic([n], is_nil(n.index_tier) and not is_nil(n.chunk_count)))
 
-    # Users with an indexed note still behind this build's chunker: the v5
-    # pass re-embeds those capped anyway, and demoting them first would pay
-    # Voyage twice (the old `INDEX_BUDGET_ENABLED` gate existed for this).
-    # Their chunk counts are v3-sized, so they are not budgeted at all until
+    # Users with an indexed note the version pass can still reach and has not
+    # rebuilt: the pass re-embeds those capped anyway, and demoting first
+    # would pay Voyage twice (the old `INDEX_BUDGET_ENABLED` gate existed for
+    # this). Their chunk counts are v3-sized, so they are not budgeted until
     # the pass has caught up.
-    {chunker, _keyword} = Rebuild.build_versions()
+    #
+    # Same versions the pass rebuilds to (`Rebuild.target_versions/0`): with
+    # the rebuild `off` or `dry_run` that is the pins, so the guard never
+    # waits on a rebuild that is not running. Notes the pass skips do not
+    # count: parked until edited or on a cooldown (`embed_retry_after` in the
+    # future, which includes a poison note that will never rebuild) and
+    # budget-parked ones, which wait on THIS sweep to free room.
+    {chunker, _keyword} = Rebuild.target_versions()
 
     behind =
       IndexVersions.live_notes()
       |> where([n], not is_nil(n.embed_hash))
       |> where([n], is_nil(n.chunker_version) or n.chunker_version < ^chunker)
+      |> where([n], is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now)
+      |> where([n], is_nil(n.embed_budget_parked) or n.embed_budget_parked == false)
       |> distinct(true)
       |> select([n], n.user_id)
       |> per_user.()

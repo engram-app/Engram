@@ -381,6 +381,84 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
       assert demoted > 0
     end
 
+    # Notes the version pass will not rebuild must not hold their owner out of
+    # the budget: a budget-parked note waits on THIS sweep, and a poison note
+    # never rebuilds. Without the retry/park filter on `behind` both deadlock.
+    for {name, set} <- [
+          {"poison-parked", [embed_retry_after: ~U[9999-01-01 00:00:00.000000Z]]},
+          {"budget-parked",
+           [embed_budget_parked: true, embed_retry_after: ~U[9999-01-01 00:00:00.000000Z]]},
+          {"on a cooldown", [embed_retry_after: DateTime.add(DateTime.utc_now(), 3_600, :second)]}
+        ] do
+      test "an old-chunker note that is #{name} does not block budgeting", %{
+        user: user,
+        vault: vault
+      } do
+        notes = div(cap() * 12, 1_000)
+        [legacy | _] = full_notes(user, vault, notes, 100, real: true)
+
+        Repo.with_tenant(user.id, fn ->
+          Repo.update_all(from(n in Note, where: n.id == ^legacy),
+            set: [chunker_version: nil] ++ unquote(Macro.escape(set))
+          )
+        end)
+
+        assert {:ok, %{demoted: demoted}} = ReconcileEmbeddings.budget_sweep(20)
+        assert demoted > 0
+      end
+    end
+
+    # Zero-rows CONTROL: the guard rejects per user. A second, all-current
+    # user over the cap IS budgeted in the very sweep that skips the first.
+    test "the stale-chunker guard is per user: an all-current user is budgeted alongside", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, other} = Crypto.ensure_user_dek(insert(:user))
+      other_vault = insert(:vault, user: other, is_default: true)
+      notes = div(cap() * 12, 1_000)
+      [legacy | _] = full_notes(user, vault, notes, 100, real: true)
+      other_ids = full_notes(other, other_vault, notes, 100, real: true)
+
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^legacy), set: [chunker_version: nil])
+      end)
+
+      assert {:ok, %{demoted: demoted}} = ReconcileEmbeddings.budget_sweep(20)
+      assert demoted > 0
+      assert tiers(other, other_ids) |> Map.values() |> Enum.any?(&(&1 != nil))
+      assert tiers(user, [legacy]) |> Map.values() |> Enum.all?(&is_nil/1)
+    end
+
+    # The guard waits on the versions the pass rebuilds to
+    # (`Rebuild.target_versions/0`). Rebuild off: that is the pins, a note at
+    # the pin is current and its owner is budgeted; on: the build is the
+    # target and the same note is the pass's, so the sweep skips the owner.
+    test "the guard follows the rebuild's target versions (off: pins, on: build)", %{
+      user: user,
+      vault: vault
+    } do
+      pin = Markdown.chunker_version() - 1
+      ServiceConfig.put_override(:rebuild_pinned_versions, {pin, Engram.KeywordIndex.version()})
+      notes = div(cap() * 12, 1_000)
+      [pinned | _] = full_notes(user, vault, notes, 100, real: true)
+
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^pinned), set: [chunker_version: pin])
+      end)
+
+      # "on" reads as off until a ledger budget exists and is not halted.
+      Engram.Cache.clear_local(:rebuild)
+      Engram.Rebuild.set_budget(10_000_000)
+      ServiceConfig.put_override(:index_rebuild, "on")
+      assert Engram.Rebuild.mode() == :on
+      assert {:ok, %{demoted: 0, promoted: 0}} = ReconcileEmbeddings.budget_sweep(20)
+
+      ServiceConfig.put_override(:index_rebuild, "off")
+      assert {:ok, %{demoted: demoted}} = ReconcileEmbeddings.budget_sweep(20)
+      assert demoted > 0
+    end
+
     test "1,000 over-cap notes demote 200 per tick across five ticks; red pauses", %{
       user: user,
       vault: vault,
