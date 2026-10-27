@@ -133,7 +133,7 @@ def test_min_age_default_ignores_timestamp() -> None:
 def test_min_age_skips_users_with_unparseable_timestamp() -> None:
     """Fail-safe: when age can't be verified, don't delete (never risk a live user).
 
-    An out-of-band reaper (clerk-orphans.yml) still catches genuinely stale
+    An out-of-band reaper (cron.yml e2e-orphans) still catches genuinely stale
     orphans, so skipping an unparseable-timestamp user in-suite is the safe
     choice — the alternative (delete anyway) reintroduces the race this guards.
     """

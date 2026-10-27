@@ -1,10 +1,11 @@
 """Canonical identification of e2e-created Clerk users.
 
 Single source of truth shared by the in-run sweep (helpers/cleanup.py) and the
-hourly reaper (scripts/cleanup_clerk_users.py). Historically each used its own
-hard-coded list of email *prefixes*, and every new test suite added a prefix
-(e2e-conn-, e2e-free-signup-, e2e-cancel-free-, …) that one or both lists
-forgot — so those users leaked until the dev-tier 100-user cap was hit (#558).
+daily reaper (scripts/cleanup_clerk_users.py, run by cron.yml e2e-orphans).
+Historically each used its own hard-coded list of email *prefixes*, and every
+new test suite added a prefix (e2e-conn-, e2e-free-signup-, e2e-cancel-free-,
+…) that one or both lists forgot — so those users leaked until the dev-tier
+100-user cap was hit (#558).
 
 The pytest harness mints users with an ``e2e-`` local part AND the
 ``+clerk_test`` plus-tag (the dev-instance "don't deliver email" convention,

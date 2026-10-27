@@ -6,8 +6,8 @@ Usage:
     E2E_CLERK_SECRET_KEY=sk_test_... python e2e/scripts/cleanup_clerk_users.py --older-than 1h
 
 Fetches all Clerk users, filters to e2e-* email patterns, and deletes them.
-The ``--older-than`` filter is the safety belt for the hourly cron reaper
-(``.github/workflows/clerk-orphans.yml``): without it, the reaper could
+The ``--older-than`` filter is the safety belt for the per-run reaper (verify.yml e2e-clerk) and the daily
+``cron.yml`` backstop: without it, a reaper could
 race against an in-flight CI run whose users are still active. See issue #160.
 """
 
