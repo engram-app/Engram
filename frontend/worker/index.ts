@@ -46,24 +46,6 @@ interface Env {
 	ASSETS: { fetch: (request: Request) => Promise<Response> };
 }
 
-// PostHog geolocates the connecting IP, and we strip every IP header, so it
-// sees a Cloudflare egress IP (US). The SPA asks here for the visitor's
-// country instead and sends it as an explicit property. Country only: the same
-// granularity the privacy policy promises and `cf-ipcountry` already carries.
-const COUNTRY_PATH = "/ph/country";
-
-function serveCountry(request: Request): Response {
-	const headers = { "cache-control": "no-store" };
-	if (request.headers.get("sec-gpc") === "1") {
-		return new Response(null, { status: 204, headers });
-	}
-	// cf-ipcountry is the header form of request.cf.country; it keeps this typed.
-	const raw = (request.headers.get("cf-ipcountry") ?? "").toUpperCase();
-	// ISO 3166 alpha-2 only; Cloudflare's "XX" (unknown) and "T1" (Tor) are not countries.
-	const country = /^[A-Z]{2}$/.test(raw) && raw !== "XX" && raw !== "T1" ? raw : null;
-	return Response.json({ country }, { headers });
-}
-
 async function proxyToPostHog(request: Request): Promise<Response> {
 	// Global Privacy Control has legal force under CCPA/CPRA and is what our
 	// privacy policy promises to honor. This check does NOT exist in
@@ -136,10 +118,6 @@ async function serveWellKnown(request: Request, env: Env, pathname: string): Pro
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
 		const { pathname } = new URL(request.url);
-
-		if (pathname === COUNTRY_PATH) {
-			return serveCountry(request);
-		}
 
 		if (pathname === "/ph" || pathname.startsWith("/ph/")) {
 			return await proxyToPostHog(request);

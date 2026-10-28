@@ -32,6 +32,7 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   alias Engram.Logger.Metadata
   alias Engram.Webhooks.Idempotency
   alias Engram.Workers.CancelReasonMarker
+  alias Engram.Workers.PersonOriginSync
 
   require Logger
 
@@ -63,6 +64,7 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
     case Accounts.find_by_external_id(clerk_id) do
       {:ok, %{email: email} = user} when is_binary(email) and byte_size(email) > 0 ->
         _ = Engram.Analytics.track(user, event, %{})
+        if event == "user_signed_up", do: PersonOriginSync.enqueue_user(user.id)
         :ok
 
       _ ->

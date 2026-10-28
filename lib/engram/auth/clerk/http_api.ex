@@ -75,4 +75,55 @@ defmodule Engram.Auth.Clerk.HttpApi do
         end
     end
   end
+
+  # GET /v1/sessions?user_id= is sorted newest first; `latest_activity` holds
+  # `country` (per Clerk's OpenAPI spec, the field names below are verbatim),
+  # `device_type` and `is_mobile`. We read those two and drop ip_address and
+  # city on the floor: country granularity is all the privacy policy allows.
+  @impl true
+  def latest_activity(clerk_user_id) when is_binary(clerk_user_id) do
+    base_url = Application.get_env(:engram, :clerk_api_base_url, @default_base_url)
+
+    case Application.get_env(:engram, :clerk_secret_key) do
+      blank when blank in [nil, ""] ->
+        {:error, :missing_secret}
+
+      secret ->
+        case Req.get("#{base_url}/sessions",
+               params: [user_id: clerk_user_id, limit: 1],
+               auth: {:bearer, secret},
+               receive_timeout: 10_000,
+               retry: false
+             ) do
+          {:ok, %{status: 200, body: body}} -> {:ok, parse_activity(body)}
+          {:ok, %{status: status}} -> {:error, {:http_error, status}}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  # Unpaginated, the endpoint returns a bare array; paginated, `%{"data" => [...]}`.
+  defp parse_activity(%{"data" => sessions}), do: parse_activity(sessions)
+
+  defp parse_activity([%{"latest_activity" => %{} = activity} | _]) do
+    %{country: country(activity["country"]), device_type: device_type(activity)}
+  end
+
+  defp parse_activity(_none), do: nil
+
+  # Two-letter code only. Anything else (a country name, junk) is dropped, not
+  # guessed at: a wrong country is worse than a missing one.
+  defp country(code) when is_binary(code) do
+    code = String.upcase(code)
+    if code =~ ~r/^[A-Z]{2}$/, do: code
+  end
+
+  defp country(_), do: nil
+
+  defp device_type(%{"device_type" => type}) when is_binary(type) and type != "",
+    do: String.downcase(type)
+
+  defp device_type(%{"is_mobile" => true}), do: "mobile"
+  defp device_type(%{"is_mobile" => false}), do: "desktop"
+  defp device_type(_), do: nil
 end

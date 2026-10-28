@@ -68,29 +68,6 @@ describe("worker /ph proxy", () => {
 	});
 });
 
-describe("worker /ph/country", () => {
-	const get = (init: RequestInit = {}) =>
-		worker.fetch(new Request("https://app.engram.page/ph/country", init), envStub);
-
-	it("returns the visitor country without calling PostHog", async () => {
-		const fetchSpy = vi.spyOn(globalThis, "fetch");
-		const res = await get({ headers: { "cf-ipcountry": "cn" } });
-		expect(await res.json()).toEqual({ country: "CN" });
-		expect(res.headers.get("cache-control")).toBe("no-store");
-		expect(fetchSpy).not.toHaveBeenCalled();
-	});
-
-	it.each(["XX", "T1", ""])("returns null for unknown country %j", async (code) => {
-		const res = await get({ headers: { "cf-ipcountry": code } });
-		expect(await res.json()).toEqual({ country: null });
-	});
-
-	it("returns 204 when Sec-GPC is 1", async () => {
-		const res = await get({ headers: { "sec-gpc": "1", "cf-ipcountry": "DE" } });
-		expect(res.status).toBe(204);
-	});
-});
-
 describe("worker /.well-known", () => {
 	const assetsFetch = vi.fn<(request: Request) => Promise<Response>>();
 	const env = { ASSETS: { fetch: assetsFetch } };

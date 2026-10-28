@@ -52,6 +52,47 @@ defmodule Engram.Analytics.PersonProperties do
     end
   end
 
+  # Canonical person properties, each filled from the best source that has a
+  # value. Order is priority. `$geoip_country_code` is deliberately absent: via
+  # our first-party proxy PostHog geolocates a Cloudflare egress IP (US).
+  @sources %{
+    country: [:clerk],
+    language: [:app_locale, :browser_language],
+    device_type: [:clerk, :posthog_initial]
+  }
+
+  @doc """
+  The one resolver for `country`, `language` and `device_type`.
+
+  `candidates` is `%{field => %{source => value}}`; `existing` is the person's
+  current PostHog properties. Returns the traits to `$set`: for each field the
+  highest-priority non-nil value, plus `<field>_source` naming where it came
+  from. A field is skipped when `existing["<field>_source"]` already names a
+  source of higher priority, so a lower source never overwrites a higher one.
+  """
+  @spec resolve(%{atom() => %{atom() => String.t() | nil}}, map()) :: map()
+  def resolve(candidates, existing \\ %{}) do
+    Enum.reduce(@sources, %{}, fn {field, order}, traits ->
+      values = Map.get(candidates, field, %{})
+
+      with source when not is_nil(source) <- Enum.find(order, &present?(values[&1])),
+           true <- rank(order, existing["#{field}_source"]) >= rank(order, source) do
+        traits
+        |> Map.put(field, values[source])
+        |> Map.put(:"#{field}_source", Atom.to_string(source))
+      else
+        _ -> traits
+      end
+    end)
+  end
+
+  defp present?(value), do: is_binary(value) and value != ""
+
+  # Lower number = higher priority. An unknown or missing stored source ranks last.
+  defp rank(order, source) do
+    Enum.find_index(order, &(Atom.to_string(&1) == source)) || length(order)
+  end
+
   @doc "`{%{email: _}, traits}` for every live, non-opted-out user, for `Engram.Analytics.set_traits/1`."
   @spec all() :: [{map(), map()}]
   def all, do: Enum.map(by_user(), fn {_user_id, traits} -> {%{email: traits.email}, traits} end)

@@ -59,4 +59,48 @@ defmodule Engram.Auth.Clerk.HttpApiTest do
     respond(bypass, 401)
     capture_log(fn -> assert {:error, {:http_error, 401}} = HttpApi.delete_user("user_abc") end)
   end
+
+  describe "latest_activity/1" do
+    defp sessions(bypass, status, body) do
+      Bypass.expect_once(bypass, "GET", "/v1/sessions", fn conn ->
+        assert conn.query_string =~ "user_id=user_1"
+        Plug.Conn.resp(conn, status, Jason.encode!(body))
+      end)
+    end
+
+    test "reads country and device_type, never ip or city", %{bypass: bypass} do
+      sessions(bypass, 200, [
+        %{
+          "latest_activity" => %{
+            "country" => "br",
+            "city" => "Sao Paulo",
+            "ip_address" => "203.0.113.9",
+            "device_type" => "iPhone",
+            "is_mobile" => true
+          }
+        }
+      ])
+
+      assert {:ok, activity} = HttpApi.latest_activity("user_1")
+      assert activity == %{country: "BR", device_type: "iphone"}
+    end
+
+    test "falls back to is_mobile and drops a non-code country", %{bypass: bypass} do
+      sessions(bypass, 200, [
+        %{"latest_activity" => %{"country" => "Brazil", "is_mobile" => false}}
+      ])
+
+      assert {:ok, %{country: nil, device_type: "desktop"}} = HttpApi.latest_activity("user_1")
+    end
+
+    test "no sessions is {:ok, nil}", %{bypass: bypass} do
+      sessions(bypass, 200, [])
+      assert {:ok, nil} = HttpApi.latest_activity("user_1")
+    end
+
+    test "an HTTP error is an error tuple", %{bypass: bypass} do
+      sessions(bypass, 429, %{})
+      assert {:error, {:http_error, 429}} = HttpApi.latest_activity("user_1")
+    end
+  end
 end

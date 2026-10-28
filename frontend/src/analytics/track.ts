@@ -2,7 +2,6 @@ import { LOCALES } from "../i18n/locales";
 import { isMember } from "../lib/is-member";
 import { captureError } from "../sentry";
 import { analyticsClient } from "./client";
-import { COUNTRY_CODE } from "./country";
 import {
 	CHECKLIST_ACTIONS,
 	CHECKLIST_ITEMS,
@@ -63,8 +62,6 @@ function isKind(kind: PropKind, value: unknown): boolean {
 			return typeof value === "string" && LANGUAGE_TAG.test(value);
 		case "locale":
 			return isMember(LOCALES, value);
-		case "country":
-			return typeof value === "string" && COUNTRY_CODE.test(value);
 		case "language_tags":
 			return (
 				Array.isArray(value) && value.every((v) => typeof v === "string" && LANGUAGE_TAG.test(v))

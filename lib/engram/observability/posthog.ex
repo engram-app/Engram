@@ -172,6 +172,41 @@ defmodule Engram.Observability.PostHog do
     end
   end
 
+  @doc """
+  A person's current properties (`$browser_language`, `$initial_device_type`,
+  our own `country_source`...), for `Engram.Analytics.PersonProperties.resolve/2`.
+  `{:ok, %{}}` when the person does not exist; `{:error, _}` when the read is
+  not configured or failed (the caller treats that as "no PostHog source").
+  Needs the personal API key with person:read scope.
+  """
+  @spec person_properties(String.t()) :: {:ok, map()} | {:error, term()}
+  def person_properties(distinct_id) when is_binary(distinct_id) do
+    case admin_config() do
+      :disabled ->
+        {:error, :not_configured}
+
+      {key, host, project} ->
+        case Req.get("#{host}/api/projects/#{project}/persons/",
+               params: [distinct_id: distinct_id],
+               auth: {:bearer, key},
+               receive_timeout: 5_000,
+               retry: false
+             ) do
+          {:ok, %{status: 200, body: %{"results" => [%{"properties" => %{} = props} | _]}}} ->
+            {:ok, props}
+
+          {:ok, %{status: 200}} ->
+            {:ok, %{}}
+
+          {:ok, %{status: status}} ->
+            {:error, {:http_error, status}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
   defp lookup_and_delete(host, project, key, distinct_id) do
     case Req.get("#{host}/api/projects/#{project}/persons/",
            params: [distinct_id: distinct_id],
