@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.68.0](https://github.com/engram-app/Engram/compare/0.67.0...0.68.0) (2026-10-28)
+
+
+### Features
+
+* **analytics:** run the origin backfill as a data migration ([#2290](https://github.com/engram-app/Engram/issues/2290)) ([cb4bcd2](https://github.com/engram-app/Engram/commit/cb4bcd265882e162cb5304395a3dbfdd9c85388c))
+
+
+### Bug Fixes
+
+* **auth:** stop user.created deleting the user's own row ([#2302](https://github.com/engram-app/Engram/issues/2302)) ([17a2c58](https://github.com/engram-app/Engram/commit/17a2c5804f16c7bde7bb04be828d2741cda0d98f))
+* background queries bound rows read, not returned ([#2280](https://github.com/engram-app/Engram/issues/2280)) ([e29e1aa](https://github.com/engram-app/Engram/commit/e29e1aa5314c7e087f12d8bedd754618441c0c43))
+
 ## [0.67.0](https://github.com/engram-app/Engram/compare/0.66.1...0.67.0) (2026-10-28)
 
 
