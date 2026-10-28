@@ -4,8 +4,8 @@ defmodule Engram.Backfill.IdWindowsChunkTest do
   # Rows with only a checksum, the common case, are never visited.
   use Engram.DataCase, async: true
 
-  alias Engram.Crypto
   alias Engram.Backfill.IdWindows
+  alias Engram.Crypto
   alias Engram.Notes.ChunkPoint
 
   setup do

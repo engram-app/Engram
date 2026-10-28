@@ -12,7 +12,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
   apart needs to know whether a `Repo.with_tenant/2` is in force at runtime —
   which is not a lexical property of the call site. The clearest counter-example
   is `crypto/user_dek_rotation.ex`: most of its sites sit in closures that
-  `TenantSweep.each_batch/3` executes inside a `with_tenant`, nowhere near them in the
+  `IdWindows.each_batch/4` executes inside a `with_tenant`, nowhere near them in the
   source. A lexical lint calls all 21 violations and gets turned off inside a
   week.
 
