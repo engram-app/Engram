@@ -112,41 +112,13 @@ defmodule Engram.QueryRecorder do
   end
 
   @doc """
-  The statements `pid` ran that read `table` with no window bound (#2276):
-  each must be a pure keyset window (a `LIMIT` of at most `window`, no
-  `EXISTS` subquery) or be confined to a list parameter of at most `window`
-  ids (`id = ANY($n)`). "The next N rows MATCHING a predicate"
-  fails: its LIMIT bounds rows returned, not rows read.
+  The statements `pid` ran that read `table` outside an id window (#2276).
+  See `Engram.WindowedReads.windowed?/4` for what counts as a window.
   """
   def unwindowed(queries, table, window, pid \\ self()) do
     for %{sql: sql, params: params, pid: ^pid} <- queries,
-        sql =~ ~r/\b"?#{table}"?\b/,
-        not (keyset_window?(sql, params, window) or confined?(sql, params, window)),
+        not Engram.WindowedReads.windowed?(sql, params, table, window),
         do: sql
-  end
-
-  defp keyset_window?(sql, params, window) do
-    case Regex.run(~r/LIMIT \$(\d+)/, sql) do
-      [_, i] ->
-        Enum.at(params, String.to_integer(i) - 1) <= window and not (sql =~ ~r/\bexists\b/i)
-
-      nil ->
-        false
-    end
-  end
-
-  # The note key itself in a listed window: `id = ANY($n)` with `$n` a list
-  # of at most `window` ids. Another list parameter (`embed_model = ANY`)
-  # confines nothing.
-  defp confined?(sql, params, window) do
-    ~r/\bid"? = ANY\(\$(\d+)/
-    |> Regex.scan(sql, capture: :all_but_first)
-    |> Enum.any?(fn [i] ->
-      case Enum.at(params, String.to_integer(i) - 1) do
-        ids when is_list(ids) -> ids != [] and length(ids) <= window
-        _ -> false
-      end
-    end)
   end
 
   def format(queries) do

@@ -19,6 +19,7 @@ defmodule Engram.Workers.BackfillCrdtHeadMaintenanceTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Engram.Notes.Note
+  alias Engram.QueryRecorder
   alias Engram.Repo
   alias Engram.Repo.Maintenance
   alias Engram.Workers.BackfillCrdtHead
@@ -66,18 +67,22 @@ defmodule Engram.Workers.BackfillCrdtHeadMaintenanceTest do
         nil
       )
 
-      try do
-        assert as_prod_role_committing(fn -> BackfillCrdtHead.enqueue_all() end) >= 2
-      after
-        :telemetry.detach(handler)
-      end
+      {_, queries} =
+        try do
+          QueryRecorder.record(fn ->
+            assert as_prod_role_committing(fn -> BackfillCrdtHead.enqueue_all() end) >= 2
+          end)
+        after
+          :telemetry.detach(handler)
+        end
 
       refute_received :app_pool_notes_query
 
-      # One walk for both users: their notes fit one window, so the window,
-      # its predicate, and the empty window that ends the walk. A walk per
-      # user would be twice that.
-      assert drain(:maintenance_notes_query, 0) in 1..3
+      # One walk for both users: their notes fit one window, so exactly the
+      # window, its predicate, and the empty window that ends the walk. The
+      # old single DISTINCT over every live note was 1; a walk per user, 6.
+      assert drain(:maintenance_notes_query, 0) == 3
+      assert QueryRecorder.unwindowed(queries, "notes", 1_000) == []
 
       for {user_id, vault_id} <- vaults do
         assert_enqueued(
