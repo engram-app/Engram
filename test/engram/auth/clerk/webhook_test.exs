@@ -42,6 +42,47 @@ defmodule Engram.Auth.Clerk.WebhookTest do
     :ok
   end
 
+  # The external_id lookup in `handle_user_created` and the email lookup in
+  # `apply_user_created` are not atomic. A user's first authenticated request
+  # JIT-creates their row (same Clerk id) in between, so the email lookup finds
+  # the user's OWN row. These tests pin the state at email-lookup time (#2292).
+  describe "user.created: email match at dup-check time" do
+    test "row already bound to the incoming Clerk id is ours: no rejection, no Clerk delete" do
+      user =
+        insert(:user,
+          email: "racer@gmail.com",
+          normalized_email: "racer@gmail.com",
+          external_id: "user_race_self"
+        )
+
+      # Mox (verify_on_exit!) fails the test if delete_user is called.
+      assert :ok = Webhook.apply_user_created("user_race_self", user.email, "racer@gmail.com")
+
+      assert Repo.get(User, user.id, skip_tenant_check: true)
+      assert :error = Engram.Auth.SignupRejections.fetch("user_race_self")
+    end
+
+    test "row bound to a different Clerk id is a real duplicate: rejected and revoked" do
+      _existing =
+        insert(:user,
+          email: "taken.dup@gmail.com",
+          normalized_email: "takendup@gmail.com",
+          external_id: "user_original"
+        )
+
+      expect(Engram.Auth.Clerk.ApiMock, :delete_user, fn "user_second" -> :ok end)
+
+      assert :ok =
+               Webhook.apply_user_created(
+                 "user_second",
+                 "Taken.Dup@gmail.com",
+                 "takendup@gmail.com"
+               )
+
+      assert {:ok, :duplicate_identity} = Engram.Auth.SignupRejections.fetch("user_second")
+    end
+  end
+
   describe "user.deleted" do
     test "drives Lifecycle.soft_delete + hard_delete with :clerk reason, removing the local user" do
       user = insert(:user, external_id: "clerk_user_kick_1")
