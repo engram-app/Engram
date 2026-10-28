@@ -110,7 +110,7 @@ defmodule Engram.Auth.Clerk.HttpApi do
   defp parse_activity(sessions) when is_list(sessions) do
     sessions
     |> Enum.filter(&match?(%{"latest_activity" => %{}}, &1))
-    |> Enum.max_by(&(&1["last_active_at"] || 0), fn -> nil end)
+    |> Enum.max_by(&(&1["last_active_at"] || 0), &>=/2, fn -> nil end)
     |> case do
       %{"latest_activity" => activity} ->
         %{country: country(activity["country"]), device_type: device_class(activity)}

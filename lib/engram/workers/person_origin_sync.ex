@@ -25,7 +25,7 @@ defmodule Engram.Workers.PersonOriginSync do
   for an opted-out or deleted user, or before the privacy policy that announces
   identified analytics is in effect. Args are ids only, never emails.
   """
-  use Oban.Worker, queue: :maintenance, max_attempts: 3
+  use Oban.Worker, queue: :events, max_attempts: 3
 
   import Ecto.Query
 

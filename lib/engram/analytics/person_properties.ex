@@ -56,9 +56,9 @@ defmodule Engram.Analytics.PersonProperties do
   # value. Order is priority. `$geoip_country_code` is deliberately absent: via
   # our first-party proxy PostHog geolocates a Cloudflare egress IP (US).
   @sources %{
-    country: [:clerk],
-    language: [:app_locale, :browser_language],
-    device_type: [:clerk, :posthog_initial]
+    country: {:country_source, [:clerk]},
+    language: {:language_source, [:app_locale, :browser_language]},
+    device_type: {:device_type_source, [:clerk, :posthog_initial]}
   }
 
   @doc """
@@ -72,16 +72,15 @@ defmodule Engram.Analytics.PersonProperties do
   """
   @spec resolve(%{atom() => %{atom() => String.t() | nil}}, map()) :: map()
   def resolve(candidates, existing \\ %{}) do
-    Enum.reduce(@sources, %{}, fn {field, order}, traits ->
+    Enum.reduce(@sources, %{}, fn {field, {source_key, order}}, traits ->
       values = Map.get(candidates, field, %{})
+      best = Enum.find(order, &present?(values[&1]))
+      stored = existing[Atom.to_string(source_key)]
 
-      with source when not is_nil(source) <- Enum.find(order, &present?(values[&1])),
-           true <- rank(order, existing["#{field}_source"]) >= rank(order, source) do
-        traits
-        |> Map.put(field, values[source])
-        |> Map.put(:"#{field}_source", Atom.to_string(source))
+      if best && rank(order, stored) >= rank(order, Atom.to_string(best)) do
+        traits |> Map.put(field, values[best]) |> Map.put(source_key, Atom.to_string(best))
       else
-        _ -> traits
+        traits
       end
     end)
   end

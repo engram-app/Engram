@@ -182,7 +182,8 @@ defmodule Engram.Observability.PostHog do
   """
   @spec person_properties(String.t()) :: {:ok, map()} | {:error, term()}
   def person_properties(distinct_id) when is_binary(distinct_id) do
-    case fetch_person(distinct_id) do
+    # retry: false: a backfill must not sit in backoff once per user; the job retries.
+    case fetch_person(distinct_id, retry: false) do
       {:ok, %{"properties" => %{} = props}} -> {:ok, props}
       {:ok, _none} -> {:ok, %{}}
       # Status only: this lands in Oban job errors, which must not hold bodies.
@@ -194,16 +195,16 @@ defmodule Engram.Observability.PostHog do
 
   # The one persons lookup (read and erasure share it). `{:ok, nil}` when the
   # person does not exist.
-  defp fetch_person(distinct_id) do
+  defp fetch_person(distinct_id, req_opts \\ []) do
     case admin_config() do
       :disabled ->
         {:error, :not_configured}
 
       {key, host, project} ->
-        case Req.get("#{host}/api/projects/#{project}/persons/",
-               params: [distinct_id: distinct_id],
-               auth: {:bearer, key},
-               receive_timeout: 5_000
+        case Req.get(
+               "#{host}/api/projects/#{project}/persons/",
+               [params: [distinct_id: distinct_id], auth: {:bearer, key}, receive_timeout: 5_000] ++
+                 req_opts
              ) do
           {:ok, %{status: 200, body: %{"results" => [%{} = person | _]}}} -> {:ok, person}
           {:ok, %{status: 200, body: %{"results" => []}}} -> {:ok, nil}

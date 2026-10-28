@@ -49,7 +49,8 @@ defmodule Engram.Workers.PersonOriginSyncTest do
 
     Bypass.stub(bypass, "GET", "/api/projects/1/persons/", fn conn ->
       body = Jason.encode!(%{results: [%{id: "p1", properties: props}]})
-      Plug.Conn.resp(conn, 200, body)
+
+      conn |> Plug.Conn.put_resp_content_type("application/json") |> Plug.Conn.resp(200, body)
     end)
 
     Bypass.stub(bypass, "POST", "/batch/", fn conn ->
