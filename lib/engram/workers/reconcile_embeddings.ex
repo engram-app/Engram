@@ -332,9 +332,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # that hold more chunks than their tier's `note_points_cap`. They go to
   # RebuildStaleNote with `recap: true`, which re-merges them unmetered. One
   # bounded batch per tick, and only in the daily re-verify hour: the probe
-  # touches every dense note (one id window per statement), the backlog is a one-off (641 notes in prod on
-  # 2026-10-18, under a day of ticks), new notes are capped as they are indexed,
-  # and a downgrade can wait a day.
+  # touches every dense note (one id window per statement), the backlog is a
+  # one-off (641 notes in prod on 2026-10-18, under a day of ticks), new notes
+  # are capped as they are indexed, and a downgrade can wait a day.
   #
   # "More than `cap` chunks" is read as "a chunk at position >= cap": positions
   # are unique per note and start at 0, so a note over the cap always has one,
@@ -385,7 +385,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       # One id window at a time (#2276): the over-cap probe is per note and
       # no index serves the predicate, so "the next 100 over the cap" walked
       # every dense note in one statement.
-      {_, rows} =
+      {:ok, rows} =
         IdWindows.reduce_all(
           Note,
           [],

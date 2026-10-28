@@ -68,7 +68,7 @@ defmodule Engram.Backfill.IdWindows do
   @type scope :: {:user, Ecto.UUID.t()} | {:fleet, module()}
   @type ctx :: %{repo: module(), user_id: Ecto.UUID.t() | nil}
   @type step_result :: {:cont, term()} | {:halt, term()} | {:error, term()}
-  @type result :: {:ok, term()} | {:halted, term()} | {:error, term()}
+  @type result :: {:ok, term()} | {:error, term()}
 
   @doc "The keyset start: sorts before every uuid."
   def first_id, do: @first_id
@@ -111,8 +111,8 @@ defmodule Engram.Backfill.IdWindows do
   @doc """
   Folds `fun.(ids, ctx, acc)` over every window of `scope`. `fun` returns
   `{:cont, acc}`, `{:halt, acc}` (stop; the window commits) or
-  `{:error, reason}` (stop). Returns `{:ok, acc}` after the last window,
-  `{:halted, acc}`, or the error.
+  `{:error, reason}` (stop). Returns `{:ok, acc}` after the last window or a
+  halt, or the error.
 
   Options: `:after` resumes after that key, `:batch_size` is the window
   (default 200), `:fun_in_tenant` (default `true`). With `false`, only the
@@ -123,7 +123,14 @@ defmodule Engram.Backfill.IdWindows do
   """
   @spec reduce(scope(), module(), term(), (list(), ctx(), term() -> step_result()), keyword()) ::
           result()
-  def reduce(scope, schema, acc, fun, opts \\ []) do
+  def reduce(scope, schema, acc, fun, opts \\ []),
+    do: settle(walk_scope(scope, schema, acc, fun, opts))
+
+  # `{:halted, acc}` stays internal: it stops `reduce_all/4`'s user loop.
+  defp settle({:halted, acc}), do: {:ok, acc}
+  defp settle(result), do: result
+
+  defp walk_scope(scope, schema, acc, fun, opts) do
     walk(
       scope,
       schema,
@@ -187,12 +194,14 @@ defmodule Engram.Backfill.IdWindows do
   def reduce_all(schema, acc, fun, opts \\ []) do
     case Repo.maintenance() do
       Repo ->
-        Enum.reduce_while(TenantScan.user_ids(), {:ok, acc}, fn user_id, {:ok, acc} ->
-          case reduce({:user, user_id}, schema, acc, fun, opts) do
+        TenantScan.user_ids()
+        |> Enum.reduce_while({:ok, acc}, fn user_id, {:ok, acc} ->
+          case walk_scope({:user, user_id}, schema, acc, fun, opts) do
             {:ok, _acc} = ok -> {:cont, ok}
             stop -> {:halt, stop}
           end
         end)
+        |> settle()
 
       maintenance ->
         reduce({:fleet, maintenance}, schema, acc, fun, opts)
@@ -223,7 +232,7 @@ defmodule Engram.Backfill.IdWindows do
   @doc "True once `pred.(ids, ctx)` is true for some window of any tenant. Stops there."
   @spec any?(module(), (list(), ctx() -> boolean()), keyword()) :: boolean()
   def any?(schema, pred, opts \\ []) do
-    {_, found} =
+    {:ok, found} =
       reduce_all(
         schema,
         false,
@@ -277,10 +286,10 @@ defmodule Engram.Backfill.IdWindows do
     end
 
     case reduce_all(schema, {0, false, false}, heal, opts) do
+      {:ok, {0, false, false}} -> :done
+      {:ok, {fixed, _left?, false}} -> {:more, rows: fixed}
+      {:ok, {fixed, _left?, true}} -> {:more, rows: fixed, hit_budget: true}
       {:error, reason} -> raise "id-window pass failed: #{inspect(reason)}"
-      {_, {0, false, false}} -> :done
-      {_, {fixed, _left?, false}} -> {:more, rows: fixed}
-      {_, {fixed, _left?, true}} -> {:more, rows: fixed, hit_budget: true}
     end
   end
 
@@ -304,7 +313,7 @@ defmodule Engram.Backfill.IdWindows do
 
     case reduce({:user, user_id}, schema, nil, step, opts) do
       {:ok, nil} -> :ok
-      {:halted, halt} -> halt
+      {:ok, halt} -> halt
       {:error, _} = err -> err
     end
   end
