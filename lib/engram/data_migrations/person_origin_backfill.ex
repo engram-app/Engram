@@ -14,6 +14,11 @@ defmodule Engram.DataMigrations.PersonOriginBackfill do
       enqueue a fresh chain, `:more`. A re-run is idempotent and never lowers a
       field's source priority.
 
+  A persistent error (a revoked PostHog key) fails every batch until Oban
+  discards it, so each hourly pass restarts one bounded batch and the 7-day
+  stuck alert fires: that is the intended signal, not a false `:done`. A
+  failed successor insert fails its batch (retried), never ends the chain.
+
   Enqueue is `unique` on the chain head, so the hourly runner and a
   multi-node boot never start two chains. Pacing and batch size stay in
   `PersonOriginSync`. The Oban Pruner keeps completed jobs 24 h; a runner down

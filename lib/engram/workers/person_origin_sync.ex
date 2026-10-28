@@ -114,18 +114,32 @@ defmodule Engram.Workers.PersonOriginSync do
       Enum.each(failed, fn {user, _reason} -> enqueue_user(user.id, 0) end)
     end
 
+    # A failed successor insert fails this batch so Oban retries it: swallowing
+    # it would end the chain on a `completed` job, which the data migration
+    # reads as "backfill finished".
     with :ok <- written do
-      _ = chain_next(users)
-      :ok
+      chain_next(users)
     end
   end
 
-  defp chain_next(users) do
-    if length(users) == @batch do
-      next = %{"backfill" => true, "after" => List.last(users).id}
-      Oban.insert(new(next, schedule_in: @next_batch_in))
+  # `unique` on the cursor across every state: a batch retried after it already
+  # inserted its successor (SIGTERM at deploy, then a Lifeline rescue, 60 min)
+  # must not fork the chain. The 2 h window outlives the rescue.
+  defp chain_next(users) when length(users) == @batch do
+    next = %{"backfill" => true, "after" => List.last(users).id}
+
+    case Oban.insert(
+           new(next,
+             schedule_in: @next_batch_in,
+             unique: [period: 7200, states: Oban.Job.states()]
+           )
+         ) do
+      {:ok, _job} -> :ok
+      {:error, _} = error -> error
     end
   end
+
+  defp chain_next(_users), do: :ok
 
   # Returns the error so Oban retries this one user.
   defp single(user) do

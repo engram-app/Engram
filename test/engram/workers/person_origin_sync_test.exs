@@ -216,6 +216,30 @@ defmodule Engram.Workers.PersonOriginSyncTest do
       refute_receive {:batch, _}, 100
     end
 
+    test "a failed successor insert fails the batch instead of ending the chain" do
+      for n <- 1..100,
+          do: insert(:user, email: "x#{n}@example.com", external_id: "x#{n}", locale: "fr")
+
+      # DDL rolls back with the sandbox transaction.
+      Repo.query!(
+        "ALTER TABLE oban_jobs ADD CONSTRAINT no_successor CHECK (NOT (args ? 'after'))"
+      )
+
+      assert_raise Postgrex.Error, fn ->
+        perform_job(PersonOriginSync, %{"backfill" => true})
+      end
+    end
+
+    test "a retried batch does not fork the chain" do
+      for n <- 1..100,
+          do: insert(:user, email: "y#{n}@example.com", external_id: "y#{n}", locale: "fr")
+
+      assert :ok = perform_job(PersonOriginSync, %{"backfill" => true})
+      assert :ok = perform_job(PersonOriginSync, %{"backfill" => true})
+
+      assert Enum.count(all_enqueued(worker: PersonOriginSync), & &1.args["after"]) == 1
+    end
+
     test "a full batch chains the next one from the last id" do
       for n <- 1..100,
           do: insert(:user, email: "b#{n}@example.com", external_id: "b#{n}", locale: "fr")
