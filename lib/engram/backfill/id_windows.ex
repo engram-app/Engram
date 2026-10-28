@@ -274,6 +274,7 @@ defmodule Engram.Backfill.IdWindows do
   # A walk spanning more passes than this logs a warning per pass: the table
   # outgrew the budget, and done now takes that many hourly runs.
   @span_warn_passes 3
+  @cursors Engram.Backfill.IdWindows.Cursors
 
   @doc "Default `:budget_ms` of `heal_pass/4`."
   def pass_budget_ms, do: @pass_budget_ms
@@ -293,9 +294,10 @@ defmodule Engram.Backfill.IdWindows do
   ends and the next pass starts a new one from the start.
 
   Returns `:done`, or `{:more, rows: fixed}` plus `hit_budget: true` when
-  this pass stopped on its time budget. The cursor is node-local
-  (`:persistent_term`, one write per pass): a restart or a Cron leader
-  change starts the walk over, which costs time, never a false done.
+  this pass stopped on its time budget. The cursor is node-local (an Agent
+  in the application tree, `child_spec/1`), so a restart, or a pass that
+  lands on another clustered node, starts the walk over: that costs time,
+  never a false done, and the spanning warning shows it if it repeats.
   Takes `reduce/5`'s options.
   """
   @spec heal_pass(
@@ -305,8 +307,7 @@ defmodule Engram.Backfill.IdWindows do
           keyword()
         ) :: :done | {:more, keyword()}
   def heal_pass(name, schema, step, opts) do
-    key = {__MODULE__, :walk, name}
-    walk = :persistent_term.get(key, %{from: nil, dirty: false, passes: 0})
+    walk = Agent.get(@cursors, &Map.get(&1, name, %{from: nil, dirty: false, passes: 0}))
     walk = %{walk | passes: walk.passes + 1}
     max_fixed = Keyword.get(opts, :max_fixed, :infinity)
 
@@ -345,12 +346,12 @@ defmodule Engram.Backfill.IdWindows do
 
     case pass.stop do
       nil ->
-        :persistent_term.erase(key)
+        Agent.update(@cursors, &Map.delete(&1, name))
         if dirty, do: {:more, rows: pass.fixed}, else: :done
 
       stop ->
         walk = %{walk | from: pass.at, dirty: dirty}
-        :persistent_term.put(key, walk)
+        Agent.update(@cursors, &Map.put(&1, name, walk))
         spanning(name, walk.passes)
         more = [rows: pass.fixed]
         if stop == :budget, do: {:more, more ++ [hit_budget: true]}, else: {:more, more}
@@ -370,12 +371,15 @@ defmodule Engram.Backfill.IdWindows do
 
   @doc false
   # Drops every walk cursor (tests; `Engram.DataMigrations.reset_cache/0`).
-  def reset_walks do
-    for {{__MODULE__, :walk, _} = key, _} <- :persistent_term.get(),
-        do: :persistent_term.erase(key)
+  def reset_walks, do: Agent.update(@cursors, fn _ -> %{} end)
 
-    :ok
-  end
+  @doc """
+  The walk cursors of `heal_pass/4`, by walk name: one Agent, started in
+  the application tree. Not `:persistent_term`, whose every put and erase
+  scans the literal area of every process on the node.
+  """
+  def child_spec(_opts),
+    do: %{id: __MODULE__, start: {Agent, :start_link, [fn -> %{} end, [name: @cursors]]}}
 
   @doc """
   Calls `fun` with each window of the user's row ids (ascending), inside the

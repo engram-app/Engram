@@ -45,8 +45,9 @@ others.
   budget (240 s) or `:max_fixed`, and the next pass resumes at the cursor,
   so the tail is reached however large the table. A walk that found work
   ends and the next pass starts a new one. Every pass processes at least one
-  window. The cursor is node-local (`:persistent_term`): a restart or a Cron
-  leader change starts the walk over (slower, never a false done). A walk
+  window. The cursor is node-local (an Agent in the application tree): a
+  restart or a pass on another node starts the walk over (slower, never a
+  false done). A walk
   spanning more than 3 passes logs a warning per pass and emits
   `[:engram, :id_windows, :walk_spanning]`.
 - `NoteIndexState`'s chunk counters are kept on every `chunks` write by the

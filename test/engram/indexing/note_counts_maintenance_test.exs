@@ -101,6 +101,21 @@ defmodule Engram.Indexing.NoteCountsMaintenanceTest do
     assert %{points: 2, len_rows: 2, len_sum: 20} = state(note.id)
   end
 
+  # recount! itself writes through `maintenance_all`: a hand-drifted counter
+  # (no chunk write, so no trigger) is one row to fix. RLS filtering the
+  # UPDATE to zero rows would return 0 and leave 99.
+  test "recount! through the maintenance pool fixes a hand-drifted counter", %{note: note} do
+    {1, _} =
+      Maintenance.update_all(from(s in NoteIndexState, where: s.note_id == ^note.id),
+        set: [points: 99]
+      )
+
+    {:ok, _} =
+      Maintenance.transaction(fn -> assert ChunkRows.recount!([note.id], Maintenance) == 1 end)
+
+    assert %{points: 3, len_rows: 3, len_sum: 30} = state(note.id)
+  end
+
   test "the backfill fills and counts through the maintenance pool", %{note: note} do
     {1, _} = Maintenance.delete_all(from(s in NoteIndexState, where: s.note_id == ^note.id))
     assert state(note.id) == nil
