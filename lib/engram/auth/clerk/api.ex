@@ -9,6 +9,13 @@ defmodule Engram.Auth.Clerk.Api do
               :ok | {:error, term()}
 
   @doc """
+  Whether the Clerk user still exists: `{:ok, false}` only on a 404, so a
+  caller can treat `false` as proof the identity is gone. Every other outcome
+  is an error, never a guess.
+  """
+  @callback user_exists?(clerk_user_id :: String.t()) :: {:ok, boolean()} | {:error, term()}
+
+  @doc """
   The user's newest session activity, country level only (no IP, no city):
   `{:ok, %{country: "US" | nil, device_type: "mobile" | "desktop" | ... | nil}}`,
   or `{:ok, nil}` when Clerk has no session for them.

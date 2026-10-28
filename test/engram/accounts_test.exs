@@ -59,6 +59,23 @@ defmodule Engram.AccountsTest do
     end
   end
 
+  describe "rebind_external_id/2" do
+    test "moves the row to the new Clerk id" do
+      user = insert(:user, external_id: "user_old")
+      assert {:ok, %{external_id: "user_new"}} = Accounts.rebind_external_id(user, "user_new")
+      assert {:ok, %{id: id}} = Accounts.find_by_external_id("user_new")
+      assert id == user.id
+    end
+
+    test "is a compare-and-swap: a row rebound underneath us is left alone" do
+      user = insert(:user, external_id: "user_old")
+      assert {:ok, _} = Accounts.rebind_external_id(user, "user_first")
+      assert {:error, :stale} = Accounts.rebind_external_id(user, "user_second")
+      assert {:ok, %{id: id}} = Accounts.find_by_external_id("user_first")
+      assert id == user.id
+    end
+  end
+
   describe "find_or_create_by_external_id/2" do
     test "returns existing user when external_id matches" do
       user = insert(:user, email: "existing@test.com")
