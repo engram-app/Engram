@@ -1,10 +1,10 @@
 defmodule Engram.Analytics.PersonPropertiesTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias Engram.Analytics.PersonProperties
   alias Engram.Legal.Seeder
-
-  import ExUnit.CaptureLog
 
   # Identified analytics starts on the pinned version's effective_date. Pinning
   # it to a version with no date (effective at once) or a date that gives no
