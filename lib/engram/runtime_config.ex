@@ -210,6 +210,23 @@ defmodule Engram.RuntimeConfig do
   def maintenance_timeout, do: 120_000
 
   @doc """
+  Repo options of `Engram.Repo.Maintenance` except SSL, which the caller
+  appends. Here (not inline in runtime.exs) so the timeout wiring is testable.
+  """
+  @spec maintenance_repo_opts(String.t(), pos_integer(), list()) :: keyword()
+  def maintenance_repo_opts(url, pool_size, socket_options) do
+    [
+      url: url,
+      pool_size: pool_size,
+      socket_options: socket_options,
+      # Keeps Ecto params out of :debug logs if anyone raises the log level.
+      log: false,
+      timeout: maintenance_timeout(),
+      parameters: repo_parameters(:maintenance)
+    ]
+  end
+
+  @doc """
   Builds the `Engram.Repo` SSL options from env.
 
     * `DATABASE_SSL` not in `~w(true 1)` → `[]` (no TLS; self-host/local pg).

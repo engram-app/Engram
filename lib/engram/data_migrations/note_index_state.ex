@@ -34,9 +34,11 @@ defmodule Engram.DataMigrations.NoteIndexState do
   # Rows per keyset window. A recount query scans exactly this many notes
   # (one chunk-index probe each), whatever the drift density.
   @batch 1_000
-  # 200 windows = 200k notes per phase per pass, above the largest vault set
-  # seen (70k `notes` rows on prod, 2026-10-27).
-  @max_batches 200
+  # The walk restarts from the first note every pass (no persisted cursor), so
+  # it is bounded by time, not by a window count: a count cap would stall the
+  # tail forever once the table outgrew it. A clean window is milliseconds, so
+  # this reaches far past any real table; the Oban job timeout is 30 min.
+  @budget_ms 240_000
 
   @impl true
   def name, do: "note_index_state"
@@ -70,65 +72,64 @@ defmodule Engram.DataMigrations.NoteIndexState do
   # `Engram.RuntimeConfig.maintenance_timeout/0`, applied once in runtime.exs.
   def run_pass(opts) do
     batch = Keyword.get(opts, :batch, @batch)
+    deadline = System.monotonic_time(:millisecond) + Keyword.get(opts, :budget_ms, @budget_ms)
 
-    {filled, recounted, capped?} =
+    {{filled, over_fill}, {drifted, over_recount}} =
       case Repo.maintenance() do
         Repo ->
           TenantScan.user_ids()
           |> Enum.map(fn user_id ->
-            {f, cf} =
-              batches(batch, fn after_id ->
-                Repo.with_tenant!(user_id, fn -> fill(Repo, user_id, after_id, batch) end)
-              end)
-
-            {r, cr} =
-              batches(batch, fn after_id ->
-                Repo.with_tenant!(user_id, fn -> recount(Repo, user_id, after_id, batch) end)
-              end)
-
-            {f, r, cf or cr}
+            {batches(batch, deadline, fn after_id ->
+               Repo.with_tenant!(user_id, fn -> fill(Repo, user_id, after_id, batch) end)
+             end),
+             batches(batch, deadline, fn after_id ->
+               Repo.with_tenant!(user_id, fn -> recount(Repo, user_id, after_id, batch) end)
+             end)}
           end)
-          |> Enum.reduce({0, 0, false}, fn {f, r, c}, {af, ar, ac} ->
-            {af + f, ar + r, ac or c}
+          |> Enum.reduce({{0, false}, {0, false}}, fn {{f, cf}, {r, cr}},
+                                                      {{af, acf}, {ar, acr}} ->
+            {{af + f, acf or cf}, {ar + r, acr or cr}}
           end)
 
         maintenance ->
-          {f, cf} = batches(batch, &fill(maintenance, nil, &1, batch))
+          {batches(batch, deadline, &fill(maintenance, nil, &1, batch)),
+           batches(batch, deadline, fn after_id ->
+             {:ok, step} =
+               maintenance.transaction(fn -> recount(maintenance, nil, after_id, batch) end)
 
-          {r, cr} =
-            batches(batch, fn after_id ->
-              {:ok, step} =
-                maintenance.transaction(fn -> recount(maintenance, nil, after_id, batch) end)
-
-              step
-            end)
-
-          {f, r, cf or cr}
+             step
+           end)}
       end
 
-    # Counts only, never ids (tenant data).
+    over_budget? = over_fill or over_recount
+
+    # Counts only, never ids (tenant data). `drifted` counts notes seen with a
+    # missing row or wrong counters, including any a writer held locked.
     Logger.info(
       "note_index_state pass",
       Metadata.with_category(:info, :oban,
         migration: name(),
         filled: filled,
-        recounted: recounted,
-        hit_batch_cap: capped?
+        drifted: drifted,
+        hit_budget: over_budget?
       )
     )
 
-    if filled + recounted > 0 or capped?, do: {:more, rows: filled + recounted}, else: :done
+    if filled + drifted > 0 or over_budget?,
+      do: {:more, rows: filled + drifted},
+      else: :done
   end
 
   # `step.(after_id)` returns `{scanned, last_id, hits}`: a window short of
-  # `batch` is the end of the walk. Returns `{hits, hit_cap?}`.
-  defp batches(batch, step, after_id \\ nil, hits \\ 0, rounds \\ 0)
-  defp batches(_batch, _step, _after_id, hits, @max_batches), do: {hits, true}
-
-  defp batches(batch, step, after_id, hits, rounds) do
-    case step.(after_id) do
-      {scanned, _last, h} when scanned < batch -> {hits + h, false}
-      {_scanned, last, h} -> batches(batch, step, last, hits + h, rounds + 1)
+  # `batch` is the end of the walk. Returns `{hits, out_of_time?}`.
+  defp batches(batch, deadline, step, after_id \\ nil, hits \\ 0) do
+    if System.monotonic_time(:millisecond) > deadline do
+      {hits, true}
+    else
+      case step.(after_id) do
+        {scanned, _last, h} when scanned < batch -> {hits + h, false}
+        {_scanned, last, h} -> batches(batch, deadline, step, last, hits + h)
+      end
     end
   end
 
@@ -163,12 +164,12 @@ defmodule Engram.DataMigrations.NoteIndexState do
       repo.query!(
         """
         SELECT w.id::text,
-               CASE WHEN s.note_id IS NULL THEN false ELSE
-                 ROW(s.points, s.len_rows, s.len_sum) IS DISTINCT FROM (
-                   SELECT ROW(count(*)::int, count(c.token_count)::int,
-                              coalesce(sum(c.token_count), 0)::bigint)
-                   FROM chunks c WHERE c.note_id = w.id)
-               END
+               CASE WHEN s.note_id IS NULL THEN 'missing'
+                    WHEN ROW(s.points, s.len_rows, s.len_sum) IS DISTINCT FROM (
+                           SELECT ROW(count(*)::int, count(c.token_count)::int,
+                                      coalesce(sum(c.token_count), 0)::bigint)
+                           FROM chunks c WHERE c.note_id = w.id)
+                    THEN 'drifted' ELSE 'ok' END
         FROM (SELECT n.id FROM notes n
               WHERE n.kind = 'note'
                 AND ($1::uuid IS NULL OR n.user_id = $1::uuid)
@@ -180,10 +181,13 @@ defmodule Engram.DataMigrations.NoteIndexState do
         [dump(user_id), dump(after_id), batch]
       )
 
-    drifted = for [id, true] <- rows, do: id
+    drifted = for [id, "drifted"] <- rows, do: id
+    # A missing row cannot be counted here (fill owns it): it is only a hit,
+    # which keeps the pass open until the next fill.
+    missing = Enum.count(rows, &match?([_, "missing"], &1))
     locked = ChunkRows.lock_notes!(drifted, repo: repo, skip_locked: true)
     _ = ChunkRows.recount!(locked, repo)
-    {length(rows), rows |> List.last() |> then(&(&1 && hd(&1))), length(drifted)}
+    {length(rows), rows |> List.last() |> then(&(&1 && hd(&1))), length(drifted) + missing}
   end
 
   defp dump(nil), do: nil

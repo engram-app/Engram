@@ -132,6 +132,20 @@ Then the next `orphan_sweep` / `crdt_bloat_sweep` must not log
 `refusing to run`, `crdt_bloat_sweep notes=` must match the previous run
 (not 0), and `qdrant_points_swept` should stay around 0.
 
+## Client timeout: 120 s, set once
+
+DBConnection's per-call `timeout` defaults to 15 s and applies to every
+maintenance query and transaction unless the repo config overrides it. The
+pool sets `timeout: 120_000` (`Engram.RuntimeConfig.maintenance_timeout/0`,
+wired by `maintenance_repo_opts/3` in `config/runtime.exs`); never pass
+`timeout:` per call. It is a client bound: the DB's own limits on the role
+(`idle_in_transaction_session_timeout` 10 min) and the Oban job timeout still
+apply. Cost: a hung sweep query now holds one of the pool's 2 connections for
+up to 120 s, delaying sibling cron workers, instead of failing at 15 s. Found
+when the `note_index_state` ledger pass hit 15 s on prod (70k `notes`);
+keep sweep statements bounded (keyset windows) rather than relying on the
+timeout.
+
 ## Related
 
 - `lib/engram/repo/maintenance.ex`: the pool and its rules

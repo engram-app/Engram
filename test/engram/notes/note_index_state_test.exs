@@ -166,20 +166,39 @@ defmodule Engram.Notes.NoteIndexStateTest do
       :ok
     end
 
-    defp capture_sql(fun) do
+    # Scans of `chunks` so far in this transaction (seq + index, each
+    # correlated-subquery probe counts one).
+    defp chunk_probes do
+      %{rows: [[n]]} =
+        Repo.query!(
+          "SELECT coalesce(sum(seq_scan + idx_scan), 0)::bigint " <>
+            "FROM pg_stat_xact_user_tables WHERE relname = 'chunks'"
+        )
+
+      n
+    end
+
+    # `chunks` probes issued by each drift-scan statement of a pass.
+    defp probes_per_statement(fun) do
       test = self()
       id = {__MODULE__, make_ref()}
+      Process.put(:last_probes, chunk_probes())
 
       :telemetry.attach(
         id,
         [:engram, :repo, :query],
-        fn _, _, %{query: q}, _ -> send(test, {:sql, q}) end,
+        fn _, _, %{query: q}, _ ->
+          if q =~ "FROM chunks c WHERE" do
+            now = chunk_probes()
+            send(test, {:probes, now - Process.get(:last_probes, 0)})
+            Process.put(:last_probes, now)
+          end
+        end,
         nil
       )
 
       try do
-        result = fun.()
-        {result, drain([])}
+        {fun.(), drain([])}
       after
         :telemetry.detach(id)
       end
@@ -187,24 +206,71 @@ defmodule Engram.Notes.NoteIndexStateTest do
 
     defp drain(acc) do
       receive do
-        {:sql, q} -> drain([q | acc])
+        {:probes, n} -> drain([n | acc])
       after
         0 -> acc
       end
     end
 
-    test "a clean ledger closes in bounded, windowed statements" do
-      started = System.monotonic_time(:millisecond)
-      {result, sqls} = capture_sql(fn -> Backfill.run_pass() end)
-      elapsed = System.monotonic_time(:millisecond) - started
+    test "a clean ledger probes chunks once per note, a bounded window per statement" do
+      {result, probes} = probes_per_statement(fn -> Backfill.run_pass(batch: 500) end)
 
       assert result == :done
-      # Margin: the real cost is well under a second here; 15 s is DBConnection's cap.
-      assert elapsed < 15_000
+      # Old code: one statement probed all 3000 notes, and the done check
+      # probed them all again. Now: 6 full windows of 500 plus the empty tail, 3000 total.
+      assert length(probes) == 7
+      assert Enum.max(probes) <= 500 + 25
+      assert Enum.sum(probes) <= 3000 + 100
+    end
 
-      chunk_scans = Enum.filter(sqls, &(&1 =~ "FROM chunks c"))
-      assert length(chunk_scans) >= 3
-      assert Enum.all?(chunk_scans, &(&1 =~ "LIMIT")), "an unbounded chunk-count scan ran"
+    test "a note whose state row vanishes mid-pass keeps the pass open", %{user: u} do
+      victim = Repo.one!(from(n in Note, select: n.id, limit: 1), skip_tenant_check: true)
+      test = self()
+      id = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        id,
+        [:engram, :repo, :query],
+        fn _, _, %{query: q}, _ ->
+          # After the fill phase read, before the recount phase.
+          if q =~ "note_index_state_sync" and Process.get(:deleted) != true do
+            Process.put(:deleted, true)
+
+            Repo.query!("DELETE FROM note_index_state WHERE note_id = $1", [
+              Ecto.UUID.dump!(victim)
+            ])
+
+            send(test, :deleted)
+          end
+        end,
+        nil
+      )
+
+      try do
+        assert {:more, rows: 1} = Backfill.run_pass()
+        assert_received :deleted
+      after
+        :telemetry.detach(id)
+      end
+
+      assert state(victim) == nil
+      assert {:more, rows: 1} = Backfill.run_pass()
+      assert state(victim)
+      assert :done = Backfill.run_pass()
+      _ = u
+    end
+
+    test "a pass that runs out of time never reports done" do
+      assert {:more, _} = Backfill.run_pass(batch: 500, budget_ms: -1)
+    end
+
+    test "the walk reaches the last note of a many-window table" do
+      Repo.query!(
+        "UPDATE note_index_state SET points = 99 WHERE note_id = (SELECT id FROM notes ORDER BY id DESC LIMIT 1)"
+      )
+
+      assert {:more, rows: 1} = Backfill.run_pass(batch: 250)
+      assert :done = Backfill.run_pass(batch: 250)
     end
 
     test "sparse drift among thousands is fixed exactly, then the ledger closes", %{user: u} do
