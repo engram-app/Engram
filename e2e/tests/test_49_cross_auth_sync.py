@@ -25,6 +25,68 @@ from helpers.oauth import (
 from helpers.vault import read_note, wait_for_content, wait_for_file, write_note
 from helpers.latency import DELIVERY_TIMEOUT
 from helpers.quiescence import await_quiescent
+from helpers.cdp import ENGINE_PATH
+import json
+
+# REPRO ONLY (Engram#2271): record every engine step that touches a RapidEdits
+# note on device B, so a failure shows WHICH step wrote the stale version.
+_TRACE_JS = """
+(function() {
+  const se = %(E)s;
+  if (se.__rt) { se.__rt.length = 0; return 'reset'; }
+  const T = se.__rt = [];
+  const t0 = performance.now();
+  const tail = (s) => typeof s === 'string' ? s.slice(-6) : String(s);
+  const rec = (...a) => { if (T.length < 900) T.push([Math.round(performance.now() - t0)].concat(a)); };
+  const st = () => (new Error().stack || '').split('\\n').slice(2, 7).map(x => x.trim().replace(/^at /, '').split(' (')[0]).join('<');
+  const wrap = (obj, name, fmt) => {
+    const orig = obj[name];
+    if (typeof orig !== 'function') return;
+    obj[name] = function() {
+      const tag = fmt(arguments);
+      if (tag) rec('>' + name, tag, st());
+      const r = orig.apply(this, arguments);
+      if (tag && r && typeof r.then === 'function') r.then(v => rec('<' + name, tag, tail(typeof v === 'string' ? v : JSON.stringify(v))), e => rec('!' + name, tag, String(e)));
+      return r;
+    };
+  };
+  const isR = (p) => typeof p === 'string' && p.indexOf('RapidEdits') >= 0;
+  const ids = () => se.__rtIds || (se.__rtIds = new Set());
+  wrap(se, 'handleStreamEvent', a => isR(a[0] && a[0].path) ? (ids().add(a[0].id), 'ev ' + a[0].event_type + ' ' + tail(a[0].content) + ' h=' + a[0].content_hash + ' v=' + a[0].version) : null);
+  wrap(se, 'applyPushedNoteUpdate', a => ids().has(a[0]) ? 'fan head=' + String(a[2]).slice(0, 12) : null);
+  wrap(se, 'applyLiveOpWithSeq', a => ids().has(a[0]) ? 'seq=' + a[1] : null);
+  wrap(se, 'flushFromCrdt', a => isR(a[0]) ? 'flush ' + tail(a[1]) : null);
+  wrap(se, 'pushFile', a => isR(a[0] && a[0].path) ? 'push' : null);
+  wrap(se, 'captureDiskDriftBeforeRemote', a => isR(a[0]) ? 'drift' : null);
+  wrap(se, 'adoptHistoryLessNote', a => isR(a[0]) ? 'adopt' : null);
+  if (se.crdt) {
+    wrap(se.crdt, 'applyLocalEdit', a => ids().has(a[0]) ? 'localEdit ' + tail(a[1]) : null);
+    wrap(se.crdt, 'applyRemoteUpdate', a => ids().has(a[0]) ? 'remote' : null);
+  }
+  wrap(app.vault, 'modify', a => isR(a[0] && a[0].path) ? 'modify ' + tail(a[1]) : null);
+  wrap(app.vault, 'create', a => isR(a[0]) ? 'create ' + tail(a[1]) : null);
+  wrap(se, 'writeCrdtNote', a => isR(a[0]) ? 'wcn ' + tail(a[1]) + ' L=' + a[2] : null);
+  wrap(se, 'resolveDriftOnLoad', a => isR(a[0]) ? 'interlock server=' + tail(a[3]) : null);
+  wrap(se, 'loadServerState', a => ids().has(a[0]) ? 'loadState' : null);
+  wrap(se, 'handleModify', a => isR(a[0] && a[0].path) ? 'handleModify' : null);
+  if (se.crdt) {
+    wrap(se.crdt, 'mergeLocalEditFromBase', a => ids().has(a[0]) ? 'merge3 base=' + tail(a[1]) + ' srv=' + tail(a[2]) + ' disk=' + tail(a[3]) : null);
+  }
+  wrap(app.vault, 'process', a => isR(a[0] && a[0].path) ? 'process ' + tail(a[1](''))  : null);
+  return 'armed';
+})()
+""" % {"E": ENGINE_PATH}
+
+
+async def _trace_dump(cdp, path: str) -> str:
+    js = (
+        "(async function(){ const se = %s; const p = %s; const s = se.syncState && se.syncState.get(p);"
+        " const id = se.noteIdMap && se.noteIdMap.get(p); let doc = null;"
+        " try { doc = id && se.crdt ? await se.crdt.projectedText(id) : null; } catch (e) { doc = 'ERR ' + e; }"
+        " return JSON.stringify({state: s || null, id, doc, trace: se.__rt || null}); })()"
+    ) % (ENGINE_PATH, json.dumps(path))
+    return str(await cdp.evaluate(js, await_promise=True))
+
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +229,8 @@ async def test_rapid_api_edits_final_content_arrives(
     # test_apikey_push_oauth_receives). The final "Version 5 of 5" would hash-equal
     # a leftover from a prior attempt and never re-broadcast.
     path = f"E2E/RapidEdits-{uuid.uuid4().hex[:12]}.md"
+    logger.info("REPRO2271 arm B: %s", await cdp_b.evaluate(_TRACE_JS))
+    logger.info("REPRO2271 arm A: %s", await cdp_a.evaluate(_TRACE_JS))
 
     # Fire 5 rapid edits (no sleep between them)
     for i in range(1, 6):
@@ -193,6 +257,10 @@ async def test_rapid_api_edits_final_content_arrives(
     for cdp in (cdp_a, cdp_b):
         await await_quiescent(cdp, api_sync, kick=False, caught_up=False)
     server = api_sync.get_note(path)
+    if server is None or server["content"] != "# Rapid Edit\nVersion 5 of 5":
+        logger.error("REPRO2271 server=%r", server)
+        logger.error("REPRO2271 B engine: %s", await _trace_dump(cdp_b, path))
+        logger.error("REPRO2271 A engine: %s", await _trace_dump(cdp_a, path))
     assert server is not None, f"{path} vanished from the server"
     assert server["content"] == "# Rapid Edit\nVersion 5 of 5", (
         f"Server lost the last save (a receiver pushed stale text back): "
