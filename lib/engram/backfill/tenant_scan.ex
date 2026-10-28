@@ -116,7 +116,7 @@ defmodule Engram.Backfill.TenantScan do
   The one place that choice is made; never a cross-tenant read on the app
   pool, which FORCE RLS turns into zero rows (#1349).
   """
-  @spec pool() :: :per_user | {:fleet, module()}
+  @spec pool() :: :per_user | {:fleet, Engram.Repo.Maintenance}
   def pool do
     case Repo.maintenance() do
       Repo -> :per_user
