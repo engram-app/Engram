@@ -60,6 +60,9 @@ defmodule Engram.Backfill.IdWindows do
   alias Engram.Repo
 
   @batch_size 200
+  # Window for the discovery helpers (`all/2`): one primary-key range of
+  # 1,000 rows per statement.
+  @fleet_window 1_000
   @first_id "00000000-0000-0000-0000-000000000000"
 
   @type scope :: {:user, Ecto.UUID.t()} | {:fleet, module()}
@@ -185,6 +188,25 @@ defmodule Engram.Backfill.IdWindows do
       maintenance ->
         reduce({:fleet, maintenance}, schema, acc, fun, opts)
     end
+  end
+
+  @doc """
+  Every row `query` (a `notes` query, first binding the note) returns, across
+  all tenants, asked one id window at a time: the windowed form of
+  `TenantScan.all/1` for a rare predicate. Duplicates across windows are the
+  caller's to drop (a `distinct` holds within one window).
+  """
+  @spec all(Ecto.Query.t(), keyword()) :: list()
+  def all(%Ecto.Query{} = query, opts \\ []) do
+    {:ok, rows} =
+      reduce_all(
+        Engram.Notes.Note,
+        [],
+        fn ids, %{repo: repo}, acc -> {:cont, [repo.all(where(query, [n], n.id in ^ids)) | acc]} end,
+        Keyword.put_new(opts, :batch_size, @fleet_window)
+      )
+
+    rows |> Enum.reverse() |> Enum.concat()
   end
 
   @doc "True once `pred.(ids, ctx)` is true for some window of any tenant. Stops there."
