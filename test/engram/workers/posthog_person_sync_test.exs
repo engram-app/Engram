@@ -66,6 +66,30 @@ defmodule Engram.Workers.PostHogPersonSyncTest do
     assert :ok = perform_job(PostHogPersonSync, %{})
   end
 
+  test "before the effective date it sends only users who accepted the policy" do
+    bypass = enable_posthog()
+    capture_batch(bypass)
+    policy_effective_on(Date.add(Date.utc_today(), 5))
+
+    yes = insert(:user, email: "yes@example.com")
+
+    insert(:agreement,
+      user: yes,
+      document: "privacy_policy",
+      version: Engram.Analytics.PersonProperties.policy_version()
+    )
+
+    insert(:user, email: "no@example.com")
+    insert(:user, email: "optout@example.com", analytics_opt_out_at: DateTime.utc_now())
+
+    assert :ok = perform_job(PostHogPersonSync, %{})
+    assert_receive {:batch, batch}, 1_000
+
+    assert person(batch, "yes@example.com")
+    assert is_nil(person(batch, "no@example.com"))
+    assert is_nil(person(batch, "optout@example.com"))
+  end
+
   test "sets account properties on every live user in one batch" do
     bypass = enable_posthog()
     capture_batch(bypass)

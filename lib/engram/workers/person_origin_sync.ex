@@ -63,7 +63,7 @@ defmodule Engram.Workers.PersonOriginSync do
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
     cond do
-      not Analytics.enabled?() or not PersonProperties.policy_in_effect?() ->
+      not Analytics.enabled?() ->
         :ok
 
       # The stored `<field>_source` is read from PostHog's persons API, which
@@ -89,6 +89,9 @@ defmodule Engram.Workers.PersonOriginSync do
   defp run(%{"backfill" => true} = args) do
     users = batch(args["after"])
 
+    if is_nil(args["after"]),
+      do: Logger.info("PersonOriginSync backfill: gated=#{PersonProperties.gated_count()}")
+
     {written, failed} =
       sync(users, Application.get_env(:engram, :person_origin_pause_ms, @default_pause_ms))
 
@@ -102,6 +105,10 @@ defmodule Engram.Workers.PersonOriginSync do
 
       Enum.each(failed, fn {user, _reason} -> enqueue_user(user.id, 0) end)
     end
+
+    Logger.info(
+      "PersonOriginSync batch: users=#{length(users)} deferred=#{length(failed)} write=#{inspect(written)}"
+    )
 
     with :ok <- written do
       _ = chain_next(users)
@@ -131,7 +138,7 @@ defmodule Engram.Workers.PersonOriginSync do
     repo = Repo.maintenance()
 
     query =
-      from(u in PersonProperties.trackable_users(),
+      from(u in PersonProperties.identifiable_users(),
         where: not is_nil(u.external_id),
         order_by: u.id,
         limit: ^@batch
@@ -160,7 +167,9 @@ defmodule Engram.Workers.PersonOriginSync do
   # `{:ok, {user, traits}}` to write, `:skip` for nothing to write, or `{:error, _}`.
   defp resolve(%User{deleted_at: nil, external_id: external_id} = user)
        when is_binary(external_id) do
+    # The batch scope already filtered; the single-user path relies on this.
     with false <- Analytics.opted_out?(user),
+         true <- PersonProperties.may_identify?(user),
          {:ok, existing} <- Analytics.person_properties(user),
          {:ok, clerk} <- clerk_activity(external_id) do
       traits =
@@ -182,6 +191,7 @@ defmodule Engram.Workers.PersonOriginSync do
       if traits == %{}, do: :skip, else: {:ok, {user, traits}}
     else
       true -> :skip
+      false -> :skip
       :none -> :skip
       {:error, _} = error -> error
     end

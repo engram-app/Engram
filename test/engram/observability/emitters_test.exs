@@ -923,6 +923,40 @@ defmodule Engram.Observability.EmittersTest do
              }
     end
 
+    test "$set of plan is sent before the effective date for a user who accepted it", %{
+      bypass: bypass
+    } do
+      Engram.Legal.Seeder.seed()
+      user = user_with_clerk_id()
+
+      insert(:agreement,
+        user: user,
+        document: "privacy_policy",
+        version: Engram.Analytics.PersonProperties.policy_version()
+      )
+
+      sub = insert(:subscription, user: user, tier: "pro", status: "active")
+
+      Repo.update_all(
+        from(v in Engram.Legal.TermsVersion,
+          where: v.document == "privacy_policy" and v.version == "2026-10-12"
+        ),
+        [set: [effective_date: Date.add(Date.utc_today(), 5)]],
+        skip_tenant_check: true
+      )
+
+      expect_captures(bypass)
+
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{"event_type" => "subscription.past_due", "data" => %{}},
+          sub
+        )
+
+      assert_receive {:posthog_body, body}, 1_500
+      assert body["properties"]["$set"]["plan"] == "pro"
+    end
+
     test "an approved refund or chargeback is refund_issued", %{bypass: bypass} do
       user = user_with_clerk_id()
       sub = insert(:subscription, user: user, tier: "pro")
