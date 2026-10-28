@@ -193,7 +193,8 @@ defmodule Engram.Analytics do
   `:none` when nothing may be read (opted out, no email); `{:error, _}` when the
   read failed, which the caller must not treat as an empty person.
   """
-  @spec person_properties(map()) :: {:ok, map()} | :none | {:error, term()}
+  @spec person_properties(map()) ::
+          {:ok, map()} | :none | {:error, PostHog.read_error()}
   def person_properties(user) do
     case PostHog.distinct_id(user) do
       nil -> :none

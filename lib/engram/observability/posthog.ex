@@ -180,7 +180,9 @@ defmodule Engram.Observability.PostHog do
   an error: the stored `<field>_source` is what stops a lower source winning.
   Needs the personal API key with person:read scope.
   """
-  @spec person_properties(String.t()) :: {:ok, map()} | {:error, term()}
+  @type read_error :: :not_configured | :transport | {:http_error, non_neg_integer()}
+
+  @spec person_properties(String.t()) :: {:ok, map()} | {:error, read_error()}
   def person_properties(distinct_id) when is_binary(distinct_id) do
     # retry: false: a backfill must not sit in backoff once per user; the job retries.
     case fetch_person(distinct_id, retry: false) do

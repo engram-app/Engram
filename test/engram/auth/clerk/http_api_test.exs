@@ -64,7 +64,10 @@ defmodule Engram.Auth.Clerk.HttpApiTest do
     defp sessions(bypass, status, body) do
       Bypass.expect_once(bypass, "GET", "/v1/sessions", fn conn ->
         assert conn.query_string =~ "user_id=user_1"
-        Plug.Conn.resp(conn, status, Jason.encode!(body))
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(status, Jason.encode!(body))
       end)
     end
 
