@@ -100,12 +100,27 @@ defmodule Engram.Backfill.TenantScan do
   """
   @spec all(Ecto.Query.t(), (module(), Ecto.Query.t() -> list())) :: list()
   def all(%Ecto.Query{} = query, run \\ fn repo, q -> repo.all(q) end) do
-    case Repo.maintenance() do
-      Repo ->
+    case pool() do
+      :per_user ->
         flat_map_users(fn user_id -> run.(Repo, where(query, [r], r.user_id == ^user_id)) end)
 
-      maintenance ->
+      {:fleet, maintenance} ->
         run.(maintenance, query)
+    end
+  end
+
+  @doc """
+  Where a cross-tenant sweep runs: `{:fleet, repo}` on the maintenance pool
+  where one is configured (SaaS: one pass sees every tenant), else
+  `:per_user` (self-host, dev: one pass per user inside that user's tenant).
+  The one place that choice is made; never a cross-tenant read on the app
+  pool, which FORCE RLS turns into zero rows (#1349).
+  """
+  @spec pool() :: :per_user | {:fleet, module()}
+  def pool do
+    case Repo.maintenance() do
+      Repo -> :per_user
+      maintenance -> {:fleet, maintenance}
     end
   end
 

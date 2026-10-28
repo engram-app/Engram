@@ -198,6 +198,6 @@ defmodule Engram.DataMigrations do
   @doc false
   def reset_cache do
     for {{__MODULE__, _, _} = key, _} <- :persistent_term.get(), do: :persistent_term.erase(key)
-    :ok
+    IdWindows.reset_walks()
   end
 end

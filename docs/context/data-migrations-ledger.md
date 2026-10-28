@@ -37,13 +37,18 @@ others.
   against exactly those rows (the same scan and predicate the worker uses).
 - Every statement reads one id window, never "the next N rows that need work"
   (#2276; the backend `AGENTS.md` rule). A pass walks `notes` through
-  `Engram.Backfill.IdWindows.heal_pass/3`: each window's step fixes what it
+  `Engram.Backfill.IdWindows.heal_pass/4`: each window's step fixes what it
   can and says whether a matched row is still unfixed (a row lock it
-  skipped). `:done` is a walk over EVERY window that fixed nothing and left
-  nothing; that walk is the completion check, so no separate fleet-wide
-  EXISTS runs. A pass stops after a bounded number of fixed rows
-  (`:max_fixed`) and the next pass starts over from the first window,
-  re-reading the clean prefix (reads only, one window per statement).
+  skipped). `:done` is ONE complete walk, start to end, that fixed nothing
+  and left nothing; that walk is the completion check, so no separate
+  fleet-wide EXISTS runs. A walk can span passes: a pass stops on its time
+  budget (240 s) or `:max_fixed`, and the next pass resumes at the cursor,
+  so the tail is reached however large the table. A walk that found work
+  ends and the next pass starts a new one. Every pass processes at least one
+  window. The cursor is node-local (`:persistent_term`): a restart or a Cron
+  leader change starts the walk over (slower, never a false done). A walk
+  spanning more than 3 passes logs a warning per pass and emits
+  `[:engram, :id_windows, :walk_spanning]`.
 - Two kinds of unfixed row, treated oppositely:
   - Rows the worker can never SELECT (deleted notes, soft-deleted vaults, for
     `CrdtStateSeed` notes backed by a `crdt_update_log` tail) are not its work.

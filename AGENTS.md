@@ -360,7 +360,7 @@ again. Both grow with the table and with how DONE the job is, and both hit the
   advanced by the window's last key. Fleet-wide on the maintenance pool or per
   user, chosen for you by `reduce_all/4`.
 - Completion is "a walk over every window found nothing"
-  (`IdWindows.heal_pass/3`, `DataMigrations.any_row?/1`), never a separate
+  (`IdWindows.heal_pass/4`, `DataMigrations.any_row?/1`), never a separate
   EXISTS over the table.
 - A predicate an index serves (a partial index whose WHERE the query implies)
   may page directly; prove it with `Engram.QueryPlan`.

@@ -92,8 +92,11 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     now = DateTime.utc_now()
     backoff_until = DateTime.add(now, backoff_seconds(), :second)
 
-    # One page of eligible stale notes, oldest-first, kept as a subquery so
-    # the whole select-and-stamp is ONE statement (see the UPDATE below).
+    # One page of eligible stale notes, oldest-first (fleet-wide once
+    # IndexVersions is done; within one id window while it is open, where
+    # the cooldown stamp, not the order, keeps any note from starving), kept
+    # as a subquery so the whole select-and-stamp is ONE statement (see the
+    # UPDATE below).
     # The SQL proxy for "unmetered": a paid, entitled subscription. Used to
     # let an embed-budget park lapse once the user upgrades (see below).
     # `entitled_statuses/0` rather than a hand-rolled subset: dropping
@@ -384,7 +387,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
       # One id window at a time (#2276): the over-cap probe is per note and
       # no index serves the predicate, so "the next 100 over the cap" walked
-      # every dense note in one statement.
+      # every dense note in one statement. The 100 are now the first found in
+      # id order, oldest-first only within a window; the backoff stamp moves
+      # a picked note out of the next tick's way, so every note is reached.
       {:ok, rows} =
         IdWindows.reduce_all(
           Note,
@@ -1165,13 +1170,13 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # transaction; on the maintenance path the stamp commits first, and a lost
   # enqueue costs that note one cooldown window.
   defp scan(page, page_size, handle, false) do
-    case Repo.maintenance() do
-      Repo ->
+    case TenantScan.pool() do
+      :per_user ->
         Enum.flat_map(TenantScan.user_ids(), fn user_id ->
           sweep_pages(page_size, page_in(user_id, Repo, nil, page, handle))
         end)
 
-      maintenance ->
+      {:fleet, maintenance} ->
         sweep_pages(page_size, page_in(nil, maintenance, nil, page, handle))
     end
   end

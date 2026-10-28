@@ -59,6 +59,8 @@ defmodule Engram.Backfill.IdWindows do
   alias Engram.Backfill.TenantScan
   alias Engram.Repo
 
+  require Logger
+
   @batch_size 200
   # Window for the discovery helpers (`all/2`): one primary-key range of
   # 1,000 rows per statement.
@@ -69,24 +71,18 @@ defmodule Engram.Backfill.IdWindows do
   @type ctx :: %{repo: module(), user_id: Ecto.UUID.t() | nil}
   @type step_result :: {:cont, term()} | {:halt, term()} | {:error, term()}
   @type result :: {:ok, term()} | {:error, term()}
+  # Where a walk resumes: the user (nil on the fleet walk) and the last key
+  # of the last window it finished.
+  @type cursor :: {Ecto.UUID.t() | nil, Ecto.UUID.t()} | nil
 
-  @doc "The keyset start: sorts before every uuid."
-  def first_id, do: @first_id
-
-  @doc """
-  The next `size` keys of `schema` after `after_id` (ascending), for one user
-  or (`user_id` nil) the whole table. Caller provides the tenant context. For
-  a chained worker that runs one window per job: apply the predicate inside
-  the window, resume the successor at `List.last(window)`, stop on a short
-  window.
-  """
-  @spec window(module(), Ecto.UUID.t() | nil, module(), Ecto.UUID.t() | nil, pos_integer()) ::
-          [Ecto.UUID.t()]
-  def window(repo, user_id, schema, after_id, size) do
+  # The next `size` keys of `schema` after `after_id` (ascending), for one
+  # user or (`user_id` nil) the whole table. Caller provides the tenant
+  # context.
+  defp window(repo, user_id, schema, after_id, size) do
     key = key(schema)
 
     from(r in schema,
-      where: field(r, ^key) > ^(after_id || @first_id),
+      where: field(r, ^key) > ^after_id,
       order_by: field(r, ^key),
       limit: ^size,
       select: field(r, ^key)
@@ -114,9 +110,14 @@ defmodule Engram.Backfill.IdWindows do
   `{:error, reason}` (stop). Returns `{:ok, acc}` after the last window or a
   halt, or the error.
 
+  `{:fleet, repo}` must be the maintenance pool: `Engram.Repo` raises, since
+  FORCE RLS would filter every window to zero rows and the walk would report
+  "nothing left" (#1349). Use `reduce_all/4`, which picks the scope.
+
   Options: `:after` resumes after that key, `:batch_size` is the window
   (default 200), `:fun_in_tenant` (default `true`). With `false`, only the
-  window read runs in the scope's transaction and `fun` runs outside it,
+  window read runs in the scope's context (per user: its tenant
+  transaction; fleet: no transaction at all) and `fun` runs outside it,
   owning its own transactions: a caller that commits in smaller pieces than a
   window (the re-encoder, byte-bounded), or one whose writes must commit
   before a side effect (a stamp before its enqueue), needs that.
@@ -129,6 +130,12 @@ defmodule Engram.Backfill.IdWindows do
   # `{:halted, acc}` stays internal: it stops `reduce_all/4`'s user loop.
   defp settle({:halted, acc}), do: {:ok, acc}
   defp settle(result), do: result
+
+  defp walk_scope({:fleet, Repo}, _schema, _acc, _fun, _opts) do
+    raise ArgumentError,
+          "a fleet-wide id-window walk on Engram.Repo reads zero rows under FORCE RLS " <>
+            "(#1349); use the maintenance pool or reduce_all/4"
+  end
 
   defp walk_scope(scope, schema, acc, fun, opts) do
     walk(
@@ -145,17 +152,16 @@ defmodule Engram.Backfill.IdWindows do
   defp walk(scope, schema, after_id, acc, fun, size, fun_in_tenant) do
     ctx = ctx(scope)
 
-    stepped =
-      transaction(scope, fn ->
-        case window(ctx.repo, ctx.user_id, schema, after_id, size) do
-          [] -> :done
-          ids when fun_in_tenant -> {:ran, ids, fun.(ids, ctx, acc)}
-          ids -> {:ids, ids}
-        end
-      end)
+    read = fn ->
+      case window(ctx.repo, ctx.user_id, schema, after_id, size) do
+        [] -> :done
+        ids when fun_in_tenant -> {:ran, ids, fun.(ids, ctx, acc)}
+        ids -> {:ids, ids}
+      end
+    end
 
     stepped =
-      case stepped do
+      case transaction(scope, read, fun_in_tenant) do
         {:ok, {:ids, ids}} -> {:ok, {:ran, ids, fun.(ids, ctx, acc)}}
         other -> other
       end
@@ -181,21 +187,36 @@ defmodule Engram.Backfill.IdWindows do
   defp ctx({:user, user_id}), do: %{repo: Repo, user_id: user_id}
   defp ctx({:fleet, repo}), do: %{repo: repo, user_id: nil}
 
-  defp transaction({:user, user_id}, fun), do: Repo.with_tenant(user_id, fun)
-  defp transaction({:fleet, repo}, fun), do: repo.transaction(fun)
+  # A fleet window read alone needs no transaction (one statement, no tenant
+  # to set): skipping it saves a BEGIN/COMMIT round trip per window.
+  defp transaction({:fleet, _repo}, fun, false), do: {:ok, fun.()}
+  defp transaction({:fleet, repo}, fun, true), do: repo.transaction(fun)
+  defp transaction({:user, user_id}, fun, _in_tx), do: Repo.with_tenant(user_id, fun)
 
   @doc """
   `reduce/5` over every tenant: one fleet walk on the maintenance pool where
-  one is configured, else one walk per user, the accumulator threaded through.
-  A halt or an error stops the whole walk.
+  one is configured, else one walk per user in id order
+  (`TenantScan.pool/0`), the accumulator threaded through. A halt or an
+  error stops the whole walk: the users after it are not visited.
+
+  `:from` (a `t:cursor/0`) resumes a walk: the fleet walk after that key,
+  or the per-user walk at that user, after that key, then every later user.
   """
   @spec reduce_all(module(), term(), (list(), ctx(), term() -> step_result()), keyword()) ::
           result()
   def reduce_all(schema, acc, fun, opts \\ []) do
-    case Repo.maintenance() do
-      Repo ->
+    {from_user, from_after} = Keyword.get(opts, :from) || {nil, nil}
+    opts = Keyword.delete(opts, :from)
+
+    case TenantScan.pool() do
+      :per_user ->
         TenantScan.user_ids()
+        |> Enum.sort()
+        |> Enum.drop_while(&(from_user != nil and &1 < from_user))
         |> Enum.reduce_while({:ok, acc}, fn user_id, {:ok, acc} ->
+          after_id = if user_id == from_user, do: from_after
+          opts = Keyword.put(opts, :after, after_id)
+
           case walk_scope({:user, user_id}, schema, acc, fun, opts) do
             {:ok, _acc} = ok -> {:cont, ok}
             stop -> {:halt, stop}
@@ -203,8 +224,10 @@ defmodule Engram.Backfill.IdWindows do
         end)
         |> settle()
 
-      maintenance ->
-        reduce({:fleet, maintenance}, schema, acc, fun, opts)
+      {:fleet, maintenance} ->
+        # A per-user cursor (the pool changed between passes) restarts.
+        after_id = if from_user == nil, do: from_after
+        reduce({:fleet, maintenance}, schema, acc, fun, Keyword.put(opts, :after, after_id))
     end
   end
 
@@ -243,54 +266,115 @@ defmodule Engram.Backfill.IdWindows do
     found
   end
 
-  # A pass's time budget: the walk restarts from the first window every pass
-  # (no persisted cursor), so it is bounded by time, not by a window count; a
-  # count cap would stall the tail once the table outgrew it. A clean window
-  # is milliseconds, so this reaches far past any real table; the runner's
-  # Oban job timeout is 30 min.
+  # A pass's time budget. A walk that does not finish in one pass resumes at
+  # its cursor on the next (`heal_pass/4`), so the budget bounds one pass,
+  # not the walk; the runner's Oban job timeout is 30 min for every ledger
+  # migration together.
   @pass_budget_ms 240_000
+  # A walk spanning more passes than this logs a warning per pass: the table
+  # outgrew the budget, and done now takes that many hourly runs.
+  @span_warn_passes 3
 
-  @doc "Default `:budget_ms` of `heal_pass/3`."
+  @doc "Default `:budget_ms` of `heal_pass/4`."
   def pass_budget_ms, do: @pass_budget_ms
 
   @doc """
-  One self-healing data-migration pass (`Engram.DataMigration.run_pass/0`):
-  `step.(ids, ctx)` fixes what it can inside one window and returns
-  `{fixed, left?}`, where `left?` says a row it matched is still unfixed (a
-  row lock it skipped). The next pass starts over from the first window,
-  re-reading the clean prefix (reads only, each statement one window).
+  One self-healing data-migration pass (`Engram.DataMigration.run_pass/0`)
+  of the walk named `name`: `step.(ids, ctx)` fixes what it can inside one
+  window and returns `{fixed, left?}`, where `left?` says a row it matched
+  is still unfixed (a row lock it skipped).
 
-  `:done` only when a walk over EVERY window fixed nothing and left nothing:
-  that full walk is the completion check, so no fleet-wide EXISTS runs.
-  Otherwise `{:more, rows: fixed}`, plus `hit_budget: true` when the walk
-  stopped on its time budget (`:budget_ms`, default 240 s), which never
-  reports done. `:max_fixed` also stops the walk once that many rows are
-  fixed. Takes `reduce/5`'s options.
+  A walk can span passes. A pass stops on its time budget (`:budget_ms`,
+  default 240 s) or once `:max_fixed` rows are fixed, and the next pass
+  resumes at its cursor instead of window 0, so the tail is reached however
+  large the table. `:done` only when ONE complete walk, start to end and
+  possibly spanning passes, fixed nothing and left nothing: that walk is the
+  completion check, so no fleet-wide EXISTS runs. A walk that found work
+  ends and the next pass starts a new one from the start.
+
+  Returns `:done`, or `{:more, rows: fixed}` plus `hit_budget: true` when
+  this pass stopped on its time budget. The cursor is node-local
+  (`:persistent_term`, one write per pass): a restart or a Cron leader
+  change starts the walk over, which costs time, never a false done.
+  Takes `reduce/5`'s options.
   """
-  @spec heal_pass(module(), (list(), ctx() -> {non_neg_integer(), boolean()}), keyword()) ::
-          :done | {:more, keyword()}
-  def heal_pass(schema, step, opts) do
+  @spec heal_pass(
+          String.t(),
+          module(),
+          (list(), ctx() -> {non_neg_integer(), boolean()}),
+          keyword()
+        ) :: :done | {:more, keyword()}
+  def heal_pass(name, schema, step, opts) do
+    key = {__MODULE__, :walk, name}
+    walk = :persistent_term.get(key, %{from: nil, dirty: false, passes: 0})
+    walk = %{walk | passes: walk.passes + 1}
     max_fixed = Keyword.get(opts, :max_fixed, :infinity)
 
     deadline =
       System.monotonic_time(:millisecond) + Keyword.get(opts, :budget_ms, @pass_budget_ms)
 
-    heal = fn ids, ctx, {fixed, left?, _late?} ->
-      if System.monotonic_time(:millisecond) > deadline do
-        {:halt, {fixed, true, true}}
+    # The budget is checked from the second window on: every pass makes
+    # progress, so a budget too small for even one window still finishes.
+    heal = fn ids, ctx, acc ->
+      if acc.windows > 0 and System.monotonic_time(:millisecond) > deadline do
+        {:halt, %{acc | stop: :budget}}
       else
         {f, l} = step.(ids, ctx)
-        acc = {fixed + f, left? or l, false}
-        if fixed + f >= max_fixed, do: {:halt, acc}, else: {:cont, acc}
+
+        acc = %{
+          acc
+          | fixed: acc.fixed + f,
+            left: acc.left or l,
+            windows: acc.windows + 1,
+            at: {ctx.user_id, List.last(ids)}
+        }
+
+        if acc.fixed >= max_fixed, do: {:halt, %{acc | stop: :cap}}, else: {:cont, acc}
       end
     end
 
-    case reduce_all(schema, {0, false, false}, heal, opts) do
-      {:ok, {0, false, false}} -> :done
-      {:ok, {fixed, _left?, false}} -> {:more, rows: fixed}
-      {:ok, {fixed, _left?, true}} -> {:more, rows: fixed, hit_budget: true}
-      {:error, reason} -> raise "id-window pass failed: #{inspect(reason)}"
+    acc = %{fixed: 0, left: false, stop: nil, at: walk.from, windows: 0}
+
+    pass =
+      case reduce_all(schema, acc, heal, Keyword.put(opts, :from, walk.from)) do
+        {:ok, pass} -> pass
+        {:error, reason} -> raise "id-window pass #{name} failed: #{inspect(reason)}"
+      end
+
+    dirty = walk.dirty or pass.fixed > 0 or pass.left
+
+    case pass.stop do
+      nil ->
+        :persistent_term.erase(key)
+        if dirty, do: {:more, rows: pass.fixed}, else: :done
+
+      stop ->
+        walk = %{walk | from: pass.at, dirty: dirty}
+        :persistent_term.put(key, walk)
+        spanning(name, walk.passes)
+        more = [rows: pass.fixed]
+        if stop == :budget, do: {:more, more ++ [hit_budget: true]}, else: {:more, more}
     end
+  end
+
+  defp spanning(name, passes) when passes > @span_warn_passes do
+    :telemetry.execute([:engram, :id_windows, :walk_spanning], %{passes: passes}, %{walk: name})
+
+    Logger.warning(
+      "id-window walk #{name} has spanned #{passes} passes without reaching the end",
+      Engram.Logger.Metadata.with_category(:warning, :oban, walk: name, passes: passes)
+    )
+  end
+
+  defp spanning(_name, _passes), do: :ok
+
+  @doc false
+  # Drops every walk cursor (tests; `Engram.DataMigrations.reset_cache/0`).
+  def reset_walks do
+    for {{__MODULE__, :walk, _} = key, _} <- :persistent_term.get(),
+        do: :persistent_term.erase(key)
+
+    :ok
   end
 
   @doc """

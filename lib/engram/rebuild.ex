@@ -702,9 +702,9 @@ defmodule Engram.Rebuild do
   # `ReconcileEmbeddings.scan/3` for why never cross-tenant on the app pool.
   @spec each_tenant((module() -> term())) :: [term()]
   def each_tenant(fun) do
-    case Repo.maintenance() do
-      Repo -> Enum.map(TenantScan.user_ids(), &Repo.with_tenant!(&1, fn -> fun.(Repo) end))
-      maintenance -> [fun.(maintenance)]
+    case TenantScan.pool() do
+      :per_user -> Enum.map(TenantScan.user_ids(), &Repo.with_tenant!(&1, fn -> fun.(Repo) end))
+      {:fleet, maintenance} -> [fun.(maintenance)]
     end
   end
 

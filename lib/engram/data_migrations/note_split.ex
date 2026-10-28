@@ -57,7 +57,10 @@ defmodule Engram.DataMigrations.NoteSplit do
     # less than it matched has not proven the table clean: `heal/2` reports
     # the row as left and the pass stays open. Only a walk over every window
     # that finds no row left closes the ledger; until then the ids stay off.
-    case IdWindows.heal_pass(Note, &heal/2, batch_size: batch, max_fixed: @max_batches * batch) do
+    case IdWindows.heal_pass(name(), Note, &heal/2,
+           batch_size: batch,
+           max_fixed: @max_batches * batch
+         ) do
       :done -> tap(:done, fn _ -> safe_drift(fn -> report_drift(batch) end) end)
       more -> more
     end

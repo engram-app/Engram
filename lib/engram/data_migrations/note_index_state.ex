@@ -61,10 +61,10 @@ defmodule Engram.DataMigrations.NoteIndexState do
 
   @doc false
   # `batch:` overrides the window size (tests walk a few rows), `budget_ms:`
-  # the pass's time budget (`IdWindows.heal_pass/3`).
+  # the pass's time budget (`IdWindows.heal_pass/4`).
   def run_pass(opts) do
     result =
-      IdWindows.heal_pass(Note, &heal/2,
+      IdWindows.heal_pass(name(), Note, &heal/2,
         batch_size: Keyword.get(opts, :batch, @batch),
         budget_ms: Keyword.get(opts, :budget_ms, IdWindows.pass_budget_ms())
       )

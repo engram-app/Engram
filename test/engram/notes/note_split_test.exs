@@ -2,7 +2,9 @@ defmodule Engram.Notes.NoteSplitTest do
   # Wave 3 dual-write: the notes_derive_core_keys / notes_sync_body triggers
   # keep the narrow core columns and note_bodies in step with every write,
   # and the NoteSplit data migration fills rows written before them.
-  use Engram.DataCase, async: true
+  # Not async: `NoteSplit.run_pass/1` resumes a node-global walk cursor
+  # (`IdWindows.heal_pass/4`), which DataCase resets before each sync test.
+  use Engram.DataCase, async: false
 
   alias Engram.DataMigrations.NoteSplit
   alias Engram.Notes
