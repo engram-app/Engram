@@ -74,6 +74,24 @@ describe("OnboardVaultPage: step-completion tracking", () => {
 	});
 });
 
+describe("OnboardVaultPage: failure tracking", () => {
+	it("emits onboarding_step_failed when creating the vault fails", async () => {
+		mockTrack.mockClear();
+		createVaultMutateAsync.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+		renderPage();
+
+		fireEvent.click(screen.getByText(/starting fresh/iu));
+		fireEvent.click(screen.getByRole("button", { name: /create vault & continue/iu }));
+
+		await waitFor(() =>
+			expect(mockTrack).toHaveBeenCalledWith("onboarding_step_failed", {
+				step: "vault",
+				reason: "network",
+			}),
+		);
+	});
+});
+
 describe("OnboardVaultPage: default vault name is stored in English, shown translated", () => {
 	const german = {
 		de: async () => ({ default: { "My Vault": "Mein Tresor", "Vault name": "Tresorname" } }),

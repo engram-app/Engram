@@ -5,6 +5,7 @@ import { track } from "../analytics/track";
 import { useOnboardingStatus } from "../api/queries";
 import { stashPendingAuthorization } from "../oauth/pending-authorization";
 import OnboardLayout from "./onboard-layout";
+import { markStepCompleted, resetStepCompletion } from "./step-completion";
 
 const logout = vi.fn();
 
@@ -220,5 +221,47 @@ describe("OnboardLayout step tracking", () => {
 	it("does not emit for a step outside the account's chain (redirected before rendering)", () => {
 		renderAt("/onboard/agreement", SELF);
 		expect(mockTrack).not.toHaveBeenCalled();
+	});
+});
+
+describe("OnboardLayout abandonment beacon", () => {
+	const pagehide = (persisted: boolean) =>
+		window.dispatchEvent(Object.assign(new Event("pagehide"), { persisted }));
+
+	afterEach(() => {
+		mockTrack.mockClear();
+		resetStepCompletion();
+	});
+
+	it("beacons onboarding_step_abandoned with the step and time on it at pagehide", () => {
+		renderAt("/onboard/heard", SAAS);
+
+		pagehide(false);
+
+		expect(mockTrack).toHaveBeenCalledWith(
+			"onboarding_step_abandoned",
+			{ step: "heard", duration_ms: expect.any(Number) },
+			{ beacon: true },
+		);
+	});
+
+	it("does not report a step as abandoned after it completed (reload or redirect)", () => {
+		renderAt("/onboard/heard", SAAS);
+		markStepCompleted("heard");
+
+		pagehide(false);
+
+		expect(mockTrack.mock.calls.filter(([e]) => e === "onboarding_step_abandoned")).toEqual([]);
+	});
+
+	it("does not count entering the back/forward cache as a departure", () => {
+		renderAt("/onboard/heard", SAAS);
+
+		pagehide(true);
+		expect(mockTrack.mock.calls.filter(([e]) => e === "onboarding_step_abandoned")).toEqual([]);
+
+		// Control: the same render does report a real departure.
+		pagehide(false);
+		expect(mockTrack.mock.calls.filter(([e]) => e === "onboarding_step_abandoned")).toHaveLength(1);
 	});
 });

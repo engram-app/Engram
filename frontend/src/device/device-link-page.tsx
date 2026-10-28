@@ -19,6 +19,7 @@ import type { MsgKey } from "@/i18n/ui-text";
 import { serverErrorMessage } from "@/lib/server-error";
 import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
+import { errorCodeOf } from "../analytics/error-code";
 import { track } from "../analytics/track";
 import { setActiveVaultId } from "../api/active-vault";
 import { api, isNotFound } from "../api/client";
@@ -454,7 +455,7 @@ function DeviceLinkPage() {
 			// dialog opens with Disconnect + Upgrade). Don't double-render its
 			// raw message as an inline error.
 			if (e instanceof Error && e.name === "LimitExceededError") {
-				track("plugin_connect_failed", { reason: "limit_exceeded" });
+				track("plugin_connect_failed", { reason: errorCodeOf(e) });
 				return;
 			}
 			// By status, not message: a 403 "vault not found or not owned by

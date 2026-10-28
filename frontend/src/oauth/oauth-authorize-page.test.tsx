@@ -1018,6 +1018,28 @@ describe("OAuthAuthorizePage", () => {
 		);
 	});
 
+	it.each([
+		[new ApiError(403, "denied"), "auth"],
+		[new ApiError(404, "gone"), "not_found"],
+		[new TypeError("Failed to fetch"), "network"],
+	])("reports mcp_connect_failed with a specific reason (%#)", async (err, reason) => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude Desktop",
+			kind: "mcp",
+			slug: "claude",
+		});
+		postOAuthConsent.mockRejectedValueOnce(err);
+
+		renderAt(VALID_QS);
+		await screen.findByRole("button", { name: /^review$/iu });
+		approve();
+
+		await waitFor(() =>
+			expect(mockTrack).toHaveBeenCalledWith("mcp_connect_failed", { client: "claude", reason }),
+		);
+	});
+
 	it("shows a heads-up banner at the Obsidian cap and swaps on Approve", async () => {
 		// A free-tier user already at the Obsidian connection cap — landing on
 		// /oauth/consent for a new Obsidian client should see a heads-up banner above the normal

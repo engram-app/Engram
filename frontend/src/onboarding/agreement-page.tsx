@@ -9,6 +9,7 @@ import type { UIText } from "@/i18n/ui-text";
 import AuthPanel from "@/layout/auth-panel";
 import { serverErrorMessage } from "@/lib/server-error";
 import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
+import { errorCodeOf } from "../analytics/error-code";
 import { track } from "../analytics/track";
 import { isApiClientFailure } from "../api/client";
 import { useOnboardingStatus } from "../api/queries";
@@ -16,6 +17,7 @@ import { LegalDoc } from "../legal/legal-doc";
 import { formatEffectiveDate, useDocumentName } from "../legal/legal-notice-banner";
 import { useAcceptAgreements } from "../legal/use-accept-current";
 import { captureError } from "../sentry";
+import { markStepCompleted } from "./step-completion";
 
 // The legal texts take whatever height the card has left, so the agreement
 // and Continue stay on screen without the page scrolling (AuthPanel).
@@ -51,6 +53,7 @@ export default function AgreementPage() {
 			if (!isApiClientFailure(err)) {
 				captureError(err);
 			}
+			track("onboarding_step_failed", { step: "agreement", reason: errorCodeOf(err) });
 			setFailure(serverErrorMessage(err, t("Could not continue. Please try again."), t));
 		} finally {
 			setSubmitting(false);
@@ -61,6 +64,7 @@ export default function AgreementPage() {
 		if (!(await accept())) {
 			return;
 		}
+		markStepCompleted("agreement");
 		track("onboarding_step_completed", {
 			step: "agreement",
 			duration_ms: Date.now() - mountedAt,

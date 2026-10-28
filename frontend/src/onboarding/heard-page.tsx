@@ -4,9 +4,11 @@ import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import AuthPanel from "@/layout/auth-panel";
 import { destructiveAlert, heading } from "@/lib/ui-classes";
+import { errorCodeOf } from "../analytics/error-code";
 import { track } from "../analytics/track";
 import { useSubmitFeedback } from "../api/queries";
 import { HeardFromField } from "./about-you-fields";
+import { markStepCompleted } from "./step-completion";
 
 // "How did you hear about Engram?", a web signup's step after the terms.
 // Plugin and connector signups never reach it: where they started is the
@@ -36,13 +38,15 @@ export default function HeardPage() {
 				heard_from: heardFrom,
 				...(trimmed ? { heard_from_detail: trimmed } : {}),
 			});
-		} catch {
+		} catch (err) {
 			// The wizard stays on this step until the answer is saved, so
 			// moving on would land right back here.
+			track("onboarding_step_failed", { step: "heard", reason: errorCodeOf(err) });
 			setFailed(true);
 			setSaving(false);
 			return;
 		}
+		markStepCompleted("heard");
 		track("onboarding_step_completed", { step: "heard", duration_ms: Date.now() - mountedAt });
 		navigate("/onboard", { replace: true });
 	}

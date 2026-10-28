@@ -31,7 +31,7 @@ defmodule Engram.Analytics.EventLog do
   @allowed ~w(
     action amount_bucket app_locale app_version area attachments auth_method cadence calls
     category choice client client_agent client_type contact_ok cross_vault
-    currency device discounted duration_ms error errors events failed folders
+    currency device device_number discounted duration_ms error errors events failed folders
     from_tier grant_id grant_type heard_from initiated_by interval item
     jwks_source kind languages latency_ms limit_key method missing mood next_step
     note_count notes notes_bucket origin outcome paddle_subscription_id phase

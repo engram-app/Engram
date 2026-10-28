@@ -3704,14 +3704,72 @@ defmodule EngramWeb.CrdtChannelTest do
       assert body["properties"]["vault_id"] == vault.id
     end
 
-    test "an Obsidian crdt_create does not fire note_created (bulk import)", %{socket: socket} do
-      ref =
-        push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "Notes/o.md"})
+    test "Obsidian crdt_creates fire ONE note_created per vault per hour, with calls", %{
+      socket: socket,
+      vault: vault
+    } do
+      for path <- ["Notes/o1.md", "Notes/o2.md", "Notes/o3.md"] do
+        ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => path})
+        assert_reply ref, :ok, %{doc_id: _}, 3000
+      end
 
+      Process.sleep(400)
+      [body] = Enum.filter(drain_posthog([]), &(&1["event"] == "note_created"))
+      assert body["properties"]["surface"] == "obsidian_sync"
+      assert body["properties"]["vault_id"] == vault.id
+      assert body["properties"]["calls"] == 1
+    end
+
+    test "a web editor edit fires one throttled note_edited per vault", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/ne.md", "content" => "base"},
+          actor: "api"
+        )
+
+      {:ok, _, joined} =
+        subscribe_and_join(
+          user_socket(user),
+          EngramWeb.CrdtChannel,
+          "crdt:#{user.id}:#{vault.id}",
+          %{"crdt_proto" => 2, "client_type" => "web"}
+        )
+
+      Sandbox.allow(Repo, self(), joined.channel_pid)
+
+      for prefix <- ["A-", "B-"] do
+        frame = client_sync_update(joined, note.id, prefix)
+
+        ref =
+          push(joined, "crdt_doc_update", %{"doc_id" => note.id, "b64" => Base.encode64(frame)})
+
+        assert_reply ref, :ok, %{doc_id: _}, 3000
+      end
+
+      Process.sleep(400)
+      [body] = Enum.filter(drain_posthog([]), &(&1["event"] == "note_edited"))
+      assert body["properties"]["surface"] == "web"
+      assert body["properties"]["vault_id"] == vault.id
+    end
+
+    test "an Obsidian edit does not fire note_edited", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/no.md", "content" => "base"},
+          actor: "api"
+        )
+
+      frame = client_sync_update(socket, note.id, "OBS-")
+      ref = push(socket, "crdt_doc_update", %{"doc_id" => note.id, "b64" => Base.encode64(frame)})
       assert_reply ref, :ok, %{doc_id: _}, 3000
 
       Process.sleep(400)
-      assert [] == Enum.filter(drain_posthog([]), &(&1["event"] == "note_created"))
+      assert [] == Enum.filter(drain_posthog([]), &(&1["event"] == "note_edited"))
     end
 
     test "a create refused by notes_cap fires one throttled limit_hit", %{

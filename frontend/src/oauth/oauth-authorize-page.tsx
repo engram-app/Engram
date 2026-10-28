@@ -19,6 +19,7 @@ import { Trans } from "@/i18n/trans";
 import { serverErrorMessage } from "@/lib/server-error";
 import { destructiveAlert, heading } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
+import { errorCodeOf } from "../analytics/error-code";
 import { MCP_CLIENTS } from "../analytics/events";
 import { track } from "../analytics/track";
 import { ApiError, api } from "../api/client";
@@ -512,7 +513,7 @@ export default function OAuthAuthorizePage() {
 							: t("Couldn't rename your vault. Check your connection and try again."),
 					);
 					if (isMcp) {
-						track("mcp_connect_failed", { client: mcpClient, reason: "unknown" });
+						track("mcp_connect_failed", { client: mcpClient, reason: errorCodeOf(err) });
 					}
 					setSubmitting(false);
 					return;
@@ -578,7 +579,7 @@ export default function OAuthAuthorizePage() {
 					),
 				);
 				if (isMcp) {
-					track("mcp_connect_failed", { client: mcpClient, reason: "unknown" });
+					track("mcp_connect_failed", { client: mcpClient, reason: errorCodeOf(e) });
 				}
 				setSubmitting(false);
 				return;
@@ -588,14 +589,14 @@ export default function OAuthAuthorizePage() {
 			// cap re-trips between disconnect + consent.
 			if (e instanceof Error && e.name === "LimitExceededError") {
 				if (isMcp) {
-					track("mcp_connect_failed", { client: mcpClient, reason: "limit_exceeded" });
+					track("mcp_connect_failed", { client: mcpClient, reason: errorCodeOf(e) });
 				}
 				setSubmitting(false);
 				return;
 			}
 			setSubmitError(serverErrorMessage(e, t("Authorization failed"), t));
 			if (isMcp) {
-				track("mcp_connect_failed", { client: mcpClient, reason: "unknown" });
+				track("mcp_connect_failed", { client: mcpClient, reason: errorCodeOf(e) });
 			}
 			setSubmitting(false);
 		}

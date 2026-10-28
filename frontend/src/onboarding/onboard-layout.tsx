@@ -20,6 +20,7 @@ import AuthShell from "../layout/auth-shell";
 import LoadingScreen from "../layout/loading-screen";
 import { isMember } from "../lib/is-member";
 import { clearPendingAuthorization, pendingCancelUrl } from "../oauth/pending-authorization";
+import { isStepCompleted } from "./step-completion";
 
 const STEP_PATHS: OnboardingStep[] = ["agreement", "billing", "heard", "vault"];
 
@@ -68,6 +69,27 @@ export default function OnboardLayout() {
 		}
 		track("onboarding_step_viewed", { step: current });
 	}, [current, ready]);
+
+	// The step was on screen when the tab closed or navigated away. `persisted`
+	// = entering the back/forward cache, which may come back: not a departure.
+	// Same beacon pattern as checkout_abandoned in billing-page.tsx.
+	useEffect(() => {
+		if (!current) {
+			return;
+		}
+		const shownAt = Date.now();
+		const onPageHide = (event: PageTransitionEvent) => {
+			if (!(event.persisted || isStepCompleted(current))) {
+				track(
+					"onboarding_step_abandoned",
+					{ step: current, duration_ms: Date.now() - shownAt },
+					{ beacon: true },
+				);
+			}
+		};
+		window.addEventListener("pagehide", onPageHide);
+		return () => window.removeEventListener("pagehide", onPageHide);
+	}, [current]);
 
 	if (isLoading || !data) {
 		return <LoadingScreen />;
