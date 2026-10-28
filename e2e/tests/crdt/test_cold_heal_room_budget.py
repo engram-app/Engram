@@ -30,8 +30,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 import os
+import shutil
 import time
 import uuid
 
@@ -44,23 +44,31 @@ logger = logging.getLogger(__name__)
 # Enough diverged notes that a room per note is unmistakable next to the budget,
 # small enough to keep the e2e-crdt job's wall clock sane.
 NOTE_COUNT = int(os.environ.get("E2E_COLD_HEAL_NOTE_COUNT", "300"))
+# An override of 0 (or a handful) would make every assertion below vacuous.
+MIN_NOTE_COUNT = 50
 
 # The fix's per-device start budget (Engram-obsidian#644: token bucket, burst 5
-# then 15 a minute). Two devices hold this user's vault (A and B), so the bound
-# allows both, even though only A's socket drops.
+# then 15 a minute). Only device A holds the vault here: obsidian_b is a lazy
+# session fixture and this file sorts first in tests/crdt/, so B never runs.
 BURST = 5
-RATE_PER_MIN = 15
-DEVICES = 2
+DEVICES = 1
+# The probe counts room ALLOCATIONS, not heal tokens. One heal allocates about
+# two: the handshake room, then a restart after the CI idle drain
+# (CRDT_IDLE_EXIT_MS) closes it. Measured: 1.38.1 allocated 600 for 300 heals.
+ALLOCS_PER_HEAL = 2
 
-# Independent of how long convergence takes: a room per note is O(N), the fix
-# is O(1). Without this, a slow enough red run would earn its way under the
-# time-scaled bucket bound.
-HARD_CEILING = NOTE_COUNT // 4
+# Fixed, independent of N and of wall clock: the fix's claim is O(1) rooms for
+# O(N) diverged notes. A time-scaled bound lets a slow or partial regression
+# (dozens of notes each falling back to a room) earn its way under it. Green
+# measured 10 (one burst at two allocations per heal); the slack absorbs one
+# extra burst and incidental live-bound handshakes.
+ROOM_CEILING = DEVICES * ALLOCS_PER_HEAL * BURST + 15
 
 CONVERGE_TIMEOUT_S = 6 * 60
 NO_PROGRESS_KICK_S = 30
 # Rooms a trailing heal opens after the last file lands still count.
 SETTLE_S = 15
+CLEANUP_TIMEOUT_S = 120
 
 
 def _content(i: int, run: str, round_: int) -> str:
@@ -106,7 +114,21 @@ async def _wait_converged(vault, cdp, paths, run, round_, timeout) -> float:
         await asyncio.sleep(1)
 
 
-def _cleanup(api_sync, folder: str) -> None:
+async def _ensure_connected(cdp) -> None:
+    """Bring A's socket back if it is down. `reconnect_stream` only logs on failure."""
+    if not await cdp.check_stream_connected():
+        await cdp.reconnect_stream()
+    # Raises with the channel diagnosis if the socket never comes back.
+    await cdp.wait_for_stream_connected()
+
+
+async def _cleanup(api_sync, vault, folder: str) -> None:
+    """Delete this test's notes and wait until A has applied every delete.
+
+    This file sorts first in tests/crdt/ and the session vault is shared, so
+    returning before A drains 300 deletes would bleed that work into the
+    measurements of every test after it.
+    """
     ids = [
         n["id"]
         for n in api_sync.get_manifest().get("notes", [])
@@ -116,14 +138,28 @@ def _cleanup(api_sync, folder: str) -> None:
         status = api_sync.batch_delete_notes(ids[start : start + 500])
         assert status < 300, f"cold-heal cleanup: batch-delete returned {status}"
 
+    local = vault / folder
+    left: list = []
+    deadline = time.monotonic() + CLEANUP_TIMEOUT_S
+    while time.monotonic() < deadline:
+        left = list(local.glob("*.md")) if local.exists() else []
+        if not left:
+            break
+        await asyncio.sleep(1)
+    assert not left, f"cold-heal cleanup: A still holds {len(left)} files in {folder}"
+    shutil.rmtree(local, ignore_errors=True)
+
 
 @pytest.mark.timeout(20 * 60)
 @pytest.mark.asyncio
 async def test_resume_cold_heals_stay_in_room_budget(vault_a, cdp_a, api_sync, capsys):
+    assert NOTE_COUNT >= MIN_NOTE_COUNT, (
+        f"E2E_COLD_HEAL_NOTE_COUNT={NOTE_COUNT} is below {MIN_NOTE_COUNT}; "
+        "the room bound would be vacuous"
+    )
     run = uuid.uuid4().hex[:8]
     folder = f"ColdHeal-{run}/"
     paths = [f"{folder}n{i:04d}.md" for i in range(NOTE_COUNT)]
-    disconnected = False
     try:
         await cdp_a.wait_for_stream_connected()
 
@@ -140,16 +176,21 @@ async def test_resume_cold_heals_stay_in_room_budget(vault_a, cdp_a, api_sync, c
         # Drop A's socket (1.38.1 wipes every resident doc's `synced` flag here),
         # then diverge every note server-side while A cannot hear it.
         await cdp_a.disconnect_stream()
-        disconnected = True
         assert not await cdp_a.check_stream_connected(), "socket did not drop"
-        for i, p in enumerate(paths):
-            api_sync.create_note(p, _content(i, run, 2))
-
+        # Armed before the offline writes: if A reconnects on its own mid-write,
+        # the heal it starts is still counted. The counter is node-global (any
+        # vault, any user); that is safe only because e2e-crdt runs serially.
         arm_room_starts()
         before = read_room_starts()
         started = time.monotonic()
+        for i, p in enumerate(paths):
+            api_sync.create_note(p, _content(i, run, 2))
+        assert not await cdp_a.check_stream_connected(), (
+            "A reconnected on its own during the offline writes"
+        )
+
         await cdp_a.reconnect_stream()
-        disconnected = False
+        await cdp_a.wait_for_stream_connected()
         converged_s = await _wait_converged(
             vault_a, cdp_a, paths, run, 2, CONVERGE_TIMEOUT_S
         )
@@ -157,21 +198,19 @@ async def test_resume_cold_heals_stay_in_room_budget(vault_a, cdp_a, api_sync, c
         rooms = read_room_starts() - before
         elapsed_min = (time.monotonic() - started) / 60
 
-        budget = DEVICES * (BURST + math.ceil(RATE_PER_MIN * elapsed_min))
-        bound = min(budget, HARD_CEILING)
         # Uncaptured so a green run records its count too (the red/green proof).
         with capsys.disabled():
             print(
                 f"\ncold-heal: {NOTE_COUNT} diverged notes converged in {converged_s:.1f}s; "
-                f"resume window {elapsed_min:.2f} min allocated {rooms}; "
-                f"handshake bound {bound} (bucket {budget}, ceiling {HARD_CEILING})"
+                f"window {elapsed_min:.2f} min allocated {rooms}; ceiling {ROOM_CEILING}"
             )
-        assert rooms.handshake <= bound, (
-            f"resume heal of {NOTE_COUNT} diverged cold notes opened "
-            f"{rooms.handshake} handshake rooms in {elapsed_min:.2f} min, past the "
-            f"bound {bound} ({DEVICES} devices x (burst {BURST} + {RATE_PER_MIN}/min), "
-            f"capped at N/4). A room per diverged note is the Engram#2242 surge: "
-            f"cold heals must go room-free or through the pooled, rate-capped path."
+        # Total, not handshake only: a heal re-routed through a path tagged
+        # `edit` or `unknown` is the same surge.
+        assert rooms.total <= ROOM_CEILING, (
+            f"resume heal of {NOTE_COUNT} diverged cold notes allocated {rooms} in "
+            f"{elapsed_min:.2f} min, past the fixed ceiling {ROOM_CEILING}. A room per "
+            "diverged note is the Engram#2242 surge: cold heals must go room-free or "
+            "through the pooled, rate-capped path."
         )
 
         # No data loss: the server still holds the round-2 body for every note
@@ -184,10 +223,9 @@ async def test_resume_cold_heals_stay_in_room_budget(vault_a, cdp_a, api_sync, c
         ]
         assert not stale, f"{len(stale)} notes lost their server content: {stale[:5]}"
     finally:
-        if disconnected:
-            await cdp_a.reconnect_stream()
         try:
-            _cleanup(api_sync, folder)
+            await _ensure_connected(cdp_a)
+            await _cleanup(api_sync, vault_a, folder)
         except Exception:
             logger.exception("cold-heal cleanup failed; %s residue may leak", folder)
             raise
