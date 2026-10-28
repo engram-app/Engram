@@ -155,6 +155,7 @@ export type PropKind =
 	| "language_tag"
 	| "language_tags"
 	| "locale"
+	| "country"
 	| "boolean"
 	| "number";
 

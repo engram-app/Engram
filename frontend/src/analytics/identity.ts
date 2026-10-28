@@ -9,6 +9,16 @@ import { serverEvents } from "./server-sink";
 // Properties set while capture was off. On re-opt-in the locale effect runs
 // before the identify hook lifts the opt-out and never re-runs, so they are
 // held here and sent after the next identify. Memory only; cleared on sign-out.
+let identified = false;
+let country: string | null = null;
+
+function setCountryOnPerson(): void {
+	const posthog = analyticsClient();
+	if (country && identified && posthog && !posthog.has_opted_out_capturing()) {
+		posthog.setPersonProperties(undefined, { country });
+	}
+}
+
 let held: Record<string, string> | null = null;
 
 // A persisted opt-out belongs to whoever objected, not to this browser: lift it
@@ -25,6 +35,8 @@ export function identifyUser(analyticsId: string): void {
 	resumeCaptureIfAllowed();
 	serverEvents.enable();
 	analyticsClient()?.identify(analyticsId);
+	identified = true;
+	setCountryOnPerson();
 	if (held) {
 		const properties = held;
 		held = null;
@@ -42,6 +54,7 @@ export function stopCapture(): void {
 
 /** Sign-out. `reset()` also clears posthog-js's persisted consent. */
 export function forgetUser(): void {
+	identified = false;
 	held = null;
 	serverEvents.disable();
 	analyticsClient()?.reset();
@@ -59,4 +72,13 @@ export function setPersonProperties(properties: Record<string, string>): void {
 	} else {
 		posthog.setPersonProperties(properties);
 	}
+}
+
+/** The visitor's country (ISO alpha-2), known once /ph/country answers. A super
+ *  property on every event, and a once-only person property after identify.
+ *  PostHog's own geoip sees a Cloudflare egress IP, not the visitor. */
+export function setCountry(code: string): void {
+	country = code;
+	analyticsClient()?.register({ country: code });
+	setCountryOnPerson();
 }

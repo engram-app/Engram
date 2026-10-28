@@ -1,7 +1,7 @@
 import type { PostHog } from "posthog-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setAnalyticsClient } from "./client";
-import { forgetUser, identifyUser, setPersonProperties, stopCapture } from "./identity";
+import { forgetUser, identifyUser, setCountry, setPersonProperties, stopCapture } from "./identity";
 import { serverEvents } from "./server-sink";
 
 // A stand-in that tracks posthog-js's persisted opt-out.
@@ -17,6 +17,7 @@ const posthog = {
 	identify: vi.fn(),
 	reset: vi.fn(),
 	setPersonProperties: vi.fn(),
+	register: vi.fn(),
 };
 setAnalyticsClient(posthog as unknown as PostHog);
 
@@ -79,5 +80,21 @@ describe("server event log consent", () => {
 		stopCapture();
 		forgetUser();
 		expect(disable).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("setCountry", () => {
+	it("registers a super property and sets the person property once identified", () => {
+		setCountry("CN");
+		expect(posthog.register).toHaveBeenCalledWith({ country: "CN" });
+		expect(posthog.setPersonProperties).not.toHaveBeenCalled();
+		identifyUser("u1");
+		expect(posthog.setPersonProperties).toHaveBeenCalledWith(undefined, { country: "CN" });
+	});
+
+	it("sets the person property at once when already identified", () => {
+		identifyUser("u1");
+		setCountry("BR");
+		expect(posthog.setPersonProperties).toHaveBeenCalledWith(undefined, { country: "BR" });
 	});
 });

@@ -1,6 +1,7 @@
 import type { PostHogConfig } from "posthog-js";
 import { whenLoaded } from "@/lib/when-loaded";
 import { setAnalyticsClient } from "./client";
+import { reportCountry } from "./country";
 
 // PostHog — product analytics. Cookieless by `persistence: 'memory'` per
 // [[reference_cookie_audit_2026_05_24]] so the no-banner launch posture
@@ -48,8 +49,13 @@ export async function initAnalytics(key: string): Promise<void> {
 	}
 
 	const { default: posthog } = await whenLoaded(import("posthog-js"));
-	posthog.init(key, posthogInitOptions());
+	const options = posthogInitOptions();
+	posthog.init(key, options);
 	setAnalyticsClient(posthog);
+	// Only the first-party proxy serves /country; a custom host is not ours.
+	if (options.api_host === "/ph") {
+		await reportCountry("/ph");
+	}
 }
 
 /** The exact options passed to `posthog.init`. Exported so a test can pin every
