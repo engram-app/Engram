@@ -206,7 +206,7 @@ defmodule Engram.RuntimeConfig do
   The database's own statement limit on `engram_maintenance` stays the hard
   bound (docs/context/maintenance-db-role.md).
   """
-  @spec maintenance_timeout() :: pos_integer()
+  @spec maintenance_timeout() :: 120_000
   def maintenance_timeout, do: 120_000
 
   @doc """
