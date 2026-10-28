@@ -891,33 +891,29 @@ defmodule Engram.Observability.EmittersTest do
       refute_receive {:posthog_body, _}, 100
     end
 
-    test "$set of plan waits for the privacy policy that announces traits", %{bypass: bypass} do
+    test "$set of plan is sent before the privacy policy takes effect", %{bypass: bypass} do
       Engram.Legal.Seeder.seed()
       sub = insert(:subscription, user: user_with_clerk_id(), tier: "pro", status: "past_due")
 
-      set_policy_effective = fn date ->
-        Repo.update_all(
-          from(v in Engram.Legal.TermsVersion,
-            where: v.document == "privacy_policy" and v.version == "2026-10-12"
-          ),
-          [set: [effective_date: date]],
-          skip_tenant_check: true
-        )
-      end
-
-      event = %{"event_type" => "subscription.past_due", "data" => %{}}
+      Repo.update_all(
+        from(v in Engram.Legal.TermsVersion,
+          where: v.document == "privacy_policy" and v.version == "2026-10-12"
+        ),
+        [set: [effective_date: Date.add(Date.utc_today(), 1)]],
+        skip_tenant_check: true
+      )
 
       expect_captures(bypass)
-      set_policy_effective.(Date.add(Date.utc_today(), 1))
-      :ok = PostHogForwarder.forward_paddle_event(event, sub)
-      assert_receive {:posthog_body, before}, 1_500
-      refute Map.has_key?(before["properties"], "$set")
 
-      set_policy_effective.(Date.add(Date.utc_today(), -1))
-      :ok = PostHogForwarder.forward_paddle_event(event, sub)
-      assert_receive {:posthog_body, after_}, 1_500
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{"event_type" => "subscription.past_due", "data" => %{}},
+          sub
+        )
+
+      assert_receive {:posthog_body, body}, 1_500
       # Dunning is still entitled (`Billing.entitled_statuses/0`).
-      assert after_["properties"]["$set"] == %{
+      assert body["properties"]["$set"] == %{
                "plan" => "pro",
                "subscription_status" => "past_due"
              }

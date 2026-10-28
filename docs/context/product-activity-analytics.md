@@ -80,10 +80,19 @@ already covers sign-in activity.
 ## Person properties (daily, `Engram.Workers.PostHogPersonSync`)
 
 Since privacy policy 2026-10-12, PostHog persons are identified. A daily job
-(06:25 UTC) `$set`s on every live user. It is gated on
-`PersonProperties.policy_in_effect?/0` and sends nothing before 2026-11-11.
+(06:25 UTC) `$set`s on every live, non-opted-out user. The gate is per TRAIT, one
+shared filter, `PersonProperties.shareable_traits/1` (applied in
+`Analytics.set_traits/1`, so every sender goes through it): the identifying
+traits, `email` and `name`, are sent only once `PersonProperties.policy_in_effect?/0`
+is true (2026-11-11). Every other trait is keyed on the pseudonymous hashed
+analytics id and sends now. The HMAC distinct id is derived from the email but is
+not a trait. If the policy lookup fails, identifying traits are held back. The
+seeded `effective_date` is never edited. Senders: `PostHogPersonSync` (below),
+`PersonOriginSync` (`country`, `language`, `device_type` from Clerk / app locale /
+PostHog; `*_source` records the winner) and the Paddle `$set` of `plan` and
+`subscription_status` (no email or name, so it always sends).
 
-- Account: `email`, `name`, `signed_up_at`, `plan` (`free`/`starter`/`pro`,
+- Account: `email` and `name` (after 2026-11-11 only), `signed_up_at`, `plan` (`free`/`starter`/`pro`,
   same rule as `Billing.tier/1`), `subscription_status`.
 - Size: `vault_count`, `total_notes`, `total_note_bytes` (stored size:
   encrypted and maybe compressed), `total_attachments`,

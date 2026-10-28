@@ -19,6 +19,7 @@ defmodule Engram.Analytics.PersonProperties do
   alias Engram.Auth.DeviceRefreshToken
   alias Engram.Billing
   alias Engram.Billing.Subscription
+  alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Notes.NoteBody
   alias Engram.OAuth.Client
@@ -29,10 +30,14 @@ defmodule Engram.Analytics.PersonProperties do
   alias Engram.Vaults.Vault
 
   require Engram.OAuth
+  require Logger
 
   # The privacy version that announced identified analytics. Its seeded
   # effective_date (2026-11-11 in `Engram.Legal.Seeder`) is the "takes effect on
   # November 11, 2026" date the policy text promises; change one, change both.
+  # Until then only the IDENTIFYING traits (`@identifying`: email, name) are
+  # held back; every other trait is keyed on the pseudonymous hashed analytics
+  # id and may be sent now (`shareable_traits/1`).
   # Must stay a version with a future-at-publish effective_date giving 30 days'
   # notice: a nil date would start linking analytics at once, unannounced.
   # `test/engram/analytics/person_properties_test.exs` enforces it.
@@ -41,7 +46,34 @@ defmodule Engram.Analytics.PersonProperties do
   @doc false
   def policy_version, do: @policy_version
 
-  # Identified analytics starts only once the policy announcing it is in
+  # Traits that are directly an email, name or display name. The hashed
+  # distinct id is derived from the email but is not a trait.
+  @identifying [:email, :name, "email", "name"]
+
+  @doc """
+  The traits that may leave now: all of them once the policy is in effect,
+  before that everything except `@identifying`. The one filter every sender
+  routes through (`Engram.Analytics.set_traits/1`). Fails closed: if the policy
+  lookup raises, identifying traits are held back.
+  """
+  @spec shareable_traits(map()) :: map()
+  def shareable_traits(traits) do
+    if policy_in_effect_or_false?(), do: traits, else: Map.drop(traits, @identifying)
+  end
+
+  defp policy_in_effect_or_false? do
+    policy_in_effect?()
+  rescue
+    error ->
+      Logger.warning(
+        "person traits: policy lookup failed, holding back identifying traits: #{inspect(error.__struct__)}",
+        Metadata.with_category(:warning, :oban, [])
+      )
+
+      false
+  end
+
+  # Identifying analytics starts only once the policy announcing it is in
   # effect (its 30-day notice window has run).
   @spec policy_in_effect?() :: boolean()
   def policy_in_effect? do
@@ -50,6 +82,53 @@ defmodule Engram.Analytics.PersonProperties do
       %{effective_date: date} -> Date.compare(date, Date.utc_today()) != :gt
       nil -> false
     end
+  end
+
+  # Canonical person properties, each filled from the best source that has a
+  # value. Order is priority. `$geoip_country_code` is deliberately absent: via
+  # our first-party proxy PostHog geolocates a Cloudflare egress IP (US).
+  @sources %{
+    country: {:country_source, [:clerk]},
+    language: {:language_source, [:app_locale, :browser_language]},
+    device_type: {:device_type_source, [:clerk, :posthog_initial]}
+  }
+
+  @doc """
+  The one resolver for `country`, `language` and `device_type`.
+
+  `candidates` is `%{field => %{source => value}}`; `existing` is the person's
+  current PostHog properties. Returns the traits to `$set`: for each field the
+  highest-priority non-nil value, plus `<field>_source` naming where it came
+  from. A field is skipped when `existing["<field>_source"]` already names a
+  source of higher priority, so a lower source never overwrites a higher one.
+  """
+  @spec resolve(%{atom() => %{atom() => String.t() | nil}}, map()) :: map()
+  def resolve(candidates, existing \\ %{}) do
+    Enum.reduce(@sources, %{}, fn {field, {source_key, order}}, traits ->
+      values = Map.get(candidates, field, %{})
+      best = Enum.find(order, &present?(values[&1]))
+      stored = existing[Atom.to_string(source_key)]
+
+      if best && rank(order, stored) >= rank(order, Atom.to_string(best)) do
+        traits |> Map.put(field, values[best]) |> Map.put(source_key, Atom.to_string(best))
+      else
+        traits
+      end
+    end)
+  end
+
+  defp present?(value), do: is_binary(value) and value != ""
+
+  # Lower number = higher priority. An unknown or missing stored source ranks last.
+  defp rank(order, source) do
+    Enum.find_index(order, &(Atom.to_string(&1) == source)) || length(order)
+  end
+
+  @doc "Live, non-opted-out users with an email: everyone analytics may know about."
+  def trackable_users do
+    from(u in User,
+      where: is_nil(u.deleted_at) and is_nil(u.analytics_opt_out_at) and not is_nil(u.email)
+    )
   end
 
   @doc "`{%{email: _}, traits}` for every live, non-opted-out user, for `Engram.Analytics.set_traits/1`."
@@ -154,7 +233,7 @@ defmodule Engram.Analytics.PersonProperties do
         }
       )
 
-    from(u in User,
+    from(u in trackable_users(),
       left_join: s in Subscription,
       on: s.user_id == u.id,
       left_join: sz in subquery(sizes),
@@ -169,7 +248,6 @@ defmodule Engram.Analytics.PersonProperties do
       on: m.user_id == u.id,
       left_join: um in Meter,
       on: um.user_id == u.id,
-      where: is_nil(u.deleted_at) and is_nil(u.analytics_opt_out_at) and not is_nil(u.email),
       select: %{
         email: u.email,
         name: u.display_name,

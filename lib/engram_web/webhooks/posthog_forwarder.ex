@@ -32,6 +32,7 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   alias Engram.Logger.Metadata
   alias Engram.Webhooks.Idempotency
   alias Engram.Workers.CancelReasonMarker
+  alias Engram.Workers.PersonOriginSync
 
   require Logger
 
@@ -63,6 +64,7 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
     case Accounts.find_by_external_id(clerk_id) do
       {:ok, %{email: email} = user} when is_binary(email) and byte_size(email) > 0 ->
         _ = Engram.Analytics.track(user, event, %{})
+        _ = if event == "user_signed_up", do: PersonOriginSync.enqueue_user(user.id)
         :ok
 
       _ ->
@@ -329,16 +331,12 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   end
 
   # The plan rides as a person trait so it is right the moment it changes,
-  # not a day later. Traits wait for the privacy policy that announces them,
-  # same gate as the daily `PostHogPersonSync`.
+  # not a day later. Pseudonymous (keyed on the hashed id, no email or name),
+  # so it sends before the policy's effective date too.
   defp with_plan_traits(props, sub) do
-    if PersonProperties.policy_in_effect?() do
-      Map.put(props, "$set", %{
-        "plan" => PersonProperties.plan(sub.tier, sub.status),
-        "subscription_status" => sub.status
-      })
-    else
-      props
-    end
+    Map.put(props, "$set", %{
+      "plan" => PersonProperties.plan(sub.tier, sub.status),
+      "subscription_status" => sub.status
+    })
   end
 end

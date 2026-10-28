@@ -27,6 +27,7 @@ defmodule Engram.Analytics do
   alias Engram.Accounts.User
   alias Engram.Analytics.EventLog
   alias Engram.Analytics.Folds
+  alias Engram.Analytics.PersonProperties
   alias Engram.Observability.PostHog
   alias Engram.Workers.PostHogErasure
 
@@ -44,6 +45,10 @@ defmodule Engram.Analytics do
   @doc "Whether analytics is configured (false on self-host, dev and test)."
   @spec enabled?() :: boolean()
   def enabled?, do: PostHog.enabled?()
+
+  @doc "Whether person properties can be READ (personal API key and project id set)."
+  @spec person_reads_enabled?() :: boolean()
+  def person_reads_enabled?, do: PostHog.erasure_enabled?()
 
   # Whether an event goes anywhere: PostHog, our event log, or both.
   defp recording?, do: enabled?() or EventLog.enabled?()
@@ -178,10 +183,24 @@ defmodule Engram.Analytics do
     |> Enum.flat_map(fn {user, traits} ->
       case PostHog.distinct_id(user) do
         nil -> []
-        id -> [{id, traits}]
+        id -> [{id, PersonProperties.shareable_traits(traits)}]
       end
     end)
     |> PostHog.set_people()
+  end
+
+  @doc """
+  The person's current PostHog properties, for `Engram.Analytics.PersonProperties`.
+  `:none` when nothing may be read (opted out, no email); `{:error, _}` when the
+  read failed, which the caller must not treat as an empty person.
+  """
+  @spec person_properties(map()) ::
+          {:ok, map()} | :none | {:error, PostHog.read_error()}
+  def person_properties(user) do
+    case PostHog.distinct_id(user) do
+      nil -> :none
+      id -> PostHog.person_properties(id)
+    end
   end
 
   @doc """

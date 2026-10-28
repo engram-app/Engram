@@ -57,13 +57,59 @@ defmodule Engram.Workers.PostHogPersonSyncTest do
     assert :ok = perform_job(PostHogPersonSync, %{})
   end
 
-  test "sends nothing before the privacy policy that announces it takes effect" do
+  test "before the effective date it sends pseudonymous traits but never email or name" do
     bypass = enable_posthog()
-    Bypass.stub(bypass, "POST", "/batch/", fn _ -> flunk("sent before effective date") end)
-    policy_effective_on(Date.add(Date.utc_today(), 1))
-    insert(:user)
+    capture_batch(bypass)
+    policy_effective_on(Date.add(Date.utc_today(), 5))
+
+    user = insert(:user, email: "early@example.com", display_name: "Early Bird")
+    insert(:subscription, user: user, tier: "pro", status: "active")
+    insert(:vault, user: user)
 
     assert :ok = perform_job(PostHogPersonSync, %{})
+    assert_receive {:batch, batch}, 1_000
+
+    set = person(batch, "early@example.com")["properties"]["$set"]
+    refute Map.has_key?(set, "email")
+    refute Map.has_key?(set, "name")
+    assert set["plan"] == "pro"
+    assert set["vault_count"] == 1
+    assert is_binary(set["signed_up_at"])
+  end
+
+  test "after the effective date email and name are sent" do
+    bypass = enable_posthog()
+    capture_batch(bypass)
+    insert(:user, email: "late@example.com", display_name: "Late Bird")
+
+    assert :ok = perform_job(PostHogPersonSync, %{})
+    assert_receive {:batch, batch}, 1_000
+
+    set = person(batch, "late@example.com")["properties"]["$set"]
+    assert set["email"] == "late@example.com"
+    assert set["name"] == "Late Bird"
+  end
+
+  test "opted-out and deleted users are never sent, before or after the date" do
+    bypass = enable_posthog()
+    capture_batch(bypass)
+
+    for date <- [Date.add(Date.utc_today(), 5), Date.add(Date.utc_today(), -1)] do
+      policy_effective_on(date)
+      insert(:user, email: "out#{date}@example.com", analytics_opt_out_at: DateTime.utc_now())
+      insert(:user, email: "gone#{date}@example.com", deleted_at: DateTime.utc_now())
+      insert(:user, email: "kept#{date}@example.com")
+    end
+
+    assert :ok = perform_job(PostHogPersonSync, %{})
+    assert_receive {:batch, batch}, 1_000
+    emails = Enum.map(batch["batch"], & &1["distinct_id"])
+
+    for date <- [Date.add(Date.utc_today(), 5), Date.add(Date.utc_today(), -1)] do
+      assert PostHog.analytics_id("kept#{date}@example.com") in emails
+      refute PostHog.analytics_id("out#{date}@example.com") in emails
+      refute PostHog.analytics_id("gone#{date}@example.com") in emails
+    end
   end
 
   test "sets account properties on every live user in one batch" do

@@ -20,7 +20,9 @@ defmodule Engram.Workers.PostHogPersonSync do
 
   @impl Oban.Worker
   def perform(%Oban.Job{}) do
-    if Analytics.enabled?() and PersonProperties.policy_in_effect?() do
+    # Identifying traits (email, name) are filtered inside `Analytics.set_traits/1`
+    # until the policy is in effect; the rest send now.
+    if Analytics.enabled?() do
       PersonProperties.all() |> Analytics.set_traits()
     else
       :ok

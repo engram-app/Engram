@@ -75,4 +75,71 @@ defmodule Engram.Auth.Clerk.HttpApi do
         end
     end
   end
+
+  # GET /v1/sessions?user_id= returns `latest_activity` per session with
+  # `country`, `device_type` (a model string such as "iPhone", NOT a class) and
+  # `is_mobile`; field names are verbatim from Clerk's OpenAPI spec. Clerk does
+  # not document an order guarantee for the list, so we read a handful and take
+  # the session with the greatest `last_active_at`. ip_address and city are
+  # dropped here: country granularity is all the privacy policy allows.
+  @impl true
+  def latest_activity(clerk_user_id) when is_binary(clerk_user_id) do
+    base_url = Application.get_env(:engram, :clerk_api_base_url, @default_base_url)
+
+    case Application.get_env(:engram, :clerk_secret_key) do
+      blank when blank in [nil, ""] ->
+        {:error, :missing_secret}
+
+      secret ->
+        case Req.get("#{base_url}/sessions",
+               params: [user_id: clerk_user_id, limit: 10],
+               auth: {:bearer, secret},
+               receive_timeout: 10_000,
+               retry: false
+             ) do
+          {:ok, %{status: 200, body: body}} -> {:ok, parse_activity(body)}
+          {:ok, %{status: status}} -> {:error, {:http_error, status}}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  # Unpaginated, the endpoint returns a bare array; paginated, `%{"data" => [...]}`.
+  defp parse_activity(%{"data" => sessions}), do: parse_activity(sessions)
+
+  defp parse_activity(sessions) when is_list(sessions) do
+    sessions
+    |> Enum.filter(&match?(%{"latest_activity" => %{}}, &1))
+    |> Enum.max_by(&(&1["last_active_at"] || 0), &>=/2, fn -> nil end)
+    |> case do
+      %{"latest_activity" => activity} ->
+        %{country: country(activity["country"]), device_type: device_class(activity)}
+
+      nil ->
+        nil
+    end
+  end
+
+  defp parse_activity(_other), do: nil
+
+  # Two-letter code only. Anything else (a country name, junk) is dropped, not
+  # guessed at: a wrong country is worse than a missing one.
+  defp country(code) when is_binary(code) do
+    code = String.upcase(code)
+    if code =~ ~r/^[A-Z]{2}$/, do: code
+  end
+
+  defp country(_), do: nil
+
+  # The class PostHog's `$device_type` uses: mobile, desktop or tablet.
+  defp device_class(activity) do
+    model = activity["device_type"] |> to_string() |> String.downcase()
+
+    cond do
+      model =~ ~r/ipad|tablet/ -> "tablet"
+      activity["is_mobile"] == true -> "mobile"
+      activity["is_mobile"] == false -> "desktop"
+      true -> nil
+    end
+  end
 end

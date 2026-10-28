@@ -7,4 +7,13 @@ defmodule Engram.Auth.Clerk.Api do
 
   @callback delete_user(clerk_user_id :: String.t()) ::
               :ok | {:error, term()}
+
+  @doc """
+  The user's newest session activity, country level only (no IP, no city):
+  `{:ok, %{country: "US" | nil, device_type: "mobile" | "desktop" | ... | nil}}`,
+  or `{:ok, nil}` when Clerk has no session for them.
+  """
+  @callback latest_activity(clerk_user_id :: String.t()) ::
+              {:ok, %{country: String.t() | nil, device_type: String.t() | nil} | nil}
+              | {:error, term()}
 end
