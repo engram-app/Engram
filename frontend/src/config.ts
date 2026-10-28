@@ -35,7 +35,6 @@ function normalize(raw: Record<string, unknown>): EngramConfig {
 		billingEnabled: raw.billingEnabled === true,
 		apiBase: typeof raw.apiBase === "string" ? raw.apiBase : "",
 		wsBase: typeof raw.wsBase === "string" ? raw.wsBase : "",
-		tracingEnabled: raw.tracingEnabled === true,
 		bootstrap: normalizeBootstrap(raw.bootstrap),
 	};
 }
@@ -49,7 +48,6 @@ function defaultConfig(): EngramConfig {
 		billingEnabled: import.meta.env.VITE_BILLING_ENABLED === "true",
 		apiBase: import.meta.env.VITE_API_BASE ?? "",
 		wsBase: import.meta.env.VITE_WS_BASE ?? "",
-		tracingEnabled: import.meta.env.VITE_TRACING_ENABLED === "true",
 	};
 }
 
@@ -64,12 +62,6 @@ export interface EngramConfig {
 	// Runtime WebSocket base URL. Empty string = same-origin (selfhost).
 	// A full wss:// URL points Phoenix Socket at the cross-origin backend.
 	wsBase: string;
-	// Distributed trace beacon dark-launch gate (default false). When true,
-	// authFetch injects a `traceparent` header and the client-side beacon
-	// buffer reports spans to `POST /api/telemetry/spans`. Self-host and
-	// OTEL-disabled deployments leave this false, so no id is generated, no
-	// header is added, and nothing is ever enqueued.
-	tracingEnabled: boolean;
 	// Self-host SSR-injected bootstrap state. `null` under Clerk; `undefined`
 	// when the config didn't ship one (CF Pages serves static config.json
 	// without a bootstrap block; Vite dev; older Phoenix build), in which

@@ -95,7 +95,7 @@ defmodule Engram.Crypto.Envelope do
   @spec compression_on?() :: boolean()
   def compression_on?,
     do:
-      Application.get_env(:engram, :envelope_compression, false) == true and
+      Application.get_env(:engram, :envelope_compression, true) == true and
         Engram.Crypto.CompressionGate.allowed?()
 
   @spec encrypt(binary(), <<_::256>>) :: {binary(), binary()}

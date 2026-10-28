@@ -90,9 +90,7 @@ error → use defaults).
 
    **Saas too:** add the field to `BootstrapConfig` in
    `frontend/scripts/bootstrap-config.ts`, or saas never receives it and
-   `normalize()` silently falls back to the default. (`tracingEnabled` is in
-   neither `SpaController` nor `bootstrap-config.ts` today, so it is false
-   everywhere.)
+   `normalize()` silently falls back to the default.
 
 4. **Consumer**, read it via `useConfig()`; non-React code uses a module
    singleton set in `BootstrapGate` (as `getApiBase()` does). For

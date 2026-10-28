@@ -168,7 +168,6 @@ const CONFIG: EngramConfig = {
 	billingEnabled: true,
 	apiBase: "",
 	wsBase: "",
-	tracingEnabled: false,
 };
 
 function status(over: Partial<OnboardingStatus> = {}): OnboardingStatus {

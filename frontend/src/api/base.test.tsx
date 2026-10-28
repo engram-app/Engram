@@ -11,7 +11,6 @@ function makeConfig(apiBase: string, wsBase = ""): EngramConfig {
 		billingEnabled: false,
 		apiBase,
 		wsBase,
-		tracingEnabled: false,
 	};
 }
 

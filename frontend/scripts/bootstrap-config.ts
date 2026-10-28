@@ -13,7 +13,6 @@ export interface BootstrapConfig {
 	authProvider: string;
 	clerkPublishableKey: string;
 	billingEnabled: boolean;
-	clerkWaitlistMode: boolean;
 	apiBase: string;
 	wsBase: string;
 }
@@ -26,7 +25,6 @@ export function bootstrapConfigFromEnv(env: Env): {
 		authProvider: env.VITE_AUTH_PROVIDER ?? "clerk",
 		clerkPublishableKey: env.VITE_CLERK_PUBLISHABLE_KEY ?? "",
 		billingEnabled: env.VITE_BILLING_ENABLED === "true",
-		clerkWaitlistMode: env.VITE_CLERK_WAITLIST_MODE === "true",
 		apiBase: env.VITE_API_BASE ?? "",
 		wsBase: env.VITE_WS_BASE ?? "",
 	};

@@ -11,13 +11,13 @@ The web app: an Obsidian-style note browser, viewer, and editor served at `app.e
 ## Stack
 - **React 19** + **react-router 8** (data router) + **TanStack Query 5** (server state) + **Vite 8** (rolldown).
 - Tailwind + shadcn/ui (`components/ui`); **CodeMirror 6** via `@atomic-editor/editor` + yCollab (editor); **remark/rehype** (viewer); **Clerk** (saas auth); **Paddle.js** (billing).
-- Observability: Sentry (opt-in `VITE_SENTRY_DSN`, dynamic import), Cloudflare Web Analytics (cookieless, `VITE_CF_BEACON_TOKEN`), PostHog (`persistence:'memory'`, autocapture off, dynamic import, `identify` in the auth provider).
+- Observability: Sentry (opt-in `VITE_SENTRY_DSN`, dynamic import), PostHog (`persistence:'memory'`, autocapture off, dynamic import, `identify` in the auth provider).
 
 ## Bootstrap chain (`src/main.tsx`)
 `RootErrorBoundary` → `StrictMode` → `BootstrapGate` (`use(configPromise)` suspends until config resolves) → `setApiBase/setWsBase` (module singletons, set BEFORE any child mounts) → provider stack: `ConfigProvider` › `ThemeProvider` › `AuthProvider` (clerk **or** local, by `config.authProvider`) › `QueryClientProvider` › `RouterProvider`. One auth provider is instantiated per load; the other never downloads.
 
 ## Config (`src/config.ts`, `config-context.tsx`)
-`EngramConfig` = `{ authProvider, clerkPublishableKey, billingEnabled, apiBase, wsBase, tracingEnabled, bootstrap? }`. Resolution order:
+`EngramConfig` = `{ authProvider, clerkPublishableKey, billingEnabled, apiBase, wsBase, bootstrap? }`. Resolution order:
 1. `window.__ENGRAM_CONFIG__`. Self-host: Phoenix injects it per request. Saas: the `build:saas` Vite plugin inlines it into `index.html` (`VITE_INLINE_BOOTSTRAP_CONFIG=1`, mapping in `scripts/bootstrap-config.ts`). See `spa-state-injection.md`.
 2. `/config.json` fallback.
 3. `VITE_*` env defaults (Vite dev; loud console error in prod if both above fail).
@@ -40,7 +40,7 @@ Tree:
 
 ## Data / realtime / sync
 - `api/base.ts`: `apiBase`/`wsBase` singletons + `joinApiUrl`/`joinWsUrl` + `useApiUrl`/`useWsUrl` hooks.
-- `api/client.ts`: singleton `api` object; `authFetch` sets `Authorization`, `X-Vault-ID`, `X-Device-Id` (`device-id.ts`), and `traceparent` when `tracingEnabled`.
+- `api/client.ts`: singleton `api` object; `authFetch` sets `Authorization`, `X-Vault-ID`, `X-Device-Id` (`device-id.ts`).
 - `api/query-client.ts` + `api/queries.ts`: TanStack Query client + server-state hooks. One `['vault-tree']` query feeds the sidebar; see `folder-tree-optimistic-rebuild.md`.
 - `api/channel.ts` + `api/use-channel.ts`: Phoenix Channels for realtime (`note_changed` fan-out, coalesced into tree patches via `api/vault-tree-patch.ts`). See `channel-event-contract.md`.
 - `src/crdt/` + `api/crdt-ops.ts`: the CRDT sync client (manager, session, durable op-queue, genesis).
@@ -68,7 +68,7 @@ Tree:
 - The dual-runtime is **config-driven, not build-driven** at the component level: behavior flips on resolved `EngramConfig`. Don't hardcode saas-only assumptions.
 - `apiBase`/`wsBase` are module singletons set in `BootstrapGate` before first render; non-React callers use `getApiBase()`/`getWsBase()`, not a hook.
 - It is NOT SSR. First-paint-correct UI comes from injected config state (`spa-state-injection.md`).
-- **Every new request header the SPA sends cross-origin must be added to `access-control-allow-headers` in `lib/engram_web/plugs/cors.ex` in the same change**, or the saas preflight fails and every API call dies (2026-06-20: `x-device-id`). Latent instance: `authFetch` sets `traceparent` when `tracingEnabled`, and cors.ex does not allow it. Prod is safe only because `scripts/bootstrap-config.ts` does not ship `tracingEnabled`, so it resolves false (`VITE_TRACING_ENABLED=true` in `.env.production` is dead). Wiring it in without updating cors.ex breaks saas.
+- **Every new request header the SPA sends cross-origin must be added to `access-control-allow-headers` in `lib/engram_web/plugs/cors.ex` in the same change**, or the saas preflight fails and every API call dies (2026-06-20: `x-device-id`).
 
 ## References
 - `spa-state-injection.md`, `folder-tree-optimistic-rebuild.md`, `read-path-decrypt-perf.md`, `billing-tier-frontend-contract.md`, `channel-event-contract.md`, `frontend-login-boot-perf.md`

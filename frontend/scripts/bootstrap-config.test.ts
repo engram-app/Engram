@@ -5,7 +5,6 @@ const SAAS_ENV = {
 	VITE_AUTH_PROVIDER: "clerk",
 	VITE_CLERK_PUBLISHABLE_KEY: "pk_live_x",
 	VITE_BILLING_ENABLED: "true",
-	VITE_CLERK_WAITLIST_MODE: "false",
 	VITE_API_BASE: "https://api.engram.page",
 	VITE_WS_BASE: "wss://api.engram.page",
 };
@@ -18,7 +17,6 @@ describe("bootstrapConfigFromEnv", () => {
 			authProvider: "clerk",
 			clerkPublishableKey: "pk_live_x",
 			billingEnabled: true,
-			clerkWaitlistMode: false,
 			apiBase: "https://api.engram.page",
 			wsBase: "wss://api.engram.page",
 		});
@@ -29,14 +27,12 @@ describe("bootstrapConfigFromEnv", () => {
 		expect(config.authProvider).toBe("clerk");
 	});
 
-	it("coerces billingEnabled/clerkWaitlistMode to strict booleans", () => {
+	it("coerces billingEnabled to a strict boolean", () => {
 		const { config } = bootstrapConfigFromEnv({
 			...SAAS_ENV,
 			VITE_BILLING_ENABLED: "false",
-			VITE_CLERK_WAITLIST_MODE: "true",
 		});
 		expect(config.billingEnabled).toBe(false);
-		expect(config.clerkWaitlistMode).toBe(true);
 	});
 
 	it("reports a missing clerk publishable key", () => {

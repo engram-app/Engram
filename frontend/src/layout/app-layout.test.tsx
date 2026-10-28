@@ -15,7 +15,6 @@ const testConfig: EngramConfig = {
 	billingEnabled: true,
 	apiBase: "",
 	wsBase: "",
-	tracingEnabled: false,
 };
 
 vi.mock("../api/queries", async () => {
