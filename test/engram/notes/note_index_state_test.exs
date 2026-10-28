@@ -257,6 +257,7 @@ defmodule Engram.Notes.NoteIndexStateTest do
         Repo.one!(from(n in Note, select: n.id, order_by: n.id, limit: 1),
           skip_tenant_check: true
         )
+
       test = self()
       id = {__MODULE__, make_ref()}
 

@@ -599,11 +599,12 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   defp budget_users(caps, limit, now) do
     repo = Repo.maintenance()
     tick = div(DateTime.to_unix(now), 300)
-    # Daily GROUP BYs over every note (the re-verify hour only): the report
-    # ceiling, not the 15 s default (#2276).
+    # Daily GROUP BYs over every note (the re-verify hour only): the
+    # maintenance pool's ceiling, explicit so self-host (where this is
+    # `Engram.Repo`, 15 s) gets it too (#2276).
     per_user = fn query ->
       Repo.cross_tenant(fn ->
-        repo.all(query, timeout: Engram.Repo.Maintenance.report_timeout())
+        repo.all(query, timeout: Engram.RuntimeConfig.maintenance_timeout())
       end)
     end
 

@@ -365,9 +365,12 @@ again. Both grow with the table and with how DONE the job is, and both hit the
 - A predicate an index serves (a partial index whose WHERE the query implies)
   may page directly; prove it with `Engram.QueryPlan`.
 - Never `timeout: :infinity`, and do not raise the timeout to make a sweep
-  fit: the 15 s default is the guard. The one exception is a deliberate daily
-  full aggregate (a report), which uses
-  `Engram.Repo.Maintenance.report_timeout/0` and names its ceiling.
+  fit: the pool's default is the guard (15 s on `Engram.Repo`,
+  `Engram.RuntimeConfig.maintenance_timeout/0` on the maintenance pool). A
+  window statement should take milliseconds; one near either limit is a
+  window too large or a predicate outside the window. A deliberate daily
+  full aggregate (a report) passes `maintenance_timeout/0` explicitly, so
+  self-host, where the maintenance pool is `Engram.Repo`, gets it too.
 - Test it: `Engram.QueryRecorder.unwindowed/4` lists any statement that reads
   a table outside a window.
 

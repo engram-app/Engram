@@ -142,8 +142,10 @@ defmodule Engram.Analytics.PersonProperties do
   @spec by_user() :: [{Ecto.UUID.t(), map()}]
   def by_user do
     repo = Repo.maintenance()
-    # Daily full aggregates: the report ceiling, not the 15 s default.
-    timeout = Engram.Repo.Maintenance.report_timeout()
+    # Daily full aggregates, read whole by design: the maintenance pool's
+    # ceiling, explicit so self-host (where this is `Engram.Repo`, 15 s)
+    # gets it too (#2276).
+    timeout = Engram.RuntimeConfig.maintenance_timeout()
 
     {rows, oauth} =
       Repo.cross_tenant(fn ->
