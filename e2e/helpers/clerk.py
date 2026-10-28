@@ -83,18 +83,20 @@ class ClerkClient:
     all via the Backend API, no browser needed.
     """
 
+    # Every user ANY ClerkClient in this process creates, tracked so session
+    # teardown deletes the exact set — even ones whose id never reached the
+    # caller's try/finally, whose test crashed before its own cleanup, or that
+    # were made by a test's own ClerkClient (tests 32/72-75/89 build their own;
+    # a per-instance set leaked every one of those and filled the 100-user
+    # quota in an hour). Process-wide, so it never races a sibling run's users.
+    # The orphan reaper stays as the backstop for hard crashes.
+    created_user_ids: set[str] = set()
+
     def __init__(self, secret_key: str):
         self.session = requests.Session()
         self.session.headers["Authorization"] = f"Bearer {secret_key}"
         self.session.headers["Content-Type"] = "application/json"
         self.base_url = "https://api.clerk.dev/v1"
-        # Every user this client creates, tracked so session teardown can delete
-        # the exact set it made — even ones whose id never reached the caller's
-        # try/finally (readiness-probe timeout) or whose test crashed before its
-        # own cleanup. Scoped to THIS client's creations, so it never races a
-        # sibling run's users. The hourly orphan reaper stays as the backstop
-        # for hard crashes that skip teardown entirely.
-        self.created_user_ids: set[str] = set()
         # Clerk rate-limits the Backend API (429). Without backoff, a burst of
         # e2e runs fails create/delete hard mid-suite — which then skips the
         # per-test cleanup and leaks users (compounding the quota problem).
@@ -412,6 +414,22 @@ class ClerkClient:
             except Exception as e:
                 logger.warning("Tracked-user cleanup failed for %s: %s", user_id, e)
         return deleted
+
+    def count_users(self) -> int:
+        """Total users in the Clerk instance (cheap; no pagination)."""
+        resp = self.session.get(f"{self.base_url}/users/count", timeout=15)
+        resp.raise_for_status()
+        return resp.json()["total_count"]
+
+    def assert_quota_headroom(self, limit: int = 100, threshold: int = 90) -> None:
+        """Fail fast with a clear message when the instance is nearly full,
+        instead of an opaque 403 ``user_quota_exceeded`` mid-suite."""
+        n = self.count_users()
+        if n >= threshold:
+            raise ClerkQuotaError(
+                f"Clerk e2e instance has {n}/{limit} users; "
+                "run e2e/scripts/cleanup_clerk_users.py"
+            )
 
     def list_users(self, limit: int = 100, offset: int = 0) -> list[dict]:
         """List Clerk users with pagination."""

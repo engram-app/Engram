@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 from helpers.api import ApiClient
-from helpers.clerk import e2e_email
+from helpers.clerk import ClerkQuotaError, e2e_email
 from helpers.auth_provider import get_auth_provider, ClerkAuthProvider
 from helpers.cdp import SIMULATED_SWITCH_VAULT_ID
 from helpers.billing import grant_test_plan
@@ -335,6 +335,12 @@ def auth_provider():
     `e2e/scripts/cleanup_clerk_users.py` tool.
     """
     provider = get_auth_provider(API_URL)
+    clerk_client = getattr(provider, "clerk_client", None)
+    if clerk_client is not None:
+        try:
+            clerk_client.assert_quota_headroom()
+        except ClerkQuotaError as e:
+            pytest.exit(str(e), returncode=3)
     if _WORKER == 0:
         # Scope sweep to THIS run+job namespace — never touch sibling runs'
         # OR sibling jobs' users (issues #160, #869). Orphans from crashed
