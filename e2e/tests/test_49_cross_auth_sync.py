@@ -72,6 +72,7 @@ _TRACE_JS = """
   if (se.crdt) {
     wrap(se.crdt, 'mergeLocalEditFromBase', a => ids().has(a[0]) ? 'merge3 base=' + tail(a[1]) + ' srv=' + tail(a[2]) + ' disk=' + tail(a[3]) : null);
   }
+  if (se.crdt && se.crdt.opts) wrap(se.crdt.opts, 'send', a => ids().has(a[0]) ? 'SEND ' + String(a[1]).length : null);
   wrap(app.vault, 'process', a => isR(a[0] && a[0].path) ? 'process ' + tail(a[1](''))  : null);
   return 'armed';
 })()
@@ -238,7 +239,13 @@ async def test_rapid_api_edits_final_content_arrives(
 
     # Final content should arrive
     t0 = time.monotonic()
-    wait_for_content(vault_b, path, "Version 5 of 5", timeout=RT_TIMEOUT)
+    try:
+        wait_for_content(vault_b, path, "Version 5 of 5", timeout=RT_TIMEOUT)
+    except BaseException:
+        logger.error("REPRO2271 server=%r", api_sync.get_note(path))
+        logger.error("REPRO2271 B engine: %s", await _trace_dump(cdp_b, path))
+        logger.error("REPRO2271 A engine: %s", await _trace_dump(cdp_a, path))
+        raise
     _log_latency("rapid_edits_final", t0)
 
     final = read_note(vault_b, path)
