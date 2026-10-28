@@ -1,6 +1,6 @@
 defmodule Engram.Workers.PostHogPersonSync do
   @moduledoc """
-  Daily push of the account facts of every live user who may be identified to their PostHog person, so
+  Daily push of every live user's account facts to their PostHog person, so
   PostHog can segment by plan, size and signup date.
 
   Self-healing by construction: each run re-sends the full current state, so a
@@ -15,23 +15,13 @@ defmodule Engram.Workers.PostHogPersonSync do
   alias Engram.Analytics
   alias Engram.Analytics.PersonProperties
 
-  require Logger
-
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
 
   @impl Oban.Worker
   def perform(%Oban.Job{}) do
-    if Analytics.enabled?() do
-      # Per user: everyone once the policy is in effect, before that only users
-      # who accepted it (`PersonProperties.identifiable_users/0`).
-      people = PersonProperties.all()
-
-      Logger.info(
-        "PostHogPersonSync: sent=#{length(people)} gated=#{PersonProperties.gated_count()}"
-      )
-
-      Analytics.set_traits(people)
+    if Analytics.enabled?() and PersonProperties.policy_in_effect?() do
+      PersonProperties.all() |> Analytics.set_traits()
     else
       :ok
     end

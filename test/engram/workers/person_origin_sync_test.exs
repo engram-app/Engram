@@ -119,49 +119,6 @@ defmodule Engram.Workers.PersonOriginSyncTest do
     assert :ok = perform_job(PersonOriginSync, %{"user_id" => user.id})
   end
 
-  describe "before the policy's effective date" do
-    setup %{bypass: bypass} do
-      policy_effective_on(Date.add(Date.utc_today(), 5))
-      posthog(bypass, %{})
-      :ok
-    end
-
-    defp accept_policy(user) do
-      insert(:agreement,
-        user: user,
-        document: "privacy_policy",
-        version: Engram.Analytics.PersonProperties.policy_version()
-      )
-    end
-
-    test "a user who accepted is synced" do
-      user = insert(:user, email: "yes@example.com", external_id: "user_y", locale: "de")
-      accept_policy(user)
-      expect(ApiMock, :latest_activity, fn _ -> {:ok, %{country: "DE", device_type: nil}} end)
-
-      assert :ok = perform_job(PersonOriginSync, %{"user_id" => user.id})
-      assert set_for("yes@example.com")["country"] == "DE"
-    end
-
-    test "a user who did not is not, and an opted-out acceptor is not", %{bypass: bypass} do
-      Bypass.stub(bypass, "POST", "/batch/", fn _ -> flunk("sent a gated user") end)
-      no = insert(:user, external_id: "user_n", locale: "de")
-
-      out =
-        insert(:user,
-          external_id: "user_o",
-          locale: "de",
-          analytics_opt_out_at: DateTime.utc_now()
-        )
-
-      accept_policy(out)
-
-      assert :ok = perform_job(PersonOriginSync, %{"user_id" => no.id})
-      assert :ok = perform_job(PersonOriginSync, %{"user_id" => out.id})
-      assert :ok = perform_job(PersonOriginSync, %{"backfill" => true})
-    end
-  end
-
   test "backfill covers Clerk users only", %{bypass: bypass} do
     posthog(bypass, %{})
     insert(:user, email: "f@example.com", external_id: "user_f", locale: "ja")

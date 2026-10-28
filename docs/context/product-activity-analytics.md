@@ -80,19 +80,8 @@ already covers sign-in activity.
 ## Person properties (daily, `Engram.Workers.PostHogPersonSync`)
 
 Since privacy policy 2026-10-12, PostHog persons are identified. A daily job
-(06:25 UTC) `$set`s on every live user who may be identified. The gate is PER
-USER, one shared predicate in `PersonProperties`: a user may be identified when
-`policy_in_effect?/0` is true (2026-11-11 onward, everyone) OR they have a
-`user_agreements` row for privacy policy 2026-10-12 (written at signup, so every
-user who signed up after it was published). Users who signed up earlier and never
-accepted stay gated until 2026-11-11. Batch senders use
-`PersonProperties.identifiable_users/0` (one SQL scope, opt-out and soft-delete
-already excluded); single-user senders use `may_identify?/1`. Senders under this
-gate: `PostHogPersonSync` (below), `PersonOriginSync` (`country`, `language`,
-`device_type` from Clerk/app locale/PostHog) and the Paddle `$set` of `plan` and
-`subscription_status`. The seeded `effective_date` is never edited. Both jobs log
-`sent=` / `gated=` counts. The `DailySnapshot` read of the same facts is our own
-data and takes every trackable user.
+(06:25 UTC) `$set`s on every live user. It is gated on
+`PersonProperties.policy_in_effect?/0` and sends nothing before 2026-11-11.
 
 - Account: `email`, `name`, `signed_up_at`, `plan` (`free`/`starter`/`pro`,
   same rule as `Billing.tier/1`), `subscription_status`.

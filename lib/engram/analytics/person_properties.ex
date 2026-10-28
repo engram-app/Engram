@@ -24,7 +24,6 @@ defmodule Engram.Analytics.PersonProperties do
   alias Engram.OAuth.Client
   alias Engram.OAuth.RefreshToken
   alias Engram.Onboarding.Action
-  alias Engram.Onboarding.Agreement
   alias Engram.Repo
   alias Engram.UsageMeters.Meter
   alias Engram.Vaults.Vault
@@ -51,61 +50,6 @@ defmodule Engram.Analytics.PersonProperties do
       %{effective_date: date} -> Date.compare(date, Date.utc_today()) != :gt
       nil -> false
     end
-  end
-
-  @doc """
-  Whether `user` may be identified in PostHog: the policy is in effect for
-  everyone, OR this user accepted the policy version that announces identified
-  analytics (`user_agreements`, written at signup for every user who signed up
-  after it was published). Opt-out and deletion are NOT checked here; callers
-  pair this with `Analytics` (opted out => no distinct id) and a live-user read.
-  One indexed lookup; batch paths use `identifiable_users/0` instead.
-  """
-  @spec may_identify?(User.t()) :: boolean()
-  def may_identify?(%User{id: id}) do
-    policy_in_effect?() or
-      Repo.cross_tenant(fn ->
-        Repo.maintenance().exists?(accepted_policy(id))
-      end)
-  end
-
-  defp accepted_policy(user_id) do
-    from(a in Agreement,
-      where:
-        a.user_id == ^user_id and a.document == "privacy_policy" and a.version == ^@policy_version
-    )
-  end
-
-  @doc """
-  `trackable_users/0` narrowed to who may be identified now: everyone once the
-  policy is in effect, else only users with an acceptance row for it. One SQL
-  scope for every batch sender, so the gate cannot drift between them.
-  """
-  def identifiable_users do
-    if policy_in_effect?() do
-      trackable_users()
-    else
-      from(u in trackable_users(),
-        where:
-          exists(
-            from(a in Agreement,
-              where:
-                a.user_id == parent_as(:user).id and a.document == "privacy_policy" and
-                  a.version == ^@policy_version
-            )
-          )
-      )
-    end
-  end
-
-  @doc "How many trackable users are still gated (no acceptance, policy not yet in effect)."
-  @spec gated_count() :: non_neg_integer()
-  def gated_count do
-    repo = Repo.maintenance()
-
-    Repo.cross_tenant(fn ->
-      repo.aggregate(trackable_users(), :count) - repo.aggregate(identifiable_users(), :count)
-    end)
   end
 
   # Canonical person properties, each filled from the best source that has a
@@ -151,40 +95,29 @@ defmodule Engram.Analytics.PersonProperties do
   @doc "Live, non-opted-out users with an email: everyone analytics may know about."
   def trackable_users do
     from(u in User,
-      as: :user,
       where: is_nil(u.deleted_at) and is_nil(u.analytics_opt_out_at) and not is_nil(u.email)
     )
   end
 
   @doc "`{%{email: _}, traits}` for every live, non-opted-out user, for `Engram.Analytics.set_traits/1`."
   @spec all() :: [{map(), map()}]
-  def all,
-    do:
-      Enum.map(by_user(:identifiable), fn {_user_id, traits} ->
-        {%{email: traits.email}, traits}
-      end)
+  def all, do: Enum.map(by_user(), fn {_user_id, traits} -> {%{email: traits.email}, traits} end)
 
   @doc """
   `{user_id, traits}` for every live, non-opted-out user: the same facts as
-  `all/0`, keyed by user id (`Engram.Workers.DailySnapshot`, which is our own
-  data and never leaves, so it takes every trackable user). `:identifiable`
-  narrows to who may be sent to PostHog now (`identifiable_users/0`).
+  `all/0`, keyed by user id (`Engram.Workers.DailySnapshot`).
   """
-  @spec by_user(:trackable | :identifiable) :: [{Ecto.UUID.t(), map()}]
-  def by_user(scope \\ :trackable) do
+  @spec by_user() :: [{Ecto.UUID.t(), map()}]
+  def by_user do
     repo = Repo.maintenance()
-    users = if scope == :identifiable, do: identifiable_users(), else: trackable_users()
-
-    {rows, oauth} =
-      Repo.cross_tenant(fn -> {repo.all(query(users)), repo.all(oauth_clients())} end)
-
+    {rows, oauth} = Repo.cross_tenant(fn -> {repo.all(query()), repo.all(oauth_clients())} end)
     oauth = Enum.group_by(oauth, &elem(&1, 0), &elem(&1, 1))
     Enum.map(rows, &{&1.user_id, to_traits(&1, Map.get(oauth, &1.user_id, []))})
   end
 
   # Cross-tenant on purpose: one aggregate over every user. Maintenance repo so
   # RLS does not hide other tenants' vaults and attachments.
-  defp query(users) do
+  defp query do
     # Deleted vaults count toward first_vault_at: it is when they started.
     first_vault =
       from(v in Vault, group_by: v.user_id, select: %{user_id: v.user_id, at: min(v.created_at)})
@@ -268,7 +201,7 @@ defmodule Engram.Analytics.PersonProperties do
         }
       )
 
-    from(u in users,
+    from(u in trackable_users(),
       left_join: s in Subscription,
       on: s.user_id == u.id,
       left_join: sz in subquery(sizes),

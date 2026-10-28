@@ -322,7 +322,7 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   defp track_sub(%Subscription{} = sub, event, props) do
     case Accounts.get_user(sub.user_id) do
       %{email: email} = user when is_binary(email) and byte_size(email) > 0 ->
-        _ = Engram.Analytics.track(user, event, with_plan_traits(props, sub, user))
+        _ = Engram.Analytics.track(user, event, with_plan_traits(props, sub))
         :ok
 
       _ ->
@@ -332,9 +332,9 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
 
   # The plan rides as a person trait so it is right the moment it changes,
   # not a day later. Traits wait for the privacy policy that announces them,
-  # same per-user gate as the daily `PostHogPersonSync`.
-  defp with_plan_traits(props, sub, user) do
-    if PersonProperties.may_identify?(user) do
+  # same gate as the daily `PostHogPersonSync`.
+  defp with_plan_traits(props, sub) do
+    if PersonProperties.policy_in_effect?() do
       Map.put(props, "$set", %{
         "plan" => PersonProperties.plan(sub.tier, sub.status),
         "subscription_status" => sub.status
