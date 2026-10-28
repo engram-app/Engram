@@ -46,9 +46,28 @@ defmodule Engram.Workers.PersonOriginSync do
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
 
-  @doc "Start the one-time backfill."
+  @incomplete [:available, :scheduled, :executing, :retryable]
+
+  @doc """
+  Start the one-time backfill (run by `DataMigrations.PersonOriginBackfill`).
+  The head is `unique` on the `backfill` flag while ANY backfill job is
+  incomplete, so two concurrent starts yield one chain. It carries a fresh
+  `chain` token that every successor inherits, so a restarted chain never
+  collides with the jobs of an older one.
+  """
   @spec backfill() :: {:ok, Oban.Job.t()} | {:error, term()}
-  def backfill, do: Oban.insert(new(%{"backfill" => true}))
+  def backfill do
+    Oban.insert(
+      new(%{"backfill" => true, "chain" => Ecto.UUID.generate()},
+        unique: [
+          fields: [:worker, :args],
+          keys: [:backfill],
+          period: :infinity,
+          states: @incomplete
+        ]
+      )
+    )
+  end
 
   @doc "Enqueue one user's sync. Delayed: Clerk has no session yet at `user.created`."
   @spec enqueue_user(Ecto.UUID.t(), non_neg_integer()) :: {:ok, Oban.Job.t()} | {:error, term()}
@@ -62,7 +81,12 @@ defmodule Engram.Workers.PersonOriginSync do
   end
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: args}) do
+  def perform(%Oban.Job{args: args, id: id}) do
+    # A backfill job queued before chain tokens has none: derive it from the
+    # job id so every retry of that job reuses it (a fresh token per retry
+    # would fork the chain once its successor exists).
+    args = if args["backfill"], do: Map.put_new(args, "chain", "legacy-#{id}"), else: args
+
     cond do
       not Analytics.enabled?() ->
         :ok
@@ -104,18 +128,44 @@ defmodule Engram.Workers.PersonOriginSync do
       Enum.each(failed, fn {user, _reason} -> enqueue_user(user.id, 0) end)
     end
 
+    # A failed successor insert fails this batch so Oban retries it: swallowing
+    # it would end the chain on a `completed` job, which the data migration
+    # reads as "backfill finished".
     with :ok <- written do
-      _ = chain_next(users)
-      :ok
+      chain_next(users, args["chain"])
     end
   end
 
-  defp chain_next(users) do
-    if length(users) == @batch do
-      next = %{"backfill" => true, "after" => List.last(users).id}
-      Oban.insert(new(next, schedule_in: @next_batch_in))
+  # `unique` on chain + cursor across every state: a batch retried after it
+  # already inserted its successor (SIGTERM at deploy, then a Lifeline rescue,
+  # 60 min) must not fork the chain. The 2 h window outlives the rescue. The
+  # chain token keeps a restarted chain (new token) from colliding with an old
+  # one's jobs, which would end it on a `completed` head with no successor.
+  defp chain_next(users, chain) when length(users) == @batch do
+    after_id = List.last(users).id
+    next = %{"backfill" => true, "chain" => chain, "after" => after_id}
+
+    job =
+      new(next,
+        schedule_in: @next_batch_in,
+        unique: [
+          fields: [:worker, :args],
+          keys: [:chain, :after],
+          period: 7200,
+          states: Oban.Job.states()
+        ]
+      )
+
+    case insert_fun().(job) do
+      {:ok, %Oban.Job{conflict?: false}} -> :ok
+      # Only this chain's own successor for this cursor counts as inserted.
+      {:ok, %Oban.Job{conflict?: true, args: %{"chain" => ^chain, "after" => ^after_id}}} -> :ok
+      {:ok, other} -> {:error, {:unexpected_successor, other.id}}
+      {:error, _} = error -> error
     end
   end
+
+  defp chain_next(_users, _chain), do: :ok
 
   # Returns the error so Oban retries this one user.
   defp single(user) do
@@ -200,6 +250,9 @@ defmodule Engram.Workers.PersonOriginSync do
 
   defp downcase(value) when is_binary(value), do: String.downcase(value)
   defp downcase(_), do: nil
+
+  # Per-test seam (module is async: false in tests): the successor insert.
+  defp insert_fun, do: Application.get_env(:engram, :person_origin_insert_fun, &Oban.insert/1)
 
   defp clerk_api, do: Application.get_env(:engram, :clerk_api, Engram.Auth.Clerk.HttpApi)
 end

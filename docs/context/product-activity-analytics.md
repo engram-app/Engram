@@ -92,7 +92,8 @@ analytics id and sends now. The HMAC distinct id is derived from the email but i
 not a trait. If the policy lookup fails, identifying traits are held back. The
 seeded `effective_date` is never edited. Senders: `PostHogPersonSync` (below),
 `PersonOriginSync` (`country`, `language`, `device_type` from Clerk / app locale /
-PostHog; `*_source` records the winner) and the Paddle `$set` of `plan` and
+PostHog; `*_source` records the winner; the existing-user backfill runs itself as the
+`PersonOriginBackfill` data migration, see `data-migrations-ledger.md`) and the Paddle `$set` of `plan` and
 `subscription_status` (no email or name, so it always sends).
 
 - Account: `email` and `name` (after 2026-11-11 only), `signed_up_at`, `plan` (`free`/`starter`/`pro`,
