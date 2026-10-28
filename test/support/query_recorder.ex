@@ -59,7 +59,13 @@ defmodule Engram.QueryRecorder do
       send(
         pid,
         {:recorded_query,
-         %{source: meta[:source], sql: meta.query, caller: caller(st), pid: self()}}
+         %{
+           source: meta[:source],
+           sql: meta.query,
+           params: meta[:params] || [],
+           caller: caller(st),
+           pid: self()
+         }}
       )
     end
   end
@@ -104,6 +110,32 @@ defmodule Engram.QueryRecorder do
     |> elem(0)
     |> Enum.reverse()
   end
+
+  @doc """
+  The statements `pid` ran that read `table` with no window bound (#2276):
+  each must be a pure keyset window (a `LIMIT` of at most `window`, no
+  `EXISTS` subquery) or be confined to a list parameter of at most `window`
+  ids (`= ANY(...)`, `IN (...)`). "The next N rows MATCHING a predicate"
+  fails: its LIMIT bounds rows returned, not rows read.
+  """
+  def unwindowed(queries, table, window, pid \\ self()) do
+    for %{sql: sql, params: params, pid: ^pid} <- queries,
+        sql =~ ~r/\b"?#{table}"?\b/,
+        not (keyset_window?(sql, params, window) or confined?(sql, params, window)),
+        do: sql
+  end
+
+  defp keyset_window?(sql, params, window) do
+    case Regex.run(~r/LIMIT \$(\d+)/, sql) do
+      [_, i] -> Enum.at(params, String.to_integer(i) - 1) <= window and not (sql =~ ~r/\bexists\b/i)
+      nil -> false
+    end
+  end
+
+  defp confined?(sql, params, window),
+    do:
+      sql =~ ~r/ANY\(|\bIN \(/ and
+        Enum.any?(params, &(is_list(&1) and &1 != [] and length(&1) <= window))
 
   def format(queries) do
     queries

@@ -150,7 +150,12 @@ defmodule Engram.Indexing.ChunkRows do
   Inside the caller's transaction.
   """
   @spec lock_notes!([Ecto.UUID.t()], keyword()) :: :ok | [Ecto.UUID.t()]
-  def lock_notes!(note_ids, opts \\ []) do
+  def lock_notes!(note_ids, opts \\ [])
+
+  # Nothing to lock: no statement (the ledger asks once per id window).
+  def lock_notes!([], opts), do: if(Keyword.get(opts, :skip_locked, false), do: [], else: :ok)
+
+  def lock_notes!(note_ids, opts) do
     repo = Keyword.get(opts, :repo, Repo)
     skip = if Keyword.get(opts, :skip_locked, false), do: " SKIP LOCKED", else: ""
 

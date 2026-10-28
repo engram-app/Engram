@@ -10,6 +10,7 @@ defmodule Engram.Notes.NoteIndexStateTest do
   alias Engram.DataMigrations.NoteIndexState, as: Backfill
   alias Engram.Notes
   alias Engram.Notes.{Note, NoteIndexState}
+  alias Engram.QueryRecorder
   alias Engram.Repo
 
   setup do
@@ -109,50 +110,6 @@ defmodule Engram.Notes.NoteIndexStateTest do
     assert state(n.id) == nil
   end
 
-  # Every statement the repo runs in `fun` that reads `notes`, as
-  # `{sql, params}`.
-  defp notes_statements(fun) do
-    ref = make_ref()
-    me = self()
-
-    :telemetry.attach(
-      "notes-statements-#{inspect(ref)}",
-      [:engram, :repo, :query],
-      fn _event, _measurements, %{query: sql, params: params}, _ ->
-        if self() == me and Regex.match?(~r/\bnotes\b/, sql), do: send(me, {ref, sql, params})
-      end,
-      nil
-    )
-
-    try do
-      fun.()
-    after
-      :telemetry.detach("notes-statements-#{inspect(ref)}")
-    end
-
-    collect(ref, [])
-  end
-
-  defp collect(ref, acc) do
-    receive do
-      {^ref, sql, params} -> collect(ref, [{sql, params} | acc])
-    after
-      0 -> Enum.reverse(acc)
-    end
-  end
-
-  # A pure keyset window (a LIMIT of at most `batch`, no predicate subquery),
-  # or a statement confined to at most `batch` listed ids.
-  defp windowed?(sql, params, batch) do
-    window? =
-      case Regex.run(~r/LIMIT \$(\d+)/, sql) do
-        [_, i] -> Enum.at(params, String.to_integer(i) - 1) <= batch and not (sql =~ "EXISTS")
-        nil -> false
-      end
-
-    window? or (sql =~ "ANY(" and Enum.any?(params, &(is_list(&1) and length(&1) <= batch)))
-  end
-
   describe "NoteIndexState backfill" do
     test "fills rows written before the trigger, then reports done", %{user: u, vault: v} do
       a = write!(u, v, "A.md", "# A\n\nbody")
@@ -189,17 +146,15 @@ defmodule Engram.Notes.NoteIndexStateTest do
       last = Enum.max_by(notes, & &1.id)
       Repo.query!("DELETE FROM note_index_state WHERE note_id = $1", [Ecto.UUID.dump!(last.id)])
 
-      statements =
-        notes_statements(fn ->
+      {_, queries} =
+        QueryRecorder.record(fn ->
           assert {:more, rows: 1} = Backfill.run_pass(batch: 2)
           assert :done = Backfill.run_pass(batch: 2)
         end)
 
       assert mirrors?(state(last.id), note(last.id))
-      assert statements != []
-
-      for {sql, params} <- statements,
-          do: assert(windowed?(sql, params, 2), "unbounded read of notes: #{sql}")
+      assert Enum.any?(queries, &(&1.sql =~ "notes"))
+      assert QueryRecorder.unwindowed(queries, "notes", 2) == []
     end
 
     test "keyset-pages across batches", %{user: u, vault: v} do
