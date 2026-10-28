@@ -27,6 +27,7 @@ defmodule Engram.Analytics do
   alias Engram.Accounts.User
   alias Engram.Analytics.EventLog
   alias Engram.Analytics.Folds
+  alias Engram.Analytics.PersonProperties
   alias Engram.Observability.PostHog
   alias Engram.Workers.PostHogErasure
 
@@ -182,7 +183,7 @@ defmodule Engram.Analytics do
     |> Enum.flat_map(fn {user, traits} ->
       case PostHog.distinct_id(user) do
         nil -> []
-        id -> [{id, traits}]
+        id -> [{id, PersonProperties.shareable_traits(traits)}]
       end
     end)
     |> PostHog.set_people()

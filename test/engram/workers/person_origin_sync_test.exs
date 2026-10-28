@@ -111,12 +111,19 @@ defmodule Engram.Workers.PersonOriginSyncTest do
     assert :ok = perform_job(PersonOriginSync, %{"user_id" => user.id})
   end
 
-  test "sends nothing before the privacy policy takes effect", %{bypass: bypass} do
+  test "before the effective date country and language still send, but never email or name",
+       %{bypass: bypass} do
+    posthog(bypass, %{})
     policy_effective_on(Date.add(Date.utc_today(), 1))
-    Bypass.stub(bypass, "POST", "/batch/", fn _ -> flunk("sent before effective date") end)
-    user = insert(:user, external_id: "user_e")
+    user = insert(:user, email: "e@example.com", external_id: "user_e", locale: "de")
+    expect(ApiMock, :latest_activity, fn _ -> {:ok, %{country: "DE", device_type: nil}} end)
 
     assert :ok = perform_job(PersonOriginSync, %{"user_id" => user.id})
+    set = set_for("e@example.com")
+    assert set["country"] == "DE"
+    assert set["language"] == "de"
+    refute Map.has_key?(set, "email")
+    refute Map.has_key?(set, "name")
   end
 
   test "backfill covers Clerk users only", %{bypass: bypass} do

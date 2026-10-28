@@ -22,8 +22,9 @@ defmodule Engram.Workers.PersonOriginSync do
   higher one.
 
   Country level only: the Clerk client never returns IP or city. Sends nothing
-  for an opted-out or deleted user, or before the privacy policy that announces
-  identified analytics is in effect. Args are ids only, never emails.
+  for an opted-out or deleted user. These traits are pseudonymous (keyed on the
+  hashed id), so they send before the privacy policy's effective date; email and
+  name never go through here. Args are ids only, never emails.
   """
   use Oban.Worker, queue: :events, max_attempts: 3
 
@@ -63,7 +64,7 @@ defmodule Engram.Workers.PersonOriginSync do
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
     cond do
-      not Analytics.enabled?() or not PersonProperties.policy_in_effect?() ->
+      not Analytics.enabled?() ->
         :ok
 
       # The stored `<field>_source` is read from PostHog's persons API, which
