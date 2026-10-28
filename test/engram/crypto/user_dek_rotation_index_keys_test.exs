@@ -28,6 +28,7 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
   alias Engram.Indexing
   alias Engram.Notes
   alias Engram.Notes.Chunk
+  alias Engram.QueryRecorder
   alias Engram.Search
   alias Engram.Vector.PayloadKeys
   alias Engram.Workers.{ReconcileNotePayloads, RefreshKeywordVectors}
@@ -102,6 +103,20 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
       )
 
     %{user: user, vault: vault, note: note, store: store}
+  end
+
+  # The fingerprint remap writes chunks, and every chunk statement's trigger
+  # takes the note's `note_index_state` row: the note lock must come first,
+  # as for every chunk writer (`ChunkRows`, "Lock order"), or a concurrent
+  # reindex of the note can deadlock with it.
+  test "the chunk fingerprint remap locks the note before its chunk writes", ctx do
+    # `:ok` is rotate_user's result, the list every statement it ran.
+    {:ok, queries} = QueryRecorder.record(fn -> UserDekRotation.rotate_user(ctx.user.id) end)
+
+    sqls = Enum.map(queries, & &1.sql)
+    remap = Enum.find_index(sqls, &(&1 =~ ~r/^UPDATE "chunks" .*"context_hmac"/s))
+    assert remap, "the rotation must remap the note's chunk fingerprints"
+    assert Enum.at(sqls, remap - 1) =~ ~r/^SELECT id::text FROM notes WHERE id = ANY.*FOR UPDATE/
   end
 
   for layout <- [:v5, :v3] do

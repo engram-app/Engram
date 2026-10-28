@@ -40,6 +40,7 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Crypto.{DekCache, Envelope, MigrationRunner, RotationLock}
   alias Engram.Crypto.KeyProvider.Resolver
   alias Engram.Indexing
+  alias Engram.Indexing.ChunkRows
   alias Engram.Logger.Metadata
   alias Engram.Notes.CrdtUpdateLog
   alias Engram.Notes.FieldCatalog
@@ -1429,6 +1430,13 @@ defmodule Engram.Crypto.UserDekRotation do
 
     {:ok, _} =
       Repo.with_tenant(user_id, fn ->
+        # The note first, as every chunk writer does (`ChunkRows`, "Lock
+        # order"): each chunk statement's trigger then takes the note's
+        # `note_index_state` row, and a concurrent reindex of this note,
+        # holding chunk rows these updates need, would otherwise wait on it
+        # in a cycle.
+        :ok = ChunkRows.lock_notes!([note_id])
+
         # `chunks` carries FORCE ROW LEVEL SECURITY: unscoped, these match
         # zero rows and still return :ok, a silent no-op. A row neither old-
         # nor new-key (text edited since its last index) is cleared, as
