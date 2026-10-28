@@ -81,6 +81,26 @@ defmodule Engram.Auth.Clerk.WebhookTest do
 
       assert {:ok, :duplicate_identity} = Engram.Auth.SignupRejections.fetch("user_second")
     end
+
+    test "row with no Clerk id (legacy/local account) is still a duplicate: rejected and revoked" do
+      _existing =
+        insert(:user,
+          email: "legacy.dup@gmail.com",
+          normalized_email: "legacydup@gmail.com",
+          external_id: nil
+        )
+
+      expect(Engram.Auth.Clerk.ApiMock, :delete_user, fn "user_vs_legacy" -> :ok end)
+
+      assert :ok =
+               Webhook.apply_user_created(
+                 "user_vs_legacy",
+                 "legacy.dup@gmail.com",
+                 "legacydup@gmail.com"
+               )
+
+      assert {:ok, :duplicate_identity} = Engram.Auth.SignupRejections.fetch("user_vs_legacy")
+    end
   end
 
   describe "user.deleted" do
