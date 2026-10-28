@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.66.1](https://github.com/engram-app/Engram/compare/0.66.0...0.66.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* **data-migrations:** keep the note_index_state pass under the query timeout ([#2278](https://github.com/engram-app/Engram/issues/2278)) ([09226d6](https://github.com/engram-app/Engram/commit/09226d6952bfdf31f2464c732e1616b14fb5b5da))
+
 ## [0.66.0](https://github.com/engram-app/Engram/compare/0.65.2...0.66.0) (2026-10-27)
 
 
