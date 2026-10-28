@@ -1238,17 +1238,18 @@ defmodule Engram.Workers.EmbedNote do
   @doc """
   Build a debounced EmbedNote job — embed only once the note has been quiet.
 
-  Trailing debounce: each edit re-inserts with `replace: [:scheduled_at]`, which
-  pushes the run time to `now + settle` (default 30s, `EMBED_SETTLE_SECONDS`), so
+  Trailing debounce: each edit re-inserts through `insert_debounced/3`, which
+  moves the pending job's run time to `now + settle` (default 30s, `EMBED_SETTLE_SECONDS`), so
   a burst of rapid saves collapses into a single Voyage call after the editing
   settles.
 
   Max-wait ceiling: a note edited continuously would otherwise never embed (the
   timer keeps resetting). `insert_debounced/3` clamps `scheduled_at` to
   `burst_start + max_wait` (default 5m, `EMBED_SETTLE_MAX_WAIT_SECONDS`), where
-  `burst_start` is the surviving job's `inserted_at` (unchanged by `replace`).
+  `burst_start` is the surviving job's `inserted_at` (never moved).
   The unique `period` is widened to span the whole window so dedup holds until
-  the ceiling fires. Inserting this changeset directly skips the clamp.
+  the ceiling fires. Inserting this changeset directly skips the debounce: a
+  conflict leaves the pending job untouched.
 
   Pass `settle: :agent` for a write made by an AI agent over MCP: it settles
   for `agent_settle_seconds/0` (default 2s, `EMBED_AGENT_SETTLE_SECONDS`)
@@ -1300,7 +1301,8 @@ defmodule Engram.Workers.EmbedNote do
       args,
       scheduled_at: scheduled_at,
       priority: Keyword.get(opts, :priority, 0),
-      replace: [:scheduled_at],
+      # No `replace:`. `insert_debounced/3` moves the surviving job itself so
+      # it can respect a backoff, which Oban's per-state replace cannot see.
       # Override the worker default (60s) so dedup spans the full settle+ceiling
       # window — otherwise a burst longer than the period spawns a second job and
       # resets the ceiling.
@@ -1409,16 +1411,16 @@ defmodule Engram.Workers.EmbedNote do
   Inserts `new_debounced/3` through `Engram.Notes.Enqueue`, clamped to the
   max-wait ceiling.
 
-  The burst start is read off the job Oban's own unique check returns (the
-  surviving job, `conflict?: true`, after its `replace`), so the clamp costs no
-  extra read. Only when the replaced `scheduled_at` overshoots the ceiling does
-  one UPDATE pull it back: a continuously-edited note, once per edit past the
-  5-minute mark.
+  On a conflict, the surviving job Oban's unique check returns
+  (`conflict?: true`) is moved here in one UPDATE, with no extra read:
+  `scheduled_at` to this write's settle, clamped to the ceiling, never earlier
+  than a backoff the job is serving (snoozed or retryable), and `priority`
+  promoted if this write is more urgent.
 
-  Race: a concurrent enqueue for the same note can replace `scheduled_at`
-  between Oban's update and this one. That only moves the embed by at most one
-  settle interval (never earlier than the ceiling, never a duplicate), and the
-  next edit self-corrects. Bounded extra staleness, not a correctness bug.
+  Race: a concurrent enqueue for the same note can move the job between
+  Oban's read and this UPDATE. That only shifts the embed by at most one
+  settle interval (never past the ceiling, never a duplicate), and the next
+  edit self-corrects. Bounded extra staleness, not a correctness bug.
   """
   @spec insert_debounced(Ecto.UUID.t(), Ecto.UUID.t(), keyword()) ::
           {:ok, Oban.Job.t()} | {:error, term()}
@@ -1431,36 +1433,58 @@ defmodule Engram.Workers.EmbedNote do
   defp insert_clamped(changeset) do
     case Oban.insert(changeset) do
       # `id` is nil when Oban could not take the unique lock and returned the
-      # unsaved changeset as the conflict: nothing to clamp.
+      # unsaved changeset as the conflict: nothing to move.
       {:ok, %Oban.Job{conflict?: true, id: id, inserted_at: %DateTime{} = start} = job}
       when is_integer(id) ->
-        job = promote(job, Ecto.Changeset.get_field(changeset, :priority))
-        {:ok, clamp_to_ceiling(job, DateTime.add(start, settle_max_wait_seconds(), :second))}
+        ceiling = DateTime.add(start, settle_max_wait_seconds(), :second)
+
+        at =
+          changeset
+          |> Ecto.Changeset.get_field(:scheduled_at)
+          |> respect_backoff(job)
+          |> earliest(ceiling)
+
+        # A more urgent write promotes the pending job instead of inheriting
+        # its rank: an agent edit to a note whose first embed is still queued
+        # at backfill priority must not wait behind an import. Oban fetches
+        # `priority ASC`; same rule as `reject_already_queued/2`.
+        priority = min(job.priority, Ecto.Changeset.get_field(changeset, :priority))
+
+        {:ok, move_pending(job, scheduled_at: at, priority: priority)}
 
       other ->
         other
     end
   end
 
-  # A more urgent write promotes the pending job instead of inheriting its
-  # rank: an agent edit to a note whose first embed is still queued at
-  # backfill priority must not wait behind an import. Oban fetches
-  # `priority ASC`; same rule as `reject_already_queued/2`.
-  defp promote(%Oban.Job{id: id, priority: current} = job, wanted) when wanted < current do
-    {_, _} = Repo.update_all(from(j in Oban.Job, where: j.id == ^id), set: [priority: wanted])
-    %{job | priority: wanted}
+  # A job backing off (snoozed for a Voyage 429, Qdrant backpressure or a
+  # paused rebuild, or retryable after a failure) keeps its backoff: a write
+  # may push it later, never earlier. Otherwise an agent chaining edits every
+  # 2s would retry at its own write rate through a rate-limit storm.
+  defp respect_backoff(wanted, %Oban.Job{state: state, meta: meta, scheduled_at: current}) do
+    backing_off? = state == "retryable" or (meta["snoozed"] || 0) > 0
+    if backing_off?, do: latest(wanted, current), else: wanted
   end
 
-  defp promote(job, _wanted), do: job
+  defp earliest(a, b), do: if(DateTime.compare(a, b) == :gt, do: b, else: a)
+  defp latest(a, b), do: if(DateTime.compare(a, b) == :lt, do: b, else: a)
 
-  defp clamp_to_ceiling(%Oban.Job{id: id, scheduled_at: at} = job, ceiling) do
-    if DateTime.compare(at, ceiling) == :gt do
-      {_, _} =
-        Repo.update_all(from(j in Oban.Job, where: j.id == ^id), set: [scheduled_at: ceiling])
+  # One UPDATE, only for what changed, and only while the job is still
+  # pending: one that started running meanwhile is left alone.
+  defp move_pending(%Oban.Job{id: id} = job, fields) do
+    case Enum.reject(fields, fn {k, v} -> Map.fetch!(job, k) == v end) do
+      [] ->
+        job
 
-      %{job | scheduled_at: ceiling}
-    else
-      job
+      changed ->
+        pending = Enum.map(@pending_states, &to_string/1)
+
+        {_, _} =
+          Repo.update_all(from(j in Oban.Job, where: j.id == ^id and j.state in ^pending),
+            set: changed
+          )
+
+        struct!(job, changed)
     end
   end
 end

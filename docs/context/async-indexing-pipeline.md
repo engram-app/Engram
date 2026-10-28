@@ -25,7 +25,7 @@ note write (REST / MCP / CRDT checkpoint)
 ```
 
 ## Debounce and Dedup
-- Each edit re-inserts with `replace: [:scheduled_at]`, pushing the run to `now + settle` (default 30s, `EMBED_SETTLE_SECONDS`). A burst of saves collapses to one Voyage call.
+- Each edit re-inserts through `EmbedNote.insert_debounced/3`, which moves the pending job to `now + settle` (default 30s, `EMBED_SETTLE_SECONDS`). A burst of saves collapses to one Voyage call.
 - MCP (AI agent) writes settle for `EMBED_AGENT_SETTLE_SECONDS` (default 2s) instead, at priority 0, so an agent that searches right after writing finds the note (#2294). Same unique job: the last write sets the timer, except that a job in backoff (snoozed or retryable) is never pulled earlier, and an executing job never absorbs a newer edit.
 - Max-wait ceiling: `scheduled_at` is clamped to `burst_start + max_wait` (default 300s, `EMBED_SETTLE_MAX_WAIT_SECONDS`) so a continuously edited note still embeds. `burst_start` is the surviving job's `inserted_at`.
 - Unique per `note_id` across `:incomplete` states, with the period widened to span the whole window.

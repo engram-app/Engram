@@ -859,8 +859,8 @@ defmodule Engram.Workers.EmbedNoteTest do
     end
 
     test "a rapid re-insert keeps a single job and pushes the timer out", %{note: note} do
-      {:ok, _} = Oban.insert(EmbedNote.new_debounced(note.id, note.user_id))
-      {:ok, _} = Oban.insert(EmbedNote.new_debounced(note.id, note.user_id))
+      {:ok, _} = EmbedNote.insert_debounced(note.id, note.user_id)
+      {:ok, _} = EmbedNote.insert_debounced(note.id, note.user_id)
 
       jobs =
         from(j in Oban.Job, where: fragment("? ->> 'note_id' = ?", j.args, ^to_string(note.id)))
