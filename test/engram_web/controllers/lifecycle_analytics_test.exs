@@ -199,6 +199,27 @@ defmodule EngramWeb.LifecycleAnalyticsTest do
       end
     end
 
+    test "device_connected carries device_number, the live count including this one", %{
+      conn: conn
+    } do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+
+      for _ <- 1..2 do
+        {:ok, auth} = DeviceFlow.start_device_flow("client_1")
+        {:ok, _} = DeviceFlow.authorize_device(auth.user_code, user, vault.id)
+        post(conn, "/api/auth/device/token", %{device_code: auth.device_code})
+      end
+
+      numbers =
+        events()
+        |> Enum.filter(&(&1["event"] == "device_connected"))
+        |> Enum.map(& &1["properties"]["device_number"])
+        |> Enum.sort()
+
+      assert numbers == [1, 2]
+    end
+
     test "revoking a device emits device_disconnected", %{conn: conn} do
       user = insert(:user)
       token = insert(:device_refresh_token, user: user, vault: insert(:vault, user: user))

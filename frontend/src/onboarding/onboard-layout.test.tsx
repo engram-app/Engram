@@ -222,3 +222,30 @@ describe("OnboardLayout step tracking", () => {
 		expect(mockTrack).not.toHaveBeenCalled();
 	});
 });
+
+describe("OnboardLayout abandonment beacon", () => {
+	const pagehide = (persisted: boolean) =>
+		window.dispatchEvent(Object.assign(new Event("pagehide"), { persisted }));
+
+	afterEach(() => mockTrack.mockClear());
+
+	it("beacons onboarding_step_abandoned with the step and time on it at pagehide", () => {
+		renderAt("/onboard/heard", SAAS);
+
+		pagehide(false);
+
+		expect(mockTrack).toHaveBeenCalledWith(
+			"onboarding_step_abandoned",
+			{ step: "heard", duration_ms: expect.any(Number) },
+			{ beacon: true },
+		);
+	});
+
+	it("does not count entering the back/forward cache as a departure", () => {
+		renderAt("/onboard/heard", SAAS);
+
+		pagehide(true);
+
+		expect(mockTrack.mock.calls.filter(([e]) => e === "onboarding_step_abandoned")).toEqual([]);
+	});
+});

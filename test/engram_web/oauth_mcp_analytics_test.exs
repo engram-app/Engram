@@ -106,6 +106,37 @@ defmodule EngramWeb.OAuthMcpAnalyticsTest do
     assert e["properties"]["scopes_granted"] == ["mcp"]
   end
 
+  test "a refused authorize emits mcp_oauth_authorize_rejected with reason and bucketed client",
+       %{client: client} do
+    {_verifier, challenge} = pkce_pair()
+
+    params =
+      client |> authorize_params(challenge) |> Map.put("redirect_uri", "https://evil.example/cb")
+
+    get(build_conn(), "/oauth/authorize", params)
+
+    e = event(drain(), "mcp_oauth_authorize_rejected")
+    assert e["properties"]["$process_person_profile"] == false
+    assert e["properties"]["client"] == "claude"
+    assert is_binary(e["properties"]["reason"])
+    refute inspect(e["properties"]) =~ "evil.example"
+  end
+
+  test "a refused authorize from an unknown client is bucketed to other" do
+    {_verifier, challenge} = pkce_pair()
+
+    get(build_conn(), "/oauth/authorize", %{
+      "client_id" => Ecto.UUID.generate(),
+      "redirect_uri" => @redirect,
+      "response_type" => "code",
+      "code_challenge" => challenge,
+      "code_challenge_method" => "S256"
+    })
+
+    e = event(drain(), "mcp_oauth_authorize_rejected")
+    assert e["properties"]["client"] == "other"
+  end
+
   test "a bare authorize GET (a crawler) emits no analytics" do
     get(build_conn(), "/oauth/authorize")
 

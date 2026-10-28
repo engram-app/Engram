@@ -9,6 +9,7 @@ import type { UIText } from "@/i18n/ui-text";
 import AuthPanel from "@/layout/auth-panel";
 import { serverErrorMessage } from "@/lib/server-error";
 import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
+import { errorCodeOf } from "../analytics/error-code";
 import { track } from "../analytics/track";
 import { isApiClientFailure } from "../api/client";
 import { useOnboardingStatus } from "../api/queries";
@@ -51,6 +52,7 @@ export default function AgreementPage() {
 			if (!isApiClientFailure(err)) {
 				captureError(err);
 			}
+			track("onboarding_step_failed", { step: "agreement", reason: errorCodeOf(err) });
 			setFailure(serverErrorMessage(err, t("Could not continue. Please try again."), t));
 		} finally {
 			setSubmitting(false);

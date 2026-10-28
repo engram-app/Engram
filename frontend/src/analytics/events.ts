@@ -3,6 +3,8 @@
 export type EngramEvent =
 	| "onboarding_step_viewed"
 	| "onboarding_step_completed"
+	| "onboarding_step_abandoned"
+	| "onboarding_step_failed"
 	| "onboarding_blocked"
 	| "plugin_connect_started"
 	| "plugin_connect_succeeded"
@@ -132,6 +134,8 @@ export const ERROR_CODES = [
 	// A connection attempt (plugin device-link, MCP OAuth) hit a plan cap
 	// (LimitExceededError) rather than an ordinary failure.
 	"limit_exceeded",
+	// A 401/403 on a connect or submit call: the session or grant was refused.
+	"auth",
 	"unknown",
 ] as const;
 
@@ -169,6 +173,9 @@ export const EVENT_SCHEMAS: Record<EngramEvent, Record<string, PropKind>> = {
 	// Corrected from the first-cut `{ step, reason: error_code }` — the actual
 	// 403 body (RequireOnboarding) carries `missing` (a list of GATE_REASONS)
 	// and `next_step` (an OnboardingStep), never a single "reason".
+	// The step was on screen when the page went away (pagehide) without moving on.
+	onboarding_step_abandoned: { step: "step", duration_ms: "number" },
+	onboarding_step_failed: { step: "step", reason: "error_code" },
 	onboarding_blocked: { missing: "gate_reasons", next_step: "step" },
 	plugin_connect_started: { vault_id: "uuid" },
 	plugin_connect_succeeded: { vault_id: "uuid", duration_ms: "number" },

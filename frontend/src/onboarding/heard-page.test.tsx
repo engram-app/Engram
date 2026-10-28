@@ -60,6 +60,20 @@ describe("HeardPage", () => {
 		);
 	});
 
+	it("emits onboarding_step_failed when the answer cannot be saved", async () => {
+		submitFeedback.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+		renderPage();
+		fireEvent.click(screen.getByRole("radio", { name: "Reddit" }));
+		fireEvent.click(screen.getByRole("button", { name: /continue/iu }));
+
+		await waitFor(() =>
+			expect(mockTrack).toHaveBeenCalledWith("onboarding_step_failed", {
+				step: "heard",
+				reason: "network",
+			}),
+		);
+	});
+
 	it("sends the detail only for Somewhere else", async () => {
 		renderPage();
 		fireEvent.click(screen.getByRole("radio", { name: "Somewhere else" }));

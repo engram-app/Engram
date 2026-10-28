@@ -269,6 +269,20 @@ describe("AgreementPage: terms only", () => {
 		expect(captureError).toHaveBeenCalledWith(err);
 	});
 
+	it("emits onboarding_step_failed with a bucketed reason when the accept fails", async () => {
+		mockTrack.mockClear();
+		mutate.mockRejectedValueOnce(new ApiError(403, "nope"));
+		renderPage();
+		fireEvent.click(screen.getByRole("checkbox", { name: /agree/iu }));
+		await clickContinue();
+		await screen.findByRole("alert");
+
+		expect(mockTrack).toHaveBeenCalledWith("onboarding_step_failed", {
+			step: "agreement",
+			reason: "auth",
+		});
+	});
+
 	// The server's English is never shown; a status with its own sentence is.
 	it("shows the translated sentence for a status that has one", async () => {
 		mutate.mockRejectedValueOnce(new ApiError(429, "rate_limited"));

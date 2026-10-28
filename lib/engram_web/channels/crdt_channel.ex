@@ -2004,8 +2004,12 @@ defmodule EngramWeb.CrdtChannel do
   # join boundary (user_socket.ex bounded_version/1, client_type/1 above), so
   # they are safe to forward. They give plugin-version adoption for free.
   # The web editor creates one note per click, so it gets `note_created` like a
-  # REST create. Obsidian creates arrive as a bulk import: no per-note event,
-  # one request per note would flood PostHog.
+  # REST create. Obsidian creates arrive as a bulk import, so they get ONE
+  # `note_created` per person per vault per hour whose `calls` counts every
+  # create since the last one (a fold: no DB read, exact volume). The welcome
+  # seed never comes through here, so it cannot count.
+  @analytics_window_ms :timer.hours(1)
+
   defp note_created_activity(%{assigns: %{client_type: "web"}} = socket) do
     note_sync_activity(socket)
 
@@ -2015,7 +2019,19 @@ defmodule EngramWeb.CrdtChannel do
     })
   end
 
-  defp note_created_activity(socket), do: note_sync_activity(socket)
+  defp note_created_activity(socket) do
+    note_sync_activity(socket)
+    vault_id = socket.assigns.vault.id
+
+    Engram.Analytics.track_folded(
+      socket.assigns.current_user,
+      "note_created",
+      "obsidian:#{vault_id}",
+      @analytics_window_ms,
+      %{vault_id: vault_id, surface: "obsidian_sync"},
+      %{calls: 1}
+    )
+  end
 
   defp note_sync_activity(socket) do
     props =
@@ -2039,6 +2055,19 @@ defmodule EngramWeb.CrdtChannel do
       props,
       opts
     )
+
+    # surface_active{web} cannot tell the editor from browsing; this can.
+    if client_type == "web" do
+      vault_id = socket.assigns.vault.id
+
+      Engram.Analytics.track_throttled(
+        socket.assigns.current_user,
+        "note_edited",
+        "web:#{vault_id}",
+        @analytics_window_ms,
+        %{vault_id: vault_id, surface: "web"}
+      )
+    end
   end
 
   defp sync_error(socket, kind) do

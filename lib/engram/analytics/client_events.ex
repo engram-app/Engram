@@ -29,7 +29,7 @@ defmodule Engram.Analytics.ClientEvents do
     "checklist_action" => ~w(guide_opened dismissed),
     "vault_source" => ~w(obsidian fresh),
     "error_code" => ~w(onboarding_required gate_closed not_found rate_limited network timeout
-      payment_declined payment_unfinished limit_exceeded unknown),
+      payment_declined payment_unfinished limit_exceeded auth unknown),
     "gate_reasons" => ~w(terms subscription profile vault),
     "locale" => Engram.I18n.locales()
   }
@@ -41,6 +41,8 @@ defmodule Engram.Analytics.ClientEvents do
       "vault_id" => "uuid",
       "duration_ms" => "number"
     },
+    "onboarding_step_abandoned" => %{"step" => "step", "duration_ms" => "number"},
+    "onboarding_step_failed" => %{"step" => "step", "reason" => "error_code"},
     "onboarding_blocked" => %{"missing" => "gate_reasons", "next_step" => "step"},
     "plugin_connect_started" => %{"vault_id" => "uuid"},
     "plugin_connect_succeeded" => %{"vault_id" => "uuid", "duration_ms" => "number"},

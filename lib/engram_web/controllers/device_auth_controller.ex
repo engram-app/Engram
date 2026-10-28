@@ -139,9 +139,12 @@ defmodule EngramWeb.DeviceAuthController do
         Engram.Analytics.track(result.user, "plugin_linked", %{})
 
         # Connection churn, paired with device_disconnected. `platform` is an
-        # enum a newer plugin sends; anything else is dropped.
+        # enum a newer plugin sends; anything else is dropped. `device_number`
+        # is the live count including this one (the same count the person
+        # trait `obsidian_devices` reads), so 2+ marks a multi-device user.
         Engram.Analytics.track(result.user, "device_connected", %{
-          platform: if(params["platform"] in ~w(desktop mobile), do: params["platform"])
+          platform: if(params["platform"] in ~w(desktop mobile), do: params["platform"]),
+          device_number: Engram.Connections.count_active(result.user.id, :obsidian)
         })
 
         json(conn, %{

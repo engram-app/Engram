@@ -55,12 +55,15 @@ defmodule EngramWeb.OAuthAuthorizeController do
         redirect_to_spa(conn, validated, params)
 
       {:client_error, code} ->
+        track_rejected(params, code)
         render_client_error(conn, code)
 
       {:server_error, code} ->
+        track_rejected(params, code)
         render_server_error(conn, code)
 
       {:redirect_error, redirect_uri, error, state} ->
+        track_rejected(params, error)
         redirect_with_error(conn, redirect_uri, error, state)
     end
   end
@@ -132,6 +135,22 @@ defmodule EngramWeb.OAuthAuthorizeController do
             OAuth.build_redirect(redirect_uri, %{error: error, state: state, iss: iss})
         })
     end
+  end
+
+  # The refused half of `mcp_oauth_authorize_started`: `reason` is our own
+  # error code, `client` the bucketed family of a client_id we already know
+  # (a pure DB lookup), else "other". Never the raw client_id or redirect_uri.
+  defp track_rejected(params, code) do
+    client =
+      case OAuth.get_client(params["client_id"]) do
+        {:ok, client} -> client
+        _ -> nil
+      end
+
+    Engram.Analytics.track_anonymous("mcp_oauth_authorize_rejected", %{
+      reason: code,
+      client: McpClient.client_props(client).client
+    })
   end
 
   # Client family + registration method, and the requested vs granted scopes

@@ -12,6 +12,7 @@ import { DEFAULT_VAULT_NAME } from "@/i18n/vault-name";
 import AuthPanel from "@/layout/auth-panel";
 import { serverErrorMessage } from "@/lib/server-error";
 import { heading } from "@/lib/ui-classes";
+import { errorCodeOf } from "../analytics/error-code";
 import { track } from "../analytics/track";
 import { setActiveVaultId } from "../api/active-vault";
 import {
@@ -79,6 +80,12 @@ function VaultStep({
 		}
 	}, [obsidianCommitted, navigate]);
 
+	// Reports a failed submit call, then rethrows so callers behave as before.
+	function reportFailure(err: unknown): never {
+		track("onboarding_step_failed", { step: "vault", reason: errorCodeOf(err) });
+		throw err;
+	}
+
 	async function pickSource(s: Source) {
 		if (s !== null && s !== source) {
 			track("vault_source_picked", { source: s });
@@ -92,7 +99,8 @@ function VaultStep({
 			try {
 				await setProfile.mutateAsync({ uses_obsidian: true });
 				setObsidianCommitted(true);
-			} catch {
+			} catch (err) {
+				track("onboarding_step_failed", { step: "vault", reason: errorCodeOf(err) });
 				// Error is also reflected on setProfile.isError so the panel can
 				// surface it; swallowing here just prevents a console unhandled
 				// rejection. The user sees the inline error message below.
@@ -102,7 +110,7 @@ function VaultStep({
 
 	async function commitObsidian() {
 		if (!obsidianCommitted) {
-			await setProfile.mutateAsync({ uses_obsidian: true });
+			await setProfile.mutateAsync({ uses_obsidian: true }).catch(reportFailure);
 			setObsidianCommitted(true);
 		}
 		// No onboarding_step_completed here: this branch's real milestone is the
@@ -113,12 +121,14 @@ function VaultStep({
 	}
 
 	async function commitFresh(name: string) {
-		await setProfile.mutateAsync({ uses_obsidian: false });
+		await setProfile.mutateAsync({ uses_obsidian: false }).catch(reportFailure);
 		const trimmed = name.trim() || DEFAULT_VAULT_NAME;
-		const vault = await createVault.mutateAsync({
-			name: trimmed,
-			client_id: vaultClientId,
-		});
+		const vault = await createVault
+			.mutateAsync({
+				name: trimmed,
+				client_id: vaultClientId,
+			})
+			.catch(reportFailure);
 		setActiveVaultId(vault.id);
 		// The welcome note is seeded server-side by `Engram.Vaults.WelcomeNote`
 		// on every vault creation, so there is nothing to write here.
