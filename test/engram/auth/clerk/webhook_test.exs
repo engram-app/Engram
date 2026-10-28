@@ -5,6 +5,7 @@ defmodule Engram.Auth.Clerk.WebhookTest do
 
   alias Engram.Accounts.User
   alias Engram.Auth.Clerk.Webhook
+  alias Engram.Auth.SignupRejections
   alias Engram.Repo
   alias Engram.Storage.InMemory
 
@@ -59,7 +60,7 @@ defmodule Engram.Auth.Clerk.WebhookTest do
       assert :ok = Webhook.apply_user_created("user_race_self", user.email, "racer@gmail.com")
 
       assert Repo.get(User, user.id, skip_tenant_check: true)
-      assert :error = Engram.Auth.SignupRejections.fetch("user_race_self")
+      assert :error = SignupRejections.fetch("user_race_self")
     end
 
     test "row bound to a different Clerk id is a real duplicate: rejected and revoked" do
@@ -79,7 +80,7 @@ defmodule Engram.Auth.Clerk.WebhookTest do
                  "takendup@gmail.com"
                )
 
-      assert {:ok, :duplicate_identity} = Engram.Auth.SignupRejections.fetch("user_second")
+      assert {:ok, :duplicate_identity} = SignupRejections.fetch("user_second")
     end
 
     test "row with no Clerk id (legacy/local account) is still a duplicate: rejected and revoked" do
@@ -99,7 +100,7 @@ defmodule Engram.Auth.Clerk.WebhookTest do
                  "legacydup@gmail.com"
                )
 
-      assert {:ok, :duplicate_identity} = Engram.Auth.SignupRejections.fetch("user_vs_legacy")
+      assert {:ok, :duplicate_identity} = SignupRejections.fetch("user_vs_legacy")
     end
   end
 
