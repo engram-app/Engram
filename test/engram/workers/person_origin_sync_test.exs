@@ -220,24 +220,47 @@ defmodule Engram.Workers.PersonOriginSyncTest do
       for n <- 1..100,
           do: insert(:user, email: "x#{n}@example.com", external_id: "x#{n}", locale: "fr")
 
-      # DDL rolls back with the sandbox transaction.
-      Repo.query!(
-        "ALTER TABLE oban_jobs ADD CONSTRAINT no_successor CHECK (NOT (args ? 'after'))"
-      )
+      Application.put_env(:engram, :person_origin_insert_fun, fn _ -> {:error, :boom} end)
+      on_exit(fn -> Application.delete_env(:engram, :person_origin_insert_fun) end)
 
-      assert_raise Postgrex.Error, fn ->
-        perform_job(PersonOriginSync, %{"backfill" => true})
-      end
+      assert {:error, :boom} = perform_job(PersonOriginSync, %{"backfill" => true, "chain" => "c"})
     end
 
     test "a retried batch does not fork the chain" do
       for n <- 1..100,
           do: insert(:user, email: "y#{n}@example.com", external_id: "y#{n}", locale: "fr")
 
-      assert :ok = perform_job(PersonOriginSync, %{"backfill" => true})
-      assert :ok = perform_job(PersonOriginSync, %{"backfill" => true})
+      args = %{"backfill" => true, "chain" => "c1"}
+      assert :ok = perform_job(PersonOriginSync, args)
+      assert :ok = perform_job(PersonOriginSync, args)
 
       assert Enum.count(all_enqueued(worker: PersonOriginSync), & &1.args["after"]) == 1
+    end
+
+    test "a restarted chain does not collide with an old chain's successor" do
+      for n <- 1..100,
+          do: insert(:user, email: "z#{n}@example.com", external_id: "z#{n}", locale: "fr")
+
+      # Old chain: batch 1 inserted its successor, then the chain was discarded.
+      assert :ok = perform_job(PersonOriginSync, %{"backfill" => true, "chain" => "old"})
+      [old] = all_enqueued(worker: PersonOriginSync)
+      Repo.update_all(from(j in Oban.Job, where: j.id == ^old.id), set: [state: "discarded"])
+
+      {:ok, head} = PersonOriginSync.backfill()
+      refute head.conflict?
+      assert :ok = perform_job(PersonOriginSync, head.args)
+
+      successors = Enum.filter(all_enqueued(worker: PersonOriginSync), & &1.args["after"])
+      assert Enum.any?(successors, &(&1.args["chain"] == head.args["chain"]))
+    end
+
+    test "two concurrent starts yield one chain" do
+      {:ok, first} = PersonOriginSync.backfill()
+      {:ok, second} = PersonOriginSync.backfill()
+
+      assert second.conflict?
+      assert second.id == first.id
+      assert length(all_enqueued(worker: PersonOriginSync)) == 1
     end
 
     test "a full batch chains the next one from the last id" do

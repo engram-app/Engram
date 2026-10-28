@@ -46,16 +46,20 @@ defmodule Engram.Workers.PersonOriginSync do
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
 
+  @incomplete [:available, :scheduled, :executing, :retryable]
+
   @doc """
   Start the one-time backfill (run by `DataMigrations.PersonOriginBackfill`).
-  `unique` on the chain head while it is incomplete, so two callers never
-  start two chains.
+  The head is `unique` on the `backfill` flag while ANY backfill job is
+  incomplete, so two concurrent starts yield one chain. It carries a fresh
+  `chain` token that every successor inherits, so a restarted chain never
+  collides with the jobs of an older one.
   """
   @spec backfill() :: {:ok, Oban.Job.t()} | {:error, term()}
   def backfill do
     Oban.insert(
-      new(%{"backfill" => true},
-        unique: [period: :infinity, states: [:available, :scheduled, :executing, :retryable]]
+      new(%{"backfill" => true, "chain" => Ecto.UUID.generate()},
+        unique: [fields: [:worker, :args], keys: [:backfill], period: :infinity, states: @incomplete]
       )
     )
   end
@@ -118,28 +122,40 @@ defmodule Engram.Workers.PersonOriginSync do
     # it would end the chain on a `completed` job, which the data migration
     # reads as "backfill finished".
     with :ok <- written do
-      chain_next(users)
+      chain_next(users, args["chain"] || Ecto.UUID.generate())
     end
   end
 
-  # `unique` on the cursor across every state: a batch retried after it already
-  # inserted its successor (SIGTERM at deploy, then a Lifeline rescue, 60 min)
-  # must not fork the chain. The 2 h window outlives the rescue.
-  defp chain_next(users) when length(users) == @batch do
-    next = %{"backfill" => true, "after" => List.last(users).id}
+  # `unique` on chain + cursor across every state: a batch retried after it
+  # already inserted its successor (SIGTERM at deploy, then a Lifeline rescue,
+  # 60 min) must not fork the chain. The 2 h window outlives the rescue. The
+  # chain token keeps a restarted chain (new token) from colliding with an old
+  # one's jobs, which would end it on a `completed` head with no successor.
+  defp chain_next(users, chain) when length(users) == @batch do
+    after_id = List.last(users).id
+    next = %{"backfill" => true, "chain" => chain, "after" => after_id}
 
-    case Oban.insert(
-           new(next,
-             schedule_in: @next_batch_in,
-             unique: [period: 7200, states: Oban.Job.states()]
-           )
-         ) do
-      {:ok, _job} -> :ok
+    job =
+      new(next,
+        schedule_in: @next_batch_in,
+        unique: [
+          fields: [:worker, :args],
+          keys: [:chain, :after],
+          period: 7200,
+          states: Oban.Job.states()
+        ]
+      )
+
+    case insert_fun().(job) do
+      {:ok, %Oban.Job{conflict?: false}} -> :ok
+      # Only this chain's own successor for this cursor counts as inserted.
+      {:ok, %Oban.Job{conflict?: true, args: %{"chain" => ^chain, "after" => ^after_id}}} -> :ok
+      {:ok, other} -> {:error, {:unexpected_successor, other.id}}
       {:error, _} = error -> error
     end
   end
 
-  defp chain_next(_users), do: :ok
+  defp chain_next(_users, _chain), do: :ok
 
   # Returns the error so Oban retries this one user.
   defp single(user) do
@@ -224,6 +240,9 @@ defmodule Engram.Workers.PersonOriginSync do
 
   defp downcase(value) when is_binary(value), do: String.downcase(value)
   defp downcase(_), do: nil
+
+  # Per-test seam (module is async: false in tests): the successor insert.
+  defp insert_fun, do: Application.get_env(:engram, :person_origin_insert_fun, &Oban.insert/1)
 
   defp clerk_api, do: Application.get_env(:engram, :clerk_api, Engram.Auth.Clerk.HttpApi)
 end
