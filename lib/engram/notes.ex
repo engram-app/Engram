@@ -961,6 +961,7 @@ defmodule Engram.Notes do
               _ =
                 ContentCommit.enqueue_jobs(note.id, user.id,
                   embed_priority: EmbedNote.priority_for(note),
+                  embed_settle: embed_settle(opts),
                   finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)
                 )
             end
@@ -1020,6 +1021,7 @@ defmodule Engram.Notes do
               _ =
                 ContentCommit.enqueue_jobs(note.id, user.id,
                   embed_priority: EmbedNote.priority_for(note),
+                  embed_settle: embed_settle(opts),
                   finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)
                 )
             end
@@ -2210,6 +2212,10 @@ defmodule Engram.Notes do
       end
     end
   end
+
+  # #2294: an AI agent writes a whole note and searches for it seconds later,
+  # so its writes skip most of the typing debounce (EmbedNote.new_debounced/3).
+  defp embed_settle(opts), do: if(opts[:actor] == "mcp", do: :agent)
 
   # The content jobs the seed's checkpoint used to enqueue for a genesis body,
   # after the row's commit like the checkpoint's.

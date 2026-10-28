@@ -1248,6 +1248,14 @@ defmodule Engram.Workers.EmbedNote do
   The unique `period` is widened to span the whole window so dedup holds until
   the ceiling fires. Inserting this changeset directly skips the clamp.
 
+  Pass `settle: :agent` for a write made by an AI agent over MCP: it settles
+  for `agent_settle_seconds/0` (default 2s, `EMBED_AGENT_SETTLE_SECONDS`)
+  instead, because an agent writes a whole note at once and then searches for
+  it seconds later. The job is the same unique job either way, so whichever
+  write came LAST sets the timer: a plugin edit after an agent write pushes it
+  back out to the full settle, an agent write after a plugin edit pulls it in.
+  Never two jobs, never a stale 30s job left behind.
+
   Pass `old_path_hmac:` (base64) when the note was renamed — the worker will
   delete old-path Qdrant points before re-indexing under the new path. T3.2:
   HMAC bytes (not plaintext path) are what survives in `oban_jobs.args` JSONB.
@@ -1264,7 +1272,7 @@ defmodule Engram.Workers.EmbedNote do
   # LIST into `args.user_id`, which then fails the `is_binary` check in
   # `fetch_note_for_worker_job/1` and silently takes the unscoped legacy path.
   def new_debounced(note_id, user_id, opts \\ []) when is_binary(user_id) do
-    scheduled_at = DateTime.add(DateTime.utc_now(), settle_seconds(), :second)
+    scheduled_at = DateTime.add(DateTime.utc_now(), settle_for(opts[:settle]), :second)
 
     args = %{note_id: note_id, user_id: user_id}
 
@@ -1375,6 +1383,13 @@ defmodule Engram.Workers.EmbedNote do
   def priority_for(%Note{}), do: 0
 
   defp settle_seconds, do: Application.get_env(:engram, :embed_settle_seconds, 30)
+
+  @doc "Seconds an MCP (AI agent) write waits before it embeds. See `new_debounced/3`."
+  @spec agent_settle_seconds() :: non_neg_integer()
+  def agent_settle_seconds, do: Application.get_env(:engram, :embed_agent_settle_seconds, 2)
+
+  defp settle_for(:agent), do: agent_settle_seconds()
+  defp settle_for(_), do: settle_seconds()
 
   defp settle_max_wait_seconds,
     do: Application.get_env(:engram, :embed_settle_max_wait_seconds, 300)

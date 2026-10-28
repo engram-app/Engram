@@ -1787,6 +1787,19 @@ defmodule Engram.MCP.Handlers do
   #     `Notes.upsert_note/4`'s own error reasons are never binaries (its spec
   #     is Ecto.Changeset.t() | atom() | {atom(), ...}), so this can't shadow
   #     an internal failure detail leaking to the caller.
+  @doc """
+  The line every successful MCP write reply ends with (#2294). Search lags a
+  write by the agent settle (`EmbedNote.agent_settle_seconds/0`) plus the
+  embed itself; agents that searched straight away reported their notes as
+  missing.
+  """
+  @spec index_delay_hint() :: String.t()
+  def index_delay_hint do
+    "search_notes finds this change a few seconds from now (it indexes " <>
+      "#{Engram.Workers.EmbedNote.agent_settle_seconds()}s after your last write); " <>
+      "use get_notes to read it until then."
+  end
+
   # Every failure here used to come back as `{:ok, apologetic_sentence}` — a
   # write that did not happen, reported as one that did. A model reading only
   # `isError` had no way to tell a landed write from a version conflict, so it
@@ -1795,7 +1808,7 @@ defmodule Engram.MCP.Handlers do
   defp upsert_reply(result, msgs, structured) do
     case result do
       {:ok, _note} ->
-        {:ok, msgs[:ok], structured}
+        {:ok, msgs[:ok] <> "\n" <> index_delay_hint(), structured}
 
       {:error, :version_conflict, _note} ->
         ToolError.error(:version_conflict, msgs[:conflict])

@@ -21,7 +21,7 @@ defmodule Engram.MCP.HandlersEchoStoredPathTest do
     assert {:ok, text, %{"path" => "a/b.md"}} =
              Handlers.handle("write_note", user, vault, %{"path" => "a/../b.md", "content" => "x"})
 
-    assert text == "Note saved: a/b.md"
+    assert text == "Note saved: a/b.md\n" <> Handlers.index_delay_hint()
     assert Notes.note_exists?(user, vault, "a/b.md")
   end
 
@@ -33,7 +33,7 @@ defmodule Engram.MCP.HandlersEchoStoredPathTest do
                "content" => "x"
              })
 
-    assert text == "Note created: a/x/c.md"
+    assert text == "Note created: a/x/c.md\n" <> Handlers.index_delay_hint()
   end
 
   test "rename_note echoes the stored new path", %{user: user, vault: vault} do
