@@ -950,20 +950,15 @@ if config_env() == :prod do
     maintenance_url ->
       config :engram,
              Engram.Repo.Maintenance,
-             [
-               url: maintenance_url,
-               # Deliberately tiny: this pool serves a few cron jobs and never a
-               # request, and connections are the scarce resource on RDS (see
-               # docs/context/prod-db-connection-budget.md). It is sized per
-               # NODE, like POOL_SIZE, so the fleet total is this times the task
-               # count.
-               pool_size: String.to_integer(System.get_env("MAINTENANCE_POOL_SIZE") || "2"),
-               socket_options: maybe_ipv6,
-               # Same reasoning as Engram.Repo above (T3.0.2): keep Ecto params
-               # out of :debug logs if anyone raises the log level.
-               log: false,
-               parameters: Engram.RuntimeConfig.repo_parameters(:maintenance)
-             ] ++
+             # Pool is deliberately tiny: it serves a few cron jobs and never a
+             # request, and connections are the scarce resource on RDS (see
+             # docs/context/prod-db-connection-budget.md). Sized per NODE, like
+             # POOL_SIZE, so the fleet total is this times the task count.
+             Engram.RuntimeConfig.maintenance_repo_opts(
+               maintenance_url,
+               String.to_integer(System.get_env("MAINTENANCE_POOL_SIZE") || "2"),
+               maybe_ipv6
+             ) ++
                Engram.RuntimeConfig.database_ssl(
                  &System.get_env/1,
                  URI.parse(maintenance_url).host

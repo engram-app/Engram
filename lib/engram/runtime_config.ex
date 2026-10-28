@@ -198,6 +198,35 @@ defmodule Engram.RuntimeConfig do
   def repo_parameters(:maintenance), do: [idle_in_transaction_session_timeout: "10min"]
 
   @doc """
+  Per-call client timeout (ms) of the maintenance pool, set once on its repo
+  config. DBConnection's 15 s default applies to every call unless the repo
+  config says otherwise, and the cross-tenant sweeps legitimately run longer
+  on prod data (the note_index_state pass failed with `query_canceled` /
+  "queued and checked out the connection for longer than 15000ms" there).
+  The database's own statement limit on `engram_maintenance` stays the hard
+  bound (docs/context/maintenance-db-role.md).
+  """
+  @spec maintenance_timeout() :: 120_000
+  def maintenance_timeout, do: 120_000
+
+  @doc """
+  Repo options of `Engram.Repo.Maintenance` except SSL, which the caller
+  appends. Here (not inline in runtime.exs) so the timeout wiring is testable.
+  """
+  @spec maintenance_repo_opts(String.t(), pos_integer(), list()) :: keyword()
+  def maintenance_repo_opts(url, pool_size, socket_options) do
+    [
+      url: url,
+      pool_size: pool_size,
+      socket_options: socket_options,
+      # Keeps Ecto params out of :debug logs if anyone raises the log level.
+      log: false,
+      timeout: maintenance_timeout(),
+      parameters: repo_parameters(:maintenance)
+    ]
+  end
+
+  @doc """
   Builds the `Engram.Repo` SSL options from env.
 
     * `DATABASE_SSL` not in `~w(true 1)` → `[]` (no TLS; self-host/local pg).

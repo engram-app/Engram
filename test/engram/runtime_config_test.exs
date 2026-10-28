@@ -189,4 +189,19 @@ defmodule Engram.RuntimeConfigTest do
       assert RuntimeConfig.database_ssl(env, "db.rds.amazonaws.com") == []
     end
   end
+
+  test "the maintenance repo options carry the long client timeout" do
+    opts = RuntimeConfig.maintenance_repo_opts("ecto://u:p@h/db", 2, [:inet6])
+
+    assert opts[:timeout] == RuntimeConfig.maintenance_timeout()
+    assert opts[:timeout] > 15_000
+    assert opts[:url] == "ecto://u:p@h/db"
+    assert opts[:pool_size] == 2
+    assert opts[:socket_options] == [:inet6]
+  end
+
+  test "config/runtime.exs builds the maintenance repo from those options" do
+    src = File.read!("config/runtime.exs")
+    assert src =~ "Engram.RuntimeConfig.maintenance_repo_opts("
+  end
 end

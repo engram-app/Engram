@@ -140,6 +140,159 @@ defmodule Engram.Notes.NoteIndexStateTest do
     end
   end
 
+  describe "NoteIndexState pass on prod-size data" do
+    # Prod (70k notes, 421k chunks) failed the pass with a 15 s DBConnection
+    # timeout: the done check and the recount each scanned ALL notes with a
+    # correlated chunk count in one statement. Every statement must now be
+    # bounded to an id window, however sparse the drift.
+    setup %{user: u, vault: v} do
+      seed = write!(u, v, "seed.md", "# S\n\nbody")
+
+      Repo.query!(
+        """
+        INSERT INTO notes
+        SELECT (r).* FROM (
+          SELECT jsonb_populate_record(null::notes,
+                   to_jsonb(n) || jsonb_build_object('id', gen_random_uuid(),
+                                                     'path', 'gen/' || g || '.md',
+                                                     'path_hmac', '\\\\x' || md5(g::text))) AS r
+          FROM notes n, generate_series(1, 2999) g WHERE n.id = $1) x
+        """,
+        [Ecto.UUID.dump!(seed.id)]
+      )
+
+      %{rows: [[total]]} = Repo.query!("SELECT count(*) FROM note_index_state")
+      assert total == 3000
+      :ok
+    end
+
+    # Scans of `chunks` so far in this transaction (seq + index, each
+    # correlated-subquery probe counts one).
+    defp chunk_probes do
+      %{rows: [[n]]} =
+        Repo.query!(
+          "SELECT coalesce(sum(seq_scan + idx_scan), 0)::bigint " <>
+            "FROM pg_stat_xact_user_tables WHERE relname = 'chunks'"
+        )
+
+      n
+    end
+
+    # `chunks` probes issued by each drift-scan statement of a pass.
+    defp probes_per_statement(fun) do
+      test = self()
+      id = {__MODULE__, make_ref()}
+      Process.put(:last_probes, chunk_probes())
+
+      :telemetry.attach(
+        id,
+        [:engram, :repo, :query],
+        fn _, _, %{query: q}, _ ->
+          if q =~ "FROM chunks c WHERE" do
+            now = chunk_probes()
+            send(test, {:probes, now - Process.get(:last_probes, 0)})
+            Process.put(:last_probes, now)
+          end
+        end,
+        nil
+      )
+
+      try do
+        {fun.(), drain([])}
+      after
+        :telemetry.detach(id)
+      end
+    end
+
+    defp drain(acc) do
+      receive do
+        {:probes, n} -> drain([n | acc])
+      after
+        0 -> acc
+      end
+    end
+
+    test "a clean ledger probes chunks once per note, a bounded window per statement" do
+      {result, probes} = probes_per_statement(fn -> Backfill.run_pass(batch: 500) end)
+
+      assert result == :done
+      # Old code: one statement probed all 3000 notes, and the done check
+      # probed them all again. Now: 6 full windows of 500 plus the empty tail, 3000 total.
+      assert length(probes) == 7
+      assert Enum.max(probes) <= 500 + 25
+      assert Enum.sum(probes) <= 3000 + 100
+    end
+
+    test "a note whose state row vanishes mid-pass keeps the pass open", %{user: u} do
+      victim = Repo.one!(from(n in Note, select: n.id, limit: 1), skip_tenant_check: true)
+      test = self()
+      id = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        id,
+        [:engram, :repo, :query],
+        fn _, _, %{query: q}, _ ->
+          # After the fill phase read, before the recount phase.
+          if q =~ "note_index_state_sync" and Process.get(:deleted) != true do
+            Process.put(:deleted, true)
+
+            Repo.query!("DELETE FROM note_index_state WHERE note_id = $1", [
+              Ecto.UUID.dump!(victim)
+            ])
+
+            send(test, :deleted)
+          end
+        end,
+        nil
+      )
+
+      try do
+        assert {:more, rows: 1} = Backfill.run_pass()
+        assert_received :deleted
+      after
+        :telemetry.detach(id)
+      end
+
+      assert state(victim) == nil
+      assert {:more, rows: 1} = Backfill.run_pass()
+      assert state(victim)
+      assert :done = Backfill.run_pass()
+      _ = u
+    end
+
+    test "a pass that runs out of time never reports done" do
+      assert {:more, _} = Backfill.run_pass(batch: 500, budget_ms: -1)
+    end
+
+    test "the walk reaches the last note of a many-window table" do
+      Repo.query!(
+        "UPDATE note_index_state SET points = 99 WHERE note_id = (SELECT id FROM notes ORDER BY id DESC LIMIT 1)"
+      )
+
+      assert {:more, rows: 1} = Backfill.run_pass(batch: 250)
+      assert :done = Backfill.run_pass(batch: 250)
+    end
+
+    test "sparse drift among thousands is fixed exactly, then the ledger closes", %{user: u} do
+      drifted =
+        Repo.query!(
+          "UPDATE note_index_state SET points = 99 WHERE note_id IN " <>
+            "(SELECT note_id FROM note_index_state ORDER BY note_id OFFSET 1500 LIMIT 3) " <>
+            "RETURNING note_id"
+        ).rows
+
+      assert length(drifted) == 3
+      assert {:more, rows: 3} = Backfill.run_pass(batch: 500)
+      assert :done = Backfill.run_pass(batch: 500)
+
+      assert Repo.aggregate(from(s in NoteIndexState, where: s.points == 99), :count,
+               skip_tenant_check: true
+             ) == 0
+
+      _ = u
+    end
+  end
+
   describe "RLS" do
     test "control: the dropped role with no tenant sees zero rows", %{user: u, vault: v} do
       write!(u, v, "A.md", "# A\n\nbody")

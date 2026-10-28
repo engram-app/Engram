@@ -26,10 +26,19 @@ defmodule Engram.DataMigrations.NoteIndexState do
 
   alias Engram.Backfill.TenantScan
   alias Engram.Indexing.ChunkRows
+  alias Engram.Logger.Metadata
   alias Engram.Repo
 
+  require Logger
+
+  # Rows per keyset window. A recount query scans exactly this many notes
+  # (one chunk-index probe each), whatever the drift density.
   @batch 1_000
-  @max_batches 50
+  # The walk restarts from the first note every pass (no persisted cursor), so
+  # it is bounded by time, not by a window count: a count cap would stall the
+  # tail forever once the table outgrew it. A clean window is milliseconds, so
+  # this reaches far past any real table; the Oban job timeout is 30 min.
+  @budget_ms 240_000
 
   @impl true
   def name, do: "note_index_state"
@@ -52,129 +61,133 @@ defmodule Engram.DataMigrations.NoteIndexState do
   def counted?, do: Engram.DataMigrations.done?(name(), version())
 
   @doc false
-  # `batch:` overrides the batch size (tests page over a few rows).
+  # `batch:` overrides the window size (tests page over a few rows).
+  #
+  # The recount phase walks EVERY note once, in id windows, so a pass that
+  # fixed nothing has by construction seen no missing row and no drifted
+  # counter: that is the done check, there is no separate "anything left?"
+  # scan. (The old one re-ran the full correlated chunk count over all notes
+  # in one statement and tripped DBConnection's 15 s timeout on prod.)
+  # Per-query timeouts for the maintenance pool live in
+  # `Engram.RuntimeConfig.maintenance_timeout/0`, applied once in runtime.exs.
   def run_pass(opts) do
     batch = Keyword.get(opts, :batch, @batch)
+    deadline = System.monotonic_time(:millisecond) + Keyword.get(opts, :budget_ms, @budget_ms)
 
-    {fixed, left?} =
+    {{filled, over_fill}, {drifted, over_recount}} =
       case Repo.maintenance() do
         Repo ->
-          users = TenantScan.user_ids()
-
-          fixed =
-            users
-            |> Enum.map(fn user_id ->
-              batches(batch, fn after_id ->
-                Repo.with_tenant!(user_id, fn -> fill(Repo, user_id, after_id, batch) end)
-              end) +
-                batches(batch, fn after_id ->
-                  Repo.with_tenant!(user_id, fn -> recount(Repo, user_id, after_id, batch) end)
-                end)
-            end)
-            |> Enum.sum()
-
-          {fixed,
-           fn ->
-             Enum.any?(users, fn user_id ->
-               Repo.with_tenant!(user_id, fn -> left?(Repo, user_id) end)
-             end)
-           end}
+          TenantScan.user_ids()
+          |> Enum.map(fn user_id ->
+            {batches(batch, deadline, fn after_id ->
+               Repo.with_tenant!(user_id, fn -> fill(Repo, user_id, after_id, batch) end)
+             end),
+             batches(batch, deadline, fn after_id ->
+               Repo.with_tenant!(user_id, fn -> recount(Repo, user_id, after_id, batch) end)
+             end)}
+          end)
+          |> Enum.reduce({{0, false}, {0, false}}, fn {{f, cf}, {r, cr}},
+                                                      {{af, acf}, {ar, acr}} ->
+            {{af + f, acf or cf}, {ar + r, acr or cr}}
+          end)
 
         maintenance ->
-          {batches(batch, &fill(maintenance, nil, &1, batch)) +
-             batches(batch, fn after_id ->
-               {:ok, ids} =
-                 maintenance.transaction(fn -> recount(maintenance, nil, after_id, batch) end)
+          {batches(batch, deadline, &fill(maintenance, nil, &1, batch)),
+           batches(batch, deadline, fn after_id ->
+             {:ok, step} =
+               maintenance.transaction(fn -> recount(maintenance, nil, after_id, batch) end)
 
-               ids
-             end), fn -> left?(maintenance, nil) end}
+             step
+           end)}
       end
 
-    cond do
-      fixed > 0 -> {:more, rows: fixed}
-      left?.() -> {:more, rows: 0}
-      true -> :done
+    over_budget? = over_fill or over_recount
+
+    # Counts only, never ids (tenant data). `drifted` counts notes seen with a
+    # missing row or wrong counters, including any a writer held locked.
+    Logger.info(
+      "note_index_state pass",
+      Metadata.with_category(:info, :oban,
+        migration: name(),
+        filled: filled,
+        drifted: drifted,
+        hit_budget: over_budget?
+      )
+    )
+
+    if filled + drifted > 0 or over_budget?,
+      do: {:more, rows: filled + drifted},
+      else: :done
+  end
+
+  # `step.(after_id)` returns `{scanned, last_id, hits}`: a window short of
+  # `batch` is the end of the walk. Returns `{hits, out_of_time?}`.
+  defp batches(batch, deadline, step, after_id \\ nil, hits \\ 0) do
+    if System.monotonic_time(:millisecond) > deadline do
+      {hits, true}
+    else
+      case step.(after_id) do
+        {scanned, _last, h} when scanned < batch -> {hits + h, false}
+        {_scanned, last, h} -> batches(batch, deadline, step, last, hits + h)
+      end
     end
   end
 
-  defp batches(batch, step, after_id \\ nil, n \\ 0, rounds \\ 0)
-  defp batches(_batch, _step, _after_id, n, @max_batches), do: n
-
-  defp batches(batch, step, after_id, n, rounds) do
-    case step.(after_id) do
-      ids when length(ids) < batch -> n + length(ids)
-      ids -> batches(batch, step, Enum.max(ids), n + length(ids), rounds + 1)
-    end
-  end
-
-  @missing """
-  n.kind = 'note'
-    AND ($1::uuid IS NULL OR n.user_id = $1::uuid)
-    AND NOT EXISTS (SELECT 1 FROM note_index_state s WHERE s.note_id = n.id)
-  """
-
-  # Returns the filled ids (lowercase uuid strings sort as their bytes, so
-  # the max is the keyset).
+  # Filled notes. Lowercase uuid strings sort as their bytes, so the max id
+  # is the keyset.
   defp fill(repo, user_id, after_id, batch) do
     %{rows: rows} =
       repo.query!(
         """
         SELECT n.id::text, note_index_state_sync(n, false) FROM notes n
-        WHERE #{@missing} AND ($2::uuid IS NULL OR n.id > $2::uuid)
-        ORDER BY n.id LIMIT $3
-        """,
-        [dump(user_id), dump(after_id), batch]
-      )
-
-    Enum.map(rows, &hd/1)
-  end
-
-  # Notes whose counters differ from their chunk rows, in id order: one
-  # index probe of `chunks (note_id, position)` per note.
-  @drifted """
-  n.kind = 'note'
-    AND ($1::uuid IS NULL OR n.user_id = $1::uuid)
-    AND ROW(s.points, s.len_rows, s.len_sum) IS DISTINCT FROM (
-      SELECT ROW(count(*)::int, count(c.token_count)::int, coalesce(sum(c.token_count), 0)::bigint)
-      FROM chunks c WHERE c.note_id = n.id)
-  """
-
-  # Inside a transaction: locks the drifted notes of this batch (skipping
-  # any a writer holds; a later pass takes them), then counts them in a new
-  # statement, so the count sees every chunk write that committed before
-  # the lock. Returns the scanned ids (the keyset); `batches/5` stops on a
-  # short page.
-  defp recount(repo, user_id, after_id, batch) do
-    %{rows: rows} =
-      repo.query!(
-        """
-        SELECT n.id::text FROM notes n JOIN note_index_state s ON s.note_id = n.id
-        WHERE #{@drifted} AND ($2::uuid IS NULL OR n.id > $2::uuid)
+        WHERE n.kind = 'note'
+          AND ($1::uuid IS NULL OR n.user_id = $1::uuid)
+          AND NOT EXISTS (SELECT 1 FROM note_index_state s WHERE s.note_id = n.id)
+          AND ($2::uuid IS NULL OR n.id > $2::uuid)
         ORDER BY n.id LIMIT $3
         """,
         [dump(user_id), dump(after_id), batch]
       )
 
     ids = Enum.map(rows, &hd/1)
-
-    locked = ChunkRows.lock_notes!(ids, repo: repo, skip_locked: true)
-    _ = ChunkRows.recount!(locked, repo)
-    ids
+    {length(ids), List.last(ids), length(ids)}
   end
 
-  # Any note still missing its row or with drifted counters, locked or not.
-  defp left?(repo, user_id) do
-    %{rows: [[left]]} =
+  # Inside a transaction: scans one id window of `batch` notes (one
+  # `chunks (note_id, position)` index probe each), locks the drifted ones
+  # (skipping any a writer holds; a later pass takes them), then counts
+  # them in a new statement, so the count sees every chunk write that
+  # committed before the lock. Skipped notes still count as hits, so the
+  # pass stays open for them.
+  defp recount(repo, user_id, after_id, batch) do
+    %{rows: rows} =
       repo.query!(
         """
-        SELECT EXISTS (SELECT 1 FROM notes n WHERE #{@missing})
-          OR EXISTS (SELECT 1 FROM notes n JOIN note_index_state s ON s.note_id = n.id
-                     WHERE #{@drifted})
+        SELECT w.id::text,
+               CASE WHEN s.note_id IS NULL THEN 'missing'
+                    WHEN ROW(s.points, s.len_rows, s.len_sum) IS DISTINCT FROM (
+                           SELECT ROW(count(*)::int, count(c.token_count)::int,
+                                      coalesce(sum(c.token_count), 0)::bigint)
+                           FROM chunks c WHERE c.note_id = w.id)
+                    THEN 'drifted' ELSE 'ok' END
+        FROM (SELECT n.id FROM notes n
+              WHERE n.kind = 'note'
+                AND ($1::uuid IS NULL OR n.user_id = $1::uuid)
+                AND ($2::uuid IS NULL OR n.id > $2::uuid)
+              ORDER BY n.id LIMIT $3) w
+        LEFT JOIN note_index_state s ON s.note_id = w.id
+        ORDER BY w.id
         """,
-        [dump(user_id)]
+        [dump(user_id), dump(after_id), batch]
       )
 
-    left
+    drifted = for [id, "drifted"] <- rows, do: id
+    # A missing row cannot be counted here (fill owns it): it is only a hit,
+    # which keeps the pass open until the next fill.
+    missing = Enum.count(rows, &match?([_, "missing"], &1))
+    locked = ChunkRows.lock_notes!(drifted, repo: repo, skip_locked: true)
+    _ = ChunkRows.recount!(locked, repo)
+    {length(rows), rows |> List.last() |> then(&(&1 && hd(&1))), length(drifted) + missing}
   end
 
   defp dump(nil), do: nil
