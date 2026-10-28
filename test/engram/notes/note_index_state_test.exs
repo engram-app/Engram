@@ -109,6 +109,50 @@ defmodule Engram.Notes.NoteIndexStateTest do
     assert state(n.id) == nil
   end
 
+  # Every statement the repo runs in `fun` that reads `notes`, as
+  # `{sql, params}`.
+  defp notes_statements(fun) do
+    ref = make_ref()
+    me = self()
+
+    :telemetry.attach(
+      "notes-statements-#{inspect(ref)}",
+      [:engram, :repo, :query],
+      fn _event, _measurements, %{query: sql, params: params}, _ ->
+        if self() == me and Regex.match?(~r/\bnotes\b/, sql), do: send(me, {ref, sql, params})
+      end,
+      nil
+    )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach("notes-statements-#{inspect(ref)}")
+    end
+
+    collect(ref, [])
+  end
+
+  defp collect(ref, acc) do
+    receive do
+      {^ref, sql, params} -> collect(ref, [{sql, params} | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
+
+  # A pure keyset window (a LIMIT of at most `batch`, no predicate subquery),
+  # or a statement confined to at most `batch` listed ids.
+  defp windowed?(sql, params, batch) do
+    window? =
+      case Regex.run(~r/LIMIT \$(\d+)/, sql) do
+        [_, i] -> Enum.at(params, String.to_integer(i) - 1) <= batch and not (sql =~ "EXISTS")
+        nil -> false
+      end
+
+    window? or (sql =~ "ANY(" and Enum.any?(params, &(is_list(&1) and length(&1) <= batch)))
+  end
+
   describe "NoteIndexState backfill" do
     test "fills rows written before the trigger, then reports done", %{user: u, vault: v} do
       a = write!(u, v, "A.md", "# A\n\nbody")
@@ -129,6 +173,33 @@ defmodule Engram.Notes.NoteIndexStateTest do
 
       assert :done = Backfill.run_pass()
       assert state(a.id).keyword_version == 99
+    end
+
+    # #2276: the pass bounds rows READ per statement, not rows returned. One
+    # drifted note at the END of the id order, behind clean ones: the old
+    # "next N matching notes" query walked every clean note to reach it, and
+    # the "anything left?" EXISTS walked the table again. Every statement that
+    # reads `notes` must be a pure keyset window or confined to one window's
+    # ids.
+    test "a missing row at the end of the table, every statement one window", %{
+      user: u,
+      vault: v
+    } do
+      notes = for i <- 1..9, do: write!(u, v, "W#{i}.md", "# W\n\nbody #{i}")
+      last = Enum.max_by(notes, & &1.id)
+      Repo.query!("DELETE FROM note_index_state WHERE note_id = $1", [Ecto.UUID.dump!(last.id)])
+
+      statements =
+        notes_statements(fn ->
+          assert {:more, rows: 1} = Backfill.run_pass(batch: 2)
+          assert :done = Backfill.run_pass(batch: 2)
+        end)
+
+      assert mirrors?(state(last.id), note(last.id))
+      assert statements != []
+
+      for {sql, params} <- statements,
+          do: assert(windowed?(sql, params, 2), "unbounded read of notes: #{sql}")
     end
 
     test "keyset-pages across batches", %{user: u, vault: v} do
@@ -217,14 +288,20 @@ defmodule Engram.Notes.NoteIndexStateTest do
 
       assert result == :done
       # Old code: one statement probed all 3000 notes, and the done check
-      # probed them all again. Now: 6 full windows of 500 plus the empty tail, 3000 total.
-      assert length(probes) == 7
+      # probed them all again. Now: 6 full windows of 500, 3000 total (the
+      # empty window that ends the walk runs no drift scan).
+      assert length(probes) == 6
       assert Enum.max(probes) <= 500 + 25
       assert Enum.sum(probes) <= 3000 + 100
     end
 
     test "a note whose state row vanishes mid-pass keeps the pass open", %{user: u} do
-      victim = Repo.one!(from(n in Note, select: n.id, limit: 1), skip_tenant_check: true)
+      # The first note in id order: its window's fill runs first, so the
+      # delete below lands after that fill and before that window's scan.
+      victim =
+        Repo.one!(from(n in Note, select: n.id, order_by: n.id, limit: 1),
+          skip_tenant_check: true
+        )
       test = self()
       id = {__MODULE__, make_ref()}
 
@@ -232,7 +309,7 @@ defmodule Engram.Notes.NoteIndexStateTest do
         id,
         [:engram, :repo, :query],
         fn _, _, %{query: q}, _ ->
-          # After the fill phase read, before the recount phase.
+          # After the first window's fill, before its drift scan.
           if q =~ "note_index_state_sync" and Process.get(:deleted) != true do
             Process.put(:deleted, true)
 

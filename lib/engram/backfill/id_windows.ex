@@ -201,33 +201,53 @@ defmodule Engram.Backfill.IdWindows do
     found
   end
 
+  # A pass's time budget: the walk restarts from the first window every pass
+  # (no persisted cursor), so it is bounded by time, not by a window count; a
+  # count cap would stall the tail once the table outgrew it. A clean window
+  # is milliseconds, so this reaches far past any real table; the runner's
+  # Oban job timeout is 30 min.
+  @pass_budget_ms 240_000
+
+  @doc "Default `:budget_ms` of `heal_pass/3`."
+  def pass_budget_ms, do: @pass_budget_ms
+
   @doc """
   One self-healing data-migration pass (`Engram.DataMigration.run_pass/0`):
   `step.(ids, ctx)` fixes what it can inside one window and returns
   `{fixed, left?}`, where `left?` says a row it matched is still unfixed (a
-  row lock it skipped). The walk stops once `:max_fixed` rows are fixed, so
-  one pass is a bounded slice of writes; the next pass starts over, re-reading
-  the clean prefix (reads only, each statement one window).
+  row lock it skipped). The next pass starts over from the first window,
+  re-reading the clean prefix (reads only, each statement one window).
 
   `:done` only when a walk over EVERY window fixed nothing and left nothing:
   that full walk is the completion check, so no fleet-wide EXISTS runs.
-  Otherwise `{:more, rows: fixed}`. Takes `reduce/5`'s options.
+  Otherwise `{:more, rows: fixed}`, plus `hit_budget: true` when the walk
+  stopped on its time budget (`:budget_ms`, default 240 s), which never
+  reports done. `:max_fixed` also stops the walk once that many rows are
+  fixed. Takes `reduce/5`'s options.
   """
   @spec heal_pass(module(), (list(), ctx() -> {non_neg_integer(), boolean()}), keyword()) ::
-          :done | {:more, [rows: non_neg_integer()]}
+          :done | {:more, keyword()}
   def heal_pass(schema, step, opts) do
-    max_fixed = Keyword.fetch!(opts, :max_fixed)
+    max_fixed = Keyword.get(opts, :max_fixed, :infinity)
 
-    heal = fn ids, ctx, {fixed, left?} ->
-      {f, l} = step.(ids, ctx)
-      acc = {fixed + f, left? or l}
-      if fixed + f >= max_fixed, do: {:halt, acc}, else: {:cont, acc}
+    deadline =
+      System.monotonic_time(:millisecond) + Keyword.get(opts, :budget_ms, @pass_budget_ms)
+
+    heal = fn ids, ctx, {fixed, left?, _late?} ->
+      if System.monotonic_time(:millisecond) > deadline do
+        {:halt, {fixed, true, true}}
+      else
+        {f, l} = step.(ids, ctx)
+        acc = {fixed + f, left? or l, false}
+        if fixed + f >= max_fixed, do: {:halt, acc}, else: {:cont, acc}
+      end
     end
 
-    case reduce_all(schema, {0, false}, heal, opts) do
-      {_, {0, false}} -> :done
-      {status, {fixed, _left?}} when status in [:ok, :halted] -> {:more, rows: fixed}
+    case reduce_all(schema, {0, false, false}, heal, opts) do
       {:error, reason} -> raise "id-window pass failed: #{inspect(reason)}"
+      {_, {0, false, false}} -> :done
+      {_, {fixed, _left?, false}} -> {:more, rows: fixed}
+      {_, {fixed, _left?, true}} -> {:more, rows: fixed, hit_budget: true}
     end
   end
 
