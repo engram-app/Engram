@@ -1,6 +1,8 @@
 defmodule EngramWeb.DeviceAuthController do
   use EngramWeb, :controller
 
+  require Logger
+
   alias Engram.Auth.DeviceFlow
   alias Engram.Vaults
   alias Engram.Vaults.WelcomeNote
@@ -132,6 +134,16 @@ defmodule EngramWeb.DeviceAuthController do
     end
   end
 
+  # Analytics only: the tokens are already minted, so a DB blip here must not
+  # turn a successful link into a 500.
+  defp device_number(user_id) do
+    Engram.Connections.device_active_count(user_id)
+  rescue
+    e ->
+      Logger.warning("device_number_failed #{Exception.message(e)}")
+      nil
+  end
+
   def token(conn, %{"device_code" => device_code} = params) do
     case DeviceFlow.exchange_device_code(device_code) do
       {:ok, result} ->
@@ -140,11 +152,12 @@ defmodule EngramWeb.DeviceAuthController do
 
         # Connection churn, paired with device_disconnected. `platform` is an
         # enum a newer plugin sends; anything else is dropped. `device_number`
-        # is the live count including this one (the same count the person
-        # trait `obsidian_devices` reads), so 2+ marks a multi-device user.
+        # is the live device-family count including this one (a re-link mints
+        # a new family and the old one lives until revoked or expired, the same
+        # way the connection cap counts them), so 2+ marks a multi-device user.
         Engram.Analytics.track(result.user, "device_connected", %{
           platform: if(params["platform"] in ~w(desktop mobile), do: params["platform"]),
-          device_number: Engram.Connections.count_active(result.user.id, :obsidian)
+          device_number: device_number(result.user.id)
         })
 
         json(conn, %{

@@ -137,20 +137,32 @@ defmodule EngramWeb.OAuthAuthorizeController do
     end
   end
 
-  # The refused half of `mcp_oauth_authorize_started`: `reason` is our own
-  # error code, `client` the bucketed family of a client_id we already know
-  # (a pure DB lookup), else "other". Never the raw client_id or redirect_uri.
-  defp track_rejected(params, code) do
-    client =
-      case OAuth.get_client(params["client_id"]) do
-        {:ok, client} -> client
-        _ -> nil
-      end
+  # The refused half of `mcp_oauth_authorize_started`. Public and unauthenticated,
+  # so a scanner repeating one bad request must cost one limiter hit, not an
+  # event, an event-log row and a client lookup each: 1 per reason per minute
+  # (volume lives in the refusal telemetry, not here). `client` is the bucketed
+  # family of a client_id we already know, else "other"; the lookup runs only
+  # when the event is sent. Never the raw client_id or redirect_uri.
+  @rejected_window_ms :timer.minutes(1)
 
-    Engram.Analytics.track_anonymous("mcp_oauth_authorize_rejected", %{
-      reason: code,
-      client: McpClient.client_props(client).client
-    })
+  defp track_rejected(params, code) do
+    key = "ph:mcp_oauth_authorize_rejected:#{code}"
+
+    with {:allow, _} <-
+           EngramWeb.RateLimiter.hit(key, @rejected_window_ms, 1, :analytics_activity) do
+      client =
+        case OAuth.get_client(params["client_id"]) do
+          {:ok, client} -> client
+          _ -> nil
+        end
+
+      Engram.Analytics.track_anonymous("mcp_oauth_authorize_rejected", %{
+        reason: code,
+        client: McpClient.client_props(client).client
+      })
+    else
+      _ -> :ok
+    end
   end
 
   # Client family + registration method, and the requested vs granted scopes

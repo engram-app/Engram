@@ -589,7 +589,7 @@ export default function OAuthAuthorizePage() {
 			// cap re-trips between disconnect + consent.
 			if (e instanceof Error && e.name === "LimitExceededError") {
 				if (isMcp) {
-					track("mcp_connect_failed", { client: mcpClient, reason: "limit_exceeded" });
+					track("mcp_connect_failed", { client: mcpClient, reason: errorCodeOf(e) });
 				}
 				setSubmitting(false);
 				return;

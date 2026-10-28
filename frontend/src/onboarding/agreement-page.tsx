@@ -17,6 +17,7 @@ import { LegalDoc } from "../legal/legal-doc";
 import { formatEffectiveDate, useDocumentName } from "../legal/legal-notice-banner";
 import { useAcceptAgreements } from "../legal/use-accept-current";
 import { captureError } from "../sentry";
+import { markStepCompleted } from "./step-completion";
 
 // The legal texts take whatever height the card has left, so the agreement
 // and Continue stay on screen without the page scrolling (AuthPanel).
@@ -63,6 +64,7 @@ export default function AgreementPage() {
 		if (!(await accept())) {
 			return;
 		}
+		markStepCompleted("agreement");
 		track("onboarding_step_completed", {
 			step: "agreement",
 			duration_ms: Date.now() - mountedAt,

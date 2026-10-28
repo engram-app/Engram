@@ -28,12 +28,12 @@ and throttling, free text dropped), whether or not PostHog is configured. See
 | `mcp_tool_called` | MCP tool call (also argument-rejected ones) | 1 per person per tool per client per min | `tool` (allowlist, else `unknown`), `status`, `client`, `calls`, `errors` |
 | `mcp_client_connected` | MCP `initialize` | 1 per person per client family per hour | `client` (bucketed, else `other`) |
 | `plugin_linked`, `api_key_created`, `mcp_oauth_granted` | one-shot milestones | none | none |
-| `device_connected` | every device-code exchange | none | `platform` (`desktop` `mobile`, else null), `device_number` (live device families incl. this one; 2+ = multi-device) |
+| `device_connected` | every device-code exchange | none | `platform` (`desktop` `mobile`, else null), `device_number` (live device-flow families incl. this one, null if the count failed; a re-link leaves the old family live until revoked/expired; 2+ = multi-device) |
 | `device_disconnected` | a device family or Obsidian OAuth grant revoked | none | `via` (`device_flow` `oauth`) |
 | `mcp_client_disconnected` | an MCP grant or an API key revoked | none | `via` (`oauth` `api_key`), `client` (family, oauth only) |
 | `note_created` | a REST or MCP write, or a web-editor CRDT create, makes a note | none (Obsidian CRDT creates: 1 per person per vault per hour, folded) | `vault_id`, `surface` (`web` `obsidian_sync` `mcp` `api` `welcome` `other`), `calls` (Obsidian only: creates since the last event) |
 | `note_edited` | a web-editor CRDT edit or create (Obsidian edits are `surface_active{obsidian_sync}`) | 1 per person per vault per hour | `vault_id`, `surface` (`web`) |
-| `mcp_oauth_authorize_started` / `mcp_oauth_authorize_rejected` | `GET /oauth/authorize` accepted / refused (anonymous) | none | `client` (bucketed family, `other` if unknown), `reason` (our OAuth error code, rejected only) |
+| `mcp_oauth_authorize_started` / `mcp_oauth_authorize_rejected` | `GET /oauth/authorize` accepted / refused (anonymous) | rejected: 1 per reason per minute (a scanner costs one limiter hit; volume is in the refusal telemetry) | `client` (bucketed family, `other` if unknown), `reason` (our OAuth error code, rejected only) |
 | `onboarding_step_abandoned` / `onboarding_step_failed` | SPA wizard: page left while a step is shown (pagehide beacon) / a submit failed | none | `step`, `duration_ms` / `reason` (`ERROR_CODES`: `network` `auth` `not_found` `rate_limited` `limit_exceeded` `unknown`) |
 | `vault_populated` | a vault gets its first non-welcome note | none | `vault_id` |
 | `vault_created` / `vault_deleted` | a vault newly made / deleted | none | `vault_id`, `vault_number` / `vaults_left`, `surface` |
@@ -124,7 +124,9 @@ last-used trait: nothing in Postgres records which client wrote.
 - **Obsidian CRDT creates are one throttled `note_created{obsidian_sync}`**,
   not one per note (a bulk import would flood PostHog): 1 per person per vault
   per hour, and `calls` carries the creates since the last one, so sum `calls`
-  for volume. It is a fold, not a milestone, so no DB count runs per create and
+  for volume, PLUS the `calls` on `note_created_rollup` events (the counts of
+  the last window are sent as a rollup within 5 minutes; summing `note_created`
+  alone undercounts). It is a fold, not a milestone, so no DB count runs per create and
   the welcome seed (never sent over `crdt_create`) cannot count. Use
   `vault_populated` for when a vault got its first note.
 - **`note_edited{web}` is the web editor; `surface_active{web}` is browsing OR

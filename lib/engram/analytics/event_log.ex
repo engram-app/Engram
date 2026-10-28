@@ -29,7 +29,7 @@ defmodule Engram.Analytics.EventLog do
   # gets the full props under the feedback policy; `$`-prefixed person
   # updates are never facts about the event.
   @allowed ~w(
-    action amount_bucket app_locale app_version area attachments auth_method bucket cadence calls
+    action amount_bucket app_locale app_version area attachments auth_method cadence calls
     category choice client client_agent client_type contact_ok cross_vault
     currency device device_number discounted duration_ms error errors events failed folders
     from_tier grant_id grant_type heard_from initiated_by interval item

@@ -20,6 +20,7 @@ import AuthShell from "../layout/auth-shell";
 import LoadingScreen from "../layout/loading-screen";
 import { isMember } from "../lib/is-member";
 import { clearPendingAuthorization, pendingCancelUrl } from "../oauth/pending-authorization";
+import { isStepCompleted } from "./step-completion";
 
 const STEP_PATHS: OnboardingStep[] = ["agreement", "billing", "heard", "vault"];
 
@@ -78,7 +79,7 @@ export default function OnboardLayout() {
 		}
 		const shownAt = Date.now();
 		const onPageHide = (event: PageTransitionEvent) => {
-			if (!event.persisted) {
+			if (!(event.persisted || isStepCompleted(current))) {
 				track(
 					"onboarding_step_abandoned",
 					{ step: current, duration_ms: Date.now() - shownAt },

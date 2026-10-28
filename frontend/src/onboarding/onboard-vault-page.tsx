@@ -25,6 +25,7 @@ import { useConfig } from "../config-context";
 import LoadingScreen from "../layout/loading-screen";
 import { peekPendingAuthorization } from "../oauth/pending-authorization";
 import { onboardingDoneTarget } from "./onboarding-next";
+import { markStepCompleted } from "./step-completion";
 import { SyncStatusPill } from "./sync-status-pill";
 import { useVaultReadyEvents } from "./use-vault-ready-events";
 
@@ -132,6 +133,7 @@ function VaultStep({
 		setActiveVaultId(vault.id);
 		// The welcome note is seeded server-side by `Engram.Vaults.WelcomeNote`
 		// on every vault creation, so there is nothing to write here.
+		markStepCompleted("vault");
 		track("onboarding_step_completed", {
 			step: "vault",
 			vault_id: vault.id,

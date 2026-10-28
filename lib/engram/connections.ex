@@ -79,7 +79,9 @@ defmodule Engram.Connections do
     |> Repo.one()
   end
 
-  defp device_active_count(user_id) do
+  @doc "Live device-flow families only (no OAuth grants): distinct, unrevoked, unexpired."
+  @spec device_active_count(Ecto.UUID.t()) :: non_neg_integer()
+  def device_active_count(user_id) do
     from(rt in DeviceRefreshToken,
       where: rt.user_id == ^user_id,
       where: is_nil(rt.revoked_at),

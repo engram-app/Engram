@@ -122,6 +122,19 @@ defmodule EngramWeb.OAuthMcpAnalyticsTest do
     refute inspect(e["properties"]) =~ "evil.example"
   end
 
+  test "a repeated refusal (a scanner) emits one rejected event per reason per window", %{
+    client: client
+  } do
+    {_verifier, challenge} = pkce_pair()
+
+    params =
+      client |> authorize_params(challenge) |> Map.put("redirect_uri", "https://evil.example/cb")
+
+    for _ <- 1..3, do: get(build_conn(), "/oauth/authorize", params)
+
+    assert [_one] = Enum.filter(drain(), &(&1["event"] == "mcp_oauth_authorize_rejected"))
+  end
+
   test "a refused authorize from an unknown client is bucketed to other" do
     {_verifier, challenge} = pkce_pair()
 

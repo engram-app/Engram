@@ -5,6 +5,7 @@ import { track } from "../analytics/track";
 import { useOnboardingStatus } from "../api/queries";
 import { stashPendingAuthorization } from "../oauth/pending-authorization";
 import OnboardLayout from "./onboard-layout";
+import { markStepCompleted } from "./step-completion";
 
 const logout = vi.fn();
 
@@ -239,6 +240,15 @@ describe("OnboardLayout abandonment beacon", () => {
 			{ step: "heard", duration_ms: expect.any(Number) },
 			{ beacon: true },
 		);
+	});
+
+	it("does not report a step as abandoned after it completed (reload or redirect)", () => {
+		renderAt("/onboard/heard", SAAS);
+		markStepCompleted("heard");
+
+		pagehide(false);
+
+		expect(mockTrack.mock.calls.filter(([e]) => e === "onboarding_step_abandoned")).toEqual([]);
 	});
 
 	it("does not count entering the back/forward cache as a departure", () => {

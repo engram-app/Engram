@@ -8,6 +8,7 @@ import { errorCodeOf } from "../analytics/error-code";
 import { track } from "../analytics/track";
 import { useSubmitFeedback } from "../api/queries";
 import { HeardFromField } from "./about-you-fields";
+import { markStepCompleted } from "./step-completion";
 
 // "How did you hear about Engram?", a web signup's step after the terms.
 // Plugin and connector signups never reach it: where they started is the
@@ -45,6 +46,7 @@ export default function HeardPage() {
 			setSaving(false);
 			return;
 		}
+		markStepCompleted("heard");
 		track("onboarding_step_completed", { step: "heard", duration_ms: Date.now() - mountedAt });
 		navigate("/onboard", { replace: true });
 	}
