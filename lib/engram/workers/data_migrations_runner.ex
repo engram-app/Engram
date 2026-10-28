@@ -36,7 +36,8 @@ defmodule Engram.Workers.DataMigrationsRunner do
     Engram.DataMigrations.NotePayloadStamps,
     Engram.DataMigrations.NoteSplit,
     Engram.DataMigrations.NoteIndexState,
-    Engram.DataMigrations.KeyAliases
+    Engram.DataMigrations.KeyAliases,
+    Engram.DataMigrations.PersonOriginBackfill
   ]
 
   @impl Oban.Worker

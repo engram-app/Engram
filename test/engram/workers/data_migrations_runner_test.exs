@@ -284,6 +284,11 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     Engram.Cache.clear_local(:rebuild)
     Repo.query!("DELETE FROM rebuild_ledger")
     Engram.Rebuild.set_budget(1_000_000)
+    # PersonOriginBackfill is disabled (no ledger row) without PostHog reads.
+    posthog = [:posthog_key, :posthog_erasure_api_key, :posthog_project_id]
+    prior = Map.new(posthog, &{&1, Application.get_env(:engram, &1)})
+    on_exit(fn -> Enum.each(prior, fn {k, v} -> Application.put_env(:engram, k, v) end) end)
+    Enum.each(posthog, &Application.put_env(:engram, &1, "test"))
     assert :ok = perform_job(DataMigrationsRunner, %{})
 
     # Every pass leaves a ledger row: mark_done/2 on :done, note_open/2 on :more.

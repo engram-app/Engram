@@ -46,9 +46,19 @@ defmodule Engram.Workers.PersonOriginSync do
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
 
-  @doc "Start the one-time backfill."
+  @doc """
+  Start the one-time backfill (run by `DataMigrations.PersonOriginBackfill`).
+  `unique` on the chain head while it is incomplete, so two callers never
+  start two chains.
+  """
   @spec backfill() :: {:ok, Oban.Job.t()} | {:error, term()}
-  def backfill, do: Oban.insert(new(%{"backfill" => true}))
+  def backfill do
+    Oban.insert(
+      new(%{"backfill" => true},
+        unique: [period: :infinity, states: [:available, :scheduled, :executing, :retryable]]
+      )
+    )
+  end
 
   @doc "Enqueue one user's sync. Delayed: Clerk has no session yet at `user.created`."
   @spec enqueue_user(Ecto.UUID.t(), non_neg_integer()) :: {:ok, Oban.Job.t()} | {:error, term()}
