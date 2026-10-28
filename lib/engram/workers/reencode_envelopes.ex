@@ -93,9 +93,10 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   import Ecto.Query
 
   alias Engram.Accounts.User
+  alias Engram.Backfill.IdWindows
   alias Engram.Backfill.TenantScan
   alias Engram.Crypto
-  alias Engram.Crypto.{Envelope, RotationGate, TenantSweep}
+  alias Engram.Crypto.{Envelope, RotationGate}
   alias Engram.Logger.Metadata
   alias Engram.Notes.{CrdtUpdateLog, Note, VaultIndexState, VaultIndexUpdateLog}
   alias Engram.Repo
@@ -242,7 +243,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
     written = :counters.new(1, [])
 
     result =
-      TenantSweep.each_batch(
+      IdWindows.each_batch(
         user_id,
         column.schema,
         &reencode_batch(user_id, column, &1, deadline, written),

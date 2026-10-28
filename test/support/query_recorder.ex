@@ -59,7 +59,13 @@ defmodule Engram.QueryRecorder do
       send(
         pid,
         {:recorded_query,
-         %{source: meta[:source], sql: meta.query, caller: caller(st), pid: self()}}
+         %{
+           source: meta[:source],
+           sql: meta.query,
+           params: meta[:params] || [],
+           caller: caller(st),
+           pid: self()
+         }}
       )
     end
   end
@@ -103,6 +109,16 @@ defmodule Engram.QueryRecorder do
     end)
     |> elem(0)
     |> Enum.reverse()
+  end
+
+  @doc """
+  The statements `pid` ran that read `table` outside an id window (#2276).
+  See `Engram.WindowedReads.windowed?/4` for what counts as a window.
+  """
+  def unwindowed(queries, table, window, pid \\ self()) do
+    for %{sql: sql, params: params, pid: ^pid} <- queries,
+        not Engram.WindowedReads.windowed?(sql, params, table, window),
+        do: sql
   end
 
   def format(queries) do

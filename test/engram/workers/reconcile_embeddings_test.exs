@@ -7,6 +7,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
   alias Engram.KeywordIndex
   alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
+  alias Engram.QueryRecorder
   alias Engram.Workers.{EmbedNote, RebuildStaleNote, ReconcileEmbeddings, RefreshKeywordVectors}
 
   # The test embedder declares no model, which turns model tracking off; name
@@ -576,11 +577,38 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
 
       assert length(all_enqueued(worker: EmbedNote)) == 1_205
 
-      # One tenant transaction PER PAGE (embed sweep: 2 pages, keyword sweep:
-      # 1), not one per user: a transaction holding a whole backlog runs past
-      # the 15 s checkout deadline, rolls back, and stalls every later user.
-      # Plus the embed-bucket queue's one per-tenant "anything parked?" check.
-      assert txns == 4
+      # One tenant transaction PER PAGE, not one per user: a transaction
+      # holding a whole backlog runs past the 15 s checkout deadline, rolls
+      # back, and stalls every later user. IndexVersions is open, so both
+      # sweeps walk id windows of 1,000 (#2276), each window read its own
+      # transaction: embed sweep 3 window reads (1,000, 205, then the empty
+      # one that ends the walk) and 3 pages (1,000, 0, 205); keyword sweep 3
+      # window reads and 2 empty pages. Plus the embed-bucket queue's one
+      # per-tenant "anything parked?" check.
+      assert txns == 12
+    end
+
+    # #2276: while IndexVersions is open the version and keyword terms defeat
+    # every index, so each sweep statement must read one id window, never
+    # "the next page of stale notes" across the table.
+    test "while IndexVersions is open, the sweeps read notes one window at a time" do
+      user = insert(:user)
+      for _ <- 1..3, do: current_note(user, keyword_version: nil, chunker_version: nil)
+
+      {_, queries} =
+        QueryRecorder.record(fn ->
+          assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[03:57:00]))
+        end)
+
+      assert length(all_enqueued(worker: RebuildStaleNote)) == 3
+
+      # The parked-user check is served by its own partial index
+      # (`notes_embed_budget_parked_user_id_index`), not a sweep.
+      parked_check =
+        ~r/^SELECT TRUE FROM "notes" AS n0 WHERE \(\(n0."kind" = 'note'\) AND \(n0."embed_budget_parked" = TRUE\)\) LIMIT 1$/
+
+      sweeps = Enum.reject(queries, &(&1.sql =~ parked_check))
+      assert QueryRecorder.unwindowed(sweeps, "notes", 1_000) == []
     end
 
     # The keyword sweep pages to the end too, never "the first page".
@@ -597,13 +625,17 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
         end)
 
       assert length(all_enqueued(worker: RefreshKeywordVectors)) == 5
-      # Embed sweep: one empty page. Keyword sweep: 2, 2, then 1. Bucket
-      # queue: one "anything parked?" check.
-      assert txns == 5
+      # Each sweep walks id windows (#2276): one window of 5, then the empty
+      # window that ends the walk, each read its own transaction. Embed sweep:
+      # 2 window reads and one empty page. Keyword sweep: 2 window reads and
+      # pages of 2, 2, then 1. Bucket queue: one "anything parked?" check.
+      assert txns == 9
     end
 
-    # One notes query per SWEEP per tenant (the embed sweep, the keyword
-    # sweep and the embed-bucket queue's parked check), never one per vault.
+    # A fixed number of notes queries per SWEEP per tenant, never one per
+    # vault: the embed and keyword sweeps each read a window, run its page,
+    # and read the empty window that ends the walk (#2276); the embed-bucket
+    # queue's parked check is one.
     test "runs one notes query per sweep regardless of vault count" do
       user = insert(:user)
 
@@ -637,7 +669,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       end
 
       queries = collect_queries()
-      assert Enum.count(queries, &(&1 == "notes")) == 3
+      assert Enum.count(queries, &(&1 == "notes")) == 7
       refute Enum.any?(queries, &(&1 == "vaults"))
     end
 

@@ -1,11 +1,11 @@
-defmodule Engram.Crypto.TenantSweepChunkTest do
+defmodule Engram.Backfill.IdWindowsChunkTest do
   # DEK rotation sweeps `chunk_points` only for their display envelope, so a
   # sweep visits only rows that hold one (notes over the display threshold).
   # Rows with only a checksum, the common case, are never visited.
   use Engram.DataCase, async: true
 
+  alias Engram.Backfill.IdWindows
   alias Engram.Crypto
-  alias Engram.Crypto.TenantSweep
   alias Engram.Notes.ChunkPoint
 
   setup do
@@ -45,7 +45,7 @@ defmodule Engram.Crypto.TenantSweepChunkTest do
     {:ok, agent} = Agent.start_link(fn -> [] end)
 
     :ok =
-      TenantSweep.each_batch(user.id, ChunkPoint, fn ids ->
+      IdWindows.each_batch(user.id, ChunkPoint, fn ids ->
         Agent.update(agent, &(&1 ++ ids))
         :ok
       end)

@@ -84,7 +84,10 @@ defmodule Engram.Indexing.NoteCountsMaintenanceTest do
              )
   end
 
-  test "a chunk delete and its recount through the maintenance pool", %{note: note} do
+  # The chunks trigger counts as the writer: under `engram_maintenance` its
+  # state write goes through `maintenance_all`. A write RLS filtered to zero
+  # rows would leave 3 points and leave the recount something to fix.
+  test "a chunk delete through the maintenance pool is counted by the trigger", %{note: note} do
     {:ok, _} =
       Maintenance.transaction(fn ->
         {1, _} =
@@ -92,10 +95,25 @@ defmodule Engram.Indexing.NoteCountsMaintenanceTest do
             from(c in Chunk, where: c.note_id == ^note.id and c.position == 2)
           )
 
-        assert ChunkRows.recount!([note.id], Maintenance) == 1
+        assert ChunkRows.recount!([note.id], Maintenance) == 0
       end)
 
     assert %{points: 2, len_rows: 2, len_sum: 20} = state(note.id)
+  end
+
+  # recount! itself writes through `maintenance_all`: a hand-drifted counter
+  # (no chunk write, so no trigger) is one row to fix. RLS filtering the
+  # UPDATE to zero rows would return 0 and leave 99.
+  test "recount! through the maintenance pool fixes a hand-drifted counter", %{note: note} do
+    {1, _} =
+      Maintenance.update_all(from(s in NoteIndexState, where: s.note_id == ^note.id),
+        set: [points: 99]
+      )
+
+    {:ok, _} =
+      Maintenance.transaction(fn -> assert ChunkRows.recount!([note.id], Maintenance) == 1 end)
+
+    assert %{points: 3, len_rows: 3, len_sum: 30} = state(note.id)
   end
 
   test "the backfill fills and counts through the maintenance pool", %{note: note} do

@@ -10,6 +10,7 @@ defmodule Engram.Notes.NoteIndexStateTest do
   alias Engram.DataMigrations.NoteIndexState, as: Backfill
   alias Engram.Notes
   alias Engram.Notes.{Note, NoteIndexState}
+  alias Engram.QueryRecorder
   alias Engram.Repo
 
   setup do
@@ -131,6 +132,31 @@ defmodule Engram.Notes.NoteIndexStateTest do
       assert state(a.id).keyword_version == 99
     end
 
+    # #2276: the pass bounds rows READ per statement, not rows returned. One
+    # drifted note at the END of the id order, behind clean ones: the old
+    # "next N matching notes" query walked every clean note to reach it, and
+    # the "anything left?" EXISTS walked the table again. Every statement that
+    # reads `notes` must be a pure keyset window or confined to one window's
+    # ids.
+    test "a missing row at the end of the table, every statement one window", %{
+      user: u,
+      vault: v
+    } do
+      notes = for i <- 1..9, do: write!(u, v, "W#{i}.md", "# W\n\nbody #{i}")
+      last = Enum.max_by(notes, & &1.id)
+      Repo.query!("DELETE FROM note_index_state WHERE note_id = $1", [Ecto.UUID.dump!(last.id)])
+
+      {_, queries} =
+        QueryRecorder.record(fn ->
+          assert {:more, rows: 1} = Backfill.run_pass(batch: 2)
+          assert :done = Backfill.run_pass(batch: 2)
+        end)
+
+      assert mirrors?(state(last.id), note(last.id))
+      assert Enum.any?(queries, &(&1.sql =~ "notes"))
+      assert QueryRecorder.unwindowed(queries, "notes", 2) == []
+    end
+
     test "keyset-pages across batches", %{user: u, vault: v} do
       for i <- 1..3, do: write!(u, v, "N#{i}.md", "# N\n\nbody #{i}")
       Repo.query!("DELETE FROM note_index_state")
@@ -217,14 +243,21 @@ defmodule Engram.Notes.NoteIndexStateTest do
 
       assert result == :done
       # Old code: one statement probed all 3000 notes, and the done check
-      # probed them all again. Now: 6 full windows of 500 plus the empty tail, 3000 total.
-      assert length(probes) == 7
+      # probed them all again. Now: 6 full windows of 500, 3000 total (the
+      # empty window that ends the walk runs no drift scan).
+      assert length(probes) == 6
       assert Enum.max(probes) <= 500 + 25
       assert Enum.sum(probes) <= 3000 + 100
     end
 
     test "a note whose state row vanishes mid-pass keeps the pass open", %{user: u} do
-      victim = Repo.one!(from(n in Note, select: n.id, limit: 1), skip_tenant_check: true)
+      # The first note in id order: its window's fill runs first, so the
+      # delete below lands after that fill and before that window's scan.
+      victim =
+        Repo.one!(from(n in Note, select: n.id, order_by: n.id, limit: 1),
+          skip_tenant_check: true
+        )
+
       test = self()
       id = {__MODULE__, make_ref()}
 
@@ -232,7 +265,7 @@ defmodule Engram.Notes.NoteIndexStateTest do
         id,
         [:engram, :repo, :query],
         fn _, _, %{query: q}, _ ->
-          # After the fill phase read, before the recount phase.
+          # After the first window's fill, before its drift scan.
           if q =~ "note_index_state_sync" and Process.get(:deleted) != true do
             Process.put(:deleted, true)
 

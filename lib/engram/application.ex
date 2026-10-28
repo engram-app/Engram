@@ -360,6 +360,9 @@ defmodule Engram.Application do
       # Repo so the shutdown flush can still write.
       Engram.Abuse.OriginStats.Buffer,
       rate_limiter_child(),
+      # Walk cursors of the data-migration ledger passes (IdWindows); before
+      # Oban, whose runner job uses them.
+      Engram.Backfill.IdWindows,
       {Oban, oban},
       boot_sweep_child(oban),
       # Payload indexes for this boot's flag state, on every node; retries

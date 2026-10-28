@@ -142,7 +142,16 @@ defmodule Engram.Analytics.PersonProperties do
   @spec by_user() :: [{Ecto.UUID.t(), map()}]
   def by_user do
     repo = Repo.maintenance()
-    {rows, oauth} = Repo.cross_tenant(fn -> {repo.all(query()), repo.all(oauth_clients())} end)
+    # Daily full aggregates, read whole by design: the maintenance pool's
+    # ceiling, explicit so self-host (where this is `Engram.Repo`, 15 s)
+    # gets it too (#2276).
+    timeout = Engram.RuntimeConfig.maintenance_timeout()
+
+    {rows, oauth} =
+      Repo.cross_tenant(fn ->
+        {repo.all(query(), timeout: timeout), repo.all(oauth_clients(), timeout: timeout)}
+      end)
+
     oauth = Enum.group_by(oauth, &elem(&1, 0), &elem(&1, 1))
     Enum.map(rows, &{&1.user_id, to_traits(&1, Map.get(oauth, &1.user_id, []))})
   end

@@ -35,10 +35,12 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Attachments.SegmentedCipher
   alias Engram.Attachments.Upload
   alias Engram.Auth.SessionInvalidator
+  alias Engram.Backfill.IdWindows
   alias Engram.Crypto
-  alias Engram.Crypto.{DekCache, Envelope, MigrationRunner, RotationLock, TenantSweep}
+  alias Engram.Crypto.{DekCache, Envelope, MigrationRunner, RotationLock}
   alias Engram.Crypto.KeyProvider.Resolver
   alias Engram.Indexing
+  alias Engram.Indexing.ChunkRows
   alias Engram.Logger.Metadata
   alias Engram.Notes.CrdtUpdateLog
   alias Engram.Notes.FieldCatalog
@@ -225,7 +227,7 @@ defmodule Engram.Crypto.UserDekRotation do
   # ---------------------------------------------------------------------------
 
   defp sweep_notes(%User{id: user_id}, old_dek, new_dek, new_filter_key, new_dek_version) do
-    TenantSweep.each_batch(
+    IdWindows.each_batch(
       user_id,
       Engram.Notes.Note,
       fn batch_ids ->
@@ -286,7 +288,7 @@ defmodule Engram.Crypto.UserDekRotation do
   # ---------------------------------------------------------------------------
 
   defp sweep_vaults(%User{id: user_id}, old_dek, new_dek, new_filter_key, new_dek_version) do
-    TenantSweep.each_batch(
+    IdWindows.each_batch(
       user_id,
       Engram.Vaults.Vault,
       fn batch_ids ->
@@ -874,7 +876,7 @@ defmodule Engram.Crypto.UserDekRotation do
          new_filter_key,
          new_dek_version
        ) do
-    TenantSweep.each_batch(user_id, Upload, fn batch_ids ->
+    IdWindows.each_batch(user_id, Upload, fn batch_ids ->
       Repo.transaction(fn ->
         # Completed sessions are skipped: nothing reads their key or path
         # again (a repeat complete reads the committed row), and their file
@@ -968,7 +970,7 @@ defmodule Engram.Crypto.UserDekRotation do
   # ---------------------------------------------------------------------------
 
   defp sweep_note_links(%User{id: user_id}, old_dek, new_dek, new_filter_key, new_dek_version) do
-    TenantSweep.each_batch(
+    IdWindows.each_batch(
       user_id,
       Engram.Links.NoteLink,
       fn batch_ids ->
@@ -1132,7 +1134,7 @@ defmodule Engram.Crypto.UserDekRotation do
   # a node dying after the flip loses nothing and a later edit is not
   # reverted.
   defp resync_note_attrs(%User{id: user_id}, new_dek, new_filter_key) do
-    TenantSweep.each_batch(
+    IdWindows.each_batch(
       user_id,
       Engram.Notes.Note,
       fn batch_ids ->
@@ -1202,7 +1204,7 @@ defmodule Engram.Crypto.UserDekRotation do
   # re-derives the text from the note content, and the next index pass
   # writes the envelope again.
   defp sweep_chunk_texts(%User{id: user_id}, old_dek, new_dek) do
-    TenantSweep.each_batch(user_id, Engram.Notes.ChunkPoint, fn batch_ids ->
+    IdWindows.each_batch(user_id, Engram.Notes.ChunkPoint, fn batch_ids ->
       Repo.transaction(fn ->
         from(c in Engram.Notes.ChunkPoint,
           where: c.point_id in ^batch_ids and not is_nil(c.display_ct),
@@ -1264,9 +1266,9 @@ defmodule Engram.Crypto.UserDekRotation do
     new_ck = Crypto.dek_content_hash_key_from_bytes(new_dek)
     new_floor = Indexing.text_sum(new_ck, "")
 
-    # By NOTE: the ChunkPoint cursor (`TenantSweep`) visits only envelope
+    # By NOTE: the ChunkPoint cursor (`IdWindows`) visits only envelope
     # rows, and these are the rows without one. The batch runs in the tenant.
-    TenantSweep.each_batch(user_id, Engram.Notes.Note, fn note_ids ->
+    IdWindows.each_batch(user_id, Engram.Notes.Note, fn note_ids ->
       rows =
         from(c in Engram.Notes.ChunkPoint,
           where: c.note_id in ^note_ids and is_nil(c.display_ct) and not is_nil(c.slice_sum),
@@ -1394,7 +1396,7 @@ defmodule Engram.Crypto.UserDekRotation do
       {Crypto.dek_content_hash_key_from_bytes(old_dek),
        Crypto.dek_content_hash_key_from_bytes(new_dek)}
 
-    TenantSweep.each_batch(
+    IdWindows.each_batch(
       user_id,
       Engram.Notes.Note,
       fn batch_ids -> remap_batch(user_id, batch_ids, new_dek, keys) end,
@@ -1428,6 +1430,13 @@ defmodule Engram.Crypto.UserDekRotation do
 
     {:ok, _} =
       Repo.with_tenant(user_id, fn ->
+        # The note first, as every chunk writer does (`ChunkRows`, "Lock
+        # order"): each chunk statement's trigger then takes the note's
+        # `note_index_state` row, and a concurrent reindex of this note,
+        # holding chunk rows these updates need, would otherwise wait on it
+        # in a cycle.
+        :ok = ChunkRows.lock_notes!([note_id])
+
         # `chunks` carries FORCE ROW LEVEL SECURITY: unscoped, these match
         # zero rows and still return :ok, a silent no-op. A row neither old-
         # nor new-key (text edited since its last index) is cleared, as
@@ -1916,7 +1925,7 @@ defmodule Engram.Crypto.UserDekRotation do
   # No HMAC and no filter key: the snapshot is one opaque blob with no lookup
   # column, which is why this takes fewer arguments than its siblings.
   defp sweep_vault_index_states(%User{id: user_id}, old_dek, new_dek, new_dek_version) do
-    TenantSweep.each_batch(
+    IdWindows.each_batch(
       user_id,
       Engram.Notes.VaultIndexState,
       fn batch_ids ->
@@ -1985,7 +1994,7 @@ defmodule Engram.Crypto.UserDekRotation do
   #
   # Keyed by the row id (not the vault) because the AAD binds per row.
   defp sweep_vault_index_update_log(%User{id: user_id}, old_dek, new_dek, new_dek_version) do
-    TenantSweep.each_batch(
+    IdWindows.each_batch(
       user_id,
       Engram.Notes.VaultIndexUpdateLog,
       fn batch_ids ->

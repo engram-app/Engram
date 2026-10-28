@@ -23,6 +23,7 @@ defmodule Engram.Backfill.TenantScanTest do
   alias Engram.Crypto
   alias Engram.Notes.Note
   alias Engram.Onboarding
+  alias Engram.QueryRecorder
   alias Engram.Repo
 
   setup do
@@ -108,6 +109,23 @@ defmodule Engram.Backfill.TenantScanTest do
       assert skipped == [],
              "#{unquote(label)} discovery bypassed the tenant guard on #{inspect(skipped)} — " <>
                "on prod those reads return zero rows under FORCE RLS (#1349)"
+    end
+  end
+
+  # #2276: the same discoveries bound rows READ per statement. Each statement
+  # reading `notes` is an id window or confined to one window's ids; "every
+  # (user, vault) with a matching note" in one DISTINCT walked the table.
+  for {label, mod, fun} <- [
+        {"crdt_state seed", Engram.Workers.BackfillCrdtState, :enqueue_missing},
+        {"crdt_head warm", Engram.Workers.BackfillCrdtHead, :enqueue_all},
+        {"index versions", Engram.DataMigrations.IndexVersions, :run_pass}
+      ] do
+    test "#{label} discovery reads notes one id window at a time", %{user: user, vault: vault} do
+      insert_note!(user, vault, %{"content" => "discoverable"})
+
+      {_, queries} = QueryRecorder.record(fn -> apply(unquote(mod), unquote(fun), []) end)
+
+      assert QueryRecorder.unwindowed(queries, "notes", 1_000) == []
     end
   end
 end

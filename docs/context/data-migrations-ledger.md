@@ -35,6 +35,28 @@ others.
   returns `users: n`), which the runner adds to its log lines.
 - `:done` means no row the backfill would process still needs work, checked
   against exactly those rows (the same scan and predicate the worker uses).
+- Every statement reads one id window, never "the next N rows that need work"
+  (#2276; the backend `AGENTS.md` rule). A pass walks `notes` through
+  `Engram.Backfill.IdWindows.heal_pass/4`: each window's step fixes what it
+  can and says whether a matched row is still unfixed (a row lock it
+  skipped). `:done` is ONE complete walk, start to end, that fixed nothing
+  and left nothing; that walk is the completion check, so no separate
+  fleet-wide EXISTS runs. A walk can span passes: a pass stops on its time
+  budget (240 s) or `:max_fixed`, and the next pass resumes at the cursor,
+  so the tail is reached however large the table. A walk that found work
+  ends and the next pass starts a new one. Every pass processes at least one
+  window. The cursor is node-local (an Agent in the application tree): a
+  restart or a pass on another node starts the walk over (slower, never a
+  false done). A walk
+  spanning more than 3 passes logs a warning per pass and emits
+  `[:engram, :id_windows, :walk_spanning]`.
+- `NoteIndexState`'s chunk counters are kept on every `chunks` write by the
+  `chunks_sync_note_counts_*` statement triggers (migration 20261028000000):
+  absolute recount of the touched notes, one state write per note per
+  statement. The ledger's windowed recount is the backstop for notes counted
+  before the trigger and for anything that bypasses it; it should find
+  nothing once the trigger is in. It stays until the trigger has run clean
+  in prod for a week.
 - Two kinds of unfixed row, treated oppositely:
   - Rows the worker can never SELECT (deleted notes, soft-deleted vaults, for
     `CrdtStateSeed` notes backed by a `crdt_update_log` tail) are not its work.
@@ -91,10 +113,20 @@ keeps its own check in `ReconcileEmbeddings`.
 
 ## Cross-tenant discovery
 
-Use `DataMigrations.any_row?/1`. Never `skip_tenant_check: true` on the app
-pool: FORCE RLS turns that into zero rows and the migration would close early
-(#1349). `any_row?/1` uses the maintenance repo when enabled, else one query per
-user inside that user's RLS context.
+Use `DataMigrations.any_row?/1` (a `notes` query) or `IdWindows` directly.
+Never `skip_tenant_check: true` on the app pool: FORCE RLS turns that into
+zero rows and the migration would close early (#1349). `any_row?/1` walks
+`notes` in id windows of 1,000 and asks the query only inside each window,
+stopping at the first hit: fleet-wide on the maintenance repo when enabled,
+else per user inside that user's RLS context. It is cheapest while work is
+left (an early hit) and costs one full walk, one window per statement, to
+prove done. The single EXISTS it replaced was slowest exactly when almost
+done (#2276).
+
+Per-user windows filter on `user_id`, and `notes` has no `(user_id, id)`
+index, so on the per-user path (self-host) a window read is bounded by the
+user's row count, not the window. The fleet walk (SaaS) reads the primary key
+only.
 
 ## Jobs without `unique`
 

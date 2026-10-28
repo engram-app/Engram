@@ -29,7 +29,7 @@ defmodule Engram.Workers.BackfillCrdtHead do
   import Ecto.Query
 
   alias Engram.Accounts
-  alias Engram.Backfill.TenantScan
+  alias Engram.Backfill.IdWindows
   alias Engram.Crypto.RotationGate
   alias Engram.Notes.{CrdtTransport, Note}
   alias Engram.Repo
@@ -58,14 +58,14 @@ defmodule Engram.Workers.BackfillCrdtHead do
   """
   @spec enqueue_all() :: non_neg_integer()
   def enqueue_all do
-    # Through TenantScan.all/1: one maintenance-pool query on SaaS, a
-    # per-tenant loop elsewhere. Never one cross-tenant read on the app pool,
-    # which FORCE ROW LEVEL SECURITY turns into zero rows (#1349).
-    # ponytail: an hourly scan of the live notes, deliberately unindexed. Any
-    # index on crdt_head makes every CRDT append (which clears it) a non-HOT
-    # update across all notes indexes (NotesHotAppendTest); one bounded scan
-    # an hour is the cheaper side. Moving crdt_head off `notes` (the v5-window
-    # body split) is the upgrade path.
+    # Through IdWindows.all/2: a fleet walk on the maintenance pool on SaaS,
+    # a per-tenant walk elsewhere. Never one cross-tenant read on the app
+    # pool, which FORCE ROW LEVEL SECURITY turns into zero rows (#1349).
+    # ponytail: an hourly walk of every notes row, deliberately unindexed,
+    # one id window per statement (#2276: the single DISTINCT over all live
+    # notes grew with the table). Any index on crdt_head makes every CRDT
+    # append (which clears it) a non-HOT update across all notes indexes
+    # (NotesHotAppendTest); moving crdt_head off `notes` is the upgrade path.
     pairs =
       from(n in Note,
         join: v in Vault,
@@ -74,7 +74,8 @@ defmodule Engram.Workers.BackfillCrdtHead do
         distinct: true,
         select: {n.user_id, n.vault_id}
       )
-      |> TenantScan.all()
+      |> IdWindows.all()
+      |> Enum.uniq()
 
     Enum.each(pairs, fn {user_id, vault_id} ->
       %{"user_id" => user_id, "vault_id" => vault_id, "cursor" => @start_cursor}

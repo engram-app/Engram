@@ -1,9 +1,10 @@
 defmodule Engram.Workers.BackfillCrdtHeadMaintenanceTest do
   @moduledoc """
   `BackfillCrdtHead.enqueue_all/0` (hourly, via WarmCrdtHeads) discovers work
-  in ONE query on the maintenance pool when one is configured, instead of one
-  tenant transaction per user (2026-10-20 audit, P1-7). The query has no
-  index on purpose: see NotesHotAppendTest.
+  in ONE id-window walk on the maintenance pool when one is configured,
+  instead of one tenant transaction per user (2026-10-20 audit, P1-7). The
+  walk reads one window per statement (#2276) and has no index on purpose:
+  see NotesHotAppendTest.
 
   Same rig as ReconcileEmbeddingsMaintenanceTest: the app pool runs as
   `engram_app` with no tenant, where the notes policy hides every row, and a
@@ -18,6 +19,7 @@ defmodule Engram.Workers.BackfillCrdtHeadMaintenanceTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Engram.Notes.Note
+  alias Engram.QueryRecorder
   alias Engram.Repo
   alias Engram.Repo.Maintenance
   alias Engram.Workers.BackfillCrdtHead
@@ -48,7 +50,7 @@ defmodule Engram.Workers.BackfillCrdtHeadMaintenanceTest do
       %{vaults: vaults}
     end
 
-    test "finds every tenant's vaults in one query, none on the app pool", %{vaults: vaults} do
+    test "finds every tenant's vaults in one walk, none on the app pool", %{vaults: vaults} do
       test_pid = self()
       handler = {__MODULE__, make_ref()}
 
@@ -65,15 +67,22 @@ defmodule Engram.Workers.BackfillCrdtHeadMaintenanceTest do
         nil
       )
 
-      try do
-        assert as_prod_role_committing(fn -> BackfillCrdtHead.enqueue_all() end) >= 2
-      after
-        :telemetry.detach(handler)
-      end
+      {_, queries} =
+        try do
+          QueryRecorder.record(fn ->
+            assert as_prod_role_committing(fn -> BackfillCrdtHead.enqueue_all() end) >= 2
+          end)
+        after
+          :telemetry.detach(handler)
+        end
 
       refute_received :app_pool_notes_query
-      assert_received :maintenance_notes_query
-      refute_received :maintenance_notes_query
+
+      # One walk for both users: their notes fit one window, so exactly the
+      # window, its predicate, and the empty window that ends the walk. The
+      # old single DISTINCT over every live note was 1; a walk per user, 6.
+      assert drain(:maintenance_notes_query, 0) == 3
+      assert QueryRecorder.unwindowed(queries, "notes", 1_000) == []
 
       for {user_id, vault_id} <- vaults do
         assert_enqueued(
@@ -81,6 +90,14 @@ defmodule Engram.Workers.BackfillCrdtHeadMaintenanceTest do
           args: %{"user_id" => user_id, "vault_id" => vault_id}
         )
       end
+    end
+  end
+
+  defp drain(msg, n) do
+    receive do
+      ^msg -> drain(msg, n + 1)
+    after
+      0 -> n
     end
   end
 

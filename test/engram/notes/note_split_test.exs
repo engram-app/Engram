@@ -2,10 +2,13 @@ defmodule Engram.Notes.NoteSplitTest do
   # Wave 3 dual-write: the notes_derive_core_keys / notes_sync_body triggers
   # keep the narrow core columns and note_bodies in step with every write,
   # and the NoteSplit data migration fills rows written before them.
-  use Engram.DataCase, async: true
+  # Not async: `NoteSplit.run_pass/1` resumes a node-global walk cursor
+  # (`IdWindows.heal_pass/4`), which DataCase resets before each sync test.
+  use Engram.DataCase, async: false
 
   alias Engram.DataMigrations.NoteSplit
   alias Engram.Notes
+  alias Engram.QueryRecorder
   alias Engram.Repo
 
   setup do
@@ -236,6 +239,26 @@ defmodule Engram.Notes.NoteSplitTest do
 
       assert :done = NoteSplit.run_pass()
       assert_received {^ref, 0}
+    end
+
+    # #2276: one row needing work at the END of the id order, behind clean
+    # ones. Every statement reading `notes` is a keyset window or confined to
+    # one window's ids: no "next N rows that need work", no EXISTS over the
+    # table.
+    test "a row at the end of the table, every statement one window", %{user: u, vault: v} do
+      notes = for i <- 1..9, do: write!(u, v, "w#{i}.md", "w#{i}")
+      last = Enum.max_by(notes, & &1.id)
+      Repo.query!("DELETE FROM note_bodies WHERE note_id = $1", [Ecto.UUID.dump!(last.id)])
+
+      {_, queries} =
+        QueryRecorder.record(fn ->
+          assert {:more, rows: 1} = NoteSplit.run_pass(batch: 2)
+          assert :done = NoteSplit.run_pass(batch: 2)
+        end)
+
+      assert row(last.id)["has_body"]
+      assert Enum.any?(queries, &(&1.sql =~ "notes"))
+      assert QueryRecorder.unwindowed(queries, "notes", 2) == []
     end
 
     test "keyset-pages across batches without rescanning", %{user: u, vault: v} do

@@ -36,6 +36,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
   import Ecto.Query
 
+  alias Engram.Backfill.IdWindows
   alias Engram.Backfill.TenantScan
   alias Engram.Billing
   alias Engram.Billing.Subscription
@@ -91,8 +92,11 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     now = DateTime.utc_now()
     backoff_until = DateTime.add(now, backoff_seconds(), :second)
 
-    # One page of eligible stale notes, oldest-first, kept as a subquery so
-    # the whole select-and-stamp is ONE statement (see the UPDATE below).
+    # One page of eligible stale notes, oldest-first (fleet-wide once
+    # IndexVersions is done; within one id window while it is open, where
+    # the cooldown stamp, not the order, keeps any note from starving), kept
+    # as a subquery so the whole select-and-stamp is ONE statement (see the
+    # UPDATE below).
     # The SQL proxy for "unmetered": a paid, entitled subscription. Used to
     # let an embed-budget park lapse once the user upgrades (see below).
     # `entitled_statuses/0` rather than a hand-rolled subset: dropping
@@ -125,9 +129,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     version_stale =
       if versions_done, do: dynamic(false), else: IndexVersions.stale_dynamic(versions)
 
-    sweep_tenant = fn repo, remaining ->
+    sweep_tenant = fn repo, ids, remaining ->
       eligible =
         IndexVersions.live_notes()
+        |> in_window(ids)
         # Two ways a note is stale:
         #   1. content changed since it was indexed (or was never indexed)
         #   2. it is indexed but has NO dense vectors. That is the backfill for
@@ -252,7 +257,11 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       rows
     end
 
-    counts = scan(&sweep_tenant.(&1, page_size), page_size, &enqueue_page/1)
+    # The version term defeats the `notes_reconcile_due` partial index, so
+    # while it is on the sweep asks one id window at a time (#2276); once
+    # IndexVersions is done the index serves it, one statement per page.
+    counts =
+      scan(&sweep_tenant.(&1, &2, page_size), page_size, &enqueue_page/1, not versions_done)
 
     eligible = Enum.sum(Enum.map(counts, &elem(&1, 0)))
     queued = Enum.sum(Enum.map(counts, &elem(&1, 1)))
@@ -318,13 +327,17 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # twelve re-verify ticks.
   @recap_batch 100
 
+  # Notes per id window when a sweep's predicate has no index to serve it
+  # (`scan/4`, `sweep_over_note_cap/1`): one primary-key range per statement.
+  @window 1_000
+
   # Notes indexed before the per-note cap (or on a plan since downgraded)
   # that hold more chunks than their tier's `note_points_cap`. They go to
   # RebuildStaleNote with `recap: true`, which re-merges them unmetered. One
   # bounded batch per tick, and only in the daily re-verify hour: the probe
-  # touches every dense note, the backlog is a one-off (641 notes in prod on
-  # 2026-10-18, under a day of ticks), new notes are capped as they are indexed,
-  # and a downgrade can wait a day.
+  # touches every dense note (one id window per statement), the backlog is a
+  # one-off (641 notes in prod on 2026-10-18, under a day of ticks), new notes
+  # are capped as they are indexed, and a downgrade can wait a day.
   #
   # "More than `cap` chunks" is read as "a chunk at position >= cap": positions
   # are unique per note and start at 0, so a note over the cap always has one,
@@ -352,9 +365,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       backoff_until = DateTime.add(now, backoff_seconds(), :second)
       over_cap = over_note_cap_dynamic(tier_caps, Billing.active_overrides(:note_points_cap))
 
-      page = fn repo, limit ->
+      page = fn repo, ids, limit ->
         eligible =
           IndexVersions.content_current_notes()
+          |> in_window(ids)
           |> where([n], n.dense_indexed_hash == n.content_hash and is_nil(n.index_tier))
           |> where(^dynamic([n], not (^IndexVersions.stale_dynamic(Rebuild.build_versions()))))
           |> where([n], is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now)
@@ -371,23 +385,21 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         found
       end
 
-      rows =
-        case Repo.maintenance() do
-          Repo ->
-            Enum.reduce_while(TenantScan.user_ids(), [], fn user_id, acc ->
-              case @recap_batch - length(acc) do
-                0 ->
-                  {:halt, acc}
-
-                left ->
-                  {:ok, found} = Repo.with_tenant(user_id, fn -> page.(Repo, left) end)
-                  {:cont, acc ++ found}
-              end
-            end)
-
-          maintenance ->
-            page.(maintenance, @recap_batch)
-        end
+      # One id window at a time (#2276): the over-cap probe is per note and
+      # no index serves the predicate, so "the next 100 over the cap" walked
+      # every dense note in one statement. The 100 are now the first found in
+      # id order, oldest-first only within a window; the backoff stamp moves
+      # a picked note out of the next tick's way, so every note is reached.
+      {:ok, rows} =
+        IdWindows.reduce_all(
+          Note,
+          [],
+          fn ids, %{repo: repo}, acc ->
+            acc = acc ++ page.(repo, ids, @recap_batch - length(acc))
+            if length(acc) < @recap_batch, do: {:cont, acc}, else: {:halt, acc}
+          end,
+          batch_size: @window
+        )
 
       fresh = rows |> reject_pending(RebuildStaleNote) |> within_ceilings(now)
 
@@ -592,7 +604,14 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   defp budget_users(caps, limit, now) do
     repo = Repo.maintenance()
     tick = div(DateTime.to_unix(now), 300)
-    per_user = fn query -> Repo.cross_tenant(fn -> repo.all(query) end) end
+    # Daily GROUP BYs over every note (the re-verify hour only): the
+    # maintenance pool's ceiling, explicit so self-host (where this is
+    # `Engram.Repo`, 15 s) gets it too (#2276).
+    per_user = fn query ->
+      Repo.cross_tenant(fn ->
+        repo.all(query, timeout: Engram.RuntimeConfig.maintenance_timeout())
+      end)
+    end
 
     # The per-note counters summed per user (`Indexing.points_by_user/0`),
     # not a GROUP BY over every chunk row; users with no points have
@@ -1131,9 +1150,15 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   defp daily_reverify?(%DateTime{hour: 4}), do: true
   defp daily_reverify?(_scheduled_at), do: false
 
-  # Runs `sweep.(repo)` over every tenant: once on the maintenance pool
-  # (which sees every tenant) where one is configured, as prod does; else
-  # once per user inside that user's tenant.
+  # Runs `page.(repo, ids)` over every tenant until each page comes back
+  # short: once on the maintenance pool (which sees every tenant) where one
+  # is configured, as prod does; else once per user inside that user's
+  # tenant.
+  #
+  # `windowed` asks one id window at a time (`ids`, `IdWindows`), for a
+  # predicate no index serves: each statement then reads one window, not
+  # the table (#2276). Without it `ids` is nil and the pages page the whole
+  # tenant, which only an index-served predicate may do.
   #
   # Never one cross-tenant statement on the app pool. `notes` carries FORCE
   # ROW LEVEL SECURITY, so with no `app.current_tenant` that UPDATE is
@@ -1144,26 +1169,47 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # On the per-user path each page is stamped and enqueued in the tenant's
   # transaction; on the maintenance path the stamp commits first, and a lost
   # enqueue costs that note one cooldown window.
-  defp scan(page, page_size, handle) do
-    case Repo.maintenance() do
-      Repo ->
-        # One transaction PER PAGE, inside the user's tenant: stamp and
-        # enqueue stay atomic, and no transaction holds a whole backlog. One
-        # per user ran past the 15 s checkout deadline on a large backlog,
-        # rolled back, and stalled every user after it on every tick.
+  defp scan(page, page_size, handle, false) do
+    case TenantScan.pool() do
+      :per_user ->
         Enum.flat_map(TenantScan.user_ids(), fn user_id ->
-          sweep_pages(page_size, fn ->
-            {:ok, counts} =
-              Repo.with_tenant(user_id, fn -> page_counts(page.(Repo), handle) end)
-
-            counts
-          end)
+          sweep_pages(page_size, page_in(user_id, Repo, nil, page, handle))
         end)
 
-      maintenance ->
-        sweep_pages(page_size, fn -> page_counts(page.(maintenance), handle) end)
+      {:fleet, maintenance} ->
+        sweep_pages(page_size, page_in(nil, maintenance, nil, page, handle))
     end
   end
+
+  defp scan(page, page_size, handle, true) do
+    {:ok, counts} =
+      IdWindows.reduce_all(
+        Note,
+        [],
+        fn ids, %{repo: repo, user_id: user_id}, acc ->
+          {:cont, [sweep_pages(page_size, page_in(user_id, repo, ids, page, handle)) | acc]}
+        end,
+        batch_size: @window,
+        # Each page owns its transaction, as on the unwindowed path.
+        fun_in_tenant: false
+      )
+
+    counts |> Enum.reverse() |> Enum.concat()
+  end
+
+  # One page. Per user: one transaction PER PAGE, inside the user's tenant,
+  # so stamp and enqueue stay atomic and no transaction holds a whole
+  # backlog (one per user ran past the 15 s checkout deadline on a large
+  # backlog, rolled back, and stalled every user after it on every tick).
+  # On the maintenance pool the stamp commits on its own, first.
+  defp page_in(nil, repo, ids, page, handle),
+    do: fn -> page_counts(page.(repo, ids), handle) end
+
+  defp page_in(user_id, repo, ids, page, handle),
+    do: fn -> Repo.with_tenant!(user_id, fn -> page_counts(page.(repo, ids), handle) end) end
+
+  defp in_window(query, nil), do: query
+  defp in_window(query, ids), do: where(query, [n], n.id in ^ids)
 
   defp page_counts(rows, handle), do: {length(rows), handle.(rows)}
 
@@ -1296,16 +1342,16 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # Content-stale notes are left to the sweep above: EmbedNote's full pass
   # stamps the keyword version itself. Same cooldown filter and stamp as above.
   #
-  # ponytail: `keyword_version` is unindexed, so this scans each tenant's live
-  # notes every tick. Fine at thousands of notes per tenant; add a partial
-  # index on (user_id) WHERE keyword_version IS DISTINCT FROM <current> if a
-  # tenant reaches hundreds of thousands.
+  # ponytail: `keyword_version` is unindexed, so this walks every note in id
+  # windows each tick while IndexVersions is open (one window per statement,
+  # #2276). A partial index on keyword_version would let it page instead.
   defp sweep_keyword_stale(now, paid, page_size, versions) do
     backoff_until = DateTime.add(now, backoff_seconds(), :second)
 
-    page = fn repo ->
+    page = fn repo, ids ->
       eligible =
         IndexVersions.content_current_notes()
+        |> in_window(ids)
         |> where(^IndexVersions.keyword_stale_dynamic(versions))
         # A version-stale note gets a full rebuild above, which stamps the
         # keyword version itself.
@@ -1341,7 +1387,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       found
     end
 
-    counts = scan(page, page_size, &enqueue_refresh/1)
+    counts = scan(page, page_size, &enqueue_refresh/1, true)
 
     Logger.info(
       "reconcile_embeddings: swept keyword-stale notes",

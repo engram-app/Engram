@@ -15,7 +15,10 @@ defmodule Engram.Indexing.ChunkRows do
 
   Also keeps each note's chunk counters on `note_index_state`
   (`recount!/1`): every chunk writer of this release calls it in the same
-  transaction as its chunk statements.
+  transaction as its chunk statements. The `chunks_sync_note_counts_*`
+  statement triggers (migration 20261028000000) now keep the same absolute
+  counters on every chunk write, any writer; `recount!` agrees with them
+  and stays until a later release removes it.
 
   ## Lock order
 
@@ -150,7 +153,12 @@ defmodule Engram.Indexing.ChunkRows do
   Inside the caller's transaction.
   """
   @spec lock_notes!([Ecto.UUID.t()], keyword()) :: :ok | [Ecto.UUID.t()]
-  def lock_notes!(note_ids, opts \\ []) do
+  def lock_notes!(note_ids, opts \\ [])
+
+  # Nothing to lock: no statement (the ledger asks once per id window).
+  def lock_notes!([], opts), do: if(Keyword.get(opts, :skip_locked, false), do: [], else: :ok)
+
+  def lock_notes!(note_ids, opts) do
     repo = Keyword.get(opts, :repo, Repo)
     skip = if Keyword.get(opts, :skip_locked, false), do: " SKIP LOCKED", else: ""
 

@@ -6,6 +6,7 @@ defmodule Engram.DataMigrationsTest do
 
   alias Engram.DataMigrations
   alias Engram.Notes.Note
+  alias Engram.QueryRecorder
 
   setup do
     DataMigrations.reset_cache()
@@ -113,6 +114,21 @@ defmodule Engram.DataMigrationsTest do
       user = insert(:user)
       insert(:note, user: user)
       assert DataMigrations.any_row?(from(n in Note, select: 1))
+    end
+
+    # #2276: asked inside id windows, never one EXISTS over the whole table.
+    test "finds the last row by windows, every statement one window" do
+      user = insert(:user)
+      notes = for _ <- 1..5, do: insert(:note, user: user)
+      last = Enum.max_by(notes, & &1.id)
+
+      {found, queries} =
+        QueryRecorder.record(fn ->
+          DataMigrations.any_row?(from(n in Note, where: n.id == ^last.id, select: 1))
+        end)
+
+      assert found
+      assert QueryRecorder.unwindowed(queries, "notes", 1_000) == []
     end
 
     test "is false on an empty set" do

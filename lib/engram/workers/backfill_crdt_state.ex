@@ -70,7 +70,7 @@ defmodule Engram.Workers.BackfillCrdtState do
   import Ecto.Query
 
   alias Engram.Accounts
-  alias Engram.Backfill.TenantScan
+  alias Engram.Backfill.IdWindows
   alias Engram.Cluster.Readiness
   alias Engram.Crypto
   alias Engram.Crypto.AadRebind
@@ -105,9 +105,10 @@ defmodule Engram.Workers.BackfillCrdtState do
   """
   @spec enqueue_missing() :: non_neg_integer()
   def enqueue_missing do
-    # Through TenantScan.all/1: one maintenance-pool query on SaaS, a
-    # per-tenant loop elsewhere. Never one cross-tenant read on the app pool,
-    # which FORCE ROW LEVEL SECURITY turns into zero rows (#1349).
+    # Through IdWindows.all/2: a fleet walk on the maintenance pool on SaaS,
+    # a per-tenant walk elsewhere, one id window per statement (#2276). Never
+    # one cross-tenant read on the app pool, which FORCE ROW LEVEL SECURITY
+    # turns into zero rows (#1349).
     pairs =
       from(n in seedable(),
         join: v in Vault,
@@ -115,7 +116,8 @@ defmodule Engram.Workers.BackfillCrdtState do
         distinct: true,
         select: {n.user_id, n.vault_id}
       )
-      |> TenantScan.all()
+      |> IdWindows.all()
+      |> Enum.uniq()
 
     Enum.each(pairs, fn {user_id, vault_id} -> {:ok, _} = enqueue_vault(user_id, vault_id) end)
 
