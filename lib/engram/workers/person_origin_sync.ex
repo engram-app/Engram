@@ -104,12 +104,15 @@ defmodule Engram.Workers.PersonOriginSync do
     end
 
     with :ok <- written do
-      if length(users) == @batch do
-        next = %{"backfill" => true, "after" => List.last(users).id}
-        {:ok, _job} = Oban.insert(new(next, schedule_in: @next_batch_in))
-      end
-
+      _ = chain_next(users)
       :ok
+    end
+  end
+
+  defp chain_next(users) do
+    if length(users) == @batch do
+      next = %{"backfill" => true, "after" => List.last(users).id}
+      Oban.insert(new(next, schedule_in: @next_batch_in))
     end
   end
 
