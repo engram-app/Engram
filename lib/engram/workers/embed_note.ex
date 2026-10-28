@@ -1434,12 +1434,24 @@ defmodule Engram.Workers.EmbedNote do
       # unsaved changeset as the conflict: nothing to clamp.
       {:ok, %Oban.Job{conflict?: true, id: id, inserted_at: %DateTime{} = start} = job}
       when is_integer(id) ->
+        job = promote(job, Ecto.Changeset.get_field(changeset, :priority))
         {:ok, clamp_to_ceiling(job, DateTime.add(start, settle_max_wait_seconds(), :second))}
 
       other ->
         other
     end
   end
+
+  # A more urgent write promotes the pending job instead of inheriting its
+  # rank: an agent edit to a note whose first embed is still queued at
+  # backfill priority must not wait behind an import. Oban fetches
+  # `priority ASC`; same rule as `reject_already_queued/2`.
+  defp promote(%Oban.Job{id: id, priority: current} = job, wanted) when wanted < current do
+    {_, _} = Repo.update_all(from(j in Oban.Job, where: j.id == ^id), set: [priority: wanted])
+    %{job | priority: wanted}
+  end
+
+  defp promote(job, _wanted), do: job
 
   defp clamp_to_ceiling(%Oban.Job{id: id, scheduled_at: at} = job, ceiling) do
     if DateTime.compare(at, ceiling) == :gt do

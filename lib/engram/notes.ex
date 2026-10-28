@@ -959,10 +959,11 @@ defmodule Engram.Notes do
           _ =
             if prev_hash != note.content_hash do
               _ =
-                ContentCommit.enqueue_jobs(note.id, user.id,
-                  embed_priority: EmbedNote.priority_for(note),
-                  embed_settle: embed_settle(opts),
-                  finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)
+                ContentCommit.enqueue_jobs(
+                  note.id,
+                  user.id,
+                  embed_opts(note, opts) ++
+                    [finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)]
                 )
             end
 
@@ -1019,10 +1020,11 @@ defmodule Engram.Notes do
           _ =
             if prev_hash != note.content_hash do
               _ =
-                ContentCommit.enqueue_jobs(note.id, user.id,
-                  embed_priority: EmbedNote.priority_for(note),
-                  embed_settle: embed_settle(opts),
-                  finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)
+                ContentCommit.enqueue_jobs(
+                  note.id,
+                  user.id,
+                  embed_opts(note, opts) ++
+                    [finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)]
                 )
             end
 
@@ -2214,8 +2216,14 @@ defmodule Engram.Notes do
   end
 
   # #2294: an AI agent writes a whole note and searches for it seconds later,
-  # so its writes skip most of the typing debounce (EmbedNote.new_debounced/3).
-  defp embed_settle(opts), do: if(opts[:actor] == "mcp", do: :agent)
+  # so its writes skip most of the typing debounce (EmbedNote.new_debounced/3)
+  # and rank as interactive even for a never-embedded note, which
+  # `EmbedNote.priority_for/1` would otherwise file as backfill.
+  defp embed_opts(note, opts) do
+    if opts[:actor] == "mcp",
+      do: [embed_priority: 0, embed_settle: :agent],
+      else: [embed_priority: EmbedNote.priority_for(note)]
+  end
 
   # The content jobs the seed's checkpoint used to enqueue for a genesis body,
   # after the row's commit like the checkpoint's.
