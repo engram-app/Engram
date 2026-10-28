@@ -86,15 +86,6 @@ defmodule Engram.Workers.PersonOriginSync do
     end
   end
 
-  # Returns the error so Oban retries this one user.
-  defp single(user) do
-    case sync([user]) do
-      {:ok, []} -> :ok
-      {:ok, [{_user, reason}]} -> {:error, reason}
-      {error, _failed} -> error
-    end
-  end
-
   defp run(%{"backfill" => true} = args) do
     users = batch(args["after"])
 
@@ -119,6 +110,15 @@ defmodule Engram.Workers.PersonOriginSync do
       end
 
       :ok
+    end
+  end
+
+  # Returns the error so Oban retries this one user.
+  defp single(user) do
+    case sync([user]) do
+      {:ok, []} -> :ok
+      {:ok, [{_user, reason}]} -> {:error, reason}
+      {error, _failed} -> error
     end
   end
 
