@@ -19,6 +19,7 @@ defmodule Engram.Analytics.PersonProperties do
   alias Engram.Auth.DeviceRefreshToken
   alias Engram.Billing
   alias Engram.Billing.Subscription
+  alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Notes.NoteBody
   alias Engram.OAuth.Client
@@ -29,6 +30,7 @@ defmodule Engram.Analytics.PersonProperties do
   alias Engram.Vaults.Vault
 
   require Engram.OAuth
+  require Logger
 
   # The privacy version that announced identified analytics. Its seeded
   # effective_date (2026-11-11 in `Engram.Legal.Seeder`) is the "takes effect on
@@ -62,7 +64,13 @@ defmodule Engram.Analytics.PersonProperties do
   defp policy_in_effect_or_false? do
     policy_in_effect?()
   rescue
-    _ -> false
+    error ->
+      Logger.warning(
+        "person traits: policy lookup failed, holding back identifying traits: #{inspect(error.__struct__)}",
+        Metadata.with_category(:warning, :oban, [])
+      )
+
+      false
   end
 
   # Identifying analytics starts only once the policy announcing it is in
