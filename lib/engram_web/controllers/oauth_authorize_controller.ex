@@ -148,20 +148,21 @@ defmodule EngramWeb.OAuthAuthorizeController do
   defp track_rejected(params, code) do
     key = "ph:mcp_oauth_authorize_rejected:#{code}"
 
-    with {:allow, _} <-
-           EngramWeb.RateLimiter.hit(key, @rejected_window_ms, 1, :analytics_activity) do
-      client =
-        case OAuth.get_client(params["client_id"]) do
-          {:ok, client} -> client
-          _ -> nil
-        end
+    case EngramWeb.RateLimiter.hit(key, @rejected_window_ms, 1, :analytics_activity) do
+      {:allow, _} ->
+        client =
+          case OAuth.get_client(params["client_id"]) do
+            {:ok, client} -> client
+            _ -> nil
+          end
 
-      Engram.Analytics.track_anonymous("mcp_oauth_authorize_rejected", %{
-        reason: code,
-        client: McpClient.client_props(client).client
-      })
-    else
-      _ -> :ok
+        Engram.Analytics.track_anonymous("mcp_oauth_authorize_rejected", %{
+          reason: code,
+          client: McpClient.client_props(client).client
+        })
+
+      _ ->
+        :ok
     end
   end
 

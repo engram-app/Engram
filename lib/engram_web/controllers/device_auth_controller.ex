@@ -1,11 +1,11 @@
 defmodule EngramWeb.DeviceAuthController do
   use EngramWeb, :controller
 
-  require Logger
-
   alias Engram.Auth.DeviceFlow
   alias Engram.Vaults
   alias Engram.Vaults.WelcomeNote
+
+  require Logger
 
   # Fail the link at the moment the user clicks "connect", not later with a
   # silent socket refusal. This route sits on the user-scoped pipeline (it must
