@@ -20,7 +20,6 @@ import {
 } from "../crdt/session";
 import { uuid7 } from "../crdt/uuid7";
 import { rlog } from "../observability/remote-log";
-import { beacon, newTraceContext, parseTraceparent, tracingEnabled } from "../observability/trace";
 import { getWsBase, joinWsUrl } from "./base";
 import {
 	CrdtOpError,
@@ -265,30 +264,6 @@ function flushBatch(batch: PendingBatch): void {
 	}
 }
 
-// Failure-only push beacon (web.crdt.push): OK pushes are per-keystroke
-// volume and would blow the 60/min beacon rate limit; the failures are the
-// signal. No-ops entirely (resolveTransport returns null) when tracing is off.
-// Exported as a test seam (same pattern as __getServerJitterMs).
-export function pushFailureBeacon(docId: string, startUs: number, reason: string): void {
-	if (!tracingEnabled()) {
-		return;
-	}
-	const ctx = newTraceContext();
-	beacon.enqueue({
-		trace_id: ctx.traceId,
-		parent_span_id: ctx.spanId,
-		name: "web.crdt.push",
-		start_us: startUs,
-		end_us: Date.now() * 1000,
-		attributes: {
-			"engram.surface": "web",
-			"engram.event_type": "push_failed",
-			"engram.note_id": docId,
-			"engram.reason": reason.slice(0, 64),
-		},
-	});
-}
-
 export const RECONNECT_JITTER_DEFAULT_MS = 5000;
 export const RECONNECT_JITTER_MAX_MS = 60_000;
 
@@ -366,10 +341,6 @@ export interface NoteChangedPayload {
 	size_bytes?: number;
 	updated_at?: string;
 	version?: number;
-	// Distributed trace leg B: the `sync.fanout` span's W3C traceparent,
-	// stamped into the payload by the backend. The browser parents its
-	// `browser.live_sync.render` beacon onto it. Absent when OTEL is off.
-	traceparent?: string;
 }
 
 /** Test hook: drop any pending batch without flushing. */
@@ -391,12 +362,6 @@ export function handleNoteChanged(
 	if (payload.vault_id !== activeVaultId) {
 		return;
 	}
-
-	// Leg-B trace timing. Gate BEFORE any tracing work: disabled = one
-	// boolean, no id parse, no enqueue. Capture the start now so the beacon
-	// spans the actual apply below.
-	const traceparent = tracingEnabled() ? payload.traceparent : undefined;
-	const startUs = traceparent ? Date.now() * 1000 : 0;
 
 	if (payload.id !== undefined) {
 		queryClient.invalidateQueries({ queryKey: ["note", activeVaultId, payload.id] });
@@ -443,28 +408,6 @@ export function handleNoteChanged(
 
 	for (const listener of listeners) {
 		listener(payload);
-	}
-
-	// Live-sync render leg: report a beacon parented onto the fan-out span so
-	// the Tempo trace closes obsidian.push -> backend -> browser render.
-	// enqueue is O(1) and never networks on the render path; the shared
-	// buffer batches/flushes on its own timer. Best-effort: a bad traceparent
-	// just skips.
-	if (traceparent) {
-		const parsed = parseTraceparent(traceparent);
-		if (parsed) {
-			beacon.enqueue({
-				trace_id: parsed.traceId,
-				parent_span_id: parsed.parentSpanId,
-				name: "browser.live_sync.render",
-				start_us: startUs,
-				end_us: Date.now() * 1000,
-				attributes: {
-					"engram.surface": "web",
-					"engram.event_type": payload.event_type ?? "note_changed",
-				},
-			});
-		}
 	}
 }
 
@@ -622,7 +565,6 @@ export async function connectChannel({
 	startCrdtSession({
 		vaultId,
 		push: (docId, b64) => {
-			const startUs = Date.now() * 1000;
 			crdtChannel
 				?.push("crdt_msg", { doc_id: docId, b64 })
 				.receive("ok", () => {
@@ -636,7 +578,6 @@ export async function connectChannel({
 						"crdt",
 						`crdt_msg push rejected note=${docId} reason=${resp?.reason ?? "unknown"}`,
 					);
-					pushFailureBeacon(docId, startUs, resp?.reason ?? "error");
 					if (resp?.reason === "frame_too_large") {
 						// Retrying would re-send the same oversized diff and loop.
 						console.error(`CRDT frame rejected (frame_too_large) for ${docId} — edit not synced`);
@@ -651,7 +592,6 @@ export async function connectChannel({
 					// timeout is REAL non-delivery now, not the old always-fires noise
 					// that re-handshook every open note every ~3.5s forever.
 					rlog().warn("crdt", `crdt_msg push timeout note=${docId} — scheduling re-handshake`);
-					pushFailureBeacon(docId, startUs, "timeout");
 					scheduleCrdtRehandshake(docId, 1000);
 				});
 		},

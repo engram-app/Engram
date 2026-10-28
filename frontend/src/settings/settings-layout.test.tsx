@@ -19,7 +19,6 @@ const testConfig: EngramConfig = {
 	billingEnabled: true,
 	apiBase: "",
 	wsBase: "",
-	tracingEnabled: false,
 };
 
 function LocationProbe() {

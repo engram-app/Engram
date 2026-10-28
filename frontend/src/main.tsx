@@ -5,7 +5,7 @@ import { Component, lazy, type ReactNode, StrictMode, Suspense, use } from "reac
 import { createRoot } from "react-dom/client";
 import { RouterProvider } from "react-router";
 import { initAnalytics } from "./analytics/init";
-import { setApiBase, setTracingEnabled, setWsBase } from "./api/base";
+import { setApiBase, setWsBase } from "./api/base";
 import { queryClient } from "./api/query-client";
 import { configPromise, type EngramConfig } from "./config";
 import { ConfigProvider } from "./config-context";
@@ -140,7 +140,6 @@ function BootstrapGate() {
 	// populated before AuthGuard fires its first fetch on mount.
 	setApiBase(config.apiBase);
 	setWsBase(config.wsBase);
-	setTracingEnabled(config.tracingEnabled);
 	return <AppShell config={config} />;
 }
 

@@ -9,10 +9,9 @@
 // WebSocket sniffer to the user's tab. The CRDT lifecycle breadcrumbs wired
 // through this module make that hunt a Loki/`GET /api/logs` query instead.
 //
-// NOT gated on `tracingEnabled` — logs are the incident-response floor and
-// must flow on every deployment shape; the trace beacon stays dark-launched
-// separately. Transport mirrors `BeaconBuffer`: batched, keepalive fetch,
-// fire-and-forget, `pagehide` flush, never throws into a caller.
+// Logs are the incident-response floor and flow on every deployment shape.
+// Transport: batched, keepalive fetch, fire-and-forget, `pagehide` flush,
+// never throws into a caller.
 import { getActiveVaultId } from "../api/active-vault";
 import { getApiBase } from "../api/base";
 import { getAuthToken } from "../api/client";

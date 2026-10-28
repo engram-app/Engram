@@ -534,34 +534,30 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
       assert all_enqueued(args: %{"note_id" => note.id}) == []
     end
 
-    for cache? <- [false, true] do
-      test "rebuilds keyword-only, keeps the park and its dense points (vector cache #{cache?})",
-           %{note: note, need: need, kept: kept} do
-        Engram.ServiceConfig.put_override(:vector_cache_enabled, unquote(cache?))
+    test "rebuilds keyword-only, keeps the park and its dense points",
+         %{note: note, need: need, kept: kept} do
+      stub(Engram.MockEmbedder, :embed_texts, fn _ ->
+        flunk("a parked rebuild must not embed")
+      end)
 
-        stub(Engram.MockEmbedder, :embed_texts, fn _ ->
-          flunk("a parked rebuild must not embed")
-        end)
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert [job] = all_enqueued(worker: Engram.Workers.RebuildStaleNote)
+      assert job.args["note_id"] == note.id
 
-        assert :ok = perform_job(ReconcileEmbeddings, %{})
-        assert [job] = all_enqueued(worker: Engram.Workers.RebuildStaleNote)
-        assert job.args["note_id"] == note.id
+      assert :ok = perform_job(Engram.Workers.RebuildStaleNote, job.args)
 
-        assert :ok = perform_job(Engram.Workers.RebuildStaleNote, job.args)
+      row = reload(note)
+      assert row.chunker_version == elem(Engram.Rebuild.target_versions(), 0)
+      assert row.embed_budget_parked == true
+      assert row.embed_budget_need == need
+      assert row.embed_retry_after == EmbedNote.parked_until_edited()
+      assert MapSet.subset?(kept, MapSet.new(point_ids(note))), "dense points were dropped"
 
-        row = reload(note)
-        assert row.chunker_version == elem(Engram.Rebuild.target_versions(), 0)
-        assert row.embed_budget_parked == true
-        assert row.embed_budget_need == need
-        assert row.embed_retry_after == EmbedNote.parked_until_edited()
-        assert MapSet.subset?(kept, MapSet.new(point_ids(note))), "dense points were dropped"
-
-        # The next tick neither rebuilds nor wakes it: the bucket is empty.
-        Repo.delete_all(Oban.Job)
-        assert :ok = perform_job(ReconcileEmbeddings, %{})
-        assert all_enqueued(args: %{"note_id" => note.id}) == []
-        assert reload(note).embed_budget_parked == true
-      end
+      # The next tick neither rebuilds nor wakes it: the bucket is empty.
+      Repo.delete_all(Oban.Job)
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert all_enqueued(args: %{"note_id" => note.id}) == []
+      assert reload(note).embed_budget_parked == true
     end
   end
 

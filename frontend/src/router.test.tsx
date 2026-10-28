@@ -44,7 +44,6 @@ const config: EngramConfig = {
 	billingEnabled: false,
 	apiBase: "",
 	wsBase: "",
-	tracingEnabled: false,
 };
 
 // createAppRouter builds a createBrowserRouter, which reads its initial

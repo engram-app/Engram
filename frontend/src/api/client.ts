@@ -1,6 +1,5 @@
 import { track } from "../analytics/track";
 import { rlog } from "../observability/remote-log";
-import { newTraceContext, tracingEnabled } from "../observability/trace";
 import { scrubUrl } from "../sentry";
 import { getActiveVaultId } from "./active-vault";
 import { getApiBase, joinApiUrl } from "./base";
@@ -166,13 +165,6 @@ async function authFetch(
 		headers.set("X-Vault-ID", String(vaultId));
 	}
 	headers.set("X-Device-Id", getDeviceId());
-	// Distributed trace leg A: gated on the real `tracingEnabled` config
-	// field (default false). Disabled = a single boolean check, no id
-	// generation, no header. The render-leg beacon lives in channel.ts.
-	if (tracingEnabled()) {
-		headers.set("traceparent", newTraceContext().traceparent);
-	}
-
 	// joinApiUrl handles both same-origin (selfhost) and cross-origin
 	// (saas, `https://api.engram.page`). For selfhost apiBase is "" so
 	// this composes to `/api${path}` identically to the pre-eject shape.

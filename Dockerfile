@@ -2,12 +2,10 @@
 # check=skip=SecretsUsedInArgOrEnv
 #
 # `check=skip=SecretsUsedInArgOrEnv`: BuildKit's lint flags any ARG/ENV whose
-# name contains KEY/TOKEN/SECRET. Our `VITE_CF_BEACON_TOKEN` and
-# `VITE_POSTHOG_KEY` trip this heuristic but are NOT secrets — Vite bakes
+# name contains KEY/TOKEN/SECRET. Our `VITE_POSTHOG_KEY` trips this heuristic but is NOT a secret — Vite bakes
 # `import.meta.env.VITE_*` into the JS bundle that ships to every browser.
-# Both are public per-site identifiers (CF beacon: rate-limited per-site;
-# PostHog: write-only event ingest per project). They cannot be hidden by
-# any build-time mechanism. The check is a true false-positive; skipping
+# It is a public per-project identifier (PostHog: write-only event ingest).
+# It cannot be hidden by any build-time mechanism. The check is a true false-positive; skipping
 # the rule for the whole Dockerfile keeps the build clean without changing
 # real risk posture. Real secrets in this Dockerfile use `RUN
 # --mount=type=secret` (see `sentry_auth_token` usage in the frontend stage).
@@ -44,16 +42,12 @@ FROM oven/bun:1.3 AS frontend
 # the SaaS bundle's job (verify.yml + frontend-promote.yml).
 ARG VITE_SENTRY_DSN
 ARG VITE_GIT_SHA
-# Cloudflare Web Analytics beacon — public per-site identifier.
-# Build-arg so self-host bundles don't ship the SaaS-side token.
-ARG VITE_CF_BEACON_TOKEN
 # PostHog — public project token (write-only event ingest, per-project).
-# Same self-host-shouldn't-emit-to-SaaS rationale as the CF beacon.
+# Build-arg so self-host bundles don't ship the SaaS-side token.
 ARG VITE_POSTHOG_KEY
 ARG VITE_POSTHOG_HOST
 ENV VITE_SENTRY_DSN=${VITE_SENTRY_DSN} \
     VITE_GIT_SHA=${VITE_GIT_SHA} \
-    VITE_CF_BEACON_TOKEN=${VITE_CF_BEACON_TOKEN} \
     VITE_POSTHOG_KEY=${VITE_POSTHOG_KEY} \
     VITE_POSTHOG_HOST=${VITE_POSTHOG_HOST}
 
