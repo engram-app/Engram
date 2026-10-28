@@ -59,7 +59,12 @@ defmodule Engram.Workers.PersonOriginSync do
   def backfill do
     Oban.insert(
       new(%{"backfill" => true, "chain" => Ecto.UUID.generate()},
-        unique: [fields: [:worker, :args], keys: [:backfill], period: :infinity, states: @incomplete]
+        unique: [
+          fields: [:worker, :args],
+          keys: [:backfill],
+          period: :infinity,
+          states: @incomplete
+        ]
       )
     )
   end
@@ -76,7 +81,12 @@ defmodule Engram.Workers.PersonOriginSync do
   end
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: args}) do
+  def perform(%Oban.Job{args: args, id: id}) do
+    # A backfill job queued before chain tokens has none: derive it from the
+    # job id so every retry of that job reuses it (a fresh token per retry
+    # would fork the chain once its successor exists).
+    args = if args["backfill"], do: Map.put_new(args, "chain", "legacy-#{id}"), else: args
+
     cond do
       not Analytics.enabled?() ->
         :ok
@@ -122,7 +132,7 @@ defmodule Engram.Workers.PersonOriginSync do
     # it would end the chain on a `completed` job, which the data migration
     # reads as "backfill finished".
     with :ok <- written do
-      chain_next(users, args["chain"] || Ecto.UUID.generate())
+      chain_next(users, args["chain"])
     end
   end
 

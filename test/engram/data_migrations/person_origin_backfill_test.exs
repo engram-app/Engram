@@ -17,6 +17,7 @@ defmodule Engram.DataMigrations.PersonOriginBackfillTest do
         {k, :error} -> Application.delete_env(:engram, k)
       end)
     end)
+
     :ok
   end
 

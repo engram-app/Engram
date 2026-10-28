@@ -223,7 +223,8 @@ defmodule Engram.Workers.PersonOriginSyncTest do
       Application.put_env(:engram, :person_origin_insert_fun, fn _ -> {:error, :boom} end)
       on_exit(fn -> Application.delete_env(:engram, :person_origin_insert_fun) end)
 
-      assert {:error, :boom} = perform_job(PersonOriginSync, %{"backfill" => true, "chain" => "c"})
+      assert {:error, :boom} =
+               perform_job(PersonOriginSync, %{"backfill" => true, "chain" => "c"})
     end
 
     test "a retried batch does not fork the chain" do
@@ -233,6 +234,17 @@ defmodule Engram.Workers.PersonOriginSyncTest do
       args = %{"backfill" => true, "chain" => "c1"}
       assert :ok = perform_job(PersonOriginSync, args)
       assert :ok = perform_job(PersonOriginSync, args)
+
+      assert Enum.count(all_enqueued(worker: PersonOriginSync), & &1.args["after"]) == 1
+    end
+
+    test "a token-less head retried after its successor was inserted yields one successor" do
+      for n <- 1..100,
+          do: insert(:user, email: "l#{n}@example.com", external_id: "l#{n}", locale: "fr")
+
+      head = Oban.insert!(PersonOriginSync.new(%{"backfill" => true}))
+      assert :ok = PersonOriginSync.perform(head)
+      assert :ok = PersonOriginSync.perform(head)
 
       assert Enum.count(all_enqueued(worker: PersonOriginSync), & &1.args["after"]) == 1
     end
