@@ -138,7 +138,7 @@ defmodule Engram.Workers.PersonOriginSyncTest do
     Bypass.stub(bypass, "POST", "/batch/", fn _ -> flunk("wrote without the stored sources") end)
     user = insert(:user, email: "g@example.com", external_id: "user_g", locale: "en")
 
-    assert {:error, {:sync_incomplete, 1, {:http_error, 429, _}}} =
+    assert {:error, {:http_error, 429}} =
              perform_job(PersonOriginSync, %{"user_id" => user.id})
   end
 
@@ -148,8 +148,34 @@ defmodule Engram.Workers.PersonOriginSyncTest do
     user = insert(:user, email: "h@example.com", external_id: "user_h", locale: "en")
     expect(ApiMock, :latest_activity, fn _ -> {:error, {:http_error, 429}} end)
 
-    assert {:error, {:sync_incomplete, 1, {:http_error, 429}}} =
+    assert {:error, {:http_error, 429}} =
              perform_job(PersonOriginSync, %{"user_id" => user.id})
+  end
+
+  test "skips quietly (no error, no retry storm) when person reads are not configured", %{
+    bypass: bypass
+  } do
+    Application.delete_env(:engram, :posthog_erasure_api_key)
+    Bypass.stub(bypass, "POST", "/batch/", fn _ -> flunk("wrote without read config") end)
+    user = insert(:user, external_id: "user_j", locale: "en")
+
+    assert :ok = perform_job(PersonOriginSync, %{"user_id" => user.id})
+    assert :ok = perform_job(PersonOriginSync, %{"backfill" => true})
+    refute_enqueued(worker: PersonOriginSync)
+  end
+
+  test "backfill defers failed users to single retries and still chains", %{bypass: bypass} do
+    Bypass.stub(bypass, "GET", "/api/projects/1/persons/", &Plug.Conn.resp(&1, 429, "{}"))
+    Bypass.stub(bypass, "POST", "/batch/", fn _ -> flunk("nothing resolved, nothing written") end)
+
+    for n <- 1..100,
+        do: insert(:user, email: "d#{n}@example.com", external_id: "d#{n}", locale: "fr")
+
+    assert :ok = perform_job(PersonOriginSync, %{"backfill" => true})
+
+    jobs = all_enqueued(worker: PersonOriginSync)
+    assert Enum.count(jobs, &Map.has_key?(&1.args, "user_id")) == 100
+    assert Enum.count(jobs, &(&1.args["backfill"] == true and &1.args["after"])) == 1
   end
 
   test "a user soft-deleted before the job runs is not sent", %{bypass: bypass} do

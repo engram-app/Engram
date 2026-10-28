@@ -185,7 +185,10 @@ defmodule Engram.Observability.PostHog do
     case fetch_person(distinct_id) do
       {:ok, %{"properties" => %{} = props}} -> {:ok, props}
       {:ok, _none} -> {:ok, %{}}
-      {:error, _} = error -> error
+      # Status only: this lands in Oban job errors, which must not hold bodies.
+      {:error, {:http_error, status, _body}} -> {:error, {:http_error, status}}
+      {:error, :not_configured} -> {:error, :not_configured}
+      {:error, _transport} -> {:error, :transport}
     end
   end
 
@@ -200,8 +203,7 @@ defmodule Engram.Observability.PostHog do
         case Req.get("#{host}/api/projects/#{project}/persons/",
                params: [distinct_id: distinct_id],
                auth: {:bearer, key},
-               receive_timeout: 5_000,
-               retry: false
+               receive_timeout: 5_000
              ) do
           {:ok, %{status: 200, body: %{"results" => [%{} = person | _]}}} -> {:ok, person}
           {:ok, %{status: 200, body: %{"results" => []}}} -> {:ok, nil}

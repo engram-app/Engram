@@ -45,6 +45,10 @@ defmodule Engram.Analytics do
   @spec enabled?() :: boolean()
   def enabled?, do: PostHog.enabled?()
 
+  @doc "Whether person properties can be READ (personal API key and project id set)."
+  @spec person_reads_enabled?() :: boolean()
+  def person_reads_enabled?, do: PostHog.erasure_enabled?()
+
   # Whether an event goes anywhere: PostHog, our event log, or both.
   defp recording?, do: enabled?() or EventLog.enabled?()
 
