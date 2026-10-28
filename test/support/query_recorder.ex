@@ -115,7 +115,7 @@ defmodule Engram.QueryRecorder do
   The statements `pid` ran that read `table` with no window bound (#2276):
   each must be a pure keyset window (a `LIMIT` of at most `window`, no
   `EXISTS` subquery) or be confined to a list parameter of at most `window`
-  ids (`= ANY(...)`, `IN (...)`). "The next N rows MATCHING a predicate"
+  ids (`id = ANY($n)`). "The next N rows MATCHING a predicate"
   fails: its LIMIT bounds rows returned, not rows read.
   """
   def unwindowed(queries, table, window, pid \\ self()) do
@@ -132,10 +132,19 @@ defmodule Engram.QueryRecorder do
     end
   end
 
-  defp confined?(sql, params, window),
-    do:
-      sql =~ ~r/ANY\(|\bIN \(/ and
-        Enum.any?(params, &(is_list(&1) and &1 != [] and length(&1) <= window))
+  # The note key itself in a listed window: `id = ANY($n)` with `$n` a list
+  # of at most `window` ids. Another list parameter (`embed_model = ANY`)
+  # confines nothing.
+  defp confined?(sql, params, window) do
+    ~r/\bid"? = ANY\(\$(\d+)/
+    |> Regex.scan(sql, capture: :all_but_first)
+    |> Enum.any?(fn [i] ->
+      case Enum.at(params, String.to_integer(i) - 1) do
+        ids when is_list(ids) -> ids != [] and length(ids) <= window
+        _ -> false
+      end
+    end)
+  end
 
   def format(queries) do
     queries
