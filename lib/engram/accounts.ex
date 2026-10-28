@@ -176,27 +176,6 @@ defmodule Engram.Accounts do
     end
   end
 
-  @doc """
-  Moves a row to a new Clerk id. Only for an orphaned row whose old Clerk
-  identity is provably gone; the caller (the Clerk `user.created` webhook)
-  owns that proof and the verified-email check. The old id is matched in the
-  update, so a row that changed underneath us is left alone.
-  """
-  @spec rebind_external_id(User.t(), String.t()) :: {:ok, User.t()} | {:error, :stale}
-  def rebind_external_id(%User{external_id: old} = user, new_external_id)
-      when is_binary(old) and is_binary(new_external_id) do
-    from(u in User, where: u.id == ^user.id and u.external_id == ^old and is_nil(u.deleted_at))
-    |> Repo.update_all([set: [external_id: new_external_id]], skip_tenant_check: true)
-    |> case do
-      {1, _} ->
-        evict_user(user.id)
-        {:ok, %{user | external_id: new_external_id}}
-
-      {0, _} ->
-        {:error, :stale}
-    end
-  end
-
   # ── Local Auth ─────────────────────────────────────────────────
 
   # Advisory lock key for bootstrap admin assignment — arbitrary fixed integer

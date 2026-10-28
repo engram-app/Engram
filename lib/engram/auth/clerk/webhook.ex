@@ -5,8 +5,7 @@ defmodule Engram.Auth.Clerk.Webhook do
 
   Handles:
   - `user.created` — dup-check against normalized_email; revoke via Clerk API if
-    duplicate, otherwise insert local user row. A duplicate row whose own Clerk
-    identity is gone (Clerk 404) is rebound to a verified-email signup instead.
+    duplicate, otherwise insert local user row.
   - `user.updated` — mirrors the Clerk primary email into `users.email` +
     `normalized_email`, and sets `users.phone_verified_at` when a verified phone
     appears (drives the §A.3 EmbedNote pre-flight gate). Email and phone sync are
@@ -86,22 +85,25 @@ defmodule Engram.Auth.Clerk.Webhook do
 
   defp handle_user_created(%{"id" => clerk_id} = data) do
     case Accounts.find_by_external_id(clerk_id) do
-      {:ok, _user} -> :ok
-      {:error, :user_not_found} -> apply_user_created(clerk_id, data)
+      {:ok, _user} ->
+        :ok
+
+      {:error, :user_not_found} ->
+        case primary_email(data) do
+          {:error, _} ->
+            :ok
+
+          {:ok, email} ->
+            normalized = EmailNormalizer.normalize(email)
+            apply_user_created(clerk_id, email, normalized)
+        end
     end
   end
 
   # Public only so tests can pin the state at email-lookup time (the race in
-  # the first guard below cannot be interleaved deterministically through handle/1).
+  # the guard below cannot be interleaved deterministically through handle/1).
   @doc false
-  def apply_user_created(clerk_id, data) do
-    case primary_email(data) do
-      {:ok, email} -> apply_user_created(clerk_id, data, email, EmailNormalizer.normalize(email))
-      {:error, _} -> :ok
-    end
-  end
-
-  defp apply_user_created(clerk_id, data, email, normalized) do
+  def apply_user_created(clerk_id, email, normalized) do
     case Accounts.find_by_normalized_email(normalized) do
       # The user's own first request JIT-created this row (same Clerk id) after
       # the external_id lookup in handle_user_created/1 missed. It is not a
@@ -109,60 +111,25 @@ defmodule Engram.Auth.Clerk.Webhook do
       {:ok, %{external_id: ^clerk_id}} ->
         :ok
 
-      {:ok, existing} ->
-        case reclaim_orphan(existing, clerk_id, data) do
-          :rebound -> :ok
-          :reject -> reject_duplicate(clerk_id, normalized)
-        end
+      {:ok, _existing} ->
+        Logger.warning(
+          "Clerk signup rejected — normalized email already exists",
+          Metadata.with_category(:warning, :auth,
+            clerk_user_id: clerk_id,
+            normalized_email_hash: hash(normalized)
+          )
+        )
+
+        # Stash the reason before the delete orphans the session, so the web app
+        # can fetch it and explain the bounce instead of failing silently.
+        SignupRejections.record(clerk_id, :duplicate_identity)
+        revoke_duplicate(clerk_id, normalized)
+        :ok
 
       {:error, :user_not_found} ->
         _ = Accounts.find_or_create_by_external_id(clerk_id, %{email: email})
         :ok
     end
-  end
-
-  # A row whose Clerk identity no longer exists can never be signed in to, yet
-  # it holds the email and so rejected every later signup forever (#2292
-  # lockout). The verified owner of that email reclaims it. Both proofs are
-  # required, and anything short of a Clerk 404 fails closed (reject): a rebind
-  # must never hand a live person's account to someone else.
-  defp reclaim_orphan(%{external_id: old_id, deleted_at: nil} = existing, clerk_id, data)
-       when is_binary(old_id) do
-    with true <- primary_email_verified?(data),
-         {:ok, false} <- clerk_api().user_exists?(old_id),
-         {:ok, _} <- Accounts.rebind_external_id(existing, clerk_id) do
-      :telemetry.execute([:engram, :auth, :orphan_rebound], %{count: 1}, %{user_id: existing.id})
-
-      Logger.warning(
-        "Clerk signup reclaimed an orphaned account: old Clerk identity is gone",
-        Metadata.with_category(:warning, :auth,
-          user_id: existing.id,
-          clerk_user_id: clerk_id
-        )
-      )
-
-      :rebound
-    else
-      _ -> :reject
-    end
-  end
-
-  defp reclaim_orphan(_existing, _clerk_id, _data), do: :reject
-
-  defp reject_duplicate(clerk_id, normalized) do
-    Logger.warning(
-      "Clerk signup rejected — normalized email already exists",
-      Metadata.with_category(:warning, :auth,
-        clerk_user_id: clerk_id,
-        normalized_email_hash: hash(normalized)
-      )
-    )
-
-    # Stash the reason before the delete orphans the session, so the web app
-    # can fetch it and explain the bounce instead of failing silently.
-    SignupRejections.record(clerk_id, :duplicate_identity)
-    revoke_duplicate(clerk_id, normalized)
-    :ok
   end
 
   # The block is only real if Clerk actually revokes the duplicate. A failed
@@ -280,13 +247,6 @@ defmodule Engram.Auth.Clerk.Webhook do
        do: {:ok, email}
 
   defp primary_email(_), do: {:error, :no_primary_email}
-
-  defp primary_email_verified?(%{"primary_email_address_id" => pid, "email_addresses" => addrs})
-       when is_list(addrs) do
-    Enum.any?(addrs, &(&1["id"] == pid and get_in(&1, ["verification", "status"]) == "verified"))
-  end
-
-  defp primary_email_verified?(_), do: false
 
   defp has_verified_phone?(%{"phone_numbers" => phones}) when is_list(phones) do
     Enum.any?(phones, fn p -> get_in(p, ["verification", "status"]) == "verified" end)

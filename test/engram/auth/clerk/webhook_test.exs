@@ -4,9 +4,7 @@ defmodule Engram.Auth.Clerk.WebhookTest do
   import Mox
 
   alias Engram.Accounts.User
-  alias Engram.Auth.Clerk.ApiMock
   alias Engram.Auth.Clerk.Webhook
-  alias Engram.Auth.SignupRejections
   alias Engram.Repo
   alias Engram.Storage.InMemory
 
@@ -58,107 +56,31 @@ defmodule Engram.Auth.Clerk.WebhookTest do
         )
 
       # Mox (verify_on_exit!) fails the test if delete_user is called.
-      assert :ok =
-               Webhook.apply_user_created(
-                 "user_race_self",
-                 created_data("user_race_self", "racer@gmail.com")
-               )
+      assert :ok = Webhook.apply_user_created("user_race_self", user.email, "racer@gmail.com")
 
       assert Repo.get(User, user.id, skip_tenant_check: true)
-      assert :error = SignupRejections.fetch("user_race_self")
+      assert :error = Engram.Auth.SignupRejections.fetch("user_race_self")
     end
 
-    test "row bound to a live different Clerk id is a real duplicate: rejected and revoked" do
-      existing = dup_row("user_original")
+    test "row bound to a different Clerk id is a real duplicate: rejected and revoked" do
+      _existing =
+        insert(:user,
+          email: "taken.dup@gmail.com",
+          normalized_email: "takendup@gmail.com",
+          external_id: "user_original"
+        )
 
-      expect(ApiMock, :user_exists?, fn "user_original" -> {:ok, true} end)
-      expect(ApiMock, :delete_user, fn "user_second" -> :ok end)
+      expect(Engram.Auth.Clerk.ApiMock, :delete_user, fn "user_second" -> :ok end)
 
-      assert :ok = created("user_second", "Taken.Dup@gmail.com")
+      assert :ok =
+               Webhook.apply_user_created(
+                 "user_second",
+                 "Taken.Dup@gmail.com",
+                 "takendup@gmail.com"
+               )
 
-      assert {:ok, :duplicate_identity} = SignupRejections.fetch("user_second")
-      assert reload(existing).external_id == "user_original"
+      assert {:ok, :duplicate_identity} = Engram.Auth.SignupRejections.fetch("user_second")
     end
-  end
-
-  # A row whose Clerk identity is gone (deleted upstream) is orphaned: nobody
-  # can sign in to it, and before this fix it blocked every re-signup with the
-  # same email forever (#2292 lockout). A verified owner of the email reclaims it.
-  describe "user.created: orphaned row (old Clerk identity gone)" do
-    test "rebinds the orphan to the incoming Clerk id instead of rejecting" do
-      existing = dup_row("user_gone")
-
-      expect(ApiMock, :user_exists?, fn "user_gone" -> {:ok, false} end)
-      # No delete_user expectation: Mox fails the test if it is called.
-
-      assert :ok = created("user_back", "Taken.Dup@gmail.com")
-
-      assert reload(existing).external_id == "user_back"
-      assert :error = SignupRejections.fetch("user_back")
-      assert {:ok, %{id: id}} = Engram.Accounts.find_by_external_id("user_back")
-      assert id == existing.id
-    end
-
-    test "unverified incoming email is rejected without asking Clerk about the old id" do
-      existing = dup_row("user_gone")
-
-      expect(ApiMock, :delete_user, fn "user_unverified" -> :ok end)
-
-      assert :ok = created("user_unverified", "Taken.Dup@gmail.com", "unverified")
-
-      assert {:ok, :duplicate_identity} = SignupRejections.fetch("user_unverified")
-      assert reload(existing).external_id == "user_gone"
-    end
-
-    test "Clerk API error fails closed: rejected, no rebind" do
-      existing = dup_row("user_gone")
-
-      expect(ApiMock, :user_exists?, fn "user_gone" -> {:error, {:http_error, 500}} end)
-      expect(ApiMock, :delete_user, fn "user_flaky" -> :ok end)
-
-      assert :ok = created("user_flaky", "Taken.Dup@gmail.com")
-
-      assert {:ok, :duplicate_identity} = SignupRejections.fetch("user_flaky")
-      assert reload(existing).external_id == "user_gone"
-    end
-
-    test "a soft-deleted row is never rebound" do
-      existing =
-        dup_row("user_gone", deleted_at: DateTime.utc_now(:second))
-
-      expect(ApiMock, :delete_user, fn "user_late" -> :ok end)
-
-      assert :ok = created("user_late", "Taken.Dup@gmail.com")
-
-      assert reload(existing).external_id == "user_gone"
-    end
-  end
-
-  defp dup_row(external_id, extra \\ []) do
-    insert(
-      :user,
-      [
-        email: "taken.dup@gmail.com",
-        normalized_email: "takendup@gmail.com",
-        external_id: external_id
-      ] ++ extra
-    )
-  end
-
-  defp reload(user), do: Repo.get(User, user.id, skip_tenant_check: true)
-
-  defp created(clerk_id, email, status \\ "verified") do
-    Webhook.handle(%{"type" => "user.created", "data" => created_data(clerk_id, email, status)})
-  end
-
-  defp created_data(clerk_id, email, status \\ "verified") do
-    %{
-      "id" => clerk_id,
-      "primary_email_address_id" => "email_1",
-      "email_addresses" => [
-        %{"id" => "email_1", "email_address" => email, "verification" => %{"status" => status}}
-      ]
-    }
   end
 
   describe "user.deleted" do

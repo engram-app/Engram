@@ -1,8 +1,7 @@
 defmodule Engram.Auth.Clerk.HttpApi do
   @moduledoc """
-  Live Clerk Backend API client: delete a user (revoking dup signups caught
-  by pricing v2 §A normalization), check a user still exists, and read the
-  latest session activity.
+  Live Clerk Backend API client. Delete-user is the only operation we need
+  today (revoking dup signups caught by pricing v2 §A normalization).
 
   Requires `CLERK_SECRET_KEY` (sk_*) in runtime config. Tests inject
   `Engram.Auth.Clerk.ApiMock` via Mox.
@@ -85,26 +84,6 @@ defmodule Engram.Auth.Clerk.HttpApi do
   # dropped here: country granularity is all the privacy policy allows.
   @impl true
   def latest_activity(clerk_user_id) when is_binary(clerk_user_id) do
-    case get("/sessions", params: [user_id: clerk_user_id, limit: 10]) do
-      {:ok, %{status: 200, body: body}} -> {:ok, parse_activity(body)}
-      {:ok, %{status: status}} -> {:error, {:http_error, status}}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  # Only a 404 counts as "gone": a 5xx, 401 or transport error must never be
-  # read as proof the identity is deleted (callers rebind accounts on false).
-  @impl true
-  def user_exists?(clerk_user_id) when is_binary(clerk_user_id) do
-    case get("/users/#{URI.encode_www_form(clerk_user_id)}") do
-      {:ok, %{status: 200}} -> {:ok, true}
-      {:ok, %{status: 404}} -> {:ok, false}
-      {:ok, %{status: status}} -> {:error, {:http_error, status}}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp get(path, opts \\ []) do
     base_url = Application.get_env(:engram, :clerk_api_base_url, @default_base_url)
 
     case Application.get_env(:engram, :clerk_secret_key) do
@@ -112,10 +91,16 @@ defmodule Engram.Auth.Clerk.HttpApi do
         {:error, :missing_secret}
 
       secret ->
-        Req.get(
-          base_url <> path,
-          [auth: {:bearer, secret}, receive_timeout: 10_000, retry: false] ++ opts
-        )
+        case Req.get("#{base_url}/sessions",
+               params: [user_id: clerk_user_id, limit: 10],
+               auth: {:bearer, secret},
+               receive_timeout: 10_000,
+               retry: false
+             ) do
+          {:ok, %{status: 200, body: body}} -> {:ok, parse_activity(body)}
+          {:ok, %{status: status}} -> {:error, {:http_error, status}}
+          {:error, reason} -> {:error, reason}
+        end
     end
   end
 

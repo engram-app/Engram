@@ -60,34 +60,6 @@ defmodule Engram.Auth.Clerk.HttpApiTest do
     capture_log(fn -> assert {:error, {:http_error, 401}} = HttpApi.delete_user("user_abc") end)
   end
 
-  describe "user_exists?/1" do
-    defp get_user(bypass, status) do
-      Bypass.expect_once(bypass, "GET", "/v1/users/user_abc", fn conn ->
-        Plug.Conn.resp(conn, status, ~s({"id":"user_abc"}))
-      end)
-    end
-
-    test "200 is {:ok, true}", %{bypass: bypass} do
-      get_user(bypass, 200)
-      assert {:ok, true} = HttpApi.user_exists?("user_abc")
-    end
-
-    test "404 is {:ok, false}: the identity is provably gone", %{bypass: bypass} do
-      get_user(bypass, 404)
-      assert {:ok, false} = HttpApi.user_exists?("user_abc")
-    end
-
-    test "any other status is an error, never a false", %{bypass: bypass} do
-      get_user(bypass, 500)
-      assert {:error, {:http_error, 500}} = HttpApi.user_exists?("user_abc")
-    end
-
-    test "missing secret is an error" do
-      Application.put_env(:engram, :clerk_secret_key, "")
-      assert {:error, :missing_secret} = HttpApi.user_exists?("user_abc")
-    end
-  end
-
   describe "latest_activity/1" do
     defp sessions(bypass, status, body) do
       Bypass.expect_once(bypass, "GET", "/v1/sessions", fn conn ->
