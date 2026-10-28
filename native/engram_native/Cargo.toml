@@ -37,4 +37,4 @@ comrak = { version = "=0.56.0", default-features = false }
 base64 = "0.22"
 # Rival-lineage audit (yjs_lineage.rs): walks a stored Yjs update with yrs's
 # public decoder. Same version as y_ex, so both read the same wire format.
-yrs = "0.25"
+yrs = "0.28"
