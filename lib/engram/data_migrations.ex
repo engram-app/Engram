@@ -13,11 +13,14 @@ defmodule Engram.DataMigrations do
   """
   import Ecto.Query
 
-  alias Engram.Backfill.TenantScan
+  alias Engram.Backfill.IdWindows
   alias Engram.DataMigrations.Entry
+  alias Engram.Notes.Note
   alias Engram.Repo
 
   @in_flight ~w(available scheduled executing retryable)
+  # Notes per `any_row?/1` window.
+  @window 1_000
 
   @spec done?(String.t(), pos_integer()) :: boolean()
   def done?(name, version) do
@@ -167,23 +170,22 @@ defmodule Engram.DataMigrations do
   end
 
   @doc """
-  True if `queryable` returns a row in any tenant. Uses the maintenance repo
-  when enabled (one query), else one query per user inside that user's RLS
-  context, stopping at the first user with a row. Never trusts a cross-tenant
-  read on the app pool, which FORCE RLS turns into zero rows (#1349).
+  True if `queryable`, a `notes` query, returns a row in any tenant. Walks
+  `notes` in id windows (`Engram.Backfill.IdWindows.any?/3`) and asks only
+  inside each window, stopping at the first hit: each statement reads one
+  window, so "is anything left?" stays bounded however rare the answer is
+  (#2276). The old single EXISTS walked the whole table, slowest when
+  almost done. Fleet-wide on the maintenance pool, else per user inside that
+  user's RLS context; never a cross-tenant read on the app pool, which FORCE
+  RLS turns into zero rows (#1349).
   """
   @spec any_row?(Ecto.Queryable.t()) :: boolean()
   def any_row?(queryable) do
-    case Repo.maintenance() do
-      Repo ->
-        Enum.any?(TenantScan.user_ids(), fn user_id ->
-          {:ok, found} = Repo.with_tenant(user_id, fn -> Repo.exists?(queryable) end)
-          found
-        end)
-
-      maintenance ->
-        maintenance.exists?(queryable)
-    end
+    IdWindows.any?(
+      Note,
+      fn ids, %{repo: repo} -> repo.exists?(where(queryable, [n], n.id in ^ids)) end,
+      batch_size: @window
+    )
   end
 
   @doc "True while any job of `worker` is queued or running."
