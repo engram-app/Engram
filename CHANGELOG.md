@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.67.0](https://github.com/engram-app/Engram/compare/0.66.1...0.67.0) (2026-10-28)
+
+
+### Features
+
+* **analytics:** add missing funnel events ([#2284](https://github.com/engram-app/Engram/issues/2284)) ([92f9d34](https://github.com/engram-app/Engram/commit/92f9d348910d2f77741f9969071273bbda143b76))
+
+
+### Bug Fixes
+
+* **analytics:** resolve country, language, device_type from Clerk ([#2283](https://github.com/engram-app/Engram/issues/2283)) ([ffcfb30](https://github.com/engram-app/Engram/commit/ffcfb30c14793ed275a49dbbbd56db6929db0d48))
+* **e2e:** stop Clerk user leak, add quota preflight ([#2285](https://github.com/engram-app/Engram/issues/2285)) ([4093905](https://github.com/engram-app/Engram/commit/409390505a97dc9b87b81449a5cde027207caf84))
+
 ## [0.66.1](https://github.com/engram-app/Engram/compare/0.66.0...0.66.1) (2026-10-28)
 
 
