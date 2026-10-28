@@ -345,6 +345,32 @@ What that means in practice:
 4. **A migration must apply on top of the previous release's schema.** The
    same job applies new migrations onto the last `release-v*` tag's schema.
 
+## Background queries bound rows READ, not rows returned
+
+Every background sweep, backfill and data-migration query must bound the rows
+each statement READS. `WHERE <rare predicate> AND id > $after ORDER BY id
+LIMIT N` bounds rows RETURNED: once matches are rare (the steady state of any
+backfill that works) Postgres walks most of the table to fill the LIMIT, and a
+fleet-wide `SELECT EXISTS(<rare predicate>)` "anything left?" check walks it
+again. Both grow with the table and with how DONE the job is, and both hit the
+15 s query timeout in prod (#2276, `note_index_state`).
+
+- Walk fixed id windows with `Engram.Backfill.IdWindows`: the next N keys by
+  keyset alone, the predicate applied only inside that window, the cursor
+  advanced by the window's last key. Fleet-wide on the maintenance pool or per
+  user, chosen for you by `reduce_all/4`.
+- Completion is "a walk over every window found nothing"
+  (`IdWindows.heal_pass/3`, `DataMigrations.any_row?/1`), never a separate
+  EXISTS over the table.
+- A predicate an index serves (a partial index whose WHERE the query implies)
+  may page directly; prove it with `Engram.QueryPlan`.
+- Never `timeout: :infinity`, and do not raise the timeout to make a sweep
+  fit: the 15 s default is the guard. The one exception is a deliberate daily
+  full aggregate (a report), which uses
+  `Engram.Repo.Maintenance.report_timeout/0` and names its ceiling.
+- Test it: `Engram.QueryRecorder.unwindowed/4` lists any statement that reads
+  a table outside a window.
+
 ## Data DML in migrations — FORCE RLS trap
 
 Raw `UPDATE`/`DELETE`/`INSERT` against a tenant table in a migration silently

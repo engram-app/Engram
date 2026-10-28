@@ -35,6 +35,15 @@ others.
   returns `users: n`), which the runner adds to its log lines.
 - `:done` means no row the backfill would process still needs work, checked
   against exactly those rows (the same scan and predicate the worker uses).
+- Every statement reads one id window, never "the next N rows that need work"
+  (#2276; the backend `AGENTS.md` rule). A pass walks `notes` through
+  `Engram.Backfill.IdWindows.heal_pass/3`: each window's step fixes what it
+  can and says whether a matched row is still unfixed (a row lock it
+  skipped). `:done` is a walk over EVERY window that fixed nothing and left
+  nothing; that walk is the completion check, so no separate fleet-wide
+  EXISTS runs. A pass stops after a bounded number of fixed rows
+  (`:max_fixed`) and the next pass starts over from the first window,
+  re-reading the clean prefix (reads only, one window per statement).
 - Two kinds of unfixed row, treated oppositely:
   - Rows the worker can never SELECT (deleted notes, soft-deleted vaults, for
     `CrdtStateSeed` notes backed by a `crdt_update_log` tail) are not its work.
@@ -91,10 +100,20 @@ keeps its own check in `ReconcileEmbeddings`.
 
 ## Cross-tenant discovery
 
-Use `DataMigrations.any_row?/1`. Never `skip_tenant_check: true` on the app
-pool: FORCE RLS turns that into zero rows and the migration would close early
-(#1349). `any_row?/1` uses the maintenance repo when enabled, else one query per
-user inside that user's RLS context.
+Use `DataMigrations.any_row?/1` (a `notes` query) or `IdWindows` directly.
+Never `skip_tenant_check: true` on the app pool: FORCE RLS turns that into
+zero rows and the migration would close early (#1349). `any_row?/1` walks
+`notes` in id windows of 1,000 and asks the query only inside each window,
+stopping at the first hit: fleet-wide on the maintenance repo when enabled,
+else per user inside that user's RLS context. It is cheapest while work is
+left (an early hit) and costs one full walk, one window per statement, to
+prove done. The single EXISTS it replaced was slowest exactly when almost
+done (#2276).
+
+Per-user windows filter on `user_id`, and `notes` has no `(user_id, id)`
+index, so on the per-user path (self-host) a window read is bounded by the
+user's row count, not the window. The fleet walk (SaaS) reads the primary key
+only.
 
 ## Jobs without `unique`
 
