@@ -50,13 +50,16 @@ defmodule Engram.DataMigrations.PersonOriginBackfillTest do
   end
 
   test "a later batch in flight blocks a second chain" do
-    {:ok, _} = PersonOriginSync.backfill()
-    Oban.insert!(PersonOriginSync.new(%{"backfill" => true, "after" => Ecto.UUID.generate()}))
     {:ok, head} = PersonOriginSync.backfill()
     set_state(head, "completed")
 
+    later = %{"backfill" => true, "chain" => head.args["chain"], "after" => Ecto.UUID.generate()}
+    Oban.insert!(PersonOriginSync.new(later))
+
     assert {:more, running: true} = PersonOriginBackfill.run_pass()
-    assert length(backfill_jobs()) == 2
+    # Only the later batch is incomplete (all_enqueued skips the completed head):
+    # the pass enqueued no second chain.
+    assert [%{args: ^later}] = backfill_jobs()
   end
 
   test "a single-user job is not a backfill chain" do
