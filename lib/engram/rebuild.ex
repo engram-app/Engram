@@ -78,7 +78,7 @@ defmodule Engram.Rebuild do
 
   # The last versions every install rebuilds automatically, without the
   # switch: the stamps prod notes carry before the v5 pass (chunker 3,
-  # keyword 2). The build is at 5 / 4 (PR-17, then phrase pairs); that waits
+  # keyword 2). The build is at 5 / 5 (PR-17, phrase pairs, then dropped); that waits
   # for `on`.
   # `:rebuild_pinned_versions` is a test seam only (no env var, set by
   # `test_helper.exs` to the build's versions so the suite runs pins == build).

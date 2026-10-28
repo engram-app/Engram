@@ -212,15 +212,15 @@ pub fn tokenize(text: &str, lang: Option<&str>) -> (Vec<String>, Vec<usize>) {
     (out, raw)
 }
 
-/// Adjacent raw-token pairs, the phrase features of the keyword vector.
-/// A pair with a CJK token is skipped: CJK runs are already char bigrams.
-/// Same rule for documents and quoted query phrases.
-pub fn pairs<'a>(
-    tokens: &'a [String],
-    raw: &'a [usize],
-) -> impl Iterator<Item = (&'a str, &'a str)> {
-    raw.windows(2).filter_map(move |w| {
-        let (a, b) = (tokens[w[0]].as_str(), tokens[w[1]].as_str());
-        (!a.chars().any(is_cjk) && !b.chars().any(is_cjk)).then_some((a, b))
-    })
+/// A text as its words, one entry each, in the form the keyword index
+/// matches on: the stem where the language has one, else the word itself
+/// (CJK runs are char bigrams). Two texts hold the same phrase when one's
+/// sequence contains the other's. Same rule for chunks and quoted phrases.
+pub fn phrase_seq(text: &str, lang: Option<&str>) -> Vec<String> {
+    let (tokens, raw) = tokenize(text, lang);
+    let ends = raw.iter().skip(1).copied().chain([tokens.len()]);
+    raw.iter()
+        .zip(ends)
+        .map(|(_, end)| tokens[end - 1].clone())
+        .collect()
 }

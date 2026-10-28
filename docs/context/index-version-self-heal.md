@@ -127,3 +127,32 @@ can dedupe any single tick, and a skipped tick must not skip the day. It is a
 pure function of the job's `scheduled_at`, with no extra cron entry and no
 state. A stale note is healed within a day; the cost is twelve unindexed
 keyword scans per day.
+
+## Keyword v5: phrase pairs dropped (2026-10-27)
+
+v4 added an adjacent-word pair dim per chunk so a quoted query could match
+word order inside Qdrant. Measured on prod `engram_notes` (6.89 GB, 408k
+points): sparse index + storage was 4.64 GB, and pairs were 50 to 70% of the
+sparse entries. The founder decided to drop them; v5 is unigram-only again.
+
+**Quoted phrases now work at query time** (`Engram.Search.PhraseCheck`): when
+the query has a double-quoted span, the top 100 fused candidates (constants in
+that module) have their chunk text, already loaded and decrypted by the
+search path, checked by the Rust tokenizer (`phrase_matches_nif`): the
+language-stemmed raw-token stream of the text must hold the phrase's stream
+contiguously. Matches are promoted above non-matches (stable, nothing is
+filtered, empty or missing text is just unverified). Text is read only up to
+64 KB per candidate, so a phrase deep in a floor point stays unverified. The
+fetch limit rises to 100 for such queries and the page is cut back to its
+usual size after promotion. Telemetry: `engram_prom_ex_search_phrase_checked_total`
+and `..._phrase_promoted_total` (no query text). `search_performed` carries
+`quoted: true|false` to see how often phrases are used.
+
+**Rollout trap: the in-place rewrite makes disk PEAK before it falls.**
+`RefreshKeywordVectors` upserts new (smaller) sparse vectors, but Qdrant only
+reclaims the old segment space when the optimizer vacuums, so while the pass
+runs, disk and RAM go UP, not down. Watch the Qdrant volume, and let the
+vacuum run before judging the saving. Under `INDEX_REBUILD=off|dry_run` the
+sweep targets `Rebuild.pinned_versions/0` (keyword 2), so nothing moves until
+`on`. No Voyage call is made. The sparse `f16` datatype and the vacuum
+threshold are separate changes (staging plus an infra PR).

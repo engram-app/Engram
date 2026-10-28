@@ -47,14 +47,6 @@ fn dim_parts(key: &[u8], parts: &[&[u8]]) -> u32 {
     u32::from_be_bytes([out[0], out[1], out[2], out[3]])
 }
 
-/// Dim of the adjacent-word pair `a b`: HMAC(key, "\x01bg " a " " b), the
-/// eval prototype's preimage, keyed. A unigram is one word run, which never
-/// holds \x01 or a space, so no unigram has this preimage; the u32s can
-/// still meet by chance, like any two unigrams, and sum.
-fn pair_dim(key: &[u8], a: &str, b: &str) -> u32 {
-    dim_parts(key, &[b"\x01bg ", a.as_bytes(), b" ", b.as_bytes()])
-}
-
 /// BM25 length options. `b` is the length weight (0.75 for every v3 point);
 /// `cap`, when set, scores a document as if it were at most `cap` x avgdl
 /// long (floor points and capped groups use 3.0).
@@ -106,18 +98,6 @@ fn encode(
         *by_dim.entry(d).or_insert(0.0) += w;
     }
 
-    // Phrase features: adjacent raw pairs, same BM25 tf weight and norm.
-    // Only quoted query phrases ask for them, so they move nothing else.
-    let mut pair_tf: HashMap<(&str, &str), u32> = HashMap::new();
-    for p in tokenizer::pairs(&tokens, &raw) {
-        *pair_tf.entry(p).or_insert(0) += 1;
-    }
-    for ((a, b), n) in pair_tf {
-        let n = n as f64;
-        let w = n * (K1 + 1.0) / (n + K1 * norm);
-        *by_dim.entry(pair_dim(key, a, b)).or_insert(0.0) += w;
-    }
-
     let mut pairs: Vec<(u32, f64)> = by_dim.into_iter().collect();
     pairs.sort_unstable_by_key(|p| p.0);
     let mut idx = Vec::with_capacity(pairs.len() * 4);
@@ -159,28 +139,47 @@ fn encode_documents_nif<'a>(
     })
 }
 
-/// Query vector: distinct tokens, value 1.0 each (Qdrant applies IDF), plus
-/// the adjacent-pair dims of each quoted `phrase` (none: the unigram vector
-/// exactly as before phrases existed).
+/// Query vector: distinct tokens, value 1.0 each (Qdrant applies IDF).
 /// Plain lists: a query is a few terms and goes straight into a JSON body.
 /// Dirty like the rest: query length is caller-controlled.
 #[rustler::nif(schedule = "DirtyCpu")]
-fn encode_query_nif(
-    query: &str,
-    key: Binary,
-    lang: Option<String>,
-    phrases: Vec<String>,
-) -> (Vec<u32>, Vec<f64>) {
+fn encode_query_nif(query: &str, key: Binary, lang: Option<String>) -> (Vec<u32>, Vec<f64>) {
     let (tokens, _) = tokenizer::tokens_with_len(query, lang.as_deref());
     let mut dims: Vec<u32> = tokens.iter().map(|t| dim(key.as_slice(), t)).collect();
-    for phrase in &phrases {
-        let (pt, raw) = tokenizer::tokenize(phrase, None);
-        dims.extend(tokenizer::pairs(&pt, &raw).map(|(a, b)| pair_dim(key.as_slice(), a, b)));
-    }
     dims.sort_unstable();
     dims.dedup();
     let values = vec![1.0; dims.len()];
     (dims, values)
+}
+
+/// Per text, how many of `phrases` it holds as a contiguous run of words,
+/// compared as the indexer sees them (same normalisation, same stemmer, CJK
+/// as char bigrams). Reads at most `max_bytes` of each text. A phrase with
+/// no words is never counted.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn phrase_matches_nif(
+    texts: Vec<Binary>,
+    phrases: Vec<String>,
+    lang: Option<String>,
+    max_bytes: usize,
+) -> Vec<usize> {
+    let wanted: Vec<Vec<String>> = phrases
+        .iter()
+        .map(|p| tokenizer::phrase_seq(p, lang.as_deref()))
+        .filter(|p| !p.is_empty())
+        .collect();
+    texts
+        .iter()
+        .map(|t| {
+            let bytes = t.as_slice();
+            let text = String::from_utf8_lossy(&bytes[..bytes.len().min(max_bytes)]);
+            let seq = tokenizer::phrase_seq(&text, lang.as_deref());
+            wanted
+                .iter()
+                .filter(|p| seq.windows(p.len()).any(|w| w == p.as_slice()))
+                .count()
+        })
+        .collect()
 }
 
 /// Language codes with a Snowball stemmer.

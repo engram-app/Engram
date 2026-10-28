@@ -14,6 +14,7 @@ defmodule Engram.Search do
   alias Engram.Notes.Helpers
   alias Engram.Search.FieldFilters
   alias Engram.Search.MMR
+  alias Engram.Search.PhraseCheck
   alias Engram.Search.SearchProfile
   alias Engram.Vector.Qdrant
   alias EngramWeb.RateLimiter
@@ -264,7 +265,13 @@ defmodule Engram.Search do
       |> scrub_result_utf8()
       |> window_texts(query)
 
-    emit_search_performed(user, result, started_at, cross_vault, surface_prop(opts))
+    emit_search_performed(
+      user,
+      result,
+      started_at,
+      cross_vault,
+      Map.put(surface_prop(opts), :quoted, quoted_phrases(query) != [])
+    )
 
     :telemetry.execute(
       [:engram, :search, :request, :stop],
@@ -455,6 +462,10 @@ defmodule Engram.Search do
   defp result_count({:ok, results}) when is_list(results), do: length(results)
   defp result_count(_), do: 0
 
+  # The double-quoted spans of a text query (none for `{:similar, ids}`).
+  defp quoted_phrases(query) when is_binary(query), do: KeywordIndex.quoted_phrases(query)
+  defp quoted_phrases(_query), do: []
+
   defp rerank_label(user) do
     case Engram.Billing.check_feature(user, :reranker_enabled) do
       :ok -> if reranker_active?(), do: :on, else: :off
@@ -544,7 +555,14 @@ defmodule Engram.Search do
     # at diversity 0, where it must not be starved down to `limit` chunks).
     # A similar_to query is `{:similar, ids}`, not text: nothing to rerank against.
     rerank_for_user? = reranker_active?() and profile.reranker and is_binary(query)
-    fetch_limit = if group? or rerank_for_user? or diversify?, do: pool, else: limit
+    page_fetch = if group? or rerank_for_user? or diversify?, do: pool, else: limit
+    # A quoted phrase is checked against the top candidates (`PhraseCheck`),
+    # so such a query fetches that many; the page is cut back after.
+    phrases = if mode in [:keyword, :hybrid], do: quoted_phrases(query), else: []
+
+    fetch_limit =
+      if phrases == [], do: page_fetch, else: max(page_fetch, PhraseCheck.candidates())
+
     # Keep the whole pool through the reranker when diversifying or grouping so
     # MMR / collapse can see it; otherwise the reranker cuts straight to `limit`
     # (unchanged chunk-path behavior).
@@ -567,6 +585,14 @@ defmodule Engram.Search do
              {:ok, candidates} <- payload_fallback(candidates, hits, user),
              vaults_by_id = load_candidate_vaults(user, vault, candidates),
              {:ok, decrypted} <- decrypt_candidates(candidates, user, vaults_by_id, hits) do
+          decrypted =
+            if phrases == [],
+              do: decrypted,
+              else:
+                decrypted
+                |> PhraseCheck.promote(phrases, detect_query_language(query))
+                |> Enum.take(page_fetch)
+
           rerank_module = if rerank_for_user?, do: reranker(), else: Engram.Rerankers.None
 
           with {:ok, ranked} <- rerank_module.rerank(query, decrypted, rerank_keep) do

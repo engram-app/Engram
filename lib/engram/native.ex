@@ -33,11 +33,15 @@ defmodule Engram.Native do
   # recompiles it, and Rustler rebuilds the env's own library.
   @external_resource "priv/native/engram_native.so"
 
+  @doc "Keyword query vector: `{indices, values}`, distinct dims, values 1.0."
+  def encode_query_nif(_query, _filter_key, _language),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   @doc """
-  Keyword query vector: `{indices, values}`, distinct dims, values 1.0. Each
-  string in `phrases` adds its adjacent-word pair dims (`[]`: unigrams only).
+  Per text, how many of `phrases` it holds as a run of consecutive words
+  (stemmed per `language`), reading at most `max_bytes` of each text.
   """
-  def encode_query_nif(_query, _filter_key, _language, _phrases),
+  def phrase_matches_nif(_texts, _phrases, _language, _max_bytes),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc "Language codes (strings) with a Snowball stemmer."
