@@ -140,6 +140,93 @@ defmodule Engram.Notes.NoteIndexStateTest do
     end
   end
 
+  describe "NoteIndexState pass on prod-size data" do
+    # Prod (70k notes, 421k chunks) failed the pass with a 15 s DBConnection
+    # timeout: the done check and the recount each scanned ALL notes with a
+    # correlated chunk count in one statement. Every statement must now be
+    # bounded to an id window, however sparse the drift.
+    setup %{user: u, vault: v} do
+      seed = write!(u, v, "seed.md", "# S\n\nbody")
+
+      Repo.query!(
+        """
+        INSERT INTO notes
+        SELECT (r).* FROM (
+          SELECT jsonb_populate_record(null::notes,
+                   to_jsonb(n) || jsonb_build_object('id', gen_random_uuid(),
+                                                     'path', 'gen/' || g || '.md',
+                                                     'path_hmac', '\\\\x' || md5(g::text))) AS r
+          FROM notes n, generate_series(1, 2999) g WHERE n.id = $1) x
+        """,
+        [Ecto.UUID.dump!(seed.id)]
+      )
+
+      %{rows: [[total]]} = Repo.query!("SELECT count(*) FROM note_index_state")
+      assert total == 3000
+      :ok
+    end
+
+    defp capture_sql(fun) do
+      test = self()
+      id = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        id,
+        [:engram, :repo, :query],
+        fn _, _, %{query: q}, _ -> send(test, {:sql, q}) end,
+        nil
+      )
+
+      try do
+        result = fun.()
+        {result, drain([])}
+      after
+        :telemetry.detach(id)
+      end
+    end
+
+    defp drain(acc) do
+      receive do
+        {:sql, q} -> drain([q | acc])
+      after
+        0 -> acc
+      end
+    end
+
+    test "a clean ledger closes in bounded, windowed statements" do
+      started = System.monotonic_time(:millisecond)
+      {result, sqls} = capture_sql(fn -> Backfill.run_pass() end)
+      elapsed = System.monotonic_time(:millisecond) - started
+
+      assert result == :done
+      # Margin: the real cost is well under a second here; 15 s is DBConnection's cap.
+      assert elapsed < 15_000
+
+      chunk_scans = Enum.filter(sqls, &(&1 =~ "FROM chunks c"))
+      assert length(chunk_scans) >= 3
+      assert Enum.all?(chunk_scans, &(&1 =~ "LIMIT")), "an unbounded chunk-count scan ran"
+    end
+
+    test "sparse drift among thousands is fixed exactly, then the ledger closes", %{user: u} do
+      drifted =
+        Repo.query!(
+          "UPDATE note_index_state SET points = 99 WHERE note_id IN " <>
+            "(SELECT note_id FROM note_index_state ORDER BY note_id OFFSET 1500 LIMIT 3) " <>
+            "RETURNING note_id"
+        ).rows
+
+      assert length(drifted) == 3
+      assert {:more, rows: 3} = Backfill.run_pass(batch: 500)
+      assert :done = Backfill.run_pass(batch: 500)
+
+      assert Repo.aggregate(from(s in NoteIndexState, where: s.points == 99), :count,
+               skip_tenant_check: true
+             ) == 0
+
+      _ = u
+    end
+  end
+
   describe "RLS" do
     test "control: the dropped role with no tenant sees zero rows", %{user: u, vault: v} do
       write!(u, v, "A.md", "# A\n\nbody")

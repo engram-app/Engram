@@ -962,6 +962,9 @@ if config_env() == :prod do
                # Same reasoning as Engram.Repo above (T3.0.2): keep Ecto params
                # out of :debug logs if anyone raises the log level.
                log: false,
+               # Cross-tenant sweeps outrun DBConnection's 15 s default on prod
+               # data; one place, so no sweep passes `timeout:` per call.
+               timeout: Engram.RuntimeConfig.maintenance_timeout(),
                parameters: Engram.RuntimeConfig.repo_parameters(:maintenance)
              ] ++
                Engram.RuntimeConfig.database_ssl(

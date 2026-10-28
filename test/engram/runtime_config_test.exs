@@ -189,4 +189,8 @@ defmodule Engram.RuntimeConfigTest do
       assert RuntimeConfig.database_ssl(env, "db.rds.amazonaws.com") == []
     end
   end
+
+  test "the maintenance pool outlasts DBConnection's 15 s default" do
+    assert RuntimeConfig.maintenance_timeout() > 15_000
+  end
 end
