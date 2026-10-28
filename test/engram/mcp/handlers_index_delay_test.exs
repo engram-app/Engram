@@ -90,6 +90,56 @@ defmodule Engram.MCP.HandlersIndexDelayTest do
     assert seconds_out(job) <= EmbedNote.agent_settle_seconds() + 1
   end
 
+  # Review P1: a running embed read the content before this edit, so it must
+  # not swallow the edit's job (the stale pass rolls back `:superseded`).
+  test "an MCP write while the note's embed is executing queues a new job",
+       %{user: u, vault: v} do
+    mcp_write(u, v, "e.md", "first")
+    Repo.update_all(Oban.Job, set: [state: "executing", attempted_at: DateTime.utc_now()])
+
+    mcp_write(u, v, "e.md", "second")
+
+    assert [_running, queued] = Enum.sort_by(embed_jobs(), & &1.id)
+    assert queued.state in ["scheduled", "available"]
+    assert seconds_out(queued) <= EmbedNote.agent_settle_seconds() + 1
+  end
+
+  # Review P2: an agent create is interactive, not backfill (`priority_for/1`
+  # gives never-embedded notes 9), and it promotes a backfill-ranked job.
+  test "MCP writes enqueue at interactive priority", %{user: u, vault: v} do
+    mcp_write(u, v, "n.md", "new note")
+    assert [%{priority: 0}] = embed_jobs()
+
+    plugin_write(u, v, "b.md", "bulk synced, never embedded")
+    assert [%{priority: 9}] = Enum.filter(embed_jobs(), &(&1.priority == 9))
+
+    mcp_write(u, v, "b.md", "agent touched it")
+    assert Enum.all?(embed_jobs(), &(&1.priority == 0))
+  end
+
+  # Review P2: a job backing off (Voyage 429 snooze, Qdrant backpressure,
+  # retry) keeps its backoff; an agent write never pulls it to 2s.
+  for {label, changes} <- [
+        snoozed: [state: "scheduled", meta: %{"snoozed" => 1}],
+        retryable: [state: "retryable", attempt: 1]
+      ] do
+    test "an MCP write does not pull a #{label} job forward", %{user: u, vault: v} do
+      mcp_write(u, v, "s.md", "first")
+      later = DateTime.add(DateTime.utc_now(), 60)
+      Repo.update_all(Oban.Job, set: [scheduled_at: later] ++ unquote(Macro.escape(changes)))
+
+      mcp_write(u, v, "s.md", "second")
+
+      assert [job] = embed_jobs()
+      assert seconds_out(job) >= 55
+    end
+  end
+
+  test "the agent settle never exceeds the default settle" do
+    Application.put_env(:engram, :embed_agent_settle_seconds, 1_000)
+    assert EmbedNote.agent_settle_seconds() == 30
+  end
+
   test "every MCP write reply tells the agent when search will see it", %{user: u, vault: v} do
     {:ok, text, _} =
       Handlers.handle("write_note", u, v, %{"path" => "r.md", "content" => "body"})
