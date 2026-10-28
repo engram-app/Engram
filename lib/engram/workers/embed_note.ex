@@ -50,6 +50,7 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Crypto.RotationGate
   alias Engram.EmbedModels
   alias Engram.Indexing
+  alias Engram.Jobs
   alias Engram.Logger.DecryptFailure
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
@@ -1269,14 +1270,15 @@ defmodule Engram.Workers.EmbedNote do
   `unique`/`replace`, so the ceiling is meaningless there and building the
   changeset reads nothing.
   """
-  # Every incomplete state but `executing`: a running pass may already have
-  # read the previous content, so a newer edit needs its own job (the same rule
-  # `reject_already_queued/2` applies to bulk enqueues). The two passes are
+  # `Engram.Jobs.pending_states/0`, every incomplete state but `executing`: a
+  # running pass may already have read the previous content, so a newer edit
+  # needs its own job (the rule `reject_already_queued/2` applies to bulk
+  # enqueues through the same list). The two passes are
   # safe together: `Indexing` re-checks `content_hash` under `FOR UPDATE` and
   # the stale one rolls back `:superseded`, and the `embed_hash` stamp is
   # optimistic. Before #2294 an edit during a run was absorbed and only the
   # 5-minute `ReconcileEmbeddings` sweep caught it.
-  @pending_states [:suspended, :available, :scheduled, :retryable]
+  @pending_states Enum.map(Engram.Jobs.pending_states(), &String.to_existing_atom/1)
 
   # `user_id` REQUIRED and positional — see the note on
   # `Engram.Workers.ExtractNoteLinks.new_debounced/2`.
@@ -1402,12 +1404,16 @@ defmodule Engram.Workers.EmbedNote do
   @doc """
   Seconds an MCP (AI agent) write waits before it embeds. See `new_debounced/3`.
 
-  Capped at the default settle: longer would make an agent write slower than a
-  typed one, and would outrun the unique `period` sized off that settle.
+  Kept within `0..settle_seconds()`: longer would make an agent write slower
+  than a typed one and outrun the unique `period` sized off that settle, and a
+  negative value means nothing.
   """
   @spec agent_settle_seconds() :: non_neg_integer()
   def agent_settle_seconds,
-    do: min(Application.get_env(:engram, :embed_agent_settle_seconds, 2), settle_seconds())
+    do:
+      Application.get_env(:engram, :embed_agent_settle_seconds, 2)
+      |> min(settle_seconds())
+      |> max(0)
 
   defp settle_for(:agent), do: agent_settle_seconds()
   defp settle_for(_), do: settle_seconds()
@@ -1444,6 +1450,7 @@ defmodule Engram.Workers.EmbedNote do
       # unsaved changeset as the conflict: nothing to move.
       {:ok, %Oban.Job{conflict?: true, id: id, inserted_at: %DateTime{} = start} = job}
       when is_integer(id) ->
+        Engram.InterleaveHook.run(:embed_after_unique_lookup)
         ceiling = DateTime.add(start, settle_max_wait_seconds(), :second)
 
         at =
@@ -1452,13 +1459,7 @@ defmodule Engram.Workers.EmbedNote do
           |> respect_backoff(job)
           |> earliest(ceiling)
 
-        # A more urgent write promotes the pending job instead of inheriting
-        # its rank: an agent edit to a note whose first embed is still queued
-        # at backfill priority must not wait behind an import. Oban fetches
-        # `priority ASC`; same rule as `reject_already_queued/2`.
-        priority = min(job.priority, Ecto.Changeset.get_field(changeset, :priority))
-
-        {:ok, move_pending(job, scheduled_at: at, priority: priority)}
+        move_pending(job, at, Ecto.Changeset.get_field(changeset, :priority), changeset)
 
       other ->
         other
@@ -1477,22 +1478,26 @@ defmodule Engram.Workers.EmbedNote do
   defp earliest(a, b), do: if(DateTime.compare(a, b) == :gt, do: b, else: a)
   defp latest(a, b), do: if(DateTime.compare(a, b) == :lt, do: b, else: a)
 
-  # One UPDATE, only for what changed, and only while the job is still
-  # pending: one that started running meanwhile is left alone.
-  defp move_pending(%Oban.Job{id: id} = job, fields) do
-    case Enum.reject(fields, fn {k, v} -> Map.fetch!(job, k) == v end) do
-      [] ->
-        job
+  # One UPDATE, only while the job is still pending. Oban's unique lookup
+  # does not lock the row, so a due job can start between that lookup and
+  # this UPDATE. It then matches nothing, and the running pass read the
+  # content before this edit: insert this edit's own job (the unique check
+  # now misses, `executing` is not pending) rather than leave it to the
+  # 5-minute `ReconcileEmbeddings` sweep.
+  defp move_pending(%Oban.Job{id: id} = job, at, priority, changeset) do
+    pending = from(j in Oban.Job, where: j.id == ^id and j.state in ^Jobs.pending_states())
 
-      changed ->
-        pending = Enum.map(@pending_states, &to_string/1)
+    case Repo.update_all(pending, set: [scheduled_at: at]) do
+      {0, _} ->
+        Oban.insert(changeset)
 
-        {_, _} =
-          Repo.update_all(from(j in Oban.Job, where: j.id == ^id and j.state in ^pending),
-            set: changed
-          )
-
-        struct!(job, changed)
+      {1, _} ->
+        # A more urgent write promotes the pending job instead of inheriting
+        # its rank: an agent edit to a note whose first embed is still queued
+        # at backfill priority must not wait behind an import.
+        promoted = if priority < job.priority, do: Jobs.promote(pending, priority), else: 0
+        job = %{job | scheduled_at: at}
+        {:ok, if(promoted == 1, do: %{job | priority: priority}, else: job)}
     end
   end
 end

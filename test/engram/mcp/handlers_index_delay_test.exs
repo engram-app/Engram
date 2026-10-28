@@ -140,6 +140,33 @@ defmodule Engram.MCP.HandlersIndexDelayTest do
     assert EmbedNote.agent_settle_seconds() == 30
   end
 
+  # Delta review P3: Oban's unique lookup does not lock the row, so a due job
+  # can start before the debounce moves it. The edit then gets its own job.
+  test "a job that starts between the unique lookup and the move does not absorb the edit",
+       %{user: u, vault: v} do
+    mcp_write(u, v, "g.md", "first")
+
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      :embed_after_unique_lookup ->
+        Repo.update_all(Oban.Job, set: [state: "executing", attempted_at: DateTime.utc_now()])
+
+      _ ->
+        :ok
+    end)
+
+    on_exit(fn -> Application.delete_env(:engram, :checkpoint_interleave_hook) end)
+
+    mcp_write(u, v, "g.md", "second")
+
+    assert [%{state: "executing"}, queued] = Enum.sort_by(embed_jobs(), & &1.id)
+    assert queued.state in ["scheduled", "available"]
+  end
+
+  test "a negative agent settle reads as zero" do
+    Application.put_env(:engram, :embed_agent_settle_seconds, -5)
+    assert EmbedNote.agent_settle_seconds() == 0
+  end
+
   test "every MCP write reply tells the agent when search will see it", %{user: u, vault: v} do
     {:ok, text, _} =
       Handlers.handle("write_note", u, v, %{"path" => "r.md", "content" => "body"})
