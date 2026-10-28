@@ -517,14 +517,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   end
 
   # Test-only seam (`Engram.CheckpointInterleave`): nil outside those tests.
-  defp interleave_hook(point) do
-    case Application.get_env(:engram, :checkpoint_interleave_hook) do
-      nil -> :ok
-      fun when is_function(fun, 1) -> _ = fun.(point)
-    end
-
-    :ok
-  end
+  defp interleave_hook(point), do: Engram.InterleaveHook.run(point)
 
   # do_checkpoint/1 runs for note rooms only, so `room_key` is the note id.
   defp room_log_meta(state), do: [vault_id: state.vault_id, note_id: state.room_key]

@@ -2766,14 +2766,7 @@ defmodule Engram.Notes do
   # `OF n0` (Ecto's alias for the first source) keeps the lock on notes.
   defp locked_body_from_notes(query), do: query |> exclude(:select) |> select([n], n)
 
-  defp interleave_hook(point) do
-    case Application.get_env(:engram, :checkpoint_interleave_hook) do
-      nil -> :ok
-      fun when is_function(fun, 1) -> _ = fun.(point)
-    end
-
-    :ok
-  end
+  defp interleave_hook(point), do: Engram.InterleaveHook.run(point)
 
   defp do_rewrite_note(existing, base_attrs, user, sanitized_path, folder, opts) do
     # db_opts carries `mode: :savepoint` on the batch path so a failed SQL
