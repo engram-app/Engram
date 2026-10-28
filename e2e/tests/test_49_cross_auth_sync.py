@@ -152,7 +152,10 @@ async def test_oauth_push_apikey_receives(
 
 
 @pytest.mark.asyncio
-async def test_rapid_api_edits_final_content_arrives(vault_b, cdp_a, cdp_b, api_sync):
+@pytest.mark.parametrize("rep", range(10))  # PROOF ONLY, do not merge
+async def test_rapid_api_edits_final_content_arrives(
+    vault_b, cdp_a, cdp_b, api_sync, rep
+):
     """Multiple rapid API edits to same note → final content arrives at client.
 
     Tests that debounce/dedup logic doesn't drop the final update.
