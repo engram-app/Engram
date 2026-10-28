@@ -232,8 +232,11 @@ if config_env() != :test do
   # Settle for a write made over MCP by an AI agent (#2294). It writes the whole
   # note at once and searches for it seconds later, so 30s reads as "my note is
   # missing". Default 2s.
-  if secs = System.get_env("EMBED_AGENT_SETTLE_SECONDS") do
-    config :engram, :embed_agent_settle_seconds, String.to_integer(secs)
+  # Blank reads the default rather than failing boot (self-host `.env` files
+  # often leave knobs empty).
+  case String.trim(System.get_env("EMBED_AGENT_SETTLE_SECONDS", "")) do
+    "" -> :ok
+    secs -> config :engram, :embed_agent_settle_seconds, String.to_integer(secs)
   end
 
   # Max-wait ceiling: a continuously-edited note embeds at most this many seconds

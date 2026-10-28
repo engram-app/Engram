@@ -1257,7 +1257,9 @@ defmodule Engram.Workers.EmbedNote do
   it seconds later. The job is the same unique job either way, so whichever
   write came LAST sets the timer: a plugin edit after an agent write pushes it
   back out to the full settle, an agent write after a plugin edit pulls it in.
-  Never two jobs, never a stale 30s job left behind.
+  Usually one job and no stale 30s job: when Oban cannot take the unique lock
+  (two writers racing on one note) the losing write moves nothing, so its
+  settle can lose to the other writer's, bounded by that writer's settle.
 
   Pass `old_path_hmac:` (base64) when the note was renamed — the worker will
   delete old-path Qdrant points before re-indexing under the new path. T3.2:
@@ -1397,9 +1399,15 @@ defmodule Engram.Workers.EmbedNote do
 
   defp settle_seconds, do: Application.get_env(:engram, :embed_settle_seconds, 30)
 
-  @doc "Seconds an MCP (AI agent) write waits before it embeds. See `new_debounced/3`."
+  @doc """
+  Seconds an MCP (AI agent) write waits before it embeds. See `new_debounced/3`.
+
+  Capped at the default settle: longer would make an agent write slower than a
+  typed one, and would outrun the unique `period` sized off that settle.
+  """
   @spec agent_settle_seconds() :: non_neg_integer()
-  def agent_settle_seconds, do: Application.get_env(:engram, :embed_agent_settle_seconds, 2)
+  def agent_settle_seconds,
+    do: min(Application.get_env(:engram, :embed_agent_settle_seconds, 2), settle_seconds())
 
   defp settle_for(:agent), do: agent_settle_seconds()
   defp settle_for(_), do: settle_seconds()
