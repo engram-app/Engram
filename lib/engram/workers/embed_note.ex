@@ -8,8 +8,10 @@ defmodule Engram.Workers.EmbedNote do
 
   Does not write `note_links`; `ExtractNoteLinks` owns those.
 
-  Dedup: unique per note_id across all `:incomplete` states (which includes
-  `executing` and `retryable`, not just available/scheduled), 60-second window.
+  Dedup: unique per note_id across the pending states (`retryable` and
+  `suspended` included, `executing` NOT: a running pass may have read the old
+  content). The `use` default below is a 60-second window over `:incomplete`;
+  `new_debounced/3` overrides both.
 
   Idempotency: skips embedding when embed_hash already matches content_hash
   (content hasn't changed since last successful embed). On success, sets
@@ -1264,6 +1266,15 @@ defmodule Engram.Workers.EmbedNote do
   `unique`/`replace`, so the ceiling is meaningless there and building the
   changeset reads nothing.
   """
+  # Every incomplete state but `executing`: a running pass may already have
+  # read the previous content, so a newer edit needs its own job (the same rule
+  # `reject_already_queued/2` applies to bulk enqueues). The two passes are
+  # safe together: `Indexing` re-checks `content_hash` under `FOR UPDATE` and
+  # the stale one rolls back `:superseded`, and the `embed_hash` stamp is
+  # optimistic. Before #2294 an edit during a run was absorbed and only the
+  # 5-minute `ReconcileEmbeddings` sweep caught it.
+  @pending_states [:suspended, :available, :scheduled, :retryable]
+
   # `user_id` REQUIRED and positional — see the note on
   # `Engram.Workers.ExtractNoteLinks.new_debounced/2`.
   # The `is_binary(user_id)` guard is load-bearing, not decoration. `opts` keeps
@@ -1296,7 +1307,7 @@ defmodule Engram.Workers.EmbedNote do
       unique: [
         period: settle_max_wait_seconds() + settle_seconds(),
         keys: [:note_id],
-        states: :incomplete
+        states: @pending_states
       ]
     )
   end
