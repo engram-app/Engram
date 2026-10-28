@@ -157,17 +157,19 @@ defmodule Engram.Indexing.NoteCountsTest do
   # Old-release writers (a rolling deploy, a rollback) do not count: the
   # ledger finds the drift and heals it, so the one-statement check fails
   # until it does.
+  # Every chunk write is counted by the chunks trigger (migration
+  # 20261028000000), so drift now only comes from outside it: a hand edit,
+  # or a note counted before the trigger existed.
   test "the ledger heals counters a non-counting writer left behind", ctx do
     a = index!(ctx.user, ctx.vault, "A.md", content(5, "alpha"))
     b = index!(ctx.user, ctx.vault, "B.md", content(3, "bravo"))
 
-    Repo.delete_all(from(c in Chunk, where: c.note_id == ^a.id and c.position > 1),
-      skip_tenant_check: true
-    )
-
-    Repo.query!("UPDATE note_index_state SET points = 999 WHERE note_id = $1", [
-      Ecto.UUID.dump!(b.id)
-    ])
+    for {note, points} <- [{a, 2}, {b, 999}] do
+      Repo.query!("UPDATE note_index_state SET points = $2 WHERE note_id = $1", [
+        Ecto.UUID.dump!(note.id),
+        points
+      ])
+    end
 
     assert drifted() == 2
     assert {:more, rows: 2} = Ledger.run_pass()

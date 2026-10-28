@@ -15,7 +15,10 @@ defmodule Engram.Indexing.ChunkRows do
 
   Also keeps each note's chunk counters on `note_index_state`
   (`recount!/1`): every chunk writer of this release calls it in the same
-  transaction as its chunk statements.
+  transaction as its chunk statements. The `chunks_sync_note_counts_*`
+  statement triggers (migration 20261028000000) now keep the same absolute
+  counters on every chunk write, any writer; `recount!` agrees with them
+  and stays until a later release removes it.
 
   ## Lock order
 

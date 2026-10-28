@@ -49,6 +49,13 @@ others.
   leader change starts the walk over (slower, never a false done). A walk
   spanning more than 3 passes logs a warning per pass and emits
   `[:engram, :id_windows, :walk_spanning]`.
+- `NoteIndexState`'s chunk counters are kept on every `chunks` write by the
+  `chunks_sync_note_counts_*` statement triggers (migration 20261028000000):
+  absolute recount of the touched notes, one state write per note per
+  statement. The ledger's windowed recount is the backstop for notes counted
+  before the trigger and for anything that bypasses it; it should find
+  nothing once the trigger is in. It stays until the trigger has run clean
+  in prod for a week.
 - Two kinds of unfixed row, treated oppositely:
   - Rows the worker can never SELECT (deleted notes, soft-deleted vaults, for
     `CrdtStateSeed` notes backed by a `crdt_update_log` tail) are not its work.
