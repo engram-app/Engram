@@ -604,7 +604,9 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
 
       # The parked-user check is served by its own partial index
       # (`notes_embed_budget_parked_user_id_index`), not a sweep.
-      parked_check = ~r/^SELECT TRUE FROM "notes" AS n0 WHERE \(\(n0."kind" = 'note'\) AND \(n0."embed_budget_parked" = TRUE\)\) LIMIT 1$/
+      parked_check =
+        ~r/^SELECT TRUE FROM "notes" AS n0 WHERE \(\(n0."kind" = 'note'\) AND \(n0."embed_budget_parked" = TRUE\)\) LIMIT 1$/
+
       sweeps = Enum.reject(queries, &(&1.sql =~ parked_check))
       assert QueryRecorder.unwindowed(sweeps, "notes", 1_000) == []
     end

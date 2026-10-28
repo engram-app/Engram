@@ -127,8 +127,11 @@ defmodule Engram.QueryRecorder do
 
   defp keyset_window?(sql, params, window) do
     case Regex.run(~r/LIMIT \$(\d+)/, sql) do
-      [_, i] -> Enum.at(params, String.to_integer(i) - 1) <= window and not (sql =~ ~r/\bexists\b/i)
-      nil -> false
+      [_, i] ->
+        Enum.at(params, String.to_integer(i) - 1) <= window and not (sql =~ ~r/\bexists\b/i)
+
+      nil ->
+        false
     end
   end
 

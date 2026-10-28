@@ -154,11 +154,20 @@ defmodule Engram.Backfill.IdWindows do
       end
 
     case stepped do
-      {:ok, :done} -> {:ok, acc}
-      {:ok, {:ran, ids, {:cont, acc}}} -> walk(scope, schema, List.last(ids), acc, fun, size, fun_in_tenant)
-      {:ok, {:ran, _ids, {:halt, acc}}} -> {:halted, acc}
-      {:ok, {:ran, _ids, {:error, _} = err}} -> err
-      {:error, reason} -> {:error, reason}
+      {:ok, :done} ->
+        {:ok, acc}
+
+      {:ok, {:ran, ids, {:cont, acc}}} ->
+        walk(scope, schema, List.last(ids), acc, fun, size, fun_in_tenant)
+
+      {:ok, {:ran, _ids, {:halt, acc}}} ->
+        {:halted, acc}
+
+      {:ok, {:ran, _ids, {:error, _} = err}} ->
+        err
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -202,7 +211,9 @@ defmodule Engram.Backfill.IdWindows do
       reduce_all(
         Engram.Notes.Note,
         [],
-        fn ids, %{repo: repo}, acc -> {:cont, [repo.all(where(query, [n], n.id in ^ids)) | acc]} end,
+        fn ids, %{repo: repo}, acc ->
+          {:cont, [repo.all(where(query, [n], n.id in ^ids)) | acc]}
+        end,
         Keyword.put_new(opts, :batch_size, @fleet_window)
       )
 
