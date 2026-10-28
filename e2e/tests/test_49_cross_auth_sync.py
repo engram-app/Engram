@@ -215,7 +215,7 @@ async def test_oauth_push_apikey_receives(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("rep", range(10))  # PROOF ONLY, do not merge
+@pytest.mark.parametrize("rep", range(30))  # PROOF ONLY, do not merge
 async def test_rapid_api_edits_final_content_arrives(
     vault_b, cdp_a, cdp_b, api_sync, rep
 ):
