@@ -32,7 +32,7 @@ serde = "1"
 serde_json = { version = "1", features = ["float_roundtrip"] }
 # Same version and parse options as mdex_native 0.2.9 (the parser Sections
 # used before md_outline), so section boundaries did not move in the port.
-comrak = { version = "=0.56.0", default-features = false }
+comrak = { version = "=0.57.0", default-features = false }
 # Base64 for the CRDT channel frames (b64_decode / b64_encode).
 base64 = "0.22"
 # Rival-lineage audit (yjs_lineage.rs): walks a stored Yjs update with yrs's
