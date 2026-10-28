@@ -54,3 +54,32 @@ def test_quota_preflight_fails_fast_when_nearly_full():
     with pytest.raises(ClerkQuotaError, match="97/100.*cleanup_clerk_users.py"):
         _client(97).assert_quota_headroom()
     _client(10).assert_quota_headroom()
+
+
+class _BadCountSession(_Session):
+    def __init__(self, resp=None, exc=None):
+        super().__init__()
+        self.resp, self.exc = resp, exc
+
+    def get(self, url, timeout=None, **kw):
+        if self.exc:
+            raise self.exc
+        return self.resp
+
+
+def test_quota_preflight_warns_and_continues_on_count_errors():
+    import requests
+
+    for kw in (
+        {"exc": requests.HTTPError("429")},
+        {"resp": _Resp(body={})},  # missing total_count
+        {"resp": _Resp(body={"total_count": "97"})},  # wrong type
+    ):
+        c = _client()
+        c.session = _BadCountSession(**kw)
+        c.assert_quota_headroom()  # must not raise
+
+
+def test_live_key_refused():
+    with pytest.raises(ValueError, match="sk_test_"):
+        ClerkClient("sk_live_abc")

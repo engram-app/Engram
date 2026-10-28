@@ -71,6 +71,10 @@ def e2e_email(label: str, ts: str, domain: str = "example.com") -> str:
     return f"{local}{_CLERK_TEST_TAG}@{domain}"
 
 
+CLERK_USER_LIMIT = 100  # Clerk dev-instance user cap
+CLERK_QUOTA_ABORT_AT = 90  # preflight aborts at/above this many users
+
+
 class ClerkQuotaError(RuntimeError):
     """Clerk refused a request because the shared dev instance is out of
     quota or rate limit (infra, not a product bug)."""
@@ -93,6 +97,10 @@ class ClerkClient:
     created_user_ids: set[str] = set()
 
     def __init__(self, secret_key: str):
+        # create_user reuses an existing user on "identifier taken" and tracks
+        # it for deletion at teardown, so a live key could delete real users.
+        if not secret_key.startswith("sk_test_"):
+            raise ValueError("ClerkClient refuses a non-test Clerk key (must start sk_test_)")
         self.session = requests.Session()
         self.session.headers["Authorization"] = f"Bearer {secret_key}"
         self.session.headers["Content-Type"] = "application/json"
@@ -419,12 +427,26 @@ class ClerkClient:
         """Total users in the Clerk instance (cheap; no pagination)."""
         resp = self.session.get(f"{self.base_url}/users/count", timeout=15)
         resp.raise_for_status()
-        return resp.json()["total_count"]
+        n = resp.json().get("total_count")
+        if not isinstance(n, int) or isinstance(n, bool):
+            raise ValueError(f"unexpected /users/count body: total_count={n!r}")
+        return n
 
-    def assert_quota_headroom(self, limit: int = 100, threshold: int = 90) -> None:
+    def assert_quota_headroom(
+        self, limit: int = CLERK_USER_LIMIT, threshold: int = CLERK_QUOTA_ABORT_AT
+    ) -> None:
         """Fail fast with a clear message when the instance is nearly full,
-        instead of an opaque 403 ``user_quota_exceeded`` mid-suite."""
-        n = self.count_users()
+        instead of an opaque 403 ``user_quota_exceeded`` mid-suite.
+
+        Advisory only: any error or malformed body from the count endpoint
+        (429, 5xx, missing field) warns and continues; only a valid int
+        >= ``threshold`` aborts. GET /users/count returns
+        ``{"object": "total_count", "total_count": <int>}``."""
+        try:
+            n = self.count_users()
+        except Exception as e:
+            logger.warning("Clerk quota preflight skipped: %s", e)
+            return
         if n >= threshold:
             raise ClerkQuotaError(
                 f"Clerk e2e instance has {n}/{limit} users; "

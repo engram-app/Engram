@@ -340,6 +340,8 @@ def auth_provider():
         try:
             clerk_client.assert_quota_headroom()
         except ClerkQuotaError as e:
+            # Under pytest-xdist (verified 3.8) a worker exit surfaces as an
+            # INTERNALERROR traceback, but the run still exits non-zero (3).
             pytest.exit(str(e), returncode=3)
     if _WORKER == 0:
         # Scope sweep to THIS run+job namespace — never touch sibling runs'
