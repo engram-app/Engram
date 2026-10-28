@@ -5,7 +5,7 @@ import { track } from "../analytics/track";
 import { useOnboardingStatus } from "../api/queries";
 import { stashPendingAuthorization } from "../oauth/pending-authorization";
 import OnboardLayout from "./onboard-layout";
-import { markStepCompleted } from "./step-completion";
+import { markStepCompleted, resetStepCompletion } from "./step-completion";
 
 const logout = vi.fn();
 
@@ -228,7 +228,10 @@ describe("OnboardLayout abandonment beacon", () => {
 	const pagehide = (persisted: boolean) =>
 		window.dispatchEvent(Object.assign(new Event("pagehide"), { persisted }));
 
-	afterEach(() => mockTrack.mockClear());
+	afterEach(() => {
+		mockTrack.mockClear();
+		resetStepCompletion();
+	});
 
 	it("beacons onboarding_step_abandoned with the step and time on it at pagehide", () => {
 		renderAt("/onboard/heard", SAAS);
@@ -255,7 +258,10 @@ describe("OnboardLayout abandonment beacon", () => {
 		renderAt("/onboard/heard", SAAS);
 
 		pagehide(true);
-
 		expect(mockTrack.mock.calls.filter(([e]) => e === "onboarding_step_abandoned")).toEqual([]);
+
+		// Control: the same render does report a real departure.
+		pagehide(false);
+		expect(mockTrack.mock.calls.filter(([e]) => e === "onboarding_step_abandoned")).toHaveLength(1);
 	});
 });

@@ -12,3 +12,8 @@ export function markStepCompleted(step: OnboardingStep): void {
 export function isStepCompleted(step: OnboardingStep): boolean {
 	return completed.has(step);
 }
+
+/** Test-only: the set outlives a render, so tests clear it between cases. */
+export function resetStepCompletion(): void {
+	completed.clear();
+}
