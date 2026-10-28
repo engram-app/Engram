@@ -37,7 +37,13 @@ defmodule Engram.RepoSessionTimeoutsTest do
   test "config/runtime.exs wires both pools" do
     source = File.read!(@runtime)
     assert source =~ "parameters: Engram.RuntimeConfig.repo_parameters(:app)"
-    assert source =~ "parameters: Engram.RuntimeConfig.repo_parameters(:maintenance)"
+    # The maintenance pool is built by RuntimeConfig.maintenance_repo_opts/3
+    # (so its timeout wiring is testable); runtime.exs must call it, and it must
+    # carry the maintenance session parameters.
+    assert source =~ "Engram.RuntimeConfig.maintenance_repo_opts("
+
+    assert RuntimeConfig.maintenance_repo_opts("ecto://x", 3, [])[:parameters] ==
+             RuntimeConfig.repo_parameters(:maintenance)
   end
 
   # Proves Postgrex really applies the keyword list as session settings.
