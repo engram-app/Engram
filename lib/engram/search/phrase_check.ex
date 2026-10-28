@@ -12,8 +12,8 @@ defmodule Engram.Search.PhraseCheck do
   nothing is dropped. A hit with no text is simply unverified.
 
   The reranker, MMR and the page cut all read `:score`, so a verified hit's
-  score is lifted by the head's score range: it then sorts above every
-  unverified hit and keeps its place among the verified.
+  score is lifted by the head's score range times the phrases it holds: it
+  then sorts above every unverified hit, and above a hit with fewer phrases.
   """
 
   # Fused candidates checked, and the text read from each. A floor point holds
@@ -63,7 +63,7 @@ defmodule Engram.Search.PhraseCheck do
   end
 
   defp lift(%{score: score} = c, n, bonus) when n > 0 and is_number(score),
-    do: %{c | score: score + bonus}
+    do: %{c | score: score + n * bonus}
 
   defp lift(c, _n, _bonus), do: c
 end

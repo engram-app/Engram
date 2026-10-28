@@ -113,6 +113,17 @@ defmodule Engram.KeywordIndex.PhraseQueryTest do
       assert ids(PhraseCheck.promote(cands, ["red fox"], :en)) == [2, 4, 1, 3]
     end
 
+    # Two quoted phrases: a chunk holding both outranks one holding a single
+    # phrase even when the fused legs ranked it lower. The score lift must keep
+    # the returned order score-descending (the reranker and page cut sort by it).
+    test "a chunk with more of the quoted phrases outranks one with fewer" do
+      cands =
+        scored([cand(:one, "red fox"), cand(:two, "red fox and blue whale"), cand(:none, "x")])
+
+      assert ids(PhraseCheck.promote(cands, ["red fox", "blue whale"], :en)) ==
+               [:two, :one, :none]
+    end
+
     test "no phrase, no match, empty or missing text leave the order unchanged" do
       cands = [cand(1, "a"), cand(2, ""), %{qdrant_id: 3, text: nil}, %{qdrant_id: 4}]
       assert PhraseCheck.promote(cands, [], :en) == cands
