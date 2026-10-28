@@ -106,9 +106,9 @@ defmodule Engram.Workers.PostHogPersonSyncTest do
     emails = Enum.map(batch["batch"], & &1["distinct_id"])
 
     for date <- [Date.add(Date.utc_today(), 5), Date.add(Date.utc_today(), -1)] do
-      assert Engram.Observability.PostHog.analytics_id("kept#{date}@example.com") in emails
-      refute Engram.Observability.PostHog.analytics_id("out#{date}@example.com") in emails
-      refute Engram.Observability.PostHog.analytics_id("gone#{date}@example.com") in emails
+      assert PostHog.analytics_id("kept#{date}@example.com") in emails
+      refute PostHog.analytics_id("out#{date}@example.com") in emails
+      refute PostHog.analytics_id("gone#{date}@example.com") in emails
     end
   end
 
