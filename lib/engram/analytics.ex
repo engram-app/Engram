@@ -185,6 +185,19 @@ defmodule Engram.Analytics do
   end
 
   @doc """
+  The person's current PostHog properties, for `Engram.Analytics.PersonProperties`.
+  `:none` when nothing may be read (opted out, no email); `{:error, _}` when the
+  read failed, which the caller must not treat as an empty person.
+  """
+  @spec person_properties(map()) :: {:ok, map()} | :none | {:error, term()}
+  def person_properties(user) do
+    case PostHog.distinct_id(user) do
+      nil -> :none
+      id -> PostHog.person_properties(id)
+    end
+  end
+
+  @doc """
   Erase every analytics record of `user` as they are NOW (current email plus
   the legacy Clerk-id person). Runs immediately and again after
   #{elem(@reerase_after, 0)} minutes, in case an in-flight batch re-creates the

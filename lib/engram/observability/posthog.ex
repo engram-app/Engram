@@ -176,11 +176,22 @@ defmodule Engram.Observability.PostHog do
   A person's current properties (`$browser_language`, `$initial_device_type`,
   our own `country_source`...), for `Engram.Analytics.PersonProperties.resolve/2`.
   `{:ok, %{}}` when the person does not exist; `{:error, _}` when the read is
-  not configured or failed (the caller treats that as "no PostHog source").
+  not configured or failed. The caller must NOT resolve against an empty map on
+  an error: the stored `<field>_source` is what stops a lower source winning.
   Needs the personal API key with person:read scope.
   """
   @spec person_properties(String.t()) :: {:ok, map()} | {:error, term()}
   def person_properties(distinct_id) when is_binary(distinct_id) do
+    case fetch_person(distinct_id) do
+      {:ok, %{"properties" => %{} = props}} -> {:ok, props}
+      {:ok, _none} -> {:ok, %{}}
+      {:error, _} = error -> error
+    end
+  end
+
+  # The one persons lookup (read and erasure share it). `{:ok, nil}` when the
+  # person does not exist.
+  defp fetch_person(distinct_id) do
     case admin_config() do
       :disabled ->
         {:error, :not_configured}
@@ -192,36 +203,25 @@ defmodule Engram.Observability.PostHog do
                receive_timeout: 5_000,
                retry: false
              ) do
-          {:ok, %{status: 200, body: %{"results" => [%{"properties" => %{} = props} | _]}}} ->
-            {:ok, props}
-
-          {:ok, %{status: 200}} ->
-            {:ok, %{}}
-
-          {:ok, %{status: status}} ->
-            {:error, {:http_error, status}}
-
-          {:error, reason} ->
-            {:error, reason}
+          {:ok, %{status: 200, body: %{"results" => [%{} = person | _]}}} -> {:ok, person}
+          {:ok, %{status: 200, body: %{"results" => []}}} -> {:ok, nil}
+          {:ok, %{status: status, body: body}} -> {:error, {:http_error, status, body}}
+          {:error, reason} -> {:error, reason}
         end
     end
   end
 
   defp lookup_and_delete(host, project, key, distinct_id) do
-    case Req.get("#{host}/api/projects/#{project}/persons/",
-           params: [distinct_id: distinct_id],
-           auth: {:bearer, key},
-           receive_timeout: 5_000
-         ) do
-      {:ok, %{status: 200, body: %{"results" => [%{"id" => id} | _]}}} ->
+    case fetch_person(distinct_id) do
+      {:ok, %{"id" => id}} ->
         delete_by_id(host, project, key, id, distinct_id)
 
-      {:ok, %{status: 200, body: %{"results" => []}}} ->
-        # Not found — SUCCESS, not a failure. Same tolerance as the Clerk
+      {:ok, nil} ->
+        # Not found: SUCCESS, not a failure. Same tolerance as the Clerk
         # delete, which treats 404 as done.
         :ok
 
-      {:ok, %{status: status, body: body}} ->
+      {:error, {:http_error, status, body}} ->
         warn_erasure_failed("lookup", distinct_id, status: status, body: body)
 
       {:error, reason} ->

@@ -82,7 +82,7 @@ defmodule Engram.Auth.Clerk.HttpApiTest do
       ])
 
       assert {:ok, activity} = HttpApi.latest_activity("user_1")
-      assert activity == %{country: "BR", device_type: "iphone"}
+      assert activity == %{country: "BR", device_type: "mobile"}
     end
 
     test "falls back to is_mobile and drops a non-code country", %{bypass: bypass} do
@@ -91,6 +91,27 @@ defmodule Engram.Auth.Clerk.HttpApiTest do
       ])
 
       assert {:ok, %{country: nil, device_type: "desktop"}} = HttpApi.latest_activity("user_1")
+    end
+
+    test "uses the most recently active session and classes an iPad as a tablet", %{
+      bypass: bypass
+    } do
+      sessions(bypass, 200, [
+        %{
+          "last_active_at" => 1,
+          "latest_activity" => %{
+            "country" => "US",
+            "device_type" => "Macintosh",
+            "is_mobile" => false
+          }
+        },
+        %{
+          "last_active_at" => 9,
+          "latest_activity" => %{"country" => "DE", "device_type" => "iPad", "is_mobile" => true}
+        }
+      ])
+
+      assert {:ok, %{country: "DE", device_type: "tablet"}} = HttpApi.latest_activity("user_1")
     end
 
     test "no sessions is {:ok, nil}", %{bypass: bypass} do

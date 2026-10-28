@@ -93,6 +93,13 @@ defmodule Engram.Analytics.PersonProperties do
     Enum.find_index(order, &(Atom.to_string(&1) == source)) || length(order)
   end
 
+  @doc "Live, non-opted-out users with an email: everyone analytics may know about."
+  def trackable_users do
+    from(u in User,
+      where: is_nil(u.deleted_at) and is_nil(u.analytics_opt_out_at) and not is_nil(u.email)
+    )
+  end
+
   @doc "`{%{email: _}, traits}` for every live, non-opted-out user, for `Engram.Analytics.set_traits/1`."
   @spec all() :: [{map(), map()}]
   def all, do: Enum.map(by_user(), fn {_user_id, traits} -> {%{email: traits.email}, traits} end)
@@ -195,7 +202,7 @@ defmodule Engram.Analytics.PersonProperties do
         }
       )
 
-    from(u in User,
+    from(u in trackable_users(),
       left_join: s in Subscription,
       on: s.user_id == u.id,
       left_join: sz in subquery(sizes),
@@ -210,7 +217,6 @@ defmodule Engram.Analytics.PersonProperties do
       on: m.user_id == u.id,
       left_join: um in Meter,
       on: um.user_id == u.id,
-      where: is_nil(u.deleted_at) and is_nil(u.analytics_opt_out_at) and not is_nil(u.email),
       select: %{
         email: u.email,
         name: u.display_name,

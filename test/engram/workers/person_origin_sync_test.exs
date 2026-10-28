@@ -12,10 +12,18 @@ defmodule Engram.Workers.PersonOriginSyncTest do
   setup :verify_on_exit!
 
   setup do
-    keys = [:posthog_key, :posthog_host, :posthog_erasure_api_key, :posthog_project_id]
+    keys = [
+      :person_origin_pause_ms,
+      :posthog_key,
+      :posthog_host,
+      :posthog_erasure_api_key,
+      :posthog_project_id
+    ]
+
     prior = Map.new(keys, &{&1, Application.get_env(:engram, &1)})
     on_exit(fn -> Enum.each(prior, fn {k, v} -> Application.put_env(:engram, k, v) end) end)
 
+    Application.put_env(:engram, :person_origin_pause_ms, 0)
     bypass = Bypass.open()
     Application.put_env(:engram, :posthog_key, "phc_test_token")
     Application.put_env(:engram, :posthog_host, "http://localhost:#{bypass.port}")
@@ -76,7 +84,7 @@ defmodule Engram.Workers.PersonOriginSyncTest do
   test "missing Clerk and locale fall back to PostHog first-event values", %{bypass: bypass} do
     posthog(bypass, %{"$browser_language" => "ru", "$initial_device_type" => "Tablet"})
     user = insert(:user, email: "b@example.com", external_id: "user_b", locale: nil)
-    expect(ApiMock, :latest_activity, fn _ -> {:error, :boom} end)
+    expect(ApiMock, :latest_activity, fn _ -> {:ok, nil} end)
 
     assert :ok = perform_job(PersonOriginSync, %{"user_id" => user.id})
     set = set_for("b@example.com")
@@ -121,5 +129,75 @@ defmodule Engram.Workers.PersonOriginSyncTest do
 
     assert :ok = perform_job(PersonOriginSync, %{"backfill" => true})
     assert set_for("f@example.com")["country"] == "JP"
+  end
+
+  test "a failed PostHog read writes nothing and returns an error for Oban to retry", %{
+    bypass: bypass
+  } do
+    Bypass.stub(bypass, "GET", "/api/projects/1/persons/", &Plug.Conn.resp(&1, 429, "{}"))
+    Bypass.stub(bypass, "POST", "/batch/", fn _ -> flunk("wrote without the stored sources") end)
+    user = insert(:user, email: "g@example.com", external_id: "user_g", locale: "en")
+
+    assert {:error, {:sync_incomplete, 1, {:http_error, 429, _}}} =
+             perform_job(PersonOriginSync, %{"user_id" => user.id})
+  end
+
+  test "a failed Clerk read writes nothing and returns an error", %{bypass: bypass} do
+    posthog(bypass, %{})
+    Bypass.stub(bypass, "POST", "/batch/", fn _ -> flunk("wrote after a Clerk failure") end)
+    user = insert(:user, email: "h@example.com", external_id: "user_h", locale: "en")
+    expect(ApiMock, :latest_activity, fn _ -> {:error, {:http_error, 429}} end)
+
+    assert {:error, {:sync_incomplete, 1, {:http_error, 429}}} =
+             perform_job(PersonOriginSync, %{"user_id" => user.id})
+  end
+
+  test "a user soft-deleted before the job runs is not sent", %{bypass: bypass} do
+    Bypass.stub(bypass, "POST", "/batch/", fn _ -> flunk("sent for a deleted user") end)
+
+    user =
+      insert(:user, external_id: "user_i", locale: "en", deleted_at: DateTime.utc_now(:second))
+
+    assert :ok = perform_job(PersonOriginSync, %{"user_id" => user.id})
+  end
+
+  describe "backfill batching" do
+    setup %{bypass: bypass} do
+      posthog(bypass, %{})
+      stub(ApiMock, :latest_activity, fn _ -> {:ok, nil} end)
+      :ok
+    end
+
+    test "resumes after the cursor, in one /batch write" do
+      [first | rest] =
+        for(
+          n <- 1..3,
+          do: insert(:user, email: "u#{n}@example.com", external_id: "c#{n}", locale: "fr")
+        )
+        |> Enum.sort_by(& &1.id)
+
+      assert :ok = perform_job(PersonOriginSync, %{"backfill" => true, "after" => first.id})
+      assert_receive {:batch, %{"batch" => sent}}, 1_000
+      assert length(sent) == length(rest)
+      refute_receive {:batch, _}, 100
+    end
+
+    test "a full batch chains the next one from the last id" do
+      for n <- 1..100,
+          do: insert(:user, email: "b#{n}@example.com", external_id: "b#{n}", locale: "fr")
+
+      assert :ok = perform_job(PersonOriginSync, %{"backfill" => true})
+      assert_receive {:batch, %{"batch" => sent}}, 5_000
+      assert length(sent) == 100
+
+      assert [%{args: %{"backfill" => true, "after" => _}}] =
+               all_enqueued(worker: PersonOriginSync)
+    end
+  end
+
+  test "enqueue_user dedupes a redelivered webhook" do
+    id = Ecto.UUID.generate()
+    assert {:ok, %{conflict?: false}} = PersonOriginSync.enqueue_user(id)
+    assert {:ok, %{conflict?: true}} = PersonOriginSync.enqueue_user(id)
   end
 end
