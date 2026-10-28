@@ -142,7 +142,14 @@ defmodule Engram.Analytics.PersonProperties do
   @spec by_user() :: [{Ecto.UUID.t(), map()}]
   def by_user do
     repo = Repo.maintenance()
-    {rows, oauth} = Repo.cross_tenant(fn -> {repo.all(query()), repo.all(oauth_clients())} end)
+    # Daily full aggregates: the report ceiling, not the 15 s default.
+    timeout = Engram.Repo.Maintenance.report_timeout()
+
+    {rows, oauth} =
+      Repo.cross_tenant(fn ->
+        {repo.all(query(), timeout: timeout), repo.all(oauth_clients(), timeout: timeout)}
+      end)
+
     oauth = Enum.group_by(oauth, &elem(&1, 0), &elem(&1, 1))
     Enum.map(rows, &{&1.user_id, to_traits(&1, Map.get(oauth, &1.user_id, []))})
   end

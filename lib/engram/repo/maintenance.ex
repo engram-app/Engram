@@ -71,4 +71,19 @@ defmodule Engram.Repo.Maintenance do
   use Ecto.Repo,
     otp_app: :engram,
     adapter: Ecto.Adapters.Postgres
+
+  @doc """
+  Statement timeout for a once-a-day aggregate over a whole table on this
+  pool (`Engram.Analytics.PersonProperties`, the reconcile sweep's points
+  budget). Those read every row by design, so they cannot be windowed into
+  the 15 s default the way a backfill can (#2276); this names their ceiling
+  instead of leaving them on the default, where table growth alone fails
+  them.
+
+  ponytail: a 2 min ceiling, about 8x the default. Past it, move the report
+  onto incremental counters (`note_index_state` sums) or per-user
+  aggregation, not a larger number, and never `:infinity`.
+  """
+  @spec report_timeout() :: pos_integer()
+  def report_timeout, do: :timer.minutes(2)
 end
