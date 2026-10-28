@@ -100,8 +100,17 @@ defmodule Engram.Auth.Clerk.Webhook do
     end
   end
 
-  defp apply_user_created(clerk_id, email, normalized) do
+  # Public only so tests can pin the state at email-lookup time (the race in
+  # the guard below cannot be interleaved deterministically through handle/1).
+  @doc false
+  def apply_user_created(clerk_id, email, normalized) do
     case Accounts.find_by_normalized_email(normalized) do
+      # The user's own first request JIT-created this row (same Clerk id) after
+      # the external_id lookup in handle_user_created/1 missed. It is not a
+      # duplicate: revoking it would delete the brand-new account (#2292).
+      {:ok, %{external_id: ^clerk_id}} ->
+        :ok
+
       {:ok, _existing} ->
         Logger.warning(
           "Clerk signup rejected — normalized email already exists",

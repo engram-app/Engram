@@ -5,6 +5,7 @@ defmodule Engram.Auth.Clerk.WebhookTest do
 
   alias Engram.Accounts.User
   alias Engram.Auth.Clerk.Webhook
+  alias Engram.Auth.SignupRejections
   alias Engram.Repo
   alias Engram.Storage.InMemory
 
@@ -40,6 +41,67 @@ defmodule Engram.Auth.Clerk.WebhookTest do
     end)
 
     :ok
+  end
+
+  # The external_id lookup in `handle_user_created` and the email lookup in
+  # `apply_user_created` are not atomic. A user's first authenticated request
+  # JIT-creates their row (same Clerk id) in between, so the email lookup finds
+  # the user's OWN row. These tests pin the state at email-lookup time (#2292).
+  describe "user.created: email match at dup-check time" do
+    test "row already bound to the incoming Clerk id is ours: no rejection, no Clerk delete" do
+      user =
+        insert(:user,
+          email: "racer@gmail.com",
+          normalized_email: "racer@gmail.com",
+          external_id: "user_race_self"
+        )
+
+      # Mox (verify_on_exit!) fails the test if delete_user is called.
+      assert :ok = Webhook.apply_user_created("user_race_self", user.email, "racer@gmail.com")
+
+      assert Repo.get(User, user.id, skip_tenant_check: true)
+      assert :error = SignupRejections.fetch("user_race_self")
+    end
+
+    test "row bound to a different Clerk id is a real duplicate: rejected and revoked" do
+      _existing =
+        insert(:user,
+          email: "taken.dup@gmail.com",
+          normalized_email: "takendup@gmail.com",
+          external_id: "user_original"
+        )
+
+      expect(Engram.Auth.Clerk.ApiMock, :delete_user, fn "user_second" -> :ok end)
+
+      assert :ok =
+               Webhook.apply_user_created(
+                 "user_second",
+                 "Taken.Dup@gmail.com",
+                 "takendup@gmail.com"
+               )
+
+      assert {:ok, :duplicate_identity} = SignupRejections.fetch("user_second")
+    end
+
+    test "row with no Clerk id (legacy/local account) is still a duplicate: rejected and revoked" do
+      _existing =
+        insert(:user,
+          email: "legacy.dup@gmail.com",
+          normalized_email: "legacydup@gmail.com",
+          external_id: nil
+        )
+
+      expect(Engram.Auth.Clerk.ApiMock, :delete_user, fn "user_vs_legacy" -> :ok end)
+
+      assert :ok =
+               Webhook.apply_user_created(
+                 "user_vs_legacy",
+                 "legacy.dup@gmail.com",
+                 "legacydup@gmail.com"
+               )
+
+      assert {:ok, :duplicate_identity} = SignupRejections.fetch("user_vs_legacy")
+    end
   end
 
   describe "user.deleted" do
