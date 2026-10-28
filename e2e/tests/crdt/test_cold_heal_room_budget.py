@@ -119,7 +119,7 @@ def _cleanup(api_sync, folder: str) -> None:
 
 @pytest.mark.timeout(20 * 60)
 @pytest.mark.asyncio
-async def test_resume_cold_heals_stay_in_room_budget(vault_a, cdp_a, api_sync):
+async def test_resume_cold_heals_stay_in_room_budget(vault_a, cdp_a, api_sync, capsys):
     run = uuid.uuid4().hex[:8]
     folder = f"ColdHeal-{run}/"
     paths = [f"{folder}n{i:04d}.md" for i in range(NOTE_COUNT)]
@@ -159,11 +159,13 @@ async def test_resume_cold_heals_stay_in_room_budget(vault_a, cdp_a, api_sync):
 
         budget = DEVICES * (BURST + math.ceil(RATE_PER_MIN * elapsed_min))
         bound = min(budget, HARD_CEILING)
-        print(
-            f"\ncold-heal: {NOTE_COUNT} diverged notes converged in {converged_s:.1f}s; "
-            f"resume window {elapsed_min:.2f} min allocated {rooms}; "
-            f"handshake bound {bound} (bucket {budget}, ceiling {HARD_CEILING})"
-        )
+        # Uncaptured so a green run records its count too (the red/green proof).
+        with capsys.disabled():
+            print(
+                f"\ncold-heal: {NOTE_COUNT} diverged notes converged in {converged_s:.1f}s; "
+                f"resume window {elapsed_min:.2f} min allocated {rooms}; "
+                f"handshake bound {bound} (bucket {budget}, ceiling {HARD_CEILING})"
+            )
         assert rooms.handshake <= bound, (
             f"resume heal of {NOTE_COUNT} diverged cold notes opened "
             f"{rooms.handshake} handshake rooms in {elapsed_min:.2f} min, past the "
