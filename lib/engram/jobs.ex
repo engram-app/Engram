@@ -123,8 +123,9 @@ defmodule Engram.Jobs do
 
     # The UPDATE only runs when something pending is ranked worse; the common
     # case stays one query.
-    if promote_to && Enum.any?(rows, fn {_, priority} -> priority > promote_to end),
-      do: promote(query, promote_to)
+    _ =
+      if promote_to && Enum.any?(rows, fn {_, priority} -> priority > promote_to end),
+        do: promote(query, promote_to)
 
     Enum.map(rows, &elem(&1, 0))
   end
