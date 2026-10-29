@@ -152,20 +152,19 @@ defmodule Engram.Billing.SubscriptionsRlsTest do
                end)
     end
 
-    test "a paddle id already held by another user is a changeset error, not a 25P02 crash",
+    test "a paddle id already held by another user is refused, not a 25P02 crash",
          %{sub: sub} do
       other = insert(:user)
 
       # Without `mode: :savepoint`, the unique violation aborts the tenant
-      # transaction and `with_tenant/2`'s role reset dies with 25P02.
-      assert {:returned, {:error, %Ecto.Changeset{errors: errors}}} =
+      # transaction and `with_tenant/2`'s role reset dies with 25P02. The
+      # race re-read then finds the owner's row and refuses the event (#2312).
+      assert {:returned, {:error, :paddle_subscription_owned_by_other_user}} =
                as_prod_role(fn ->
                  Billing.upsert_from_paddle_event(
                    created_event(other.id, sub.paddle_subscription_id)
                  )
                end)
-
-      assert Keyword.has_key?(errors, :paddle_subscription_id)
     end
   end
 
