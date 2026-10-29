@@ -163,7 +163,8 @@ defmodule EngramWeb.AttachmentUploadsController do
         "longer fits the quota, the session then being dropped. Safe to retry: once committed, " <>
         "a repeat complete returns the same attachment (404 if it was since deleted or " <>
         "overwritten). An optional `base_hash` makes the commit compare-and-swap, as on " <>
-        "`POST /api/attachments`: a stale one returns 409 `version_conflict` and drops the session.",
+        "`POST /api/attachments`: a stale one returns 409 `version_conflict`, the session staying open so a " <>
+        "complete with the current hash commits it without re-uploading.",
     tags: ["Attachments"],
     parameters: [id: @id_param],
     request_body:

@@ -6909,7 +6909,7 @@
     "/api/attachment-uploads/{id}/complete": {
       "post": {
         "callbacks": {},
-        "description": "Assembles the parts into a live attachment and answers like `POST /api/attachments`. Returns 409 `missing_parts` (with the part numbers) while any part is missing, the session staying resumable, and 402 `attachments_quota_exceeded` when the file no longer fits the quota, the session then being dropped. Safe to retry: once committed, a repeat complete returns the same attachment (404 if it was since deleted or overwritten). An optional `base_hash` makes the commit compare-and-swap, as on `POST /api/attachments`: a stale one returns 409 `version_conflict` and drops the session.",
+        "description": "Assembles the parts into a live attachment and answers like `POST /api/attachments`. Returns 409 `missing_parts` (with the part numbers) while any part is missing, the session staying resumable, and 402 `attachments_quota_exceeded` when the file no longer fits the quota, the session then being dropped. Safe to retry: once committed, a repeat complete returns the same attachment (404 if it was since deleted or overwritten). An optional `base_hash` makes the commit compare-and-swap, as on `POST /api/attachments`: a stale one returns 409 `version_conflict`, the session staying open so a complete with the current hash commits it without re-uploading.",
         "operationId": "attachment-uploads-complete",
         "parameters": [
           {

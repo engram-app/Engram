@@ -255,8 +255,11 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
   end
 
   # #2163: complete takes the same compare-and-swap `base_hash` as
-  # POST /attachments. A stale one refuses and drops the assembled file.
-  test "complete with a stale base_hash is 409 and keeps the newer bytes", %{conn: conn} do
+  # POST /attachments. A stale one refuses but keeps the assembled session,
+  # so a retry with the current hash commits it without re-uploading.
+  test "complete with a stale base_hash is 409, then completes with the current hash", %{
+    conn: conn
+  } do
     hash = fn bytes ->
       conn
       |> post("/api/attachments", %{path: "photos/a.png", content_base64: Base.encode64(bytes)})
@@ -280,7 +283,13 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
     assert body["error"] == "version_conflict"
     assert body["server_attachment"]["content_hash"] == h2
     assert conn |> get("/api/attachments/photos/a.png?raw=1") |> response(200) == "v2"
-    refute InMemory.exists?(key)
+    assert InMemory.exists?(key)
+
+    assert conn
+           |> post("/api/attachment-uploads/#{id}/complete", %{base_hash: h2})
+           |> json_response(200)
+
+    assert conn |> get("/api/attachments/photos/a.png?raw=1") |> response(200) == bytes
   end
 
   test "complete with a matching base_hash commits", %{conn: conn} do

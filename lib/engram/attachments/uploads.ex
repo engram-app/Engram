@@ -279,7 +279,7 @@ defmodule Engram.Attachments.Uploads do
 
   `opts[:base_hash]` is the compare-and-swap guard of
   `Attachments.commit_row/8`: a stale one refuses with `{:stale_base, live}`
-  and drops the session, as a quota refusal does.
+  and keeps the session open, so a retry with the current hash completes it.
   """
   @spec complete(map(), map(), Ecto.UUID.t(), keyword()) ::
           {:ok, Attachment.t()}
@@ -349,13 +349,13 @@ defmodule Engram.Attachments.Uploads do
          {:ok, hash} <- content_hash(user, up, file_key) do
       result = commit(user, vault, up, file_key, hash, opts)
 
-      # Neither refusal is retryable with this file: drop it.
+      # A quota refusal is not retryable with this file: drop it. A stale
+      # base_hash (#2163) keeps the session: it is assembled, so the client
+      # can complete it again with the current hash without re-uploading.
+      # An abandoned one expires like any other open session.
       _ =
-        case result do
-          {:error, {:storage_cap_reached, _, _}} -> drop(user, vault, up)
-          {:error, {:stale_base, _}} -> drop(user, vault, up)
-          _ -> :ok
-        end
+        with {:error, {:storage_cap_reached, _, _}} <- result,
+             do: drop(user, vault, up)
 
       result
     else

@@ -401,9 +401,24 @@ defmodule EngramWeb.AttachmentsControllerTest do
       |> get_in(["attachment", "content_hash"])
     end
 
-    test "stale base_hash returns 409 with the current hash and keeps the bytes", %{conn: conn} do
+    test "stale base_hash returns 409 with the current hash and keeps the bytes", %{
+      conn: conn,
+      user: user
+    } do
       h1 = upload_hash(conn, "doc.png", "v1 bytes")
       h2 = upload_hash(conn, "doc.png", "v2 bytes")
+      used_before = elem(Attachments.storage_usage(user), 1).used_bytes
+
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+      test_pid = self()
+
+      Mox.stub(Engram.MockStorage, :put, fn key, bin, opts ->
+        send(test_pid, {:stored, key})
+        Engram.Storage.InMemory.put(key, bin, opts)
+      end)
 
       body =
         conn
@@ -418,6 +433,12 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert body["error"] == "version_conflict"
       assert body["server_attachment"]["content_hash"] == h2
       assert body["server_attachment"]["path"] == "doc.png"
+
+      # The blob PUT before the lock is deleted on the refusal, and the
+      # refused write is not billed against the quota.
+      assert_received {:stored, fresh_key}
+      refute Engram.Storage.InMemory.exists?(fresh_key)
+      assert elem(Attachments.storage_usage(user), 1).used_bytes == used_before
 
       got = conn |> get("/api/attachments/doc.png") |> json_response(200)
       assert Base.decode64!(got["content_base64"]) == "v2 bytes"

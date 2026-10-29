@@ -2280,12 +2280,16 @@ defmodule Engram.Notes do
   # against the stored snapshot, so a stale full-content push deletes newer
   # content "convergently" (prod incident 2026-07-07). Absent base_hash keeps
   # the merge behavior for legacy clients. Attachments upload through the same
-  # option (#2163).
+  # option (#2163). "" is absent (a blank form field is not a hash), and
+  # stored hashes are lowercase hex, so an uppercase echo still matches.
   @doc false
   def put_base_hash_opt(opts, attrs) do
     case attrs["base_hash"] || attrs[:base_hash] do
-      base when is_binary(base) -> Keyword.put(opts, :base_hash, base)
-      _ -> opts
+      base when is_binary(base) and base != "" ->
+        Keyword.put(opts, :base_hash, String.downcase(base))
+
+      _ ->
+        opts
     end
   end
 

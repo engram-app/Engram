@@ -337,6 +337,51 @@ defmodule Engram.NotesTest do
       assert updated.content == "one\ntwo"
     end
 
+    # The shared `Notes.put_base_hash_opt/2` (#2163): an uppercase echo of
+    # the lowercase-hex hash is the same base, and "" is no base at all.
+    test "an uppercase base_hash matching the current row proceeds", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, v1} =
+        Notes.upsert_note(user, vault, %{"path" => "cas3.md", "content" => "one", "mtime" => 1.0},
+          actor: "api"
+        )
+
+      assert {:ok, _} =
+               Notes.upsert_note(
+                 user,
+                 vault,
+                 %{
+                   "path" => "cas3.md",
+                   "content" => "one\ntwo",
+                   "mtime" => 2.0,
+                   "base_hash" => String.upcase(v1.content_hash)
+                 },
+                 actor: "api"
+               )
+    end
+
+    test "an empty base_hash is absent, not a stale base", %{user: user, vault: vault} do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "cas4.md", "content" => "one", "mtime" => 1.0},
+          actor: "api"
+        )
+
+      assert {:ok, _} =
+               Notes.upsert_note(
+                 user,
+                 vault,
+                 %{
+                   "path" => "cas4.md",
+                   "content" => "one\ntwo",
+                   "mtime" => 2.0,
+                   "base_hash" => ""
+                 },
+                 actor: "api"
+               )
+    end
+
     test "absent base_hash keeps the merge behavior (legacy clients)", %{
       user: user,
       vault: vault
