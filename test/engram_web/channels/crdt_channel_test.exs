@@ -2376,6 +2376,68 @@ defmodule EngramWeb.CrdtChannelTest do
     end
   end
 
+  # Engram-obsidian#658. A heal is STEP1 -> server STEP2 + the server's OWN
+  # trailing STEP1 (y_ex sync.rs). Plugins release the room after the STEP2,
+  # so their answer to that trailing STEP1 (a STEP2) arrives for a doc with no
+  # room. Routed through ensure_room it started a SECOND room per heal
+  # (room_start{source="handshake"} doubled). It must not start a room, and it
+  # must never lose an update the server lacks.
+  describe "trailing STEP2 after release (#658)" do
+    test "an already-covered STEP2 starts no room and changes nothing", %{
+      socket: socket,
+      user: user,
+      vault: vault,
+      doc_id: doc_id
+    } do
+      {client, server_sv} = heal_and_release(socket, doc_id)
+      watch_room_starts()
+
+      ref = push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => step2_b64(client, server_sv)})
+      assert_reply ref, :ok, %{}, 3000
+
+      refute_receive {:room_start, _}, 200
+      assert CrdtRegistry.lookup(doc_id) == nil
+      assert_note_content_eventually(user, vault, doc_id, "base")
+    end
+
+    test "a STEP2 carrying a new insert is applied, with no handshake room", %{
+      socket: socket,
+      user: user,
+      vault: vault,
+      doc_id: doc_id
+    } do
+      {client, server_sv} = heal_and_release(socket, doc_id)
+      Yex.Text.insert(Yex.Doc.get_text(client, "content"), 0, "TRAIL-")
+      watch_room_starts()
+
+      ref = push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => step2_b64(client, server_sv)})
+      assert_reply ref, :ok, %{}, 3000
+
+      assert_note_content_eventually(user, vault, doc_id, "TRAIL-base", now_plus(3000))
+      refute_receive {:room_start, %{source: :handshake}}, 200
+      assert eventually_no_room?(doc_id), "the trailing STEP2 must not leave a room resident"
+    end
+
+    test "a delete-only STEP2 (state vector unchanged) is still applied", %{
+      socket: socket,
+      user: user,
+      vault: vault,
+      doc_id: doc_id
+    } do
+      # The data-safety trap: a pure deletion does not advance the state
+      # vector, so a coverage check on the state vector alone would DROP it.
+      {client, server_sv} = heal_and_release(socket, doc_id)
+      Yex.Text.delete(Yex.Doc.get_text(client, "content"), 0, 1)
+      watch_room_starts()
+
+      ref = push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => step2_b64(client, server_sv)})
+      assert_reply ref, :ok, %{}, 3000
+
+      assert_note_content_eventually(user, vault, doc_id, "ase", now_plus(3000))
+      refute_receive {:room_start, %{source: :handshake}}, 200
+    end
+  end
+
   describe "crdt_msg" do
     test "sync step1 for existing doc yields a step2 crdt_msg reply with server content",
          %{socket: socket, doc_id: doc_id} do
@@ -3267,6 +3329,56 @@ defmodule EngramWeb.CrdtChannelTest do
       deadline
     )
   end
+
+  # --- trailing-STEP2 helpers (#658) ----------------------------------------
+
+  # Heal over `crdt_msg` (STEP1 -> STEP2 + the server's trailing STEP1), then
+  # release the room the way 1.38/1.39 plugins do. Returns the healed client doc
+  # and the server state vector carried by the trailing STEP1.
+  defp heal_and_release(socket, doc_id) do
+    client = CrdtBridge.new_doc()
+    {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
+    {:ok, f1} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
+    push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Base.encode64(f1)})
+
+    assert_push "crdt_msg", %{"doc_id" => ^doc_id, "b64" => b64_step2}, 3000
+    {:ok, {:sync, {:sync_step2, update}}} = Yex.Sync.message_decode(Base.decode64!(b64_step2))
+    :ok = Yex.apply_update(client, update)
+
+    assert_push "crdt_msg", %{"doc_id" => ^doc_id, "b64" => b64_step1}, 3000
+    {:ok, {:sync, {:sync_step1, server_sv}}} = Yex.Sync.message_decode(Base.decode64!(b64_step1))
+
+    room = CrdtRegistry.lookup(doc_id)
+    room_ref = Process.monitor(room)
+    ref = push(socket, "crdt_release", %{"doc_id" => doc_id})
+    assert_reply ref, :ok, %{}
+    assert_receive {:DOWN, ^room_ref, :process, ^room, _}, 2_000
+
+    {client, server_sv}
+  end
+
+  # The client's answer to the server's trailing STEP1.
+  defp step2_b64(client, server_sv) do
+    {:ok, diff} = Yex.encode_state_as_update(client, server_sv)
+    {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step2, diff}})
+    Base.encode64(frame)
+  end
+
+  defp watch_room_starts do
+    test_pid = self()
+    handler = "room-start-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler,
+      [:engram, :crdt, :room_start],
+      fn _e, _m, meta, _ -> send(test_pid, {:room_start, meta}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  defp now_plus(ms), do: System.monotonic_time(:millisecond) + ms
 
   # --- room-free write helpers (#1493) ---------------------------------------
 
