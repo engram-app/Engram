@@ -719,6 +719,189 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
     end
   end
 
+  # #2306: the tail used to be folded ONLY by a graceful `unbind/3`. A bulk first
+  # sync grew one vault's tail to thousands of rows, every OOM kill skipped
+  # `unbind/3`, and every rebind replayed the whole tail with one `Repo.all` and
+  # two state-vector encodes per row: prod web tasks crash-looped for 22 min.
+  describe "a bounded tail (#2306)" do
+    # Small limits so the tests stay fast. The module is async: false, so the
+    # app env is safe to swap for the duration of one test.
+    @limits [fold_tail_rows: 20, fold_tail_bytes: 2_000_000, replay_page_rows: 5]
+
+    setup do
+      previous = Application.get_env(:engram, CrdtIndexPersistence)
+      Application.put_env(:engram, CrdtIndexPersistence, @limits)
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:engram, CrdtIndexPersistence, previous),
+          else: Application.delete_env(:engram, CrdtIndexPersistence)
+      end)
+
+      :ok
+    end
+
+    # One real claim from a throwaway client doc, the shape a tail row holds.
+    defp claim_update(path) do
+      doc = Yex.Doc.new()
+
+      doc
+      |> Yex.Doc.get_map(CrdtIndexDoc.map_name())
+      |> Yex.Map.set(path, %{"note_id" => Ecto.UUID.generate()})
+
+      {:ok, update} = Yex.encode_state_as_update(doc)
+      update
+    end
+
+    defp seed_rows(%{user: user, vault: vault}, updates) do
+      rows =
+        for update <- updates do
+          id = UUIDv7.generate()
+          {:ok, {ct, nonce}} = Crypto.encrypt_index_update(update, user, id)
+
+          %{
+            id: id,
+            vault_id: vault.id,
+            user_id: user.id,
+            update_ciphertext: ct,
+            update_nonce: nonce,
+            dek_version: user.dek_version || Crypto.row_version_aad_bound()
+          }
+        end
+
+      {:ok, {n, _}} =
+        Repo.with_tenant(user.id, fn -> Repo.insert_all(VaultIndexUpdateLog, rows) end)
+
+      n
+    end
+
+    defp seed_tail(ctx, n), do: seed_rows(ctx, for(i <- 1..n, do: claim_update("seed-#{i}.md")))
+
+    defp bind_fresh(ctx) do
+      doc = Yex.Doc.new()
+      state = CrdtIndexPersistence.bind(%{user_id: ctx.user.id, vault_id: ctx.vault.id}, "i", doc)
+      {state, doc}
+    end
+
+    defp entry_count(doc), do: doc |> Yex.Doc.get_map(CrdtIndexDoc.map_name()) |> Yex.Map.size()
+
+    # What a later bind sees: the snapshot plus whatever tail survives.
+    defp persisted_entries(ctx) do
+      {:ok, doc} = CrdtIndexPersistence.load_doc(ctx.user, ctx.vault.id)
+      entry_count(doc)
+    end
+
+    test "a bind that replays more than the row threshold folds the tail", ctx do
+      seed_tail(ctx, @limits[:fold_tail_rows] + 1)
+
+      {_state, doc} = bind_fresh(ctx)
+
+      assert entry_count(doc) == @limits[:fold_tail_rows] + 1
+
+      assert tail_count(ctx.user, ctx.vault.id) == 0,
+             "the bind replayed a tail over the threshold and left it in place, " <>
+               "so a crash now replays it all again"
+
+      assert %VaultIndexState{} = tenant_get(ctx.user, ctx.vault.id)
+      assert persisted_entries(ctx) == @limits[:fold_tail_rows] + 1
+    end
+
+    test "a bind that replays more than the byte threshold folds the tail", ctx do
+      Application.put_env(
+        :engram,
+        CrdtIndexPersistence,
+        Keyword.put(@limits, :fold_tail_bytes, 100)
+      )
+
+      seed_tail(ctx, 3)
+
+      {_state, _doc} = bind_fresh(ctx)
+
+      assert tail_count(ctx.user, ctx.vault.id) == 0
+      assert persisted_entries(ctx) == 3
+    end
+
+    test "a bind reads the tail one page per statement", ctx do
+      seed_tail(ctx, @limits[:fold_tail_rows] + 1)
+
+      {_result, queries} = Engram.QueryRecorder.record(fn -> bind_fresh(ctx) end)
+
+      reads = Enum.filter(queries, &String.starts_with?(&1.sql, "SELECT"))
+
+      assert Engram.QueryRecorder.unwindowed(
+               reads,
+               "vault_index_update_log",
+               @limits[:replay_page_rows]
+             ) == [],
+             "a statement read the tail outside one #{@limits[:replay_page_rows]}-row page"
+    end
+
+    test "an empty tail binds without writing a snapshot", ctx do
+      {_state, doc} = bind_fresh(ctx)
+
+      assert entry_count(doc) == 0
+      assert tail_count(ctx.user, ctx.vault.id) == 0
+      refute tenant_get(ctx.user, ctx.vault.id), "an empty bind checkpointed an empty doc"
+    end
+
+    test "a tail of exactly the threshold binds unfolded, and the next append folds it", ctx do
+      rows = @limits[:fold_tail_rows]
+      seed_tail(ctx, rows)
+
+      {state, doc} = bind_fresh(ctx)
+
+      assert entry_count(doc) == rows
+      assert tail_count(ctx.user, ctx.vault.id) == rows, "folded at, not past, the threshold"
+
+      # In a room, bind's replay echoes come back through update_v1/4 and spend
+      # the credits bind left. This bare doc has no update observer, so nothing
+      # comes back: drop the credits or they swallow the append below.
+      Process.delete(:index_replay_echoes)
+
+      # The room's own update handling: the doc already holds the change.
+      update = claim_update("one-more.md")
+      :ok = Yex.apply_update(doc, update)
+      _state = CrdtIndexPersistence.update_v1(state, update, "i", doc)
+
+      assert tail_count(ctx.user, ctx.vault.id) == 0
+      assert persisted_entries(ctx) == rows + 1
+    end
+
+    test "a row that fails to decode stays in the tail when the bind folds", ctx do
+      seed_tail(ctx, @limits[:fold_tail_rows] + 1)
+      # Encrypts fine, is not a Yjs update: the merged page apply fails and the
+      # page falls back to row by row, so only this row is skipped.
+      seed_rows(ctx, [<<255, 255, 255, 255>>])
+
+      {_state, doc} = bind_fresh(ctx)
+
+      assert entry_count(doc) == @limits[:fold_tail_rows] + 1
+
+      assert tail_count(ctx.user, ctx.vault.id) == 1,
+             "the fold pruned a row it never applied, or folded nothing"
+    end
+
+    test "appending past the threshold on a live room folds the tail", ctx do
+      room = start_index_room(ctx)
+      rows = @limits[:fold_tail_rows]
+
+      for i <- 1..(rows + 1),
+          do: put_entry(room, "live-#{i}.md", "#{i}")
+
+      # FIFO: every update_v1 posted by the puts above is handled before this.
+      assert read_entry(room, "live-#{rows + 1}.md")["note_id"] == "#{rows + 1}"
+
+      assert Process.alive?(room)
+
+      assert tail_count(ctx.user, ctx.vault.id) < rows,
+             "a live room appended past the threshold and never folded the tail"
+
+      assert %VaultIndexState{} = tenant_get(ctx.user, ctx.vault.id)
+
+      :ok = stop_room_and_wait(room)
+    end
+  end
+
   describe "isolation and binding" do
     test "one vault's index never bleeds into another's", ctx do
       {:ok, other, _} = Vaults.register_vault(ctx.user, "OtherVault", Ecto.UUID.generate())
