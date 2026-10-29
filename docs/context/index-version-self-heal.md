@@ -184,9 +184,10 @@ about 20% of the corpus is rewritten, which costs about 20% of the
 collection's size in dead copies on top of today's disk. If that sum
 reaches the disk gate first, the gate stops the writes that would push a
 segment over the threshold, nothing vacuums, disk never falls, and the
-sweep snoozes forever (users unaffected). Check before a bump: `disk% +
-0.2 x disk_bytes / capacity + one segment's optimization copy` must sit
-under the gate; if not, lower `QDRANT_DELETED_THRESHOLD` first. A sustained
+sweep snoozes forever (users unaffected). Check before a bump, all in
+percent of capacity: `disk% + 100 x 0.2 x disk_bytes / capacity + one
+segment's optimization copy` must sit under the gate; if not, lower
+`QDRANT_DELETED_THRESHOLD` first. A sustained
 `rebuild_gated_total{reason="disk"}` with a flat disk line is the stall.
 
 The full rebuild shares this gate, so it gets the disk check too. A user's
