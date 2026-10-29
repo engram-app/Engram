@@ -58,10 +58,13 @@ if config_env() in [:dev, :test] do
   repo_conn =
     case System.get_env("DATABASE_URL") do
       nil ->
+        # Dev defaults to docker-compose.dev.yml's Postgres (localhost:5433);
+        # test keeps the standard 5432.
         [
           username: "engram",
           password: "engram",
           hostname: "localhost",
+          port: if(config_env() == :dev, do: 5433, else: 5432),
           database: default_database <> partition
         ]
 
@@ -99,6 +102,9 @@ end
 if config_env() == :dev do
   # Default :debug; the Playwright e2e servers set LOG_LEVEL=info in CI.
   config :logger, level: String.to_existing_atom(System.get_env("LOG_LEVEL", "debug"))
+
+  # docker-compose.dev.yml's Qdrant. QDRANT_URL (read below) still overrides.
+  config :engram, :qdrant_url, "http://localhost:6334"
 end
 
 # Model per plan (SaaS, billing on): `{DOC,QUERY}_EMBED_MODEL_{FREE,STARTER,PRO}`.
@@ -123,7 +129,8 @@ if config_env() != :test do
   # can drop MinIO — not for scale (that's why BYTEA was removed for SaaS in
   # A.5/PR #62); it stores opaque ciphertext in a generic `storage_objects`
   # table, NOT the old `attachments.content` column.
-  case System.get_env("STORAGE_BACKEND", "s3") do
+  # Dev defaults to "database" so a fresh clone needs no MinIO or S3.
+  case System.get_env("STORAGE_BACKEND", if(config_env() == :dev, do: "database", else: "s3")) do
     "s3" ->
       config :engram, :storage, Engram.Storage.S3
       config :engram, :storage_bucket, System.get_env("STORAGE_BUCKET", "engram-attachments")
@@ -751,7 +758,9 @@ if config_env() != :test do
 
   config :engram,
     key_provider: key_provider_module,
-    encryption_master_key: System.get_env("ENCRYPTION_MASTER_KEY"),
+    # Dev falls back to a public dev-only key; prod refuses that key.
+    encryption_master_key:
+      Engram.RuntimeConfig.encryption_master_key(&System.get_env/1, config_env()),
     encryption_master_key_previous: System.get_env("ENCRYPTION_MASTER_KEY_PREVIOUS"),
     encryption_master_key_version:
       String.to_integer(System.get_env("ENCRYPTION_MASTER_KEY_VERSION", "1")),

@@ -69,31 +69,23 @@ without Docker — i.e. you're hacking on the app itself.
 
 ```bash
 mix deps.get
+make dev-db-up                  # Postgres :5433 + Qdrant :6334 (Docker)
 mix ecto.setup                  # create DB + migrations + seeds
 bash scripts/install-hooks.sh   # one-time: enables pre-push version check
 ```
 
 ### Configure
 
-```bash
-cp .env.example .env
-```
+Nothing. No env file is needed for local dev. In `MIX_ENV=dev`,
+`config/runtime.exs` defaults to the Postgres (localhost:5433) and Qdrant
+(localhost:6334) from `docker-compose.dev.yml` (`make dev-db-up` starts them),
+attachments in Postgres, local auth, and a public DEV-ONLY encryption key that
+prod refuses to boot with. `make dev-selfhost` does all of it, plus Vite.
 
-Edit `.env`. Minimum for local dev:
-
-```bash
-DATABASE_URL=postgresql://engram:engram@localhost:5432/engram
-EMBED_BACKEND=ollama
-EMBED_MODEL=nomic-embed-text
-EMBED_DIMS=768
-QDRANT_URL=http://localhost:6333
-JWT_SECRET=some-random-string-at-least-32-chars
-SECRET_KEY_BASE=$(openssl rand -base64 48)
-ENCRYPTION_MASTER_KEY=$(openssl rand -base64 32)
-PHX_HOST=localhost
-PHX_SCHEME=http
-PHX_PORT=4000
-```
+To override (another database, Ollama or Voyage embeddings for search), edit
+`.env.local-selfhost` (created from `.env.local-selfhost.example` on first
+`make dev-selfhost`) or export the variables. `.env.example` is for the
+`docker-compose.yml` production self-host only; `mix` never reads it.
 
 Full env reference: <https://engram.page/docs/self-host/environment-variables/>.
 

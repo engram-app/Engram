@@ -33,6 +33,35 @@ defmodule Engram.RuntimeConfig do
     {"CLIENT_LOG_LINE_BUDGET_OVERRIDE", :client_log_line_budget_override}
   ]
 
+  # DEV-ONLY master key, public in git. `mix phx.server` in :dev falls back to
+  # it so a fresh clone boots with no env file; :prod refuses to boot with it.
+  # Never use it for data you care about.
+  @dev_encryption_master_key "uB2okhpf1lb6quoXIk+ZVIQDenCUnGnZuTb8IA/iZ4w="
+
+  @doc "The public, dev-only `ENCRYPTION_MASTER_KEY` (see `encryption_master_key/2`)."
+  @spec dev_encryption_master_key() :: String.t()
+  def dev_encryption_master_key, do: @dev_encryption_master_key
+
+  @doc """
+  `ENCRYPTION_MASTER_KEY` for `config_env`. Unset or empty in `:dev` falls
+  back to the public dev key, so local dev needs no env file. `:prod` raises
+  if it is given that dev key: it is in git, so it protects nothing.
+  """
+  @spec encryption_master_key((String.t() -> String.t() | nil), atom()) :: String.t() | nil
+  def encryption_master_key(getenv, config_env) do
+    case {getenv.("ENCRYPTION_MASTER_KEY"), config_env} do
+      {key, :dev} when key in [nil, ""] ->
+        @dev_encryption_master_key
+
+      {@dev_encryption_master_key, :prod} ->
+        raise "ENCRYPTION_MASTER_KEY is the public dev-only key from the Engram repo. " <>
+                "Generate a real one with `openssl rand -base64 32`."
+
+      {key, _} ->
+        key
+    end
+  end
+
   @doc """
   `ENVELOPE_COMPRESSION` -> `{:ok, boolean}` or `:unset` (#1872).
 

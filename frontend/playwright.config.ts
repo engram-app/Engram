@@ -110,10 +110,9 @@ export default defineConfig({
 				AUTH_PROVIDER: "local",
 				PHX_SERVER: "true",
 				PORT: String(LOCAL_BACKEND_PORT),
-				// Local dev/e2e only — 32-byte base64 key, not used in production.
+				// ENCRYPTION_MASTER_KEY: MIX_ENV=dev falls back to the dev-only key
+				// (Engram.RuntimeConfig.dev_encryption_master_key/0).
 				KEY_PROVIDER: process.env.KEY_PROVIDER ?? "local",
-				ENCRYPTION_MASTER_KEY:
-					process.env.ENCRYPTION_MASTER_KEY ?? "uB2okhpf1lb6quoXIk+ZVIQDenCUnGnZuTb8IA/iZ4w=",
 			},
 		},
 		{
@@ -153,8 +152,6 @@ export default defineConfig({
 							PHX_SERVER: "true",
 							PORT: String(CLERK_BACKEND_PORT),
 							KEY_PROVIDER: process.env.KEY_PROVIDER ?? "local",
-							ENCRYPTION_MASTER_KEY:
-								process.env.ENCRYPTION_MASTER_KEY ?? "uB2okhpf1lb6quoXIk+ZVIQDenCUnGnZuTb8IA/iZ4w=",
 							CLERK_JWKS_URL: process.env.CLERK_JWKS_URL ?? "",
 							CLERK_ISSUER: process.env.CLERK_ISSUER ?? "",
 							CLERK_PUBLISHABLE_KEY: clerkPublishableKey,
