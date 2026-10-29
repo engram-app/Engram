@@ -24,7 +24,7 @@ Live. Covers every var `config/runtime.exs` reads (`Engram.EnvVarDocsTest` fails
 | `PHX_HOST` | unset (`localhost` for URLs in dev) | Canonical host(s) for URL gen + CORS/WS origin. **Comma-separated; first entry is canonical**. When unset, CORS allows `*` and WS allows all (fine for self-host; a SaaS deploy fails closed if `PHX_HOST` is missing). |
 | `PHX_SCHEME` | `https` prod / `http` dev | URL scheme. |
 | `PHX_PORT` | `443` prod / `80` dev | URL port for generated links. |
-| `DATABASE_URL` |, (required in prod) | `ecto://USER:PASS@HOST/DATABASE`. |
+| `DATABASE_URL` | dev: `engram:engram@localhost:5433/engram_dev` (docker-compose.dev.yml); required in prod | `ecto://USER:PASS@HOST/DATABASE`. |
 | `POOL_SIZE` | `10` | Ecto pool size. |
 | `MIX_TEST_PARTITION` | unset | Test env only. Suffixes the test database name (also on a `DATABASE_URL`) so `mix test --partitions N` gets one DB per partition. Read in `runtime.exs`, not `test.exs`, so it never changes compile-time config (that would force a full recompile in every CI job). |
 | `LOG_LEVEL` | `debug` | Dev env only. Logger level; the Playwright e2e servers set `info` in CI. Read in `runtime.exs` for the same reason. |
@@ -65,11 +65,11 @@ Live. Covers every var `config/runtime.exs` reads (`Engram.EnvVarDocsTest` fails
 
 ## Storage / Attachments
 
-> **`STORAGE_BACKEND` code default is `s3`** (`System.get_env("STORAGE_BACKEND", "s3")`). `s3` is the SaaS/prod (AWS S3) and standard self-host (MinIO) path. `database` (#297) is a self-host-only convenience that stores opaque ciphertext in the generic `storage_objects` table (NOT the removed `attachments.content` column). Unknown values raise at boot.
+> **`STORAGE_BACKEND` code default is `s3`, except `database` in `MIX_ENV=dev`** so a fresh clone needs no MinIO. `s3` is the SaaS/prod (AWS S3) and standard self-host (MinIO) path. `database` (#297) is a self-host-only convenience that stores opaque ciphertext in the generic `storage_objects` table (NOT the removed `attachments.content` column). Unknown values raise at boot.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `STORAGE_BACKEND` | `s3` | `s3` or `database`. |
+| `STORAGE_BACKEND` | `s3` (dev: `database`) | `s3` or `database`. |
 | `STORAGE_BUCKET` | `engram-attachments` | S3 bucket. |
 | `STORAGE_ACCESS_KEY_ID` | unset | Static S3 key (MinIO/non-AWS). Leave unset on ECS to use the task role. |
 | `STORAGE_SECRET_ACCESS_KEY` |, | Paired secret (required if access key set). |
@@ -110,7 +110,7 @@ Live. Covers every var `config/runtime.exs` reads (`Engram.EnvVarDocsTest` fails
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `QDRANT_URL` | (compile-time) | Qdrant base URL. |
+| `QDRANT_URL` | dev: `http://localhost:6334` (docker-compose.dev.yml); else `http://localhost:6333` | Qdrant base URL. |
 | `QDRANT_COLLECTION` | env-driven; fallback `obsidian_notes` (module) / `engram_notes` (dev+test+prod) | Collection name. See nuance above. |
 | `QDRANT_API_KEY` | unset | Qdrant Cloud key. |
 | `QDRANT_ACTIVE_CLUSTER` | retired | Ignored: Qdrant is always `QDRANT_URL`. `old` is silent; any other value logs a warning at boot. `QDRANT_URL_V2` / `QDRANT_API_KEY_V2` are ignored too. |
@@ -151,7 +151,7 @@ Live. Covers every var `config/runtime.exs` reads (`Engram.EnvVarDocsTest` fails
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `KEY_PROVIDER` | `local` | `local` or `aws_kms`. |
-| `ENCRYPTION_MASTER_KEY` | unset | Master key for wrapping per-user DEKs (local provider). |
+| `ENCRYPTION_MASTER_KEY` | unset (dev: a public dev-only key, `Engram.RuntimeConfig.dev_encryption_master_key/0`) | Master key for wrapping per-user DEKs (local provider). Prod refuses to boot with the dev key. |
 | `ENCRYPTION_MASTER_KEY_PREVIOUS` | unset | Old master key during rotation. |
 | `ENCRYPTION_MASTER_KEY_VERSION` | `1` | Master key version. |
 | `DEK_CACHE_TTL_MS` | `3600000` (1h) | DEK cache TTL. |

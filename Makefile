@@ -10,7 +10,7 @@ deps:              ## Fetch Elixir + frontend deps
 	cd frontend && bun install
 
 dev:               ## Start local Phoenix dev server (SaaS shape: Voyage + Clerk, port 4000)
-	@test -f .env.local || { echo "missing .env.local: cp .env.local.example .env.local and fill it in" >&2; exit 1; }
+	@test -f .env.local || { echo "missing .env.local: SaaS-shape dev needs your own Clerk dev instance (CLERK_PUBLISHABLE_KEY, CLERK_ISSUER, CLERK_JWKS_URL from dashboard.clerk.com > API keys). cp .env.local.example .env.local and set them. No Clerk account? Run make dev-selfhost: it needs no env file." >&2; exit 1; }
 	env $$(grep -v '^\#' .env.local | grep -v '^$$' | xargs) mix phx.server
 
 dev-db-up:         ## Start the isolated local Postgres + Qdrant for dev (idempotent)
@@ -26,7 +26,7 @@ dev-selfhost: dev-db-up  ## Start local Phoenix + Vite + isolated dev DB (selfho
 	@# Brings up dev Postgres+Qdrant (containers), creates+migrates the schema,
 	@# then runs Vite :5173 and Phoenix :4000. Trap reaps Vite when Phoenix
 	@# exits so Ctrl-C cleans up both processes.
-	@test -f .env.local-selfhost || { echo "missing .env.local-selfhost: cp .env.local-selfhost.example .env.local-selfhost and fill it in" >&2; exit 1; }
+	@test -f .env.local-selfhost || { cp .env.local-selfhost.example .env.local-selfhost && echo "[dev-selfhost] created .env.local-selfhost from the example (dev defaults; edit it to override)"; }
 	@set -e ; \
 	  echo "[dev-selfhost] ensuring schema is migrated…" ; \
 	  env $$(grep -v '^\#' .env.local-selfhost | grep -v '^$$' | xargs) mix ecto.create --quiet ; \
