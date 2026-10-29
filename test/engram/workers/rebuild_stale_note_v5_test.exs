@@ -32,6 +32,8 @@ defmodule Engram.Workers.RebuildStaleNoteV5Test do
 
   setup do
     Engram.Cache.clear_local(:rebuild)
+    # The gate's cached Qdrant verdict outlives the test otherwise.
+    on_exit(fn -> Engram.Cache.clear_local(:rebuild) end)
     Repo.query!("DELETE FROM rebuild_ledger")
     EngramWeb.RateLimiter.reset_buckets!()
     ServiceConfig.put_override(:rebuild_pinned_versions, @pins)

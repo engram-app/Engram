@@ -46,6 +46,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   alias Engram.Notes.{Chunk, Note}
   alias Engram.Rebuild
   alias Engram.Repo
+  alias Engram.ServiceConfig
   alias Engram.Vector.Qdrant
 
   alias Engram.Workers.{
@@ -1169,7 +1170,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # On the per-user path each page is stamped and enqueued in the tenant's
   # transaction; on the maintenance path the stamp commits first, and a lost
   # enqueue costs that note one cooldown window.
-  defp scan(page, page_size, handle, false) do
+  defp scan(page, page_size, handle, windowed?, max_queued \\ nil)
+
+  defp scan(page, page_size, handle, false, _max_queued) do
     case TenantScan.pool() do
       :per_user ->
         Enum.flat_map(TenantScan.user_ids(), fn user_id ->
@@ -1181,13 +1184,17 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     end
   end
 
-  defp scan(page, page_size, handle, true) do
-    {:ok, counts} =
+  # Windowed. `max_queued`: stop after the window that queued that many jobs.
+  defp scan(page, page_size, handle, true, max_queued) do
+    {:ok, {counts, _queued}} =
       IdWindows.reduce_all(
         Note,
-        [],
-        fn ids, %{repo: repo, user_id: user_id}, acc ->
-          {:cont, [sweep_pages(page_size, page_in(user_id, repo, ids, page, handle)) | acc]}
+        {[], 0},
+        fn ids, %{repo: repo, user_id: user_id}, {acc, queued} ->
+          window = sweep_pages(page_size, page_in(user_id, repo, ids, page, handle))
+          queued = queued + Enum.sum(Enum.map(window, &elem(&1, 1)))
+          step = if max_queued && queued >= max_queued, do: :halt, else: :cont
+          {step, {[window | acc], queued}}
         end,
         batch_size: @window,
         # Each page owns its transaction, as on the unwindowed path.
@@ -1345,7 +1352,23 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # ponytail: `keyword_version` is unindexed, so this walks every note in id
   # windows each tick while IndexVersions is open (one window per statement,
   # #2276). A partial index on keyword_version would let it page instead.
+  #
+  # Bounded by `:keyword_refresh_backlog` (default 10,000) pending
+  # RefreshKeywordVectors jobs: a keyword bump makes the whole corpus stale at
+  # once, and without the cap one tick queued every note (~648k points in
+  # prod). Each tick tops the backlog up to the cap and stops; notes it did
+  # not reach are not stamped, so a later tick picks them up. ponytail: it
+  # halts between id windows, so a tick can overshoot by up to one window.
   defp sweep_keyword_stale(now, paid, page_size, versions) do
+    cap = ServiceConfig.get(:keyword_refresh_backlog, 10_000)
+
+    case cap - Engram.Jobs.pending_count(RefreshKeywordVectors, cap) do
+      room when room > 0 -> sweep_keyword_stale(now, paid, page_size, versions, room)
+      _full -> :ok
+    end
+  end
+
+  defp sweep_keyword_stale(now, paid, page_size, versions, room) do
     backoff_until = DateTime.add(now, backoff_seconds(), :second)
 
     page = fn repo, ids ->
@@ -1387,7 +1410,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       found
     end
 
-    counts = scan(page, page_size, &enqueue_refresh/1, true)
+    counts = scan(page, page_size, &enqueue_refresh/1, true, room)
 
     Logger.info(
       "reconcile_embeddings: swept keyword-stale notes",

@@ -56,6 +56,8 @@ defmodule Engram.Workers.QdrantWriteWorkersBackpressureTest do
       |> Plug.Conn.send_resp(status, body)
     end)
 
+    Engram.QdrantStub.stub_healthy(bypass)
+
     {:ok, user} = Crypto.ensure_user_dek(insert(:user))
     vault = insert(:vault, user: user)
 

@@ -27,6 +27,27 @@ defmodule Engram.QdrantStub do
     %{"result" => [%{"points" => points}, %{"points" => keyword}]}
   end
 
+  @doc """
+  A green, caught-up collection (`GET /collections/{col}` and its
+  `/optimizations`), so `Engram.Rebuild.qdrant_pace/0` lets a paced worker
+  (`RefreshKeywordVectors`) run. Route stubs win over a test's `:any` stub.
+  """
+  def stub_healthy(bypass, col \\ "engram_notes") do
+    Bypass.stub(bypass, "GET", "/collections/#{col}", fn conn ->
+      json(conn, %{"result" => %{"status" => "green", "optimizer_status" => "ok"}})
+    end)
+
+    Bypass.stub(bypass, "GET", "/collections/#{col}/optimizations", fn conn ->
+      json(conn, %{"result" => %{"summary" => %{"queued_points" => 0}}})
+    end)
+  end
+
+  defp json(conn, body) do
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(200, Jason.encode!(Map.put(body, "status", "ok")))
+  end
+
   @doc "Answers `POST /collections/{col}/points` (retrieve) from what `batch/3` recorded."
   def stub_retrieve(bypass, col \\ "engram_notes") do
     :ets.delete(@table, {bypass.port, :last_retrieve})

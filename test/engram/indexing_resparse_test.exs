@@ -29,6 +29,8 @@ defmodule Engram.IndexingResparseTest do
       |> Plug.Conn.send_resp(200, ~s({"result": true, "status": "ok"}))
     end)
 
+    Engram.QdrantStub.stub_healthy(bypass)
+
     {:ok, user} = Crypto.ensure_user_dek(insert(:user))
     vault = insert(:vault, user: user)
 

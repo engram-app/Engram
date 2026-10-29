@@ -21,6 +21,12 @@ defmodule Engram.Workers.RefreshKeywordVectors do
   fingerprint, v1 chunks whose blobs v2 strips) belong to notes with a stale
   `chunker_version`, which the chunker rebuild owns; see
   `docs/context/index-version-self-heal.md`.
+
+  Paced by `Engram.Rebuild.qdrant_pace/0` in every mode: a keyword bump
+  rewrites every point in place, and each rewrite leaves a dead copy until
+  the optimizer vacuums the segment, so an unpaced sweep can fill the disk
+  into strict mode's write refusal. A gated job snoozes; no Voyage cost, so
+  no token bucket.
   """
   use Oban.Worker,
     queue: :embed,
@@ -47,7 +53,8 @@ defmodule Engram.Workers.RefreshKeywordVectors do
   def perform(%Oban.Job{args: args}) do
     :ok = BackgroundPriority.demote()
 
-    with {:ok, note} <- Engram.Notes.fetch_note_for_worker_job(args),
+    with :ok <- Engram.Rebuild.qdrant_pace(),
+         {:ok, note} <- Engram.Notes.fetch_note_for_worker_job(args),
          :ok <- RotationGate.check(note.user_id),
          user = Engram.Accounts.get_user!(note.user_id),
          {:ok, note} <- Crypto.maybe_decrypt_note_fields(note, user),
@@ -71,6 +78,7 @@ defmodule Engram.Workers.RefreshKeywordVectors do
           )
       end
     else
+      {:snooze, _} = snooze -> snooze
       {:discard, _} = discard -> discard
       {:error, :rotation_in_progress} -> {:snooze, 60}
       {:error, :qdrant_backpressure} -> Qdrant.backpressure_snooze(:refused)
