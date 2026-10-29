@@ -8,6 +8,7 @@ defmodule Engram.IndexingResparseTest do
   import Mox
 
   alias Engram.Crypto
+  alias Engram.EmbedModels
   alias Engram.Indexing
   alias Engram.Notes
   alias Engram.Parsers.Markdown
@@ -310,6 +311,93 @@ defmodule Engram.IndexingResparseTest do
 
     assert_receive {:qdrant, "PUT", path, _body}
     assert String.ends_with?(path, "/points/vectors")
+  end
+
+  # Per plan (SaaS), a Free note's points are fingerprinted with
+  # voyage-4-lite while the build's model is voyage-4-large. Resparse runs
+  # outside an index pass, so it must try every plan model's dense
+  # fingerprint, or every Free note matches nothing, stays unstamped, and the
+  # keyword sweep retries it forever (staging 2026-10-28: 1,300 notes).
+  describe "per-plan models" do
+    @lite "voyage-4-lite"
+    @large "voyage-4-large"
+
+    setup %{user: user, vault: vault} do
+      prev = Map.new([:billing_enabled, :embed_model], &{&1, Application.get_env(:engram, &1)})
+
+      on_exit(fn ->
+        for {k, v} <- prev do
+          if v == nil,
+            do: Application.delete_env(:engram, k),
+            else: Application.put_env(:engram, k, v)
+        end
+      end)
+
+      Application.put_env(:engram, :billing_enabled, true)
+      Application.put_env(:engram, :embed_model, @large)
+
+      # A nameable model calls the embedder with it (`embed_texts/2`).
+      stub(Engram.MockEmbedder, :embed_texts, fn texts, _opts ->
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      content = "# Essay\n\nPlain prose about gardens.\n\n## More\n\nTomatoes like sun."
+
+      {:ok, prose} =
+        Notes.upsert_note(
+          user,
+          vault,
+          %{"path" => "essay.md", "content" => content, "mtime" => 1.0},
+          actor: "api"
+        )
+
+      {:ok, prose} = Crypto.maybe_decrypt_note_fields(prose, user)
+      %{prose: prose}
+    end
+
+    defp index_with(note, vault, user, model) do
+      {:ok, _, _, true} = Indexing.index_note_with_usage(note, vault, user, doc_model: model)
+      points = upserted_points()
+      assert points != []
+      points
+    end
+
+    test "a Free note embedded with lite matches every point", ctx do
+      %{user: user, vault: vault, prose: prose} = ctx
+      assert EmbedModels.doc_model(user) == @lite
+      points = index_with(prose, vault, user, @lite)
+
+      assert {:ok, count, 0} = Indexing.resparse_note(prose, user)
+      assert count == length(points)
+    end
+
+    test "a large-model note still matches every point", ctx do
+      %{user: user, vault: vault, prose: prose} = ctx
+      points = index_with(prose, vault, user, @large)
+
+      assert {:ok, count, 0} = Indexing.resparse_note(prose, user)
+      assert count == length(points)
+    end
+
+    test "the job stamps a current-chunker lite note with the target keyword version", ctx do
+      %{user: user, vault: vault, prose: prose} = ctx
+      index_with(prose, vault, user, @lite)
+
+      Repo.update_all(
+        from(n in Notes.Note, where: n.id == ^prose.id),
+        [set: [chunker_version: Markdown.chunker_version(), keyword_version: nil]],
+        skip_tenant_check: true
+      )
+
+      assert :ok =
+               perform_job(Engram.Workers.RefreshKeywordVectors, %{
+                 note_id: prose.id,
+                 user_id: user.id
+               })
+
+      assert Repo.get!(Notes.Note, prose.id, skip_tenant_check: true).keyword_version ==
+               elem(Engram.Rebuild.target_versions(), 1)
+    end
   end
 
   # A chunk whose text changed since the last index has no point that is
