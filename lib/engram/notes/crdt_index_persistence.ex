@@ -162,7 +162,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     end
 
     with {:ok, user} <- fetch_user(user_id),
-         {:ok, row_id} <- append_tail(user, vault_id, update) do
+         {:ok, row_id} <- append_tail(user, vault_id, update, state.last_row_id) do
       grow_tail(state, row_id, byte_size(update), doc)
     else
       :skipped ->
@@ -187,6 +187,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     state = %{
       state
       | folded_ids: [row_id | state.folded_ids],
+        last_row_id: row_id,
         tail_bytes: state.tail_bytes + bytes
     }
 
@@ -227,7 +228,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
 
   # The row id is minted BEFORE encrypting because the AAD binds to it — the
   # same pre-allocation the tombstone path uses for row-id-bound AAD.
-  defp append_tail(user, vault_id, update) do
+  defp append_tail(user, vault_id, update, after_id) do
     # #1341. This ENCRYPTS, so it carries the same hazard as the checkpoint, and
     # `Identity`'s "the room path needs no gate — it only mutates memory" stopped
     # being true the moment this callback existed. A row written after the sweep
@@ -246,12 +247,12 @@ defmodule Engram.Notes.CrdtIndexPersistence do
         :skipped
 
       _ ->
-        do_append_tail(user, vault_id, update)
+        do_append_tail(user, vault_id, update, after_id)
     end
   end
 
-  defp do_append_tail(user, vault_id, update) do
-    row_id = UUIDv7.generate()
+  defp do_append_tail(user, vault_id, update, after_id) do
+    row_id = next_row_id(after_id)
 
     # dek_version records the version that actually wrapped THIS row, never a
     # constant: the rotation sweep stamps the new version, so a hardcoded 2
@@ -286,6 +287,28 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     e -> {:error, e}
   catch
     :exit, reason -> {:error, {:exit, reason}}
+  end
+
+  # A row id that sorts after `after_id`, the newest row this room knows of
+  # (bound over or appended). The replay walks the tail in id order and yrs does
+  # not converge every out-of-order replay of one client's edits (a reversed
+  # set/overwrite/delete chain loses a key), so one room's appends must sort in
+  # append order. A bare UUIDv7 does not promise that: its low bits are random
+  # within a millisecond, and its clock can step back or differ between the
+  # nodes a `:global` room moves across. Bumping by one keeps the version and
+  # variant bits (a carry out of the 62 random bits is the only way to lose
+  # them).
+  defp next_row_id(nil), do: UUIDv7.generate()
+
+  defp next_row_id(after_id) do
+    case UUIDv7.generate() do
+      id when id > after_id ->
+        id
+
+      _ ->
+        <<n::128>> = Ecto.UUID.dump!(after_id)
+        Ecto.UUID.load!(<<n + 1::128>>)
+    end
   end
 
   defp emit_tail(phase) do
@@ -354,7 +377,12 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     # deleted it in the meantime. So a fold prunes `folded_ids` (what this doc
     # holds) and nothing else, which also spares rows another room appended
     # during a `:global` netsplit (review finding 4).
-    state = Map.merge(state, %{folded_ids: replay.applied, tail_bytes: replay.bytes})
+    state =
+      Map.merge(state, %{
+        folded_ids: replay.applied,
+        tail_bytes: replay.bytes,
+        last_row_id: replay.last
+      })
 
     # #2306: fold a large replay NOW. Left to `unbind/3`, a kill after this
     # bind (the OOM the replay itself nearly caused) replays it all again on
@@ -740,7 +768,8 @@ defmodule Engram.Notes.CrdtIndexPersistence do
   end
 
   # Replays every tail row for this vault and returns the ids that actually
-  # applied, the echoes owed and the plaintext bytes applied.
+  # applied, the echoes owed, the plaintext bytes applied and the newest id
+  # seen (applied or skipped), which the room's next append must sort after.
   #
   # Paged (#2306): `IdWindows` walks the user's tail one `replay_page_rows`
   # id window at a time, each in its own short tenant transaction (or inside
@@ -762,10 +791,11 @@ defmodule Engram.Notes.CrdtIndexPersistence do
             applied: [Ecto.UUID.t()],
             skipped: [Ecto.UUID.t()],
             echoes: non_neg_integer(),
-            bytes: non_neg_integer()
+            bytes: non_neg_integer(),
+            last: Ecto.UUID.t() | nil
           }
   def replay_tail(doc, user, vault_id) do
-    acc = %{applied: [], skipped: [], echoes: 0, bytes: 0}
+    acc = %{applied: [], skipped: [], echoes: 0, bytes: 0, last: nil}
 
     {:ok, acc} =
       tail_windows(user, acc, fn ids, acc ->
@@ -807,6 +837,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
 
   defp replay_page(doc, user, vault_id, rows, acc) do
     before_sv = Yex.encode_state_vector(doc)
+    acc = %{acc | last: Enum.max([acc.last | Enum.map(rows, & &1.id)], &max_id/2)}
 
     acc =
       Yex.Doc.transaction(doc, fn ->
@@ -830,6 +861,11 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     echoed? = Yex.encode_state_vector(doc) != before_sv
     %{acc | echoes: acc.echoes + if(echoed?, do: 1, else: 0)}
   end
+
+  # Canonical lowercase UUID strings compare in byte order; nil sorts first.
+  defp max_id(nil, _b), do: false
+  defp max_id(_a, nil), do: true
+  defp max_id(a, b), do: a >= b
 
   # Whether this apply will actually post an `{:update_v1, ...}` back to us.
   #
