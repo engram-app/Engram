@@ -67,6 +67,16 @@ LOAD_HOST = "gh-runner"  # the isolated CI runner VM (docs/context/runner-vm-set
 PREFIX = "fsproof"
 PLUGIN_REPO = "https://github.com/engram-app/Engram-obsidian.git"
 NPM_MIRROR = "http://10.0.20.214:4873"
+QDRANT_COLLECTION_URL = (
+    "http://10.0.20.201:6333/collections/obsidian_notes"  # staging's
+)
+# Queues whose workers write to Qdrant (EmbedNote, RefreshKeywordVectors,
+# RepathNoteIndex on :embed; ExtractNoteLinks, DeleteNoteIndex on :indexing).
+# Staging shares that Qdrant with CI (Engram#2318), so they stay paused for the
+# whole run. Oban keeps pauses in memory: every container start resumes them,
+# so the watcher re-pauses after each start it sees.
+QDRANT_QUEUES = ("embed", "indexing")
+QDRANT_POINT_SLACK = 50  # other staging users' writes; anything more aborts
 FIX_PR = 2308
 PROD_WEB_TASK_MIB = 2048  # engram-infra main/envs/prod/ecs.tf, web memory_mib
 
@@ -415,6 +425,40 @@ def delete_user(user_id: str, key_id: str | None) -> str:
     return rpc_field(out, "del")[0]
 
 
+def pause_qdrant_queues(pause: bool) -> None:
+    fn = "pause_queue" if pause else "resume_queue"
+    qs = ", ".join(f":{q}" for q in QDRANT_QUEUES)
+    out = rpc(
+        f"for q <- [{qs}], do: Oban.{fn}(queue: q)\n"
+        f'IO.puts("paused|#{{Enum.all?([{qs}], &Oban.check_queue(queue: &1).paused)}}")'
+    )
+    if rpc_field(out, "paused")[0] != str(pause).lower():
+        raise RuntimeError(f"could not {fn} {QDRANT_QUEUES}")
+
+
+def cancel_user_jobs(user_id: str) -> str:
+    """Cancel the run user's pending jobs in the Qdrant queues, nobody else's."""
+    qs = ", ".join(f'"{q}"' for q in QDRANT_QUEUES)
+    out = rpc(
+        f"""
+        import Ecto.Query
+        q = from(j in Oban.Job,
+          where: j.queue in [{qs}] and j.state in ["available", "scheduled", "retryable"]
+            and fragment("?->>?", j.args, "user_id") == "{user_id}")
+        IO.puts("cancelled|#{{inspect(Oban.cancel_all_jobs(q))}}")
+        """
+    )
+    return rpc_field(out, "cancelled")[0]
+
+
+def qdrant_points() -> int:
+    import requests
+
+    return requests.get(QDRANT_COLLECTION_URL, timeout=10).json()["result"][
+        "points_count"
+    ]
+
+
 def find_vault(run_id: str) -> str | None:
     rows = psql(
         f"select id from vaults where client_id = '{PREFIX}~{run_id}' and deleted_at is null;"
@@ -485,7 +529,8 @@ def fetch_and_clean_load_host(host: str, work: str, out: Path) -> None:
     if tar.returncode == 0:
         subprocess.run(["tar", "-C", str(dest), "-x"], input=tar.stdout)
     if work.startswith("/tmp/fsproof."):
-        ssh(f"rm -rf {work}", host=host, timeout=300)
+        # The load may still run (an abort): stop it before removing its files.
+        ssh(f"pkill -f {work}/; sleep 2; rm -rf {work}", host=host, timeout=300)
 
 
 # One SSH round trip per sample: container state, docker stats, BEAM memory.
@@ -588,7 +633,12 @@ def cmd_watch(a) -> int:
     load_rc = None
     restarted = None
     samples = out / "samples.jsonl"
+    paused = False
     try:
+        pause_qdrant_queues(True)
+        paused = True
+        q0 = qdrant_points()
+        started_at = sample(None).get("started_at")
         user_id = create_user(run_id)
         if grant_overrides(run_id) != len(OVERRIDES):
             raise RuntimeError("limit grant did not land")
@@ -609,8 +659,29 @@ def cmd_watch(a) -> int:
                 print(f"[watch] transient: {str(e)[:200]}", flush=True)
                 time.sleep(a.interval)
                 continue
+            try:
+                s["qdrant_points"] = qdrant_points()
+            except (
+                OSError,
+                KeyError,
+                ValueError,
+            ) as e:  # recorded; a miss is not a rise
+                s["qdrant_err"] = str(e)[:120]
             with open(samples, "a") as f:
                 f.write(json.dumps(s) + "\n")
+            if s.get("qdrant_points", q0) > q0 + QDRANT_POINT_SLACK:
+                raise RuntimeError(
+                    f"Qdrant points rose {q0} -> {s['qdrant_points']}; aborting"
+                )
+            if s.get("started_at") and s["started_at"] != started_at:
+                started_at = s["started_at"]
+                if restarted is None or time.time() - restarted["t"] > 180:
+                    # A deploy (staging follows main) or a crash: either way not
+                    # the controlled kill this proof is about.
+                    raise RuntimeError(
+                        f"container restarted outside the proof at {started_at}; aborting"
+                    )
+                pause_qdrant_queues(True)  # our own kill resumed them
             n = s.get("notes")
             progress = n / a.notes if n is not None else 0.0
             print(
@@ -656,6 +727,9 @@ def cmd_watch(a) -> int:
             fetch_and_clean_load_host(a.load_host, work, out)
         if user_id:
             print(f"[watch] cleanup: {delete_user(user_id, key_id)}", flush=True)
+            print(f"[watch] cancelled jobs: {cancel_user_jobs(user_id)}", flush=True)
+        if paused:
+            pause_qdrant_queues(False)
 
     rp = out / "load" / "out" / "result.json"
     load_result = json.loads(rp.read_text()) if rp.exists() else None
@@ -778,7 +852,8 @@ def summarize(a, run_id, build, where, samples, restarted, events, logs, load) -
         "</details>",
         "",
         "Choices: attachments are 1-20 KB (the index tail sees one claim per file, not its bytes); "
-        "the plugin's own default push concurrency; the pass does not wait on embeddings or indexing.",
+        "the plugin's own default push concurrency; the Qdrant-writing Oban queues (embed, indexing) are paused "
+        "for the run and the user's jobs cancelled after, so the pass does not wait on (or cause) embeddings or indexing.",
         "",
         "Not covered: staging is one Docker node with no memory limit, so a breach shows as the BEAM cap check "
         "above rather than a kernel OOM kill, and there is no second node for the `:global` room to move to.",
