@@ -6,19 +6,22 @@ a bulk first sync grew the per-vault CRDT index room's update tail, every
 restart re-bound the room and replayed that tail, and the replay OOM-killed the
 node again (docs/context/web-oom-index-room-tail-replay-2026-10-29.md).
 
-Three subcommands, split by where they must run:
+Subcommands:
 
   generate  Deterministic synthetic vault (notes + attachments) from a seed.
-            Cheap at small N; the 30k corpus is ~1 GB, so CI builds it.
-  load      CI (runner VM, .github/workflows/staging-first-sync-proof.yml):
-            provisions the dedicated Clerk test account, opens a fresh vault,
-            generates the corpus and runs ONE real plugin engine over it
+  load      Runs on the load host (the CI runner VM, over SSH): generates the
+            corpus, opens a fresh vault and runs ONE real plugin engine over it
             (first_sync.ts: e2e/headless Replica with the index room wired).
-  watch     Dev box (needs SSH to FastRaid): dispatches the CI job, grants the
-            account's limits, samples the staging container (BEAM memory,
+            Authenticates with an Engram API key read from STDIN, so the key
+            never touches argv, env, disk or a log.
+  watch     Dev box (needs SSH to FastRaid and to the load host): creates a
+            throwaway staging user through the release rpc (no Clerk secret),
+            grants its limits, mints its key, starts `load` on the load host
+            under a memory cap, samples the staging container (BEAM memory,
             container state, counts, index tail), KILLS the container once
-            40-60% of notes are on the server, waits for completion and writes
-            summary.md for a PR comment.
+            40-60% of notes are on the server, waits for completion, writes
+            summary.md for a PR comment, and always cleans up (key, user and
+            its data, the load host's temp dir).
 
 Staging is ONE Docker container on FastRaid (engram-saas), not ECS, so the
 "restart" is `docker kill -s KILL` + `docker start`: the same SIGKILL an OOM
@@ -27,7 +30,7 @@ which is the case #2308 has to survive. `--restart-mode graceful` uses
 `docker restart` instead (the ECS force-new-deployment shape).
 
     # one command, from the dev box, after #2308 is on staging:
-    python3 e2e/load/first_sync_proof.py watch --dispatch --out fsproof-out
+    python3 e2e/load/first_sync_proof.py watch --out fsproof-out
 """
 
 from __future__ import annotations
@@ -35,7 +38,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import random
 import shlex
 import subprocess
@@ -47,6 +49,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 E2E = HERE.parent
+REPO = E2E.parent
 sys.path.insert(0, str(E2E))
 
 from load.guards import check_target  # noqa: E402
@@ -59,13 +62,14 @@ STAGING_HOST = "root@10.0.20.214"  # FastRaid
 STAGING_APP = "engram-saas"
 STAGING_PG = "engram-saas-postgres"
 STAGING_HEALTH = "https://staging.engram.page/api/health"
-EMAIL = "fsproof-u00+clerk_test@example.com"  # dedicated Clerk test account
-PREFIX = "fsproof"  # -> Account(0, api, PREFIX).email == EMAIL
-WORKFLOW = "staging-first-sync-proof.yml"
+LOAD_HOST = "gh-runner"  # the isolated CI runner VM (docs/context/runner-vm-setup.md)
+PREFIX = "fsproof"
+PLUGIN_REPO = "https://github.com/engram-app/Engram-obsidian.git"
+NPM_MIRROR = "http://10.0.20.214:4873"
 FIX_PR = 2308
 PROD_WEB_TASK_MIB = 2048  # engram-infra main/envs/prod/ecs.tf, web memory_mib
 
-# The account's limit overrides (-1 = unlimited, as e2e/load/grant.sql).
+# The throwaway account's limit overrides (-1 = unlimited, as e2e/load/grant.sql).
 OVERRIDES = {
     "notes_cap": -1,
     "attachment_bytes_cap": -1,
@@ -88,16 +92,17 @@ def refuse_prod(*names: str) -> None:
             raise Refused(f"refusing {n!r}: names containing 'prod' are never a target")
 
 
+def email_for(run_id: str) -> str:
+    return f"{PREFIX}-{run_id}+clerk_test@example.com"
+
+
 # ---------------------------------------------------------------------------
 # generate
 # ---------------------------------------------------------------------------
-# Size bands for attachments (bytes): mostly screenshots, some photos, a few
-# large scans. Mean ~0.5 MB, so 2,000 attachments is ~1 GB.
-ATT_BANDS = [
-    (0.70, 50_000, 300_000),
-    (0.25, 300_000, 1_500_000),
-    (0.05, 1_500_000, 4_000_000),
-]
+# Attachment sizes (bytes). Tiny on purpose: the index room sees one path
+# claim per file whatever its size, and that tail is what this proves, so 2,000
+# attachments of 1-20 KB (~20 MB) exercise it as well as ~1 GB would, faster.
+ATT_BANDS = [(1.0, 1_000, 20_000)]
 
 
 def attachment(seed: int, k: int) -> tuple[str, bytes]:
@@ -159,31 +164,22 @@ def cmd_generate(a) -> int:
 
 
 # ---------------------------------------------------------------------------
-# load (CI)
+# load (the load host)
 # ---------------------------------------------------------------------------
 def cmd_load(a) -> int:
-    import requests
-
-    from helpers.clerk import ClerkClient
-    from helpers.clerk_auth import ClerkAuth
-    from load.guards import check_clerk_key, redact
-    from load.sim import (
-        Account,
-        install_signal_handlers,
-        provision,
-        register_vault,
-        spawn_child,
-    )
+    from load.guards import redact
+    from load.sim import Account, install_signal_handlers, register_vault, spawn_child
 
     check_target(a.api, allow_any_host=False)
-    key = os.environ.get("STAGING_CLERK_SECRET_KEY", "")
-    check_clerk_key(key)
+    key = sys.stdin.readline().strip()  # stdin only: never argv, env or disk
+    if not key.startswith("engram_"):
+        raise SystemExit("load: expected an Engram API key on stdin")
     install_signal_handlers()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     root = Path(a.work)
     root.mkdir(parents=True, exist_ok=True)
-    device = f"fsproof-{a.run_id}"
+    device = f"{PREFIX}-{a.run_id}"
 
     # 1. Corpus first: it is the slow part, and the vault should start empty and
     #    see the sync begin straight away.
@@ -191,37 +187,13 @@ def cmd_load(a) -> int:
     manifest = generate(root / device, a.notes, a.attachments, a.seed)
     log(out, "generated", seconds=round(time.time() - t0, 1), **manifest)
 
-    # 2. The dedicated account; wait for the watcher's limit grant to land.
-    clerk = ClerkClient(key)
-    acct = Account(0, a.api.removesuffix("/api") + "/api", PREFIX)
-    assert acct.email == EMAIL
-    provision(acct, clerk, a.run_id)
-    deadline = time.time() + 900
-    while True:
-        u = (
-            acct.s(vault=False)
-            .get(f"{acct.api}/billing/usage", timeout=30)
-            .json()["usage"]
-        )
-        if u["notes"]["limit"] is None and u["attachment_bytes"]["limit"] is None:
-            break
-        if time.time() > deadline:
-            log(out, "grant_timeout", usage=u)
-            return 3
-        time.sleep(10)
-
-    # 3. A FRESH vault per run (a first sync needs an empty server vault). Older
-    #    proof vaults are deleted and purged so they do not pile up on staging.
-    j = requests.Session()
-    j.auth = ClerkAuth(clerk, acct.clerk_id)
-    for v in (
-        acct.s(vault=False)
-        .get(f"{acct.api}/vaults", timeout=30)
-        .json()
-        .get("vaults", [])
-    ):
-        acct.s(vault=False).delete(f"{acct.api}/vaults/{v['id']}", timeout=60)
-        j.post(f"{acct.api}/vaults/{v['id']}/purge", timeout=60)
+    # 2. A fresh vault on the throwaway account (accept_terms may have opened a
+    #    connector vault; the first sync gets its own).
+    acct = Account(0, a.api, PREFIX)
+    acct.key = key
+    acct.user_id = (
+        acct.s(vault=False).get(f"{acct.api}/me", timeout=30).json()["user"]["id"]
+    )
     acct.client_id = f"{PREFIX}~{a.run_id}"
     register_vault(acct)
     v = (
@@ -230,13 +202,12 @@ def cmd_load(a) -> int:
         .json()["vault"]
     )
     manifest["baseline_notes"] = v["note_count"]  # a seeded welcome note, if any
-    manifest["vault_id"] = acct.vault_id
     (root / f"{device}.manifest.json").write_text(json.dumps(manifest))
     log(out, "vault", vault_id=acct.vault_id, baseline_notes=v["note_count"])
 
-    # 4. The real plugin engine. Its config (live API key) goes on stdin only.
+    # 3. The real plugin engine. Its config (the key) goes on its stdin only.
     cfg = {
-        "token": acct.key,
+        "token": key,
         "userId": acct.user_id,
         "vaultId": acct.vault_id,
         "root": str(root.resolve()),
@@ -246,8 +217,6 @@ def cmd_load(a) -> int:
         "passGapMs": 60_000,
         "apiUrl": acct.api,
     }
-    env = {k: v for k, v in os.environ.items() if k != "STAGING_CLERK_SECRET_KEY"}
-    env.update(ENGRAM_API_URL=acct.api)
     child = spawn_child(
         [
             "bun",
@@ -257,11 +226,10 @@ def cmd_load(a) -> int:
             "-",
         ],
         cfg,
-        env=env,
+        env=None,
         log=out / "first_sync.log",
     )
     rc = child.wait()
-    # The artifact is public: strip any socket token or API key the engine logged.
     clog = out / "first_sync.log"
     clog.write_text(redact(clog.read_text(errors="replace")))
     final = (
@@ -282,9 +250,6 @@ def cmd_load(a) -> int:
     }
     (out / "result.json").write_text(json.dumps(result, indent=2))
     log(out, "done", **result)
-    # Revoke this run's key: the next run mints its own.
-    if acct.key_id:
-        j.delete(f"{acct.api}/api-keys/{acct.key_id}", timeout=30)
     return 0 if rc == 0 else 1
 
 
@@ -299,10 +264,10 @@ def log(out: Path, event: str, **kw) -> None:
 # watch (dev box)
 # ---------------------------------------------------------------------------
 def ssh(
-    cmd: str, timeout: int = 60, stdin: str | None = None
+    cmd: str, timeout: int = 60, stdin: str | None = None, host: str = STAGING_HOST
 ) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", STAGING_HOST, cmd],
+        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host, cmd],
         input=stdin,
         capture_output=True,
         text=True,
@@ -319,6 +284,26 @@ def psql(sql: str, write: bool = False) -> list[list[str]]:
     if r.returncode != 0:
         raise RuntimeError(f"psql failed: {r.stderr.strip()[:300]}")
     return [ln.split("|") for ln in r.stdout.splitlines() if ln and ln != "SET"]
+
+
+def rpc(expr: str, timeout: int = 120) -> str:
+    """Evaluate Elixir on the staging release (e2e/helpers/backend_rpc.py's seam).
+
+    The output can hold a live key: callers parse it and never print it."""
+    r = ssh(
+        f"docker exec -i {STAGING_APP} bin/engram rpc {shlex.quote(expr)}",
+        timeout=timeout,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"rpc failed ({r.returncode}): {r.stderr.strip()[:300]}")
+    return r.stdout
+
+
+def rpc_field(out: str, tag: str) -> list[str]:
+    line = next((ln for ln in out.splitlines() if ln.startswith(f"{tag}|")), None)
+    if line is None:
+        raise RuntimeError(f"rpc gave no {tag} line")
+    return line.split("|")[1:]
 
 
 def gh(*args: str) -> str:
@@ -360,19 +345,72 @@ def check_fix_deployed() -> str:
     return f"{build['version']} ({build['build_sha'][:9]})"
 
 
-def grant_overrides() -> bool:
-    """Idempotent limit grant for the proof account; False until the user row exists."""
+# ---------------------------------------------------------------------------
+# The throwaway account: created, keyed and deleted through the release rpc,
+# so no Clerk secret is involved. external_id is synthetic and never signs in.
+# ---------------------------------------------------------------------------
+def create_user(run_id: str) -> str:
+    """Create + onboard the run's user (terms, Free start, profile); returns its id."""
+    out = rpc(
+        f"""
+        {{:ok, u}} = Engram.Accounts.find_or_create_by_external_id("{PREFIX}-{run_id}", %{{email: "{email_for(run_id)}"}})
+        s = Engram.Onboarding.status(u)
+        m = Engram.Legal.Manifest.read()
+        tv = s.current_tos_version
+        pv = s.current_privacy_version
+        {{:ok, _}} = Engram.Onboarding.accept_terms(u, tv, m["terms_of_service"][tv], pv, m["privacy_policy"][pv], %{{}})
+        {{:ok, _}} = Engram.Onboarding.set_profile(u, %{{uses_obsidian: true, tools: ["claude"]}})
+        IO.puts("uid|#{{u.id}}")
+        """
+    )
+    return rpc_field(out, "uid")[0]
+
+
+def grant_overrides(run_id: str) -> int:
+    """The run user's limit overrides, nobody else's; returns rows written."""
     values = ", ".join(
         f"('{k}', '{{\"v\": {v}}}'::jsonb)" for k, v in OVERRIDES.items()
     )
     rows = psql(
         "INSERT INTO user_limit_overrides (user_id, key, value, reason, set_by) "
-        f"SELECT u.id, k.key, k.value, 'first-sync-proof', 'first-sync-proof' FROM users u "
-        f"CROSS JOIN (VALUES {values}) AS k(key, value) WHERE u.email = '{EMAIL}' "
+        "SELECT u.id, k.key, k.value, 'first-sync-proof', 'first-sync-proof' FROM users u "
+        f"CROSS JOIN (VALUES {values}) AS k(key, value) WHERE u.email = '{email_for(run_id)}' "
         "ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, set_at = NOW() RETURNING 1;",
         write=True,
     )
-    return len(rows) > 0
+    return len(rows)
+
+
+def mint_key(user_id: str) -> tuple[str, str]:
+    """(raw key, key id). The raw key lives only in this process's memory."""
+    raw, key_id = rpc_field(
+        rpc(
+            f"""
+            u = Engram.Accounts.get_user!("{user_id}")
+            {{:ok, raw, k}} = Engram.Accounts.create_api_key(u, "{PREFIX}")
+            IO.puts("key|#{{raw}}|#{{k.id}}")
+            """
+        ),
+        "key",
+    )
+    return raw, key_id
+
+
+def delete_user(user_id: str, key_id: str | None) -> str:
+    """Revoke the key, then hard-delete the user and everything it owns
+    (notes, attachments, Qdrant points, vaults). Idempotent."""
+    out = rpc(
+        f"""
+        case Engram.Accounts.get_user("{user_id}") do
+          nil -> IO.puts("del|gone")
+          u ->
+            {"Engram.Accounts.revoke_api_key(u, " + json.dumps(key_id) + ")" if key_id else ":ok"}
+            IO.puts("del|#{{inspect(Engram.Accounts.Lifecycle.delete_account(u, :user))}}")
+        end
+        """,
+        timeout=900,
+    )
+    return rpc_field(out, "del")[0]
 
 
 def find_vault(run_id: str) -> str | None:
@@ -380,6 +418,72 @@ def find_vault(run_id: str) -> str | None:
         f"select id from vaults where client_id = '{PREFIX}~{run_id}' and deleted_at is null;"
     )
     return rows[0][0] if rows else None
+
+
+# ---------------------------------------------------------------------------
+# The load host: a temp dir with this checkout's e2e/, the plugin and its deps.
+# ---------------------------------------------------------------------------
+def stage_load_host(host: str, plugin_ref: str) -> str:
+    refuse_prod(host)
+    r = ssh("mktemp -d /tmp/fsproof.XXXXXX", host=host)
+    work = r.stdout.strip()
+    if r.returncode != 0 or not work.startswith("/tmp/fsproof."):
+        raise RuntimeError(f"mktemp on {host} failed: {r.stderr.strip()[:200]}")
+    # The working tree's e2e/ (this harness may not be on main yet).
+    tar = subprocess.run(
+        ["tar", "-C", str(REPO), "-c", "--exclude=__pycache__", "e2e"],
+        capture_output=True,
+        check=True,
+    )
+    up = subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", host, f"tar -C {work} -x"],
+        input=tar.stdout,
+        capture_output=True,
+    )
+    if up.returncode != 0:
+        raise RuntimeError(f"copy to {host} failed: {up.stderr.decode()[:200]}")
+    r = ssh(
+        f"cd {work} && git clone -q --depth=1 --branch {shlex.quote(plugin_ref)} {PLUGIN_REPO} plugin"
+        f" && cd plugin && bun install --frozen-lockfile --registry {NPM_MIRROR} >/dev/null",
+        timeout=600,
+        host=host,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"plugin setup on {host} failed: {r.stderr.strip()[-300:]}")
+    return work
+
+
+def start_load(host: str, work: str, key: str, a, run_id: str) -> subprocess.Popen:
+    """`load` on the load host under a 4 GB / 2-core cap, the key on its stdin."""
+    cmd = (
+        f"cd {work} && systemd-run --user --scope --quiet -p MemoryMax=4G -p CPUQuota=200%"
+        f" env ENGRAM_PLUGIN_SRC={work}/plugin python3 e2e/load/first_sync_proof.py load"
+        f" --api {shlex.quote(a.api)} --run-id {run_id} --notes {a.notes}"
+        f" --attachments {a.attachments} --seed {a.seed} --work {work}/work --out {work}/out"
+    )
+    p = subprocess.Popen(
+        ["ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30", host, cmd],
+        stdin=subprocess.PIPE,
+        stdout=open(Path(a.out) / "load_host.log", "w"),
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    p.stdin.write(key + "\n")
+    p.stdin.close()
+    return p
+
+
+def fetch_and_clean_load_host(host: str, work: str, out: Path) -> None:
+    dest = out / "load"
+    dest.mkdir(exist_ok=True)
+    tar = subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", host, f"tar -C {work} -c out"],
+        capture_output=True,
+    )
+    if tar.returncode == 0:
+        subprocess.run(["tar", "-C", str(dest), "-x"], input=tar.stdout)
+    if work.startswith("/tmp/fsproof."):
+        ssh(f"rm -rf {work}", host=host, timeout=300)
 
 
 # One SSH round trip per sample: container state, docker stats, BEAM memory.
@@ -453,168 +557,114 @@ def restart(mode: str) -> dict:
     return {"t": t0, "mode": mode, "rc": r.returncode, "err": r.stderr.strip()[:200]}
 
 
-def finished(gh_run, s: dict, a) -> bool:
-    """The CI load exited (it exits once the server holds the corpus, or gives
-    up), or, watching a run started elsewhere, the server counts are full."""
-    if not gh_run:
-        return s.get("notes", 0) >= a.notes and s.get("attachments", 0) >= a.attachments
-    try:
-        st = gh(
-            "run",
-            "view",
-            str(gh_run),
-            "-R",
-            "engram-app/Engram",
-            "--json",
-            "status",
-            "--jq",
-            ".status",
-        )
-    except TRANSIENT:
-        return False
-    return st == "completed"
+def wait_for_fix(minutes: int) -> str:
+    """Poll every 2 min until staging serves a build with #2308 in it."""
+    end = time.time() + minutes * 60
+    while True:
+        try:
+            return check_fix_deployed()
+        except Refused as e:
+            if time.time() > end:
+                raise
+            print(f"[watch] {e}; polling again in 2 min", flush=True)
+            time.sleep(120)
 
 
 def cmd_watch(a) -> int:
-    refuse_prod(STAGING_HOST, STAGING_APP, STAGING_PG, a.api)
+    refuse_prod(STAGING_HOST, STAGING_APP, STAGING_PG, a.api, a.load_host)
     check_target(a.api, allow_any_host=False)
     if not 0.4 <= a.restart_at <= 0.6:
         raise SystemExit("--restart-at must be within 0.4-0.6")
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    build = check_fix_deployed() if not a.skip_fix_check else "unchecked"
-    run_id = (
-        a.run_id
-        or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + uuid.uuid4().hex[:4]
-    )
+    build = wait_for_fix(a.wait_fix_minutes) if not a.skip_fix_check else "unchecked"
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + uuid.uuid4().hex[:4]
     since = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    gh_run = None
-    if a.dispatch:
-        gh(
-            "workflow",
-            "run",
-            WORKFLOW,
-            "-R",
-            "engram-app/Engram",
-            "--ref",
-            a.ref,
-            "-f",
-            f"run_id={run_id}",
-            "-f",
-            f"notes={a.notes}",
-            "-f",
-            f"attachments={a.attachments}",
-            "-f",
-            f"seed={a.seed}",
-            "-f",
-            f"api={a.api}",
-        )
     print(f"[watch] run_id={run_id} build={build}", flush=True)
 
+    user_id = key_id = work = None
+    load_rc = None
+    restarted = None
     samples = out / "samples.jsonl"
-    vault_id, granted, restarted, done_at = None, False, None, None
-    end = time.time() + a.deadline
-    while time.time() < end:
-        # Control-plane lookups retry on the next tick: SSH, psql and gh all
-        # blip while the container restarts, and losing the watcher mid-proof
-        # loses the evidence.
-        try:
-            if not granted:
-                granted = grant_overrides()
-            if vault_id is None:
-                vault_id = find_vault(run_id)
-            if a.dispatch and gh_run is None:
-                runs = json.loads(
-                    gh(
-                        "run",
-                        "list",
-                        "-R",
-                        "engram-app/Engram",
-                        "--workflow",
-                        WORKFLOW,
-                        "-L",
-                        "20",
-                        "--json",
-                        "databaseId,displayTitle",
-                    )
-                )
-                gh_run = next(
-                    (r["databaseId"] for r in runs if run_id in r["displayTitle"]),
-                    None,
-                )
-            s = sample(vault_id)
-        except TRANSIENT as e:
-            print(f"[watch] transient: {str(e)[:200]}", flush=True)
+    try:
+        user_id = create_user(run_id)
+        if grant_overrides(run_id) != len(OVERRIDES):
+            raise RuntimeError("limit grant did not land")
+        key, key_id = mint_key(user_id)
+        work = stage_load_host(a.load_host, a.plugin_ref)
+        load = start_load(a.load_host, work, key, a, run_id)
+        del key
+        print(f"[watch] load started on {a.load_host}", flush=True)
+
+        vault_id, done_at = None, None
+        end = time.time() + a.deadline
+        while time.time() < end:
+            try:
+                if vault_id is None:
+                    vault_id = find_vault(run_id)
+                s = sample(vault_id)
+            except TRANSIENT as e:  # SSH/psql blip, often our own kill
+                print(f"[watch] transient: {str(e)[:200]}", flush=True)
+                time.sleep(a.interval)
+                continue
+            with open(samples, "a") as f:
+                f.write(json.dumps(s) + "\n")
+            n = s.get("notes")
+            progress = n / a.notes if n is not None else 0.0
+            print(
+                f"[watch] notes={n} att={s.get('attachments')} tail={s.get('tail_rows')} "
+                f"bin={mib(s.get('beam_binary'))} total={mib(s.get('beam_total'))} {s.get('status')}",
+                flush=True,
+            )
+            if restarted is None and progress >= a.restart_at:
+                restarted = restart(a.restart_mode) | {
+                    "progress": round(progress, 3),
+                    "notes": n,
+                }
+                (out / "restart.json").write_text(json.dumps(restarted))
+                print(f"[watch] RESTART at {progress:.1%}: {restarted}", flush=True)
+                if restarted["rc"] != 0:
+                    raise RuntimeError(f"restart failed: {restarted['err']}")
+            if done_at is None and load.poll() is not None:
+                load_rc, done_at = load.returncode, time.time()
+            if (
+                done_at and time.time() - done_at > a.cooldown
+            ):  # a late OOM still counts
+                break
             time.sleep(a.interval)
-            continue
-        with open(samples, "a") as f:
-            f.write(json.dumps(s) + "\n")
-        n = s.get("notes")
-        progress = n / a.notes if n is not None else 0.0
-        print(
-            f"[watch] notes={n} att={s.get('attachments')} tail={s.get('tail_rows')} "
-            f"bin={mib(s.get('beam_binary'))} total={mib(s.get('beam_total'))} {s.get('status')}",
-            flush=True,
+        else:
+            load.terminate()
+            raise RuntimeError("watch deadline passed before the load finished")
+    finally:
+        # Always: evidence first (needs the container), then the throwaway state.
+        until = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ev = ssh(
+            f"docker events --since {since} --until {until} --filter container={STAGING_APP} --format '{{{{json .}}}}'",
+            timeout=60,
         )
-        if restarted is None and progress >= a.restart_at:
-            restarted = restart(a.restart_mode) | {
-                "progress": round(progress, 3),
-                "notes": n,
-            }
-            (out / "restart.json").write_text(json.dumps(restarted))
-            print(f"[watch] RESTART at {progress:.1%}: {restarted}", flush=True)
-        if done_at is None and finished(gh_run, s, a):
-            done_at = time.time()
-        if (
-            done_at and time.time() - done_at > a.cooldown
-        ):  # keep sampling: a late OOM counts
-            break
-        time.sleep(a.interval)
+        (out / "events.jsonl").write_text(ev.stdout)
+        logs = {}
+        for name, pat in LOG_SIGNATURES.items():
+            r = ssh(
+                f"docker logs --since {since} {STAGING_APP} 2>&1 | grep -c -E {shlex.quote(pat)}",
+                timeout=120,
+            )
+            logs[name] = int(r.stdout.strip() or 0)
+        if work:
+            fetch_and_clean_load_host(a.load_host, work, out)
+        if user_id:
+            print(f"[watch] cleanup: {delete_user(user_id, key_id)}", flush=True)
 
-    # Container events and log signatures across the whole window.
-    until = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    ev = ssh(
-        f"docker events --since {since} --until {until} --filter container={STAGING_APP} --format '{{{{json .}}}}'",
-        timeout=60,
-    )
-    (out / "events.jsonl").write_text(ev.stdout)
-    logs = {}
-    for name, pat in LOG_SIGNATURES.items():
-        r = ssh(
-            f"docker logs --since {since} {STAGING_APP} 2>&1 | grep -c -E {shlex.quote(pat)}",
-            timeout=120,
-        )
-        logs[name] = int(r.stdout.strip() or 0)
-
-    load_result = None
-    if gh_run:
-        subprocess.run(
-            [
-                "gh",
-                "run",
-                "download",
-                str(gh_run),
-                "-R",
-                "engram-app/Engram",
-                "-D",
-                str(out / "load"),
-            ],
-            capture_output=True,
-        )
-        rp = (
-            next((out / "load").rglob("result.json"), None)
-            if (out / "load").exists()
-            else None
-        )
-        load_result = json.loads(rp.read_text()) if rp else None
-
+    rp = out / "load" / "out" / "result.json"
+    load_result = json.loads(rp.read_text()) if rp.exists() else None
     summary = summarize(
         a,
         run_id,
         build,
-        gh_run,
-        [json.loads(x) for x in samples.read_text().splitlines()],
+        f"{a.load_host} (exit {load_rc})",
+        [json.loads(x) for x in samples.read_text().splitlines()]
+        if samples.exists()
+        else [],
         restarted,
         [json.loads(x) for x in ev.stdout.splitlines() if x.strip()],
         logs,
@@ -636,7 +686,7 @@ def mib(b) -> str:
     return "-" if b is None else f"{b / 2**20:.0f}MiB"
 
 
-def summarize(a, run_id, build, gh_run, samples, restarted, events, logs, load) -> str:
+def summarize(a, run_id, build, where, samples, restarted, events, logs, load) -> str:
     def peak(key, after=0.0):
         vals = [s[key] for s in samples if key in s and s["t"] >= after]
         return max(vals) if vals else None
@@ -686,12 +736,11 @@ def summarize(a, run_id, build, gh_run, samples, restarted, events, logs, load) 
             else ""
         )
         + ".",
-        "Load: one real plugin engine (e2e/headless Replica, index room wired) running `fullSync`"
-        + (f", CI run {gh_run}" if gh_run else "")
-        + ".",
+        f"Load: one real plugin engine (e2e/headless Replica, index room wired) running `fullSync` on {where}.",
         f"Restart: `{restarted['mode'] if restarted else '-'}` of `{STAGING_APP}` at "
         + (
-            f"{restarted['progress']:.0%} ({restarted['notes']} notes)"
+            f"{datetime.fromtimestamp(restarted['t'], timezone.utc):%Y-%m-%d %H:%M:%SZ}, "
+            f"{restarted['progress']:.0%} of notes ({restarted['notes']})"
             if restarted
             else "never"
         )
@@ -709,6 +758,7 @@ def summarize(a, run_id, build, gh_run, samples, restarted, events, logs, load) 
         f"| Peak index tail bytes | {peak('tail_bytes')} | {peak('tail_bytes', after)} |",
         f"| Final notes / attachments | {last.get('notes')} / {last.get('attachments')} | |",
         f"| Container deaths (ours / unexpected) | {len(dies) - len(unexpected)} / {len(unexpected)} | |",
+        f"| OOM kills | {len(ooms)} | |",
         "",
         "Log signatures over the window: "
         + ", ".join(f"`{k}` {v}" for k, v in logs.items())
@@ -724,6 +774,9 @@ def summarize(a, run_id, build, gh_run, samples, restarted, events, logs, load) 
         ],
         "```",
         "</details>",
+        "",
+        "Choices: attachments are 1-20 KB (the index tail sees one claim per file, not its bytes); "
+        "the plugin's own default push concurrency; the pass does not wait on embeddings or indexing.",
         "",
         "Not covered: staging is one Docker node with no memory limit, so a breach shows as the BEAM cap check "
         "above rather than a kernel OOM kill, and there is no second node for the `:global` room to move to.",
@@ -741,34 +794,26 @@ def main() -> int:
         p.add_argument("--notes", type=int, default=30_000)
         p.add_argument("--attachments", type=int, default=2_000)
         p.add_argument("--seed", type=int, default=2306)
+        p.add_argument("--api", default="http://10.0.20.214:8000/api")
 
     g = sub.add_parser("generate")
     corpus(g)
     g.add_argument("--out", required=True)
 
-    ld = sub.add_parser("load")
+    ld = sub.add_parser("load", help="reads the API key from stdin")
     corpus(ld)
-    ld.add_argument("--api", default="http://10.0.20.214:8000/api")
     ld.add_argument("--run-id", required=True)
-    ld.add_argument("--work", default="fsproof-work")
-    ld.add_argument("--out", default="fsproof-out")
+    ld.add_argument("--work", required=True)
+    ld.add_argument("--out", required=True)
     ld.add_argument(
         "--deadline", type=int, default=3 * 3600, help="seconds for the sync to finish"
     )
 
     w = sub.add_parser("watch")
     corpus(w)
-    w.add_argument(
-        "--api", default="http://10.0.20.214:8000/api", help="passed to the CI load job"
-    )
-    w.add_argument(
-        "--dispatch",
-        action="store_true",
-        help="start the CI load job (else watch --run-id)",
-    )
-    w.add_argument("--ref", default="main", help="git ref the CI job runs")
-    w.add_argument("--run-id")
     w.add_argument("--out", default="fsproof-out")
+    w.add_argument("--load-host", default=LOAD_HOST, help="ssh alias of the load host")
+    w.add_argument("--plugin-ref", default="main")
     w.add_argument("--restart-at", type=float, default=0.5)
     w.add_argument("--restart-mode", choices=["kill", "graceful"], default="kill")
     w.add_argument("--interval", type=int, default=15)
@@ -776,9 +821,10 @@ def main() -> int:
         "--cooldown",
         type=int,
         default=180,
-        help="seconds to keep sampling after completion",
+        help="seconds to keep sampling after the load exits",
     )
     w.add_argument("--deadline", type=int, default=4 * 3600)
+    w.add_argument("--wait-fix-minutes", type=int, default=60)
     w.add_argument(
         "--max-beam-mib",
         type=int,

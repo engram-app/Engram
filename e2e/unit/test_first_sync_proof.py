@@ -45,8 +45,7 @@ def test_corpus_is_deterministic_and_counted(tmp_path):
     assert sum(1 for p in files if p.suffix == ".md") == 30
     sizes = [p.stat().st_size for p in files if p.suffix != ".md"]
     assert (
-        all(50_000 <= s <= 4_000_000 for s in sizes)
-        and sum(sizes) == a["attachment_bytes"]
+        all(1_000 <= s <= 20_000 for s in sizes) and sum(sizes) == a["attachment_bytes"]
     )
 
 
