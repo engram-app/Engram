@@ -972,9 +972,10 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
     # order one room's appends get (see the next test).
     #
     # In APPEND order, not reversed: yrs does not converge every out-of-order
-    # replay of one client's chain (reversed, `b` is lost, with or without
-    # pages, merged or not), so append order is a correctness requirement of
-    # the replay, not a nicety.
+    # replay of one client's chain when the rows are applied one by one
+    # (reversed, `b` is lost, in or out of one doc transaction). Merging the
+    # rows first does converge, but the replay applies row by row, so append
+    # order is a correctness requirement of the replay, not a nicety.
     test "one client's dependent edits converge across pages", ctx do
       Application.put_env(
         :engram,
@@ -1016,6 +1017,124 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
     # millisecond, and following a wall clock that can step back or differ
     # between nodes. So a room mints each id after every row it knows of,
     # including the tail a previous room on a fast-clocked node left behind.
+    # Delta review H1: a fold merged the stored snapshot FIRST, and
+    # `merge_updates` keeps the first input's copy of a struct, so overwritten
+    # and deleted values kept their bytes forever. A room that is always live
+    # never compacted, and the snapshot crept toward the 16 MB cap, after which
+    # every fold fails and the tail is unbounded again.
+    test "repeated overwrites through live folds keep the snapshot near the doc size", ctx do
+      Application.put_env(
+        :engram,
+        CrdtIndexPersistence,
+        Keyword.put(@limits, :fold_tail_bytes, 1)
+      )
+
+      big = String.duplicate("x", 10_000)
+      room = start_index_room(ctx)
+
+      for i <- 1..10 do
+        put_entry(room, "k.md", big <> "#{i}")
+        assert read_entry(room, "k.md")
+        :ok = await_tail_exactly(ctx.user, ctx.vault.id, 0)
+      end
+
+      :ok = stop_room_and_wait(room)
+
+      {:ok, snapshot} = Crypto.decrypt_index_state(tenant_get(ctx.user, ctx.vault.id), ctx.user)
+      {:ok, doc} = CrdtIndexPersistence.load_doc(ctx.user, ctx.vault.id)
+      {:ok, compact} = Yex.encode_state_as_update(doc)
+
+      assert byte_size(snapshot) < 2 * byte_size(compact),
+             "snapshot #{byte_size(snapshot)} B for a #{byte_size(compact)} B doc: " <>
+               "the fold keeps overwritten content"
+    end
+
+    # Delta review M1: every threshold crossing started its own task, so a slow
+    # pool piled up tasks, each holding a connection and an encode of the doc
+    # while it queued on the per-vault lock. One room's live folds now run in
+    # one process, one at a time, later requests coalesced.
+    test "a room's live folds run one at a time in one process", ctx do
+      Application.put_env(
+        :engram,
+        CrdtIndexPersistence,
+        Keyword.put(@limits, :fold_tail_bytes, 1)
+      )
+
+      room = start_index_room(ctx)
+
+      {_, queries} =
+        Engram.QueryRecorder.record(fn ->
+          for i <- 1..15, do: put_entry(room, "f-#{i}.md", "#{i}")
+          assert read_entry(room, "f-15.md")
+          :ok = await_tail_exactly(ctx.user, ctx.vault.id, 0)
+        end)
+
+      folders =
+        for %{sql: "INSERT INTO \"vault_index_states\"" <> _, pid: pid} <- queries,
+            pid != room,
+            uniq: true,
+            do: pid
+
+      assert length(folders) == 1, "#{length(folders)} processes ran this room's folds"
+
+      :ok = stop_room_and_wait(room)
+    end
+
+    # Delta review M2 (pre-existing): `apply_update` answers :ok for an update
+    # whose dependencies are missing; it just goes pending. So when one row of
+    # a client's chain was skipped, every later row counted as applied and was
+    # pruned at the next fold, and the snapshot encode keeps pending structs but
+    # NOT the pending delete set: once the skipped row replayed, a deleted entry
+    # came back.
+    test "rows after a skipped row are never pruned", ctx do
+      doc = Yex.Doc.new()
+      map = Yex.Doc.get_map(doc, CrdtIndexDoc.map_name())
+
+      step = fn change ->
+        {:ok, sv} = Yex.encode_state_vector(doc)
+        change.()
+        {:ok, update} = Yex.encode_state_as_update(doc, sv)
+        update
+      end
+
+      updates = [
+        step.(fn -> Yex.Map.set(map, "a", "a1") end),
+        step.(fn -> Yex.Map.set(map, "b", "b1") end),
+        step.(fn -> Yex.Map.delete(map, "a") end)
+      ]
+
+      [first | _] = ids = for(_ <- updates, do: UUIDv7.generate()) |> Enum.sort()
+      seed_rows(ctx, updates, ids)
+
+      # A transient decrypt failure on the chain's first row.
+      {:ok, row} = Repo.with_tenant(ctx.user.id, fn -> Repo.get(VaultIndexUpdateLog, first) end)
+      <<head::binary-size(byte_size(row.update_ciphertext) - 1), last>> = row.update_ciphertext
+
+      set_ct = fn ct ->
+        {:ok, {1, _}} =
+          Repo.with_tenant(ctx.user.id, fn ->
+            Repo.update_all(from(l in VaultIndexUpdateLog, where: l.id == ^first),
+              set: [update_ciphertext: ct]
+            )
+          end)
+      end
+
+      set_ct.(<<head::binary, Bitwise.bxor(last, 0xFF)>>)
+
+      room = start_index_room(ctx)
+      put_entry(room, "unrelated.md", "u")
+      :ok = stop_room_and_wait(room)
+
+      # The transient clears; the next bind replays the whole chain.
+      set_ct.(row.update_ciphertext)
+      revived = start_index_room(ctx)
+
+      refute read_entry(revived, "a"), "a deleted entry came back after its delete was pruned"
+      assert read_entry(revived, "b") == "b1"
+
+      :ok = stop_room_and_wait(revived)
+    end
+
     test "a room's appends sort after the tail it bound over", ctx do
       ahead = UUIDv7.generate(System.system_time(:millisecond) + 60_000)
       seed_rows(ctx, [claim_update("from-a-fast-clock.md")], [ahead])
