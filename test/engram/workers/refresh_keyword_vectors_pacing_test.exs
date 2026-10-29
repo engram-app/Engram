@@ -181,6 +181,19 @@ defmodule Engram.Workers.RefreshKeywordVectorsPacingTest do
     end
   end
 
+  # The kill switch: queued jobs stop rewriting within one override read
+  # (15 s cache) and come back on their own once it is on again.
+  test "keyword_refresh off snoozes a queued job before any rewrite", ctx do
+    ServiceConfig.put_override(:keyword_refresh, false)
+
+    assert {:snooze, 300} = refresh(ctx)
+    refute_received :rewrite
+
+    ServiceConfig.put_override(:keyword_refresh, true)
+    assert :ok = refresh(ctx)
+    assert_received :rewrite
+  end
+
   test "the rebuild's pace/0 snoozes on disk headroom too", ctx do
     Agent.update(ctx.health, fn _ -> {@green, 0, 80} end)
 
@@ -189,6 +202,8 @@ defmodule Engram.Workers.RefreshKeywordVectorsPacingTest do
   end
 
   test "a user's edit (EmbedNote) is never gated", ctx do
+    ServiceConfig.put_override(:keyword_refresh, false)
+
     Agent.update(ctx.health, fn _ ->
       {put_in(@green, ["update_queue", "length"], 10_000), 1_000_000, 79}
     end)

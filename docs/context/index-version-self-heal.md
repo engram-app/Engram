@@ -1,6 +1,6 @@
 # Index changes heal themselves: version stamps + the reconcile sweep
 
-_Last verified: 2026-10-04_
+_Last verified: 2026-10-29_
 
 **The standard:** a change to how notes are indexed must reach every EXISTING
 note on its own, on SaaS and on every self-host install. A release that needs
@@ -200,3 +200,34 @@ The sweep also stops topping up once `:keyword_refresh_backlog` (default
 reconcile tick queued every keyword-stale note in the fleet at once.
 Concurrency is the `embed` queue's limit (5 per worker node), shared with
 user edits, which run first (keyword jobs are backfill priority).
+
+**Kill switch: `:keyword_refresh` (no deploy).** `INDEX_REBUILD=off` is NOT
+the brake for this sweep. Off drops the keyword target to the pin (2), so
+v5-stale notes stop being queued, but jobs already queued (up to the
+backlog cap) never read the mode and keep rewriting, and off also halts the
+whole v5 pass. Use the runtime override instead, from a release shell on
+any one task (ECS Exec, see the workspace `docs/deployment.md`):
+
+```bash
+aws ecs execute-command --cluster engram-prod --task <task-id> \
+  --container engram --interactive \
+  --command "/app/bin/engram rpc 'Engram.ServiceConfig.override(:keyword_refresh, false, by: \"<you>\") |> IO.inspect()'"
+# resume: the same with Engram.ServiceConfig.clear(:keyword_refresh, by: \"<you>\")
+```
+
+Effect: the write evicts the cached overrides on every node (CacheSync), and
+the 15 s cache TTL bounds a lost eviction, so every node reads it within
+15 s. From then on each queued `RefreshKeywordVectors` job snoozes 300 s at
+perform time before any Qdrant call (a job mid-rewrite finishes its one
+note), and the reconcile sweep queues and stamps nothing. Cleared, the
+snoozed jobs run on their next wake (within 5 min) and the next tick (within
+5 min) tops the backlog up again: no operator backfill. `EmbedNote` (user
+edits) never reads it.
+
+The two knobs are runtime overrides too, same command shape:
+`override(:keyword_refresh_backlog, 0..1_000_000)` (0 also stops the sweep
+queueing, but leaves queued jobs running) and
+`override(:rebuild_max_disk_percent, 1..100)` (also gates the v5 rebuild).
+The gate verdict is cached 30 s per node, so a disk-percent change lands
+within 15 s + 30 s. `Engram.ServiceConfig.list()` shows what is set. Self-host
+leaves all three unset: the defaults (on, 10,000, 75) apply.

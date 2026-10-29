@@ -27,6 +27,14 @@ defmodule Engram.Workers.RefreshKeywordVectors do
   the optimizer vacuums the segment, so an unpaced sweep can fill the disk
   into strict mode's write refusal. A gated job snoozes; no Voyage cost, so
   no token bucket.
+
+  ## Kill switch
+
+  `:keyword_refresh` (runtime override, default true) set to false stops the
+  sweep queueing and makes every queued job snooze 300 s before any
+  Qdrant call. Back on, the snoozed jobs and the next sweep resume with no
+  operator step. A user's edit (`EmbedNote`) never reads it. See
+  `docs/context/index-version-self-heal.md`.
   """
   use Oban.Worker,
     queue: :embed,
@@ -46,6 +54,14 @@ defmodule Engram.Workers.RefreshKeywordVectors do
 
   require Logger
 
+  # Long, so a paused backlog of thousands is a few wakeups a second fleet-wide,
+  # not hundreds; still short enough that "back on" resumes within minutes.
+  @paused_snooze 300
+
+  @doc "False while the `:keyword_refresh` kill switch is off."
+  @spec enabled?() :: boolean()
+  def enabled?, do: Engram.ServiceConfig.get(:keyword_refresh, true) != false
+
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
 
@@ -53,7 +69,8 @@ defmodule Engram.Workers.RefreshKeywordVectors do
   def perform(%Oban.Job{args: args}) do
     :ok = BackgroundPriority.demote()
 
-    with :ok <- Engram.Rebuild.qdrant_pace(),
+    with :ok <- if(enabled?(), do: :ok, else: {:snooze, @paused_snooze}),
+         :ok <- Engram.Rebuild.qdrant_pace(),
          {:ok, note} <- Engram.Notes.fetch_note_for_worker_job(args),
          :ok <- RotationGate.check(note.user_id),
          user = Engram.Accounts.get_user!(note.user_id),

@@ -1359,12 +1359,20 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # prod). Each tick tops the backlog up to the cap and stops; notes it did
   # not reach are not stamped, so a later tick picks them up. ponytail: it
   # halts between id windows, so a tick can overshoot by up to one window.
+  #
+  # `:keyword_refresh` false (a runtime override, `RefreshKeywordVectors.enabled?/0`)
+  # skips the sweep: nothing queued, nothing stamped, so the next tick after it
+  # is back on picks every note up.
   defp sweep_keyword_stale(now, paid, page_size, versions) do
     cap = ServiceConfig.get(:keyword_refresh_backlog, 10_000)
 
-    case cap - Engram.Jobs.pending_count(RefreshKeywordVectors, cap) do
-      room when room > 0 -> sweep_keyword_stale(now, paid, page_size, versions, room)
-      _full -> :ok
+    case RefreshKeywordVectors.enabled?() and
+           cap - Engram.Jobs.pending_count(RefreshKeywordVectors, cap) do
+      room when is_integer(room) and room > 0 ->
+        sweep_keyword_stale(now, paid, page_size, versions, room)
+
+      _off_or_full ->
+        :ok
     end
   end
 

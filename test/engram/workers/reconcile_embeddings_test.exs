@@ -201,6 +201,21 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert Repo.get!(Note, skipped.id, skip_tenant_check: true).embed_retry_after == nil
     end
 
+    # The kill switch: off, the sweep queues nothing and stamps nothing, so
+    # the notes are still eligible the tick after it is turned back on.
+    test "keyword_refresh off stops the keyword sweep; on resumes it" do
+      Engram.ServiceConfig.put_override(:keyword_refresh, false)
+      note = current_note(insert(:user), keyword_version: nil)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert all_enqueued(worker: RefreshKeywordVectors) == []
+      assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_retry_after == nil
+
+      Engram.ServiceConfig.put_override(:keyword_refresh, true)
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert [_] = all_enqueued(worker: RefreshKeywordVectors)
+    end
+
     # Nodes on the previous release share the embed queue mid-deploy, and
     # their ResparseNote re-embedded unmatched notes. The sweep must enqueue a
     # worker name they do not have, so they fail the job instead of billing.
