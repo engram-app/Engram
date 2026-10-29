@@ -859,7 +859,7 @@ defmodule Engram.Observability.EmittersTest do
           %{
             "event_type" => "transaction.completed",
             "data" => %{
-              "custom_data" => %{"user_id" => user.id},
+              "custom_data" => checkout_custom_data(user.id),
               "origin" => "subscription_recurring",
               "currency_code" => "USD",
               "discount_id" => nil,
@@ -890,7 +890,7 @@ defmodule Engram.Observability.EmittersTest do
           %{
             "event_type" => "transaction.completed",
             "data" => %{
-              "custom_data" => %{"user_id" => user.id},
+              "custom_data" => checkout_custom_data(user.id),
               "origin" => "web",
               "currency_code" => "EUR",
               "discount_id" => "dsc_comp",

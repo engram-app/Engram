@@ -976,7 +976,7 @@ defmodule Engram.BillingTest do
             "starts_at" => "2026-05-13T00:00:00Z",
             "ends_at" => "2026-05-20T00:00:00Z"
           },
-          "custom_data" => %{"user_id" => user.id, "affiliate_ref" => "ref_abc"}
+          "custom_data" => checkout_custom_data(user.id, %{"affiliate_ref" => "ref_abc"})
         }
       }
 
@@ -986,7 +986,8 @@ defmodule Engram.BillingTest do
       assert sub.paddle_subscription_id == "sub_paddle_1"
       assert sub.tier == "starter"
       assert sub.status == "trialing"
-      assert sub.custom_data == %{"user_id" => user.id, "affiliate_ref" => "ref_abc"}
+      assert sub.custom_data == event["data"]["custom_data"]
+      assert %{"user_id" => _, "affiliate_ref" => "ref_abc", "sig" => _} = sub.custom_data
       # A new plan can lift the index cap: the backfill starts now.
       assert_enqueued(worker: Engram.Workers.ReconcileEmbeddings)
     end
@@ -1002,7 +1003,7 @@ defmodule Engram.BillingTest do
           "customer_id" => "ctm_retry_1",
           "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
           "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
-          "custom_data" => %{"user_id" => user.id, "affiliate_ref" => "rf_original"}
+          "custom_data" => checkout_custom_data(user.id, %{"affiliate_ref" => "rf_original"})
         }
       }
 
@@ -1011,10 +1012,11 @@ defmodule Engram.BillingTest do
       # Paddle redelivers. The replay arrives with different (or empty)
       # custom_data — e.g. an operator-replayed event from the dashboard.
       retry_event =
-        put_in(first_event, ["data", "custom_data"], %{
-          "user_id" => user.id,
-          "affiliate_ref" => "rf_replay"
-        })
+        put_in(
+          first_event,
+          ["data", "custom_data"],
+          checkout_custom_data(user.id, %{"affiliate_ref" => "rf_replay"})
+        )
 
       assert {:ok, _} = Billing.upsert_from_paddle_event(retry_event)
 
@@ -1035,11 +1037,92 @@ defmodule Engram.BillingTest do
           "customer_id" => "ctm_paddle_2",
           "items" => [%{"price" => %{"id" => "pri_pro_monthly_test"}}],
           "current_billing_period" => %{"ends_at" => "2026-06-13T00:00:00Z"},
-          "custom_data" => %{"user_id" => to_string(user.id)}
+          "custom_data" => checkout_custom_data(to_string(user.id))
         }
       }
 
       assert {:ok, %Subscription{tier: "pro"}} = Billing.upsert_from_paddle_event(event)
+    end
+
+    test "subscription.created with a signed user_id inserts the row" do
+      user = insert(:user)
+      sig = Phoenix.Token.sign(EngramWeb.Endpoint, "paddle_checkout", user.id)
+
+      event = binding_event("sub_bind_ok", %{"user_id" => user.id, "sig" => sig})
+
+      assert {:ok, %Subscription{paddle_subscription_id: "sub_bind_ok"}} =
+               Billing.upsert_from_paddle_event(event)
+    end
+
+    test "subscription.created with an unsigned, tampered or foreign sig is rejected" do
+      user = insert(:user)
+      other = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_bind_existing",
+        status: "canceled",
+        tier: "starter"
+      )
+
+      own_sig = Phoenix.Token.sign(EngramWeb.Endpoint, "paddle_checkout", user.id)
+      other_sig = Phoenix.Token.sign(EngramWeb.Endpoint, "paddle_checkout", other.id)
+      wrong_salt = Phoenix.Token.sign(EngramWeb.Endpoint, "other_purpose", user.id)
+
+      for custom <- [
+            %{"user_id" => user.id},
+            %{"user_id" => user.id, "sig" => own_sig <> "x"},
+            %{"user_id" => user.id, "sig" => other_sig},
+            %{"user_id" => user.id, "sig" => wrong_salt},
+            %{"user_id" => user.id, "sig" => 123}
+          ] do
+        assert {:error, :unverified_user_binding} =
+                 Billing.upsert_from_paddle_event(binding_event("sub_bind_bad", custom))
+      end
+
+      row = Repo.with_tenant!(user.id, fn -> Repo.get_by!(Subscription, user_id: user.id) end)
+      assert row.paddle_subscription_id == "sub_bind_existing"
+      assert row.status == "canceled"
+    end
+
+    test "an event for a stored subscription applies without a sig" do
+      user = insert(:user)
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_bind_known",
+        status: "active"
+      )
+
+      updated =
+        "sub_bind_known"
+        |> binding_event(%{"user_id" => user.id})
+        |> Map.put("event_type", "subscription.updated")
+        |> put_in(["data", "status"], "past_due")
+
+      assert {:ok, %Subscription{status: "past_due"}} = Billing.upsert_from_paddle_event(updated)
+
+      canceled =
+        updated
+        |> Map.put("event_type", "subscription.canceled")
+        |> put_in(["data", "status"], "canceled")
+        |> put_in(["data", "custom_data"], %{})
+
+      assert {:ok, %Subscription{status: "canceled"}} = Billing.upsert_from_paddle_event(canceled)
+    end
+
+    defp binding_event(sub_id, custom_data) do
+      %{
+        "event_type" => "subscription.created",
+        "data" => %{
+          "id" => sub_id,
+          "status" => "active",
+          "customer_id" => "ctm_" <> sub_id,
+          "items" => [%{"price" => %{"id" => "pri_pro_monthly_test"}}],
+          "current_billing_period" => %{"ends_at" => "2026-06-13T00:00:00Z"},
+          "custom_data" => custom_data
+        }
+      }
     end
 
     test "subscription.created without user_id returns :missing_user_id" do
@@ -1095,7 +1178,7 @@ defmodule Engram.BillingTest do
           "customer_id" => "ctm_bucket_1",
           "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
           "current_billing_period" => %{"ends_at" => "2026-07-01T00:00:00Z"},
-          "custom_data" => %{"user_id" => user.id}
+          "custom_data" => checkout_custom_data(user.id)
         }
       }
 
@@ -1944,7 +2027,7 @@ defmodule Engram.BillingTest do
           "customer_id" => "ctm_broadcast_1",
           "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
           "current_billing_period" => %{"ends_at" => "2026-07-01T00:00:00Z"},
-          "custom_data" => %{"user_id" => user.id}
+          "custom_data" => checkout_custom_data(user.id)
         }
       }
 

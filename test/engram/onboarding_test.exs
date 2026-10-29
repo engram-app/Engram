@@ -872,7 +872,7 @@ defmodule Engram.OnboardingTest do
               "starts_at" => "2026-05-13T00:00:00Z",
               "ends_at" => "2026-06-13T00:00:00Z"
             },
-            "custom_data" => %{"user_id" => user.id}
+            "custom_data" => checkout_custom_data(user.id)
           }
         })
 
@@ -1654,7 +1654,7 @@ defmodule Engram.OnboardingTest do
           "starts_at" => "2026-05-13T00:00:00Z",
           "ends_at" => "2026-06-13T00:00:00Z"
         },
-        "custom_data" => %{"user_id" => user.id}
+        "custom_data" => checkout_custom_data(user.id)
       }
     }
   end

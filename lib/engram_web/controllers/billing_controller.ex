@@ -218,8 +218,8 @@ defmodule EngramWeb.BillingController do
 
   @doc """
   Returns the public configuration the frontend needs to open the Paddle.js
-  overlay. The client merges its own affiliate / utm params into
-  `custom_data` before calling `Paddle.Checkout.open()`.
+  overlay. `custom_data` carries the user id and a server signature over it,
+  which the webhook verifies before binding a new subscription to the user.
   """
   def config(conn, _params) do
     user = conn.assigns.current_user
@@ -239,7 +239,7 @@ defmodule EngramWeb.BillingController do
         },
         customer_email: user.email,
         customer_id: Billing.paddle_customer_id(user),
-        custom_data: %{user_id: user.id},
+        custom_data: Engram.Billing.CheckoutBinding.custom_data(user.id),
         vaults_cap: cap_json(Billing.cap(user, :vaults_cap))
       })
     )

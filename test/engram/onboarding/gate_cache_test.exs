@@ -133,7 +133,7 @@ defmodule Engram.Onboarding.GateCacheTest do
             "id" => "sub_gatecache_test",
             "customer_id" => "ctm_gatecache_test",
             "status" => "active",
-            "custom_data" => %{"user_id" => user.id},
+            "custom_data" => checkout_custom_data(user.id),
             "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
             "current_billing_period" => %{"ends_at" => "2026-07-01T00:00:00Z"}
           }

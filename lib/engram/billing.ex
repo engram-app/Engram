@@ -8,6 +8,7 @@ defmodule Engram.Billing do
 
   import Ecto.Query
 
+  alias Engram.Billing.CheckoutBinding
   alias Engram.Billing.EntitlementCache
   alias Engram.Billing.LimitKeys
   alias Engram.Billing.PlanCache
@@ -1276,8 +1277,11 @@ defmodule Engram.Billing do
             end
         end
 
-      :error ->
+      :missing ->
         {:error, :missing_user_id}
+
+      :unverified ->
+        {:error, :unverified_user_binding}
     end
   end
 
@@ -1655,14 +1659,9 @@ defmodule Engram.Billing do
 
   # ── Helpers ────────────────────────────────────────────────────
 
-  defp extract_user_id(%{"custom_data" => %{"user_id" => id}}) when is_binary(id) do
-    case Ecto.UUID.cast(id) do
-      {:ok, uuid} -> {:ok, uuid}
-      :error -> :error
-    end
-  end
-
-  defp extract_user_id(_), do: :error
+  # The owner of a subscription no row holds yet, from the checkout's
+  # server-signed custom_data (see `Engram.Billing.CheckoutBinding`).
+  defp extract_user_id(data), do: CheckoutBinding.verify(data["custom_data"])
 
   @doc """
   Resolve a tier (`:starter` | `:pro`) from a Paddle subscription data
