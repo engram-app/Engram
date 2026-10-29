@@ -38,10 +38,12 @@ defmodule Engram.Notes.CrdtIndexDoc do
   It is wired now. `start_link/1` starts a `CrdtCheckpointTimer` in `mode:
   :index`, which is the timer generalised off `note_id` — it keys on `vault_id`
   and, crucially, **never checkpoints on a tick**. Only the room's own
-  persistence state knows which tail rows failed to replay, so a checkpoint that
-  did not come from `unbind/3` would prune rows it never folded in. The drain is
-  the mechanism instead: observers let go, `auto_exit` fires on the last one,
-  and `terminate/2` checkpoints with the state that has the answer.
+  persistence state knows which tail rows failed to replay, so a checkpoint from
+  outside the room process would prune rows it never folded in. The room folds
+  its own tail (`CrdtIndexPersistence`: on `unbind/3`, and since #2306 once
+  appends or a bind's replay pass the tail limits); the drain does the exiting:
+  observers let go, `auto_exit` fires on the last one, and `terminate/2`
+  checkpoints with the state that has the answer.
 
   This matters more here than for a note room. `auto_exit` bounds a note room
   well, because a note is observed only while it is open. This room is observed

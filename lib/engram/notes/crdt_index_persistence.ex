@@ -39,33 +39,41 @@ defmodule Engram.Notes.CrdtIndexPersistence do
   There is still no rebuild path in `lib/` — do not read "rebuildable" as "a
   rebuild exists".
 
-  ## The tail is bounded ONLY by a graceful room exit
+  ## What bounds the tail (#2306)
 
-  Note rooms bound their tail three ways — `CrdtCheckpointTimer` debounces a
-  flush, `update_v1/4` can checkpoint inline under `CheckpointGate`, and
-  overflow goes to the `crdt_checkpoint` Oban queue. This room has exactly one:
-  `unbind/3`. Nothing folds the tail while the room is alive, deliberately —
-  only the room's persistence state knows which rows failed to replay, so a
-  checkpoint from anywhere else would prune rows it never folded in.
+  Every fold is `checkpoint/5`, run from inside the room process, because only
+  the room's persistence state knows which rows failed to replay
+  (`:unfolded_ids`); a checkpoint from anywhere else would prune rows it never
+  folded in. It runs at three points:
 
-  What bounds it is therefore the room EXITING, and #1152's idle drain is what
-  makes that happen on a timer rather than on the last socket disconnecting
-  (`CrdtIndexDoc` wires it; see there). With the drain off, the tail still grows
-  unbounded for: a room pinned open by a long-lived observer, a crash loop that
-  never reaches `terminate/2`, and every room exit during a DEK rotation (the
-  checkpoint is gated, so it skips the prune too). There is no age sweep, no
-  size cap and no reaper; the `on_delete: :delete_all` FKs only fire when the
-  user or vault is deleted.
+  * `unbind/3`, on a graceful exit (#1152's idle drain makes that happen on a
+    timer; `CrdtIndexDoc` wires it).
+  * `update_v1/4`, once the appends since the last fold pass `fold_tail_rows`
+    or `fold_tail_bytes`.
+  * `bind/3`, right after a replay that itself passed those limits.
 
-  Tolerable because index writes are rename/create/delete rather than
-  keystrokes, so the volume is orders of magnitude below a note tail, and
-  because replay is idempotent.
+  Until #2306 only the first existed. A bulk first sync appends one claim per
+  note, an OOM kill skips `unbind/3`, and every rebind replayed the same
+  ever-growing tail on whichever node held the `:global` name: prod web tasks
+  crash-looped for 22 min on 2026-10-29
+  (`docs/context/web-oom-index-room-tail-replay-2026-10-29.md`). The bind fold
+  means a crash after one good bind cannot replay that tail again.
+
+  The replay itself reads `replay_page_rows` rows per statement, each window in
+  its own short tenant transaction, and applies each page as ONE merged update.
+  The limits live in `limit/1` and are overridable with
+  `config :engram, Engram.Notes.CrdtIndexPersistence, ...`.
+
+  Still unbounded: every fold during a DEK rotation is gated (it skips the
+  prune too), so a long rotation lets the tail grow until the next fold after
+  it.
   """
   @behaviour Yex.Sync.SharedDoc.PersistenceBehaviour
 
-  import Ecto.Query, only: [where: 3, order_by: 3, select: 3]
+  import Ecto.Query, only: [where: 3, select: 3]
 
   alias Engram.Accounts
+  alias Engram.Backfill.IdWindows
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
@@ -88,6 +96,22 @@ defmodule Engram.Notes.CrdtIndexPersistence do
   # counter. Bounded phase atoms only, never vault/user ids.
   @checkpoint_event [:engram, :crdt, :index_checkpoint]
 
+  # #2306. The tail bounds, in one place. A claim encodes to a few hundred
+  # bytes, so 500 rows replay in three 200-row pages (well under 1 MB of
+  # ciphertext) and a 15k-note first sync folds about 30 times, each fold one
+  # encode of the index (~2 MB at 10k notes). The byte bound catches the rarer
+  # large update (a batch claim) that the row count would not.
+  @tail_defaults [fold_tail_rows: 500, fold_tail_bytes: 2_000_000, replay_page_rows: 200]
+
+  defp limit(key) do
+    :engram
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(key, @tail_defaults[key])
+  end
+
+  defp over_threshold?(rows, bytes),
+    do: rows > limit(:fold_tail_rows) or bytes > limit(:fold_tail_bytes)
+
   @impl true
   # #1391. WITHOUT this callback the room was snapshot-only: everything since the
   # last checkpoint died with the process, and since #1151 step 2 made the map
@@ -99,7 +123,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
   # vault and loses MORE than the one update. The snapshot at checkpoint is
   # still taken, so a dropped tail row degrades to exactly the old behaviour
   # rather than to something worse.
-  def update_v1(%{user_id: user_id, vault_id: vault_id} = state, update, _name, _doc) do
+  def update_v1(%{user_id: user_id, vault_id: vault_id} = state, update, _name, doc) do
     case Process.get(:index_replay_echoes, 0) do
       n when n > 0 ->
         # Our own bind replaying. Re-appending it would duplicate the tail.
@@ -107,11 +131,11 @@ defmodule Engram.Notes.CrdtIndexPersistence do
         state
 
       _ ->
-        do_update_v1(state, user_id, vault_id, update)
+        do_update_v1(state, user_id, vault_id, update, doc)
     end
   end
 
-  defp do_update_v1(state, user_id, vault_id, update) do
+  defp do_update_v1(state, user_id, vault_id, update, doc) do
     # Postpone the idle drain (#1152). Signalled for EVERY update, including one
     # whose tail append fails below: activity is about whether the room is in
     # use, not whether the write succeeded, and draining a room a client is
@@ -126,7 +150,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
 
     with {:ok, user} <- fetch_user(user_id),
          :ok <- append_tail(user, vault_id, update) do
-      state
+      grow_tail(state, byte_size(update), doc)
     else
       {:error, reason} ->
         emit_tail(:failed)
@@ -138,6 +162,25 @@ defmodule Engram.Notes.CrdtIndexPersistence do
 
         state
     end
+  end
+
+  # Counts the appends since the last fold, and folds once they pass a limit
+  # (#2306). Rows a replay skipped are not counted: they stay in the tail
+  # whatever we do, and counting them would fold on every append.
+  defp grow_tail(state, bytes, doc) do
+    rows = Map.get(state, :tail_rows, 0) + 1
+    bytes = Map.get(state, :tail_bytes, 0) + bytes
+
+    if over_threshold?(rows, bytes),
+      do: fold_tail(state, doc),
+      else: Map.merge(state, %{tail_rows: rows, tail_bytes: bytes})
+  end
+
+  # A fold that was skipped (rotation) or failed still resets the counters: the
+  # next attempt is one more threshold of appends away, not every append.
+  defp fold_tail(state, doc) do
+    :ok = fold(state, doc)
+    Map.merge(state, %{tail_rows: 0, tail_bytes: 0})
   end
 
   defp fetch_user(user_id) do
@@ -231,24 +274,27 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     # #954 error storm.
     user = Accounts.get_user!(user_id)
 
-    {:ok, {snapshot_echoed?, replay}} =
+    {:ok, snapshot_echoed?} =
       Repo.with_tenant(user_id, fn ->
-        echoed? =
-          case Repo.get(VaultIndexState, vault_id) do
-            nil ->
-              # No snapshot yet: a vault whose index room has never checkpointed.
-              # The doc stays empty, which is the correct starting state.
-              false
+        case Repo.get(VaultIndexState, vault_id) do
+          nil ->
+            # No snapshot yet: a vault whose index room has never checkpointed.
+            # The doc stays empty, which is the correct starting state.
+            false
 
-            %VaultIndexState{} = row ->
-              apply_snapshot(row, user, doc, vault_id)
-          end
-
-        # AFTER the snapshot, always — including when there is none. A vault
-        # that has never checkpointed can still have tail rows, and those are
-        # the only record of its claims (#1391).
-        {echoed?, replay_tail(doc, user, vault_id)}
+          %VaultIndexState{} = row ->
+            apply_snapshot(row, user, doc, vault_id)
+        end
       end)
+
+    # AFTER the snapshot, always — including when there is none. A vault that
+    # has never checkpointed can still have tail rows, and those are the only
+    # record of its claims (#1391). Outside the snapshot's transaction: the
+    # replay opens one short transaction per page (#2306), where one spanning
+    # the whole tail held its connection past DBConnection's 15 s limit in prod.
+    # Each statement already saw its own snapshot under READ COMMITTED, so this
+    # opens no window one transaction closed.
+    replay = replay_tail(doc, user, vault_id)
 
     # y_ex installs the doc update monitor BEFORE bind/3 runs
     # (`doc_server_worker.ex` monitor_update_v1 -> module.init -> bind), so every
@@ -274,11 +320,28 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     # to decrypt today (a DekCache miss, a read racing a rotation) still holds a
     # claim that a later successful replay can recover — unless a checkpoint
     # deleted it in the meantime.
-    Map.put(state, :unfolded_ids, replay.skipped)
+    state =
+      Map.merge(state, %{
+        unfolded_ids: replay.skipped,
+        tail_rows: length(replay.applied),
+        tail_bytes: replay.bytes
+      })
+
+    # #2306: fold a large replay NOW. Left to `unbind/3`, a kill after this
+    # bind (the OOM the replay itself nearly caused) replays it all again on
+    # the next node. The echo credits above are unaffected: a fold never changes
+    # the doc, so it posts no update.
+    if over_threshold?(state.tail_rows, state.tail_bytes),
+      do: fold_tail(state, doc),
+      else: state
   end
 
   @impl true
-  def unbind(%{user_id: user_id, vault_id: vault_id} = state, _doc_name, doc) do
+  def unbind(state, _doc_name, doc), do: fold(state, doc)
+
+  # The one fold every caller goes through: `unbind/3`, a live room past the
+  # tail limits, and a bind that replayed past them. Always returns :ok.
+  defp fold(%{user_id: user_id, vault_id: vault_id} = state, doc) do
     # get_user/1, NOT the bang variant. A deleted user or a vault force-purge is
     # an EXPECTED lifecycle state here — rows go while rooms are still exiting —
     # and raising turned that into a per-room error storm during a purge
@@ -556,44 +619,100 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     end
   end
 
-  # Replays every tail row for this vault, oldest first, and returns the ids
-  # that actually applied. Ordered by (inserted_at, id): two appends can land
-  # inside one clock tick, and the checkpoint prunes by EXACT id, so a tie must
-  # not let replay and prune disagree about which rows were folded in.
+  # Replays every tail row for this vault and returns the ids that actually
+  # applied, the echoes owed and the plaintext bytes applied.
+  #
+  # Paged (#2306): `IdWindows` walks the user's tail one `replay_page_rows`
+  # id window at a time, each in its own short tenant transaction (or inside
+  # the caller's, which `load_doc/2` and `fold_roomless/3` hold), so memory and
+  # connection time are bounded by a page, not by the tail. The old shape, one
+  # `Repo.all` of every row plus two state-vector encodes PER ROW, is what
+  # OOM-killed prod web tasks on 2026-10-29.
+  #
+  # In id order rather than (inserted_at, id). Order is not load-bearing: Yjs
+  # updates are commutative, and the prune is by the exact ids returned here.
+  # Ids are UUIDv7 minted at append, so it is near insertion order anyway.
   #
   # A row that will not decrypt is SKIPPED, not fatal. Yjs updates are
   # commutative and idempotent, so the rest still converge; refusing to bind
   # over one bad row would take the whole vault's index down.
-  # Must be called inside the caller's `Repo.with_tenant` transaction — it
-  # queries a tenant-scoped table.
   @doc false
   @spec replay_tail(Yex.Doc.t(), map(), String.t()) ::
-          %{applied: [Ecto.UUID.t()], skipped: [Ecto.UUID.t()], echoes: non_neg_integer()}
+          %{
+            applied: [Ecto.UUID.t()],
+            skipped: [Ecto.UUID.t()],
+            echoes: non_neg_integer(),
+            bytes: non_neg_integer()
+          }
   def replay_tail(doc, user, vault_id) do
-    VaultIndexUpdateLog
-    |> where([l], l.vault_id == ^vault_id)
-    |> order_by([l], asc: l.inserted_at, asc: l.id)
-    |> Repo.all()
-    |> Enum.reduce(%{applied: [], skipped: [], echoes: 0}, fn row, acc ->
-      case Crypto.decrypt_index_update(row, user) do
-        {:ok, update} ->
+    acc = %{applied: [], skipped: [], echoes: 0, bytes: 0}
+
+    {:ok, acc} =
+      tail_windows(user, acc, fn ids, acc ->
+        rows = Repo.all(where(VaultIndexUpdateLog, [l], l.id in ^ids and l.vault_id == ^vault_id))
+        replay_page(doc, user, vault_id, rows, acc)
+      end)
+
+    %{acc | applied: Enum.reverse(acc.applied)}
+  end
+
+  # The user's tail, one id window per step (a user's tail spans their vaults;
+  # each step filters to one). The window is keyed on the primary key, so a
+  # statement reads at most one page whatever the tail's size.
+  defp tail_windows(user, acc, step) do
+    IdWindows.reduce(
+      {:user, user.id},
+      VaultIndexUpdateLog,
+      acc,
+      fn ids, _ctx, acc -> {:cont, step.(ids, acc)} end,
+      batch_size: limit(:replay_page_rows)
+    )
+  end
+
+  # One page applied as ONE merged update: one transaction in the doc, one
+  # `{:update_v1, ...}` echo and two state-vector encodes per page, where the
+  # old per-row apply paid two encodes per row (the encode is the size of the
+  # doc's client set, which a bulk sync grows by one per claim).
+  #
+  # A page that will not merge or apply falls back to row by row, so one
+  # corrupt row is skipped alone exactly as before.
+  defp replay_page(doc, user, vault_id, rows, acc) do
+    {decrypted, acc} =
+      Enum.reduce(rows, {[], acc}, fn row, {ok, acc} ->
+        case Crypto.decrypt_index_update(row, user) do
+          {:ok, update} ->
+            {[{row.id, update} | ok], acc}
+
+          {:error, reason} ->
+            {ok, skip_row(acc, row.id, user, vault_id, {:undecryptable_row, reason})}
+        end
+      end)
+
+    with [_ | _] <- decrypted,
+         {:ok, merged} <- decrypted |> Enum.map(&elem(&1, 1)) |> Yex.merge_updates(),
+         {:ok, echoed?} <- apply_echoing?(doc, merged) do
+      applied(acc, decrypted, echoed?)
+    else
+      [] ->
+        acc
+
+      _ ->
+        Enum.reduce(Enum.reverse(decrypted), acc, fn {id, update}, acc ->
           case apply_echoing?(doc, update) do
-            {:ok, echoed?} ->
-              %{
-                acc
-                | applied: [row.id | acc.applied],
-                  echoes: acc.echoes + if(echoed?, do: 1, else: 0)
-              }
-
-            _ ->
-              skip_row(acc, row, user, vault_id, :corrupt_row)
+            {:ok, echoed?} -> applied(acc, [{id, update}], echoed?)
+            _ -> skip_row(acc, id, user, vault_id, :corrupt_row)
           end
+        end)
+    end
+  end
 
-        {:error, reason} ->
-          skip_row(acc, row, user, vault_id, {:undecryptable_row, reason})
-      end
-    end)
-    |> then(fn acc -> %{acc | applied: Enum.reverse(acc.applied)} end)
+  defp applied(acc, rows, echoed?) do
+    %{
+      acc
+      | applied: Enum.reduce(rows, acc.applied, fn {id, _}, ids -> [id | ids] end),
+        echoes: acc.echoes + if(echoed?, do: 1, else: 0),
+        bytes: Enum.reduce(rows, acc.bytes, fn {_, update}, n -> n + byte_size(update) end)
+    }
   end
 
   # Whether this apply will actually post an `{:update_v1, ...}` back to us.
@@ -625,7 +744,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
   # — after the transient that caused it has cleared — can still recover the
   # claim. It is also LOGGED, not merely counted: a permanently lost path claim
   # that surfaces only as a Prometheus tick gives an operator no vault to look at.
-  defp skip_row(acc, row, user, vault_id, reason) do
+  defp skip_row(acc, row_id, user, vault_id, reason) do
     phase = if is_tuple(reason), do: elem(reason, 0), else: reason
     emit_tail(phase)
 
@@ -634,16 +753,21 @@ defmodule Engram.Notes.CrdtIndexPersistence do
       Metadata.with_category(:warning, :sync, user_id: user.id, vault_id: vault_id)
     )
 
-    %{acc | skipped: [row.id | acc.skipped]}
+    %{acc | skipped: [row_id | acc.skipped]}
   end
 
+  # Paged like the replay, so a fold over a large tail reads one window per
+  # statement too.
   defp tail_ids(user, vault_id) do
     {:ok, ids} =
-      Repo.with_tenant(user.id, fn ->
-        VaultIndexUpdateLog
-        |> where([l], l.vault_id == ^vault_id)
-        |> select([l], l.id)
-        |> Repo.all()
+      tail_windows(user, [], fn ids, acc ->
+        page =
+          VaultIndexUpdateLog
+          |> where([l], l.id in ^ids and l.vault_id == ^vault_id)
+          |> select([l], l.id)
+          |> Repo.all()
+
+        page ++ acc
       end)
 
     ids

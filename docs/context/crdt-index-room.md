@@ -1,6 +1,6 @@
 # The per-vault CRDT index room: shape, wire, residency, projection
 
-_Last verified: 2026-10-23_
+_Last verified: 2026-10-28_
 
 **TL;DR:** `{:global, {:crdt_index, vault_id}}`, one `Y.Map` named `filemeta_v0`
 (`path -> %{note_id, type, hash}`), riding the existing per-vault `crdt:` channel as
@@ -128,9 +128,15 @@ What actually bounds it today:
 
 `CrdtIndexDoc.start_link/1` starts a `CrdtCheckpointTimer` in `mode: :index`: keyed on
 `vault_id`, LRU-tracked, and it **never checkpoints on a tick**. Only the room's own persistence
-state knows which tail rows failed to replay, so a checkpoint not driven by `unbind/3` would prune
-rows it never folded in. The drain does the exiting: observers let go, `auto_exit` fires,
-`terminate/2` checkpoints.
+state knows which tail rows failed to replay, so a checkpoint from outside the room process would
+prune rows it never folded in. The room folds its own tail through one function
+(`CrdtIndexPersistence.fold/2`): on `unbind/3`, and since #2306 also from `update_v1/4` once the
+appends since the last fold pass `fold_tail_rows` (500) or `fold_tail_bytes` (2 MB), and right
+after a `bind/3` whose replay passed them. Replay reads the tail one `replay_page_rows` (200) id
+window per statement (`Engram.Backfill.IdWindows`) and applies each page as one merged update.
+Before #2306 only `unbind/3` folded, so an OOM kill during a bulk first sync left a tail that every
+rebind replayed again (`web-oom-index-room-tail-replay-2026-10-29.md`). The drain does the exiting:
+observers let go, `auto_exit` fires, `terminate/2` checkpoints.
 
 The drain is ON unconditionally, with no off switch: this room is observed while ANY socket on the
 vault is connected, so without it residency is session-length (#1149 measured 7.91 MB per 10k-note
