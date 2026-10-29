@@ -946,6 +946,14 @@
           "path": {
             "description": "Where the note landed; the server picks the folder",
             "type": "string"
+          },
+          "search_note": {
+            "description": "When search will see this change; use get_notes until then",
+            "type": "string"
+          },
+          "search_ready_in_seconds": {
+            "description": "Seconds after this write before search_notes indexes it",
+            "type": "integer"
           }
         },
         "required": [
@@ -995,6 +1003,14 @@
         "properties": {
           "path": {
             "type": "string"
+          },
+          "search_note": {
+            "description": "When search will see this change; use get_notes until then",
+            "type": "string"
+          },
+          "search_ready_in_seconds": {
+            "description": "Seconds after this write before search_notes indexes it",
+            "type": "integer"
           }
         },
         "required": [
@@ -1053,6 +1069,14 @@
           },
           "path": {
             "type": "string"
+          },
+          "search_note": {
+            "description": "When search will see this change; use get_notes until then",
+            "type": "string"
+          },
+          "search_ready_in_seconds": {
+            "description": "Seconds after this write before search_notes indexes it",
+            "type": "integer"
           }
         },
         "required": [
@@ -1163,6 +1187,14 @@
               "integer",
               "null"
             ]
+          },
+          "search_note": {
+            "description": "When search will see this change; use get_notes until then",
+            "type": "string"
+          },
+          "search_ready_in_seconds": {
+            "description": "Seconds after this write before search_notes indexes it",
+            "type": "integer"
           }
         },
         "required": [

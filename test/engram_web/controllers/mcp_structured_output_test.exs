@@ -190,6 +190,47 @@ defmodule EngramWeb.McpStructuredOutputTest do
     end
   end
 
+  # #2294 follow-up: clients that read only `structuredContent` (staging's MCP
+  # client, likely ChatGPT) never saw the "searchable in a few seconds" line,
+  # which lived in the text part alone.
+  describe "write tools say when search will see the change" do
+    setup %{user: user, vault: vault} do
+      {:ok, _} =
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{"path" => "w.md", "content" => "## Log\nold line\n"},
+          actor: "api"
+        )
+
+      :ok
+    end
+
+    for {tool, args} <- [
+          {"create_note", %{"title" => "fresh", "suggested_folder" => "Inbox", "content" => "x"}},
+          {"write_note", %{"path" => "w2.md", "content" => "x"}},
+          {"append_to_note", %{"path" => "w.md", "text" => "more"}},
+          {"edit_note",
+           %{"path" => "w.md", "mode" => "replace_text", "find" => "old", "replace" => "new"}},
+          {"patch_note", %{"path" => "w.md", "find" => "old", "replace" => "new"}},
+          {"update_section", %{"path" => "w.md", "heading" => "Log", "content" => "fresh"}}
+        ] do
+      test "#{tool} carries the search delay in structuredContent", %{user: user, vault: vault} do
+        assert {:ok, _text, structured} =
+                 Handlers.handle(unquote(tool), user, vault, unquote(Macro.escape(args)))
+
+        assert structured["search_ready_in_seconds"] ==
+                 Engram.Workers.EmbedNote.agent_settle_seconds()
+
+        assert structured["search_note"] == Handlers.index_delay_hint()
+
+        {:ok, tool_def} = Tools.get(unquote(tool))
+        root = JSV.build!(tool_def.outputSchema)
+        assert {:ok, _} = JSV.validate(structured, root)
+      end
+    end
+  end
+
   defp assert_structured(result, name) do
     assert is_map(result["structuredContent"]),
            "#{name} advertises an outputSchema but returned no structuredContent"

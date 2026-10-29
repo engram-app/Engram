@@ -1830,6 +1830,15 @@ defmodule Engram.MCP.Handlers do
       "use get_notes to read it until then."
   end
 
+  # The same hint for clients that read only `structuredContent`; declared as
+  # `Tools` `@index_delay_properties` on every tool that replies through here.
+  defp index_delay_fields do
+    %{
+      "search_ready_in_seconds" => Engram.Workers.EmbedNote.agent_settle_seconds(),
+      "search_note" => index_delay_hint()
+    }
+  end
+
   # Every failure here used to come back as `{:ok, apologetic_sentence}` — a
   # write that did not happen, reported as one that did. A model reading only
   # `isError` had no way to tell a landed write from a version conflict, so it
@@ -1838,7 +1847,8 @@ defmodule Engram.MCP.Handlers do
   defp upsert_reply(result, msgs, structured) do
     case result do
       {:ok, _note} ->
-        {:ok, msgs[:ok] <> "\n" <> index_delay_hint(), structured}
+        {:ok, msgs[:ok] <> "\n" <> index_delay_hint(),
+         Map.merge(structured, index_delay_fields())}
 
       {:error, :version_conflict, _note} ->
         ToolError.error(:version_conflict, msgs[:conflict])

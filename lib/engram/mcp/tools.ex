@@ -71,6 +71,20 @@ defmodule Engram.MCP.Tools do
     }
   }
 
+  # Every write tool that replies through `Handlers.upsert_reply/3` returns
+  # these (#2294): search lags a write by a few seconds, and an agent that
+  # searches straight away should read the note with get_notes instead.
+  @index_delay_properties %{
+    "search_ready_in_seconds" => %{
+      "type" => "integer",
+      "description" => "Seconds after this write before search_notes indexes it"
+    },
+    "search_note" => %{
+      "type" => "string",
+      "description" => "When search will see this change; use get_notes until then"
+    }
+  }
+
   # MCP tool annotations, keyed by tool name. The Claude and ChatGPT app
   # directories reject a server without them, and clients use `readOnlyHint` to
   # skip the confirmation prompt. `destructive` = overwrites or removes content
@@ -1019,12 +1033,14 @@ defmodule Engram.MCP.Tools do
       },
       outputSchema: %{
         "type" => "object",
-        "properties" => %{
-          "path" => %{
-            "type" => "string",
-            "description" => "Where the note landed; the server picks the folder"
+        "properties" =>
+          %{
+            "path" => %{
+              "type" => "string",
+              "description" => "Where the note landed; the server picks the folder"
+            }
           }
-        },
+          |> Map.merge(@index_delay_properties),
         "required" => ["path"]
       },
       handler: &Handlers.handle("create_note", &1, &2, &3)
@@ -1063,7 +1079,7 @@ defmodule Engram.MCP.Tools do
       },
       outputSchema: %{
         "type" => "object",
-        "properties" => %{"path" => %{"type" => "string"}},
+        "properties" => %{"path" => %{"type" => "string"}} |> Map.merge(@index_delay_properties),
         "required" => ["path"]
       },
       handler: &Handlers.handle("write_note", &1, &2, &3)
@@ -1096,13 +1112,15 @@ defmodule Engram.MCP.Tools do
       },
       outputSchema: %{
         "type" => "object",
-        "properties" => %{
-          "path" => %{"type" => "string"},
-          "created" => %{
-            "type" => "boolean",
-            "description" => "true when the note did not exist and was created"
+        "properties" =>
+          %{
+            "path" => %{"type" => "string"},
+            "created" => %{
+              "type" => "boolean",
+              "description" => "true when the note did not exist and was created"
+            }
           }
-        },
+          |> Map.merge(@index_delay_properties),
         "required" => ["path", "created"]
       },
       handler: &Handlers.handle("append_to_note", &1, &2, &3)
@@ -1180,19 +1198,21 @@ defmodule Engram.MCP.Tools do
       },
       outputSchema: %{
         "type" => "object",
-        "properties" => %{
-          "path" => %{"type" => "string"},
-          "mode" => %{"type" => "string"},
-          "replacements" => %{
-            "type" => ["integer", "null"],
-            "description" => "replace_text: occurrences replaced; null for the section modes"
-          },
-          "heading" => %{
-            "type" => ["string", "null"],
-            "description" =>
-              "replace_section and insert_section: the heading edited; null for replace_text"
+        "properties" =>
+          %{
+            "path" => %{"type" => "string"},
+            "mode" => %{"type" => "string"},
+            "replacements" => %{
+              "type" => ["integer", "null"],
+              "description" => "replace_text: occurrences replaced; null for the section modes"
+            },
+            "heading" => %{
+              "type" => ["string", "null"],
+              "description" =>
+                "replace_section and insert_section: the heading edited; null for replace_text"
+            }
           }
-        },
+          |> Map.merge(@index_delay_properties),
         "required" => ["path", "mode"]
       },
       # Undocumented back-compat aliases for find/replace (Handlers.run_edit
@@ -1229,10 +1249,12 @@ defmodule Engram.MCP.Tools do
       },
       outputSchema: %{
         "type" => "object",
-        "properties" => %{
-          "path" => %{"type" => "string"},
-          "replacements" => %{"type" => "integer", "description" => "Occurrences replaced"}
-        },
+        "properties" =>
+          %{
+            "path" => %{"type" => "string"},
+            "replacements" => %{"type" => "integer", "description" => "Occurrences replaced"}
+          }
+          |> Map.merge(@index_delay_properties),
         "required" => ["path", "replacements"]
       },
       handler: &Handlers.handle("patch_note", &1, &2, &3)
@@ -1271,10 +1293,12 @@ defmodule Engram.MCP.Tools do
       },
       outputSchema: %{
         "type" => "object",
-        "properties" => %{
-          "path" => %{"type" => "string"},
-          "heading" => %{"type" => "string"}
-        },
+        "properties" =>
+          %{
+            "path" => %{"type" => "string"},
+            "heading" => %{"type" => "string"}
+          }
+          |> Map.merge(@index_delay_properties),
         "required" => ["path", "heading"]
       },
       handler: &Handlers.handle("update_section", &1, &2, &3)
