@@ -225,6 +225,8 @@ export class Replica {
 	private readonly app: any;
 	// biome-ignore lint/suspicious/noExplicitAny: cross-repo dynamic types.
 	private readonly channel: any;
+	// biome-ignore lint/suspicious/noExplicitAny: cross-repo dynamic types.
+	private readonly engine: any;
 	private readonly signal: CatchupSignal;
 
 	private constructor(args: {
@@ -234,12 +236,15 @@ export class Replica {
 		app: any;
 		// biome-ignore lint/suspicious/noExplicitAny: cross-repo dynamic types.
 		channel: any;
+		// biome-ignore lint/suspicious/noExplicitAny: cross-repo dynamic types.
+		engine: any;
 		signal: CatchupSignal;
 	}) {
 		this.id = args.id;
 		this.vaultDir = args.vaultDir;
 		this.app = args.app;
 		this.channel = args.channel;
+		this.engine = args.engine;
 		this.signal = args.signal;
 	}
 
@@ -251,8 +256,17 @@ export class Replica {
 		return this.signal.waitCatchup(sinceCount, deadlineMs, this.id);
 	}
 
-	static async boot(session: Session, id: string, rootDir: string): Promise<Replica> {
+	/** `indexRoom: true` wires the per-vault index room (`filemeta_v0`) the way
+	 *  main.ts does, so path->id claims ride `crdt_index_msg` like a real plugin.
+	 *  Off by default: the GREEN gate scenarios were burned in without it. */
+	static async boot(
+		session: Session,
+		id: string,
+		rootDir: string,
+		opts: { indexRoom?: boolean } = {},
+	): Promise<Replica> {
 		const { EngramApi } = await imp("src/api");
+		const { IndexRoom } = await imp("src/crdt/index-room");
 		const { NoteChannel } = await imp("src/channel");
 		const { makeCrdtOpSend } = await imp("src/crdt-op-dispatch");
 		const { CrdtOpQueue } = await imp("src/crdt-op-queue");
@@ -266,7 +280,13 @@ export class Replica {
 
 		const signal = new CatchupSignal();
 		const vaultDir = path.join(rootDir, id);
-		const noteIdMap = new NoteIdMap();
+		// main.ts:325 / 291: the room's send goes through whatever channel is
+		// current (the forward-ref below), and the id map is a view of its store.
+		let indexChannel: { sendIndexCrdt(b64: string): boolean } | null = null;
+		const indexRoom = opts.indexRoom
+			? new IndexRoom({ send: (b64: string) => indexChannel?.sendIndexCrdt(b64) ?? false })
+			: null;
+		const noteIdMap = new NoteIdMap(indexRoom?.store);
 
 		// biome-ignore lint/suspicious/noExplicitAny: engine is dynamically typed here.
 		let engine: any;
@@ -359,6 +379,14 @@ export class Replica {
 			id, // deviceId -> WS device_id param (ctor: baseUrl, apiKey, userId, vaultId, deviceId)
 		);
 		noteStream = channel;
+		if (indexRoom) {
+			indexChannel = channel; // main.ts:2839
+			// main.ts:3052-3079: inbound route, and re-offer a rate-limited claim.
+			channel.onIndexMessage = (b64: string) => indexRoom.receive(b64);
+			channel.onIndexFrameRejected = (b64: string, reason: string) => {
+				if (reason === "rate_limited") indexRoom.requeue(b64);
+			};
+		}
 
 		channel.onEvent = (event: unknown) => void engine.handleStreamEvent(event); // main.ts:1710-1712
 
@@ -371,6 +399,8 @@ export class Replica {
 			// rather than being written to a dead socket. goOffline() only drops the
 			// channel, so without this the registry still believes it can send.
 			if (!connected) manager.setConnected(false);
+			// main.ts:2791: without this a rejoin never re-handshakes the index doc.
+			if (!connected) indexRoom?.setConnected(false);
 		};
 
 		// Genesis notes ride this per-file loop now. The engine's batch-create
@@ -410,6 +440,7 @@ export class Replica {
 		// deaf-note-race fix. onCrdtTopicJoined runs the reconnect convergence.
 		channel.onCrdtJoined = () => {
 			crdtEverJoined = true;
+			indexRoom?.connect(); // main.ts:3103, before the note providers
 			engine.setCrdtManager(manager);
 			// Provider model: the crdt: topic is joined, so frames can go out. Without
 			// this the registry stays `connected: false`, and since broadcast() is
@@ -449,7 +480,13 @@ export class Replica {
 		engine.setReady(); // main.ts (gate opens)
 		void channel.connect(); // main.ts:2013
 
-		return new Replica({ id, vaultDir, app, channel, signal });
+		return new Replica({ id, vaultDir, app, channel, engine, signal });
+	}
+
+	/** The plugin's own startup/"smart merge" sync: pull, then push every local
+	 *  file the server lacks (notes via crdt_create, attachments via REST). */
+	fullSync(): Promise<{ pulled: number; pushed: number }> {
+		return this.engine.fullSync();
 	}
 
 	// --- ops ---

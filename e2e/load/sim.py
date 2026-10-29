@@ -181,12 +181,15 @@ def special_notes(acct: int) -> dict[str, str]:
     return {}
 
 
+# A valid 1x1 PNG; attachment bodies are this plus seeded noise.
+PNG_HEAD = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
+
+
 def attachment_bytes(acct: int, k: int) -> bytes:
     rng = random.Random(f"att:{acct}:{k}")
-    png_head = base64.b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-    )
-    return png_head + bytes(
+    return PNG_HEAD + bytes(
         rng.getrandbits(8) for _ in range(rng.randint(20_000, 200_000))
     )
 
@@ -317,6 +320,18 @@ def legal_manifest() -> dict:
     return json.loads((E2E.parent / "priv/legal/legal-manifest.json").read_text())
 
 
+def register_vault(acct: Account) -> None:
+    """Register (or re-attach) the vault named by `acct.client_id`; sets `acct.vault_id`."""
+    r = requests.post(
+        f"{acct.api}/vaults/register",
+        json={"name": acct.client_id, "client_id": acct.client_id},
+        headers={"Authorization": f"Bearer {acct.key}"},
+        timeout=30,
+    )
+    r.raise_for_status()
+    acct.vault_id = r.json().get("id") or r.json().get("vault", {}).get("id")
+
+
 def provision(acct: Account, clerk: ClerkClient, run_id: str) -> None:
     acct.clerk_id = clerk.find_user_by_email(acct.email) or clerk.create_user(
         acct.email, uuid.uuid4().hex + "Aa1!"
@@ -362,14 +377,7 @@ def provision(acct: Account, clerk: ClerkClient, run_id: str) -> None:
     if vaults:
         acct.vault_id = vaults[0]["id"]
     else:
-        r = requests.post(
-            f"{acct.api}/vaults/register",
-            json={"name": acct.client_id, "client_id": acct.client_id},
-            headers={"Authorization": f"Bearer {acct.key}"},
-            timeout=30,
-        )
-        r.raise_for_status()
-        acct.vault_id = r.json().get("id") or r.json().get("vault", {}).get("id")
+        register_vault(acct)
     acct.user_id = (
         acct.s(vault=False).get(f"{acct.api}/me", timeout=30).json()["user"]["id"]
     )
@@ -903,13 +911,7 @@ def purge_cycle(
         )
         # Fresh vault for the rest of the run and the next one.
         acct.client_id = f"{acct.client_id.split('~')[0]}~{uuid.uuid4().hex[:6]}"
-        r = requests.post(
-            f"{acct.api}/vaults/register",
-            json={"name": acct.client_id, "client_id": acct.client_id},
-            headers={"Authorization": f"Bearer {acct.key}"},
-            timeout=30,
-        )
-        acct.vault_id = r.json().get("id") or r.json().get("vault", {}).get("id")
+        register_vault(acct)
         seed(acct, rec, guard)
     finally:
         acct.paused.clear()
