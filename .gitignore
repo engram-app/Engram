@@ -44,6 +44,8 @@ priv/static/app/
 
 .env*
 !.env.example
+!.env.local.example
+!.env.local-selfhost.example
 frontend/.vite/
 .worktrees/
 
