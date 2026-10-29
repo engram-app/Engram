@@ -760,7 +760,10 @@ if config_env() != :test do
     key_provider: key_provider_module,
     # Dev falls back to a public dev-only key; prod refuses that key.
     encryption_master_key:
-      Engram.RuntimeConfig.encryption_master_key(&System.get_env/1, config_env()),
+      Engram.RuntimeConfig.encryption_master_key(
+        System.get_env("ENCRYPTION_MASTER_KEY"),
+        config_env()
+      ),
     encryption_master_key_previous: System.get_env("ENCRYPTION_MASTER_KEY_PREVIOUS"),
     encryption_master_key_version:
       String.to_integer(System.get_env("ENCRYPTION_MASTER_KEY_VERSION", "1")),

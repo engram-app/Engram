@@ -54,8 +54,7 @@ defmodule Engram.DevRuntimeDefaultsTest do
   end
 
   test "prod and test never fall back to the dev key" do
-    getenv = fn _ -> nil end
-    assert RuntimeConfig.encryption_master_key(getenv, :prod) == nil
-    assert RuntimeConfig.encryption_master_key(getenv, :test) == nil
+    assert RuntimeConfig.encryption_master_key(nil, :prod) == nil
+    assert RuntimeConfig.encryption_master_key(nil, :test) == nil
   end
 end

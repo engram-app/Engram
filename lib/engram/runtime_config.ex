@@ -43,13 +43,13 @@ defmodule Engram.RuntimeConfig do
   def dev_encryption_master_key, do: @dev_encryption_master_key
 
   @doc """
-  `ENCRYPTION_MASTER_KEY` for `config_env`. Unset or empty in `:dev` falls
+  The `ENCRYPTION_MASTER_KEY` value to use in `config_env`. Unset or empty in `:dev` falls
   back to the public dev key, so local dev needs no env file. `:prod` raises
   if it is given that dev key: it is in git, so it protects nothing.
   """
-  @spec encryption_master_key((String.t() -> String.t() | nil), atom()) :: String.t() | nil
-  def encryption_master_key(getenv, config_env) do
-    case {getenv.("ENCRYPTION_MASTER_KEY"), config_env} do
+  @spec encryption_master_key(String.t() | nil, atom()) :: String.t() | nil
+  def encryption_master_key(env_value, config_env) do
+    case {env_value, config_env} do
       {key, :dev} when key in [nil, ""] ->
         @dev_encryption_master_key
 
