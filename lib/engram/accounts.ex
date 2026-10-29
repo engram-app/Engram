@@ -156,38 +156,46 @@ defmodule Engram.Accounts do
             {:error, :external_id_conflict}
 
           nil ->
-            %User{}
-            |> Ecto.Changeset.change(%{
-              external_id: external_id,
-              email: email,
-              normalized_email: EmailNormalizer.normalize(email)
-            })
-            |> Ecto.Changeset.unique_constraint(:email, name: :users_email_lower_index)
-            |> Ecto.Changeset.unique_constraint(:external_id, name: :users_clerk_id_index)
-            |> Ecto.Changeset.unique_constraint(:normalized_email,
-              name: :users_normalized_email_index
-            )
-            |> Repo.insert(skip_tenant_check: true)
-            |> case do
-              {:ok, user} ->
-                {:ok, user}
-
-              {:error, %Ecto.Changeset{errors: [{field, _}]}}
-              when field in [:email, :external_id] and retries > 0 ->
-                # Concurrent request won the insert — retry finds the winner
-                find_or_create_by_external_id(external_id, %{email: email}, retries - 1)
-
-              {:error, %Ecto.Changeset{}} ->
-                require Logger
-
-                Logger.warning(
-                  "Clerk account conflict: email or an alias of it belongs to another user",
-                  Metadata.with_category(:warning, :auth, clerk_user_id: external_id)
-                )
-
-                {:error, :account_conflict}
-            end
+            insert_new_user(external_id, email, retries)
         end
+    end
+  end
+
+  # Public only so tests can drive the insert after another request already
+  # created the row: the race window between the lookups above and this insert
+  # cannot be interleaved deterministically through the public function.
+  @doc false
+  def insert_new_user(external_id, email, retries) do
+    %User{}
+    |> Ecto.Changeset.change(%{
+      external_id: external_id,
+      email: email,
+      normalized_email: EmailNormalizer.normalize(email)
+    })
+    |> Ecto.Changeset.unique_constraint(:email, name: :users_email_lower_index)
+    |> Ecto.Changeset.unique_constraint(:external_id, name: :users_clerk_id_index)
+    |> Ecto.Changeset.unique_constraint(:normalized_email, name: :users_normalized_email_index)
+    |> Repo.insert(skip_tenant_check: true)
+    |> case do
+      {:ok, user} ->
+        {:ok, user}
+
+      # Any unique violation may be a concurrent insert of this same user (the
+      # webhook vs the first request) winning, and Postgres reports whichever
+      # index it checks first. Re-read by external_id: a violation still there
+      # on the second pass is a real conflict.
+      {:error, %Ecto.Changeset{}} when retries > 0 ->
+        find_or_create_by_external_id(external_id, %{email: email}, retries - 1)
+
+      {:error, %Ecto.Changeset{}} ->
+        require Logger
+
+        Logger.warning(
+          "Clerk account conflict: email or an alias of it belongs to another user",
+          Metadata.with_category(:warning, :auth, clerk_user_id: external_id)
+        )
+
+        {:error, :account_conflict}
     end
   end
 
