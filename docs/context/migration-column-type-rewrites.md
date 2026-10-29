@@ -73,7 +73,7 @@ execute "ALTER TABLE t ALTER COLUMN c SET DEFAULT ARRAY[]::text[]"
 `changing-column-type` is deliberately left enabled in `.squawk.toml` and fires
 on **every** such ALTER, coercible or not. There is no per-statement ignore, so
 the only escape is the file-level `# squawk-ignore-file` marker that
-`priv/repo/lint_migrations.sh` greps for (documented in `AGENTS.md` alongside
+`priv/repo/lint_migrations.sh` greps for (documented in `docs/context/migrations-playbook.md` alongside
 `safety_assured:`).
 
 Using it obliges you to have done the relfilenode measurement and to write the
@@ -108,6 +108,6 @@ the log rather than stopping at the test summary.
 ## References
 
 - Migration: `priv/repo/migrations/20260730180000_widen_oauth_text_columns_expand.exs`
-- `AGENTS.md` → "The `# safety_assured:` escape"
+- `docs/context/migrations-playbook.md` → "The `# safety_assured:` escape"
 - `priv/repo/lint_migrations.sh`, `.squawk.toml`
 - PR #1147 (Windsurf `state` overflow, which prompted the widening)

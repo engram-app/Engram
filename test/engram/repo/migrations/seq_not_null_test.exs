@@ -4,8 +4,8 @@ defmodule Engram.Repo.Migrations.SeqNotNullTest do
   filters `not is_nil(n.seq)`), so a forgotten `put_change(:seq, ...)` in a
   future write path would mean notes that never sync, with no error anywhere.
   The DB must enforce the invariant: validated NOT NULL constraints on
-  notes.seq and attachments.seq (PG18 named-constraint pattern, see AGENTS.md
-  "PG18-era cheap patterns").
+  notes.seq and attachments.seq (PG18 named-constraint pattern, see
+  docs/context/migrations-playbook.md "PG18-era cheap patterns").
   """
   use Engram.DataCase, async: true
 

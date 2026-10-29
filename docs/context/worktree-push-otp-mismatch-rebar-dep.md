@@ -97,4 +97,4 @@ trees before concluding the blast radius was worktree-only.
 - `.tool-versions` (erlang 27.3.4.14 / elixir 1.17.3-otp-27)
 - Sibling worktree/hardlink failure with a different root cause (missing
   yecc/leex-generated beams) → `docs/context/worktree-deps-artifact-staleness.md`
-- `AGENTS.md` → "Quality Tooling" (pre-push hook stages), "Testing" (pipe-to-tail rule)
+- `docs/context/testing-strategy.md` → "Quality tooling" (pre-push hook), "Local gate loop before pushing" (pipe-to-tail rule)

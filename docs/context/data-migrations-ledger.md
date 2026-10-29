@@ -7,7 +7,7 @@ _Last verified: 2026-10-06_
 A data migration that must reach existing rows is an `Engram.DataMigration`
 module registered in `Engram.Workers.DataMigrationsRunner` `@migrations`. It is
 never an operator command and never a one-off rpc (see "Upgrades require zero
-operator action" in `AGENTS.md`). The runner runs at "boot" (Oban Cron
+operator action" in `docs/context/migrations-playbook.md`). The runner runs at "boot" (Oban Cron
 `@reboot`) and hourly (minute 33), on the `:maintenance` queue. Oban Cron
 schedules only on the leader, so "boot" means when a node takes Cron
 leadership: on a single node, every boot; on a multi-node fleet, a node that
