@@ -87,8 +87,6 @@ export default {
 	"Loading...": "Завантаження…",
 	"An account with this email already exists":
 		"Обліковий запис з цією електронною адресою вже існує",
-	"We couldn’t create a new account because one already exists for this email (or an alias of it). Please sign in below instead.":
-		"Ми не змогли створити новий обліковий запис, оскільки він вже існує для цієї електронної адреси (або її псевдоніма). Будь ласка, увійдіть нижче.",
 	"Billing history": "Історія платежів",
 	"No transactions yet.": "Поки немає транзакцій.",
 	Date: "Дата",

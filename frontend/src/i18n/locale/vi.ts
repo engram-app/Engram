@@ -84,8 +84,6 @@ export default {
 	"Already have an account? {signin}": "Đã có tài khoản? {signin}",
 	"Loading...": "Đang tải...",
 	"An account with this email already exists": "Đã có tài khoản với email này",
-	"We couldn’t create a new account because one already exists for this email (or an alias of it). Please sign in below instead.":
-		"Không thể tạo tài khoản mới vì đã có tài khoản cho email này (hoặc một địa chỉ khác). Vui lòng đăng nhập bên dưới.",
 	"Billing history": "Lịch sử thanh toán",
 	"No transactions yet.": "Chưa có giao dịch nào.",
 	Date: "Ngày",

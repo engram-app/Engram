@@ -86,8 +86,6 @@ export default {
 	"Already have an account? {signin}": "すでにアカウントをお持ちですか？{signin}",
 	"Loading...": "読み込み中...",
 	"An account with this email already exists": "このメールアドレスでアカウントが既に存在します",
-	"We couldn’t create a new account because one already exists for this email (or an alias of it). Please sign in below instead.":
-		"このメールアドレス（またはそのエイリアス）で既にアカウントが存在するため、新規作成できません。代わりに、下記からサインインしてください。",
 	"Billing history": "支払い履歴",
 	"No transactions yet.": "まだ取引履歴はありません。",
 	Date: "日付",

@@ -5,7 +5,6 @@ defmodule Engram.Auth.Clerk.WebhookTest do
 
   alias Engram.Accounts.User
   alias Engram.Auth.Clerk.Webhook
-  alias Engram.Auth.SignupRejections
   alias Engram.Repo
   alias Engram.Storage.InMemory
 
@@ -43,64 +42,121 @@ defmodule Engram.Auth.Clerk.WebhookTest do
     :ok
   end
 
-  # The external_id lookup in `handle_user_created` and the email lookup in
-  # `apply_user_created` are not atomic. A user's first authenticated request
-  # JIT-creates their row (same Clerk id) in between, so the email lookup finds
-  # the user's OWN row. These tests pin the state at email-lookup time (#2292).
-  describe "user.created: email match at dup-check time" do
-    test "row already bound to the incoming Clerk id is ours: no rejection, no Clerk delete" do
-      user =
-        insert(:user,
-          email: "racer@gmail.com",
-          normalized_email: "racer@gmail.com",
-          external_id: "user_race_self"
-        )
+  defp user_created(clerk_id, email, status \\ "verified") do
+    Webhook.handle(%{
+      "type" => "user.created",
+      "data" => %{
+        "id" => clerk_id,
+        "primary_email_address_id" => "idn_1",
+        "email_addresses" => [
+          %{"id" => "idn_1", "email_address" => email, "verification" => %{"status" => status}}
+        ]
+      }
+    })
+  end
 
-      # Mox (verify_on_exit!) fails the test if delete_user is called.
-      assert :ok = Webhook.apply_user_created("user_race_self", user.email, "racer@gmail.com")
+  # The webhook links a row with no external_id (legacy / pre-Clerk) by email.
+  # Only a VERIFIED Clerk address may claim it, or anyone could create a Clerk
+  # user (Backend API, some OAuth providers) with that email unverified and
+  # take the account over.
+  describe "user.created links a legacy row only by a verified email" do
+    test "verified primary email links the unbound row" do
+      legacy = insert(:user, email: "legacy.owner@gmail.com", external_id: nil)
 
-      assert Repo.get(User, user.id, skip_tenant_check: true)
-      assert :error = SignupRejections.fetch("user_race_self")
+      assert :ok = user_created("user_legacy_ok", "legacy.owner@gmail.com")
+
+      assert Repo.reload!(legacy, skip_tenant_check: true).external_id == "user_legacy_ok"
     end
 
-    test "row bound to a different Clerk id is a real duplicate: rejected and revoked" do
-      _existing =
+    test "unverified primary email neither links nor creates a row" do
+      legacy = insert(:user, email: "legacy.victim@gmail.com", external_id: nil)
+
+      assert :ok = user_created("user_legacy_bad", "legacy.victim@gmail.com", "unverified")
+
+      assert Repo.reload!(legacy, skip_tenant_check: true).external_id == nil
+      assert {:error, :user_not_found} = Engram.Accounts.find_by_external_id("user_legacy_bad")
+    end
+
+    test "no primary id: the first address is not used as a fallback" do
+      legacy = insert(:user, email: "legacy.first@gmail.com", external_id: nil)
+
+      assert :ok =
+               Webhook.handle(%{
+                 "type" => "user.created",
+                 "data" => %{
+                   "id" => "user_no_primary",
+                   "email_addresses" => [
+                     %{
+                       "id" => "idn_1",
+                       "email_address" => "legacy.first@gmail.com",
+                       "verification" => %{"status" => "verified"}
+                     }
+                   ]
+                 }
+               })
+
+      assert Repo.reload!(legacy, skip_tenant_check: true).external_id == nil
+    end
+  end
+
+  # Clerk's "Block email subaddresses" refuses aliases before a Clerk user
+  # exists, so the webhook no longer polices duplicates. It must never call
+  # Clerk delete: in prod every one of those deletes hit a real user (#2292).
+  # Mox (verify_on_exit!) fails these tests on any delete_user call.
+  describe "user.created never deletes a Clerk user" do
+    test "alias of an existing user: no Clerk delete, existing row intact, no new row" do
+      existing =
         insert(:user,
           email: "taken.dup@gmail.com",
           normalized_email: "takendup@gmail.com",
           external_id: "user_original"
         )
 
-      expect(Engram.Auth.Clerk.ApiMock, :delete_user, fn "user_second" -> :ok end)
+      assert :ok = user_created("user_second", "Taken.Dup+x@gmail.com")
 
-      assert :ok =
-               Webhook.apply_user_created(
-                 "user_second",
-                 "Taken.Dup@gmail.com",
-                 "takendup@gmail.com"
-               )
-
-      assert {:ok, :duplicate_identity} = SignupRejections.fetch("user_second")
+      assert Repo.reload!(existing, skip_tenant_check: true).external_id == "user_original"
+      assert {:error, :user_not_found} = Engram.Accounts.find_by_external_id("user_second")
     end
 
-    test "row with no Clerk id (legacy/local account) is still a duplicate: rejected and revoked" do
-      _existing =
+    test "orphan row with the same email (re-signup after delete): no Clerk delete" do
+      orphan =
         insert(:user,
-          email: "legacy.dup@gmail.com",
-          normalized_email: "legacydup@gmail.com",
-          external_id: nil
+          email: "back.again@gmail.com",
+          normalized_email: "backagain@gmail.com",
+          external_id: "user_old_id"
         )
 
-      expect(Engram.Auth.Clerk.ApiMock, :delete_user, fn "user_vs_legacy" -> :ok end)
+      assert :ok = user_created("user_new_id", "back.again@gmail.com")
 
-      assert :ok =
-               Webhook.apply_user_created(
-                 "user_vs_legacy",
-                 "legacy.dup@gmail.com",
-                 "legacydup@gmail.com"
-               )
+      assert Repo.reload!(orphan, skip_tenant_check: true).external_id == "user_old_id"
+    end
 
-      assert {:ok, :duplicate_identity} = SignupRejections.fetch("user_vs_legacy")
+    # The prod race: X's first request JIT-creates X's row, then Clerk delivers
+    # user.created for an alias Y and, after the old code deleted Y in Clerk,
+    # user.deleted for Y. X's row must survive and Clerk is never called.
+    test "race: JIT row for X survives user.created + user.deleted for alias Y" do
+      {:ok, x} =
+        Engram.Accounts.find_or_create_by_external_id("user_x", %{email: "racer@gmail.com"})
+
+      assert :ok = user_created("user_y", "r.acer@gmail.com")
+      assert :ok = Webhook.handle(%{"type" => "user.deleted", "data" => %{"id" => "user_y"}})
+
+      assert Repo.get(User, x.id, skip_tenant_check: true)
+    end
+
+    test "new email creates the row through the JIT path" do
+      assert :ok = user_created("user_fresh", "fresh.signup@gmail.com")
+
+      assert {:ok, user} = Engram.Accounts.find_by_external_id("user_fresh")
+      assert user.normalized_email == "freshsignup@gmail.com"
+    end
+
+    test "replay for an existing row is a no-op" do
+      {:ok, x} =
+        Engram.Accounts.find_or_create_by_external_id("user_replay", %{email: "replay@gmail.com"})
+
+      assert :ok = user_created("user_replay", "replay@gmail.com")
+      assert Repo.get(User, x.id, skip_tenant_check: true)
     end
   end
 

@@ -84,8 +84,6 @@ export default {
 	"Already have an account? {signin}": "Masz już konto? {signin}",
 	"Loading...": "Ładowanie…",
 	"An account with this email already exists": "Konto z tym adresem e-mail już istnieje",
-	"We couldn’t create a new account because one already exists for this email (or an alias of it). Please sign in below instead.":
-		"Nie udało się utworzyć nowego konta, ponieważ jedno już istnieje dla tego adresu e-mail (lub jego aliasu). Zamiast tego zaloguj się poniżej.",
 	"Billing history": "Historia płatności",
 	"No transactions yet.": "Brak transakcji.",
 	Date: "Data",

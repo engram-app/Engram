@@ -77,8 +77,6 @@ export default {
 	"Already have an account? {signin}": "已经有账号？{signin}",
 	"Loading...": "正在加载...",
 	"An account with this email already exists": "该邮箱已注册",
-	"We couldn’t create a new account because one already exists for this email (or an alias of it). Please sign in below instead.":
-		"无法创建新账号，因为该邮箱已存在（或其别名）。请使用下方登录。",
 	"Billing history": "账单记录",
 	"No transactions yet.": "暂无交易。",
 	Date: "日期",

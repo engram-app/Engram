@@ -77,8 +77,6 @@ export default {
 	"Already have an account? {signin}": "已經有帳戶？{signin}",
 	"Loading...": "載入中...",
 	"An account with this email already exists": "此電子郵件已存在帳戶",
-	"We couldn’t create a new account because one already exists for this email (or an alias of it). Please sign in below instead.":
-		"我們無法建立新的帳戶，因為此電子郵件（或其別名）已存在帳戶。請在下方登入。",
 	"Billing history": "帳單紀錄",
 	"No transactions yet.": "尚未有任何交易。",
 	Date: "日期",

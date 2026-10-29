@@ -14,7 +14,7 @@ vi.mock("@clerk/react", () => ({
 	useClerk: () => ({ user: null, signOut: vi.fn(), status: hoisted.status }),
 }));
 vi.mock("@clerk/themes", () => ({ dark: {} }));
-vi.mock("../api/client", () => ({ setTokenGetter: vi.fn() }));
+vi.mock("../api/client", () => ({ setTokenGetter: vi.fn(), setAccountConflictHandler: vi.fn() }));
 vi.mock("../api/queries", () => ({ useMe: () => ({ data: undefined }) }));
 vi.mock("../api/query-client", () => ({ queryClient: {} }));
 vi.mock("../config-context", () => ({ useConfig: () => ({ clerkPublishableKey: "pk_test" }) }));

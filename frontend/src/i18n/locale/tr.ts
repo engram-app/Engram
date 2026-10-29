@@ -84,8 +84,6 @@ export default {
 	"Already have an account? {signin}": "Zaten bir hesabınız var mı? {signin}",
 	"Loading...": "Yükleniyor...",
 	"An account with this email already exists": "Bu e-posta adresiyle zaten bir hesap mevcut",
-	"We couldn’t create a new account because one already exists for this email (or an alias of it). Please sign in below instead.":
-		"Bu e-posta adresi için zaten bir hesap olduğu için yeni bir hesap oluşturamadık (veya bir takma adıyla). Lütfen aşağıda giriş yapın.",
 	"Billing history": "Ödeme geçmişi",
 	"No transactions yet.": "Henüz işlem yok.",
 	Date: "Tarih",

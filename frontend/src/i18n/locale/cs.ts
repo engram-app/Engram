@@ -85,8 +85,6 @@ export default {
 	"Already have an account? {signin}": "Už máte účet? {signin}",
 	"Loading...": "Načítá se…",
 	"An account with this email already exists": "Účet s touto e-mailovou adresou již existuje",
-	"We couldn’t create a new account because one already exists for this email (or an alias of it). Please sign in below instead.":
-		"Nemohli jsme vytvořit nový účet, protože pro tuto e-mailovou adresu (nebo její alias) již jeden existuje. Přihlaste se prosím níže.",
 	"Billing history": "Historie plateb",
 	"No transactions yet.": "Zatím žádné transakce.",
 	Date: "Datum",
