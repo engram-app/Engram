@@ -658,7 +658,10 @@ defmodule Engram.Notes.CrdtIndexPersistence do
 
   # The user's tail, one id window per step (a user's tail spans their vaults;
   # each step filters to one). The window is keyed on the primary key, so a
-  # statement reads at most one page whatever the tail's size.
+  # statement returns at most one page whatever the tail's size.
+  # ponytail: the table has no `(user_id, id)` index, so a window read can scan
+  # the user's whole tail for its 200 ids (ids only, no decrypt). The live fold
+  # keeps a tail near `fold_tail_rows`; add that index if a tail outgrows it.
   defp tail_windows(user, acc, step) do
     IdWindows.reduce(
       {:user, user.id},
