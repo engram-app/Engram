@@ -1397,7 +1397,9 @@ defmodule Engram.Workers.EmbedNote do
   def priority_for(%Note{embed_hash: nil}), do: @backfill_priority
   def priority_for(%Note{}), do: 0
 
-  defp settle_seconds, do: Application.get_env(:engram, :embed_settle_seconds, 30)
+  @doc "Seconds an edit waits before it embeds (the typing debounce). See `new_debounced/3`."
+  @spec settle_seconds() :: non_neg_integer()
+  def settle_seconds, do: Application.get_env(:engram, :embed_settle_seconds, 30)
 
   @doc """
   Seconds an MCP (AI agent) write waits before it embeds. See `new_debounced/3`.

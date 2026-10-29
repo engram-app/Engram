@@ -71,9 +71,9 @@ defmodule Engram.MCP.Tools do
     }
   }
 
-  # Every write tool that replies through `Handlers.upsert_reply/3` returns
-  # these (#2294): search lags a write by a few seconds, and an agent that
-  # searches straight away should read the note with get_notes instead.
+  # Every tool whose success queues an embed returns these, through
+  # `Handlers.with_index_delay/2` (#2294): the note writes and restore_deleted.
+  # rename_note and rename_folder only re-path existing points, so they do not.
   @index_delay_properties %{
     "search_indexing_starts_in_seconds" => %{
       "type" => "integer",
@@ -1563,28 +1563,30 @@ defmodule Engram.MCP.Tools do
       },
       outputSchema: %{
         "type" => "object",
-        "properties" => %{
-          "notes" => %{"type" => "integer", "description" => "Notes restored"},
-          "folders" => %{"type" => "integer", "description" => "Empty folders restored"},
-          "attachments" => %{"type" => "integer", "description" => "Attachments restored"},
-          "skipped" => %{
-            "type" => "array",
-            "description" =>
-              "Items not restored and why: path_taken (another file holds the path), " <>
-                "expired (past trash retention), unavailable (attachment bytes already " <>
-                "reaped), changed (the item changed since the delete), unreadable",
-            "items" => %{
-              "type" => "object",
-              "properties" => %{
-                "path" => %{"type" => "string"},
-                "id" => %{"type" => "string"},
-                "kind" => %{"type" => "string"},
-                "reason" => %{"type" => "string"}
-              },
-              "required" => ["kind", "reason"]
+        "properties" =>
+          %{
+            "notes" => %{"type" => "integer", "description" => "Notes restored"},
+            "folders" => %{"type" => "integer", "description" => "Empty folders restored"},
+            "attachments" => %{"type" => "integer", "description" => "Attachments restored"},
+            "skipped" => %{
+              "type" => "array",
+              "description" =>
+                "Items not restored and why: path_taken (another file holds the path), " <>
+                  "expired (past trash retention), unavailable (attachment bytes already " <>
+                  "reaped), changed (the item changed since the delete), unreadable",
+              "items" => %{
+                "type" => "object",
+                "properties" => %{
+                  "path" => %{"type" => "string"},
+                  "id" => %{"type" => "string"},
+                  "kind" => %{"type" => "string"},
+                  "reason" => %{"type" => "string"}
+                },
+                "required" => ["kind", "reason"]
+              }
             }
           }
-        },
+          |> Map.merge(@index_delay_properties),
         "required" => ["notes", "folders", "attachments", "skipped"]
       },
       handler: &Handlers.handle("restore_deleted", &1, &2, &3)

@@ -239,6 +239,30 @@ defmodule EngramWeb.McpStructuredOutputTest do
     end
   end
 
+  test "restore_deleted carries the default settle, which restored notes wait for", %{
+    user: user,
+    vault: vault
+  } do
+    {:ok, _} =
+      Engram.Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "x"}, actor: "api")
+
+    {:ok, _, %{"delete_op_id" => op}} =
+      Handlers.handle("delete_note", user, vault, %{"path" => "r.md"})
+
+    assert {:ok, text, structured} =
+             Handlers.handle("restore_deleted", user, vault, %{"op_id" => op})
+
+    seconds = Engram.Workers.EmbedNote.settle_seconds()
+    assert structured["notes"] == 1
+    assert structured["search_indexing_starts_in_seconds"] == seconds
+    assert structured["search_note"] == Handlers.index_delay_hint(seconds)
+    assert text =~ Handlers.index_delay_hint(seconds)
+
+    {:ok, tool_def} = Tools.get("restore_deleted")
+    assert Map.has_key?(tool_def.outputSchema["properties"], "search_indexing_starts_in_seconds")
+    assert {:ok, _} = JSV.validate(structured, JSV.build!(tool_def.outputSchema))
+  end
+
   defp assert_structured(result, name) do
     assert is_map(result["structuredContent"]),
            "#{name} advertises an outputSchema but returned no structuredContent"

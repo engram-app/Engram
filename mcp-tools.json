@@ -1593,6 +1593,14 @@
             "description": "Notes restored",
             "type": "integer"
           },
+          "search_indexing_starts_in_seconds": {
+            "description": "At least this many seconds until indexing starts; search can lag further. Use get_notes to read the note until search finds it",
+            "type": "integer"
+          },
+          "search_note": {
+            "description": "When search will see this change; use get_notes until then",
+            "type": "string"
+          },
           "skipped": {
             "description": "Items not restored and why: path_taken (another file holds the path), expired (past trash retention), unavailable (attachment bytes already reaped), changed (the item changed since the delete), unreadable",
             "items": {
