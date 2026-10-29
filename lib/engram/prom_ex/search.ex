@@ -24,6 +24,9 @@ defmodule Engram.PromEx.Search do
     * `engram_prom_ex_search_hits_total`: sum of `count` from
       `[:engram, :search, :hits]`, every candidate on the Postgres read path
       (the ratio denominator for the two above).
+    * `engram_prom_ex_search_phrase_checked_total` and
+      `..._phrase_promoted_total`: `checked` / `promoted` of
+      `[:engram, :search, :phrase_check]`.
 
   Cardinality contract: only the booleans/atoms above. NEVER add
   user_id, vault_id, or the query string.
@@ -37,6 +40,7 @@ defmodule Engram.PromEx.Search do
   @text_missing_event [:engram, :search, :text_missing]
   @hits_event [:engram, :search, :hits]
   @text_stale_event [:engram, :search, :text_stale]
+  @phrase_check_event [:engram, :search, :phrase_check]
 
   @impl true
   def event_metrics(opts) do
@@ -101,6 +105,20 @@ defmodule Engram.PromEx.Search do
           event_name: @hits_event,
           measurement: :count,
           description: "Search hits read from Postgres, before drops."
+        ),
+        # Quoted-phrase check (`Search.PhraseCheck`): candidates whose text was
+        # checked, and how many a match moved up. No query text, no tags.
+        sum(
+          metric_prefix ++ [:phrase_checked, :total],
+          event_name: @phrase_check_event,
+          measurement: :checked,
+          description: "Search candidates checked for a quoted phrase."
+        ),
+        sum(
+          metric_prefix ++ [:phrase_promoted, :total],
+          event_name: @phrase_check_event,
+          measurement: :promoted,
+          description: "Search candidates a quoted-phrase match moved up."
         )
       ]
     )

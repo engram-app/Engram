@@ -269,6 +269,36 @@ defmodule Engram.Observability.EmittersTest do
       assert body["properties"]["surface"] == "mcp"
     end
 
+    test "says whether the query held a quoted phrase", %{bypass: bypass} do
+      user = user_with_clerk_id()
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
+      Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
+      on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, 2, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      parent = self()
+
+      Bypass.expect(bypass, fn conn ->
+        if conn.request_path == "/capture/" do
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          send(parent, {:posthog_body, Jason.decode!(body)})
+          Plug.Conn.resp(conn, 200, "1")
+        else
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => []}))
+        end
+      end)
+
+      for {query, quoted} <- [{~s(say "hello world"), true}, {"say hello world", false}] do
+        assert {:ok, []} = Search.search(user, vault, query)
+        assert_receive {:posthog_body, %{"event" => "search_performed"} = body}, 1_500
+        assert body["properties"]["quoted"] == quoted
+      end
+    end
+
     test "a refused search is search_performed{status: refused}", %{bypass: bypass} do
       EngramWeb.RateLimiter.reset_buckets!()
       user = user_with_clerk_id()

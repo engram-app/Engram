@@ -35,7 +35,7 @@ defmodule Engram.Analytics.EventLog do
     from_tier grant_id grant_type heard_from initiated_by interval item
     jwks_source kind languages latency_ms limit_key method missing mood next_step
     note_count notes notes_bucket origin outcome paddle_subscription_id phase
-    plan platform plugin_version price_id reason referrer_domain registration
+    plan platform plugin_version price_id quoted reason referrer_domain registration
     result result_count scopes_granted scopes_requested server_version
     signup_source signup_tool silent skipped source status step surface
     surfaces_used tenure_bucket tier to to_tier tool tool_name tools total trigger

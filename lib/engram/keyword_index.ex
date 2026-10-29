@@ -61,10 +61,12 @@ defmodule Engram.KeywordIndex do
   # NULL (pre-stamp) is stale. 2: the `context_text` prefix (#1615).
   # 3: the v5 rebuild's encoding (pinned per-vault avgdl, merged-chunk BM25
   # `b`; chunker v5 PR-17). 4: adjacent-word pair dims for quoted-phrase
-  # queries, riding the same pass. 3 and 4 are reached only under
-  # `INDEX_REBUILD=on` (`Engram.Rebuild.target_versions/0` pins 2 until
-  # then); the bump is sparse-only, so it adds no Voyage call.
-  @version 4
+  # queries. 5: the pair dims dropped again (they were 50 to 70% of the sparse
+  # entries; quoted phrases are checked at query time, `Search.PhraseCheck`).
+  # 3 to 5 are reached only under `INDEX_REBUILD=on`
+  # (`Engram.Rebuild.target_versions/0` pins 2 until then); the bump is
+  # sparse-only, so it adds no Voyage call.
+  @version 5
 
   @doc "Version of the keyword encoding in this build, stamped on `notes.keyword_version`."
   # No @spec, like `Markdown.chunker_version/0`: the body is a literal, so
@@ -72,8 +74,8 @@ defmodule Engram.KeywordIndex do
   def version, do: @version
 
   @doc """
-  The double-quoted spans of a search query, the phrases the keyword leg
-  matches in word order. Smart, low-9 (German), guillemet and fullwidth
+  The double-quoted spans of a search query, the phrases `Search.PhraseCheck`
+  looks for in word order. Smart, low-9 (German), guillemet and fullwidth
   double quotes count as quotes. An odd number of quotes means the user did
   not close one, so it is no phrase at all.
 

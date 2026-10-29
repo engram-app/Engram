@@ -277,6 +277,32 @@ defmodule Engram.SearchFetchShapeTest do
     assert actual == @golden
   end
 
+  # Point 9 is 7th in the keyword leg, outside a page of 5. A quoted phrase
+  # only it holds is fetched past the page, promoted to the top, and the page
+  # keeps its size; the unquoted query is untouched.
+  test "a quoted phrase promotes the chunk holding it, and the page keeps its size", ctx do
+    plain =
+      Search.search(ctx.user, ctx.vault, "ferritin", mode: :keyword, limit: 5, diversity: 0.0)
+
+    assert {:ok, hits} = plain
+    refute "09" in ranked(:keyword, plain)
+    assert length(hits) == 5
+
+    requests()
+
+    quoted =
+      Search.search(ctx.user, ctx.vault, ~s(ferritin "T9 ferritin"),
+        mode: :keyword,
+        limit: 5,
+        diversity: 0.0
+      )
+
+    assert {:ok, hits} = quoted
+    assert length(hits) == 5
+    assert hd(ranked(:keyword, quoted)) == "09"
+    assert Enum.any?(requests(), &match?({:query, %{"limit" => 100}, _}, &1))
+  end
+
   # Response bytes and Qdrant calls per search on ed0564746, text from
   # Postgres: {bytes, calls}.
   @before %{
