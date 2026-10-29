@@ -1011,6 +1011,35 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
                %{"b" => "b2", "d" => "d1"}
     end
 
+    # The replay walks the tail in id order, and (previous test) out-of-order
+    # replay can lose one client's edits. Row ids are UUIDv7: random within a
+    # millisecond, and following a wall clock that can step back or differ
+    # between nodes. So a room mints each id after every row it knows of,
+    # including the tail a previous room on a fast-clocked node left behind.
+    test "a room's appends sort after the tail it bound over", ctx do
+      ahead = UUIDv7.generate(System.system_time(:millisecond) + 60_000)
+      seed_rows(ctx, [claim_update("from-a-fast-clock.md")], [ahead])
+
+      {state, doc} = bind_fresh(ctx)
+      Process.delete(:index_replay_echoes)
+
+      update = claim_update("next.md")
+      :ok = Yex.apply_update(doc, update)
+      _state = CrdtIndexPersistence.update_v1(state, update, "i", doc)
+
+      {:ok, ids} =
+        Repo.with_tenant(ctx.user.id, fn ->
+          Repo.all(
+            from(l in VaultIndexUpdateLog, where: l.vault_id == ^ctx.vault.id, select: l.id)
+          )
+        end)
+
+      assert [^ahead, appended] = Enum.sort(ids),
+             "the new append sorts before the row it was appended after"
+
+      assert appended > ahead
+    end
+
     # Review finding 1: a fold every `fold_tail_rows` appends used to enqueue a
     # full projection pass each time, about 30 per 15k-note first sync. Only
     # the room's exit projects; the live fold is durability, not projection.
