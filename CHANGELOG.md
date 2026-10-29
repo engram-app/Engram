@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.69.0](https://github.com/engram-app/Engram/compare/0.68.0...0.69.0) (2026-10-29)
+
+
+### Features
+
+* **dev:** boot mix phx.server with no env file ([#2309](https://github.com/engram-app/Engram/issues/2309)) ([dedf028](https://github.com/engram-app/Engram/commit/dedf0289075b2337ea1bc2c3f836d4e56ed8235d))
+* **mcp:** index MCP writes within seconds ([#2303](https://github.com/engram-app/Engram/issues/2303)) ([58beb67](https://github.com/engram-app/Engram/commit/58beb67dc4d8a7b86da28673961e0147f61069a6))
+* **search:** drop phrase-pair dims, check quoted phrases at query time ([#2281](https://github.com/engram-app/Engram/issues/2281)) ([94a24b8](https://github.com/engram-app/Engram/commit/94a24b834151e312eacec02d281378d1dc9a1693))
+
+
+### Bug Fixes
+
+* **billing:** recover Paddle subscription insert race ([#2317](https://github.com/engram-app/Engram/issues/2317)) ([73b5c55](https://github.com/engram-app/Engram/commit/73b5c55f9373c5c1214e02643257fb5cd44df560))
+* **billing:** verify checkout user binding server-side ([#2316](https://github.com/engram-app/Engram/issues/2316)) ([13bada6](https://github.com/engram-app/Engram/commit/13bada6fc6138a0debe76ad935a904c92570c600))
+* boot keyword_refresh default from KEYWORD_REFRESH ([#2322](https://github.com/engram-app/Engram/issues/2322)) ([3bc97c9](https://github.com/engram-app/Engram/commit/3bc97c95df4dc71a5f92d37459f7030976ae3f02))
+* bound the index room tail and page its replay ([#2308](https://github.com/engram-app/Engram/issues/2308)) ([be1f665](https://github.com/engram-app/Engram/commit/be1f66559a06609fe0cefad4050859bf3e12d3a1))
+* drop webhook duplicate check, 403 account_conflict ([#2323](https://github.com/engram-app/Engram/issues/2323)) ([97593fa](https://github.com/engram-app/Engram/commit/97593fab339dc95b22020bb75b2d7c11bccffb4c))
+* **indexing:** pace keyword rewrite on Qdrant gate ([#2313](https://github.com/engram-app/Engram/issues/2313)) ([b10bb42](https://github.com/engram-app/Engram/commit/b10bb4253050c788a6f7a8b07b54b8027de6cd78))
+* **indexing:** resparse tries every plan model ([#2320](https://github.com/engram-app/Engram/issues/2320)) ([94a76d5](https://github.com/engram-app/Engram/commit/94a76d501b9cf77c9f890433f2c50460611c3a58))
+
 ## [0.68.0](https://github.com/engram-app/Engram/compare/0.67.0...0.68.0) (2026-10-28)
 
 
