@@ -42,15 +42,61 @@ defmodule Engram.Auth.Clerk.WebhookTest do
     :ok
   end
 
-  defp user_created(clerk_id, email) do
+  defp user_created(clerk_id, email, status \\ "verified") do
     Webhook.handle(%{
       "type" => "user.created",
       "data" => %{
         "id" => clerk_id,
         "primary_email_address_id" => "idn_1",
-        "email_addresses" => [%{"id" => "idn_1", "email_address" => email}]
+        "email_addresses" => [
+          %{"id" => "idn_1", "email_address" => email, "verification" => %{"status" => status}}
+        ]
       }
     })
+  end
+
+  # The webhook links a row with no external_id (legacy / pre-Clerk) by email.
+  # Only a VERIFIED Clerk address may claim it, or anyone could create a Clerk
+  # user (Backend API, some OAuth providers) with that email unverified and
+  # take the account over.
+  describe "user.created links a legacy row only by a verified email" do
+    test "verified primary email links the unbound row" do
+      legacy = insert(:user, email: "legacy.owner@gmail.com", external_id: nil)
+
+      assert :ok = user_created("user_legacy_ok", "legacy.owner@gmail.com")
+
+      assert Repo.reload!(legacy, skip_tenant_check: true).external_id == "user_legacy_ok"
+    end
+
+    test "unverified primary email neither links nor creates a row" do
+      legacy = insert(:user, email: "legacy.victim@gmail.com", external_id: nil)
+
+      assert :ok = user_created("user_legacy_bad", "legacy.victim@gmail.com", "unverified")
+
+      assert Repo.reload!(legacy, skip_tenant_check: true).external_id == nil
+      assert {:error, :user_not_found} = Engram.Accounts.find_by_external_id("user_legacy_bad")
+    end
+
+    test "no primary id: the first address is not used as a fallback" do
+      legacy = insert(:user, email: "legacy.first@gmail.com", external_id: nil)
+
+      assert :ok =
+               Webhook.handle(%{
+                 "type" => "user.created",
+                 "data" => %{
+                   "id" => "user_no_primary",
+                   "email_addresses" => [
+                     %{
+                       "id" => "idn_1",
+                       "email_address" => "legacy.first@gmail.com",
+                       "verification" => %{"status" => "verified"}
+                     }
+                   ]
+                 }
+               })
+
+      assert Repo.reload!(legacy, skip_tenant_check: true).external_id == nil
+    end
   end
 
   # Clerk's "Block email subaddresses" refuses aliases before a Clerk user

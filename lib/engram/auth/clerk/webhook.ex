@@ -86,7 +86,8 @@ defmodule Engram.Auth.Clerk.Webhook do
   defp handle_user_deleted(_), do: :ok
 
   # Same path as JIT, so the webhook and a racing first request converge on
-  # one row; the unique indexes decide atomically. A conflict (the email or an
+  # one row; the unique indexes decide atomically. No verified primary email:
+  # skip, the user's first request still creates the row. A conflict (the email or an
   # alias of it belongs to another account) leaves the Clerk user alone: the
   # auth plug answers that identity 403 `account_conflict`, and the find/create
   # call already logs it.
@@ -171,19 +172,23 @@ defmodule Engram.Auth.Clerk.Webhook do
     :ok
   end
 
+  # Only the VERIFIED primary address counts, with no fallback to the first
+  # address. It can link a row with no external_id (legacy / pre-Clerk) and
+  # replace a user's email, and a Clerk user made through the Backend API or
+  # some OAuth providers can carry an email nobody proved they own.
   defp primary_email(%{"primary_email_address_id" => pid, "email_addresses" => addrs})
-       when is_list(addrs) do
+       when is_binary(pid) and is_list(addrs) do
     case Enum.find(addrs, &(&1["id"] == pid)) do
-      %{"email_address" => email} when is_binary(email) -> {:ok, email}
-      _ -> {:error, :no_primary_email}
+      %{"email_address" => email, "verification" => %{"status" => "verified"}}
+      when is_binary(email) ->
+        {:ok, email}
+
+      _ ->
+        {:error, :no_verified_primary_email}
     end
   end
 
-  defp primary_email(%{"email_addresses" => [%{"email_address" => email} | _]})
-       when is_binary(email),
-       do: {:ok, email}
-
-  defp primary_email(_), do: {:error, :no_primary_email}
+  defp primary_email(_), do: {:error, :no_verified_primary_email}
 
   defp has_verified_phone?(%{"phone_numbers" => phones}) when is_list(phones) do
     Enum.any?(phones, fn p -> get_in(p, ["verification", "status"]) == "verified" end)
