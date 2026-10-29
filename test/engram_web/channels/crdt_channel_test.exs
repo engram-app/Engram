@@ -2396,6 +2396,7 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_reply ref, :ok, %{}, 3000
 
       refute_receive {:room_start, _}, 200
+      assert_receive {:unroomed_step2, %{outcome: :covered}}
       assert CrdtRegistry.lookup(doc_id) == nil
       assert_note_content_eventually(user, vault, doc_id, "base")
     end
@@ -2415,7 +2416,98 @@ defmodule EngramWeb.CrdtChannelTest do
 
       assert_note_content_eventually(user, vault, doc_id, "TRAIL-base", now_plus(3000))
       refute_receive {:room_start, %{source: :handshake}}, 200
+      # Its own label, so a heal is not counted as a queue drain (room_free_update).
+      assert_receive {:room_start, %{source: :trailing_step2}}
+      assert_receive {:unroomed_step2, %{outcome: :applied}}
       assert eventually_no_room?(doc_id), "the trailing STEP2 must not leave a room resident"
+    end
+
+    test "a peer with the room open receives the trailing STEP2's insert", %{
+      socket: socket,
+      user: user,
+      vault: vault,
+      doc_id: doc_id
+    } do
+      {:ok, _, peer} =
+        subscribe_and_join(
+          user_socket(user),
+          EngramWeb.CrdtChannel,
+          "crdt:#{user.id}:#{vault.id}",
+          %{
+            "crdt_proto" => 2
+          }
+        )
+
+      Sandbox.allow(Repo, self(), peer.channel_pid)
+
+      # The peer opens the room and keeps it.
+      push(peer, "crdt_msg", %{"doc_id" => doc_id, "b64" => step1_b64(CrdtBridge.new_doc())})
+      await_frame(doc_id, :sync_step1)
+      room = CrdtRegistry.lookup(doc_id)
+
+      # This socket heals on the same room and releases it; the room stays.
+      client = CrdtBridge.new_doc()
+      push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => step1_b64(client)})
+      update = await_frame(doc_id, :sync_step2)
+      :ok = Yex.apply_update(client, update)
+      server_sv = await_frame(doc_id, :sync_step1)
+      ref = push(socket, "crdt_release", %{"doc_id" => doc_id})
+      assert_reply ref, :ok, %{}
+      assert CrdtRegistry.lookup(doc_id) == room
+
+      Yex.Text.insert(Yex.Doc.get_text(client, "content"), 0, "PEER-")
+      ref = push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => step2_b64(client, server_sv)})
+      assert_reply ref, :ok, %{}, 3000
+
+      # Only the peer still observes the room, so this is its fan-out.
+      delta = await_frame(doc_id, :sync_update)
+      probe = CrdtBridge.new_doc()
+      :ok = Yex.apply_update(probe, update)
+      :ok = Yex.apply_update(probe, delta)
+      assert CrdtBridge.text_of(probe) == "PEER-base"
+      assert CrdtRegistry.lookup(doc_id) == room
+    end
+
+    test "a trailing STEP2 for a note deleted meanwhile replies note_not_found", %{
+      socket: socket,
+      user: user,
+      vault: vault,
+      doc_id: doc_id
+    } do
+      {client, server_sv} = heal_and_release(socket, doc_id)
+      :ok = Notes.delete_note(user, vault, "p.md")
+      Yex.Text.insert(Yex.Doc.get_text(client, "content"), 0, "GONE-")
+
+      ref = push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => step2_b64(client, server_sv)})
+      assert_reply ref, :error, %{reason: "note_not_found", doc_id: ^doc_id}, 3000
+    end
+
+    test "a STEP2 the server cannot integrate gets an error reply, not silence", %{
+      socket: socket,
+      doc_id: doc_id
+    } do
+      {_client, _server_sv} = heal_and_release(socket, doc_id)
+      watch_room_starts()
+
+      ref = push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => missing_deps_step2_b64()})
+      assert_reply ref, :error, %{reason: "doc_update_failed", doc_id: ^doc_id}, 3000
+      assert_receive {:unroomed_step2, %{outcome: :failed}}
+    end
+
+    test "a STEP2 for a doc this socket never released keeps the room path", %{
+      socket: socket,
+      doc_id: doc_id
+    } do
+      # Not the #658 shape (no release): e.g. the room crashed under a live
+      # editor mid-handshake. Re-attaching the socket is what keeps that editor
+      # observed, so it still opens a room as before.
+      watch_room_starts()
+      {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step2, <<0, 0>>}})
+
+      ref = push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Base.encode64(frame)})
+      assert_reply ref, :ok, %{}, 3000
+      assert_receive {:room_start, %{source: :handshake}}, 2_000
+      refute_receive {:unroomed_step2, _}, 100
     end
 
     test "a delete-only STEP2 (state vector unchanged) is still applied", %{
@@ -3364,14 +3456,45 @@ defmodule EngramWeb.CrdtChannelTest do
     Base.encode64(frame)
   end
 
+  # Next crdt_msg push for doc_id that decodes to `kind`, skipping awareness and
+  # other frames a shared room interleaves. Returns the frame's payload.
+  defp await_frame(doc_id, kind) do
+    assert_push "crdt_msg", %{"doc_id" => ^doc_id, "b64" => b64}, 3000
+
+    case Yex.Sync.message_decode(Base.decode64!(b64)) do
+      {:ok, {:sync, {^kind, payload}}} -> payload
+      _ -> await_frame(doc_id, kind)
+    end
+  end
+
+  defp step1_b64(doc) do
+    {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(doc)
+    {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
+    Base.encode64(frame)
+  end
+
+  # Structs whose left origin (clock 0..2 of a client the server never saw) is
+  # absent, so the server can only park them as pending.
+  defp missing_deps_step2_b64 do
+    doc = CrdtBridge.new_doc()
+    text = Yex.Doc.get_text(doc, "content")
+    Yex.Text.insert(text, 0, "abc")
+    sv = Yex.encode_state_vector!(doc)
+    Yex.Text.insert(text, 3, "def")
+    {:ok, diff} = Yex.encode_state_as_update(doc, sv)
+    {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step2, diff}})
+    Base.encode64(frame)
+  end
+
+  # Room starts and #658 unroomed-STEP2 outcomes, as {:room_start | :unroomed_step2, meta}.
   defp watch_room_starts do
     test_pid = self()
     handler = "room-start-#{System.unique_integer([:positive])}"
 
-    :telemetry.attach(
+    :telemetry.attach_many(
       handler,
-      [:engram, :crdt, :room_start],
-      fn _e, _m, meta, _ -> send(test_pid, {:room_start, meta}) end,
+      [[:engram, :crdt, :room_start], [:engram, :crdt, :unroomed_step2]],
+      fn [:engram, :crdt, tag], _m, meta, _ -> send(test_pid, {tag, meta}) end,
       nil
     )
 
