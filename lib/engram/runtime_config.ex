@@ -53,14 +53,24 @@ defmodule Engram.RuntimeConfig do
       {key, :dev} when key in [nil, ""] ->
         @dev_encryption_master_key
 
-      {@dev_encryption_master_key, :prod} ->
-        raise "ENCRYPTION_MASTER_KEY is the public dev-only key from the Engram repo. " <>
-                "Generate a real one with `openssl rand -base64 32`."
+      {key, :prod} when is_binary(key) ->
+        if dev_encryption_master_key?(key) do
+          raise "ENCRYPTION_MASTER_KEY is the public dev-only key from the Engram repo. " <>
+                  "Generate a real one with `openssl rand -base64 32`."
+        end
+
+        key
 
       {key, _} ->
         key
     end
   end
+
+  # Compare decoded bytes, not strings: base64 of 32 bytes leaves 2 unused bits
+  # in the last char, and Base.decode64/1 (what Engram.Crypto.Config uses)
+  # ignores them, so several spellings decode to this same key.
+  defp dev_encryption_master_key?(key),
+    do: Base.decode64(key) == Base.decode64(@dev_encryption_master_key)
 
   @doc """
   `ENVELOPE_COMPRESSION` -> `{:ok, boolean}` or `:unset` (#1872).

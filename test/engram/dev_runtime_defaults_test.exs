@@ -53,6 +53,17 @@ defmodule Engram.DevRuntimeDefaultsTest do
     assert_raise RuntimeError, ~r/public dev-only key/, fn -> read_runtime(:prod) end
   end
 
+  test "prod refuses a base64 spelling of the dev key that decodes to the same bytes" do
+    # 32 bytes leave 2 unused bits in the last base64 char; Base.decode64/1
+    # ignores them, so "...Z4x=" is the same key as "...Z4w=".
+    variant = String.replace_suffix(RuntimeConfig.dev_encryption_master_key(), "w=", "x=")
+    assert Base.decode64(variant) == Base.decode64(RuntimeConfig.dev_encryption_master_key())
+
+    assert_raise RuntimeError, ~r/public dev-only key/, fn ->
+      RuntimeConfig.encryption_master_key(variant, :prod)
+    end
+  end
+
   test "prod and test never fall back to the dev key" do
     assert RuntimeConfig.encryption_master_key(nil, :prod) == nil
     assert RuntimeConfig.encryption_master_key(nil, :test) == nil
