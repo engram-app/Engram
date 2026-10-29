@@ -143,6 +143,25 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
     end
   end
 
+  # A live or post-bind fold runs off the room's message loop (#2306 review), so
+  # its prune lands a moment after the call that triggered it.
+  defp await_tail_exactly(user, vault_id, n) do
+    Enum.reduce_while(1..150, nil, fn _, _ ->
+      case tail_count(user, vault_id) do
+        ^n ->
+          {:halt, :ok}
+
+        other ->
+          Process.sleep(20)
+          {:cont, other}
+      end
+    end)
+    |> case do
+      :ok -> :ok
+      last -> flunk("tail stayed at #{last} row(s), expected #{n}, for vault #{vault_id}")
+    end
+  end
+
   # Kill the room outright: no terminate/2, so no unbind/3 and no checkpoint.
   # This is a deploy replacing an ECS task, a node loss, or an OOM kill.
   defp kill_room_and_wait(room) do
@@ -673,6 +692,32 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
 
       refute_enqueued(worker: Engram.Workers.ProjectVaultIndex)
     end
+
+    # The worker's own `unique` spans `:executing`, so an exit that lands while
+    # a pass is running was collapsed into a pass that had already read the
+    # older snapshot: the room's final changes went unprojected.
+    test "an exit projects even while a pass for the vault is executing", ctx do
+      {:ok, running} =
+        Oban.insert(
+          Engram.Workers.ProjectVaultIndex.new(%{user_id: ctx.user.id, vault_id: ctx.vault.id})
+        )
+
+      {1, _} =
+        Repo.update_all(from(j in Oban.Job, where: j.id == ^running.id),
+          set: [state: "executing"]
+        )
+
+      room = start_index_room(ctx)
+      put_entry(room, "late.md", "note-late")
+      stop_room_and_wait(room)
+
+      assert [_] =
+               all_enqueued(
+                 worker: Engram.Workers.ProjectVaultIndex,
+                 args: %{vault_id: ctx.vault.id}
+               ),
+             "the exit's projection was collapsed into the pass already executing"
+    end
   end
 
   # Roomless folds are load -> mutate -> REPLACE the snapshot row, with no merge.
@@ -798,9 +843,9 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
 
       assert entry_count(doc) == @limits[:fold_tail_rows] + 1
 
-      assert tail_count(ctx.user, ctx.vault.id) == 0,
-             "the bind replayed a tail over the threshold and left it in place, " <>
-               "so a crash now replays it all again"
+      # Fails as "tail stayed at 21" when the bind leaves a tail over the
+      # threshold in place, so a crash replays it all again.
+      :ok = await_tail_exactly(ctx.user, ctx.vault.id, 0)
 
       assert %VaultIndexState{} = tenant_get(ctx.user, ctx.vault.id)
       assert persisted_entries(ctx) == @limits[:fold_tail_rows] + 1
@@ -817,7 +862,7 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
 
       {_state, _doc} = bind_fresh(ctx)
 
-      assert tail_count(ctx.user, ctx.vault.id) == 0
+      :ok = await_tail_exactly(ctx.user, ctx.vault.id, 0)
       assert persisted_entries(ctx) == 3
     end
 
@@ -834,6 +879,9 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
                @limits[:replay_page_rows]
              ) == [],
              "a statement read the tail outside one #{@limits[:replay_page_rows]}-row page"
+
+      # Let the post-bind fold finish before the sandbox owner exits.
+      :ok = await_tail_exactly(ctx.user, ctx.vault.id, 0)
     end
 
     test "an empty tail binds without writing a snapshot", ctx do
@@ -863,22 +911,22 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
       :ok = Yex.apply_update(doc, update)
       _state = CrdtIndexPersistence.update_v1(state, update, "i", doc)
 
-      assert tail_count(ctx.user, ctx.vault.id) == 0
+      :ok = await_tail_exactly(ctx.user, ctx.vault.id, 0)
       assert persisted_entries(ctx) == rows + 1
     end
 
     test "a row that fails to decode stays in the tail when the bind folds", ctx do
       seed_tail(ctx, @limits[:fold_tail_rows] + 1)
-      # Encrypts fine, is not a Yjs update: the merged page apply fails and the
-      # page falls back to row by row, so only this row is skipped.
+      # Encrypts fine, is not a Yjs update: only this row is skipped, the rest
+      # of its page still applies.
       seed_rows(ctx, [<<255, 255, 255, 255>>])
 
       {_state, doc} = bind_fresh(ctx)
 
       assert entry_count(doc) == @limits[:fold_tail_rows] + 1
 
-      assert tail_count(ctx.user, ctx.vault.id) == 1,
-             "the fold pruned a row it never applied, or folded nothing"
+      # 0 means the fold pruned a row it never applied; 22 means no fold.
+      :ok = await_tail_exactly(ctx.user, ctx.vault.id, 1)
     end
 
     test "appending past the threshold on a live room folds the tail", ctx do
@@ -893,12 +941,193 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
 
       assert Process.alive?(room)
 
-      assert tail_count(ctx.user, ctx.vault.id) < rows,
-             "a live room appended past the threshold and never folded the tail"
+      # 21 rows means a live room appended past the threshold and never folded.
+      :ok = await_tail_exactly(ctx.user, ctx.vault.id, 0)
 
       assert %VaultIndexState{} = tenant_get(ctx.user, ctx.vault.id)
 
       :ok = stop_room_and_wait(room)
+    end
+
+    # Review finding 1: a fold every `fold_tail_rows` appends used to enqueue a
+    # full projection pass each time, about 30 per 15k-note first sync. Only
+    # the room's exit projects; the live fold is durability, not projection.
+    test "a live fold enqueues no projection pass, the exit does", ctx do
+      room = start_index_room(ctx)
+      rows = @limits[:fold_tail_rows]
+
+      for i <- 1..(rows + 1), do: put_entry(room, "p-#{i}.md", "#{i}")
+      assert read_entry(room, "p-#{rows + 1}.md")
+      :ok = await_tail_exactly(ctx.user, ctx.vault.id, 0)
+
+      refute_enqueued(worker: Engram.Workers.ProjectVaultIndex)
+
+      :ok = stop_room_and_wait(room)
+      assert_enqueued(worker: Engram.Workers.ProjectVaultIndex, args: %{vault_id: ctx.vault.id})
+    end
+
+    # Review finding 2: the fold's DB work (snapshot read, encrypt, upsert,
+    # prune) used to run on the room's own message loop, so a slow pool pushed
+    # `Identity.via_room` past its 5 s call into the snapshot fallback. The room
+    # now encodes (memory only) and hands the rest off.
+    test "a live fold writes the snapshot outside the room process", ctx do
+      room = start_index_room(ctx)
+      rows = @limits[:fold_tail_rows]
+
+      {_, queries} =
+        Engram.QueryRecorder.record(fn ->
+          for i <- 1..(rows + 1), do: put_entry(room, "b-#{i}.md", "#{i}")
+          assert read_entry(room, "b-#{rows + 1}.md")
+          :ok = await_tail_exactly(ctx.user, ctx.vault.id, 0)
+        end)
+
+      upserts = Enum.filter(queries, &(&1.sql =~ ~r/^INSERT INTO "vault_index_states"/))
+
+      assert upserts != [], "no fold wrote a snapshot"
+
+      refute Enum.any?(upserts, &(&1.pid == room)),
+             "the fold wrote the snapshot on the room's message loop"
+
+      :ok = stop_room_and_wait(room)
+    end
+
+    # Review finding 3: bind reads the snapshot, then pages the tail. A roomless
+    # fold that commits in between writes S' and prunes the rows it folded, so
+    # the pages read nothing for them and the room never learns those claims.
+    # Bind re-reads the snapshot after the replay and applies it if it moved.
+    test "a roomless fold that lands mid-replay is not lost to the room", ctx do
+      seed_tail(ctx, 10)
+      me = self()
+      id = {__MODULE__, make_ref()}
+
+      # Fire ONE roomless claim, in this process, right after the bind's first
+      # tail window read: the deterministic version of a second node writing
+      # between the bind's snapshot read and its page reads.
+      :telemetry.attach(
+        id,
+        [:engram, :repo, :query],
+        fn _e, _m, meta, _ ->
+          if self() == me and meta.query =~ ~r/FROM "vault_index_update_log"/ and
+               Process.get(:mid_replay_fired) == nil do
+            Process.put(:mid_replay_fired, true)
+
+            :ok =
+              CrdtIndexPersistence.fold_roomless(ctx.user, ctx.vault.id, fn doc ->
+                doc
+                |> Yex.Doc.get_map(CrdtIndexDoc.map_name())
+                |> Yex.Map.set("mid-replay.md", %{"note_id" => "mid"})
+
+                :ok
+              end)
+          end
+        end,
+        nil
+      )
+
+      {_state, doc} =
+        try do
+          bind_fresh(ctx)
+        after
+          :telemetry.detach(id)
+        end
+
+      assert Process.get(:mid_replay_fired), "the probe never fired"
+
+      assert entry_count(doc) == 11,
+             "the bind missed claims a roomless fold folded and pruned mid-replay"
+    end
+
+    # Review finding 4: the prune used every tail row of the vault, so with two
+    # rooms live (a `:global` netsplit) one room's fold deleted rows the other
+    # appended, which were in neither snapshot.
+    test "a fold prunes only the rows its own room folded in", ctx do
+      room = start_index_room(ctx)
+      put_entry(room, "mine.md", "mine")
+      :ok = await_tail(ctx.user, ctx.vault.id, 1)
+
+      # Another room's append, never seen by this one.
+      seed_rows(ctx, [claim_update("theirs.md")])
+
+      :ok = stop_room_and_wait(room)
+
+      assert tail_count(ctx.user, ctx.vault.id) == 1,
+             "the fold deleted a tail row its room never applied"
+    end
+
+    # Item 3: the room fold replaced the snapshot without the per-vault lock
+    # roomless folds take, so the two overwrote each other: a roomless write
+    # that landed while the room was live vanished at the room's next fold.
+    test "a room fold keeps a roomless write that landed while it was live", ctx do
+      room = start_index_room(ctx)
+      put_entry(room, "room.md", "room")
+      :ok = await_tail(ctx.user, ctx.vault.id, 1)
+
+      :ok =
+        CrdtIndexPersistence.fold_roomless(ctx.user, ctx.vault.id, fn doc ->
+          doc |> Yex.Doc.get_map(CrdtIndexDoc.map_name()) |> Yex.Map.set("roomless.md", %{})
+          :ok
+        end)
+
+      :ok = stop_room_and_wait(room)
+
+      {:ok, doc} = CrdtIndexPersistence.load_doc(ctx.user, ctx.vault.id)
+      map = Yex.Doc.get_map(doc, CrdtIndexDoc.map_name())
+
+      assert Yex.Map.has_key?(map, "room.md")
+      assert Yex.Map.has_key?(map, "roomless.md"), "the room fold overwrote a roomless write"
+    end
+
+    test "a room fold takes the per-vault fold lock before it writes", ctx do
+      room = start_index_room(ctx)
+      put_entry(room, "locked.md", "l")
+      :ok = await_tail(ctx.user, ctx.vault.id, 1)
+
+      {_, queries} = Engram.QueryRecorder.record(fn -> stop_room_and_wait(room) end)
+      queries = Enum.filter(queries, &(&1.pid == room))
+
+      lock_at =
+        Enum.find_index(queries, fn q ->
+          q.sql =~ "pg_advisory_xact_lock" and q.params == ["crdt_index_fold:" <> ctx.vault.id]
+        end)
+
+      write_at = Enum.find_index(queries, &(&1.sql =~ ~r/^INSERT INTO "vault_index_states"/))
+
+      assert write_at, "the room fold wrote no snapshot"
+      assert lock_at, "the room fold took no per-vault fold lock"
+      assert lock_at < write_at
+    end
+  end
+
+  # The root of the 2026-10-29 replay cost: every roomless write built a fresh
+  # `Yex.Doc.new()`, so it minted a new Yjs client id, and a state vector never
+  # drops one. A 15k-note sync left ~15k client ids, and every state-vector
+  # encode paid for all of them.
+  describe "server-side client ids" do
+    defp client_ids(doc) do
+      {:ok, sv} = Yex.encode_state_vector(doc)
+      {n, _rest} = read_varuint(sv, 0, 0)
+      n
+    end
+
+    defp read_varuint(<<1::1, b::7, rest::binary>>, shift, acc),
+      do: read_varuint(rest, shift + 7, acc + Bitwise.bsl(b, shift))
+
+    defp read_varuint(<<0::1, b::7, rest::binary>>, shift, acc),
+      do: {acc + Bitwise.bsl(b, shift), rest}
+
+    test "many roomless writes leave one server client id in the state vector", ctx do
+      for i <- 1..5 do
+        :ok =
+          CrdtIndexPersistence.fold_roomless(ctx.user, ctx.vault.id, fn doc ->
+            doc |> Yex.Doc.get_map(CrdtIndexDoc.map_name()) |> Yex.Map.set("w-#{i}.md", %{})
+            :ok
+          end)
+      end
+
+      {:ok, doc} = CrdtIndexPersistence.load_doc(ctx.user, ctx.vault.id)
+
+      assert entry_count(doc) == 5
+      assert client_ids(doc) == 1, "each roomless write minted its own Yjs client id"
     end
   end
 
