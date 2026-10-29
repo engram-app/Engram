@@ -98,6 +98,23 @@ defmodule Engram.Jobs do
     |> Repo.all()
   end
 
+  @doc """
+  How many `worker` jobs are pending (scheduled, available, executing or
+  retryable), counted up to `cap` (the scan stops there).
+  """
+  @spec pending_count(module(), pos_integer()) :: non_neg_integer()
+  def pending_count(worker, cap) do
+    jobs =
+      from(j in Oban.Job,
+        where: j.worker == ^inspect(worker),
+        where: j.state in ~w(scheduled available executing retryable),
+        limit: ^cap,
+        select: j.id
+      )
+
+    from(j in subquery(jobs), select: count()) |> Repo.one()
+  end
+
   @doc false
   def pending_query_for_test(worker, wanted, executing?),
     do: pending_query(worker, wanted, executing?)

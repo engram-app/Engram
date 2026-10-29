@@ -34,7 +34,7 @@ defmodule Engram.ServiceConfig.Overrides do
 
   `put/3` and `delete/2` validate the key against `keys/0` and the value
   against its type, log key, old and new value and the operator, then evict
-  cluster-wide. Values are booleans and short enums, so nothing logged is a
+  cluster-wide. Values are booleans, short enums and bounded integers, so nothing logged is a
   secret.
   """
 
@@ -48,7 +48,10 @@ defmodule Engram.ServiceConfig.Overrides do
 
   @types %{
     tenant_idf: :boolean,
-    index_rebuild: {:enum, ~w(off dry_run on)}
+    index_rebuild: {:enum, ~w(off dry_run on)},
+    keyword_refresh: :boolean,
+    keyword_refresh_backlog: {:integer, 0..1_000_000},
+    rebuild_max_disk_percent: {:integer, 1..100}
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})
@@ -280,6 +283,7 @@ defmodule Engram.ServiceConfig.Overrides do
       case Map.fetch!(@types, key) do
         :boolean -> is_boolean(value)
         {:enum, allowed} -> value in allowed
+        {:integer, range} -> is_integer(value) and value in range
       end
 
     if ok?, do: :ok, else: {:error, {:invalid_value, key, value}}

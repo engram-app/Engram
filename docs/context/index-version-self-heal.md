@@ -1,6 +1,6 @@
 # Index changes heal themselves: version stamps + the reconcile sweep
 
-_Last verified: 2026-10-04_
+_Last verified: 2026-10-29_
 
 **The standard:** a change to how notes are indexed must reach every EXISTING
 note on its own, on SaaS and on every self-host install. A release that needs
@@ -156,3 +156,78 @@ vacuum run before judging the saving. Under `INDEX_REBUILD=off|dry_run` the
 sweep targets `Rebuild.pinned_versions/0` (keyword 2), so nothing moves until
 `on`. No Voyage call is made. The sparse `f16` datatype and the vacuum
 threshold are separate changes (staging plus an infra PR).
+
+**The rewrite is paced, so the peak cannot reach strict mode.** Each
+`RefreshKeywordVectors` job first passes `Rebuild.qdrant_pace/0`, the same
+Qdrant half of the gate the v5 rebuild's `pace/0` uses (minus the Voyage
+token bucket, since a resparse costs nothing). It snoozes 30 s (never fails)
+while:
+
+- disk is at or over the lower of `:rebuild_max_disk_percent` (default 75)
+  and 5 points under the user-write preflight (`Qdrant.preflight_limit/2`,
+  the live strict-mode limit less `QDRANT_PREFLIGHT_MARGIN_POINTS`), from the
+  cached `Qdrant.pressure/0` volume reading. The live limit is not a fixed 85:
+  it is capacity less a reserve that scales with the collection, clamped to
+  70..95, so it falls as dead copies grow the collection. Tying the gate to
+  it keeps the pass stopping before users' own writes are held back.
+  Unknown capacity (self-host has no `/sys_metrics`) never blocks.
+- the update queue holds more than 100 operations, or
+- the optimizer is behind: collection not green, optimizer not ok, or more
+  than `:rebuild_max_queued_points` points awaiting optimization. Waiting on
+  the optimizer is what lets the vacuum keep pace with the dead copies.
+
+**The disk gate can stall the pass for good.** The vacuum optimizer only
+rewrites a segment once its dead share passes `deleted_threshold`
+(`QDRANT_DELETED_THRESHOLD`, default 0.2). The sweep walks notes by id, so
+its dead copies spread evenly over every segment: no segment vacuums until
+about 20% of the corpus is rewritten, which costs about 20% of the
+collection's size in dead copies on top of today's disk. If that sum
+reaches the disk gate first, the gate stops the writes that would push a
+segment over the threshold, nothing vacuums, disk never falls, and the
+sweep snoozes forever (users unaffected). Check before a bump, all in
+percent of capacity: `disk% + 100 x 0.2 x disk_bytes / capacity + one
+segment's optimization copy` must sit under the gate; if not, lower
+`QDRANT_DELETED_THRESHOLD` first. A sustained
+`rebuild_gated_total{reason="disk"}` with a flat disk line is the stall.
+
+The full rebuild shares this gate, so it gets the disk check too. A user's
+edit (`EmbedNote`) is never gated. Snoozes are counted by reason in
+`engram_prom_ex_indexing_rebuild_gated_total{reason}` (`disk`, `queue`,
+`optimizer`, `unavailable`, and `tokens` for the rebuild).
+
+The sweep also stops topping up once `:keyword_refresh_backlog` (default
+10,000) `RefreshKeywordVectors` jobs are pending. Before that cap, one
+reconcile tick queued every keyword-stale note in the fleet at once.
+Concurrency is the `embed` queue's limit (5 per worker node), shared with
+user edits, which run first (keyword jobs are backfill priority).
+
+**Kill switch: `:keyword_refresh` (no deploy).** `INDEX_REBUILD=off` is NOT
+the brake for this sweep. Off drops the keyword target to the pin (2), so
+v5-stale notes stop being queued, but jobs already queued (up to the
+backlog cap) never read the mode and keep rewriting, and off also halts the
+whole v5 pass. Use the runtime override instead, from a release shell on
+any one task (ECS Exec, see the workspace `docs/deployment.md`):
+
+```bash
+aws ecs execute-command --cluster engram-prod --task <task-id> \
+  --container engram --interactive \
+  --command "/app/bin/engram rpc 'Engram.ServiceConfig.override(:keyword_refresh, false, by: \"<you>\") |> IO.inspect()'"
+# resume: the same with Engram.ServiceConfig.clear(:keyword_refresh, by: \"<you>\")
+```
+
+Effect: the write evicts the cached overrides on every node (CacheSync), and
+the 15 s cache TTL bounds a lost eviction, so every node reads it within
+15 s. From then on each queued `RefreshKeywordVectors` job snoozes 300 s at
+perform time before any Qdrant call (a job mid-rewrite finishes its one
+note), and the reconcile sweep queues and stamps nothing. Cleared, the
+snoozed jobs run on their next wake (within 5 min) and the next tick (within
+5 min) tops the backlog up again: no operator backfill. `EmbedNote` (user
+edits) never reads it.
+
+The two knobs are runtime overrides too, same command shape:
+`override(:keyword_refresh_backlog, 0..1_000_000)` (0 also stops the sweep
+queueing, but leaves queued jobs running) and
+`override(:rebuild_max_disk_percent, 1..100)` (also gates the v5 rebuild).
+The gate verdict is cached 30 s per node, so a disk-percent change lands
+within 15 s + 30 s. `Engram.ServiceConfig.list()` shows what is set. Self-host
+leaves all three unset: the defaults (on, 10,000, 75) apply.

@@ -247,5 +247,27 @@ defmodule Engram.ServiceConfig.OverridesTest do
       :ok = ServiceConfig.override(:index_rebuild, "dry_run", by: "t")
       assert Engram.Rebuild.mode() == :dry_run
     end
+
+    # The keyword sweep's brake and its two tuning knobs move without a deploy.
+    test "the keyword sweep knobs are overridable and range-checked" do
+      assert :ok = ServiceConfig.override(:keyword_refresh, false, by: "t")
+      assert :ok = ServiceConfig.override(:keyword_refresh_backlog, 0, by: "t")
+      assert :ok = ServiceConfig.override(:rebuild_max_disk_percent, 60, by: "t")
+
+      assert ServiceConfig.get(:keyword_refresh, true) == false
+      assert ServiceConfig.get(:keyword_refresh_backlog, 10_000) == 0
+      assert ServiceConfig.get(:rebuild_max_disk_percent, 75) == 60
+
+      for {key, bad} <- [
+            keyword_refresh: "off",
+            keyword_refresh_backlog: -1,
+            keyword_refresh_backlog: "10",
+            rebuild_max_disk_percent: 0,
+            rebuild_max_disk_percent: 101,
+            rebuild_max_disk_percent: 60.5
+          ] do
+        assert {:error, {:invalid_value, ^key, ^bad}} = ServiceConfig.override(key, bad, by: "t")
+      end
+    end
   end
 end

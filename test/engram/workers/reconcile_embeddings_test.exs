@@ -180,6 +180,42 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       end
     end
 
+    # A keyword-version bump makes every indexed note stale at once (~648k
+    # points in prod). One tick must not queue them all: the sweep stops once
+    # the pending RefreshKeywordVectors backlog reaches its cap, and the rest
+    # stay eligible for a later tick.
+    test "the keyword sweep stops at its backlog cap" do
+      Engram.ServiceConfig.put_override(:keyword_refresh_backlog, 1)
+      [a, b] = for _ <- 1..2, do: current_note(insert(:user), keyword_version: nil)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert length(all_enqueued(worker: RefreshKeywordVectors)) == 1
+
+      # The backlog is still at the cap: the next tick queues nothing more.
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert length(all_enqueued(worker: RefreshKeywordVectors)) == 1
+
+      # The note it skipped was not stamped, so it is still eligible.
+      [queued] = all_enqueued(worker: RefreshKeywordVectors)
+      skipped = if queued.args["note_id"] == a.id, do: b, else: a
+      assert Repo.get!(Note, skipped.id, skip_tenant_check: true).embed_retry_after == nil
+    end
+
+    # The kill switch: off, the sweep queues nothing and stamps nothing, so
+    # the notes are still eligible the tick after it is turned back on.
+    test "keyword_refresh off stops the keyword sweep; on resumes it" do
+      Engram.ServiceConfig.put_override(:keyword_refresh, false)
+      note = current_note(insert(:user), keyword_version: nil)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert all_enqueued(worker: RefreshKeywordVectors) == []
+      assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_retry_after == nil
+
+      Engram.ServiceConfig.put_override(:keyword_refresh, true)
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert [_] = all_enqueued(worker: RefreshKeywordVectors)
+    end
+
     # Nodes on the previous release share the embed queue mid-deploy, and
     # their ResparseNote re-embedded unmatched notes. The sweep must enqueue a
     # worker name they do not have, so they fail the job instead of billing.

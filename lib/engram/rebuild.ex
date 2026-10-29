@@ -49,8 +49,11 @@ defmodule Engram.Rebuild do
   While `on`, each `RebuildStaleNote` job waits (`gate/0`) for two things:
   room in the maintenance token bucket (150,000 Voyage tokens a minute,
   debited by each response's `usage.total_tokens`), and a Qdrant that is
-  keeping up (green, optimizer ok, at most 100 queued updates and
-  `:rebuild_max_queued_points` points awaiting optimization). The
+  keeping up (green, optimizer ok, at most 100 queued updates,
+  `:rebuild_max_queued_points` points awaiting optimization, and disk under
+  `:rebuild_max_disk_percent`, `qdrant_pace/0`). The keyword sweep's
+  in-place rewrite (`RefreshKeywordVectors`) waits on `qdrant_pace/0` too,
+  in every mode. The
   reconcile sweep queues the pass by `rebuild_order/1`: paid users first,
   then active Free users smallest first, then inactive Free, and the users
   in `:rebuild_last_users` (the whales) last.
@@ -100,6 +103,8 @@ defmodule Engram.Rebuild do
   # What a gated job snoozes, and the Qdrant update-queue ceiling.
   @gate_snooze 30
   @max_update_queue 100
+  # The maintenance disk gate's lead over the user-write preflight (`disk_full?/0`).
+  @user_headroom_points 5
   # "Active" Free users for the order: seen within this many days.
   @active_days 30
 
@@ -344,11 +349,9 @@ defmodule Engram.Rebuild do
 
   @doc """
   `:ok`, or `{:snooze, 30}` while the pass must wait: the maintenance token
-  bucket is spent for this minute, or Qdrant is behind (not green, optimizer
-  not ok, more than 100 queued updates, or more than
-  `:rebuild_max_queued_points` (default 50,000) points awaiting
-  optimization). Unreadable health counts as behind. Only while `on`: off
-  and `dry_run` never gate, and never call Qdrant here.
+  bucket is spent for this minute, or `qdrant_pace/0` says Qdrant is
+  behind. Only while `on`: off and `dry_run` never gate, and never call
+  Qdrant here.
   """
   @spec gate() :: :ok | {:snooze, 30}
   def gate, do: if(mode() == :on, do: pace(), else: :ok)
@@ -386,11 +389,35 @@ defmodule Engram.Rebuild do
   (`Engram.EmbedModels`) is paced like the pass even when it is off.
   """
   @spec pace() :: :ok | {:snooze, 30}
-  def pace do
-    cond do
-      not tpm_room?() -> gated(:tokens)
-      not qdrant_ready?() -> gated(:qdrant)
-      true -> :ok
+  def pace, do: if(tpm_room?(), do: qdrant_pace(), else: gated(:tokens))
+
+  @doc """
+  The Qdrant half of `pace/0`, for maintenance writes with no Voyage cost
+  (`RefreshKeywordVectors`): `{:snooze, 30}` while Qdrant cannot absorb a
+  bulk rewrite. Every in-place rewrite leaves a dead copy until the
+  optimizer vacuums the segment, so a corpus-wide pass must wait for it, or
+  disk climbs into strict mode's write refusal and users' writes are
+  refused too. Snoozes on, by `[:engram, :rebuild, :gated]` reason:
+
+    * `:disk`: Qdrant volume use at or over the lower of
+      `:rebuild_max_disk_percent` (default 75) and 5 points under the
+      user-write preflight (`Qdrant.preflight_limit/2`). Unknown capacity
+      (self-host has no `/sys_metrics`) never blocks. Reads the cached
+      `Qdrant.pressure/0`.
+    * `:queue`: more than 100 queued updates.
+    * `:optimizer`: collection not green (yellow = optimizing), optimizer
+      not ok, or more than `:rebuild_max_queued_points` (default 50,000)
+      points awaiting optimization.
+    * `:unavailable`: collection info unreadable.
+
+  The verdict is cached per node for 30 s, the snooze interval. Never gate
+  a user's own write on this.
+  """
+  @spec qdrant_pace() :: :ok | {:snooze, 30}
+  def qdrant_pace do
+    case qdrant_behind() do
+      nil -> :ok
+      reason -> gated(reason)
     end
   end
 
@@ -403,16 +430,47 @@ defmodule Engram.Rebuild do
   defp tpm_debit(tokens),
     do: RateLimiter.hit(@tpm_key, @tpm_window_ms, @tpm_tokens, :voyage_embed, tokens)
 
-  defp qdrant_ready? do
-    col = Qdrant.collection_name()
+  # Cached per node for the snooze interval (`:rebuild` TTL 30 s): every
+  # queued job runs this, and a backlog of thousands would otherwise ask
+  # Qdrant for its health thousands of times a minute just to snooze.
+  defp qdrant_behind do
+    Cache.fetch(:rebuild, {:qdrant_behind, Qdrant.base_url()}, fn ->
+      if disk_full?(), do: :disk, else: collection_behind(Qdrant.collection_name())
+    end)
+  end
 
-    case Qdrant.collection_info(col, :search) do
-      {:ok, %{"status" => "green", "optimizer_status" => "ok"} = info} ->
-        (get_in(info, ["update_queue", "length"]) || 0) <= @max_update_queue and
-          optimizer_caught_up?(col)
+  # The lower of `:rebuild_max_disk_percent` and 5 points under the user-write
+  # preflight. The live strict-mode limit falls as dead copies grow the
+  # collection (`QdrantLayout.strict_limits/2`, down to 70), so a fixed 75
+  # could keep rewriting after users' own writes are held back.
+  defp disk_full? do
+    case Qdrant.pressure() do
+      %{disk: pct} = reading when is_integer(pct) ->
+        pct >=
+          min(
+            ServiceConfig.get(:rebuild_max_disk_percent, 75),
+            Qdrant.preflight_limit(reading, :disk) - @user_headroom_points
+          )
 
       _ ->
         false
+    end
+  end
+
+  defp collection_behind(col) do
+    case Qdrant.collection_info(col, :search) do
+      {:ok, %{"status" => "green", "optimizer_status" => "ok"} = info} ->
+        cond do
+          (get_in(info, ["update_queue", "length"]) || 0) > @max_update_queue -> :queue
+          not optimizer_caught_up?(col) -> :optimizer
+          true -> nil
+        end
+
+      {:ok, _} ->
+        :optimizer
+
+      _ ->
+        :unavailable
     end
   end
 

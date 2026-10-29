@@ -1053,11 +1053,19 @@ defmodule Engram.Vector.Qdrant do
   5) of its strict-mode limit, i.e. about to be refused. Unknown is never over.
   """
   def over_pressure?(%{disk: disk, heap: heap} = reading) do
-    limits = Map.get(reading, :limits, @static_limits)
-    margin = ServiceConfig.get(:qdrant_preflight_margin_points, 5)
+    at_or_over?(disk, preflight_limit(reading, :disk)) or
+      at_or_over?(heap, preflight_limit(reading, :heap))
+  end
 
-    at_or_over?(disk, limits.disk.percent - margin) or
-      at_or_over?(heap, limits.heap.percent - margin)
+  @doc """
+  The percent at which `over_pressure?/1` starts refusing `kind` (`:disk` |
+  `:heap`) for `reading`: the live strict-mode limit less
+  `QDRANT_PREFLIGHT_MARGIN_POINTS`. Maintenance gates (`Engram.Rebuild`)
+  stop below it, so a user's write is never the first one held back.
+  """
+  def preflight_limit(reading, kind) do
+    limits = Map.get(reading, :limits, @static_limits)
+    limits[kind].percent - ServiceConfig.get(:qdrant_preflight_margin_points, 5)
   end
 
   defp at_or_over?(pct, limit), do: is_integer(pct) and pct >= limit

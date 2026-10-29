@@ -62,6 +62,7 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
     bypass = Bypass.open()
     Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
     Bypass.stub(bypass, :any, :any, &fake_qdrant(&1, store))
+    Engram.QdrantStub.stub_healthy(bypass)
 
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture(dek_version: 1)
     vault = Engram.Fixtures.insert_vault!(user, "KeysVault")

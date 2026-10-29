@@ -27,9 +27,12 @@ defmodule Engram.PromEx.Indexing do
       ledger (`Engram.Rebuild.ledger/0`), polled every 60 s on every node
       (aggregate with `max`, never `sum`). Absent until a dry run seals a
       budget. Spend past 1.1x the manifest is `spent > 1.1 * budget / 1.15`.
-    * `engram_prom_ex_indexing_rebuild_gated_total{reason}`: rebuild jobs
-      snoozed by `Engram.Rebuild.gate/0`, `tokens` (the maintenance bucket
-      is spent for the minute) or `qdrant` (the collection is behind).
+    * `engram_prom_ex_indexing_rebuild_gated_total{reason}`: rebuild and
+      keyword-refresh jobs snoozed by `Engram.Rebuild.pace/0` /
+      `qdrant_pace/0`: `tokens` (the maintenance bucket is spent for the
+      minute), `disk` (Qdrant volume over `:rebuild_max_disk_percent`),
+      `queue` (update queue over 100), `optimizer` (not green or points
+      awaiting optimization) or `unavailable` (collection info unreadable).
     * `engram_prom_ex_indexing_repath_total` — counter of repath events by
       `:outcome`. Alert on `:fallback` / `:missing_points` rate; the `:ok` rate
       is the "renames took the cheap path" signal.
@@ -291,7 +294,7 @@ defmodule Engram.PromEx.Indexing do
           metric_prefix ++ [:rebuild, :gated, :total],
           event_name: @rebuild_gated_event,
           description:
-            "v5 rebuild jobs snoozed by the pass's pacing: tokens (bucket spent) or qdrant (behind).",
+            "Rebuild and keyword-refresh jobs snoozed by pacing: tokens, disk, queue, optimizer or unavailable.",
           tags: [:reason]
         ),
         sum(

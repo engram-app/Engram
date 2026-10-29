@@ -24,6 +24,7 @@ defmodule Engram.Workers.EmbedNoteTest do
     bypass = Bypass.open()
     Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
+    Engram.QdrantStub.stub_healthy(bypass)
 
     user = insert(:user)
     {:ok, user} = Crypto.ensure_user_dek(user)
