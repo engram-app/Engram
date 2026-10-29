@@ -41,7 +41,7 @@ defmodule Engram.EmbedModels do
   `price/1` is micro-USD per million tokens, from Voyage's public pricing
   page (https://docs.voyageai.com/docs/pricing, read 2026-10-21):
   voyage-4-large $0.12/M, voyage-4-lite $0.02/M. `:voyage_prices`
-  overrides them. The rebuild ledger counts cost in voyage-4-large tokens
+  overrides them. voyage-4-nano (staging, self-hosted in Ollama) is free. The rebuild ledger counts cost in voyage-4-large tokens
   (`large_tokens/2`): a lite token debits 1/6 of one.
   """
 
@@ -124,9 +124,24 @@ defmodule Engram.EmbedModels do
     end
   end
 
-  @doc "Micro-USD per million tokens; an unknown model prices as voyage-4-large."
-  @spec price(String.t() | nil) :: pos_integer()
+  @doc """
+  True for voyage-4-nano, the open-weights member of the family, by any Ollama
+  tag (`hf.co/MongoDB/voyage-4-nano-GGUF:Q8_0`, `:F16`). Only the official
+  MongoDB GGUF files are in the voyage-4 space; community conversions are not.
+  """
+  @spec nano?(String.t() | nil) :: boolean()
+  def nano?(model), do: is_binary(model) and String.contains?(model, "voyage-4-nano")
+
+  @doc """
+  Micro-USD per million tokens; an unknown model prices as voyage-4-large.
+  voyage-4-nano runs on our own hardware (`Engram.Embedders.Ollama`): 0.
+  """
+  @spec price(String.t() | nil) :: non_neg_integer()
   def price(model) do
+    if nano?(model), do: 0, else: api_price(model)
+  end
+
+  defp api_price(model) do
     prices = Application.get_env(:engram, :voyage_prices, @prices)
     Map.get(prices, model) || Map.get(prices, @large) || Map.fetch!(@prices, @large)
   end

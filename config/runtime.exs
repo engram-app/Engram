@@ -175,6 +175,12 @@ if config_env() != :test do
     "ollama" ->
       config :engram, :embedder, Engram.Embedders.Ollama
 
+      # voyage-4-nano only (`Engram.Embedders.Ollama`): context per request,
+      # sent as num_ctx and num_batch. Unset keeps the model's own (32k, ~6 GB).
+      if num_ctx = System.get_env("OLLAMA_NUM_CTX") do
+        config :engram, :ollama_num_ctx, String.to_integer(num_ctx)
+      end
+
     _ ->
       config :engram, :embedder, Engram.Embedders.Voyage
 
