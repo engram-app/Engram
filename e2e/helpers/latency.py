@@ -20,8 +20,8 @@ DELIVERY_TIMEOUT = float(os.environ.get("E2E_DELIVERY_TIMEOUT", "120"))
 # latency SLO, and nothing documented them as one.
 #
 # A search's cost is dominated by ONE query embed, and in CI that embed queues
-# behind the embed worker's bulk index batches on the shared FastRaid Ollama
-# (`10.0.20.214:11434`), which serializes requests. Measured 2026-08-12 against
+# behind the embed worker's bulk index batches on the shared CI Ollama
+# (a GPU host), which serializes requests. Measured 2026-08-12 against
 # that box with `mxbai-embed-large`:
 #
 #   idle query embed .................................. ~0.12s

@@ -2,7 +2,7 @@
 # dev-reset.sh — wipe the local dev data stores for a clean slate.
 #
 # Resets all three persistent dev stores in sequence:
-#   1. Qdrant collection on SlowRaid (or wherever QDRANT_URL points)
+#   1. Qdrant collection (docker-compose.dev.yml, or wherever QDRANT_URL points)
 #   2. MinIO bucket on the local Docker stack
 #   3. Postgres engram_dev DB (opt-in via --postgres)
 #
@@ -21,7 +21,7 @@ ENV_FILE="${ROOT}/.env.local"
 
 [[ -f "${ENV_FILE}" ]] && set -a && source "${ENV_FILE}" && set +a
 
-QDRANT_URL="${QDRANT_URL:-http://10.0.20.201:6333}"
+QDRANT_URL="${QDRANT_URL:-http://localhost:6334}"
 QDRANT_COLLECTION="${QDRANT_COLLECTION:-obsidian_notes}"
 MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://localhost:9000}"
 MINIO_BUCKET="${STORAGE_BUCKET:-engram-attachments}"
