@@ -3751,7 +3751,7 @@ defmodule Engram.Notes do
       query =
         case fields do
           :meta -> from(n in base, select: struct(n, @note_meta_fields))
-          :crdt -> from(n in base, select: struct(n, @note_crdt_fields))
+          :crdt -> NoteBody.select_note(base, @note_crdt_fields)
           :all -> NoteBody.select_note(base)
           :current -> with_tail(base)
         end

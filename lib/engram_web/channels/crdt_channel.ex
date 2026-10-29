@@ -894,7 +894,7 @@ defmodule EngramWeb.CrdtChannel do
 
   defp deliver_released_step2(socket, doc_id, frame) do
     with {:ok, note_id} <- cast_doc_id(doc_id),
-         {:ok, update} <- take_sync(frame, :sync_step2, :bad_frame) do
+         {:ok, update} <- decode_step2(frame) do
       result =
         apply_room_free(
           socket,
@@ -902,29 +902,36 @@ defmodule EngramWeb.CrdtChannel do
         )
 
       emit_unroomed_step2(result)
-      step2_reply(result, socket)
+      with :ok <- step2_result(result), do: {:ok, socket}
     end
+  end
+
+  # A STEP2 that will not decode will not decode on a resend either.
+  defp decode_step2(frame) do
+    take_sync(frame, :sync_step2, :doc_update_failed)
   rescue
     # Same discipline as `crdt_doc_update`: the decode NIF runs on THIS process,
     # and a raise here would cost the socket every room it holds.
-    _ -> {:error, :bad_frame}
+    _ -> {:error, :doc_update_failed}
   end
 
-  # Every failure replies (doc_id is a proven UUID, so echoing it is safe).
-  # Not-found and too-large keep their own replies. A timeout or crashed applier
-  # may still land, and a resend is idempotent: room_unavailable. A malformed or
-  # dependency-missing update will not land on a resend: doc_update_failed.
-  defp step2_reply({:ok, _}, socket), do: {:ok, socket}
+  @doc false
+  # Public so the timeout / crashed-applier arms, which push/3 cannot drive
+  # deterministically, are testable. Every failure replies (doc_id is a proven
+  # UUID, so echoing it is safe). Not-found and too-large keep their own
+  # replies. A malformed or dependency-missing update will not land on a resend:
+  # doc_update_failed. Anything else (timeout, crashed applier, dead room) may
+  # still land, and a resend is idempotent: room_unavailable.
+  @spec step2_result({:ok, term()} | {:error, term()}) :: :ok | {:error, atom()}
+  def step2_result({:ok, _}), do: :ok
 
-  defp step2_reply({:error, reason}, _socket)
-       when reason in [:not_found, :note_too_large, :room_unavailable],
-       do: {:error, reason}
+  def step2_result({:error, reason}) when reason in [:not_found, :note_too_large],
+    do: {:error, reason}
 
-  defp step2_reply({:error, reason}, _socket)
-       when reason in [:invalid_update, :missing_dependencies],
-       do: {:error, :doc_update_failed}
+  def step2_result({:error, reason}) when reason in [:invalid_update, :missing_dependencies],
+    do: {:error, :doc_update_failed}
 
-  defp step2_reply({:error, _reason}, _socket), do: {:error, :room_unavailable}
+  def step2_result({:error, _reason}), do: {:error, :room_unavailable}
 
   defp emit_unroomed_step2(result) do
     outcome =

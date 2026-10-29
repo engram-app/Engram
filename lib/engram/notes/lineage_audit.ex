@@ -53,7 +53,7 @@ defmodule Engram.Notes.LineageAudit do
   alias Engram.Crypto
   alias Engram.Logger.Metadata
   alias Engram.Native
-  alias Engram.Notes.{CrdtBridge, CrdtPersistence, CrdtUpdateLog, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtPersistence, CrdtUpdateLog, Note, NoteBody}
   alias Engram.Repo
   alias Engram.Vaults.Vault
 
@@ -162,14 +162,14 @@ defmodule Engram.Notes.LineageAudit do
     {note, rows} =
       Repo.with_tenant!(user.id, fn ->
         note =
-          Repo.one(
-            from(n in Note,
-              where:
-                n.id == ^note_id and n.vault_id == ^vault.id and n.kind == "note" and
-                  is_nil(n.deleted_at),
-              select: struct(n, [:id, :dek_version, :crdt_state_ciphertext, :crdt_state_nonce])
-            )
+          from(n in Note,
+            where:
+              n.id == ^note_id and n.vault_id == ^vault.id and n.kind == "note" and
+                is_nil(n.deleted_at)
           )
+          # Body columns come from note_bodies first (wave 3 migrate-data).
+          |> NoteBody.select_note([:id, :dek_version, :crdt_state_ciphertext, :crdt_state_nonce])
+          |> Repo.one()
 
         {note, note && CrdtPersistence.tail_rows(note_id, vault.id)}
       end)

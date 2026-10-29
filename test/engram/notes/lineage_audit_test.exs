@@ -294,9 +294,12 @@ defmodule Engram.Notes.LineageAuditTest do
     bad = note(user, vault, "C/Bad.md", "x\n")
     good = note(user, vault, "C/Good.md", "y\n")
     CrdtRegistry.terminate_room(bad.id)
-    # Also break the facade: the audit must not need it.
+    # Also break the facade: the audit must not need it. A NEW nonce, so the
+    # notes_sync_body trigger carries the corrupt state into note_bodies, the
+    # copy the audit reads.
     set_note(user, bad.id,
       crdt_state_ciphertext: :crypto.strong_rand_bytes(48),
+      crdt_state_nonce: :crypto.strong_rand_bytes(12),
       content_ciphertext: :crypto.strong_rand_bytes(48)
     )
 
