@@ -2494,6 +2494,38 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_receive {:unroomed_step2, %{outcome: :failed}}
     end
 
+    test "a released doc's STEP2 that will not decode gets an error reply", %{
+      socket: socket,
+      doc_id: doc_id
+    } do
+      _ = heal_and_release(socket, doc_id)
+      # STEP2 prefix, then a buffer length (5) the frame cannot honour.
+      frame = <<0, 1, 5, 1, 2>>
+
+      ref = push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Base.encode64(frame)})
+      assert_reply ref, :error, %{reason: "doc_update_failed", doc_id: ^doc_id}, 3000
+    end
+
+    test "every room-free failure maps to a reply reason" do
+      # The timeout and crashed-applier arms cannot be driven through push/3
+      # deterministically. Both may still land and a resend is idempotent.
+      for r <- [:apply_timeout, {:applier_crashed, :boom}, :room_unavailable, :append_failed],
+          do:
+            assert(EngramWeb.CrdtChannel.step2_result({:error, r}) == {:error, :room_unavailable})
+
+      for r <- [:invalid_update, :missing_dependencies],
+          do:
+            assert(
+              EngramWeb.CrdtChannel.step2_result({:error, r}) == {:error, :doc_update_failed}
+            )
+
+      for r <- [:not_found, :note_too_large],
+          do: assert(EngramWeb.CrdtChannel.step2_result({:error, r}) == {:error, r})
+
+      assert EngramWeb.CrdtChannel.step2_result({:ok, :covered}) == :ok
+      assert EngramWeb.CrdtChannel.step2_result({:ok, %{head: "h"}}) == :ok
+    end
+
     test "a STEP2 for a doc this socket never released keeps the room path", %{
       socket: socket,
       doc_id: doc_id
