@@ -923,8 +923,11 @@ defmodule Engram.Notes.CrdtIndexPersistence do
                 :ok ->
                   applied(acc, row.id, update)
 
-                _ ->
-                  drop_row(acc, row.id, user, vault_id)
+                error ->
+                  case apply_failure(error) do
+                    :drop -> drop_row(acc, row.id, user, vault_id)
+                    :keep -> skip_row(acc, row.id, user, vault_id, {:apply_failed, error})
+                  end
               end
 
             {:error, reason} ->
@@ -960,6 +963,14 @@ defmodule Engram.Notes.CrdtIndexPersistence do
   # `applied`, the list a fold prunes, so the next fold deletes it. Loud: this
   # is a lost update, and the operator needs the vault. It does not open a gap
   # (`skipped`): rows depending on it stay pending whatever we do.
+  # Only a decode failure proves the row is not a Yjs update. Any other apply
+  # error (a dead doc worker, an exit during shutdown) says nothing about the
+  # row, so it is kept and opens a gap, exactly like an undecryptable row.
+  @doc false
+  @spec apply_failure(term()) :: :drop | :keep
+  def apply_failure({:error, {:encoding_exception, _}}), do: :drop
+  def apply_failure(_error), do: :keep
+
   defp drop_row(acc, row_id, user, vault_id) do
     emit_tail(:corrupt_row)
 
