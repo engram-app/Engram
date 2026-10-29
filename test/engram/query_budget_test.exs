@@ -115,13 +115,15 @@ defmodule Engram.QueryBudgetTest do
     # path in the vault index room, which must commit before the row txn):
     #  1-4 claim validation txn (note ids at the paths).
     #  5 the claim's own fresh rotation lock (a socket's user is stale).
-    #  6-13 index room fold (per-vault advisory lock, snapshot, tail, tail
-    #  ids, snapshot upsert). The lock (+1) serializes roomless folds so
-    #  concurrent release chunks cannot overwrite each other's snapshot.
-    #  14-21 rename txn (2 note reads, seq, UPDATE, tombstone INSERT).
-    #  22-27 post-commit jobs (one unique, own txn). 28-32 idle-room fanout
-    #  (fresh users row + note read). 33-36 links txn.
-    "POST notes/rename" => 36,
+    #  6-12 index room fold (per-vault advisory lock, snapshot, one tail
+    #  window read, snapshot upsert). The lock (+1) serializes roomless folds
+    #  so concurrent release chunks cannot overwrite each other's snapshot.
+    #  The separate tail-ids read is gone (-1, #2306): the fold prunes exactly
+    #  the ids its replay applied.
+    #  13-20 rename txn (2 note reads, seq, UPDATE, tombstone INSERT).
+    #  21-26 post-commit jobs (one unique, own txn). 27-31 idle-room fanout
+    #  (fresh users row + note read). 32-35 links txn.
+    "POST notes/rename" => 35,
     # begin, enter, the note row, seq bump, tombstone, usage_meters, the
     # index-delete job insert + its pg_notify, the release joining the
     # warm-up's pending release job (one UPDATE, no insert), commit. With no
