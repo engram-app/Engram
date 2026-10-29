@@ -946,8 +946,17 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
       assert read_entry(revived, "left-5.md")["note_id"] == "5"
       :ok = stop_room_and_wait(revived)
 
-      assert tail_count(ctx.user, ctx.vault.id) <= 1,
-             "the rows behind a corrupt row were never pruned"
+      assert tail_count(ctx.user, ctx.vault.id) == 0,
+             "the corrupt row, or the rows behind it, were never pruned"
+    end
+
+    # Only a decode failure proves a row is not a Yjs update. Any other apply
+    # error (a dead doc worker, an exit mid-shutdown) says nothing about the
+    # row, so it is kept like an undecryptable one rather than deleted.
+    test "only an encoding exception marks a row for dropping" do
+      assert CrdtIndexPersistence.apply_failure({:error, {:encoding_exception, "eof"}}) == :drop
+      assert CrdtIndexPersistence.apply_failure({:error, :worker_down}) == :keep
+      assert CrdtIndexPersistence.apply_failure({:error, {:other, "x"}}) == :keep
     end
 
     test "appending past the threshold on a live room folds the tail", ctx do
