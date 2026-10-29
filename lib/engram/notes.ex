@@ -2279,8 +2279,10 @@ defmodule Engram.Notes do
   # write 409s instead of CRDT-merging. The merge diffs incoming FULL content
   # against the stored snapshot, so a stale full-content push deletes newer
   # content "convergently" (prod incident 2026-07-07). Absent base_hash keeps
-  # the merge behavior for legacy clients.
-  defp put_base_hash_opt(opts, attrs) do
+  # the merge behavior for legacy clients. Attachments upload through the same
+  # option (#2163).
+  @doc false
+  def put_base_hash_opt(opts, attrs) do
     case attrs["base_hash"] || attrs[:base_hash] do
       base when is_binary(base) -> Keyword.put(opts, :base_hash, base)
       _ -> opts

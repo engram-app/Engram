@@ -29,7 +29,9 @@ defmodule EngramWeb.AttachmentsController do
         "is also limited to text MIME types), any file type is accepted except executables, whose extension returns 415 " <>
         "(`extension_not_allowed`), the file must be within the per-plan size and total-quota limits (402), a raw body " <>
         "over the request ceiling returns 413, a raw body that stalls returns 408, a non-numeric " <>
-        "`mtime`, or a `mime_type` with illegal bytes (`invalid_mime_type`), returns 422, and a storage backend failure returns 502.",
+        "`mtime`, or a `mime_type` with illegal bytes (`invalid_mime_type`), returns 422, and a storage backend failure returns 502. " <>
+        "An optional `base_hash` (the `content_hash` you last read) makes the write compare-and-swap: " <>
+        "if the attachment changed since, it returns 409 `version_conflict` with the current attachment.",
     tags: ["Attachments"],
     parameters: [
       path: [
@@ -49,6 +51,14 @@ defmodule EngramWeb.AttachmentsController do
         type: :string,
         required: false,
         description: "MIME override; detected from the extension when absent (octet-stream body)."
+      ],
+      base_hash: [
+        in: :query,
+        type: :string,
+        required: false,
+        description:
+          "Compare-and-swap guard (octet-stream body): the content_hash you last read. " <>
+            "If the attachment changed since, the upload returns 409 instead of overwriting."
       ]
     ],
     request_body: %OpenApiSpex.RequestBody{
@@ -67,6 +77,9 @@ defmodule EngramWeb.AttachmentsController do
            "`retry-after` seconds.", "application/json", Schemas.MessageError},
       ok: {"Uploaded", "application/json", Schemas.AttachmentResponse},
       bad_request: {"Invalid base64", "application/json", Schemas.MessageError},
+      conflict:
+        {"`version_conflict`: stale `base_hash`", "application/json",
+         Schemas.AttachmentVersionConflict},
       payment_required:
         {"Attachments require a paid plan / quota", "application/json", Schemas.LimitError},
       request_timeout:
@@ -327,6 +340,9 @@ defmodule EngramWeb.AttachmentsController do
       # A rotation that started after RotationLockCheck let the request in.
       {:error, :rotation_in_progress} ->
         EngramWeb.Plugs.RotationLockCheck.halt_rotating(conn)
+
+      {:error, {:stale_base, att}} ->
+        version_conflict(conn, att)
 
       # Defense in depth: the context enforces the gate too. The pre-check
       # above answers first on the HTTP path; these keep a context rejection
@@ -945,6 +961,15 @@ defmodule EngramWeb.AttachmentsController do
   @doc false
   def attachments_disabled(conn) do
     EngramWeb.LimitResponse.halt(conn, "attachments_disabled", :attachments_enabled, false, nil)
+  end
+
+  # #2163: a stale `base_hash` on upload or chunked complete. Same error key
+  # as the notes 409, carrying the live row so the client sees its hash.
+  @doc false
+  def version_conflict(conn, att) do
+    conn
+    |> put_status(409)
+    |> json(%{error: "version_conflict", server_attachment: serialize_metadata(att)})
   end
 
   # The JSON body's metadata for a `?raw=1` download, so a client can take the

@@ -9,6 +9,7 @@ defmodule EngramWeb.AttachmentUploadsController do
 
   alias Engram.Attachments.Uploads
   alias Engram.Billing
+  alias Engram.Notes
   alias Engram.Storage.MimeWhitelist
   alias EngramWeb.AttachmentRefusalTelemetry
   alias EngramWeb.AttachmentsController
@@ -161,9 +162,13 @@ defmodule EngramWeb.AttachmentUploadsController do
         "session staying resumable, and 402 `attachments_quota_exceeded` when the file no " <>
         "longer fits the quota, the session then being dropped. Safe to retry: once committed, " <>
         "a repeat complete returns the same attachment (404 if it was since deleted or " <>
-        "overwritten).",
+        "overwritten). An optional `base_hash` makes the commit compare-and-swap, as on " <>
+        "`POST /api/attachments`: a stale one returns 409 `version_conflict` and drops the session.",
     tags: ["Attachments"],
     parameters: [id: @id_param],
+    request_body:
+      {"Optional compare-and-swap guard", "application/json",
+       Schemas.AttachmentUploadCompleteRequest, required: false},
     responses: [
       service_unavailable:
         {"`rotation_in_progress`: an encryption key rotation holds the account; retry after " <>
@@ -171,13 +176,19 @@ defmodule EngramWeb.AttachmentUploadsController do
       ok: {"Uploaded", "application/json", Schemas.AttachmentResponse},
       payment_required: {"Quota exceeded", "application/json", Schemas.LimitError},
       not_found: {"No such upload", "application/json", Schemas.Error},
-      conflict: {"Parts missing", "application/json", Schemas.AttachmentUploadMissingParts},
+      conflict:
+        {"`missing_parts`, or `version_conflict` on a stale `base_hash`", "application/json",
+         %OpenApiSpex.Schema{
+           oneOf: [Schemas.AttachmentUploadMissingParts, Schemas.AttachmentVersionConflict]
+         }},
       bad_gateway: {"Storage backend failure", "application/json", Schemas.MessageError}
     ]
   )
 
-  def complete(conn, %{"id" => id}) do
-    case Uploads.complete(conn.assigns.current_user, conn.assigns.current_vault, id) do
+  def complete(conn, %{"id" => id} = params) do
+    opts = Notes.put_base_hash_opt([], params)
+
+    case Uploads.complete(conn.assigns.current_user, conn.assigns.current_vault, id, opts) do
       {:ok, att} -> json(conn, %{attachment: AttachmentsController.serialize_metadata(att)})
       {:error, reason} -> refuse(conn, reason)
     end
@@ -314,6 +325,8 @@ defmodule EngramWeb.AttachmentUploadsController do
 
   defp refuse(conn, :upload_completed),
     do: conn |> put_status(409) |> json(%{error: "upload_completed"})
+
+  defp refuse(conn, {:stale_base, att}), do: AttachmentsController.version_conflict(conn, att)
 
   defp refuse(conn, {:missing_parts, missing}),
     do: conn |> put_status(409) |> json(%{error: "missing_parts", missing: missing})
