@@ -12,6 +12,9 @@ defmodule Engram.Notes.ContentCommit do
   write, so a create or a write history did not record enqueues no
   `FinalizeRevision`.
 
+  `:embed_settle` is passed to `EmbedNote.new_debounced/3` as `settle:`
+  (`:agent` for an MCP write; absent means the default settle).
+
   Returns the first failed insert, if any; the inline write sites ignore it
   (Enqueue logs it), the dispatcher job fails on it so Oban retries.
 
@@ -25,7 +28,8 @@ defmodule Engram.Notes.ContentCommit do
   def enqueue_jobs(note_id, user_id, opts \\ []) when is_binary(note_id) and is_binary(user_id) do
     [
       EmbedNote.insert_debounced(note_id, user_id,
-        priority: Keyword.get(opts, :embed_priority, 0)
+        priority: Keyword.get(opts, :embed_priority, 0),
+        settle: Keyword.get(opts, :embed_settle)
       ),
       # #648 lever 1: cheap edge extraction must not ride the embed debounce
       # (30s) or the embed budget gate; ~2s leading edge.

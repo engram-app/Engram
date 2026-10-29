@@ -577,14 +577,7 @@ defmodule Engram.Notes.CrdtPersistence do
   def apply_tail_rows(doc, user, note_id, rows), do: replay_loaded(doc, user, note_id, rows)
 
   # Test-only seam (`Engram.CheckpointInterleave`): nil outside those tests.
-  defp interleave_hook(point) do
-    case Application.get_env(:engram, :checkpoint_interleave_hook) do
-      nil -> :ok
-      fun when is_function(fun, 1) -> _ = fun.(point)
-    end
-
-    :ok
-  end
+  defp interleave_hook(point), do: Engram.InterleaveHook.run(point)
 
   defp in_room?, do: match?({Yex.DocServer.Worker, _, _}, Process.get(:"$initial_call"))
 

@@ -19,6 +19,33 @@ defmodule Engram.Jobs do
   # beat one scan that grows with the backlog.
   @chunk 50
 
+  # The one definition of a job that has not started and so can still absorb
+  # a newer edit: an enqueue for the same note joins it instead of adding one.
+  # A running job is not in it, because it may already have read the previous
+  # content. Module attributes, not parameters, so the queries below stay
+  # literal for `oban_jobs_pending_note_id_index`'s partial predicate.
+  @pending_states ~w(scheduled available retryable)
+  @pending_or_executing ["executing" | @pending_states]
+
+  @doc "Oban states of a job that has not started yet. See `@pending_states`."
+  @spec pending_states() :: [String.t()]
+  def pending_states, do: @pending_states
+
+  @doc """
+  Lower to `priority` every job in `query` ranked worse than it, so a live
+  enqueue is not swallowed by a backfill job queued earlier (Oban fetches
+  `priority ASC`). A nil `priority` is a no-op. Returns the rows updated.
+  """
+  @spec promote(Ecto.Queryable.t(), non_neg_integer() | nil) :: non_neg_integer()
+  def promote(_query, nil), do: 0
+
+  def promote(query, priority) do
+    {count, _} =
+      query |> where([j], j.priority > ^priority) |> Repo.update_all(set: [priority: priority])
+
+    count
+  end
+
   @doc """
   `note_ids` minus those with a pending job of `worker`. Order kept.
 
@@ -78,7 +105,7 @@ defmodule Engram.Jobs do
   defp pending_query(worker, wanted, true) do
     from(j in Oban.Job,
       where: j.worker == ^worker,
-      where: j.state in ~w(scheduled available executing retryable),
+      where: j.state in @pending_or_executing,
       where: fragment("? ->> 'note_id'", j.args) in ^wanted
     )
   end
@@ -86,7 +113,7 @@ defmodule Engram.Jobs do
   defp pending_query(worker, wanted, false) do
     from(j in Oban.Job,
       where: j.worker == ^worker,
-      where: j.state in ~w(scheduled available retryable),
+      where: j.state in @pending_states,
       where: fragment("? ->> 'note_id'", j.args) in ^wanted
     )
   end
@@ -96,11 +123,9 @@ defmodule Engram.Jobs do
 
     # The UPDATE only runs when something pending is ranked worse; the common
     # case stays one query.
-    if promote_to && Enum.any?(rows, fn {_, priority} -> priority > promote_to end) do
-      query
-      |> where([j], j.priority > ^promote_to)
-      |> Repo.update_all(set: [priority: promote_to])
-    end
+    _ =
+      if promote_to && Enum.any?(rows, fn {_, priority} -> priority > promote_to end),
+        do: promote(query, promote_to)
 
     Enum.map(rows, &elem(&1, 0))
   end

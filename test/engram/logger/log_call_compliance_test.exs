@@ -86,6 +86,10 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # Note ids from job args only, and silent today; in scope so a log line
     # added later is still scanned.
     "lib/engram/jobs.ex",
+    # Test seam on the note write, checkpoint and CRDT paths (all in scope
+    # here). Takes only a point atom and logs nothing today; in scope so a
+    # log line added later is still scanned.
+    "lib/engram/interleave_hook.ex",
     "lib/engram/workers/delete_note_index.ex",
     "lib/engram/workers/repath_note_index.ex",
     "lib/engram_web/controllers/search_controller.ex",

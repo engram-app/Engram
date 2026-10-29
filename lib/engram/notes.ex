@@ -959,9 +959,11 @@ defmodule Engram.Notes do
           _ =
             if prev_hash != note.content_hash do
               _ =
-                ContentCommit.enqueue_jobs(note.id, user.id,
-                  embed_priority: EmbedNote.priority_for(note),
-                  finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)
+                ContentCommit.enqueue_jobs(
+                  note.id,
+                  user.id,
+                  embed_opts(note, opts) ++
+                    [finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)]
                 )
             end
 
@@ -1018,9 +1020,11 @@ defmodule Engram.Notes do
           _ =
             if prev_hash != note.content_hash do
               _ =
-                ContentCommit.enqueue_jobs(note.id, user.id,
-                  embed_priority: EmbedNote.priority_for(note),
-                  finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)
+                ContentCommit.enqueue_jobs(
+                  note.id,
+                  user.id,
+                  embed_opts(note, opts) ++
+                    [finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)]
                 )
             end
 
@@ -2211,6 +2215,16 @@ defmodule Engram.Notes do
     end
   end
 
+  # #2294: an AI agent writes a whole note and searches for it seconds later,
+  # so its writes skip most of the typing debounce (EmbedNote.new_debounced/3)
+  # and rank as interactive even for a never-embedded note, which
+  # `EmbedNote.priority_for/1` would otherwise file as backfill.
+  defp embed_opts(note, opts) do
+    if opts[:actor] == "mcp",
+      do: [embed_priority: 0, embed_settle: :agent],
+      else: [embed_priority: EmbedNote.priority_for(note)]
+  end
+
   # The content jobs the seed's checkpoint used to enqueue for a genesis body,
   # after the row's commit like the checkpoint's.
   defp commit_genesis_body(note, user) do
@@ -2752,14 +2766,7 @@ defmodule Engram.Notes do
   # `OF n0` (Ecto's alias for the first source) keeps the lock on notes.
   defp locked_body_from_notes(query), do: query |> exclude(:select) |> select([n], n)
 
-  defp interleave_hook(point) do
-    case Application.get_env(:engram, :checkpoint_interleave_hook) do
-      nil -> :ok
-      fun when is_function(fun, 1) -> _ = fun.(point)
-    end
-
-    :ok
-  end
+  defp interleave_hook(point), do: Engram.InterleaveHook.run(point)
 
   defp do_rewrite_note(existing, base_attrs, user, sanitized_path, folder, opts) do
     # db_opts carries `mode: :savepoint` on the batch path so a failed SQL

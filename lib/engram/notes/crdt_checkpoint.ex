@@ -857,14 +857,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
     |> length()
   end
 
-  defp interleave_hook(point) do
-    case Application.get_env(:engram, :checkpoint_interleave_hook) do
-      nil -> :ok
-      fun when is_function(fun, 1) -> _ = fun.(point)
-    end
-
-    :ok
-  end
+  defp interleave_hook(point), do: Engram.InterleaveHook.run(point)
 
   # Pin the write to the row pre-image this checkpoint derived from. #1335,
   # mirror direction.
