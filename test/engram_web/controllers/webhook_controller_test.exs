@@ -930,6 +930,46 @@ defmodule EngramWeb.WebhookControllerTest do
     end
   end
 
+  # #2312: a unique-constraint error is a concurrency loss (two deliveries
+  # inserting one subscription at once), not a bad payload, so a retry can
+  # succeed. Acking it 200 dropped the event for good.
+  describe "POST /webhooks/paddle: unique-constraint errors" do
+    test "a unique violation answers 500 and is not marked processed" do
+      user = insert(:user)
+
+      Engram.Repo.query!("""
+      CREATE FUNCTION pg_temp.paddle_id_taken() RETURNS trigger AS $$
+      BEGIN
+        RAISE unique_violation
+          USING CONSTRAINT = 'subscriptions_paddle_subscription_id_index';
+      END $$ LANGUAGE plpgsql
+      """)
+
+      Engram.Repo.query!("""
+      CREATE TRIGGER paddle_id_taken BEFORE INSERT ON subscriptions
+      FOR EACH ROW EXECUTE FUNCTION pg_temp.paddle_id_taken()
+      """)
+
+      payload = sub_event("subscription.activated", "ntf_taken", "sub_taken", user, "active")
+
+      assert json_response(send_payload(payload), 500)["status"] == "error"
+      assert Idempotency.check(:paddle, "ntf_taken") == :proceed
+    end
+
+    test "a paddle id another user holds stays a permanent 200" do
+      owner = insert(:user)
+      other = insert(:user)
+      send_payload(sub_event("subscription.created", "ntf_own", "sub_held", owner, "active"))
+
+      conn =
+        send_payload(sub_event("subscription.created", "ntf_steal", "sub_held", other, "active"))
+
+      assert json_response(conn, 200)["status"] == "ok"
+      assert %{status: "active"} = Engram.Billing.get_subscription(owner)
+      assert Engram.Billing.get_subscription(other) == nil
+    end
+  end
+
   defp sub_event(type, event_id, sub_id, user, status, opts \\ []) do
     Jason.encode!(%{
       "event_type" => type,

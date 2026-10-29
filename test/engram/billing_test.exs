@@ -1718,6 +1718,137 @@ defmodule Engram.BillingTest do
     end
   end
 
+  # #2312: Paddle sends subscription.created and subscription.activated
+  # milliseconds apart, and two web tasks handle them at once. Both pass the
+  # `ON CONFLICT (user_id)` arbiter check before either commits, so the second
+  # insert raises a plain unique violation on the OTHER unique index
+  # (paddle_subscription_id) instead of taking the conflict update. One
+  # connection cannot interleave two inserts that way, so the race is staged:
+  # the sibling event lands right after the handler's pre-read (a telemetry
+  # hook on that query), and a trigger raises the exact error Postgres raises
+  # in the race whenever a row already holds the inserted paddle id.
+  describe "upsert_from_paddle_event/1: concurrent insert race (#2312)" do
+    setup do
+      Repo.query!("""
+      CREATE FUNCTION pg_temp.paddle_id_race() RETURNS trigger AS $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM subscriptions
+                   WHERE paddle_subscription_id = NEW.paddle_subscription_id) THEN
+          RAISE unique_violation
+            USING CONSTRAINT = 'subscriptions_paddle_subscription_id_index';
+        END IF;
+        RETURN NEW;
+      END $$ LANGUAGE plpgsql
+      """)
+
+      Repo.query!("""
+      CREATE TRIGGER paddle_id_race BEFORE INSERT ON subscriptions
+      FOR EACH ROW EXECUTE FUNCTION pg_temp.paddle_id_race()
+      """)
+
+      :ok
+    end
+
+    test "activated racing created applies the newer status" do
+      user = insert(:user)
+
+      land_after_preread(
+        race_event("subscription.created", user, "trialing", "2026-10-29T06:17:00Z")
+      )
+
+      event = race_event("subscription.activated", user, "active", "2026-10-29T06:17:01Z")
+
+      assert {:ok, %Subscription{status: "active"}} = Billing.upsert_from_paddle_event(event)
+
+      assert %{status: "active", last_event_occurred_at: ~U[2026-10-29 06:17:01.000000Z]} =
+               Billing.get_subscription(user)
+    end
+
+    test "canceled racing created applies the cancel" do
+      user = insert(:user)
+
+      land_after_preread(
+        race_event("subscription.created", user, "active", "2026-10-29T06:17:00Z")
+      )
+
+      event = race_event("subscription.canceled", user, "canceled", "2026-10-29T06:17:01Z")
+
+      assert {:ok, %Subscription{status: "canceled"}} = Billing.upsert_from_paddle_event(event)
+      assert %{status: "canceled"} = Billing.get_subscription(user)
+    end
+
+    test "an older event racing a newer row is skipped as stale" do
+      user = insert(:user)
+
+      land_after_preread(
+        race_event("subscription.created", user, "active", "2026-10-29T06:17:01Z")
+      )
+
+      event = race_event("subscription.updated", user, "past_due", "2026-10-29T06:17:00Z")
+
+      assert {:ok, :stale} = Billing.upsert_from_paddle_event(event)
+
+      assert %{status: "active", last_event_occurred_at: ~U[2026-10-29 06:17:01.000000Z]} =
+               Billing.get_subscription(user)
+    end
+
+    test "a paddle id another user holds is refused and not overwritten" do
+      owner = insert(:user)
+      other = insert(:user)
+      created = race_event("subscription.created", owner, "active", "2026-10-29T06:17:00Z")
+      assert {:ok, _} = Billing.upsert_from_paddle_event(created)
+
+      event = race_event("subscription.created", other, "trialing", "2026-10-29T06:17:01Z")
+
+      assert {:error, :paddle_subscription_owned_by_other_user} =
+               Billing.upsert_from_paddle_event(event)
+
+      assert %{status: "active", user_id: owner_id} = Billing.get_subscription(owner)
+      assert owner_id == owner.id
+      assert Billing.get_subscription(other) == nil
+    end
+  end
+
+  defp race_event(type, user, status, occurred_at) do
+    %{
+      "event_type" => type,
+      "occurred_at" => occurred_at,
+      "data" => %{
+        "id" => "sub_race",
+        "status" => status,
+        "customer_id" => "ctm_race",
+        "items" => [%{"price" => %{"id" => "pri_pro_monthly_test"}}],
+        "current_billing_period" => %{"ends_at" => "2026-11-29T00:00:00Z"},
+        "custom_data" => checkout_custom_data(user.id)
+      }
+    }
+  end
+
+  # Runs `sibling` once, in this process, right after the next query on
+  # `subscriptions` (the handler's pre-read) returns.
+  defp land_after_preread(sibling) do
+    id = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        id,
+        [:engram, :repo, :query],
+        &__MODULE__.race_hook/4,
+        {self(), id, sibling}
+      )
+
+    on_exit(fn -> :telemetry.detach(id) end)
+  end
+
+  @doc false
+  def race_hook(_event, _measurements, %{source: "subscriptions"}, {pid, id, sibling})
+      when pid == self() do
+    :telemetry.detach(id)
+    {:ok, %Subscription{}} = Billing.upsert_from_paddle_event(sibling)
+  end
+
+  def race_hook(_event, _measurements, _metadata, _config), do: :ok
+
   # #1737 — every transaction.* event used to fall to the catch-all and return
   # {:ok, :ignored} with no warn line and no metric, so a checkout could stall
   # on the only revenue path we have and leave no trace. Reproduces the real

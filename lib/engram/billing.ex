@@ -900,10 +900,9 @@ defmodule Engram.Billing do
       if type != "subscription.created" and is_binary(data["id"]),
         do: get_subscription_by_paddle_id(data["id"])
 
-    case {type, existing} do
-      {_, nil} -> upsert_subscription(type, data, occurred_at)
-      {"subscription.canceled", sub} -> cancel_subscription(sub, data, occurred_at)
-      {_, sub} -> update_subscription(sub, data, occurred_at)
+    case existing do
+      nil -> upsert_subscription(type, data, occurred_at)
+      sub -> apply_to_existing(type, sub, data, occurred_at)
     end
   end
 
@@ -1273,6 +1272,9 @@ defmodule Engram.Billing do
               error_opt(errors, :last_event_occurred_at, :stale) ->
                 stale_or_wait(type, data, user_id)
 
+              error_opt(errors, :paddle_subscription_id, :constraint) == :unique ->
+                apply_to_racing_row(type, data, user_id, occurred_at, changeset)
+
               true ->
                 {:error, changeset}
             end
@@ -1283,6 +1285,32 @@ defmodule Engram.Billing do
 
       :unverified ->
         {:error, :unverified_user_binding}
+    end
+  end
+
+  # Every event for a row that already holds its paddle id: the pre-read hit,
+  # or the insert lost a race to it.
+  defp apply_to_existing("subscription.canceled", sub, data, occurred_at),
+    do: cancel_subscription(sub, data, occurred_at)
+
+  defp apply_to_existing(_type, sub, data, occurred_at),
+    do: update_subscription(sub, data, occurred_at)
+
+  # #2312: a sibling event for the same subscription (created and activated
+  # land milliseconds apart on two tasks) inserted it first. `ON CONFLICT`
+  # arbitrates only the user_id index, so when both inserts pass that check
+  # before either commits, ours raises on the paddle_subscription_id index
+  # instead of taking the conflict update. That row is committed by the time
+  # the violation is raised: apply the event to it once, through the locked,
+  # stale-guarded update path (which never inserts, so this cannot loop). A
+  # row another user owns is never overwritten. The insert ran with
+  # `mode: :savepoint`, so the tenant transaction was not aborted (no 25P02).
+  defp apply_to_racing_row(type, data, user_id, occurred_at, changeset) do
+    case get_subscription_by_paddle_id(data["id"]) do
+      %Subscription{user_id: ^user_id} = sub -> apply_to_existing(type, sub, data, occurred_at)
+      %Subscription{} -> {:error, :paddle_subscription_owned_by_other_user}
+      # Gone again before the re-read: transient, the controller answers 500.
+      nil -> {:error, changeset}
     end
   end
 

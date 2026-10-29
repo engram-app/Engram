@@ -162,14 +162,19 @@ defmodule EngramWeb.WebhookController do
     end
   end
 
-  # Permanent: the payload has no (verified) owner, fails validation (bad status, a
-  # paddle id another user holds, an unknown price on a first insert), or
-  # asks for a cancel Paddle rejects. The same bytes fail the same way on
-  # every retry. Everything else (a raised exception, a DB error, an unknown
-  # reason) is treated as transient.
+  # Permanent: the payload has no (verified) owner, names a paddle id another
+  # user holds, fails validation (bad status, an unknown price on a first
+  # insert), or asks for a cancel Paddle rejects. The same bytes fail the same
+  # way on every retry. Everything else (a raised exception, a DB error, a
+  # unique violation, an unknown reason) is treated as transient.
   defp permanent_paddle_error?(:missing_user_id), do: true
   defp permanent_paddle_error?(:unverified_user_binding), do: true
-  defp permanent_paddle_error?(%Ecto.Changeset{}), do: true
+  defp permanent_paddle_error?(:paddle_subscription_owned_by_other_user), do: true
+  # A unique violation is two deliveries racing on one row (#2312), not a bad
+  # payload: the retry finds the committed row. Acking it lost the event.
+  defp permanent_paddle_error?(%Ecto.Changeset{errors: errors}),
+    do: not Enum.any?(errors, fn {_field, {_msg, opts}} -> opts[:constraint] == :unique end)
+
   # Paddle refused our refund cancel with a non-retryable 4xx and still
   # holds the subscription live: logged at error above, for a human. Lock
   # errors never get here (Billing keeps them transient).
