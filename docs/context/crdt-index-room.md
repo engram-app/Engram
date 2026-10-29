@@ -1,6 +1,6 @@
 # The per-vault CRDT index room: shape, wire, residency, projection
 
-_Last verified: 2026-10-23_
+_Last verified: 2026-10-28_
 
 **TL;DR:** `{:global, {:crdt_index, vault_id}}`, one `Y.Map` named `filemeta_v0`
 (`path -> %{note_id, type, hash}`), riding the existing per-vault `crdt:` channel as
@@ -128,9 +128,29 @@ What actually bounds it today:
 
 `CrdtIndexDoc.start_link/1` starts a `CrdtCheckpointTimer` in `mode: :index`: keyed on
 `vault_id`, LRU-tracked, and it **never checkpoints on a tick**. Only the room's own persistence
-state knows which tail rows failed to replay, so a checkpoint not driven by `unbind/3` would prune
-rows it never folded in. The drain does the exiting: observers let go, `auto_exit` fires,
-`terminate/2` checkpoints.
+state knows which tail rows failed to replay, so a checkpoint from outside the room process would
+prune rows it never folded in. The room folds its own tail through one function
+(`CrdtIndexPersistence.fold/5`): on `unbind/3` (synchronous, the only fold that enqueues
+projection), and since #2306 also from `update_v1/4` once the appends since the last fold pass
+`fold_tail_rows` (500) or `fold_tail_bytes` (2 MB), and right after a `bind/3` whose replay passed
+them. Those two encode in the room and do the DB work in the room's single folder process (one
+fold in flight, later requests coalesced), so a slow pool cannot push `Identity.via_room` into its
+timeout fallback or pile up tasks. Every fold takes the `crdt_index_fold:<vault>` advisory lock
+that roomless folds take and UNIONS the stored snapshot with its encode by applying both to a fresh
+doc and re-encoding. Not `Yex.merge_updates([stored, encoded])`: that keeps the first input's copy
+of a struct, so dead values never compact and the snapshot grows toward the 16 MB cap. A fold
+prunes only the rows its own room holds (`folded_ids`), never every row of the vault, and never a
+row after one that would not decrypt (possibly transient; a pending update's delete set is lost on
+encode). A row that decrypts but is not a Yjs update can never apply: it is logged at error, counted
+as `index_tail{phase="corrupt_row"}`, and dropped by the next fold, so it never pins the tail. Bind
+re-reads the snapshot after its replay, in case a roomless fold landed in between. Replay reads
+the tail one `replay_page_rows` (1,000) id window per statement (`Engram.Backfill.IdWindows`) and
+applies each page in one doc transaction. Roomless writes use one Yjs client id per vault
+(`server_doc/1`); a fresh `Yex.Doc.new()` per write is what grew a 15k-note sync's state vector to
+~15k client ids, which made every per-row state-vector encode in the old replay quadratic.
+Before #2306 only `unbind/3` folded, so an OOM kill during a bulk first sync left a tail that every
+rebind replayed again (`web-oom-index-room-tail-replay-2026-10-29.md`). The drain does the exiting:
+observers let go, `auto_exit` fires, `terminate/2` checkpoints.
 
 The drain is ON unconditionally, with no off switch: this room is observed while ANY socket on the
 vault is connected, so without it residency is session-length (#1149 measured 7.91 MB per 10k-note
