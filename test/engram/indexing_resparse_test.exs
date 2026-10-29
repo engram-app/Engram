@@ -379,6 +379,60 @@ defmodule Engram.IndexingResparseTest do
       assert count == length(points)
     end
 
+    # A downgraded note keeps its large vectors and embeds only new chunks
+    # with lite, so one note holds points under both models' fingerprints.
+    test "a note mixing large and lite points matches each exactly once", ctx do
+      %{user: user, vault: vault} = ctx
+
+      section = fn h, word ->
+        "## #{h}\n\n" <> String.duplicate("#{word} grows in the bed. ", 60)
+      end
+
+      base =
+        "# Garden\n\n" <>
+          Enum.map_join([{"A", "Basil"}, {"B", "Thyme"}], "\n\n", fn {h, w} -> section.(h, w) end)
+
+      upsert = fn content, mtime ->
+        {:ok, n} =
+          Notes.upsert_note(
+            user,
+            vault,
+            %{"path" => "garden.md", "content" => content, "mtime" => mtime},
+            actor: "api"
+          )
+
+        {:ok, n} = Crypto.maybe_decrypt_note_fields(n, user)
+        n
+      end
+
+      index_with(upsert.(base, 1.0), vault, user, @large)
+      edited = upsert.(base <> "\n\n" <> section.("C", "Pepper"), 2.0)
+      test_pid = self()
+
+      stub(Engram.MockEmbedder, :embed_texts, fn texts, _opts ->
+        send(test_pid, {:embedded, length(texts)})
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      {:ok, _, _, true} = Indexing.index_note_with_usage(edited, vault, user, doc_model: @lite)
+      _ = upserted_points()
+
+      rows =
+        Repo.all(
+          from(c in Engram.Notes.Chunk,
+            where: c.note_id == ^edited.id and not is_nil(c.qdrant_point_id)
+          ),
+          skip_tenant_check: true
+        )
+
+      # Mixed for real: lite embedded only the new chunk, the rest kept large.
+      assert_received {:embedded, sent}
+      assert sent > 0 and sent < length(rows)
+
+      assert {:ok, count, 0} = Indexing.resparse_note(edited, user)
+      assert count == length(rows)
+    end
+
     test "the job stamps a current-chunker lite note with the target keyword version", ctx do
       %{user: user, vault: vault, prose: prose} = ctx
       index_with(prose, vault, user, @lite)

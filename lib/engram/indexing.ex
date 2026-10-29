@@ -3123,12 +3123,6 @@ defmodule Engram.Indexing do
     ])
   end
 
-  # `/embed_text`: the dense input dropped the folder in chunker v3 (#1621),
-  # so a vector fingerprinted before then came from another string.
-  # `embed_model/0`, not the configured value alone: with EMBED_MODEL unset the
-  # embedder sends its own default, and a reuse fingerprint that names no
-  # model would reuse old-model vectors after a default change, under a new
-  # model stamp. (Prod sets DOC_EMBED_MODEL, so its model part is unchanged.)
   # Every model whose name a stored dense fingerprint may carry, for the
   # paths that run OUTSIDE an index pass (resparse, DEK rekey) and so have no
   # pass model. Per plan that is every plan model: a note's points can mix
@@ -3138,6 +3132,12 @@ defmodule Engram.Indexing do
   defp fingerprint_models,
     do: if(EmbedModels.per_plan?(), do: EmbedModels.acceptable(:free), else: [nil])
 
+  # `/embed_text`: the dense input dropped the folder in chunker v3 (#1621),
+  # so a vector fingerprinted before then came from another string.
+  # `embed_model/0`, not the configured value alone: with EMBED_MODEL unset the
+  # embedder sends its own default, and a reuse fingerprint that names no
+  # model would reuse old-model vectors after a default change, under a new
+  # model stamp. (Prod sets DOC_EMBED_MODEL, so its model part is unchanged.)
   defp fingerprint_prefix(true, model), do: "dense:#{model || pass_model()}/embed_text\n"
   defp fingerprint_prefix(false, _model), do: "sparse\n"
 
