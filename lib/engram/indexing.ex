@@ -3129,6 +3129,15 @@ defmodule Engram.Indexing do
   # embedder sends its own default, and a reuse fingerprint that names no
   # model would reuse old-model vectors after a default change, under a new
   # model stamp. (Prod sets DOC_EMBED_MODEL, so its model part is unchanged.)
+  # Every model whose name a stored dense fingerprint may carry, for the
+  # paths that run OUTSIDE an index pass (resparse, DEK rekey) and so have no
+  # pass model. Per plan that is every plan model: a note's points can mix
+  # models (a Free note keeps large vectors and embeds new chunks with lite),
+  # so neither the owner's plan nor `notes.embed_model` (the cheapest model
+  # held) names them all. [nil] off per-plan: the build's model.
+  defp fingerprint_models,
+    do: if(EmbedModels.per_plan?(), do: EmbedModels.acceptable(:free), else: [nil])
+
   defp fingerprint_prefix(true, model), do: "dense:#{model || pass_model()}/embed_text\n"
   defp fingerprint_prefix(false, _model), do: "sparse\n"
 
@@ -3316,29 +3325,34 @@ defmodule Engram.Indexing do
     # that no candidate equals holds other text.
     by_offsets = Map.new(for {nil, id, offsets} <- rows, do: {offsets, id})
 
-    # Third candidate: rows written between #1595 (context_hmac) and #1606
+    # Last candidate: rows written between #1595 (context_hmac) and #1606
     # (the pass-type prefix) hold an UNPREFIXED hmac of context_text. Reuse
     # must not accept them (they say nothing about which vectors the point
     # holds), but this rewrites only the keyword vector, so the text match is
     # all it needs.
-    keyed =
-      Enum.zip([
-        chunks,
-        fingerprints(content_key, chunks, true),
-        fingerprints(content_key, chunks, false),
-        Engram.Native.hmac_hex_many(
-          content_key,
-          "",
-          Enum.map(chunks, &IO.iodata_to_binary(&1.context_text))
-        )
-      ])
+    #
+    # Dense candidates: one per plan model (`fingerprint_models/0`). This runs
+    # outside an index pass, so a lone `fingerprints/4` would name the build's
+    # model and miss every point a Free pass fingerprinted with lite.
+    candidates =
+      Enum.map(fingerprint_models(), &fingerprints(content_key, chunks, true, &1)) ++
+        [
+          fingerprints(content_key, chunks, false),
+          Engram.Native.hmac_hex_many(
+            content_key,
+            "",
+            Enum.map(chunks, &IO.iodata_to_binary(&1.context_text))
+          )
+        ]
+
+    keyed = Enum.zip(chunks, Enum.zip_with(candidates, & &1))
 
     {matched, _left} =
-      Enum.flat_map_reduce(keyed, {by_hmac, by_offsets}, fn {chunk, dense, sparse, legacy},
+      Enum.flat_map_reduce(keyed, {by_hmac, by_offsets}, fn {chunk, hmac_candidates},
                                                             {hmacs, offsets} = acc ->
         offset_key = {chunk.position, chunk.char_start, chunk.char_end}
 
-        case Enum.find([dense, sparse, legacy], &match?([_ | _], Map.get(hmacs, &1))) do
+        case Enum.find(hmac_candidates, &match?([_ | _], Map.get(hmacs, &1))) do
           nil ->
             case Map.pop(offsets, offset_key) do
               {nil, _} -> {[], acc}
@@ -3726,10 +3740,7 @@ defmodule Engram.Indexing do
         %{}
 
       chunks ->
-        # Per plan, a note may hold any plan model's vectors (`reuse_models/0`).
-        models = if EmbedModels.per_plan?(), do: EmbedModels.acceptable(:free), else: [nil]
-
-        for model <- models, dense? <- [true, false], reduce: %{} do
+        for model <- fingerprint_models(), dense? <- [true, false], reduce: %{} do
           acc ->
             fingerprints(old_key, chunks, dense?, model)
             |> Enum.zip(fingerprints(new_key, chunks, dense?, model))

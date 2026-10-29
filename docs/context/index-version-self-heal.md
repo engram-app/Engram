@@ -87,8 +87,29 @@ chunking before it is expensive: bundle boundary changes into one bump.
   is a few percent of the BM25 length term: a ranking nudge, not a defect.
   Each later edit re-normalizes its note.
 - A note whose points cannot match on a CURRENT chunker stays unstamped and
-  logs a warning each window. Should not happen (the current chunker
-  reproduces its own offsets); the warning is the tripwire if it does.
+  logs a warning (`resparse cannot match points on a current-chunker note`)
+  each window. Should not happen (the current chunker reproduces its own
+  offsets); the warning is the tripwire if it does.
+- It did fire, 2026-10-28 on staging: 1,300 notes, every one a Free note
+  embedded with `voyage-4-lite` (35 users), none of the 19,632 large-model
+  notes. Cause: resparse runs OUTSIDE an index pass, so it had no pass model
+  and built every dense fingerprint as `dense:<embed_model = voyage-4-large>/`.
+  A lite point's fingerprint never matched, and because the row HAD a
+  fingerprint the offset fallback was skipped. Each note retried every
+  cooldown window forever, kept its old keyword dims, and its matched points
+  (multi-chunk notes) were rewritten every cycle. Fix: `fingerprint_models/0`
+  in `Indexing`, every plan model per plan (`EmbedModels.acceptable(:free)`),
+  shared by `resparse_note/2` and `rekey_fingerprints/3`. Not the note's
+  `embed_model` stamp: it names the CHEAPEST model the note holds, and a Free
+  note keeps large vectors next to new lite ones, so one note's points can
+  carry both names. Stuck notes heal on the next sweep, no operator step.
+  Rule: any path that computes a dense fingerprint outside `with_pass_model`
+  must go through `fingerprint_models/0`.
+- `INDEX_REBUILD=dry_run` does not stop the keyword sweep, by design. The
+  sweep runs in every mode against `Rebuild.target_versions/0` (the pins,
+  `{3, 2}`, off and dry_run), and a NULL `keyword_version` (cleared by payload
+  drift healing in `ReconcileNotePayloads`, a DEK rotation, or kept NULL by
+  EmbedNote's compare-and-set stamp) is behind any target.
 - Watch it: `RefreshKeywordVectors` jobs in the `embed` queue at backfill priority; the
   `reconcile_embeddings: queueing keyword-stale notes` debug line carries
   `eligible_count` / `total_count`.
