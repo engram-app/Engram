@@ -924,7 +924,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
                   applied(acc, row.id, update)
 
                 _ ->
-                  skip_row(acc, row.id, user, vault_id, :corrupt_row)
+                  drop_row(acc, row.id, user, vault_id)
               end
 
             {:error, reason} ->
@@ -949,7 +949,27 @@ defmodule Engram.Notes.CrdtIndexPersistence do
   defp applied(%{skipped: []} = acc, id, update),
     do: %{acc | applied: [id | acc.applied], bytes: acc.bytes + byte_size(update)}
 
-  defp applied(acc, _id, update), do: %{acc | bytes: acc.bytes + byte_size(update)}
+  # Withheld rows' bytes are not counted either: they would re-trigger a bind
+  # fold that cannot prune them.
+  defp applied(acc, _id, _update), do: acc
+
+  # A row that decrypts but will not apply is not a Yjs update and never will
+  # be: nothing can make it integrate. Keeping it bought nothing and, under the
+  # rule above, would have pinned every row behind it forever (delta review
+  # M3), so the rows killed rooms leave behind piled up again. It goes into
+  # `applied`, the list a fold prunes, so the next fold deletes it. Loud: this
+  # is a lost update, and the operator needs the vault. It does not open a gap
+  # (`skipped`): rows depending on it stay pending whatever we do.
+  defp drop_row(acc, row_id, user, vault_id) do
+    emit_tail(:corrupt_row)
+
+    Logger.error(
+      "crdt index tail row is not a Yjs update; dropping it at the next fold",
+      Metadata.with_category(:error, :sync, user_id: user.id, vault_id: vault_id)
+    )
+
+    %{acc | applied: [row_id | acc.applied]}
+  end
 
   # Canonical lowercase UUID strings compare in byte order; nil sorts first.
   defp max_id(nil, _b), do: false
@@ -981,12 +1001,13 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     end
   end
 
-  # A skipped row is NOT dropped. It keeps its place in the tail so a later bind
-  # — after the transient that caused it has cleared — can still recover the
-  # claim. It is also LOGGED, not merely counted: a permanently lost path claim
-  # that surfaces only as a Prometheus tick gives an operator no vault to look at.
-  defp skip_row(acc, row_id, user, vault_id, reason) do
-    phase = if is_tuple(reason), do: elem(reason, 0), else: reason
+  # A skipped row (one that would not DECRYPT, which may be transient: a
+  # DekCache miss, a read racing a rotation) is NOT dropped. It keeps its place
+  # in the tail so a later bind, after the transient has cleared, can still
+  # recover the claim. It is also LOGGED, not merely counted: a permanently
+  # lost path claim that surfaces only as a Prometheus tick gives an operator
+  # no vault to look at.
+  defp skip_row(acc, row_id, user, vault_id, {phase, _} = reason) do
     emit_tail(phase)
 
     Logger.warning(

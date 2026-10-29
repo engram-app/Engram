@@ -513,7 +513,8 @@ defmodule Engram.PromEx.Crdt do
           event_name: @tail_event,
           description:
             "filemeta_v0 tail-log operations by phase (ok | failed | pruned | " <>
-              "corrupt_row | undecryptable_row | skipped_rotation | prune_failed). " <>
+              "corrupt_row (dropped at the next fold) | undecryptable_row (kept) | " <>
+              "skipped_rotation | prune_failed). " <>
               "A sustained `failed` " <>
               "OR `skipped_rotation` both mean the same thing — claims are living only in " <>
               "room memory and die with the process.",

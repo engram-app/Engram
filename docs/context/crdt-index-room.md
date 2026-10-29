@@ -140,7 +140,9 @@ that roomless folds take and UNIONS the stored snapshot with its encode by apply
 doc and re-encoding. Not `Yex.merge_updates([stored, encoded])`: that keeps the first input's copy
 of a struct, so dead values never compact and the snapshot grows toward the 16 MB cap. A fold
 prunes only the rows its own room holds (`folded_ids`), never every row of the vault, and never a
-row after a skipped one (a pending update's delete set is lost on encode). Bind
+row after one that would not decrypt (possibly transient; a pending update's delete set is lost on
+encode). A row that decrypts but is not a Yjs update can never apply: it is logged at error, counted
+as `index_tail{phase="corrupt_row"}`, and dropped by the next fold, so it never pins the tail. Bind
 re-reads the snapshot after its replay, in case a roomless fold landed in between. Replay reads
 the tail one `replay_page_rows` (1,000) id window per statement (`Engram.Backfill.IdWindows`) and
 applies each page in one doc transaction. Roomless writes use one Yjs client id per vault
