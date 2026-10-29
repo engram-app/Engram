@@ -35,4 +35,4 @@ NEVER interpolate sensitive values into the message string. `RedactFilter` scrub
 **Depth on demand:** operators can temporarily raise a single module to `:debug` at runtime via release rpc — `Engram.Logger.DebugToggle.enable(SomeModule)` to flip it on while chasing a live issue, `reset(SomeModule)` to flip it back (levels also reset on node restart).
 
 
-Design spec: Engram vault, `50 Engineering/_Superpowers Specs/` (logging taxonomy redesign, 2026-06-23).
+Design spec: the logging taxonomy redesign (2026-06-23) in the team's Engram vault. Ask a maintainer for vault access.

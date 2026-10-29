@@ -102,8 +102,6 @@ mix test <files-you-changed> test/lint/ --warnings-as-errors
 
 CI is the gate for the full suite and e2e. **Never merge on red** is unchanged.
 
-See `docs/context/testing-strategy.md` for full strategy, tooling, and CI pipeline.
-
 ## A test must be able to fail
 
 A green test is worth nothing until you know what makes it red. Three rules,

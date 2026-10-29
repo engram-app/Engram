@@ -46,6 +46,8 @@ mix deps.get && mix ecto.setup && mix phx.server   # outside Docker: http://loca
 cd frontend && bun install && bun run dev          # Vite on :5173, proxies to Phoenix
 ```
 
+Toolchain versions are pinned in `.tool-versions` (Erlang/OTP 27, Elixir 1.17);
+use asdf or mise so `mix` and the pre-push hook run on OTP 27, not a system OTP.
 Outside Docker you need Postgres 18+ (`uuidv7()`), Qdrant, and Rust via rustup
 (`mix compile` builds `native/engram_native`). Env vars:
 `docs/context/environment-variables.md`. Local test DB: `docs/context/local-backend-testing.md`.
@@ -93,6 +95,8 @@ self-hoster upgrades by pulling an image and restarting, and may skip releases.
    `migration-gates` job fails a drop that `lib/` still references, and applies
    new migrations onto the last `release-v*` schema. Every migration must also
    be correct when a skipping self-hoster applies it in one batch with later ones.
+   A raw-SQL `DROP` inside `execute/1` is invisible to that gate: use Ecto's
+   `remove`/`drop`.
 4. **Backfills self-heal**: in the migration or as an `Engram.DataMigration`
    ledger entry (`docs/context/data-migrations-ledger.md`). Index changes bump a
    version stamp (`docs/context/index-version-self-heal.md`). Destructive
@@ -103,6 +107,9 @@ self-hoster upgrades by pulling an image and restarting, and may skip releases.
 6. **Background queries bound rows READ**, not rows returned: walk id windows with
    `Engram.Backfill.IdWindows`, never `timeout: :infinity`.
 7. Squawk (`priv/repo/lint_migrations.sh`) hard-fails unsafe DDL; read its message.
+8. **A baseline regen** (`priv/repo/structure.sql`) is a silent no-op on an existing
+   DB: it must be paired with a wipe and recreate at every env, never an in-place
+   upgrade (this stranded prod once).
 
 Long form (squawk locally, `# safety_assured:`, PG18 patterns, baseline regen,
 preflight, tooling locations): `docs/context/migrations-playbook.md`.
@@ -111,7 +118,9 @@ preflight, tooling locations): `docs/context/migrations-playbook.md`.
 
 - **RLS is the tenant boundary.** Tenant queries run in `Repo.with_tenant`
   (`SET LOCAL app.current_tenant`); `Repo.prepare_query` raises on unscoped ones.
-  Two runtime roles: `engram_owner` (migrations) and `engram_app` (subject to RLS).
+  DB roles: `engram_admin` runs migrations, `engram_app` is the runtime pool
+  (subject to RLS), `engram_maintenance` is the maintenance pool (sees all rows
+  via `maintenance_all`).
   See `docs/context/database-schema-rls.md`. Adding a tenant table:
   `docs/context/maintenance-db-role.md`.
 - **Never log sensitive values in a message string.** `RedactFilter` scrubs
@@ -155,7 +164,7 @@ preflight, tooling locations): `docs/context/migrations-playbook.md`.
 - **Before non-trivial work in an area, grep the index:**
   `grep -i <keyword> docs/context/INDEX.md`.
 - A new context doc gets its trigger line in `docs/context/INDEX.md`, never here.
-- Implementation plans: `docs/superpowers/plans/`. Design specs: the Engram vault,
-  `50 Engineering/_Superpowers Specs/`.
+- Implementation plans: `docs/superpowers/plans/`. Design specs live in the team's
+  Engram vault, not this repo. Ask a maintainer for vault access.
 - Product pricing rationale: `../engram-workspace/docs/context/pricing-tiers-v2-decisions.md`;
   billing integration: `docs/context/paddle-integration.md`.
