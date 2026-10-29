@@ -24,4 +24,18 @@ defmodule Engram.Embedder do
   @callback model_info() :: %{model: String.t(), dimensions: pos_integer()}
 
   @optional_callbacks [model_info: 0, embed_texts: 2]
+
+  @doc """
+  `text` in Unicode NFC, as the voyage tokenizer normalises before it embeds
+  (llama.cpp does not, so `Engram.Embedders.Ollama` sends nano NFC text), and
+  the key the vector cache hashes (`Engram.Indexing.VectorCache.normalize/1`).
+  Not valid UTF-8 has no NFC form: returned as given.
+  """
+  @spec nfc(binary()) :: binary()
+  def nfc(text) when is_binary(text) do
+    case :unicode.characters_to_nfc_binary(text) do
+      normalized when is_binary(normalized) -> normalized
+      _error -> text
+    end
+  end
 end

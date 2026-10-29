@@ -294,7 +294,9 @@ defmodule Engram.Indexing do
   @spec ensure_collection() :: :ok | {:error, term()}
   def ensure_collection, do: Qdrant.ensure_collection(collection(), embed_dims())
 
-  defp embed_dims, do: Application.get_env(:engram, :embed_dims, @default_dims)
+  @doc "The collection's vector width: `EMBED_DIMS`, else 1024."
+  @spec embed_dims() :: pos_integer()
+  def embed_dims, do: Application.get_env(:engram, :embed_dims, @default_dims)
 
   defp prepare_chunks(note, user, chunks, opts, okf_healed? \\ false) do
     dims = embed_dims()

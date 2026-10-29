@@ -15,7 +15,8 @@ defmodule Engram.Embedders.Ollama do
     * prepends the trained purpose prompt (`:query` gets the query prompt,
       every other purpose the document prompt);
     * normalises to Unicode NFC, which llama.cpp's tokenizer skips;
-    * sends `dimensions` from `EMBED_DIMS` (Ollama truncates the 2048-d
+    * sends `dimensions`, the collection's width (`EMBED_DIMS`, else
+      `Indexing.embed_dims/0`'s 1024; Ollama truncates the 2048-d
       Matryoshka output and re-normalises);
     * sends `num_ctx` and an equal `num_batch` from `OLLAMA_NUM_CTX` when set
       (bidirectional attention: one input must fit one batch). Unset, the
@@ -26,7 +27,9 @@ defmodule Engram.Embedders.Ollama do
 
   @behaviour Engram.Embedder
 
+  alias Engram.Embedder
   alias Engram.EmbedModels
+  alias Engram.Indexing
   alias Engram.Logger.Metadata
   alias Engram.ServiceConfig
 
@@ -202,19 +205,16 @@ defmodule Engram.Embedders.Ollama do
     if EmbedModels.nano?(model) do
       prompt = if purpose == :query, do: @query_prompt, else: @document_prompt
 
-      %{model: model, input: Enum.map(texts, &(prompt <> nfc(&1)))}
-      |> put_if(:dimensions, ServiceConfig.get(:embed_dims))
+      # `dimensions` always: the model emits 2048-d, and an unset EMBED_DIMS
+      # still means a 1024-d collection (`Indexing.embed_dims/0`).
+      %{
+        model: model,
+        input: Enum.map(texts, &(prompt <> Embedder.nfc(&1))),
+        dimensions: ServiceConfig.get(:embed_dims) || Indexing.embed_dims()
+      }
       |> put_if(:options, num_ctx_options(ServiceConfig.get(:ollama_num_ctx)))
     else
       %{model: model, input: texts}
-    end
-  end
-
-  # Invalid UTF-8 has no NFC form; send it as it came, as before.
-  defp nfc(text) do
-    case :unicode.characters_to_nfc_binary(text) do
-      normalized when is_binary(normalized) -> normalized
-      _error -> text
     end
   end
 

@@ -177,6 +177,19 @@ defmodule Engram.Embedders.OllamaTest do
       end
     end
 
+    test "nano with EMBED_DIMS unset still sends the collection's width, not 2048" do
+      # The model emits 2048-d; the collection is `Indexing.embed_dims/0` wide
+      # (1024 by default). Without `dimensions` every upsert would be refused.
+      body = sent_body(["a"], model: @nano)
+      assert body["dimensions"] == Engram.Indexing.embed_dims()
+      assert body["dimensions"] == 1024
+    end
+
+    test "Embedder.nfc/1 composes, and passes invalid UTF-8 through as given" do
+      assert Engram.Embedder.nfc(<<0xFF, ?a>>) == <<0xFF, ?a>>
+      assert Engram.Embedder.nfc("cafe\u0301") == "caf\u00e9"
+    end
+
     test "nano queries get the query prompt" do
       body = sent_body(["mars"], model: @nano, purpose: :query)
       assert body["input"] == ["Represent the query for retrieving supporting documents: mars"]
