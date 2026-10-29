@@ -1360,7 +1360,8 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # not reach are not stamped, so a later tick picks them up. ponytail: it
   # halts between id windows, so a tick can overshoot by up to one window.
   #
-  # `:keyword_refresh` false (a runtime override, `RefreshKeywordVectors.enabled?/0`)
+  # `:keyword_refresh` false (a runtime override, else env `KEYWORD_REFRESH`;
+  # `RefreshKeywordVectors.enabled?/0`)
   # skips the sweep: nothing queued, nothing stamped, so the next tick after it
   # is back on picks every note up.
   defp sweep_keyword_stale(now, paid, page_size, versions) do
