@@ -1,6 +1,6 @@
 # Paddle integration
 
-_Last verified: 2026-10-24_
+_Last verified: 2026-10-29_
 
 How Engram talks to Paddle Billing. Owner: billing / monetization. Status: shipped end-to-end (PR #132; Stripe removed entirely). Billing is live, `RequireOnboarding` gates the vault pipeline, and the Paddle.js overlay is wired.
 
@@ -56,13 +56,13 @@ The signed payload is `"<ts>:<body>"` (colon, not period — different from Stri
 
 ## `custom_data` contract
 
-When the frontend opens `Paddle.Checkout.open()`, it MUST include at least `user_id` in `customData`. Optional keys carry affiliate / attribution data:
+When the frontend opens `Paddle.Checkout.open()`, it MUST pass `customData` exactly as `GET /api/billing/config` returned it: `user_id` plus `sig`, a server-signed token over that id (`Engram.Billing.CheckoutBinding`, `Phoenix.Token`, salt `paddle_checkout`, 30-day max age). The first webhook for a subscription no row holds yet binds it to `user_id` only when `sig` verifies for that same id; otherwise `upsert_from_paddle_event/1` returns `{:error, :unverified_user_binding}`, the controller logs a `paddle_webhook_unverified_user_binding` warning (subscription id only) and acks 200 without marking the event processed, and reconciliation reports the subscription as `:missing_local`. Events for a subscription we already store match by `paddle_subscription_id` and need no `sig`. Optional keys carry affiliate / attribution data:
 
 ```js
 Paddle.Checkout.open({
   items: [{ priceId: cfg.price_ids.starter.monthly, quantity: 1 }],
   customer: { email: cfg.customer_email },
-  customData: cfg.custom_data,   // { user_id: ... }; extra attribution keys would go here
+  customData: cfg.custom_data,   // { user_id, sig }; extra attribution keys would go here
 });
 ```
 
@@ -70,7 +70,7 @@ The live call is in `frontend/src/billing/billing-page.tsx`.
 
 Whatever the overlay sends becomes `data.custom_data` on every subscription webhook for that subscription. The backend persists the full map on `subscriptions.custom_data` (JSONB), keyed off the initial `subscription.created` event. Subsequent updates leave `custom_data` untouched so the original attribution survives plan changes.
 
-`user_id` resolution accepts either integer or stringified integer — Paddle returns JS-typed values that arrive over the wire as strings in some configurations.
+`user_id` must be a UUID string matching the signed token.
 
 ## Event lifecycle
 
@@ -92,7 +92,7 @@ Whatever the overlay sends becomes `data.custom_data` on every subscription webh
 
 Paddle retries a webhook only when we answer non-2xx (exponential backoff, up to 60 attempts over about two days on live), and it does not guarantee delivery order. `EngramWeb.WebhookController.paddle/2` and `Engram.Billing.upsert_from_paddle_event/1` handle both:
 
-- **Status codes.** `{:ok, _}` (including `:ignored` and `:stale`) answers 200 and marks the `event_id` processed. An event whose `custom_data.user_id` names a user that no longer exists (a hard-deleted paying account: Paddle's follow-up updated/canceled still carry it) is `{:ok, :ignored}`: the subscription changeset declares `foreign_key_constraint(:user_id)` and the insert path maps that error to an info `paddle_webhook_owner_missing_skipped` line (`reason=owner_deleted`), 200, marked processed. A permanent error answers 200 without marking it: `:missing_user_id`, an `%Ecto.Changeset{}` (bad status, a paddle id another user holds, an unknown price on a first insert), and `{:adjustment_cancel_rejected, status}` (Paddle answered our refund cancel with a non-retryable 4xx and a follow-up read still reports the subscription live; when it reports it canceled, as after `subscription_is_canceled_action_invalid`, its state is applied instead). Paddle's lock answers stay retryable (500): 409 (`subscription_locked_renewal`, `_processing`, `_consent_review_period`), any `subscription_locked_*` code (400 `subscription_locked_pending_changes`), 429, 401/403, and a failed follow-up read, because the same payload fails the same way on every retry. Anything else (a raised exception, a DB error, an unknown reason) answers **500** without marking it, so Paddle redelivers and the handler runs again. `WebhookIdempotency.mark_processed/2` runs on success only.
+- **Status codes.** `{:ok, _}` (including `:ignored` and `:stale`) answers 200 and marks the `event_id` processed. An event whose `custom_data.user_id` names a user that no longer exists (a hard-deleted paying account: Paddle's follow-up updated/canceled still carry it) is `{:ok, :ignored}`: the subscription changeset declares `foreign_key_constraint(:user_id)` and the insert path maps that error to an info `paddle_webhook_owner_missing_skipped` line (`reason=owner_deleted`), 200, marked processed. A permanent error answers 200 without marking it: `:missing_user_id`, `:unverified_user_binding` (see "`custom_data` contract"), an `%Ecto.Changeset{}` (bad status, a paddle id another user holds, an unknown price on a first insert), and `{:adjustment_cancel_rejected, status}` (Paddle answered our refund cancel with a non-retryable 4xx and a follow-up read still reports the subscription live; when it reports it canceled, as after `subscription_is_canceled_action_invalid`, its state is applied instead). Paddle's lock answers stay retryable (500): 409 (`subscription_locked_renewal`, `_processing`, `_consent_review_period`), any `subscription_locked_*` code (400 `subscription_locked_pending_changes`), 429, 401/403, and a failed follow-up read, because the same payload fails the same way on every retry. Anything else (a raised exception, a DB error, an unknown reason) answers **500** without marking it, so Paddle redelivers and the handler runs again. `WebhookIdempotency.mark_processed/2` runs on success only.
 - **Ordering.** `subscriptions.last_event_occurred_at` (utc_datetime_usec, nullable) stores the top-level `occurred_at` of the newest `subscription.*` event applied. An event older than it is skipped: 200, `{:ok, :stale}`, an info `paddle_webhook_stale_skipped` line with the subscription id. NULL (rows from before the column, or an event without `occurred_at`) accepts. Equal timestamps apply, because Paddle emits `subscription.updated` and `subscription.canceled` for one change at the same instant. Writes to a known row re-read it `FOR UPDATE` inside the tenant transaction, so two concurrent deliveries cannot both pass the check; the insert path puts the same check in the `ON CONFLICT ... DO UPDATE ... WHERE`.
 - **First event wins the insert.** An activated/updated/past_due/canceled for a paddle id no row holds goes through the `subscription.created` path, owner from `custom_data.user_id` (every subscription event carries it). On a `user_id` conflict with a DIFFERENT paddle id, any event replaces the row when the stored row is canceled or has no paddle id; `subscription.created` also replaces it when it is not older than the row's stamp. So a late cancel, or a retried created, for a user's previous subscription cannot overwrite their new one (it is skipped as stale). One exception to the skip: a non-created event whose subscription's `created_at` is after the live row's stamp is the user's NEW subscription arriving ahead of its own created, so it answers 500 (`:awaiting_subscription_created`, warning `paddle_webhook_awaiting_created`, no error line) and Paddle retries it after the created lands. Accepted risk: with TWO live subscriptions at once (a double checkout), the order "S2 update (500), then an S1 event that moves the row's stamp past S2's `created_at`, then S2's created" skips S2's created as stale, so S2 is invisible locally until reconciliation reports it. One row per user cannot hold two live subscriptions; telling them apart would need the row to store its subscription's Paddle `created_at` (a schema change). The Try again transaction check makes the double checkout rarer.
 - **Refund cancel.** The cancel we make for a refund or chargeback is run through the canceled clause stamped with the returned entity's `updated_at`, so a pre-refund `subscription.updated` delivered late is stale. A second cancel of an already canceled row (Paddle's own canceled after ours, or a replay) writes the row but emits no second `tier_downgraded`, disconnect or broadcast.

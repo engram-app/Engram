@@ -1458,8 +1458,11 @@ export interface BillingConfig extends PaddleClientConfig {
 	// The user's Paddle customer id (`ctm_…`) once they have one, else null.
 	// Absent on an older backend.
 	customer_id?: string | null;
+	// Passed verbatim to Paddle.Checkout.open as customData. `sig` is the
+	// server's signature over user_id, checked by the webhook.
 	custom_data: {
 		user_id: string;
+		sig: string;
 	};
 	// Maximum number of active vaults the user may have, or null for unlimited.
 	vaults_cap: number | null;
