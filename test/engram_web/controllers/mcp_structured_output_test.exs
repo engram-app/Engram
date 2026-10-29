@@ -219,7 +219,7 @@ defmodule EngramWeb.McpStructuredOutputTest do
         assert {:ok, _text, structured} =
                  Handlers.handle(unquote(tool), user, vault, unquote(Macro.escape(args)))
 
-        assert structured["search_ready_in_seconds"] ==
+        assert structured["search_indexing_starts_in_seconds"] ==
                  Engram.Workers.EmbedNote.agent_settle_seconds()
 
         assert structured["search_note"] == Handlers.index_delay_hint()

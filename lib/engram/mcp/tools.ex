@@ -75,9 +75,11 @@ defmodule Engram.MCP.Tools do
   # these (#2294): search lags a write by a few seconds, and an agent that
   # searches straight away should read the note with get_notes instead.
   @index_delay_properties %{
-    "search_ready_in_seconds" => %{
+    "search_indexing_starts_in_seconds" => %{
       "type" => "integer",
-      "description" => "Seconds after this write before search_notes indexes it"
+      "description" =>
+        "At least this many seconds until indexing starts; search can lag further. " <>
+          "Use get_notes to read the note until search finds it"
     },
     "search_note" => %{
       "type" => "string",

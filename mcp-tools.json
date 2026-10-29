@@ -947,13 +947,13 @@
             "description": "Where the note landed; the server picks the folder",
             "type": "string"
           },
+          "search_indexing_starts_in_seconds": {
+            "description": "At least this many seconds until indexing starts; search can lag further. Use get_notes to read the note until search finds it",
+            "type": "integer"
+          },
           "search_note": {
             "description": "When search will see this change; use get_notes until then",
             "type": "string"
-          },
-          "search_ready_in_seconds": {
-            "description": "Seconds after this write before search_notes indexes it",
-            "type": "integer"
           }
         },
         "required": [
@@ -1004,13 +1004,13 @@
           "path": {
             "type": "string"
           },
+          "search_indexing_starts_in_seconds": {
+            "description": "At least this many seconds until indexing starts; search can lag further. Use get_notes to read the note until search finds it",
+            "type": "integer"
+          },
           "search_note": {
             "description": "When search will see this change; use get_notes until then",
             "type": "string"
-          },
-          "search_ready_in_seconds": {
-            "description": "Seconds after this write before search_notes indexes it",
-            "type": "integer"
           }
         },
         "required": [
@@ -1070,13 +1070,13 @@
           "path": {
             "type": "string"
           },
+          "search_indexing_starts_in_seconds": {
+            "description": "At least this many seconds until indexing starts; search can lag further. Use get_notes to read the note until search finds it",
+            "type": "integer"
+          },
           "search_note": {
             "description": "When search will see this change; use get_notes until then",
             "type": "string"
-          },
-          "search_ready_in_seconds": {
-            "description": "Seconds after this write before search_notes indexes it",
-            "type": "integer"
           }
         },
         "required": [
@@ -1188,13 +1188,13 @@
               "null"
             ]
           },
+          "search_indexing_starts_in_seconds": {
+            "description": "At least this many seconds until indexing starts; search can lag further. Use get_notes to read the note until search finds it",
+            "type": "integer"
+          },
           "search_note": {
             "description": "When search will see this change; use get_notes until then",
             "type": "string"
-          },
-          "search_ready_in_seconds": {
-            "description": "Seconds after this write before search_notes indexes it",
-            "type": "integer"
           }
         },
         "required": [

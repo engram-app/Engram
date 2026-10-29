@@ -1834,7 +1834,7 @@ defmodule Engram.MCP.Handlers do
   # `Tools` `@index_delay_properties` on every tool that replies through here.
   defp index_delay_fields do
     %{
-      "search_ready_in_seconds" => Engram.Workers.EmbedNote.agent_settle_seconds(),
+      "search_indexing_starts_in_seconds" => Engram.Workers.EmbedNote.agent_settle_seconds(),
       "search_note" => index_delay_hint()
     }
   end
