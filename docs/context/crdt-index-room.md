@@ -130,10 +130,18 @@ What actually bounds it today:
 `vault_id`, LRU-tracked, and it **never checkpoints on a tick**. Only the room's own persistence
 state knows which tail rows failed to replay, so a checkpoint from outside the room process would
 prune rows it never folded in. The room folds its own tail through one function
-(`CrdtIndexPersistence.fold/2`): on `unbind/3`, and since #2306 also from `update_v1/4` once the
-appends since the last fold pass `fold_tail_rows` (500) or `fold_tail_bytes` (2 MB), and right
-after a `bind/3` whose replay passed them. Replay reads the tail one `replay_page_rows` (200) id
-window per statement (`Engram.Backfill.IdWindows`) and applies each page as one merged update.
+(`CrdtIndexPersistence.fold/5`): on `unbind/3` (synchronous, the only fold that enqueues
+projection), and since #2306 also from `update_v1/4` once the appends since the last fold pass
+`fold_tail_rows` (500) or `fold_tail_bytes` (2 MB), and right after a `bind/3` whose replay passed
+them. Those two encode in the room and do the DB work in a task, so a slow pool cannot push
+`Identity.via_room` into its timeout fallback. Every fold takes the `crdt_index_fold:<vault>`
+advisory lock that roomless folds take, MERGES into the stored snapshot instead of replacing it,
+and prunes only the rows its own room holds (`folded_ids`), never every row of the vault. Bind
+re-reads the snapshot after its replay, in case a roomless fold landed in between. Replay reads
+the tail one `replay_page_rows` (1,000) id window per statement (`Engram.Backfill.IdWindows`) and
+applies each page in one doc transaction. Roomless writes use one Yjs client id per vault
+(`server_doc/1`); a fresh `Yex.Doc.new()` per write is what grew a 15k-note sync's state vector to
+~15k client ids, which made every per-row state-vector encode in the old replay quadratic.
 Before #2306 only `unbind/3` folded, so an OOM kill during a bulk first sync left a tail that every
 rebind replayed again (`web-oom-index-room-tail-replay-2026-10-29.md`). The drain does the exiting:
 observers let go, `auto_exit` fires, `terminate/2` checkpoints.

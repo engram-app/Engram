@@ -798,10 +798,12 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
       update
     end
 
-    defp seed_rows(%{user: user, vault: vault}, updates) do
+    defp seed_rows(ctx, updates),
+      do: seed_rows(ctx, updates, for(_ <- updates, do: UUIDv7.generate()))
+
+    defp seed_rows(%{user: user, vault: vault}, updates, ids) do
       rows =
-        for update <- updates do
-          id = UUIDv7.generate()
+        for {update, id} <- Enum.zip(updates, ids) do
           {:ok, {ct, nonce}} = Crypto.encrypt_index_update(update, user, id)
 
           %{
@@ -947,6 +949,66 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
       assert %VaultIndexState{} = tenant_get(ctx.user, ctx.vault.id)
 
       :ok = stop_room_and_wait(room)
+    end
+
+    # Review finding 7: page applies post one echo per page, and the credit is
+    # one per page. Too many credits swallow a real claim, too few re-append
+    # the replay. A real room over a multi-page tail, then one claim.
+    test "a multi-page bind in a real room appends the next claim exactly once", ctx do
+      seed_tail(ctx, 12)
+
+      room = start_index_room(ctx)
+      put_entry(room, "after-pages.md", "n")
+      assert read_entry(room, "after-pages.md")
+
+      assert tail_count(ctx.user, ctx.vault.id) == 13
+
+      :ok = stop_room_and_wait(room)
+    end
+
+    # Review finding 7: one client's dependent edits (sets, an overwrite and
+    # deletes) split across 2-row pages, so each page applies on top of a
+    # previous page's transaction. Seeded with strictly increasing ids, the
+    # order one room's appends get (see the next test).
+    #
+    # In APPEND order, not reversed: yrs does not converge every out-of-order
+    # replay of one client's chain (reversed, `b` is lost, with or without
+    # pages, merged or not), so append order is a correctness requirement of
+    # the replay, not a nicety.
+    test "one client's dependent edits converge across pages", ctx do
+      Application.put_env(
+        :engram,
+        CrdtIndexPersistence,
+        Keyword.put(@limits, :replay_page_rows, 2)
+      )
+
+      doc = Yex.Doc.new()
+      map = Yex.Doc.get_map(doc, CrdtIndexDoc.map_name())
+
+      step = fn change ->
+        {:ok, sv} = Yex.encode_state_vector(doc)
+        change.()
+        {:ok, update} = Yex.encode_state_as_update(doc, sv)
+        update
+      end
+
+      updates = [
+        step.(fn -> Yex.Map.set(map, "a", "a1") end),
+        step.(fn -> Yex.Map.set(map, "b", "b1") end),
+        step.(fn -> Yex.Map.delete(map, "a") end),
+        step.(fn -> Yex.Map.set(map, "c", "c1") end),
+        step.(fn -> Yex.Map.set(map, "b", "b2") end),
+        step.(fn -> Yex.Map.delete(map, "c") end),
+        step.(fn -> Yex.Map.set(map, "d", "d1") end)
+      ]
+
+      ids = for(_ <- updates, do: UUIDv7.generate()) |> Enum.sort()
+      seed_rows(ctx, updates, ids)
+
+      {_state, replayed} = bind_fresh(ctx)
+
+      assert replayed |> Yex.Doc.get_map(CrdtIndexDoc.map_name()) |> Yex.Map.to_map() ==
+               %{"b" => "b2", "d" => "d1"}
     end
 
     # Review finding 1: a fold every `fold_tail_rows` appends used to enqueue a
