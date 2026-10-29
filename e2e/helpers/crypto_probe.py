@@ -28,7 +28,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-QDRANT_URL = os.environ.get("QDRANT_URL", "http://10.0.20.201:6333")
+QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "ci_test_notes")
 CI_POSTGRES_CONTAINER = os.environ.get("CI_POSTGRES_CONTAINER", "engram-postgres-1")
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bulk-delete orphaned CI Qdrant collections from the shared SlowRaid Qdrant.
+"""Bulk-delete orphaned CI Qdrant collections from the shared CI Qdrant.
 
 CI creates a per-run collection (``ci_test_<run_id>_obsidian``, ``ci_crdt_<run_id>``)
 and deletes it on teardown — but that teardown ``DELETE`` is best-effort
@@ -13,7 +13,7 @@ run is no longer active (not queued/in_progress). Real collections
 touched.
 
 Usage:
-    QDRANT_URL=http://10.0.20.201:6333 GITHUB_TOKEN=... \
+    QDRANT_URL=http://<ci-qdrant-host>:6333 GITHUB_TOKEN=... \
       GITHUB_REPOSITORY=engram-app/engram \
       python e2e/scripts/cleanup_qdrant_collections.py [--dry-run]
 """
@@ -107,9 +107,13 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="list orphans without deleting")
     args = ap.parse_args()
 
-    qdrant_url = os.environ.get("QDRANT_URL", "http://10.0.20.201:6333").rstrip("/")
+    qdrant_url = os.environ.get("QDRANT_URL", "").rstrip("/")
     repo = os.environ.get("GITHUB_REPOSITORY", "engram-app/engram")
     token = os.environ.get("GITHUB_TOKEN", "")
+
+    if not qdrant_url:
+        logger.error("QDRANT_URL is required: there is no default host, so name the Qdrant to reap")
+        return 1
 
     if not token:
         logger.error("GITHUB_TOKEN is required — the active-run guard prevents deleting a live run's collection")

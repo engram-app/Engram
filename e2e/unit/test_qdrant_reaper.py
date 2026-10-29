@@ -61,3 +61,15 @@ def test_empty_active_set_still_never_touches_real_collections():
     names = ["ci_test_1_obsidian", "obsidian_notes", "obsidian_notes_selfhost"]
     orphans = reaper.orphaned_ci_collections(names, active_run_ids=set())
     assert orphans == ["ci_test_1_obsidian"]
+
+
+def test_main_refuses_without_qdrant_url(monkeypatch):
+    # No default host: a missing QDRANT_URL must stop before any network call,
+    # not fall back to some shared Qdrant and start deleting there.
+    monkeypatch.delenv("QDRANT_URL", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", "x")
+    monkeypatch.setattr("sys.argv", ["cleanup_qdrant_collections.py", "--dry-run"])
+    calls = []
+    monkeypatch.setattr(reaper, "list_collections", lambda *a: calls.append(a) or [])
+    assert reaper.main() == 1
+    assert calls == []

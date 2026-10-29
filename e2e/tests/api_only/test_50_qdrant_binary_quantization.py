@@ -4,8 +4,8 @@ API-only test. Creates a note to trigger collection creation and indexing,
 verifies the collection has correct vector dimensions and binary quantization
 config, then searches Qdrant directly with an Ollama-embedded vector.
 
-Qdrant runs on SlowRaid (10.0.20.201, i9-14900K) which has AVX2 — required
-for binary quantization's POPCNT/bitwise operations.
+The Qdrant host (QDRANT_URL) must have an AVX2 CPU, which binary
+quantization's POPCNT/bitwise operations require.
 """
 
 import os
@@ -22,7 +22,7 @@ from helpers.crypto_probe import (
 )
 
 ENGRAM_API_URL = os.environ.get("ENGRAM_API_URL", "http://localhost:8100/api")
-QDRANT_URL = os.environ.get("QDRANT_URL", "http://10.0.20.201:6333")
+QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "ci_test_notes")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
