@@ -258,6 +258,14 @@ defmodule Engram.ServiceConfig.OverridesTest do
       assert ServiceConfig.get(:keyword_refresh_backlog, 10_000) == 0
       assert ServiceConfig.get(:rebuild_max_disk_percent, 75) == 60
 
+      # KEYWORD_REFRESH=false (prod's boot default) loses to an override, and
+      # clearing the override goes back to it.
+      ServiceConfig.put_override(:keyword_refresh, false)
+      assert :ok = ServiceConfig.override(:keyword_refresh, true, by: "t")
+      assert Engram.Workers.RefreshKeywordVectors.enabled?()
+      assert :ok = ServiceConfig.clear(:keyword_refresh, by: "t")
+      refute Engram.Workers.RefreshKeywordVectors.enabled?()
+
       for {key, bad} <- [
             keyword_refresh: "off",
             keyword_refresh_backlog: -1,

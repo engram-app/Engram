@@ -236,6 +236,15 @@ aws ecs execute-command --cluster engram-prod --task <task-id> \
 # resume: the same with Engram.ServiceConfig.clear(:keyword_refresh, by: \"<you>\")
 ```
 
+**Boot default: `KEYWORD_REFRESH` (env).** The override's fallback is the
+`KEYWORD_REFRESH` env var (`true` default, so self-host needs nothing). Set
+`KEYWORD_REFRESH=false` on the task defs to boot a release with the sweep
+already off, no rpc after the deploy. Then the override is how it goes on:
+`override(:keyword_refresh, true, ...)` starts it, `override(..., false, ...)`
+or `clear(:keyword_refresh, ...)` stops it again (clear falls back to the env
+value, so with `KEYWORD_REFRESH=false` "clear" means OFF, not resume). An
+invalid value refuses to boot.
+
 Effect: the write evicts the cached overrides on every node (CacheSync), and
 the 15 s cache TTL bounds a lost eviction, so every node reads it within
 15 s. From then on each queued `RefreshKeywordVectors` job snoozes 300 s at

@@ -9,7 +9,8 @@ defmodule Engram.RebuildRuntimeConfigTest do
     "BM25_B_MERGED" => :bm25_b_merged,
     "TENANT_IDF_MIN_POINTS" => :tenant_idf_min_points,
     "LEGACY_FILTER_FIELDS" => :legacy_filter_fields,
-    "REBUILD_LAST_USERS" => :rebuild_last_users
+    "REBUILD_LAST_USERS" => :rebuild_last_users,
+    "KEYWORD_REFRESH" => :keyword_refresh
   }
 
   # The v5 switches whose prod value is now the code's only behaviour. A task
@@ -81,6 +82,18 @@ defmodule Engram.RebuildRuntimeConfigTest do
     assert with_env("LEGACY_FILTER_FIELDS", "true") == true
     System.put_env("LEGACY_FILTER_FIELDS", "maybe")
     assert_raise RuntimeError, ~r/LEGACY_FILTER_FIELDS must be true or false/, &read_runtime/0
+  end
+
+  # The keyword sweep's boot default (`RefreshKeywordVectors.enabled?/0`):
+  # prod boots with it off, a runtime override still wins.
+  test "KEYWORD_REFRESH is a switch" do
+    assert with_env("KEYWORD_REFRESH", "false") == false
+    assert with_env("KEYWORD_REFRESH", "true") == true
+
+    for bad <- ["off", "no", ""] do
+      System.put_env("KEYWORD_REFRESH", bad)
+      assert_raise RuntimeError, ~r/KEYWORD_REFRESH must be true or false/, &read_runtime/0
+    end
   end
 
   test "REBUILD_LAST_USERS is a comma-separated list of user ids" do
