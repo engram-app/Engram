@@ -1,6 +1,6 @@
 # Context doc index
 
-Trigger → doc. Not auto-loaded: a prompt hook injects matching lines, and agents grep this file before non-trivial work in an area. Add every new doc's trigger line HERE, never to CLAUDE.md/AGENTS.md.
+Trigger → doc. Not auto-loaded: agents grep this file before non-trivial work in an area. Add every new doc's trigger line HERE, never to CLAUDE.md/AGENTS.md.
 
 
 Grouped index into `docs/context/`. Each entry is a trigger → doc; read the doc itself for full detail.
@@ -8,6 +8,9 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 **Architecture & Decisions**
 - Changing chunking, tokenizing or what the keyword leg encodes (version stamps, the reconcile sweep, why "run X per vault after deploy" is a defect) → `docs/context/index-version-self-heal.md`
 - Adding a backfill that must reach existing rows (`Engram.DataMigration`, completion ledger, `any_row?`, `:done` semantics, why not an operator command) → `docs/context/data-migrations-ledger.md`
+- Backend component map, key patterns (RLS, adapters, NIFs, caches), data flow, deployment modes → `docs/context/backend-architecture.md`
+- Writing or reviewing a migration long form (squawk locally, `# safety_assured:`, PG18 patterns, baseline regen wipe, self-host preflight, migration tooling locations, IdWindows sweeps) → `docs/context/migrations-playbook.md`
+- Adding a log line: levels, the nine categories, `with_category`, Loki vs CloudWatch sinks, LogQL field names, runtime debug toggle → `docs/context/logging-conventions.md`
 - Elixir decision audit, library deps, infra checklist (partially superseded — read inline corrections) → `docs/context/elixir-architecture-decisions.md`
 - RLS policy set (12 tenant tables, `api_keys_discovery`, `maintenance_all`), DB roles, `with_tenant`/`cross_tenant`/`maintenance()`/`skip_tenant_check` semantics → `docs/context/database-schema-rls.md`
 - Adding a tenant table (needs its own `maintenance_all`), the `MAINTENANCE_DATABASE_URL` credential, why it is not BYPASSRLS → `docs/context/maintenance-db-role.md`
@@ -119,7 +122,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - An old issue's description contradicts the code, or you are triaging a stale backlog (`Refs #N` drift + the detection recipe) → `docs/context/backlog-refs-drift.md`
 
 **Testing & CI**
-- Full test strategy, ExUnit tooling, CI pipeline → `docs/context/testing-strategy.md`
+- Full test strategy, ExUnit tooling, CI pipeline, local gate loop before pushing, "a test must be able to fail" rules, quality lints (credo/sobelow/dialyzer) → `docs/context/testing-strategy.md`
 - CI pipeline & gating — what runs vs what gates, post testing-architecture migration → `docs/context/ci-pipeline-gating.md`
 - Running the ExUnit suite locally against Docker Postgres → `docs/context/local-backend-testing.md`
 - `Vault not registered after 15s` E2E diagnostic ladder — don't just bump the timeout → `docs/context/e2e-vault-registration-diagnostics.md`

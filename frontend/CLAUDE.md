@@ -1,6 +1,6 @@
 # Web app (frontend/) - UI rules
 
-These are the owner's standing design rules, collected from repeated review feedback. Check every screen against them BEFORE showing it. A screen that breaks one goes back for another pass.
+These are the team's standing UI rules, collected from repeated review feedback. Check every screen against them BEFORE showing it. A screen that breaks one goes back for another pass.
 
 ## Layout
 - **The page body never scrolls in onboarding, modals or consent screens.** Size every section to the viewport, minus the app header. Long lists get their own scroll area.
@@ -30,4 +30,4 @@ These are the owner's standing design rules, collected from repeated review feed
 
 ## Before you hand it over
 - Check desktop AND mobile widths.
-- Drive the flow in the browser yourself, then tell the owner exactly what to click.
+- Drive the flow in the browser yourself, then tell the reviewer exactly what to click.
