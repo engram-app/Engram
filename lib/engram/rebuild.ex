@@ -399,18 +399,19 @@ defmodule Engram.Rebuild do
   disk climbs into strict mode's write refusal and users' writes are
   refused too. Snoozes on, by `[:engram, :rebuild, :gated]` reason:
 
-    * `:disk`: Qdrant volume use at or over `:rebuild_max_disk_percent`
-      (default 75, below strict mode's 85). Unknown capacity (self-host has
-      no `/sys_metrics`) never blocks. Reads the cached `Qdrant.pressure/0`.
-
-  The verdict is cached per node for 30 s, the snooze interval.
+    * `:disk`: Qdrant volume use at or over the lower of
+      `:rebuild_max_disk_percent` (default 75) and 5 points under the
+      user-write preflight (`Qdrant.preflight_limit/2`). Unknown capacity
+      (self-host has no `/sys_metrics`) never blocks. Reads the cached
+      `Qdrant.pressure/0`.
     * `:queue`: more than 100 queued updates.
     * `:optimizer`: collection not green (yellow = optimizing), optimizer
       not ok, or more than `:rebuild_max_queued_points` (default 50,000)
       points awaiting optimization.
     * `:unavailable`: collection info unreadable.
 
-  Never gate a user's own write on this.
+  The verdict is cached per node for 30 s, the snooze interval. Never gate
+  a user's own write on this.
   """
   @spec qdrant_pace() :: :ok | {:snooze, 30}
   def qdrant_pace do

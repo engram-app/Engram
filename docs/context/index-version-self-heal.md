@@ -163,14 +163,31 @@ Qdrant half of the gate the v5 rebuild's `pace/0` uses (minus the Voyage
 token bucket, since a resparse costs nothing). It snoozes 30 s (never fails)
 while:
 
-- disk is at or over `:rebuild_max_disk_percent` (default 75), from the
-  cached `Qdrant.pressure/0` volume reading. Strict mode refuses writes at 85,
-  so the pass stops 10 points short and users' own writes keep landing.
+- disk is at or over the lower of `:rebuild_max_disk_percent` (default 75)
+  and 5 points under the user-write preflight (`Qdrant.preflight_limit/2`,
+  the live strict-mode limit less `QDRANT_PREFLIGHT_MARGIN_POINTS`), from the
+  cached `Qdrant.pressure/0` volume reading. The live limit is not a fixed 85:
+  it is capacity less a reserve that scales with the collection, clamped to
+  70..95, so it falls as dead copies grow the collection. Tying the gate to
+  it keeps the pass stopping before users' own writes are held back.
   Unknown capacity (self-host has no `/sys_metrics`) never blocks.
 - the update queue holds more than 100 operations, or
 - the optimizer is behind: collection not green, optimizer not ok, or more
   than `:rebuild_max_queued_points` points awaiting optimization. Waiting on
   the optimizer is what lets the vacuum keep pace with the dead copies.
+
+**The disk gate can stall the pass for good.** The vacuum optimizer only
+rewrites a segment once its dead share passes `deleted_threshold`
+(`QDRANT_DELETED_THRESHOLD`, default 0.2). The sweep walks notes by id, so
+its dead copies spread evenly over every segment: no segment vacuums until
+about 20% of the corpus is rewritten, which costs about 20% of the
+collection's size in dead copies on top of today's disk. If that sum
+reaches the disk gate first, the gate stops the writes that would push a
+segment over the threshold, nothing vacuums, disk never falls, and the
+sweep snoozes forever (users unaffected). Check before a bump: `disk% +
+0.2 x disk_bytes / capacity + one segment's optimization copy` must sit
+under the gate; if not, lower `QDRANT_DELETED_THRESHOLD` first. A sustained
+`rebuild_gated_total{reason="disk"}` with a flat disk line is the stall.
 
 The full rebuild shares this gate, so it gets the disk check too. A user's
 edit (`EmbedNote`) is never gated. Snoozes are counted by reason in
