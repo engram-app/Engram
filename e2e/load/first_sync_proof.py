@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import random
 import shlex
 import subprocess
@@ -226,7 +227,8 @@ def cmd_load(a) -> int:
             "-",
         ],
         cfg,
-        env=None,
+        # run.ts reads the API base from the env (default: a local CI stack).
+        env={**os.environ, "ENGRAM_API_URL": acct.api},
         log=out / "first_sync.log",
     )
     rc = child.wait()
@@ -378,7 +380,7 @@ def grant_overrides(run_id: str) -> int:
         "ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, set_at = NOW() RETURNING 1;",
         write=True,
     )
-    return len(rows)
+    return sum(1 for r in rows if r == ["1"])  # psql also prints the INSERT tag
 
 
 def mint_key(user_id: str) -> tuple[str, str]:
