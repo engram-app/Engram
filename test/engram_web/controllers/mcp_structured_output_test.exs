@@ -225,6 +225,14 @@ defmodule EngramWeb.McpStructuredOutputTest do
         assert structured["search_note"] == Handlers.index_delay_hint()
 
         {:ok, tool_def} = Tools.get(unquote(tool))
+
+        # No `additionalProperties: false`, so validation alone would accept
+        # an undeclared key; the declaration is what a client builds types from.
+        for key <- ["search_indexing_starts_in_seconds", "search_note"] do
+          assert Map.has_key?(tool_def.outputSchema["properties"], key),
+                 "#{unquote(tool)} outputSchema does not declare #{key}"
+        end
+
         root = JSV.build!(tool_def.outputSchema)
         assert {:ok, _} = JSV.validate(structured, root)
       end
