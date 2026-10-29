@@ -103,6 +103,8 @@ defmodule Engram.Rebuild do
   # What a gated job snoozes, and the Qdrant update-queue ceiling.
   @gate_snooze 30
   @max_update_queue 100
+  # The maintenance disk gate's lead over the user-write preflight (`disk_full?/0`).
+  @user_headroom_points 5
   # "Active" Free users for the order: seen within this many days.
   @active_days 30
 
@@ -436,10 +438,21 @@ defmodule Engram.Rebuild do
     end)
   end
 
+  # The lower of `:rebuild_max_disk_percent` and 5 points under the user-write
+  # preflight. The live strict-mode limit falls as dead copies grow the
+  # collection (`QdrantLayout.strict_limits/2`, down to 70), so a fixed 75
+  # could keep rewriting after users' own writes are held back.
   defp disk_full? do
     case Qdrant.pressure() do
-      %{disk: pct} when is_integer(pct) -> pct >= ServiceConfig.get(:rebuild_max_disk_percent, 75)
-      _ -> false
+      %{disk: pct} = reading when is_integer(pct) ->
+        pct >=
+          min(
+            ServiceConfig.get(:rebuild_max_disk_percent, 75),
+            Qdrant.preflight_limit(reading, :disk) - @user_headroom_points
+          )
+
+      _ ->
+        false
     end
   end
 

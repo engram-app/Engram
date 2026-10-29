@@ -61,7 +61,7 @@ defmodule Engram.Workers.RefreshKeywordVectorsPacingTest do
     {:ok, _} = Indexing.index_note(decrypted, vault, user)
 
     ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :rebuild, :gated]])
-    %{user: user, vault: vault, note: note, health: health, ref: ref}
+    %{user: user, vault: vault, note: note, health: health, ref: ref, bypass: bypass}
   end
 
   defp stub_qdrant(bypass, health) do
@@ -153,6 +153,24 @@ defmodule Engram.Workers.RefreshKeywordVectorsPacingTest do
       Agent.update(ctx.health, fn _ -> {@green, 0, 60} end)
 
       assert {:snooze, 30} = refresh(ctx)
+    end
+
+    test "the disk threshold stays under a lower live strict-mode limit", ctx do
+      # A 100-byte volume against the 1 GiB disk reserve clamps the live
+      # limit to 70, so EmbedNote's preflight holds users' writes from 65.
+      # A fixed 75 would let the rewrite run on at 66.
+      Bypass.stub(ctx.bypass, "GET", "/collections/#{Qdrant.collection_name()}/memory", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result":{"total":{"disk_bytes":50}},"status":"ok"}))
+      end)
+
+      Agent.update(ctx.health, fn _ -> {@green, 0, 66} end)
+
+      assert %{limits: %{disk: %{percent: 70}}} = Qdrant.pressure()
+      assert {:snooze, 30} = refresh(ctx)
+      refute_received :rewrite
+      assert_received {[:engram, :rebuild, :gated], _, %{count: 1}, %{reason: :disk}}
     end
 
     test "a spent maintenance token bucket does not gate it (no Voyage cost)", ctx do
