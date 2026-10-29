@@ -435,26 +435,37 @@ defmodule EngramWeb.Plugs.AuthTest do
     end
 
     @tag capture_log: true
-    test "401s a Clerk JWT whose email belongs to a user bound to another Clerk id" do
-      user = insert(:user, email: "victim@test.com")
+    test "403s a Clerk JWT whose email belongs to a user bound to another Clerk id" do
+      user = insert(:user, email: "victim@test.com", external_id: "clerk_victim")
 
-      user
-      |> Ecto.Changeset.change(%{external_id: "clerk_victim"})
-      |> Engram.Repo.update!(skip_tenant_check: true)
-
-      token =
-        "clerk_other_instance"
-        |> Engram.ClerkHelpers.clerk_claims(email: "victim@test.com")
-        |> Engram.ClerkHelpers.sign_clerk_jwt()
-
-      conn =
-        build_conn()
-        |> put_req_header("authorization", "Bearer #{token}")
-        |> Auth.call([])
-
-      assert conn.status == 401
-      assert conn.halted
+      assert_account_conflict(clerk_conn("clerk_other_instance", "victim@test.com"))
       assert Engram.Repo.reload!(user, skip_tenant_check: true).external_id == "clerk_victim"
+    end
+
+    # Was a 500: the normalized-email unique violation came back as a raw
+    # changeset and format_reason/1 had no clause for it.
+    @tag capture_log: true
+    test "403s a Clerk JWT whose email is an alias of another user's" do
+      user =
+        insert(:user,
+          email: "me.foo@gmail.com",
+          normalized_email: "mefoo@gmail.com",
+          external_id: "clerk_alias_owner"
+        )
+
+      assert_account_conflict(clerk_conn("clerk_alias_new", "Me.Foo+x@gmail.com"))
+      assert Engram.Repo.reload!(user, skip_tenant_check: true).external_id == "clerk_alias_owner"
+    end
+
+    # Was a 500: the exact email compare missed the row, the insert hit the
+    # case-insensitive index.
+    test "links an unbound row whose email differs only in case" do
+      user = insert(:user, email: "Mixed.Case@Test.com", external_id: nil)
+
+      conn = clerk_conn("clerk_mixed_case", "mixed.case@test.com")
+
+      refute conn.halted
+      assert conn.assigns.current_user.id == user.id
     end
 
     @tag capture_log: true
@@ -476,5 +487,24 @@ defmodule EngramWeb.Plugs.AuthTest do
       assert conn.status == 401
       assert conn.halted
     end
+  end
+
+  # An account conflict is not a bad token: no `invalid_token` bearer error,
+  # or OAuth clients refresh and retry forever. 403 with a code the SPA reads.
+  defp assert_account_conflict(conn) do
+    assert conn.status == 403
+    assert conn.halted
+    assert Jason.decode!(conn.resp_body) == %{"error" => "account_conflict"}
+    assert get_resp_header(conn, "www-authenticate") == []
+    refute Map.has_key?(conn.assigns, :bearer_error)
+  end
+
+  defp clerk_conn(clerk_id, email) do
+    token =
+      clerk_id
+      |> Engram.ClerkHelpers.clerk_claims(email: email)
+      |> Engram.ClerkHelpers.sign_clerk_jwt()
+
+    build_conn() |> put_req_header("authorization", "Bearer #{token}") |> Auth.call([])
   end
 end

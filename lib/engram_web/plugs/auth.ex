@@ -48,6 +48,13 @@ defmodule EngramWeb.Plugs.Auth do
         |> assign(:current_api_key, api_key)
         |> assign_grant_claims(:error)
 
+      {:error, reason} when reason in [:account_conflict, :external_id_conflict] ->
+        # A valid token whose identity cannot be bound to an account: not a bad
+        # credential, so no `invalid_token` (OAuth clients would refresh and
+        # retry forever). The SPA reads the code and signs out with a notice.
+        _ = Engram.Auth.emit_rejected(reason, :http)
+        Halt.json(conn, 403, %{error: "account_conflict"})
+
       {:error, reason} ->
         Logger.warning(
           "auth rejected",

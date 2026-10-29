@@ -4,8 +4,12 @@ defmodule Engram.Auth.Clerk.Webhook do
   in the controller — by the time we get an event map here, it's trusted.
 
   Handles:
-  - `user.created` — dup-check against normalized_email; revoke via Clerk API if
-    duplicate, otherwise insert local user row.
+  - `user.created`: creates the local row through the same path as a first
+    authenticated request (`Accounts.find_or_create_by_external_id/2`). It never
+    rejects or deletes the Clerk user: Clerk's "Block email subaddresses" setting
+    stops Gmail dot/plus aliases at sign-up, and `users_normalized_email_index`
+    is the backstop. The old webhook dup-check only ever deleted real users
+    (#2292, #2293).
   - `user.updated` — mirrors the Clerk primary email into `users.email` +
     `normalized_email`, and sets `users.phone_verified_at` when a verified phone
     appears (drives the §A.3 EmbedNote pre-flight gate). Email and phone sync are
@@ -16,7 +20,6 @@ defmodule Engram.Auth.Clerk.Webhook do
 
   alias Engram.Accounts
   alias Engram.Auth.EmailNormalizer
-  alias Engram.Auth.SignupRejections
   alias Engram.Logger.Metadata
   alias Engram.Repo
 
@@ -31,10 +34,9 @@ defmodule Engram.Auth.Clerk.Webhook do
   def handle(_), do: :ok
 
   # Clerk fires `user.deleted` when an admin deletes a user from the Clerk
-  # dashboard, when Clerk itself revokes a user (e.g. the duplicate-signup
-  # branch in `apply_user_created/3`), or when a user self-deletes via the
-  # Clerk account portal. In every case the upstream identity is already
-  # gone, so the local row must follow — drive the full
+  # dashboard, when our own `Lifecycle.hard_delete` deletes the Clerk user, or
+  # when a user self-deletes via the Clerk account portal. In every case the
+  # upstream identity is already gone, so the local row must follow: drive the full
   # `Lifecycle.delete_account/2` cascade immediately. Step 0 of
   # `hard_delete` kicks live sockets, so the JWT cached in
   # `socket.assigns.current_user` cannot keep streaming data.
@@ -83,82 +85,17 @@ defmodule Engram.Auth.Clerk.Webhook do
 
   defp handle_user_deleted(_), do: :ok
 
+  # Same path as JIT, so the webhook and a racing first request converge on
+  # one row; the unique indexes decide atomically. A conflict (the email or an
+  # alias of it belongs to another account) leaves the Clerk user alone: the
+  # auth plug answers that identity 403 `account_conflict`, and the find/create
+  # call already logs it.
   defp handle_user_created(%{"id" => clerk_id} = data) do
-    case Accounts.find_by_external_id(clerk_id) do
-      {:ok, _user} ->
-        :ok
-
-      {:error, :user_not_found} ->
-        case primary_email(data) do
-          {:error, _} ->
-            :ok
-
-          {:ok, email} ->
-            normalized = EmailNormalizer.normalize(email)
-            apply_user_created(clerk_id, email, normalized)
-        end
+    with {:ok, email} <- primary_email(data) do
+      _ = Accounts.find_or_create_by_external_id(clerk_id, %{email: email})
     end
-  end
 
-  # Public only so tests can pin the state at email-lookup time (the race in
-  # the guard below cannot be interleaved deterministically through handle/1).
-  @doc false
-  def apply_user_created(clerk_id, email, normalized) do
-    case Accounts.find_by_normalized_email(normalized) do
-      # The user's own first request JIT-created this row (same Clerk id) after
-      # the external_id lookup in handle_user_created/1 missed. It is not a
-      # duplicate: revoking it would delete the brand-new account (#2292).
-      {:ok, %{external_id: ^clerk_id}} ->
-        :ok
-
-      {:ok, _existing} ->
-        Logger.warning(
-          "Clerk signup rejected — normalized email already exists",
-          Metadata.with_category(:warning, :auth,
-            clerk_user_id: clerk_id,
-            normalized_email_hash: hash(normalized)
-          )
-        )
-
-        # Stash the reason before the delete orphans the session, so the web app
-        # can fetch it and explain the bounce instead of failing silently.
-        SignupRejections.record(clerk_id, :duplicate_identity)
-        revoke_duplicate(clerk_id, normalized)
-        :ok
-
-      {:error, :user_not_found} ->
-        _ = Accounts.find_or_create_by_external_id(clerk_id, %{email: email})
-        :ok
-    end
-  end
-
-  # The block is only real if Clerk actually revokes the duplicate. A failed
-  # delete (e.g. missing CLERK_SECRET_KEY) leaves the duplicate account live and
-  # signed in — count the outcome, not the intent, and make a failure alertable.
-  defp revoke_duplicate(clerk_id, normalized) do
-    case clerk_api().delete_user(clerk_id) do
-      :ok ->
-        :telemetry.execute(
-          [:engram, :abuse, :multi_account_blocked],
-          %{count: 1},
-          %{normalized_email_hash: hash(normalized)}
-        )
-
-      {:error, reason} ->
-        :telemetry.execute(
-          [:engram, :abuse, :multi_account_block_failed],
-          %{count: 1},
-          %{normalized_email_hash: hash(normalized), reason: inspect(reason)}
-        )
-
-        Logger.error(
-          "Clerk delete_user did not revoke duplicate signup — account still live",
-          Metadata.with_category(:error, :auth,
-            clerk_user_id: clerk_id,
-            reason: inspect(reason)
-          )
-        )
-    end
+    :ok
   end
 
   defp handle_user_updated(%{"id" => clerk_id} = data) do
@@ -256,8 +193,4 @@ defmodule Engram.Auth.Clerk.Webhook do
 
   defp hash(str),
     do: :crypto.hash(:sha256, str) |> Base.encode16(case: :lower) |> binary_part(0, 12)
-
-  defp clerk_api do
-    Application.get_env(:engram, :clerk_api, Engram.Auth.Clerk.HttpApi)
-  end
 end

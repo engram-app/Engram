@@ -104,6 +104,50 @@ defmodule Engram.AccountsTest do
       assert Engram.Repo.reload!(user, skip_tenant_check: true).external_id == "clerk_original"
     end
 
+    # Clerk blocks Gmail dot/plus aliases at sign-up, so this only happens if
+    # that setting is off. The users_normalized_email_index is the backstop: the
+    # insert's unique violation must come back as a reason the auth plug can
+    # answer (403), not a raw changeset it crashes on (500).
+    test "returns :account_conflict when the normalized email belongs to another user" do
+      existing =
+        insert(:user,
+          email: "me.foo@gmail.com",
+          normalized_email: "mefoo@gmail.com",
+          external_id: "clerk_original"
+        )
+
+      assert {:error, :account_conflict} =
+               Accounts.find_or_create_by_external_id("clerk_alias_dup", %{
+                 email: "Me.Foo+spam@gmail.com"
+               })
+
+      assert Engram.Repo.reload!(existing, skip_tenant_check: true).external_id ==
+               "clerk_original"
+    end
+
+    # users_email_lower_index is case-insensitive, so the email lookup must be
+    # too: an exact compare missed the row and the insert hit the index.
+    test "links an unbound row whose email differs only in case" do
+      user = insert(:user, email: "Case.Only@Test.com", external_id: nil)
+
+      assert {:ok, linked} =
+               Accounts.find_or_create_by_external_id("clerk_case_only", %{
+                 email: "case.only@test.com"
+               })
+
+      assert linked.id == user.id
+      assert linked.external_id == "clerk_case_only"
+    end
+
+    test "refuses a case-only email match bound to another Clerk id" do
+      insert(:user, email: "Bound.Case@Test.com", external_id: "clerk_bound_case")
+
+      assert {:error, :external_id_conflict} =
+               Accounts.find_or_create_by_external_id("clerk_case_other", %{
+                 email: "bound.case@test.com"
+               })
+    end
+
     test "creates new user when no external_id or email match" do
       assert {:ok, created} =
                Accounts.find_or_create_by_external_id("clerk_user_new", %{

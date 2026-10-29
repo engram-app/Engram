@@ -359,10 +359,6 @@ defmodule EngramWeb.Router do
     # Self-host install census collector (SaaS only; self-host answers 404).
     post "/telemetry/ping", InstallPingController, :create
 
-    # Public: explain why a just-completed sign-up was rejected (multi-account
-    # block deletes the Clerk user, so there is no session to authenticate with).
-    get "/auth/signup-rejection", SignupRejectionController, :show
-
     # Public: Clear-Site-Data for a Clerk sign-out (the local logout sets it itself).
     post "/auth/clear-cache", ClearCacheController, :create
   end

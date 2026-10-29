@@ -115,7 +115,12 @@ defmodule Engram.Accounts do
   The email match only claims a row with no `external_id` yet (a local/legacy
   account). A row already bound to a DIFFERENT Clerk id is never relinked:
   that would hand the account to whoever presents a token with the same
-  email (#1868). Returns `{:error, :external_id_conflict}` instead.
+  email (#1868). Returns `{:error, :external_id_conflict}` instead. The email
+  match is case-insensitive, like `users_email_lower_index`.
+
+  A new row whose normalized email (Gmail dot/plus alias) already belongs to
+  another account is refused by `users_normalized_email_index`:
+  `{:error, :account_conflict}`. The auth plug answers both conflicts 403.
 
   Consequence: a Clerk instance swap mints new ids for every user, so existing
   rows need an explicit `external_id` migration; sign-in will not relink them.
@@ -128,7 +133,10 @@ defmodule Engram.Accounts do
         {:ok, user}
 
       nil ->
-        case Repo.one(from(u in User, where: u.email == ^email), skip_tenant_check: true) do
+        case Repo.one(
+               from(u in User, where: fragment("lower(?)", u.email) == ^String.downcase(email)),
+               skip_tenant_check: true
+             ) do
           %User{external_id: nil} = user ->
             user
             |> Ecto.Changeset.change(%{external_id: external_id})
@@ -169,8 +177,15 @@ defmodule Engram.Accounts do
                 # Concurrent request won the insert — retry finds the winner
                 find_or_create_by_external_id(external_id, %{email: email}, retries - 1)
 
-              {:error, changeset} ->
-                {:error, changeset}
+              {:error, %Ecto.Changeset{}} ->
+                require Logger
+
+                Logger.warning(
+                  "Clerk account conflict: email or an alias of it belongs to another user",
+                  Metadata.with_category(:warning, :auth, clerk_user_id: external_id)
+                )
+
+                {:error, :account_conflict}
             end
         end
     end
