@@ -360,17 +360,12 @@ defmodule Engram.Notes.Identity do
 
   defp snapshot_phase(_reason), do: :persist_failed
 
-  # NARROWS — does not close — the read-modify-write race: a room can bind the
-  # OLD snapshot while we are between our read and our write, and its `unbind`
-  # REPLACES the row rather than merging it, discarding the claim. Re-applying
-  # through a room that appeared meanwhile is safe because `mutate` is
-  # idempotent (it asserts "this id lives at this path").
-  #
-  # Residual: a room that binds AND exits entirely inside that window still
-  # clobbers the claim, because our lookup then returns `:undefined`.
-  #
-  # This is NOT the residual risk `CrdtIndexPersistence` documents — that one is
-  # a netsplit heal. This race is written down only here.
+  # Pushes a roomless claim into a room that bound the OLD snapshot while we
+  # were between our read and our write, so the room's clients see it now
+  # rather than at the next bind. The claim itself is already durable: the
+  # room's folds merge the stored snapshot instead of replacing it, and bind
+  # re-reads the snapshot after its replay (#2306). Re-applying is safe
+  # because `mutate` is idempotent (it asserts "this id lives at this path").
   #
   # The result is DISCARDED on purpose. The snapshot write already succeeded, so
   # the claim is durable and the caller must not be told it failed; a refusal

@@ -133,10 +133,14 @@ prune rows it never folded in. The room folds its own tail through one function
 (`CrdtIndexPersistence.fold/5`): on `unbind/3` (synchronous, the only fold that enqueues
 projection), and since #2306 also from `update_v1/4` once the appends since the last fold pass
 `fold_tail_rows` (500) or `fold_tail_bytes` (2 MB), and right after a `bind/3` whose replay passed
-them. Those two encode in the room and do the DB work in a task, so a slow pool cannot push
-`Identity.via_room` into its timeout fallback. Every fold takes the `crdt_index_fold:<vault>`
-advisory lock that roomless folds take, MERGES into the stored snapshot instead of replacing it,
-and prunes only the rows its own room holds (`folded_ids`), never every row of the vault. Bind
+them. Those two encode in the room and do the DB work in the room's single folder process (one
+fold in flight, later requests coalesced), so a slow pool cannot push `Identity.via_room` into its
+timeout fallback or pile up tasks. Every fold takes the `crdt_index_fold:<vault>` advisory lock
+that roomless folds take and UNIONS the stored snapshot with its encode by applying both to a fresh
+doc and re-encoding. Not `Yex.merge_updates([stored, encoded])`: that keeps the first input's copy
+of a struct, so dead values never compact and the snapshot grows toward the 16 MB cap. A fold
+prunes only the rows its own room holds (`folded_ids`), never every row of the vault, and never a
+row after a skipped one (a pending update's delete set is lost on encode). Bind
 re-reads the snapshot after its replay, in case a roomless fold landed in between. Replay reads
 the tail one `replay_page_rows` (1,000) id window per statement (`Engram.Backfill.IdWindows`) and
 applies each page in one doc transaction. Roomless writes use one Yjs client id per vault
