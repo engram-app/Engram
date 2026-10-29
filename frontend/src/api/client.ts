@@ -15,6 +15,12 @@ let tokenGetter: (() => Promise<string | null>) | null = null;
 // than an event bus to stay simple and tree-shakeable.
 let upgradeHandler: ((reason: string) => void) | null = null;
 
+// Module-level account-conflict handler: the Clerk auth provider registers
+// one that signs out, so a 403 `account_conflict` (this identity's email, or an
+// alias of it, belongs to another account) ends the session instead of
+// leaving every request failing behind it.
+let accountConflictHandler: (() => void) | null = null;
+
 /** First "field: message" from the unified 422 shape %{errors: %{field => [msgs]}}.
  *  Controllers return this shape with no top-level `error` key, so the generic
  *  error surface must read it or validation toasts degrade to bare statusText. */
@@ -230,6 +236,9 @@ async function authFetch(
 		if (response.status === 403 && body.error === "onboarding_required") {
 			track("onboarding_blocked", { missing: body.missing, next_step: body.next_step });
 		}
+		if (response.status === 403 && body.error === "account_conflict") {
+			accountConflictHandler?.();
+		}
 		if (response.status === 402) {
 			const reason = body.reason ?? "unknown";
 			if (upgradeHandler) {
@@ -308,6 +317,10 @@ export async function getAuthToken(): Promise<string | null> {
 
 export function setUpgradeHandler(fn: ((reason: string) => void) | null) {
 	upgradeHandler = fn;
+}
+
+export function setAccountConflictHandler(fn: (() => void) | null) {
+	accountConflictHandler = fn;
 }
 
 export type { QueryAttempt };

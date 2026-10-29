@@ -86,8 +86,6 @@ export default {
 	"Already have an account? {signin}": "Sudah mempunyai akaun? {signin}",
 	"Loading...": "Memuatkan...",
 	"An account with this email already exists": "Sudah ada akaun dengan e-mel ini",
-	"We couldn’t create a new account because one already exists for this email (or an alias of it). Please sign in below instead.":
-		"Kami tidak dapat mencipta akaun baharu kerana sudah ada yang menggunakan e-mel ini (atau alamat alternatifnya). Sila log masuk di bawah.",
 	"Billing history": "Sejarah pembayaran",
 	"No transactions yet.": "Tiada transaksi lagi.",
 	Date: "Tarikh",

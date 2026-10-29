@@ -82,8 +82,6 @@ export default {
 	"Already have an account? {signin}": "이미 계정이 있으신가요? {signin}",
 	"Loading...": "로딩 중...",
 	"An account with this email already exists": "이 이메일로 등록된 계정이 이미 있습니다",
-	"We couldn’t create a new account because one already exists for this email (or an alias of it). Please sign in below instead.":
-		"이 이메일(또는 이메일 별칭)로 이미 계정이 존재하므로 새 계정을 만들 수 없습니다. 아래에서 로그인하세요.",
 	"Billing history": "결제 내역",
 	"No transactions yet.": "아직 거래 내역이 없습니다.",
 	Date: "날짜",

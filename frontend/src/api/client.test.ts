@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { track } from "../analytics/track";
-import { ApiError, api, isNotFound, LimitExceededError, setUpgradeHandler } from "./client";
+import {
+	ApiError,
+	api,
+	isNotFound,
+	LimitExceededError,
+	setAccountConflictHandler,
+	setUpgradeHandler,
+} from "./client";
 
 vi.mock("../analytics/track", () => ({ track: vi.fn() }));
 const mockTrack = vi.mocked(track);
@@ -11,6 +18,41 @@ describe("isNotFound", () => {
 		expect(isNotFound(new ApiError(500, "server error"))).toBe(false);
 		expect(isNotFound(new Error("network down"))).toBe(false);
 		expect(isNotFound(null)).toBe(false);
+	});
+});
+
+describe("api client 403 account_conflict", () => {
+	beforeEach(() => {
+		setAccountConflictHandler(null);
+	});
+
+	const reply = (body: object) =>
+		vi.fn().mockResolvedValue(
+			new Response(JSON.stringify(body), {
+				status: 403,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+
+	it("calls the account-conflict handler and still throws the ApiError", async () => {
+		const handler = vi.fn();
+		setAccountConflictHandler(handler);
+		globalThis.fetch = reply({ error: "account_conflict" });
+
+		await expect(api.get("/me")).rejects.toMatchObject({
+			status: 403,
+			message: "account_conflict",
+		});
+		expect(handler).toHaveBeenCalledTimes(1);
+	});
+
+	it("ignores other 403s", async () => {
+		const handler = vi.fn();
+		setAccountConflictHandler(handler);
+		globalThis.fetch = reply({ error: "onboarding_required" });
+
+		await expect(api.get("/me")).rejects.toBeInstanceOf(ApiError);
+		expect(handler).not.toHaveBeenCalled();
 	});
 });
 

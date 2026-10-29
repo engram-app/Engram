@@ -88,8 +88,6 @@ export default {
 	"Loading...": "Загрузка...",
 	"An account with this email already exists":
 		"Учётная запись с этим адресом электронной почты уже существует",
-	"We couldn’t create a new account because one already exists for this email (or an alias of it). Please sign in below instead.":
-		"Мы не смогли создать новую учётную запись, так как она уже существует для этого адреса электронной почты (или его псевдонима). Пожалуйста, войдите в систему ниже.",
 	"Billing history": "История платежей",
 	"No transactions yet.": "Операций пока нет.",
 	Date: "Дата",

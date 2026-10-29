@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import AuthPanel from "@/layout/auth-panel";
 import { notify } from "@/lib/notify";
 import { heading } from "@/lib/ui-classes";
-import { setTokenGetter } from "../api/client";
+import { setAccountConflictHandler, setTokenGetter } from "../api/client";
 import { useMe } from "../api/queries";
 import { queryClient } from "../api/query-client";
 import { useConfig } from "../config-context";
@@ -18,7 +18,7 @@ import { captureError, sentryReady } from "../sentry";
 import { useTheme } from "../theme/theme-provider";
 import { type AuthAdapter, AuthContext } from "./auth-context";
 import { clearHttpCache } from "./clear-http-cache";
-import { rememberSignupUser } from "./signup-rejection";
+import { markAccountConflict } from "./signup-rejection";
 import { useClearQueryCacheOnUserChange } from "./use-clear-query-cache-on-user-change";
 import { useIdentifyUserOnAuthChange } from "./use-identify-user-on-auth-change";
 import { useWipeCrdtOnUserChange } from "./use-wipe-crdt-on-user-change";
@@ -62,14 +62,7 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 		setTokenGetter(tokenGetter);
 	}, [tokenGetter]);
 
-	// Remember the Clerk user id while we still have it. If the multi-account
-	// block deletes this user moments later, the sign-in bounce can look up why.
 	const clerkUserId = clerk.user?.id;
-	useEffect(() => {
-		if (clerkUserId) {
-			rememberSignupUser(clerkUserId);
-		}
-	}, [clerkUserId]);
 
 	useClearQueryCacheOnUserChange(queryClient, clerkUserId);
 	useWipeCrdtOnUserChange(clerkUserId);
@@ -133,6 +126,16 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 			signingOut.current = false;
 		}
 	}, [clerk, t]);
+
+	// A 403 account_conflict means this Clerk identity can never reach its data
+	// (another account holds the email). Sign out, and tell the sign-in page why.
+	useEffect(() => {
+		setAccountConflictHandler(() => {
+			markAccountConflict();
+			logout();
+		});
+		return () => setAccountConflictHandler(null);
+	}, [logout]);
 
 	const adapter: AuthAdapter = useMemo(
 		() => ({

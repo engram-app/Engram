@@ -2,30 +2,15 @@ import { useEffect, useState } from "react";
 import { useT } from "@/i18n/locale-provider";
 import { destructiveAlert } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
-import { fetchSignupRejection, takePendingSignupUser } from "./signup-rejection";
+import { clearAccountConflict, hasAccountConflict } from "./signup-rejection";
 
-// Shown on the sign-in page after a sign-up was rejected server-side by the
-// multi-account block. Self-contained: renders nothing unless a recent pending
-// sign-up resolves to a known rejection reason.
+// Shown on the sign-in page after the app signed out on a 403
+// `account_conflict`. Shown once: the flag is cleared after it is read.
 export default function SignupRejectionNotice() {
 	const { t } = useT();
-	const [rejected, setRejected] = useState(false);
+	const [rejected] = useState(hasAccountConflict);
 
-	useEffect(() => {
-		const id = takePendingSignupUser();
-		if (!id) {
-			return;
-		}
-		let active = true;
-		fetchSignupRejection(id).then((reason) => {
-			if (active && reason === "duplicate_identity") {
-				setRejected(true);
-			}
-		});
-		return () => {
-			active = false;
-		};
-	}, []);
+	useEffect(clearAccountConflict, []);
 
 	if (!rejected) {
 		return null;
@@ -36,11 +21,7 @@ export default function SignupRejectionNotice() {
 			<p className="font-medium text-foreground">
 				{t("An account with this email already exists")}
 			</p>
-			<p className="mt-1 text-muted-foreground">
-				{t(
-					"We couldn’t create a new account because one already exists for this email (or an alias of it). Please sign in below instead.",
-				)}
-			</p>
+			<p className="mt-1 text-muted-foreground">{t("Contact support to restore access.")}</p>
 		</div>
 	);
 }
