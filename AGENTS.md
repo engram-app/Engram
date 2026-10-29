@@ -73,6 +73,9 @@ mix test <files-you-changed> test/lint/ --warnings-as-errors
 - A test must be able to fail: negative tests build the exact denied case, and
   scoping/auth tests are checked once by mutating the guard and watching it go red.
 - In PRs and issues, label claims **measured** (number + source), **deduced**, or **assumed**.
+- Link issues with `Refs #N` when a PR only partly addresses one, and `Closes #N` only
+  when it finishes it: GitHub's `Closes` ignores qualifiers like "partially" and closes
+  the issue anyway. Sweep stale `Refs` with `docs/context/backlog-refs-drift.md`.
 
 E2E: `python3 -m pytest e2e/tests/ -v` against the CI stack. Full strategy, the
 "test must fail" rules with examples, and lint tooling:
@@ -144,7 +147,8 @@ preflight, tooling locations): `docs/context/migrations-playbook.md`.
   `docs/context/request-query-budget.md`).
 - **Translations come from the translategemma pipeline**, never hand-written:
   wrap the string, run `cd frontend && I18N_OLLAMA_URL=<ollama-url> bun run i18n:translate`
-  (the team Ollama runs on FastRaid, the LAN server at 10.0.20.214:11434), or
+  against any Ollama serving `translategemma:12b` (maintainers use the team GPU box
+  over the VPN; addresses in engram-infra `docs/context/lan-hosts.md`), or
   let the `i18n-translate.yml` bot PR fill catalogs after merge. Product and plan
   names are never translated. Rules: `docs/context/webapp-i18n.md`.
 

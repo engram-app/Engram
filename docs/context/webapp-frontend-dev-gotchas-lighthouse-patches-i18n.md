@@ -46,7 +46,7 @@ t("Note text");
 
 Also:
 
-- The translate script needs `I18N_OLLAMA_URL=http://10.0.20.214:11434` on claw (no local Ollama).
+- The translate script needs `I18N_OLLAMA_URL` set to an Ollama serving `translategemma:12b` (it defaults to localhost; maintainers use the team GPU box, see engram-infra `docs/context/lan-hosts.md`).
 - Catalog key ORDER follows source scan order. Moving a `t()`/`msg()` call to another file reorders the catalogs: a diff with no real change.
 
 ## 6. `HighlightStyle` scoped to `markdownLanguage` never matches
