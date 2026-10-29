@@ -314,6 +314,12 @@ defmodule EngramWeb.CrdtChannel do
         log_dropped(socket, doc_id, err)
         {:reply, {:error, %{reason: "room_unavailable", doc_id: doc_id}}, socket}
 
+      {:error, :doc_update_failed} = err ->
+        # A released doc's STEP2 (#658) that will not land on a resend. The
+        # doc_id is a proven UUID by then, so echoing it is safe.
+        log_dropped(socket, doc_id, err)
+        {:reply, {:error, %{reason: "doc_update_failed", doc_id: doc_id}}, socket}
+
       err ->
         # Surface drops rather than swallowing them silently — a dropped frame
         # (bad base64, or a non-UUID doc_id from a stale path-keyed client)
@@ -599,7 +605,11 @@ defmodule EngramWeb.CrdtChannel do
          {:ok, frame} <- decode_frame(b64),
          :ok <- guard_frame(frame),
          {:ok, update} <- take_sync_update(frame),
-         {:ok, %{head: head}} <- apply_room_free(socket, note_id, update) do
+         {:ok, %{head: head}} <-
+           apply_room_free(
+             socket,
+             &CrdtTransport.apply_update(&1, &2, note_id, update, :room_free_update)
+           ) do
       note_sync_activity(socket)
       {:reply, {:ok, %{doc_id: note_id, head: head}}, socket}
     else
@@ -814,14 +824,12 @@ defmodule EngramWeb.CrdtChannel do
   # rooms. The supervisor also propagates `$callers`, which is what lets the
   # task reach the Repo (and, in tests, the sandbox connection this channel is
   # allowed on).
-  defp apply_room_free(socket, note_id, update) do
+  # `apply` is `(user, vault -> result)`, run on the task.
+  defp apply_room_free(socket, apply) do
     user = socket.assigns.current_user
     vault = socket.assigns.vault
 
-    task =
-      Task.Supervisor.async_nolink(Engram.TaskSupervisor, fn ->
-        CrdtTransport.apply_update(user, vault, note_id, update, :room_free_update)
-      end)
+    task = Task.Supervisor.async_nolink(Engram.TaskSupervisor, fn -> apply.(user, vault) end)
 
     case Task.yield(task, @room_free_apply_ms) do
       {:ok, result} ->
@@ -854,33 +862,79 @@ defmodule EngramWeb.CrdtChannel do
 
   # Engram-obsidian#658. A heal is STEP1 -> our STEP2 + our own trailing STEP1
   # (y_ex sync.rs), and 1.38/1.39 plugins `crdt_release` after the STEP2. Their
-  # answer to the trailing STEP1 is a STEP2 for a doc this socket no longer
-  # holds, and `ensure_room` would start a second room per heal for it
-  # (room_start{source="handshake"} doubled). So a STEP2 with no room here never
-  # starts one: it is dropped when the persisted doc already covers it, and
-  # otherwise applied through the room-free write `crdt_doc_update` uses, so an
-  # update the server lacks is never lost. STEP1 and sync_update frames keep the
-  # room path.
-  defp deliver(socket, doc_id, <<0, 1, _::binary>> = frame, _class)
-       when not is_map_key(socket.assigns.rooms, doc_id) do
-    %{current_user: user, vault: vault} = socket.assigns
-
-    with {:ok, note_id} <- cast_doc_id(doc_id),
-         {:ok, {:sync, {:sync_step2, update}}} <- Yex.Sync.message_decode(frame) do
-      if CrdtTransport.covered?(user, vault, note_id, update) do
-        {:ok, socket}
-      else
-        with {:ok, _head} <- apply_room_free(socket, note_id, update), do: {:ok, socket}
-      end
-    end
+  # answer to the trailing STEP1 is a STEP2 for a doc this socket just released,
+  # and `ensure_room` started a second room per heal for it
+  # (room_start{source="handshake"} doubled). So that STEP2 never re-attaches
+  # the socket: on the room-free applier task it is dropped when the persisted
+  # doc already covers it, and otherwise applied through the same room-free
+  # write `crdt_doc_update` uses, so an update the server lacks is never lost.
+  #
+  # Scoped to docs this socket RELEASED (`drained`), not to any unroomed doc: a
+  # STEP2 after a room CRASH may come from a live editor that needs the socket
+  # observing again, so it keeps the room path. STEP1 and sync_update frames
+  # always keep it. `drained` clears on overflow, which only costs a room.
+  defp deliver(socket, doc_id, <<0, 1, _::binary>> = frame, class) do
+    if released_here?(socket, doc_id),
+      do: deliver_released_step2(socket, doc_id, frame),
+      else: deliver_via_room(socket, doc_id, frame, class)
   end
 
-  defp deliver(socket, doc_id, frame, class) do
+  defp deliver(socket, doc_id, frame, class), do: deliver_via_room(socket, doc_id, frame, class)
+
+  defp deliver_via_room(socket, doc_id, frame, class) do
     with {:ok, socket, %{room: room}} <- ensure_room(socket, doc_id, class),
          :ok <- guard_size(room, frame),
          :ok <- relay_frame(room, frame),
          :ok <- confirm_appended(room, frame),
          do: {:ok, socket}
+  end
+
+  defp released_here?(%{assigns: assigns}, doc_id),
+    do: not is_map_key(assigns.rooms, doc_id) and MapSet.member?(assigns.drained, doc_id)
+
+  defp deliver_released_step2(socket, doc_id, frame) do
+    with {:ok, note_id} <- cast_doc_id(doc_id),
+         {:ok, update} <- take_sync(frame, :sync_step2, :bad_frame) do
+      result =
+        apply_room_free(
+          socket,
+          &CrdtTransport.apply_unless_covered(&1, &2, note_id, update, :trailing_step2)
+        )
+
+      emit_unroomed_step2(result)
+      step2_reply(result, socket)
+    end
+  rescue
+    # Same discipline as `crdt_doc_update`: the decode NIF runs on THIS process,
+    # and a raise here would cost the socket every room it holds.
+    _ -> {:error, :bad_frame}
+  end
+
+  # Every failure replies (doc_id is a proven UUID, so echoing it is safe).
+  # Not-found and too-large keep their own replies. A timeout or crashed applier
+  # may still land, and a resend is idempotent: room_unavailable. A malformed or
+  # dependency-missing update will not land on a resend: doc_update_failed.
+  defp step2_reply({:ok, _}, socket), do: {:ok, socket}
+
+  defp step2_reply({:error, reason}, _socket)
+       when reason in [:not_found, :note_too_large, :room_unavailable],
+       do: {:error, reason}
+
+  defp step2_reply({:error, reason}, _socket)
+       when reason in [:invalid_update, :missing_dependencies],
+       do: {:error, :doc_update_failed}
+
+  defp step2_reply({:error, _reason}, _socket), do: {:error, :room_unavailable}
+
+  defp emit_unroomed_step2(result) do
+    outcome =
+      case result do
+        {:ok, :covered} -> :covered
+        {:ok, _} -> :applied
+        {:error, _} -> :failed
+      end
+
+    :telemetry.execute([:engram, :crdt, :unroomed_step2], %{count: 1}, %{outcome: outcome})
   end
 
   defp log_doc_update_failed(note_id, reason) do
@@ -1100,10 +1154,12 @@ defmodule EngramWeb.CrdtChannel do
     if markdown_path?(path), do: :ok, else: {:error, :not_markdown}
   end
 
-  defp take_sync_update(frame) do
+  defp take_sync_update(frame), do: take_sync(frame, :sync_update, :not_sync_update)
+
+  defp take_sync(frame, kind, error) do
     case Yex.Sync.message_decode(frame) do
-      {:ok, {:sync, {:sync_update, update}}} -> {:ok, update}
-      _ -> {:error, :not_sync_update}
+      {:ok, {:sync, {^kind, update}}} -> {:ok, update}
+      _ -> {:error, error}
     end
   end
 
