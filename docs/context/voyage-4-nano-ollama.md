@@ -27,8 +27,10 @@ models are untouched.
   The Voyage API adds these server-side from `input_type`; Ollama does not.
 - NFC normalisation: llama.cpp's tokenizer skips it, so NFD text (macOS file
   names) would embed differently.
-- `dimensions` from `EMBED_DIMS`: the model emits 2048-d; Ollama truncates
-  (Matryoshka) and re-normalises. Our collection is 1024-d, so set `EMBED_DIMS=1024`.
+- `dimensions`, always: the collection's width (`EMBED_DIMS`, else
+  `Indexing.embed_dims/0`'s 1024). The model emits 2048-d; Ollama truncates
+  (Matryoshka) and re-normalises. Without it every upsert into the 1024-d
+  collection is refused.
 - `options: {num_ctx, num_batch}` from `OLLAMA_NUM_CTX`: bidirectional
   attention means one input must fit one batch, so both are equal. Unset, the
   repo's params reserve 32k (~6 GB); 8192 is ~1.3 GB. Changing it reloads
@@ -37,8 +39,11 @@ models are untouched.
     (7,500 estimated = ~30 KB), and dense text runs ~1.4 bytes/token, so a
     merged input can exceed 8192 real tokens. Ollama's `/api/embed` truncates
     over-length input by default (no error), so at 8192 such an input embeds
-    its prefix only. Only 32768 (unset) rules that out. Fine for staging;
-    revisit before recommending nano to self-hosters.
+    its prefix only. Worst case is 1 byte/token (digit runs: Qwen3 splits
+    digits), so 30,000 tokens plus the prompt: only 32768 (unset) rules
+    truncation out, and it is what the Voyage API gives prod (32k, truncation
+    on). Leave it unset; set 8192 only on a GPU that cannot spare ~6 GB, and
+    accept prefix-only vectors on merged code/CJK groups.
 
 The per-plan doc model and the query model reach Ollama as the `:model` opt,
 same as Voyage; before this change the Ollama adapter ignored it.
@@ -48,7 +53,7 @@ same as Voyage; before this change the Ollama adapter ignored it.
 ```
 EMBED_BACKEND=ollama
 OLLAMA_URL=http://<fastraid-ollama>:11434
-OLLAMA_NUM_CTX=8192
+# OLLAMA_NUM_CTX unset: the model's 32768 (see the ceiling above)
 EMBED_DIMS=1024
 EMBED_MODEL=hf.co/MongoDB/voyage-4-nano-GGUF:Q8_0
 DOC_EMBED_MODEL / QUERY_EMBED_MODEL: same value, or unset
@@ -65,6 +70,18 @@ voyage-4-lite/large, and Ollama would be asked for a model it does not have.
 `acceptable/1` is `[nano]`, so notes stamped `voyage-4-lite`/`voyage-4-large`
 are `version_stale?` and the reconcile sweep re-embeds them with nano. No
 backfill, no operator step. Switching back to the API re-embeds the other way.
+
+## Pacing the switch
+
+The model-only re-embeds are `RebuildStaleNote` jobs with `upgrade: true`
+on the `rebuild` queue (concurrency 2 per node), gated by `Rebuild.pace/0`.
+Its token bucket is debited only by the Voyage adapter's token telemetry,
+which Ollama never emits, so on Ollama the gate is Qdrant health plus that
+concurrency: at most 2 in-flight batches (<=128 texts, <=118 KB) per node.
+No flood, but searches queue behind them in Ollama (45 s query budget).
+The FastRaid Ollama also serves CI's `mxbai-embed-large` and holds one
+model in VRAM at a time (seen 2026-10), so a staging re-embed and an e2e run evict each
+other's model on every request: run the switch outside CI hours.
 
 ## Self-host default NOT changed
 
