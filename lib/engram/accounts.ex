@@ -134,7 +134,11 @@ defmodule Engram.Accounts do
 
       nil ->
         case Repo.one(
-               from(u in User, where: fragment("lower(?)", u.email) == ^String.downcase(email)),
+               # lower() on both sides, as users_email_lower_index does: Elixir's
+               # String.downcase folds some non-ASCII letters differently.
+               from(u in User,
+                 where: fragment("lower(?)", u.email) == fragment("lower(?)", ^email)
+               ),
                skip_tenant_check: true
              ) do
           %User{external_id: nil} = user ->

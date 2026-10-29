@@ -139,6 +139,20 @@ defmodule Engram.AccountsTest do
       assert linked.external_id == "clerk_case_only"
     end
 
+    # Elixir's String.downcase and Postgres lower() fold some characters
+    # differently (Turkish dotted I: "İ" -> "i̇" vs "i" or unchanged), so the
+    # lookup lowers both sides in SQL, exactly as users_email_lower_index does.
+    test "links an unbound row whose email differs in non-ASCII case only" do
+      user = insert(:user, email: "İnci@test.com", external_id: nil)
+
+      assert {:ok, linked} =
+               Accounts.find_or_create_by_external_id("clerk_dotted_i", %{
+                 email: "İNCI@test.com"
+               })
+
+      assert linked.id == user.id
+    end
+
     test "refuses a case-only email match bound to another Clerk id" do
       insert(:user, email: "Bound.Case@Test.com", external_id: "clerk_bound_case")
 
