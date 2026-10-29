@@ -1308,10 +1308,26 @@ defmodule Engram.Billing do
   defp apply_to_racing_row(type, data, user_id, occurred_at, changeset) do
     case get_subscription_by_paddle_id(data["id"]) do
       %Subscription{user_id: ^user_id} = sub -> apply_to_existing(type, sub, data, occurred_at)
-      %Subscription{} -> {:error, :paddle_subscription_owned_by_other_user}
+      %Subscription{} = sub -> owned_by_other_user(sub, user_id)
       # Gone again before the re-read: transient, the controller answers 500.
       nil -> {:error, changeset}
     end
+  end
+
+  # A paying subscription is attached to a different account than its
+  # checkout named: a bug, or a tampered custom_data. No retry can fix it, so
+  # it is acked (200) and must reach a human: logged at error (Sentry, Loki).
+  defp owned_by_other_user(sub, user_id) do
+    Logger.error(
+      "paddle_subscription_owned_by_other_user",
+      Metadata.with_category(:error, :billing,
+        paddle_subscription_id: sub.paddle_subscription_id,
+        owner_user_id: sub.user_id,
+        user_id: user_id
+      )
+    )
+
+    {:error, :paddle_subscription_owned_by_other_user}
   end
 
   # The `user_id` conflict update. Same paddle id: apply unless the event is

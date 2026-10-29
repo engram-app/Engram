@@ -1759,6 +1759,7 @@ defmodule Engram.BillingTest do
       event = race_event("subscription.activated", user, "active", "2026-10-29T06:17:01Z")
 
       assert {:ok, %Subscription{status: "active"}} = Billing.upsert_from_paddle_event(event)
+      assert_received :sibling_landed
 
       assert %{status: "active", last_event_occurred_at: ~U[2026-10-29 06:17:01.000000Z]} =
                Billing.get_subscription(user)
@@ -1774,6 +1775,7 @@ defmodule Engram.BillingTest do
       event = race_event("subscription.canceled", user, "canceled", "2026-10-29T06:17:01Z")
 
       assert {:ok, %Subscription{status: "canceled"}} = Billing.upsert_from_paddle_event(event)
+      assert_received :sibling_landed
       assert %{status: "canceled"} = Billing.get_subscription(user)
     end
 
@@ -1787,6 +1789,22 @@ defmodule Engram.BillingTest do
       event = race_event("subscription.updated", user, "past_due", "2026-10-29T06:17:00Z")
 
       assert {:ok, :stale} = Billing.upsert_from_paddle_event(event)
+      assert_received :sibling_landed
+
+      assert %{status: "active", last_event_occurred_at: ~U[2026-10-29 06:17:01.000000Z]} =
+               Billing.get_subscription(user)
+    end
+
+    # The likely incident order: activated wins, the older created loses.
+    # created skips the pre-read, so the trigger alone stages it.
+    test "an older created losing to activated is skipped as stale" do
+      user = insert(:user)
+      activated = race_event("subscription.activated", user, "active", "2026-10-29T06:17:01Z")
+      assert {:ok, %Subscription{}} = Billing.upsert_from_paddle_event(activated)
+
+      created = race_event("subscription.created", user, "trialing", "2026-10-29T06:17:00Z")
+
+      assert {:ok, :stale} = Billing.upsert_from_paddle_event(created)
 
       assert %{status: "active", last_event_occurred_at: ~U[2026-10-29 06:17:01.000000Z]} =
                Billing.get_subscription(user)
@@ -1800,8 +1818,14 @@ defmodule Engram.BillingTest do
 
       event = race_event("subscription.created", other, "trialing", "2026-10-29T06:17:01Z")
 
-      assert {:error, :paddle_subscription_owned_by_other_user} =
-               Billing.upsert_from_paddle_event(event)
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, :paddle_subscription_owned_by_other_user} =
+                   Billing.upsert_from_paddle_event(event)
+        end)
+
+      assert log =~ "[error]"
+      assert log =~ "paddle_subscription_owned_by_other_user"
 
       assert %{status: "active", user_id: owner_id} = Billing.get_subscription(owner)
       assert owner_id == owner.id
@@ -1844,7 +1868,10 @@ defmodule Engram.BillingTest do
   def race_hook(_event, _measurements, %{source: "subscriptions"}, {pid, id, sibling})
       when pid == self() do
     :telemetry.detach(id)
+    # :telemetry swallows a raise here, so the test asserts this message:
+    # without it a failed sibling would leave a race test passing with no race.
     {:ok, %Subscription{}} = Billing.upsert_from_paddle_event(sibling)
+    send(pid, :sibling_landed)
   end
 
   def race_hook(_event, _measurements, _metadata, _config), do: :ok
