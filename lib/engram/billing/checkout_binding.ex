@@ -9,8 +9,15 @@ defmodule Engram.Billing.CheckoutBinding do
   it back. `verify/1` accepts the `user_id` only when `sig` is a token this
   server signed for that same id.
 
-  Only the first event for a subscription is checked: events for a
-  subscription we already store match by `paddle_subscription_id`.
+  Checked on the insert path: every `subscription.created` (including
+  retries and replays), and any other subscription event whose
+  `paddle_subscription_id` no row holds yet. Other events for a stored
+  subscription match by `paddle_subscription_id` and need no token.
+
+  Recovery for a subscription left unbound: a replay resends the original
+  payload, so it cannot add a token. Mint fresh data with `custom_data/1`
+  in a release shell and PATCH it onto the Paddle subscription
+  (see `docs/context/paddle-integration.md`).
   """
 
   @salt "paddle_checkout"

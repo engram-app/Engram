@@ -1224,7 +1224,8 @@ defmodule Engram.Billing do
             user_id: user_id,
             paddle_customer_id: data["customer_id"],
             paddle_subscription_id: data["id"],
-            custom_data: data["custom_data"] || %{}
+            # The binding token is verified above, not stored.
+            custom_data: Map.delete(data["custom_data"] || %{}, "sig")
           })
 
         # :custom_data is not in the conflict update. Paddle delivers
@@ -1557,7 +1558,13 @@ defmodule Engram.Billing do
   # `api_keys_discovery`). `cross_tenant/1` only silences the app-level
   # tripwire; the policy is what admits the read. The caller then writes under
   # `with_tenant(sub.user_id)`, where INSERT/UPDATE/DELETE stay tenant-scoped.
-  defp get_subscription_by_paddle_id(subscription_id) do
+  @doc """
+  The stored subscription for a Paddle subscription id, across tenants, or
+  nil. Webhook-driven code resolves a Paddle entity's owner through this
+  rather than through `custom_data`.
+  """
+  @spec get_subscription_by_paddle_id(String.t()) :: Subscription.t() | nil
+  def get_subscription_by_paddle_id(subscription_id) do
     Repo.cross_tenant(fn ->
       Repo.one(from(s in Subscription, where: s.paddle_subscription_id == ^subscription_id))
     end)

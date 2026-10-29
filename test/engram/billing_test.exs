@@ -986,8 +986,8 @@ defmodule Engram.BillingTest do
       assert sub.paddle_subscription_id == "sub_paddle_1"
       assert sub.tier == "starter"
       assert sub.status == "trialing"
-      assert sub.custom_data == event["data"]["custom_data"]
-      assert %{"user_id" => _, "affiliate_ref" => "ref_abc", "sig" => _} = sub.custom_data
+      # The binding token is checked, not stored.
+      assert sub.custom_data == %{"user_id" => user.id, "affiliate_ref" => "ref_abc"}
       # A new plan can lift the index cap: the backfill starts now.
       assert_enqueued(worker: Engram.Workers.ReconcileEmbeddings)
     end
@@ -1009,8 +1009,8 @@ defmodule Engram.BillingTest do
 
       assert {:ok, _} = Billing.upsert_from_paddle_event(first_event)
 
-      # Paddle redelivers. The replay arrives with different (or empty)
-      # custom_data — e.g. an operator-replayed event from the dashboard.
+      # Paddle redelivers the same checkout's custom_data (still signed) with
+      # different attribution keys: the stored attribution must not change.
       retry_event =
         put_in(
           first_event,
@@ -1024,6 +1024,11 @@ defmodule Engram.BillingTest do
       # the DB. The DB row is what we care about.
       reloaded = Billing.get_subscription(user)
       assert reloaded.custom_data["affiliate_ref"] == "rf_original"
+
+      # A created replay with its custom_data emptied names no owner at all.
+      empty_replay = put_in(first_event, ["data", "custom_data"], %{})
+      assert {:error, :missing_user_id} = Billing.upsert_from_paddle_event(empty_replay)
+      assert Billing.get_subscription(user).custom_data["affiliate_ref"] == "rf_original"
     end
 
     test "subscription.created accepts user_id as string in custom_data" do
@@ -1083,6 +1088,22 @@ defmodule Engram.BillingTest do
       row = Repo.with_tenant!(user.id, fn -> Repo.get_by!(Subscription, user_id: user.id) end)
       assert row.paddle_subscription_id == "sub_bind_existing"
       assert row.status == "canceled"
+    end
+
+    test "subscription.created with an expired sig is rejected" do
+      user = insert(:user)
+
+      expired =
+        Phoenix.Token.sign(EngramWeb.Endpoint, "paddle_checkout", user.id,
+          signed_at: System.system_time(:second) - 31 * 86_400
+        )
+
+      assert {:error, :unverified_user_binding} =
+               Billing.upsert_from_paddle_event(
+                 binding_event("sub_bind_expired", %{"user_id" => user.id, "sig" => expired})
+               )
+
+      assert Billing.get_subscription(user) == nil
     end
 
     test "an event for a stored subscription applies without a sig" do

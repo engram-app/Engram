@@ -544,10 +544,11 @@ defmodule EngramWeb.WebhookControllerTest do
         })
 
       log =
-        ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+        ExUnit.CaptureLog.capture_log([level: :error], fn ->
           assert json_response(send_payload(payload), 200)["status"] == "ok"
         end)
 
+      # Error level, so the billing alert and Sentry see it.
       assert log =~ "paddle_webhook_unverified_user_binding"
       refute log =~ "paddle_webhook_handler_error"
       assert Engram.Billing.get_subscription(user) == nil

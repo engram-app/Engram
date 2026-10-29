@@ -89,12 +89,13 @@ defmodule EngramWeb.WebhookController do
               {:error, :awaiting_subscription_created} = err ->
                 {err, %{event_type: event_type, event_id: event_id, result: :error}}
 
-              # The first event's custom_data did not carry a valid server
-              # signature for its user_id: nothing is bound. Ids only.
+              # The event's custom_data did not carry a valid server signature
+              # for its user_id: nothing is bound. Error level so the billing
+              # alert and Sentry surface it for a human. Ids only.
               {:error, :unverified_user_binding} = err ->
-                Logger.warning(
+                Logger.error(
                   "paddle_webhook_unverified_user_binding",
-                  Metadata.with_category(:warning, :billing,
+                  Metadata.with_category(:error, :billing,
                     paddle_subscription_id: get_in(event, ["data", "id"])
                   )
                 )

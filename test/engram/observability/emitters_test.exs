@@ -852,6 +852,7 @@ defmodule Engram.Observability.EmittersTest do
 
     test "transaction.completed is payment_completed with bounded amount props", %{bypass: bypass} do
       user = user_with_clerk_id()
+      insert(:subscription, user: user, paddle_subscription_id: "sub_pay_1")
       expect_capture(bypass)
 
       :ok =
@@ -859,7 +860,9 @@ defmodule Engram.Observability.EmittersTest do
           %{
             "event_type" => "transaction.completed",
             "data" => %{
-              "custom_data" => checkout_custom_data(user.id),
+              "subscription_id" => "sub_pay_1",
+              # The owner comes from the stored subscription, not custom_data.
+              "custom_data" => %{"user_id" => Ecto.UUID.generate()},
               "origin" => "subscription_recurring",
               "currency_code" => "USD",
               "discount_id" => nil,
@@ -883,6 +886,7 @@ defmodule Engram.Observability.EmittersTest do
 
     test "a fully comped payment buckets as 0 and is discounted", %{bypass: bypass} do
       user = user_with_clerk_id()
+      insert(:subscription, user: user, paddle_subscription_id: "sub_pay_comp")
       expect_capture(bypass)
 
       :ok =
@@ -890,7 +894,7 @@ defmodule Engram.Observability.EmittersTest do
           %{
             "event_type" => "transaction.completed",
             "data" => %{
-              "custom_data" => checkout_custom_data(user.id),
+              "subscription_id" => "sub_pay_comp",
               "origin" => "web",
               "currency_code" => "EUR",
               "discount_id" => "dsc_comp",
@@ -906,13 +910,22 @@ defmodule Engram.Observability.EmittersTest do
       assert body["properties"]["interval"] == nil
     end
 
-    test "a payment with no resolvable user sends nothing" do
-      for custom <- [%{}, %{"user_id" => "not-a-uuid"}, %{"user_id" => Ecto.UUID.generate()}] do
+    test "a payment with no stored subscription sends nothing" do
+      user = user_with_clerk_id()
+
+      for data <- [
+            %{},
+            %{"subscription_id" => "sub_unknown"},
+            %{"subscription_id" => 123},
+            # custom_data alone never names the owner.
+            %{"custom_data" => %{"user_id" => user.id}},
+            %{"subscription_id" => "sub_unknown", "custom_data" => checkout_custom_data(user.id)}
+          ] do
         :ok =
           PostHogForwarder.forward_paddle_event(
             %{
               "event_type" => "transaction.completed",
-              "data" => %{"custom_data" => custom, "currency_code" => "USD"}
+              "data" => Map.put(data, "currency_code", "USD")
             },
             :ignored
           )

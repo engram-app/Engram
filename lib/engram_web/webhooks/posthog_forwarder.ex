@@ -20,13 +20,14 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
     the same key, Clerk's session row references the user it belongs
     to), so each handler loads the local user by external_id and hashes
     its email.
-  - Paddle events carry an *internal* `custom_data.user_id`; we resolve
-    through the Subscription row to the user, then hash its email.
+  - Paddle events resolve to a user through the stored Subscription row
+    (never raw `custom_data`), then we hash its email.
   """
 
   alias Engram.Accounts
   alias Engram.Accounts.User
   alias Engram.Analytics.PersonProperties
+  alias Engram.Billing
   alias Engram.Billing.Subscription
   alias Engram.Feedback
   alias Engram.Logger.Metadata
@@ -185,10 +186,12 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
     track_sub(sub, "subscription_past_due", %{tier: sub.tier, status: sub.status})
   end
 
-  # Paddle copies the checkout's custom_data (our user_id) onto the
-  # subscription and every renewal transaction it creates.
+  # The payer is the owner of the stored subscription the transaction belongs
+  # to, as for adjustments. A transaction with no stored row (a first charge
+  # landing before its subscription.created, or a one-off) is not attributed.
   def forward_paddle_event(%{"event_type" => "transaction.completed", "data" => data}, _result) do
-    with {:ok, user_id} <- Ecto.UUID.cast(get_in(data, ["custom_data", "user_id"])),
+    with sub_id when is_binary(sub_id) <- data["subscription_id"],
+         %Subscription{user_id: user_id} <- Billing.get_subscription_by_paddle_id(sub_id),
          %{email: email} = user when is_binary(email) and byte_size(email) > 0 <-
            Accounts.get_user(user_id) do
       interval =
