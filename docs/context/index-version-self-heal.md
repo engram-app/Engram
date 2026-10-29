@@ -156,3 +156,29 @@ vacuum run before judging the saving. Under `INDEX_REBUILD=off|dry_run` the
 sweep targets `Rebuild.pinned_versions/0` (keyword 2), so nothing moves until
 `on`. No Voyage call is made. The sparse `f16` datatype and the vacuum
 threshold are separate changes (staging plus an infra PR).
+
+**The rewrite is paced, so the peak cannot reach strict mode.** Each
+`RefreshKeywordVectors` job first passes `Rebuild.qdrant_pace/0`, the same
+Qdrant half of the gate the v5 rebuild's `pace/0` uses (minus the Voyage
+token bucket, since a resparse costs nothing). It snoozes 30 s (never fails)
+while:
+
+- disk is at or over `:rebuild_max_disk_percent` (default 75), from the
+  cached `Qdrant.pressure/0` volume reading. Strict mode refuses writes at 85,
+  so the pass stops 10 points short and users' own writes keep landing.
+  Unknown capacity (self-host has no `/sys_metrics`) never blocks.
+- the update queue holds more than 100 operations, or
+- the optimizer is behind: collection not green, optimizer not ok, or more
+  than `:rebuild_max_queued_points` points awaiting optimization. Waiting on
+  the optimizer is what lets the vacuum keep pace with the dead copies.
+
+The full rebuild shares this gate, so it gets the disk check too. A user's
+edit (`EmbedNote`) is never gated. Snoozes are counted by reason in
+`engram_prom_ex_indexing_rebuild_gated_total{reason}` (`disk`, `queue`,
+`optimizer`, `unavailable`, and `tokens` for the rebuild).
+
+The sweep also stops topping up once `:keyword_refresh_backlog` (default
+10,000) `RefreshKeywordVectors` jobs are pending. Before that cap, one
+reconcile tick queued every keyword-stale note in the fleet at once.
+Concurrency is the `embed` queue's limit (5 per worker node), shared with
+user edits, which run first (keyword jobs are backfill priority).
