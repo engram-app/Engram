@@ -917,18 +917,37 @@ defmodule Engram.Notes.CrdtIndexPersistenceTest do
       assert persisted_entries(ctx) == rows + 1
     end
 
-    test "a row that fails to decode stays in the tail when the bind folds", ctx do
+    # Delta review M3. A row that decrypts but is not a Yjs update can never
+    # apply, so keeping it buys nothing, and (with the "nothing after a skip"
+    # rule) it blocked pruning of every row behind it forever. It is dropped at
+    # the next fold, loudly. Contrast a row that will not DECRYPT, which may be
+    # transient and is kept (see "a row that could not be replayed").
+    test "a permanently corrupt row is dropped by the fold, the rest still apply", ctx do
       seed_tail(ctx, @limits[:fold_tail_rows] + 1)
-      # Encrypts fine, is not a Yjs update: only this row is skipped, the rest
-      # of its page still applies.
       seed_rows(ctx, [<<255, 255, 255, 255>>])
 
       {_state, doc} = bind_fresh(ctx)
 
       assert entry_count(doc) == @limits[:fold_tail_rows] + 1
 
-      # 0 means the fold pruned a row it never applied; 22 means no fold.
-      :ok = await_tail_exactly(ctx.user, ctx.vault.id, 1)
+      # 22 means no fold; 1 means the corrupt row was kept.
+      :ok = await_tail_exactly(ctx.user, ctx.vault.id, 0)
+    end
+
+    test "a corrupt row does not pin the rows a killed room left behind it", ctx do
+      seed_rows(ctx, [<<255, 255, 255, 255>>])
+
+      room = start_index_room(ctx)
+      for i <- 1..5, do: put_entry(room, "left-#{i}.md", "#{i}")
+      :ok = await_tail(ctx.user, ctx.vault.id, 6)
+      :ok = kill_room_and_wait(room)
+
+      revived = start_index_room(ctx)
+      assert read_entry(revived, "left-5.md")["note_id"] == "5"
+      :ok = stop_room_and_wait(revived)
+
+      assert tail_count(ctx.user, ctx.vault.id) <= 1,
+             "the rows behind a corrupt row were never pruned"
     end
 
     test "appending past the threshold on a live room folds the tail", ctx do
