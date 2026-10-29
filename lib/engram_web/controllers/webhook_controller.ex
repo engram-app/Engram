@@ -89,6 +89,15 @@ defmodule EngramWeb.WebhookController do
               {:error, :awaiting_subscription_created} = err ->
                 {err, %{event_type: event_type, event_id: event_id, result: :error}}
 
+              # A first insert lost a race and its row could not be re-read
+              # (#2312): retried, and Billing already logs it at warning.
+              {:error, :subscription_insert_race} = err ->
+                {err, %{event_type: event_type, event_id: event_id, result: :error}}
+
+              # Billing already logged it at error with both user ids.
+              {:error, :paddle_subscription_owned_by_other_user} = err ->
+                {err, %{event_type: event_type, event_id: event_id, result: :error}}
+
               # The event's custom_data did not carry a valid server signature
               # for its user_id: nothing is bound. Error level so the billing
               # alert and Sentry surface it for a human. Ids only.
@@ -166,14 +175,11 @@ defmodule EngramWeb.WebhookController do
   # user holds, fails validation (bad status, an unknown price on a first
   # insert), or asks for a cancel Paddle rejects. The same bytes fail the same
   # way on every retry. Everything else (a raised exception, a DB error, a
-  # unique violation, an unknown reason) is treated as transient.
+  # lost insert race, an unknown reason) is treated as transient.
   defp permanent_paddle_error?(:missing_user_id), do: true
   defp permanent_paddle_error?(:unverified_user_binding), do: true
   defp permanent_paddle_error?(:paddle_subscription_owned_by_other_user), do: true
-  # A unique violation is two deliveries racing on one row (#2312), not a bad
-  # payload: the retry finds the committed row. Acking it lost the event.
-  defp permanent_paddle_error?(%Ecto.Changeset{errors: errors}),
-    do: not Enum.any?(errors, fn {_field, {_msg, opts}} -> opts[:constraint] == :unique end)
+  defp permanent_paddle_error?(%Ecto.Changeset{}), do: true
 
   # Paddle refused our refund cancel with a non-retryable 4xx and still
   # holds the subscription live: logged at error above, for a human. Lock

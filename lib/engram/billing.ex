@@ -1253,15 +1253,7 @@ defmodule Engram.Billing do
             broadcast_subscription_activated(user_id, sub)
             # A new plan can lift the index cap: the backfill starts now.
             _ = Engram.Workers.ReconcileEmbeddings.kick()
-            # A connector signup's vault waits for a passing plan, and a paid
-            # plan passes here rather than in the wizard. Only the insert path
-            # gets here, so renewals and cancellations of a known row never
-            # recreate a deleted vault (and a canceled first event fails the
-            # plan check inside). Last, and it never raises.
-            with %Engram.Accounts.User{} = user <- Engram.Accounts.get_user(user_id) do
-              :ok = Engram.Onboarding.maybe_provision_connector_vault(user)
-            end
-
+            provision_connector_vault(user_id)
             {:ok, sub}
 
           {:error, %Ecto.Changeset{errors: errors} = changeset} ->
@@ -1273,7 +1265,7 @@ defmodule Engram.Billing do
                 stale_or_wait(type, data, user_id)
 
               error_opt(errors, :paddle_subscription_id, :constraint) == :unique ->
-                apply_to_racing_row(type, data, user_id, occurred_at, changeset)
+                apply_to_racing_row(type, data, user_id, occurred_at)
 
               true ->
                 {:error, changeset}
@@ -1286,6 +1278,21 @@ defmodule Engram.Billing do
       :unverified ->
         {:error, :unverified_user_binding}
     end
+  end
+
+  # A connector signup's vault waits for a passing plan, and a paid plan
+  # passes here rather than in the wizard. Only the insert path (and its race
+  # loser, which is part of the same first insert) calls this, so renewals
+  # and cancellations of a known row never recreate a deleted vault (and a
+  # canceled first event fails the plan check inside). Idempotent: it needs
+  # no vault and no prior provisioning action, and `register_vault/3` answers
+  # `:existing` for the same client id. Called last; it never raises.
+  defp provision_connector_vault(user_id) do
+    with %Engram.Accounts.User{} = user <- Engram.Accounts.get_user(user_id) do
+      :ok = Engram.Onboarding.maybe_provision_connector_vault(user)
+    end
+
+    :ok
   end
 
   # Every event for a row that already holds its paddle id: the pre-read hit,
@@ -1305,13 +1312,41 @@ defmodule Engram.Billing do
   # stale-guarded update path (which never inserts, so this cannot loop). A
   # row another user owns is never overwritten. The insert ran with
   # `mode: :savepoint`, so the tenant transaction was not aborted (no 25P02).
-  defp apply_to_racing_row(type, data, user_id, occurred_at, changeset) do
+  #
+  # The update path already broadcasts and kicks the backfill; the vault
+  # provisioning is the one insert side effect it lacks. It runs when this
+  # event changed the row: a winner whose plan failed the check (a canceled
+  # first event) leaves the provisioning to this event.
+  defp apply_to_racing_row(type, data, user_id, occurred_at) do
     case get_subscription_by_paddle_id(data["id"]) do
-      %Subscription{user_id: ^user_id} = sub -> apply_to_existing(type, sub, data, occurred_at)
-      %Subscription{} = sub -> owned_by_other_user(sub, user_id)
-      # Gone again before the re-read: transient, the controller answers 500.
-      nil -> {:error, changeset}
+      %Subscription{user_id: ^user_id} = sub ->
+        with {:ok, %Subscription{}} = ok <- apply_to_existing(type, sub, data, occurred_at) do
+          provision_connector_vault(user_id)
+          ok
+        end
+
+      %Subscription{} = sub ->
+        owned_by_other_user(sub, user_id)
+
+      nil ->
+        race_reread_missing(data)
     end
+  end
+
+  # The violation named a committed row, yet the re-read found none: it was
+  # deleted in between, or the discovery policy no longer admits the read.
+  # Transient (the controller answers 500, Paddle retries); logged so a
+  # policy regression does not fail quietly.
+  defp race_reread_missing(data) do
+    Logger.warning(
+      "paddle_subscription_race_reread_missing",
+      Metadata.with_category(:warning, :billing,
+        paddle_subscription_id: data["id"],
+        reason: :reread_found_no_row
+      )
+    )
+
+    {:error, :subscription_insert_race}
   end
 
   # A paying subscription is attached to a different account than its

@@ -952,8 +952,15 @@ defmodule EngramWeb.WebhookControllerTest do
 
       payload = sub_event("subscription.activated", "ntf_taken", "sub_taken", user, "active")
 
-      assert json_response(send_payload(payload), 500)["status"] == "error"
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert json_response(send_payload(payload), 500)["status"] == "error"
+        end)
+
       assert Idempotency.check(:paddle, "ntf_taken") == :proceed
+      # Expected and retried: a warning, not the generic handler error.
+      refute log =~ "paddle_webhook_handler_error"
+      assert log =~ "paddle_subscription_race_reread_missing"
     end
 
     test "a paddle id another user holds stays a permanent 200" do
@@ -961,10 +968,19 @@ defmodule EngramWeb.WebhookControllerTest do
       other = insert(:user)
       send_payload(sub_event("subscription.created", "ntf_own", "sub_held", owner, "active"))
 
-      conn =
-        send_payload(sub_event("subscription.created", "ntf_steal", "sub_held", other, "active"))
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          conn =
+            send_payload(
+              sub_event("subscription.created", "ntf_steal", "sub_held", other, "active")
+            )
 
-      assert json_response(conn, 200)["status"] == "ok"
+          assert json_response(conn, 200)["status"] == "ok"
+        end)
+
+      # Billing's error line only, not a second generic one.
+      assert log =~ "paddle_subscription_owned_by_other_user"
+      refute log =~ "paddle_webhook_handler_error"
       assert %{status: "active"} = Engram.Billing.get_subscription(owner)
       assert Engram.Billing.get_subscription(other) == nil
     end

@@ -1718,6 +1718,22 @@ defmodule Engram.BillingTest do
     end
   end
 
+  # Sequential delivery never raises: the second insert sees the committed
+  # row at the `ON CONFLICT (user_id)` arbiter and takes the guarded conflict
+  # update (`upsert_conflict_query/1`), which skips the older created.
+  test "an older created after a stored activated is skipped by the conflict guard" do
+    user = insert(:user)
+    activated = race_event("subscription.activated", user, "active", "2026-10-29T06:17:01Z")
+    assert {:ok, %Subscription{}} = Billing.upsert_from_paddle_event(activated)
+
+    created = race_event("subscription.created", user, "trialing", "2026-10-29T06:17:00Z")
+
+    assert {:ok, :stale} = Billing.upsert_from_paddle_event(created)
+
+    assert %{status: "active", last_event_occurred_at: ~U[2026-10-29 06:17:01.000000Z]} =
+             Billing.get_subscription(user)
+  end
+
   # #2312: Paddle sends subscription.created and subscription.activated
   # milliseconds apart, and two web tasks handle them at once. Both pass the
   # `ON CONFLICT (user_id)` arbiter check before either commits, so the second
@@ -1810,6 +1826,73 @@ defmodule Engram.BillingTest do
                Billing.get_subscription(user)
     end
 
+    # The insert path provisions a connector signup's vault once a plan
+    # passes. When a non-passing event wins the insert, the losing activated
+    # is what makes the plan pass, so the race path must provision too.
+    test "activated losing to a canceled insert still provisions the connector vault" do
+      # Pinned: runtime.exs derives it from PADDLE_API_KEY, and with billing
+      # off every plan passes, so nothing would wait for the activated.
+      prev = Application.get_env(:engram, :billing_enabled)
+      Application.put_env(:engram, :billing_enabled, true)
+      on_exit(fn -> Application.put_env(:engram, :billing_enabled, prev) end)
+
+      # A lapsed payer: terms accepted, not on Free, no paid plan, so the
+      # connector vault is still due and waits for a plan that passes.
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Engram.Onboarding.accept_terms(user, "2026-05-15", %{})
+
+      Repo.update_all(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        set: [free_tier_accepted_at: nil]
+      )
+
+      Engram.Accounts.evict_user(user.id)
+
+      {:ok, _} =
+        Engram.Onboarding.set_profile(user, %{tools: ["chatgpt"], tools_prefilled: true})
+
+      assert [] = Engram.Vaults.list_vaults(user)
+
+      # Canceled with its period already over, so the winning insert's own
+      # plan check fails and it provisions nothing.
+      canceled =
+        "subscription.canceled"
+        |> race_event(user, "canceled", "2026-10-29T06:17:00Z")
+        |> put_in(["data", "current_billing_period", "ends_at"], "2026-01-01T00:00:00Z")
+
+      land_after_preread(canceled)
+
+      event = race_event("subscription.activated", user, "active", "2026-10-29T06:17:01Z")
+
+      assert {:ok, %Subscription{status: "active"}} = Billing.upsert_from_paddle_event(event)
+      assert_received :sibling_landed
+      assert [%{name: "My Vault"}] = Engram.Vaults.list_vaults(user)
+    end
+
+    # The conflicting row is gone (or hidden from the discovery read) by the
+    # time it is re-read: a tagged transient error, logged so a discovery
+    # policy regression shows up instead of failing quietly.
+    test "a race whose row cannot be re-read is a tagged transient error" do
+      user = insert(:user)
+
+      Repo.query!("""
+      CREATE OR REPLACE FUNCTION pg_temp.paddle_id_race() RETURNS trigger AS $$
+      BEGIN
+        RAISE unique_violation
+          USING CONSTRAINT = 'subscriptions_paddle_subscription_id_index';
+      END $$ LANGUAGE plpgsql
+      """)
+
+      event = race_event("subscription.activated", user, "active", "2026-10-29T06:17:01Z")
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, :subscription_insert_race} = Billing.upsert_from_paddle_event(event)
+        end)
+
+      assert log =~ "[warning]"
+      assert log =~ "paddle_subscription_race_reread_missing"
+    end
+
     test "a paddle id another user holds is refused and not overwritten" do
       owner = insert(:user)
       other = insert(:user)
@@ -1868,9 +1951,14 @@ defmodule Engram.BillingTest do
   def race_hook(_event, _measurements, %{source: "subscriptions"}, {pid, id, sibling})
       when pid == self() do
     :telemetry.detach(id)
+    # Its own process, like the sibling delivery it stands for: the hook runs
+    # inside the pre-read's `cross_tenant/1`, and that process flag must not
+    # leak into the sibling. The sandbox admits the Task through `$callers`.
     # :telemetry swallows a raise here, so the test asserts this message:
     # without it a failed sibling would leave a race test passing with no race.
-    {:ok, %Subscription{}} = Billing.upsert_from_paddle_event(sibling)
+    {:ok, %Subscription{}} =
+      fn -> Billing.upsert_from_paddle_event(sibling) end |> Task.async() |> Task.await()
+
     send(pid, :sibling_landed)
   end
 
