@@ -751,7 +751,7 @@ if config_env() != :test do
         false
 
       nil ->
-        Engram.RuntimeConfig.billing_enabled(&System.get_env/1, auth_provider)
+        billing_enabled
 
       other ->
         raise """
