@@ -250,10 +250,7 @@ defmodule EngramWeb.CrdtChannel do
     with :ok <- check_rate(socket, frame_class_b64(b64)),
          {:ok, frame} <- decode_frame(b64),
          :ok <- guard_frame(frame),
-         {:ok, socket, %{room: room}} <- ensure_room(socket, doc_id, frame_class_b64(b64)),
-         :ok <- guard_size(room, frame),
-         :ok <- relay_frame(room, frame),
-         :ok <- confirm_appended(room, frame) do
+         {:ok, socket} <- deliver(socket, doc_id, frame, frame_class_b64(b64)) do
       if frame_class_b64(b64) == :edit, do: note_sync_activity(socket)
 
       # ACK the push. Clients attach reply handlers to distinguish delivery
@@ -853,6 +850,37 @@ defmodule EngramWeb.CrdtChannel do
           _ -> {:error, :apply_timeout}
         end
     end
+  end
+
+  # Engram-obsidian#658. A heal is STEP1 -> our STEP2 + our own trailing STEP1
+  # (y_ex sync.rs), and 1.38/1.39 plugins `crdt_release` after the STEP2. Their
+  # answer to the trailing STEP1 is a STEP2 for a doc this socket no longer
+  # holds, and `ensure_room` would start a second room per heal for it
+  # (room_start{source="handshake"} doubled). So a STEP2 with no room here never
+  # starts one: it is dropped when the persisted doc already covers it, and
+  # otherwise applied through the room-free write `crdt_doc_update` uses, so an
+  # update the server lacks is never lost. STEP1 and sync_update frames keep the
+  # room path.
+  defp deliver(socket, doc_id, <<0, 1, _::binary>> = frame, _class)
+       when not is_map_key(socket.assigns.rooms, doc_id) do
+    %{current_user: user, vault: vault} = socket.assigns
+
+    with {:ok, note_id} <- cast_doc_id(doc_id),
+         {:ok, {:sync, {:sync_step2, update}}} <- Yex.Sync.message_decode(frame) do
+      if CrdtTransport.covered?(user, vault, note_id, update) do
+        {:ok, socket}
+      else
+        with {:ok, _head} <- apply_room_free(socket, note_id, update), do: {:ok, socket}
+      end
+    end
+  end
+
+  defp deliver(socket, doc_id, frame, class) do
+    with {:ok, socket, %{room: room}} <- ensure_room(socket, doc_id, class),
+         :ok <- guard_size(room, frame),
+         :ok <- relay_frame(room, frame),
+         :ok <- confirm_appended(room, frame),
+         do: {:ok, socket}
   end
 
   defp log_doc_update_failed(note_id, reason) do

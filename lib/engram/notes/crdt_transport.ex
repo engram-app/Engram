@@ -313,6 +313,38 @@ defmodule Engram.Notes.CrdtTransport do
     end
   end
 
+  @doc """
+  True only when `update` would change NOTHING in the note's persisted doc
+  (snapshot + tail), so a caller may drop it without starting a room (#658).
+
+  Not a state-vector comparison: a delete-only update leaves the state vector
+  where it was, so that check would call a real deletion "covered" and lose it.
+  The fingerprint is state vector + delete set + pending structs. Any error, or
+  any doubt, answers `false`: the caller then applies, which is idempotent, so
+  the only cost of a wrong `false` is a room this check meant to save.
+  """
+  @spec covered?(map(), map(), String.t(), binary()) :: boolean()
+  def covered?(user, vault, note_id, update) do
+    case load_doc(user, vault, note_id) do
+      {:ok, doc} ->
+        before = fingerprint(doc)
+        Yex.apply_update(doc, update) == :ok and fingerprint(doc) == before
+
+      _ ->
+        false
+    end
+  rescue
+    # ponytail: fail toward applying, never toward dropping.
+    _ -> false
+  end
+
+  # Encoding the diff against the doc's OWN state vector carries no structs,
+  # only the full delete set.
+  defp fingerprint(doc) do
+    sv = Yex.encode_state_vector!(doc)
+    {sv, Yex.encode_state_as_update!(doc, sv), pending(doc)}
+  end
+
   defp pending(doc) do
     {:ok, structs} = Yex.Doc.get_pending_update(doc)
     {:ok, ds} = Yex.Doc.get_pending_ds(doc)
