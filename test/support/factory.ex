@@ -152,6 +152,19 @@ defmodule Engram.Factory do
     }
   end
 
+  @doc """
+  A Paddle webhook's `custom_data` as the checkout overlay sends it: the
+  user id plus the server signature `Engram.Billing.CheckoutBinding` issues,
+  string-keyed as it arrives in a decoded payload. `extra` adds attribution
+  keys.
+  """
+  def checkout_custom_data(user_id, extra \\ %{}) do
+    user_id
+    |> Engram.Billing.CheckoutBinding.custom_data()
+    |> Map.new(fn {k, v} -> {Atom.to_string(k), v} end)
+    |> Map.merge(extra)
+  end
+
   def subscription_factory do
     %Engram.Billing.Subscription{
       id: Ecto.UUID.generate(),

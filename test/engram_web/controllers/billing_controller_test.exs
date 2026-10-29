@@ -150,6 +150,14 @@ defmodule EngramWeb.BillingControllerTest do
       assert body["price_ids"]["pro"]["annual"] == "pri_pro_annual_test"
       assert body["customer_email"] == user.email
       assert body["custom_data"]["user_id"] == user.id
+
+      assert {:ok, user.id} ==
+               Phoenix.Token.verify(
+                 EngramWeb.Endpoint,
+                 "paddle_checkout",
+                 body["custom_data"]["sig"],
+                 max_age: 60
+               )
     end
 
     test "exposes the tier-default vaults_cap when the user has no override", %{conn: conn} do

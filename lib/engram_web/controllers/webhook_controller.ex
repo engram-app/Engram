@@ -89,6 +89,19 @@ defmodule EngramWeb.WebhookController do
               {:error, :awaiting_subscription_created} = err ->
                 {err, %{event_type: event_type, event_id: event_id, result: :error}}
 
+              # The event's custom_data did not carry a valid server signature
+              # for its user_id: nothing is bound. Error level so the billing
+              # alert and Sentry surface it for a human. Ids only.
+              {:error, :unverified_user_binding} = err ->
+                Logger.error(
+                  "paddle_webhook_unverified_user_binding",
+                  Metadata.with_category(:error, :billing,
+                    paddle_subscription_id: get_in(event, ["data", "id"])
+                  )
+                )
+
+                {err, %{event_type: event_type, event_id: event_id, result: :error}}
+
               {:error, reason} = err ->
                 Logger.error(
                   "paddle_webhook_handler_error",
@@ -149,12 +162,13 @@ defmodule EngramWeb.WebhookController do
     end
   end
 
-  # Permanent: the payload has no owner, fails validation (bad status, a
+  # Permanent: the payload has no (verified) owner, fails validation (bad status, a
   # paddle id another user holds, an unknown price on a first insert), or
   # asks for a cancel Paddle rejects. The same bytes fail the same way on
   # every retry. Everything else (a raised exception, a DB error, an unknown
   # reason) is treated as transient.
   defp permanent_paddle_error?(:missing_user_id), do: true
+  defp permanent_paddle_error?(:unverified_user_binding), do: true
   defp permanent_paddle_error?(%Ecto.Changeset{}), do: true
   # Paddle refused our refund cancel with a non-retryable 4xx and still
   # holds the subscription live: logged at error above, for a human. Lock

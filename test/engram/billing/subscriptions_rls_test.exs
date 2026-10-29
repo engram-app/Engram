@@ -124,7 +124,7 @@ defmodule Engram.Billing.SubscriptionsRlsTest do
           "id" => paddle_sub_id,
           "status" => "active",
           "customer_id" => "ctm_rls",
-          "custom_data" => %{"user_id" => user_id},
+          "custom_data" => checkout_custom_data(user_id),
           "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
           "current_billing_period" => %{"ends_at" => "2026-12-01T00:00:00Z"}
         }

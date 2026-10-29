@@ -8,6 +8,7 @@ defmodule Engram.Billing do
 
   import Ecto.Query
 
+  alias Engram.Billing.CheckoutBinding
   alias Engram.Billing.EntitlementCache
   alias Engram.Billing.LimitKeys
   alias Engram.Billing.PlanCache
@@ -1223,7 +1224,8 @@ defmodule Engram.Billing do
             user_id: user_id,
             paddle_customer_id: data["customer_id"],
             paddle_subscription_id: data["id"],
-            custom_data: data["custom_data"] || %{}
+            # The binding token is verified above, not stored.
+            custom_data: Map.delete(data["custom_data"] || %{}, "sig")
           })
 
         # :custom_data is not in the conflict update. Paddle delivers
@@ -1276,8 +1278,11 @@ defmodule Engram.Billing do
             end
         end
 
-      :error ->
+      :missing ->
         {:error, :missing_user_id}
+
+      :unverified ->
+        {:error, :unverified_user_binding}
     end
   end
 
@@ -1553,7 +1558,13 @@ defmodule Engram.Billing do
   # `api_keys_discovery`). `cross_tenant/1` only silences the app-level
   # tripwire; the policy is what admits the read. The caller then writes under
   # `with_tenant(sub.user_id)`, where INSERT/UPDATE/DELETE stay tenant-scoped.
-  defp get_subscription_by_paddle_id(subscription_id) do
+  @doc """
+  The stored subscription for a Paddle subscription id, across tenants, or
+  nil. Webhook-driven code resolves a Paddle entity's owner through this
+  rather than through `custom_data`.
+  """
+  @spec get_subscription_by_paddle_id(String.t()) :: Subscription.t() | nil
+  def get_subscription_by_paddle_id(subscription_id) do
     Repo.cross_tenant(fn ->
       Repo.one(from(s in Subscription, where: s.paddle_subscription_id == ^subscription_id))
     end)
@@ -1655,14 +1666,9 @@ defmodule Engram.Billing do
 
   # ── Helpers ────────────────────────────────────────────────────
 
-  defp extract_user_id(%{"custom_data" => %{"user_id" => id}}) when is_binary(id) do
-    case Ecto.UUID.cast(id) do
-      {:ok, uuid} -> {:ok, uuid}
-      :error -> :error
-    end
-  end
-
-  defp extract_user_id(_), do: :error
+  # The owner of a subscription no row holds yet, from the checkout's
+  # server-signed custom_data (see `Engram.Billing.CheckoutBinding`).
+  defp extract_user_id(data), do: CheckoutBinding.verify(data["custom_data"])
 
   @doc """
   Resolve a tier (`:starter` | `:pro`) from a Paddle subscription data

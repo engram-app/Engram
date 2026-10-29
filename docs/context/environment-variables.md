@@ -36,7 +36,7 @@ Live. Covers every var `config/runtime.exs` reads (`Engram.EnvVarDocsTest` fails
 | `ECTO_IPV6` | unset | `true`/`1` → connect to Postgres over IPv6. |
 | `DATABASE_SSL` | off | `true` enables TLS to Postgres (required by AWS RDS) (via `RuntimeConfig.database_ssl/2`). |
 | `DATABASE_SSL_MODE` | `verify_none` | `verify-full` → `verify_peer` w/ OS trust store + SNI + hostname check. |
-| `SECRET_KEY_BASE` |, (required in prod) | Phoenix cookie/secret signing. |
+| `SECRET_KEY_BASE` |, (required in prod) | Phoenix cookie/secret signing. Rotating it invalidates every in-flight Paddle checkout token (`Engram.Billing.CheckoutBinding`, no key list): rotate outside checkout hours, then run `Engram.Billing.Reconciliation.run(7)` and bind any `:missing_local` subscription per `paddle-integration.md` (recovery). |
 | `JWT_SECRET` |, (required in prod) | Joken default signer for internal JWTs. |
 | `DNS_CLUSTER_QUERY` | unset | `dns_cluster` DNS query for BEAM node discovery. When set, the rate limiter auto-selects the distributed ETS + Phoenix.PubSub backend; unset → plain ETS. |
 | `ENGRAM_NODE_ROLE` | unset (= runs every queue) | `web` \| `worker`, case- and whitespace-insensitive; any other value **raises at boot**. `web` supervises NO Oban queues on this node — it still enqueues, a worker executes. Opt-out on purpose: unset keeps the full queue list, so self-host and single-node deploys need no configuration. The closed set matters because the opt-out direction makes a typo silent otherwise — `wbe` would mean "run every queue" on a node meant to run none. A `web` node without `DNS_CLUSTER_QUERY` warns at boot (nothing would drain the queues, and `CheckpointNote`'s live-room guard is a `:global` lookup that needs the cluster). |

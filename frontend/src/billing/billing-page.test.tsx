@@ -175,7 +175,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 						pro: { monthly: "p3", annual: "p4" },
 					},
 					customer_email: "u@example.com",
-					custom_data: { user_id: "1" },
+					custom_data: { user_id: "1", sig: "signed-1" },
 					vaults_cap: null,
 				};
 			}
@@ -278,6 +278,8 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
 		expect(queryAllByText("Starter")).toHaveLength(0);
 		expect(openMock).toHaveBeenCalledTimes(1);
+		// The server-signed binding reaches Paddle unchanged.
+		expect(openMock.mock.calls[0]![0].customData).toEqual({ user_id: "1", sig: "signed-1" });
 	});
 
 	// California BPC 17602(a)(1) and ROSCA: the renewal terms sit next to the

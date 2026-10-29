@@ -66,7 +66,7 @@ defmodule EngramWeb.WebhookControllerTest do
             "customer_id" => "ctm_wh_create",
             "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
             "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
-            "custom_data" => %{"user_id" => user.id, "affiliate_ref" => "rf_1"}
+            "custom_data" => checkout_custom_data(user.id, %{"affiliate_ref" => "rf_1"})
           }
         })
 
@@ -136,7 +136,7 @@ defmodule EngramWeb.WebhookControllerTest do
             "customer_id" => "ctm_idempotent",
             "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
             "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
-            "custom_data" => %{"user_id" => user.id, "affiliate_ref" => "rf_first"}
+            "custom_data" => checkout_custom_data(user.id, %{"affiliate_ref" => "rf_first"})
           }
         })
 
@@ -189,7 +189,7 @@ defmodule EngramWeb.WebhookControllerTest do
             "customer_id" => "ctm_replay_once",
             "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
             "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
-            "custom_data" => %{"user_id" => user.id}
+            "custom_data" => checkout_custom_data(user.id)
           }
         })
 
@@ -226,7 +226,7 @@ defmodule EngramWeb.WebhookControllerTest do
             "customer_id" => "ctm_never_created",
             "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
             "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
-            "custom_data" => %{"user_id" => user.id}
+            "custom_data" => checkout_custom_data(user.id)
           }
         })
 
@@ -261,7 +261,7 @@ defmodule EngramWeb.WebhookControllerTest do
               "customer_id" => "ctm_a",
               "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
               "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
-              "custom_data" => %{"user_id" => user.id}
+              "custom_data" => checkout_custom_data(user.id)
             }
           })
         )
@@ -306,7 +306,7 @@ defmodule EngramWeb.WebhookControllerTest do
             "customer_id" => "ctm_wh_telemetry",
             "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
             "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
-            "custom_data" => %{"user_id" => user.id}
+            "custom_data" => checkout_custom_data(user.id)
           }
         })
 
@@ -527,6 +527,34 @@ defmodule EngramWeb.WebhookControllerTest do
       assert Idempotency.check(:paddle, "ntf_transient") == :duplicate
     end
 
+    test "a first event with an unsigned user_id answers 200, writes no row, stays unprocessed" do
+      user = insert(:user)
+
+      payload =
+        Jason.encode!(%{
+          "event_type" => "subscription.created",
+          "event_id" => "ntf_unsigned",
+          "data" => %{
+            "id" => "sub_unsigned",
+            "status" => "active",
+            "customer_id" => "ctm_unsigned",
+            "items" => [%{"price" => %{"id" => "pri_pro_monthly_test"}}],
+            "custom_data" => %{"user_id" => user.id}
+          }
+        })
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :error], fn ->
+          assert json_response(send_payload(payload), 200)["status"] == "ok"
+        end)
+
+      # Error level, so the billing alert and Sentry see it.
+      assert log =~ "paddle_webhook_unverified_user_binding"
+      refute log =~ "paddle_webhook_handler_error"
+      assert Engram.Billing.get_subscription(user) == nil
+      assert Idempotency.check(:paddle, "ntf_unsigned") == :proceed
+    end
+
     test "a permanent bad payload (no custom_data.user_id) answers 200 so Paddle stops" do
       payload =
         Jason.encode!(%{
@@ -641,7 +669,7 @@ defmodule EngramWeb.WebhookControllerTest do
             "customer_id" => "ctm_sub_paid",
             "subscription_id" => "sub_paid",
             "details" => %{"totals" => %{"total" => "1000", "grand_total" => "1000"}},
-            "custom_data" => %{"user_id" => user.id}
+            "custom_data" => checkout_custom_data(user.id)
           }
         })
 
@@ -914,7 +942,7 @@ defmodule EngramWeb.WebhookControllerTest do
           "customer_id" => "ctm_#{sub_id}",
           "items" => [%{"price" => %{"id" => "pri_pro_monthly_test"}}],
           "current_billing_period" => %{"ends_at" => "2026-11-24T00:00:00Z"},
-          "custom_data" => %{"user_id" => user.id}
+          "custom_data" => checkout_custom_data(user.id)
         }
         |> then(
           &if(opts[:created_at], do: Map.put(&1, "created_at", opts[:created_at]), else: &1)
@@ -932,7 +960,7 @@ defmodule EngramWeb.WebhookControllerTest do
         "customer_id" => "ctm_replay_test",
         "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
         "current_billing_period" => %{"ends_at" => "2026-05-20T00:00:00Z"},
-        "custom_data" => %{"user_id" => user.id, "affiliate_ref" => affiliate_ref}
+        "custom_data" => checkout_custom_data(user.id, %{"affiliate_ref" => affiliate_ref})
       }
     })
   end
