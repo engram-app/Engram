@@ -233,8 +233,20 @@ any one task (ECS Exec, see the workspace `docs/deployment.md`):
 aws ecs execute-command --cluster engram-prod --task <task-id> \
   --container engram --interactive \
   --command "/app/bin/engram rpc 'Engram.ServiceConfig.override(:keyword_refresh, false, by: \"<you>\") |> IO.inspect()'"
-# resume: the same with Engram.ServiceConfig.clear(:keyword_refresh, by: \"<you>\")
+# resume: override(:keyword_refresh, true, ...). clear(:keyword_refresh, ...) only
+# resumes when KEYWORD_REFRESH is unset/true; prod sets it false, so there
+# clear means OFF.
 ```
+
+**Boot default: `KEYWORD_REFRESH` (env).** The override's fallback is the
+`KEYWORD_REFRESH` env var (`true` default, so self-host needs nothing). Set
+`KEYWORD_REFRESH=false` on BOTH the web and worker task defs (the
+reconcile cron and the `embed` queue run on the worker) to boot a release with the sweep
+already off, no rpc after the deploy. Then the override is how it goes on:
+`override(:keyword_refresh, true, ...)` starts it, `override(..., false, ...)`
+or `clear(:keyword_refresh, ...)` stops it again (clear falls back to the env
+value, so with `KEYWORD_REFRESH=false` "clear" means OFF, not resume). An
+invalid value refuses to boot.
 
 Effect: the write evicts the cached overrides on every node (CacheSync), and
 the 15 s cache TTL bounds a lost eviction, so every node reads it within
@@ -242,7 +254,9 @@ the 15 s cache TTL bounds a lost eviction, so every node reads it within
 perform time before any Qdrant call (a job mid-rewrite finishes its one
 note), and the reconcile sweep queues and stamps nothing. Cleared, the
 snoozed jobs run on their next wake (within 5 min) and the next tick (within
-5 min) tops the backlog up again: no operator backfill. `EmbedNote` (user
+5 min) tops the backlog up again: no operator backfill. "Back on" means the
+resolved value is true: an override of true, or a clear where
+`KEYWORD_REFRESH` is unset/true. `EmbedNote` (user
 edits) never reads it.
 
 The two knobs are runtime overrides too, same command shape:

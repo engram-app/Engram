@@ -390,6 +390,16 @@ case qdrant_switch.("TENANT_IDF") do
   on? -> config :engram, :tenant_idf, on?
 end
 
+# The keyword-vector refresh kill switch's boot default
+# (`RefreshKeywordVectors.enabled?/0`). Default true. false = queued
+# RefreshKeywordVectors jobs snooze before any Qdrant call and the reconcile
+# sweep queues and stamps nothing, from the first boot. A runtime override
+# (`ServiceConfig.override(:keyword_refresh, ...)`) still wins.
+case qdrant_switch.("KEYWORD_REFRESH") do
+  nil -> :ok
+  on? -> config :engram, :keyword_refresh, on?
+end
+
 # v5 rebuild tuning (INFRA-5 sets these on the web and worker task defs).
 # Unset, nothing is configured and each reader's default applies: 0.2, 0.25,
 # 1_000, true and [] (today's behaviour). A malformed value refuses to boot.

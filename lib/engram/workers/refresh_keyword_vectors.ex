@@ -30,7 +30,8 @@ defmodule Engram.Workers.RefreshKeywordVectors do
 
   ## Kill switch
 
-  `:keyword_refresh` (runtime override, default true) set to false stops the
+  `:keyword_refresh` (runtime override; else env `KEYWORD_REFRESH`, default
+  true) set to false stops the
   sweep queueing and makes every queued job snooze 300 s before any
   Qdrant call. Back on, the snoozed jobs and the next sweep resume with no
   operator step. A user's edit (`EmbedNote`) never reads it. See
