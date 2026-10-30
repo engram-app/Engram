@@ -205,6 +205,18 @@ defmodule Engram.Vector.QdrantWaitTest do
       assert {:error, {:set_payloads_not_applied, ["p2"]}} = Qdrant.set_payloads(@col, @pairs)
     end
 
+    # `{id, payload, gone}`: keys to delete in the same batch; the read-back
+    # fails the page while one is still on the point.
+    test "keys to delete are verified gone", %{bypass: bypass} do
+      entries = [{"p1", %{"t" => "new1"}, ["old"]}]
+
+      stub_set_payloads(bypass, @acked, [%{id: "p1", payload: %{t: "new1"}}])
+      assert :ok = Qdrant.set_payloads(@col, entries)
+
+      stub_set_payloads(bypass, @acked, [%{id: "p1", payload: %{t: "new1", old: "x"}}])
+      assert {:error, {:set_payloads_not_applied, ["p1"]}} = Qdrant.set_payloads(@col, entries)
+    end
+
     test "a batch op answered with an unknown status fails the page", %{bypass: bypass} do
       bad = ~s({"result":[{"status":"acknowledged"},{"status":"failed"}],"status":"ok"})
       stub_set_payloads(bypass, bad, [])

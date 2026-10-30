@@ -114,6 +114,58 @@ defmodule Engram.Vector.QdrantFilterTest do
              }
     end
 
+    test "a folder row id matches the same `f` index, in either uuid form" do
+      row_id = "33333333-3333-3333-3333-333333333333"
+      undashed = FilterId.uuid(row_id)
+
+      # No legacy member: a row id has no legacy form.
+      assert Qdrant.match_filter(:folder, row_id) == %{key: "f", match: %{value: undashed}}
+      assert Qdrant.match_filter(:folder, undashed) == %{key: "f", match: %{value: undashed}}
+    end
+
+    test "a folder list may mix hash forms and row ids: one any over `f`" do
+      b64 = Base.encode64(@hmac)
+      row_id = "33333333-3333-3333-3333-333333333333"
+
+      assert %{should: [%{key: "folder_hmac", match: %{any: [^b64]}}, v5]} =
+               Qdrant.match_filter(:folder, [b64, row_id])
+
+      assert v5 == %{key: "f", match: %{any: [FilterId.uuid(row_id), FilterId.from_hmac(@hmac)]}}
+    end
+
+    test "a folder row id list never reaches the legacy key" do
+      ids =
+        for n <- 1..3,
+            do:
+              Ecto.UUID.generate()
+              |> String.replace("-", "")
+              |> Kernel.<>("#{n}")
+              |> binary_part(0, 32)
+
+      assert %{key: "f", match: %{any: any}} = Qdrant.match_filter(:folder, ids)
+      assert any == ids
+    end
+
+    test "the old hash form alone is unchanged" do
+      b64 = Base.encode64(@hmac)
+
+      assert %{should: [%{key: "folder_hmac", match: %{value: ^b64}}, v5]} =
+               Qdrant.match_filter(:folder, b64)
+
+      assert v5 == %{key: "f", match: %{value: FilterId.from_hmac(@hmac)}}
+    end
+
+    test "with legacy fields off, an empty folder list fails closed and row ids still match" do
+      ServiceConfig.put_override(:legacy_filter_fields, false)
+      id = "33333333333333333333333333333333"
+
+      assert Qdrant.match_filter(:folder, []) == %{key: "f", match: %{any: []}}
+      assert Qdrant.match_filter(:folder, [id]) == %{key: "f", match: %{any: [id]}}
+
+      assert Qdrant.match_filter(:folder, Base.encode64(@hmac)) ==
+               %{key: "f", match: %{value: FilterId.from_hmac(@hmac)}}
+    end
+
     test "ranges match fm_timestamp or up, fm_created or cr" do
       %{must: [_user, ts]} = Qdrant.build_tenant_filter(user_id: "u1", fm_timestamp_gte: 5)
 

@@ -1235,18 +1235,43 @@ defmodule Engram.Vector.Qdrant do
 
   def set_payloads(_col, [], _opts), do: :ok
 
+  # An entry is `{id, payload}` or `{id, payload, gone}`: `gone` are payload
+  # keys to delete from that point in the same batch (`delete_payload`, the POST
+  # route; never a PUT), for a shape that DROPS a key a merge would keep.
   def set_payloads(col, pairs, opts) when is_list(pairs) and is_list(opts) do
     col = col || collection()
-    payload_write(:set_payload, length(pairs), Map.new(pairs), opts)
-    ops = for {id, payload} <- pairs, do: %{set_payload: %{points: [id], payload: payload}}
+
+    entries =
+      Enum.map(pairs, fn
+        {id, payload} -> {id, payload, []}
+        full -> full
+      end)
+
+    payload_write(
+      :set_payload,
+      length(entries),
+      Map.new(entries, &{elem(&1, 0), elem(&1, 1)}),
+      opts
+    )
+
+    ops =
+      Enum.flat_map(entries, fn {id, payload, gone} ->
+        [
+          {payload != %{}, %{set_payload: %{points: [id], payload: payload}}},
+          {gone != [], %{delete_payload: %{points: [id], keys: gone}}}
+        ]
+        |> Enum.filter(&elem(&1, 0))
+        |> Enum.map(&elem(&1, 1))
+      end)
+
     batch = [json: %{operations: ops}, params: [wait: false]] ++ req_opts()
-    barrier = write_opts(%{keys: [@barrier_key], points: Enum.map(pairs, &elem(&1, 0))})
+    barrier = write_opts(%{keys: [@barrier_key], points: Enum.map(entries, &elem(&1, 0))})
 
     instrument(:set_payload, fn ->
       with :ok <-
              batch_accepted(Req.post("#{base_url()}/collections/#{col}/points/batch", batch)),
            :ok <- write(&Req.post/2, "/collections/#{col}/points/payload/delete", barrier) do
-        verify_applied(col, pairs)
+        verify_applied(col, entries)
       end
     end)
   end
@@ -1272,16 +1297,24 @@ defmodule Engram.Vector.Qdrant do
   # that). So read the page back and compare: a payload that did not land
   # fails the page, and the caller retries it (re-review N4). One retrieve
   # of the set keys only, no vectors.
-  defp verify_applied(col, pairs) do
-    want = Map.new(pairs, fn {id, payload} -> {id, Jason.decode!(Jason.encode!(payload))} end)
-    keys = want |> Map.values() |> Enum.flat_map(&Map.keys/1) |> Enum.uniq()
-    opts = [json: %{ids: Map.keys(want), with_payload: keys, with_vector: false}] ++ req_opts()
+  defp verify_applied(col, entries) do
+    want =
+      Map.new(entries, fn {id, payload, _} -> {id, Jason.decode!(Jason.encode!(payload))} end)
+
+    gone = Map.new(entries, fn {id, _, gone} -> {id, gone} end)
+
+    keys =
+      (Map.values(want) |> Enum.flat_map(&Map.keys/1)) ++ (Map.values(gone) |> List.flatten())
+
+    opts =
+      [json: %{ids: Map.keys(want), with_payload: Enum.uniq(keys), with_vector: false}] ++
+        req_opts()
 
     case Req.post("#{base_url()}/collections/#{col}/points", opts) do
       {:ok, %{status: 200, body: %{"result" => points}}} when is_list(points) ->
         stored = Map.new(points, &{&1["id"], &1["payload"] || %{}})
 
-        case for({id, _payload} <- pairs, not landed?(stored[id], want[id]), do: id) do
+        case for({id, _, _} <- entries, not landed?(stored[id], want[id], gone[id]), do: id) do
           [] -> :ok
           missing -> {:error, {:set_payloads_not_applied, missing}}
         end
@@ -1294,8 +1327,12 @@ defmodule Engram.Vector.Qdrant do
     end
   end
 
-  defp landed?(nil, _want), do: false
-  defp landed?(stored, want), do: Enum.all?(want, fn {k, v} -> stored[k] == v end)
+  defp landed?(nil, _want, _gone), do: false
+
+  defp landed?(stored, want, gone),
+    do:
+      Enum.all?(want, fn {k, v} -> stored[k] == v end) and
+        Enum.all?(gone, &(not Map.has_key?(stored, &1)))
 
   defp write(request, path, opts) do
     case request.("#{base_url()}#{path}", opts) do
@@ -1727,13 +1764,15 @@ defmodule Engram.Vector.Qdrant do
   One filter condition for `field` equal to `value` (a list matches any), in
   both payload formats. `:user`/`:vault` take ids as stored in Postgres;
   `:path`/`:folder`/`:type`/`:tags` take the base64 HMACs the legacy filters
-  use.
+  use. `:folder` also takes a folder row id (see `folder_filter/1`).
 
   With legacy filters off it never emits a legacy key
   (the v3 cluster has no index for one). A value with no v5 form there (an
   empty list, a malformed HMAC) matches nothing on the v5 key: fail closed.
   """
   @spec match_filter(match_field(), term()) :: key_condition() | %{should: [key_condition()]}
+  def match_filter(:folder, value), do: folder_filter(value)
+
   def match_filter(field, value) do
     legacy = legacy_match_filter(field, value)
     v5_key = PayloadKeys.short(Map.fetch!(@v5_keys, field))
@@ -1746,6 +1785,44 @@ defmodule Engram.Vector.Qdrant do
 
   defp v5_or_both(legacy, v5),
     do: if(legacy_filter_fields?(), do: %{should: [legacy, v5]}, else: v5)
+
+  # `:folder` takes the legacy base64 path HMAC AND a folder row id (a uuid,
+  # dashed or not), singly or mixed in a list: a point's `f` holds the HMAC
+  # form until the payload sweep rewrites it to the row id, so a search must
+  # match either. Both forms are uuid-shaped values of the same `f` index, so
+  # one `v5` condition covers them; the legacy key only knows the HMAC form.
+  defp folder_filter(value) do
+    {ids, hashes} = value |> List.wrap() |> Enum.split_with(&folder_row_id?/1)
+    v5_ids = Enum.map(ids, &FilterId.uuid/1) ++ Enum.flat_map(hashes, &List.wrap(hmac_id(&1)))
+    legacy? = hashes != [] and legacy_filter_fields?()
+    shape = fn values -> if is_list(value), do: values, else: hd(values) end
+
+    case {v5_ids, legacy?} do
+      {[], true} ->
+        legacy_match_filter(:folder, shape.(hashes))
+
+      {[], false} ->
+        %{key: v5_folder_key(), match: %{any: []}}
+
+      {_, true} ->
+        %{
+          should: [
+            legacy_match_filter(:folder, shape.(hashes)),
+            %{key: v5_folder_key(), match: match(shape.(v5_ids))}
+          ]
+        }
+
+      {_, false} ->
+        %{key: v5_folder_key(), match: match(shape.(v5_ids))}
+    end
+  end
+
+  defp v5_folder_key, do: PayloadKeys.short(Map.fetch!(@v5_keys, :folder))
+
+  defp folder_row_id?(value) when is_binary(value),
+    do: Regex.match?(~r/\A[0-9a-fA-F]{32}\z/, FilterId.uuid(value))
+
+  defp folder_row_id?(_), do: false
 
   @doc "A range condition on `fm_timestamp` / `fm_created`, in both formats."
   @spec range_filter(:fm_timestamp | :fm_created, map()) :: map()

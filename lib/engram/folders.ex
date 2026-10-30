@@ -47,6 +47,7 @@ defmodule Engram.Folders do
   alias Engram.Notes.PathSanitizer
   alias Engram.Repo
   alias Engram.Sync.Broadcast
+  alias Engram.Vector.Qdrant
 
   require Logger
 
@@ -86,6 +87,38 @@ defmodule Engram.Folders do
         end
       end)
     end)
+  end
+
+  @doc """
+  The ids of the live folder `root_id` and all its live descendants, for a
+  subtree search: a point carries its DIRECT folder's row id, so a subtree is
+  the root's id plus every descendant's, expanded at query time (a move or
+  rename then changes no payload).
+
+  `{:error, :folder_subtree_too_large}` when the subtree is over
+  `Qdrant.max_ids/0`, the size of one `match any` list. The search layer must
+  pass it up as a refusal (`Search.input_error_message/1` has its text and
+  `SearchController` renders it as 422), never as an empty result: the caller
+  narrows the folder. There is no Qdrant-side path-prefix scan to fall back to
+  (the path is an encrypted blind index). Only meaningful once the payload
+  sweep has rewritten `f` to row ids (`docs/context/payload-v6.md`).
+  """
+  @spec descendant_ids(map(), Ecto.UUID.t(), pos_integer()) ::
+          {:ok, [Ecto.UUID.t()]} | {:error, :folder_subtree_too_large | term()}
+  def descendant_ids(%{id: vault_id, user_id: user_id}, root_id, cap \\ Qdrant.max_ids()) do
+    with {:ok, ids} <-
+           Repo.with_tenant(user_id, fn -> Rows.descendant_ids(vault_id, root_id, cap + 1) end) do
+      if length(ids) > cap, do: {:error, :folder_subtree_too_large}, else: {:ok, ids}
+    end
+  end
+
+  @doc "The Qdrant condition for a folder and its whole subtree (`descendant_ids/2`)."
+  @spec subtree_filter(map(), Ecto.UUID.t()) ::
+          {:ok, Qdrant.key_condition() | %{should: [Qdrant.key_condition()]}}
+          | {:error, :folder_subtree_too_large | term()}
+  def subtree_filter(vault, root_id) do
+    with {:ok, ids} <- descendant_ids(vault, root_id),
+         do: {:ok, Qdrant.match_filter(:folder, ids)}
   end
 
   @doc """

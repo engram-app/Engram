@@ -10,6 +10,14 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   Qdrant call may sit before the rotation's flip). A rotation before this
   worker existed left the points on the old key for good.
 
+  Two reasons select a note. A NULL `payload_hash` (below), and a payload
+  version behind `PayloadV6.version/0` (`note_index_state.payload_version`,
+  NULL = the baseline, compared with `<`): that note's drifted v5 points are
+  merged with ONE `Qdrant.set_payloads/2` batch per page, then it is stamped.
+  No read of the old payload beyond the drift check, no upsert, no PUT, no
+  embedder call. While the version equals the baseline the second reason
+  selects nothing (`docs/context/payload-v6.md`).
+
   A note is checked while its `payload_hash` is NULL. Its points are READ
   (payload keys only); if every one already holds the expected payload the
   row is just stamped, otherwise the drifted ones are rewritten with
@@ -57,8 +65,9 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
   alias Engram.Indexing
+  alias Engram.Indexing.PayloadV6
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{Chunk, Note, NoteBody}
+  alias Engram.Notes.{Chunk, Note, NoteBody, NoteIndexState}
   alias Engram.Repo
   alias Engram.Vector.PayloadKeys
   alias Engram.Vector.Qdrant
@@ -66,6 +75,8 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   require Logger
 
   @batch_size 200
+  # Ops per `set_payloads` request (one point per op).
+  @refresh_page 256
   @event [:engram, :indexing, :payload_reconcile]
   @cancelled_event [:engram, :indexing, :payload_reconcile_cancelled]
   @zero %{checked: 0, drifted: 0, rewritten: 0, skipped_v5: 0}
@@ -134,18 +145,42 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     length(user_ids)
   end
 
-  # The done predicate and the worker's selection, one definition.
+  # The done predicate and the worker's selection, one definition: an
+  # unstamped note, or one whose points were written with an older payload
+  # version (`PayloadV6.version/0`; NULL counts as the baseline). While the
+  # version equals the baseline no note can be behind, so the term is left out.
   defp unstamped do
     from(n in Note,
       as: :note,
       where:
-        n.kind == "note" and is_nil(n.payload_hash) and
+        n.kind == "note" and
           exists(
             from(c in Chunk,
               where: c.note_id == parent_as(:note).id and not is_nil(c.qdrant_point_id)
             )
           )
     )
+    |> where(^unstamped_or_stale())
+  end
+
+  defp unstamped_or_stale do
+    version = PayloadV6.version()
+    base = PayloadV6.baseline()
+
+    if version > base do
+      dynamic(
+        [note: n],
+        is_nil(n.payload_hash) or
+          exists(
+            from(s in NoteIndexState,
+              where:
+                s.note_id == parent_as(:note).id and coalesce(s.payload_version, ^base) < ^version
+            )
+          )
+      )
+    else
+      dynamic([note: n], is_nil(n.payload_hash))
+    end
   end
 
   defp heal(%User{id: user_id} = user, after_id, deadline, counts) do
@@ -316,6 +351,24 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     do: from(u in User, where: u.id == ^id and u.dek_version == ^v, select: 1)
 
   defp heal_notes(user, notes, points, stored, counts) do
+    # A note with a stamp is selected only for an old payload version: it
+    # needs a rewrite, not the drift check a NULL stamp gets.
+    {stale, unstamped} = Enum.split_with(notes, & &1.payload_hash)
+
+    # A note still holding legacy-layout (v3) points is healed as an unstamped
+    # one: the refresh below rewrites v5 points only, and stamping a note whose
+    # points were not written would vouch for a payload they do not hold.
+    {legacy, stale} = Enum.split_with(stale, &legacy_points?(&1, points, stored))
+
+    with {:ok, counts} <- heal_unstamped(user, unstamped ++ legacy, points, stored, counts) do
+      refresh_stale(user, stale, points, stored, counts)
+    end
+  end
+
+  defp legacy_points?(note, points, stored),
+    do: Enum.any?(Map.get(points, note.id, []), &(stored[&1] && not v5?(stored[&1])))
+
+  defp heal_unstamped(user, notes, points, stored, counts) do
     Enum.reduce_while(notes, {:ok, counts}, fn note, {:ok, counts} ->
       present = for id <- Map.get(points, note.id, []), Map.has_key?(stored, id), do: id
       {v5_ids, v3_ids} = Enum.split_with(present, &v5?(stored[&1]))
@@ -323,7 +376,9 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
       case plan_note(user, note, v5_ids, v3_ids, stored) do
         {:ok, writes, payload} ->
-          heal_note(note, payload, writes, counts)
+          # Legacy points never take the new shape: their note is not stamped
+          # with a payload version, so the sweep keeps it in view.
+          heal_note(note, payload, writes, counts, v3_ids == [])
 
         :skip ->
           mark_undecryptable(note, user)
@@ -333,6 +388,75 @@ defmodule Engram.Workers.ReconcileNotePayloads do
           {:halt, {:error, reason, counts}}
       end
     end)
+  end
+
+  # Payload-version refresh: the expected payload is merged onto every v5
+  # point that does not hold it, as ONE `set_payloads` batch per page (never an
+  # upsert, never a PUT: vectors untouched, no embedder), then each note is
+  # stamped. A note whose points all hold it is only stamped.
+  # Seam for the writer flip: `Indexing.expected_v5_payload/2` is the one call
+  # that becomes the v6 builder (`PayloadV6.from_rows_or_extract/4`).
+  defp refresh_stale(_user, [], _points, _stored, counts), do: {:ok, counts}
+
+  defp refresh_stale(user, notes, points, stored, counts) do
+    plans =
+      Enum.map(notes, fn note ->
+        v5_ids = for id <- Map.get(points, note.id, []), v5_point?(stored[id]), do: id
+        {note, plan_refresh(user, note, v5_ids, stored)}
+      end)
+
+    case Enum.find(plans, &match?({_, {:error, _}}, &1)) do
+      {_note, {:error, reason}} -> {:error, reason, counts}
+      nil -> write_refresh(plans, counts)
+    end
+  end
+
+  defp v5_point?(nil), do: false
+  defp v5_point?(point), do: v5?(point)
+
+  defp plan_refresh(user, note, v5_ids, stored) do
+    with {:ok, plain} <- Crypto.maybe_decrypt_note_fields(note, user),
+         {:ok, v5} <- Indexing.expected_v5_payload(plain, user) do
+      want = normalize(v5)
+      drifted = Enum.reject(v5_ids, &(Map.take(stored[&1], v5_keys()) == want))
+      # A key the new payload omits is deleted, not left behind by the merge.
+      {:ok, v5, for(id <- drifted, do: {id, v5, dropped(stored[id], want)})}
+    else
+      {:error, :decrypt_failed} -> :skip
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp dropped(point, want), do: Map.keys(Map.take(point, v5_keys())) -- Map.keys(want)
+
+  defp write_refresh(plans, counts) do
+    pairs = for {_note, {:ok, _payload, pairs}} <- plans, pair <- pairs, do: pair
+
+    pairs
+    |> Enum.chunk_every(@refresh_page)
+    |> Enum.reduce_while(:ok, fn page, :ok ->
+      case Qdrant.set_payloads(Qdrant.collection_name(), page) do
+        :ok -> {:cont, :ok}
+        err -> {:halt, err}
+      end
+    end)
+    |> case do
+      :ok -> {:ok, Enum.reduce(plans, counts, &stamp_refreshed/2)}
+      {:error, reason} -> {:error, reason, counts}
+    end
+  end
+
+  defp stamp_refreshed({note, {:ok, payload, pairs}}, counts) do
+    counts = bump(counts, :checked)
+    stamp(note, payload, wrote?: pairs != [], resparse?: false, versioned?: true)
+    if pairs == [], do: counts, else: counts |> bump(:drifted) |> bump(:rewritten)
+  end
+
+  # Cannot be opened under the current DEK: stamped so the sweep does not
+  # select it every hour; its next index pass writes the real payload.
+  defp stamp_refreshed({note, :skip}, counts) do
+    stamp_version(note)
+    counts |> bump(:checked) |> bump(:skipped_v5)
   end
 
   # `{:ok, writes, stamp_payload}`: the drifted points of each layout with
@@ -373,19 +497,19 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   defp v5_keys, do: Enum.map(PayloadKeys.logical_names(), &PayloadKeys.short/1)
 
-  defp heal_note(note, payload, [], counts) do
-    stamp(note, payload, false)
+  defp heal_note(note, payload, [], counts, versioned?) do
+    stamp(note, payload, wrote?: false, resparse?: false, versioned?: versioned?)
     {:cont, {:ok, counts}}
   end
 
-  defp heal_note(note, payload, writes, counts) do
+  defp heal_note(note, payload, writes, counts, versioned?) do
     counts = bump(counts, :drifted)
 
     case Enum.reduce_while(writes, :ok, fn w, :ok -> write(w) end) do
       :ok ->
         # Drifted filter keys mean a rotation, so the sparse vectors (keyed
         # on the same filter key) are stale too: the keyword sweep redoes them.
-        stamp(note, payload, true)
+        stamp(note, payload, wrote?: true, resparse?: true, versioned?: versioned?)
         {:cont, {:ok, bump(counts, :rewritten)}}
 
       # Logged once, with its class, where the hop answers Oban (`answer/2`).
@@ -404,9 +528,11 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   end
 
   # Compare-and-set on every column the payload is built from, and on the
-  # stamp still being NULL: an index that committed since the read wrote (and
+  # stamp still being what the batch read (NULL for a first stamp, the old hash
+  # for a version refresh): an index that committed since the read wrote (and
   # stamped) its own payload, and stamping ours would vouch for HMACs the row
-  # no longer holds. A miss stays NULL for the next pass.
+  # no longer holds. A miss stays as it was for the next pass. A hit also
+  # stamps the payload version the points now hold.
   @payload_columns [
     :content_hash,
     :vault_id,
@@ -418,9 +544,12 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     :fm_created
   ]
 
-  defp stamp(note, payload, drifted?) do
+  defp stamp(note, payload, opts) do
+    wrote? = Keyword.fetch!(opts, :wrote?)
+    resparse? = Keyword.fetch!(opts, :resparse?)
+
     guard =
-      Enum.reduce(@payload_columns, dynamic([n], n.id == ^note.id and is_nil(n.payload_hash)), fn
+      Enum.reduce(@payload_columns, same_stamp(note), fn
         col, acc ->
           case Map.fetch!(note, col) do
             nil -> dynamic([n], ^acc and is_nil(field(n, ^col)))
@@ -429,7 +558,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
       end)
 
     set = [payload_hash: Indexing.note_payload_hash(payload)]
-    set = if drifted?, do: [{:keyword_version, nil} | set], else: set
+    set = if resparse?, do: [{:keyword_version, nil} | set], else: set
 
     {:ok, :ok} =
       Repo.with_tenant(note.user_id, fn ->
@@ -437,10 +566,33 @@ defmodule Engram.Workers.ReconcileNotePayloads do
           # We wrote this note's points from the row we read and the stamp
           # missed: an index committed (and stamped) in between, and our
           # write may have replaced its fresher payload.
-          {0, _} when drifted? -> Indexing.unstamp_payload_hash(note)
-          {_, _} -> :ok
+          {0, _} when wrote? -> Indexing.unstamp_payload_hash(note)
+          {0, _} -> :ok
+          {_, _} -> if Keyword.fetch!(opts, :versioned?), do: put_version(note), else: :ok
         end
       end)
+
+    :ok
+  end
+
+  defp same_stamp(%{payload_hash: nil, id: id}),
+    do: dynamic([n], n.id == ^id and is_nil(n.payload_hash))
+
+  defp same_stamp(%{payload_hash: hash, id: id}),
+    do: dynamic([n], n.id == ^id and n.payload_hash == ^hash)
+
+  defp stamp_version(note),
+    do: elem(Repo.with_tenant(note.user_id, fn -> put_version(note) end), 0)
+
+  # Never lowers a newer stamp (`<` everywhere: a newer stamp is current).
+  defp put_version(note) do
+    version = PayloadV6.version()
+
+    from(s in NoteIndexState,
+      where: s.note_id == ^note.id,
+      where: is_nil(s.payload_version) or s.payload_version < ^version
+    )
+    |> Repo.update_all(set: [payload_version: version])
 
     :ok
   end

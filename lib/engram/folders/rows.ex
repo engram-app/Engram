@@ -422,11 +422,26 @@ defmodule Engram.Folders.Rows do
     end
   end
 
-  defp subtree_query(_vault_id, []), do: from(f in Folder, where: false)
-
   # A cycle in `parent_id` (never written by this module, but a bad row from any
   # path must not pin a connection in an endless recursion) is cut at this depth.
   @max_depth 512
+
+  # The recursive walk from `roots` (a query of `%{id, depth}`) down the live
+  # folders of `vault_id`: the CTE pieces, for `subtree_query/2` and
+  # `descendant_ids/3` to select from.
+  defp walk_down(vault_id, roots) do
+    walk =
+      from(f in Folder,
+        join: t in "folder_subtree",
+        on: f.parent_id == t.id,
+        where: f.vault_id == ^vault_id and is_nil(f.deleted_at) and t.depth < @max_depth,
+        select: %{id: f.id, depth: fragment("? + 1", t.depth)}
+      )
+
+    union_all(roots, ^walk)
+  end
+
+  defp subtree_query(_vault_id, []), do: from(f in Folder, where: false)
 
   defp subtree_query(vault_id, root_hmacs) do
     roots =
@@ -436,21 +451,41 @@ defmodule Engram.Folders.Rows do
         select: %{id: f.id, depth: fragment("0")}
       )
 
-    walk =
-      from(f in Folder,
-        join: t in "folder_subtree",
-        on: f.parent_id == t.id,
-        where: f.vault_id == ^vault_id and is_nil(f.deleted_at) and t.depth < @max_depth,
-        select: %{id: f.id, depth: fragment("? + 1", t.depth)}
-      )
-
     from(f in Folder,
       join: t in "folder_subtree",
       on: f.id == t.id,
       order_by: [asc: t.depth, asc: f.id]
     )
     |> recursive_ctes(true)
-    |> with_cte("folder_subtree", as: ^union_all(roots, ^walk))
+    |> with_cte("folder_subtree", as: ^walk_down(vault_id, roots))
+  end
+
+  @doc """
+  The ids of the live folder `root_id` and every live descendant, each once,
+  shallowest first, at most `limit` of them (the caller passes its cap plus
+  one to learn the subtree is over it). A cycle in `parent_id` is walked to
+  the depth cap and its repeats collapsed (a folder is in the subtree once),
+  so a cycle is never mistaken for a large subtree. A missing or deleted root
+  gives `[]`. Runs inside the caller's tenant transaction. The cap bounds the
+  answer, not the walk: Postgres still visits the whole subtree.
+  """
+  @spec descendant_ids(Ecto.UUID.t(), Ecto.UUID.t(), pos_integer()) :: [Ecto.UUID.t()]
+  def descendant_ids(vault_id, root_id, limit) do
+    roots =
+      from(f in Folder,
+        where: f.vault_id == ^vault_id and f.id == ^root_id and is_nil(f.deleted_at),
+        select: %{id: f.id, depth: fragment("0")}
+      )
+
+    from(t in "folder_subtree",
+      group_by: t.id,
+      order_by: [asc: min(t.depth), asc: t.id],
+      limit: ^limit,
+      select: type(t.id, Ecto.UUID)
+    )
+    |> recursive_ctes(true)
+    |> with_cte("folder_subtree", as: ^walk_down(vault_id, roots))
+    |> Repo.all()
   end
 
   # ---- rename --------------------------------------------------------------

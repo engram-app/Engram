@@ -19,6 +19,7 @@ worker that brings them current.
 | Keyword encoding: tokenizer, stemmer, BM25 weighting, WHICH text is encoded | `Engram.KeywordIndex` `@version` | `notes.keyword_version` | `RefreshKeywordVectors` (sparse vectors rewritten in place) | no embedder call |
 | Chunk boundaries or chunk text | `Engram.Parsers.Markdown` `@chunker_version` | `notes.chunker_version` | `RebuildStaleNote` (EmbedNote's maintenance path) | re-embed, unmetered |
 | Embed model (`DOC_EMBED_MODEL` / `EMBED_MODEL` / the embedder's default) | nothing: config | `notes.embed_model` (dense notes only) | `RebuildStaleNote` | re-embed, unmetered |
+| Payload shape only (a key's value or form on the points, vectors unchanged) | `Engram.Indexing.PayloadV6` `@version` | `note_index_state.payload_version` | `ReconcileNotePayloads` (one `set_payloads` batch per page) | zero embedder calls |
 
 **Version rebuilds are unmetered (decided 2026-10-04).** A rebuild of unchanged
 content is our maintenance, not the user's usage: it never counts against an
@@ -123,6 +124,20 @@ release leaves it alone, so rolling back rebuilds nothing, and the roll
 forward finds those notes still current. Before this, a rollback from a
 chunker bump re-indexed every note twice. `embed_model` is a string with no
 order, so a model rollback still rebuilds.
+
+## A payload-only change has its own stamp
+
+`payload_hash` is the note's OWN computed payload at its last index pass; a new
+payload SHAPE never clears it, so before the stamp a new shape reached only
+edited notes. `note_index_state.payload_version` (NULL = the baseline, the
+shape before the column existed) is the stamp for the shape.
+`ReconcileNotePayloads` selects `payload_hash IS NULL OR
+COALESCE(payload_version, baseline) < PayloadV6.version()`, merges the new
+payload onto the points that do not hold it (`Qdrant.set_payloads/2`, never an
+upsert, never `PUT /points/payload`) and stamps the note. It is compared with
+`<`: a newer stamp is current, so a rollback rebuilds nothing. It is NOT a
+reason to bump `KeywordIndex`/`chunker` versions, and it never calls the
+embedder. Rollout order and rollback rule: `docs/context/payload-v6.md`.
 
 ## The completion ledger stops the version scans
 
