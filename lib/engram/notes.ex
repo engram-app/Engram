@@ -106,6 +106,8 @@ defmodule Engram.Notes do
     :parse_reason
   ]
 
+  @note_crdt_fields @note_meta_fields ++ [:crdt_state_ciphertext, :crdt_state_nonce]
+
   # Notes resolved per transaction on the change feed. `Repo.with_tenant` takes
   # Ecto's default 15s timeout, and each resolution is a decrypt + Yjs NIF
   # rebuild + tail query + projection — so an unchunked 500-row page of stale
@@ -3522,6 +3524,17 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  `get_note_row_by_id/3` without the content body or its decrypt: metadata plus
+  the encrypted CRDT state, for callers that rebuild the doc and never read
+  `content` (`CrdtTransport`'s read path).
+  """
+  @spec get_note_crdt_row_by_id(map(), map(), String.t()) ::
+          {:ok, Note.t()} | {:error, :not_found}
+  def get_note_crdt_row_by_id(user, vault, id) when is_binary(id) do
+    fetch_note_by_id(user, vault, id, :crdt)
+  end
+
+  @doc """
   Bulk metadata-only variant of `get_note_by_id/3`: every live note among
   `ids`, in ONE tenant transaction, without the content column or its decrypt.
 
@@ -3738,6 +3751,7 @@ defmodule Engram.Notes do
       query =
         case fields do
           :meta -> from(n in base, select: struct(n, @note_meta_fields))
+          :crdt -> NoteBody.select_note(base, @note_crdt_fields)
           :all -> NoteBody.select_note(base)
           :current -> with_tail(base)
         end

@@ -34,6 +34,8 @@ defmodule Engram.PromEx.Crdt do
   Metrics:
 
     * `engram_prom_ex_crdt_room_start_total`, tags `[:source]`.
+    * `engram_prom_ex_crdt_unroomed_step2_total`, tags `[:outcome]`, from
+      `[:engram, :crdt, :unroomed_step2]` (Engram-obsidian#658).
     * `engram_prom_ex_crdt_room_drain_total` — tags `[:phase]`.
     * `engram_prom_ex_crdt_genesis_reply_total`, tags `[:outcome, :client]`.
       One per SUCCESSFUL `crdt_create` reply (error replies are not
@@ -143,6 +145,7 @@ defmodule Engram.PromEx.Crdt do
   @tail_event [:engram, :crdt, :index_tail]
   @drain_event [:engram, :crdt, :room_drain]
   @start_event [:engram, :crdt, :room_start]
+  @unroomed_step2_event [:engram, :crdt, :unroomed_step2]
   @genesis_reply_event [:engram, :crdt, :genesis_reply]
   @checkpoint_event [:engram, :crdt, :index_checkpoint]
   @abort_event [:engram, :crdt, :checkpoint_abort]
@@ -187,6 +190,18 @@ defmodule Engram.PromEx.Crdt do
           event_name: @start_event,
           description: "CRDT note rooms started (process actually created), by call path.",
           tags: [:source]
+        ),
+        # Engram-obsidian#658: a STEP2 for a doc the socket just released. Covered
+        # ones are dropped with no room; the rest apply room-free under
+        # room_start{source="trailing_step2"}. Proves where the doubled
+        # handshake starts went, and shows a client flooding them.
+        counter(
+          metric_prefix ++ [:unroomed_step2, :total],
+          event_name: @unroomed_step2_event,
+          description:
+            "STEP2 frames for a doc the socket had released, by outcome " <>
+              "(covered = dropped, no room | applied | failed).",
+          tags: [:outcome]
         ),
         # A sum of :count, not a counter: `Engram.PromEx.ZeroInit` seeds all six
         # outcome x client series with a 0 at boot so `increase()` sees the

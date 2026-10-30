@@ -82,6 +82,24 @@ defmodule Engram.Notes.NoteBodyReadTest do
       assert {:ok, @content} = Notes.authoritative_content(ctx.user, ctx.note)
     end
 
+    test "CRDT state: read_delta (crdt_doc_state, covered?) rebuilds from the body row", ctx do
+      corrupt_notes_copy!(ctx.note, "crdt_state_ciphertext")
+
+      assert {:ok, %{update: update}} =
+               Engram.Notes.CrdtTransport.read_delta(ctx.user, ctx.vault, ctx.note.id, nil)
+
+      doc = Engram.Notes.CrdtBridge.new_doc()
+      :ok = Yex.apply_update(doc, update)
+      assert Engram.Notes.CrdtBridge.body_of(doc) == @content
+    end
+
+    test "CRDT state: the read-only lineage audit scans the body row", ctx do
+      corrupt_notes_copy!(ctx.note, "crdt_state_ciphertext")
+
+      assert {:ok, %{live_root_count: 1}} =
+               Engram.Notes.LineageAudit.scan_note(ctx.user, ctx.vault, ctx.note.id)
+    end
+
     test "the catch-up page serves the body row", ctx do
       corrupt_notes_copy!(ctx.note, "content_ciphertext")
 

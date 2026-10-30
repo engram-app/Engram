@@ -313,6 +313,50 @@ defmodule Engram.Notes.CrdtTransport do
     end
   end
 
+  @doc """
+  True only when `update` would change NOTHING in the note's persisted doc
+  (snapshot + tail), so a caller may drop it without starting a room (#658).
+
+  Not a state-vector comparison: a delete-only update leaves the state vector
+  where it was, so that check would call a real deletion "covered" and lose it.
+  The fingerprint is state vector + delete set + pending structs. Any error, or
+  any doubt, answers `false`: the caller then applies, which is idempotent, so
+  the only cost of a wrong `false` is a room this check meant to save.
+  """
+  @spec covered?(map(), map(), String.t(), binary()) :: boolean()
+  def covered?(user, vault, note_id, update) do
+    case load_doc(user, vault, note_id) do
+      {:ok, doc} ->
+        before = fingerprint(doc)
+        Yex.apply_update(doc, update) == :ok and fingerprint(doc) == before
+
+      _ ->
+        false
+    end
+  rescue
+    # ponytail: fail toward applying, never toward dropping.
+    _ -> false
+  end
+
+  @doc """
+  `apply_update/5`, skipped when `covered?/4` proves the update changes nothing:
+  `{:ok, :covered}` then, and no room is started (#658).
+  """
+  @spec apply_unless_covered(map(), map(), String.t(), binary(), atom()) ::
+          {:ok, :covered | %{head: String.t()}} | {:error, atom()}
+  def apply_unless_covered(user, vault, note_id, update, source) do
+    if covered?(user, vault, note_id, update),
+      do: {:ok, :covered},
+      else: apply_update(user, vault, note_id, update, source)
+  end
+
+  # Encoding the diff against the doc's OWN state vector carries no structs,
+  # only the full delete set.
+  defp fingerprint(doc) do
+    sv = Yex.encode_state_vector!(doc)
+    {sv, Yex.encode_state_as_update!(doc, sv), pending(doc)}
+  end
+
   defp pending(doc) do
     {:ok, structs} = Yex.Doc.get_pending_update(doc)
     {:ok, ds} = Yex.Doc.get_pending_ds(doc)
@@ -502,7 +546,7 @@ defmodule Engram.Notes.CrdtTransport do
   # dead pattern. `:not_found` keeps its own arm because the caller
   # distinguishes it.
   defp load_doc(user, vault, note_id) do
-    with {:ok, note} <- Notes.get_note_row_by_id(user, vault, note_id),
+    with {:ok, note} <- Notes.get_note_crdt_row_by_id(user, vault, note_id),
          {:ok, snapshot} <- Crypto.decrypt_crdt_state(note, user),
          {:ok, doc} <- CrdtBridge.doc_from_state(snapshot) do
       Repo.with_tenant(user.id, fn ->

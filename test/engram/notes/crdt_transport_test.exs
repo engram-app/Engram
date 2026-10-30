@@ -185,6 +185,59 @@ defmodule Engram.Notes.CrdtTransportTest do
     end
   end
 
+  describe "covered?/4 (#658)" do
+    setup %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "F/C.md", content: "hello"}, actor: "api")
+
+      {:ok, %{update: full}} = CrdtTransport.read_delta(user, vault, note.id, nil)
+      client = CrdtBridge.new_doc()
+      :ok = Yex.apply_update(client, full)
+      %{note: note, client: client, full: full}
+    end
+
+    test "the server's own state is covered", %{user: user, vault: vault, note: note, full: full} do
+      assert CrdtTransport.covered?(user, vault, note.id, full)
+    end
+
+    test "an insert is not covered", %{user: user, vault: vault, note: note, client: client} do
+      sv = Yex.encode_state_vector!(client)
+      Yex.Text.insert(Yex.Doc.get_text(client, "content"), 0, "x")
+      {:ok, diff} = Yex.encode_state_as_update(client, sv)
+      refute CrdtTransport.covered?(user, vault, note.id, diff)
+    end
+
+    test "a delete-only update is not covered", %{
+      user: user,
+      vault: vault,
+      note: note,
+      client: client
+    } do
+      sv = Yex.encode_state_vector!(client)
+      Yex.Text.delete(Yex.Doc.get_text(client, "content"), 0, 1)
+      {:ok, diff} = Yex.encode_state_as_update(client, sv)
+      refute CrdtTransport.covered?(user, vault, note.id, diff)
+    end
+
+    test "an update with missing dependencies is not covered", %{
+      user: user,
+      vault: vault,
+      note: note
+    } do
+      doc = CrdtBridge.new_doc()
+      text = Yex.Doc.get_text(doc, "content")
+      Yex.Text.insert(text, 0, "abc")
+      sv = Yex.encode_state_vector!(doc)
+      Yex.Text.insert(text, 3, "def")
+      {:ok, diff} = Yex.encode_state_as_update(doc, sv)
+      refute CrdtTransport.covered?(user, vault, note.id, diff)
+    end
+
+    test "an unknown note is not covered", %{user: user, vault: vault, full: full} do
+      refute CrdtTransport.covered?(user, vault, Ecto.UUID.generate(), full)
+    end
+  end
+
   describe "read_delta/4" do
     test "full state (since=nil) reconstructs the note text on a fresh client doc",
          %{user: user, vault: vault} do
