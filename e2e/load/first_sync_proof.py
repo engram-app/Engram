@@ -704,6 +704,29 @@ def restart(mode: str) -> dict:
     return {"t": t0, "mode": mode, "rc": rc, "err": err}
 
 
+def container_started_at() -> str:
+    r = ssh(f"docker inspect {STAGING_APP} --format '{{{{.State.StartedAt}}}}'")
+    if r.returncode != 0 or not r.stdout.strip():
+        raise RuntimeError(f"docker inspect failed: {r.stderr.strip()[:200]}")
+    return r.stdout.strip()
+
+
+def controlled_restart(mode: str, user_id: str) -> tuple[dict, str | None]:
+    """The proof's own restart. Oban boots with the queues running, and rpc
+    answers only ~30 s after start, so: cancel the user's queued jobs (nothing
+    of ours can run in that window), restart, wait for rpc, re-pause at once,
+    cancel what slipped in. Returns (restart record, the new StartedAt), so the
+    watcher adopts our restart instead of calling it an outside one."""
+    cancel_user_jobs(user_id)
+    r = restart(mode)
+    if r["rc"] != 0:
+        return r, None
+    wait_rpc()
+    pause_qdrant_queues(True)
+    cancel_user_jobs(user_id)
+    return r, container_started_at()
+
+
 def wait_for_fix(minutes: int) -> str:
     """Poll every 2 min until staging serves a build with #2308 in it."""
     end = time.time() + minutes * 60
@@ -739,7 +762,7 @@ def cmd_watch(a) -> int:
             True  # before the call: a pause that lands then raises still gets resumed
         )
         pause_qdrant_queues(True)
-        started_at = sample(None).get("started_at")
+        started_at = container_started_at()
         user_id = create_user(run_id)
         scope = qdrant_scope(user_id)
         if grant_overrides(run_id) != len(OVERRIDES):
@@ -776,14 +799,11 @@ def cmd_watch(a) -> int:
                     f"the run user has {s['qdrant_points']} Qdrant points; aborting"
                 )
             if s.get("started_at") and s["started_at"] != started_at:
-                started_at = s["started_at"]
-                if restarted is None or time.time() - restarted["t"] > 180:
-                    # A deploy (staging follows main) or a crash: either way not
-                    # the controlled kill this proof is about.
-                    raise RuntimeError(
-                        f"container restarted outside the proof at {started_at}; aborting"
-                    )
-                pause_qdrant_queues(True)  # our own kill resumed them
+                # A deploy (staging follows main) or a crash: our own restart
+                # already adopted its StartedAt in controlled_restart().
+                raise RuntimeError(
+                    f"container restarted outside the proof at {s['started_at']}; aborting"
+                )
             n = s.get("notes")
             progress = n / a.notes if n is not None else 0.0
             print(
@@ -792,7 +812,8 @@ def cmd_watch(a) -> int:
                 flush=True,
             )
             if restarted is None and progress >= a.restart_at:
-                restarted = restart(a.restart_mode) | {
+                rec, started_at = controlled_restart(a.restart_mode, user_id)
+                restarted = rec | {
                     "progress": round(progress, 3),
                     "notes": n,
                 }

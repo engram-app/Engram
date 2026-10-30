@@ -357,3 +357,36 @@ def test_restart_retries_a_failed_start_and_never_raises(monkeypatch):
     monkeypatch.setattr(fsp, "ssh", hang)
     r = fsp.restart("kill")  # a hung ssh is a failed restart, not a crash
     assert r["rc"] != 0
+
+
+def test_our_kill_waits_for_rpc_then_repauses_before_anything_else(monkeypatch):
+    """A fresh container answers rpc ~30 s after start and boots with the queues
+    running: re-pausing on the next sample raced the boot and aborted the run."""
+    calls = []
+    rec = (
+        lambda name, ret=None: (
+            lambda *a, **k: (
+                calls.append(  # noqa: E731
+                    (name, *a[:1]) if name == "pause" else name
+                )
+                or ret
+            )
+        )
+    )
+    monkeypatch.setattr(fsp, "cancel_user_jobs", rec("cancel", "0"))
+    monkeypatch.setattr(fsp, "restart", rec("restart", {"t": 1.0, "rc": 0, "err": ""}))
+    monkeypatch.setattr(fsp, "wait_rpc", rec("wait_rpc"))
+    monkeypatch.setattr(fsp, "pause_qdrant_queues", rec("pause"))
+    monkeypatch.setattr(fsp, "container_started_at", rec("inspect", "T2"))
+    _, started_at = fsp.controlled_restart("kill", "uid")
+    assert calls == [
+        "cancel",
+        "restart",
+        "wait_rpc",
+        ("pause", True),
+        "cancel",
+        "inspect",
+    ]
+    assert (
+        started_at == "T2"
+    )  # adopted, so the watcher does not call it an outside restart
