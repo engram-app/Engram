@@ -123,6 +123,11 @@ def test_clean_run_passes():
         ),  # over the memory bar
         ([*GOOD, {"t": 260.0, "tail_rows": 9000}], [OUR_KILL], {}),  # tail not bounded
         (GOOD, [OUR_KILL], {"db_checkout_over_15s": 2}),  # the 2026-10-29 log signature
+        (
+            [*GOOD, {"t": 270.0, "qdrant_err": "400 Bad Request"}],
+            [OUR_KILL],
+            {},
+        ),  # the leak guard was blind for a sample
     ],
 )
 def test_each_failure_turns_the_verdict(samples, events, logs):
@@ -390,3 +395,25 @@ def test_our_kill_waits_for_rpc_then_repauses_before_anything_else(monkeypatch):
     assert (
         started_at == "T2"
     )  # adopted, so the watcher does not call it an outside restart
+
+
+def test_qdrant_guard_aborts_on_points_and_on_a_blind_streak(monkeypatch):
+    """A count that always errors (400 strict mode, 404 collection) left the
+    guard off for the whole run while the verdict could still PASS."""
+    counts = iter([0, OSError("400"), OSError("400"), 2])
+
+    def fake_points(scope):
+        x = next(counts)
+        if isinstance(x, Exception):
+            raise x
+        return x
+
+    monkeypatch.setattr(fsp, "qdrant_points", fake_points)
+    s = {}
+    assert fsp.qdrant_guard(None, s, 0) == 0 and s["qdrant_points"] == 0
+    s = {}
+    assert fsp.qdrant_guard(None, s, 0) == 1 and "qdrant_err" in s
+    with pytest.raises(RuntimeError, match="blind"):
+        fsp.qdrant_guard(None, {}, fsp.QDRANT_MAX_ERRORS - 1)
+    with pytest.raises(RuntimeError, match="2 Qdrant points"):
+        fsp.qdrant_guard(None, {}, 0)

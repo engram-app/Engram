@@ -510,6 +510,29 @@ def qdrant_scope(user_id: str) -> tuple[str, dict]:
     }
 
 
+QDRANT_MAX_ERRORS = 4  # consecutive failed counts (1 min at 15 s) before aborting
+
+
+def qdrant_guard(scope, s: dict, errors: int) -> int:
+    """Count the run user's points into sample `s`; abort on any point, or once
+    the count has failed QDRANT_MAX_ERRORS times in a row (a guard that cannot
+    see is off). Returns the new consecutive-error count."""
+    try:
+        s["qdrant_points"] = qdrant_points(scope)
+    except (OSError, KeyError, ValueError) as e:  # requests errors are OSError
+        s["qdrant_err"] = str(e)[:120]
+        if errors + 1 >= QDRANT_MAX_ERRORS:
+            raise RuntimeError(
+                f"Qdrant leak guard blind for {errors + 1} samples ({s['qdrant_err']}); aborting"
+            ) from e
+        return errors + 1
+    if s["qdrant_points"] > 0:
+        raise RuntimeError(
+            f"the run user has {s['qdrant_points']} Qdrant points; aborting"
+        )
+    return 0
+
+
 def qdrant_points(scope: tuple[str, dict]) -> int:
     import requests
 
@@ -765,6 +788,10 @@ def cmd_watch(a) -> int:
         started_at = container_started_at()
         user_id = create_user(run_id)
         scope = qdrant_scope(user_id)
+        # Exercise the scope before any load: a filter Qdrant rejects or a
+        # wrong collection must fail here, not blind the guard for the run.
+        if (n0 := qdrant_points(scope)) != 0:
+            raise RuntimeError(f"fresh run user already has {n0} Qdrant points")
         if grant_overrides(run_id) != len(OVERRIDES):
             raise RuntimeError("limit grant did not land")
         key, key_id = mint_key(user_id)
@@ -773,7 +800,7 @@ def cmd_watch(a) -> int:
         del key
         print(f"[watch] load started on {a.load_host}", flush=True)
 
-        vault_id, done_at = None, None
+        vault_id, done_at, qdrant_errors = None, None, 0
         end = time.time() + a.deadline
         while time.time() < end:
             try:
@@ -785,19 +812,10 @@ def cmd_watch(a) -> int:
                 time.sleep(a.interval)
                 continue
             try:
-                s["qdrant_points"] = qdrant_points(scope)
-            except (
-                OSError,
-                KeyError,
-                ValueError,
-            ) as e:  # recorded; a miss is not a rise
-                s["qdrant_err"] = str(e)[:120]
-            with open(samples, "a") as f:
-                f.write(json.dumps(s) + "\n")
-            if s.get("qdrant_points", 0) > 0:
-                raise RuntimeError(
-                    f"the run user has {s['qdrant_points']} Qdrant points; aborting"
-                )
+                qdrant_errors = qdrant_guard(scope, s, qdrant_errors)
+            finally:  # the sample is evidence whether or not the guard tripped
+                with open(samples, "a") as f:
+                    f.write(json.dumps(s) + "\n")
             if s.get("started_at") and s["started_at"] != started_at:
                 # A deploy (staging follows main) or a crash: our own restart
                 # already adopted its StartedAt in controlled_restart().
@@ -995,6 +1013,10 @@ def summarize(a, run_id, build, where, samples, restarted, events, logs, load) -
             (peak("tail_rows") or 0) < a.max_tail_rows,
         ),
         ("no DB checkout > 15 s in the logs", logs.get("db_checkout_over_15s", 0) == 0),
+        (
+            "Qdrant leak guard counted on every sample",
+            not any("qdrant_err" in s for s in samples),
+        ),
     ]
     ok = all(c for _, c in checks)
     lines = [
