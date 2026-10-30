@@ -69,7 +69,12 @@ defmodule Engram.Workers.EmbedNote.CrashGuard do
   end
 
   def cooldown_seconds(deaths),
-    do: min(@base_cooldown_seconds * Integer.pow(2, max(deaths - 2, 0)), @max_cooldown_seconds)
+    do:
+      Engram.Jobs.capped_backoff(
+        @base_cooldown_seconds,
+        max(deaths - 2, 0),
+        @max_cooldown_seconds
+      )
 
   @doc """
   Decide what this attempt does. Returns `:run`, `{:snooze, seconds}` (another

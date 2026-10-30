@@ -13,6 +13,24 @@ defmodule Engram.JobsTest do
     |> Repo.update!()
   end
 
+  describe "capped_backoff/3" do
+    test "doubles from the base per step and stops at the cap" do
+      assert Jobs.capped_backoff(30, 0, 600) == 30
+      assert Jobs.capped_backoff(30, 1, 600) == 60
+      assert Jobs.capped_backoff(30, 4, 600) == 480
+      assert Jobs.capped_backoff(30, 5, 600) == 600
+      # A huge step count must not build a huge integer first.
+      assert Jobs.capped_backoff(30, 10_000_000, 600) == 600
+    end
+
+    test "jitter only adds, by at most the given share" do
+      for _ <- 1..200 do
+        assert Jobs.capped_backoff(30, 1, 600, 0.25) in 60..75
+        assert Jobs.capped_backoff(30, 40, 600, 0.25) in 600..750
+      end
+    end
+  end
+
   describe "pending_note_ids_for_vault/4" do
     alias Engram.Workers.CheckpointNote
 

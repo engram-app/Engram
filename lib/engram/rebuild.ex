@@ -438,10 +438,8 @@ defmodule Engram.Rebuild do
   @spec gate_snooze(non_neg_integer()) :: pos_integer()
   def gate_snooze(0), do: @gate_snooze
 
-  def gate_snooze(snoozed) do
-    base = min(@gate_snooze * Integer.pow(2, min(snoozed, 5)), @gate_snooze_max)
-    base + :rand.uniform(div(base, 4))
-  end
+  def gate_snooze(snoozed),
+    do: Engram.Jobs.capped_backoff(@gate_snooze, snoozed, @gate_snooze_max, 0.25)
 
   # A check costs the bucket 1 token (Hammer has no read without a hit).
   defp tpm_room?,
