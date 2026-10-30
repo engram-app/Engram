@@ -1,4 +1,6 @@
-# Ephemeral CI test stack — Ollama on FastRaid (GPU), Qdrant on SlowRaid (AVX2).
+# Ephemeral CI test stack — Ollama on FastRaid (GPU), Qdrant on SlowRaid (AVX2)
+# unless ci/compose.qdrant.yml overrides it with a per-stack tmpfs Qdrant
+# (e2e-clerk and e2e-crdt do).
 #
 # Always invoke with explicit project name for stable container names:
 #   docker compose -f ci/compose.yml -p engram-ci up -d --build --wait
@@ -9,7 +11,7 @@
 #
 # External services (persistent, not in this compose):
 #   Ollama:  http://10.0.20.214:11434  (FastRaid — GPU for embeddings)
-#   Qdrant:  http://10.0.20.201:6333   (SlowRaid — AVX2 for binary quantization, v1.17.1)
+#   Qdrant:  http://10.0.20.201:6333   (SlowRaid — AVX2 for binary quantization; headless-protocol only)
 #
 # Ports default to offsets from standard dev ports, but can be overridden
 # via CI_ENGRAM_PORT / CI_PG_PORT for parallel-safe runs.

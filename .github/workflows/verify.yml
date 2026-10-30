@@ -2426,8 +2426,9 @@ jobs:
           # This job allocates a Qdrant collection on the SHARED SlowRaid Qdrant
           # and, until 2026-08-05, never released it — it leaked one per run from
           # the day the job was added. `docker compose down` does not reclaim it;
-          # the collection does not live on this runner. Same reap the other two
-          # e2e jobs do. (Attachments need no equivalent: they share one
+          # the collection does not live on this runner. e2e-clerk and e2e-crdt
+          # no longer need this: they run their own tmpfs Qdrant (ci/compose.qdrant.yml),
+          # which `down -v` removes. (Attachments need no equivalent: they share one
           # permanent bucket with server-side expiry, so there is nothing here to
           # release — see ci/compose.yml.)
           curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
