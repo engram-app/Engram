@@ -939,9 +939,10 @@ def spawn_child(
     return child
 
 
-def install_signal_handlers() -> None:
-    """SIGTERM/SIGINT (a CI cancel or timeout): stop the children, exit 128+sig.
-    atexit alone does not run on a signal, which orphaned the bun child."""
+def install_signal_handlers(on_exit=None) -> None:
+    """SIGTERM/SIGINT (a CI cancel or timeout): stop the children, run
+    `on_exit` (os._exit skips every finally), exit 128+sig. atexit alone does
+    not run on a signal, which orphaned the bun child."""
 
     def on_signal(signum, _frame):
         for c in _CHILDREN:
@@ -952,7 +953,11 @@ def install_signal_handlers() -> None:
                 c.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 c.kill()
-        os._exit(128 + signum)
+        try:
+            if on_exit:
+                on_exit()
+        finally:
+            os._exit(128 + signum)
 
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)

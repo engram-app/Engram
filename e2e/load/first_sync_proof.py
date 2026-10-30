@@ -53,7 +53,7 @@ E2E = HERE.parent
 REPO = E2E.parent
 sys.path.insert(0, str(E2E))
 
-from load.guards import check_target  # noqa: E402
+from load.guards import check_target, redact  # noqa: E402
 from load.sim import PNG_HEAD, note_body, note_path  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -178,16 +178,21 @@ def cmd_generate(a) -> int:
 # load (the load host)
 # ---------------------------------------------------------------------------
 def cmd_load(a) -> int:
-    from load.guards import redact
     from load.sim import Account, install_signal_handlers, register_vault, spawn_child
 
     check_target(a.api, allow_any_host=False)
     key = sys.stdin.readline().strip()  # stdin only: never argv, env or disk
     if not key.startswith("engram_"):
         raise SystemExit("load: expected an Engram API key on stdin")
-    install_signal_handlers()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
+    clog = out / "first_sync.log"
+
+    def redact_log() -> None:  # the child's log can echo the key (socket URL)
+        if clog.exists():
+            clog.write_text(redact(clog.read_text(errors="replace")))
+
+    install_signal_handlers(on_exit=redact_log)
     root = Path(a.work)
     root.mkdir(parents=True, exist_ok=True)
     device = f"{PREFIX}-{a.run_id}"
@@ -239,11 +244,12 @@ def cmd_load(a) -> int:
         cfg,
         # run.ts reads the API base from the env (default: a local CI stack).
         env={**os.environ, "ENGRAM_API_URL": acct.api},
-        log=out / "first_sync.log",
+        log=clog,
     )
-    rc = child.wait()
-    clog = out / "first_sync.log"
-    clog.write_text(redact(clog.read_text(errors="replace")))
+    try:
+        rc = child.wait()
+    finally:
+        redact_log()
     final = (
         acct.s(vault=False)
         .get(f"{acct.api}/vaults/{acct.vault_id}", timeout=30)
@@ -533,21 +539,28 @@ def start_load(host: str, work: str, key: str, a, run_id: str) -> subprocess.Pop
 
 
 def fetch_and_clean_load_host(host: str, work: str, out: Path) -> None:
+    if not work.startswith("/tmp/fsproof."):
+        raise RuntimeError(f"refusing to clean {work!r}")
+    # The load may still run (an abort): stop it first, so its signal handler
+    # redacts its log before the copy, and before removing its files. `[/]`
+    # matches "/" in the load's argv but not in this shell's own argv, which
+    # holds the pattern text; a plain `{work}/` killed the shell itself.
+    pattern = shlex.quote(f"[/]{work[1:]}/")
+    ssh(f"pkill -f {pattern}; sleep 5", host=host, timeout=60)
     dest = out / "load"
     dest.mkdir(exist_ok=True)
     tar = subprocess.run(
         ["ssh", "-o", "BatchMode=yes", host, f"tar -C {work} -c out"],
         capture_output=True,
+        timeout=300,
     )
     if tar.returncode == 0:
-        subprocess.run(["tar", "-C", str(dest), "-x"], input=tar.stdout)
-    if work.startswith("/tmp/fsproof."):
-        # The load may still run (an abort): stop it before removing its files.
-        # `[/]` matches "/" in the load's argv but not in this shell's own
-        # argv, which holds the pattern text; a plain `{work}/` killed the
-        # shell itself, so `rm -rf` never ran.
-        pattern = shlex.quote(f"[/]{work[1:]}/")
-        ssh(f"pkill -f {pattern}; sleep 2; rm -rf {work}", host=host, timeout=300)
+        subprocess.run(["tar", "-C", str(dest), "-x"], input=tar.stdout, timeout=300)
+        # Backstop for a load that died without redacting (SIGKILL, a hang).
+        for f in dest.rglob("*"):
+            if f.is_file():
+                f.write_text(redact(f.read_text(errors="replace")))
+    ssh(f"rm -rf {work}", host=host, timeout=300)
 
 
 # One SSH round trip per sample: container state, docker stats, BEAM memory.

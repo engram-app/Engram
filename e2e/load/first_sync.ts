@@ -34,8 +34,13 @@ globalThis.WebSocket = UAWebSocket as typeof WebSocket;
 // Config arrives on stdin ("-"): it carries a live API key, so no file holds it.
 const cfg: Cfg = JSON.parse(fs.readFileSync(process.argv[2] === "-" ? 0 : process.argv[2], "utf8"));
 const out = fs.openSync(cfg.out, "a");
+// An error string can echo the socket URL (?token=) or an auth header: the
+// key itself never reaches this file.
 const record = (op: string, ms: number, ok: boolean, extra: Record<string, unknown> = {}) =>
-	fs.writeSync(out, `${JSON.stringify({ t: Date.now() / 1000, op, ms: Math.round(ms), ok, ...extra })}\n`);
+	fs.writeSync(
+		out,
+		`${JSON.stringify({ t: Date.now() / 1000, op, ms: Math.round(ms), ok, ...extra }).replaceAll(cfg.token, "engram_REDACTED")}\n`,
+	);
 
 // A push racing the restart rejects somewhere the engine does not await; the
 // next pass retries it, so record and carry on rather than die mid-proof.

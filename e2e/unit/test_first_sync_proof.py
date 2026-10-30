@@ -158,3 +158,44 @@ def test_load_host_cleanup_pkill_cannot_match_its_own_shell(tmp_path, monkeypatc
     for c in cmds:  # every shell this cleanup runs
         assert not re.search(pattern, c), f"pkill would kill its own shell: {c}"
     assert any(c.strip().endswith(f"rm -rf {work}") for c in cmds)
+
+
+KEY = "engram_" + "k" * 32
+
+
+def test_fetched_load_output_is_redacted_and_load_stopped_first(tmp_path, monkeypatch):
+    """A killed or crashed load leaves the raw key in its log: never copy it home."""
+    order = []
+
+    def fake_ssh(cmd, **kw):
+        order.append("pkill" if "pkill" in cmd else cmd.split()[0])
+        return _Proc()
+
+    def fake_run(argv, **kw):
+        if argv[0] == "ssh":  # the remote `tar -c out`
+            order.append("fetch")
+            return _Proc(stdout=b"tar")
+        d = tmp_path / "load" / "out"  # the local `tar -x`
+        d.mkdir(parents=True)
+        (d / "first_sync.log").write_text(f"ws?token={KEY}&vsn=2 failed\n")
+        (d / "first_sync.jsonl").write_text(f'{{"err": "Bearer {KEY}"}}\n')
+        return _Proc()
+
+    monkeypatch.setattr(fsp, "ssh", fake_ssh)
+    monkeypatch.setattr(fsp.subprocess, "run", fake_run)
+    fsp.fetch_and_clean_load_host("gh-runner", "/tmp/fsproof.x", tmp_path)
+    for f in (tmp_path / "load" / "out").iterdir():
+        assert KEY not in f.read_text(), f.name
+    assert order.index("pkill") < order.index("fetch"), order
+
+
+def test_signal_exit_runs_the_load_log_redaction(monkeypatch):
+    """SIGTERM ends the load through os._exit, which skips every finally."""
+    from load import sim
+
+    handlers, calls = {}, []
+    monkeypatch.setattr(sim.signal, "signal", lambda s, h: handlers.__setitem__(s, h))
+    monkeypatch.setattr(sim.os, "_exit", lambda code: calls.append(("exit", code)))
+    sim.install_signal_handlers(on_exit=lambda: calls.append("redact"))
+    handlers[sim.signal.SIGTERM](sim.signal.SIGTERM, None)
+    assert calls == ["redact", ("exit", 128 + sim.signal.SIGTERM)]
