@@ -150,12 +150,34 @@ defmodule Engram.Notes.NoteBodyReadTest do
       assert read.crdt_head == head
     end
 
+    # note_bodies is built for HOT updates (fillfactor 75, pkey only): a
+    # checkpoint rewrites content_ct / crdt_ct / crdt_head / key_version, and
+    # an index (key, INCLUDE, expression or predicate) on any of them turns
+    # every checkpoint into extra index writes. Only the immutable keys may
+    # be indexed.
+    test "every note_bodies index covers immutable keys only (HOT-eligible)" do
+      %{rows: rows} =
+        Repo.query!("""
+        SELECT i.indexrelid::regclass::text, a.attname
+        FROM pg_index i
+        JOIN pg_attribute a ON a.attrelid = i.indrelid
+        WHERE i.indrelid = 'note_bodies'::regclass
+          AND a.attnum > 0 AND NOT a.attisdropped
+          AND (a.attnum = ANY(i.indkey)
+               OR pg_get_expr(i.indexprs, i.indrelid) ~ ('\\m' || a.attname || '\\M')
+               OR pg_get_expr(i.indpred, i.indrelid) ~ ('\\m' || a.attname || '\\M'))
+        """)
+
+      assert rows != []
+      assert for([idx, col] <- rows, col not in ~w(note_id user_id), do: {idx, col}) == []
+    end
+
     # R5: under RLS the only filter on `note_bodies` was `user_id`, which no
     # index served, so a vault's manifest hash-joined a seq scan of EVERY
     # tenant's bodies (106 ms on a 10k-note staging vault, growing with the
-    # whole table). The owner's bodies, and the head the manifest reads from
-    # them, must be reachable by index (with the join above, `user_id` is an
-    # index condition for every `NoteBody.join/1` caller).
+    # whole table). The owner's bodies must be reachable by index (with the
+    # join above, `user_id` is an index condition for every `NoteBody.join/1`
+    # caller); the head itself is a heap fetch (HOT guard above).
     test "an owner's bodies and heads are reachable by index", ctx do
       {sql, _} =
         Repo.to_sql(
@@ -164,7 +186,7 @@ defmodule Engram.Notes.NoteBodyReadTest do
         )
 
       plan = Engram.QueryPlan.generic_plan(sql, analyze: ["note_bodies"])
-      assert plan =~ "note_bodies_user_head", plan
+      assert plan =~ "note_bodies_user_note", plan
       assert plan =~ "Index Cond: (user_id = $1)", plan
     end
   end
