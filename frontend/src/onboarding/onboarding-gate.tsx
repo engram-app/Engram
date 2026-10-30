@@ -11,28 +11,28 @@ export default function OnboardingGate() {
 	// vaults / capabilities caches, so the views mounted past this gate read from
 	// cache instead of each issuing their own request.
 	const { data, isLoading } = useAppBootstrap();
+	// Same tick as /bootstrap: the tree, the note and its code, in parallel
+	// rather than waiting for this gate to render its children (first-view.ts).
+	const qc = useQueryClient();
+	useEffect(() => {
+		// ponytail: fires before the onboarding status is known, on purpose. For
+		// a signup still in the wizard the vault routes 403 it: one harmless
+		// refused burst, which the refusal line's route + surface identify
+		// (`VaultTreeController#show`, `web`). Waiting for the status instead
+		// costs every onboarded cold load a /bootstrap round trip.
+		prefetchFirstView(qc, window.location.pathname, getActiveVaultId());
+	}, [qc]);
 	// Route off the granular ["onboarding","status"] cache — the one every
 	// wizard mutation invalidates — never bootstrap's own copy, which is cached
 	// forever and once looped finished users back to /onboard/agreement.
 	// `enabled` waits for the bootstrap seed so first load stays one request.
 	const { data: onboarding } = useOnboardingStatus({ enabled: data !== undefined });
-	const open = onboarding !== undefined && (!onboarding.enabled || onboarding.next_step === "done");
-	// The tree, the note and its code, before this gate's children mount
-	// (first-view.ts). Only once the gate is open: the vault routes 403 an
-	// unfinished signup, and firing this on mount, before the status was known,
-	// was most of prod's "onboarding refused" lines.
-	const qc = useQueryClient();
-	useEffect(() => {
-		if (open) {
-			prefetchFirstView(qc, window.location.pathname, getActiveVaultId());
-		}
-	}, [qc, open]);
 
 	if (isLoading || !data || !onboarding) {
 		return <LoadingScreen />;
 	}
 
-	if (open) {
+	if (!onboarding.enabled || onboarding.next_step === "done") {
 		return <Outlet />;
 	}
 

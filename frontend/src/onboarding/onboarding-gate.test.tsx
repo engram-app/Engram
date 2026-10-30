@@ -3,14 +3,12 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import { useAppBootstrap, useOnboardingStatus } from "../api/queries";
-import { prefetchFirstView } from "../layout/first-view";
 import OnboardingGate from "./onboarding-gate";
 
 vi.mock("../api/queries", () => ({
 	useAppBootstrap: vi.fn(),
 	useOnboardingStatus: vi.fn(),
 }));
-vi.mock("../layout/first-view", () => ({ prefetchFirstView: vi.fn() }));
 
 function mountGate() {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -123,29 +121,5 @@ describe("OnboardingGate", () => {
 			profile_complete: false,
 		});
 		expect(screen.getByText("vault-step")).toBeInTheDocument();
-	});
-
-	// The first-view prefetch hits GET /api/vault/tree, which the backend's
-	// onboarding gate refuses (403 + an "onboarding refused" warning) until the
-	// wizard is done. Firing it on mount, before the status was known, made the
-	// web app the source of most prod refusals.
-	describe("first-view prefetch", () => {
-		it("does not fire while onboarding status is unknown", () => {
-			vi.mocked(prefetchFirstView).mockClear();
-			renderWith(null, { isLoading: true });
-			expect(prefetchFirstView).not.toHaveBeenCalled();
-		});
-
-		it("does not fire while onboarding is incomplete", () => {
-			vi.mocked(prefetchFirstView).mockClear();
-			renderWith({ enabled: true, next_step: "agreement", terms_ok: false });
-			expect(prefetchFirstView).not.toHaveBeenCalled();
-		});
-
-		it("fires once the gate is open", () => {
-			vi.mocked(prefetchFirstView).mockClear();
-			renderWith({ enabled: true, next_step: "done", terms_ok: true, subscription_ok: true });
-			expect(prefetchFirstView).toHaveBeenCalledOnce();
-		});
 	});
 });
