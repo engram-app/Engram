@@ -666,27 +666,99 @@ defmodule Engram.Folders.Rows do
   end
 
   @doc """
-  Brings back every folder row `soft_delete/4` stamped with `op_id`, except a
-  row whose name a live sibling has since taken (the unique live-name index
-  would refuse it). Returns how many came back.
+  Brings back every folder row `soft_delete/4` stamped with `op_id`. Returns
+  how many came back.
+
+  A row whose place a live sibling has since taken (the unique live-name index
+  would refuse it) stays deleted, and the rows below it are RE-PARENTED to that
+  live sibling: the undo merges into what exists, as a rename onto an existing
+  folder does. Reviving them under the dead row instead would leave live folders
+  that no walk from a live parent reaches, so a later delete, rename or move
+  of the folder would miss their content. Rows arrive shallowest first, so a
+  parent's outcome is known when its children are placed. A top row of the op
+  whose own parent is no longer live stays deleted, with its subtree.
   """
   @spec restore_op(Ecto.UUID.t(), Ecto.UUID.t()) :: non_neg_integer()
   def restore_op(vault_id, op_id) do
-    taken =
-      from(o in Folder,
-        where:
-          o.vault_id == parent_as(:f).vault_id and o.name_hmac == parent_as(:f).name_hmac and
-            is_nil(o.deleted_at) and
-            fragment("? IS NOT DISTINCT FROM ?", o.parent_id, parent_as(:f).parent_id)
+    rows =
+      from(f in Folder,
+        where: f.vault_id == ^vault_id and f.delete_op_id == ^op_id and not is_nil(f.deleted_at),
+        select: %{id: f.id, parent_id: f.parent_id, name_hmac: f.name_hmac}
       )
+      |> Repo.all()
+
+    by_id = Map.new(rows, &{&1.id, &1})
+
+    {revive, _placed} =
+      rows
+      |> Enum.sort_by(&depth(&1, by_id, @max_depth))
+      |> Enum.reduce({[], %{}}, fn row, {revive, placed} ->
+        case place_restored(vault_id, row, by_id, placed) do
+          :skip -> {revive, placed}
+          {:merge, into} -> {revive, Map.put(placed, row.id, into)}
+          {:revive, parent} -> {[{row.id, parent} | revive], Map.put(placed, row.id, row.id)}
+        end
+      end)
+
+    write_revived(revive)
+  end
+
+  defp depth(_row, _by_id, 0), do: 0
+
+  defp depth(row, by_id, budget) do
+    case Map.get(by_id, row.parent_id) do
+      nil -> 0
+      parent -> 1 + depth(parent, by_id, budget - 1)
+    end
+  end
+
+  # Where a deleted row goes: `:skip` (its parent did not come back),
+  # `{:merge, live_id}` (a live row holds its place) or `{:revive, parent_id}`.
+  defp place_restored(vault_id, row, by_id, placed) do
+    parent =
+      cond do
+        is_nil(row.parent_id) -> {:ok, nil}
+        Map.has_key?(by_id, row.parent_id) -> Map.fetch(placed, row.parent_id)
+        live?(row.parent_id) -> {:ok, row.parent_id}
+        true -> :error
+      end
+
+    with {:ok, parent_id} <- parent do
+      case live_child(vault_id, parent_id, row.name_hmac) do
+        nil -> {:revive, parent_id}
+        %{id: id} -> {:merge, id}
+      end
+    else
+      _ -> :skip
+    end
+  end
+
+  defp live?(id), do: Repo.exists?(from(f in Folder, where: f.id == ^id and is_nil(f.deleted_at)))
+
+  defp write_revived([]), do: 0
+
+  defp write_revived(revive) do
+    {ids, parents} = Enum.unzip(revive)
 
     {n, _} =
       from(f in Folder,
-        as: :f,
-        where: f.vault_id == ^vault_id and f.delete_op_id == ^op_id and not is_nil(f.deleted_at),
-        where: not exists(subquery(taken))
+        join:
+          v in fragment(
+            "SELECT * FROM unnest(?::uuid[], ?::uuid[]) AS t(id, parent_id)",
+            type(^ids, {:array, Ecto.UUID}),
+            type(^parents, {:array, Ecto.UUID})
+          ),
+        on: f.id == field(v, :id),
+        update: [
+          set: [
+            deleted_at: nil,
+            delete_op_id: nil,
+            parent_id: field(v, :parent_id),
+            updated_at: ^now()
+          ]
+        ]
       )
-      |> Repo.update_all(set: [deleted_at: nil, delete_op_id: nil, updated_at: now()])
+      |> Repo.update_all([])
 
     n
   end
