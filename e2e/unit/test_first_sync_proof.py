@@ -257,6 +257,7 @@ def _cleanup_env(tmp_path, monkeypatch, fail=()):
 
     monkeypatch.setattr(fsp, "ssh", fake_ssh)
     monkeypatch.setattr(fsp, "fetch_and_clean_load_host", step("load_host"))
+    monkeypatch.setattr(fsp, "start_container", step("start"))
     monkeypatch.setattr(fsp, "wait_rpc", step("wait_rpc"))
     monkeypatch.setattr(fsp, "pause_qdrant_queues", step("pause"))
     monkeypatch.setattr(fsp, "cancel_user_jobs", step("cancel", "0"))
@@ -278,6 +279,7 @@ def test_cleanup_survives_every_failing_step_and_resumes_queues_last(
     _, _, errors = run()
     assert calls == [
         "load_host",
+        "start",
         "wait_rpc",
         ("pause", True),
         "cancel",
@@ -323,3 +325,35 @@ def test_delete_user_retries_a_deadlock_but_not_a_real_refusal(monkeypatch):
     monkeypatch.setattr(fsp, "rpc", lambda expr, **kw: "del|{:error, :last_admin}\n")
     with pytest.raises(RuntimeError, match="last_admin"):
         fsp.delete_user("uid", "kid")
+
+
+def test_cleanup_with_staging_down_still_cleans_the_rest_and_says_so(
+    tmp_path, monkeypatch, capsys
+):
+    """A failed `docker start` left staging down; cleanup then burned 300 s on rpc."""
+    calls, run = _cleanup_env(tmp_path, monkeypatch, fail={"start"})
+    _, _, errors = run()
+    assert calls == ["load_host", "start"]  # no rpc step against a dead container
+    assert errors and "OPERATOR ACTION" in capsys.readouterr().out
+
+
+def test_restart_retries_a_failed_start_and_never_raises(monkeypatch):
+    monkeypatch.setattr(fsp.time, "sleep", lambda s: None)
+    cmds = []
+    starts = iter([_Proc(rc=1, stderr="busy"), _Proc(rc=1, stderr="busy"), _Proc()])
+
+    def fake_ssh(cmd, **kw):
+        cmds.append(cmd)
+        return next(starts) if cmd.startswith("docker start") else _Proc()
+
+    monkeypatch.setattr(fsp, "ssh", fake_ssh)
+    r = fsp.restart("kill")
+    assert r["rc"] == 0
+    assert sum(c.startswith("docker start") for c in cmds) == 3
+
+    def hang(cmd, **kw):
+        raise fsp.subprocess.TimeoutExpired(cmd, 120)
+
+    monkeypatch.setattr(fsp, "ssh", hang)
+    r = fsp.restart("kill")  # a hung ssh is a failed restart, not a crash
+    assert r["rc"] != 0

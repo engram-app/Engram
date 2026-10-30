@@ -663,16 +663,45 @@ def sample(vault_id: str | None) -> dict:
 TRANSIENT = (RuntimeError, ValueError, subprocess.SubprocessError)
 
 
+def start_container(tries: int = 3) -> None:
+    """`docker start` the staging app, retried; a no-op when it already runs.
+    Raises if it stays down."""
+    refuse_prod(STAGING_HOST, STAGING_APP)
+    err = ""
+    for attempt in range(tries):
+        if attempt:
+            time.sleep(10)
+        try:
+            r = ssh(f"docker start {STAGING_APP}", timeout=120)
+            if r.returncode == 0:
+                return
+            err = r.stderr.strip()[:200]
+        except subprocess.TimeoutExpired:
+            err = "ssh timed out"
+    raise RuntimeError(f"docker start {STAGING_APP} failed {tries}x: {err}")
+
+
 def restart(mode: str) -> dict:
+    """Kill (or gracefully restart) staging and bring it back. Never raises:
+    a failure is rc != 0, and the caller aborts into cleanup."""
     refuse_prod(STAGING_HOST, STAGING_APP)
     cmd = (
-        f"docker kill --signal KILL {STAGING_APP} && docker start {STAGING_APP}"
+        f"docker kill --signal KILL {STAGING_APP}"
         if mode == "kill"
         else f"docker restart --time 30 {STAGING_APP}"
     )
     t0 = time.time()
-    r = ssh(cmd, timeout=120)
-    return {"t": t0, "mode": mode, "rc": r.returncode, "err": r.stderr.strip()[:200]}
+    try:
+        r = ssh(cmd, timeout=120)
+        rc, err = r.returncode, r.stderr.strip()[:200]
+    except subprocess.TimeoutExpired:
+        rc, err = -1, f"{cmd}: ssh timed out"
+    if mode == "kill" or rc != 0:  # a kill leaves it stopped; a failed restart may
+        try:
+            start_container()
+        except RuntimeError as e:
+            rc, err = rc or 1, f"{err} {e}".strip()
+    return {"t": t0, "mode": mode, "rc": rc, "err": err}
 
 
 def wait_for_fix(minutes: int) -> str:
@@ -851,16 +880,26 @@ def cleanup(a, out: Path, since: str, work, user_id, key_id, paused: bool):
             logs[name] = n
     if work:
         step("load host", lambda: fetch_and_clean_load_host(a.load_host, work, out))
-    if paused or user_id:
+    # Idempotent: brings back a container our kill (or a failed restart) left
+    # stopped. Down means no rpc step can work; its boot resumes the queues.
+    up = step("start staging", lambda: start_container() or True)
+    if not up:
+        print(
+            f"[watch] OPERATOR ACTION: {STAGING_APP} on {STAGING_HOST} is down. "
+            f"Run `docker start {STAGING_APP}` (its boot resumes the Oban queues), "
+            f"then delete user {user_id} with Engram.Accounts.Lifecycle.delete_account.",
+            flush=True,
+        )
+    elif paused or user_id:
         try:
             # A restart leaves a container that is still booting (rpc
             # :noconnection) with the queues resumed: wait, re-pause, cancel
             # the user's jobs, then delete, so nothing embeds into the shared
             # Qdrant.
-            up = step("wait rpc", lambda: wait_rpc() or True)
-            if up and paused:
+            rpc_up = step("wait rpc", lambda: wait_rpc() or True)
+            if rpc_up and paused:
                 step("re-pause queues", lambda: pause_qdrant_queues(True))
-            if up and user_id:
+            if rpc_up and user_id:
                 step(
                     "cancel jobs",
                     lambda: print(
@@ -877,12 +916,12 @@ def cleanup(a, out: Path, since: str, work, user_id, key_id, paused: bool):
         finally:
             if paused:  # last, always: never leave staging's queues paused
                 step("resume queues", lambda: pause_qdrant_queues(False))
-    if errors and user_id:
-        print(
-            f"[watch] OPERATOR ACTION: cleanup incomplete; check user {user_id} is deleted "
-            f"and Oban queues {QDRANT_QUEUES} are running on {STAGING_APP}",
-            flush=True,
-        )
+        if errors and user_id:
+            print(
+                f"[watch] OPERATOR ACTION: cleanup incomplete; check user {user_id} is "
+                f"deleted and Oban queues {QDRANT_QUEUES} run on {STAGING_APP}",
+                flush=True,
+            )
     return ev, logs, errors
 
 
