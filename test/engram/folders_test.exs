@@ -423,6 +423,12 @@ defmodule Engram.FoldersTest do
     } do
       for i <- 1..30, do: put_att(user, vault, "Docs/f#{i}.png")
 
+      # Warm the data_migrations caches (verified_until, Keys) with a throwaway
+      # rename: cold, they add 3 statements, and whether they are cold depends
+      # on which test ran first (seed), not on the code under test.
+      put_att(user, vault, "Warm/f.png")
+      assert {:ok, %{attachments: 1}} = Folders.rename(user, vault, "Warm", "Warmed")
+
       {{:ok, %{attachments: 30}}, queries} =
         Engram.QueryRecorder.record(fn -> Folders.rename(user, vault, "Docs", "Archive") end)
 
@@ -433,7 +439,8 @@ defmodule Engram.FoldersTest do
              "the rename transaction ran #{largest} statements for 30 attachments\n" <>
                Engram.QueryRecorder.format(queries)
 
-      assert att_paths(user, vault) == Enum.sort(for i <- 1..30, do: "Archive/f#{i}.png")
+      assert att_paths(user, vault) ==
+               Enum.sort(["Warmed/f.png" | for(i <- 1..30, do: "Archive/f#{i}.png")])
     end
 
     # ~7,500 attachments scaled down: 75 rows in chunks of 10 is the same

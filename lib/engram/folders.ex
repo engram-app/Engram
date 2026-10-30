@@ -114,7 +114,8 @@ defmodule Engram.Folders do
 
   @doc "The Qdrant condition for a folder and its whole subtree (`descendant_ids/2`)."
   @spec subtree_filter(map(), Ecto.UUID.t()) ::
-          {:ok, map()} | {:error, :folder_subtree_too_large | term()}
+          {:ok, Qdrant.key_condition() | %{should: [Qdrant.key_condition()]}}
+          | {:error, :folder_subtree_too_large | term()}
   def subtree_filter(vault, root_id) do
     with {:ok, ids} <- descendant_ids(vault, root_id),
          do: {:ok, Qdrant.match_filter(:folder, ids)}

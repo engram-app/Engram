@@ -42,7 +42,7 @@ defmodule Engram.Indexing.PayloadV6 do
   def version, do: ServiceConfig.get(:payload_version, @version)
 
   @doc "The version of a note whose stamp is NULL: the shape before the stamp existed."
-  @spec baseline() :: pos_integer()
+  @spec baseline() :: 5
   def baseline, do: @baseline
 
   @doc "The v6 payload for a note and its extracted fields."
