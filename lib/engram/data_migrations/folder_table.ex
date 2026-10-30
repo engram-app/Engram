@@ -2,7 +2,7 @@ defmodule Engram.DataMigrations.FolderTable do
   @moduledoc """
   Fills the `folders` table and `folder_ref_id` for rows written before the
   `notes_set_folder_ref` trigger and folder rows existed (migrations
-  20261029000000..600). Every later note write resolves its own folder in
+  20261029000000..800). Every later note write resolves its own folder in
   the database, so this only catches up and heals what a previous-release
   writer left behind (re-verifies daily).
 

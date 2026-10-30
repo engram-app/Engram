@@ -112,6 +112,16 @@ defmodule Engram.Folders.FoldersTableTest do
     end
   end
 
+  describe "folders constraints" do
+    test "a folder cannot be its own parent", %{user: u, vault: v, fk: fk} do
+      id = folder!(u, v, hmac(fk, "self"))
+
+      assert_raise Postgrex.Error, ~r/folders_not_own_parent/, fn ->
+        Repo.query!("UPDATE folders SET parent_id = id WHERE id = $1", [dump(id)])
+      end
+    end
+  end
+
   describe "folder_ref_id" do
     test "exists on notes and attachments, nullable, keys valid, indexes valid" do
       assert %{rows: [["attachments", "uuid", "YES", nil], ["notes", "uuid", "YES", nil]]} =
@@ -130,6 +140,15 @@ defmodule Engram.Folders.FoldersTableTest do
       assert %{rows: [[true], [true]]} =
                Repo.query!("""
                SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+               WHERE c.relname IN ('notes_folder_ref', 'attachments_folder_ref')
+               """)
+    end
+
+    test "the folder_ref_id indexes are not partial (the FK SET NULL action has no deleted_at predicate)" do
+      assert %{rows: [[nil], [nil]]} =
+               Repo.query!("""
+               SELECT pg_get_expr(i.indpred, i.indrelid) FROM pg_index i
+               JOIN pg_class c ON c.oid = i.indexrelid
                WHERE c.relname IN ('notes_folder_ref', 'attachments_folder_ref')
                """)
     end

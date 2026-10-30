@@ -57,7 +57,8 @@ defmodule Engram.Repo.Migrations.CreateFoldersExpand do
       updated_at timestamptz NOT NULL DEFAULT now(),
       CONSTRAINT folders_vault_id_id_key UNIQUE (vault_id, id),
       CONSTRAINT folders_parent_fk FOREIGN KEY (vault_id, parent_id)
-        REFERENCES folders (vault_id, id)
+        REFERENCES folders (vault_id, id),
+      CONSTRAINT folders_not_own_parent CHECK (parent_id IS DISTINCT FROM id)
     )
     """
 
@@ -70,6 +71,10 @@ defmodule Engram.Repo.Migrations.CreateFoldersExpand do
     CREATE INDEX folders_full_path ON folders (vault_id, full_path_hmac)
       WHERE full_path_hmac IS NOT NULL AND deleted_at IS NULL
     """
+
+    # The per-user scans (data migration, DEK rotation) filter on user_id, like
+    # idx_attachments_user and idx_chunks_user.
+    execute "CREATE INDEX folders_user ON folders (user_id)"
 
     execute "ALTER TABLE folders ENABLE ROW LEVEL SECURITY"
     execute "ALTER TABLE folders FORCE ROW LEVEL SECURITY"

@@ -3,8 +3,9 @@ defmodule Engram.Repo.Migrations.IndexAttachmentsFolderRefExpand do
   @disable_ddl_transaction true
   @disable_migration_lock true
 
-  # The live attachments of a folder: `WHERE vault_id = $1 AND folder_ref_id = $2`
-  # (listing, subtree scans once readers switch).
+  # The attachments of a folder (NOT partial: the FK's ON DELETE SET NULL action runs
+  # `WHERE vault_id = $1 AND folder_ref_id = $2` with no deleted_at predicate, and a
+  # partial index would let it seq-scan the table on every hard-deleted folder row).
   def up do
     # A CONCURRENTLY build that fails leaves an INVALID index under its name;
     # dropping the name first makes the retry rebuild it.
@@ -15,7 +16,6 @@ defmodule Engram.Repo.Migrations.IndexAttachmentsFolderRefExpand do
 
     create index(:attachments, [:vault_id, :folder_ref_id],
              name: :attachments_folder_ref,
-             where: "deleted_at IS NULL",
              concurrently: true
            )
   end
