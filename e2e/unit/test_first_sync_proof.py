@@ -199,3 +199,36 @@ def test_signal_exit_runs_the_load_log_redaction(monkeypatch):
     sim.install_signal_handlers(on_exit=lambda: calls.append("redact"))
     handlers[sim.signal.SIGTERM](sim.signal.SIGTERM, None)
     assert calls == ["redact", ("exit", 128 + sim.signal.SIGTERM)]
+
+
+def test_qdrant_guard_counts_only_the_run_users_points(monkeypatch):
+    """The collection is shared with CI: a global count false-aborts and hides leaks."""
+    import sys
+    import types
+
+    cond = {"key": "u", "match": {"value": "0f3a"}}
+    exprs, posts = [], []
+    monkeypatch.setattr(
+        fsp,
+        "rpc",
+        lambda expr, **kw: exprs.append(expr)
+        or f"qdrant|obsidian_notes_v3|{fsp.json.dumps(cond)}\n",
+    )
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"result": {"count": 3}}
+
+    fake = types.SimpleNamespace(
+        post=lambda url, json, timeout: posts.append((url, json)) or Resp()
+    )
+    monkeypatch.setitem(sys.modules, "requests", fake)
+    scope = fsp.qdrant_scope("0f3a-uuid")
+    assert "match_filter(:user, \"0f3a-uuid\")" in exprs[0]  # the indexed tenant key
+    assert fsp.qdrant_points(scope) == 3
+    url, body = posts[0]
+    assert url.endswith("/collections/obsidian_notes_v3/points/count")
+    assert body == {"filter": {"must": [cond]}, "exact": True}

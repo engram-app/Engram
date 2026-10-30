@@ -67,16 +67,14 @@ LOAD_HOST = "gh-runner"  # the isolated CI runner VM (docs/context/runner-vm-set
 PREFIX = "fsproof"
 PLUGIN_REPO = "https://github.com/engram-app/Engram-obsidian.git"
 NPM_MIRROR = "http://10.0.20.214:4873"
-QDRANT_COLLECTION_URL = (
-    "http://10.0.20.201:6333/collections/obsidian_notes"  # staging's
-)
+QDRANT_URL = "http://10.0.20.201:6333"  # staging's
 # Queues whose workers write to Qdrant (EmbedNote, RefreshKeywordVectors,
 # RepathNoteIndex on :embed; ExtractNoteLinks, DeleteNoteIndex on :indexing).
 # Staging shares that Qdrant with CI (Engram#2318), so they stay paused for the
 # whole run. Oban keeps pauses in memory: every container start resumes them,
-# so the watcher re-pauses after each start it sees.
+# so the watcher re-pauses after each start it sees. Any point the run user
+# owns means a write got through, and aborts the run.
 QDRANT_QUEUES = ("embed", "indexing")
-QDRANT_POINT_SLACK = 50  # other staging users' writes; anything more aborts
 FIX_PR = 2308
 PROD_WEB_TASK_MIB = 2048  # engram-infra main/envs/prod/ecs.tf, web memory_mib
 
@@ -470,12 +468,33 @@ def cancel_user_jobs(user_id: str) -> str:
     return rpc_field(out, "cancelled")[0]
 
 
-def qdrant_points() -> int:
+def qdrant_scope(user_id: str) -> tuple[str, dict]:
+    """(count URL, filter) for the run user's points only: the collection is
+    shared with CI, so its total moves under us. The backend names the
+    collection and builds the filter (`Qdrant.match_filter/2`, the indexed
+    tenant key in whichever payload format staging writes), so no key name is
+    guessed here (docs/context/qdrant-strict-mode-unindexed-filter.md)."""
+    col, *cond = rpc_field(
+        rpc(
+            f'''
+            alias Engram.Vector.Qdrant
+            IO.puts("qdrant|" <> Qdrant.collection_name() <> "|" <> Jason.encode!(Qdrant.match_filter(:user, "{user_id}")))
+            '''
+        ),
+        "qdrant",
+    )
+    return f"{QDRANT_URL}/collections/{col}/points/count", {
+        "must": [json.loads("|".join(cond))]
+    }
+
+
+def qdrant_points(scope: tuple[str, dict]) -> int:
     import requests
 
-    return requests.get(QDRANT_COLLECTION_URL, timeout=10).json()["result"][
-        "points_count"
-    ]
+    url, flt = scope
+    r = requests.post(url, json={"filter": flt, "exact": True}, timeout=10)
+    r.raise_for_status()
+    return r.json()["result"]["count"]
 
 
 def find_vault(run_id: str) -> str | None:
@@ -667,9 +686,9 @@ def cmd_watch(a) -> int:
     try:
         pause_qdrant_queues(True)
         paused = True
-        q0 = qdrant_points()
         started_at = sample(None).get("started_at")
         user_id = create_user(run_id)
+        scope = qdrant_scope(user_id)
         if grant_overrides(run_id) != len(OVERRIDES):
             raise RuntimeError("limit grant did not land")
         key, key_id = mint_key(user_id)
@@ -690,7 +709,7 @@ def cmd_watch(a) -> int:
                 time.sleep(a.interval)
                 continue
             try:
-                s["qdrant_points"] = qdrant_points()
+                s["qdrant_points"] = qdrant_points(scope)
             except (
                 OSError,
                 KeyError,
@@ -699,9 +718,9 @@ def cmd_watch(a) -> int:
                 s["qdrant_err"] = str(e)[:120]
             with open(samples, "a") as f:
                 f.write(json.dumps(s) + "\n")
-            if s.get("qdrant_points", q0) > q0 + QDRANT_POINT_SLACK:
+            if s.get("qdrant_points", 0) > 0:
                 raise RuntimeError(
-                    f"Qdrant points rose {q0} -> {s['qdrant_points']}; aborting"
+                    f"the run user has {s['qdrant_points']} Qdrant points; aborting"
                 )
             if s.get("started_at") and s["started_at"] != started_at:
                 started_at = s["started_at"]
