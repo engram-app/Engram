@@ -419,6 +419,10 @@ Production (Oban worker — preferred for long rotations that must survive node 
 
 Worker uniqueness on `[:user_id]` collapses duplicate enqueues to the same job — safe to enqueue from multiple operator scripts without coordinating.
 
+### Folder rows
+
+`folders` (`Engram.Folders.Rows`) holds one encrypted segment name per folder (AAD `folders\0name\0<row id>`) plus `name_hmac` and `full_path_hmac` (equal to `notes.folder_hmac`). The rotation rewraps the names and recomputes both HMACs in one transaction per user (`sweep_folders/5`: the path HMAC needs the ancestors' plaintext, so it reads every folder of the user once). It runs BEFORE the notes sweep: rewriting a note's `folder_hmac` fires `notes_set_folder_ref`, which resolves the folder by the new `full_path_hmac`; folders left on the old hash would null every `folder_ref_id`. Not touched by the other sweeps, with reasons: master-key rotation and provider migration rewrap only `users.encrypted_dek`; `ReencodeEnvelopes` handles compressible columns only (folder names are not in its policy); `AadRebind` handles legacy rows (`dek_version` 1) and a folder row is never written legacy; the account export writes note content only; vault purge and account delete remove folder rows by the `vault_id` cascade (notes and attachments are deleted first, so the `ON DELETE SET NULL` lookups, served by the vault-leading indexes, find nothing).
+
 ### Expected duration
 
 - 1k notes: ~10s
