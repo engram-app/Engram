@@ -100,6 +100,65 @@ defmodule Engram.NotesVaultScanTest do
       put!(u, v, "Work/B.md", "b")
       assert {:ok, [%{folder: "Work", count: 2}]} = Notes.list_folders_with_counts(u, v)
     end
+
+    defp refer!(note_id, ref) do
+      Repo.query!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [
+        Ecto.UUID.dump!(note_id),
+        Ecto.UUID.dump!(ref)
+      ])
+    end
+
+    defp delete_folder_row!(id) do
+      Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(id)])
+    end
+
+    # Every row kind the count distinguishes: a note in a live folder row,
+    # one in a nested live row, notes whose reference names a DELETED row
+    # (counted by their folder hash, two different dead rows under one hash
+    # summed), a root note, a soft-deleted note, and an empty marker.
+    test "counts live, nested, dead-ref, root and marker rows", %{user: u, vault: v} do
+      put!(u, v, "Live/a.md", "a")
+      put!(u, v, "Live/Deep/b.md", "b")
+      d1 = put!(u, v, "Dead/c.md", "c")
+      d2 = put!(u, v, "Dead/d.md", "d")
+      put!(u, v, "root.md", "r")
+      put!(u, v, "Live/gone.md", "g")
+      :ok = Notes.delete_note(u, v, "Live/gone.md")
+      {:ok, _} = Notes.create_folder_markers(u, v, ["Empty"])
+
+      dead = Engram.FolderRows.ref("notes", d1.id)
+      other_dead = Engram.FolderRows.insert!(u, v, :crypto.strong_rand_bytes(32))
+      refer!(d2.id, other_dead)
+      delete_folder_row!(dead)
+      delete_folder_row!(other_dead)
+
+      counts =
+        Repo.with_tenant!(u.id, fn -> Notes.raw_folder_count_rows(u, v) end)
+        |> Notes.decrypt_folder_count_rows(elem(Engram.Crypto.get_dek(u), 1))
+
+      assert Map.new(counts, &{&1.folder, &1.count}) == %{
+               "" => 1,
+               "Live" => 1,
+               "Live/Deep" => 1,
+               "Dead" => 2,
+               "Empty" => 0
+             }
+    end
+
+    # R5: the old read scanned the vault's notes twice (by reference, then
+    # the unreferenced rest), each with a correlated live-folder probe; the
+    # by-reference half became a nested loop over every folder row (231 ms on
+    # a 13k-folder staging vault). One grouped scan, liveness decided from the
+    # folder rows already loaded.
+    test "reads the vault's notes once", %{user: u, vault: v} do
+      put!(u, v, "Work/A.md", "a")
+      put!(u, v, "root.md", "r")
+
+      {_, reads} =
+        notes_reads(fn -> Repo.with_tenant!(u.id, fn -> Notes.raw_folder_count_rows(u, v) end) end)
+
+      assert length(reads) == 1, "notes reads:\n#{Enum.join(reads, "\n")}"
+    end
   end
 
   describe "folder cascade" do
