@@ -2821,11 +2821,7 @@ describe("useFolderNotes", () => {
 		await waitFor(() => expect(result.current.isSuccess).toBe(true));
 		expect(result.current.data?.map((x) => x.id)).toEqual(["a", "b", "c"]);
 		expect(get).toHaveBeenNthCalledWith(1, "/folders/list?folder=Big", expect.anything());
-		expect(get).toHaveBeenNthCalledWith(
-			2,
-			"/folders/list?folder=Big&cursor=c1",
-			expect.anything(),
-		);
+		expect(get).toHaveBeenNthCalledWith(2, "/folders/list?folder=Big&cursor=c1", expect.anything());
 	});
 
 	it("restores title order across pages (pages arrive id-ordered)", async () => {
@@ -2858,6 +2854,8 @@ describe("useFolderNotes", () => {
 			.mockResolvedValueOnce({ notes: [], next_cursor: null });
 
 		await fetchAllFolderNotes("Big", ctl.signal);
-		for (const call of get.mock.calls) expect(call[1]).toEqual({ signal: ctl.signal });
+		for (const call of get.mock.calls) {
+			expect(call[1]).toEqual({ signal: ctl.signal });
+		}
 	});
 });

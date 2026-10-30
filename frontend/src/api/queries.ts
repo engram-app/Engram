@@ -86,38 +86,6 @@ const selectFolders = (tree: VaultTree): Folder[] =>
 
 const selectNotes = (data: { notes: NoteSummary[] }) => data.notes;
 
-// `/folders/list` returns one page (500 notes by default, ordered by id) and a
-// `next_cursor` until the last. Follow it so a big folder still shows every
-// note, then restore the title order the server used to return in one piece.
-// The bounds are a tripwire for a server bug (a repeated cursor would loop
-// forever): 7.4k notes, the largest folder, is 15 pages.
-const MAX_FOLDER_NOTE_PAGES = 100;
-
-export async function fetchAllFolderNotes(
-	folder: string,
-	signal?: AbortSignal,
-): Promise<{ notes: NoteSummary[] }> {
-	const base = `/folders/list?folder=${encodeURIComponent(folder)}`;
-	const notes: NoteSummary[] = [];
-	const seen = new Set<string>();
-	let cursor: string | null = null;
-	for (let pages = 0; pages < MAX_FOLDER_NOTE_PAGES; pages++) {
-		const url: string = cursor ? `${base}&cursor=${encodeURIComponent(cursor)}` : base;
-		const page: { notes: NoteSummary[]; next_cursor?: string | null } = await api.get(url, {
-			signal,
-		});
-		notes.push(...page.notes);
-		cursor = page.next_cursor ?? null;
-		if (!cursor) {
-			notes.sort((a, b) => (a.title < b.title ? -1 : a.title > b.title ? 1 : 0));
-			return { notes };
-		}
-		if (seen.has(cursor)) throw new Error("folder listing repeated a cursor");
-		seen.add(cursor);
-	}
-	throw new Error(`folder listing exceeded ${MAX_FOLDER_NOTE_PAGES} pages`);
-}
-
 const selectAttachments = (tree: VaultTree): AttachmentSummary[] => tree.attachments;
 
 // Every note in the vault, in the shape list consumers render. The sidebar
@@ -2811,4 +2779,37 @@ export function useBatchDeleteAttachments() {
 			}
 		},
 	});
+}
+
+// `/folders/list` returns one page (500 notes by default, ordered by id) and a
+// `next_cursor` until the last. Follow it so a big folder still shows every
+// note, then restore the title order the server used to return in one piece.
+// The bounds are a tripwire for a server bug (a repeated cursor would loop
+// forever): 7.4k notes, the largest folder, is 15 pages.
+export async function fetchAllFolderNotes(
+	folder: string,
+	signal?: AbortSignal,
+): Promise<{ notes: NoteSummary[] }> {
+	const MAX_FOLDER_NOTE_PAGES = 100;
+	const base = `/folders/list?folder=${encodeURIComponent(folder)}`;
+	const notes: NoteSummary[] = [];
+	const seen = new Set<string>();
+	let cursor: string | null = null;
+	for (let pages = 0; pages < MAX_FOLDER_NOTE_PAGES; pages++) {
+		const url: string = cursor ? `${base}&cursor=${encodeURIComponent(cursor)}` : base;
+		const page: { notes: NoteSummary[]; next_cursor?: string | null } = await api.get(url, {
+			signal,
+		});
+		notes.push(...page.notes);
+		cursor = page.next_cursor ?? null;
+		if (!cursor) {
+			notes.sort((a, b) => (a.title < b.title ? -1 : a.title > b.title ? 1 : 0));
+			return { notes };
+		}
+		if (seen.has(cursor)) {
+			throw new Error("folder listing repeated a cursor");
+		}
+		seen.add(cursor);
+	}
+	throw new Error(`folder listing exceeded ${MAX_FOLDER_NOTE_PAGES} pages`);
 }
