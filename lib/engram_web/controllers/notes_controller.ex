@@ -47,7 +47,7 @@ defmodule EngramWeb.NotesController do
       user = conn.assigns.current_user
       vault = conn.assigns.current_vault
       actor = EngramWeb.WriteActor.for_conn(conn)
-      surface = EngramWeb.WriteActor.surface(conn)
+      surface = EngramWeb.RequestMeta.surface(conn.assigns)
 
       # One transaction: the write, its job inserts and the response's links
       # read. Rendered inside it, sent after it commits.
@@ -176,7 +176,7 @@ defmodule EngramWeb.NotesController do
                  "mtime" => System.os_time(:second) * 1.0
                },
                actor: actor,
-               surface: EngramWeb.WriteActor.surface(conn)
+               surface: EngramWeb.RequestMeta.surface(conn.assigns)
              )
              |> render_in_txn(user)}
 

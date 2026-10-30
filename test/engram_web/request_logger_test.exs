@@ -229,6 +229,27 @@ defmodule EngramWeb.RequestLoggerTest do
     assert event.meta[:route] == nil
   end
 
+  # A pipeline plug that halts (RequireOnboarding's 403) runs before any
+  # controller, so `phoenix_controller` is never set and the 403 used to log
+  # with route nil, indistinguishable from every other 403.
+  test "a request halted in a router pipeline still carries its route" do
+    conn = %Plug.Conn{
+      method: "GET",
+      path_info: ["api", "vault", "tree"],
+      request_path: "/api/vault/tree",
+      query_string: "",
+      status: 403,
+      private: %{phoenix_router: EngramWeb.Router}
+    }
+
+    {_, events} =
+      LogCapture.with_events(fn ->
+        :telemetry.execute([:phoenix, :endpoint, :stop], %{duration: 100_000}, %{conn: conn})
+      end)
+
+    assert find_request_event(events).meta[:route] == "EngramWeb.VaultTreeController#show"
+  end
+
   test "escalates a 5xx response to :error level (a 500 flood is visible to level alerts)" do
     conn = %Plug.Conn{method: "GET", request_path: "/api/notes", query_string: "", status: 500}
 

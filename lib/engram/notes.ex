@@ -893,7 +893,7 @@ defmodule Engram.Notes do
       default, so a new caller cannot silently file its edits under another
       writer's version.
     * `surface:` the analytics surface of a `"sync"` write (`"web"` or
-      `"obsidian_sync"`, from `EngramWeb.WriteActor.surface/1`). Other actors
+      `"obsidian_sync"`, from `EngramWeb.RequestMeta.surface/1`). Other actors
       imply it; see `created_surface/1`.
     * `announce_vault_populated: false` — suppress the `vault_populated`
       broadcast for a write the SERVER originated. See the call site; the
