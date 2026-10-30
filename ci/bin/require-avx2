@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Fail fast on a runner whose CPU has no AVX2. The tmpfs Qdrant
+# (ci/compose.qdrant.yml) uses binary quantization, which SIGILLs without
+# AVX2 and surfaces only as a misleading "socket closed" much later.
+grep -qw avx2 /proc/cpuinfo || { echo "::error::runner $RUNNER_NAME has no AVX2; tmpfs Qdrant would SIGILL (docs/context/local-qdrant-sigill-no-avx2.md)"; exit 1; }

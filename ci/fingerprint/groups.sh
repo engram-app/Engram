@@ -26,7 +26,7 @@ group_paths() {
     # rel/ is COPY'd into the release image (Dockerfile `COPY rel rel`: env.sh.eex
     # cluster gate + RELEASE_NODE). ci/compose*.yml drive every e2e/storage stack.
     # Both were in BACKEND_HASH; dropping them lets a stack/release-env change skip.
-    docker-image) echo "Dockerfile entrypoint.sh .dockerignore rel ci/compose.yml ci/compose.local.yml ci/compose.database.yml" ;;
+    docker-image) echo "Dockerfile entrypoint.sh .dockerignore rel ci/compose.yml ci/compose.local.yml ci/compose.database.yml ci/compose.qdrant.yml" ;;
     # .dialyzer_ignore.exs gates the lint job's dialyzer step (a fatal check).
     lint-config) echo ".credo.exs .sobelow-conf .sobelow-skips .formatter.exs .dialyzer_ignore.exs mcp-tools.json" ;;
     # The CI logic itself: a change to the workflow or the fingerprint scripts
