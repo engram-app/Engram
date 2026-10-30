@@ -23,6 +23,8 @@ defmodule Engram.Folders.Folder do
   def name_hmac(filter_key, segment),
     do: Engram.Crypto.hmac_field(filter_key, @name_domain <> segment)
 
+  @type t :: %__MODULE__{}
+
   schema "folders" do
     field :user_id, Ecto.UUID
     field :vault_id, Ecto.UUID

@@ -368,7 +368,7 @@ defmodule Engram.Folders.Rows do
   first, as `Folder` structs (names still encrypted). The recursive walk is
   over folder rows only, so its cost is the number of folders, never notes.
   """
-  @spec subtree(map(), Ecto.UUID.t(), [String.t()]) :: [%Folder{}]
+  @spec subtree(map(), Ecto.UUID.t(), [String.t()]) :: [Folder.t()]
   def subtree(user, vault_id, folders) do
     case Crypto.dek_filter_key(user) do
       {:ok, fk} ->
