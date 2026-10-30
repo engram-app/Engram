@@ -4,6 +4,7 @@ defmodule Engram.OnboardingTest do
   alias Engram.LegalFixtures
   alias Engram.Onboarding
   alias Engram.Onboarding.Agreement
+  alias Engram.Test.LogCapture
 
   describe "accept_terms/3" do
     test "inserts an agreement row for the user and version" do
@@ -886,7 +887,7 @@ defmodule Engram.OnboardingTest do
       on_exit(fn -> Logger.configure(level: previous_level) end)
 
       {_, events} =
-        Engram.Test.LogCapture.with_events(fn ->
+        LogCapture.with_events(fn ->
           {:ok, _} =
             Engram.Billing.upsert_from_paddle_event(%{
               "event_type" => "subscription.created",
@@ -1711,18 +1712,53 @@ defmodule Engram.OnboardingTest do
       {:ok, _} = Engram.Vaults.delete_vault(user, vault.id)
 
       {_, events} =
-        Engram.Test.LogCapture.with_events(fn ->
+        LogCapture.with_events(fn ->
           {:ok, _} = Engram.Vaults.restore_vault(user, vault.id)
         end)
 
-      assert [event] = Enum.filter(events, &gate_opened?/1)
+      assert [event] = Enum.filter(events, &gate_opened_line?/1)
       assert event.meta[:trigger] == "vault_restore"
     end
 
-    defp gate_opened?(%{msg: {:string, s}}),
-      do: IO.iodata_to_binary(s) == "onboarding gate opened"
+    # The gate reads are observability only: one that raises must neither
+    # block the write nor turn a committed write into an error.
+    test "a gate read that raises before the mutation passes its result through" do
+      # Not a UUID: the user lookup raises Ecto.Query.CastError.
+      {result, events} =
+        LogCapture.with_events(fn ->
+          Onboarding.log_gate_opening("not-a-uuid", "test", fn -> {:ok, :sentinel} end)
+        end)
 
-    defp gate_opened?(_), do: false
+      assert result == {:ok, :sentinel}
+      refute Enum.find(events, &gate_opened_line?/1)
+      assert [warning] = Enum.filter(events, &gate_read_failed?/1)
+      assert warning.meta[:category] == :lifecycle
+      assert warning.meta[:reason] == "Ecto.Query.CastError"
+    end
+
+    test "a gate read that raises after the mutation passes its result through" do
+      user = insert(:user, onboarding_profile: %{})
+
+      {result, events} =
+        LogCapture.with_events(fn ->
+          Onboarding.log_gate_opening(user, "test", fn ->
+            # A row the status read cannot handle: the after-read raises.
+            Engram.Cache.put(:user, user.id, :not_a_user)
+            {:ok, :sentinel}
+          end)
+        end)
+
+      Engram.Cache.evict(:user, user.id)
+      assert result == {:ok, :sentinel}
+      refute Enum.find(events, &gate_opened_line?/1)
+      assert [warning] = Enum.filter(events, &gate_read_failed?/1)
+      assert warning.meta[:user_id] == user.id
+    end
+
+    defp gate_read_failed?(%{msg: {:string, s}}),
+      do: IO.iodata_to_binary(s) == "onboarding gate read failed"
+
+    defp gate_read_failed?(_), do: false
   end
 
   defp gate_opened_line?(%{msg: {:string, s}}),
