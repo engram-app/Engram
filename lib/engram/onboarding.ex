@@ -414,10 +414,11 @@ defmodule Engram.Onboarding do
 
       try do
         user_id = if is_binary(user), do: user, else: user.id
-        before = gate_open?(user_id)
+        before = safe_gate_open?(user_id)
         result = fun.()
 
-        if before == false and gate_open?(user_id) do
+        # `before` unknown (nil) skips the after-read: no line either way.
+        if before == false and safe_gate_open?(user_id) == true do
           Logger.info(
             "onboarding gate opened",
             Metadata.with_category(:info, :lifecycle, user_id: user_id, trigger: trigger)
@@ -429,6 +430,27 @@ defmodule Engram.Onboarding do
         Process.delete(@gate_opening_key)
       end
     end
+  end
+
+  # Not error swallowing: only this observability read is fenced, the
+  # wrapped write's own errors pass through `log_gate_opening/3` untouched.
+  # A raise here must neither block the write nor turn a committed one into
+  # an error (a vault-register 500 skips the welcome note; Paddle retries).
+  # Unknown (nil) never counts as an opening. The module name only: an
+  # exception's message can carry row data.
+  defp safe_gate_open?(user_id) do
+    gate_open?(user_id)
+  rescue
+    error ->
+      Logger.warning(
+        "onboarding gate read failed",
+        Metadata.with_category(:warning, :lifecycle,
+          user_id: user_id,
+          reason: inspect(error.__struct__)
+        )
+      )
+
+      nil
   end
 
   # Fresh row, for the same reason `gate/2` re-reads it: `status/1` reads
