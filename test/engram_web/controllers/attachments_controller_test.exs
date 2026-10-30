@@ -388,6 +388,82 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
       assert json_response(conn, 401)
     end
+
+    # #2163: an upload that declares the content_hash it last read gets
+    # compare-and-swap semantics, as POST /notes does with `base_hash`.
+    defp upload_hash(conn, path, bytes, extra \\ %{}) do
+      conn
+      |> post(
+        "/api/attachments",
+        Map.merge(%{path: path, content_base64: Base.encode64(bytes), mtime: 1.0}, extra)
+      )
+      |> json_response(200)
+      |> get_in(["attachment", "content_hash"])
+    end
+
+    test "stale base_hash returns 409 with the current hash and keeps the bytes", %{
+      conn: conn,
+      user: user
+    } do
+      h1 = upload_hash(conn, "doc.png", "v1 bytes")
+      h2 = upload_hash(conn, "doc.png", "v2 bytes")
+      used_before = elem(Attachments.storage_usage(user), 1).used_bytes
+
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+      test_pid = self()
+
+      Mox.stub(Engram.MockStorage, :put, fn key, bin, opts ->
+        send(test_pid, {:stored, key})
+        Engram.Storage.InMemory.put(key, bin, opts)
+      end)
+
+      body =
+        conn
+        |> post("/api/attachments", %{
+          path: "doc.png",
+          content_base64: Base.encode64("v3 bytes"),
+          mtime: 1.0,
+          base_hash: h1
+        })
+        |> json_response(409)
+
+      assert body["error"] == "version_conflict"
+      assert body["server_attachment"]["content_hash"] == h2
+      assert body["server_attachment"]["path"] == "doc.png"
+
+      # The blob PUT before the lock is deleted on the refusal, and the
+      # refused write is not billed against the quota.
+      assert_received {:stored, fresh_key}
+      refute Engram.Storage.InMemory.exists?(fresh_key)
+      assert elem(Attachments.storage_usage(user), 1).used_bytes == used_before
+
+      got = conn |> get("/api/attachments/doc.png") |> json_response(200)
+      assert Base.decode64!(got["content_base64"]) == "v2 bytes"
+    end
+
+    test "a matching base_hash overwrites", %{conn: conn} do
+      h1 = upload_hash(conn, "doc.png", "v1 bytes")
+      h2 = upload_hash(conn, "doc.png", "v2 bytes", %{base_hash: h1})
+
+      refute h2 == h1
+      got = conn |> get("/api/attachments/doc.png") |> json_response(200)
+      assert Base.decode64!(got["content_base64"]) == "v2 bytes"
+    end
+
+    test "no base_hash still overwrites", %{conn: conn} do
+      _ = upload_hash(conn, "doc.png", "v1 bytes")
+      _ = upload_hash(conn, "doc.png", "v2 bytes")
+
+      got = conn |> get("/api/attachments/doc.png") |> json_response(200)
+      assert Base.decode64!(got["content_base64"]) == "v2 bytes"
+    end
+
+    test "base_hash on a path with no row creates it", %{conn: conn} do
+      assert is_binary(upload_hash(conn, "fresh.png", "v1 bytes", %{base_hash: "deadbeef"}))
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -399,6 +475,29 @@ defmodule EngramWeb.AttachmentsControllerTest do
       conn
       |> put_req_header("content-type", "application/octet-stream")
       |> post("/api/attachments?" <> URI.encode_query(query), body)
+    end
+
+    test "a stale base_hash query param returns 409 and keeps the bytes", %{conn: conn} do
+      h1 =
+        conn
+        |> raw_post(%{path: "raw.png", mtime: "1"}, "v1 bytes")
+        |> json_response(200)
+        |> get_in(["attachment", "content_hash"])
+
+      h2 =
+        conn
+        |> raw_post(%{path: "raw.png", mtime: "1"}, "v2 bytes")
+        |> json_response(200)
+        |> get_in(["attachment", "content_hash"])
+
+      body =
+        conn
+        |> raw_post(%{path: "raw.png", mtime: "1", base_hash: h1}, "v3 bytes")
+        |> json_response(409)
+
+      assert body["error"] == "version_conflict"
+      assert body["server_attachment"]["content_hash"] == h2
+      assert conn |> get("/api/attachments/raw.png?raw=1") |> response(200) == "v2 bytes"
     end
 
     test "uploads raw bytes with metadata in the query string", %{conn: conn} do

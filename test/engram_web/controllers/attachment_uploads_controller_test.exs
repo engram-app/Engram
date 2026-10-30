@@ -254,6 +254,62 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
     refute InMemory.exists?(v1_key)
   end
 
+  # #2163: complete takes the same compare-and-swap `base_hash` as
+  # POST /attachments. A stale one refuses but keeps the assembled session,
+  # so a retry with the current hash commits it without re-uploading.
+  test "complete with a stale base_hash is 409, then completes with the current hash", %{
+    conn: conn
+  } do
+    hash = fn bytes ->
+      conn
+      |> post("/api/attachments", %{path: "photos/a.png", content_base64: Base.encode64(bytes)})
+      |> json_response(200)
+      |> get_in(["attachment", "content_hash"])
+    end
+
+    h1 = hash.("v1")
+    h2 = hash.("v2")
+
+    bytes = :crypto.strong_rand_bytes(1000)
+    %{"upload_id" => id} = start!(conn, "photos/a.png", byte_size(bytes))
+    assert conn |> put_part(id, 1, bytes) |> json_response(200)
+    key = session(id).storage_key
+
+    body =
+      conn
+      |> post("/api/attachment-uploads/#{id}/complete", %{base_hash: h1})
+      |> json_response(409)
+
+    assert body["error"] == "version_conflict"
+    assert body["server_attachment"]["content_hash"] == h2
+    assert conn |> get("/api/attachments/photos/a.png?raw=1") |> response(200) == "v2"
+    assert InMemory.exists?(key)
+
+    assert conn
+           |> post("/api/attachment-uploads/#{id}/complete", %{base_hash: h2})
+           |> json_response(200)
+
+    assert conn |> get("/api/attachments/photos/a.png?raw=1") |> response(200) == bytes
+  end
+
+  test "complete with a matching base_hash commits", %{conn: conn} do
+    h1 =
+      conn
+      |> post("/api/attachments", %{path: "photos/a.png", content_base64: Base.encode64("v1")})
+      |> json_response(200)
+      |> get_in(["attachment", "content_hash"])
+
+    bytes = :crypto.strong_rand_bytes(1000)
+    %{"upload_id" => id} = start!(conn, "photos/a.png", byte_size(bytes))
+    assert conn |> put_part(id, 1, bytes) |> json_response(200)
+
+    assert conn
+           |> post("/api/attachment-uploads/#{id}/complete", %{base_hash: h1})
+           |> json_response(200)
+
+    assert conn |> get("/api/attachments/photos/a.png?raw=1") |> response(200) == bytes
+  end
+
   defp session_hmac(user, path) do
     {:ok, filter_key} = Crypto.dek_filter_key(Crypto.fresh_user(user))
     Crypto.hmac_field(filter_key, path)

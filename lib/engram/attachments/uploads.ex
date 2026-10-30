@@ -8,7 +8,7 @@ defmodule Engram.Attachments.Uploads do
   storage, so no plaintext is ever stored. `start/3` counts the user's open
   sessions against the quota at their declared sizes; `complete/3` re-checks
   it against live usage under the same per-path lock single-request uploads
-  take (`Attachments.commit_row/7`).
+  take (`Attachments.commit_row/8`).
 
   The blob key is per upload (`Storage.object_key/3` on the upload id), never
   shared with the row it replaces, so a refused or abandoned upload can be
@@ -276,16 +276,21 @@ defmodule Engram.Attachments.Uploads do
   so a client whose first complete timed out after the commit gets the same
   attachment from a retry. `:not_found` once that attachment was deleted or
   overwritten since.
+
+  `opts[:base_hash]` is the compare-and-swap guard of
+  `Attachments.commit_row/8`: a stale one refuses with `{:stale_base, live}`
+  and keeps the session open, so a retry with the current hash completes it.
   """
-  @spec complete(map(), map(), Ecto.UUID.t()) ::
+  @spec complete(map(), map(), Ecto.UUID.t(), keyword()) ::
           {:ok, Attachment.t()}
           | {:error,
              :not_found
              | {:missing_parts, [pos_integer()]}
              | {:storage_cap_reached, integer(), integer()}
              | :rotation_in_progress
+             | {:stale_base, Attachment.t()}
              | {:storage, term()}}
-  def complete(user, vault, upload_id) do
+  def complete(user, vault, upload_id, opts \\ []) do
     user = Crypto.fresh_user(user)
 
     case fetch(user, vault, upload_id) do
@@ -293,7 +298,7 @@ defmodule Engram.Attachments.Uploads do
         committed(user, vault, up)
 
       {:ok, up} ->
-        with {:error, :not_found} <- complete_session(user, vault, up),
+        with {:error, :not_found} <- complete_session(user, vault, up, opts),
              do: lost_race(user, vault, upload_id)
 
       err ->
@@ -333,17 +338,21 @@ defmodule Engram.Attachments.Uploads do
   @doc false
   # `complete/3` past the fetch. Public so a test can replay a stale session
   # struct, which is what a second concurrent caller holds.
-  @spec complete_session(map(), map(), Upload.t()) ::
+  @spec complete_session(map(), map(), Upload.t(), keyword()) ::
           {:ok, Attachment.t()} | {:error, term()}
-  def complete_session(user, vault, %Upload{} = up) do
+  def complete_session(user, vault, %Upload{} = up, opts \\ []) do
     with [] <- Enum.to_list(1..up.part_count) -- done(up),
          # Early quota refusal: no point assembling and reading back the file.
          :ok <- quota(user, vault, up),
          {:ok, file_key} <- file_key(user, up, up.attachment_id),
          {:ok, up} <- assemble(user, vault, up),
          {:ok, hash} <- content_hash(user, up, file_key) do
-      result = commit(user, vault, up, file_key, hash)
+      result = commit(user, vault, up, file_key, hash, opts)
 
+      # A quota refusal is not retryable with this file: drop it. A stale
+      # base_hash (#2163) keeps the session: it is assembled, so the client
+      # can complete it again with the current hash without re-uploading.
+      # An abandoned one expires like any other open session.
       _ =
         with {:error, {:storage_cap_reached, _, _}} <- result,
              do: drop(user, vault, up)
@@ -474,12 +483,12 @@ defmodule Engram.Attachments.Uploads do
   # finished since rewrapped the session row, not this struct. Refused on the
   # session's DEK version, here (before using the DEK) and again under the
   # locks; the client's retry reads the rewrapped session.
-  defp commit(user, vault, %Upload{} = up, file_key, hash) do
+  defp commit(user, vault, %Upload{} = up, file_key, hash, opts) do
     with :ok <- Attachments.rotation_gate(user, up.dek_version),
          {:ok, dek} <- Crypto.get_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user),
          {:ok, path} <- decrypt_path(up, dek) do
-      write_attachment(user, vault, up, path, {dek, filter_key}, file_key, hash)
+      write_attachment(user, vault, up, path, {dek, filter_key}, file_key, hash, opts)
     end
   end
 
@@ -490,49 +499,58 @@ defmodule Engram.Attachments.Uploads do
     end
   end
 
-  defp write_attachment(user, vault, up, path, {dek, filter_key}, file_key, hash) do
+  defp write_attachment(user, vault, up, path, {dek, filter_key}, file_key, hash, opts) do
     basename_hmac = Crypto.hmac_field(filter_key, Links.basename_key(path))
 
-    Attachments.commit_row(user, vault, path, up.path_hmac, up.size_bytes, up.dek_version, fn
-      existing ->
-        id = commit_id(user, vault, existing, up.attachment_id)
+    Attachments.commit_row(
+      user,
+      vault,
+      path,
+      up.path_hmac,
+      up.size_bytes,
+      up.dek_version,
+      fn
+        existing ->
+          id = commit_id(user, vault, existing, up.attachment_id)
 
-        # Marked completed first, in the same transaction as the row write: a
-        # duplicate concurrent complete (or an abort that got there first)
-        # finds no open session and rolls back.
-        with :ok <- mark_completed(user, vault, up, id) do
-          # A different row won the path since start (a single-request upload,
-          # or the claimed row was deleted): bind the file key to the winner's
-          # id. A 32-byte rewrap, not a re-encrypt.
-          {wrapped, key_nonce} =
-            if id == up.attachment_id,
-              do: {up.wrapped_file_key, up.file_key_nonce},
-              else: SegmentedCipher.wrap_key(file_key, dek, id)
+          # Marked completed first, in the same transaction as the row write: a
+          # duplicate concurrent complete (or an abort that got there first)
+          # finds no open session and rolls back.
+          with :ok <- mark_completed(user, vault, up, id) do
+            # A different row won the path since start (a single-request upload,
+            # or the claimed row was deleted): bind the file key to the winner's
+            # id. A 32-byte rewrap, not a re-encrypt.
+            {wrapped, key_nonce} =
+              if id == up.attachment_id,
+                do: {up.wrapped_file_key, up.file_key_nonce},
+                else: SegmentedCipher.wrap_key(file_key, dek, id)
 
-          {:ok, id,
-           Map.merge(
-             %{
-               content_hash: hash,
-               mime_type: up.mime_type,
-               size_bytes: up.size_bytes,
-               mtime: up.mtime,
-               user_id: user.id,
-               vault_id: vault.id,
-               storage_key: up.storage_key,
-               deleted_at: nil,
-               encryption_version: 2,
-               dek_version: Crypto.row_version_aad_bound(),
-               content_nonce: nil,
-               wrapped_file_key: wrapped,
-               file_key_nonce: key_nonce,
-               upload_id: up.id,
-               segment_size: up.part_size,
-               segment_count: up.part_count
-             },
-             Attachments.path_attrs(dek, id, path, {up.path_hmac, basename_hmac})
-           )}
-        end
-    end)
+            {:ok, id,
+             Map.merge(
+               %{
+                 content_hash: hash,
+                 mime_type: up.mime_type,
+                 size_bytes: up.size_bytes,
+                 mtime: up.mtime,
+                 user_id: user.id,
+                 vault_id: vault.id,
+                 storage_key: up.storage_key,
+                 deleted_at: nil,
+                 encryption_version: 2,
+                 dek_version: Crypto.row_version_aad_bound(),
+                 content_nonce: nil,
+                 wrapped_file_key: wrapped,
+                 file_key_nonce: key_nonce,
+                 upload_id: up.id,
+                 segment_size: up.part_size,
+                 segment_count: up.part_count
+               },
+               Attachments.path_attrs(dek, id, path, {up.path_hmac, basename_hmac})
+             )}
+          end
+      end,
+      opts
+    )
   end
 
   # The live row's id when one holds the path; else the id claimed at start,

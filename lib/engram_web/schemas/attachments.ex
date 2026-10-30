@@ -83,6 +83,20 @@ defmodule EngramWeb.Schemas.AttachmentsResponse do
   })
 end
 
+defmodule EngramWeb.Schemas.AttachmentBaseHash do
+  @moduledoc "Compare-and-swap guard shared by attachment upload and chunked complete."
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "AttachmentBaseHash",
+    type: :string,
+    nullable: true,
+    description:
+      "The content_hash you last read for this attachment. If it changed since, the " <>
+        "write returns 409 `version_conflict` instead of overwriting."
+  })
+end
+
 defmodule EngramWeb.Schemas.UploadAttachmentRequest do
   @moduledoc "Attachments are uploaded as base64 JSON (not multipart)."
   alias OpenApiSpex.Schema
@@ -98,7 +112,8 @@ defmodule EngramWeb.Schemas.UploadAttachmentRequest do
         type: :string,
         nullable: true,
         description: "Detected from path if omitted."
-      }
+      },
+      base_hash: EngramWeb.Schemas.AttachmentBaseHash
     },
     required: [:path, :content_base64],
     example: %{
@@ -303,5 +318,35 @@ defmodule EngramWeb.Schemas.AttachmentUploadMissingParts do
       missing: %Schema{type: :array, items: %Schema{type: :integer}}
     },
     required: [:error, :missing]
+  })
+end
+
+defmodule EngramWeb.Schemas.AttachmentUploadCompleteRequest do
+  @moduledoc "Optional body of a chunked upload complete."
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "AttachmentUploadCompleteRequest",
+    type: :object,
+    properties: %{base_hash: EngramWeb.Schemas.AttachmentBaseHash},
+    example: %{
+      "base_hash" => "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    }
+  })
+end
+
+defmodule EngramWeb.Schemas.AttachmentVersionConflict do
+  @moduledoc "409 body - a stale `base_hash`; carries the live attachment."
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "AttachmentVersionConflict",
+    type: :object,
+    properties: %{
+      error: %Schema{type: :string, example: "version_conflict"},
+      server_attachment: EngramWeb.Schemas.AttachmentMeta
+    },
+    required: [:error, :server_attachment]
   })
 end

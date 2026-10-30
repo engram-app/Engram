@@ -24,6 +24,7 @@ defmodule Engram.Attachments do
   alias Engram.Folders.Rows
   alias Engram.Links
   alias Engram.Logger.Metadata
+  alias Engram.Notes
   alias Engram.Notes.Enqueue
   alias Engram.Notes.Helpers
   alias Engram.Notes.PathSanitizer
@@ -70,7 +71,7 @@ defmodule Engram.Attachments do
          :ok <- MimeWhitelist.check(explicit_mime || MimeWhitelist.detect_mime(path), path),
          :ok <- validate_size(byte_size(plaintext), user),
          {:ok, user} <- Crypto.ensure_user_dek(user),
-         # Before any key is derived: commit_row/7 refuses if a rotation
+         # Before any key is derived: commit_row/8 refuses if a rotation
          # moved the DEK since (`RotationGate.check/2`).
          dek_version = RotationGate.dek_version(user.id),
          {:ok, filter_key} <- Crypto.dek_filter_key(user),
@@ -99,7 +100,7 @@ defmodule Engram.Attachments do
       # Every write stores its ciphertext under a fresh key, never over the
       # live row's blob: this PUT runs before the lock, and a refusal under
       # the lock must leave the live row and its bytes as they were. On
-      # commit the row moves to the new key and commit_row/6 releases the
+      # commit the row moves to the new key and commit_row/8 releases the
       # old blob; on any refusal the new blob is deleted.
       key = Storage.object_key(user.id, vault.id, Ecto.UUID.generate())
 
@@ -129,21 +130,30 @@ defmodule Engram.Attachments do
         end
 
         deleting_blob_on_raise(user, vault, key, fn ->
-          commit_row(user, vault, path, path_hmac, byte_size(plaintext), dek_version, fn
-            %Attachment{id: id} when id != att_id0 ->
-              reprepare.(id)
+          commit_row(
+            user,
+            vault,
+            path,
+            path_hmac,
+            byte_size(plaintext),
+            dek_version,
+            fn
+              %Attachment{id: id} when id != att_id0 ->
+                reprepare.(id)
 
-            %Attachment{} ->
-              {:ok, att_id0, attrs0}
+              %Attachment{} ->
+                {:ok, att_id0, attrs0}
 
-            # The row read before the lock was deleted (or moved) since: its
-            # id stays taken by the tombstone, so a fresh row needs a fresh
-            # id (as `Uploads` does for a claimed id).
-            nil ->
-              if existing0,
-                do: reprepare.(Ecto.UUID.generate()),
-                else: {:ok, att_id0, attrs0}
-          end)
+              # The row read before the lock was deleted (or moved) since: its
+              # id stays taken by the tombstone, so a fresh row needs a fresh
+              # id (as `Uploads` does for a claimed id).
+              nil ->
+                if existing0,
+                  do: reprepare.(Ecto.UUID.generate()),
+                  else: {:ok, att_id0, attrs0}
+            end,
+            Notes.put_base_hash_opt([], attrs)
+          )
         end)
         |> tap(fn
           {:ok, _} -> :ok
@@ -185,6 +195,10 @@ defmodule Engram.Attachments do
   # the path. Lock order is always path then user. Both locks auto-release on
   # commit/rollback, and an `{:error, reason}` from `build` rolls back.
   #
+  # `opts[:base_hash]` (#2163) is the `content_hash` the writer last read, the
+  # same compare-and-swap guard `Notes.upsert_note/4` takes: a live row whose
+  # hash moved since refuses with `{:error, {:stale_base, live_row}}`.
+  #
   # After commit: releases the replaced row's blob when the new write moved
   # the row to a different storage key, then broadcasts the upsert.
   @spec commit_row(
@@ -196,10 +210,11 @@ defmodule Engram.Attachments do
           integer() | nil,
           (Attachment.t() | nil ->
              {:ok, Ecto.UUID.t(), map()}
-             | {:error, term()})
+             | {:error, term()}),
+          keyword()
         ) ::
           {:ok, Attachment.t()} | {:error, term()}
-  def commit_row(user, vault, path, path_hmac, size, dek_version, build) do
+  def commit_row(user, vault, path, path_hmac, size, dek_version, build, opts \\ []) do
     Repo.transaction(fn ->
       :ok = acquire_path_lock(user.id, path_hmac)
       existing = fetch_existing(user, vault.id, path_hmac)
@@ -207,7 +222,8 @@ defmodule Engram.Attachments do
 
       # Under the locks and before anything is written: a row committed after
       # a DEK rotation's sweep went by would stay under the retiring key.
-      with :ok <- rotation_gate(user, dek_version),
+      with :ok <- base_hash_gate(existing, path, opts[:base_hash]),
+           :ok <- rotation_gate(user, dek_version),
            :ok <- validate_storage_cap(user, existing, size),
            {:ok, insert_id, attrs} <- build.(existing),
            {:ok, att} <- write_row(user, existing, insert_id, attrs, path) do
@@ -231,10 +247,33 @@ defmodule Engram.Attachments do
         broadcast_attachment(user.id, vault.id, "upsert", path, att)
         {:ok, att}
 
+      {:error, {:stale_base, live}} = err ->
+        # Distinct greppable key, as `note_stale_base_rejected`.
+        require Logger
+
+        Logger.warning(
+          "attachment_stale_base_rejected",
+          Metadata.with_category(:warning, :sync,
+            user_id: user.id,
+            vault_id: vault.id,
+            attachment_id: live.id
+          )
+        )
+
+        err
+
       {:error, _} = err ->
         err
     end
   end
+
+  # Mirrors the notes stale-base gate (`Notes.do_update_note/6`). No live row
+  # means no check, as for notes; the resurrection risk is #2311.
+  defp base_hash_gate(%Attachment{content_hash: current} = live, path, base)
+       when is_binary(base) and is_binary(current) and current != base,
+       do: {:error, {:stale_base, %{live | path: path}}}
+
+  defp base_hash_gate(_existing, _path, _base), do: :ok
 
   @doc """
   `{:error, :rotation_in_progress}` while a DEK rotation holds the user (read
