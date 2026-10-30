@@ -85,7 +85,7 @@ defmodule Engram.Notes.Enqueue do
   end
 
   defp insert_chunk(chunk, worker_label) do
-    Oban.insert_all(chunk)
+    _inserted = Oban.insert_all(chunk)
     :ok
   rescue
     _first ->
@@ -93,7 +93,7 @@ defmodule Engram.Notes.Enqueue do
   end
 
   defp retry_chunk(chunk, worker_label) do
-    Oban.insert_all(chunk)
+    _inserted = Oban.insert_all(chunk)
     :ok
   rescue
     e ->
