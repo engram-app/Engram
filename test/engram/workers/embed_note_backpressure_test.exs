@@ -171,7 +171,7 @@ defmodule Engram.Workers.EmbedNoteBackpressureTest do
   # A tripped strict breaker (review H2) and a write still queued past its
   # wait (review M2): neither may stamp the note, and neither may re-embed.
   for {label, first_upsert, event} <- [
-        {"a tripped max_points_count breaker",
+        {"a tripped hand-set max_points_count breaker",
          {400,
           ~S|{"status":{"error":"Bad request: Max points count limit of 1500000 reached!"}}|},
          :backpressure},
