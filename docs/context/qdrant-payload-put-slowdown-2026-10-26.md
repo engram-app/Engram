@@ -5,7 +5,8 @@ _Last verified: 2026-10-30_
 ## Status
 PUT mitigated in code (PR 2261, 3d08eab9f). As of 2026-10-30 the remaining
 tail is real and inside Qdrant; cause identified with medium-high
-confidence (see "2026-10-30 findings"). Decision: accept and alert.
+confidence (see "2026-10-30 findings"). Decision (2026-10-30): no alert for
+now; pursue the code/config fixes under "Options" (pending user approval).
 
 ## What This Is
 Client metric `op=set_payload` (`engram_prom_ex_qdrant_request_duration_milliseconds`) rose from ~10ms p95 (before 10-17) to 3-4s hourly p95 on `role=worker` by 10-26.
@@ -55,8 +56,16 @@ Impact: no request path waits on these writes. The payload refresh runs in
 `commit_index` (EmbedNote, RebuildStaleNote) and the repath in
 `RepathNoteIndex`, all Oban jobs.
 
-Options:
-- Accept and alert on the over-500 ms share (chosen).
+Decision (2026-10-30): the user declined an alert on the over-500 ms
+share. No alert for now. Pursue these fixes instead, pending user approval:
+- Floor the fallback `up` payload timestamp to the day, so a same-day body
+  edit leaves the payload unchanged and skips the rewrite (and its
+  copy-on-write move).
+- Merge the set and the follow-up delete into one `POST /points/batch`, so
+  each note costs one request instead of two.
+
+Other options:
+- Alert on the over-500 ms share (declined 2026-10-30).
 - Full upsert from the vector cache instead of `set_payload` (design change).
 - More Qdrant RAM/CPU (costs money).
 - `wait=false` (rejected: reopens the marked-indexed-before-visible race).
