@@ -915,7 +915,7 @@ defmodule EngramWeb.CrdtChannelTest do
 
       parked = CheckpointInterleave.await_parked(:genesis_seed_before_write, socket.channel_pid)
 
-      room = start_racing_room(user, vault, id)
+      room = start_racing_room(id)
       on_exit(fn -> CrdtRegistry.terminate_room(id) end)
       room_ref = Process.monitor(room)
 
@@ -1289,7 +1289,7 @@ defmodule EngramWeb.CrdtChannelTest do
 
       parked = CheckpointInterleave.await_parked(:genesis_seed_before_write, socket.channel_pid)
 
-      room = start_racing_room(user, vault, id)
+      room = start_racing_room(id)
       on_exit(fn -> CrdtRegistry.terminate_room(id) end)
       room_ref = Process.monitor(room)
 
@@ -4101,7 +4101,7 @@ defmodule EngramWeb.CrdtChannelTest do
   # timeout and a lucky after-commit order. As the moduledoc above says, the
   # registry interleaving is the only genuine one here, and a registered pid
   # is exactly what `evict_racing_room/1` looks up and kills.
-  defp start_racing_room(_user, _vault, id) do
+  defp start_racing_room(id) do
     racer = spawn(fn -> Process.sleep(:infinity) end)
     :yes = :global.register_name({:crdt_doc, id}, racer)
     racer

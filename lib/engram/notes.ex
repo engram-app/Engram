@@ -2227,7 +2227,7 @@ defmodule Engram.Notes do
 
         {:inserted, inserted, _crdt} ->
           :ok = discard_job(job)
-          _ = commit_genesis_body(inserted.id, user)
+          _ = if job, do: commit_genesis_body(inserted.id, user)
           {:ok, decrypt_or_raise!(inserted, user), :announce_bodied}
 
         {:raced, existing} ->
