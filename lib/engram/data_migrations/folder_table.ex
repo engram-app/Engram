@@ -78,7 +78,7 @@ defmodule Engram.DataMigrations.FolderTable do
 
     stats =
       Keyword.get_lazy(opts, :user_ids, &TenantScan.user_ids/0)
-      |> Enum.map(&migrate_user(&1, batch))
+      |> Enum.map(&safe_migrate_user(&1, batch))
       |> Enum.reduce(%{changed: 0, blocked: 0}, fn s, acc ->
         %{changed: acc.changed + s.changed, blocked: acc.blocked + s.blocked}
       end)
@@ -89,6 +89,30 @@ defmodule Engram.DataMigrations.FolderTable do
   end
 
   # ---- per user ------------------------------------------------------------
+
+  # One user raising (a unique violation, a decrypt crash, a transaction
+  # timeout) must not stop the users after it, on every pass: it is logged and
+  # counted as blocked, which keeps the ledger open. Its steps are separate
+  # transactions, so what it already wrote stays and the next pass resumes.
+  defp safe_migrate_user(user_id, batch) do
+    migrate_user(user_id, batch)
+  rescue
+    e -> user_failed(user_id, e)
+  catch
+    :exit, reason -> user_failed(user_id, reason)
+  end
+
+  defp user_failed(user_id, reason) do
+    Logger.error(
+      "folder_table: user pass failed",
+      Metadata.with_category(:error, :sync,
+        user_id: user_id,
+        reason: Metadata.safe_reason(reason)
+      )
+    )
+
+    %{changed: 0, blocked: 1}
+  end
 
   defp migrate_user(user_id, batch) do
     with %User{} = user <- Repo.get(User, user_id),
@@ -293,8 +317,8 @@ defmodule Engram.DataMigrations.FolderTable do
   # ---- 1. markers ----------------------------------------------------------
 
   defp markers(ctx, tree) do
-    scope(ctx.user_id, fn repo ->
-      %{rows: rows} =
+    %{rows: rows} =
+      scope(ctx.user_id, fn repo ->
         repo.query!(
           """
           SELECT id, vault_id, dek_version, folder_ciphertext, folder_nonce FROM notes
@@ -302,20 +326,38 @@ defmodule Engram.DataMigrations.FolderTable do
           """,
           [dump(ctx.user_id)]
         )
+      end)
 
-      Enum.reduce(rows, {tree, %{changed: 0, blocked: 0}}, fn [id, vault, dv, ct, nonce],
-                                                              {tree, stats} ->
+    {_, state} =
+      in_chunks(ctx, rows, {tree, %{changed: 0, blocked: 0}}, fn repo,
+                                                                 [id, vault, dv, ct, nonce],
+                                                                 {tree, stats} ->
         case decrypt_folder(ctx, id, dv, ct, nonce) do
           {:ok, ""} ->
-            {tree, stats}
+            {[], {tree, stats}}
 
           {:ok, path} ->
-            {_leaf, {tree, stats}} = ensure_path(repo, ctx, {tree, stats}, vault, path, %{id: id})
-            {tree, stats}
+            {_leaf, state} = ensure_path(repo, ctx, {tree, stats}, vault, path, %{id: id})
+            {[], state}
 
           :error ->
-            {tree, blocked(stats, "marker", id)}
+            {[], {tree, blocked(stats, "marker", id)}}
         end
+      end)
+
+    state
+  end
+
+  # `fun.(repo, item, state)` returns `{outputs, state}`. Items run `batch` to
+  # a transaction, so a user with tens of thousands of folders stays under the
+  # transaction timeout; `ensure_path` is idempotent, so a failed chunk is
+  # simply done again by the next pass.
+  defp in_chunks(ctx, items, state, fun) do
+    items
+    |> Enum.chunk_every(ctx.batch)
+    |> Enum.flat_map_reduce(state, fn chunk, state ->
+      scope(ctx.user_id, fn repo ->
+        Enum.flat_map_reduce(chunk, state, &fun.(repo, &1, &2))
       end)
     end)
   end
@@ -353,13 +395,10 @@ defmodule Engram.DataMigrations.FolderTable do
         end
       end)
 
-    # Create every missing folder in one transaction.
     {leaves, {tree, stats}} =
-      scope(ctx.user_id, fn repo ->
-        Enum.map_reduce(folders, {tree, stats}, fn {vault, hmac, path}, state ->
-          {leaf, state} = ensure_path(repo, ctx, state, vault, path)
-          {{vault, hmac, leaf}, state}
-        end)
+      in_chunks(ctx, folders, {tree, stats}, fn repo, {vault, hmac, path}, state ->
+        {leaf, state} = ensure_path(repo, ctx, state, vault, path)
+        {[{vault, hmac, leaf}], state}
       end)
 
     updated = Enum.reduce(leaves, 0, fn leaf, n -> n + point_notes(ctx, leaf) end)

@@ -184,6 +184,54 @@ defmodule Engram.DataMigrations.FolderTableTest do
         Repo.query!("SELECT count(*)::int FROM attachments WHERE folder_ref_id IS NULL")
     end
 
+    test "creates folders and markers `batch` to a transaction", %{user: u, vault: v} do
+      for i <- 1..5, do: note!(u, v, "F#{i}/N.md")
+      for i <- 1..5, do: {:ok, _} = Notes.create_folder_marker(u, v, "M#{i}")
+      unresolve!()
+
+      {_, queries} =
+        Engram.QueryRecorder.record(fn -> FolderTable.run_pass(batch: 2, user_ids: [u.id]) end)
+
+      inserts =
+        queries
+        |> Engram.QueryRecorder.transactions()
+        |> Enum.map(fn tx -> Enum.count(tx, &(&1 =~ ~r/INSERT INTO folders/i)) end)
+
+      assert Enum.sum(inserts) == 10
+      assert Enum.max(inserts) <= 2
+    end
+
+    test "one user raising does not stop the others, and the pass is not done", %{
+      user: u,
+      vault: v
+    } do
+      bad = insert(:user)
+      {:ok, bad} = Crypto.ensure_user_dek(bad)
+      bad_note = note!(bad, insert(:vault, user: bad), "X/N.md")
+
+      # A folder insert that raises for this user only (the sandbox rolls the DDL back).
+      Repo.query!("""
+      CREATE FUNCTION folder_boom() RETURNS trigger LANGUAGE plpgsql AS
+      $$ BEGIN
+           IF NEW.user_id = '#{bad.id}' THEN RAISE EXCEPTION 'boom'; END IF;
+           RETURN NEW;
+         END $$
+      """)
+
+      Repo.query!(
+        "CREATE TRIGGER folder_boom BEFORE INSERT ON folders FOR EACH ROW EXECUTE FUNCTION folder_boom()"
+      )
+
+      mine = note!(u, v, "A/N.md")
+      unresolve!()
+
+      # The bad user is first: before the fix its raise aborted the pass.
+      assert {:more, stats} = FolderTable.run_pass(user_ids: [bad.id, u.id])
+      assert stats[:blocked] >= 1
+      assert ref("notes", mine.id)
+      assert ref("notes", bad_note.id) == nil
+    end
+
     test "touches nothing of another tenant", %{user: u, vault: v} do
       other = insert(:user)
       {:ok, other} = Crypto.ensure_user_dek(other)
