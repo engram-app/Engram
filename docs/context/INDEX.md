@@ -39,6 +39,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - A web-app rename reverts to its old path, or you are adding a write path that moves a note's row → `docs/context/crdt-create-is-a-rename.md`
 - Who owns note→path identity (`filemeta_v0` map is authoritative; claim before the row moves, outside any transaction) → `docs/context/crdt-identity-authority.md`
 - The per-vault index room (`filemeta_v0`): wire, projection onto `notes.path_*`, why it drains with no off switch → `docs/context/crdt-index-room.md`
+- Web tasks OOM-kill in a loop minutes after start, binary memory jumps to ~1 GB with flat heap (CRDT index room tail replay on bind; do not deploy during a bulk sync) → `docs/context/web-oom-index-room-tail-replay-2026-10-29.md`
 - A CRDT room won't go away, resident rooms climb, or tuning `CRDT_IDLE_EXIT_MS`/`CRDT_MAX_RESIDENT_ROOMS` → `docs/context/crdt-room-lifetime-and-drain.md`
 - Background worker processed stale note content (facade vs `authoritative_content`) → `docs/context/worker-reads-stale-content-facade.md`
 - Worker CPU pegged and "nothing alerted", or assuming a `severity=page` alert woke someone (CloudWatch twin did fire; `page` routes only to Discord) → `docs/context/worker-oom-regex-backtrack-2026-10-03.md`
