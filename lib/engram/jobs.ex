@@ -187,5 +187,8 @@ defmodule Engram.Jobs do
     (base * Integer.pow(2, min(step, 32)))
     |> min(cap)
     |> Oban.Backoff.jitter(mode: :inc, mult: jitter)
+    # Oban specs jitter/2 as number(); it returns an integer for an integer
+    # input, so this is a no-op that keeps our pos_integer() contract honest.
+    |> trunc()
   end
 end
