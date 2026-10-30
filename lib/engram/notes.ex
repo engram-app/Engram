@@ -2453,9 +2453,11 @@ defmodule Engram.Notes do
          folder,
          actor,
          recording,
-         db_opts \\ [],
-         refs \\ nil
+         opts \\ []
        ) do
+    # `:folder_refs` is the batch's up-front folder ids; the rest goes to the write.
+    {refs, db_opts} = Keyword.pop(opts, :folder_refs)
+
     was_tombstoned = not is_nil(prior.deleted_at)
 
     with {:ok, crdt} <-
@@ -7714,8 +7716,8 @@ defmodule Engram.Notes do
            folder,
            "restore",
            false,
-           [mode: :savepoint],
-           refs
+           mode: :savepoint,
+           folder_refs: refs
          ) do
       {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
         {:ok, decrypt_or_raise!(updated, user)}
