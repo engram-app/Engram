@@ -595,6 +595,33 @@ defmodule EngramWeb.OnboardingControllerTest do
       assert event.meta[:trigger] == "profile"
     end
 
+    # Only the closed-to-open change logs: a step re-posted by a user whose
+    # gate is already open (a connector PATCHing tools_prefilled, a privacy
+    # notice dismissed) would otherwise count as a second opening.
+    test "does not log the gate opening for a user it is already open for", %{conn: conn} do
+      accept_terms!(conn)
+      patch(conn, "/api/onboarding/profile", %{"uses_obsidian" => true})
+
+      {_, events} =
+        LogCapture.with_events(fn ->
+          patch(conn, "/api/onboarding/profile", %{"tools" => ["claude"]})
+        end)
+
+      refute Enum.find(events, &gate_opened?/1)
+    end
+
+    # accept-terms also provisions a connector signup's vault: one opening,
+    # one line.
+    test "a connector signup's terms step logs one opening", %{conn: conn, user: user} do
+      {:ok, _} =
+        Engram.Onboarding.set_profile(user, %{tools: ["chatgpt"], tools_prefilled: true})
+
+      {_, events} = LogCapture.with_events(fn -> accept_terms!(conn) end)
+
+      assert [event] = Enum.filter(events, &gate_opened?/1)
+      assert event.meta[:trigger] == "terms"
+    end
+
     test "does not log the gate opening while steps remain", %{conn: conn} do
       {_, events} = LogCapture.with_events(fn -> accept_terms!(conn) end)
 

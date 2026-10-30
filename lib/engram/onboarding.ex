@@ -25,6 +25,9 @@ defmodule Engram.Onboarding do
   # Origins `set_profile/2` records; "connector" is implied by `tools_prefilled`.
   @signup_sources ~w(plugin)
 
+  # Set while `log_gate_opening/3` runs, so a nested call logs nothing.
+  @gate_opening_key :engram_onboarding_gate_opening
+
   @connector_vault_name "My Vault"
   @connector_vault_action "connector_vault_provisioned"
   @connector_vault_client_id "connector-signup"
@@ -385,30 +388,57 @@ defmodule Engram.Onboarding do
   defp log_meta(opts), do: Keyword.get(opts, :log_meta, fn -> [] end).()
 
   @doc """
-  Logs `onboarding gate opened` when `user` now passes the runtime gate.
-  Call it after a mutation that can complete onboarding; `trigger` names it.
+  Runs `fun` (a mutation that can complete onboarding) and logs
+  `onboarding gate opened` when it moved `user`'s runtime gate from closed
+  to open. Returns `fun`'s result. `user` is a struct or a user id; `trigger`
+  names the mutation.
 
   The other half of `onboarding refused`, keyed the same way (`user_id`,
   category `:lifecycle`) so one LogQL query joins them: a refusal with no
   later `gate opened` is a user still stuck. `:info` + `:lifecycle` ships to
   Loki (`Category.loki_ship?/2`).
 
-  It reads the gate after the fact, not the transition, so a re-POST of a
-  step by an already-open user logs it again. Callers keep to the steps that
-  can open it, which makes that rare and harmless for a join.
+  The gate is read before and after, so a step re-posted by a user it is
+  already open for logs nothing. Nested calls (accepting terms provisions a
+  connector vault, which is `register_vault`) log once, as the outermost
+  trigger.
   """
-  @spec log_gate_opened(Engram.Accounts.User.t(), String.t()) :: :ok
-  def log_gate_opened(%{id: user_id} = user, trigger) do
-    # Fresh row, for the same reason `gate/2` re-reads it: `status/1` reads
-    # `free_tier_accepted_at` off the struct, and callers hold a pre-step one.
-    if status(Accounts.get_user(user_id) || user).gate_ok do
-      Logger.info(
-        "onboarding gate opened",
-        Metadata.with_category(:info, :lifecycle, user_id: user_id, trigger: trigger)
-      )
-    end
+  @spec log_gate_opening(Engram.Accounts.User.t() | Ecto.UUID.t(), String.t(), (-> result)) ::
+          result
+        when result: term()
+  def log_gate_opening(user, trigger, fun) do
+    if Process.get(@gate_opening_key) do
+      fun.()
+    else
+      Process.put(@gate_opening_key, true)
 
-    :ok
+      try do
+        user_id = if is_binary(user), do: user, else: user.id
+        before = gate_open?(user_id)
+        result = fun.()
+
+        if before == false and gate_open?(user_id) do
+          Logger.info(
+            "onboarding gate opened",
+            Metadata.with_category(:info, :lifecycle, user_id: user_id, trigger: trigger)
+          )
+        end
+
+        result
+      after
+        Process.delete(@gate_opening_key)
+      end
+    end
+  end
+
+  # Fresh row, for the same reason `gate/2` re-reads it: `status/1` reads
+  # `free_tier_accepted_at` off the struct. Nil for a user that is gone (or
+  # an unknown id), which never counts as an opening.
+  defp gate_open?(user_id) do
+    case Accounts.get_user(user_id) do
+      nil -> nil
+      user -> status(user).gate_ok
+    end
   end
 
   # The sorted list of unmet runtime requirements, or `[]` when the user may

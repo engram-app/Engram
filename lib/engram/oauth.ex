@@ -1470,8 +1470,9 @@ defmodule Engram.OAuth do
   def expand_claims(claims), do: {:ok, claims}
 
   # The grant's OAuth client, for log lines (`EngramWeb.RequestMeta.log_surface/1`).
-  # Never an authorization input. `Map.get`: an entry cached by a node running
-  # the previous release has no `:client_id`.
+  # Never an authorization input. `:oauth_grant` is per-node ETS and every
+  # entry comes from `load_grant/1`, so the key is always there; `Map.get`
+  # only keeps a hand-built grant map (tests) from raising.
   defp put_client_id(claims, grant),
     do: maybe_put(claims, "client_id", Map.get(grant, :client_id))
 
