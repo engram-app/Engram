@@ -4,6 +4,7 @@ defmodule Engram.OnboardingTest do
   alias Engram.LegalFixtures
   alias Engram.Onboarding
   alias Engram.Onboarding.Agreement
+  alias Engram.Onboarding.GateCache
   alias Engram.Test.LogCapture
 
   describe "accept_terms/3" do
@@ -383,7 +384,7 @@ defmodule Engram.OnboardingTest do
           vault <- [false, true],
           heard <- [false, true] do
         Application.put_env(:engram, :billing_enabled, billing)
-        Engram.Onboarding.GateCache.evict_all()
+        GateCache.evict_all()
 
         user =
           insert(:user,
@@ -1698,10 +1699,77 @@ defmodule Engram.OnboardingTest do
   # "onboarding gate opened" is the line after a refusal. These are the
   # openings that happen outside the wizard's own steps.
   describe "gate opened logging" do
+    # The real SaaS gate: config/runtime.exs sets :billing_enabled false for
+    # the whole suite (docs/context/onboarding-gate-is-http-only.md).
     setup do
       previous_level = Logger.level()
+      prev_enabled = Application.get_env(:engram, :billing_enabled)
       Logger.configure(level: :info)
-      on_exit(fn -> Logger.configure(level: previous_level) end)
+      Application.put_env(:engram, :billing_enabled, true)
+
+      LegalFixtures.insert_version(
+        document: "terms_of_service",
+        version: "2026-05-15",
+        material: true,
+        effective_date: nil
+      )
+
+      LegalFixtures.reset_version_cache()
+      GateCache.evict_all()
+
+      on_exit(fn ->
+        Logger.configure(level: previous_level)
+        Application.put_env(:engram, :billing_enabled, prev_enabled)
+        LegalFixtures.reset_version_cache()
+        GateCache.evict_all()
+      end)
+    end
+
+    # Onboarded on a paid plan, plan lapsed (no Free acceptance, so the gate
+    # closes on "subscription"), then Paddle reactivates it.
+    test "a lapsed paid account reactivated by Paddle logs one opening, as billing" do
+      user = insert(:user)
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_lapsed_1",
+        status: "canceled",
+        last_event_occurred_at: ~U[2026-05-01 00:00:00Z]
+      )
+
+      assert %{gate_ok: false} = Onboarding.status(Engram.Accounts.get_user!(user.id))
+
+      event = %{
+        "event_type" => "subscription.updated",
+        "event_id" => "ntf_lapsed_1",
+        "occurred_at" => "2026-06-01T00:00:00Z",
+        "data" => %{
+          "id" => "sub_lapsed_1",
+          "status" => "active",
+          "customer_id" => "ctm_lapsed_1",
+          "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}, "status" => "active"}],
+          "current_billing_period" => %{
+            "starts_at" => "2026-06-01T00:00:00Z",
+            "ends_at" => "2026-07-01T00:00:00Z"
+          }
+        }
+      }
+
+      {_, events} =
+        LogCapture.with_events(fn ->
+          {:ok, _} = Engram.Billing.upsert_from_paddle_event(event)
+        end)
+
+      assert [line] = Enum.filter(events, &gate_opened_line?/1)
+      assert line.meta[:trigger] == "billing"
+      assert line.meta[:user_id] == user.id
+
+      # Paddle delivers at least once: a redelivery finds the gate open.
+      {_, again} =
+        LogCapture.with_events(fn -> Engram.Billing.upsert_from_paddle_event(event) end)
+
+      assert [] = Enum.filter(again, &gate_opened_line?/1)
     end
 
     test "restoring the only vault logs the gate reopening" do
