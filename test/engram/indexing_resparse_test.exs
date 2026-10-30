@@ -169,53 +169,43 @@ defmodule Engram.IndexingResparseTest do
     assert reloaded.keyword_version == Engram.KeywordIndex.version()
   end
 
-  # On a CURRENT chunker no rebuild is coming for a point that matches
-  # nothing, so stamping would hide it for good; staying unstamped keeps it in
-  # the sweep and logged.
-  test "unmatched points on a current-chunker note leave it unstamped", ctx do
-    %{user: user, note: note} = ctx
-    orphan_one_row(note)
+  # A resparse on unchanged content and chunker finds the same unmatched
+  # points every time, so leaving the note unstamped only re-selected it every
+  # backoff window: in prod 671 notes looped twice an hour, each pass
+  # rewriting the matched points and logging an oban-category warning. The
+  # note is stamped, logged once at info, and comes back only when something
+  # changes (an edit re-embeds it, a keyword bump re-selects it).
+  for {label, chunker_offset} <- [{"current", 0}, {"newer", 1}] do
+    test "unmatched points on a #{label}-chunker note stamp it so the sweep stops re-selecting it",
+         ctx do
+      %{user: user, note: note} = ctx
+      orphan_one_row(note)
 
-    Repo.update_all(
-      from(n in Notes.Note, where: n.id == ^note.id),
-      [set: [chunker_version: Markdown.chunker_version(), keyword_version: nil]],
-      skip_tenant_check: true
-    )
+      Repo.update_all(
+        from(n in Notes.Note, where: n.id == ^note.id),
+        [
+          set: [
+            chunker_version: Markdown.chunker_version() + unquote(chunker_offset),
+            keyword_version: nil
+          ]
+        ],
+        skip_tenant_check: true
+      )
 
-    assert :ok =
-             perform_job(Engram.Workers.RefreshKeywordVectors, %{
-               note_id: note.id,
-               user_id: user.id
-             })
+      log =
+        ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+          assert :ok =
+                   perform_job(Engram.Workers.RefreshKeywordVectors, %{
+                     note_id: note.id,
+                     user_id: user.id
+                   })
+        end)
 
-    assert is_nil(Repo.get!(Notes.Note, note.id, skip_tenant_check: true).keyword_version)
-  end
+      assert Repo.get!(Notes.Note, note.id, skip_tenant_check: true).keyword_version ==
+               elem(Engram.Rebuild.target_versions(), 1)
 
-  # After a rollback the stamp is NEWER than this build's chunker, and the
-  # rebuild ignores newer stamps (#2044): nothing else will fix these points,
-  # so they take the current-chunker branch, not stamp-and-skip.
-  test "unmatched points on a newer-chunker note leave it unstamped", ctx do
-    %{user: user, note: note} = ctx
-    orphan_one_row(note)
-
-    Repo.update_all(
-      from(n in Notes.Note, where: n.id == ^note.id),
-      [
-        set: [
-          chunker_version: Markdown.chunker_version() + 1,
-          keyword_version: nil
-        ]
-      ],
-      skip_tenant_check: true
-    )
-
-    assert :ok =
-             perform_job(Engram.Workers.RefreshKeywordVectors, %{
-               note_id: note.id,
-               user_id: user.id
-             })
-
-    assert is_nil(Repo.get!(Notes.Note, note.id, skip_tenant_check: true).keyword_version)
+      refute log =~ "resparse", "logged once at info, not as an oban warning"
+    end
   end
 
   # Rows written between #1595 (context_hmac) and #1606 (pass-type prefix)

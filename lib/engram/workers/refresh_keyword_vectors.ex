@@ -17,9 +17,10 @@ defmodule Engram.Workers.RefreshKeywordVectors do
   `ResparseNote` still re-embedded unmatched notes. A worker name they do not
   have makes them fail the job harmlessly instead of billing Voyage.
 
-  It never re-embeds. Points it cannot match (legacy rows with no
-  fingerprint, v1 chunks whose blobs v2 strips) belong to notes with a stale
-  `chunker_version`, which the chunker rebuild owns; see
+  It never re-embeds. Points it cannot match keep their old keyword vector:
+  on a stale `chunker_version` the chunker rebuild owns them, on a current
+  one the next edit does. The note is stamped either way, so the sweep does
+  not re-select it every backoff window; see
   `docs/context/index-version-self-heal.md`.
 
   Paced by `Engram.Rebuild.qdrant_pace/1` in every mode: a keyword bump
@@ -78,24 +79,8 @@ defmodule Engram.Workers.RefreshKeywordVectors do
          user = Engram.Accounts.get_user!(note.user_id),
          {:ok, note} <- Crypto.maybe_decrypt_note_fields(note, user),
          {:ok, _updated, unmatched} <- Indexing.resparse_note(note, user) do
-      cond do
-        unmatched == 0 ->
-          stamp_keyword_version(note)
-
-        stale_chunker?(note.chunker_version) ->
-          log_unmatched(note, unmatched)
-          stamp_keyword_version(note)
-
-        # Unmatched on a current (or newer) chunker: nothing else will rebuild these
-        # points (a DEK rotation clears every context_hmac without touching
-        # content or chunker). Stay unstamped and say so; the sweep retries
-        # once per cooldown window, which costs no embedder call.
-        true ->
-          Logger.warning(
-            "resparse cannot match points on a current-chunker note",
-            Metadata.with_category(:warning, :oban, note_id: note.id, count: unmatched)
-          )
-      end
+      if unmatched > 0, do: log_unmatched(note, unmatched)
+      stamp_keyword_version(note)
     else
       {:snooze, _} = snooze -> snooze
       {:discard, _} = discard -> discard
@@ -106,11 +91,6 @@ defmodule Engram.Workers.RefreshKeywordVectors do
       {:error, _} = err -> err
     end
   end
-
-  # Only an OLDER (or missing) stamp is the chunker rebuild's. A newer one,
-  # after a rollback, is left alone by the rebuild, so it is ours to report.
-  # Against `Rebuild.target_versions/0`, as every version check.
-  defp stale_chunker?(v), do: Engram.Rebuild.behind?(v, elem(Engram.Rebuild.target_versions(), 0))
 
   # Every point now carries the current keyword encoding, so the note leaves
   # ReconcileEmbeddings' keyword sweep. Stamped with the TARGET version (the
@@ -131,17 +111,34 @@ defmodule Engram.Workers.RefreshKeywordVectors do
     :ok
   end
 
-  # Never a re-embed from here. On a stale-chunker note, a point resparse
-  # cannot match is a legacy row (no fingerprint) or a v1 chunk holding a
-  # base64 blob v2 strips, and the chunker rebuild owns it.
-  # Re-embedding here turned the automatic keyword sweep into a corpus-wide
-  # Voyage bill and, over a spent Free budget, a sparse-only pass that drops
-  # the note's dense points. The note is still stamped: its matched points are
-  # current, and re-selecting it every tick would change nothing.
+  # Never a re-embed from here. A point resparse cannot match keeps its old
+  # keyword vector. On a stale-chunker note it is a legacy row (no
+  # fingerprint) or a v1 chunk holding a base64 blob v2 strips, and the
+  # chunker rebuild owns it. On a current chunker only an edit (EmbedNote's
+  # full pass) rebuilds it. Re-embedding here turned the automatic keyword
+  # sweep into a corpus-wide Voyage bill and, over a spent Free budget, a
+  # sparse-only pass that drops the note's dense points.
+  #
+  # The note is stamped either way: a resparse of unchanged content finds the
+  # same unmatched points every time, so leaving it unstamped only re-selected
+  # it every backoff window (671 notes in prod, twice an hour, each pass
+  # rewriting the matched points and logging an oban warning). Info, once per
+  # note per keyword bump, still shipped to Loki as the tripwire for a
+  # matching bug (#2320 was one), with `stale_chunker` saying which case.
   defp log_unmatched(note, unmatched) do
     Logger.info(
-      "resparse left unmatched points for the chunker rebuild",
-      Metadata.with_category(:info, :oban, note_id: note.id, count: unmatched)
+      "resparse left unmatched points",
+      Metadata.with_category(:info, :search,
+        note_id: note.id,
+        count: unmatched,
+        stale_chunker: stale_chunker?(note.chunker_version)
+      )
+      |> Metadata.ship_to_loki()
     )
   end
+
+  # Only an OLDER (or missing) stamp is the chunker rebuild's. A newer one,
+  # after a rollback, is left alone by the rebuild. Against
+  # `Rebuild.target_versions/0`, as every version check.
+  defp stale_chunker?(v), do: Engram.Rebuild.behind?(v, elem(Engram.Rebuild.target_versions(), 0))
 end

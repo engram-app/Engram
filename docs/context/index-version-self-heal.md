@@ -87,10 +87,15 @@ chunking before it is expensive: bundle boundary changes into one bump.
   normalized against an average built mostly from old lengths. For #1615 that
   is a few percent of the BM25 length term: a ranking nudge, not a defect.
   Each later edit re-normalizes its note.
-- A note whose points cannot match on a CURRENT chunker stays unstamped and
-  logs a warning (`resparse cannot match points on a current-chunker note`)
-  each window. Should not happen (the current chunker reproduces its own
-  offsets); the warning is the tripwire if it does.
+- A note whose points cannot match is stamped anyway and logs ONE info line
+  (`resparse left unmatched points`, `stale_chunker: false` on a current
+  chunker, shipped to Loki). Should not happen on a current chunker (it
+  reproduces its own offsets); that line is the tripwire if it does. The
+  unmatched points keep their old keyword vector until an edit re-embeds the
+  note. Until 2026-10-30 such a note stayed unstamped and warned every
+  backoff window: in prod 671 notes looped twice an hour from the 0.69.0
+  deploy (~1,300 oban warnings/hour, firing `engram-prod-loki-oban-discard`),
+  each pass rewriting the matched points for nothing.
 - It did fire, 2026-10-28 on staging: 1,300 notes, every one a Free note
   embedded with `voyage-4-lite` (35 users), none of the 19,632 large-model
   notes. Cause: resparse runs OUTSIDE an index pass, so it had no pass model
