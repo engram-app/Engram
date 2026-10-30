@@ -43,6 +43,7 @@ defmodule Engram.DataMigrations.FolderTable do
   alias Engram.Backfill.TenantScan
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.Folders.Folder
   alias Engram.Logger.Metadata
   alias Engram.Notes.Helpers
   alias Engram.Repo
@@ -52,10 +53,6 @@ defmodule Engram.DataMigrations.FolderTable do
   @batch 1_000
   # Pages per user per pass: a pass is one bounded slice; the next run takes the rest.
   @max_batches 50
-
-  # A folder segment's HMAC lives in its own domain, so it never equals a
-  # note's `path_hmac` or a `folder_hmac` (a full path).
-  @name_domain "folder-name\0"
 
   @impl true
   def name, do: "folder_table"
@@ -190,7 +187,7 @@ defmodule Engram.DataMigrations.FolderTable do
 
   # `leaf` is `%{id: marker_id}` for a marker's own folder, else nil.
   defp ensure_one(repo, ctx, {tree, stats}, vault, parent, segment, full_path, leaf) do
-    name_hmac = Crypto.hmac_field(ctx.fk, @name_domain <> segment)
+    name_hmac = Folder.name_hmac(ctx.fk, segment)
     full = Crypto.hmac_field(ctx.fk, full_path)
     key = {vault, parent, name_hmac}
     explicit? = leaf != nil

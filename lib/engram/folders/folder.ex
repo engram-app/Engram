@@ -14,6 +14,15 @@ defmodule Engram.Folders.Folder do
   """
   use Engram.Schema
 
+  # A folder segment's HMAC lives in its own domain, so it never equals a
+  # note's `path_hmac` or a `folder_hmac` (a full path).
+  @name_domain "folder-name\0"
+
+  @doc "The `name_hmac` of one path segment under a user's filter key."
+  @spec name_hmac(binary(), String.t()) :: binary()
+  def name_hmac(filter_key, segment),
+    do: Engram.Crypto.hmac_field(filter_key, @name_domain <> segment)
+
   schema "folders" do
     field :user_id, Ecto.UUID
     field :vault_id, Ecto.UUID
