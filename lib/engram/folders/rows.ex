@@ -83,16 +83,21 @@ defmodule Engram.Folders.Rows do
   @spec ensure(map(), Ecto.UUID.t(), String.t(), keyword()) ::
           {:ok, Ecto.UUID.t() | nil} | {:error, term()}
   def ensure(user, vault_id, folder, opts \\ [])
-  def ensure(_user, _vault_id, "", _opts), do: {:ok, nil}
 
   def ensure(user, vault_id, folder, opts) do
-    with {:ok, dek} <- Crypto.get_dek(user),
-         {:ok, fk} <- Crypto.dek_filter_key(user) do
-      ctx = %{user_id: user.id, vault_id: vault_id, dek: dek, fk: fk}
-      explicit = Keyword.get(opts, :explicit)
-      {:ok, resolve_all(ctx, %{folder => explicit})[folder]}
+    case normalize(folder) do
+      "" ->
+        {:ok, nil}
+
+      path ->
+        with {:ok, ids} <- ensure_set(user, vault_id, %{path => Keyword.get(opts, :explicit)}),
+             do: {:ok, ids[path]}
     end
   end
+
+  # "A//B", "/A/" and "A/B/" name the same folders `prefixes/1` walks (it drops
+  # empty segments): key every result by this one form.
+  defp normalize(folder), do: folder |> String.split("/", trim: true) |> Enum.join("/")
 
   # Both entry points below are `ensure/4` for a set: one code path, set-based.
   defp ensure_set(user, vault_id, targets) do
@@ -119,8 +124,8 @@ defmodule Engram.Folders.Rows do
   @spec ensure_all(map(), Ecto.UUID.t(), [String.t()]) ::
           {:ok, %{String.t() => Ecto.UUID.t() | nil}} | {:error, term()}
   def ensure_all(user, vault_id, folders) do
-    with {:ok, ids} <- ensure_set(user, vault_id, Map.new(folders, &{&1, nil})) do
-      {:ok, Map.new(folders, &{&1, Map.get(ids, &1)})}
+    with {:ok, ids} <- ensure_set(user, vault_id, Map.new(folders, &{normalize(&1), nil})) do
+      {:ok, Map.new(folders, &{&1, Map.get(ids, normalize(&1))})}
     end
   end
 
@@ -136,7 +141,7 @@ defmodule Engram.Folders.Rows do
       |> Enum.uniq()
       |> Enum.sort()
       |> Enum.reverse()
-      |> Map.new()
+      |> Map.new(fn {folder, marker_id} -> {normalize(folder), marker_id} end)
 
     {:ok, _} = ensure_set(user, vault_id, targets)
     :ok

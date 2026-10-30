@@ -212,4 +212,95 @@ defmodule Engram.Folders.RowsTest do
       assert %{id: ^id, explicit: false} = by_path(u, v, fk).("M")
     end
   end
+
+  describe "the batched resolver" do
+    defp ensure_all!(user, vault, folders) do
+      {:ok, {:ok, ids}} =
+        Repo.with_tenant(user.id, fn -> Rows.ensure_all(user, vault.id, folders) end)
+
+      ids
+    end
+
+    defp ensure_markers!(user, vault, markers) do
+      {:ok, :ok} =
+        Repo.with_tenant(user.id, fn -> Rows.ensure_markers(user, vault.id, markers) end)
+    end
+
+    test "non-normalized folder strings resolve to their leaf, \"\" to the root", %{
+      user: u,
+      vault: v
+    } do
+      leaf = ensure!(u, v, "A/B")
+      assert ensure!(u, v, "A/B/") == leaf
+      assert ensure!(u, v, "A//B") == leaf
+      assert ensure!(u, v, "/A/B") == leaf
+      assert ensure!(u, v, "") == nil
+      assert ensure!(u, v, "/") == nil
+
+      ids = ensure_all!(u, v, ["A//B", "/A/", ""])
+      assert ids["A//B"] == leaf
+      assert ids["/A/"] == ensure!(u, v, "A")
+      assert ids[""] == nil
+      assert length(rows(u, v)) == 2
+    end
+
+    test "duplicate input folders create one row each", %{user: u, vault: v} do
+      ids = ensure_all!(u, v, ["X/Y", "X/Y", "X", "X/Y/Z", "X/Y"])
+      assert length(rows(u, v)) == 3
+      assert ids["X/Y"] != ids["X"]
+      assert ids["X/Y/Z"]
+    end
+
+    test "a mixed chain: existing ancestors are kept, only the rest is created", %{
+      user: u,
+      vault: v
+    } do
+      a = ensure!(u, v, "A")
+      ab = ensure!(u, v, "A/B")
+      ids = ensure_all!(u, v, ["A/B/C/D", "A/E", "F/G"])
+
+      assert length(rows(u, v)) == 2 + 2 + 1 + 2
+      by_id = Map.new(rows(u, v), &{&1.id, &1})
+      d = by_id[ids["A/B/C/D"]]
+      c = by_id[d.parent_id]
+      assert c.parent_id == ab
+      assert by_id[ids["A/E"]].parent_id == a
+      assert by_id[by_id[ids["F/G"]].parent_id].parent_id == nil
+    end
+
+    test "tombstoned markers are revived inside a batch, keeping their ids", %{user: u, vault: v} do
+      m1 = Ecto.UUID.generate()
+      m2 = Ecto.UUID.generate()
+      ensure!(u, v, "Gone/One", explicit: m1)
+
+      Repo.with_tenant(u.id, fn ->
+        Repo.update_all(from(f in Folder, where: f.id == ^m1),
+          set: [deleted_at: DateTime.utc_now()]
+        )
+      end)
+
+      ensure_markers!(u, v, [{"Gone/One", m1}, {"Gone/Two", m2}, {"Fresh", Ecto.UUID.generate()}])
+
+      live = rows(u, v) |> Enum.reject(& &1.deleted_at) |> Map.new(&{&1.id, &1})
+      assert live[m1].explicit and live[m2].explicit
+      assert length(Map.keys(live)) == 4
+    end
+
+    test "a row that loses the insert (its name is already live) falls back to a read", ctx do
+      %{user: u, vault: v, fk: fk} = ctx
+      # A live row for the name whose full_path_hmac is missing (an older
+      # writer): the batch insert hits the live-name index, writes nothing, and
+      # the fallback adopts the row instead of duplicating it.
+      id = ensure!(u, v, "Legacy")
+
+      Repo.with_tenant(u.id, fn ->
+        Repo.update_all(from(f in Folder, where: f.id == ^id), set: [full_path_hmac: nil])
+      end)
+
+      ids = ensure_all!(u, v, ["Legacy/Child", "Other"])
+      assert length(rows(u, v)) == 3
+      assert Enum.find(rows(u, v), &(&1.id == id)).full_path_hmac == Rows.path_hmac(fk, "Legacy")
+      assert Enum.find(rows(u, v), &(&1.id == ids["Legacy/Child"])).parent_id == id
+    end
+  end
 end
