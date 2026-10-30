@@ -5,7 +5,7 @@
 //! heading-shaped line may sit hidden (closed fences, closed HTML comments,
 //! masked `$$` math). The rules are the ones `Sections.scan/1` applied to
 //! mdex_native's AST before this port, kept rule for rule; the comrak
-//! version and options are the ones mdex_native 0.2.9 used.
+//! options are the ones mdex_native 0.2.9 used (version pinned in Cargo.toml).
 //!
 //! Lines are 0-indexed and counted by `\n` only. Traversal is iterative
 //! (`descendants`), so deep nesting cannot overflow a scheduler stack.
