@@ -822,7 +822,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
          ctx do
       force_chain()
       attach_projection_telemetry()
-      chunk = ReleaseIndexEntries.chunk_size()
+      chunk = Engram.Batch.release_index_entries()
       ids = stale_ids(20_000)
       seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
 
@@ -859,7 +859,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
     test "within the link budget, ONE job releases every chunk and enqueues no successor",
          ctx do
       ample_budget()
-      chunk = ReleaseIndexEntries.chunk_size()
+      chunk = Engram.Batch.release_index_entries()
       ids = stale_ids(chunk * 2 + 1)
       seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
       assert :ok = run(ctx)
@@ -876,7 +876,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
     # (or the rest would run past an unread chunk), and resume on retry.
     test "a failed link keeps the rest of the chain and resumes on retry", ctx do
       force_chain()
-      chunk = ReleaseIndexEntries.chunk_size()
+      chunk = Engram.Batch.release_index_entries()
       ids = stale_ids(chunk * 2)
       seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
       assert :ok = run(ctx)
@@ -903,7 +903,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
     # makes get_note_meta_by_ids raise on decrypt.
     test "a chunk failing mid-link enqueues no successor and the retry finishes", ctx do
       ample_budget()
-      chunk = ReleaseIndexEntries.chunk_size()
+      chunk = Engram.Batch.release_index_entries()
       ids = stale_ids(chunk + 1)
       seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
       bad = note(ctx, "bad.md")

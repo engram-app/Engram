@@ -11,6 +11,7 @@ defmodule Engram.Jobs do
 
   import Ecto.Query
 
+  alias Engram.Batch
   alias Engram.Repo
 
   # Ids per lookup query. Postgres plans `args->>'note_id' = ANY($1)` as an
@@ -81,6 +82,22 @@ defmodule Engram.Jobs do
       |> MapSet.new()
 
     Enum.reject(note_ids, &MapSet.member?(pending, to_string(&1)))
+  end
+
+  @doc """
+  Inserts `changesets` with `Oban.insert_all/1`, `Engram.Batch.insert_rows/0`
+  per statement. Raises on a database error, so a caller inside a transaction
+  rolls the jobs back with its other writes. Like `reject_pending/3`'s
+  callers, it ignores `unique` (bulk uniqueness is Oban Pro): drop
+  already-pending ids first. Returns the number of changesets inserted.
+  """
+  @spec insert_chunked([Ecto.Changeset.t()]) :: non_neg_integer()
+  def insert_chunked(changesets) do
+    changesets
+    |> Enum.chunk_every(Batch.insert_rows())
+    |> Enum.each(&Oban.insert_all/1)
+
+    length(changesets)
   end
 
   @doc """

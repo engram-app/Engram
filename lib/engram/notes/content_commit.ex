@@ -21,6 +21,7 @@ defmodule Engram.Notes.ContentCommit do
   Site-specific work stays at the site: the checkpoint's announce, upsert's
   broadcast and link rebind.
   """
+  alias Engram.Jobs
   alias Engram.Notes.Enqueue
   alias Engram.Workers.{EmbedNote, ExtractNoteLinks, FinalizeRevision}
 
@@ -44,5 +45,40 @@ defmodule Engram.Notes.ContentCommit do
     # logged by Enqueue). Each job is unique, so a caller that retries the
     # whole set (Workers.NoteCommitted) does not duplicate the ones that landed.
     |> Enum.find(:ok, &match?({:error, _}, &1))
+  end
+
+  @doc """
+  `enqueue_jobs/3` for many notes of one user at once, without the finalize
+  job (its only caller, a trash restore, never records a version): one
+  chunked bulk insert per worker instead of two unique inserts per note.
+
+  `entries` is `[{note_id, embed_priority}]`. `insert_all` ignores `unique`,
+  so each worker's pending ids are dropped first, the way its own `unique`
+  would: `EmbedNote.reject_already_queued/2` (which also promotes a pending
+  job ranked worse than the new priority, so a restore never inherits a
+  backfill slot) and `Jobs.reject_pending/3` for the link extraction.
+  Raises on a database error: called inside the caller's transaction, the
+  jobs commit or roll back with it.
+  """
+  @spec enqueue_jobs_bulk([{String.t(), non_neg_integer()}], String.t()) :: :ok
+  def enqueue_jobs_bulk([], _user_id), do: :ok
+
+  def enqueue_jobs_bulk(entries, user_id) when is_binary(user_id) do
+    embeds =
+      entries
+      |> Enum.group_by(&elem(&1, 1), &elem(&1, 0))
+      |> Enum.flat_map(fn {priority, ids} ->
+        ids
+        |> EmbedNote.reject_already_queued(priority)
+        |> Enum.map(&EmbedNote.new_debounced(&1, user_id, priority: priority))
+      end)
+
+    links =
+      ExtractNoteLinks
+      |> Jobs.reject_pending(Enum.map(entries, &elem(&1, 0)), executing: false)
+      |> Enum.map(&ExtractNoteLinks.new_debounced(&1, user_id))
+
+    _ = Jobs.insert_chunked(embeds ++ links)
+    :ok
   end
 end

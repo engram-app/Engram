@@ -16,6 +16,42 @@ defmodule Engram.Workers.BackfillCrdtHeadTest do
     %{user: user, vault: vault}
   end
 
+  describe "fan-out (#2169)" do
+    test "enqueue_user queues every vault in one bulk insert", %{user: user, vault: vault} do
+      vaults =
+        for i <- 1..3 do
+          {:ok, v, _} = Engram.Vaults.register_vault(user, "V#{i}", Ecto.UUID.generate())
+          v
+        end
+
+      assert {:ok, 1} =
+               Engram.ObanInsertCount.count(fn -> BackfillCrdtHead.enqueue_user(user.id) end)
+
+      queued = all_enqueued(worker: BackfillCrdtHead) |> Enum.map(& &1.args["vault_id"])
+      assert Enum.sort(queued) == Enum.sort([vault.id | Enum.map(vaults, & &1.id)])
+    end
+
+    test "enqueue_all queues every (user, vault) in one bulk insert", %{user: user, vault: vault} do
+      note = fn u, v, path ->
+        {:ok, _} =
+          Notes.upsert_note(u, v, %{path: path, content: "# x", mtime: 1.0}, actor: "api")
+      end
+
+      note.(user, vault, "A/a.md")
+
+      for i <- 1..2 do
+        other = insert(:user)
+        insert(:user_limit_override, user: other, key: "vaults_cap", value: %{"v" => -1})
+        {:ok, other} = Engram.Crypto.ensure_user_dek(other)
+        {:ok, ov, _} = Engram.Vaults.register_vault(other, "O#{i}", Ecto.UUID.generate())
+        note.(other, ov, "B/b.md")
+      end
+
+      assert {3, 1} = Engram.ObanInsertCount.count(fn -> BackfillCrdtHead.enqueue_all() end)
+      assert length(all_enqueued(worker: BackfillCrdtHead)) == 3
+    end
+  end
+
   describe "perform/1" do
     test "populates a NULL crdt_head to match the authoritative read", %{user: user, vault: vault} do
       {:ok, a} =

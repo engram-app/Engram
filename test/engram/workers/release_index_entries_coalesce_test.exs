@@ -143,7 +143,7 @@ defmodule Engram.Workers.ReleaseIndexEntriesCoalesceTest do
   # absorbing ids without bound. A job holds at most one chunk's worth of
   # joined ids; past that a release queues its own job.
   test "a pending job holding a full chunk is not extended", ctx do
-    full = ids(ReleaseIndexEntries.chunk_size())
+    full = ids(Engram.Batch.release_index_entries())
     {:ok, _} = ReleaseIndexEntries.enqueue(ctx.user.id, ctx.vault.id, full)
     [extra] = ids(1)
     {:ok, _} = ReleaseIndexEntries.enqueue(ctx.user.id, ctx.vault.id, [extra])
@@ -154,23 +154,23 @@ defmodule Engram.Workers.ReleaseIndexEntriesCoalesceTest do
   end
 
   test "a release that would overflow the pending job queues its own", ctx do
-    almost = ids(ReleaseIndexEntries.chunk_size() - 1)
+    almost = ids(Engram.Batch.release_index_entries() - 1)
     two = ids(2)
     {:ok, _} = ReleaseIndexEntries.enqueue(ctx.user.id, ctx.vault.id, almost)
     {:ok, _} = ReleaseIndexEntries.enqueue(ctx.user.id, ctx.vault.id, two)
 
     assert Enum.map(release_jobs(), &length(&1.args["note_ids"])) ==
-             [ReleaseIndexEntries.chunk_size() - 1, 2]
+             [Engram.Batch.release_index_entries() - 1, 2]
   end
 
   test "a release filling the pending job exactly joins it", ctx do
-    almost = ids(ReleaseIndexEntries.chunk_size() - 1)
+    almost = ids(Engram.Batch.release_index_entries() - 1)
     [last] = ids(1)
     {:ok, _} = ReleaseIndexEntries.enqueue(ctx.user.id, ctx.vault.id, almost)
     {:ok, :joined} = ReleaseIndexEntries.enqueue(ctx.user.id, ctx.vault.id, [last])
 
     assert [job] = release_jobs()
-    assert length(job.args["note_ids"]) == ReleaseIndexEntries.chunk_size()
+    assert length(job.args["note_ids"]) == Engram.Batch.release_index_entries()
   end
 
   # Review of #2209 (M2): the lookup runs on every note delete, usually to find

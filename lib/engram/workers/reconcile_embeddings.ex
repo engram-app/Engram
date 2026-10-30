@@ -38,6 +38,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
   alias Engram.Backfill.IdWindows
   alias Engram.Backfill.TenantScan
+  alias Engram.Batch
   alias Engram.Billing
   alias Engram.Billing.Subscription
   alias Engram.DataMigrations.IndexVersions
@@ -59,10 +60,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
   require Logger
 
-  # Notes stamped and enqueued per statement. Each page drops out of the next
-  # page's query (the stamp), so a loop of pages walks the whole backlog.
+  # Notes stamped and enqueued per statement (`Engram.Batch.reconcile_page/0`).
   # Tests pass a smaller `"page"` arg to exercise the loop.
-  @page 1_000
+  @page Batch.reconcile_page()
 
   # The index points budget (`index_points_cap`): users per tick, and notes
   # per user per tick.
@@ -426,10 +426,24 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     :ok
   end
 
+  # The "rolling day" every Voyage ceiling below reads back from `oban_jobs`
+  # (`inserted_at` newer than this). The pruner deletes a completed job once
+  # its `scheduled_at` is older than its `max_age` (config.exs, 24 h), and
+  # `scheduled_at` is set when the changeset is built, a hair BEFORE
+  # `inserted_at`, so a job leaves the table no earlier than it leaves this
+  # window, give or take the build-to-insert gap (milliseconds). Raising the
+  # window above the pruner's `max_age` would under-count, which
+  # `ReconcileEmbeddingsLedgerWindowTest` guards.
+  @ledger_window_seconds 86_400
+
+  @doc "Seconds the unmetered-spend ledger looks back; at most the Oban pruner's `max_age`."
+  @spec ledger_window_seconds() :: 86_400
+  def ledger_window_seconds, do: @ledger_window_seconds
+
   # ponytail: at most 2,000 unmetered promoted points per user per rolling
   # day, read back from the jobs this sweep enqueued (`budget_points`, kept
-  # by Oban's 7-day pruner), so delete-and-promote cycles cannot spend
-  # unbounded Voyage. A metered promotion spends the user's own budget and
+  # for `ledger_window_seconds/0` by Oban's pruner), so delete-and-promote
+  # cycles cannot spend unbounded Voyage. A metered promotion spends the user's own budget and
   # is not counted.
   @unmetered_points_per_day 2_000
 
@@ -493,11 +507,11 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # estimated unmetered Voyage tokens a rolling day: 150k a minute over the
   # hour, the maintenance bucket the v5 pass uses, so they cannot saturate
   # Voyage's TPM and starve query embeds. Read back from the jobs' own
-  # `budget_tokens` (Oban prunes after 7 days).
+  # `budget_tokens` (Oban prunes completed jobs after the same day).
   @maintenance_tokens_per_day 9_000_000
 
   defp maintenance_token_room(now) do
-    day_ago = DateTime.add(now, -86_400, :second)
+    day_ago = DateTime.add(now, -@ledger_window_seconds, :second)
 
     ceiling =
       Application.get_env(:engram, :maintenance_tokens_per_day, @maintenance_tokens_per_day)
@@ -797,7 +811,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # This sweep's jobs for the user: queued ones (their points are not in
   # `chunks` yet) and the last day's unmetered ones (the daily ceiling).
   defp budget_jobs(user_id, now) do
-    day_ago = DateTime.add(now, -86_400, :second)
+    day_ago = DateTime.add(now, -@ledger_window_seconds, :second)
     pending = ~w(scheduled available executing retryable)
 
     from(j in Oban.Job,
@@ -875,7 +889,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
   # Newest first while the projection stays under 90% of the cap.
   defp promote(user, notes, projected, pending, jobs, now) do
-    day_ago = DateTime.add(now, -86_400, :second)
+    day_ago = DateTime.add(now, -@ledger_window_seconds, :second)
 
     spent =
       for j <- jobs,

@@ -6,11 +6,13 @@ defmodule Engram.Notes do
 
   import Ecto.Query
 
+  alias Engram.Batch
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Crypto.PathCrypto
   alias Engram.Crypto.RotationGate
+  alias Engram.Jobs
   alias Engram.Links
   alias Engram.Logger.DecryptFailure
   alias Engram.Logger.Metadata
@@ -469,11 +471,7 @@ defmodule Engram.Notes do
   @spec max_batch_folders() :: 500
   def max_batch_folders, do: @max_batch_folders
 
-  # Rows per folder-marker `insert_all`. A marker row binds 14 parameters
-  # (upsert_folder_markers/6), so 65535 allows 4681; 2000 is the same
-  # half-margin Links uses so a new column cannot re-arm the overflow.
-  @folder_insert_chunk 2000
-
+  # Rows per folder-marker `insert_all`: `Engram.Batch.insert_rows/0`.
   @doc """
   Batch `create_folder_marker/3`: one tenant transaction and at most one
   shared `seq` for the whole batch. Each folder goes through
@@ -652,7 +650,7 @@ defmodule Engram.Notes do
         # Batched so the protocol bind cap does not depend on the caller's
         # batch limit staying where it is today.
         rows
-        |> Enum.chunk_every(@folder_insert_chunk)
+        |> Enum.chunk_every(Batch.insert_rows())
         |> Enum.each(&Repo.insert_all(Note, &1, on_conflict: :nothing))
 
         user
@@ -3774,6 +3772,22 @@ defmodule Engram.Notes do
     end
   end
 
+  @doc """
+  Whether a live NOTE (not a folder marker) with this id exists in the vault,
+  selecting nothing but the existence. For callers that need the yes/no only
+  (the backlinks endpoint): `get_note_by_id/3` loads the body and decrypts the
+  whole note to answer the same question.
+  """
+  @spec note_id_exists?(map(), map(), String.t()) :: boolean()
+  def note_id_exists?(user, vault, id) when is_binary(id) do
+    {:ok, found} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.exists?(from(n in scoped_live(user, vault), where: n.id == ^id and n.kind == "note"))
+      end)
+
+    found
+  end
+
   # Phase B.2: single normalization helper for path lookups.
   # All callers route through here so post-B.3 column drop is mechanical.
   # Opens its own tenant context — use note_by_path_query/3 directly when
@@ -4492,11 +4506,6 @@ defmodule Engram.Notes do
     end
   end
 
-  # Jobs per `Oban.insert_all` in batch_delete_notes/3. Oban's Basic engine
-  # binds up to 17 parameters per job (Oban.Job's permitted params), so 65535
-  # allows 3855; 2000 is the same half-margin. The id list is caller-sized.
-  @job_insert_chunk 2000
-
   @doc """
   Atomically soft-deletes a list of notes by id, scoped to the caller's
   user + vault. All-or-nothing: if any id fails to resolve to a live note
@@ -4574,11 +4583,7 @@ defmodule Engram.Notes do
               # the tombstones. insert_all trades Enqueue.enqueue's per-job
               # telemetry for one statement; {_count, _} match keeps failures
               # loud (insert_all raises on error).
-              jobs = Enum.map(notes, &delete_note_index_job/1)
-
-              jobs
-              |> Enum.chunk_every(@job_insert_chunk)
-              |> Enum.each(&Oban.insert_all/1)
+              _ = notes |> Enum.map(&delete_note_index_job/1) |> Jobs.insert_chunked()
 
               {:ok, %{deleted: updated, notes: notes, seq: seq}}
 
@@ -6729,45 +6734,16 @@ defmodule Engram.Notes do
             # Side effects outside the transaction — broadcast + reindex + link
             # rewrite fan-out. T3.2 — hmac-only args, never plaintext.
             # Marker rows have no path / no embedding / no basename, skip everything.
-            Enum.each(real_note_updates, fn {note, old_note_path, new_path, new_note_folder,
-                                             _title} ->
-              old_path_hmac = old_path_hmac_b64!(user, old_note_path)
+            moves =
+              Enum.map(real_note_updates, fn {note, old_note_path, new_path, new_note_folder,
+                                              _title} ->
+                {note, old_note_path, new_path, new_note_folder,
+                 old_path_hmac_b64!(user, old_note_path)}
+              end)
 
-              _ =
-                Enqueue.enqueue(
-                  RepathNoteIndex.new_debounced(note.id, user.id,
-                    old_path_hmac: old_path_hmac,
-                    bulk: bulk_repath?
-                  ),
-                  "repath_note_index"
-                )
+            enqueue_rename_cascade_jobs(user, vault, moves, bulk_repath?)
 
-              # #648/#1231 Phase 3 — a folder rename is N note renames (basename
-              # unchanged), so each moved note reuses the Phase 1 rewrite job
-              # verbatim: qualified [[old-folder/…]] occurrences get the new
-              # prefix; bare [[basename]] occurrences plan no edit (idempotence
-              # guard in Rewriter.plan_edits/5). Old-path recovery = the tombstone
-              # this very cascade inserted in the same transaction — no ciphertext
-              # args. Origin safety is by construction: the plugin never calls the
-              # folder-rename REST surface (it renames per-file over CRDT, which
-              # Phase 2 gates), so every caller here is web/MCP and must rewrite.
-              # Gated on a real move: the idempotent same-folder branch of
-              # rename_folder_gated reaches this loop with old == new.
-              _ =
-                if old_note_path != new_path do
-                  Enqueue.enqueue(
-                    RewriteNoteLinks.new_for(
-                      user.id,
-                      vault.id,
-                      :note,
-                      note.id,
-                      old_path_hmac,
-                      Base.encode64(Links.basename_hmac(user, Links.basename_key(old_note_path)))
-                    ),
-                    "rewrite_note_links"
-                  )
-                end
-
+            Enum.each(moves, fn {note, old_note_path, new_path, new_note_folder, _old_hmac} ->
               # #976: carry the moved note's id on the old-path delete leg. The note
               # still exists (same id, new path, upsert leg below), so receivers can
               # correlate the delete+upsert pair by id instead of resolving by path
@@ -6812,6 +6788,69 @@ defmodule Engram.Notes do
           end
       end
     end
+  end
+
+  # The folder-rename cascade's reindex + link-rewrite jobs for every moved
+  # note, as two bulk inserts instead of 2N single ones (#2169).
+  #
+  # `moves` is `{note, old_path, new_path, new_folder, old_path_hmac_b64}`.
+  # T3.2 - hmac-only args, never plaintext.
+  #
+  # Repath: `Oban.insert_all/1` ignores the worker's `unique`, so notes that
+  # already have a pending RepathNoteIndex job are dropped with
+  # `Jobs.reject_pending/3` (what `unique: [keys: [:note_id, ...]]` did, one
+  # probe per 50 ids). A pending job reads the note's CURRENT path when it
+  # runs, so it also covers a second rename that landed before it ran; a job
+  # already EXECUTING may have read the older path, so it does not count
+  # (`executing: false`) and a fresh job is queued.
+  #
+  # Rewrite: RewriteNoteLinks has no `unique` (a cursor worker re-enqueues
+  # its own successor), so nothing to drop. #648/#1231 Phase 3 - a folder
+  # rename is N note renames (basename unchanged), so each moved note reuses
+  # the Phase 1 rewrite job verbatim: qualified [[old-folder/...]] occurrences
+  # get the new prefix; bare [[basename]] occurrences plan no edit
+  # (idempotence guard in Rewriter.plan_edits/5). Old-path recovery = the
+  # tombstone this cascade inserted in the same transaction. Origin safety is
+  # by construction: the plugin never calls the folder-rename REST surface,
+  # so every caller here is web/MCP and must rewrite. Gated on a real move:
+  # the idempotent same-folder branch reaches this with old == new.
+  #
+  # One job per folder rename was rejected: repath patches ONE note's Qdrant
+  # points under that note's own old hmac and retries/falls back per note, and
+  # the rewrite job's cursor and target are per note.
+  defp enqueue_rename_cascade_jobs(user, vault, moves, bulk_repath?) do
+    to_repath =
+      RepathNoteIndex
+      |> Enqueue.reject_pending(
+        Enum.map(moves, fn {n, _, _, _, _} -> n.id end),
+        [executing: false],
+        "repath_note_index"
+      )
+      |> MapSet.new()
+
+    moves
+    |> Enum.filter(fn {n, _, _, _, _} -> MapSet.member?(to_repath, n.id) end)
+    |> Enum.map(fn {note, _old, _new, _folder, old_hmac} ->
+      RepathNoteIndex.new_debounced(note.id, user.id,
+        old_path_hmac: old_hmac,
+        bulk: bulk_repath?
+      )
+    end)
+    |> Enqueue.enqueue_all("repath_note_index")
+
+    moves
+    |> Enum.filter(fn {_n, old, new, _f, _h} -> old != new end)
+    |> Enum.map(fn {note, old, _new, _folder, old_hmac} ->
+      RewriteNoteLinks.new_for(
+        user.id,
+        vault.id,
+        :note,
+        note.id,
+        old_hmac,
+        Base.encode64(Links.basename_hmac(user, Links.basename_key(old)))
+      )
+    end)
+    |> Enqueue.enqueue_all("rewrite_note_links")
   end
 
   # Extracted from `do_rename_folder/6` so the claim above it can guard the row
@@ -7041,9 +7080,14 @@ defmodule Engram.Notes do
       # Side effects outside the transaction context, so they never fire if
       # the update_all above rolled back. Qdrant cleanup + broadcasts.
       # Markers carry no embedding, so they skip the index-cleanup enqueue.
-      Enum.each(real_notes, fn note ->
-        _ = Enqueue.enqueue(delete_note_index_job(note), "delete_note_index")
+      #
+      # One chunked bulk insert, not one insert (pool checkout) per note
+      # (#2169). DeleteNoteIndex has no `unique`, so insert_all drops nothing
+      # the per-note insert deduped. The per-note delete EVENTS stay one per
+      # note: clients dispatch on each event's id and path.
+      Enqueue.enqueue_all(Enum.map(real_notes, &delete_note_index_job/1), "delete_note_index")
 
+      Enum.each(real_notes, fn note ->
         :ok = broadcast_change(user.id, vault.id, "delete", note.path, note.id, seq: seq)
       end)
 
@@ -7268,6 +7312,7 @@ defmodule Engram.Notes do
         )
         |> Repo.all()
         |> Map.new(&{&1.id, restore_one(user, &1)})
+        |> tap(&enqueue_restored_jobs(user, &1))
       end)
 
     restored = for {_id, {:ok, note}} <- results, do: note
@@ -7286,6 +7331,15 @@ defmodule Engram.Notes do
   defp skip_reason(nil), do: :changed
   defp skip_reason({:ok, _note}), do: nil
   defp skip_reason({:skip, reason}), do: reason
+
+  # The delete cleared embed_hash and dropped the points, so every restored
+  # note re-embeds. One bulk insert for the chunk (#2169), inside its
+  # transaction: a rolled-back chunk queues nothing, and a row skipped above
+  # (its savepoint rolled back) is not in `results` as `{:ok, _}`.
+  defp enqueue_restored_jobs(user, results) do
+    entries = for {_id, {:ok, note}} <- results, do: {note.id, EmbedNote.priority_for(note)}
+    ContentCommit.enqueue_jobs_bulk(entries, user.id)
+  end
 
   defp restore_one(user, tomb) do
     case Crypto.maybe_decrypt_note_fields(tomb, user) do
@@ -7316,14 +7370,6 @@ defmodule Engram.Notes do
            mode: :savepoint
          ) do
       {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
-        # The delete cleared embed_hash and dropped the points, so this
-        # re-embeds. Joins the transaction: a rolled-back chunk queues nothing.
-        _ =
-          ContentCommit.enqueue_jobs(updated.id, user.id,
-            embed_priority: EmbedNote.priority_for(updated),
-            finalize?: false
-          )
-
         {:ok, decrypt_or_raise!(updated, user)}
 
       {:error, %Ecto.Changeset{}} ->

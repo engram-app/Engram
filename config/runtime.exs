@@ -1131,7 +1131,7 @@ if config_env() == :prod do
           # here rather than in config/config.exs because it is only safe on a
           # node shaped like this one. A worker never binds a CRDT room, so it
           # never runs the inline CheckpointGate (3) that a web or unsplit node
-          # spends alongside this lane — and its POOL_SIZE is 25, not 15. Both
+          # spends alongside this lane — and its POOL_SIZE is 20, not 15. Both
           # halves of that are what make 6 affordable.
           #
           # 6 restores the capacity the cluster already had: the lane used to run

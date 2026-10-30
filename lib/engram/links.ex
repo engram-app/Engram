@@ -42,6 +42,7 @@ defmodule Engram.Links do
   import Ecto.Query
 
   alias Engram.Attachments.Attachment
+  alias Engram.Batch
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Links.NoteLink
@@ -82,7 +83,7 @@ defmodule Engram.Links do
   # against the protocol's 65535 cap leaves room for 3855, so 2000 is a
   # deliberate half-margin — a new optional column must not silently re-arm
   # the overflow.
-  @insert_chunk 2000
+  @insert_chunk Batch.insert_rows()
 
   # Unicode decides `String.length/1` (graphemes) and `String.downcase/1`,
   # so keys computed under another Unicode version are not trusted.

@@ -14,6 +14,7 @@ defmodule Engram.Attachments do
   alias Engram.Attachments.Attachment
   alias Engram.Attachments.BulkUpdate
   alias Engram.Attachments.SegmentedCipher
+  alias Engram.Batch
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
@@ -1216,8 +1217,7 @@ defmodule Engram.Attachments do
         Base.encode64(item.old_basename_hmac)
       )
     end)
-    |> Enum.chunk_every(2_000)
-    |> Enum.each(&Oban.insert_all/1)
+    |> Engram.Jobs.insert_chunked()
 
     Enum.map(moved, fn {item, _seq, _cols, att} -> {item, att} end)
   end
@@ -1338,7 +1338,7 @@ defmodule Engram.Attachments do
   # Elixir reads module attributes at their point of use, so a second
   # definition would silently give the chunker and the batch_delete guard
   # different limits.
-  @max_batch_entries 500
+  @max_batch_entries Batch.folder_delete()
 
   @spec delete_folder(Engram.Accounts.User.t(), map(), String.t()) ::
           {:ok, non_neg_integer()} | {:error, term()}

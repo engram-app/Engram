@@ -15,7 +15,7 @@ defmodule Engram.Workers.ReleaseIndexEntriesTest do
     end
 
     test "any number of ids is ONE job carrying all of them, in order" do
-      all = ids(ReleaseIndexEntries.chunk_size() * 2 + 7)
+      all = ids(Engram.Batch.release_index_entries() * 2 + 7)
       job = ReleaseIndexEntries.new_for("u", "v", all)
 
       assert %Ecto.Changeset{} = job
