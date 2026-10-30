@@ -212,6 +212,9 @@ defmodule Engram.Workers.FinalizeRevisionTest do
       set: [encrypted_dek: nil]
     )
 
+    # A raw write: evict as every `users` writer does (no NOTIFY in the sandbox).
+    :ok = Engram.Accounts.evict_user(u.id)
+
     assert :ok = perform_job(FinalizeRevision, %{note_id: n.id, user_id: u.id})
 
     parked = reload(u, b.id)
