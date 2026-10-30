@@ -75,6 +75,31 @@ defmodule EngramWeb.OnboardingGateChannelTest do
       assert "subscription" in err.missing
     end
 
+    # The topic is the channel's route; its user segment is hashed like every
+    # other user id in a log line.
+    test "a refused join logs its redacted topic as the route", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      topic = "crdt:#{user.id}:#{vault.id}"
+
+      {_, events} =
+        Engram.Test.LogCapture.with_events(fn ->
+          subscribe_and_join(socket, EngramWeb.CrdtChannel, topic, %{"crdt_proto" => 2})
+        end)
+
+      event =
+        Enum.find(events, fn
+          %{msg: {:string, s}} -> IO.iodata_to_binary(s) == "onboarding refused"
+          _ -> false
+        end)
+
+      assert event, "no onboarding refused line"
+      assert event.meta[:route] == Engram.Logger.Metadata.redact_topic(topic)
+      refute event.meta[:route] =~ user.id
+    end
+
     test "join succeeds once onboarding completes", %{user: user, vault: vault} do
       user = complete_onboarding!(user)
 

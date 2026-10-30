@@ -182,6 +182,8 @@ defmodule EngramWeb.OnboardingController do
       "onboarding step completed: #{step}",
       Metadata.with_category(:info, :lifecycle, [step: step, user_id: user.id] ++ extra)
     )
+
+    Onboarding.log_gate_opened(user, step)
   end
 
   defp maybe_put_attr(attrs, params, json_key, atom_key) do

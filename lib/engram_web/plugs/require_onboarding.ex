@@ -17,7 +17,7 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
   on a socket.
 
   Adding a route to the vault pipeline gets you this plug. Adding a *channel*
-  gets you nothing — call `EngramWeb.ChannelGate.check/3` from its `join/3`,
+  gets you nothing — call `EngramWeb.ChannelGate.check/4` from its `join/3`,
   NOT `Onboarding.gate/2` directly. `ChannelGate` composes onboarding with the
   account-lifecycle gates and the liveness stamp; calling `gate/2` alone gives
   you a channel with onboarding enforced and lifecycle silently missing, which
@@ -35,6 +35,7 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
 
   alias Engram.Onboarding
   alias EngramWeb.Plugs.Halt
+  alias EngramWeb.RequestMeta
 
   def init(opts), do: opts
 
@@ -44,7 +45,7 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
         Halt.json(conn, 401, %{error: "authentication_required"})
 
       user ->
-        case Onboarding.gate(user, opts) do
+        case Onboarding.gate(user, Keyword.put(opts, :log_meta, fn -> log_meta(conn) end)) do
           :ok ->
             conn
 
@@ -64,6 +65,14 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
             })
         end
     end
+  end
+
+  defp log_meta(conn) do
+    [
+      route: RequestMeta.log_route(conn),
+      surface: RequestMeta.log_surface(conn.assigns),
+      user_agent: RequestMeta.log_user_agent(conn)
+    ]
   end
 
   # Terms alone means everything after the agreement step is done, so this is
