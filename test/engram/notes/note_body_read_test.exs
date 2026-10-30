@@ -125,6 +125,70 @@ defmodule Engram.Notes.NoteBodyReadTest do
       assert read!(ctx.user.id, ctx.note.id, [:id, :crdt_head]).crdt_head ==
                Base.url_encode64(digest, padding: false)
     end
+
+    # R5: the join matches the body row's owner as well as its note, so a
+    # caller's own `user_id` reaches `note_bodies` as an index condition.
+    test "a body row owned by another user is not joined", ctx do
+      %{rows: [[head]]} = raw!("SELECT crdt_head FROM notes WHERE id = $1", ctx.note)
+
+      Repo.query!(
+        "UPDATE note_bodies SET user_id = $2, crdt_head = $3 WHERE note_id = $1",
+        [
+          Ecto.UUID.dump!(ctx.note.id),
+          Ecto.UUID.dump!(insert(:user).id),
+          :crypto.strong_rand_bytes(32)
+        ]
+      )
+
+      # Unscoped, as the maintenance pool reads (RLS does not filter): only
+      # the join condition keeps another user's row out.
+      read =
+        from(n in Engram.Notes.Note, where: n.id == ^ctx.note.id)
+        |> NoteBody.select_note([:id, :crdt_head])
+        |> Repo.one(skip_tenant_check: true)
+
+      assert read.crdt_head == head
+    end
+
+    # note_bodies is built for HOT updates (fillfactor 75, pkey only): a
+    # checkpoint rewrites content_ct / crdt_ct / crdt_head / key_version, and
+    # an index (key, INCLUDE, expression or predicate) on any of them turns
+    # every checkpoint into extra index writes. Only the immutable keys may
+    # be indexed.
+    test "every note_bodies index covers immutable keys only (HOT-eligible)" do
+      %{rows: rows} =
+        Repo.query!("""
+        SELECT i.indexrelid::regclass::text, a.attname
+        FROM pg_index i
+        JOIN pg_attribute a ON a.attrelid = i.indrelid
+        WHERE i.indrelid = 'note_bodies'::regclass
+          AND a.attnum > 0 AND NOT a.attisdropped
+          AND (a.attnum = ANY(i.indkey)
+               OR pg_get_expr(i.indexprs, i.indrelid) ~ ('\\m' || a.attname || '\\M')
+               OR pg_get_expr(i.indpred, i.indrelid) ~ ('\\m' || a.attname || '\\M'))
+        """)
+
+      assert rows != []
+      assert for([idx, col] <- rows, col not in ~w(note_id user_id), do: {idx, col}) == []
+    end
+
+    # R5: under RLS the only filter on `note_bodies` was `user_id`, which no
+    # index served, so a vault's manifest hash-joined a seq scan of EVERY
+    # tenant's bodies (106 ms on a 10k-note staging vault, growing with the
+    # whole table). The owner's bodies must be reachable by index (with the
+    # join above, `user_id` is an index condition for every `NoteBody.join/1`
+    # caller); the head itself is a heap fetch (HOT guard above).
+    test "an owner's bodies and heads are reachable by index", ctx do
+      {sql, _} =
+        Repo.to_sql(
+          :all,
+          from(b in NoteBody, where: b.user_id == ^ctx.user.id, select: {b.note_id, b.crdt_head})
+        )
+
+      plan = Engram.QueryPlan.generic_plan(sql, analyze: ["note_bodies"])
+      assert plan =~ "note_bodies_user_note", plan
+      assert plan =~ "Index Cond: (user_id = $1)", plan
+    end
   end
 
   describe "budgeted reads" do

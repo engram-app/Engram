@@ -6206,38 +6206,38 @@ defmodule Engram.Notes do
     # the sort spilled 5.7 MB to disk at the default work_mem.
     # A reference counts only while its folder row is live: one naming a deleted
     # row (a delete racing a write) is unresolved, like every other scan.
-    live_ref = live_folder_ref()
-
-    by_ref =
-      from(n in scoped_live(user, vault),
-        as: :n,
-        where: n.kind == "note" and not is_nil(n.folder_ref_id) and exists(live_ref),
-        group_by: n.folder_ref_id,
-        select: {n.folder_ref_id, count()}
-      )
-      |> Repo.all()
-      |> Enum.map(fn {ref, count} -> %{ref: ref, count: count} end)
-
-    folder_rows =
+    #
+    # ONE scan of the vault's notes, grouped by (reference, hash), and the
+    # liveness of a reference decided here from the folder rows this already
+    # loads (R5). The old two scans each probed `folders` per row, and the
+    # by-reference one became a nested loop over every folder row (231 ms on
+    # a 13k-folder staging vault).
+    {folder_rows, live} =
       from(f in Engram.Folders.Folder,
         where: f.vault_id == ^vault.id,
-        select: %{
-          id: f.id,
-          parent_id: f.parent_id,
-          dv: f.dek_version,
-          ct: f.name_ciphertext,
-          nonce: f.name_nonce
+        select: {
+          %{
+            id: f.id,
+            parent_id: f.parent_id,
+            dv: f.dek_version,
+            ct: f.name_ciphertext,
+            nonce: f.name_nonce
+          },
+          is_nil(f.deleted_at)
         }
       )
       |> Repo.all()
-      |> Enum.map(&%{folder_row: &1})
+      |> Enum.reduce({[], MapSet.new()}, fn {row, live?}, {rows, live} ->
+        {[%{folder_row: row} | rows], if(live?, do: MapSet.put(live, row.id), else: live)}
+      end)
 
-    unreferenced =
+    {by_ref, unreferenced} =
       from(n in scoped_live(user, vault),
-        as: :n,
-        where: not is_nil(n.folder_hmac) and (is_nil(n.folder_ref_id) or not exists(live_ref)),
-        group_by: n.folder_hmac,
+        where: not is_nil(n.folder_ref_id) or not is_nil(n.folder_hmac),
+        group_by: [n.folder_ref_id, n.folder_hmac],
         select: {
+          n.folder_ref_id,
+          n.folder_hmac,
           fragment(
             "any_value(ROW(?, ?, ?, ?))",
             n.id,
@@ -6249,12 +6249,38 @@ defmodule Engram.Notes do
         }
       )
       |> Repo.all()
-      |> Enum.map(fn {{id, dv, ct, nonce}, count} ->
+      |> Enum.split_with(fn {ref, _hmac, _row, _count} -> MapSet.member?(live, ref) end)
+
+    # A live reference counts its notes only (folder markers never carry one).
+    by_ref =
+      by_ref
+      |> merge_count_groups(fn {ref, _, _, _} -> ref end, fn ref, _first, count ->
+        %{ref: ref, count: count}
+      end)
+      |> Enum.reject(&(&1.count == 0))
+
+    # Everything else with a folder hash, merged by hash as before: root rows
+    # (no hash) are not a folder.
+    unreferenced =
+      unreferenced
+      |> Enum.reject(fn {_ref, hmac, _row, _count} -> is_nil(hmac) end)
+      |> merge_count_groups(fn {_, hmac, _, _} -> hmac end, fn _hmac, first, count ->
+        {_, _, {id, dv, ct, nonce}, _} = first
         # A record's fields skip Ecto's type casting, so the uuid is raw bytes.
         %{id: Ecto.UUID.load!(id), dv: dv, ct: ct, nonce: nonce, count: count}
       end)
 
-    by_ref ++ if(by_ref == [], do: [], else: folder_rows) ++ unreferenced
+    by_ref ++ if(by_ref == [], do: [], else: Enum.reverse(folder_rows)) ++ unreferenced
+  end
+
+  # One row per `key` over `raw_folder_count_rows/2`'s (reference, hash)
+  # groups: `build.(key, first group, summed count)`.
+  defp merge_count_groups(groups, key, build) do
+    groups
+    |> Enum.group_by(key)
+    |> Enum.map(fn {k, [first | _] = same} ->
+      build.(k, first, same |> Enum.map(&elem(&1, 3)) |> Enum.sum())
+    end)
   end
 
   @doc """

@@ -223,6 +223,31 @@ defmodule Engram.Notes.NoteSplitTest do
       assert row(note.id)["b_content"] == newer
     end
 
+    # The body join matches the owner as well as the note (R5), so a body
+    # row whose user_id differs from its note's is invisible to every read.
+    # The drift report must still see it (reported, never repaired). Read as
+    # the fleet walk does: the maintenance pool has no tenant guard and its
+    # policy admits every row, which the suite's superuser stands in for.
+    defmodule FleetRepo do
+      @moduledoc false
+      def all(query), do: Engram.Repo.all(query, skip_tenant_check: true)
+    end
+
+    test "a body row owned by another user is drift; a clean one is not", %{user: u, vault: v} do
+      note = write!(u, v, "owner.md", "owner")
+      clean = write!(u, v, "clean2.md", "clean")
+      ids = [note.id, clean.id]
+      assert NoteSplit.drift_ids(FleetRepo, ids) == []
+
+      Repo.query!("UPDATE note_bodies SET user_id = $2 WHERE note_id = $1", [
+        Ecto.UUID.dump!(note.id),
+        Ecto.UUID.dump!(Ecto.UUID.generate())
+      ])
+
+      assert NoteSplit.drift_ids(FleetRepo, ids) == [note.id]
+      assert row(note.id)["b_content"], "the body row must be left in place"
+    end
+
     test "a clean table reports no drift", %{user: u, vault: v} do
       _ = write!(u, v, "clean.md", "clean")
       ref = make_ref()
