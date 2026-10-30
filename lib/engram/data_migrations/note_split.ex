@@ -134,21 +134,26 @@ defmodule Engram.DataMigrations.NoteSplit do
       IdWindows.reduce_all(
         Note,
         [],
-        fn ids, %{repo: repo}, found ->
-          rows =
-            from(n in Note, where: n.kind == "note" and n.id in ^ids)
-            |> NoteBody.join()
-            |> where([_n, note_body: b], not is_nil(b.note_id))
-            |> select([n], %{id: n.id})
-            |> select_merge(^%{drift: NoteBody.drift()})
-            |> repo.all()
-
-          {:cont, for(%{id: id, drift: true} <- rows, do: id) ++ found}
-        end,
+        fn ids, %{repo: repo}, found -> {:cont, drift_ids(repo, ids) ++ found} end,
         batch_size: batch
       )
 
     emit_drift(found)
+  end
+
+  @doc false
+  # The notes among `ids` whose body row drifted (`NoteBody.drift/0`), or
+  # whose body row is owned by another user: `NoteBody.join/1` matches the
+  # owner too (R5), so every read treats such a row as missing and falls
+  # back to the notes columns. Reported like any other drift, never repaired.
+  def drift_ids(repo, ids) do
+    from(n in Note, as: :n, where: n.kind == "note" and n.id in ^ids)
+    |> NoteBody.join()
+    |> where(exists(from(o in "note_bodies", where: o.note_id == parent_as(:n).id, select: 1)))
+    |> select([n], %{id: n.id})
+    |> select_merge(^%{drift: dynamic([note_body: b], is_nil(b.note_id) or ^NoteBody.drift())})
+    |> repo.all()
+    |> Enum.flat_map(fn %{id: id, drift: drift?} -> if drift?, do: [id], else: [] end)
   end
 
   # Test-only fault seam: nil outside tests.
