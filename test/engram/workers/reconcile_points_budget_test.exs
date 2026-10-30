@@ -711,7 +711,7 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
         Repo.update_all(from(n in Note, where: n.id == ^note.id), set: [chunker_version: nil])
       end)
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: ~U[2026-10-19 04:02:00Z])
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
       assert [job] = all_enqueued(worker: RebuildStaleNote)
       assert job.args["note_id"] == note.id
       assert :ok = perform_job(RebuildStaleNote, job.args)
@@ -875,8 +875,6 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
   # `budget_points` and count against the user's 2,000-a-day ceiling, and
   # both 04:00 sweeps stop at a global maintenance-token ceiling a day.
   describe "maintenance ceilings" do
-    defp reverify_tick, do: DateTime.new!(Date.utc_today(), ~T[04:02:00])
-
     defp recap_jobs, do: for(j <- all_enqueued(worker: RebuildStaleNote), j.args["recap"], do: j)
 
     test "recap jobs carry budget_points and stop at the daily ceiling", %{
@@ -886,7 +884,7 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
       # 20 dense notes of 200 chunks: over the 128 cap, 128 points each.
       full_notes(user, vault, 20, 200)
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
       jobs = recap_jobs()
       assert jobs != []
       assert Enum.all?(jobs, &(&1.args["budget_points"] == 128 and &1.args["unmetered"]))
@@ -907,7 +905,7 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
       end)
 
       full_notes(user, vault, 3, 200)
-      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
       assert recap_jobs() == []
     end
   end

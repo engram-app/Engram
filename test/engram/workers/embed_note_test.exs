@@ -921,6 +921,24 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert DateTime.compare(updated.embed_retry_after, DateTime.utc_now()) == :gt
     end
 
+    # R6: the retry is a job scheduled for the cooldown's end, in the park's
+    # transaction, so no sweep has to find the note when the cooldown lapses.
+    test "a parked note is retried at its cooldown's end by a scheduled job",
+         %{bypass: bypass, note: note} do
+      stub_qdrant_optional(bypass)
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _texts -> {:error, {500, %{"detail" => "boom"}}} end)
+
+      assert {:error, {500, _}} =
+               perform_job(EmbedNote, %{note_id: note.id}, attempt: 5, max_attempts: 5)
+
+      parked = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert [retry] = all_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+      assert retry.priority == EmbedNote.backfill_priority()
+      assert abs(DateTime.diff(retry.scheduled_at, parked.embed_retry_after)) <= 1
+    end
+
     test "a transient transport failure gets a SHORT cooldown, not the 6h poison",
          %{bypass: bypass, note: note} do
       # "Qdrant/Ollama not reachable" recovers on its own — a 6h park stranded

@@ -82,8 +82,15 @@ defmodule Engram.PromEx.Indexing do
       (100..599, bounded). Any increase means a request Qdrant refuses on
       every attempt (#2138): the hourly re-check would cancel it forever.
 
-  Cardinality contract: only `:outcome`/`:reason`/`:kind`/`:dense` (closed
-  enums) and `:http_status` (an HTTP status). NEVER add note_id, user_id, or vault_id.
+    * `engram_prom_ex_indexing_reconcile_found_total{reason, missed}`: notes
+      the `ReconcileEmbeddings` backstop queued, by `reason`
+      (`content_stale | never_embedded | dense_missing | version | relink`)
+      and `missed` (`true`: a content change no event queued, see
+      `ReconcileEmbeddings`). The event path is healthy while
+      `sum(increase(...{missed="true"}[7d]))` stays near zero.
+
+  Cardinality contract: only `:outcome`/`:reason`/`:kind`/`:dense`/`:missed`
+  (closed enums) and `:http_status` (an HTTP status). NEVER add note_id, user_id, or vault_id.
   """
 
   use PromEx.Plugin
@@ -106,6 +113,7 @@ defmodule Engram.PromEx.Indexing do
   @vector_cache_lookup_event [:engram, :vector_cache, :lookup]
   @vector_cache_write_event [:engram, :vector_cache, :write]
   @vector_cache_skipped_event [:engram, :vector_cache, :skipped]
+  @reconcile_found_event [:engram, :reconcile, :found]
 
   @impl true
   def polling_metrics(opts) do
@@ -172,6 +180,15 @@ defmodule Engram.PromEx.Indexing do
     Event.build(
       :engram_indexing_event_metrics,
       [
+        sum(
+          metric_prefix ++ [:reconcile_found, :total],
+          event_name: @reconcile_found_event,
+          measurement: :count,
+          description:
+            "Notes the reconcile backstop queued, by reason; missed=true is a content " <>
+              "change no event queued (expected near zero).",
+          tags: [:reason, :missed]
+        ),
         counter(
           metric_prefix ++ [:repath, :total],
           event_name: @repath_stop_event,

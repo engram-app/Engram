@@ -197,14 +197,19 @@ config :engram, Oban,
       # missed. No two entries share a minute (ObanCronTest): they share the
       # 2-slot maintenance queue and one database.
       #
-      # Minutes: reconcile owns every :x2/:x7, the stalled-checkout scan every
-      # :x4/:x9, hourly jobs sit on :x3/:x8 or :10/:25/:55 (data-migrations
-      # runner :33, legal notices :18, attachment blob GC :03,
-      # CRDT head re-warm :48),
+      # Minutes: reconcile :02 (every 3 h, plus the 04:02 re-verify), the
+      # stalled-checkout scan every :x4/:x9, hourly jobs sit on :x3/:x8 or
+      # :10/:25/:55 (data-migrations runner :33, legal notices :18,
+      # attachment blob GC :03, CRDT head re-warm :48),
       # dailies on :00/:15/:30/:40/:45.
       crontab: [
-        # Every 5 min. Work is also queued the moment it is due (`kick/0`).
-        {"2-59/5 * * * *", Engram.Workers.ReconcileEmbeddings},
+        # A backstop (R6): writes queue their own jobs in their transaction,
+        # and kick/0 queues a sweep the moment notes are marked. While a
+        # version rollout is open the sweep chains itself every 5 min.
+        {"2 */3 * * *", Engram.Workers.ReconcileEmbeddings},
+        # The daily index-version re-verify; chains in 5-min hops while work
+        # remains (ReconcileEmbeddings `@reverify_hops`).
+        {"2 4 * * *", Engram.Workers.ReconcileEmbeddings, args: %{"mode" => "reverify"}},
         # Expired device-flow and OAuth codes/tokens. Cheap DELETEs. Hourly:
         # lookups already refuse expired rows and the cutoffs are 1 h / 7 d, so
         # this only bounds table size. Moved off :x4 for the 5-min scan (#2203).

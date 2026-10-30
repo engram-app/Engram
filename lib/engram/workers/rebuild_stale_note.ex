@@ -29,7 +29,7 @@ defmodule Engram.Workers.RebuildStaleNote do
   current against the pins and completes without embedding, so the
   backoff would keep the note out of the sweep for up to 30 minutes after
   `on` returns. Such a job clears it (`release_halted/1`): the next sweep
-  (the resume's `ReconcileEmbeddings.kick/0`, or the 5-minute cron) queues
+  (the resume's `ReconcileEmbeddings.kick/0`, or its rollout chain) queues
   the note again. Nothing is paid twice: a rebuilt note is current and
   not selected, and a paid one is guarded by `notes.rebuild_paid_at`.
   """

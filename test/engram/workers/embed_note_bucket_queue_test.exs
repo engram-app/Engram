@@ -13,7 +13,7 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
   alias Engram.Notes.{Chunk, Note}
   alias Engram.Repo
   alias Engram.UsageMeters
-  alias Engram.Workers.{EmbedNote, ReconcileEmbeddings}
+  alias Engram.Workers.{EmbedNote, ReconcileEmbeddings, WakeBudgetParked}
 
   setup :verify_on_exit!
 
@@ -372,45 +372,151 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
     end
   end
 
-  describe "ReconcileEmbeddings.fitting/2 (oldest first, first fit)" do
+  # R6: a park schedules its own wake for the time the refilling bucket can
+  # pay; the reconcile sweep (every 3 h now) is only the backstop.
+  describe "the wake is a scheduled job, not a sweep" do
+    defp wakes(user), do: all_enqueued(worker: WakeBudgetParked, args: %{"user_id" => user.id})
+
+    defp bucket_cap(user) do
+      user.id
+      |> Engram.Accounts.get_user_with_subscription()
+      |> Engram.Billing.effective_limit(:embed_token_bucket)
+    end
+
+    defp assert_near(%DateTime{} = at, %DateTime{} = expected),
+      do: assert(abs(DateTime.diff(at, expected)) <= 5, "#{at} is not ~#{expected}")
+
+    test "a park schedules one wake, at the time the bucket covers its next chunk",
+         %{user: user, vault: vault} do
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "P.md", content: "# P\n\nwords"})
+      set_bucket(user.id, 0)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+      parked = reload(note)
+      assert parked.embed_budget_parked == true
+
+      assert [wake] = wakes(user)
+      need = min(parked.embed_budget_need, parked.embed_budget_next || 512)
+
+      assert_near(
+        wake.scheduled_at,
+        UsageMeters.bucket_ready_at(0, need, bucket_cap(user), DateTime.utc_now())
+      )
+    end
+
+    test "the wake, run at its time, wakes the note with no sweep", %{user: user, vault: vault} do
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "A.md", content: "# A\n\nwords"})
+      park!(note, DateTime.utc_now(), 10)
+      set_bucket(user.id, 1_000)
+
+      assert :ok = perform_job(WakeBudgetParked, %{user_id: user.id})
+
+      assert reload(note).embed_budget_parked == nil
+      assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+      # Nothing left parked: no successor.
+      assert wakes(user) == []
+    end
+
+    test "a wake that leaves notes parked schedules the next at their refill time",
+         %{user: user, vault: vault} do
+      small = Engram.Fixtures.insert_note!(user, vault, %{path: "S.md", content: "# S\n\ns"})
+      big = Engram.Fixtures.insert_note!(user, vault, %{path: "B.md", content: "# B\n\nb"})
+      now = DateTime.utc_now()
+      park!(small, DateTime.add(now, -60, :second), 10)
+      park!(big, now, 100_000, 50_000)
+      set_bucket(user.id, 100)
+
+      assert :ok = perform_job(WakeBudgetParked, %{user_id: user.id})
+
+      assert reload(small).embed_budget_parked == nil
+      assert reload(big).embed_budget_parked == true
+      # 90 left after the small note; the big one's next chunk is 50,000.
+      assert [next] = wakes(user)
+
+      assert_near(
+        next.scheduled_at,
+        UsageMeters.bucket_ready_at(90, 50_000, bucket_cap(user), now)
+      )
+    end
+
+    test "an empty bucket wakes nothing and waits for the refill", %{user: user, vault: vault} do
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "E.md", content: "# E\n\nwords"})
+      park!(note, DateTime.utc_now(), 1_000)
+      set_bucket(user.id, 0)
+
+      assert :ok = perform_job(WakeBudgetParked, %{user_id: user.id})
+
+      assert reload(note).embed_budget_parked == true
+      refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+      assert [next] = wakes(user)
+      now = DateTime.utc_now()
+      assert_near(next.scheduled_at, UsageMeters.bucket_ready_at(0, 512, bucket_cap(user), now))
+    end
+
+    test "an unmetered user wakes everything and schedules nothing", %{user: user, vault: vault} do
+      insert(:subscription, user: user, tier: "pro", status: "active")
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "U.md", content: "# U\n\nwords"})
+      park!(note, DateTime.utc_now(), 10_000_000)
+
+      assert :ok = perform_job(WakeBudgetParked, %{user_id: user.id})
+
+      assert reload(note).embed_budget_parked == nil
+      assert wakes(user) == []
+    end
+
+    test "two parks keep one wake, at the earlier time", %{user: user} do
+      now = DateTime.utc_now()
+      later = DateTime.add(now, 3_600, :second)
+      earlier = DateTime.add(now, 60, :second)
+
+      :ok = WakeBudgetParked.schedule(user.id, later)
+      :ok = WakeBudgetParked.schedule(user.id, earlier)
+      :ok = WakeBudgetParked.schedule(user.id, later)
+
+      assert [wake] = wakes(user)
+      assert_near(wake.scheduled_at, earlier)
+    end
+  end
+
+  describe "WakeBudgetParked.fitting/2 (oldest first, first fit)" do
     # Candidates are `{id, need, next_chunk}`, oldest first.
     test "the oldest note that fits wakes first" do
-      assert ReconcileEmbeddings.fitting([{:a, 100, nil}, {:b, 50, nil}, {:c, 50, nil}], 120) ==
+      assert WakeBudgetParked.fitting([{:a, 100, nil}, {:b, 50, nil}, {:c, 50, nil}], 120) ==
                [{:a, nil}]
     end
 
     test "a note that does not fit is skipped; smaller ones behind it wake" do
       candidates = [{:a, 50, nil}, {:b, 900, nil}, {:c, 40, nil}, {:d, 30, nil}]
-      assert ReconcileEmbeddings.fitting(candidates, 100) == [{:a, nil}, {:c, nil}]
+      assert WakeBudgetParked.fitting(candidates, 100) == [{:a, nil}, {:c, nil}]
     end
 
     test "the oldest, skipped, still gets what is left, so it cannot starve" do
-      assert ReconcileEmbeddings.fitting([{:a, 700, 400}, {:b, 100, nil}, {:c, 600, nil}], 600) ==
+      assert WakeBudgetParked.fitting([{:a, 700, 400}, {:b, 100, nil}, {:c, 600, nil}], 600) ==
                [{:a, 500}, {:b, nil}]
     end
 
     test "the skipped oldest wakes only once what is left covers its next chunk" do
       candidates = [{:a, 700, 300}, {:b, 100, nil}]
-      assert ReconcileEmbeddings.fitting(candidates, 399) == [{:b, nil}]
-      assert ReconcileEmbeddings.fitting(candidates, 400) == [{:a, 300}, {:b, nil}]
+      assert WakeBudgetParked.fitting(candidates, 399) == [{:b, nil}]
+      assert WakeBudgetParked.fitting(candidates, 400) == [{:a, 300}, {:b, nil}]
     end
 
     test "an unknown next chunk is taken as 512 tokens" do
-      assert ReconcileEmbeddings.fitting([{:a, 2_000, nil}], 511) == []
-      assert ReconcileEmbeddings.fitting([{:a, 2_000, nil}], 512) == [{:a, 512}]
+      assert WakeBudgetParked.fitting([{:a, 2_000, nil}], 511) == []
+      assert WakeBudgetParked.fitting([{:a, 2_000, nil}], 512) == [{:a, 512}]
     end
 
     test "nothing wakes on an empty bucket, and nothing partial on a spent one" do
-      assert ReconcileEmbeddings.fitting([{:a, 700, nil}], 0) == []
-      assert ReconcileEmbeddings.fitting([{:a, 700, nil}, {:b, 100, nil}], 100) == [{:b, nil}]
+      assert WakeBudgetParked.fitting([{:a, 700, nil}], 0) == []
+      assert WakeBudgetParked.fitting([{:a, 700, nil}, {:b, 100, nil}], 100) == [{:b, nil}]
     end
 
     test "a legacy park with no need recorded wakes once anything is left" do
-      assert ReconcileEmbeddings.fitting([{:a, nil, nil}], 1) == [{:a, nil}]
+      assert WakeBudgetParked.fitting([{:a, nil, nil}], 1) == [{:a, nil}]
     end
 
     test "unmetered wakes everything" do
-      assert ReconcileEmbeddings.fitting([{:a, 700, 5}, {:b, nil, nil}], :unmetered) ==
+      assert WakeBudgetParked.fitting([{:a, 700, 5}, {:b, nil, nil}], :unmetered) ==
                [{:a, nil}, {:b, nil}]
     end
   end
