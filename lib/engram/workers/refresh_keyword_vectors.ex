@@ -96,13 +96,22 @@ defmodule Engram.Workers.RefreshKeywordVectors do
   # ReconcileEmbeddings' keyword sweep. Stamped with the TARGET version (the
   # pin before `INDEX_REBUILD=on`), as `EmbedNote` stamps: the v5 pass must
   # still re-encode it with the pinned avgdl. Guarded on the content it read: an edit
-  # that landed meanwhile is EmbedNote's to index (and stamp).
+  # that landed meanwhile is EmbedNote's to index (and stamp). And on the
+  # stamp it read, as EmbedNote's (#2216 L1): a DEK rotation's flip or a
+  # payload-drift heal NULLs it while our resparse encoded under the retired
+  # filter key, and stamping over that NULL would keep those vectors for good.
   defp stamp_keyword_version(note) do
     {:ok, _} =
       Repo.with_tenant(note.user_id, fn ->
         Repo.update_all(
           from(n in Note,
-            where: n.kind == "note" and n.id == ^note.id and n.content_hash == ^note.content_hash
+            where:
+              n.kind == "note" and n.id == ^note.id and n.content_hash == ^note.content_hash and
+                fragment(
+                  "? IS NOT DISTINCT FROM ?",
+                  n.keyword_version,
+                  type(^note.keyword_version, :integer)
+                )
           ),
           set: [keyword_version: elem(Engram.Rebuild.target_versions(), 1)]
         )

@@ -245,6 +245,47 @@ defmodule Engram.IndexingResparseTest do
              Engram.KeywordIndex.version()
   end
 
+  # A DEK rotation's flip (or a payload-drift heal) clears `keyword_version`
+  # while this job's resparse is in flight: those points were just encoded
+  # under the retired filter key. Stamping over the NULL would keep them on
+  # that key for good, so the stamp is compare-and-set, as EmbedNote's
+  # (#2216 L1).
+  test "a keyword_version clear that lands during the job is kept", ctx do
+    %{user: user, note: note} = ctx
+
+    Repo.update_all(from(n in Notes.Note, where: n.id == ^note.id), [set: [keyword_version: 1]],
+      skip_tenant_check: true
+    )
+
+    bypass = Bypass.open()
+    Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+    Engram.QdrantStub.stub_healthy(bypass)
+
+    Bypass.stub(bypass, :any, :any, fn conn ->
+      {:ok, _body, conn} = Plug.Conn.read_body(conn, length: 50_000_000)
+
+      if String.ends_with?(conn.request_path, "/points/vectors") do
+        Repo.update_all(
+          from(n in Notes.Note, where: n.id == ^note.id),
+          [set: [keyword_version: nil]],
+          skip_tenant_check: true
+        )
+      end
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, ~s({"result": true, "status": "ok"}))
+    end)
+
+    assert :ok =
+             perform_job(Engram.Workers.RefreshKeywordVectors, %{
+               note_id: note.id,
+               user_id: user.id
+             })
+
+    assert is_nil(Repo.get!(Notes.Note, note.id, skip_tenant_check: true).keyword_version)
+  end
+
   # Before `INDEX_REBUILD=on` the target is the pin: stamping the build here
   # would make the v5 pass skip a note it must re-encode (pinned avgdl).
   test "before the v5 pass the job stamps the pinned keyword version", ctx do
