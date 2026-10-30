@@ -43,6 +43,8 @@ defmodule Engram.DataMigrations.FolderTable do
   alias Engram.Backfill.TenantScan
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.Crypto.RotationGate
+  alias Engram.Crypto.RotationInProgressError
   alias Engram.Folders.Folder
   alias Engram.Logger.Metadata
   alias Engram.Notes.Helpers
@@ -97,6 +99,9 @@ defmodule Engram.DataMigrations.FolderTable do
   defp safe_migrate_user(user_id, batch) do
     migrate_user(user_id, batch)
   rescue
+    # Deferred, not failed: the rotation ends in minutes and the next pass
+    # (the ledger stays open through `blocked`) finds the user unlocked.
+    RotationInProgressError -> %{changed: 0, blocked: 1}
     e -> user_failed(user_id, e)
   catch
     :exit, reason -> user_failed(user_id, reason)
@@ -115,10 +120,20 @@ defmodule Engram.DataMigrations.FolderTable do
   end
 
   defp migrate_user(user_id, batch) do
+    # Read the key's version BEFORE the key itself (`RotationGate.check/2`).
+    dek_version = RotationGate.dek_version(user_id)
+
     with %User{} = user <- Repo.get(User, user_id),
          {:ok, dek} <- Crypto.get_dek(user) do
-      ctx = %{user_id: user_id, dek: dek, fk: Crypto.dek_filter_key_from_bytes(dek), batch: batch}
-      tree = scope(user_id, &load_tree(&1, ctx))
+      ctx = %{
+        user_id: user_id,
+        dek: dek,
+        dek_version: dek_version,
+        fk: Crypto.dek_filter_key_from_bytes(dek),
+        batch: batch
+      }
+
+      tree = scope(ctx, &load_tree(&1, ctx))
 
       {tree, markers} = markers(ctx, tree)
       {tree, notes} = notes(ctx, tree)
@@ -151,14 +166,32 @@ defmodule Engram.DataMigrations.FolderTable do
   # One short transaction per step: a tenant block on SaaS' app pool, the
   # maintenance repo (its `maintenance_all` policies) where one is configured.
   # Every statement also filters on `user_id`.
-  defp scope(user_id, fun) do
+  defp scope(ctx, fun) do
     case Repo.maintenance() do
       Repo ->
-        Repo.with_tenant!(user_id, fn -> fun.(Repo) end)
+        Repo.with_tenant!(ctx.user_id, fn -> gated(Repo, ctx, fun) end)
 
       maintenance ->
-        {:ok, result} = maintenance.transaction(fn -> fun.(maintenance) end)
+        {:ok, result} = maintenance.transaction(fn -> gated(maintenance, ctx, fun) end)
         result
+    end
+  end
+
+  # A DEK rotation re-keys `folders` once, then flips the key: a folder written
+  # under the old key after that sweep would never be re-keyed. So every
+  # transaction first takes the user's rotation lock FOR SHARE (a rotation
+  # starting meanwhile waits for it) and refuses a locked user or a key that
+  # moved since `ctx.dek` was read. The maintenance pool's tenant block does
+  # not gate by itself.
+  defp gated(repo, ctx, fun) do
+    case RotationGate.check(ctx.user_id,
+           repo: repo,
+           share_lock: true,
+           dek_version: ctx.dek_version
+         ) do
+      :ok -> fun.(repo)
+      {:error, :user_not_found} -> fun.(repo)
+      {:error, :rotation_in_progress} -> raise Engram.Crypto.RotationInProgressError
     end
   end
 
@@ -318,7 +351,7 @@ defmodule Engram.DataMigrations.FolderTable do
 
   defp markers(ctx, tree) do
     %{rows: rows} =
-      scope(ctx.user_id, fn repo ->
+      scope(ctx, fn repo ->
         repo.query!(
           """
           SELECT id, vault_id, dek_version, folder_ciphertext, folder_nonce FROM notes
@@ -356,7 +389,7 @@ defmodule Engram.DataMigrations.FolderTable do
     items
     |> Enum.chunk_every(ctx.batch)
     |> Enum.flat_map_reduce(state, fn chunk, state ->
-      scope(ctx.user_id, fn repo ->
+      scope(ctx, fn repo ->
         Enum.flat_map_reduce(chunk, state, &fun.(repo, &1, &2))
       end)
     end)
@@ -368,7 +401,7 @@ defmodule Engram.DataMigrations.FolderTable do
   # folder that is gone): one envelope each, never a note's.
   defp notes(ctx, tree) do
     %{rows: rows} =
-      scope(ctx.user_id, fn repo ->
+      scope(ctx, fn repo ->
         repo.query!(
           """
           SELECT DISTINCT ON (n.vault_id, n.folder_hmac)
@@ -407,7 +440,7 @@ defmodule Engram.DataMigrations.FolderTable do
     # A note a writer held was skipped; look once for any left.
     left? =
       leaves != [] and
-        scope(ctx.user_id, fn repo ->
+        scope(ctx, fn repo ->
           %{rows: [[left?]]} =
             repo.query!(
               """
@@ -428,7 +461,7 @@ defmodule Engram.DataMigrations.FolderTable do
   # an IN subquery may be re-planned per row and, with SKIP LOCKED, drift.
   defp point_notes(ctx, {vault, hmac, leaf}, n \\ 0) do
     count =
-      scope(ctx.user_id, fn repo ->
+      scope(ctx, fn repo ->
         %{num_rows: count} =
           repo.query!(
             """
@@ -457,7 +490,7 @@ defmodule Engram.DataMigrations.FolderTable do
 
   defp attachments(ctx, tree, after_id, stats, rounds) do
     {tree, stats, last, size} =
-      scope(ctx.user_id, fn repo ->
+      scope(ctx, fn repo ->
         %{rows: rows} =
           repo.query!(
             """

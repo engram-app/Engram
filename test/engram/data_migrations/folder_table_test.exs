@@ -232,6 +232,22 @@ defmodule Engram.DataMigrations.FolderTableTest do
       assert ref("notes", bad_note.id) == nil
     end
 
+    test "a rotation in progress defers the user and writes no folders", %{user: u, vault: v} do
+      note = note!(u, v, "A/B/N.md")
+      unresolve!()
+      Repo.query!("UPDATE users SET dek_rotation_locked_at = now() WHERE id = $1", [dump(u.id)])
+
+      assert {:more, stats} = FolderTable.run_pass(user_ids: [u.id])
+      assert stats[:blocked] == 1
+      assert %{rows: [[0]]} = Repo.query!("SELECT count(*)::int FROM folders")
+      assert ref("notes", note.id) == nil
+
+      # Unlocked, the next pass does the work.
+      Repo.query!("UPDATE users SET dek_rotation_locked_at = NULL WHERE id = $1", [dump(u.id)])
+      run_to_done(user_ids: [u.id])
+      assert ref("notes", note.id)
+    end
+
     test "touches nothing of another tenant", %{user: u, vault: v} do
       other = insert(:user)
       {:ok, other} = Crypto.ensure_user_dek(other)

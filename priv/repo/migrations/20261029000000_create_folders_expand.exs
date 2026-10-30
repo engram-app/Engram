@@ -76,6 +76,9 @@ defmodule Engram.Repo.Migrations.CreateFoldersExpand do
     # idx_attachments_user and idx_chunks_user.
     execute "CREATE INDEX folders_user ON folders (user_id)"
 
+    # The parent FK's checks on a hard delete (children with this parent).
+    execute "CREATE INDEX folders_parent ON folders (vault_id, parent_id)"
+
     execute "ALTER TABLE folders ENABLE ROW LEVEL SECURITY"
     execute "ALTER TABLE folders FORCE ROW LEVEL SECURITY"
 

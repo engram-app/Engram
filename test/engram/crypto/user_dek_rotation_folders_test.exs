@@ -55,11 +55,22 @@ defmodule Engram.Crypto.UserDekRotationFoldersTest do
     vault: vault
   } do
     note = write!(user, vault, "Projects/Alpha/one.md")
+    deep = write!(user, vault, "Projects/Alpha/Beta/Gamma/Delta/two.md")
     root_note = write!(user, vault, "top.md")
+    trashed = write!(user, vault, "Old/Gone/three.md")
     FolderTable.run_pass(user_ids: [user.id])
 
+    # A soft-deleted folder with a trashed note in it.
+    Repo.query!(
+      "UPDATE folders SET deleted_at = now() WHERE id = (SELECT folder_ref_id FROM notes WHERE id = $1)",
+      [Ecto.UUID.dump!(trashed.id)]
+    )
+
+    Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(trashed.id)])
+
     before = folders(user.id)
-    assert length(before) == 2
+    assert length(before) == 7
+    deep_before = ref_id(deep.id)
     ref_before = ref_id(note.id)
     assert ref_before
     assert ref_id(root_note.id) == nil
@@ -87,15 +98,53 @@ defmodule Engram.Crypto.UserDekRotationFoldersTest do
         {name, f}
       end)
 
+    assert by_name["Gamma"].full_path_hmac ==
+             Crypto.hmac_field(fk, "Projects/Alpha/Beta/Gamma")
+
+    assert by_name["Gone"].full_path_hmac == Crypto.hmac_field(fk, "Old/Gone")
+    assert by_name["Gone"].deleted_at
     assert by_name["Projects"].full_path_hmac == Crypto.hmac_field(fk, "Projects")
     assert by_name["Alpha"].full_path_hmac == Crypto.hmac_field(fk, "Projects/Alpha")
 
     # The trigger found the re-keyed row: same folder, no orphan, no duplicate.
     assert ref_id(note.id) == Ecto.UUID.dump!(by_name["Alpha"].id)
+    assert ref_id(deep.id) == deep_before
     assert ref_id(root_note.id) == nil
+
+    # A trashed note in a soft-deleted folder loses its ref: the
+    # `notes_set_folder_ref` trigger resolves live folders only, and it fires
+    # on the `folder_hmac` rewrite. Nothing reads the ref yet, and the note
+    # re-enters `FolderTable`'s selection (live, ref NULL) when it is restored.
+    assert ref_id(trashed.id) == nil
+
+    Repo.query!("UPDATE folders SET deleted_at = NULL WHERE id = $1", [
+      Ecto.UUID.dump!(by_name["Gone"].id)
+    ])
+
+    Repo.query!("UPDATE notes SET deleted_at = NULL WHERE id = $1", [Ecto.UUID.dump!(trashed.id)])
+    FolderTable.run_pass(user_ids: [user.id])
+    assert ref_id(trashed.id) == Ecto.UUID.dump!(by_name["Gone"].id)
 
     # A second pass over the data migration has nothing to do (no duplicate tree).
     assert :done = FolderTable.run_pass(user_ids: [user.id])
-    assert length(folders(user.id)) == 2
+    assert length(folders(user.id)) == 7
+  end
+
+  test "a looping parent chain does not hang or fail the rotation", %{user: user, vault: vault} do
+    write!(user, vault, "P/Q/n.md")
+    FolderTable.run_pass(user_ids: [user.id])
+    [a, b] = folders(user.id)
+
+    Repo.query!("UPDATE folders SET parent_id = $2 WHERE id = $1", [
+      Ecto.UUID.dump!(a.id),
+      Ecto.UUID.dump!(b.id)
+    ])
+
+    Repo.query!("UPDATE folders SET parent_id = $2 WHERE id = $1", [
+      Ecto.UUID.dump!(b.id),
+      Ecto.UUID.dump!(a.id)
+    ])
+
+    assert :ok = UserDekRotation.rotate_user(user.id)
   end
 end

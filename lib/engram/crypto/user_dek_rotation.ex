@@ -55,6 +55,8 @@ defmodule Engram.Crypto.UserDekRotation do
   require Logger
 
   @batch_size 200
+  # Folder nesting deeper than this is a corrupt (looping) parent chain.
+  @max_folder_depth 512
 
   @type rotate_result :: :ok | {:error, term()}
 
@@ -189,6 +191,10 @@ defmodule Engram.Crypto.UserDekRotation do
          # Folders before notes: the `notes_set_folder_ref` trigger re-resolves
          # `folder_ref_id` from `folders.full_path_hmac` whenever the notes sweep
          # rewrites `folder_hmac`, so the rows must already carry the new key.
+         # The trigger resolves LIVE folders only, so a trashed note in a
+         # soft-deleted folder ends with a NULL ref. Harmless: nothing reads
+         # the ref yet, and a restored note is live with a NULL ref, which
+         # `FolderTable` re-resolves (pinned in user_dek_rotation_folders_test).
          :ok <- sweep_folders(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_notes(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- enqueue_crdt_head_rewarm(user),
@@ -376,11 +382,32 @@ defmodule Engram.Crypto.UserDekRotation do
         {id, {parent, segment}}
       end)
 
-    rows
-    |> Enum.filter(fn {_, _, _, _, has_path} -> has_path end)
-    |> Enum.map(fn {id, _, _, _, _} ->
-      {Ecto.UUID.dump!(id), Crypto.hmac_field(new_filter_key, folder_path(names, id))}
-    end)
+    {paths, _memo} =
+      rows
+      |> Enum.filter(fn {_, _, _, _, has_path} -> has_path end)
+      |> Enum.flat_map_reduce(%{}, fn {id, _, _, _, _}, memo ->
+        case folder_path(names, id, memo, 0) do
+          {:ok, path, memo} ->
+            {[{Ecto.UUID.dump!(id), Crypto.hmac_field(new_filter_key, path)}], memo}
+
+          {:cycle, memo} ->
+            # Corrupt parent chain. Raising would strand the user (earlier
+            # sweeps committed under the new DEK), so the row keeps its hmac.
+            Logger.error(
+              "T3.7 sweep_folders: parent chain loops or is too deep",
+              Metadata.with_category(:error, :crypto,
+                user_id: user_id,
+                table: :folders,
+                row_id: id,
+                phase: :sweep_folders
+              )
+            )
+
+            {[], memo}
+        end
+      end)
+
+    paths
     |> Enum.chunk_every(1_000)
     |> Enum.each(fn chunk ->
       {ids, hmacs} = Enum.unzip(chunk)
@@ -396,10 +423,27 @@ defmodule Engram.Crypto.UserDekRotation do
     end)
   end
 
-  defp folder_path(names, id) do
-    case Map.fetch!(names, id) do
-      {nil, segment} -> segment
-      {parent, segment} -> folder_path(names, parent) <> "/" <> segment
+  # The path of a folder from its parent chain, memoised so a deep tree is
+  # walked once, not once per descendant. A chain longer than
+  # `@max_folder_depth` is a cycle (or corrupt): `{:cycle, memo}`.
+  defp folder_path(_names, _id, memo, depth) when depth > @max_folder_depth, do: {:cycle, memo}
+
+  defp folder_path(names, id, memo, depth) do
+    case memo do
+      %{^id => path} ->
+        {:ok, path, memo}
+
+      _ ->
+        case Map.fetch!(names, id) do
+          {nil, segment} ->
+            {:ok, segment, Map.put(memo, id, segment)}
+
+          {parent, segment} ->
+            with {:ok, parent_path, memo} <- folder_path(names, parent, memo, depth + 1) do
+              path = parent_path <> "/" <> segment
+              {:ok, path, Map.put(memo, id, path)}
+            end
+        end
     end
   end
 

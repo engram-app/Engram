@@ -43,6 +43,10 @@ defmodule Engram.Crypto.RotationGate do
   `v`: a rotation that started AND finished after the caller read its DEK
   leaves the lock clear, and only the version shows the key moved. Read `v`
   with `dek_version/1` BEFORE deriving anything from the DEK.
+
+  With `repo: r`, the read (and its `FOR SHARE`) runs on that repo, so a
+  caller writing through the maintenance pool holds the share lock on the
+  connection that writes, not on another one.
   """
   @spec check(Ecto.UUID.t(), keyword()) ::
           :ok | {:error, :rotation_in_progress | :user_not_found}
@@ -57,7 +61,7 @@ defmodule Engram.Crypto.RotationGate do
 
     query = if opts[:share_lock], do: from(u in query, lock: "FOR SHARE"), else: query
 
-    case Repo.one(query, skip_tenant_check: true) do
+    case Keyword.get(opts, :repo, Repo).one(query, skip_tenant_check: true) do
       nil -> {:error, :user_not_found}
       {_id, %DateTime{}, _version} -> {:error, :rotation_in_progress}
       {_id, nil, version} -> same_version(opts, version)
