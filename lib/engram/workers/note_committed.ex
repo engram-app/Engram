@@ -21,6 +21,8 @@ defmodule Engram.Workers.NoteCommitted do
   """
   use Oban.Worker, queue: :events, max_attempts: 10
 
+  import Ecto.Query, only: [from: 2]
+
   alias Engram.Notes.ContentCommit
 
   @doc "The dispatcher job for a checkpoint of `note_id` that changed its content."
@@ -52,9 +54,20 @@ defmodule Engram.Workers.NoteCommitted do
   without it. Never through `Engram.Notes.Enqueue`: its retry and rescue
   would hide an aborted transaction from the caller.
   """
-  @spec insert!(String.t(), String.t(), keyword()) :: :ok
+  @spec insert!(String.t(), String.t(), keyword()) :: Oban.Job.t()
   def insert!(note_id, user_id, opts) do
-    {:ok, _job} = Oban.insert(job(note_id, user_id, opts))
+    {:ok, job} = Oban.insert(job(note_id, user_id, opts))
+    job
+  end
+
+  @doc """
+  Deletes a job `insert!/3` wrote ahead of a write that then changed nothing
+  (a lost fence, a create that raced), in the same transaction. By id, so
+  another write's job for the note is never touched.
+  """
+  @spec discard!(Oban.Job.t()) :: :ok
+  def discard!(%Oban.Job{id: id}) do
+    {_, _} = Engram.Repo.delete_all(from(j in Oban.Job, where: j.id == ^id))
     :ok
   end
 

@@ -2209,19 +2209,24 @@ defmodule Engram.Notes do
       # Shared create leg with insert_new_note/7 (do_bare_insert/6) — genesis
       # decrypts inline and tags :announce (a real create), a version_conflict
       # on a concurrent-create race.
+      # R6 outbox: a bodied create's job goes in BEFORE the insert, so it is
+      # not made under the vault seq lock the insert takes (#1710); a create
+      # that did not insert discards it.
+      job = if body && base_attrs.content != "", do: commit_genesis_body(id, user)
+
       case do_bare_insert(base_attrs, user, sanitized_path, folder, id, lookup_query) do
         {:inserted, inserted, _crdt} when is_nil(body) ->
           {:ok, decrypt_or_raise!(inserted, user), :announce}
 
         {:inserted, inserted, _crdt} ->
-          note = decrypt_or_raise!(inserted, user)
-          _ = if note.content != "", do: commit_genesis_body(note, user)
-          {:ok, note, :announce_bodied}
+          {:ok, decrypt_or_raise!(inserted, user), :announce_bodied}
 
         {:raced, existing} ->
+          :ok = discard_job(job)
           {:error, :version_conflict, decrypt_or_raise!(existing, user)}
 
         {:error, _} = err ->
+          :ok = discard_job(job)
           err
       end
     end
@@ -2264,13 +2269,17 @@ defmodule Engram.Notes do
   end
 
   # The content jobs the seed's checkpoint used to enqueue for a genesis body:
-  # its outbox row, in the create's own transaction (R6).
-  defp commit_genesis_body(note, user) do
-    NoteCommitted.insert!(note.id, user.id,
-      embed_priority: EmbedNote.priority_for(note),
+  # its outbox row, in the create's own transaction (R6). A new note was never
+  # embedded, so it ranks as backfill (`EmbedNote.priority_for/1`).
+  defp commit_genesis_body(id, user) do
+    NoteCommitted.insert!(id, user.id,
+      embed_priority: EmbedNote.backfill_priority(),
       finalize?: false
     )
   end
+
+  defp discard_job(nil), do: :ok
+  defp discard_job(job), do: NoteCommitted.discard!(job)
 
   # Phase 0 stale-base gate: a writer that declares the content_hash it READ
   # (`base_hash`) gets compare-and-swap semantics — if the row moved, the
@@ -2459,8 +2468,11 @@ defmodule Engram.Notes do
          recording,
          opts \\ []
        ) do
-    # `:folder_refs` is the batch's up-front folder ids; the rest goes to the write.
-    {refs, db_opts} = Keyword.pop(opts, :folder_refs)
+    # `:folder_refs` is the batch's up-front folder ids; `outbox: false` is a
+    # caller that queues the revived notes' jobs itself (a trash restore, in
+    # bulk); the rest goes to the write.
+    {refs, opts} = Keyword.pop(opts, :folder_refs)
+    {outbox?, db_opts} = Keyword.pop(opts, :outbox, true)
 
     was_tombstoned = not is_nil(prior.deleted_at)
 
@@ -2537,13 +2549,43 @@ defmodule Engram.Notes do
               if prior.content_hash != crdt.content_hash,
                 do: Revisions.record_write(prior, actor, recording)
 
+            # R6 outbox for a revived tombstone: the delete dropped its index
+            # (embed hashes nulled, points gone), so it needs its jobs even
+            # when the content is unchanged, and every caller (REST id-keyed
+            # restore, CRDT resurrect, link rewriter) goes through here. The
+            # returned prev hash is then the new one, so a caller that queues
+            # on a hash change does not queue twice.
+            prev_hash =
+              if was_tombstoned do
+                _ =
+                  if outbox?,
+                    do:
+                      NoteCommitted.insert!(
+                        prior.id,
+                        user.id,
+                        embed_opts(updated, actor: actor) ++
+                          [
+                            finalize?:
+                              Revisions.finalize?(
+                                recording,
+                                prior.content_hash,
+                                crdt.content_hash
+                              )
+                          ]
+                      )
+
+                crdt.content_hash
+              else
+                prior.content_hash
+              end
+
             # Tagged `:moved` (not the plain 4-tuple do_rewrite_note returns) so
             # the caller broadcasts unconditionally: a rename keeps the same
             # content_hash but persisted a new path/seq/version, and the plain
             # `prev_hash != content_hash` broadcast guard would skip it — leaving
             # peers with the old-path delete but no new-path upsert (the note
             # vanishes on them until their next pull).
-            {:ok, {:moved, prior.content_hash, updated, crdt.merged_text, crdt.content_hash}}
+            {:ok, {:moved, prev_hash, updated, crdt.merged_text, crdt.content_hash}}
 
           {:error, changeset} ->
             {:error, changeset}
@@ -7747,7 +7789,9 @@ defmodule Engram.Notes do
            "restore",
            false,
            mode: :savepoint,
-           folder_refs: refs
+           folder_refs: refs,
+           # restore_notes queues every restored note's jobs in one bulk insert.
+           outbox: false
          ) do
       {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
         {:ok, decrypt_or_raise!(updated, user)}

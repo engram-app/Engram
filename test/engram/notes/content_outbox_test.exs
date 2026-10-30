@@ -101,6 +101,36 @@ defmodule Engram.Notes.ContentOutboxTest do
     end
   end
 
+  # Review M3: #1710 took the job insert out from under the vault seq lock
+  # (`Vaults.next_seq!/1` row-locks the vault to the commit). The outbox
+  # insert must come before that bump, still inside the transaction.
+  defp outbox_before_seq_bump?(fun) do
+    {_, recorded} = Engram.QueryRecorder.record(fun)
+    sqls = Enum.map(recorded, & &1.sql)
+    insert = Enum.find_index(sqls, &(&1 =~ ~r/INSERT INTO "public"."oban_jobs"/))
+    bump = Enum.find_index(sqls, &(&1 =~ "change_seq = change_seq + 1"))
+    assert insert && bump, "expected both an outbox insert and a seq bump"
+    insert < bump
+  end
+
+  describe "the outbox insert is not under the vault seq lock" do
+    test "checkpoint", %{user: u, vault: v} do
+      {:ok, note} =
+        Notes.upsert_note(u, v, %{"path" => "l.md", "content" => "before"}, actor: "api")
+
+      assert outbox_before_seq_bump?(fn -> :ok = checkpoint_text(u, v, note.id, "after") end)
+    end
+
+    test "genesis body", %{user: u, vault: v} do
+      assert outbox_before_seq_bump?(fn ->
+               {:ok, _} =
+                 Notes.genesis_crdt_note(u, v, Ecto.UUID.generate(), "lg.md",
+                   body: doc_with("genesis body")
+                 )
+             end)
+    end
+  end
+
   describe "genesis body" do
     test "the job is in the table before the create's transaction ends", %{user: u, vault: v} do
       id = Ecto.UUID.generate()
@@ -165,6 +195,45 @@ defmodule Engram.Notes.ContentOutboxTest do
 
       assert DateTime.diff(embed.scheduled_at, DateTime.utc_now()) <=
                EmbedNote.agent_settle_seconds()
+    end
+  end
+
+  # Review H1: a delete drops the note's index (embed hashes nulled, points
+  # gone), so bringing it back by id needs its jobs even with the same
+  # content. Before, only the reconcile sweep (now every 3 h) found it.
+  describe "a deleted note brought back by id" do
+    setup %{user: u, vault: v} do
+      {:ok, note} =
+        Notes.upsert_note(u, v, %{"path" => "Old.md", "content" => "# body"}, actor: "api")
+
+      :ok = Notes.delete_note(u, v, "Old.md")
+      Repo.delete_all(Oban.Job)
+      %{note: note}
+    end
+
+    test "an id-keyed REST restore with the same content queues one job",
+         %{user: u, vault: v, note: n} do
+      {:ok, _} =
+        Notes.upsert_note(u, v, %{"id" => n.id, "path" => "New.md", "content" => "# body"},
+          actor: "api"
+        )
+
+      assert [_] = committed(n.id)
+    end
+
+    test "an id-keyed restore with new content queues one job, not two",
+         %{user: u, vault: v, note: n} do
+      {:ok, _} =
+        Notes.upsert_note(u, v, %{"id" => n.id, "path" => "New.md", "content" => "# changed"},
+          actor: "api"
+        )
+
+      assert [_] = committed(n.id)
+    end
+
+    test "a CRDT resurrect-rename queues one job", %{user: u, vault: v, note: n} do
+      {:ok, _} = Notes.genesis_crdt_note(u, v, n.id, "New.md")
+      assert [_] = committed(n.id)
     end
   end
 
