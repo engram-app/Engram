@@ -3303,10 +3303,11 @@ defmodule Engram.Indexing do
     {:ok, rows} =
       Repo.with_tenant(note.user_id, fn ->
         Chunk
+        |> join(:left, [c], p in ChunkPoint, on: p.point_id == c.qdrant_point_id)
         |> where([c], c.note_id == ^note.id and not is_nil(c.qdrant_point_id))
         |> select(
-          [c],
-          {c.context_hmac, c.qdrant_point_id, {c.position, c.char_start, c.char_end}}
+          [c, p],
+          {c.context_hmac, c.qdrant_point_id, {c.position, c.char_start, c.char_end}, p.slice_sum}
         )
         |> Repo.all()
       end)
@@ -3316,14 +3317,8 @@ defmodule Engram.Indexing do
 
   defp match_stored_points(rows, chunks, content_key) do
     by_hmac =
-      for({hmac, id, _} <- rows, hmac != nil, do: {hmac, id})
+      for({hmac, id, _, _} <- rows, hmac != nil, do: {hmac, id})
       |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
-
-    # A row with NO fingerprint (written before context_hmac existed, or
-    # cleared by a DEK rotation) still names the chunk it holds by position
-    # and offsets. Only those rows match this way: a row WITH a fingerprint
-    # that no candidate equals holds other text.
-    by_offsets = Map.new(for {nil, id, offsets} <- rows, do: {offsets, id})
 
     # Last candidate: rows written between #1595 (context_hmac) and #1606
     # (the pass-type prefix) hold an UNPREFIXED hmac of context_text. Reuse
@@ -3347,26 +3342,59 @@ defmodule Engram.Indexing do
 
     keyed = Enum.zip(chunks, Enum.zip_with(candidates, & &1))
 
-    {matched, _left} =
-      Enum.flat_map_reduce(keyed, {by_hmac, by_offsets}, fn {chunk, hmac_candidates},
-                                                            {hmacs, offsets} = acc ->
-        offset_key = {chunk.position, chunk.char_start, chunk.char_end}
-
+    {by_fingerprint, _left} =
+      Enum.map_reduce(keyed, by_hmac, fn {chunk, hmac_candidates}, hmacs ->
         case Enum.find(hmac_candidates, &match?([_ | _], Map.get(hmacs, &1))) do
           nil ->
-            case Map.pop(offsets, offset_key) do
-              {nil, _} -> {[], acc}
-              {id, rest} -> {[{chunk, id}], {hmacs, rest}}
-            end
+            {{chunk, nil}, hmacs}
 
           hmac ->
             [id | rest] = Map.fetch!(hmacs, hmac)
-            {[{chunk, id}], {Map.put(hmacs, hmac, rest), offsets}}
+            {{chunk, id}, Map.put(hmacs, hmac, rest)}
         end
+      end)
+
+    # A chunk no fingerprint matched falls back to a row at its position and
+    # offsets that no other chunk took. A row with NO fingerprint (written
+    # before context_hmac existed, or cleared by a DEK rotation) needs nothing
+    # more. A row WITH one also needs its stored text checksum to equal the
+    # chunk's: a rename (`RepathNoteIndex` moves points, never re-indexes)
+    # leaves every row fingerprinted under the old path's context prefix
+    # (#2345), while an equal checksum at equal offsets says the point holds
+    # this text. The fingerprint is left as is: the dense vector still has
+    # the old title in it.
+    taken = MapSet.new(for {_, id} <- by_fingerprint, id != nil, do: id)
+
+    by_offsets =
+      rows
+      |> Enum.reject(&MapSet.member?(taken, elem(&1, 1)))
+      |> Enum.group_by(&elem(&1, 2))
+
+    {matched, _left} =
+      Enum.flat_map_reduce(by_fingerprint, by_offsets, fn
+        {chunk, nil}, offsets ->
+          key = {chunk.position, chunk.char_start, chunk.char_end}
+
+          case Enum.find(Map.get(offsets, key, []), &same_text?(&1, chunk, content_key)) do
+            nil ->
+              {[], offsets}
+
+            {_, id, _, _} = row ->
+              {[{chunk, id}], Map.update!(offsets, key, &List.delete(&1, row))}
+          end
+
+        {chunk, id}, offsets ->
+          {[{chunk, id}], offsets}
       end)
 
     {matched, length(rows) - length(matched)}
   end
+
+  defp same_text?({nil, _id, _offsets, _sum}, _chunk, _content_key), do: true
+  defp same_text?({_hmac, _id, _offsets, nil}, _chunk, _content_key), do: false
+
+  defp same_text?({_hmac, _id, _offsets, sum}, chunk, content_key),
+    do: sum == text_sum(content_key, chunk.text)
 
   defp update_vectors_batched(points) do
     points

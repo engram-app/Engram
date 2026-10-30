@@ -499,4 +499,33 @@ defmodule Engram.IndexingResparseTest do
     assert {:ok, count, unmatched} = Indexing.resparse_note(edited, user)
     assert count > 0 and count + unmatched == length(upserted)
   end
+
+  # A rename moves the points (RepathNoteIndex) without re-indexing, so every
+  # row keeps a fingerprint built from the OLD path's context prefix. Offsets
+  # and the stored text checksum (`chunk_points.slice_sum`) still name the
+  # chunk. Before this, every point of a renamed note was unmatched (671
+  # notes in prod looped on the keyword sweep, #2345).
+  test "rename then resparse matches all points", ctx do
+    %{user: user, note: note, upserted: upserted} = ctx
+    renamed = %{note | path: "archive/Renamed plan.md"}
+
+    assert {:ok, count, 0} = Indexing.resparse_note(renamed, user)
+    assert count == length(upserted)
+  end
+
+  # Same offsets, different text: the checksum differs, so the point still
+  # holds another chunk's text and stays unmatched.
+  test "a renamed note whose text changed in place keeps that point unmatched", ctx do
+    %{user: user, note: note, upserted: upserted} = ctx
+    assert length(upserted) > 1
+
+    renamed = %{
+      note
+      | path: "archive/Renamed plan.md",
+        content: String.replace(note.content, "Deploying daily.", "Deploying never.")
+    }
+
+    assert {:ok, count, 1} = Indexing.resparse_note(renamed, user)
+    assert count == length(upserted) - 1
+  end
 end
