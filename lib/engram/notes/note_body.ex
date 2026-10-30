@@ -119,12 +119,24 @@ defmodule Engram.Notes.NoteBody do
     Note |> where([n], n.id == ^id) |> select_note(fields) |> Repo.one()
   end
 
-  @doc "Left-joins `note_bodies` as the `:note_body` binding (once)."
+  @doc """
+  Left-joins `note_bodies` as the `:note_body` binding (once).
+
+  Matches `user_id` as well as `note_id`: a caller's `n.user_id == ^id`
+  then reaches `note_bodies` as an index condition (`note_bodies_user_head`),
+  so a vault-wide join reads the owner's bodies, not every tenant's (R5).
+  The trigger writes the note's own `user_id`, so no row changes sides.
+  """
   @spec join(Ecto.Queryable.t()) :: Ecto.Query.t()
   def join(query) do
     if has_named_binding?(query, :note_body),
       do: query,
-      else: from(n in query, left_join: b in __MODULE__, as: :note_body, on: b.note_id == n.id)
+      else:
+        from(n in query,
+          left_join: b in __MODULE__,
+          as: :note_body,
+          on: b.note_id == n.id and b.user_id == n.user_id
+        )
   end
 
   @doc """
