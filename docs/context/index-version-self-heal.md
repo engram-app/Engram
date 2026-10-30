@@ -1,6 +1,6 @@
 # Index changes heal themselves: version stamps + the reconcile sweep
 
-_Last verified: 2026-10-29_
+_Last verified: 2026-10-30_
 
 **The standard:** a change to how notes are indexed must reach every EXISTING
 note on its own, on SaaS and on every self-host install. A release that needs
@@ -10,9 +10,13 @@ run it, and in SaaS prod the exec path needs the dormant break-glass user.
 ## The mechanism
 
 Each kind of index change has a version constant in code and a stamp per note.
-`Engram.Workers.ReconcileEmbeddings` (cron every 5 min, at boot, and on
-`kick/0`; no per-sweep cap) selects notes whose stamp is behind and sends them to the cheapest
-worker that brings them current.
+`Engram.Workers.ReconcileEmbeddings` (at boot, on `kick/0`, a 3-hour cron
+backstop, and every 5 min while `IndexVersions` is open: each run queues its
+successor; no per-sweep cap) selects notes whose stamp is behind and sends
+them to the cheapest worker that brings them current. It queues
+`RebuildStaleNote` and `RefreshKeywordVectors` only while
+`Rebuild.qdrant_open?/0` holds; with the gate shut it skips them and the
+next chained run asks again.
 
 | Change | Bump | Stamp | Sweep sends to | Cost |
 |---|---|---|---|---|
@@ -162,12 +166,13 @@ version-stale notes back after the migration closed, and none renames it:
   new node marked the new name done.
 
 So `ReconcileEmbeddings` still runs the version term and the keyword sweep
-for one hour a day: every tick scheduled 04:00 <= t < 05:00 UTC (twelve
-`2-59/5` ticks). A whole hour rather than one tick because the unique window
-can dedupe any single tick, and a skipped tick must not skip the day. It is a
-pure function of the job's `scheduled_at`, with no extra cron entry and no
-state. A stale note is healed within a day; the cost is twelve unindexed
-keyword scans per day.
+once a day: its own cron entry, `{"2 4 * * *", args: %{"mode" => "reverify"}}`
+(R6). Its args differ from a plain sweep's, so a kick or a running sweep
+never dedupes it. The run chains itself in 5-minute hops (`hop` arg, at most
+12 runs, the old hour's throughput) while a page came back full (the recap
+batch, the budget sweep's users, the keyword backlog) or the Qdrant gate was
+shut, and stops as soon as nothing is left. A stale note is healed within a
+day.
 
 ## Keyword v5: phrase pairs dropped (2026-10-27)
 
@@ -280,8 +285,8 @@ the 15 s cache TTL bounds a lost eviction, so every node reads it within
 15 s. From then on each queued `RefreshKeywordVectors` job snoozes 300 s at
 perform time before any Qdrant call (a job mid-rewrite finishes its one
 note), and the reconcile sweep queues and stamps nothing. Cleared, the
-snoozed jobs run on their next wake (within 5 min) and the next tick (within
-5 min) tops the backlog up again: no operator backfill. "Back on" means the
+snoozed jobs run on their next wake and the next reconcile run (the rollout
+chain, within 5 min) tops the backlog up again: no operator backfill. "Back on" means the
 resolved value is true: an override of true, or a clear where
 `KEYWORD_REFRESH` is unset/true. `EmbedNote` (user
 edits) never reads it.
