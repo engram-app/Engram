@@ -328,7 +328,10 @@ defmodule EngramWeb.Schemas.AttachmentUploadCompleteRequest do
   OpenApiSpex.schema(%{
     title: "AttachmentUploadCompleteRequest",
     type: :object,
-    properties: %{base_hash: EngramWeb.Schemas.AttachmentBaseHash}
+    properties: %{base_hash: EngramWeb.Schemas.AttachmentBaseHash},
+    example: %{
+      "base_hash" => "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    }
   })
 end
 
