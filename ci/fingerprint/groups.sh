@@ -32,7 +32,7 @@ group_paths() {
     # The CI logic itself: a change to the workflow or the fingerprint scripts
     # must bust EVERY job's hash (mirrors BACKEND_HASH including verify.yml), so
     # a CI-config change is never skipped by a stale per-job marker.
-    ci-meta)     echo ".github/workflows/verify.yml ci/fingerprint" ;;
+    ci-meta)     echo ".github/workflows/verify.yml ci/fingerprint ci/bin" ;;
     *) echo "unknown group: $1" >&2; return 2 ;;
   esac
 }
