@@ -1247,7 +1247,12 @@ defmodule Engram.Vector.Qdrant do
         full -> full
       end)
 
-    payload_write(:set_payload, length(entries), Map.new(entries, &{elem(&1, 0), elem(&1, 1)}), opts)
+    payload_write(
+      :set_payload,
+      length(entries),
+      Map.new(entries, &{elem(&1, 0), elem(&1, 1)}),
+      opts
+    )
 
     ops =
       Enum.flat_map(entries, fn {id, payload, gone} ->

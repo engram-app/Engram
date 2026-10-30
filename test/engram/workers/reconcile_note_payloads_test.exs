@@ -20,8 +20,8 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   alias Engram.Indexing.PayloadV6
   alias Engram.Notes
   alias Engram.Notes.{Chunk, Note, NoteIndexState}
-  alias Engram.Vector.{FilterId, QdrantLayout}
   alias Engram.ServiceConfig
+  alias Engram.Vector.{FilterId, QdrantLayout}
   alias Engram.Workers.ReconcileNotePayloads
 
   setup :verify_on_exit!
@@ -727,6 +727,12 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
 
         # An overwrite is a merge (recorded above) plus this delete of the keys
         # the new payload omits: the delete turns that merge into an overwrite.
+        # `Qdrant.set_payloads/3` ends with a barrier delete (`points:`, a key no
+        # point has): it changes nothing and is not an overwrite.
+        {"POST", "/collections/engram_notes/points/payload/delete"}
+        when is_map_key(body, "points") ->
+          %{"status" => "completed"}
+
         {"POST", "/collections/engram_notes/points/payload/delete"} ->
           if hook = Agent.get(store, & &1.on_write), do: hook.()
 
