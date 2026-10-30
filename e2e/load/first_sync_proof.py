@@ -408,6 +408,19 @@ def mint_key(user_id: str) -> tuple[str, str]:
     return raw, key_id
 
 
+def wait_rpc(timeout: int = 300) -> None:
+    """Block until the staging release answers rpc (a fresh container boots for ~30s)."""
+    end = time.time() + timeout
+    while True:
+        try:
+            rpc('IO.puts("up")', timeout=30)
+            return
+        except (RuntimeError, subprocess.TimeoutExpired):
+            if time.time() > end:
+                raise
+            time.sleep(5)
+
+
 def delete_user(user_id: str, key_id: str | None) -> str:
     """Revoke the key, then hard-delete the user and everything it owns
     (notes, attachments, Qdrant points, vaults). Idempotent."""
@@ -725,9 +738,16 @@ def cmd_watch(a) -> int:
             logs[name] = int(r.stdout.strip() or 0)
         if work:
             fetch_and_clean_load_host(a.load_host, work, out)
+        if paused or user_id:
+            # A deploy mid-run leaves a container that is still booting (rpc
+            # :noconnection) and has resumed the queues: wait, re-pause, then
+            # cancel before deleting so no job embeds into the shared Qdrant.
+            wait_rpc()
+            if paused:
+                pause_qdrant_queues(True)
         if user_id:
-            print(f"[watch] cleanup: {delete_user(user_id, key_id)}", flush=True)
             print(f"[watch] cancelled jobs: {cancel_user_jobs(user_id)}", flush=True)
+            print(f"[watch] cleanup: {delete_user(user_id, key_id)}", flush=True)
         if paused:
             pause_qdrant_queues(False)
 
