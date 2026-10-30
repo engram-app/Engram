@@ -119,6 +119,29 @@ defmodule Engram.Vaults do
   end
 
   @doc """
+  Takes `FOR KEY SHARE NOWAIT` on every vault row of `user_id`, in id order, or
+  raises `Postgrex.Error` (`:lock_not_available`) at once when one is held.
+
+  For a per-user background sweep that inserts rows referencing `vaults`. An
+  account delete deletes the vault rows first and the user row second
+  (`Accounts.Lifecycle.hard_delete/2`); a sweep that took the user row first
+  and the vault row second is the opposite order, which Postgres resolves by
+  killing the delete (#2339). Taking the vaults first puts the sweep in the
+  delete's order: it never waits on a delete, and a delete that starts after
+  waits for the sweep's transaction. Inside the caller's transaction, on the
+  repo that will write.
+  """
+  @spec lock_user_vaults_nowait!(module(), Ecto.UUID.t()) :: :ok
+  def lock_user_vaults_nowait!(repo, user_id) do
+    repo.query!(
+      "SELECT id FROM vaults WHERE user_id = $1 ORDER BY id FOR KEY SHARE NOWAIT",
+      [Ecto.UUID.dump!(user_id)]
+    )
+
+    :ok
+  end
+
+  @doc """
   Allocates `n` contiguous seqs in one statement and returns the LAST of the
   block (`last - n + 1 .. last`). Same contract as `next_seq!/2`: call it
   inside the caller's `Repo.with_tenant/2` write transaction.

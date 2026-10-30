@@ -51,6 +51,7 @@ defmodule Engram.DataMigrations.FolderTable do
   alias Engram.Logger.Metadata
   alias Engram.Notes.Helpers
   alias Engram.Repo
+  alias Engram.Vaults
 
   require Logger
 
@@ -140,11 +141,21 @@ defmodule Engram.DataMigrations.FolderTable do
   rescue
     # Deferred, not failed: the rotation ends in minutes and the next pass
     # (the ledger stays open through `blocked`) finds the user unlocked.
-    RotationInProgressError -> %{zero() | blocked: 1}
-    e -> user_failed(user_id, e)
+    RotationInProgressError ->
+      %{zero() | blocked: 1}
+
+    # Or a user under deletion (its vault rows are held, or it deadlocked with
+    # the delete): likewise retried by the next pass, not an error.
+    e ->
+      if lock_conflict?(e), do: %{zero() | blocked: 1}, else: user_failed(user_id, e)
   catch
     :exit, reason -> user_failed(user_id, reason)
   end
+
+  defp lock_conflict?(%Postgrex.Error{postgres: %{code: code}}),
+    do: code in [:lock_not_available, :deadlock_detected]
+
+  defp lock_conflict?(_), do: false
 
   defp user_failed(user_id, reason) do
     Logger.error(
@@ -221,7 +232,14 @@ defmodule Engram.DataMigrations.FolderTable do
   # starting meanwhile waits for it) and refuses a locked user or a key that
   # moved since `ctx.dek` was read. The maintenance pool's tenant block does
   # not gate by itself.
+  #
+  # The vault rows come FIRST, NOWAIT: `delete_account` deletes vaults, then the
+  # user row, and this transaction's user-row lock followed by the folders FK's
+  # vault-row lock is the opposite order, a deadlock Postgres broke by killing
+  # the delete (#2339). A vault held by a delete defers the user instead.
   defp gated(repo, ctx, fun) do
+    :ok = Vaults.lock_user_vaults_nowait!(repo, ctx.user_id)
+
     case RotationGate.check(ctx.user_id,
            repo: repo,
            share_lock: true,
