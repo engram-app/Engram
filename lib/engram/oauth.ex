@@ -1440,19 +1440,22 @@ defmodule Engram.OAuth do
       nil ->
         :revoked
 
-      %{vault_access: nil, vault_ids: ids} ->
+      %{vault_access: nil, vault_ids: ids} = grant ->
         {:ok,
          claims
          |> Map.drop(["vault_ids", "vault_id"])
          |> maybe_put("vault_ids", ids)
-         |> maybe_put("vault_id", scalar_vault_id(ids))}
+         |> maybe_put("vault_id", scalar_vault_id(ids))
+         |> put_client_id(grant)}
 
       grant ->
         {:ok,
-         Map.merge(claims, %{
+         claims
+         |> Map.merge(%{
            "vault_access" => grant.vault_access,
            "default_access" => grant.default_access
-         })}
+         })
+         |> put_client_id(grant)}
     end
   end
 
@@ -1465,6 +1468,12 @@ defmodule Engram.OAuth do
   # stored nowhere. Its refresh token, once revoked or narrowed, mints
   # nothing wider.
   def expand_claims(claims), do: {:ok, claims}
+
+  # The grant's OAuth client, for log lines (`EngramWeb.RequestMeta.log_surface/1`).
+  # Never an authorization input. `Map.get`: an entry cached by a node running
+  # the previous release has no `:client_id`.
+  defp put_client_id(claims, grant),
+    do: maybe_put(claims, "client_id", Map.get(grant, :client_id))
 
   # The grant behind `gid`, or nil when it is revoked, gone, or not the
   # token's user's. Ownership is checked on every read rather than keyed into
@@ -1501,6 +1510,7 @@ defmodule Engram.OAuth do
       select: %{
         live: family_unrevoked(t.family_id),
         user_id: t.user_id,
+        client_id: t.client_id,
         vault_access: t.vault_access,
         default_access: t.default_access,
         vault_ids: t.vault_ids,

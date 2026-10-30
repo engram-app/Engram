@@ -118,4 +118,14 @@ defmodule Engram.OAuthGrantCacheTest do
       assert Accounts.grant_claims(tokens.access_token) == :revoked
     end
   end
+
+  # The surface a log line names an MCP request by (`mcp:<client_id>`,
+  # `EngramWeb.RequestMeta.log_surface/1`) reads the client from here.
+  describe "expanded claims" do
+    test "name the grant's OAuth client", ctx do
+      tokens = grant(ctx, :all)
+      assert {:ok, %{"client_id" => client_id}} = Accounts.grant_claims(tokens.access_token)
+      assert client_id == ctx.client.client_id
+    end
+  end
 end
