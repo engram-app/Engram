@@ -36,6 +36,7 @@ defmodule Engram.Workers.DataMigrationsRunner do
     Engram.DataMigrations.NotePayloadStamps,
     Engram.DataMigrations.NoteSplit,
     Engram.DataMigrations.NoteIndexState,
+    Engram.DataMigrations.FolderTable,
     Engram.DataMigrations.KeyAliases,
     Engram.DataMigrations.PersonOriginBackfill
   ]

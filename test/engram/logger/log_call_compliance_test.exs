@@ -57,6 +57,8 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram_web/channel_gate.ex",
     "lib/engram/notes.ex",
     "lib/engram/notes/",
+    # Encrypted folder names (the `folders` schema): data a log line could reach.
+    "lib/engram/folders/",
     "lib/engram/attachments.ex",
     "lib/engram/crypto/",
     "lib/engram/logs.ex",
