@@ -89,27 +89,39 @@ defmodule Engram.Folders.Rows do
     with {:ok, dek} <- Crypto.get_dek(user),
          {:ok, fk} <- Crypto.dek_filter_key(user) do
       ctx = %{user_id: user.id, vault_id: vault_id, dek: dek, fk: fk}
-      {:ok, resolve(ctx, folder, Keyword.get(opts, :explicit))}
+      explicit = Keyword.get(opts, :explicit)
+      {:ok, resolve_all(ctx, %{folder => explicit})[folder]}
+    end
+  end
+
+  # Both entry points below are `ensure/4` for a set: one code path, set-based.
+  defp ensure_set(user, vault_id, targets) do
+    targets = Map.delete(targets, "")
+
+    if map_size(targets) == 0 do
+      {:ok, %{}}
+    else
+      with {:ok, dek} <- Crypto.get_dek(user),
+           {:ok, fk} <- Crypto.dek_filter_key(user) do
+        ctx = %{user_id: user.id, vault_id: vault_id, dek: dek, fk: fk}
+        {:ok, resolve_all(ctx, targets)}
+      end
     end
   end
 
   @doc """
-  `ensure/4` for many folders: `{:ok, %{folder => id}}`. Sorted, so two
-  concurrent batches create shared ancestors in the same order and cannot
-  deadlock on each other's unique-index entries.
+  `ensure/4` for many folders: `{:ok, %{folder => id}}`, in a fixed number of
+  statements (one read of every path and ancestor, one insert per depth
+  level). Rows go in sorted, so two concurrent batches create shared
+  ancestors in the same order and cannot deadlock on each other's
+  unique-index entries.
   """
   @spec ensure_all(map(), Ecto.UUID.t(), [String.t()]) ::
           {:ok, %{String.t() => Ecto.UUID.t() | nil}} | {:error, term()}
   def ensure_all(user, vault_id, folders) do
-    folders
-    |> Enum.uniq()
-    |> Enum.sort()
-    |> Enum.reduce_while({:ok, %{}}, fn folder, {:ok, acc} ->
-      case ensure(user, vault_id, folder) do
-        {:ok, id} -> {:cont, {:ok, Map.put(acc, folder, id)}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
+    with {:ok, ids} <- ensure_set(user, vault_id, Map.new(folders, &{&1, nil})) do
+      {:ok, Map.new(folders, &{&1, Map.get(ids, &1)})}
+    end
   end
 
   @doc """
@@ -119,42 +131,83 @@ defmodule Engram.Folders.Rows do
   """
   @spec ensure_markers(map(), Ecto.UUID.t(), [{String.t(), Ecto.UUID.t()}]) :: :ok
   def ensure_markers(user, vault_id, markers) do
-    markers
-    |> Enum.uniq()
-    |> Enum.sort()
-    |> Enum.each(fn {folder, marker_id} ->
-      {:ok, _id} = ensure(user, vault_id, folder, explicit: marker_id)
+    targets =
+      markers
+      |> Enum.uniq()
+      |> Enum.sort()
+      |> Enum.reverse()
+      |> Map.new()
+
+    {:ok, _} = ensure_set(user, vault_id, targets)
+    :ok
+  end
+
+  # `targets`: %{folder => marker id | nil}. Returns %{folder => leaf id}.
+  # One read of every prefix, then one insert per depth level (parents first).
+  defp resolve_all(ctx, targets) do
+    paths = targets |> Map.keys() |> Enum.flat_map(&prefixes/1) |> Enum.uniq()
+    hmacs = Map.new(paths, &{&1, path_hmac(ctx.fk, &1)})
+    known = live_ids_by_path_hmac(ctx.vault_id, Map.values(hmacs))
+    ids = Map.new(paths, &{&1, Map.get(known, hmacs[&1])})
+
+    ids =
+      paths
+      |> Enum.filter(&is_nil(ids[&1]))
+      |> Enum.group_by(&length(String.split(&1, "/")))
+      |> Enum.sort()
+      |> Enum.reduce(ids, fn {_depth, level}, ids ->
+        create_level(ctx, Enum.sort(level), ids, targets, hmacs)
+      end)
+
+    # A row that was already there becomes explicit when a marker names it.
+    to_mark =
+      for {folder, marker} <- targets, marker, Map.has_key?(known, hmacs[folder]), do: ids[folder]
+
+    mark_explicit(to_mark)
+
+    Map.new(targets, fn {folder, _} -> {folder, ids[folder]} end)
+  end
+
+  # Inserts the missing rows of one depth in one statement per chunk. A row the
+  # insert did not write (a racing creator, a marker id that names a row
+  # elsewhere) goes through `step/5`, which reads, repairs or moves it.
+  defp create_level(ctx, level, ids, targets, hmacs) do
+    rows =
+      Enum.map(level, fn path ->
+        parent = ids[parent_path(path)]
+        marker = Map.get(targets, path)
+        segment = path |> String.split("/") |> List.last()
+        id = marker || mint_id()
+
+        {path, parent, marker, id,
+         build_row(ctx, id, parent, segment, hmacs[path], marker != nil)}
+      end)
+
+    written =
+      rows
+      |> Enum.chunk_every(1_000)
+      |> Enum.flat_map(fn chunk ->
+        {_, ret} =
+          Repo.insert_all(Folder, Enum.map(chunk, &elem(&1, 4)),
+            on_conflict: :nothing,
+            returning: [:id]
+          )
+
+        Enum.map(ret, & &1.id)
+      end)
+      |> MapSet.new()
+
+    Enum.reduce(rows, ids, fn {path, parent, marker, id, _row}, ids ->
+      if MapSet.member?(written, id),
+        do: Map.put(ids, path, id),
+        else: Map.put(ids, path, step(ctx, parent, path, marker, 3, false))
     end)
   end
 
-  defp resolve(ctx, folder, explicit) do
-    prefixes = prefixes(folder)
-    known = live_ids_by_path_hmac(ctx.vault_id, Enum.map(prefixes, &path_hmac(ctx.fk, &1)))
-
-    # Start below the deepest ancestor that already has a row.
-    {parent, missing} =
-      prefixes
-      |> Enum.with_index()
-      |> Enum.reverse()
-      |> Enum.find_value({nil, prefixes}, fn {prefix, i} ->
-        case Map.get(known, path_hmac(ctx.fk, prefix)) do
-          nil -> nil
-          id -> {id, Enum.drop(prefixes, i + 1)}
-        end
-      end)
-
-    case missing do
-      [] ->
-        if explicit, do: mark_explicit(ctx, parent)
-        parent
-
-      _ ->
-        last = List.last(missing)
-
-        Enum.reduce(missing, parent, fn path, parent_id ->
-          marker = if path == last, do: explicit
-          step(ctx, parent_id, path, marker)
-        end)
+  defp parent_path(path) do
+    case String.split(path, "/") do
+      [_only] -> nil
+      segments -> segments |> Enum.drop(-1) |> Enum.join("/")
     end
   end
 
@@ -173,13 +226,16 @@ defmodule Engram.Folders.Rows do
   # The insert goes first (DO NOTHING), so the common case, a folder that is not
   # there yet, costs one statement; a row that is already there (found by the
   # live-name index, or one a racing creator just committed) is read after.
-  defp step(ctx, parent_id, path, explicit, attempts \\ 3) do
+  defp step(ctx, parent_id, path, explicit, attempts, insert? \\ true) do
     segment = path |> String.split("/") |> List.last()
     name_h = name_hmac(ctx.fk, segment)
     full_h = path_hmac(ctx.fk, path)
     id = explicit || mint_id()
 
-    case insert(ctx, id, parent_id, segment, name_h, full_h, explicit != nil) do
+    case if(insert?,
+           do: insert(ctx, id, parent_id, segment, full_h, explicit != nil),
+           else: 0
+         ) do
       1 ->
         id
 
@@ -231,33 +287,38 @@ defmodule Engram.Folders.Rows do
     :ok
   end
 
-  defp mark_explicit(_ctx, id) do
-    from(f in Folder, where: f.id == ^id and not f.explicit)
+  defp mark_explicit([]), do: :ok
+
+  defp mark_explicit(ids) do
+    from(f in Folder, where: f.id in ^ids and not f.explicit)
     |> Repo.update_all(set: [explicit: true, updated_at: now()])
+
+    :ok
   end
 
-  defp insert(ctx, id, parent_id, segment, name_h, full_h, explicit?) do
+  defp build_row(ctx, id, parent_id, segment, full_h, explicit?) do
     {ct, nonce} = encrypt_name(ctx.dek, id, segment)
+    now = now()
 
+    %{
+      id: id,
+      user_id: ctx.user_id,
+      vault_id: ctx.vault_id,
+      parent_id: parent_id,
+      name_ciphertext: ct,
+      name_nonce: nonce,
+      name_hmac: name_hmac(ctx.fk, segment),
+      full_path_hmac: full_h,
+      dek_version: Crypto.row_version_aad_bound(),
+      explicit: explicit?,
+      inserted_at: now,
+      updated_at: now
+    }
+  end
+
+  defp insert(ctx, id, parent_id, segment, full_h, explicit?) do
     {n, _} =
-      Repo.insert_all(
-        Folder,
-        [
-          %{
-            id: id,
-            user_id: ctx.user_id,
-            vault_id: ctx.vault_id,
-            parent_id: parent_id,
-            name_ciphertext: ct,
-            name_nonce: nonce,
-            name_hmac: name_h,
-            full_path_hmac: full_h,
-            dek_version: Crypto.row_version_aad_bound(),
-            explicit: explicit?,
-            inserted_at: now(),
-            updated_at: now()
-          }
-        ],
+      Repo.insert_all(Folder, [build_row(ctx, id, parent_id, segment, full_h, explicit?)],
         on_conflict: :nothing
       )
 
@@ -465,7 +526,10 @@ defmodule Engram.Folders.Rows do
   defp move_subtree(ctx, [root | _] = rows, new_folder) do
     new_segment = new_folder |> String.split("/") |> List.last()
     parent_path = new_folder |> String.split("/") |> Enum.drop(-1) |> Enum.join("/")
-    new_parent = resolve(ctx, parent_path, nil)
+
+    new_parent =
+      if parent_path == "", do: nil, else: resolve_all(ctx, %{parent_path => nil})[parent_path]
+
     new_name_h = name_hmac(ctx.fk, new_segment)
 
     # Each row's NEW full path, from the decrypted segment names. A name that
