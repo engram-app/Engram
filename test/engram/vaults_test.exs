@@ -411,6 +411,48 @@ defmodule Engram.VaultsTest do
     test "content_counts/2 returns zeros for an empty vault", %{user: user, b: b} do
       assert Vaults.content_counts(user, b.id) == %{notes: 0, attachments: 0, populated: false}
     end
+
+    test "populated is per vault: welcome-only is not, welcome plus a note is", ctx do
+      %{a: a, b: b} = ctx
+      {:ok, user} = Engram.Crypto.ensure_user_dek(ctx.user)
+      :ok = Engram.Vaults.WelcomeNote.seed(user, a)
+      :ok = Engram.Vaults.WelcomeNote.seed(user, b)
+
+      {:ok, _} =
+        Engram.Notes.upsert_note(user, b, %{"path" => "Real.md", "content" => "x"}, actor: "api")
+
+      counts = Vaults.content_counts_for(user, [a, b])
+      assert counts[a.id] == %{notes: 1, attachments: 0, populated: false}
+      assert counts[b.id] == %{notes: 2, attachments: 0, populated: true}
+    end
+
+    # R5: the old read FILTERed on `path_hmac` next to `count(id)`, and no
+    # index carries both, so it heap-scanned every live note (55 ms / 6.9k
+    # buffers on a 10k-note staging vault vs 4 ms index-only). Every notes
+    # read must touch only columns of `notes_user_vault_path_v2` (key and
+    # predicate), so an index-only scan can answer it. Asserted on the SQL:
+    # a sandboxed test table is never all-visible, so the planner costs an
+    # index-only scan like a heap scan and a plan assertion would flap.
+    test "every notes read is index-only answerable", %{a: a, b: b} = ctx do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(ctx.user)
+      insert(:note, user: user, vault: a)
+
+      {_, queries} =
+        Engram.QueryRecorder.record(fn -> Vaults.content_counts_for(user, [a, b]) end)
+
+      covered = ~w(user_id vault_id path_hmac deleted_at kind)
+      assert [sql] = Engram.QueryPlan.reading(queries, "notes")
+
+      for [alias_] <- Regex.scan(~r/FROM "notes" AS (s?n\d+)/, sql, capture: :all_but_first) do
+        cols = Regex.scan(~r/\b#{alias_}\."(\w+)"/, sql, capture: :all_but_first)
+        uncovered = cols |> List.flatten() |> Enum.reject(&(&1 in covered))
+        assert uncovered == [], "reads #{inspect(uncovered)}, which no index covers:\n#{sql}"
+        refute sql =~ ~r/count\(\s*#{alias_}\./, "counts a column, not rows:\n#{sql}"
+      end
+
+      # The populated probe rides the same statement (no extra round trip).
+      assert sql =~ "exists("
+    end
   end
 
   # ---------------------------------------------------------------------------

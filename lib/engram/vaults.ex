@@ -573,7 +573,7 @@ defmodule Engram.Vaults do
   exists.
 
   Two batched GROUP BY queries (one per table) — no N+1, both inside a single
-  `Repo.with_tenant/2`. The explicit `user_id == ^user_id` clause stays, but
+  `Repo.with_tenant/2`. The notes one is index-only (R5). The explicit `user_id == ^user_id` clause stays, but
   the policy filters first: unscoped, both reads returned `[]` and the
   zero-fallback below then reported `%{notes: 0, attachments: 0}` for every
   vault — an answer a caller cannot tell apart from a genuine zero.
@@ -613,6 +613,18 @@ defmodule Engram.Vaults do
     # that event is still to come. `note_count` keeps counting the welcome note.
     welcome = Engram.Vaults.WelcomeNote.path_hmac(user)
 
+    # A live note of the outer group's vault other than the welcome seed.
+    # With no filter key the seed cannot be recognised: every note is real.
+    real =
+      welcome &&
+        from(r in Engram.Notes.Note,
+          where:
+            r.user_id == ^user_id and r.vault_id == parent_as(:n).vault_id and
+              is_nil(r.deleted_at) and r.kind == "note" and
+              (is_nil(r.path_hmac) or r.path_hmac != ^welcome),
+          select: 1
+        )
+
     # Both reads in ONE `with_tenant/2` rather than two: they are a single
     # logical answer, and `notes` + `attachments` are both FORCE-RLS, so
     # unscoped each returned `[]` and the `Map.new/2` fallback below turned
@@ -621,12 +633,13 @@ defmodule Engram.Vaults do
       Repo.with_tenant!(user_id, fn ->
         notes =
           from(n in Engram.Notes.Note,
+            as: :n,
             where:
               n.user_id == ^user_id and n.vault_id in ^ids and is_nil(n.deleted_at) and
                 n.kind == "note",
             group_by: n.vault_id
           )
-          |> select_note_counts(welcome)
+          |> select_note_counts(real)
           |> Repo.all()
           |> Map.new()
 
@@ -643,22 +656,20 @@ defmodule Engram.Vaults do
       end)
 
     Map.new(ids, fn id ->
-      {notes, real} = Map.get(note_counts, id, {0, 0})
-      {id, %{notes: notes, attachments: Map.get(attachment_counts, id, 0), populated: real > 0}}
+      {notes, populated} = Map.get(note_counts, id, {0, false})
+      {id, %{notes: notes, attachments: Map.get(attachment_counts, id, 0), populated: populated}}
     end)
   end
 
-  # `{vault_id, {all notes, notes other than the welcome seed}}`. With no filter
-  # key the seed cannot be recognised, so every note counts as real.
-  defp select_note_counts(query, nil),
-    do: select(query, [n], {n.vault_id, {count(n.id), count(n.id)}})
+  # `{vault_id, {all notes, populated?}}`, both answerable from an index
+  # alone (R5): `count(*)` reads only the partial index's keys, and
+  # `populated` is an EXISTS per vault group over `notes_user_vault_path_v2`
+  # that stops at its first real note. The old `count(id) FILTER (path_hmac
+  # ...)` heap-scanned every live note (55 ms vs ~5 ms on a 10k-note vault).
+  defp select_note_counts(query, nil), do: select(query, [n], {n.vault_id, {count(), true}})
 
-  defp select_note_counts(query, welcome) do
-    select(query, [n], {
-      n.vault_id,
-      {count(n.id), filter(count(n.id), is_nil(n.path_hmac) or n.path_hmac != ^welcome)}
-    })
-  end
+  defp select_note_counts(query, real),
+    do: select(query, [n], {n.vault_id, {count(), exists(real)}})
 
   # ── Get ─────────────────────────────────────────────────────────────────────
 
