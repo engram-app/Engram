@@ -922,7 +922,8 @@ defmodule EngramWeb.CrdtChannel do
   # replies. A malformed or dependency-missing update will not land on a resend:
   # doc_update_failed. Anything else (timeout, crashed applier, dead room) may
   # still land, and a resend is idempotent: room_unavailable.
-  @spec step2_result({:ok, term()} | {:error, term()}) :: :ok | {:error, atom()}
+  @spec step2_result({:ok, term()} | {:error, term()}) ::
+          :ok | {:error, :doc_update_failed | :not_found | :note_too_large | :room_unavailable}
   def step2_result({:ok, _}), do: :ok
 
   def step2_result({:error, reason}) when reason in [:not_found, :note_too_large],
