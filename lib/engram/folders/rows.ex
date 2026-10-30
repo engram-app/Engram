@@ -1,6 +1,6 @@
 defmodule Engram.Folders.Rows do
   @moduledoc """
-  The one place that reads and writes `folders` rows (migration 20261027000000):
+  The one place that reads and writes `folders` rows (migration 20261029000000):
   key derivation, name encryption, find-or-create of a path, subtree lookups,
   rename, soft delete and restore.
 
