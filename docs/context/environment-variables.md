@@ -104,6 +104,7 @@ Live. Covers every var `config/runtime.exs` reads (`Engram.EnvVarDocsTest` fails
 | `VOYAGE_RPM` | unset (no throttle) | Client-side cap, synthetic 429 before real call. |
 | `VOYAGE_QUERY_RPM` | falls back to `VOYAGE_RPM` | Separate bucket for synchronous search. |
 | `OLLAMA_URL` | (adapter default `http://localhost:11434`) | Ollama server (self-host). |
+| `OLLAMA_NUM_CTX` | unset (model's own; 32k for voyage-4-nano, ~6 GB) | voyage-4-nano only: sent as `num_ctx` and `num_batch` per request. `8192` is ~1.3 GB. See `docs/context/voyage-4-nano-ollama.md`. |
 
 ## Vector DB (Qdrant)
 

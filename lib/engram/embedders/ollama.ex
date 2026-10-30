@@ -3,11 +3,35 @@ defmodule Engram.Embedders.Ollama do
   Ollama embedder adapter for self-hosted inference.
   Uses the /api/embed endpoint (Ollama 0.3+).
   Reads config: OLLAMA_URL (default http://localhost:11434), EMBED_MODEL (nomic-embed-text).
+
+  ## voyage-4-nano
+
+  The official `hf.co/MongoDB/voyage-4-nano-GGUF` files (Ollama 0.40.7+) embed
+  in the same space as the Voyage API's voyage-4-large/lite, so staging can run
+  on our own hardware against vectors prod's models made. For a nano model
+  (`Engram.EmbedModels.nano?/1`) the adapter does what the model card asks and
+  the Voyage API does server-side:
+
+    * prepends the trained purpose prompt (`:query` gets the query prompt,
+      every other purpose the document prompt);
+    * normalises to Unicode NFC, which llama.cpp's tokenizer skips;
+    * sends `dimensions`, the collection's width (`EMBED_DIMS`, else
+      `Indexing.embed_dims/0`'s 1024; Ollama truncates the 2048-d
+      Matryoshka output and re-normalises);
+    * sends `num_ctx` and an equal `num_batch` from `OLLAMA_NUM_CTX` when set
+      (bidirectional attention: one input must fit one batch). Unset, the
+      repo's params reserve the full 32k context (~6 GB); 8192 is ~1.3 GB.
+
+  Other models get none of these, exactly as before.
   """
 
   @behaviour Engram.Embedder
 
+  alias Engram.Embedder
+  alias Engram.EmbedModels
+  alias Engram.Indexing
   alias Engram.Logger.Metadata
+  alias Engram.ServiceConfig
 
   require Logger
 
@@ -86,7 +110,9 @@ defmodule Engram.Embedders.Ollama do
   @spec request_defaults(atom()) :: keyword()
   def request_defaults(:query), do: query_defaults()
 
-  def request_defaults(purpose) when purpose in [nil, :index], do: index_defaults()
+  # `:maintenance` is a rebuild pass (`Engram.Indexing`): an Oban job, so it
+  # gets the patient index budget.
+  def request_defaults(purpose) when purpose in [nil, :index, :maintenance], do: index_defaults()
 
   # An unrecognized purpose must NOT silently inherit the 120s indexing budget:
   # a typo (`purpose: :querry`) would otherwise reinstate the exact two-minute
@@ -131,8 +157,8 @@ defmodule Engram.Embedders.Ollama do
   @impl true
   def model_info do
     %{
-      model: Application.get_env(:engram, :embed_model, @default_model),
-      dimensions: Application.get_env(:engram, :embed_dims, 768)
+      model: ServiceConfig.get(:embed_model, @default_model),
+      dimensions: ServiceConfig.get(:embed_dims, 768)
     }
   end
 
@@ -142,7 +168,9 @@ defmodule Engram.Embedders.Ollama do
   @impl true
   def embed_texts(texts, opts) when is_list(texts) do
     url = System.get_env("OLLAMA_URL", @default_url)
-    model = Application.get_env(:engram, :embed_model, @default_model)
+    # The per-plan doc model and the query model arrive as `:model`, as they
+    # do for Voyage.
+    model = Keyword.get(opts, :model) || ServiceConfig.get(:embed_model, @default_model)
 
     # `:purpose` is OUR routing hint, not a Req option — the split drops it, so
     # it can never reach Req as an unknown option.
@@ -154,7 +182,7 @@ defmodule Engram.Embedders.Ollama do
     result =
       Req.post(
         "#{url}/api/embed",
-        [json: %{model: model, input: texts}] ++
+        [json: request_body(model, texts, purpose)] ++
           Keyword.merge(request_defaults(purpose), req_opts)
       )
 
@@ -169,4 +197,30 @@ defmodule Engram.Embedders.Ollama do
         {:error, reason}
     end
   end
+
+  @query_prompt "Represent the query for retrieving supporting documents: "
+  @document_prompt "Represent the document for retrieval: "
+
+  defp request_body(model, texts, purpose) do
+    if EmbedModels.nano?(model) do
+      prompt = if purpose == :query, do: @query_prompt, else: @document_prompt
+
+      # `dimensions` always: the model emits 2048-d, and an unset EMBED_DIMS
+      # still means a 1024-d collection (`Indexing.embed_dims/0`).
+      %{
+        model: model,
+        input: Enum.map(texts, &(prompt <> Embedder.nfc(&1))),
+        dimensions: ServiceConfig.get(:embed_dims) || Indexing.embed_dims()
+      }
+      |> put_if(:options, num_ctx_options(ServiceConfig.get(:ollama_num_ctx)))
+    else
+      %{model: model, input: texts}
+    end
+  end
+
+  defp num_ctx_options(nil), do: nil
+  defp num_ctx_options(n), do: %{num_ctx: n, num_batch: n}
+
+  defp put_if(map, _key, nil), do: map
+  defp put_if(map, key, value), do: Map.put(map, key, value)
 end

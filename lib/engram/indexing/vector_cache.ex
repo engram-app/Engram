@@ -57,6 +57,7 @@ defmodule Engram.Indexing.VectorCache do
   import Ecto.Query
 
   alias Engram.Crypto.Envelope
+  alias Engram.Embedder
   alias Engram.Indexing.VectorCache.Entry
   alias Engram.Repo
 
@@ -98,13 +99,11 @@ defmodule Engram.Indexing.VectorCache do
   @doc "NFC, then every `\\p{Cf}` (format) code point removed."
   @spec normalize(iodata()) :: binary()
   def normalize(text) do
-    bin = IO.iodata_to_binary(text)
+    nfc = text |> IO.iodata_to_binary() |> Embedder.nfc()
 
-    case :unicode.characters_to_nfc_binary(bin) do
-      nfc when is_binary(nfc) -> String.replace(nfc, ~r/\p{Cf}/u, "")
-      # Not valid UTF-8: hashed as given, still keyed and still exact.
-      _ -> bin
-    end
+    # Not valid UTF-8 (`nfc/1` returned it as given): hashed as given, still
+    # keyed and still exact.
+    if String.valid?(nfc), do: String.replace(nfc, ~r/\p{Cf}/u, ""), else: nfc
   end
 
   @doc "The input digest: model, shape and normalized text."

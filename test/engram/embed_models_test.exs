@@ -23,6 +23,7 @@ defmodule Engram.EmbedModelsTest do
 
   @lite "voyage-4-lite"
   @large "voyage-4-large"
+  @nano "hf.co/MongoDB/voyage-4-nano-GGUF:Q8_0"
 
   setup do
     prev =
@@ -267,12 +268,50 @@ defmodule Engram.EmbedModelsTest do
     end
   end
 
+  describe "staging on voyage-4-nano: every plan's model set to nano" do
+    setup do
+      prev =
+        for k <- [:plan_doc_embed_models, :plan_query_embed_models],
+            do: {k, Application.get_env(:engram, k)}
+
+      on_exit(fn -> for {k, v} <- prev, do: Application.put_env(:engram, k, v || %{}) end)
+
+      all_nano = %{free: @nano, starter: @nano, pro: @nano}
+      Application.put_env(:engram, :plan_doc_embed_models, all_nano)
+      Application.put_env(:engram, :plan_query_embed_models, all_nano)
+      Application.put_env(:engram, :billing_enabled, true)
+      Application.put_env(:engram, :embed_model, @nano)
+      :ok
+    end
+
+    test "every plan embeds and searches with nano, and only nano is acceptable" do
+      assert EmbedModels.doc_model(free_user()) == @nano
+      assert EmbedModels.query_model(paid_user()) == @nano
+      assert EmbedModels.acceptable(:free) == [@nano]
+      assert EmbedModels.acceptable(:paid) == [@nano]
+    end
+
+    test "a note stamped by the API models is stale, so the switch self-heals" do
+      free = free_user()
+      paid = paid_user()
+      assert EmbedNote.version_stale?(indexed_note(free, @lite))
+      assert EmbedNote.version_stale?(indexed_note(paid, @large))
+      refute EmbedNote.version_stale?(indexed_note(paid, @nano))
+    end
+  end
+
   describe "pricing" do
     test "Voyage list prices per million tokens; unknown prices as large" do
       assert EmbedModels.price(@large) == 120_000
       assert EmbedModels.price(@lite) == 20_000
       assert EmbedModels.price("something-new") == 120_000
       assert EmbedModels.price(nil) == 120_000
+    end
+
+    test "voyage-4-nano runs on our own hardware: it costs nothing, by any Ollama tag" do
+      assert EmbedModels.price(@nano) == 0
+      assert EmbedModels.price("hf.co/MongoDB/voyage-4-nano-GGUF:F16") == 0
+      assert EmbedModels.large_tokens(600, @nano) == 0
     end
 
     test "large_tokens/2 rounds up and is exact for large" do

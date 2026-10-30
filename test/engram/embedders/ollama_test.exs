@@ -2,6 +2,7 @@ defmodule Engram.Embedders.OllamaTest do
   use ExUnit.Case, async: true
 
   alias Engram.Embedders.Ollama
+  alias Engram.ServiceConfig
 
   # Stub the HTTP layer via Req's `plug:` adapter (routed through embed_texts
   # opts) so these run async with no network and no OLLAMA_URL env mutation.
@@ -68,6 +69,15 @@ defmodule Engram.Embedders.OllamaTest do
       assert Ollama.request_defaults(:query)[:receive_timeout] > measured_depth_3_ms * 2
     end
 
+    test "a maintenance (rebuild) embed is an index embed, not an unknown purpose" do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert Ollama.request_defaults(:maintenance)[:receive_timeout] == 120_000
+        end)
+
+      refute log =~ "unknown purpose"
+    end
+
     test "an index embed keeps the long Oban budget" do
       # An Oban worker CAN afford to wait out a busy Ollama — nobody is blocked.
       assert Ollama.request_defaults(:index)[:receive_timeout] == 120_000
@@ -123,6 +133,74 @@ defmodule Engram.Embedders.OllamaTest do
 
       assert {:ok, [[1.0]]} =
                Ollama.embed_texts(["hi"], purpose: :query, receive_timeout: 42, plug: plug)
+    end
+  end
+
+  describe "embed_texts/2 request body" do
+    @nano "hf.co/MongoDB/voyage-4-nano-GGUF:Q8_0"
+
+    # Echoes the decoded JSON body back to the test process.
+    defp capture_plug(test_pid) do
+      fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:body, Jason.decode!(raw)})
+        json_resp(conn, 200, %{"embeddings" => [[1.0]]})
+      end
+    end
+
+    defp sent_body(texts, opts) do
+      assert {:ok, _} = Ollama.embed_texts(texts, [plug: capture_plug(self())] ++ opts)
+      assert_received {:body, body}
+      body
+    end
+
+    test "the caller's model wins over the configured one (per-plan and query models)" do
+      assert %{"model" => "mxbai-embed-large"} = sent_body(["a"], model: "mxbai-embed-large")
+    end
+
+    test "a non-nano model gets its input verbatim and no dimensions or options" do
+      ServiceConfig.put_override(:embed_dims, 1024)
+      ServiceConfig.put_override(:ollama_num_ctx, 8192)
+      body = sent_body(["cafe\u0301"], model: "nomic-embed-text")
+      assert body["input"] == ["cafe\u0301"]
+      refute Map.has_key?(body, "dimensions")
+      refute Map.has_key?(body, "options")
+    end
+
+    test "nano documents get the document prompt, NFC text and the collection's dims" do
+      ServiceConfig.put_override(:embed_dims, 1024)
+
+      for purpose <- [:index, :maintenance] do
+        body = sent_body(["cafe\u0301"], model: @nano, purpose: purpose)
+        assert body["input"] == ["Represent the document for retrieval: caf\u00e9"]
+        assert body["dimensions"] == 1024
+      end
+    end
+
+    test "nano with EMBED_DIMS unset still sends the collection's width, not 2048" do
+      # The model emits 2048-d; the collection is `Indexing.embed_dims/0` wide
+      # (1024 by default). Without `dimensions` every upsert would be refused.
+      body = sent_body(["a"], model: @nano)
+      assert body["dimensions"] == Engram.Indexing.embed_dims()
+      assert body["dimensions"] == 1024
+    end
+
+    test "Embedder.nfc/1 composes, and passes invalid UTF-8 through as given" do
+      assert Engram.Embedder.nfc(<<0xFF, ?a>>) == <<0xFF, ?a>>
+      assert Engram.Embedder.nfc("cafe\u0301") == "caf\u00e9"
+    end
+
+    test "nano queries get the query prompt" do
+      body = sent_body(["mars"], model: @nano, purpose: :query)
+      assert body["input"] == ["Represent the query for retrieving supporting documents: mars"]
+    end
+
+    test "nano with OLLAMA_NUM_CTX set sends num_ctx and an equal num_batch" do
+      # Bidirectional attention: one input must fit one batch (model card).
+      ServiceConfig.put_override(:ollama_num_ctx, 8192)
+
+      assert %{"options" => %{"num_ctx" => 8192, "num_batch" => 8192}} =
+               sent_body(["a"], model: @nano)
     end
   end
 
