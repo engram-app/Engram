@@ -879,6 +879,41 @@ defmodule Engram.OnboardingTest do
       assert [%{name: "My Vault"}] = Engram.Vaults.list_vaults(user)
     end
 
+    test "a paid subscription that opens the gate logs it once, as billing" do
+      user = prefilled_past_terms()
+      previous_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous_level) end)
+
+      {_, events} =
+        Engram.Test.LogCapture.with_events(fn ->
+          {:ok, _} =
+            Engram.Billing.upsert_from_paddle_event(%{
+              "event_type" => "subscription.created",
+              "event_id" => "ntf_gate_open_1",
+              "data" => %{
+                "id" => "sub_gate_open_1",
+                "status" => "active",
+                "customer_id" => "ctm_gate_open_1",
+                "items" => [
+                  %{"price" => %{"id" => "pri_starter_monthly_test"}, "status" => "active"}
+                ],
+                "current_billing_period" => %{
+                  "starts_at" => "2026-05-13T00:00:00Z",
+                  "ends_at" => "2026-06-13T00:00:00Z"
+                },
+                "custom_data" => checkout_custom_data(user.id)
+              }
+            })
+        end)
+
+      # The plan also provisions the connector vault (a nested opening
+      # mutation): still one line, named for the outer one.
+      assert [event] = Enum.filter(events, &gate_opened_line?/1)
+      assert event.meta[:trigger] == "billing"
+      assert event.meta[:user_id] == user.id
+    end
+
     # A returning user whose plan already passes but whose terms lapsed: the
     # pre-answer cannot provision (terms not ok), and the plan step is already
     # satisfied, so accepting the terms is the moment it becomes due.
@@ -1658,6 +1693,42 @@ defmodule Engram.OnboardingTest do
       }
     }
   end
+
+  # "onboarding gate opened" is the line after a refusal. These are the
+  # openings that happen outside the wizard's own steps.
+  describe "gate opened logging" do
+    setup do
+      previous_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous_level) end)
+    end
+
+    test "restoring the only vault logs the gate reopening" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", "canonical", "2026-05-15", "p", %{})
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false})
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "Main", Ecto.UUID.generate())
+      {:ok, _} = Engram.Vaults.delete_vault(user, vault.id)
+
+      {_, events} =
+        Engram.Test.LogCapture.with_events(fn ->
+          {:ok, _} = Engram.Vaults.restore_vault(user, vault.id)
+        end)
+
+      assert [event] = Enum.filter(events, &gate_opened?/1)
+      assert event.meta[:trigger] == "vault_restore"
+    end
+
+    defp gate_opened?(%{msg: {:string, s}}),
+      do: IO.iodata_to_binary(s) == "onboarding gate opened"
+
+    defp gate_opened?(_), do: false
+  end
+
+  defp gate_opened_line?(%{msg: {:string, s}}),
+    do: IO.iodata_to_binary(s) == "onboarding gate opened"
+
+  defp gate_opened_line?(_), do: false
 
   defp prefilled_past_terms do
     user = insert(:user, onboarding_profile: %{})

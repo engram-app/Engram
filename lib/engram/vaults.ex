@@ -246,7 +246,9 @@ defmodule Engram.Vaults do
     if String.trim(client_id) == "" do
       {:error, :invalid_client_id}
     else
-      do_register_vault(user, name, client_id, atomize_keys(extra_attrs), opts)
+      Engram.Onboarding.log_gate_opening(user, "vault", fn ->
+        do_register_vault(user, name, client_id, atomize_keys(extra_attrs), opts)
+      end)
     end
   end
 
@@ -266,15 +268,8 @@ defmodule Engram.Vaults do
       end)
       |> unwrap_register_transaction()
       |> tap(fn
-        {:ok, vault, :created} ->
-          evict_vaults(user.id)
-          # Post-commit and after the eviction, so the gate reads the vault.
-          # Only the default (the user's only live vault) can be the one that
-          # opens the gate; a second vault never does.
-          if vault.is_default, do: Engram.Onboarding.log_gate_opened(user, "vault")
-
-        _ ->
-          :ok
+        {:ok, _vault, :created} -> evict_vaults(user.id)
+        _ -> :ok
       end)
     end
   end
@@ -976,6 +971,13 @@ defmodule Engram.Vaults do
   {:error, :purge_started}, or {:error, :not_found}.
   """
   def restore_vault(user, vault_id) do
+    # Restoring the only vault reopens the vault step of the onboarding gate.
+    Engram.Onboarding.log_gate_opening(user, "vault_restore", fn ->
+      do_restore_vault(user, vault_id)
+    end)
+  end
+
+  defp do_restore_vault(user, vault_id) do
     user = fresh_user(user)
 
     Repo.with_tenant(user.id, fn ->
