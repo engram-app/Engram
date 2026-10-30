@@ -1316,6 +1316,8 @@ defmodule Engram.Notes do
       # writer (append, move, rename, get_note_for_update/3) takes the vault row
       # first, so inserting first and locking after deadlocks against them
       # (Postgres 40P01). Pinned by crdt_create_query_budget_test.exs.
+      # Test seam: a competing row can land here (a path or id race).
+      interleave_hook(:before_bare_insert)
       seq = Engram.Vaults.next_seq!(insert_attrs.vault_id)
       _ = ensure_folder_row!(user, insert_attrs.vault_id, folder)
       changeset = Ecto.Changeset.put_change(changeset, :seq, seq)
@@ -2218,7 +2220,14 @@ defmodule Engram.Notes do
         {:inserted, inserted, _crdt} when is_nil(body) ->
           {:ok, decrypt_or_raise!(inserted, user), :announce}
 
+        # `remint_own_id/7` can land the note under a fresh id (an id race):
+        # its job follows it.
+        {:inserted, %Note{id: ^id} = inserted, _crdt} ->
+          {:ok, decrypt_or_raise!(inserted, user), :announce_bodied}
+
         {:inserted, inserted, _crdt} ->
+          :ok = discard_job(job)
+          _ = commit_genesis_body(inserted.id, user)
           {:ok, decrypt_or_raise!(inserted, user), :announce_bodied}
 
         {:raced, existing} ->
@@ -2402,7 +2411,8 @@ defmodule Engram.Notes do
             sanitized_path,
             folder,
             actor,
-            Keyword.fetch!(opts, :recording)
+            Keyword.fetch!(opts, :recording),
+            embed_opts: opts
           )
         end
 
@@ -2472,7 +2482,9 @@ defmodule Engram.Notes do
     # caller that queues the revived notes' jobs itself (a trash restore, in
     # bulk); the rest goes to the write.
     {refs, opts} = Keyword.pop(opts, :folder_refs)
-    {outbox?, db_opts} = Keyword.pop(opts, :outbox, true)
+    {outbox?, opts} = Keyword.pop(opts, :outbox, true)
+    # The write's own opts (`actor`, MCP's agent settle), for a revived note's job.
+    {write_opts, db_opts} = Keyword.pop(opts, :embed_opts, actor: actor)
 
     was_tombstoned = not is_nil(prior.deleted_at)
 
@@ -2563,7 +2575,7 @@ defmodule Engram.Notes do
                       NoteCommitted.insert!(
                         prior.id,
                         user.id,
-                        embed_opts(updated, actor: actor) ++
+                        embed_opts(updated, write_opts) ++
                           [
                             finalize?:
                               Revisions.finalize?(

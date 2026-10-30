@@ -915,7 +915,7 @@ defmodule EngramWeb.CrdtChannelTest do
 
       parked = CheckpointInterleave.await_parked(:genesis_seed_before_write, socket.channel_pid)
 
-      {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, id)
+      room = start_racing_room(user, vault, id)
       on_exit(fn -> CrdtRegistry.terminate_room(id) end)
       room_ref = Process.monitor(room)
 
@@ -1289,7 +1289,7 @@ defmodule EngramWeb.CrdtChannelTest do
 
       parked = CheckpointInterleave.await_parked(:genesis_seed_before_write, socket.channel_pid)
 
-      {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, id)
+      room = start_racing_room(user, vault, id)
       on_exit(fn -> CrdtRegistry.terminate_room(id) end)
       room_ref = Process.monitor(room)
 
@@ -4090,5 +4090,20 @@ defmodule EngramWeb.CrdtChannelTest do
         0 -> acc
       end
     end
+  end
+
+  # A racer registered under the room's name while the create is parked in
+  # its row transaction. Not a real CrdtDoc: under this file's shared sandbox
+  # a real room's bind/3 queries the one connection the parked channel holds
+  # inside its transaction, so its init could not finish before the release,
+  # and the eviction then killed it mid-query, which drops the test's own
+  # connection. Before the R6 outbox these tests passed only on the 10 s park
+  # timeout and a lucky after-commit order. As the moduledoc above says, the
+  # registry interleaving is the only genuine one here, and a registered pid
+  # is exactly what `evict_racing_room/1` looks up and kills.
+  defp start_racing_room(_user, _vault, id) do
+    racer = spawn(fn -> Process.sleep(:infinity) end)
+    :yes = :global.register_name({:crdt_doc, id}, racer)
+    racer
   end
 end

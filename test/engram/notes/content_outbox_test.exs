@@ -151,6 +151,63 @@ defmodule Engram.Notes.ContentOutboxTest do
     end
   end
 
+  # Delta review D2/D3: a job written ahead of a write follows the row the
+  # write really made, and is deleted when the write made none.
+  describe "a job written ahead of the write" do
+    # Runs `fun` once, at the bare insert's seam, inside its transaction.
+    defp once_before_insert(fun) do
+      put_hook(fn
+        :before_bare_insert ->
+          if Process.put(:outbox_hook_ran, true) != true, do: fun.()
+
+        _ ->
+          :ok
+      end)
+    end
+
+    test "a create re-minted under a fresh id queues its job under that id",
+         %{user: u, vault: v} do
+      id = Ecto.UUID.generate()
+      {:ok, other, _} = Vaults.register_vault(u, "Other", Ecto.UUID.generate())
+      once_before_insert(fn -> insert(:note, id: id, user: u, vault: other, path: "x.md") end)
+
+      {:ok, note} = Notes.genesis_crdt_note(u, v, id, "remint.md", body: doc_with("body"))
+
+      assert note.id != id
+      assert [_] = committed(note.id)
+      assert committed(id) == []
+    end
+
+    test "a create that lost the path race leaves no job", %{user: u, vault: v} do
+      id = Ecto.UUID.generate()
+      once_before_insert(fn -> Engram.Fixtures.insert_note!(u, v, %{path: "race.md"}) end)
+
+      assert {:error, :version_conflict, _} =
+               Notes.genesis_crdt_note(u, v, id, "race.md", body: doc_with("body"))
+
+      assert all_enqueued(worker: NoteCommitted) == []
+    end
+
+    # The #902 shape: a REST write commits after the room's snapshot, so the
+    # checkpoint's version fence matches no row and the write is abandoned.
+    test "a checkpoint that lost its fence leaves no job", %{user: u, vault: v} do
+      {:ok, note} =
+        Notes.upsert_note(u, v, %{"path" => "f.md", "content" => "before"}, actor: "api")
+
+      {:ok, raw} = Repo.with_tenant(u.id, fn -> Repo.get!(Note, note.id) end)
+      {:ok, state} = Crypto.decrypt_crdt_state(raw, u)
+      {:ok, doc} = CrdtBridge.doc_from_state(state)
+      :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "room edit")
+
+      {:ok, _} = Notes.upsert_note(u, v, %{"path" => "f.md", "content" => "rest"}, actor: "api")
+      Repo.delete_all(Oban.Job)
+
+      :ok = CrdtCheckpoint.checkpoint(u.id, v.id, note.id, doc, captured_version: raw.version)
+
+      assert committed(note.id) == []
+    end
+  end
+
   describe "upsert_note" do
     # Before: three unique inserts (embed, links, finalize) after
     # `with_tenant` returned. Now one plain NoteCommitted in the write's
@@ -229,6 +286,17 @@ defmodule Engram.Notes.ContentOutboxTest do
         )
 
       assert [_] = committed(n.id)
+    end
+
+    # Delta review D4: the revived note's job keeps the write's own opts.
+    test "an MCP restore keeps the agent settle", %{user: u, vault: v, note: n} do
+      {:ok, _} =
+        Notes.upsert_note(u, v, %{"id" => n.id, "path" => "New.md", "content" => "# body"},
+          actor: "mcp"
+        )
+
+      assert [job] = committed(n.id)
+      assert job.args["embed_settle"] == "agent"
     end
 
     test "a CRDT resurrect-rename queues one job", %{user: u, vault: v, note: n} do
