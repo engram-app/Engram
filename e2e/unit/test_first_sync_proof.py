@@ -132,3 +132,29 @@ def test_each_failure_turns_the_verdict(samples, events, logs):
 def test_restart_outside_the_window_fails():
     late = {"t": 100.0, "mode": "kill", "rc": 0, "progress": 0.75, "notes": 75}
     assert "**FAIL**" in _run(GOOD, [OUR_KILL], restarted=late).splitlines()[0]
+
+
+# ---------------------------------------------------------------------------
+# Cleanup paths: these run against shared staging, so a crash here strands state.
+# ---------------------------------------------------------------------------
+class _Proc:
+    def __init__(self, rc=0, stdout="", stderr=""):
+        self.returncode, self.stdout, self.stderr = rc, stdout, stderr
+
+
+def test_load_host_cleanup_pkill_cannot_match_its_own_shell(tmp_path, monkeypatch):
+    """`pkill -f <work>/` matched the ssh shell running it, so `rm -rf` never ran."""
+    import re
+
+    work = "/tmp/fsproof.AbC123"
+    cmds = []
+    monkeypatch.setattr(fsp, "ssh", lambda cmd, **kw: cmds.append(cmd) or _Proc())
+    monkeypatch.setattr(fsp.subprocess, "run", lambda *a, **kw: _Proc(rc=1, stdout=b""))
+    fsp.fetch_and_clean_load_host("gh-runner", work, tmp_path)
+    kill = next(c for c in cmds if "pkill" in c)
+    pattern = re.search(r"pkill -f '?([^';\s]+)", kill).group(1)
+    load_cmdline = f"python3 e2e/load/first_sync_proof.py load --work {work}/work"
+    assert re.search(pattern, load_cmdline), "must still match the load"
+    for c in cmds:  # every shell this cleanup runs
+        assert not re.search(pattern, c), f"pkill would kill its own shell: {c}"
+    assert any(c.strip().endswith(f"rm -rf {work}") for c in cmds)

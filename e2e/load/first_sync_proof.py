@@ -543,7 +543,11 @@ def fetch_and_clean_load_host(host: str, work: str, out: Path) -> None:
         subprocess.run(["tar", "-C", str(dest), "-x"], input=tar.stdout)
     if work.startswith("/tmp/fsproof."):
         # The load may still run (an abort): stop it before removing its files.
-        ssh(f"pkill -f {work}/; sleep 2; rm -rf {work}", host=host, timeout=300)
+        # `[/]` matches "/" in the load's argv but not in this shell's own
+        # argv, which holds the pattern text; a plain `{work}/` killed the
+        # shell itself, so `rm -rf` never ran.
+        pattern = shlex.quote(f"[/]{work[1:]}/")
+        ssh(f"pkill -f {pattern}; sleep 2; rm -rf {work}", host=host, timeout=300)
 
 
 # One SSH round trip per sample: container state, docker stats, BEAM memory.
