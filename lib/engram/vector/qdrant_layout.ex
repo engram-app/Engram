@@ -128,7 +128,6 @@ defmodule Engram.Vector.QdrantLayout do
     "upsert_max_batchsize" => 256,
     "filter_max_conditions" => 64,
     "condition_max_size" => 4096,
-    "max_points_count" => 1_500_000,
     "max_timeout" => @max_timeout_s,
     "search_max_batchsize" => 8
   }
@@ -145,8 +144,20 @@ defmodule Engram.Vector.QdrantLayout do
   # fields are included in case an earlier config or a hand PATCH set them.
   @ceiling 2_147_483_647
   @byte_ceiling 2 ** 53 - 1
+
+  # Retired breakers. `max_points_count` (1.5M) was removed: the point count is
+  # bounded by plan limits and the disk/memory guards, not a static number. Prod
+  # still carries the old value and neither a null nor a missing key clears a
+  # strict field (`diff/2` is a subset check, the PATCH merges), so the cloud
+  # profile raises it to the ceiling, where `diff/2` sees the stale value as
+  # drift and the next reconcile PATCHes it. Drop an entry once every cluster
+  # has converged.
+  @retired_limits %{"max_points_count" => @ceiling}
+
   @lifted_limits Map.merge(
-                   Map.new(@hard_limits, fn {field, _} -> {field, @ceiling} end),
+                   Map.new(Map.merge(@hard_limits, @retired_limits), fn {field, _} ->
+                     {field, @ceiling}
+                   end),
                    %{
                      "max_collection_payload_size_bytes" => @byte_ceiling,
                      "max_collection_vector_size_bytes" => @byte_ceiling
@@ -164,7 +175,7 @@ defmodule Engram.Vector.QdrantLayout do
   # No @spec: both clauses return literals, so dialyzer's :underspecs flags
   # any wider map type.
   def desired_strict(:self_host), do: %{}
-  def desired_strict(:cloud), do: @hard_limits
+  def desired_strict(:cloud), do: Map.merge(@hard_limits, @retired_limits)
 
   # Qdrant Cloud's managed default, set here too so the cloud profile
   # (`QDRANT_STRICT_PROFILE=cloud` on staging) refuses an unindexed filtered
