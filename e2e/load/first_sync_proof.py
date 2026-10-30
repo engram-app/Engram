@@ -311,7 +311,9 @@ def rpc(expr: str, timeout: int = 120) -> str:
         timeout=timeout,
     )
     if r.returncode != 0:
-        raise RuntimeError(f"rpc failed ({r.returncode}): {r.stderr.strip()[:300]}")
+        # An Elixir raise prints to stdout; redact in case it echoes a key.
+        detail = redact(f"{r.stderr.strip()[:300]} {r.stdout.strip()[-300:]}")
+        raise RuntimeError(f"rpc failed ({r.returncode}): {detail}")
     return r.stdout
 
 
@@ -425,21 +427,41 @@ def wait_rpc(timeout: int = 300) -> None:
             time.sleep(5)
 
 
+DELETE_TRIES = 4
+# delete_account can deadlock (40P01) with the FolderTable backfill
+# (Engram#2339): it raises, or rolls back as :pg_failed. A retry clears it.
+RETRYABLE_DELETE = ("40P01", "deadlock", ":pg_failed")
+
+
 def delete_user(user_id: str, key_id: str | None) -> str:
     """Revoke the key, then hard-delete the user and everything it owns
-    (notes, attachments, Qdrant points, vaults). Idempotent."""
-    out = rpc(
-        f"""
-        case Engram.Accounts.get_user("{user_id}") do
-          nil -> IO.puts("del|gone")
-          u ->
-            {"Engram.Accounts.revoke_api_key(u, " + json.dumps(key_id) + ")" if key_id else ":ok"}
-            IO.puts("del|#{{inspect(Engram.Accounts.Lifecycle.delete_account(u, :user))}}")
-        end
-        """,
-        timeout=900,
-    )
-    return rpc_field(out, "del")[0]
+    (notes, attachments, Qdrant points, vaults). Idempotent, so retried on a
+    deadlock; raises unless the user is gone."""
+    for attempt in range(1, DELETE_TRIES + 1):
+        try:
+            res = rpc_field(
+                rpc(
+                    f"""
+                    case Engram.Accounts.get_user("{user_id}") do
+                      nil -> IO.puts("del|gone")
+                      u ->
+                        {"Engram.Accounts.revoke_api_key(u, " + json.dumps(key_id) + ")" if key_id else ":ok"}
+                        IO.puts("del|#{{inspect(Engram.Accounts.Lifecycle.delete_account(u, :user))}}")
+                    end
+                    """,
+                    timeout=900,
+                ),
+                "del",
+            )[0]
+        except RuntimeError as e:
+            res = str(e)
+        if res in (":ok", "gone"):
+            return res
+        if attempt == DELETE_TRIES or not any(m in res for m in RETRYABLE_DELETE):
+            raise RuntimeError(f"delete_user {user_id}: {res[:300]}")
+        print(f"[watch] delete_user retry {attempt}: {res[:120]}", flush=True)
+        time.sleep(15)
+    raise AssertionError("unreachable")
 
 
 def pause_qdrant_queues(pause: bool) -> None:
@@ -684,8 +706,10 @@ def cmd_watch(a) -> int:
     samples = out / "samples.jsonl"
     paused = False
     try:
+        paused = (
+            True  # before the call: a pause that lands then raises still gets resumed
+        )
         pause_qdrant_queues(True)
-        paused = True
         started_at = sample(None).get("started_at")
         user_id = create_user(run_id)
         scope = qdrant_scope(user_id)
@@ -758,34 +782,9 @@ def cmd_watch(a) -> int:
             load.terminate()
             raise RuntimeError("watch deadline passed before the load finished")
     finally:
-        # Always: evidence first (needs the container), then the throwaway state.
-        until = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        ev = ssh(
-            f"docker events --since {since} --until {until} --filter container={STAGING_APP} --format '{{{{json .}}}}'",
-            timeout=60,
-        )
-        (out / "events.jsonl").write_text(ev.stdout)
-        logs = {}
-        for name, pat in LOG_SIGNATURES.items():
-            r = ssh(
-                f"docker logs --since {since} {STAGING_APP} 2>&1 | grep -c -E {shlex.quote(pat)}",
-                timeout=120,
-            )
-            logs[name] = int(r.stdout.strip() or 0)
-        if work:
-            fetch_and_clean_load_host(a.load_host, work, out)
-        if paused or user_id:
-            # A deploy mid-run leaves a container that is still booting (rpc
-            # :noconnection) and has resumed the queues: wait, re-pause, then
-            # cancel before deleting so no job embeds into the shared Qdrant.
-            wait_rpc()
-            if paused:
-                pause_qdrant_queues(True)
-        if user_id:
-            print(f"[watch] cancelled jobs: {cancel_user_jobs(user_id)}", flush=True)
-            print(f"[watch] cleanup: {delete_user(user_id, key_id)}", flush=True)
-        if paused:
-            pause_qdrant_queues(False)
+        # If the run itself raised, that error propagates; cleanup's own
+        # errors are printed as they happen and raised after the summary.
+        ev, logs, errors = cleanup(a, out, since, work, user_id, key_id, paused)
 
     rp = out / "load" / "out" / "result.json"
     load_result = json.loads(rp.read_text()) if rp.exists() else None
@@ -798,13 +797,93 @@ def cmd_watch(a) -> int:
         if samples.exists()
         else [],
         restarted,
-        [json.loads(x) for x in ev.stdout.splitlines() if x.strip()],
+        [json.loads(x) for x in ev.splitlines() if x.strip()],
         logs,
         load_result,
     )
     (out / "summary.md").write_text(summary)
     print(summary)
+    if errors:
+        raise RuntimeError(f"cleanup failed: {errors}")
     return 0 if "**PASS**" in summary.splitlines()[0] else 1
+
+
+def cleanup(a, out: Path, since: str, work, user_id, key_id, paused: bool):
+    """Evidence, then the throwaway state. Every step runs whatever the others
+    did: one raising step used to skip the rest, leaving the user and its
+    grants behind and the embed/indexing queues paused for ALL of staging.
+    Returns (docker events text, log signature counts, errors)."""
+    errors: list[str] = []
+
+    def step(name, fn):
+        try:
+            return fn()
+        except Exception as e:  # collected, printed, raised by the caller
+            errors.append(f"{name}: {redact(str(e))[:300]}")
+            print(f"[watch] cleanup step failed: {errors[-1]}", flush=True)
+            return None
+
+    until = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ev = step(
+        "docker events",
+        lambda: (
+            ssh(
+                f"docker events --since {since} --until {until} --filter container={STAGING_APP} --format '{{{{json .}}}}'",
+                timeout=60,
+            ).stdout
+        ),
+    )
+    ev = ev or ""
+    (out / "events.jsonl").write_text(ev)
+    logs = {}
+    for name, pat in LOG_SIGNATURES.items():
+        n = step(
+            f"docker logs {name}",
+            lambda pat=pat: int(
+                ssh(
+                    f"docker logs --since {since} {STAGING_APP} 2>&1 | grep -c -E {shlex.quote(pat)}",
+                    timeout=120,
+                ).stdout.strip()
+                or 0
+            ),
+        )
+        if n is not None:
+            logs[name] = n
+    if work:
+        step("load host", lambda: fetch_and_clean_load_host(a.load_host, work, out))
+    if paused or user_id:
+        try:
+            # A restart leaves a container that is still booting (rpc
+            # :noconnection) with the queues resumed: wait, re-pause, cancel
+            # the user's jobs, then delete, so nothing embeds into the shared
+            # Qdrant.
+            up = step("wait rpc", lambda: wait_rpc() or True)
+            if up and paused:
+                step("re-pause queues", lambda: pause_qdrant_queues(True))
+            if up and user_id:
+                step(
+                    "cancel jobs",
+                    lambda: print(
+                        f"[watch] cancelled jobs: {cancel_user_jobs(user_id)}",
+                        flush=True,
+                    ),
+                )
+                step(
+                    "delete user",
+                    lambda: print(
+                        f"[watch] cleanup: {delete_user(user_id, key_id)}", flush=True
+                    ),
+                )
+        finally:
+            if paused:  # last, always: never leave staging's queues paused
+                step("resume queues", lambda: pause_qdrant_queues(False))
+    if errors and user_id:
+        print(
+            f"[watch] OPERATOR ACTION: cleanup incomplete; check user {user_id} is deleted "
+            f"and Oban queues {QDRANT_QUEUES} are running on {STAGING_APP}",
+            flush=True,
+        )
+    return ev, logs, errors
 
 
 LOG_SIGNATURES = {

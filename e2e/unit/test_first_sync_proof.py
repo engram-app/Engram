@@ -211,8 +211,9 @@ def test_qdrant_guard_counts_only_the_run_users_points(monkeypatch):
     monkeypatch.setattr(
         fsp,
         "rpc",
-        lambda expr, **kw: exprs.append(expr)
-        or f"qdrant|obsidian_notes_v3|{fsp.json.dumps(cond)}\n",
+        lambda expr, **kw: (
+            exprs.append(expr) or f"qdrant|obsidian_notes_v3|{fsp.json.dumps(cond)}\n"
+        ),
     )
 
     class Resp:
@@ -227,8 +228,98 @@ def test_qdrant_guard_counts_only_the_run_users_points(monkeypatch):
     )
     monkeypatch.setitem(sys.modules, "requests", fake)
     scope = fsp.qdrant_scope("0f3a-uuid")
-    assert "match_filter(:user, \"0f3a-uuid\")" in exprs[0]  # the indexed tenant key
+    assert 'match_filter(:user, "0f3a-uuid")' in exprs[0]  # the indexed tenant key
     assert fsp.qdrant_points(scope) == 3
     url, body = posts[0]
     assert url.endswith("/collections/obsidian_notes_v3/points/count")
     assert body == {"filter": {"must": [cond]}, "exact": True}
+
+
+def _cleanup_env(tmp_path, monkeypatch, fail=()):
+    """Mock every staging/load-host call cleanup makes; names in `fail` raise."""
+    calls = []
+
+    def step(name, ret=None):
+        def fn(*args, **kw):
+            calls.append((name, *args[:1]) if name == "pause" else name)
+            if name in fail:
+                raise RuntimeError(
+                    f"{name} boom 40P01" if name == "delete" else f"{name} boom"
+                )
+            return ret
+
+        return fn
+
+    def fake_ssh(cmd, **kw):
+        if "docker events" in cmd and "events" in fail:
+            raise fsp.subprocess.TimeoutExpired(cmd, 60)
+        return _Proc(stdout="0\n")
+
+    monkeypatch.setattr(fsp, "ssh", fake_ssh)
+    monkeypatch.setattr(fsp, "fetch_and_clean_load_host", step("load_host"))
+    monkeypatch.setattr(fsp, "wait_rpc", step("wait_rpc"))
+    monkeypatch.setattr(fsp, "pause_qdrant_queues", step("pause"))
+    monkeypatch.setattr(fsp, "cancel_user_jobs", step("cancel", "0"))
+    monkeypatch.setattr(fsp, "delete_user", step("delete", ":ok"))
+    a = argparse.Namespace(load_host="gh-runner")
+    run = lambda: fsp.cleanup(  # noqa: E731
+        a, tmp_path, "2026-10-30T00:00:00Z", "/tmp/fsproof.x", "uid", "kid", True
+    )
+    return calls, run
+
+
+def test_cleanup_survives_every_failing_step_and_resumes_queues_last(
+    tmp_path, monkeypatch
+):
+    """One raising step used to skip the rest: user left behind, staging queues paused."""
+    calls, run = _cleanup_env(
+        tmp_path, monkeypatch, fail={"events", "load_host", "cancel"}
+    )
+    _, _, errors = run()
+    assert calls == [
+        "load_host",
+        "wait_rpc",
+        ("pause", True),
+        "cancel",
+        "delete",
+        ("pause", False),
+    ]
+    assert [e.split(":")[0] for e in errors] == [
+        "docker events",
+        "load host",
+        "cancel jobs",
+    ]
+
+
+def test_cleanup_resumes_queues_even_when_staging_rpc_never_answers(
+    tmp_path, monkeypatch
+):
+    calls, run = _cleanup_env(tmp_path, monkeypatch, fail={"wait_rpc"})
+    _, _, errors = run()
+    assert calls[-1] == ("pause", False)
+    assert "delete" not in calls and errors
+
+
+def test_delete_user_retries_a_deadlock_but_not_a_real_refusal(monkeypatch):
+    """Engram#2339: delete_account can deadlock (40P01) with the folder backfill."""
+    monkeypatch.setattr(fsp.time, "sleep", lambda s: None)
+    answers = iter(
+        [
+            "del|{:error, :pg_failed}\n",
+            RuntimeError("** (Postgrex.Error) ERROR 40P01 (deadlock_detected)"),
+            "del|:ok\n",
+        ]
+    )
+
+    def fake_rpc(expr, **kw):
+        x = next(answers)
+        if isinstance(x, Exception):
+            raise x
+        return x
+
+    monkeypatch.setattr(fsp, "rpc", fake_rpc)
+    assert fsp.delete_user("uid", "kid") == ":ok"
+
+    monkeypatch.setattr(fsp, "rpc", lambda expr, **kw: "del|{:error, :last_admin}\n")
+    with pytest.raises(RuntimeError, match="last_admin"):
+        fsp.delete_user("uid", "kid")
