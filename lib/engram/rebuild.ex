@@ -27,7 +27,8 @@ defmodule Engram.Rebuild do
   say what is left, and the kick queues it within about a minute. The jobs
   a halted pass skipped released their notes' sweep backoff
   (`Engram.Workers.RebuildStaleNote`), and one caught mid-flight retries
-  after 60 s. Without the kick the 5-minute cron picks the notes up.
+  after 60 s. Without the kick the next reconcile run (the rollout chain
+  every 5 minutes while IndexVersions is open) picks the notes up.
 
   ## Pricing by plan
 
@@ -422,6 +423,15 @@ defmodule Engram.Rebuild do
       reason -> gated(reason, job)
     end
   end
+
+  @doc """
+  Whether `qdrant_pace/1` would let a job through now, for a caller that
+  QUEUES per-note Qdrant work (`ReconcileEmbeddings`): it queues nothing
+  while this is false, instead of queueing jobs that only snooze. Same
+  cached verdict; emits no gated event (no job was gated).
+  """
+  @spec qdrant_open?() :: boolean()
+  def qdrant_open?, do: qdrant_behind() == nil
 
   @doc """
   What a job gated for the `snoozed`+1-th time snoozes: 30 s at first, then

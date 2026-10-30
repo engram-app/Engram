@@ -88,11 +88,15 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
   end
 
   describe "wiring" do
+    # A content write queues one NoteCommitted (R6 outbox); it enqueues this.
+    defp dispatch, do: Engram.Test.NoteCommittedDispatch.run()
+
     test "REST upsert enqueues extraction on content change, not on no-op",
          %{user: user, vault: vault} do
       {:ok, note} =
         Notes.upsert_note(user, vault, %{"path" => "W.md", "content" => "v1"}, actor: "api")
 
+      dispatch()
       assert [%{args: %{"note_id" => id}}] = all_enqueued(worker: ExtractNoteLinks)
       assert id == note.id
 
@@ -102,6 +106,7 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
       {:ok, _} =
         Notes.upsert_note(user, vault, %{"path" => "W.md", "content" => "v1"}, actor: "api")
 
+      dispatch()
       assert [] == all_enqueued(worker: ExtractNoteLinks)
     end
 
@@ -110,6 +115,7 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
       {:ok, note} =
         Notes.upsert_note(user, vault, %{"path" => "C.md", "content" => "old"}, actor: "api")
 
+      dispatch()
       Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.ExtractNoteLinks"))
 
       {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
@@ -132,10 +138,12 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
       assert id == note.id
     end
 
-    test "REST moved leg (rename resurrect) enqueues extraction on content change, not on same content",
+    test "REST moved leg (rename resurrect) enqueues extraction, with or without a content change",
          %{user: user, vault: vault} do
       {:ok, note} =
         Notes.upsert_note(user, vault, %{"path" => "M1.md", "content" => "before"}, actor: "api")
+
+      dispatch()
 
       :ok = Notes.delete_note(user, vault, "M1.md")
       Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.ExtractNoteLinks"))
@@ -154,6 +162,7 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
                  actor: "api"
                )
 
+      dispatch()
       assert [%{args: %{"note_id" => id}}] = all_enqueued(worker: ExtractNoteLinks)
       assert id == moved.id
 
@@ -161,8 +170,9 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
       :ok = Notes.delete_note(user, vault, "M2.md")
       Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.ExtractNoteLinks"))
 
-      # Same rename resurrect shape, but SAME content as the tombstoned note:
-      # merge produces an identical hash, no job.
+      # Same rename resurrect shape, SAME content as the tombstoned note: the
+      # delete dropped its index, so the revival queues its jobs anyway (R6,
+      # review H1: before, only the reconcile sweep found it).
       assert {:ok, _} =
                Notes.upsert_note(
                  user,
@@ -175,7 +185,8 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
                  actor: "api"
                )
 
-      assert [] == all_enqueued(worker: ExtractNoteLinks)
+      dispatch()
+      assert [%{args: %{"note_id" => ^id}}] = all_enqueued(worker: ExtractNoteLinks)
     end
   end
 

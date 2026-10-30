@@ -40,11 +40,19 @@ defmodule Engram.MCP.HandlersIndexDelayTest do
 
   defp seconds_out(%Oban.Job{scheduled_at: at}), do: DateTime.diff(at, DateTime.utc_now())
 
-  defp plugin_write(u, v, path, content),
-    do: {:ok, _} = Notes.upsert_note(u, v, %{"path" => path, "content" => content}, actor: "sync")
+  # Each write queues one NoteCommitted (R6 outbox); running it enqueues the
+  # embed, as the `events` queue would right after the commit.
+  defp dispatch, do: Engram.Test.NoteCommittedDispatch.run()
 
-  defp mcp_write(u, v, path, content),
-    do: {:ok, _, _} = Handlers.handle("write_note", u, v, %{"path" => path, "content" => content})
+  defp plugin_write(u, v, path, content) do
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => path, "content" => content}, actor: "sync")
+    dispatch()
+  end
+
+  defp mcp_write(u, v, path, content) do
+    {:ok, _, _} = Handlers.handle("write_note", u, v, %{"path" => path, "content" => content})
+    dispatch()
+  end
 
   test "an MCP create schedules indexing within seconds", %{user: u, vault: v} do
     {:ok, _, _} =
@@ -54,6 +62,7 @@ defmodule Engram.MCP.HandlersIndexDelayTest do
         "content" => "agent wrote this"
       })
 
+    dispatch()
     assert [job] = embed_jobs()
     assert seconds_out(job) <= EmbedNote.agent_settle_seconds() + 1
   end

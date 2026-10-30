@@ -97,8 +97,6 @@ defmodule Engram.NotePointsCapFlagTest do
     end
   end
 
-  defp reverify_tick, do: DateTime.new!(Date.utc_today(), ~T[04:02:00])
-
   defp insert_note(user, vault, content) do
     note = Engram.Fixtures.insert_note!(user, vault, %{path: "Big.md", content: content})
     {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
@@ -216,7 +214,7 @@ defmodule Engram.NotePointsCapFlagTest do
       # The 04:00 tick (recap included), a second rebuild job and an
       # edit-less index pass: none of them pays again.
       lapse_cooldown(note)
-      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
       no_job_for(note)
       assert :ok = perform_job(RebuildStaleNote, %{"note_id" => note.id, "user_id" => user.id})
       reindex(note, vault, user)
@@ -224,7 +222,7 @@ defmodule Engram.NotePointsCapFlagTest do
 
       # The same on the next tick.
       lapse_cooldown(note)
-      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
       no_job_for(note)
       assert :ok = perform_job(EmbedNote, %{"note_id" => note.id, "user_id" => user.id})
       reindex(note, vault, user)
@@ -241,7 +239,7 @@ defmodule Engram.NotePointsCapFlagTest do
       assert rows(note) == 500
       stamp_pinned(note)
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
       refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id, "recap" => true})
     end
 
@@ -254,7 +252,7 @@ defmodule Engram.NotePointsCapFlagTest do
       assert rows(note) == 500
       lapse_cooldown(note)
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
       assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id, "recap" => true})
     end
   end

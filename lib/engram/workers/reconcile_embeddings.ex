@@ -2,10 +2,26 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   @moduledoc """
   Oban cron worker: finds notes with stale or missing embeddings and re-queues them.
 
-  Runs every 5 minutes via Oban.Plugins.Cron, at boot on a queue-running node,
-  and whenever something marks notes for re-indexing (`kick/0`). Catches any
-  notes that fell through the cracks — failed jobs, discarded jobs, config
-  errors, crashes mid-embed — and every index-version rebuild.
+  A BACKSTOP (R6). Every content write inserts its `NoteCommitted` job in its
+  own transaction, a failed embed schedules its own retry at its cooldown's
+  end, and a budget park schedules a per-user `WakeBudgetParked`. This sweep
+  catches what those missed: every 3 hours via Oban.Plugins.Cron, at boot on
+  a queue-running node, and whenever something marks notes for re-indexing
+  (`kick/0`). A note it finds that no event explains is counted as
+  `[:engram, :reconcile, :found]` with `missed: true`.
+
+  It runs more often only while there is work only it can do, by queueing
+  its own successor in 5 minutes (`@chain_seconds`):
+
+    * while `IndexVersions` is open (a version rollout): as the old 5-minute
+      cron did, so a rollout keeps its pace;
+    * the daily re-verify (`mode: "reverify"`, 04:02), up to 12 hops while a
+      page comes back full.
+
+  Per-note Qdrant work (`RebuildStaleNote`, `RefreshKeywordVectors`) is
+  queued only while `Engram.Rebuild.qdrant_open?/0` holds: a job queued
+  into a shut gate only snoozes (prod 2026-10-30: 1.4M snoozes a day). A
+  shut gate skips that work for the run; the chain asks again in 5 minutes.
 
   A note needs embedding when:
   - embed_hash IS NULL (never embedded)
@@ -24,15 +40,24 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
   use Oban.Worker,
     queue: :maintenance,
-    max_attempts: 1,
+    # A failed or timed-out run is retried (`backoff/1`), so one bad run never
+    # ends a rollout chain for the 3 hours until the next cron.
+    max_attempts: 5,
     # One sweep at a time. Two at once stamp the same rows (the stamp's
     # subquery is not re-checked under a row lock) and, on the maintenance
-    # pool where the stamp commits before the enqueue, queue them twice. A
-    # kick during a sweep is dropped: the running sweep pages until nothing is
-    # left, and the 5-min cron catches anything marked after its last page.
-    # Period = the 15-min timeout, so a job a killed node left `executing`
-    # stops blocking once it could no longer be running.
-    unique: [period: 900, states: [:available, :scheduled, :executing]]
+    # pool where the stamp commits before the enqueue, queue them twice.
+    #
+    # At most ONE queued sweep, whatever its args: `fields` leaves `args` out,
+    # so a re-verify (`mode`/`hop` args) and a plain sweep dedupe against each
+    # other (a re-verify arriving on a queued plain sweep takes it over,
+    # `replace_args/1`). `executing` is not in `states`: a running sweep is
+    # excluded at its start instead (`defer_if_running/1`), so a kick or the
+    # re-verify cron during a run is deferred, never dropped.
+    unique: [
+      fields: [:worker, :queue],
+      period: 900,
+      states: [:available, :scheduled, :retryable]
+    ]
 
   import Ecto.Query
 
@@ -55,7 +80,8 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     ExtractNoteLinks,
     RebuildDryRun,
     RebuildStaleNote,
-    RefreshKeywordVectors
+    RefreshKeywordVectors,
+    WakeBudgetParked
   }
 
   require Logger
@@ -69,22 +95,99 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   @budget_users 20
   @budget_notes 200
 
+  # A chained run's delay, and the daily re-verify's hop limit: the cadence
+  # and the throughput of the old 5-minute cron, only while work remains.
+  @chain_seconds 300
+  @reverify_hops 12
+
   @doc """
   Queues a sweep now. Called where notes are marked for re-indexing (index
   cap changes, orphan repair, plan upgrades) and at boot, so that work starts
-  immediately instead of on the next cron tick. Deduplicated while pending.
+  immediately instead of on the next cron tick. Deduplicated while pending;
+  a chained run already scheduled is pulled forward to now. `meta.kick`
+  marks the notes it finds as explained by an event (never `missed`).
   """
-  def kick, do: Oban.insert(new(%{}))
+  def kick(meta \\ %{"kick" => true}) do
+    # `scheduled_at` explicitly: Oban's replace copies only changed fields.
+    Oban.insert(
+      new(%{},
+        scheduled_at: DateTime.utc_now(),
+        meta: meta,
+        replace: [scheduled: [:scheduled_at, :meta], retryable: [:scheduled_at, :meta]]
+      )
+    )
+  end
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(15)
+
+  # A retry is the chain's survival: 5, 10, 20, 40 min (jittered), then the
+  # 3-hour cron. A scheduled retry, never a snooze.
+  @impl Oban.Worker
+  def backoff(%Oban.Job{attempt: attempt}),
+    do: Engram.Jobs.capped_backoff(@chain_seconds, max(attempt - 1, 0), 3_600, 0.25)
+
+  @doc """
+  The `replace` option for a sweep with `args`: a re-verify takes over a
+  queued plain sweep's args (it does everything a plain sweep does); a plain
+  sweep never downgrades a queued re-verify.
+  """
+  @spec replace_args(map()) :: keyword()
+  def replace_args(%{"mode" => "reverify"}),
+    do: [scheduled: [:args], available: [:args], retryable: [:args]]
+
+  def replace_args(_args), do: []
+
+  defp enqueue(args, opts) do
+    {:ok, _} =
+      Oban.insert(new(args, Keyword.merge([replace: replace_args(args)], opts)))
+
+    :ok
+  end
+
+  # Another sweep is running: run later instead of concurrently. Only one
+  # sweep is ever queued (`unique`), so two cannot both start and both defer.
+  # An `executing` row older than the timeout is a killed node's leftover
+  # (Lifeline rescues it) and does not count.
+  defp defer_if_running(%Oban.Job{id: id, args: args, meta: meta}) do
+    since = DateTime.add(DateTime.utc_now(), -div(timeout(nil), 1_000), :second)
+
+    running =
+      from(j in Oban.Job,
+        where:
+          j.worker == ^inspect(__MODULE__) and j.state == "executing" and
+            j.attempted_at > ^since
+      )
+
+    running = if id, do: where(running, [j], j.id != ^id), else: running
+
+    if Repo.exists?(running) do
+      :ok =
+        enqueue(args,
+          schedule_in: @chain_seconds,
+          meta: Map.take(meta || %{}, ["kick", "boot"])
+        )
+
+      :deferred
+    else
+      :run
+    end
+  end
 
   # T3.7 — NO rotation gate needed here. This worker only queries note IDs and
   # enqueues `EmbedNote` jobs — it never decrypts or re-encrypts any payload.
   # The enqueued EmbedNote workers are individually gated via `RotationGate`.
   @impl Oban.Worker
-  def perform(%Oban.Job{args: args, scheduled_at: scheduled_at}) do
+  def perform(%Oban.Job{} = job) do
+    case defer_if_running(job) do
+      :deferred -> :ok
+      :run -> sweep(job)
+    end
+  end
+
+  defp sweep(%Oban.Job{args: args} = job) do
     page_size = Map.get(args, "page", @page)
+    reverify? = args["mode"] == "reverify"
 
     # Pages through every tenant's stale notes: one pass on the maintenance
     # pool, or one transaction per page per tenant without it (see scan/3).
@@ -115,20 +218,23 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     #
     # Once IndexVersions is done no content-current note is on an old
     # version: skip the version term and the keyword scan (an unindexed
-    # per-tenant scan every 5 min). A version bump renames the migration,
-    # which reopens both. Except in the daily re-verify hour: a rollback then
-    # roll-forward, or a restored soft-deleted vault, puts version-stale notes
-    # back after the migration closed, and nothing would reopen it.
+    # per-tenant scan). A version bump renames the migration, which reopens
+    # both. Except in the daily re-verify: a rollback then roll-forward, or a
+    # restored soft-deleted vault, puts version-stale notes back after the
+    # migration closed, and nothing would reopen it.
+    #
+    # And never while the Qdrant gate is shut: both terms only queue per-note
+    # Qdrant writes, which would snooze in a shut gate. One gate read per run.
     #
     # The versions are the rebuild switch's (`Rebuild.target_versions/0`),
     # read once for both sweeps. `done?/0` reads them again through the
-    # migration name; a halt between the two reads only makes this tick
+    # migration name; a halt between the two reads only makes this run
     # skip rebuilds, never queue extra ones.
     versions = Rebuild.target_versions()
-    versions_done = IndexVersions.done?() and not daily_reverify?(scheduled_at)
+    %{open?: open?, qdrant_open?: qdrant_open?, version_term?: version_term?} = gates(reverify?)
 
     version_stale =
-      if versions_done, do: dynamic(false), else: IndexVersions.stale_dynamic(versions)
+      if version_term?, do: IndexVersions.stale_dynamic(versions), else: dynamic(false)
 
     sweep_tenant = fn repo, ids, remaining ->
       eligible =
@@ -206,7 +312,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       # race, and still a single `notes` query regardless of vault count. A
       # successful EmbedNote clears the stamp back to NULL; a graceful terminal
       # failure extends it to the full poison cooldown. The window MUST outlast the
-      # 5-min cron interval so a crash-poison note skips at least one tick.
+      # 5-min chain hop so a crash-poison note skips at least one run.
       # `kind == "note"` is redundant with the subquery (which already filters it)
       # but kept explicit so this bulk UPDATE is self-evidently note-scoped — a
       # folder marker can never get an embed cooldown stamped even if the subquery
@@ -232,6 +338,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
           dense_indexed_hash: n.dense_indexed_hash,
           chunker_version: n.chunker_version,
           embed_model: n.embed_model,
+          updated_at: n.updated_at,
           paid: exists(paid)
         })
         # Clears the budget-park flag with it: the #897 backoff must hold for
@@ -261,8 +368,15 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # The version term defeats the `notes_reconcile_due` partial index, so
     # while it is on the sweep asks one id window at a time (#2276); once
     # IndexVersions is done the index serves it, one statement per page.
+    found = %{now: now, kick?: get_in(job.meta, ["kick"]) == true, qdrant_open?: qdrant_open?}
+
     counts =
-      scan(&sweep_tenant.(&1, &2, page_size), page_size, &enqueue_page/1, not versions_done)
+      scan(
+        &sweep_tenant.(&1, &2, page_size),
+        page_size,
+        &enqueue_page(&1, found),
+        version_term?
+      )
 
     eligible = Enum.sum(Enum.map(counts, &elem(&1, 0)))
     queued = Enum.sum(Enum.map(counts, &elem(&1, 1)))
@@ -280,18 +394,88 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       )
     )
 
+    finish(args, %{
+      now: now,
+      backoff_until: backoff_until,
+      paid: paid,
+      page_size: page_size,
+      versions: versions,
+      open?: open?,
+      reverify?: reverify?,
+      qdrant_open?: qdrant_open?,
+      version_term?: version_term?
+    })
+  end
+
+  # Whether a version rollout is open, whether the Qdrant gate lets per-note
+  # Qdrant work through (read only when this run would queue any), and so
+  # whether the version term and keyword top-up run.
+  defp gates(reverify?) do
+    open? = not IndexVersions.done?()
+    qdrant_open? = not (open? or reverify?) or qdrant_open?()
+
+    %{
+      open?: open?,
+      qdrant_open?: qdrant_open?,
+      version_term?: (open? or reverify?) and qdrant_open?
+    }
+  end
+
+  # Everything after the main sweep: the daily re-verify's sweeps, the
+  # budget-park backstop, the dry run, the keyword top-up, and the chain.
+  defp finish(args, run) do
     # Both daily: the backlog is a one-off, new notes are capped and
     # budget-checked as they are indexed (`Indexing`), and a promotion after
-    # deletes can wait a day.
-    _ =
-      if daily_reverify?(scheduled_at) do
-        :ok = sweep_over_note_cap(now)
-        {:ok, _} = budget_sweep(@budget_users, now)
+    # deletes can wait a day. Both queue RebuildStaleNote, so not into a
+    # shut Qdrant gate. `true` = a page came back full: more remains.
+    reverify_more? =
+      run.reverify? and run.qdrant_open? and
+        Enum.any?([
+          sweep_over_note_cap(run.now),
+          elem(budget_sweep(@budget_users, run.now), 1).users == @budget_users
+        ])
+
+    :ok = wake_budget_parked(run.backoff_until)
+    :ok = maybe_dry_run()
+
+    keyword_more? =
+      run.version_term? and
+        sweep_keyword_stale(run.now, run.paid, run.page_size, run.versions)
+
+    chain(args, run.open?, reverify_more? or keyword_more? or not run.qdrant_open?)
+  end
+
+  # The successor, in `@chain_seconds`, while there is work only this sweep
+  # does: the re-verify while a page came back full or the gate was shut (up
+  # to `@reverify_hops`), else a version rollout (as often as the old cron).
+  # A shut gate is retried by the next run, never by a snoozing job.
+  defp chain(args, open?, more?) do
+    hop = Map.get(args, "hop", 0) + 1
+    reverify? = args["mode"] == "reverify"
+
+    next =
+      cond do
+        reverify? and more? and hop < @reverify_hops -> %{"mode" => "reverify", "hop" => hop}
+        open? -> %{}
+        true -> nil
       end
 
-    :ok = wake_budget_parked(backoff_until)
-    :ok = maybe_dry_run()
-    if versions_done, do: :ok, else: sweep_keyword_stale(now, paid, page_size, versions)
+    _ =
+      if reverify? and more? and hop >= @reverify_hops do
+        Logger.warning(
+          "reconcile_embeddings: re-verify stopped with work left",
+          Metadata.with_category(:warning, :search, attempt: hop)
+        )
+      end
+
+    if next, do: enqueue(next, schedule_in: @chain_seconds), else: :ok
+  end
+
+  # The Qdrant half of the rebuild gate (`Rebuild.qdrant_open?/0`).
+  # `:reconcile_qdrant_gate` false skips the check (config/test.exs, where no
+  # Qdrant answers and the gate would always read shut).
+  defp qdrant_open? do
+    not Application.get_env(:engram, :reconcile_qdrant_gate, true) or Rebuild.qdrant_open?()
   end
 
   # `exists/1` is not allowed in an UPDATE's SET, so the sweep's stamp
@@ -324,8 +508,8 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     :ok
   end
 
-  # Notes rebuilt per tick by `sweep_over_note_cap/1`: 1,200 a day over the
-  # twelve re-verify ticks.
+  # Notes rebuilt per run by `sweep_over_note_cap/1`: up to 1,200 a day over
+  # the re-verify's twelve hops.
   @recap_batch 100
 
   # Notes per id window when a sweep's predicate has no index to serve it
@@ -335,9 +519,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # Notes indexed before the per-note cap (or on a plan since downgraded)
   # that hold more chunks than their tier's `note_points_cap`. They go to
   # RebuildStaleNote with `recap: true`, which re-merges them unmetered. One
-  # bounded batch per tick, and only in the daily re-verify hour: the probe
+  # bounded batch per run, and only in the daily re-verify: the probe
   # touches every dense note (one id window per statement), the backlog is a
-  # one-off (641 notes in prod on 2026-10-18, under a day of ticks), new notes
+  # one-off (641 notes in prod on 2026-10-18, under a day of hops), new notes
   # are capped as they are indexed, and a downgrade can wait a day.
   #
   # "More than `cap` chunks" is read as "a chunk at position >= cap": positions
@@ -358,11 +542,14 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # for it twice. Before and during the pass that leaves the recap nothing
   # but notes the pass already wrote; after it, downgrades and lowered
   # overrides.
+  # Returns whether a full batch was found (more may remain).
   defp sweep_over_note_cap(now) do
     tier_caps = by_tier(:note_points_cap)
 
     # Every tier `:unlimited` is enforcement off (self-host): nothing to do.
-    unless Enum.all?(Map.values(tier_caps), &(&1 == :unlimited)) do
+    if Enum.all?(Map.values(tier_caps), &(&1 == :unlimited)) do
+      false
+    else
       backoff_until = DateTime.add(now, backoff_seconds(), :second)
       over_cap = over_note_cap_dynamic(tier_caps, Billing.active_overrides(:note_points_cap))
 
@@ -421,9 +608,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
           total_count: length(fresh)
         )
       )
-    end
 
-    :ok
+      length(rows) >= @recap_batch
+    end
   end
 
   # The "rolling day" every Voyage ceiling below reads back from `oban_jobs`
@@ -556,7 +743,8 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   collection is red.
   """
   @spec budget_sweep(pos_integer(), DateTime.t()) ::
-          {:ok, %{demoted: non_neg_integer(), promoted: non_neg_integer()}}
+          {:ok,
+           %{demoted: non_neg_integer(), promoted: non_neg_integer(), users: non_neg_integer()}}
   def budget_sweep(limit_users, now \\ DateTime.utc_now()) do
     with caps when caps != :off <- budget_caps(),
          [_ | _] = users <- budget_users(caps, limit_users, now),
@@ -575,9 +763,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         )
       )
 
-      {:ok, totals}
+      {:ok, Map.put(totals, :users, length(users))}
     else
-      _ -> {:ok, %{demoted: 0, promoted: 0}}
+      _ -> {:ok, %{demoted: 0, promoted: 0, users: 0}}
     end
   end
 
@@ -611,15 +799,16 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # users with something that can promote under today's caps: a floor note
   # that fits below 90%, or a merged note whose chunks now fit its per-note
   # cap. The second group is ordered by a hash of the user and the 5-minute
-  # tick, so a user whose promotion keeps not fitting (the ledger, a large
-  # note) cannot hold a slot on every tick.
+  # bucket of `now` (each re-verify hop is 5 min apart), so a user whose
+  # promotion keeps not fitting (the ledger, a large note) cannot hold a slot
+  # on every hop.
   #
   # ponytail: one `IN ^ids` subscriptions read over every chunk-owning user;
   # batch it past tens of thousands of users.
   defp budget_users(caps, limit, now) do
     repo = Repo.maintenance()
     tick = div(DateTime.to_unix(now), 300)
-    # Daily GROUP BYs over every note (the re-verify hour only): the
+    # Daily GROUP BYs over every note (the re-verify only): the
     # maintenance pool's ceiling, explicit so self-host (where this is
     # `Engram.Repo`, 15 s) gets it too (#2276).
     per_user = fn query ->
@@ -1038,16 +1227,11 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   end
 
   defp over(_no_cap), do: dynamic(false)
-  # The Free embed-bucket queue. A budget-parked note waits with no clock
-  # (`EmbedNote.parked_until_edited/0`); this wakes, per user, the parked notes
-  # whose recorded `embed_budget_need` fits what the bucket holds now, first
-  # fit by age (`embed_budget_parked_at`): oldest first, and a note that does
-  # not fit is skipped so smaller ones behind it still wake. The oldest note,
-  # if skipped, also wakes with whatever is left as its cap (`budget_cap`) once
-  # that covers its next chunk (`embed_budget_next`): it embeds what fits and
-  # parks the rest, so it cannot starve, and no pass runs to embed nothing.
-  @wake_page 500
 
+  # The backstop for `WakeBudgetParked`, which wakes a user's budget-parked
+  # notes at the time their bucket can pay (scheduled by the park itself).
+  # Here every parked user is woken (and gets a scheduled wake if notes stay
+  # parked), so a lost or old-release job costs a delay, never a stuck note.
   defp wake_budget_parked(backoff_until) do
     Enum.each(parked_user_ids(), &wake_user(&1, backoff_until))
   end
@@ -1070,100 +1254,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   defp wake_user(user_id, backoff_until) do
     case Engram.Accounts.get_user_with_subscription(user_id) do
       nil -> :ok
-      user -> wake(user, backoff_until)
+      user -> WakeBudgetParked.wake(user, backoff_until)
     end
   end
-
-  defp wake(user, backoff_until), do: wake(user, spendable(user), backoff_until)
-
-  # An empty bucket wakes nothing (`fitting/2` returns [] when nothing is
-  # left), so skip the tenant transaction and the queue read. This runs every
-  # tick for every user with a parked note.
-  defp wake(_user, budget, _backoff_until) when is_number(budget) and budget <= 0, do: :ok
-
-  defp wake(user, budget, backoff_until) do
-    woken =
-      Repo.with_tenant!(user.id, fn ->
-        candidates =
-          from(n in IndexVersions.live_notes(),
-            where: n.embed_budget_parked == true,
-            order_by: [asc_nulls_last: n.embed_budget_parked_at, asc: n.id],
-            limit: @wake_page,
-            select: {n.id, n.embed_budget_need, n.embed_budget_next}
-          )
-          |> Repo.all()
-
-        woken = fitting(candidates, budget)
-        ids = Enum.map(woken, &elem(&1, 0))
-
-        _ =
-          Repo.update_all(from(n in Note, where: n.kind == "note" and n.id in ^ids),
-            set: [embed_budget_parked: nil, embed_retry_after: backoff_until]
-          )
-
-        woken
-      end)
-
-    caps = Map.new(woken)
-    fresh = EmbedNote.reject_already_queued(Map.keys(caps), EmbedNote.backfill_priority())
-
-    _ =
-      Oban.insert_all(
-        Enum.map(fresh, fn id ->
-          EmbedNote.new_debounced(id, user.id,
-            priority: EmbedNote.backfill_priority(),
-            budget_cap: caps[id]
-          )
-        end)
-      )
-
-    :ok
-  end
-
-  # What the bucket holds now, or `:unmetered` (paid, self-host, a -1 override).
-  defp spendable(user) do
-    case Engram.Billing.effective_limit(user, :embed_token_bucket) do
-      cap when is_integer(cap) and cap >= 0 -> Engram.UsageMeters.bucket_available(user.id, cap)
-      _ -> :unmetered
-    end
-  end
-
-  # A parked note's next chunk when its park did not record one.
-  @unknown_next_chunk 512
-
-  @doc false
-  # `candidates` (`{id, need, next_chunk}`, oldest first) to wake as
-  # `{id, budget_cap}`: every one whose need fits what is left, first fit, cap
-  # nil; then the oldest, if it was skipped and what is left covers its next
-  # chunk, capped at that remainder. Below that its pass would embed nothing.
-  def fitting(candidates, :unmetered), do: Enum.map(candidates, &{elem(&1, 0), nil})
-
-  def fitting([], _available), do: []
-
-  def fitting([{head, _, head_next} | _] = candidates, available) do
-    # Parked by an older release, need unknown: wake it once anything is left;
-    # its pass records the real need.
-    {fits, left} =
-      Enum.reduce(candidates, {[], available}, fn {id, need, _next}, {fits, left} ->
-        need = need || 1
-        if need <= left, do: {[{id, nil} | fits], left - need}, else: {fits, left}
-      end)
-
-    fits = Enum.reverse(fits)
-
-    if left > 0 and left >= (head_next || @unknown_next_chunk) and
-         not List.keymember?(fits, head, 0),
-       do: [{head, left} | fits],
-       else: fits
-  end
-
-  # The hour a day (04:00-04:59 UTC, twelve "2-59/5" ticks) that re-checks
-  # index versions after IndexVersions is done. A whole hour, not one tick: the
-  # unique window can dedupe any single tick, and a skipped tick must not skip
-  # the day. A pure function of the job's time: no extra cron entry, no state.
-  # A kick landing in the hour counts too.
-  defp daily_reverify?(%DateTime{hour: 4}), do: true
-  defp daily_reverify?(_scheduled_at), do: false
 
   # Runs `page.(repo, ids)` over every tenant until each page comes back
   # short: once on the maintenance pool (which sees every tenant) where one
@@ -1247,12 +1340,14 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # A version rebuild (content current, older chunker or embed model) goes to
   # RebuildStaleNote, a worker the previous release lacks, so a rolling
   # deploy's old nodes cannot run it metered. Everything else is EmbedNote's.
-  # Returns how many jobs were queued.
-  defp enqueue_page([]), do: 0
+  # Returns how many jobs were queued. With the Qdrant gate shut a version
+  # rebuild is not queued: the note keeps this run's backoff stamp and a later
+  # run picks it up.
+  defp enqueue_page([], _found), do: 0
 
-  defp enqueue_page(rows) do
+  defp enqueue_page(rows, found) do
     {rebuild_rows, embed_rows} = Enum.split_with(rows, &version_rebuild?/1)
-    rebuilt = enqueue_rebuilds(rebuild_rows)
+    rebuilt = if found.qdrant_open?, do: enqueue_rebuilds(rebuild_rows), else: 0
     user_by_note = Map.new(embed_rows, &{&1.id, &1.user_id})
 
     # reject_already_queued/2 is what keeps this worker from being a ratchet.
@@ -1297,8 +1392,49 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         Enum.map(relink, &ExtractNoteLinks.new_debounced(&1, Map.fetch!(user_by_note, &1)))
       )
 
+    :ok = report_found(rebuild_rows, embed_rows, queued, length(relink), found)
     rebuilt + length(fresh)
   end
+
+  # `[:engram, :reconcile, :found]`, `%{count}`, by `reason` and `missed`:
+  # how often the backstop is needed. `missed: true` is a note the event path
+  # should have queued and did not: its content changed (or was never
+  # indexed), no job is pending for it, its last write is older than the
+  # embed debounce can hold a job back (`EmbedNote.settle_window_seconds/0`),
+  # and no `kick/0` explains this run. Version rebuilds, the dense backfill
+  # (`dense_missing`) and the link re-extraction (`relink`) are expected work,
+  # never missed. `relink` counts the same notes as `content_stale` and
+  # `never_embedded` a second time, so sum notes without it. A boot sweep
+  # (`meta.boot`) is not a kick: what it finds can be missed.
+  defp report_found(rebuild_rows, embed_rows, queued, relinked, found) do
+    settled_before = DateTime.add(found.now, -EmbedNote.settle_window_seconds(), :second)
+
+    missed? = fn row, reason ->
+      reason in [:content_stale, :never_embedded] and not found.kick? and
+        MapSet.member?(queued, row.id) and
+        DateTime.compare(row.updated_at, settled_before) == :lt
+    end
+
+    counts =
+      Enum.frequencies(
+        for(_ <- rebuild_rows, do: {:version, false}) ++
+          for(row <- embed_rows, reason = found_reason(row), do: {reason, missed?.(row, reason)}) ++
+          List.duplicate({:relink, false}, relinked)
+      )
+
+    for {{reason, missed}, count} <- counts do
+      :telemetry.execute([:engram, :reconcile, :found], %{count: count}, %{
+        reason: reason,
+        missed: missed
+      })
+    end
+
+    :ok
+  end
+
+  defp found_reason(%{embed_hash: nil}), do: :never_embedded
+  defp found_reason(%{embed_hash: hash, content_hash: hash}), do: :dense_missing
+  defp found_reason(_row), do: :content_stale
 
   defp version_rebuild?(%{embed_hash: hash, content_hash: hash} = row) when hash != nil,
     do: EmbedNote.version_stale?(struct(Note, row), Map.get(row, :paid))
@@ -1370,9 +1506,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # Bounded by `:keyword_refresh_backlog` (default 10,000) pending
   # RefreshKeywordVectors jobs: a keyword bump makes the whole corpus stale at
   # once, and without the cap one tick queued every note (~648k points in
-  # prod). Each tick tops the backlog up to the cap and stops; notes it did
-  # not reach are not stamped, so a later tick picks them up. ponytail: it
-  # halts between id windows, so a tick can overshoot by up to one window.
+  # prod). Each run tops the backlog up to the cap and stops; notes it did
+  # not reach are not stamped, so a later run picks them up (the rollout
+  # chain, every 5 min). ponytail: it halts between id windows, so a run can
+  # overshoot by up to one window. Returns whether more may remain.
   #
   # `:keyword_refresh` false (a runtime override, else env `KEYWORD_REFRESH`;
   # `RefreshKeywordVectors.enabled?/0`)
@@ -1386,8 +1523,12 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       room when is_integer(room) and room > 0 ->
         sweep_keyword_stale(now, paid, page_size, versions, room)
 
-      _off_or_full ->
-        :ok
+      # The backlog is at its cap: more remains once it drains.
+      room when is_integer(room) ->
+        true
+
+      false ->
+        false
     end
   end
 
@@ -1434,16 +1575,18 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     end
 
     counts = scan(page, page_size, &enqueue_refresh/1, true, room)
+    queued = Enum.sum(Enum.map(counts, &elem(&1, 1)))
 
     Logger.info(
       "reconcile_embeddings: swept keyword-stale notes",
       Metadata.with_category(:info, :search,
         eligible_count: Enum.sum(Enum.map(counts, &elem(&1, 0))),
-        total_count: Enum.sum(Enum.map(counts, &elem(&1, 1)))
+        total_count: queued
       )
     )
 
-    :ok
+    # Filled the room: more may remain.
+    queued >= room
   end
 
   defp enqueue_refresh(rows) do
@@ -1472,14 +1615,14 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   end
 
   # #897 — preemptive cooldown window stamped on every enqueued note (see
-  # perform/1). MUST exceed the 5-minute cron interval so a crash-poison note
-  # skips at least one tick rather than re-enqueuing immediately. A healthy note
-  # is unaffected: its EmbedNote clears the stamp on success, typically within
-  # seconds. Env-driven via `EMBED_RECONCILE_BACKOFF_SECONDS` (runtime.exs);
-  # default 30 min.
-  # Floored at 6 min, past the cron interval: at or below `now` the stamp no
-  # longer removes a note from the next page's query, and the page loop
-  # never ends.
+  # perform/1), so a crash-poison note is not re-enqueued by the very next
+  # run. A healthy note is unaffected: its EmbedNote clears the stamp on
+  # success, typically within seconds. A crashed embed is recovered by
+  # `Oban.Plugins.Lifeline` and `EmbedNote.CrashGuard` first; this sweep is a
+  # third line. Env-driven via `EMBED_RECONCILE_BACKOFF_SECONDS`
+  # (runtime.exs); default 30 min. Floored at 6 min, past the rollout chain's
+  # 5-minute hop: at or below `now` the stamp no longer removes a note from
+  # the next page's query, and the page loop never ends.
   @doc false
   # Also read by `RebuildStaleNote`, which releases this backoff on a note a
   # halted pass skipped.

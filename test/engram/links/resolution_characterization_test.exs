@@ -31,6 +31,7 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
   alias Engram.Links
   alias Engram.MCP.Handlers
   alias Engram.Notes
+  alias Engram.Test.NoteCommittedDispatch
 
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
@@ -40,8 +41,14 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
 
   # ── helpers ──────────────────────────────────────────────────────────────
 
-  defp settle!,
-    do: Oban.drain_queue(queue: :indexing, with_scheduled: true, with_recursion: true)
+  # A content write queues one NoteCommitted (`events` queue, R6 outbox) that
+  # enqueues the link extraction, so run the dispatchers before draining, and
+  # again for any write a drained job made (the link rewriter writes notes).
+  defp settle! do
+    _ = NoteCommittedDispatch.run()
+    _ = Oban.drain_queue(queue: :indexing, with_scheduled: true, with_recursion: true)
+    if NoteCommittedDispatch.run() > 0, do: settle!(), else: :ok
+  end
 
   # Writes a note and drains ITS jobs (link extraction included), so nothing
   # of this note is left queued for a later `settle!/0` to replay.

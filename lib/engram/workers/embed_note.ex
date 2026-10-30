@@ -62,6 +62,7 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Vector.Qdrant
   alias Engram.Workers.BackgroundPriority
   alias Engram.Workers.EmbedNote.CrashGuard
+  alias Engram.Workers.WakeBudgetParked
 
   require Logger
 
@@ -413,7 +414,7 @@ defmodule Engram.Workers.EmbedNote do
   #
   # Queued behind the parked backlog: while another note of this user waits on
   # the bucket, a new pass spends nothing (`queue_blocked?/1`) and its new
-  # chunks join the queue keyword-only; ReconcileEmbeddings decides who wakes.
+  # chunks join the queue keyword-only; WakeBudgetParked decides who wakes.
   # A woken head note spends at most its `:budget_cap`. A refused or
   # partly-fitting pass keeps every dense vector the note already has
   # (`Indexing` re-plans only the new chunks).
@@ -674,11 +675,16 @@ defmodule Engram.Workers.EmbedNote do
   defp park_over_budget(%Note{} = note, user) do
     need = park_need(note)
 
+    # The wake is scheduled in the park's transaction (R6): the park and its
+    # wake commit together, so no sweep has to find the note.
     {:ok, _} =
       Repo.with_tenant(note.user_id, fn ->
-        Repo.update_all(from(n in Note, where: n.id == ^note.id),
-          set: budget_park_set(note, need, note.embed_budget_next)
-        )
+        _ =
+          Repo.update_all(from(n in Note, where: n.id == ^note.id),
+            set: budget_park_set(note, need, note.embed_budget_next)
+          )
+
+        WakeBudgetParked.schedule_park(user, need, note.embed_budget_next)
       end)
 
     newly_parked(note, user)
@@ -714,13 +720,11 @@ defmodule Engram.Workers.EmbedNote do
   # persistent-failure cooldown. On 2026-07-19 a Qdrant outage made embeds fail
   # with Req.TransportError; the flat 6h poison then stranded every affected
   # note for 6h even after Qdrant recovered. "Upstream unreachable / temporarily
-  # unavailable" recovers on its own, so park briefly and let ReconcileEmbeddings
-  # re-embed on its next pass; keep the long cooldown only for failures that
-  # won't fix themselves on retry (4xx / unembeddable content / unknown).
-  # NOTE: the transient default (300s) is a floor, not the real recovery time —
-  # ReconcileEmbeddings sweeps every 5 min, so a parked note re-embeds on the
-  # first sweep after the cooldown lapses. Dropping it below ~300s buys
-  # nothing; raise it only to back off harder on a sustained outage.
+  # unavailable" recovers on its own, so park briefly and retry at the
+  # cooldown's end (the park schedules that job, `park_poisoned/2`); keep the
+  # long cooldown only for failures that won't fix themselves on retry (4xx /
+  # unembeddable content / unknown). Raise the transient default (300s) only
+  # to back off harder on a sustained outage.
   defp poison_cooldown_seconds(reason) do
     if transient_embed_error?(reason) do
       Application.get_env(:engram, :embed_transient_cooldown_seconds, 300)
@@ -740,7 +744,8 @@ defmodule Engram.Workers.EmbedNote do
   defp transient_embed_error?(_), do: false
 
   # Final-attempt failure: park the note for a cooldown so ReconcileEmbeddings
-  # stops re-enqueuing (and re-billing) it every 5 minutes. Only fires on the
+  # stops re-enqueuing (and re-billing) it, and schedule its retry for the
+  # cooldown's end. Only fires on the
   # terminal Oban attempt and only for {:error, _} — snooze/cancel/discard are
   # not embed failures. Like stamp_embed_hash, an optimistic content_hash guard
   # avoids parking content that was edited mid-flight — but a nil content_hash
@@ -788,13 +793,22 @@ defmodule Engram.Workers.EmbedNote do
     # Tenant-scoped: `notes` carries FORCE ROW LEVEL SECURITY, and an UPDATE is
     # FILTERED by the policy's USING clause rather than rejected — it reports 0
     # rows with no error. Unscoped, the note is never parked, so
-    # ReconcileEmbeddings re-enqueues this exact failing note every 5 minutes
+    # ReconcileEmbeddings re-enqueues this exact failing note on every sweep
     # and re-pays Voyage each time. `note.user_id` is in scope.
-    {:ok, {count, _}} =
+    #
+    # R6: the retry is a job scheduled for the cooldown's end, inserted in the
+    # park's transaction, so the note re-embeds when its cooldown lapses with
+    # no sweep. Backfill priority, behind every live edit. A note that did not
+    # park (edited mid-flight) has its edit's own job instead.
+    {:ok, count} =
       Repo.with_tenant(note.user_id, fn ->
-        Repo.update_all(park_query,
-          set: [embed_retry_after: retry_after, embed_budget_parked: nil]
-        )
+        {count, _} =
+          Repo.update_all(park_query,
+            set: [embed_retry_after: retry_after, embed_budget_parked: nil]
+          )
+
+        _ = if count > 0, do: :ok = insert_retry(note, retry_after)
+        count
       end)
 
     # Emitted after the write so `parked:` reports what actually happened.
@@ -811,6 +825,29 @@ defmodule Engram.Workers.EmbedNote do
     )
 
     :ok
+  end
+
+  # A queued job (an edit's) already covers the note. The check is a plain
+  # read and the insert a plain INSERT: a unique insert would hold an
+  # advisory lock to the end of the park's transaction, and the worker's
+  # `unique` counts the executing job that is parking the note.
+  defp insert_retry(note, retry_after) do
+    case Jobs.reject_pending(__MODULE__, [note.id], executing: false) do
+      [] ->
+        :ok
+
+      [_] ->
+        {:ok, _job} =
+          Oban.insert(
+            new(%{note_id: note.id, user_id: note.user_id},
+              scheduled_at: retry_after,
+              priority: backfill_priority(),
+              unique: false
+            )
+          )
+
+        :ok
+    end
   end
 
   defp run_embed(note, user, vault, old_path_hmac_b64, opts) do
@@ -855,7 +892,12 @@ defmodule Engram.Workers.EmbedNote do
                 outcome =
                   stamp_embed_hash(note, dense?, count, pass, :budget, pass.held_model || model)
 
-                Process.put(@budget_parked_key, outcome == :parked)
+                # R6: a park schedules its wake in the same transaction.
+                _ =
+                  with {:parked, need, next} <- outcome,
+                       do: WakeBudgetParked.schedule_park(user, need, next)
+
+                Process.put(@budget_parked_key, match?({:parked, _, _}, outcome))
               end
             ]
 
@@ -1044,7 +1086,8 @@ defmodule Engram.Workers.EmbedNote do
   # the Free bucket queue) or :too_long (an input over the model's window,
   # parked until the content changes).
   # `model`: the doc model the pass embedded with, stamped on a dense pass.
-  # Returns `:parked` when it parked the note on the bucket, else `:ok`.
+  # Returns `{:parked, need, next}` when it parked the note on the bucket,
+  # else `:ok`.
   defp stamp_embed_hash(
          note,
          dense?,
@@ -1198,7 +1241,11 @@ defmodule Engram.Workers.EmbedNote do
     if parked?, do: :ok = back_off_stale_park(note, stamped)
 
     :ok = CrashGuard.clear(note, :ok)
-    if parked?, do: :parked, else: :ok
+
+    if parked?,
+      do:
+        {:parked, Keyword.fetch!(set, :embed_budget_need), Keyword.get(set, :embed_budget_next)},
+      else: :ok
   end
 
   # Review M3: the sweep lets a budget park through on its sentinel while
@@ -1275,7 +1322,7 @@ defmodule Engram.Workers.EmbedNote do
   # safe together: `Indexing` re-checks `content_hash` under `FOR UPDATE` and
   # the stale one rolls back `:superseded`, and the `embed_hash` stamp is
   # optimistic. Before #2294 an edit during a run was absorbed and only the
-  # 5-minute `ReconcileEmbeddings` sweep caught it.
+  # `ReconcileEmbeddings` sweep caught it.
   @pending_states Enum.map(Engram.Jobs.pending_states(), &String.to_existing_atom/1)
 
   # `user_id` REQUIRED and positional — see the note on
@@ -1309,7 +1356,7 @@ defmodule Engram.Workers.EmbedNote do
       # window — otherwise a burst longer than the period spawns a second job and
       # resets the ceiling.
       unique: [
-        period: settle_max_wait_seconds() + settle_seconds(),
+        period: settle_window_seconds(),
         keys: [:note_id],
         states: @pending_states
       ]
@@ -1422,6 +1469,14 @@ defmodule Engram.Workers.EmbedNote do
     do: Application.get_env(:engram, :embed_settle_max_wait_seconds, 300)
 
   @doc """
+  The longest a debounced embed can wait after an edit: the max-wait ceiling
+  plus one settle. A note edited longer ago than this with no job pending is
+  one its write's event path should already have queued.
+  """
+  @spec settle_window_seconds() :: number()
+  def settle_window_seconds, do: settle_max_wait_seconds() + settle_seconds()
+
+  @doc """
   Inserts `new_debounced/3` through `Engram.Notes.Enqueue`, clamped to the
   max-wait ceiling.
 
@@ -1483,7 +1538,7 @@ defmodule Engram.Workers.EmbedNote do
   # this UPDATE. It then matches nothing, and the running pass read the
   # content before this edit: insert this edit's own job (the unique check
   # now misses, `executing` is not pending) rather than leave it to the
-  # 5-minute `ReconcileEmbeddings` sweep.
+  # `ReconcileEmbeddings` backstop.
   defp move_pending(%Oban.Job{id: id} = job, at, priority, changeset) do
     pending = from(j in Oban.Job, where: j.id == ^id and j.state in ^Jobs.pending_states())
 

@@ -194,6 +194,8 @@ defmodule Engram.Notes.RevisionsWritePathTest do
       drop_finalize_jobs()
 
       {:ok, _} = Notes.genesis_crdt_note(u, v, note.id, "z2.md")
+      # A revived tombstone's jobs ride its outbox NoteCommitted (R6, move_note).
+      _ = Engram.Test.NoteCommittedDispatch.run()
 
       assert_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
     end

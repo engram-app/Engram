@@ -260,6 +260,11 @@ config :engram, :qdrant_collection_metrics, false
 # /sys_metrics and /metrics); its tests opt in per-process.
 config :engram, :qdrant_backpressure_preflight, false
 
+# No Qdrant answers in tests, so the reconcile sweep's gate check
+# (`Rebuild.qdrant_open?/0`) would read shut and queue no rebuild or keyword
+# work. Tests of the gate itself turn it on.
+config :engram, :reconcile_qdrant_gate, false
+
 # Post-flip Qdrant sweep retries without waiting in tests.
 config :engram, Engram.Crypto.UserDekRotation, qdrant_retry_ms: 0
 

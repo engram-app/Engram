@@ -247,7 +247,7 @@ if config_env() != :test do
   end
 
   # Cooldown (seconds) parked on a note that exhausts its embed attempts, before
-  # ReconcileEmbeddings retries it. Caps re-billing on permanently-failing notes.
+  # its scheduled retry runs. Caps re-billing on permanently-failing notes.
   # Default 6h (21_600). Lower it to retry broken notes sooner at higher cost.
   if secs = System.get_env("EMBED_POISON_COOLDOWN_SECONDS") do
     config :engram, :embed_poison_cooldown_seconds, String.to_integer(secs)
@@ -255,7 +255,7 @@ if config_env() != :test do
 
   # Shorter cooldown for TRANSIENT embed failures (upstream unreachable / 5xx) so
   # a provider blip doesn't strand notes for the full poison window. Default 300s;
-  # effective recovery is bounded below by the 5-min ReconcileEmbeddings sweep.
+  # the park schedules the retry for exactly that time (EmbedNote, R6).
   if secs = System.get_env("EMBED_TRANSIENT_COOLDOWN_SECONDS") do
     config :engram, :embed_transient_cooldown_seconds, String.to_integer(secs)
   end

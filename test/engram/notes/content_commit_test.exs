@@ -47,6 +47,7 @@ defmodule Engram.Notes.ContentCommitTest do
     {:ok, note} = Notes.upsert_note(u, v, %{"path" => "u.md", "content" => "one"}, actor: "api")
     drop_jobs()
     {:ok, _} = Notes.upsert_note(u, v, %{"path" => "u.md", "content" => "two"}, actor: "api")
+    run_dispatchers()
     assert_all_enqueued(note.id)
   end
 
@@ -62,11 +63,9 @@ defmodule Engram.Notes.ContentCommitTest do
     refute_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
   end
 
-  # The checkpoint inserts ONE dispatcher job after it commits (not under the
-  # vault seq lock, #1710); the dispatcher enqueues the three.
-  defp run_dispatchers do
-    for job <- all_enqueued(worker: NoteCommitted), do: :ok = perform_job(NoteCommitted, job.args)
-  end
+  # Every content write inserts ONE dispatcher job in its transaction (R6);
+  # the dispatcher enqueues the three.
+  defp run_dispatchers, do: Engram.Test.NoteCommittedDispatch.run()
 
   defp checkpoint_text(u, v, note_id, text) do
     {:ok, raw} = Repo.with_tenant(u.id, fn -> Repo.get!(Note, note_id) end)

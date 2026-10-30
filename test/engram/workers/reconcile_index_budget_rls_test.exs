@@ -144,8 +144,6 @@ defmodule Engram.Workers.ReconcileIndexBudgetRlsTest do
     end)
   end
 
-  defp reverify_tick, do: DateTime.new!(Date.utc_today(), ~T[04:02:00])
-
   defp recap_note_ids do
     for j <- all_enqueued(worker: RebuildStaleNote),
         j.args["recap"] == true,
@@ -163,7 +161,7 @@ defmodule Engram.Workers.ReconcileIndexBudgetRlsTest do
 
     assert {:returned, [free_id]} =
              as_prod_role(fn ->
-               :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
+               :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
                recap_note_ids()
              end)
 
@@ -193,7 +191,7 @@ defmodule Engram.Workers.ReconcileIndexBudgetRlsTest do
   } do
     assert {:returned, [free_id]} =
              as_prod_role(fn ->
-               :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
+               :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
                recap_note_ids()
              end)
 

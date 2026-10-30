@@ -2,11 +2,10 @@ defmodule Engram.Notes.ContentCommit do
   @moduledoc """
   The jobs every note CONTENT change needs, in one place.
 
-  Called by the single-note write sites (the CRDT checkpoint, through the
-  `Engram.Workers.NoteCommitted` job it inserts, and both content branches of
-  `Notes.upsert_note/4`) only when the content hash actually changed. The call may run inside an enclosing tenant transaction
-  (an MCP tool call is one), and that is fine: the jobs then commit or roll
-  back atomically with the write (`engram_app` may insert into `oban_jobs`).
+  Called by `Engram.Workers.NoteCommitted`, the outbox job every single-note
+  content write (the CRDT checkpoint, a genesis body, both content branches
+  of `Notes.upsert_note/4`) inserts in its own transaction when the content
+  hash actually changed (R6).
 
   `:finalize?` is required: `Engram.Notes.Revisions.finalize?/3` for the
   write, so a create or a write history did not record enqueues no
@@ -15,8 +14,8 @@ defmodule Engram.Notes.ContentCommit do
   `:embed_settle` is passed to `EmbedNote.new_debounced/3` as `settle:`
   (`:agent` for an MCP write; absent means the default settle).
 
-  Returns the first failed insert, if any; the inline write sites ignore it
-  (Enqueue logs it), the dispatcher job fails on it so Oban retries.
+  Returns the first failed insert, if any (Enqueue logs it); the dispatcher
+  job fails on it so Oban retries.
 
   Site-specific work stays at the site: the checkpoint's announce, upsert's
   broadcast and link rebind.

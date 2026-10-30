@@ -407,7 +407,9 @@ defmodule Engram.Application do
   """
   def boot_sweep_child(oban) do
     if oban[:queues] != false and is_nil(oban[:testing]),
-      do: {Task, &Engram.Workers.ReconcileEmbeddings.kick/0}
+      # `boot`, not `kick`: a deploy is where events get lost, so what the
+      # boot sweep finds still counts as `missed` (ReconcileEmbeddings).
+      do: {Task, fn -> Engram.Workers.ReconcileEmbeddings.kick(%{"boot" => true}) end}
   end
 
   defp clerk_strategy_child do

@@ -92,7 +92,8 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
     end
 
     # Once IndexVersions is done, no content-current note is on an old
-    # version, so the sweep stops looking for them, except on one tick a day.
+    # version, so the sweep stops looking for them, except in the daily
+    # re-verify (`mode: "reverify"`, its own cron entry).
     test "once IndexVersions is done, a version-stale note is not swept" do
       user = insert(:user)
       insert(:subscription, user: user, tier: "pro", status: "active")
@@ -107,19 +108,19 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
     end
 
     # A rollback then roll-forward, or a restored soft-deleted vault, leaves
-    # version-stale notes after the migration closed. The daily hour heals them.
-    test "once IndexVersions is done, the daily hour still sweeps a version-stale note" do
+    # version-stale notes after the migration closed. The daily re-verify heals them.
+    test "once IndexVersions is done, the daily re-verify still sweeps a version-stale note" do
       user = insert(:user)
       insert(:subscription, user: user, tier: "pro", status: "active")
       note = current_note(user, chunker_version: nil, keyword_version: nil)
       :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[04:02:00]))
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
 
       assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
     end
 
-    test "once IndexVersions is done, the keyword sweep runs only in the daily hour" do
+    test "once IndexVersions is done, the keyword sweep runs only in the daily re-verify" do
       user = insert(:user)
       note = current_note(user, keyword_version: nil)
       :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
@@ -130,18 +131,21 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[03:57:00]))
       refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
 
+      # A plain run in the 04:00 hour no longer re-verifies: the mode does.
       assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[04:02:00]))
+      refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
       assert_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
     end
 
-    # The unique window can dedupe the 04:02 tick (a kick or a slow previous
-    # run). Any later tick in the hour must still re-verify that day.
-    test "a deduped 04:02 tick does not skip the day: 04:57 re-verifies too" do
+    # A later hop of the re-verify chain re-verifies too.
+    test "a re-verify hop re-verifies" do
       user = insert(:user)
       note = current_note(user, keyword_version: nil)
       :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[04:57:00]))
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify", "hop" => 11})
       assert_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
     end
 
@@ -502,10 +506,11 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       refute_enqueued(worker: EmbedNote)
     end
 
-    # The queue's wake-up runs every tick for every user with a parked note.
-    # An empty bucket can wake nothing, so it must not open the tenant
-    # transaction and read the queue at all. The full-bucket user is the
-    # control: it proves the counter sees the queue read.
+    # The backstop wake runs for every user with a parked note. An empty
+    # bucket can wake nothing, and a user whose wake is already scheduled
+    # (WakeBudgetParked, R6) needs nothing computed, so it must not open the
+    # tenant transaction and read the queue at all. The full-bucket user is
+    # the control: it proves the counter sees the queue read.
     test "the wake-up skips the queue read for a user whose bucket is empty" do
       empty = insert(:user)
       full = insert(:user)
@@ -522,6 +527,12 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       end
 
       {:ok, _} = Engram.UsageMeters.bucket_take(empty.id, 6_000_000, 6_000_000)
+
+      :ok =
+        Engram.Workers.WakeBudgetParked.schedule(
+          empty.id,
+          DateTime.add(DateTime.utc_now(), 3600, :second)
+        )
 
       reads = queue_reads(fn -> assert :ok = perform_job(ReconcileEmbeddings, %{}) end)
 
@@ -877,11 +888,13 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
   end
 
   # Two sweeps at once stamp the same rows and, on the maintenance pool,
-  # queue them twice. A kick while one runs is absorbed.
-  test "a kick while a sweep is executing does not start a second one" do
+  # queue them twice. A kick while one runs queues ONE run (it defers at its
+  # start while the other runs, ReconcileBackstopTest); a second kick joins it.
+  test "a kick while a sweep is executing queues one run, never two" do
     {:ok, job} = Oban.insert(ReconcileEmbeddings.new(%{}))
     Repo.update_all(from(j in Oban.Job, where: j.id == ^job.id), set: [state: "executing"])
 
+    assert {:ok, %Oban.Job{conflict?: false}} = ReconcileEmbeddings.kick()
     assert {:ok, %Oban.Job{conflict?: true}} = ReconcileEmbeddings.kick()
   end
 

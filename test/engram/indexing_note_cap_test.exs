@@ -111,9 +111,6 @@ defmodule Engram.IndexingNoteCapTest do
     end)
   end
 
-  # The per-note cap sweep runs in the daily re-verify hour only.
-  defp reverify_tick, do: DateTime.new!(Date.utc_today(), ~T[04:02:00])
-
   defp lapse_cooldown(note) do
     {:ok, _} =
       Repo.with_tenant(note.user_id, fn ->
@@ -1017,7 +1014,7 @@ defmodule Engram.IndexingNoteCapTest do
       note = insert_note(user, vault, sections(500))
       index_uncapped(note)
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
       refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
 
       assert [job] =
@@ -1038,7 +1035,7 @@ defmodule Engram.IndexingNoteCapTest do
 
       # Healed: the next tick leaves it alone.
       lapse_cooldown(note)
-      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
 
       assert [_only_the_first] =
                all_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
@@ -1049,7 +1046,7 @@ defmodule Engram.IndexingNoteCapTest do
       note = insert_note(user, vault, sections(500))
       index_uncapped(note)
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
       refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
       refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
     end
@@ -1060,7 +1057,7 @@ defmodule Engram.IndexingNoteCapTest do
       note = insert_note(user, vault, sections(500))
       index_uncapped(note)
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
       refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
     end
 
@@ -1070,7 +1067,7 @@ defmodule Engram.IndexingNoteCapTest do
       note = insert_note(user, vault, sections(500))
       index_uncapped(note)
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
       assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id, "recap" => true})
     end
 
@@ -1092,7 +1089,7 @@ defmodule Engram.IndexingNoteCapTest do
       index_uncapped(note)
       with_limits_enforced(false)
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
       refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
     end
   end

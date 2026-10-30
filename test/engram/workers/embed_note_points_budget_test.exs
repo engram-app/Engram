@@ -232,7 +232,7 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
         # In the 04:00 UTC re-verify hour, so the budget sweep runs too: it
         # must not promote a note that cannot fit. Pinned, not the wall
         # clock, so the result never depends on when CI runs.
-        assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
+        assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
         refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
         refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
 
@@ -378,6 +378,4 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
       assert_reply ref, :ok, %{doc_id: ^id}
     end
   end
-
-  defp reverify_tick, do: DateTime.new!(Date.utc_today(), ~T[04:02:00])
 end

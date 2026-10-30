@@ -27,7 +27,6 @@ defmodule Engram.Notes.CrdtCheckpoint do
     CrdtBridge,
     CrdtDeliver,
     CrdtUpdateLog,
-    Enqueue,
     Helpers,
     Note,
     NoteBody,
@@ -275,7 +274,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
           end)
 
         case outcome do
-          {prev_hash, new_hash, path, embed_priority, finalize?, renamed_title, pruned} ->
+          {prev_hash, new_hash, path, _embed_priority, _finalize?, renamed_title, pruned} ->
             :ok =
               post_commit(note_id, fn ->
                 interleave_hook(:post_commit)
@@ -287,17 +286,6 @@ defmodule Engram.Notes.CrdtCheckpoint do
                     do: Engram.Notes.NameIndex.announce(vault_id, note_id, path, renamed_title)
 
                 if prev_hash != new_hash do
-                  # One dispatcher job, after the commit (#1710): it enqueues
-                  # embed, links and finalize with their own uniqueness.
-                  _ =
-                    Enqueue.enqueue(
-                      NoteCommitted.job(note_id, user_id,
-                        embed_priority: embed_priority,
-                        finalize?: finalize?
-                      ),
-                      "note_committed"
-                    )
-
                   # Deliver-out gap: a web-editor edit lands ONLY via this checkpoint,
                   # which (unlike REST/MCP writes) never announced. A client not
                   # actively enrolled in the room — e.g. Obsidian — thus never
@@ -374,7 +362,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # The write is committed: a raise or exit in its follow-up work must not
   # reach do_checkpoint's rescue and report :skipped (the room would keep
   # refusing acks for a durable state). Logged as a post-commit failure; the
-  # outcome stays written. The reconcile sweeps backstop a lost enqueue.
+  # outcome stays written. Its jobs are already in the table (checkpoint_write/6).
   # Deferred through Repo.after_commit/1: the checkpoint can run INSIDE an
   # enclosing transaction (the genesis seed runs in its row's transaction,
   # Notes.genesis_crdt_note/5 `:seed`), and its announce must not reach peers
@@ -603,6 +591,16 @@ defmodule Engram.Notes.CrdtCheckpoint do
         captured = Keyword.get(opts, :captured_version)
         fence_version = captured || note.version
 
+        # R6 outbox: the content change's one NoteCommitted job, in this
+        # transaction but BEFORE the seq bump, so the insert is not made under
+        # the vault seq lock `next_seq!` takes (#1710 kept that lock short).
+        # A lost fence below changed nothing and discards it.
+        job =
+          NoteCommitted.insert!(note_id, user.id,
+            embed_priority: EmbedNote.priority_for(note),
+            finalize?: finalize?(note, Keyword.fetch!(opts, :recording), prev, content_hash)
+          )
+
         changeset =
           note
           |> Note.changeset(Map.put(phase_b, :version, fence_version + 1))
@@ -648,9 +646,11 @@ defmodule Engram.Notes.CrdtCheckpoint do
           {0, _} ->
             # The row advanced since our snapshot — a newer write is already
             # committed. Do NOT prune (its tail rows may be unmerged) and do NOT
-            # revert. Return equal hashes so the caller enqueues no embed for a
-            # write that did not happen; the next debounce tick re-captures the
-            # now-merged doc and checkpoints that.
+            # revert. Discard this write's job and return equal hashes; the
+            # next debounce tick re-captures the now-merged doc and
+            # checkpoints that.
+            :ok = NoteCommitted.discard!(job)
+
             Logger.info(
               "crdt checkpoint skipped stale write note_id=#{note_id} captured_version=#{fence_version}",
               Metadata.with_category(:info, :sync, note_id: note_id)

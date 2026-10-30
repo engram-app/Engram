@@ -824,6 +824,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
       CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "changed content")
 
     :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+    _ = Engram.Test.NoteCommittedDispatch.run()
 
     assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
   end
