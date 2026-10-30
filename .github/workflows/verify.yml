@@ -114,6 +114,10 @@ env:
   # downstream callers (line ~929, ~2165) used to tolerate unset via shell
   # fallback to Docker Hub — that fallback path is now dead.
   LOCAL_REGISTRY: "10.0.20.214:5001"
+  # Qdrant image for every CI Qdrant: unit-tests' container and the per-stack
+  # `qdrant` service in ci/compose.qdrant.yml (which reads this var). One pin, so the
+  # e2e stacks and the integration tests never test different versions.
+  CI_QDRANT_IMAGE: qdrant/qdrant:v1.19.2
   # LAN Hex pull-through mirror (nginx proxy_cache -> repo.hex.pm). Workflow-wide
   # so every `mix deps.get` (prebuild-mix/unit-tests/lint) and the docker builds
   # pull hex from the LAN instead of WAN. Signatures still verified client-side.
@@ -366,7 +370,7 @@ jobs:
               Dockerfile entrypoint.sh .dockerignore \
               rel mix.lock \
               .formatter.exs .credo.exs .dialyzer_ignore.exs .sobelow-conf .sobelow-skips \
-              ci/compose.yml ci/compose.local.yml ci/compose.database.yml \
+              ci/compose.yml ci/compose.local.yml ci/compose.database.yml ci/compose.qdrant.yml \
               .github/workflows/verify.yml
             echo "mix.exs-no-version:$MIX_EXS_NO_VERSION"
           } | sha256sum | cut -d' ' -f1)
@@ -1163,7 +1167,7 @@ jobs:
           DISPLAY_MIN: ${{ steps.display.outputs.min }}
           DISPLAY_MAX: ${{ steps.display.outputs.max }}
         run: |
-          docker compose -f ci/compose.yml -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
+          docker compose -f ci/compose.yml -f ci/compose.qdrant.yml -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
           pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
           # Orphan Xvfb cleanup is scoped to THIS run's display range only,
           # so a concurrent e2e-clerk on a different run_number bucket isn't
@@ -1272,12 +1276,12 @@ jobs:
           # No CDP ports here: Obsidian binds its own (--remote-debugging-port=0)
           # and the harness reads it back. Pre-picked ports raced other
           # processes on the runner (run 39520960336).
-          read -r ENGRAM_PORT PG_PORT <<< "$(alloc_ports 2)"
+          read -r ENGRAM_PORT PG_PORT QDRANT_PORT <<< "$(alloc_ports 3)"
           # DISPLAY_BASE comes from the earlier "Compute display range" step so
           # pre-cleanup and tear-down can scope Xvfb kills consistently.
 
           # Validate all ports are non-empty (alloc_ports can fail silently)
-          for var in ENGRAM_PORT PG_PORT; do
+          for var in ENGRAM_PORT PG_PORT QDRANT_PORT; do
             if [ -z "${!var}" ]; then
               echo "::error::Port allocation failed for $var"
               exit 1
@@ -1287,9 +1291,10 @@ jobs:
           {
             echo "engram_port=$ENGRAM_PORT"
             echo "pg_port=$PG_PORT"
+            echo "qdrant_port=$QDRANT_PORT"
             echo "display_base=$DISPLAY_BASE"
           } >> "$GITHUB_OUTPUT"
-          echo "Ports: engram=$ENGRAM_PORT pg=$PG_PORT"
+          echo "Ports: engram=$ENGRAM_PORT pg=$PG_PORT qdrant=$QDRANT_PORT"
           echo "  display base :$DISPLAY_BASE (uses :$DISPLAY_BASE..:$((DISPLAY_BASE-5)))"
 
       - name: "Background: CI stack + plugin build + Playwright + Ollama + Qdrant"
@@ -1299,15 +1304,15 @@ jobs:
           CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
           CI_ENGRAM_PORT: ${{ steps.ports.outputs.engram_port }}
           CI_PG_PORT: ${{ steps.ports.outputs.pg_port }}
+          CI_QDRANT_PORT: ${{ steps.ports.outputs.qdrant_port }}
           QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
         run: |
+          # Before anything starts: the tmpfs Qdrant needs AVX2.
+          ci/bin/require-avx2
           # --- CI stack build + start (background) ---
           (
             # Cap Docker build cache (--mount=type=cache grows unbounded)
             docker builder prune --all --keep-storage=2gb -f 2>/dev/null || true
-
-            # Clean up stale CI collection on SlowRaid Qdrant before starting
-            curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
 
             # Pull the image `prebuild-ci-image` published to the FastRaid
             # registry — this runner may be a different host than the one that
@@ -1325,12 +1330,12 @@ jobs:
             # stuck `--wait` is diagnosable instead of a bare timeout.
             for attempt in 1 2; do
               docker pull "$ENGRAM_CI_IMAGE" \
-                && docker compose -f ci/compose.yml -p "$CI_PROJECT" up -d --no-build --wait \
+                && docker compose -f ci/compose.yml -f ci/compose.qdrant.yml -p "$CI_PROJECT" up -d --no-build --wait \
                 && break
               echo "stack attempt $attempt failed; container state:"
               docker ps -aq --filter "label=com.docker.compose.project=$CI_PROJECT" \
                 | xargs -r docker inspect --format '{{.Name}} {{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{end}}' || true
-              [ "$attempt" = 2 ] || docker compose -f ci/compose.yml -p "$CI_PROJECT" down -v --remove-orphans || true
+              [ "$attempt" = 2 ] || docker compose -f ci/compose.yml -f ci/compose.qdrant.yml -p "$CI_PROJECT" down -v --remove-orphans || true
             done
 
             # Quick verification — compose --wait already confirmed healthcheck,
@@ -1406,31 +1411,6 @@ jobs:
           ) > "${MARKER_PREFIX}-ollama.log" 2>&1 &
           echo "Ollama check started (PID $!)"
 
-          # --- Qdrant reachability check (background) ---
-          # SlowRaid (10.0.20.201) hosts persistent Qdrant with AVX2 for binary quantization.
-          # Runner VM (10.20.99.x) → SlowRaid host has intermittent connectivity (shim-br0 /
-          # MASQUERADE routing race per docs/context/runner-vm-setup.md gotcha #1). A single-shot
-          # probe sometimes fails even though Qdrant is up — retry 6× over 30s before giving up.
-          (
-            ok=false
-            for attempt in $(seq 1 6); do
-              if curl -sf --max-time 5 http://10.0.20.201:6333/healthz > /dev/null 2>&1; then
-                echo "Qdrant OK (SlowRaid AVX2) — attempt ${attempt}"
-                ok=true
-                break
-              fi
-              echo "attempt ${attempt}: Qdrant probe failed; retrying in 5s…"
-              sleep 5
-            done
-            if $ok; then
-              touch "${MARKER_PREFIX}-qdrant.marker"
-            else
-              echo "ERROR: Qdrant on SlowRaid not reachable after 6 attempts — binary quantization tests will fail"
-              touch "${MARKER_PREFIX}-qdrant-failed.marker"
-            fi
-          ) > "${MARKER_PREFIX}-qdrant.log" 2>&1 &
-          echo "Qdrant check started (PID $!)"
-
       # ------------------------------------------------------------------
       # Wait for all background tasks
       # ------------------------------------------------------------------
@@ -1466,20 +1446,6 @@ jobs:
             echo "WARNING: Ollama check timed out. Logs:"; cat "${MARKER_PREFIX}-ollama.log" 2>/dev/null || true
           fi
 
-          echo "Waiting for Qdrant check..."
-          for i in $(seq 1 15); do
-            if [ -f "${MARKER_PREFIX}-qdrant.marker" ]; then echo "Qdrant OK"; break; fi
-            if [ -f "${MARKER_PREFIX}-qdrant-failed.marker" ]; then
-              echo "ERROR: Qdrant on SlowRaid (10.0.20.201) not reachable. Logs:"
-              cat "${MARKER_PREFIX}-qdrant.log"
-              exit 1
-            fi
-            sleep 1
-          done
-          if [ ! -f "${MARKER_PREFIX}-qdrant.marker" ] && [ ! -f "${MARKER_PREFIX}-qdrant-failed.marker" ]; then
-            echo "ERROR: Qdrant check timed out. Logs:"; cat "${MARKER_PREFIX}-qdrant.log" 2>/dev/null || true; exit 1
-          fi
-
       # test_88_mcp_conformance shells out to the pinned @mcpjam/cli via npx,
       # so the API-only tier now needs node. The test ASSERTS npx is present
       # rather than skipping, so if this step is ever removed the gate fails
@@ -1506,7 +1472,7 @@ jobs:
           AUTH_PROVIDER: clerk
           CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
           CI_ENGRAM_CONTAINER: ${{ env.CI_PROJECT }}-engram-1
-          QDRANT_URL: http://10.0.20.201:6333
+          QDRANT_URL: http://127.0.0.1:${{ steps.ports.outputs.qdrant_port }}
           QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
           OLLAMA_URL: http://10.0.20.214:11434
 
@@ -1636,7 +1602,7 @@ jobs:
         if: failure()
         run: |
           mkdir -p ci-artifacts
-          docker compose -f ci/compose.yml -p "$CI_PROJECT" logs > ci-artifacts/docker-compose.log 2>&1
+          docker compose -f ci/compose.yml -f ci/compose.qdrant.yml -p "$CI_PROJECT" logs > ci-artifacts/docker-compose.log 2>&1
 
           # Name the storage-full failure mode instead of leaving it as
           # `assert 502 == 200`. Once the drive crosses MinIO's minimum free
@@ -1715,8 +1681,6 @@ jobs:
             pid="$(cat "${MARKER_PREFIX}-stack.pid")"
             kill -STOP "$pid" 2>/dev/null && kill -KILL $(tree "$pid") 2>/dev/null || true
           fi
-          # Delete this run's Qdrant collection on SlowRaid
-          curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
           # Kill only this run's Obsidian/Xvfb processes (scoped by config dir)
           pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
           # Xvfb command line doesn't contain $E2E_CONFIG_PREFIX, so kill it
@@ -1733,7 +1697,7 @@ jobs:
           # Remove only this run's temp dirs + marker files
           rm -rf ${E2E_VAULT_PREFIX}-* ${E2E_CONFIG_PREFIX}-* ${MARKER_PREFIX}-*
           # Tear down only this run's Docker stack
-          docker compose -f ci/compose.yml -p "$CI_PROJECT" down -v --remove-orphans --rmi local 2>/dev/null || true
+          docker compose -f ci/compose.yml -f ci/compose.qdrant.yml -p "$CI_PROJECT" down -v --remove-orphans --rmi local 2>/dev/null || true
           # Prune dangling images + volumes to reclaim disk
           docker image prune -f 2>/dev/null || true
           docker volume prune -f 2>/dev/null || true
@@ -1835,7 +1799,7 @@ jobs:
           DISPLAY_MIN: ${{ steps.display.outputs.min }}
           DISPLAY_MAX: ${{ steps.display.outputs.max }}
         run: |
-          docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
+          docker compose -f ci/compose.yml -f ci/compose.local.yml -f ci/compose.qdrant.yml -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
           pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
           # Orphan Xvfb cleanup is scoped to THIS run's display range only,
           # so a concurrent e2e-clerk on a different run_number bucket isn't
@@ -1942,12 +1906,12 @@ jobs:
             python3 -c "import socket,sys; ss=[socket.socket() for _ in range(int(sys.argv[1]))]; [s.bind(('',0)) for s in ss]; print(' '.join(str(s.getsockname()[1]) for s in ss))" "$1"
           }
           # No CDP ports here: Obsidian binds its own (--remote-debugging-port=0).
-          read -r ENGRAM_PORT PG_PORT <<< "$(alloc_ports 2)"
+          read -r ENGRAM_PORT PG_PORT QDRANT_PORT <<< "$(alloc_ports 3)"
           # DISPLAY_BASE comes from the earlier "Compute display range" step so
           # pre-cleanup and tear-down can scope Xvfb kills consistently.
 
           # Validate all ports are non-empty (alloc_ports can fail silently)
-          for var in ENGRAM_PORT PG_PORT; do
+          for var in ENGRAM_PORT PG_PORT QDRANT_PORT; do
             if [ -z "${!var}" ]; then
               echo "::error::Port allocation failed for $var"
               exit 1
@@ -1957,24 +1921,25 @@ jobs:
           {
             echo "engram_port=$ENGRAM_PORT"
             echo "pg_port=$PG_PORT"
+            echo "qdrant_port=$QDRANT_PORT"
             echo "display_base=$DISPLAY_BASE"
           } >> "$GITHUB_OUTPUT"
-          echo "Ports: engram=$ENGRAM_PORT pg=$PG_PORT"
+          echo "Ports: engram=$ENGRAM_PORT pg=$PG_PORT qdrant=$QDRANT_PORT"
           echo "  display base :$DISPLAY_BASE (uses :$DISPLAY_BASE..:$((DISPLAY_BASE-5)))"
 
       - name: "Background: CI stack + plugin build + Playwright + Ollama + Qdrant"
         env:
           CI_ENGRAM_PORT: ${{ steps.ports.outputs.engram_port }}
           CI_PG_PORT: ${{ steps.ports.outputs.pg_port }}
+          CI_QDRANT_PORT: ${{ steps.ports.outputs.qdrant_port }}
           QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
         run: |
+          # Before anything starts: the tmpfs Qdrant needs AVX2.
+          ci/bin/require-avx2
           # --- CI stack build + start (background) ---
           (
             # Cap Docker build cache (--mount=type=cache grows unbounded)
             docker builder prune --all --keep-storage=2gb -f 2>/dev/null || true
-
-            # Clean up stale CI collection on SlowRaid Qdrant before starting
-            curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
 
             # Pull the image `prebuild-ci-image` published to the FastRaid
             # registry — this runner may be a different host than the one that
@@ -1994,12 +1959,12 @@ jobs:
             # stuck `--wait` is diagnosable instead of a bare timeout.
             for attempt in 1 2; do
               docker pull "$ENGRAM_CI_IMAGE" \
-                && docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" up -d --no-build --wait \
+                && docker compose -f ci/compose.yml -f ci/compose.local.yml -f ci/compose.qdrant.yml -p "$CI_PROJECT" up -d --no-build --wait \
                 && break
               echo "stack attempt $attempt failed; container state:"
               docker ps -aq --filter "label=com.docker.compose.project=$CI_PROJECT" \
                 | xargs -r docker inspect --format '{{.Name}} {{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{end}}' || true
-              [ "$attempt" = 2 ] || docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" down -v --remove-orphans || true
+              [ "$attempt" = 2 ] || docker compose -f ci/compose.yml -f ci/compose.local.yml -f ci/compose.qdrant.yml -p "$CI_PROJECT" down -v --remove-orphans || true
             done
 
             # Quick verification — compose --wait already confirmed healthcheck,
@@ -2075,31 +2040,6 @@ jobs:
           ) > "${MARKER_PREFIX}-ollama.log" 2>&1 &
           echo "Ollama check started (PID $!)"
 
-          # --- Qdrant reachability check (background) ---
-          # SlowRaid (10.0.20.201) hosts persistent Qdrant with AVX2 for binary quantization.
-          # Runner VM (10.20.99.x) → SlowRaid host has intermittent connectivity (shim-br0 /
-          # MASQUERADE routing race per docs/context/runner-vm-setup.md gotcha #1). A single-shot
-          # probe sometimes fails even though Qdrant is up — retry 6× over 30s before giving up.
-          (
-            ok=false
-            for attempt in $(seq 1 6); do
-              if curl -sf --max-time 5 http://10.0.20.201:6333/healthz > /dev/null 2>&1; then
-                echo "Qdrant OK (SlowRaid AVX2) — attempt ${attempt}"
-                ok=true
-                break
-              fi
-              echo "attempt ${attempt}: Qdrant probe failed; retrying in 5s…"
-              sleep 5
-            done
-            if $ok; then
-              touch "${MARKER_PREFIX}-qdrant.marker"
-            else
-              echo "ERROR: Qdrant on SlowRaid not reachable after 6 attempts — binary quantization tests will fail"
-              touch "${MARKER_PREFIX}-qdrant-failed.marker"
-            fi
-          ) > "${MARKER_PREFIX}-qdrant.log" 2>&1 &
-          echo "Qdrant check started (PID $!)"
-
       # ------------------------------------------------------------------
       # Wait for all background tasks
       # ------------------------------------------------------------------
@@ -2135,20 +2075,6 @@ jobs:
             echo "WARNING: Ollama check timed out. Logs:"; cat "${MARKER_PREFIX}-ollama.log" 2>/dev/null || true
           fi
 
-          echo "Waiting for Qdrant check..."
-          for i in $(seq 1 15); do
-            if [ -f "${MARKER_PREFIX}-qdrant.marker" ]; then echo "Qdrant OK"; break; fi
-            if [ -f "${MARKER_PREFIX}-qdrant-failed.marker" ]; then
-              echo "ERROR: Qdrant on SlowRaid (10.0.20.201) not reachable. Logs:"
-              cat "${MARKER_PREFIX}-qdrant.log"
-              exit 1
-            fi
-            sleep 1
-          done
-          if [ ! -f "${MARKER_PREFIX}-qdrant.marker" ] && [ ! -f "${MARKER_PREFIX}-qdrant-failed.marker" ]; then
-            echo "ERROR: Qdrant check timed out. Logs:"; cat "${MARKER_PREFIX}-qdrant.log" 2>/dev/null || true; exit 1
-          fi
-
       # ------------------------------------------------------------------
       # Local-auth API tests (absorbed from the deleted e2e-local job).
       # Needs only the stack — runs before the Obsidian machinery is ready.
@@ -2163,7 +2089,7 @@ jobs:
           AUTH_PROVIDER: local
           CI_POSTGRES_CONTAINER: ${{ env.CI_PROJECT }}-postgres-1
           CI_ENGRAM_CONTAINER: ${{ env.CI_PROJECT }}-engram-1
-          QDRANT_URL: http://10.0.20.201:6333
+          QDRANT_URL: http://127.0.0.1:${{ steps.ports.outputs.qdrant_port }}
           QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
           OLLAMA_URL: http://10.0.20.214:11434
           E2E_PATTERN: ${{ needs.fingerprint.outputs.e2e-target-pattern }}
@@ -2247,7 +2173,7 @@ jobs:
         if: failure()
         run: |
           mkdir -p ci-artifacts
-          docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" logs > ci-artifacts/docker-compose.log 2>&1
+          docker compose -f ci/compose.yml -f ci/compose.local.yml -f ci/compose.qdrant.yml -p "$CI_PROJECT" logs > ci-artifacts/docker-compose.log 2>&1
           cp ${MARKER_PREFIX}-*.log ci-artifacts/ 2>/dev/null || true
           # Pytest detailed log (captures DEBUG+ from all helpers)
           cp e2e/pytest-e2e.log ci-artifacts/ 2>/dev/null || true
@@ -2307,8 +2233,6 @@ jobs:
             pid="$(cat "${MARKER_PREFIX}-stack.pid")"
             kill -STOP "$pid" 2>/dev/null && kill -KILL $(tree "$pid") 2>/dev/null || true
           fi
-          # Delete this run's Qdrant collection on SlowRaid
-          curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
           # Kill only this run's Obsidian/Xvfb processes (scoped by config dir)
           pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
           # Xvfb command line doesn't contain $E2E_CONFIG_PREFIX, so kill it
@@ -2325,7 +2249,7 @@ jobs:
           # Remove only this run's temp dirs + marker files
           rm -rf ${E2E_VAULT_PREFIX}-* ${E2E_CONFIG_PREFIX}-* ${MARKER_PREFIX}-*
           # Tear down only this run's Docker stack
-          docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" down -v --remove-orphans --rmi local 2>/dev/null || true
+          docker compose -f ci/compose.yml -f ci/compose.local.yml -f ci/compose.qdrant.yml -p "$CI_PROJECT" down -v --remove-orphans --rmi local 2>/dev/null || true
           # Prune dangling images + volumes to reclaim disk
           docker image prune -f 2>/dev/null || true
           docker volume prune -f 2>/dev/null || true
@@ -2612,10 +2536,10 @@ jobs:
           docker rm -f "$QDRANT_CONTAINER" 2>/dev/null || true
 
           if [ -n "${LOCAL_REGISTRY:-}" ]; then
-            QDRANT_IMAGE="${LOCAL_REGISTRY}/qdrant/qdrant:v1.19.2"
-            docker pull "$QDRANT_IMAGE" 2>/dev/null || QDRANT_IMAGE="qdrant/qdrant:v1.19.2"
+            QDRANT_IMAGE="${LOCAL_REGISTRY}/${CI_QDRANT_IMAGE}"
+            docker pull "$QDRANT_IMAGE" 2>/dev/null || QDRANT_IMAGE="$CI_QDRANT_IMAGE"
           else
-            QDRANT_IMAGE="qdrant/qdrant:v1.19.2"
+            QDRANT_IMAGE="$CI_QDRANT_IMAGE"
           fi
 
           # Bind IPv4 explicitly. With a bare `-p 0:6333` docker publishes on
