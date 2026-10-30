@@ -150,12 +150,14 @@ defmodule Engram.Vector.QdrantLayout do
   # still carries the old value and neither a null nor a missing key clears a
   # strict field (`diff/2` is a subset check, the PATCH merges), so the cloud
   # profile raises it to the ceiling, where `diff/2` sees the stale value as
-  # drift and the next reconcile PATCHes it. Drop an entry once every cluster
-  # has converged.
+  # drift and the next reconcile PATCHes it. Delete an entry once every cloud
+  # cluster (prod, staging) has been reconciled past it, i.e. its GET reports
+  # the ceiling; after that a missing key is harmless.
   @retired_limits %{"max_points_count" => @ceiling}
+  @cloud_limits Map.merge(@hard_limits, @retired_limits)
 
   @lifted_limits Map.merge(
-                   Map.new(Map.merge(@hard_limits, @retired_limits), fn {field, _} ->
+                   Map.new(@cloud_limits, fn {field, _} ->
                      {field, @ceiling}
                    end),
                    %{
@@ -175,7 +177,7 @@ defmodule Engram.Vector.QdrantLayout do
   # No @spec: both clauses return literals, so dialyzer's :underspecs flags
   # any wider map type.
   def desired_strict(:self_host), do: %{}
-  def desired_strict(:cloud), do: Map.merge(@hard_limits, @retired_limits)
+  def desired_strict(:cloud), do: @cloud_limits
 
   # Qdrant Cloud's managed default, set here too so the cloud profile
   # (`QDRANT_STRICT_PROFILE=cloud` on staging) refuses an unindexed filtered
