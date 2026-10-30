@@ -220,7 +220,7 @@ defmodule Engram.OAuthRefreshGraceTest do
         end
       end)
 
-    refute log =~ "oauth_refresh_reuse"
+    refute reuse_logged?(log, ctx)
   end
 
   # A used token that is revoked while its family still has a live row (one
@@ -240,7 +240,7 @@ defmodule Engram.OAuthRefreshGraceTest do
                  OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
       end)
 
-    assert log =~ "oauth_refresh_reuse"
+    assert reuse_logged?(log, ctx)
     assert log =~ "reason=family_revoked"
     assert row(rt2).revoked_at
 
@@ -250,7 +250,7 @@ defmodule Engram.OAuthRefreshGraceTest do
                  OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
       end)
 
-    refute log =~ "oauth_refresh_reuse"
+    refute reuse_logged?(log, ctx)
   end
 
   # Review of #1974: every re-issue is visible, with whether it came from the
@@ -307,7 +307,7 @@ defmodule Engram.OAuthRefreshGraceTest do
                  OAuth.rotate_refresh_token(rt2, ctx.client_id)
       end)
 
-    refute log =~ "oauth_refresh_reuse"
+    refute reuse_logged?(log, ctx)
   end
 
   test "a replay from another client never re-issues", ctx do
@@ -392,5 +392,16 @@ defmodule Engram.OAuthRefreshGraceTest do
     assert OAuth.prior_connection?(user_id, internal, Ecto.UUID.generate())
 
     assert {:ok, _} = OAuth.rotate_refresh_token(rt2, ctx.client_id)
+  end
+
+  # `capture_log/1` sees every process's logs and this module is async, so a
+  # concurrent test's reuse line (e.g. `OAuthTokenRejectionLogTest`) lands
+  # here too. Only a line naming this test's client (the row's internal id) counts.
+  defp reuse_logged?(log, ctx) do
+    client_id = row(ctx.rt1).client_id
+
+    log
+    |> String.split("\n")
+    |> Enum.any?(&(&1 =~ "oauth_refresh_reuse" and &1 =~ "client_id=#{client_id}"))
   end
 end
