@@ -84,6 +84,7 @@ export default {
 	"Already have an account? {signin}": "Zaten bir hesabınız var mı? {signin}",
 	"Loading...": "Yükleniyor...",
 	"An account with this email already exists": "Bu e-posta adresiyle zaten bir hesap mevcut",
+	"Contact support to restore access.": "Erişimi yeniden sağlamak için destek ile iletişime geçin.",
 	"Billing history": "Ödeme geçmişi",
 	"No transactions yet.": "Henüz işlem yok.",
 	Date: "Tarih",
@@ -231,7 +232,6 @@ export default {
 	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
 		"Ücretsiz planınızdaki cihaz sınırına ulaştınız. Bu cihazı bağlamak için kullanmadığınız bir cihazı kapatın veya daha fazla cihaz bağlamak için yükseltin.",
 	"Account suspended": "Hesap askıya alındı",
-	"Contact support to restore access.": "Erişimi yeniden sağlamak için destek ile iletişime geçin.",
 	"Account setup incomplete": "Hesap kurulumu tamamlanmadı",
 	"Please complete onboarding.": "Lütfen kurulumu tamamlayın.",
 	"Limit reached": "Sınıra ulaşıldı",
