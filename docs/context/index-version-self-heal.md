@@ -179,10 +179,16 @@ sweep targets `Rebuild.pinned_versions/0` (keyword 2), so nothing moves until
 threshold are separate changes (staging plus an infra PR).
 
 **The rewrite is paced, so the peak cannot reach strict mode.** Each
-`RefreshKeywordVectors` job first passes `Rebuild.qdrant_pace/0`, the same
-Qdrant half of the gate the v5 rebuild's `pace/0` uses (minus the Voyage
-token bucket, since a resparse costs nothing). It snoozes 30 s (never fails)
-while:
+`RefreshKeywordVectors` job first passes `Rebuild.qdrant_pace/1`, the same
+Qdrant half of the gate the v5 rebuild's `pace/1` uses (minus the Voyage
+token bucket, since a resparse costs nothing). It snoozes (never fails)
+while any check below fails: 30 s the first time, then doubling with up to
+25% jitter to a 600 s ceiling (`Rebuild.gate_snooze/1`, by Oban's
+`meta["snoozed"]`). The growth matters: every snooze is a Postgres UPDATE,
+and on 2026-10-30 a 10,000-job backlog re-polling a shut gate every 30 s
+logged 133,443 snoozes in 15 minutes for ~7,800 rewrites and took prod RDS
+CPU from ~8% to ~25% avg for the whole sweep. At the ceiling the same
+backlog wakes ~15 times a second instead of ~330. The checks:
 
 - disk is at or over the lower of `:rebuild_max_disk_percent` (default 75)
   and 5 points under the user-write preflight (`Qdrant.preflight_limit/2`,
@@ -233,9 +239,9 @@ any one task (ECS Exec, see the workspace `docs/deployment.md`):
 aws ecs execute-command --cluster engram-prod --task <task-id> \
   --container engram --interactive \
   --command "/app/bin/engram rpc 'Engram.ServiceConfig.override(:keyword_refresh, false, by: \"<you>\") |> IO.inspect()'"
-# resume: override(:keyword_refresh, true, ...). clear(:keyword_refresh, ...) only
-# resumes when KEYWORD_REFRESH is unset/true; prod sets it false, so there
-# clear means OFF.
+# resume: override(:keyword_refresh, true, ...). clear(:keyword_refresh, ...)
+# falls back to KEYWORD_REFRESH; prod no longer sets it (engram-infra PR 1688),
+# so the default true applies and clear leaves the sweep ON.
 ```
 
 **Boot default: `KEYWORD_REFRESH` (env).** The override's fallback is the
@@ -246,7 +252,8 @@ already off, no rpc after the deploy. Then the override is how it goes on:
 `override(:keyword_refresh, true, ...)` starts it, `override(..., false, ...)`
 or `clear(:keyword_refresh, ...)` stops it again (clear falls back to the env
 value, so with `KEYWORD_REFRESH=false` "clear" means OFF, not resume). An
-invalid value refuses to boot.
+invalid value refuses to boot. Prod does not set it (engram-infra PR 1688
+removed it), so there the env default is true and `clear` means ON.
 
 Effect: the write evicts the cached overrides on every node (CacheSync), and
 the 15 s cache TTL bounds a lost eviction, so every node reads it within
@@ -266,3 +273,18 @@ queueing, but leaves queued jobs running) and
 The gate verdict is cached 30 s per node, so a disk-percent change lands
 within 15 s + 30 s. `Engram.ServiceConfig.list()` shows what is set. Self-host
 leaves all three unset: the defaults (on, 10,000, 75) apply.
+
+## Measuring disk
+
+- **Staging per-point numbers do not predict prod.** Staging (SlowRaid
+  Qdrant, collection `obsidian_notes`) carries ~12 KB of payload indexes per
+  point vs ~1.9 KB in prod, and ~50 bytes per keyword (sparse) entry vs
+  ~26.5 in prod. Measure a disk change on prod's own numbers.
+- **`/collections/{c}/memory` overstates real disk.** Its total `disk_bytes`
+  sums file sizes (prod: 6.03 GB) while the volume really used 4.9 GB
+  (`/sys_metrics` kubelet `volume_stats`). For real disk percent use
+  `Engram.Vector.Qdrant.read_pressure().disk`, the same reading the gate
+  uses.
+- **Prod result of the phrase-pair drop sweep (2026-10-30):** real disk
+  53% -> 29% of 16 GiB, keyword data 6.19 -> 2.62 GB, collection file size
+  9.78 -> 6.02 GB.
