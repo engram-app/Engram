@@ -266,8 +266,15 @@ defmodule Engram.Vaults do
       end)
       |> unwrap_register_transaction()
       |> tap(fn
-        {:ok, _vault, :created} -> evict_vaults(user.id)
-        _ -> :ok
+        {:ok, vault, :created} ->
+          evict_vaults(user.id)
+          # Post-commit and after the eviction, so the gate reads the vault.
+          # Only the default (the user's only live vault) can be the one that
+          # opens the gate; a second vault never does.
+          if vault.is_default, do: Engram.Onboarding.log_gate_opened(user, "vault")
+
+        _ ->
+          :ok
       end)
     end
   end
@@ -920,7 +927,9 @@ defmodule Engram.Vaults do
                 "vault deleted",
                 Metadata.with_category(:info, :lifecycle,
                   user_id: deleted.user_id,
-                  vault_id: deleted.id
+                  vault_id: deleted.id,
+                  # 0 here closes the onboarding gate again (vault step).
+                  vaults_left: count_vaults(deleted.user_id)
                 )
               )
 

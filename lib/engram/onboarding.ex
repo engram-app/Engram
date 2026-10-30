@@ -305,7 +305,7 @@ defmodule Engram.Onboarding do
       # for the life of the connection. `accept_free_tier/1` is a bare
       # `Repo.update` with no socket disconnect, so nothing else would clear it.
       # `fresh: true` means the caller already re-read this row this join
-      # (see `EngramWeb.ChannelGate.check/3`) — don't pay for it twice.
+      # (see `EngramWeb.ChannelGate.check/4`) — don't pay for it twice.
       user =
         if Keyword.get(opts, :fresh, false),
           do: user,
@@ -363,16 +363,52 @@ defmodule Engram.Onboarding do
         # exists to surface — #1666 ran for five hours with no signal at all.
         Logger.warning(
           "onboarding refused",
-          Metadata.with_category(:warning, :lifecycle,
-            reason: "onboarding_required",
-            missing: Enum.join(missing, ","),
-            next_step: to_string(next_step),
-            user_id: user.id
+          Metadata.with_category(
+            :warning,
+            :lifecycle,
+            [
+              reason: "onboarding_required",
+              missing: Enum.join(missing, ","),
+              next_step: to_string(next_step),
+              user_id: user.id
+            ] ++ log_meta(opts)
           )
         )
 
         {:error, missing, next_step}
     end
+  end
+
+  # Where the refused request came from (`route`, `surface`, `user_agent`),
+  # from the caller's `log_meta:` option. A function, so the hot pass path
+  # never builds it: only a refusal pays for the route-table lookup.
+  defp log_meta(opts), do: Keyword.get(opts, :log_meta, fn -> [] end).()
+
+  @doc """
+  Logs `onboarding gate opened` when `user` now passes the runtime gate.
+  Call it after a mutation that can complete onboarding; `trigger` names it.
+
+  The other half of `onboarding refused`, keyed the same way (`user_id`,
+  category `:lifecycle`) so one LogQL query joins them: a refusal with no
+  later `gate opened` is a user still stuck. `:info` + `:lifecycle` ships to
+  Loki (`Category.loki_ship?/2`).
+
+  It reads the gate after the fact, not the transition, so a re-POST of a
+  step by an already-open user logs it again. Callers keep to the steps that
+  can open it, which makes that rare and harmless for a join.
+  """
+  @spec log_gate_opened(Engram.Accounts.User.t(), String.t()) :: :ok
+  def log_gate_opened(%{id: user_id} = user, trigger) do
+    # Fresh row, for the same reason `gate/2` re-reads it: `status/1` reads
+    # `free_tier_accepted_at` off the struct, and callers hold a pre-step one.
+    if status(Accounts.get_user(user_id) || user).gate_ok do
+      Logger.info(
+        "onboarding gate opened",
+        Metadata.with_category(:info, :lifecycle, user_id: user_id, trigger: trigger)
+      )
+    end
+
+    :ok
   end
 
   # The sorted list of unmet runtime requirements, or `[]` when the user may
