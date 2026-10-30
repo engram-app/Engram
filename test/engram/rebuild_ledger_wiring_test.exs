@@ -37,7 +37,7 @@ defmodule Engram.RebuildLedgerWiringTest do
     bypass = Bypass.open()
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
 
-    # A green, caught-up collection for `Rebuild.gate/0`; every write succeeds,
+    # A green, caught-up collection for `Rebuild.gate/1`; every write succeeds,
     # and every point read back holds a dense vector (the v5 rebuild copies
     # it, Task 16.3).
     col = "/collections/#{Engram.Vector.Qdrant.collection_name()}"

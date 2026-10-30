@@ -15,10 +15,10 @@ defmodule Engram.Workers.RebuildStaleNote do
   Its own `rebuild` queue (chunker v5 Task 16.2), so a pass never holds an
   `embed` slot a user's edit is waiting for. Every Voyage call here is
   `purpose: :maintenance`: never retried once it may have been billed (H6).
-  While the v5 pass is `on`, each job first passes `Engram.Rebuild.gate/0`
+  While the v5 pass is `on`, each job first passes `Engram.Rebuild.gate/1`
   (the maintenance token bucket and the Qdrant optimizer backlog). A plan
   upgrade's re-embed (`upgrade: true`, `Engram.EmbedModels`) passes the same
-  checks (`Rebuild.pace/0`) in every mode, and its Voyage tokens debit the
+  checks (`Rebuild.pace/1`) in every mode, and its Voyage tokens debit the
   bucket (`Rebuild.paced/1`).
 
   ## A halted pass resumes at once
@@ -50,11 +50,11 @@ defmodule Engram.Workers.RebuildStaleNote do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"upgrade" => true}} = job) do
-    with :ok <- Rebuild.pace(), do: Rebuild.paced(fn -> EmbedNote.perform(job) end)
+    with :ok <- Rebuild.pace(job), do: Rebuild.paced(fn -> EmbedNote.perform(job) end)
   end
 
   def perform(%Oban.Job{args: args} = job) do
-    with :ok <- Rebuild.gate(), :ok <- EmbedNote.perform(job) do
+    with :ok <- Rebuild.gate(job), :ok <- EmbedNote.perform(job) do
       if Rebuild.mode() == :on, do: :ok, else: release_halted(args)
     end
   end

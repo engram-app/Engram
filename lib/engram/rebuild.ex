@@ -46,14 +46,14 @@ defmodule Engram.Rebuild do
 
   ## Pacing (Task 16.2)
 
-  While `on`, each `RebuildStaleNote` job waits (`gate/0`) for two things:
+  While `on`, each `RebuildStaleNote` job waits (`gate/1`) for two things:
   room in the maintenance token bucket (150,000 Voyage tokens a minute,
   debited by each response's `usage.total_tokens`), and a Qdrant that is
   keeping up (green, optimizer ok, at most 100 queued updates,
   `:rebuild_max_queued_points` points awaiting optimization, and disk under
-  `:rebuild_max_disk_percent`, `qdrant_pace/0`). The keyword sweep's
-  in-place rewrite (`RefreshKeywordVectors`) waits on `qdrant_pace/0` too,
-  in every mode. The
+  `:rebuild_max_disk_percent`, `qdrant_pace/1`). The keyword sweep's
+  in-place rewrite (`RefreshKeywordVectors`) waits on `qdrant_pace/1` too,
+  in every mode. A job gated again snoozes longer (`gate_snooze/1`). The
   reconcile sweep queues the pass by `rebuild_order/1`: paid users first,
   then active Free users smallest first, then inactive Free, and the users
   in `:rebuild_last_users` (the whales) last.
@@ -100,8 +100,10 @@ defmodule Engram.Rebuild do
   @tpm_key "voyage_maintenance_tpm"
   @tpm_tokens 150_000
   @tpm_window_ms 60_000
-  # What a gated job snoozes, and the Qdrant update-queue ceiling.
+  # A gated job's first snooze, the ceiling its growing snooze reaches, and
+  # the Qdrant update-queue ceiling.
   @gate_snooze 30
+  @gate_snooze_max 600
   @max_update_queue 100
   # The maintenance disk gate's lead over the user-write preflight (`disk_full?/0`).
   @user_headroom_points 5
@@ -348,13 +350,13 @@ defmodule Engram.Rebuild do
   end
 
   @doc """
-  `:ok`, or `{:snooze, 30}` while the pass must wait: the maintenance token
-  bucket is spent for this minute, or `qdrant_pace/0` says Qdrant is
-  behind. Only while `on`: off and `dry_run` never gate, and never call
-  Qdrant here.
+  `:ok`, or a snooze (`gate_snooze/1`) while the pass must wait: the
+  maintenance token bucket is spent for this minute, or `qdrant_pace/1` says
+  Qdrant is behind. Only while `on`: off and `dry_run` never gate, and never
+  call Qdrant here.
   """
-  @spec gate() :: :ok | {:snooze, 30}
-  def gate, do: if(mode() == :on, do: pace(), else: :ok)
+  @spec gate(Oban.Job.t()) :: :ok | {:snooze, pos_integer()}
+  def gate(job), do: if(mode() == :on, do: pace(job), else: :ok)
 
   @doc """
   Runs `fun` with its Voyage tokens debited from the maintenance token
@@ -385,15 +387,15 @@ defmodule Engram.Rebuild do
   end
 
   @doc """
-  `gate/0`'s checks in any mode: a plan-upgrade re-embed
+  `gate/1`'s checks in any mode: a plan-upgrade re-embed
   (`Engram.EmbedModels`) is paced like the pass even when it is off.
   """
-  @spec pace() :: :ok | {:snooze, 30}
-  def pace, do: if(tpm_room?(), do: qdrant_pace(), else: gated(:tokens))
+  @spec pace(Oban.Job.t()) :: :ok | {:snooze, pos_integer()}
+  def pace(job), do: if(tpm_room?(), do: qdrant_pace(job), else: gated(:tokens, job))
 
   @doc """
-  The Qdrant half of `pace/0`, for maintenance writes with no Voyage cost
-  (`RefreshKeywordVectors`): `{:snooze, 30}` while Qdrant cannot absorb a
+  The Qdrant half of `pace/1`, for maintenance writes with no Voyage cost
+  (`RefreshKeywordVectors`): a snooze (`gate_snooze/1`) while Qdrant cannot absorb a
   bulk rewrite. Every in-place rewrite leaves a dead copy until the
   optimizer vacuums the segment, so a corpus-wide pass must wait for it, or
   disk climbs into strict mode's write refusal and users' writes are
@@ -410,15 +412,35 @@ defmodule Engram.Rebuild do
       points awaiting optimization.
     * `:unavailable`: collection info unreadable.
 
-  The verdict is cached per node for 30 s, the snooze interval. Never gate
-  a user's own write on this.
+  The verdict is cached per node for 30 s, the first snooze. Never gate a
+  user's own write on this.
   """
-  @spec qdrant_pace() :: :ok | {:snooze, 30}
-  def qdrant_pace do
+  @spec qdrant_pace(Oban.Job.t()) :: :ok | {:snooze, pos_integer()}
+  def qdrant_pace(job) do
     case qdrant_behind() do
       nil -> :ok
-      reason -> gated(reason)
+      reason -> gated(reason, job)
     end
+  end
+
+  @doc """
+  What a job gated for the `snoozed`+1-th time snoozes: 30 s at first, then
+  doubling (jittered up to a quarter more) to a 600 s ceiling. A gated
+  backlog is thousands of queued jobs (`:keyword_refresh_backlog`), each
+  re-polling the gate, and every snooze is a Postgres UPDATE: at a fixed
+  30 s a 10,000-job backlog was ~330 updates a second fleet-wide while the
+  gate stayed shut (prod 2026-10-30: 133k snoozes in 15 minutes for ~7,800
+  rewrites). At the ceiling it is ~15 a second, still more wakeups than
+  Qdrant lets through once it reopens. The jitter spreads them so a
+  reopened gate is not met by one wave. Counts every snooze the job took
+  (Oban's `meta["snoozed"]`), including Qdrant backpressure ones.
+  """
+  @spec gate_snooze(non_neg_integer()) :: pos_integer()
+  def gate_snooze(0), do: @gate_snooze
+
+  def gate_snooze(snoozed) do
+    base = min(@gate_snooze * Integer.pow(2, min(snoozed, 5)), @gate_snooze_max)
+    base + :rand.uniform(div(base, 4))
   end
 
   # A check costs the bucket 1 token (Hammer has no read without a hit).
@@ -488,9 +510,9 @@ defmodule Engram.Rebuild do
     end
   end
 
-  defp gated(reason) do
+  defp gated(reason, %Oban.Job{meta: meta}) do
     :telemetry.execute([:engram, :rebuild, :gated], %{count: 1}, %{reason: reason})
-    {:snooze, @gate_snooze}
+    {:snooze, gate_snooze(Map.get(meta || %{}, "snoozed", 0))}
   end
 
   @doc """

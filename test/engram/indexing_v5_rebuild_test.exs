@@ -370,7 +370,7 @@ defmodule Engram.IndexingV5RebuildTest do
     stub(Engram.MockEmbedder, :embed_texts, fn _ -> flunk("the rebuild must not embed") end)
     stub(Engram.MockEmbedder, :embed_texts, fn _, _ -> flunk("the rebuild must not embed") end)
 
-    # What RebuildStaleNote runs once `Rebuild.gate/0` (Qdrant health and
+    # What RebuildStaleNote runs once `Rebuild.gate/1` (Qdrant health and
     # token pacing, not under test here) lets it through.
     assert :ok = perform_job(EmbedNote, %{note_id: note.id, user_id: ctx.user.id})
 

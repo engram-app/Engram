@@ -1,7 +1,7 @@
 defmodule Engram.Workers.RefreshKeywordVectorsPacingTest do
   @moduledoc """
   The keyword sweep's in-place rewrite (`RefreshKeywordVectors`) goes through
-  the same Qdrant gate as the v5 rebuild (`Engram.Rebuild.qdrant_pace/0`):
+  the same Qdrant gate as the v5 rebuild (`Engram.Rebuild.qdrant_pace/1`):
   every rewrite leaves a dead copy until the optimizer vacuums the segment,
   so an unpaced sweep over the whole corpus can push disk into strict mode's
   write refusal, and users' own writes are refused with it. A user's edit
@@ -134,6 +134,22 @@ defmodule Engram.Workers.RefreshKeywordVectorsPacingTest do
       end
     end
 
+    # Prod 2026-10-30: a 10,000-job backlog each re-polling a closed gate every
+    # 30 s logged 133k snoozes (one Postgres UPDATE each) in 15 minutes for
+    # ~7,800 rewrites. A job gated again waits longer, up to about 10 minutes.
+    test "a job gated again backs off instead of re-polling every 30 s", ctx do
+      Agent.update(ctx.health, fn _ -> {%{@green | "status" => "yellow"}, 0, nil} end)
+      args = %{note_id: ctx.note.id, user_id: ctx.user.id}
+      snooze = &perform_job(RefreshKeywordVectors, args, meta: %{"snoozed" => &1})
+
+      assert {:snooze, 30} = snooze.(0)
+      assert {:snooze, once} = snooze.(1)
+      assert once in 60..75
+      assert {:snooze, capped} = snooze.(40)
+      assert capped in 600..750
+      refute_received :rewrite
+    end
+
     test "it runs at the limits", ctx do
       Agent.update(ctx.health, fn _ ->
         {put_in(@green, ["update_queue", "length"], 100), 50_000, 75 - 1}
@@ -194,10 +210,10 @@ defmodule Engram.Workers.RefreshKeywordVectorsPacingTest do
     assert_received :rewrite
   end
 
-  test "the rebuild's pace/0 snoozes on disk headroom too", ctx do
+  test "the rebuild's pace/1 snoozes on disk headroom too", ctx do
     Agent.update(ctx.health, fn _ -> {@green, 0, 80} end)
 
-    assert {:snooze, 30} = Rebuild.pace()
+    assert {:snooze, 30} = Rebuild.pace(%Oban.Job{})
     assert_received {[:engram, :rebuild, :gated], _, %{count: 1}, %{reason: :disk}}
   end
 
