@@ -41,6 +41,7 @@ defmodule Engram.Folders do
   alias Engram.Attachments
   alias Engram.Billing
   alias Engram.Crypto
+  alias Engram.Folders.Rows
   alias Engram.Logger.Metadata
   alias Engram.Notes
   alias Engram.Notes.PathSanitizer
@@ -162,6 +163,8 @@ defmodule Engram.Folders do
     # checkout limit. An attachment added under the folder in between stays
     # at its path, the same outcome as one added just after the rename.
     with {:ok, new_folder} <- PathSanitizer.sanitize_target(new_folder),
+         # Never into its own subtree: refused before any scan or write.
+         :ok <- refuse_own_subtree(String.trim_trailing(old_folder, "/"), new_folder),
          {:ok, att_pairs} <-
            Attachments.folder_rename_pairs(user, vault, old_folder, new_folder) do
       atomic(fn ->
@@ -171,6 +174,10 @@ defmodule Engram.Folders do
         end
       end)
     end
+  end
+
+  defp refuse_own_subtree(old, new) do
+    if old != new and Rows.into_own_subtree?(old, new), do: {:error, :invalid_path}, else: :ok
   end
 
   @doc """
@@ -249,7 +256,7 @@ defmodule Engram.Folders do
             log_orphaned_attachments(user, vault, folder, unreadable)
 
             {:ok, %{notes: n, attachments: a}} =
-              delete_scanned(user, vault, note_rows, att_paths, opts)
+              delete_scanned(user, vault, [folder], note_rows, att_paths, opts)
 
             {:ok, %{notes: n, attachments: a}}
         end
@@ -265,13 +272,20 @@ defmodule Engram.Folders do
   # both from what was ACTUALLY deleted, not the scan. Since #1346 the
   # membership fence can skip a row that moved in the gap, so the scan count
   # is aspirational.
-  defp delete_scanned(user, vault, note_rows, att_paths, opts) do
+  defp delete_scanned(user, vault, folders, note_rows, att_paths, opts) do
     op = Keyword.take(opts, [:op_id])
     {:ok, attachments} = Attachments.delete_scanned_paths(user, vault, att_paths, op)
     {content, markers} = Enum.split_with(note_rows, &(&1.kind == "note"))
 
     %{deleted: d1, notes: n} = delete_note_chunks(user, vault, content, op)
     %{deleted: d2} = delete_note_chunks(user, vault, markers, op)
+
+    # The folder rows go last, like the markers: a failure above leaves the
+    # folder in place for a retry to find. Rows only; the notes and
+    # attachments were stamped by their own legs.
+    _ =
+      Repo.with_tenant!(user.id, fn -> Rows.soft_delete(user, vault.id, folders, op[:op_id]) end)
+
     {:ok, %{notes: n, deleted: d1 + d2, attachments: attachments}}
   end
 
@@ -322,7 +336,7 @@ defmodule Engram.Folders do
          {:ok, note_rows} <- Notes.scan_folders(user, vault, folders),
          {:ok, att_paths} <- attachment_paths_under(user, vault, folders) do
       {:ok, %{deleted: notes, attachments: atts}} =
-        delete_scanned(user, vault, note_rows, att_paths, opts)
+        delete_scanned(user, vault, folders, note_rows, att_paths, opts)
 
       {:ok, %{notes: notes, attachments: atts}}
     end
@@ -366,6 +380,9 @@ defmodule Engram.Folders do
 
     with {:ok, notes} <- Notes.plan_restore(user, vault, op_id, cutoff),
          {:ok, atts} <- Attachments.plan_restore(user, vault, op_id, cutoff),
+         # Folder rows before anything that points at them. The plans above
+         # refuse without writing, so a refused restore leaves them deleted.
+         _ = Repo.with_tenant!(user.id, fn -> Rows.restore_op(vault.id, op_id) end),
          {:ok, folders} <- restore_markers(user, vault, notes.folders),
          {:ok, n} <- Notes.restore_notes(user, vault, op_id, notes.notes),
          {:ok, a} <- Attachments.restore_attachments(user, vault, atts.attachments) do
@@ -410,8 +427,10 @@ defmodule Engram.Folders do
   def batch_move(_user, _vault, [], _target), do: {:ok, %{notes: 0, attachments: 0}}
 
   def batch_move(user, vault, marker_ids, target) do
-    # Attachment scan before the transaction (#2159), like `rename/4`.
-    with {:ok, metas} <- Attachments.list_attachments(user, vault) do
+    # Attachment scan before the transaction (#2159), like `rename/4`; only the
+    # moved folders' attachments are read.
+    with {:ok, folders} <- Notes.resolve_folder_markers(user, vault, marker_ids),
+         {:ok, %{metas: metas}} <- Attachments.scan_under(user, vault, folders) do
       atomic(fn ->
         with {:ok, %{moved: notes, pairs: pairs}} <-
                Notes.batch_move_folders(user, vault, marker_ids, target),
@@ -422,8 +441,9 @@ defmodule Engram.Folders do
     end
   end
 
-  # Perf (finding #9): scan the vault's attachments ONCE per batch op, then
-  # partition the decrypted paths across the N folders — instead of calling
+  # Perf (finding #9): scan the named folders' attachments ONCE per batch op
+  # (`Attachments.scan_under/4`: the rows under those folders, not the vault's),
+  # then partition the decrypted paths across the N folders — instead of calling
   # `Attachments.delete_folder`/`rename_folder` per folder, each of which ran its
   # own full `list_attachments` scan (O(N × total_attachments) wasted DB work).
   # The pre-filtered paths feed the leaner explicit-list attachment entry points
@@ -438,16 +458,10 @@ defmodule Engram.Folders do
     # `attachments: 0` while live rows survive under a deleted marker is the
     # orphaning this whole change exists to stop, and it reached here through
     # the tolerant listing.
-    with {:ok, metas, unreadable} <- Attachments.scan_with_drops(user, vault) do
-      prefixes = Enum.map(folders, &folder_prefix/1)
-
-      paths =
-        metas
-        |> Enum.map(& &1.path)
-        |> Enum.filter(fn path -> Enum.any?(prefixes, &String.starts_with?(path, &1)) end)
-
+    with {:ok, %{metas: metas, unreadable: unreadable}} <-
+           Attachments.scan_under(user, vault, folders) do
       log_orphaned_attachments(user, vault, Enum.join(folders, ","), unreadable)
-      {:ok, paths}
+      {:ok, Enum.map(metas, & &1.path)}
     end
   end
 
@@ -464,8 +478,6 @@ defmodule Engram.Folders do
 
     Attachments.move_folder_pairs(user, vault, move_pairs)
   end
-
-  defp folder_prefix(folder), do: String.trim_trailing(folder, "/") <> "/"
 
   # Maps a decrypted attachment path to its new path under whichever {old, new}
   # folder pair owns it. When a batch selects BOTH a parent and a nested child

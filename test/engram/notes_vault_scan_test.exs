@@ -111,11 +111,13 @@ defmodule Engram.NotesVaultScanTest do
       :ok
     end
 
-    test "rename fetches only the rows under the folder, by the folder index", ctx do
+    test "rename fetches only the rows under the folder, by the folder-reference index", ctx do
       %{user: u, vault: v} = ctx
       {{:ok, 2}, reads} = notes_reads(fn -> Notes.rename_folder(u, v, "Work", "Job") end)
 
-      [fetch] = Enum.filter(reads, &(&1 =~ ~r/"folder_hmac" = ANY\(\$\d+\)/))
+      # The notes come in by `folder_ref_id` (the folder rows name the subtree),
+      # not by decrypting a folder envelope per distinct folder in the vault.
+      [fetch] = Enum.filter(reads, &(&1 =~ ~r/"folder_ref_id" = ANY\(\$\d+\)/))
       {:ok, paths} = Notes.list_tree_notes(u, v)
 
       assert Enum.map(paths, & &1.path) |> Enum.sort() ==
@@ -125,10 +127,10 @@ defmodule Engram.NotesVaultScanTest do
       # table's cost ties (as NotesPathIndexPlanTest). Added after the rename:
       # their ciphertext is not real, and only the plan reads them.
       for _ <- 1..1000,
-          do: insert(:note, user: u, vault: v, folder_hmac: :crypto.strong_rand_bytes(32))
+          do: insert(:note, user: u, vault: v, folder_ref_id: nil)
 
       plan = QueryPlan.generic_plan(fetch, analyze: ["notes"], bitmapscan: false)
-      assert plan =~ "notes_user_id_vault_id_folder_hmac_index", plan
+      assert plan =~ "notes_folder_ref", plan
     end
 
     test "scan_folders returns the folder and its descendants only", %{user: u, vault: v} do

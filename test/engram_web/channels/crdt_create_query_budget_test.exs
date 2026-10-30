@@ -27,7 +27,11 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
   # frame first), so the seed's in-transaction checkpoint (row and tail
   # reads, version read, second seq, notes UPDATE, revision, read-back) is
   # gone. One notes version per create instead of two.
-  @statements 15
+  # 15 -> 17: the create files its note under a folder, so the folder row is
+  # found or created in the row transaction (`Folders.Rows.ensure/4`: one probe
+  # by path hash, plus one insert when the folder is new, as `F` is here; an
+  # existing folder costs the probe alone).
+  @statements 17
   @tenant_txns 1
   @subscription_reads 0
 

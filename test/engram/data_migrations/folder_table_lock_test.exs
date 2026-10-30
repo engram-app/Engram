@@ -10,11 +10,11 @@ defmodule Engram.DataMigrations.FolderTableLockTest do
   """
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
   import Engram.Factory
 
   alias Engram.CheckpointInterleave
   alias Engram.DataMigrations.FolderTable
-  alias Engram.Notes
   alias Engram.Repo
 
   setup do
@@ -48,8 +48,8 @@ defmodule Engram.DataMigrations.FolderTableLockTest do
     user: user,
     vault: vault
   } do
-    {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => "Dir/l.md", "content" => "x"}, actor: "api")
+    # The previous release's write (the app's own writers create the folder row).
+    note = Engram.Fixtures.insert_note!(user, vault, %{path: "Dir/l.md", content: "x"})
 
     test = self()
 
@@ -82,5 +82,68 @@ defmodule Engram.DataMigrations.FolderTableLockTest do
     assert {:more, _} = FolderTable.run_pass(user_ids: [user.id])
     assert ref(user, note.id) != nil
     assert :done = FolderTable.run_pass(user_ids: [user.id])
+  end
+
+  # #2339: `delete_account` deletes the user's vaults, then the user row.
+  # FolderTable's chunk transaction held the user row FOR SHARE (the rotation
+  # gate) and then wanted the vault row (the folders FK): opposite orders, and
+  # Postgres killed the delete. The backfill now takes the vault rows first,
+  # NOWAIT, so a user under deletion is deferred and the delete never waits.
+  test "a pass never deadlocks with an account delete, and defers that user", %{
+    user: user,
+    vault: vault
+  } do
+    note = Engram.Fixtures.insert_note!(user, vault, %{path: "Dir/d.md", content: "x"})
+
+    # Back to what the previous release left: no folder row, no ref.
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.query!("UPDATE notes SET folder_ref_id = NULL WHERE user_id = $1", [
+          Ecto.UUID.dump!(user.id)
+        ])
+
+        Repo.query!("DELETE FROM folders WHERE user_id = $1", [Ecto.UUID.dump!(user.id)])
+      end)
+
+    test = self()
+
+    deleter =
+      Task.async(fn ->
+        CheckpointInterleave.checkout_real!()
+
+        Repo.with_tenant(user.id, fn ->
+          # The first half of Lifecycle.hard_delete's transaction.
+          Repo.delete_all(from(v in Engram.Vaults.Vault, where: v.user_id == ^user.id))
+          send(test, :vaults_deleted)
+
+          receive do
+            :continue -> :ok
+          after
+            15_000 -> Repo.rollback(:test_timeout)
+          end
+
+          # The second half: the user row.
+          Repo.delete_all(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+            skip_tenant_check: true
+          )
+        end)
+      end)
+
+    assert_receive :vaults_deleted, 5_000
+
+    pass =
+      Task.async(fn ->
+        CheckpointInterleave.checkout_real!()
+        FolderTable.run_pass(user_ids: [user.id])
+      end)
+
+    # The pass must not wait on the delete's vault rows (an unfixed one holds
+    # the user row and blocks there, which deadlocks once the delete goes on).
+    assert {:ok, {:more, stats}} = Task.yield(pass, 3_000) || Task.shutdown(pass, :brutal_kill)
+    assert stats[:blocked] >= 1
+
+    send(deleter.pid, :continue)
+    assert {:ok, _} = Task.await(deleter, 15_000)
+    assert note.id
   end
 end

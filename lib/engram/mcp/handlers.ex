@@ -593,7 +593,10 @@ defmodule Engram.MCP.Handlers do
         ToolError.error(:path_conflict, "Folder rename conflict: #{stored} already exists")
 
       {:error, :invalid_path} ->
-        ToolError.error(:invalid_path, "new_folder must be a non-empty path")
+        ToolError.error(
+          :invalid_path,
+          "new_folder must be a non-empty path outside the folder being renamed"
+        )
 
       # Catch-all (Bug 2): Folders.rename can surface a non-:conflict
       # {:error, reason} (e.g. a crypto failure in the attachment leg). Without

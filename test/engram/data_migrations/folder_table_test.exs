@@ -7,7 +7,6 @@ defmodule Engram.DataMigrations.FolderTableTest do
 
   alias Engram.Attachments
   alias Engram.Crypto
-  alias Engram.Crypto.Envelope
   alias Engram.DataMigrations.FolderTable
   alias Engram.Notes
   alias Engram.Repo
@@ -43,38 +42,8 @@ defmodule Engram.DataMigrations.FolderTableTest do
     Repo.query!("DELETE FROM folders")
   end
 
-  defp ref(table, id) do
-    %{rows: [[ref]]} =
-      Repo.query!("SELECT folder_ref_id FROM #{table} WHERE id = $1", [dump(id)])
-
-    ref && Ecto.UUID.load!(ref)
-  end
-
-  # path => %{id, explicit}, with the names decrypted the way a reader will.
-  defp folder_tree(user) do
-    {:ok, dek} = Crypto.get_dek(user)
-
-    %{rows: rows} =
-      Repo.query!(
-        "SELECT id, parent_id, name_ciphertext, name_nonce, explicit FROM folders WHERE deleted_at IS NULL"
-      )
-
-    by_id =
-      Map.new(rows, fn [id, parent, ct, nonce, explicit] ->
-        id = Ecto.UUID.load!(id)
-        {:ok, name} = Envelope.decrypt(ct, nonce, dek, Crypto.aad_for_row(:folders, :name, id))
-        {id, %{name: name, parent: parent && Ecto.UUID.load!(parent), explicit: explicit}}
-      end)
-
-    path = fn path, id, self ->
-      case by_id[id] do
-        %{parent: nil, name: n} -> n
-        %{parent: p, name: n} -> self.(path, p, self) <> "/" <> n
-      end
-    end
-
-    Map.new(by_id, fn {id, f} -> {path.(path, id, path), %{id: id, explicit: f.explicit}} end)
-  end
+  defp ref(table, id), do: Engram.FolderRows.ref(table, id)
+  defp folder_tree(user), do: Engram.FolderRows.tree(user)
 
   defp run_to_done(opts \\ []) do
     assert {:more, _} = FolderTable.run_pass(opts)
@@ -288,7 +257,8 @@ defmodule Engram.DataMigrations.FolderTableTest do
 
       # The previous release writes a note into a folder that has no row yet
       # (the trigger leaves NULL), and an attachment loses its reference.
-      fresh = note!(u, v, "Fresh/Sub/Z.md")
+      # (`insert_note!` is that writer: the app's own writers now create the row.)
+      fresh = Engram.Fixtures.insert_note!(u, v, %{path: "Fresh/Sub/Z.md", content: "# T"})
       assert ref("notes", fresh.id) == nil
       Repo.query!("UPDATE attachments SET folder_ref_id = NULL WHERE id = $1", [dump(att.id)])
       Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [dump(tree["A"].id)])

@@ -45,6 +45,22 @@ defmodule Engram.DataMigrations do
   end
 
   @doc """
+  When `name` was last verified complete at `version` (or higher): the
+  `completed_at` every `mark_done/2` rewrites, `nil` while it is open (never
+  done, bumped, or reopened by a re-verify that found work). A read, not the
+  cached `done?/2`: a reopened migration must stop being trusted at once.
+  """
+  @spec completed_at(String.t(), pos_integer()) :: DateTime.t() | nil
+  def completed_at(name, version) do
+    Repo.one(
+      from(e in Entry,
+        where: e.name == ^name and e.version >= ^version and not is_nil(e.completed_at),
+        select: e.completed_at
+      )
+    )
+  end
+
+  @doc """
   Marks `name` done at `version`. A no-op on a row already at a higher
   version: during a rolling deploy an old node finishing its older version
   must neither lower the version nor close the newer version's work.

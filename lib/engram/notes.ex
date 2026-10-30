@@ -41,6 +41,7 @@ defmodule Engram.Notes do
     VaultScanCache
   }
 
+  alias Engram.Folders.Rows
   alias Engram.Pager
   alias Engram.Repo
   alias Engram.Sync.Broadcast
@@ -421,6 +422,26 @@ defmodule Engram.Notes do
   @spec mint_id() :: Ecto.UUID.t()
   def mint_id, do: UUIDv7.generate()
 
+  # The folder row must exist before the note row that names it, in the same
+  # transaction: `notes_set_folder_ref` then finds it, and the note is born
+  # pointing at its folder. Call it after the vault seq lock is taken, so two
+  # writers creating the same new folder queue on that lock instead of racing
+  # for the unique index (`Rows.ensure/4` is safe against that race anyway).
+  # The stored `folder_*` columns stay authoritative and are still written.
+  # Returns the folder's id (nil at the root) so a writer that does not change
+  # `folder_hmac` (the trigger would not refire) can still set the reference.
+  defp ensure_folder_row!(user, vault_id, folder) do
+    {:ok, id} = Rows.ensure(user, vault_id, folder)
+    id
+  end
+
+  # The folder id for a write that may already hold the batch's up-front
+  # `Rows.ensure_all/3` result (`refs`: %{folder => id}): a batch resolves each
+  # distinct folder once, before its per-row loop and outside the per-row
+  # savepoints, and passes the map down. Without one, resolve it here.
+  defp folder_ref_for(nil, user, vault_id, folder), do: ensure_folder_row!(user, vault_id, folder)
+  defp folder_ref_for(refs, _user, _vault_id, folder), do: Map.fetch!(refs, folder)
+
   @doc """
   Creates an explicit empty-folder marker row (kind="folder").
 
@@ -457,9 +478,13 @@ defmodule Engram.Notes do
       # Repo.with_tenant wraps the fn return in {:ok, _} (transaction).
       # Unwrap once so the public contract is {:ok, note} | {:error, _}.
       case Repo.with_tenant(user.id, fn ->
-             upsert_folder_marker(user, vault, dek, folder, folder_hmac, fn ->
-               Engram.Vaults.next_seq!(vault.id)
-             end)
+             with {:ok, marker} <-
+                    upsert_folder_marker(user, vault, dek, folder, folder_hmac, fn ->
+                      Engram.Vaults.next_seq!(vault.id)
+                    end) do
+               :ok = Rows.ensure_markers(user, vault.id, [{folder, marker.id}])
+               {:ok, marker}
+             end
            end) do
         {:ok, inner} -> inner
         {:error, _} = err -> err
@@ -552,6 +577,7 @@ defmodule Engram.Notes do
 
         try do
           markers = upsert_folder_markers(user, vault, dek, filter_key, names, seq_fun)
+          :ok = Rows.ensure_markers(user, vault.id, Enum.map(markers, &{&1.folder, &1.id}))
           seq = Process.get(seq_key)
 
           # A marker carrying this call's seq is one this call wrote; a live
@@ -833,8 +859,14 @@ defmodule Engram.Notes do
                  |> Ecto.Changeset.put_change(:seq, Engram.Vaults.next_seq!(vault.id))
                  |> Repo.update()
                  |> case do
-                   {:ok, _} -> {:ok, :deleted}
-                   {:error, _} = err -> err
+                   {:ok, _} ->
+                     # Notes under the folder keep it alive; it is just no
+                     # longer an explicit one.
+                     :ok = Rows.unmark_explicit(user, vault.id, folder)
+                     {:ok, :deleted}
+
+                   {:error, _} = err ->
+                     err
                  end
 
                {:ok, _already_soft_deleted} ->
@@ -1308,6 +1340,7 @@ defmodule Engram.Notes do
       # first, so inserting first and locking after deadlocks against them
       # (Postgres 40P01). Pinned by crdt_create_query_budget_test.exs.
       seq = Engram.Vaults.next_seq!(insert_attrs.vault_id)
+      _ = ensure_folder_row!(user, insert_attrs.vault_id, folder)
       changeset = Ecto.Changeset.put_change(changeset, :seq, seq)
 
       case Repo.insert(changeset, on_conflict: :nothing) do
@@ -2412,7 +2445,19 @@ defmodule Engram.Notes do
   # constraint, so a rare race (another live note grabbed the target path
   # between the lookup and this update) surfaces as `{:error, changeset}`
   # instead of raising and aborting the tenant transaction.
-  defp move_note(prior, base_attrs, user, sanitized_path, folder, actor, recording, db_opts \\ []) do
+  defp move_note(
+         prior,
+         base_attrs,
+         user,
+         sanitized_path,
+         folder,
+         actor,
+         recording,
+         opts \\ []
+       ) do
+    # `:folder_refs` is the batch's up-front folder ids; the rest goes to the write.
+    {refs, db_opts} = Keyword.pop(opts, :folder_refs)
+
     was_tombstoned = not is_nil(prior.deleted_at)
 
     with {:ok, crdt} <-
@@ -2451,11 +2496,15 @@ defmodule Engram.Notes do
           |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
 
         seq = Engram.Vaults.next_seq!(prior.vault_id)
+        folder_ref = folder_ref_for(refs, user, prior.vault_id, folder)
 
         changeset =
           prior
           |> Note.changeset(Map.put(phase_b, :version, prior.version + 1))
           |> Ecto.Changeset.put_change(:seq, seq)
+          # A restore or resurrect may leave `folder_hmac` as it was, so the
+          # trigger does not refire: point at the live row explicitly.
+          |> Ecto.Changeset.put_change(:folder_ref_id, folder_ref)
           |> Ecto.Changeset.put_change(:deleted_at, nil)
           # Any undelete leaves the op that deleted it (#609), so a later
           # restore of that op cannot reach a row that has lived since.
@@ -3999,7 +4048,16 @@ defmodule Engram.Notes do
 
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, claimed?} <- claim_rename(user, vault, old_path, new_path, opts) do
-      case do_rename_note(user, vault, old_path, new_path, new_folder, now, opts[:note_id]) do
+      case do_rename_note(
+             user,
+             vault,
+             old_path,
+             new_path,
+             new_folder,
+             now,
+             opts[:note_id],
+             opts[:folder_refs]
+           ) do
         {:ok, _} = ok -> ok
         {:error, reason} = err -> report_orphan_claim(user, vault, claimed?, reason, err)
       end
@@ -4118,7 +4176,7 @@ defmodule Engram.Notes do
     :ok
   end
 
-  defp do_rename_note(user, vault, old_path, new_path, new_folder, now, note_id) do
+  defp do_rename_note(user, vault, old_path, new_path, new_folder, now, note_id, refs) do
     {:ok, lookup_query} = note_by_path_query(user, vault, old_path)
 
     lookup_query =
@@ -4145,7 +4203,7 @@ defmodule Engram.Notes do
             :conflict
 
           true ->
-            rename_with_retry(lookup_query, user, new_path, new_folder, now, 1)
+            rename_with_retry(lookup_query, user, new_path, new_folder, now, refs, 1)
         end
       end)
 
@@ -4218,15 +4276,15 @@ defmodule Engram.Notes do
   # rebuilds every ciphertext column from the row it was handed, so retrying
   # with the stale struct would just lose the fence again and write pre-read
   # plaintext if it did not.
-  defp rename_with_retry(lookup_query, user, new_path, new_folder, now, retries) do
+  defp rename_with_retry(lookup_query, user, new_path, new_folder, now, refs, retries) do
     case Repo.one(lookup_query) do
       nil ->
         :not_found
 
       note ->
-        case do_rename_note_inner(note, user, new_path, new_folder, now) do
+        case do_rename_note_inner(note, user, new_path, new_folder, now, refs) do
           :stale_snapshot when retries > 0 ->
-            rename_with_retry(lookup_query, user, new_path, new_folder, now, retries - 1)
+            rename_with_retry(lookup_query, user, new_path, new_folder, now, refs, retries - 1)
 
           :stale_snapshot ->
             Logger.warning(
@@ -4251,7 +4309,7 @@ defmodule Engram.Notes do
   defp rename_fence(%Note{id: id, seq: seq, crdt_state_nonce: nonce}),
     do: from(n in Note, where: n.id == ^id and n.seq == ^seq and n.crdt_state_nonce == ^nonce)
 
-  defp do_rename_note_inner(note, user, new_path, new_folder, now) do
+  defp do_rename_note_inner(note, user, new_path, new_folder, now, refs) do
     decrypted_note = decrypt_or_raise!(note, user)
     new_title = Helpers.extract_title(decrypted_note.content || "", new_path)
 
@@ -4275,6 +4333,7 @@ defmodule Engram.Notes do
       )
 
     seq = Engram.Vaults.next_seq!(note.vault_id)
+    folder_ref = folder_ref_for(refs, user, note.vault_id, new_folder)
 
     # Fenced on the row pre-image this rename derived from. #1335, same class.
     # `full_kw` rebuilds ALL five ciphertext columns from `decrypted_note`,
@@ -4293,7 +4352,8 @@ defmodule Engram.Notes do
         set:
           [
             updated_at: now,
-            seq: seq
+            seq: seq,
+            folder_ref_id: folder_ref
           ] ++ full_kw
       )
 
@@ -4374,7 +4434,7 @@ defmodule Engram.Notes do
       # fence, and without this filter it would report as a fence loss —
       # destroying the exact distinction this probe exists to draw.
       if Repo.exists?(from(n in Note, where: n.id == ^note.id and is_nil(n.deleted_at))) do
-        # Live row, stale pre-image. `rename_with_retry/6` re-reads and tries
+        # Live row, stale pre-image. `rename_with_retry/7` re-reads and tries
         # again; only if THAT loses too does the caller see :not_found.
         :stale_snapshot
       else
@@ -4739,7 +4799,10 @@ defmodule Engram.Notes do
     with {:ok, moves} <- resolve_moves(user, vault, ids, target_folder),
          :ok <- validate_move_targets(user, vault, moves),
          :ok <- claim_moves(user, vault, moves) do
-      Repo.transaction(fn -> apply_moves(user, vault, moves) end)
+      Repo.transaction(fn ->
+        refs = ensure_move_folders!(user, vault, moves)
+        apply_moves(user, vault, moves, refs)
+      end)
     end
   end
 
@@ -4845,9 +4908,27 @@ defmodule Engram.Notes do
   # have between them ruled out missing ids, row collisions and intra-batch
   # duplicates. What remains is a race or a lost fence, and it leaves an orphan
   # claim that `rename_note/5` counts and enqueues projection for.
-  defp apply_moves(user, vault, moves) do
+  # Every distinct target folder of the batch, resolved once, before the
+  # per-note renames (vault seq lock first, like the writers).
+  defp ensure_move_folders!(user, vault, moves) do
+    folders =
+      for {note, new_path} <- moves, note.path != new_path, uniq: true do
+        new_path |> PathSanitizer.sanitize() |> Helpers.extract_folder()
+      end
+
+    {:ok, refs} =
+      Repo.with_tenant(user.id, fn ->
+        :ok = Engram.Vaults.lock_seq!(vault.id)
+        {:ok, refs} = Rows.ensure_all(user, vault.id, folders)
+        refs
+      end)
+
+    refs
+  end
+
+  defp apply_moves(user, vault, moves, refs) do
     Enum.reduce_while(moves, %{moved: 0}, fn {note, new_path}, acc ->
-      case rename_note(user, vault, note.path, new_path, index: :skip) do
+      case rename_note(user, vault, note.path, new_path, index: :skip, folder_refs: refs) do
         {:ok, _} ->
           {:cont, Map.update!(acc, :moved, &(&1 + 1))}
 
@@ -5722,39 +5803,14 @@ defmodule Engram.Notes do
   end
 
   @doc """
-  Returns unique non-empty folder paths for a user's notes.
+  Returns unique non-empty folder paths for a user's notes: the folders that hold
+  a live note or marker. The same set as `list_folders_with_counts/2`, minus the
+  root and the counts.
   """
   @spec list_folders(map(), map()) :: {:ok, [String.t()]}
   def list_folders(user, vault) do
-    case Crypto.dek_filter_key(user) do
-      {:ok, filter_key} ->
-        {:ok, dek} = Crypto.get_dek(user)
-        empty_hmac = Crypto.hmac_field(filter_key, "")
-
-        {:ok, rows} =
-          Repo.with_tenant(user.id, fn ->
-            Repo.all(
-              from(n in scoped_live(user, vault),
-                where: not is_nil(n.folder_hmac) and n.folder_hmac != ^empty_hmac,
-                distinct: n.folder_hmac,
-                select: {n.id, n.dek_version, n.folder_ciphertext, n.folder_nonce}
-              )
-            )
-          end)
-
-        folders =
-          rows
-          |> Enum.map(fn {id, dv, ct, nonce} ->
-            decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :folder, id, dv))
-          end)
-          |> Enum.sort()
-
-        {:ok, folders}
-
-      # No DEK = user has no encrypted data possible = no folders.
-      {:error, :no_dek} ->
-        {:ok, []}
-    end
+    {:ok, counts} = list_folders_with_counts(user, vault)
+    {:ok, for(%{folder: folder} <- counts, folder != "", do: folder)}
   end
 
   @doc """
@@ -6125,33 +6181,74 @@ defmodule Engram.Notes do
   """
   @spec raw_folder_count_rows(map(), map()) :: [map()]
   def raw_folder_count_rows(user, vault) do
-    # Per folder_hmac, pick any one row (for envelope decryption) and
-    # count only kind='note' rows. Marker-only folders yield count 0;
-    # mixed folders yield the note count (markers excluded).
+    # Three kinds of row, each cheap in Postgres and decrypted outside it:
+    #
+    #  * `%{ref:, count:}`: live notes grouped by `folder_ref_id`, the folder
+    #    ROW they sit in (no folder envelope is touched for them);
+    #  * `%{folder_row: ...}`: the vault's folder rows, which name those
+    #    references (a folder's name is one segment, so a path is assembled
+    #    from its ancestors);
+    #  * `%{id:, dv:, ct:, nonce:, count:}`: everything with NO reference, grouped
+    #    by `folder_hmac` with one representative row to decrypt, as before:
+    #    folder markers (they never carry a reference), root notes, and notes the
+    #    previous release filed into a folder that has no row yet. The group
+    #    needs no ledger flag: the stored hash classifies it.
     #
     # GROUP BY + any_value(ROW(...)) (one row's fields, kept together) is a
     # HashAggregate; the old DISTINCT ON + window COUNT sorted every live
     # row first. 50k notes / 2k folders, PG 18 local: 112 ms vs 257 ms, and
     # the sort spilled 5.7 MB to disk at the default work_mem.
-    from(n in scoped_live(user, vault),
-      where: not is_nil(n.folder_hmac),
-      group_by: n.folder_hmac,
-      select: {
-        fragment(
-          "any_value(ROW(?, ?, ?, ?))",
-          n.id,
-          n.dek_version,
-          n.folder_ciphertext,
-          n.folder_nonce
-        ),
-        fragment("COUNT(*) FILTER (WHERE ? = 'note')", n.kind)
-      }
-    )
-    |> Repo.all()
-    |> Enum.map(fn {{id, dv, ct, nonce}, count} ->
-      # A record's fields skip Ecto's type casting, so the uuid is raw bytes.
-      %{id: Ecto.UUID.load!(id), dv: dv, ct: ct, nonce: nonce, count: count}
-    end)
+    # A reference counts only while its folder row is live: one naming a deleted
+    # row (a delete racing a write) is unresolved, like every other scan.
+    live_ref = live_folder_ref()
+
+    by_ref =
+      from(n in scoped_live(user, vault),
+        as: :n,
+        where: n.kind == "note" and not is_nil(n.folder_ref_id) and exists(live_ref),
+        group_by: n.folder_ref_id,
+        select: {n.folder_ref_id, count()}
+      )
+      |> Repo.all()
+      |> Enum.map(fn {ref, count} -> %{ref: ref, count: count} end)
+
+    folder_rows =
+      from(f in Engram.Folders.Folder,
+        where: f.vault_id == ^vault.id,
+        select: %{
+          id: f.id,
+          parent_id: f.parent_id,
+          dv: f.dek_version,
+          ct: f.name_ciphertext,
+          nonce: f.name_nonce
+        }
+      )
+      |> Repo.all()
+      |> Enum.map(&%{folder_row: &1})
+
+    unreferenced =
+      from(n in scoped_live(user, vault),
+        as: :n,
+        where: not is_nil(n.folder_hmac) and (is_nil(n.folder_ref_id) or not exists(live_ref)),
+        group_by: n.folder_hmac,
+        select: {
+          fragment(
+            "any_value(ROW(?, ?, ?, ?))",
+            n.id,
+            n.dek_version,
+            n.folder_ciphertext,
+            n.folder_nonce
+          ),
+          fragment("COUNT(*) FILTER (WHERE ? = 'note')", n.kind)
+        }
+      )
+      |> Repo.all()
+      |> Enum.map(fn {{id, dv, ct, nonce}, count} ->
+        # A record's fields skip Ecto's type casting, so the uuid is raw bytes.
+        %{id: Ecto.UUID.load!(id), dv: dv, ct: ct, nonce: nonce, count: count}
+      end)
+
+    by_ref ++ if(by_ref == [], do: [], else: folder_rows) ++ unreferenced
   end
 
   @doc """
@@ -6181,14 +6278,97 @@ defmodule Engram.Notes do
   @doc "Decrypts `raw_folder_count_rows/2`'s rows. Pure — no DB access."
   @spec decrypt_folder_count_rows([map()], binary()) :: [%{folder: String.t(), count: integer()}]
   def decrypt_folder_count_rows(rows, dek) do
-    rows
-    |> Enum.map(fn %{id: id, dv: dv, ct: ct, nonce: nonce, count: count} ->
-      %{
-        folder: decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :folder, id, dv)),
-        count: count
-      }
+    by_id = for %{folder_row: row} <- rows, into: %{}, do: {row.id, row}
+
+    {entries, _memo} =
+      Enum.flat_map_reduce(rows, %{}, fn
+        %{folder_row: _}, memo ->
+          {[], memo}
+
+        %{ref: ref, count: count}, memo ->
+          # Only the chains of referenced folders are opened. One that will not
+          # open is logged (ids only) and left out of the listing: the rest of
+          # the vault keeps being served.
+          case folder_row_path(ref, by_id, dek, memo) do
+            {:ok, path, memo} -> {[{path, count}], memo}
+            {:error, memo} -> {[], memo}
+          end
+
+        %{id: id, dv: dv, ct: ct, nonce: nonce, count: count}, memo ->
+          {[{decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :folder, id, dv)), count}], memo}
+      end)
+
+    entries
+    # One folder can arrive twice (a reference group and a marker or hash group),
+    # so sum by name.
+    |> Enum.reduce(%{}, fn {folder, count}, acc ->
+      Map.update(acc, folder, count, &(&1 + count))
     end)
+    |> Enum.map(fn {folder, count} -> %{folder: folder, count: count} end)
     |> Enum.sort_by(& &1.folder)
+  end
+
+  # `{:ok, full path, memo}` for the folder row `id`, assembled from its
+  # ancestors' segment names, or `{:error, memo}` when a name in the chain (or
+  # the chain itself) is missing or does not open. `memo` caches paths and
+  # failures so a bad row is reported once per listing.
+  defp folder_row_path(id, by_id, dek, memo, depth \\ 0) do
+    case memo do
+      %{^id => {:ok, path}} ->
+        {:ok, path, memo}
+
+      %{^id => :error} ->
+        {:error, memo}
+
+      _ ->
+        folder_row_path_uncached(id, by_id, dek, memo, depth)
+    end
+  end
+
+  # The first folder on a chain that cannot be read is reported; everything
+  # below it is marked failed silently, so a bad row with K children logs once.
+  defp folder_row_path_uncached(id, by_id, dek, memo, depth) do
+    with %{} = row <- Map.get(by_id, id),
+         true <- depth < 512 do
+      case parent_path(row, by_id, dek, memo, depth) do
+        {:ok, parent_path, memo} ->
+          case Envelope.decrypt(row.ct, row.nonce, dek, row_aad(:folders, :name, id, row.dv)) do
+            {:ok, name} ->
+              path = if parent_path, do: parent_path <> "/" <> name, else: name
+              {:ok, path, Map.put(memo, id, {:ok, path})}
+
+            :error ->
+              report_undecryptable_folder(id)
+              {:error, Map.put(memo, id, :error)}
+          end
+
+        {:error, memo} ->
+          {:error, Map.put(memo, id, :error)}
+      end
+    else
+      _ ->
+        report_undecryptable_folder(id)
+        {:error, Map.put(memo, id, :error)}
+    end
+  end
+
+  defp parent_path(%{parent_id: nil}, _by_id, _dek, memo, _depth), do: {:ok, nil, memo}
+
+  defp parent_path(%{parent_id: parent}, by_id, dek, memo, depth) do
+    case folder_row_path(parent, by_id, dek, memo, depth + 1) do
+      {:ok, path, memo} -> {:ok, path, memo}
+      {:error, memo} -> {:error, memo}
+    end
+  end
+
+  # Ids only: a folder name is plaintext once opened, and this one did not.
+  defp report_undecryptable_folder(id) do
+    Logger.error(
+      "folder row did not decrypt; its notes are left out of the listing",
+      Metadata.with_category(:error, :crypto, row_id: id)
+    )
+
+    :telemetry.execute([:engram, :folders, :row_undecryptable], %{count: 1}, %{})
   end
 
   @doc """
@@ -6364,6 +6544,15 @@ defmodule Engram.Notes do
     old_prefix = old_folder <> "/"
 
     cond do
+      # A folder cannot move into itself or its own subtree (it would become
+      # its own ancestor), by path or by row. Refused before anything is read
+      # or written: past the claim below, a refusal would leave it committed.
+      old_folder != new_folder and
+          Repo.with_tenant!(user.id, fn ->
+            Rows.check_move(user, vault.id, old_folder, new_folder)
+          end) != :ok ->
+        {:error, :invalid_path}
+
       # No-op rename: same folder. Skip the target conflict check so the
       # call is idempotent rather than colliding with itself.
       old_folder == new_folder ->
@@ -6423,11 +6612,14 @@ defmodule Engram.Notes do
   end
 
   # Fetch + decrypt the live rows in `folders` or under them, at any depth,
-  # for a folder cascade (rename, move, delete). Plaintext `folder` is gone
-  # (Phase B.3), so the prefix match runs on decrypted folders: but on ONE
-  # row per distinct folder_hmac (grouped in Postgres), and then only the
-  # rows in the matching folders are fetched, by the folder_hmac index. A
-  # rename used to fetch and decrypt every row of the vault.
+  # for a folder cascade (rename, move, delete). The folders are found by their
+  # rows (`Folders.Rows.subtree_refs/3`: a walk over folder rows, no decrypt) and
+  # the notes by `folder_ref_id`; folder markers have no reference and join on
+  # the row's path hash. Only notes the rows cannot vouch for (`unresolved_hmacs/4`:
+  # no reference, because the previous release made their folder) still go
+  # through a decrypt of one envelope per distinct folder, and in steady state
+  # there are none. The final `folder_in?` filter keeps the stored path
+  # authoritative: a reference only narrows what is read.
   # Markers hydrate their single folder envelope; real notes go through the
   # parallel batch decryptor. Always meta-projected (#863): callers only need
   # path/folder/kind; content decrypt is targeted per-id where actually
@@ -6435,16 +6627,40 @@ defmodule Engram.Notes do
   defp fetch_decrypted_live_rows(user, vault, folders) do
     {:ok, dek} = Crypto.get_dek(user)
 
-    hmacs = folder_hmacs_under(user, vault, folders, dek)
+    {refs, stray} =
+      Repo.with_tenant!(user.id, fn ->
+        {Rows.subtree_refs(user, vault.id, folders), raw_unresolved_rows(user, vault)}
+      end)
 
+    ids = Enum.map(refs, & &1.id)
+    row_hmacs = for %{full_path_hmac: h} when is_binary(h) <- refs, do: h
+    stray_hmacs = unresolved_hmacs(stray, folders, dek)
+
+    # One indexed read per kind of evidence (not one OR: each arm then has its
+    # own index, `notes_folder_ref` for the references), skipped when empty.
     rows =
       Repo.with_tenant!(user.id, fn ->
-        Repo.all(
-          from(n in scoped_live(user, vault),
-            where: ^Keys.in_any(:folder, hmacs),
-            select: struct(n, @note_meta_fields)
-          )
-        )
+        live = from(n in scoped_live(user, vault), select: struct(n, @note_meta_fields))
+
+        by_ref = if ids == [], do: [], else: Repo.all(where(live, [n], n.folder_ref_id in ^ids))
+
+        markers =
+          if row_hmacs == [],
+            do: [],
+            else:
+              Repo.all(
+                from(n in live,
+                  where: n.kind == "folder",
+                  where: ^Keys.in_any(:folder, row_hmacs)
+                )
+              )
+
+        strays =
+          if stray_hmacs == [],
+            do: [],
+            else: Repo.all(from(n in live, where: ^Keys.in_any(:folder, stray_hmacs)))
+
+        Enum.uniq_by(by_ref ++ markers ++ strays, & &1.id)
       end)
 
     # Marker rows have nil path_ciphertext, so the standard decrypt path
@@ -6456,26 +6672,63 @@ defmodule Engram.Notes do
     |> Enum.filter(&folder_in?(&1.folder || "", folders))
   end
 
-  # The folder_hmacs of the vault's live rows whose folder is one of
-  # `folders` or under one. Every folder_hmac, not just this filter key's: a
-  # filter-key rotation leaves rows with another hmac for the same folder.
-  defp folder_hmacs_under(user, vault, folders, dek) do
-    Repo.with_tenant!(user.id, fn ->
-      Repo.all(
-        from(n in scoped_live(user, vault),
-          group_by: n.folder_hmac,
-          select:
-            {n.folder_hmac,
-             fragment(
-               "any_value(ROW(?, ?, ?, ?))",
-               n.id,
-               n.dek_version,
-               n.folder_ciphertext,
-               n.folder_nonce
-             )}
-        )
+  # The live folder row a note's `folder_ref_id` names; for `exists/1` on a query
+  # whose notes binding is named `:n`.
+  defp live_folder_ref do
+    from(f in Engram.Folders.Folder,
+      where: f.id == parent_as(:n).folder_ref_id and is_nil(f.deleted_at)
+    )
+  end
+
+  # One representative row per folder hash among the live rows the folder rows
+  # cannot vouch for, with no decrypt:
+  #   * NOTES with no `folder_ref_id` that are not at the root. The previous
+  #     release filed them into a folder that had no row. The reference is NULL
+  #     for a root note too, so the stored folder hash tells them apart.
+  #   * folder MARKERS with no live row at their path (markers never carry a
+  #     reference; the row, if there is one, is found by the path hash).
+  defp raw_unresolved_rows(user, vault) do
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+    root = Crypto.hmac_field(filter_key, "")
+
+    live_row =
+      from(f in Engram.Folders.Folder,
+        where:
+          f.vault_id == parent_as(:n).vault_id and f.full_path_hmac == parent_as(:n).folder_hmac and
+            is_nil(f.deleted_at)
       )
-    end)
+
+    # A reference to a deleted or missing row vouches for nothing either (an
+    # undo that could not revive the row, a write racing a delete).
+    live_ref = live_folder_ref()
+
+    Repo.all(
+      from(n in scoped_live(user, vault),
+        as: :n,
+        where: not is_nil(n.folder_hmac),
+        where:
+          (n.kind == "note" and n.folder_hmac != ^root and
+             (is_nil(n.folder_ref_id) or not exists(live_ref))) or
+            (n.kind == "folder" and not exists(live_row)),
+        group_by: n.folder_hmac,
+        select:
+          {n.folder_hmac,
+           fragment(
+             "any_value(ROW(?, ?, ?, ?))",
+             n.id,
+             n.dek_version,
+             n.folder_ciphertext,
+             n.folder_nonce
+           )}
+      )
+    )
+  end
+
+  # The folder hashes, from `raw_unresolved_rows/2`, whose folder is one of
+  # `folders` or under one. Every hash, not just this filter key's: a filter-key
+  # rotation leaves rows with another hash for the same folder.
+  defp unresolved_hmacs(rows, folders, dek) do
+    rows
     |> Enum.filter(fn {_hmac, {id, dv, ct, nonce}} ->
       # A record's fields skip Ecto's type casting, so the uuid is raw bytes.
       aad = row_aad(:notes, :folder, Ecto.UUID.load!(id), dv)
@@ -6681,6 +6934,27 @@ defmodule Engram.Notes do
               Repo.with_tenant(user.id, fn ->
                 seq = Engram.Vaults.next_seq!(vault.id)
 
+                # Folder rows first: the renamed subtree keeps its rows (and
+                # ids) under the new path hashes, so the trigger on the notes
+                # update below resolves every note straight back to its own
+                # folder. Descendant FOLDERS only; the notes join by id.
+                # The row-level move guard runs again here, in the write
+                # transaction: a concurrent move can make it refuse after the
+                # check at the top of this function passed. Throwing rolls the
+                # transaction back; the claim already committed is reported
+                # below, like any other failure past it.
+                case Rows.rename(user, vault.id, old_folder, new_folder) do
+                  :ok -> :ok
+                  {:error, reason} -> throw({:rename_refused, reason})
+                end
+
+                {:ok, _} =
+                  Rows.ensure_all(
+                    user,
+                    vault.id,
+                    Enum.map(updates, fn {_n, _old, _new, folder, _t} -> folder end)
+                  )
+
                 # Batched write side: the old shape issued one update_all PER NOTE
                 # (each row carries its own re-encrypted envelopes, so a plain
                 # update_all can't express it). Partition rows by the column set
@@ -6825,6 +7099,10 @@ defmodule Engram.Notes do
             e ->
               _ = orphan_claim(user, vault, length(claims), e)
               reraise e, __STACKTRACE__
+          catch
+            {:rename_refused, reason} ->
+              _ = orphan_claim(user, vault, length(claims), reason)
+              {:error, reason}
           end
       end
     end
@@ -7351,7 +7629,7 @@ defmodule Engram.Notes do
               not is_nil(n.deleted_at)
         )
         |> Repo.all()
-        |> Map.new(&{&1.id, restore_one(user, &1)})
+        |> restore_rows(user, vault)
         |> tap(&enqueue_restored_jobs(user, &1))
       end)
 
@@ -7381,10 +7659,34 @@ defmodule Engram.Notes do
     ContentCommit.enqueue_jobs_bulk(entries, user.id)
   end
 
-  defp restore_one(user, tomb) do
+  # Decrypt the whole chunk, resolve its distinct folders ONCE (vault seq lock
+  # first, outside the per-row savepoints, so a skipped row cannot take a
+  # folder row with it), then write each row against that map.
+  defp restore_rows(tombs, user, vault) do
+    decrypted = Map.new(tombs, &{&1.id, decrypt_tomb(user, &1)})
+
+    folders =
+      for {_id, {:ok, prior}} <- decrypted, uniq: true, do: Helpers.extract_folder(prior.path)
+
+    refs =
+      if folders == [] do
+        %{}
+      else
+        :ok = Engram.Vaults.lock_seq!(vault.id)
+        {:ok, refs} = Rows.ensure_all(user, vault.id, folders)
+        refs
+      end
+
+    Map.new(decrypted, fn
+      {id, {:ok, prior}} -> {id, restore_decrypted(user, prior, refs)}
+      {id, skip} -> {id, skip}
+    end)
+  end
+
+  defp decrypt_tomb(user, tomb) do
     case Crypto.maybe_decrypt_note_fields(tomb, user) do
       {:ok, prior} ->
-        restore_decrypted(user, prior)
+        {:ok, prior}
 
       {:error, reason} ->
         DecryptFailure.log("decrypt_failed", reason, user_id: user.id, note_id: tomb.id)
@@ -7392,7 +7694,7 @@ defmodule Engram.Notes do
     end
   end
 
-  defp restore_decrypted(user, prior) do
+  defp restore_decrypted(user, prior, refs) do
     base_attrs = %{
       content: prior.content,
       title: prior.title,
@@ -7406,8 +7708,16 @@ defmodule Engram.Notes do
     # `mode: :savepoint`: a unique violation (a live note took the path after
     # the plan) rolls back this row only. Without it Postgres aborts the whole
     # chunk transaction and the next statement raises 25P02.
-    case move_note(prior, base_attrs, user, prior.path, folder, "restore", false,
-           mode: :savepoint
+    case move_note(
+           prior,
+           base_attrs,
+           user,
+           prior.path,
+           folder,
+           "restore",
+           false,
+           mode: :savepoint,
+           folder_refs: refs
          ) do
       {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
         {:ok, decrypt_or_raise!(updated, user)}
@@ -7531,10 +7841,28 @@ defmodule Engram.Notes do
   def resolve_folder_markers(user, vault, marker_ids) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, dek} <- Crypto.get_dek(user) do
+      # One read for every valid id (not one per marker), ids checked in
+      # order; a malformed id is "not found", like any other missing one.
+      cast = Map.new(marker_ids, &{&1, Ecto.UUID.cast(&1)})
+      valid = for {_id, {:ok, uuid}} <- cast, do: uuid
+
+      {:ok, found} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(
+            from(n in scoped_live(user, vault),
+              where: n.id in ^valid and n.kind == "folder"
+            )
+          )
+        end)
+
+      by_id = Map.new(found, &{&1.id, &1})
+
       Enum.reduce_while(marker_ids, {:ok, []}, fn id, {:ok, acc} ->
-        case get_folder_marker_by_id(user, vault, id) do
-          {:ok, marker} -> {:cont, {:ok, [hydrate_folder_marker(marker, dek).folder | acc]}}
-          {:error, :not_found} -> {:halt, {:error, {:not_found, id}}}
+        with {:ok, uuid} <- cast[id],
+             {:ok, marker} <- Map.fetch(by_id, uuid) do
+          {:cont, {:ok, [hydrate_folder_marker(marker, dek).folder | acc]}}
+        else
+          _ -> {:halt, {:error, {:not_found, id}}}
         end
       end)
     end
@@ -7745,12 +8073,14 @@ defmodule Engram.Notes do
               tf -> tf <> "/" <> leaf
             end
 
-          # rename_folder_gated's only error is :conflict — the batch entry
+          # rename_folder_gated's errors are :conflict and (unreachable here, the
+          # batch has its own :cycle guard above) :invalid_path — the batch entry
           # point already ran ensure_user_dek, so rename_folder/4's wider
           # error surface can't arise here (dialyzer proves the coverage).
           case rename_folder_gated(user, vault, source_folder, new_folder, rows) do
             {:ok, _count} -> {:ok, {source_folder, new_folder}}
             {:error, :conflict} -> {:error, :conflict}
+            {:error, :invalid_path} -> {:error, :cycle}
           end
         end
 

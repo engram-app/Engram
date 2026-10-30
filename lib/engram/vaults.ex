@@ -102,11 +102,41 @@ defmodule Engram.Vaults do
   before locking content rows (see LOCK ORDER above). Same contract: inside
   the caller's `Repo.with_tenant/2` transaction.
   """
-  def lock_seq!(vault_id) do
-    %{num_rows: 1} =
-      Repo.query!("SELECT 1 FROM vaults WHERE id = $1 FOR NO KEY UPDATE", [
-        Ecto.UUID.dump!(vault_id)
-      ])
+  def lock_seq!(vault_id), do: :ok = lock_seq(vault_id)
+
+  @doc """
+  `lock_seq!/1` for a caller that may not own the vault: `:none` (nothing
+  locked) when the row is not visible to the tenant, instead of raising.
+  """
+  @spec lock_seq(Ecto.UUID.t()) :: :ok | :none
+  def lock_seq(vault_id) do
+    case Repo.query!("SELECT 1 FROM vaults WHERE id = $1 FOR NO KEY UPDATE", [
+           Ecto.UUID.dump!(vault_id)
+         ]) do
+      %{num_rows: 1} -> :ok
+      %{num_rows: 0} -> :none
+    end
+  end
+
+  @doc """
+  Takes `FOR KEY SHARE NOWAIT` on every vault row of `user_id`, in id order, or
+  raises `Postgrex.Error` (`:lock_not_available`) at once when one is held.
+
+  For a per-user background sweep that inserts rows referencing `vaults`. An
+  account delete deletes the vault rows first and the user row second
+  (`Accounts.Lifecycle.hard_delete/2`); a sweep that took the user row first
+  and the vault row second is the opposite order, which Postgres resolves by
+  killing the delete (#2339). Taking the vaults first puts the sweep in the
+  delete's order: it never waits on a delete, and a delete that starts after
+  waits for the sweep's transaction. Inside the caller's transaction, on the
+  repo that will write.
+  """
+  @spec lock_user_vaults_nowait!(module(), Ecto.UUID.t()) :: :ok
+  def lock_user_vaults_nowait!(repo, user_id) do
+    repo.query!(
+      "SELECT id FROM vaults WHERE user_id = $1 ORDER BY id FOR KEY SHARE NOWAIT",
+      [Ecto.UUID.dump!(user_id)]
+    )
 
     :ok
   end
