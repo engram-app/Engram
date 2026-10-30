@@ -464,6 +464,59 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
       assert wakes(user) == []
     end
 
+    # Review H2: a wake reads one page (500); a full page used to end the
+    # chain, leaving the rest for the 3-hour backstop.
+    test "a full page queues the next page's wake", %{user: user, vault: vault} do
+      Application.put_env(:engram, :wake_budget_page, 2)
+      on_exit(fn -> Application.delete_env(:engram, :wake_budget_page) end)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+
+      notes =
+        for i <- 1..3 do
+          note =
+            Engram.Fixtures.insert_note!(user, vault, %{path: "P#{i}.md", content: "# P\n\n#{i}"})
+
+          park!(note, DateTime.add(DateTime.utc_now(), i, :second), 10)
+          note
+        end
+
+      assert :ok = perform_job(WakeBudgetParked, %{user_id: user.id})
+      assert Enum.count(notes, &reload(&1).embed_budget_parked) == 1
+      assert [next] = wakes(user)
+      assert_near(next.scheduled_at, DateTime.add(DateTime.utc_now(), 60, :second))
+
+      assert :ok = perform_job(WakeBudgetParked, %{user_id: user.id})
+      refute Enum.any?(notes, &reload(&1).embed_budget_parked)
+    end
+
+    # Review L3: nothing parked can ever fit a tiny bucket; no 60 s loop.
+    test "a need above the whole bucket schedules no wake", %{user: user, vault: vault} do
+      insert(:user_limit_override, user: user, key: "embed_token_bucket", value: %{"v" => 100})
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "T.md", content: "# T\n\nwords"})
+      park!(note, DateTime.utc_now(), 1_000, 600)
+
+      assert :ok = perform_job(WakeBudgetParked, %{user_id: user.id})
+      assert reload(note).embed_budget_parked == true
+      assert wakes(user) == []
+    end
+
+    # Review L8: the backstop's self-heal. A parked user with no scheduled
+    # wake (a lost job, a park by the previous release) gets one, even on an
+    # empty bucket.
+    test "an empty bucket with no pending wake gets one from the backstop sweep",
+         %{user: user, vault: vault} do
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "H.md", content: "# H\n\nwords"})
+      park!(note, DateTime.utc_now(), 1_000)
+      set_bucket(user.id, 0)
+      assert wakes(user) == []
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+
+      assert reload(note).embed_budget_parked == true
+      assert [wake] = wakes(user)
+      assert DateTime.compare(wake.scheduled_at, DateTime.utc_now()) == :gt
+    end
+
     test "two parks keep one wake, at the earlier time", %{user: user} do
       now = DateTime.utc_now()
       later = DateTime.add(now, 3_600, :second)

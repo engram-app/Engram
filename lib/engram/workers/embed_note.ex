@@ -414,7 +414,7 @@ defmodule Engram.Workers.EmbedNote do
   #
   # Queued behind the parked backlog: while another note of this user waits on
   # the bucket, a new pass spends nothing (`queue_blocked?/1`) and its new
-  # chunks join the queue keyword-only; ReconcileEmbeddings decides who wakes.
+  # chunks join the queue keyword-only; WakeBudgetParked decides who wakes.
   # A woken head note spends at most its `:budget_cap`. A refused or
   # partly-fitting pass keeps every dense vector the note already has
   # (`Indexing` re-plans only the new chunks).
@@ -807,7 +807,7 @@ defmodule Engram.Workers.EmbedNote do
             set: [embed_retry_after: retry_after, embed_budget_parked: nil]
           )
 
-        _ = if count > 0, do: {:ok, _} = Oban.insert(retry_job(note, retry_after))
+        _ = if count > 0, do: :ok = insert_retry(note, retry_after)
         count
       end)
 
@@ -827,15 +827,27 @@ defmodule Engram.Workers.EmbedNote do
     :ok
   end
 
-  # Unique per note among QUEUED jobs, not the executing one that is parking
-  # it (the worker's `unique` counts `executing`, which would drop the retry).
-  # A queued job (an edit's) already covers the note.
-  defp retry_job(note, retry_after) do
-    new(%{note_id: note.id, user_id: note.user_id},
-      scheduled_at: retry_after,
-      priority: backfill_priority(),
-      unique: [period: :infinity, keys: [:note_id], states: ~w(available scheduled retryable)a]
-    )
+  # A queued job (an edit's) already covers the note. The check is a plain
+  # read and the insert a plain INSERT: a unique insert would hold an
+  # advisory lock to the end of the park's transaction, and the worker's
+  # `unique` counts the executing job that is parking the note.
+  defp insert_retry(note, retry_after) do
+    case Jobs.reject_pending(__MODULE__, [note.id], executing: false) do
+      [] ->
+        :ok
+
+      [_] ->
+        {:ok, _job} =
+          Oban.insert(
+            new(%{note_id: note.id, user_id: note.user_id},
+              scheduled_at: retry_after,
+              priority: backfill_priority(),
+              unique: false
+            )
+          )
+
+        :ok
+    end
   end
 
   defp run_embed(note, user, vault, old_path_hmac_b64, opts) do
@@ -1074,7 +1086,8 @@ defmodule Engram.Workers.EmbedNote do
   # the Free bucket queue) or :too_long (an input over the model's window,
   # parked until the content changes).
   # `model`: the doc model the pass embedded with, stamped on a dense pass.
-  # Returns `:parked` when it parked the note on the bucket, else `:ok`.
+  # Returns `{:parked, need, next}` when it parked the note on the bucket,
+  # else `:ok`.
   defp stamp_embed_hash(
          note,
          dense?,

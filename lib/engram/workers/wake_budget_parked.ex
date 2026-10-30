@@ -41,7 +41,7 @@ defmodule Engram.Workers.WakeBudgetParked do
   alias Engram.UsageMeters
   alias Engram.Workers.EmbedNote
 
-  # Parked notes read per wake.
+  # Parked notes read per wake (`:wake_budget_page` overrides it in tests).
   @wake_page 500
 
   # A parked note's next chunk when its park did not record one.
@@ -92,13 +92,13 @@ defmodule Engram.Workers.WakeBudgetParked do
   end
 
   defp wake(user, budget, backoff_until) do
-    {woken, left, waiting} =
+    {woken, left, waiting, full_page?} =
       Repo.with_tenant!(user.id, fn ->
         candidates =
           from(n in IndexVersions.live_notes(),
             where: n.embed_budget_parked == true,
             order_by: [asc_nulls_last: n.embed_budget_parked_at, asc: n.id],
-            limit: @wake_page,
+            limit: ^page_size(),
             select: {n.id, n.embed_budget_need, n.embed_budget_next}
           )
           |> Repo.all()
@@ -113,7 +113,8 @@ defmodule Engram.Workers.WakeBudgetParked do
             )
           end
 
-        {woken, left, Enum.reject(candidates, &List.keymember?(woken, elem(&1, 0), 0))}
+        waiting = Enum.reject(candidates, &List.keymember?(woken, elem(&1, 0), 0))
+        {woken, left, waiting, length(candidates) == page_size()}
       end)
 
     caps = Map.new(woken)
@@ -129,8 +130,14 @@ defmodule Engram.Workers.WakeBudgetParked do
         end)
       )
 
-    reschedule(user, left, waiting)
+    # A full page may hide more parked notes past it: the next page goes
+    # next, whatever the bucket (an upgrade wakes a backlog in pages).
+    if full_page?,
+      do: schedule(user.id, DateTime.add(DateTime.utc_now(), @next_page_seconds, :second)),
+      else: reschedule(user, left, waiting)
   end
+
+  defp page_size, do: Application.get_env(:engram, :wake_budget_page, @wake_page)
 
   defp backoff_until,
     do:
@@ -151,8 +158,17 @@ defmodule Engram.Workers.WakeBudgetParked do
     need = Enum.min([head_next || @unknown_next_chunk | Enum.map(waiting, &(elem(&1, 1) || 1))])
 
     case capacity(user) do
-      nil -> :ok
-      cap -> schedule_for(user.id, need, cap, left)
+      nil ->
+        :ok
+
+      # Nothing parked can ever fit (every need and the oldest's next chunk
+      # exceed the whole bucket, e.g. a tiny override): no clock to wait
+      # for. An edit (a new need) or a raised cap re-parks and reschedules.
+      cap when need > cap ->
+        :ok
+
+      cap ->
+        schedule_for(user.id, need, cap, left)
     end
   end
 
@@ -171,10 +187,12 @@ defmodule Engram.Workers.WakeBudgetParked do
 
   defp pending?(user_id), do: Repo.exists?(pending_query(user_id))
 
+  # Not started (`Jobs.pending_states/0`): a running wake schedules its own
+  # successor.
   defp pending_query(user_id) do
     from(j in Oban.Job,
       where:
-        j.worker == ^inspect(__MODULE__) and j.state in ["scheduled", "available"] and
+        j.worker == ^inspect(__MODULE__) and j.state in ^Engram.Jobs.pending_states() and
           fragment("? @> ?", j.args, type(^%{"user_id" => user_id}, :map))
     )
   end
