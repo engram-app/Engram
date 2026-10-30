@@ -489,6 +489,29 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
       refute Enum.any?(notes, &reload(&1).embed_budget_parked)
     end
 
+    # Delta review D1: a full page that woke nothing waits for the bucket,
+    # not 60 s, or a Free backlog past a page re-reads it every minute.
+    test "a full page on an empty Free bucket waits for the refill, not 60 s",
+         %{user: user, vault: vault} do
+      Application.put_env(:engram, :wake_budget_page, 2)
+      on_exit(fn -> Application.delete_env(:engram, :wake_budget_page) end)
+
+      for i <- 1..3 do
+        note =
+          Engram.Fixtures.insert_note!(user, vault, %{path: "F#{i}.md", content: "# F\n\n#{i}"})
+
+        park!(note, DateTime.add(DateTime.utc_now(), i, :second), 1_000)
+      end
+
+      set_bucket(user.id, 0)
+      assert :ok = perform_job(WakeBudgetParked, %{user_id: user.id})
+
+      assert [next] = wakes(user)
+      now = DateTime.utc_now()
+      assert_near(next.scheduled_at, UsageMeters.bucket_ready_at(0, 512, bucket_cap(user), now))
+      assert DateTime.diff(next.scheduled_at, now) > 600
+    end
+
     # Review L3: nothing parked can ever fit a tiny bucket; no 60 s loop.
     test "a need above the whole bucket schedules no wake", %{user: user, vault: vault} do
       insert(:user_limit_override, user: user, key: "embed_token_bucket", value: %{"v" => 100})

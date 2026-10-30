@@ -131,8 +131,11 @@ defmodule Engram.Workers.WakeBudgetParked do
       )
 
     # A full page may hide more parked notes past it: the next page goes
-    # next, whatever the bucket (an upgrade wakes a backlog in pages).
-    if full_page?,
+    # next (an upgrade wakes a backlog in pages).
+    # Only when the whole page woke (or nothing is metered): a page that
+    # stayed parked waits for the bucket like any other, or a Free backlog
+    # past 500 notes would re-read 500 rows every minute.
+    if full_page? and (waiting == [] or left == :unmetered),
       do: schedule(user.id, DateTime.add(DateTime.utc_now(), @next_page_seconds, :second)),
       else: reschedule(user, left, waiting)
   end
