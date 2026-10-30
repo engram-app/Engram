@@ -22,11 +22,12 @@ defmodule Engram.Workers.RefreshKeywordVectors do
   `chunker_version`, which the chunker rebuild owns; see
   `docs/context/index-version-self-heal.md`.
 
-  Paced by `Engram.Rebuild.qdrant_pace/0` in every mode: a keyword bump
+  Paced by `Engram.Rebuild.qdrant_pace/1` in every mode: a keyword bump
   rewrites every point in place, and each rewrite leaves a dead copy until
   the optimizer vacuums the segment, so an unpaced sweep can fill the disk
-  into strict mode's write refusal. A gated job snoozes; no Voyage cost, so
-  no token bucket.
+  into strict mode's write refusal. A gated job snoozes, longer each time it
+  is gated again (`Engram.Rebuild.gate_snooze/1`); no Voyage cost, so no
+  token bucket.
 
   ## Kill switch
 
@@ -67,11 +68,11 @@ defmodule Engram.Workers.RefreshKeywordVectors do
   def timeout(_job), do: :timer.minutes(5)
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: args}) do
+  def perform(%Oban.Job{args: args} = job) do
     :ok = BackgroundPriority.demote()
 
     with :ok <- if(enabled?(), do: :ok, else: {:snooze, @paused_snooze}),
-         :ok <- Engram.Rebuild.qdrant_pace(),
+         :ok <- Engram.Rebuild.qdrant_pace(job),
          {:ok, note} <- Engram.Notes.fetch_note_for_worker_job(args),
          :ok <- RotationGate.check(note.user_id),
          user = Engram.Accounts.get_user!(note.user_id),

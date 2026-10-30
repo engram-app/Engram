@@ -82,9 +82,7 @@ defmodule Engram.Workers.EmbedNote do
         } = job
       ) do
     if transient_embed_error?(reason) do
-      (60 * Integer.pow(2, attempt - 1))
-      |> min(600)
-      |> Oban.Backoff.jitter(mode: :inc)
+      Jobs.capped_backoff(60, attempt - 1, 600, 0.1)
     else
       Oban.Worker.backoff(job)
     end

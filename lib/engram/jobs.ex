@@ -174,4 +174,21 @@ defmodule Engram.Jobs do
 
     Enum.map(rows, &elem(&1, 0))
   end
+
+  @doc """
+  The one capped exponential wait: `base` doubled `step` times, capped at
+  `cap`, plus up to a `jitter` share more (`Oban.Backoff.jitter/2`, only
+  ever adding). Used for Oban backoffs and growing snoozes alike.
+  """
+  @spec capped_backoff(pos_integer(), non_neg_integer(), pos_integer(), float()) ::
+          pos_integer()
+  def capped_backoff(base, step, cap, jitter \\ 0.0) do
+    # Past 2^32 every base is over any cap; bound it before Integer.pow.
+    (base * Integer.pow(2, min(step, 32)))
+    |> min(cap)
+    |> Oban.Backoff.jitter(mode: :inc, mult: jitter)
+    # Oban specs jitter/2 as number(); it returns an integer for an integer
+    # input, so this is a no-op that keeps our pos_integer() contract honest.
+    |> trunc()
+  end
 end

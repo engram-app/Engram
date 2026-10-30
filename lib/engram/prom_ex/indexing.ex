@@ -28,8 +28,8 @@ defmodule Engram.PromEx.Indexing do
       (aggregate with `max`, never `sum`). Absent until a dry run seals a
       budget. Spend past 1.1x the manifest is `spent > 1.1 * budget / 1.15`.
     * `engram_prom_ex_indexing_rebuild_gated_total{reason}`: rebuild and
-      keyword-refresh jobs snoozed by `Engram.Rebuild.pace/0` /
-      `qdrant_pace/0`: `tokens` (the maintenance bucket is spent for the
+      keyword-refresh jobs snoozed by `Engram.Rebuild.pace/1` /
+      `qdrant_pace/1`: `tokens` (the maintenance bucket is spent for the
       minute), `disk` (Qdrant volume over `:rebuild_max_disk_percent`),
       `queue` (update queue over 100), `optimizer` (not green or points
       awaiting optimization) or `unavailable` (collection info unreadable).

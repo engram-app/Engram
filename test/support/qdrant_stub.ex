@@ -29,7 +29,7 @@ defmodule Engram.QdrantStub do
 
   @doc """
   A green, caught-up collection (`GET /collections/{col}` and its
-  `/optimizations`), so `Engram.Rebuild.qdrant_pace/0` lets a paced worker
+  `/optimizations`), so `Engram.Rebuild.qdrant_pace/1` lets a paced worker
   (`RefreshKeywordVectors`) run. Route stubs win over a test's `:any` stub.
   """
   def stub_healthy(bypass, col \\ "engram_notes") do
