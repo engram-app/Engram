@@ -169,53 +169,43 @@ defmodule Engram.IndexingResparseTest do
     assert reloaded.keyword_version == Engram.KeywordIndex.version()
   end
 
-  # On a CURRENT chunker no rebuild is coming for a point that matches
-  # nothing, so stamping would hide it for good; staying unstamped keeps it in
-  # the sweep and logged.
-  test "unmatched points on a current-chunker note leave it unstamped", ctx do
-    %{user: user, note: note} = ctx
-    orphan_one_row(note)
+  # A resparse on unchanged content and chunker finds the same unmatched
+  # points every time, so leaving the note unstamped only re-selected it every
+  # backoff window: in prod 671 notes looped twice an hour, each pass
+  # rewriting the matched points and logging an oban-category warning. The
+  # note is stamped, logged once at info, and comes back only when something
+  # changes (an edit re-embeds it, a keyword bump re-selects it).
+  for {label, chunker_offset} <- [{"current", 0}, {"newer", 1}] do
+    test "unmatched points on a #{label}-chunker note stamp it so the sweep stops re-selecting it",
+         ctx do
+      %{user: user, note: note} = ctx
+      orphan_one_row(note)
 
-    Repo.update_all(
-      from(n in Notes.Note, where: n.id == ^note.id),
-      [set: [chunker_version: Markdown.chunker_version(), keyword_version: nil]],
-      skip_tenant_check: true
-    )
+      Repo.update_all(
+        from(n in Notes.Note, where: n.id == ^note.id),
+        [
+          set: [
+            chunker_version: Markdown.chunker_version() + unquote(chunker_offset),
+            keyword_version: nil
+          ]
+        ],
+        skip_tenant_check: true
+      )
 
-    assert :ok =
-             perform_job(Engram.Workers.RefreshKeywordVectors, %{
-               note_id: note.id,
-               user_id: user.id
-             })
+      log =
+        ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+          assert :ok =
+                   perform_job(Engram.Workers.RefreshKeywordVectors, %{
+                     note_id: note.id,
+                     user_id: user.id
+                   })
+        end)
 
-    assert is_nil(Repo.get!(Notes.Note, note.id, skip_tenant_check: true).keyword_version)
-  end
+      assert Repo.get!(Notes.Note, note.id, skip_tenant_check: true).keyword_version ==
+               elem(Engram.Rebuild.target_versions(), 1)
 
-  # After a rollback the stamp is NEWER than this build's chunker, and the
-  # rebuild ignores newer stamps (#2044): nothing else will fix these points,
-  # so they take the current-chunker branch, not stamp-and-skip.
-  test "unmatched points on a newer-chunker note leave it unstamped", ctx do
-    %{user: user, note: note} = ctx
-    orphan_one_row(note)
-
-    Repo.update_all(
-      from(n in Notes.Note, where: n.id == ^note.id),
-      [
-        set: [
-          chunker_version: Markdown.chunker_version() + 1,
-          keyword_version: nil
-        ]
-      ],
-      skip_tenant_check: true
-    )
-
-    assert :ok =
-             perform_job(Engram.Workers.RefreshKeywordVectors, %{
-               note_id: note.id,
-               user_id: user.id
-             })
-
-    assert is_nil(Repo.get!(Notes.Note, note.id, skip_tenant_check: true).keyword_version)
+      refute log =~ "resparse", "logged once at info, not as an oban warning"
+    end
   end
 
   # Rows written between #1595 (context_hmac) and #1606 (pass-type prefix)
@@ -253,6 +243,47 @@ defmodule Engram.IndexingResparseTest do
 
     assert Repo.get!(Notes.Note, note.id, skip_tenant_check: true).keyword_version ==
              Engram.KeywordIndex.version()
+  end
+
+  # A DEK rotation's flip (or a payload-drift heal) clears `keyword_version`
+  # while this job's resparse is in flight: those points were just encoded
+  # under the retired filter key. Stamping over the NULL would keep them on
+  # that key for good, so the stamp is compare-and-set, as EmbedNote's
+  # (#2216 L1).
+  test "a keyword_version clear that lands during the job is kept", ctx do
+    %{user: user, note: note} = ctx
+
+    Repo.update_all(from(n in Notes.Note, where: n.id == ^note.id), [set: [keyword_version: 1]],
+      skip_tenant_check: true
+    )
+
+    bypass = Bypass.open()
+    Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+    Engram.QdrantStub.stub_healthy(bypass)
+
+    Bypass.stub(bypass, :any, :any, fn conn ->
+      {:ok, _body, conn} = Plug.Conn.read_body(conn, length: 50_000_000)
+
+      if String.ends_with?(conn.request_path, "/points/vectors") do
+        Repo.update_all(
+          from(n in Notes.Note, where: n.id == ^note.id),
+          [set: [keyword_version: nil]],
+          skip_tenant_check: true
+        )
+      end
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, ~s({"result": true, "status": "ok"}))
+    end)
+
+    assert :ok =
+             perform_job(Engram.Workers.RefreshKeywordVectors, %{
+               note_id: note.id,
+               user_id: user.id
+             })
+
+    assert is_nil(Repo.get!(Notes.Note, note.id, skip_tenant_check: true).keyword_version)
   end
 
   # Before `INDEX_REBUILD=on` the target is the pin: stamping the build here
@@ -467,5 +498,34 @@ defmodule Engram.IndexingResparseTest do
 
     assert {:ok, count, unmatched} = Indexing.resparse_note(edited, user)
     assert count > 0 and count + unmatched == length(upserted)
+  end
+
+  # A rename moves the points (RepathNoteIndex) without re-indexing, so every
+  # row keeps a fingerprint built from the OLD path's context prefix. Offsets
+  # and the stored text checksum (`chunk_points.slice_sum`) still name the
+  # chunk. Before this, every point of a renamed note was unmatched (671
+  # notes in prod looped on the keyword sweep, #2345).
+  test "rename then resparse matches all points", ctx do
+    %{user: user, note: note, upserted: upserted} = ctx
+    renamed = %{note | path: "archive/Renamed plan.md"}
+
+    assert {:ok, count, 0} = Indexing.resparse_note(renamed, user)
+    assert count == length(upserted)
+  end
+
+  # Same offsets, different text: the checksum differs, so the point still
+  # holds another chunk's text and stays unmatched.
+  test "a renamed note whose text changed in place keeps that point unmatched", ctx do
+    %{user: user, note: note, upserted: upserted} = ctx
+    assert length(upserted) > 1
+
+    renamed = %{
+      note
+      | path: "archive/Renamed plan.md",
+        content: String.replace(note.content, "Deploying daily.", "Deploying never.")
+    }
+
+    assert {:ok, count, 1} = Indexing.resparse_note(renamed, user)
+    assert count == length(upserted) - 1
   end
 end

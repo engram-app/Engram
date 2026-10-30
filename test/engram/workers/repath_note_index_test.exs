@@ -75,6 +75,24 @@ defmodule Engram.Workers.RepathNoteIndexTest do
     assert_received {^ref, %{count: 2}, %{outcome: :ok}}
   end
 
+  # The keyword vector encodes the context prefix (folder > title), so the
+  # moved points still carry the old path's keywords until a resparse.
+  test "a rename that moves points enqueues a keyword refresh", %{bypass: bypass, note: note} do
+    stub_count(bypass, 2)
+
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
+      Plug.Conn.send_resp(conn, 200, ~s({"result": true}))
+    end)
+
+    assert :ok =
+             perform_job(RepathNoteIndex, %{note_id: note.id, old_path_hmac: Base.encode64(<<7>>)})
+
+    assert_enqueued(
+      worker: Engram.Workers.RefreshKeywordVectors,
+      args: %{note_id: note.id, user_id: note.user_id}
+    )
+  end
+
   test "enqueues EmbedNote when zero points and content not yet embedded", %{
     bypass: bypass,
     note: note
