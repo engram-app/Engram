@@ -11,6 +11,7 @@ traffic instead.
 | `server_probe.sh` | Server-side sampler (Oban, pg_stat_*, connections, logs, PromEx). Needs SSH to the staging host |
 | `grant.sql` | One-time limit grant for the sim's accounts |
 | `.github/workflows/staging-load.yml` | `workflow_dispatch` runner for `sim.py` |
+| `first_sync_proof.py` + `first_sync.ts` | Separate proof: a 30k-note + 2k-attachment first sync survives a SIGKILL of the staging container mid-sync (Engram#2306). `watch` from the dev box: throwaway user and API key via the release rpc (no Clerk secret), load on the runner VM over SSH, cleanup always. See the module docstring |
 
 ## Workload
 
