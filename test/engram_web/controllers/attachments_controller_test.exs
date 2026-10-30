@@ -888,6 +888,68 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert is_binary(a["id"])
     end
 
+    test "pages by cursor with no duplicate; an unpaged call gets page one plus next_cursor",
+         %{conn: conn} do
+      for n <- 1..3 do
+        conn
+        |> post("/api/attachments", %{
+          path: "pg/a#{n}.png",
+          content_base64: Base.encode64("PNG#{n}"),
+          mtime: 1_000.0
+        })
+        |> json_response(200)
+      end
+
+      page1 = conn |> get("/api/attachments", %{limit: 2}) |> json_response(200)
+      assert length(page1["attachments"]) == 2
+      assert is_binary(page1["next_cursor"])
+      assert page1["truncated"] == true
+
+      page2 =
+        conn
+        |> get("/api/attachments", %{limit: 2, cursor: page1["next_cursor"]})
+        |> json_response(200)
+
+      assert length(page2["attachments"]) == 1
+      assert page2["next_cursor"] == nil
+      assert page2["truncated"] == false
+
+      both = page1["attachments"] ++ page2["attachments"]
+      ids = Enum.map(both, & &1["id"])
+      assert ids == Enum.sort(ids), "pages are ordered by id"
+
+      paths = Enum.map(both, & &1["path"])
+      assert Enum.sort(paths) == ["pg/a1.png", "pg/a2.png", "pg/a3.png"]
+
+      unpaged = conn |> get("/api/attachments") |> json_response(200)
+      assert length(unpaged["attachments"]) == 3 and unpaged["next_cursor"] == nil
+    end
+
+    test "a forged cursor is a 400, and a cursor from another tenant is refused",
+         %{conn: conn, user: user, vault: vault} do
+      for n <- 1..2 do
+        conn
+        |> post("/api/attachments", %{
+          path: "pg/a#{n}.png",
+          content_base64: Base.encode64("PNG#{n}"),
+          mtime: 1_000.0
+        })
+        |> json_response(200)
+      end
+
+      assert conn |> get("/api/attachments", %{cursor: "nope"}) |> json_response(400) ==
+               %{"error" => "invalid_cursor"}
+
+      {:ok, %{next_cursor: cursor}} = Attachments.list_attachments_page(user, vault, limit: 1)
+      assert is_binary(cursor)
+
+      other = insert(:user)
+      other_vault = insert(:vault, user: other, is_default: true)
+
+      assert {:error, :invalid_cursor} =
+               Attachments.list_attachments_page(other, other_vault, cursor: cursor)
+    end
+
     test "returns empty list for a vault with no attachments", %{conn: conn} do
       resp = conn |> get("/api/attachments") |> json_response(200)
       assert resp["attachments"] == []

@@ -10,6 +10,7 @@ defmodule Engram.Attachments do
   """
 
   import Ecto.Query
+  import Engram.Pager, only: [keyset_gt: 4]
 
   alias Engram.Attachments.Attachment
   alias Engram.Attachments.BulkUpdate
@@ -23,6 +24,7 @@ defmodule Engram.Attachments do
   alias Engram.Logger.Metadata
   alias Engram.Notes.Enqueue
   alias Engram.Notes.PathSanitizer
+  alias Engram.Pager
   alias Engram.Repo
   alias Engram.Storage
   alias Engram.Storage.MimeWhitelist
@@ -1757,6 +1759,43 @@ defmodule Engram.Attachments do
   end
 
   @doc """
+  One page of live attachment metadata, same shape as `list_attachments/2`.
+  Keyset-paged on `id` and decrypts only the page. Options: `:limit` (see
+  `Engram.Pager.limit/1`), `:cursor` (the previous page's `next_cursor`; none
+  means the first page). `next_cursor` is nil on the last page.
+  """
+  @spec list_attachments_page(map(), map(), keyword()) ::
+          {:ok, %{attachments: [map()], next_cursor: String.t() | nil}}
+          | {:error, :invalid_cursor | term()}
+  def list_attachments_page(user, vault, opts \\ []) do
+    user = fresh_user(user)
+    scope = Pager.scope(:attachments, user, vault)
+    limit = Pager.limit(opts[:limit])
+
+    with {:ok, after_id} <- Pager.decode(scope, opts[:cursor]) do
+      query =
+        from(a in scoped_live(user, vault),
+          order_by: [asc: a.id],
+          limit: ^(limit + 1),
+          select: struct(a, @tree_attachment_fields)
+        )
+
+      query = if after_id, do: where(query, [a], a.id > ^after_id), else: query
+
+      Repo.with_tenant(user.id, fn -> Repo.all(query) end)
+      |> unwrap_tenant()
+      |> case do
+        {:ok, rows} ->
+          {page, next_cursor} = Pager.paginate(rows, limit, scope, & &1.id)
+          {:ok, %{attachments: decrypt_tree_rows(page, user), next_cursor: next_cursor}}
+
+        err ->
+          err
+      end
+    end
+  end
+
+  @doc """
   Raw attachment rows for GET /vault/tree, projected to the columns
   `decrypt_tree_rows/2` (and every current caller of `list_attachments/2`)
   actually reads. MUST run inside the caller's `Repo.with_tenant/2` — pair
@@ -1962,7 +2001,7 @@ defmodule Engram.Attachments do
         # form is an index range on (vault_id, seq, id), so a page seeks to its
         # cursor instead of walking the feed from seq 0 (SeqFeedKeysetPlanTest).
         from(a in base,
-          where: fragment("(?, ?) > (?, ?)", a.seq, a.id, ^after_seq, type(^after_id, Ecto.UUID))
+          where: keyset_gt(a.seq, a.id, after_seq, after_id)
         )
       else
         from(a in base, where: a.seq > ^after_seq)

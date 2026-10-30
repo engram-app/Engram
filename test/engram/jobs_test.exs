@@ -13,6 +13,41 @@ defmodule Engram.JobsTest do
     |> Repo.update!()
   end
 
+  describe "pending_note_ids_for_vault/4" do
+    alias Engram.Workers.CheckpointNote
+
+    defp checkpoint!(vault_id, state) do
+      {:ok, job} =
+        %{
+          "user_id" => Ecto.UUID.generate(),
+          "vault_id" => vault_id,
+          "note_id" => Ecto.UUID.generate()
+        }
+        |> CheckpointNote.new()
+        |> Oban.insert()
+
+      job |> Ecto.Changeset.change(state: state) |> Repo.update!()
+    end
+
+    test "reads at most `limit` ids, only this vault's, only the asked states" do
+      vault_id = Ecto.UUID.generate()
+      for _ <- 1..5, do: checkpoint!(vault_id, "available")
+      checkpoint!(vault_id, "completed")
+      checkpoint!(Ecto.UUID.generate(), "available")
+
+      states = ~w(available executing retryable scheduled)
+      assert {ids, false} = Jobs.pending_note_ids_for_vault(CheckpointNote, vault_id, states)
+      assert length(ids) == 5
+
+      assert {first, true} = Jobs.pending_note_ids_for_vault(CheckpointNote, vault_id, states, 3)
+      assert length(first) == 3
+      # Stable subset: the same call returns the same ids.
+      assert {^first, true} = Jobs.pending_note_ids_for_vault(CheckpointNote, vault_id, states, 3)
+
+      assert {_, false} = Jobs.pending_note_ids_for_vault(CheckpointNote, vault_id, states, 5)
+    end
+  end
+
   describe "reject_pending/3" do
     test "drops ids with a pending job of that worker, keeps the rest" do
       [queued, running, done, fresh] = for _ <- 1..4, do: Ecto.UUID.generate()

@@ -27,7 +27,8 @@ defmodule EngramWeb.SyncControllerTest do
                "change_seq" => 0,
                "pending_crdt_updates" => 0,
                "pending_checkpoints" => 0,
-               "deferred_checkpoints" => 0
+               "deferred_checkpoints" => 0,
+               "checkpoints_capped" => false
              }
     end
 
@@ -65,6 +66,64 @@ defmodule EngramWeb.SyncControllerTest do
       assert body["pending_crdt_updates"] == 2
       assert body["pending_checkpoints"] == 1
       assert body["change_seq"] > 0
+    end
+
+    defp insert_checkpoint_jobs(user, vault, note_ids) do
+      now = DateTime.utc_now()
+
+      Engram.Repo.insert_all(
+        "oban_jobs",
+        for note_id <- note_ids do
+          %{
+            state: "available",
+            queue: "default",
+            worker: inspect(Engram.Workers.CheckpointNote),
+            args: %{"user_id" => user.id, "vault_id" => vault.id, "note_id" => note_id},
+            meta: %{},
+            errors: [],
+            tags: [],
+            attempt: 0,
+            max_attempts: 1,
+            priority: 0,
+            inserted_at: now,
+            scheduled_at: now
+          }
+        end
+      )
+    end
+
+    test "reads at most the cap and says so", %{conn: conn, user: user, vault: vault} do
+      insert_checkpoint_jobs(user, vault, for(_ <- 1..1_001, do: Ecto.UUID.generate()))
+
+      body = conn |> get("/api/sync/quiescence") |> json_response(200)
+      assert body["pending_checkpoints"] == 1_000
+      assert body["checkpoints_capped"] == true
+    end
+
+    # The false-quiet case: the capped subset is entirely deferred to live
+    # rooms while the one unread job is owed. Capped must never read as 0.
+    test "a capped read whose subset is all live rooms is not quiet", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      ids = for _ <- 1..1_001, do: Ecto.UUID.generate()
+      insert_checkpoint_jobs(user, vault, ids)
+
+      # A pid holds one global name, so each stand-in room is its own process.
+      rooms =
+        for id <- Enum.take(ids, 1_000) do
+          pid = spawn(fn -> Process.sleep(:infinity) end)
+          :yes = :global.register_name({:crdt_doc, id}, pid)
+          pid
+        end
+
+      on_exit(fn -> Enum.each(rooms, &Process.exit(&1, :kill)) end)
+
+      body = conn |> get("/api/sync/quiescence") |> json_response(200)
+      assert body["checkpoints_capped"] == true
+      assert body["pending_checkpoints"] >= 1
+      assert body["deferred_checkpoints"] == 1_000
     end
 
     # A checkpoint for a note with a live room snoozes until the room closes

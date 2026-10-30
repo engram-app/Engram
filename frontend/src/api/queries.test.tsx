@@ -11,6 +11,7 @@ import { CrdtOpError } from "./crdt-ops";
 import {
 	type Connection,
 	type Folder,
+	fetchAllFolderNotes,
 	type Note,
 	useAcceptTerms,
 	useAppBootstrap,
@@ -29,6 +30,7 @@ import {
 	useDeleteNote,
 	useDeleteVault,
 	useDuplicateNote,
+	useFolderNotes,
 	useMe,
 	useNote,
 	usePlanChangePreview,
@@ -2804,5 +2806,56 @@ describe("useUpdateConnectionAccess", () => {
 			result.current.mutateAsync({ connection: key, body: { default_access: "none" } }),
 		);
 		expect(api.patch).toHaveBeenCalledWith("/connections/pat/k1", { default_access: "none" });
+	});
+});
+
+describe("useFolderNotes", () => {
+	it("follows next_cursor so a folder over one page shows every note", async () => {
+		const n = (id: string) => ({ id, path: `Big/${id}.md`, title: id, tags: [] });
+		get
+			.mockResolvedValueOnce({ notes: [n("a"), n("b")], next_cursor: "c1" })
+			.mockResolvedValueOnce({ notes: [n("c")], next_cursor: null });
+
+		const { result } = renderHook(() => useFolderNotes("Big"), { wrapper });
+
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+		expect(result.current.data?.map((x) => x.id)).toEqual(["a", "b", "c"]);
+		expect(get).toHaveBeenNthCalledWith(1, "/folders/list?folder=Big", expect.anything());
+		expect(get).toHaveBeenNthCalledWith(2, "/folders/list?folder=Big&cursor=c1", expect.anything());
+	});
+
+	it("restores title order across pages (pages arrive id-ordered)", async () => {
+		const n = (id: string, title: string) => ({ id, path: `Big/${id}.md`, title, tags: [] });
+		get
+			.mockResolvedValueOnce({ notes: [n("1", "pear"), n("2", "apple")], next_cursor: "c1" })
+			.mockResolvedValueOnce({ notes: [n("3", "banana")], next_cursor: null });
+
+		const data = await fetchAllFolderNotes("Big");
+		expect(data.notes.map((x) => x.title)).toEqual(["apple", "banana", "pear"]);
+	});
+
+	it("stops with an error when the server repeats a cursor", async () => {
+		get.mockResolvedValue({ notes: [], next_cursor: "same" });
+		await expect(fetchAllFolderNotes("Big")).rejects.toThrow(/repeated a cursor/);
+		expect(get.mock.calls.length).toBeLessThan(5);
+	});
+
+	it("stops after the page cap even if every cursor is new", async () => {
+		let i = 0;
+		get.mockImplementation(async () => ({ notes: [], next_cursor: `c${i++}` }));
+		await expect(fetchAllFolderNotes("Big")).rejects.toThrow(/exceeded/);
+		expect(get.mock.calls.length).toBe(100);
+	});
+
+	it("passes the abort signal to every page request", async () => {
+		const ctl = new AbortController();
+		get
+			.mockResolvedValueOnce({ notes: [], next_cursor: "c1" })
+			.mockResolvedValueOnce({ notes: [], next_cursor: null });
+
+		await fetchAllFolderNotes("Big", ctl.signal);
+		for (const call of get.mock.calls) {
+			expect(call[1]).toEqual({ signal: ctl.signal });
+		}
 	});
 });

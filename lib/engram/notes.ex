@@ -5,6 +5,7 @@ defmodule Engram.Notes do
   """
 
   import Ecto.Query
+  import Engram.Pager, only: [keyset_gt: 4]
 
   alias Engram.Batch
   alias Engram.Billing
@@ -40,6 +41,7 @@ defmodule Engram.Notes do
     VaultScanCache
   }
 
+  alias Engram.Pager
   alias Engram.Repo
   alias Engram.Sync.Broadcast
   alias Engram.Telemetry
@@ -4955,7 +4957,7 @@ defmodule Engram.Notes do
         # form is an index range on (vault_id, seq, id), so a page seeks to its
         # cursor instead of walking the feed from seq 0 (SeqFeedKeysetPlanTest).
         from(n in base,
-          where: fragment("(?, ?) > (?, ?)", n.seq, n.id, ^after_seq, type(^after_id, Ecto.UUID))
+          where: keyset_gt(n.seq, n.id, after_seq, after_id)
         )
       else
         from(n in base, where: n.seq > ^after_seq)
@@ -6224,11 +6226,18 @@ defmodule Engram.Notes do
   end
 
   @doc """
-  Returns all non-deleted notes in a specific folder for a user.
-  Pass "" for root-level notes.
+  One page of the non-deleted notes directly in `folder` ("" = root), metadata
+  only. Keyset-paged on `id` (the title is encrypted, so SQL cannot order by
+  it); each page is sorted by title in BEAM. Options: `:limit` (see
+  `Engram.Pager.limit/1`), `:cursor` (a `next_cursor` from the previous page;
+  none means the first page). `next_cursor` is nil on the last page.
   """
-  @spec list_notes_in_folder(map(), map(), String.t()) :: {:ok, [Note.t()]}
-  def list_notes_in_folder(user, vault, folder) do
+  @spec list_notes_in_folder_page(map(), map(), String.t(), keyword()) ::
+          {:ok, %{notes: [Note.t()], next_cursor: String.t() | nil}}
+          | {:error, :invalid_cursor}
+  def list_notes_in_folder_page(user, vault, folder, opts \\ []) do
+    limit = Pager.limit(opts[:limit])
+
     # Phase B.2.6 — match by folder_hmac so the lookup survives B.3's drop of
     # the plaintext `folder` column. Both root ("") and named folders go
     # through the same HMAC equality check; the empty string has its own
@@ -6237,50 +6246,81 @@ defmodule Engram.Notes do
       {:ok, filter_key} ->
         target_hmac = Crypto.hmac_field(filter_key, folder)
 
-        # Metadata projection: every caller serializes summaries (path,
-        # title, tags, ...) — content is never returned, so don't fetch
-        # or decrypt it.
-        {:ok, notes} =
-          Repo.with_tenant(user.id, fn ->
-            Repo.all(
-              from(n in scoped_live(user, vault),
-                where: n.kind == "note",
-                where: ^Keys.eq(:folder, target_hmac),
-                order_by: [asc: n.id],
-                select: struct(n, @note_meta_fields)
-              )
-            )
-          end)
+        # The cursor is bound to this folder (a short hash of its HMAC, never
+        # the path): a cursor from folder A used on folder B would silently
+        # skip B's rows with a smaller id.
+        scope = Pager.scope({:folder_notes, binary_part(target_hmac, 0, 16)}, user, vault)
 
-        # Phase B.4: title is virtual — sort by decrypted title in BEAM
-        # since SQL can't order by encrypted columns deterministically.
-        decrypted = decrypt_or_raise!(notes, user)
-        {:ok, Enum.sort_by(decrypted, & &1.title)}
+        with {:ok, after_id} <- Pager.decode(scope, opts[:cursor]) do
+          # Metadata projection: every caller serializes summaries (path,
+          # title, tags, ...) — content is never returned, so don't fetch
+          # or decrypt it.
+          query =
+            from(n in scoped_live(user, vault),
+              where: n.kind == "note",
+              where: ^Keys.eq(:folder, target_hmac),
+              order_by: [asc: n.id],
+              limit: ^(limit + 1),
+              select: struct(n, @note_meta_fields)
+            )
+
+          query = if after_id, do: where(query, [n], n.id > ^after_id), else: query
+          {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
+          {page, next_cursor} = Pager.paginate(rows, limit, scope, & &1.id)
+
+          # Phase B.4: title is virtual — sort the page by decrypted title in
+          # BEAM since SQL can't order by encrypted columns. Pages themselves
+          # are id-ordered; a client wanting a global title order sorts the
+          # concatenated pages.
+          notes = page |> decrypt_or_raise!(user) |> Enum.sort_by(& &1.title)
+          {:ok, %{notes: notes, next_cursor: next_cursor}}
+        end
 
       {:error, :no_dek} ->
         # Mirrors the list_folders (B.2.2) defensive empty: no DEK = no
         # encrypted notes possible = empty result.
-        {:ok, []}
+        {:ok, %{notes: [], next_cursor: nil}}
     end
   end
 
   @doc """
-  Returns all non-deleted notes living directly under the folder identified
-  by `marker_id` (a folder-marker row's id). Id-keyed counterpart to
-  `list_notes_in_folder/3` — used by tree data loaders that already hold a
+  Every non-deleted note directly in `folder`, by draining
+  `list_notes_in_folder_page/4`. Unbounded: for callers that must act on the
+  whole folder (tests, repair). Request paths page instead.
+  """
+  @spec list_notes_in_folder(map(), map(), String.t()) :: {:ok, [Note.t()]}
+  def list_notes_in_folder(user, vault, folder) do
+    {:ok, notes} = drain_folder_pages(user, vault, folder, nil, [])
+    {:ok, Enum.sort_by(notes, & &1.title)}
+  end
+
+  defp drain_folder_pages(user, vault, folder, cursor, acc) do
+    {:ok, %{notes: notes, next_cursor: next}} =
+      list_notes_in_folder_page(user, vault, folder, cursor: cursor, limit: Batch.page_max())
+
+    acc = acc ++ notes
+    if next, do: drain_folder_pages(user, vault, folder, next, acc), else: {:ok, acc}
+  end
+
+  @doc """
+  One page (see `list_notes_in_folder_page/4`, same options) of the non-deleted
+  notes living directly under the folder identified by `marker_id` (a
+  folder-marker row's id). Id-keyed counterpart to
+  `list_notes_in_folder_page/4` — used by tree data loaders that already hold a
   marker id and shouldn't have to round-trip cleartext folder paths.
 
   Returns `{:error, :not_found}` when the id doesn't resolve to a live
   folder marker owned by `user`/`vault`.
   """
-  @spec list_folder_notes_by_id(map(), map(), String.t()) ::
-          {:ok, [Note.t()]} | {:error, :not_found}
-  def list_folder_notes_by_id(user, vault, marker_id) when is_binary(marker_id) do
+  @spec list_folder_notes_by_id(map(), map(), String.t(), keyword()) ::
+          {:ok, %{notes: [Note.t()], next_cursor: String.t() | nil}}
+          | {:error, :not_found | :invalid_cursor}
+  def list_folder_notes_by_id(user, vault, marker_id, opts \\ []) when is_binary(marker_id) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, marker} <- get_folder_marker_by_id(user, vault, marker_id),
          {:ok, dek} <- Crypto.get_dek(user) do
       hydrated = hydrate_folder_marker(marker, dek)
-      list_notes_in_folder(user, vault, hydrated.folder)
+      list_notes_in_folder_page(user, vault, hydrated.folder, opts)
     end
   end
 

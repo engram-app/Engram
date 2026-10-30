@@ -680,7 +680,8 @@ defmodule Engram.MCP.Tools do
           "an empty string for the vault root. Set recursive: true to list every " <>
           "descendant folder (with note counts) instead of just the direct ones. To see " <>
           "every folder in the vault with counts call list_folder with recursive: true " <>
-          "on the root. To find notes by content use search_notes.",
+          "on the root. Notes come in pages: when next_cursor is not null, call again with " <>
+          "that cursor for more. To find notes by content use search_notes.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -692,6 +693,16 @@ defmodule Engram.MCP.Tools do
             "type" => "boolean",
             "description" =>
               "List every descendant folder, not just direct subfolders. Defaults to false."
+          },
+          "cursor" => %{
+            "type" => "string",
+            "description" =>
+              "next_cursor from the previous call, to get the next page of notes. Omit for the first page. Keep following until next_cursor is null."
+          },
+          "limit" => %{
+            "type" => "integer",
+            "description" =>
+              "Notes per page. Defaults to #{Engram.Batch.page_default()}, at most #{Engram.Batch.page_max()}."
           }
         }
       },
@@ -699,6 +710,16 @@ defmodule Engram.MCP.Tools do
         "type" => "object",
         "properties" => %{
           "folder" => %{"type" => "string", "description" => ~s(Folder listed; "" is the root)},
+          "next_cursor" => %{
+            "type" => ["string", "null"],
+            "description" =>
+              "Pass as cursor to list the next page of notes; null on the last page. Attachments and subfolders are returned on the first page only."
+          },
+          "truncated" => %{
+            "type" => "boolean",
+            "description" =>
+              "True while more notes remain (next_cursor is not null): this page is not the whole folder."
+          },
           "notes" => %{
             "type" => "array",
             "items" => %{
@@ -742,7 +763,7 @@ defmodule Engram.MCP.Tools do
             }
           }
         },
-        "required" => ["folder", "notes", "attachments", "folders"]
+        "required" => ["folder", "notes", "attachments", "folders", "next_cursor", "truncated"]
       },
       handler: &Handlers.handle("list_folder", &1, &2, &3)
     }

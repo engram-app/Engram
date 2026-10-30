@@ -37,6 +37,7 @@ OWED = ("pushing", "pendingPushes", "queued", "flushing", "creating", "crdtOps")
 def _settled(server: dict, client: dict, caught_up: bool) -> bool:
     return (
         server["pending_checkpoints"] == 0
+        and not server.get("checkpoints_capped")
         and (not caught_up or client["catchupSeq"] >= server["change_seq"])
         and not client["pulling"]
         and all(client[k] == 0 for k in OWED)

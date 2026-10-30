@@ -529,13 +529,21 @@
         "readOnlyHint": true,
         "title": "List Folder Contents"
       },
-      "description": "List the notes, attachments, and subfolders directly inside one folder. Pass an empty string for the vault root. Set recursive: true to list every descendant folder (with note counts) instead of just the direct ones. To see every folder in the vault with counts call list_folder with recursive: true on the root. To find notes by content use search_notes.",
+      "description": "List the notes, attachments, and subfolders directly inside one folder. Pass an empty string for the vault root. Set recursive: true to list every descendant folder (with note counts) instead of just the direct ones. To see every folder in the vault with counts call list_folder with recursive: true on the root. Notes come in pages: when next_cursor is not null, call again with that cursor for more. To find notes by content use search_notes.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "cursor": {
+            "description": "next_cursor from the previous call, to get the next page of notes. Omit for the first page. Keep following until next_cursor is null.",
+            "type": "string"
+          },
           "folder": {
             "description": "Folder path (e.g. \"Health\") or \"\" for root. Defaults to root.",
             "type": "string"
+          },
+          "limit": {
+            "description": "Notes per page. Defaults to 200, at most 1000.",
+            "type": "integer"
           },
           "recursive": {
             "description": "List every descendant folder, not just direct subfolders. Defaults to false.",
@@ -593,6 +601,13 @@
             },
             "type": "array"
           },
+          "next_cursor": {
+            "description": "Pass as cursor to list the next page of notes; null on the last page. Attachments and subfolders are returned on the first page only.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "notes": {
             "items": {
               "properties": {
@@ -621,13 +636,19 @@
               "type": "object"
             },
             "type": "array"
+          },
+          "truncated": {
+            "description": "True while more notes remain (next_cursor is not null): this page is not the whole folder.",
+            "type": "boolean"
           }
         },
         "required": [
           "folder",
           "notes",
           "attachments",
-          "folders"
+          "folders",
+          "next_cursor",
+          "truncated"
         ],
         "type": "object"
       },

@@ -102,17 +102,28 @@ defmodule Engram.Jobs do
 
   @doc """
   The `note_id` arg of every `worker` job for `vault_id` in one of `states`
-  (Oban state names, e.g. `~w(available executing retryable)`).
+  (Oban state names, e.g. `~w(available executing retryable)`), as
+  `{ids, capped?}`. Reads at most `limit` ids (default
+  `Engram.Batch.quiescence_cap/0`), lowest job id first so the subset is
+  stable between calls; a storm backlog is 10k+ ids. `capped?` is true when
+  more existed than were returned: the caller must then treat the answer as
+  "not settled", because the unread jobs may be owed.
   """
-  @spec pending_note_ids_for_vault(module(), String.t(), [String.t()]) :: [String.t()]
-  def pending_note_ids_for_vault(worker, vault_id, states) do
-    from(j in Oban.Job,
-      where: j.worker == ^inspect(worker),
-      where: j.state in ^states,
-      where: fragment("? ->> 'vault_id'", j.args) == ^to_string(vault_id),
-      select: fragment("? ->> 'note_id'", j.args)
-    )
-    |> Repo.all()
+  @spec pending_note_ids_for_vault(module(), String.t(), [String.t()], pos_integer()) ::
+          {[String.t()], boolean()}
+  def pending_note_ids_for_vault(worker, vault_id, states, limit \\ Batch.quiescence_cap()) do
+    ids =
+      from(j in Oban.Job,
+        where: j.worker == ^inspect(worker),
+        where: j.state in ^states,
+        where: fragment("? ->> 'vault_id'", j.args) == ^to_string(vault_id),
+        order_by: [asc: j.id],
+        limit: ^(limit + 1),
+        select: fragment("? ->> 'note_id'", j.args)
+      )
+      |> Repo.all()
+
+    {Enum.take(ids, limit), length(ids) > limit}
   end
 
   @doc """

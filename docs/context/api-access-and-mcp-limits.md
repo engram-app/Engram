@@ -80,3 +80,15 @@ Removed in #1974: `EngramWeb.Plugs.RequireApiWriteEnabled`,
 `EnforceConnectionCap`, `caps.mcp_connections` / `caps.api_write_enabled` /
 `current_connections.mcp` in `/billing/status`, and the frontend upsells
 that read them.
+
+## Paged list endpoints
+`GET /api/folders/list`, `GET /api/folders/:id/notes`, `GET /api/attachments` and MCP
+`list_folder` return one keyset page (`Engram.Pager`) plus `next_cursor` and
+`truncated` (true while `next_cursor` is not null). Params: `cursor`, `limit`.
+Defaults: REST 500, MCP 200; hard max 1,000 (`Engram.Batch`). Rows come in **id order**,
+not title; a client that wants title order sorts the concatenated pages. A client that
+sends no cursor gets the first page only, so it must read `truncated`. Cursors are
+signed, bound to user, vault and (for folder notes) folder, and never expire. A bad
+cursor is `400 invalid_cursor`. MCP sends attachments and subfolders on page one only.
+`GET /api/sync/quiescence` reads at most `Batch.quiescence_cap` pending checkpoints; past
+it `checkpoints_capped` is true and `pending_checkpoints` is at least 1 (never "quiet").
