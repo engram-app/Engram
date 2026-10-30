@@ -71,6 +71,22 @@ defmodule Engram.MCP.Tools do
     }
   }
 
+  # Every tool whose success queues an embed returns these, through
+  # `Handlers.with_index_delay/2` (#2294): the note writes and restore_deleted.
+  # rename_note and rename_folder only re-path existing points, so they do not.
+  @index_delay_properties %{
+    "search_indexing_starts_in_seconds" => %{
+      "type" => "integer",
+      "description" =>
+        "At least this many seconds until indexing starts; search can lag further. " <>
+          "Use get_notes to read the note until search finds it"
+    },
+    "search_note" => %{
+      "type" => "string",
+      "description" => "When search will see this change; use get_notes until then"
+    }
+  }
+
   # MCP tool annotations, keyed by tool name. The Claude and ChatGPT app
   # directories reject a server without them, and clients use `readOnlyHint` to
   # skip the confirmation prompt. `destructive` = overwrites or removes content
@@ -1019,12 +1035,14 @@ defmodule Engram.MCP.Tools do
       },
       outputSchema: %{
         "type" => "object",
-        "properties" => %{
-          "path" => %{
-            "type" => "string",
-            "description" => "Where the note landed; the server picks the folder"
+        "properties" =>
+          %{
+            "path" => %{
+              "type" => "string",
+              "description" => "Where the note landed; the server picks the folder"
+            }
           }
-        },
+          |> Map.merge(@index_delay_properties),
         "required" => ["path"]
       },
       handler: &Handlers.handle("create_note", &1, &2, &3)
@@ -1063,7 +1081,7 @@ defmodule Engram.MCP.Tools do
       },
       outputSchema: %{
         "type" => "object",
-        "properties" => %{"path" => %{"type" => "string"}},
+        "properties" => %{"path" => %{"type" => "string"}} |> Map.merge(@index_delay_properties),
         "required" => ["path"]
       },
       handler: &Handlers.handle("write_note", &1, &2, &3)
@@ -1096,13 +1114,15 @@ defmodule Engram.MCP.Tools do
       },
       outputSchema: %{
         "type" => "object",
-        "properties" => %{
-          "path" => %{"type" => "string"},
-          "created" => %{
-            "type" => "boolean",
-            "description" => "true when the note did not exist and was created"
+        "properties" =>
+          %{
+            "path" => %{"type" => "string"},
+            "created" => %{
+              "type" => "boolean",
+              "description" => "true when the note did not exist and was created"
+            }
           }
-        },
+          |> Map.merge(@index_delay_properties),
         "required" => ["path", "created"]
       },
       handler: &Handlers.handle("append_to_note", &1, &2, &3)
@@ -1180,19 +1200,21 @@ defmodule Engram.MCP.Tools do
       },
       outputSchema: %{
         "type" => "object",
-        "properties" => %{
-          "path" => %{"type" => "string"},
-          "mode" => %{"type" => "string"},
-          "replacements" => %{
-            "type" => ["integer", "null"],
-            "description" => "replace_text: occurrences replaced; null for the section modes"
-          },
-          "heading" => %{
-            "type" => ["string", "null"],
-            "description" =>
-              "replace_section and insert_section: the heading edited; null for replace_text"
+        "properties" =>
+          %{
+            "path" => %{"type" => "string"},
+            "mode" => %{"type" => "string"},
+            "replacements" => %{
+              "type" => ["integer", "null"],
+              "description" => "replace_text: occurrences replaced; null for the section modes"
+            },
+            "heading" => %{
+              "type" => ["string", "null"],
+              "description" =>
+                "replace_section and insert_section: the heading edited; null for replace_text"
+            }
           }
-        },
+          |> Map.merge(@index_delay_properties),
         "required" => ["path", "mode"]
       },
       # Undocumented back-compat aliases for find/replace (Handlers.run_edit
@@ -1229,10 +1251,12 @@ defmodule Engram.MCP.Tools do
       },
       outputSchema: %{
         "type" => "object",
-        "properties" => %{
-          "path" => %{"type" => "string"},
-          "replacements" => %{"type" => "integer", "description" => "Occurrences replaced"}
-        },
+        "properties" =>
+          %{
+            "path" => %{"type" => "string"},
+            "replacements" => %{"type" => "integer", "description" => "Occurrences replaced"}
+          }
+          |> Map.merge(@index_delay_properties),
         "required" => ["path", "replacements"]
       },
       handler: &Handlers.handle("patch_note", &1, &2, &3)
@@ -1271,10 +1295,12 @@ defmodule Engram.MCP.Tools do
       },
       outputSchema: %{
         "type" => "object",
-        "properties" => %{
-          "path" => %{"type" => "string"},
-          "heading" => %{"type" => "string"}
-        },
+        "properties" =>
+          %{
+            "path" => %{"type" => "string"},
+            "heading" => %{"type" => "string"}
+          }
+          |> Map.merge(@index_delay_properties),
         "required" => ["path", "heading"]
       },
       handler: &Handlers.handle("update_section", &1, &2, &3)
@@ -1537,28 +1563,30 @@ defmodule Engram.MCP.Tools do
       },
       outputSchema: %{
         "type" => "object",
-        "properties" => %{
-          "notes" => %{"type" => "integer", "description" => "Notes restored"},
-          "folders" => %{"type" => "integer", "description" => "Empty folders restored"},
-          "attachments" => %{"type" => "integer", "description" => "Attachments restored"},
-          "skipped" => %{
-            "type" => "array",
-            "description" =>
-              "Items not restored and why: path_taken (another file holds the path), " <>
-                "expired (past trash retention), unavailable (attachment bytes already " <>
-                "reaped), changed (the item changed since the delete), unreadable",
-            "items" => %{
-              "type" => "object",
-              "properties" => %{
-                "path" => %{"type" => "string"},
-                "id" => %{"type" => "string"},
-                "kind" => %{"type" => "string"},
-                "reason" => %{"type" => "string"}
-              },
-              "required" => ["kind", "reason"]
+        "properties" =>
+          %{
+            "notes" => %{"type" => "integer", "description" => "Notes restored"},
+            "folders" => %{"type" => "integer", "description" => "Empty folders restored"},
+            "attachments" => %{"type" => "integer", "description" => "Attachments restored"},
+            "skipped" => %{
+              "type" => "array",
+              "description" =>
+                "Items not restored and why: path_taken (another file holds the path), " <>
+                  "expired (past trash retention), unavailable (attachment bytes already " <>
+                  "reaped), changed (the item changed since the delete), unreadable",
+              "items" => %{
+                "type" => "object",
+                "properties" => %{
+                  "path" => %{"type" => "string"},
+                  "id" => %{"type" => "string"},
+                  "kind" => %{"type" => "string"},
+                  "reason" => %{"type" => "string"}
+                },
+                "required" => ["kind", "reason"]
+              }
             }
           }
-        },
+          |> Map.merge(@index_delay_properties),
         "required" => ["notes", "folders", "attachments", "skipped"]
       },
       handler: &Handlers.handle("restore_deleted", &1, &2, &3)

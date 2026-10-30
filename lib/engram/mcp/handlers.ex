@@ -7,6 +7,7 @@ defmodule Engram.MCP.Handlers do
   alias Engram.MCP.{ParseGate, Sections, ToolError}
   alias Engram.{Notes, Repo, Search}
   alias Engram.Notes.Frontmatter
+  alias Engram.Workers.EmbedNote
   alias EngramWeb.Endpoint
 
   # #1710: every MCP note write is the "mcp" history actor. The
@@ -745,8 +746,13 @@ defmodule Engram.MCP.Handlers do
             _ -> "\nNot restored: " <> Enum.map_join(skipped, ", ", &skip_label/1)
           end
 
-        {:ok, "Restored #{n} notes, #{a} attachments and #{f} folders.#{skip_text}",
-         %{"notes" => n, "folders" => f, "attachments" => a, "skipped" => skipped}}
+        reply =
+          {:ok, "Restored #{n} notes, #{a} attachments and #{f} folders.#{skip_text}",
+           %{"notes" => n, "folders" => f, "attachments" => a, "skipped" => skipped}}
+
+        # A restored note re-embeds through the default settle: the delete
+        # cleared its index (`Notes.restore_decrypted/2`).
+        if n > 0, do: with_index_delay(reply, EmbedNote.settle_seconds()), else: reply
 
       {:error, :invalid_op_id} ->
         ToolError.error(:invalid_arguments, "op_id must be the delete_op_id a delete returned")
@@ -1823,11 +1829,21 @@ defmodule Engram.MCP.Handlers do
   embed itself; agents that searched straight away reported their notes as
   missing.
   """
-  @spec index_delay_hint() :: String.t()
-  def index_delay_hint do
-    "search_notes finds this change a few seconds from now (it indexes " <>
-      "#{Engram.Workers.EmbedNote.agent_settle_seconds()}s after your last write); " <>
+  @spec index_delay_hint(non_neg_integer()) :: String.t()
+  def index_delay_hint(seconds \\ EmbedNote.agent_settle_seconds()) do
+    "search_notes sees this change once indexing starts, at least #{seconds}s from now; " <>
       "use get_notes to read it until then."
+  end
+
+  # The hint in both halves of a success: the text for clients that render it,
+  # and `Tools` `@index_delay_properties` for clients that read only
+  # `structuredContent`. Every tool that queues an embed replies through here.
+  defp with_index_delay({:ok, text, structured}, seconds) do
+    {:ok, text <> "\n" <> index_delay_hint(seconds),
+     Map.merge(structured, %{
+       "search_indexing_starts_in_seconds" => seconds,
+       "search_note" => index_delay_hint(seconds)
+     })}
   end
 
   # Every failure here used to come back as `{:ok, apologetic_sentence}` — a
@@ -1838,7 +1854,7 @@ defmodule Engram.MCP.Handlers do
   defp upsert_reply(result, msgs, structured) do
     case result do
       {:ok, _note} ->
-        {:ok, msgs[:ok] <> "\n" <> index_delay_hint(), structured}
+        with_index_delay({:ok, msgs[:ok], structured}, EmbedNote.agent_settle_seconds())
 
       {:error, :version_conflict, _note} ->
         ToolError.error(:version_conflict, msgs[:conflict])

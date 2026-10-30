@@ -93,7 +93,9 @@ def test_patch_note_alias_still_works(scoped):
     result = resp["result"]
     assert result["isError"] is False, f"patch_note alias should succeed: {result}"
     assert "(patch_note is deprecated; use edit_note.)" in _text(result)
-    assert result["structuredContent"] == {"path": path, "replacements": 1}
+    structured = result["structuredContent"]
+    assert {k: structured[k] for k in ("path", "replacements")} == {"path": path, "replacements": 1}
+    assert isinstance(structured["search_indexing_starts_in_seconds"], int)
 
     updated = api.get_note(path)
     assert "Patched sentence here." in updated["content"]
@@ -113,7 +115,9 @@ def test_update_section_alias_still_works(scoped):
     result = resp["result"]
     assert result["isError"] is False, f"update_section alias should succeed: {result}"
     assert "(update_section is deprecated; use edit_note.)" in _text(result)
-    assert result["structuredContent"] == {"path": path, "heading": "Notes"}
+    structured = result["structuredContent"]
+    assert {k: structured[k] for k in ("path", "heading")} == {"path": path, "heading": "Notes"}
+    assert isinstance(structured["search_indexing_starts_in_seconds"], int)
 
     updated = api.get_note(path)
     assert "New body." in updated["content"]

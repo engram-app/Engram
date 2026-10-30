@@ -190,6 +190,79 @@ defmodule EngramWeb.McpStructuredOutputTest do
     end
   end
 
+  # #2294 follow-up: clients that read only `structuredContent` (staging's MCP
+  # client, likely ChatGPT) never saw the "searchable in a few seconds" line,
+  # which lived in the text part alone.
+  describe "write tools say when search will see the change" do
+    setup %{user: user, vault: vault} do
+      {:ok, _} =
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{"path" => "w.md", "content" => "## Log\nold line\n"},
+          actor: "api"
+        )
+
+      :ok
+    end
+
+    for {tool, args} <- [
+          {"create_note", %{"title" => "fresh", "suggested_folder" => "Inbox", "content" => "x"}},
+          {"write_note", %{"path" => "w2.md", "content" => "x"}},
+          {"append_to_note", %{"path" => "w.md", "text" => "more"}},
+          {"edit_note",
+           %{"path" => "w.md", "mode" => "replace_text", "find" => "old", "replace" => "new"}},
+          {"patch_note", %{"path" => "w.md", "find" => "old", "replace" => "new"}},
+          {"update_section", %{"path" => "w.md", "heading" => "Log", "content" => "fresh"}}
+        ] do
+      test "#{tool} carries the search delay in structuredContent", %{user: user, vault: vault} do
+        assert {:ok, _text, structured} =
+                 Handlers.handle(unquote(tool), user, vault, unquote(Macro.escape(args)))
+
+        assert structured["search_indexing_starts_in_seconds"] ==
+                 Engram.Workers.EmbedNote.agent_settle_seconds()
+
+        assert structured["search_note"] == Handlers.index_delay_hint()
+
+        {:ok, tool_def} = Tools.get(unquote(tool))
+
+        # No `additionalProperties: false`, so validation alone would accept
+        # an undeclared key; the declaration is what a client builds types from.
+        for key <- ["search_indexing_starts_in_seconds", "search_note"] do
+          assert Map.has_key?(tool_def.outputSchema["properties"], key),
+                 "#{unquote(tool)} outputSchema does not declare #{key}"
+        end
+
+        root = JSV.build!(tool_def.outputSchema)
+        assert {:ok, _} = JSV.validate(structured, root)
+      end
+    end
+  end
+
+  test "restore_deleted carries the default settle, which restored notes wait for", %{
+    user: user,
+    vault: vault
+  } do
+    {:ok, _} =
+      Engram.Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "x"}, actor: "api")
+
+    {:ok, _, %{"delete_op_id" => op}} =
+      Handlers.handle("delete_note", user, vault, %{"path" => "r.md"})
+
+    assert {:ok, text, structured} =
+             Handlers.handle("restore_deleted", user, vault, %{"op_id" => op})
+
+    seconds = Engram.Workers.EmbedNote.settle_seconds()
+    assert structured["notes"] == 1
+    assert structured["search_indexing_starts_in_seconds"] == seconds
+    assert structured["search_note"] == Handlers.index_delay_hint(seconds)
+    assert text =~ Handlers.index_delay_hint(seconds)
+
+    {:ok, tool_def} = Tools.get("restore_deleted")
+    assert Map.has_key?(tool_def.outputSchema["properties"], "search_indexing_starts_in_seconds")
+    assert {:ok, _} = JSV.validate(structured, JSV.build!(tool_def.outputSchema))
+  end
+
   defp assert_structured(result, name) do
     assert is_map(result["structuredContent"]),
            "#{name} advertises an outputSchema but returned no structuredContent"
