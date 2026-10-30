@@ -102,13 +102,20 @@ defmodule Engram.Vaults do
   before locking content rows (see LOCK ORDER above). Same contract: inside
   the caller's `Repo.with_tenant/2` transaction.
   """
-  def lock_seq!(vault_id) do
-    %{num_rows: 1} =
-      Repo.query!("SELECT 1 FROM vaults WHERE id = $1 FOR NO KEY UPDATE", [
-        Ecto.UUID.dump!(vault_id)
-      ])
+  def lock_seq!(vault_id), do: :ok = lock_seq(vault_id)
 
-    :ok
+  @doc """
+  `lock_seq!/1` for a caller that may not own the vault: `:none` (nothing
+  locked) when the row is not visible to the tenant, instead of raising.
+  """
+  @spec lock_seq(Ecto.UUID.t()) :: :ok | :none
+  def lock_seq(vault_id) do
+    case Repo.query!("SELECT 1 FROM vaults WHERE id = $1 FOR NO KEY UPDATE", [
+           Ecto.UUID.dump!(vault_id)
+         ]) do
+      %{num_rows: 1} -> :ok
+      %{num_rows: 0} -> :none
+    end
   end
 
   @doc """

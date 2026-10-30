@@ -6889,7 +6889,15 @@ defmodule Engram.Notes do
                 # ids) under the new path hashes, so the trigger on the notes
                 # update below resolves every note straight back to its own
                 # folder. Descendant FOLDERS only; the notes join by id.
-                :ok = Rows.rename(user, vault.id, old_folder, new_folder)
+                # The row-level move guard runs again here, in the write
+                # transaction: a concurrent move can make it refuse after the
+                # check at the top of this function passed. Throwing rolls the
+                # transaction back; the claim already committed is reported
+                # below, like any other failure past it.
+                case Rows.rename(user, vault.id, old_folder, new_folder) do
+                  :ok -> :ok
+                  {:error, reason} -> throw({:rename_refused, reason})
+                end
 
                 {:ok, _} =
                   Rows.ensure_all(
@@ -7042,6 +7050,10 @@ defmodule Engram.Notes do
             e ->
               _ = orphan_claim(user, vault, length(claims), e)
               reraise e, __STACKTRACE__
+          catch
+            {:rename_refused, reason} ->
+              _ = orphan_claim(user, vault, length(claims), reason)
+              {:error, reason}
           end
       end
     end

@@ -614,6 +614,11 @@ defmodule Engram.Folders.Rows do
   """
   @spec soft_delete(map(), Ecto.UUID.t(), [String.t()], Ecto.UUID.t() | nil) :: non_neg_integer()
   def soft_delete(user, vault_id, folders, op_id) do
+    # The vault row first, like a rename (LOCK ORDER in `Engram.Vaults`): the
+    # row updates below take their locks in no fixed order, so two writers
+    # that skip this lock can deadlock (40P01).
+    _ = Engram.Vaults.lock_seq(vault_id)
+
     case subtree(user, vault_id, folders) do
       [] ->
         0
@@ -680,6 +685,8 @@ defmodule Engram.Folders.Rows do
   """
   @spec restore_op(Ecto.UUID.t(), Ecto.UUID.t()) :: non_neg_integer()
   def restore_op(vault_id, op_id) do
+    _ = Engram.Vaults.lock_seq(vault_id)
+
     rows =
       from(f in Folder,
         where: f.vault_id == ^vault_id and f.delete_op_id == ^op_id and not is_nil(f.deleted_at),
@@ -723,13 +730,15 @@ defmodule Engram.Folders.Rows do
         true -> :error
       end
 
-    with {:ok, parent_id} <- parent do
-      case live_child(vault_id, parent_id, row.name_hmac) do
-        nil -> {:revive, parent_id}
-        %{id: id} -> {:merge, id}
-      end
-    else
-      _ -> :skip
+    case parent do
+      {:ok, parent_id} ->
+        case live_child(vault_id, parent_id, row.name_hmac) do
+          nil -> {:revive, parent_id}
+          %{id: id} -> {:merge, id}
+        end
+
+      _ ->
+        :skip
     end
   end
 
