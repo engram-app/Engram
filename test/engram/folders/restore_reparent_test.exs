@@ -3,8 +3,8 @@ defmodule Engram.Folders.RestoreReparentTest do
   # the folders below it: they come back under the live row.
   use Engram.DataCase, async: false
 
-  alias Engram.{Folders, Notes, Repo}
   alias Engram.FolderRows
+  alias Engram.{Folders, Notes, Repo}
 
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()

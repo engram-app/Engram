@@ -3,8 +3,8 @@ defmodule Engram.Folders.LockAndRefusalTest do
   # whose row-level guard refuses after the path claim fails cleanly.
   use Engram.DataCase, async: false
 
-  alias Engram.{Folders, Notes, QueryRecorder, Repo}
   alias Engram.FolderRows
+  alias Engram.{Folders, Notes, QueryRecorder, Repo}
   alias Engram.Folders.Rows
 
   setup do

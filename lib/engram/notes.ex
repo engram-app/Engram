@@ -7760,10 +7760,22 @@ defmodule Engram.Notes do
   def resolve_folder_markers(user, vault, marker_ids) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, dek} <- Crypto.get_dek(user) do
+      # One read for every id (not one per marker), ids checked in order.
+      {:ok, found} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(
+            from(n in scoped_live(user, vault),
+              where: n.id in ^marker_ids and n.kind == "folder"
+            )
+          )
+        end)
+
+      by_id = Map.new(found, &{&1.id, &1})
+
       Enum.reduce_while(marker_ids, {:ok, []}, fn id, {:ok, acc} ->
-        case get_folder_marker_by_id(user, vault, id) do
+        case Map.fetch(by_id, with({:ok, u} <- Ecto.UUID.cast(id), do: u)) do
           {:ok, marker} -> {:cont, {:ok, [hydrate_folder_marker(marker, dek).folder | acc]}}
-          {:error, :not_found} -> {:halt, {:error, {:not_found, id}}}
+          :error -> {:halt, {:error, {:not_found, id}}}
         end
       end)
     end
