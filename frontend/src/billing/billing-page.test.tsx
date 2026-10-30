@@ -72,6 +72,23 @@ const ME = {
 	display_name: null,
 };
 
+// The plan buttons stay disabled until Paddle and /billing/config load, and a
+// disabled button swallows the click (no checkout, no frame). Rendering the
+// plan text does not mean they loaded: wait for the button itself.
+async function chooseStarter(container: HTMLElement) {
+	const startBtn = await waitFor(() => {
+		const btn = Array.from(container.querySelectorAll("button")).find(
+			(b) => b.textContent === "Choose Starter",
+		);
+		expect(btn).toBeEnabled();
+		return btn!;
+	});
+	await act(async () => {
+		startBtn.click();
+		await Promise.resolve();
+	});
+}
+
 describe("BillingPage — Paddle effect cleanup", () => {
 	beforeEach(() => {
 		get.mockReset();
@@ -265,14 +282,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		// in the DOM (CSS, not JS, hides one), so assert on the count.
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
 
-		const startButtons = container.querySelectorAll("button");
-		const startBtn = Array.from(startButtons).find((b) => b.textContent === "Choose Starter");
-		expect(startBtn).toBeDefined();
-
-		await act(async () => {
-			startBtn!.click();
-			await Promise.resolve();
-		});
+		await chooseStarter(container);
 
 		// Plan cards hidden, mount target rendered, Paddle.Checkout.open invoked
 		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
@@ -320,11 +330,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			return { Checkout: { open: vi.fn(), close: vi.fn() } };
 		});
 		const { container } = renderBilling({ inline: true });
-		const [startBtn] = await screen.findAllByRole("button", { name: "Choose Starter" });
-		await act(async () => {
-			startBtn!.click();
-			await Promise.resolve();
-		});
+		await chooseStarter(container);
 		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
 
 		const summary = () => within(screen.getByRole("region", { name: "Order summary" }));
@@ -384,13 +390,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		const { container, queryAllByText } = renderBilling({ inline: true });
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Choose Starter",
-		)!;
-		await act(async () => {
-			startBtn.click();
-			await Promise.resolve();
-		});
+		await chooseStarter(container);
 
 		expect(openMock.mock.calls[0]![0].settings.allowedPaymentMethods).toBeUndefined();
 		const { settings } = initializePaddleMock.mock.calls[0]![0].checkout;
@@ -417,13 +417,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		const { container, queryAllByText } = renderBilling({ inline: true });
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Choose Starter",
-		)!;
-		await act(async () => {
-			startBtn.click();
-			await Promise.resolve();
-		});
+		await chooseStarter(container);
 		await waitFor(() => expect(openMock).toHaveBeenCalledTimes(1));
 
 		expect(openMock.mock.calls[0]![0].customer).toEqual(expected);
@@ -431,16 +425,6 @@ describe("BillingPage — Paddle effect cleanup", () => {
 	});
 
 	describe("checkout funnel tracking", () => {
-		function startCheckout(container: HTMLElement) {
-			const startBtn = Array.from(container.querySelectorAll("button")).find(
-				(b) => b.textContent === "Choose Starter",
-			)!;
-			return act(async () => {
-				startBtn.click();
-				await Promise.resolve();
-			});
-		}
-
 		it("emits checkout_opened with method unknown and the tier being checked out, on CHECKOUT_LOADED", async () => {
 			mockBillingApi();
 			let captured: ((event: { name: string; data?: unknown }) => void) | undefined;
@@ -451,7 +435,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 			const { container, queryAllByText } = renderBilling({ inline: true });
 			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-			await startCheckout(container);
+			await chooseStarter(container);
 
 			await act(async () => {
 				captured!({ name: "checkout.loaded", data: {} });
@@ -477,7 +461,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 			const { container, queryAllByText } = renderBilling({ inline: true });
 			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-			await startCheckout(container);
+			await chooseStarter(container);
 
 			await act(async () => {
 				captured!({
@@ -508,7 +492,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 			const { container, queryAllByText } = renderBilling({ inline: true });
 			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-			await startCheckout(container);
+			await chooseStarter(container);
 
 			await act(async () => {
 				captured!({
@@ -538,7 +522,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 			const { container, queryAllByText } = renderBilling({ inline: true });
 			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-			await startCheckout(container);
+			await chooseStarter(container);
 
 			await act(async () => {
 				captured!({ name: "checkout.closed", data: {} });
@@ -565,7 +549,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 			const { container, queryAllByText } = renderBilling({ inline: true });
 			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-			await startCheckout(container);
+			await chooseStarter(container);
 
 			await act(async () => {
 				captured!({
@@ -599,7 +583,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 			const { container, queryAllByText } = renderBilling({ inline: true });
 			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-			await startCheckout(container);
+			await chooseStarter(container);
 			await act(async () => {
 				captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
 				captured!({ name: "checkout.payment.failed", data: {} });
@@ -623,7 +607,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 			const { container, queryAllByText } = renderBilling({ inline: true });
 			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-			await startCheckout(container);
+			await chooseStarter(container);
 			await act(async () => {
 				captured!({ name: "checkout.error", data: {} });
 				await Promise.resolve();
@@ -643,7 +627,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 			const { container, queryAllByText } = renderBilling({ inline: true });
 			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-			await startCheckout(container);
+			await chooseStarter(container);
 			await act(async () => {
 				captured!({ name: "checkout.closed", data: {} });
 				await Promise.resolve();
@@ -663,7 +647,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 			const { container, queryAllByText } = renderBilling({ inline: true });
 			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-			await startCheckout(container);
+			await chooseStarter(container);
 
 			window.dispatchEvent(new Event("pagehide"));
 			window.dispatchEvent(new Event("pagehide"));
@@ -689,7 +673,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 			const { container, queryAllByText } = renderBilling({ inline: true });
 			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-			await startCheckout(container);
+			await chooseStarter(container);
 			await act(async () => {
 				captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
 				await Promise.resolve();
@@ -714,7 +698,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 			const { container, queryAllByText } = renderBilling({ inline: true });
 			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-			await startCheckout(container);
+			await chooseStarter(container);
 			// happy-dom's PageTransitionEvent drops the `persisted` init field.
 			const toBfcache = new Event("pagehide");
 			Object.defineProperty(toBfcache, "persisted", { value: true });
@@ -744,7 +728,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 			const { container, queryAllByText } = renderBilling({ inline: true });
 			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-			await startCheckout(container);
+			await chooseStarter(container);
 			await act(async () => {
 				captured!({ name: "checkout.loaded", data: { id: "che_1" } });
 				captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
@@ -771,7 +755,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			const { container, queryAllByText } = renderBilling({ inline: true });
 			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
 			window.dispatchEvent(new Event("pagehide"));
-			await startCheckout(container);
+			await chooseStarter(container);
 			await act(async () => {
 				captured!({ name: "checkout.completed", data: {} });
 				await Promise.resolve();
@@ -796,7 +780,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 			const { container, queryAllByText } = renderBilling({ inline: true });
 			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-			await startCheckout(container);
+			await chooseStarter(container);
 
 			await act(async () => {
 				captured!({ name: "checkout.completed", data: {} });
@@ -829,7 +813,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 			const { container, queryAllByText } = renderBilling({ inline: true });
 			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-			await startCheckout(container);
+			await chooseStarter(container);
 
 			await act(async () => {
 				captured!({ name: "checkout.loaded", data: {} });
@@ -880,7 +864,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 			const { container, queryAllByText } = renderBilling({ inline: true });
 			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-			await startCheckout(container);
+			await chooseStarter(container);
 
 			await act(async () => {
 				captured!({ name: "checkout.loaded", data: {} });
@@ -926,13 +910,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 			const { container, queryAllByText } = renderBilling({ inline: true });
 			await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-			const startBtn = Array.from(container.querySelectorAll("button")).find(
-				(b) => b.textContent === "Choose Starter",
-			)!;
-			await act(async () => {
-				startBtn.click();
-				await Promise.resolve();
-			});
+			await chooseStarter(container);
 			await act(async () => {
 				captured!({ name: "checkout.loaded", data: {} });
 				captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
@@ -970,13 +948,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		// "Starter" renders twice (desktop card + mobile accordion); assert count.
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Choose Starter",
-		)!;
-		await act(async () => {
-			startBtn.click();
-			await Promise.resolve();
-		});
+		await chooseStarter(container);
 
 		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
 
@@ -1013,13 +985,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		const { container, queryAllByText } = renderBilling({ inline: true });
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Choose Starter",
-		)!;
-		await act(async () => {
-			startBtn.click();
-			await Promise.resolve();
-		});
+		await chooseStarter(container);
 		await waitFor(() => expect(openMock).toHaveBeenCalledTimes(1));
 		expect(openMock.mock.calls[0]![0].customer).toEqual({ id: "ctm_stale" });
 
@@ -1054,13 +1020,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		const { container, queryAllByText } = renderBilling({ inline: true });
 
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Choose Starter",
-		)!;
-		await act(async () => {
-			startBtn.click();
-			await Promise.resolve();
-		});
+		await chooseStarter(container);
 		expect(container.querySelector(".paddle-checkout")).not.toBeNull();
 
 		await act(async () => {
@@ -1143,13 +1103,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		const { container, queryAllByText } = renderBilling({ inline: true });
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Choose Starter",
-		)!;
-		await act(async () => {
-			startBtn.click();
-			await Promise.resolve();
-		});
+		await chooseStarter(container);
 
 		await act(async () => {
 			captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_wallet" } });
@@ -1213,13 +1167,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			});
 			const utils = renderBilling({ inline: true });
 			await waitFor(() => expect(utils.queryAllByText("Starter").length).toBeGreaterThan(0));
-			const startBtn = Array.from(utils.container.querySelectorAll("button")).find(
-				(b) => b.textContent === "Choose Starter",
-			)!;
-			await act(async () => {
-				startBtn.click();
-				await Promise.resolve();
-			});
+			await chooseStarter(utils.container);
 			await waitFor(() => expect(openMock).toHaveBeenCalledTimes(1));
 			await waitFor(() => expect(channelHandlers.subscription_activated).toBeDefined());
 			await act(async () => {
@@ -1367,13 +1315,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 
 		const { container, queryAllByText } = renderBilling({ inline: true });
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Choose Starter",
-		)!;
-		await act(async () => {
-			startBtn.click();
-			await Promise.resolve();
-		});
+		await chooseStarter(container);
 
 		await act(async () => {
 			captured!({ name: "checkout.payment.initiated", data: { transaction_id: "txn_1" } });
@@ -1462,13 +1404,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		);
 
 		await waitFor(() => expect(queryAllByText("Starter").length).toBeGreaterThan(0));
-		const startBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Choose Starter",
-		)!;
-		await act(async () => {
-			startBtn.click();
-			await Promise.resolve();
-		});
+		await chooseStarter(container);
 
 		expect(onCheckoutActiveChange).toHaveBeenLastCalledWith(true);
 		expect(onCheckoutFrameActiveChange).toHaveBeenLastCalledWith(true);
