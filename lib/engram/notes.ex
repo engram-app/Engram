@@ -968,21 +968,20 @@ defmodule Engram.Notes do
 
       result =
         Repo.with_tenant(user.id, fn ->
-          lookup_and_write(
-            %{
-              query: lookup_query,
-              locked: Keyword.get(opts, :locked_note),
-              expected: Keyword.get(opts, :expected_note),
-              client_id: client_id,
-              vault: vault,
-              base: base_attrs,
-              user: user,
-              path: sanitized_path,
-              folder: folder,
-              opts: opts
-            },
-            write_retries(opts)
-          )
+          %{
+            query: lookup_query,
+            locked: Keyword.get(opts, :locked_note),
+            expected: Keyword.get(opts, :expected_note),
+            client_id: client_id,
+            vault: vault,
+            base: base_attrs,
+            user: user,
+            path: sanitized_path,
+            folder: folder,
+            opts: opts
+          }
+          |> lookup_and_write(write_retries(opts))
+          |> commit_content(user, opts, recording)
         end)
 
       case result do
@@ -990,17 +989,6 @@ defmodule Engram.Notes do
           {:error, :stale_note}
 
         {:ok, {:ok, {prev_hash, note, _merged_text, _content_hash}}} ->
-          _ =
-            if prev_hash != note.content_hash do
-              _ =
-                ContentCommit.enqueue_jobs(
-                  note.id,
-                  user.id,
-                  embed_opts(note, opts) ++
-                    [finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)]
-                )
-            end
-
           note = decrypt_or_raise!(note, user)
           maybe_log_path_rewrite(user, vault, path, sanitized_path, note.id)
 
@@ -1044,24 +1032,13 @@ defmodule Engram.Notes do
 
           {:ok, note}
 
-        {:ok, {:ok, {:moved, prev_hash, note, _merged_text, _content_hash}}} ->
+        {:ok, {:ok, {:moved, _prev_hash, note, _merged_text, _content_hash}}} ->
           # An id-keyed rename moved an existing row to a new path (move_note).
           # Re-embed only when the content actually changed (a pure rename keeps
           # the same hash), but ALWAYS broadcast: the move persisted a real
           # change (path/seq/version), and skipping the broadcast on hash
           # equality would strand peers with the old-path delete and no
           # new-path upsert until they next pull.
-          _ =
-            if prev_hash != note.content_hash do
-              _ =
-                ContentCommit.enqueue_jobs(
-                  note.id,
-                  user.id,
-                  embed_opts(note, opts) ++
-                    [finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)]
-                )
-            end
-
           note = decrypt_or_raise!(note, user)
           maybe_log_path_rewrite(user, vault, path, sanitized_path, note.id)
           :ok = broadcast_change(user, vault.id, "upsert", note.path, note, opts)
@@ -2250,6 +2227,32 @@ defmodule Engram.Notes do
     end
   end
 
+  # R6 outbox: a write that changed the content inserts its NoteCommitted job
+  # in the write's own transaction (this runs inside `with_tenant`, or inside
+  # an MCP tool call's outer transaction), so the job commits or rolls back
+  # with the write. A pure rename keeps its hash and queues nothing.
+  defp commit_content({:ok, {prev_hash, note, _text, _hash}} = written, user, opts, recording),
+    do: commit_content(written, prev_hash, note, user, opts, recording)
+
+  defp commit_content({:ok, {:moved, prev_hash, note, _text, _hash}} = written, user, opts, rec),
+    do: commit_content(written, prev_hash, note, user, opts, rec)
+
+  defp commit_content(other, _user, _opts, _recording), do: other
+
+  defp commit_content(written, prev_hash, note, user, opts, recording) do
+    _ =
+      if prev_hash != note.content_hash do
+        NoteCommitted.insert!(
+          note.id,
+          user.id,
+          embed_opts(note, opts) ++
+            [finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)]
+        )
+      end
+
+    written
+  end
+
   # #2294: an AI agent writes a whole note and searches for it seconds later,
   # so its writes skip most of the typing debounce (EmbedNote.new_debounced/3)
   # and rank as interactive even for a never-embedded note, which
@@ -2260,18 +2263,13 @@ defmodule Engram.Notes do
       else: [embed_priority: EmbedNote.priority_for(note)]
   end
 
-  # The content jobs the seed's checkpoint used to enqueue for a genesis body,
-  # after the row's commit like the checkpoint's.
+  # The content jobs the seed's checkpoint used to enqueue for a genesis body:
+  # its outbox row, in the create's own transaction (R6).
   defp commit_genesis_body(note, user) do
-    Repo.after_commit(fn ->
-      Enqueue.enqueue(
-        NoteCommitted.job(note.id, user.id,
-          embed_priority: EmbedNote.priority_for(note),
-          finalize?: false
-        ),
-        "note_committed"
-      )
-    end)
+    NoteCommitted.insert!(note.id, user.id,
+      embed_priority: EmbedNote.priority_for(note),
+      finalize?: false
+    )
   end
 
   # Phase 0 stale-base gate: a writer that declares the content_hash it READ

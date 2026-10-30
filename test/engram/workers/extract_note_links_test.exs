@@ -88,11 +88,15 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
   end
 
   describe "wiring" do
+    # A content write queues one NoteCommitted (R6 outbox); it enqueues this.
+    defp dispatch, do: Engram.Test.NoteCommittedDispatch.run()
+
     test "REST upsert enqueues extraction on content change, not on no-op",
          %{user: user, vault: vault} do
       {:ok, note} =
         Notes.upsert_note(user, vault, %{"path" => "W.md", "content" => "v1"}, actor: "api")
 
+      dispatch()
       assert [%{args: %{"note_id" => id}}] = all_enqueued(worker: ExtractNoteLinks)
       assert id == note.id
 
@@ -102,6 +106,7 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
       {:ok, _} =
         Notes.upsert_note(user, vault, %{"path" => "W.md", "content" => "v1"}, actor: "api")
 
+      dispatch()
       assert [] == all_enqueued(worker: ExtractNoteLinks)
     end
 
@@ -110,6 +115,7 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
       {:ok, note} =
         Notes.upsert_note(user, vault, %{"path" => "C.md", "content" => "old"}, actor: "api")
 
+      dispatch()
       Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.ExtractNoteLinks"))
 
       {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
@@ -137,6 +143,8 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
       {:ok, note} =
         Notes.upsert_note(user, vault, %{"path" => "M1.md", "content" => "before"}, actor: "api")
 
+      dispatch()
+
       :ok = Notes.delete_note(user, vault, "M1.md")
       Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.ExtractNoteLinks"))
 
@@ -154,6 +162,7 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
                  actor: "api"
                )
 
+      dispatch()
       assert [%{args: %{"note_id" => id}}] = all_enqueued(worker: ExtractNoteLinks)
       assert id == moved.id
 
@@ -175,6 +184,7 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
                  actor: "api"
                )
 
+      dispatch()
       assert [] == all_enqueued(worker: ExtractNoteLinks)
     end
   end

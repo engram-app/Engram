@@ -12,6 +12,7 @@ defmodule Engram.Workers.EmbedNoteTest do
   alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
   alias Engram.Repo
+  alias Engram.Test.NoteCommittedDispatch
   alias Engram.Workers.EmbedNote
 
   setup :verify_on_exit!
@@ -1057,7 +1058,10 @@ defmodule Engram.Workers.EmbedNoteTest do
           actor: "api"
         )
 
-      # Oban is in :manual mode globally — jobs stay in 'scheduled' state for assertion
+      # Oban is in :manual mode globally: jobs stay in 'scheduled' state for
+      # assertion. The write queues one NoteCommitted (R6 outbox), which
+      # enqueues the embed.
+      _ = NoteCommittedDispatch.run()
       assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
     end
 
@@ -1075,6 +1079,7 @@ defmodule Engram.Workers.EmbedNoteTest do
         )
 
       # First upsert triggers embed
+      _ = NoteCommittedDispatch.run()
       assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
 
       # Re-upsert with same content — should not enqueue another
@@ -1091,6 +1096,7 @@ defmodule Engram.Workers.EmbedNoteTest do
         )
 
       # Still only one job
+      assert NoteCommittedDispatch.run() == 0
       jobs = all_enqueued(worker: EmbedNote)
       assert length(jobs) == 1
     end
@@ -1119,6 +1125,7 @@ defmodule Engram.Workers.EmbedNoteTest do
           actor: "api"
         )
 
+      _ = NoteCommittedDispatch.run()
       Notes.delete_note(user, vault, note.path)
       # Allow the background Task to complete before checking job count
       Process.sleep(100)

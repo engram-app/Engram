@@ -27,7 +27,6 @@ defmodule Engram.Notes.CrdtCheckpoint do
     CrdtBridge,
     CrdtDeliver,
     CrdtUpdateLog,
-    Enqueue,
     Helpers,
     Note,
     NoteBody,
@@ -270,12 +269,14 @@ defmodule Engram.Notes.CrdtCheckpoint do
                 # #1710: the finalize decision rides out the same way. A
                 # CRDT-created row holds the hash of empty text, not nil, so its
                 # first checkpoint is the create and has no old text to finalize.
-                carry_out(result, note, recording)
+                result
+                |> carry_out(note, recording)
+                |> commit_jobs(note_id, user_id)
             end
           end)
 
         case outcome do
-          {prev_hash, new_hash, path, embed_priority, finalize?, renamed_title, pruned} ->
+          {prev_hash, new_hash, path, _embed_priority, _finalize?, renamed_title, pruned} ->
             :ok =
               post_commit(note_id, fn ->
                 interleave_hook(:post_commit)
@@ -287,17 +288,6 @@ defmodule Engram.Notes.CrdtCheckpoint do
                     do: Engram.Notes.NameIndex.announce(vault_id, note_id, path, renamed_title)
 
                 if prev_hash != new_hash do
-                  # One dispatcher job, after the commit (#1710): it enqueues
-                  # embed, links and finalize with their own uniqueness.
-                  _ =
-                    Enqueue.enqueue(
-                      NoteCommitted.job(note_id, user_id,
-                        embed_priority: embed_priority,
-                        finalize?: finalize?
-                      ),
-                      "note_committed"
-                    )
-
                   # Deliver-out gap: a web-editor edit lands ONLY via this checkpoint,
                   # which (unlike REST/MCP writes) never announced. A client not
                   # actively enrolled in the room — e.g. Obsidian — thus never
@@ -371,10 +361,33 @@ defmodule Engram.Notes.CrdtCheckpoint do
       :skipped
   end
 
+  # R6 outbox: a written content change inserts its one NoteCommitted job in
+  # the checkpoint's own transaction, so the job commits or rolls back with
+  # the write (a lost post-commit insert used to wait for the reconcile
+  # sweep). Equal hashes are a compaction or the #902 stale-abort, which also
+  # commit and queue nothing. One plain insert (~1 ms under the vault seq
+  # lock); the dispatcher does the unique inserts after the commit.
+  defp commit_jobs(
+         {prev_hash, new_hash, _path, embed_priority, finalize?, _title, _pruned} = out,
+         note_id,
+         user_id
+       )
+       when prev_hash != new_hash do
+    :ok =
+      NoteCommitted.insert!(note_id, user_id,
+        embed_priority: embed_priority,
+        finalize?: finalize?
+      )
+
+    out
+  end
+
+  defp commit_jobs(out, _note_id, _user_id), do: out
+
   # The write is committed: a raise or exit in its follow-up work must not
   # reach do_checkpoint's rescue and report :skipped (the room would keep
   # refusing acks for a durable state). Logged as a post-commit failure; the
-  # outcome stays written. The reconcile sweeps backstop a lost enqueue.
+  # outcome stays written. Its jobs are already in the table (commit_jobs/3).
   # Deferred through Repo.after_commit/1: the checkpoint can run INSIDE an
   # enclosing transaction (the genesis seed runs in its row's transaction,
   # Notes.genesis_crdt_note/5 `:seed`), and its announce must not reach peers

@@ -69,6 +69,7 @@ defmodule Engram.Notes.CrdtEmbedCoalescingTest do
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
     :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "checkpointed")
     :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
+    _ = Engram.Test.NoteCommittedDispatch.run()
 
     # A debounced embed job for this note must exist (new or coalesced into the
     # one upsert_note enqueued — Oban replace: [:scheduled_at] dedup means the

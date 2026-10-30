@@ -77,21 +77,23 @@ defmodule Engram.QueryBudgetTest do
     # block (4), and the `mcp_tool_calls_per_min` override lookup (1, the
     # OAuth tools/call budget, 2026-10-24; warm it is the override cache).
     "mcp get_notes oauth cold" => 16,
-    # Write target 12; floor 14, each kept query required:
+    # Each kept query required:
     #  1 rotation lock: a write reads it fresh from the DB (RotationGate).
-    #  2, 3, 14 begin / tenant_enter / commit: the one tenant txn (RLS).
+    #  2, 3, 11 begin / tenant_enter / commit: the one tenant txn (RLS).
     #  4 note row: the write's base. 5 crdt tail: the merge replays it.
     #  6 vault change_seq bump: the seq the write is stamped with.
     #  7 note UPDATE: the write itself.
     #  8 open revision touch (it returns the open row): history.
-    #  9, 10 EmbedNote unique check + scheduled_at replace: the debounce.
-    #  11, 12 ExtractNoteLinks / FinalizeRevision unique checks: Oban dedup.
-    "mcp write_note update" => 13,
+    #  9, 10 the NoteCommitted outbox INSERT + its pg_notify, in the write's
+    #  transaction (R6, -2): it replaced four post-write Oban queries (the
+    #  EmbedNote unique check + scheduled_at replace, the ExtractNoteLinks and
+    #  FinalizeRevision unique checks), which the dispatcher job now runs.
+    "mcp write_note update" => 11,
     # As write_note, with 4 the unlocked read and 5 the locked re-read of the
     # optimistic read-modify-write (Task 7 ruling F1) instead of the tail read
     # (the tail rides in the read statement).
-    "mcp append_to_note" => 13,
-    "mcp edit_note" => 13,
+    "mcp append_to_note" => 11,
+    "mcp edit_note" => 11,
     # rotation lock, begin, enter, the note row (found once), seq bump,
     # tombstone, usage_meters, the index-delete job insert + its pg_notify,
     # the release joining the warm-up's pending release job (one UPDATE, no
@@ -101,17 +103,18 @@ defmodule Engram.QueryBudgetTest do
     # rows are read at all), notes rows, attachments rows, commit.
     "GET sync/manifest" => 6,
     "GET notes/*path" => 5,
-    # As "mcp write_note update" (1-13), plus the response's note_links read.
-    "POST notes update" => 13,
-    # Write target 12; floor 17: rotation lock, begin, enter, path lookup,
-    # notes cap (usage_meters), path-collision probe, seq bump, INSERT, the
-    # inserted row's re-read, usage_meters increment, EmbedNote and
-    # ExtractNoteLinks unique check + insert (4), the vault_populated probe,
-    # the response's links read, the folder row lookup (`Folders.Rows.ensure/4`:
-    # one indexed probe by path hash when the folder is not the root), commit.
-    "POST notes create" => 17,
-    # As "mcp append_to_note" (1-13), plus the response's note_links read.
-    "POST notes/append" => 13,
+    # As "mcp write_note update" (1-11), plus the response's note_links read.
+    "POST notes update" => 11,
+    # Rotation lock, begin, enter, path lookup, notes cap (usage_meters),
+    # path-collision probe, seq bump, INSERT, the inserted row's re-read,
+    # usage_meters increment, the NoteCommitted outbox INSERT + its pg_notify
+    # (R6, -2: was the EmbedNote and ExtractNoteLinks unique check + insert,
+    # 4), the vault_populated probe, the response's links read, the folder row
+    # lookup (`Folders.Rows.ensure/4`: one indexed probe by path hash when the
+    # folder is not the root), commit.
+    "POST notes create" => 15,
+    # As "mcp append_to_note" (1-11), plus the response's note_links read.
+    "POST notes/append" => 11,
     # Not consolidated in Task 10b (no query-classify item; a rename claims its
     # path in the vault index room, which must commit before the row txn):
     #  1-4 claim validation txn (note ids at the paths).
