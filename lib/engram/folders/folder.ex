@@ -1,6 +1,6 @@
 defmodule Engram.Folders.Folder do
   @moduledoc """
-  A folder as a row (migration 20261027000000): an id, its parent, and its own
+  A folder as a row (migration 20261029000000): an id, its parent, and its own
   name, so a child points at it by `folder_ref_id` instead of repeating the
   path. `parent_id` nil is the vault root (there is no root row).
 
