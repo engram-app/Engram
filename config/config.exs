@@ -209,7 +209,10 @@ config :engram, Oban,
         {"2 */3 * * *", Engram.Workers.ReconcileEmbeddings},
         # The daily index-version re-verify; chains in 5-min hops while work
         # remains (ReconcileEmbeddings `@reverify_hops`).
-        {"2 4 * * *", Engram.Workers.ReconcileEmbeddings, args: %{"mode" => "reverify"}},
+        # It takes over a queued plain sweep (one sweep queued at a time).
+        {"2 4 * * *", Engram.Workers.ReconcileEmbeddings,
+         args: %{"mode" => "reverify"},
+         replace: [scheduled: [:args], available: [:args], retryable: [:args]]},
         # Expired device-flow and OAuth codes/tokens. Cheap DELETEs. Hourly:
         # lookups already refuse expired rows and the cutoffs are 1 h / 7 d, so
         # this only bounds table size. Moved off :x4 for the 5-min scan (#2203).

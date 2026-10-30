@@ -888,11 +888,13 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
   end
 
   # Two sweeps at once stamp the same rows and, on the maintenance pool,
-  # queue them twice. A kick while one runs is absorbed.
-  test "a kick while a sweep is executing does not start a second one" do
+  # queue them twice. A kick while one runs queues ONE run (it defers at its
+  # start while the other runs, ReconcileBackstopTest); a second kick joins it.
+  test "a kick while a sweep is executing queues one run, never two" do
     {:ok, job} = Oban.insert(ReconcileEmbeddings.new(%{}))
     Repo.update_all(from(j in Oban.Job, where: j.id == ^job.id), set: [state: "executing"])
 
+    assert {:ok, %Oban.Job{conflict?: false}} = ReconcileEmbeddings.kick()
     assert {:ok, %Oban.Job{conflict?: true}} = ReconcileEmbeddings.kick()
   end
 

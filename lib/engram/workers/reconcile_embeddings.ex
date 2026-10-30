@@ -40,16 +40,24 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
   use Oban.Worker,
     queue: :maintenance,
-    max_attempts: 1,
+    # A failed or timed-out run is retried (`backoff/1`), so one bad run never
+    # ends a rollout chain for the 3 hours until the next cron.
+    max_attempts: 5,
     # One sweep at a time. Two at once stamp the same rows (the stamp's
     # subquery is not re-checked under a row lock) and, on the maintenance
-    # pool where the stamp commits before the enqueue, queue them twice. A
-    # kick during a sweep is dropped: the running sweep pages until nothing is
-    # left, and the next run (the chain, or the 3-hour cron) catches anything
-    # marked after its last page.
-    # Period = the 15-min timeout, so a job a killed node left `executing`
-    # stops blocking once it could no longer be running.
-    unique: [period: 900, states: [:available, :scheduled, :executing]]
+    # pool where the stamp commits before the enqueue, queue them twice.
+    #
+    # At most ONE queued sweep, whatever its args: `fields` leaves `args` out,
+    # so a re-verify (`mode`/`hop` args) and a plain sweep dedupe against each
+    # other (a re-verify arriving on a queued plain sweep takes it over,
+    # `replace_args/1`). `executing` is not in `states`: a running sweep is
+    # excluded at its start instead (`defer_if_running/1`), so a kick or the
+    # re-verify cron during a run is deferred, never dropped.
+    unique: [
+      fields: [:worker, :queue],
+      period: 900,
+      states: [:available, :scheduled, :retryable]
+    ]
 
   import Ecto.Query
 
@@ -99,13 +107,13 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   a chained run already scheduled is pulled forward to now. `meta.kick`
   marks the notes it finds as explained by an event (never `missed`).
   """
-  def kick do
+  def kick(meta \\ %{"kick" => true}) do
     # `scheduled_at` explicitly: Oban's replace copies only changed fields.
     Oban.insert(
       new(%{},
         scheduled_at: DateTime.utc_now(),
-        meta: %{"kick" => true},
-        replace: [scheduled: [:scheduled_at, :meta]]
+        meta: meta,
+        replace: [scheduled: [:scheduled_at, :meta], retryable: [:scheduled_at, :meta]]
       )
     )
   end
@@ -113,11 +121,71 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(15)
 
+  # A retry is the chain's survival: 5, 10, 20, 40 min (jittered), then the
+  # 3-hour cron. A scheduled retry, never a snooze.
+  @impl Oban.Worker
+  def backoff(%Oban.Job{attempt: attempt}),
+    do: Engram.Jobs.capped_backoff(@chain_seconds, max(attempt - 1, 0), 3_600, 0.25)
+
+  @doc """
+  The `replace` option for a sweep with `args`: a re-verify takes over a
+  queued plain sweep's args (it does everything a plain sweep does); a plain
+  sweep never downgrades a queued re-verify.
+  """
+  @spec replace_args(map()) :: keyword()
+  def replace_args(%{"mode" => "reverify"}),
+    do: [scheduled: [:args], available: [:args], retryable: [:args]]
+
+  def replace_args(_args), do: []
+
+  defp enqueue(args, opts) do
+    {:ok, _} =
+      Oban.insert(new(args, Keyword.merge([replace: replace_args(args)], opts)))
+
+    :ok
+  end
+
+  # Another sweep is running: run later instead of concurrently. Only one
+  # sweep is ever queued (`unique`), so two cannot both start and both defer.
+  # An `executing` row older than the timeout is a killed node's leftover
+  # (Lifeline rescues it) and does not count.
+  defp defer_if_running(%Oban.Job{id: id, args: args, meta: meta}) do
+    since = DateTime.add(DateTime.utc_now(), -div(timeout(nil), 1_000), :second)
+
+    running =
+      from(j in Oban.Job,
+        where:
+          j.worker == ^inspect(__MODULE__) and j.state == "executing" and
+            j.attempted_at > ^since
+      )
+
+    running = if id, do: where(running, [j], j.id != ^id), else: running
+
+    if Repo.exists?(running) do
+      :ok =
+        enqueue(args,
+          schedule_in: @chain_seconds,
+          meta: Map.take(meta || %{}, ["kick", "boot"])
+        )
+
+      :deferred
+    else
+      :run
+    end
+  end
+
   # T3.7 — NO rotation gate needed here. This worker only queries note IDs and
   # enqueues `EmbedNote` jobs — it never decrypts or re-encrypts any payload.
   # The enqueued EmbedNote workers are individually gated via `RotationGate`.
   @impl Oban.Worker
-  def perform(%Oban.Job{args: args} = job) do
+  def perform(%Oban.Job{} = job) do
+    case defer_if_running(job) do
+      :deferred -> :ok
+      :run -> sweep(job)
+    end
+  end
+
+  defp sweep(%Oban.Job{args: args} = job) do
     page_size = Map.get(args, "page", @page)
     reverify? = args["mode"] == "reverify"
 
@@ -378,39 +446,30 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   end
 
   # The successor, in `@chain_seconds`, while there is work only this sweep
-  # does: a version rollout (as often as the old cron), or the re-verify while
-  # a page came back full or the gate was shut (up to `@reverify_hops`). A
-  # shut gate is retried by the next run, never by a snoozing job.
-  defp chain(%{"mode" => "reverify"} = args, _open?, true) do
+  # does: the re-verify while a page came back full or the gate was shut (up
+  # to `@reverify_hops`), else a version rollout (as often as the old cron).
+  # A shut gate is retried by the next run, never by a snoozing job.
+  defp chain(args, open?, more?) do
     hop = Map.get(args, "hop", 0) + 1
+    reverify? = args["mode"] == "reverify"
 
-    _ =
-      if hop < @reverify_hops do
-        {:ok, _} =
-          Oban.insert(new(%{"mode" => "reverify", "hop" => hop}, schedule_in: @chain_seconds))
+    next =
+      cond do
+        reverify? and more? and hop < @reverify_hops -> %{"mode" => "reverify", "hop" => hop}
+        open? -> %{}
+        true -> nil
       end
 
-    :ok
-  end
-
-  defp chain(%{"mode" => "reverify"}, _open?, false), do: :ok
-
-  # Unique against a queued sweep only, not against this running one (the
-  # worker's own `unique` counts `executing`, which would drop every
-  # successor).
-  defp chain(_args, true, _more?) do
-    {:ok, _} =
-      Oban.insert(
-        new(%{},
-          schedule_in: @chain_seconds,
-          unique: [period: 900, states: [:available, :scheduled]]
+    _ =
+      if reverify? and more? and hop >= @reverify_hops do
+        Logger.warning(
+          "reconcile_embeddings: re-verify stopped with work left",
+          Metadata.with_category(:warning, :search, attempt: hop)
         )
-      )
+      end
 
-    :ok
+    if next, do: enqueue(next, schedule_in: @chain_seconds), else: :ok
   end
-
-  defp chain(_args, false, _more?), do: :ok
 
   # The Qdrant half of the rebuild gate (`Rebuild.qdrant_open?/0`).
   # `:reconcile_qdrant_gate` false skips the check (config/test.exs, where no
@@ -1344,7 +1403,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # embed debounce can hold a job back (`EmbedNote.settle_window_seconds/0`),
   # and no `kick/0` explains this run. Version rebuilds, the dense backfill
   # (`dense_missing`) and the link re-extraction (`relink`) are expected work,
-  # never missed.
+  # never missed. `relink` counts the same notes as `content_stale` and
+  # `never_embedded` a second time, so sum notes without it. A boot sweep
+  # (`meta.boot`) is not a kick: what it finds can be missed.
   defp report_found(rebuild_rows, embed_rows, queued, relinked, found) do
     settled_before = DateTime.add(found.now, -EmbedNote.settle_window_seconds(), :second)
 

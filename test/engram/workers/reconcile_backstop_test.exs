@@ -147,6 +147,72 @@ defmodule Engram.Workers.ReconcileBackstopTest do
     end
   end
 
+  # Review M1: a re-verify and a plain sweep must never run at once (both
+  # stamp the same rows and double-queue on the maintenance pool).
+  describe "one sweep at a time" do
+    defp sweeps,
+      do: Repo.all(from(j in Oban.Job, where: j.worker == ^inspect(ReconcileEmbeddings)))
+
+    test "the re-verify takes over a queued plain sweep; a plain one never downgrades it" do
+      {:ok, _} = Oban.insert(ReconcileEmbeddings.new(%{}, schedule_in: 300))
+
+      {:ok, _} =
+        Oban.insert(
+          ReconcileEmbeddings.new(%{"mode" => "reverify"},
+            replace: ReconcileEmbeddings.replace_args(%{"mode" => "reverify"})
+          )
+        )
+
+      assert [%{args: %{"mode" => "reverify"}}] = sweeps()
+
+      {:ok, _} = Oban.insert(ReconcileEmbeddings.new(%{}))
+      {:ok, _} = ReconcileEmbeddings.kick()
+      assert [%{args: %{"mode" => "reverify"}}] = sweeps()
+    end
+
+    test "a sweep that starts while another runs defers instead of sweeping" do
+      user = insert(:user)
+      note = note_for(user, content_hash: "new", embed_hash: "old")
+      {:ok, running} = Oban.insert(ReconcileEmbeddings.new(%{"mode" => "reverify"}))
+
+      Repo.update_all(from(j in Oban.Job, where: j.id == ^running.id),
+        set: [state: "executing", attempted_at: DateTime.utc_now()]
+      )
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+
+      refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+      assert [deferred] = successors()
+      assert_in_five_minutes(deferred)
+    end
+
+    test "a stale executing row (a killed node) does not block" do
+      user = insert(:user)
+      note = note_for(user, content_hash: "new", embed_hash: "old")
+      {:ok, dead} = Oban.insert(ReconcileEmbeddings.new(%{"mode" => "reverify"}))
+
+      Repo.update_all(from(j in Oban.Job, where: j.id == ^dead.id),
+        set: [state: "executing", attempted_at: DateTime.add(DateTime.utc_now(), -3_600)]
+      )
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+    end
+  end
+
+  # Review M2: one failed or timed-out run used to end the rollout chain
+  # (max_attempts 1) until the next 3-hour cron.
+  describe "a failed run" do
+    test "is retried on a capped backoff, not dropped" do
+      assert ReconcileEmbeddings.__opts__()[:max_attempts] >= 5
+
+      waits = for a <- 1..6, do: ReconcileEmbeddings.backoff(%Oban.Job{attempt: a})
+      assert hd(waits) in 300..375
+      assert Enum.all?(waits, &(&1 <= 4_500))
+      assert Enum.at(waits, 2) >= 1_200
+    end
+  end
+
   describe "the found counter" do
     setup do
       close_rollout()
@@ -198,6 +264,14 @@ defmodule Engram.Workers.ReconcileBackstopTest do
 
       assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
       assert {:version, false, 1} in found(ref)
+    end
+
+    test "what the boot sweep finds can be missed (deploys lose events)", %{ref: ref} do
+      user = insert(:user)
+      note_for(user, content_hash: "new", embed_hash: "old", updated_at: hour_ago())
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, meta: %{"boot" => true})
+      assert {:content_stale, true, 1} in found(ref)
     end
 
     test "what a kick finds is explained by the kick", %{ref: ref} do
