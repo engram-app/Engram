@@ -39,6 +39,7 @@ defmodule Engram.Workers.RepathNoteIndex do
   alias Engram.Notes.Note
   alias Engram.Vector.Qdrant
   alias Engram.Workers.EmbedNote
+  alias Engram.Workers.RefreshKeywordVectors
 
   require Logger
 
@@ -92,6 +93,9 @@ defmodule Engram.Workers.RepathNoteIndex do
                 # #746 — Grafana proof that rename took the cheap path (0 Voyage).
                 # `count` is the number of points patched.
                 emit_repath(:ok, count)
+                # The moved points' keyword vectors still encode the old
+                # path's context prefix; a resparse is cheap (no Voyage).
+                _ = Oban.insert(RefreshKeywordVectors.new_for_note(note.id, note.user_id))
                 :ok
 
               {:error, _} = err ->

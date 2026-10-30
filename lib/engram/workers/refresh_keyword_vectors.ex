@@ -65,6 +65,19 @@ defmodule Engram.Workers.RefreshKeywordVectors do
   @spec enabled?() :: boolean()
   def enabled?, do: Engram.ServiceConfig.get(:keyword_refresh, true) != false
 
+  @doc """
+  The job for one note, at backfill priority (`EmbedNote.backfill_priority/0`).
+  Used by the keyword sweep and after a rename moves a note's points
+  (`RepathNoteIndex`): the keyword vector encodes the context prefix
+  (folder > title), and a rename leaves `keyword_version` as it was, so no
+  sweep would ever pick the note up.
+  """
+  def new_for_note(note_id, user_id),
+    do:
+      new(%{note_id: to_string(note_id), user_id: user_id},
+        priority: Engram.Workers.EmbedNote.backfill_priority()
+      )
+
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
 

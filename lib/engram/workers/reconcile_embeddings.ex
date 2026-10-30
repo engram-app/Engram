@@ -1452,9 +1452,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     _ =
       Oban.insert_all(
         Enum.map(fresh, fn {note_id, user_id} ->
-          RefreshKeywordVectors.new(%{note_id: to_string(note_id), user_id: user_id},
-            priority: EmbedNote.backfill_priority()
-          )
+          RefreshKeywordVectors.new_for_note(note_id, user_id)
         end)
       )
 
