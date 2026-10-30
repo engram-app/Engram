@@ -3189,8 +3189,10 @@ defmodule Engram.Indexing do
 
   A chunk is rewritten only if it still matches a stored point by
   fingerprint (dense, sparse-only for points that never had a dense vector,
-  or the legacy unprefixed form written before #1606), or, for a row with no
-  fingerprint, by position and offsets.
+  or the legacy unprefixed form written before #1606), or by position and
+  offsets: a row with no fingerprint needs nothing more, a fingerprinted one
+  (a rename leaves the old path's fingerprints) also needs its
+  `chunk_points.slice_sum` to equal the chunk's `text_sum/2`.
 
   Returns `{:ok, points_updated, points_unmatched}`. An unmatched point kept
   its old keyword vector: a boundary the current chunker no longer produces
