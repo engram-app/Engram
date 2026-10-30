@@ -41,7 +41,7 @@ defmodule Engram.Folders.Rows do
   def path_hmac(filter_key, path), do: Crypto.hmac_field(filter_key, path)
 
   @doc "Encrypts a segment for the folder row `id` (a canonical UUID string)."
-  @spec encrypt_name(binary(), String.t(), String.t()) :: {binary(), binary()}
+  @spec encrypt_name(<<_::256>>, binary(), binary()) :: {binary(), binary()}
   def encrypt_name(dek, id, segment),
     do: Envelope.encrypt(segment, dek, Crypto.aad_for_row(:folders, :name, id))
 
@@ -368,7 +368,7 @@ defmodule Engram.Folders.Rows do
   first, as `Folder` structs (names still encrypted). The recursive walk is
   over folder rows only, so its cost is the number of folders, never notes.
   """
-  @spec subtree(map(), Ecto.UUID.t(), [String.t()]) :: [Folder.t()]
+  @spec subtree(map(), Ecto.UUID.t(), [String.t()]) :: [%Folder{}]
   def subtree(user, vault_id, folders) do
     case Crypto.dek_filter_key(user) do
       {:ok, fk} ->
