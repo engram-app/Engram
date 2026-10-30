@@ -256,11 +256,15 @@ def _cleanup_env(tmp_path, monkeypatch, fail=()):
         return fn
 
     def fake_ssh(cmd, **kw):
+        if "docker events" in cmd or "docker logs" in cmd:
+            if "evidence" not in calls:
+                calls.append("evidence")
         if "docker events" in cmd and "events" in fail:
             raise fsp.subprocess.TimeoutExpired(cmd, 60)
         return _Proc(stdout="0\n")
 
     monkeypatch.setattr(fsp, "ssh", fake_ssh)
+    monkeypatch.setattr(fsp, "stop_load_host", step("stop_load"))
     monkeypatch.setattr(fsp, "fetch_and_clean_load_host", step("load_host"))
     monkeypatch.setattr(fsp, "start_container", step("start"))
     monkeypatch.setattr(fsp, "wait_rpc", step("wait_rpc"))
@@ -277,21 +281,27 @@ def _cleanup_env(tmp_path, monkeypatch, fail=()):
 def test_cleanup_survives_every_failing_step_and_resumes_queues_last(
     tmp_path, monkeypatch
 ):
-    """One raising step used to skip the rest: user left behind, staging queues paused."""
+    """One raising step used to skip the rest: user left behind, staging queues
+    paused. And the queues are stopped and the load killed BEFORE the minutes of
+    evidence collection, so an aborted run cannot keep embedding meanwhile."""
     calls, run = _cleanup_env(
         tmp_path, monkeypatch, fail={"events", "load_host", "cancel"}
     )
     _, _, errors = run()
     assert calls == [
-        "load_host",
         "start",
         "wait_rpc",
         ("pause", True),
+        "cancel",
+        "stop_load",
+        "evidence",
+        "load_host",
         "cancel",
         "delete",
         ("pause", False),
     ]
     assert [e.split(":")[0] for e in errors] == [
+        "cancel jobs",
         "docker events",
         "load host",
         "cancel jobs",
@@ -338,7 +348,8 @@ def test_cleanup_with_staging_down_still_cleans_the_rest_and_says_so(
     """A failed `docker start` left staging down; cleanup then burned 300 s on rpc."""
     calls, run = _cleanup_env(tmp_path, monkeypatch, fail={"start"})
     _, _, errors = run()
-    assert calls == ["load_host", "start"]  # no rpc step against a dead container
+    # no rpc step against a dead container; the load is still stopped first
+    assert calls == ["start", "stop_load", "evidence", "load_host"]
     assert errors and "OPERATOR ACTION" in capsys.readouterr().out
 
 

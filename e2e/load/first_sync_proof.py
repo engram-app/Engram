@@ -602,15 +602,20 @@ def start_load(host: str, work: str, key: str, a, run_id: str) -> subprocess.Pop
     return p
 
 
-def fetch_and_clean_load_host(host: str, work: str, out: Path) -> None:
+def stop_load_host(host: str, work: str) -> None:
+    """Stop the load (idempotent). Its signal handler redacts its log. `[/]`
+    matches "/" in the load's argv but not in this shell's own argv, which
+    holds the pattern text; a plain `{work}/` killed the shell itself."""
     if not work.startswith("/tmp/fsproof."):
-        raise RuntimeError(f"refusing to clean {work!r}")
-    # The load may still run (an abort): stop it first, so its signal handler
-    # redacts its log before the copy, and before removing its files. `[/]`
-    # matches "/" in the load's argv but not in this shell's own argv, which
-    # holds the pattern text; a plain `{work}/` killed the shell itself.
+        raise RuntimeError(f"refusing to touch {work!r}")
     pattern = shlex.quote(f"[/]{work[1:]}/")
     ssh(f"pkill -f {pattern}; sleep 5", host=host, timeout=60)
+
+
+def fetch_and_clean_load_host(host: str, work: str, out: Path) -> None:
+    # The load may still run (an abort): stop it before the copy (so its log
+    # is redacted) and before removing its files.
+    stop_load_host(host, work)
     dest = out / "load"
     dest.mkdir(exist_ok=True)
     tar = subprocess.run(
@@ -877,7 +882,8 @@ def cmd_watch(a) -> int:
 
 
 def cleanup(a, out: Path, since: str, work, user_id, key_id, paused: bool):
-    """Evidence, then the throwaway state. Every step runs whatever the others
+    """Stop the run's writes, collect evidence, delete the throwaway state,
+    resume the queues. Every step runs whatever the others
     did: one raising step used to skip the rest, leaving the user and its
     grants behind and the embed/indexing queues paused for ALL of staging.
     Returns (docker events text, log signature counts, errors)."""
@@ -892,75 +898,86 @@ def cleanup(a, out: Path, since: str, work, user_id, key_id, paused: bool):
             return None
 
     until = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    ev = step(
-        "docker events",
-        lambda: (
-            ssh(
-                f"docker events --since {since} --until {until} --filter container={STAGING_APP} --format '{{{{json .}}}}'",
-                timeout=60,
-            ).stdout
-        ),
-    )
-    ev = ev or ""
-    (out / "events.jsonl").write_text(ev)
-    logs = {}
-    for name, pat in LOG_SIGNATURES.items():
-        n = step(
-            f"docker logs {name}",
-            lambda pat=pat: int(
-                ssh(
-                    f"docker logs --since {since} {STAGING_APP} 2>&1 | grep -c -E {shlex.quote(pat)}",
-                    timeout=120,
-                ).stdout.strip()
-                or 0
+    # 1. Stop the bleeding first. An abort (an outside restart, a Qdrant
+    #    point) means the queues may be running and the load still pushing:
+    #    start staging (idempotent; a kill or failed restart left it down),
+    #    wait for rpc (a fresh boot answers ~30 s in), re-pause, cancel the
+    #    user's jobs, stop the load. Evidence needs none of this undone.
+    up = bool(step("start staging", lambda: start_container() or True))
+    rpc_up = up and bool(step("wait rpc", lambda: wait_rpc() or True))
+
+    def cancel():
+        step(
+            "cancel jobs",
+            lambda: print(
+                f"[watch] cancelled jobs: {cancel_user_jobs(user_id)}", flush=True
             ),
         )
-        if n is not None:
-            logs[name] = n
-    if work:
-        step("load host", lambda: fetch_and_clean_load_host(a.load_host, work, out))
-    # Idempotent: brings back a container our kill (or a failed restart) left
-    # stopped. Down means no rpc step can work; its boot resumes the queues.
-    up = step("start staging", lambda: start_container() or True)
+
+    try:
+        if rpc_up and paused:
+            step("re-pause queues", lambda: pause_qdrant_queues(True))
+        if rpc_up and user_id:
+            cancel()
+        if work:
+            step("stop load", lambda: stop_load_host(a.load_host, work))
+        # 2. Evidence (minutes of docker events/logs), then the load host.
+        ev = (
+            step(
+                "docker events",
+                lambda: (
+                    ssh(
+                        f"docker events --since {since} --until {until} --filter container={STAGING_APP} --format '{{{{json .}}}}'",
+                        timeout=60,
+                    ).stdout
+                ),
+            )
+            or ""
+        )
+        (out / "events.jsonl").write_text(ev)
+        logs = {}
+        for name, pat in LOG_SIGNATURES.items():
+            n = step(
+                f"docker logs {name}",
+                lambda pat=pat: int(
+                    ssh(
+                        f"docker logs --since {since} {STAGING_APP} 2>&1 | grep -c -E {shlex.quote(pat)}",
+                        timeout=120,
+                    ).stdout.strip()
+                    or 0
+                ),
+            )
+            if n is not None:
+                logs[name] = n
+        if work:
+            step("load host", lambda: fetch_and_clean_load_host(a.load_host, work, out))
+        # 3. The throwaway user: cancel what slipped in meanwhile, then delete.
+        if rpc_up and user_id:
+            cancel()
+            step(
+                "delete user",
+                lambda: print(
+                    f"[watch] cleanup: {delete_user(user_id, key_id)}", flush=True
+                ),
+            )
+    finally:
+        if up and paused:  # last, always: never leave staging's queues paused
+            step("resume queues", lambda: pause_qdrant_queues(False))
     if not up:
         print(
             f"[watch] OPERATOR ACTION: {STAGING_APP} on {STAGING_HOST} is down. "
-            f"Run `docker start {STAGING_APP}` (its boot resumes the Oban queues), "
-            f"then delete user {user_id} with Engram.Accounts.Lifecycle.delete_account.",
+            f"Run `docker start {STAGING_APP}`; its boot resumes the Oban queues, so "
+            f"at once pause {QDRANT_QUEUES} (Oban.pause_queue) and cancel user "
+            f"{user_id}'s jobs (cancel_user_jobs in first_sync_proof.py), then delete "
+            f"the user with Engram.Accounts.Lifecycle.delete_account and resume the queues.",
             flush=True,
         )
-    elif paused or user_id:
-        try:
-            # A restart leaves a container that is still booting (rpc
-            # :noconnection) with the queues resumed: wait, re-pause, cancel
-            # the user's jobs, then delete, so nothing embeds into the shared
-            # Qdrant.
-            rpc_up = step("wait rpc", lambda: wait_rpc() or True)
-            if rpc_up and paused:
-                step("re-pause queues", lambda: pause_qdrant_queues(True))
-            if rpc_up and user_id:
-                step(
-                    "cancel jobs",
-                    lambda: print(
-                        f"[watch] cancelled jobs: {cancel_user_jobs(user_id)}",
-                        flush=True,
-                    ),
-                )
-                step(
-                    "delete user",
-                    lambda: print(
-                        f"[watch] cleanup: {delete_user(user_id, key_id)}", flush=True
-                    ),
-                )
-        finally:
-            if paused:  # last, always: never leave staging's queues paused
-                step("resume queues", lambda: pause_qdrant_queues(False))
-        if errors and user_id:
-            print(
-                f"[watch] OPERATOR ACTION: cleanup incomplete; check user {user_id} is "
-                f"deleted and Oban queues {QDRANT_QUEUES} run on {STAGING_APP}",
-                flush=True,
-            )
+    elif errors and user_id:
+        print(
+            f"[watch] OPERATOR ACTION: cleanup incomplete; check user {user_id} is "
+            f"deleted and Oban queues {QDRANT_QUEUES} run on {STAGING_APP}",
+            flush=True,
+        )
     return ev, logs, errors
 
 
