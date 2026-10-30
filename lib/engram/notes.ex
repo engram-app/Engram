@@ -422,6 +422,8 @@ defmodule Engram.Notes do
   @spec mint_id() :: Ecto.UUID.t()
   def mint_id, do: UUIDv7.generate()
 
+  @folder_memo :engram_notes_folder_memo
+
   # The folder row must exist before the note row that names it, in the same
   # transaction: `notes_set_folder_ref` then finds it, and the note is born
   # pointing at its folder. Call it after the vault seq lock is taken, so two
@@ -431,8 +433,40 @@ defmodule Engram.Notes do
   # Returns the folder's id (nil at the root) so a writer that does not change
   # `folder_hmac` (the trigger would not refire) can still set the reference.
   defp ensure_folder_row!(user, vault_id, folder) do
+    case Process.get(@folder_memo) do
+      nil ->
+        resolve_folder_row!(user, vault_id, folder)
+
+      memo ->
+        case memo do
+          %{{^vault_id, ^folder} => id} ->
+            id
+
+          _ ->
+            id = resolve_folder_row!(user, vault_id, folder)
+            Process.put(@folder_memo, Map.put(memo, {vault_id, folder}, id))
+            id
+        end
+    end
+  end
+
+  defp resolve_folder_row!(user, vault_id, folder) do
     {:ok, id} = Rows.ensure(user, vault_id, folder)
     id
+  end
+
+  # A batch of per-note writes (a restore chunk, a batch move) resolves each
+  # DISTINCT folder once, not once per note: `ensure_folder_row!/3` memoizes in
+  # the process for the span of `fun`. Safe because nothing in such a span
+  # deletes or renames a folder row; a rollback ends the span with it.
+  defp with_folder_memo(fun) do
+    previous = Process.put(@folder_memo, %{})
+
+    try do
+      fun.()
+    after
+      if previous, do: Process.put(@folder_memo, previous), else: Process.delete(@folder_memo)
+    end
   end
 
   @doc """
@@ -4771,7 +4805,7 @@ defmodule Engram.Notes do
     with {:ok, moves} <- resolve_moves(user, vault, ids, target_folder),
          :ok <- validate_move_targets(user, vault, moves),
          :ok <- claim_moves(user, vault, moves) do
-      Repo.transaction(fn -> apply_moves(user, vault, moves) end)
+      Repo.transaction(fn -> with_folder_memo(fn -> apply_moves(user, vault, moves) end) end)
     end
   end
 
@@ -7516,7 +7550,7 @@ defmodule Engram.Notes do
 
       {r, s} =
         try do
-          restore_chunk(user, vault, op_id, chunk)
+          with_folder_memo(fn -> restore_chunk(user, vault, op_id, chunk) end)
         rescue
           e ->
             release_claims(user, vault, pending)
