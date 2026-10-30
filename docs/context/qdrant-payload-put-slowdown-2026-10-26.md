@@ -1,9 +1,11 @@
 # Context Doc: Qdrant payload PUT slowdown (2026-10-26)
 
-_Last verified: 2026-10-26_
+_Last verified: 2026-10-30_
 
 ## Status
-Mitigated in code (PR 2261, 3d08eab9f), root cause NOT proven. Verify after the next prod deploy (issue 2263).
+PUT mitigated in code (PR 2261, 3d08eab9f). As of 2026-10-30 the remaining
+tail is real and inside Qdrant; cause identified with medium-high
+confidence (see "2026-10-30 findings"). Decision: accept and alert.
 
 ## What This Is
 Client metric `op=set_payload` (`engram_prom_ex_qdrant_request_duration_milliseconds`) rose from ~10ms p95 (before 10-17) to 3-4s hourly p95 on `role=worker` by 10-26.
@@ -25,10 +27,44 @@ RebuildStaleNote backfill peaked 10-24..25 (96k/261k jobs per 6h) but the slowne
 ## Fix (PR 2261, 3d08eab9f)
 Swap PUT (overwrite) for POST set plus a points-scoped payload delete of known keys (`PayloadKeys.note_keys` + leaked plaintext keys + `note_id`). Telemetry `[:engram,:qdrant,:payload_write]` with a `caller` tag. Dashboard row: engram-infra PR 1635.
 
-## Not proven
-Why PUT is slow (unverified). Check PUT p95 on the Qdrant-side metric after the next prod deploy.
+## 2026-10-30 findings
+Measured (prod, Grafana):
+- App side, 7 days of `set_payload`: 27,239 calls, 3.7% over 500 ms, 2.3%
+  over 1 s, 0 over 5 s, p50 ~15 ms.
+- The app-side slow counts match Qdrant's server-side `POST /points/payload`
+  hour by hour, so the time is spent inside Qdrant, not in our client or
+  the network.
+- Bursty: 0.5-2% over 500 ms most hours, 6-11% in some hours (optimizer
+  runs, maintenance sweeps).
+- `POST /points/payload` has the worst over-500 ms share of any endpoint
+  over 48 h: 0.96%, vs `PUT /points/vectors` 0.64%, upsert 0.10%,
+  `/points/payload/delete` 0.07%.
+- Correlates (slow share inside vs outside the condition): disk page faults
+  over 300/s hold 64% of slow calls (3.4% vs 1.15%); Qdrant CPU near its
+  0.5 vCPU cap (4.1% vs 1.45%); optimizer running (3.0% vs 1.5%).
+
+Root cause (deduced, medium-high confidence): Qdrant's copy-on-write move.
+A payload or vector update to a point in a non-appendable (optimized)
+segment copies the whole point, reading all its on-disk vectors, into the
+appendable segment. Hence the page faults and the CPU tie. The follow-up
+payload delete on the same ids is fast because those points were just
+moved. Our comment in `lib/engram/indexing.ex` (the `refresh_ids` skip in
+the commit path, ~L1110) already notes the copy.
+
+Impact: no request path waits on these writes. The payload refresh runs in
+`commit_index` (EmbedNote, RebuildStaleNote) and the repath in
+`RepathNoteIndex`, all Oban jobs.
+
+Options:
+- Accept and alert on the over-500 ms share (chosen).
+- Full upsert from the vector cache instead of `set_payload` (design change).
+- More Qdrant RAM/CPU (costs money).
+- `wait=false` (rejected: reopens the marked-indexed-before-visible race).
 
 ## Gotchas
 - `Engram.PromEx.FixedBucketsTest` pins every histogram's name and `le` boundaries; add new distributions to `@scraped`.
 - A 4-partition CI shows one failing test at a time: grep the WHOLE `test/` tree for stale wire-shape stubs (round 2 found a PUT stub in `NoteFieldsTest`).
+- Qdrant's server metrics are scraped 3x (one series per Alloy `task`
+  label): use `max by` across `task` for counts and rates, or every number
+  triples. Quantiles are unaffected.
 - Tempo returned no slow Qdrant spans (span naming mismatch, unresolved); do not rely on traces here.
