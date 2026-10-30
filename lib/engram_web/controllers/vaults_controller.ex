@@ -228,7 +228,7 @@ defmodule EngramWeb.VaultsController do
     with_writable_vault(conn, id, fn vault_id ->
       case Vaults.delete_vault(user, vault_id) do
         {:ok, vault} ->
-          Vaults.track_deleted(user, vault, EngramWeb.Plugs.WebActivity.surface(conn.assigns))
+          Vaults.track_deleted(user, vault, EngramWeb.RequestMeta.surface(conn.assigns))
           json(conn, %{deleted: true, id: vault.id})
 
         {:error, :not_found} ->
@@ -375,7 +375,7 @@ defmodule EngramWeb.VaultsController do
             end
 
           WelcomeNote.seed(user, vault)
-          Vaults.track_created(user, vault, EngramWeb.Plugs.WebActivity.surface(conn.assigns))
+          Vaults.track_created(user, vault, EngramWeb.RequestMeta.surface(conn.assigns))
 
           conn
           |> put_status(201)

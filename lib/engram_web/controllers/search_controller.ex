@@ -42,7 +42,7 @@ defmodule EngramWeb.SearchController do
             cross_vault: cross_vault,
             mode: Search.parse_mode(params["mode"]),
             group_by_note: true,
-            surface: EngramWeb.Plugs.WebActivity.surface(conn.assigns)
+            surface: EngramWeb.RequestMeta.surface(conn.assigns)
           ]
           |> then(&if(tags, do: Keyword.put(&1, :tags, tags), else: &1))
           |> then(&if(folder, do: Keyword.put(&1, :folder, folder), else: &1))
