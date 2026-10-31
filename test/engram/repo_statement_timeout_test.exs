@@ -147,8 +147,13 @@ defmodule Engram.RepoStatementTimeoutTest do
       refute Engram.Sentry.EventFilter.server_error?(%Engram.Repo.ShedError{code: code})
     end
 
-    log =
-      ExUnit.CaptureLog.capture_log(fn ->
+    # Only THIS process's events: the module is async, and a global capture
+    # also catches other tests' errors (a pool disconnect, a decrypt failure).
+    # The handler logs synchronously in the process that raised, here the test.
+    me = self()
+
+    {_, events} =
+      Engram.Test.LogCapture.with_events(fn ->
         EngramWeb.RequestExceptionLogger.handle_event(
           [:bandit, :request, :exception],
           %{},
@@ -157,9 +162,17 @@ defmodule Engram.RepoStatementTimeoutTest do
         )
       end)
 
-    assert log =~ "[warning] request shed at its DB bound: query_canceled"
-    refute log =~ "[error]"
+    mine =
+      for %{meta: %{pid: ^me}, level: level, msg: msg} <- events,
+          do: {level, render_msg(msg)}
+
+    assert {:warning, "request shed at its DB bound: query_canceled"} in mine
+    refute Enum.any?(mine, fn {level, _} -> level in [:error, :critical, :alert, :emergency] end)
   end
+
+  defp render_msg({:string, s}), do: IO.iodata_to_binary(s)
+  defp render_msg({:report, _}), do: ""
+  defp render_msg(other), do: to_string(other)
 
   test "the shed counter is declared on the PromEx plugin" do
     metric =
