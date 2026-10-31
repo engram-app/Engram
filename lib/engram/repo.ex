@@ -308,17 +308,18 @@ defmodule Engram.Repo do
 
   # Literal statements, not one built at runtime: the SQL is fixed text. The
   # rotation probe stays the LAST column (tenant_transaction/2 reads it).
-  defp enter_tenant(uuid, gated?) do
-    case Process.get(:engram_db_bounds) do
-      nil ->
-        sql = if gated?, do: @tenant_enter_gated, else: @tenant_enter
-        query!(sql, [uuid], source: "tenant_enter")
+  defp enter_tenant(uuid, gated?), do: enter_tenant(uuid, gated?, Process.get(:engram_db_bounds))
 
-      %{statement: s, lock: l} ->
-        sql = if gated?, do: @tenant_enter_gated_bounded, else: @tenant_enter_bounded
-        query!(sql, [uuid, "#{s}ms", "#{l}ms"], source: "tenant_enter")
-    end
-  end
+  defp enter_tenant(uuid, false, nil), do: query!(@tenant_enter, [uuid], source: "tenant_enter")
+
+  defp enter_tenant(uuid, true, nil),
+    do: query!(@tenant_enter_gated, [uuid], source: "tenant_enter")
+
+  defp enter_tenant(uuid, false, %{statement: s, lock: l}),
+    do: query!(@tenant_enter_bounded, [uuid, "#{s}ms", "#{l}ms"], source: "tenant_enter")
+
+  defp enter_tenant(uuid, true, %{statement: s, lock: l}),
+    do: query!(@tenant_enter_gated_bounded, [uuid, "#{s}ms", "#{l}ms"], source: "tenant_enter")
 
   # SQLSTATE 57014 (statement_timeout) and 55P03 (lock_timeout): the request's
   # own bound shed it. Only under a request bound, so a worker that rescues
