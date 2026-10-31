@@ -65,7 +65,6 @@ defmodule EngramWeb.Router do
     # words: "data loss beats a stale row". Message precedence is worth less.
     plug EngramWeb.Plugs.RequirePluginVersion
     plug EngramWeb.Plugs.RequireApiRpsBudget
-    plug EngramWeb.Plugs.WriteConcurrency
   end
 
   # RequireSession that still admits API keys: rejects third-party OAuth grants

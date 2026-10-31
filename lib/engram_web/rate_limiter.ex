@@ -38,7 +38,6 @@ defmodule EngramWeb.RateLimiter do
           | :client_logs
           | :folder_create
           | :checkout_status
-          | :write_inflight
           | :other
 
   @doc """
