@@ -244,29 +244,31 @@ defmodule Engram.Attachments do
         ) ::
           {:ok, Attachment.t()} | {:error, term()}
   def commit_row(user, vault, path, path_hmac, size, dek_version, build, opts \\ []) do
-    # Decided before the transaction: an unlimited plan has no cap to
-    # serialize, so it skips the per-user lock (and validate_storage_cap/3
-    # skips the usage SUM).
-    quota? = storage_capped?(user)
+    # Read once, before the transaction, and used for both the lock and the
+    # check, so a plan change in between cannot run the SUM without the lock.
+    # An unlimited plan has no cap to serialize: no quota lock, no SUM.
+    limit = Billing.effective_limit(user, :attachment_bytes_cap)
 
     # Gate outermost (see SeqGate): waiters queue without a pool connection.
     SeqGate.with_vault(vault.id, fn ->
       Repo.transaction(fn ->
         :ok = acquire_path_lock(user.id, path_hmac)
         existing = fetch_existing(user, vault.id, path_hmac)
-        if quota?, do: :ok = Repo.advisory_lock!(quota_lock_id(user.id))
 
-        # The vault row BEFORE the users row (rotation_gate's FOR SHARE): an
-        # account delete deletes vaults then users, so users-then-vault here
-        # was a 40P01 cycle with it (#2339). write_row's next_seq! re-enters
-        # this lock.
-        :ok = Repo.with_tenant!(user.id, fn -> Engram.Vaults.lock_seq!(vault.id) end)
-
-        # Under the locks and before anything is written: a row committed after
-        # a DEK rotation's sweep went by would stay under the retiring key.
+        # The cap check (a user-wide SUM) is serialized by the per-user quota
+        # lock, so it runs BEFORE the vault row lock that every writer of the
+        # vault waits on.
         with :ok <- base_hash_gate(existing, path, opts[:base_hash]),
+             :ok <- quota_check(user, limit, existing, size),
+             # The vault row BEFORE the users row (rotation_gate's FOR SHARE):
+             # an account delete deletes vaults then users, so users-then-vault
+             # here was a 40P01 cycle with it (#2339). write_row's next_seq!
+             # re-enters this lock.
+             :ok <- Repo.with_tenant!(user.id, fn -> Engram.Vaults.lock_seq!(vault.id) end),
+             # Under the locks and before anything is written: a row committed
+             # after a DEK rotation's sweep went by would stay under the
+             # retiring key.
              :ok <- rotation_gate(user, dek_version),
-             :ok <- validate_storage_cap(user, existing, size),
              {:ok, insert_id, attrs} <- build.(existing),
              {:ok, att} <- write_row(user, existing, insert_id, attrs, path) do
           # Phase B.3: path is virtual — splice the plaintext we already have
@@ -2345,15 +2347,26 @@ defmodule Engram.Attachments do
   @doc false
   # Whether the user's plan caps attachment storage (same sentinel as
   # validate_storage_cap/3: a negative or absent limit is unlimited).
-  defp storage_capped?(user) do
-    case Billing.effective_limit(user, :attachment_bytes_cap) do
-      n when is_integer(n) and n >= 0 -> true
-      _ -> false
-    end
+  # Inside commit_row's transaction: the quota lock and the check, for a
+  # capped plan only.
+  defp quota_check(user, limit, existing, size) when is_integer(limit) and limit >= 0 do
+    :ok = Repo.advisory_lock!(quota_lock_id(user.id))
+    storage_cap_at(limit, user, existing, size)
   end
 
-  def validate_storage_cap(user, existing, new_size) do
-    case Billing.effective_limit(user, :attachment_bytes_cap) do
+  defp quota_check(_user, _limit, _existing, _size), do: :ok
+
+  def validate_storage_cap(user, existing, new_size),
+    do:
+      storage_cap_at(
+        Billing.effective_limit(user, :attachment_bytes_cap),
+        user,
+        existing,
+        new_size
+      )
+
+  defp storage_cap_at(limit, user, existing, new_size) do
+    case limit do
       # Same unlimited sentinel as validate_size/2 above.
       n when is_integer(n) and n < 0 ->
         :ok

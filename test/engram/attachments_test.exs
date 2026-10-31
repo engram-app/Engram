@@ -270,6 +270,23 @@ defmodule Engram.AttachmentsTest do
       refute Enum.any?(upload_queries(user, vault), &(&1 =~ "hashtextextended"))
     end
 
+    # The user-wide usage SUM is serialized by the quota lock; run under the
+    # vault row lock it stalled every writer of the vault for its duration.
+    test "a capped plan sums usage before taking the vault row lock", %{user: user, vault: vault} do
+      insert(:user_limit_override,
+        user: user,
+        key: "attachment_bytes_cap",
+        value: %{"v" => 100_000_000}
+      )
+
+      queries = upload_queries(user, vault)
+      sum_at = Enum.find_index(queries, &(&1 =~ ~r/sum\(.*FROM "attachments"/is))
+      vault_at = Enum.find_index(queries, &(&1 =~ ~r/FROM vaults .*FOR NO KEY UPDATE/))
+
+      assert sum_at && vault_at, inspect(queries, pretty: true)
+      assert sum_at < vault_at
+    end
+
     test "a capped plan still serializes on the quota lock", %{user: user, vault: vault} do
       insert(:user_limit_override,
         user: user,
