@@ -26,7 +26,7 @@ Two layers:
 - **`Engram.Onboarding.gate/2`** — the onboarding verdict itself. `:ok` or
   `{:error, missing, next_step}`, with `GateCache` pass-caching.
   `EngramWeb.Plugs.RequireOnboarding` is a thin 403-shaping wrapper over it.
-- **`EngramWeb.ChannelGate.check/3`** — the socket-side equivalent of the whole
+- **`EngramWeb.ChannelGate.check/4`** — the socket-side equivalent of the whole
   vault-scoped pipeline. Composes lifecycle + onboarding and returns the map to
   reply straight from `join/3`. `SyncChannel` and `CrdtChannel` both call it.
 
@@ -55,7 +55,7 @@ touches REST" into a permanently locked-out account in daily active use.
 Port the enforcement half and the liveness half together, always.
 
 **Adding a route to the vault pipeline gets you the plugs. Adding a _channel_
-gets you nothing, call `ChannelGate.check/3` from its `join/3`. And adding a
+gets you nothing, call `ChannelGate.check/4` from its `join/3`. And adding a
 plug to the pipeline does NOT add it to sockets: decide explicitly and put it
 in `ChannelGate`.**
 
@@ -76,8 +76,8 @@ in `ChannelGate`.**
 
 ## Ordering (do not "tidy" this)
 In `CrdtChannel`: `crdt_proto` → **topic ownership match** →
-`ChannelGate.check/3` → vault resolve. In `SyncChannel`: topic ownership
-match → `ChannelGate.check/3` → vault resolve.
+`ChannelGate.check/4` → vault resolve. In `SyncChannel`: topic ownership
+match → `ChannelGate.check/4` → vault resolve.
 
 Rotation used to sit ahead of the ownership match in `CrdtChannel`; #1434
 moved it inside `ChannelGate` so `SyncChannel` gets it too. Behaviour change
@@ -91,7 +91,7 @@ The gate goes last because:
 - the plugin's identity self-heal keys on `reason === "unauthorized"`
   specifically (`channel.ts`, e2e test_84) — replacing that reason wedges it;
 - a user mid-DEK-rotation on their OWN topic must still hear
-  `rotation_in_progress`, `check/3` runs `rotation/1` before `onboarding/1`
+  `rotation_in_progress`, `check/4` runs `rotation/1` before `onboarding/1`
   for exactly this, and there is a test on it. Only the FOREIGN-topic case
   changed: #1434 moved rotation behind the ownership match, so a mid-rotation
   user probing someone else's topic now correctly gets `unauthorized`.
@@ -134,7 +134,7 @@ There are mutation-checked tests for all three in
   is a client convention, not an enforced one — and this topic is reachable
   pre-onboarding by design.
 - **Lifecycle is never cached and never read off the socket struct.**
-  `ChannelGate.check/3` re-reads the row on every join. An admin suspension has
+  `ChannelGate.check/4` re-reads the row on every join. An admin suspension has
   to bite on the *next* join: `SessionInvalidator` kills the live socket, but
   the JWT stays valid and the client reconnects within seconds. `GateCache`
   holds PASS verdicts for 60s, so routing the lifecycle check through it would

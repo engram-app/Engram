@@ -900,9 +900,21 @@ defmodule Engram.Billing do
       if type != "subscription.created" and is_binary(data["id"]),
         do: get_subscription_by_paddle_id(data["id"])
 
-    case existing do
-      nil -> upsert_subscription(type, data, occurred_at)
-      sub -> apply_to_existing(type, sub, data, occurred_at)
+    # A plan can reopen the gate (a lapsed paid account parked on the
+    # billing step). The id is the event's claim, read only: a line needs the
+    # write to have landed for that user. The upsert verifies the binding.
+    owner_id = if existing, do: existing.user_id, else: get_in(data, ["custom_data", "user_id"])
+
+    apply = fn ->
+      case existing do
+        nil -> upsert_subscription(type, data, occurred_at)
+        sub -> apply_to_existing(type, sub, data, occurred_at)
+      end
+    end
+
+    case Ecto.UUID.cast(owner_id) do
+      {:ok, user_id} -> Engram.Onboarding.log_gate_opening(user_id, "billing", apply)
+      :error -> apply.()
     end
   end
 

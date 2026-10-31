@@ -2,7 +2,7 @@ defmodule EngramWeb.ChannelGate do
   @moduledoc """
   The socket-side equivalent of the vault-scoped router pipeline's access
   gates. Both `EngramWeb.SyncChannel` and `EngramWeb.CrdtChannel` call
-  `check/3` from `join/3`.
+  `check/4` from `join/3`.
 
   A Plug takes a `conn` and never runs on a socket, so every rule the pipeline
   enforces has to be re-expressed here or it silently does not apply to sync.
@@ -12,7 +12,7 @@ defmodule EngramWeb.ChannelGate do
   The vault scope pipes `:authed_api` (`router.ex:49-68`), which runs
   **twelve** plugs (`WebActivity` was added after `BumpActivity`; the deleted
   `EnforceSearchCap` once inflated an older count). Below in PIPELINE order, which is also the order
-  `check/3` applies them; derive one from the other only in that order.
+  `check/4` applies them; derive one from the other only in that order.
 
   Mirrored:
 
@@ -35,7 +35,7 @@ defmodule EngramWeb.ChannelGate do
       requests); not mirrored on join. `CrdtChannel` emits its own `:crdt`
       activity event instead, so there is no socket-side `:web` count.
     * `PreAuthRateLimit` (plug 1) — no equivalent, so there is **no join rate
-      limiter at all**, which is why `check/3` sits behind the free topic
+      limiter at all**, which is why `check/4` sits behind the free topic
       ownership match.
     * `DeviceFingerprint` (4) — no equivalent.
     * `EnforceSearchCap` — DELETED, along with `Engram.Usage.SearchCap` (see
@@ -56,7 +56,7 @@ defmodule EngramWeb.ChannelGate do
   user-scoped and onboarding pipelines, NOT this one.
 
   **Adding a plug to `:authed_api` does not add it here.** Decide explicitly
-  whether sync needs it, then either add it to `check/3` or add it to the NOT
+  whether sync needs it, then either add it to `check/4` or add it to the NOT
   list above with a reason.
 
   ## Why the plugin-version floor is enforced here and not at `connect/3`
@@ -66,7 +66,7 @@ defmodule EngramWeb.ChannelGate do
   anyway: `connect/3` can only return `:error`, which reaches the client as an
   anonymous close carrying no payload. A blocked client would retry forever
   with nothing to show the user, which is the failure mode the whole feature
-  exists to avoid. `check/3` returns a reason map, so the plugin can say
+  exists to avoid. `check/4` returns a reason map, so the plugin can say
   "update the plugin" and stop.
 
   ## Why `user:` is not gated
@@ -118,7 +118,7 @@ defmodule EngramWeb.ChannelGate do
 
   require Logger
 
-  # Refusals `check/3` logs (#1430). See the clause that uses it.
+  # Refusals `check/4` logs (#1430). See the clause that uses it.
   @logged_refusals ~w(account_suspended account_deleted)
 
   @doc """
@@ -136,9 +136,13 @@ defmodule EngramWeb.ChannelGate do
   # passes dialyzer, and silently skips the compatibility floor. Pass
   # `socket.assigns[:plugin_version]`; nil (every client that predates the
   # param, plus the web SPA) is allowed.
-  @spec check(Engram.Accounts.User.t(), term(), String.t() | nil) :: :ok | {:error, map()}
-  def check(%Engram.Accounts.User{id: user_id} = user, api_key, plugin_version) do
-    case do_check(user, api_key, plugin_version) do
+  #
+  # `topic` is the joining channel's `socket.topic`, logged (user segment
+  # hashed) as the `route` of an `onboarding refused` line.
+  @spec check(Engram.Accounts.User.t(), term(), String.t() | nil, String.t()) ::
+          :ok | {:error, map()}
+  def check(%Engram.Accounts.User{id: user_id} = user, api_key, plugin_version, topic) do
+    case do_check(user, api_key, plugin_version, topic) do
       :ok ->
         :ok
 
@@ -163,7 +167,7 @@ defmodule EngramWeb.ChannelGate do
     end
   end
 
-  defp do_check(%Engram.Accounts.User{id: user_id}, api_key, plugin_version) do
+  defp do_check(%Engram.Accounts.User{id: user_id}, api_key, plugin_version, topic) do
     # One read, shared by both checks — `gate/2` is told not to re-read.
     #
     # No `|| socket_user` fallback: `Accounts.Lifecycle.hard_delete/2` removes
@@ -187,7 +191,7 @@ defmodule EngramWeb.ChannelGate do
         # stamp below, mirroring router.ex:65. See the note there.
         with :ok <- deleted(fresh),
              :ok <- rotation(fresh),
-             :ok <- onboarding(fresh),
+             :ok <- onboarding(fresh, topic),
              :ok <- suspended(fresh) do
           # Liveness stamp sits HERE, between the account gates and the API
           # gates, because that is where `BumpActivity` sits on HTTP
@@ -297,7 +301,7 @@ defmodule EngramWeb.ChannelGate do
   # unselected columns as nil, so a `select:`-projected `get_user/1` yields
   # `%User{deleted_at: nil, suspended_at: nil}` and both clauses match
   # cleanly — every suspended and soft-deleted account would pass, with no
-  # crash and no test failure. `check/3` must keep loading the FULL row; if
+  # crash and no test failure. `check/4` must keep loading the FULL row; if
   # the join cost ever motivates a narrower query, gate on a column list, not
   # on these clauses.
   defp deleted(%{deleted_at: %DateTime{}}), do: {:error, %{reason: "account_deleted"}}
@@ -404,8 +408,11 @@ defmodule EngramWeb.ChannelGate do
     end
   end
 
-  defp onboarding(user) do
-    case Onboarding.gate(user, fresh: true) do
+  defp onboarding(user, topic) do
+    case Onboarding.gate(user,
+           fresh: true,
+           log_meta: fn -> [route: Metadata.redact_topic(topic)] end
+         ) do
       :ok ->
         :ok
 

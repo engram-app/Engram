@@ -66,6 +66,26 @@ defmodule EngramWeb.OnboardingGateIntegrationTest do
     assert "terms" in body["missing"]
   end
 
+  # The refusal line had no route, client or user agent, so a stuck user
+  # could not be told from one the web app's own prefetch tripped.
+  test "a refusal names the route, the surface and the user agent", %{conn: conn, user: user} do
+    {_, events} =
+      Engram.Test.LogCapture.with_events(fn ->
+        conn |> put_req_header("user-agent", "test-agent/1.0") |> get("/api/vault/tree")
+      end)
+
+    event = Enum.find(events, &refused_msg?(&1.msg))
+    assert event, "no onboarding refused line"
+    assert event.meta[:route] == "EngramWeb.VaultTreeController#show"
+    assert event.meta[:surface] == "api"
+    assert event.meta[:user_agent] == "test-agent/1.0"
+    assert event.meta[:user_id] == user.id
+    assert event.meta[:category] == :lifecycle
+  end
+
+  defp refused_msg?({:string, s}), do: IO.iodata_to_binary(s) == "onboarding refused"
+  defp refused_msg?(_), do: false
+
   test "GET /api/folders returns 200 after onboarding completes", %{conn: conn, user: user} do
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
     insert(:subscription, user: user, status: "active")

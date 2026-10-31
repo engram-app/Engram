@@ -246,7 +246,9 @@ defmodule Engram.Vaults do
     if String.trim(client_id) == "" do
       {:error, :invalid_client_id}
     else
-      do_register_vault(user, name, client_id, atomize_keys(extra_attrs), opts)
+      Engram.Onboarding.log_gate_opening(user, "vault", fn ->
+        do_register_vault(user, name, client_id, atomize_keys(extra_attrs), opts)
+      end)
     end
   end
 
@@ -920,7 +922,9 @@ defmodule Engram.Vaults do
                 "vault deleted",
                 Metadata.with_category(:info, :lifecycle,
                   user_id: deleted.user_id,
-                  vault_id: deleted.id
+                  vault_id: deleted.id,
+                  # 0 here closes the onboarding gate again (vault step).
+                  vaults_left: count_vaults(deleted.user_id)
                 )
               )
 
@@ -967,6 +971,13 @@ defmodule Engram.Vaults do
   {:error, :purge_started}, or {:error, :not_found}.
   """
   def restore_vault(user, vault_id) do
+    # Restoring the only vault reopens the vault step of the onboarding gate.
+    Engram.Onboarding.log_gate_opening(user, "vault_restore", fn ->
+      do_restore_vault(user, vault_id)
+    end)
+  end
+
+  defp do_restore_vault(user, vault_id) do
     user = fresh_user(user)
 
     Repo.with_tenant(user.id, fn ->

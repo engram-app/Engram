@@ -75,7 +75,9 @@ defmodule EngramWeb.OnboardingController do
       step =
         if Onboarding.accepted?(user, "terms_of_service", tv), do: "legal_update", else: "terms"
 
-      case Onboarding.accept_terms(user, tv, th, pv, ph, meta) do
+      case Onboarding.log_gate_opening(user, step, fn ->
+             Onboarding.accept_terms(user, tv, th, pv, ph, meta)
+           end) do
         {:ok, agreement} ->
           log_step(user, step)
 
@@ -116,7 +118,9 @@ defmodule EngramWeb.OnboardingController do
   def accept_free_tier(conn, _params) do
     user = conn.assigns.current_user
 
-    case Onboarding.accept_free_tier(user) do
+    case Onboarding.log_gate_opening(user, "free_tier", fn ->
+           Onboarding.accept_free_tier(user)
+         end) do
       {:ok, updated} ->
         log_step(user, "free_tier")
 
@@ -153,7 +157,11 @@ defmodule EngramWeb.OnboardingController do
     if attrs == %{} do
       conn |> put_status(422) |> json(%{error: "missing_fields"})
     else
-      case Onboarding.set_profile(conn.assigns.current_user, attrs) do
+      user = conn.assigns.current_user
+
+      case Onboarding.log_gate_opening(user, "profile", fn ->
+             Onboarding.set_profile(user, attrs)
+           end) do
         {:ok, user} ->
           log_step(user, "profile", fields: attrs |> Map.keys() |> Enum.sort() |> Enum.join(","))
           conn |> put_status(:created) |> json(user.onboarding_profile)

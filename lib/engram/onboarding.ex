@@ -25,6 +25,9 @@ defmodule Engram.Onboarding do
   # Origins `set_profile/2` records; "connector" is implied by `tools_prefilled`.
   @signup_sources ~w(plugin)
 
+  # Set while `log_gate_opening/3` runs, so a nested call logs nothing.
+  @gate_opening_key :engram_onboarding_gate_opening
+
   @connector_vault_name "My Vault"
   @connector_vault_action "connector_vault_provisioned"
   @connector_vault_client_id "connector-signup"
@@ -305,7 +308,7 @@ defmodule Engram.Onboarding do
       # for the life of the connection. `accept_free_tier/1` is a bare
       # `Repo.update` with no socket disconnect, so nothing else would clear it.
       # `fresh: true` means the caller already re-read this row this join
-      # (see `EngramWeb.ChannelGate.check/3`) — don't pay for it twice.
+      # (see `EngramWeb.ChannelGate.check/4`) — don't pay for it twice.
       user =
         if Keyword.get(opts, :fresh, false),
           do: user,
@@ -363,15 +366,100 @@ defmodule Engram.Onboarding do
         # exists to surface — #1666 ran for five hours with no signal at all.
         Logger.warning(
           "onboarding refused",
-          Metadata.with_category(:warning, :lifecycle,
-            reason: "onboarding_required",
-            missing: Enum.join(missing, ","),
-            next_step: to_string(next_step),
-            user_id: user.id
+          Metadata.with_category(
+            :warning,
+            :lifecycle,
+            [
+              reason: "onboarding_required",
+              missing: Enum.join(missing, ","),
+              next_step: to_string(next_step),
+              user_id: user.id
+            ] ++ log_meta(opts)
           )
         )
 
         {:error, missing, next_step}
+    end
+  end
+
+  # Where the refused request came from (`route`, `surface`, `user_agent`),
+  # from the caller's `log_meta:` option. A function, so the hot pass path
+  # never builds it: only a refusal pays for the route-table lookup.
+  defp log_meta(opts), do: Keyword.get(opts, :log_meta, fn -> [] end).()
+
+  @doc """
+  Runs `fun` (a mutation that can complete onboarding) and logs
+  `onboarding gate opened` when it moved `user`'s runtime gate from closed
+  to open. Returns `fun`'s result. `user` is a struct or a user id; `trigger`
+  names the mutation.
+
+  The other half of `onboarding refused`, keyed the same way (`user_id`,
+  category `:lifecycle`) so one LogQL query joins them: a refusal with no
+  later `gate opened` is a user still stuck. `:info` + `:lifecycle` ships to
+  Loki (`Category.loki_ship?/2`).
+
+  The gate is read before and after, so a step re-posted by a user it is
+  already open for logs nothing. Nested calls (accepting terms provisions a
+  connector vault, which is `register_vault`) log once, as the outermost
+  trigger.
+  """
+  @spec log_gate_opening(Engram.Accounts.User.t() | Ecto.UUID.t(), String.t(), (-> result)) ::
+          result
+        when result: term()
+  def log_gate_opening(user, trigger, fun) do
+    if Process.get(@gate_opening_key) do
+      fun.()
+    else
+      Process.put(@gate_opening_key, true)
+
+      try do
+        user_id = if is_binary(user), do: user, else: user.id
+        before = safe_gate_open?(user_id)
+        result = fun.()
+
+        # `before` unknown (nil) skips the after-read: no line either way.
+        if before == false and safe_gate_open?(user_id) == true do
+          Logger.info(
+            "onboarding gate opened",
+            Metadata.with_category(:info, :lifecycle, user_id: user_id, trigger: trigger)
+          )
+        end
+
+        result
+      after
+        Process.delete(@gate_opening_key)
+      end
+    end
+  end
+
+  # Not error swallowing: only this observability read is fenced, the
+  # wrapped write's own errors pass through `log_gate_opening/3` untouched.
+  # A raise here must neither block the write nor turn a committed one into
+  # an error (a vault-register 500 skips the welcome note; Paddle retries).
+  # Unknown (nil) never counts as an opening. The module name only: an
+  # exception's message can carry row data.
+  defp safe_gate_open?(user_id) do
+    gate_open?(user_id)
+  rescue
+    error ->
+      Logger.warning(
+        "onboarding gate read failed",
+        Metadata.with_category(:warning, :lifecycle,
+          user_id: user_id,
+          reason: inspect(error.__struct__)
+        )
+      )
+
+      nil
+  end
+
+  # Fresh row, for the same reason `gate/2` re-reads it: `status/1` reads
+  # `free_tier_accepted_at` off the struct. Nil for a user that is gone (or
+  # an unknown id), which never counts as an opening.
+  defp gate_open?(user_id) do
+    case Accounts.get_user(user_id) do
+      nil -> nil
+      user -> status(user).gate_ok
     end
   end
 

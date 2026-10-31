@@ -4,6 +4,8 @@ defmodule EngramWeb.OnboardingControllerTest do
   alias Engram.Accounts
   alias Engram.Legal.VersionCache
   alias Engram.LegalFixtures
+  alias Engram.Test.LogCapture
+  alias Engram.Vaults
 
   setup %{conn: conn} do
     prev_enabled = Application.get_env(:engram, :billing_enabled)
@@ -427,7 +429,7 @@ defmodule EngramWeb.OnboardingControllerTest do
   describe "GET /api/onboarding/status payload extensions" do
     test "includes actions list and vault_count", %{conn: conn, user: user} do
       :ok = Engram.Onboarding.record_action(user.id, :first_vault_created)
-      {:ok, _vault, _} = Engram.Vaults.register_vault(user, "Demo", Ecto.UUID.generate())
+      {:ok, _vault, _} = Vaults.register_vault(user, "Demo", Ecto.UUID.generate())
 
       resp = conn |> get("/api/onboarding/status") |> json_response(200)
 
@@ -572,6 +574,106 @@ defmodule EngramWeb.OnboardingControllerTest do
       assert log =~ "onboarding step completed: profile"
       assert log =~ "uses_obsidian"
     end
+
+    # A refusal line with nothing after it could be a stuck user or one who
+    # finished. This is the line after it, keyed the same way (user_id,
+    # category lifecycle) so one LogQL query joins the two.
+    test "logs the gate opening on the step that opens it", %{conn: conn, user: user} do
+      accept_terms!(conn)
+
+      {_, events} =
+        LogCapture.with_events(fn ->
+          patch(conn, "/api/onboarding/profile", %{"uses_obsidian" => true})
+        end)
+
+      event = Enum.find(events, &gate_opened?/1)
+      assert event, "no onboarding gate opened line"
+      assert event.level == :info
+      assert event.meta[:user_id] == user.id
+      assert event.meta[:category] == :lifecycle
+      assert event.meta[:loki_ship] == true
+      assert event.meta[:trigger] == "profile"
+    end
+
+    # Only the closed-to-open change logs: a step re-posted by a user whose
+    # gate is already open (a connector PATCHing tools_prefilled, a privacy
+    # notice dismissed) would otherwise count as a second opening.
+    test "does not log the gate opening for a user it is already open for", %{conn: conn} do
+      accept_terms!(conn)
+      patch(conn, "/api/onboarding/profile", %{"uses_obsidian" => true})
+
+      {_, events} =
+        LogCapture.with_events(fn ->
+          patch(conn, "/api/onboarding/profile", %{"tools" => ["claude"]})
+        end)
+
+      refute Enum.find(events, &gate_opened?/1)
+    end
+
+    # accept-terms also provisions a connector signup's vault: one opening,
+    # one line.
+    test "a connector signup's terms step logs one opening", %{conn: conn, user: user} do
+      {:ok, _} =
+        Engram.Onboarding.set_profile(user, %{tools: ["chatgpt"], tools_prefilled: true})
+
+      {_, events} = LogCapture.with_events(fn -> accept_terms!(conn) end)
+
+      assert [event] = Enum.filter(events, &gate_opened?/1)
+      assert event.meta[:trigger] == "terms"
+    end
+
+    test "does not log the gate opening while steps remain", %{conn: conn} do
+      {_, events} = LogCapture.with_events(fn -> accept_terms!(conn) end)
+
+      refute Enum.find(events, &gate_opened?/1)
+    end
+
+    # The web path: terms and profile done, the first vault is the last step.
+    test "logs the gate opening when the first vault opens it", %{conn: conn, user: user} do
+      accept_terms!(conn)
+      patch(conn, "/api/onboarding/profile", %{"uses_obsidian" => false})
+
+      {_, events} =
+        LogCapture.with_events(fn ->
+          {:ok, _, :created} = Vaults.register_vault(user, "Main", Ecto.UUID.generate())
+        end)
+
+      event = Enum.find(events, &gate_opened?/1)
+      assert event, "no onboarding gate opened line"
+      assert event.meta[:trigger] == "vault"
+    end
+
+    test "logs vaults_left when a vault is deleted", %{user: user} do
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
+      {:ok, a, _} = Vaults.register_vault(user, "A", Ecto.UUID.generate())
+      {:ok, _b, _} = Vaults.register_vault(user, "B", Ecto.UUID.generate())
+
+      {_, events} =
+        LogCapture.with_events(fn -> Vaults.delete_vault(user, a.id) end)
+
+      event =
+        Enum.find(events, fn
+          %{msg: {:string, s}} -> IO.iodata_to_binary(s) == "vault deleted"
+          _ -> false
+        end)
+
+      assert event, "no vault deleted line"
+      assert event.meta[:vaults_left] == 1
+    end
+
+    defp accept_terms!(conn) do
+      post(conn, "/api/onboarding/accept-terms", %{
+        "tos_version" => "2026-05-15",
+        "tos_hash" => "canonical",
+        "privacy_version" => "2026-05-15",
+        "privacy_hash" => "p"
+      })
+    end
+
+    defp gate_opened?(%{msg: {:string, s}}),
+      do: IO.iodata_to_binary(s) == "onboarding gate opened"
+
+    defp gate_opened?(_), do: false
 
     test "does not log a rejected profile save", %{conn: conn} do
       log =
