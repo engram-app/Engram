@@ -7,6 +7,9 @@ defmodule EngramWeb.UsersController do
 
   action_fallback EngramWeb.FallbackController
 
+  # One cascading DELETE (audit H6): keeps the long DB bound.
+  plug EngramWeb.Plugs.StatementTimeout, :cascade when action in [:delete]
+
   operation(:me,
     operation_id: "account-me",
     summary: "Get the current user",

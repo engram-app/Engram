@@ -237,21 +237,20 @@ defmodule Engram.RuntimeConfig do
   def repo_parameters(:maintenance), do: [idle_in_transaction_session_timeout: "10min"]
 
   @doc """
-  Server-side `statement_timeout` (ms) a request's tenant transactions apply
-  (`EngramWeb.Plugs.StatementTimeout` picks the class, `Engram.Repo` sends it
-  with `SET LOCAL`). No session-wide value, for the reason above: only request
-  paths get one.
-
-    * `:auth_read`: account, onboarding and billing reads. Single-row
-      lookups, milliseconds when healthy, so 2s only fires behind a lock
-      convoy or a sick database, and then the request fails fast instead of
-      pinning a pool connection (the 2026-10-31 shape).
-    * `:write`: vault and MCP requests. Equal to DBConnection's 15s client
-      timeout: past it the client has already given up, so the server stops
-      too instead of running the statement for nobody.
+  The `statement_timeout` and `lock_timeout` (ms) a request's tenant
+  transactions apply, by route class (`:auth_read`, `:write`, `:cascade`).
+  The values and the measurements behind them live in `config/config.exs`
+  (`:request_db_bounds`), the one place they are set.
   """
-  def statement_timeout(:auth_read), do: 2_000
-  def statement_timeout(:write), do: 15_000
+  @spec request_db_bounds(:auth_read | :write | :cascade) :: %{
+          statement: pos_integer(),
+          lock: pos_integer()
+        }
+  def request_db_bounds(class) when class in [:auth_read, :write, :cascade] do
+    b = Application.fetch_env!(:engram, :request_db_bounds)
+    lock = if class == :cascade, do: b[:cascade_lock], else: b[:lock]
+    %{statement: Keyword.fetch!(b, class), lock: lock}
+  end
 
   @doc """
   Per-call client timeout (ms) of the maintenance pool, set once on its repo

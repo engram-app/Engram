@@ -253,7 +253,7 @@ defmodule Engram.Repo do
     do: owning_after_commit(fn -> transaction(fun) end)
 
   defp run_with_tenant(uuid, fun),
-    do: owning_after_commit(fn -> tenant_transaction(uuid, fun) end)
+    do: shed_on_bound(fn -> owning_after_commit(fn -> tenant_transaction(uuid, fun) end) end)
 
   # Only the outermost transaction owns the queue. Re-entrant with_tenant calls
   # never get here, so this is false only for one opened inside a queue owner.
@@ -277,45 +277,65 @@ defmodule Engram.Repo do
 
   @tenant_enter "SELECT set_config('app.current_tenant', $1, true), " <>
                   "set_config('role', 'engram_app', true)"
-  @statement_timeout ", set_config('statement_timeout', $2, true)"
+  @request_bounds ", set_config('statement_timeout', $2, true), " <>
+                    "set_config('lock_timeout', $3, true)"
   @rotation_locked ", (SELECT dek_rotation_locked_at IS NOT NULL " <>
                      "FROM users WHERE id = $1::uuid)"
-  @tenant_enter_timeout @tenant_enter <> @statement_timeout
+  @tenant_enter_bounded @tenant_enter <> @request_bounds
   @tenant_enter_gated @tenant_enter <> @rotation_locked
-  @tenant_enter_gated_timeout @tenant_enter_timeout <> @rotation_locked
+  @tenant_enter_gated_bounded @tenant_enter_bounded <> @rotation_locked
 
   @doc """
-  Sets the server-side `statement_timeout` (ms) every later tenant
-  transaction in this process applies with `SET LOCAL`, or clears it (`nil`:
-  the session default, none). Set per request by
-  `EngramWeb.Plugs.StatementTimeout`; the value rides the tenant-enter round
-  trip, so it costs nothing extra. It bounds lock waits too, so a convoy
-  sheds the request instead of holding its connection.
+  Sets the server-side bounds every later tenant transaction in this process
+  applies with `SET LOCAL`: `statement_timeout` and `lock_timeout`, in ms
+  (`Engram.RuntimeConfig.request_db_bounds/1`), or clears them (`nil`: the
+  session defaults). Set per request by `EngramWeb.Plugs.StatementTimeout`;
+  the values ride the tenant-enter round trip, so they cost nothing extra.
+  A statement cancelled by either is re-raised as `Engram.Repo.ShedError`
+  (429 + retry-after), not a 500: it is load, not a fault.
   """
-  @spec put_statement_timeout(pos_integer() | nil) :: :ok
-  def put_statement_timeout(nil) do
-    Process.delete(:engram_statement_timeout)
+  @spec put_db_bounds(%{statement: pos_integer(), lock: pos_integer()} | nil) :: :ok
+  def put_db_bounds(nil) do
+    Process.delete(:engram_db_bounds)
     :ok
   end
 
-  def put_statement_timeout(ms) when is_integer(ms) and ms > 0 do
-    Process.put(:engram_statement_timeout, ms)
+  def put_db_bounds(%{statement: s, lock: l} = bounds)
+      when is_integer(s) and s > 0 and is_integer(l) and l > 0 do
+    Process.put(:engram_db_bounds, bounds)
     :ok
   end
 
   # Literal statements, not one built at runtime: the SQL is fixed text. The
   # rotation probe stays the LAST column (tenant_transaction/2 reads it).
   defp enter_tenant(uuid, gated?) do
-    case Process.get(:engram_statement_timeout) do
+    case Process.get(:engram_db_bounds) do
       nil ->
         sql = if gated?, do: @tenant_enter_gated, else: @tenant_enter
         query!(sql, [uuid], source: "tenant_enter")
 
-      ms ->
-        sql = if gated?, do: @tenant_enter_gated_timeout, else: @tenant_enter_timeout
-        query!(sql, [uuid, "#{ms}ms"], source: "tenant_enter")
+      %{statement: s, lock: l} ->
+        sql = if gated?, do: @tenant_enter_gated_bounded, else: @tenant_enter_bounded
+        query!(sql, [uuid, "#{s}ms", "#{l}ms"], source: "tenant_enter")
     end
   end
+
+  # SQLSTATE 57014 (statement_timeout) and 55P03 (lock_timeout): the request's
+  # own bound shed it. Only under a request bound, so a worker that rescues
+  # `:lock_not_available` itself (NOWAIT sweeps) still sees the Postgrex error.
+  defp shed_on_bound(fun) do
+    fun.()
+  rescue
+    e in Postgrex.Error ->
+      if Process.get(:engram_db_bounds) && shed_code?(e),
+        do: reraise(Engram.Repo.ShedError, [code: e.postgres.code], __STACKTRACE__),
+        else: reraise(e, __STACKTRACE__)
+  end
+
+  defp shed_code?(%Postgrex.Error{postgres: %{code: code}}),
+    do: code in [:query_canceled, :lock_not_available]
+
+  defp shed_code?(_), do: false
 
   defp tenant_transaction(uuid, fun) do
     # Decided before the transaction opens: inside it, in_transaction? is

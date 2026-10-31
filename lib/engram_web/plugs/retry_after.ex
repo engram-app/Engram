@@ -10,8 +10,10 @@ defmodule EngramWeb.Plugs.RetryAfter do
   A shed vault write (`Engram.Vaults.SeqGate.BusyError`, rendered as a bare
   429) gets a short one: its queue drains in milliseconds once it moves, and
   the plugin waits `retry-after` on a 429 instead of counting the attempt
-  toward parking the write. ONLY that exception, identified by the `reason`
-  Phoenix's error renderer assigns. Every other 429 keeps exactly what its
+  toward parking the write. A request shed by its own DB bound
+  (`Engram.Repo.ShedError`) is the same kind of load and gets the same value.
+  ONLY those exceptions, identified by the `reason` Phoenix's error renderer
+  assigns. Every other 429 keeps exactly what its
   limiter set, including none: a cap-0 refusal deliberately carries no
   `retry-after`, so a client has nothing to loop on.
 
@@ -37,7 +39,7 @@ defmodule EngramWeb.Plugs.RetryAfter do
           put_resp_header(conn, "retry-after", @seconds)
 
         {429, []} ->
-          if busy?(conn), do: put_resp_header(conn, "retry-after", @busy_seconds), else: conn
+          if shed?(conn), do: put_resp_header(conn, "retry-after", @busy_seconds), else: conn
 
         _ ->
           conn
@@ -45,5 +47,12 @@ defmodule EngramWeb.Plugs.RetryAfter do
     end)
   end
 
-  defp busy?(conn), do: match?(%Engram.Vaults.SeqGate.BusyError{}, conn.assigns[:reason])
+  # The one 429 retry-after rule: a shed write (gate) or a shed request (DB
+  # bound) waits the same constant `busy_seconds/0`; the clients jitter.
+  defp shed?(conn),
+    do:
+      match?(
+        %shed{} when shed in [Engram.Vaults.SeqGate.BusyError, Engram.Repo.ShedError],
+        conn.assigns[:reason]
+      )
 end

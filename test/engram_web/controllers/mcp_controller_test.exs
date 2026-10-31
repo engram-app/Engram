@@ -1925,3 +1925,70 @@ defmodule EngramWeb.McpControllerTest do
     end
   end
 end
+
+defmodule EngramWeb.McpControllerShedTest do
+  # The gate's wait budget is global app env.
+  use EngramWeb.ConnCase, async: false
+
+  import ExUnit.CaptureLog
+
+  setup do
+    user = insert(:user)
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    {:ok, vault, _} = Engram.Vaults.register_vault(user, "Shed", Ecto.UUID.generate())
+    %{user: user, vault: vault}
+  end
+
+  defp sleeper,
+    do: %{
+      name: "write_note",
+      handler: fn _u, _v, _a ->
+        Engram.Repo.query!("SELECT pg_sleep(0.5)")
+        {:ok, "slept"}
+      end
+    }
+
+  defp assert_busy({{:ok, result}, :error, _}) do
+    assert result["isError"] == true
+    assert hd(result["content"])["text"] =~ "busy"
+  end
+
+  test "a saturated vault gate is a retryable busy tool error, not a trapped crash", ctx do
+    %{user: user, vault: vault} = ctx
+    prev = Application.fetch_env!(:engram, :seq_gate_wait_ms)
+    Application.put_env(:engram, :seq_gate_wait_ms, 50)
+    on_exit(fn -> Application.put_env(:engram, :seq_gate_wait_ms, prev) end)
+    test = self()
+
+    holder =
+      Task.async(fn ->
+        Engram.Vaults.SeqGate.with_vault(vault.id, fn ->
+          send(test, :held)
+          receive do: (:release -> :ok)
+        end)
+      end)
+
+    assert_receive :held
+
+    log =
+      capture_log(fn ->
+        assert_busy(EngramWeb.McpController.run_tool_handler(sleeper(), user, vault, %{}))
+      end)
+
+    send(holder.pid, :release)
+    Task.await(holder)
+    refute log =~ "trapped"
+  end
+
+  test "a statement cancelled by the request's DB bound is the same busy tool error", ctx do
+    %{user: user, vault: vault} = ctx
+    :ok = Engram.Repo.put_db_bounds(%{statement: 50, lock: 50})
+
+    log =
+      capture_log(fn ->
+        assert_busy(EngramWeb.McpController.run_tool_handler(sleeper(), user, vault, %{}))
+      end)
+
+    refute log =~ "trapped"
+  end
+end

@@ -1257,7 +1257,9 @@ defmodule EngramWeb.McpController do
     # The message does not say "nothing changed": a gated tool can commit part
     # of its work first (a rename's index claim, which then completes on its
     # own). `_meta` carries the wait as a number for programs.
-    :error, %SeqGate.BusyError{} ->
+    # A request shed by its own DB bound (Engram.Repo.ShedError) is the same
+    # kind of load and gets the same answer.
+    :error, %shed{} when shed in [SeqGate.BusyError, Engram.Repo.ShedError] ->
       retry_s = EngramWeb.Plugs.RetryAfter.busy_seconds()
 
       err =

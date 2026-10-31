@@ -10,6 +10,9 @@ defmodule EngramWeb.VaultsController do
 
   action_fallback EngramWeb.FallbackController
 
+  # One cascading DELETE (audit H6): keeps the long DB bound.
+  plug EngramWeb.Plugs.StatementTimeout, :cascade when action in [:delete, :purge]
+
   @zero_counts %{notes: 0, attachments: 0}
 
   # ── index ──────────────────────────────────────────────────────────────────

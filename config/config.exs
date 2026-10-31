@@ -84,6 +84,31 @@ config :engram, :seq_gate_wait_ms, 10_000
 # SeqGateTest.
 config :engram, :seq_gate_channel_wait_ms, 2_000
 
+# Server-side bounds (ms) on a REQUEST's tenant transactions, by route class
+# (EngramWeb.Plugs.StatementTimeout -> Engram.Repo.put_db_bounds/1, sent with
+# SET LOCAL in the tenant-enter round trip). Background work has none (the
+# session keeps lock_timeout 10s, no statement_timeout). A statement past its
+# bound sheds as 429 + retry-after (Engram.Repo.ShedError), not a 500.
+#
+# Sized from prod Tempo, one normal day (10-30 06:30Z to 10-31 06:30Z), max DB
+# span per root, accurate to ~2x (power-of-two buckets), PR 2360 review:
+#   * auth_read 3s: GET /vaults, /connections, /billing/usage peak 0.54-1.07s
+#     (whole-vault GROUP BY / user-wide SUM, not single rows); /bootstrap
+#     0.27-0.54s; p99 10-46 ms. 3s is ~3x the worst bucket.
+#   * write 5s: vault + MCP routes; the manifest peaks at 1.07-2.15s, all others
+#     0.54s or less. 5s is ~2.3x the manifest. A SeqGate waiter waits in the
+#     BEAM holding no connection, so the gate wait does not add to this.
+#   * lock 3s: request lock waits get their own code (55P03), shed like the rest.
+#   * cascade 15s: DELETE /api/me, DELETE /api/vaults/:id, POST
+#     /api/vaults/:id/purge run one cascading DELETE (audit H6); they keep the
+#     15s client timeout until they move to a chunked job.
+config :engram, :request_db_bounds,
+  auth_read: 3_000,
+  write: 5_000,
+  cascade: 15_000,
+  lock: 3_000,
+  cascade_lock: 10_000
+
 # Embedder adapter (overridden per environment)
 config :engram, :embedder, Engram.Embedders.Voyage
 
