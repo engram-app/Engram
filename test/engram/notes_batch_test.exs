@@ -722,6 +722,43 @@ defmodule Engram.NotesBatchSetBasedTest do
     assert {:ok, %{path: "a.md"}} = Notes.get_note_by_id(user, vault, n1.id)
   end
 
+  # The common failure is not a raise: a row refused mid-batch (here, deleted
+  # after the claim) rolls the rows back and returns an error. Its claim must
+  # be undone too, or projection moves the rest of the batch later.
+  test "a batch move refused mid-batch undoes its claim", %{user: user, vault: vault} do
+    {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "a.md"}, actor: "api")
+    {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "b.md"}, actor: "api")
+
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      :batch_move_claimed ->
+        {:ok, _} =
+          Engram.Repo.with_tenant(user.id, fn ->
+            Engram.Repo.update_all(
+              Ecto.Query.from(n in Engram.Notes.Note, where: n.id == ^n2.id),
+              set: [deleted_at: DateTime.utc_now()]
+            )
+          end)
+
+        :ok
+
+      _ ->
+        :ok
+    end)
+
+    try do
+      assert {:error, _} = Notes.batch_move_notes(user, vault, [n1.id, n2.id], {:path, "Z"})
+    after
+      Application.delete_env(:engram, :checkpoint_interleave_hook)
+    end
+
+    {:ok, doc} = Engram.Notes.CrdtIndexPersistence.load_doc(user, vault.id)
+    entries = doc |> Yex.Doc.get_map(Engram.Notes.CrdtIndexDoc.map_name()) |> Yex.Map.to_map()
+    refute Map.has_key?(entries, "Z/a.md"), inspect(entries)
+
+    :ok = perform_job(Engram.Workers.ProjectVaultIndex, %{user_id: user.id, vault_id: vault.id})
+    assert {:ok, %{path: "a.md"}} = Notes.get_note_by_id(user, vault, n1.id)
+  end
+
   test "batch move resolves every id in one query, not one per id", %{user: user, vault: vault} do
     notes =
       for i <- 1..3 do

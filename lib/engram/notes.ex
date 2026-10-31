@@ -4988,7 +4988,9 @@ defmodule Engram.Notes do
     SeqGate.with_vault(vault.id, fn ->
       with {:ok, moves} <- resolve_moves(user, vault, ids, target_folder),
            :ok <- validate_move_targets(user, vault, moves),
-           :ok <- claim_moves(user, vault, moves) do
+           :ok <- claim_moves(user, vault, moves),
+           # Test seam (nil outside tests): claimed, rows not yet moved.
+           :ok <- interleave_hook(:batch_move_claimed) do
         apply_claimed_moves(user, vault, moves)
       end
     end)
@@ -4996,29 +4998,43 @@ defmodule Engram.Notes do
 
   # A transaction that owns the after-commit queue: the per-note renames'
   # broadcasts and room stops wait for THIS commit, not each nested
-  # with_tenant's return. Past the claim, a raise (a request DB bound shed, a
-  # constraint) rolled every row back, so the claims are undone (each only if
-  # still ours): a shed batch must not move later through projection. If the
-  # undo itself fails, the claim is reported for projection to converge.
+  # with_tenant's return. Past the claim, ANY failure (a refused row, a request
+  # DB bound shed, a raise, an exit) rolled every row back, so the claims are
+  # undone, each only if still ours: a batch that answered an error must not
+  # move later through projection.
   defp apply_claimed_moves(user, vault, moves) do
-    Repo.transaction_after_commit(fn ->
-      refs = ensure_move_folders!(user, vault, moves)
-      moved = apply_moves(user, vault, moves, refs)
-      # Test seam (nil outside tests): the last point before commit.
-      :ok = interleave_hook(:batch_move_applied)
-      moved
-    end)
-  rescue
-    e ->
-      undo =
-        for {note, new_path} <- moves, note.path != new_path, do: {note.id, new_path, note.path}
-
-      case Identity.unclaim(user, vault.id, undo) do
-        :ok -> :ok
-        error -> orphan_claim(user, vault, length(undo), error)
+    result =
+      try do
+        Repo.transaction_after_commit(fn ->
+          refs = ensure_move_folders!(user, vault, moves)
+          moved = apply_moves(user, vault, moves, refs)
+          # Test seam (nil outside tests): the last point before commit.
+          :ok = interleave_hook(:batch_move_applied)
+          moved
+        end)
+      catch
+        kind, reason ->
+          undo_claims(user, vault, moves, kind)
+          :erlang.raise(kind, reason, __STACKTRACE__)
       end
 
-      reraise e, __STACKTRACE__
+    with {:error, reason} <- result do
+      undo_claims(user, vault, moves, reason)
+      result
+    end
+  end
+
+  # Moves each claimed note's index entry back to its row path, only while the
+  # entry is still at the target this batch claimed (Identity.unclaim/3). If
+  # the undo fails, the claim is reported for projection to converge.
+  defp undo_claims(user, vault, moves, why) do
+    undo =
+      for {note, new_path} <- moves, note.path != new_path, do: {note.id, new_path, note.path}
+
+    case Identity.unclaim(user, vault.id, undo) do
+      :ok -> :ok
+      error -> orphan_claim(user, vault, length(undo), {why, error})
+    end
   end
 
   # One meta read for the whole batch (was one transaction per id).
@@ -5152,12 +5168,8 @@ defmodule Engram.Notes do
           {:cont, Map.update!(acc, :moved, &(&1 + 1))}
 
         {:error, reason} ->
-          # The claim for the WHOLE batch already committed in `claim_moves/3`,
-          # and rolling the rows back cannot undo it. Report it here — the
-          # `rename_note/5` reporter cannot, because this call passes
-          # `index: :skip` and so never claimed anything itself.
-          _ = orphan_claim(user, vault, length(moves), reason)
-
+          # The claim for the WHOLE batch already committed in `claim_moves/3`;
+          # apply_claimed_moves/3 undoes it once this rolls back.
           tagged = if reason == :conflict, do: {:conflict, note.id}, else: reason
           {:halt, Repo.rollback(tagged)}
       end
