@@ -29,11 +29,12 @@ defmodule EngramWeb.AttachmentBatchDeleteTest do
   end
 
   # Without the tag the plugin applied its own delete echo and trashed the
-  # files it had just recreated. The plugin batches only when the server
-  # advertises `attachment_batch_delete_origin`, so the flag and the stamping
-  # are asserted together: neither may ship without the other.
-  test "each delete broadcast carries the caller's X-Device-Id, as advertised", ctx do
-    assert EngramWeb.UserChannel.features().attachment_batch_delete_origin == true
+  # files it had just recreated. The `attachment_batch_delete_origin` feature
+  # flag that tells the plugin it may batch ships one release LATER than this
+  # stamping (a mixed-version rolling deploy must never advertise it before
+  # every task stamps), so it is deliberately absent here.
+  test "each delete broadcast carries the caller's X-Device-Id", ctx do
+    refute Map.has_key?(EngramWeb.UserChannel.features(), :attachment_batch_delete_origin)
     %{conn: conn, user: user, vault: vault} = ctx
 
     {:ok, _} =

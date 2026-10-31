@@ -48,11 +48,6 @@ defmodule EngramWeb.UserChannel do
       raw_attachment_upload: true,
       raw_attachment_download: true,
       crdt_diff_refusal: true,
-      # POST /attachments/batch-delete stamps the caller's X-Device-Id on every
-      # delete broadcast, so the plugin can batch without trashing files it
-      # recreated (Engram-obsidian#671). True only because of that stamping;
-      # pinned together with it by AttachmentBatchDeleteTest.
-      attachment_batch_delete_origin: true,
       # The web app has no plan feed (it never joins `user:`), so it gets the
       # executable list here to refuse those files before the upload dialog.
       blocked_extensions: Engram.Billing.advertised_blocked_extensions()
