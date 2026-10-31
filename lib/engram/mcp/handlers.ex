@@ -529,7 +529,16 @@ defmodule Engram.MCP.Handlers do
     new_content = args["content"] || ""
     level = args["level"] || 2
 
-    replace_section(user, vault, path, heading, new_content, level, "update_section")
+    replace_section(
+      user,
+      vault,
+      path,
+      heading,
+      new_content,
+      level,
+      "update_section",
+      args[:rmw_prepared]
+    )
   end
 
   @text_params ~w(find replace occurrence expected_replacements old_text new_text)
@@ -972,7 +981,8 @@ defmodule Engram.MCP.Handlers do
           args["heading"],
           args["content"],
           args["level"] || 2,
-          "edit_note"
+          "edit_note",
+          args[:rmw_prepared]
         )
         |> tag_mode("replace_section", %{"replacements" => nil})
     end
@@ -994,7 +1004,12 @@ defmodule Engram.MCP.Handlers do
       true ->
         with {:ok, position} <- resolve_insert_position(args["position"]) do
           user
-          |> insert_section(vault, path, args["heading"], level, position, args["content"])
+          |> insert_section(
+            vault,
+            path,
+            {args["heading"], level, position, args["content"]},
+            args[:rmw_prepared]
+          )
           |> tag_mode("insert_section", %{"replacements" => nil})
         end
     end
@@ -1006,26 +1021,8 @@ defmodule Engram.MCP.Handlers do
 
   # Through rmw_upsert: the rebuild runs against the authority (#1159) of the
   # locked row, and a missing heading refuses inside it, so nothing is written.
-  defp insert_section(user, vault, path, heading, level, position, text) do
-    gate = ParseGate.call_opts()
-
-    rebuild = fn current ->
-      case Sections.insert(current, heading, level, position, text, gate) do
-        {:ok, updated} ->
-          updated
-
-        {:error, reason} ->
-          {:error, section_error(heading, reason)}
-
-        :error ->
-          ToolError.error(
-            :section_not_found,
-            "Heading not found: #{String.duplicate("#", level)} #{heading}"
-          )
-      end
-    end
-
-    case rmw_upsert(user, vault, path, rebuild) do
+  defp insert_section(user, vault, path, {heading, _level, position, _text} = spec, prepared) do
+    case rmw_upsert(user, vault, path, inserted_section(spec), prepared) do
       {:error, :not_found} ->
         ToolError.error(:note_not_found, "Note not found: #{path}")
 
@@ -1039,6 +1036,27 @@ defmodule Engram.MCP.Handlers do
           ],
           %{"path" => path, "heading" => heading}
         )
+    end
+  end
+
+  # The section insertion as a rebuild: the new text or `{:error, message}`.
+  defp inserted_section({heading, level, position, text}) do
+    gate = ParseGate.call_opts()
+
+    fn current ->
+      case Sections.insert(current, heading, level, position, text, gate) do
+        {:ok, updated} ->
+          updated
+
+        {:error, reason} ->
+          {:error, section_error(heading, reason)}
+
+        :error ->
+          ToolError.error(
+            :section_not_found,
+            "Heading not found: #{String.duplicate("#", level)} #{heading}"
+          )
+      end
     end
   end
 
@@ -1201,15 +1219,15 @@ defmodule Engram.MCP.Handlers do
   # removes the mismatch instead of also clamping the end-scan to match.
   # The finder (`Engram.MCP.Sections.find/3`) is a CommonMark parser;
   # the level guard still refuses 0 or 7+ before any lookup.
-  defp replace_section(_user, _vault, _path, _heading, _new_content, level, _op)
+  defp replace_section(_user, _vault, _path, _heading, _new_content, level, _op, _prepared)
        when level < 1 or level > 6 do
     {:error, "level must be between 1 and 6"}
   end
 
-  defp replace_section(user, vault, path, heading, new_content, level, op) do
+  defp replace_section(user, vault, path, heading, new_content, level, op, prepared) do
     rebuild = fn current -> replaced_section(current, heading, new_content, level) end
 
-    case rmw(user, vault, path, rebuild) do
+    case rmw(user, vault, path, rebuild, prepared) do
       {{:error, :not_found} = e, _} ->
         read_error(e, op, path)
 
@@ -1377,15 +1395,22 @@ defmodule Engram.MCP.Handlers do
   # refuse the write entirely: rmw_upsert returns that error as-is and writes
   # nothing. Returns `{:error, :not_found}` for a missing note, with the vault
   # lock held until the caller's transaction ends. Public (doc: false) for tests.
-  def rmw_upsert(user, vault, path, rebuild) do
-    case rmw(user, vault, path, rebuild) do
+  def rmw_upsert(user, vault, path, rebuild, prepared \\ nil) do
+    case rmw(user, vault, path, rebuild, prepared) do
       {{:error, {:authority, reason}}, _} -> {:error, reason}
       {result, _meta} -> result
     end
   end
 
-  defp rmw(user, vault, path, rebuild),
-    do: Notes.rmw_note(user, vault, path, rebuild, [mtime: now()] ++ @write_opts)
+  defp rmw(user, vault, path, rebuild, prepared \\ nil),
+    do:
+      Notes.rmw_note(
+        user,
+        vault,
+        path,
+        rebuild,
+        [mtime: now(), rebuilt: prepared] ++ @write_opts
+      )
 
   # No base_hash: a blind replace, as before base_hash existed.
   defp write_whole(user, vault, path, content, nil),
@@ -2039,7 +2064,48 @@ defmodule Engram.MCP.Handlers do
         )
   end
 
+  # Section edits: the CommonMark parse (ParseGate, up to seconds) runs here,
+  # before the request transaction opens, on the note as it is now. Inside the
+  # transaction rmw_note/5 reuses the result when the text is unchanged, so the
+  # parse holds no pool connection and, on a lost race, no vault lock.
+  def before_txn(tool, user, vault, args) when tool in ["update_section", "edit_note"] do
+    with {:ok, rebuild} <- section_rebuild(tool, args),
+         {:ok, prepared} <- Notes.rmw_prepare(user, vault, args["path"] || "", rebuild) do
+      Map.put(args, :rmw_prepared, prepared)
+    else
+      _ -> args
+    end
+  end
+
   def before_txn(_tool, _user, _vault, args), do: args
+
+  # The same rebuild the handler builds from the same args; :none for any
+  # input the handler refuses before rebuilding.
+  defp section_rebuild("update_section", args),
+    do: replace_rebuild(args["heading"] || "", args["content"] || "", args["level"] || 2)
+
+  defp section_rebuild("edit_note", %{"mode" => "replace_section"} = args),
+    do: replace_rebuild(args["heading"], args["content"], args["level"] || 2)
+
+  defp section_rebuild("edit_note", %{"mode" => "insert_section"} = args) do
+    level = args["level"] || 2
+
+    with true <- is_binary(args["heading"]) and is_binary(args["content"]),
+         true <- is_integer(level) and level in 1..6,
+         {:ok, position} <- resolve_insert_position(args["position"]) do
+      {:ok, inserted_section({args["heading"], level, position, args["content"]})}
+    else
+      _ -> :none
+    end
+  end
+
+  defp section_rebuild(_tool, _args), do: :none
+
+  defp replace_rebuild(heading, content, level)
+       when is_binary(heading) and is_binary(content) and is_integer(level) and level in 1..6,
+       do: {:ok, fn current -> replaced_section(current, heading, content, level) end}
+
+  defp replace_rebuild(_heading, _content, _level), do: :none
 
   defp title(args), do: args["title"] || "Untitled"
 

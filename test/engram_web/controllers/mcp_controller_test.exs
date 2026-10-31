@@ -921,6 +921,37 @@ defmodule EngramWeb.McpControllerTest do
   end
 
   describe "update_section tool" do
+    # The CommonMark parse can take seconds (ParseGate allows 15 s). Inside the
+    # request transaction it pinned a pool connection the whole time, and on a
+    # lost race it re-ran under the vault lock. It runs before the transaction
+    # opens now, once, and the in-transaction rebuild reuses it.
+    test "parses the section outside the request transaction, once", %{conn: conn} do
+      test = self()
+      id = {__MODULE__, :section_parse}
+
+      :telemetry.attach(
+        id,
+        [:engram, :mcp, :section_parse, :stop],
+        fn _, _, _, _ -> send(test, {:parsed_in_txn, Engram.Repo.in_transaction?()}) end,
+        nil
+      )
+
+      try do
+        assert conn
+               |> call_tool("update_section", %{
+                 "path" => "Health/Supplements.md",
+                 "heading" => "Shopping List",
+                 "content" => "- Fish Oil"
+               })
+               |> tool_text() =~ "Section 'Shopping List' updated"
+      after
+        :telemetry.detach(id)
+      end
+
+      assert_received {:parsed_in_txn, false}
+      refute_received {:parsed_in_txn, _}
+    end
+
     test "replaces section content under heading", %{conn: conn} do
       conn =
         call_tool(conn, "update_section", %{
