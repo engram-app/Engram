@@ -37,10 +37,12 @@ function firstValidationError(errors: unknown): string | undefined {
 	return typeof msg === "string" ? `${field}: ${msg}` : field;
 }
 
-/** `retry-after` in seconds, when the server sent a numeric one. */
+/** `retry-after` in seconds, when the server sent a numeric one. An empty
+ *  value is absent, not 0 (`Number("")` is 0). */
 function parseRetryAfter(response: Response): number | undefined {
-	const secs = Number(response.headers.get("retry-after"));
-	return response.headers.has("retry-after") && Number.isFinite(secs) ? secs : undefined;
+	const raw = response.headers.get("retry-after")?.trim();
+	const secs = Number(raw);
+	return raw && Number.isFinite(secs) ? secs : undefined;
 }
 
 /** Report a request that failed in a way that means "broken", not "no": a
@@ -161,6 +163,19 @@ const RETRY_DELAY_MS = 300;
  *  clamped so a bogus header cannot park a request for an hour. */
 const MAX_BUSY_ATTEMPTS = 3;
 const MAX_RETRY_AFTER_S = 30;
+/** Each wait is stretched by a random 0-50%, so the requests one saturated
+ *  gate shed together do not all come back on the same tick. The server's
+ *  `retry-after` is whole seconds and constant ("2"); the spread lives here. */
+const BUSY_JITTER = 0.5;
+
+/** 429s this client already waited out and resent, so React Query must not
+ *  retry them a second time (one retry layer, see query-client.ts). */
+const busyRetried = new WeakSet<object>();
+
+function busyWaitMs(retryAfterS: number): number {
+	const jittered = Math.max(retryAfterS, 0) * (1 + Math.random() * BUSY_JITTER);
+	return Math.min(jittered, MAX_RETRY_AFTER_S) * 1000;
+}
 
 async function authFetch(
 	path: string,
@@ -169,14 +184,19 @@ async function authFetch(
 ): Promise<Response> {
 	// Before the first await: only the synchronous part of a queryFn is inside it.
 	const queryAttempt = currentQueryAttempt;
-	const token = await getAuthToken();
-
 	const headers = new Headers(options.headers);
+	// Per send, not per request: a busy resend can come up to a minute later,
+	// past a session token's lifetime. The getter returns a cached token while
+	// it is still fresh.
+	const authorize = async () => {
+		const token = await getAuthToken();
+		if (token) {
+			headers.set("Authorization", `Bearer ${token}`);
+		}
+	};
+	await authorize();
 	if (!headers.has("Content-Type")) {
 		headers.set("Content-Type", "application/json");
-	}
-	if (token) {
-		headers.set("Authorization", `Bearer ${token}`);
 	}
 	const vaultId = getActiveVaultId();
 	if (vaultId !== null) {
@@ -237,10 +257,8 @@ async function authFetch(
 		}
 		// An abort ends the wait early; the resend then rejects with the
 		// AbortError through attemptFetch, like any aborted request.
-		await sleep(
-			Math.min(Math.max(waitS, 0), MAX_RETRY_AFTER_S) * 1000,
-			options.signal ?? undefined,
-		).catch(() => undefined);
+		await sleep(busyWaitMs(waitS), options.signal).catch(() => undefined);
+		await authorize();
 		const next = await attemptFetch(1);
 		({ response } = next);
 		resentAfterNetworkError ||= next.attempt === 2;
@@ -288,6 +306,9 @@ async function authFetch(
 			body.error ?? firstValidationError(body.errors) ?? response.statusText,
 			parseRetryAfter(response),
 		);
+		if (safeToResend && error.retryAfterS !== undefined && response.status === 429) {
+			busyRetried.add(error);
+		}
 		if (response.status >= 500) {
 			ownedFailures.add(error);
 			reportUnlessRetried(error, { kind: `http_${response.status}`, method, url }, queryAttempt);
@@ -300,6 +321,11 @@ async function authFetch(
 
 /** The attempt that threw `err` will be retried: its failure is not final, so
  *  drop its report. The final attempt's own error reports if it fails too. */
+/** True for a 429 this client already waited out and resent (see busyRetried). */
+export function isBusyRetriedByClient(err: unknown): boolean {
+	return typeof err === "object" && err !== null && busyRetried.has(err);
+}
+
 /** True when the api client already reports (or deliberately skips) this
  *  failure: a network error or a 5xx. Anything else is the caller's to report. */
 export function isApiClientFailure(err: unknown): boolean {

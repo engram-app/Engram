@@ -81,9 +81,7 @@ function responseHeadersTheSpaReads(): Set<string> {
 			continue;
 		}
 		const text = readFileSync(join(SRC, file), "utf8");
-		for (const m of text.matchAll(
-			/\b(?:res|response)\.headers\.(?:get|has)\(["'](?<name>[^"']+)["']\)/g,
-		)) {
+		for (const m of text.matchAll(/\b\w+\.headers\.(?:get|has)\(["'](?<name>[^"']+)["']\)/g)) {
 			found.add((m.groups?.name ?? "").toLowerCase());
 		}
 	}

@@ -1,5 +1,7 @@
+import { QueryObserver } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, api } from "./client";
+import { ApiError, api, setTokenGetter } from "./client";
+import { queryClient } from "./query-client";
 
 // 2026-10-31: the backend sheds a write with 429 + `retry-after: 2` when the
 // vault's write gate is busy (SeqGate.BusyError). The client waits it out on
@@ -28,9 +30,14 @@ function sentHeader(fetchMock: ReturnType<typeof vi.fn>, n: number, name: string
 describe("api client retries a 429 that carries retry-after", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
+		// No jitter unless a test asks for it, so delays are exact.
+		vi.spyOn(Math, "random").mockReturnValue(0);
 	});
 	afterEach(() => {
 		vi.useRealTimers();
+		vi.restoreAllMocks();
+		setTokenGetter(() => Promise.resolve(null));
+		queryClient.clear();
 	});
 
 	it("resends an idempotent request after the retry-after delay", async () => {
@@ -122,5 +129,57 @@ describe("api client retries a 429 that carries retry-after", () => {
 		ctl.abort();
 		await vi.advanceTimersByTimeAsync(0);
 		await settled;
+	});
+
+	it("does not retry a 429 whose retry-after is empty", async () => {
+		const fetchMock = vi.fn().mockResolvedValueOnce(tooBusy("")).mockResolvedValueOnce(ok());
+		globalThis.fetch = fetchMock;
+
+		await expect(api.get("/notes")).rejects.toMatchObject({ status: 429, retryAfterS: undefined });
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("spreads resends with up to 50% jitter so shed clients do not return in lockstep", async () => {
+		vi.spyOn(Math, "random").mockReturnValue(0.99);
+		const fetchMock = vi.fn().mockResolvedValueOnce(tooBusy("2")).mockResolvedValueOnce(ok());
+		globalThis.fetch = fetchMock;
+
+		const result = api.get("/notes");
+		await vi.advanceTimersByTimeAsync(2500);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(500);
+		await expect(result).resolves.toEqual({ ok: true });
+	});
+
+	it("asks for a fresh sign-in token on every resend", async () => {
+		const tokens = ["t1", "t2"];
+		setTokenGetter(() => Promise.resolve(tokens.shift() ?? "t-last"));
+		// Read the header when fetch is called, as a real request copies it then.
+		const sent: (string | null)[] = [];
+		const replies = [tooBusy("2"), ok()];
+		globalThis.fetch = vi.fn().mockImplementation((_url, init?: RequestInit) => {
+			sent.push(new Headers(init?.headers).get("Authorization"));
+			return Promise.resolve(replies.shift());
+		});
+
+		const result = api.get("/notes");
+		await vi.advanceTimersByTimeAsync(2000);
+		await result;
+		expect(sent).toEqual(["Bearer t1", "Bearer t2"]);
+	});
+
+	it("leaves a busy 429 to the client: React Query does not retry it again", async () => {
+		const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(tooBusy("2")));
+		globalThis.fetch = fetchMock;
+
+		const observer = new QueryObserver(queryClient, {
+			queryKey: ["busy-probe"],
+			queryFn: () => api.get("/notes"),
+		});
+		const unsubscribe = observer.subscribe(() => {});
+		await vi.advanceTimersByTimeAsync(60_000);
+		unsubscribe();
+		expect(observer.getCurrentResult().status).toBe("error");
+		expect(fetchMock).toHaveBeenCalledTimes(3);
 	});
 });

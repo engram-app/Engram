@@ -269,7 +269,7 @@ describe("CrdtOpQueueController: a burst of deletes", () => {
 		}
 	}
 
-	it("sends 200 deletes with at most 4 in flight", async () => {
+	it("sends 200 deletes one at a time", async () => {
 		let inFlight = 0;
 		let maxInFlight = 0;
 		const channel: CrdtOpChannel = {
@@ -288,7 +288,7 @@ describe("CrdtOpQueueController: a burst of deletes", () => {
 		const all = Promise.all(ids.map((id) => ctrl.enqueueDelete(id)));
 		await drain(ctrl);
 		await expect(all).resolves.toHaveLength(200);
-		expect(maxInFlight).toBeLessThanOrEqual(4);
+		expect(maxInFlight).toBe(1);
 	});
 
 	it.each(["rate_limited", "busy"])(
