@@ -18,7 +18,9 @@ defmodule Engram.PromEx.SeqGate do
 
   defmodule MsBuckets do
     @moduledoc false
-    use Engram.PromEx.Buckets, [1, 5, 25, 100, 500, 2_500, 15_000]
+    # Edges around the 10s wait budget (`:seq_gate_wait_ms`) so a shed write
+    # (waited the full budget plus overhead) lands in 12.5s, not +Inf.
+    use Engram.PromEx.Buckets, [1, 5, 25, 100, 500, 2_500, 7_500, 10_000, 12_500, 20_000]
   end
 
   @impl true
