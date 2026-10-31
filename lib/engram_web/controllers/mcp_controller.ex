@@ -13,6 +13,7 @@ defmodule EngramWeb.McpController do
   alias Engram.MCP.Handlers
   alias Engram.MCP.Prompts
   alias Engram.MCP.Resources
+  alias Engram.MCP.ToolError
   alias Engram.MCP.Tools
 
   require Logger
@@ -1245,7 +1246,7 @@ defmodule EngramWeb.McpController do
         {{:ok, result}, :ok, byte_size_safe(text)}
 
       {:error, err} ->
-        {error_result(err), :error, byte_size_safe(Engram.MCP.ToolError.message(err))}
+        {error_result(err), :error, byte_size_safe(ToolError.message(err))}
     end
   catch
     # A write shed by the vault's SeqGate (`rename_note` runs outside the
@@ -1264,7 +1265,7 @@ defmodule EngramWeb.McpController do
            "already be applied; check the result, then retry in #{retry_s} seconds."}
 
       {{:ok, payload}, :error, bytes} =
-        {error_result(err), :error, byte_size_safe(Engram.MCP.ToolError.message(err))}
+        {error_result(err), :error, byte_size_safe(ToolError.message(err))}
 
       {{:ok, put_in(payload, ["_meta", "engram.page/retry_after_s"], retry_s)}, :error, bytes}
 
@@ -1481,7 +1482,7 @@ defmodule EngramWeb.McpController do
   defp text_result(text),
     do: %{"content" => [%{"type" => "text", "text" => text}], "isError" => false}
 
-  defp error_result(err), do: {:ok, Engram.MCP.ToolError.result(err)}
+  defp error_result(err), do: {:ok, ToolError.result(err)}
 
   # -- Vault resolution --
 
