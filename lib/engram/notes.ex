@@ -967,8 +967,11 @@ defmodule Engram.Notes do
       {:ok, lookup_query} = note_by_path_query(user, vault, sanitized_path)
       opts = prepare_expected(opts, base_attrs, user, sanitized_path, folder)
 
+      # NOT gated (Vaults.SeqGate): this transaction runs the CRDT merge and
+      # field encryption before its seq bump, and a no-op re-push takes no seq
+      # lock at all. Gating it serialized merges per vault (PR 2356 review).
       result =
-        SeqGate.with_tenant(user.id, vault.id, fn ->
+        Repo.with_tenant(user.id, fn ->
           %{
             query: lookup_query,
             locked: Keyword.get(opts, :locked_note),
