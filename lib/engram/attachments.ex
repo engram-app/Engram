@@ -1553,8 +1553,13 @@ defmodule Engram.Attachments do
         # back, and a deleted blob cannot.
         if deleted_ids != [], do: :ok = evict_counts(user.id)
 
+        # `origin_device_id:` (#970) lets the calling device drop its own
+        # echo, as the single delete does; without it the plugin trashed the
+        # files it had just recreated.
+        echo = Keyword.take(opts, [:origin_device_id])
+
         for path <- sanitized, seq = seq_by_hmac[hmac_by_path[path]], seq != nil do
-          broadcast_delete(user.id, vault.id, path, seq, [])
+          broadcast_delete(user.id, vault.id, path, seq, echo)
         end
 
         {:ok, %{deleted: map_size(seq_by_hmac)}}
@@ -1577,7 +1582,11 @@ defmodule Engram.Attachments do
   defp batch_soft_delete_rows(user, vault, hmacs, op_id) do
     now = DateTime.utc_now(:second)
 
-    Repo.with_tenant(user.id, fn ->
+    # Gated like the single delete (Vaults.SeqGate): concurrent batches to one
+    # vault queue without a pool connection. The HMACs were computed before;
+    # inside run only the read and the writes. Skips the gate when nested in a
+    # caller's transaction (the folder cascade).
+    SeqGate.with_tenant(user.id, vault.id, fn ->
       rows =
         from(a in scoped_live(user, vault),
           where: a.path_hmac in ^hmacs,
