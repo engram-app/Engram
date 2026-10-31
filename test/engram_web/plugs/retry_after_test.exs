@@ -15,7 +15,7 @@ defmodule EngramWeb.Plugs.RetryAfterTest do
     assert get_resp_header(respond(503), "retry-after") == ["30"]
   end
 
-  # SeqGate.Busy renders as a bare 429: the plugin needs retry-after on it.
+  # SeqGate.BusyError renders as a bare 429: the plugin needs retry-after on it.
   test "a 429 without one gets a short retry-after" do
     assert get_resp_header(respond(429), "retry-after") == ["2"]
   end

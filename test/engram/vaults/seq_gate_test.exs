@@ -63,7 +63,9 @@ defmodule Engram.Vaults.SeqGateTest do
        %{vault_id: v} do
     holder = hold_gate(v)
 
-    e = assert_raise SeqGate.Busy, fn -> SeqGate.with_vault(v, fn -> :ran end, timeout: 50) end
+    e =
+      assert_raise SeqGate.BusyError, fn -> SeqGate.with_vault(v, fn -> :ran end, timeout: 50) end
+
     assert Plug.Exception.status(e) == 429
     refute Engram.Sentry.EventFilter.server_error?(e)
 
@@ -97,7 +99,7 @@ defmodule Engram.Vaults.SeqGateTest do
   # Delta review item 4: a missing or crashed gate must fail closed, not let
   # every queued writer into the DB at once.
   test "a missing gate fails closed with Busy", %{vault_id: v} do
-    assert_raise SeqGate.Busy, fn ->
+    assert_raise SeqGate.BusyError, fn ->
       SeqGate.with_vault(v, fn -> :ran end, gate: :no_such_gate, timeout: 100)
     end
   end
@@ -147,7 +149,7 @@ defmodule Engram.Vaults.SeqGateTest do
     assert_receive {[:engram, :seq_gate, :hold], %{duration: d}, _} when d >= 0
 
     holder = hold_gate(v)
-    assert_raise SeqGate.Busy, fn -> SeqGate.with_vault(v, fn -> :ok end, timeout: 20) end
+    assert_raise SeqGate.BusyError, fn -> SeqGate.with_vault(v, fn -> :ok end, timeout: 20) end
     assert_receive {[:engram, :seq_gate, :acquire], _, %{result: :busy}}
     send(holder.pid, :release)
   end

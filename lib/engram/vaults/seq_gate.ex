@@ -19,7 +19,7 @@ defmodule Engram.Vaults.SeqGate do
       A crash affects only that partition's vaults.
     * Holder death releases the lock (monitored), so a crash cannot leak it.
     * FAILS CLOSED. A wait timeout, or a gate that stays down past the wait
-      budget, raises `Busy` (HTTP 429 + `retry-after`, which the plugin
+      budget, raises `BusyError` (HTTP 429 + `retry-after`, which the plugin
       honors). A crashed partition is retried until the budget runs out:
       running its waiters ungated all at once is the incident shape.
     * A call already inside a DB transaction skips the gate: it holds a
@@ -53,7 +53,7 @@ defmodule Engram.Vaults.SeqGate do
 
   require Logger
 
-  defmodule Busy do
+  defmodule BusyError do
     @moduledoc """
     The vault's write queue did not drain within the wait budget. A 429, not a
     5xx: it is load, so it stays out of Sentry, and the plugin retries a 429
@@ -96,7 +96,7 @@ defmodule Engram.Vaults.SeqGate do
 
       if result == :busy do
         Logger.warning("vault seq gate saturated, shedding write", category: :sync)
-        raise Busy
+        raise BusyError
       end
 
       Process.put(key, true)
@@ -117,7 +117,7 @@ defmodule Engram.Vaults.SeqGate do
     end
   end
 
-  @doc "Longest a write queues for its vault's gate before shedding with `Busy`."
+  @doc "Longest a write queues for its vault's gate before shedding with `BusyError`."
   def wait_ms, do: Application.fetch_env!(:engram, :seq_gate_wait_ms)
 
   @doc """
