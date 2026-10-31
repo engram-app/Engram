@@ -108,7 +108,11 @@ config :engram, :seq_gate_channel_wait_ms, 2_000
 #     outlier, not the median: the route is rare enough that one connection
 #     held for 2 min costs nothing, and the web client sets no fetch timeout
 #     (the ALB idle timeout is 4000s). A user delete keeps its tokens until the
-#     cascade commits, so a run past it is retryable by the owner.
+#     cascade commits, so a run past it is retryable by the owner, and the
+#     sync socket refuses a deleted account so its plugin cannot queue writes
+#     behind the cascade. The route is password-only, so in practice this is
+#     self-host: a Clerk (SaaS) account is deleted through the Clerk webhook,
+#     which sets no class and so has no statement bound.
 #     Vault delete and purge stay on :write: a soft-delete UPDATE and a job.
 #
 # Routes in no classified scope (/webhooks, /oauth, /api/auth, /api/admin,
