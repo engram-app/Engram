@@ -46,6 +46,16 @@ defmodule EngramWeb.RequestExceptionLogger do
           )
         )
 
+      match?(%Engram.Repo.ShedError{}, exception) ->
+        Logger.warning(
+          "request shed at its DB bound: #{exception.code}",
+          Metadata.with_category(:warning, :http,
+            domain: [:bandit],
+            method: request_method(meta),
+            status: client_status(exception)
+          )
+        )
+
       client_failure?(exception) ->
         Logger.warning(
           "request failed client-side: #{Metadata.safe_reason(exception)}",

@@ -56,6 +56,11 @@ defmodule Engram.Attachments do
     from(a in scoped(user, vault), where: is_nil(a.deleted_at))
   end
 
+  # Each lost race re-encrypts and re-PUTs once, outside the transaction. Two
+  # in a row means the path is being rewritten as fast as we can seal it; the
+  # caller gets a 409 and retries against whatever won.
+  @reprepare_attempts 2
+
   @doc """
   Upserts an attachment. Takes raw bytes under the atom key `:content`, or
   base64 under `content_base64`. Detects MIME type, computes hash.
@@ -123,14 +128,16 @@ defmodule Engram.Attachments do
            :ok <- store_external(key, ciphertext, attrs0.mime_type) do
         # T3-audit H1 — the content AAD binds the row id, so if the locked
         # re-read finds a different row holding the path, re-encrypt for its
-        # id and re-PUT, to the same fresh key (rare race path only).
+        # id and re-PUT, to the same fresh key (rare race path only). The
+        # locked transaction refuses with `{:reprepare, id}` and this runs
+        # after it rolled back: no S3 PUT under the vault lock.
         reprepare = fn id ->
           with {:ok, attrs1, ciphertext1} <- prepare.(id),
                :ok <- store_external(key, ciphertext1, attrs1.mime_type),
-               do: {:ok, id, attrs1}
+               do: {:ok, attrs1}
         end
 
-        deleting_blob_on_raise(user, vault, key, fn ->
+        commit = fn id, prepared_attrs ->
           commit_row(
             user,
             vault,
@@ -139,22 +146,27 @@ defmodule Engram.Attachments do
             byte_size(plaintext),
             dek_version,
             fn
-              %Attachment{id: id} when id != att_id0 ->
-                reprepare.(id)
+              %Attachment{id: ^id} ->
+                {:ok, id, prepared_attrs}
 
-              %Attachment{} ->
-                {:ok, att_id0, attrs0}
+              %Attachment{id: other} ->
+                {:error, {:reprepare, other}}
 
               # The row read before the lock was deleted (or moved) since: its
               # id stays taken by the tombstone, so a fresh row needs a fresh
               # id (as `Uploads` does for a claimed id).
+              nil when existing0 != nil and id == att_id0 ->
+                {:error, {:reprepare, Ecto.UUID.generate()}}
+
               nil ->
-                if existing0,
-                  do: reprepare.(Ecto.UUID.generate()),
-                  else: {:ok, att_id0, attrs0}
+                {:ok, id, prepared_attrs}
             end,
             Notes.put_base_hash_opt([], attrs)
           )
+        end
+
+        deleting_blob_on_raise(user, vault, key, fn ->
+          commit_prepared(commit, reprepare, att_id0, attrs0, @reprepare_attempts)
         end)
         |> tap(fn
           {:ok, _} -> :ok
@@ -164,8 +176,21 @@ defmodule Engram.Attachments do
     end
   end
 
-  # A raise in the locked write (a storage client error on the re-PUT, a
-  # constraint) must not orphan the fresh blob. Deleted only while no row
+  defp commit_prepared(commit, reprepare, id, attrs, attempts) do
+    case commit.(id, attrs) do
+      {:error, {:reprepare, new_id}} when attempts > 0 ->
+        with {:ok, attrs1} <- reprepare.(new_id),
+             do: commit_prepared(commit, reprepare, new_id, attrs1, attempts - 1)
+
+      {:error, {:reprepare, _}} ->
+        {:error, :conflict}
+
+      done ->
+        done
+    end
+  end
+
+  # A raise in the locked write (a constraint) must not orphan the fresh blob. Deleted only while no row
   # points at it, so a raise after the commit cannot reach a live blob. The
   # raise is often the rotation gate refusing the write; the check is a read
   # and runs ungated, or it would raise the same way and skip the delete.
@@ -188,13 +213,16 @@ defmodule Engram.Attachments do
   @doc false
   # The locked row write shared by single-request uploads (above) and chunked
   # ones (`Engram.Attachments.Uploads.complete/3`). Takes the per-path
-  # advisory lock, re-reads the live row at `path_hmac`, then takes the
-  # per-user quota lock and re-checks the storage cap for `size` against live
-  # usage (two uploads to different paths would otherwise both pass). Then
-  # hands the live row (or nil) to `build`, which returns
+  # advisory lock, re-reads the live row at `path_hmac`, then (capped plans
+  # only) takes the per-user quota lock and re-checks the storage cap for
+  # `size` against live usage (two uploads to different paths would otherwise
+  # both pass). Then hands the live row (or nil) to `build`, which returns
   # `{:ok, insert_id, attrs}`; `insert_id` is used only when no live row holds
-  # the path. Lock order is always path then user. Both locks auto-release on
-  # commit/rollback, and an `{:error, reason}` from `build` rolls back.
+  # the path. Lock order: path, quota, vault row, users row. All auto-release
+  # on commit/rollback, and an `{:error, reason}` from `build` rolls back.
+  # `build` runs under the vault lock, so it must not do I/O: a caller that
+  # needs to re-encrypt or re-PUT refuses (`{:error, {:reprepare, id}}`) and
+  # retries after the rollback, as upsert_attachment/3 does.
   #
   # `opts[:base_hash]` (#2163) is the `content_hash` the writer last read, the
   # same compare-and-swap guard `Notes.upsert_note/4` takes: a live row whose
@@ -216,27 +244,17 @@ defmodule Engram.Attachments do
         ) ::
           {:ok, Attachment.t()} | {:error, term()}
   def commit_row(user, vault, path, path_hmac, size, dek_version, build, opts \\ []) do
-    # Gate outermost (see SeqGate): waiters queue without a pool connection.
-    SeqGate.with_vault(vault.id, fn ->
-      Repo.transaction(fn ->
-        :ok = acquire_path_lock(user.id, path_hmac)
-        existing = fetch_existing(user, vault.id, path_hmac)
-        :ok = Repo.advisory_lock!(quota_lock_id(user.id))
+    # Read once, before the transaction, and used for both the lock and the
+    # check, so a plan change in between cannot run the SUM without the lock.
+    # An unlimited plan has no cap to serialize: no quota lock, no SUM.
+    limit = Billing.effective_limit(user, :attachment_bytes_cap)
 
-        # Under the locks and before anything is written: a row committed after
-        # a DEK rotation's sweep went by would stay under the retiring key.
-        with :ok <- base_hash_gate(existing, path, opts[:base_hash]),
-             :ok <- rotation_gate(user, dek_version),
-             :ok <- validate_storage_cap(user, existing, size),
-             {:ok, insert_id, attrs} <- build.(existing),
-             {:ok, att} <- write_row(user, existing, insert_id, attrs, path) do
-          # Phase B.3: path is virtual — splice the plaintext we already have
-          # onto the returned struct so callers can read att.path without a
-          # second decrypt round-trip.
-          {%{att | path: path}, existing}
-        else
-          {:error, reason} -> Repo.rollback(reason)
-        end
+    # Gate outermost (see SeqGate): waiters queue without a pool connection.
+    # shed_on_bound: the path and quota advisory locks run outside a tenant
+    # leg, so a request lock_timeout there must still shed as a 429.
+    SeqGate.with_vault(vault.id, fn ->
+      Repo.shed_on_bound(fn ->
+        commit_txn(user, vault, {path, path_hmac, size}, dek_version, build, limit, opts)
       end)
     end)
     |> case do
@@ -269,6 +287,37 @@ defmodule Engram.Attachments do
       {:error, _} = err ->
         err
     end
+  end
+
+  defp commit_txn(user, vault, {path, path_hmac, size}, dek_version, build, limit, opts) do
+    Repo.transaction(fn ->
+      :ok = acquire_path_lock(user.id, path_hmac)
+      existing = fetch_existing(user, vault.id, path_hmac)
+
+      # The cap check (a user-wide SUM) is serialized by the per-user quota
+      # lock, so it runs BEFORE the vault row lock that every writer of the
+      # vault waits on.
+      with :ok <- base_hash_gate(existing, path, opts[:base_hash]),
+           :ok <- quota_check(user, limit, existing, size),
+           # The vault row BEFORE the users row (rotation_gate's FOR SHARE):
+           # an account delete deletes vaults then users, so users-then-vault
+           # here was a 40P01 cycle with it (#2339). write_row's next_seq!
+           # re-enters this lock.
+           :ok <- Repo.with_tenant!(user.id, fn -> Engram.Vaults.lock_seq!(vault.id) end),
+           # Under the locks and before anything is written: a row committed
+           # after a DEK rotation's sweep went by would stay under the
+           # retiring key.
+           :ok <- rotation_gate(user, dek_version),
+           {:ok, insert_id, attrs} <- build.(existing),
+           {:ok, att} <- write_row(user, existing, insert_id, attrs, path) do
+        # Phase B.3: path is virtual — splice the plaintext we already have
+        # onto the returned struct so callers can read att.path without a
+        # second decrypt round-trip.
+        {%{att | path: path}, existing}
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
   end
 
   # Mirrors the notes stale-base gate (`Notes.do_update_note/6`). No live row
@@ -1399,6 +1448,7 @@ defmodule Engram.Attachments do
   # definition would silently give the chunker and the batch_delete guard
   # different limits.
   @max_batch_entries Batch.folder_delete()
+  @max_batch_request Batch.batch_request_max()
 
   @spec delete_folder(Engram.Accounts.User.t(), map(), String.t()) ::
           {:ok, non_neg_integer()} | {:error, term()}
@@ -1478,7 +1528,8 @@ defmodule Engram.Attachments do
   no origin device, same as before). Blobs stay for
   `Engram.Workers.AttachmentBlobGC` (#2159).
 
-  Capped at 500 paths per batch (`{:error, :batch_too_large}` above that).
+  Capped at `Engram.Batch.batch_request_max/0` paths per batch
+  (`{:error, :batch_too_large}` above that).
   `op_id:` stamps every row it deletes with that undo id (#609).
   """
   @spec batch_delete(map(), map(), [String.t()], keyword()) ::
@@ -1488,7 +1539,7 @@ defmodule Engram.Attachments do
   def batch_delete(_user, _vault, [], _opts), do: {:ok, %{deleted: 0}}
 
   def batch_delete(_user, _vault, paths, _opts)
-      when is_list(paths) and length(paths) > @max_batch_entries,
+      when is_list(paths) and length(paths) > @max_batch_request,
       do: {:error, :batch_too_large}
 
   def batch_delete(user, vault, paths, opts) when is_list(paths) do
@@ -1512,8 +1563,13 @@ defmodule Engram.Attachments do
         # back, and a deleted blob cannot.
         if deleted_ids != [], do: :ok = evict_counts(user.id)
 
+        # `origin_device_id:` (#970) lets the calling device drop its own
+        # echo, as the single delete does; without it the plugin trashed the
+        # files it had just recreated.
+        echo = Keyword.take(opts, [:origin_device_id])
+
         for path <- sanitized, seq = seq_by_hmac[hmac_by_path[path]], seq != nil do
-          broadcast_delete(user.id, vault.id, path, seq, [])
+          broadcast_delete(user.id, vault.id, path, seq, echo)
         end
 
         {:ok, %{deleted: map_size(seq_by_hmac)}}
@@ -1536,7 +1592,11 @@ defmodule Engram.Attachments do
   defp batch_soft_delete_rows(user, vault, hmacs, op_id) do
     now = DateTime.utc_now(:second)
 
-    Repo.with_tenant(user.id, fn ->
+    # Gated like the single delete (Vaults.SeqGate): concurrent batches to one
+    # vault queue without a pool connection. The HMACs were computed before;
+    # inside run only the read and the writes. Skips the gate when nested in a
+    # caller's transaction (the folder cascade).
+    SeqGate.with_tenant(user.id, vault.id, fn ->
       rows =
         from(a in scoped_live(user, vault),
           where: a.path_hmac in ^hmacs,
@@ -2293,8 +2353,28 @@ defmodule Engram.Attachments do
   # non-deleted rows via storage_usage/1. Runs inside the per-path
   # advisory lock for consistency with the writer's view of `existing`.
   @doc false
-  def validate_storage_cap(user, existing, new_size) do
-    case Billing.effective_limit(user, :attachment_bytes_cap) do
+  # Whether the user's plan caps attachment storage (same sentinel as
+  # validate_storage_cap/3: a negative or absent limit is unlimited).
+  # Inside commit_row's transaction: the quota lock and the check, for a
+  # capped plan only.
+  defp quota_check(user, limit, existing, size) when is_integer(limit) and limit >= 0 do
+    :ok = Repo.advisory_lock!(quota_lock_id(user.id))
+    storage_cap_at(limit, user, existing, size)
+  end
+
+  defp quota_check(_user, _limit, _existing, _size), do: :ok
+
+  def validate_storage_cap(user, existing, new_size),
+    do:
+      storage_cap_at(
+        Billing.effective_limit(user, :attachment_bytes_cap),
+        user,
+        existing,
+        new_size
+      )
+
+  defp storage_cap_at(limit, user, existing, new_size) do
+    case limit do
       # Same unlimited sentinel as validate_size/2 above.
       n when is_integer(n) and n < 0 ->
         :ok

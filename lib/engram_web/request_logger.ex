@@ -56,9 +56,16 @@ defmodule EngramWeb.RequestLogger do
   end
 
   def handle_event(@exception_event, _measurements, %{conn: conn} = metadata, _config) do
-    Logger.error(
+    # Every raise stays at error (the error-rate page alert counts them),
+    # except a load shed (Engram.Sentry.EventFilter.shed?/1), which is counted
+    # by its own metric and logged at warning.
+    level =
+      if Engram.Sentry.EventFilter.shed?(unwrap(metadata[:reason])), do: :warning, else: :error
+
+    Logger.log(
+      level,
       "request exception",
-      Metadata.with_category(:error, :http,
+      Metadata.with_category(level, :http,
         method: conn.method,
         status: conn.status,
         route: route(conn),
@@ -73,6 +80,9 @@ defmodule EngramWeb.RequestLogger do
   end
 
   def handle_event(_, _, _, _), do: :ok
+
+  defp unwrap(%Plug.Conn.WrapperError{reason: reason}), do: unwrap(reason)
+  defp unwrap(reason), do: reason
 
   defp emit_request_log(conn, duration) do
     duration_ms = System.convert_time_unit(duration, :native, :millisecond)
@@ -156,10 +166,16 @@ defmodule EngramWeb.RequestLogger do
   #
   # Opt-in PER RESPONSE, set server-side — never blanket-4xx and never keyed on
   # route+status, so a genuine client error on the same endpoint (malformed
-  # body, missing param) still surfaces at :warning. 5xx is never downgradable.
+  # body, missing param) still surfaces at :warning. 5xx is never downgradable
+  # by a flag (the DB-bound shed below is matched on its exception, not set).
   defp level_for_conn(%Plug.Conn{status: status, assigns: %{expected_client_status: true}})
        when is_integer(status) and status < 500,
        do: :info
+
+  # The one 5xx exception: a request its own DB bound cancelled (503 with no
+  # retry-after) is counted by `seq_gate_db_shed_total` and logged at warning,
+  # like a gate shed, so a DB stall does not read as one error per request.
+  defp level_for_conn(%Plug.Conn{assigns: %{reason: %Engram.Repo.ShedError{}}}), do: :warning
 
   defp level_for_conn(%Plug.Conn{status: status}), do: level_for_status(status)
 

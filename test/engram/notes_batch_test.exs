@@ -599,7 +599,9 @@ defmodule Engram.NotesBatchSetBasedTest do
   composition leaked note_changed events for rolled-back work (documented
   caveat in the old moduledoc; this is the promised fix).
   """
-  use Engram.DataCase, async: true
+  # async: false: one test arms the global interleave hook.
+  use Engram.DataCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   alias Engram.Notes
 
@@ -682,26 +684,136 @@ defmodule Engram.NotesBatchSetBasedTest do
     assert Engram.UsageMeters.notes_count(user.id) == before - 2
   end
 
-  # NOTE deliberately absent: a "batch move emits no broadcasts on failure"
-  # test would assert a guarantee batch_move_notes does NOT provide — moves
-  # still broadcast mid-transaction per item (see its moduledoc caveat), so
-  # a multi-item batch that fails late leaks events for rolled-back renames.
-  # The after-commit buffer for move/folder ops is the tracked follow-up.
+  # A batch that rolls back after its renames ran must announce none of them
+  # (the rename broadcasts wait for the batch's own commit).
+  test "a batch move that rolls back broadcasts nothing", %{user: user, vault: vault} do
+    {:ok, n1} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# A"}, actor: "api")
+
+    {:ok, n2} =
+      Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "# B"}, actor: "api")
+
+    EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      :batch_move_applied -> raise "late failure"
+      _ -> :ok
+    end)
+
+    try do
+      assert_raise RuntimeError, "late failure", fn ->
+        Notes.batch_move_notes(user, vault, [n1.id, n2.id], {:path, "Z"})
+      end
+    after
+      Application.delete_env(:engram, :checkpoint_interleave_hook)
+    end
+
+    refute_receive %Phoenix.Socket.Broadcast{event: "note_changed"}, 300
+    assert {:ok, %{path: "a.md"}} = Notes.get_note_by_id(user, vault, n1.id)
+
+    # The claim is undone with the rows: projection must not move the notes
+    # later for a batch that answered an error.
+    {:ok, doc} = Engram.Notes.CrdtIndexPersistence.load_doc(user, vault.id)
+    entries = doc |> Yex.Doc.get_map(Engram.Notes.CrdtIndexDoc.map_name()) |> Yex.Map.to_map()
+    refute Map.has_key?(entries, "Z/a.md"), inspect(entries)
+    assert entries["a.md"]["note_id"] == n1.id
+
+    :ok = perform_job(Engram.Workers.ProjectVaultIndex, %{user_id: user.id, vault_id: vault.id})
+    assert {:ok, %{path: "a.md"}} = Notes.get_note_by_id(user, vault, n1.id)
+  end
+
+  # The common failure is not a raise: a row refused mid-batch (here, deleted
+  # after the claim) rolls the rows back and returns an error. Its claim must
+  # be undone too, or projection moves the rest of the batch later.
+  test "a batch move refused mid-batch undoes its claim", %{user: user, vault: vault} do
+    {:ok, n1} = Notes.upsert_note(user, vault, %{"path" => "a.md"}, actor: "api")
+    {:ok, n2} = Notes.upsert_note(user, vault, %{"path" => "b.md"}, actor: "api")
+
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      :batch_move_claimed ->
+        {:ok, _} =
+          Engram.Repo.with_tenant(user.id, fn ->
+            Engram.Repo.update_all(
+              Ecto.Query.from(n in Engram.Notes.Note, where: n.id == ^n2.id),
+              set: [deleted_at: DateTime.utc_now()]
+            )
+          end)
+
+        :ok
+
+      _ ->
+        :ok
+    end)
+
+    try do
+      assert {:error, _} = Notes.batch_move_notes(user, vault, [n1.id, n2.id], {:path, "Z"})
+    after
+      Application.delete_env(:engram, :checkpoint_interleave_hook)
+    end
+
+    {:ok, doc} = Engram.Notes.CrdtIndexPersistence.load_doc(user, vault.id)
+    entries = doc |> Yex.Doc.get_map(Engram.Notes.CrdtIndexDoc.map_name()) |> Yex.Map.to_map()
+    refute Map.has_key?(entries, "Z/a.md"), inspect(entries)
+
+    :ok = perform_job(Engram.Workers.ProjectVaultIndex, %{user_id: user.id, vault_id: vault.id})
+    assert {:ok, %{path: "a.md"}} = Notes.get_note_by_id(user, vault, n1.id)
+  end
+
+  test "batch move resolves every id in one query, not one per id", %{user: user, vault: vault} do
+    notes =
+      for i <- 1..3 do
+        {:ok, n} = Notes.upsert_note(user, vault, %{"path" => "m#{i}.md"}, actor: "api")
+        n
+      end
+
+    test = self()
+    handler = {__MODULE__, :resolve_count}
+
+    :telemetry.attach(
+      handler,
+      [:engram, :repo, :query],
+      fn _, _, %{query: q, source: src}, _ ->
+        # fetch_note_by_id's single-id lookup: `WHERE ... n0."id" = $k`, with
+        # no path_hmac in the WHERE (rename_note's own lookup pins both).
+        where = q |> String.split(" WHERE ", parts: 2) |> Enum.at(1, "")
+
+        if self() == test and src == "notes" and String.starts_with?(q, "SELECT") and
+             where =~ ~r/n0\."id" = \$\d/ and where =~ "'note'" and
+             not (where =~ "path_hmac") do
+          send(test, {:single_id_select, q})
+        end
+      end,
+      nil
+    )
+
+    try do
+      assert {:ok, %{moved: 3}} =
+               Notes.batch_move_notes(user, vault, Enum.map(notes, & &1.id), {:path, "Q"})
+    after
+      :telemetry.detach(handler)
+    end
+
+    refute_received {:single_id_select, _}
+  end
 
   describe "batch size limits (context boundary)" do
-    # Delete/move accept ANY size — real consumers (e2e harness cleanup,
-    # test_77 bulk teardown) legitimately send >1000 ids in one request.
     # Rows may share one timestamp: the seq feed orders by (seq, id), so
     # same-stamp runs are harmless (the distinct-stamp invariant died with
     # the legacy `updated_at >= since` feed, retired in #1215).
-    test "batch_delete_notes accepts >500 ids", %{
-      user: user,
-      vault: vault
-    } do
+    # One request is one transaction under the vault lock, so its size is
+    # capped (Engram.Batch.batch_request_max/0); the e2e harness chunks to 500.
+    test "batch_delete_notes refuses 501 ids and deletes nothing", %{user: user, vault: vault} do
       notes = for _ <- 1..501, do: insert(:note, user: user, vault: vault)
       ids = Enum.map(notes, & &1.id)
 
-      assert {:ok, %{deleted: 501}} = Notes.batch_delete_notes(user, vault, ids)
+      assert {:error, :batch_too_large} = Notes.batch_delete_notes(user, vault, ids)
+      assert is_nil(Engram.Fixtures.raw_note_row!(user, hd(ids)).deleted_at)
+      assert {:ok, %{deleted: 500}} = Notes.batch_delete_notes(user, vault, Enum.take(ids, 500))
+    end
+
+    test "batch_move_notes refuses 501 ids", %{user: user, vault: vault} do
+      ids = for _ <- 1..501, do: Ecto.UUID.generate()
+      assert {:error, :batch_too_large} = Notes.batch_move_notes(user, vault, ids, {:path, "X"})
     end
 
     @tag timeout: 120_000

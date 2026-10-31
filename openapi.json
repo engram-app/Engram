@@ -6745,7 +6745,7 @@
     "/api/notes/batch-delete": {
       "post": {
         "callbacks": {},
-        "description": "Deletes multiple notes by id in a single transaction and returns the deleted count. Requires the `X-Idempotency-Key` header for safe retries. Returns 404/409 (with the offending `item_id`) if any id is missing or conflicts.",
+        "description": "Deletes up to 500 notes by id in a single transaction and returns the deleted count. An id whose note is already deleted is a no-op. Requires the `X-Idempotency-Key` header for safe retries; send `X-Device-Id` to have your own device's delete echo tagged. Returns 404/409 (with the offending `item_id`) if any id is unknown or conflicts, 422 above 500 ids, and 429 (with `retry-after`) when the sync budget is spent.",
         "operationId": "notes-batch-delete",
         "parameters": [],
         "requestBody": {
@@ -6799,6 +6799,26 @@
               }
             },
             "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "More than 500 ids"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Sync budget spent"
           }
         },
         "summary": "Delete notes by id (idempotent)",

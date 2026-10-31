@@ -155,14 +155,20 @@ defmodule EngramWeb.HealthController do
   # carry connection strings, hostnames, or dependency-internal shapes.
   # `format_error/1` keeps the message low-cardinality and predictable.
 
+  # On the probe's own connection, never the request pool: a convoy that
+  # drains Engram.Repo must not make the ALB pull this task (Engram.HealthProbe).
   defp check_postgres do
-    case Ecto.Adapters.SQL.query(Engram.Repo, "SELECT 1", []) do
-      {:ok, _} -> "ok"
+    case Engram.HealthProbe.check(health_probe()) do
+      :ok -> "ok"
       {:error, reason} -> "error: #{format_error(reason)}"
     end
   rescue
     e -> "error: #{Exception.message(e)}"
   end
+
+  # Test seam only, like cluster_readiness_opts/0: lets ExUnit point the probe
+  # at a dead connection. Unset everywhere else.
+  defp health_probe, do: Application.get_env(:engram, :health_probe_conn, Engram.HealthProbe)
 
   defp check_qdrant do
     qdrant_url = Engram.Vector.Qdrant.base_url()

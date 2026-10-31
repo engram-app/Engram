@@ -18,8 +18,20 @@ defmodule EngramWeb.UserSocket do
   def connect(_params, _socket, _connect_info), do: :error
 
   # `:rest`: an MCP OAuth token has no business on the sync socket.
+  #
+  # A deleted account is refused here, the one gate every channel passes. HTTP
+  # has `AccountLifecycle` (410 everywhere but `DELETE /api/me`); the socket
+  # had nothing, and a user's own delete keeps its tokens until the cascade
+  # commits, so its plugin reconnected and queued writes behind the cascade's
+  # row locks, each holding a pool connection, for the whole delete.
   defp resolve_and_accept(token, params, socket) do
     case Engram.Auth.TokenResolver.resolve(token, :rest) do
+      {:ok, %{deleted_at: %DateTime{}}} ->
+        reject(:account_deleted, token)
+
+      {:ok, %{deleted_at: %DateTime{}}, _} ->
+        reject(:account_deleted, token)
+
       {:ok, user} ->
         # See `read_claims/1` for why this branch reads grant claims too
         # (self-host only: a Clerk JWT never carries a grant).

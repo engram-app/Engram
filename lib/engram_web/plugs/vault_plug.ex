@@ -84,9 +84,13 @@ defmodule EngramWeb.Plugs.VaultPlug do
   # request-stop log line (no second log per rejection). Category/level come from
   # RequestLogger's :http request log; the raw vault id is not logged (correlate
   # via trace_id / the Sentry request-env URL).
+  #
+  # `code` is the stable machine key (the plugin matches it, Engram-obsidian#671);
+  # `error` keeps its text for clients that still match that. Every reason is
+  # the same code on purpose: a credential must not learn WHY (no probing).
   defp reject(conn, reason, message) do
     conn
     |> assign(:reject_reason, reason)
-    |> Halt.json(404, %{error: message})
+    |> Halt.json(404, %{error: message, code: "vault_not_found"})
   end
 end

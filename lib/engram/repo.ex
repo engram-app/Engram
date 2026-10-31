@@ -250,10 +250,10 @@ defmodule Engram.Repo do
   """
   @spec transaction_after_commit((-> any())) :: {:ok, any()} | {:error, any()}
   def transaction_after_commit(fun) when is_function(fun, 0),
-    do: owning_after_commit(fn -> transaction(fun) end)
+    do: shed_on_bound(fn -> owning_after_commit(fn -> transaction(fun) end) end)
 
   defp run_with_tenant(uuid, fun),
-    do: owning_after_commit(fn -> tenant_transaction(uuid, fun) end)
+    do: shed_on_bound(fn -> owning_after_commit(fn -> tenant_transaction(uuid, fun) end) end)
 
   # Only the outermost transaction owns the queue. Re-entrant with_tenant calls
   # never get here, so this is false only for one opened inside a queue owner.
@@ -277,13 +277,90 @@ defmodule Engram.Repo do
 
   @tenant_enter "SELECT set_config('app.current_tenant', $1, true), " <>
                   "set_config('role', 'engram_app', true)"
-  @tenant_enter_gated @tenant_enter <>
-                        ", (SELECT dek_rotation_locked_at IS NOT NULL " <>
-                        "FROM users WHERE id = $1::uuid)"
+  @request_bounds ", set_config('statement_timeout', $2, true), " <>
+                    "set_config('lock_timeout', $3, true)"
+  @rotation_locked ", (SELECT dek_rotation_locked_at IS NOT NULL " <>
+                     "FROM users WHERE id = $1::uuid)"
+  @tenant_enter_bounded @tenant_enter <> @request_bounds
+  @tenant_enter_gated @tenant_enter <> @rotation_locked
+  @tenant_enter_gated_bounded @tenant_enter_bounded <> @rotation_locked
 
-  # Two literal statements, not one built at runtime: the SQL is fixed text.
-  defp enter_tenant(uuid, false), do: query!(@tenant_enter, [uuid], source: "tenant_enter")
-  defp enter_tenant(uuid, true), do: query!(@tenant_enter_gated, [uuid], source: "tenant_enter")
+  @doc """
+  Sets the server-side bounds every later tenant transaction in this process
+  applies with `SET LOCAL`: `statement_timeout` and `lock_timeout`, in ms
+  (`Engram.RuntimeConfig.request_db_bounds/1`), or clears them (`nil`: the
+  session defaults). Set per request by `EngramWeb.Plugs.StatementTimeout`;
+  the values ride the tenant-enter round trip, so they cost nothing extra.
+  A statement cancelled by either is re-raised as `Engram.Repo.ShedError`
+  (429 + retry-after), not a 500: it is load, not a fault.
+  """
+  @spec put_db_bounds(
+          %{
+            required(:statement) => pos_integer(),
+            required(:lock) => pos_integer(),
+            optional(:class) => atom()
+          }
+          | nil
+        ) :: :ok
+  def put_db_bounds(nil) do
+    Process.delete(:engram_db_bounds)
+    :ok
+  end
+
+  def put_db_bounds(%{statement: s, lock: l} = bounds)
+      when is_integer(s) and s > 0 and is_integer(l) and l > 0 do
+    Process.put(:engram_db_bounds, bounds)
+    :ok
+  end
+
+  # Literal statements, not one built at runtime: the SQL is fixed text. The
+  # rotation probe stays the LAST column (tenant_transaction/2 reads it).
+  defp enter_tenant(uuid, gated?), do: enter_tenant(uuid, gated?, Process.get(:engram_db_bounds))
+
+  defp enter_tenant(uuid, false, nil), do: query!(@tenant_enter, [uuid], source: "tenant_enter")
+
+  defp enter_tenant(uuid, true, nil),
+    do: query!(@tenant_enter_gated, [uuid], source: "tenant_enter")
+
+  defp enter_tenant(uuid, false, %{statement: s, lock: l}),
+    do: query!(@tenant_enter_bounded, [uuid, "#{s}ms", "#{l}ms"], source: "tenant_enter")
+
+  defp enter_tenant(uuid, true, %{statement: s, lock: l}),
+    do: query!(@tenant_enter_gated_bounded, [uuid, "#{s}ms", "#{l}ms"], source: "tenant_enter")
+
+  @doc """
+  Runs `fun`, re-raising a statement the request's own bound cancelled
+  (SQLSTATE 57014 `statement_timeout`, 55P03 `lock_timeout`) as
+  `Engram.Repo.ShedError` and counting it (`[:engram, :repo, :shed]`). Only
+  under a request bound, so a worker that rescues `:lock_not_available` itself
+  (NOWAIT sweeps) still sees the Postgrex error. Every tenant transaction
+  runs through it; wrap a request-path plain `Repo.transaction` whose
+  statements run outside a tenant leg (an advisory lock) in it too.
+  """
+  def shed_on_bound(fun) do
+    fun.()
+  rescue
+    e in Postgrex.Error ->
+      bounds = Process.get(:engram_db_bounds)
+
+      if bounds && shed_code?(e) do
+        code = e.postgres.code
+
+        :telemetry.execute([:engram, :repo, :shed], %{count: 1}, %{
+          code: code,
+          class: Map.get(bounds, :class, :unknown)
+        })
+
+        reraise Engram.Repo.ShedError, [code: code], __STACKTRACE__
+      else
+        reraise e, __STACKTRACE__
+      end
+  end
+
+  defp shed_code?(%Postgrex.Error{postgres: %{code: code}}),
+    do: code in [:query_canceled, :lock_not_available]
+
+  defp shed_code?(_), do: false
 
   defp tenant_transaction(uuid, fun) do
     # Decided before the transaction opens: inside it, in_transaction? is

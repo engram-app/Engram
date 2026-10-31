@@ -8,8 +8,11 @@ defmodule Engram.PromEx.SeqGate do
     * `..._seq_gate_wait_milliseconds`: time queued before the gate.
     * `..._seq_gate_hold_milliseconds`: time holding it (the write transaction).
     * `..._seq_gate_held` / `..._seq_gate_waiting`: per-node gauges, polled.
+    * `..._seq_gate_db_shed_total{code, class}`: requests their own DB bound
+      cancelled (`Engram.Repo.ShedError`); `code` is the SQLSTATE name, `class`
+      the route class. Same family as the gate: load shed at the DB.
 
-  Cardinality: `result` only. Never the vault id.
+  Cardinality: `result`, `code` (2) and `class` (3) only. Never the vault id.
   """
 
   use PromEx.Plugin
@@ -40,6 +43,13 @@ defmodule Engram.PromEx.SeqGate do
         description: "Time a write waited for its vault's gate.",
         tags: [:result],
         reporter_options: Buckets.opts(MsBuckets)
+      ),
+      counter(prefix ++ [:db_shed, :total],
+        event_name: [:engram, :repo, :shed],
+        description:
+          "Requests their own DB bound cancelled (Engram.Repo.ShedError): " <>
+            "lock_not_available (429) or query_canceled (503), by route class.",
+        tags: [:code, :class]
       ),
       distribution(prefix ++ [:hold, :milliseconds],
         event_name: [:engram, :seq_gate, :hold],

@@ -63,11 +63,18 @@ defmodule Engram.Accounts.Lifecycle do
   """
   @spec delete_account(User.t(), :user | :clerk) :: :ok | {:error, :last_admin | :pg_failed}
   def delete_account(%User{} = user, reason) when reason in [:user, :clerk] do
-    :ok = mark_deleted(user, reason)
+    # A user's own delete keeps its tokens until the cascade commits (the user
+    # row's delete then removes them with it): if the cascade fails or runs
+    # past the request's bound, `AccountLifecycle` lets that owner back in to
+    # `DELETE /api/me` only, and `Accounts.delete_self/2` finishes it. A Clerk
+    # delete has no owner left to retry, so it revokes up front.
+    :ok = mark_deleted(user, reason, reason == :clerk)
     hard_delete(user, reason)
   end
 
-  defp mark_deleted(%User{deleted_at: %DateTime{}} = user, _reason) do
+  defp mark_deleted(user, reason, revoke? \\ true)
+
+  defp mark_deleted(%User{deleted_at: %DateTime{}} = user, _reason, _revoke?) do
     # Idempotent retry path: tokens may have been re-issued between attempts
     # (e.g. delete_self crashed after the mark, user retried). Revoke
     # again — `revoke_all_user_tokens` is idempotent. Skip email and
@@ -76,13 +83,13 @@ defmodule Engram.Accounts.Lifecycle do
     :ok
   end
 
-  defp mark_deleted(%User{} = user, reason) do
+  defp mark_deleted(%User{} = user, reason, revoke?) do
     user
     |> Ecto.Changeset.change(%{deleted_at: DateTime.utc_now()})
     |> Repo.update!(skip_tenant_check: true)
 
     Accounts.evict_user(user.id)
-    Accounts.revoke_all_user_tokens(user)
+    if revoke?, do: Accounts.revoke_all_user_tokens(user)
     _ = Mailer.send_account_deleted_notice(user, reason)
 
     :telemetry.execute(

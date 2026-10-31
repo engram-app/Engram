@@ -199,6 +199,87 @@ defmodule EngramWeb.UsersControllerTest do
       assert %{"error" => "password_required"} = json_response(conn, 400)
     end
 
+    # The account's whole cascade runs in this request, so it gets the long
+    # bound, not the 5s `:write` one every other DELETE under /api gets.
+    test "runs under the account_delete DB bound", %{user: user} do
+      conn = auth_conn(user) |> delete("/api/me", %{password: "password123"})
+      assert %{"ok" => true} = json_response(conn, 200)
+      assert %{class: :account_delete} = Process.get(:engram_db_bounds)
+    end
+
+    # A cascade past the bound must leave the account finishable by its owner:
+    # the tokens survive until the cascade commits, and the retry completes it.
+    test "a cascade past its bound leaves the account retryable", %{user: user} do
+      {:ok, _raw, _record} = Accounts.create_refresh_token(user)
+      prev = Application.fetch_env!(:engram, :request_db_bounds)
+
+      Application.put_env(
+        :engram,
+        :request_db_bounds,
+        Keyword.merge(prev, account_delete_lock: 50)
+      )
+
+      # Deterministic: another session holds SHARE on `vaults`, so the
+      # cascade's DELETE (ROW EXCLUSIVE) waits past its lock bound while every
+      # read before it (ACCESS SHARE) passes. A 1 ms statement bound tripped
+      # whichever statement was first to be slow, sometimes outside a tenant
+      # leg (not shed-mapped).
+      {:ok, holder} = Postgrex.start_link(Engram.Application.repo_connection_opts())
+      test = self()
+
+      locker =
+        Task.async(fn ->
+          Postgrex.transaction(holder, fn c ->
+            Postgrex.query!(c, "LOCK TABLE vaults IN SHARE MODE", [])
+            send(test, :locked)
+            receive do: (:release -> :ok)
+          end)
+        end)
+
+      assert_receive :locked
+
+      try do
+        log =
+          ExUnit.CaptureLog.capture_log(fn ->
+            assert_error_sent(429, fn ->
+              auth_conn(user) |> delete("/api/me", %{password: "password123"})
+            end)
+          end)
+
+        # A shed, not an error: warning lines only.
+        assert log =~ "[warning] request exception"
+        refute log =~ "[error]"
+      after
+        send(locker.pid, :release)
+        Task.await(locker)
+        GenServer.stop(holder)
+        Application.put_env(:engram, :request_db_bounds, prev)
+      end
+
+      assert %{deleted_at: %DateTime{}} =
+               Engram.Repo.get(Engram.Accounts.User, user.id, skip_tenant_check: true)
+
+      import Ecto.Query
+
+      assert Engram.Repo.aggregate(
+               from(rt in Engram.Auth.RefreshToken,
+                 where: rt.user_id == ^user.id and is_nil(rt.revoked_at)
+               ),
+               :count,
+               skip_tenant_check: true
+             ) == 1
+
+      # Test-only: the sandbox's one outer transaction keeps the failed
+      # request's SET LOCAL bounds; a real request starts its own.
+      Engram.Repo.query!(
+        "SELECT set_config('statement_timeout', '0', true), set_config('lock_timeout', '0', true)"
+      )
+
+      conn = auth_conn(user) |> delete("/api/me", %{password: "password123"})
+      assert %{"ok" => true} = json_response(conn, 200)
+      refute Engram.Repo.get(Engram.Accounts.User, user.id, skip_tenant_check: true)
+    end
+
     # The half-state: `deleted_at` stamped, hard delete failed. Its owner can
     # finish it, but only with the password, like the first attempt.
     test "a half-deleted account finishes its delete with the password", %{user: user} do

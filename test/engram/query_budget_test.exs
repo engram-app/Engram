@@ -58,6 +58,9 @@ defmodule Engram.QueryBudgetTest do
   # one narrow transaction (-4); a catch-up page carries its byte budget in
   # the page query (the size probe's transaction is gone, -4) and a resolve
   # chunk with nothing to refresh sends no refresh query (-1).
+  # Lock discipline: REST append and MCP section edits read (and rebuild)
+  # outside the write transaction (+6 / +3), trading round trips for no
+  # connection held across the merge or parse.
   @budgets %{
     # Read target 5. begin, tenant_enter, the note, commit.
     "mcp get_notes" => 4,
@@ -93,7 +96,10 @@ defmodule Engram.QueryBudgetTest do
     # optimistic read-modify-write (Task 7 ruling F1) instead of the tail read
     # (the tail rides in the read statement).
     "mcp append_to_note" => 11,
-    "mcp edit_note" => 11,
+    # As append_to_note, but the note read (and the section parse it feeds)
+    # runs before the request transaction, in its own short one (+3: begin,
+    # enter, commit), so a seconds-long parse holds no pool connection.
+    "mcp edit_note" => 14,
     # rotation lock, begin, enter, the note row (found once), seq bump,
     # tombstone, usage_meters, the index-delete job insert + its pg_notify,
     # the release joining the warm-up's pending release job (one UPDATE, no
@@ -113,8 +119,11 @@ defmodule Engram.QueryBudgetTest do
     # lookup (`Folders.Rows.ensure/4`: one indexed probe by path hash when the
     # folder is not the root), commit.
     "POST notes create" => 15,
-    # As "mcp append_to_note" (1-11), plus the response's note_links read.
-    "POST notes/append" => 11,
+    # The read, the write and the response's note_links read are three short
+    # tenant transactions, not one (+6: two more begin/enter/commit), so the
+    # merge and encryption hold no pool connection and the links read runs
+    # after the write committed.
+    "POST notes/append" => 17,
     # Not consolidated in Task 10b (no query-classify item; a rename claims its
     # path in the vault index room, which must commit before the row txn):
     #  1-4 claim validation txn (note ids at the paths).

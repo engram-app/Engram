@@ -47,6 +47,8 @@ defmodule EngramWeb.Router do
   # Each scope appends its own tail (VaultPlug for REST; OAuthScopeEnforce for
   # MCP) after this pipeline.
   pipeline :authed_api do
+    # Vault and MCP requests: every tenant transaction gets the write bound.
+    plug EngramWeb.Plugs.StatementTimeout, :write
     plug EngramWeb.Plugs.PreAuthRateLimit
     plug EngramWeb.Plugs.Auth
     plug EngramWeb.Plugs.AccountDeleted
@@ -65,6 +67,12 @@ defmodule EngramWeb.Router do
     # words: "data loss beats a stale row". Message precedence is worth less.
     plug EngramWeb.Plugs.RequirePluginVersion
     plug EngramWeb.Plugs.RequireApiRpsBudget
+  end
+
+  # Account, onboarding and billing scopes: reads get the short DB statement
+  # bound, writes the vault one (EngramWeb.Plugs.StatementTimeout).
+  pipeline :auth_statement_timeout do
+    plug EngramWeb.Plugs.StatementTimeout, :auth
   end
 
   # RequireSession that still admits API keys: rejects third-party OAuth grants
@@ -386,6 +394,7 @@ defmodule EngramWeb.Router do
   scope "/api", EngramWeb do
     pipe_through [
       :api,
+      :auth_statement_timeout,
       EngramWeb.Plugs.Auth,
       # Surfaces oauth_scope_vault_ids so GET /vaults can filter its list to
       # the grant (Engram.Permissions.vault_scope reads this assign). Must run
@@ -520,6 +529,7 @@ defmodule EngramWeb.Router do
   scope "/api", EngramWeb do
     pipe_through [
       :api,
+      :auth_statement_timeout,
       EngramWeb.Plugs.Auth,
       # Surfaces oauth_scope_vault_ids so GET /bootstrap's embedded vault list
       # gets the same grant-scoped filtering as GET /vaults — this scope is a

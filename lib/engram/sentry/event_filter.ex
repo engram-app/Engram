@@ -29,8 +29,25 @@ defmodule Engram.Sentry.EventFilter do
   @spec server_error?(Exception.t()) :: boolean()
   def server_error?(%Bandit.TransportError{}), do: false
 
+  # A request its own DB bound cancelled (lock wait 429, statement 503): load
+  # or a slow query, counted by `seq_gate_db_shed_total{code,class}` and
+  # logged at warning. During a DB stall every request sheds, so as an error
+  # it would turn one incident into a Sentry event per request.
+  def server_error?(%Engram.Repo.ShedError{}), do: false
+
   def server_error?(exception),
     do: exception |> Plug.Exception.status() |> Plug.Conn.Status.code() >= 500
+
+  @doc """
+  A load shed, not a fault: the vault gate's `BusyError` (429) or a request's
+  own DB bound (`Engram.Repo.ShedError`, 429 or 503). Counted
+  (`seq_gate_acquire_total{result="busy"}`, `seq_gate_db_shed_total`) and
+  logged at warning. The ONLY raises the request logs demote from error.
+  """
+  @spec shed?(term()) :: boolean()
+  def shed?(%Engram.Vaults.SeqGate.BusyError{}), do: true
+  def shed?(%Engram.Repo.ShedError{}), do: true
+  def shed?(_other), do: false
 
   defp client_failure?(%Sentry.Event{original_exception: %Bandit.TransportError{}}), do: true
 

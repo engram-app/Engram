@@ -3,12 +3,14 @@ defmodule EngramWeb.NotesController do
   use OpenApiSpex.ControllerSpecs
   alias EngramWeb.Schemas
 
+  alias Engram.Batch
   alias Engram.Crypto
   alias Engram.Links
   alias Engram.Logger.Metadata
   alias Engram.Notes
   alias Engram.Repo
   alias EngramWeb.BatchOps
+  alias EngramWeb.SyncRateLimit
 
   action_fallback EngramWeb.FallbackController
 
@@ -154,47 +156,62 @@ defmodule EngramWeb.NotesController do
     # (a second append used to erase the first) and merges into the exact doc
     # the new body was derived from (it used to duplicate un-checkpointed edits).
     #
-    # One transaction: a miss comes back holding the vault lock, so the create
-    # below cannot race another append's create. The response is rendered after
-    # it commits.
+    # Outside a transaction first: the rebuild, merge and encryption hold no
+    # pool connection (Notes.rmw_note/5). Only a miss opens one, where the
+    # retried rmw comes back holding the vault lock, so the create cannot race
+    # another append's create. The response renders after the commit: its
+    # links read is a fresh short read, not part of the write.
     rebuild = fn base -> String.trim_trailing(base, "\n") <> "\n" <> text end
 
     result =
-      in_write_txn(user, fn user ->
+      with {:ok, user} <- Crypto.ensure_user_dek(user) do
         case Notes.rmw_note(user, vault, path, rebuild, actor: actor) do
           {{:error, :not_found}, _} ->
-            # Create new note with heading from filename + appended text
-            filename = path |> Path.basename(".md")
-
-            {:created,
-             Notes.upsert_note(
-               user,
-               vault,
-               %{
-                 "path" => path,
-                 "content" => "# #{filename}\n\n#{text}",
-                 "mtime" => System.os_time(:second) * 1.0
-               },
-               actor: actor,
-               surface: EngramWeb.WriteActor.surface(conn)
-             )
-             |> render_in_txn(user)}
+            in_write_txn(user, fn user ->
+              append_or_create(conn, user, vault, path, text, rebuild)
+            end)
 
           {upserted, _} ->
-            {:appended, render_in_txn(upserted, user)}
+            {:appended, upserted}
         end
-      end)
+      end
 
-    append_response(conn, user, path, result)
+    append_response(conn, user, path, render_append(result, user))
   end
 
-  # note_json's links read joins the request transaction.
-  defp render_in_txn({:ok, note}, user), do: {:ok, {:rendered, note_json(note, user)}}
+  defp append_or_create(conn, user, vault, path, text, rebuild) do
+    actor = EngramWeb.WriteActor.for_conn(conn)
 
-  defp render_in_txn({:error, :version_conflict, server}, user),
-    do: {:error, :version_conflict, {:rendered, note_json(server, user)}}
+    case Notes.rmw_note(user, vault, path, rebuild, actor: actor) do
+      {{:error, :not_found}, _} ->
+        # Create new note with heading from filename + appended text
+        filename = path |> Path.basename(".md")
 
-  defp render_in_txn(other, _user), do: other
+        {:created,
+         Notes.upsert_note(
+           user,
+           vault,
+           %{
+             "path" => path,
+             "content" => "# #{filename}\n\n#{text}",
+             "mtime" => System.os_time(:second) * 1.0
+           },
+           actor: actor,
+           surface: EngramWeb.WriteActor.surface(conn)
+         )}
+
+      {upserted, _} ->
+        {:appended, upserted}
+    end
+  end
+
+  defp render_append({kind, {:ok, note}}, user),
+    do: {kind, {:ok, {:rendered, note_json(note, user)}}}
+
+  defp render_append({kind, {:error, :version_conflict, server}}, user),
+    do: {kind, {:error, :version_conflict, {:rendered, note_json(server, user)}}}
+
+  defp render_append(other, _user), do: other
 
   # The DEK could not be provisioned (in_write_txn/2): nothing was read or
   # written. Same retryable refusal as an unreadable authority.
@@ -572,38 +589,57 @@ defmodule EngramWeb.NotesController do
     operation_id: "notes-batch-delete",
     summary: "Delete notes by id (idempotent)",
     description:
-      "Deletes multiple notes by id in a single transaction and returns the deleted count. " <>
-        "Requires the `X-Idempotency-Key` header for safe retries. Returns 404/409 (with the " <>
-        "offending `item_id`) if any id is missing or conflicts.",
+      "Deletes up to 500 notes by id in a single transaction and returns the deleted count. " <>
+        "An id whose note is already deleted is a no-op. Requires the `X-Idempotency-Key` " <>
+        "header for safe retries; send `X-Device-Id` to have your own device's delete echo " <>
+        "tagged. Returns 404/409 (with the offending `item_id`) if any id is unknown or " <>
+        "conflicts, 422 above 500 ids, and 429 (with `retry-after`) when the sync budget is spent.",
     tags: ["Notes"],
     request_body: {"Note ids", "application/json", Schemas.BatchIdsRequest, required: true},
     responses: [
       ok: {"Deleted count", "application/json", Schemas.DeletedCount},
       bad_request: {"Invalid ids", "application/json", Schemas.Error},
       not_found: {"Some ids not found", "application/json", Schemas.Error},
-      conflict: {"Conflict", "application/json", Schemas.Error}
+      conflict: {"Conflict", "application/json", Schemas.Error},
+      unprocessable_entity: {"More than 500 ids", "application/json", Schemas.Error},
+      too_many_requests: {"Sync budget spent", "application/json", Schemas.Error}
     ]
   )
 
   def batch_delete(conn, %{"ids" => ids}) when is_list(ids) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
+    device = EngramWeb.OriginDevice.from_conn(conn)
 
-    case BatchOps.parse_uuid_list(ids) do
+    with {:ok, ids} <- BatchOps.parse_uuid_list(ids),
+         # Size first: an oversized request gets its 422 without spending budget.
+         :ok <- Batch.check_request_size(ids),
+         # Same budget as the socket's per-note `crdt_delete`, one unit per id,
+         # so a client cannot double it by switching transport.
+         :ok <- SyncRateLimit.check(user.id, device, :handshake, max(length(ids), 1)) do
+      # Error tuples ({:not_found, id}/internal) fall through to the
+      # action_fallback.
+      with {:ok, %{deleted: n}} <-
+             Notes.batch_delete_notes(user, vault, ids, origin_device_id: device) do
+        body = %{deleted: n}
+
+        EngramWeb.Plugs.IdempotencyKey.remember(conn, %{status: 200, body: body})
+
+        # A retry where every id was already gone changed nothing: no refetch.
+        if n > 0,
+          do: BatchOps.broadcast_batch(user, vault, "notes.batch", %{op: "delete", ids: ids})
+
+        json(conn, body)
+      end
+    else
       :error ->
         conn |> put_status(400) |> json(%{error: "invalid_ids"})
 
-      {:ok, ids} ->
-        # Error tuples ({:not_found, id}/{:conflict, id}/internal) fall
-        # through to the action_fallback.
-        with {:ok, %{deleted: n}} <- Notes.batch_delete_notes(user, vault, ids) do
-          body = %{deleted: n}
+      {:error, :batch_too_large} = too_large ->
+        EngramWeb.FallbackController.call(conn, too_large)
 
-          EngramWeb.Plugs.IdempotencyKey.remember(conn, %{status: 200, body: body})
-
-          BatchOps.broadcast_batch(user, vault, "notes.batch", %{op: "delete", ids: ids})
-          json(conn, body)
-        end
+      {:error, {:rate_limited, retry_after_ms}} ->
+        EngramWeb.Plugs.Halt.rate_limited(conn, retry_after_ms)
     end
   end
 

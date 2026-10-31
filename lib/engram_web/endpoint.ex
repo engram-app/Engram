@@ -202,6 +202,9 @@ defmodule EngramWeb.Endpoint do
   plug Plug.Head
   plug EngramWeb.Plugs.CORS
   plug EngramWeb.Plugs.RetryAfter
+  # Clears the previous keep-alive request's DB statement bound; the router's
+  # scopes set this request's (EngramWeb.Plugs.StatementTimeout).
+  plug EngramWeb.Plugs.StatementTimeout, :reset
   # Drains a body the route left unread, after the response (raw uploads).
   plug EngramWeb.Plugs.SettleUnreadBody, EngramWeb.Router
 

@@ -4,6 +4,7 @@ defmodule EngramWeb.McpControllerTest do
   import Engram.QdrantFilterView
 
   alias Engram.QdrantStub
+  alias Engram.Vaults.SeqGate
 
   # ---------------------------------------------------------------------------
   # Setup: authenticated connection + seeded notes
@@ -921,6 +922,41 @@ defmodule EngramWeb.McpControllerTest do
   end
 
   describe "update_section tool" do
+    # The CommonMark parse can take seconds (ParseGate allows 15 s). Inside the
+    # request transaction it pinned a pool connection the whole time, and on a
+    # lost race it re-ran under the vault lock. It runs before the transaction
+    # opens now, once, and the in-transaction rebuild reuses it.
+    test "parses the section outside the request transaction, once", %{conn: conn} do
+      test = self()
+      id = {__MODULE__, :section_parse}
+
+      :telemetry.attach(
+        id,
+        [:engram, :mcp, :section_parse, :stop],
+        # The handler is global and the suite is async: count only this
+        # test's own request (the conn runs in this process).
+        fn _, _, _, _ ->
+          if self() == test, do: send(test, {:parsed_in_txn, Engram.Repo.in_transaction?()})
+        end,
+        nil
+      )
+
+      try do
+        assert conn
+               |> call_tool("update_section", %{
+                 "path" => "Health/Supplements.md",
+                 "heading" => "Shopping List",
+                 "content" => "- Fish Oil"
+               })
+               |> tool_text() =~ "Section 'Shopping List' updated"
+      after
+        :telemetry.detach(id)
+      end
+
+      assert_received {:parsed_in_txn, false}
+      refute_received {:parsed_in_txn, _}
+    end
+
     test "replaces section content under heading", %{conn: conn} do
       conn =
         call_tool(conn, "update_section", %{
@@ -1641,6 +1677,88 @@ defmodule EngramWeb.McpControllerTest do
     end
   end
 
+  describe "run_tool_handler/4 vault write gate" do
+    # Agents issue tool calls in parallel. Each used to check out a pool
+    # connection at transaction open and then wait on the vault row lock
+    # inside it, so ~10 concurrent writes to one vault emptied the pool. A
+    # write tool now queues on the vault's SeqGate first, holding nothing.
+    defp hold_gate(vault_id) do
+      test = self()
+
+      holder =
+        spawn(fn ->
+          SeqGate.with_vault(vault_id, fn ->
+            send(test, :held)
+
+            receive do
+              :release -> :ok
+            end
+          end)
+        end)
+
+      assert_receive :held
+      holder
+    end
+
+    defp probe(name, test),
+      do: %{
+        name: name,
+        handler: fn _u, _v, _a ->
+          send(test, {:ran, name})
+          {:ok, "ran"}
+        end
+      }
+
+    test "a write tool waits for the vault's gate before opening its transaction", ctx do
+      %{user: user, vault: vault} = ctx
+      test = self()
+      holder = hold_gate(vault.id)
+
+      task =
+        Task.async(fn ->
+          EngramWeb.McpController.run_tool_handler(probe("write_note", test), user, vault, %{})
+        end)
+
+      # Gate THEN transaction: while it waits, the call has opened none (no
+      # connection is held by a waiter).
+      id = {__MODULE__, :waiter_begin}
+      task_pid = task.pid
+
+      :telemetry.attach(
+        id,
+        [:engram, :repo, :query],
+        fn _, _, %{query: q}, _ -> if self() == task_pid, do: send(test, {:waiter_sql, q}) end,
+        nil
+      )
+
+      refute_receive {:ran, "write_note"}, 200
+      :telemetry.detach(id)
+      refute_received {:waiter_sql, "begin"}
+      assert SeqGate.queue_depth().waiting >= 1
+
+      send(holder, :release)
+      assert {{:ok, _}, :ok, _} = Task.await(task)
+      assert_received {:ran, "write_note"}
+    end
+
+    test "a read-only tool does not wait for the gate", ctx do
+      %{user: user, vault: vault} = ctx
+      holder = hold_gate(vault.id)
+
+      try do
+        assert {{:ok, _}, :ok, _} =
+                 EngramWeb.McpController.run_tool_handler(
+                   probe("get_note", self()),
+                   user,
+                   vault,
+                   %{}
+                 )
+      after
+        send(holder, :release)
+      end
+    end
+  end
+
   describe "error branches through the request transaction" do
     test "move_attachment reports a missing attachment", %{conn: conn} do
       text =
@@ -1824,5 +1942,80 @@ defmodule EngramWeb.McpControllerTest do
       refute tool_text(conn) =~ "Invalid or missing argument(s)"
       assert tool_text(conn) =~ "Recently updated"
     end
+  end
+end
+
+defmodule EngramWeb.McpControllerShedTest do
+  # The gate's wait budget is global app env.
+  use EngramWeb.ConnCase, async: false
+
+  import ExUnit.CaptureLog
+
+  alias Engram.Vaults.SeqGate
+
+  setup do
+    user = insert(:user)
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    {:ok, vault, _} = Engram.Vaults.register_vault(user, "Shed", Ecto.UUID.generate())
+    %{user: user, vault: vault}
+  end
+
+  defp sleeper,
+    do: %{
+      name: "write_note",
+      handler: fn _u, _v, _a ->
+        Engram.Repo.query!("SELECT pg_sleep(0.5)")
+        {:ok, "slept"}
+      end
+    }
+
+  defp assert_busy({{:ok, result}, :error, _}) do
+    assert result["isError"] == true
+    assert hd(result["content"])["text"] =~ "busy"
+  end
+
+  test "a saturated vault gate is a retryable busy tool error, not a trapped crash", ctx do
+    %{user: user, vault: vault} = ctx
+    prev = Application.fetch_env!(:engram, :seq_gate_wait_ms)
+    Application.put_env(:engram, :seq_gate_wait_ms, 50)
+    on_exit(fn -> Application.put_env(:engram, :seq_gate_wait_ms, prev) end)
+    test = self()
+
+    holder =
+      Task.async(fn ->
+        SeqGate.with_vault(vault.id, fn ->
+          send(test, :held)
+          receive do: (:release -> :ok)
+        end)
+      end)
+
+    assert_receive :held
+
+    log =
+      capture_log(fn ->
+        assert_busy(EngramWeb.McpController.run_tool_handler(sleeper(), user, vault, %{}))
+      end)
+
+    send(holder.pid, :release)
+    Task.await(holder)
+    assert log =~ "mcp tool call shed"
+    refute log =~ "trapped"
+  end
+
+  test "a statement cancelled by the request's DB bound says so, logged at warning", ctx do
+    %{user: user, vault: vault} = ctx
+    :ok = Engram.Repo.put_db_bounds(%{statement: 50, lock: 50, class: :write})
+
+    log =
+      capture_log(fn ->
+        {{:ok, result}, :error, _} =
+          EngramWeb.McpController.run_tool_handler(sleeper(), user, vault, %{})
+
+        assert result["isError"] == true
+        assert hd(result["content"])["text"] =~ "took too long"
+      end)
+
+    assert log =~ "mcp tool call shed"
+    refute log =~ "trapped"
   end
 end

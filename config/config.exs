@@ -84,6 +84,48 @@ config :engram, :seq_gate_wait_ms, 10_000
 # SeqGateTest.
 config :engram, :seq_gate_channel_wait_ms, 2_000
 
+# Server-side bounds (ms) on a REQUEST's tenant transactions, by route class
+# (EngramWeb.Plugs.StatementTimeout -> Engram.Repo.put_db_bounds/1, sent with
+# SET LOCAL in the tenant-enter round trip). Background work has none (the
+# session keeps lock_timeout 10s, no statement_timeout). A statement past its
+# bound sheds (Engram.Repo.ShedError): a lock wait as 429 + retry-after, a
+# statement past its bound as 503 with no retry-after (it parks). Never a 500.
+#
+# Sized from prod Tempo, one normal day (10-30 06:30Z to 10-31 06:30Z), max DB
+# span per root, accurate to ~2x (power-of-two buckets), PR 2360 review:
+#   * auth_read 3s: GET /vaults, /connections, /billing/usage peak 0.54-1.07s
+#     (whole-vault GROUP BY / user-wide SUM, not single rows); /bootstrap
+#     0.27-0.54s; p99 10-46 ms. 3s is ~3x the worst bucket.
+#   * write 5s: vault + MCP routes; the manifest peaks at 1.07-2.15s, all others
+#     0.54s or less. 5s is ~2.3x the manifest. A SeqGate waiter waits in the
+#     BEAM holding no connection, so the gate wait does not add to this.
+#   * lock 3s: request lock waits get their own code (55P03), shed like the rest.
+#   * account_delete 120s (lock 10s): DELETE /api/me runs the account's whole
+#     vault cascade (every note, chunk and attachment row) in ONE tenant
+#     transaction (Accounts.Lifecycle.do_hard_delete). No prod timing exists:
+#     Tempo holds zero DELETE /api/me traces for 10-24..10-31, and the largest
+#     account deleted so far held 10,046 notes. So the bound is set for the
+#     outlier, not the median: the route is rare enough that one connection
+#     held for 2 min costs nothing, and the web client sets no fetch timeout
+#     (the ALB idle timeout is 4000s). A user delete keeps its tokens until the
+#     cascade commits, so a run past it is retryable by the owner, and the
+#     sync socket refuses a deleted account so its plugin cannot queue writes
+#     behind the cascade. The route is password-only, so in practice this is
+#     self-host: a Clerk (SaaS) account is deleted through the Clerk webhook,
+#     which sets no class and so has no statement bound.
+#     Vault delete and purge stay on :write: a soft-delete UPDATE and a job.
+#
+# Routes in no classified scope (/webhooks, /oauth, /api/auth, /api/admin,
+# /api/operator, public and .well-known) set no class: no statement_timeout
+# and the session's 10s lock_timeout, and they never shed. Classify a new
+# route on purpose (EngramWeb.Plugs.StatementTimeout).
+config :engram, :request_db_bounds,
+  auth_read: 3_000,
+  write: 5_000,
+  lock: 3_000,
+  account_delete: 120_000,
+  account_delete_lock: 10_000
+
 # Embedder adapter (overridden per environment)
 config :engram, :embedder, Engram.Embedders.Voyage
 

@@ -316,6 +316,9 @@ defmodule Engram.Application do
       # After PromEx: seeds the alerted counters at 0 once its handlers attach.
       Engram.PromEx.ZeroInit,
       Engram.Repo,
+      # One connection of its own for the readiness probe (/api/health/deep),
+      # so a drained request pool cannot fail it (see Engram.HealthProbe).
+      Engram.HealthProbe,
       maintenance_repo_child(),
       boot_canary_guard(),
       tenancy_guard(),
@@ -437,22 +440,31 @@ defmodule Engram.Application do
   # missed while down.
   defp pg_notifications_child do
     opts =
-      Engram.Repo.config()
-      |> Keyword.take([
-        :hostname,
-        :host,
-        :port,
-        :username,
-        :password,
-        :database,
-        :ssl,
-        :ssl_opts,
-        :socket_options,
-        :url
-      ])
-      |> Keyword.merge(name: Engram.PgNotifications, auto_reconnect: true, sync_connect: false)
+      Keyword.merge(repo_connection_opts(),
+        name: Engram.PgNotifications,
+        auto_reconnect: true,
+        sync_connect: false
+      )
 
     {Engram.Cache.Listener, opts}
+  end
+
+  @doc false
+  # Where Engram.Repo connects, for the side connections that must not share
+  # its pool (the LISTEN connection, the readiness probe).
+  def repo_connection_opts do
+    Keyword.take(Engram.Repo.config(), [
+      :hostname,
+      :host,
+      :port,
+      :username,
+      :password,
+      :database,
+      :ssl,
+      :ssl_opts,
+      :socket_options,
+      :url
+    ])
   end
 
   # Start the concrete limiter matching the configured backend. Both ETS backends

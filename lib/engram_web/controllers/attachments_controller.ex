@@ -353,6 +353,11 @@ defmodule EngramWeb.AttachmentsController do
       {:error, {:extension_not_allowed, ext}} ->
         conn |> put_status(415) |> json(%{error: "extension_not_allowed", extension: ext})
 
+      # The path was rewritten under us on every retry (Attachments'
+      # reprepare loop): 409 via the fallback, the client retries.
+      {:error, :conflict} = error ->
+        error
+
       {:error, %Ecto.Changeset{}} = error ->
         error
     end
@@ -492,19 +497,14 @@ defmodule EngramWeb.AttachmentsController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    case Attachments.batch_delete(user, vault, paths) do
-      {:ok, %{deleted: n}} ->
-        body = %{deleted: n}
+    # `{:error, :batch_too_large}` falls through to the action_fallback (422).
+    device = EngramWeb.OriginDevice.from_conn(conn)
 
-        EngramWeb.Plugs.IdempotencyKey.remember(conn, %{
-          status: 200,
-          body: body
-        })
-
-        json(conn, body)
-
-      {:error, :batch_too_large} ->
-        conn |> put_status(422) |> json(%{error: "batch_too_large", max: 500})
+    with {:ok, %{deleted: n}} <-
+           Attachments.batch_delete(user, vault, paths, origin_device_id: device) do
+      body = %{deleted: n}
+      EngramWeb.Plugs.IdempotencyKey.remember(conn, %{status: 200, body: body})
+      json(conn, body)
     end
   end
 

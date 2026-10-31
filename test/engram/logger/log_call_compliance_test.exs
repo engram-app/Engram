@@ -279,6 +279,10 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram_web/plugs/",
     "lib/engram_web/presence.ex",
     "lib/engram_web/rate_limiter.ex",
+    # The channel/batch-delete rate check: user id, device id, a class atom
+    # and counts. No Logger call, never touches content, path, title or a
+    # query.
+    "lib/engram_web/sync_rate_limit.ex",
     # Compares method + path_info to decide "can this write"; logs nothing.
     "lib/engram_web/read_only_routes.ex",
     "lib/engram_web/rate_limiter/",
@@ -332,6 +336,13 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/release.ex",
     "lib/engram/release/",
     "lib/engram/repo.ex",
+    # An exception holding a SQLSTATE name atom. No Logger call, never
+    # touches content, path, title or a query. Listed as the file, not
+    # `lib/engram/repo/`, so `tenancy_guard.ex` stays in scope.
+    "lib/engram/repo/shed_error.ex",
+    # The readiness probe's own one-connection pool: `SELECT 1` and a
+    # timeout. No Logger call, never touches content, path, title or a query.
+    "lib/engram/health_probe.ex",
     "lib/engram/runtime_config.ex",
     "lib/engram/schema.ex",
     "lib/engram/secrets.ex",

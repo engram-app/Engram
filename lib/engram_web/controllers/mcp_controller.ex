@@ -10,11 +10,13 @@ defmodule EngramWeb.McpController do
   alias Engram.Abuse.OriginStats
   alias Engram.Analytics.McpClient
   alias Engram.Crypto
+  alias Engram.Logger.Metadata
   alias Engram.MCP.Handlers
   alias Engram.MCP.Prompts
   alias Engram.MCP.Resources
   alias Engram.MCP.ToolError
   alias Engram.MCP.Tools
+  alias Engram.Vaults.SeqGate
 
   require Logger
   require OpenTelemetry.Tracer
@@ -567,7 +569,7 @@ defmodule EngramWeb.McpController do
         _ -> %{}
       end
 
-    Engram.Logger.Metadata.with_category(:info, :lifecycle,
+    Metadata.with_category(:info, :lifecycle,
       mcp_protocol_requested: bounded(params["protocolVersion"]),
       mcp_client_name: bounded(client["name"]),
       mcp_client_version: bounded(client["version"]),
@@ -1221,6 +1223,28 @@ defmodule EngramWeb.McpController do
   @no_request_txn ~w(search_notes suggest_folder delete_folder rename_note rename_folder
                      restore_deleted)
 
+  defp busy_result(tool, reason) do
+    log_shed(tool, reason)
+    retry_s = EngramWeb.Plugs.RetryAfter.busy_seconds()
+
+    err =
+      {:rate_limited,
+       "The vault is busy with other writes, so this did not finish. Part of it may " <>
+         "already be applied; check the result, then retry in #{retry_s} seconds."}
+
+    {{:ok, payload}, :error, bytes} =
+      {error_result(err), :error, byte_size_safe(ToolError.message(err))}
+
+    {{:ok, put_in(payload, ["_meta", "engram.page/retry_after_s"], retry_s)}, :error, bytes}
+  end
+
+  defp log_shed(tool, reason) do
+    Logger.warning(
+      "mcp tool call shed",
+      Metadata.with_category(:warning, :http, tool: tool.name, reason: reason)
+    )
+  end
+
   @doc false
   def run_tool_handler(tool, user, vault, args) do
     case call_handler(tool, user, vault, args) do
@@ -1249,25 +1273,24 @@ defmodule EngramWeb.McpController do
         {error_result(err), :error, byte_size_safe(ToolError.message(err))}
     end
   catch
-    # A write shed by the vault's SeqGate (`rename_note` runs outside the
-    # request transaction, so it queues there). Load, not a crash: a
-    # retryable tool error, and no error log.
-    #
-    # The message does not say "nothing changed": a gated tool can commit part
-    # of its work first (a rename's index claim, which then completes on its
-    # own). `_meta` carries the wait as a number for programs.
-    :error, %Engram.Vaults.SeqGate.BusyError{} ->
-      retry_s = EngramWeb.Plugs.RetryAfter.busy_seconds()
+    # Load, not a crash, and logged at warning (a shed is otherwise invisible
+    # on MCP; the DB sheds are also counted). A write shed by the vault's
+    # SeqGate, or a lock wait past the request's DB bound: a retryable
+    # `rate_limited` tool error. The message does not say "nothing changed": a
+    # gated tool can commit part of its work first (a rename's index claim,
+    # which then completes on its own). `_meta` carries the wait for programs.
+    :error, %SeqGate.BusyError{} ->
+      busy_result(tool, :busy)
 
-      err =
-        {:rate_limited,
-         "The vault is busy with other writes, so this did not finish. Part of it may " <>
-           "already be applied; check the result, then retry in #{retry_s} seconds."}
+    :error, %Engram.Repo.ShedError{code: :lock_not_available} ->
+      busy_result(tool, :lock_not_available)
 
-      {{:ok, payload}, :error, bytes} =
-        {error_result(err), :error, byte_size_safe(ToolError.message(err))}
-
-      {{:ok, put_in(payload, ["_meta", "engram.page/retry_after_s"], retry_s)}, :error, bytes}
+    # A statement past its bound is not load (it would time out again), so it
+    # says so instead of inviting a retry.
+    :error, %Engram.Repo.ShedError{code: code} ->
+      log_shed(tool, code)
+      err = "This request took too long on the server and was stopped; narrow it before retrying"
+      {error_result(err), :error, byte_size(err)}
 
     kind, reason ->
       # T3.0.1 follow-up — never `inspect/1` an exit/throw reason into a
@@ -1278,7 +1301,7 @@ defmodule EngramWeb.McpController do
 
       Logger.error(
         "mcp tool dispatch trapped",
-        Engram.Logger.Metadata.with_category(:error, :http,
+        Metadata.with_category(:error, :http,
           tool: tool.name,
           kind: kind,
           reason_label: Engram.Telemetry.error_kind(reason)
@@ -1301,13 +1324,31 @@ defmodule EngramWeb.McpController do
   # wrap never committed. A provisioning failure is the tool's error (retrying
   # it inside the transaction would call KMS there). An unwrap failure keeps
   # the provisioned user and lets the tool's own crypto path report it.
+  #
+  # A tool that writes vault data takes the vault's SeqGate BEFORE the
+  # transaction opens, so concurrent tool calls against one vault (agents
+  # issue them in parallel) queue in the BEAM holding no pool connection,
+  # instead of each checking one out and waiting on the vault row lock inside
+  # it. Every lib write inside the call then runs ungated (in a transaction,
+  # and already the vault's holder). The slow work (folder placement, the
+  # section parse) runs in before_txn, outside both.
   defp call_handler(tool, user, vault, args) do
-    args = Handlers.before_txn(tool.name, user, vault, args)
-
     case Crypto.ensure_user_dek(user) do
       {:ok, user} ->
         _ = Crypto.get_dek(user)
-        Engram.Repo.with_tenant!(user.id, fn -> tool.handler.(user, vault, args) end)
+        args = Handlers.before_txn(tool.name, user, vault, args)
+
+        run = fn ->
+          Engram.Repo.with_tenant!(user.id, fn -> tool.handler.(user, vault, args) end)
+        end
+
+        case vault do
+          %{id: vault_id} when is_binary(vault_id) ->
+            if Tools.writes_vault?(tool.name), do: SeqGate.with_vault(vault_id, run), else: run.()
+
+          _ ->
+            run.()
+        end
 
       {:error, reason} ->
         {:error, "Encryption key unavailable (#{Crypto.format_dek_error(reason)})"}

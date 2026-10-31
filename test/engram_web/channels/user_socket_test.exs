@@ -19,6 +19,21 @@ defmodule EngramWeb.UserSocketTest do
     %{user: user, token: api_key}
   end
 
+  # A user's own delete keeps its tokens until the cascade commits; its plugin
+  # must not reconnect and queue writes behind the cascade's locks.
+  test "a deleted account is refused at connect, its API key still valid", ctx do
+    %{user: user, token: token} = ctx
+
+    Engram.Repo.update!(Ecto.Changeset.change(user, deleted_at: DateTime.utc_now()),
+      skip_tenant_check: true
+    )
+
+    Engram.Accounts.evict_user(user.id)
+
+    log = capture_log(fn -> assert :error = connect(UserSocket, %{"token" => token}) end)
+    assert log =~ "account_deleted"
+  end
+
   test "connect stores conn_id/device_id and logs ws connect", %{token: token} do
     log =
       capture_log(fn ->
