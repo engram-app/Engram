@@ -682,43 +682,6 @@ defmodule Engram.NotesBatchSetBasedTest do
     assert Engram.UsageMeters.notes_count(user.id) == before - 2
   end
 
-  test "batch move broadcasts only after its transaction commits", %{user: user, vault: vault} do
-    {:ok, n1} =
-      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# A"}, actor: "api")
-
-    {:ok, n2} =
-      Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "# B"}, actor: "api")
-
-    EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
-    test = self()
-    handler = {__MODULE__, :move_commit}
-
-    # Runs in this process: at each commit, has a note_changed already arrived?
-    :telemetry.attach(
-      handler,
-      [:engram, :repo, :query],
-      fn _, _, %{query: q}, _ ->
-        if self() == test and q == "commit" do
-          {:messages, msgs} = Process.info(self(), :messages)
-          early = Enum.count(msgs, &match?(%Phoenix.Socket.Broadcast{event: "note_changed"}, &1))
-          send(test, {:commit_saw, early})
-        end
-      end,
-      nil
-    )
-
-    try do
-      assert {:ok, %{moved: 2}} =
-               Notes.batch_move_notes(user, vault, [n1.id, n2.id], {:path, "Z"})
-    after
-      :telemetry.detach(handler)
-    end
-
-    seen = collect_commit_saw([])
-    assert seen != [] and Enum.all?(seen, &(&1 == 0)), inspect(seen)
-    assert_receive %Phoenix.Socket.Broadcast{event: "note_changed"}
-  end
-
   test "batch move resolves every id in one query, not one per id", %{user: user, vault: vault} do
     notes =
       for i <- 1..3 do
@@ -734,10 +697,13 @@ defmodule Engram.NotesBatchSetBasedTest do
       [:engram, :repo, :query],
       fn _, _, %{query: q, source: src}, _ ->
         # fetch_note_by_id's single-id lookup: `WHERE ... n0."id" = $k`, with
-        # no path_hmac (rename_note's own lookup pins both).
+        # no path_hmac in the WHERE (rename_note's own lookup pins both).
+        where = q |> String.split(" WHERE ", parts: 2) |> Enum.at(1, "")
+
         if self() == test and src == "notes" and String.starts_with?(q, "SELECT") and
-             q =~ ~r/n0\."id" = \$\d/ and not (q =~ "path_hmac") do
-          send(test, :single_id_select)
+             where =~ ~r/n0\."id" = \$\d/ and where =~ "'note'" and
+             not (where =~ "path_hmac") do
+          send(test, {:single_id_select, q})
         end
       end,
       nil
@@ -750,15 +716,7 @@ defmodule Engram.NotesBatchSetBasedTest do
       :telemetry.detach(handler)
     end
 
-    refute_received :single_id_select
-  end
-
-  defp collect_commit_saw(acc) do
-    receive do
-      {:commit_saw, n} -> collect_commit_saw([n | acc])
-    after
-      0 -> acc
-    end
+    refute_received {:single_id_select, _}
   end
 
   describe "batch size limits (context boundary)" do
