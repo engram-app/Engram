@@ -11,6 +11,10 @@ defmodule Engram.Repo.ShedError do
       too long. Often deterministic (a big vault, a bad plan), so retrying
       every few seconds would loop forever: 503 with NO `retry-after`, which
       the plugin counts toward parking the request.
+
+  Neither is a server error to Sentry or the error log
+  (`Engram.Sentry.EventFilter.server_error?/1`): both are logged at warning
+  and counted, like `Engram.Vaults.SeqGate.BusyError`.
   """
   defexception [:code]
 

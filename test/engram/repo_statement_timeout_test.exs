@@ -140,6 +140,27 @@ defmodule Engram.RepoStatementTimeoutTest do
     assert rendered(%Engram.Repo.ShedError{code: :query_canceled}, 503) == []
   end
 
+  # Like a gate shed: a warning and the counter, never Sentry or the error
+  # log (a DB stall would otherwise send one event per request).
+  test "neither shed is a server error to Sentry or the error log" do
+    for code <- [:query_canceled, :lock_not_available] do
+      refute Engram.Sentry.EventFilter.server_error?(%Engram.Repo.ShedError{code: code})
+    end
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        EngramWeb.RequestExceptionLogger.handle_event(
+          [:bandit, :request, :exception],
+          %{},
+          %{exception: %Engram.Repo.ShedError{code: :query_canceled}, kind: :error},
+          nil
+        )
+      end)
+
+    assert log =~ "[warning] request shed at its DB bound: query_canceled"
+    refute log =~ "[error]"
+  end
+
   test "the shed counter is declared on the PromEx plugin" do
     metric =
       Engram.Test.PromExMetrics.of(Engram.PromEx.SeqGate)

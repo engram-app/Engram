@@ -56,9 +56,17 @@ defmodule EngramWeb.RequestLogger do
   end
 
   def handle_event(@exception_event, _measurements, %{conn: conn} = metadata, _config) do
-    Logger.error(
+    # The one server-error policy (Engram.Sentry.EventFilter): a raise that
+    # renders a 4xx (a gate shed, a 404) or a DB-bound shed is not an error.
+    level =
+      if Engram.Sentry.EventFilter.server_error?(unwrap(metadata[:reason])),
+        do: :error,
+        else: :warning
+
+    Logger.log(
+      level,
       "request exception",
-      Metadata.with_category(:error, :http,
+      Metadata.with_category(level, :http,
         method: conn.method,
         status: conn.status,
         route: route(conn),
@@ -73,6 +81,11 @@ defmodule EngramWeb.RequestLogger do
   end
 
   def handle_event(_, _, _, _), do: :ok
+
+  defp unwrap(%Plug.Conn.WrapperError{reason: reason}), do: unwrap(reason)
+  defp unwrap(reason) when is_exception(reason), do: reason
+  # A throw or exit is not an exception with a status: treat it as ours.
+  defp unwrap(_reason), do: %RuntimeError{}
 
   defp emit_request_log(conn, duration) do
     duration_ms = System.convert_time_unit(duration, :native, :millisecond)
@@ -156,10 +169,16 @@ defmodule EngramWeb.RequestLogger do
   #
   # Opt-in PER RESPONSE, set server-side — never blanket-4xx and never keyed on
   # route+status, so a genuine client error on the same endpoint (malformed
-  # body, missing param) still surfaces at :warning. 5xx is never downgradable.
+  # body, missing param) still surfaces at :warning. 5xx is never downgradable
+  # by a flag (the DB-bound shed below is matched on its exception, not set).
   defp level_for_conn(%Plug.Conn{status: status, assigns: %{expected_client_status: true}})
        when is_integer(status) and status < 500,
        do: :info
+
+  # The one 5xx exception: a request its own DB bound cancelled (503 with no
+  # retry-after) is counted by `seq_gate_db_shed_total` and logged at warning,
+  # like a gate shed, so a DB stall does not read as one error per request.
+  defp level_for_conn(%Plug.Conn{assigns: %{reason: %Engram.Repo.ShedError{}}}), do: :warning
 
   defp level_for_conn(%Plug.Conn{status: status}), do: level_for_status(status)
 
