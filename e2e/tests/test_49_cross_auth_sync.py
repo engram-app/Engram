@@ -24,6 +24,7 @@ from helpers.oauth import (
 )
 from helpers.vault import read_note, wait_for_content, wait_for_file, write_note
 from helpers.latency import DELIVERY_TIMEOUT
+from helpers.quiescence import await_quiescent
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +152,7 @@ async def test_oauth_push_apikey_receives(
 
 
 @pytest.mark.asyncio
-async def test_rapid_api_edits_final_content_arrives(vault_b, cdp_b, api_sync):
+async def test_rapid_api_edits_final_content_arrives(vault_b, cdp_a, cdp_b, api_sync):
     """Multiple rapid API edits to same note → final content arrives at client.
 
     Tests that debounce/dedup logic doesn't drop the final update.
@@ -178,4 +179,22 @@ async def test_rapid_api_edits_final_content_arrives(vault_b, cdp_b, api_sync):
     # Earlier versions must have been overwritten, not appended.
     assert final.count("Version") == 1, (
         f"Expected only the final version line: {final[:300]}"
+    )
+
+    # The device check alone misses the worse half of #2271: a receiver that
+    # wrote a stale version, read its own write back as a user edit and
+    # PUSHED it left the server on "Version 4 of 5" or "Version 51 of 5"
+    # while B briefly showed v5. Wait until both receivers owe nothing
+    # outbound (no fullSync kick: a pull could mask the revert), then the
+    # server must still hold exactly the last save.
+    for cdp in (cdp_a, cdp_b):
+        await await_quiescent(cdp, api_sync, kick=False, caught_up=False)
+    server = api_sync.get_note(path)
+    assert server is not None, f"{path} vanished from the server"
+    assert server["content"] == "# Rapid Edit\nVersion 5 of 5", (
+        f"Server lost the last save (a receiver pushed stale text back): "
+        f"{server['content']!r}"
+    )
+    assert read_note(vault_b, path) == server["content"], (
+        f"B drifted after settling: {read_note(vault_b, path)!r}"
     )
