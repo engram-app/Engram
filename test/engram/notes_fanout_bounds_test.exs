@@ -109,6 +109,93 @@ defmodule Engram.NotesFanoutBoundsTest do
       assert {:ok, %{path: "Elsewhere/kept.md"}} = Notes.get_note_by_id(user, vault, moved.id)
     end
 
+    defp index_entries(user, vault) do
+      {:ok, doc} = Engram.Notes.CrdtIndexPersistence.load_doc(user, vault.id)
+      doc |> Yex.Doc.get_map(Engram.Notes.CrdtIndexDoc.map_name()) |> Yex.Map.to_map()
+    end
+
+    defp arm_once(point, fun) do
+      {:ok, fired} = Agent.start_link(fn -> 0 end)
+
+      Application.put_env(:engram, :checkpoint_interleave_hook, fn
+        ^point -> if Agent.get_and_update(fired, &{&1, &1 + 1}) == 0, do: fun.()
+        _ -> :ok
+      end)
+
+      on_exit(fn -> Application.delete_env(:engram, :checkpoint_interleave_hook) end)
+      fired
+    end
+
+    # The other order: the single rename commits BEFORE the cascade claims, so
+    # the cascade's claim (a move in the index) is the stale one. Fixing only
+    # the rows left the index naming the folder path, and projection then
+    # undid the user's rename.
+    test "a rename racing the cascade survives in the index and after projection", ctx do
+      %{user: user, vault: vault} = ctx
+      [moved | _] = seed(user, vault, "Docs")
+
+      arm_once(:folder_rename_read, fn ->
+        {:ok, _} = Notes.rename_note(user, vault, moved.path, "Elsewhere/kept.md")
+      end)
+
+      assert {:ok, _} = Notes.rename_folder(user, vault, "Docs", "Archive")
+      assert index_entries(user, vault)["Elsewhere/kept.md"]["note_id"] == moved.id
+
+      :ok =
+        perform_job(Engram.Workers.ProjectVaultIndex, %{user_id: user.id, vault_id: vault.id})
+
+      assert {:ok, %{path: "Elsewhere/kept.md"}} = Notes.get_note_by_id(user, vault, moved.id)
+    end
+
+    # The fence is seq AND the crdt_state nonce, as rename_note's: a checkpoint
+    # rewrites crdt_state without bumping seq, and a seq-only check missed it.
+    test "a checkpoint during the cascade (same seq, new nonce) forces a fresh read", ctx do
+      %{user: user, vault: vault} = ctx
+      [touched | _] = seed(user, vault, "Docs")
+
+      assert Engram.Fixtures.raw_note_row!(user, touched.id).crdt_state_nonce,
+             "precondition: the seeded note carries a CRDT state"
+
+      fired =
+        arm_once(:folder_rename_seal, fn ->
+          {:ok, _} =
+            Repo.with_tenant(user.id, fn ->
+              Repo.update_all(from(n in Engram.Notes.Note, where: n.id == ^touched.id),
+                set: [crdt_state_nonce: :crypto.strong_rand_bytes(12)]
+              )
+            end)
+        end)
+
+      assert {:ok, _} = Notes.rename_folder(user, vault, "Docs", "Archive")
+      # Sealed twice: the first write missed the fence and retried.
+      assert Agent.get(fired, & &1) == 2
+    end
+
+    # A second miss is a write storm on the folder, not a target conflict: it
+    # sheds as busy (429 + retry-after), which clients retry, not a 409.
+    test "a cascade that misses its fence twice sheds as busy", ctx do
+      %{user: user, vault: vault} = ctx
+      [touched | _] = seed(user, vault, "Docs")
+
+      Application.put_env(:engram, :checkpoint_interleave_hook, fn
+        :folder_rename_seal ->
+          Repo.with_tenant(user.id, fn ->
+            Repo.update_all(from(n in Engram.Notes.Note, where: n.id == ^touched.id),
+              set: [crdt_state_nonce: :crypto.strong_rand_bytes(12)]
+            )
+          end)
+
+        _ ->
+          :ok
+      end)
+
+      on_exit(fn -> Application.delete_env(:engram, :checkpoint_interleave_hook) end)
+
+      assert_raise Engram.Vaults.SeqGate.BusyError, fn ->
+        Notes.rename_folder(user, vault, "Docs", "Archive")
+      end
+    end
+
     # The fan-out is an outbox: it commits with the rows it covers, so a
     # crash between the commit and a separate enqueue cannot lose a reindex.
     test "the repath and link-rewrite jobs insert inside the rename transaction", ctx do

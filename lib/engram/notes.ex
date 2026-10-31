@@ -113,6 +113,7 @@ defmodule Engram.Notes do
   ]
 
   @note_crdt_fields @note_meta_fields ++ [:crdt_state_ciphertext, :crdt_state_nonce]
+  @note_fence_scan_fields @note_meta_fields ++ [:crdt_state_nonce]
 
   # Notes resolved per transaction on the change feed. `Repo.with_tenant` takes
   # Ecto's default 15s timeout, and each resolution is a decrypt + Yjs NIF
@@ -4468,11 +4469,21 @@ defmodule Engram.Notes do
   # Nonce, not ciphertext: 12 random bytes rewritten by every write of the
   # column, so it discriminates identically without shipping a TOASTed blob as a
   # bind parameter. Compared only when non-nil (`= NULL` is never true).
-  defp rename_fence(%Note{id: id, seq: seq, crdt_state_nonce: nil}),
-    do: from(n in Note, where: n.id == ^id and n.seq == ^seq)
+  #
+  # The ONE write fence for a row rewritten from a read: the single rename
+  # (here) and the folder-rename cascade (BulkRename's `read_seq`/`read_nonce`
+  # VALUES columns, same rule in SQL) both take it from fence_of/1.
+  defp fence_of(%Note{seq: seq, crdt_state_nonce: nonce}), do: {seq, nonce}
 
-  defp rename_fence(%Note{id: id, seq: seq, crdt_state_nonce: nonce}),
-    do: from(n in Note, where: n.id == ^id and n.seq == ^seq and n.crdt_state_nonce == ^nonce)
+  defp rename_fence(%Note{id: id} = note) do
+    case fence_of(note) do
+      {seq, nil} ->
+        from(n in Note, where: n.id == ^id and n.seq == ^seq)
+
+      {seq, nonce} ->
+        from(n in Note, where: n.id == ^id and n.seq == ^seq and n.crdt_state_nonce == ^nonce)
+    end
+  end
 
   defp do_rename_note_inner(note, user, new_path, new_folder, now, refs) do
     decrypted_note = decrypt_or_raise!(note, user)
@@ -6772,12 +6783,13 @@ defmodule Engram.Notes do
   def rename_folder(user, vault, old_folder, new_folder) do
     with {:ok, user} <- Crypto.ensure_user_dek(user) do
       # A row moved between the cascade's read and its locked write (the
-      # compare-and-swap in BulkRename): retry once from a fresh read, then
-      # report a conflict.
+      # fence in BulkRename): retry once from a fresh read. A second miss is a
+      # write storm on this folder, not a conflict with the target: shed as
+      # busy (429 + retry-after), which clients retry.
       case rename_folder_gated(user, vault, old_folder, new_folder, nil) do
         {:error, :stale_rename} ->
           case rename_folder_gated(user, vault, old_folder, new_folder, nil) do
-            {:error, :stale_rename} -> {:error, :conflict}
+            {:error, :stale_rename} -> raise SeqGate.BusyError
             other -> public_rename_result(other)
           end
 
@@ -6895,7 +6907,8 @@ defmodule Engram.Notes do
     # own index, `notes_folder_ref` for the references), skipped when empty.
     rows =
       Repo.with_tenant!(user.id, fn ->
-        live = from(n in scoped_live(user, vault), select: struct(n, @note_meta_fields))
+        # crdt_state_nonce: half of the write fence (fence_of/1).
+        live = from(n in scoped_live(user, vault), select: struct(n, @note_fence_scan_fields))
 
         by_ref = if ids == [], do: [], else: Repo.all(where(live, [n], n.folder_ref_id in ^ids))
 
@@ -7090,6 +7103,8 @@ defmodule Engram.Notes do
     if notes == [] do
       {:ok, 0, nil}
     else
+      # Test seam (nil outside tests): between the subtree read and its claim.
+      :ok = interleave_hook(:folder_rename_read)
       now = DateTime.utc_now()
       old_len = String.length(old_folder)
       content_by_id = fetch_v1_contents(user, notes)
@@ -7203,14 +7218,15 @@ defmodule Engram.Notes do
             # AND tombstones; the seq feed orders by (seq, id), so same-stamp
             # runs are harmless.
             grouped = group_rename_updates(user, updates, content_by_id)
-            # Each row carries the seq it was read at: the write below is a
-            # compare-and-swap on it, so a row a concurrent write moved after
-            # the read (a rename_note in the subtree, a v1 content edit) is
-            # not overwritten from the stale read.
-            read_seq = Map.new(notes, &{&1.id, &1.seq})
-            marker_rows = stamp_rename_rows(grouped[:marker] || [], now, read_seq)
-            v2_rows = stamp_rename_rows(grouped[:v2] || [], now, read_seq)
-            v1_rows = stamp_rename_rows(grouped[:v1] || [], now, read_seq)
+            # Each row carries the fence it was read at (seq + crdt_state
+            # nonce, fence_of/1, the same one rename_note writes under): a row
+            # a concurrent write moved after the read (a rename_note in the
+            # subtree, a v1 content edit, a checkpoint) is not overwritten from
+            # the stale read.
+            fences = Map.new(notes, &{&1.id, fence_of(&1)})
+            marker_rows = stamp_rename_rows(grouped[:marker] || [], now, fences)
+            v2_rows = stamp_rename_rows(grouped[:v2] || [], now, fences)
+            v1_rows = stamp_rename_rows(grouped[:v1] || [], now, fences)
 
             # Soft-deleted tombstones for old paths so the seq feed
             # (list_changes_by_seq, no deleted_at filter) carries delete
@@ -7370,11 +7386,42 @@ defmodule Engram.Notes do
               _ = orphan_claim(user, vault, length(claims), e)
               reraise e, __STACKTRACE__
           catch
+            # A row moved under the cascade: the claim just committed may name
+            # a note that is no longer in the subtree. Put every claimed note
+            # back at its CURRENT row path, so projection cannot undo the
+            # concurrent write, then let the caller retry from a fresh read.
+            # Expected on a concurrency path: counted, not an error.
+            {:rename_refused, :stale_rename} ->
+              :telemetry.execute(
+                [:engram, :crdt, :index_claim],
+                %{count: 1, entries: length(claims)},
+                %{op: :claim, route: :folder_rename, phase: :stale_retry}
+              )
+
+              :ok = reclaim_current_paths(user, vault, Enum.map(claims, &elem(&1, 1)))
+              {:error, :stale_rename}
+
             {:rename_refused, reason} ->
               _ = orphan_claim(user, vault, length(claims), reason)
               {:error, reason}
           end
       end
+    end
+  end
+
+  # The index entries a stale cascade claimed, re-claimed at each note's row
+  # path as it is now (one read, one claim). The retry re-claims the notes
+  # still in the subtree at their new paths; a note that left keeps the path
+  # its own writer gave it. A failure here leaves the stale claim for
+  # projection to converge, so it is reported like any orphan claim.
+  defp reclaim_current_paths(user, vault, note_ids) do
+    with {:ok, by_id} <- get_note_meta_by_ids(user, vault, note_ids),
+         :ok <- Identity.claim(user, vault.id, Enum.map(by_id, fn {id, n} -> {n.path, id} end)) do
+      :ok
+    else
+      error ->
+        _ = orphan_claim(user, vault, length(note_ids), error)
+        :ok
     end
   end
 
@@ -8357,9 +8404,10 @@ defmodule Engram.Notes do
           # error surface can't arise here (dialyzer proves the coverage).
           case rename_folder_gated(user, vault, source_folder, new_folder, rows) do
             {:ok, _count, seq} -> {:ok, {source_folder, new_folder, seq}}
+            {:error, :conflict} -> {:error, :conflict}
             # The batch shares one scan, so a stale row is the caller's to
-            # retry: a conflict, as the single rename's second miss is.
-            {:error, reason} when reason in [:conflict, :stale_rename] -> {:error, :conflict}
+            # retry: shed as busy, as the single rename's second miss is.
+            {:error, :stale_rename} -> raise SeqGate.BusyError
             {:error, :invalid_path} -> {:error, :cycle}
           end
         end
@@ -8873,8 +8921,8 @@ defmodule Engram.Notes do
 
   # Attaches the cascade's shared timestamp to each {id, kw} rename row,
   # producing the [{id, stamp, kw}] shape BulkRename.update!/3 consumes.
-  defp stamp_rename_rows(rows, now, read_seq) do
-    Enum.map(rows, fn {id, kw} -> {id, Map.fetch!(read_seq, id), now, kw} end)
+  defp stamp_rename_rows(rows, now, fences) do
+    Enum.map(rows, fn {id, kw} -> {id, Map.fetch!(fences, id), now, kw} end)
   end
 
   # Marker-only rename helper. Re-encrypts JUST the folder envelope under the
