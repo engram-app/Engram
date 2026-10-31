@@ -60,6 +60,44 @@ defmodule Engram.NotesFanoutBoundsTest do
   end
 
   describe "rename_folder/4 (folder rename cascade)" do
+    # Every moved row is re-encrypted (path + folder envelopes, plus a
+    # tombstone each). That CPU used to run AFTER next_seq! took the vault
+    # row lock, so a big folder rename stalled every other writer of the
+    # vault. (Call tracing cannot see it: crypto marks the process
+    # :sensitive, which silences trace messages by design.)
+    test "re-encrypts the moved notes before opening the write transaction", ctx do
+      %{user: user, vault: vault} = ctx
+      seed(user, vault, "Docs")
+      test = self()
+
+      Application.put_env(:engram, :checkpoint_interleave_hook, fn
+        :folder_rename_seal -> send(test, {:sealed_in_txn, Repo.in_transaction?()})
+        _ -> :ok
+      end)
+
+      on_exit(fn -> Application.delete_env(:engram, :checkpoint_interleave_hook) end)
+
+      assert {:ok, _} = Notes.rename_folder(user, vault, "Docs", "Archive")
+      assert_received {:sealed_in_txn, false}
+    end
+
+    # The fan-out is an outbox: it commits with the rows it covers, so a
+    # crash between the commit and a separate enqueue cannot lose a reindex.
+    test "the repath and link-rewrite jobs insert inside the rename transaction", ctx do
+      %{user: user, vault: vault} = ctx
+      seed(user, vault, "Docs")
+
+      {{:ok, _}, queries} =
+        Engram.QueryRecorder.record(fn -> Notes.rename_folder(user, vault, "Docs", "Archive") end)
+
+      txns = Engram.QueryRecorder.transactions(queries)
+
+      [rename_txn] =
+        Enum.filter(txns, fn stmts -> Enum.any?(stmts, &(&1 =~ "SET change_seq")) end)
+
+      assert Enum.count(rename_txn, &(&1 =~ ~r/^INSERT INTO .*oban_jobs/)) >= 2
+    end
+
     test "enqueues repath + link-rewrite jobs in two bulk inserts, one job each per note", ctx do
       %{user: user, vault: vault} = ctx
       notes = seed(user, vault, "Docs")
