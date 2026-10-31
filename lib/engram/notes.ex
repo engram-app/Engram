@@ -3944,9 +3944,7 @@ defmodule Engram.Notes do
     end
   end
 
-  # Shared shell for by-id fetches; `fields: :meta` skips the content column
-  # and its decrypt for callers that only need path/folder/tags (#863) —
-  # same projection pattern the changes feeds use. `kind == "note"` excludes
+  # Shared shell for by-id fetches. `kind == "note"` excludes
   # folder-marker rows (they share the id space but aren't fetchable/
   # deletable through the by-id note API — CrdtTransport.load_doc and
   # delete_note_by_id both route through here, so neither can target a
