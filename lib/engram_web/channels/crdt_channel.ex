@@ -669,23 +669,18 @@ defmodule EngramWeb.CrdtChannel do
   def handle_in("crdt_delete", %{"doc_id" => doc_id}, socket) do
     with :ok <- check_rate(socket, :handshake),
          {:ok, note_id} <- cast_doc_id(doc_id) do
-      user = socket.assigns.current_user
-      vault = socket.assigns.vault
-      device_id = socket.assigns[:device_id]
-      # Idempotent: a :not_found means the row is already gone — the desired
-      # end state — so we still reply :ok. origin_device_id (#970) lets THIS
-      # device drop its own note_changed echo of the delete.
-      _ = Notes.delete_note_by_id(user, vault, note_id, origin_device_id: device_id)
-      {:reply, {:ok, %{doc_id: note_id}}, socket}
+      # The delete queues on the vault's SeqGate. Waiting HERE would stall
+      # every other room on this socket for the whole wait, so it runs on a
+      # task and replies through the socket ref. Ordering is safe: both
+      # clients' op queues send one structural op and await its reply.
+      # `Task.Supervisor` propagates `$callers`, which is what reaches the Repo
+      # (and the test sandbox).
+      delete_off_channel(socket, note_id)
+      {:noreply, socket}
     else
       {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
       {:error, :bad_doc_id} -> {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
     end
-  rescue
-    # The delete queues on the vault's SeqGate. A shed wait is load, not a
-    # fault: answer a retryable reason (both clients' op queues retry it on
-    # backoff) instead of crashing the channel and every room on it.
-    Engram.Vaults.SeqGate.BusyError -> {:reply, {:error, %{reason: "busy"}}, socket}
   end
 
   # Single-path catch-up (Phase B): replay the seq-ordered op-log over the
@@ -821,6 +816,38 @@ defmodule EngramWeb.CrdtChannel do
     )
 
     :telemetry.execute([:engram, :crdt, :doc_state_failed], %{count: 1}, %{reason: kind})
+  end
+
+  defp delete_off_channel(socket, note_id) do
+    ref = socket_ref(socket)
+    user = socket.assigns.current_user
+    vault = socket.assigns.vault
+    device_id = socket.assigns[:device_id]
+
+    {:ok, _pid} =
+      Task.Supervisor.start_child(Engram.TaskSupervisor, fn ->
+        reply =
+          try do
+            # Idempotent: a :not_found means the row is already gone, the
+            # desired end state, so it still replies :ok. origin_device_id
+            # (#970) lets THIS device drop its own note_changed echo.
+            _ =
+              Notes.delete_note_by_id(user, vault, note_id,
+                origin_device_id: device_id,
+                gate_timeout: Engram.Vaults.SeqGate.channel_wait_ms()
+              )
+
+            {:ok, %{doc_id: note_id}}
+          rescue
+            # A shed wait is load, not a fault: a retryable reason, which both
+            # clients' op queues retry on backoff.
+            Engram.Vaults.SeqGate.BusyError -> {:error, %{reason: "busy"}}
+          end
+
+        reply(ref, reply)
+      end)
+
+    :ok
   end
 
   # Run the apply on a task so the ROOM'S OBSERVER is that task, not this

@@ -1383,11 +1383,12 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_reply ref2, :ok, %{doc_id: _}
     end
 
-    # 2026-10-31: the delete now queues on the vault's SeqGate. A shed wait
-    # raised BusyError inside handle_in, which crashed the channel and cost
-    # the tab every room (a full re-handshake, more load). It must answer a
-    # retryable `busy` and keep the channel up.
-    test "a delete shed by a busy vault gate replies busy and keeps the channel", %{
+    # 2026-10-31: the delete queues on the vault's SeqGate. It must (1) shed
+    # on the CHANNEL budget, well inside the clients' 10s push timeout, with a
+    # retryable `busy` instead of a raise that crashed the channel, and (2) not
+    # wait on the channel process, where it stalled every other room on the
+    # socket for the whole wait.
+    test "a delete behind a held vault gate replies busy fast and blocks no other frame", %{
       socket: socket,
       user: user,
       vault: vault
@@ -1396,10 +1397,6 @@ defmodule EngramWeb.CrdtChannelTest do
         Notes.upsert_note(user, vault, %{"path" => "Notes/busy.md", "content" => "x"},
           actor: "api"
         )
-
-      prev = Application.fetch_env!(:engram, :seq_gate_wait_ms)
-      Application.put_env(:engram, :seq_gate_wait_ms, 50)
-      on_exit(fn -> Application.put_env(:engram, :seq_gate_wait_ms, prev) end)
 
       parent = self()
 
@@ -1412,8 +1409,14 @@ defmodule EngramWeb.CrdtChannelTest do
         end)
 
       assert_receive :held
+      started = System.monotonic_time(:millisecond)
       ref = push(socket, "crdt_delete", %{"doc_id" => note.id})
-      assert_reply ref, :error, %{reason: "busy"}, 1_000
+      other = push(socket, "crdt_catchup_since", %{"cursor_seq" => 0})
+
+      # The socket keeps serving while the delete waits.
+      assert_reply other, :ok, %{changes: _}, 500
+      assert_reply ref, :error, %{reason: "busy"}, 3_000
+      assert System.monotonic_time(:millisecond) - started < 3_000
 
       send(holder.pid, :release)
       Task.await(holder)

@@ -14,6 +14,11 @@ defmodule EngramWeb.Plugs.RetryAfter do
   Phoenix's error renderer assigns. Every other 429 keeps exactly what its
   limiter set, including none: a cap-0 refusal deliberately carries no
   `retry-after`, so a client has nothing to loop on.
+
+  The busy value is constant, not jittered: the header is whole seconds, so
+  server-side jitter could only pick 2 or 3, and a client reading it exactly
+  would still cluster on those ticks. The clients spread their own resends
+  instead (web `api/client.ts` adds 0-50%).
   """
   import Plug.Conn
 

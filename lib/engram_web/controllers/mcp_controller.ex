@@ -1248,6 +1248,16 @@ defmodule EngramWeb.McpController do
         {error_result(err), :error, byte_size_safe(Engram.MCP.ToolError.message(err))}
     end
   catch
+    # A write shed by the vault's SeqGate (`rename_note` runs outside the
+    # request transaction, so it queues there). Load, not a crash: a
+    # retryable tool error, and no error log.
+    :error, %Engram.Vaults.SeqGate.BusyError{} ->
+      err =
+        {:rate_limited,
+         "The vault is busy with other writes. Nothing was changed; retry in a few seconds."}
+
+      {error_result(err), :error, byte_size_safe(Engram.MCP.ToolError.message(err))}
+
     kind, reason ->
       # T3.0.1 follow-up — never `inspect/1` an exit/throw reason into a
       # response body. The reason can be an arbitrary term originating
