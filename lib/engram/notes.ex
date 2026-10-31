@@ -4985,22 +4985,35 @@ defmodule Engram.Notes do
   # survived. The same call would have different durability depending on
   # whether the user happens to have a socket open.
   defp move_notes_claimed(user, vault, ids, target_folder) do
-    with {:ok, moves} <- resolve_moves(user, vault, ids, target_folder),
-         :ok <- validate_move_targets(user, vault, moves),
-         :ok <- claim_moves(user, vault, moves) do
-      # Gate outermost (Vaults.SeqGate), then a transaction that owns the
-      # after-commit queue: the per-note renames' broadcasts and room stops
-      # wait for THIS commit, not each nested with_tenant's return.
-      SeqGate.with_vault(vault.id, fn ->
-        Repo.transaction_after_commit(fn ->
-          refs = ensure_move_folders!(user, vault, moves)
-          moved = apply_moves(user, vault, moves, refs)
-          # Test seam (nil outside tests): the last point before commit.
-          :ok = interleave_hook(:batch_move_applied)
-          moved
-        end)
-      end)
-    end
+    # The gate is taken BEFORE the claim: a claim cannot be rolled back, so a
+    # batch the gate would shed must not have claimed anything. The gate holds
+    # no connection, so resolving and claiming under it costs the pool nothing.
+    SeqGate.with_vault(vault.id, fn ->
+      with {:ok, moves} <- resolve_moves(user, vault, ids, target_folder),
+           :ok <- validate_move_targets(user, vault, moves),
+           :ok <- claim_moves(user, vault, moves) do
+        apply_claimed_moves(user, vault, moves)
+      end
+    end)
+  end
+
+  # A transaction that owns the after-commit queue: the per-note renames'
+  # broadcasts and room stops wait for THIS commit, not each nested
+  # with_tenant's return. Past the claim, a raise (a request DB bound shed, a
+  # constraint) leaves the claim standing, so it is reported for projection
+  # to converge, as a refused move in apply_moves/4 is.
+  defp apply_claimed_moves(user, vault, moves) do
+    Repo.transaction_after_commit(fn ->
+      refs = ensure_move_folders!(user, vault, moves)
+      moved = apply_moves(user, vault, moves, refs)
+      # Test seam (nil outside tests): the last point before commit.
+      :ok = interleave_hook(:batch_move_applied)
+      moved
+    end)
+  rescue
+    e ->
+      _ = orphan_claim(user, vault, length(moves), e)
+      reraise e, __STACKTRACE__
   end
 
   # One meta read for the whole batch (was one transaction per id).

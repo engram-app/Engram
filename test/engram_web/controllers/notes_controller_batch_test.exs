@@ -306,5 +306,11 @@ defmodule EngramWeb.NotesControllerBatchGateTest do
 
   test "batch move waits on a held vault gate, then sheds as 429 + retry-after 2", ctx do
     assert_sheds(ctx, "/api/notes/batch-move", &%{ids: [&1], target_folder: "Moved"})
+
+    # The claim is the commit in the vault index (projection would later move
+    # the row to match it), so a shed batch must not have claimed anything.
+    {:ok, doc} = Engram.Notes.CrdtIndexPersistence.load_doc(ctx.user, ctx.vault.id)
+    entries = doc |> Yex.Doc.get_map(Engram.Notes.CrdtIndexDoc.map_name()) |> Yex.Map.to_map()
+    refute Map.has_key?(entries, "Moved/g.md"), inspect(entries)
   end
 end
