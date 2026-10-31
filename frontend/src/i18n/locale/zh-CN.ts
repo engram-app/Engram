@@ -77,6 +77,7 @@ export default {
 	"Already have an account? {signin}": "已经有账号？{signin}",
 	"Loading...": "正在加载...",
 	"An account with this email already exists": "该邮箱已注册",
+	"Contact support to restore access.": "联系客服恢复访问权限。",
 	"Billing history": "账单记录",
 	"No transactions yet.": "暂无交易。",
 	Date: "日期",
@@ -204,7 +205,6 @@ export default {
 	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
 		"您已达到免费计划的设备数量限制。断开您不使用的设备以连接此设备，或升级以连接更多设备。",
 	"Account suspended": "账号已暂停",
-	"Contact support to restore access.": "联系客服恢复访问权限。",
 	"Account setup incomplete": "账号设置未完成",
 	"Please complete onboarding.": "请完成引导。",
 	"Limit reached": "已达到限制",

@@ -86,6 +86,7 @@ export default {
 	"Already have an account? {signin}": "すでにアカウントをお持ちですか？{signin}",
 	"Loading...": "読み込み中...",
 	"An account with this email already exists": "このメールアドレスでアカウントが既に存在します",
+	"Contact support to restore access.": "復旧のため、サポートにお問い合わせください。",
 	"Billing history": "支払い履歴",
 	"No transactions yet.": "まだ取引履歴はありません。",
 	Date: "日付",
@@ -223,7 +224,6 @@ export default {
 	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
 		"無料プランでは、デバイスの接続台数制限に達しました。使用していないデバイスを切断して、このデバイスを接続するか、より多くのデバイスを接続するためにプランをアップグレードしてください。",
 	"Account suspended": "アカウントが停止されました",
-	"Contact support to restore access.": "復旧のため、サポートにお問い合わせください。",
 	"Account setup incomplete": "アカウントの設定が完了していません",
 	"Please complete onboarding.": "セットアップを完了してください。",
 	"Limit reached": "制限に達しました",
