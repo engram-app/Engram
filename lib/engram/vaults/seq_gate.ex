@@ -44,8 +44,9 @@ defmodule Engram.Vaults.SeqGate do
       delete and rename. NOT gated: note upsert (its transaction runs the CRDT
       merge), batch and folder ops (one lock per transaction), MCP tool calls
       (they run inside one tenant transaction, so they skip the gate), CRDT
-      channel writes and checkpoints, and Oban workers other than the vault
-      index projection.
+      channel writes and checkpoints (except `crdt_delete`, which is the note
+      delete and replies `busy` when shed), and Oban workers other than the
+      vault index projection.
   """
   use GenServer
 

@@ -1383,6 +1383,47 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_reply ref2, :ok, %{doc_id: _}
     end
 
+    # 2026-10-31: the delete now queues on the vault's SeqGate. A shed wait
+    # raised BusyError inside handle_in, which crashed the channel and cost
+    # the tab every room (a full re-handshake, more load). It must answer a
+    # retryable `busy` and keep the channel up.
+    test "a delete shed by a busy vault gate replies busy and keeps the channel", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/busy.md", "content" => "x"},
+          actor: "api"
+        )
+
+      prev = Application.fetch_env!(:engram, :seq_gate_wait_ms)
+      Application.put_env(:engram, :seq_gate_wait_ms, 50)
+      on_exit(fn -> Application.put_env(:engram, :seq_gate_wait_ms, prev) end)
+
+      parent = self()
+
+      holder =
+        Task.async(fn ->
+          Engram.Vaults.SeqGate.with_vault(vault.id, fn ->
+            send(parent, :held)
+            receive do: (:release -> :ok)
+          end)
+        end)
+
+      assert_receive :held
+      ref = push(socket, "crdt_delete", %{"doc_id" => note.id})
+      assert_reply ref, :error, %{reason: "busy"}, 1_000
+
+      send(holder.pid, :release)
+      Task.await(holder)
+
+      assert Process.alive?(socket.channel_pid)
+      ref2 = push(socket, "crdt_delete", %{"doc_id" => note.id})
+      assert_reply ref2, :ok, %{doc_id: _}
+      refute Notes.note_in_vault?(user, vault.id, note.id)
+    end
+
     test "delete broadcast carries the deleting socket's device_id (#970)", %{
       user: user,
       vault: vault

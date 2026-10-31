@@ -2472,8 +2472,10 @@ export function useBatchDeleteNotes() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<{ deleted: number }, ApiError, { ids: string[] }, TreeContext>({
-		// No batch crdt op — one crdt_delete per id, concurrently (replaces
-		// POST /notes/batch-delete). ponytail: N round trips + non-atomic — a
+		// No batch crdt op — one crdt_delete per id (replaces POST
+		// /notes/batch-delete). The Promise.all only enqueues: the op queue
+		// sends one at a time and retries a busy / rate_limited reply on
+		// backoff (op-queue-controller.test.ts). ponytail: N round trips + non-atomic — a
 		// mid-batch reject fails the whole Promise.all → onError rollback; the
 		// onSettled invalidation reconciles server truth on BOTH paths (a partial
 		// failure leaves some ids deleted while onError restores every row).

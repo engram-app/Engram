@@ -31,7 +31,7 @@ function makeController(over: Partial<CrdtOpQueueControllerDeps> = {}) {
 		onLimitSurfaced,
 		persister: over.persister ?? memPersister(),
 		mintId: () => `op-${++idc}`,
-		now: () => 1000,
+		now: over.now ?? (() => 1000),
 		tickMs: 1_000_000, // never auto-tick; drive via joined()/enqueue kick
 		queueOptions: over.queueOptions,
 	});
@@ -253,4 +253,69 @@ describe("CrdtOpQueueController — permanent join refusal (#1430)", () => {
 		await ctrl.joined();
 		await expect(ctrl.enqueueCreate("a", "a.md")).resolves.toBe("a");
 	});
+});
+
+// 2026-10-31 pool-starvation incident: a multi-select delete fires one
+// enqueueDelete per id at once (useBatchDeleteNotes' Promise.all). The queue
+// is what keeps that off the server: it sends one op at a time, and a busy
+// or rate-limited reply is retried on backoff instead of failing the batch.
+describe("CrdtOpQueueController: a burst of deletes", () => {
+	async function drain(ctrl: CrdtOpQueueController, advance = () => {}) {
+		for (let i = 0; ctrl.size() > 0 && i < 1000; i++) {
+			advance();
+			await ctrl.joined();
+			// Let an in-flight flush (the enqueue's own kick) finish.
+			await new Promise((r) => setTimeout(r, 1));
+		}
+	}
+
+	it("sends 200 deletes with at most 4 in flight", async () => {
+		let inFlight = 0;
+		let maxInFlight = 0;
+		const channel: CrdtOpChannel = {
+			...okChannel,
+			crdtDelete: async (docId) => {
+				inFlight += 1;
+				maxInFlight = Math.max(maxInFlight, inFlight);
+				await new Promise((r) => setTimeout(r, 0));
+				inFlight -= 1;
+				return { doc_id: docId };
+			},
+		};
+		const { ctrl } = makeController({ channel: () => channel });
+		await ctrl.joined();
+		const ids = Array.from({ length: 200 }, (_, i) => `n${i}`);
+		const all = Promise.all(ids.map((id) => ctrl.enqueueDelete(id)));
+		await drain(ctrl);
+		await expect(all).resolves.toHaveLength(200);
+		expect(maxInFlight).toBeLessThanOrEqual(4);
+	});
+
+	it.each(["rate_limited", "busy"])(
+		"retries a %s delete instead of failing the batch",
+		async (reason) => {
+			let clock = 1000;
+			const refused = new Set(["b"]);
+			const channel: CrdtOpChannel = {
+				...okChannel,
+				crdtDelete: async (docId) => {
+					if (refused.delete(docId)) {
+						throw new CrdtOpError(reason, "crdt_delete");
+					}
+					return { doc_id: docId };
+				},
+			};
+			const { ctrl, onDropSurfaced } = makeController({
+				channel: () => channel,
+				now: () => clock,
+			});
+			await ctrl.joined();
+			const all = Promise.all(["a", "b", "c"].map((id) => ctrl.enqueueDelete(id)));
+			await drain(ctrl, () => {
+				clock += 60_000;
+			});
+			await expect(all).resolves.toEqual([{ doc_id: "a" }, { doc_id: "b" }, { doc_id: "c" }]);
+			expect(onDropSurfaced).not.toHaveBeenCalled();
+		},
+	);
 });

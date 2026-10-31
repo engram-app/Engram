@@ -681,6 +681,11 @@ defmodule EngramWeb.CrdtChannel do
       {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
       {:error, :bad_doc_id} -> {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
     end
+  rescue
+    # The delete queues on the vault's SeqGate. A shed wait is load, not a
+    # fault: answer a retryable reason (both clients' op queues retry it on
+    # backoff) instead of crashing the channel and every room on it.
+    Engram.Vaults.SeqGate.BusyError -> {:reply, {:error, %{reason: "busy"}}, socket}
   end
 
   # Single-path catch-up (Phase B): replay the seq-ordered op-log over the
