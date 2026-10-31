@@ -6745,9 +6745,24 @@ defmodule Engram.Notes do
           {:ok, integer()} | {:error, :conflict | term()}
   def rename_folder(user, vault, old_folder, new_folder) do
     with {:ok, user} <- Crypto.ensure_user_dek(user) do
-      rename_folder_gated(user, vault, old_folder, new_folder, nil)
+      # A row moved between the cascade's read and its locked write (the
+      # compare-and-swap in BulkRename): retry once from a fresh read, then
+      # report a conflict.
+      case rename_folder_gated(user, vault, old_folder, new_folder, nil) do
+        {:error, :stale_rename} ->
+          case rename_folder_gated(user, vault, old_folder, new_folder, nil) do
+            {:error, :stale_rename} -> {:error, :conflict}
+            other -> public_rename_result(other)
+          end
+
+        other ->
+          public_rename_result(other)
+      end
     end
   end
+
+  defp public_rename_result({:ok, count, _seq}), do: {:ok, count}
+  defp public_rename_result(other), do: other
 
   # Conflict-gated rename shared by the public entry point (rows = nil →
   # do_rename_folder scans the vault itself) and the batch-move path (rows =
@@ -7047,7 +7062,7 @@ defmodule Engram.Notes do
       end)
 
     if notes == [] do
-      {:ok, 0}
+      {:ok, 0, nil}
     else
       now = DateTime.utc_now()
       old_len = String.length(old_folder)
@@ -7162,9 +7177,14 @@ defmodule Engram.Notes do
             # AND tombstones; the seq feed orders by (seq, id), so same-stamp
             # runs are harmless.
             grouped = group_rename_updates(user, updates, content_by_id)
-            marker_rows = stamp_rename_rows(grouped[:marker] || [], now)
-            v2_rows = stamp_rename_rows(grouped[:v2] || [], now)
-            v1_rows = stamp_rename_rows(grouped[:v1] || [], now)
+            # Each row carries the seq it was read at: the write below is a
+            # compare-and-swap on it, so a row a concurrent write moved after
+            # the read (a rename_note in the subtree, a v1 content edit) is
+            # not overwritten from the stale read.
+            read_seq = Map.new(notes, &{&1.id, &1.seq})
+            marker_rows = stamp_rename_rows(grouped[:marker] || [], now, read_seq)
+            v2_rows = stamp_rename_rows(grouped[:v2] || [], now, read_seq)
+            v1_rows = stamp_rename_rows(grouped[:v1] || [], now, read_seq)
 
             # Soft-deleted tombstones for old paths so the seq feed
             # (list_changes_by_seq, no deleted_at filter) carries delete
@@ -7240,9 +7260,14 @@ defmodule Engram.Notes do
                     Enum.map(updates, fn {_n, _old, _new, folder, _t} -> folder end)
                   )
 
-                BulkRename.update!(marker_rows, @marker_rename_cols, seq)
-                BulkRename.update!(v2_rows, @v2_rename_cols, seq)
-                BulkRename.update!(v1_rows, @v1_rename_cols, seq)
+                written =
+                  BulkRename.update!(marker_rows, @marker_rename_cols, seq) +
+                    BulkRename.update!(v2_rows, @v2_rename_cols, seq) +
+                    BulkRename.update!(v1_rows, @v1_rename_cols, seq)
+
+                # A row moved since the read: roll back, rename_folder/4
+                # retries once from a fresh read.
+                if written != length(updates), do: throw({:rename_refused, :stale_rename})
 
                 # Batched: one tombstone per note under the folder, so a big
                 # folder overflows the protocol's 65535 bind cap in one statement.
@@ -7312,7 +7337,8 @@ defmodule Engram.Notes do
                 broadcast_change(user.id, vault.id, "delete", old_note_path, note.id, seq: seq)
             end)
 
-            {:ok, length(notes)}
+            # The seq is for the batch path (advance_renamed_rows/4).
+            {:ok, length(notes), seq}
           rescue
             e ->
               _ = orphan_claim(user, vault, length(claims), e)
@@ -8208,7 +8234,7 @@ defmodule Engram.Notes do
 
   # The scan holds every row under any marker's folder as resolved. A marker
   # that sits under an earlier one in the batch moves with it in memory
-  # (advance_renamed_rows/3), and its rows were already under the earlier
+  # (advance_renamed_rows/4), and its rows were already under the earlier
   # folder, so later lookups by its current folder still find them.
   defp do_reduce_move_folders(user, vault, marker_ids, target_folder, dek, sources) do
     rows = fetch_decrypted_live_rows(user, vault, sources)
@@ -8216,9 +8242,9 @@ defmodule Engram.Notes do
     marker_ids
     |> Enum.reduce_while({%{moved: 0, pairs: []}, rows}, fn id, {acc, rows} ->
       case move_folder_into(user, vault, id, target_folder, dek, rows) do
-        {:ok, {old_folder, new_folder}} ->
+        {:ok, {old_folder, new_folder, seq}} ->
           acc = %{acc | moved: acc.moved + 1, pairs: [{old_folder, new_folder} | acc.pairs]}
-          {:cont, {acc, advance_renamed_rows(rows, old_folder, new_folder)}}
+          {:cont, {acc, advance_renamed_rows(rows, old_folder, new_folder, seq)}}
 
         {:error, :not_found} ->
           {:halt, {:rollback, {:not_found, id}}}
@@ -8241,7 +8267,7 @@ defmodule Engram.Notes do
   # (real notes) dek_version bumped to AAD-bound — exactly the DB-visible
   # outcome — so the next marker in the batch sees current state without a
   # re-scan. Filter + rewrite arithmetic MUST match do_rename_folder/6.
-  defp advance_renamed_rows(rows, old_folder, new_folder) do
+  defp advance_renamed_rows(rows, old_folder, new_folder, seq) do
     old_prefix = old_folder <> "/"
     old_len = String.length(old_folder)
 
@@ -8263,7 +8289,9 @@ defmodule Engram.Notes do
         dek_version =
           if n.kind == "note", do: Crypto.row_version_aad_bound(), else: n.dek_version
 
-        %{n | folder: new_note_folder, path: new_path, dek_version: dek_version}
+        # The seq the cascade stamped: the next marker's compare-and-swap
+        # reads it as this row's current one.
+        %{n | folder: new_note_folder, path: new_path, dek_version: dek_version, seq: seq}
       else
         n
       end
@@ -8302,8 +8330,10 @@ defmodule Engram.Notes do
           # point already ran ensure_user_dek, so rename_folder/4's wider
           # error surface can't arise here (dialyzer proves the coverage).
           case rename_folder_gated(user, vault, source_folder, new_folder, rows) do
-            {:ok, _count} -> {:ok, {source_folder, new_folder}}
-            {:error, :conflict} -> {:error, :conflict}
+            {:ok, _count, seq} -> {:ok, {source_folder, new_folder, seq}}
+            # The batch shares one scan, so a stale row is the caller's to
+            # retry: a conflict, as the single rename's second miss is.
+            {:error, reason} when reason in [:conflict, :stale_rename] -> {:error, :conflict}
             {:error, :invalid_path} -> {:error, :cycle}
           end
         end
@@ -8817,8 +8847,8 @@ defmodule Engram.Notes do
 
   # Attaches the cascade's shared timestamp to each {id, kw} rename row,
   # producing the [{id, stamp, kw}] shape BulkRename.update!/3 consumes.
-  defp stamp_rename_rows(rows, now) do
-    Enum.map(rows, fn {id, kw} -> {id, now, kw} end)
+  defp stamp_rename_rows(rows, now, read_seq) do
+    Enum.map(rows, fn {id, kw} -> {id, Map.fetch!(read_seq, id), now, kw} end)
   end
 
   # Marker-only rename helper. Re-encrypts JUST the folder envelope under the

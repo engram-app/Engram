@@ -81,6 +81,34 @@ defmodule Engram.NotesFanoutBoundsTest do
       assert_received {:sealed_in_txn, false}
     end
 
+    # The cascade reads the subtree, encrypts, then writes. A note renamed out
+    # of the subtree in between used to be written back from the stale read
+    # (its path overwritten into the new folder). The write is a
+    # compare-and-swap on the seq read, and a miss retries from a fresh read.
+    test "a note moved during the cascade is not overwritten from the stale read", ctx do
+      %{user: user, vault: vault} = ctx
+      [moved | _] = seed(user, vault, "Docs")
+      test = self()
+      {:ok, fired} = Agent.start_link(fn -> false end)
+
+      Application.put_env(:engram, :checkpoint_interleave_hook, fn
+        :folder_rename_seal ->
+          unless Agent.get_and_update(fired, &{&1, true}) do
+            {:ok, _} = Notes.rename_note(user, vault, moved.path, "Elsewhere/kept.md")
+            send(test, :moved_mid_cascade)
+          end
+
+        _ ->
+          :ok
+      end)
+
+      on_exit(fn -> Application.delete_env(:engram, :checkpoint_interleave_hook) end)
+
+      assert {:ok, _} = Notes.rename_folder(user, vault, "Docs", "Archive")
+      assert_received :moved_mid_cascade
+      assert {:ok, %{path: "Elsewhere/kept.md"}} = Notes.get_note_by_id(user, vault, moved.id)
+    end
+
     # The fan-out is an outbox: it commits with the rows it covers, so a
     # crash between the commit and a separate enqueue cannot lose a reindex.
     test "the repath and link-rewrite jobs insert inside the rename transaction", ctx do

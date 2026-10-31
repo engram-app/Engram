@@ -23,23 +23,28 @@ defmodule Engram.Notes.BulkRename do
   it must not be one UPDATE per note either (the N+1 this replaces). Runs
   inside the caller's with_tenant transaction: the RLS role restricts the raw
   UPDATE to the tenant's rows, and the shared `seq` keeps the #614
-  one-op-one-seq contract. `rows` is [{note_id, stamp, kw}] where `kw`
-  holds a value for every column in `cols`. A nested-collision unique
-  violation raises Postgrex.Error exactly like the per-note update_all did.
+  one-op-one-seq contract. `rows` is [{note_id, read_seq, stamp, kw}] where
+  `read_seq` is the row's seq when the cascade read it and `kw` holds a value
+  for every column in `cols`. A row whose seq moved since (a concurrent write
+  committed in between) is NOT updated: the count returned is the rows
+  actually written, and the caller compares it with `length(rows)`. A
+  nested-collision unique violation raises Postgrex.Error exactly like the
+  per-note update_all did.
   """
-  @spec update!([{binary(), DateTime.t(), keyword()}], [atom()], integer()) :: :ok
-  def update!([], _cols, _seq), do: :ok
+  @spec update!([{binary(), integer(), DateTime.t(), keyword()}], [atom()], integer()) ::
+          non_neg_integer()
+  def update!([], _cols, _seq), do: 0
 
   def update!(rows, cols, seq) do
     set_sql =
       Enum.map_join(cols, ", ", &"#{&1} = v.#{&1}") <> ", updated_at = v.updated_at, seq = $1"
 
-    # id + updated_at + the class's columns, per VALUES row.
-    ncols = length(cols) + 2
+    # id + read seq + updated_at + the class's columns, per VALUES row.
+    ncols = length(cols) + 3
 
     rows
     |> Enum.chunk_every(@chunk)
-    |> Enum.each(fn chunk ->
+    |> Enum.reduce(0, fn chunk, written ->
       values_sql =
         chunk
         |> Enum.with_index()
@@ -48,36 +53,37 @@ defmodule Engram.Notes.BulkRename do
 
           col_placeholders =
             cols
-            |> Enum.with_index(2)
+            |> Enum.with_index(3)
             |> Enum.map_join(", ", fn {col, j} ->
               "$#{base + j}::#{sql_type(col)}"
             end)
 
-          "($#{base}::uuid, $#{base + 1}::timestamp, #{col_placeholders})"
+          "($#{base}::uuid, $#{base + 1}::bigint, $#{base + 2}::timestamp, #{col_placeholders})"
         end)
 
       params =
         [seq] ++
-          Enum.flat_map(chunk, fn {id, stamp, kw} ->
+          Enum.flat_map(chunk, fn {id, read_seq, stamp, kw} ->
             [
               Ecto.UUID.dump!(id),
+              read_seq,
               DateTime.to_naive(stamp) | Enum.map(cols, &Keyword.fetch!(kw, &1))
             ]
           end)
 
-      _ =
+      %{num_rows: n} =
         Repo.query!(
           """
           UPDATE notes AS n
           SET #{set_sql}
-          FROM (VALUES #{values_sql}) AS v(id, updated_at, #{Enum.join(cols, ", ")})
-          WHERE n.id = v.id
+          FROM (VALUES #{values_sql}) AS v(id, read_seq, updated_at, #{Enum.join(cols, ", ")})
+          WHERE n.id = v.id AND n.seq = v.read_seq
           """,
           params
         )
-    end)
 
-    :ok
+      written + n
+    end)
   end
 
   defp sql_type(:tags_hmac), do: "bytea[]"
