@@ -73,6 +73,54 @@ defmodule EngramWeb.HealthControllerTest do
       assert body["checks"] == %{"postgres" => "ok"}
     end
 
+    # A tenant's lock convoy drains the request pool; readiness must not wait
+    # behind it, or the ALB pulls a task whose database is fine.
+    test "never touches the request pool", %{conn: conn} do
+      test = self()
+      id = {__MODULE__, :repo_query}
+
+      :telemetry.attach(
+        id,
+        [:engram, :repo, :query],
+        fn _, _, _, _ -> if self() == test, do: send(test, :request_pool_query) end,
+        nil
+      )
+
+      try do
+        assert %{"checks" => %{"postgres" => "ok"}} =
+                 conn |> get("/api/health/deep") |> json_response(200)
+      after
+        :telemetry.detach(id)
+      end
+
+      refute_received :request_pool_query
+    end
+
+    test "a dead database still fails readiness", %{conn: conn} do
+      # Nothing listens on port 1: the probe connection can never connect.
+      {:ok, dead} =
+        Postgrex.start_link(
+          hostname: "127.0.0.1",
+          port: 1,
+          database: "none",
+          username: "none",
+          queue_target: 50,
+          queue_interval: 100
+        )
+
+      Application.put_env(:engram, :health_probe_conn, dead)
+      on_exit(fn -> Application.delete_env(:engram, :health_probe_conn) end)
+
+      capture_log(fn ->
+        body = conn |> get("/api/health/deep") |> json_response(503)
+        send(self(), {:body, body})
+      end)
+
+      assert_received {:body, body}
+      assert body["status"] == "degraded"
+      assert body["checks"]["postgres"] =~ "error"
+    end
+
     test "does NOT include qdrant or any non-essential dep", %{conn: conn} do
       # Qdrant outages must not pull tasks from the ALB. Search will 500
       # via the search route; ALB readiness stays narrow on Postgres.
