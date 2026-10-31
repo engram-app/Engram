@@ -172,6 +172,14 @@ defmodule Engram.Vaults.SeqGateTest do
     assert SeqGate.wait_ms() <= @plugin_request_timeout_ms - 5_000
   end
 
+  # Channel pushes time out at 10s in both clients (phoenix.js default on the
+  # web, `timeoutMs = 10000` in the plugin). A channel write must shed well
+  # inside that so the client reads `busy`, not a timeout.
+  @channel_push_timeout_ms 10_000
+  test "the channel wait budget stays clearly under the push timeout" do
+    assert SeqGate.channel_wait_ms() <= @channel_push_timeout_ms - 5_000
+  end
+
   # Delta 2 L1: note upsert runs the CRDT merge in its transaction; gating it
   # serialized merges per vault. Fails if someone re-wraps it.
   test "note upsert does not wait on a held vault gate" do

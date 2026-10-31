@@ -1502,6 +1502,35 @@ defmodule EngramWeb.McpControllerTest do
     end
   end
 
+  describe "run_tool_handler/4 busy vault gate" do
+    # rename_note runs outside the request transaction, so it waits on the
+    # vault's SeqGate and can shed. That is load, not a crash: the model gets
+    # a retryable rate_limited tool error, and no error log is written.
+    test "a shed write is a rate_limited tool error with a retry hint" do
+      busy = %{
+        name: "rename_note",
+        handler: fn _user, _vault, _args -> raise Engram.Vaults.SeqGate.BusyError end
+      }
+
+      {{result, status, _bytes}, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          EngramWeb.McpController.run_tool_handler(busy, :user, :vault, %{})
+        end)
+
+      assert status == :error
+      {:ok, payload} = result
+      assert payload["isError"] == true
+      assert payload["_meta"]["engram.page/error_code"] == "rate_limited"
+      text = hd(payload["content"])["text"]
+      assert text =~ "retry"
+      # A gated tool may have committed part of its work before the shed (a
+      # rename's index claim), so it must not claim nothing changed.
+      refute text =~ "Nothing was changed"
+      assert payload["_meta"]["engram.page/retry_after_s"] == 2
+      refute log =~ "mcp tool dispatch trapped"
+    end
+  end
+
   describe "run_tool_handler/4 request transaction" do
     defp tenant_probe(name) do
       %{name: name, handler: fn _u, _v, _a -> {:ok, inspect(Process.get(:engram_tenant))} end}

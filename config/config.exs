@@ -77,6 +77,13 @@ config :engram, :envelope_compression, true
 # 429, and counts it toward parking the write. Pinned by SeqGateTest.
 config :engram, :seq_gate_wait_ms, 10_000
 
+# The same gate's budget for a write that arrives over a CHANNEL (crdt_delete).
+# Channel pushes time out at 10s in both clients (phoenix.js default on the web,
+# `timeoutMs = 10000` in the plugin), so it must shed well inside that for the
+# client to read the retryable `busy` reply instead of a timeout. Pinned by
+# SeqGateTest.
+config :engram, :seq_gate_channel_wait_ms, 2_000
+
 # Embedder adapter (overridden per environment)
 config :engram, :embedder, Engram.Embedders.Voyage
 

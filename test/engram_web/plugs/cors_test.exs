@@ -89,6 +89,17 @@ defmodule EngramWeb.Plugs.CORSTest do
     assert origin_header == configured_origin
   end
 
+  test "API responses expose retry-after to a cross-origin SPA" do
+    # The SPA waits out a 429 by `retry-after`; cross-origin, an unexposed
+    # header reads as null and the retry never fires.
+    conn =
+      build_conn()
+      |> put_req_header("origin", "https://app.engram.dev")
+      |> get("/api/health")
+
+    assert get_resp_header(conn, "access-control-expose-headers") == ["retry-after"]
+  end
+
   test "CORS origin header value matches configured origin" do
     # Presence check is not enough — verify the value equals config, not *.
     Application.put_env(:engram, :cors_origin, "https://custom.example.com")

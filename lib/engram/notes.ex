@@ -4110,16 +4110,24 @@ defmodule Engram.Notes do
 
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, claimed?} <- claim_rename(user, vault, old_path, new_path, opts) do
-      case do_rename_note(
-             user,
-             vault,
-             old_path,
-             new_path,
-             new_folder,
-             now,
-             opts[:note_id],
-             opts[:folder_refs]
-           ) do
+      try do
+        do_rename_note(
+          user,
+          vault,
+          old_path,
+          new_path,
+          new_folder,
+          now,
+          opts[:note_id],
+          opts[:folder_refs]
+        )
+      rescue
+        # Shed by the vault's SeqGate AFTER the claim committed: the same
+        # orphan as a failed rename, so projection converges the row.
+        e in SeqGate.BusyError ->
+          _ = report_orphan_claim(user, vault, claimed?, :busy, {:error, :busy})
+          reraise e, __STACKTRACE__
+      else
         {:ok, _} = ok -> ok
         {:error, reason} = err -> report_orphan_claim(user, vault, claimed?, reason, err)
       end
@@ -4515,6 +4523,8 @@ defmodule Engram.Notes do
       originating device can drop its own echo (#970).
     * `:op_id` — undo id stamped on the tombstone (#609), restored by
       `Engram.Folders.restore_op/3`.
+    * `:gate_timeout` — how long to queue on the vault's `SeqGate` before
+      raising `BusyError` (default `SeqGate.wait_ms/0`).
   """
   @spec delete_note(Engram.Accounts.User.t(), map(), String.t(), keyword()) :: :ok
   def delete_note(user, vault, path, opts \\ []) do
@@ -4532,14 +4542,18 @@ defmodule Engram.Notes do
     # The HMAC before the transaction: a DekCache miss unwraps through KMS.
     case note_by_path_query(user, vault, path, @note_core_fields) do
       {:ok, query} ->
-        SeqGate.with_vault(vault.id, fn ->
-          Repo.with_tenant!(user.id, fn ->
-            case Repo.one(query) do
-              %Note{} = note -> tombstone_note(user, vault, path, note, opts)
-              nil -> :absent
-            end
-          end)
-        end)
+        SeqGate.with_vault(
+          vault.id,
+          fn ->
+            Repo.with_tenant!(user.id, fn ->
+              case Repo.one(query) do
+                %Note{} = note -> tombstone_note(user, vault, path, note, opts)
+                nil -> :absent
+              end
+            end)
+          end,
+          timeout: Keyword.get_lazy(opts, :gate_timeout, &SeqGate.wait_ms/0)
+        )
 
       {:error, _} ->
         :absent

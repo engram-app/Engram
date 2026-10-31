@@ -10,7 +10,8 @@
  * Error taxonomy (backend reasons from crdt_channel.ex):
  *  - server ok                       → "ok"  (delivered; queue drops it)
  *  - RETRYABLE reject                → "error" / "timeout" (queue retries):
- *      rate_limited, recently_deleted (delete-wins window), the synthetic
+ *      rate_limited, busy (crdt_delete shed by the vault write gate),
+ *      recently_deleted (delete-wins window), the synthetic
  *      `disconnected` (no socket), any unstructured failure; a timeout.
  *  - LIMIT reject                    → "error" (RETRYABLE) AND routed through
  *      onLimit so the user is TOLD once: notes_cap_reached is a transient plan

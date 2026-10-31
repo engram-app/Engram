@@ -2,6 +2,7 @@ import { track } from "../analytics/track";
 import { rlog } from "../observability/remote-log";
 import { scrubUrl } from "../sentry";
 import { getActiveVaultId } from "./active-vault";
+import { sleep } from "./backoff";
 import { getApiBase, joinApiUrl } from "./base";
 import { getDeviceId } from "./device-id";
 import { type NetworkContext, networkContext, offlineMark } from "./network-context";
@@ -36,10 +37,12 @@ function firstValidationError(errors: unknown): string | undefined {
 	return typeof msg === "string" ? `${field}: ${msg}` : field;
 }
 
-/** `retry-after` in seconds, when the server sent a numeric one. */
+/** `retry-after` in seconds, when the server sent a numeric one. An empty
+ *  value is absent, not 0 (`Number("")` is 0). */
 function parseRetryAfter(response: Response): number | undefined {
-	const secs = Number(response.headers.get("retry-after"));
-	return response.headers.has("retry-after") && Number.isFinite(secs) ? secs : undefined;
+	const raw = response.headers.get("retry-after")?.trim();
+	const secs = Number(raw);
+	return raw && Number.isFinite(secs) ? secs : undefined;
 }
 
 /** Report a request that failed in a way that means "broken", not "no": a
@@ -150,6 +153,30 @@ function reportUnlessRetried(err: object, failure: Failure, queryAttempt: QueryA
 const RETRY_ONCE_METHODS = new Set(["DELETE"]);
 const RETRY_DELAY_MS = 300;
 
+/** A 429 WITH `retry-after` is "busy, come back" (the vault write gate's
+ *  SeqGate.BusyError sends 2, rate limiters their window), so a request that
+ *  is safe to send twice waits it out here: a GET, an audited DELETE (see
+ *  RETRY_ONCE_METHODS), or anything carrying an X-Idempotency-Key, which is
+ *  resent with the SAME key (the server caches only successes, so a 429 left
+ *  nothing to replay). A 429 WITHOUT `retry-after` is a refusal (an MCP cap-0
+ *  limit) and is never retried. Attempts include the first; the wait is
+ *  clamped so a bogus header cannot park a request for an hour. */
+const MAX_BUSY_ATTEMPTS = 3;
+const MAX_RETRY_AFTER_S = 30;
+/** Each wait is stretched by a random 0-50%, so the requests one saturated
+ *  gate shed together do not all come back on the same tick. The server's
+ *  `retry-after` is whole seconds and constant ("2"); the spread lives here. */
+const BUSY_JITTER = 0.5;
+
+/** 429s this client already waited out and resent, so React Query must not
+ *  retry them a second time (one retry layer, see query-client.ts). */
+const busyRetried = new WeakSet<object>();
+
+function busyWaitMs(retryAfterS: number): number {
+	const jittered = Math.max(retryAfterS, 0) * (1 + Math.random() * BUSY_JITTER);
+	return Math.min(jittered, MAX_RETRY_AFTER_S) * 1000;
+}
+
 async function authFetch(
 	path: string,
 	options: RequestInit = {},
@@ -157,14 +184,22 @@ async function authFetch(
 ): Promise<Response> {
 	// Before the first await: only the synchronous part of a queryFn is inside it.
 	const queryAttempt = currentQueryAttempt;
-	const token = await getAuthToken();
-
 	const headers = new Headers(options.headers);
+	// Per send, not per request: a busy resend can come up to a minute later,
+	// past a session token's lifetime. The getter returns a cached token while
+	// it is still fresh.
+	const authorize = async () => {
+		const token = await getAuthToken();
+		if (token) {
+			headers.set("Authorization", `Bearer ${token}`);
+		} else {
+			// Signed out during a busy wait: do not resend the old session's token.
+			headers.delete("Authorization");
+		}
+	};
+	await authorize();
 	if (!headers.has("Content-Type")) {
 		headers.set("Content-Type", "application/json");
-	}
-	if (token) {
-		headers.set("Authorization", `Bearer ${token}`);
 	}
 	const vaultId = getActiveVaultId();
 	if (vaultId !== null) {
@@ -188,7 +223,7 @@ async function authFetch(
 			// A TypeError is the browser's network failure; an AbortError (a
 			// DOMException) is the caller's choice and is never retried.
 			if (retriesOnce && tryNumber === 1 && err instanceof TypeError) {
-				await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+				await sleep(RETRY_DELAY_MS);
 				return attemptFetch(2);
 			}
 			// Aborts are the caller's choice and offline is the user's network, not
@@ -213,7 +248,26 @@ async function authFetch(
 			throw err;
 		}
 	};
-	const { response, attempt } = await attemptFetch(1);
+	const first = await attemptFetch(1);
+	let { response } = first;
+	// Sticky across busy retries: a network-failed first try may have landed.
+	let resentAfterNetworkError = first.attempt === 2;
+	const safeToResend = method === "GET" || retriesOnce || headers.has("X-Idempotency-Key");
+	for (let tries = 1; tries < MAX_BUSY_ATTEMPTS; tries++) {
+		const waitS = safeToResend && response.status === 429 ? parseRetryAfter(response) : undefined;
+		if (waitS === undefined) {
+			break;
+		}
+		// An abort ends the wait early; the resend then rejects with the
+		// AbortError through attemptFetch, like any aborted request.
+		await sleep(busyWaitMs(waitS), options.signal).catch(() => undefined);
+		if (!options.signal?.aborted) {
+			await authorize();
+		}
+		const next = await attemptFetch(1);
+		({ response } = next);
+		resentAfterNetworkError ||= next.attempt === 2;
+	}
 
 	// A 404 on the repeat of a DELETE: either the first attempt reached the
 	// server and deleted it before the connection failed, or it never arrived
@@ -221,7 +275,7 @@ async function authFetch(
 	// way, and failing would read as "delete failed" for a delete that worked,
 	// so it resolves. The ambiguity is logged, so a wrong-id bug that only
 	// shows up when a network error coincides is still countable in Loki.
-	if (attempt === 2 && method === "DELETE" && response.status === 404) {
+	if (resentAfterNetworkError && method === "DELETE" && response.status === 404) {
 		rlog().warn("api_request", `delete_retry_not_found DELETE ${scrubUrl(url)}`);
 		return new Response(null, { status: 204 });
 	}
@@ -257,6 +311,9 @@ async function authFetch(
 			body.error ?? firstValidationError(body.errors) ?? response.statusText,
 			parseRetryAfter(response),
 		);
+		if (safeToResend && error.retryAfterS !== undefined && response.status === 429) {
+			busyRetried.add(error);
+		}
 		if (response.status >= 500) {
 			ownedFailures.add(error);
 			reportUnlessRetried(error, { kind: `http_${response.status}`, method, url }, queryAttempt);
@@ -267,8 +324,11 @@ async function authFetch(
 	return response;
 }
 
-/** The attempt that threw `err` will be retried: its failure is not final, so
- *  drop its report. The final attempt's own error reports if it fails too. */
+/** True for a 429 this client already waited out and resent (see busyRetried). */
+export function isBusyRetriedByClient(err: unknown): boolean {
+	return typeof err === "object" && err !== null && busyRetried.has(err);
+}
+
 /** True when the api client already reports (or deliberately skips) this
  *  failure: a network error or a 5xx. Anything else is the caller's to report. */
 export function isApiClientFailure(err: unknown): boolean {
@@ -286,6 +346,8 @@ export function runInQueryAttempt<T>(attempt: QueryAttempt, fn: () => T): T {
 	}
 }
 
+/** The attempt that threw `err` will be retried: its failure is not final, so
+ *  drop its report. The final attempt's own error reports if it fails too. */
 export function discardRetriedFailure(err: unknown) {
 	if (typeof err === "object" && err !== null) {
 		pendingReports.delete(err);

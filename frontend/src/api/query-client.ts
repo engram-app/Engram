@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-query";
 import {
 	discardRetriedFailure,
+	isBusyRetriedByClient,
 	noteEarlierAttempts,
 	type QueryAttempt,
 	runInQueryAttempt,
@@ -26,7 +27,9 @@ const queryClient = new QueryClient({
 	defaultOptions: {
 		queries: {
 			staleTime: 30_000,
-			retry: 1,
+			// One retry, except a 429 the api client already waited out and
+			// resent: retrying it here too would stack the two layers.
+			retry: (failureCount, error) => failureCount < 1 && !isBusyRetriedByClient(error),
 			// Runs every queryFn attempt inside a QueryAttempt (client.ts), so a
 			// retried attempt's request failures are dropped however the queryFn
 			// combined or wrapped them. React Query's own hook for wrapping the

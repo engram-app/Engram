@@ -41,11 +41,15 @@ defmodule Engram.Vaults.SeqGate do
       while the new process grants new callers: briefly two writers per vault
       for that partition. The DB row lock keeps this correct.
     * Gated: REST attachment upsert (`commit_row`), delete and move; REST note
-      delete and rename. NOT gated: note upsert (its transaction runs the CRDT
-      merge), batch and folder ops (one lock per transaction), MCP tool calls
-      (they run inside one tenant transaction, so they skip the gate), CRDT
-      channel writes and checkpoints, and Oban workers other than the vault
-      index projection.
+      delete and rename; MCP tools that run outside the request transaction
+      and reach those (`rename_note`), which answer a shed as a `rate_limited`
+      tool error; the channel `crdt_delete`, on the shorter
+      `channel_wait_ms/0` budget and off the channel process, replying `busy`.
+      NOT gated: note upsert (its transaction runs the CRDT merge), batch and
+      folder ops (one lock per transaction), MCP tools inside the request
+      transaction (a call already in a transaction skips the gate), the other
+      CRDT channel writes and checkpoints, and Oban workers other than the
+      vault index projection.
   """
   use GenServer
 
@@ -119,6 +123,9 @@ defmodule Engram.Vaults.SeqGate do
 
   @doc "Longest a write queues for its vault's gate before shedding with `BusyError`."
   def wait_ms, do: Application.fetch_env!(:engram, :seq_gate_wait_ms)
+
+  @doc "`wait_ms/0` for a write that arrived over a channel (see config/config.exs)."
+  def channel_wait_ms, do: Application.fetch_env!(:engram, :seq_gate_channel_wait_ms)
 
   @doc """
   Whether the vault's gate has writers queued behind its holder on this node.
