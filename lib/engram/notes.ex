@@ -4125,7 +4125,7 @@ defmodule Engram.Notes do
         # Shed by the vault's SeqGate AFTER the claim committed: the same
         # orphan as a failed rename, so projection converges the row.
         e in SeqGate.BusyError ->
-          _ = report_orphan_claim(user, vault, claimed?, :busy, :busy)
+          _ = report_orphan_claim(user, vault, claimed?, :busy, {:error, :busy})
           reraise e, __STACKTRACE__
       else
         {:ok, _} = ok -> ok
