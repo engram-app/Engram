@@ -44,7 +44,9 @@ defmodule EngramWeb.Plugs.VaultPlugTest do
 
       assert conn.halted
       assert conn.status == 404
-      assert Jason.decode!(conn.resp_body)["error"] == EngramWeb.FrontendUrl.no_vault_message()
+      body = Jason.decode!(conn.resp_body)
+      assert body["error"] == EngramWeb.FrontendUrl.no_vault_message()
+      assert body["code"] == "vault_not_found"
     end
   end
 
@@ -193,7 +195,11 @@ defmodule EngramWeb.Plugs.VaultPlugTest do
 
       assert conn.halted
       assert conn.status == 404
-      assert Jason.decode!(conn.resp_body) == %{"error" => "Vault not found"}
+      # The stable code for new clients, the old text for clients that match it.
+      assert Jason.decode!(conn.resp_body) == %{
+               "error" => "Vault not found",
+               "code" => "vault_not_found"
+             }
     end
   end
 end
