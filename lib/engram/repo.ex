@@ -277,13 +277,45 @@ defmodule Engram.Repo do
 
   @tenant_enter "SELECT set_config('app.current_tenant', $1, true), " <>
                   "set_config('role', 'engram_app', true)"
-  @tenant_enter_gated @tenant_enter <>
-                        ", (SELECT dek_rotation_locked_at IS NOT NULL " <>
-                        "FROM users WHERE id = $1::uuid)"
+  @statement_timeout ", set_config('statement_timeout', $2, true)"
+  @rotation_locked ", (SELECT dek_rotation_locked_at IS NOT NULL " <>
+                     "FROM users WHERE id = $1::uuid)"
+  @tenant_enter_timeout @tenant_enter <> @statement_timeout
+  @tenant_enter_gated @tenant_enter <> @rotation_locked
+  @tenant_enter_gated_timeout @tenant_enter_timeout <> @rotation_locked
 
-  # Two literal statements, not one built at runtime: the SQL is fixed text.
-  defp enter_tenant(uuid, false), do: query!(@tenant_enter, [uuid], source: "tenant_enter")
-  defp enter_tenant(uuid, true), do: query!(@tenant_enter_gated, [uuid], source: "tenant_enter")
+  @doc """
+  Sets the server-side `statement_timeout` (ms) every later tenant
+  transaction in this process applies with `SET LOCAL`, or clears it (`nil`:
+  the session default, none). Set per request by
+  `EngramWeb.Plugs.StatementTimeout`; the value rides the tenant-enter round
+  trip, so it costs nothing extra. It bounds lock waits too, so a convoy
+  sheds the request instead of holding its connection.
+  """
+  @spec put_statement_timeout(pos_integer() | nil) :: :ok
+  def put_statement_timeout(nil) do
+    Process.delete(:engram_statement_timeout)
+    :ok
+  end
+
+  def put_statement_timeout(ms) when is_integer(ms) and ms > 0 do
+    Process.put(:engram_statement_timeout, ms)
+    :ok
+  end
+
+  # Literal statements, not one built at runtime: the SQL is fixed text. The
+  # rotation probe stays the LAST column (tenant_transaction/2 reads it).
+  defp enter_tenant(uuid, gated?) do
+    case Process.get(:engram_statement_timeout) do
+      nil ->
+        sql = if gated?, do: @tenant_enter_gated, else: @tenant_enter
+        query!(sql, [uuid], source: "tenant_enter")
+
+      ms ->
+        sql = if gated?, do: @tenant_enter_gated_timeout, else: @tenant_enter_timeout
+        query!(sql, [uuid, "#{ms}ms"], source: "tenant_enter")
+    end
+  end
 
   defp tenant_transaction(uuid, fun) do
     # Decided before the transaction opens: inside it, in_transaction? is

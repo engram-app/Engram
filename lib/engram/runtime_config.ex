@@ -237,6 +237,23 @@ defmodule Engram.RuntimeConfig do
   def repo_parameters(:maintenance), do: [idle_in_transaction_session_timeout: "10min"]
 
   @doc """
+  Server-side `statement_timeout` (ms) a request's tenant transactions apply
+  (`EngramWeb.Plugs.StatementTimeout` picks the class, `Engram.Repo` sends it
+  with `SET LOCAL`). No session-wide value, for the reason above: only request
+  paths get one.
+
+    * `:auth_read`: account, onboarding and billing reads. Single-row
+      lookups, milliseconds when healthy, so 2s only fires behind a lock
+      convoy or a sick database, and then the request fails fast instead of
+      pinning a pool connection (the 2026-10-31 shape).
+    * `:write`: vault and MCP requests. Equal to DBConnection's 15s client
+      timeout: past it the client has already given up, so the server stops
+      too instead of running the statement for nobody.
+  """
+  def statement_timeout(:auth_read), do: 2_000
+  def statement_timeout(:write), do: 15_000
+
+  @doc """
   Per-call client timeout (ms) of the maintenance pool, set once on its repo
   config. DBConnection's 15 s default applies to every call unless the repo
   config says otherwise, and the cross-tenant sweeps legitimately run longer
