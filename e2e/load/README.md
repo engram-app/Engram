@@ -11,6 +11,7 @@ traffic instead.
 | `server_probe.sh` | Server-side sampler (Oban, pg_stat_*, connections, logs, PromEx). Needs SSH to the staging host |
 | `grant.sql` | One-time limit grant for the sim's accounts |
 | `.github/workflows/staging-load.yml` | `workflow_dispatch` runner for `sim.py` |
+| `attachment_delete_burst.py` | Incident repro (2026-10-31): N concurrent single attachment DELETEs on one vault while DB-touching probes measure pool starvation. Throwaway user via the release rpc, always cleaned up. Before/after for Engram#2356: `python3 e2e/load/attachment_delete_burst.py --out <dir>` |
 | `first_sync_proof.py` + `first_sync.ts` | Separate proof: a 30k-note + 2k-attachment first sync survives a SIGKILL of the staging container mid-sync (Engram#2306). `watch` from the dev box: throwaway user and API key via the release rpc (no Clerk secret), load on the runner VM over SSH, cleanup always. See the module docstring |
 
 ## Workload
