@@ -56,12 +56,11 @@ defmodule EngramWeb.RequestLogger do
   end
 
   def handle_event(@exception_event, _measurements, %{conn: conn} = metadata, _config) do
-    # The one server-error policy (Engram.Sentry.EventFilter): a raise that
-    # renders a 4xx (a gate shed, a 404) or a DB-bound shed is not an error.
+    # Every raise stays at error (the error-rate page alert counts them),
+    # except a load shed (Engram.Sentry.EventFilter.shed?/1), which is counted
+    # by its own metric and logged at warning.
     level =
-      if Engram.Sentry.EventFilter.server_error?(unwrap(metadata[:reason])),
-        do: :error,
-        else: :warning
+      if Engram.Sentry.EventFilter.shed?(unwrap(metadata[:reason])), do: :warning, else: :error
 
     Logger.log(
       level,
@@ -83,9 +82,7 @@ defmodule EngramWeb.RequestLogger do
   def handle_event(_, _, _, _), do: :ok
 
   defp unwrap(%Plug.Conn.WrapperError{reason: reason}), do: unwrap(reason)
-  defp unwrap(reason) when is_exception(reason), do: reason
-  # A throw or exit is not an exception with a status: treat it as ours.
-  defp unwrap(_reason), do: %RuntimeError{}
+  defp unwrap(reason), do: reason
 
   defp emit_request_log(conn, duration) do
     duration_ms = System.convert_time_unit(duration, :native, :millisecond)

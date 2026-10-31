@@ -38,6 +38,17 @@ defmodule Engram.Sentry.EventFilter do
   def server_error?(exception),
     do: exception |> Plug.Exception.status() |> Plug.Conn.Status.code() >= 500
 
+  @doc """
+  A load shed, not a fault: the vault gate's `BusyError` (429) or a request's
+  own DB bound (`Engram.Repo.ShedError`, 429 or 503). Counted
+  (`seq_gate_acquire_total{result="busy"}`, `seq_gate_db_shed_total`) and
+  logged at warning. The ONLY raises the request logs demote from error.
+  """
+  @spec shed?(term()) :: boolean()
+  def shed?(%Engram.Vaults.SeqGate.BusyError{}), do: true
+  def shed?(%Engram.Repo.ShedError{}), do: true
+  def shed?(_other), do: false
+
   defp client_failure?(%Sentry.Event{original_exception: %Bandit.TransportError{}}), do: true
 
   # Status only means something for a request. phoenix_ecto maps

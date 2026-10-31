@@ -327,6 +327,48 @@ defmodule EngramWeb.RequestLoggerTest do
     refute inspect(event.meta) =~ "XYZZYZ"
   end
 
+  defp dispatch_exception_level(reason) do
+    conn = %Plug.Conn{
+      method: "POST",
+      request_path: "/api/notes",
+      query_string: "",
+      status: 500,
+      private: %{phoenix_controller: EngramWeb.NotesController, phoenix_action: :create}
+    }
+
+    {_, events} =
+      LogCapture.with_events(fn ->
+        :telemetry.execute(
+          [:phoenix, :router_dispatch, :exception],
+          %{duration: 1_000_000},
+          %{conn: conn, kind: :error, reason: reason, stacktrace: []}
+        )
+      end)
+
+    Enum.find(events, fn e -> render_msg(e.msg) =~ "request exception" end).level
+  end
+
+  # The error-rate page alert counts error-level lines: only a load shed
+  # (counted by its own metric) is demoted. Other raises that render a 4xx
+  # (a bad shape, a missing row) stay errors.
+  test "only a load shed's dispatch exception logs at warning" do
+    for shed <- [
+          %Engram.Vaults.SeqGate.BusyError{},
+          %Engram.Repo.ShedError{code: :lock_not_available},
+          %Engram.Repo.ShedError{code: :query_canceled},
+          %Plug.Conn.WrapperError{reason: %Engram.Repo.ShedError{code: :query_canceled}}
+        ] do
+      assert dispatch_exception_level(shed) == :warning, inspect(shed)
+    end
+
+    for other <- [
+          %Ecto.NoResultsError{message: "x"},
+          %Plug.Conn.WrapperError{reason: %Ecto.NoResultsError{message: "x"}}
+        ] do
+      assert dispatch_exception_level(other) == :error, inspect(other)
+    end
+  end
+
   test "successful request stamps category=:http and loki_ship=false" do
     conn = %Plug.Conn{
       method: "GET",
