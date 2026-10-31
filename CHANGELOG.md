@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.70.0](https://github.com/engram-app/Engram/compare/0.69.0...0.70.0) (2026-10-31)
+
+
+### Features
+
+* **db:** folders table, folder_ref_id, trigger and backfill (expand) ([#2329](https://github.com/engram-app/Engram/issues/2329)) ([55aeef0](https://github.com/engram-app/Engram/commit/55aeef0bdf3b3a8f9a9079ac0bf4b037b5a0d66a))
+* **embed:** voyage-4-nano via Ollama for staging ([#2314](https://github.com/engram-app/Engram/issues/2314)) ([e83b6f3](https://github.com/engram-app/Engram/commit/e83b6f31e5845ed81bd934e4c020e5480ca0831a))
+* **folders:** writers and readers use the folders table (dual-write), fix [#2339](https://github.com/engram-app/Engram/issues/2339) deadlock ([#2341](https://github.com/engram-app/Engram/issues/2341)) ([5bf318f](https://github.com/engram-app/Engram/commit/5bf318f30f5804ae33d26fd9215a809443c03654))
+* payload v6 reader half (version stamp, builder, folder filter by row id) ([#2346](https://github.com/engram-app/Engram/issues/2346)) ([72484ad](https://github.com/engram-app/Engram/commit/72484ad181a93bda79d924e8cca758afb2903d4e))
+
+
+### Bug Fixes
+
+* **attachments:** honor base_hash on upload ([#2344](https://github.com/engram-app/Engram/issues/2344)) ([2921d76](https://github.com/engram-app/Engram/commit/2921d763bfadb5468c55b93664787690b94eba5f))
+* **crdt:** unroomed STEP2 never starts a room ([#2325](https://github.com/engram-app/Engram/issues/2325)) ([297f4cb](https://github.com/engram-app/Engram/commit/297f4cb5784fcee02fa0540c0b7026373356feec))
+* **indexing:** stamp keyword version on unmatched resparse ([#2343](https://github.com/engram-app/Engram/issues/2343)) ([649ec3c](https://github.com/engram-app/Engram/commit/649ec3c6305b90446e4ca6b057783e495447cf9f))
+* **mcp:** search delay hint in structuredContent ([#2342](https://github.com/engram-app/Engram/issues/2342)) ([88e2790](https://github.com/engram-app/Engram/commit/88e279017b0c55b6a9b9ab474b8353c9d537f8ba))
+* **rebuild:** back off gated maintenance jobs ([#2330](https://github.com/engram-app/Engram/issues/2330)) ([76d664d](https://github.com/engram-app/Engram/commit/76d664dc2e2b8e846d6ebaa46cb091afd830f9e8))
+* **sync:** queue vault writes outside the DB pool ([#2356](https://github.com/engram-app/Engram/issues/2356)) ([3c8b723](https://github.com/engram-app/Engram/commit/3c8b7237cf057921b267ba437ea6708f2d8d77d1))
+* **sync:** vault lock discipline (batch caps, gates, slow work out of txns) ([#2360](https://github.com/engram-app/Engram/issues/2360)) ([d52c84a](https://github.com/engram-app/Engram/commit/d52c84aa93f7a265c5b6d75aeca30e98ce7565a8))
+* **web:** honor 429 retry-after, busy crdt_delete ([#2359](https://github.com/engram-app/Engram/issues/2359)) ([e89f486](https://github.com/engram-app/Engram/commit/e89f486dc18ddff2a4859f107bbd3aa3cc0c2ed1))
+
+
+### Performance Improvements
+
+* bound the per-item fan-out (folder delete/rename/restore, cron backfills) ([#2327](https://github.com/engram-app/Engram/issues/2327)) ([4dacc53](https://github.com/engram-app/Engram/commit/4dacc531110bf9df95d12c97e87439518d218939))
+* faster sync manifest, vault tree and bootstrap reads ([#2349](https://github.com/engram-app/Engram/issues/2349)) ([dc44043](https://github.com/engram-app/Engram/commit/dc44043210e97e06dd07b67db0480cb0ae3ff4f3))
+* **indexing:** event-driven queue, 3h backstop sweep ([#2350](https://github.com/engram-app/Engram/issues/2350)) ([5d63958](https://github.com/engram-app/Engram/commit/5d639587175f895b377858352350a5f9dc74146a))
+* shared pager and bounded folder, attachment and quiescence reads ([#2328](https://github.com/engram-app/Engram/issues/2328)) ([14e85c4](https://github.com/engram-app/Engram/commit/14e85c4505626b4d7b3014462fcca9bbb9f61542))
+
 ## [0.69.0](https://github.com/engram-app/Engram/compare/0.68.0...0.69.0) (2026-10-29)
 
 
