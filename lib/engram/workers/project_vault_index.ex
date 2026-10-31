@@ -123,7 +123,7 @@ defmodule Engram.Workers.ProjectVaultIndex do
   def timeout(_job), do: :timer.minutes(5)
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"user_id" => user_id, "vault_id" => vault_id}}) do
+  def perform(%Oban.Job{args: %{"user_id" => user_id, "vault_id" => vault_id}} = job) do
     case Accounts.get_user(user_id) do
       nil ->
         # Purged mid-flight. Expected, not exceptional (#954) — but counted, so
@@ -141,9 +141,47 @@ defmodule Engram.Workers.ProjectVaultIndex do
             {:snooze, 30}
 
           _ ->
-            project(user, vault_id)
+            project_or_snooze(user, vault_id, job)
         end
     end
+  end
+
+  # A rename can shed with SeqGate.BusyError when the vault's write queue is
+  # saturated. That is load, not a bug: snooze instead of crashing the job
+  # (which would report to Sentry). The projection is re-run safe.
+  #
+  # Bounded by job age, not by attempts: Oban's snooze decrements `attempt`, so
+  # `max_attempts` never caps a snoozing job. Past @busy_give_up_s it errors
+  # (counted toward max_attempts); `unique` lets the next checkpoint enqueue a
+  # fresh one. A vault whose gate is already contended snoozes BEFORE the
+  # snapshot decrypt and replay, so a busy cycle costs one gate call.
+  @busy_snooze_s 5
+  @busy_give_up_s 600
+
+  defp project_or_snooze(user, vault_id, job) do
+    if Engram.Vaults.SeqGate.contended?(vault_id),
+      do: busy(job),
+      else: project_shedding(user, vault_id, job)
+  end
+
+  defp project_shedding(user, vault_id, job) do
+    project(user, vault_id)
+  rescue
+    Engram.Vaults.SeqGate.BusyError -> busy(job)
+  end
+
+  defp busy(%Oban.Job{inserted_at: %DateTime{} = at}) do
+    if DateTime.diff(DateTime.utc_now(), at) > @busy_give_up_s do
+      emit(:busy_gave_up)
+      {:error, :vault_write_queue_saturated}
+    else
+      busy(nil)
+    end
+  end
+
+  defp busy(_job) do
+    emit(:snoozed_busy)
+    {:snooze, @busy_snooze_s}
   end
 
   defp project(user, vault_id) do

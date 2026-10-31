@@ -33,6 +33,7 @@ defmodule Engram.Attachments do
   alias Engram.Storage
   alias Engram.Storage.MimeWhitelist
   alias Engram.Sync.Broadcast
+  alias Engram.Vaults.SeqGate
   alias Engram.Workers.ReconcileAttachmentBlobs
 
   @doc """
@@ -215,25 +216,28 @@ defmodule Engram.Attachments do
         ) ::
           {:ok, Attachment.t()} | {:error, term()}
   def commit_row(user, vault, path, path_hmac, size, dek_version, build, opts \\ []) do
-    Repo.transaction(fn ->
-      :ok = acquire_path_lock(user.id, path_hmac)
-      existing = fetch_existing(user, vault.id, path_hmac)
-      :ok = Repo.advisory_lock!(quota_lock_id(user.id))
+    # Gate outermost (see SeqGate): waiters queue without a pool connection.
+    SeqGate.with_vault(vault.id, fn ->
+      Repo.transaction(fn ->
+        :ok = acquire_path_lock(user.id, path_hmac)
+        existing = fetch_existing(user, vault.id, path_hmac)
+        :ok = Repo.advisory_lock!(quota_lock_id(user.id))
 
-      # Under the locks and before anything is written: a row committed after
-      # a DEK rotation's sweep went by would stay under the retiring key.
-      with :ok <- base_hash_gate(existing, path, opts[:base_hash]),
-           :ok <- rotation_gate(user, dek_version),
-           :ok <- validate_storage_cap(user, existing, size),
-           {:ok, insert_id, attrs} <- build.(existing),
-           {:ok, att} <- write_row(user, existing, insert_id, attrs, path) do
-        # Phase B.3: path is virtual — splice the plaintext we already have
-        # onto the returned struct so callers can read att.path without a
-        # second decrypt round-trip.
-        {%{att | path: path}, existing}
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
+        # Under the locks and before anything is written: a row committed after
+        # a DEK rotation's sweep went by would stay under the retiring key.
+        with :ok <- base_hash_gate(existing, path, opts[:base_hash]),
+             :ok <- rotation_gate(user, dek_version),
+             :ok <- validate_storage_cap(user, existing, size),
+             {:ok, insert_id, attrs} <- build.(existing),
+             {:ok, att} <- write_row(user, existing, insert_id, attrs, path) do
+          # Phase B.3: path is virtual — splice the plaintext we already have
+          # onto the returned struct so callers can read att.path without a
+          # second decrypt round-trip.
+          {%{att | path: path}, existing}
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
     end)
     |> case do
       {:ok, {att, existing}} ->
@@ -724,7 +728,7 @@ defmodule Engram.Attachments do
         path_hmac = Crypto.hmac_field(filter_key, path)
 
         result =
-          Repo.with_tenant(user.id, fn ->
+          SeqGate.with_tenant(user.id, vault.id, fn ->
             live = from(a in scoped_live(user, vault), where: a.path_hmac == ^path_hmac)
 
             # Unlocked pre-check so an absent path neither bumps the vault seq
@@ -870,7 +874,7 @@ defmodule Engram.Attachments do
       # Errors are returned, never `Repo.rollback`: nothing is written before
       # a refusal, and a rollback here would poison an enclosing transaction
       # (an MCP tool call, the folder-rename cascade) instead of reporting.
-      Repo.with_tenant(user.id, fn ->
+      SeqGate.with_tenant(user.id, vault.id, fn ->
         live = Repo.one(live_by_hmac_query(user, vault, old_hmac))
 
         cond do

@@ -70,6 +70,13 @@ config :prom_ex, :storage_adapter, PromEx.Storage.Peep
 # ENVELOPE_COMPRESSION=false env var and restart (config/runtime.exs).
 config :engram, :envelope_compression, true
 
+# Engram.Vaults.SeqGate: longest a write queues for its vault's gate before it
+# sheds with a 429. MUST stay clearly below the Obsidian plugin's per-request
+# timeout on the gated routes (`requestTimeoutMs = 15_000`, plugin src/api.ts).
+# At or above it, the client aborts first, sees a network error instead of the
+# 429, and counts it toward parking the write. Pinned by SeqGateTest.
+config :engram, :seq_gate_wait_ms, 10_000
+
 # Embedder adapter (overridden per environment)
 config :engram, :embedder, Engram.Embedders.Voyage
 

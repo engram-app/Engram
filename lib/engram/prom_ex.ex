@@ -38,6 +38,7 @@ defmodule Engram.PromEx do
       Engram.PromEx.Reliability,
       Engram.PromEx.Installs,
       Engram.PromEx.RateLimiter,
+      Engram.PromEx.SeqGate,
       Engram.PromEx.Profiling,
       Engram.PromEx.Native,
       Engram.PromEx.WebSocket,

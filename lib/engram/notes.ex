@@ -47,6 +47,7 @@ defmodule Engram.Notes do
   alias Engram.Sync.Broadcast
   alias Engram.Telemetry
   alias Engram.UsageMeters
+  alias Engram.Vaults.SeqGate
   alias Engram.Vaults.Vault
 
   alias Engram.Workers.{
@@ -966,6 +967,9 @@ defmodule Engram.Notes do
       {:ok, lookup_query} = note_by_path_query(user, vault, sanitized_path)
       opts = prepare_expected(opts, base_attrs, user, sanitized_path, folder)
 
+      # NOT gated (Vaults.SeqGate): this transaction runs the CRDT merge and
+      # field encryption before its seq bump, and a no-op re-push takes no seq
+      # lock at all. Gating it serialized merges per vault (PR 2356 review).
       result =
         Repo.with_tenant(user.id, fn ->
           %{
@@ -4243,7 +4247,7 @@ defmodule Engram.Notes do
     {:ok, target_query} = note_by_path_query(user, vault, new_path, [:id])
 
     result =
-      Repo.with_tenant(user.id, fn ->
+      SeqGate.with_tenant(user.id, vault.id, fn ->
         cond do
           # No-op rename: same path. Skip target conflict check so the
           # request becomes idempotent rather than reporting a conflict
@@ -4528,11 +4532,13 @@ defmodule Engram.Notes do
     # The HMAC before the transaction: a DekCache miss unwraps through KMS.
     case note_by_path_query(user, vault, path, @note_core_fields) do
       {:ok, query} ->
-        Repo.with_tenant!(user.id, fn ->
-          case Repo.one(query) do
-            %Note{} = note -> tombstone_note(user, vault, path, note, opts)
-            nil -> :absent
-          end
+        SeqGate.with_vault(vault.id, fn ->
+          Repo.with_tenant!(user.id, fn ->
+            case Repo.one(query) do
+              %Note{} = note -> tombstone_note(user, vault, path, note, opts)
+              nil -> :absent
+            end
+          end)
         end)
 
       {:error, _} ->

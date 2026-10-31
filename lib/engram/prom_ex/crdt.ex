@@ -540,7 +540,7 @@ defmodule Engram.PromEx.Crdt do
           event_name: @projection_event,
           description:
             "Per-vault index projection runs by phase (converged | unresolved | no_snapshot | " <>
-              "decrypt_failed | corrupt_snapshot | snoozed_rotation | user_gone).",
+              "decrypt_failed | corrupt_snapshot | snoozed_rotation | snoozed_busy | busy_gave_up | user_gone).",
           tags: [:phase]
         ),
         sum(
