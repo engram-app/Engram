@@ -141,9 +141,20 @@ defmodule Engram.Workers.ProjectVaultIndex do
             {:snooze, 30}
 
           _ ->
-            project(user, vault_id)
+            project_or_snooze(user, vault_id)
         end
     end
+  end
+
+  # A rename can shed with SeqGate.Busy when the vault's write queue is
+  # saturated. That is load, not a bug: snooze instead of crashing the job
+  # (which would report to Sentry). The projection is re-run safe.
+  defp project_or_snooze(user, vault_id) do
+    project(user, vault_id)
+  rescue
+    Engram.Vaults.SeqGate.Busy ->
+      emit(:snoozed_busy)
+      {:snooze, 5}
   end
 
   defp project(user, vault_id) do
