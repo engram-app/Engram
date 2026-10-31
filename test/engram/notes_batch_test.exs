@@ -601,6 +601,7 @@ defmodule Engram.NotesBatchSetBasedTest do
   """
   # async: false: one test arms the global interleave hook.
   use Engram.DataCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   alias Engram.Notes
 
@@ -708,6 +709,16 @@ defmodule Engram.NotesBatchSetBasedTest do
     end
 
     refute_receive %Phoenix.Socket.Broadcast{event: "note_changed"}, 300
+    assert {:ok, %{path: "a.md"}} = Notes.get_note_by_id(user, vault, n1.id)
+
+    # The claim is undone with the rows: projection must not move the notes
+    # later for a batch that answered an error.
+    {:ok, doc} = Engram.Notes.CrdtIndexPersistence.load_doc(user, vault.id)
+    entries = doc |> Yex.Doc.get_map(Engram.Notes.CrdtIndexDoc.map_name()) |> Yex.Map.to_map()
+    refute Map.has_key?(entries, "Z/a.md"), inspect(entries)
+    assert entries["a.md"]["note_id"] == n1.id
+
+    :ok = perform_job(Engram.Workers.ProjectVaultIndex, %{user_id: user.id, vault_id: vault.id})
     assert {:ok, %{path: "a.md"}} = Notes.get_note_by_id(user, vault, n1.id)
   end
 

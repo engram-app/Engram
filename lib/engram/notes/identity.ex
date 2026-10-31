@@ -119,6 +119,24 @@ defmodule Engram.Notes.Identity do
   end
 
   @doc """
+  Undo claims of this caller's own: `entries` is `[{note_id, held_path,
+  path}]`, and each note moves to `path` only if its entry is STILL at
+  `held_path` (the claim being undone). A note whose entry moved since (a
+  concurrent rename claimed it elsewhere) is left alone. Compare-and-set per
+  entry, in the same one Yjs transaction as `claim/3`.
+  """
+  @spec unclaim(map(), String.t(), [{String.t(), String.t(), String.t()}]) ::
+          :ok | {:error, term()}
+  def unclaim(user, vault_id, entries)
+
+  def unclaim(_user, _vault_id, []), do: :ok
+
+  def unclaim(user, vault_id, entries) when is_map(user) do
+    targets = Enum.map(entries, fn {id, held, path} -> {id, path, {:if_at, held}} end)
+    apply_targets(user, vault_id, targets, :claim)
+  end
+
+  @doc """
   Drop every entry naming any of `note_ids` — the note is gone.
 
   Idempotent: releasing a note with no entries is a no-op, not an error.
@@ -418,6 +436,7 @@ defmodule Engram.Notes.Identity do
     map = Yex.Doc.get_map(doc, CrdtIndexDoc.map_name())
     current = Yex.Map.to_map(map)
     by_note = entries_by_note(current)
+    targets = Enum.flat_map(targets, &still_held(&1, current))
 
     case refusal(current, targets) do
       nil ->
@@ -436,6 +455,17 @@ defmodule Engram.Notes.Identity do
         {:error, :conflict}
     end
   end
+
+  # unclaim/3's compare-and-set, read inside the same room transaction as the
+  # write: kept only while the note's entry is still at the held path.
+  defp still_held({note_id, path, {:if_at, held}}, current) do
+    case Map.get(current, held) do
+      %{"note_id" => ^note_id} -> [{note_id, path}]
+      _ -> []
+    end
+  end
+
+  defp still_held(target, _current), do: [target]
 
   # A claim is refused when the path is held by a note OUTSIDE this batch, or
   # when two entries INSIDE it name the same path. Both produce the same

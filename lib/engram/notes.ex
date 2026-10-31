@@ -5016,8 +5016,9 @@ defmodule Engram.Notes do
   # A transaction that owns the after-commit queue: the per-note renames'
   # broadcasts and room stops wait for THIS commit, not each nested
   # with_tenant's return. Past the claim, a raise (a request DB bound shed, a
-  # constraint) leaves the claim standing, so it is reported for projection
-  # to converge, as a refused move in apply_moves/4 is.
+  # constraint) rolled every row back, so the claims are undone (each only if
+  # still ours): a shed batch must not move later through projection. If the
+  # undo itself fails, the claim is reported for projection to converge.
   defp apply_claimed_moves(user, vault, moves) do
     Repo.transaction_after_commit(fn ->
       refs = ensure_move_folders!(user, vault, moves)
@@ -5028,7 +5029,14 @@ defmodule Engram.Notes do
     end)
   rescue
     e ->
-      _ = orphan_claim(user, vault, length(moves), e)
+      undo =
+        for {note, new_path} <- moves, note.path != new_path, do: {note.id, new_path, note.path}
+
+      case Identity.unclaim(user, vault.id, undo) do
+        :ok -> :ok
+        error -> orphan_claim(user, vault, length(undo), error)
+      end
+
       reraise e, __STACKTRACE__
   end
 
