@@ -216,21 +216,43 @@ defmodule EngramWeb.UsersControllerTest do
       Application.put_env(
         :engram,
         :request_db_bounds,
-        Keyword.merge(prev, account_delete: 1, account_delete_lock: 1)
+        Keyword.merge(prev, account_delete_lock: 50)
       )
+
+      # Deterministic: another session holds SHARE on `vaults`, so the
+      # cascade's DELETE (ROW EXCLUSIVE) waits past its lock bound while every
+      # read before it (ACCESS SHARE) passes. A 1 ms statement bound tripped
+      # whichever statement was first to be slow, sometimes outside a tenant
+      # leg (not shed-mapped).
+      {:ok, holder} = Postgrex.start_link(Engram.Application.repo_connection_opts())
+      test = self()
+
+      locker =
+        Task.async(fn ->
+          Postgrex.transaction(holder, fn c ->
+            Postgrex.query!(c, "LOCK TABLE vaults IN SHARE MODE", [])
+            send(test, :locked)
+            receive do: (:release -> :ok)
+          end)
+        end)
+
+      assert_receive :locked
 
       try do
         log =
           ExUnit.CaptureLog.capture_log(fn ->
-            assert_error_sent(503, fn ->
+            assert_error_sent(429, fn ->
               auth_conn(user) |> delete("/api/me", %{password: "password123"})
             end)
           end)
 
-        # A shed, not an error: warning lines only (delta review 2, L1).
+        # A shed, not an error: warning lines only.
         assert log =~ "[warning] request exception"
         refute log =~ "[error]"
       after
+        send(locker.pid, :release)
+        Task.await(locker)
+        GenServer.stop(holder)
         Application.put_env(:engram, :request_db_bounds, prev)
       end
 
@@ -248,7 +270,7 @@ defmodule EngramWeb.UsersControllerTest do
              ) == 1
 
       # Test-only: the sandbox's one outer transaction keeps the failed
-      # request's SET LOCAL 1ms bounds; a real request starts its own.
+      # request's SET LOCAL bounds; a real request starts its own.
       Engram.Repo.query!(
         "SELECT set_config('statement_timeout', '0', true), set_config('lock_timeout', '0', true)"
       )
