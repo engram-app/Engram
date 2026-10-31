@@ -186,8 +186,10 @@ defmodule Engram.AttachmentsTest do
       # With the PUT outside the lock, two concurrent first-uploads can
       # encrypt under different att_ids. The locked re-read must detect
       # that the surviving row id differs from the AAD baked into the
-      # uploaded blob and re-encrypt + re-PUT under the lock (T3-audit H1
-      # invariant: surviving blob AAD == surviving row id).
+      # uploaded blob and re-encrypt + re-PUT (T3-audit H1 invariant:
+      # surviving blob AAD == surviving row id) AFTER rolling back, so the
+      # re-PUT never runs under the vault lock either.
+      test_pid = self()
       {:ok, user} = Crypto.ensure_user_dek(user)
       {:ok, filter_key} = Crypto.dek_filter_key(user)
       path_hmac = Crypto.hmac_field(filter_key, @path)
@@ -209,6 +211,7 @@ defmodule Engram.AttachmentsTest do
           )
         end
 
+        send(test_pid, {:put_in_txn, Engram.Repo.in_transaction?()})
         InMemory.put(key, binary, opts)
       end)
 
@@ -225,6 +228,56 @@ defmodule Engram.AttachmentsTest do
       # End-to-end proof the blob decrypts under the surviving id.
       {:ok, fetched} = Attachments.get_attachment(user, vault, @path)
       assert fetched.content == Base.decode64!(@valid_content)
+
+      assert_received {:put_in_txn, false}
+      assert_received {:put_in_txn, false}
+    end
+  end
+
+  describe "upsert_attachment/3 lock order" do
+    setup do
+      stub(Engram.MockStorage, :put, fn _key, _binary, _opts -> :ok end)
+      :ok
+    end
+
+    defp upload_queries(user, vault) do
+      {{:ok, _}, queries} =
+        Engram.QueryRecorder.record(fn ->
+          Attachments.upsert_attachment(user, vault, %{
+            "path" => @path,
+            "content_base64" => @valid_content
+          })
+        end)
+
+      me = self()
+      for %{sql: q, pid: ^me} <- queries, do: q
+    end
+
+    # An account delete deletes the vault rows, then the users row. An upload
+    # that share-locked the users row and then waited on the vault row was
+    # the other half of a 40P01 cycle (#2339's order).
+    test "locks the vault row before the users row", %{user: user, vault: vault} do
+      queries = upload_queries(user, vault)
+      vault_at = Enum.find_index(queries, &(&1 =~ ~r/FROM vaults .*FOR NO KEY UPDATE/))
+      users_at = Enum.find_index(queries, &(&1 =~ ~r/FROM "users".*FOR SHARE/s))
+
+      assert vault_at && users_at, inspect(queries, pretty: true)
+      assert vault_at < users_at
+    end
+
+    test "an unlimited plan takes no per-user quota lock", %{user: user, vault: vault} do
+      insert(:user_limit_override, user: user, key: "attachment_bytes_cap", value: %{"v" => -1})
+      refute Enum.any?(upload_queries(user, vault), &(&1 =~ "hashtextextended"))
+    end
+
+    test "a capped plan still serializes on the quota lock", %{user: user, vault: vault} do
+      insert(:user_limit_override,
+        user: user,
+        key: "attachment_bytes_cap",
+        value: %{"v" => 100_000_000}
+      )
+
+      assert Enum.any?(upload_queries(user, vault), &(&1 =~ "hashtextextended"))
     end
   end
 

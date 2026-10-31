@@ -353,6 +353,11 @@ defmodule EngramWeb.AttachmentsController do
       {:error, {:extension_not_allowed, ext}} ->
         conn |> put_status(415) |> json(%{error: "extension_not_allowed", extension: ext})
 
+      # The path was rewritten under us on every retry (Attachments'
+      # reprepare loop): 409 via the fallback, the client retries.
+      {:error, :conflict} = error ->
+        error
+
       {:error, %Ecto.Changeset{}} = error ->
         error
     end
