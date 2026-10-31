@@ -292,6 +292,41 @@ defmodule Engram.AttachmentsTest do
       assert sum_at < vault_at
     end
 
+    # The quota advisory lock runs outside any tenant leg: a request lock bound
+    # reached there must still shed (429), not surface a raw 55P03 (500).
+    test "a quota-lock wait past the request bound sheds as 429", %{user: user, vault: vault} do
+      insert(:user_limit_override,
+        user: user,
+        key: "attachment_bytes_cap",
+        value: %{"v" => 100_000_000}
+      )
+
+      # The shed upload deletes its fresh blob (deleting_blob_on_raise/4).
+      stub(Engram.MockStorage, :delete, fn _key -> :ok end)
+      {:ok, holder} = Postgrex.start_link(Engram.Application.repo_connection_opts())
+
+      Postgrex.query!(holder, "SELECT pg_advisory_lock(hashtextextended($1, 0))", [
+        Attachments.quota_lock_id(user.id)
+      ])
+
+      try do
+        :ok = Engram.Repo.put_db_bounds(%{statement: 5_000, lock: 50, class: :write})
+
+        error =
+          assert_raise Engram.Repo.ShedError, fn ->
+            Attachments.upsert_attachment(user, vault, %{
+              "path" => @path,
+              "content_base64" => @valid_content
+            })
+          end
+
+        assert error.code == :lock_not_available
+      after
+        Engram.Repo.put_db_bounds(nil)
+        GenServer.stop(holder)
+      end
+    end
+
     test "a capped plan still serializes on the quota lock", %{user: user, vault: vault} do
       insert(:user_limit_override,
         user: user,

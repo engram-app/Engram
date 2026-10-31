@@ -250,34 +250,11 @@ defmodule Engram.Attachments do
     limit = Billing.effective_limit(user, :attachment_bytes_cap)
 
     # Gate outermost (see SeqGate): waiters queue without a pool connection.
+    # shed_on_bound: the path and quota advisory locks run outside a tenant
+    # leg, so a request lock_timeout there must still shed as a 429.
     SeqGate.with_vault(vault.id, fn ->
-      Repo.transaction(fn ->
-        :ok = acquire_path_lock(user.id, path_hmac)
-        existing = fetch_existing(user, vault.id, path_hmac)
-
-        # The cap check (a user-wide SUM) is serialized by the per-user quota
-        # lock, so it runs BEFORE the vault row lock that every writer of the
-        # vault waits on.
-        with :ok <- base_hash_gate(existing, path, opts[:base_hash]),
-             :ok <- quota_check(user, limit, existing, size),
-             # The vault row BEFORE the users row (rotation_gate's FOR SHARE):
-             # an account delete deletes vaults then users, so users-then-vault
-             # here was a 40P01 cycle with it (#2339). write_row's next_seq!
-             # re-enters this lock.
-             :ok <- Repo.with_tenant!(user.id, fn -> Engram.Vaults.lock_seq!(vault.id) end),
-             # Under the locks and before anything is written: a row committed
-             # after a DEK rotation's sweep went by would stay under the
-             # retiring key.
-             :ok <- rotation_gate(user, dek_version),
-             {:ok, insert_id, attrs} <- build.(existing),
-             {:ok, att} <- write_row(user, existing, insert_id, attrs, path) do
-          # Phase B.3: path is virtual — splice the plaintext we already have
-          # onto the returned struct so callers can read att.path without a
-          # second decrypt round-trip.
-          {%{att | path: path}, existing}
-        else
-          {:error, reason} -> Repo.rollback(reason)
-        end
+      Repo.shed_on_bound(fn ->
+        commit_txn(user, vault, {path, path_hmac, size}, dek_version, build, limit, opts)
       end)
     end)
     |> case do
@@ -310,6 +287,37 @@ defmodule Engram.Attachments do
       {:error, _} = err ->
         err
     end
+  end
+
+  defp commit_txn(user, vault, {path, path_hmac, size}, dek_version, build, limit, opts) do
+    Repo.transaction(fn ->
+      :ok = acquire_path_lock(user.id, path_hmac)
+      existing = fetch_existing(user, vault.id, path_hmac)
+
+      # The cap check (a user-wide SUM) is serialized by the per-user quota
+      # lock, so it runs BEFORE the vault row lock that every writer of the
+      # vault waits on.
+      with :ok <- base_hash_gate(existing, path, opts[:base_hash]),
+           :ok <- quota_check(user, limit, existing, size),
+           # The vault row BEFORE the users row (rotation_gate's FOR SHARE):
+           # an account delete deletes vaults then users, so users-then-vault
+           # here was a 40P01 cycle with it (#2339). write_row's next_seq!
+           # re-enters this lock.
+           :ok <- Repo.with_tenant!(user.id, fn -> Engram.Vaults.lock_seq!(vault.id) end),
+           # Under the locks and before anything is written: a row committed
+           # after a DEK rotation's sweep went by would stay under the
+           # retiring key.
+           :ok <- rotation_gate(user, dek_version),
+           {:ok, insert_id, attrs} <- build.(existing),
+           {:ok, att} <- write_row(user, existing, insert_id, attrs, path) do
+        # Phase B.3: path is virtual — splice the plaintext we already have
+        # onto the returned struct so callers can read att.path without a
+        # second decrypt round-trip.
+        {%{att | path: path}, existing}
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
   end
 
   # Mirrors the notes stale-base gate (`Notes.do_update_note/6`). No live row

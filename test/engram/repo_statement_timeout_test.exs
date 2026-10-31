@@ -38,18 +38,76 @@ defmodule Engram.RepoStatementTimeoutTest do
              "3s"
   end
 
-  # The bound must actually cancel, and the cancel must read as load.
-  test "a statement past the bound is cancelled and sheds as ShedError (429)" do
+  # Counts every shed, by SQLSTATE name and route class.
+  defp capture_sheds(fun) do
+    test = self()
+    id = {__MODULE__, make_ref()}
+
+    :telemetry.attach(
+      id,
+      [:engram, :repo, :shed],
+      fn _, %{count: 1}, meta, _ -> if self() == test, do: send(test, {:shed, meta}) end,
+      nil
+    )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(id)
+    end
+  end
+
+  # A statement past its bound is often deterministic (a big vault, a bad
+  # plan): a 503 the client parks on, never a 429 it would retry forever.
+  test "a statement past the bound is cancelled: ShedError 503, counted" do
     user = insert(:user)
-    :ok = Repo.put_db_bounds(%{statement: 50, lock: 50})
+    :ok = Repo.put_db_bounds(%{statement: 50, lock: 50, class: :write})
 
     error =
-      assert_raise Engram.Repo.ShedError, fn ->
-        Repo.with_tenant(user.id, fn -> Repo.query!("SELECT pg_sleep(0.5)") end)
-      end
+      capture_sheds(fn ->
+        assert_raise Engram.Repo.ShedError, fn ->
+          Repo.with_tenant(user.id, fn -> Repo.query!("SELECT pg_sleep(0.5)") end)
+        end
+      end)
 
     assert error.code == :query_canceled
-    assert Plug.Exception.status(error) == 429
+    assert Plug.Exception.status(error) == 503
+    assert_received {:shed, %{code: :query_canceled, class: :write}}
+  end
+
+  # A lock held by another session past the request's lock bound is load:
+  # a 429 the client retries after a short wait.
+  test "a lock wait past the bound is ShedError 429, counted" do
+    user = insert(:user)
+    key = System.unique_integer([:positive])
+    holder = hold_advisory_lock(key)
+
+    try do
+      :ok = Repo.put_db_bounds(%{statement: 5_000, lock: 50, class: :auth_read})
+
+      error =
+        capture_sheds(fn ->
+          assert_raise Engram.Repo.ShedError, fn ->
+            Repo.with_tenant(user.id, fn ->
+              Repo.query!("SELECT pg_advisory_xact_lock($1)", [key])
+            end)
+          end
+        end)
+
+      assert error.code == :lock_not_available
+      assert Plug.Exception.status(error) == 429
+      assert_received {:shed, %{code: :lock_not_available, class: :auth_read}}
+    after
+      GenServer.stop(holder)
+    end
+  end
+
+  # Another real session (outside the test sandbox) holding a session-level
+  # advisory lock until stopped.
+  def hold_advisory_lock(key) do
+    {:ok, conn} = Postgrex.start_link(Engram.Application.repo_connection_opts())
+    Postgrex.query!(conn, "SELECT pg_advisory_lock($1)", [key])
+    conn
   end
 
   test "without a request bound a cancel stays a Postgrex error (workers rescue it)" do
@@ -64,21 +122,39 @@ defmodule Engram.RepoStatementTimeoutTest do
     end
   end
 
-  test "a shed request gets the same constant retry-after as a gate shed" do
-    conn =
-      build_conn()
-      |> Plug.Conn.assign(:reason, %Engram.Repo.ShedError{code: :query_canceled})
-      |> EngramWeb.Plugs.RetryAfter.call([])
-      |> Plug.Conn.send_resp(429, "")
+  defp rendered(reason, status) do
+    build_conn()
+    |> Plug.Conn.assign(:reason, reason)
+    |> EngramWeb.Plugs.RetryAfter.call([])
+    |> Plug.Conn.send_resp(status, "")
+    |> Plug.Conn.get_resp_header("retry-after")
+  end
 
-    assert Plug.Conn.get_resp_header(conn, "retry-after") ==
+  # One 429 rule with the gate (#2359): a constant; the clients jitter.
+  test "a lock shed gets the same constant retry-after as a gate shed" do
+    assert rendered(%Engram.Repo.ShedError{code: :lock_not_available}, 429) ==
              [Integer.to_string(EngramWeb.Plugs.RetryAfter.busy_seconds())]
   end
 
+  test "a statement-timeout shed gets NO retry-after, so the client parks" do
+    assert rendered(%Engram.Repo.ShedError{code: :query_canceled}, 503) == []
+  end
+
+  test "the shed counter is declared on the PromEx plugin" do
+    metric =
+      Engram.Test.PromExMetrics.of(Engram.PromEx.SeqGate)
+      |> List.wrap()
+      |> Enum.flat_map(& &1.metrics)
+      |> Enum.find(&(&1.name == [:engram, :prom_ex, :seq_gate, :db_shed, :total]))
+
+    assert metric.event_name == [:engram, :repo, :shed]
+    assert metric.tags == [:code, :class]
+  end
+
   test "the bounds come from the one config location" do
-    assert Engram.RuntimeConfig.request_db_bounds(:auth_read) == %{statement: 3_000, lock: 3_000}
-    assert Engram.RuntimeConfig.request_db_bounds(:write) == %{statement: 5_000, lock: 3_000}
-    assert Engram.RuntimeConfig.request_db_bounds(:cascade) == %{statement: 15_000, lock: 10_000}
+    assert %{statement: 3_000, lock: 3_000} = Engram.RuntimeConfig.request_db_bounds(:auth_read)
+    assert %{statement: 5_000, lock: 3_000} = Engram.RuntimeConfig.request_db_bounds(:write)
+    assert %{statement: 15_000, lock: 10_000} = Engram.RuntimeConfig.request_db_bounds(:cascade)
   end
 
   describe "route classes" do

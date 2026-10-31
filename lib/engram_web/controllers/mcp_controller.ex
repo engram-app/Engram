@@ -1222,6 +1222,28 @@ defmodule EngramWeb.McpController do
   @no_request_txn ~w(search_notes suggest_folder delete_folder rename_note rename_folder
                      restore_deleted)
 
+  defp busy_result(tool, reason) do
+    log_shed(tool, reason)
+    retry_s = EngramWeb.Plugs.RetryAfter.busy_seconds()
+
+    err =
+      {:rate_limited,
+       "The vault is busy with other writes, so this did not finish. Part of it may " <>
+         "already be applied; check the result, then retry in #{retry_s} seconds."}
+
+    {{:ok, payload}, :error, bytes} =
+      {error_result(err), :error, byte_size_safe(ToolError.message(err))}
+
+    {{:ok, put_in(payload, ["_meta", "engram.page/retry_after_s"], retry_s)}, :error, bytes}
+  end
+
+  defp log_shed(tool, reason) do
+    Logger.warning(
+      "mcp tool call shed",
+      Engram.Logger.Metadata.with_category(:warning, :http, tool: tool.name, reason: reason)
+    )
+  end
+
   @doc false
   def run_tool_handler(tool, user, vault, args) do
     case call_handler(tool, user, vault, args) do
@@ -1250,27 +1272,24 @@ defmodule EngramWeb.McpController do
         {error_result(err), :error, byte_size_safe(ToolError.message(err))}
     end
   catch
-    # A write shed by the vault's SeqGate (`rename_note` runs outside the
-    # request transaction, so it queues there). Load, not a crash: a
-    # retryable tool error, and no error log.
-    #
-    # The message does not say "nothing changed": a gated tool can commit part
-    # of its work first (a rename's index claim, which then completes on its
-    # own). `_meta` carries the wait as a number for programs.
-    # A request shed by its own DB bound (Engram.Repo.ShedError) is the same
-    # kind of load and gets the same answer.
-    :error, %shed{} when shed in [SeqGate.BusyError, Engram.Repo.ShedError] ->
-      retry_s = EngramWeb.Plugs.RetryAfter.busy_seconds()
+    # Load, not a crash, and logged at warning (a shed is otherwise invisible
+    # on MCP; the DB sheds are also counted). A write shed by the vault's
+    # SeqGate, or a lock wait past the request's DB bound: a retryable
+    # `rate_limited` tool error. The message does not say "nothing changed": a
+    # gated tool can commit part of its work first (a rename's index claim,
+    # which then completes on its own). `_meta` carries the wait for programs.
+    :error, %SeqGate.BusyError{} ->
+      busy_result(tool, :busy)
 
-      err =
-        {:rate_limited,
-         "The vault is busy with other writes, so this did not finish. Part of it may " <>
-           "already be applied; check the result, then retry in #{retry_s} seconds."}
+    :error, %Engram.Repo.ShedError{code: :lock_not_available} ->
+      busy_result(tool, :lock_not_available)
 
-      {{:ok, payload}, :error, bytes} =
-        {error_result(err), :error, byte_size_safe(ToolError.message(err))}
-
-      {{:ok, put_in(payload, ["_meta", "engram.page/retry_after_s"], retry_s)}, :error, bytes}
+    # A statement past its bound is not load (it would time out again), so it
+    # says so instead of inviting a retry.
+    :error, %Engram.Repo.ShedError{code: code} ->
+      log_shed(tool, code)
+      err = "This request took too long on the server and was stopped; narrow it before retrying"
+      {error_result(err), :error, byte_size(err)}
 
     kind, reason ->
       # T3.0.1 follow-up — never `inspect/1` an exit/throw reason into a

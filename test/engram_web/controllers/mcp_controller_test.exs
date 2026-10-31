@@ -1998,18 +1998,24 @@ defmodule EngramWeb.McpControllerShedTest do
 
     send(holder.pid, :release)
     Task.await(holder)
+    assert log =~ "mcp tool call shed"
     refute log =~ "trapped"
   end
 
-  test "a statement cancelled by the request's DB bound is the same busy tool error", ctx do
+  test "a statement cancelled by the request's DB bound says so, logged at warning", ctx do
     %{user: user, vault: vault} = ctx
-    :ok = Engram.Repo.put_db_bounds(%{statement: 50, lock: 50})
+    :ok = Engram.Repo.put_db_bounds(%{statement: 50, lock: 50, class: :write})
 
     log =
       capture_log(fn ->
-        assert_busy(EngramWeb.McpController.run_tool_handler(sleeper(), user, vault, %{}))
+        {{:ok, result}, :error, _} =
+          EngramWeb.McpController.run_tool_handler(sleeper(), user, vault, %{})
+
+        assert result["isError"] == true
+        assert hd(result["content"])["text"] =~ "took too long"
       end)
 
+    assert log =~ "mcp tool call shed"
     refute log =~ "trapped"
   end
 end

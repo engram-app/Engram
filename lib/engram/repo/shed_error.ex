@@ -1,13 +1,25 @@
 defmodule Engram.Repo.ShedError do
   @moduledoc """
-  A request's tenant transaction ran past its own server-side bound
-  (`statement_timeout`, SQLSTATE 57014, or `lock_timeout`, 55P03, set by
-  `Engram.Repo.put_db_bounds/1`). Load, not a fault: a 429 the plugin retries
-  after `retry-after` (`EngramWeb.Plugs.RetryAfter`), kept out of Sentry and the
-  5xx alarm, the same contract as `Engram.Vaults.SeqGate.BusyError`.
+  A request's tenant transaction ran past its own server-side bound, set by
+  `Engram.Repo.put_db_bounds/1`. Raised by `Engram.Repo.shed_on_bound/1` and
+  counted (`[:engram, :repo, :shed]`, `code` + route `class`).
+
+    * `:lock_not_available` (55P03, `lock_timeout`): the request waited on a
+      lock held by other writers. Load: 429 with a short `retry-after`
+      (`EngramWeb.Plugs.RetryAfter`), which the plugin waits out and retries.
+    * `:query_canceled` (57014, `statement_timeout`): the statement itself ran
+      too long. Often deterministic (a big vault, a bad plan), so retrying
+      every few seconds would loop forever: 503 with NO `retry-after`, which
+      the plugin counts toward parking the request.
   """
-  defexception [:code, plug_status: 429]
+  defexception [:code]
 
   @impl true
-  def message(%{code: code}), do: "database bound reached (#{code}), retry"
+  def message(%{code: code}), do: "database bound reached (#{code})"
+
+  defimpl Plug.Exception do
+    def status(%{code: :lock_not_available}), do: 429
+    def status(_), do: 503
+    def actions(_), do: []
+  end
 end

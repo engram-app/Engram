@@ -250,7 +250,7 @@ defmodule Engram.Repo do
   """
   @spec transaction_after_commit((-> any())) :: {:ok, any()} | {:error, any()}
   def transaction_after_commit(fun) when is_function(fun, 0),
-    do: owning_after_commit(fn -> transaction(fun) end)
+    do: shed_on_bound(fn -> owning_after_commit(fn -> transaction(fun) end) end)
 
   defp run_with_tenant(uuid, fun),
     do: shed_on_bound(fn -> owning_after_commit(fn -> tenant_transaction(uuid, fun) end) end)
@@ -294,7 +294,14 @@ defmodule Engram.Repo do
   A statement cancelled by either is re-raised as `Engram.Repo.ShedError`
   (429 + retry-after), not a 500: it is load, not a fault.
   """
-  @spec put_db_bounds(%{statement: pos_integer(), lock: pos_integer()} | nil) :: :ok
+  @spec put_db_bounds(
+          %{
+            required(:statement) => pos_integer(),
+            required(:lock) => pos_integer(),
+            optional(:class) => atom()
+          }
+          | nil
+        ) :: :ok
   def put_db_bounds(nil) do
     Process.delete(:engram_db_bounds)
     :ok
@@ -321,16 +328,33 @@ defmodule Engram.Repo do
   defp enter_tenant(uuid, true, %{statement: s, lock: l}),
     do: query!(@tenant_enter_gated_bounded, [uuid, "#{s}ms", "#{l}ms"], source: "tenant_enter")
 
-  # SQLSTATE 57014 (statement_timeout) and 55P03 (lock_timeout): the request's
-  # own bound shed it. Only under a request bound, so a worker that rescues
-  # `:lock_not_available` itself (NOWAIT sweeps) still sees the Postgrex error.
-  defp shed_on_bound(fun) do
+  @doc """
+  Runs `fun`, re-raising a statement the request's own bound cancelled
+  (SQLSTATE 57014 `statement_timeout`, 55P03 `lock_timeout`) as
+  `Engram.Repo.ShedError` and counting it (`[:engram, :repo, :shed]`). Only
+  under a request bound, so a worker that rescues `:lock_not_available` itself
+  (NOWAIT sweeps) still sees the Postgrex error. Every tenant transaction
+  runs through it; wrap a request-path plain `Repo.transaction` whose
+  statements run outside a tenant leg (an advisory lock) in it too.
+  """
+  def shed_on_bound(fun) do
     fun.()
   rescue
     e in Postgrex.Error ->
-      if Process.get(:engram_db_bounds) && shed_code?(e),
-        do: reraise(Engram.Repo.ShedError, [code: e.postgres.code], __STACKTRACE__),
-        else: reraise(e, __STACKTRACE__)
+      bounds = Process.get(:engram_db_bounds)
+
+      if bounds && shed_code?(e) do
+        code = e.postgres.code
+
+        :telemetry.execute([:engram, :repo, :shed], %{count: 1}, %{
+          code: code,
+          class: Map.get(bounds, :class, :unknown)
+        })
+
+        reraise Engram.Repo.ShedError, [code: code], __STACKTRACE__
+      else
+        reraise e, __STACKTRACE__
+      end
   end
 
   defp shed_code?(%Postgrex.Error{postgres: %{code: code}}),

@@ -244,12 +244,13 @@ defmodule Engram.RuntimeConfig do
   """
   @spec request_db_bounds(:auth_read | :write | :cascade) :: %{
           statement: pos_integer(),
-          lock: pos_integer()
+          lock: pos_integer(),
+          class: :auth_read | :write | :cascade
         }
   def request_db_bounds(class) when class in [:auth_read, :write, :cascade] do
     b = Application.fetch_env!(:engram, :request_db_bounds)
     lock = if class == :cascade, do: b[:cascade_lock], else: b[:lock]
-    %{statement: Keyword.fetch!(b, class), lock: lock}
+    %{statement: Keyword.fetch!(b, class), lock: lock, class: class}
   end
 
   @doc """
