@@ -47,6 +47,7 @@ defmodule Engram.Notes do
   alias Engram.Sync.Broadcast
   alias Engram.Telemetry
   alias Engram.UsageMeters
+  alias Engram.Vaults.SeqGate
   alias Engram.Vaults.Vault
 
   alias Engram.Workers.{
@@ -967,7 +968,7 @@ defmodule Engram.Notes do
       opts = prepare_expected(opts, base_attrs, user, sanitized_path, folder)
 
       result =
-        Repo.with_tenant(user.id, fn ->
+        SeqGate.with_tenant(user.id, vault.id, fn ->
           %{
             query: lookup_query,
             locked: Keyword.get(opts, :locked_note),
@@ -4100,12 +4101,6 @@ defmodule Engram.Notes do
   @spec rename_note(map(), map(), String.t(), String.t(), keyword()) ::
           {:ok, Note.t()} | {:error, :not_found | :conflict | term()}
   def rename_note(user, vault, old_path, new_path, opts \\ []) do
-    Engram.Vaults.SeqGate.with_vault(vault.id, fn ->
-      do_rename_note_gated(user, vault, old_path, new_path, opts)
-    end)
-  end
-
-  defp do_rename_note_gated(user, vault, old_path, new_path, opts) do
     new_path = PathSanitizer.sanitize(new_path)
     new_folder = Helpers.extract_folder(new_path)
     now = DateTime.utc_now()
@@ -4249,7 +4244,7 @@ defmodule Engram.Notes do
     {:ok, target_query} = note_by_path_query(user, vault, new_path, [:id])
 
     result =
-      Repo.with_tenant(user.id, fn ->
+      SeqGate.with_tenant(user.id, vault.id, fn ->
         cond do
           # No-op rename: same path. Skip target conflict check so the
           # request becomes idempotent rather than reporting a conflict
@@ -4531,20 +4526,16 @@ defmodule Engram.Notes do
   """
   @spec delete_note_reporting(map(), map(), String.t(), keyword()) :: :deleted | :absent
   def delete_note_reporting(user, vault, path, opts \\ []) do
-    Engram.Vaults.SeqGate.with_vault(vault.id, fn ->
-      do_delete_note_reporting(user, vault, path, opts)
-    end)
-  end
-
-  defp do_delete_note_reporting(user, vault, path, opts) do
     # The HMAC before the transaction: a DekCache miss unwraps through KMS.
     case note_by_path_query(user, vault, path, @note_core_fields) do
       {:ok, query} ->
-        Repo.with_tenant!(user.id, fn ->
-          case Repo.one(query) do
-            %Note{} = note -> tombstone_note(user, vault, path, note, opts)
-            nil -> :absent
-          end
+        SeqGate.with_vault(vault.id, fn ->
+          Repo.with_tenant!(user.id, fn ->
+            case Repo.one(query) do
+              %Note{} = note -> tombstone_note(user, vault, path, note, opts)
+              nil -> :absent
+            end
+          end)
         end)
 
       {:error, _} ->

@@ -2,50 +2,67 @@ defmodule Engram.Vaults.SeqGate do
   @moduledoc """
   Per-vault in-BEAM mutex taken BEFORE a write opens its DB transaction.
 
-  `Vaults.next_seq!/2` row-locks the vault, so single writes to one vault run
-  one at a time. Without this gate each waiter sits on a checked-out pool
-  connection while it waits: ~10 concurrent writes to one vault (a client
-  deleting 400 attachments one by one) empty a 10-connection pool and every
-  unrelated request dies with `dropped from queue`. Here the waiters queue in
-  this process instead and hold no connection.
+  `Vaults.next_seq!/2` row-locks the vault, so writes to one vault run one at a
+  time. Without this gate each waiter sits on a checked-out pool connection
+  while it waits: ~10 concurrent writes to one vault (a client deleting 400
+  attachments one by one) empty a 10-connection pool and every unrelated
+  request dies with `dropped from queue`. Here the waiters queue in this
+  process instead and hold no connection.
 
-  The DB row lock stays the correctness boundary. This gate only decides who
-  queues where, so it degrades open: on wait timeout or a missing gate the work
-  runs anyway.
+  Wrap the transaction itself (`with_tenant/3`, or `with_vault/2` around a
+  `Repo.transaction`), not the whole request: keep KMS/S3 work outside so it
+  does not serialize per vault.
 
-  Limits: per node. With N web nodes a vault can still have N writers inside the
-  DB, so pool use is capped at N connections for that vault instead of the
-  pool size. Not re-entrant across processes; within a process a nested call for
-  the same vault just runs, and a call already inside a DB transaction skips the
-  gate (it holds a connection and possibly the row lock, so waiting here could
-  deadlock against the holder).
+  ## Behaviour
 
-  A holder that dies is demonitored-released, so a crash cannot leak a lock.
+    * Holder death releases the lock (monitored), so a crash cannot leak it.
+    * Wait timeout SHEDS: raises `Busy` (HTTP 503). Running ungated would put
+      every late waiter back on a pool connection, recreating the incident
+      exactly when the gate matters.
+    * Gate not running (or crashed mid-wait): runs ungated. The DB row lock is
+      the correctness boundary; this gate only decides who waits where.
+    * A call already inside a DB transaction skips the gate: it holds a
+      connection and possibly the row lock, so waiting here could deadlock
+      against the holder. A nested call for the same vault in the same process
+      just runs (per-process; a Task spawned inside the gate is NOT the holder).
 
-  ## Per-user write bulkhead
+  ## Limits
 
-  The same process also counts in-flight writes per USER (`enter_user/2`,
-  `leave_user/1`, used by `EngramWeb.Plugs.WriteConcurrency`). Request-count
-  limiters never see a burst that stays under N/minute but all lands at once;
-  this caps how many pool connections one user can occupy (default: half the
-  pool, `:write_inflight_cap` overrides). Entries are monitored, so a crashed
-  request process frees its slot. Per node, like the lock: a user spread over N
-  nodes can hold N x cap.
+    * Per node: with N web nodes a vault can have N writers inside the DB, so a
+      vault's pool use is capped at N connections, not the pool size.
+    * One process for all vaults. Messages are tiny and the state is a map
+      keyed by vault, so this is far from a bottleneck at current load; a crash
+      drops the queue and waiters run ungated (see above).
+    * Gated writers: attachment upsert/delete/move, note upsert/delete/rename.
+      Batch and folder ops take the lock once per transaction and are not gated
+      yet, nor are CRDT checkpoints and Oban workers.
   """
   use GenServer
+
+  alias Engram.Repo
+
   require Logger
 
+  defmodule Busy do
+    @moduledoc "The vault's write queue did not drain within the wait budget."
+    defexception message: "vault write queue saturated, retry", plug_status: 503
+  end
+
   # Longest a queued write waits. A single seq-bumping write is milliseconds, so
-  # this is only hit under real saturation, then the write runs ungated.
+  # this is only hit under real saturation, and then we shed.
   @default_timeout 15_000
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, :ok, name: opts[:name] || __MODULE__)
+
+  @doc "`Repo.with_tenant/2` run while holding the vault's gate."
+  def with_tenant(user_id, vault_id, fun, opts \\ []),
+    do: with_vault(vault_id, fn -> Repo.with_tenant(user_id, fun) end, opts)
 
   @doc "Run `fun` holding the vault's gate. Options: `:gate`, `:timeout`."
   def with_vault(vault_id, fun, opts \\ []) do
     key = {:seq_gate, vault_id}
 
-    if Process.get(key) || Engram.Repo.in_transaction?() do
+    if Process.get(key) || Repo.in_transaction?() do
       fun.()
     else
       gate = Keyword.get(opts, :gate, __MODULE__)
@@ -61,57 +78,37 @@ defmodule Engram.Vaults.SeqGate do
             GenServer.cast(gate, {:release, vault_id, self()})
           end
 
-        :degraded ->
+        :ungated ->
           fun.()
       end
     end
   end
 
-  @doc "Max concurrent writes per user on this node (half the DB pool, min 2)."
-  def user_cap do
-    case Application.get_env(:engram, :write_inflight_cap) do
-      n when is_integer(n) and n > 0 ->
-        n
-
-      _ ->
-        pool = Keyword.get(Application.get_env(:engram, Engram.Repo, []), :pool_size, 10)
-        max(2, div(pool, 2))
-    end
-  end
-
-  @doc """
-  Take a per-user in-flight write slot for the calling process: `{:ok, ref}` or
-  `:deny` when the user is at `cap`. Degrades open (`{:ok, nil}`) if the gate is
-  down. Free it with `leave_user/1`; the caller's death frees it too.
-  """
-  def enter_user(user_id, cap \\ user_cap(), gate \\ __MODULE__) do
-    GenServer.call(gate, {:enter_user, user_id, cap}, 1_000)
-  catch
-    :exit, _ -> {:ok, nil}
-  end
-
-  def leave_user(ref, gate \\ __MODULE__)
-  def leave_user(nil, _gate), do: :ok
-  def leave_user(ref, gate), do: GenServer.cast(gate, {:leave_user, ref})
-
   defp acquire(gate, vault_id, timeout) do
     GenServer.call(gate, {:acquire, vault_id}, timeout)
   catch
-    :exit, _ ->
+    :exit, reason ->
       # Withdraw first: a timed-out waiter still in the queue would be granted
-      # the lock and never release it. Cast, so a dead gate cannot hang us.
+      # the lock and hold it until it dies. Cast, so a dead gate cannot hang us.
       try do
         GenServer.cast(gate, {:cancel, vault_id, self()})
       catch
         :exit, _ -> :ok
       end
 
-      Logger.warning("vault seq gate unavailable or saturated, writing ungated", category: :sync)
-      :degraded
+      case reason do
+        {:timeout, _} ->
+          Logger.warning("vault seq gate saturated, shedding write", category: :sync)
+          raise Busy
+
+        _ ->
+          Logger.warning("vault seq gate unavailable, writing ungated", category: :sync)
+          :ungated
+      end
   end
 
   @impl true
-  def init(:ok), do: {:ok, %{locks: %{}, refs: %{}, inflight: %{}, counts: %{}}}
+  def init(:ok), do: {:ok, %{locks: %{}, refs: %{}}}
 
   @impl true
   def handle_call({:acquire, vault_id}, {pid, _} = from, state) do
@@ -125,28 +122,7 @@ defmodule Engram.Vaults.SeqGate do
     end
   end
 
-  def handle_call({:enter_user, user_id, cap}, {pid, _}, state) do
-    if Map.get(state.counts, user_id, 0) >= cap do
-      {:reply, :deny, state}
-    else
-      ref = Process.monitor(pid)
-
-      state = %{
-        state
-        | inflight: Map.put(state.inflight, ref, user_id),
-          counts: Map.update(state.counts, user_id, 1, &(&1 + 1))
-      }
-
-      {:reply, {:ok, ref}, state}
-    end
-  end
-
   @impl true
-  def handle_cast({:leave_user, ref}, state) do
-    Process.demonitor(ref, [:flush])
-    {:noreply, leave(state, ref)}
-  end
-
   def handle_cast({:release, vault_id, pid}, state), do: {:noreply, release(state, vault_id, pid)}
 
   def handle_cast({:cancel, vault_id, pid}, state) do
@@ -167,23 +143,7 @@ defmodule Engram.Vaults.SeqGate do
   def handle_info({:DOWN, ref, :process, pid, _}, state) do
     case state.refs do
       %{^ref => vault_id} -> {:noreply, release(state, vault_id, pid)}
-      _ -> {:noreply, leave(state, ref)}
-    end
-  end
-
-  defp leave(state, ref) do
-    case Map.pop(state.inflight, ref) do
-      {nil, _} ->
-        state
-
-      {user_id, inflight} ->
-        counts =
-          case Map.fetch!(state.counts, user_id) do
-            1 -> Map.delete(state.counts, user_id)
-            n -> Map.put(state.counts, user_id, n - 1)
-          end
-
-        %{state | inflight: inflight, counts: counts}
+      _ -> {:noreply, state}
     end
   end
 

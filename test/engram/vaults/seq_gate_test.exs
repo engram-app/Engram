@@ -1,98 +1,94 @@
 defmodule Engram.Vaults.SeqGateTest do
   use Engram.DataCase, async: false
 
-  alias Engram.Attachments
   alias Engram.Vaults.SeqGate
 
-  setup do
-    prev = Application.get_env(:engram, :storage)
-    Application.put_env(:engram, :storage, Engram.MockStorage)
-    on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
-    Mox.stub(Engram.MockStorage, :put, fn _k, _b, _o -> :ok end)
-
-    user = insert(:user)
-    vault = insert(:vault, user: user)
-    %{user: user, vault: vault}
-  end
-
-  # Holds the vault's gate (what a long seq-lock holder looks like to waiters)
-  # until told to let go.
-  defp hold_gate(vault_id) do
+  # Holds the vault's gate from another process until told to let go.
+  defp hold_gate(vault_id, opts \\ []) do
     parent = self()
 
     task =
       Task.async(fn ->
-        SeqGate.with_vault(vault_id, fn ->
-          send(parent, :held)
-          receive do: (:release -> :ok)
-        end)
+        SeqGate.with_vault(
+          vault_id,
+          fn ->
+            send(parent, :held)
+            receive do: (:release -> :ok)
+          end,
+          opts
+        )
       end)
 
     assert_receive :held, 1_000
     task
   end
 
-  # RED on main (deletes run straight into the DB and complete while the vault is
-  # contended), GREEN with the gate: waiters queue in-BEAM BEFORE
-  # Repo.with_tenant, so they hold no pool connection while the seq lock is busy.
-  test "50 concurrent single deletes wait outside the DB while the vault is contended", %{
-    user: user,
-    vault: vault
-  } do
-    for i <- 1..50 do
-      {:ok, _} =
-        Attachments.upsert_attachment(user, vault, %{
-          "path" => "a/#{i}.png",
-          "content_base64" => Base.encode64("x")
-        })
-    end
+  defp waiter(vault_id, opts \\ []),
+    do: Task.async(fn -> SeqGate.with_vault(vault_id, fn -> :ran end, opts) end)
 
-    holder = hold_gate(vault.id)
+  setup do: %{vault_id: Ecto.UUID.generate()}
 
-    deletes =
-      for i <- 1..50 do
-        Task.async(fn -> Attachments.delete_attachment(user, vault, "a/#{i}.png") end)
-      end
+  test "serializes one vault but not different vaults", %{vault_id: v} do
+    holder = hold_gate(v)
+    assert SeqGate.with_vault(Ecto.UUID.generate(), fn -> :ran end) == :ran
 
-    assert Task.yield_many(deletes, 300) |> Enum.all?(fn {_t, res} -> is_nil(res) end),
-           "deletes ran while the vault gate was held (they would hold pool connections)"
-
-    # Unrelated work on the same repo is not starved.
-    assert {:ok, _} = Engram.Repo.with_tenant(user.id, fn -> 1 end)
-
+    w = waiter(v)
+    assert Task.yield(w, 100) == nil
     send(holder.pid, :release)
-    assert Enum.all?(Task.await_many(deletes, 10_000), &(&1 == :ok))
-    {:ok, metas} = Attachments.list_attachments(user, vault)
-    assert metas == []
+    assert Task.await(w) == :ran
   end
 
-  test "serializes one vault but not different vaults", %{vault: vault} do
-    holder = hold_gate(vault.id)
-    other = Ecto.UUID.generate()
-
-    assert :ran = SeqGate.with_vault(other, fn -> :ran end)
-
-    waiter = Task.async(fn -> SeqGate.with_vault(vault.id, fn -> :ran end) end)
-    assert Task.yield(waiter, 100) == nil
-    send(holder.pid, :release)
-    assert Task.await(waiter) == :ran
-  end
-
-  test "a crashed holder releases the lock", %{vault: vault} do
-    holder = hold_gate(vault.id)
-    waiter = Task.async(fn -> SeqGate.with_vault(vault.id, fn -> :ran end) end)
-    assert Task.yield(waiter, 100) == nil
+  test "a crashed holder releases the lock", %{vault_id: v} do
+    holder = hold_gate(v)
+    w = waiter(v)
+    assert Task.yield(w, 100) == nil
 
     Process.unlink(holder.pid)
     Process.exit(holder.pid, :kill)
-    assert Task.await(waiter) == :ran
+    assert Task.await(w) == :ran
   end
 
-  test "a wait timeout degrades open and leaves no lock behind", %{vault: vault} do
-    holder = hold_gate(vault.id)
-    assert SeqGate.with_vault(vault.id, fn -> :ran end, timeout: 50) == :ran
+  test "a raising holder releases the lock", %{vault_id: v} do
+    assert_raise RuntimeError, fn -> SeqGate.with_vault(v, fn -> raise "boom" end) end
+    assert SeqGate.with_vault(v, fn -> :ran end) == :ran
+  end
+
+  # Review M2: degrading open on timeout put every late waiter back on a pool
+  # connection. It must shed instead, and leave no queued entry behind.
+  test "a wait timeout sheds with Busy (503) and leaves nothing queued", %{vault_id: v} do
+    holder = hold_gate(v)
+
+    e = assert_raise SeqGate.Busy, fn -> SeqGate.with_vault(v, fn -> :ran end, timeout: 50) end
+    assert Plug.Exception.status(e) == 503
+
     send(holder.pid, :release)
     Task.await(holder)
-    assert SeqGate.with_vault(vault.id, fn -> :again end) == :again
+    # Had the timed-out caller stayed queued it would now hold the lock forever.
+    assert SeqGate.with_vault(v, fn -> :again end, timeout: 500) == :again
+  end
+
+  test "a waiter killed while queued is skipped", %{vault_id: v} do
+    holder = hold_gate(v)
+    dead = waiter(v)
+    Process.sleep(20)
+    Process.unlink(dead.pid)
+    Process.exit(dead.pid, :kill)
+
+    send(holder.pid, :release)
+    Task.await(holder)
+    assert SeqGate.with_vault(v, fn -> :ran end, timeout: 500) == :ran
+  end
+
+  test "nested in-process and in-transaction calls do not wait on the gate", %{vault_id: v} do
+    assert SeqGate.with_vault(v, fn -> SeqGate.with_vault(v, fn -> :inner end) end) == :inner
+
+    holder = hold_gate(v)
+    {:ok, res} = Engram.Repo.transaction(fn -> SeqGate.with_vault(v, fn -> :ran end) end)
+    assert res == :ran
+    send(holder.pid, :release)
+  end
+
+  test "a missing gate runs ungated", %{vault_id: v} do
+    assert SeqGate.with_vault(v, fn -> :ran end, gate: :no_such_gate) == :ran
   end
 end
