@@ -338,6 +338,8 @@ defmodule Engram.Application do
       # Bounds concurrent catch-up page builds. Absent, merged_changes_page
       # degrades open rather than failing, so ordering here is not critical.
       Engram.Sync.PageGate,
+      # Per-vault write queue so seq-lock waiters hold no pool connection.
+      Engram.Vaults.SeqGate,
       # Dedicated LISTEN/NOTIFY connection (Engram.Cache.Listener) so raw-SQL
       # writes (trigger -> pg_notify) evict caches on every node. It forwards
       # to Cache.Server by name, dropping messages while the server is down.

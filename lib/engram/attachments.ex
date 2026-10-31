@@ -33,6 +33,7 @@ defmodule Engram.Attachments do
   alias Engram.Storage
   alias Engram.Storage.MimeWhitelist
   alias Engram.Sync.Broadcast
+  alias Engram.Vaults.SeqGate
   alias Engram.Workers.ReconcileAttachmentBlobs
 
   @doc """
@@ -705,7 +706,9 @@ defmodule Engram.Attachments do
   @spec delete_attachment_reporting(Engram.Accounts.User.t(), map(), String.t(), keyword()) ::
           :deleted | :absent | {:error, term()}
   def delete_attachment_reporting(user, vault, path, opts \\ []) do
-    do_delete_attachment(fresh_user(user), vault, path, opts)
+    SeqGate.with_vault(vault.id, fn ->
+      do_delete_attachment(fresh_user(user), vault, path, opts)
+    end)
   end
 
   # Soft-deletes one attachment: `:deleted` when a live row transitioned,
@@ -826,6 +829,12 @@ defmodule Engram.Attachments do
           {:ok, Attachment.t()}
           | {:error, :conflict | :not_found | :feature_not_available | term()}
   def move_attachment(user, vault, old_path, new_path) do
+    SeqGate.with_vault(vault.id, fn ->
+      do_move_attachment_gated(user, vault, old_path, new_path)
+    end)
+  end
+
+  defp do_move_attachment_gated(user, vault, old_path, new_path) do
     # `attachments_enabled` is gated HERE, not in the caller. REST
     # (`AttachmentsController.rename/2`) and MCP (the `move_attachment` tool)
     # both land on this function; while the check lived in the controller, only

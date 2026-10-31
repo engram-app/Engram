@@ -4100,6 +4100,12 @@ defmodule Engram.Notes do
   @spec rename_note(map(), map(), String.t(), String.t(), keyword()) ::
           {:ok, Note.t()} | {:error, :not_found | :conflict | term()}
   def rename_note(user, vault, old_path, new_path, opts \\ []) do
+    Engram.Vaults.SeqGate.with_vault(vault.id, fn ->
+      do_rename_note_gated(user, vault, old_path, new_path, opts)
+    end)
+  end
+
+  defp do_rename_note_gated(user, vault, old_path, new_path, opts) do
     new_path = PathSanitizer.sanitize(new_path)
     new_folder = Helpers.extract_folder(new_path)
     now = DateTime.utc_now()
@@ -4525,6 +4531,12 @@ defmodule Engram.Notes do
   """
   @spec delete_note_reporting(map(), map(), String.t(), keyword()) :: :deleted | :absent
   def delete_note_reporting(user, vault, path, opts \\ []) do
+    Engram.Vaults.SeqGate.with_vault(vault.id, fn ->
+      do_delete_note_reporting(user, vault, path, opts)
+    end)
+  end
+
+  defp do_delete_note_reporting(user, vault, path, opts) do
     # The HMAC before the transaction: a DekCache miss unwraps through KMS.
     case note_by_path_query(user, vault, path, @note_core_fields) do
       {:ok, query} ->
