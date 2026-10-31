@@ -192,6 +192,9 @@ async function authFetch(
 		const token = await getAuthToken();
 		if (token) {
 			headers.set("Authorization", `Bearer ${token}`);
+		} else {
+			// Signed out during a busy wait: do not resend the old session's token.
+			headers.delete("Authorization");
 		}
 	};
 	await authorize();
@@ -258,7 +261,9 @@ async function authFetch(
 		// An abort ends the wait early; the resend then rejects with the
 		// AbortError through attemptFetch, like any aborted request.
 		await sleep(busyWaitMs(waitS), options.signal).catch(() => undefined);
-		await authorize();
+		if (!options.signal?.aborted) {
+			await authorize();
+		}
 		const next = await attemptFetch(1);
 		({ response } = next);
 		resentAfterNetworkError ||= next.attempt === 2;
@@ -319,8 +324,6 @@ async function authFetch(
 	return response;
 }
 
-/** The attempt that threw `err` will be retried: its failure is not final, so
- *  drop its report. The final attempt's own error reports if it fails too. */
 /** True for a 429 this client already waited out and resent (see busyRetried). */
 export function isBusyRetriedByClient(err: unknown): boolean {
 	return typeof err === "object" && err !== null && busyRetried.has(err);
@@ -343,6 +346,8 @@ export function runInQueryAttempt<T>(attempt: QueryAttempt, fn: () => T): T {
 	}
 }
 
+/** The attempt that threw `err` will be retried: its failure is not final, so
+ *  drop its report. The final attempt's own error reports if it fails too. */
 export function discardRetriedFailure(err: unknown) {
 	if (typeof err === "object" && err !== null) {
 		pendingReports.delete(err);

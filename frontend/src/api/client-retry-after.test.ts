@@ -182,4 +182,41 @@ describe("api client retries a 429 that carries retry-after", () => {
 		expect(observer.getCurrentResult().status).toBe("error");
 		expect(fetchMock).toHaveBeenCalledTimes(3);
 	});
+
+	it("drops the Authorization header when the user signed out during the wait", async () => {
+		const tokens: (string | null)[] = ["t1", null];
+		setTokenGetter(() => Promise.resolve(tokens.shift() ?? null));
+		const sent: (string | null)[] = [];
+		const replies = [tooBusy("2"), ok()];
+		globalThis.fetch = vi.fn().mockImplementation((_url, init?: RequestInit) => {
+			sent.push(new Headers(init?.headers).get("Authorization"));
+			return Promise.resolve(replies.shift());
+		});
+
+		const result = api.get("/notes");
+		await vi.advanceTimersByTimeAsync(2000);
+		await result;
+		expect(sent).toEqual(["Bearer t1", null]);
+	});
+
+	it("does not fetch a token for a resend the caller already aborted", async () => {
+		const getter = vi.fn(() => Promise.resolve("t"));
+		setTokenGetter(getter);
+		globalThis.fetch = vi
+			.fn()
+			.mockImplementation((_url, init?: RequestInit) =>
+				init?.signal?.aborted
+					? Promise.reject(new DOMException("aborted", "AbortError"))
+					: Promise.resolve(tooBusy("30")),
+			);
+		const ctl = new AbortController();
+
+		const result = api.get("/notes", { signal: ctl.signal });
+		const settled = expect(result).rejects.toMatchObject({ name: "AbortError" });
+		await vi.advanceTimersByTimeAsync(10);
+		ctl.abort();
+		await vi.advanceTimersByTimeAsync(0);
+		await settled;
+		expect(getter).toHaveBeenCalledTimes(1);
+	});
 });
