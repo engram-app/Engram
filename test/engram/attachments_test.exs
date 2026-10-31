@@ -279,7 +279,12 @@ defmodule Engram.AttachmentsTest do
         value: %{"v" => 100_000_000}
       )
 
-      queries = upload_queries(user, vault)
+      # From the locked transaction on (the pre-lock window sums once too).
+      queries =
+        user
+        |> upload_queries(vault)
+        |> Enum.drop_while(&(not (&1 =~ "pg_advisory_xact_lock")))
+
       sum_at = Enum.find_index(queries, &(&1 =~ ~r/sum\(.*FROM "attachments"/is))
       vault_at = Enum.find_index(queries, &(&1 =~ ~r/FROM vaults .*FOR NO KEY UPDATE/))
 
