@@ -104,7 +104,7 @@ defmodule Engram.NotesFanoutBoundsTest do
 
       on_exit(fn -> Application.delete_env(:engram, :checkpoint_interleave_hook) end)
 
-      assert {:ok, _} = Notes.rename_folder(user, vault, "Docs", "Archive")
+      assert {:ok, _} = Folders.rename(user, vault, "Docs", "Archive")
       assert_received :moved_mid_cascade
       assert {:ok, %{path: "Elsewhere/kept.md"}} = Notes.get_note_by_id(user, vault, moved.id)
     end
@@ -138,7 +138,7 @@ defmodule Engram.NotesFanoutBoundsTest do
         {:ok, _} = Notes.rename_note(user, vault, moved.path, "Elsewhere/kept.md")
       end)
 
-      assert {:ok, _} = Notes.rename_folder(user, vault, "Docs", "Archive")
+      assert {:ok, _} = Folders.rename(user, vault, "Docs", "Archive")
       assert index_entries(user, vault)["Elsewhere/kept.md"]["note_id"] == moved.id
 
       :ok =
@@ -166,7 +166,7 @@ defmodule Engram.NotesFanoutBoundsTest do
             end)
         end)
 
-      assert {:ok, _} = Notes.rename_folder(user, vault, "Docs", "Archive")
+      assert {:ok, _} = Folders.rename(user, vault, "Docs", "Archive")
       # Sealed twice: the first write missed the fence and retried.
       assert Agent.get(fired, & &1) == 2
     end
@@ -192,8 +192,80 @@ defmodule Engram.NotesFanoutBoundsTest do
       on_exit(fn -> Application.delete_env(:engram, :checkpoint_interleave_hook) end)
 
       assert_raise Engram.Vaults.SeqGate.BusyError, fn ->
-        Notes.rename_folder(user, vault, "Docs", "Archive")
+        Folders.rename(user, vault, "Docs", "Archive")
       end
+    end
+
+    # The batch folder move shares one scan across its markers and runs inside
+    # Folders.batch_move/4's transaction: a miss retries from a fresh scan.
+    test "a batch folder move whose scan went stale retries and moves", ctx do
+      %{user: user, vault: vault} = ctx
+      [touched | _] = seed(user, vault, "Docs")
+      {:ok, marker} = Notes.create_folder_marker(user, vault, "Docs")
+
+      fired =
+        arm_once(:folder_rename_seal, fn ->
+          {:ok, _} =
+            Repo.with_tenant(user.id, fn ->
+              Repo.update_all(from(n in Engram.Notes.Note, where: n.id == ^touched.id),
+                set: [crdt_state_nonce: :crypto.strong_rand_bytes(12)]
+              )
+            end)
+        end)
+
+      assert {:ok, %{notes: 1}} = Folders.batch_move(user, vault, [marker.id], {:path, "Archive"})
+      assert Agent.get(fired, & &1) == 2
+      assert {:ok, %{path: "Archive/Docs/" <> _}} = Notes.get_note_by_id(user, vault, touched.id)
+    end
+
+    # A single rename that CLAIMED before the cascade's miss and WROTE its row
+    # after it: undoing the cascade's claim from the rows' paths put the note
+    # back where its row was, and once the row landed projection moved it back.
+    # The cascade now checks its fence before it claims, so a miss leaves no
+    # claim of its own to undo.
+    test "a rename claimed before a cascade miss and written after it survives", ctx do
+      %{user: user, vault: vault} = ctx
+      [moved, other | _] = seed(user, vault, "Docs")
+      {:ok, calls} = Agent.start_link(fn -> %{} end)
+
+      Application.put_env(:engram, :checkpoint_interleave_hook, fn point ->
+        n =
+          Agent.get_and_update(
+            calls,
+            &{Map.get(&1, point, 0), Map.update(&1, point, 1, fn c -> c + 1 end)}
+          )
+
+        case {point, n} do
+          # rename_note's claim, and an unrelated row moving: the cascade misses.
+          {:folder_rename_seal, 0} ->
+            :ok = Engram.Notes.Identity.claim(user, vault.id, [{"Elsewhere/kept.md", moved.id}])
+
+            {:ok, _} =
+              Repo.with_tenant(user.id, fn ->
+                Repo.update_all(from(n in Engram.Notes.Note, where: n.id == ^other.id),
+                  set: [crdt_state_nonce: :crypto.strong_rand_bytes(12)]
+                )
+              end)
+
+          # rename_note's row lands before the retry reads.
+          {:folder_rename_scan, 1} ->
+            {:ok, _} =
+              Notes.rename_note(user, vault, moved.path, "Elsewhere/kept.md", index: :skip)
+
+          _ ->
+            :ok
+        end
+      end)
+
+      on_exit(fn -> Application.delete_env(:engram, :checkpoint_interleave_hook) end)
+
+      assert {:ok, _} = Folders.rename(user, vault, "Docs", "Archive")
+      assert index_entries(user, vault)["Elsewhere/kept.md"]["note_id"] == moved.id
+
+      :ok =
+        perform_job(Engram.Workers.ProjectVaultIndex, %{user_id: user.id, vault_id: vault.id})
+
+      assert {:ok, %{path: "Elsewhere/kept.md"}} = Notes.get_note_by_id(user, vault, moved.id)
     end
 
     # The fan-out is an outbox: it commits with the rows it covers, so a
