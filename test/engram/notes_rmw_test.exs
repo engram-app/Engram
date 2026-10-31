@@ -33,6 +33,18 @@ defmodule Engram.NotesRmwTest do
     refute_received {:rebuilt_in_txn, _}
   end
 
+  # Outside a transaction no lock could outlive the call, so a miss must not
+  # open a locked transaction just to find nothing.
+  test "outside a transaction a miss takes no vault lock", %{user: user, vault: vault} do
+    {{{:error, :not_found}, nil}, queries} =
+      Engram.QueryRecorder.record(fn ->
+        Notes.rmw_note(user, vault, "missing.md", & &1, actor: "api")
+      end)
+
+    me = self()
+    refute Enum.any?(queries, &(&1.pid == me and &1.sql =~ "FOR NO KEY UPDATE"))
+  end
+
   test "inside a caller's transaction a miss still returns holding the vault lock", ctx do
     %{user: user, vault: vault} = ctx
 
