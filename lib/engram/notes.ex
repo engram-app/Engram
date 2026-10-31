@@ -3404,7 +3404,7 @@ defmodule Engram.Notes do
     # its transaction) seeds the memo, so an unchanged note is not re-parsed.
     # Its note and tail are the optimistic snapshot, so the note is read once.
     {rebuilt, opts} = Keyword.pop(opts, :rebuilt)
-    snapshot = rebuilt && {:ok, rebuilt.note, rebuilt.tail}
+    snapshot = rebuilt && {:ok, rebuilt.note, {:replayed, rebuilt.tail, rebuilt.authority}}
     if rebuilt, do: Process.put(key, {rebuilt.text, rebuilt.result})
 
     try do
@@ -3436,29 +3436,47 @@ defmodule Engram.Notes do
   @spec rmw_prepare(map(), map(), String.t(), (String.t() -> term())) :: {:ok, map()} | :none
   def rmw_prepare(user, vault, path, rebuild) do
     with {:ok, note, tail} <- get_note_with_tail(user, vault, path),
-         {:ok, current, _doc} <- authority(user, note, tail) do
-      {:ok, %{note: note, tail: tail, text: current, result: rebuild.(current)}}
+         {:ok, current, _doc} = authority <- authority(user, note, tail) do
+      # The replayed doc rides along, so the transaction does not decrypt and
+      # replay the same snapshot again (rebuild/1 never mutates it).
+      {:ok,
+       %{note: note, tail: tail, authority: authority, text: current, result: rebuild.(current)}}
     else
       _ -> :none
     end
   end
 
-  # Inside a transaction a lost race or a miss continues locked in it;
-  # outside one it returns :locked for the caller to open one.
+  # Inside a transaction a lost race or a miss continues locked in it.
+  # Outside one a lost race returns :locked for the caller to open one, and a
+  # miss is answered as is: no lock would outlive the call anyway, so a
+  # caller that creates on a miss opens its own transaction (REST append).
   defp rmw_optimistic(user, vault, path, rebuild, opts, snapshot) do
     with {:ok, note, tail} <- snapshot || get_note_with_tail(user, vault, path),
          {{:error, stale}, _} when stale in [:stale_note, :stale_tail] <-
            rmw_attempt(user, vault, path, {note, tail}, rebuild, [expected_note: note] ++ opts) do
       locked_or_return(user, vault, path, rebuild, opts)
     else
-      {:error, :not_found} -> locked_or_return(user, vault, path, rebuild, opts)
-      done -> done
+      {:error, :not_found} = missing ->
+        if Repo.in_transaction?(),
+          do: rmw_locked(user, vault, path, rebuild, opts),
+          else: {missing, nil}
+
+      done ->
+        done
     end
   end
 
   defp locked_or_return(user, vault, path, rebuild, opts) do
     if Repo.in_transaction?(), do: rmw_locked(user, vault, path, rebuild, opts), else: :locked
   end
+
+  # rmw_prepare/4 already replayed this snapshot; :read reads the tail now.
+  defp attempt_authority(_user, _note, {:replayed, _tail, authority}), do: authority
+
+  defp attempt_authority(user, note, :read),
+    do: authority(user, note, CrdtPersistence.tail_rows(note.id, note.vault_id))
+
+  defp attempt_authority(user, note, tail), do: authority(user, note, tail)
 
   defp memo_rebuild(rebuild, key) do
     fn current ->
@@ -3498,12 +3516,7 @@ defmodule Engram.Notes do
   end
 
   defp rmw_attempt(user, vault, path, {note, tail}, rebuild, opts) do
-    tail =
-      if tail == :read,
-        do: CrdtPersistence.tail_rows(note.id, note.vault_id),
-        else: tail
-
-    case authority(user, note, tail) do
+    case attempt_authority(user, note, tail) do
       {:ok, current, doc} ->
         rmw_write(
           user,
