@@ -63,9 +63,8 @@ defmodule Engram.Vaults.SeqGate do
     defexception message: "vault write queue saturated, retry", plug_status: 429
   end
 
-  # Longest a queued write waits. A single seq-bumping write is milliseconds, so
-  # this is only hit under real saturation, and then we shed.
-  @default_timeout 15_000
+  # The wait budget lives in config (`:seq_gate_wait_ms`, config/config.exs),
+  # with the constraint it must respect documented there.
   # Pause between retries while a crashed partition restarts.
   @restart_backoff_ms 10
 
@@ -86,7 +85,7 @@ defmodule Engram.Vaults.SeqGate do
       fun.()
     else
       gate = Keyword.get(opts, :gate, __MODULE__)
-      timeout = Keyword.get(opts, :timeout, @default_timeout)
+      timeout = Keyword.get_lazy(opts, :timeout, &wait_ms/0)
       started = System.monotonic_time()
       result = acquire(gate, vault_id, started + ms_to_native(timeout))
       now = System.monotonic_time()
@@ -116,6 +115,20 @@ defmodule Engram.Vaults.SeqGate do
         cast(gate, vault_id, {:release, vault_id, self()})
       end
     end
+  end
+
+  @doc "Longest a write queues for its vault's gate before shedding with `Busy`."
+  def wait_ms, do: Application.fetch_env!(:engram, :seq_gate_wait_ms)
+
+  @doc """
+  Whether the vault's gate has writers queued behind its holder on this node.
+  Cheap (one call to the vault's partition); `false` when the gate is down.
+  For callers that would otherwise do expensive work only to queue and shed.
+  """
+  def contended?(vault_id, gate \\ __MODULE__) do
+    GenServer.call(via(gate, vault_id), {:contended?, vault_id}, 1_000)
+  catch
+    :exit, _ -> false
   end
 
   @doc "Held and queued writes across this node's partitions."
@@ -170,23 +183,35 @@ defmodule Engram.Vaults.SeqGate do
   defp ms_to_native(ms), do: System.convert_time_unit(ms, :millisecond, :native)
   defp native_to_ms(n), do: System.convert_time_unit(n, :native, :millisecond)
 
+  # State per partition: `locks` maps vault_id to
+  # `%{holder, ref, queue, waiters}`. `queue` keeps arrival order (pids);
+  # `waiters` (pid => {from, monitor_ref}) is the live set. A cancelled or dead
+  # waiter is removed from `waiters` only (O(1)); `pump` skips queue entries
+  # with no live waiter, so neither cancel nor death scans the queue. `refs`
+  # maps every monitor to `vault_id` (holder) or `{:waiter, vault_id, pid}`.
   @impl true
   def init(:ok), do: {:ok, %{locks: %{}, refs: %{}}}
 
   @impl true
   def handle_call({:acquire, vault_id}, {pid, _} = from, state) do
     case state.locks do
-      %{^vault_id => lock} ->
-        lock = %{lock | waiting: :queue.in(from, lock.waiting)}
-        {:noreply, put_in(state.locks[vault_id], lock)}
-
-      _ ->
-        {:reply, :ok, grant(state, vault_id, pid, :queue.new())}
+      %{^vault_id => lock} -> {:noreply, enqueue(state, vault_id, lock, pid, from)}
+      _ -> {:reply, :ok, grant(state, vault_id, pid, :queue.new(), %{})}
     end
   end
 
+  def handle_call({:contended?, vault_id}, _from, state) do
+    contended =
+      case state.locks do
+        %{^vault_id => %{waiters: w}} -> map_size(w) > 0
+        _ -> false
+      end
+
+    {:reply, contended, state}
+  end
+
   def handle_call(:depth, _from, state) do
-    waiting = state.locks |> Map.values() |> Enum.map(&:queue.len(&1.waiting)) |> Enum.sum()
+    waiting = state.locks |> Map.values() |> Enum.map(&map_size(&1.waiters)) |> Enum.sum()
     {:reply, %{held: map_size(state.locks), waiting: waiting}, state}
   end
 
@@ -194,30 +219,57 @@ defmodule Engram.Vaults.SeqGate do
   def handle_cast({:release, vault_id, pid}, state), do: {:noreply, release(state, vault_id, pid)}
 
   def handle_cast({:cancel, vault_id, pid}, state) do
-    state =
-      case state.locks do
-        %{^vault_id => lock} ->
-          waiting = :queue.filter(fn {w, _} -> w != pid end, lock.waiting)
-          put_in(state.locks[vault_id], %{lock | waiting: waiting})
-
-        _ ->
-          state
-      end
-
-    {:noreply, release(state, vault_id, pid)}
+    {:noreply, state |> drop_waiter(vault_id, pid) |> release(vault_id, pid)}
   end
 
   @impl true
   def handle_info({:DOWN, ref, :process, pid, _}, state) do
     case state.refs do
+      %{^ref => {:waiter, vault_id, ^pid}} -> {:noreply, drop_waiter(state, vault_id, pid)}
       %{^ref => vault_id} -> {:noreply, release(state, vault_id, pid)}
       _ -> {:noreply, state}
     end
   end
 
-  defp grant(state, vault_id, pid, waiting) do
+  # A pid already waiting (a stale entry from a timed-out call) keeps its place
+  # and monitor; the reply goes to its newest `from`.
+  defp enqueue(state, vault_id, lock, pid, from) do
+    {lock, refs} =
+      case lock.waiters do
+        %{^pid => {_old, mref}} ->
+          {%{lock | waiters: Map.put(lock.waiters, pid, {from, mref})}, state.refs}
+
+        _ ->
+          mref = Process.monitor(pid)
+
+          {%{
+             lock
+             | queue: :queue.in(pid, lock.queue),
+               waiters: Map.put(lock.waiters, pid, {from, mref})
+           }, Map.put(state.refs, mref, {:waiter, vault_id, pid})}
+      end
+
+    %{state | locks: Map.put(state.locks, vault_id, lock), refs: refs}
+  end
+
+  defp drop_waiter(state, vault_id, pid) do
+    with %{^vault_id => lock} <- state.locks,
+         {{_from, mref}, waiters} <- Map.pop(lock.waiters, pid) do
+      Process.demonitor(mref, [:flush])
+
+      %{
+        state
+        | locks: Map.put(state.locks, vault_id, %{lock | waiters: waiters}),
+          refs: Map.delete(state.refs, mref)
+      }
+    else
+      _ -> state
+    end
+  end
+
+  defp grant(state, vault_id, pid, queue, waiters) do
     ref = Process.monitor(pid)
-    lock = %{holder: pid, ref: ref, waiting: waiting}
+    lock = %{holder: pid, ref: ref, queue: queue, waiters: waiters}
 
     %{
       state
@@ -229,7 +281,7 @@ defmodule Engram.Vaults.SeqGate do
   # Only the current holder can release; a stale cast is ignored.
   defp release(state, vault_id, pid) do
     case state.locks do
-      %{^vault_id => %{holder: ^pid, ref: ref, waiting: waiting}} ->
+      %{^vault_id => %{holder: ^pid, ref: ref} = lock} ->
         Process.demonitor(ref, [:flush])
 
         state = %{
@@ -238,25 +290,34 @@ defmodule Engram.Vaults.SeqGate do
             refs: Map.delete(state.refs, ref)
         }
 
-        pump(state, vault_id, waiting)
+        pump(state, vault_id, lock.queue, lock.waiters)
 
       _ ->
         state
     end
   end
 
-  # Hand the lock to the next live waiter; skip ones that died while queued.
-  defp pump(state, vault_id, waiting) do
-    case :queue.out(waiting) do
+  # Hand the lock to the next live waiter, skipping cancelled or dead entries.
+  defp pump(state, vault_id, queue, waiters) do
+    case :queue.out(queue) do
       {:empty, _} ->
         state
 
-      {{:value, {pid, _} = from}, rest} ->
-        if Process.alive?(pid) do
-          GenServer.reply(from, :ok)
-          grant(state, vault_id, pid, rest)
-        else
-          pump(state, vault_id, rest)
+      {{:value, pid}, rest} ->
+        case Map.pop(waiters, pid) do
+          {nil, _} ->
+            pump(state, vault_id, rest, waiters)
+
+          {{from, mref}, waiters} ->
+            Process.demonitor(mref, [:flush])
+            state = %{state | refs: Map.delete(state.refs, mref)}
+
+            if Process.alive?(pid) do
+              GenServer.reply(from, :ok)
+              grant(state, vault_id, pid, rest, waiters)
+            else
+              pump(state, vault_id, rest, waiters)
+            end
         end
     end
   end

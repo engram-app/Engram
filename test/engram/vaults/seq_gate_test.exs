@@ -161,4 +161,55 @@ defmodule Engram.Vaults.SeqGateTest do
     send(holder.pid, :release)
     Task.await(w)
   end
+
+  # Delta 2 M1: the plugin aborts gated requests at 15s (src/api.ts
+  # requestTimeoutMs). A server wait at or above it turns the 429 into a client
+  # network error that counts toward parking the write.
+  @plugin_request_timeout_ms 15_000
+  test "the wait budget stays clearly under the plugin's request timeout" do
+    assert SeqGate.wait_ms() <= @plugin_request_timeout_ms - 5_000
+  end
+
+  # Delta 2 L1: note upsert runs the CRDT merge in its transaction; gating it
+  # serialized merges per vault. Fails if someone re-wraps it.
+  test "note upsert does not wait on a held vault gate" do
+    user = insert(:user)
+    vault = insert(:vault, user: user)
+    holder = hold_gate(vault.id)
+
+    task =
+      Task.async(fn ->
+        Engram.Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "x"},
+          actor: "test"
+        )
+      end)
+
+    assert {:ok, {:ok, _note}} = Task.yield(task, 3_000), "upsert_note queued on the vault gate"
+    send(holder.pid, :release)
+  end
+
+  # Delta 2 L4: a dead or cancelled waiter leaves the gauge at once, without
+  # waiting for the queue to drain past it.
+  test "a dead waiter stops counting as waiting immediately", %{vault_id: v} do
+    holder = hold_gate(v)
+    dead = waiter(v)
+    wait_for_waiting(1)
+    Process.unlink(dead.pid)
+    Process.exit(dead.pid, :kill)
+    Process.sleep(20)
+    assert SeqGate.queue_depth().waiting == 0
+    send(holder.pid, :release)
+  end
+
+  test "contended? is true only while writers queue behind the holder", %{vault_id: v} do
+    refute SeqGate.contended?(v)
+    holder = hold_gate(v)
+    refute SeqGate.contended?(v)
+    w = waiter(v)
+    wait_for_waiting(1)
+    assert SeqGate.contended?(v)
+    send(holder.pid, :release)
+    Task.await(w)
+    refute SeqGate.contended?(v)
+  end
 end
