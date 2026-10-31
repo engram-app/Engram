@@ -10,6 +10,7 @@ defmodule EngramWeb.McpController do
   alias Engram.Abuse.OriginStats
   alias Engram.Analytics.McpClient
   alias Engram.Crypto
+  alias Engram.Logger.Metadata
   alias Engram.MCP.Handlers
   alias Engram.MCP.Prompts
   alias Engram.MCP.Resources
@@ -568,7 +569,7 @@ defmodule EngramWeb.McpController do
         _ -> %{}
       end
 
-    Engram.Logger.Metadata.with_category(:info, :lifecycle,
+    Metadata.with_category(:info, :lifecycle,
       mcp_protocol_requested: bounded(params["protocolVersion"]),
       mcp_client_name: bounded(client["name"]),
       mcp_client_version: bounded(client["version"]),
@@ -1240,7 +1241,7 @@ defmodule EngramWeb.McpController do
   defp log_shed(tool, reason) do
     Logger.warning(
       "mcp tool call shed",
-      Engram.Logger.Metadata.with_category(:warning, :http, tool: tool.name, reason: reason)
+      Metadata.with_category(:warning, :http, tool: tool.name, reason: reason)
     )
   end
 
@@ -1300,7 +1301,7 @@ defmodule EngramWeb.McpController do
 
       Logger.error(
         "mcp tool dispatch trapped",
-        Engram.Logger.Metadata.with_category(:error, :http,
+        Metadata.with_category(:error, :http,
           tool: tool.name,
           kind: kind,
           reason_label: Engram.Telemetry.error_kind(reason)

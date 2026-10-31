@@ -154,7 +154,6 @@ defmodule Engram.RepoStatementTimeoutTest do
   test "the bounds come from the one config location" do
     assert %{statement: 3_000, lock: 3_000} = Engram.RuntimeConfig.request_db_bounds(:auth_read)
     assert %{statement: 5_000, lock: 3_000} = Engram.RuntimeConfig.request_db_bounds(:write)
-    assert %{statement: 15_000, lock: 10_000} = Engram.RuntimeConfig.request_db_bounds(:cascade)
   end
 
   describe "route classes" do
@@ -206,15 +205,6 @@ defmodule Engram.RepoStatementTimeoutTest do
 
       assert enters != []
       assert Enum.all?(enters, &match?([_, "5000ms", "3000ms"], &1)), inspect(enters)
-    end
-
-    test "a vault delete keeps the cascade bound", %{conn: conn, user: user} do
-      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
-      {:ok, other, _} = Engram.Vaults.register_vault(user, "Other", Ecto.UUID.generate())
-
-      enters = tenant_enters(fn -> delete(conn, ~p"/api/vaults/#{other.id}") end)
-      assert enters != []
-      assert Enum.any?(enters, &match?([_, "15000ms", "10000ms"], &1)), inspect(enters)
     end
   end
 end
