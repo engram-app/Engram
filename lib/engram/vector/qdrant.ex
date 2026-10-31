@@ -934,9 +934,9 @@ defmodule Engram.Vector.Qdrant do
   # are never refused (delete ops are not "disk/memory-consuming"); deletes
   # map it anyway so a future Qdrant that does refuse them is handled alike.
   #
-  # The capacity breakers are backpressure too (`max_points_count`, the byte
-  # sizes; `check_collection_size_limit` in verification/update.rs): a plain
-  # error makes EmbedNote retry, re-embedding (and re-paying Voyage) only to
+  # The capacity breakers are backpressure too (the byte sizes, and a
+  # `max_points_count` set by hand; `check_collection_size_limit` in
+  # verification/update.rs): a plain error makes EmbedNote retry, re-embedding (and re-paying Voyage) only to
   # be refused again; backpressure snoozes with the vectors retained.
   # Strings captured from 1.19.2 (qdrant_backpressure_test).
   @backpressure ~r/(Disk usage|Resident memory usage) is at \d+% of total|Max points count limit of \d+ reached|Max (vector|payload) storage size limit of [\d.]+MB reached/
