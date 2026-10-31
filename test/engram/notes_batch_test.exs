@@ -682,26 +682,103 @@ defmodule Engram.NotesBatchSetBasedTest do
     assert Engram.UsageMeters.notes_count(user.id) == before - 2
   end
 
-  # NOTE deliberately absent: a "batch move emits no broadcasts on failure"
-  # test would assert a guarantee batch_move_notes does NOT provide — moves
-  # still broadcast mid-transaction per item (see its moduledoc caveat), so
-  # a multi-item batch that fails late leaks events for rolled-back renames.
-  # The after-commit buffer for move/folder ops is the tracked follow-up.
+  test "batch move broadcasts only after its transaction commits", %{user: user, vault: vault} do
+    {:ok, n1} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# A"}, actor: "api")
+
+    {:ok, n2} =
+      Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "# B"}, actor: "api")
+
+    EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+    test = self()
+    handler = {__MODULE__, :move_commit}
+
+    # Runs in this process: at each commit, has a note_changed already arrived?
+    :telemetry.attach(
+      handler,
+      [:engram, :repo, :query],
+      fn _, _, %{query: q}, _ ->
+        if self() == test and q == "commit" do
+          {:messages, msgs} = Process.info(self(), :messages)
+          early = Enum.count(msgs, &match?(%Phoenix.Socket.Broadcast{event: "note_changed"}, &1))
+          send(test, {:commit_saw, early})
+        end
+      end,
+      nil
+    )
+
+    try do
+      assert {:ok, %{moved: 2}} =
+               Notes.batch_move_notes(user, vault, [n1.id, n2.id], {:path, "Z"})
+    after
+      :telemetry.detach(handler)
+    end
+
+    seen = collect_commit_saw([])
+    assert seen != [] and Enum.all?(seen, &(&1 == 0)), inspect(seen)
+    assert_receive %Phoenix.Socket.Broadcast{event: "note_changed"}
+  end
+
+  test "batch move resolves every id in one query, not one per id", %{user: user, vault: vault} do
+    notes =
+      for i <- 1..3 do
+        {:ok, n} = Notes.upsert_note(user, vault, %{"path" => "m#{i}.md"}, actor: "api")
+        n
+      end
+
+    test = self()
+    handler = {__MODULE__, :resolve_count}
+
+    :telemetry.attach(
+      handler,
+      [:engram, :repo, :query],
+      fn _, _, %{query: q, source: src}, _ ->
+        # fetch_note_by_id's single-id lookup: `WHERE ... n0."id" = $k`, with
+        # no path_hmac (rename_note's own lookup pins both).
+        if self() == test and src == "notes" and String.starts_with?(q, "SELECT") and
+             q =~ ~r/n0\."id" = \$\d/ and not (q =~ "path_hmac") do
+          send(test, :single_id_select)
+        end
+      end,
+      nil
+    )
+
+    try do
+      assert {:ok, %{moved: 3}} =
+               Notes.batch_move_notes(user, vault, Enum.map(notes, & &1.id), {:path, "Q"})
+    after
+      :telemetry.detach(handler)
+    end
+
+    refute_received :single_id_select
+  end
+
+  defp collect_commit_saw(acc) do
+    receive do
+      {:commit_saw, n} -> collect_commit_saw([n | acc])
+    after
+      0 -> acc
+    end
+  end
 
   describe "batch size limits (context boundary)" do
-    # Delete/move accept ANY size — real consumers (e2e harness cleanup,
-    # test_77 bulk teardown) legitimately send >1000 ids in one request.
     # Rows may share one timestamp: the seq feed orders by (seq, id), so
     # same-stamp runs are harmless (the distinct-stamp invariant died with
     # the legacy `updated_at >= since` feed, retired in #1215).
-    test "batch_delete_notes accepts >500 ids", %{
-      user: user,
-      vault: vault
-    } do
+    # One request is one transaction under the vault lock, so its size is
+    # capped (Engram.Batch.batch_request_max/0); the e2e harness chunks to 500.
+    test "batch_delete_notes refuses 501 ids and deletes nothing", %{user: user, vault: vault} do
       notes = for _ <- 1..501, do: insert(:note, user: user, vault: vault)
       ids = Enum.map(notes, & &1.id)
 
-      assert {:ok, %{deleted: 501}} = Notes.batch_delete_notes(user, vault, ids)
+      assert {:error, :batch_too_large} = Notes.batch_delete_notes(user, vault, ids)
+      assert is_nil(Engram.Fixtures.raw_note_row!(user, hd(ids)).deleted_at)
+      assert {:ok, %{deleted: 500}} = Notes.batch_delete_notes(user, vault, Enum.take(ids, 500))
+    end
+
+    test "batch_move_notes refuses 501 ids", %{user: user, vault: vault} do
+      ids = for _ <- 1..501, do: Ecto.UUID.generate()
+      assert {:error, :batch_too_large} = Notes.batch_move_notes(user, vault, ids, {:path, "X"})
     end
 
     @tag timeout: 120_000

@@ -46,14 +46,6 @@ defmodule EngramWeb.CrdtChannel do
   # frame within the cap — reject before allocating the decoded copy.
   @max_b64_bytes div(@max_frame_bytes * 4, 3) + 8
 
-  # 240 frames / 10 s ≈ 24 msg/s sustained — well above human typing speed with
-  # a 2 s client debounce, and low enough to stop scripted floods.
-  # Overridable via :crdt_msg_rate_limit_override (unit tests put_env it; CI/E2E
-  # set it from a CI-gated env in runtime.exs). See effective_msg_limit/0 below;
-  # prod never sets it and uses @msg_limit.
-  @msg_limit 240
-  @msg_scale_ms 10_000
-
   # How long `crdt_doc_update` waits on its applier task before answering an
   # error and letting the client fall back to the room handshake.
   #
@@ -86,19 +78,6 @@ defmodule EngramWeb.CrdtChannel do
   # toward the real active-set (~256) once lazy enrollment is the plugin default.
   # Runtime-overridable via config so it can be lowered without a redeploy.
   @default_max_rooms 4096
-
-  # Handshake (STEP1/STEP2) budget — separate from @msg_limit so connect-time
-  # enrollment (one STEP1 per note) can never starve edit frames (the
-  # 2026-07-07 incident trigger on a ~230-note vault). 2400/10s enrolls a
-  # 2400-note vault inside one window; bounded, not exempt (see frame_class).
-  @hs_limit 2400
-
-  # Account-wide ceiling = @msg_limit × this. A user may run several devices,
-  # each with the full per-device budget, but the account total is capped so a
-  # single account can't multiply its budget without bound by opening many
-  # sockets or forging device ids (the WS transport has no connect-level
-  # limiter). 10 ≈ "up to ten busy devices per account" before the ceiling bites.
-  @account_multiplier 10
 
   # Default page size for crdt_catchup_since when the client sends no `limit`.
   # Matches the seq feeds' internal 500-row cap (larger values clamp to it).
@@ -2006,7 +1985,7 @@ defmodule EngramWeb.CrdtChannel do
   # `|| @room_probe_ms`, NOT `get_env/3` with a default: the three-arg form only
   # falls back when the key is ABSENT, so any writer that leaves the key set to
   # nil (e.g. a test restoring a previously-unset override) would feed `nil` to
-  # GenServer.call/3 and crash the channel. Matches effective_msg_limit/0 above.
+  # GenServer.call/3 and crash the channel. Same reason as EngramWeb.SyncRateLimit's limits.
   defp room_probe_ms, do: Application.get_env(:engram, :crdt_room_probe_ms) || @room_probe_ms
 
   # A note_id is a non-sensitive UUID and is REQUIRED to diagnose which note
@@ -2117,18 +2096,7 @@ defmodule EngramWeb.CrdtChannel do
   # Rate-limit per DEVICE (not per account) so a single user's multiple devices
   # (desktop + laptop + web app, or two e2e Obsidian instances sharing one
   # session user) each get the full budget instead of self-DoSing against one
-  # shared bucket. TWO layers:
-  #
-  #   1. per-device — `crdt_msg:<user_id>:<device>`. The `user_id` prefix is
-  #      SERVER-derived, so the client-supplied device/conn id can only REFINE
-  #      within its own tenant: it can never collide with another user's bucket
-  #      (no cross-user griefing) nor spend anything but its own allowance.
-  #   2. per-account ceiling — `crdt_msg:acct:<user_id>` at @account_multiplier×.
-  #      Caps total account throughput so forging device ids / opening many
-  #      sockets can't multiply the budget without bound.
-  #
-  # Both must allow. Per-device is checked first so a device that's already over
-  # its own budget doesn't also consume from the account ceiling.
+  # shared bucket; the account ceiling lives in EngramWeb.SyncRateLimit.
   # Classify WITHOUT decoding the payload: the first 4 base64 chars decode to
   # the frame's first 3 bytes. Yjs v1 wire layout (Yex.Sync doctests):
   # <<0, 0, ..>> STEP1, <<0, 1, ..>> STEP2, <<0, 2, ..>> update — all subtype
@@ -2266,38 +2234,10 @@ defmodule EngramWeb.CrdtChannel do
   # about which rate lane an ill-formed payload bills, never about accepting it.
   defp state_frame_class(_b64), do: :edit
 
+  # Budgets live in EngramWeb.SyncRateLimit, shared with the REST batch delete.
   defp check_rate(socket, class) do
-    {key_prefix, limit} =
-      case class do
-        # Handshakes get a 10x-larger bucket, NOT an exemption: STEP2 carries
-        # full doc state, so an unbounded handshake lane would be a flood
-        # vector. 2400/10s enrolls a 2400-note vault in one window while still
-        # capping abuse; edits keep their own untouched budget either way.
-        :handshake -> {"crdt_hs", effective_hs_limit()}
-        :edit -> {"crdt_msg", effective_msg_limit()}
-      end
-
-    user_id = socket.assigns.current_user.id
-    device = socket.assigns[:device_id] || socket.assigns[:conn_id] || "u"
-
-    with {:allow, _} <-
-           EngramWeb.RateLimiter.hit(
-             "#{key_prefix}:#{user_id}:#{device}",
-             @msg_scale_ms,
-             limit,
-             :other
-           ),
-         {:allow, _} <-
-           EngramWeb.RateLimiter.hit(
-             "#{key_prefix}:acct:#{user_id}",
-             @msg_scale_ms,
-             limit * @account_multiplier,
-             :other
-           ) do
-      :ok
-    else
-      {:deny, _} -> {:error, :rate_limited}
-    end
+    device = socket.assigns[:device_id] || socket.assigns[:conn_id]
+    EngramWeb.SyncRateLimit.check(socket.assigns.current_user.id, device, class)
   end
 
   defp decode_frame(b64) when byte_size(b64) > @max_b64_bytes, do: {:error, :frame_too_large}
@@ -2417,7 +2357,7 @@ defmodule EngramWeb.CrdtChannel do
       # nothing: every peer already learned about this note when it was first
       # announced. Re-announcing would make every drain->edit cycle fan a
       # syncStep1 out of every other device on the vault, against budgets that
-      # are already tight (@hs_limit here, the plugin's 240/10s crdt_msg limit
+      # are already tight (the handshake budget in EngramWeb.SyncRateLimit, the plugin's 240/10s crdt_msg limit
       # in Engram-obsidian#159) — and handshake starvation is the documented
       # trigger for the wrong-mint cross-file overwrite class. The drain makes
       # re-spin routine rather than crash-only, so what used to be rare noise
@@ -2501,19 +2441,4 @@ defmodule EngramWeb.CrdtChannel do
   # Per-socket room ceiling. Read from config at call time (not compiled in) so
   # ops can lower it live via Application.put_env under abuse, no redeploy.
   defp max_rooms, do: Application.get_env(:engram, :max_rooms_per_socket, @default_max_rooms)
-
-  # Both limits are overridable via app env (a cached ETS read, so per-message
-  # cheap). Two writers set it, never prod:
-  #   - unit tests: Application.put_env(:engram, :crdt_msg_rate_limit_override, n)
-  #     (crdt_channel_test.exs) so a test need not push 241 frames.
-  #   - CI/E2E release stacks: config/runtime.exs sets it from the CI-gated
-  #     CRDT_MSG_RATE_LIMIT_OVERRIDE env (Engram.RuntimeConfig), because the
-  #     harness's compressed workload legitimately exceeds the per-account budget.
-  # Prod never sets either (CI != true, no put_env), so effective_* falls back to
-  # the @constant there — the limiter stays un-weakenable in production.
-  defp effective_msg_limit,
-    do: Application.get_env(:engram, :crdt_msg_rate_limit_override) || @msg_limit
-
-  defp effective_hs_limit,
-    do: Application.get_env(:engram, :crdt_hs_rate_limit_override) || @hs_limit
 end

@@ -3,12 +3,14 @@ defmodule EngramWeb.NotesController do
   use OpenApiSpex.ControllerSpecs
   alias EngramWeb.Schemas
 
+  alias Engram.Batch
   alias Engram.Crypto
   alias Engram.Links
   alias Engram.Logger.Metadata
   alias Engram.Notes
   alias Engram.Repo
   alias EngramWeb.BatchOps
+  alias EngramWeb.SyncRateLimit
 
   action_fallback EngramWeb.FallbackController
 
@@ -572,44 +574,58 @@ defmodule EngramWeb.NotesController do
     operation_id: "notes-batch-delete",
     summary: "Delete notes by id (idempotent)",
     description:
-      "Deletes multiple notes by id in a single transaction and returns the deleted count. " <>
-        "Requires the `X-Idempotency-Key` header for safe retries. Returns 404/409 (with the " <>
-        "offending `item_id`) if any id is missing or conflicts.",
+      "Deletes up to 500 notes by id in a single transaction and returns the deleted count. " <>
+        "An id whose note is already deleted is a no-op. Requires the `X-Idempotency-Key` " <>
+        "header for safe retries; send `X-Device-Id` to have your own device's delete echo " <>
+        "tagged. Returns 404/409 (with the offending `item_id`) if any id is unknown or " <>
+        "conflicts, 422 above 500 ids, and 429 (with `retry-after`) when the sync budget is spent.",
     tags: ["Notes"],
     request_body: {"Note ids", "application/json", Schemas.BatchIdsRequest, required: true},
     responses: [
       ok: {"Deleted count", "application/json", Schemas.DeletedCount},
       bad_request: {"Invalid ids", "application/json", Schemas.Error},
       not_found: {"Some ids not found", "application/json", Schemas.Error},
-      conflict: {"Conflict", "application/json", Schemas.Error}
+      conflict: {"Conflict", "application/json", Schemas.Error},
+      unprocessable_entity: {"More than 500 ids", "application/json", Schemas.Error},
+      too_many_requests: {"Sync budget spent", "application/json", Schemas.Error}
     ]
   )
 
   def batch_delete(conn, %{"ids" => ids}) when is_list(ids) do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
+    device = EngramWeb.OriginDevice.from_conn(conn)
 
-    case BatchOps.parse_uuid_list(ids) do
+    with {:ok, ids} <- BatchOps.parse_uuid_list(ids),
+         # Same budget as the socket's per-note `crdt_delete`, one unit per id
+         # (so a client cannot double it by switching transport), at most one
+         # full batch: an oversized request still gets its 422, not a 429.
+         :ok <- SyncRateLimit.check(user.id, device, :handshake, delete_units(ids)) do
+      # Error tuples ({:not_found, id}/:batch_too_large/internal) fall through
+      # to the action_fallback.
+      with {:ok, %{deleted: n}} <-
+             Notes.batch_delete_notes(user, vault, ids, origin_device_id: device) do
+        body = %{deleted: n}
+
+        EngramWeb.Plugs.IdempotencyKey.remember(conn, %{status: 200, body: body})
+
+        BatchOps.broadcast_batch(user, vault, "notes.batch", %{op: "delete", ids: ids})
+        json(conn, body)
+      end
+    else
       :error ->
         conn |> put_status(400) |> json(%{error: "invalid_ids"})
 
-      {:ok, ids} ->
-        # Error tuples ({:not_found, id}/{:conflict, id}/internal) fall
-        # through to the action_fallback.
-        with {:ok, %{deleted: n}} <- Notes.batch_delete_notes(user, vault, ids) do
-          body = %{deleted: n}
-
-          EngramWeb.Plugs.IdempotencyKey.remember(conn, %{status: 200, body: body})
-
-          BatchOps.broadcast_batch(user, vault, "notes.batch", %{op: "delete", ids: ids})
-          json(conn, body)
-        end
+      {:error, :rate_limited} ->
+        conn |> put_status(429) |> json(%{error: "rate_limited"})
     end
   end
 
   def batch_delete(conn, _params) do
     conn |> put_status(400) |> json(%{error: "missing required param: ids"})
   end
+
+  defp delete_units(ids), do: ids |> length() |> min(Batch.batch_request_max()) |> max(1)
 
   operation(:batch_move,
     operation_id: "notes-batch-move",

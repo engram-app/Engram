@@ -493,7 +493,9 @@ defmodule Engram.Notes do
     end
   end
 
-  @max_batch_folders 500
+  # Ids or folders one client batch request may name (Engram.Batch).
+  @max_batch_request Batch.batch_request_max()
+  @max_batch_folders @max_batch_request
 
   @doc "Folders per `create_folder_markers/3` call."
   @spec max_batch_folders() :: 500
@@ -4648,36 +4650,39 @@ defmodule Engram.Notes do
 
   @doc """
   Atomically soft-deletes a list of notes by id, scoped to the caller's
-  user + vault. All-or-nothing: if any id fails to resolve to a live note
-  owned by the caller, nothing is deleted.
+  user + vault. All-or-nothing: if any id names no note of this vault (never
+  existed, another vault's, a folder marker), nothing is deleted and the
+  first such id is returned as `{:error, {:not_found, id}}`. An id whose note
+  is ALREADY deleted is a no-op, not a failure (the same idempotent-delete
+  contract as the socket's `crdt_delete`), so a retried batch succeeds.
+
+  At most `Engram.Batch.batch_request_max/0` ids (`{:error, :batch_too_large}`
+  above it): the whole batch is one transaction under the vault lock.
 
   Set-based (#863): ONE meta-projected `id IN (...)` fetch (no content read
-  or decrypt), ONE shared seq for the whole batch (the previous per-id
-  `next_seq!` composition took the vault row lock N times and held it to
-  commit — a serialization point for every concurrent write to the vault),
-  ONE `update_all`, and a bulk `Oban.insert_all` for the index cleanup jobs.
-  The missing-id check runs BEFORE any write, so all-or-nothing needs no
-  rollback of partial work.
+  or decrypt), ONE shared seq for the whole batch, ONE `update_all`, and a
+  bulk `Oban.insert_all` for the index cleanup jobs. The missing-id check runs
+  BEFORE any write. The job insert runs before the seq bump, so the vault lock
+  covers only the tombstone update and the meter.
 
-  Broadcasts fire AFTER the transaction commits — the old per-id
-  composition leaked `note_changed` events for work that later rolled back.
-  NOTE: this fixes batch DELETE only; `batch_move_notes/4` and the folder
-  batch ops still broadcast mid-transaction (their moduledocs carry the
-  caveat) — the systemic after-commit buffer remains a follow-up.
+  Broadcasts fire after the commit, one per deleted note, stamped with
+  `origin_device_id:` (#970) so the calling device can drop its own echo.
 
-  Duplicate ids collapse to a single delete (idempotent-delete semantics);
-  folder-marker ids are NOT deletable here (use the folder APIs) and read
-  as not_found. Returns `{:ok, %{deleted: n}}` (n = distinct live notes
-  deleted) or `{:error, {:not_found, id}}` for the first unresolvable id.
+  Duplicate ids collapse to a single delete; `deleted` counts distinct live
+  notes this call deleted.
   """
-  @spec batch_delete_notes(map(), map(), [String.t()]) ::
+  @spec batch_delete_notes(map(), map(), [String.t()], keyword()) ::
           {:ok, %{deleted: non_neg_integer()}}
-          | {:error, {:not_found, String.t()} | term()}
-  def batch_delete_notes(_user, _vault, []), do: {:ok, %{deleted: 0}}
+          | {:error, {:not_found, String.t()} | :batch_too_large | term()}
+  def batch_delete_notes(user, vault, ids, opts \\ [])
 
-  def batch_delete_notes(user, vault, ids) when is_list(ids) do
-    # Duplicate ids collapse to one delete (idempotent-delete semantics);
-    # `deleted` counts DISTINCT notes, documented in the @doc above.
+  def batch_delete_notes(_user, _vault, [], _opts), do: {:ok, %{deleted: 0}}
+
+  def batch_delete_notes(_user, _vault, ids, _opts)
+      when is_list(ids) and length(ids) > @max_batch_request,
+      do: {:error, :batch_too_large}
+
+  def batch_delete_notes(user, vault, ids, opts) when is_list(ids) do
     ids = Enum.uniq(ids)
 
     with {:ok, user} <- Crypto.ensure_user_dek(user) do
@@ -4686,92 +4691,100 @@ defmodule Engram.Notes do
           # kind filter: folder-marker rows share the notes table but have
           # nil path_hmac and their own delete API — a marker id here must
           # read as not_found, not tombstone the marker + crash on encode64.
-          notes =
+          # Tombstones are read too: an already-deleted id is a no-op.
+          rows =
             Repo.all(
-              from(n in scoped_live(user, vault),
+              from(n in scoped(user, vault),
                 where: n.id in ^ids and n.kind == "note",
                 select: struct(n, @note_meta_fields)
               )
             )
 
-          found = MapSet.new(notes, & &1.id)
+          found = MapSet.new(rows, & &1.id)
 
           case Enum.find(ids, &(not MapSet.member?(found, &1))) do
-            nil ->
-              seq = Engram.Vaults.next_seq!(vault.id)
-              now = DateTime.utc_now()
-
-              # One shared timestamp for every tombstone — the seq feed orders
-              # by (seq, id), so same-stamp runs are harmless (the timestamp
-              # chunking that used to live here served the retired legacy feed).
-              {updated, _} =
-                from(n in Note, where: n.id in ^ids and is_nil(n.deleted_at))
-                |> Repo.update_all(
-                  set: [
-                    deleted_at: now,
-                    updated_at: now,
-                    seq: seq,
-                    embed_hash: nil,
-                    dense_indexed_hash: nil
-                  ]
-                )
-
-              :ok = UsageMeters.dec_notes_count(user.id, updated)
-              :ok = stop_rooms_after_commit(ids)
-
-              # Jobs insert inside the txn, so a failure rolls them back with
-              # the tombstones. insert_all trades Enqueue.enqueue's per-job
-              # telemetry for one statement; {_count, _} match keeps failures
-              # loud (insert_all raises on error).
-              _ = notes |> Enum.map(&delete_note_index_job/1) |> Jobs.insert_chunked()
-
-              {:ok, %{deleted: updated, notes: notes, seq: seq}}
-
-            missing ->
-              {:error, {:not_found, missing}}
+            nil -> tombstone_batch(user, vault, Enum.filter(rows, &is_nil(&1.deleted_at)))
+            missing -> {:error, {:not_found, missing}}
           end
         end)
 
       case result do
         {:ok, %{deleted: deleted, notes: notes, seq: seq}} ->
-          # Release every deleted note's claim, for the same reason delete_note/4
-          # does — and at N scale. A stale entry naming a dead note is not just
-          # `unresolved` noise: Identity.claim/3 refuses that path for every LIVE
-          # note forever, even though the rows are free. Skipping it turns a
-          # 200-note folder delete into 200 permanent path reservations.
-          _ =
-            ReleaseIndexEntries.enqueue(user.id, vault.id, Enum.map(notes, & &1.id))
-
-          # Post-commit: same per-note delete events clients already handle.
-          # Meta rows decrypt cheaply (path envelope only — no content).
-          zipped = notes |> Crypto.decrypt_notes_batch(user) |> Enum.zip(notes)
-
-          Enum.each(zipped, fn
-            {{:ok, note}, raw} ->
-              broadcast_change(user.id, vault.id, "delete", note.path, raw.id, seq: seq)
-
-            {{:error, reason}, raw} ->
-              # The tombstone committed; only the broadcast is lost. Fail
-              # LOUD in logs (read paths raise on decrypt failures) so a
-              # corrupt path envelope doesn't vanish silently — other
-              # devices reconcile on their next pull via the seq feed.
-              Logger.error(
-                "batch_delete broadcast skipped: undecryptable path envelope",
-                Metadata.with_category(:error, :crypto,
-                  user_id: user.id,
-                  vault_id: vault.id,
-                  note_id: raw.id,
-                  reason: Metadata.safe_reason(reason)
-                )
-              )
-          end)
-
+          after_batch_delete(user, vault, notes, seq, opts)
           {:ok, %{deleted: deleted}}
 
         {:error, _} = err ->
           err
       end
     end
+  end
+
+  defp tombstone_batch(_user, _vault, []), do: {:ok, %{deleted: 0, notes: [], seq: nil}}
+
+  defp tombstone_batch(user, vault, notes) do
+    live_ids = Enum.map(notes, & &1.id)
+
+    # Jobs insert inside the txn, so a failure rolls them back with the
+    # tombstones; before the seq bump, so the vault lock does not cover them.
+    # insert_all trades Enqueue.enqueue's per-job telemetry for one statement
+    # (insert_all raises on error).
+    _ = notes |> Enum.map(&delete_note_index_job/1) |> Jobs.insert_chunked()
+    :ok = stop_rooms_after_commit(live_ids)
+
+    seq = Engram.Vaults.next_seq!(vault.id)
+    now = DateTime.utc_now()
+
+    # One shared timestamp for every tombstone — the seq feed orders by
+    # (seq, id), so same-stamp runs are harmless.
+    {updated, _} =
+      from(n in Note, where: n.id in ^live_ids and is_nil(n.deleted_at))
+      |> Repo.update_all(
+        set: [
+          deleted_at: now,
+          updated_at: now,
+          seq: seq,
+          embed_hash: nil,
+          dense_indexed_hash: nil
+        ]
+      )
+
+    # After the vault lock (canonical order: vaults, then usage_meters).
+    :ok = UsageMeters.dec_notes_count(user.id, updated)
+    {:ok, %{deleted: updated, notes: notes, seq: seq}}
+  end
+
+  defp after_batch_delete(_user, _vault, [], _seq, _opts), do: :ok
+
+  defp after_batch_delete(user, vault, notes, seq, opts) do
+    # Release every deleted note's claim, for the same reason delete_note/4
+    # does — and at N scale. A stale entry naming a dead note is not just
+    # `unresolved` noise: Identity.claim/3 refuses that path for every LIVE
+    # note forever, even though the rows are free.
+    _ = ReleaseIndexEntries.enqueue(user.id, vault.id, Enum.map(notes, & &1.id))
+
+    # Post-commit: same per-note delete events clients already handle.
+    # Meta rows decrypt cheaply (path envelope only — no content).
+    broadcast_opts = [seq: seq, origin_device_id: opts[:origin_device_id]]
+    zipped = notes |> Crypto.decrypt_notes_batch(user) |> Enum.zip(notes)
+
+    Enum.each(zipped, fn
+      {{:ok, note}, raw} ->
+        broadcast_change(user.id, vault.id, "delete", note.path, raw.id, broadcast_opts)
+
+      {{:error, reason}, raw} ->
+        # The tombstone committed; only the broadcast is lost. Fail LOUD in
+        # logs so a corrupt path envelope doesn't vanish silently — other
+        # devices reconcile on their next pull via the seq feed.
+        Logger.error(
+          "batch_delete broadcast skipped: undecryptable path envelope",
+          Metadata.with_category(:error, :crypto,
+            user_id: user.id,
+            vault_id: vault.id,
+            note_id: raw.id,
+            reason: Metadata.safe_reason(reason)
+          )
+        )
+    end)
   end
 
   # T3.2 — base64 path_hmac, never plaintext. Single builder shared by
@@ -4811,17 +4824,20 @@ defmodule Engram.Notes do
   Empty list short-circuits to `{:ok, %{moved: 0}}` without opening a
   transaction or resolving the marker.
 
-  PubSub disclosure (same caveat as `batch_delete_notes/3`): `rename_note/4`
-  fires `note_changed` broadcasts per id during the transaction. PubSub is
-  NOT transactional — subscribers may receive events for moves that get
-  rolled back when a later id in the batch fails. The systemic fix
-  (after-commit hooks so broadcasts only fire post-commit) is tracked as a
-  follow-up and will land before more batch ops are added.
+  At most `Engram.Batch.batch_request_max/0` ids
+  (`{:error, :batch_too_large}` above it): the rows move in one transaction
+  under the vault lock. Broadcasts and room stops wait for that transaction's
+  commit (`Repo.transaction_after_commit/1`), so a batch that rolls back
+  announces nothing.
   """
   @spec batch_move_notes(map(), map(), [String.t()], String.t() | {:path, String.t()}) ::
           {:ok, %{moved: non_neg_integer()}}
           | {:error, {:not_found | :conflict, String.t()} | term()}
   def batch_move_notes(_user, _vault, [], _target_folder_id), do: {:ok, %{moved: 0}}
+
+  def batch_move_notes(_user, _vault, ids, _target)
+      when is_list(ids) and length(ids) > @max_batch_request,
+      do: {:error, :batch_too_large}
 
   # Move into a folder given by PATH. No marker is required — a "derived" folder
   # exists purely as a path on its notes. `folder == ""` means the vault root.
@@ -4877,23 +4893,29 @@ defmodule Engram.Notes do
     with {:ok, moves} <- resolve_moves(user, vault, ids, target_folder),
          :ok <- validate_move_targets(user, vault, moves),
          :ok <- claim_moves(user, vault, moves) do
-      Repo.transaction(fn ->
+      # Owns the after-commit queue: the per-note renames' broadcasts and room
+      # stops wait for THIS commit, not each nested with_tenant's return.
+      Repo.transaction_after_commit(fn ->
         refs = ensure_move_folders!(user, vault, moves)
         apply_moves(user, vault, moves, refs)
       end)
     end
   end
 
+  # One meta read for the whole batch (was one transaction per id).
   defp resolve_moves(user, vault, ids, target_folder) do
-    Enum.reduce_while(ids, {:ok, []}, fn id, {:ok, acc} ->
-      case fetch_note_by_id(user, vault, id, :meta) do
-        {:ok, note} -> {:cont, {:ok, [{note, move_target(note, target_folder)} | acc]}}
-        {:error, :not_found} -> {:halt, {:error, {:not_found, id}}}
+    with {:ok, by_id} <- get_note_meta_by_ids(user, vault, ids) do
+      case Enum.find(ids, &(not Map.has_key?(by_id, &1))) do
+        nil ->
+          {:ok,
+           Enum.map(ids, fn id ->
+             note = Map.fetch!(by_id, id)
+             {note, move_target(note, target_folder)}
+           end)}
+
+        missing ->
+          {:error, {:not_found, missing}}
       end
-    end)
-    |> case do
-      {:ok, moves} -> {:ok, Enum.reverse(moves)}
-      err -> err
     end
   end
 

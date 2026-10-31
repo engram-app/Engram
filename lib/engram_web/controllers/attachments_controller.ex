@@ -492,19 +492,11 @@ defmodule EngramWeb.AttachmentsController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    case Attachments.batch_delete(user, vault, paths) do
-      {:ok, %{deleted: n}} ->
-        body = %{deleted: n}
-
-        EngramWeb.Plugs.IdempotencyKey.remember(conn, %{
-          status: 200,
-          body: body
-        })
-
-        json(conn, body)
-
-      {:error, :batch_too_large} ->
-        conn |> put_status(422) |> json(%{error: "batch_too_large", max: 500})
+    # `{:error, :batch_too_large}` falls through to the action_fallback (422).
+    with {:ok, %{deleted: n}} <- Attachments.batch_delete(user, vault, paths) do
+      body = %{deleted: n}
+      EngramWeb.Plugs.IdempotencyKey.remember(conn, %{status: 200, body: body})
+      json(conn, body)
     end
   end
 

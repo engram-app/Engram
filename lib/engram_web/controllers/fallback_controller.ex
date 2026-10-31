@@ -23,6 +23,7 @@ defmodule EngramWeb.FallbackController do
   | `{:error, :conflict}`          | 409    | `%{error: "conflict"}`                   |
   | `{:error, {:conflict, id}}`    | 409    | `%{error: "conflict", item_id: id}`      |
   | `{:error, :last_admin}`        | 409    | `%{error: "last_admin"}`                 |
+  | `{:error, :batch_too_large}`   | 422    | `%{error: "batch_too_large", max: n}`    |
   | `{:error, transient DEK}`      | 503    | `%{error: "dek_unavailable"}`            |
   | `{:error, _}` (terminal)       | 500    | `%{error: "internal"}`                   |
 
@@ -56,6 +57,14 @@ defmodule EngramWeb.FallbackController do
   # A rename/move target that sanitizes to nothing (PathSanitizer.sanitize_target/1).
   def call(conn, {:error, :invalid_path}) do
     conn |> put_status(422) |> json(%{error: "invalid_path"})
+  end
+
+  # A batch request over `Engram.Batch.batch_request_max/0` (notes,
+  # attachments and folders batch endpoints).
+  def call(conn, {:error, :batch_too_large}) do
+    conn
+    |> put_status(422)
+    |> json(%{error: "batch_too_large", max: Engram.Batch.batch_request_max()})
   end
 
   def call(conn, {:error, :last_admin}) do

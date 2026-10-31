@@ -213,8 +213,8 @@ defmodule EngramWeb.FoldersController do
       false ->
         conn |> put_status(422) |> json(%{error: "folders must be strings"})
 
-      {:error, :batch_too_large} ->
-        conn |> put_status(422) |> json(%{error: "batch_too_large", max: 500})
+      {:error, :batch_too_large} = too_large ->
+        EngramWeb.FallbackController.call(conn, too_large)
 
       {:error, {:rate_limited, retry_after_ms}} ->
         Halt.rate_limited(conn, retry_after_ms)

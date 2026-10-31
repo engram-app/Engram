@@ -1399,6 +1399,7 @@ defmodule Engram.Attachments do
   # definition would silently give the chunker and the batch_delete guard
   # different limits.
   @max_batch_entries Batch.folder_delete()
+  @max_batch_request Batch.batch_request_max()
 
   @spec delete_folder(Engram.Accounts.User.t(), map(), String.t()) ::
           {:ok, non_neg_integer()} | {:error, term()}
@@ -1478,7 +1479,8 @@ defmodule Engram.Attachments do
   no origin device, same as before). Blobs stay for
   `Engram.Workers.AttachmentBlobGC` (#2159).
 
-  Capped at 500 paths per batch (`{:error, :batch_too_large}` above that).
+  Capped at `Engram.Batch.batch_request_max/0` paths per batch
+  (`{:error, :batch_too_large}` above that).
   `op_id:` stamps every row it deletes with that undo id (#609).
   """
   @spec batch_delete(map(), map(), [String.t()], keyword()) ::
@@ -1488,7 +1490,7 @@ defmodule Engram.Attachments do
   def batch_delete(_user, _vault, [], _opts), do: {:ok, %{deleted: 0}}
 
   def batch_delete(_user, _vault, paths, _opts)
-      when is_list(paths) and length(paths) > @max_batch_entries,
+      when is_list(paths) and length(paths) > @max_batch_request,
       do: {:error, :batch_too_large}
 
   def batch_delete(user, vault, paths, opts) when is_list(paths) do
