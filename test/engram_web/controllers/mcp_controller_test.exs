@@ -1521,7 +1521,12 @@ defmodule EngramWeb.McpControllerTest do
       {:ok, payload} = result
       assert payload["isError"] == true
       assert payload["_meta"]["engram.page/error_code"] == "rate_limited"
-      assert hd(payload["content"])["text"] =~ "retry"
+      text = hd(payload["content"])["text"]
+      assert text =~ "retry"
+      # A gated tool may have committed part of its work before the shed (a
+      # rename's index claim), so it must not claim nothing changed.
+      refute text =~ "Nothing was changed"
+      assert payload["_meta"]["engram.page/retry_after_s"] == 2
       refute log =~ "mcp tool dispatch trapped"
     end
   end

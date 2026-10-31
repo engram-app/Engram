@@ -1251,12 +1251,22 @@ defmodule EngramWeb.McpController do
     # A write shed by the vault's SeqGate (`rename_note` runs outside the
     # request transaction, so it queues there). Load, not a crash: a
     # retryable tool error, and no error log.
+    #
+    # The message does not say "nothing changed": a gated tool can commit part
+    # of its work first (a rename's index claim, which then completes on its
+    # own). `_meta` carries the wait as a number for programs.
     :error, %Engram.Vaults.SeqGate.BusyError{} ->
+      retry_s = EngramWeb.Plugs.RetryAfter.busy_seconds()
+
       err =
         {:rate_limited,
-         "The vault is busy with other writes. Nothing was changed; retry in a few seconds."}
+         "The vault is busy with other writes, so this did not finish. Part of it may " <>
+           "already be applied; check the result, then retry in #{retry_s} seconds."}
 
-      {error_result(err), :error, byte_size_safe(Engram.MCP.ToolError.message(err))}
+      {{:ok, payload}, :error, bytes} =
+        {error_result(err), :error, byte_size_safe(Engram.MCP.ToolError.message(err))}
+
+      {{:ok, put_in(payload, ["_meta", "engram.page/retry_after_s"], retry_s)}, :error, bytes}
 
     kind, reason ->
       # T3.0.1 follow-up — never `inspect/1` an exit/throw reason into a

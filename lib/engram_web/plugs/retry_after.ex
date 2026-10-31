@@ -27,6 +27,9 @@ defmodule EngramWeb.Plugs.RetryAfter do
 
   def init(opts), do: opts
 
+  @doc "Seconds a client should wait before resending a write the vault gate shed."
+  def busy_seconds, do: String.to_integer(@busy_seconds)
+
   def call(conn, _opts) do
     register_before_send(conn, fn conn ->
       case {conn.status, get_resp_header(conn, "retry-after")} do

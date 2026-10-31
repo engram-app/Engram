@@ -213,6 +213,48 @@ defmodule Engram.Notes.IdentityTest do
     end
   end
 
+  describe "a rename shed by the vault write gate" do
+    # The claim (the commit) lands BEFORE the row waits on the gate. A shed is
+    # a raise, which skipped the orphan report, so nothing converged the row to
+    # the claim and the caller was told the rename did not happen. The shed must
+    # take the same orphan path as a failed rename.
+    test "reports the orphan claim so projection converges the row", ctx do
+      n = note(ctx, "a.md")
+      prev = Application.fetch_env!(:engram, :seq_gate_wait_ms)
+      Application.put_env(:engram, :seq_gate_wait_ms, 50)
+      on_exit(fn -> Application.put_env(:engram, :seq_gate_wait_ms, prev) end)
+
+      parent = self()
+
+      holder =
+        Task.async(fn ->
+          Engram.Vaults.SeqGate.with_vault(ctx.vault.id, fn ->
+            send(parent, :held)
+            receive do: (:release -> :ok)
+          end)
+        end)
+
+      assert_receive :held
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert_raise Engram.Vaults.SeqGate.BusyError, fn ->
+          Notes.rename_note(ctx.user, ctx.vault, "a.md", "b.md")
+        end
+      end)
+
+      send(holder.pid, :release)
+      Task.await(holder)
+
+      assert index_entries(ctx)["b.md"]["note_id"] == n.id
+      assert path_of(ctx, n.id) == "a.md"
+
+      assert_enqueued(
+        worker: Engram.Workers.ProjectVaultIndex,
+        args: %{user_id: ctx.user.id, vault_id: ctx.vault.id}
+      )
+    end
+  end
+
   describe "removal is id-keyed, never path-keyed" do
     # Every rename test where the map agrees with the rows produces identical
     # output under both implementations. This is the case that separates them:

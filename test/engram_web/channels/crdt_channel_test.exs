@@ -1365,6 +1365,30 @@ defmodule EngramWeb.CrdtChannelTest do
   end
 
   describe "crdt_delete" do
+    # Shortens the channel gate budget for this test and returns it (ms).
+    defp short_channel_budget do
+      prev = Application.fetch_env!(:engram, :seq_gate_channel_wait_ms)
+      Application.put_env(:engram, :seq_gate_channel_wait_ms, 200)
+      on_exit(fn -> Application.put_env(:engram, :seq_gate_channel_wait_ms, prev) end)
+      200
+    end
+
+    # Holds the vault's write gate from another process until sent :release.
+    defp hold_vault_gate(vault_id) do
+      parent = self()
+
+      holder =
+        Task.async(fn ->
+          Engram.Vaults.SeqGate.with_vault(vault_id, fn ->
+            send(parent, :held)
+            receive do: (:release -> :ok)
+          end)
+        end)
+
+      assert_receive :held
+      holder
+    end
+
     test "soft-deletes a note by id and is idempotent", %{
       socket: socket,
       user: user,
@@ -1398,25 +1422,16 @@ defmodule EngramWeb.CrdtChannelTest do
           actor: "api"
         )
 
-      parent = self()
-
-      holder =
-        Task.async(fn ->
-          Engram.Vaults.SeqGate.with_vault(vault.id, fn ->
-            send(parent, :held)
-            receive do: (:release -> :ok)
-          end)
-        end)
-
-      assert_receive :held
+      budget = short_channel_budget()
+      holder = hold_vault_gate(vault.id)
       started = System.monotonic_time(:millisecond)
       ref = push(socket, "crdt_delete", %{"doc_id" => note.id})
       other = push(socket, "crdt_catchup_since", %{"cursor_seq" => 0})
 
       # The socket keeps serving while the delete waits.
-      assert_reply other, :ok, %{changes: _}, 500
-      assert_reply ref, :error, %{reason: "busy"}, 3_000
-      assert System.monotonic_time(:millisecond) - started < 3_000
+      assert_reply other, :ok, %{changes: _}, budget
+      assert_reply ref, :error, %{reason: "busy"}, budget * 5
+      assert System.monotonic_time(:millisecond) - started < budget * 5
 
       send(holder.pid, :release)
       Task.await(holder)
@@ -1425,6 +1440,45 @@ defmodule EngramWeb.CrdtChannelTest do
       ref2 = push(socket, "crdt_delete", %{"doc_id" => note.id})
       assert_reply ref2, :ok, %{doc_id: _}
       refute Notes.note_in_vault?(user, vault.id, note.id)
+    end
+
+    # One delete in flight per channel. Clients never send a second before the
+    # first replies (their op queues await each op), so an extra is a broken or
+    # hostile client: answered `busy` at once, with no task and no DB work.
+    test "a second crdt_delete while one is in flight is busy at once and spawns no task", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, first} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/one.md", "content" => "x"},
+          actor: "api"
+        )
+
+      {:ok, second} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/two.md", "content" => "x"},
+          actor: "api"
+        )
+
+      budget = short_channel_budget()
+      holder = hold_vault_gate(vault.id)
+      ref1 = push(socket, "crdt_delete", %{"doc_id" => first.id})
+      # Let the first frame reach the channel and start its task.
+      :sys.get_state(socket.channel_pid)
+      tasks = length(Task.Supervisor.children(Engram.TaskSupervisor))
+
+      ref2 = push(socket, "crdt_delete", %{"doc_id" => second.id})
+      assert_reply ref2, :error, %{reason: "busy"}, div(budget, 2)
+      assert length(Task.Supervisor.children(Engram.TaskSupervisor)) == tasks
+
+      send(holder.pid, :release)
+      Task.await(holder)
+      assert_reply ref1, :ok, %{doc_id: _}, budget * 5
+      assert Notes.note_in_vault?(user, vault.id, second.id)
+
+      # The slot frees once the first delete finished.
+      ref3 = push(socket, "crdt_delete", %{"doc_id" => second.id})
+      assert_reply ref3, :ok, %{doc_id: _}, budget * 5
     end
 
     test "delete broadcast carries the deleting socket's device_id (#970)", %{

@@ -666,17 +666,28 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   @impl true
+  # One delete in flight per channel. A second one before the first replied is
+  # answered `busy` at once (retryable): no task, no DB work. The web and plugin
+  # op queues never send one before the last replied, so only a broken or
+  # hostile client is refused, and it cannot pile up gate waiters and decrypts.
+  def handle_in("crdt_delete", _payload, %{assigns: %{delete_in_flight: ref}} = socket)
+      when is_reference(ref),
+      do: {:reply, {:error, %{reason: "busy"}}, socket}
+
   def handle_in("crdt_delete", %{"doc_id" => doc_id}, socket) do
     with :ok <- check_rate(socket, :handshake),
          {:ok, note_id} <- cast_doc_id(doc_id) do
       # The delete queues on the vault's SeqGate. Waiting HERE would stall
       # every other room on this socket for the whole wait, so it runs on a
-      # task and replies through the socket ref. Ordering is safe: both
-      # clients' op queues send one structural op and await its reply.
-      # `Task.Supervisor` propagates `$callers`, which is what reaches the Repo
-      # (and the test sandbox).
-      delete_off_channel(socket, note_id)
-      {:noreply, socket}
+      # task and replies through the socket ref.
+      #
+      # What stays ordered: the op queues (web and plugin) send one structural
+      # op and await its reply, so their create/delete sequence is unchanged.
+      # What is NOT: this channel no longer holds back OTHER frames behind the
+      # delete. A frame sent while it waits (a catch-up read, a crdt_create
+      # sent outside the queue) can run first. `Task.Supervisor` propagates
+      # `$callers`, which is what reaches the Repo (and the test sandbox).
+      {:noreply, assign(socket, :delete_in_flight, delete_off_channel(socket, note_id))}
     else
       {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
       {:error, :bad_doc_id} -> {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
@@ -824,7 +835,7 @@ defmodule EngramWeb.CrdtChannel do
     vault = socket.assigns.vault
     device_id = socket.assigns[:device_id]
 
-    {:ok, _pid} =
+    {:ok, pid} =
       Task.Supervisor.start_child(Engram.TaskSupervisor, fn ->
         reply =
           try do
@@ -841,13 +852,25 @@ defmodule EngramWeb.CrdtChannel do
           rescue
             # A shed wait is load, not a fault: a retryable reason, which both
             # clients' op queues retry on backoff.
-            Engram.Vaults.SeqGate.BusyError -> {:error, %{reason: "busy"}}
+            Engram.Vaults.SeqGate.BusyError ->
+              {:error, %{reason: "busy"}}
+
+            # Anything else still answers (also retryable), rather than leaving
+            # the client to its 10s push timeout. The reason is never echoed.
+            e ->
+              Logger.error(
+                "crdt_delete failed: #{Engram.Telemetry.error_kind(e)}",
+                category: :sync
+              )
+
+              {:error, %{reason: "delete_failed"}}
           end
 
         reply(ref, reply)
       end)
 
-    :ok
+    # Its DOWN (normal exit or crash) frees the channel's delete slot.
+    Process.monitor(pid)
   end
 
   # Run the apply on a task so the ROOM'S OBSERVER is that task, not this
@@ -1762,7 +1785,14 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
+  # The in-flight crdt_delete task ended, however it ended.
   @impl true
+  def handle_info(
+        {:DOWN, ref, :process, _pid, _reason},
+        %{assigns: %{delete_in_flight: ref}} = socket
+      ),
+      do: {:noreply, assign(socket, :delete_in_flight, nil)}
+
   def handle_info({:DOWN, _ref, :process, pid, _reason}, socket) do
     # The index room dying must clear its cache too, or the next frame casts at
     # a dead pid and returns :ok — the same silent-drop class the note-room

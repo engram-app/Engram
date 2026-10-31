@@ -4110,16 +4110,24 @@ defmodule Engram.Notes do
 
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, claimed?} <- claim_rename(user, vault, old_path, new_path, opts) do
-      case do_rename_note(
-             user,
-             vault,
-             old_path,
-             new_path,
-             new_folder,
-             now,
-             opts[:note_id],
-             opts[:folder_refs]
-           ) do
+      try do
+        do_rename_note(
+          user,
+          vault,
+          old_path,
+          new_path,
+          new_folder,
+          now,
+          opts[:note_id],
+          opts[:folder_refs]
+        )
+      rescue
+        # Shed by the vault's SeqGate AFTER the claim committed: the same
+        # orphan as a failed rename, so projection converges the row.
+        e in SeqGate.BusyError ->
+          _ = report_orphan_claim(user, vault, claimed?, :busy, :busy)
+          reraise e, __STACKTRACE__
+      else
         {:ok, _} = ok -> ok
         {:error, reason} = err -> report_orphan_claim(user, vault, claimed?, reason, err)
       end
