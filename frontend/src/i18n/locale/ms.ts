@@ -86,6 +86,7 @@ export default {
 	"Already have an account? {signin}": "Sudah mempunyai akaun? {signin}",
 	"Loading...": "Memuatkan...",
 	"An account with this email already exists": "Sudah ada akaun dengan e-mel ini",
+	"Contact support to restore access.": "Hubungi sokongan untuk memulihkan akses.",
 	"Billing history": "Sejarah pembayaran",
 	"No transactions yet.": "Tiada transaksi lagi.",
 	Date: "Tarikh",
@@ -227,7 +228,6 @@ export default {
 	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
 		"Anda telah mencapai had peranti pada pelan percuma anda. Putuskan sambungan peranti yang tidak anda gunakan untuk menyambungkan yang ini, atau tingkatkan langganan anda untuk menyambungkan lebih banyak peranti.",
 	"Account suspended": "Akaun ditangguhkan",
-	"Contact support to restore access.": "Hubungi sokongan untuk memulihkan akses.",
 	"Account setup incomplete": "Persediaan akaun belum selesai",
 	"Please complete onboarding.": "Sila lengkapkan proses permulaan.",
 	"Limit reached": "Had telah dicapai",
