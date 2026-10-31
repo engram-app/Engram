@@ -932,7 +932,11 @@ defmodule EngramWeb.McpControllerTest do
       :telemetry.attach(
         id,
         [:engram, :mcp, :section_parse, :stop],
-        fn _, _, _, _ -> send(test, {:parsed_in_txn, Engram.Repo.in_transaction?()}) end,
+        # The handler is global and the suite is async: count only this
+        # test's own request (the conn runs in this process).
+        fn _, _, _, _ ->
+          if self() == test, do: send(test, {:parsed_in_txn, Engram.Repo.in_transaction?()})
+        end,
         nil
       )
 
@@ -1714,7 +1718,21 @@ defmodule EngramWeb.McpControllerTest do
           EngramWeb.McpController.run_tool_handler(probe("write_note", test), user, vault, %{})
         end)
 
+      # Gate THEN transaction: while it waits, the call has opened none (no
+      # connection is held by a waiter).
+      id = {__MODULE__, :waiter_begin}
+      task_pid = task.pid
+
+      :telemetry.attach(
+        id,
+        [:engram, :repo, :query],
+        fn _, _, %{query: q}, _ -> if self() == task_pid, do: send(test, {:waiter_sql, q}) end,
+        nil
+      )
+
       refute_receive {:ran, "write_note"}, 200
+      :telemetry.detach(id)
+      refute_received {:waiter_sql, "begin"}
       assert Engram.Vaults.SeqGate.queue_depth().waiting >= 1
 
       send(holder, :release)

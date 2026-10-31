@@ -24,7 +24,11 @@ defmodule Engram.HealthProbe do
       # A probe arrives every few seconds and runs in milliseconds; a little
       # queueing between concurrent probes is fine, shedding them is not.
       queue_target: 500,
-      queue_interval: 2_000
+      queue_interval: 2_000,
+      # Postgrex backs off up to 30 s between reconnects by default, which
+      # would keep the probe red that long after an RDS failover the request
+      # pool has already recovered from.
+      backoff_max: 5_000
     )
     |> Postgrex.child_spec()
   end

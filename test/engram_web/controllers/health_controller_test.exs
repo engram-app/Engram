@@ -96,6 +96,12 @@ defmodule EngramWeb.HealthControllerTest do
       refute_received :request_pool_query
     end
 
+    test "the probe reconnects within 5 s of the database coming back" do
+      %{start: {_pool, :start_link, [{Postgrex.Protocol, opts}]}} = Engram.HealthProbe.child_spec([])
+      assert opts[:backoff_max] == 5_000
+      assert opts[:pool_size] == 1
+    end
+
     test "a dead database still fails readiness", %{conn: conn} do
       # Nothing listens on port 1: the probe connection can never connect.
       {:ok, dead} =
