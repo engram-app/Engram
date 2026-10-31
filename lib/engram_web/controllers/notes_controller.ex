@@ -612,35 +612,40 @@ defmodule EngramWeb.NotesController do
     device = EngramWeb.OriginDevice.from_conn(conn)
 
     with {:ok, ids} <- BatchOps.parse_uuid_list(ids),
-         # Same budget as the socket's per-note `crdt_delete`, one unit per id
-         # (so a client cannot double it by switching transport), at most one
-         # full batch: an oversized request still gets its 422, not a 429.
-         :ok <- SyncRateLimit.check(user.id, device, :handshake, delete_units(ids)) do
-      # Error tuples ({:not_found, id}/:batch_too_large/internal) fall through
-      # to the action_fallback.
+         # Size first: an oversized request gets its 422 without spending budget.
+         :ok <- Batch.check_request_size(ids),
+         # Same budget as the socket's per-note `crdt_delete`, one unit per id,
+         # so a client cannot double it by switching transport.
+         :ok <- SyncRateLimit.check(user.id, device, :handshake, max(length(ids), 1)) do
+      # Error tuples ({:not_found, id}/internal) fall through to the
+      # action_fallback.
       with {:ok, %{deleted: n}} <-
              Notes.batch_delete_notes(user, vault, ids, origin_device_id: device) do
         body = %{deleted: n}
 
         EngramWeb.Plugs.IdempotencyKey.remember(conn, %{status: 200, body: body})
 
-        BatchOps.broadcast_batch(user, vault, "notes.batch", %{op: "delete", ids: ids})
+        # A retry where every id was already gone changed nothing: no refetch.
+        if n > 0,
+          do: BatchOps.broadcast_batch(user, vault, "notes.batch", %{op: "delete", ids: ids})
+
         json(conn, body)
       end
     else
       :error ->
         conn |> put_status(400) |> json(%{error: "invalid_ids"})
 
-      {:error, :rate_limited} ->
-        conn |> put_status(429) |> json(%{error: "rate_limited"})
+      {:error, :batch_too_large} = too_large ->
+        EngramWeb.FallbackController.call(conn, too_large)
+
+      {:error, {:rate_limited, retry_after_ms}} ->
+        EngramWeb.Plugs.Halt.rate_limited(conn, retry_after_ms)
     end
   end
 
   def batch_delete(conn, _params) do
     conn |> put_status(400) |> json(%{error: "missing required param: ids"})
   end
-
-  defp delete_units(ids), do: ids |> length() |> min(Batch.batch_request_max()) |> max(1)
 
   operation(:batch_move,
     operation_id: "notes-batch-move",

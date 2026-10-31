@@ -40,16 +40,16 @@ defmodule Engram.Vaults.SeqGate do
     * After a partition restarts, holders that were inside the DB still finish
       while the new process grants new callers: briefly two writers per vault
       for that partition. The DB row lock keeps this correct.
-    * Gated: REST attachment upsert (`commit_row`), delete and move; REST note
-      delete and rename; every MCP tool call that writes vault data (taken in
-      `McpController` before its request transaction opens), and MCP tools
-      outside the request transaction that reach those (`rename_note`); an MCP
-      shed answers a `rate_limited` tool error. The channel `crdt_delete`, on
-      the shorter `channel_wait_ms/0` budget and off the channel process,
-      replying `busy`. NOT gated: REST note upsert (its transaction runs the
-      CRDT merge), batch and folder ops (one lock per transaction), the other
-      CRDT channel writes and checkpoints, and Oban workers other than the
-      vault index projection.
+    * Gated: REST attachment upsert (`commit_row`), delete, move and batch
+      delete; REST note delete, rename, batch delete and batch move; every MCP
+      tool call that writes vault data (taken in `McpController` before its
+      request transaction opens), and MCP tools outside the request
+      transaction that reach those (`rename_note`); an MCP shed answers a
+      `rate_limited` tool error. The channel `crdt_delete`, on the shorter
+      `channel_wait_ms/0` budget and off the channel process, replying `busy`.
+      NOT gated: REST note upsert (its transaction runs the CRDT merge), folder
+      ops (one lock per transaction), the other CRDT channel writes and
+      checkpoints, and Oban workers other than the vault index projection.
   """
   use GenServer
 

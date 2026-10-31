@@ -4766,8 +4766,10 @@ defmodule Engram.Notes do
     ids = Enum.uniq(ids)
 
     with {:ok, user} <- Crypto.ensure_user_dek(user) do
+      # Gated (Vaults.SeqGate): concurrent batches to one vault queue without
+      # a pool connection instead of waiting on the vault lock inside one.
       {:ok, result} =
-        Repo.with_tenant(user.id, fn ->
+        SeqGate.with_tenant(user.id, vault.id, fn ->
           # kind filter: folder-marker rows share the notes table but have
           # nil path_hmac and their own delete API — a marker id here must
           # read as not_found, not tombstone the marker + crash on encode64.
@@ -4973,11 +4975,17 @@ defmodule Engram.Notes do
     with {:ok, moves} <- resolve_moves(user, vault, ids, target_folder),
          :ok <- validate_move_targets(user, vault, moves),
          :ok <- claim_moves(user, vault, moves) do
-      # Owns the after-commit queue: the per-note renames' broadcasts and room
-      # stops wait for THIS commit, not each nested with_tenant's return.
-      Repo.transaction_after_commit(fn ->
-        refs = ensure_move_folders!(user, vault, moves)
-        apply_moves(user, vault, moves, refs)
+      # Gate outermost (Vaults.SeqGate), then a transaction that owns the
+      # after-commit queue: the per-note renames' broadcasts and room stops
+      # wait for THIS commit, not each nested with_tenant's return.
+      SeqGate.with_vault(vault.id, fn ->
+        Repo.transaction_after_commit(fn ->
+          refs = ensure_move_folders!(user, vault, moves)
+          moved = apply_moves(user, vault, moves, refs)
+          # Test seam (nil outside tests): the last point before commit.
+          :ok = interleave_hook(:batch_move_applied)
+          moved
+        end)
       end)
     end
   end

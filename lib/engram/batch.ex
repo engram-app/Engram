@@ -77,6 +77,13 @@ defmodule Engram.Batch do
   @spec batch_request_max() :: 500
   def batch_request_max, do: @folder_delete
 
+  @doc "`:ok`, or `{:error, :batch_too_large}` for a request over `batch_request_max/0`."
+  @spec check_request_size(list()) :: :ok | {:error, :batch_too_large}
+  def check_request_size(items) when length(items) > @folder_delete,
+    do: {:error, :batch_too_large}
+
+  def check_request_size(items) when is_list(items), do: :ok
+
   @doc "Default rows per page of a paged MCP list when the client sends no limit."
   @spec page_default() :: 200
   def page_default, do: @page_default

@@ -36,9 +36,10 @@ defmodule EngramWeb.SyncRateLimit do
   @doc """
   Charges `increment` units of `class` to the device and account buckets.
   `device` is the client's device id, or nil (one shared bucket per user).
+  A refusal carries the ms until the refusing bucket frees, for `retry-after`.
   """
   @spec check(Ecto.UUID.t(), String.t() | nil, class(), pos_integer()) ::
-          :ok | {:error, :rate_limited}
+          :ok | {:error, {:rate_limited, non_neg_integer()}}
   def check(user_id, device, class, increment \\ 1) do
     {prefix, limit} =
       case class do
@@ -50,7 +51,7 @@ defmodule EngramWeb.SyncRateLimit do
          {:allow, _} <- hit("#{prefix}:acct:#{user_id}", limit * @account_multiplier, increment) do
       :ok
     else
-      {:deny, _} -> {:error, :rate_limited}
+      {:deny, retry_after_ms} -> {:error, {:rate_limited, retry_after_ms}}
     end
   end
 

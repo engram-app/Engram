@@ -599,7 +599,8 @@ defmodule Engram.NotesBatchSetBasedTest do
   composition leaked note_changed events for rolled-back work (documented
   caveat in the old moduledoc; this is the promised fix).
   """
-  use Engram.DataCase, async: true
+  # async: false: one test arms the global interleave hook.
+  use Engram.DataCase, async: false
 
   alias Engram.Notes
 
@@ -680,6 +681,34 @@ defmodule Engram.NotesBatchSetBasedTest do
 
     assert {:ok, %{deleted: 2}} = Notes.batch_delete_notes(user, vault, [n1.id, n2.id])
     assert Engram.UsageMeters.notes_count(user.id) == before - 2
+  end
+
+  # A batch that rolls back after its renames ran must announce none of them
+  # (the rename broadcasts wait for the batch's own commit).
+  test "a batch move that rolls back broadcasts nothing", %{user: user, vault: vault} do
+    {:ok, n1} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "# A"}, actor: "api")
+
+    {:ok, n2} =
+      Notes.upsert_note(user, vault, %{"path" => "b.md", "content" => "# B"}, actor: "api")
+
+    EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      :batch_move_applied -> raise "late failure"
+      _ -> :ok
+    end)
+
+    try do
+      assert_raise RuntimeError, "late failure", fn ->
+        Notes.batch_move_notes(user, vault, [n1.id, n2.id], {:path, "Z"})
+      end
+    after
+      Application.delete_env(:engram, :checkpoint_interleave_hook)
+    end
+
+    refute_receive %Phoenix.Socket.Broadcast{event: "note_changed"}, 300
+    assert {:ok, %{path: "a.md"}} = Notes.get_note_by_id(user, vault, n1.id)
   end
 
   test "batch move resolves every id in one query, not one per id", %{user: user, vault: vault} do

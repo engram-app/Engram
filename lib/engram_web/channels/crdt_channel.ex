@@ -2237,7 +2237,11 @@ defmodule EngramWeb.CrdtChannel do
   # Budgets live in EngramWeb.SyncRateLimit, shared with the REST batch delete.
   defp check_rate(socket, class) do
     device = socket.assigns[:device_id] || socket.assigns[:conn_id]
-    EngramWeb.SyncRateLimit.check(socket.assigns.current_user.id, device, class)
+
+    case EngramWeb.SyncRateLimit.check(socket.assigns.current_user.id, device, class) do
+      :ok -> :ok
+      {:error, {:rate_limited, _retry_after_ms}} -> {:error, :rate_limited}
+    end
   end
 
   defp decode_frame(b64) when byte_size(b64) > @max_b64_bytes, do: {:error, :frame_too_large}
