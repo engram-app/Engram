@@ -3373,25 +3373,105 @@ defmodule Engram.Notes do
   the row locked and writes only if it has not moved. If it moved, the read and
   rebuild run again on the row locked by `get_note_for_update/3`, so a
   concurrent writer of this note is never overwritten and never retried
-  against. A missing note returns `{:error, :not_found}` with the vault lock
-  held, so a caller that creates the note in the same transaction cannot race
-  another creator.
+  against.
+
+  Called outside a transaction, the optimistic attempt holds no pool
+  connection while it rebuilds (each read and the write are their own short
+  transactions), and only a lost race or a miss opens the locked one.
+  `rebuild` is memoized on its input: when the locked re-read finds the text
+  the optimistic attempt already rebuilt (the row moved, its text did not),
+  the result is reused instead of re-parsing under the vault lock. So
+  `rebuild` must be a pure function of the text.
+
+  The locked path itself still computes under the vault and note locks: every
+  note writer takes the vault lock BEFORE the note row (`get_note_for_update/3`),
+  so locking the note alone, computing, and bumping the seq last would
+  deadlock against them (40P01).
+
+  A missing note returns `{:error, :not_found}` with the vault lock held until
+  the caller's transaction ends, so a caller that creates the note in the same
+  transaction cannot race another creator. Outside a transaction there is no
+  such hold: open one first if you create on a miss.
 
   `opts` are `upsert_note/4`'s; `mtime:` defaults to the note's own.
   """
   @spec rmw_note(map(), map(), String.t(), (String.t() -> term()), keyword()) ::
           {term(), term()}
   def rmw_note(user, vault, path, rebuild, opts) do
-    Repo.with_tenant!(user.id, fn ->
-      with {:ok, note, tail} <- get_note_with_tail(user, vault, path),
-           {{:error, stale}, _} when stale in [:stale_note, :stale_tail] <-
-             rmw_attempt(user, vault, path, {note, tail}, rebuild, [expected_note: note] ++ opts) do
-        rmw_locked(user, vault, path, rebuild, opts)
+    key = {:rmw_rebuild, make_ref()}
+    rebuild = memo_rebuild(rebuild, key)
+    # `rebuilt:` (rmw_prepare/4's result, computed before the caller opened
+    # its transaction) seeds the memo, so an unchanged note is not re-parsed.
+    # Its note and tail are the optimistic snapshot, so the note is read once.
+    {rebuilt, opts} = Keyword.pop(opts, :rebuilt)
+    snapshot = rebuilt && {:ok, rebuilt.note, rebuilt.tail}
+    if rebuilt, do: Process.put(key, {rebuilt.text, rebuilt.result})
+
+    try do
+      if Repo.in_transaction?() do
+        Repo.with_tenant!(user.id, fn ->
+          rmw_optimistic(user, vault, path, rebuild, opts, snapshot)
+        end)
       else
-        {:error, :not_found} -> rmw_locked(user, vault, path, rebuild, opts)
-        done -> done
+        case rmw_optimistic(user, vault, path, rebuild, opts, snapshot) do
+          :locked ->
+            Repo.with_tenant!(user.id, fn -> rmw_locked(user, vault, path, rebuild, opts) end)
+
+          done ->
+            done
+        end
       end
-    end)
+    after
+      Process.delete(key)
+    end
+  end
+
+  @doc """
+  Runs `rebuild` on the note's current authority text, for a caller about to
+  call `rmw_note/5` inside a transaction: `{:ok, prepared}` to pass as
+  `rebuilt:` (the note and tail it read become rmw_note's optimistic snapshot), or `:none` (no note, or its authority is unreadable; the rmw
+  then reads and rebuilds itself). Call it OUTSIDE any transaction, so a slow
+  rebuild (a section parse) holds no connection and no lock.
+  """
+  @spec rmw_prepare(map(), map(), String.t(), (String.t() -> term())) :: {:ok, map()} | :none
+  def rmw_prepare(user, vault, path, rebuild) do
+    with {:ok, note, tail} <- get_note_with_tail(user, vault, path),
+         {:ok, current, _doc} <- authority(user, note, tail) do
+      {:ok, %{note: note, tail: tail, text: current, result: rebuild.(current)}}
+    else
+      _ -> :none
+    end
+  end
+
+  # Inside a transaction a lost race or a miss continues locked in it;
+  # outside one it returns :locked for the caller to open one.
+  defp rmw_optimistic(user, vault, path, rebuild, opts, snapshot) do
+    with {:ok, note, tail} <- snapshot || get_note_with_tail(user, vault, path),
+         {{:error, stale}, _} when stale in [:stale_note, :stale_tail] <-
+           rmw_attempt(user, vault, path, {note, tail}, rebuild, [expected_note: note] ++ opts) do
+      locked_or_return(user, vault, path, rebuild, opts)
+    else
+      {:error, :not_found} -> locked_or_return(user, vault, path, rebuild, opts)
+      done -> done
+    end
+  end
+
+  defp locked_or_return(user, vault, path, rebuild, opts) do
+    if Repo.in_transaction?(), do: rmw_locked(user, vault, path, rebuild, opts), else: :locked
+  end
+
+  defp memo_rebuild(rebuild, key) do
+    fn current ->
+      case Process.get(key) do
+        {^current, result} ->
+          result
+
+        _ ->
+          result = rebuild.(current)
+          Process.put(key, {current, result})
+          result
+      end
+    end
   end
 
   defp rmw_locked(user, vault, path, rebuild, opts) do

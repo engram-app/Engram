@@ -156,47 +156,62 @@ defmodule EngramWeb.NotesController do
     # (a second append used to erase the first) and merges into the exact doc
     # the new body was derived from (it used to duplicate un-checkpointed edits).
     #
-    # One transaction: a miss comes back holding the vault lock, so the create
-    # below cannot race another append's create. The response is rendered after
-    # it commits.
+    # Outside a transaction first: the rebuild, merge and encryption hold no
+    # pool connection (Notes.rmw_note/5). Only a miss opens one, where the
+    # retried rmw comes back holding the vault lock, so the create cannot race
+    # another append's create. The response renders after the commit: its
+    # links read is a fresh short read, not part of the write.
     rebuild = fn base -> String.trim_trailing(base, "\n") <> "\n" <> text end
 
     result =
-      in_write_txn(user, fn user ->
+      with {:ok, user} <- Crypto.ensure_user_dek(user) do
         case Notes.rmw_note(user, vault, path, rebuild, actor: actor) do
           {{:error, :not_found}, _} ->
-            # Create new note with heading from filename + appended text
-            filename = path |> Path.basename(".md")
-
-            {:created,
-             Notes.upsert_note(
-               user,
-               vault,
-               %{
-                 "path" => path,
-                 "content" => "# #{filename}\n\n#{text}",
-                 "mtime" => System.os_time(:second) * 1.0
-               },
-               actor: actor,
-               surface: EngramWeb.WriteActor.surface(conn)
-             )
-             |> render_in_txn(user)}
+            in_write_txn(user, fn user ->
+              append_or_create(conn, user, vault, path, text, rebuild)
+            end)
 
           {upserted, _} ->
-            {:appended, render_in_txn(upserted, user)}
+            {:appended, upserted}
         end
-      end)
+      end
 
-    append_response(conn, user, path, result)
+    append_response(conn, user, path, render_append(result, user))
   end
 
-  # note_json's links read joins the request transaction.
-  defp render_in_txn({:ok, note}, user), do: {:ok, {:rendered, note_json(note, user)}}
+  defp append_or_create(conn, user, vault, path, text, rebuild) do
+    actor = EngramWeb.WriteActor.for_conn(conn)
 
-  defp render_in_txn({:error, :version_conflict, server}, user),
-    do: {:error, :version_conflict, {:rendered, note_json(server, user)}}
+    case Notes.rmw_note(user, vault, path, rebuild, actor: actor) do
+      {{:error, :not_found}, _} ->
+        # Create new note with heading from filename + appended text
+        filename = path |> Path.basename(".md")
 
-  defp render_in_txn(other, _user), do: other
+        {:created,
+         Notes.upsert_note(
+           user,
+           vault,
+           %{
+             "path" => path,
+             "content" => "# #{filename}\n\n#{text}",
+             "mtime" => System.os_time(:second) * 1.0
+           },
+           actor: actor,
+           surface: EngramWeb.WriteActor.surface(conn)
+         )}
+
+      {upserted, _} ->
+        {:appended, upserted}
+    end
+  end
+
+  defp render_append({kind, {:ok, note}}, user),
+    do: {kind, {:ok, {:rendered, note_json(note, user)}}}
+
+  defp render_append({kind, {:error, :version_conflict, server}}, user),
+    do: {kind, {:error, :version_conflict, {:rendered, note_json(server, user)}}}
+
+  defp render_append(other, _user), do: other
 
   # The DEK could not be provisioned (in_write_txn/2): nothing was read or
   # written. Same retryable refusal as an unreadable authority.
