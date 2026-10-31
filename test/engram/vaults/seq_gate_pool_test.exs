@@ -44,6 +44,19 @@ defmodule Engram.Vaults.SeqGatePoolTest do
     end)
   end
 
+  defp await_queued(n, tries \\ 200) do
+    waiting = Engram.Vaults.SeqGate.queue_depth().waiting
+
+    if waiting >= n or tries == 0 do
+      # Give ungated deletes (the red run) the same time to reach the pool.
+      Process.sleep(100)
+      waiting
+    else
+      Process.sleep(10)
+      await_queued(n, tries - 1)
+    end
+  end
+
   test "50 deletes queued on one vault's seq lock leave the pool usable", ctx do
     user = insert(:user, email: "seq-gate-#{Ecto.UUID.generate()}@example.com")
 
@@ -78,7 +91,9 @@ defmodule Engram.Vaults.SeqGatePoolTest do
         for i <- 1..@deletes,
             do: on_pool(ctx, fn -> Attachments.delete_attachment(user, vault, "a/#{i}.png") end)
 
-      Process.sleep(300)
+      # Precondition: the deletes have actually reached the gate. Otherwise the
+      # probe below would pass trivially.
+      queued = await_queued(@deletes - 1)
 
       probe = on_pool(ctx, fn -> Repo.query("SELECT 1", [], timeout: 2_000) end)
       probe_result = Task.yield(probe, 3_000) || Task.shutdown(probe, :brutal_kill)
@@ -91,6 +106,7 @@ defmodule Engram.Vaults.SeqGatePoolTest do
       assert {:ok, {:ok, %{rows: [[1]]}}} = probe_result,
              "an unrelated query could not get a pool connection"
 
+      assert queued >= @deletes - 1, "only #{queued} deletes were queued on the gate"
       assert Enum.all?(results, &match?({_, {:ok, :ok}}, &1))
       assert {:ok, []} = Attachments.list_attachments(user, vault)
     after

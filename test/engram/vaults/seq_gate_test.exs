@@ -4,19 +4,15 @@ defmodule Engram.Vaults.SeqGateTest do
   alias Engram.Vaults.SeqGate
 
   # Holds the vault's gate from another process until told to let go.
-  defp hold_gate(vault_id, opts \\ []) do
+  defp hold_gate(vault_id) do
     parent = self()
 
     task =
       Task.async(fn ->
-        SeqGate.with_vault(
-          vault_id,
-          fn ->
-            send(parent, :held)
-            receive do: (:release -> :ok)
-          end,
-          opts
-        )
+        SeqGate.with_vault(vault_id, fn ->
+          send(parent, :held)
+          receive do: (:release -> :ok)
+        end)
       end)
 
     assert_receive :held, 1_000
@@ -25,6 +21,14 @@ defmodule Engram.Vaults.SeqGateTest do
 
   defp waiter(vault_id, opts \\ []),
     do: Task.async(fn -> SeqGate.with_vault(vault_id, fn -> :ran end, opts) end)
+
+  defp wait_for_waiting(n, tries \\ 100) do
+    cond do
+      SeqGate.queue_depth().waiting >= n -> :ok
+      tries == 0 -> flunk("queue never reached #{n} waiters")
+      true -> Process.sleep(10) && wait_for_waiting(n, tries - 1)
+    end
+  end
 
   setup do: %{vault_id: Ecto.UUID.generate()}
 
@@ -53,13 +57,15 @@ defmodule Engram.Vaults.SeqGateTest do
     assert SeqGate.with_vault(v, fn -> :ran end) == :ran
   end
 
-  # Review M2: degrading open on timeout put every late waiter back on a pool
-  # connection. It must shed instead, and leave no queued entry behind.
-  test "a wait timeout sheds with Busy (503) and leaves nothing queued", %{vault_id: v} do
+  # Delta review M1: Busy must be a 429 (the plugin honors retry-after on 429
+  # but parks a 503 after 5 tries) and must stay out of Sentry.
+  test "a wait timeout sheds with Busy (429, not a Sentry error), nothing left queued",
+       %{vault_id: v} do
     holder = hold_gate(v)
 
     e = assert_raise SeqGate.Busy, fn -> SeqGate.with_vault(v, fn -> :ran end, timeout: 50) end
-    assert Plug.Exception.status(e) == 503
+    assert Plug.Exception.status(e) == 429
+    refute Engram.Sentry.EventFilter.server_error?(e)
 
     send(holder.pid, :release)
     Task.await(holder)
@@ -70,7 +76,7 @@ defmodule Engram.Vaults.SeqGateTest do
   test "a waiter killed while queued is skipped", %{vault_id: v} do
     holder = hold_gate(v)
     dead = waiter(v)
-    Process.sleep(20)
+    wait_for_waiting(1)
     Process.unlink(dead.pid)
     Process.exit(dead.pid, :kill)
 
@@ -88,7 +94,71 @@ defmodule Engram.Vaults.SeqGateTest do
     send(holder.pid, :release)
   end
 
-  test "a missing gate runs ungated", %{vault_id: v} do
-    assert SeqGate.with_vault(v, fn -> :ran end, gate: :no_such_gate) == :ran
+  # Delta review item 4: a missing or crashed gate must fail closed, not let
+  # every queued writer into the DB at once.
+  test "a missing gate fails closed with Busy", %{vault_id: v} do
+    assert_raise SeqGate.Busy, fn ->
+      SeqGate.with_vault(v, fn -> :ran end, gate: :no_such_gate, timeout: 100)
+    end
+  end
+
+  test "a crashed partition re-queues its waiters one at a time", %{vault_id: v} do
+    holder = hold_gate(v)
+    parent = self()
+    {:ok, counter} = Agent.start_link(fn -> {0, 0} end)
+
+    waiters =
+      for _ <- 1..5 do
+        Task.async(fn ->
+          SeqGate.with_vault(v, fn ->
+            Agent.update(counter, fn {cur, max} -> {cur + 1, max(max, cur + 1)} end)
+            Process.sleep(20)
+            Agent.update(counter, fn {cur, max} -> {cur - 1, max} end)
+          end)
+        end)
+      end
+
+    wait_for_waiting(5)
+    partition = GenServer.whereis({:via, PartitionSupervisor, {SeqGate, v}})
+    Process.exit(partition, :kill)
+
+    Task.await_many(waiters, 5_000)
+    {_, max_concurrent} = Agent.get(counter, & &1)
+    assert max_concurrent == 1, "waiters ran ungated together after the crash"
+    send(holder.pid, :release)
+    send(parent, :done)
+  end
+
+  test "emits acquire (ok/busy) and hold telemetry", %{vault_id: v} do
+    me = self()
+    id = {__MODULE__, make_ref()}
+
+    :telemetry.attach_many(
+      id,
+      [[:engram, :seq_gate, :acquire], [:engram, :seq_gate, :hold]],
+      fn event, m, meta, _ -> if self() == me, do: send(me, {event, m, meta}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(id) end)
+
+    SeqGate.with_vault(v, fn -> :ok end)
+    assert_receive {[:engram, :seq_gate, :acquire], %{duration: _}, %{result: :ok}}
+    assert_receive {[:engram, :seq_gate, :hold], %{duration: d}, _} when d >= 0
+
+    holder = hold_gate(v)
+    assert_raise SeqGate.Busy, fn -> SeqGate.with_vault(v, fn -> :ok end, timeout: 20) end
+    assert_receive {[:engram, :seq_gate, :acquire], _, %{result: :busy}}
+    send(holder.pid, :release)
+  end
+
+  test "queue_depth counts held vaults and queued writers on this node", %{vault_id: v} do
+    holder = hold_gate(v)
+    w = waiter(v)
+    wait_for_waiting(1)
+    assert %{held: held, waiting: waiting} = SeqGate.queue_depth()
+    assert held >= 1 and waiting >= 1
+    send(holder.pid, :release)
+    Task.await(w)
   end
 end

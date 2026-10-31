@@ -9,33 +9,43 @@ defmodule Engram.Vaults.SeqGate do
   request dies with `dropped from queue`. Here the waiters queue in this
   process instead and hold no connection.
 
-  Wrap the transaction itself (`with_tenant/3`, or `with_vault/2` around a
-  `Repo.transaction`), not the whole request: keep KMS/S3 work outside so it
-  does not serialize per vault.
+  Wrap only a short transaction (`with_tenant/4`, or `with_vault/3` around a
+  `Repo.transaction`). Slow work (KMS/HMAC, S3, CRDT merge, encryption) stays
+  outside, or it serializes per vault.
 
   ## Behaviour
 
+    * Partitioned: a `PartitionSupervisor` of gate processes, keyed by vault.
+      A crash affects only that partition's vaults.
     * Holder death releases the lock (monitored), so a crash cannot leak it.
-    * Wait timeout SHEDS: raises `Busy` (HTTP 503). Running ungated would put
-      every late waiter back on a pool connection, recreating the incident
-      exactly when the gate matters.
-    * Gate not running (or crashed mid-wait): runs ungated. The DB row lock is
-      the correctness boundary; this gate only decides who waits where.
+    * FAILS CLOSED. A wait timeout, or a gate that stays down past the wait
+      budget, raises `Busy` (HTTP 429 + `retry-after`, which the plugin
+      honors). A crashed partition is retried until the budget runs out:
+      running its waiters ungated all at once is the incident shape.
     * A call already inside a DB transaction skips the gate: it holds a
       connection and possibly the row lock, so waiting here could deadlock
       against the holder. A nested call for the same vault in the same process
-      just runs (per-process; a Task spawned inside the gate is NOT the holder).
+      just runs (per process; a Task spawned inside the gate is NOT the holder).
+
+  ## Telemetry (`Engram.PromEx.SeqGate`)
+
+    * `[:engram, :seq_gate, :acquire]` `%{duration}` (wait), `%{result: :ok | :busy}`
+    * `[:engram, :seq_gate, :hold]` `%{duration}` (time holding the gate)
+    * `[:engram, :seq_gate, :queue]` `%{held, waiting}`, polled per node
 
   ## Limits
 
     * Per node: with N web nodes a vault can have N writers inside the DB, so a
       vault's pool use is capped at N connections, not the pool size.
-    * One process for all vaults. Messages are tiny and the state is a map
-      keyed by vault, so this is far from a bottleneck at current load; a crash
-      drops the queue and waiters run ungated (see above).
-    * Gated writers: attachment upsert/delete/move, note upsert/delete/rename.
-      Batch and folder ops take the lock once per transaction and are not gated
-      yet, nor are CRDT checkpoints and Oban workers.
+    * After a partition restarts, holders that were inside the DB still finish
+      while the new process grants new callers: briefly two writers per vault
+      for that partition. The DB row lock keeps this correct.
+    * Gated: REST attachment upsert (`commit_row`), delete and move; REST note
+      delete and rename. NOT gated: note upsert (its transaction runs the CRDT
+      merge), batch and folder ops (one lock per transaction), MCP tool calls
+      (they run inside one tenant transaction, so they skip the gate), CRDT
+      channel writes and checkpoints, and Oban workers other than the vault
+      index projection.
   """
   use GenServer
 
@@ -44,21 +54,31 @@ defmodule Engram.Vaults.SeqGate do
   require Logger
 
   defmodule Busy do
-    @moduledoc "The vault's write queue did not drain within the wait budget."
-    defexception message: "vault write queue saturated, retry", plug_status: 503
+    @moduledoc """
+    The vault's write queue did not drain within the wait budget. A 429, not a
+    5xx: it is load, so it stays out of Sentry, and the plugin retries a 429
+    after `retry-after` instead of parking the write (`EngramWeb.Plugs.RetryAfter`
+    supplies the header).
+    """
+    defexception message: "vault write queue saturated, retry", plug_status: 429
   end
 
   # Longest a queued write waits. A single seq-bumping write is milliseconds, so
   # this is only hit under real saturation, and then we shed.
   @default_timeout 15_000
+  # Pause between retries while a crashed partition restarts.
+  @restart_backoff_ms 10
 
-  def start_link(opts), do: GenServer.start_link(__MODULE__, :ok, name: opts[:name] || __MODULE__)
+  def start_link(opts), do: GenServer.start_link(__MODULE__, :ok, Keyword.take(opts, [:name]))
 
   @doc "`Repo.with_tenant/2` run while holding the vault's gate."
   def with_tenant(user_id, vault_id, fun, opts \\ []),
     do: with_vault(vault_id, fn -> Repo.with_tenant(user_id, fun) end, opts)
 
-  @doc "Run `fun` holding the vault's gate. Options: `:gate`, `:timeout`."
+  @doc """
+  Run `fun` holding the vault's gate. Options: `:gate` (the PartitionSupervisor
+  name, for tests), `:timeout` (wait budget in ms).
+  """
   def with_vault(vault_id, fun, opts \\ []) do
     key = {:seq_gate, vault_id}
 
@@ -66,46 +86,89 @@ defmodule Engram.Vaults.SeqGate do
       fun.()
     else
       gate = Keyword.get(opts, :gate, __MODULE__)
+      timeout = Keyword.get(opts, :timeout, @default_timeout)
+      started = System.monotonic_time()
+      result = acquire(gate, vault_id, started + ms_to_native(timeout))
+      now = System.monotonic_time()
 
-      case acquire(gate, vault_id, Keyword.get(opts, :timeout, @default_timeout)) do
-        :ok ->
-          Process.put(key, true)
+      :telemetry.execute([:engram, :seq_gate, :acquire], %{duration: now - started}, %{
+        result: result
+      })
 
-          try do
-            fun.()
-          after
-            Process.delete(key)
-            GenServer.cast(gate, {:release, vault_id, self()})
-          end
+      if result == :busy do
+        Logger.warning("vault seq gate saturated, shedding write", category: :sync)
+        raise Busy
+      end
 
-        :ungated ->
-          fun.()
+      Process.put(key, true)
+
+      try do
+        fun.()
+      after
+        Process.delete(key)
+
+        :telemetry.execute(
+          [:engram, :seq_gate, :hold],
+          %{duration: System.monotonic_time() - now},
+          %{}
+        )
+
+        cast(gate, vault_id, {:release, vault_id, self()})
       end
     end
   end
 
-  defp acquire(gate, vault_id, timeout) do
-    GenServer.call(gate, {:acquire, vault_id}, timeout)
-  catch
-    :exit, reason ->
-      # Withdraw first: a timed-out waiter still in the queue would be granted
-      # the lock and hold it until it dies. Cast, so a dead gate cannot hang us.
+  @doc "Held and queued writes across this node's partitions."
+  def queue_depth(gate \\ __MODULE__) do
+    gate
+    |> PartitionSupervisor.which_children()
+    |> Enum.reduce(%{held: 0, waiting: 0}, fn {_, pid, _, _}, acc ->
       try do
-        GenServer.cast(gate, {:cancel, vault_id, self()})
+        %{held: h, waiting: w} = GenServer.call(pid, :depth, 1_000)
+        %{held: acc.held + h, waiting: acc.waiting + w}
       catch
-        :exit, _ -> :ok
+        :exit, _ -> acc
       end
-
-      case reason do
-        {:timeout, _} ->
-          Logger.warning("vault seq gate saturated, shedding write", category: :sync)
-          raise Busy
-
-        _ ->
-          Logger.warning("vault seq gate unavailable, writing ungated", category: :sync)
-          :ungated
-      end
+    end)
   end
+
+  defp acquire(gate, vault_id, deadline) do
+    remaining = native_to_ms(deadline - System.monotonic_time())
+
+    if remaining <= 0 do
+      :busy
+    else
+      try do
+        GenServer.call(via(gate, vault_id), {:acquire, vault_id}, remaining)
+      catch
+        :exit, reason ->
+          # Withdraw first: a timed-out waiter still in the queue would be
+          # granted the lock and hold it until it dies.
+          cast(gate, vault_id, {:cancel, vault_id, self()})
+
+          case reason do
+            {:timeout, _} ->
+              :busy
+
+            _crashed_or_restarting ->
+              Process.sleep(min(@restart_backoff_ms, remaining))
+              acquire(gate, vault_id, deadline)
+          end
+      end
+    end
+  end
+
+  # Cast, so a dead gate (or a missing supervisor) cannot hang or crash us.
+  defp cast(gate, vault_id, msg) do
+    GenServer.cast(via(gate, vault_id), msg)
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp via(gate, vault_id), do: {:via, PartitionSupervisor, {gate, vault_id}}
+
+  defp ms_to_native(ms), do: System.convert_time_unit(ms, :millisecond, :native)
+  defp native_to_ms(n), do: System.convert_time_unit(n, :native, :millisecond)
 
   @impl true
   def init(:ok), do: {:ok, %{locks: %{}, refs: %{}}}
@@ -120,6 +183,11 @@ defmodule Engram.Vaults.SeqGate do
       _ ->
         {:reply, :ok, grant(state, vault_id, pid, :queue.new())}
     end
+  end
+
+  def handle_call(:depth, _from, state) do
+    waiting = state.locks |> Map.values() |> Enum.map(&:queue.len(&1.waiting)) |> Enum.sum()
+    {:reply, %{held: map_size(state.locks), waiting: waiting}, state}
   end
 
   @impl true
