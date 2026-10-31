@@ -110,9 +110,10 @@ jobs:
           fi
           python3 e2e/scripts/cleanup_clerk_users.py --older-than 1h
 
-      # Reaps orphaned CI Qdrant collections on the shared SlowRaid Qdrant. Each
-      # e2e job creates a per-run collection (ci_test_<run>_obsidian /
-      # ci_crdt_<run>) and deletes it on teardown, but that DELETE is best-effort
+      # Reaps orphaned CI Qdrant collections on the shared SlowRaid Qdrant. Only
+      # headless-protocol still creates one there (e2e-clerk and e2e-crdt moved to
+      # a per-stack tmpfs Qdrant; keep the wider match until their old orphans age
+      # out). It deletes its collection on teardown, but that DELETE is best-effort
       # (`curl ... || true`) — a cancelled job or an unreachable Qdrant leaks it.
       # They reached 297 orphans by 2026-07-19, at which point Qdrant ENOMEM-
       # panicked loading every shard on boot → crash loop → CI-wide "Qdrant not

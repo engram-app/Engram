@@ -1,0 +1,42 @@
+# CI overlay: a private Qdrant per stack, storage on tmpfs.
+# Usage: docker compose -f ci/compose.yml [-f ci/compose.local.yml] -f ci/compose.qdrant.yml ...
+#
+# Same shape as the unit-tests job's Qdrant (verify.yml "Start ephemeral
+# qdrant"). Without this overlay the stack uses the shared SlowRaid Qdrant,
+# whose disk sits on the ZFS `cache` pool. The daily scrub of that pool
+# (08:00Z) pushed fsync-bound writes (payload-index builds, wait=true upserts)
+# past 60 s and failed e2e with "Qdrant never indexed" (#2318). tmpfs has no
+# fsync cost, and a private instance has no cross-stack contention.
+#
+# Only for jobs pinned to AVX2 runners (e2e-clerk, e2e-crdt: the `heavy`
+# label). Binary quantization SIGILLs without AVX2, and the fastraid-* VMs
+# have none (docs/context/local-qdrant-sigill-no-avx2.md), so
+# headless-protocol, which can land there, stays on the shared Qdrant.
+
+services:
+  engram:
+    environment:
+      QDRANT_URL: http://qdrant:6333
+    depends_on:
+      qdrant:
+        condition: service_healthy
+
+  qdrant:
+    # CI sets CI_QDRANT_IMAGE once at the workflow level; the default is for
+    # running this file by hand.
+    image: ${CI_QDRANT_IMAGE:-qdrant/qdrant:v1.19.2}
+    tmpfs:
+      - /qdrant/storage:size=2g
+      - /qdrant/snapshots:size=256m
+    # Loopback only: the host-side pytest probes (crypto_probe, test_50) read
+    # points directly; nothing off the runner needs it.
+    ports:
+      - "127.0.0.1:${CI_QDRANT_PORT:-6335}:6333"
+    healthcheck:
+      # The image has bash but no curl. /readyz is 200 once the HTTP API and
+      # collections are loaded.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333 && printf \"GET /readyz HTTP/1.0\\r\\n\\r\\n\" >&3 && grep -q \" 200 \" <&3'"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+    restart: "no"
