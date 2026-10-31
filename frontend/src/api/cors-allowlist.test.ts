@@ -51,3 +51,55 @@ describe("CORS allowlist covers every header the SPA sends", () => {
 		expect(missing).toEqual([]);
 	});
 });
+
+// The mirror image for RESPONSE headers: cross-origin, a script can read only
+// the CORS-safelisted ones unless the server exposes the rest. Without it,
+// `retry-after` reads as null in prod and the 429 wait-and-retry never fires.
+const SAFELISTED_RESPONSE = new Set([
+	"cache-control",
+	"content-language",
+	"content-length",
+	"content-type",
+	"expires",
+	"last-modified",
+	"pragma",
+]);
+
+function exposedHeaders(): Set<string> {
+	const plug = readFileSync(CORS_PLUG, "utf8");
+	const list = plug.match(/@api_expose_headers\s+"(?<list>[^"]+)"/)?.groups?.list;
+	if (!list) {
+		throw new Error("@api_expose_headers not found in cors.ex");
+	}
+	return new Set(list.split(",").map((h) => h.trim().toLowerCase()));
+}
+
+function responseHeadersTheSpaReads(): Set<string> {
+	const found = new Set<string>();
+	for (const file of readdirSync(SRC, { recursive: true, encoding: "utf8" })) {
+		if (!/\.tsx?$/.test(file) || /\.test\.tsx?$/.test(file)) {
+			continue;
+		}
+		const text = readFileSync(join(SRC, file), "utf8");
+		for (const m of text.matchAll(
+			/\b(?:res|response)\.headers\.(?:get|has)\(["'](?<name>[^"']+)["']\)/g,
+		)) {
+			found.add((m.groups?.name ?? "").toLowerCase());
+		}
+	}
+	return found;
+}
+
+describe("CORS exposes every response header the SPA reads", () => {
+	it("finds the headers it is meant to guard", () => {
+		expect([...responseHeadersTheSpaReads()]).toContain("retry-after");
+	});
+
+	it("exposes each non-safelisted one", () => {
+		const exposed = exposedHeaders();
+		const missing = [...responseHeadersTheSpaReads()].filter(
+			(h) => !(SAFELISTED_RESPONSE.has(h) || exposed.has(h)),
+		);
+		expect(missing).toEqual([]);
+	});
+});

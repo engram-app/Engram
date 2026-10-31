@@ -2,6 +2,7 @@ import { track } from "../analytics/track";
 import { rlog } from "../observability/remote-log";
 import { scrubUrl } from "../sentry";
 import { getActiveVaultId } from "./active-vault";
+import { sleep } from "./backoff";
 import { getApiBase, joinApiUrl } from "./base";
 import { getDeviceId } from "./device-id";
 import { type NetworkContext, networkContext, offlineMark } from "./network-context";
@@ -150,6 +151,17 @@ function reportUnlessRetried(err: object, failure: Failure, queryAttempt: QueryA
 const RETRY_ONCE_METHODS = new Set(["DELETE"]);
 const RETRY_DELAY_MS = 300;
 
+/** A 429 WITH `retry-after` is "busy, come back" (the vault write gate's
+ *  SeqGate.BusyError sends 2, rate limiters their window), so a request that
+ *  is safe to send twice waits it out here: a GET, an audited DELETE (see
+ *  RETRY_ONCE_METHODS), or anything carrying an X-Idempotency-Key, which is
+ *  resent with the SAME key (the server caches only successes, so a 429 left
+ *  nothing to replay). A 429 WITHOUT `retry-after` is a refusal (an MCP cap-0
+ *  limit) and is never retried. Attempts include the first; the wait is
+ *  clamped so a bogus header cannot park a request for an hour. */
+const MAX_BUSY_ATTEMPTS = 3;
+const MAX_RETRY_AFTER_S = 30;
+
 async function authFetch(
 	path: string,
 	options: RequestInit = {},
@@ -188,7 +200,7 @@ async function authFetch(
 			// A TypeError is the browser's network failure; an AbortError (a
 			// DOMException) is the caller's choice and is never retried.
 			if (retriesOnce && tryNumber === 1 && err instanceof TypeError) {
-				await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+				await sleep(RETRY_DELAY_MS);
 				return attemptFetch(2);
 			}
 			// Aborts are the caller's choice and offline is the user's network, not
@@ -213,7 +225,26 @@ async function authFetch(
 			throw err;
 		}
 	};
-	const { response, attempt } = await attemptFetch(1);
+	const first = await attemptFetch(1);
+	let { response } = first;
+	// Sticky across busy retries: a network-failed first try may have landed.
+	let resentAfterNetworkError = first.attempt === 2;
+	const safeToResend = method === "GET" || retriesOnce || headers.has("X-Idempotency-Key");
+	for (let tries = 1; tries < MAX_BUSY_ATTEMPTS; tries++) {
+		const waitS = safeToResend && response.status === 429 ? parseRetryAfter(response) : undefined;
+		if (waitS === undefined) {
+			break;
+		}
+		// An abort ends the wait early; the resend then rejects with the
+		// AbortError through attemptFetch, like any aborted request.
+		await sleep(
+			Math.min(Math.max(waitS, 0), MAX_RETRY_AFTER_S) * 1000,
+			options.signal ?? undefined,
+		).catch(() => undefined);
+		const next = await attemptFetch(1);
+		({ response } = next);
+		resentAfterNetworkError ||= next.attempt === 2;
+	}
 
 	// A 404 on the repeat of a DELETE: either the first attempt reached the
 	// server and deleted it before the connection failed, or it never arrived
@@ -221,7 +252,7 @@ async function authFetch(
 	// way, and failing would read as "delete failed" for a delete that worked,
 	// so it resolves. The ambiguity is logged, so a wrong-id bug that only
 	// shows up when a network error coincides is still countable in Loki.
-	if (attempt === 2 && method === "DELETE" && response.status === 404) {
+	if (resentAfterNetworkError && method === "DELETE" && response.status === 404) {
 		rlog().warn("api_request", `delete_retry_not_found DELETE ${scrubUrl(url)}`);
 		return new Response(null, { status: 204 });
 	}

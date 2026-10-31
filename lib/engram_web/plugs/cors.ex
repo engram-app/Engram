@@ -34,6 +34,12 @@ defmodule EngramWeb.Plugs.CORS do
     "/.well-known/ai-catalog.json"
   ]
 
+  # Response headers a cross-origin script may read beyond the CORS-safelisted
+  # ones. `retry-after`: the SPA (app.engram.page calling api.engram.page)
+  # waits out a 429 by it (frontend/src/api/client.ts); unexposed, it reads as
+  # null and the retry never fires. Pinned by frontend/src/api/cors-allowlist.test.ts.
+  @api_expose_headers "retry-after"
+
   def init(opts), do: opts
 
   def call(conn, _opts) do
@@ -57,16 +63,13 @@ defmodule EngramWeb.Plugs.CORS do
       "authorization, content-type, x-vault-id, x-device-id, x-idempotency-key, traceparent, if-none-match"
     )
     |> put_resp_header("access-control-max-age", "86400")
-    |> expose_etag()
+    |> put_resp_header("access-control-expose-headers", expose_headers(conn.request_path))
   end
 
   # The server-card spec has browsers revalidate with the ETag, which they can
-  # only read if it is exposed. Only the cacheable documents send one.
-  defp expose_etag(%Plug.Conn{request_path: path} = conn) do
-    if cacheable_path?(path),
-      do: put_resp_header(conn, "access-control-expose-headers", "etag"),
-      else: conn
-  end
+  # only read if it is exposed. Only the cacheable documents send one, and they
+  # keep a constant header set (see resolve_origin/1).
+  defp expose_headers(path), do: if(cacheable_path?(path), do: "etag", else: @api_expose_headers)
 
   # `*` on the edge-cached documents, and this is a CORRECTNESS REQUIREMENT of
   # caching them rather than a loosening. The echo below is right for per-request

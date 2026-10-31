@@ -1,3 +1,4 @@
+import { sleep } from "./backoff";
 import { ApiError, api, LimitExceededError } from "./client";
 import type { AttachmentSummary } from "./queries";
 
@@ -35,25 +36,6 @@ function delayFor(err: unknown, attempt: number, backoffMs: number): number {
 		return err.retryAfterS * 1000;
 	}
 	return backoffMs * 2 ** attempt;
-}
-
-/** A backoff wait that ends the moment the caller aborts. */
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-	return new Promise((resolve, reject) => {
-		if (signal?.aborted) {
-			reject(new DOMException("aborted", "AbortError"));
-			return;
-		}
-		const onAbort = () => {
-			clearTimeout(timer);
-			reject(new DOMException("aborted", "AbortError"));
-		};
-		const timer = setTimeout(() => {
-			signal?.removeEventListener("abort", onAbort);
-			resolve();
-		}, ms);
-		signal?.addEventListener("abort", onAbort, { once: true });
-	});
 }
 
 /**
