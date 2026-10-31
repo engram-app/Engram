@@ -3957,7 +3957,6 @@ defmodule Engram.Notes do
 
       query =
         case fields do
-          :meta -> from(n in base, select: struct(n, @note_meta_fields))
           :crdt -> NoteBody.select_note(base, @note_crdt_fields)
           :all -> NoteBody.select_note(base)
           :current -> with_tail(base)
@@ -7345,28 +7344,7 @@ defmodule Engram.Notes do
           seq
         end
 
-        txn =
-          Repo.with_tenant(user.id, fn ->
-            :ok = Engram.Vaults.lock_seq!(vault.id)
-
-            cond do
-              not fences_hold?(user, vault, fences) ->
-                :stale_rename
-
-              (claimed = claim_cascade(user, vault, claims, movers)) != :ok ->
-                {:claim_refused, claimed}
-
-              true ->
-                write_cascade.()
-            end
-          end)
-
-        seq =
-          case txn do
-            {:ok, :stale_rename} -> throw({:rename_refused, :stale_rename})
-            {:ok, {:claim_refused, {:error, reason}}} -> throw({:claim_refused, reason})
-            {:ok, seq} -> seq
-          end
+        seq = fenced_cascade(user, vault, fences, {claims, movers}, write_cascade)
 
         # Content for the upsert broadcast (e2e test_34 "received=yes
         # materialized=no"): the cascade scans meta columns only (#863), so the
@@ -7450,6 +7428,33 @@ defmodule Engram.Notes do
           _ = orphan_claim(user, vault, length(claims), reason)
           {:error, reason}
       end
+    end
+  end
+
+  # The folder-rename write transaction: vault lock, fence check (locking the
+  # rows), claim, then `write`. Throws for the caller's catch, from OUTSIDE the
+  # transaction, so an enclosing one is not aborted by a miss or a refusal.
+  defp fenced_cascade(user, vault, fences, {claims, movers}, write) do
+    txn =
+      Repo.with_tenant(user.id, fn ->
+        :ok = Engram.Vaults.lock_seq!(vault.id)
+
+        cond do
+          not fences_hold?(user, vault, fences) ->
+            :stale_rename
+
+          (claimed = claim_cascade(user, vault, claims, movers)) != :ok ->
+            {:claim_refused, claimed}
+
+          true ->
+            write.()
+        end
+      end)
+
+    case txn do
+      {:ok, :stale_rename} -> throw({:rename_refused, :stale_rename})
+      {:ok, {:claim_refused, {:error, reason}}} -> throw({:claim_refused, reason})
+      {:ok, seq} -> seq
     end
   end
 
