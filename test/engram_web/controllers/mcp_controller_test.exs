@@ -4,6 +4,7 @@ defmodule EngramWeb.McpControllerTest do
   import Engram.QdrantFilterView
 
   alias Engram.QdrantStub
+  alias Engram.Vaults.SeqGate
 
   # ---------------------------------------------------------------------------
   # Setup: authenticated connection + seeded notes
@@ -1686,7 +1687,7 @@ defmodule EngramWeb.McpControllerTest do
 
       holder =
         spawn(fn ->
-          Engram.Vaults.SeqGate.with_vault(vault_id, fn ->
+          SeqGate.with_vault(vault_id, fn ->
             send(test, :held)
 
             receive do
@@ -1733,7 +1734,7 @@ defmodule EngramWeb.McpControllerTest do
       refute_receive {:ran, "write_note"}, 200
       :telemetry.detach(id)
       refute_received {:waiter_sql, "begin"}
-      assert Engram.Vaults.SeqGate.queue_depth().waiting >= 1
+      assert SeqGate.queue_depth().waiting >= 1
 
       send(holder, :release)
       assert {{:ok, _}, :ok, _} = Task.await(task)
@@ -1950,6 +1951,8 @@ defmodule EngramWeb.McpControllerShedTest do
 
   import ExUnit.CaptureLog
 
+  alias Engram.Vaults.SeqGate
+
   setup do
     user = insert(:user)
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
@@ -1980,7 +1983,7 @@ defmodule EngramWeb.McpControllerShedTest do
 
     holder =
       Task.async(fn ->
-        Engram.Vaults.SeqGate.with_vault(vault.id, fn ->
+        SeqGate.with_vault(vault.id, fn ->
           send(test, :held)
           receive do: (:release -> :ok)
         end)
