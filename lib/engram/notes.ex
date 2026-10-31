@@ -113,7 +113,6 @@ defmodule Engram.Notes do
   ]
 
   @note_crdt_fields @note_meta_fields ++ [:crdt_state_ciphertext, :crdt_state_nonce]
-  @note_fence_scan_fields @note_meta_fields ++ [:crdt_state_nonce]
 
   # Notes resolved per transaction on the change feed. `Repo.with_tenant` takes
   # Ecto's default 15s timeout, and each resolution is a decrypt + Yjs NIF
@@ -4466,27 +4465,11 @@ defmodule Engram.Notes do
   # Nonce, not ciphertext: 12 random bytes rewritten by every write of the
   # column, so it discriminates identically without shipping a TOASTed blob as a
   # bind parameter. Compared only when non-nil (`= NULL` is never true).
-  #
-  # The ONE write fence for a row rewritten from a read: the single rename
-  # (here) and the folder-rename cascade (BulkRename's `read_seq`/`read_nonce`
-  # VALUES columns, same rule in SQL) both take it from fence_of/1.
-  defp fence_of(%Note{seq: seq, crdt_state_nonce: nonce}), do: {seq, nonce}
+  defp rename_fence(%Note{id: id, seq: seq, crdt_state_nonce: nil}),
+    do: from(n in Note, where: n.id == ^id and n.seq == ^seq)
 
-  # The same rule against a fence read back: seq equal, nonce equal when the
-  # read one was non-nil.
-  defp fence_held?({seq, nil}, {seq, _now}), do: true
-  defp fence_held?({seq, nonce}, {seq, nonce}), do: true
-  defp fence_held?(_read, _now), do: false
-
-  defp rename_fence(%Note{id: id} = note) do
-    case fence_of(note) do
-      {seq, nil} ->
-        from(n in Note, where: n.id == ^id and n.seq == ^seq)
-
-      {seq, nonce} ->
-        from(n in Note, where: n.id == ^id and n.seq == ^seq and n.crdt_state_nonce == ^nonce)
-    end
-  end
+  defp rename_fence(%Note{id: id, seq: seq, crdt_state_nonce: nonce}),
+    do: from(n in Note, where: n.id == ^id and n.seq == ^seq and n.crdt_state_nonce == ^nonce)
 
   defp do_rename_note_inner(note, user, new_path, new_folder, now, refs) do
     decrypted_note = decrypt_or_raise!(note, user)
@@ -6793,40 +6776,15 @@ defmodule Engram.Notes do
           {:ok, integer()} | {:error, :conflict | term()}
   def rename_folder(user, vault, old_folder, new_folder) do
     with {:ok, user} <- Crypto.ensure_user_dek(user) do
-      public_rename_result(rename_folder_gated(user, vault, old_folder, new_folder, nil))
+      rename_folder_gated(user, vault, old_folder, new_folder, nil)
     end
   end
-
-  defp public_rename_result({:ok, count, _seq}), do: {:ok, count}
-  defp public_rename_result(other), do: other
 
   # Conflict-gated rename shared by the public entry point (rows = nil →
   # do_rename_folder scans the vault itself) and the batch-move path (rows =
   # the ONE decrypted scan shared across all K markers). Caller must have run
   # `Crypto.ensure_user_dek/1` already.
-  #
-  # A row moved between the cascade's read and its write (the fence check
-  # under the vault lock in do_rename_folder/6): nothing was claimed or
-  # written, so retry once from a fresh scan. Safe inside a caller's
-  # transaction (Folders.rename/4, batch_move_folders/4): the miss writes
-  # nothing, so the transaction is not aborted, and the vault and row locks
-  # the first attempt took are still held, so the retry's read is current. A
-  # second miss is a write storm on this folder, not a conflict with the
-  # target: shed as busy (429 + retry-after), which clients retry.
   defp rename_folder_gated(user, vault, old_folder, new_folder, rows) do
-    case rename_folder_once(user, vault, old_folder, new_folder, rows) do
-      {:error, :stale_rename} ->
-        case rename_folder_once(user, vault, old_folder, new_folder, nil) do
-          {:error, :stale_rename} -> raise SeqGate.BusyError
-          other -> other
-        end
-
-      other ->
-        other
-    end
-  end
-
-  defp rename_folder_once(user, vault, old_folder, new_folder, rows) do
     new_folder = String.trim_trailing(new_folder, "/")
     old_prefix = old_folder <> "/"
 
@@ -6927,8 +6885,7 @@ defmodule Engram.Notes do
     # own index, `notes_folder_ref` for the references), skipped when empty.
     rows =
       Repo.with_tenant!(user.id, fn ->
-        # crdt_state_nonce: half of the write fence (fence_of/1).
-        live = from(n in scoped_live(user, vault), select: struct(n, @note_fence_scan_fields))
+        live = from(n in scoped_live(user, vault), select: struct(n, @note_meta_fields))
 
         by_ref = if ids == [], do: [], else: Repo.all(where(live, [n], n.folder_ref_id in ^ids))
 
@@ -7113,8 +7070,6 @@ defmodule Engram.Notes do
     # (full AAD rebind, needs content + recomputed title) fetch content,
     # targeted by id below. `rows` (batch-move path) reuses a scan the caller
     # already holds instead of re-scanning per marker.
-    # Test seam (nil outside tests): before the subtree read.
-    :ok = interleave_hook(:folder_rename_scan)
     decrypted = rows || fetch_decrypted_live_rows(user, vault, [old_folder])
 
     notes =
@@ -7123,10 +7078,8 @@ defmodule Engram.Notes do
       end)
 
     if notes == [] do
-      {:ok, 0, nil}
+      {:ok, 0}
     else
-      # Test seam (nil outside tests): between the subtree read and its claim.
-      :ok = interleave_hook(:folder_rename_read)
       now = DateTime.utc_now()
       old_len = String.length(old_folder)
       content_by_id = fetch_v1_contents(user, notes)
@@ -7201,288 +7154,216 @@ defmodule Engram.Notes do
       # a partial folder rename executing asynchronously after a 500.
       movers = MapSet.new(real_note_updates, fn {n, _o, _np, _f, _t} -> n.id end)
 
-      # Past the claim (taken in the write transaction below), a raise
-      # (BulkRename.update! can still surface a Postgrex unique_violation for a
-      # shape the row validation cannot see) leaves the map claiming N paths the
-      # rows never took. Report it before it propagates: projection is what
-      # converges the divergence, and nothing else would enqueue a pass.
-      try do
-        # One seq for the whole folder-rename op — shared across every touched
-        # row (renamed updates + old-path tombstones). The cascade row-updates
-        # AND the tombstone insert commit in a SINGLE transaction so a
-        # cursor-based pull (`WHERE seq > cursor`) can never observe the renamed
-        # rows at seq S, advance past S, and then miss the tombstones (also S,
-        # excluded by `seq > cursor`) → lost delete / resurrection (#614).
-        # seq is allocated inside the txn that holds the vault row lock; the
-        # tombstone rows are built from in-memory data (no re-query of committed
-        # state) so they fold cleanly into the same transaction.
-        # Every ciphertext is built BEFORE the transaction: the cascade
-        # re-encrypts each moved row's path/folder (full content for legacy
-        # v1 rows) and each tombstone's fields, and none of it reads state
-        # the lock protects. Under the vault lock only the writes remain.
-        #
-        # Batched write side: rows are partitioned by the column set each
-        # class updates and applied as chunked `UPDATE ... FROM (VALUES ...)`:
-        #   markers -> folder envelope only;
-        #   AAD-bound v2 notes (#863) -> path + folder envelopes only
-        #     (content/tags AADs key on note_id and the basename can't
-        #     change, so re-encrypting content was pure TOAST/WAL churn);
-        #   legacy v1 rows -> full rebind (the rename is their upgrade to
-        #     AAD-bound encryption, dek_version stamped to 2).
-        #
-        # One shared `now` for every row this cascade writes, renamed rows
-        # AND tombstones; the seq feed orders by (seq, id), so same-stamp
-        # runs are harmless.
-        grouped = group_rename_updates(user, updates, content_by_id)
-        # Each row carries the fence it was read at (seq + crdt_state
-        # nonce, fence_of/1, the same one rename_note writes under): a row
-        # a concurrent write moved after the read (a rename_note in the
-        # subtree, a v1 content edit, a checkpoint) is not overwritten from
-        # the stale read.
-        fences = Map.new(notes, &{&1.id, fence_of(&1)})
-        marker_rows = stamp_rename_rows(grouped[:marker] || [], now, fences)
-        v2_rows = stamp_rename_rows(grouped[:v2] || [], now, fences)
-        v1_rows = stamp_rename_rows(grouped[:v1] || [], now, fences)
+      case claim_cascade(user, vault, claims, movers) do
+        {:error, reason} ->
+          {:error, reason}
 
-        # Soft-deleted tombstones for old paths so the seq feed
-        # (list_changes_by_seq, no deleted_at filter) carries delete
-        # signals; without them catch-up clients keep stale files at old
-        # paths. Full-row inserts, so each carries encrypted path/folder/
-        # tags fields too (T3.6: a pre-allocated id, so the row-id-bound
-        # AAD can be built before insert; empty content/title/tags).
-        # Marker rows have no path to tombstone. The seq is stamped in the
-        # transaction.
-        tombstones =
-          Enum.map(real_note_updates, fn {_note, old_path, _new_path, _new_folder, _title} ->
-            tomb_id = mint_id()
-            old_path_folder = Helpers.extract_folder(old_path)
-            full_kw = full_aad_bound_kw(user, tomb_id, "", "", old_path, old_path_folder, [])
+        :ok ->
+          # Everything below runs with the cascade's claim ALREADY COMMITTED, so
+          # a raise here (BulkRename.update! can still surface a Postgrex
+          # unique_violation for a shape the row validation cannot see) leaves
+          # the map claiming N paths the rows never took. Report it before it
+          # propagates — projection is what converges the divergence, and
+          # nothing else would enqueue a pass.
+          try do
+            # One seq for the whole folder-rename op — shared across every touched
+            # row (renamed updates + old-path tombstones). The cascade row-updates
+            # AND the tombstone insert commit in a SINGLE transaction so a
+            # cursor-based pull (`WHERE seq > cursor`) can never observe the renamed
+            # rows at seq S, advance past S, and then miss the tombstones (also S,
+            # excluded by `seq > cursor`) → lost delete / resurrection (#614).
+            # seq is allocated inside the txn that holds the vault row lock; the
+            # tombstone rows are built from in-memory data (no re-query of committed
+            # state) so they fold cleanly into the same transaction.
+            # Every ciphertext is built BEFORE the transaction: the cascade
+            # re-encrypts each moved row's path/folder (full content for legacy
+            # v1 rows) and each tombstone's fields, and none of it reads state
+            # the lock protects. Under the vault lock only the writes remain.
+            #
+            # Batched write side: rows are partitioned by the column set each
+            # class updates and applied as chunked `UPDATE ... FROM (VALUES ...)`:
+            #   markers -> folder envelope only;
+            #   AAD-bound v2 notes (#863) -> path + folder envelopes only
+            #     (content/tags AADs key on note_id and the basename can't
+            #     change, so re-encrypting content was pure TOAST/WAL churn);
+            #   legacy v1 rows -> full rebind (the rename is their upgrade to
+            #     AAD-bound encryption, dek_version stamped to 2).
+            #
+            # One shared `now` for every row this cascade writes, renamed rows
+            # AND tombstones; the seq feed orders by (seq, id), so same-stamp
+            # runs are harmless.
+            grouped = group_rename_updates(user, updates, content_by_id)
+            marker_rows = stamp_rename_rows(grouped[:marker] || [], now)
+            v2_rows = stamp_rename_rows(grouped[:v2] || [], now)
+            v1_rows = stamp_rename_rows(grouped[:v1] || [], now)
 
-            Map.merge(
-              %{
-                id: tomb_id,
-                content_hash: "",
-                mtime: mtime_float,
-                user_id: user.id,
-                vault_id: vault.id,
-                created_at: now,
-                updated_at: now,
-                deleted_at: now
-              },
-              Map.new(full_kw)
-            )
-          end)
+            # Soft-deleted tombstones for old paths so the seq feed
+            # (list_changes_by_seq, no deleted_at filter) carries delete
+            # signals; without them catch-up clients keep stale files at old
+            # paths. Full-row inserts, so each carries encrypted path/folder/
+            # tags fields too (T3.6: a pre-allocated id, so the row-id-bound
+            # AAD can be built before insert; empty content/title/tags).
+            # Marker rows have no path to tombstone. The seq is stamped in the
+            # transaction.
+            tombstones =
+              Enum.map(real_note_updates, fn {_note, old_path, _new_path, _new_folder, _title} ->
+                tomb_id = mint_id()
+                old_path_folder = Helpers.extract_folder(old_path)
+                full_kw = full_aad_bound_kw(user, tomb_id, "", "", old_path, old_path_folder, [])
 
-        # HMACs for the fan-out jobs, also before the lock (a DekCache
-        # miss unwraps through KMS). T3.2: hmac-only args, never plaintext.
-        moves =
-          Enum.map(real_note_updates, fn {note, old_note_path, new_path, new_note_folder, _title} ->
-            {note, old_note_path, new_path, new_note_folder,
-             old_path_hmac_b64!(user, old_note_path)}
-          end)
+                Map.merge(
+                  %{
+                    id: tomb_id,
+                    content_hash: "",
+                    mtime: mtime_float,
+                    user_id: user.id,
+                    vault_id: vault.id,
+                    created_at: now,
+                    updated_at: now,
+                    deleted_at: now
+                  },
+                  Map.new(full_kw)
+                )
+              end)
 
-        # A rename this large is maintenance: it waits out the v5 rebuild.
-        bulk_repath? = length(real_note_updates) > RepathNoteIndex.bulk_threshold()
+            # HMACs for the fan-out jobs, also before the lock (a DekCache
+            # miss unwraps through KMS). T3.2: hmac-only args, never plaintext.
+            moves =
+              Enum.map(real_note_updates, fn {note, old_note_path, new_path, new_note_folder,
+                                              _title} ->
+                {note, old_note_path, new_path, new_note_folder,
+                 old_path_hmac_b64!(user, old_note_path)}
+              end)
 
-        # One seq for the whole folder-rename op, shared across every
-        # touched row (renamed updates + old-path tombstones), in a SINGLE
-        # transaction so a cursor-based pull (`WHERE seq > cursor`) can
-        # never observe the renamed rows at seq S, advance past S, and then
-        # miss the tombstones (#614). That is also why the cascade is not
-        # split across transactions: a chunk boundary would be exactly that
-        # split, and would show a renamed folder row over notes still at the
-        # old path. Statements are chunked instead (BulkRename, tombstones).
-        # The fence is checked FIRST under the vault lock, with the rows
-        # locked, and only then is the cascade claimed: a row that moved
-        # since the read (a rename_note, a v1 edit, a checkpoint) means
-        # nothing is claimed and nothing written, so there is no stale
-        # claim to undo and an enclosing transaction is left usable for
-        # the retry. The claim runs under the lock on purpose: claimed
-        # earlier, a single rename could land its row between the claim
-        # and this check, and projection would later undo it.
-        # ponytail: the claim (a room call, ms) now holds the vault lock;
-        # move it out only with a compare-and-set claim on the index.
-        write_cascade = fn ->
-          seq = Engram.Vaults.next_seq!(vault.id)
+            # A rename this large is maintenance: it waits out the v5 rebuild.
+            bulk_repath? = length(real_note_updates) > RepathNoteIndex.bulk_threshold()
 
-          # Folder rows first: the renamed subtree keeps its rows (and
-          # ids) under the new path hashes, so the trigger on the notes
-          # update below resolves every note straight back to its own
-          # folder. Descendant FOLDERS only; the notes join by id.
-          # The row-level move guard runs again here, in the write
-          # transaction: a concurrent move can make it refuse after the
-          # check at the top of this function passed. Throwing rolls the
-          # transaction back; the claim already committed is reported
-          # below, like any other failure past it.
-          case Rows.rename(user, vault.id, old_folder, new_folder) do
-            :ok -> :ok
-            {:error, reason} -> throw({:rename_refused, reason})
+            # One seq for the whole folder-rename op, shared across every
+            # touched row (renamed updates + old-path tombstones), in a SINGLE
+            # transaction so a cursor-based pull (`WHERE seq > cursor`) can
+            # never observe the renamed rows at seq S, advance past S, and then
+            # miss the tombstones (#614). That is also why the cascade is not
+            # split across transactions: a chunk boundary would be exactly that
+            # split, and would show a renamed folder row over notes still at the
+            # old path. Statements are chunked instead (BulkRename, tombstones).
+            {:ok, seq} =
+              Repo.with_tenant(user.id, fn ->
+                seq = Engram.Vaults.next_seq!(vault.id)
+
+                # Folder rows first: the renamed subtree keeps its rows (and
+                # ids) under the new path hashes, so the trigger on the notes
+                # update below resolves every note straight back to its own
+                # folder. Descendant FOLDERS only; the notes join by id.
+                # The row-level move guard runs again here, in the write
+                # transaction: a concurrent move can make it refuse after the
+                # check at the top of this function passed. Throwing rolls the
+                # transaction back; the claim already committed is reported
+                # below, like any other failure past it.
+                case Rows.rename(user, vault.id, old_folder, new_folder) do
+                  :ok -> :ok
+                  {:error, reason} -> throw({:rename_refused, reason})
+                end
+
+                {:ok, _} =
+                  Rows.ensure_all(
+                    user,
+                    vault.id,
+                    Enum.map(updates, fn {_n, _old, _new, folder, _t} -> folder end)
+                  )
+
+                BulkRename.update!(marker_rows, @marker_rename_cols, seq)
+                BulkRename.update!(v2_rows, @v2_rename_cols, seq)
+                BulkRename.update!(v1_rows, @v1_rename_cols, seq)
+
+                # Batched: one tombstone per note under the folder, so a big
+                # folder overflows the protocol's 65535 bind cap in one statement.
+                tombstones
+                |> Enum.map(&Map.put(&1, :seq, seq))
+                |> Enum.chunk_every(@tombstone_insert_chunk)
+                |> Enum.each(&Repo.insert_all(Note, &1, on_conflict: :nothing))
+
+                # The reindex + link-rewrite fan-out commits with the rows it
+                # covers (bulk inserts, bounded by Engram.Batch.insert_rows/0).
+                enqueue_rename_cascade_jobs(user, vault, moves, bulk_repath?)
+
+                seq
+              end)
+
+            # Content for the upsert broadcast (e2e test_34 "received=yes
+            # materialized=no"): the cascade scans meta columns only (#863), so the
+            # `note` struct carries content: nil. Broadcasting that omits the inline
+            # body, forcing receivers to wait ~30-60s for a pull to materialize the
+            # renamed path. Decrypt each renamed note's body once here so the upsert
+            # ships it inline, exactly like do_rename_note. Content is unchanged by a
+            # rename, so the stored content_hash stays consistent with this body.
+            # ponytail: decrypts every renamed note — a very large folder rename pays
+            # O(content) here; accepted vs the pull-latency correctness bug.
+            #
+            # After the commit, read and broadcast: Folders.rename/4 runs this
+            # inside its own transaction, which still holds the vault lock
+            # here, so a decrypt of every renamed note's content would hold it
+            # too. `Repo.after_commit/1` runs it once that transaction commits
+            # (at once when there is none).
+            :ok =
+              Repo.after_commit(fn ->
+                broadcast_renamed(user, vault, moves, real_note_updates, seq)
+              end)
+
+            {:ok, length(notes)}
+          rescue
+            e ->
+              _ = orphan_claim(user, vault, length(claims), e)
+              reraise e, __STACKTRACE__
+          catch
+            {:rename_refused, reason} ->
+              _ = orphan_claim(user, vault, length(claims), reason)
+              {:error, reason}
           end
-
-          {:ok, _} =
-            Rows.ensure_all(
-              user,
-              vault.id,
-              Enum.map(updates, fn {_n, _old, _new, folder, _t} -> folder end)
-            )
-
-          written =
-            BulkRename.update!(marker_rows, @marker_rename_cols, seq) +
-              BulkRename.update!(v2_rows, @v2_rename_cols, seq) +
-              BulkRename.update!(v1_rows, @v1_rename_cols, seq)
-
-          # Unreachable: fences_hold?/3 locked every row at its read fence.
-          # A miss here is a bug, so it raises (and reports the claim).
-          if written != length(updates),
-            do: raise("folder rename: a fenced row moved under its lock")
-
-          # Batched: one tombstone per note under the folder, so a big
-          # folder overflows the protocol's 65535 bind cap in one statement.
-          tombstones
-          |> Enum.map(&Map.put(&1, :seq, seq))
-          |> Enum.chunk_every(@tombstone_insert_chunk)
-          |> Enum.each(&Repo.insert_all(Note, &1, on_conflict: :nothing))
-
-          # The reindex + link-rewrite fan-out commits with the rows it
-          # covers (bulk inserts, bounded by Engram.Batch.insert_rows/0).
-          enqueue_rename_cascade_jobs(user, vault, moves, bulk_repath?)
-
-          seq
-        end
-
-        seq = fenced_cascade(user, vault, fences, {claims, movers}, write_cascade)
-
-        # Content for the upsert broadcast (e2e test_34 "received=yes
-        # materialized=no"): the cascade scans meta columns only (#863), so the
-        # `note` struct carries content: nil. Broadcasting that omits the inline
-        # body, forcing receivers to wait ~30-60s for a pull to materialize the
-        # renamed path. Decrypt each renamed note's body once here so the upsert
-        # ships it inline, exactly like do_rename_note. Content is unchanged by a
-        # rename, so the stored content_hash stays consistent with this body.
-        # ponytail: decrypts every renamed note — a very large folder rename pays
-        # O(content) here; accepted vs the pull-latency correctness bug.
-        broadcast_contents =
-          fetch_note_contents(
-            user,
-            Enum.map(real_note_updates, fn {n, _, _, _, _} -> n.id end)
-          )
-
-        # Broadcasts outside the transaction (the jobs committed with it).
-
-        Enum.each(moves, fn {note, old_note_path, new_path, new_note_folder, _old_hmac} ->
-          # #976: carry the moved note's id on the old-path delete leg. The note
-          # still exists (same id, new path, upsert leg below), so receivers can
-          # correlate the delete+upsert pair by id instead of resolving by path
-          # mid-relocation — the ambiguity window the resurrection bug lived in.
-          #
-          # Emit the new-path upsert BEFORE the old-path delete: the receiver
-          # must relocate the note's id to the new path first, so the delete
-          # reads as a relocation leg (id now lives elsewhere) instead of
-          # tearing the note's CRDT room down by id before the new path can
-          # materialize from it (e2e test_34 "received=yes materialized=no").
-          #
-          # Root cause of a dropped CRDT rebind on cross-tab folder rename: the
-          # 4-arity clause below carries no `id`, so a client's id-keyed
-          # `useNote(id)` cache never invalidates and its editor stays bound to
-          # the pre-rename CRDT doc path. Pass the note (id included) through
-          # the 6-arity clause instead, same as single-note rename does.
-          :ok =
-            broadcast_change(
-              user.id,
-              vault.id,
-              "upsert",
-              new_path,
-              %{
-                note
-                | path: new_path,
-                  folder: new_note_folder,
-                  content: Map.get(broadcast_contents, note.id),
-                  seq: seq
-              },
-              []
-            )
-
-          :ok =
-            broadcast_change(user.id, vault.id, "delete", old_note_path, note.id, seq: seq)
-        end)
-
-        # The seq is for the batch path (advance_renamed_rows/4).
-        {:ok, length(notes), seq}
-      rescue
-        e ->
-          _ = orphan_claim(user, vault, length(claims), e)
-          reraise e, __STACKTRACE__
-      catch
-        # A row moved since the read: nothing claimed, nothing written;
-        # rename_folder_gated/5 retries. Expected on a concurrency path:
-        # counted, not an error.
-        {:rename_refused, :stale_rename} ->
-          :telemetry.execute(
-            [:engram, :crdt, :index_claim],
-            %{count: 1, entries: 0},
-            %{op: :claim, route: :folder_rename, phase: :stale_retry}
-          )
-
-          {:error, :stale_rename}
-
-        # The claim itself refused (a collision, a rotation): nothing was
-        # claimed or written.
-        {:claim_refused, reason} ->
-          {:error, reason}
-
-        {:rename_refused, reason} ->
-          _ = orphan_claim(user, vault, length(claims), reason)
-          {:error, reason}
       end
     end
   end
 
-  # The folder-rename write transaction: vault lock, fence check (locking the
-  # rows), claim, then `write`. Throws for the caller's catch, from OUTSIDE the
-  # transaction, so an enclosing one is not aborted by a miss or a refusal.
-  defp fenced_cascade(user, vault, fences, {claims, movers}, write) do
-    txn =
-      Repo.with_tenant(user.id, fn ->
-        :ok = Engram.Vaults.lock_seq!(vault.id)
+  # The folder-rename cascade's broadcasts (the jobs committed with the rows).
+  defp broadcast_renamed(user, vault, moves, real_note_updates, seq) do
+    broadcast_contents =
+      fetch_note_contents(user, Enum.map(real_note_updates, fn {n, _, _, _, _} -> n.id end))
 
-        cond do
-          not fences_hold?(user, vault, fences) ->
-            :stale_rename
-
-          (claimed = claim_cascade(user, vault, claims, movers)) != :ok ->
-            {:claim_refused, claimed}
-
-          true ->
-            write.()
-        end
-      end)
-
-    case txn do
-      {:ok, :stale_rename} -> throw({:rename_refused, :stale_rename})
-      {:ok, {:claim_refused, {:error, reason}}} -> throw({:claim_refused, reason})
-      {:ok, seq} -> seq
-    end
-  end
-
-  # The cascade's read fences still hold: every row is live at the seq (and
-  # crdt_state nonce) it was read at. Locks the rows (the lock the UPDATE
-  # would take) so none can move between this check and the write.
-  defp fences_hold?(user, vault, fences) do
-    ids = Map.keys(fences)
-
-    current =
-      Repo.all(
-        from(n in scoped_live(user, vault),
-          where: n.id in ^ids,
-          select: {n.id, n.seq, n.crdt_state_nonce},
-          lock: "FOR NO KEY UPDATE"
+    Enum.each(moves, fn {note, old_note_path, new_path, new_note_folder, _old_hmac} ->
+      # #976: carry the moved note's id on the old-path delete leg. The note
+      # still exists (same id, new path, upsert leg below), so receivers can
+      # correlate the delete+upsert pair by id instead of resolving by path
+      # mid-relocation — the ambiguity window the resurrection bug lived in.
+      #
+      # Emit the new-path upsert BEFORE the old-path delete: the receiver
+      # must relocate the note's id to the new path first, so the delete
+      # reads as a relocation leg (id now lives elsewhere) instead of
+      # tearing the note's CRDT room down by id before the new path can
+      # materialize from it (e2e test_34 "received=yes materialized=no").
+      #
+      # Root cause of a dropped CRDT rebind on cross-tab folder rename: the
+      # 4-arity clause below carries no `id`, so a client's id-keyed
+      # `useNote(id)` cache never invalidates and its editor stays bound to
+      # the pre-rename CRDT doc path. Pass the note (id included) through
+      # the 6-arity clause instead, same as single-note rename does.
+      :ok =
+        broadcast_change(
+          user.id,
+          vault.id,
+          "upsert",
+          new_path,
+          %{
+            note
+            | path: new_path,
+              folder: new_note_folder,
+              content: Map.get(broadcast_contents, note.id),
+              seq: seq
+          },
+          []
         )
-      )
 
-    length(current) == map_size(fences) and
-      Enum.all?(current, fn {id, seq, nonce} ->
-        fence_held?(Map.fetch!(fences, id), {seq, nonce})
-      end)
+      :ok =
+        broadcast_change(user.id, vault.id, "delete", old_note_path, note.id, seq: seq)
+    end)
   end
 
   # The folder-rename cascade's reindex + link-rewrite jobs for every moved
@@ -8367,7 +8248,7 @@ defmodule Engram.Notes do
 
   # The scan holds every row under any marker's folder as resolved. A marker
   # that sits under an earlier one in the batch moves with it in memory
-  # (advance_renamed_rows/4), and its rows were already under the earlier
+  # (advance_renamed_rows/3), and its rows were already under the earlier
   # folder, so later lookups by its current folder still find them.
   defp do_reduce_move_folders(user, vault, marker_ids, target_folder, dek, sources) do
     rows = fetch_decrypted_live_rows(user, vault, sources)
@@ -8375,9 +8256,9 @@ defmodule Engram.Notes do
     marker_ids
     |> Enum.reduce_while({%{moved: 0, pairs: []}, rows}, fn id, {acc, rows} ->
       case move_folder_into(user, vault, id, target_folder, dek, rows) do
-        {:ok, {old_folder, new_folder, seq}} ->
+        {:ok, {old_folder, new_folder}} ->
           acc = %{acc | moved: acc.moved + 1, pairs: [{old_folder, new_folder} | acc.pairs]}
-          {:cont, {acc, advance_renamed_rows(rows, old_folder, new_folder, seq)}}
+          {:cont, {acc, advance_renamed_rows(rows, old_folder, new_folder)}}
 
         {:error, :not_found} ->
           {:halt, {:rollback, {:not_found, id}}}
@@ -8400,7 +8281,7 @@ defmodule Engram.Notes do
   # (real notes) dek_version bumped to AAD-bound — exactly the DB-visible
   # outcome — so the next marker in the batch sees current state without a
   # re-scan. Filter + rewrite arithmetic MUST match do_rename_folder/6.
-  defp advance_renamed_rows(rows, old_folder, new_folder, seq) do
+  defp advance_renamed_rows(rows, old_folder, new_folder) do
     old_prefix = old_folder <> "/"
     old_len = String.length(old_folder)
 
@@ -8422,9 +8303,7 @@ defmodule Engram.Notes do
         dek_version =
           if n.kind == "note", do: Crypto.row_version_aad_bound(), else: n.dek_version
 
-        # The seq the cascade stamped: the next marker's compare-and-swap
-        # reads it as this row's current one.
-        %{n | folder: new_note_folder, path: new_path, dek_version: dek_version, seq: seq}
+        %{n | folder: new_note_folder, path: new_path, dek_version: dek_version}
       else
         n
       end
@@ -8463,7 +8342,7 @@ defmodule Engram.Notes do
           # point already ran ensure_user_dek, so rename_folder/4's wider
           # error surface can't arise here (dialyzer proves the coverage).
           case rename_folder_gated(user, vault, source_folder, new_folder, rows) do
-            {:ok, _count, seq} -> {:ok, {source_folder, new_folder, seq}}
+            {:ok, _count} -> {:ok, {source_folder, new_folder}}
             {:error, :conflict} -> {:error, :conflict}
             {:error, :invalid_path} -> {:error, :cycle}
           end
@@ -8978,8 +8857,8 @@ defmodule Engram.Notes do
 
   # Attaches the cascade's shared timestamp to each {id, kw} rename row,
   # producing the [{id, stamp, kw}] shape BulkRename.update!/3 consumes.
-  defp stamp_rename_rows(rows, now, fences) do
-    Enum.map(rows, fn {id, kw} -> {id, Map.fetch!(fences, id), now, kw} end)
+  defp stamp_rename_rows(rows, now) do
+    Enum.map(rows, fn {id, kw} -> {id, now, kw} end)
   end
 
   # Marker-only rename helper. Re-encrypts JUST the folder envelope under the
