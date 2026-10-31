@@ -12,17 +12,19 @@ defmodule EngramWeb.Plugs.StatementTimeout do
       fails them fast instead of pinning a connection; writes there get
       `:write`.
     * `plug StatementTimeout, :write` (vault and MCP scopes): `:write`.
+    * `plug StatementTimeout, :account_delete` (`UsersController :delete`):
+      the long bound for the account's one cascading delete.
 
   Values: `config :engram, :request_db_bounds` (`config/config.exs`), read via
-  `Engram.RuntimeConfig.request_db_bounds/1`. A bound reached sheds as 429
-  (`Engram.Repo.ShedError`). Background work (Oban,
+  `Engram.RuntimeConfig.request_db_bounds/1`. A bound reached sheds (`Engram.Repo.ShedError`): a lock wait as 429, a
+  statement past its bound as 503. Background work (Oban,
   channels, the maintenance pool) never passes through a plug, so it keeps
   the session default (none).
   """
   @behaviour Plug
 
   @impl true
-  def init(class) when class in [:reset, :auth, :write], do: class
+  def init(class) when class in [:reset, :auth, :write, :account_delete], do: class
 
   @impl true
   def call(conn, :reset) do
@@ -33,6 +35,7 @@ defmodule EngramWeb.Plugs.StatementTimeout do
   def call(%Plug.Conn{method: method} = conn, :auth) when method in ["GET", "HEAD"],
     do: put(conn, :auth_read)
 
+  def call(conn, :account_delete), do: put(conn, :account_delete)
   def call(conn, _class), do: put(conn, :write)
 
   defp put(conn, class) do

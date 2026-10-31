@@ -7,6 +7,9 @@ defmodule EngramWeb.UsersController do
 
   action_fallback EngramWeb.FallbackController
 
+  # The account's whole vault cascade runs in this request: the long bound.
+  plug EngramWeb.Plugs.StatementTimeout, :account_delete when action in [:delete]
+
   operation(:me,
     operation_id: "account-me",
     summary: "Get the current user",

@@ -238,15 +238,25 @@ defmodule Engram.RuntimeConfig do
 
   @doc """
   The `statement_timeout` and `lock_timeout` (ms) a request's tenant
-  transactions apply, by route class (`:auth_read`, `:write`).
+  transactions apply, by route class (`:auth_read`, `:write`, `:account_delete`).
   The values and the measurements behind them live in `config/config.exs`
   (`:request_db_bounds`), the one place they are set.
   """
-  @spec request_db_bounds(:auth_read | :write) :: %{
+  @spec request_db_bounds(:auth_read | :write | :account_delete) :: %{
           statement: pos_integer(),
           lock: pos_integer(),
-          class: :auth_read | :write
+          class: :auth_read | :write | :account_delete
         }
+  def request_db_bounds(:account_delete) do
+    b = Application.fetch_env!(:engram, :request_db_bounds)
+
+    %{
+      statement: Keyword.fetch!(b, :account_delete),
+      lock: Keyword.fetch!(b, :account_delete_lock),
+      class: :account_delete
+    }
+  end
+
   def request_db_bounds(class) when class in [:auth_read, :write] do
     b = Application.fetch_env!(:engram, :request_db_bounds)
     %{statement: Keyword.fetch!(b, class), lock: Keyword.fetch!(b, :lock), class: class}

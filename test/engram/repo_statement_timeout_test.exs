@@ -154,6 +154,9 @@ defmodule Engram.RepoStatementTimeoutTest do
   test "the bounds come from the one config location" do
     assert %{statement: 3_000, lock: 3_000} = Engram.RuntimeConfig.request_db_bounds(:auth_read)
     assert %{statement: 5_000, lock: 3_000} = Engram.RuntimeConfig.request_db_bounds(:write)
+
+    assert %{statement: 120_000, lock: 10_000} =
+             Engram.RuntimeConfig.request_db_bounds(:account_delete)
   end
 
   describe "route classes" do

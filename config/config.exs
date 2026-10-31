@@ -100,9 +100,16 @@ config :engram, :seq_gate_channel_wait_ms, 2_000
 #     0.54s or less. 5s is ~2.3x the manifest. A SeqGate waiter waits in the
 #     BEAM holding no connection, so the gate wait does not add to this.
 #   * lock 3s: request lock waits get their own code (55P03), shed like the rest.
-#   * No cascade class: account delete runs outside a tenant transaction and
-#     vault delete/purge only enqueue CleanupVault, so a longer bound would
-#     protect nothing (PR 2360 delta review L3).
+#   * account_delete 120s (lock 10s): DELETE /api/me runs the account's whole
+#     vault cascade (every note, chunk and attachment row) in ONE tenant
+#     transaction (Accounts.Lifecycle.do_hard_delete). No prod timing exists:
+#     Tempo holds zero DELETE /api/me traces for 10-24..10-31, and the largest
+#     account deleted so far held 10,046 notes. So the bound is set for the
+#     outlier, not the median: the route is rare enough that one connection
+#     held for 2 min costs nothing, and the web client sets no fetch timeout
+#     (the ALB idle timeout is 4000s). A user delete keeps its tokens until the
+#     cascade commits, so a run past it is retryable by the owner.
+#     Vault delete and purge stay on :write: a soft-delete UPDATE and a job.
 #
 # Routes in no classified scope (/webhooks, /oauth, /api/auth, /api/admin,
 # /api/operator, public and .well-known) set no class: no statement_timeout
@@ -111,7 +118,9 @@ config :engram, :seq_gate_channel_wait_ms, 2_000
 config :engram, :request_db_bounds,
   auth_read: 3_000,
   write: 5_000,
-  lock: 3_000
+  lock: 3_000,
+  account_delete: 120_000,
+  account_delete_lock: 10_000
 
 # Embedder adapter (overridden per environment)
 config :engram, :embedder, Engram.Embedders.Voyage
