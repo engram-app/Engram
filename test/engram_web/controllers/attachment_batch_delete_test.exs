@@ -29,8 +29,11 @@ defmodule EngramWeb.AttachmentBatchDeleteTest do
   end
 
   # Without the tag the plugin applied its own delete echo and trashed the
-  # files it had just recreated.
-  test "each delete broadcast carries the caller's X-Device-Id", ctx do
+  # files it had just recreated. The plugin batches only when the server
+  # advertises `attachment_batch_delete_origin`, so the flag and the stamping
+  # are asserted together: neither may ship without the other.
+  test "each delete broadcast carries the caller's X-Device-Id, as advertised", ctx do
+    assert EngramWeb.UserChannel.features().attachment_batch_delete_origin == true
     %{conn: conn, user: user, vault: vault} = ctx
 
     {:ok, _} =

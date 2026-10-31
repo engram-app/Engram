@@ -29,6 +29,16 @@ late), is marked `// compat(server): ...` in the plugin repo.
 New wire shapes the plugin must detect before using are advertised in the
 `user:{id}` join reply under `features` (`EngramWeb.UserChannel`).
 
+Some flags advertise a behavior with no old shape kept, so they have no shim
+and no row in the table below; they stay as long as a supported plugin reads
+them:
+
+- `attachment_batch_delete_origin`: `POST /attachments/batch-delete` stamps the
+  caller's `X-Device-Id` on every delete broadcast. The plugin batches
+  attachment deletes only when it is true (Engram-obsidian#671); before it, its
+  own delete echo trashed files it had just recreated. Pinned with the stamping
+  in `EngramWeb.AttachmentBatchDeleteTest`.
+
 ## The rule
 
 When the plugin version floor is raised (workspace
