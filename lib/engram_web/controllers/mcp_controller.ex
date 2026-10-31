@@ -15,6 +15,7 @@ defmodule EngramWeb.McpController do
   alias Engram.MCP.Resources
   alias Engram.MCP.ToolError
   alias Engram.MCP.Tools
+  alias Engram.Vaults.SeqGate
 
   require Logger
   require OpenTelemetry.Tracer
@@ -1256,7 +1257,7 @@ defmodule EngramWeb.McpController do
     # The message does not say "nothing changed": a gated tool can commit part
     # of its work first (a rename's index claim, which then completes on its
     # own). `_meta` carries the wait as a number for programs.
-    :error, %Engram.Vaults.SeqGate.BusyError{} ->
+    :error, %SeqGate.BusyError{} ->
       retry_s = EngramWeb.Plugs.RetryAfter.busy_seconds()
 
       err =
@@ -1301,13 +1302,31 @@ defmodule EngramWeb.McpController do
   # wrap never committed. A provisioning failure is the tool's error (retrying
   # it inside the transaction would call KMS there). An unwrap failure keeps
   # the provisioned user and lets the tool's own crypto path report it.
+  #
+  # A tool that writes vault data takes the vault's SeqGate BEFORE the
+  # transaction opens, so concurrent tool calls against one vault (agents
+  # issue them in parallel) queue in the BEAM holding no pool connection,
+  # instead of each checking one out and waiting on the vault row lock inside
+  # it. Every lib write inside the call then runs ungated (in a transaction,
+  # and already the vault's holder). The slow work (folder placement, the
+  # section parse) runs in before_txn, outside both.
   defp call_handler(tool, user, vault, args) do
-    args = Handlers.before_txn(tool.name, user, vault, args)
-
     case Crypto.ensure_user_dek(user) do
       {:ok, user} ->
         _ = Crypto.get_dek(user)
-        Engram.Repo.with_tenant!(user.id, fn -> tool.handler.(user, vault, args) end)
+        args = Handlers.before_txn(tool.name, user, vault, args)
+
+        run = fn ->
+          Engram.Repo.with_tenant!(user.id, fn -> tool.handler.(user, vault, args) end)
+        end
+
+        case vault do
+          %{id: vault_id} when is_binary(vault_id) ->
+            if Tools.writes_vault?(tool.name), do: SeqGate.with_vault(vault_id, run), else: run.()
+
+          _ ->
+            run.()
+        end
 
       {:error, reason} ->
         {:error, "Encryption key unavailable (#{Crypto.format_dek_error(reason)})"}

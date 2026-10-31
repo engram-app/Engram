@@ -1672,6 +1672,74 @@ defmodule EngramWeb.McpControllerTest do
     end
   end
 
+  describe "run_tool_handler/4 vault write gate" do
+    # Agents issue tool calls in parallel. Each used to check out a pool
+    # connection at transaction open and then wait on the vault row lock
+    # inside it, so ~10 concurrent writes to one vault emptied the pool. A
+    # write tool now queues on the vault's SeqGate first, holding nothing.
+    defp hold_gate(vault_id) do
+      test = self()
+
+      holder =
+        spawn(fn ->
+          Engram.Vaults.SeqGate.with_vault(vault_id, fn ->
+            send(test, :held)
+
+            receive do
+              :release -> :ok
+            end
+          end)
+        end)
+
+      assert_receive :held
+      holder
+    end
+
+    defp probe(name, test),
+      do: %{
+        name: name,
+        handler: fn _u, _v, _a ->
+          send(test, {:ran, name})
+          {:ok, "ran"}
+        end
+      }
+
+    test "a write tool waits for the vault's gate before opening its transaction", ctx do
+      %{user: user, vault: vault} = ctx
+      test = self()
+      holder = hold_gate(vault.id)
+
+      task =
+        Task.async(fn ->
+          EngramWeb.McpController.run_tool_handler(probe("write_note", test), user, vault, %{})
+        end)
+
+      refute_receive {:ran, "write_note"}, 200
+      assert Engram.Vaults.SeqGate.queue_depth().waiting >= 1
+
+      send(holder, :release)
+      assert {{:ok, _}, :ok, _} = Task.await(task)
+      assert_received {:ran, "write_note"}
+    end
+
+    test "a read-only tool does not wait for the gate", ctx do
+      %{user: user, vault: vault} = ctx
+      holder = hold_gate(vault.id)
+
+      try do
+        assert {{:ok, _}, :ok, _} =
+                 EngramWeb.McpController.run_tool_handler(
+                   probe("get_note", self()),
+                   user,
+                   vault,
+                   %{}
+                 )
+      after
+        send(holder, :release)
+      end
+    end
+  end
+
   describe "error branches through the request transaction" do
     test "move_attachment reports a missing attachment", %{conn: conn} do
       text =
