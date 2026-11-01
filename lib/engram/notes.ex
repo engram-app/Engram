@@ -2315,6 +2315,19 @@ defmodule Engram.Notes do
     end
   end
 
+  # The stale-base check for notes and attachments alike: the live row moved
+  # off the writer's declared base, and not onto the bytes being written. A
+  # row that already holds the incoming content is the writer's own earlier
+  # attempt (a retry after a lost response), not a conflict; the writer cannot
+  # tell, since `content_hash` is keyed server-side. A nil base (none
+  # declared) or nil current (legacy row) never conflicts.
+  @doc false
+  def stale_base?(current, base, incoming)
+      when is_binary(current) and is_binary(base),
+      do: current != base and current != incoming
+
+  def stale_base?(_current, _base, _incoming), do: false
+
   @doc """
   Kill every live CRDT room belonging to `vault_id`'s notes (#954). A room
   must not outlive its vault: orphaned rooms kept ticking checkpoints against
@@ -2656,8 +2669,7 @@ defmodule Engram.Notes do
           not Keyword.get(opts, :force, false) ->
         idempotent_repush(existing, base_attrs)
 
-      is_binary(base_hash) and is_binary(existing.content_hash) and
-          existing.content_hash != base_hash ->
+      stale_base?(existing.content_hash, base_hash, base_attrs.content_hash) ->
         # Stale base declared: the row moved since this writer read it. Refuse
         # to merge (see upsert_note — a stale full-content push deletes newer
         # content convergently); the writer re-reads and retries or surfaces a

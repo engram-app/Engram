@@ -292,6 +292,37 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
     assert conn |> get("/api/attachments/photos/a.png?raw=1") |> response(200) == bytes
   end
 
+  # A retry in a fresh session after a lost response: the row already holds
+  # these exact bytes, so the stale base is the client's own write.
+  test "complete with a stale base_hash succeeds when the row already holds these bytes", %{
+    conn: conn
+  } do
+    upload = fn bytes, extra ->
+      conn
+      |> post(
+        "/api/attachments",
+        Map.merge(%{path: "photos/a.png", content_base64: Base.encode64(bytes)}, extra)
+      )
+      |> json_response(200)
+      |> get_in(["attachment", "content_hash"])
+    end
+
+    h1 = upload.("v1", %{})
+    bytes = :crypto.strong_rand_bytes(1000)
+    h2 = upload.(bytes, %{base_hash: h1})
+
+    %{"upload_id" => id} = start!(conn, "photos/a.png", byte_size(bytes))
+    assert conn |> put_part(id, 1, bytes) |> json_response(200)
+
+    body =
+      conn
+      |> post("/api/attachment-uploads/#{id}/complete", %{base_hash: h1})
+      |> json_response(200)
+
+    assert body["attachment"]["content_hash"] == h2
+    assert conn |> get("/api/attachments/photos/a.png?raw=1") |> response(200) == bytes
+  end
+
   test "complete with a matching base_hash commits", %{conn: conn} do
     h1 =
       conn

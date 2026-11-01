@@ -347,7 +347,7 @@ defmodule Engram.Attachments.Uploads do
          {:ok, file_key} <- file_key(user, up, up.attachment_id),
          {:ok, up} <- assemble(user, vault, up),
          {:ok, hash} <- content_hash(user, up, file_key) do
-      result = commit(user, vault, up, file_key, hash, opts)
+      result = commit(user, vault, up, file_key, hash, Keyword.put(opts, :content_hash, hash))
 
       # A quota refusal is not retryable with this file: drop it. A stale
       # base_hash (#2163) keeps the session: it is assembled, so the client

@@ -161,7 +161,7 @@ defmodule Engram.Attachments do
               nil ->
                 {:ok, id, prepared_attrs}
             end,
-            Notes.put_base_hash_opt([], attrs)
+            Notes.put_base_hash_opt([content_hash: attrs0.content_hash], attrs)
           )
         end
 
@@ -226,7 +226,8 @@ defmodule Engram.Attachments do
   #
   # `opts[:base_hash]` (#2163) is the `content_hash` the writer last read, the
   # same compare-and-swap guard `Notes.upsert_note/4` takes: a live row whose
-  # hash moved since refuses with `{:error, {:stale_base, live_row}}`.
+  # hash moved since refuses with `{:error, {:stale_base, live_row}}`, unless
+  # it moved to `opts[:content_hash]`, the hash of the bytes being written.
   #
   # After commit: releases the replaced row's blob when the new write moved
   # the row to a different storage key, then broadcasts the upsert.
@@ -297,7 +298,7 @@ defmodule Engram.Attachments do
       # The cap check (a user-wide SUM) is serialized by the per-user quota
       # lock, so it runs BEFORE the vault row lock that every writer of the
       # vault waits on.
-      with :ok <- base_hash_gate(existing, path, opts[:base_hash]),
+      with :ok <- base_hash_gate(existing, path, opts[:base_hash], opts[:content_hash]),
            :ok <- quota_check(user, limit, existing, size),
            # The vault row BEFORE the users row (rotation_gate's FOR SHARE):
            # an account delete deletes vaults then users, so users-then-vault
@@ -320,13 +321,21 @@ defmodule Engram.Attachments do
     end)
   end
 
-  # Mirrors the notes stale-base gate (`Notes.do_update_note/6`). No live row
-  # means no check, as for notes; the resurrection risk is #2311.
-  defp base_hash_gate(%Attachment{content_hash: current} = live, path, base)
-       when is_binary(base) and is_binary(current) and current != base,
-       do: {:error, {:stale_base, %{live | path: path}}}
+  # The notes stale-base check (`Notes.stale_base?/3`): a live row that already
+  # holds the incoming bytes passes, so a retry after a lost response is not
+  # refused as a conflict with itself. No live row means no check, as for
+  # notes; the resurrection risk is #2311.
+  #
+  # ponytail: a passing retry still rewrites the row (a version bump and a
+  # blob swap). Only the concurrent case reaches here: a sequential retry
+  # returns from `identical_or_changed/5` before the lock.
+  defp base_hash_gate(%Attachment{content_hash: current} = live, path, base, incoming) do
+    if Notes.stale_base?(current, base, incoming),
+      do: {:error, {:stale_base, %{live | path: path}}},
+      else: :ok
+  end
 
-  defp base_hash_gate(_existing, _path, _base), do: :ok
+  defp base_hash_gate(_existing, _path, _base, _incoming), do: :ok
 
   @doc """
   `{:error, :rotation_in_progress}` while a DEK rotation holds the user (read
