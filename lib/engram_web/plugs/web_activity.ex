@@ -21,7 +21,7 @@ defmodule EngramWeb.Plugs.WebActivity do
   def init(opts), do: opts
 
   def call(%Plug.Conn{assigns: %{current_user: user} = assigns} = conn, _opts) do
-    surface = surface(assigns)
+    surface = EngramWeb.RequestMeta.surface(assigns)
     if surface == "web", do: Engram.Analytics.track_activity(user, :web)
 
     # The one place every authenticated response passes, so the refusals a
@@ -38,18 +38,4 @@ defmodule EngramWeb.Plugs.WebActivity do
   end
 
   def call(conn, _opts), do: conn
-
-  @doc """
-  The analytics surface of a REST request's credential: `"api"` for an API
-  key, `"obsidian_sync"` for a device / OAuth token (MCP has its own
-  controller), `"web"` for a Clerk session.
-  """
-  @spec surface(map()) :: String.t()
-  def surface(assigns) do
-    cond do
-      Map.get(assigns, :current_api_key) -> "api"
-      Map.get(assigns, :current_auth_method) == :internal_jwt -> "obsidian_sync"
-      true -> "web"
-    end
-  end
 end

@@ -41,7 +41,7 @@ defmodule EngramWeb.LimitResponse do
 
     if user = conn.assigns[:current_user] do
       Engram.Analytics.track_limit_hit(user, limit_key || reason, %{
-        surface: EngramWeb.Plugs.WebActivity.surface(conn.assigns)
+        surface: EngramWeb.RequestMeta.surface(conn.assigns)
       })
     end
 

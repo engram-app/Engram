@@ -52,6 +52,11 @@ defmodule EngramWeb.ConnCase do
       |> Ecto.Changeset.change(external_id: "test-#{user.id}")
       |> Engram.Repo.update(skip_tenant_check: true)
 
+    # Every `users` writer evicts `:user` itself (the `users_changed` NOTIFY
+    # never fires in the sandbox: nothing commits). Without this, an earlier
+    # cached read (e.g. an onboarding gate read in `register_vault/3`) keeps
+    # serving the row with no `external_id`, and the minted token has no `sub`.
+    :ok = Engram.Accounts.evict_user(updated.id)
     updated
   end
 

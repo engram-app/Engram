@@ -57,7 +57,8 @@ defmodule EngramWeb.SyncChannel do
     case ChannelGate.check(
            user,
            socket.assigns[:current_api_key],
-           socket.assigns[:plugin_version]
+           socket.assigns[:plugin_version],
+           socket.topic
          ) do
       :ok -> resolve_vault_and_join(vault_id_str, params, socket, user)
       {:error, payload} -> {:error, payload}

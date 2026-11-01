@@ -86,7 +86,7 @@ defmodule Engram.PluginVersion do
 
     * `EngramWeb.Plugs.RequirePluginVersion` on the `:authed_api` pipeline
       (HTTP) → `426 Upgrade Required`.
-    * `EngramWeb.ChannelGate.check/3` (sync + CRDT joins) →
+    * `EngramWeb.ChannelGate.check/4` (sync + CRDT joins) →
       `plugin_upgrade_required`.
 
   The socket half is the load-bearing one. Sync runs over CRDT channels, so

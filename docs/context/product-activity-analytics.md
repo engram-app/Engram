@@ -65,7 +65,7 @@ counts of the last window wait for the next event, so a sum can trail by one
 window.
 
 Call seams: `EngramWeb.Plugs.WebActivity` (web activity and `sync_error`; in
-`:authed_api` and the user scope; `WebActivity.surface/1` is the one
+`:authed_api` and the user scope; `EngramWeb.RequestMeta.surface/1` is the one
 credential-to-surface rule), `crdt_channel.ex` `note_sync_activity/1` (edits
 only), `mcp_controller.ex` `emit_tool_analytics/3` and
 `emit_client_connected/2`, `Search.search/4` (`opts[:surface]`).

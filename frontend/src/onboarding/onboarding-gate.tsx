@@ -15,6 +15,11 @@ export default function OnboardingGate() {
 	// rather than waiting for this gate to render its children (first-view.ts).
 	const qc = useQueryClient();
 	useEffect(() => {
+		// ponytail: fires before the onboarding status is known, on purpose. For
+		// a signup still in the wizard the vault routes 403 it: one harmless
+		// refused burst, which the refusal line's route + surface identify
+		// (`VaultTreeController#show`, `web`). Waiting for the status instead
+		// costs every onboarded cold load a /bootstrap round trip.
 		prefetchFirstView(qc, window.location.pathname, getActiveVaultId());
 	}, [qc]);
 	// Route off the granular ["onboarding","status"] cache — the one every

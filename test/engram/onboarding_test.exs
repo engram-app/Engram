@@ -4,6 +4,8 @@ defmodule Engram.OnboardingTest do
   alias Engram.LegalFixtures
   alias Engram.Onboarding
   alias Engram.Onboarding.Agreement
+  alias Engram.Onboarding.GateCache
+  alias Engram.Test.LogCapture
 
   describe "accept_terms/3" do
     test "inserts an agreement row for the user and version" do
@@ -382,7 +384,7 @@ defmodule Engram.OnboardingTest do
           vault <- [false, true],
           heard <- [false, true] do
         Application.put_env(:engram, :billing_enabled, billing)
-        Engram.Onboarding.GateCache.evict_all()
+        GateCache.evict_all()
 
         user =
           insert(:user,
@@ -877,6 +879,41 @@ defmodule Engram.OnboardingTest do
         })
 
       assert [%{name: "My Vault"}] = Engram.Vaults.list_vaults(user)
+    end
+
+    test "a paid subscription that opens the gate logs it once, as billing" do
+      user = prefilled_past_terms()
+      previous_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous_level) end)
+
+      {_, events} =
+        LogCapture.with_events(fn ->
+          {:ok, _} =
+            Engram.Billing.upsert_from_paddle_event(%{
+              "event_type" => "subscription.created",
+              "event_id" => "ntf_gate_open_1",
+              "data" => %{
+                "id" => "sub_gate_open_1",
+                "status" => "active",
+                "customer_id" => "ctm_gate_open_1",
+                "items" => [
+                  %{"price" => %{"id" => "pri_starter_monthly_test"}, "status" => "active"}
+                ],
+                "current_billing_period" => %{
+                  "starts_at" => "2026-05-13T00:00:00Z",
+                  "ends_at" => "2026-06-13T00:00:00Z"
+                },
+                "custom_data" => checkout_custom_data(user.id)
+              }
+            })
+        end)
+
+      # The plan also provisions the connector vault (a nested opening
+      # mutation): still one line, named for the outer one.
+      assert [event] = Enum.filter(events, &gate_opened_line?/1)
+      assert event.meta[:trigger] == "billing"
+      assert event.meta[:user_id] == user.id
     end
 
     # A returning user whose plan already passes but whose terms lapsed: the
@@ -1658,6 +1695,144 @@ defmodule Engram.OnboardingTest do
       }
     }
   end
+
+  # "onboarding gate opened" is the line after a refusal. These are the
+  # openings that happen outside the wizard's own steps.
+  describe "gate opened logging" do
+    # The real SaaS gate: config/runtime.exs sets :billing_enabled false for
+    # the whole suite (docs/context/onboarding-gate-is-http-only.md).
+    setup do
+      previous_level = Logger.level()
+      prev_enabled = Application.get_env(:engram, :billing_enabled)
+      Logger.configure(level: :info)
+      Application.put_env(:engram, :billing_enabled, true)
+
+      LegalFixtures.insert_version(
+        document: "terms_of_service",
+        version: "2026-05-15",
+        material: true,
+        effective_date: nil
+      )
+
+      LegalFixtures.reset_version_cache()
+      GateCache.evict_all()
+
+      on_exit(fn ->
+        Logger.configure(level: previous_level)
+        Application.put_env(:engram, :billing_enabled, prev_enabled)
+        LegalFixtures.reset_version_cache()
+        GateCache.evict_all()
+      end)
+    end
+
+    # Onboarded on a paid plan, plan lapsed (no Free acceptance, so the gate
+    # closes on "subscription"), then Paddle reactivates it.
+    test "a lapsed paid account reactivated by Paddle logs one opening, as billing" do
+      user = insert(:user)
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+
+      insert(:subscription,
+        user: user,
+        paddle_subscription_id: "sub_lapsed_1",
+        status: "canceled",
+        last_event_occurred_at: ~U[2026-05-01 00:00:00Z]
+      )
+
+      assert %{gate_ok: false} = Onboarding.status(Engram.Accounts.get_user!(user.id))
+
+      event = %{
+        "event_type" => "subscription.updated",
+        "event_id" => "ntf_lapsed_1",
+        "occurred_at" => "2026-06-01T00:00:00Z",
+        "data" => %{
+          "id" => "sub_lapsed_1",
+          "status" => "active",
+          "customer_id" => "ctm_lapsed_1",
+          "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}, "status" => "active"}],
+          "current_billing_period" => %{
+            "starts_at" => "2026-06-01T00:00:00Z",
+            "ends_at" => "2026-07-01T00:00:00Z"
+          }
+        }
+      }
+
+      {_, events} =
+        LogCapture.with_events(fn ->
+          {:ok, _} = Engram.Billing.upsert_from_paddle_event(event)
+        end)
+
+      assert [line] = Enum.filter(events, &gate_opened_line?/1)
+      assert line.meta[:trigger] == "billing"
+      assert line.meta[:user_id] == user.id
+
+      # Paddle delivers at least once: a redelivery finds the gate open.
+      {_, again} =
+        LogCapture.with_events(fn -> Engram.Billing.upsert_from_paddle_event(event) end)
+
+      assert [] = Enum.filter(again, &gate_opened_line?/1)
+    end
+
+    test "restoring the only vault logs the gate reopening" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", "canonical", "2026-05-15", "p", %{})
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false})
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "Main", Ecto.UUID.generate())
+      {:ok, _} = Engram.Vaults.delete_vault(user, vault.id)
+
+      {_, events} =
+        LogCapture.with_events(fn ->
+          {:ok, _} = Engram.Vaults.restore_vault(user, vault.id)
+        end)
+
+      assert [event] = Enum.filter(events, &gate_opened_line?/1)
+      assert event.meta[:trigger] == "vault_restore"
+    end
+
+    # The gate reads are observability only: one that raises must neither
+    # block the write nor turn a committed write into an error.
+    test "a gate read that raises before the mutation passes its result through" do
+      # Not a UUID: the user lookup raises Ecto.Query.CastError.
+      {result, events} =
+        LogCapture.with_events(fn ->
+          Onboarding.log_gate_opening("not-a-uuid", "test", fn -> {:ok, :sentinel} end)
+        end)
+
+      assert result == {:ok, :sentinel}
+      refute Enum.find(events, &gate_opened_line?/1)
+      assert [warning] = Enum.filter(events, &gate_read_failed?/1)
+      assert warning.meta[:category] == :lifecycle
+      assert warning.meta[:reason] == "Ecto.Query.CastError"
+    end
+
+    test "a gate read that raises after the mutation passes its result through" do
+      user = insert(:user, onboarding_profile: %{})
+
+      {result, events} =
+        LogCapture.with_events(fn ->
+          Onboarding.log_gate_opening(user, "test", fn ->
+            # A row the status read cannot handle: the after-read raises.
+            Engram.Cache.put(:user, user.id, :not_a_user)
+            {:ok, :sentinel}
+          end)
+        end)
+
+      Engram.Cache.evict(:user, user.id)
+      assert result == {:ok, :sentinel}
+      refute Enum.find(events, &gate_opened_line?/1)
+      assert [warning] = Enum.filter(events, &gate_read_failed?/1)
+      assert warning.meta[:user_id] == user.id
+    end
+
+    defp gate_read_failed?(%{msg: {:string, s}}),
+      do: IO.iodata_to_binary(s) == "onboarding gate read failed"
+
+    defp gate_read_failed?(_), do: false
+  end
+
+  defp gate_opened_line?(%{msg: {:string, s}}),
+    do: IO.iodata_to_binary(s) == "onboarding gate opened"
+
+  defp gate_opened_line?(_), do: false
 
   defp prefilled_past_terms do
     user = insert(:user, onboarding_profile: %{})

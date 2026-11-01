@@ -99,7 +99,7 @@ defmodule EngramWeb.Plugs.BodyParser do
       Engram.Logger.Metadata.with_category(:warning, :http,
         method: conn.method,
         status: 413,
-        route: route_name(route_info),
+        route: RequestMeta.route_name(route_info),
         reason: "request_too_large",
         declared_bytes: declared,
         content_type: content_type
@@ -109,10 +109,4 @@ defmodule EngramWeb.Plugs.BodyParser do
 
   defp route_template(%{route: route}) when is_binary(route), do: route
   defp route_template(_), do: nil
-
-  # Same "Module#action" shape as `EngramWeb.RequestLogger`'s `route`.
-  defp route_name(%{plug: plug, plug_opts: action}) when is_atom(action),
-    do: "#{inspect(plug)}##{action}"
-
-  defp route_name(_), do: nil
 end
