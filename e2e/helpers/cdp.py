@@ -1689,6 +1689,8 @@ class CdpClient:
         (async function() {{
             const plugin = {PLUGIN_PATH};
             plugin.settings.diagnosticsEnabled = true;
+            // Default detail is warn; the e2e oracles read info lines.
+            plugin.settings.remoteLogLevel = 'info';
             await plugin.saveSettings();
             return 'enabled';
         }})()
