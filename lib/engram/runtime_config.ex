@@ -291,6 +291,61 @@ defmodule Engram.RuntimeConfig do
     ]
   end
 
+  @default_max_lifetime_minutes 360
+  # One week. Far above any sane bound, and well under the ~286,000 minutes
+  # where DBConnection's jitter hash (`:erlang.phash2/2`, range < 2^32) raises
+  # badarg, which it rescues into "never recycle": a silent no-op.
+  @max_lifetime_cap_minutes 10_080
+
+  @doc """
+  How long a pooled Postgres connection may live before DBConnection closes
+  and reopens it, the way HikariCP's `maxLifetime` and PgBouncer's
+  `server_lifetime` work.
+
+  Why: each Postgres backend keeps private caches (relcache, catcache, and
+  Postgrex's named prepared statements) that only grow while it lives. On
+  prod (db.t4g.small, about 1 GB left for Postgres) that grew ~9 MB per
+  backend per day and pushed RDS into active swap; a deploy, which recycles
+  every connection, dropped swap from 1,262 MB to 386 MB. This does the same
+  on a schedule.
+
+  `DATABASE_MAX_LIFETIME_MINUTES` (default #{@default_max_lifetime_minutes},
+  `0` disables, above #{@max_lifetime_cap_minutes} fails boot). Returns `[max_lifetime: min..max]`, where `max` is `min`
+  plus 25%: DBConnection hashes each connection to a point in that window,
+  so a pool drains gradually instead of reconnecting all at once.
+
+  Safe for in-flight work: DBConnection only checks the age when a
+  connection is checked back in or pinged while idle, so a running query or
+  transaction is never cut. Requires a reconnect backoff, which is
+  DBConnection's default (we never set `backoff_type: :stop`).
+  """
+  @spec repo_max_lifetime((String.t() -> String.t() | nil)) :: keyword()
+  def repo_max_lifetime(getenv) when is_function(getenv, 1) do
+    minutes =
+      case getenv.("DATABASE_MAX_LIFETIME_MINUTES") do
+        v when v in [nil, ""] -> @default_max_lifetime_minutes
+        v -> parse_non_neg_int!(v, "DATABASE_MAX_LIFETIME_MINUTES")
+      end
+
+    if minutes > @max_lifetime_cap_minutes do
+      raise ArgumentError,
+            "DATABASE_MAX_LIFETIME_MINUTES must be at most #{@max_lifetime_cap_minutes} " <>
+              "(one week), got: #{minutes}; use 0 to disable"
+    end
+
+    case minutes * 60_000 do
+      0 -> []
+      ms -> [max_lifetime: ms..(ms + div(ms, 4))]
+    end
+  end
+
+  defp parse_non_neg_int!(value, var) do
+    case Integer.parse(value) do
+      {n, ""} when n >= 0 -> n
+      _ -> raise ArgumentError, "#{var} must be a non-negative integer, got: #{inspect(value)}"
+    end
+  end
+
   @doc """
   Builds the `Engram.Repo` SSL options from env.
 

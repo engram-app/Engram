@@ -235,6 +235,9 @@ defmodule Engram.Release do
   # `pg_advisory_lock`: a blocked statement holds a snapshot, and the
   # holder's CONCURRENTLY build waits on every open snapshot, so the two
   # would wait on each other forever with no deadlock error.
+  #
+  # `:max_lifetime` is dropped because the lock session sits idle: an idle
+  # ping past the age would reconnect it and silently release the lock.
   @migration_lock_key 2_128_000_001
 
   @doc false
@@ -242,7 +245,7 @@ defmodule Engram.Release do
   def with_migration_lock(config, fun, retry_ms \\ 2_000) do
     {:ok, conn} =
       config
-      |> Keyword.drop([:pool, :pool_size, :parameters])
+      |> Keyword.drop([:pool, :pool_size, :parameters, :max_lifetime])
       |> Keyword.put(:pool_size, 1)
       |> Postgrex.start_link()
 

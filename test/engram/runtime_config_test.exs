@@ -200,6 +200,70 @@ defmodule Engram.RuntimeConfigTest do
     assert opts[:socket_options] == [:inet6]
   end
 
+  describe "repo_max_lifetime/1" do
+    @six_hours 6 * 60 * 60 * 1000
+
+    test "defaults to recycling connections after 6h, jittered over the next 90 min" do
+      assert RuntimeConfig.repo_max_lifetime(getenv(%{})) ==
+               [max_lifetime: @six_hours..(@six_hours + div(@six_hours, 4))]
+    end
+
+    test "DATABASE_MAX_LIFETIME_MINUTES overrides the bound" do
+      assert [max_lifetime: 3_600_000..4_500_000] =
+               RuntimeConfig.repo_max_lifetime(getenv(%{"DATABASE_MAX_LIFETIME_MINUTES" => "60"}))
+    end
+
+    test "0 disables recycling (connections live as long as the node)" do
+      assert RuntimeConfig.repo_max_lifetime(getenv(%{"DATABASE_MAX_LIFETIME_MINUTES" => "0"})) ==
+               []
+    end
+
+    test "an empty value falls back to the default" do
+      assert [max_lifetime: @six_hours.._//1] =
+               RuntimeConfig.repo_max_lifetime(getenv(%{"DATABASE_MAX_LIFETIME_MINUTES" => ""}))
+    end
+
+    test "garbage or negative values fail boot loudly" do
+      for bad <- ["abc", "-5", "6h"] do
+        assert_raise ArgumentError, fn ->
+          RuntimeConfig.repo_max_lifetime(getenv(%{"DATABASE_MAX_LIFETIME_MINUTES" => bad}))
+        end
+      end
+    end
+
+    test "values above one week fail boot instead of silently never recycling" do
+      assert [max_lifetime: _] =
+               RuntimeConfig.repo_max_lifetime(
+                 getenv(%{"DATABASE_MAX_LIFETIME_MINUTES" => "10080"})
+               )
+
+      for big <- ["10081", "300000"] do
+        assert_raise ArgumentError, ~r/at most 10080/, fn ->
+          RuntimeConfig.repo_max_lifetime(getenv(%{"DATABASE_MAX_LIFETIME_MINUTES" => big}))
+        end
+      end
+    end
+
+    test "the range is one DBConnection accepts (non-negative, step 1)" do
+      [max_lifetime: %Range{first: first, last: last, step: 1}] =
+        RuntimeConfig.repo_max_lifetime(getenv(%{}))
+
+      assert first >= 0 and last > first
+    end
+  end
+
+  test "config/runtime.exs applies the max lifetime to the app and maintenance repos" do
+    src = File.read!("config/runtime.exs")
+    assert src =~ "Engram.RuntimeConfig.repo_max_lifetime(&System.get_env/1)"
+    # Appended to both pools' option lists, not just computed.
+    assert length(String.split(src, "++ repo_max_lifetime")) == 3
+  end
+
+  test "the migration-lock connection never recycles (it holds a session lock)" do
+    src = File.read!("lib/engram/release.ex")
+    assert src =~ ~r/Keyword\.drop\(\[[^\]]*:max_lifetime/
+  end
+
   test "config/runtime.exs builds the maintenance repo from those options" do
     src = File.read!("config/runtime.exs")
     assert src =~ "Engram.RuntimeConfig.maintenance_repo_opts("
