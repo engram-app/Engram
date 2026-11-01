@@ -45,6 +45,16 @@ defmodule Engram.PromEx.ReliabilityTest do
 
     # A per-user inactivity-sweep failure is swallowed so the run continues;
     # without this counter it shows nowhere but one log line.
+    test "sums dropped client log lines by reason + level (not user or device)" do
+      m =
+        Enum.find(metrics(), fn m ->
+          match?(%Telemetry.Metrics.Sum{}, m) and
+            m.event_name == [:engram, :client_logs, :dropped]
+        end)
+
+      assert %{tags: [:reason, :level]} = m
+    end
+
     test "counts inactivity sweep per-user failures by step + kind (not user_id)" do
       assert %{tags: [:step, :kind]} = counter_for([:engram, :abuse, :inactivity_sweep_failed])
     end

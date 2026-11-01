@@ -98,6 +98,20 @@ defmodule Engram.RuntimeConfigTest do
     end
   end
 
+  describe "client_logs_persist_all?/2" do
+    test "SaaS (billing on, not CI) filters" do
+      refute RuntimeConfig.client_logs_persist_all?(getenv(%{}), true)
+    end
+
+    test "self-host (billing off) keeps every line: client_logs is its only log store" do
+      assert RuntimeConfig.client_logs_persist_all?(getenv(%{}), false)
+    end
+
+    test "CI keeps every line for the e2e log oracle, even with billing on" do
+      assert RuntimeConfig.client_logs_persist_all?(getenv(%{"CI" => "true"}), true)
+    end
+  end
+
   describe "ci_gated_int_override/2" do
     # Run the full gating contract against every override so no limiter can
     # drift onto a different rule.

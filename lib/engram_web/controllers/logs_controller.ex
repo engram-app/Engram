@@ -22,13 +22,10 @@ defmodule EngramWeb.LogsController do
   def ingest(conn, %{"logs" => [_ | _] = logs}) do
     user = conn.assigns.current_user
 
-    count =
-      if within_line_budget?(conn, user, length(logs)) do
-        {:ok, count} = Logs.insert_logs(user, logs, conn.assigns.current_vault.id)
-        count
-      else
-        0
-      end
+    {:ok, count} =
+      Logs.insert_logs(user, logs, conn.assigns.current_vault.id,
+        admit: &within_line_budget?(conn, user, &1)
+      )
 
     json(conn, %{ok: true, count: count})
   end
@@ -39,6 +36,12 @@ defmodule EngramWeb.LogsController do
   # lines per 10m). The per-request limiters bound request count, not lines,
   # and one request can carry 1,000 lines, each scrubbed, inserted and maybe
   # re-emitted.
+  #
+  # 500 per 10 min (was 5,000): one device's warn loop wrote 212k-260k rows a
+  # day for four days in 2026-10, 56% of the table. It counts only lines that
+  # are kept (`Logs.insert_logs/4` `:admit`), so info lines the SaaS filter
+  # drops never spend it. Over-cap lines are counted on
+  # `[:engram, :client_logs, :dropped]` with `reason: :over_budget`.
   #
   # Over budget we answer 200 and drop the batch rather than 429: the plugin's
   # remote logger re-buffers a failed batch and logs the failure into the same
@@ -53,7 +56,7 @@ defmodule EngramWeb.LogsController do
   # run and its log oracle reads these lines.
   # ponytail: a batch that crosses the budget is dropped whole (Hammer's deny
   # carries no count to accept a partial batch); partial accept if it matters.
-  @line_budget 5_000
+  @line_budget 500
   @user_budget_devices 4
   @line_window_ms :timer.minutes(10)
 

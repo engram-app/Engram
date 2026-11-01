@@ -725,9 +725,16 @@ end
 # Onboarding wizard toggle. Self-host (AUTH_PROVIDER=local) never shows the
 # SaaS wizard — operators own their own legal posture and there is no Paddle.
 # SaaS (clerk) needs the wizard whenever the Paddle API key is configured.
-config :engram,
-       :billing_enabled,
-       auth_provider == :clerk and System.get_env("PADDLE_API_KEY") != nil
+billing_enabled = auth_provider == :clerk and System.get_env("PADDLE_API_KEY") != nil
+config :engram, :billing_enabled, billing_enabled
+
+# Client log filter (Engram.Logs.PersistPolicy): on for SaaS, off for CI and
+# self-host. test.exs pins it.
+if config_env() != :test do
+  config :engram,
+         :client_logs_persist_all,
+         Engram.RuntimeConfig.client_logs_persist_all?(&System.get_env/1, billing_enabled)
+end
 
 # Plan limits enforcement toggle.
 # SaaS default: enforce when Paddle is configured.

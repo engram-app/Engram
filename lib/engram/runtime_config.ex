@@ -154,6 +154,21 @@ defmodule Engram.RuntimeConfig do
   def drain_overrides, do: @drain_overrides
 
   @doc """
+  Whether `client_logs` stores every client line (true) or only what
+  `Engram.Logs.PersistPolicy` keeps (false).
+
+    * CI (`CI=true`): true. The e2e log oracle asserts on info lines.
+    * Self-host (`billing_enabled` false): true. There is no Loki or
+      CloudWatch, so `client_logs` is the only copy of any client line, and a
+      single install's volume is not the fleet-wide cost the filter exists for.
+      An upgrade changes nothing for a self-hoster.
+    * SaaS: false. Warn/error are also in Loki; plain info had no prod reader.
+  """
+  @spec client_logs_persist_all?((String.t() -> String.t() | nil), boolean()) :: boolean()
+  def client_logs_persist_all?(getenv, billing_enabled) when is_function(getenv, 1),
+    do: getenv.("CI") == "true" or not billing_enabled
+
+  @doc """
   Decides whether an integer rate-limit override env var should be applied.
 
   These overrides exist only to stop CI/E2E stacks from 429-ing themselves; they

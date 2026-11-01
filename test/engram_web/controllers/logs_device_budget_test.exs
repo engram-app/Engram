@@ -8,7 +8,8 @@ defmodule EngramWeb.LogsDeviceBudgetTest do
   alias Engram.Logs.ClientLog
   alias Engram.Repo
 
-  @budget 5_000
+  @budget 500
+  @batch 100
 
   setup %{conn: conn} do
     EngramWeb.RateLimiter.reset_buckets!()
@@ -26,12 +27,12 @@ defmodule EngramWeb.LogsDeviceBudgetTest do
     conn |> post("/api/logs", %{logs: lines(n)}) |> json_response(200)
   end
 
-  # Spend the whole budget in max-size batches (the per-request cap is 1,000).
+  # Spend the whole budget in equal batches.
   defp exhaust(conn, device \\ nil),
     do:
       for(
-        _ <- 1..div(@budget, 1000),
-        do: assert(%{"count" => 1000} = send_logs(conn, 1000, device))
+        _ <- 1..div(@budget, @batch),
+        do: assert(%{"count" => @batch} = send_logs(conn, @batch, device))
       )
 
   defp stored(user),
@@ -40,6 +41,7 @@ defmodule EngramWeb.LogsDeviceBudgetTest do
         skip_tenant_check: true
       )
 
+  # 500 per device per 10 min: the 501st line is the first one refused.
   test "a device may spend exactly its budget; the next line is dropped with 200", %{
     conn: conn,
     user: user
@@ -55,11 +57,11 @@ defmodule EngramWeb.LogsDeviceBudgetTest do
   end
 
   test "a batch that would cross the budget is dropped whole", %{conn: conn, user: user} do
-    for _ <- 1..div(@budget, 1000), do: send_logs(conn, 999, "dev-a")
-    remaining = @budget - 999 * div(@budget, 1000)
+    for _ <- 1..div(@budget, @batch), do: send_logs(conn, @batch - 1, "dev-a")
+    remaining = @budget - (@batch - 1) * div(@budget, @batch)
     assert %{"count" => 0} = send_logs(conn, remaining + 1, "dev-a")
     assert %{"count" => 0} = send_logs(conn, 1, "dev-a")
-    assert stored(user) == 999 * div(@budget, 1000)
+    assert stored(user) == (@batch - 1) * div(@budget, @batch)
   end
 
   test "budgets are per device", %{conn: conn, user: user} do
@@ -83,8 +85,8 @@ defmodule EngramWeb.LogsDeviceBudgetTest do
   end
 
   test "a batch that exactly fills the remaining budget is accepted", %{conn: conn} do
-    for _ <- 1..div(@budget, 1000), do: send_logs(conn, 999, "dev-a")
-    remaining = @budget - 999 * div(@budget, 1000)
+    for _ <- 1..div(@budget, @batch), do: send_logs(conn, @batch - 1, "dev-a")
+    remaining = @budget - (@batch - 1) * div(@budget, @batch)
     assert %{"count" => ^remaining} = send_logs(conn, remaining, "dev-a")
     assert %{"count" => 0} = send_logs(conn, 1, "dev-a")
   end
@@ -105,5 +107,20 @@ defmodule EngramWeb.LogsDeviceBudgetTest do
 
     assert %{"count" => 10} = send_logs(conn, 10, "dev-a")
     assert %{"count" => 0} = send_logs(conn, 1, "dev-a")
+  end
+
+  # The budget counts STORED lines: with the SaaS filter on, info lines that
+  # are dropped anyway must not use up the room a warn line needs.
+  test "filtered info lines do not spend the budget", %{conn: conn, user: user} do
+    Application.put_env(:engram, :client_logs_persist_all, false)
+    on_exit(fn -> Application.put_env(:engram, :client_logs_persist_all, true) end)
+
+    for _ <- 1..6, do: assert(%{"count" => 0} = send_logs(conn, @batch, "dev-a"))
+
+    warn = for i <- 1..@budget, do: %{level: "warn", category: "t", message: "w#{i}"}
+
+    conn = put_req_header(conn, "x-device-id", "dev-a")
+    assert %{"count" => @budget} = conn |> post("/api/logs", %{logs: warn}) |> json_response(200)
+    assert stored(user) == @budget
   end
 end

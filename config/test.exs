@@ -193,6 +193,10 @@ config :engram,
 # via Application.put_env/3 in their setup blocks.
 config :engram, :billing_enabled, true
 
+# Store every client log line, as CI does for the e2e log oracle. The filter
+# tests pass `persist_all: false` explicitly.
+config :engram, :client_logs_persist_all, true
+
 # Limits enforced by default in test env so existing tests don't bypass.
 config :engram, :limits_enforced, true
 
