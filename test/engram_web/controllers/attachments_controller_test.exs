@@ -519,19 +519,31 @@ defmodule EngramWeb.AttachmentsControllerTest do
       on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
       Mox.stub_with(Engram.MockStorage, InMemory)
 
+      test_pid = self()
+
       Mox.stub(Engram.MockStorage, :put, fn key, bin, opts ->
         unless Process.put(:first_attempt_done, true) do
           {:ok, first} = Attachments.upsert_attachment(user, vault, v2)
           :ok = InMemory.delete(first.storage_key)
+          send(test_pid, {:first, first})
         end
 
+        send(test_pid, {:stored, key})
         InMemory.put(key, bin, opts)
       end)
 
       assert conn |> post("/api/attachments", v2) |> json_response(200)
       assert conn |> get("/api/attachments/doc.png?raw=1") |> response(200) == "v2 bytes"
+
+      # The off-gate probe found the first attempt's blob missing, so the
+      # second commit wrote the retry's own blob: the row moved to its key.
+      assert_received {:first, first}
+      assert_received {:stored, key_a}
+      assert_received {:stored, key_b}
+      [retry_key] = [key_a, key_b] -- [first.storage_key]
       {:ok, live} = Attachments.get_attachment(user, vault, "doc.png")
-      assert InMemory.exists?(live.storage_key)
+      assert live.storage_key == retry_key
+      assert InMemory.exists?(retry_key)
     end
 
     test "a matching base_hash overwrites", %{conn: conn} do

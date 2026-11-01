@@ -290,6 +290,9 @@ defmodule Engram.Attachments do
       # gate, transaction or connection held (S3 I/O), then committed once
       # more with the answer.
       {:error, {:verify_blob, live}} ->
+        # A missing blob replaces the caller's `rewrite_key`: that key's row
+        # was already judged for a rewrite, and any row back on it fails the
+        # `verified_key` match on the second commit and is written anyway.
         key = if blob_present?(live), do: :verified_key, else: :rewrite_key
         gated.(Keyword.merge(opts, [{key, live.storage_key}, verify_blob: false]))
 
