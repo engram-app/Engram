@@ -89,12 +89,14 @@ defmodule Engram.Attachments do
          # starve the whole API). The locked transaction below re-checks
          # `existing` and repairs the rare race.
          existing0 = fetch_existing(user, vault.id, path_hmac),
+         {:ok, content_key} <- Crypto.dek_content_hash_key(user),
+         content_hash = Crypto.hmac_content_hash(content_key, plaintext),
          # Re-offering bytes the server already holds is a no-op. Returning the
          # live row here skips the encrypt, the S3 PUT, the locked row write
          # AND the "upsert" broadcast every peer would otherwise chase. See
-         # `identical_or_changed/5`.
+         # `identical_or_changed/4`.
          :changed <-
-           identical_or_changed(user, existing0, plaintext, path, explicit_mime) do
+           identical_or_changed(existing0, content_hash, path, explicit_mime) do
       basename_hmac = Crypto.hmac_field(filter_key, Links.basename_key(path))
 
       att_id0 =
@@ -161,17 +163,29 @@ defmodule Engram.Attachments do
               nil ->
                 {:ok, id, prepared_attrs}
             end,
-            Notes.put_base_hash_opt([content_hash: attrs0.content_hash], attrs)
+            Notes.put_base_hash_opt(
+              own_write_opts(existing0, content_hash, attrs0.mime_type),
+              attrs
+            )
           )
         end
 
         deleting_blob_on_raise(user, vault, key, fn ->
           commit_prepared(commit, reprepare, att_id0, attrs0, @reprepare_attempts)
         end)
-        |> tap(fn
-          {:ok, _} -> :ok
-          {:error, _} -> delete_external(key)
-        end)
+        |> case do
+          {:ok, _} = ok ->
+            ok
+
+          # The live row already holds these bytes: this upload's blob is unused.
+          {:unchanged, att} ->
+            delete_external(key)
+            {:ok, att}
+
+          {:error, _} = err ->
+            delete_external(key)
+            err
+        end
       end
     end
   end
@@ -229,6 +243,14 @@ defmodule Engram.Attachments do
   # hash moved since refuses with `{:error, {:stale_base, live_row}}`, unless
   # it moved to `opts[:content_hash]`, the hash of the bytes being written.
   #
+  # A live row that already holds those bytes (same hash and `opts[:mime_type]`)
+  # is left as it is: `{:unchanged, live_row}`, no write, no blob release, no
+  # broadcast, `build` never called. The caller drops its own blob. This is the
+  # concurrent own-write retry; a sequential one returns before the lock (see
+  # `identical_or_changed/4`). `opts[:rewrite_key]` names a row the caller
+  # already probed and must rewrite anyway (its blob is missing): a live row
+  # still on that key is written, not kept.
+  #
   # After commit: releases the replaced row's blob when the new write moved
   # the row to a different storage key, then broadcasts the upsert.
   @spec commit_row(
@@ -243,7 +265,7 @@ defmodule Engram.Attachments do
              | {:error, term()}),
           keyword()
         ) ::
-          {:ok, Attachment.t()} | {:error, term()}
+          {:ok, Attachment.t()} | {:unchanged, Attachment.t()} | {:error, term()}
   def commit_row(user, vault, path, path_hmac, size, dek_version, build, opts \\ []) do
     # Read once, before the transaction, and used for both the lock and the
     # check, so a plan change in between cannot run the SUM without the lock.
@@ -259,6 +281,9 @@ defmodule Engram.Attachments do
       end)
     end)
     |> case do
+      {:ok, {att, :unchanged}} ->
+        {:unchanged, att}
+
       {:ok, {att, existing}} ->
         :ok = release_replaced_blob(user, vault, path_hmac, existing, att)
 
@@ -312,6 +337,7 @@ defmodule Engram.Attachments do
            # under the old content key and can never match, so the refusal
            # must be the rotation, not a stale base.
            :ok <- base_hash_gate(existing, path, opts[:base_hash], opts[:content_hash]),
+           :write <- own_write(existing, opts),
            {:ok, insert_id, attrs} <- build.(existing),
            {:ok, att} <- write_row(user, existing, insert_id, attrs, path) do
         # Phase B.3: path is virtual — splice the plaintext we already have
@@ -319,6 +345,7 @@ defmodule Engram.Attachments do
         # second decrypt round-trip.
         {%{att | path: path}, existing}
       else
+        {:unchanged, live} -> {%{live | path: path}, :unchanged}
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
@@ -328,10 +355,6 @@ defmodule Engram.Attachments do
   # holds the incoming bytes passes, so a retry after a lost response is not
   # refused as a conflict with itself. No live row means no check, as for
   # notes; the resurrection risk is #2311.
-  #
-  # ponytail: a passing retry still rewrites the row (a version bump and a
-  # blob swap). Only the concurrent case reaches here: a sequential retry
-  # returns from `identical_or_changed/5` before the lock.
   defp base_hash_gate(%Attachment{content_hash: current} = live, path, base, incoming) do
     if Notes.stale_base?(current, base, incoming),
       do: {:error, {:stale_base, %{live | path: path}}},
@@ -339,6 +362,27 @@ defmodule Engram.Attachments do
   end
 
   defp base_hash_gate(_existing, _path, _base, _incoming), do: :ok
+
+  @doc false
+  # The `commit_row/8` opts that let an upload of bytes the live row already
+  # holds keep that row (see `commit_row/8`). `probed` is the row the caller's
+  # `identical_or_changed/4` judged before the lock, or nil.
+  def own_write_opts(probed, content_hash, mime_type) do
+    [
+      content_hash: content_hash,
+      mime_type: mime_type,
+      rewrite_key: probed && probed.storage_key
+    ]
+  end
+
+  defp own_write(%Attachment{content_hash: hash, mime_type: mime, storage_key: key} = live, opts)
+       when is_binary(hash) do
+    if hash == opts[:content_hash] and mime == opts[:mime_type] and key != opts[:rewrite_key],
+      do: {:unchanged, live},
+      else: :write
+  end
+
+  defp own_write(_existing, _opts), do: :write
 
   @doc """
   `{:error, :rotation_in_progress}` while a DEK rotation holds the user (read
@@ -428,23 +472,22 @@ defmodule Engram.Attachments do
   # upload does and repoints the row. On a backend with no versions to
   # restore from, the client's matching local copy is the only source left.
   # Costs one HEAD per identical re-upload.
-  defp identical_or_changed(_user, nil, _plaintext, _path, _explicit_mime), do: :changed
+  @doc false
+  def identical_or_changed(nil, _content_hash, _path, _explicit_mime), do: :changed
 
-  defp identical_or_changed(
-         user,
-         %Attachment{content_hash: stored} = att,
-         plaintext,
-         path,
-         explicit_mime
-       )
-       when is_binary(stored) do
+  def identical_or_changed(
+        %Attachment{content_hash: stored} = att,
+        content_hash,
+        path,
+        explicit_mime
+      )
+      when is_binary(stored) do
     effective_mime = explicit_mime || MimeWhitelist.detect_mime(path)
 
     with true <- att.mime_type == effective_mime,
          # Not a secret comparison — both sides are HMACs over content the
          # caller just supplied, so there is no oracle to time. Plain `==`.
-         {:ok, content_key} <- Crypto.dek_content_hash_key(user),
-         true <- stored == Crypto.hmac_content_hash(content_key, plaintext),
+         true <- stored == content_hash,
          true <- blob_present?(att) do
       # `path` is virtual (Phase B.3); splice it on so this return is
       # shape-identical to the write path's.
@@ -454,7 +497,7 @@ defmodule Engram.Attachments do
     end
   end
 
-  defp identical_or_changed(_user, _existing, _plaintext, _path, _explicit_mime), do: :changed
+  def identical_or_changed(_existing, _content_hash, _path, _explicit_mime), do: :changed
 
   defp blob_present?(%Attachment{storage_key: key} = att) when is_binary(key) do
     case Storage.presence(key) do

@@ -347,7 +347,11 @@ defmodule Engram.Attachments.Uploads do
          {:ok, file_key} <- file_key(user, up, up.attachment_id),
          {:ok, up} <- assemble(user, vault, up),
          {:ok, hash} <- content_hash(user, up, file_key) do
-      result = commit(user, vault, up, file_key, hash, Keyword.put(opts, :content_hash, hash))
+      result =
+        case commit(user, vault, up, file_key, hash, opts) do
+          {:unchanged, att} -> adopt(user, vault, up, att)
+          other -> other
+        end
 
       # A quota refusal is not retryable with this file: drop it. A stale
       # base_hash (#2163) keeps the session: it is assembled, so the client
@@ -499,7 +503,22 @@ defmodule Engram.Attachments.Uploads do
     end
   end
 
-  defp write_attachment(user, vault, up, path, {dek, filter_key}, file_key, hash, opts) do
+  defp write_attachment(user, vault, up, path, keys, file_key, hash, opts) do
+    # Bytes the live row already holds (a retry after a lost response): keep
+    # the row, as a single-request upload does.
+    existing = Attachments.fetch_existing(user, vault.id, up.path_hmac)
+
+    case Attachments.identical_or_changed(existing, hash, path, up.mime_type) do
+      {:ok, att} ->
+        {:unchanged, att}
+
+      :changed ->
+        opts = Attachments.own_write_opts(existing, hash, up.mime_type) ++ opts
+        commit_attachment(user, vault, up, path, keys, file_key, hash, opts)
+    end
+  end
+
+  defp commit_attachment(user, vault, up, path, {dek, filter_key}, file_key, hash, opts) do
     basename_hmac = Crypto.hmac_field(filter_key, Links.basename_key(path))
 
     Attachments.commit_row(
@@ -551,6 +570,36 @@ defmodule Engram.Attachments.Uploads do
       end,
       opts
     )
+  end
+
+  # The session committed nothing: the live row already held its bytes. The
+  # session is completed onto that row's blob, so a retried complete answers
+  # with it (`committed/3`) and expiry leaves the blob alone, and the
+  # session's own blob is dropped. If another caller completed or dropped the
+  # session first, it answers as a lost race and the blob is theirs.
+  defp adopt(user, vault, %Upload{id: id} = up, %Attachment{} = att) do
+    now = DateTime.utc_now(:second)
+
+    Repo.with_tenant(user.id, fn ->
+      Repo.update_all(
+        from(u in scoped(user, vault), where: u.id == ^id and is_nil(u.completed_at)),
+        set: [
+          completed_at: now,
+          attachment_id: att.id,
+          storage_key: att.storage_key,
+          updated_at: now
+        ]
+      )
+    end)
+    |> unwrap()
+    |> case do
+      {:ok, {1, _}} ->
+        delete_object(up.storage_key)
+        {:ok, att}
+
+      {:ok, {0, _}} ->
+        {:error, :not_found}
+    end
   end
 
   # The live row's id when one holds the path; else the id claimed at start,

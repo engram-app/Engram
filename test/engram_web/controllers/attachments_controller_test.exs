@@ -461,28 +461,46 @@ defmodule EngramWeb.AttachmentsControllerTest do
       Application.put_env(:engram, :storage, Engram.MockStorage)
       on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
       Mox.stub_with(Engram.MockStorage, InMemory)
+      test_pid = self()
 
       # The first attempt commits during the retry's pre-lock PUT, after the
       # retry already read the v1 row.
       Mox.stub(Engram.MockStorage, :put, fn key, bin, opts ->
         unless Process.put(:first_attempt_done, true) do
-          {:ok, _} = Attachments.upsert_attachment(user, vault, v2)
+          {:ok, first} = Attachments.upsert_attachment(user, vault, v2)
+          send(test_pid, {:first, first})
         end
 
+        send(test_pid, {:stored, key})
         InMemory.put(key, bin, opts)
       end)
 
       body = conn |> post("/api/attachments", v2) |> json_response(200)
+      assert_received {:first, first}
       h2 = body["attachment"]["content_hash"]
+      assert h2 == first.content_hash
       refute h2 == h1
       assert conn |> get("/api/attachments/doc.png?raw=1") |> response(200) == "v2 bytes"
 
-      # A later sequential retry is a no-op: same row, same blob.
-      {:ok, before} = Attachments.get_attachment(user, vault, "doc.png")
+      # The retry is a no-op on the first attempt's row: no new version, no
+      # blob swap (so no peer re-download). Its own blob is dropped, and the
+      # file counts once.
+      {:ok, live} = Attachments.get_attachment(user, vault, "doc.png")
+      assert live.storage_key == first.storage_key
+      assert live.version == first.version
+      assert live.updated_at == first.updated_at
+      assert_received {:stored, key_a}
+      assert_received {:stored, key_b}
+      [retry_key] = [key_a, key_b] -- [first.storage_key]
+      refute InMemory.exists?(retry_key)
+      assert InMemory.exists?(first.storage_key)
+      assert elem(Attachments.storage_usage(user), 1).used_bytes == byte_size("v2 bytes")
+
+      # A later sequential retry is a no-op too.
       assert upload_hash(conn, "doc.png", "v2 bytes", %{base_hash: h1}) == h2
       {:ok, after_retry} = Attachments.get_attachment(user, vault, "doc.png")
-      assert after_retry.storage_key == before.storage_key
-      assert after_retry.updated_at == before.updated_at
+      assert after_retry.storage_key == first.storage_key
+      assert after_retry.updated_at == first.updated_at
     end
 
     test "a matching base_hash overwrites", %{conn: conn} do
