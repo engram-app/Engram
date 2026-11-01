@@ -942,6 +942,13 @@ if config_env() == :prod do
   database_ssl_opts =
     Engram.RuntimeConfig.database_ssl(&System.get_env/1, URI.parse(database_url).host)
 
+  # Recycle pooled connections on a bounded, jittered age so Postgres
+  # backend caches cannot grow for the life of the node. One value for both
+  # pools; see Engram.RuntimeConfig.repo_max_lifetime/1. Not applied to the
+  # Engram.Cache.Listener LISTEN connection: it is not a pool, touches almost
+  # no catalog, and a recycle would open a window of missed cache evictions.
+  repo_max_lifetime = Engram.RuntimeConfig.repo_max_lifetime(&System.get_env/1)
+
   config :engram,
          Engram.Repo,
          [
@@ -957,7 +964,7 @@ if config_env() == :prod do
            # Idle-in-transaction and lock timeouts; see the function's doc.
            # Release.migrate strips them for the migrator.
            parameters: Engram.RuntimeConfig.repo_parameters(:app)
-         ] ++ database_ssl_opts
+         ] ++ database_ssl_opts ++ repo_max_lifetime
 
   # Second pool, for work that legitimately spans tenants (orphan reaping,
   # expiry sweeps, credential lookups that DISCOVER a user_id). See
@@ -1000,7 +1007,7 @@ if config_env() == :prod do
                Engram.RuntimeConfig.database_ssl(
                  &System.get_env/1,
                  URI.parse(maintenance_url).host
-               )
+               ) ++ repo_max_lifetime
 
       # Read by `Engram.Repo.maintenance/0`. A separate key rather than probing
       # for the repo's config, so the resolver stays a cheap app-env lookup on
