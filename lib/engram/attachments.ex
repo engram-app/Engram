@@ -249,7 +249,9 @@ defmodule Engram.Attachments do
   # concurrent own-write retry; a sequential one returns before the lock (see
   # `identical_or_changed/4`). `opts[:rewrite_key]` names a row the caller
   # already probed and must rewrite anyway (its blob is missing): a live row
-  # still on that key is written, not kept.
+  # still on that key is written, not kept. Any other row is kept only once
+  # its blob is confirmed present, probed outside the gate and the
+  # transaction (`{:verify_blob, live}`, then one more commit).
   #
   # After commit: releases the replaced row's blob when the new write moved
   # the row to a different storage key, then broadcasts the upsert.
@@ -275,11 +277,25 @@ defmodule Engram.Attachments do
     # Gate outermost (see SeqGate): waiters queue without a pool connection.
     # shed_on_bound: the path and quota advisory locks run outside a tenant
     # leg, so a request lock_timeout there must still shed as a 429.
-    SeqGate.with_vault(vault.id, fn ->
-      Repo.shed_on_bound(fn ->
-        commit_txn(user, vault, {path, path_hmac, size}, dek_version, build, limit, opts)
+    gated = fn opts ->
+      SeqGate.with_vault(vault.id, fn ->
+        Repo.shed_on_bound(fn ->
+          commit_txn(user, vault, {path, path_hmac, size}, dek_version, build, limit, opts)
+        end)
       end)
-    end)
+    end
+
+    case gated.(opts) do
+      # An own-write candidate whose blob is unconfirmed: probed here, with no
+      # gate, transaction or connection held (S3 I/O), then committed once
+      # more with the answer.
+      {:error, {:verify_blob, live}} ->
+        key = if blob_present?(live), do: :verified_key, else: :rewrite_key
+        gated.(Keyword.merge(opts, [{key, live.storage_key}, verify_blob: false]))
+
+      result ->
+        result
+    end
     |> case do
       {:ok, {att, :unchanged}} ->
         {:unchanged, att}
@@ -383,14 +399,24 @@ defmodule Engram.Attachments do
 
   defp own_write(%Attachment{content_hash: hash, mime_type: mime, storage_key: key} = live, opts)
        when is_binary(hash) do
-    # The blob probe is the same one the pre-lock path runs. It is I/O under
-    # the path lock, but only on this rare path (same bytes, a row the caller
-    # did not probe), and before the quota and vault row locks. A missing
-    # blob writes the upload: the bytes in hand are never discarded.
-    if hash == opts[:content_hash] and mime == opts[:mime_type] and key != opts[:rewrite_key] and
-         blob_present?(live),
-       do: {:unchanged, live},
-       else: :write
+    # No I/O here (under the gate and the transaction): a row whose blob is
+    # not yet confirmed rolls back to `commit_row/8`, which probes it outside
+    # and commits again. A missing blob writes the upload, so the bytes in
+    # hand are never discarded; a row that moved again on the second commit
+    # is written too.
+    cond do
+      hash != opts[:content_hash] or mime != opts[:mime_type] or key == opts[:rewrite_key] ->
+        :write
+
+      key == opts[:verified_key] ->
+        {:unchanged, live}
+
+      Keyword.get(opts, :verify_blob, true) ->
+        {:error, {:verify_blob, live}}
+
+      true ->
+        :write
+    end
   end
 
   defp own_write(_existing, _opts), do: :write
