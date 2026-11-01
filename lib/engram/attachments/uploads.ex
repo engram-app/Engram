@@ -604,7 +604,9 @@ defmodule Engram.Attachments.Uploads do
     |> unwrap()
     |> case do
       {:ok, {1, _}} ->
-        delete_object(up.storage_key)
+        # Best-effort, as in drop/3: the session is already completed onto
+        # the live row, and delete_object/1 logs its own failure.
+        _ = delete_object(up.storage_key)
         {:ok, att}
 
       {:ok, {0, _}} ->
