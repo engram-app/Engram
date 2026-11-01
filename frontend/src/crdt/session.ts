@@ -347,7 +347,9 @@ export function resyncOpenDocs(trigger: ResyncTrigger = "reconnect"): void {
 	rehandshakeAttempts.clear();
 	const ids = [...session.awareness.keys()];
 	if (ids.length > 0) {
-		rlog().info("crdt", `${trigger} resync: re-enrolling ${ids.length} open doc(s)`);
+		// Fixed "resync (" prefix: the backend's client_logs allowlist
+		// (Engram.Logs.PersistPolicy) matches on it.
+		rlog().info("crdt", `resync (${trigger}): re-enrolling ${ids.length} open doc(s)`);
 	}
 	for (const id of ids) {
 		session.enrollment.reset(id); // clears enrolled set + CrdtChannel.initiated guard

@@ -2,8 +2,10 @@ defmodule Engram.Workers.ClientLogsPruner do
   @moduledoc """
   Hourly retention sweep for `client_logs` (the plugin remote-log sink).
 
-  Deletes rows older than `:client_logs_retention_days` (default 30) in bounded
-  batches, so the DELETE never holds a long lock on this write-hot table.
+  Deletes rows older than `:client_logs_retention_days` (config.exs, 7) in bounded
+  batches, so the DELETE never holds a long lock on this write-hot table, and
+  at most `@max_batches` batches per run, so a backlog drains over several
+  hourly runs instead of one burst.
 
   Added after the 2026-06-29 DB audit found client_logs unbounded at ~98% of
   the database (~737K rows / 147 MB) with no retention (Engram#792).
@@ -18,16 +20,23 @@ defmodule Engram.Workers.ClientLogsPruner do
   require Logger
 
   @batch 5_000
+  # At most 100k rows per hourly run. Cutting retention (30 -> 7 days) left a
+  # ~0.5M-row backlog; deleting it in one back-to-back burst is a WAL/IO spike
+  # plus an autovacuum pass on an RDS instance that already swaps. The cron
+  # drains the rest over the next few hours.
+  @max_batches 20
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(15)
 
   @impl Oban.Worker
-  def perform(%Oban.Job{}) do
-    days = Application.get_env(:engram, :client_logs_retention_days, 30)
+  def perform(%Oban.Job{args: args}) do
+    days = Application.fetch_env!(:engram, :client_logs_retention_days)
     # NaiveDateTime to match the physical `timestamp without time zone` column.
     cutoff = NaiveDateTime.utc_now() |> NaiveDateTime.add(-days * 24 * 3600, :second)
-    n = prune(cutoff, 0)
+    # Args exist so a test can exercise the cap with a handful of rows.
+    batch = Map.get(args, "batch", @batch)
+    n = prune(cutoff, batch, Map.get(args, "max_batches", @max_batches), 0)
     if n > 0, do: Logger.info("client_logs_pruner deleted=#{n}")
     {:ok, n}
   end
@@ -38,7 +47,9 @@ defmodule Engram.Workers.ClientLogsPruner do
   # a uuidv7's leading 48 bits are its mint time in ms, so `id < floor(cutoff)`
   # is a pkey range scan. `created_at < cutoff` stays as the correctness bound:
   # no row younger than retention is ever deleted, whatever its id.
-  defp prune(cutoff, acc) do
+  defp prune(_cutoff, _batch, 0 = _batches_left, acc), do: acc
+
+  defp prune(cutoff, batch, batches_left, acc) do
     floor =
       cutoff
       |> DateTime.from_naive!("Etc/UTC")
@@ -54,13 +65,13 @@ defmodule Engram.Workers.ClientLogsPruner do
                 where: s.id < type(^floor, Ecto.UUID) and s.created_at < ^cutoff,
                 order_by: s.id,
                 select: s.id,
-                limit: @batch
+                limit: ^batch
               )
             )
         )
       )
 
-    if n >= @batch, do: prune(cutoff, acc + n), else: acc + n
+    if n >= batch, do: prune(cutoff, batch, batches_left - 1, acc + n), else: acc + n
   end
 
   # The smallest uuidv7 minted at `ms`: its timestamp bits, then all zeros.

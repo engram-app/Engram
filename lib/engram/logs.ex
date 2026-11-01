@@ -8,6 +8,7 @@ defmodule Engram.Logs do
   alias Engram.Crypto.HMAC
   alias Engram.Logger.Metadata
   alias Engram.Logs.ClientLog
+  alias Engram.Logs.PersistPolicy
   alias Engram.Logs.TextScrubber
   alias Engram.Repo
 
@@ -92,11 +93,22 @@ defmodule Engram.Logs do
 
   `vault_id` stamps the vault the request addressed, so `list_logs/2` can keep
   a credential scoped to one vault out of another vault's lines.
-  """
-  def insert_logs(user, entries, vault_id \\ nil)
-  def insert_logs(_user, [], _vault_id), do: {:ok, 0}
 
-  def insert_logs(user, entries, vault_id) when is_list(entries) do
+  Options:
+    * `:persist_all` - store every line. Default `:client_logs_persist_all`;
+      when false only `Engram.Logs.PersistPolicy.persist?/1` lines are stored.
+    * `:admit` - `fn kept_lines -> boolean end`, the caller's line budget. Asked
+      once with the number of lines that would leave a trace (stored, or
+      re-emitted as diagnostic); `false` drops the batch. Not asked when
+      nothing would be kept, so filtered lines never spend a budget.
+
+  Dropped lines are counted on `[:engram, :client_logs, :dropped]`
+  (`%{lines: n}`, `%{reason: :filtered | :over_budget, level: level}`).
+  """
+  def insert_logs(user, entries, vault_id \\ nil, opts \\ [])
+  def insert_logs(_user, [], _vault_id, _opts), do: {:ok, 0}
+
+  def insert_logs(user, entries, vault_id, opts) when is_list(entries) do
     now = DateTime.utc_now(:second)
 
     {kept, dropped} = take_bounded(entries)
@@ -114,8 +126,51 @@ defmodule Engram.Logs do
     # for it twice.
     bounded = Enum.map(kept, &bound_entry(&1, now))
 
+    persist_all =
+      Keyword.get_lazy(opts, :persist_all, fn ->
+        Application.get_env(:engram, :client_logs_persist_all, false)
+      end)
+
+    {stored, unstored} =
+      if persist_all,
+        do: {bounded, []},
+        else: Enum.split_with(bounded, &PersistPolicy.persist?/1)
+
+    count_dropped(unstored, :filtered)
+
+    # An unstored diagnostic line still ships to Loki, so it spends budget too.
+    cost = length(stored) + Enum.count(unstored, & &1.diagnostic)
+    admit = Keyword.get(opts, :admit, fn _lines -> true end)
+
+    cond do
+      cost == 0 ->
+        {:ok, 0}
+
+      admit.(cost) ->
+        count = store(user, stored, vault_id, now)
+        reemit_to_logger(user, bounded)
+        {:ok, count}
+
+      true ->
+        count_dropped(stored ++ Enum.filter(unstored, & &1.diagnostic), :over_budget)
+        {:ok, 0}
+    end
+  end
+
+  defp count_dropped(entries, reason) do
+    entries
+    |> Enum.frequencies_by(&PersistPolicy.metric_level(&1.level))
+    |> Enum.each(fn {level, n} ->
+      :telemetry.execute([:engram, :client_logs, :dropped], %{lines: n}, %{
+        reason: reason,
+        level: level
+      })
+    end)
+  end
+
+  defp store(user, entries, vault_id, now) do
     rows =
-      Enum.map(bounded, fn e ->
+      Enum.map(entries, fn e ->
         %{
           user_id: user.id,
           vault_id: vault_id,
@@ -134,8 +189,7 @@ defmodule Engram.Logs do
       end)
 
     {count, _} = Repo.insert_all(ClientLog, rows, skip_tenant_check: true)
-    reemit_to_logger(user, bounded)
-    {:ok, count}
+    count
   end
 
   # Truncate rather than reject. This is a diagnostics pipe: a 413 on a log push
@@ -283,7 +337,8 @@ defmodule Engram.Logs do
   # category so they flow through FireLens to CloudWatch and Loki. Only lines
   # Loki takes are written (warn+, or info the client marks diagnostic): a plain
   # info line was formatted and written to stdout for every entry only to be
-  # dropped by Fluent Bit's Loki route, and the row is in client_logs anyway.
+  # dropped by Fluent Bit's Loki route (and SaaS no longer stores plain info at
+  # all, see Engram.Logs.PersistPolicy).
   # That was most of the logging CPU during a first sync (2026-10-17: 6,344
   # info lines from one device in 20 min). Identical lines in one batch are
   # written once with a `repeat` count.

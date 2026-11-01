@@ -589,8 +589,15 @@ config :opentelemetry,
 config :engram, :reconnect_jitter_max_ms, 5_000
 
 # Retention for the client_logs plugin remote-log sink. Rows older than this
-# are deleted daily by Engram.Workers.ClientLogsPruner (Engram#792).
-config :engram, :client_logs_retention_days, 30
+# are deleted hourly by Engram.Workers.ClientLogsPruner (Engram#792). 7 days
+# covers "a user reports a bug, we look"; warn/error lines also live in Loki
+# and CloudWatch for ~30 days.
+config :engram, :client_logs_retention_days, 7
+
+# false = client_logs stores only warn/error and the info allowlist in
+# Engram.Logs.PersistPolicy (SaaS). runtime.exs sets true for CI and self-host
+# (Engram.RuntimeConfig.client_logs_persist_all?/2); test.exs sets true.
+config :engram, :client_logs_persist_all, false
 
 # Per-user budget for single-folder creates (POST /api/folders, #2161). Each
 # create is a pooled tenant transaction that can take the vault change_seq row

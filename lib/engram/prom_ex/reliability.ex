@@ -44,6 +44,13 @@ defmodule Engram.PromEx.Reliability do
       the next daily run, so a non-zero rate that persists is a stuck
       account. Alert on everything except `kind="refused"`, which is an
       expected daily repeat, not a fault.
+    * `[:engram, :client_logs, :dropped]` →
+      `..._client_logs_dropped_lines_total`, tags `[:reason, :level]` — client
+      log lines `POST /api/logs` accepted but did not store. `reason`:
+      `filtered` (`Engram.Logs.PersistPolicy`, SaaS only) or `over_budget`
+      (the per-device line budget). `level` is bounded by
+      `PersistPolicy.metric_level/1`. A rising `over_budget` rate is a client
+      stuck in a log loop.
     * `[:engram, :fanout_pacer, :drain]` → `..._fanout_pacer_queue_depth`,
       `..._fanout_pacer_queued`, `..._fanout_pacer_topics` (#1004) — the
       vault-channel pacer's cold-queue state, sampled on every drain tick.
@@ -152,6 +159,13 @@ defmodule Engram.PromEx.Reliability do
           event_name: [:engram, :oban, :timeout],
           description: "Oban jobs killed by their worker timeout, on any attempt.",
           tags: [:worker, :queue]
+        ),
+        sum(
+          metric_prefix ++ [:client_logs, :dropped, :lines, :total],
+          event_name: [:engram, :client_logs, :dropped],
+          measurement: :lines,
+          description: "Client log lines not stored, by reason (filtered | over_budget) + level.",
+          tags: [:reason, :level]
         ),
         counter(
           metric_prefix ++ [:inactivity_sweep_failed, :total],

@@ -139,8 +139,8 @@ describe("crdt session", () => {
 			window.dispatchEvent(new Event("focus"));
 			await vi.waitFor(() => expect(lines.length).toBeGreaterThan(0));
 
-			expect(lines.some((l) => l.includes("refocus resync"))).toBe(true);
-			expect(lines.some((l) => l.includes("reconnect resync"))).toBe(false);
+			expect(lines.some((l) => l.includes("resync (refocus)"))).toBe(true);
+			expect(lines.some((l) => l.includes("resync (reconnect)"))).toBe(false);
 		} finally {
 			remove();
 			spy.mockRestore();
