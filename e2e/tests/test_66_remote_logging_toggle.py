@@ -50,6 +50,26 @@ PLUGIN_ID = "engram-vault-sync"
 AFTER_MARKER = "test66-after-disable"
 
 
+async def _drain_at_warn(cdp) -> None:
+    """Drop the plugin to its default warn detail and flush what is buffered.
+
+    The suite seeds remoteLogLevel=info (helpers/obsidian.py) so other oracles
+    can read info lines. At info, a live instance buffers joins, openSocket and
+    catch-up lines continuously; disabling logging flushes that backlog, and it
+    lands inside the post-disable window as a burst of "leaks". This test owns
+    its level: drain the backlog while still enabled, then only warn+ remains.
+    """
+    await cdp.evaluate(
+        f"(async () => {{"
+        f"  const p = app.plugins.plugins['{PLUGIN_ID}'];"
+        f"  p.settings.remoteLogLevel = 'warn';"
+        f"  await p.saveSettings();"
+        f"}})()",
+        await_promise=True,
+    )
+    await cdp.flush_remote_logs()
+
+
 async def _set_remote_logging(cdp, enabled: bool) -> None:
     """Toggle remote logging on one instance via saveSettings.
 
@@ -89,6 +109,13 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
     )
     original_enabled_b = await cdp_b.evaluate(
         f"app.plugins.plugins['{PLUGIN_ID}'].settings.diagnosticsEnabled"
+    )
+
+    original_level_a = await cdp_a.evaluate(
+        f"app.plugins.plugins['{PLUGIN_ID}'].settings.remoteLogLevel"
+    )
+    original_level_b = await cdp_b.evaluate(
+        f"app.plugins.plugins['{PLUGIN_ID}'].settings.remoteLogLevel"
     )
 
     try:
@@ -201,6 +228,8 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
         # settle sleep is required. B must be silenced too (see docstring):
         # it logs after.md's receive events under the same user.
         # ------------------------------------------------------------------ #
+        await _drain_at_warn(cdp_a)
+        await _drain_at_warn(cdp_b)
         await _set_remote_logging(cdp_a, False)
         await _set_remote_logging(cdp_b, False)
 
@@ -291,6 +320,10 @@ async def test_disable_stops_flush(vault_a, cdp_a, cdp_b, api_sync):
         # Restore: reset diagnosticsEnabled on both instances, clean up
         # seeded notes.
         # ------------------------------------------------------------------ #
+        for cdp, level in ((cdp_a, original_level_a), (cdp_b, original_level_b)):
+            await cdp.evaluate(
+                f"app.plugins.plugins['{PLUGIN_ID}'].settings.remoteLogLevel = {level!r}"
+            )
         await _set_remote_logging(cdp_a, bool(original_enabled_a))
         await _set_remote_logging(cdp_b, bool(original_enabled_b))
         for fname in ("before.md", "after.md"):

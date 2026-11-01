@@ -309,6 +309,11 @@ class ObsidianInstance:
             # of the single diagnosticsEnabled toggle (plugin collapsed the three
             # legacy diagnostics flags into it).
             "diagnosticsEnabled": True,
+            # The plugin ships warn+ by default and caps lines per 10 min
+            # (Engram-obsidian client log diet). The oracle reads info lines
+            # from a session-long device, so ask for info and lift the cap.
+            "remoteLogLevel": "info",
+            "remoteLogBudget": 0,
         }
         # No enableCrdt key: CRDT is the only sync path. The plugin retired the
         # setting (settings-migrate strips it) and the backend always
