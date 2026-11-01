@@ -63,7 +63,11 @@ defmodule Engram.LogsPersistPolicyTest do
             "Vault not registered — skipping initial sync",
             "sync_gate_opened waited_s=12 context=preview",
             "pullAll started — replay from 0",
-            "pullAll(deleteLocalExtras) replay done — applied=40"
+            "pullAll(deleteLocalExtras) replay done — applied=40",
+            # Web SPA deaf-note breadcrumbs (frontend/src/api/channel.ts,
+            # frontend/src/crdt/session.ts).
+            "crdt channel joined — live note sync active",
+            "resync (reconnect): re-enrolling 3 open doc(s)"
           ] do
         assert PersistPolicy.persist?(%{level: "info", message: msg}), msg
       end
@@ -135,6 +139,18 @@ defmodule Engram.LogsPersistPolicyTest do
       assert stored(user) == []
       assert_receive {:dropped, %{lines: 1}, %{reason: :over_budget, level: "warn"}}
       assert_receive {:dropped, %{lines: 1}, %{reason: :over_budget, level: "error"}}
+    end
+
+    # An unstored diagnostic line spends budget, so a refusal must count it.
+    test "a refused batch also counts its unstored diagnostic lines", %{user: user} do
+      batch = [Map.put(line("info", "verbose"), "diagnostic", true), line("warn", "a")]
+
+      assert {:ok, 0} =
+               Logs.insert_logs(user, batch, nil, persist_all: false, admit: fn _ -> false end)
+
+      assert_receive {:dropped, %{lines: 1}, %{reason: :filtered, level: "info"}}
+      assert_receive {:dropped, %{lines: 1}, %{reason: :over_budget, level: "info"}}
+      assert_receive {:dropped, %{lines: 1}, %{reason: :over_budget, level: "warn"}}
     end
   end
 end

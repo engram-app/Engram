@@ -152,7 +152,7 @@ defmodule Engram.Logs do
         {:ok, count}
 
       true ->
-        count_dropped(stored, :over_budget)
+        count_dropped(stored ++ Enum.filter(unstored, & &1.diagnostic), :over_budget)
         {:ok, 0}
     end
   end

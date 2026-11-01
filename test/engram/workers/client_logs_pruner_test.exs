@@ -67,6 +67,17 @@ defmodule Engram.Workers.ClientLogsPrunerTest do
     assert count() == 1
   end
 
+  # The 30 -> 7 day cut left a ~0.5M-row backlog; one run must not delete it
+  # in a single burst on the swapping RDS. The hourly cron drains the rest.
+  test "a run stops after max_batches; the next run continues", %{user: user} do
+    for _ <- 1..5, do: insert_log(user, 40)
+
+    assert {:ok, 4} = perform_job(ClientLogsPruner, %{"batch" => 2, "max_batches" => 2})
+    assert count() == 1
+    assert {:ok, 1} = perform_job(ClientLogsPruner, %{"batch" => 2, "max_batches" => 2})
+    assert count() == 0
+  end
+
   test "honors a custom retention window", %{user: user} do
     Application.put_env(:engram, :client_logs_retention_days, 10)
     insert_log(user, 15)

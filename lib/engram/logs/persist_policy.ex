@@ -13,6 +13,12 @@ defmodule Engram.Logs.PersistPolicy do
   say where a user's first sync stopped (`docs/context/first-sync-anatomy.md`
   in the workspace repo).
 
+  Reach of the plugin milestones: `rlog().info` lines are sent only when the
+  user turned plugin diagnostics on (off by default), so on a typical first
+  sync none of them arrive and only the warn anomalies do. Do not count on
+  them being there; making them always ship needs the plugin's forced path.
+  The web SPA sends its info lines with no opt-in, so its breadcrumbs do arrive.
+
   Applies only when `:client_logs_persist_all` is false: SaaS. CI (the e2e log
   oracle reads info lines), test and self-host (no Loki, so `client_logs` is
   the only copy of a client line) keep everything; see
@@ -36,7 +42,12 @@ defmodule Engram.Logs.PersistPolicy do
     "sync_gate_opened",
     # "pullAll started — replay from 0" / "pullAll replay done — applied=N",
     # also the "pullAll(deleteLocalExtras)" variant.
-    "pullAll"
+    "pullAll",
+    # Web SPA deaf-note breadcrumbs (frontend/src/observability/remote-log.ts:
+    # a deaf-note hunt is a `GET /api/logs` query). Not diagnostic, so they
+    # never reach Loki; this is their only store. One line per join / resync.
+    "crdt channel joined",
+    "resync ("
   ]
 
   # Bounded label set for the dropped-lines metric: the client sends any
