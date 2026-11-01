@@ -73,6 +73,29 @@ defmodule Engram.RuntimeConfig do
     do: Base.decode64(key) == Base.decode64(@dev_encryption_master_key)
 
   @doc """
+  Whether Paddle billing (and the onboarding/Terms gate) is on.
+
+  Clerk auth plus a PADDLE_API_KEY turns it on; self-host and staging (no
+  `ENGRAM_SAAS_ONLY`) keep billing off when the key is unset. SaaS prod sets
+  `ENGRAM_SAAS_ONLY=true`, and there a missing or blank key raises instead of
+  silently disabling billing, per-plan embed models and the onboarding gate.
+  """
+  @spec billing_enabled((String.t() -> String.t() | nil), :clerk | :local) :: boolean()
+  def billing_enabled(getenv, auth_provider) do
+    key = getenv.("PADDLE_API_KEY")
+
+    if auth_provider == :clerk and getenv.("ENGRAM_SAAS_ONLY") == "true" and blank?(key) do
+      raise "ENGRAM_SAAS_ONLY=true with AUTH_PROVIDER=clerk requires a non-blank PADDLE_API_KEY; " <>
+              "refusing to boot with billing silently disabled."
+    end
+
+    auth_provider == :clerk and key != nil
+  end
+
+  defp blank?(nil), do: true
+  defp blank?(v), do: String.trim(v) == ""
+
+  @doc """
   `ENVELOPE_COMPRESSION` -> `{:ok, boolean}` or `:unset` (#1872).
 
   The emergency kill switch for compress-then-encrypt: `false`/`0` returns new

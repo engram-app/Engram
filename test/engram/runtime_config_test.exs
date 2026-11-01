@@ -5,6 +5,46 @@ defmodule Engram.RuntimeConfigTest do
 
   defp getenv(map), do: fn key -> Map.get(map, key) end
 
+  describe "billing_enabled/2" do
+    # SaaS prod sets ENGRAM_SAAS_ONLY=true (engram-infra prod ecs.tf). A missing
+    # or blank PADDLE_API_KEY there used to derive billing_enabled=false and
+    # silently drop billing, per-plan embed models and the onboarding gate.
+    @saas %{"ENGRAM_SAAS_ONLY" => "true"}
+
+    test "SaaS prod with a Paddle key has billing on" do
+      assert RuntimeConfig.billing_enabled(
+               getenv(Map.put(@saas, "PADDLE_API_KEY", "pdl_x")),
+               :clerk
+             )
+    end
+
+    test "SaaS prod without PADDLE_API_KEY refuses to boot" do
+      assert_raise RuntimeError, ~r/PADDLE_API_KEY/, fn ->
+        RuntimeConfig.billing_enabled(getenv(@saas), :clerk)
+      end
+    end
+
+    test "SaaS prod with a blank or whitespace PADDLE_API_KEY refuses to boot" do
+      for blank <- ["", "  ", "\n"] do
+        assert_raise RuntimeError, ~r/PADDLE_API_KEY/, fn ->
+          RuntimeConfig.billing_enabled(getenv(Map.put(@saas, "PADDLE_API_KEY", blank)), :clerk)
+        end
+      end
+    end
+
+    # Self-host runs billing off by design.
+    test "self-host without a key stays billing-off and boots" do
+      refute RuntimeConfig.billing_enabled(getenv(%{}), :local)
+      refute RuntimeConfig.billing_enabled(getenv(%{"ENGRAM_SAAS_ONLY" => "false"}), :local)
+    end
+
+    # Staging/FastRaid: clerk auth but no ENGRAM_SAAS_ONLY, so no new boot failure.
+    test "clerk without ENGRAM_SAAS_ONLY keeps the old derivation" do
+      refute RuntimeConfig.billing_enabled(getenv(%{}), :clerk)
+      assert RuntimeConfig.billing_enabled(getenv(%{"PADDLE_API_KEY" => "pdl_x"}), :clerk)
+    end
+  end
+
   describe "http_compression/1" do
     # Cloudflare compresses at the edge, so origin compression in SaaS is pure
     # CPU (9% of web CPU in the 2026-10-17 profile, all :zlib.gzip/1).
