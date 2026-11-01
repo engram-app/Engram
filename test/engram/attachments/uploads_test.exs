@@ -386,6 +386,92 @@ defmodule Engram.Attachments.UploadsTest do
     end
   end
 
+  describe "complete/3 over bytes the live row already holds" do
+    setup %{user: user, vault: vault} do
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      stub_with(Engram.MockStorage, InMemory)
+
+      bytes = :crypto.strong_rand_bytes(600)
+      up = start!(user, vault, "a.png", byte_size(bytes))
+      put_all(user, vault, up, bytes)
+      %{bytes: bytes, up: up}
+    end
+
+    # Runs `fun` once, from inside the first read-back of the session blob.
+    defp during_read_back(fun) do
+      ran = :counters.new(1, [])
+
+      stub(Engram.MockStorage, :get_range, fn key, offset, len ->
+        if :counters.get(ran, 1) == 0 do
+          :counters.add(ran, 1, 1)
+          fun.()
+        end
+
+        InMemory.get_range(key, offset, len)
+      end)
+    end
+
+    # Two completes of one session racing, its bytes already live: the
+    # winner keeps the live row and drops the session blob the loser is
+    # reading. The loser answers with the same row and the live blob stays.
+    test "a duplicate complete racing a no-op complete answers the live row", %{
+      user: user,
+      vault: vault,
+      bytes: bytes,
+      up: up
+    } do
+      {:ok, live} = Attachments.upsert_attachment(user, vault, %{path: "a.png", content: bytes})
+      parent = self()
+      during_read_back(fn -> send(parent, {:winner, Uploads.complete(user, vault, up.id)}) end)
+
+      assert {:ok, loser} = Uploads.complete(user, vault, up.id)
+      assert_received {:winner, {:ok, winner}}
+
+      for att <- [loser, winner] do
+        assert att.id == live.id
+        assert att.storage_key == live.storage_key
+      end
+
+      row = Repo.get!(Attachment, live.id, skip_tenant_check: true)
+      assert row.storage_key == live.storage_key
+      assert row.version == live.version
+      assert InMemory.exists?(live.storage_key)
+      refute InMemory.exists?(up.storage_key)
+    end
+
+    # A stale base refuses before the cap check: 409 keeps the assembled
+    # session for a retry with the current hash, where a cap refusal drops it.
+    test "a stale base_hash over the cap is stale_base and keeps the session", %{
+      user: user,
+      vault: vault,
+      up: up
+    } do
+      insert(:user_limit_override, user: user, key: "attachment_bytes_cap", value: %{"v" => 1000})
+      # setup's start already cached the default cap.
+      Engram.Billing.OverrideCache.evict(user.id)
+      {:ok, v1} = Attachments.upsert_attachment(user, vault, %{path: "a.png", content: "v1"})
+      {:ok, _v2} = Attachments.upsert_attachment(user, vault, %{path: "a.png", content: "v2"})
+
+      # Passes the early cap check, then another file fills the quota before
+      # the locked one.
+      during_read_back(fn ->
+        {:ok, _} =
+          Attachments.upsert_attachment(user, vault, %{
+            path: "b.png",
+            content: :crypto.strong_rand_bytes(600)
+          })
+      end)
+
+      assert {:error, {:stale_base, _}} =
+               Uploads.complete(user, vault, up.id, base_hash: v1.content_hash)
+
+      assert Repo.get(Upload, up.id, skip_tenant_check: true)
+      assert InMemory.exists?(up.storage_key)
+    end
+  end
+
   describe "complete/3 recovery and races" do
     setup %{user: user, vault: vault} do
       allow_big_files(user)

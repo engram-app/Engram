@@ -292,6 +292,54 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
     assert conn |> get("/api/attachments/photos/a.png?raw=1") |> response(200) == bytes
   end
 
+  # A retry in a fresh session after a lost response: the row already holds
+  # these exact bytes, so the stale base is the client's own write.
+  test "complete with a stale base_hash succeeds when the row already holds these bytes", %{
+    conn: conn,
+    user: user
+  } do
+    upload = fn bytes, extra ->
+      conn
+      |> post(
+        "/api/attachments",
+        Map.merge(%{path: "photos/a.png", content_base64: Base.encode64(bytes)}, extra)
+      )
+      |> json_response(200)
+      |> get_in(["attachment", "content_hash"])
+    end
+
+    h1 = upload.("v1", %{})
+    bytes = :crypto.strong_rand_bytes(1000)
+    h2 = upload.(bytes, %{base_hash: h1})
+
+    live = Repo.one!(from(a in Attachment, where: a.content_hash == ^h2), skip_tenant_check: true)
+    %{"upload_id" => id} = start!(conn, "photos/a.png", byte_size(bytes))
+    assert conn |> put_part(id, 1, bytes) |> json_response(200)
+    key = session(id).storage_key
+
+    body =
+      conn
+      |> post("/api/attachment-uploads/#{id}/complete", %{base_hash: h1})
+      |> json_response(200)
+
+    assert body["attachment"]["content_hash"] == h2
+    assert conn |> get("/api/attachments/photos/a.png?raw=1") |> response(200) == bytes
+
+    # The live row is left as it was (no new version, no blob swap), the
+    # session's blob is dropped, and a retried complete answers the same.
+    after_complete = Repo.get!(Attachment, live.id, skip_tenant_check: true)
+    assert after_complete.storage_key == live.storage_key
+    assert after_complete.version == live.version
+    assert after_complete.updated_at == live.updated_at
+    refute InMemory.exists?(key)
+    assert used(user) == byte_size(bytes)
+
+    assert conn
+           |> post("/api/attachment-uploads/#{id}/complete", %{base_hash: h1})
+           |> json_response(200)
+           |> get_in(["attachment", "content_hash"]) == h2
+  end
+
   test "complete with a matching base_hash commits", %{conn: conn} do
     h1 =
       conn

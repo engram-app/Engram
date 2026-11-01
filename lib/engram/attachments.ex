@@ -89,12 +89,14 @@ defmodule Engram.Attachments do
          # starve the whole API). The locked transaction below re-checks
          # `existing` and repairs the rare race.
          existing0 = fetch_existing(user, vault.id, path_hmac),
+         {:ok, content_key} <- Crypto.dek_content_hash_key(user),
+         content_hash = Crypto.hmac_content_hash(content_key, plaintext),
          # Re-offering bytes the server already holds is a no-op. Returning the
          # live row here skips the encrypt, the S3 PUT, the locked row write
          # AND the "upsert" broadcast every peer would otherwise chase. See
-         # `identical_or_changed/5`.
+         # `identical_or_changed/4`.
          :changed <-
-           identical_or_changed(user, existing0, plaintext, path, explicit_mime) do
+           identical_or_changed(existing0, content_hash, path, explicit_mime) do
       basename_hmac = Crypto.hmac_field(filter_key, Links.basename_key(path))
 
       att_id0 =
@@ -161,17 +163,29 @@ defmodule Engram.Attachments do
               nil ->
                 {:ok, id, prepared_attrs}
             end,
-            Notes.put_base_hash_opt([], attrs)
+            Notes.put_base_hash_opt(
+              own_write_opts(existing0, content_hash, attrs0.mime_type),
+              attrs
+            )
           )
         end
 
         deleting_blob_on_raise(user, vault, key, fn ->
           commit_prepared(commit, reprepare, att_id0, attrs0, @reprepare_attempts)
         end)
-        |> tap(fn
-          {:ok, _} -> :ok
-          {:error, _} -> delete_external(key)
-        end)
+        |> case do
+          {:ok, _} = ok ->
+            ok
+
+          # The live row already holds these bytes: this upload's blob is unused.
+          {:unchanged, att} ->
+            delete_external(key)
+            {:ok, att}
+
+          {:error, _} = err ->
+            delete_external(key)
+            err
+        end
       end
     end
   end
@@ -226,7 +240,18 @@ defmodule Engram.Attachments do
   #
   # `opts[:base_hash]` (#2163) is the `content_hash` the writer last read, the
   # same compare-and-swap guard `Notes.upsert_note/4` takes: a live row whose
-  # hash moved since refuses with `{:error, {:stale_base, live_row}}`.
+  # hash moved since refuses with `{:error, {:stale_base, live_row}}`, unless
+  # it moved to `opts[:content_hash]`, the hash of the bytes being written.
+  #
+  # A live row that already holds those bytes (same hash and `opts[:mime_type]`)
+  # is left as it is: `{:unchanged, live_row}`, no write, no blob release, no
+  # broadcast, `build` never called. The caller drops its own blob. This is the
+  # concurrent own-write retry; a sequential one returns before the lock (see
+  # `identical_or_changed/4`). `opts[:rewrite_key]` names a row the caller
+  # already probed and must rewrite anyway (its blob is missing): a live row
+  # still on that key is written, not kept. Any other row is kept only once
+  # its blob is confirmed present, probed outside the gate and the
+  # transaction (`{:verify_blob, live}`, then one more commit).
   #
   # After commit: releases the replaced row's blob when the new write moved
   # the row to a different storage key, then broadcasts the upsert.
@@ -242,7 +267,7 @@ defmodule Engram.Attachments do
              | {:error, term()}),
           keyword()
         ) ::
-          {:ok, Attachment.t()} | {:error, term()}
+          {:ok, Attachment.t()} | {:unchanged, Attachment.t()} | {:error, term()}
   def commit_row(user, vault, path, path_hmac, size, dek_version, build, opts \\ []) do
     # Read once, before the transaction, and used for both the lock and the
     # check, so a plan change in between cannot run the SUM without the lock.
@@ -252,12 +277,32 @@ defmodule Engram.Attachments do
     # Gate outermost (see SeqGate): waiters queue without a pool connection.
     # shed_on_bound: the path and quota advisory locks run outside a tenant
     # leg, so a request lock_timeout there must still shed as a 429.
-    SeqGate.with_vault(vault.id, fn ->
-      Repo.shed_on_bound(fn ->
-        commit_txn(user, vault, {path, path_hmac, size}, dek_version, build, limit, opts)
+    gated = fn opts ->
+      SeqGate.with_vault(vault.id, fn ->
+        Repo.shed_on_bound(fn ->
+          commit_txn(user, vault, {path, path_hmac, size}, dek_version, build, limit, opts)
+        end)
       end)
-    end)
+    end
+
+    case gated.(opts) do
+      # An own-write candidate whose blob is unconfirmed: probed here, with no
+      # gate, transaction or connection held (S3 I/O), then committed once
+      # more with the answer.
+      {:error, {:verify_blob, live}} ->
+        # A missing blob replaces the caller's `rewrite_key`: that key's row
+        # was already judged for a rewrite, and any row back on it fails the
+        # `verified_key` match on the second commit and is written anyway.
+        key = if blob_present?(live), do: :verified_key, else: :rewrite_key
+        gated.(Keyword.merge(opts, [{key, live.storage_key}, verify_blob: false]))
+
+      result ->
+        result
+    end
     |> case do
+      {:ok, {att, :unchanged}} ->
+        {:unchanged, att}
+
       {:ok, {att, existing}} ->
         :ok = release_replaced_blob(user, vault, path_hmac, existing, att)
 
@@ -294,10 +339,20 @@ defmodule Engram.Attachments do
       :ok = acquire_path_lock(user.id, path_hmac)
       existing = fetch_existing(user, vault.id, path_hmac)
 
+      # The stale-base and own-write checks run before the cap check: a stale
+      # request is a 409 (a chunked session is kept for the retry), and an
+      # own-write retry is a no-op, whatever the quota. A rotation is refused
+      # first, from an unlocked read (the users row lock must come after the
+      # vault row's, below): across a rotation the incoming hash is under the
+      # old content key and can never match, so the refusal must be the
+      # rotation, not a stale base. The locked gate below stays authoritative.
+      #
       # The cap check (a user-wide SUM) is serialized by the per-user quota
       # lock, so it runs BEFORE the vault row lock that every writer of the
       # vault waits on.
-      with :ok <- base_hash_gate(existing, path, opts[:base_hash]),
+      with :ok <- rotation_gate(user, dek_version, false),
+           :ok <- base_hash_gate(existing, path, opts[:base_hash], opts[:content_hash]),
+           :write <- own_write(existing, opts),
            :ok <- quota_check(user, limit, existing, size),
            # The vault row BEFORE the users row (rotation_gate's FOR SHARE):
            # an account delete deletes vaults then users, so users-then-vault
@@ -315,29 +370,72 @@ defmodule Engram.Attachments do
         # second decrypt round-trip.
         {%{att | path: path}, existing}
       else
+        {:unchanged, live} -> {%{live | path: path}, :unchanged}
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
   end
 
-  # Mirrors the notes stale-base gate (`Notes.do_update_note/6`). No live row
-  # means no check, as for notes; the resurrection risk is #2311.
-  defp base_hash_gate(%Attachment{content_hash: current} = live, path, base)
-       when is_binary(base) and is_binary(current) and current != base,
-       do: {:error, {:stale_base, %{live | path: path}}}
+  # The notes stale-base check (`Notes.stale_base?/3`): a live row that already
+  # holds the incoming bytes passes, so a retry after a lost response is not
+  # refused as a conflict with itself. No live row means no check, as for
+  # notes; the resurrection risk is #2311.
+  defp base_hash_gate(%Attachment{content_hash: current} = live, path, base, incoming) do
+    if Notes.stale_base?(current, base, incoming),
+      do: {:error, {:stale_base, %{live | path: path}}},
+      else: :ok
+  end
 
-  defp base_hash_gate(_existing, _path, _base), do: :ok
+  defp base_hash_gate(_existing, _path, _base, _incoming), do: :ok
+
+  @doc false
+  # The `commit_row/8` opts that let an upload of bytes the live row already
+  # holds keep that row (see `commit_row/8`). `probed` is the row the caller's
+  # `identical_or_changed/4` judged before the lock, or nil.
+  def own_write_opts(probed, content_hash, mime_type) do
+    [
+      content_hash: content_hash,
+      mime_type: mime_type,
+      rewrite_key: probed && probed.storage_key
+    ]
+  end
+
+  defp own_write(%Attachment{content_hash: hash, mime_type: mime, storage_key: key} = live, opts)
+       when is_binary(hash) do
+    # No I/O here (under the gate and the transaction): a row whose blob is
+    # not yet confirmed rolls back to `commit_row/8`, which probes it outside
+    # and commits again. A missing blob writes the upload, so the bytes in
+    # hand are never discarded; a row that moved again on the second commit
+    # is written too.
+    cond do
+      hash != opts[:content_hash] or mime != opts[:mime_type] or key == opts[:rewrite_key] ->
+        :write
+
+      key == opts[:verified_key] ->
+        {:unchanged, live}
+
+      Keyword.get(opts, :verify_blob, true) ->
+        {:error, {:verify_blob, live}}
+
+      true ->
+        :write
+    end
+  end
+
+  defp own_write(_existing, _opts), do: :write
 
   @doc """
   `{:error, :rotation_in_progress}` while a DEK rotation holds the user (read
   fresh, never from a cached struct), or, given `dek_version`, once one has
   completed since the caller read that version. Inside a transaction it also holds the
   user row against a rotation starting before the caller commits
-  (`RotationGate.check/2`). Fails closed on a missing user.
+  (`RotationGate.check/2`); `share_lock: false` skips that lock for an early,
+  advisory read. Fails closed on a missing user.
   """
-  @spec rotation_gate(map(), integer() | nil) :: :ok | {:error, :rotation_in_progress}
-  def rotation_gate(user, dek_version \\ nil) do
-    opts = [share_lock: Repo.in_transaction?()]
+  @spec rotation_gate(map(), integer() | nil, boolean()) ::
+          :ok | {:error, :rotation_in_progress}
+  def rotation_gate(user, dek_version \\ nil, share_lock \\ Repo.in_transaction?()) do
+    opts = [share_lock: share_lock]
     opts = if dek_version, do: [{:dek_version, dek_version} | opts], else: opts
 
     case RotationGate.check(user.id, opts) do
@@ -416,23 +514,22 @@ defmodule Engram.Attachments do
   # upload does and repoints the row. On a backend with no versions to
   # restore from, the client's matching local copy is the only source left.
   # Costs one HEAD per identical re-upload.
-  defp identical_or_changed(_user, nil, _plaintext, _path, _explicit_mime), do: :changed
+  @doc false
+  def identical_or_changed(nil, _content_hash, _path, _explicit_mime), do: :changed
 
-  defp identical_or_changed(
-         user,
-         %Attachment{content_hash: stored} = att,
-         plaintext,
-         path,
-         explicit_mime
-       )
-       when is_binary(stored) do
+  def identical_or_changed(
+        %Attachment{content_hash: stored} = att,
+        content_hash,
+        path,
+        explicit_mime
+      )
+      when is_binary(stored) do
     effective_mime = explicit_mime || MimeWhitelist.detect_mime(path)
 
     with true <- att.mime_type == effective_mime,
          # Not a secret comparison — both sides are HMACs over content the
          # caller just supplied, so there is no oracle to time. Plain `==`.
-         {:ok, content_key} <- Crypto.dek_content_hash_key(user),
-         true <- stored == Crypto.hmac_content_hash(content_key, plaintext),
+         true <- stored == content_hash,
          true <- blob_present?(att) do
       # `path` is virtual (Phase B.3); splice it on so this return is
       # shape-identical to the write path's.
@@ -442,7 +539,7 @@ defmodule Engram.Attachments do
     end
   end
 
-  defp identical_or_changed(_user, _existing, _plaintext, _path, _explicit_mime), do: :changed
+  def identical_or_changed(_existing, _content_hash, _path, _explicit_mime), do: :changed
 
   defp blob_present?(%Attachment{storage_key: key} = att) when is_binary(key) do
     case Storage.presence(key) do

@@ -155,6 +155,69 @@ defmodule Engram.AttachmentsTest do
     end
   end
 
+  describe "own-write retry blob probe" do
+    # A retry whose identical first attempt committed while the retry was in
+    # flight keeps that row only once its blob is confirmed present. The probe
+    # is S3 I/O, so it must run with no transaction, no pool connection and no
+    # vault SeqGate held: other writes to the vault proceed while it is slow.
+    test "runs outside the transaction and the vault gate", %{user: user, vault: vault} do
+      stub_with(Engram.MockStorage, InMemory)
+      test_pid = self()
+      first_done = :counters.new(1, [])
+      v2 = %{"path" => @path, "content_base64" => Base.encode64("v2 bytes")}
+
+      {:ok, _v1} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => @path,
+          "content_base64" => Base.encode64("v1 bytes")
+        })
+
+      stub(Engram.MockStorage, :put, fn key, bin, opts ->
+        if :counters.get(first_done, 1) == 0 do
+          :counters.add(first_done, 1, 1)
+          {:ok, first} = Attachments.upsert_attachment(user, vault, v2)
+          send(test_pid, {:first, first})
+        end
+
+        InMemory.put(key, bin, opts)
+      end)
+
+      stub(Engram.MockStorage, :get_range, fn key, offset, len ->
+        send(test_pid, {:probing, self(), Engram.Repo.in_transaction?()})
+
+        receive do
+          :go -> :ok
+        after
+          5_000 -> :ok
+        end
+
+        InMemory.get_range(key, offset, len)
+      end)
+
+      retry = Task.async(fn -> Attachments.upsert_attachment(user, vault, v2) end)
+      assert_receive {:first, first}, 5_000
+      assert_receive {:probing, prober, false}, 5_000
+
+      # While the probe is blocked, another write to the same vault lands.
+      other =
+        Task.async(fn ->
+          Attachments.upsert_attachment(user, vault, %{
+            "path" => "photos/other.png",
+            "content_base64" => Base.encode64("other")
+          })
+        end)
+
+      assert {:ok, {:ok, _}} = Task.yield(other, 2_000)
+
+      send(prober, :go)
+      assert {:ok, att} = Task.await(retry)
+      assert att.storage_key == first.storage_key
+      row = Repo.get!(Attachment, first.id, skip_tenant_check: true)
+      assert row.version == first.version
+      assert row.updated_at == first.updated_at
+    end
+  end
+
   describe "upsert_attachment/3 transaction shape" do
     test "S3 PUT runs outside the row transaction on the common path", %{
       user: user,

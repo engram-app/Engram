@@ -7,6 +7,7 @@ defmodule EngramWeb.AttachmentsControllerTest do
   use EngramWeb.ConnCase, async: false
 
   alias Engram.Attachments
+  alias Engram.Storage.InMemory
 
   @sample_content "Hello, binary world!"
   @sample_base64 Base.encode64("Hello, binary world!")
@@ -412,12 +413,12 @@ defmodule EngramWeb.AttachmentsControllerTest do
       prev = Application.get_env(:engram, :storage)
       Application.put_env(:engram, :storage, Engram.MockStorage)
       on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
-      Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+      Mox.stub_with(Engram.MockStorage, InMemory)
       test_pid = self()
 
       Mox.stub(Engram.MockStorage, :put, fn key, bin, opts ->
         send(test_pid, {:stored, key})
-        Engram.Storage.InMemory.put(key, bin, opts)
+        InMemory.put(key, bin, opts)
       end)
 
       body =
@@ -437,11 +438,112 @@ defmodule EngramWeb.AttachmentsControllerTest do
       # The blob PUT before the lock is deleted on the refusal, and the
       # refused write is not billed against the quota.
       assert_received {:stored, fresh_key}
-      refute Engram.Storage.InMemory.exists?(fresh_key)
+      refute InMemory.exists?(fresh_key)
       assert elem(Attachments.storage_usage(user), 1).used_bytes == used_before
 
       got = conn |> get("/api/attachments/doc.png") |> json_response(200)
       assert Base.decode64!(got["content_base64"]) == "v2 bytes"
+    end
+
+    # A retry whose first attempt committed while the retry was in flight
+    # (lost response): the row now holds the retry's own bytes, so its base is
+    # stale but there is nothing to conflict with. The client cannot tell it is
+    # its own write (content_hash is keyed server-side), so this must succeed.
+    test "a retry landing on its own committed write succeeds, not 409", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      h1 = upload_hash(conn, "doc.png", "v1 bytes")
+      v2 = %{path: "doc.png", content_base64: Base.encode64("v2 bytes"), base_hash: h1}
+
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      Mox.stub_with(Engram.MockStorage, InMemory)
+      test_pid = self()
+
+      # The first attempt commits during the retry's pre-lock PUT, after the
+      # retry already read the v1 row.
+      Mox.stub(Engram.MockStorage, :put, fn key, bin, opts ->
+        unless Process.put(:first_attempt_done, true) do
+          {:ok, first} = Attachments.upsert_attachment(user, vault, v2)
+          send(test_pid, {:first, first})
+        end
+
+        send(test_pid, {:stored, key})
+        InMemory.put(key, bin, opts)
+      end)
+
+      body = conn |> post("/api/attachments", v2) |> json_response(200)
+      assert_received {:first, first}
+      h2 = body["attachment"]["content_hash"]
+      assert h2 == first.content_hash
+      refute h2 == h1
+      assert conn |> get("/api/attachments/doc.png?raw=1") |> response(200) == "v2 bytes"
+
+      # The retry is a no-op on the first attempt's row: no new version, no
+      # blob swap (so no peer re-download). Its own blob is dropped, and the
+      # file counts once.
+      {:ok, live} = Attachments.get_attachment(user, vault, "doc.png")
+      assert live.storage_key == first.storage_key
+      assert live.version == first.version
+      assert live.updated_at == first.updated_at
+      assert_received {:stored, key_a}
+      assert_received {:stored, key_b}
+      [retry_key] = [key_a, key_b] -- [first.storage_key]
+      refute InMemory.exists?(retry_key)
+      assert InMemory.exists?(first.storage_key)
+      assert elem(Attachments.storage_usage(user), 1).used_bytes == byte_size("v2 bytes")
+
+      # A later sequential retry is a no-op too.
+      assert upload_hash(conn, "doc.png", "v2 bytes", %{base_hash: h1}) == h2
+      {:ok, after_retry} = Attachments.get_attachment(user, vault, "doc.png")
+      assert after_retry.storage_key == first.storage_key
+      assert after_retry.updated_at == first.updated_at
+    end
+
+    # As above, but the first attempt's blob is gone by the time the retry
+    # takes the lock: the retry holds the bytes, so it writes them rather than
+    # keep a row that points at nothing.
+    test "a retry landing on its own write whose blob is missing writes its bytes", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      h1 = upload_hash(conn, "doc.png", "v1 bytes")
+      v2 = %{path: "doc.png", content_base64: Base.encode64("v2 bytes"), base_hash: h1}
+
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      Mox.stub_with(Engram.MockStorage, InMemory)
+
+      test_pid = self()
+
+      Mox.stub(Engram.MockStorage, :put, fn key, bin, opts ->
+        unless Process.put(:first_attempt_done, true) do
+          {:ok, first} = Attachments.upsert_attachment(user, vault, v2)
+          :ok = InMemory.delete(first.storage_key)
+          send(test_pid, {:first, first})
+        end
+
+        send(test_pid, {:stored, key})
+        InMemory.put(key, bin, opts)
+      end)
+
+      assert conn |> post("/api/attachments", v2) |> json_response(200)
+      assert conn |> get("/api/attachments/doc.png?raw=1") |> response(200) == "v2 bytes"
+
+      # The off-gate probe found the first attempt's blob missing, so the
+      # second commit wrote the retry's own blob: the row moved to its key.
+      assert_received {:first, first}
+      assert_received {:stored, key_a}
+      assert_received {:stored, key_b}
+      [retry_key] = [key_a, key_b] -- [first.storage_key]
+      {:ok, live} = Attachments.get_attachment(user, vault, "doc.png")
+      assert live.storage_key == retry_key
+      assert InMemory.exists?(retry_key)
     end
 
     test "a matching base_hash overwrites", %{conn: conn} do
@@ -1597,7 +1699,6 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
     alias Engram.Attachments.Attachment
     alias Engram.Repo
-    alias Engram.Storage.InMemory
 
     defp set_rotation_lock(user, at) do
       Repo.update_all(
@@ -1687,6 +1788,39 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert live_rows(user) == []
     end
 
+    # The incoming hash is under the pre-rotation content key, so it can never
+    # match the live row's: the right refusal is the rotation, not a 409.
+    test "a rotation mid-request with a stale base_hash is rotation_in_progress, not 409", %{
+      conn: conn,
+      user: user
+    } do
+      assert conn |> upload() |> json_response(200)
+
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      stub_with(Engram.MockStorage, InMemory)
+
+      stub(Engram.MockStorage, :put, fn k, bin, opts ->
+        Repo.update_all(
+          from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          [inc: [dek_version: 1]],
+          skip_tenant_check: true
+        )
+
+        InMemory.put(k, bin, opts)
+      end)
+
+      resp =
+        post(conn, "/api/attachments", %{
+          path: "r.png",
+          content_base64: @updated_base64,
+          base_hash: String.duplicate("0", 64)
+        })
+
+      assert %{"error" => "rotation_in_progress"} = json_response(resp, 503)
+    end
+
     test "a refused overwrite leaves the existing attachment readable", %{
       conn: conn,
       user: user
@@ -1730,7 +1864,6 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
     alias Engram.Attachments.{Attachment, SegmentedCipher, Uploads}
     alias Engram.Repo
-    alias Engram.Storage.InMemory
 
     @seg 8 * 1024 * 1024
     # Two segments, 11.5 MB: over the 11 MB single-request ceiling.
