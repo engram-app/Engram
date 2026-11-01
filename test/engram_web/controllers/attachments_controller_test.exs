@@ -1727,6 +1727,39 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert live_rows(user) == []
     end
 
+    # The incoming hash is under the pre-rotation content key, so it can never
+    # match the live row's: the right refusal is the rotation, not a 409.
+    test "a rotation mid-request with a stale base_hash is rotation_in_progress, not 409", %{
+      conn: conn,
+      user: user
+    } do
+      assert conn |> upload() |> json_response(200)
+
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      stub_with(Engram.MockStorage, InMemory)
+
+      stub(Engram.MockStorage, :put, fn k, bin, opts ->
+        Repo.update_all(
+          from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          [inc: [dek_version: 1]],
+          skip_tenant_check: true
+        )
+
+        InMemory.put(k, bin, opts)
+      end)
+
+      resp =
+        post(conn, "/api/attachments", %{
+          path: "r.png",
+          content_base64: @updated_base64,
+          base_hash: String.duplicate("0", 64)
+        })
+
+      assert %{"error" => "rotation_in_progress"} = json_response(resp, 503)
+    end
+
     test "a refused overwrite leaves the existing attachment readable", %{
       conn: conn,
       user: user

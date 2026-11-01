@@ -298,8 +298,7 @@ defmodule Engram.Attachments do
       # The cap check (a user-wide SUM) is serialized by the per-user quota
       # lock, so it runs BEFORE the vault row lock that every writer of the
       # vault waits on.
-      with :ok <- base_hash_gate(existing, path, opts[:base_hash], opts[:content_hash]),
-           :ok <- quota_check(user, limit, existing, size),
+      with :ok <- quota_check(user, limit, existing, size),
            # The vault row BEFORE the users row (rotation_gate's FOR SHARE):
            # an account delete deletes vaults then users, so users-then-vault
            # here was a 40P01 cycle with it (#2339). write_row's next_seq!
@@ -309,6 +308,10 @@ defmodule Engram.Attachments do
            # after a DEK rotation's sweep went by would stay under the
            # retiring key.
            :ok <- rotation_gate(user, dek_version),
+           # After the rotation gate: across a rotation the incoming hash is
+           # under the old content key and can never match, so the refusal
+           # must be the rotation, not a stale base.
+           :ok <- base_hash_gate(existing, path, opts[:base_hash], opts[:content_hash]),
            {:ok, insert_id, attrs} <- build.(existing),
            {:ok, att} <- write_row(user, existing, insert_id, attrs, path) do
         # Phase B.3: path is virtual — splice the plaintext we already have
