@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.71.0](https://github.com/engram-app/Engram/compare/0.70.0...0.71.0) (2026-11-01)
+
+
+### Features
+
+* **logs:** store warn+ client logs, cap 500/10m ([#2369](https://github.com/engram-app/Engram/issues/2369)) ([1472169](https://github.com/engram-app/Engram/commit/147216902a2e54c05a27671c9d71ab7340744e3d))
+
+
+### Bug Fixes
+
+* **attachments:** own-write retry is not a 409 ([#2366](https://github.com/engram-app/Engram/issues/2366)) ([1769c44](https://github.com/engram-app/Engram/commit/1769c44834ba35b1e8cfd3fd4578d3d5e11d5ff5))
+* **repo:** recycle pg connections after 6h ([#2367](https://github.com/engram-app/Engram/issues/2367)) ([1fc7599](https://github.com/engram-app/Engram/commit/1fc7599caa3bd6e0645ed0a37e98f346e9a0435f))
+
 ## [0.70.0](https://github.com/engram-app/Engram/compare/0.69.0...0.70.0) (2026-10-31)
 
 
