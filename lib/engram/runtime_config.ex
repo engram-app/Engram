@@ -292,6 +292,10 @@ defmodule Engram.RuntimeConfig do
   end
 
   @default_max_lifetime_minutes 360
+  # One week. Far above any sane bound, and well under the ~286,000 minutes
+  # where DBConnection's jitter hash (`:erlang.phash2/2`, range < 2^32) raises
+  # badarg, which it rescues into "never recycle": a silent no-op.
+  @max_lifetime_cap_minutes 10_080
 
   @doc """
   How long a pooled Postgres connection may live before DBConnection closes
@@ -306,7 +310,7 @@ defmodule Engram.RuntimeConfig do
   on a schedule.
 
   `DATABASE_MAX_LIFETIME_MINUTES` (default #{@default_max_lifetime_minutes},
-  `0` disables). Returns `[max_lifetime: min..max]`, where `max` is `min`
+  `0` disables, above #{@max_lifetime_cap_minutes} fails boot). Returns `[max_lifetime: min..max]`, where `max` is `min`
   plus 25%: DBConnection hashes each connection to a point in that window,
   so a pool drains gradually instead of reconnecting all at once.
 
@@ -322,6 +326,12 @@ defmodule Engram.RuntimeConfig do
         v when v in [nil, ""] -> @default_max_lifetime_minutes
         v -> parse_non_neg_int!(v, "DATABASE_MAX_LIFETIME_MINUTES")
       end
+
+    if minutes > @max_lifetime_cap_minutes do
+      raise ArgumentError,
+            "DATABASE_MAX_LIFETIME_MINUTES must be at most #{@max_lifetime_cap_minutes} " <>
+              "(one week), got: #{minutes}; use 0 to disable"
+    end
 
     case minutes * 60_000 do
       0 -> []

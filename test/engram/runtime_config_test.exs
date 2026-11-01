@@ -231,6 +231,19 @@ defmodule Engram.RuntimeConfigTest do
       end
     end
 
+    test "values above one week fail boot instead of silently never recycling" do
+      assert [max_lifetime: _] =
+               RuntimeConfig.repo_max_lifetime(
+                 getenv(%{"DATABASE_MAX_LIFETIME_MINUTES" => "10080"})
+               )
+
+      for big <- ["10081", "300000"] do
+        assert_raise ArgumentError, ~r/at most 10080/, fn ->
+          RuntimeConfig.repo_max_lifetime(getenv(%{"DATABASE_MAX_LIFETIME_MINUTES" => big}))
+        end
+      end
+    end
+
     test "the range is one DBConnection accepts (non-negative, step 1)" do
       [max_lifetime: %Range{first: first, last: last, step: 1}] =
         RuntimeConfig.repo_max_lifetime(getenv(%{}))
