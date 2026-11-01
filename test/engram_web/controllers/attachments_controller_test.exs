@@ -503,6 +503,37 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert after_retry.updated_at == first.updated_at
     end
 
+    # As above, but the first attempt's blob is gone by the time the retry
+    # takes the lock: the retry holds the bytes, so it writes them rather than
+    # keep a row that points at nothing.
+    test "a retry landing on its own write whose blob is missing writes its bytes", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      h1 = upload_hash(conn, "doc.png", "v1 bytes")
+      v2 = %{path: "doc.png", content_base64: Base.encode64("v2 bytes"), base_hash: h1}
+
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      Mox.stub_with(Engram.MockStorage, InMemory)
+
+      Mox.stub(Engram.MockStorage, :put, fn key, bin, opts ->
+        unless Process.put(:first_attempt_done, true) do
+          {:ok, first} = Attachments.upsert_attachment(user, vault, v2)
+          :ok = InMemory.delete(first.storage_key)
+        end
+
+        InMemory.put(key, bin, opts)
+      end)
+
+      assert conn |> post("/api/attachments", v2) |> json_response(200)
+      assert conn |> get("/api/attachments/doc.png?raw=1") |> response(200) == "v2 bytes"
+      {:ok, live} = Attachments.get_attachment(user, vault, "doc.png")
+      assert InMemory.exists?(live.storage_key)
+    end
+
     test "a matching base_hash overwrites", %{conn: conn} do
       h1 = upload_hash(conn, "doc.png", "v1 bytes")
       h2 = upload_hash(conn, "doc.png", "v2 bytes", %{base_hash: h1})

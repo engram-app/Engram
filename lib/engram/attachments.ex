@@ -320,10 +320,21 @@ defmodule Engram.Attachments do
       :ok = acquire_path_lock(user.id, path_hmac)
       existing = fetch_existing(user, vault.id, path_hmac)
 
+      # The stale-base and own-write checks run before the cap check: a stale
+      # request is a 409 (a chunked session is kept for the retry), and an
+      # own-write retry is a no-op, whatever the quota. A rotation is refused
+      # first, from an unlocked read (the users row lock must come after the
+      # vault row's, below): across a rotation the incoming hash is under the
+      # old content key and can never match, so the refusal must be the
+      # rotation, not a stale base. The locked gate below stays authoritative.
+      #
       # The cap check (a user-wide SUM) is serialized by the per-user quota
       # lock, so it runs BEFORE the vault row lock that every writer of the
       # vault waits on.
-      with :ok <- quota_check(user, limit, existing, size),
+      with :ok <- rotation_gate(user, dek_version, false),
+           :ok <- base_hash_gate(existing, path, opts[:base_hash], opts[:content_hash]),
+           :write <- own_write(existing, opts),
+           :ok <- quota_check(user, limit, existing, size),
            # The vault row BEFORE the users row (rotation_gate's FOR SHARE):
            # an account delete deletes vaults then users, so users-then-vault
            # here was a 40P01 cycle with it (#2339). write_row's next_seq!
@@ -333,11 +344,6 @@ defmodule Engram.Attachments do
            # after a DEK rotation's sweep went by would stay under the
            # retiring key.
            :ok <- rotation_gate(user, dek_version),
-           # After the rotation gate: across a rotation the incoming hash is
-           # under the old content key and can never match, so the refusal
-           # must be the rotation, not a stale base.
-           :ok <- base_hash_gate(existing, path, opts[:base_hash], opts[:content_hash]),
-           :write <- own_write(existing, opts),
            {:ok, insert_id, attrs} <- build.(existing),
            {:ok, att} <- write_row(user, existing, insert_id, attrs, path) do
         # Phase B.3: path is virtual — splice the plaintext we already have
@@ -377,9 +383,14 @@ defmodule Engram.Attachments do
 
   defp own_write(%Attachment{content_hash: hash, mime_type: mime, storage_key: key} = live, opts)
        when is_binary(hash) do
-    if hash == opts[:content_hash] and mime == opts[:mime_type] and key != opts[:rewrite_key],
-      do: {:unchanged, live},
-      else: :write
+    # The blob probe is the same one the pre-lock path runs. It is I/O under
+    # the path lock, but only on this rare path (same bytes, a row the caller
+    # did not probe), and before the quota and vault row locks. A missing
+    # blob writes the upload: the bytes in hand are never discarded.
+    if hash == opts[:content_hash] and mime == opts[:mime_type] and key != opts[:rewrite_key] and
+         blob_present?(live),
+       do: {:unchanged, live},
+       else: :write
   end
 
   defp own_write(_existing, _opts), do: :write
@@ -389,11 +400,13 @@ defmodule Engram.Attachments do
   fresh, never from a cached struct), or, given `dek_version`, once one has
   completed since the caller read that version. Inside a transaction it also holds the
   user row against a rotation starting before the caller commits
-  (`RotationGate.check/2`). Fails closed on a missing user.
+  (`RotationGate.check/2`); `share_lock: false` skips that lock for an early,
+  advisory read. Fails closed on a missing user.
   """
-  @spec rotation_gate(map(), integer() | nil) :: :ok | {:error, :rotation_in_progress}
-  def rotation_gate(user, dek_version \\ nil) do
-    opts = [share_lock: Repo.in_transaction?()]
+  @spec rotation_gate(map(), integer() | nil, boolean()) ::
+          :ok | {:error, :rotation_in_progress}
+  def rotation_gate(user, dek_version \\ nil, share_lock \\ Repo.in_transaction?()) do
+    opts = [share_lock: share_lock]
     opts = if dek_version, do: [{:dek_version, dek_version} | opts], else: opts
 
     case RotationGate.check(user.id, opts) do
