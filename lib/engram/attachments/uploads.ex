@@ -298,21 +298,31 @@ defmodule Engram.Attachments.Uploads do
         committed(user, vault, up)
 
       {:ok, up} ->
-        with {:error, :not_found} <- complete_session(user, vault, up, opts),
-             do: lost_race(user, vault, upload_id)
+        case complete_session(user, vault, up, opts) do
+          # A rolled-back duplicate, or a read-back that lost the session blob
+          # to a no-op complete: either way another caller may have finished it.
+          {:error, :not_found} = err ->
+            lost_race(user, vault, upload_id, err)
+
+          {:error, {:storage, _}} = err ->
+            lost_race(user, vault, upload_id, err)
+
+          result ->
+            result
+        end
 
       err ->
         err
     end
   end
 
-  # A concurrent complete committed the session while this one ran (its
-  # write rolled back): answer with that attachment. Still :not_found when
-  # an abort got there first.
-  defp lost_race(user, vault, upload_id) do
+  # A concurrent complete committed the session while this one ran: answer
+  # with that attachment. Otherwise this call's own error (:not_found when an
+  # abort got there first).
+  defp lost_race(user, vault, upload_id, err) do
     case fetch(user, vault, upload_id) do
       {:ok, %Upload{completed_at: %DateTime{}} = up} -> committed(user, vault, up)
-      _ -> {:error, :not_found}
+      _ -> err
     end
   end
 

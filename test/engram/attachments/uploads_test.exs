@@ -413,6 +413,34 @@ defmodule Engram.Attachments.UploadsTest do
       end)
     end
 
+    # Two completes of one session racing, its bytes already live: the
+    # winner keeps the live row and drops the session blob the loser is
+    # reading. The loser answers with the same row and the live blob stays.
+    test "a duplicate complete racing a no-op complete answers the live row", %{
+      user: user,
+      vault: vault,
+      bytes: bytes,
+      up: up
+    } do
+      {:ok, live} = Attachments.upsert_attachment(user, vault, %{path: "a.png", content: bytes})
+      parent = self()
+      during_read_back(fn -> send(parent, {:winner, Uploads.complete(user, vault, up.id)}) end)
+
+      assert {:ok, loser} = Uploads.complete(user, vault, up.id)
+      assert_received {:winner, {:ok, winner}}
+
+      for att <- [loser, winner] do
+        assert att.id == live.id
+        assert att.storage_key == live.storage_key
+      end
+
+      row = Repo.get!(Attachment, live.id, skip_tenant_check: true)
+      assert row.storage_key == live.storage_key
+      assert row.version == live.version
+      assert InMemory.exists?(live.storage_key)
+      refute InMemory.exists?(up.storage_key)
+    end
+
     # A stale base refuses before the cap check: 409 keeps the assembled
     # session for a retry with the current hash, where a cap refusal drops it.
     test "a stale base_hash over the cap is stale_base and keeps the session", %{
