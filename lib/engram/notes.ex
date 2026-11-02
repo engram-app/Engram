@@ -53,7 +53,6 @@ defmodule Engram.Notes do
   alias Engram.Workers.{
     DeleteNoteIndex,
     EmbedNote,
-    FinalizeRevision,
     NoteCommitted,
     ReleaseIndexEntries,
     RepathNoteIndex,
@@ -1329,7 +1328,10 @@ defmodule Engram.Notes do
       # row whose body never lands only ever sees compacting checkpoints, which
       # queue nothing, so this is its one job (R6 missed-18). Before the seq
       # bump so it is not made under the vault seq lock (#1710); every leg
-      # below that did not insert this id discards it.
+      # below that did not insert this id discards it. Accepted cost: a bare
+      # row whose body lands later gets a second job from that checkpoint.
+      # Both dispatch the same unique EmbedNote/ExtractNoteLinks inserts, which
+      # collapse, so it is one extra `events` job and no extra embed.
       job =
         NoteCommitted.insert!(
           note_id,
@@ -1502,7 +1504,7 @@ defmodule Engram.Notes do
       {result, seed_outcome} = take_seed(result)
 
       announced =
-        case finalize_moved_revision(result, user) do
+        case result do
           # Only genesis_resurrect/genesis_insert_bare tag their success with
           # :announce (a REAL create/resurrect). The idempotent same-path and
           # adopt-existing-live-note branches change nothing, so they return a
@@ -1573,21 +1575,6 @@ defmodule Engram.Notes do
     end
   end
 
-  # #1710: a relocate/resurrect that changed content (uncheckpointed CRDT tail
-  # folded in by move_note) may have closed a version. Enqueue its finalize
-  # here, after the write's transaction, the same position as
-  # ContentCommit.enqueue_jobs/3. The flag is Revisions.finalize?/3; strip it
-  # so the clauses above see the plain 3-tuple.
-  defp finalize_moved_revision({:ok, {:ok, note, tag, finalize?}}, user) do
-    _ =
-      if finalize?,
-        do: Enqueue.enqueue(FinalizeRevision.job(note.id, user.id), "finalize_revision")
-
-    {:ok, {:ok, note, tag}}
-  end
-
-  defp finalize_moved_revision(result, _user), do: result
-
   defp initial_claim(opts) do
     if Keyword.get(opts, :index, :claim) == :skip, do: {:done, false}, else: :pending
   end
@@ -1626,9 +1613,6 @@ defmodule Engram.Notes do
   defp probe_vault_populated({:ok, _note, :announce} = result, g),
     do: tap(result, fn _ -> :ok = maybe_broadcast_vault_populated(g.user, g.vault) end)
 
-  defp probe_vault_populated({:ok, _note, :announce, _finalize?} = result, g),
-    do: tap(result, fn _ -> :ok = maybe_broadcast_vault_populated(g.user, g.vault) end)
-
   defp probe_vault_populated({:ok, _note, :announce_bodied} = result, g),
     do: tap(result, fn _ -> :ok = maybe_broadcast_vault_populated(g.user, g.vault) end)
 
@@ -1646,10 +1630,6 @@ defmodule Engram.Notes do
   # the caller seeds after the fact exactly as before.
   defp seed_in_txn({:ok, note, :announce} = result, %{seed: seed}) when is_function(seed, 1),
     do: {:seeded, result, seed.(note)}
-
-  defp seed_in_txn({:ok, note, :announce, _finalize?} = result, %{seed: seed})
-       when is_function(seed, 1),
-       do: {:seeded, result, seed.(note)}
 
   # The body went into the INSERT itself (`:body`, genesis_insert_bare/7): no
   # checkpoint is needed, the seed fun only learns it (`{:inserted, note}`).
@@ -2014,7 +1994,7 @@ defmodule Engram.Notes do
           }
 
           case move_note(decrypted, base_attrs, user, sanitized_path, folder, "sync", recording) do
-            {:ok, {:moved, prev_hash, updated, _merged_text, content_hash}} ->
+            {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
               case Crypto.maybe_decrypt_note_fields(updated, user) do
                 {:ok, moved} ->
                   Logger.info(
@@ -2041,8 +2021,8 @@ defmodule Engram.Notes do
                   # Carry the OLD path so the post-commit handler can fan an
                   # old-path delete to peers (a web receiver has no local mirror
                   # to drop the note from its old folder otherwise).
-                  {:ok, moved, {:announce_moved, decrypted.path},
-                   Revisions.finalize?(recording, prev_hash, content_hash)}
+                  # A content change's finalize rides move_note's NoteCommitted.
+                  {:ok, moved, {:announce_moved, decrypted.path}}
 
                 {:error, reason} ->
                   log_resurrect_decrypt_failure(reason, user, updated)
@@ -2153,7 +2133,7 @@ defmodule Engram.Notes do
       }
 
       case move_note(prior, base_attrs, user, sanitized_path, folder, "sync", recording) do
-        {:ok, {:moved, prev_hash, updated, _merged_text, content_hash}} ->
+        {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
           case Crypto.maybe_decrypt_note_fields(updated, user) do
             {:ok, decrypted} ->
               # #648 Phase 2 — a resurrect-rename IS a rename (move_note over a
@@ -2170,7 +2150,7 @@ defmodule Engram.Notes do
               # A rename-restore carries the OLD (tombstone) path so peers clear
               # it; a same-path resurrect just announces.
               tag = if renamed?, do: {:announce_moved, prior.path}, else: :announce
-              {:ok, decrypted, tag, Revisions.finalize?(recording, prev_hash, content_hash)}
+              {:ok, decrypted, tag}
 
             {:error, reason} ->
               log_resurrect_decrypt_failure(reason, user, updated)
@@ -2513,15 +2493,17 @@ defmodule Engram.Notes do
     {write_opts, db_opts} = Keyword.pop(opts, :embed_opts, actor: actor)
 
     was_tombstoned = not is_nil(prior.deleted_at)
+    {incoming, merge_doc} = unedited_merge(prior, base_attrs.content, user)
 
     with {:ok, crdt} <-
            maybe_merge_crdt(
              prior,
-             base_attrs.content,
+             incoming,
              user,
              prior.id,
              prior.vault_id,
-             sanitized_path
+             sanitized_path,
+             merge_doc
            ) do
       merged_attrs =
         keep_stored_ctime(
@@ -2548,6 +2530,30 @@ defmodule Engram.Notes do
           |> inject_frontmatter_fields(user, prior.id, crdt.merged_text)
           |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
           |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
+
+        # R6 outbox. A revived tombstone: the delete dropped its index
+        # (embed hashes nulled, points gone), so it needs its jobs even when
+        # the content is unchanged. A changed hash: the move folded the
+        # uncheckpointed CRDT tail into the content, and the room's next
+        # checkpoint then sees no change and queues nothing (R6 missed-18).
+        # Every caller (REST id-keyed move, CRDT relocate and resurrect, link
+        # rewriter) goes through here. Before the seq bump, so it is not made
+        # under the vault seq lock (#1710); a write that lands nothing
+        # discards it.
+        queue? = was_tombstoned or prior.content_hash != crdt.content_hash
+
+        job =
+          if queue? and outbox?,
+            do:
+              NoteCommitted.insert!(
+                prior.id,
+                user.id,
+                embed_opts(prior, write_opts) ++
+                  [
+                    finalize?:
+                      Revisions.finalize?(recording, prior.content_hash, crdt.content_hash)
+                  ]
+              )
 
         seq = Engram.Vaults.next_seq!(prior.vault_id)
         folder_ref = folder_ref_for(refs, user, prior.vault_id, folder)
@@ -2587,38 +2593,9 @@ defmodule Engram.Notes do
               if prior.content_hash != crdt.content_hash,
                 do: Revisions.record_write(prior, actor, recording)
 
-            # R6 outbox. A revived tombstone: the delete dropped its index
-            # (embed hashes nulled, points gone), so it needs its jobs even
-            # when the content is unchanged. A changed hash: the move folded
-            # the uncheckpointed CRDT tail into the content, and the room's
-            # next checkpoint then sees no change and queues nothing (R6
-            # missed-18). Every caller (REST id-keyed move, CRDT relocate and
-            # resurrect, link rewriter) goes through here. The returned prev
-            # hash is then the new one, so a caller that queues on a hash
-            # change does not queue twice.
-            prev_hash =
-              if was_tombstoned or prior.content_hash != crdt.content_hash do
-                _ =
-                  if outbox?,
-                    do:
-                      NoteCommitted.insert!(
-                        prior.id,
-                        user.id,
-                        embed_opts(updated, write_opts) ++
-                          [
-                            finalize?:
-                              Revisions.finalize?(
-                                recording,
-                                prior.content_hash,
-                                crdt.content_hash
-                              )
-                          ]
-                      )
-
-                crdt.content_hash
-              else
-                prior.content_hash
-              end
+            # A queued job means the returned prev hash is the new one, so a
+            # caller that queues on a hash change does not queue twice.
+            prev_hash = if queue?, do: crdt.content_hash, else: prior.content_hash
 
             # Tagged `:moved` (not the plain 4-tuple do_rewrite_note returns) so
             # the caller broadcasts unconditionally: a rename keeps the same
@@ -2629,14 +2606,37 @@ defmodule Engram.Notes do
             {:ok, {:moved, prev_hash, updated, crdt.merged_text, crdt.content_hash}}
 
           {:error, changeset} ->
+            :ok = discard_job(job)
             {:error, changeset}
 
           :stale_snapshot ->
+            :ok = discard_job(job)
             :stale_snapshot
         end
       end
     end
   end
+
+  defp discard_job(nil), do: :ok
+  defp discard_job(job), do: NoteCommitted.discard!(job)
+
+  # A relocate, resurrect or restore passes the stored text back: no edit. Its
+  # merge must keep every uncheckpointed tail edit, so it takes the
+  # tail-replayed doc as it is. Diffing the stored text into it deleted them
+  # wherever the snapshot did not hold that text (a bare row, a pre-CRDT row):
+  # R6 missed-18. With no tail there is nothing to keep, and the normal merge
+  # writes the stored text back unchanged.
+  defp unedited_merge(%Note{content: content} = prior, content, user) when is_binary(content) do
+    with {:ok, state} <- Crypto.decrypt_crdt_state(prior, user),
+         {:ok, doc} <- CrdtBridge.doc_from_state(state),
+         [_ | _] <- CrdtPersistence.replay_tail(doc, user, prior.id, prior.vault_id) do
+      {CrdtBridge.text_of(doc), doc}
+    else
+      _ -> {content, nil}
+    end
+  end
+
+  defp unedited_merge(_prior, incoming, _user), do: {incoming, nil}
 
   # PathSanitizer can silently rewrite an input path (drop `..`, strip illegal
   # chars, truncate). The note then lives at a path the client never asked for,
@@ -3080,16 +3080,7 @@ defmodule Engram.Notes do
   # Returns the merged text, with its content_hash, title (`path` is the
   # fallback) and tags, all from the MERGED result — the public-API contract
   # is "server merges, never clobbers."
-  defp maybe_merge_crdt(
-         existing,
-         incoming_content,
-         user,
-         note_id,
-         vault_id,
-         path,
-         merge_doc \\ nil
-       )
-
+  #
   # A locked read-modify-write: `merge_doc` is this row's snapshot with the tail
   # already replayed, and `incoming_content` was derived from its projection.
   # Diffing two-way into it applies exactly the caller's edit. The three-way
@@ -3177,9 +3168,8 @@ defmodule Engram.Notes do
           # any checkpoint). Replay the tail, then two-way-diff the incoming
           # text against the tail-inclusive doc to avoid full-body duplication.
           with {:ok, doc} <- CrdtBridge.doc_from_state(nil) do
-            ancestor = CrdtBridge.text_of(doc)
             _count = CrdtPersistence.replay_tail(doc, user, note_id, vault_id)
-            merge_over_tail(doc, ancestor, incoming_content)
+            CrdtBridge.merge_plaintext_into_doc(doc, incoming_content)
           end
 
         true ->
@@ -3193,9 +3183,8 @@ defmodule Engram.Notes do
               # empty-projecting ancestor takes the same tail-inclusive
               # two-way path as a nil snapshot (reusing the hydrated doc keeps
               # the empty snapshot's lineage continuity).
-              ancestor = CrdtBridge.text_of(snapshot_doc)
               _count = CrdtPersistence.replay_tail(snapshot_doc, user, note_id, vault_id)
-              merge_over_tail(snapshot_doc, ancestor, incoming_content)
+              CrdtBridge.merge_plaintext_into_doc(snapshot_doc, incoming_content)
             else
               # Two independent docs from the same snapshot:
               # - snapshot_doc: the shared ancestor; the incoming diff is applied
@@ -3222,16 +3211,6 @@ defmodule Engram.Notes do
     with {:ok, merged} <- merge_result, do: crdt_merge_result(merged, user, note_id, path)
   catch
     {:crdt_decrypt, err} -> err
-  end
-
-  # Two-way diff of `incoming` into a tail-replayed doc whose ancestor projected
-  # to `ancestor`. An incoming text equal to that ancestor is no edit at all (a
-  # relocate passes the stored facade back), and diffing it would DELETE every
-  # tail edit: a bare row's whole body lives in its tail, so a CRDT relocate
-  # wiped it (R6 missed-18). The three-way branch already reads that as a no-op.
-  defp merge_over_tail(doc, ancestor, incoming) do
-    target = if incoming == ancestor, do: CrdtBridge.text_of(doc), else: incoming
-    CrdtBridge.merge_plaintext_into_doc(doc, target)
   end
 
   defp crdt_merge_result(%{state: new_state, text: merged_text}, user, note_id, path) do

@@ -14,6 +14,8 @@ defmodule Engram.Notes.ContentOutboxTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  import Ecto.Query, only: [from: 2]
+
   alias Engram.{Crypto, Notes, Repo, Vaults}
   alias Engram.Crypto.Envelope
   alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog, Note}
@@ -198,6 +200,17 @@ defmodule Engram.Notes.ContentOutboxTest do
       :ok
     end
 
+    defp drop_snapshot!(u, note_id) do
+      {:ok, _} =
+        Repo.with_tenant(u.id, fn ->
+          Repo.update_all(from(n in Note, where: n.id == ^note_id),
+            set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+          )
+        end)
+
+      :ok
+    end
+
     defp stored(u, note_id) do
       {:ok, raw} = Repo.with_tenant(u.id, fn -> Repo.get!(Note, note_id) end)
       {:ok, note} = Crypto.maybe_decrypt_note_fields(raw, u)
@@ -239,6 +252,30 @@ defmodule Engram.Notes.ContentOutboxTest do
 
       assert stored(u, id).content == "only in the tail"
       assert [_] = committed(id)
+    end
+
+    # Review finding 1: a pre-CRDT row (no snapshot) whose tail holds the bind
+    # seed plus a keystroke. The relocate passes the stored "X" back, which
+    # must not diff the keystroke away.
+    test "a pre-CRDT row's tail edit survives a relocate", %{user: u, vault: v} do
+      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "p.md", "content" => "X"}, actor: "api")
+      :ok = drop_snapshot!(u, note.id)
+      # One tail update standing for the bind seed "X" plus the keystroke "Y".
+      :ok = tail_edit!(u, v, note.id, "XY")
+
+      {:ok, _} = Notes.genesis_crdt_note(u, v, note.id, "q.md")
+
+      assert stored(u, note.id).content == "XY"
+    end
+
+    # Guard: with no tail there is nothing to keep, and the stored text stays.
+    test "a pre-CRDT row with no tail keeps its content", %{user: u, vault: v} do
+      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "n.md", "content" => "X"}, actor: "api")
+      :ok = drop_snapshot!(u, note.id)
+
+      {:ok, _} = Notes.genesis_crdt_note(u, v, note.id, "m.md")
+
+      assert stored(u, note.id).content == "X"
     end
   end
 
