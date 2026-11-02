@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.72.0](https://github.com/engram-app/Engram/compare/0.71.0...0.72.0) (2026-11-02)
+
+
+### Features
+
+* **onboarding:** log refusal context and gate opening ([#2355](https://github.com/engram-app/Engram/issues/2355)) ([91ab895](https://github.com/engram-app/Engram/commit/91ab895c5b85579f6de8f5f55626658291d65919))
+
+
+### Bug Fixes
+
+* **config:** refuse SaaS boot with blank PADDLE_API_KEY ([#2372](https://github.com/engram-app/Engram/issues/2372)) ([2a79b39](https://github.com/engram-app/Engram/commit/2a79b3907bc07f33d52057046a76f11682d47ece))
+
 ## [0.71.0](https://github.com/engram-app/Engram/compare/0.70.0...0.71.0) (2026-11-01)
 
 
