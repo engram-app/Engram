@@ -15,7 +15,8 @@ defmodule Engram.Notes.ContentOutboxTest do
   use Oban.Testing, repo: Engram.Repo
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, Note}
+  alias Engram.Crypto.Envelope
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog, Note}
   alias Engram.Workers.{EmbedNote, NoteCommitted}
 
   setup do
@@ -144,10 +145,100 @@ defmodule Engram.Notes.ContentOutboxTest do
       assert [_] = seen
     end
 
-    test "a bare genesis queues nothing", %{user: u, vault: v} do
+    # R6 missed-18: a bare row whose body never lands (dropped crdt_msg, an
+    # empty note) only ever sees compacting checkpoints, so without its own
+    # job nothing indexes it and the reconcile sweep reports it missed.
+    test "a bare genesis queues one job", %{user: u, vault: v} do
       id = Ecto.UUID.generate()
       {:ok, _} = Notes.genesis_crdt_note(u, v, id, "bare.md")
+      assert [_] = committed(id)
+    end
+
+    test "a genesis with an empty body queues one job", %{user: u, vault: v} do
+      id = Ecto.UUID.generate()
+      {:ok, _} = Notes.genesis_crdt_note(u, v, id, "empty.md", body: doc_with(""))
+      assert [_] = committed(id)
+    end
+
+    test "a bare genesis's job is not under the vault seq lock", %{user: u, vault: v} do
+      assert outbox_before_seq_bump?(fn ->
+               {:ok, _} = Notes.genesis_crdt_note(u, v, Ecto.UUID.generate(), "lb.md")
+             end)
+    end
+  end
+
+  # R6 missed-18 candidate B: a live relocate folds the uncheckpointed tail
+  # into the stored content. The room's next checkpoint then sees no change
+  # and compacts, so the relocate itself owes the job.
+  describe "a live note relocated by id" do
+    # Appends `text` as an uncheckpointed tail update over the row's snapshot.
+    defp tail_edit!(u, v, note_id, text) do
+      {:ok, raw} = Repo.with_tenant(u.id, fn -> Repo.get!(Note, note_id) end)
+      {:ok, state} = Crypto.decrypt_crdt_state(raw, u)
+      {:ok, doc} = CrdtBridge.doc_from_state(state)
+      :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), text)
+      {:ok, update} = Yex.encode_state_as_update(doc)
+      {:ok, dek} = Crypto.get_dek(u)
+
+      {ct, nonce} =
+        Envelope.encrypt(update, dek, Crypto.aad_for_row(:notes, :crdt_state, note_id))
+
+      {:ok, _} =
+        Repo.with_tenant(u.id, fn ->
+          Repo.insert!(%CrdtUpdateLog{
+            note_id: note_id,
+            user_id: u.id,
+            vault_id: v.id,
+            update_ciphertext: ct,
+            update_nonce: nonce,
+            inserted_at: DateTime.utc_now()
+          })
+        end)
+
+      :ok
+    end
+
+    defp stored(u, note_id) do
+      {:ok, raw} = Repo.with_tenant(u.id, fn -> Repo.get!(Note, note_id) end)
+      {:ok, note} = Crypto.maybe_decrypt_note_fields(raw, u)
+      note
+    end
+
+    test "a relocate that folds a tail edit in queues one job", %{user: u, vault: v} do
+      id = Ecto.UUID.generate()
+      {:ok, _} = Notes.genesis_crdt_note(u, v, id, "a.md", body: doc_with("before"))
+      Repo.delete_all(Oban.Job)
+      :ok = tail_edit!(u, v, id, "after")
+
+      {:ok, _} = Notes.genesis_crdt_note(u, v, id, "b.md")
+
+      assert stored(u, id).content == "after"
+      assert [_] = committed(id)
+    end
+
+    test "a pure relocate queues nothing", %{user: u, vault: v} do
+      id = Ecto.UUID.generate()
+      {:ok, _} = Notes.genesis_crdt_note(u, v, id, "a.md", body: doc_with("same"))
+      Repo.delete_all(Oban.Job)
+
+      {:ok, _} = Notes.genesis_crdt_note(u, v, id, "b.md")
+
       assert committed(id) == []
+    end
+
+    # Data-loss guard: a bare row's snapshot projects "", and its body lives
+    # only in the tail. The relocate must keep that body, not diff the empty
+    # facade into the tail-inclusive doc and delete it.
+    test "a bare row's tail-only body survives a relocate", %{user: u, vault: v} do
+      id = Ecto.UUID.generate()
+      {:ok, _} = Notes.genesis_crdt_note(u, v, id, "a.md")
+      :ok = tail_edit!(u, v, id, "only in the tail")
+      Repo.delete_all(Oban.Job)
+
+      {:ok, _} = Notes.genesis_crdt_note(u, v, id, "b.md")
+
+      assert stored(u, id).content == "only in the tail"
+      assert [_] = committed(id)
     end
   end
 

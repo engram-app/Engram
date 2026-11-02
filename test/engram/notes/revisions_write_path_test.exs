@@ -171,6 +171,9 @@ defmodule Engram.Notes.RevisionsWritePathTest do
       assert moved.path == "r2.md"
       revs = revisions(u, note.id)
       assert text_of(u, Enum.find(revs, &(&1.origin == "baseline"))) == "before"
+      # The folded-in tail changed the hash, so its finalize rides the
+      # relocate's outbox NoteCommitted (R6, move_note), as a resurrect's does.
+      _ = Engram.Test.NoteCommittedDispatch.run()
       assert_enqueued(worker: FinalizeRevision, args: %{note_id: note.id})
     end
 
