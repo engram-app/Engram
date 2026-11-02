@@ -2624,13 +2624,22 @@ defmodule Engram.Notes do
   # merge must keep every uncheckpointed tail edit, so it takes the
   # tail-replayed doc as it is. Diffing the stored text into it deleted them
   # wherever the snapshot did not hold that text (a bare row, a pre-CRDT row):
-  # R6 missed-18. With no tail there is nothing to keep, and the normal merge
-  # writes the stored text back unchanged.
+  # R6 missed-18. Everything else takes the normal merge, which writes the
+  # stored text back: no tail, a non-markdown doc (a `.canvas` keeps its data
+  # in Y.Maps, so its projection is "" and would wipe the board), or a
+  # projection the feed would not trust either (`trust_projection?/5`).
+  # The id-keyed REST rename (`upsert_pathless/1`) is the one caller that
+  # passes client text, and it passes an undecrypted row: the virtual
+  # `content` is nil, so it never takes this path.
   defp unedited_merge(%Note{content: content} = prior, content, user) when is_binary(content) do
-    with {:ok, state} <- Crypto.decrypt_crdt_state(prior, user),
+    with true <- CrdtBridge.markdown_path?(prior.path),
+         [_ | _] = rows <- CrdtPersistence.tail_rows(prior.id, prior.vault_id),
+         {:ok, state} <- Crypto.decrypt_crdt_state(prior, user),
          {:ok, doc} <- CrdtBridge.doc_from_state(state),
-         [_ | _] <- CrdtPersistence.replay_tail(doc, user, prior.id, prior.vault_id) do
-      {CrdtBridge.text_of(doc), doc}
+         applied = CrdtPersistence.apply_tail_rows(doc, user, prior.id, rows),
+         text = CrdtBridge.project_doc(doc),
+         true <- trust_projection?("move", prior.id, user, {text, applied, rows}, content) do
+      {text, doc}
     else
       _ -> {content, nil}
     end
@@ -5890,52 +5899,11 @@ defmodule Engram.Notes do
       {:ok, doc} ->
         applied = CrdtPersistence.apply_tail_rows(doc, user, row.id, tail_rows)
         text = CrdtBridge.project_doc(doc)
+        stored = fresh.content || ""
 
-        cond do
-          # A tail row that would not decrypt was logged and SKIPPED, so the
-          # projection is missing ops — non-empty but truncated, which the
-          # empty-projection guard below cannot see. A DEK fault mid-rotation
-          # would otherwise ship a body with the newest edits missing.
-          #
-          # Race-free now that the rows are held rather than re-queried: a short
-          # replay means a decrypt genuinely failed, not that a checkpoint pruned
-          # the tail underneath us.
-          length(applied) < length(tail_rows) ->
-            Logger.warning(
-              "feed: partial CRDT tail replay",
-              Metadata.with_category(:warning, :sync,
-                note_id: row.id,
-                user_id: user.id,
-                applied: length(applied),
-                tail_rows: length(tail_rows)
-              )
-            )
-
-            # Degrading to the row is only safe when the row HAS a body. A
-            # never-checkpointed note has none — `genesis_insert_bare` leaves
-            # content: "" and the whole body in the tail — so "serve the last
-            # checkpoint" would serve "", and the client's discovery leg writes
-            # that to disk and pushes the empty hash back. That is #1339, reached
-            # through the one undecryptable tail row this branch exists for.
-            # A truncated projection is strictly better: the room heals the
-            # missing ops, and a 0-byte file does not.
-            if (fresh.content || "") == "", do: %{fresh | content: text}, else: fresh
-
-          # The read-side mirror of `ensure_projection_safe/2`. The write path
-          # refuses to materialize "" over a façade that holds a body — "pure
-          # data loss" in its own words — and the read path needs the same
-          # backstop.
-          text == "" and (fresh.content || "") != "" ->
-            Logger.warning(
-              "feed: CRDT projection is empty over a non-empty facade, serving the facade",
-              Metadata.with_category(:warning, :sync, note_id: row.id, user_id: user.id)
-            )
-
-            fresh
-
-          true ->
-            %{fresh | content: text}
-        end
+        if trust_projection?("feed", row.id, user, {text, applied, tail_rows}, stored),
+          do: %{fresh | content: text},
+          else: fresh
 
       {:error, reason} ->
         Logger.error(
@@ -5948,6 +5916,50 @@ defmodule Engram.Notes do
         )
 
         fresh
+    end
+  end
+
+  # The ONE rule for trusting a tail-replayed projection over the stored
+  # facade, shared by the sync feed (`project_resolved/5`) and move_note's
+  # no-edit merge (`unedited_merge/3`). `replay` is {text, applied ids, rows}.
+  #
+  #   * A short replay: a tail row would not decrypt and was logged and
+  #     SKIPPED, so the projection is missing ops, non-empty but truncated. A
+  #     DEK fault mid-rotation would otherwise ship (or store) a body with the
+  #     newest edits missing. Race-free: the caller holds the rows it applied,
+  #     so a short replay means a decrypt failed, not that a checkpoint pruned
+  #     the tail underneath it. The facade wins, unless it has no body: a
+  #     never-checkpointed note keeps its whole body in the tail, and "" is
+  #     #1339 (a 0-byte file the client pushes back). A truncated projection is
+  #     strictly better: the room heals the missing ops, and a 0-byte file
+  #     does not.
+  #   * The mirror of `ensure_projection_safe/2`: "" over a facade that holds
+  #     a body is pure data loss. The facade wins.
+  defp trust_projection?(source, note_id, user, {text, applied, rows}, stored) do
+    cond do
+      length(applied) < length(rows) ->
+        Logger.warning(
+          "#{source}: partial CRDT tail replay",
+          Metadata.with_category(:warning, :sync,
+            note_id: note_id,
+            user_id: user.id,
+            applied: length(applied),
+            tail_rows: length(rows)
+          )
+        )
+
+        stored == ""
+
+      text == "" and stored != "" ->
+        Logger.warning(
+          "#{source}: CRDT projection is empty over a non-empty facade, serving the facade",
+          Metadata.with_category(:warning, :sync, note_id: note_id, user_id: user.id)
+        )
+
+        false
+
+      true ->
+        true
     end
   end
 

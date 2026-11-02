@@ -180,10 +180,14 @@ defmodule Engram.Notes.ContentOutboxTest do
       {:ok, doc} = CrdtBridge.doc_from_state(state)
       :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), text)
       {:ok, update} = Yex.encode_state_as_update(doc)
-      {:ok, dek} = Crypto.get_dek(u)
+      insert_tail!(u, v, note_id, update, note_id)
+    end
 
-      {ct, nonce} =
-        Envelope.encrypt(update, dek, Crypto.aad_for_row(:notes, :crdt_state, note_id))
+    # A tail row for `note_id`, encrypted under `aad_id`'s AAD (another id
+    # makes a row that will not decrypt).
+    defp insert_tail!(u, v, note_id, update, aad_id) do
+      {:ok, dek} = Crypto.get_dek(u)
+      {ct, nonce} = Envelope.encrypt(update, dek, Crypto.aad_for_row(:notes, :crdt_state, aad_id))
 
       {:ok, _} =
         Repo.with_tenant(u.id, fn ->
@@ -266,6 +270,64 @@ defmodule Engram.Notes.ContentOutboxTest do
       {:ok, _} = Notes.genesis_crdt_note(u, v, note.id, "q.md")
 
       assert stored(u, note.id).content == "XY"
+    end
+
+    # Delta D1: a canvas keeps its board in Y.Maps, so its text projection is
+    # "". Taking the tail doc as the relocate target stored "" over the board.
+    test "a canvas with a tail edit keeps its content on relocate", %{user: u, vault: v} do
+      body = ~s({"nodes":[{"id":"n1","text":"hi"}],"edges":[]})
+
+      {:ok, note} =
+        Notes.upsert_note(u, v, %{"path" => "b.canvas", "content" => body}, actor: "api")
+
+      {:ok, doc} = CrdtBridge.doc_from_state(nil)
+      Yex.Map.set(Yex.Doc.get_map(doc, "nodes"), "n0", "base")
+      {:ok, state} = Yex.encode_state_as_update(doc)
+      {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(state, u, note.id)
+
+      {:ok, _} =
+        Repo.with_tenant(u.id, fn ->
+          Repo.update_all(from(n in Note, where: n.id == ^note.id),
+            set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+          )
+        end)
+
+      Yex.Map.set(Yex.Doc.get_map(doc, "nodes"), "n1", "hi")
+      {:ok, update} = Yex.encode_state_as_update(doc)
+      :ok = insert_tail!(u, v, note.id, update, note.id)
+
+      {:ok, _} = Notes.genesis_crdt_note(u, v, note.id, "c.canvas")
+
+      assert stored(u, note.id).content == body
+    end
+
+    # Delta D2, the feed's two refusals (`trust_projection?/5`) apply to a
+    # move too. A tail row that will not decrypt leaves a truncated replay:
+    # the stored body wins.
+    test "a partial tail replay keeps the stored body", %{user: u, vault: v} do
+      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "t.md", "content" => "X"}, actor: "api")
+      :ok = drop_snapshot!(u, note.id)
+      :ok = tail_edit!(u, v, note.id, "XY")
+      # Encrypted under another row's AAD: replay logs and skips it.
+      :ok = insert_tail!(u, v, note.id, "junk", Ecto.UUID.generate())
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        {:ok, _} = Notes.genesis_crdt_note(u, v, note.id, "t2.md")
+      end)
+
+      assert stored(u, note.id).content == "X"
+    end
+
+    test "an empty projection over a stored body keeps the body", %{user: u, vault: v} do
+      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "e.md", "content" => "X"}, actor: "api")
+      :ok = drop_snapshot!(u, note.id)
+      :ok = tail_edit!(u, v, note.id, "")
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        {:ok, _} = Notes.genesis_crdt_note(u, v, note.id, "e2.md")
+      end)
+
+      assert stored(u, note.id).content == "X"
     end
 
     # Guard: with no tail there is nothing to keep, and the stored text stays.
