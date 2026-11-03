@@ -29,6 +29,7 @@ defmodule Engram.Workers.BackfillCrdtHead do
   import Ecto.Query
 
   alias Engram.Accounts
+  alias Engram.Backfill.IdWindows
   alias Engram.Backfill.TenantScan
   alias Engram.Crypto.RotationGate
   alias Engram.Jobs
@@ -153,20 +154,35 @@ defmodule Engram.Workers.BackfillCrdtHead do
   defp live_pairs([]), do: []
 
   defp live_pairs(candidates) do
-    ids = Enum.map(candidates, & &1.note_id)
-
     # The head re-check reads `note_bodies` (the copy the R8 contract keeps),
-    # not `notes.crdt_head`.
-    from(n in Note,
-      join: b in NoteBody,
-      on: b.note_id == n.id and b.user_id == n.user_id,
-      join: v in Vault,
-      on: v.id == n.vault_id and is_nil(v.deleted_at),
-      where: n.id in ^ids and n.kind == "note" and is_nil(b.crdt_head) and is_nil(n.deleted_at),
-      distinct: true,
-      select: {n.user_id, n.vault_id}
-    )
-    |> TenantScan.all()
+    # not `notes.crdt_head`. The candidates are read by primary key
+    # (`IdWindows.by_id/2`): an `id IN` list lets the planner walk a
+    # user-leading index instead (#2403).
+    query = fn ids ->
+      from(n in Note,
+        join: b in NoteBody,
+        on: b.note_id == n.id and b.user_id == n.user_id,
+        join: v in Vault,
+        on: v.id == n.vault_id and is_nil(v.deleted_at),
+        where: n.kind == "note" and is_nil(b.crdt_head) and is_nil(n.deleted_at),
+        distinct: true,
+        select: {n.user_id, n.vault_id}
+      )
+      |> IdWindows.by_id(ids)
+    end
+
+    case TenantScan.pool() do
+      {:fleet, repo} ->
+        repo.all(query.(Enum.map(candidates, & &1.note_id)))
+
+      # Per tenant: each user's own candidates only, never every id per user.
+      :per_user ->
+        candidates
+        |> Enum.group_by(& &1.user_id, & &1.note_id)
+        |> Enum.flat_map(fn {user_id, ids} ->
+          Repo.with_tenant!(user_id, fn -> Repo.all(query.(ids)) end)
+        end)
+    end
     |> Enum.uniq()
   end
 

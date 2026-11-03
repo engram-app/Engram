@@ -170,7 +170,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       # of notes (`"id" = ANY(...)` windows). Now no window read, and the
       # vault-scoped sweep is an index read of notes.
       reconcile = Enum.filter(queries, &(&1.sql =~ "reconcile_eligible"))
-      refute Enum.any?(reconcile, &(&1.sql =~ ~r/n\d\."id" = ANY/)), inspect(reconcile)
+      refute Enum.any?(reconcile, &(&1.sql =~ ~r/n\d\."id" = ANY|unnest\(/)), inspect(reconcile)
 
       [scoped | _] = Enum.filter(reconcile, &(&1.sql =~ ~r/"vault_id" = ANY/))
 
@@ -239,7 +239,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[03:57:00]))
       refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
 
-      # A plain run in the 04:00 hour no longer re-verifies: the mode does.
+      # A plain run in the old 04:00 hour does not re-verify: the mode does.
       assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[04:02:00]))
       refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
 
