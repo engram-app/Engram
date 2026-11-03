@@ -64,7 +64,7 @@ first and ask.
 
 ## Bounty
 
-No paid bounty at launch. We will publicly credit researchers (with their
+No paid bounty program at this time. We will publicly credit researchers (with their
 permission) in release notes and in this file once we've shipped a fix.
 
 ## Recent advisories

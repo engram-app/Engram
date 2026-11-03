@@ -385,7 +385,8 @@ defmodule Engram.Release do
        unless that type is a legacy integer. Once the schema is uuid (or the
        table is absent), this returns `:ok` having touched nothing.
 
-  Pre-launch one-shot. Destroys all data. Runs as the connecting master role
+  One-shot baseline reset. Destroys all data, but self-disables
+  (no-op) unless the schema is in the legacy integer-PK state. Runs as the connecting master role
   (`engram_admin` on RDS), which owns `public`, so `DROP SCHEMA` succeeds.
   After the reset, the DB state equals a fresh-DB state — exactly what CI
   builds and validates green on every push.

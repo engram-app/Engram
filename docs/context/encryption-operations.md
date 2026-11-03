@@ -335,13 +335,13 @@ Sources of truth:
 
 ### Where to back up
 
-**Tier-3 launch baseline (today):**
+**Tier-3 baseline (today):**
 
 1. **Primary:** staging's key is in the SOPS-encrypted engram-infra secrets for `staging-fastraid`. Owner: open-claw.
 2. **Secondary:** sealed printout in a physical safe at owner's residence. Owner: open-claw.
 3. **Off-site copy:** encrypted, stored in 1Password personal vault. Owner: open-claw.
 
-**Tier-3 follow-up (post-launch):**
+**Tier-3 follow-up (planned):**
 
 - Add at least one independent backup with a non-owner trustee (legal next-of-kin or a designated co-signatory).
 - Add a quarterly restore drill schedule.
