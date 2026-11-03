@@ -471,7 +471,7 @@ defmodule Engram.Rebuild do
   """
   @spec hold(Oban.Job.t()) :: :ok
   def hold(%Oban.Job{} = job) do
-    Oban.insert!(
+    changeset =
       Oban.Job.new(job.args,
         worker: job.worker,
         queue: job.queue,
@@ -479,14 +479,17 @@ defmodule Engram.Rebuild do
         max_attempts: job.max_attempts,
         meta: Map.put(job.meta || %{}, "held", "rebuild"),
         tags: job.tags || [],
-        state: "suspended",
         # Unique among held copies only: the running original is `executing`
         # and must not block its own hold, but a re-run of it (Lifeline
         # rescue, a retry of the completed original) must not hold a second
         # copy, or both are released at once (two DEK rotations overlapping).
         unique: [period: :infinity, states: [:suspended]]
       )
-    )
+
+    # `state` is a permitted field but not in `Oban.Job.new/2`'s option
+    # typespec, so it is set on the changeset (dialyzer read the option as
+    # a call that never returns).
+    _job = Oban.insert!(Ecto.Changeset.put_change(changeset, :state, "suspended"))
 
     :ok
   end
