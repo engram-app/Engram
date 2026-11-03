@@ -209,7 +209,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
     baseline = baseline(now)
     since = if baseline, do: elem(baseline, 0), else: DateTime.add(now, -@first_window_s)
     narrow? = NoteSizes.done?()
-    written = if narrow?, do: written_versions()
+    {written, commit} = if narrow?, do: written_versions(), else: {nil, fn -> :ok end}
     _ = if narrow?, do: refresh_sizes(Map.keys(written) ++ backstop_ids())
 
     %Postgrex.Result{rows: [row]} =
@@ -275,6 +275,8 @@ defmodule Engram.Workers.CrdtBloatSweep do
         else: Map.new(Enum.zip(Enum.map(ids, &Ecto.UUID.load!/1), versions))
 
     Engram.Cache.put(:crdt_sweep_versions, :last, {now, versions})
+    # The feed moves only once its rows are refreshed and measured.
+    :ok = commit.()
 
     %{
       notes: notes,
@@ -369,9 +371,8 @@ defmodule Engram.Workers.CrdtBloatSweep do
   # Ids and versions of the live notes written since the last sweep, from the
   # sync change sequence (`Engram.Maintenance.ChangeFeed`, index reads only).
   defp written_versions do
-    "crdt_bloat_sweep"
-    |> Engram.Maintenance.ChangeFeed.changed()
-    |> Map.new(&{&1.id, &1.version})
+    {rows, commit} = Engram.Maintenance.ChangeFeed.changed("crdt_bloat_sweep")
+    {Map.new(rows, &{&1.id, &1.version}), commit}
   end
 
   # Backstop for size changes the change feed cannot see (a snapshot

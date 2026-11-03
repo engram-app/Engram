@@ -97,9 +97,8 @@ defmodule Engram.Workers.BackfillCrdtHead do
         cap
       )
 
-    recent =
-      for n <- Engram.Maintenance.ChangeFeed.changed("warm_crdt_heads:feed"),
-          do: %{user_id: n.user_id, note_id: n.id}
+    {changed, commit} = Engram.Maintenance.ChangeFeed.changed("warm_crdt_heads:feed")
+    recent = for n <- changed, do: %{user_id: n.user_id, note_id: n.id}
 
     candidates = Enum.uniq(Enum.filter(window, & &1.null?) ++ recent)
 
@@ -107,11 +106,16 @@ defmodule Engram.Workers.BackfillCrdtHead do
 
     # No `unique` on this worker, so bulk insert drops nothing a single one
     # deduped (#2169: one hourly tick must not be one insert per vault).
-    pairs
-    |> Enum.map(fn {user_id, vault_id} ->
-      __MODULE__.new(%{"user_id" => user_id, "vault_id" => vault_id, "cursor" => @start_cursor})
-    end)
-    |> Jobs.insert_chunked()
+    count =
+      pairs
+      |> Enum.map(fn {user_id, vault_id} ->
+        __MODULE__.new(%{"user_id" => user_id, "vault_id" => vault_id, "cursor" => @start_cursor})
+      end)
+      |> Jobs.insert_chunked()
+
+    # The feed moves only once its candidates are queued.
+    :ok = commit.()
+    count
   end
 
   @doc false

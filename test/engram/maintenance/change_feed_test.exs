@@ -15,6 +15,13 @@ defmodule Engram.Maintenance.ChangeFeedTest do
     %{user: user, vault: vault}
   end
 
+  # The feed, committed (the consumer succeeded).
+  defp changed(name, per_vault \\ 1_000) do
+    {rows, commit} = ChangeFeed.changed(name, per_vault)
+    :ok = commit.()
+    rows
+  end
+
   defp write(u, v, path),
     do: {:ok, _} = Notes.upsert_note(u, v, %{"path" => path, "content" => path}, actor: "api")
 
@@ -23,28 +30,57 @@ defmodule Engram.Maintenance.ChangeFeedTest do
     vault: v
   } do
     {:ok, old} = write(u, v, "old.md")
-    assert ChangeFeed.changed("t") == []
+    assert changed("t") == []
 
     {:ok, a} = write(u, v, "a.md")
     {:ok, b} = write(u, v, "b.md")
-    ids = ChangeFeed.changed("t") |> Enum.map(& &1.id) |> Enum.sort()
+    ids = changed("t") |> Enum.map(& &1.id) |> Enum.sort()
     assert ids == Enum.sort([a.id, b.id])
     refute old.id in ids
-    assert ChangeFeed.changed("t") == []
+    assert changed("t") == []
   end
 
   test "a vault with more than a page continues next call, and deleted notes are skipped", %{
     user: u,
     vault: v
   } do
-    assert ChangeFeed.changed("p", 1) == []
+    assert changed("p", 1) == []
     {:ok, a} = write(u, v, "a.md")
     {:ok, b} = write(u, v, "b.md")
     Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(b.id)])
 
-    assert [%{id: id}] = ChangeFeed.changed("p", 1)
+    assert [%{id: id}] = changed("p", 1)
     assert id == a.id
-    assert ChangeFeed.changed("p", 1) == []
+    assert changed("p", 1) == []
+  end
+
+  # Red on daa914e6d: the cursor moved before the consumer ran, so a failed
+  # run lost its rows.
+  test "a consumer that fails before committing reads the same rows next run", %{
+    user: u,
+    vault: v
+  } do
+    assert changed("c") == []
+    {:ok, a} = write(u, v, "a.md")
+
+    {rows, _commit} = ChangeFeed.changed("c")
+    assert Enum.map(rows, & &1.id) == [a.id]
+    assert Enum.map(changed("c"), & &1.id) == [a.id]
+    assert changed("c") == []
+  end
+
+  # Red on daa914e6d: the cursor stayed at the last note seq, so a vault
+  # whose last change was not a note was walked on every run.
+  test "a vault whose last change was not a note is not walked again", %{vault: v} do
+    assert changed("s") == []
+    _ = Engram.Vaults.next_seq!(v.id)
+    assert changed("s") == []
+
+    %{rows: [[seq]]} =
+      Repo.query!("SELECT change_seq FROM vaults WHERE id = $1", [Ecto.UUID.dump!(v.id)])
+
+    assert [^seq, "ffffffff-ffff-ffff-ffff-ffffffffffff"] =
+             Engram.Maintenance.Cursor.get("s")[v.id]
   end
 
   # Red on 5be4a3373's `updated_at >= $1` read: notes has no index on

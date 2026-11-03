@@ -8,8 +8,10 @@ defmodule Engram.Maintenance.ChangeFeed do
   save writes is added (an `updated_at` index would end HOT saves).
 
   Not seen: a write that does not take a seq (the CRDT snapshot compaction,
-  an append that clears `crdt_head`), and a write that commits after a
-  higher seq was read. Callers keep a bounded key-window backstop for those.
+  an append that clears `crdt_head`). Callers keep a bounded key-window
+  backstop for those. Not capped across vaults, and the cursor row holds
+  every live vault (~60 B each): fine at today's vault count; add a total cap
+  with a round-robin when that grows.
 
   The cursor (`Engram.Maintenance.Cursor`, one row per sweep) maps each live
   vault to the `[seq, id]` read up to; a vault first seen starts at its current
@@ -42,11 +44,13 @@ defmodule Engram.Maintenance.ChangeFeed do
   def notes_sql, do: @notes
 
   @doc """
-  The live notes (`kind = 'note'`, not deleted) written since the last call
-  for `name`, as `%{id, user_id, vault_id, version}`, and the cursor moved
-  past every row read.
+  The live notes (`kind = 'note'`, not deleted) written since the last
+  committed call for `name`, as `%{id, user_id, vault_id, version}`, and a
+  `commit` function that moves the cursor past every row read. Call it only
+  after the rows are consumed: a run that fails before it reads the same rows
+  again next time (at least once; consumers are idempotent).
   """
-  @spec changed(String.t(), pos_integer()) :: [map()]
+  @spec changed(String.t(), pos_integer()) :: {[map()], (-> :ok)}
   def changed(name, per_vault \\ @per_vault) do
     cursor = Cursor.get(name) || %{}
 
@@ -68,35 +72,42 @@ defmodule Engram.Maintenance.ChangeFeed do
 
     by_vault = Enum.group_by(read, fn [_, _, v | _] -> Ecto.UUID.load!(v) end)
 
+    walked = MapSet.new(walk, &elem(&1, 0))
+
     next =
       Map.new(vaults, fn {id, seq} ->
-        case Map.get(by_vault, id) do
-          nil ->
-            {id, Map.get(cursor, id, [seq, @top]) |> caught_up(id, walk)}
+        page = Map.get(by_vault, id, [])
 
-          page ->
+        cond do
+          # A full page: more may follow at this exact position.
+          length(page) >= per_vault ->
             [nid, _, _, _, s, _] = List.last(page)
-            {id, if(length(page) >= per_vault, do: [s, Ecto.UUID.load!(nid)], else: [s, @top])}
+            {id, [s, Ecto.UUID.load!(nid)]}
+
+          # Caught up: jump to the `change_seq` read (or past the last row,
+          # if a later write was read too). Safe: `Vaults.next_seq!/2` locks
+          # the vault row from the bump to commit, so every write at or below
+          # a committed `change_seq` is visible. A vault whose last change was
+          # not a note (an attachment, a folder) is not walked again.
+          MapSet.member?(walked, id) ->
+            last_seq = page |> List.last() |> then(&((&1 && Enum.at(&1, 4)) || seq))
+            {id, [max(seq, last_seq), @top]}
+
+          true ->
+            {id, Map.get(cursor, id, [seq, @top])}
         end
       end)
 
-    :ok = Cursor.put(name, next)
+    rows =
+      for [id, user_id, vault_id, version, _seq, true] <- read,
+          do: %{
+            id: Ecto.UUID.load!(id),
+            user_id: Ecto.UUID.load!(user_id),
+            vault_id: Ecto.UUID.load!(vault_id),
+            version: version
+          }
 
-    for [id, user_id, vault_id, version, _seq, true] <- read,
-        do: %{
-          id: Ecto.UUID.load!(id),
-          user_id: Ecto.UUID.load!(user_id),
-          vault_id: Ecto.UUID.load!(vault_id),
-          version: version
-        }
-  end
-
-  # A walked vault with no row after its cursor has read everything there is
-  # (its seq moved for attachments only, say). The cursor stays at the last
-  # seq read, never jumps to `change_seq`: a write holding a lower seq may
-  # still be uncommitted.
-  defp caught_up([s, last], id, walk) do
-    if Enum.any?(walk, &(elem(&1, 0) == id)), do: [s, @top], else: [s, last]
+    {rows, fn -> Cursor.put(name, next) end}
   end
 
   defp params(walk, per_vault) do
