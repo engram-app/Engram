@@ -1,12 +1,4 @@
 defmodule Engram.Workers.ReconcileEmbeddings do
-  # Hop caps, above the moduledoc so it quotes them. The daily re-verify's is
-  # low (Job Load Audit 2026-11-03): it no longer walks the notes table (see
-  # `gates/1`), so its hops only page the budget and note-cap sweeps, and four
-  # 5-minute hops end inside the off-peak window. A fleet version check pages
-  # stale notes: the old daily walk's 12.
-  @reverify_hops 4
-  @version_check_hops 12
-
   @moduledoc """
   Oban cron worker: finds notes with stale or missing embeddings and re-queues them.
 
@@ -23,8 +15,8 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     * while `IndexVersions` is open (a version rollout): as the old 5-minute
       cron did, so a rollout keeps its pace;
-    * the daily re-verify (`mode: "reverify"`, 10:02), up to #{@reverify_hops}
-      hops while a page comes back full (#{@version_check_hops} while a fleet
+    * the daily re-verify (`mode: "reverify"`, 10:02), up to `@reverify_hops`
+      hops while a page comes back full (`@version_check_hops` while a fleet
       version check is pending).
 
   Per-note Qdrant work (`RebuildStaleNote`, `RefreshKeywordVectors`) is
@@ -109,6 +101,12 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # A chained run's delay, and the daily re-verify's hop limit: the cadence
   # and the throughput of the old 5-minute cron, only while work remains.
   @chain_seconds 300
+  # Capped low (Job Load Audit 2026-11-03): the re-verify no longer walks the
+  # notes table (see `gates/1`), so its hops only page the budget and note-cap
+  # sweeps, and four 5-minute hops end inside the off-peak window. A fleet
+  # version check pages stale notes: the old daily walk's 12.
+  @reverify_hops 4
+  @version_check_hops 12
   @version_check_pending "reconcile:version_check"
   @version_stamp "reconcile:version_stamp"
 
