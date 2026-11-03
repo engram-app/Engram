@@ -95,7 +95,7 @@ CloudWatch `FreeableMemory` / `SwapUsage` with `--profile engram-audit`. A 7-day
 
 ## Failed Approaches / Dead Ends
 - `pg_stats.avg_width` for byte sizing: RLS hides the tables. Use per-tenant `pg_column_size`.
-- `extensions.pg_stat_statements` directly as engram_audit_ro: permission denied on schema.
+- `extensions.pg_stat_statements` directly as engram_audit_ro: permission denied on schema (see Gotchas: it IS installed).
 - Static guess that the 3-col basename partial was dead and the 4-col one used: prod says the reverse.
 - Static guess that 7 KB columns meant compression was off: nonce lengths prove it is on.
 - Hunting engram code for `SET statement_timeout`: it is not ours.
@@ -104,6 +104,9 @@ CloudWatch `FreeableMemory` / `SwapUsage` with `--profile engram-audit`. A 7-day
 - The audit pollutes its own evidence: the `pg_column_size`/chunks scans appear in pg_stat_statements top-mean, and they are the 04:20-04:45 MDT 2026-10-20 CPU/IO spike (63% CPU, 320 read IOPS). Exclude that window and those statements; chunks seq_scan counts are mostly this audit.
 - The #1 total-time statement is the Grafana exporter's own pg_stat_statements query (6694 s, 25 ms mean), and #3 is the pg_stat_activity exporter (1936 s, 11.3M calls). Monitoring is a top DB consumer; rate-limit it too.
 - pg_stat counters run from the last reset (2026-06-11 here). Check `stats_reset` in `pg_stat_database` before reading idx_scan as "unused".
+- pg_stat_statements IS installed (schema `extensions`, data since ~2026-06-11), but `engram_audit_ro` has no USAGE on `extensions`, so it looks "not installed" from that role. Read it as the master role (SELECT only), or grant USAGE (prod change, needs the user's yes).
+- pg_buffercache is available but NOT installed (needs the master role). Measured once on 2026-11-02 (user's yes), then dropped: two snapshots 15 min apart, grouped by relation with TOAST resolved to the parent, plus usagecount. Prod db.t4g.medium, PG 18.3: 910 MB shared_buffers full; notes heap 237 MB (100% cached); note_bodies TOAST 105 MB; notes TOAST 98 MB (1.6 GB on disk after note_split); oban_jobs 76 MB for 34k rows (bloat); `oban_jobs_args_index` 32 MB, the biggest index disk reader. Live hit ratio 94.6%; swap 206 MB after the resize.
+- The Oban `count(*) ... GROUP BY queue, state` query is the source of the millions of oban_jobs seq scans (466k calls).
 
 ## References
 - `engram-infra/docs/context/prod-db-readonly-access.md` (access)
