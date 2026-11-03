@@ -144,6 +144,30 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
     assert content == body - 13 - Engram.Crypto.Envelope.tag_bytes()
   end
 
+  # R8 N+1 (#2416) drops `notes_sync_body`; the app writes the body itself
+  # (`NoteBody.sync!/3`). The sizes come from the body row's own BEFORE
+  # trigger, so they must fill without the notes trigger.
+  test "sizes fill on an app body write with notes_sync_body dropped", %{
+    user: user,
+    vault: vault
+  } do
+    Repo.query!("DROP TRIGGER notes_sync_body ON notes")
+
+    {:ok, n} =
+      Notes.upsert_note(user, vault, %{"path" => "r8.md", "content" => "no trigger"},
+        actor: "api"
+      )
+
+    %{rows: [[bytes, len]]} =
+      Repo.query!(
+        "SELECT content_bytes, octet_length(content_ct) FROM note_bodies WHERE note_id = $1",
+        [Ecto.UUID.dump!(n.id)]
+      )
+
+    assert is_integer(len)
+    assert bytes == len - 13 - Engram.Crypto.Envelope.tag_bytes()
+  end
+
   test "the ledger fills rows the trigger never saw, then the sweep reads no notes", %{
     notes: notes
   } do

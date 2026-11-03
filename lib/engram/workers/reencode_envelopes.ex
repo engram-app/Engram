@@ -296,7 +296,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   """
   @spec enqueue_missing() :: non_neg_integer()
   # Each per-user EXISTS is served by a partial index whose predicate is
-  # `legacy/1` (migration 20261103000200); `Engram.Bookkeeping.Drain` finds the
+  # `legacy/1` (migration 20261103130200); `Engram.Bookkeeping.Drain` finds the
   # drifted users from those indexes every few minutes.
   def enqueue_missing do
     TenantScan.flat_map_users(fn uid -> if any_legacy?(uid), do: [uid], else: [] end)

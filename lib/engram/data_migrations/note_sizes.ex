@@ -2,7 +2,7 @@ defmodule Engram.DataMigrations.NoteSizes do
   @moduledoc """
   Fills `note_bodies.content_bytes` / `state_bytes` / `envelope_legacy` and
   `note_index_state.note_live` / `content_bytes` / `state_bytes` /
-  `has_state` (migration 20261103000000) for rows written before their
+  `has_state` (migration 20261103130000) for rows written before their
   triggers existed (one row version per unfilled row, once). Later writes
   fill the body columns and `note_live` themselves; `CrdtBloatSweep` copies
   sizes of written notes to `note_index_state` hourly. Not re-verified.

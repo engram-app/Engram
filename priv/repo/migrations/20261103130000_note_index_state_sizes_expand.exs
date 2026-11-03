@@ -22,7 +22,8 @@ defmodule Engram.Repo.Migrations.NoteIndexStateSizesExpand do
       guard), whose trigger now also fires on `deleted_at`.
     * `note_index_state.content_bytes` / `state_bytes` / `has_state`: a narrow
       copy of the body sizes for the hourly `CrdtBloatSweep` percentiles:
-      seeded by the state row's own INSERT when a note is created, then
+      seeded by the state row's own INSERT when a note is created (if its
+      body row exists yet), then
       copied by the sweep for the notes written since its last run (one HOT
       row version per written note per hour, off the save path), never by a
       save. Readers see edits up to an hour late.
@@ -108,9 +109,10 @@ defmodule Engram.Repo.Migrations.NoteIndexStateSizesExpand do
         n.embed_budget_parked, n.index_tier, n.embed_model, n.embed_started_by,
         n.embed_hash, n.dense_indexed_hash, n.embed_started_hash, n.payload_hash,
         n.deleted_at IS NULL,
-        -- Seeded at creation only (not in the DO UPDATE list): the body row
-        -- exists, `notes_sync_body` runs first. Edits are copied hourly by
-        -- `CrdtBloatSweep`.
+        -- Seeded at creation only (not in the DO UPDATE list), when the body
+        -- row already exists; NULL otherwise (after R8 N+1 drops
+        -- `notes_sync_body`, the app writes the body after the note). Either
+        -- way `CrdtBloatSweep` copies sizes of written notes hourly.
         (SELECT b.content_bytes FROM public.note_bodies b WHERE b.note_id = n.id),
         (SELECT b.state_bytes FROM public.note_bodies b WHERE b.note_id = n.id),
         (SELECT b.state_bytes IS NOT NULL FROM public.note_bodies b WHERE b.note_id = n.id))

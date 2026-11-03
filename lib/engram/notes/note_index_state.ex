@@ -42,7 +42,7 @@ defmodule Engram.Notes.NoteIndexState do
     # Not mirrored from `notes` (`Engram.Workers.ReconcileNotePayloads` stamps it).
     field :payload_version, :integer
     # `deleted_at IS NULL` of the note, kept by `note_index_state_sync`
-    # (migration 20261103000000) for the narrow sweeps. NULL until
+    # (migration 20261103130000) for the narrow sweeps. NULL until
     # `DataMigrations.NoteSizes` has filled the row.
     field :note_live, :boolean
     # Narrow copy of the `note_bodies` sizes for `CrdtBloatSweep`, written by

@@ -17,7 +17,7 @@ defmodule Engram.Repo.Migrations.IndexDriftDrainExpand do
       16-byte tag), `ReencodeEnvelopes`. A note's body and CRDT state are read
       from `note_bodies` (the copy the R8 contract keeps) through its
       `envelope_legacy` flag, set by the `note_bodies_sizes` BEFORE trigger
-      (20261103000000) from the same test on the merged nonce field.
+      (20261103130000) from the same test on the merged nonce field.
     * `note_index_state_unstamped`: an indexed note with no `payload_hash`,
       `ReconcileNotePayloads`. `points` is the chunk counter the chunks
       triggers keep exact (`chunk_count` is set only on floored or merged notes).

@@ -9,7 +9,7 @@ defmodule Engram.Bookkeeping.Drain do
   Qdrant payload stamps, folder rows), so a database trigger cannot keep it,
   and a previous-release writer during a rolling deploy skips it. Each kind
   has a partial index whose predicate is the drift test (migration
-  20261103000200, and the link-key indexes of 20261018230001), empty in steady
+  20261103130200, and the link-key indexes of 20261018230001), empty in steady
   state. One tick runs one `SELECT DISTINCT user_id ... LIMIT 100` per index
   (an index read of a page or two), then hands the users to the worker that
   owns the repair. Nothing here reads `notes` outside those indexes.
