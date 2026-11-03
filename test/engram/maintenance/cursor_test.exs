@@ -14,4 +14,15 @@ defmodule Engram.Maintenance.CursorTest do
     :ok = Cursor.advance("t", false, 0, 100)
     assert Cursor.get("t") == nil
   end
+
+  # `_` and `%` are LIKE wildcards; a family match is literal.
+  test "family/1 matches the base and base:<suffix> only, literally" do
+    for name <- ~w(a_b a_b:1 a_b:x_y aXb aXb:1 a_bc a_b_c a%b:1),
+        do: :ok = Cursor.put(name, %{"n" => name})
+
+    assert Cursor.family("a_b") |> Enum.map(&elem(&1, 0)) |> Enum.sort() ==
+             ~w(a_b a_b:1 a_b:x_y)
+
+    assert Cursor.family("a%b") |> Enum.map(&elem(&1, 0)) == ["a%b:1"]
+  end
 end

@@ -43,12 +43,19 @@ defmodule Engram.Maintenance.Cursor do
     :ok
   end
 
-  @doc "Every `{name, cursor}` whose name starts with `prefix`."
-  @spec with_prefix(String.t()) :: [{String.t(), map()}]
-  def with_prefix(prefix) do
+  @doc """
+  Every `{name, cursor}` named `base` or `base:<anything>`. A literal prefix
+  compare, not LIKE: `_` and `%` in a name match only themselves.
+  """
+  @spec family(String.t()) :: [{String.t(), map()}]
+  def family(base) do
+    prefix = base <> ":"
+
     Repo.all(
       from(c in "maintenance_cursors",
-        where: like(c.name, ^(prefix <> "%")),
+        where:
+          c.name == ^base or
+            fragment("left(?, ?) = ?", c.name, ^String.length(prefix), ^prefix),
         select: {c.name, c.cursor}
       )
     )
