@@ -154,17 +154,16 @@ defmodule Engram.Workers.BackfillCrdtHead do
   defp live_pairs([]), do: []
 
   defp live_pairs(candidates) do
-    # The head re-check reads `note_bodies` (the copy the R8 contract keeps),
-    # not `notes.crdt_head`. The candidates are read by primary key
-    # (`IdWindows.by_id/2`): an `id IN` list lets the planner walk a
-    # user-leading index instead (#2403).
+    # The candidates are read by primary key (`IdWindows.by_id/2`), with the
+    # predicate `IdWindows.all/2` used here before (#2403): no join to
+    # `note_bodies`, whose user-leading index the planner otherwise walked
+    # once per candidate under a tenant's RLS (CI: one statement past the
+    # 15 s checkout). The notes head is the trigger-kept source of the copy.
     query = fn ids ->
       from(n in Note,
-        join: b in NoteBody,
-        on: b.note_id == n.id and b.user_id == n.user_id,
         join: v in Vault,
         on: v.id == n.vault_id and is_nil(v.deleted_at),
-        where: n.kind == "note" and is_nil(b.crdt_head) and is_nil(n.deleted_at),
+        where: n.kind == "note" and is_nil(n.crdt_head) and is_nil(n.deleted_at),
         distinct: true,
         select: {n.user_id, n.vault_id}
       )
