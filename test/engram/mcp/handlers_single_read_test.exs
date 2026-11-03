@@ -54,8 +54,9 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     assert [unlocked, locked, body] = selects(qs, "notes"),
            "expected one unlocked read + one locked re-read (lock, then body):\n" <> report
 
-    refute unlocked.sql =~ "FOR NO KEY UPDATE", report
-    assert locked.sql =~ "FOR NO KEY UPDATE", report
+    # `OF n0`: the notes row lock, not the vault-lock subquery's own clause.
+    refute unlocked.sql =~ "FOR NO KEY UPDATE OF n0", report
+    assert locked.sql =~ "FOR NO KEY UPDATE OF n0", report
 
     refute locked.sql =~ ~r/content_ciphertext|crdt_state_ciphertext/,
            "lock statement selects a body column:\n" <> report
@@ -63,8 +64,13 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     assert body.sql =~ ~s/"note_bodies"/, report
     refute body.sql =~ ~r/FOR (NO KEY )?UPDATE|FOR (KEY )?SHARE/, report
 
-    assert Enum.find_index(qs, &(&1 == body)) == Enum.find_index(qs, &(&1 == locked)) + 1,
+    mine = Enum.filter(qs, &(&1.pid == self()))
+
+    assert Enum.find_index(mine, &(&1 == body)) == Enum.find_index(mine, &(&1 == locked)) + 1,
            "body read is not right after the lock:\n" <> report
+
+    assert Enum.any?(QueryRecorder.transactions(qs), &(locked.sql in &1 and body.sql in &1)),
+           "lock and body read are not in one transaction:\n" <> report
 
     assert length(selects(qs, "crdt_update_log")) <= 1, "tail read more than once:\n" <> report
 
