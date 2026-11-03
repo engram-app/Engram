@@ -21,9 +21,9 @@ defmodule Engram.Workers.CronScanBoundTest do
     Engram.Workers.BookkeepingDrain =>
       "partial indexes *_envelope_legacy (note_bodies: trigger-kept flag), note_index_state_unstamped, notes_unresolved_folder, *_link_keys_stale; 100 users per probe",
     Engram.Workers.WarmCrdtHeads =>
-      "notes updated_at range since the last run, plus a 5,000-row note_bodies primary-key window",
+      "sync change feed (notes vault_id/seq index) since the last run, plus a 5,000-row note_bodies primary-key window",
     Engram.Workers.CrdtBloatSweep =>
-      "reads note_index_state (narrow) once NoteSizes is done; one aggregate per hour plus a PK refresh of the notes written since",
+      "reads note_index_state (narrow) once NoteSizes is done; one aggregate per hour; size refresh for the change feed plus a 20,000-row key window",
     Engram.Workers.DataMigrationsRunner =>
       "id windows (IdWindows.heal_pass) with a 240 s budget; daily re-verify only for reopening ledgers",
     Engram.Workers.ReconcileEmbeddings =>

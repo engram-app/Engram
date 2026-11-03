@@ -160,11 +160,15 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
     {new, queries} = Engram.QueryRecorder.record(&CrdtBloatSweep.measure_and_emit/0)
 
     # Red before: the aggregate read every notes row (the old path read all
-    # 3). Now notes is read only for the ids written since the last sweep, an
-    # `updated_at` range; the sizes come from the narrow copy.
+    # 3). Now notes is read only through the change feed (an index range of
+    # the sync index, ChangeFeedTest pins the plan); the sizes come from the
+    # narrow copy.
     assert old_reads >= 3
     notes_reads = Enum.filter(queries, &(&1.sql =~ ~r/FROM notes\b/))
-    assert Enum.all?(notes_reads, &(&1.sql =~ "updated_at >= $1")), inspect(notes_reads)
+
+    assert Enum.all?(notes_reads, &(&1.sql == Engram.Maintenance.ChangeFeed.notes_sql())),
+           inspect(notes_reads)
+
     refute Enum.any?(queries, &(&1.sql =~ "octet_length(n."))
 
     # The second run also has a save-rate baseline; compare the gauges both report.

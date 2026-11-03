@@ -63,9 +63,9 @@ defmodule Engram.Insights.SnapshotNarrowTest do
       [Ecto.UUID.dump!(n.id)]
     )
 
-    # Sizes reach the narrow copy through the hourly bloat sweep, for notes
-    # whose `updated_at` moved (every save moves it).
-    Repo.query!("UPDATE notes SET updated_at = now() WHERE id = $1", [Ecto.UUID.dump!(n.id)])
+    # Sizes reach the narrow copy through the hourly bloat sweep: the notes
+    # the change feed saw, plus its key-window backstop (this body-only write
+    # takes no seq, so the backstop carries it).
     _ = Engram.Workers.CrdtBloatSweep.measure_and_emit()
     Snapshot.run(day: Date.add(day1, 1))
 

@@ -81,16 +81,11 @@ defmodule Engram.Workers.BackfillCrdtHeadMaintenanceTest do
 
       refute_received :app_pool_notes_query
 
-      # Two bounded reads of notes for both users: the `updated_at` range of
-      # notes written since the last run, and one primary-key probe of the
-      # candidates (the old id-window walk was 3 statements and read the whole
-      # table; a walk per user, 6).
-      assert drain(:maintenance_notes_query, 0) == 2
-      # The recent read is an `updated_at` index range (writes since the last
-      # run), which the id-window oracle does not model; nothing else is
-      # outside a window.
-      assert [recent] = QueryRecorder.unwindowed(queries, "notes", 1_000)
-      assert recent =~ ~s|WHERE (((n0."updated_at" >= $1)|
+      # One probe of notes for both users' candidates (the old id-window walk
+      # was 3 statements and read the whole table; a walk per user, 6). The
+      # change feed's first run reads only vaults.
+      assert drain(:maintenance_notes_query, 0) == 1
+      assert QueryRecorder.unwindowed(queries, "notes", 1_000) == []
 
       for {user_id, vault_id} <- vaults do
         assert_enqueued(

@@ -93,11 +93,12 @@ defmodule Engram.Workers.BackfillCrdtHeadIndexTest do
             Notes.upsert_note(u, v, %{"path" => "k#{i}.md", "content" => "k"}, actor: "api")
 
     head = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-    Repo.query!("UPDATE notes SET crdt_head = $1, updated_at = now() - interval '1 day'", [head])
+    Repo.query!("UPDATE notes SET crdt_head = $1", [head])
     assert BackfillCrdtHead.enqueue_all() == 0
 
-    %{rows: [[last]]} = Repo.query!("SELECT id FROM notes ORDER BY id DESC LIMIT 1")
-    Repo.query!("UPDATE notes SET crdt_head = NULL, updated_at = now() WHERE id = $1", [last])
+    # A write takes a seq (the sync change feed); its head is then cleared.
+    {:ok, n} = Notes.upsert_note(u, v, %{"path" => "k5.md", "content" => "edited"}, actor: "api")
+    Repo.query!("UPDATE notes SET crdt_head = NULL WHERE id = $1", [Ecto.UUID.dump!(n.id)])
     assert BackfillCrdtHead.enqueue_all() == 1
   end
 end

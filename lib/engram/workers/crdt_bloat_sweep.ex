@@ -209,8 +209,8 @@ defmodule Engram.Workers.CrdtBloatSweep do
     baseline = baseline(now)
     since = if baseline, do: elem(baseline, 0), else: DateTime.add(now, -@first_window_s)
     narrow? = NoteSizes.done?()
-    written = if narrow?, do: written_versions(since)
-    _ = if narrow?, do: refresh_sizes(written)
+    written = if narrow?, do: written_versions()
+    _ = if narrow?, do: refresh_sizes(Map.keys(written) ++ backstop_ids())
 
     %Postgrex.Result{rows: [row]} =
       Repo.maintenance().query!(
@@ -340,13 +340,13 @@ defmodule Engram.Workers.CrdtBloatSweep do
   end
 
   # Copies the body sizes (`note_bodies`, BEFORE-trigger columns) of the notes
-  # written since the last sweep to the narrow `note_index_state` copy: one
-  # HOT row version per written note per sweep, off the save path. PK
-  # lookups; an unchanged row is not written.
+  # written since the last sweep, and of the backstop window, to the narrow
+  # `note_index_state` copy: PK lookups, at most one HOT row version per
+  # changed note per sweep, off the save path; an unchanged row is not written.
   @refresh_batch 5_000
-  defp refresh_sizes(versions) do
-    versions
-    |> Map.keys()
+  defp refresh_sizes(ids) do
+    ids
+    |> Enum.uniq()
     |> Enum.chunk_every(@refresh_batch)
     |> Enum.each(fn ids ->
       Repo.maintenance().query!(
@@ -366,20 +366,44 @@ defmodule Engram.Workers.CrdtBloatSweep do
     end)
   end
 
-  # Ids and versions of the live notes written since `since`: a range of the
-  # `notes (updated_at)` index, the window since the last sweep.
-  defp written_versions(since) do
+  # Ids and versions of the live notes written since the last sweep, from the
+  # sync change sequence (`Engram.Maintenance.ChangeFeed`, index reads only).
+  defp written_versions do
+    "crdt_bloat_sweep"
+    |> Engram.Maintenance.ChangeFeed.changed()
+    |> Map.new(&{&1.id, &1.version})
+  end
+
+  # Backstop for size changes the change feed cannot see (a snapshot
+  # compaction takes no seq): the next `@backstop_rows` state rows in key
+  # order from a persisted cursor, wrapping at the end, so every copy is
+  # re-checked within rows / @backstop_rows hours.
+  @backstop_rows 20_000
+  defp backstop_ids do
+    from = Engram.Maintenance.Cursor.get("crdt_bloat_sweep:sizes")
+
     %Postgrex.Result{rows: rows} =
       Repo.maintenance().query!(
         """
-        SELECT id, version FROM notes
-        WHERE updated_at >= $1 AND kind = 'note' AND deleted_at IS NULL
+        SELECT note_id FROM note_index_state
+        WHERE ($1::uuid IS NULL OR note_id > $1) ORDER BY note_id LIMIT $2
         """,
-        [DateTime.to_naive(since)],
-        timeout: :timer.minutes(5)
+        [from && Ecto.UUID.dump!(from["note_id"]), @backstop_rows],
+        timeout: :timer.minutes(2)
       )
 
-    Map.new(rows, fn [id, v] -> {Ecto.UUID.load!(id), v} end)
+    ids = Enum.map(rows, fn [id] -> Ecto.UUID.load!(id) end)
+    last = List.last(ids)
+
+    :ok =
+      Engram.Maintenance.Cursor.advance(
+        "crdt_bloat_sweep:sizes",
+        last && %{"note_id" => last},
+        length(ids),
+        @backstop_rows
+      )
+
+    ids
   end
 
   # The previous sweep's baseline, when this node has one young enough to diff.

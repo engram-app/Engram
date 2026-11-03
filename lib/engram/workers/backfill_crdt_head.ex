@@ -42,7 +42,6 @@ defmodule Engram.Workers.BackfillCrdtHead do
   # NULL-head notes examined per hourly run (see `enqueue_all/0`).
   @candidate_cap 5_000
   @cursor "warm_crdt_heads"
-  @since_cursor "warm_crdt_heads:since"
   @start_cursor "00000000-0000-0000-0000-000000000000"
 
   # 60 min, the Lifeline `rescue_after` ceiling. This walks every row it
@@ -67,9 +66,10 @@ defmodule Engram.Workers.BackfillCrdtHead do
     # Candidates, with no index on the head (a partial index on
     # `crdt_head IS NULL` makes every CRDT append, which clears the head, and
     # every warm a non-HOT body write; `NoteBodyReadTest` guards that):
-    #   * recent: notes written since the last run (`notes.updated_at` index;
-    #     every append is followed by a checkpoint that moves it), heads read
-    #     by primary key. This is where NULL heads come from.
+    #   * recent: notes written since the last run, from the sync change
+    #     sequence (`Engram.Maintenance.ChangeFeed`, index reads only); a
+    #     checkpoint that changes the note takes a seq. Heads re-checked by
+    #     primary key in `live_pairs/1`.
     #   * backstop: the next `candidate_cap/0` body rows in key order from a
     #     persisted cursor (`Engram.Maintenance.Cursor`), wrapping at the end:
     #     bounded rows per run, and the whole table every N/cap hours.
@@ -77,11 +77,6 @@ defmodule Engram.Workers.BackfillCrdtHead do
     # 2.7 GB). `TenantScan.all/2`: the maintenance pool on SaaS, per tenant
     # elsewhere (never a cross-tenant read on the app pool, #1349).
     cap = candidate_cap()
-    now = NaiveDateTime.utc_now()
-    since = Cursor.get(@since_cursor)
-
-    since =
-      if since, do: NaiveDateTime.from_iso8601!(since["at"]), else: NaiveDateTime.add(now, -7_200)
 
     from = Cursor.get(@cursor)
 
@@ -102,10 +97,9 @@ defmodule Engram.Workers.BackfillCrdtHead do
         cap
       )
 
-    recent = since |> recent_query(cap) |> TenantScan.all()
-    # A minute of overlap: a write committed late with an earlier timestamp.
-    :ok =
-      Cursor.put(@since_cursor, %{"at" => NaiveDateTime.to_iso8601(NaiveDateTime.add(now, -60))})
+    recent =
+      for n <- Engram.Maintenance.ChangeFeed.changed("warm_crdt_heads:feed"),
+          do: %{user_id: n.user_id, note_id: n.id}
 
     candidates = Enum.uniq(Enum.filter(window, & &1.null?) ++ recent)
 
@@ -130,19 +124,6 @@ defmodule Engram.Workers.BackfillCrdtHead do
       limit: ^cap
     )
     |> after_key(after_key)
-  end
-
-  @doc false
-  # Live notes written since `since` whose head is NULL, `cap` at most.
-  def recent_query(since, cap) do
-    from(n in Note,
-      join: b in NoteBody,
-      on: b.note_id == n.id,
-      where: n.updated_at >= ^since and n.kind == "note" and is_nil(n.deleted_at),
-      where: is_nil(b.crdt_head),
-      select: %{user_id: n.user_id, note_id: n.id},
-      limit: ^cap
-    )
   end
 
   defp after_key(query, nil), do: query
