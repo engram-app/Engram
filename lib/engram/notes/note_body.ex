@@ -345,6 +345,30 @@ defmodule Engram.Notes.NoteBody do
   @spec fields([atom()]) :: %{atom() => Ecto.Query.dynamic_expr()}
   def fields(fields), do: Map.new(fields, &{&1, field_expr(&1)})
 
+  @doc """
+  `crdt_head` as `fields([:crdt_head])` reads it, for a whole-vault read
+  whose `notes` side must stay an index-only scan (the sync manifest on
+  `notes_manifest`, which does not carry the head: head stores would lose
+  HOT on `notes`). The no-body fallback reads `notes.crdt_head` by a per-row
+  primary-key subquery that only a row without a body runs, instead of as a
+  column of the outer scan. EngramWeb.SyncManifestPlanTest.
+  """
+  @spec head_off_notes_scan() :: Ecto.Query.dynamic_expr()
+  def head_off_notes_scan do
+    dynamic(
+      [n, note_body: b],
+      type(
+        fragment(
+          "CASE WHEN ? IS NULL THEN (SELECT h.crdt_head FROM notes AS h WHERE h.id = ?) ELSE rtrim(translate(encode(?, 'base64'), '+/', '-_'), '=') END",
+          b.note_id,
+          n.id,
+          b.crdt_head
+        ),
+        :string
+      )
+    )
+  end
+
   # The ciphertext starts at byte 14 in both merged formats: a format 1
   # nonce field is 13 bytes (leading 1), a format 0 nonce (12 bytes) sits
   # behind a 0 byte. `substring ... FOR n` reads a slice of an EXTERNAL

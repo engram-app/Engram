@@ -187,23 +187,9 @@ defmodule EngramWeb.SyncController do
     # behind the 2026-07-09 CRDT pool-exhaustion incident.
     # `crdt_head` from the note's body row (`NoteBody`), the rest from notes.
     notes =
-      from(n in Note,
-        where:
-          n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-            n.kind == "note",
-        select: %{
-          id: n.id,
-          raw: fragment("uuid_send(?)", n.id),
-          v: n.dek_version,
-          ct: n.path_ciphertext,
-          nonce: n.path_nonce,
-          hash: n.content_hash,
-          seq: n.seq
-        }
+      Repo.all(
+        union_all(manifest_notes(user, vault, :short), ^manifest_notes(user, vault, :long))
       )
-      |> NoteBody.join()
-      |> select_merge(^NoteBody.fields([:crdt_head]))
-      |> Repo.all()
 
     attachments =
       Repo.all(
@@ -217,6 +203,42 @@ defmodule EngramWeb.SyncController do
 
     {notes, attachments}
   end
+
+  # The manifest's notes, in two halves of one statement (UNION ALL). A
+  # path ciphertext up to 2,000 bytes is read index-only from
+  # `notes_manifest`, which carries every column below. A longer one (no
+  # total path cap, and a btree entry over 2,704 bytes refuses the write)
+  # stays out of it and is read from the heap through the near-empty
+  # `notes_manifest_long_path`. Each clause is its index predicate verbatim,
+  # literal 2000 included, so a generic plan can prove it (migration
+  # 20261103050000). The no-body head fallback probes `notes` by primary
+  # key per row (`NoteBody.head_off_notes_scan/0`), so it does not pull
+  # `crdt_head` into the scan. EngramWeb.SyncManifestPlanTest.
+  defp manifest_notes(user, vault, half) do
+    from(n in Note,
+      where:
+        n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
+          n.kind == "note",
+      select: %{
+        id: n.id,
+        raw: fragment("uuid_send(?)", n.id),
+        v: n.dek_version,
+        ct: n.path_ciphertext,
+        nonce: n.path_nonce,
+        hash: n.content_hash,
+        seq: n.seq
+      }
+    )
+    |> path_half(half)
+    |> NoteBody.join()
+    |> select_merge(^%{crdt_head: NoteBody.head_off_notes_scan()})
+  end
+
+  defp path_half(query, :short),
+    do: where(query, [n], fragment("octet_length(?) <= 2000", n.path_ciphertext))
+
+  defp path_half(query, :long),
+    do: where(query, [n], fragment("(octet_length(?) <= 2000) IS NOT TRUE", n.path_ciphertext))
 
   defp render_manifest(conn, {note_rows, attachment_rows}, dek, current_seq) do
     # One batch native call per column (`PathCrypto.decrypt_many!/3`): one key

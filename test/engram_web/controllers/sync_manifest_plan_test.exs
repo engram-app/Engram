@@ -62,7 +62,7 @@ defmodule EngramWeb.SyncManifestPlanTest do
   # visibility map counted as set: a sandbox cannot VACUUM, and with no
   # all-visible page every index-only scan is costed as a heap fetch per
   # row. Prod's cold rows are all-visible.
-  defp plan(sql) do
+  defp plan(sql, tenant \\ nil) do
     for t <- @tables do
       Engram.Repo.query!("REINDEX TABLE #{t}")
       Engram.Repo.query!("ANALYZE #{t}")
@@ -73,17 +73,46 @@ defmodule EngramWeb.SyncManifestPlanTest do
       [@tables]
     )
 
-    QueryPlan.generic_plan(sql, bitmapscan: false)
+    if tenant,
+      do:
+        Engram.Repo.with_tenant!(tenant, fn -> QueryPlan.generic_plan(sql, bitmapscan: false) end),
+      else: QueryPlan.generic_plan(sql, bitmapscan: false)
+  end
+
+  defp manifest_notes_sql(conn) do
+    [sql] = for sql <- statements(manifest(conn), "notes"), sql =~ ~s|uuid_send(n0."id")|, do: sql
+    sql
   end
 
   test "the manifest reads crdt_head index-only from note_bodies", %{conn: conn} do
-    [sql] =
-      for sql <- statements(manifest(conn), "notes"),
-          sql =~ ~s|uuid_send(n0."id")|,
-          do: sql
-
-    plan = plan(sql)
+    plan = plan(manifest_notes_sql(conn))
     assert plan =~ "Index Only Scan using note_bodies_user_note_head", plan
+  end
+
+  # Prod 2026-11-03, the same 40k-note vault cold: the notes side read 9.3k
+  # heap pages (5.5 s at ~0.56 ms a read), about 5 rows a page. Under the
+  # tenant's generic plan (what a 6th or later call may run) the notes side
+  # is an index-only scan of `notes_manifest`, about 1.4k leaf pages for that
+  # vault. Rows whose path ciphertext is too long for a btree entry come from
+  # `notes_manifest_long_path`; the no-body head fallback probes `notes_pkey`
+  # per row. No other notes index and no heap scan of the vault.
+  test "the manifest's notes side is index-only on notes_manifest under a tenant", ctx do
+    plan = plan(manifest_notes_sql(ctx.conn), ctx.user.id)
+    assert plan =~ "Index Only Scan using notes_manifest on notes", plan
+
+    refute plan =~
+             ~r/Scan(?: Backward)? using (?!notes_manifest(?:_long_path)?\b|notes_pkey\b)\S+ on notes\b/,
+           plan
+
+    refute plan =~ ~r/(Seq|Bitmap Heap) Scan on notes\b/, plan
+
+    # Index-only skips the heap only for all-visible pages: notes vacuums
+    # often enough to keep its visibility map set.
+    %{rows: [[opts]]} =
+      Engram.Repo.query!("SELECT reloptions FROM pg_class WHERE oid = 'notes'::regclass")
+
+    assert "autovacuum_vacuum_scale_factor=0.02" in opts
+    assert "autovacuum_vacuum_insert_scale_factor=0.02" in opts
   end
 
   test "the per-user attachment usage sum is index-only", %{user: user} do
