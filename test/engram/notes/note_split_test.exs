@@ -270,10 +270,6 @@ defmodule Engram.Notes.NoteSplitTest do
       assert_received {^ref, 0}
     end
 
-    # #2276: one row needing work at the END of the id order, behind clean
-    # ones. Every statement reading `notes` is a keyset window or confined to
-    # one window's ids: no "next N rows that need work", no EXISTS over the
-    # table.
     # The daily re-verify of a closed ledger walked every notes window and
     # de-TOASTed both bodies of every note for the drift report: in prod ~95
     # windows a day, ~700 ms and 1.6-1.9k disk reads each. The derive and body
@@ -290,6 +286,10 @@ defmodule Engram.Notes.NoteSplitTest do
       assert TableReads.count(tables) == before
     end
 
+    # #2276: one row needing work at the END of the id order, behind clean
+    # ones. Every statement reading `notes` is a keyset window or confined to
+    # one window's ids: no "next N rows that need work", no EXISTS over the
+    # table.
     test "a row at the end of the table, every statement one window", %{user: u, vault: v} do
       notes = for i <- 1..9, do: write!(u, v, "w#{i}.md", "w#{i}")
       last = Enum.max_by(notes, & &1.id)
