@@ -7,7 +7,14 @@ defmodule Engram.RebuildExclusionTest do
 
   alias Engram.Rebuild
   alias Engram.ServiceConfig
-  alias Engram.Workers.{IndexCapMaintenance, RebuildDryRun, RepathNoteIndex, RotateUserDek}
+
+  alias Engram.Workers.{
+    IndexCapMaintenance,
+    RebuildDryRun,
+    ReleaseRebuildHeld,
+    RepathNoteIndex,
+    RotateUserDek
+  }
 
   setup do
     Engram.Cache.clear_local(:rebuild)
@@ -41,13 +48,66 @@ defmodule Engram.RebuildExclusionTest do
   end
 
   describe "other writers while on" do
-    test "a DEK rotation snoozes an hour and writes nothing" do
+    # Held, not snoozed: a snooze rewrites the job row every time it wakes
+    # (#2375). A suspended job is never staged or fetched, so it writes nothing.
+    test "a DEK rotation is held and writes nothing" do
       on!()
       user = insert(:user)
       before = Repo.reload!(user)
 
-      assert {:snooze, 3600} = perform_job(RotateUserDek, %{user_id: user.id})
+      assert :ok = perform_job(RotateUserDek, %{user_id: user.id})
       assert Repo.reload!(user).dek_version == before.dek_version
+      assert [%{state: "suspended"}] = all_enqueued(worker: RotateUserDek)
+    end
+
+    # A re-run of one job (Lifeline rescue, or a retry of the completed
+    # original) must not hold a second copy: both would be released together
+    # and rotate twice, overlapping (#2380 review).
+    test "holding the same job twice keeps one held copy, with its meta and tags" do
+      on!()
+      user = insert(:user)
+
+      job = %Oban.Job{
+        worker: "Engram.Workers.RotateUserDek",
+        queue: "crypto_backfill",
+        priority: 0,
+        max_attempts: 3,
+        args: %{"user_id" => user.id},
+        meta: %{"trace" => "t1"},
+        tags: ["ops"]
+      }
+
+      assert :ok = Rebuild.hold(job)
+      assert :ok = Rebuild.hold(job)
+
+      assert [%{state: "suspended", meta: meta, tags: ["ops"]}] =
+               all_enqueued(worker: RotateUserDek)
+
+      assert meta["trace"] == "t1"
+      assert meta["held"] == "rebuild"
+    end
+
+    test "the release leaves other suspended jobs alone and reports zero with none held" do
+      ServiceConfig.put_override(:index_rebuild, "off")
+      assert Rebuild.release_held() == 0
+
+      Oban.insert!(RotateUserDek.new(%{user_id: Ecto.UUID.generate()}, state: "suspended"))
+      assert Rebuild.release_held() == 0
+      assert [%{state: "suspended"}] = all_enqueued(worker: RotateUserDek)
+    end
+
+    # A halt only pauses the pass: a raised budget resumes it, so a rotation
+    # let go during the halt could overlap it.
+    test "a budget halt keeps holding, and releases nothing" do
+      on!()
+      Rebuild.set_budget(5)
+      assert Rebuild.debit(10) == :halt
+      assert Rebuild.mode() == :off
+
+      user = insert(:user)
+      assert :ok = perform_job(RotateUserDek, %{user_id: user.id})
+      assert Rebuild.release_held() == 0
+      assert [%{state: "suspended"}] = all_enqueued(worker: RotateUserDek)
     end
 
     test "a DEK rotation runs when the pass is off" do
@@ -62,7 +122,7 @@ defmodule Engram.RebuildExclusionTest do
       assert :ok = perform_job(IndexCapMaintenance, %{})
     end
 
-    test "a single-note repath still runs; a bulk one snoozes" do
+    test "a single-note repath still runs; a bulk one is held until the pass is off" do
       on!()
 
       args = %{
@@ -72,7 +132,17 @@ defmodule Engram.RebuildExclusionTest do
       }
 
       refute match?({:snooze, _}, perform_job(RepathNoteIndex, args))
-      assert {:snooze, 3600} = perform_job(RepathNoteIndex, Map.put(args, :bulk, true))
+      assert :ok = perform_job(RepathNoteIndex, Map.put(args, :bulk, true))
+      assert [%{state: "suspended"} = held] = all_enqueued(worker: RepathNoteIndex)
+      assert held.args["bulk"] == true
+
+      # Still on: the release sweep leaves it held.
+      assert :ok = perform_job(ReleaseRebuildHeld, %{})
+      assert [%{state: "suspended"}] = all_enqueued(worker: RepathNoteIndex)
+
+      ServiceConfig.put_override(:index_rebuild, "off")
+      assert :ok = perform_job(ReleaseRebuildHeld, %{})
+      assert [%{state: "available"}] = all_enqueued(worker: RepathNoteIndex)
     end
 
     test "a bulk repath runs when the pass is off" do

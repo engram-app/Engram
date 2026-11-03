@@ -40,9 +40,10 @@ defmodule Engram.Rebuild do
 
   ## Other writers while `on` (Task 16.4)
 
-  A DEK rotation (`RotateUserDek`) snoozes an hour and writes nothing, and a
-  bulk repath (a folder rename moving over 100 notes) snoozes an hour; a
-  single-note rename still repaths. The recap cron (`IndexCapMaintenance`)
+  A DEK rotation (`RotateUserDek`) and a bulk repath (a folder rename moving
+  over 100 notes) are held (`hold/1`) and write nothing until the switch
+  leaves `on` (`holding?/0`, a budget halt still holds); a single-note
+  rename still repaths. The recap cron (`IndexCapMaintenance`)
   is already a no-op.
 
   ## Pacing (Task 16.2)
@@ -450,6 +451,94 @@ defmodule Engram.Rebuild do
 
   def gate_snooze(snoozed),
     do: Engram.Jobs.capped_backoff(@gate_snooze, snoozed, @gate_snooze_max, 0.25)
+
+  @doc """
+  True while the switch reads `on`, halted or not: the writers Task 16.4
+  keeps out of the pass (bulk repaths, DEK rotations) wait on this, not on
+  `mode/0`. A budget halt only pauses the pass; raising the budget resumes
+  it, so a DEK rotation let go during a halt could still be running then.
+  """
+  @spec holding?() :: boolean()
+  def holding?, do: ServiceConfig.get(:index_rebuild, "off") == "on"
+
+  @doc """
+  Parks `job` until `holding?/0` is false (Task 16.4) and returns `:ok`
+  for the worker to return. Queues a `suspended` copy, which Oban never
+  stages or fetches, so a held job writes nothing while it waits;
+  `release_held/0` frees it. A snooze instead rewrites the job row (a
+  non-HOT UPDATE) every time it wakes: 801 bulk repaths snoozing hourly were
+  ~800 updates an hour for as long as the flag stayed on (#2375).
+  """
+  @spec hold(Oban.Job.t()) :: :ok
+  def hold(%Oban.Job{} = job) do
+    changeset =
+      Oban.Job.new(job.args,
+        worker: job.worker,
+        queue: job.queue,
+        priority: job.priority,
+        max_attempts: job.max_attempts,
+        meta: Map.put(job.meta || %{}, "held", "rebuild"),
+        tags: job.tags || [],
+        # Unique among held copies only: the running original is `executing`
+        # and must not block its own hold, but a re-run of it (Lifeline
+        # rescue, a retry of the completed original) must not hold a second
+        # copy, or both are released at once (two DEK rotations overlapping).
+        unique: [period: :infinity, states: [:suspended]]
+      )
+
+    # `state` is a permitted field but not in `Oban.Job.new/2`'s option
+    # typespec, so it is set on the changeset (dialyzer read the option as
+    # a call that never returns).
+    _job = Oban.insert!(Ecto.Changeset.put_change(changeset, :state, "suspended"))
+
+    :ok
+  end
+
+  @doc """
+  The gate for the writers Task 16.4 keeps out of the pass: `hold/1` while
+  `holding?/0`, else run `fun`. Before running, drops any held copy of the
+  same job: an original that re-runs after the switch goes off (a crash
+  after its hold, a manual retry) does the work, and its held copy must not
+  do it again on the next release (a second DEK rotation).
+  """
+  @spec run_or_hold(Oban.Job.t(), (-> result)) :: :ok | result when result: term()
+  def run_or_hold(%Oban.Job{} = job, fun) do
+    if holding?() do
+      hold(job)
+    else
+      drop_held(job)
+      fun.()
+    end
+  end
+
+  defp drop_held(%Oban.Job{worker: worker, args: args}) do
+    from(j in held_query(), where: j.worker == ^worker and j.args == ^args)
+    |> Repo.delete_all()
+  end
+
+  defp held_query,
+    do:
+      from(j in Oban.Job,
+        where: j.state == "suspended" and fragment("?->>'held' = 'rebuild'", j.meta)
+      )
+
+  @doc """
+  Makes every job `hold/1` parked available again once `holding?/0` is
+  false. Returns how many it released. Run hourly by
+  `Engram.Workers.ReleaseRebuildHeld`.
+  """
+  @spec release_held() :: non_neg_integer()
+  def release_held do
+    if holding?() do
+      0
+    else
+      {count, _} =
+        held_query()
+        |> Repo.update_all(set: [state: "available", scheduled_at: DateTime.utc_now()])
+
+      count
+    end
+  end
 
   # A check costs the bucket 1 token (Hammer has no read without a hit).
   defp tpm_room?,
