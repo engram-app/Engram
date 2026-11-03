@@ -277,7 +277,12 @@ defmodule Engram.Crypto.AadRebind do
           ]
         )
 
-      if count == 1, do: :ok, else: :stale
+      if count == 1 do
+        _ = NoteBody.sync!(id, [:content_ciphertext])
+        :ok
+      else
+        :stale
+      end
     end
   end
 

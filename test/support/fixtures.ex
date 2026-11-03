@@ -365,18 +365,58 @@ defmodule Engram.Fixtures do
   end
 
   @doc """
+  Every `kind = 'note'` row of `user_id` whose `note_bodies` row is missing
+  or disagrees with its `notes` body columns, as `{id, [column]}`, compared
+  in full against the `notes_sync_body` trigger's mapping (20261021110200),
+  restated here independently of `Engram.Notes.NoteBody`. Ids and column
+  names only, never content. `[]` means in step.
+  """
+  def note_body_divergence(user_id) do
+    merged = fn ct, nonce ->
+      """
+      CASE WHEN n.#{ct} IS NULL THEN NULL
+        WHEN n.#{nonce} IS NULL THEN n.#{ct}
+        WHEN length(n.#{nonce}) = 13 THEN n.#{nonce} || n.#{ct}
+        ELSE '\\x00'::bytea || n.#{nonce} || n.#{ct} END
+      """
+    end
+
+    %{rows: rows} =
+      Engram.Repo.query!(
+        """
+        SELECT n.id::text,
+          b.note_id IS NULL,
+          b.user_id IS DISTINCT FROM n.user_id,
+          b.key_version IS DISTINCT FROM
+            (CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END),
+          b.content_ct IS DISTINCT FROM (#{merged.("content_ciphertext", "content_nonce")}),
+          b.crdt_ct IS DISTINCT FROM (#{merged.("crdt_state_ciphertext", "crdt_state_nonce")}),
+          b.crdt_head IS DISTINCT FROM (CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$'
+            THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END)
+        FROM notes n LEFT JOIN note_bodies b ON b.note_id = n.id
+        WHERE n.user_id = $1 AND n.kind = 'note'
+        """,
+        [Ecto.UUID.dump!(user_id)]
+      )
+
+    names = [:missing, :user_id, :key_version, :content, :crdt, :head]
+
+    for [id | flags] <- rows, Enum.any?(flags) do
+      {id, for({name, true} <- Enum.zip(names, flags), do: name)}
+    end
+  end
+
+  @doc """
   Copies a note's `notes` body columns into its `note_bodies` row, merged as
   the `notes_sync_body` trigger stores them. Readers take the body from
-  `note_bodies`, and the trigger skips a write whose nonce did not change, so
-  a test that tampers with a `notes` ciphertext at rest calls this to put the
+  `note_bodies`, and a write is copied only when its nonce changed, so a
+  test that tampers with a `notes` ciphertext at rest calls this to put the
   tampered bytes where they are read.
   """
   def mirror_body!(note_id) do
-    id = Ecto.UUID.dump!(note_id)
-    # The trigger's own copy: with no body row, a write listing `kind`
-    # re-inserts it from the notes columns (what `NoteSplit` does).
-    Engram.Repo.query!("DELETE FROM note_bodies WHERE note_id = $1", [id])
-    Engram.Repo.query!("UPDATE notes SET kind = kind WHERE id = $1", [id])
+    # With no body row, `sync!/3` inserts it whole from the notes columns.
+    Engram.Repo.query!("DELETE FROM note_bodies WHERE note_id = $1", [Ecto.UUID.dump!(note_id)])
+    Engram.Notes.NoteBody.sync!(note_id, [])
     :ok
   end
 

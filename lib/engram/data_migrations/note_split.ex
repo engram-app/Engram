@@ -70,6 +70,9 @@ defmodule Engram.DataMigrations.NoteSplit do
   # touch skipped because a writer held it.
   defp heal(ids, %{repo: repo}) do
     touched = touch(repo, needing(ids))
+    # A missing body row, written by this pass rather than by the trigger
+    # (the next release drops it). Present rows are left as they are.
+    _ = NoteBody.sync!(touched, [], repo: repo)
     left? = repo.exists?(where(unfixed(), [n], field(n, :id) in type(^ids, {:array, Ecto.UUID})))
     {length(touched), left?}
   end
@@ -93,7 +96,7 @@ defmodule Engram.DataMigrations.NoteSplit do
   # changed a ciphertext but kept its nonce (no writer does; a restore or a
   # hand edit could) leaves the body stale. A pass that closes the ledger
   # (the last catch-up pass, and every daily re-verify) compares the two
-  # (`NoteBody.drift/0`, slices only), in id windows so no single
+  # (`NoteBody.drift_ids/2`, slices only), in id windows so no single
   # statement or snapshot spans the table.
   #
   # REPORT ONLY: counted (`[:engram, :note_split, :body_drift]`) and logged
@@ -142,19 +145,11 @@ defmodule Engram.DataMigrations.NoteSplit do
   end
 
   @doc false
-  # The notes among `ids` whose body row drifted (`NoteBody.drift/0`), or
+  # The notes among `ids` whose body row drifted (`NoteBody.drift_ids/2`), or
   # whose body row is owned by another user: `NoteBody.join/1` matches the
   # owner too (R5), so every read treats such a row as missing and falls
   # back to the notes columns. Reported like any other drift, never repaired.
-  def drift_ids(repo, ids) do
-    from(n in Note, as: :n, where: n.kind == "note" and n.id in ^ids)
-    |> NoteBody.join()
-    |> where(exists(from(o in "note_bodies", where: o.note_id == parent_as(:n).id, select: 1)))
-    |> select([n], %{id: n.id})
-    |> select_merge(^%{drift: dynamic([note_body: b], is_nil(b.note_id) or ^NoteBody.drift())})
-    |> repo.all()
-    |> Enum.flat_map(fn %{id: id, drift: drift?} -> if drift?, do: [id], else: [] end)
-  end
+  def drift_ids(repo, ids), do: NoteBody.drift_ids(repo, ids)
 
   # Test-only fault seam: nil outside tests.
   defp drift_fault do

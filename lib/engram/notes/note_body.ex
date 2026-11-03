@@ -1,9 +1,17 @@
 defmodule Engram.Notes.NoteBody do
   @moduledoc """
   A note's body, 1:1 with `notes` (migration 20261021110100): materialized
-  content, CRDT state and manifest head. Written only by the
-  `notes_sync_body` trigger, which every writer of the `notes` body columns
-  fires (this release, the previous one, raw SQL, backfills).
+  content, CRDT state and manifest head.
+
+  Written twice over, on purpose, while R8 (stop storing every body twice)
+  rolls out: by the `notes_sync_body` trigger, which every writer of the
+  `notes` body columns fires (the previous release's nodes, raw SQL), AND by
+  `sync!/3`, which every app writer of those columns calls after its `notes`
+  write, in the same transaction. With the trigger live, `sync!/3` finds the
+  row already in step and writes nothing, so a save still writes this row
+  once. The next release drops the trigger and `sync!/3` is the only writer;
+  the one after stops writing the `notes` columns. Order matters: nulling
+  the `notes` columns under a live trigger copies the NULLs here.
 
   Wave 3 migrate-data (`docs/context/notes-chunks-hyperopt.md` 6.1 step 2):
   every READ of a body column goes through `select_note/2` (or `join/1` +
@@ -29,20 +37,25 @@ defmodule Engram.Notes.NoteBody do
   disagrees with its notes row (`drift/0`) and never repairs it: from the
   next release on, the body is the newer side.
 
-  Two rules the contract release (stop writing the notes body columns, drop
-  them) must change in the same release:
+  Row-locked reads (`Notes.lock_for_write/2`, DEK rotation) lock the notes
+  row in one statement and read the body from here in a fresh one
+  (`locked_bodies/2`): a single statement that waits on the row lock
+  re-fetches only the locked relation (EvalPlanQual), so a joined body row
+  would be the pre-wait version (LockedReadBodyTest). No lock is needed on
+  this table: every writer of a body row holds that note's `notes` row lock
+  (the trigger and `sync!/3` run after a `notes` write in the same
+  transaction; the cascade runs inside the `notes` DELETE), so once the
+  reader holds it, the fresh statement sees the last committed body and
+  nothing can change it until the reader commits.
 
-    * Row-locked reads (`Notes.lock_for_write/2`, DEK rotation) read the
-      body from the `notes` columns, not from here: a read that waits on the
-      notes row lock re-fetches only the locked relation (EvalPlanQual), so
-      a joined body row would be the pre-wait version. Contract must lock in
-      one statement and read the body in a fresh one (LockedReadBodyTest).
-    * Write fences (`snapshot_fence`, `rename_fence`, `snapshot_fenced`)
-      compare the `notes.crdt_state_nonce` column against the nonce a read
-      split from here. That holds while `notes` keeps its own nonce column,
-      which every release up to contract writes. `notes` never gets the
-      merged layout: the release that stops writing it moves the fences to
-      a `note_bodies` comparison at the same time.
+  Write fences (`snapshot_fence`, `rename_fence`, `snapshot_fenced`) compare
+  the `notes.crdt_state_nonce` column (inline, never TOASTed) against the
+  nonce a read split from here. They must stay on a `notes` column: a fence
+  that reads `note_bodies` inside the `notes` UPDATE sees the pre-wait body
+  after a lock wait (the same EvalPlanQual rule), so it would pass against a
+  checkpoint that committed meanwhile. The release that stops writing the
+  `notes` body columns must keep writing the two nonce columns (or another
+  per-write stamp on `notes`) for them.
   """
   use Ecto.Schema
 
@@ -67,6 +80,108 @@ defmodule Engram.Notes.NoteBody do
     :crdt_state_nonce,
     :crdt_head
   ]
+
+  # The `notes` columns each body field is copied from.
+  @sources [
+    content: [:content_ciphertext, :content_nonce],
+    crdt: [:crdt_state_ciphertext, :crdt_state_nonce],
+    head: [:crdt_head]
+  ]
+
+  # The trigger's merged layout of one `notes` (ciphertext, nonce) pair.
+  merged = fn ct, nonce ->
+    """
+    CASE WHEN n.#{ct} IS NULL THEN NULL
+      WHEN n.#{nonce} IS NULL THEN n.#{ct}
+      WHEN length(n.#{nonce}) = 13 THEN n.#{nonce} || n.#{ct}
+      ELSE '\\x00'::bytea || n.#{nonce} || n.#{ct} END
+    """
+  end
+
+  # True when body column `body` does not hold `merged` of (ct, nonce):
+  # NULL-ness, length, nonce field (first 13 bytes) and tag (last 16).
+  differs = fn body, ct, nonce ->
+    prefix =
+      "CASE WHEN n.#{nonce} IS NULL THEN ''::bytea WHEN length(n.#{nonce}) = 13 " <>
+        "THEN n.#{nonce} ELSE '\\x00'::bytea || n.#{nonce} END"
+
+    """
+    ((b.#{body} IS NULL) <> (n.#{ct} IS NULL) OR (n.#{ct} IS NOT NULL AND (
+      octet_length(b.#{body}) <> octet_length(n.#{ct}) + octet_length(#{prefix})
+      OR substring(b.#{body} FROM 1 FOR 13)
+        <> substring((#{prefix}) || substring(n.#{ct} FROM 1 FOR 13) FROM 1 FOR 13)
+      OR substring(b.#{body} FROM greatest(octet_length(b.#{body}) - 15, 1))
+        <> substring(n.#{ct} FROM greatest(octet_length(n.#{ct}) - 15, 1)))))
+    """
+  end
+
+  key_version = "CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END"
+
+  head =
+    "CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$' " <>
+      "THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END"
+
+  content = merged.("content_ciphertext", "content_nonce")
+  crdt = merged.("crdt_state_ciphertext", "crdt_state_nonce")
+
+  # Per body field: its SET clause and its "differs" test.
+  copy = %{
+    content:
+      {"content_ct = #{content}", differs.("content_ct", "content_ciphertext", "content_nonce")},
+    crdt: {"crdt_ct = #{crdt}", differs.("crdt_ct", "crdt_state_ciphertext", "crdt_state_nonce")},
+    head: {"crdt_head = #{head}", "b.crdt_head IS DISTINCT FROM #{head}"}
+  }
+
+  # One statement per set of fields a write touched (`sync!/3`): update the
+  # body rows that exist and differ in those fields (plus the owner and key
+  # version, which live on `notes` for good), insert the missing ones whole.
+  # Both CTEs read the statement's snapshot, so a row is in exactly one of
+  # them. Built at compile time for every subset (eight).
+  @sync_sql (for content? <- [false, true],
+                 crdt? <- [false, true],
+                 head? <- [false, true],
+                 into: %{} do
+               fields =
+                 for {f, true} <- [content: content?, crdt: crdt?, head: head?], do: f
+
+               set =
+                 Enum.map_join(fields, "", fn f -> ",\n      " <> elem(copy[f], 0) end)
+
+               diff = Enum.map_join(fields, "", fn f -> " OR " <> elem(copy[f], 1) end)
+
+               {fields,
+                """
+                WITH upd AS (
+                  UPDATE note_bodies b SET
+                    user_id = n.user_id,
+                    key_version = #{key_version}#{set}
+                  FROM notes n
+                  WHERE b.note_id = n.id AND n.id = ANY($1) AND n.kind = 'note'
+                    AND (b.user_id <> n.user_id OR b.key_version <> #{key_version}#{diff})
+                  RETURNING 1
+                ), ins AS (
+                  INSERT INTO note_bodies (note_id, user_id, key_version, content_ct, crdt_ct, crdt_head)
+                  SELECT n.id, n.user_id, #{key_version}, #{content}, #{crdt}, #{head}
+                  FROM notes n
+                  WHERE n.id = ANY($1) AND n.kind = 'note'
+                    AND NOT EXISTS (SELECT 1 FROM note_bodies x WHERE x.note_id = n.id)
+                  ON CONFLICT (note_id) DO NOTHING
+                  RETURNING 1
+                )
+                SELECT ((SELECT count(*) FROM upd) + (SELECT count(*) FROM ins))::int
+                """}
+             end)
+
+  # The ids among $1 whose body row exists and disagrees with its notes row
+  # in any copied column: the same per-field tests `sync!/3` writes on, all
+  # fields at once (`drift_ids/2`).
+  all_differ = Enum.map_join([:content, :crdt, :head], " OR ", &elem(copy[&1], 1))
+
+  @drift_sql """
+  SELECT n.id::text FROM notes n JOIN note_bodies b ON b.note_id = n.id
+  WHERE n.id = ANY($1) AND n.kind = 'note'
+    AND (b.user_id <> n.user_id OR b.key_version <> #{key_version} OR #{all_differ})
+  """
 
   @doc """
   Every `Note` field except the CRDT state, about half of a note's stored
@@ -117,6 +232,86 @@ defmodule Engram.Notes.NoteBody do
   @spec get(Ecto.UUID.t(), [atom()]) :: Note.t() | nil
   def get(id, fields \\ Note.__schema__(:fields)) do
     Note |> where([n], n.id == ^id) |> select_note(fields) |> Repo.one()
+  end
+
+  @doc """
+  The body fields of the notes `ids`, from here, as `%{id => %{field =>
+  value}}`, for a caller that already holds those notes rows' lock (see the
+  moduledoc). Notes only: a folder row has no body and no entry.
+  `repo_opts` go to the read (`skip_tenant_check:`).
+  """
+  @spec locked_bodies([Ecto.UUID.t()], keyword()) :: %{Ecto.UUID.t() => map()}
+  def locked_bodies([], _repo_opts), do: %{}
+
+  def locked_bodies(ids, repo_opts) do
+    from(n in Note, where: n.id in ^ids and n.kind == "note")
+    |> select_map([:id | @body], %{})
+    |> Repo.all(repo_opts)
+    |> Map.new(fn row -> {row.id, Map.take(row, @body)} end)
+  end
+
+  @doc """
+  Brings the `note_bodies` rows of the notes `ids` in step with the `notes`
+  body columns a write just set, as the `notes_sync_body` trigger maps them
+  (20261021110200), and returns how many rows it wrote. The one function
+  every app writer of a `notes` body column (content, CRDT state, head,
+  `dek_version`) calls after that write, in the same transaction, so the
+  `notes` rows are already locked (`notes` before `note_bodies`, the
+  trigger's order).
+
+  `written` names the `notes` columns the write set (a list, or the
+  keyword list / changes map it wrote), and only the body fields copied
+  from those are compared and copied, as the trigger copies only the
+  columns whose nonce changed. That is load-bearing for the release that
+  stops writing the `notes` body columns: an older node beside it must not
+  copy a stale `notes` column it did not write over a newer body. A CRDT
+  state write also copies the head (the `notes_crdt_head_invalidate`
+  trigger NULLs it). The owner and key version (`dek_version`, which stays
+  on `notes`) are always kept in step. A missing body row (written before
+  the trigger) is inserted whole.
+
+  Compared cheaply: per body column its NULL-ness, its length, the 13-byte
+  nonce field and the 16-byte AEAD tag (slices of an EXTERNAL value, so
+  nothing is de-TOASTed; every encryption takes a fresh nonce, the
+  trigger's own change test). A row already in step (the trigger just
+  wrote it) is not touched, so a save writes it once.
+
+  Emits `[:engram, :note_body, :sync_wrote]` (`%{count: rows}`) when it
+  wrote anything (`engram_prom_ex_notes_body_sync_wrote_rows_total`). While
+  the trigger is live that means the trigger left a row behind; it should
+  stay at zero, which is the evidence the release dropping the trigger
+  waits for.
+
+  Options: `:repo` (default `Engram.Repo`, or the maintenance repo a ledger
+  runs on); the rest go to the query (`mode: :savepoint`,
+  `skip_tenant_check:` is ignored by raw SQL and harmless).
+  """
+  @spec sync!(Ecto.UUID.t() | [Ecto.UUID.t()], [atom()] | keyword() | map(), keyword()) ::
+          non_neg_integer()
+  def sync!(ids, written, opts \\ [])
+  def sync!(id, written, opts) when is_binary(id), do: sync!([id], written, opts)
+  def sync!([], _written, _opts), do: 0
+
+  def sync!(ids, written, opts) when is_list(ids) do
+    {repo, opts} = Keyword.pop(opts, :repo, Repo)
+    sql = Map.fetch!(@sync_sql, synced_fields(written))
+    %{rows: [[n]]} = repo.query!(sql, [Enum.map(ids, &Ecto.UUID.dump!/1)], opts)
+    if n > 0, do: :telemetry.execute([:engram, :note_body, :sync_wrote], %{count: n}, %{})
+    n
+  end
+
+  defp synced_fields(written) when is_map(written), do: synced_fields(Map.keys(written))
+
+  defp synced_fields(written) when is_list(written) do
+    cols =
+      Enum.map(written, fn
+        {col, _} -> col
+        col -> col
+      end)
+
+    # A CRDT state write also resets the head (`notes_crdt_head_invalidate`).
+    cols = if Enum.any?(@sources[:crdt], &(&1 in cols)), do: [:crdt_head | cols], else: cols
+    for {field, srcs} <- @sources, Enum.any?(srcs, &(&1 in cols)), do: field
   end
 
   @doc """
@@ -228,38 +423,19 @@ defmodule Engram.Notes.NoteBody do
   end
 
   @doc """
-  True when a note's body row disagrees with its `notes` row, for a query
-  through `join/1` restricted to rows that HAVE a body: the nonce each side
-  carries (the read's own split, `nonce_expr/2`), the AEAD tag (the last 16
-  bytes, which differ for any other ciphertext under the same nonce), and
-  the head. Slices and varlena headers only, nothing is de-TOASTed. For
-  `Engram.DataMigrations.NoteSplit`'s drift report.
+  The notes among `ids` whose body row exists and disagrees with its `notes`
+  row in any column `sync!/3` copies (the owner too: a body row owned by
+  another user is invisible to every read, which joins on the owner). The
+  same comparison `sync!/3` writes on, so the two cannot disagree: slices
+  and varlena headers only, nothing is de-TOASTed. For
+  `Engram.DataMigrations.NoteSplit`'s drift report; `repo` is the pool the
+  caller walks with.
   """
-  @spec drift() :: Ecto.Query.dynamic_expr()
-  def drift do
-    content = differs(:content_ct, :content_nonce, :content_ciphertext)
-    crdt = differs(:crdt_ct, :crdt_state_nonce, :crdt_state_ciphertext)
-    head = field_expr(:crdt_head)
+  @spec drift_ids(module(), [Ecto.UUID.t()]) :: [Ecto.UUID.t()]
+  def drift_ids(_repo, []), do: []
 
-    dynamic(
-      [n],
-      ^content or ^crdt or fragment("? IS DISTINCT FROM ?", ^head, n.crdt_head)
-    )
-  end
-
-  defp differs(body, notes_nonce, notes_ct) do
-    nonce = nonce_expr(body, notes_nonce)
-
-    dynamic(
-      [n, note_body: b],
-      fragment("? IS DISTINCT FROM ?", ^nonce, field(n, ^notes_nonce)) or
-        fragment(
-          "substring(? FROM greatest(octet_length(?) - 15, 1)) IS DISTINCT FROM substring(? FROM greatest(octet_length(?) - 15, 1))",
-          field(b, ^body),
-          field(b, ^body),
-          field(n, ^notes_ct),
-          field(n, ^notes_ct)
-        )
-    )
+  def drift_ids(repo, ids) do
+    %{rows: rows} = repo.query!(@drift_sql, [Enum.map(ids, &Ecto.UUID.dump!/1)])
+    Enum.map(rows, fn [id] -> id end)
   end
 end

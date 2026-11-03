@@ -337,7 +337,8 @@ defmodule Engram.Notes.CrdtPersistence do
   end
 
   # ONE statement per keystroke (this is the hot path): the tail insert, the
-  # crdt_head reset and the seq read for the fanout below.
+  # crdt_head reset and the seq read for the fanout below. A second one
+  # (`NoteBody.sync!/3`) only when the head was reset.
   #
   # crdt_head: this update advanced the doc, so a stored head is stale. NULL it
   # in the same transaction (the BackfillCrdtHead worker re-warms it from
@@ -360,8 +361,9 @@ defmodule Engram.Notes.CrdtPersistence do
   ), head_reset AS (
     UPDATE notes SET crdt_head = NULL
     WHERE id = $2 AND kind = 'note' AND crdt_head IS NOT NULL
+    RETURNING 1
   )
-  SELECT seq FROM notes WHERE id = $2
+  SELECT seq, EXISTS (SELECT 1 FROM head_reset) FROM notes WHERE id = $2
   """
 
   defp append_row(row_id, %{user_id: user_id, vault_id: vault_id, note_id: note_id}, ct, nonce) do
@@ -375,8 +377,17 @@ defmodule Engram.Notes.CrdtPersistence do
     ]
 
     case Repo.query!(@append_sql, params) do
-      %{rows: [[seq]]} -> seq
-      %{rows: []} -> nil
+      %{rows: [[seq, false]]} ->
+        seq
+
+      # The head was reset: its body row too, in this transaction. Only the
+      # first append after a head was stored, not every keystroke.
+      %{rows: [[seq, true]]} ->
+        _ = NoteBody.sync!(note_id, [:crdt_head])
+        seq
+
+      %{rows: []} ->
+        nil
     end
   end
 

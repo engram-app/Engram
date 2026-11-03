@@ -243,18 +243,22 @@ defmodule Engram.Crypto.UserDekRotation do
       Engram.Notes.Note,
       fn batch_ids ->
         Repo.transaction(fn ->
-          # Bodies from the `notes` columns under this lock, never a joined
-          # `note_bodies` row: a read that waits on the row lock re-fetches
-          # only the locked relation (EvalPlanQual), so a joined body would
-          # be the pre-wait version (see `Notes.lock_for_write/2`). This
-          # release still writes the notes columns in step; the rewrap
-          # writes them and the trigger mirrors the bodies.
-          notes =
+          # Lock the rows (no body column, so the `notes` copy is never
+          # de-TOASTed), then read their bodies from `note_bodies` in a
+          # fresh statement: a single statement that waits on the row lock
+          # re-fetches only the locked relation (EvalPlanQual), so a joined
+          # body would be the pre-wait version (see `Notes.one_locked/1`).
+          locked =
             from(n in Engram.Notes.Note,
               where: n.id in ^batch_ids,
+              select:
+                struct(n, ^(Engram.Notes.Note.__schema__(:fields) -- NoteBody.body_fields())),
               lock: "FOR UPDATE"
             )
             |> Repo.all(skip_tenant_check: true)
+
+          bodies = NoteBody.locked_bodies(Enum.map(locked, & &1.id), skip_tenant_check: true)
+          notes = Enum.map(locked, &struct(&1, Map.get(bodies, &1.id, %{})))
 
           rewrap_crdt_tail(batch_ids, old_dek, new_dek)
 
@@ -285,6 +289,9 @@ defmodule Engram.Crypto.UserDekRotation do
               end
             end
           end)
+
+          # The rewrapped bodies, in this transaction, for the whole batch.
+          _ = NoteBody.sync!(Enum.map(notes, & &1.id), NoteBody.body_fields())
         end)
         |> case do
           {:ok, _} -> :ok

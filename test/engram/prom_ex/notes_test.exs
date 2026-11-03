@@ -37,6 +37,14 @@ defmodule Engram.PromEx.NotesTest do
              end)
     end
 
+    test "declares a sum of rows NoteBody.sync! wrote itself", %{metrics: metrics} do
+      assert Enum.any?(metrics, fn m ->
+               match?(%Telemetry.Metrics.Sum{}, m) and
+                 m.event_name == [:engram, :note_body, :sync_wrote] and
+                 m.name == [:engram, :prom_ex, :notes, :body_sync_wrote, :rows, :total]
+             end)
+    end
+
     test "no high-cardinality tags", %{metrics: metrics} do
       banned = [:user_id, :vault_id, :tenant_id, :note_id, :path, :content]
 

@@ -16,7 +16,16 @@ defmodule Engram.Notes.CrdtTransport do
 
   alias Engram.{Crypto, Notes, Repo}
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBridge, CrdtPersistence, CrdtRegistry, CrdtRoom, CrdtUpdateLog, Note}
+
+  alias Engram.Notes.{
+    CrdtBridge,
+    CrdtPersistence,
+    CrdtRegistry,
+    CrdtRoom,
+    CrdtUpdateLog,
+    Note,
+    NoteBody
+  }
 
   require Logger
 
@@ -509,6 +518,7 @@ defmodule Engram.Notes.CrdtTransport do
             )
       )
       |> Repo.update_all(set: [crdt_head: head])
+      |> tap(fn {n, _} -> if n > 0, do: NoteBody.sync!(note_id, [:crdt_head]) end)
     end)
   end
 

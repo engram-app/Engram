@@ -61,6 +61,12 @@ defmodule Engram.QueryBudgetTest do
   # Lock discipline: REST append and MCP section edits read (and rebuild)
   # outside the write transaction (+6 / +3), trading round trips for no
   # connection held across the merge or parse.
+  # R8 release N (stop storing each body twice): every write of a notes body
+  # column brings `note_bodies` in step itself (`NoteBody.sync!/3`, +1 on
+  # every write; a no-op while the trigger is live, the only writer once it
+  # is dropped), and a row-locked read takes its body from `note_bodies` in a
+  # fresh statement after the lock (+1 on the locked read-modify-write paths:
+  # append, edit_note), so the lock never de-TOASTs the notes copy.
   @budgets %{
     # Read target 5. begin, tenant_enter, the note, commit.
     "mcp get_notes" => 4,
@@ -91,15 +97,15 @@ defmodule Engram.QueryBudgetTest do
     #  transaction (R6, -2): it replaced four post-write Oban queries (the
     #  EmbedNote unique check + scheduled_at replace, the ExtractNoteLinks and
     #  FinalizeRevision unique checks), which the dispatcher job now runs.
-    "mcp write_note update" => 11,
+    "mcp write_note update" => 12,
     # As write_note, with 4 the unlocked read and 5 the locked re-read of the
     # optimistic read-modify-write (Task 7 ruling F1) instead of the tail read
     # (the tail rides in the read statement).
-    "mcp append_to_note" => 11,
+    "mcp append_to_note" => 13,
     # As append_to_note, but the note read (and the section parse it feeds)
     # runs before the request transaction, in its own short one (+3: begin,
     # enter, commit), so a seconds-long parse holds no pool connection.
-    "mcp edit_note" => 14,
+    "mcp edit_note" => 16,
     # rotation lock, begin, enter, the note row (found once), seq bump,
     # tombstone, usage_meters, the index-delete job insert + its pg_notify,
     # the release joining the warm-up's pending release job (one UPDATE, no
@@ -110,7 +116,7 @@ defmodule Engram.QueryBudgetTest do
     "GET sync/manifest" => 6,
     "GET notes/*path" => 5,
     # As "mcp write_note update" (1-11), plus the response's note_links read.
-    "POST notes update" => 11,
+    "POST notes update" => 12,
     # Rotation lock, begin, enter, path lookup, notes cap (usage_meters),
     # path-collision probe, seq bump, INSERT, the inserted row's re-read,
     # usage_meters increment, the NoteCommitted outbox INSERT + its pg_notify
@@ -118,12 +124,12 @@ defmodule Engram.QueryBudgetTest do
     # 4), the vault_populated probe, the response's links read, the folder row
     # lookup (`Folders.Rows.ensure/4`: one indexed probe by path hash when the
     # folder is not the root), commit.
-    "POST notes create" => 15,
+    "POST notes create" => 16,
     # The read, the write and the response's note_links read are three short
     # tenant transactions, not one (+6: two more begin/enter/commit), so the
     # merge and encryption hold no pool connection and the links read runs
     # after the write committed.
-    "POST notes/append" => 17,
+    "POST notes/append" => 19,
     # Not consolidated in Task 10b (no query-classify item; a rename claims its
     # path in the vault index room, which must commit before the row txn):
     #  1-4 claim validation txn (note ids at the paths).
@@ -137,7 +143,7 @@ defmodule Engram.QueryBudgetTest do
     #  UPDATE, tombstone INSERT).
     #  22-27 post-commit jobs (one unique, own txn). 28-32 idle-room fanout
     #  (fresh users row + note read). 33-36 links txn.
-    "POST notes/rename" => 36,
+    "POST notes/rename" => 37,
     # begin, enter, the note row, seq bump, tombstone, usage_meters, the
     # index-delete job insert + its pg_notify, the release joining the
     # warm-up's pending release job (one UPDATE, no insert), commit. With no
@@ -169,11 +175,11 @@ defmodule Engram.QueryBudgetTest do
     # (10: BEGIN, tenant_enter, note read, next_seq, note write, tail prune,
     # revisions read + 2 inserts, COMMIT) plus the dispatcher job insert and
     # Oban's pg_notify.
-    "CRDT checkpoint tick" => 12,
+    "CRDT checkpoint tick" => 13,
     # idle (was 48): bind 5 + delta 4 + the exit checkpoint 13 + the exit's
     # re-time of a CheckpointNote snoozed behind this room (one UPDATE on
     # oban_jobs, `CheckpointNote.retime_snoozed/1`, #2085 review).
-    "CRDT crdt_doc_update idle" => 22,
+    "CRDT crdt_doc_update idle" => 23,
     # open (was 25 at bee71923, 13 before wave 3): the channel's ownership +
     # path read 4 (`Notes.live_note_path/3`) + bind 5.
     "CRDT room open" => 9

@@ -24,10 +24,18 @@ defmodule Engram.PromEx.Notes do
       snapshot and tail (a decrypt plus a Yjs doc rebuild). Its rate against
       the read rate is the share of reads paying that cost.
 
+    * `[:engram, :note_body, :sync_wrote]`: `%{count: rows}`, no metadata.
+      `Engram.Notes.NoteBody.sync!/3` wrote body rows itself. While the
+      `notes_sync_body` trigger is live it should stay at zero (the trigger
+      already wrote them); a non-zero rate is a write the trigger missed, and
+      the trigger may only be dropped once it has read zero for a while.
+      Once the trigger is gone, this is every body write.
+
   Metrics:
 
     * `engram_prom_ex_notes_utf8_scrub_total` — tags `[:boundary]`.
     * `engram_prom_ex_notes_read_rebuild_total`: no tags.
+    * `engram_prom_ex_notes_body_sync_wrote_rows_total`: no tags.
 
   Also declared in `EngramWeb.Telemetry.metrics/0`, but that list feeds
   LiveDashboard only — this plugin is what puts it on the scraped `/metrics`
@@ -41,6 +49,7 @@ defmodule Engram.PromEx.Notes do
 
   @utf8_scrub_event [:engram, :notes, :utf8_scrub]
   @read_rebuild_event [:engram, :notes, :read_rebuild]
+  @body_sync_wrote_event [:engram, :note_body, :sync_wrote]
 
   @impl true
   def event_metrics(opts) do
@@ -61,6 +70,13 @@ defmodule Engram.PromEx.Notes do
           metric_prefix ++ [:read_rebuild, :total],
           event_name: @read_rebuild_event,
           description: "Note reads that rebuilt the text from the CRDT snapshot and tail."
+        ),
+        sum(
+          metric_prefix ++ [:body_sync_wrote, :rows, :total],
+          event_name: @body_sync_wrote_event,
+          measurement: :count,
+          description:
+            "note_bodies rows NoteBody.sync! wrote itself (zero while the notes_sync_body trigger is live)."
         )
       ]
     )
