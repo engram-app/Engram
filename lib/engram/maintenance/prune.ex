@@ -8,9 +8,17 @@ defmodule Engram.Maintenance.Prune do
   predicate (the retention cutoff on an indexed column) and a `LIMIT`.
   """
 
+  # The one per-run cap every prune uses unless a test passes its own.
+  @max_batches 20
+
+  @doc "Batches one prune run deletes at most."
+  @spec max_batches() :: pos_integer()
+  def max_batches, do: @max_batches
+
   @spec batched((pos_integer() -> non_neg_integer()), pos_integer(), non_neg_integer()) ::
           non_neg_integer()
-  def batched(delete_batch, batch, max_batches), do: loop(delete_batch, batch, max_batches, 0)
+  def batched(delete_batch, batch, max_batches \\ @max_batches),
+    do: loop(delete_batch, batch, max_batches, 0)
 
   defp loop(_delete_batch, _batch, 0, acc), do: acc
 

@@ -111,18 +111,28 @@ defmodule Engram.Idempotency do
   relies on app-layer scoping — see the rls_coverage allowlist); called by
   the daily `Engram.Workers.IdempotencyPrune` cron.
   """
-  # Deletes `batch` rows per statement (each row carries a response body),
-  # until a batch comes back short.
+  # Deletes `batch` rows per statement (each row carries a response body)
+  # through the shared bounded loop (`Engram.Maintenance.Prune`).
   @spec prune_expired(pos_integer()) :: {:ok, non_neg_integer()}
-  def prune_expired(batch \\ 1_000), do: {:ok, prune_batches(DateTime.utc_now(), batch, 0)}
+  def prune_expired(batch \\ 1_000) do
+    now = DateTime.utc_now()
 
-  defp prune_batches(now, batch, acc) do
-    ids = from(k in Key, where: k.expires_at <= ^now, select: k.id, limit: ^batch)
+    n =
+      Engram.Maintenance.Prune.batched(
+        fn batch ->
+          ids = from(k in Key, where: k.expires_at <= ^now, select: k.id, limit: ^batch)
 
-    {n, _} =
-      Repo.delete_all(from(k in Key, where: k.id in subquery(ids)), skip_tenant_check: true)
+          {n, _} =
+            Repo.delete_all(from(k in Key, where: k.id in subquery(ids)),
+              skip_tenant_check: true
+            )
 
-    if n == batch, do: prune_batches(now, batch, acc + n), else: acc + n
+          n
+        end,
+        batch
+      )
+
+    {:ok, n}
   end
 
   defp decrypt_response(ciphertext, nonce, dek, user_id, key) do
