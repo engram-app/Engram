@@ -15,14 +15,13 @@ defmodule Engram.DataMigrations.NoteSizes do
   """
   @behaviour Engram.DataMigration
 
-  @max_fixed 50_000
-
   import Ecto.Query
 
   alias Engram.Backfill.IdWindows
   alias Engram.Notes.Note
 
   @batch 1_000
+  @max_fixed 50_000
 
   @impl true
   def name, do: "note_sizes"

@@ -5,9 +5,11 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
   alias Engram.DataMigrations
   alias Engram.DataMigrations.IndexVersions
   alias Engram.KeywordIndex
+  alias Engram.Maintenance.Cursor
   alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
   alias Engram.QueryRecorder
+  alias Engram.Vaults
   alias Engram.Workers.{EmbedNote, RebuildStaleNote, ReconcileEmbeddings, RefreshKeywordVectors}
 
   # The test embedder declares no model, which turns model tracking off; name
@@ -129,9 +131,9 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       insert(:subscription, user: user, tier: "pro", status: "active")
       note = current_note(user, chunker_version: nil, keyword_version: nil)
       :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
-      {:ok, _} = Engram.Vaults.delete_vault(user, note.vault_id)
+      {:ok, _} = Vaults.delete_vault(user, note.vault_id)
 
-      assert {:ok, _} = Engram.Vaults.restore_vault(user, note.vault_id)
+      assert {:ok, _} = Vaults.restore_vault(user, note.vault_id)
       assert_enqueued(worker: ReconcileEmbeddings, args: %{"mode" => "reverify"})
 
       assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
@@ -154,12 +156,12 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
 
       {:ok, _} = ReconcileEmbeddings.version_check(note.vault_id)
       {:ok, _} = ReconcileEmbeddings.version_check(note.vault_id)
-      assert length(Engram.Maintenance.Cursor.with_prefix("reconcile:version_check")) == 1
+      assert length(Cursor.with_prefix("reconcile:version_check")) == 1
 
       assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
       assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
       refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => other.id})
-      assert Engram.Maintenance.Cursor.with_prefix("reconcile:version_check") == []
+      assert Cursor.with_prefix("reconcile:version_check") == []
     end
 
     # Red on 5be4a3373: the request rode in job args, and a later re-verify
@@ -186,9 +188,9 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
     test "the request clears only after a complete version-term run" do
       :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
       {:ok, _} = ReconcileEmbeddings.version_check()
-      assert Engram.Maintenance.Cursor.get("reconcile:version_check")
+      assert Cursor.get("reconcile:version_check")
       assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
-      refute Engram.Maintenance.Cursor.get("reconcile:version_check")
+      refute Cursor.get("reconcile:version_check")
       # A plain re-verify with no request does not run the version term.
       assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
     end
