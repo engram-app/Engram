@@ -8,8 +8,8 @@ defmodule Engram.DataMigrations.IndexVersions do
   of them is a new, not-done migration.
 
   The versions are `Engram.Rebuild.target_versions/0`: the build's while
-  `INDEX_REBUILD=on`, else the pinned pre-v5 versions (today's build, so
-  `off` changes nothing). A stamp bump past the pins renames nothing and
+  `INDEX_REBUILD=on` or once their pass completed (`completed?/1`), else the
+  pinned pre-v5 versions. A stamp bump past the pins renames nothing and
   rebuilds nothing until the switch is `on`, which reopens the migration.
   """
   @behaviour Engram.DataMigration
@@ -20,14 +20,32 @@ defmodule Engram.DataMigrations.IndexVersions do
   alias Engram.Indexing
   alias Engram.Notes.Note
   alias Engram.Rebuild
+  alias Engram.Repo
   alias Engram.Vaults.Vault
 
   @impl true
-  def name do
-    {chunker, keyword} = Rebuild.target_versions()
+  def name, do: prefix(Rebuild.target_versions()) <> (Indexing.embed_model() || "none")
 
-    "index_versions:chunker=#{chunker},keyword=#{keyword},model=#{Indexing.embed_model() || "none"}"
+  @doc """
+  True once a pass at `{chunker, keyword}` has completed under ANY embed
+  model: every content-current note then held those versions. The model is
+  left out because it has its own stale term (`stale_dynamic/1`), so a model
+  change must not send `off` back to the pre-v5 pins. Read by
+  `Rebuild.target_versions/0` to make the build's versions `off`'s target.
+  """
+  @spec completed?({pos_integer(), pos_integer()}) :: boolean()
+  def completed?(versions) do
+    pattern = prefix(versions) <> "%"
+
+    Repo.exists?(
+      from(e in DataMigrations.Entry,
+        where: like(e.name, ^pattern) and e.version >= ^version() and not is_nil(e.completed_at)
+      )
+    )
   end
+
+  defp prefix({chunker, keyword}),
+    do: "index_versions:chunker=#{chunker},keyword=#{keyword},model="
 
   @impl true
   def version, do: 1

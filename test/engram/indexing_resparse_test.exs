@@ -291,6 +291,8 @@ defmodule Engram.IndexingResparseTest do
   test "before the v5 pass the job stamps the pinned keyword version", ctx do
     %{user: user, note: note} = ctx
     Engram.ServiceConfig.put_override(:rebuild_pinned_versions, Engram.Rebuild.pinned_versions())
+    # A cached "the build's pass completed" from an earlier test would target the build.
+    Engram.Cache.clear_local(:rebuild)
 
     Repo.update_all(from(n in Notes.Note, where: n.id == ^note.id), [set: [keyword_version: nil]],
       skip_tenant_check: true

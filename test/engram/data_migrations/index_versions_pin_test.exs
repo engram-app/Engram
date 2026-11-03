@@ -35,6 +35,8 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
 
   defp mode!(mode), do: ServiceConfig.put_override(:index_rebuild, mode)
 
+  defp complete!(name), do: DataMigrations.mark_done(name, IndexVersions.version())
+
   defp stamped_note(chunker, keyword) do
     user = insert(:user)
 
@@ -81,6 +83,49 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
       assert :ok = perform_job(ReconcileEmbeddings, %{})
 
       for note <- notes, worker <- [EmbedNote, RebuildStaleNote, RefreshKeywordVectors] do
+        refute_enqueued(worker: worker, args: %{"note_id" => note.id})
+      end
+    end
+  end
+
+  describe "after the build's pass completed, off is the steady state" do
+    # Prod, 2026-11-01: the ledger closed the v5 pass. `off` then targets the
+    # build, so an edit is stamped with the versions its points really hold.
+    for mode <- ["off", "dry_run"] do
+      test "#{mode}: the target is the build once its ledger row is complete" do
+        complete!("index_versions:chunker=5,keyword=5,model=voyage-4-large")
+        mode!(unquote(mode))
+
+        assert Rebuild.target_versions() == {5, 5}
+        assert IndexVersions.name() =~ "index_versions:chunker=5,keyword=5,"
+        assert EmbedNote.version_stale?(stamped_note(3, 2))
+        refute EmbedNote.version_stale?(stamped_note(5, 5))
+      end
+    end
+
+    test "any embed model's completed row counts: the model has its own term" do
+      complete!("index_versions:chunker=5,keyword=5,model=some-older-model")
+      mode!("off")
+
+      assert Rebuild.target_versions() == {5, 5}
+    end
+
+    # Self-host on old data: only the pre-v5 row (or none) is complete. The
+    # pins hold, so its {3, 2} notes stay current and nothing re-embeds.
+    test "off without a completed build row keeps the pins, so old data stays current" do
+      complete!("index_versions:chunker=3,keyword=2,model=voyage-4-large")
+      complete!("index_versions:chunker=5,keyword=4,model=voyage-4-large")
+      DataMigrations.note_open("index_versions:chunker=5,keyword=5,model=voyage-4-large", 1)
+      mode!("off")
+
+      assert Rebuild.target_versions() == {3, 2}
+      note = stamped_note(3, 2)
+      refute EmbedNote.version_stale?(note)
+
+      expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("Voyage called") end)
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+
+      for worker <- [EmbedNote, RebuildStaleNote, RefreshKeywordVectors] do
         refute_enqueued(worker: worker, args: %{"note_id" => note.id})
       end
     end
@@ -137,6 +182,17 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
         assert reloaded.embed_hash == reloaded.content_hash
         assert {reloaded.chunker_version, reloaded.keyword_version} == {3, 2}
       end
+    end
+
+    test "off after the pass completed: EmbedNote stamps the build, 5 / 5", %{note: note} do
+      complete!("index_versions:chunker=5,keyword=5,model=voyage-4-large")
+      mode!("off")
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert reloaded.embed_hash == reloaded.content_hash
+      assert {reloaded.chunker_version, reloaded.keyword_version} == {5, 5}
     end
   end
 end
