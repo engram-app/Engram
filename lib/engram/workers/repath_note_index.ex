@@ -73,7 +73,7 @@ defmodule Engram.Workers.RepathNoteIndex do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"bulk" => true}} = job) do
-    if Engram.Rebuild.mode() == :on, do: Engram.Rebuild.hold(job), else: repath(job)
+    if Engram.Rebuild.holding?(), do: Engram.Rebuild.hold(job), else: repath(job)
   end
 
   def perform(%Oban.Job{} = job), do: repath(job)

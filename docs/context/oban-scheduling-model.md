@@ -69,9 +69,10 @@ assert no tenant-table query reaches it).
 
 - **No two entries share a minute of the day.** They share the 2-slot
   `maintenance` queue and one database. `ObanCronTest` enforces this globally.
-- Minute map: reconcile `:02` every 3 h plus the 04:02 re-verify (`:x7`
-  is free since R6), the stalled-checkout scan `:x4/:x9`, hourly jobs on
-  `:x3/:x8` or `:10`, dailies on `:00/:16/:25/:30/:40`.
+- Minute map: reconcile `:02` every 3 h plus the 04:02 re-verify, the
+  rebuild-held release `:07` (`ReleaseRebuildHeld`), the stalled-checkout
+  scan `:x4/:x9`, hourly jobs on `:x3/:x8` or `:10`, dailies on
+  `:00/:16/:25/:30/:40`.
 - Cheap cleanup and retention run hourly or more often, so each run is small.
 - A job whose output is an alert (Paddle drift, fair-use) runs at the cadence
   of the question it answers. Running it more often only repeats the alert.

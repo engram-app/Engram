@@ -41,8 +41,9 @@ defmodule Engram.Rebuild do
   ## Other writers while `on` (Task 16.4)
 
   A DEK rotation (`RotateUserDek`) and a bulk repath (a folder rename moving
-  over 100 notes) are held (`hold/1`) and write nothing until the pass is
-  off; a single-note rename still repaths. The recap cron (`IndexCapMaintenance`)
+  over 100 notes) are held (`hold/1`) and write nothing until the switch
+  leaves `on` (`holding?/0`, a budget halt still holds); a single-note
+  rename still repaths. The recap cron (`IndexCapMaintenance`)
   is already a no-op.
 
   ## Pacing (Task 16.2)
@@ -452,7 +453,16 @@ defmodule Engram.Rebuild do
     do: Engram.Jobs.capped_backoff(@gate_snooze, snoozed, @gate_snooze_max, 0.25)
 
   @doc """
-  Parks `job` until the pass is no longer `on` (Task 16.4) and returns `:ok`
+  True while the switch reads `on`, halted or not: the writers Task 16.4
+  keeps out of the pass (bulk repaths, DEK rotations) wait on this, not on
+  `mode/0`. A budget halt only pauses the pass; raising the budget resumes
+  it, so a DEK rotation let go during a halt could still be running then.
+  """
+  @spec holding?() :: boolean()
+  def holding?, do: ServiceConfig.get(:index_rebuild, "off") == "on"
+
+  @doc """
+  Parks `job` until `holding?/0` is false (Task 16.4) and returns `:ok`
   for the worker to return. Queues a `suspended` copy, which Oban never
   stages or fetches, so a held job writes nothing while it waits;
   `release_held/0` frees it. A snooze instead rewrites the job row (a
@@ -482,12 +492,13 @@ defmodule Engram.Rebuild do
   end
 
   @doc """
-  Makes every job `hold/1` parked available again once the pass is not `on`.
-  Returns how many it released. Run hourly by `Engram.Workers.ReleaseRebuildHeld`.
+  Makes every job `hold/1` parked available again once `holding?/0` is
+  false. Returns how many it released. Run hourly by
+  `Engram.Workers.ReleaseRebuildHeld`.
   """
   @spec release_held() :: non_neg_integer()
   def release_held do
-    if mode() == :on do
+    if holding?() do
       0
     else
       {count, _} =

@@ -39,6 +39,23 @@ defmodule Engram.Workers.RotateUserDekTest do
       assert reloaded.dek_version == 2
     end
 
+    test "a rotation held by the rebuild runs once released", %{user: user} do
+      Engram.ServiceConfig.put_override(:index_rebuild, "on")
+      assert :ok = perform_job(RotateUserDek, %{"user_id" => user.id})
+      assert [%{state: "suspended"}] = all_enqueued(worker: RotateUserDek)
+
+      Engram.ServiceConfig.put_override(:index_rebuild, "off")
+      assert :ok = perform_job(Engram.Workers.ReleaseRebuildHeld, %{})
+      assert %{success: 1} = Oban.drain_queue(queue: :crypto_backfill)
+
+      reloaded =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      assert reloaded.dek_version == 2
+    end
+
     test "discards on missing user (no retry storms)" do
       assert {:discard, :user_deleted} =
                perform_job(RotateUserDek, %{"user_id" => Ecto.UUID.generate()})

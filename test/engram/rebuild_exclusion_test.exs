@@ -87,6 +87,29 @@ defmodule Engram.RebuildExclusionTest do
       assert meta["held"] == "rebuild"
     end
 
+    test "the release leaves other suspended jobs alone and reports zero with none held" do
+      ServiceConfig.put_override(:index_rebuild, "off")
+      assert Rebuild.release_held() == 0
+
+      Oban.insert!(RotateUserDek.new(%{user_id: Ecto.UUID.generate()}, state: "suspended"))
+      assert Rebuild.release_held() == 0
+      assert [%{state: "suspended"}] = all_enqueued(worker: RotateUserDek)
+    end
+
+    # A halt only pauses the pass: a raised budget resumes it, so a rotation
+    # let go during the halt could overlap it.
+    test "a budget halt keeps holding, and releases nothing" do
+      on!()
+      Rebuild.set_budget(5)
+      assert Rebuild.debit(10) == :halt
+      assert Rebuild.mode() == :off
+
+      user = insert(:user)
+      assert :ok = perform_job(RotateUserDek, %{user_id: user.id})
+      assert Rebuild.release_held() == 0
+      assert [%{state: "suspended"}] = all_enqueued(worker: RotateUserDek)
+    end
+
     test "a DEK rotation runs when the pass is off" do
       ServiceConfig.put_override(:index_rebuild, "off")
 
