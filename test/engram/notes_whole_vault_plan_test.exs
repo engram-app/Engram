@@ -16,8 +16,9 @@ defmodule Engram.NotesWholeVaultPlanTest do
   # `notes_recent_index`, filtering `id`).
   #
   # Each test asserts the custom plan (the call's own values) and the
-  # generic plan (`EXPLAIN (GENERIC_PLAN)`), so the plan is right whichever
-  # one the statement runs on. The tenancy shape is set as
+  # generic plan (`PREPARE` under `force_generic_plan`, via
+  # `QueryPlan.after_runs/3`), so the plan is right whichever one the
+  # statement runs on after its 5th execution. The tenancy shape is set as
   # `NotesGenericPlanTest` sets it: `n_distinct = 40`, so the planner sees
   # many vaults and this one as a fraction of the table. Not async: the
   # ALTER TABLE locks `notes` until the sandbox rolls back.

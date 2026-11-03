@@ -84,15 +84,21 @@ defmodule Engram.QueryPlan do
   end
 
   @doc """
-  The plans the statement `fun` sends would run on, once it is a reused
-  prepared statement. Runs `fun` `runs` times (7: past the 5 custom plans
-  Postgres tries before it may switch a named statement to a generic plan),
-  takes the last statement of this process whose SQL matches `pattern`, and
-  returns `%{custom:, generic:}`: the plan for its recorded values, and
-  the generic plan (`generic_plan/2`), the plan with no values that a 6th
-  execution may switch to. Asserting both pins the plan whichever one runs. Unlike
-  `generic_plan/2`, seq scans stay enabled: the question is which plan
-  Postgres picks, not whether an index can serve it.
+  The custom and the generic plan of the statement `fun` sends: runs `fun`
+  `runs` times, takes the last statement of this process whose SQL matches
+  `pattern`, and returns `%{custom:, generic:}`.
+
+    * `custom`: a one-off parameterised EXPLAIN with the recorded values,
+      the plan each of the first 5 executions of a prepared statement gets;
+    * `generic`: `generic_plan/2` (a fresh `PREPARE` under
+      `force_generic_plan`, seq scans left on), the plan with no values a
+      6th or later execution may switch to.
+
+  Neither reads the prepared statement the runs built, so the runs do not
+  change what is asserted: they exercise the call as prod repeats it and
+  record its real SQL and values. What asserting BOTH plans proves is
+  that the statement reads the right index whichever plan Postgres picks
+  after the 5th execution; it does not show which one it picked.
   """
   @spec after_runs((-> term()), Regex.t(), pos_integer()) :: %{
           custom: String.t(),

@@ -437,9 +437,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       end
     end
 
-    # The version term defeats the `notes_reconcile_due_v2` partial index, so
-    # while it is on the sweep asks one id window at a time (#2276); once
-    # IndexVersions is done the index serves it, one statement per page.
+    # The version term defeats the `notes_reconcile_due_v2` partial index,
+    # so while it is on the sweep asks one id window at a time (#2276); once
+    # IndexVersions is done the index serves it (with `due_only/3`), one
+    # statement per page.
     found = %{now: now, kick?: get_in(job.meta, ["kick"]) == true, qdrant_open?: qdrant_open?}
 
     sweep = fn stale, vaults, windowed? ->
