@@ -104,7 +104,7 @@ defmodule Engram.Bookkeeping.Drain do
     {"note_index_state",
      """
      SELECT DISTINCT user_id FROM note_index_state
-     WHERE payload_hash IS NULL AND chunk_count > 0
+     WHERE payload_hash IS NULL AND points > 0
        AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
      """}
   ]

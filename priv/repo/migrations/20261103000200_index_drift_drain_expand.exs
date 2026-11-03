@@ -21,7 +21,8 @@ defmodule Engram.Repo.Migrations.IndexDriftDrainExpand do
       `substring .. FOR 1` is a slice read of the stored value (as
       `NoteBody`'s nonce split), never a de-TOAST.
     * `note_index_state_unstamped`: an indexed note with no `payload_hash`,
-      `ReconcileNotePayloads`. `chunk_count > 0` stands for "has points".
+      `ReconcileNotePayloads`. `points` is the chunk counter the chunks
+      triggers keep exact (`chunk_count` is set only on floored or merged notes).
     * `notes_unresolved_folder`: a live note in a non-root folder whose
       `folder_ref_id` is NULL, `FolderTable`. A root note keeps a NULL
       reference forever and a NOT NULL `folder_hmac` (the HMAC of ""), so the
@@ -35,8 +36,9 @@ defmodule Engram.Repo.Migrations.IndexDriftDrainExpand do
   that changes a ciphertext is no longer heap-only: it adds entries to the
   primary key and `note_bodies_user_note` (two small keys), and to these
   indexes only for a format-0 row. A head-only update stays HOT. On `note_index_state` the predicate columns are `payload_hash`
-  and `chunk_count`, written a few times per index run (not per chunk), which
-  costs two small index entries on those updates. The three log tables are
+  and `points`: an index run's chunk statements and its stamp are no longer
+  heap-only there (two small index entries each); a content edit with no index
+  run does not touch them. The three log tables are
   insert-mostly.
 
   Additive: the previous release ignores them. Each is dropped by name first,
@@ -55,7 +57,7 @@ defmodule Engram.Repo.Migrations.IndexDriftDrainExpand do
     {"vault_index_update_log_envelope_legacy", "vault_index_update_log", "user_id",
      "octet_length(update_nonce) = 12 AND octet_length(update_ciphertext) > 16"},
     {"note_index_state_unstamped", "note_index_state", "user_id",
-     "payload_hash IS NULL AND chunk_count > 0"},
+     "payload_hash IS NULL AND points > 0"},
     {"notes_unresolved_folder", "notes", "user_id",
      "kind = 'note' AND deleted_at IS NULL AND folder_ref_id IS NULL AND octet_length(folder_ciphertext) > 16"}
   ]

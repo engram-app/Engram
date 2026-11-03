@@ -70,12 +70,29 @@ defmodule Engram.Bookkeeping.DrainTest do
       assert_enqueued(worker: BackfillLinkKeys, args: %{"user_id" => u.id})
     end
 
+    # Red on c0c603cb9: its index read `chunk_count > 0`, which ordinary
+    # full-tier notes never set, so a lost write race was never found.
+    test "an ordinary indexed note whose stamp was lost queues the payload heal", %{
+      user: u,
+      vault: v
+    } do
+      n = write!(u, v, "indexed.md")
+      Engram.Fixtures.insert_chunk!(u, n, Ecto.UUID.generate())
+
+      sql!("UPDATE notes SET payload_hash = NULL, chunk_count = NULL WHERE id = $1", [
+        Ecto.UUID.dump!(n.id)
+      ])
+
+      assert %{payload: 1} = Drain.run()
+      assert_enqueued(worker: Engram.Workers.ReconcileNotePayloads, args: %{"user_id" => u.id})
+    end
+
     test "an unstamped state row with no points is a false positive the worker's predicate drops",
          %{user: u, vault: v} do
       n = write!(u, v, "p.md")
 
       sql!(
-        "UPDATE note_index_state SET chunk_count = 3, payload_hash = NULL WHERE note_id = $1",
+        "UPDATE note_index_state SET points = 3, payload_hash = NULL WHERE note_id = $1",
         [Ecto.UUID.dump!(n.id)]
       )
 
