@@ -181,8 +181,9 @@ fn may_have_code(s: &str) -> bool {
 /// Pushes code ranges, offset by `base`. Returns the start of a fenced or
 /// raw-HTML block that runs to the end of `s`, i.e. may still be open.
 fn segment_code_ranges(s: &str, base: usize, out: &mut Vec<(usize, usize)>) -> Option<usize> {
-    // pulldown-cmark 0.13.4 panics on some valid input (an unwrap in
-    // parse.rs, e.g. "> - [x]: /u\n    \r"). Rustler would turn that into an
+    // pulldown-cmark 0.13.4 panicked on some valid input (an unwrap in
+    // parse.rs, e.g. "> - [x]: /u\n    \r"); 0.13.6 fixes that shape, and the
+    // guard stays as belt-and-braces for the next parser bug. Rustler would turn that into an
     // exception and the note could not be saved or indexed. Losing one
     // segment's code ranges is the lesser harm: its links and tags count.
     let mut ranges = Vec::new();
