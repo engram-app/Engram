@@ -88,6 +88,16 @@ defmodule Engram.Folders.Rows do
   def carry_attachment_ref(stamp, stamp, new_nonce), do: [folder_ref_stamp: new_nonce]
   def carry_attachment_ref(_stamp, _old_nonce, _new_nonce), do: []
 
+  @doc """
+  The stamp `FolderTable` leaves on an attachment whose path did not decrypt
+  under `path_nonce`: the nonce behind a 0 byte. It is not the nonce, so
+  readers never trust the reference and read the row by path (and count it
+  unreadable), but it is excluded from `attachments_folder_ref_stale`, so the
+  drain does not re-run the user forever. A writer's fresh nonce ends it.
+  """
+  @spec unreadable_attachment_stamp(binary()) :: binary()
+  def unreadable_attachment_stamp(path_nonce), do: <<0>> <> path_nonce
+
   @doc "`a.folder_ref_stamp = a.path_nonce` on the attachment bound as `:a`."
   @spec attachment_ref_current() :: Ecto.Query.dynamic_expr()
   def attachment_ref_current,

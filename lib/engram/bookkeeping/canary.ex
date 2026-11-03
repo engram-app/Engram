@@ -23,10 +23,13 @@ defmodule Engram.Bookkeeping.Canary do
   `folder_ref` is the app-kept half: `FolderTable` has no nightly re-verify,
   and `Engram.Bookkeeping.Drain` only finds references whose drift its indexes
   describe (a NULL note reference, an attachment reference stamped for another
-  path). This counts the references a reader TRUSTS that are wrong anyway: a
-  sampled note whose folder row's `full_path_hmac` is not its `folder_hmac`,
-  and a sampled attachment, stamped current, whose decrypted path is not in
-  its folder row (a writer that stamped a wrong folder). Attachments are
+  path). This counts the references that are wrong anyway: a sampled note
+  whose folder row is deleted or has another `full_path_hmac` than its
+  `folder_hmac` (no index can find a reference to a deleted row), and a
+  sampled attachment, stamped current, whose decrypted path is not in its
+  folder row (a writer that stamped a wrong folder). Users under a DEK
+  rotation are skipped: their rows and folder rows are re-keyed in separate
+  sweeps, so a mid-rotation compare would report drift that is not there. Attachments are
   sampled like notes, on their own ids; their paths are decrypted under each
   sampled user's key, counts only leave this module.
 
@@ -122,18 +125,29 @@ defmodule Engram.Bookkeeping.Canary do
     }
   end
 
-  # Live notes whose reference names a live folder row of another path. A NULL
-  # reference (no row yet) is the drain's, not a trusted wrong one.
+  # Live notes whose reference names a deleted folder row, or a live one of
+  # another path. A NULL reference (no row yet) is the drain's.
   defp wrong_note_refs(repo, ids) do
     from(n in "notes",
-      join: f in "folders",
-      on: f.id == n.folder_ref_id and is_nil(f.deleted_at),
+      as: :a,
+      left_join: f in "folders",
+      on: f.id == n.folder_ref_id,
       where:
         n.id in type(^ids, {:array, Ecto.UUID}) and n.kind == "note" and is_nil(n.deleted_at) and
-          (f.full_path_hmac != n.folder_hmac or f.vault_id != n.vault_id),
+          not is_nil(n.folder_ref_id) and not exists(rotating()) and
+          (is_nil(f.id) or not is_nil(f.deleted_at) or f.full_path_hmac != n.folder_hmac or
+             f.vault_id != n.vault_id),
       select: count()
     )
     |> repo.one()
+  end
+
+  # The sampled row's (bound as `:a`) user is mid DEK rotation.
+  defp rotating do
+    from(u in "users",
+      where: u.id == parent_as(:a).user_id and not is_nil(u.dek_rotation_locked_at),
+      select: 1
+    )
   end
 
   # Live attachments a reader trusts (stamp current) whose decrypted path is not
@@ -147,6 +161,7 @@ defmodule Engram.Bookkeeping.Canary do
       on: f.id == a.folder_ref_id and is_nil(f.deleted_at),
       where: a.id in type(^ids, {:array, Ecto.UUID}) and is_nil(a.deleted_at),
       where: ^Rows.attachment_ref_current(),
+      where: is_nil(a.dek_version_pending) and not exists(rotating()),
       select: %{
         id: type(a.id, Ecto.UUID),
         user_id: type(a.user_id, Ecto.UUID),

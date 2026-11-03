@@ -185,6 +185,51 @@ defmodule Engram.Bookkeeping.DrainTest do
       assert %{folder: 0} = Drain.run()
     end
 
+    # One unstamped row whose path cannot be decrypted is logged once, then
+    # left out of the index until a writer gives it a fresh nonce: it must not
+    # re-run its user's FolderTable pass on every tick.
+    test "an unreadable unstamped attachment is logged once, then skipped until rewritten", %{
+      user: u,
+      vault: v
+    } do
+      att = put_att!(u, v, "Bad/x.png")
+
+      sql!(
+        "UPDATE attachments SET folder_ref_stamp = NULL, path_ciphertext = '\\x00'::bytea WHERE id = $1",
+        [Ecto.UUID.dump!(att.id)]
+      )
+
+      :ok = DataMigrations.mark_done(FolderTable.name(), FolderTable.version())
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert %{folder: 1, folder_blocked: 1} = Drain.run()
+        end)
+
+      assert log =~ "attachment path did not decrypt"
+      assert %{folder: 0} = Drain.run()
+
+      # Readers still never trust it: the stamp is not its nonce.
+      %{rows: [[false]]} =
+        sql!("SELECT folder_ref_stamp = path_nonce FROM attachments WHERE id = $1", [
+          Ecto.UUID.dump!(att.id)
+        ])
+
+      # A writer's fresh nonce ends the skip: the upload re-points and stamps.
+      {:ok, _} =
+        Engram.Attachments.upsert_attachment(u, v, %{
+          "path" => "Bad/x.png",
+          "content_base64" => Base.encode64("new bytes")
+        })
+
+      assert %{folder: 0} = Drain.run()
+
+      %{rows: [[true]]} =
+        sql!("SELECT folder_ref_stamp = path_nonce FROM attachments WHERE id = $1", [
+          Ecto.UUID.dump!(att.id)
+        ])
+    end
+
     test "an open FolderTable ledger is left to the hourly runner", %{user: u, vault: v} do
       write!(u, v, "Open/n.md")
       sql!("UPDATE notes SET folder_ref_id = NULL")

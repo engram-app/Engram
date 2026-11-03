@@ -10,6 +10,11 @@ defmodule Engram.Repo.Migrations.IndexAttachmentsFolderRefStaleExpand do
   to `FolderTable`, which replaces that migration's nightly re-verify walk.
   Its predicate must equal the drain probe's text (`drain_test.exs` pins it).
 
+  A row whose path did not decrypt is stamped `'\\x00' || path_nonce`
+  (`Rows.unreadable_attachment_stamp/1`) and leaves the index until a writer
+  gives it a fresh nonce, so one unreadable row cannot re-queue its user on
+  every drain tick.
+
   Empty in steady state: every writer stamps (`Rows.attachment_ref/2`). It
   holds every live attachment between this migration and the end of the
   `FolderTable` version 2 pass that stamps them.
@@ -30,6 +35,7 @@ defmodule Engram.Repo.Migrations.IndexAttachmentsFolderRefStaleExpand do
     execute """
     CREATE INDEX CONCURRENTLY attachments_folder_ref_stale ON attachments (user_id)
     WHERE deleted_at IS NULL AND folder_ref_stamp IS DISTINCT FROM path_nonce
+      AND folder_ref_stamp IS DISTINCT FROM ('\\x00'::bytea || path_nonce)
     """
   end
 

@@ -564,13 +564,14 @@ defmodule Engram.DataMigrations.FolderTable do
             SELECT id, vault_id, dek_version, path_ciphertext, path_nonce, folder_ref_id FROM attachments
             WHERE user_id = $1 AND deleted_at IS NULL AND ($2::uuid IS NULL OR id > $2)
               AND folder_ref_stamp IS DISTINCT FROM path_nonce
+              AND folder_ref_stamp IS DISTINCT FROM ('\\x00'::bytea || path_nonce)
             ORDER BY id LIMIT $3
             """,
             [dump(ctx.user_id), after_id, ctx.batch]
           )
 
         {tree, stats, wanted} =
-          Enum.reduce(rows, {tree, stats, []}, fn [id, vault, dv, ct, nonce, _current],
+          Enum.reduce(rows, {tree, stats, []}, fn [id, vault, dv, ct, nonce, current],
                                                   {tree, stats, wanted} ->
             case decrypt_path(ctx, id, dv, ct, nonce) do
               {:ok, path} ->
@@ -581,10 +582,16 @@ defmodule Engram.DataMigrations.FolderTable do
                   end
 
                 # Unstamped: written even when the reference is right, to stamp it.
-                {tree, stats, [{id, leaf, nonce} | wanted]}
+                {tree, stats, [{id, leaf, nonce, nonce} | wanted]}
 
+              # Logged once, then marked unreadable at this nonce: out of the
+              # drain's index until a writer rewrites the path (a fresh nonce),
+              # and never trusted by readers (the stamp is not the nonce).
               :error ->
-                {tree, blocked(stats, "attachment path", id), wanted}
+                stamp = Rows.unreadable_attachment_stamp(nonce)
+
+                {tree, blocked(stats, "attachment path", id),
+                 [{id, current, nonce, stamp} | wanted]}
             end
           end)
 
@@ -600,26 +607,30 @@ defmodule Engram.DataMigrations.FolderTable do
   end
 
   # By id, locked rows skipped. The set-based form of `Rows.attachment_ref/2`:
-  # stamped with the nonce the path was decrypted under, and only where the row
-  # still holds it (a path rewritten since is the writer's, stamped by it).
+  # `{id, folder, nonce, stamp}` is written only where the row still holds the
+  # nonce its path was read under (a path rewritten since is the writer's,
+  # stamped by it). The stamp is the nonce, or `Rows.unreadable_attachment_stamp/1`
+  # for a path that did not decrypt (its reference is left as it was).
   # Returns the rows updated.
   defp point_attachments(_repo, []), do: 0
 
   defp point_attachments(repo, wanted) do
-    {ids, leaves, nonces} =
-      Enum.reduce(Enum.reverse(wanted), {[], [], []}, fn {id, leaf, nonce}, {i, l, n} ->
-        {[id | i], [leaf | l], [nonce | n]}
+    {ids, leaves, nonces, stamps} =
+      Enum.reduce(Enum.reverse(wanted), {[], [], [], []}, fn {id, leaf, nonce, stamp},
+                                                             {i, l, n, st} ->
+        {[id | i], [leaf | l], [nonce | n], [stamp | st]}
       end)
 
     %{num_rows: count} =
       repo.query!(
         """
         WITH locked AS (SELECT id FROM attachments WHERE id = ANY($1::uuid[]) FOR UPDATE SKIP LOCKED)
-        UPDATE attachments a SET folder_ref_id = v.fid, folder_ref_stamp = v.nonce
-        FROM unnest($1::uuid[], $2::uuid[], $3::bytea[]) AS v(id, fid, nonce), locked l
+        UPDATE attachments a SET folder_ref_id = v.fid, folder_ref_stamp = v.stamp
+        FROM unnest($1::uuid[], $2::uuid[], $3::bytea[], $4::bytea[]) AS v(id, fid, nonce, stamp),
+             locked l
         WHERE a.id = v.id AND l.id = a.id AND a.path_nonce = v.nonce
         """,
-        [ids, leaves, nonces]
+        [ids, leaves, nonces, stamps]
       )
 
     count

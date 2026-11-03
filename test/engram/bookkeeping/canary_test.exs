@@ -127,6 +127,45 @@ defmodule Engram.Bookkeeping.CanaryTest do
       assert drift_of(Canary.run()) == %{folder_ref: 1}
     end
 
+    # No index can find a reference to a soft-deleted folder row, so the
+    # canary counts it.
+    test "a note whose reference names a deleted folder row", ctx do
+      %{user: u, vault: v} = ctx
+      {:ok, n} = Notes.upsert_note(u, v, %{"path" => "F/n.md", "content" => "x"}, actor: "api")
+
+      Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [
+        Ecto.UUID.dump!(folder_id(u, "F"))
+      ])
+
+      assert drift_of(Canary.run()) == %{folder_ref: 1}
+      _ = n
+    end
+
+    # Mid-rotation, rows and folder rows are re-keyed in separate sweeps: a
+    # compare under the new key would report drift that is not there.
+    test "a user under a DEK rotation is not judged", ctx do
+      %{user: u, vault: v} = ctx
+      att = put_att(u, v, "F/a.png")
+      {:ok, n} = Notes.upsert_note(u, v, %{"path" => "F/n.md", "content" => "x"}, actor: "api")
+      put_att(u, v, "G/b.png")
+
+      Repo.query!(
+        "UPDATE attachments SET folder_ref_id = $2, folder_ref_stamp = path_nonce WHERE id = $1",
+        [Ecto.UUID.dump!(att.id), Ecto.UUID.dump!(folder_id(u, "G"))]
+      )
+
+      Repo.query!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [
+        Ecto.UUID.dump!(n.id),
+        Ecto.UUID.dump!(folder_id(u, "G"))
+      ])
+
+      Repo.query!("UPDATE users SET dek_rotation_locked_at = now() WHERE id = $1", [
+        Ecto.UUID.dump!(u.id)
+      ])
+
+      assert drift_of(Canary.run()) == %{}
+    end
+
     test "control: an unstamped wrong reference is the drain's, not trusted drift", ctx do
       %{user: u, vault: v} = ctx
       att = put_att(u, v, "F/a.png")

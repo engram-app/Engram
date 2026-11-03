@@ -131,6 +131,7 @@ defmodule Engram.Bookkeeping.Drain do
      """
      SELECT DISTINCT user_id FROM attachments
      WHERE deleted_at IS NULL AND folder_ref_stamp IS DISTINCT FROM path_nonce
+       AND folder_ref_stamp IS DISTINCT FROM ('\\x00'::bytea || path_nonce)
        AND ($1::uuid IS NULL OR user_id = $1)
        AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 10
      """}

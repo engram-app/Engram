@@ -211,6 +211,24 @@ defmodule Engram.Folders.ReadsTest do
       assert stale_count() == 0
       assert "Z/B/b.png" in live_paths(u, v)
     end
+
+    # The restore's own stamp: a row that was already stale when it was
+    # deleted (the previous release moved it, then it went to the trash) comes
+    # back re-pointed and stamped, not left for the drain.
+    test "restore stamps a row that was stale when it was deleted", %{user: u, vault: v} do
+      att = put_att(u, v, "P/a.png")
+      op = Ecto.UUID.generate()
+      assert {:ok, _} = Folders.delete(u, v, "P", recursive: true, op_id: op)
+
+      Repo.query!(
+        "UPDATE attachments SET folder_ref_id = NULL, folder_ref_stamp = NULL WHERE id = $1",
+        [Ecto.UUID.dump!(att.id)]
+      )
+
+      assert {:ok, %{attachments: 1}} = Folders.restore_op(u, v, op)
+      assert stale_count() == 0
+      assert FolderRows.ref("attachments", att.id) == FolderRows.tree(u)["P"].id
+    end
   end
 
   describe "rollout: the previous release keeps writing after the backfill closed" do
