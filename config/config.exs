@@ -298,6 +298,9 @@ config :engram, Oban,
         {"38 * * * *", Engram.Workers.IdempotencyPrune},
         # Vector cache expiry: rows 72 h after insert, hourly in small batches.
         {"8 * * * *", Engram.Workers.VectorCachePrune},
+        # Jobs held while the v5 rebuild is `on` (Rebuild.hold/1) run again
+        # within the hour of it going off; a no-op while it is on (#2375).
+        {"7 * * * *", Engram.Workers.ReleaseRebuildHeld},
         # Note-version outbox copies whose FinalizeRevision job was lost
         # between commit and enqueue (#1710).
         {"43 * * * *", Engram.Workers.FinalizeRevisionSweep},

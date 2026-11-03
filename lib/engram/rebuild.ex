@@ -40,9 +40,9 @@ defmodule Engram.Rebuild do
 
   ## Other writers while `on` (Task 16.4)
 
-  A DEK rotation (`RotateUserDek`) snoozes an hour and writes nothing, and a
-  bulk repath (a folder rename moving over 100 notes) snoozes an hour; a
-  single-note rename still repaths. The recap cron (`IndexCapMaintenance`)
+  A DEK rotation (`RotateUserDek`) and a bulk repath (a folder rename moving
+  over 100 notes) are held (`hold/1`) and write nothing until the pass is
+  off; a single-note rename still repaths. The recap cron (`IndexCapMaintenance`)
   is already a no-op.
 
   ## Pacing (Task 16.2)
@@ -450,6 +450,51 @@ defmodule Engram.Rebuild do
 
   def gate_snooze(snoozed),
     do: Engram.Jobs.capped_backoff(@gate_snooze, snoozed, @gate_snooze_max, 0.25)
+
+  @doc """
+  Parks `job` until the pass is no longer `on` (Task 16.4) and returns `:ok`
+  for the worker to return. Queues a `suspended` copy, which Oban never
+  stages or fetches, so a held job writes nothing while it waits;
+  `release_held/0` frees it. A snooze instead rewrites the job row (a
+  non-HOT UPDATE) every time it wakes: 801 bulk repaths snoozing hourly were
+  ~800 updates an hour for as long as the flag stayed on (#2375).
+  """
+  @spec hold(Oban.Job.t()) :: :ok
+  def hold(%Oban.Job{} = job) do
+    Oban.insert!(
+      Oban.Job.new(job.args,
+        worker: job.worker,
+        queue: job.queue,
+        priority: job.priority,
+        max_attempts: job.max_attempts,
+        meta: %{"held" => "rebuild"},
+        state: "suspended",
+        # The running original still holds the unique slot.
+        unique: false
+      )
+    )
+
+    :ok
+  end
+
+  @doc """
+  Makes every job `hold/1` parked available again once the pass is not `on`.
+  Returns how many it released. Run hourly by `Engram.Workers.ReleaseRebuildHeld`.
+  """
+  @spec release_held() :: non_neg_integer()
+  def release_held do
+    if mode() == :on do
+      0
+    else
+      {count, _} =
+        from(j in Oban.Job,
+          where: j.state == "suspended" and fragment("?->>'held' = 'rebuild'", j.meta)
+        )
+        |> Repo.update_all(set: [state: "available", scheduled_at: DateTime.utc_now()])
+
+      count
+    end
+  end
 
   # A check costs the bucket 1 token (Hammer has no read without a hit).
   defp tpm_room?,

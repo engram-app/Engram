@@ -21,9 +21,9 @@ defmodule Engram.Workers.RepathNoteIndex do
   with `%{count}` and a bounded `%{outcome: :ok | :missing_points | :fallback}`
   tag, mapped to Prometheus by `Engram.PromEx.Indexing` (#753).
 
-  A bulk repath (`bulk: true`, a folder rename moving over 100 notes)
-  snoozes an hour while the v5 rebuild is `on` (Task 16.4); a single-note
-  rename still runs.
+  A bulk repath (`bulk: true`, a folder rename moving over 100 notes) is
+  held (`Engram.Rebuild.hold/1`) while the v5 rebuild is `on` (Task 16.4);
+  a single-note rename still runs.
 
   Shares the `:embed` queue with EmbedNote; repath jobs are cheap (no Voyage)
   so they don't meaningfully starve embeds.
@@ -73,7 +73,7 @@ defmodule Engram.Workers.RepathNoteIndex do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"bulk" => true}} = job) do
-    if Engram.Rebuild.mode() == :on, do: {:snooze, 3600}, else: repath(job)
+    if Engram.Rebuild.mode() == :on, do: Engram.Rebuild.hold(job), else: repath(job)
   end
 
   def perform(%Oban.Job{} = job), do: repath(job)

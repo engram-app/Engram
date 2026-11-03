@@ -22,7 +22,8 @@ defmodule Engram.Workers.RotateUserDek do
     before retry. Retrying via Oban would generate a fresh DEK and
     irreversibly corrupt the half-rotated S3 blobs.
   - `{:snooze, 60}` — another rotation is in progress; retry in 60 s
-  - `{:snooze, 3600}` — the v5 rebuild is `on`; nothing written
+  - `:ok` after `Engram.Rebuild.hold/1`: the v5 rebuild is `on`; nothing
+    written, a held copy runs once it is off
   - `{:error, reason}` — transient failure; Oban retries up to max_attempts
   - `{:discard, {:invalid_args, keys}}` — malformed job args; no retry
   """
@@ -59,9 +60,9 @@ defmodule Engram.Workers.RotateUserDek do
   # While the v5 rebuild is `on`, a rotation would re-encrypt payloads the
   # pass is rewriting: wait it out, writing nothing (Task 16.4).
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"user_id" => user_id}, attempt: attempt})
+  def perform(%Oban.Job{args: %{"user_id" => user_id}, attempt: attempt} = job)
       when is_binary(user_id) do
-    if Engram.Rebuild.mode() == :on, do: {:snooze, 3600}, else: rotate(user_id, attempt)
+    if Engram.Rebuild.mode() == :on, do: Engram.Rebuild.hold(job), else: rotate(user_id, attempt)
   end
 
   # Tolerant fall-through for malformed args (T3.2-style guard).
