@@ -27,7 +27,7 @@ defmodule Engram.PromEx.Notes do
     * `[:engram, :note_body, :sync_wrote]`: `%{count: rows}`, no metadata.
       `Engram.Notes.NoteBody.sync!/3` wrote body rows, the only writer of
       `note_bodies` since the `notes_sync_body` trigger was dropped
-      (20261103000000): the body write rate. On a release that still has the
+      (20261103120000): the body write rate. On a release that still has the
       trigger it reads zero (the trigger wrote first).
 
   Metrics:

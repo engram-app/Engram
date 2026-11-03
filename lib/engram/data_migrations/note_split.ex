@@ -3,7 +3,7 @@ defmodule Engram.DataMigrations.NoteSplit do
   Fills wave 3's narrow `notes` columns and `note_bodies` for rows written
   before the `notes_derive_core_keys` / `notes_sync_body` triggers existed
   (migration 20261021110200; `notes_sync_body` was dropped in
-  20261103000000). Every later write fills them itself, so this only
+  20261103120000). Every later write fills them itself, so this only
   catches up.
 
   The core columns are the trigger's own work: a pass touches `kind`
