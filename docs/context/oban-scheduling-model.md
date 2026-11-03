@@ -78,10 +78,11 @@ assert no tenant-table query reaches it).
   of the question it answers. Running it more often only repeats the alert.
 
 - **Daily heavy work shares one off-peak window, 10:00-11:15 UTC**, on free
-  minutes: the index re-verify (10:02), abuse sweep (10:00), snapshot (10:15),
+  minutes: the index re-verify (10:02), abuse sweep (10:00),
   inactivity cleanup (10:30), blob reconcile (10:45), orphan sweep (11:00),
   PostHog sync (11:15). `DataMigrationsRunner.reverify_hour/0` follows it
-  (`oban_cron_test.exs` pins the two together). The bulk-import hours (00-03
+  (`oban_cron_test.exs` pins the two together). DailySnapshot stays at 00:40: its row
+  is the state as of the run under yesterday's date, and it is incremental. The bulk-import hours (00-03
   UTC) and the old 04:xx cluster stay clear.
 - **Every cron worker declares its scan bound** in
   `test/engram/workers/cron_scan_bound_test.exs` (the index and the per-run

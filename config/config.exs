@@ -353,8 +353,10 @@ config :engram, Oban,
         # CIMD JWKS refresh (#1974): keeps the persisted key set fresh so the
         # token path never fetches. Schedules the sweep 1-30 s out.
         {"1-59/5 * * * *", Engram.Workers.CimdJwksSchedule},
-        # Yesterday's account and vault snapshots for the operator insights.
-        {"15 10 * * *", Engram.Workers.DailySnapshot},
+        # Yesterday's account and vault snapshots for the operator insights. Near
+        # midnight on purpose: the row is "the state as of the run" under
+        # yesterday's date. Incremental (narrow sizes, unchanged vaults copied).
+        {"40 0 * * *", Engram.Workers.DailySnapshot},
         # Account facts onto PostHog persons; no-op unless PostHog is configured.
         # :15, not :25 (upload expiry's hourly minute).
         {"15 11 * * *", Engram.Workers.PostHogPersonSync}

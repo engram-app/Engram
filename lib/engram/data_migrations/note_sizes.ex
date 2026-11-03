@@ -15,6 +15,8 @@ defmodule Engram.DataMigrations.NoteSizes do
   alias Engram.Backfill.IdWindows
   alias Engram.Notes.Note
 
+  import Ecto.Query
+
   @batch 1_000
 
   @impl true
@@ -22,6 +24,35 @@ defmodule Engram.DataMigrations.NoteSizes do
 
   @impl true
   def version, do: 1
+
+  @doc """
+  Live notes per vault: `%{vault_id, n, bytes}`, `bytes` the stored content
+  ciphertext (tag included, as `NoteBody.byte_length(:content)`). From the
+  narrow `note_index_state` once this ledger is done, else the wide `notes`
+  heap. The first binding has `vault_id`, so a caller can narrow it by vault.
+  """
+  @spec live_totals_by_vault() :: Ecto.Query.t()
+  def live_totals_by_vault do
+    if done?() do
+      from(s in Engram.Notes.NoteIndexState,
+        where: s.note_live,
+        group_by: s.vault_id,
+        select: %{
+          vault_id: s.vault_id,
+          n: count(),
+          bytes: sum(s.content_bytes + ^Engram.Crypto.Envelope.tag_bytes())
+        }
+      )
+    else
+      from(n in Note,
+        where: is_nil(n.deleted_at) and n.kind == "note",
+        group_by: n.vault_id,
+        select: %{vault_id: n.vault_id, n: count(n.id)}
+      )
+      |> Engram.Notes.NoteBody.join()
+      |> select_merge(^%{bytes: dynamic([n], sum(^Engram.Notes.NoteBody.byte_length(:content)))})
+    end
+  end
 
   @doc "True once every note's size columns are filled."
   @spec done?() :: boolean()

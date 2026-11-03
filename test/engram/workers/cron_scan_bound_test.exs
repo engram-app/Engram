@@ -29,7 +29,9 @@ defmodule Engram.Workers.CronScanBoundTest do
     Engram.Workers.ReconcileEmbeddings =>
       "partial index notes_reconcile_due, 1,000-row pages; daily budget sweep reads note_index_state",
     Engram.Workers.DailySnapshot =>
-      "per-vault chunks of 1,000, skips vaults whose change_seq is unchanged",
+      "copies vaults whose change_seq is unchanged; note counts and bytes from note_index_state",
+    Engram.Workers.PostHogPersonSync =>
+      "account facts; note counts and bytes from note_index_state (narrow), small tables otherwise",
     Engram.Workers.ClientLogsPruner => "batched deletes, 20 batches per run",
     Engram.Workers.IdempotencyPrune => "batched deletes by expiry",
     Engram.Workers.VectorCachePrune => "batched deletes by age",
@@ -49,7 +51,6 @@ defmodule Engram.Workers.CronScanBoundTest do
   @known_unbounded %{
     Engram.Workers.OrphanSweep =>
       "O(Qdrant points), daily: needs a resumable cursor at 1M points",
-    Engram.Workers.PostHogPersonSync => "fleet GROUP BY, daily, 3.9 s: incremental by activity",
     Engram.Workers.ReconcileAttachmentBlobs => "per-vault fan-out over 60k attachments, daily",
     Engram.Workers.OriginAbuseSweep => "daily question over a 3-day window",
     Engram.Workers.InactivityCleanup => "daily, per-user steps with early exit",
@@ -76,7 +77,7 @@ defmodule Engram.Workers.CronScanBoundTest do
 
   # The open list only shrinks: pinned at its size when it was written.
   test "the known-unbounded list does not grow" do
-    assert map_size(@known_unbounded) <= 10
+    assert map_size(@known_unbounded) <= 9
   end
 
   test "the classification lists no worker that left the crontab" do
