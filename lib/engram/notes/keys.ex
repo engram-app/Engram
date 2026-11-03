@@ -27,6 +27,8 @@ defmodule Engram.Notes.Keys do
     type: {:type_hmac, :type_id}
   }
 
+  @key_columns @cols |> Map.values() |> Enum.flat_map(&Tuple.to_list/1)
+
   @typedoc "The key families `notes` carries both ways."
   @type kind :: :path | :folder | :basename | :path_ci | :type
 
@@ -104,4 +106,41 @@ defmodule Engram.Notes.Keys do
   # A malformed key (a corrupt job arg) matches no row, as its HMAC did; a
   # real HMAC is 32 bytes, and none derives the all-zero id.
   def id(_short), do: "00000000-0000-0000-0000-000000000000"
+
+  @doc """
+  True when `query` reads `notes` by a key value (`=` or `IN` on a column of
+  `@cols`). `Engram.Repo.prepare_query/3` runs such a statement unnamed, so
+  Postgres plans it for its actual values every time (a custom plan).
+
+  Why: Postgrex prepares a NAMED statement per query shape, and from the 6th
+  execution Postgres may switch it to a GENERIC plan, costed for an average
+  vault. `vault_id = $2` is then a few rows, and every
+  `(user_id, vault_id, ...)` index costs what the key's own index costs: a
+  tie it breaks by index order. Prod 2026-11-02 (engram_app, RLS set): the
+  path lookup's generic plan walked `notes_recent_index` over a 40k-note
+  vault, filtering `path_id` row by row (12,665 buffers, 130k calls in 5
+  days), where its custom plan reads `notes_path_live` (3 buffers). No index
+  shape fixes it: the generic plan cannot know one vault is 400x the
+  average, and an `= ANY` key is costed as 10 descents. A custom plan reads
+  the vault's own row count (`pg_stats` MCV list). `NotesGenericPlanTest`.
+
+  Cost: one more round trip (Parse/Describe before Bind/Execute) and a
+  plan per call, about 0.5-1 ms on prod RDS, on ~70k lookups a day.
+  """
+  @spec lookup?(term()) :: boolean()
+  def lookup?(%Ecto.Query{from: %{source: {"notes", _}}, wheres: wheres}),
+    do: Enum.any?(wheres, &key_compare?(&1.expr))
+
+  def lookup?(_), do: false
+
+  defp key_compare?({op, _, [left, right]}) when op in [:==, :in],
+    do: key_column?(left) or key_column?(right)
+
+  defp key_compare?({op, _, args}) when op in [:and, :or, :not] and is_list(args),
+    do: Enum.any?(args, &key_compare?/1)
+
+  defp key_compare?(_), do: false
+
+  defp key_column?({{:., _, [{:&, _, [0]}, column]}, _, _}), do: column in @key_columns
+  defp key_column?(_), do: false
 end

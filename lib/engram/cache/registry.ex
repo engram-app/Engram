@@ -36,6 +36,11 @@ defmodule Engram.Cache.Registry do
       evict_match: :key,
       pg_channel: "user_limit_overrides_changed"
     },
+    # Attachment bytes in use per user, as this node last summed or committed
+    # them (`Engram.Attachments`). Only the advisory pre-checks read it, and
+    # only to answer :ok; a refusal and the check under the quota lock always
+    # sum fresh. TTL-only.
+    %{name: :storage_usage, ttl: 60_000, cache_nil: false, evict_match: :key, pg_channel: nil},
     # Per-vault avgdl (BM25 length normalizer); a soft value, TTL-only.
     %{name: :avgdl, ttl: 600_000, cache_nil: false, evict_match: :key, pg_channel: nil},
     # The v5 rebuild's halt flag (`:halted`) and pinned avgdl per vault
