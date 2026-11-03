@@ -167,14 +167,11 @@ defmodule EngramWeb.TagsFoldersControllerTest do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
       over = Engram.Batch.rest_page_default() + 1
 
+      # Direct rows: this pins paging, not the write path. 501 full
+      # `upsert_note/4` saves took 25-45 s alone and hit the 60 s timeout
+      # on loaded CI runners.
       for i <- 1..over do
-        {:ok, _} =
-          Engram.Notes.upsert_note(
-            user,
-            vault,
-            %{"path" => "Huge/n#{i}.md", "content" => "x", "mtime" => 1.0},
-            actor: "api"
-          )
+        Engram.Fixtures.insert_note!(user, vault, %{"path" => "Huge/n#{i}.md", "content" => "x"})
       end
 
       page = conn |> get("/api/folders/list", %{folder: "Huge"}) |> json_response(200)
