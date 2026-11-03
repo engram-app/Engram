@@ -37,6 +37,8 @@ defmodule Engram.QueryPlan do
   holding only this test's rows, in key order, as a table written in uuidv7
   order is in prod. CLUSTER holds an ACCESS EXCLUSIVE lock to the end of
   the test: use it from `async: false` tests only.
+
+  `seqscan: true` keeps seq scans on, to ask which plan Postgres picks.
   """
   @spec generic_plan(String.t(), keyword()) :: String.t()
   def generic_plan(sql, opts \\ []) do
@@ -60,7 +62,9 @@ defmodule Engram.QueryPlan do
         end
 
         Repo.query!("SET LOCAL plan_cache_mode = force_generic_plan")
-        Repo.query!("SET LOCAL enable_seqscan = off")
+
+        unless Keyword.get(opts, :seqscan, false),
+          do: Repo.query!("SET LOCAL enable_seqscan = off")
 
         unless Keyword.get(opts, :bitmapscan, true),
           do: Repo.query!("SET LOCAL enable_bitmapscan = off")
@@ -78,6 +82,35 @@ defmodule Engram.QueryPlan do
 
     text
   end
+
+  @doc """
+  The plans the statement `fun` sends would run on, once it is a reused
+  prepared statement. Runs `fun` `runs` times (7: past the 5 custom plans
+  Postgres tries before it may switch a named statement to a generic plan),
+  takes the last statement of this process whose SQL matches `pattern`, and
+  returns `%{custom:, generic:}`: the plan for its recorded values, and
+  the generic plan (`generic_plan/2`), the plan with no values that a 6th
+  execution may switch to. Asserting both pins the plan whichever one runs. Unlike
+  `generic_plan/2`, seq scans stay enabled: the question is which plan
+  Postgres picks, not whether an index can serve it.
+  """
+  @spec after_runs((-> term()), Regex.t(), pos_integer()) :: %{
+          custom: String.t(),
+          generic: String.t()
+        }
+  def after_runs(fun, pattern, runs \\ 7) do
+    %{sql: sql, params: params} =
+      Enum.reduce(1..runs, nil, fn _, _ ->
+        {_, queries} = Engram.QueryRecorder.record(fun)
+        me = self()
+        queries |> Enum.filter(&(&1.pid == me and &1.sql =~ pattern)) |> List.last()
+      end) || flunk("no statement matched #{inspect(pattern)}")
+
+    custom = Repo.query!("EXPLAIN " <> sql, params).rows |> List.flatten() |> Enum.join("\n")
+    %{custom: custom, generic: generic_plan(sql, seqscan: true)}
+  end
+
+  defp flunk(message), do: raise(ExUnit.AssertionError, message: message)
 
   @doc """
   The statements the calling process recorded whose SQL reads `table`, in
