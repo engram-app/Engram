@@ -169,8 +169,9 @@ rebuild is the correct work.
 
 A cleared keyword stamp after the ledger closed (payload drift heal in
 `ReconcileNotePayloads`) used to wait for the daily re-verify: the prod v5
-gate found exactly one such note on 2026-11-02 (heal at 05:54 UTC, after the
-04:02 re-verify). The heal now queues `RefreshKeywordVectors` for the note
+gate found exactly one such note on 2026-11-02 (heal at 05:54 UTC, after that
+day's 04:02 re-verify; the re-verify now runs at 10:02 and only walks the
+version term on request). The heal now queues `RefreshKeywordVectors` for the note
 itself, as `RepathNoteIndex` does after a rename.
 
 ## The completion ledger stops the version scans

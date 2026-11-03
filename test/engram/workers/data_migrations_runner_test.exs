@@ -143,7 +143,7 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
       refute is_nil(Repo.get!(Entry, "test_reverified_clean").completed_at)
     end
 
-    # The 04:00 run was deduped or failed: the next hourly run catches up.
+    # The re-verify-hour run was deduped or failed: the next hourly run catches up.
     test "outside the re-verify hour, a verification older than 25 h re-verifies" do
       :ok = DataMigrations.mark_done("test_reverified_clean", 1)
       stale = DateTime.add(DateTime.utc_now(), -26 * 3600)

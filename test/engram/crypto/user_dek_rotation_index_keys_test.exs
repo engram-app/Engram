@@ -200,7 +200,7 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
            |> Enum.all?(&is_nil/1),
            "no chunk may reuse a point whose text is under the retired DEK"
 
-    # Enqueued now, not left for the 04:00 reconcile hour.
+    # Enqueued now, not left for the daily re-verify.
     assert_enqueued(worker: Engram.Workers.EmbedNote, args: %{note_id: ctx.note.id})
 
     Agent.update(ctx.store, &%{&1 | fail: false})

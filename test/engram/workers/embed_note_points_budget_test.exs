@@ -157,7 +157,7 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
     end
 
     # Review M1: an inline pass may overshoot the cap by 5% rather than
-    # floor the note the user is editing; the 04:00 sweep then demotes the
+    # floor the note the user is editing; the daily sweep then demotes the
     # least recently edited notes. 11,998 + 5 = 12,003, under 12,600.
     test "at 11,998 the note being indexed overshoots instead of flooring", %{
       user: user,
@@ -229,7 +229,7 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
       assert reload(note).index_tier == "floor"
 
       for _tick <- 1..2 do
-        # In the 04:00 UTC re-verify hour, so the budget sweep runs too: it
+        # A re-verify run, so the budget sweep runs too: it
         # must not promote a note that cannot fit. Pinned, not the wall
         # clock, so the result never depends on when CI runs.
         assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})

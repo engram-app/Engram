@@ -1,7 +1,7 @@
 defmodule Engram.NotePointsCapFlagTest do
   @moduledoc """
   The per-note cap merge. The v5 pass prices and writes every over-cap note
-  capped, so each note is embedded once and the 04:00 tick must not embed a
+  capped, so each note is embedded once and the daily re-verify tick must not embed a
   capped note again.
 
   async: false: global Mox mode and `limits_enforced` are global app env.
@@ -211,7 +211,7 @@ defmodule Engram.NotePointsCapFlagTest do
       assert once > 0 and once <= 128
       assert rows(note) == once
 
-      # The 04:00 tick (recap included), a second rebuild job and an
+      # The daily re-verify tick (recap included), a second rebuild job and an
       # edit-less index pass: none of them pays again.
       lapse_cooldown(note)
       assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})

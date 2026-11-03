@@ -16,7 +16,7 @@ credential called; cost is metered where it is incurred.
 |---|---|---|---|---|
 | `ai_searches_per_day` (THE cost meter) | 20 | unlimited | unlimited | `Engram.Search.search/4`, every transport |
 | `notes_cap` | 2,000 | 20,000 | 40,000 | note creates and restores (`Notes.check_notes_cap/2`); edits, reads and deletes of an over-cap account are never refused |
-| `index_points_cap` (search points, chunk rows) | 12,000 | 120,000 | 240,000 | `Indexing` floor + 04:00 budget sweep (always on); points cap = `notes_cap` x 6 |
+| `index_points_cap` (search points, chunk rows) | 12,000 | 120,000 | 240,000 | `Indexing` floor + daily budget sweep (10:02 re-verify, always on); points cap = `notes_cap` x 6 |
 | `note_points_cap` (points per note, merged past it) | 128 | 1,024 | 1,024 | `Indexing.cap_chunks/3` |
 | `api_rps_cap` (API-key traffic, per user per second) | 30 | 30 | 30 | `RequireApiRpsBudget`; `0` also refuses API-key sockets (`ChannelGate.api_access/2`) |
 | `mcp_tool_calls_per_min` (MCP `tools/call` without an API key, i.e. OAuth) | 120 | 120 | 120 | `McpController.handle/2`, 429 + `Retry-After`; off when limits are not enforced (self-host) |

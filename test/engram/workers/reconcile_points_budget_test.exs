@@ -895,7 +895,7 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
 
   # Review L3 and M4: a recap is unmetered maintenance, so its jobs carry
   # `budget_points` and count against the user's 2,000-a-day ceiling, and
-  # both 04:00 sweeps stop at a global maintenance-token ceiling a day.
+  # both daily re-verify sweeps stop at a global maintenance-token ceiling a day.
   describe "maintenance ceilings" do
     defp recap_jobs, do: for(j <- all_enqueued(worker: RebuildStaleNote), j.args["recap"], do: j)
 

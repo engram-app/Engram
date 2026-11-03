@@ -815,7 +815,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     |> Map.new(fn {id, rows} -> {id, rows * @tokens_per_chunk} end)
   end
 
-  # Review M4: both 04:00 sweeps together enqueue at most this many
+  # Review M4: both daily (10:02) sweeps together enqueue at most this many
   # estimated unmetered Voyage tokens a rolling day: 150k a minute over the
   # hour, the maintenance bucket the v5 pass uses, so they cannot saturate
   # Voyage's TPM and starve query embeds. Read back from the jobs' own
