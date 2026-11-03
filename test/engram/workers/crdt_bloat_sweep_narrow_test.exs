@@ -30,7 +30,7 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
         n
       end
 
-    %{notes: notes}
+    %{notes: notes, user: user, vault: vault}
   end
 
   defp sizes(note) do
@@ -68,12 +68,21 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
   end
 
   # Row versions of one compaction checkpoint plus one ordinary save, from
-  # pg_stat_xact_user_tables, equal to main's: notes 2 (1 HOT), note_bodies 2
+  # pg_stat_xact_user_tables: notes 2 (the compaction HOT), note_bodies 2
   # (both HOT), note_index_state 0. Red on 156c2fd94: note_index_state 4 (its
   # two size triggers), note_bodies 0 HOT (the envelope expression indexes).
   test "a save and a checkpoint write the same row versions as main", %{
-    notes: [n | _]
+    user: user,
+    vault: vault
   } do
+    # Deterministic HOT: free space on a fresh note's page (as
+    # NotesHotAppendTest), so a miss can only mean an index blocked it.
+    Repo.query!("ALTER TABLE notes SET (fillfactor = 50)")
+    Repo.query!("ALTER TABLE note_bodies SET (fillfactor = 50)")
+
+    {:ok, n} =
+      Notes.upsert_note(user, vault, %{"path" => "hot.md", "content" => "hot"}, actor: "api")
+
     stat = fn ->
       %{rows: rows} =
         Repo.query!("""
@@ -87,16 +96,18 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
     id = Ecto.UUID.dump!(n.id)
     before = stat.()
 
-    # A compaction checkpoint: CRDT state only, with the version/updated_at
-    # bump an ordinary checkpoint carries.
+    # A compaction checkpoint, as `CrdtCheckpoint` writes it: CRDT state and
+    # DEK version only (no version/seq/updated_at).
     Repo.query!(
-      "UPDATE notes SET crdt_state_ciphertext = $2, crdt_state_nonce = $3, version = version + 1, updated_at = now() WHERE id = $1",
+      "UPDATE notes SET crdt_state_ciphertext = $2, crdt_state_nonce = $3, dek_version = dek_version WHERE id = $1",
       [id, :crypto.strong_rand_bytes(80), <<1>> <> :crypto.strong_rand_bytes(12)]
     )
 
     # An ordinary content save, raw so no app-level stamp writes run.
+    # `clock_timestamp()`: `now()` is constant inside the test transaction, so
+    # `updated_at` (indexed) would not move as it does on a real save.
     Repo.query!(
-      "UPDATE notes SET content_ciphertext = $2, content_nonce = $3, version = version + 1, updated_at = now() WHERE id = $1",
+      "UPDATE notes SET content_ciphertext = $2, content_nonce = $3, version = version + 1, updated_at = clock_timestamp() WHERE id = $1",
       [id, :crypto.strong_rand_bytes(40), <<1>> <> :crypto.strong_rand_bytes(12)]
     )
 
@@ -107,11 +118,10 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
         {t, Enum.zip_with(v, Map.get(before, t, [0, 0, 0]), &(&1 - &2))}
       end)
 
-    # [inserts, updates, of which HOT]
-    # notes' HOT count is left out: this PR adds no index on a column these
-    # writes change, and whether the content save fits its page (1 HOT on a
-    # fresh page, 0 behind earlier tests' dead rows) depends on test order.
-    assert [0, 2, _] = delta["notes"], inspect(delta)
+    # [inserts, updates, of which HOT]: on notes the compaction is HOT and the
+    # content save is not (`updated_at` is indexed); an index on a column the
+    # compaction writes would make it [0, 2, 0].
+    assert delta["notes"] == [0, 2, 1], inspect(delta)
     assert delta["note_bodies"] == [0, 2, 2], inspect(delta)
     assert Map.get(delta, "note_index_state", [0, 0, 0]) == [0, 0, 0], inspect(delta)
   end
