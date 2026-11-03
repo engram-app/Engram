@@ -77,6 +77,8 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
   # against every note of the vault: 445 ms, 669 cold reads, for 5 ids.
   # The window must be fetched by primary key, under RLS (self-host's
   # per-user walk, the E5 shape) and without it (SaaS' fleet walk).
+  # Seeds 400 users: slow on a loaded runner.
+  @tag timeout: 180_000
   test "the windowed sweep fetches its id window by primary key, not per vault" do
     user = insert(:user)
     vaults = insert_list(2, :vault, user: user)

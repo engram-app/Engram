@@ -128,7 +128,9 @@ defmodule Engram.DataMigrations.IndexVersions do
     )
   end
 
-  defp notes(nil), do: from(n in Note, as: :note)
+  # The kind filter repeats `live_notes/1`'s so NotesScopeLintTest sees this
+  # `from` scoped; the window form applies it to the probed rows.
+  defp notes(nil), do: from(n in Note, as: :note, where: n.kind == "note")
   defp notes(ids), do: from(n in subquery(IdWindows.by_id(Note, ids)), as: :note)
 
   @doc "`live_notes/1` already indexed at their current content."
