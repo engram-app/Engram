@@ -16,9 +16,21 @@ defmodule Engram.DataMigrations.NoteSplit do
   one fleet walk on the maintenance pool on SaaS, a per-user walk on
   self-host. Each statement reads one window (#2276).
 
-  Readers keep using the old columns; nothing gates on this yet. Re-verifies
-  daily, so a row a trigger somehow missed (a restore from an old dump) is
-  caught.
+  Readers keep using the old columns; nothing gates on this yet.
+
+  Not re-verified once done (`reverify?/0` stays `false`). The daily re-verify
+  walked every notes window and de-TOASTed both bodies of every note for the
+  drift report (prod 2026-10-28..11-02: ~95 windows a day, ~700 ms and 1.6-1.9k
+  disk reads each, evicting the hot set) and did not reopen it once in 14 days
+  of prod logs. It has nothing to find: the triggers are in the database, so every INSERT and every write of a
+  source column fills the row, from any release's code, during a rolling
+  deploy and after a rollback alike; no code writes a derived column or
+  deletes a `note_bodies` row (the FK cascades with its note). A full restore
+  brings this ledger row back from the same dump as the rows it vouches for.
+  What remains is a write with triggers disabled (`session_replication_role
+  = replica`, a data-only `pg_restore --disable-triggers`): an operator who
+  does that reopens the ledger (`DataMigrations.reopen/2`) or bumps
+  `version/0`, and the next pass heals it.
   """
   @behaviour Engram.DataMigration
 
@@ -41,9 +53,6 @@ defmodule Engram.DataMigrations.NoteSplit do
 
   @impl true
   def version, do: 1
-
-  @impl true
-  def reverify?, do: true
 
   @impl true
   def run_pass, do: run_pass([])
@@ -95,7 +104,7 @@ defmodule Engram.DataMigrations.NoteSplit do
   # rewrites a body column only when its nonce changes, so a write that
   # changed a ciphertext but kept its nonce (no writer does; a restore or a
   # hand edit could) leaves the body stale. A pass that closes the ledger
-  # (the last catch-up pass, and every daily re-verify) compares the two
+  # (the last catch-up pass after a version bump or a reopen) compares the two
   # (`NoteBody.drift_ids/2`, slices only), in id windows so no single
   # statement or snapshot spans the table.
   #

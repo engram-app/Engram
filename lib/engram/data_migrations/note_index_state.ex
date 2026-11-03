@@ -14,9 +14,19 @@ defmodule Engram.DataMigrations.NoteIndexState do
   whose counters differ from its `chunks` rows is re-counted under its
   `notes` row lock (`FOR UPDATE SKIP LOCKED`, the lock `commit_index` holds
   while it writes chunks), so the count cannot race a pass on that note.
-  This is both the backfill and the self-heal: done (`counted?/0`) gates
-  the vault and user sums, and the daily re-verify re-counts whatever a
-  previous-release writer (a rolling deploy, a rollback) left behind.
+  This is the backfill: done (`counted?/0`) gates the vault and user sums.
+
+  Not re-verified once done (`reverify?/0` stays `false`). Since migration
+  20261028000000 the `chunks_sync_note_counts_*` statement triggers recount a
+  note on every chunks insert, update and delete (a note delete's cascade
+  included), and `notes_sync_index_state` writes the state row on every note
+  insert. Both live in the database, so a previous-release writer (a rolling
+  deploy, a rollback) keeps them exact too. The daily re-verify walked every
+  notes window and probed chunks for every note (prod 2026-10-28..11-02: ~95
+  windows a day, ~600 ms and ~1.9k disk reads each, evicting the hot set)
+  and found nothing on every pass after the counting trigger shipped. A
+  write with triggers disabled reopens it by hand (`DataMigrations.reopen/2`)
+  or by a `version/0` bump.
 
   Discovery walks `notes` in fixed id windows (`Engram.Backfill.IdWindows`):
   one fleet walk on the maintenance pool on SaaS, a per-user walk on
@@ -44,9 +54,6 @@ defmodule Engram.DataMigrations.NoteIndexState do
 
   @impl true
   def version, do: 1
-
-  @impl true
-  def reverify?, do: true
 
   @impl true
   def run_pass, do: run_pass([])
