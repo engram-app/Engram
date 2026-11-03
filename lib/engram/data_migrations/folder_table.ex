@@ -117,9 +117,14 @@ defmodule Engram.DataMigrations.FolderTable do
     batch = Keyword.get(opts, :batch, @batch)
     budget = Keyword.get(opts, :attachment_budget_ms, @attachment_budget_ms)
 
+    # Attachments untouched since the last clean verification are vouched for
+    # (`verified_until/0`), so a pass over a closed ledger decrypts only the
+    # rows written since; `nil` (never verified, or reopened) walks them all.
+    since = Keyword.get_lazy(opts, :attachments_since, &verified_until/0)
+
     stats =
       Keyword.get_lazy(opts, :user_ids, &TenantScan.user_ids/0)
-      |> Enum.map(&safe_migrate_user(&1, batch, budget))
+      |> Enum.map(&safe_migrate_user(&1, batch, budget, since))
       |> Enum.reduce(zero(), &add/2)
 
     if stats.changed + stats.blocked + stats.more == 0,
@@ -136,8 +141,8 @@ defmodule Engram.DataMigrations.FolderTable do
   # timeout) must not stop the users after it, on every pass: it is logged and
   # counted as blocked, which keeps the ledger open. Its steps are separate
   # transactions, so what it already wrote stays and the next pass resumes.
-  defp safe_migrate_user(user_id, batch, budget) do
-    migrate_user(user_id, batch, budget)
+  defp safe_migrate_user(user_id, batch, budget, since) do
+    migrate_user(user_id, batch, budget, since)
   rescue
     # Deferred, not failed: the rotation ends in minutes and the next pass
     # (the ledger stays open through `blocked`) finds the user unlocked.
@@ -169,7 +174,7 @@ defmodule Engram.DataMigrations.FolderTable do
     %{zero() | blocked: 1}
   end
 
-  defp migrate_user(user_id, batch, budget) do
+  defp migrate_user(user_id, batch, budget, since) do
     # Read the key's version BEFORE the key itself (`RotationGate.check/2`).
     dek_version = RotationGate.dek_version(user_id)
 
@@ -181,6 +186,7 @@ defmodule Engram.DataMigrations.FolderTable do
         dek_version: dek_version,
         fk: Crypto.dek_filter_key_from_bytes(dek),
         batch: batch,
+        since: since && DateTime.to_naive(since),
         deadline: System.monotonic_time(:millisecond) + budget
       }
 
@@ -591,9 +597,10 @@ defmodule Engram.DataMigrations.FolderTable do
             """
             SELECT id, vault_id, dek_version, path_ciphertext, path_nonce, folder_ref_id FROM attachments
             WHERE user_id = $1 AND deleted_at IS NULL AND ($2::uuid IS NULL OR id > $2)
+              AND ($4::timestamp IS NULL OR updated_at > $4)
             ORDER BY id LIMIT $3
             """,
-            [dump(ctx.user_id), after_id, ctx.batch]
+            [dump(ctx.user_id), after_id, ctx.batch, ctx.since]
           )
 
         {tree, stats, wanted} =

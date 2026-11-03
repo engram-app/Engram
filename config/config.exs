@@ -297,6 +297,10 @@ config :engram, Oban,
         # within the hour of a run is deduped by the worker's `unique` (intended).
         {"@reboot", Engram.Workers.DataMigrationsRunner},
         {"33 * * * *", Engram.Workers.DataMigrationsRunner},
+        # Drift in app-kept bookkeeping (envelope format, link keys, payload
+        # stamps, folder refs) found through partial indexes, not a nightly walk.
+        # Free minutes only (no other entry fires there).
+        {"7,22,37,52 * * * *", Engram.Workers.BookkeepingDrain},
         # Legal-change emails (notice + reminder): hourly so a deploy that
         # publishes a version announces it within the hour.
         {"18 * * * *", Engram.Workers.LegalNoticeDispatch},

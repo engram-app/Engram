@@ -417,8 +417,8 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     assert NotePayloadStamps.run_pass() == :done
     Indexing.unstamp_payload_hash(reload(ctx.stale))
 
-    # The runner re-runs a done migration's pass daily only if it opts in.
-    assert NotePayloadStamps.reverify?()
+    # No daily re-run: `Engram.Bookkeeping.Drain` finds the unstamped row.
+    refute function_exported?(NotePayloadStamps, :reverify?, 0)
     assert {:more, users: 1} = NotePayloadStamps.run_pass()
     assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
   end

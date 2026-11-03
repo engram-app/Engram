@@ -17,6 +17,8 @@ defmodule Engram.Workers.CronScanBoundTest do
 
   @bounded %{
     Engram.Workers.BookkeepingCanary => "primary-key range reads of ~200 sampled notes per run",
+    Engram.Workers.BookkeepingDrain =>
+      "partial indexes *_envelope_legacy, note_index_state_unstamped, notes_unresolved_folder, *_link_keys_stale; 100 users per probe",
     Engram.Workers.WarmCrdtHeads =>
       "partial index note_bodies_crdt_head_null, 5,000 candidates per run",
     Engram.Workers.CrdtBloatSweep =>

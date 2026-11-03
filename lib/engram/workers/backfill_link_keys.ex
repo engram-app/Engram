@@ -81,15 +81,15 @@ defmodule Engram.Workers.BackfillLinkKeys do
   @doc "Enqueues a chain for every user with a row missing its keys. Returns how many."
   @spec enqueue_missing() :: non_neg_integer()
   def enqueue_missing do
-    user_ids = TenantScan.flat_map_users(fn uid -> if missing?(uid), do: [uid], else: [] end)
-    executing = TenantScan.executing_user_ids(__MODULE__)
+    TenantScan.flat_map_users(fn uid -> if missing?(uid), do: [uid], else: [] end)
+    |> then(&TenantScan.enqueue_users(__MODULE__, &1))
+  end
 
-    # One insert per user: Oban's Basic engine ignores `unique` in insert_all.
-    for uid <- user_ids,
-        not MapSet.member?(executing, uid),
-        do: {:ok, _} = Oban.insert(new(%{"user_id" => uid}))
-
-    length(user_ids)
+  @doc "True while the user has a row this worker would key (its own selection predicate)."
+  @spec missing_rows?(Ecto.UUID.t()) :: boolean()
+  def missing_rows?(user_id) do
+    {:ok, any} = Repo.with_tenant(user_id, fn -> missing?(user_id) end)
+    any
   end
 
   defp missing?(user_id),

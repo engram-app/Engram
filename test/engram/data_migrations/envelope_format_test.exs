@@ -130,7 +130,10 @@ defmodule Engram.DataMigrations.EnvelopeFormatTest do
     end
   end
 
-  describe "daily re-verify" do
+  # A done ledger is never re-walked (the daily per-user EXISTS over every row
+  # of every column is gone): `Engram.Bookkeeping.Drain` finds a reappearing
+  # legacy row through the `*_envelope_legacy` partial indexes instead.
+  describe "no daily re-verify" do
     setup %{user: u, vault: v} do
       note!(u, v, "new.md", @big, true)
       assert DataMigrationsRunner.run(EnvelopeFormat) == :done
@@ -138,45 +141,18 @@ defmodule Engram.DataMigrations.EnvelopeFormatTest do
       :ok
     end
 
-    test "a done migration stays skipped outside the re-verify run", %{user: u, vault: v} do
+    test "a done migration stays skipped, even in the re-verify run", %{user: u, vault: v} do
       note!(u, v, "late.md", @big, false)
+      refute function_exported?(EnvelopeFormat, :reverify?, 0)
+      assert DataMigrationsRunner.run(EnvelopeFormat, true) == :skipped
       assert DataMigrationsRunner.run(EnvelopeFormat, false) == :skipped
       refute_enqueued(worker: ReencodeEnvelopes)
     end
 
-    test "re-verify with nothing new keeps it done", _ do
-      assert DataMigrationsRunner.run(EnvelopeFormat, true) == :done
-      assert DataMigrations.done?("envelope_format", 1)
-      refute_enqueued(worker: ReencodeEnvelopes)
-    end
-
-    test "re-verify reopens it when a legacy row reappears", %{user: u, vault: v} do
+    test "the drain queues the re-encode for the reappearing legacy row", %{user: u, vault: v} do
       note!(u, v, "late.md", @big, false)
-
-      assert DataMigrationsRunner.run(EnvelopeFormat, true) == :more
-      assert is_nil(ledger("envelope_format").completed_at)
-      refute DataMigrations.done?("envelope_format", 1)
+      assert %{envelope: 1} = Engram.Bookkeeping.Drain.run()
       assert_enqueued(worker: ReencodeEnvelopes, args: %{"user_id" => u.id})
-    end
-
-    test "the 04:00 UTC runner job is the re-verify run", %{user: u, vault: v} do
-      note!(u, v, "late.md", @big, false)
-
-      assert :ok =
-               perform_job(DataMigrationsRunner, %{}, scheduled_at: ~U[2026-10-08 05:33:00Z])
-
-      assert DataMigrations.done?("envelope_format", 1)
-
-      assert :ok =
-               perform_job(DataMigrationsRunner, %{}, scheduled_at: ~U[2026-10-08 04:33:00Z])
-
-      refute DataMigrations.done?("envelope_format", 1)
-    end
-
-    test "a migration without reverify?/0 is never re-run once done" do
-      Engram.DataMigrations.mark_done(Engram.DataMigrations.CrdtStateSeed.name(), 1)
-
-      assert DataMigrationsRunner.run(Engram.DataMigrations.CrdtStateSeed, true) == :skipped
     end
   end
 

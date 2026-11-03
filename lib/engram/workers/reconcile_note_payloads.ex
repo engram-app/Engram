@@ -132,19 +132,17 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   @doc "Enqueues a chain for every user with an unstamped indexed note. Returns how many."
   @spec enqueue_missing() :: non_neg_integer()
   def enqueue_missing do
-    user_ids =
-      TenantScan.flat_map_users(fn uid ->
-        if Repo.exists?(where(unstamped(), [n], n.user_id == ^uid)), do: [uid], else: []
-      end)
+    TenantScan.flat_map_users(fn uid ->
+      if Repo.exists?(where(unstamped(), [n], n.user_id == ^uid)), do: [uid], else: []
+    end)
+    |> then(&TenantScan.enqueue_users(__MODULE__, &1))
+  end
 
-    executing = Engram.Backfill.TenantScan.executing_user_ids(__MODULE__)
-
-    # One insert per user: Oban's Basic engine ignores `unique` in insert_all.
-    for uid <- user_ids,
-        not MapSet.member?(executing, uid),
-        do: {:ok, _} = Oban.insert(new(%{"user_id" => uid}))
-
-    length(user_ids)
+  @doc "True while the user has an unstamped indexed note (the worker's own selection predicate)."
+  @spec unstamped_rows?(Ecto.UUID.t()) :: boolean()
+  def unstamped_rows?(user_id) do
+    {:ok, any} = Repo.with_tenant(user_id, fn -> Repo.exists?(where(unstamped(), [n], n.user_id == ^user_id)) end)
+    any
   end
 
   # The done predicate and the worker's selection, one definition: an

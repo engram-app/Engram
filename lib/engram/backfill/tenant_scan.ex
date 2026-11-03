@@ -134,6 +134,24 @@ defmodule Engram.Backfill.TenantScan do
   end
 
   @doc """
+  One `worker` job (`args.user_id`) per user id, skipping a user whose job is
+  executing (a per-user chain inserts its own successor while it executes, so
+  `unique` cannot cover that state) and letting `unique` drop one whose job is
+  pending. One insert per user: Oban's Basic engine ignores `unique` in
+  `insert_all`. Returns how many users were asked for.
+  """
+  @spec enqueue_users(module(), [Ecto.UUID.t()]) :: non_neg_integer()
+  def enqueue_users(worker, user_ids) when is_atom(worker) do
+    executing = executing_user_ids(worker)
+
+    for uid <- user_ids,
+        not MapSet.member?(executing, uid),
+        do: {:ok, _} = Oban.insert(worker.new(%{"user_id" => uid}))
+
+    length(user_ids)
+  end
+
+  @doc """
   User ids (`args.user_id`) with an executing `worker` job. A per-user chain
   inserts its own successor while it executes, so `executing` cannot be a
   `unique` state; an `enqueue_missing/0` skips these users instead, or a
