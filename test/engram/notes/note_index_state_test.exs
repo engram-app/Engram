@@ -177,6 +177,26 @@ defmodule Engram.Notes.NoteIndexStateTest do
       assert TableReads.count(tables) == before
     end
 
+    # The ledger closed at v1 on 0.66/0.67, before the chunks counting
+    # trigger (0.68.0), while app code kept the counters and they drifted
+    # (prod 2026-10-28: 5,631 drifted). The daily re-verify used to heal
+    # that; without it, an instance skipping straight to this release needs
+    # one more full pass, so v2 reopens it once.
+    test "a ledger closed at v1 runs one more pass and heals drift", %{user: u, vault: v} do
+      a = write!(u, v, "V1.md", "# V\n\nbody")
+      real = state(a.id).points
+      :ok = DataMigrations.mark_done(Backfill.name(), 1)
+
+      Repo.query!("UPDATE note_index_state SET points = points + 5 WHERE note_id = $1", [
+        Ecto.UUID.dump!(a.id)
+      ])
+
+      assert DataMigrationsRunner.run(Backfill, false) == :more
+      assert state(a.id).points == real
+      assert DataMigrationsRunner.run(Backfill, false) == :done
+      assert Backfill.counted?()
+    end
+
     # Still the backstop while the ledger is open (a version bump reopens it):
     # a note whose counters disagree with its chunks is found and fixed.
     test "an open ledger still finds a drifted counter", %{user: u, vault: v} do

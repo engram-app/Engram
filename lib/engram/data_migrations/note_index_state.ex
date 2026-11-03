@@ -24,9 +24,9 @@ defmodule Engram.DataMigrations.NoteIndexState do
   deploy, a rollback) keeps them exact too. The daily re-verify walked every
   notes window and probed chunks for every note (prod 2026-10-28..11-02: ~95
   windows a day, ~600 ms and ~1.9k disk reads each, evicting the hot set)
-  and found nothing on every pass after the counting trigger shipped. A
-  write with triggers disabled reopens it by hand (`DataMigrations.reopen/2`)
-  or by a `version/0` bump.
+  and found nothing on every pass logged since. After a write with triggers
+  disabled, reopen it cluster-wide (`DataMigrations.reopen/2`, runbook in
+  `docs/context/data-migrations-ledger.md`).
 
   Discovery walks `notes` in fixed id windows (`Engram.Backfill.IdWindows`):
   one fleet walk on the maintenance pool on SaaS, a per-user walk on
@@ -52,8 +52,12 @@ defmodule Engram.DataMigrations.NoteIndexState do
   @impl true
   def name, do: "note_index_state"
 
+  # 2: one more full pass on every instance once the chunks counting trigger
+  # exists. Counters were app-kept on 0.66/0.67 and drifted (prod: 5,631 on
+  # 2026-10-28); the daily re-verify healed that until it stopped, so an
+  # instance skipping from 0.66/0.67 to this release recounts here, once.
   @impl true
-  def version, do: 1
+  def version, do: 2
 
   @impl true
   def run_pass, do: run_pass([])
