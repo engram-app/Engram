@@ -808,7 +808,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     _ =
       Enqueue.enqueue(
         Engram.Workers.ProjectVaultIndex.new(%{user_id: user_id, vault_id: vault_id},
-          unique: [keys: [:vault_id], states: [:available, :scheduled, :retryable]],
+          unique: Engram.Jobs.unique({Engram.Workers.ProjectVaultIndex, :pending}),
           schedule_in: 5
         ),
         "project_vault_index"

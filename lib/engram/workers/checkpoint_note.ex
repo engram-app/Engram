@@ -18,7 +18,7 @@ defmodule Engram.Workers.CheckpointNote do
   use Oban.Worker,
     queue: :crdt_checkpoint,
     max_attempts: 3,
-    unique: [keys: [:note_id], states: :incomplete],
+    unique: Engram.Jobs.unique(__MODULE__),
     # A job snoozed behind a live room ABSORBS later enqueues for its note
     # (unique across `:incomplete`). Without this, an absorbed room-exit enqueue
     # waits out the rest of the 60 s snooze; with it, the insert re-times the

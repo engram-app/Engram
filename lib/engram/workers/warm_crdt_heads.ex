@@ -15,7 +15,7 @@ defmodule Engram.Workers.WarmCrdtHeads do
   use Oban.Worker,
     queue: :maintenance,
     max_attempts: 3,
-    unique: [period: 3000, states: :incomplete]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   alias Engram.DataMigrations
   alias Engram.Workers.BackfillCrdtHead

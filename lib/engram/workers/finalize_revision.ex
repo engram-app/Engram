@@ -62,7 +62,7 @@ defmodule Engram.Workers.FinalizeRevision do
   def job(note_id, user_id) when is_binary(note_id) and is_binary(user_id) do
     new(%{note_id: note_id, user_id: user_id},
       schedule_in: 5,
-      unique: [period: 60, keys: [:note_id], states: [:available, :scheduled, :retryable]]
+      unique: Engram.Jobs.unique({__MODULE__, :debounced})
     )
   end
 

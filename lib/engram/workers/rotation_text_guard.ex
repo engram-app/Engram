@@ -19,11 +19,7 @@ defmodule Engram.Workers.RotationTextGuard do
     queue: :crdt_backfill,
     priority: 3,
     max_attempts: 10,
-    unique: [
-      keys: [:user_id, :dek_version],
-      period: :infinity,
-      states: [:available, :scheduled, :retryable]
-    ]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   alias Engram.Accounts.User
   alias Engram.Crypto.{RotationGate, UserDekRotation}

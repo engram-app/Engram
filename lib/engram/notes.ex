@@ -4366,7 +4366,7 @@ defmodule Engram.Notes do
       Enqueue.enqueue(
         Engram.Workers.ProjectVaultIndex.new(
           %{user_id: user.id, vault_id: vault.id},
-          unique: false,
+          unique: Engram.Jobs.unique(:none),
           schedule_in: 5
         ),
         "project_vault_index"

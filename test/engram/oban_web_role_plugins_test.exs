@@ -29,15 +29,16 @@ defmodule Engram.ObanWebRolePluginsTest do
 
   test "Oban with the base plugin list still elects a leader through the database" do
     base = Application.fetch_env!(:engram, Oban)
-    conf = Oban.Config.new(repo: Engram.Repo, queues: false, plugins: base[:plugins])
+    plugins = Engram.Jobs.oban_config(base)[:plugins]
+    conf = Oban.Config.new(repo: Engram.Repo, queues: false, plugins: plugins)
 
     refute match?({Oban.Peers.Isolated, _}, conf.peer)
     # 2.24 normalizes the plugins into its own service modules (Oban.Cron, ...).
-    assert length(conf.plugins) == 3, inspect(conf.plugins)
+    assert length(conf.plugins) == 4, inspect(conf.plugins)
   end
 
-  test "the unset-role default (config/config.exs) keeps Cron, Pruner and Lifeline" do
-    plugins = Application.fetch_env!(:engram, Oban)[:plugins]
+  test "the unset-role default keeps Cron, Pruner, Lifeline and Reindexer" do
+    plugins = Engram.Jobs.oban_config(Application.fetch_env!(:engram, Oban))[:plugins]
 
     mods =
       Enum.map(plugins, fn
@@ -48,6 +49,7 @@ defmodule Engram.ObanWebRolePluginsTest do
     assert Oban.Plugins.Cron in mods
     assert Oban.Plugins.Pruner in mods
     assert Oban.Plugins.Lifeline in mods
+    assert Oban.Reindexer in mods
   end
 
   # runtime.exs sets `plugins: false` on top of the config.exs keyword list.

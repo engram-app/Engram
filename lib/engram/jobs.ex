@@ -32,6 +32,296 @@ defmodule Engram.Jobs do
   @spec pending_states() :: [String.t()]
   def pending_states, do: @pending_states
 
+  # ---------------------------------------------------------------------------
+  # Job options: the ONE home of every `unique:` policy, the oban_jobs
+  # retention and reindex settings, and suspended-job handling. Workers and
+  # enqueue sites call `unique/2`; JobsOptionsSourceTest fails on an inline
+  # `unique:` anywhere else in lib/.
+  # ---------------------------------------------------------------------------
+
+  # Completed, cancelled and discarded jobs are deleted this long after they
+  # finish. Every retained row is read by the queue polls and unique checks;
+  # ObanRetentionTest holds every unique period below this unless a table
+  # dedupes it. Oban's Pruner never deletes `suspended`: see `suspend_copy/2`.
+  @retention_seconds 24 * 3600
+
+  # EmbedNote's debounced dedup: every incomplete state but `executing`. A
+  # running pass may already have read the previous content, so a newer edit
+  # needs its own job (the rule `reject_pending/3` applies to bulk enqueues).
+  # The two passes are safe together: `Indexing` re-checks `content_hash`
+  # under `FOR UPDATE` and the stale one rolls back `:superseded` (#2294).
+  @embed_pending Enum.map(@pending_states, &String.to_atom/1)
+
+  # Every unique policy, by worker (its `use Oban.Worker` default) or by
+  # `{worker, call_site}`. `unique/2` adds `:queue` to a narrowed `fields:`.
+  @unique %{
+    Engram.Billing.Workers.OverrideExpirySweep => [period: 60, fields: [:worker]],
+    Engram.Billing.Workers.PaddleReconcile => [period: 60, fields: [:worker, :args]],
+    Engram.Workers.AccountExport => [fields: [:args], period: :infinity],
+    Engram.Workers.BackfillLinkKeys => [
+      keys: [:user_id],
+      period: :infinity,
+      states: [:available, :scheduled, :retryable]
+    ],
+    Engram.Workers.BookkeepingCanary => [period: 3000, states: :incomplete],
+    Engram.Workers.BookkeepingDrain => [period: 600, states: :incomplete],
+    Engram.Workers.CancelReasonMarker => [
+      keys: [:user_id, :effective_at],
+      states: [:available, :scheduled],
+      period: :infinity
+    ],
+    Engram.Workers.CheckpointNote => [keys: [:note_id], states: :incomplete],
+    Engram.Workers.CleanupDeviceAuthWorker => [
+      period: 600,
+      states: [:available, :scheduled, :executing]
+    ],
+    Engram.Workers.ConnectionCreated => [keys: [:user_id, :client_id], period: 30 * 24 * 3600],
+    Engram.Workers.DailySnapshot => [period: 3000],
+    Engram.Workers.DataMigrationsRunner => [period: 3000, states: :incomplete],
+    Engram.Workers.DrainStrandedTails => [period: 600, states: :incomplete],
+    Engram.Workers.EmbedNote => [period: 60, keys: [:note_id], states: :incomplete],
+    # Period is the caller's settle window (`EmbedNote.job/3`).
+    {Engram.Workers.EmbedNote, :debounced} => [keys: [:note_id], states: @embed_pending],
+    {Engram.Workers.ExtractNoteLinks, :debounced} => [
+      period: 60,
+      keys: [:note_id],
+      states: [:available, :scheduled]
+    ],
+    {Engram.Workers.FinalizeRevision, :debounced} => [
+      period: 60,
+      keys: [:note_id],
+      states: [:available, :scheduled, :retryable]
+    ],
+    Engram.Workers.HealKeyAliases => [
+      keys: [:user_id],
+      period: :infinity,
+      states: [:available, :scheduled, :retryable]
+    ],
+    Engram.Workers.MigrateUserProvider => [
+      keys: [:user_id, :target_provider],
+      states: :incomplete
+    ],
+    {Engram.Workers.PersonOriginSync, :backfill_head} => [
+      fields: [:worker, :args],
+      keys: [:backfill],
+      period: :infinity,
+      states: [:available, :scheduled, :executing, :retryable]
+    ],
+    {Engram.Workers.PersonOriginSync, :user} => [period: 300, fields: [:worker, :args]],
+    {Engram.Workers.PersonOriginSync, :chain_next} => [
+      fields: [:worker, :args],
+      keys: [:chain, :after],
+      period: 7200,
+      states: :all
+    ],
+    Engram.Workers.ProjectVaultIndex => [keys: [:vault_id], states: :incomplete],
+    # Pending only: see `CrdtIndexPersistence` (a running pass already read
+    # the older snapshot).
+    {Engram.Workers.ProjectVaultIndex, :pending} => [
+      keys: [:vault_id],
+      states: [:available, :scheduled, :retryable]
+    ],
+    Engram.Workers.RebuildDryRun => [
+      period: :infinity,
+      keys: [:user_id],
+      states: [:available, :scheduled, :executing, :retryable]
+    ],
+    Engram.Workers.RebuildStaleNote => [
+      period: 3600,
+      keys: [:note_id],
+      states: [:available, :scheduled]
+    ],
+    Engram.Workers.ReconcileAttachmentBlobs => [keys: [:vault_id], period: 600],
+    Engram.Workers.ReconcileEmbeddings => [
+      fields: [:worker, :queue],
+      period: 900,
+      states: [:available, :scheduled, :retryable]
+    ],
+    Engram.Workers.ReconcileNotePayloads => [
+      keys: [:user_id],
+      period: :infinity,
+      states: [:available, :scheduled, :retryable]
+    ],
+    Engram.Workers.ReencodeEnvelopes => [
+      keys: [:user_id],
+      period: :infinity,
+      states: [:available, :scheduled, :retryable]
+    ],
+    Engram.Workers.RefreshKeywordVectors => [
+      period: 3600,
+      keys: [:note_id],
+      states: [:available, :scheduled]
+    ],
+    Engram.Workers.RepathNoteIndex => [
+      period: 120,
+      keys: [:note_id, :old_path_hmac],
+      states: :incomplete
+    ],
+    # Period is the caller's repair window (`ExtractNoteLinks`).
+    {Engram.Workers.RewriteNoteLinks, :repair} => [
+      keys: [:target_id, :old_basename_hmac],
+      states: [:available, :scheduled]
+    ],
+    Engram.Workers.RotateUserDek => [keys: [:user_id], states: :incomplete],
+    Engram.Workers.RotateUserMasterKey => [keys: [:user_id, :target_version], states: :incomplete],
+    Engram.Workers.RotationTextGuard => [
+      keys: [:user_id, :dek_version],
+      period: :infinity,
+      states: [:available, :scheduled, :retryable]
+    ],
+    Engram.Workers.WarmCrdtHeads => [period: 3000, states: :incomplete],
+    # Unique among held copies only: the running original is `executing` and
+    # must not block its own hold, but a re-run of it (Lifeline rescue, a
+    # retry of the completed original) must not hold a second copy, or both
+    # are released at once (two DEK rotations overlapping).
+    :suspended_copy => [period: :infinity, states: [:suspended]]
+  }
+
+  @doc """
+  The `unique:` option for `key` (a worker, `{worker, call_site}`, or
+  `:none` for an insert that must never dedup), with `overrides` (a
+  caller's runtime `period`) merged in.
+
+  A narrowed `fields:` always gets `:queue`. Oban's check is `WHERE state IN
+  (..) AND inserted_at >= .. AND <one predicate per field>`, and the only
+  btree it can use is `(state, queue, ...)`: without `queue` it seq-scans
+  oban_jobs (3.8 s per check in prod on 2026-11-03, planner cost 11,016
+  against 904 with it). A worker runs on one queue, so dedup is unchanged.
+  """
+  @spec unique(term(), keyword()) :: keyword() | false
+  def unique(key, overrides \\ [])
+  def unique(:none, []), do: false
+
+  def unique(key, overrides) do
+    opts = @unique |> Map.fetch!(key) |> Keyword.merge(overrides)
+
+    case Keyword.fetch(opts, :fields) do
+      {:ok, fields} ->
+        if :queue in fields, do: opts, else: Keyword.put(opts, :fields, fields ++ [:queue])
+
+      :error ->
+        opts
+    end
+  end
+
+  @doc "Every unique policy key (ObanRetentionTest walks them)."
+  @spec unique_keys() :: [term()]
+  def unique_keys, do: Map.keys(@unique)
+
+  @doc "Seconds a finished job is kept before the Pruner deletes it."
+  @spec retention_seconds() :: pos_integer()
+  def retention_seconds, do: @retention_seconds
+
+  @doc """
+  `Oban.Reindexer` options. oban_jobs is a queue table: every row is
+  pruned within a day and VACUUM never shrinks a btree or GIN (prod
+  2026-11-03: 73 MB of index for 17 MB of rows). `REINDEX INDEX
+  CONCURRENTLY` blocks no insert, fetch or update.
+
+    * `indexes`: every index oban_jobs has (ObanReindexerTest checks the
+      migrated schema). Oban's default names `oban_jobs_meta_index`, which
+      we dropped, so it would fail every run.
+    * `schedule`: Sunday 10:37 UTC, inside the 10:00-11:15 window, on a
+      minute no cron uses (ObanReindexerTest).
+    * `timeout`: per statement; Oban's 15 s default is short for the GIN.
+
+  Needs MAINTAIN on oban_jobs for the runtime role (migration
+  20261103200000). A run cut short leaves an invalid `*_ccnew` copy only the
+  table owner can drop: `docs/context/oban-jobs-reindex.md`.
+  """
+  @spec reindexer() :: keyword()
+  def reindexer do
+    [
+      schedule: "37 10 * * 0",
+      timeout: :timer.minutes(10),
+      indexes: ~w(
+        oban_jobs_pkey
+        oban_jobs_args_index
+        oban_jobs_state_queue_priority_scheduled_at_id_index
+        oban_jobs_pending_note_id_index
+        oban_jobs_state_cancelled_at_index
+        oban_jobs_state_discarded_at_index
+        oban_jobs_embed_note_note_id_index
+        oban_jobs_rewrite_note_links_old_basename_hmac_index
+      )
+    ]
+  end
+
+  @doc """
+  `conf` (the `:engram, Oban` env) with the oban_jobs table plugins added:
+  the Pruner (`retention_seconds/0`) and the Reindexer (`reindexer/0`).
+  A node with `plugins: false` (web) gets neither.
+  """
+  @spec oban_config(keyword()) :: keyword()
+  def oban_config(conf) do
+    case Keyword.get(conf, :plugins) do
+      plugins when is_list(plugins) ->
+        table_plugins = [
+          {Oban.Plugins.Pruner, max_age: @retention_seconds},
+          {Oban.Reindexer, reindexer()}
+        ]
+
+        Keyword.put(conf, :plugins, plugins ++ table_plugins)
+
+      _false ->
+        conf
+    end
+  end
+
+  @doc """
+  Parks a copy of `job` as `suspended`, tagged `meta.held = tag`, and returns
+  `:ok`. Oban never stages or fetches a suspended job, so it writes nothing
+  while it waits (a snooze rewrites the row every wake, a non-HOT UPDATE).
+  `release_suspended/1` frees it. Not pruned: a held job is real work, so the
+  holder must release it (the count is
+  `engram_prom_ex_oban_queue_length_count{state="suspended"}`).
+  """
+  @spec suspend_copy(Oban.Job.t(), String.t()) :: :ok
+  def suspend_copy(%Oban.Job{} = job, tag) do
+    changeset =
+      Oban.Job.new(job.args,
+        worker: job.worker,
+        queue: job.queue,
+        priority: job.priority,
+        max_attempts: job.max_attempts,
+        meta: Map.put(job.meta || %{}, "held", tag),
+        tags: job.tags || [],
+        unique: unique(:suspended_copy)
+      )
+
+    # `state` is a permitted field but not in `Oban.Job.new/2`'s option
+    # typespec, so it is set on the changeset (dialyzer read the option as
+    # a call that never returns).
+    _job = Oban.insert!(Ecto.Changeset.put_change(changeset, :state, "suspended"))
+    :ok
+  end
+
+  @doc "Deletes the `tag` copy of `job` (same worker and args) `suspend_copy/2` parked."
+  @spec drop_suspended(Oban.Job.t(), String.t()) :: non_neg_integer()
+  def drop_suspended(%Oban.Job{worker: worker, args: args}, tag) do
+    {count, _} =
+      from(j in suspended_query(tag), where: j.worker == ^worker and j.args == ^args)
+      |> Repo.delete_all()
+
+    count
+  end
+
+  @doc "Makes every `tag` copy available now. Returns how many."
+  @spec release_suspended(String.t()) :: non_neg_integer()
+  def release_suspended(tag) do
+    {count, _} =
+      suspended_query(tag)
+      |> Repo.update_all(set: [state: "available", scheduled_at: DateTime.utc_now()])
+
+    count
+  end
+
+  defp suspended_query(tag),
+    do:
+      from(j in Oban.Job,
+        where: j.state == "suspended" and fragment("?->>'held' = ?", j.meta, ^tag)
+      )
+
   @doc """
   Lower to `priority` every job in `query` ranked worse than it, so a live
   enqueue is not swallowed by a backfill job queued earlier (Oban fetches

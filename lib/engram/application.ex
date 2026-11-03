@@ -32,7 +32,7 @@ defmodule Engram.Application do
 
     if Engram.Observability.Otel.enabled?(), do: Engram.Observability.Otel.attach_handlers()
 
-    children = children(Application.fetch_env!(:engram, Oban))
+    children = children(Engram.Jobs.oban_config(Application.fetch_env!(:engram, Oban)))
 
     opts = [strategy: :one_for_one, name: Engram.Supervisor]
 

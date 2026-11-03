@@ -32,7 +32,7 @@ defmodule Engram.Workers.RepathNoteIndex do
   use Oban.Worker,
     queue: :embed,
     max_attempts: 5,
-    unique: [period: 120, keys: [:note_id, :old_path_hmac], states: :incomplete]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   alias Engram.Indexing
   alias Engram.Logger.Metadata

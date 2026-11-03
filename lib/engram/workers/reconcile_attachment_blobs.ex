@@ -48,7 +48,7 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
   use Oban.Worker,
     queue: :maintenance,
     max_attempts: 3,
-    unique: [keys: [:vault_id], period: 600]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   import Ecto.Query
 

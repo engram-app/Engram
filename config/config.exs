@@ -240,11 +240,9 @@ config :engram, Oban,
     crdt_checkpoint: 3
   ],
   plugins: [
-    # One day. The PromEx queue-count poll scans every retained row, and at
-    # 7 days it was the #1 app statement in prod (2026-10-20 audit). Nothing
-    # may rely on a completed job outliving this: ObanRetentionTest fails a
-    # worker whose unique period is longer, unless a table really dedupes it.
-    {Oban.Plugins.Pruner, max_age: 24 * 3600},
+    # The oban_jobs Pruner (retention) and Reindexer are added at boot by
+    # `Engram.Jobs.oban_config/1` (lib/engram/application.ex): their values
+    # live in `Engram.Jobs`, the one home of job options.
     Oban.Plugins.Lifeline,
     {
       Oban.Plugins.Cron,

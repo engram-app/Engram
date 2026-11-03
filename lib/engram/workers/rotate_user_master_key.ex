@@ -22,10 +22,7 @@ defmodule Engram.Workers.RotateUserMasterKey do
   use Oban.Worker,
     queue: :crypto_backfill,
     max_attempts: 5,
-    unique: [
-      keys: [:user_id, :target_version],
-      states: :incomplete
-    ]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   alias Engram.Crypto.MasterRotation
 

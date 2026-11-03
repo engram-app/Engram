@@ -12,7 +12,7 @@ defmodule Engram.ObanRetentionTest do
   # (2026-10-20 audit: 435k calls, 8.6 ms mean, cost linear in retained rows).
   use ExUnit.Case, async: true
 
-  alias Engram.Test.ObanWorkers
+  alias Engram.Jobs
 
   # Workers whose long unique period is NOT their dedupe, with the thing that is.
   @db_deduped %{
@@ -34,14 +34,15 @@ defmodule Engram.ObanRetentionTest do
   test "no worker's unique period outlives the Pruner unless a table dedupes it" do
     max_age = pruner_max_age()
 
+    # Every policy in the one table, call-site variants included.
     offenders =
-      for mod <- ObanWorkers.all(),
-          unique = Keyword.get(mod.__opts__(), :unique),
-          is_list(unique),
+      for key <- Jobs.unique_keys(),
+          mod = policy_worker(key),
+          unique = Jobs.unique(key),
           counts_completed?(unique),
           longer_than?(Keyword.get(unique, :period, 60), max_age),
           not Map.has_key?(@db_deduped, mod),
-          do: {mod, unique[:period]}
+          do: {key, unique[:period]}
 
     assert offenders == [],
            "these workers dedupe for longer than the Pruner keeps completed jobs\n" <>
@@ -67,12 +68,14 @@ defmodule Engram.ObanRetentionTest do
   defp longer_than?(period, max) when is_integer(period), do: period > max
 
   defp pruner_max_age do
-    :engram
-    |> Application.fetch_env!(Oban)
+    Jobs.oban_config(plugins: [])
     |> Keyword.fetch!(:plugins)
     |> Enum.find_value(fn
       {Oban.Plugins.Pruner, opts} -> Keyword.fetch!(opts, :max_age)
       _ -> nil
     end)
   end
+
+  defp policy_worker({mod, _call_site}), do: mod
+  defp policy_worker(mod), do: mod
 end

@@ -19,7 +19,7 @@ defmodule Engram.Workers.DrainStrandedTails do
   use Oban.Worker,
     queue: :maintenance,
     max_attempts: 3,
-    unique: [period: 600, states: :incomplete]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   import Ecto.Query
 

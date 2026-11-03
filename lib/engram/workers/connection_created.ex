@@ -27,7 +27,7 @@ defmodule Engram.Workers.ConnectionCreated do
     max_attempts: 3,
     # The same look-back as `OAuth.prior_connection?/3`, which is the real
     # dedupe. Effective only as long as the Pruner keeps completed jobs.
-    unique: [keys: [:user_id, :client_id], period: 30 * 24 * 3600]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   alias Engram.Accounts.User
   alias Engram.Mailer

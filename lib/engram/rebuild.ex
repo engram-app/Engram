@@ -113,6 +113,9 @@ defmodule Engram.Rebuild do
   # "Active" Free users for the order: seen within this many days.
   @active_days 30
 
+  # `meta.held` of the jobs `hold/1` parks (`Engram.Jobs.suspend_copy/2`).
+  @held_tag "rebuild"
+
   @type mode :: :off | :dry_run | :on
   # A note or any map naming one and its owner (a `%Note{}` qualifies).
   @type note_ref :: %{
@@ -501,29 +504,7 @@ defmodule Engram.Rebuild do
   ~800 updates an hour for as long as the flag stayed on (#2375).
   """
   @spec hold(Oban.Job.t()) :: :ok
-  def hold(%Oban.Job{} = job) do
-    changeset =
-      Oban.Job.new(job.args,
-        worker: job.worker,
-        queue: job.queue,
-        priority: job.priority,
-        max_attempts: job.max_attempts,
-        meta: Map.put(job.meta || %{}, "held", "rebuild"),
-        tags: job.tags || [],
-        # Unique among held copies only: the running original is `executing`
-        # and must not block its own hold, but a re-run of it (Lifeline
-        # rescue, a retry of the completed original) must not hold a second
-        # copy, or both are released at once (two DEK rotations overlapping).
-        unique: [period: :infinity, states: [:suspended]]
-      )
-
-    # `state` is a permitted field but not in `Oban.Job.new/2`'s option
-    # typespec, so it is set on the changeset (dialyzer read the option as
-    # a call that never returns).
-    _job = Oban.insert!(Ecto.Changeset.put_change(changeset, :state, "suspended"))
-
-    :ok
-  end
+  def hold(%Oban.Job{} = job), do: Engram.Jobs.suspend_copy(job, @held_tag)
 
   @doc """
   The gate for the writers Task 16.4 keeps out of the pass: `hold/1` while
@@ -542,16 +523,7 @@ defmodule Engram.Rebuild do
     end
   end
 
-  defp drop_held(%Oban.Job{worker: worker, args: args}) do
-    from(j in held_query(), where: j.worker == ^worker and j.args == ^args)
-    |> Repo.delete_all()
-  end
-
-  defp held_query,
-    do:
-      from(j in Oban.Job,
-        where: j.state == "suspended" and fragment("?->>'held' = 'rebuild'", j.meta)
-      )
+  defp drop_held(job), do: Engram.Jobs.drop_suspended(job, @held_tag)
 
   @doc """
   Makes every job `hold/1` parked available again once `holding?/0` is
@@ -560,15 +532,7 @@ defmodule Engram.Rebuild do
   """
   @spec release_held() :: non_neg_integer()
   def release_held do
-    if holding?() do
-      0
-    else
-      {count, _} =
-        held_query()
-        |> Repo.update_all(set: [state: "available", scheduled_at: DateTime.utc_now()])
-
-      count
-    end
+    if holding?(), do: 0, else: Engram.Jobs.release_suspended(@held_tag)
   end
 
   # A check costs the bucket 1 token (Hammer has no read without a hit).
