@@ -121,6 +121,36 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
     end
 
+    # A restored trashed vault (IndexVersions skips deleted vaults) or a
+    # rollback then roll-forward leaves version-stale notes after the ledger
+    # closed. Red on 156c2fd94: nothing re-checked them.
+    test "restoring a trashed vault re-checks versions, and the re-check heals it" do
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+      note = current_note(user, chunker_version: nil, keyword_version: nil)
+      :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
+      {:ok, _} = Engram.Vaults.delete_vault(user, note.vault_id)
+
+      assert {:ok, _} = Engram.Vaults.restore_vault(user, note.vault_id)
+
+      assert_enqueued(
+        worker: ReconcileEmbeddings,
+        args: %{"mode" => "reverify", "version_check" => true}
+      )
+
+      assert :ok =
+               perform_job(ReconcileEmbeddings, %{"mode" => "reverify", "version_check" => true})
+
+      assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
+    end
+
+    test "a new build queues one version re-check, the same build none" do
+      assert :ok = ReconcileEmbeddings.version_check_on_new_build("sha-a")
+      assert_enqueued(worker: ReconcileEmbeddings, args: %{"version_check" => true})
+      assert :skipped = ReconcileEmbeddings.version_check_on_new_build("sha-a")
+      assert :skipped = ReconcileEmbeddings.version_check_on_new_build(nil)
+    end
+
     test "once IndexVersions is done, the keyword sweep does not run, re-verify included" do
       user = insert(:user)
       note = current_note(user, keyword_version: nil)

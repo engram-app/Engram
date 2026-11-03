@@ -103,6 +103,8 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # notes table (see `gates/1`), so its hops only page the budget and note-cap
   # sweeps, and four 5-minute hops end inside the off-peak window.
   @reverify_hops 4
+  @version_check_hops 12
+  @version_check_cursor "reconcile:version_check"
 
   @doc """
   Queues a sweep now. Called where notes are marked for re-indexing (index
@@ -130,6 +132,38 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   @impl Oban.Worker
   def backoff(%Oban.Job{attempt: attempt}),
     do: Engram.Jobs.capped_backoff(@chain_seconds, max(attempt - 1, 0), 3_600, 0.25)
+
+  @doc """
+  Queues one version re-check: the re-verify with the version term on, so it
+  walks the id windows for notes left on an older index version once
+  `IndexVersions` has closed. For the two events that put such notes back
+  without reopening the ledger: a restored trashed vault (`Vaults` calls this
+  in the restore transaction) and a new build after a rollback
+  (`version_check_on_new_build/1`, at boot). Event-driven, not daily: the
+  daily walk was the 04:02 slow statement.
+  """
+  @spec version_check() :: {:ok, Oban.Job.t()} | {:error, term()}
+  def version_check do
+    args = %{"mode" => "reverify", "version_check" => true}
+    Oban.insert(new(args, replace: replace_args(args)))
+  end
+
+  @doc """
+  At boot: one `version_check/0` per build (`build`, the release sha), so a
+  rollback then roll-forward self-heals with no operator step. The build last
+  checked is a persisted cursor; nil (no release sha: dev, test) does nothing.
+  """
+  @spec version_check_on_new_build(String.t() | nil) :: :ok | :skipped
+  def version_check_on_new_build(nil), do: :skipped
+
+  def version_check_on_new_build(build) do
+    if Engram.Maintenance.Cursor.get(@version_check_cursor)["build"] == build do
+      :skipped
+    else
+      {:ok, _} = version_check()
+      :ok = Engram.Maintenance.Cursor.put(@version_check_cursor, %{"build" => build})
+    end
+  end
 
   @doc """
   The `replace` option for a sweep with `args`: a re-verify takes over a
@@ -235,7 +269,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # migration name; a halt between the two reads only makes this run
     # skip rebuilds, never queue extra ones.
     versions = Rebuild.target_versions()
-    %{open?: open?, qdrant_open?: qdrant_open?, version_term?: version_term?} = gates(reverify?)
+
+    %{open?: open?, qdrant_open?: qdrant_open?, version_term?: version_term?} =
+      gates(reverify?, args["version_check"] == true)
 
     version_stale =
       if version_term?, do: IndexVersions.stale_dynamic(versions), else: dynamic(false)
@@ -411,19 +447,19 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # Whether a version rollout is open, whether the Qdrant gate lets per-note
   # Qdrant work through (read only when this run would queue any), and so
   # whether the version term and keyword top-up run.
-  defp gates(reverify?) do
+  defp gates(reverify?, version_check?) do
     open? = not IndexVersions.done?()
     qdrant_open? = not (open? or reverify?) or qdrant_open?()
 
-    # The version term walks every notes window, so it runs only while a
-    # rollout is open. The daily re-verify used to run it too, to catch notes a
-    # rollback then roll-forward or a restored vault left version-stale after
-    # the ledger closed; that walk was the 04:02 slow statement (Job Load Audit
-    # 2026-11-03), so a release that needs it bumps the version instead.
+    # The version term walks every notes window, so it runs while a rollout is
+    # open, and once per event that can put version-stale notes back after the
+    # ledger closed: a restored vault and a new build (`version_check/0`).
+    # Not daily: that walk was the 04:02 slow statement (Job Load Audit
+    # 2026-11-03).
     %{
       open?: open?,
       qdrant_open?: qdrant_open?,
-      version_term?: open? and qdrant_open?
+      version_term?: (open? or version_check?) and qdrant_open?
     }
   end
 
@@ -458,16 +494,23 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   defp chain(args, open?, more?) do
     hop = Map.get(args, "hop", 0) + 1
     reverify? = args["mode"] == "reverify"
+    # A version check walks the id windows: the old daily walk's 12 hops.
+    hops = if args["version_check"], do: @version_check_hops, else: @reverify_hops
 
     next =
       cond do
-        reverify? and more? and hop < @reverify_hops -> %{"mode" => "reverify", "hop" => hop}
-        open? -> %{}
-        true -> nil
+        reverify? and more? and hop < hops ->
+          Map.merge(%{"mode" => "reverify", "hop" => hop}, Map.take(args, ["version_check"]))
+
+        open? ->
+          %{}
+
+        true ->
+          nil
       end
 
     _ =
-      if reverify? and more? and hop >= @reverify_hops do
+      if reverify? and more? and hop >= hops do
         Logger.warning(
           "reconcile_embeddings: re-verify stopped with work left",
           Metadata.with_category(:warning, :search, attempt: hop)

@@ -414,7 +414,15 @@ defmodule Engram.Application do
     if oban[:queues] != false and is_nil(oban[:testing]),
       # `boot`, not `kick`: a deploy is where events get lost, so what the
       # boot sweep finds still counts as `missed` (ReconcileEmbeddings).
-      do: {Task, fn -> Engram.Workers.ReconcileEmbeddings.kick(%{"boot" => true}) end}
+      do:
+        {Task,
+         fn ->
+           Engram.Workers.ReconcileEmbeddings.kick(%{"boot" => true})
+           # Once per build: a rollback then roll-forward self-heals.
+           Engram.Workers.ReconcileEmbeddings.version_check_on_new_build(
+             System.get_env("RELEASE_SHA")
+           )
+         end}
   end
 
   defp clerk_strategy_child do

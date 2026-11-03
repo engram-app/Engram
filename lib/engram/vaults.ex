@@ -1018,6 +1018,10 @@ defmodule Engram.Vaults do
                   # closed while this one sat in the trash. Same transaction:
                   # a rolled-back restore enqueues nothing.
                   {:ok, _} = Engram.Workers.BackfillCrdtState.enqueue_vault(user.id, v.id)
+                  # IndexVersions skips deleted vaults too, so its notes may sit
+                  # on an older index version: one version re-check, same
+                  # transaction.
+                  {:ok, _} = Engram.Workers.ReconcileEmbeddings.version_check()
                   {:ok, decrypt_vault_if_needed(v, user)}
 
                 other ->
