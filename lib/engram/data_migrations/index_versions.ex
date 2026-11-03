@@ -28,13 +28,14 @@ defmodule Engram.DataMigrations.IndexVersions do
 
   @doc """
   The newest `{chunker, keyword}` pass that has completed, under ANY embed
-  model and ledger `version/0`, each capped at `build` (a rollback build
-  older than the pass keeps its own); nil when none has. Every content-current
-  note held at least those versions when it closed. The model is left out
-  because it has its own stale term (`stale_dynamic/1`), and the ledger
-  version because a bump that reopens the pass does not unmake what the old
-  one proved. Read by `Rebuild.target_versions/0`, so `off` keeps stamping the
-  last completed pass after the next chunker or keyword bump.
+  model, capped at `build` (a rollback build older than the pass keeps its
+  own); nil when none has. Every content-current note held at least those
+  versions when it closed. One real row wins (tuple order), never a mix of
+  two rows' components. The model is left out because it has its own stale
+  term (`stale_dynamic/1`). Rows whose pass is open again (a `version/0` bump
+  that found work) do not count. Read by `Rebuild.target_versions/0`, so
+  `off` keeps stamping the last completed pass after the next chunker or
+  keyword bump.
   """
   @spec newest_completed({pos_integer(), pos_integer()}) :: {pos_integer(), pos_integer()} | nil
   def newest_completed({build_chunker, build_keyword}) do
@@ -58,7 +59,11 @@ defmodule Engram.DataMigrations.IndexVersions do
   defp prefix({chunker, keyword}),
     do: "index_versions:chunker=#{chunker},keyword=#{keyword},model="
 
-  # Bumping this reopens the pass; `newest_completed/1` ignores it on purpose.
+  # Bumping this reopens the pass. `newest_completed/1` does not filter on
+  # it, but once the bumped pass finds work the runner reopens the SAME row
+  # (`note_open/2` clears `completed_at`), so `off` falls back to the next
+  # older completed pass, or the pins, until it closes again. Stamps can
+  # then only be lower than the data, never higher.
   @impl true
   def version, do: 1
 

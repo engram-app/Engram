@@ -139,6 +139,13 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
       assert IndexVersions.newest_completed({6, 6}) == {5, 5}
     end
 
+    test "disagreeing rows give one real pass, not a mix of both" do
+      complete!("index_versions:chunker=5,keyword=4,model=voyage-4-large")
+      complete!("index_versions:chunker=4,keyword=5,model=voyage-4-large")
+
+      assert IndexVersions.newest_completed({5, 5}) == {5, 4}
+    end
+
     test "capped at the build, nil when nothing completed" do
       assert IndexVersions.newest_completed({5, 5}) == nil
       complete!("index_versions:chunker=5,keyword=5,model=voyage-4-large")
