@@ -70,6 +70,9 @@ defmodule Engram.DataMigrations.NoteSplit do
   # touch skipped because a writer held it.
   defp heal(ids, %{repo: repo}) do
     touched = touch(repo, needing(ids))
+    # A missing body row, written by this pass rather than by the trigger
+    # (the next release drops it). Present rows are left as they are.
+    _ = NoteBody.sync!(touched, [], repo: repo)
     left? = repo.exists?(where(unfixed(), [n], field(n, :id) in type(^ids, {:array, Ecto.UUID})))
     {length(touched), left?}
   end

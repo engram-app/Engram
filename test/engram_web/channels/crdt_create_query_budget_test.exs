@@ -31,7 +31,9 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
   # found or created in the row transaction (`Folders.Rows.ensure/4`: one probe
   # by path hash, plus one insert when the folder is new, as `F` is here; an
   # existing folder costs the probe alone).
-  @statements 17
+  # 17 -> 18: R8 release N, the create brings its `note_bodies` row in step
+  # itself (`NoteBody.sync!/3`; a no-op while the trigger is live).
+  @statements 18
   @tenant_txns 1
   @subscription_reads 0
 

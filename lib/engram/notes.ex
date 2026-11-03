@@ -1349,6 +1349,8 @@ defmodule Engram.Notes do
         {:ok, _} ->
           case Repo.one(lookup_query) do
             %Note{id: ^note_id} = inserted ->
+              # Ours, so it was inserted: its body row, same transaction.
+              _ = NoteBody.sync!(note_id, NoteBody.body_fields())
               :ok = UsageMeters.inc_notes_count(user.id, 1)
               {:inserted, inserted, crdt}
 
@@ -2759,7 +2761,7 @@ defmodule Engram.Notes do
     # every writer) and write only if it is still that row.
     interleave_hook(:before_expected_lock)
 
-    case Repo.one(
+    case one_locked(
            w.query
            |> no_tail_since_replay(w.opts[:merge_doc])
            |> lock_for_write(w.vault.id)
@@ -2895,22 +2897,28 @@ defmodule Engram.Notes do
         type(^vault_id, Ecto.UUID)
       )
     )
-    |> locked_body_from_notes()
+    |> exclude(:select)
+    |> select([n], struct(n, ^@note_core_fields))
     |> lock("FOR NO KEY UPDATE OF n0")
   end
 
-  # A row-locked read takes the body from the `notes` columns, not from
-  # `note_bodies`. When the read WAITS on the row lock, Postgres re-fetches
-  # only the locked relation at its newest version (EvalPlanQual, READ
-  # COMMITTED); a joined body row comes back as the statement first read it,
-  # so a fresh notes row would pair with a stale body and the write behind it
-  # would lose its snapshot fence whenever it waited. This release still
-  # writes every notes body column in step. The contract release, which stops
-  # writing them, must lock in one statement and read the body in a fresh
-  # one (LockedReadBodyTest pins this). Any select the query carried is
-  # replaced; the unused LEFT JOIN is removed by the planner (unique key).
+  # Runs a `lock_for_write/2` query, then reads the locked row's body from
+  # `note_bodies` in a FRESH statement. The lock statement selects no body
+  # column, so it never de-TOASTs the `notes` copy. Two statements, not a
+  # join: when the lock statement WAITS, Postgres re-fetches only the locked
+  # relation at its newest version (EvalPlanQual, READ COMMITTED), so a
+  # joined body would be the pre-wait one and the write behind it would lose
+  # its snapshot fence (LockedReadBodyTest). Holding the notes row lock is
+  # enough for the second read: every body writer holds it too
+  # (`Engram.Notes.NoteBody` moduledoc). Any select the query carried is
+  # replaced; an unused LEFT JOIN is removed by the planner (unique key).
   # `OF n0` (Ecto's alias for the first source) keeps the lock on notes.
-  defp locked_body_from_notes(query), do: query |> exclude(:select) |> select([n], n)
+  defp one_locked(query) do
+    case Repo.one(query) do
+      nil -> nil
+      %Note{id: id} = note -> struct(note, Map.get(NoteBody.locked_bodies([id], []), id, %{}))
+    end
+  end
 
   defp interleave_hook(point), do: Engram.InterleaveHook.run(point)
 
@@ -3067,8 +3075,15 @@ defmodule Engram.Notes do
   # read or reports a conflict. The UPDATE itself succeeded (it matched no
   # rows), so there is no aborted-statement state and the enclosing transaction
   # stays usable, including on the `mode: :savepoint` batch path.
+  #
+  # A write that landed brings `note_bodies` in step in the same transaction
+  # (`NoteBody.sync!/3`); a lost fence or a failed write wrote nothing, so it
+  # syncs nothing.
   defp fenced_update(changeset, db_opts) do
-    Repo.update(changeset, db_opts)
+    with {:ok, updated} <- Repo.update(changeset, db_opts) do
+      _ = NoteBody.sync!(updated.id, changeset.changes, db_opts)
+      {:ok, updated}
+    end
   rescue
     Ecto.StaleEntryError -> :stale_snapshot
   end
@@ -3604,8 +3619,8 @@ defmodule Engram.Notes do
   end
 
   defp one_or_reread(query) do
-    case Repo.one(query) do
-      nil -> Repo.one(query)
+    case one_locked(query) do
+      nil -> one_locked(query)
       %Note{} = note -> note
     end
   end
@@ -4582,6 +4597,7 @@ defmodule Engram.Notes do
       # if that ever stops holding (e.g. an index-semantics change), since a
       # dropped tombstone silently reopens the offline-resurrection gap.
       {inserted, _} = Repo.insert_all(Note, [tombstone], on_conflict: :nothing)
+      _ = NoteBody.sync!([note.id, tomb_id], full_kw)
 
       if inserted == 0 do
         require Logger
@@ -7317,7 +7333,10 @@ defmodule Engram.Notes do
                 tombstones
                 |> Enum.map(&Map.put(&1, :seq, seq))
                 |> Enum.chunk_every(@tombstone_insert_chunk)
-                |> Enum.each(&Repo.insert_all(Note, &1, on_conflict: :nothing))
+                |> Enum.each(fn rows ->
+                  Repo.insert_all(Note, rows, on_conflict: :nothing)
+                  NoteBody.sync!(Enum.map(rows, & &1.id), NoteBody.body_fields())
+                end)
 
                 # The reindex + link-rewrite fan-out commits with the rows it
                 # covers (bulk inserts, bounded by Engram.Batch.insert_rows/0).

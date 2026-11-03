@@ -8,8 +8,8 @@ defmodule Engram.Notes.LockedReadBodyTest do
   back as the statement first read it. So a locked read that joins the body
   pairs a fresh notes row with a stale body, and the write behind it loses
   its snapshot fence every time it actually waited. Locked reads therefore
-  take the body from the `notes` columns, which this release still writes
-  in step (`Engram.Notes.NoteBody` moduledoc).
+  lock in one statement and read the body from `note_bodies` in a fresh one
+  (`Engram.Notes.NoteBody` moduledoc).
 
   Two real sessions: the sandbox shares one transaction across processes,
   so everything is created through `unboxed_run` and deleted afterwards.

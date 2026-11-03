@@ -98,7 +98,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   alias Engram.Crypto
   alias Engram.Crypto.{Envelope, RotationGate}
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtUpdateLog, Note, VaultIndexState, VaultIndexUpdateLog}
+  alias Engram.Notes.{CrdtUpdateLog, Note, NoteBody, VaultIndexState, VaultIndexUpdateLog}
   alias Engram.Repo
   alias Engram.Workers.BackfillCrdtHead
 
@@ -491,5 +491,6 @@ defmodule Engram.Workers.ReencodeEnvelopes do
 
     from(r in schema, where: field(r, ^key) == ^id and field(r, ^ct) == ^old_ct)
     |> Repo.update_all(set: [{ct, new_ct}, {nonce, new_nonce}])
+    |> tap(fn {n, _} -> if schema == Note and n > 0, do: NoteBody.sync!(id, [ct]) end)
   end
 end

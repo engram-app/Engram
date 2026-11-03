@@ -487,6 +487,8 @@ defmodule Engram.Notes.CrdtCheckpoint do
              ]
            ) do
         {1, _} ->
+          _ = NoteBody.sync!(note_id, [:crdt_state_ciphertext])
+
           {note.content_hash, note.content_hash, note.path, nil,
            prune_tail(note_id, vault_id, prune)}
 
@@ -550,6 +552,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
                ]
              ) do
           {1, _} ->
+            _ = NoteBody.sync!(note_id, [:crdt_state_ciphertext])
             {prev, content_hash, note.path, nil, prune_tail(note_id, vault_id, prune)}
 
           {0, _} ->
@@ -629,6 +632,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
         case Repo.update_all(fenced_query, set: set) do
           {1, _} ->
+            _ = NoteBody.sync!(note_id, set)
             pruned = prune_tail(note_id, vault_id, prune)
 
             # #1710. AFTER the fenced write, in the same transaction: the {0, _}
