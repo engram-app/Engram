@@ -30,6 +30,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
   # Indexed notes beside the one due: enough that scanning the vault costs
   # clearly more than the partial index.
   @indexed 200
+  @small_vaults 150
 
   setup do
     DataMigrations.reset_cache()
@@ -66,5 +67,76 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
 
     plan = QueryPlan.generic_plan(sql, analyze: ~w(notes vaults))
     assert plan =~ "notes_reconcile_due", "plan:\n#{plan}\n\nsql:\n#{sql}"
+  end
+
+  # The windowed sweep (an IndexVersions rollout, and the daily re-verify)
+  # names one id window of notes. Prod E5 (2026-11-02, as engram_app under
+  # the tenant): with the vault as an INNER JOIN the planner drove the loop
+  # from the user's vaults and scanned `notes_recent_index (user_id,
+  # vault_id, updated_at, id)` once per vault, filtering the window's ids
+  # against every note of the vault: 445 ms, 669 cold reads, for 5 ids.
+  # The window must be fetched by primary key, under RLS (self-host's
+  # per-user walk, the E5 shape) and without it (SaaS' fleet walk).
+  test "the windowed sweep fetches its id window by primary key, not per vault" do
+    user = insert(:user)
+    vaults = insert_list(2, :vault, user: user)
+    done = :crypto.hash(:sha256, "# Test note content") |> Base.encode16(case: :lower)
+
+    for vault <- vaults,
+        do:
+          insert_list(@indexed, :note,
+            user: user,
+            vault: vault,
+            embed_hash: done,
+            dense_indexed_hash: done
+          )
+
+    note = insert(:note, user: user, vault: hd(vaults), embed_hash: nil)
+
+    # Prod's shape: many small vaults, so the statistics put a few notes in
+    # any one vault and a per-vault index scan looks as cheap as the window's
+    # primary-key probes, though this user's vaults hold hundreds.
+    for _ <- 1..@small_vaults do
+      other = insert(:user)
+
+      insert_list(2, :note,
+        user: other,
+        vault: insert(:vault, user: other),
+        embed_hash: done,
+        dense_indexed_hash: done
+      )
+    end
+
+    # A version rollout is open and the Qdrant gate lets it through: the
+    # version term is on, so the sweep walks id windows.
+    :ok = DataMigrations.reopen(IndexVersions.name(), 1)
+    DataMigrations.reset_cache()
+    Application.put_env(:engram, :reconcile_qdrant_gate, false)
+    on_exit(fn -> Application.delete_env(:engram, :reconcile_qdrant_gate) end)
+
+    tick = DateTime.new!(Date.utc_today(), ~T[03:57:00])
+
+    {_, queries} =
+      QueryRecorder.record(fn ->
+        assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick)
+      end)
+
+    assert_enqueued(worker: Engram.Workers.EmbedNote, args: %{"note_id" => note.id})
+
+    windowed =
+      for %{sql: "WITH \"reconcile_eligible\"" <> _ = sql} <- queries, sql =~ "ANY(", do: sql
+
+    assert [sql | _] = windowed, "recorded no windowed reconcile UPDATE on notes"
+
+    Repo.query!("ANALYZE notes")
+    Repo.query!("ANALYZE vaults")
+
+    fleet = QueryPlan.generic_plan(sql, bitmapscan: false)
+    tenant = Repo.with_tenant!(user.id, fn -> QueryPlan.generic_plan(sql, bitmapscan: false) end)
+
+    for plan <- [fleet, tenant] do
+      assert plan =~ "notes_pkey", "plan:\n#{plan}\n\nsql:\n#{sql}"
+      refute plan =~ ~r/Index Cond: .*vault_id = /, "plan:\n#{plan}\n\nsql:\n#{sql}"
+    end
   end
 end

@@ -979,7 +979,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     IndexVersions.live_notes()
     |> join(:inner, [n], c in subquery(per_note), on: c.note_id == n.id)
-    |> select([n, _v, c], %{
+    |> select([n, c], %{
       id: n.id,
       tier: n.index_tier,
       updated_at: n.updated_at,
