@@ -917,7 +917,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   end
 
   # The live notes the daily budget sweep aggregates over. Once `NoteSizes` has
-  # filled `note_index_state.note_live` (kept by the `notes_sync_sizes` trigger)
+  # filled `note_index_state.note_live` (kept by the `note_index_state_sync` upsert)
   # the sweep reads that narrow table, whose embed columns are mirrored from
   # `notes` by trigger; until then it aggregates the wide `notes` heap (Job Load
   # Audit 2026-11-03, item 5: these GROUP BYs read every notes row daily).

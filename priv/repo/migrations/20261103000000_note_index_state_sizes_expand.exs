@@ -2,55 +2,42 @@ defmodule Engram.Repo.Migrations.NoteIndexStateSizesExpand do
   use Ecto.Migration
 
   @moduledoc """
-  Stored-size columns on `note_index_state`, kept by triggers, so the hourly
-  `CrdtBloatSweep` reads this narrow row instead of aggregating every wide
-  `notes` row (prod 2026-11-03: that aggregate took 14,982 ms against the
-  15 s query timeout and swapped the database).
+  Narrow, trigger-kept sizes and liveness so `CrdtBloatSweep` (and the daily
+  snapshot, PostHog sync and budget sweep) stop aggregating every wide `notes`
+  row (prod 2026-11-03: the bloat aggregate took 14,982 ms against the 15 s
+  query timeout and swapped the database), WITHOUT adding a row version to
+  any save:
 
-  Sizes come from `note_bodies`, not the `notes` body columns, which the R8
-  contract stops writing and drops: `content_ct` / `crdt_ct` are `nonce field
-  (13 bytes) || ciphertext`, so the stored payload is `octet_length - 13 - 16`
-  (the AEAD tag), floored at 0, exactly what the sweep computed from `notes`.
-  `octet_length` reads the varlena header, never de-TOASTs. `state_bytes` is 0
-  and `has_state` false for a note with no CRDT state.
+    * `note_bodies.content_bytes` / `state_bytes`: the stored payload of the
+      merged body columns (`octet_length - 13` nonce field `- 16` tag,
+      `note_body_payload_bytes/1`; each NULL when its ciphertext is NULL, so a body with
+      no content counts 0 bytes as before), set by the BEFORE trigger `note_bodies_sizes` on the row being
+      written: no extra row. `octet_length` reads the varlena header, never
+      de-TOASTs. From `note_bodies`, which the R8 contract keeps.
+      Follow-up: once R8 N lands (`NoteBody.sync!/3`, #2400), write the sizes
+      in that statement and drop this trigger.
+    * `note_index_state.note_live` (`deleted_at IS NULL`): folded into the
+      EXISTING `note_index_state_sync` upsert (the same `IS DISTINCT FROM`
+      guard, so an unchanged row is never written), whose trigger now also
+      fires on `deleted_at`, which changes on a soft delete or restore only.
 
-  Two triggers, because the facts live on two tables:
-
-    * `note_bodies_sync_sizes` (AFTER INSERT OR UPDATE OF content_ct, crdt_ct
-      on `note_bodies`) writes the three size columns, whoever writes the body.
-    * `notes_sync_sizes` (AFTER INSERT OR UPDATE OF deleted_at, version,
-      updated_at, kind on `notes`, named after `notes_sync_index_state` so the
-      state row exists) mirrors liveness, version and `updated_at`, and fills
-      the sizes from the body row only while they are still NULL: on a note
-      insert the body row is written before the state row, so the body
-      trigger found no state row to update.
-
-  Both update only when a value changed, and neither changes an indexed
-  column of `note_index_state` (fillfactor 80), so the updates stay HOT.
   Additive and nullable: the previous release ignores the columns, and
   `NoteSizes` (data migration) fills rows written before the triggers.
   """
 
-  # One definition of "stored payload bytes of a merged body column", used by
-  # both triggers and the `NoteSizes` backfill: `octet_length - 13` (the nonce
-  # field) `- 16` (`Envelope.tag_bytes/0`, pinned by `crdt_bloat_sweep_narrow_test`).
-  defp size(col), do: "public.note_body_payload_bytes(#{col})"
-
   def up do
     execute "SET lock_timeout = '5s'"
 
-    # Stored byte sizes of one note (far below 2 GB) and a mirror of notes.updated_at,
-    # which is timestamp without time zone.
+    # squawk-ignore: prefer-bigint-over-int
+    # Stored byte sizes of one note, far below 2 GB.
     execute """
-    -- squawk-ignore prefer-bigint-over-int, prefer-timestamptz
-    ALTER TABLE note_index_state
+    -- squawk-ignore prefer-bigint-over-int
+    ALTER TABLE note_bodies
       ADD COLUMN IF NOT EXISTS content_bytes integer,
-      ADD COLUMN IF NOT EXISTS state_bytes integer,
-      ADD COLUMN IF NOT EXISTS has_state boolean,
-      ADD COLUMN IF NOT EXISTS note_live boolean,
-      ADD COLUMN IF NOT EXISTS note_version integer,
-      ADD COLUMN IF NOT EXISTS note_updated_at timestamp
+      ADD COLUMN IF NOT EXISTS state_bytes integer
     """
+
+    execute "ALTER TABLE note_index_state ADD COLUMN IF NOT EXISTS note_live boolean"
 
     execute """
     CREATE FUNCTION note_body_payload_bytes(ct bytea) RETURNS integer
@@ -60,75 +47,191 @@ defmodule Engram.Repo.Migrations.NoteIndexStateSizesExpand do
     """
 
     execute """
-    CREATE FUNCTION note_bodies_sync_sizes() RETURNS trigger
+    CREATE FUNCTION note_bodies_sizes() RETURNS trigger
     LANGUAGE plpgsql SET search_path = '' AS $$
     BEGIN
-      UPDATE public.note_index_state s SET
-        content_bytes = #{size("NEW.content_ct")},
-        state_bytes = #{size("NEW.crdt_ct")},
-        has_state = NEW.crdt_ct IS NOT NULL
-      WHERE s.note_id = NEW.note_id
-        AND (s.content_bytes, s.state_bytes, s.has_state) IS DISTINCT FROM
-            (#{size("NEW.content_ct")}, #{size("NEW.crdt_ct")}, NEW.crdt_ct IS NOT NULL);
-      RETURN NULL;
+      NEW.content_bytes := CASE WHEN NEW.content_ct IS NULL THEN NULL
+                                ELSE public.note_body_payload_bytes(NEW.content_ct) END;
+      NEW.state_bytes := CASE WHEN NEW.crdt_ct IS NULL THEN NULL
+                              ELSE public.note_body_payload_bytes(NEW.crdt_ct) END;
+      RETURN NEW;
     END
     $$
     """
 
     execute """
-    CREATE TRIGGER note_bodies_sync_sizes
-      AFTER INSERT OR UPDATE OF content_ct, crdt_ct ON note_bodies
-      FOR EACH ROW EXECUTE FUNCTION note_bodies_sync_sizes()
+    CREATE TRIGGER note_bodies_sizes
+      BEFORE INSERT OR UPDATE OF content_ct, crdt_ct ON note_bodies
+      FOR EACH ROW EXECUTE FUNCTION note_bodies_sizes()
     """
 
-    # COALESCE evaluates its fallback only when the size is still NULL, so the
-    # body row is read once per note, on its first write.
     execute """
-    CREATE FUNCTION notes_sync_sizes() RETURNS trigger
+    CREATE OR REPLACE FUNCTION note_index_state_sync(n public.notes, overwrite boolean) RETURNS void
     LANGUAGE plpgsql SET search_path = '' AS $$
     BEGIN
-      UPDATE public.note_index_state s SET
-        note_live = NEW.deleted_at IS NULL,
-        note_version = NEW.version,
-        note_updated_at = NEW.updated_at,
-        content_bytes = coalesce(s.content_bytes,
-          (SELECT #{size("b.content_ct")} FROM public.note_bodies b WHERE b.note_id = NEW.id)),
-        state_bytes = coalesce(s.state_bytes,
-          (SELECT #{size("b.crdt_ct")} FROM public.note_bodies b WHERE b.note_id = NEW.id)),
-        has_state = coalesce(s.has_state,
-          (SELECT b.crdt_ct IS NOT NULL FROM public.note_bodies b WHERE b.note_id = NEW.id))
-      WHERE s.note_id = NEW.id AND (
-        (s.note_live, s.note_version, s.note_updated_at)
-          IS DISTINCT FROM (NEW.deleted_at IS NULL, NEW.version, NEW.updated_at)
-        OR s.content_bytes IS NULL);
-      RETURN NULL;
+      INSERT INTO public.note_index_state AS s (
+        note_id, user_id, vault_id, embed_retry_after, embed_started_at, rebuild_paid_at,
+        embed_budget_parked_at, embed_budget_need, embed_budget_next, chunk_count,
+        chunker_version, keyword_version, key_alias_version, embed_crashes,
+        embed_budget_parked, index_tier, embed_model, embed_started_by, embed_hash,
+        dense_indexed_hash, embed_started_hash, payload_hash, note_live)
+      VALUES (
+        n.id, n.user_id, n.vault_id, n.embed_retry_after, n.embed_started_at, n.rebuild_paid_at,
+        n.embed_budget_parked_at, n.embed_budget_need, n.embed_budget_next,
+        (CASE WHEN n.chunk_count < -2147483648 THEN -2147483648 WHEN n.chunk_count > 2147483647 THEN 2147483647 ELSE n.chunk_count END)::integer,
+        (CASE WHEN n.chunker_version < -32768 THEN -32768 WHEN n.chunker_version > 32767 THEN 32767 ELSE n.chunker_version END)::smallint,
+        (CASE WHEN n.keyword_version < -32768 THEN -32768 WHEN n.keyword_version > 32767 THEN 32767 ELSE n.keyword_version END)::smallint,
+        (CASE WHEN n.key_alias_version < -32768 THEN -32768 WHEN n.key_alias_version > 32767 THEN 32767 ELSE n.key_alias_version END)::smallint,
+        (CASE WHEN n.embed_crashes < -32768 THEN -32768 WHEN n.embed_crashes > 32767 THEN 32767 ELSE n.embed_crashes END)::smallint,
+        n.embed_budget_parked, n.index_tier, n.embed_model, n.embed_started_by,
+        n.embed_hash, n.dense_indexed_hash, n.embed_started_hash, n.payload_hash,
+        n.deleted_at IS NULL)
+      ON CONFLICT (note_id) DO UPDATE SET
+        user_id = EXCLUDED.user_id,
+        vault_id = EXCLUDED.vault_id,
+        embed_retry_after = EXCLUDED.embed_retry_after,
+        embed_started_at = EXCLUDED.embed_started_at,
+        rebuild_paid_at = EXCLUDED.rebuild_paid_at,
+        embed_budget_parked_at = EXCLUDED.embed_budget_parked_at,
+        embed_budget_need = EXCLUDED.embed_budget_need,
+        embed_budget_next = EXCLUDED.embed_budget_next,
+        chunk_count = EXCLUDED.chunk_count,
+        chunker_version = EXCLUDED.chunker_version,
+        keyword_version = EXCLUDED.keyword_version,
+        key_alias_version = EXCLUDED.key_alias_version,
+        embed_crashes = EXCLUDED.embed_crashes,
+        embed_budget_parked = EXCLUDED.embed_budget_parked,
+        index_tier = EXCLUDED.index_tier,
+        embed_model = EXCLUDED.embed_model,
+        embed_started_by = EXCLUDED.embed_started_by,
+        embed_hash = EXCLUDED.embed_hash,
+        dense_indexed_hash = EXCLUDED.dense_indexed_hash,
+        embed_started_hash = EXCLUDED.embed_started_hash,
+        payload_hash = EXCLUDED.payload_hash,
+        note_live = EXCLUDED.note_live
+      WHERE overwrite AND (
+        s.user_id, s.vault_id, s.embed_retry_after, s.embed_started_at, s.rebuild_paid_at,
+        s.embed_budget_parked_at, s.embed_budget_need, s.embed_budget_next, s.chunk_count,
+        s.chunker_version, s.keyword_version, s.key_alias_version, s.embed_crashes,
+        s.embed_budget_parked, s.index_tier, s.embed_model, s.embed_started_by, s.embed_hash,
+        s.dense_indexed_hash, s.embed_started_hash, s.payload_hash, s.note_live
+      ) IS DISTINCT FROM (
+        EXCLUDED.user_id, EXCLUDED.vault_id, EXCLUDED.embed_retry_after, EXCLUDED.embed_started_at,
+        EXCLUDED.rebuild_paid_at, EXCLUDED.embed_budget_parked_at, EXCLUDED.embed_budget_need,
+        EXCLUDED.embed_budget_next, EXCLUDED.chunk_count, EXCLUDED.chunker_version,
+        EXCLUDED.keyword_version, EXCLUDED.key_alias_version, EXCLUDED.embed_crashes,
+        EXCLUDED.embed_budget_parked, EXCLUDED.index_tier, EXCLUDED.embed_model,
+        EXCLUDED.embed_started_by, EXCLUDED.embed_hash, EXCLUDED.dense_indexed_hash,
+        EXCLUDED.embed_started_hash, EXCLUDED.payload_hash, EXCLUDED.note_live
+      );
     END
     $$
     """
 
+    execute "DROP TRIGGER IF EXISTS notes_sync_index_state ON notes"
+
     execute """
-    CREATE TRIGGER notes_sync_sizes
-      AFTER INSERT OR UPDATE OF deleted_at, version, updated_at, kind
+    CREATE TRIGGER notes_sync_index_state
+      AFTER INSERT OR UPDATE OF embed_retry_after, embed_started_at, rebuild_paid_at,
+        embed_budget_parked_at, embed_budget_need, embed_budget_next, chunk_count,
+        chunker_version, keyword_version, key_alias_version, embed_crashes,
+        embed_budget_parked, index_tier, embed_model, embed_started_by, embed_hash,
+        dense_indexed_hash, embed_started_hash, payload_hash, kind, user_id, vault_id, deleted_at
       ON notes FOR EACH ROW WHEN (NEW.kind = 'note')
-      EXECUTE FUNCTION notes_sync_sizes()
+      EXECUTE FUNCTION notes_sync_index_state()
     """
 
     execute "RESET lock_timeout"
   end
 
   def down do
+    execute "SET lock_timeout = '5s'"
     execute "DELETE FROM data_migrations WHERE name = 'note_sizes'"
-    execute "DROP TRIGGER IF EXISTS notes_sync_sizes ON notes"
-    execute "DROP FUNCTION IF EXISTS notes_sync_sizes()"
-    execute "DROP TRIGGER IF EXISTS note_bodies_sync_sizes ON note_bodies"
-    execute "DROP FUNCTION IF EXISTS note_bodies_sync_sizes()"
-    execute "DROP FUNCTION IF EXISTS note_body_payload_bytes(bytea)"
 
     execute """
-    ALTER TABLE note_index_state
-      DROP COLUMN IF EXISTS content_bytes, DROP COLUMN IF EXISTS state_bytes,
-      DROP COLUMN IF EXISTS has_state, DROP COLUMN IF EXISTS note_live,
-      DROP COLUMN IF EXISTS note_version, DROP COLUMN IF EXISTS note_updated_at
+    CREATE OR REPLACE FUNCTION note_index_state_sync(n public.notes, overwrite boolean) RETURNS void
+    LANGUAGE plpgsql SET search_path = '' AS $$
+    BEGIN
+      INSERT INTO public.note_index_state AS s (
+        note_id, user_id, vault_id, embed_retry_after, embed_started_at, rebuild_paid_at,
+        embed_budget_parked_at, embed_budget_need, embed_budget_next, chunk_count,
+        chunker_version, keyword_version, key_alias_version, embed_crashes,
+        embed_budget_parked, index_tier, embed_model, embed_started_by, embed_hash,
+        dense_indexed_hash, embed_started_hash, payload_hash)
+      VALUES (
+        n.id, n.user_id, n.vault_id, n.embed_retry_after, n.embed_started_at, n.rebuild_paid_at,
+        n.embed_budget_parked_at, n.embed_budget_need, n.embed_budget_next,
+        (CASE WHEN n.chunk_count < -2147483648 THEN -2147483648 WHEN n.chunk_count > 2147483647 THEN 2147483647 ELSE n.chunk_count END)::integer,
+        (CASE WHEN n.chunker_version < -32768 THEN -32768 WHEN n.chunker_version > 32767 THEN 32767 ELSE n.chunker_version END)::smallint,
+        (CASE WHEN n.keyword_version < -32768 THEN -32768 WHEN n.keyword_version > 32767 THEN 32767 ELSE n.keyword_version END)::smallint,
+        (CASE WHEN n.key_alias_version < -32768 THEN -32768 WHEN n.key_alias_version > 32767 THEN 32767 ELSE n.key_alias_version END)::smallint,
+        (CASE WHEN n.embed_crashes < -32768 THEN -32768 WHEN n.embed_crashes > 32767 THEN 32767 ELSE n.embed_crashes END)::smallint,
+        n.embed_budget_parked, n.index_tier, n.embed_model, n.embed_started_by,
+        n.embed_hash, n.dense_indexed_hash, n.embed_started_hash, n.payload_hash)
+      ON CONFLICT (note_id) DO UPDATE SET
+        user_id = EXCLUDED.user_id,
+        vault_id = EXCLUDED.vault_id,
+        embed_retry_after = EXCLUDED.embed_retry_after,
+        embed_started_at = EXCLUDED.embed_started_at,
+        rebuild_paid_at = EXCLUDED.rebuild_paid_at,
+        embed_budget_parked_at = EXCLUDED.embed_budget_parked_at,
+        embed_budget_need = EXCLUDED.embed_budget_need,
+        embed_budget_next = EXCLUDED.embed_budget_next,
+        chunk_count = EXCLUDED.chunk_count,
+        chunker_version = EXCLUDED.chunker_version,
+        keyword_version = EXCLUDED.keyword_version,
+        key_alias_version = EXCLUDED.key_alias_version,
+        embed_crashes = EXCLUDED.embed_crashes,
+        embed_budget_parked = EXCLUDED.embed_budget_parked,
+        index_tier = EXCLUDED.index_tier,
+        embed_model = EXCLUDED.embed_model,
+        embed_started_by = EXCLUDED.embed_started_by,
+        embed_hash = EXCLUDED.embed_hash,
+        dense_indexed_hash = EXCLUDED.dense_indexed_hash,
+        embed_started_hash = EXCLUDED.embed_started_hash,
+        payload_hash = EXCLUDED.payload_hash
+      WHERE overwrite AND (
+        s.user_id, s.vault_id, s.embed_retry_after, s.embed_started_at, s.rebuild_paid_at,
+        s.embed_budget_parked_at, s.embed_budget_need, s.embed_budget_next, s.chunk_count,
+        s.chunker_version, s.keyword_version, s.key_alias_version, s.embed_crashes,
+        s.embed_budget_parked, s.index_tier, s.embed_model, s.embed_started_by, s.embed_hash,
+        s.dense_indexed_hash, s.embed_started_hash, s.payload_hash
+      ) IS DISTINCT FROM (
+        EXCLUDED.user_id, EXCLUDED.vault_id, EXCLUDED.embed_retry_after, EXCLUDED.embed_started_at,
+        EXCLUDED.rebuild_paid_at, EXCLUDED.embed_budget_parked_at, EXCLUDED.embed_budget_need,
+        EXCLUDED.embed_budget_next, EXCLUDED.chunk_count, EXCLUDED.chunker_version,
+        EXCLUDED.keyword_version, EXCLUDED.key_alias_version, EXCLUDED.embed_crashes,
+        EXCLUDED.embed_budget_parked, EXCLUDED.index_tier, EXCLUDED.embed_model,
+        EXCLUDED.embed_started_by, EXCLUDED.embed_hash, EXCLUDED.dense_indexed_hash,
+        EXCLUDED.embed_started_hash, EXCLUDED.payload_hash
+      );
+    END
+    $$
     """
+
+    execute "DROP TRIGGER IF EXISTS notes_sync_index_state ON notes"
+
+    execute """
+    CREATE TRIGGER notes_sync_index_state
+      AFTER INSERT OR UPDATE OF embed_retry_after, embed_started_at, rebuild_paid_at,
+        embed_budget_parked_at, embed_budget_need, embed_budget_next, chunk_count,
+        chunker_version, keyword_version, key_alias_version, embed_crashes,
+        embed_budget_parked, index_tier, embed_model, embed_started_by, embed_hash,
+        dense_indexed_hash, embed_started_hash, payload_hash, kind, user_id, vault_id
+      ON notes FOR EACH ROW WHEN (NEW.kind = 'note')
+      EXECUTE FUNCTION notes_sync_index_state()
+    """
+
+    execute "DROP TRIGGER IF EXISTS note_bodies_sizes ON note_bodies"
+    execute "DROP FUNCTION IF EXISTS note_bodies_sizes()"
+    execute "DROP FUNCTION IF EXISTS note_body_payload_bytes(bytea)"
+    execute "ALTER TABLE note_index_state DROP COLUMN IF EXISTS note_live"
+
+    execute """
+    ALTER TABLE note_bodies
+      DROP COLUMN IF EXISTS content_bytes, DROP COLUMN IF EXISTS state_bytes
+    """
+
+    execute "RESET lock_timeout"
   end
 end

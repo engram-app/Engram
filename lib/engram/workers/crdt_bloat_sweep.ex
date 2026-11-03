@@ -97,6 +97,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
   use Oban.Worker, queue: :maintenance, max_attempts: 1
 
   alias Engram.Crypto.Envelope
+  alias Engram.DataMigrations.NoteSizes
   alias Engram.Logger.Metadata
   alias Engram.Notes.CrdtBloat
   alias Engram.Repo
@@ -265,7 +266,11 @@ defmodule Engram.Workers.CrdtBloatSweep do
     ] =
       row
 
-    versions = Map.new(Enum.zip(Enum.map(ids, &Ecto.UUID.load!/1), versions))
+    versions =
+      if NoteSizes.done?(),
+        do: written_versions(since),
+        else: Map.new(Enum.zip(Enum.map(ids, &Ecto.UUID.load!/1), versions))
+
     Engram.Cache.put(:crdt_sweep_versions, :last, {now, versions})
 
     %{
@@ -294,20 +299,24 @@ defmodule Engram.Workers.CrdtBloatSweep do
   # aggregates `notes`, which is the slow heap scan the narrow read replaces.
   # Same column names and values either way.
   defp sized_rows do
-    if Engram.DataMigrations.NoteSizes.done?() do
+    if NoteSizes.done?() do
+      # Sizes from `note_bodies` (BEFORE-trigger columns, index-only through
+      # `note_bodies_sizes`), liveness from `note_index_state`. Written ids and
+      # versions come from `written_versions/1`, an `updated_at` index range,
+      # so `written` is false here and the arrays stay empty.
       """
       SELECT
-        s.note_id AS id,
-        s.note_version AS version,
-        s.note_updated_at >= $5 AS written,
-        s.has_state,
-        s.state_bytes,
-        s.content_bytes,
-        s.content_bytes >= $3::int AS big,
-        s.state_bytes::float8 / greatest(s.content_bytes, 1)::float8 AS ratio
-      FROM note_index_state s
-      -- $1 (the tag size) is bound for both shapes; Postgres rejects an unused parameter.
-      WHERE s.note_live AND $1::int >= 0
+        b.note_id AS id,
+        0 AS version,
+        false AS written,
+        b.state_bytes IS NOT NULL AS has_state,
+        coalesce(b.state_bytes, 0) AS state_bytes,
+        coalesce(b.content_bytes, 0) AS content_bytes,
+        coalesce(b.content_bytes, 0) >= $3::int AS big,
+        coalesce(b.state_bytes, 0)::float8 / greatest(coalesce(b.content_bytes, 0), 1)::float8 AS ratio
+      FROM note_bodies b JOIN note_index_state s ON s.note_id = b.note_id
+      -- $1 and $5 are bound for both shapes; Postgres rejects an unused parameter.
+      WHERE s.note_live AND $1::int >= 0 AND $5::timestamp IS NOT NULL
       """
     else
       """
@@ -326,6 +335,22 @@ defmodule Engram.Workers.CrdtBloatSweep do
         AND n.kind = 'note'
       """
     end
+  end
+
+  # Ids and versions of the live notes written since `since`: a range of the
+  # `notes (updated_at)` index, the window since the last sweep.
+  defp written_versions(since) do
+    %Postgrex.Result{rows: rows} =
+      Repo.maintenance().query!(
+        """
+        SELECT id, version FROM notes
+        WHERE updated_at >= $1 AND kind = 'note' AND deleted_at IS NULL
+        """,
+        [DateTime.to_naive(since)],
+        timeout: :timer.minutes(5)
+      )
+
+    Map.new(rows, fn [id, v] -> {Ecto.UUID.load!(id), v} end)
   end
 
   # The previous sweep's baseline, when this node has one young enough to diff.

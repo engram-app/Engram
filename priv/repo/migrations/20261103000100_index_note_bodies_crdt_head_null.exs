@@ -4,7 +4,7 @@ defmodule Engram.Repo.Migrations.IndexNoteBodiesCrdtHeadNull do
   @disable_migration_lock true
 
   @moduledoc """
-  `WarmCrdtHeads` finds notes with a NULL `crdt_head` through this index
+  Also `note_bodies_sizes` (below). `WarmCrdtHeads` finds notes with a NULL `crdt_head` through this index
   instead of walking `notes` (Job Load Audit 2026-11-03, item 4). It holds
   only the NULL-head rows of `note_bodies`, the trigger-kept narrow copy of
   the head, so it is empty-to-small in steady state.
@@ -26,9 +26,22 @@ defmodule Engram.Repo.Migrations.IndexNoteBodiesCrdtHeadNull do
     CREATE INDEX CONCURRENTLY note_bodies_crdt_head_null
       ON note_bodies (user_id, note_id) WHERE crdt_head IS NULL
     """
+
+    # `CrdtBloatSweep` reads every live note's stored sizes from here,
+    # index-only, instead of the wide body heap. The sizes change only with a
+    # body ciphertext, whose write is already not heap-only on this table (the
+    # envelope-legacy indexes, 20261103000200), so this adds an index entry to
+    # such a write, never a row version.
+    execute "DROP INDEX CONCURRENTLY IF EXISTS note_bodies_sizes"
+
+    execute """
+    CREATE INDEX CONCURRENTLY note_bodies_sizes
+      ON note_bodies (note_id) INCLUDE (content_bytes, state_bytes)
+    """
   end
 
   def down do
     execute "DROP INDEX CONCURRENTLY IF EXISTS note_bodies_crdt_head_null"
+    execute "DROP INDEX CONCURRENTLY IF EXISTS note_bodies_sizes"
   end
 end

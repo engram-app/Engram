@@ -1,13 +1,15 @@
 defmodule Engram.DataMigrations.NoteSizes do
   @moduledoc """
-  Fills the stored-size columns of `note_index_state` (migration
-  20261103000000) for notes written before the `notes_sync_sizes` trigger
-  existed. Every later write fills them itself, from any release's code, so
-  this only catches up; it is not re-verified.
+  Fills `note_bodies.content_bytes` / `state_bytes` and
+  `note_index_state.note_live` (migration 20261103000000) for rows written
+  before their triggers existed. Every later write fills them itself, from
+  any release's code, in the row it writes, so this only catches up (one row
+  version per unfilled row, once); it is not re-verified.
 
-  Done means `CrdtBloatSweep` may read the narrow table instead of
-  aggregating `notes`. A note with no state row (the `NoteIndexState` ledger
-  fills those) keeps this open, so the sweep never reads a partial table.
+  Done means `CrdtBloatSweep`, the snapshot, the PostHog sync and the budget
+  sweep may read the narrow columns instead of aggregating `notes`. A note
+  with no state or body row (their own ledgers fill those) keeps this open,
+  so no reader sees a partial table.
   Discovery walks `notes` in id windows (`Engram.Backfill.IdWindows`).
   """
   @behaviour Engram.DataMigration
@@ -35,12 +37,14 @@ defmodule Engram.DataMigrations.NoteSizes do
   def live_totals_by_vault do
     if done?() do
       from(s in Engram.Notes.NoteIndexState,
+        join: b in Engram.Notes.NoteBody,
+        on: b.note_id == s.note_id,
         where: s.note_live,
         group_by: s.vault_id,
         select: %{
           vault_id: s.vault_id,
           n: count(),
-          bytes: sum(s.content_bytes + ^Engram.Crypto.Envelope.tag_bytes())
+          bytes: sum(b.content_bytes + ^Engram.Crypto.Envelope.tag_bytes())
         }
       )
     else
@@ -74,23 +78,30 @@ defmodule Engram.DataMigrations.NoteSizes do
   defp heal(ids, %{repo: repo}) do
     keys = Enum.map(ids, &Ecto.UUID.dump!/1)
 
-    %{num_rows: filled} =
+    # Touching `content_ct` fires the `note_bodies_sizes` BEFORE trigger: the
+    # sizes come from the same function as every new write. One row version
+    # per unfilled body, once. Locked rows are skipped; a later pass takes them.
+    %{num_rows: bodies} =
       repo.query!(
         """
-        WITH locked AS (
+        UPDATE note_bodies SET content_ct = content_ct
+        WHERE note_id = ANY(ARRAY(
+          SELECT note_id FROM note_bodies
+          WHERE note_id = ANY($1::uuid[]) AND content_bytes IS NULL AND content_ct IS NOT NULL
+          ORDER BY note_id FOR UPDATE SKIP LOCKED))
+        """,
+        [keys]
+      )
+
+    %{num_rows: states} =
+      repo.query!(
+        """
+        UPDATE note_index_state s SET note_live = n.deleted_at IS NULL
+        FROM notes n
+        WHERE n.id = s.note_id AND s.note_id = ANY(ARRAY(
           SELECT note_id FROM note_index_state
-          WHERE note_id = ANY($1::uuid[]) AND content_bytes IS NULL
-          ORDER BY note_id FOR UPDATE SKIP LOCKED)
-        UPDATE note_index_state s SET
-          content_bytes = note_body_payload_bytes(b.content_ct),
-          state_bytes = note_body_payload_bytes(b.crdt_ct),
-          has_state = b.crdt_ct IS NOT NULL,
-          note_live = n.deleted_at IS NULL,
-          note_version = n.version,
-          note_updated_at = n.updated_at
-        FROM notes n, note_bodies b, locked l
-        WHERE n.id = s.note_id AND b.note_id = s.note_id AND l.note_id = s.note_id
-          AND n.kind = 'note'
+          WHERE note_id = ANY($1::uuid[]) AND note_live IS NULL
+          ORDER BY note_id FOR UPDATE SKIP LOCKED))
         """,
         [keys]
       )
@@ -99,13 +110,16 @@ defmodule Engram.DataMigrations.NoteSizes do
       repo.query!(
         """
         SELECT EXISTS (
-          SELECT 1 FROM notes n LEFT JOIN note_index_state s ON s.note_id = n.id
+          SELECT 1 FROM notes n
+          LEFT JOIN note_index_state s ON s.note_id = n.id
+          LEFT JOIN note_bodies b ON b.note_id = n.id
           WHERE n.id = ANY($1::uuid[]) AND n.kind = 'note'
-            AND (s.note_id IS NULL OR s.content_bytes IS NULL))
+            AND (s.note_id IS NULL OR s.note_live IS NULL OR b.note_id IS NULL
+                 OR (b.content_bytes IS NULL AND b.content_ct IS NOT NULL)))
         """,
         [keys]
       )
 
-    {filled, left?}
+    {bodies + states, left?}
   end
 end

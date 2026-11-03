@@ -41,15 +41,10 @@ defmodule Engram.Notes.NoteIndexState do
     # The payload shape the points were last written with; NULL = baseline.
     # Not mirrored from `notes` (`Engram.Workers.ReconcileNotePayloads` stamps it).
     field :payload_version, :integer
-    # Stored sizes and liveness of the note, kept by the `notes_sync_sizes`
-    # trigger (migration 20261103000000) for `CrdtBloatSweep` and the budget
-    # sweep. NULL until `DataMigrations.NoteSizes` has filled the row.
-    field :content_bytes, :integer
-    field :state_bytes, :integer
-    field :has_state, :boolean
+    # `deleted_at IS NULL` of the note, kept by `note_index_state_sync`
+    # (migration 20261103000000) for the narrow sweeps. NULL until
+    # `DataMigrations.NoteSizes` has filled the row.
     field :note_live, :boolean
-    field :note_version, :integer
-    field :note_updated_at, :naive_datetime
   end
 
   @doc "The mirrored columns, for comparing a state row to its note."
@@ -63,11 +58,6 @@ defmodule Engram.Notes.NoteIndexState do
           :len_rows,
           :len_sum,
           :payload_version,
-          :content_bytes,
-          :state_bytes,
-          :has_state,
-          :note_live,
-          :note_version,
-          :note_updated_at
+          :note_live
         ]
 end

@@ -71,6 +71,10 @@ defmodule Engram.Notes.NoteBody do
     field :content_ct, :binary
     field :crdt_ct, :binary
     field :crdt_head, :binary
+    # Stored payload bytes, set by the `note_bodies_sizes` BEFORE trigger
+    # (migration 20261103000000); `state_bytes` NULL without CRDT state.
+    field :content_bytes, :integer
+    field :state_bytes, :integer
   end
 
   @body [

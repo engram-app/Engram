@@ -7,7 +7,9 @@ defmodule Engram.Maintenance.Cursor do
   wraps to the start). Survives deploys and Cron leader changes, unlike the
   node-local walk cursors of `Engram.Backfill.IdWindows`.
 
-  `cursor` is a small JSON map of keys (ids, never content).
+  `cursor` is a small JSON map of keys (ids, never content). Not a tenant
+  table (absent from `Engram.Repo.tenant_tables/0`, no RLS): a row belongs to
+  a sweep, not to a user, and only the sweeps read it.
   """
 
   import Ecto.Query
