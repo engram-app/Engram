@@ -49,7 +49,10 @@ defmodule Engram.Maintenance.ChangeFeed do
   @spec changed(String.t(), pos_integer()) :: [map()]
   def changed(name, per_vault \\ @per_vault) do
     cursor = Cursor.get(name) || %{}
-    vaults = for [id, seq] <- rows(@vaults, []), do: {Ecto.UUID.load!(id), seq}
+
+    vaults =
+      for [id, seq] <- on_pool(& &1.query!(@vaults, [], timeout: :timer.minutes(2)).rows),
+          do: {Ecto.UUID.load!(id), seq}
 
     walk =
       Enum.flat_map(vaults, fn {id, seq} ->
@@ -57,7 +60,12 @@ defmodule Engram.Maintenance.ChangeFeed do
         if s < seq or last != @top, do: [{id, s, last}], else: []
       end)
 
-    read = if walk == [], do: [], else: rows(@notes, params(walk, per_vault))
+    read =
+      if walk == [],
+        do: [],
+        else:
+          on_pool(& &1.query!(@notes, params(walk, per_vault), timeout: :timer.minutes(2)).rows)
+
     by_vault = Enum.group_by(read, fn [_, _, v | _] -> Ecto.UUID.load!(v) end)
 
     next =
@@ -102,13 +110,10 @@ defmodule Engram.Maintenance.ChangeFeed do
 
   # One statement on the maintenance pool on SaaS; per tenant elsewhere (RLS
   # scopes each read to that tenant's vaults and notes).
-  defp rows(sql, params) do
+  defp on_pool(read) do
     case TenantScan.pool() do
-      {:fleet, repo} ->
-        repo.query!(sql, params, timeout: :timer.minutes(2)).rows
-
-      :per_user ->
-        TenantScan.flat_map_users(fn _ -> Repo.query!(sql, params).rows end)
+      {:fleet, repo} -> read.(repo)
+      :per_user -> TenantScan.flat_map_users(fn _ -> read.(Repo) end)
     end
   end
 end
