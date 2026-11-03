@@ -467,10 +467,14 @@ defmodule Engram.Rebuild do
         queue: job.queue,
         priority: job.priority,
         max_attempts: job.max_attempts,
-        meta: %{"held" => "rebuild"},
+        meta: Map.put(job.meta || %{}, "held", "rebuild"),
+        tags: job.tags || [],
         state: "suspended",
-        # The running original still holds the unique slot.
-        unique: false
+        # Unique among held copies only: the running original is `executing`
+        # and must not block its own hold, but a re-run of it (Lifeline
+        # rescue, a retry of the completed original) must not hold a second
+        # copy, or both are released at once (two DEK rotations overlapping).
+        unique: [period: :infinity, states: [:suspended]]
       )
     )
 

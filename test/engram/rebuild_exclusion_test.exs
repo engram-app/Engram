@@ -60,6 +60,33 @@ defmodule Engram.RebuildExclusionTest do
       assert [%{state: "suspended"}] = all_enqueued(worker: RotateUserDek)
     end
 
+    # A re-run of one job (Lifeline rescue, or a retry of the completed
+    # original) must not hold a second copy: both would be released together
+    # and rotate twice, overlapping (#2380 review).
+    test "holding the same job twice keeps one held copy, with its meta and tags" do
+      on!()
+      user = insert(:user)
+
+      job = %Oban.Job{
+        worker: "Engram.Workers.RotateUserDek",
+        queue: "crypto_backfill",
+        priority: 0,
+        max_attempts: 3,
+        args: %{"user_id" => user.id},
+        meta: %{"trace" => "t1"},
+        tags: ["ops"]
+      }
+
+      assert :ok = Rebuild.hold(job)
+      assert :ok = Rebuild.hold(job)
+
+      assert [%{state: "suspended", meta: meta, tags: ["ops"]}] =
+               all_enqueued(worker: RotateUserDek)
+
+      assert meta["trace"] == "t1"
+      assert meta["held"] == "rebuild"
+    end
+
     test "a DEK rotation runs when the pass is off" do
       ServiceConfig.put_override(:index_rebuild, "off")
 
