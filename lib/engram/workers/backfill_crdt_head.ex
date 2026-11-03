@@ -29,15 +29,17 @@ defmodule Engram.Workers.BackfillCrdtHead do
   import Ecto.Query
 
   alias Engram.Accounts
-  alias Engram.Backfill.IdWindows
+  alias Engram.Backfill.TenantScan
   alias Engram.Crypto.RotationGate
   alias Engram.Jobs
-  alias Engram.Notes.{CrdtTransport, Note}
+  alias Engram.Notes.{CrdtTransport, Note, NoteBody}
   alias Engram.Repo
   alias Engram.Vaults
   alias Engram.Vaults.Vault
 
   @default_batch_size 100
+  # NULL-head notes examined per hourly run (see `enqueue_all/0`).
+  @candidate_cap 5_000
   @start_cursor "00000000-0000-0000-0000-000000000000"
 
   # 60 min, the Lifeline `rescue_after` ceiling. This walks every row it
@@ -59,24 +61,21 @@ defmodule Engram.Workers.BackfillCrdtHead do
   """
   @spec enqueue_all() :: non_neg_integer()
   def enqueue_all do
-    # Through IdWindows.all/2: a fleet walk on the maintenance pool on SaaS,
-    # a per-tenant walk elsewhere. Never one cross-tenant read on the app
-    # pool, which FORCE ROW LEVEL SECURITY turns into zero rows (#1349).
-    # ponytail: an hourly walk of every notes row, deliberately unindexed,
-    # one id window per statement (#2276: the single DISTINCT over all live
-    # notes grew with the table). Any index on crdt_head makes every CRDT
-    # append (which clears it) a non-HOT update across all notes indexes
-    # (NotesHotAppendTest); moving crdt_head off `notes` is the upgrade path.
+    # The candidates are the NULL heads of `note_bodies` (the trigger-kept 1:1
+    # copy of the head), read through the partial index
+    # `note_bodies_crdt_head_null`: an index range, not a walk of `notes`
+    # (Job Load Audit 2026-11-03: the hourly walk read 2.7 GB of notes).
+    # The index is on the narrow table on purpose: on `notes` it would make
+    # every CRDT append (which clears the head) a non-HOT update across all
+    # notes indexes (NotesHotAppendTest). At most `@candidate_cap` notes per
+    # run; a vault drained by its job leaves the index, so the next hour
+    # reaches the rest. `TenantScan.all/2`: one query on the maintenance pool
+    # on SaaS, per tenant elsewhere (never a cross-tenant read on the app
+    # pool, #1349).
     pairs =
-      from(n in Note,
-        join: v in Vault,
-        on: v.id == n.vault_id and is_nil(v.deleted_at),
-        where: n.kind == "note" and is_nil(n.crdt_head) and is_nil(n.deleted_at),
-        distinct: true,
-        select: {n.user_id, n.vault_id}
-      )
-      |> IdWindows.all()
-      |> Enum.uniq()
+      null_head_query(@candidate_cap)
+      |> TenantScan.all()
+      |> live_pairs()
 
     # No `unique` on this worker, so bulk insert drops nothing a single one
     # deduped (#2169: one hourly tick must not be one insert per vault).
@@ -85,6 +84,34 @@ defmodule Engram.Workers.BackfillCrdtHead do
       __MODULE__.new(%{"user_id" => user_id, "vault_id" => vault_id, "cursor" => @start_cursor})
     end)
     |> Jobs.insert_chunked()
+  end
+
+  @doc false
+  # The NULL-head candidates, `cap` at most. Public so the plan test pins the
+  # index (`note_bodies_crdt_head_null`).
+  def null_head_query(cap) do
+    from(b in NoteBody,
+      where: is_nil(b.crdt_head),
+      select: %{user_id: b.user_id, note_id: b.note_id},
+      limit: ^cap
+    )
+  end
+
+  # The live (user, vault) pairs of those notes: one primary-key probe per note.
+  defp live_pairs([]), do: []
+
+  defp live_pairs(candidates) do
+    ids = Enum.map(candidates, & &1.note_id)
+
+    from(n in Note,
+      join: v in Vault,
+      on: v.id == n.vault_id and is_nil(v.deleted_at),
+      where: n.id in ^ids and n.kind == "note" and is_nil(n.crdt_head) and is_nil(n.deleted_at),
+      distinct: true,
+      select: {n.user_id, n.vault_id}
+    )
+    |> TenantScan.all()
+    |> Enum.uniq()
   end
 
   @doc """
