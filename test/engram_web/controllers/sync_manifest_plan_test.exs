@@ -38,7 +38,7 @@ defmodule EngramWeb.SyncManifestPlanTest do
     other = insert(:vault, user: user)
     for _ <- 1..50, do: insert(:attachment, user: user, vault: other)
 
-    %{conn: put_req_header(conn, "authorization", "Bearer #{api_key}"), user: user}
+    %{conn: put_req_header(conn, "authorization", "Bearer #{api_key}"), user: user, vault: vault}
   end
 
   defp statements(fun, table) do
@@ -111,8 +111,49 @@ defmodule EngramWeb.SyncManifestPlanTest do
     %{rows: [[opts]]} =
       Engram.Repo.query!("SELECT reloptions FROM pg_class WHERE oid = 'notes'::regclass")
 
-    assert "autovacuum_vacuum_scale_factor=0.02" in opts
+    assert "autovacuum_vacuum_scale_factor=0.05" in opts
     assert "autovacuum_vacuum_insert_scale_factor=0.02" in opts
+  end
+
+  # The two halves split on `octet_length(path_ciphertext) <= 2000`: a
+  # 2,000-byte ciphertext is in the index half, 2,001 bytes and a NULL in
+  # the heap half. Each comes back exactly once from the statement the
+  # manifest sends (run here as recorded, under the tenant: the render
+  # cannot decrypt these rows).
+  test "paths at 2,000 and 2,001 bytes and a NULL path each come back once", ctx do
+    %{user: user, vault: vault} = ctx
+
+    edge =
+      for ct <- [:crypto.strong_rand_bytes(2000), :crypto.strong_rand_bytes(2001), nil],
+          do: insert(:note, user: user, vault: vault, path_ciphertext: ct).id
+
+    # Random ciphertext fails the decrypt and a NULL one the native call
+    # (a live note with no path cannot render; not new here).
+    {_, queries} =
+      QueryRecorder.record(fn ->
+        try do
+          get(ctx.conn, "/api/sync/manifest")
+          flunk("the manifest rendered undecryptable paths")
+        rescue
+          e in [RuntimeError, ArgumentError] -> e
+        end
+      end)
+
+    me = self()
+
+    [%{sql: sql, params: params}] =
+      for %{pid: ^me, sql: sql} = q <- queries, sql =~ ~s|uuid_send(n0."id")|, do: q
+
+    assert sql =~ "UNION ALL"
+
+    %{rows: rows, columns: cols} =
+      Engram.Repo.with_tenant!(user.id, fn -> Engram.Repo.query!(sql, params) end)
+
+    at = Enum.find_index(cols, &(&1 == "id"))
+    counts = rows |> Enum.map(&Ecto.UUID.load!(Enum.at(&1, at))) |> Enum.frequencies()
+
+    for id <- edge, do: assert(counts[id] == 1, "#{id}: #{inspect(counts[id])}")
+    assert Enum.all?(counts, fn {_, n} -> n == 1 end)
   end
 
   test "the per-user attachment usage sum is index-only", %{user: user} do
