@@ -12,7 +12,8 @@ defmodule Engram.Maintenance.Prune do
   @max_batches 20
 
   @doc "Batches one prune run deletes at most."
-  @spec max_batches() :: pos_integer()
+  # No `@spec`: a constant body makes pos_integer() a dialyzer
+  # `contract_supertype`.
   def max_batches, do: @max_batches
 
   @spec batched((pos_integer() -> non_neg_integer()), pos_integer(), non_neg_integer()) ::
