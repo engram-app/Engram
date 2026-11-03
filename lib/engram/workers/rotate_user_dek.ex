@@ -62,7 +62,7 @@ defmodule Engram.Workers.RotateUserDek do
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"user_id" => user_id}, attempt: attempt} = job)
       when is_binary(user_id) do
-    if Engram.Rebuild.holding?(), do: Engram.Rebuild.hold(job), else: rotate(user_id, attempt)
+    Engram.Rebuild.run_or_hold(job, fn -> rotate(user_id, attempt) end)
   end
 
   # Tolerant fall-through for malformed args (T3.2-style guard).

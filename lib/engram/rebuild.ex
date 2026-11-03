@@ -492,6 +492,34 @@ defmodule Engram.Rebuild do
   end
 
   @doc """
+  The gate for the writers Task 16.4 keeps out of the pass: `hold/1` while
+  `holding?/0`, else run `fun`. Before running, drops any held copy of the
+  same job: an original that re-runs after the switch goes off (a crash
+  after its hold, a manual retry) does the work, and its held copy must not
+  do it again on the next release (a second DEK rotation).
+  """
+  @spec run_or_hold(Oban.Job.t(), (-> result)) :: :ok | result when result: term()
+  def run_or_hold(%Oban.Job{} = job, fun) do
+    if holding?() do
+      hold(job)
+    else
+      drop_held(job)
+      fun.()
+    end
+  end
+
+  defp drop_held(%Oban.Job{worker: worker, args: args}) do
+    from(j in held_query(), where: j.worker == ^worker and j.args == ^args)
+    |> Repo.delete_all()
+  end
+
+  defp held_query,
+    do:
+      from(j in Oban.Job,
+        where: j.state == "suspended" and fragment("?->>'held' = 'rebuild'", j.meta)
+      )
+
+  @doc """
   Makes every job `hold/1` parked available again once `holding?/0` is
   false. Returns how many it released. Run hourly by
   `Engram.Workers.ReleaseRebuildHeld`.
@@ -502,9 +530,7 @@ defmodule Engram.Rebuild do
       0
     else
       {count, _} =
-        from(j in Oban.Job,
-          where: j.state == "suspended" and fragment("?->>'held' = 'rebuild'", j.meta)
-        )
+        held_query()
         |> Repo.update_all(set: [state: "available", scheduled_at: DateTime.utc_now()])
 
       count
