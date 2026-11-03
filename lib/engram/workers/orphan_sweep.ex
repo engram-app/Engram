@@ -35,6 +35,7 @@ defmodule Engram.Workers.OrphanSweep do
   alias Engram.Accounts.User
   alias Engram.Indexing
   alias Engram.Logger.Metadata
+  alias Engram.Maintenance.Cursor
   alias Engram.Repo
   alias Engram.Storage
   alias Engram.Vector.FilterId
@@ -59,6 +60,8 @@ defmodule Engram.Workers.OrphanSweep do
   @chunk_probe_batch Qdrant.max_ids()
   # Ceiling on candidates carried in memory for the confirm pass.
   @max_candidates 50_000
+  @points_cursor "orphan_sweep:points"
+  @chunks_cursor "orphan_sweep:chunks"
   # Above this share of the scanned collection, the diff is telling us the
   # authority is wrong, not that the points are strays. See `runaway?/2`.
   @max_candidate_ratio 0.10
@@ -168,7 +171,9 @@ defmodule Engram.Workers.OrphanSweep do
     # inside a `Repo.with_tenant/2` transaction the rows stay invisible to this
     # connection while the points are already public. The grace re-check in
     # `confirm_and_delete/2` is what actually makes that safe.
-    case scan_pages(nil, MapSet.new(), 0) do
+    from = Cursor.get(@points_cursor)
+
+    case scan_pages(from && from["offset"], MapSet.new(), 0, 0) do
       {:ok, candidates, scanned} ->
         Logger.info(
           "orphan_sweep scanned Qdrant points",
@@ -192,10 +197,28 @@ defmodule Engram.Workers.OrphanSweep do
 
   # Walks the collection one scroll page at a time, probing each page against
   # `chunks` and keeping only the ids no row named.
-  defp scan_pages(offset, candidates, scanned) do
+  # At most `max_pages/0` pages per run, resuming where the last run stopped
+  # (`Engram.Maintenance.Cursor`, wrapping at the end): one run's reads stay
+  # bounded however large the collection grows (#2412). A truncated run stores
+  # its offset, so the next one continues instead of starting over.
+  defp scan_pages(offset, candidates, scanned, pages) when offset != nil do
+    if pages >= max_pages() do
+      :ok = Cursor.put(@points_cursor, %{"offset" => offset})
+      {:ok, candidates, scanned}
+    else
+      scan_pages_capped(offset, candidates, scanned, pages)
+    end
+  end
+
+  defp scan_pages(offset, candidates, scanned, pages),
+    do: scan_pages_capped(offset, candidates, scanned, pages)
+
+  defp scan_pages_capped(offset, candidates, scanned, pages) do
     if MapSet.size(candidates) >= @max_candidates do
+      if offset, do: :ok = Cursor.put(@points_cursor, %{"offset" => offset})
+
       # Not silent: a sweep that stops early must say so, or a truncated run
-      # reads as a clean one. The next tick resumes from the top and the
+      # reads as a clean one. The next tick resumes at the stored offset and the
       # remainder gets collected then.
       Logger.warning(
         "orphan_sweep candidate cap reached; deferring the rest to the next tick",
@@ -204,11 +227,11 @@ defmodule Engram.Workers.OrphanSweep do
 
       {:ok, candidates, scanned}
     else
-      do_scan_page(offset, candidates, scanned)
+      do_scan_page(offset, candidates, scanned, pages)
     end
   end
 
-  defp do_scan_page(offset, candidates, scanned) do
+  defp do_scan_page(offset, candidates, scanned, pages) do
     opts = [filter: %{}, limit: @point_scroll_limit, with_payload: false, with_vector: false]
     opts = if offset, do: Keyword.put(opts, :offset, offset), else: opts
 
@@ -223,9 +246,12 @@ defmodule Engram.Workers.OrphanSweep do
 
         scanned = scanned + MapSet.size(page)
 
-        if next,
-          do: scan_pages(next, candidates, scanned),
-          else: {:ok, candidates, scanned}
+        if next do
+          scan_pages(next, candidates, scanned, pages + 1)
+        else
+          :ok = Cursor.reset(@points_cursor)
+          {:ok, candidates, scanned}
+        end
 
       {:error, reason} ->
         {:error, reason}
@@ -334,7 +360,9 @@ defmodule Engram.Workers.OrphanSweep do
   # from there on its next tick, with its own entitlement and poison-cooldown
   # checks intact — this worker deliberately owns no rebuild path of its own.
   defp sweep_missing_points(opts) do
-    case scan_chunk_pages(nil, [], 0) do
+    from = Cursor.get(@chunks_cursor)
+
+    case scan_chunk_pages(from && from["after"], [], 0, 0) do
       {:ok, [], scanned} ->
         Logger.info(
           "orphan_sweep probed chunk points",
@@ -374,8 +402,23 @@ defmodule Engram.Workers.OrphanSweep do
   # probe Qdrant second: `Indexing.commit_index/1` inserts chunk rows and THEN
   # upserts points, so probing after the read gives the points the longer
   # window to appear. The other order races outright.
-  defp scan_chunk_pages(after_id, candidates, scanned) do
+  defp scan_chunk_pages(after_id, candidates, scanned, pages)
+       when after_id != nil and pages >= 0 do
+    if pages >= max_pages() do
+      :ok = Cursor.put(@chunks_cursor, %{"after" => after_id})
+      {:ok, candidates, scanned}
+    else
+      scan_chunk_pages_capped(after_id, candidates, scanned, pages)
+    end
+  end
+
+  defp scan_chunk_pages(after_id, candidates, scanned, pages),
+    do: scan_chunk_pages_capped(after_id, candidates, scanned, pages)
+
+  defp scan_chunk_pages_capped(after_id, candidates, scanned, pages) do
     if length(candidates) >= max_missing_candidates() do
+      if after_id, do: :ok = Cursor.put(@chunks_cursor, %{"after" => after_id})
+
       # Same bound the forward pass keeps, for the same reason: the runaway
       # check can only run once the walk is done, so without a cap an empty or
       # repointed collection makes the worker hold a tuple per chunk row for
@@ -388,13 +431,14 @@ defmodule Engram.Workers.OrphanSweep do
 
       {:ok, candidates, scanned}
     else
-      do_scan_chunk_page(after_id, candidates, scanned)
+      do_scan_chunk_page(after_id, candidates, scanned, pages)
     end
   end
 
-  defp do_scan_chunk_page(after_id, candidates, scanned) do
+  defp do_scan_chunk_page(after_id, candidates, scanned, pages) do
     case chunk_page(after_id) do
       [] ->
+        :ok = Cursor.reset(@chunks_cursor)
         {:ok, candidates, scanned}
 
       rows ->
@@ -411,7 +455,7 @@ defmodule Engram.Workers.OrphanSweep do
             # accumulator once per page, which is O(n^2) over a walk that only
             # gets long in the runaway case this is trying to survive. Order
             # carries no meaning here.
-            scan_chunk_pages(last_id, missing ++ candidates, scanned + length(rows))
+            scan_chunk_pages(last_id, missing ++ candidates, scanned + length(rows), pages + 1)
 
           {:error, reason} ->
             {:error, reason}
@@ -553,6 +597,9 @@ defmodule Engram.Workers.OrphanSweep do
   # Overridable for the same reason `grace_seconds/0` is: the paging behaviour
   # is only observable across more than one page, and seeding 2,048 chunk rows
   # to prove a cursor advances is a worse test, not a better one.
+  # Pages per pass per run (#2412): 250 x 4,096 ids is ~1M points a run.
+  defp max_pages, do: Application.get_env(:engram, :orphan_sweep_max_pages, 250)
+
   defp chunk_probe_batch,
     do: Application.get_env(:engram, :orphan_sweep_chunk_probe_batch, @chunk_probe_batch)
 
