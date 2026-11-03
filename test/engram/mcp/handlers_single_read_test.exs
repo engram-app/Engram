@@ -45,11 +45,27 @@ defmodule Engram.MCP.HandlersSingleReadTest do
 
   # Optimistic read-modify-write: one unlocked read (the rebuild runs on it),
   # then one locked re-read right before the write. Nothing else reads the row.
+  # The locked re-read is two statements (`Notes.one_locked/1`): the lock,
+  # selecting no body, then the body from `note_bodies` under that lock, so
+  # the body is never the pre-wait snapshot (LockedReadBodyTest).
   defp assert_single_read(qs) do
     report = QueryRecorder.format(qs)
-    reads = selects(qs, "notes")
-    assert length(reads) == 2, "expected one unlocked + one locked note read:\n" <> report
-    assert [_] = Enum.filter(reads, &(&1.sql =~ "FOR NO KEY UPDATE")), report
+
+    assert [unlocked, locked, body] = selects(qs, "notes"),
+           "expected one unlocked read + one locked re-read (lock, then body):\n" <> report
+
+    refute unlocked.sql =~ "FOR NO KEY UPDATE", report
+    assert locked.sql =~ "FOR NO KEY UPDATE", report
+
+    refute locked.sql =~ ~r/content_ciphertext|crdt_state_ciphertext/,
+           "lock statement selects a body column:\n" <> report
+
+    assert body.sql =~ ~s/"note_bodies"/, report
+    refute body.sql =~ ~r/FOR (NO KEY )?UPDATE|FOR (KEY )?SHARE/, report
+
+    assert Enum.find_index(qs, &(&1 == body)) == Enum.find_index(qs, &(&1 == locked)) + 1,
+           "body read is not right after the lock:\n" <> report
+
     assert length(selects(qs, "crdt_update_log")) <= 1, "tail read more than once:\n" <> report
 
     refute Enum.any?(qs, &(&1.sql =~ ~s/SELECT count(*) FROM "crdt_update_log"/)),
