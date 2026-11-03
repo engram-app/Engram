@@ -7334,7 +7334,7 @@ defmodule Engram.Notes do
                 |> Enum.map(&Map.put(&1, :seq, seq))
                 |> Enum.chunk_every(@tombstone_insert_chunk)
                 |> Enum.each(fn rows ->
-                  Repo.insert_all(Note, rows, on_conflict: :nothing)
+                  _ = Repo.insert_all(Note, rows, on_conflict: :nothing)
                   NoteBody.sync!(Enum.map(rows, & &1.id), NoteBody.body_fields())
                 end)
 
