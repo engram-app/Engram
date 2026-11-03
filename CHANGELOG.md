@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.72.3](https://github.com/engram-app/Engram/compare/0.72.2...0.72.3) (2026-11-03)
+
+
+### Performance Improvements
+
+* cheap daily re-verify + pkey id windows ([#2403](https://github.com/engram-app/Engram/issues/2403)) ([766f19b](https://github.com/engram-app/Engram/commit/766f19bb35e1bd8a2d054d21ff294c9c481cb517))
+* drift-proof bookkeeping, bounded maintenance jobs ([#2410](https://github.com/engram-app/Engram/issues/2410)) ([6632512](https://github.com/engram-app/Engram/commit/6632512a2d8ca7aa29df22e0b3d19c26e76c2128))
+
 ## [0.72.2](https://github.com/engram-app/Engram/compare/0.72.1...0.72.2) (2026-11-03)
 
 
