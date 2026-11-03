@@ -92,6 +92,31 @@ defmodule Engram.PromEx.Reliability do
           tags: [:reason, :source]
         ),
         counter(
+          metric_prefix ++ [:bookkeeping, :drift, :total],
+          event_name: [:engram, :bookkeeping, :drift],
+          measurement: :count,
+          description:
+            "Sampled rows whose database-kept bookkeeping disagrees (Bookkeeping.Canary), " <>
+              "by invariant. Any increase is systematic drift: a disabled trigger or a bad deploy.",
+          tags: [:invariant]
+        ),
+        counter(
+          metric_prefix ++ [:bookkeeping, :canary_rows, :total],
+          event_name: [:engram, :bookkeeping, :canary_rows],
+          measurement: :count,
+          description: "Rows the bookkeeping canary checked.",
+          tags: []
+        ),
+        last_value(
+          metric_prefix ++ [:bookkeeping, :canary, :last_run_unix],
+          event_name: [:engram, :bookkeeping, :canary_ran],
+          measurement: :unix,
+          description:
+            "Unix time the bookkeeping canary last finished (dead-man: alert when " <>
+              "time() minus this exceeds 3 h, or it is absent).",
+          tags: []
+        ),
+        counter(
           metric_prefix ++ [:tenant_guard_violation, :total],
           event_name: [:engram, :repo, :tenant_guard_violation],
           description: "Tenant-scoped queries run with no tenant context (isolation tripwire).",

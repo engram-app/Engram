@@ -18,6 +18,8 @@ defmodule Engram.Workers.CronScanBoundTest do
   @bounded %{
     Engram.Workers.ReleaseRebuildHeld =>
       "oban_jobs rows held by the rebuild (state/queue index), a no-op while the rebuild is on",
+    Engram.Workers.BookkeepingCanary =>
+      "primary-key range reads: 20 random positions x 10 notes, checks on those ids only",
     Engram.Workers.BookkeepingDrain =>
       "partial indexes *_envelope_legacy (note_bodies: trigger-kept flag), note_index_state_unstamped, notes_unresolved_folder, *_link_keys_stale; 100 users per probe",
     Engram.Workers.WarmCrdtHeads =>

@@ -301,6 +301,9 @@ config :engram, Oban,
         # stamps, folder refs) found through partial indexes, not a nightly walk.
         # Free minutes only (no other entry fires there).
         {"12,27,42,57 * * * *", Engram.Workers.BookkeepingDrain},
+        # Random-sample tripwire for the trigger-kept bookkeeping (NoteSplit and
+        # NoteIndexState no longer re-verify daily, #2403). Read-only.
+        {"17 * * * *", Engram.Workers.BookkeepingCanary},
         # Legal-change emails (notice + reminder): hourly so a deploy that
         # publishes a version announces it within the hour.
         {"18 * * * *", Engram.Workers.LegalNoticeDispatch},
