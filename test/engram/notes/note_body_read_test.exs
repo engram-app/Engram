@@ -126,6 +126,36 @@ defmodule Engram.Notes.NoteBodyReadTest do
                Base.url_encode64(digest, padding: false)
     end
 
+    # The manifest's form: same answer as `fields([:crdt_head])`, with the
+    # no-body fallback read by a per-row subquery.
+    test "head_off_notes_scan: the body's head, else the notes head", ctx do
+      digest = :crypto.strong_rand_bytes(32)
+
+      Repo.query!("UPDATE note_bodies SET crdt_head = $2 WHERE note_id = $1", [
+        Ecto.UUID.dump!(ctx.note.id),
+        digest
+      ])
+
+      head = fn ->
+        {:ok, h} =
+          Repo.with_tenant(ctx.user.id, fn ->
+            Notes.Note
+            |> Ecto.Query.where([n], n.id == ^ctx.note.id)
+            |> NoteBody.join()
+            |> Ecto.Query.select(^%{h: NoteBody.head_off_notes_scan()})
+            |> Repo.one()
+          end)
+
+        h.h
+      end
+
+      assert head.() == Base.url_encode64(digest, padding: false)
+
+      raw!("UPDATE notes SET crdt_head = 'notes-side-head' WHERE id = $1", ctx.note)
+      raw!("DELETE FROM note_bodies WHERE note_id = $1", ctx.note)
+      assert head.() == "notes-side-head"
+    end
+
     # R5: the join matches the body row's owner as well as its note, so a
     # caller's own `user_id` reaches `note_bodies` as an index condition.
     test "a body row owned by another user is not joined", ctx do
@@ -154,7 +184,14 @@ defmodule Engram.Notes.NoteBodyReadTest do
     # checkpoint rewrites content_ct / crdt_ct / crdt_head / key_version, and
     # an index (key, INCLUDE, expression or predicate) on any of them turns
     # every checkpoint into extra index writes. Only the immutable keys may
-    # be indexed.
+    # be indexed, with ONE deliberate exception: `crdt_head` INCLUDEd in
+    # `note_bodies_user_note_head`, so the sync manifest reads heads
+    # index-only (prod 2026-11-02: 604 ms of note_bodies heap reads for a
+    # 40k-note manifest). A head change is then a non-HOT update writing two
+    # index entries (pkey and this index); 20261102120000 names the trade.
+    # Nothing else, and no other body column, may be indexed.
+    @head_index {"note_bodies_user_note_head", "crdt_head"}
+
     test "every note_bodies index covers immutable keys only (HOT-eligible)" do
       %{rows: rows} =
         Repo.query!("""
@@ -169,7 +206,12 @@ defmodule Engram.Notes.NoteBodyReadTest do
         """)
 
       assert rows != []
-      assert for([idx, col] <- rows, col not in ~w(note_id user_id), do: {idx, col}) == []
+
+      assert for(
+               [idx, col] <- rows,
+               col not in ~w(note_id user_id) and {idx, col} != @head_index,
+               do: {idx, col}
+             ) == []
     end
 
     # R5: under RLS the only filter on `note_bodies` was `user_id`, which no
