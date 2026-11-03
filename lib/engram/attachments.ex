@@ -125,7 +125,7 @@ defmodule Engram.Attachments do
         )
       end
 
-      with :ok <- validate_storage_cap(user, existing0, byte_size(plaintext)),
+      with :ok <- precheck_storage_cap(user, existing0, byte_size(plaintext)),
            {:ok, attrs0, ciphertext} <- prepare.(att_id0),
            :ok <- store_external(key, ciphertext, attrs0.mime_type) do
         # T3-audit H1 — the content AAD binds the row id, so if the locked
@@ -2385,6 +2385,10 @@ defmodule Engram.Attachments do
       |> Repo.one()
     end)
     |> unwrap_tenant()
+    |> tap(fn
+      {:ok, %{used_bytes: used}} -> Engram.Cache.put(:storage_usage, user.id, used)
+      _ -> :ok
+    end)
   end
 
   @doc """
@@ -2405,6 +2409,7 @@ defmodule Engram.Attachments do
           :ok | {:error, {:storage_cap_reached, integer(), integer()}}
   def check_storage_cap(user, vault, path, size) do
     with n when is_integer(n) and n >= 0 <- Billing.effective_limit(user, :attachment_bytes_cap),
+         false <- fits_last_usage?(user, n, nil, size),
          {:ok, %{used_bytes: used}} when used + size > n <- storage_usage(user),
          {:ok, existing} <- existing_at(user, vault, path),
          false <- same_size?(existing, size) do
@@ -2463,6 +2468,30 @@ defmodule Engram.Attachments do
 
   defp quota_check(_user, _limit, _existing, _size), do: :ok
 
+  # The pre-check before the blob PUT: advisory, like check_storage_cap/4.
+  # It answers :ok from the last usage this node saw when the upload fits on
+  # top of it, and sums fresh otherwise, so it never refuses from a stale
+  # value. A lenient answer costs a PUT that quota_check/4 (under the lock,
+  # always fresh) then refuses and deletes.
+  defp precheck_storage_cap(user, existing, new_size) do
+    limit = Billing.effective_limit(user, :attachment_bytes_cap)
+
+    if fits_last_usage?(user, limit, existing, new_size),
+      do: :ok,
+      else: storage_cap_at(limit, user, existing, new_size)
+  end
+
+  defp fits_last_usage?(user, limit, existing, new_size) when is_integer(limit) and limit >= 0 do
+    prior = if existing, do: existing.size_bytes, else: 0
+
+    case Engram.Cache.get(:storage_usage, user.id) do
+      {:ok, used} -> used - prior + new_size <= limit
+      :miss -> false
+    end
+  end
+
+  defp fits_last_usage?(_user, _limit, _existing, _new_size), do: false
+
   def validate_storage_cap(user, existing, new_size),
     do:
       storage_cap_at(
@@ -2481,10 +2510,16 @@ defmodule Engram.Attachments do
       n when is_integer(n) ->
         {:ok, %{used_bytes: current}} = storage_usage(user)
         prior = if existing, do: existing.size_bytes, else: 0
+        after_write = current - prior + new_size
 
-        if current - prior + new_size > n,
-          do: {:error, {:storage_cap_reached, current, n}},
-          else: :ok
+        if after_write > n do
+          {:error, {:storage_cap_reached, current, n}}
+        else
+          # The usage once this write commits, for the next pre-check. If it
+          # rolls back instead, the value is high: a pre-check then sums fresh.
+          Engram.Cache.put(:storage_usage, user.id, after_write)
+          :ok
+        end
 
       _ ->
         :ok

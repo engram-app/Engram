@@ -401,6 +401,57 @@ defmodule Engram.AttachmentsTest do
     end
   end
 
+  # The usage SUM ran on every pre-check AND under the quota lock: 203k sums
+  # in 5 days on prod (pss), two or three per upload. Only the locked one is
+  # authoritative; a pre-check may answer :ok from the last usage this node
+  # saw, never refuse from it.
+  describe "upsert_attachment/3 usage sums" do
+    setup %{user: user} do
+      insert(:user_limit_override,
+        user: user,
+        key: "attachment_bytes_cap",
+        value: %{"v" => 1_000}
+      )
+
+      Mox.stub(Engram.MockStorage, :put, fn _key, _bin, _opts -> :ok end)
+      Mox.stub(Engram.MockStorage, :delete, fn _key -> :ok end)
+      Engram.Cache.evict_local(:storage_usage, user.id)
+      :ok
+    end
+
+    defp upload_sums(user, vault, path, bytes) do
+      {result, queries} =
+        Engram.QueryRecorder.record(fn ->
+          Attachments.upsert_attachment(user, vault, %{
+            "path" => path,
+            "content_base64" => Base.encode64(bytes)
+          })
+        end)
+
+      me = self()
+      sums = for %{sql: q, pid: ^me} <- queries, q =~ ~r/sum\(.*FROM "attachments"/is, do: q
+      {result, length(sums)}
+    end
+
+    test "a second upload sums usage once, under the quota lock", %{user: user, vault: vault} do
+      {{:ok, _}, _} = upload_sums(user, vault, "a.png", "aaaa")
+      assert {{:ok, _}, 1} = upload_sums(user, vault, "b.png", "bbbb")
+    end
+
+    test "the pre-check never refuses from a stale usage", %{user: user, vault: vault} do
+      # As if this node last saw the account full (a delete since then).
+      Engram.Cache.put(:storage_usage, user.id, 1_000)
+      assert {{:ok, _}, 2} = upload_sums(user, vault, "c.png", "cccc")
+    end
+
+    test "an upload over the cap is still refused", %{user: user, vault: vault} do
+      {{:ok, _}, _} = upload_sums(user, vault, "d.png", "dddd")
+
+      assert {{:error, {:storage_cap_reached, _, 1_000}}, _} =
+               upload_sums(user, vault, "e.png", String.duplicate("e", 1_000))
+    end
+  end
+
   # A client that re-sends bytes the server already has must not cost a
   # re-encrypt, an S3 PUT, or a row write. On 2026-08-21 one looping Obsidian
   # client re-uploaded the same 667 attachments for 90 minutes and held prod at
