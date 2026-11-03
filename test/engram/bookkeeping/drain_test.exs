@@ -109,7 +109,7 @@ defmodule Engram.Bookkeeping.DrainTest do
       sql!("DELETE FROM folders")
 
       :ok = DataMigrations.mark_done(FolderTable.name(), FolderTable.version())
-      assert %{folder: 1} = Drain.run()
+      assert %{folder: 1, folder_blocked: 0} = Drain.run()
 
       %{rows: [[ref]]} =
         sql!("SELECT folder_ref_id FROM notes WHERE id = $1", [Ecto.UUID.dump!(n.id)])
@@ -215,6 +215,19 @@ defmodule Engram.Bookkeeping.DrainTest do
                expected,
              "#{kind}: probe and worker disagree"
     end
+  end
+
+  # The fleet cursor moves past every user a probe returns, so the folder
+  # probe must return only the users one tick repairs. Red on 156c2fd94: it
+  # paged 100 and repaired 10, so 90 were skipped and stuck users starved them.
+  test "the folder probe pages exactly the users one tick repairs" do
+    [{_table, sql}] = Drain.probes(:folder)
+    assert sql =~ "LIMIT #{Drain.page(:folder)}\n"
+    assert Drain.page(:folder) == 10
+
+    for kind <- [:envelope, :link_keys, :payload],
+        {_t, sql} <- Drain.probes(kind),
+        do: assert(sql =~ "LIMIT #{Drain.page(kind)}\n")
   end
 
   test "the cron worker runs a tick and dedups while one is incomplete" do

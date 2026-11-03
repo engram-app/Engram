@@ -130,7 +130,7 @@ defmodule Engram.Bookkeeping.Drain do
      WHERE kind = 'note' AND deleted_at IS NULL AND folder_ref_id IS NULL
        AND octet_length(folder_ciphertext) > 16
        AND ($1::uuid IS NULL OR user_id = $1)
-       AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 100
+       AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 10
      """}
   ]
 
@@ -147,11 +147,14 @@ defmodule Engram.Bookkeeping.Drain do
   @doc "One tick. Returns the users handed to each repair."
   @spec run() :: %{atom() => non_neg_integer()}
   def run do
+    {folder, folder_blocked} = folder()
+
     counts = %{
       envelope: envelope(),
       link_keys: enqueue(:link_keys, BackfillLinkKeys, &BackfillLinkKeys.missing_rows?/1),
       payload: enqueue(:payload, ReconcileNotePayloads, &ReconcileNotePayloads.unstamped_rows?/1),
-      folder: folder()
+      folder: folder,
+      folder_blocked: folder_blocked
     }
 
     Logger.info(
@@ -187,19 +190,32 @@ defmodule Engram.Bookkeeping.Drain do
   defp folder do
     case users(:folder) do
       [] ->
-        0
+        {0, 0}
 
       users ->
-        # A few users per tick, each with a short attachment budget, so the tick
-        # stays inside its job timeout; the cursor rotation reaches the rest.
-        users = Enum.take(users, @folder_users_per_tick)
+        # A few users per tick (the probe pages `@folder_users_per_tick`, so
+        # the cursor moves past exactly the users repaired), each with a short
+        # attachment budget, so the tick stays inside its job timeout. A user
+        # whose repair never finishes takes one slot per cursor cycle, never
+        # the queue; their count is logged as `folder_blocked`.
+        blocked =
+          with true <- FolderTable.done?(),
+               {:more, stats} <-
+                 FolderTable.run_pass(user_ids: users, attachment_budget_ms: @folder_budget_ms) do
+            stats[:blocked]
+          else
+            _ -> 0
+          end
 
-        if FolderTable.done?(),
-          do: FolderTable.run_pass(user_ids: users, attachment_budget_ms: @folder_budget_ms)
-
-        length(users)
+        {length(users), blocked}
     end
   end
+
+  @doc false
+  # Rows per probe page; must equal the probe SQL's LIMIT (the cursor wraps on
+  # a short page).
+  def page(:folder), do: @folder_users_per_tick
+  def page(_kind), do: @users_per_probe
 
   @doc false
   # The users a tick's probes return for `kind` (tests compare them with the
@@ -210,14 +226,14 @@ defmodule Engram.Bookkeeping.Drain do
     kind
     |> probes()
     |> Enum.with_index()
-    |> Enum.flat_map(fn {{_table, sql}, i} -> probe(sql, "drain:#{kind}:#{i}") end)
+    |> Enum.flat_map(fn {{_table, sql}, i} -> probe(sql, "drain:#{kind}:#{i}", page(kind)) end)
     |> Enum.uniq()
   end
 
   # Sobelow cannot see that `sql` is one of this module's literal probes above
   # (never input, never interpolated), so it reports the variable argument.
   # sobelow_skip ["SQL.Query"]
-  defp probe(sql, cursor) do
+  defp probe(sql, cursor, page) do
     case TenantScan.pool() do
       # Fleet: the 100 users after the last tick's, wrapping at the end, so
       # users whose repair can never finish cannot take every tick.
@@ -231,7 +247,7 @@ defmodule Engram.Bookkeeping.Drain do
             cursor,
             users != [] && %{"user_id" => List.last(users)},
             length(users),
-            @users_per_probe
+            page
           )
 
         users
