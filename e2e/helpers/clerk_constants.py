@@ -27,3 +27,18 @@ def is_e2e_clerk_email(email: str) -> bool:
     return email.startswith("e2e-") and (
         "+clerk_test@" in email or email.endswith("@test.com")
     )
+
+
+# Staging (Clerk `key-longhorn-79`, shared with local saas-dev) has no CI
+# churn, only ad-hoc agent/QA accounts. Convention (AGENTS.md): every such
+# account uses the `+clerk_test@example.com` tag, so the reaper owns it.
+# `load-sim-uNN` accounts are reused by e2e/load/sim.py and must survive.
+STAGING_TEST_EMAIL_SUFFIX = "+clerk_test@example.com"
+STAGING_KEEP_PREFIX = "load-sim-"
+
+
+def is_staging_test_clerk_email(email: str) -> bool:
+    """True iff `email` is a disposable staging test account."""
+    return email.endswith(STAGING_TEST_EMAIL_SUFFIX) and not email.startswith(
+        STAGING_KEEP_PREFIX
+    )
