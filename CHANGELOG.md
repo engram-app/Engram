@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.72.2](https://github.com/engram-app/Engram/compare/0.72.1...0.72.2) (2026-11-03)
+
+
+### Bug Fixes
+
+* **index:** off is the steady state after the v5 pass ([#2387](https://github.com/engram-app/Engram/issues/2387)) ([228e5ba](https://github.com/engram-app/Engram/commit/228e5bacec3e1a5e5123b43c5e13b766fa796043))
+* **rebuild:** hold gated jobs instead of snoozing ([#2380](https://github.com/engram-app/Engram/issues/2380)) ([c26144a](https://github.com/engram-app/Engram/commit/c26144a2e8dfb454355f86bb1f00b08c2663f950))
+
+
+### Performance Improvements
+
+* notes key lookups, index-only manifest and usage sum ([#2405](https://github.com/engram-app/Engram/issues/2405)) ([1ff78b6](https://github.com/engram-app/Engram/commit/1ff78b644c78b0e15356bad80adbd0852b6ebb69))
+* **notes:** R8 N, app writes note_bodies, locked reads from it ([#2400](https://github.com/engram-app/Engram/issues/2400)) ([34739c4](https://github.com/engram-app/Engram/commit/34739c45265efdabffa1fd96ac10e61bcf45dbda))
+* **promex:** poll only pending Oban jobs ([#2384](https://github.com/engram-app/Engram/issues/2384)) ([83872b6](https://github.com/engram-app/Engram/commit/83872b6c4e2f9590b652ca6d47a247de5bc83f8c))
+
 ## [0.72.1](https://github.com/engram-app/Engram/compare/0.72.0...0.72.1) (2026-11-03)
 
 
