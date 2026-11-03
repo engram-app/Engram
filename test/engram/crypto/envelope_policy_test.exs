@@ -113,6 +113,8 @@ defmodule Engram.Crypto.EnvelopePolicyTest do
         skip_tenant_check: true
       )
 
+      Engram.Fixtures.mirror_body!(note.id)
+
       before = raw_note(note.id)
       assert byte_size(before.content_nonce) == 13
       assert byte_size(before.crdt_state_nonce) == 13

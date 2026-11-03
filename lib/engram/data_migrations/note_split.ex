@@ -2,13 +2,15 @@ defmodule Engram.DataMigrations.NoteSplit do
   @moduledoc """
   Fills wave 3's narrow `notes` columns and `note_bodies` for rows written
   before the `notes_derive_core_keys` / `notes_sync_body` triggers existed
-  (migration 20261021110200). Every later write fills them itself, from any
-  release's code, so this only catches up.
+  (migration 20261021110200; `notes_sync_body` was dropped in
+  20261103000000). Every later write fills them itself, so this only
+  catches up.
 
-  The work is the triggers' own: a pass touches `kind` (`SET kind = kind`),
-  which both triggers list, so each row is derived by exactly the code that
-  derives new writes. `seq` and `updated_at` are untouched: no sync feed or
-  cache sees a change.
+  The core columns are the trigger's own work: a pass touches `kind`
+  (`SET kind = kind`), which `notes_derive_core_keys` lists, so each row is
+  derived by exactly the code that derives new writes. A missing body row is
+  inserted by `NoteBody.sync!/3`, the app's one body writer. `seq` and
+  `updated_at` are untouched: no sync feed or cache sees a change.
 
   A row needs work when its derived columns were never set (`is_folder` is
   NULL; the trigger always sets it) or it is a note with no body row.
@@ -80,8 +82,8 @@ defmodule Engram.DataMigrations.NoteSplit do
   # touch skipped because a writer held it.
   defp heal(ids, %{repo: repo}) do
     touched = touch(repo, needing(ids))
-    # A missing body row, written by this pass rather than by the trigger
-    # (the next release drops it). Present rows are left as they are.
+    # A missing body row, written by this pass. Present rows are left as
+    # they are.
     _ = NoteBody.sync!(touched, [], repo: repo)
     left? = repo.exists?(where(unfixed(), [n], field(n, :id) in type(^ids, {:array, Ecto.UUID})))
     {length(touched), left?}

@@ -575,6 +575,8 @@ defmodule Engram.NotesTest do
           )
         end)
 
+      Engram.Fixtures.mirror_body!(note.id)
+
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
       {:ok, _} = Notes.rename_note(user, vault, "Test/Rename Me.md", "Test/Renamed.md")

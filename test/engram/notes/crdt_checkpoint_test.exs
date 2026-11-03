@@ -378,6 +378,8 @@ defmodule Engram.Notes.CrdtCheckpointTest do
         )
       end)
 
+    Engram.Fixtures.mirror_body!(note.id)
+
     # A canvas-shaped live doc: structural data in a Y.Map, content Y.Text empty.
     doc = CrdtBridge.new_doc()
     Yex.Map.set(Yex.Doc.get_map(doc, "nodes"), "n1", "hi")
@@ -574,6 +576,8 @@ defmodule Engram.Notes.CrdtCheckpointTest do
       )
     end)
 
+    Engram.Fixtures.mirror_body!(note.id)
+
     :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
 
     {:ok, after_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
@@ -598,6 +602,8 @@ defmodule Engram.Notes.CrdtCheckpointTest do
         set: [crdt_state_ciphertext: <<0, 1, 2, 3>>, crdt_state_nonce: <<0::96>>]
       )
     end)
+
+    Engram.Fixtures.mirror_body!(note.id)
 
     doc
   end
@@ -1269,6 +1275,8 @@ defmodule Engram.Notes.CrdtCheckpointTest do
           set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
         )
       end)
+
+    Engram.Fixtures.mirror_body!(note.id)
 
     # Exactly what bind/3 now produces for such a row: an empty doc.
     doc = CrdtBridge.new_doc()

@@ -25,11 +25,10 @@ defmodule Engram.PromEx.Notes do
       the read rate is the share of reads paying that cost.
 
     * `[:engram, :note_body, :sync_wrote]`: `%{count: rows}`, no metadata.
-      `Engram.Notes.NoteBody.sync!/3` wrote body rows itself. While the
-      `notes_sync_body` trigger is live it should stay at zero (the trigger
-      already wrote them); a non-zero rate is a write the trigger missed, and
-      the trigger may only be dropped once it has read zero for a while.
-      Once the trigger is gone, this is every body write.
+      `Engram.Notes.NoteBody.sync!/3` wrote body rows, the only writer of
+      `note_bodies` since the `notes_sync_body` trigger was dropped
+      (20261103000000): the body write rate. On a release that still has the
+      trigger it reads zero (the trigger wrote first).
 
   Metrics:
 
@@ -76,7 +75,7 @@ defmodule Engram.PromEx.Notes do
           event_name: @body_sync_wrote_event,
           measurement: :count,
           description:
-            "note_bodies rows NoteBody.sync! wrote itself (zero while the notes_sync_body trigger is live)."
+            "note_bodies rows NoteBody.sync! wrote (every body write since the trigger drop)."
         )
       ]
     )

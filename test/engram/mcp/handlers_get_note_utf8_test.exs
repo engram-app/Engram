@@ -51,6 +51,8 @@ defmodule Engram.MCP.HandlersGetNoteUtf8Test do
         )
       end)
 
+    Engram.Fixtures.mirror_body!(note.id)
+
     note
   end
 

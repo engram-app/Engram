@@ -82,6 +82,9 @@ defmodule Engram.Notes.LockedReadBodyTest do
               [Ecto.UUID.dump!(ctx.note.id), ct, nonce]
             )
 
+            # The app's body write, in the same transaction (`NoteBody.sync!/3`).
+            Engram.Notes.NoteBody.sync!(ctx.note.id, [:crdt_state_ciphertext])
+
             send(parent, :locked)
             receive do: (:commit -> :ok)
           end)

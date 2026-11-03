@@ -3,15 +3,14 @@ defmodule Engram.Notes.NoteBody do
   A note's body, 1:1 with `notes` (migration 20261021110100): materialized
   content, CRDT state and manifest head.
 
-  Written twice over, on purpose, while R8 (stop storing every body twice)
-  rolls out: by the `notes_sync_body` trigger, which every writer of the
-  `notes` body columns fires (the previous release's nodes, raw SQL), AND by
-  `sync!/3`, which every app writer of those columns calls after its `notes`
-  write, in the same transaction. With the trigger live, `sync!/3` finds the
-  row already in step and writes nothing, so a save still writes this row
-  once. The next release drops the trigger and `sync!/3` is the only writer;
-  the one after stops writing the `notes` columns. Order matters: nulling
-  the `notes` columns under a live trigger copies the NULLs here.
+  Written by one function, `sync!/3`, which every app writer of the `notes`
+  body columns calls after its `notes` write, in the same transaction. R8
+  (stop storing every body twice) runs in three releases: N added `sync!/3`
+  beside the `notes_sync_body` trigger, N+1 dropped the trigger
+  (20261103000000), so a raw `notes` write that skips `sync!/3` no longer
+  reaches this table; N+2 stops writing the `notes` body columns. Order
+  matters: nulling the `notes` columns under a live trigger would copy the
+  NULLs here, so N+2 must refuse to run while the trigger exists.
 
   Wave 3 migrate-data (`docs/context/notes-chunks-hyperopt.md` 6.1 step 2):
   every READ of a body column goes through `select_note/2` (or `join/1` +
@@ -43,10 +42,10 @@ defmodule Engram.Notes.NoteBody do
   re-fetches only the locked relation (EvalPlanQual), so a joined body row
   would be the pre-wait version (LockedReadBodyTest). No lock is needed on
   this table: every writer of a body row holds that note's `notes` row lock
-  (the trigger and `sync!/3` run after a `notes` write in the same
-  transaction; the cascade runs inside the `notes` DELETE), so once the
-  reader holds it, the fresh statement sees the last committed body and
-  nothing can change it until the reader commits.
+  (`sync!/3` runs after a `notes` write in the same transaction; the
+  cascade runs inside the `notes` DELETE), so once the reader holds it, the
+  fresh statement sees the last committed body and nothing can change it
+  until the reader commits.
 
   Write fences (`snapshot_fence`, `rename_fence`, `snapshot_fenced`) compare
   the `notes.crdt_state_nonce` column (inline, never TOASTed) against the
@@ -256,35 +255,32 @@ defmodule Engram.Notes.NoteBody do
 
   @doc """
   Brings the `note_bodies` rows of the notes `ids` in step with the `notes`
-  body columns a write just set, as the `notes_sync_body` trigger maps them
-  (20261021110200), and returns how many rows it wrote. The one function
-  every app writer of a `notes` body column (content, CRDT state, head,
-  `dek_version`) calls after that write, in the same transaction, so the
-  `notes` rows are already locked (`notes` before `note_bodies`, the
-  trigger's order).
+  body columns a write just set, with the mapping the dropped
+  `notes_sync_body` trigger defined (20261021110200), and returns how many
+  rows it wrote. The one function every app writer of a `notes` body column
+  (content, CRDT state, head, `dek_version`) calls after that write, in the
+  same transaction, so the `notes` rows are already locked (`notes` before
+  `note_bodies`).
 
   `written` names the `notes` columns the write set (a list, or the
   keyword list / changes map it wrote), and only the body fields copied
-  from those are compared and copied, as the trigger copies only the
+  from those are compared and copied, as the trigger copied only the
   columns whose nonce changed. That is load-bearing for the release that
   stops writing the `notes` body columns: an older node beside it must not
   copy a stale `notes` column it did not write over a newer body. A CRDT
   state write also copies the head (the `notes_crdt_head_invalidate`
   trigger NULLs it). The owner and key version (`dek_version`, which stays
   on `notes`) are always kept in step. A missing body row (written before
-  the trigger) is inserted whole.
+  the body table) is inserted whole.
 
   Compared cheaply: per body column its NULL-ness, its length, the 13-byte
   nonce field and the 16-byte AEAD tag (slices of an EXTERNAL value, so
-  nothing is de-TOASTed; every encryption takes a fresh nonce, the
-  trigger's own change test). A row already in step (the trigger just
-  wrote it) is not touched, so a save writes it once.
+  nothing is de-TOASTed; every encryption takes a fresh nonce, so a new
+  nonce names a new ciphertext). A row already in step is not touched.
 
   Emits `[:engram, :note_body, :sync_wrote]` (`%{count: rows}`) when it
-  wrote anything (`engram_prom_ex_notes_body_sync_wrote_rows_total`). While
-  the trigger is live that means the trigger left a row behind; it should
-  stay at zero, which is the evidence the release dropping the trigger
-  waits for.
+  wrote anything (`engram_prom_ex_notes_body_sync_wrote_rows_total`): the
+  body write rate.
 
   Options: `:repo` (default `Engram.Repo`, or the maintenance repo a ledger
   runs on); the rest go to the query (`mode: :savepoint`,
@@ -324,7 +320,7 @@ defmodule Engram.Notes.NoteBody do
   Matches `user_id` as well as `note_id`: a caller's `n.user_id == ^id`
   then reaches `note_bodies` as an index condition (`note_bodies_user_note_head`),
   so a vault-wide join reads the owner's bodies, not every tenant's (R5).
-  The trigger writes the note's own `user_id`, so no row changes sides.
+  `sync!/3` writes the note's own `user_id`, so no row changes sides.
   """
   @spec join(Ecto.Queryable.t()) :: Ecto.Query.t()
   def join(query) do

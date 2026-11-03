@@ -2752,6 +2752,8 @@ defmodule EngramWeb.CrdtChannelTest do
           )
         end)
 
+      Engram.Fixtures.mirror_body!(created_id)
+
       client = CrdtBridge.new_doc()
       {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
       {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})

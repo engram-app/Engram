@@ -31,6 +31,8 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
         )
       end)
 
+    Engram.Fixtures.mirror_body!(note.id)
+
     note
   end
 

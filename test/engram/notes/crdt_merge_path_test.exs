@@ -68,6 +68,8 @@ defmodule Engram.Notes.CrdtMergePathTest do
          )}
       end)
 
+    Engram.Fixtures.mirror_body!(note.id)
+
     # REST writer pushes a diverging body under the NOW-STALE original version.
     # This MUST NOT return {:error, :version_conflict, _} — the key invariant
     # is "stale version → merge, not 409". Posture-C REST writers send full
@@ -209,6 +211,8 @@ defmodule Engram.Notes.CrdtMergePathTest do
        )}
     end)
 
+    Engram.Fixtures.mirror_body!(note.id)
+
     # Simulate bind/3's seed_from_content path: it starts from a FRESH empty doc
     # and ingests the full text — producing a tail row that encodes the full body
     # as an insert-everything operation relative to the empty doc.
@@ -280,6 +284,8 @@ defmodule Engram.Notes.CrdtMergePathTest do
          set: [crdt_state_ciphertext: ect, crdt_state_nonce: enonce]
        )}
     end)
+
+    Engram.Fixtures.mirror_body!(note.id)
 
     # Bind-time seed lineage in the tail: full text inserted against an empty doc.
     seed_doc = CrdtBridge.new_doc()

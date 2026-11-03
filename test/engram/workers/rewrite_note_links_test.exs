@@ -300,6 +300,8 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
         |> Repo.update_all(set: [crdt_state_ciphertext: <<1, 2, 3>>, crdt_state_nonce: <<0>>])
       end)
 
+    Engram.Fixtures.mirror_body!(bad.id)
+
     ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :links, :rewrite, :failed]])
     on_exit(fn -> :telemetry.detach(ref) end)
 

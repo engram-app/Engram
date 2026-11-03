@@ -29,6 +29,8 @@ defmodule Engram.Notes.LineageAuditTest do
       Repo.with_tenant(user.id, fn ->
         Repo.update_all(from(n in Note, where: n.id == ^note_id), set: fields)
       end)
+
+    Engram.Fixtures.mirror_body!(note_id)
   end
 
   # Moves the whole snapshot into one update-log row: a never-checkpointed note.
@@ -294,9 +296,8 @@ defmodule Engram.Notes.LineageAuditTest do
     bad = note(user, vault, "C/Bad.md", "x\n")
     good = note(user, vault, "C/Good.md", "y\n")
     CrdtRegistry.terminate_room(bad.id)
-    # Also break the facade: the audit must not need it. A NEW nonce, so the
-    # notes_sync_body trigger carries the corrupt state into note_bodies, the
-    # copy the audit reads.
+    # Also break the facade: the audit must not need it. `set_note/3` mirrors
+    # the corrupt state into note_bodies, the copy the audit reads.
     set_note(user, bad.id,
       crdt_state_ciphertext: :crypto.strong_rand_bytes(48),
       crdt_state_nonce: :crypto.strong_rand_bytes(12),

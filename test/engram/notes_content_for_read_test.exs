@@ -59,6 +59,8 @@ defmodule Engram.NotesContentForReadTest do
         )
       end)
 
+    Engram.Fixtures.mirror_body!(note_id)
+
     :ok
   end
 
@@ -125,6 +127,7 @@ defmodule Engram.NotesContentForReadTest do
         )
       end)
 
+    Engram.Fixtures.mirror_body!(note.id)
     :ok = blank_facade!(user, note.id)
 
     {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0)
@@ -236,6 +239,8 @@ defmodule Engram.NotesContentForReadTest do
         )
       end)
 
+    Engram.Fixtures.mirror_body!(note.id)
+
     {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0)
     change = Enum.find(changes, &(&1.path == "h.md"))
 
@@ -306,6 +311,8 @@ defmodule Engram.NotesContentForReadTest do
           set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
         )
       end)
+
+    Engram.Fixtures.mirror_body!(note.id)
 
     :ok = append_tail!(user, vault, note.id)
 

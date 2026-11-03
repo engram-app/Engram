@@ -160,6 +160,8 @@ defmodule Engram.Workers.BackfillCrdtHeadTest do
           )
         end)
 
+      Engram.Fixtures.mirror_body!(bad.id)
+
       log =
         ExUnit.CaptureLog.capture_log(fn ->
           assert :ok =

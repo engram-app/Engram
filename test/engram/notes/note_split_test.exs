@@ -1,7 +1,8 @@
 defmodule Engram.Notes.NoteSplitTest do
-  # Wave 3 dual-write: the notes_derive_core_keys / notes_sync_body triggers
-  # keep the narrow core columns and note_bodies in step with every write,
-  # and the NoteSplit data migration fills rows written before them.
+  # Wave 3: the notes_derive_core_keys trigger keeps the narrow core columns
+  # in step with every write, `NoteBody.sync!/3` (the app's one body writer
+  # since the notes_sync_body trigger was dropped) keeps note_bodies in
+  # step, and the NoteSplit data migration fills rows written before them.
   # Not async: `NoteSplit.run_pass/1` resumes a node-global walk cursor
   # (`IdWindows.heal_pass/4`), which DataCase resets before each sync test.
   use Engram.DataCase, async: false
@@ -9,6 +10,7 @@ defmodule Engram.Notes.NoteSplitTest do
   alias Engram.DataMigrations
   alias Engram.DataMigrations.NoteSplit
   alias Engram.Notes
+  alias Engram.Notes.NoteBody
   alias Engram.QueryRecorder
   alias Engram.Repo
   alias Engram.TableReads
@@ -103,9 +105,11 @@ defmodule Engram.Notes.NoteSplitTest do
     id = Ecto.UUID.dump!(note.id)
 
     Repo.query!("UPDATE notes SET crdt_head = $2 WHERE id = $1", [id, head])
+    NoteBody.sync!(note.id, [:crdt_head])
     assert row(note.id)["b_head"] == Base.url_decode64!(head, padding: false)
 
     Repo.query!("UPDATE notes SET crdt_head = NULL WHERE id = $1", [id])
+    NoteBody.sync!(note.id, [:crdt_head])
     assert row(note.id)["b_head"] == nil
   end
 
@@ -134,6 +138,7 @@ defmodule Engram.Notes.NoteSplitTest do
       [id]
     )
 
+    NoteBody.sync!(note.id, [:crdt_head])
     r = row(note.id)
     assert r["content_digest"] == nil
     assert r["b_head"] == nil
@@ -164,10 +169,12 @@ defmodule Engram.Notes.NoteSplitTest do
       [id, merged]
     )
 
+    NoteBody.sync!(note.id, [:content_ciphertext])
     assert row(note.id)["b_content"] == merged
 
     merged2 = <<1>> <> :crypto.strong_rand_bytes(40)
     Repo.query!("UPDATE notes SET content_ciphertext = $2 WHERE id = $1", [id, merged2])
+    NoteBody.sync!(note.id, [:content_ciphertext])
     assert row(note.id)["b_content"] == merged2
   end
 

@@ -151,6 +151,8 @@ defmodule Engram.Notes.CrdtCheckpointRotationFenceTest do
       skip_tenant_check: true
     )
 
+    Engram.Fixtures.mirror_body!(note.id)
+
     before = reload(user, note.id)
 
     # rebuild_detached must NOT treat "will not decrypt" as "absent". Replaying

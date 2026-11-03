@@ -309,6 +309,8 @@ defmodule Engram.MCP.HandlersSingleReadTest do
       ])
     end)
 
+    Engram.Fixtures.mirror_body!(note.id)
+
     assert count(text_of(user, vault, "a.md"), "TAILEDIT") == 1
 
     conn |> call_tool("append_to_note", %{"path" => "a.md", "text" => "APPENDED"}) |> tool_ok!()
@@ -843,6 +845,8 @@ defmodule Engram.MCP.HandlersSingleReadConcurrencyTest do
       )
     end)
 
+    Engram.Fixtures.mirror_body!(note.id)
+
     slow = parked_rmw(user, vault, "c.md", "APPENDED\n")
     assert_receive {:rebuild_parked, parked}, 15_000
 
@@ -894,6 +898,8 @@ defmodule Engram.MCP.HandlersSingleReadConcurrencyTest do
         set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
       )
     end)
+
+    Engram.Fixtures.mirror_body!(note.id)
 
     on_exit(CheckpointInterleave.arm(:before_expected_lock))
 
