@@ -36,7 +36,7 @@ defmodule Engram.Workers.ClientLogsPruner do
     cutoff = NaiveDateTime.utc_now() |> NaiveDateTime.add(-days * 24 * 3600, :second)
     # Args exist so a test can exercise the cap with a handful of rows.
     batch = Map.get(args, "batch", @batch)
-    n = prune(cutoff, batch, Map.get(args, "max_batches", @max_batches), 0)
+    n = prune(cutoff, batch, Map.get(args, "max_batches", @max_batches))
     if n > 0, do: Logger.info("client_logs_pruner deleted=#{n}")
     {:ok, n}
   end
@@ -47,31 +47,35 @@ defmodule Engram.Workers.ClientLogsPruner do
   # a uuidv7's leading 48 bits are its mint time in ms, so `id < floor(cutoff)`
   # is a pkey range scan. `created_at < cutoff` stays as the correctness bound:
   # no row younger than retention is ever deleted, whatever its id.
-  defp prune(_cutoff, _batch, 0 = _batches_left, acc), do: acc
-
-  defp prune(cutoff, batch, batches_left, acc) do
+  defp prune(cutoff, batch, max_batches) do
     floor =
       cutoff
       |> DateTime.from_naive!("Etc/UTC")
       |> DateTime.to_unix(:millisecond)
       |> id_floor()
 
-    {n, _} =
-      Repo.delete_all(
-        from(l in "client_logs",
-          where:
-            l.id in subquery(
-              from(s in "client_logs",
-                where: s.id < type(^floor, Ecto.UUID) and s.created_at < ^cutoff,
-                order_by: s.id,
-                select: s.id,
-                limit: ^batch
-              )
+    Engram.Maintenance.Prune.batched(
+      fn batch ->
+        {n, _} =
+          Repo.delete_all(
+            from(l in "client_logs",
+              where:
+                l.id in subquery(
+                  from(s in "client_logs",
+                    where: s.id < type(^floor, Ecto.UUID) and s.created_at < ^cutoff,
+                    order_by: s.id,
+                    select: s.id,
+                    limit: ^batch
+                  )
+                )
             )
-        )
-      )
+          )
 
-    if n >= batch, do: prune(cutoff, batch, batches_left - 1, acc + n), else: acc + n
+        n
+      end,
+      batch,
+      max_batches
+    )
   end
 
   # The smallest uuidv7 minted at `ms`: its timestamp bits, then all zeros.

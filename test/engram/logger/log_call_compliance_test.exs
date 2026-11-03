@@ -209,6 +209,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # has to be put in scope or written down here with a reason. That turns an
   # omission into a decision.
   @out_of_scope [
+    # Persisted sweep cursors (row ids) and the shared batched-delete loop: no
+    # Logger call, never touches content, a path, a title or a query.
+    "lib/engram/maintenance/",
     # The v5 rebuild switch, manifest and ledger: token counts, point counts
     # and avgdl per note/vault id. No content, path, title or query, no
     # Logger call. (Its dry-run worker, which decrypts notes, is in workers/.)
