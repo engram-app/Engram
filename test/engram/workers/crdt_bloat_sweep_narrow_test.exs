@@ -1,9 +1,9 @@
 defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
   @moduledoc """
-  The sweep reads stored sizes from the narrow `note_index_state` columns (kept
-  by the `note_bodies_sizes` trigger and the state-row upsert, filled by the
-  `NoteSizes` ledger) instead
-  of aggregating the wide `notes` heap. Same gauges, no `notes` read.
+  The sweep reads stored sizes from the narrow `note_index_state` copy (body
+  sizes set by the `note_bodies_sizes` BEFORE trigger, copied by the sweep for
+  written notes; liveness from the state-row upsert; old rows filled by the
+  `NoteSizes` ledger) instead of aggregating the wide `notes` heap.
   """
   use Engram.DataCase, async: false
 
@@ -67,22 +67,21 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
     assert [_, _, _, false] = sizes(n)
   end
 
-  # Sizes live on the body row, set by its BEFORE trigger, and liveness rides
-  # the existing state-row upsert: a save adds no row version. Measured with
-  # pg_stat_xact_user_tables on an ordinary edit and a compaction checkpoint.
-  # Red on 156c2fd94: its two size triggers updated note_index_state on every
-  # body write and every notes version/updated_at change.
-  test "a save and a checkpoint write no extra note_index_state row versions", %{
+  # Row versions of one compaction checkpoint plus one ordinary save, from
+  # pg_stat_xact_user_tables, equal to main's: notes 2 (1 HOT), note_bodies 2
+  # (both HOT), note_index_state 0. Red on 156c2fd94: note_index_state 4 (its
+  # two size triggers), note_bodies 0 HOT (the envelope expression indexes).
+  test "a save and a checkpoint write the same row versions as main", %{
     notes: [n | _]
   } do
     stat = fn ->
       %{rows: rows} =
         Repo.query!("""
-        SELECT relname, n_tup_ins + n_tup_upd FROM pg_stat_xact_user_tables
+        SELECT relname, n_tup_ins, n_tup_upd, n_tup_hot_upd FROM pg_stat_xact_user_tables
         WHERE relname IN ('notes', 'note_bodies', 'note_index_state')
         """)
 
-      Map.new(rows, fn [t, v] -> {t, v} end)
+      Map.new(rows, fn [t | v] -> {t, v} end)
     end
 
     id = Ecto.UUID.dump!(n.id)
@@ -102,11 +101,16 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
     )
 
     after_ = stat.()
-    delta = Map.new(after_, fn {t, v} -> {t, v - Map.get(before, t, 0)} end)
 
-    assert delta["notes"] == 2
-    assert delta["note_bodies"] == 2
-    assert Map.get(delta, "note_index_state", 0) == 0, inspect(delta)
+    delta =
+      Map.new(after_, fn {t, v} ->
+        {t, Enum.zip_with(v, Map.get(before, t, [0, 0, 0]), &(&1 - &2))}
+      end)
+
+    # [inserts, updates, of which HOT]
+    assert delta["notes"] == [0, 2, 1], inspect(delta)
+    assert delta["note_bodies"] == [0, 2, 2], inspect(delta)
+    assert Map.get(delta, "note_index_state", [0, 0, 0]) == [0, 0, 0], inspect(delta)
   end
 
   # The R8 contract stops writing the `notes` body columns, so the sizes must
@@ -135,9 +139,16 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
     old_reads = notes_rows_read() - r0
 
     Repo.query!("ALTER TABLE note_bodies DISABLE TRIGGER note_bodies_sizes")
-    Repo.query!("UPDATE note_bodies SET content_bytes = NULL, state_bytes = NULL")
+
+    Repo.query!(
+      "UPDATE note_bodies SET content_bytes = NULL, state_bytes = NULL, envelope_legacy = NULL"
+    )
+
     Repo.query!("ALTER TABLE note_bodies ENABLE TRIGGER note_bodies_sizes")
-    Repo.query!("UPDATE note_index_state SET note_live = NULL")
+
+    Repo.query!(
+      "UPDATE note_index_state SET note_live = NULL, content_bytes = NULL, state_bytes = NULL, has_state = NULL"
+    )
 
     refute NoteSizes.done?()
     assert {:more, rows: 6} = NoteSizes.run_pass()
@@ -150,7 +161,7 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
 
     # Red before: the aggregate read every notes row (the old path read all
     # 3). Now notes is read only for the ids written since the last sweep, an
-    # `updated_at` range; the sizes come from note_bodies.
+    # `updated_at` range; the sizes come from the narrow copy.
     assert old_reads >= 3
     notes_reads = Enum.filter(queries, &(&1.sql =~ ~r/FROM notes\b/))
     assert Enum.all?(notes_reads, &(&1.sql =~ "updated_at >= $1")), inspect(notes_reads)

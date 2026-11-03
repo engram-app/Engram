@@ -42,6 +42,7 @@ defmodule Engram.Workers.BackfillCrdtHead do
   # NULL-head notes examined per hourly run (see `enqueue_all/0`).
   @candidate_cap 5_000
   @cursor "warm_crdt_heads"
+  @since_cursor "warm_crdt_heads:since"
   @start_cursor "00000000-0000-0000-0000-000000000000"
 
   # 60 min, the Lifeline `rescue_after` ceiling. This walks every row it
@@ -63,37 +64,50 @@ defmodule Engram.Workers.BackfillCrdtHead do
   """
   @spec enqueue_all() :: non_neg_integer()
   def enqueue_all do
-    # The candidates are the NULL heads of `note_bodies` (the trigger-kept 1:1
-    # copy of the head), read through the partial index
-    # `note_bodies_crdt_head_null`: an index range, not a walk of `notes`
-    # (Job Load Audit 2026-11-03: the hourly walk read 2.7 GB of notes).
-    # The index is on the narrow table on purpose: on `notes` it would make
-    # every CRDT append (which clears the head) a non-HOT update across all
-    # notes indexes (NotesHotAppendTest). At most `candidate_cap/0` notes per
-    # run, resuming at a persisted cursor (`Engram.Maintenance.Cursor`) and
-    # wrapping at the end: rows that never leave the index (a trashed note, a
-    # deleted vault, a head the trigger cannot decode) cannot fill every run.
-    # `TenantScan.all/2`: one query on the maintenance pool on SaaS, per
-    # tenant elsewhere (never a cross-tenant read on the app pool, #1349).
+    # Candidates, with no index on the head (a partial index on
+    # `crdt_head IS NULL` makes every CRDT append, which clears the head, and
+    # every warm a non-HOT body write; `NoteBodyReadTest` guards that):
+    #   * recent: notes written since the last run (`notes.updated_at` index;
+    #     every append is followed by a checkpoint that moves it), heads read
+    #     by primary key. This is where NULL heads come from.
+    #   * backstop: the next `candidate_cap/0` body rows in key order from a
+    #     persisted cursor (`Engram.Maintenance.Cursor`), wrapping at the end:
+    #     bounded rows per run, and the whole table every N/cap hours.
+    # Not the hourly walk of every `notes` row (Job Load Audit 2026-11-03:
+    # 2.7 GB). `TenantScan.all/2`: the maintenance pool on SaaS, per tenant
+    # elsewhere (never a cross-tenant read on the app pool, #1349).
     cap = candidate_cap()
+    now = NaiveDateTime.utc_now()
+    since = Cursor.get(@since_cursor)
+
+    since =
+      if since, do: NaiveDateTime.from_iso8601!(since["at"]), else: NaiveDateTime.add(now, -7_200)
+
     from = Cursor.get(@cursor)
 
-    candidates =
+    window =
       cap
       |> null_head_query(from && {from["user_id"], from["note_id"]})
       |> TenantScan.all()
       |> Enum.sort_by(&{&1.user_id, &1.note_id})
       |> Enum.take(cap)
 
-    last = List.last(candidates)
+    last = List.last(window)
 
     :ok =
       Cursor.advance(
         @cursor,
         last && %{"user_id" => last.user_id, "note_id" => last.note_id},
-        length(candidates),
+        length(window),
         cap
       )
+
+    recent = since |> recent_query(cap) |> TenantScan.all()
+    # A minute of overlap: a write committed late with an earlier timestamp.
+    :ok =
+      Cursor.put(@since_cursor, %{"at" => NaiveDateTime.to_iso8601(NaiveDateTime.add(now, -60))})
+
+    candidates = Enum.uniq(Enum.filter(window, & &1.null?) ++ recent)
 
     pairs = live_pairs(candidates)
 
@@ -107,16 +121,28 @@ defmodule Engram.Workers.BackfillCrdtHead do
   end
 
   @doc false
-  # The NULL-head candidates, `cap` at most. Public so the plan test pins the
-  # index (`note_bodies_crdt_head_null`).
+  # The next `cap` body rows in key order, flagged when the head is NULL.
+  # Public so the plan test pins the primary key.
   def null_head_query(cap, after_key \\ nil) do
     from(b in NoteBody,
-      where: is_nil(b.crdt_head),
       order_by: [b.user_id, b.note_id],
-      select: %{user_id: b.user_id, note_id: b.note_id},
+      select: %{user_id: b.user_id, note_id: b.note_id, null?: is_nil(b.crdt_head)},
       limit: ^cap
     )
     |> after_key(after_key)
+  end
+
+  @doc false
+  # Live notes written since `since` whose head is NULL, `cap` at most.
+  def recent_query(since, cap) do
+    from(n in Note,
+      join: b in NoteBody,
+      on: b.note_id == n.id,
+      where: n.updated_at >= ^since and n.kind == "note" and is_nil(n.deleted_at),
+      where: is_nil(b.crdt_head),
+      select: %{user_id: n.user_id, note_id: n.id},
+      limit: ^cap
+    )
   end
 
   defp after_key(query, nil), do: query

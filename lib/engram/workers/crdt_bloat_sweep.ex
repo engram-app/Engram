@@ -208,6 +208,9 @@ defmodule Engram.Workers.CrdtBloatSweep do
     now = DateTime.utc_now()
     baseline = baseline(now)
     since = if baseline, do: elem(baseline, 0), else: DateTime.add(now, -@first_window_s)
+    narrow? = NoteSizes.done?()
+    written = if narrow?, do: written_versions(since)
+    _ = if narrow?, do: refresh_sizes(written)
 
     %Postgrex.Result{rows: [row]} =
       Repo.maintenance().query!(
@@ -236,7 +239,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
           coalesce(array_agg(id ORDER BY id) FILTER (WHERE written), '{}'),
           coalesce(array_agg(version ORDER BY id) FILTER (WHERE written), '{}')
         FROM (
-          #{sized_rows()}
+          #{sized_rows(narrow?)}
         ) sized
         """,
         [
@@ -267,8 +270,8 @@ defmodule Engram.Workers.CrdtBloatSweep do
       row
 
     versions =
-      if NoteSizes.done?(),
-        do: written_versions(since),
+      if narrow?,
+        do: written,
         else: Map.new(Enum.zip(Enum.map(ids, &Ecto.UUID.load!/1), versions))
 
     Engram.Cache.put(:crdt_sweep_versions, :last, {now, versions})
@@ -294,27 +297,26 @@ defmodule Engram.Workers.CrdtBloatSweep do
   end
 
   # The per-note sizes, one row per live note. Once `NoteSizes` has filled the
-  # narrow `note_index_state` columns (the `notes_sync_sizes` trigger keeps them
-  # current) the sweep reads that table; until then (a fresh upgrade) it
+  # narrow `note_index_state` columns (`refresh_sizes/1` keeps them current)
+  # the sweep reads that table; until then (a fresh upgrade) it
   # aggregates `notes`, which is the slow heap scan the narrow read replaces.
   # Same column names and values either way.
-  defp sized_rows do
-    if NoteSizes.done?() do
-      # Sizes from `note_bodies` (BEFORE-trigger columns, index-only through
-      # `note_bodies_sizes`), liveness from `note_index_state`. Written ids and
-      # versions come from `written_versions/1`, an `updated_at` index range,
-      # so `written` is false here and the arrays stay empty.
+  defp sized_rows(narrow?) do
+    if narrow? do
+      # The narrow copy on `note_index_state` (`refresh_sizes/1` brought the
+      # notes written since the last sweep up to date first). Written ids and
+      # versions come from `written_versions/1`, so `written` is false here.
       """
       SELECT
-        b.note_id AS id,
+        s.note_id AS id,
         0 AS version,
         false AS written,
-        b.state_bytes IS NOT NULL AS has_state,
-        coalesce(b.state_bytes, 0) AS state_bytes,
-        coalesce(b.content_bytes, 0) AS content_bytes,
-        coalesce(b.content_bytes, 0) >= $3::int AS big,
-        coalesce(b.state_bytes, 0)::float8 / greatest(coalesce(b.content_bytes, 0), 1)::float8 AS ratio
-      FROM note_bodies b JOIN note_index_state s ON s.note_id = b.note_id
+        s.has_state,
+        coalesce(s.state_bytes, 0) AS state_bytes,
+        coalesce(s.content_bytes, 0) AS content_bytes,
+        coalesce(s.content_bytes, 0) >= $3::int AS big,
+        coalesce(s.state_bytes, 0)::float8 / greatest(coalesce(s.content_bytes, 0), 1)::float8 AS ratio
+      FROM note_index_state s
       -- $1 and $5 are bound for both shapes; Postgres rejects an unused parameter.
       WHERE s.note_live AND $1::int >= 0 AND $5::timestamp IS NOT NULL
       """
@@ -335,6 +337,33 @@ defmodule Engram.Workers.CrdtBloatSweep do
         AND n.kind = 'note'
       """
     end
+  end
+
+  # Copies the body sizes (`note_bodies`, BEFORE-trigger columns) of the notes
+  # written since the last sweep to the narrow `note_index_state` copy: one
+  # HOT row version per written note per sweep, off the save path. PK
+  # lookups; an unchanged row is not written.
+  @refresh_batch 5_000
+  defp refresh_sizes(versions) do
+    versions
+    |> Map.keys()
+    |> Enum.chunk_every(@refresh_batch)
+    |> Enum.each(fn ids ->
+      Repo.maintenance().query!(
+        """
+        UPDATE note_index_state s SET
+          content_bytes = b.content_bytes,
+          state_bytes = b.state_bytes,
+          has_state = b.state_bytes IS NOT NULL
+        FROM note_bodies b
+        WHERE b.note_id = s.note_id AND s.note_id = ANY($1::uuid[])
+          AND (s.content_bytes, s.state_bytes, s.has_state)
+              IS DISTINCT FROM (b.content_bytes, b.state_bytes, b.state_bytes IS NOT NULL)
+        """,
+        [Enum.map(ids, &Ecto.UUID.dump!/1)],
+        timeout: :timer.minutes(5)
+      )
+    end)
   end
 
   # Ids and versions of the live notes written since `since`: a range of the

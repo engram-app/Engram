@@ -2,24 +2,30 @@ defmodule Engram.Repo.Migrations.NoteIndexStateSizesExpand do
   use Ecto.Migration
 
   @moduledoc """
-  Narrow, trigger-kept sizes and liveness so `CrdtBloatSweep` (and the daily
-  snapshot, PostHog sync and budget sweep) stop aggregating every wide `notes`
-  row (prod 2026-11-03: the bloat aggregate took 14,982 ms against the 15 s
-  query timeout and swapped the database), WITHOUT adding a row version to
-  any save:
+  Narrow sizes, liveness and an envelope-drift flag, WITHOUT adding a row
+  version to any save and without costing `note_bodies` its heap-only (HOT)
+  updates (`notes_hot_append_test`, row versions measured per save):
 
-    * `note_bodies.content_bytes` / `state_bytes`: the stored payload of the
-      merged body columns (`octet_length - 13` nonce field `- 16` tag,
-      `note_body_payload_bytes/1`; each NULL when its ciphertext is NULL, so a body with
-      no content counts 0 bytes as before), set by the BEFORE trigger `note_bodies_sizes` on the row being
-      written: no extra row. `octet_length` reads the varlena header, never
-      de-TOASTs. From `note_bodies`, which the R8 contract keeps.
-      Follow-up: once R8 N lands (`NoteBody.sync!/3`, #2400), write the sizes
-      in that statement and drop this trigger.
+    * `note_bodies.content_bytes` / `state_bytes` / `envelope_legacy`, set on
+      the row being written by the BEFORE trigger `note_bodies_sizes` (no
+      extra row). Sizes are the stored payload (`octet_length - 13` nonce
+      field `- 16` tag, `note_body_payload_bytes/1`), NULL when the
+      ciphertext is NULL; `octet_length` reads the varlena header, never
+      de-TOASTs. `envelope_legacy` is the format-0 test the drift drain's
+      partial index needs: an index on the ciphertext expression would make
+      every body write non-HOT, a flag that stays false does not. None of
+      these columns is in an index except the flag. From `note_bodies`, which
+      the R8 contract keeps. Follow-up: once R8 N lands (`NoteBody.sync!/3`,
+      #2400), write them in that statement and drop this trigger.
     * `note_index_state.note_live` (`deleted_at IS NULL`): folded into the
-      EXISTING `note_index_state_sync` upsert (the same `IS DISTINCT FROM`
-      guard, so an unchanged row is never written), whose trigger now also
-      fires on `deleted_at`, which changes on a soft delete or restore only.
+      EXISTING `note_index_state_sync` upsert (same `IS DISTINCT FROM`
+      guard), whose trigger now also fires on `deleted_at`.
+    * `note_index_state.content_bytes` / `state_bytes` / `has_state`: a narrow
+      copy of the body sizes for the hourly `CrdtBloatSweep` percentiles:
+      seeded by the state row's own INSERT when a note is created, then
+      copied by the sweep for the notes written since its last run (one HOT
+      row version per written note per hour, off the save path), never by a
+      save. Readers see edits up to an hour late.
 
   Additive and nullable: the previous release ignores the columns, and
   `NoteSizes` (data migration) fills rows written before the triggers.
@@ -34,10 +40,18 @@ defmodule Engram.Repo.Migrations.NoteIndexStateSizesExpand do
     -- squawk-ignore prefer-bigint-over-int
     ALTER TABLE note_bodies
       ADD COLUMN IF NOT EXISTS content_bytes integer,
-      ADD COLUMN IF NOT EXISTS state_bytes integer
+      ADD COLUMN IF NOT EXISTS state_bytes integer,
+      ADD COLUMN IF NOT EXISTS envelope_legacy boolean
     """
 
-    execute "ALTER TABLE note_index_state ADD COLUMN IF NOT EXISTS note_live boolean"
+    execute """
+    -- squawk-ignore prefer-bigint-over-int
+    ALTER TABLE note_index_state
+      ADD COLUMN IF NOT EXISTS note_live boolean,
+      ADD COLUMN IF NOT EXISTS content_bytes integer,
+      ADD COLUMN IF NOT EXISTS state_bytes integer,
+      ADD COLUMN IF NOT EXISTS has_state boolean
+    """
 
     execute """
     CREATE FUNCTION note_body_payload_bytes(ct bytea) RETURNS integer
@@ -54,6 +68,13 @@ defmodule Engram.Repo.Migrations.NoteIndexStateSizesExpand do
                                 ELSE public.note_body_payload_bytes(NEW.content_ct) END;
       NEW.state_bytes := CASE WHEN NEW.crdt_ct IS NULL THEN NULL
                               ELSE public.note_body_payload_bytes(NEW.crdt_ct) END;
+      -- Format 0: the merged nonce field starts with a 0 byte. The content
+      -- test needs an AAD-bound row (`Crypto.row_version_aad_bound/0`).
+      NEW.envelope_legacy :=
+        coalesce(substring(NEW.content_ct FROM 1 FOR 1) = '\\x00'::bytea
+                 AND octet_length(NEW.content_ct) > 29 AND NEW.key_version >= 2, false)
+        OR coalesce(substring(NEW.crdt_ct FROM 1 FOR 1) = '\\x00'::bytea
+                    AND octet_length(NEW.crdt_ct) > 29, false);
       RETURN NEW;
     END
     $$
@@ -61,7 +82,7 @@ defmodule Engram.Repo.Migrations.NoteIndexStateSizesExpand do
 
     execute """
     CREATE TRIGGER note_bodies_sizes
-      BEFORE INSERT OR UPDATE OF content_ct, crdt_ct ON note_bodies
+      BEFORE INSERT OR UPDATE OF content_ct, crdt_ct, key_version ON note_bodies
       FOR EACH ROW EXECUTE FUNCTION note_bodies_sizes()
     """
 
@@ -74,7 +95,8 @@ defmodule Engram.Repo.Migrations.NoteIndexStateSizesExpand do
         embed_budget_parked_at, embed_budget_need, embed_budget_next, chunk_count,
         chunker_version, keyword_version, key_alias_version, embed_crashes,
         embed_budget_parked, index_tier, embed_model, embed_started_by, embed_hash,
-        dense_indexed_hash, embed_started_hash, payload_hash, note_live)
+        dense_indexed_hash, embed_started_hash, payload_hash, note_live,
+        content_bytes, state_bytes, has_state)
       VALUES (
         n.id, n.user_id, n.vault_id, n.embed_retry_after, n.embed_started_at, n.rebuild_paid_at,
         n.embed_budget_parked_at, n.embed_budget_need, n.embed_budget_next,
@@ -85,7 +107,13 @@ defmodule Engram.Repo.Migrations.NoteIndexStateSizesExpand do
         (CASE WHEN n.embed_crashes < -32768 THEN -32768 WHEN n.embed_crashes > 32767 THEN 32767 ELSE n.embed_crashes END)::smallint,
         n.embed_budget_parked, n.index_tier, n.embed_model, n.embed_started_by,
         n.embed_hash, n.dense_indexed_hash, n.embed_started_hash, n.payload_hash,
-        n.deleted_at IS NULL)
+        n.deleted_at IS NULL,
+        -- Seeded at creation only (not in the DO UPDATE list): the body row
+        -- exists, `notes_sync_body` runs first. Edits are copied hourly by
+        -- `CrdtBloatSweep`.
+        (SELECT b.content_bytes FROM public.note_bodies b WHERE b.note_id = n.id),
+        (SELECT b.state_bytes FROM public.note_bodies b WHERE b.note_id = n.id),
+        (SELECT b.state_bytes IS NOT NULL FROM public.note_bodies b WHERE b.note_id = n.id))
       ON CONFLICT (note_id) DO UPDATE SET
         user_id = EXCLUDED.user_id,
         vault_id = EXCLUDED.vault_id,
@@ -225,11 +253,17 @@ defmodule Engram.Repo.Migrations.NoteIndexStateSizesExpand do
     execute "DROP TRIGGER IF EXISTS note_bodies_sizes ON note_bodies"
     execute "DROP FUNCTION IF EXISTS note_bodies_sizes()"
     execute "DROP FUNCTION IF EXISTS note_body_payload_bytes(bytea)"
-    execute "ALTER TABLE note_index_state DROP COLUMN IF EXISTS note_live"
+
+    execute """
+    ALTER TABLE note_index_state
+      DROP COLUMN IF EXISTS note_live, DROP COLUMN IF EXISTS content_bytes,
+      DROP COLUMN IF EXISTS state_bytes, DROP COLUMN IF EXISTS has_state
+    """
 
     execute """
     ALTER TABLE note_bodies
-      DROP COLUMN IF EXISTS content_bytes, DROP COLUMN IF EXISTS state_bytes
+      DROP COLUMN IF EXISTS content_bytes, DROP COLUMN IF EXISTS state_bytes,
+      DROP COLUMN IF EXISTS envelope_legacy
     """
 
     execute "RESET lock_timeout"

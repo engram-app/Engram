@@ -110,14 +110,14 @@ defmodule Engram.Repo.TenancyGuard do
 
   use GenServer
 
+  import Ecto.Query, only: [from: 2]
+
   alias Engram.Logger.Metadata
 
   require Logger
 
   # A tenant that owns nothing. Any row visible while this is the current
   # tenant belongs to somebody else, which is the whole question.
-  import Ecto.Query, only: [from: 2]
-
   @nobody "00000000-0000-0000-0000-000000000000"
 
   @doc """

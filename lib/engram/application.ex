@@ -417,7 +417,7 @@ defmodule Engram.Application do
       do:
         {Task,
          fn ->
-           Engram.Workers.ReconcileEmbeddings.kick(%{"boot" => true})
+           _ = Engram.Workers.ReconcileEmbeddings.kick(%{"boot" => true})
            # Once per build: a rollback then roll-forward self-heals.
            Engram.Workers.ReconcileEmbeddings.version_check_on_new_build(
              System.get_env("RELEASE_SHA")

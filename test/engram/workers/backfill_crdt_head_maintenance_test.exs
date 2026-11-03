@@ -3,9 +3,9 @@ defmodule Engram.Workers.BackfillCrdtHeadMaintenanceTest do
   `BackfillCrdtHead.enqueue_all/0` (hourly, via WarmCrdtHeads) discovers work
   in ONE statement on `note_bodies` plus ONE primary-key probe of `notes` on
   the maintenance pool when one is configured, instead of one tenant
-  transaction per user (2026-10-20 audit, P1-7). The candidates come from the
-  partial index `note_bodies_crdt_head_null` (an index on `notes` would end
-  its HOT updates: see NotesHotAppendTest).
+  transaction per user (2026-10-20 audit, P1-7). The candidates come from a
+  `note_bodies` primary-key window and the notes written since the last run
+  (no index on the head: it would end HOT body writes, NoteBodyReadTest).
 
   Same rig as ReconcileEmbeddingsMaintenanceTest: the app pool runs as
   `engram_app` with no tenant, where the notes policy hides every row, and a
@@ -81,10 +81,16 @@ defmodule Engram.Workers.BackfillCrdtHeadMaintenanceTest do
 
       refute_received :app_pool_notes_query
 
-      # One probe of notes for both users' candidates (the old id-window walk
-      # was 3 statements and read the whole table; a walk per user, 6).
-      assert drain(:maintenance_notes_query, 0) == 1
-      assert QueryRecorder.unwindowed(queries, "notes", 1_000) == []
+      # Two bounded reads of notes for both users: the `updated_at` range of
+      # notes written since the last run, and one primary-key probe of the
+      # candidates (the old id-window walk was 3 statements and read the whole
+      # table; a walk per user, 6).
+      assert drain(:maintenance_notes_query, 0) == 2
+      # The recent read is an `updated_at` index range (writes since the last
+      # run), which the id-window oracle does not model; nothing else is
+      # outside a window.
+      assert [recent] = QueryRecorder.unwindowed(queries, "notes", 1_000)
+      assert recent =~ ~s|WHERE (((n0."updated_at" >= $1)|
 
       for {user_id, vault_id} <- vaults do
         assert_enqueued(

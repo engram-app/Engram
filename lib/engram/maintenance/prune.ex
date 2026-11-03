@@ -15,7 +15,9 @@ defmodule Engram.Maintenance.Prune do
   defp loop(_delete_batch, _batch, 0, acc), do: acc
 
   defp loop(delete_batch, batch, left, acc) do
-    n = delete_batch.(batch)
-    if n >= batch, do: loop(delete_batch, batch, left - 1, acc + n), else: acc + n
+    case delete_batch.(batch) do
+      n when is_integer(n) and n >= batch -> loop(delete_batch, batch, left - 1, acc + n)
+      n when is_integer(n) -> acc + n
+    end
   end
 end

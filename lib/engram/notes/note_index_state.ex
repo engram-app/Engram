@@ -45,6 +45,11 @@ defmodule Engram.Notes.NoteIndexState do
     # (migration 20261103000000) for the narrow sweeps. NULL until
     # `DataMigrations.NoteSizes` has filled the row.
     field :note_live, :boolean
+    # Narrow copy of the `note_bodies` sizes for `CrdtBloatSweep`, written by
+    # the sweep for notes written since its last run, never by a save.
+    field :content_bytes, :integer
+    field :state_bytes, :integer
+    field :has_state, :boolean
   end
 
   @doc "The mirrored columns, for comparing a state row to its note."
@@ -58,6 +63,9 @@ defmodule Engram.Notes.NoteIndexState do
           :len_rows,
           :len_sum,
           :payload_version,
-          :note_live
+          :note_live,
+          :content_bytes,
+          :state_bytes,
+          :has_state
         ]
 end

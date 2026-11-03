@@ -1,6 +1,7 @@
 defmodule Engram.Workers.BackfillCrdtHeadIndexTest do
-  # The hourly `WarmCrdtHeads` discovery reads NULL heads through the partial
-  # index on the narrow `note_bodies`, never a walk of `notes`.
+  # The hourly `WarmCrdtHeads` discovery reads a bounded primary-key window of
+  # `note_bodies` plus the notes written since the last run, never a walk of
+  # `notes` and never an index on the head (HOT, NoteBodyReadTest).
   use Engram.DataCase, async: false
 
   alias Engram.Notes
@@ -19,7 +20,7 @@ defmodule Engram.Workers.BackfillCrdtHeadIndexTest do
 
   # Red before the change: discovery was an id-window walk of `notes`
   # (`SELECT id FROM notes WHERE id > ...`) with no `note_bodies` statement.
-  test "discovery reads the NULL heads from note_bodies' partial index, not notes", %{
+  test "discovery reads a key window of note_bodies, not a walk of notes", %{
     user: u,
     vault: v
   } do
@@ -31,7 +32,10 @@ defmodule Engram.Workers.BackfillCrdtHeadIndexTest do
 
     head = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
     Repo.query!("UPDATE notes SET crdt_head = $1 WHERE path_ciphertext IS NOT NULL", [head])
-    Repo.query!("UPDATE notes SET crdt_head = NULL WHERE id = (SELECT id FROM notes ORDER BY id LIMIT 1)")
+
+    Repo.query!(
+      "UPDATE notes SET crdt_head = NULL WHERE id = (SELECT id FROM notes ORDER BY id LIMIT 1)"
+    )
 
     {count, queries} = QueryRecorder.record(fn -> BackfillCrdtHead.enqueue_all() end)
     assert count == 1
@@ -41,7 +45,8 @@ defmodule Engram.Workers.BackfillCrdtHeadIndexTest do
     refute Enum.any?(queries, &(&1.sql =~ ~r/FROM "notes" AS \w+ WHERE .*"id" >/))
 
     plan = QueryPlan.generic_plan(candidate.sql, analyze: ["note_bodies"])
-    assert plan =~ "note_bodies_crdt_head_null", plan
+    assert plan =~ "note_bodies_pkey", plan
+    assert plan =~ "Limit", plan
   end
 
   test "a note whose head is set is not a candidate", %{user: u} do
@@ -71,5 +76,28 @@ defmodule Engram.Workers.BackfillCrdtHeadIndexTest do
 
     counts = for _ <- 1..3, do: BackfillCrdtHead.enqueue_all()
     assert Enum.sum(counts) >= 1, "the live note never became a candidate: #{inspect(counts)}"
+  end
+
+  # A head cleared by an append is found by the next run through the note's
+  # write, whatever the key window's position.
+  test "a note written since the last run is a candidate outside the key window", %{
+    user: u,
+    vault: v
+  } do
+    Application.put_env(:engram, :crdt_head_candidate_cap, 1)
+    on_exit(fn -> Application.delete_env(:engram, :crdt_head_candidate_cap) end)
+
+    for i <- 1..5,
+        do:
+          {:ok, _} =
+            Notes.upsert_note(u, v, %{"path" => "k#{i}.md", "content" => "k"}, actor: "api")
+
+    head = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+    Repo.query!("UPDATE notes SET crdt_head = $1, updated_at = now() - interval '1 day'", [head])
+    assert BackfillCrdtHead.enqueue_all() == 0
+
+    %{rows: [[last]]} = Repo.query!("SELECT id FROM notes ORDER BY id DESC LIMIT 1")
+    Repo.query!("UPDATE notes SET crdt_head = NULL, updated_at = now() WHERE id = $1", [last])
+    assert BackfillCrdtHead.enqueue_all() == 1
   end
 end

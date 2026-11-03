@@ -1,10 +1,11 @@
 defmodule Engram.DataMigrations.NoteSizes do
   @moduledoc """
-  Fills `note_bodies.content_bytes` / `state_bytes` and
-  `note_index_state.note_live` (migration 20261103000000) for rows written
-  before their triggers existed. Every later write fills them itself, from
-  any release's code, in the row it writes, so this only catches up (one row
-  version per unfilled row, once); it is not re-verified.
+  Fills `note_bodies.content_bytes` / `state_bytes` / `envelope_legacy` and
+  `note_index_state.note_live` / `content_bytes` / `state_bytes` /
+  `has_state` (migration 20261103000000) for rows written before their
+  triggers existed (one row version per unfilled row, once). Later writes
+  fill the body columns and `note_live` themselves; `CrdtBloatSweep` copies
+  sizes of written notes to `note_index_state` hourly. Not re-verified.
 
   Done means `CrdtBloatSweep`, the snapshot, the PostHog sync and the budget
   sweep may read the narrow columns instead of aggregating `notes`. A note
@@ -36,15 +37,15 @@ defmodule Engram.DataMigrations.NoteSizes do
   @spec live_totals_by_vault() :: Ecto.Query.t()
   def live_totals_by_vault do
     if done?() do
+      # Sizes as of the last `CrdtBloatSweep` (hourly); a NULL content
+      # ciphertext counts 0 bytes, as the wide path does.
       from(s in Engram.Notes.NoteIndexState,
-        join: b in Engram.Notes.NoteBody,
-        on: b.note_id == s.note_id,
         where: s.note_live,
         group_by: s.vault_id,
         select: %{
           vault_id: s.vault_id,
           n: count(),
-          bytes: sum(b.content_bytes + ^Engram.Crypto.Envelope.tag_bytes())
+          bytes: sum(s.content_bytes + ^Engram.Crypto.Envelope.tag_bytes())
         }
       )
     else
@@ -87,7 +88,7 @@ defmodule Engram.DataMigrations.NoteSizes do
         UPDATE note_bodies SET content_ct = content_ct
         WHERE note_id = ANY(ARRAY(
           SELECT note_id FROM note_bodies
-          WHERE note_id = ANY($1::uuid[]) AND content_bytes IS NULL AND content_ct IS NOT NULL
+          WHERE note_id = ANY($1::uuid[]) AND envelope_legacy IS NULL
           ORDER BY note_id FOR UPDATE SKIP LOCKED))
         """,
         [keys]
@@ -96,11 +97,15 @@ defmodule Engram.DataMigrations.NoteSizes do
     %{num_rows: states} =
       repo.query!(
         """
-        UPDATE note_index_state s SET note_live = n.deleted_at IS NULL
-        FROM notes n
-        WHERE n.id = s.note_id AND s.note_id = ANY(ARRAY(
+        UPDATE note_index_state s SET
+          note_live = n.deleted_at IS NULL,
+          content_bytes = b.content_bytes,
+          state_bytes = b.state_bytes,
+          has_state = b.state_bytes IS NOT NULL
+        FROM notes n, note_bodies b
+        WHERE n.id = s.note_id AND b.note_id = s.note_id AND s.note_id = ANY(ARRAY(
           SELECT note_id FROM note_index_state
-          WHERE note_id = ANY($1::uuid[]) AND note_live IS NULL
+          WHERE note_id = ANY($1::uuid[]) AND (note_live IS NULL OR has_state IS NULL)
           ORDER BY note_id FOR UPDATE SKIP LOCKED))
         """,
         [keys]
@@ -114,8 +119,8 @@ defmodule Engram.DataMigrations.NoteSizes do
           LEFT JOIN note_index_state s ON s.note_id = n.id
           LEFT JOIN note_bodies b ON b.note_id = n.id
           WHERE n.id = ANY($1::uuid[]) AND n.kind = 'note'
-            AND (s.note_id IS NULL OR s.note_live IS NULL OR b.note_id IS NULL
-                 OR (b.content_bytes IS NULL AND b.content_ct IS NOT NULL)))
+            AND (s.note_id IS NULL OR s.note_live IS NULL OR s.has_state IS NULL
+                 OR b.note_id IS NULL OR b.envelope_legacy IS NULL))
         """,
         [keys]
       )

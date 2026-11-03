@@ -50,15 +50,7 @@ defmodule Engram.Bookkeeping.Drain do
     {"note_bodies",
      """
      SELECT DISTINCT user_id FROM note_bodies
-     WHERE substring(content_ct FROM 1 FOR 1) = '\\x00'::bytea AND octet_length(content_ct) > 29
-       AND key_version >= 2 AND ($1::uuid IS NULL OR user_id = $1)
-       AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 100
-     """},
-    {"note_bodies",
-     """
-     SELECT DISTINCT user_id FROM note_bodies
-     WHERE substring(crdt_ct FROM 1 FOR 1) = '\\x00'::bytea AND octet_length(crdt_ct) > 29
-       AND ($1::uuid IS NULL OR user_id = $1)
+     WHERE envelope_legacy AND ($1::uuid IS NULL OR user_id = $1)
        AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 100
      """},
     {"crdt_update_log",
@@ -138,14 +130,20 @@ defmodule Engram.Bookkeeping.Drain do
   `{table, sql}` for each probe, by kind (`:envelope | :link_keys | :payload |
   :folder`). Public for the plan test.
   """
-  @spec probes(atom()) :: [{String.t(), String.t()}]
+  @spec probes(:envelope | :link_keys | :payload | :folder) :: [{String.t(), String.t()}]
   def probes(:envelope), do: @envelope
   def probes(:link_keys), do: @link_keys
   def probes(:payload), do: @payload
   def probes(:folder), do: @folder
 
   @doc "One tick. Returns the users handed to each repair."
-  @spec run() :: %{atom() => non_neg_integer()}
+  @spec run() :: %{
+          envelope: non_neg_integer(),
+          link_keys: non_neg_integer(),
+          payload: non_neg_integer(),
+          folder: non_neg_integer(),
+          folder_blocked: non_neg_integer()
+        }
   def run do
     {folder, folder_blocked} = folder()
 

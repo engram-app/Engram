@@ -159,7 +159,8 @@ defmodule Engram.Notes.NoteBodyReadTest do
     # index-only (prod 2026-11-02: 604 ms of note_bodies heap reads for a
     # 40k-note manifest). A head change is then a non-HOT update writing two
     # index entries (pkey and this index); 20261102120000 names the trade.
-    # Nothing else, and no other body column, may be indexed.
+    # Nothing else, and no other body column, may be indexed (but the
+    # `envelope_legacy` flag, below).
     @head_index {"note_bodies_user_note_head", "crdt_head"}
 
     test "every note_bodies index covers immutable keys only (HOT-eligible)" do
@@ -176,10 +177,12 @@ defmodule Engram.Notes.NoteBodyReadTest do
         """)
 
       assert rows != []
-
+      # `envelope_legacy`: a trigger-kept flag, false across ordinary writes
+      # (set once on a format-0 row, cleared by its re-encode), so a save stays
+      # HOT (CrdtBloatSweepNarrowTest counts the row versions).
       assert for(
                [idx, col] <- rows,
-               col not in ~w(note_id user_id) and {idx, col} != @head_index,
+               col not in ~w(note_id user_id envelope_legacy) and {idx, col} != @head_index,
                do: {idx, col}
              ) == []
     end
