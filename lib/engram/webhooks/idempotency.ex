@@ -85,22 +85,52 @@ defmodule Engram.Webhooks.Idempotency do
 
   def claim(_source, _id), do: true
 
-  @doc "Deletes rows past the retention window. Called by IdempotencyPrune."
-  @spec prune() :: {:ok, non_neg_integer()}
-  def prune do
+  @doc """
+  Deletes rows past the retention window, by the `inserted_at` index, in
+  batches of `batch`, at most `max_batches` per run. Called by IdempotencyPrune
+  (hourly). 7 days covers Paddle's retry window (up to 60 attempts over about
+  two days, `docs/context/paddle-integration.md`) with margin.
+  """
+  @spec prune(pos_integer(), pos_integer()) :: {:ok, non_neg_integer()}
+  def prune(batch \\ 5_000, max_batches \\ 20) do
     now = DateTime.utc_now()
     cutoff = DateTime.add(now, -@retention_days, :day)
     claim_cutoff = DateTime.add(now, -@claim_retention_days, :day)
 
-    {count, _} =
-      Repo.delete_all(
-        from(e in "processed_webhook_events",
-          where:
-            (e.provider not in @claim_sources and e.inserted_at < ^cutoff) or
-              e.inserted_at < ^claim_cutoff
-        )
-      )
+    # Two predicates, each the head of the `inserted_at` index: the 730-day
+    # claims never sit in front of the 7-day rows a batch deletes.
+    n =
+      delete_batched(
+        "inserted_at < $1 AND provider <> ALL($2)",
+        [cutoff, @claim_sources],
+        batch,
+        max_batches
+      ) + delete_batched("inserted_at < $1", [claim_cutoff], batch, max_batches)
 
-    {:ok, count}
+    {:ok, n}
+  end
+
+  # `where` is one of the two literal predicates above, never input.
+  # sobelow_skip ["SQL.Query"]
+  defp delete_batched(where, params, batch, max_batches) do
+    limit = "$#{length(params) + 1}"
+
+    Engram.Maintenance.Prune.batched(
+      fn batch ->
+        %{num_rows: n} =
+          Repo.query!(
+            """
+            DELETE FROM processed_webhook_events WHERE (provider, event_id) IN (
+              SELECT provider, event_id FROM processed_webhook_events
+              WHERE #{where} ORDER BY inserted_at LIMIT #{limit})
+            """,
+            params ++ [batch]
+          )
+
+        n
+      end,
+      batch,
+      max_batches
+    )
   end
 end

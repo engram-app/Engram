@@ -28,6 +28,8 @@ defmodule Engram.PromEx.ZeroInit do
   @family_revoked [:engram, :oauth, :family_revoked]
   # crdt_create genesis replies (engram-app/Engram-obsidian#645).
   @genesis_reply [:engram, :crdt, :genesis_reply]
+  @bookkeeping_drift [:engram, :bookkeeping, :drift]
+  @canary_rows [:engram, :bookkeeping, :canary_rows]
 
   # The 4xx statuses Qdrant answers a request it will refuse on every retry:
   # 400 (strict mode's unindexed filter, #2138, or a bad shape), 404 (no
@@ -97,7 +99,13 @@ defmodule Engram.PromEx.ZeroInit do
       for tags <- Engram.PromEx.Crdt.genesis_reply_tags(),
           do: {@genesis_reply, %{count: 0}, tags}
 
+    bookkeeping_series =
+      [{@canary_rows, %{count: 0}, %{}}] ++
+        for invariant <- Engram.Bookkeeping.Canary.invariants(),
+            do: {@bookkeeping_drift, %{count: 0}, %{invariant: invariant}}
+
     search_series ++
+      bookkeeping_series ++
       genesis_reply_series ++
       rotate_series ++
       reconcile_series ++
@@ -121,6 +129,8 @@ defmodule Engram.PromEx.ZeroInit do
           @rebuild_double_pay -> "engram_prom_ex_indexing_rebuild_double_pay_parked_total"
           @family_revoked -> "engram_prom_ex_oauth_family_revoked_total"
           @genesis_reply -> "engram_prom_ex_crdt_genesis_reply_total"
+          @bookkeeping_drift -> "engram_prom_ex_reliability_bookkeeping_drift_total"
+          @canary_rows -> "engram_prom_ex_reliability_bookkeeping_canary_rows_total"
         end
 
       {metric, Map.new(meta, fn {k, v} -> {k, to_string(v)} end)}

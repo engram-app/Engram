@@ -68,6 +68,16 @@ defmodule Engram.ObanCronTest do
            "crons sharing a minute (first {hour, minute}): #{inspect(collisions)}"
   end
 
+  # One source of truth for the re-verify hour: the runner re-verifies in the
+  # hour the ReconcileEmbeddings re-verify cron fires (the shared off-peak window).
+  test "the runner's re-verify hour is the reconcile re-verify cron's hour" do
+    {expr, _} =
+      Enum.find(timed(), fn {e, w} -> w == Engram.Workers.ReconcileEmbeddings and daily?(e) end)
+
+    [hour] = expr |> Expression.parse!() |> Map.fetch!(:hours) |> MapSet.to_list()
+    assert Engram.Workers.DataMigrationsRunner.reverify_hour() == hour
+  end
+
   test "the data migrations runner also runs at boot" do
     assert {"@reboot", Engram.Workers.DataMigrationsRunner} in crontab()
   end

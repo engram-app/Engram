@@ -72,42 +72,160 @@ defmodule Engram.Repo.TenancyGuardTest do
       end)
     end
 
-    test "probes every tenant table, so one exposed table is enough" do
-      # RLS state is per-table and this repo toggles it per-table: ten
-      # migrations issue NO FORCE ROW LEVEL SECURITY and re-FORCE at the end.
-      # An interrupted one leaves a single table exposed. A probe that only
-      # read `notes` would miss it — and OrphanSweep's data-loss guard reads
-      # `chunks`, not `notes`, so the blind spot sat directly over the
-      # destructive path.
-      #
-      # Asserted on the executed probe queries rather than by mutating RLS
-      # state mid-test: the sandbox cannot ALTER TABLE without leaking out of
-      # the transaction. As the RLS-subject role no table leaks, so nothing
-      # short-circuits the walk and every table must be read.
-      {verdict, queries} =
-        Engram.QueryRecorder.record(fn ->
-          {:error, verdict} =
-            Repo.transaction(fn ->
-              Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
-              Repo.rollback(TenancyGuard.observed_enforcement())
-            end)
+    # RLS state is per-table and this repo toggles it per-table: ten
+    # migrations issue NO FORCE ROW LEVEL SECURITY and re-FORCE at the end. An
+    # interrupted one leaves a single table exposed. One exposed table must be
+    # enough. The DDL rolls back with the transaction.
+    test "one tenant table with RLS off is enough to report bypassed" do
+      {:error, verdict} =
+        Repo.transaction(fn ->
+          Repo.query!("ALTER TABLE rebuild_manifest_vaults DISABLE ROW LEVEL SECURITY")
+          Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
+          Repo.rollback(TenancyGuard.observed_enforcement())
+        end)
 
-          verdict
+      assert verdict == :bypassed
+    end
+
+    # Each failure mode the catalog flags alone cannot see must report
+    # bypassed (red on 156c2fd94, whose only check was row_security_active).
+    defp as_app(setup_sql) do
+      {:error, verdict} =
+        Repo.transaction(fn ->
+          for sql <- setup_sql, do: Repo.query!(sql)
+          Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
+          Repo.rollback(TenancyGuard.observed_enforcement())
+        end)
+
+      verdict
+    end
+
+    test "a permissive USING (true) policy is a bypass" do
+      assert as_app([
+               "CREATE POLICY leak ON rebuild_manifest_vaults FOR SELECT USING (true)"
+             ]) == :bypassed
+    end
+
+    test "a table with no tenant policy is a bypass" do
+      assert as_app([
+               "DROP POLICY tenant_isolation_rebuild_manifest_vaults ON rebuild_manifest_vaults"
+             ]) == :bypassed
+    end
+
+    test "a tenant policy that does not test the tenant is a bypass" do
+      assert as_app([
+               "ALTER POLICY tenant_isolation_rebuild_manifest_vaults ON rebuild_manifest_vaults USING (true)"
+             ]) == :bypassed
+    end
+
+    test "the app credential on the maintenance role is a bypass" do
+      {:error, verdict} =
+        Repo.transaction(fn ->
+          Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_maintenance")
+          Repo.rollback(TenancyGuard.observed_enforcement())
+        end)
+
+      assert verdict == :bypassed
+    end
+
+    test "a USING (true) policy granted to the app role by name is a bypass" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      _ = insert(:note, user: user, vault: vault)
+
+      assert as_app([
+               "CREATE POLICY leak2 ON notes FOR SELECT TO engram_app USING (true)"
+             ]) == :bypassed
+    end
+
+    test "every tenant table is checked, as the RLS-subject role none leaks" do
+      {:error, verdict} =
+        Repo.transaction(fn ->
+          Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
+          Repo.rollback(TenancyGuard.observed_enforcement())
         end)
 
       assert verdict == :unknown
+    end
 
-      probed =
-        for %{pid: pid, sql: sql} <- queries,
+    # Red on c0c603cb9: the probe read every tenant table (under a 250 ms
+    # timeout that counted as "no leak" and leaked into the caller). It now
+    # reads tenant tables only through user_id indexes and sets no timeout.
+    test "the probe reads a tenant table only by user_id and sets no timeout" do
+      {_, queries} =
+        Engram.QueryRecorder.record(fn ->
+          Repo.transaction(fn ->
+            Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
+            Repo.rollback(TenancyGuard.observed_enforcement())
+          end)
+        end)
+
+      sqls = for %{pid: pid, sql: sql} <- queries, pid == self(), do: sql
+      refute Enum.any?(sqls, &(&1 =~ "statement_timeout"))
+
+      for table <- Engram.Repo.tenant_tables(),
+          sql <- sqls,
+          sql =~ ~s(FROM "#{table}"),
+          do:
+            assert(sql =~ ~s("user_id" = ANY), "#{table} read without the user_id bound: #{sql}")
+    end
+
+    # Red on 5be4a3373: tables whose only user_id-leading index is partial
+    # (chunk_points, crdt_update_log, note_index_state) were probed and
+    # seq-scanned. Every probe statement, EXPLAINed as the app role under a
+    # tenant that owns nothing, with its real parameters, uses an index.
+    test "every probe read of a tenant table is an index read for the app role" do
+      _ = insert(:user)
+
+      {_, queries} =
+        Engram.QueryRecorder.record(fn ->
+          Repo.transaction(fn ->
+            Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
+            Repo.rollback(TenancyGuard.observed_enforcement())
+          end)
+        end)
+
+      reads =
+        for %{pid: pid, sql: sql, params: params} <- queries,
             pid == self(),
-            [_, table] <- [Regex.run(~r/FROM "(\w+)"/, sql)],
-            into: MapSet.new(),
-            do: table
+            Enum.any?(Engram.Repo.tenant_tables(), &(sql =~ ~s(FROM "#{&1}"))),
+            do: {sql, params}
 
-      for table <- Engram.Repo.tenant_tables() do
-        assert to_string(table) in probed,
-               "the probe never read #{table}: the per-table blind spot is back"
-      end
+      assert length(reads) > 5
+
+      {:error, plans} =
+        Repo.transaction(fn ->
+          Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
+          Repo.query!("SELECT set_config('app.current_tenant', $1, true)", [Ecto.UUID.generate()])
+          Repo.query!("SET LOCAL enable_seqscan = off")
+
+          Repo.rollback(
+            for {sql, params} <- reads,
+                do:
+                  {sql,
+                   Repo.query!("EXPLAIN " <> sql, params).rows
+                   |> List.flatten()
+                   |> Enum.join("\n")}
+          )
+        end)
+
+      for {sql, plan} <- plans, do: refute(plan =~ "Seq Scan", "#{sql}\n#{plan}")
+
+      {probed, catalog_only} = TenancyGuard.probe_tables()
+      assert "chunk_points" in catalog_only
+      refute "chunk_points" in probed
+    end
+
+    test "a tenant policy widened with OR true is a bypass" do
+      assert as_app([
+               "ALTER POLICY tenant_isolation_rebuild_manifest_vaults ON rebuild_manifest_vaults USING (user_id = (SELECT NULLIF(current_setting('app.current_tenant', true), '')::uuid) OR true)"
+             ]) == :bypassed
+    end
+
+    test "a permissive WITH CHECK (true) is a bypass" do
+      assert as_app([
+               "ALTER POLICY tenant_isolation_rebuild_manifest_vaults ON rebuild_manifest_vaults WITH CHECK (true)"
+             ]) == :bypassed
     end
 
     test "leaves the caller's tenant untouched" do
@@ -136,11 +254,11 @@ defmodule Engram.Repo.TenancyGuardTest do
     # empty the probe returns :unknown, which is one of the conditions here.
 
     test "uses the attribute answer when the probe cannot speak" do
-      # A fresh self-host install has no rows yet. Reporting :unknown there
-      # would make `enforced?/0` true, which makes OrphanSweep refuse its
-      # weekly run forever and log an error about it each time — on a database
-      # with nothing to sweep.
-      assert TenancyGuard.observed_enforcement() == :unknown
+      # A fresh self-host install has no rows yet. The catalog answers for the
+      # suite's superuser whatever the rows (row security is not active for
+      # it), and the combined answer stays :bypassed, so OrphanSweep runs on a
+      # database with nothing to sweep instead of refusing forever.
+      assert TenancyGuard.observed_enforcement() == :bypassed
       assert TenancyGuard.enforcement() == :bypassed
     end
 

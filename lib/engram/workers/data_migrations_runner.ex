@@ -21,8 +21,8 @@ defmodule Engram.Workers.DataMigrationsRunner do
   # with `reverify?/0`. Same hour as ReconcileEmbeddings' IndexVersions check.
   # Catch-up: a done row whose last verification (`completed_at`, which every
   # :done re-verify rewrites) is older than @reverify_stale_s is re-verified
-  # on the next hourly run, so a deduped or failed 04:00 run does not skip a day.
-  @reverify_hour 4
+  # on the next hourly run, so a deduped or failed 10:00 run does not skip a day.
+  @reverify_hour 10
   @reverify_stale_s 25 * 3600
   @stuck_after_s 7 * 86_400
   @realert_after_s 86_400
@@ -36,6 +36,7 @@ defmodule Engram.Workers.DataMigrationsRunner do
     Engram.DataMigrations.NotePayloadStamps,
     Engram.DataMigrations.NoteSplit,
     Engram.DataMigrations.NoteIndexState,
+    Engram.DataMigrations.NoteSizes,
     Engram.DataMigrations.FolderTable,
     Engram.DataMigrations.KeyAliases,
     Engram.DataMigrations.PersonOriginBackfill
@@ -45,6 +46,9 @@ defmodule Engram.Workers.DataMigrationsRunner do
   def timeout(_job), do: :timer.minutes(30)
 
   def migrations, do: @migrations
+
+  @doc "The UTC hour of the daily re-verify (the one off-peak window in config.exs)."
+  def reverify_hour, do: @reverify_hour
 
   @impl Oban.Worker
   def perform(%Oban.Job{scheduled_at: scheduled_at}) do
@@ -58,7 +62,7 @@ defmodule Engram.Workers.DataMigrationsRunner do
   #
   # A disabled migration runs no pass and is never opened, alerted on or marked
   # done; only an ALREADY open row has its stuck clock held (see disabled/1). A done
-  # one is skipped too, except when it opts in and the re-verify is due (04:00
+  # one is skipped too, except when it opts in and the re-verify is due (10:00
   # UTC, or its last verification is over 25 h old): then its
   # pass runs, and `:more` reopens it (note_open/2 clears completed_at).
   @spec run(module(), boolean()) :: :skipped | :done | :more | :error

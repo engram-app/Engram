@@ -523,7 +523,7 @@ defmodule Engram.Indexing do
   #
   # The note a pass indexes is the one the user is working on (review M1):
   # it may overshoot the cap by `@inline_overshoot_pct` rather than floor,
-  # and the 04:00 sweep brings the account back under by demoting the
+  # and the daily (10:02) budget sweep brings the account back under by demoting the
   # least recently edited notes. Past that it floors.
   @inline_overshoot_pct 5
 

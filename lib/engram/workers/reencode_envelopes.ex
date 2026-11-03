@@ -295,23 +295,12 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   runs inside each user's tenant context (`TenantScan`, #1349).
   """
   @spec enqueue_missing() :: non_neg_integer()
-  # ponytail: per user, one EXISTS per column whose `octet_length` predicates
-  # no index serves, so a pass scans every row of every user (runner: hourly
-  # while open, daily re-verify after). Fine at today's row counts; if
-  # crdt_update_log grows, add a partial index on (user_id) WHERE
-  # octet_length(update_nonce) = 12 (and likewise per column).
+  # Each per-user EXISTS is served by a partial index whose predicate is
+  # `legacy/1` (migration 20261103130200); `Engram.Bookkeeping.Drain` finds the
+  # drifted users from those indexes every few minutes.
   def enqueue_missing do
-    user_ids = TenantScan.flat_map_users(fn uid -> if any_legacy?(uid), do: [uid], else: [] end)
-    executing = TenantScan.executing_user_ids(__MODULE__)
-    # One insert per user, not insert_all: Oban's Basic engine ignores
-    # `unique` in insert_all. `unique` drops a user whose job is pending; an
-    # :executing job is not a unique state (a job inserts its own successor),
-    # so that user is skipped here, or a second chain would run beside it.
-    for uid <- user_ids,
-        not MapSet.member?(executing, uid),
-        do: {:ok, _} = Oban.insert(new(%{"user_id" => uid}))
-
-    length(user_ids)
+    TenantScan.flat_map_users(fn uid -> if any_legacy?(uid), do: [uid], else: [] end)
+    |> then(&TenantScan.enqueue_users(__MODULE__, &1))
   end
 
   @doc "True while the user still has a row this worker would re-encode."

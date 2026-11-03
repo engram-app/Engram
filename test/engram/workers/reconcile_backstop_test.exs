@@ -79,10 +79,10 @@ defmodule Engram.Workers.ReconcileBackstopTest do
       assert {"2 */3 * * *", ReconcileEmbeddings} in crontab
 
       entries = for {expr, ReconcileEmbeddings} <- crontab, do: expr
-      assert Enum.sort(entries) == ["2 */3 * * *", "2 4 * * *"]
+      assert Enum.sort(entries) == ["2 */3 * * *", "2 10 * * *"]
 
       {_, _, opts} =
-        Enum.find(cron_entries(), &match?({"2 4 * * *", ReconcileEmbeddings, _}, &1))
+        Enum.find(cron_entries(), &match?({"2 10 * * *", ReconcileEmbeddings, _}, &1))
 
       assert opts[:args] == %{"mode" => "reverify"}
     end
@@ -117,8 +117,9 @@ defmodule Engram.Workers.ReconcileBackstopTest do
       assert successors() == []
     end
 
-    test "the re-verify hops on while a page comes back full, up to 12 runs" do
-      close_rollout()
+    # Capped at 4 hops (was 12): the chain ends inside the off-peak window.
+    # Red before: hop 3 chained another re-verify.
+    test "the re-verify hops on while a page comes back full, up to 4 runs" do
       ServiceConfig.put_override(:keyword_refresh_backlog, 1)
       user = insert(:user)
       for _ <- 1..2, do: current_note(user, keyword_version: nil)
@@ -129,8 +130,8 @@ defmodule Engram.Workers.ReconcileBackstopTest do
       assert_in_five_minutes(next)
 
       Repo.delete_all(from(j in Oban.Job, where: j.worker == ^inspect(ReconcileEmbeddings)))
-      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify", "hop" => 11})
-      assert successors() == []
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify", "hop" => 3})
+      refute Enum.any?(successors(), &(&1.args["mode"] == "reverify"))
     end
 
     test "a kick pulls a scheduled successor forward instead of queueing a second sweep" do
@@ -261,6 +262,14 @@ defmodule Engram.Workers.ReconcileBackstopTest do
       user = insert(:user)
       insert(:subscription, user: user, tier: "pro", status: "active")
       current_note(user, chunker_version: nil, keyword_version: nil, updated_at: hour_ago())
+
+      # A rollout is open (the version term only runs then since the re-verify
+      # stopped walking): reopen the ledger the setup closed.
+      Repo.delete_all(
+        from(e in Engram.DataMigrations.Entry, where: e.name == ^IndexVersions.name())
+      )
+
+      DataMigrations.reset_cache()
 
       assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
       assert {:version, false, 1} in found(ref)

@@ -30,11 +30,11 @@ defmodule Engram.Insights.Snapshot do
   alias Engram.Attachments.Attachment
   alias Engram.Billing
   alias Engram.Billing.UserLimitOverride
+  alias Engram.DataMigrations.NoteSizes
   alias Engram.Insights.UserDailyMetric
   alias Engram.Insights.VaultDailyMetric
   alias Engram.Links.NoteLink
   alias Engram.Notes.Note
-  alias Engram.Notes.NoteBody
   alias Engram.Repo
   alias Engram.Vaults.Vault
 
@@ -307,7 +307,11 @@ defmodule Engram.Insights.Snapshot do
     # Read BEFORE the sizes, so a write landing mid-scan leaves a seq older
     # than the sizes: the next day reads the vault again.
     seqs = Map.new(repo.all(from(v in Vault, where: v.id in ^ids, select: {v.id, v.change_seq})))
-    since = Date.add(day, -@rescan_days)
+    # With trigger-kept sizes the weekly byte rescan is not needed.
+    since =
+      if NoteSizes.done?(),
+        do: ~D[1970-01-01],
+        else: Date.add(day, -@rescan_days)
 
     copies =
       from(m in VaultDailyMetric,
@@ -325,6 +329,7 @@ defmodule Engram.Insights.Snapshot do
         |> Map.take(@copied_fields)
         |> Map.put(:links, Map.get(links, m.vault_id, 0))
       end
+      |> refresh_sizes(repo, copied)
 
     scanned_rows =
       case ids -- copied do
@@ -336,6 +341,29 @@ defmodule Engram.Insights.Snapshot do
       copied_rows ++ scanned_rows,
       &Map.merge(&1, %{date: day, inserted_at: now, updated_at: now})
     )
+  end
+
+  defp notes_in(ids) do
+    from(x in NoteSizes.live_totals_by_vault(), where: x.vault_id in ^ids)
+  end
+
+  # Once `NoteSizes` is done the stored sizes are trigger-kept, so a copied
+  # vault takes its note count and bytes fresh from the narrow state rows (a
+  # re-encode moves bytes without a seq) and is never rescanned for them.
+  defp refresh_sizes(rows, _repo, []), do: rows
+
+  defp refresh_sizes(rows, repo, ids) do
+    if NoteSizes.done?() do
+      totals =
+        ids |> notes_in() |> repo.all(timeout: @chunk_timeout) |> Map.new(&{&1.vault_id, &1})
+
+      Enum.map(rows, fn r ->
+        t = Map.get(totals, r.vault_id, %{n: 0, bytes: 0})
+        %{r | notes: t.n, note_bytes: t.bytes || 0}
+      end)
+    else
+      rows
+    end
   end
 
   defp link_counts(_repo, []), do: %{}
@@ -351,14 +379,7 @@ defmodule Engram.Insights.Snapshot do
   end
 
   defp scan_vaults(repo, ids, seqs, day) do
-    notes =
-      from(n in Note,
-        where: n.vault_id in ^ids and is_nil(n.deleted_at) and n.kind == "note",
-        group_by: n.vault_id,
-        select: %{vault_id: n.vault_id, n: count(n.id)}
-      )
-      |> NoteBody.join()
-      |> select_merge(^%{bytes: dynamic([n], sum(^NoteBody.byte_length(:content)))})
+    notes = notes_in(ids)
 
     # Derived folders and empty-folder markers alike.
     folders =

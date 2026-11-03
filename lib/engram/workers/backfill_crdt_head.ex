@@ -30,14 +30,19 @@ defmodule Engram.Workers.BackfillCrdtHead do
 
   alias Engram.Accounts
   alias Engram.Backfill.IdWindows
+  alias Engram.Backfill.TenantScan
   alias Engram.Crypto.RotationGate
   alias Engram.Jobs
-  alias Engram.Notes.{CrdtTransport, Note}
+  alias Engram.Maintenance.Cursor
+  alias Engram.Notes.{CrdtTransport, Note, NoteBody}
   alias Engram.Repo
   alias Engram.Vaults
   alias Engram.Vaults.Vault
 
   @default_batch_size 100
+  # NULL-head notes examined per hourly run (see `enqueue_all/0`).
+  @candidate_cap 5_000
+  @cursor "warm_crdt_heads"
   @start_cursor "00000000-0000-0000-0000-000000000000"
 
   # 60 min, the Lifeline `rescue_after` ceiling. This walks every row it
@@ -59,15 +64,102 @@ defmodule Engram.Workers.BackfillCrdtHead do
   """
   @spec enqueue_all() :: non_neg_integer()
   def enqueue_all do
-    # Through IdWindows.all/2: a fleet walk on the maintenance pool on SaaS,
-    # a per-tenant walk elsewhere. Never one cross-tenant read on the app
-    # pool, which FORCE ROW LEVEL SECURITY turns into zero rows (#1349).
-    # ponytail: an hourly walk of every notes row, deliberately unindexed,
-    # one id window per statement (#2276: the single DISTINCT over all live
-    # notes grew with the table). Any index on crdt_head makes every CRDT
-    # append (which clears it) a non-HOT update across all notes indexes
-    # (NotesHotAppendTest); moving crdt_head off `notes` is the upgrade path.
-    pairs =
+    # Candidates, with no index on the head (a partial index on
+    # `crdt_head IS NULL` makes every CRDT append, which clears the head, and
+    # every warm a non-HOT body write; `NoteBodyReadTest` guards that):
+    #   * recent: notes written since the last run, from the sync change
+    #     sequence (`Engram.Maintenance.ChangeFeed`, index reads only); a
+    #     checkpoint that changes the note takes a seq. Heads re-checked by
+    #     primary key in `live_pairs/1`.
+    #   * backstop: the next `candidate_cap/0` body rows in key order from a
+    #     persisted cursor (`Engram.Maintenance.Cursor`), wrapping at the end:
+    #     bounded rows per run, and the whole table every N/cap hours.
+    # Not the hourly walk of every `notes` row (Job Load Audit 2026-11-03:
+    # 2.7 GB). `TenantScan.all/2`: the maintenance pool on SaaS, per tenant
+    # elsewhere (never a cross-tenant read on the app pool, #1349).
+    cap = candidate_cap()
+
+    from = Cursor.get(@cursor)
+
+    window =
+      cap
+      |> null_head_query(from && {from["user_id"], from["note_id"]})
+      |> TenantScan.all()
+      |> Enum.sort_by(&{&1.user_id, &1.note_id})
+      |> Enum.take(cap)
+
+    last = List.last(window)
+
+    :ok =
+      Cursor.advance(
+        @cursor,
+        last && %{"user_id" => last.user_id, "note_id" => last.note_id},
+        length(window),
+        cap
+      )
+
+    {changed, commit} = Engram.Maintenance.ChangeFeed.changed("warm_crdt_heads:feed")
+    recent = for n <- changed, do: %{user_id: n.user_id, note_id: n.id}
+
+    candidates = Enum.uniq(Enum.filter(window, & &1.null?) ++ recent)
+
+    pairs = live_pairs(candidates)
+
+    # No `unique` on this worker, so bulk insert drops nothing a single one
+    # deduped (#2169: one hourly tick must not be one insert per vault).
+    count =
+      pairs
+      |> Enum.map(fn {user_id, vault_id} ->
+        __MODULE__.new(%{"user_id" => user_id, "vault_id" => vault_id, "cursor" => @start_cursor})
+      end)
+      |> Jobs.insert_chunked()
+
+    # The feed moves only once its candidates are queued.
+    :ok = commit.()
+    count
+  end
+
+  @doc false
+  # The next `cap` body rows in key order, flagged when the head is NULL.
+  # Public so the plan test pins the primary key.
+  def null_head_query(cap, after_key \\ nil) do
+    from(b in NoteBody,
+      order_by: [b.user_id, b.note_id],
+      select: %{user_id: b.user_id, note_id: b.note_id, null?: is_nil(b.crdt_head)},
+      limit: ^cap
+    )
+    |> after_key(after_key)
+  end
+
+  defp after_key(query, nil), do: query
+
+  defp after_key(query, {user_id, note_id}) do
+    where(
+      query,
+      [b],
+      fragment(
+        "(?, ?) > (?::uuid, ?::uuid)",
+        b.user_id,
+        b.note_id,
+        type(^user_id, Ecto.UUID),
+        type(^note_id, Ecto.UUID)
+      )
+    )
+  end
+
+  defp candidate_cap,
+    do: Application.get_env(:engram, :crdt_head_candidate_cap, @candidate_cap)
+
+  # The live (user, vault) pairs of those notes: one primary-key probe per note.
+  defp live_pairs([]), do: []
+
+  defp live_pairs(candidates) do
+    # The candidates are read by primary key (`IdWindows.by_id/2`), with the
+    # predicate `IdWindows.all/2` used here before (#2403): no join to
+    # `note_bodies`, whose user-leading index the planner otherwise walked
+    # once per candidate under a tenant's RLS (CI: one statement past the
+    # 15 s checkout). The notes head is the trigger-kept source of the copy.
+    query = fn ids ->
       from(n in Note,
         join: v in Vault,
         on: v.id == n.vault_id and is_nil(v.deleted_at),
@@ -75,16 +167,22 @@ defmodule Engram.Workers.BackfillCrdtHead do
         distinct: true,
         select: {n.user_id, n.vault_id}
       )
-      |> IdWindows.all()
-      |> Enum.uniq()
+      |> IdWindows.by_id(ids)
+    end
 
-    # No `unique` on this worker, so bulk insert drops nothing a single one
-    # deduped (#2169: one hourly tick must not be one insert per vault).
-    pairs
-    |> Enum.map(fn {user_id, vault_id} ->
-      __MODULE__.new(%{"user_id" => user_id, "vault_id" => vault_id, "cursor" => @start_cursor})
-    end)
-    |> Jobs.insert_chunked()
+    case TenantScan.pool() do
+      {:fleet, repo} ->
+        repo.all(query.(Enum.map(candidates, & &1.note_id)))
+
+      # Per tenant: each user's own candidates only, never every id per user.
+      :per_user ->
+        candidates
+        |> Enum.group_by(& &1.user_id, & &1.note_id)
+        |> Enum.flat_map(fn {user_id, ids} ->
+          Repo.with_tenant!(user_id, fn -> Repo.all(query.(ids)) end)
+        end)
+    end
+    |> Enum.uniq()
   end
 
   @doc """

@@ -257,4 +257,36 @@ defmodule Engram.Workers.OrphanSweepPointsTest do
 
     refute_received {:qdrant_delete, %{"points" => _}}
   end
+
+  # #2412: a run reads at most `:orphan_sweep_max_pages` pages and the next run
+  # resumes at the stored offset. Red before: every run restarted at the top,
+  # so a collection larger than one run's budget never reached its tail.
+  test "a capped run stores its offset and the next run resumes there", %{bypass: bypass} do
+    Application.put_env(:engram, :orphan_sweep_max_pages, 1)
+    on_exit(fn -> Application.delete_env(:engram, :orphan_sweep_max_pages) end)
+    test_pid = self()
+
+    Bypass.stub(bypass, "POST", "/collections/test_col/points/scroll", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      decoded = Jason.decode!(body)
+      if decoded["with_payload"] == false, do: send(test_pid, {:id_scroll, decoded["offset"]})
+
+      next = if decoded["offset"] == nil, do: Ecto.UUID.generate(), else: nil
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => next}})
+      )
+    end)
+
+    assert :ok = perform_job(OrphanSweep, %{})
+    assert_received {:id_scroll, nil}
+    refute_received {:id_scroll, _second_page_in_same_run}
+
+    assert :ok = perform_job(OrphanSweep, %{})
+    assert_received {:id_scroll, resumed}
+    assert is_binary(resumed), "the second run started over instead of resuming"
+  end
 end

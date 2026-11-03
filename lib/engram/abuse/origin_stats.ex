@@ -120,6 +120,37 @@ defmodule Engram.Abuse.OriginStats do
   @doc false
   def table, do: @table
 
+  # Rows kept: the abuse sweep reads 3 days, the operator mix task 7 by default.
+  @retention_days 30
+
+  @doc """
+  Deletes rows older than #{@retention_days} days, by the `day` index, in
+  batches of `batch`, at most `max_batches` per run. Returns the rows deleted.
+  Called by `Engram.Workers.IdempotencyPrune` (hourly). Not a tenant table.
+  """
+  @spec prune(pos_integer(), pos_integer()) :: non_neg_integer()
+  def prune(batch \\ 5_000, max_batches \\ 20) do
+    cutoff = Date.add(Date.utc_today(), -@retention_days)
+
+    Engram.Maintenance.Prune.batched(
+      fn batch ->
+        %{num_rows: n} =
+          Repo.query!(
+            """
+            DELETE FROM client_origin_stats WHERE (user_id, day, fingerprint_class) IN (
+              SELECT user_id, day, fingerprint_class FROM client_origin_stats
+              WHERE day < $1 ORDER BY day LIMIT $2)
+            """,
+            [cutoff, batch]
+          )
+
+        n
+      end,
+      batch,
+      max_batches
+    )
+  end
+
   @doc """
   Returns a list of `{day, class, count}` for the user over the last `days`,
   ordered by `day` desc then `count` desc.

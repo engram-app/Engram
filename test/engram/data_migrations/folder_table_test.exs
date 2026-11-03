@@ -71,6 +71,35 @@ defmodule Engram.DataMigrations.FolderTableTest do
     %{marker: marker, notes: notes, atts: atts}
   end
 
+  describe "attachment walk gated by the last verification" do
+    # Job Load Audit 2026-11-03, item 1: a pass over a closed ledger decrypted
+    # EVERY attachment path nightly. Rows untouched since the last clean
+    # verification are vouched for; only newer ones are read. Red before: the
+    # option did not exist and the pass fixed every attachment.
+    test "an attachment older than `attachments_since` is skipped, a newer one is fixed", %{
+      user: u,
+      vault: v
+    } do
+      old = attachment!(u, v, "A/old.png")
+      fresh = attachment!(u, v, "A/fresh.png")
+      unresolve!()
+
+      Repo.query!("UPDATE attachments SET updated_at = now() - interval '2 days' WHERE id = $1", [
+        dump(old.id)
+      ])
+
+      since = DateTime.add(DateTime.utc_now(), -3600)
+      assert {:more, _} = FolderTable.run_pass(attachments_since: since)
+
+      assert ref("attachments", fresh.id) != nil
+      assert ref("attachments", old.id) == nil
+
+      # Never verified (nil): the whole walk, as before.
+      assert {:more, _} = FolderTable.run_pass(attachments_since: nil)
+      assert ref("attachments", old.id) != nil
+    end
+  end
+
   describe "backfill" do
     test "creates the ancestor chains and points notes, attachments and markers", %{
       user: u,

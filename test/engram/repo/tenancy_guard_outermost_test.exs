@@ -63,16 +63,16 @@ defmodule Engram.Repo.TenancyGuardOutermostTest do
     test "the probe actually routes through it" do
       # Without this, `run_probe/0` could keep a hardcoded `mode: :savepoint`
       # and every test above would still pass. Outermost, that savepoint fails
-      # before the probe body runs, so the probe's own statements (reading
-      # every tenant table) never reach the database. Read-only: nothing is
+      # before the probe body runs, so the probe's own statement (the
+      # `row_security_active` catalog read) never reaches the database. Read-only: nothing is
       # written outside the sandbox.
       {_verdict, queries} = Engram.QueryRecorder.record(&TenancyGuard.observed_enforcement/0)
 
       probe_reads =
-        Enum.filter(queries, &(&1.pid == self() and &1.sql =~ ~r/FROM "notes"/))
+        Enum.filter(queries, &(&1.pid == self() and &1.sql =~ "row_security_active"))
 
       assert probe_reads != [],
-             "the outermost probe never ran its table reads: run_probe/0 must take " <>
+             "the outermost probe never ran its catalog read: run_probe/0 must take " <>
                "its transaction mode from probe_opts/0\n" <> Engram.QueryRecorder.format(queries)
     end
   end

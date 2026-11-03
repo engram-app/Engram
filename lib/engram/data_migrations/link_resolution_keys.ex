@@ -6,8 +6,9 @@ defmodule Engram.DataMigrations.LinkResolutionKeys do
   pass enqueues `BackfillLinkKeys` per user who still has an unkeyed row. Reads are exact without the keys, only slower,
   so this saves work and gates nothing.
 
-  Re-verifies daily: an older node during a rolling deploy, or a rollback,
-  re-encrypts rows without restamping them.
+  Not re-verified daily: an older node during a rolling deploy, or a rollback,
+  re-encrypts rows without restamping them, and `Engram.Bookkeeping.Drain`
+  finds those through the `*_link_keys_stale_index`es.
   """
   @behaviour Engram.DataMigration
 
@@ -21,9 +22,6 @@ defmodule Engram.DataMigrations.LinkResolutionKeys do
 
   @impl true
   def version, do: 1
-
-  @impl true
-  def reverify?, do: true
 
   @impl true
   def run_pass do

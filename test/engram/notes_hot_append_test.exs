@@ -57,5 +57,36 @@ defmodule Engram.NotesHotAppendTest do
     assert heap_page(page.()) == heap_page(ctid_before)
   end
 
+  # A compaction or structural checkpoint writes only the CRDT state and the
+  # DEK version (`CrdtCheckpoint`: "do NOT touch version/seq/content"). An
+  # index whose key or predicate names those columns (the drift drain's
+  # envelope-legacy indexes once lived on notes) would end its HOT updates.
+  # Red on c0c603cb9, where `notes_envelope_legacy_crdt` / `_content` did.
+  test "a compaction checkpoint's write is a HOT update" do
+    Repo.query!("ALTER TABLE notes SET (fillfactor = 50)")
+    user = insert(:user)
+    note = insert(:note, user: user, vault: insert(:vault, user: user))
+
+    hot = fn ->
+      %{rows: [[n]]} =
+        Repo.query!("SELECT n_tup_hot_upd FROM pg_stat_xact_user_tables WHERE relname = 'notes'")
+
+      n
+    end
+
+    before = hot.()
+
+    Repo.query!(
+      "UPDATE notes SET crdt_state_ciphertext = $2, crdt_state_nonce = $3, dek_version = dek_version WHERE id = $1",
+      [
+        Ecto.UUID.dump!(note.id),
+        :crypto.strong_rand_bytes(64),
+        <<1>> <> :crypto.strong_rand_bytes(12)
+      ]
+    )
+
+    assert hot.() == before + 1
+  end
+
   defp heap_page(ctid), do: ctid |> String.trim("(") |> String.split(",") |> hd()
 end

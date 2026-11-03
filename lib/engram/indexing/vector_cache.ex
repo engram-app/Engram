@@ -7,7 +7,11 @@ defmodule Engram.Indexing.VectorCache do
   rebuild pass all read the vector back instead of paying Voyage again. It is
   NOT a permanent second copy of the index: unchanged chunks are already
   reused by the `plan_chunks` fingerprint, so a row is worth keeping only for
-  as long as a retry can still come. Rows expire 72 h after insert.
+  as long as a retry can still come. Rows expire 24 h after insert: every
+  EmbedNote retry lands well inside that (5 attempts over ~15 min, then a 6 h
+  poison cooldown and the next 3-hourly reconcile, ~9.5 h worst case). A
+  budget-parked note can wait longer; for it a miss costs a re-embed, never a
+  failure.
 
   ## Key
 
@@ -40,10 +44,10 @@ defmodule Engram.Indexing.VectorCache do
   Per row: tuple ~2,230 B (ciphertext 2,096 + nonce 12 + key 32 + ids, header,
   alignment), stored inline (STORAGE PLAIN, see the migration), so 3 rows fill
   an 8 KB page (~2,730 B a row), plus ~76 B of primary key and ~32 B of note
-  index: about 2,840 B a row. Retention is 72 h by `inserted_at` (no touch on
+  index: about 2,840 B a row. Retention is 24 h by `inserted_at` (no touch on
   hit: a full page leaves no room for a HOT update, so a touch would rewrite a
-  2.8 KB tuple), deleted by `prune/1` in batches of 10,000 rows. So
-  the table holds about three days of embed volume: ~0.6 to 1 GB at the peak
+  2.8 KB tuple), deleted by `prune/1` in batches of 10,000 rows, at most 20 per run. So
+  the table holds about one day of embed volume: ~0.6 to 1 GB at the peak
   of the v5 rebuild (~340,000 vectors), megabytes in steady state.
 
   ## Writes refused
@@ -64,7 +68,11 @@ defmodule Engram.Indexing.VectorCache do
   @version "v1"
   @table "embedding_cache"
   @put_rows 1_000
-  @retention_hours 72
+  # A miss only re-embeds (paid Voyage tokens, never a failure). 24 h covers
+  # EmbedNote's worst retry path (~9.5 h). Not covered, accepted: jobs held by
+  # `Rebuild.hold/1` through a rebuild longer than a day, and a Qdrant outage
+  # longer than a day; both re-embed their pending notes once.
+  @retention_hours 24
   @prune_batch 10_000
 
   @get_many_sql """
@@ -299,7 +307,7 @@ defmodule Engram.Indexing.VectorCache do
   end
 
   # A note deleted mid-rotation fails the FK: that batch is rewritten without
-  # note ids (the 72 h expiry still reaps it) rather than aborting the
+  # note ids (the 24 h expiry still reaps it) rather than aborting the
   # rotation. A savepoint, as in `put_many/5`: a nested `Repo.transaction`
   # is not one, and the retry would run in an aborted transaction.
   defp insert_rekeyed(inserts) do
@@ -314,27 +322,39 @@ defmodule Engram.Indexing.VectorCache do
   end
 
   @doc """
-  Retention, cross-tenant (`Repo.maintenance/0`): rows inserted more than 72 h
-  ago, deleted #{@prune_batch} at a time (each its own statement, driven by
-  the `inserted_at` index) until none are left. Returns the rows deleted.
+  Retention, cross-tenant (`Repo.maintenance/0`): rows inserted more than
+  #{@retention_hours} h ago, deleted #{@prune_batch} at a time (each its own
+  statement, driven by the `inserted_at` index), at most #{20} batches per run.
+  Returns the rows deleted.
   """
   @spec prune(module()) :: non_neg_integer()
-  def prune(repo), do: Repo.cross_tenant(fn -> prune_loop(repo, 0) end)
+  def prune(repo), do: Repo.cross_tenant(fn -> prune_batches(repo) end)
 
-  defp prune_loop(repo, total) do
-    %{num_rows: n} =
-      repo.query!(
-        """
-        DELETE FROM #{@table} WHERE ctid = ANY(ARRAY(
-          SELECT ctid FROM #{@table}
-          WHERE inserted_at < now() - make_interval(hours => $1)
-          LIMIT $2
-        ))
-        """,
-        [@retention_hours, @prune_batch]
-      )
+  # The shared bounded loop (`Engram.Maintenance.Prune`): at most 20 batches
+  # per hourly run, so a backlog (the first run after a retention cut) drains
+  # over several runs.
+  @prune_max_batches 20
 
-    if n < @prune_batch, do: total + n, else: prune_loop(repo, total + n)
+  defp prune_batches(repo) do
+    Engram.Maintenance.Prune.batched(
+      fn batch ->
+        %{num_rows: n} =
+          repo.query!(
+            """
+            DELETE FROM #{@table} WHERE ctid = ANY(ARRAY(
+              SELECT ctid FROM #{@table}
+              WHERE inserted_at < now() - make_interval(hours => $1)
+              LIMIT $2
+            ))
+            """,
+            [@retention_hours, batch]
+          )
+
+        n
+      end,
+      @prune_batch,
+      @prune_max_batches
+    )
   end
 
   defp aad(user_id, key), do: "embedding_cache:" <> user_id <> ":" <> Base.encode16(key)

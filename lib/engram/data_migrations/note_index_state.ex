@@ -129,8 +129,10 @@ defmodule Engram.DataMigrations.NoteIndexState do
 
   # The window's notes whose counters differ from their chunk rows (one
   # index probe of `chunks (note_id, position)` per note), and how many have
-  # no state row (the fill owns those; one gone since is a hit).
-  defp drifted(repo, keys) do
+  # no state row (the fill owns those; one gone since is a hit). Public for
+  # `Engram.Bookkeeping.Canary` (same predicate, a sample of keys).
+  @doc false
+  def drifted(repo, keys) do
     %{rows: rows} =
       repo.query!(
         """

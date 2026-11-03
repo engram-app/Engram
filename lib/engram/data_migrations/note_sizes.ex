@@ -1,0 +1,137 @@
+defmodule Engram.DataMigrations.NoteSizes do
+  @moduledoc """
+  Fills `note_bodies.content_bytes` / `state_bytes` / `envelope_legacy` and
+  `note_index_state.note_live` / `content_bytes` / `state_bytes` /
+  `has_state` (migration 20261103130000) for rows written before their
+  triggers existed (one row version per unfilled row, once). Later writes
+  fill the body columns and `note_live` themselves; `CrdtBloatSweep` copies
+  sizes of written notes to `note_index_state` hourly. Not re-verified.
+
+  Done means `CrdtBloatSweep`, the snapshot, the PostHog sync and the budget
+  sweep may read the narrow columns instead of aggregating `notes`. A note
+  with no state or body row (their own ledgers fill those) keeps this open,
+  so no reader sees a partial table.
+  Discovery walks `notes` in id windows (`Engram.Backfill.IdWindows`).
+  """
+  @behaviour Engram.DataMigration
+
+  import Ecto.Query
+
+  alias Engram.Backfill.IdWindows
+  alias Engram.Notes.Note
+
+  @batch 1_000
+  @max_fixed 50_000
+
+  @impl true
+  def name, do: "note_sizes"
+
+  @impl true
+  def version, do: 1
+
+  @doc """
+  Live notes per vault: `%{vault_id, n, bytes}`, `bytes` the stored content
+  ciphertext (tag included, as `NoteBody.byte_length(:content)`). From the
+  narrow `note_index_state` once this ledger is done, else the wide `notes`
+  heap. The first binding has `vault_id`, so a caller can narrow it by vault.
+  """
+  @spec live_totals_by_vault() :: Ecto.Query.t()
+  def live_totals_by_vault do
+    if done?() do
+      # Sizes as of the last `CrdtBloatSweep` (hourly); a NULL content
+      # ciphertext counts 0 bytes, as the wide path does.
+      from(s in Engram.Notes.NoteIndexState,
+        where: s.note_live,
+        group_by: s.vault_id,
+        select: %{
+          vault_id: s.vault_id,
+          n: count(),
+          bytes: sum(s.content_bytes + ^Engram.Crypto.Envelope.tag_bytes())
+        }
+      )
+    else
+      from(n in Note,
+        where: is_nil(n.deleted_at) and n.kind == "note",
+        group_by: n.vault_id,
+        select: %{vault_id: n.vault_id, n: count(n.id)}
+      )
+      |> Engram.Notes.NoteBody.join()
+      |> select_merge(^%{bytes: dynamic([n], sum(^Engram.Notes.NoteBody.byte_length(:content)))})
+    end
+  end
+
+  @doc "True once every note's size columns are filled."
+  @spec done?() :: boolean()
+  def done?, do: Engram.DataMigrations.done?(name(), version())
+
+  @impl true
+  def run_pass, do: run_pass([])
+
+  @doc false
+  def run_pass(opts) do
+    # At most @max_fixed rows per pass: each fill is one non-HOT body version
+    # (the `envelope_legacy` flag goes NULL -> false), so the WAL per hourly
+    # pass is bounded by rows, not only by the runner's time budget.
+    IdWindows.heal_pass(name(), Note, &heal/2,
+      batch_size: Keyword.get(opts, :batch, @batch),
+      max_fixed: Keyword.get(opts, :max_fixed, @max_fixed)
+    )
+  end
+
+  # Sizes from `note_bodies` (`nonce field (13) || ciphertext`, less the
+  # 16-byte tag), as the triggers compute them; liveness from `notes`.
+  # A note with no body row yet is left (NoteSplit's to fill) and keeps this open.
+  # One window: fill the unfilled state rows (locked rows skipped, a later
+  # pass takes them), then look for a note still unfilled or with no state row.
+  defp heal(ids, %{repo: repo}) do
+    keys = Enum.map(ids, &Ecto.UUID.dump!/1)
+
+    # Touching `content_ct` fires the `note_bodies_sizes` BEFORE trigger: the
+    # sizes come from the same function as every new write. One row version
+    # per unfilled body, once. Locked rows are skipped; a later pass takes them.
+    %{num_rows: bodies} =
+      repo.query!(
+        """
+        UPDATE note_bodies SET content_ct = content_ct
+        WHERE note_id = ANY(ARRAY(
+          SELECT note_id FROM note_bodies
+          WHERE note_id = ANY($1::uuid[]) AND envelope_legacy IS NULL
+          ORDER BY note_id FOR UPDATE SKIP LOCKED))
+        """,
+        [keys]
+      )
+
+    %{num_rows: states} =
+      repo.query!(
+        """
+        UPDATE note_index_state s SET
+          note_live = n.deleted_at IS NULL,
+          content_bytes = b.content_bytes,
+          state_bytes = b.state_bytes,
+          has_state = b.state_bytes IS NOT NULL
+        FROM notes n, note_bodies b
+        WHERE n.id = s.note_id AND b.note_id = s.note_id AND s.note_id = ANY(ARRAY(
+          SELECT note_id FROM note_index_state
+          WHERE note_id = ANY($1::uuid[]) AND (note_live IS NULL OR has_state IS NULL)
+          ORDER BY note_id FOR UPDATE SKIP LOCKED))
+        """,
+        [keys]
+      )
+
+    %{rows: [[left?]]} =
+      repo.query!(
+        """
+        SELECT EXISTS (
+          SELECT 1 FROM notes n
+          LEFT JOIN note_index_state s ON s.note_id = n.id
+          LEFT JOIN note_bodies b ON b.note_id = n.id
+          WHERE n.id = ANY($1::uuid[]) AND n.kind = 'note'
+            AND (s.note_id IS NULL OR s.note_live IS NULL OR s.has_state IS NULL
+                 OR b.note_id IS NULL OR b.envelope_legacy IS NULL))
+        """,
+        [keys]
+      )
+
+    {bodies + states, left?}
+  end
+end

@@ -84,7 +84,7 @@ If no backup is usable, fall back to the full rebuild below. That fallback is ac
 
 > Count **notes, not chunks**. An earlier revision of this doc read the Qdrant point count (76,352, taken before an unrelated purge of 8 test vaults) as a note count and put the RTO at 38 hours. Measured 2026-09-05: ~10,400 chunk rows over ~1,574 live notes, about 7 chunks per note. Re-derive from `select count(*) from notes where kind = 'note' and deleted_at is null` rather than from the collection size.
 
-**This whole procedure is for TOTAL collection loss only.** For partial divergence — the far likelier case, and what a Postgres restore produces — do not null every hash. `Engram.Workers.OrphanSweep` reconciles both directions against Qdrant's real point ids on its 05:00 UTC daily tick and flags only the notes that actually lost their points (#1576). Enqueue it on demand instead of waiting.
+**This whole procedure is for TOTAL collection loss only.** For partial divergence — the far likelier case, and what a Postgres restore produces — do not null every hash. `Engram.Workers.OrphanSweep` reconciles both directions against Qdrant's real point ids on its 11:00 UTC daily tick and flags only the notes that actually lost their points (#1576). Enqueue it on demand instead of waiting.
 
 ## DR scenarios
 
@@ -96,7 +96,7 @@ Each is one paragraph and links out to the canonical runbook. Don't restate rota
 
 **A Postgres restore is not finished until Qdrant is reconciled.** Restoring rolls back the note data *and* the `embed_hash`/`dense_indexed_hash` bookkeeping about what was sent to Qdrant, together — so they stay mutually consistent while Qdrant does not. Every note re-indexed between the restore point and the failure has vectors under ids that no longer exist, and still reads as freshly indexed. Left alone those notes are silently unsearchable forever; `ReconcileEmbeddings` never notices, because it only ever compares two Postgres columns.
 
-Enqueue `Engram.Workers.OrphanSweep` immediately after the cutover rather than waiting for its 05:00 UTC tick (#1576). It reconciles both directions against Qdrant's real point ids: strays get deleted, and notes whose points are gone get their index hashes nulled so `ReconcileEmbeddings` rebuilds exactly those. **Do not blind-rebuild the whole corpus for this** — the sweep identifies the diverged set, so recovery is proportional to the damage window, not the whole note count.
+Enqueue `Engram.Workers.OrphanSweep` immediately after the cutover rather than waiting for its 11:00 UTC tick (#1576). It reconciles both directions against Qdrant's real point ids: strays get deleted, and notes whose points are gone get their index hashes nulled so `ReconcileEmbeddings` rebuilds exactly those. **Do not blind-rebuild the whole corpus for this** — the sweep identifies the diverged set, so recovery is proportional to the damage window, not the whole note count.
 
 ```elixir
 Oban.insert!(Engram.Workers.OrphanSweep.new(%{}))

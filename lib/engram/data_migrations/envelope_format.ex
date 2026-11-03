@@ -15,8 +15,8 @@ defmodule Engram.DataMigrations.EnvelopeFormat do
   read format 1): a re-encode would write format 0 again. Disabled pauses
   without paging (the runner holds the stuck clock). Rows
   written in that window (or by an older node after a rollback) are legacy
-  again after `:done`, so this opts into the runner's daily re-verify, which
-  reopens it when one appears.
+  again after `:done`; `Engram.Bookkeeping.Drain` finds them through the
+  `*_envelope_legacy` partial indexes and queues the re-encode (no daily walk).
   """
   @behaviour Engram.DataMigration
 
@@ -30,9 +30,6 @@ defmodule Engram.DataMigrations.EnvelopeFormat do
 
   @impl true
   def enabled?, do: Engram.Crypto.Envelope.compression_on?()
-
-  @impl true
-  def reverify?, do: true
 
   @impl true
   def run_pass do

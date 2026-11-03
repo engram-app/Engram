@@ -97,6 +97,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
   use Oban.Worker, queue: :maintenance, max_attempts: 1
 
   alias Engram.Crypto.Envelope
+  alias Engram.DataMigrations.NoteSizes
   alias Engram.Logger.Metadata
   alias Engram.Notes.CrdtBloat
   alias Engram.Repo
@@ -207,6 +208,9 @@ defmodule Engram.Workers.CrdtBloatSweep do
     now = DateTime.utc_now()
     baseline = baseline(now)
     since = if baseline, do: elem(baseline, 0), else: DateTime.add(now, -@first_window_s)
+    narrow? = NoteSizes.done?()
+    {written, commit} = if narrow?, do: written_versions(), else: {nil, fn -> :ok end}
+    _ = if narrow?, do: refresh_sizes(Map.keys(written) ++ backstop_ids())
 
     %Postgrex.Result{rows: [row]} =
       Repo.maintenance().query!(
@@ -235,19 +239,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
           coalesce(array_agg(id ORDER BY id) FILTER (WHERE written), '{}'),
           coalesce(array_agg(version ORDER BY id) FILTER (WHERE written), '{}')
         FROM (
-          SELECT
-            n.id,
-            n.version,
-            n.updated_at >= $5 AS written,
-            n.crdt_state_ciphertext IS NOT NULL AS has_state,
-            greatest(octet_length(n.crdt_state_ciphertext) - $1::int, 0) AS state_bytes,
-            greatest(octet_length(n.content_ciphertext) - $1::int, 0) AS content_bytes,
-            greatest(octet_length(n.content_ciphertext) - $1::int, 0) >= $3::int AS big,
-            greatest(octet_length(n.crdt_state_ciphertext) - $1::int, 0)::float8
-              / greatest(octet_length(n.content_ciphertext) - $1::int, 1)::float8 AS ratio
-          FROM notes n
-          WHERE n.deleted_at IS NULL
-            AND n.kind = 'note'
+          #{sized_rows(narrow?)}
         ) sized
         """,
         [
@@ -277,8 +269,14 @@ defmodule Engram.Workers.CrdtBloatSweep do
     ] =
       row
 
-    versions = Map.new(Enum.zip(Enum.map(ids, &Ecto.UUID.load!/1), versions))
+    versions =
+      if narrow?,
+        do: written,
+        else: Map.new(Enum.zip(Enum.map(ids, &Ecto.UUID.load!/1), versions))
+
     Engram.Cache.put(:crdt_sweep_versions, :last, {now, versions})
+    # The feed moves only once its rows are refreshed and measured.
+    :ok = commit.()
 
     %{
       notes: notes,
@@ -298,6 +296,115 @@ defmodule Engram.Workers.CrdtBloatSweep do
       measured_at_unix: System.system_time(:second)
     }
     |> Map.merge(save_rate(baseline, now, versions))
+  end
+
+  # The per-note sizes, one row per live note. Once `NoteSizes` has filled the
+  # narrow `note_index_state` columns (`refresh_sizes/1` keeps them current)
+  # the sweep reads that table; until then (a fresh upgrade) it
+  # aggregates `notes`, which is the slow heap scan the narrow read replaces.
+  # Same column names and values either way.
+  defp sized_rows(narrow?) do
+    if narrow? do
+      # The narrow copy on `note_index_state` (`refresh_sizes/1` brought the
+      # notes written since the last sweep up to date first). Written ids and
+      # versions come from `written_versions/1`, so `written` is false here.
+      """
+      SELECT
+        s.note_id AS id,
+        0 AS version,
+        false AS written,
+        s.has_state,
+        coalesce(s.state_bytes, 0) AS state_bytes,
+        coalesce(s.content_bytes, 0) AS content_bytes,
+        coalesce(s.content_bytes, 0) >= $3::int AS big,
+        coalesce(s.state_bytes, 0)::float8 / greatest(coalesce(s.content_bytes, 0), 1)::float8 AS ratio
+      FROM note_index_state s
+      -- $1 and $5 are bound for both shapes; Postgres rejects an unused parameter.
+      WHERE s.note_live AND $1::int >= 0 AND $5::timestamp IS NOT NULL
+      """
+    else
+      """
+      SELECT
+        n.id,
+        n.version,
+        n.updated_at >= $5 AS written,
+        n.crdt_state_ciphertext IS NOT NULL AS has_state,
+        greatest(octet_length(n.crdt_state_ciphertext) - $1::int, 0) AS state_bytes,
+        greatest(octet_length(n.content_ciphertext) - $1::int, 0) AS content_bytes,
+        greatest(octet_length(n.content_ciphertext) - $1::int, 0) >= $3::int AS big,
+        greatest(octet_length(n.crdt_state_ciphertext) - $1::int, 0)::float8
+          / greatest(octet_length(n.content_ciphertext) - $1::int, 1)::float8 AS ratio
+      FROM notes n
+      WHERE n.deleted_at IS NULL
+        AND n.kind = 'note'
+      """
+    end
+  end
+
+  # Copies the body sizes (`note_bodies`, BEFORE-trigger columns) of the notes
+  # written since the last sweep, and of the backstop window, to the narrow
+  # `note_index_state` copy: PK lookups, at most one HOT row version per
+  # changed note per sweep, off the save path; an unchanged row is not written.
+  @refresh_batch 5_000
+  defp refresh_sizes(ids) do
+    ids
+    |> Enum.uniq()
+    |> Enum.chunk_every(@refresh_batch)
+    |> Enum.each(fn ids ->
+      Repo.maintenance().query!(
+        """
+        UPDATE note_index_state s SET
+          content_bytes = b.content_bytes,
+          state_bytes = b.state_bytes,
+          has_state = b.state_bytes IS NOT NULL
+        FROM note_bodies b
+        WHERE b.note_id = s.note_id AND s.note_id = ANY($1::uuid[])
+          AND (s.content_bytes, s.state_bytes, s.has_state)
+              IS DISTINCT FROM (b.content_bytes, b.state_bytes, b.state_bytes IS NOT NULL)
+        """,
+        [Enum.map(ids, &Ecto.UUID.dump!/1)],
+        timeout: :timer.minutes(5)
+      )
+    end)
+  end
+
+  # Ids and versions of the live notes written since the last sweep, from the
+  # sync change sequence (`Engram.Maintenance.ChangeFeed`, index reads only).
+  defp written_versions do
+    {rows, commit} = Engram.Maintenance.ChangeFeed.changed("crdt_bloat_sweep")
+    {Map.new(rows, &{&1.id, &1.version}), commit}
+  end
+
+  # Backstop for size changes the change feed cannot see (a snapshot
+  # compaction takes no seq): the next `@backstop_rows` state rows in key
+  # order from a persisted cursor, wrapping at the end, so every copy is
+  # re-checked within rows / @backstop_rows hours.
+  @backstop_rows 20_000
+  defp backstop_ids do
+    from = Engram.Maintenance.Cursor.get("crdt_bloat_sweep:sizes")
+
+    %Postgrex.Result{rows: rows} =
+      Repo.maintenance().query!(
+        """
+        SELECT note_id FROM note_index_state
+        WHERE ($1::uuid IS NULL OR note_id > $1) ORDER BY note_id LIMIT $2
+        """,
+        [from && Ecto.UUID.dump!(from["note_id"]), @backstop_rows],
+        timeout: :timer.minutes(2)
+      )
+
+    ids = Enum.map(rows, fn [id] -> Ecto.UUID.load!(id) end)
+    last = List.last(ids)
+
+    :ok =
+      Engram.Maintenance.Cursor.advance(
+        "crdt_bloat_sweep:sizes",
+        last && %{"note_id" => last},
+        length(ids),
+        @backstop_rows
+      )
+
+    ids
   end
 
   # The previous sweep's baseline, when this node has one young enough to diff.

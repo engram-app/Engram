@@ -185,6 +185,18 @@ defmodule Engram.DataMigrations.NoteSplit do
     length(ids)
   end
 
+  @doc false
+  # The notes among `ids` the triggers should have filled but did not (the
+  # `unfixed/0` predicate). For `Engram.Bookkeeping.Canary`.
+  def unfixed_ids(repo, ids) do
+    repo.all(
+      from(n in unfixed(),
+        where: field(n, :id) in type(^ids, {:array, Ecto.UUID}),
+        select: type(field(n, :id), Ecto.UUID)
+      )
+    )
+  end
+
   defp unfixed do
     from(n in "notes",
       as: :n,

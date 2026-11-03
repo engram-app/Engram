@@ -69,13 +69,26 @@ assert no tenant-table query reaches it).
 
 - **No two entries share a minute of the day.** They share the 2-slot
   `maintenance` queue and one database. `ObanCronTest` enforces this globally.
-- Minute map: reconcile `:02` every 3 h plus the 04:02 re-verify, the
+- Minute map: reconcile `:02` every 3 h plus the 10:02 re-verify, the
   rebuild-held release `:07` (`ReleaseRebuildHeld`), the stalled-checkout
   scan `:x4/:x9`, hourly jobs on `:x3/:x8` or `:10`, dailies on
   `:00/:16/:25/:30/:40`.
 - Cheap cleanup and retention run hourly or more often, so each run is small.
 - A job whose output is an alert (Paddle drift, fair-use) runs at the cadence
   of the question it answers. Running it more often only repeats the alert.
+
+- **Daily heavy work shares one off-peak window, 10:00-11:15 UTC**, on free
+  minutes: the index re-verify (10:02), abuse sweep (10:00),
+  inactivity cleanup (10:30), blob reconcile (10:45), orphan sweep (11:00),
+  PostHog sync (11:15). `DataMigrationsRunner.reverify_hour/0` follows it
+  (`oban_cron_test.exs` pins the two together). DailySnapshot stays at 00:40: its row
+  is the state as of the run under yesterday's date, and it is incremental. The bulk-import hours (00-03
+  UTC) and the old 04:xx cluster stay clear.
+- **Every cron worker declares its scan bound** in
+  `test/engram/workers/cron_scan_bound_test.exs` (the index and the per-run
+  cap); a new cron fails that test until it does.
+- Drift in app-kept bookkeeping is found through partial indexes by
+  `BookkeepingDrain` (`12,27,42,57 * * * *`), never by re-walking a table.
 
 ## Checklist for a new worker
 

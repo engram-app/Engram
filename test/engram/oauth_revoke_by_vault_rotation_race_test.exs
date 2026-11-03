@@ -40,6 +40,10 @@ defmodule Engram.OAuthRevokeByVaultRotationRaceTest do
 
       on_exit(fn ->
         Sandbox.unboxed_run(Repo, fn ->
+          # The grant committed for real, and so did its ConnectionCreated job:
+          # left behind, it is a pending `events` row every later test in the
+          # partition sees (ObanTest counts every pending queue).
+          Repo.query!("DELETE FROM oban_jobs WHERE args->>'user_id' = $1", [user.id])
           Repo.query!("DELETE FROM users WHERE id = $1", [Ecto.UUID.dump!(user.id)])
 
           Repo.query!("DELETE FROM oauth_clients WHERE client_id = $1", [

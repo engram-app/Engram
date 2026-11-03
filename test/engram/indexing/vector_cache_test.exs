@@ -149,13 +149,15 @@ defmodule Engram.Indexing.VectorCacheTest do
       assert rows(user.id) == []
     end
 
-    test "prune deletes rows inserted more than 72 h ago and keeps younger ones" do
+    # 24 h (was 72): every retry path lands well inside it. Red before: the
+    # 25 h row survived.
+    test "prune deletes rows inserted more than 24 h ago and keeps younger ones" do
       {user, dek} = user_and_dek()
       stale = put(user, dek, "stale", vector(1))
       edge = put(user, dek, "edge", vector(1))
       fresh = put(user, dek, "fresh", vector(1))
-      age(stale, 73)
-      age(edge, 71)
+      age(stale, 25)
+      age(edge, 23)
 
       assert VectorCache.prune(Repo) == 1
       assert rows(user.id) |> Enum.map(&hd/1) |> Enum.sort() == Enum.sort([edge, fresh])
@@ -171,7 +173,7 @@ defmodule Engram.Indexing.VectorCacheTest do
         end
 
       :ok = VectorCache.put_many(user.id, nil, dek, entries)
-      Repo.query!("UPDATE embedding_cache SET inserted_at = now() - interval '80 hours'")
+      Repo.query!("UPDATE embedding_cache SET inserted_at = now() - interval '30 hours'")
       ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :repo, :query]])
 
       assert VectorCache.prune(Repo) == 10_050
