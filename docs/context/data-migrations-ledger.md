@@ -83,23 +83,34 @@ broadcast).
 `IndexVersions` is the exception: its `name/0` embeds the chunker, keyword and
 embed model versions, so bumping any of them is a new, not-done migration.
 
-## Drift drain (replaces the daily re-verify for four migrations)
+## Drift drain (replaces the daily re-verify)
 
-`EnvelopeFormat`, `LinkResolutionKeys` and `NotePayloadStamps` no longer
-declare `reverify?/0`: re-walking every row nightly to find drift that is zero
+`EnvelopeFormat`, `LinkResolutionKeys`, `NotePayloadStamps` and `FolderTable`
+no longer declare `reverify?/0`: re-walking every row nightly to find drift that is zero
 in steady state swapped the 4 GB production database (Job Load Audit
 2026-11-03). Drift they guard comes from a previous-release writer, so it is
 found continuously instead: `Engram.Workers.BookkeepingDrain` (every 15
 minutes, free cron minutes) runs `Engram.Bookkeeping.Drain`, which reads
-partial indexes whose predicate IS the drift test (migration
-`20261103130200_index_drift_drain_expand`; the link-key indexes predate it),
+partial indexes whose predicate IS the drift test (migrations
+`20261103130200_index_drift_drain_expand` and
+`20261103140100_index_attachments_folder_ref_stale_expand`; the link-key
+indexes predate them),
 empty in steady state, at most 100 users per index per tick, and hands each
 user to the repair that owns it (`ReencodeEnvelopes`, `BackfillLinkKeys`,
 `ReconcileNotePayloads`, `FolderTable.run_pass(user_ids: ..)`). Probe
 predicates must equal the index text; `test/engram/bookkeeping/drain_test.exs`
-pins every probe to its index. `FolderTable` keeps its daily re-verify (its
-`completed_at` is the read-path watermark, `verified_until/0`) but its
-attachment walk only decrypts rows with `updated_at` after that watermark.
+pins every probe to its index. `FolderTable`'s attachment drift is found
+through a stamp (#2413): every writer sets `attachments.folder_ref_stamp` to
+the `path_nonce` the reference was computed from (`Rows.attachment_ref/2`), so
+a writer that rewrites the path without re-pointing (the previous release) leaves
+`folder_ref_stamp IS DISTINCT FROM path_nonce`, the `attachments_folder_ref_stale`
+predicate. Readers trust a reference only while the stamp matches
+(`Rows.attachment_ref_current/0`), so there is no watermark any more, and the
+walk decrypts only mismatched rows. `Engram.Bookkeeping.Canary` samples the
+references readers trust (`folder_ref` invariant) in place of the nightly
+check. Markers have no drift source left (this release and the previous one
+both create a marker's folder row), so they are only reconciled when a drained
+user's pass runs.
 A root-level note stores `folder_hmac = HMAC("")` (the column is NOT NULL) and
 a NULL `folder_ref_id` forever, so the unresolved-folder predicate excludes
 the root by its empty envelope (`octet_length(folder_ciphertext) > 16`).
@@ -144,7 +155,7 @@ discovery that reads O(broken rows) over a walk of the table.
 | `EnvelopeFormat` | drain | Reopens in prod (rows written while a rolling deploy held the compression gate shut). No daily re-verify: `Engram.Bookkeeping.Drain` (every 15 min) finds format-0 rows through the `*_envelope_legacy` partial indexes and queues `ReencodeEnvelopes` per user. |
 | `LinkResolutionKeys` | drain | Reopens several times a week in prod (an older node re-encrypts without restamping). No daily re-verify: the drain finds stale stamps through the `*_link_keys_stale_index` partial indexes and queues `BackfillLinkKeys`. |
 | `NotePayloadStamps` | drain | Reopens in prod (a lost write race NULLs a stamp after the migration closed). No daily re-verify: the drain finds unstamped state rows through `note_index_state_unstamped` and queues `ReconcileNotePayloads`. |
-| `FolderTable` | yes | Its `completed_at` is the read-path watermark (`FolderTable.verified_until/0`): readers trust `folder_ref_id` only for rows older than the last verification, so stopping the re-verify would push every later write onto the slow path. Its per-user queries are small (~12 ms mean). |
+| `FolderTable` | drain (v2: stamps every attachment on upgrade) | Was the last nightly per-user walk (10:00 UTC). No daily re-verify since #2413: the drain finds unresolved notes through `notes_unresolved_folder` and unstamped attachment references through `attachments_folder_ref_stale`, and runs `FolderTable.run_pass/1` for those users. Readers trust an attachment reference only while its stamp matches its `path_nonce`. |
 | `IndexVersions` | on request | While a rollout is open, and on a version-check request (a restored vault: that vault only; an index-version change at boot: the fleet). See `index-version-self-heal.md`. |
 
 A migration that is not re-verified only goes back to work on a
