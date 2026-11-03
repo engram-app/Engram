@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.72.1](https://github.com/engram-app/Engram/compare/0.72.0...0.72.1) (2026-11-03)
+
+
+### Bug Fixes
+
+* **e2e:** reap stale staging Clerk test users ([#2383](https://github.com/engram-app/Engram/issues/2383)) ([996711c](https://github.com/engram-app/Engram/commit/996711c886f108f1b1ef769bb12b89d7a0b3a38a))
+* **native:** bump zstd and pulldown-cmark advisories ([#2386](https://github.com/engram-app/Engram/issues/2386)) ([7d2e005](https://github.com/engram-app/Engram/commit/7d2e00531eb56224068a95b1c1605a7572840894))
+* **notes:** queue NoteCommitted on bare/move, stop relocate data loss ([#2374](https://github.com/engram-app/Engram/issues/2374)) ([b505807](https://github.com/engram-app/Engram/commit/b5058077ebcdbd215253653e0ec1bfe32c160be6))
+
 ## [0.72.0](https://github.com/engram-app/Engram/compare/0.71.0...0.72.0) (2026-11-02)
 
 
