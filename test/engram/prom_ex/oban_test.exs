@@ -6,6 +6,8 @@ defmodule Engram.PromEx.ObanTest do
   # terminal (completed/discarded/cancelled) rows.
   use Engram.DataCase, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Engram.PromEx.Oban, as: Plugin
   alias Engram.Repo
 
@@ -65,8 +67,7 @@ defmodule Engram.PromEx.ObanTest do
 
     assert Enum.all?(Map.values(seen), &(&1 == 0))
 
-    # Literal states (no bind parameter) so the planner matches Oban's
-    # state-leading index at plan time.
+    # Literal states (no bind parameter) keep the statement text and plan fixed.
     {sql, params} = Repo.to_sql(:all, Plugin.pending_query())
     assert params == []
 
@@ -90,5 +91,34 @@ defmodule Engram.PromEx.ObanTest do
     seen = Plugin.emit_queue_depth(conf) && collect()
 
     assert seen[{"Oban", "orphaned", "available"}] == 1
+  end
+
+  # Parity with PromEx.Plugins.Oban (prom_ex 1.12 `plugins/oban.ex:433-470`):
+  # its unfiltered query plus zero fill over `Oban.Job.states()`, restricted to
+  # the pending states, must equal what the new poll emits.
+  test "pending-state output equals the bundled plugin's on the same rows", %{conf: conf} do
+    for queue <- ~w(embed maintenance orphaned),
+        state <- Enum.map(Oban.Job.states(), &to_string/1),
+        do: job!(queue, state)
+
+    job!("embed", "available")
+
+    old_counts =
+      from(j in Oban.Job, group_by: [j.queue, j.state], select: {{j.queue, j.state}, count(j.id)})
+      |> Repo.all(skip_tenant_check: true)
+      |> Map.new()
+
+    old =
+      for(
+        {q, _} <- conf.queues,
+        s <- Oban.Job.states(),
+        into: %{},
+        do: {{to_string(q), to_string(s)}, 0}
+      )
+      |> Map.merge(old_counts)
+      |> Map.filter(fn {{_q, s}, _} -> s in @pending end)
+      |> Map.new(fn {{q, s}, c} -> {{"Oban", q, s}, c} end)
+
+    assert (Plugin.emit_queue_depth(conf) && collect()) == old
   end
 end

@@ -21,6 +21,8 @@ defmodule Engram.PromEx.Oban do
 
   The group keeps the name `:oban_queue_poll_metrics`, so the web-role drop in
   `Engram.PromEx.drop_metrics_groups/1` and config/runtime.exs still applies.
+  The poll honours `:poll_rate` and `:metric_prefix`; it always polls the
+  default `Oban` instance (`:oban_supervisors` applies to event metrics only).
   """
   use PromEx.Plugin
 
@@ -28,9 +30,9 @@ defmodule Engram.PromEx.Oban do
 
   @event [:prom_ex, :plugin, :oban, :queue, :length, :count]
 
-  # Same set as `Oban.Job.unique_states(:incomplete)`. Inlined into the query
-  # as literals, not a bind parameter, so Postgres plans `state IN (...)`
-  # against the state-leading index.
+  # Same set as `Oban.Job.unique_states(:incomplete)`. Inlined as literals so
+  # the statement text and plan stay fixed; a bound `ANY($1)` would also match
+  # the state-leading index.
   @pending_states ~w(suspended scheduled available executing retryable)
 
   @impl true
@@ -46,7 +48,8 @@ defmodule Engram.PromEx.Oban do
       {__MODULE__, :execute_queue_metrics, []},
       [
         last_value(
-          PromEx.metric_prefix(otp_app, :oban) ++ [:queue, :length, :count],
+          Keyword.get(opts, :metric_prefix, PromEx.metric_prefix(otp_app, :oban)) ++
+            [:queue, :length, :count],
           event_name: @event,
           description: "Jobs in the queue in the designated (non-terminal) state",
           measurement: :count,
