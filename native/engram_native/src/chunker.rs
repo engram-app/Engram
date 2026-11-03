@@ -930,7 +930,8 @@ fn may_have_heading(s: &str) -> bool {
 }
 
 fn segment_headings_guarded(s: &str, at: usize, out: &mut Vec<Heading>) -> Option<usize> {
-    // pulldown-cmark 0.13.4 panics on some valid input (see links).
+    // pulldown-cmark 0.13 has panicked on valid input (see links). Fixed as
+    // of 0.13.6; kept as belt-and-braces for the next parser bug.
     // ponytail: a panicking segment loses its headings, not the note; its
     // text still chunks under the previous heading.
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -953,8 +954,9 @@ fn segment_headings(s: &str, at: usize, out: &mut Vec<Heading>) -> Option<usize>
                 let src = &s[r.clone()];
                 let text = heading_text(src);
                 if !text.is_empty() {
-                    // After a link reference definition, pulldown-cmark can
-                    // start a setext heading on the blank line before it.
+                    // pulldown-cmark 0.13.4 started a setext heading on the
+                    // blank line after a link reference definition; 0.13.6
+                    // does not. Belt-and-braces: the trim costs nothing.
                     let lead = src.len() - src.trim_start().len();
                     out.push(Heading {
                         level: level as usize,
@@ -1604,6 +1606,26 @@ mod tests {
             assert!(c.1.len() <= MAX_CHUNK + MAX_PREFIX + 2);
             assert!(c.2.len() <= MAX_CHUNK + MAX_PREFIX + 2);
         }
+    }
+
+    // Pins pulldown-cmark 0.13.6: a setext heading after a refdef and a
+    // whitespace-only line starts at its own text, not the blank line.
+    // A parser bump that moves it fails here.
+    #[test]
+    fn setext_after_a_refdef_and_blank_line_starts_at_its_text() {
+        let s = "[x]: /u\n    \nTitle\n===\nbody";
+        let start = s.find("Title").unwrap();
+        let raw: Vec<_> = Parser::new_ext(s, Options::ENABLE_TABLES)
+            .into_offset_iter()
+            .filter_map(|(e, r)| matches!(e, Event::Start(Tag::Heading { .. })).then_some(r))
+            .collect();
+        assert_eq!(raw.len(), 1, "{raw:?}");
+        assert_eq!(raw[0].start, start, "parser moved the heading start");
+        let (spans, _) = heading_spans(s, usize::MAX);
+        assert_eq!(spans.len(), 1, "{spans:?}");
+        let (level, from, to, text) = &spans[0];
+        assert_eq!((*level, *from, text.as_str()), (1, start, "Title"));
+        assert_eq!(s[*from..*to].trim_end(), "Title\n===");
     }
 
     #[test]
