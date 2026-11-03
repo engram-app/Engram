@@ -158,14 +158,19 @@ defmodule Engram.Notes.NoteBody do
 
   # The 32-byte digest as the url-safe, unpadded base64 `notes.crdt_head`
   # holds (a 32-byte base64 is 44 chars, one `=`, no line break).
+  # The no-body fallback reads `notes.crdt_head` by a per-row subquery that
+  # only such a row runs, not as a column of the outer `notes` scan: the
+  # manifest reads every live note of a vault, and its `notes` side must stay
+  # an index-only scan of `notes_manifest`, which does not carry the head
+  # (head stores would lose HOT). EngramWeb.SyncManifestPlanTest.
   defp field_expr(:crdt_head) do
     dynamic(
       [n, note_body: b],
       type(
         fragment(
-          "CASE WHEN ? IS NULL THEN ? ELSE rtrim(translate(encode(?, 'base64'), '+/', '-_'), '=') END",
+          "CASE WHEN ? IS NULL THEN (SELECT h.crdt_head FROM notes AS h WHERE h.id = ?) ELSE rtrim(translate(encode(?, 'base64'), '+/', '-_'), '=') END",
           b.note_id,
-          n.crdt_head,
+          n.id,
           b.crdt_head
         ),
         :string

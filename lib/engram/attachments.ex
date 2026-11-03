@@ -2373,11 +2373,13 @@ defmodule Engram.Attachments do
   """
   def storage_usage(user) do
     Repo.with_tenant(user.id, fn ->
+      # `count()`, not `count(a.id)`: `id` is never NULL, and the sum then
+      # reads `attachments_user_live_size` alone (index-only).
       from(a in Attachment,
         where: a.user_id == ^user.id and is_nil(a.deleted_at),
         select: %{
           used_bytes: type(coalesce(sum(a.size_bytes), 0), :integer),
-          file_count: count(a.id)
+          file_count: count()
         }
       )
       |> Repo.one()
