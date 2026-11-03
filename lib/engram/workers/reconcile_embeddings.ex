@@ -32,8 +32,8 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     EmbedNote: a note that exhausts its attempts is parked for a cooldown window
     so it can't re-bill Voyage every tick)
 
-  Uses the partial index notes_reconcile_due (its predicate is this filter
-  once IndexVersions is done). Every stale
+  Uses the partial index notes_reconcile_due_v2 (its predicate is this filter
+  once IndexVersions is done, less the unchanged budget parks). Every stale
   note is queued in one tick, a page at a time; nothing caps a tick. The embed
   queue's concurrency and priority are the throttle: backfill runs at
   priority 9, behind every live edit, and Voyage 429s snooze.
@@ -370,6 +370,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
                    n.embed_retry_after == ^EmbedNote.parked_until_edited() and ^stale)
             )
           )
+          |> due_only(ids, vaults)
           |> oldest_ids(remaining)
 
         # #897 — crash-independent backoff, done ATOMICALLY. EmbedNote's poison
@@ -436,7 +437,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       end
     end
 
-    # The version term defeats the `notes_reconcile_due` partial index, so
+    # The version term defeats the `notes_reconcile_due_v2` partial index, so
     # while it is on the sweep asks one id window at a time (#2276); once
     # IndexVersions is done the index serves it, one statement per page.
     found = %{now: now, kick?: get_in(job.meta, ["kick"]) == true, qdrant_open?: qdrant_open?}
@@ -1469,10 +1470,34 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     do: fn -> Repo.with_tenant!(user_id, fn -> page_counts(page.(repo, ids), handle) end) end
 
   # The eligible notes' ids, oldest `updated_at` first. Unwindowed,
-  # `notes_reconcile_due` serves it once IndexVersions is done; over an id
-  # window the rows were read by primary key (`IndexVersions.live_notes/1`).
+  # `notes_reconcile_due_v2` serves it (with `due_only/3`) once IndexVersions
+  # is done; over an id window the rows were read by primary key
+  # (`IndexVersions.live_notes/1`).
   defp oldest_ids(eligible, limit),
     do: eligible |> order_by([n], asc: n.updated_at) |> limit(^limit) |> select([n], n.id)
+
+  # The fleet sweep with no id window reads `notes_reconcile_due_v2`, which
+  # leaves out a budget-parked note whose content is unchanged:
+  # `WakeBudgetParked` owns it (a job at the time its bucket can pay, and
+  # `wake_budget_parked/1` below, which wakes a paying user's parks in this
+  # same run). Without it every sweep read and rejected each parked note
+  # (prod: 1,662). The clause is the index predicate's, verbatim, so a generic
+  # plan can prove it. A window (a version rollout) or a restore's vault list
+  # keeps every park: their version arm rebuilds them.
+  defp due_only(query, nil = _ids, nil = _vaults) do
+    where(
+      query,
+      [n],
+      fragment(
+        "(? IS NOT TRUE OR ? IS DISTINCT FROM ?)",
+        n.embed_budget_parked,
+        n.embed_hash,
+        n.content_hash
+      )
+    )
+  end
+
+  defp due_only(query, _ids, _vaults), do: query
 
   defp in_vaults(query, nil), do: query
   defp in_vaults(query, vault_ids), do: where(query, [n], n.vault_id in ^vault_ids)

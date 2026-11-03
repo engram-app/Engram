@@ -199,7 +199,7 @@ defmodule Engram.NotesWholeVaultPlanTest do
     plans =
       QueryPlan.after_runs(
         uncached(fn -> {:ok, [_ | _]} = FieldCatalog.list(u, v) end),
-        ~r/"notes" AS s?n0 LEFT OUTER JOIN "note_bodies"/
+        ~r/unnest\(.*LEFT OUTER JOIN "note_bodies"/s
       )
 
     assert_pkey_only(plans)
