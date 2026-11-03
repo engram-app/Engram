@@ -32,9 +32,12 @@ def is_e2e_clerk_email(email: str) -> bool:
 # Staging (Clerk `key-longhorn-79`, shared with local saas-dev) has no CI
 # churn, only ad-hoc agent/QA accounts. Convention (AGENTS.md): every such
 # account uses the `+clerk_test@example.com` tag, so the reaper owns it.
-# `load-sim-uNN` accounts are reused by e2e/load/sim.py and must survive.
+# `load-sim-uNN` accounts are reused by e2e/load/sim.py (its default
+# `--prefix`) and must survive. Any OTHER prefix is disposable: a sim run with
+# `--prefix load-big`, or first_sync_proof.py's `fsproof-*` users, is reaped.
 STAGING_TEST_EMAIL_SUFFIX = "+clerk_test@example.com"
-STAGING_KEEP_PREFIX = "load-sim-"
+LOAD_SIM_PREFIX = "load-sim"
+STAGING_KEEP_PREFIX = f"{LOAD_SIM_PREFIX}-"
 
 
 def is_staging_test_clerk_email(email: str) -> bool:

@@ -8,10 +8,17 @@ once BOTH creation and last activity are older than `--older-than`.
 """
 
 import importlib.util
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from helpers.clerk_constants import is_e2e_clerk_email, is_staging_test_clerk_email
+import pytest
+
+from helpers.clerk_constants import (
+    LOAD_SIM_PREFIX,
+    is_e2e_clerk_email,
+    is_staging_test_clerk_email,
+)
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "cleanup_clerk_users.py"
 _spec = importlib.util.spec_from_file_location("cleanup_clerk_users", _SCRIPT)
@@ -120,5 +127,145 @@ def test_ci_age_gate_ignores_activity():
     assert reaper.is_old_enough(u, NOW, timedelta(hours=1), "ci") is True
 
 
-def test_targets_read_separate_secret_env_vars():
-    assert reaper.SECRET_ENV == {"ci": "E2E_CLERK_SECRET_KEY", "staging": "STAGING_CLERK_SECRET_KEY"}
+def test_staging_activity_uses_most_recent_timestamp():
+    # last_active_at present but older than a fresh sign-in: the sign-in wins.
+    u = _user("t+clerk_test@example.com", created=timedelta(days=30),
+              active=timedelta(days=20), sign_in=timedelta(hours=3))
+    assert reaper.is_old_enough(u, NOW, WEEK, "staging") is False
+
+
+@pytest.mark.parametrize("field", ["phone_numbers", "external_accounts", "web3_wallets",
+                                   "enterprise_accounts"])
+def test_staging_user_with_other_identifiers_is_kept(field):
+    u = _user("tabtest+clerk_test@example.com")
+    u[field] = [{"id": "x"}]
+    assert reaper.is_target_user(u, "staging") is False
+
+
+def test_sim_default_prefix_is_the_kept_prefix():
+    from load import sim
+
+    assert sim.LOAD_SIM_PREFIX == LOAD_SIM_PREFIX
+    assert not is_staging_test_clerk_email(f"{LOAD_SIM_PREFIX}-u01+clerk_test@example.com")
+
+
+# ── main() end to end, HTTP mocked ───────────────────────────────────────
+
+REAL_NOW = datetime.now(timezone.utc)
+OLD = int((REAL_NOW - timedelta(days=30)).timestamp() * 1000)
+
+
+def _stale(email, uid):
+    return {"id": uid, "email_addresses": [{"email_address": email}],
+            "created_at": OLD, "last_active_at": OLD, "last_sign_in_at": None}
+
+
+class _Resp:
+    def __init__(self, status=200, body=None):
+        self.status_code, self._body = status, body
+        self.ok, self.text = status < 400, ""
+
+    def json(self):
+        return self._body
+
+    def raise_for_status(self):
+        assert self.ok
+
+
+class _FakeSession:
+    def __init__(self, users, delete_status=200):
+        self.users, self.delete_status = users, delete_status
+        self.headers, self.gets, self.deletes = {}, 0, []
+
+    def get(self, url, params=None, timeout=None):
+        self.gets += 1
+        return _Resp(body=self.users if params["offset"] == 0 else [])
+
+    def delete(self, url, timeout=None):
+        self.deletes.append(url.rsplit("/", 1)[1])
+        return _Resp(self.delete_status)
+
+
+@pytest.fixture
+def run(monkeypatch):
+    def _run(argv, users=(), env=None, delete_status=200):
+        sess = _FakeSession(list(users), delete_status)
+        monkeypatch.setattr(reaper.requests, "Session", lambda: sess)
+        monkeypatch.setattr(reaper.time, "sleep", lambda _s: None)
+        for k in reaper.SECRET_ENV.values():
+            monkeypatch.delenv(k, raising=False)
+        for k, v in (env or {}).items():
+            monkeypatch.setenv(k, v)
+        monkeypatch.setattr(sys, "argv", ["cleanup_clerk_users.py", *argv])
+        code = 0
+        try:
+            reaper.main()
+        except SystemExit as e:
+            code = e.code
+        return code, sess
+    return _run
+
+
+STAGING = ["--target", "staging", "--older-than", "7d"]
+STG_KEY = {"STAGING_CLERK_SECRET_KEY": "sk_test_stg"}
+USERS = [
+    _stale("tabtest+clerk_test@example.com", "u1"),
+    _stale("load-sim-u01+clerk_test@example.com", "u2"),
+    _stale("todd@engram.page", "u3"),
+    _stale("qc-flows+clerk_test@example.com", "u4"),
+]
+
+
+def test_main_staging_deletes_only_tagged_users(run):
+    code, sess = run(STAGING, USERS, STG_KEY)
+    assert code == 0 and sess.deletes == ["u1", "u4"]
+
+
+def test_main_staging_dry_run_issues_no_delete(run):
+    code, sess = run([*STAGING, "--dry-run"], USERS, STG_KEY)
+    assert code == 0 and sess.gets >= 1 and sess.deletes == []
+
+
+def test_main_staging_ignores_the_ci_key(run):
+    code, sess = run(STAGING, USERS, {"E2E_CLERK_SECRET_KEY": "sk_test_ci"})
+    assert code == 1 and sess.gets == 0 and sess.deletes == []
+
+
+def test_main_staging_requires_older_than(run):
+    code, sess = run(["--target", "staging"], USERS, STG_KEY)
+    assert code == 2 and sess.gets == 0
+
+
+@pytest.mark.parametrize("window", ["0s", "12h", "23h"])
+def test_main_staging_rejects_window_below_one_day(run, window):
+    code, sess = run(["--target", "staging", "--older-than", window], USERS, STG_KEY)
+    assert code == 2 and sess.gets == 0
+
+
+def test_main_staging_refuses_live_key(run):
+    code, sess = run(STAGING, USERS, {"STAGING_CLERK_SECRET_KEY": "sk_live_prod"})
+    assert code == 1 and sess.gets == 0 and sess.deletes == []
+
+
+def test_main_refuses_over_cap_before_any_delete(run):
+    code, sess = run([*STAGING, "--max-deletes", "1"], USERS, STG_KEY)
+    assert code == 1 and sess.deletes == []
+
+
+def test_main_staging_default_cap_is_40(run):
+    many = [_stale(f"t{i}+clerk_test@example.com", f"u{i}") for i in range(41)]
+    code, sess = run(STAGING, many, STG_KEY)
+    assert code == 1 and sess.deletes == []
+    code, sess = run(STAGING, many[:40], STG_KEY)
+    assert code == 0 and len(sess.deletes) == 40
+
+
+def test_main_failed_delete_exits_nonzero_after_trying_all(run):
+    code, sess = run(STAGING, USERS, STG_KEY, delete_status=500)
+    assert code == 1 and sess.deletes == ["u1", "u4"]
+
+
+def test_main_ci_target_unchanged(run):
+    users = [_stale("e2e-a+clerk_test@example.com", "c1"), *USERS]
+    code, sess = run(["--older-than", "1h"], users, {"E2E_CLERK_SECRET_KEY": "sk_test_ci"})
+    assert code == 0 and sess.deletes == ["c1"]
