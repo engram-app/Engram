@@ -41,13 +41,24 @@ defmodule Engram.Repo.TenancyGuard do
   behaviour, which made a guard built on it capable of reporting `:enforced`
   on a deployment where RLS demonstrably was not.
 
-  So the probe asks the server, per table, whether row security applies to
-  this connection: `row_security_active(oid)`, which folds in BYPASSRLS,
-  superuser, ownership without FORCE and a table with RLS disabled, whatever
-  `pg_roles` claims. `false` on any tenant table is bypassed. It reads the
-  catalog only. (It used to read a row of every tenant table under a tenant
-  that owns nothing; proving "no row visible" read the whole table, up to
-  7.3 s per boot on prod `chunk_points`.)
+  So the probe asks four questions, none of which reads a whole table:
+
+    1. `row_security_active(oid)` per tenant table: false for RLS disabled, an
+       owner without FORCE, BYPASSRLS or a superuser.
+    2. Is `current_user` the app role? The maintenance role's
+       `maintenance_all ... USING (true)` policies admit every row with every
+       flag right.
+    3. The policies: every permissive policy that applies to this role must
+       be the table's tenant predicate (or an allowed "no tenant set"
+       discovery policy), and every table must have one. A `USING (true)`
+       policy passes 1 and 2; this catches it.
+    4. The behaviour, index-bounded: under a tenant that owns nothing, can a
+       row of a real user be read? `user_id = ANY(<20 ids>) LIMIT 1` on each
+       table whose index leads with `user_id`, so it is index descents, never
+       the full-table read the old probe needed to prove "nothing visible"
+       (up to 7.3 s per boot on prod `chunk_points`). It still reads a row it
+       does not own: that is the measurement (#1726, role membership, which
+       no attribute shows).
 
   Every tenant table is probed, not just one, because RLS state is per-table
   and this repo toggles it per-table as routine practice — ten migrations
@@ -105,6 +116,8 @@ defmodule Engram.Repo.TenancyGuard do
 
   # A tenant that owns nothing. Any row visible while this is the current
   # tenant belongs to somebody else, which is the whole question.
+  import Ecto.Query, only: [from: 2]
+
   @nobody "00000000-0000-0000-0000-000000000000"
 
   @doc """
@@ -316,28 +329,113 @@ defmodule Engram.Repo.TenancyGuard do
   defp probe_all_tenant_tables do
     names = Enum.map(Engram.Repo.tenant_tables(), &Atom.to_string/1)
 
-    # `row_security_active/1` is the server's own answer for THIS role on THIS
-    # table: it folds in BYPASSRLS, superuser, table ownership without FORCE and
-    # a table with RLS disabled, the cases the row probe looked for. It reads
-    # the catalog, never the table: the row probe proved "nothing visible" by
-    # reading the whole table under RLS (prod `chunk_points`: up to 7.3 s per
-    # boot, Job Load Audit 2026-11-03), and a time-boxed row probe would
-    # report a slow leak as clean.
-    case Engram.Repo.query(
+    # Four checks, none of which can scan a table (the old row probe proved
+    # "nothing visible" by reading the whole table under RLS: prod
+    # `chunk_points` up to 7.3 s per boot, Job Load Audit 2026-11-03). Any
+    # one failing is a bypass; all passing is still no opinion, as before.
+    cond do
+      rls_inactive?(names) -> :bypassed
+      not app_role?() -> :bypassed
+      leaky_policy?(names) -> :bypassed
+      rows_visible?(names) -> :bypassed
+      true -> :unknown
+    end
+  end
+
+  # 1. Catalog: `row_security_active/1` is false for a table with RLS
+  #    disabled, an owner without FORCE, BYPASSRLS or a superuser.
+  defp rls_inactive?(names) do
+    case query(
            """
            SELECT bool_and(row_security_active(c.oid)), count(*)
            FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
            WHERE n.nspname = 'public' AND c.relname = ANY($1)
            """,
-           [names],
-           source: "tenancy_guard"
+           [names]
          ) do
-      {:ok, %{rows: [[false, _]]}} -> :bypassed
-      {:ok, %{rows: [[true, n]]}} when n == length(names) -> :unknown
-      # A tenant table missing from the catalog, or a failed read: no opinion.
-      _ -> :unknown
+      {:ok, %{rows: [[true, n]]}} -> n != length(names)
+      {:ok, _} -> true
+      _ -> false
     end
   end
+
+  # 2. The connection is the app role. The maintenance role (whose
+  #    `maintenance_all ... USING (true)` policies admit every row), or any
+  #    other role, reads other tenants' rows with every flag right.
+  defp app_role? do
+    case query("SELECT current_user::text", []) do
+      {:ok, %{rows: [[role]]}} -> role == app_role()
+      _ -> true
+    end
+  end
+
+  @doc false
+  def app_role, do: Application.get_env(:engram, :app_db_role, "engram_app")
+
+  # Permissive policies that may apply to the app role besides the tenant
+  # predicates: `subscriptions_discovery` matches only with NO tenant set (the
+  # webhook lookup by Paddle id); its qual is checked, not just its name.
+  @discovery_policies ["subscriptions_discovery"]
+
+  # 3. Policies: every permissive policy that applies to `current_user`
+  #    (PUBLIC, or a role it is a member of) must be the table's tenant
+  #    predicate on `app.current_tenant`, or an allowed discovery policy whose
+  #    qual is "no tenant set". A `USING (true)` policy, a tenant policy that
+  #    does not test the tenant, or a table with no tenant policy fails.
+  @policy_audit """
+  WITH t AS (
+    SELECT c.oid, c.relname FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relname = ANY($1)),
+  p AS (
+    SELECT t.relname, p.polname, pg_get_expr(p.polqual, p.polrelid) AS qual
+    FROM pg_policy p JOIN t ON t.oid = p.polrelid
+    WHERE p.polpermissive
+      AND (0 = ANY(p.polroles) OR EXISTS (
+        SELECT 1 FROM unnest(p.polroles) r
+        WHERE r <> 0 AND pg_has_role(current_user, r, 'USAGE'))))
+  SELECT
+    EXISTS (SELECT 1 FROM p
+            WHERE NOT (p.polname = 'tenant_isolation_' || p.relname
+                       AND p.qual LIKE '%user_id = %app.current_tenant%')
+              AND NOT (p.polname = ANY($2)
+                       AND p.qual LIKE '%COALESCE(%app.current_tenant%) = %'))
+    OR EXISTS (SELECT 1 FROM t WHERE NOT EXISTS (
+            SELECT 1 FROM p WHERE p.relname = t.relname
+              AND p.polname = 'tenant_isolation_' || t.relname))
+  """
+
+  defp leaky_policy?(names) do
+    case query(@policy_audit, [names, @discovery_policies]) do
+      {:ok, %{rows: [[leaky]]}} -> leaky
+      _ -> false
+    end
+  end
+
+  # 4. Behaviour, index-bounded: under a tenant that owns nothing, can a row
+  #    of a real user be read? Each read is `user_id = ANY(<up to 20 user
+  #    ids>)` with LIMIT 1 on a table whose index leads with `user_id`: at most
+  #    20 index descents, never a scan. A table without such an index is
+  #    covered by checks 1-3.
+  @user_id_indexed """
+  SELECT DISTINCT c.relname FROM pg_index i
+  JOIN pg_class c ON c.oid = i.indrelid
+  JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
+  WHERE c.relname = ANY($1) AND a.attname = 'user_id'
+  """
+
+  defp rows_visible?(names) do
+    with {:ok, %{rows: [_ | _] = users}} <-
+           query("SELECT id FROM users ORDER BY id LIMIT 20", []),
+         {:ok, %{rows: tables}} <- query(@user_id_indexed, [names]) do
+      ids = Enum.map(users, fn [id] -> Ecto.UUID.load!(id) end)
+      Enum.any?(tables, fn [table] -> visible?(String.to_existing_atom(table), ids) end)
+    else
+      _ -> false
+    end
+  end
+
+  defp query(sql, params), do: Engram.Repo.query(sql, params, source: "tenancy_guard")
 
   defp current_tenant do
     case Engram.Repo.query("SELECT current_setting('app.current_tenant', true)", [],
@@ -354,6 +452,23 @@ defmodule Engram.Repo.TenancyGuard do
     Engram.Repo.query("SELECT set_config('app.current_tenant', $1, true)", [value],
       source: "tenancy_guard"
     )
+  end
+
+  # One clause per tenant table, generated at COMPILE time: a structured query,
+  # because a table name cannot be a bind parameter and interpolated SQL is a
+  # security-scanner finding. `skip_tenant_check: true` is the accurate
+  # declaration: the probe set a tenant that owns nothing and asks the SERVER
+  # whether the policy filters; the ORM tripwire would refuse the query first.
+  for table <- Engram.Repo.tenant_tables() do
+    defp visible?(unquote(table), ids) do
+      Engram.Repo.exists?(
+        from(t in unquote(Atom.to_string(table)),
+          where: t.user_id in type(^ids, {:array, Ecto.UUID})
+        ),
+        skip_tenant_check: true,
+        source: "tenancy_guard"
+      )
+    end
   end
 
   @doc """

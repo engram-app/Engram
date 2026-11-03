@@ -87,6 +87,57 @@ defmodule Engram.Repo.TenancyGuardTest do
       assert verdict == :bypassed
     end
 
+    # Each failure mode the catalog flags alone cannot see must report
+    # bypassed (red on 156c2fd94, whose only check was row_security_active).
+    defp as_app(setup_sql) do
+      {:error, verdict} =
+        Repo.transaction(fn ->
+          for sql <- setup_sql, do: Repo.query!(sql)
+          Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
+          Repo.rollback(TenancyGuard.observed_enforcement())
+        end)
+
+      verdict
+    end
+
+    test "a permissive USING (true) policy is a bypass" do
+      assert as_app([
+               "CREATE POLICY leak ON rebuild_manifest_vaults FOR SELECT USING (true)"
+             ]) == :bypassed
+    end
+
+    test "a table with no tenant policy is a bypass" do
+      assert as_app([
+               "DROP POLICY tenant_isolation_rebuild_manifest_vaults ON rebuild_manifest_vaults"
+             ]) == :bypassed
+    end
+
+    test "a tenant policy that does not test the tenant is a bypass" do
+      assert as_app([
+               "ALTER POLICY tenant_isolation_rebuild_manifest_vaults ON rebuild_manifest_vaults USING (true)"
+             ]) == :bypassed
+    end
+
+    test "the app credential on the maintenance role is a bypass" do
+      {:error, verdict} =
+        Repo.transaction(fn ->
+          Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_maintenance")
+          Repo.rollback(TenancyGuard.observed_enforcement())
+        end)
+
+      assert verdict == :bypassed
+    end
+
+    test "a real user's row visible under a tenant that owns nothing is a bypass" do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      _ = insert(:note, user: user, vault: vault)
+
+      assert as_app([
+               "CREATE POLICY leak2 ON notes FOR SELECT TO engram_app USING (true)"
+             ]) == :bypassed
+    end
+
     test "every tenant table is checked, as the RLS-subject role none leaks" do
       {:error, verdict} =
         Repo.transaction(fn ->
@@ -100,7 +151,7 @@ defmodule Engram.Repo.TenancyGuardTest do
     # Red on c0c603cb9: the probe read every tenant table (under a 250 ms
     # timeout that counted as "no leak" and leaked into the caller). It now
     # reads the catalog only and sets no session state.
-    test "the probe reads no tenant table and sets no timeout" do
+    test "the probe reads a tenant table only by user_id and sets no timeout" do
       {_, queries} =
         Engram.QueryRecorder.record(fn ->
           Repo.transaction(fn ->
@@ -113,7 +164,10 @@ defmodule Engram.Repo.TenancyGuardTest do
       refute Enum.any?(sqls, &(&1 =~ "statement_timeout"))
 
       for table <- Engram.Repo.tenant_tables(),
-          do: refute(Enum.any?(sqls, &(&1 =~ ~s(FROM "#{table}"))), "read #{table}")
+          sql <- sqls,
+          sql =~ ~s(FROM "#{table}"),
+          do:
+            assert(sql =~ ~s("user_id" = ANY), "#{table} read without the user_id bound: #{sql}")
     end
 
     test "leaves the caller's tenant untouched" do
