@@ -150,14 +150,22 @@ embedder. Rollout order and rollback rule: `docs/context/payload-v6.md`.
 
 ## Off after the pass is the steady state
 
-`Rebuild.target_versions/0` under `off`/`dry_run` is the build's versions once
-ANY `index_versions:chunker=<build>,keyword=<build>,model=*` ledger row is
-complete (`IndexVersions.completed?/1`, cached 30 s), else the pins `{3, 2}`.
-So after the v5 pass, turning `INDEX_REBUILD` off stamps edits 5 / 5 (what
-their points hold) instead of regressing them to 3 / 2. A self-host install
-that never ran the pass has no such row and keeps the pins: its pre-v5 notes
-stay current and nothing re-embeds. The model is left out of the match because
-it has its own stale term.
+`Rebuild.target_versions/0` under `off`/`dry_run` is the newest completed
+`index_versions:chunker=C,keyword=K,model=*` pass (`IndexVersions.newest_completed/1`:
+any model, any ledger version, capped at the build, cached 30 s), never below
+the pins `{3, 2}`. So after the v5 pass, turning `INDEX_REBUILD` off stamps
+edits 5 / 5 (what their points hold) instead of regressing them to 3 / 2, and
+the next chunker or keyword bump keeps stamping 5 / 5 until ITS pass completes.
+A self-host install that never ran the v5 pass has only the pre-v5 row (or
+none) and keeps the pins: its old notes stay current and nothing re-embeds.
+The model is left out because it has its own stale term.
+
+Accepted risk: an install that completed a pass, rolled back to an older
+chunker, edited notes there, then rolled forward finds those edits
+version-stale against the completed pass under `off`, and rebuilds them
+without the `on` pacing or ledger. The stamps are honest (those points really
+are older), the case needs a rollback across a completed pass, and the
+rebuild is the correct work.
 
 A cleared keyword stamp after the ledger closed (payload drift heal in
 `ReconcileNotePayloads`) used to wait for the daily re-verify: the prod v5

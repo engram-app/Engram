@@ -112,9 +112,8 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
 
     # Self-host on old data: only the pre-v5 row (or none) is complete. The
     # pins hold, so its {3, 2} notes stay current and nothing re-embeds.
-    test "off without a completed build row keeps the pins, so old data stays current" do
+    test "off without a completed v5 pass keeps the pins, so old data stays current" do
       complete!("index_versions:chunker=3,keyword=2,model=voyage-4-large")
-      complete!("index_versions:chunker=5,keyword=4,model=voyage-4-large")
       DataMigrations.note_open("index_versions:chunker=5,keyword=5,model=voyage-4-large", 1)
       mode!("off")
 
@@ -128,6 +127,30 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
       for worker <- [EmbedNote, RebuildStaleNote, RefreshKeywordVectors] do
         refute_enqueued(worker: worker, args: %{"note_id" => note.id})
       end
+    end
+  end
+
+  describe "newest_completed/1" do
+    test "the next bump keeps the last completed pass, not the pins" do
+      complete!("index_versions:chunker=3,keyword=2,model=voyage-4-large")
+      complete!("index_versions:chunker=5,keyword=5,model=voyage-4-large")
+      DataMigrations.note_open("index_versions:chunker=6,keyword=6,model=voyage-4-large", 1)
+
+      assert IndexVersions.newest_completed({6, 6}) == {5, 5}
+    end
+
+    test "capped at the build, nil when nothing completed" do
+      assert IndexVersions.newest_completed({5, 5}) == nil
+      complete!("index_versions:chunker=5,keyword=5,model=voyage-4-large")
+      assert IndexVersions.newest_completed({4, 4}) == {4, 4}
+    end
+
+    test "off: a completed 5/4 pass targets 5/4 (never below it, never the pins)" do
+      complete!("index_versions:chunker=3,keyword=2,model=voyage-4-large")
+      complete!("index_versions:chunker=5,keyword=4,model=voyage-4-large")
+      mode!("off")
+
+      assert Rebuild.target_versions() == {5, 4}
     end
   end
 

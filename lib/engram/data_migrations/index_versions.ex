@@ -8,8 +8,8 @@ defmodule Engram.DataMigrations.IndexVersions do
   of them is a new, not-done migration.
 
   The versions are `Engram.Rebuild.target_versions/0`: the build's while
-  `INDEX_REBUILD=on` or once their pass completed (`completed?/1`), else the
-  pinned pre-v5 versions. A stamp bump past the pins renames nothing and
+  `INDEX_REBUILD=on`, else the newest completed pass (`newest_completed/1`),
+  never below the pinned pre-v5 versions. A stamp bump past the pins renames nothing and
   rebuilds nothing until the switch is `on`, which reopens the migration.
   """
   @behaviour Engram.DataMigration
@@ -27,26 +27,38 @@ defmodule Engram.DataMigrations.IndexVersions do
   def name, do: prefix(Rebuild.target_versions()) <> (Indexing.embed_model() || "none")
 
   @doc """
-  True once a pass at `{chunker, keyword}` has completed under ANY embed
-  model: every content-current note then held those versions. The model is
-  left out because it has its own stale term (`stale_dynamic/1`), so a model
-  change must not send `off` back to the pre-v5 pins. Read by
-  `Rebuild.target_versions/0` to make the build's versions `off`'s target.
+  The newest `{chunker, keyword}` pass that has completed, under ANY embed
+  model and ledger `version/0`, each capped at `build` (a rollback build
+  older than the pass keeps its own); nil when none has. Every content-current
+  note held at least those versions when it closed. The model is left out
+  because it has its own stale term (`stale_dynamic/1`), and the ledger
+  version because a bump that reopens the pass does not unmake what the old
+  one proved. Read by `Rebuild.target_versions/0`, so `off` keeps stamping the
+  last completed pass after the next chunker or keyword bump.
   """
-  @spec completed?({pos_integer(), pos_integer()}) :: boolean()
-  def completed?(versions) do
-    pattern = prefix(versions) <> "%"
-
-    Repo.exists?(
-      from(e in DataMigrations.Entry,
-        where: like(e.name, ^pattern) and e.version >= ^version() and not is_nil(e.completed_at)
-      )
+  @spec newest_completed({pos_integer(), pos_integer()}) :: {pos_integer(), pos_integer()} | nil
+  def newest_completed({build_chunker, build_keyword}) do
+    from(e in DataMigrations.Entry,
+      where: like(e.name, "index_versions:%") and not is_nil(e.completed_at),
+      select: e.name
     )
+    |> Repo.all()
+    |> Enum.flat_map(fn name ->
+      case Regex.run(~r/^index_versions:chunker=(\d+),keyword=(\d+),model=/, name) do
+        [_, c, k] ->
+          [{min(String.to_integer(c), build_chunker), min(String.to_integer(k), build_keyword)}]
+
+        nil ->
+          []
+      end
+    end)
+    |> Enum.max(fn -> nil end)
   end
 
   defp prefix({chunker, keyword}),
     do: "index_versions:chunker=#{chunker},keyword=#{keyword},model="
 
+  # Bumping this reopens the pass; `newest_completed/1` ignores it on purpose.
   @impl true
   def version, do: 1
 
