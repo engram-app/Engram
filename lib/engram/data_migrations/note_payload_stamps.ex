@@ -17,13 +17,18 @@ defmodule Engram.DataMigrations.NotePayloadStamps do
   """
   @behaviour Engram.DataMigration
 
+  alias Engram.Indexing.PayloadV6
   alias Engram.Workers.ReconcileNotePayloads
 
   @impl true
   def name, do: "note_payload_stamps"
 
+  # Follows the payload shape: `PayloadV6.version/0` is 5 at the baseline, so
+  # this is 1 today, and a shape bump is a new, not-done version whose pass
+  # queues every note with an older `payload_version` (the drain only sees
+  # NULL stamps). One source of truth for "points are behind".
   @impl true
-  def version, do: 1
+  def version, do: PayloadV6.version() - PayloadV6.baseline() + 1
 
   @impl true
   def run_pass do

@@ -423,6 +423,23 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
   end
 
+  # The drain probes only `payload_hash IS NULL`; a payload-shape bump is a new
+  # ledger version instead (`NotePayloadStamps.version/0` follows
+  # `PayloadV6.version/0`), so the runner's pass re-checks every note once.
+  # Red before: the version was pinned at 1, the done ledger skipped, and with
+  # no daily re-verify the stale-version notes never healed.
+  test "a payload_version bump reopens the done ledger and queues the stale notes", ctx do
+    assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+    assert Engram.Workers.DataMigrationsRunner.run(NotePayloadStamps) == :done
+    v1 = NotePayloadStamps.version()
+
+    Engram.ServiceConfig.put_override(:payload_version, Engram.Indexing.PayloadV6.version() + 1)
+    assert NotePayloadStamps.version() == v1 + 1
+
+    assert Engram.Workers.DataMigrationsRunner.run(NotePayloadStamps) == :more
+    assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
+  end
+
   test "a rotation that starts mid-job snoozes it before any write", ctx do
     uid = ctx.user.id
 
