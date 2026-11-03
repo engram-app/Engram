@@ -1097,10 +1097,32 @@ defmodule Engram.Workers.EmbedNote do
          model \\ Indexing.embed_model()
        )
 
-  defp stamp_embed_hash(%Note{content_hash: nil} = note, _dense?, _count, _pass, _park, _m),
-    do: CrashGuard.clear(note, :ok)
+  # A NULL content_hash is a legacy never-checkpointed row (the old bare
+  # genesis shape). Stamping nothing left `embed_hash` NULL, so the sweep
+  # re-selected it as `never_embedded` on every run, forever. Stamp the hash
+  # of the content this pass indexed instead: `embed_hash` means "this content
+  # is indexed", and SQL's `embed_hash != NULL` is not true, so the sweep
+  # stops. `content_hash` stays NULL: it is the sync manifest's checkpoint
+  # hash and only a write sets it. The checkpoint that sets it changes it, and
+  # queues its own NoteCommitted.
+  defp stamp_embed_hash(%Note{content_hash: nil} = note, dense?, count, pass, park, model) do
+    case indexed_hash(note) do
+      {:ok, hash} -> stamp(note, hash, dense?, count, pass, park, model)
+      _ -> CrashGuard.clear(note, :ok)
+    end
+  end
 
-  defp stamp_embed_hash(note, dense?, chunk_count, pass, sparse_park, model) do
+  defp stamp_embed_hash(note, dense?, count, pass, park, model),
+    do: stamp(note, note.content_hash, dense?, count, pass, park, model)
+
+  defp indexed_hash(note) do
+    with %User{} = user <- Accounts.get_user(note.user_id),
+         {:ok, decrypted} <- Crypto.maybe_decrypt_note_fields(note, user),
+         do: Engram.Notes.content_hash(user, decrypted.content || "")
+  end
+
+  # `hash`: the content hash this pass indexed, stamped as embed_hash.
+  defp stamp(note, hash, dense?, chunk_count, pass, sparse_park, model) do
     # `embed_hash` = "this content is indexed" (keyword and/or dense).
     # `dense_indexed_hash` = "this content has dense vectors in Qdrant".
     # Keeping them separate is what lets ReconcileEmbeddings backfill the
@@ -1127,14 +1149,14 @@ defmodule Engram.Workers.EmbedNote do
         # vectors (Indexing reports `dense? = true` only on that branch).
         chunk_count == 0 and dense? ->
           [
-            dense_indexed_hash: note.content_hash,
+            dense_indexed_hash: hash,
             embed_model: model,
             embed_retry_after: nil
           ] ++ @queue_clear
 
         dense? ->
           [
-            dense_indexed_hash: note.content_hash,
+            dense_indexed_hash: hash,
             embed_model: model,
             embed_retry_after: nil
           ] ++ @queue_clear
@@ -1186,7 +1208,7 @@ defmodule Engram.Workers.EmbedNote do
 
     set =
       [
-        embed_hash: note.content_hash,
+        embed_hash: hash,
         # A full pass read the frontmatter under the current key alias table.
         key_alias_version: Engram.Notes.KeyAliases.version()
       ] ++ set
@@ -1203,7 +1225,13 @@ defmodule Engram.Workers.EmbedNote do
     {:ok, {count, stamped}} =
       Repo.with_tenant(note.user_id, fn ->
         from(n in Note,
-          where: n.id == ^note.id and n.content_hash == ^note.content_hash,
+          where: n.id == ^note.id,
+          where:
+            fragment(
+              "? IS NOT DISTINCT FROM ?",
+              n.content_hash,
+              type(^note.content_hash, :string)
+            ),
           update: [set: ^set],
           select: n.chunker_version
         )

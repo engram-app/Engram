@@ -53,7 +53,6 @@ defmodule Engram.Notes do
   alias Engram.Workers.{
     DeleteNoteIndex,
     EmbedNote,
-    FinalizeRevision,
     NoteCommitted,
     ReleaseIndexEntries,
     RepathNoteIndex,
@@ -1217,8 +1216,9 @@ defmodule Engram.Notes do
           end
 
         case do_bare_insert(base_attrs, user, sanitized_path, folder, note_id, lookup_query) do
+          # Tagged so commit_content/4 knows do_bare_insert/7 queued its job.
           {:inserted, inserted, crdt} ->
-            {:ok, {nil, inserted, crdt.merged_text, crdt.content_hash}}
+            {:ok, {:inserted, inserted, crdt.merged_text, crdt.content_hash}}
 
           {:raced, existing} ->
             # Concurrent create won; report a version conflict (→ 409) the client
@@ -1289,8 +1289,10 @@ defmodule Engram.Notes do
          lookup_query,
          remint? \\ true
        ) do
-    # `crdt_doc` (genesis only) rides in the attrs so a re-mint keeps it.
+    # `crdt_doc` (genesis only) and `embed_opts` (the upsert's write opts) ride
+    # in the attrs so a re-mint keeps them.
     {crdt_doc, insert_attrs} = Map.pop(base_attrs, :crdt_doc)
+    {write_opts, insert_attrs} = Map.pop(insert_attrs, :embed_opts, [])
 
     with {:ok, crdt} <-
            maybe_merge_crdt(
@@ -1322,6 +1324,21 @@ defmodule Engram.Notes do
       # writer (append, move, rename, get_note_for_update/3) takes the vault row
       # first, so inserting first and locking after deadlocks against them
       # (Postgres 40P01). Pinned by crdt_create_query_budget_test.exs.
+      # R6 outbox for EVERY inserted row, bodied or bare, empty or not: a bare
+      # row whose body never lands only ever sees compacting checkpoints, which
+      # queue nothing, so this is its one job (R6 missed-18). Before the seq
+      # bump so it is not made under the vault seq lock (#1710); every leg
+      # below that did not insert this id discards it. Accepted cost: a bare
+      # row whose body lands later gets a second job from that checkpoint.
+      # Both dispatch the same unique EmbedNote/ExtractNoteLinks inserts, which
+      # collapse, so it is one extra `events` job and no extra embed.
+      job =
+        NoteCommitted.insert!(
+          note_id,
+          user.id,
+          embed_opts(%Note{}, write_opts) ++ [finalize?: false]
+        )
+
       # Test seam: a competing row can land here (a path or id race).
       interleave_hook(:before_bare_insert)
       seq = Engram.Vaults.next_seq!(insert_attrs.vault_id)
@@ -1336,9 +1353,12 @@ defmodule Engram.Notes do
               {:inserted, inserted, crdt}
 
             %Note{} = existing ->
+              :ok = NoteCommitted.discard!(job)
               {:raced, existing}
 
             nil when remint? ->
+              :ok = NoteCommitted.discard!(job)
+
               remint_own_id(
                 base_attrs,
                 user,
@@ -1350,10 +1370,12 @@ defmodule Engram.Notes do
               )
 
             nil ->
+              :ok = NoteCommitted.discard!(job)
               {:error, Ecto.Changeset.add_error(changeset, :path, "insert raced and vanished")}
           end
 
         {:error, changeset} ->
+          :ok = NoteCommitted.discard!(job)
           {:error, changeset}
       end
     end
@@ -1482,7 +1504,7 @@ defmodule Engram.Notes do
       {result, seed_outcome} = take_seed(result)
 
       announced =
-        case finalize_moved_revision(result, user) do
+        case result do
           # Only genesis_resurrect/genesis_insert_bare tag their success with
           # :announce (a REAL create/resurrect). The idempotent same-path and
           # adopt-existing-live-note branches change nothing, so they return a
@@ -1553,21 +1575,6 @@ defmodule Engram.Notes do
     end
   end
 
-  # #1710: a relocate/resurrect that changed content (uncheckpointed CRDT tail
-  # folded in by move_note) may have closed a version. Enqueue its finalize
-  # here, after the write's transaction, the same position as
-  # ContentCommit.enqueue_jobs/3. The flag is Revisions.finalize?/3; strip it
-  # so the clauses above see the plain 3-tuple.
-  defp finalize_moved_revision({:ok, {:ok, note, tag, finalize?}}, user) do
-    _ =
-      if finalize?,
-        do: Enqueue.enqueue(FinalizeRevision.job(note.id, user.id), "finalize_revision")
-
-    {:ok, {:ok, note, tag}}
-  end
-
-  defp finalize_moved_revision(result, _user), do: result
-
   defp initial_claim(opts) do
     if Keyword.get(opts, :index, :claim) == :skip, do: {:done, false}, else: :pending
   end
@@ -1606,9 +1613,6 @@ defmodule Engram.Notes do
   defp probe_vault_populated({:ok, _note, :announce} = result, g),
     do: tap(result, fn _ -> :ok = maybe_broadcast_vault_populated(g.user, g.vault) end)
 
-  defp probe_vault_populated({:ok, _note, :announce, _finalize?} = result, g),
-    do: tap(result, fn _ -> :ok = maybe_broadcast_vault_populated(g.user, g.vault) end)
-
   defp probe_vault_populated({:ok, _note, :announce_bodied} = result, g),
     do: tap(result, fn _ -> :ok = maybe_broadcast_vault_populated(g.user, g.vault) end)
 
@@ -1626,10 +1630,6 @@ defmodule Engram.Notes do
   # the caller seeds after the fact exactly as before.
   defp seed_in_txn({:ok, note, :announce} = result, %{seed: seed}) when is_function(seed, 1),
     do: {:seeded, result, seed.(note)}
-
-  defp seed_in_txn({:ok, note, :announce, _finalize?} = result, %{seed: seed})
-       when is_function(seed, 1),
-       do: {:seeded, result, seed.(note)}
 
   # The body went into the INSERT itself (`:body`, genesis_insert_bare/7): no
   # checkpoint is needed, the seed fun only learns it (`{:inserted, note}`).
@@ -1994,7 +1994,7 @@ defmodule Engram.Notes do
           }
 
           case move_note(decrypted, base_attrs, user, sanitized_path, folder, "sync", recording) do
-            {:ok, {:moved, prev_hash, updated, _merged_text, content_hash}} ->
+            {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
               case Crypto.maybe_decrypt_note_fields(updated, user) do
                 {:ok, moved} ->
                   Logger.info(
@@ -2021,8 +2021,8 @@ defmodule Engram.Notes do
                   # Carry the OLD path so the post-commit handler can fan an
                   # old-path delete to peers (a web receiver has no local mirror
                   # to drop the note from its old folder otherwise).
-                  {:ok, moved, {:announce_moved, decrypted.path},
-                   Revisions.finalize?(recording, prev_hash, content_hash)}
+                  # A content change's finalize rides move_note's NoteCommitted.
+                  {:ok, moved, {:announce_moved, decrypted.path}}
 
                 {:error, reason} ->
                   log_resurrect_decrypt_failure(reason, user, updated)
@@ -2133,7 +2133,7 @@ defmodule Engram.Notes do
       }
 
       case move_note(prior, base_attrs, user, sanitized_path, folder, "sync", recording) do
-        {:ok, {:moved, prev_hash, updated, _merged_text, content_hash}} ->
+        {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
           case Crypto.maybe_decrypt_note_fields(updated, user) do
             {:ok, decrypted} ->
               # #648 Phase 2 — a resurrect-rename IS a rename (move_note over a
@@ -2150,7 +2150,7 @@ defmodule Engram.Notes do
               # A rename-restore carries the OLD (tombstone) path so peers clear
               # it; a same-path resurrect just announces.
               tag = if renamed?, do: {:announce_moved, prior.path}, else: :announce
-              {:ok, decrypted, tag, Revisions.finalize?(recording, prev_hash, content_hash)}
+              {:ok, decrypted, tag}
 
             {:error, reason} ->
               log_resurrect_decrypt_failure(reason, user, updated)
@@ -2217,31 +2217,19 @@ defmodule Engram.Notes do
       # Shared create leg with insert_new_note/7 (do_bare_insert/6) — genesis
       # decrypts inline and tags :announce (a real create), a version_conflict
       # on a concurrent-create race.
-      # R6 outbox: a bodied create's job goes in BEFORE the insert, so it is
-      # not made under the vault seq lock the insert takes (#1710); a create
-      # that did not insert discards it.
-      job = if body && base_attrs.content != "", do: commit_genesis_body(id, user)
-
+      # R6 outbox: do_bare_insert/7 queues the row's job, under whichever id
+      # it lands (`remint_own_id/7` can re-mint on an id race).
       case do_bare_insert(base_attrs, user, sanitized_path, folder, id, lookup_query) do
         {:inserted, inserted, _crdt} when is_nil(body) ->
           {:ok, decrypt_or_raise!(inserted, user), :announce}
 
-        # `remint_own_id/7` can land the note under a fresh id (an id race):
-        # its job follows it.
-        {:inserted, %Note{id: ^id} = inserted, _crdt} ->
-          {:ok, decrypt_or_raise!(inserted, user), :announce_bodied}
-
         {:inserted, inserted, _crdt} ->
-          :ok = discard_job(job)
-          _ = if job, do: commit_genesis_body(inserted.id, user)
           {:ok, decrypt_or_raise!(inserted, user), :announce_bodied}
 
         {:raced, existing} ->
-          :ok = discard_job(job)
           {:error, :version_conflict, decrypt_or_raise!(existing, user)}
 
         {:error, _} = err ->
-          :ok = discard_job(job)
           err
       end
     end
@@ -2251,6 +2239,11 @@ defmodule Engram.Notes do
   # in the write's own transaction (this runs inside `with_tenant`, or inside
   # an MCP tool call's outer transaction), so the job commits or rolls back
   # with the write. A pure rename keeps its hash and queues nothing.
+  # An insert: do_bare_insert/7 already queued its job. Untag to the plain
+  # shape, where a nil prev hash means "created".
+  defp commit_content({:ok, {:inserted, note, text, hash}}, _user, _opts, _recording),
+    do: {:ok, {nil, note, text, hash}}
+
   defp commit_content({:ok, {prev_hash, note, _text, _hash}} = written, user, opts, recording),
     do: commit_content(written, prev_hash, note, user, opts, recording)
 
@@ -2282,19 +2275,6 @@ defmodule Engram.Notes do
       do: [embed_priority: 0, embed_settle: :agent],
       else: [embed_priority: EmbedNote.priority_for(note)]
   end
-
-  # The content jobs the seed's checkpoint used to enqueue for a genesis body:
-  # its outbox row, in the create's own transaction (R6). A new note was never
-  # embedded, so it ranks as backfill (`EmbedNote.priority_for/1`).
-  defp commit_genesis_body(id, user) do
-    NoteCommitted.insert!(id, user.id,
-      embed_priority: EmbedNote.backfill_priority(),
-      finalize?: false
-    )
-  end
-
-  defp discard_job(nil), do: :ok
-  defp discard_job(job), do: NoteCommitted.discard!(job)
 
   # Phase 0 stale-base gate: a writer that declares the content_hash it READ
   # (`base_hash`) gets compare-and-swap semantics — if the row moved, the
@@ -2436,7 +2416,14 @@ defmodule Engram.Notes do
         end
 
       nil ->
-        insert_new_note(base_attrs, user, sanitized_path, folder, client_id, lookup_query)
+        insert_new_note(
+          Map.put(base_attrs, :embed_opts, opts),
+          user,
+          sanitized_path,
+          folder,
+          client_id,
+          lookup_query
+        )
     end
   end
 
@@ -2506,15 +2493,17 @@ defmodule Engram.Notes do
     {write_opts, db_opts} = Keyword.pop(opts, :embed_opts, actor: actor)
 
     was_tombstoned = not is_nil(prior.deleted_at)
+    {incoming, merge_doc} = unedited_merge(prior, base_attrs.content, user)
 
     with {:ok, crdt} <-
            maybe_merge_crdt(
              prior,
-             base_attrs.content,
+             incoming,
              user,
              prior.id,
              prior.vault_id,
-             sanitized_path
+             sanitized_path,
+             merge_doc
            ) do
       merged_attrs =
         keep_stored_ctime(
@@ -2541,6 +2530,30 @@ defmodule Engram.Notes do
           |> inject_frontmatter_fields(user, prior.id, crdt.merged_text)
           |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
           |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
+
+        # R6 outbox. A revived tombstone: the delete dropped its index
+        # (embed hashes nulled, points gone), so it needs its jobs even when
+        # the content is unchanged. A changed hash: the move folded the
+        # uncheckpointed CRDT tail into the content, and the room's next
+        # checkpoint then sees no change and queues nothing (R6 missed-18).
+        # Every caller (REST id-keyed move, CRDT relocate and resurrect, link
+        # rewriter) goes through here. Before the seq bump, so it is not made
+        # under the vault seq lock (#1710); a write that lands nothing
+        # discards it.
+        queue? = was_tombstoned or prior.content_hash != crdt.content_hash
+
+        job =
+          if queue? and outbox?,
+            do:
+              NoteCommitted.insert!(
+                prior.id,
+                user.id,
+                embed_opts(prior, write_opts) ++
+                  [
+                    finalize?:
+                      Revisions.finalize?(recording, prior.content_hash, crdt.content_hash)
+                  ]
+              )
 
         seq = Engram.Vaults.next_seq!(prior.vault_id)
         folder_ref = folder_ref_for(refs, user, prior.vault_id, folder)
@@ -2580,35 +2593,9 @@ defmodule Engram.Notes do
               if prior.content_hash != crdt.content_hash,
                 do: Revisions.record_write(prior, actor, recording)
 
-            # R6 outbox for a revived tombstone: the delete dropped its index
-            # (embed hashes nulled, points gone), so it needs its jobs even
-            # when the content is unchanged, and every caller (REST id-keyed
-            # restore, CRDT resurrect, link rewriter) goes through here. The
-            # returned prev hash is then the new one, so a caller that queues
-            # on a hash change does not queue twice.
-            prev_hash =
-              if was_tombstoned do
-                _ =
-                  if outbox?,
-                    do:
-                      NoteCommitted.insert!(
-                        prior.id,
-                        user.id,
-                        embed_opts(updated, write_opts) ++
-                          [
-                            finalize?:
-                              Revisions.finalize?(
-                                recording,
-                                prior.content_hash,
-                                crdt.content_hash
-                              )
-                          ]
-                      )
-
-                crdt.content_hash
-              else
-                prior.content_hash
-              end
+            # A queued job means the returned prev hash is the new one, so a
+            # caller that queues on a hash change does not queue twice.
+            prev_hash = if queue?, do: crdt.content_hash, else: prior.content_hash
 
             # Tagged `:moved` (not the plain 4-tuple do_rewrite_note returns) so
             # the caller broadcasts unconditionally: a rename keeps the same
@@ -2619,14 +2606,46 @@ defmodule Engram.Notes do
             {:ok, {:moved, prev_hash, updated, crdt.merged_text, crdt.content_hash}}
 
           {:error, changeset} ->
+            :ok = discard_job(job)
             {:error, changeset}
 
           :stale_snapshot ->
+            :ok = discard_job(job)
             :stale_snapshot
         end
       end
     end
   end
+
+  defp discard_job(nil), do: :ok
+  defp discard_job(job), do: NoteCommitted.discard!(job)
+
+  # A relocate, resurrect or restore passes the stored text back: no edit. Its
+  # merge must keep every uncheckpointed tail edit, so it takes the
+  # tail-replayed doc as it is. Diffing the stored text into it deleted them
+  # wherever the snapshot did not hold that text (a bare row, a pre-CRDT row):
+  # R6 missed-18. Everything else takes the normal merge, which writes the
+  # stored text back: no tail, a non-markdown doc (a `.canvas` keeps its data
+  # in Y.Maps, so its projection is "" and would wipe the board), or a
+  # projection the feed would not trust either (`trust_projection?/5`).
+  # The id-keyed REST rename (`upsert_pathless/1`) is the one caller that
+  # passes client text, and it passes an undecrypted row: the virtual
+  # `content` is nil, so it never takes this path.
+  defp unedited_merge(%Note{content: content} = prior, content, user) when is_binary(content) do
+    with true <- CrdtBridge.markdown_path?(prior.path),
+         [_ | _] = rows <- CrdtPersistence.tail_rows(prior.id, prior.vault_id),
+         {:ok, state} <- Crypto.decrypt_crdt_state(prior, user),
+         {:ok, doc} <- CrdtBridge.doc_from_state(state),
+         applied = CrdtPersistence.apply_tail_rows(doc, user, prior.id, rows),
+         text = CrdtBridge.project_doc(doc),
+         true <- trust_projection?("move", prior.id, user, {text, applied, rows}, content) do
+      {text, doc}
+    else
+      _ -> {content, nil}
+    end
+  end
+
+  defp unedited_merge(_prior, incoming, _user), do: {incoming, nil}
 
   # PathSanitizer can silently rewrite an input path (drop `..`, strip illegal
   # chars, truncate). The note then lives at a path the client never asked for,
@@ -3070,16 +3089,7 @@ defmodule Engram.Notes do
   # Returns the merged text, with its content_hash, title (`path` is the
   # fallback) and tags, all from the MERGED result — the public-API contract
   # is "server merges, never clobbers."
-  defp maybe_merge_crdt(
-         existing,
-         incoming_content,
-         user,
-         note_id,
-         vault_id,
-         path,
-         merge_doc \\ nil
-       )
-
+  #
   # A locked read-modify-write: `merge_doc` is this row's snapshot with the tail
   # already replayed, and `incoming_content` was derived from its projection.
   # Diffing two-way into it applies exactly the caller's edit. The three-way
@@ -5889,52 +5899,11 @@ defmodule Engram.Notes do
       {:ok, doc} ->
         applied = CrdtPersistence.apply_tail_rows(doc, user, row.id, tail_rows)
         text = CrdtBridge.project_doc(doc)
+        stored = fresh.content || ""
 
-        cond do
-          # A tail row that would not decrypt was logged and SKIPPED, so the
-          # projection is missing ops — non-empty but truncated, which the
-          # empty-projection guard below cannot see. A DEK fault mid-rotation
-          # would otherwise ship a body with the newest edits missing.
-          #
-          # Race-free now that the rows are held rather than re-queried: a short
-          # replay means a decrypt genuinely failed, not that a checkpoint pruned
-          # the tail underneath us.
-          length(applied) < length(tail_rows) ->
-            Logger.warning(
-              "feed: partial CRDT tail replay",
-              Metadata.with_category(:warning, :sync,
-                note_id: row.id,
-                user_id: user.id,
-                applied: length(applied),
-                tail_rows: length(tail_rows)
-              )
-            )
-
-            # Degrading to the row is only safe when the row HAS a body. A
-            # never-checkpointed note has none — `genesis_insert_bare` leaves
-            # content: "" and the whole body in the tail — so "serve the last
-            # checkpoint" would serve "", and the client's discovery leg writes
-            # that to disk and pushes the empty hash back. That is #1339, reached
-            # through the one undecryptable tail row this branch exists for.
-            # A truncated projection is strictly better: the room heals the
-            # missing ops, and a 0-byte file does not.
-            if (fresh.content || "") == "", do: %{fresh | content: text}, else: fresh
-
-          # The read-side mirror of `ensure_projection_safe/2`. The write path
-          # refuses to materialize "" over a façade that holds a body — "pure
-          # data loss" in its own words — and the read path needs the same
-          # backstop.
-          text == "" and (fresh.content || "") != "" ->
-            Logger.warning(
-              "feed: CRDT projection is empty over a non-empty facade, serving the facade",
-              Metadata.with_category(:warning, :sync, note_id: row.id, user_id: user.id)
-            )
-
-            fresh
-
-          true ->
-            %{fresh | content: text}
-        end
+        if trust_projection?("feed", row.id, user, {text, applied, tail_rows}, stored),
+          do: %{fresh | content: text},
+          else: fresh
 
       {:error, reason} ->
         Logger.error(
@@ -5947,6 +5916,50 @@ defmodule Engram.Notes do
         )
 
         fresh
+    end
+  end
+
+  # The ONE rule for trusting a tail-replayed projection over the stored
+  # facade, shared by the sync feed (`project_resolved/5`) and move_note's
+  # no-edit merge (`unedited_merge/3`). `replay` is {text, applied ids, rows}.
+  #
+  #   * A short replay: a tail row would not decrypt and was logged and
+  #     SKIPPED, so the projection is missing ops, non-empty but truncated. A
+  #     DEK fault mid-rotation would otherwise ship (or store) a body with the
+  #     newest edits missing. Race-free: the caller holds the rows it applied,
+  #     so a short replay means a decrypt failed, not that a checkpoint pruned
+  #     the tail underneath it. The facade wins, unless it has no body: a
+  #     never-checkpointed note keeps its whole body in the tail, and "" is
+  #     #1339 (a 0-byte file the client pushes back). A truncated projection is
+  #     strictly better: the room heals the missing ops, and a 0-byte file
+  #     does not.
+  #   * The mirror of `ensure_projection_safe/2`: "" over a facade that holds
+  #     a body is pure data loss. The facade wins.
+  defp trust_projection?(source, note_id, user, {text, applied, rows}, stored) do
+    cond do
+      length(applied) < length(rows) ->
+        Logger.warning(
+          "#{source}: partial CRDT tail replay",
+          Metadata.with_category(:warning, :sync,
+            note_id: note_id,
+            user_id: user.id,
+            applied: length(applied),
+            tail_rows: length(rows)
+          )
+        )
+
+        stored == ""
+
+      text == "" and stored != "" ->
+        Logger.warning(
+          "#{source}: CRDT projection is empty over a non-empty facade, serving the facade",
+          Metadata.with_category(:warning, :sync, note_id: note_id, user_id: user.id)
+        )
+
+        false
+
+      true ->
+        true
     end
   end
 

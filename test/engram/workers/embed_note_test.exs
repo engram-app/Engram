@@ -125,6 +125,33 @@ defmodule Engram.Workers.EmbedNoteTest do
   end
 
   describe "perform/1" do
+    # R6 missed-18 / delta Q3: a legacy row with a NULL content_hash used to
+    # stamp nothing, so the backup sweep re-selected it as never_embedded,
+    # and counted it missed, on every run forever.
+    test "a NULL-hash empty note is stamped once and not re-swept",
+         %{bypass: bypass, user: user, vault: vault} do
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "Empty.md", content: ""})
+
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.update_all(from(n in Note, where: n.id == ^note.id),
+            set: [content_hash: nil, embed_hash: nil, dense_indexed_hash: nil]
+          )
+        end)
+
+      Repo.delete_all(Oban.Job)
+      stub_qdrant_optional(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id, user_id: user.id})
+
+      stamped = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert is_nil(stamped.content_hash)
+      assert {:ok, stamped.embed_hash} == Notes.content_hash(user, "")
+
+      assert :ok = perform_job(Engram.Workers.ReconcileEmbeddings, %{})
+      refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+    end
+
     test "indexes note and returns :ok", %{bypass: bypass, note: note} do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn texts ->
