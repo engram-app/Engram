@@ -172,6 +172,17 @@ defmodule Engram.Notes.NoteBody do
                 """}
              end)
 
+  # The ids among $1 whose body row exists and disagrees with its notes row
+  # in any copied column: the same per-field tests `sync!/3` writes on, all
+  # fields at once (`drift_ids/2`).
+  all_differ = Enum.map_join([:content, :crdt, :head], " OR ", &elem(copy[&1], 1))
+
+  @drift_sql """
+  SELECT n.id::text FROM notes n JOIN note_bodies b ON b.note_id = n.id
+  WHERE n.id = ANY($1) AND n.kind = 'note'
+    AND (b.user_id <> n.user_id OR b.key_version <> #{key_version} OR #{all_differ})
+  """
+
   @doc """
   Every `Note` field except the CRDT state, about half of a note's stored
   bytes: for reads that need the content but never the doc.
@@ -265,6 +276,12 @@ defmodule Engram.Notes.NoteBody do
   trigger's own change test). A row already in step (the trigger just
   wrote it) is not touched, so a save writes it once.
 
+  Emits `[:engram, :note_body, :sync_wrote]` (`%{count: rows}`) when it
+  wrote anything (`engram_prom_ex_notes_body_sync_wrote_rows_total`). While
+  the trigger is live that means the trigger left a row behind; it should
+  stay at zero, which is the evidence the release dropping the trigger
+  waits for.
+
   Options: `:repo` (default `Engram.Repo`, or the maintenance repo a ledger
   runs on); the rest go to the query (`mode: :savepoint`,
   `skip_tenant_check:` is ignored by raw SQL and harmless).
@@ -279,6 +296,7 @@ defmodule Engram.Notes.NoteBody do
     {repo, opts} = Keyword.pop(opts, :repo, Repo)
     sql = Map.fetch!(@sync_sql, synced_fields(written))
     %{rows: [[n]]} = repo.query!(sql, [Enum.map(ids, &Ecto.UUID.dump!/1)], opts)
+    if n > 0, do: :telemetry.execute([:engram, :note_body, :sync_wrote], %{count: n}, %{})
     n
   end
 
@@ -405,38 +423,19 @@ defmodule Engram.Notes.NoteBody do
   end
 
   @doc """
-  True when a note's body row disagrees with its `notes` row, for a query
-  through `join/1` restricted to rows that HAVE a body: the nonce each side
-  carries (the read's own split, `nonce_expr/2`), the AEAD tag (the last 16
-  bytes, which differ for any other ciphertext under the same nonce), and
-  the head. Slices and varlena headers only, nothing is de-TOASTed. For
-  `Engram.DataMigrations.NoteSplit`'s drift report.
+  The notes among `ids` whose body row exists and disagrees with its `notes`
+  row in any column `sync!/3` copies (the owner too: a body row owned by
+  another user is invisible to every read, which joins on the owner). The
+  same comparison `sync!/3` writes on, so the two cannot disagree: slices
+  and varlena headers only, nothing is de-TOASTed. For
+  `Engram.DataMigrations.NoteSplit`'s drift report; `repo` is the pool the
+  caller walks with.
   """
-  @spec drift() :: Ecto.Query.dynamic_expr()
-  def drift do
-    content = differs(:content_ct, :content_nonce, :content_ciphertext)
-    crdt = differs(:crdt_ct, :crdt_state_nonce, :crdt_state_ciphertext)
-    head = field_expr(:crdt_head)
+  @spec drift_ids(module(), [Ecto.UUID.t()]) :: [Ecto.UUID.t()]
+  def drift_ids(_repo, []), do: []
 
-    dynamic(
-      [n],
-      ^content or ^crdt or fragment("? IS DISTINCT FROM ?", ^head, n.crdt_head)
-    )
-  end
-
-  defp differs(body, notes_nonce, notes_ct) do
-    nonce = nonce_expr(body, notes_nonce)
-
-    dynamic(
-      [n, note_body: b],
-      fragment("? IS DISTINCT FROM ?", ^nonce, field(n, ^notes_nonce)) or
-        fragment(
-          "substring(? FROM greatest(octet_length(?) - 15, 1)) IS DISTINCT FROM substring(? FROM greatest(octet_length(?) - 15, 1))",
-          field(b, ^body),
-          field(b, ^body),
-          field(n, ^notes_ct),
-          field(n, ^notes_ct)
-        )
-    )
+  def drift_ids(repo, ids) do
+    %{rows: rows} = repo.query!(@drift_sql, [Enum.map(ids, &Ecto.UUID.dump!/1)])
+    Enum.map(rows, fn [id] -> id end)
   end
 end

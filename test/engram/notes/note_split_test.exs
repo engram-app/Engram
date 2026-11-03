@@ -231,6 +231,7 @@ defmodule Engram.Notes.NoteSplitTest do
     defmodule FleetRepo do
       @moduledoc false
       def all(query), do: Engram.Repo.all(query, skip_tenant_check: true)
+      def query!(sql, params), do: Engram.Repo.query!(sql, params)
     end
 
     test "a body row owned by another user is drift; a clean one is not", %{user: u, vault: v} do
