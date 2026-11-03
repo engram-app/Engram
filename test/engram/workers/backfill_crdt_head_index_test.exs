@@ -19,7 +19,20 @@ defmodule Engram.Workers.BackfillCrdtHeadIndexTest do
 
   # Red before the change: discovery was an id-window walk of `notes`
   # (`SELECT id FROM notes WHERE id > ...`) with no `note_bodies` statement.
-  test "discovery reads the NULL heads from note_bodies' partial index, not notes" do
+  test "discovery reads the NULL heads from note_bodies' partial index, not notes", %{
+    user: u,
+    vault: v
+  } do
+    # Realistic statistics: most bodies carry a head, so a primary-key walk
+    # filtering on `crdt_head IS NULL` costs more than the partial index.
+    for i <- 1..150 do
+      {:ok, _} = Notes.upsert_note(u, v, %{"path" => "w#{i}.md", "content" => "w"}, actor: "api")
+    end
+
+    head = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+    Repo.query!("UPDATE notes SET crdt_head = $1 WHERE path_ciphertext IS NOT NULL", [head])
+    Repo.query!("UPDATE notes SET crdt_head = NULL WHERE id = (SELECT id FROM notes ORDER BY id LIMIT 1)")
+
     {count, queries} = QueryRecorder.record(fn -> BackfillCrdtHead.enqueue_all() end)
     assert count == 1
 

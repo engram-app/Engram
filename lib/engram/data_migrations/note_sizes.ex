@@ -12,10 +12,10 @@ defmodule Engram.DataMigrations.NoteSizes do
   """
   @behaviour Engram.DataMigration
 
+  import Ecto.Query
+
   alias Engram.Backfill.IdWindows
   alias Engram.Notes.Note
-
-  import Ecto.Query
 
   @batch 1_000
 

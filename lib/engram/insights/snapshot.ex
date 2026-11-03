@@ -30,6 +30,7 @@ defmodule Engram.Insights.Snapshot do
   alias Engram.Attachments.Attachment
   alias Engram.Billing
   alias Engram.Billing.UserLimitOverride
+  alias Engram.DataMigrations.NoteSizes
   alias Engram.Insights.UserDailyMetric
   alias Engram.Insights.VaultDailyMetric
   alias Engram.Links.NoteLink
@@ -308,7 +309,7 @@ defmodule Engram.Insights.Snapshot do
     seqs = Map.new(repo.all(from(v in Vault, where: v.id in ^ids, select: {v.id, v.change_seq})))
     # With trigger-kept sizes the weekly byte rescan is not needed.
     since =
-      if Engram.DataMigrations.NoteSizes.done?(),
+      if NoteSizes.done?(),
         do: ~D[1970-01-01],
         else: Date.add(day, -@rescan_days)
 
@@ -343,7 +344,7 @@ defmodule Engram.Insights.Snapshot do
   end
 
   defp notes_in(ids) do
-    from(x in Engram.DataMigrations.NoteSizes.live_totals_by_vault(), where: x.vault_id in ^ids)
+    from(x in NoteSizes.live_totals_by_vault(), where: x.vault_id in ^ids)
   end
 
   # Once `NoteSizes` is done the stored sizes are trigger-kept, so a copied
@@ -352,7 +353,7 @@ defmodule Engram.Insights.Snapshot do
   defp refresh_sizes(rows, _repo, []), do: rows
 
   defp refresh_sizes(rows, repo, ids) do
-    if Engram.DataMigrations.NoteSizes.done?() do
+    if NoteSizes.done?() do
       totals =
         ids |> notes_in() |> repo.all(timeout: @chunk_timeout) |> Map.new(&{&1.vault_id, &1})
 
