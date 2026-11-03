@@ -24,7 +24,7 @@ unicode-normalization = "0.1"
 unicode-segmentation = "1"
 regex = "1"
 snowball_stemmers_rs = "1.0.1"
-pulldown-cmark = { version = "0.13", default-features = false }
+pulldown-cmark = { version = "0.13.5", default-features = false }
 ryu = "1"
 # Fuzzy name search for the vault name index (names.rs); helix's matcher.
 nucleo-matcher = "0.3"

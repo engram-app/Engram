@@ -1,0 +1,7 @@
+[advisories]
+ignore = [
+  # smallstr is unmaintained: an informational warning, not a vulnerability.
+  # Transitive via yrs only, and no yrs release (through 0.28.0) drops it.
+  # Remove when yrs does: https://github.com/engram-app/Engram/issues/2385
+  "RUSTSEC-2026-0215",
+]
