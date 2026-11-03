@@ -66,6 +66,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   alias Engram.Crypto.RotationGate
   alias Engram.Indexing
   alias Engram.Indexing.PayloadV6
+  alias Engram.Jobs
   alias Engram.Logger.Metadata
   alias Engram.Notes.{Chunk, Note, NoteBody, NoteIndexState}
   alias Engram.Repo
@@ -567,20 +568,36 @@ defmodule Engram.Workers.ReconcileNotePayloads do
           # We wrote this note's points from the row we read and the stamp
           # missed: an index committed (and stamped) in between, and our
           # write may have replaced its fresher payload.
-          {0, _} when wrote? -> Indexing.unstamp_payload_hash(note)
-          {0, _} -> :ok
-          {_, _} -> if Keyword.fetch!(opts, :versioned?), do: put_version(note), else: :ok
+          {0, _} when wrote? ->
+            Indexing.unstamp_payload_hash(note)
+
+          {0, _} ->
+            :ok
+
+          {_, _} ->
+            if resparse?, do: queue_refresh(note)
+            if Keyword.fetch!(opts, :versioned?), do: put_version(note), else: :ok
         end
       end)
 
-    # The cleared stamp is healed now, not by the keyword sweep: once
-    # `IndexVersions` is done that sweep runs only in the daily re-verify, so
-    # the note searched on stale sparse vectors for up to a day (the prod v5
-    # gate's one keyword-stale note, 2026-11-02). Queued on a missed stamp
-    # too: a redundant resparse costs no embedder call, and the job's own
-    # compare-and-set stamps only the row it read.
-    # ponytail: one insert per drifted note; rare outside a DEK rotation.
-    _ = if resparse?, do: Oban.insert(RefreshKeywordVectors.new_for_note(note.id, note.user_id))
+    :ok
+  end
+
+  # The stamp this transaction clears is healed now, not by the keyword sweep:
+  # once `IndexVersions` is done that sweep runs only in the daily re-verify,
+  # so the note searched on stale sparse vectors for up to a day (the prod v5
+  # gate's one keyword-stale note, 2026-11-02). Raises inside the clearing
+  # transaction, so the NULL and its job commit together or not at all. A
+  # running job does not count as pending: it read the old stamp, so its
+  # compare-and-set misses and this one heals the note.
+  # ponytail: one insert per drifted note; rare outside a DEK rotation.
+  defp queue_refresh(note) do
+    _ =
+      RefreshKeywordVectors
+      |> Jobs.reject_pending([note.id], executing: false)
+      |> Enum.map(&RefreshKeywordVectors.new_for_note(&1, note.user_id))
+      |> Jobs.insert_chunked()
+
     :ok
   end
 

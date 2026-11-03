@@ -146,6 +146,33 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     )
   end
 
+  # The NULL and its job commit together: a lost insert would strand the note
+  # until the daily re-verify, the gap the enqueue closes.
+  test "a failed refresh insert rolls the cleared stamp back with it", ctx do
+    Repo.query!("""
+    CREATE FUNCTION pg_temp.refuse_refresh() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN RAISE EXCEPTION 'refresh insert refused'; END $$
+    """)
+
+    Repo.query!("""
+    CREATE TRIGGER refuse_refresh BEFORE INSERT ON oban_jobs FOR EACH ROW
+    WHEN (NEW.worker = 'Engram.Workers.RefreshKeywordVectors')
+    EXECUTE FUNCTION pg_temp.refuse_refresh()
+    """)
+
+    before = reload(ctx.stale).keyword_version
+    refute before == nil
+
+    try do
+      perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+    rescue
+      _ -> :ok
+    end
+
+    assert reload(ctx.stale).keyword_version == before
+    refute_enqueued(worker: Engram.Workers.RefreshKeywordVectors)
+  end
+
   test "reports what it checked and rewrote", ctx do
     ref =
       :telemetry_test.attach_event_handlers(self(), [[:engram, :indexing, :payload_reconcile]])
