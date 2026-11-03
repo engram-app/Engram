@@ -1,8 +1,8 @@
 # Context Doc: Disaster Recovery & Backup Readiness
 
-_Last verified: 2026-09-05 (live AWS + Qdrant Cloud read, launch-minimum). Qdrant section updated 2026-10-25 from TF._
+_Last verified: 2026-09-05 (live AWS + Qdrant Cloud read, baseline). Qdrant section updated 2026-10-25 from TF._
 
-> **Why this exists:** "A backup that's never been restored isn't a backup." This is the launch-minimum DR runbook for engram prod (AWS account `751667630925`, region `us-east-1`). One paragraph per failure scenario; it **links** to the existing rotation runbooks rather than restating them. Tracks issue #255.
+> **Why this exists:** "A backup that's never been restored isn't a backup." This is the baseline DR runbook for engram prod (AWS account `751667630925`, region `us-east-1`). One paragraph per failure scenario; it **links** to the existing rotation runbooks rather than restating them. Tracks issue #255.
 
 ## Prod topology (data stores)
 
@@ -12,7 +12,7 @@ _Last verified: 2026-09-05 (live AWS + Qdrant Cloud read, launch-minimum). Qdran
 | **S3 attachments** | `engram-saas-prod-attachments-751667630925` | Bucket versioning, noncurrent versions expire at 30 days | ✅ versioning **Enabled**; delete→restore proof **PASSED** (see below) |
 | **Qdrant Cloud** | `engram-saas-prod-v3` (serves `QDRANT_URL`; mx1, 1 node, v1.19.2), plus `engram-saas-prod` and `-v2` | Cloud backups (volume snapshots), daily 15:00 UTC, 14-day retention, every prod cluster | ✅ schedules in TF with `delete_backups_on_destroy = false` (engram-infra `main/envs/prod/qdrant.tf`, checked 2026-10-25); **restore not drilled**. Re-embed from Postgres is the fallback (see below) |
 
-Single-AZ is intentional at launch (RPO/RTO acceptable for a low-customer-count launch; multi-AZ promoted post-launch when traffic/SLO justify it — explicitly out of scope here).
+Single-AZ is intentional today (RPO/RTO accepted at current customer count; multi-AZ is the next step when traffic/SLO justify it — explicitly out of scope here).
 
 ## Verified backup posture
 
@@ -90,7 +90,7 @@ If no backup is usable, fall back to the full rebuild below. That fallback is ac
 
 Each is one paragraph and links out to the canonical runbook. Don't restate rotation procedures here — they drift.
 
-**AWS region down (us-east-1).** Single-region at launch — there is no failover. Wait for AWS recovery; post status to the public status page (#252) and hold. Multi-region failover is deliberately out of scope until traffic/SLO justify it.
+**AWS region down (us-east-1).** Single-region today — there is no failover. Wait for AWS recovery; post status to the public status page (#252) and hold. Multi-region failover is deliberately out of scope until traffic/SLO justify it.
 
 **RDS Postgres data loss / corruption.** Restore from automated snapshot, or point-in-time to any moment within the 7-day window (RPO ≈ 4 min), to a new instance; then cut the app over by repointing `DATABASE_URL`. Drilled 2026-09-05: **7 min 34 s to a usable instance, schema byte-identical** — actuals and the gotchas that cost time are in the RDS section above. Restore from `engram-breakglass`; the operator identity is not authorized.
 
@@ -120,7 +120,7 @@ Without that flag, the sweep aborts every tick and the notes are never repaired 
 
 **Key compromise.** Prod wraps DEKs with the AWS KMS CMK and has no master key; a suspected single-user DEK leak is the T3.7 per-user DEK rotation in `docs/context/encryption-operations.md`. On staging/self-host (Local provider), master-key compromise is the T3.5 rotation in the same doc. Note plaintext is never exposed by a re-wrap.
 
-## Out of scope (launch-minimum)
+## Out of scope (current baseline)
 
 Multi-region failover drills, cross-AZ HA testing, full simulation of non-RDS scenarios, and a Paddle data-export procedure are all deferred — see #255 for rationale. Drill RDS only; trust the existing rotation runbooks (linked above) for the rest.
 

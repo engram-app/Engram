@@ -12,6 +12,8 @@ in `frontend/` (see `frontend/CLAUDE.md` for UI rules). The Obsidian plugin is
 `engram-app/Engram-obsidian`. For cross-repo work, the `engram-app/engram-workspace`
 repo cloned as a sibling (`../engram-workspace/`) gives shared context.
 
+> **Phase: revenue.** Engram is live with real paying customers (Paddle live). Prod holds customer data: never assume "pre-launch", "zero customer data" or "safe to wipe" for prod; only staging and local dev are wipeable. Destructive or irreversible prod steps need a snapshot, a reviewed plan and an explicit human yes.
+
 Issues and TODOs live in GitHub Issues (`gh issue list`), never in this file,
 `docs/`, or TODO.md files (CI forbids TODO*.md).
 
@@ -111,8 +113,8 @@ self-hoster upgrades by pulling an image and restarting, and may skip releases.
    `Engram.Backfill.IdWindows`, never `timeout: :infinity`.
 7. Squawk (`priv/repo/lint_migrations.sh`) hard-fails unsafe DDL; read its message.
 8. **A baseline regen** (`priv/repo/structure.sql`) is a silent no-op on an existing
-   DB: it must be paired with a wipe and recreate at every env, never an in-place
-   upgrade (this stranded prod once).
+   DB: it must never be applied in place. Staging and dev are wiped and recreated; prod holds
+   customer data and needs a data-preserving migration plan (this stranded prod once).
 
 Long form (squawk locally, `# safety_assured:`, PG18 patterns, baseline regen,
 preflight, tooling locations): `docs/context/migrations-playbook.md`.

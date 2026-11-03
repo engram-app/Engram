@@ -19,7 +19,7 @@ defmodule Engram.Notes.FanoutPacer do
 
   ponytail: single pacer process + one ETS table. Shard by vault (a Registry of
   per-vault pacers) only if fan-out throughput on one node ever measurably
-  saturates this process; at launch scale one process is ample.
+  saturates this process; at current scale one process is ample.
   """
   use GenServer
 

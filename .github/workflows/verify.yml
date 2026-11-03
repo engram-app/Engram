@@ -6097,7 +6097,7 @@ jobs:
         run: bun run build:saas
         env:
           # Non-secret VITE_* prod config (auth provider, api/ws base, billing,
-          # waitlist, tracing) lives in frontend/.env.production — the single
+          # tracing) lives in frontend/.env.production — the single
           # source of truth loaded by vite's production mode, shared with the
           # frontend-promote self-heal fallback so both builds are byte-identical.
           # VITE_INLINE_BOOTSTRAP_CONFIG=1 is set by build:saas itself.

@@ -9,7 +9,7 @@ defmodule Engram.Abuse.OriginStats do
     2. `Engram.Workers.OriginAbuseSweep` cron — fires telemetry when a Pro
        account exceeds fair-use thresholds for 3 consecutive days.
 
-  Telemetry-only at launch per work-order §E decision. No request-layer
+  Telemetry-only per work-order §E decision. No request-layer
   throttling, no auto-suspend. Ops reviews the alert, contacts the customer.
   """
 

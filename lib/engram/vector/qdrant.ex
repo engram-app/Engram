@@ -411,8 +411,8 @@ defmodule Engram.Vector.Qdrant do
 
   # On an existing collection, confirm it has the named `dense` vector + the
   # `keyword` sparse vector this build requires. A legacy single-unnamed-vector
-  # collection would otherwise 400 every upsert/search silently. Pre-launch the
-  # collection is recreated (wipeable); this guard catches a stale deploy.
+  # collection would otherwise 400 every upsert/search silently. Prod recreates
+  # the collection through a rebuild; this guard catches a stale deploy.
   defp verify_collection_shape(col) do
     case collection_info(col) do
       {:ok, %{"config" => %{"params" => params}} = info} ->
