@@ -35,6 +35,9 @@ defmodule Engram.DataMigrations.NoteSizes do
     IdWindows.heal_pass(name(), Note, &heal/2, batch_size: Keyword.get(opts, :batch, @batch))
   end
 
+  # Sizes from `note_bodies` (`nonce field (13) || ciphertext`, less the
+  # 16-byte tag), as the triggers compute them; liveness from `notes`.
+  # A note with no body row yet is left (NoteSplit's to fill) and keeps this open.
   # One window: fill the unfilled state rows (locked rows skipped, a later
   # pass takes them), then look for a note still unfilled or with no state row.
   defp heal(ids, %{repo: repo}) do
@@ -48,14 +51,15 @@ defmodule Engram.DataMigrations.NoteSizes do
           WHERE note_id = ANY($1::uuid[]) AND content_bytes IS NULL
           ORDER BY note_id FOR UPDATE SKIP LOCKED)
         UPDATE note_index_state s SET
-          content_bytes = greatest(octet_length(n.content_ciphertext) - 16, 0),
-          state_bytes = greatest(octet_length(n.crdt_state_ciphertext) - 16, 0),
-          has_state = n.crdt_state_ciphertext IS NOT NULL,
+          content_bytes = note_body_payload_bytes(b.content_ct),
+          state_bytes = note_body_payload_bytes(b.crdt_ct),
+          has_state = b.crdt_ct IS NOT NULL,
           note_live = n.deleted_at IS NULL,
           note_version = n.version,
           note_updated_at = n.updated_at
-        FROM notes n, locked l
-        WHERE n.id = s.note_id AND l.note_id = s.note_id AND n.kind = 'note'
+        FROM notes n, note_bodies b, locked l
+        WHERE n.id = s.note_id AND b.note_id = s.note_id AND l.note_id = s.note_id
+          AND n.kind = 'note'
         """,
         [keys]
       )

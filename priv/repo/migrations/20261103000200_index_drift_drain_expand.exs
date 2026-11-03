@@ -14,8 +14,12 @@ defmodule Engram.Repo.Migrations.IndexDriftDrainExpand do
   the same text; `drift_drain_test.exs` pins each match):
 
     * `*_envelope_legacy_*`: a format-0 envelope (12-byte nonce, more than the
-      16-byte tag), `ReencodeEnvelopes`. `dek_version >= 2` is
-      `Crypto.row_version_aad_bound/0` for the note body.
+      16-byte tag), `ReencodeEnvelopes`. A note's body and CRDT state are read
+      from `note_bodies` (its merged layout puts a format-0 nonce behind a 0
+      byte: `nonce field (13) || ciphertext`), not the `notes` columns the R8
+      contract drops. `key_version >= 2` is `Crypto.row_version_aad_bound/0`.
+      `substring .. FOR 1` is a slice read of the stored value (as
+      `NoteBody`'s nonce split), never a de-TOAST.
     * `note_index_state_unstamped`: an indexed note with no `payload_hash`,
       `ReconcileNotePayloads`. `chunk_count > 0` stands for "has points".
     * `notes_unresolved_folder`: a live note in a non-root folder whose
@@ -24,13 +28,13 @@ defmodule Engram.Repo.Migrations.IndexDriftDrainExpand do
       root is excluded by its envelope: an empty plaintext is the 16-byte tag.
     * Link keys already have `*_link_keys_stale_index` (20261018230001).
 
-  HOT: on `notes` the predicate columns are `content_nonce`,
-  `content_ciphertext`, `crdt_state_*`, `dek_version`, `folder_ciphertext`,
-  `folder_ref_id`, `kind`, `deleted_at`. Every write that changes a content or
-  state ciphertext also sets `updated_at` (indexed), so it is already not
-  heap-only; `folder_ref_id`, `kind` and `deleted_at` are already in other
-  indexes; `folder_ciphertext` changes only with `folder_hmac` (indexed) or a
-  DEK rotation. On `note_index_state` the predicate columns are `payload_hash`
+  HOT: on `notes` the only new predicate column is `folder_ciphertext`, which
+  changes only with `folder_hmac` (indexed) or a DEK rotation; `folder_ref_id`,
+  `kind` and `deleted_at` are already in other indexes. On `note_bodies` the
+  predicates name `content_ct`, `crdt_ct` and `key_version`, so a body write
+  that changes a ciphertext is no longer heap-only: it adds entries to the
+  primary key and `note_bodies_user_note` (two small keys), and to these
+  indexes only for a format-0 row. A head-only update stays HOT. On `note_index_state` the predicate columns are `payload_hash`
   and `chunk_count`, written a few times per index run (not per chunk), which
   costs two small index entries on those updates. The three log tables are
   insert-mostly.
@@ -40,10 +44,10 @@ defmodule Engram.Repo.Migrations.IndexDriftDrainExpand do
   """
 
   @indexes [
-    {"notes_envelope_legacy_content", "notes", "user_id",
-     "octet_length(content_nonce) = 12 AND octet_length(content_ciphertext) > 16 AND dek_version >= 2"},
-    {"notes_envelope_legacy_crdt", "notes", "user_id",
-     "octet_length(crdt_state_nonce) = 12 AND octet_length(crdt_state_ciphertext) > 16"},
+    {"note_bodies_envelope_legacy_content", "note_bodies", "user_id",
+     "substring(content_ct FROM 1 FOR 1) = '\\x00'::bytea AND octet_length(content_ct) > 29 AND key_version >= 2"},
+    {"note_bodies_envelope_legacy_crdt", "note_bodies", "user_id",
+     "substring(crdt_ct FROM 1 FOR 1) = '\\x00'::bytea AND octet_length(crdt_ct) > 29"},
     {"crdt_update_log_envelope_legacy", "crdt_update_log", "user_id",
      "octet_length(update_nonce) = 12 AND octet_length(update_ciphertext) > 16"},
     {"vault_index_states_envelope_legacy", "vault_index_states", "user_id",

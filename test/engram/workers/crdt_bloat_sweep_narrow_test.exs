@@ -63,6 +63,24 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
     assert [_, _, _, false] = sizes(n)
   end
 
+  # The R8 contract stops writing the `notes` body columns, so the sizes must
+  # follow a write that lands on `note_bodies` alone. Red before: the size
+  # trigger fired on the notes columns only.
+  test "a body-only write moves the stored sizes", %{notes: [n | _]} do
+    Repo.query!(
+      "UPDATE note_bodies SET content_ct = content_ct || '\\x0102030405'::bytea WHERE note_id = $1",
+      [Ecto.UUID.dump!(n.id)]
+    )
+
+    %{rows: [[body]]} =
+      Repo.query!("SELECT octet_length(content_ct) FROM note_bodies WHERE note_id = $1", [
+        Ecto.UUID.dump!(n.id)
+      ])
+
+    assert [content, _state, _has, true] = sizes(n)
+    assert content == body - 13 - Engram.Crypto.Envelope.tag_bytes()
+  end
+
   test "the ledger fills rows the trigger never saw, then the sweep reads no notes", %{
     notes: notes
   } do

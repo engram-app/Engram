@@ -2,25 +2,39 @@ defmodule Engram.Repo.Migrations.NoteIndexStateSizesExpand do
   use Ecto.Migration
 
   @moduledoc """
-  Stored-size columns on `note_index_state`, kept by a trigger, so the hourly
+  Stored-size columns on `note_index_state`, kept by triggers, so the hourly
   `CrdtBloatSweep` reads this narrow row instead of aggregating every wide
   `notes` row (prod 2026-11-03: that aggregate took 14,982 ms against the
   15 s query timeout and swapped the database).
 
-  Stored sizes are `octet_length(ciphertext) - 16` (the AEAD tag), floored at
-  0, exactly what the sweep computed from `notes`. `octet_length` reads the
-  varlena header, so the trigger never de-TOASTs. `state_bytes` is 0 and
-  `has_state` false for a note with no CRDT state. The trigger also mirrors
-  `deleted_at` (as `note_live`), `version` and `updated_at`, the other columns
-  the sweep reads.
+  Sizes come from `note_bodies`, not the `notes` body columns, which the R8
+  contract stops writing and drops: `content_ct` / `crdt_ct` are `nonce field
+  (13 bytes) || ciphertext`, so the stored payload is `octet_length - 13 - 16`
+  (the AEAD tag), floored at 0, exactly what the sweep computed from `notes`.
+  `octet_length` reads the varlena header, never de-TOASTs. `state_bytes` is 0
+  and `has_state` false for a note with no CRDT state.
 
+  Two triggers, because the facts live on two tables:
+
+    * `note_bodies_sync_sizes` (AFTER INSERT OR UPDATE OF content_ct, crdt_ct
+      on `note_bodies`) writes the three size columns, whoever writes the body.
+    * `notes_sync_sizes` (AFTER INSERT OR UPDATE OF deleted_at, version,
+      updated_at, kind on `notes`, named after `notes_sync_index_state` so the
+      state row exists) mirrors liveness, version and `updated_at`, and fills
+      the sizes from the body row only while they are still NULL: on a note
+      insert the body row is written before the state row, so the body
+      trigger found no state row to update.
+
+  Both update only when a value changed, and neither changes an indexed
+  column of `note_index_state` (fillfactor 80), so the updates stay HOT.
   Additive and nullable: the previous release ignores the columns, and
-  `NoteSizes` (data migration) fills rows written before the trigger. The
-  trigger is AFTER, named after `notes_sync_index_state`, so the state row
-  exists when it runs; it updates only when a value changed. The UPDATE
-  changes no indexed column of `note_index_state`, so it stays HOT
-  (fillfactor 80).
+  `NoteSizes` (data migration) fills rows written before the triggers.
   """
+
+  # One definition of "stored payload bytes of a merged body column", used by
+  # both triggers and the `NoteSizes` backfill: `octet_length - 13` (the nonce
+  # field) `- 16` (`Envelope.tag_bytes/0`, pinned by `crdt_bloat_sweep_narrow_test`).
+  defp size(col), do: "public.note_body_payload_bytes(#{col})"
 
   def up do
     execute "SET lock_timeout = '5s'"
@@ -39,23 +53,54 @@ defmodule Engram.Repo.Migrations.NoteIndexStateSizesExpand do
     """
 
     execute """
+    CREATE FUNCTION note_body_payload_bytes(ct bytea) RETURNS integer
+    LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path = '' AS $$
+      SELECT greatest(octet_length(ct) - 29, 0)
+    $$
+    """
+
+    execute """
+    CREATE FUNCTION note_bodies_sync_sizes() RETURNS trigger
+    LANGUAGE plpgsql SET search_path = '' AS $$
+    BEGIN
+      UPDATE public.note_index_state s SET
+        content_bytes = #{size("NEW.content_ct")},
+        state_bytes = #{size("NEW.crdt_ct")},
+        has_state = NEW.crdt_ct IS NOT NULL
+      WHERE s.note_id = NEW.note_id
+        AND (s.content_bytes, s.state_bytes, s.has_state) IS DISTINCT FROM
+            (#{size("NEW.content_ct")}, #{size("NEW.crdt_ct")}, NEW.crdt_ct IS NOT NULL);
+      RETURN NULL;
+    END
+    $$
+    """
+
+    execute """
+    CREATE TRIGGER note_bodies_sync_sizes
+      AFTER INSERT OR UPDATE OF content_ct, crdt_ct ON note_bodies
+      FOR EACH ROW EXECUTE FUNCTION note_bodies_sync_sizes()
+    """
+
+    # COALESCE evaluates its fallback only when the size is still NULL, so the
+    # body row is read once per note, on its first write.
+    execute """
     CREATE FUNCTION notes_sync_sizes() RETURNS trigger
     LANGUAGE plpgsql SET search_path = '' AS $$
     BEGIN
       UPDATE public.note_index_state s SET
-        content_bytes = greatest(octet_length(NEW.content_ciphertext) - 16, 0),
-        state_bytes = greatest(octet_length(NEW.crdt_state_ciphertext) - 16, 0),
-        has_state = NEW.crdt_state_ciphertext IS NOT NULL,
         note_live = NEW.deleted_at IS NULL,
         note_version = NEW.version,
-        note_updated_at = NEW.updated_at
+        note_updated_at = NEW.updated_at,
+        content_bytes = coalesce(s.content_bytes,
+          (SELECT #{size("b.content_ct")} FROM public.note_bodies b WHERE b.note_id = NEW.id)),
+        state_bytes = coalesce(s.state_bytes,
+          (SELECT #{size("b.crdt_ct")} FROM public.note_bodies b WHERE b.note_id = NEW.id)),
+        has_state = coalesce(s.has_state,
+          (SELECT b.crdt_ct IS NOT NULL FROM public.note_bodies b WHERE b.note_id = NEW.id))
       WHERE s.note_id = NEW.id AND (
-        s.content_bytes, s.state_bytes, s.has_state, s.note_live, s.note_version, s.note_updated_at
-      ) IS DISTINCT FROM (
-        greatest(octet_length(NEW.content_ciphertext) - 16, 0),
-        greatest(octet_length(NEW.crdt_state_ciphertext) - 16, 0),
-        NEW.crdt_state_ciphertext IS NOT NULL, NEW.deleted_at IS NULL, NEW.version, NEW.updated_at
-      );
+        (s.note_live, s.note_version, s.note_updated_at)
+          IS DISTINCT FROM (NEW.deleted_at IS NULL, NEW.version, NEW.updated_at)
+        OR s.content_bytes IS NULL);
       RETURN NULL;
     END
     $$
@@ -63,8 +108,7 @@ defmodule Engram.Repo.Migrations.NoteIndexStateSizesExpand do
 
     execute """
     CREATE TRIGGER notes_sync_sizes
-      AFTER INSERT OR UPDATE OF content_ciphertext, crdt_state_ciphertext, deleted_at, version,
-        updated_at, kind
+      AFTER INSERT OR UPDATE OF deleted_at, version, updated_at, kind
       ON notes FOR EACH ROW WHEN (NEW.kind = 'note')
       EXECUTE FUNCTION notes_sync_sizes()
     """
@@ -76,6 +120,9 @@ defmodule Engram.Repo.Migrations.NoteIndexStateSizesExpand do
     execute "DELETE FROM data_migrations WHERE name = 'note_sizes'"
     execute "DROP TRIGGER IF EXISTS notes_sync_sizes ON notes"
     execute "DROP FUNCTION IF EXISTS notes_sync_sizes()"
+    execute "DROP TRIGGER IF EXISTS note_bodies_sync_sizes ON note_bodies"
+    execute "DROP FUNCTION IF EXISTS note_bodies_sync_sizes()"
+    execute "DROP FUNCTION IF EXISTS note_body_payload_bytes(bytea)"
 
     execute """
     ALTER TABLE note_index_state

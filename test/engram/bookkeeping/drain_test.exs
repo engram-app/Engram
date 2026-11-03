@@ -120,7 +120,7 @@ defmodule Engram.Bookkeeping.DrainTest do
   # index text silently becomes a table scan. Red if either side changes alone.
   describe "every probe is served by its partial index" do
     @indexes %{
-      envelope: ~w(notes_envelope_legacy_content notes_envelope_legacy_crdt
+      envelope: ~w(note_bodies_envelope_legacy_content note_bodies_envelope_legacy_crdt
                    crdt_update_log_envelope_legacy vault_index_states_envelope_legacy
                    vault_index_update_log_envelope_legacy),
       link_keys: ~w(notes_link_keys_stale_index attachments_link_keys_stale_index

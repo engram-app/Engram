@@ -42,16 +42,16 @@ defmodule Engram.Bookkeeping.Drain do
   # partial index the predicate selects. At most 100 users per probe per tick;
   # the rest are reached on later ticks as the earlier ones leave the index.
   @envelope [
-    {"notes",
+    {"note_bodies",
      """
-     SELECT DISTINCT user_id FROM notes
-     WHERE octet_length(content_nonce) = 12 AND octet_length(content_ciphertext) > 16
-       AND dek_version >= 2 AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+     SELECT DISTINCT user_id FROM note_bodies
+     WHERE substring(content_ct FROM 1 FOR 1) = '\\x00'::bytea AND octet_length(content_ct) > 29
+       AND key_version >= 2 AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
      """},
-    {"notes",
+    {"note_bodies",
      """
-     SELECT DISTINCT user_id FROM notes
-     WHERE octet_length(crdt_state_nonce) = 12 AND octet_length(crdt_state_ciphertext) > 16
+     SELECT DISTINCT user_id FROM note_bodies
+     WHERE substring(crdt_ct FROM 1 FOR 1) = '\\x00'::bytea AND octet_length(crdt_ct) > 29
        AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
      """},
     {"crdt_update_log",
@@ -147,12 +147,14 @@ defmodule Engram.Bookkeeping.Drain do
     counts
   end
 
-  # The index predicate IS the worker's selection, so no second check. While
-  # compression is off (or a node cannot read format 1) a re-encode would write
-  # format 0 again: the worker cancels itself, so the drain does not queue it.
+  # A note's body is probed on `note_bodies` (the copy that survives the R8
+  # contract) while the worker still selects on the `notes` columns, so each
+  # candidate is confirmed with the worker's own predicate. While compression is
+  # off (or a node cannot read format 1) a re-encode would write format 0 again:
+  # the worker cancels itself, so the drain does not queue it.
   defp envelope do
     if Envelope.compression_on?(),
-      do: TenantScan.enqueue_users(ReencodeEnvelopes, users(:envelope)),
+      do: enqueue(:envelope, ReencodeEnvelopes, &ReencodeEnvelopes.legacy_rows?/1),
       else: 0
   end
 

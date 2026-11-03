@@ -103,10 +103,14 @@ defmodule Engram.Workers.BackfillCrdtHead do
   defp live_pairs(candidates) do
     ids = Enum.map(candidates, & &1.note_id)
 
+    # The head re-check reads `note_bodies` (the copy the R8 contract keeps),
+    # not `notes.crdt_head`.
     from(n in Note,
+      join: b in NoteBody,
+      on: b.note_id == n.id and b.user_id == n.user_id,
       join: v in Vault,
       on: v.id == n.vault_id and is_nil(v.deleted_at),
-      where: n.id in ^ids and n.kind == "note" and is_nil(n.crdt_head) and is_nil(n.deleted_at),
+      where: n.id in ^ids and n.kind == "note" and is_nil(b.crdt_head) and is_nil(n.deleted_at),
       distinct: true,
       select: {n.user_id, n.vault_id}
     )
