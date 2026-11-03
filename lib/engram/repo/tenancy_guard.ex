@@ -41,17 +41,13 @@ defmodule Engram.Repo.TenancyGuard do
   behaviour, which made a guard built on it capable of reporting `:enforced`
   on a deployment where RLS demonstrably was not.
 
-  So the probe is now behavioural. Adopt a tenant that owns nothing, and ask
-  whether any row is visible anyway:
-
-      SET LOCAL app.current_tenant = '00000000-...-000000000000'
-      SELECT EXISTS (SELECT 1 FROM <each tenant table> LIMIT 1)
-
-  `true` means rows belonging to other tenants are reachable — bypassed, no
-  matter what `pg_roles` claims. Each read is bounded by `LIMIT 1`, and the
-  caller's tenant is saved and restored around the whole thing.
-
-  It deliberately DOES read a row it does not own. That is the measurement.
+  So the probe asks the server, per table, whether row security applies to
+  this connection: `row_security_active(oid)`, which folds in BYPASSRLS,
+  superuser, ownership without FORCE and a table with RLS disabled, whatever
+  `pg_roles` claims. `false` on any tenant table is bypassed. It reads the
+  catalog only. (It used to read a row of every tenant table under a tenant
+  that owns nothing; proving "no row visible" read the whole table, up to
+  7.3 s per boot on prod `chunk_points`.)
 
   Every tenant table is probed, not just one, because RLS state is per-table
   and this repo toggles it per-table as routine practice — ten migrations
@@ -102,8 +98,6 @@ defmodule Engram.Repo.TenancyGuard do
   """
 
   use GenServer
-
-  import Ecto.Query, only: [from: 1]
 
   alias Engram.Logger.Metadata
 
@@ -320,9 +314,29 @@ defmodule Engram.Repo.TenancyGuard do
   # honestly assert. #1726 is a question about rows being visible that should
   # not be, and a positive answer to that needs no disambiguation.
   defp probe_all_tenant_tables do
-    Enum.reduce_while(Engram.Repo.tenant_tables(), :unknown, fn table, _acc ->
-      if probe_visibility(table), do: {:halt, :bypassed}, else: {:cont, :unknown}
-    end)
+    names = Enum.map(Engram.Repo.tenant_tables(), &Atom.to_string/1)
+
+    # `row_security_active/1` is the server's own answer for THIS role on THIS
+    # table: it folds in BYPASSRLS, superuser, table ownership without FORCE and
+    # a table with RLS disabled, the cases the row probe looked for. It reads
+    # the catalog, never the table: the row probe proved "nothing visible" by
+    # reading the whole table under RLS (prod `chunk_points`: up to 7.3 s per
+    # boot, Job Load Audit 2026-11-03), and a time-boxed row probe would
+    # report a slow leak as clean.
+    case Engram.Repo.query(
+           """
+           SELECT bool_and(row_security_active(c.oid)), count(*)
+           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname = 'public' AND c.relname = ANY($1)
+           """,
+           [names],
+           source: "tenancy_guard"
+         ) do
+      {:ok, %{rows: [[false, _]]}} -> :bypassed
+      {:ok, %{rows: [[true, n]]}} when n == length(names) -> :unknown
+      # A tenant table missing from the catalog, or a failed read: no opinion.
+      _ -> :unknown
+    end
   end
 
   defp current_tenant do
@@ -340,71 +354,6 @@ defmodule Engram.Repo.TenancyGuard do
     Engram.Repo.query("SELECT set_config('app.current_tenant', $1, true)", [value],
       source: "tenancy_guard"
     )
-  end
-
-  # One clause per tenant table, generated at COMPILE time.
-  #
-  # A structured Ecto query rather than raw SQL, because a table name cannot be
-  # a bind parameter and every raw-SQL shape that accepts one trips a lint that
-  # is right to trip: runtime interpolation is a sobelow SQL-injection finding,
-  # and `unquote`-generated SQL is too — sobelow reads the AST, where the
-  # string is not yet a literal. Both would have needed a suppression. This
-  # needs none, and reads better.
-  #
-  # `skip_tenant_check: true` is the accurate declaration here, unlike
-  # everywhere else it appears. The probe is not skipping a tenant check by
-  # oversight; it has deliberately set a tenant that owns nothing and is
-  # asking the SERVER whether the policy filters. The ORM tripwire would refuse
-  # the query before Postgres ever saw it, which would make this measure the
-  # tripwire instead of the database.
-  #
-  # Generated from `Engram.Repo.tenant_tables/0` rather than a second hardcoded
-  # list: that one is pinned to the live RLS set by `tenant_table_guard_test`,
-  # and a copy here could drift out of it silently. An unknown table raises
-  # FunctionClauseError instead of building a query, which is the behaviour
-  # worth having.
-  for table <- Engram.Repo.tenant_tables() do
-    defp probe_visibility(unquote(table)) do
-      bounded(fn ->
-        Engram.Repo.exists?(from(t in unquote(Atom.to_string(table))),
-          skip_tenant_check: true,
-          source: "tenancy_guard"
-        )
-      end)
-    end
-  end
-
-  # Time budget of one table's probe. A LEAK (the policy is missing or the role
-  # bypasses it) shows up on the first rows read, so it is found at once. An
-  # ENFORCED table can only be proven empty by reading all of it: prod's
-  # `chunk_points` probe took up to 7.3 s per boot and grows with the table
-  # (Job Load Audit 2026-11-03, #3). The probe has no opinion on "saw nothing"
-  # anyway (see `probe_all_tenant_tables/0`), so running out of budget is the
-  # same answer as an empty read: `false`, no leak seen.
-  @probe_timeout_ms 250
-
-  defp bounded(fun) do
-    case Engram.Repo.transaction(
-           fn ->
-             {:ok, _} =
-               Engram.Repo.query(
-                 "SELECT set_config('statement_timeout', $1, true)",
-                 [Integer.to_string(@probe_timeout_ms)],
-                 source: "tenancy_guard"
-               )
-
-             fun.()
-           end,
-           mode: :savepoint
-         ) do
-      {:ok, seen?} -> seen?
-      {:error, _} -> false
-    end
-  rescue
-    e in Postgrex.Error ->
-      if match?(%{postgres: %{code: :query_canceled}}, e),
-        do: false,
-        else: reraise(e, __STACKTRACE__)
   end
 
   @doc """
