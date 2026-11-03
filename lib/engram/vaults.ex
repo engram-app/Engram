@@ -1021,7 +1021,7 @@ defmodule Engram.Vaults do
                   # IndexVersions skips deleted vaults too, so its notes may sit
                   # on an older index version: one version re-check, same
                   # transaction.
-                  {:ok, _} = Engram.Workers.ReconcileEmbeddings.version_check()
+                  {:ok, _} = Engram.Workers.ReconcileEmbeddings.version_check(v.id)
                   {:ok, decrypt_vault_if_needed(v, user)}
 
                 other ->

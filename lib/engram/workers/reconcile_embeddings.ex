@@ -144,14 +144,19 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   (`version_check_on_version_change/1`). Event-driven, not daily: the daily
   walk was the 04:02 slow statement.
 
-  The request is a persisted cursor, not job args, so a later re-verify that
+  `vault_id` scopes the check to that vault's notes (a restore); nil checks
+  the fleet (a version change at boot). The request is a persisted cursor, not
+  job args, so a later re-verify that
   replaces the queued job's args cannot drop it. It is cleared only by a run
   that ran the version term to the end and saw no newer request; a shut
   Qdrant gate leaves it for the next re-verify.
   """
-  @spec version_check() :: {:ok, Oban.Job.t()} | {:error, term()}
-  def version_check do
-    :ok = Cursor.put(@version_check_pending, %{"id" => Ecto.UUID.generate()})
+  @spec version_check(Ecto.UUID.t() | nil) :: {:ok, Oban.Job.t()} | {:error, term()}
+  def version_check(vault_id \\ nil) do
+    # One request row per vault (a repeated restore of one vault rewrites the
+    # same row), or one fleet-wide row for an index-version change.
+    name = if vault_id, do: "#{@version_check_pending}:#{vault_id}", else: @version_check_pending
+    :ok = Cursor.put(name, %{"id" => Ecto.UUID.generate()})
     args = %{"mode" => "reverify"}
     Oban.insert(new(args, replace: replace_args(args)))
   end
@@ -280,13 +285,22 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # skip rebuilds, never queue extra ones.
     versions = Rebuild.target_versions()
 
-    pending = if reverify?, do: Cursor.get(@version_check_pending)
+    pending = if reverify?, do: Cursor.with_prefix(@version_check_pending), else: []
 
     %{open?: open?, qdrant_open?: qdrant_open?, version_term?: version_term?} =
-      gates(reverify?, pending != nil)
+      gates(reverify?, pending != [])
 
     version_stale =
       if version_term?, do: IndexVersions.stale_dynamic(versions), else: dynamic(false)
+
+    # Only restore requests pending (and no rollout): those vaults' notes only.
+    scope = version_scope(open?, pending)
+
+    version_stale =
+      case scope do
+        :fleet -> version_stale
+        vault_ids -> dynamic([n], n.vault_id in ^vault_ids and ^version_stale)
+      end
 
     sweep_tenant = fn repo, ids, remaining ->
       eligible =
@@ -453,7 +467,8 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       reverify?: reverify?,
       qdrant_open?: qdrant_open?,
       version_term?: version_term?,
-      pending: pending
+      pending: pending,
+      scope: scope
     })
   end
 
@@ -466,7 +481,8 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     # The version term walks every notes window, so it runs while a rollout is
     # open, and once per event that can put version-stale notes back after the
-    # ledger closed: a restored vault and a new build (`version_check/0`).
+    # ledger closed: a restored vault (that vault only) and an index-version
+    # change at boot (`version_check/1`).
     # Not daily: that walk was the 04:02 slow statement (Job Load Audit
     # 2026-11-03).
     %{
@@ -493,21 +509,36 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     :ok = wake_budget_parked(run.backoff_until)
     :ok = maybe_dry_run()
 
+    # The keyword sweep is fleet-wide (per tenant, unindexed): not for a
+    # restore request scoped to a vault.
     keyword_more? =
-      run.version_term? and
+      run.version_term? and run.scope == :fleet and
         sweep_keyword_stale(run.now, run.paid, run.page_size, run.versions)
 
     more? = reverify_more? or keyword_more? or not run.qdrant_open?
     :ok = settle_version_check(run, more?)
-    chain(args, run.open?, more?, run.pending != nil)
+    chain(args, run.open?, more?, run.pending != [])
+  end
+
+  # `:fleet` while a rollout is open or a fleet request is pending, else the
+  # vault ids of the pending restore requests.
+  defp version_scope(true = _open?, _pending), do: :fleet
+
+  defp version_scope(false, pending) do
+    if Enum.any?(pending, fn {name, _} -> name == @version_check_pending end),
+      do: :fleet,
+      else:
+        for(
+          {name, _} <- pending,
+          do: String.replace_prefix(name, @version_check_pending <> ":", "")
+        )
   end
 
   # A requested version check is done once a run with the version term found
   # nothing more. Compare-and-delete: a request made after this run read it
   # stays, and gets its own run now.
-  defp settle_version_check(%{pending: pending, version_term?: true}, false = _more?)
-       when is_map(pending) do
-    if Cursor.reset_if(@version_check_pending, pending) do
+  defp settle_version_check(%{pending: [_ | _] = pending, version_term?: true}, false = _more?) do
+    if Enum.all?(pending, fn {name, value} -> Cursor.reset_if(name, value) end) do
       :ok
     else
       enqueue(%{"mode" => "reverify"}, schedule_in: @chain_seconds)

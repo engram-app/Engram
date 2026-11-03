@@ -43,6 +43,17 @@ defmodule Engram.Maintenance.Cursor do
     :ok
   end
 
+  @doc "Every `{name, cursor}` whose name starts with `prefix`."
+  @spec with_prefix(String.t()) :: [{String.t(), map()}]
+  def with_prefix(prefix) do
+    Repo.all(
+      from(c in "maintenance_cursors",
+        where: like(c.name, ^(prefix <> "%")),
+        select: {c.name, c.cursor}
+      )
+    )
+  end
+
   @doc "Deletes `name` only while it still holds `value`; true when it did."
   @spec reset_if(String.t(), map()) :: boolean()
   def reset_if(name, %{} = value) do

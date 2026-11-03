@@ -138,6 +138,30 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
     end
 
+    # Red on daa914e6d: any restore turned the version term on for the whole
+    # fleet, and restores are user-triggerable.
+    test "a restore re-checks only that vault's notes" do
+      [user, other_user] =
+        for _ <- 1..2 do
+          u = insert(:user)
+          insert(:subscription, user: u, tier: "pro", status: "active")
+          u
+        end
+
+      note = current_note(user, chunker_version: nil, keyword_version: nil)
+      other = current_note(other_user, chunker_version: nil, keyword_version: nil)
+      :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
+
+      {:ok, _} = ReconcileEmbeddings.version_check(note.vault_id)
+      {:ok, _} = ReconcileEmbeddings.version_check(note.vault_id)
+      assert length(Engram.Maintenance.Cursor.with_prefix("reconcile:version_check")) == 1
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
+      assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
+      refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => other.id})
+      assert Engram.Maintenance.Cursor.with_prefix("reconcile:version_check") == []
+    end
+
     # Red on 5be4a3373: the request rode in job args, and a later re-verify
     # insert (the daily cron, a chain hop) replaced them before it ran.
     test "a later re-verify replacing the queued job keeps the version check" do
