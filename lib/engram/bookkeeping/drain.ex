@@ -28,6 +28,7 @@ defmodule Engram.Bookkeeping.Drain do
   alias Engram.Crypto.Envelope
   alias Engram.DataMigrations.FolderTable
   alias Engram.Logger.Metadata
+  alias Engram.Maintenance.Cursor
   alias Engram.Repo
   alias Engram.Workers.BackfillLinkKeys
   alias Engram.Workers.ReconcileNotePayloads
@@ -41,36 +42,45 @@ defmodule Engram.Bookkeeping.Drain do
   # pool; the OR is a filter on the index entries and does not affect which
   # partial index the predicate selects. At most 100 users per probe per tick;
   # the rest are reached on later ticks as the earlier ones leave the index.
+  @users_per_probe 100
+  @folder_users_per_tick 10
+  @folder_budget_ms 20_000
+
   @envelope [
     {"note_bodies",
      """
      SELECT DISTINCT user_id FROM note_bodies
      WHERE substring(content_ct FROM 1 FOR 1) = '\\x00'::bytea AND octet_length(content_ct) > 29
-       AND key_version >= 2 AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+       AND key_version >= 2 AND ($1::uuid IS NULL OR user_id = $1)
+       AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 100
      """},
     {"note_bodies",
      """
      SELECT DISTINCT user_id FROM note_bodies
      WHERE substring(crdt_ct FROM 1 FOR 1) = '\\x00'::bytea AND octet_length(crdt_ct) > 29
-       AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+       AND ($1::uuid IS NULL OR user_id = $1)
+       AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 100
      """},
     {"crdt_update_log",
      """
      SELECT DISTINCT user_id FROM crdt_update_log
      WHERE octet_length(update_nonce) = 12 AND octet_length(update_ciphertext) > 16
-       AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+       AND ($1::uuid IS NULL OR user_id = $1)
+       AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 100
      """},
     {"vault_index_states",
      """
      SELECT DISTINCT user_id FROM vault_index_states
      WHERE octet_length(state_nonce) = 12 AND octet_length(state_ciphertext) > 16
-       AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+       AND ($1::uuid IS NULL OR user_id = $1)
+       AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 100
      """},
     {"vault_index_update_log",
      """
      SELECT DISTINCT user_id FROM vault_index_update_log
      WHERE octet_length(update_nonce) = 12 AND octet_length(update_ciphertext) > 16
-       AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+       AND ($1::uuid IS NULL OR user_id = $1)
+       AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 100
      """}
   ]
 
@@ -83,20 +93,23 @@ defmodule Engram.Bookkeeping.Drain do
      SELECT DISTINCT user_id FROM notes
      WHERE basename_hmac IS NOT NULL
        AND link_keys_stamp IS DISTINCT FROM (path_nonce || '\\x31352e312e30'::bytea)
-       AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+       AND ($1::uuid IS NULL OR user_id = $1)
+       AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 100
      """},
     {"attachments",
      """
      SELECT DISTINCT user_id FROM attachments
      WHERE basename_hmac IS NOT NULL
        AND link_keys_stamp IS DISTINCT FROM (path_nonce || '\\x31352e312e30'::bytea)
-       AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+       AND ($1::uuid IS NULL OR user_id = $1)
+       AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 100
      """},
     {"note_links",
      """
      SELECT DISTINCT user_id FROM note_links
      WHERE link_keys_stamp IS DISTINCT FROM (target_text_nonce || '\\x31352e312e30'::bytea)
-       AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+       AND ($1::uuid IS NULL OR user_id = $1)
+       AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 100
      """}
   ]
 
@@ -105,7 +118,8 @@ defmodule Engram.Bookkeeping.Drain do
      """
      SELECT DISTINCT user_id FROM note_index_state
      WHERE payload_hash IS NULL AND points > 0
-       AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+       AND ($1::uuid IS NULL OR user_id = $1)
+       AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 100
      """}
   ]
 
@@ -115,7 +129,8 @@ defmodule Engram.Bookkeeping.Drain do
      SELECT DISTINCT user_id FROM notes
      WHERE kind = 'note' AND deleted_at IS NULL AND folder_ref_id IS NULL
        AND octet_length(folder_ciphertext) > 16
-       AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+       AND ($1::uuid IS NULL OR user_id = $1)
+       AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 100
      """}
   ]
 
@@ -175,7 +190,13 @@ defmodule Engram.Bookkeeping.Drain do
         0
 
       users ->
-        if FolderTable.done?(), do: FolderTable.run_pass(user_ids: users)
+        # A few users per tick, each with a short attachment budget, so the tick
+        # stays inside its job timeout; the cursor rotation reaches the rest.
+        users = Enum.take(users, @folder_users_per_tick)
+
+        if FolderTable.done?(),
+          do: FolderTable.run_pass(user_ids: users, attachment_budget_ms: @folder_budget_ms)
+
         length(users)
     end
   end
@@ -183,21 +204,36 @@ defmodule Engram.Bookkeeping.Drain do
   defp users(kind) do
     kind
     |> probes()
-    |> Enum.flat_map(fn {_table, sql} -> probe(sql) end)
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {{_table, sql}, i} -> probe(sql, "drain:#{kind}:#{i}") end)
     |> Enum.uniq()
   end
 
   # Sobelow cannot see that `sql` is one of this module's literal probes above
   # (never input, never interpolated), so it reports the variable argument.
   # sobelow_skip ["SQL.Query"]
-  defp probe(sql) do
+  defp probe(sql, cursor) do
     case TenantScan.pool() do
+      # Fleet: the 100 users after the last tick's, wrapping at the end, so
+      # users whose repair can never finish cannot take every tick.
       {:fleet, repo} ->
-        repo.query!(sql, [nil]).rows |> Enum.map(&load/1)
+        from = Cursor.get(cursor)
+        after_id = from && Ecto.UUID.dump!(from["user_id"])
+        users = repo.query!(sql, [nil, after_id]).rows |> Enum.map(&load/1)
+
+        :ok =
+          Cursor.advance(
+            cursor,
+            users != [] && %{"user_id" => List.last(users)},
+            length(users),
+            @users_per_probe
+          )
+
+        users
 
       :per_user ->
         TenantScan.flat_map_users(fn uid ->
-          Repo.query!(sql, [Ecto.UUID.dump!(uid)]).rows |> Enum.map(&load/1)
+          Repo.query!(sql, [Ecto.UUID.dump!(uid), nil]).rows |> Enum.map(&load/1)
         end)
     end
   end

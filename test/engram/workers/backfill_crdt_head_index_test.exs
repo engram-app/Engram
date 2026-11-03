@@ -39,4 +39,24 @@ defmodule Engram.Workers.BackfillCrdtHeadIndexTest do
     assert BackfillCrdtHead.enqueue_all() == 0
     _ = u
   end
+
+  # Red on c0c603cb9: the first `cap` rows of the index were read every run, so
+  # NULL-head rows that never warm (trashed notes) ahead of a live one filled
+  # every run and the live note never warmed.
+  test "rows that never warm cannot starve a live note behind them", %{user: u, vault: v} do
+    Application.put_env(:engram, :crdt_head_candidate_cap, 2)
+    on_exit(fn -> Application.delete_env(:engram, :crdt_head_candidate_cap) end)
+
+    Repo.query!("UPDATE notes SET deleted_at = now()")
+
+    for i <- 1..3 do
+      {:ok, n} = Notes.upsert_note(u, v, %{"path" => "t#{i}.md", "content" => "t"}, actor: "api")
+      Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(n.id)])
+    end
+
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "live.md", "content" => "l"}, actor: "api")
+
+    counts = for _ <- 1..3, do: BackfillCrdtHead.enqueue_all()
+    assert Enum.sum(counts) >= 1, "the live note never became a candidate: #{inspect(counts)}"
+  end
 end
