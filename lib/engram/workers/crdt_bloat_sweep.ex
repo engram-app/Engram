@@ -235,19 +235,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
           coalesce(array_agg(id ORDER BY id) FILTER (WHERE written), '{}'),
           coalesce(array_agg(version ORDER BY id) FILTER (WHERE written), '{}')
         FROM (
-          SELECT
-            n.id,
-            n.version,
-            n.updated_at >= $5 AS written,
-            n.crdt_state_ciphertext IS NOT NULL AS has_state,
-            greatest(octet_length(n.crdt_state_ciphertext) - $1::int, 0) AS state_bytes,
-            greatest(octet_length(n.content_ciphertext) - $1::int, 0) AS content_bytes,
-            greatest(octet_length(n.content_ciphertext) - $1::int, 0) >= $3::int AS big,
-            greatest(octet_length(n.crdt_state_ciphertext) - $1::int, 0)::float8
-              / greatest(octet_length(n.content_ciphertext) - $1::int, 1)::float8 AS ratio
-          FROM notes n
-          WHERE n.deleted_at IS NULL
-            AND n.kind = 'note'
+          #{sized_rows()}
         ) sized
         """,
         [
@@ -298,6 +286,46 @@ defmodule Engram.Workers.CrdtBloatSweep do
       measured_at_unix: System.system_time(:second)
     }
     |> Map.merge(save_rate(baseline, now, versions))
+  end
+
+  # The per-note sizes, one row per live note. Once `NoteSizes` has filled the
+  # narrow `note_index_state` columns (the `notes_sync_sizes` trigger keeps them
+  # current) the sweep reads that table; until then (a fresh upgrade) it
+  # aggregates `notes`, which is the slow heap scan the narrow read replaces.
+  # Same column names and values either way.
+  defp sized_rows do
+    if Engram.DataMigrations.NoteSizes.done?() do
+      """
+      SELECT
+        s.note_id AS id,
+        s.note_version AS version,
+        s.note_updated_at >= $5 AS written,
+        s.has_state,
+        s.state_bytes,
+        s.content_bytes,
+        s.content_bytes >= $3::int AS big,
+        s.state_bytes::float8 / greatest(s.content_bytes, 1)::float8 AS ratio
+      FROM note_index_state s
+      -- $1 (the tag size) is bound for both shapes; Postgres rejects an unused parameter.
+      WHERE s.note_live AND $1::int >= 0
+      """
+    else
+      """
+      SELECT
+        n.id,
+        n.version,
+        n.updated_at >= $5 AS written,
+        n.crdt_state_ciphertext IS NOT NULL AS has_state,
+        greatest(octet_length(n.crdt_state_ciphertext) - $1::int, 0) AS state_bytes,
+        greatest(octet_length(n.content_ciphertext) - $1::int, 0) AS content_bytes,
+        greatest(octet_length(n.content_ciphertext) - $1::int, 0) >= $3::int AS big,
+        greatest(octet_length(n.crdt_state_ciphertext) - $1::int, 0)::float8
+          / greatest(octet_length(n.content_ciphertext) - $1::int, 1)::float8 AS ratio
+      FROM notes n
+      WHERE n.deleted_at IS NULL
+        AND n.kind = 'note'
+      """
+    end
   end
 
   # The previous sweep's baseline, when this node has one young enough to diff.

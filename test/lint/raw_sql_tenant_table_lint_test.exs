@@ -66,6 +66,9 @@ defmodule Engram.RawSqlTenantTableLintTest do
     # `Repo.maintenance()` (maintenance_all), never cross-tenant on the app
     # pool, the same discovery NoteSplit uses.
     "engram/data_migrations/note_index_state.ex",
+    # NoteSizes: the same shape, an id-window UPDATE of note_index_state from notes,
+    # run on the fleet pool or inside a tenant by IdWindows.
+    "engram/data_migrations/note_sizes.ex",
     # DataMigrations.FolderTable: raw SQL on `folders` (Ecto has no schema for
     # it yet), `DISTINCT ON` folder discovery and `unnest` batch updates. Every
     # statement filters `user_id` and runs per user inside `Repo.with_tenant/2`,
