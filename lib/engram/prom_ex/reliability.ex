@@ -91,16 +91,19 @@ defmodule Engram.PromEx.Reliability do
           description: "Auth rejections by reason + source (http | socket).",
           tags: [:reason, :source]
         ),
-        counter(
+        sum(
           metric_prefix ++ [:bookkeeping, :drift, :total],
           event_name: [:engram, :bookkeeping, :drift],
           measurement: :count,
+          # `sum`, not `counter`: a counter adds 1 per event and ignores the
+          # measurement, and the canary emits every invariant every run (zeros
+          # included), so a counter would climb hourly on clean data.
           description:
             "Sampled rows whose database-kept bookkeeping disagrees (Bookkeeping.Canary), " <>
               "by invariant. Any increase is systematic drift: a disabled trigger or a bad deploy.",
           tags: [:invariant]
         ),
-        counter(
+        sum(
           metric_prefix ++ [:bookkeeping, :canary_rows, :total],
           event_name: [:engram, :bookkeeping, :canary_rows],
           measurement: :count,
