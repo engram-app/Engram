@@ -305,7 +305,7 @@ config :engram, Oban,
         # publishes a version announces it within the hour.
         {"18 * * * *", Engram.Workers.LegalNoticeDispatch},
         {"38 * * * *", Engram.Workers.IdempotencyPrune},
-        # Vector cache expiry: rows 72 h after insert, hourly in small batches.
+        # Vector cache expiry: rows 24 h after insert, hourly in capped batches.
         {"8 * * * *", Engram.Workers.VectorCachePrune},
         # Jobs held while the v5 rebuild is `on` (Rebuild.hold/1) run again
         # within the hour of it going off; a no-op while it is on (#2375).
