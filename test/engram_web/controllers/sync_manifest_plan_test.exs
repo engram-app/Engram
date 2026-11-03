@@ -127,8 +127,12 @@ defmodule EngramWeb.SyncManifestPlanTest do
       for ct <- [:crypto.strong_rand_bytes(2000), :crypto.strong_rand_bytes(2001), nil],
           do: insert(:note, user: user, vault: vault, path_ciphertext: ct).id
 
-    # Random ciphertext fails the decrypt and a NULL one the native call
-    # (a live note with no path cannot render; not new here).
+    # Random ciphertext fails the decrypt and a NULL one the native call.
+    # No app write leaves a note's path NULL (`Note.changeset` requires it;
+    # every bulk path write stores an `Envelope.encrypt` result), but no
+    # constraint forbids it either (`notes_kind_shape_check` covers
+    # `path_hmac` only), so the SQL halves must still cover NULL. If a
+    # `path_ciphertext IS NOT NULL` CHECK lands for notes, drop the NULL row.
     {_, queries} =
       QueryRecorder.record(fn ->
         try do
