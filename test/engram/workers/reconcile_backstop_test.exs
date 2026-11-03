@@ -79,10 +79,10 @@ defmodule Engram.Workers.ReconcileBackstopTest do
       assert {"2 */3 * * *", ReconcileEmbeddings} in crontab
 
       entries = for {expr, ReconcileEmbeddings} <- crontab, do: expr
-      assert Enum.sort(entries) == ["2 */3 * * *", "2 4 * * *"]
+      assert Enum.sort(entries) == ["2 */3 * * *", "2 10 * * *"]
 
       {_, _, opts} =
-        Enum.find(cron_entries(), &match?({"2 4 * * *", ReconcileEmbeddings, _}, &1))
+        Enum.find(cron_entries(), &match?({"2 10 * * *", ReconcileEmbeddings, _}, &1))
 
       assert opts[:args] == %{"mode" => "reverify"}
     end

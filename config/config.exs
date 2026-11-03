@@ -253,7 +253,12 @@ config :engram, Oban,
       # missed. No two entries share a minute (ObanCronTest): they share the
       # 2-slot maintenance queue and one database.
       #
-      # Minutes: reconcile :02 (every 3 h, plus the 04:02 re-verify), the
+      # The daily heavy work shares ONE off-peak window, 10:00-11:15 UTC (04:00-05:15
+      # MDT): after the 00-03 UTC bulk-import hours and clear of the 04:xx cluster that
+      # swapped the database (Job Load Audit 2026-11-03). Dailies sit on free
+      # minutes of the hour (no hourly entry fires there). PaddleReconcile 02:00
+      # keeps its alert cadence; the tiny 05:15 / 05:40 jobs stay.
+      # Minutes: reconcile :02 (every 3 h, plus the 10:02 re-verify), the
       # stalled-checkout scan every :x4/:x9, hourly jobs sit on :x3/:x8 or
       # :10/:25/:55 (data-migrations runner :33, legal notices :18,
       # attachment blob GC :03, CRDT head re-warm :48),
@@ -266,7 +271,7 @@ config :engram, Oban,
         # The daily index-version re-verify; chains in 5-min hops while work
         # remains (ReconcileEmbeddings `@reverify_hops`).
         # It takes over a queued plain sweep (one sweep queued at a time).
-        {"2 4 * * *", Engram.Workers.ReconcileEmbeddings,
+        {"2 10 * * *", Engram.Workers.ReconcileEmbeddings,
          args: %{"mode" => "reverify"},
          replace: [scheduled: [:args], available: [:args], retryable: [:args]]},
         # Expired device-flow and OAuth codes/tokens. Cheap DELETEs. Hourly:
@@ -326,17 +331,17 @@ config :engram, Oban,
         # (PaddleReconcile.scan_anchor/1), so they tile the hour (#2203).
         {"4-59/5 * * * *", Engram.Billing.Workers.PaddleReconcile,
          args: %{"scan" => "stalled_checkouts"}},
-        {"30 3 * * *", Engram.Workers.InactivityCleanup},
+        {"30 10 * * *", Engram.Workers.InactivityCleanup},
         # Fair-use over 3 consecutive DAYS: a daily question.
-        {"0 4 * * *", Engram.Workers.OriginAbuseSweep},
+        {"0 10 * * *", Engram.Workers.OriginAbuseSweep},
         # Live attachment rows whose blob sits behind a delete marker: one
         # job per vault, restores from bucket versions (#2159). Also queued
         # on the read that finds a blob missing.
-        {"45 4 * * *", Engram.Workers.ReconcileAttachmentBlobs},
+        {"45 10 * * *", Engram.Workers.ReconcileAttachmentBlobs},
         # Cross-store reconciliation (#1576): a note whose points are gone is
         # unsearchable until this finds it. Daily because a pass is
         # O(collection); revisit around 1M points with a resumable cursor.
-        {"0 5 * * *", Engram.Workers.OrphanSweep},
+        {"0 11 * * *", Engram.Workers.OrphanSweep},
         # Daily self-host install census; no-op on SaaS and unless opted in.
         {"15 5 * * *", Engram.Workers.TelemetryHeartbeat},
         # CIMD document refresh (#1642): documents carry a 24 h TTL.
@@ -345,10 +350,10 @@ config :engram, Oban,
         # token path never fetches. Schedules the sweep 1-30 s out.
         {"1-59/5 * * * *", Engram.Workers.CimdJwksSchedule},
         # Yesterday's account and vault snapshots for the operator insights.
-        {"40 0 * * *", Engram.Workers.DailySnapshot},
+        {"15 10 * * *", Engram.Workers.DailySnapshot},
         # Account facts onto PostHog persons; no-op unless PostHog is configured.
-        # 06:15, not 06:25: :25 is upload expiry's hourly minute.
-        {"15 6 * * *", Engram.Workers.PostHogPersonSync}
+        # :15, not :25 (upload expiry's hourly minute).
+        {"15 11 * * *", Engram.Workers.PostHogPersonSync}
       ]
     }
   ]

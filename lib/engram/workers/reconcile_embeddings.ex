@@ -15,7 +15,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     * while `IndexVersions` is open (a version rollout): as the old 5-minute
       cron did, so a rollout keeps its pace;
-    * the daily re-verify (`mode: "reverify"`, 04:02), up to 12 hops while a
+    * the daily re-verify (`mode: "reverify"`, 10:02), up to 12 hops while a
       page comes back full.
 
   Per-note Qdrant work (`RebuildStaleNote`, `RefreshKeywordVectors`) is

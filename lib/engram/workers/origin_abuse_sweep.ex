@@ -6,7 +6,8 @@ defmodule Engram.Workers.OriginAbuseSweep do
   alert, reviews, contacts the customer about converting to a future
   Developer/API tier.
 
-  Runs at 04:00 UTC daily (after §C InactivityCleanup at 03:30 UTC).
+  Runs at 10:00 UTC daily (after §C InactivityCleanup at 10:30 UTC the same
+  window; they share no data).
   """
 
   use Oban.Worker, queue: :maintenance, max_attempts: 3
