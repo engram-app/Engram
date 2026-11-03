@@ -6,10 +6,13 @@ defmodule Engram.Notes.NoteSplitTest do
   # (`IdWindows.heal_pass/4`), which DataCase resets before each sync test.
   use Engram.DataCase, async: false
 
+  alias Engram.DataMigrations
   alias Engram.DataMigrations.NoteSplit
   alias Engram.Notes
   alias Engram.QueryRecorder
   alias Engram.Repo
+  alias Engram.TableReads
+  alias Engram.Workers.DataMigrationsRunner
 
   setup do
     user = insert(:user)
@@ -265,6 +268,22 @@ defmodule Engram.Notes.NoteSplitTest do
 
       assert :done = NoteSplit.run_pass()
       assert_received {^ref, 0}
+    end
+
+    # The daily re-verify of a closed ledger walked every notes window and
+    # de-TOASTed both bodies of every note for the drift report: in prod ~95
+    # windows a day, ~700 ms and 1.6-1.9k disk reads each. The derive and body
+    # triggers fill every row for every writer of any release, so a closed
+    # ledger stays closed: no pass, no read.
+    test "a closed ledger's daily re-verify reads no notes or bodies", %{user: u, vault: v} do
+      for i <- 1..3, do: write!(u, v, "r#{i}.md", "r#{i}")
+      assert :done = NoteSplit.run_pass()
+      :ok = DataMigrations.mark_done(NoteSplit.name(), NoteSplit.version())
+      tables = ~w(notes note_bodies)
+      before = TableReads.count(tables)
+
+      assert DataMigrationsRunner.run(NoteSplit, true) == :skipped
+      assert TableReads.count(tables) == before
     end
 
     # #2276: one row needing work at the END of the id order, behind clean

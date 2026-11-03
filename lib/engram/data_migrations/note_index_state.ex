@@ -14,9 +14,19 @@ defmodule Engram.DataMigrations.NoteIndexState do
   whose counters differ from its `chunks` rows is re-counted under its
   `notes` row lock (`FOR UPDATE SKIP LOCKED`, the lock `commit_index` holds
   while it writes chunks), so the count cannot race a pass on that note.
-  This is both the backfill and the self-heal: done (`counted?/0`) gates
-  the vault and user sums, and the daily re-verify re-counts whatever a
-  previous-release writer (a rolling deploy, a rollback) left behind.
+  This is the backfill: done (`counted?/0`) gates the vault and user sums.
+
+  Not re-verified once done (`reverify?/0` stays `false`). Since migration
+  20261028000000 the `chunks_sync_note_counts_*` statement triggers recount a
+  note on every chunks insert, update and delete (a note delete's cascade
+  included), and `notes_sync_index_state` writes the state row on every note
+  insert. Both live in the database, so a previous-release writer (a rolling
+  deploy, a rollback) keeps them exact too. The daily re-verify walked every
+  notes window and probed chunks for every note (prod 2026-10-28..11-02: ~95
+  windows a day, ~600 ms and ~1.9k disk reads each, evicting the hot set)
+  and found nothing on every pass logged since. After a write with triggers
+  disabled, reopen it cluster-wide (`DataMigrations.reopen/2`, runbook in
+  `docs/context/data-migrations-ledger.md`).
 
   Discovery walks `notes` in fixed id windows (`Engram.Backfill.IdWindows`):
   one fleet walk on the maintenance pool on SaaS, a per-user walk on
@@ -42,11 +52,12 @@ defmodule Engram.DataMigrations.NoteIndexState do
   @impl true
   def name, do: "note_index_state"
 
+  # 2: one more full pass on every instance once the chunks counting trigger
+  # exists. Counters were app-kept on 0.66/0.67 and drifted (prod: 5,631 on
+  # 2026-10-28); the daily re-verify healed that until it stopped, so an
+  # instance skipping from 0.66/0.67 to this release recounts here, once.
   @impl true
-  def version, do: 1
-
-  @impl true
-  def reverify?, do: true
+  def version, do: 2
 
   @impl true
   def run_pass, do: run_pass([])

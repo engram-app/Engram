@@ -232,10 +232,56 @@ defmodule Engram.Backfill.IdWindows do
   end
 
   @doc """
+  The rows of `schema` (keyed `id`) whose ids are in the window, each read
+  by a single-row primary-key lookup, as a query to use as a subquery
+  source (`from(n in subquery(IdWindows.by_id(Note, ids)), as: :note)`):
+  `unnest(ids)` joined LATERAL to `SELECT * FROM schema WHERE id = <one id>
+  LIMIT 1`. Every other predicate belongs OUTSIDE, on the subquery's rows.
+
+  The probe must carry nothing but the id. Under a tenant's RLS it also
+  carries `user_id = <tenant>`, and the planner sizes a user from the table
+  average (a handful of rows). Given any more predicates (`kind = 'note'
+  AND deleted_at IS NULL`), the partial user-leading indexes that also hold
+  `id` become usable: `notes_recent_index (user_id, vault_id, updated_at
+  DESC, id DESC)` and `idx_notes_user_created_rank (user_id, created_at,
+  id)`. Postgres 18 skip-scans them on `user_id` + `id`, reading every note
+  of the user per probe (prod E5, 2026-11-02, the per-vault form: 445 ms
+  and 669 cold reads for 5 ids; CI picked the skip scan for this probe
+  once the liveness filter sat inside it). With the id alone no partial
+  index qualifies and no non-partial user-leading index holds `id`, so the
+  only index that answers `id = $1` is the primary key, and a subquery with
+  a LIMIT is not pulled up, so each probe is planned on its own.
+  ReconcileEmbeddingsIndexPlanTest pins it, under RLS and without.
+
+  Given a query on a schema instead of the schema itself, returns that
+  query with its source swapped for the probe of its schema: its bindings,
+  `as:` name, joins and predicates unchanged, all applied to the probed
+  rows. The windowed discovery reads (`all/2`, `any?/3` callers) go
+  through this form.
+  """
+  @spec by_id(module() | Ecto.Query.t(), [Ecto.UUID.t()]) :: Ecto.Query.t()
+  def by_id(%Ecto.Query{from: %{source: {_table, schema}} = source} = query, ids)
+      when is_atom(schema) and not is_nil(schema) do
+    %{query | from: %{source | source: Ecto.Query.subquery(by_id(schema, ids))}}
+  end
+
+  def by_id(schema, ids) when is_atom(schema) do
+    probe = from(r in schema, where: field(r, :id) == parent_as(:id_window).id, limit: 1)
+
+    from(w in fragment("SELECT unnest(?::uuid[]) AS id", type(^ids, {:array, Ecto.UUID})),
+      as: :id_window,
+      inner_lateral_join: r in subquery(probe),
+      on: true,
+      select: r
+    )
+  end
+
+  @doc """
   Every row `query` (a `notes` query, first binding the note) returns, across
   all tenants, asked one id window at a time: the windowed form of
-  `TenantScan.all/1` for a rare predicate. Duplicates across windows are the
-  caller's to drop (a `distinct` holds within one window).
+  `TenantScan.all/1` for a rare predicate. Each window's rows are read by
+  primary key (`by_id/2`). Duplicates across windows are the caller's to
+  drop (a `distinct` holds within one window).
   """
   @spec all(Ecto.Query.t(), keyword()) :: list()
   def all(%Ecto.Query{} = query, opts \\ []) do
@@ -244,7 +290,7 @@ defmodule Engram.Backfill.IdWindows do
         Engram.Notes.Note,
         [],
         fn ids, %{repo: repo}, acc ->
-          {:cont, [repo.all(where(query, [n], n.id in ^ids)) | acc]}
+          {:cont, [repo.all(by_id(query, ids)) | acc]}
         end,
         Keyword.put_new(opts, :batch_size, @fleet_window)
       )

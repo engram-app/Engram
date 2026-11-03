@@ -7,11 +7,14 @@ defmodule Engram.Notes.NoteIndexStateTest do
   import Ecto.Query
   import Engram.RlsCase
 
+  alias Engram.DataMigrations
   alias Engram.DataMigrations.NoteIndexState, as: Backfill
   alias Engram.Notes
   alias Engram.Notes.{Note, NoteIndexState}
   alias Engram.QueryRecorder
   alias Engram.Repo
+  alias Engram.TableReads
+  alias Engram.Workers.DataMigrationsRunner
 
   setup do
     user = insert(:user)
@@ -155,6 +158,56 @@ defmodule Engram.Notes.NoteIndexStateTest do
       assert mirrors?(state(last.id), note(last.id))
       assert Enum.any?(queries, &(&1.sql =~ "notes"))
       assert QueryRecorder.unwindowed(queries, "notes", 2) == []
+    end
+
+    # The daily re-verify of a closed ledger walked every notes window and
+    # probed chunks for every note: in prod ~95 windows a day, ~600 ms and
+    # ~1.9k disk reads each, evicting the hot set. The `notes_sync_index_state`
+    # and `chunks_sync_note_counts_*` triggers keep every row exact for every
+    # writer of any release (they live in the database), so a closed ledger
+    # stays closed: no pass, no read.
+    test "a closed ledger's daily re-verify reads no notes or chunks", %{user: u, vault: v} do
+      for i <- 1..3, do: write!(u, v, "R#{i}.md", "# R\n\nbody #{i}")
+      assert :done = Backfill.run_pass()
+      :ok = DataMigrations.mark_done(Backfill.name(), Backfill.version())
+      tables = ~w(notes chunks note_index_state)
+      before = TableReads.count(tables)
+
+      assert DataMigrationsRunner.run(Backfill, true) == :skipped
+      assert TableReads.count(tables) == before
+    end
+
+    # The ledger closed at v1 on 0.66/0.67, before the chunks counting
+    # trigger (0.68.0), while app code kept the counters and they drifted
+    # (prod 2026-10-28: 5,631 drifted). The daily re-verify used to heal
+    # that; without it, an instance skipping straight to this release needs
+    # one more full pass, so v2 reopens it once.
+    test "a ledger closed at v1 runs one more pass and heals drift", %{user: u, vault: v} do
+      a = write!(u, v, "V1.md", "# V\n\nbody")
+      real = state(a.id).points
+      :ok = DataMigrations.mark_done(Backfill.name(), 1)
+
+      Repo.query!("UPDATE note_index_state SET points = points + 5 WHERE note_id = $1", [
+        Ecto.UUID.dump!(a.id)
+      ])
+
+      assert DataMigrationsRunner.run(Backfill, false) == :more
+      assert state(a.id).points == real
+      assert DataMigrationsRunner.run(Backfill, false) == :done
+      assert Backfill.counted?()
+    end
+
+    # Still the backstop while the ledger is open (a version bump reopens it):
+    # a note whose counters disagree with its chunks is found and fixed.
+    test "an open ledger still finds a drifted counter", %{user: u, vault: v} do
+      a = write!(u, v, "D.md", "# D\n\nbody")
+
+      Repo.query!("UPDATE note_index_state SET points = points + 5 WHERE note_id = $1", [
+        Ecto.UUID.dump!(a.id)
+      ])
+
+      assert {:more, rows: 1} = Backfill.run_pass()
+      assert :done = Backfill.run_pass()
     end
 
     test "keyset-pages across batches", %{user: u, vault: v} do

@@ -31,7 +31,7 @@ defmodule Engram.Notes.NoteBody do
   A note with no body row (written before the trigger, before the
   `NoteSplit` ledger reaches it) reads its `notes` columns instead, per row.
   So no ledger gate is needed: a skip-release self-host reads right while
-  its ledger runs, and a re-verify that finds a missed row costs nothing.
+  its ledger runs, and a reopened ledger that finds a missed row costs nothing.
   The fallback is a `CASE` branch, so when the body row exists Postgres
   never de-TOASTs the `notes` copy. `NoteSplit` REPORTS a body row that
   disagrees with its notes row (`drift/0`) and never repairs it: from the

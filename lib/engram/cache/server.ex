@@ -1,5 +1,5 @@
 defmodule Engram.Cache.Server do
-  @moduledoc "Owns every `Engram.Cache` table; applies cluster and Postgres evictions; sweeps expired rows."
+  @moduledoc "Owns every `Engram.Cache` table; applies cluster and Postgres evictions (and peers' data-migration reopens); sweeps expired rows."
   use GenServer
 
   alias Engram.Cache
@@ -81,6 +81,12 @@ defmodule Engram.Cache.Server do
 
   def handle_info({:cache_sync, {:engram_cache_evict_all, cache}}, state) do
     :ok = Cache.clear_local(cache)
+    {:noreply, state}
+  end
+
+  # A peer reopened a data migration: drop this node's cached `done?`.
+  def handle_info({:cache_sync, {:data_migration_reopen, name, version}}, state) do
+    :ok = Engram.DataMigrations.forget(name, version)
     {:noreply, state}
   end
 

@@ -36,8 +36,8 @@ defmodule Engram.Notes.Keys do
   @spec ids?() :: boolean()
   def ids? do
     # Read from the ledger table itself, not `DataMigrations.done?/2`, whose
-    # `true` is kept for the node's lifetime: a re-verify that reopens the
-    # migration (rows found without ids) must turn the ids off on every node
+    # `true` is kept for the node's lifetime: a reopened ledger (an operator's
+    # `DataMigrations.reopen/2` after a trigger-less restore) must turn the ids off on every node
     # within the minute, or lookups would miss rows that exist.
     Engram.Cache.fetch(:note_split, :done, fn ->
       Repo.exists?(

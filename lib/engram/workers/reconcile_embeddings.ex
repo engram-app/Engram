@@ -238,8 +238,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     sweep_tenant = fn repo, ids, remaining ->
       eligible =
-        IndexVersions.live_notes()
-        |> in_window(ids)
+        IndexVersions.live_notes(ids)
         # Two ways a note is stale:
         #   1. content changed since it was indexed (or was never indexed)
         #   2. it is indexed but has NO dense vectors. That is the backfill for
@@ -298,9 +297,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
                  n.embed_retry_after == ^EmbedNote.parked_until_edited() and ^version_stale)
           )
         )
-        |> order_by([n], asc: n.updated_at)
-        |> limit(^remaining)
-        |> select([n], n.id)
+        |> oldest_ids(remaining)
 
       # #897 — crash-independent backoff, done ATOMICALLY. EmbedNote's poison
       # cooldown only fires on a GRACEFUL terminal `{:error, _}` (maybe_mark_poison);
@@ -555,15 +552,12 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
       page = fn repo, ids, limit ->
         eligible =
-          IndexVersions.content_current_notes()
-          |> in_window(ids)
+          IndexVersions.content_current_notes(ids)
           |> where([n], n.dense_indexed_hash == n.content_hash and is_nil(n.index_tier))
           |> where(^dynamic([n], not (^IndexVersions.stale_dynamic(Rebuild.build_versions()))))
           |> where([n], is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now)
           |> where(^over_cap)
-          |> order_by([n], asc: n.updated_at)
-          |> limit(^limit)
-          |> select([n], n.id)
+          |> oldest_ids(limit)
 
         {_count, found} =
           from(n in Note, where: n.kind == "note" and n.id in subquery(eligible))
@@ -979,7 +973,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     IndexVersions.live_notes()
     |> join(:inner, [n], c in subquery(per_note), on: c.note_id == n.id)
-    |> select([n, _v, c], %{
+    |> select([n, c], %{
       id: n.id,
       tier: n.index_tier,
       updated_at: n.updated_at,
@@ -1322,8 +1316,11 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   defp page_in(user_id, repo, ids, page, handle),
     do: fn -> Repo.with_tenant!(user_id, fn -> page_counts(page.(repo, ids), handle) end) end
 
-  defp in_window(query, nil), do: query
-  defp in_window(query, ids), do: where(query, [n], n.id in ^ids)
+  # The eligible notes' ids, oldest `updated_at` first. Unwindowed,
+  # `notes_reconcile_due` serves it once IndexVersions is done; over an id
+  # window the rows were read by primary key (`IndexVersions.live_notes/1`).
+  defp oldest_ids(eligible, limit),
+    do: eligible |> order_by([n], asc: n.updated_at) |> limit(^limit) |> select([n], n.id)
 
   defp page_counts(rows, handle), do: {length(rows), handle.(rows)}
 
@@ -1537,8 +1534,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     page = fn repo, ids ->
       eligible =
-        IndexVersions.content_current_notes()
-        |> in_window(ids)
+        IndexVersions.content_current_notes(ids)
         |> where(^IndexVersions.keyword_stale_dynamic(versions))
         # A version-stale note gets a full rebuild above, which stamps the
         # keyword version itself.
@@ -1554,9 +1550,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
             (n.embed_budget_parked == true and exists(paid)) or
             n.embed_retry_after == ^EmbedNote.parked_until_edited()
         )
-        |> order_by([n], asc: n.updated_at)
-        |> limit(^page_size)
-        |> select([n], n.id)
+        |> oldest_ids(page_size)
 
       # Select-and-stamp in one statement, as the embed sweep does (#897): a
       # note whose resparse keeps failing (a lost Qdrant point 404s

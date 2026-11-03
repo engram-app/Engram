@@ -10,8 +10,8 @@ defmodule Engram.DataMigrations.NotePayloadStamps do
   (`set_payload`, no re-embed), so for everyone else this costs reads and a
   row stamp per note.
 
-  Not re-verified: every writer since #2044 stamps the hash, and a rotation
-  now rewrites and stamps it (`UserDekRotation`).
+  Every writer since #2044 stamps the hash, and a rotation now rewrites and
+  stamps it (`UserDekRotation`); it is still re-verified, see `reverify?/0`.
   """
   @behaviour Engram.DataMigration
 

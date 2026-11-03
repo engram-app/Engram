@@ -30,6 +30,8 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
   # Indexed notes beside the one due: enough that scanning the vault costs
   # clearly more than the partial index.
   @indexed 200
+  @small_vaults 400
+  @done :crypto.hash(:sha256, "# Test note content") |> Base.encode16(case: :lower)
 
   setup do
     DataMigrations.reset_cache()
@@ -42,13 +44,11 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
     vault = insert(:vault, user: user)
     note = insert(:note, user: user, vault: vault, embed_hash: nil)
 
-    done = :crypto.hash(:sha256, "# Test note content") |> Base.encode16(case: :lower)
-
     insert_list(@indexed, :note,
       user: user,
       vault: vault,
-      embed_hash: done,
-      dense_indexed_hash: done
+      embed_hash: @done,
+      dense_indexed_hash: @done
     )
 
     tick = DateTime.new!(Date.utc_today(), ~T[03:57:00])
@@ -66,5 +66,145 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
 
     plan = QueryPlan.generic_plan(sql, analyze: ~w(notes vaults))
     assert plan =~ "notes_reconcile_due", "plan:\n#{plan}\n\nsql:\n#{sql}"
+  end
+
+  # The windowed sweep (an IndexVersions rollout, and the daily re-verify)
+  # names one id window of notes. Prod E5 (2026-11-02, as engram_app under
+  # the tenant): with the vault as an INNER JOIN the planner drove the loop
+  # from the user's vaults and scanned `notes_recent_index (user_id,
+  # vault_id, updated_at, id)` once per vault, filtering the window's ids
+  # against every note of the vault: 445 ms, 669 cold reads, for 5 ids.
+  # The window must be fetched by primary key, under RLS (self-host's
+  # per-user walk, the E5 shape) and without it (SaaS' fleet walk).
+  # Seeds 400 users: slow on a loaded runner.
+  @tag timeout: 180_000
+  test "the windowed sweep fetches its id window by primary key, not per vault" do
+    {user, vaults} = seed_prod_shape()
+    note = insert(:note, user: user, vault: hd(vaults), embed_hash: nil)
+
+    # A version rollout is open (the test config opens the Qdrant gate): the
+    # version term is on, so the sweep walks id windows.
+    :ok = DataMigrations.reopen(IndexVersions.name(), 1)
+    DataMigrations.reset_cache()
+
+    tick = DateTime.new!(Date.utc_today(), ~T[03:57:00])
+
+    {_, queries} =
+      QueryRecorder.record(fn ->
+        assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick)
+      end)
+
+    assert_enqueued(worker: Engram.Workers.EmbedNote, args: %{"note_id" => note.id})
+
+    windowed =
+      for %{sql: "WITH \"reconcile_eligible\"" <> _ = sql} <- queries,
+          sql =~ "ANY(" or sql =~ "unnest(",
+          do: sql
+
+    assert [sql | _] = windowed, "recorded no windowed reconcile UPDATE on notes"
+
+    Repo.query!("ANALYZE notes")
+    Repo.query!("ANALYZE vaults")
+
+    fleet = QueryPlan.generic_plan(sql)
+    tenant = Repo.with_tenant!(user.id, fn -> QueryPlan.generic_plan(sql) end)
+
+    # Only the window fetch (the CTE): the outer UPDATE always probes
+    # `notes_pkey` by the CTE's ids, which says nothing about how the window
+    # was read. Any other notes index there (`notes_recent_index` per vault,
+    # `idx_notes_user_created_rank` per user) has `id` as a late column, so
+    # it reads every note of the vault or user to find the window's ids.
+    for plan <- [fleet, tenant], do: assert_pk_only(window_fetch(plan), plan, sql)
+  end
+
+  # The other two id-window discovery reads: `DataMigrations.any_row?/1`
+  # (IndexVersions' done check) and `IdWindows.all/2` (the CRDT head and
+  # state backfills, whose vault INNER JOIN is the E5 shape). Each window
+  # statement reads `notes` only by primary key, under the tenant's RLS
+  # (the per-user walk the test pool runs) and without it.
+  @tag timeout: 180_000
+  test "any_row? and IdWindows.all fetch their id window by primary key" do
+    {user, _vaults} = seed_prod_shape()
+
+    {_, queries} =
+      QueryRecorder.record(fn ->
+        IndexVersions.run_pass()
+        Engram.Workers.BackfillCrdtHead.enqueue_all()
+        Engram.Workers.BackfillCrdtState.enqueue_missing()
+      end)
+
+    windowed =
+      queries
+      |> QueryPlan.reading("notes")
+      |> Enum.filter(&(&1 =~ "ANY(" or &1 =~ "unnest("))
+      |> Enum.uniq()
+
+    any_row = for "SELECT TRUE" <> _ = sql <- windowed, do: sql
+    all = for "SELECT DISTINCT" <> _ = sql <- windowed, do: sql
+    assert [_] = any_row, "recorded no any_row? window read:\n#{Enum.join(windowed, "\n")}"
+    assert [_, _] = all, "recorded no IdWindows.all window reads:\n#{Enum.join(windowed, "\n")}"
+
+    Repo.query!("ANALYZE notes")
+    Repo.query!("ANALYZE vaults")
+
+    for sql <- any_row ++ all do
+      assert_pk_only(QueryPlan.generic_plan(sql), sql)
+      assert_pk_only(Repo.with_tenant!(user.id, fn -> QueryPlan.generic_plan(sql) end), sql)
+    end
+  end
+
+  # One user with two vaults of @indexed indexed notes, beside
+  # @small_vaults one-note users. Prod's shape: many small vaults, so the
+  # statistics put a few notes in any one vault (or user) and a per-vault
+  # index scan looks as cheap as the window's primary-key probes, though
+  # this user's vaults hold hundreds.
+  defp seed_prod_shape do
+    user = insert(:user)
+    vaults = insert_list(2, :vault, user: user)
+
+    for vault <- vaults,
+        do:
+          insert_list(@indexed, :note,
+            user: user,
+            vault: vault,
+            embed_hash: @done,
+            dense_indexed_hash: @done
+          )
+
+    for _ <- 1..@small_vaults do
+      other = insert(:user)
+
+      insert(:note,
+        user: other,
+        vault: insert(:vault, user: other),
+        embed_hash: @done,
+        dense_indexed_hash: @done
+      )
+    end
+
+    {user, vaults}
+  end
+
+  # `notes` is read through `notes_pkey` and no other notes index: any other
+  # (`notes_recent_index` per vault, `idx_notes_user_created_rank` per user)
+  # has `id` as a late column, so it reads every note of the vault or user
+  # to find the window's ids.
+  defp assert_pk_only(part, plan \\ nil, sql) do
+    msg = "window fetch:\n#{part}\n\nplan:\n#{plan || part}\n\nsql:\n#{sql}"
+    assert part =~ "notes_pkey", msg
+    refute part =~ ~r/Scan using (?!notes_pkey\b)\S+ on notes\b/, msg
+    refute part =~ ~r/Bitmap Index Scan on (?!notes_pkey\b)(idx_)?notes/, msg
+    refute part =~ "Seq Scan on notes", msg
+  end
+
+  # The `CTE reconcile_eligible` subtree of a plan: its header line, then
+  # every line indented deeper than the main statement's nodes.
+  defp window_fetch(plan) do
+    plan
+    |> String.split("\n")
+    |> Enum.drop_while(&(not (&1 =~ "CTE reconcile_eligible")))
+    |> Enum.drop(1)
+    |> Enum.take_while(&String.starts_with?(&1, "    "))
+    |> Enum.join("\n")
   end
 end

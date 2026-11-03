@@ -14,8 +14,9 @@ defmodule Engram.WindowedReads do
     * confined to a window by its key, ANDed into its WHERE (no `OR` at any
       level between the term and its statement): `key = ANY($n)` with `$n` a
       list of at most `window` ids, `key = ANY(ARRAY(<subquery>))` or
-      `key IN (<subquery>)` (the subquery's own sources are checked too), or
-      a join on the key to a CTE.
+      `key IN (<subquery>)` (the subquery's own sources are checked too), a
+      join on the key to a CTE, or `key = x."id"` with `x` the unnest of a
+      list of at most `window` ids (`IdWindows.by_id/2`).
 
   "The next N rows MATCHING a predicate" (`WHERE <predicate> AND id > $a
   ORDER BY id LIMIT $n`) fails: its LIMIT bounds rows returned, not read.
@@ -115,7 +116,22 @@ defmodule Engram.WindowedReads do
       |> Regex.scan(sql, return: :index)
       |> Enum.any?(fn [{pos, _}] -> anded?(sql, pos) end)
 
-    listed or subquery or cte_join?(sql, alias)
+    listed or subquery or cte_join?(sql, alias) or
+      probed?(sql, params, alias, col, window)
+  end
+
+  # `IdWindows.by_id/2`: the source is probed by `key = x."id"`, where `x`
+  # is `(SELECT unnest($n::uuid[]) AS id) AS x` and `$n` is a window of ids.
+  defp probed?(sql, params, _alias, col, window) do
+    ~r/\(SELECT unnest\(\$(\d+)::uuid\[\][^)]*\) AS id\) AS (\w+)/
+    |> Regex.scan(sql, capture: :all_but_first)
+    |> Enum.any?(fn [n, x] ->
+      ids = param(params, n)
+
+      is_list(ids) and ids != [] and length(ids) <= window and
+        Regex.scan(~r/#{col} = #{x}\."id"/, sql, return: :index)
+        |> Enum.any?(fn [{pos, _}] -> anded?(sql, pos) end)
+    end)
   end
 
   # `x."id" = alias."id"` where x reads a CTE (`WITH "name" AS`).

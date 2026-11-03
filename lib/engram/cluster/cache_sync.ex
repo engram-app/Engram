@@ -6,6 +6,7 @@ defmodule Engram.Cluster.CacheSync do
 
     * `Engram.Crypto.DekCache`     — after a DEK rotation / AAD rebind
     * `Engram.Cache`               — every registry cache, via `Engram.Cache.evict/2`
+    * `Engram.DataMigrations`      — the cached `done?`, on `reopen/2`
 
   Pattern: the mutating node clears its OWN cache synchronously, then calls
   `broadcast/1` so peers evict. Each cache subscribes via `subscribe/0` from a
@@ -15,7 +16,7 @@ defmodule Engram.Cluster.CacheSync do
 
   Message shape: `{:cache_sync, payload}` where payload is one of
   `{:dek_evict, user_id}`, `:dek_evict_all`, `{:engram_cache_evict, cache, key}`,
-  `{:engram_cache_evict_all, cache}`. Each
+  `{:engram_cache_evict_all, cache}`, `{:data_migration_reopen, name, version}`. Each
   subscriber pattern-matches only its own payloads and ignores the rest.
   """
 
