@@ -169,6 +169,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Invalid UTF-8 at rest (bytea bypasses PG validation) → `Jason.encode` 500 at every JSON egress; fix + backfill task → `docs/context/invalid-utf8-at-rest-json-500.md`
 
 **Perf & Quality**
+- Prod RDS SwapUsage alert while RAM looks fine, finding which job/query loaded the DB (RDSOSMetrics processList, slow log, PI group names), or adding a cron/maintenance job (no O(table) scans, no index on a save-written column, `cron_scan_bound_test`) → `docs/context/maintenance-job-db-load.md`
 - Read-path decrypt perf — parallel_map economics, when it helps vs hurts → `docs/context/read-path-decrypt-perf.md`
 - Perf caches + invalidation contracts (2026-06-12 audit wave) → `docs/context/perf-caching-invalidation.md`
 - Replacing hand-rolled code with a shared helper (consolidating a PARSER silently drops accepted input shapes no test names — CRLF frontmatter read as "no frontmatter"), or a log metadata key built inside a helper that Credo cannot see → `docs/context/consolidation-drops-undocumented-tolerances.md`
