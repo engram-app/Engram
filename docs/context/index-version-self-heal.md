@@ -182,8 +182,9 @@ model version renames the migration (its name carries all three), which reopens
 both scans. No operator step is involved; see
 `docs/context/data-migrations-ledger.md`.
 
-**Daily re-verify.** Done does not stay true by itself. Three things put
-version-stale notes back after the migration closed, and none renames it:
+**Version checks after done.** Done does not stay true by itself. Three
+things put version-stale notes back after the migration closed, and none
+renames it:
 
 - a rollback then roll-forward (the old release re-stamps old versions on the
   notes it re-indexes for an edit, then the new name is already done);
@@ -191,14 +192,22 @@ version-stale notes back after the migration closed, and none renames it:
 - a rolling deploy, where an old-release node stamps an old version after a
   new node marked the new name done.
 
-So `ReconcileEmbeddings` still runs the version term and the keyword sweep
-once a day: its own cron entry, `{"2 4 * * *", args: %{"mode" => "reverify"}}`
-(R6). Its args differ from a plain sweep's, so a kick or a running sweep
-never dedupes it. The run chains itself in 5-minute hops (`hop` arg, at most
-12 runs, the old hour's throughput) while a page came back full (the recap
-batch, the budget sweep's users, the keyword backlog) or the Qdrant gate was
-shut, and stops as soon as nothing is left. A stale note is healed within a
-day.
+None of them is a daily walk any more (Job Load Audit 2026-11-03: the 04:02
+walk was the heaviest statement of the day). Each requests a version check
+(`ReconcileEmbeddings.version_check/1`, a row in `maintenance_cursors`, so a
+replaced job cannot drop it):
+
+- a restore requests one for that vault; the next plain sweep runs the
+  version term over that vault's notes only, through a vault-leading index;
+- a boot whose index versions (`IndexVersions.name/0`) differ from the last
+  boot's requests one for the fleet, which pages stale notes in id windows on
+  the re-verify chain: 5-minute hops, at most `@version_check_hops` (12).
+
+The daily re-verify itself (`{"2 10 * * *", args: %{"mode" => "reverify"}}`,
+the 10:00-11:15 UTC off-peak window) keeps the budget and note-cap sweeps and
+chains at most `@reverify_hops` (4) hops. A request is cleared only by a run
+whose version term ran with nothing left; a shut Qdrant gate leaves it for the
+next run.
 
 ## Keyword v5: phrase pairs dropped (2026-10-27)
 
