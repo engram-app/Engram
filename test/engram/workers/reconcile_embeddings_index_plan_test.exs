@@ -30,7 +30,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
   # Indexed notes beside the one due: enough that scanning the vault costs
   # clearly more than the partial index.
   @indexed 200
-  @small_vaults 150
+  @small_vaults 400
 
   setup do
     DataMigrations.reset_cache()
@@ -99,7 +99,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
     for _ <- 1..@small_vaults do
       other = insert(:user)
 
-      insert_list(2, :note,
+      insert_list(1, :note,
         user: other,
         vault: insert(:vault, user: other),
         embed_hash: done,
@@ -107,12 +107,10 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
       )
     end
 
-    # A version rollout is open and the Qdrant gate lets it through: the
+    # A version rollout is open (the test config opens the Qdrant gate): the
     # version term is on, so the sweep walks id windows.
     :ok = DataMigrations.reopen(IndexVersions.name(), 1)
     DataMigrations.reset_cache()
-    Application.put_env(:engram, :reconcile_qdrant_gate, false)
-    on_exit(fn -> Application.delete_env(:engram, :reconcile_qdrant_gate) end)
 
     tick = DateTime.new!(Date.utc_today(), ~T[03:57:00])
 

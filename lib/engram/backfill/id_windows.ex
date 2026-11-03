@@ -54,7 +54,7 @@ defmodule Engram.Backfill.IdWindows do
   transaction spanning a table would hold every row lock for the duration.
   """
 
-  import Ecto.Query, only: [from: 2, where: 3, limit: 2]
+  import Ecto.Query, only: [from: 2, where: 3]
 
   alias Engram.Backfill.TenantScan
   alias Engram.Repo
@@ -232,32 +232,36 @@ defmodule Engram.Backfill.IdWindows do
   end
 
   @doc """
-  `query` (a query whose first binding is keyed `id`, no select) probed once
-  per id of the window: `unnest(ids)` joined LATERAL to `query` narrowed to
-  that one id (`LIMIT 1`). The caller adds its select, which binds
-  `[_window, row]`.
+  The rows of `schema` (keyed `id`) whose ids are in the window, each read
+  by a single-row primary-key lookup, as a query to use as a subquery
+  source (`from(n in subquery(IdWindows.by_id(Note, ids)), as: :note)`):
+  `unnest(ids)` joined LATERAL to `SELECT * FROM schema WHERE id = <one id>
+  LIMIT 1`. Every other predicate belongs OUTSIDE, on the subquery's rows.
 
-  Why not `id = ANY(ids)`: under a tenant's RLS the query also carries
-  `user_id = <tenant>`, and the planner estimates a user's rows from the
-  table average, a handful. It then serves `user_id` and the ids together
-  from a user-leading index whose `id` is a late column
-  (`idx_notes_user_created_rank (user_id, created_at, id)`;
-  `notes_recent_index (user_id, vault_id, ...)` per vault behind a vault
-  join), reading every note of the user to find the window (prod E5,
-  2026-11-02: 445 ms, 669 cold reads for 5 ids). A plain join on
-  `unnest(ids)` is planned the same way. A subquery with a LIMIT is not
-  pulled up, so each probe is planned alone as `id = $1`: a unique
-  primary-key equality, which no other index beats. ReconcileEmbeddingsIndexPlanTest
-  pins it, under RLS and without.
+  The probe must carry nothing but the id. Under a tenant's RLS it also
+  carries `user_id = <tenant>`, and the planner sizes a user from the table
+  average (a handful of rows). Given any more predicates (`kind = 'note'
+  AND deleted_at IS NULL`), the partial user-leading indexes that also hold
+  `id` become usable: `notes_recent_index (user_id, vault_id, updated_at
+  DESC, id DESC)` and `idx_notes_user_created_rank (user_id, created_at,
+  id)`. Postgres 18 skip-scans them on `user_id` + `id`, reading every note
+  of the user per probe (prod E5, 2026-11-02, the per-vault form: 445 ms
+  and 669 cold reads for 5 ids; CI picked the skip scan for this probe
+  once the liveness filter sat inside it). With the id alone no partial
+  index qualifies and no non-partial user-leading index holds `id`, so the
+  only index that answers `id = $1` is the primary key, and a subquery with
+  a LIMIT is not pulled up, so each probe is planned on its own.
+  ReconcileEmbeddingsIndexPlanTest pins it, under RLS and without.
   """
-  @spec by_id(Ecto.Query.t(), [Ecto.UUID.t()]) :: Ecto.Query.t()
-  def by_id(query, ids) do
-    probe = query |> where([r], field(r, :id) == parent_as(:id_window).id) |> limit(1)
+  @spec by_id(module(), [Ecto.UUID.t()]) :: Ecto.Query.t()
+  def by_id(schema, ids) do
+    probe = from(r in schema, where: field(r, :id) == parent_as(:id_window).id, limit: 1)
 
     from(w in fragment("SELECT unnest(?::uuid[]) AS id", type(^ids, {:array, Ecto.UUID})),
       as: :id_window,
       inner_lateral_join: r in subquery(probe),
-      on: true
+      on: true,
+      select: r
     )
   end
 
