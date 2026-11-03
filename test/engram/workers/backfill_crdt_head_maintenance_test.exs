@@ -57,9 +57,11 @@ defmodule Engram.Workers.BackfillCrdtHeadMaintenanceTest do
       :telemetry.attach(
         handler,
         [:engram, :repo, :query],
-        fn _e, _m, %{source: source, repo: repo}, _c ->
+        # By the SQL, not only `source`: a window read through
+        # `IdWindows.by_id/2` has a subquery source (nil).
+        fn _e, _m, %{source: source, query: sql, repo: repo}, _c ->
           cond do
-            self() != test_pid or source != "notes" -> :ok
+            self() != test_pid or not (source == "notes" or sql =~ ~s("notes")) -> :ok
             repo == Repo -> send(test_pid, :app_pool_notes_query)
             true -> send(test_pid, :maintenance_notes_query)
           end

@@ -252,9 +252,20 @@ defmodule Engram.Backfill.IdWindows do
   only index that answers `id = $1` is the primary key, and a subquery with
   a LIMIT is not pulled up, so each probe is planned on its own.
   ReconcileEmbeddingsIndexPlanTest pins it, under RLS and without.
+
+  Given a query on a schema instead of the schema itself, returns that
+  query with its source swapped for the probe of its schema: its bindings,
+  `as:` name, joins and predicates unchanged, all applied to the probed
+  rows. The windowed discovery reads (`all/2`, `any?/3` callers) go
+  through this form.
   """
-  @spec by_id(module(), [Ecto.UUID.t()]) :: Ecto.Query.t()
-  def by_id(schema, ids) do
+  @spec by_id(module() | Ecto.Query.t(), [Ecto.UUID.t()]) :: Ecto.Query.t()
+  def by_id(%Ecto.Query{from: %{source: {_table, schema}} = source} = query, ids)
+      when is_atom(schema) and not is_nil(schema) do
+    %{query | from: %{source | source: Ecto.Query.subquery(by_id(schema, ids))}}
+  end
+
+  def by_id(schema, ids) when is_atom(schema) do
     probe = from(r in schema, where: field(r, :id) == parent_as(:id_window).id, limit: 1)
 
     from(w in fragment("SELECT unnest(?::uuid[]) AS id", type(^ids, {:array, Ecto.UUID})),
@@ -268,8 +279,9 @@ defmodule Engram.Backfill.IdWindows do
   @doc """
   Every row `query` (a `notes` query, first binding the note) returns, across
   all tenants, asked one id window at a time: the windowed form of
-  `TenantScan.all/1` for a rare predicate. Duplicates across windows are the
-  caller's to drop (a `distinct` holds within one window).
+  `TenantScan.all/1` for a rare predicate. Each window's rows are read by
+  primary key (`by_id/2`). Duplicates across windows are the caller's to
+  drop (a `distinct` holds within one window).
   """
   @spec all(Ecto.Query.t(), keyword()) :: list()
   def all(%Ecto.Query{} = query, opts \\ []) do
@@ -278,7 +290,7 @@ defmodule Engram.Backfill.IdWindows do
         Engram.Notes.Note,
         [],
         fn ids, %{repo: repo}, acc ->
-          {:cont, [repo.all(where(query, [n], n.id in ^ids)) | acc]}
+          {:cont, [repo.all(by_id(query, ids)) | acc]}
         end,
         Keyword.put_new(opts, :batch_size, @fleet_window)
       )

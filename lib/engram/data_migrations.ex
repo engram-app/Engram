@@ -210,7 +210,8 @@ defmodule Engram.DataMigrations do
   @doc """
   True if `queryable`, a `notes` query, returns a row in any tenant. Walks
   `notes` in id windows (`Engram.Backfill.IdWindows.any?/3`) and asks only
-  inside each window, stopping at the first hit: each statement reads one
+  inside each window, the window's rows read by primary key
+  (`IdWindows.by_id/2`), stopping at the first hit: each statement reads one
   window, so "is anything left?" stays bounded however rare the answer is
   (#2276). The old single EXISTS walked the whole table, slowest when
   almost done. Fleet-wide on the maintenance pool, else per user inside that
@@ -219,9 +220,11 @@ defmodule Engram.DataMigrations do
   """
   @spec any_row?(Ecto.Queryable.t()) :: boolean()
   def any_row?(queryable) do
+    query = Ecto.Queryable.to_query(queryable)
+
     IdWindows.any?(
       Note,
-      fn ids, %{repo: repo} -> repo.exists?(where(queryable, [n], n.id in ^ids)) end,
+      fn ids, %{repo: repo} -> repo.exists?(IdWindows.by_id(query, ids)) end,
       batch_size: @window
     )
   end
