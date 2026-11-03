@@ -145,6 +145,35 @@ defmodule Engram.RebuildExclusionTest do
       assert [%{state: "available"}] = all_enqueued(worker: RepathNoteIndex)
     end
 
+    # Prod 2026-11-03: the build's pass closed on 11-01 but the switch was
+    # still `on`, so 801 bulk repaths sat `suspended` (stale search paths)
+    # with nothing to free them. A closed pass has nothing left to protect.
+    test "a completed pass stops holding and frees what it held, switch still on" do
+      on!()
+
+      args = %{
+        note_id: Ecto.UUID.generate(),
+        user_id: Ecto.UUID.generate(),
+        old_path_hmac: "aA=="
+      }
+
+      assert :ok = perform_job(RepathNoteIndex, Map.put(args, :bulk, true))
+      assert [%{state: "suspended"}] = all_enqueued(worker: RepathNoteIndex)
+
+      {chunker, keyword} = Rebuild.build_versions()
+
+      Engram.DataMigrations.mark_done(
+        "index_versions:chunker=#{chunker},keyword=#{keyword},model=voyage-4-large",
+        Engram.DataMigrations.IndexVersions.version()
+      )
+
+      Engram.Cache.clear_local(:rebuild)
+
+      refute Rebuild.holding?()
+      assert :ok = perform_job(ReleaseRebuildHeld, %{})
+      assert [%{state: "available"}] = all_enqueued(worker: RepathNoteIndex)
+    end
+
     test "a bulk repath runs when the pass is off" do
       ServiceConfig.put_override(:index_rebuild, "off")
 

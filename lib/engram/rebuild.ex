@@ -475,13 +475,22 @@ defmodule Engram.Rebuild do
     do: Engram.Jobs.capped_backoff(@gate_snooze, snoozed, @gate_snooze_max, 0.25)
 
   @doc """
-  True while the switch reads `on`, halted or not: the writers Task 16.4
-  keeps out of the pass (bulk repaths, DEK rotations) wait on this, not on
-  `mode/0`. A budget halt only pauses the pass; raising the budget resumes
-  it, so a DEK rotation let go during a halt could still be running then.
+  True while the switch reads `on`, halted or not, and this build's pass has
+  not completed: the writers Task 16.4 keeps out of the pass (bulk repaths,
+  DEK rotations) wait on this, not on `mode/0`. A budget halt only pauses the
+  pass; raising the budget resumes it, so a DEK rotation let go during a halt
+  could still be running then.
+
+  A completed pass has nothing left to protect, so it stops holding even
+  with the switch left `on` and the hourly release frees what it held. Prod
+  2026-11-03: the 5/5 pass closed on 11-01, the switch stayed `on`, and 801
+  bulk repaths sat `suspended` (stale search paths) with nothing to free
+  them. A pass that reopens (`IndexVersions`) holds again.
   """
   @spec holding?() :: boolean()
-  def holding?, do: ServiceConfig.get(:index_rebuild, "off") == "on"
+  def holding?,
+    do:
+      ServiceConfig.get(:index_rebuild, "off") == "on" and newest_completed() != build_versions()
 
   @doc """
   Parks `job` until `holding?/0` is false (Task 16.4) and returns `:ok`
