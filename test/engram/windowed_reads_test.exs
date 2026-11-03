@@ -107,6 +107,17 @@ defmodule Engram.WindowedReadsTest do
       assert windowed?("SELECT id::text FROM notes WHERE id = ANY($1::uuid[]) FOR UPDATE", [@ids])
     end
 
+    # IdWindows.by_id/2: each id probed alone by primary key.
+    test "a source probed once per id of an unnest window" do
+      sql =
+        ~s|SELECT ss1."id" FROM (SELECT unnest($1::uuid[]::uuid[]) AS id) AS sf0 | <>
+          ~s|INNER JOIN LATERAL (SELECT ssn0."id" AS "id" FROM "notes" AS ssn0 | <>
+          ~s|WHERE (ssn0."kind" = 'note') AND (ssn0."id" = sf0."id") LIMIT 1) AS ss1 ON TRUE|
+
+      assert windowed?(sql, [@ids])
+      refute windowed?(sql, [Enum.map(1..1_001, fn _ -> Ecto.UUID.generate() end)])
+    end
+
     test "a statement that reads no notes" do
       assert windowed?("SELECT 1 FROM users", [])
     end

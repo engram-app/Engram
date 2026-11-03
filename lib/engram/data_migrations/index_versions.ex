@@ -99,8 +99,13 @@ defmodule Engram.DataMigrations.IndexVersions do
   (`notes_recent_index (user_id, vault_id, updated_at, id)`), filtering an
   id window against every note of the vault. Prod, 2026-11-02: 445 ms and
   669 cold reads for a 5-id window. An anti-join keeps `notes` the outer
-  side, so a window is read by primary key. ReconcileEmbeddingsIndexPlanTest
-  pins it.
+  side; the windowed sweeps then probe each id by primary key
+  (`IdWindows.by_id/2`). ReconcileEmbeddingsIndexPlanTest pins it.
+
+  Under a tenant's RLS the two forms differ for a note whose vault the
+  tenant cannot see (another owner's): the inner join dropped it, the
+  anti-join keeps it. No such note exists while every vault has one owner;
+  shared/team vaults (#2389) must revisit this.
   """
   @spec live_notes() :: Ecto.Query.t()
   def live_notes do

@@ -124,19 +124,41 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
     assert_enqueued(worker: Engram.Workers.EmbedNote, args: %{"note_id" => note.id})
 
     windowed =
-      for %{sql: "WITH \"reconcile_eligible\"" <> _ = sql} <- queries, sql =~ "ANY(", do: sql
+      for %{sql: "WITH \"reconcile_eligible\"" <> _ = sql} <- queries,
+          sql =~ "ANY(" or sql =~ "unnest(",
+          do: sql
 
     assert [sql | _] = windowed, "recorded no windowed reconcile UPDATE on notes"
 
     Repo.query!("ANALYZE notes")
     Repo.query!("ANALYZE vaults")
 
-    fleet = QueryPlan.generic_plan(sql, bitmapscan: false)
-    tenant = Repo.with_tenant!(user.id, fn -> QueryPlan.generic_plan(sql, bitmapscan: false) end)
+    fleet = QueryPlan.generic_plan(sql)
+    tenant = Repo.with_tenant!(user.id, fn -> QueryPlan.generic_plan(sql) end)
 
+    # Only the window fetch (the CTE): the outer UPDATE always probes
+    # `notes_pkey` by the CTE's ids, which says nothing about how the window
+    # was read. Any other notes index there (`notes_recent_index` per vault,
+    # `idx_notes_user_created_rank` per user) has `id` as a late column, so
+    # it reads every note of the vault or user to find the window's ids.
     for plan <- [fleet, tenant] do
-      assert plan =~ "notes_pkey", "plan:\n#{plan}\n\nsql:\n#{sql}"
-      refute plan =~ ~r/Index Cond: .*vault_id = /, "plan:\n#{plan}\n\nsql:\n#{sql}"
+      window = window_fetch(plan)
+      msg = "window fetch:\n#{window}\n\nplan:\n#{plan}\n\nsql:\n#{sql}"
+      assert window =~ "notes_pkey", msg
+      refute window =~ ~r/Scan using (?!notes_pkey\b)\S+ on notes\b/, msg
+      refute window =~ ~r/Bitmap Index Scan on (?!notes_pkey\b)(idx_)?notes/, msg
+      refute window =~ "Seq Scan on notes", msg
     end
+  end
+
+  # The `CTE reconcile_eligible` subtree of a plan: its header line, then
+  # every line indented deeper than the main statement's nodes.
+  defp window_fetch(plan) do
+    plan
+    |> String.split("\n")
+    |> Enum.drop_while(&(not (&1 =~ "CTE reconcile_eligible")))
+    |> Enum.drop(1)
+    |> Enum.take_while(&String.starts_with?(&1, "    "))
+    |> Enum.join("\n")
   end
 end

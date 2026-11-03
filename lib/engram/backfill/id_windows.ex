@@ -54,7 +54,7 @@ defmodule Engram.Backfill.IdWindows do
   transaction spanning a table would hold every row lock for the duration.
   """
 
-  import Ecto.Query, only: [from: 2, where: 3]
+  import Ecto.Query, only: [from: 2, where: 3, limit: 2]
 
   alias Engram.Backfill.TenantScan
   alias Engram.Repo
@@ -229,6 +229,36 @@ defmodule Engram.Backfill.IdWindows do
         after_id = if from_user == nil, do: from_after
         reduce({:fleet, maintenance}, schema, acc, fun, Keyword.put(opts, :after, after_id))
     end
+  end
+
+  @doc """
+  `query` (a query whose first binding is keyed `id`, no select) probed once
+  per id of the window: `unnest(ids)` joined LATERAL to `query` narrowed to
+  that one id (`LIMIT 1`). The caller adds its select, which binds
+  `[_window, row]`.
+
+  Why not `id = ANY(ids)`: under a tenant's RLS the query also carries
+  `user_id = <tenant>`, and the planner estimates a user's rows from the
+  table average, a handful. It then serves `user_id` and the ids together
+  from a user-leading index whose `id` is a late column
+  (`idx_notes_user_created_rank (user_id, created_at, id)`;
+  `notes_recent_index (user_id, vault_id, ...)` per vault behind a vault
+  join), reading every note of the user to find the window (prod E5,
+  2026-11-02: 445 ms, 669 cold reads for 5 ids). A plain join on
+  `unnest(ids)` is planned the same way. A subquery with a LIMIT is not
+  pulled up, so each probe is planned alone as `id = $1`: a unique
+  primary-key equality, which no other index beats. ReconcileEmbeddingsIndexPlanTest
+  pins it, under RLS and without.
+  """
+  @spec by_id(Ecto.Query.t(), [Ecto.UUID.t()]) :: Ecto.Query.t()
+  def by_id(query, ids) do
+    probe = query |> where([r], field(r, :id) == parent_as(:id_window).id) |> limit(1)
+
+    from(w in fragment("SELECT unnest(?::uuid[]) AS id", type(^ids, {:array, Ecto.UUID})),
+      as: :id_window,
+      inner_lateral_join: r in subquery(probe),
+      on: true
+    )
   end
 
   @doc """
