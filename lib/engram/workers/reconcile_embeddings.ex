@@ -99,7 +99,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # A chained run's delay, and the daily re-verify's hop limit: the cadence
   # and the throughput of the old 5-minute cron, only while work remains.
   @chain_seconds 300
-  @reverify_hops 12
+  # Capped low (Job Load Audit 2026-11-03): the re-verify no longer walks the
+  # notes table (see `gates/1`), so its hops only page the budget and note-cap
+  # sweeps, and four 5-minute hops end inside the off-peak window.
+  @reverify_hops 4
 
   @doc """
   Queues a sweep now. Called where notes are marked for re-indexing (index
@@ -412,10 +415,15 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     open? = not IndexVersions.done?()
     qdrant_open? = not (open? or reverify?) or qdrant_open?()
 
+    # The version term walks every notes window, so it runs only while a
+    # rollout is open. The daily re-verify used to run it too, to catch notes a
+    # rollback then roll-forward or a restored vault left version-stale after
+    # the ledger closed; that walk was the 04:02 slow statement (Job Load Audit
+    # 2026-11-03), so a release that needs it bumps the version instead.
     %{
       open?: open?,
       qdrant_open?: qdrant_open?,
-      version_term?: (open? or reverify?) and qdrant_open?
+      version_term?: open? and qdrant_open?
     }
   end
 

@@ -107,9 +107,10 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
     end
 
-    # A rollback then roll-forward, or a restored soft-deleted vault, leaves
-    # version-stale notes after the migration closed. The daily re-verify heals them.
-    test "once IndexVersions is done, the daily re-verify still sweeps a version-stale note" do
+    # The re-verify no longer walks every notes window once IndexVersions is
+    # done (the 04:02 slow statement, Job Load Audit 2026-11-03): only an open
+    # rollout runs the version term. Red before: the re-verify queued it.
+    test "once IndexVersions is done, the daily re-verify does not walk for version-stale notes" do
       user = insert(:user)
       insert(:subscription, user: user, tier: "pro", status: "active")
       note = current_note(user, chunker_version: nil, keyword_version: nil)
@@ -117,10 +118,10 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
 
       assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
 
-      assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
+      refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
     end
 
-    test "once IndexVersions is done, the keyword sweep runs only in the daily re-verify" do
+    test "once IndexVersions is done, the keyword sweep does not run, re-verify included" do
       user = insert(:user)
       note = current_note(user, keyword_version: nil)
       :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
@@ -136,16 +137,15 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
 
       assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
-      assert_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
+      refute_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
     end
 
-    # A later hop of the re-verify chain re-verifies too.
-    test "a re-verify hop re-verifies" do
+    # While a rollout is open the version and keyword terms still run.
+    test "an open rollout still sweeps keyword-stale notes" do
       user = insert(:user)
       note = current_note(user, keyword_version: nil)
-      :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify", "hop" => 11})
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify", "hop" => 3})
       assert_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
     end
 
