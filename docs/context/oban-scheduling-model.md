@@ -87,7 +87,7 @@ assert no tenant-table query reaches it).
   `test/engram/workers/cron_scan_bound_test.exs` (the index and the per-run
   cap); a new cron fails that test until it does.
 - Drift in app-kept bookkeeping is found through partial indexes by
-  `BookkeepingDrain` (`7,22,37,52 * * * *`), never by re-walking a table.
+  `BookkeepingDrain` (`12,27,42,57 * * * *`), never by re-walking a table.
 
 ## Checklist for a new worker
 

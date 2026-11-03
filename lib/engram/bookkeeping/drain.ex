@@ -27,7 +27,6 @@ defmodule Engram.Bookkeeping.Drain do
   alias Engram.Backfill.TenantScan
   alias Engram.Crypto.Envelope
   alias Engram.DataMigrations.FolderTable
-  alias Engram.Links
   alias Engram.Logger.Metadata
   alias Engram.Repo
   alias Engram.Workers.BackfillLinkKeys
@@ -36,51 +35,99 @@ defmodule Engram.Bookkeeping.Drain do
 
   require Logger
 
-  # Users read per probe per tick; the rest are reached on later ticks as the
-  # earlier ones leave the index.
-  @users_per_probe 100
-
+  # Each probe is a LITERAL statement (no interpolation: it is a security-scanner
+  # finding, and a computed predicate is how a probe silently stops matching its
+  # index). `$1` is the user in a per-user scope (self-host), NULL on the fleet
+  # pool; the OR is a filter on the index entries and does not affect which
+  # partial index the predicate selects. At most 100 users per probe per tick;
+  # the rest are reached on later ticks as the earlier ones leave the index.
   @envelope [
     {"notes",
-     "octet_length(content_nonce) = 12 AND octet_length(content_ciphertext) > 16 AND dek_version >= 2"},
-    {"notes", "octet_length(crdt_state_nonce) = 12 AND octet_length(crdt_state_ciphertext) > 16"},
+     """
+     SELECT DISTINCT user_id FROM notes
+     WHERE octet_length(content_nonce) = 12 AND octet_length(content_ciphertext) > 16
+       AND dek_version >= 2 AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+     """},
+    {"notes",
+     """
+     SELECT DISTINCT user_id FROM notes
+     WHERE octet_length(crdt_state_nonce) = 12 AND octet_length(crdt_state_ciphertext) > 16
+       AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+     """},
     {"crdt_update_log",
-     "octet_length(update_nonce) = 12 AND octet_length(update_ciphertext) > 16"},
+     """
+     SELECT DISTINCT user_id FROM crdt_update_log
+     WHERE octet_length(update_nonce) = 12 AND octet_length(update_ciphertext) > 16
+       AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+     """},
     {"vault_index_states",
-     "octet_length(state_nonce) = 12 AND octet_length(state_ciphertext) > 16"},
+     """
+     SELECT DISTINCT user_id FROM vault_index_states
+     WHERE octet_length(state_nonce) = 12 AND octet_length(state_ciphertext) > 16
+       AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+     """},
     {"vault_index_update_log",
-     "octet_length(update_nonce) = 12 AND octet_length(update_ciphertext) > 16"}
+     """
+     SELECT DISTINCT user_id FROM vault_index_update_log
+     WHERE octet_length(update_nonce) = 12 AND octet_length(update_ciphertext) > 16
+       AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+     """}
   ]
 
-  @payload [{"note_index_state", "payload_hash IS NULL AND chunk_count > 0"}]
+  # The Unicode version is inlined as in `*_link_keys_stale_index`
+  # (20261018230001): "15.1.0" = 0x31352e312e30. `LinkKeysIndexTest` and the
+  # plan test fail together when an Elixir upgrade moves it.
+  @link_keys [
+    {"notes",
+     """
+     SELECT DISTINCT user_id FROM notes
+     WHERE basename_hmac IS NOT NULL
+       AND link_keys_stamp IS DISTINCT FROM (path_nonce || '\\x31352e312e30'::bytea)
+       AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+     """},
+    {"attachments",
+     """
+     SELECT DISTINCT user_id FROM attachments
+     WHERE basename_hmac IS NOT NULL
+       AND link_keys_stamp IS DISTINCT FROM (path_nonce || '\\x31352e312e30'::bytea)
+       AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+     """},
+    {"note_links",
+     """
+     SELECT DISTINCT user_id FROM note_links
+     WHERE link_keys_stamp IS DISTINCT FROM (target_text_nonce || '\\x31352e312e30'::bytea)
+       AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+     """}
+  ]
+
+  @payload [
+    {"note_index_state",
+     """
+     SELECT DISTINCT user_id FROM note_index_state
+     WHERE payload_hash IS NULL AND chunk_count > 0
+       AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+     """}
+  ]
 
   @folder [
     {"notes",
-     "kind = 'note' AND deleted_at IS NULL AND folder_ref_id IS NULL AND octet_length(folder_ciphertext) > 16"}
+     """
+     SELECT DISTINCT user_id FROM notes
+     WHERE kind = 'note' AND deleted_at IS NULL AND folder_ref_id IS NULL
+       AND octet_length(folder_ciphertext) > 16
+       AND ($1::uuid IS NULL OR user_id = $1) LIMIT 100
+     """}
   ]
 
   @doc """
-  `{table, predicate}` for each probe, by kind (`:envelope | :link_keys |
-  :payload | :folder`). Public for the plan test.
+  `{table, sql}` for each probe, by kind (`:envelope | :link_keys | :payload |
+  :folder`). Public for the plan test.
   """
   @spec probes(atom()) :: [{String.t(), String.t()}]
   def probes(:envelope), do: @envelope
+  def probes(:link_keys), do: @link_keys
   def probes(:payload), do: @payload
   def probes(:folder), do: @folder
-
-  # The link-key stale test with the Unicode version inlined, as in
-  # `notes_link_keys_stale_index`.
-  def probes(:link_keys) do
-    v = "'\\x" <> Base.encode16(Links.link_keys_version(), case: :lower) <> "'::bytea"
-
-    [
-      {"notes",
-       "basename_hmac IS NOT NULL AND link_keys_stamp IS DISTINCT FROM (path_nonce || #{v})"},
-      {"attachments",
-       "basename_hmac IS NOT NULL AND link_keys_stamp IS DISTINCT FROM (path_nonce || #{v})"},
-      {"note_links", "link_keys_stamp IS DISTINCT FROM (target_text_nonce || #{v})"}
-    ]
-  end
 
   @doc "One tick. Returns the users handed to each repair."
   @spec run() :: %{atom() => non_neg_integer()}
@@ -134,21 +181,21 @@ defmodule Engram.Bookkeeping.Drain do
   defp users(kind) do
     kind
     |> probes()
-    |> Enum.flat_map(fn {table, predicate} -> probe(table, predicate) end)
+    |> Enum.flat_map(fn {_table, sql} -> probe(sql) end)
     |> Enum.uniq()
   end
 
-  defp probe(table, predicate) do
-    sql = "SELECT DISTINCT user_id FROM #{table} WHERE #{predicate}"
-
+  # Sobelow cannot see that `sql` is one of this module's literal probes above
+  # (never input, never interpolated), so it reports the variable argument.
+  # sobelow_skip ["SQL.Query"]
+  defp probe(sql) do
     case TenantScan.pool() do
       {:fleet, repo} ->
-        repo.query!(sql <> " LIMIT #{@users_per_probe}", []).rows |> Enum.map(&load/1)
+        repo.query!(sql, [nil]).rows |> Enum.map(&load/1)
 
       :per_user ->
         TenantScan.flat_map_users(fn uid ->
-          Repo.query!(sql <> " AND user_id = $1 LIMIT 1", [Ecto.UUID.dump!(uid)]).rows
-          |> Enum.map(&load/1)
+          Repo.query!(sql, [Ecto.UUID.dump!(uid)]).rows |> Enum.map(&load/1)
         end)
     end
   end

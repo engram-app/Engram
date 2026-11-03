@@ -16,7 +16,8 @@ defmodule Engram.Workers.CronScanBoundTest do
   use ExUnit.Case, async: true
 
   @bounded %{
-    Engram.Workers.BookkeepingCanary => "primary-key range reads of ~200 sampled notes per run",
+    Engram.Workers.ReleaseRebuildHeld =>
+      "oban_jobs rows held by the rebuild (state/queue index), a no-op while the rebuild is on",
     Engram.Workers.BookkeepingDrain =>
       "partial indexes *_envelope_legacy, note_index_state_unstamped, notes_unresolved_folder, *_link_keys_stale; 100 users per probe",
     Engram.Workers.WarmCrdtHeads =>

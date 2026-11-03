@@ -148,12 +148,8 @@ defmodule Engram.Bookkeeping.DrainTest do
         probes = Drain.probes(unquote(kind))
         assert length(probes) == length(unquote(names))
 
-        for {{table, predicate}, name} <- Enum.zip(probes, unquote(names)) do
-          plan =
-            QueryPlan.generic_plan(
-              "SELECT DISTINCT user_id FROM #{table} WHERE #{predicate} LIMIT 100",
-              analyze: [table]
-            )
+        for {{table, sql}, name} <- Enum.zip(probes, unquote(names)) do
+          plan = QueryPlan.generic_plan(sql, analyze: [table])
 
           assert plan =~ name, "#{table} probe does not use #{name}:\n#{plan}"
           refute plan =~ "Seq Scan on #{table}", plan

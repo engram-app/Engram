@@ -141,7 +141,11 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   @doc "True while the user has an unstamped indexed note (the worker's own selection predicate)."
   @spec unstamped_rows?(Ecto.UUID.t()) :: boolean()
   def unstamped_rows?(user_id) do
-    {:ok, any} = Repo.with_tenant(user_id, fn -> Repo.exists?(where(unstamped(), [n], n.user_id == ^user_id)) end)
+    {:ok, any} =
+      Repo.with_tenant(user_id, fn ->
+        Repo.exists?(where(unstamped(), [n], n.user_id == ^user_id))
+      end)
+
     any
   end
 
