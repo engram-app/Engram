@@ -16,7 +16,7 @@ defmodule Engram.Attachments.BulkUpdate do
 
   alias Engram.Repo
 
-  # x at most 10 params per row: far under Postgres's 65535-bind-param limit
+  # x at most 11 params per row: far under Postgres's 65535-bind-param limit
   @chunk 500
 
   @doc "Rows per statement. `:attachments_bulk_chunk` lowers it (tests)."
@@ -27,7 +27,6 @@ defmodule Engram.Attachments.BulkUpdate do
     delete: "deleted_at = $1, updated_at = $1, seq = v.seq",
     touch: "updated_at = $1, seq = v.seq"
   }
-  # Columns a move rewrites, in VALUES order, with their SQL types.
   @move_cols [
     path_ciphertext: "bytea",
     path_nonce: "bytea",
@@ -36,14 +35,15 @@ defmodule Engram.Attachments.BulkUpdate do
     path_ci_hmac: "bytea",
     path_length: "integer",
     link_keys_stamp: "bytea",
-    folder_ref_id: "uuid"
+    folder_ref_id: "uuid",
+    folder_ref_stamp: "bytea"
   ]
 
   @doc """
   Repoints live rows to new paths: `rows` is `[{id, seq, cols}]` where `cols`
-  holds a value for every column in `@move_cols`. One UPDATE per chunk;
-  returns how many rows moved. A live-path unique violation raises, rolling
-  the caller's transaction back.
+  holds a value for every `@move_cols` column (VALUES order, SQL types). One
+  UPDATE per chunk; returns how many rows moved. A live-path unique violation
+  raises, rolling the caller's transaction back.
   """
   @spec move!([{binary(), integer(), keyword()}], DateTime.t()) :: non_neg_integer()
   def move!(rows, now) do

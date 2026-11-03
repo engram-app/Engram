@@ -423,7 +423,7 @@ defmodule Engram.FoldersTest do
     } do
       for i <- 1..30, do: put_att(user, vault, "Docs/f#{i}.png")
 
-      # Warm the data_migrations caches (verified_until, Keys) with a throwaway
+      # Warm the data_migrations caches (Keys) with a throwaway
       # rename: cold, they add 3 statements, and whether they are cold depends
       # on which test ran first (seed), not on the code under test.
       put_att(user, vault, "Warm/f.png")
@@ -869,6 +869,12 @@ defmodule Engram.FoldersTest do
         })
 
       corrupt_attachment_metadata!(att.id)
+      # Its folder reference is not stamped (written before the stamp), so
+      # nothing says where the unreadable row is.
+      Engram.Repo.query!("UPDATE attachments SET folder_ref_stamp = NULL WHERE id = $1", [
+        Ecto.UUID.dump!(att.id)
+      ])
+
       {:ok, _} = Notes.create_folder_marker(user, vault, "Drafts")
 
       # `Drafts` is genuinely empty and the corrupt row is under `Photos`.
@@ -876,6 +882,26 @@ defmodule Engram.FoldersTest do
 
       # ...and recursive must always have a way through.
       assert {:ok, %{notes: 0}} = Folders.delete(user, vault, "Drafts", recursive: true)
+    end
+
+    # #2413: a current (stamped) reference places the unreadable row under
+    # `Photos`, so an unrelated folder's delete is not refused for it.
+    test "an unreadable attachment with a current reference does not block others", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, att} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "Photos/old.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      corrupt_attachment_metadata!(att.id)
+      {:ok, _} = Notes.create_folder_marker(user, vault, "Drafts")
+
+      assert {:ok, %{notes: 0, attachments: 0}} = Folders.delete(user, vault, "Drafts")
     end
 
     test "recursive deletes notes + attachments under the folder", %{user: user, vault: vault} do

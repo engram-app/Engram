@@ -173,7 +173,7 @@ defmodule Engram.Folders.ReviewFixesTest do
           })
       end
 
-      Repo.query!("UPDATE attachments SET folder_ref_id = NULL")
+      Repo.query!("UPDATE attachments SET folder_ref_id = NULL, folder_ref_stamp = NULL")
       assert {:more, _} = FolderTable.run_pass(user_ids: [u.id], batch: 2)
       assert FolderTable.run_pass(user_ids: [u.id], batch: 2) == :done
     end
@@ -187,7 +187,7 @@ defmodule Engram.Folders.ReviewFixesTest do
           })
       end
 
-      Repo.query!("UPDATE attachments SET folder_ref_id = NULL")
+      Repo.query!("UPDATE attachments SET folder_ref_id = NULL, folder_ref_stamp = NULL")
 
       assert {:more, opts} =
                FolderTable.run_pass(user_ids: [u.id], batch: 1, attachment_budget_ms: -1)

@@ -63,6 +63,36 @@ defmodule Engram.Folders.Rows do
     |> Enum.scan(fn seg, acc -> acc <> "/" <> seg end)
   end
 
+  # ---- attachment references ----------------------------------------------
+
+  @doc """
+  The columns that point an attachment at its folder row `ref` (nil at the
+  root), stamped with the `path_nonce` of the path the folder was taken from.
+  Every writer of `attachments.folder_ref_id` goes through here: a reference is
+  trusted only while its stamp equals the row's `path_nonce`
+  (`attachment_ref_current/0`), so a writer that rewrites the path without this
+  (the previous release, a raw update) leaves a mismatch that readers check by
+  path and `Engram.Bookkeeping.Drain` heals through `attachments_folder_ref_stale`.
+  """
+  @spec attachment_ref(Ecto.UUID.t() | nil, binary()) :: keyword()
+  def attachment_ref(ref, path_nonce) when is_binary(path_nonce),
+    do: [folder_ref_id: ref, folder_ref_stamp: path_nonce]
+
+  @doc """
+  The stamp a path re-encryption that keeps the folder (a DEK rotation) carries
+  forward: `[folder_ref_stamp: new_nonce]` if the reference was current under
+  `old_nonce`, else nothing (a stale reference stays stale for the drain).
+  """
+  @spec carry_attachment_ref(binary() | nil, binary(), binary()) :: keyword()
+  def carry_attachment_ref(stamp, old_nonce, new_nonce)
+  def carry_attachment_ref(stamp, stamp, new_nonce), do: [folder_ref_stamp: new_nonce]
+  def carry_attachment_ref(_stamp, _old_nonce, _new_nonce), do: []
+
+  @doc "`a.folder_ref_stamp = a.path_nonce` on the attachment bound as `:a`."
+  @spec attachment_ref_current() :: Ecto.Query.dynamic_expr()
+  def attachment_ref_current,
+    do: dynamic([a: a], a.folder_ref_stamp == a.path_nonce)
+
   # ---- find-or-create ------------------------------------------------------
 
   @doc """

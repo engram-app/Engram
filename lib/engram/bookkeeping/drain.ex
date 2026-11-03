@@ -2,14 +2,16 @@ defmodule Engram.Bookkeeping.Drain do
   @moduledoc """
   Heals app-kept bookkeeping drift in time proportional to the drift, not the
   table. Replaces the daily re-verify walk of `EnvelopeFormat`,
-  `LinkResolutionKeys` and `NotePayloadStamps`, and the notes half of
-  `FolderTable`'s (Job Load Audit 2026-11-03, item 1).
+  `LinkResolutionKeys`, `NotePayloadStamps` and `FolderTable` (Job Load Audit
+  2026-11-03, item 1; the attachments half of `FolderTable` since its
+  reference stamp, #2413).
 
   Some bookkeeping needs a per-user key (envelope format, link-key HMACs,
   Qdrant payload stamps, folder rows), so a database trigger cannot keep it,
   and a previous-release writer during a rolling deploy skips it. Each kind
   has a partial index whose predicate is the drift test (migration
-  20261103130200, and the link-key indexes of 20261018230001), empty in steady
+  20261103130200, the link-key indexes of 20261018230001 and
+  `attachments_folder_ref_stale` of 20261103140100), empty in steady
   state. One tick runs one `SELECT DISTINCT user_id ... LIMIT 100` per index
   (an index read of a page or two), then hands the users to the worker that
   owns the repair. Nothing here reads `notes` outside those indexes.
@@ -21,7 +23,8 @@ defmodule Engram.Bookkeeping.Drain do
   The repairs are the existing ones: `ReencodeEnvelopes`, `BackfillLinkKeys`
   and `ReconcileNotePayloads` per-user chains (their own rotation gate,
   `unique` and compression gate apply), and `FolderTable.run_pass/1` for the
-  users with an unresolved folder reference.
+  users with an unresolved note folder reference or an attachment whose
+  reference was not computed from its current path.
   """
 
   alias Engram.Backfill.TenantScan
@@ -123,6 +126,13 @@ defmodule Engram.Bookkeeping.Drain do
        AND octet_length(folder_ciphertext) > 16
        AND ($1::uuid IS NULL OR user_id = $1)
        AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 10
+     """},
+    {"attachments",
+     """
+     SELECT DISTINCT user_id FROM attachments
+     WHERE deleted_at IS NULL AND folder_ref_stamp IS DISTINCT FROM path_nonce
+       AND ($1::uuid IS NULL OR user_id = $1)
+       AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 10
      """}
   ]
 
@@ -182,9 +192,10 @@ defmodule Engram.Bookkeeping.Drain do
     kind |> users() |> Enum.filter(confirm) |> then(&TenantScan.enqueue_users(worker, &1))
   end
 
-  # A user whose note sits in a folder with no row yet: `FolderTable` creates
-  # the folder rows and points the notes. Only once its ledger has closed; an
-  # open ledger is the hourly runner's.
+  # A user whose note sits in a folder with no row yet, or whose attachment's
+  # reference is not stamped with its current path: `FolderTable` creates the
+  # folder rows and points (and stamps) the rows. Only once its ledger has
+  # closed; an open ledger is the hourly runner's.
   defp folder do
     case users(:folder) do
       [] ->

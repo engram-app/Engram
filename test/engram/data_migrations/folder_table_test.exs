@@ -38,7 +38,7 @@ defmodule Engram.DataMigrations.FolderTableTest do
   # rows existed. Wipes both, as a pre-release database would look.
   defp unresolve! do
     Repo.query!("UPDATE notes SET folder_ref_id = NULL")
-    Repo.query!("UPDATE attachments SET folder_ref_id = NULL")
+    Repo.query!("UPDATE attachments SET folder_ref_id = NULL, folder_ref_stamp = NULL")
     Repo.query!("DELETE FROM folders")
   end
 
@@ -71,32 +71,43 @@ defmodule Engram.DataMigrations.FolderTableTest do
     %{marker: marker, notes: notes, atts: atts}
   end
 
-  describe "attachment walk gated by the last verification" do
-    # Job Load Audit 2026-11-03, item 1: a pass over a closed ledger decrypted
-    # EVERY attachment path nightly. Rows untouched since the last clean
-    # verification are vouched for; only newer ones are read. Red before: the
-    # option did not exist and the pass fixed every attachment.
-    test "an attachment older than `attachments_since` is skipped, a newer one is fixed", %{
+  describe "attachment walk reads only unstamped rows (#2413)" do
+    # Job Load Audit 2026-11-03, item 1: a pass decrypted EVERY attachment path
+    # nightly. Now it reads only the rows whose reference is not stamped with
+    # their current path. Red before: the stamp did not exist.
+    test "a stamped row is not read; an unstamped one is pointed and stamped", %{
       user: u,
       vault: v
     } do
-      old = attachment!(u, v, "A/old.png")
-      fresh = attachment!(u, v, "A/fresh.png")
-      unresolve!()
+      stamped = attachment!(u, v, "A/stamped.png")
+      upgraded = attachment!(u, v, "A/upgraded.png")
+      tree = folder_tree(u)
 
-      Repo.query!("UPDATE attachments SET updated_at = now() - interval '2 days' WHERE id = $1", [
-        dump(old.id)
+      # Stamped and current: its path is unreadable, so a pass that read it
+      # would count it blocked and stay open.
+      Repo.query!("UPDATE attachments SET path_ciphertext = '\\x00'::bytea WHERE id = $1", [
+        dump(stamped.id)
       ])
 
-      since = DateTime.add(DateTime.utc_now(), -3600)
-      assert {:more, _} = FolderTable.run_pass(attachments_since: since)
+      # Written before the stamp existed (the version 2 upgrade): right
+      # reference, no stamp.
+      Repo.query!("UPDATE attachments SET folder_ref_stamp = NULL WHERE id = $1", [
+        dump(upgraded.id)
+      ])
 
-      assert ref("attachments", fresh.id) != nil
-      assert ref("attachments", old.id) == nil
+      run_to_done()
 
-      # Never verified (nil): the whole walk, as before.
-      assert {:more, _} = FolderTable.run_pass(attachments_since: nil)
-      assert ref("attachments", old.id) != nil
+      assert ref("attachments", upgraded.id) == tree["A"].id
+
+      %{rows: [[true]]} =
+        Repo.query!("SELECT folder_ref_stamp = path_nonce FROM attachments WHERE id = $1", [
+          dump(upgraded.id)
+        ])
+    end
+
+    test "no daily re-verify: the drain owns drift once the ledger closes" do
+      refute function_exported?(FolderTable, :reverify?, 0)
+      assert FolderTable.version() == 2
     end
   end
 
@@ -289,7 +300,12 @@ defmodule Engram.DataMigrations.FolderTableTest do
       # (`insert_note!` is that writer: the app's own writers now create the row.)
       fresh = Engram.Fixtures.insert_note!(u, v, %{path: "Fresh/Sub/Z.md", content: "# T"})
       assert ref("notes", fresh.id) == nil
-      Repo.query!("UPDATE attachments SET folder_ref_id = NULL WHERE id = $1", [dump(att.id)])
+
+      Repo.query!(
+        "UPDATE attachments SET folder_ref_id = NULL, folder_ref_stamp = NULL WHERE id = $1",
+        [dump(att.id)]
+      )
+
       Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [dump(tree["A"].id)])
 
       run_to_done()

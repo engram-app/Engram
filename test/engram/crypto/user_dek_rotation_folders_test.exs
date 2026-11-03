@@ -130,6 +130,49 @@ defmodule Engram.Crypto.UserDekRotationFoldersTest do
     assert length(folders(user.id)) == 7
   end
 
+  # #2413: the rotation re-encrypts every attachment path (a fresh nonce) and
+  # keeps its folder, so a current reference's stamp moves with the nonce; a
+  # reference that was not current stays not current, for the drain.
+  test "a rotation carries a current attachment reference's stamp to the new nonce", %{
+    user: user,
+    vault: vault
+  } do
+    put = fn path ->
+      {:ok, att} =
+        Engram.Attachments.upsert_attachment(user, vault, %{
+          "path" => path,
+          "content_base64" => Base.encode64("bytes of " <> path)
+        })
+
+      att
+    end
+
+    current = put.("Pics/a.png")
+    stale = put.("Pics/b.png")
+
+    Repo.query!("UPDATE attachments SET folder_ref_stamp = NULL WHERE id = $1", [
+      Ecto.UUID.dump!(stale.id)
+    ])
+
+    stamp = fn id ->
+      %{rows: [[nonce, matches]]} =
+        Repo.query!(
+          "SELECT path_nonce, folder_ref_stamp IS NOT DISTINCT FROM path_nonce FROM attachments WHERE id = $1",
+          [Ecto.UUID.dump!(id)]
+        )
+
+      {nonce, matches}
+    end
+
+    {nonce_before, true} = stamp.(current.id)
+    assert :ok = UserDekRotation.rotate_user(user.id)
+
+    {nonce_after, matches} = stamp.(current.id)
+    assert nonce_after != nonce_before
+    assert matches
+    assert {_, false} = stamp.(stale.id)
+  end
+
   test "a looping parent chain does not hang or fail the rotation", %{user: user, vault: vault} do
     write!(user, vault, "P/Q/n.md")
     FolderTable.run_pass(user_ids: [user.id])

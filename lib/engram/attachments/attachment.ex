@@ -18,6 +18,9 @@ defmodule Engram.Attachments.Attachment do
     # The folder ROW this attachment sits in (migration 20261029000200). Set by
     # the app next to the path; NULL = root, or a row the previous release wrote.
     field :folder_ref_id, Ecto.UUID
+    # The `path_nonce` `folder_ref_id` was computed from; the reference is
+    # trusted only while they match (`Engram.Folders.Rows.attachment_ref/2`).
+    field :folder_ref_stamp, :binary
     # Link resolution keys (`Engram.Links.path_keys/3`), trusted only while the stamp matches.
     field :path_ci_hmac, :binary
     field :path_length, :integer
@@ -72,6 +75,7 @@ defmodule Engram.Attachments.Attachment do
       :path_hmac,
       :basename_hmac,
       :folder_ref_id,
+      :folder_ref_stamp,
       :path_ci_hmac,
       :path_length,
       :link_keys_stamp,

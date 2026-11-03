@@ -27,6 +27,38 @@ defmodule Engram.Bookkeeping.DrainTest do
   end
 
   defp sql!(statement, args \\ []), do: Repo.query!(statement, args)
+
+  defp put_att!(user, vault, path) do
+    {:ok, att} =
+      Engram.Attachments.upsert_attachment(user, vault, %{
+        "path" => path,
+        "content_base64" => Base.encode64("bytes of " <> path)
+      })
+
+    att
+  end
+
+  defp folder_ref(id) do
+    %{rows: [[ref]]} =
+      sql!("SELECT folder_ref_id FROM attachments WHERE id = $1", [Ecto.UUID.dump!(id)])
+
+    ref && Ecto.UUID.load!(ref)
+  end
+
+  # What a previous-release node writes on a move: the path columns (a fresh
+  # nonce), not this release's reference stamp.
+  defp old_release_move!(user, att, new_path) do
+    {:ok, dek} = Engram.Crypto.get_dek(user)
+    {:ok, fk} = Engram.Crypto.dek_filter_key(user)
+    aad = Engram.Crypto.aad_for_row(:attachments, :path, att.id)
+    {ct, nonce} = Engram.Crypto.Envelope.encrypt(new_path, dek, aad)
+
+    sql!(
+      "UPDATE attachments SET path_ciphertext = $2, path_nonce = $3, path_hmac = $4 WHERE id = $1",
+      [Ecto.UUID.dump!(att.id), ct, nonce, Engram.Crypto.hmac_field(fk, new_path)]
+    )
+  end
+
   defp zero?(counts), do: Enum.all?(Map.values(counts), &(&1 == 0))
 
   test "clean data: the drain finds and queues nothing", %{user: u, vault: v} do
@@ -123,6 +155,36 @@ defmodule Engram.Bookkeeping.DrainTest do
       assert zero?(Drain.run())
     end
 
+    # #2413. The previous release moves an attachment: it rewrites the path
+    # (fresh nonce) and leaves the old folder's reference. Red before the
+    # stamp: nothing but FolderTable's nightly walk ever looked at attachments.
+    # No walk here: the clean row's path is corrupted, so a pass that decrypted
+    # it would count it blocked.
+    test "an attachment an old writer moved is re-pointed by the drain, no walk", %{
+      user: u,
+      vault: v
+    } do
+      att = put_att!(u, v, "Old/x.png")
+      clean = put_att!(u, v, "Keep/y.png")
+      old_folder = folder_ref(att.id)
+      old_release_move!(u, att, "New/x.png")
+
+      sql!("UPDATE attachments SET path_ciphertext = '\\x00'::bytea WHERE id = $1", [
+        Ecto.UUID.dump!(clean.id)
+      ])
+
+      :ok = DataMigrations.mark_done(FolderTable.name(), FolderTable.version())
+      assert folder_ref(att.id) == old_folder
+      assert %{folder: 1, folder_blocked: 0} = Drain.run()
+
+      new_ref = folder_ref(att.id)
+      assert new_ref != old_folder
+      assert Engram.FolderRows.tree(u)["New"].id == new_ref
+      # (Its link keys are stale too, the simulated writer skipped them: that
+      # is the link-key probe's.)
+      assert %{folder: 0} = Drain.run()
+    end
+
     test "an open FolderTable ledger is left to the hourly runner", %{user: u, vault: v} do
       write!(u, v, "Open/n.md")
       sql!("UPDATE notes SET folder_ref_id = NULL")
@@ -143,7 +205,7 @@ defmodule Engram.Bookkeeping.DrainTest do
       link_keys: ~w(notes_link_keys_stale_index attachments_link_keys_stale_index
                     note_links_link_keys_stale_index),
       payload: ~w(note_index_state_unstamped),
-      folder: ~w(notes_unresolved_folder)
+      folder: ~w(notes_unresolved_folder attachments_folder_ref_stale)
     }
 
     # Realistic statistics, set by this test: many clean live notes, no drift.
@@ -184,7 +246,7 @@ defmodule Engram.Bookkeeping.DrainTest do
     lost = write!(u, v, "Lost/x.md")
     sql!("UPDATE notes SET folder_ref_id = NULL WHERE id = $1", [Ecto.UUID.dump!(lost.id)])
 
-    [{table, sql}] = Drain.probes(:folder)
+    [{table, sql} | _] = Drain.probes(:folder)
     plan = QueryPlan.generic_plan(sql, analyze: [table], fresh: true)
     assert plan =~ "notes_unresolved_folder", plan
   end
@@ -232,11 +294,9 @@ defmodule Engram.Bookkeeping.DrainTest do
   # probe must return only the users one tick repairs. Red on 156c2fd94: it
   # paged 100 and repaired 10, so 90 were skipped and stuck users starved them.
   test "the folder probe pages exactly the users one tick repairs" do
-    [{_table, sql}] = Drain.probes(:folder)
-    assert sql =~ "LIMIT #{Drain.page(:folder)}\n"
     assert Drain.page(:folder) == 10
 
-    for kind <- [:envelope, :link_keys, :payload],
+    for kind <- [:folder, :envelope, :link_keys, :payload],
         {_t, sql} <- Drain.probes(kind),
         do: assert(sql =~ "LIMIT #{Drain.page(kind)}\n")
   end

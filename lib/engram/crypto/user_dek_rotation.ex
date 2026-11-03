@@ -1009,7 +1009,12 @@ defmodule Engram.Crypto.UserDekRotation do
                 [
                   {:basename_hmac,
                    Crypto.hmac_field(new_filter_key, Engram.Links.basename_key(plaintext))}
-                  | Engram.Links.path_keys(new_filter_key, plaintext, new_nonce)
+                  | Engram.Links.path_keys(new_filter_key, plaintext, new_nonce) ++
+                      Engram.Folders.Rows.carry_attachment_ref(
+                        att.folder_ref_stamp,
+                        nonce,
+                        new_nonce
+                      )
                 ]
               else
                 []
