@@ -320,6 +320,28 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
     reload(note)
   end
 
+  describe "narrow read (NoteSizes done)" do
+    # Job Load Audit 2026-11-03, item 5: the daily budget sweep GROUP BY'd every
+    # wide notes row. Once the size/liveness columns are filled it reads
+    # `note_index_state`; the outcome must be the same. Red before: the sweep
+    # still issued `GROUP BY user_id` over notes.
+    test "demotes the same and aggregates no notes rows", %{user: user, vault: vault} do
+      ids = full_notes(user, vault, div(cap() * 12, 1_000), 100, real: true)
+      Engram.DataMigrations.mark_done(Engram.DataMigrations.NoteSizes.name(), 1)
+
+      {result, queries} =
+        Engram.QueryRecorder.record(fn -> ReconcileEmbeddings.budget_sweep(20) end)
+
+      assert {:ok, %{demoted: demoted, promoted: 0}} = result
+      assert demoted > 0
+      assert length(ids) > demoted
+
+      refute Enum.any?(queries, fn q ->
+               q.sql =~ ~s(FROM "notes") and q.sql =~ ~s(GROUP BY) and q.sql =~ "min("
+             end)
+    end
+  end
+
   describe "demote" do
     test "over the cap demotes oldest-first to at or under it; notes kept; second sweep idle", %{
       user: user,

@@ -67,9 +67,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   alias Engram.Billing
   alias Engram.Billing.Subscription
   alias Engram.DataMigrations.IndexVersions
+  alias Engram.DataMigrations.NoteSizes
   alias Engram.Indexing
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{Chunk, Note}
+  alias Engram.Notes.{Chunk, Note, NoteIndexState}
   alias Engram.Rebuild
   alias Engram.Repo
   alias Engram.ServiceConfig
@@ -823,11 +824,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # (`chunk_count` is set on a full-tier note only when it merged): the
     # smallest per user is the one that could promote first.
     smallest = fn where ->
-      from(n in Note,
-        where: n.kind == "note" and is_nil(n.deleted_at),
-        group_by: n.user_id,
-        select: {n.user_id, min(coalesce(n.chunk_count, 1))}
-      )
+      live_per_user_notes()
+      |> group_by([n], n.user_id)
+      |> select([n], {n.user_id, min(coalesce(n.chunk_count, 1))})
       |> where(^where)
       |> per_user.()
       |> Map.new()
@@ -857,7 +856,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     reachable_until = DateTime.add(now, backoff_seconds(), :second)
 
     behind =
-      IndexVersions.live_notes()
+      live_notes_in_live_vaults()
       |> where([n], not is_nil(n.embed_hash))
       |> where([n], is_nil(n.chunker_version) or n.chunker_version < ^chunker)
       |> where([n], is_nil(n.embed_retry_after) or n.embed_retry_after <= ^reachable_until)
@@ -907,6 +906,31 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     |> Enum.sort_by(fn {group, rank, _user} -> {group, rank} end)
     |> Enum.take(limit)
     |> Enum.map(&elem(&1, 2))
+  end
+
+  # The live notes the daily budget sweep aggregates over. Once `NoteSizes` has
+  # filled `note_index_state.note_live` (kept by the `notes_sync_sizes` trigger)
+  # the sweep reads that narrow table, whose embed columns are mirrored from
+  # `notes` by trigger; until then it aggregates the wide `notes` heap (Job Load
+  # Audit 2026-11-03, item 5: these GROUP BYs read every notes row daily).
+  # Both shapes expose user_id, index_tier, chunk_count, embed_hash,
+  # chunker_version and embed_retry_after under the same names.
+  defp live_per_user_notes do
+    if NoteSizes.done?(),
+      do: from(s in NoteIndexState, where: s.note_live),
+      else: from(n in Note, where: n.kind == "note" and is_nil(n.deleted_at))
+  end
+
+  defp live_notes_in_live_vaults do
+    if NoteSizes.done?() do
+      from(s in NoteIndexState,
+        join: v in Engram.Vaults.Vault,
+        on: v.id == s.vault_id and is_nil(v.deleted_at),
+        where: s.note_live
+      )
+    else
+      IndexVersions.live_notes()
+    end
   end
 
   # The collection status the Qdrant health poller reads. Unreachable counts as red: nothing
