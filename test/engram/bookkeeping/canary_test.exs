@@ -26,7 +26,7 @@ defmodule Engram.Bookkeeping.CanaryTest do
         n
       end
 
-    %{notes: notes}
+    %{notes: notes, user: user, vault: vault}
   end
 
   defp sql(note, statement),
@@ -72,6 +72,72 @@ defmodule Engram.Bookkeeping.CanaryTest do
       """)
 
       assert drift_of(Canary.run()) == %{body_drift: 1}
+    end
+  end
+
+  # #2413: FolderTable has no nightly re-verify, so the canary samples the
+  # references readers trust. Red before: no folder invariant existed.
+  describe "folder references" do
+    defp put_att(user, vault, path) do
+      {:ok, att} =
+        Engram.Attachments.upsert_attachment(user, vault, %{
+          "path" => path,
+          "content_base64" => Base.encode64("bytes of " <> path)
+        })
+
+      att
+    end
+
+    defp folder_id(user, path), do: Engram.FolderRows.tree(user)[path].id
+
+    test "clean folders and attachments: zero drift, attachments counted", ctx do
+      %{user: u, vault: v} = ctx
+      {:ok, _} = Notes.upsert_note(u, v, %{"path" => "F/n.md", "content" => "x"}, actor: "api")
+      put_att(u, v, "F/a.png")
+      put_att(u, v, "root.png")
+
+      report = Canary.run()
+      assert report.checked == 3 + 1 + 2
+      assert drift_of(report) == %{}
+    end
+
+    test "a note whose reference names another folder's row", ctx do
+      %{user: u, vault: v} = ctx
+      {:ok, n} = Notes.upsert_note(u, v, %{"path" => "F/n.md", "content" => "x"}, actor: "api")
+      {:ok, _} = Notes.upsert_note(u, v, %{"path" => "G/m.md", "content" => "x"}, actor: "api")
+
+      Repo.query!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [
+        Ecto.UUID.dump!(n.id),
+        Ecto.UUID.dump!(folder_id(u, "G"))
+      ])
+
+      assert drift_of(Canary.run()) == %{folder_ref: 1}
+    end
+
+    test "a trusted attachment reference to the wrong folder", ctx do
+      %{user: u, vault: v} = ctx
+      att = put_att(u, v, "F/a.png")
+      put_att(u, v, "G/b.png")
+
+      Repo.query!(
+        "UPDATE attachments SET folder_ref_id = $2, folder_ref_stamp = path_nonce WHERE id = $1",
+        [Ecto.UUID.dump!(att.id), Ecto.UUID.dump!(folder_id(u, "G"))]
+      )
+
+      assert drift_of(Canary.run()) == %{folder_ref: 1}
+    end
+
+    test "control: an unstamped wrong reference is the drain's, not trusted drift", ctx do
+      %{user: u, vault: v} = ctx
+      att = put_att(u, v, "F/a.png")
+      put_att(u, v, "G/b.png")
+
+      Repo.query!(
+        "UPDATE attachments SET folder_ref_id = $2, folder_ref_stamp = NULL WHERE id = $1",
+        [Ecto.UUID.dump!(att.id), Ecto.UUID.dump!(folder_id(u, "G"))]
+      )
+
+      assert drift_of(Canary.run()) == %{}
     end
   end
 

@@ -20,6 +20,16 @@ defmodule Engram.Bookkeeping.Canary do
   with 4,800 sampled rows a day, drift in 0.1% of rows is seen with ~99%
   probability, drift in 0.01% with ~38%.
 
+  `folder_ref` is the app-kept half: `FolderTable` has no nightly re-verify,
+  and `Engram.Bookkeeping.Drain` only finds references whose drift its indexes
+  describe (a NULL note reference, an attachment reference stamped for another
+  path). This counts the references a reader TRUSTS that are wrong anyway: a
+  sampled note whose folder row's `full_path_hmac` is not its `folder_hmac`,
+  and a sampled attachment, stamped current, whose decrypted path is not in
+  its folder row (a writer that stamped a wrong folder). Attachments are
+  sampled like notes, on their own ids; their paths are decrypted under each
+  sampled user's key, counts only leave this module.
+
   `body_drift` compares each `notes` body column with its `note_bodies` copy.
   It is meaningful only while `notes` still carries the body columns: once
   the R8 contract (#2402) drops them there is nothing to compare, and the
@@ -43,10 +53,15 @@ defmodule Engram.Bookkeeping.Canary do
 
   import Ecto.Query
 
+  alias Engram.Accounts.User
+  alias Engram.Attachments.Attachment
   alias Engram.Backfill.TenantScan
+  alias Engram.Crypto
   alias Engram.DataMigrations.NoteIndexState
   alias Engram.DataMigrations.NoteSplit
+  alias Engram.Folders.Rows
   alias Engram.Logger.Metadata
+  alias Engram.Notes.Helpers
   alias Engram.Repo
 
   require Logger
@@ -54,13 +69,14 @@ defmodule Engram.Bookkeeping.Canary do
   @points 20
   @per_point 10
 
-  @invariants [:note_split, :body_drift, :state_missing, :counters_drift]
+  @invariants [:note_split, :body_drift, :state_missing, :counters_drift, :folder_ref]
 
   @doc "The invariant tags the canary reports, in a stable order."
   @spec invariants() :: [invariant(), ...]
   def invariants, do: @invariants
 
-  @type invariant :: :note_split | :body_drift | :state_missing | :counters_drift
+  @type invariant ::
+          :note_split | :body_drift | :state_missing | :counters_drift | :folder_ref
   @type report :: %{checked: non_neg_integer(), drift: %{invariant() => non_neg_integer()}}
 
   @doc """
@@ -74,8 +90,12 @@ defmodule Engram.Bookkeeping.Canary do
 
     report =
       scoped(points, fn repo, user_id, share ->
-        ids = sample(repo, user_id, share, per_point)
-        {length(ids), check(repo, ids)}
+        ids = sample(repo, "notes", user_id, share, per_point)
+        att_ids = sample(repo, "attachments", user_id, share, per_point)
+        drift = check(repo, ids)
+
+        {length(ids) + length(att_ids),
+         %{drift | folder_ref: drift.folder_ref + wrong_attachment_refs(repo, att_ids)}}
       end)
       |> Enum.reduce(%{checked: 0, drift: zero()}, fn {n, drift}, acc ->
         %{checked: acc.checked + n, drift: Map.merge(acc.drift, drift, fn _, a, b -> a + b end)}
@@ -97,9 +117,74 @@ defmodule Engram.Bookkeeping.Canary do
       note_split: length(NoteSplit.unfixed_ids(repo, ids)),
       body_drift: length(NoteSplit.drift_ids(repo, ids)),
       state_missing: missing,
-      counters_drift: length(drifted)
+      counters_drift: length(drifted),
+      folder_ref: wrong_note_refs(repo, ids)
     }
   end
+
+  # Live notes whose reference names a live folder row of another path. A NULL
+  # reference (no row yet) is the drain's, not a trusted wrong one.
+  defp wrong_note_refs(repo, ids) do
+    from(n in "notes",
+      join: f in "folders",
+      on: f.id == n.folder_ref_id and is_nil(f.deleted_at),
+      where:
+        n.id in type(^ids, {:array, Ecto.UUID}) and n.kind == "note" and is_nil(n.deleted_at) and
+          (f.full_path_hmac != n.folder_hmac or f.vault_id != n.vault_id),
+      select: count()
+    )
+    |> repo.one()
+  end
+
+  # Live attachments a reader trusts (stamp current) whose decrypted path is not
+  # in the folder row they name (or that name one at the root).
+  defp wrong_attachment_refs(_repo, []), do: 0
+
+  defp wrong_attachment_refs(repo, ids) do
+    from(a in "attachments",
+      as: :a,
+      left_join: f in "folders",
+      on: f.id == a.folder_ref_id and is_nil(f.deleted_at),
+      where: a.id in type(^ids, {:array, Ecto.UUID}) and is_nil(a.deleted_at),
+      where: ^Rows.attachment_ref_current(),
+      select: %{
+        id: type(a.id, Ecto.UUID),
+        user_id: type(a.user_id, Ecto.UUID),
+        dek_version: a.dek_version,
+        path_ciphertext: a.path_ciphertext,
+        path_nonce: a.path_nonce,
+        ref: a.folder_ref_id,
+        folder_live?: not is_nil(f.id),
+        folder_hmac: f.full_path_hmac
+      }
+    )
+    |> repo.all()
+    |> Enum.group_by(& &1.user_id)
+    |> Enum.map(fn {user_id, rows} -> count_wrong(repo, user_id, rows) end)
+    |> Enum.sum()
+  end
+
+  # A path that does not decrypt is not judged here (the drain's warning owns it).
+  defp count_wrong(repo, user_id, rows) do
+    with %User{} = user <- repo.get(User, user_id),
+         {:ok, fk} <- Crypto.dek_filter_key(user) do
+      Enum.count(rows, fn row ->
+        att =
+          struct(Attachment, Map.take(row, [:id, :dek_version, :path_ciphertext, :path_nonce]))
+
+        case Crypto.maybe_decrypt_attachment_fields(att, user) do
+          {:ok, %{path: path}} -> wrong_ref?(row, Helpers.extract_folder(path), fk)
+          _ -> false
+        end
+      end)
+    else
+      _ -> 0
+    end
+  end
+
+  defp wrong_ref?(row, "", _fk), do: row.ref != nil
+  defp wrong_ref?(%{folder_live?: false}, _folder, _fk), do: true
+  defp wrong_ref?(row, folder, fk), do: row.folder_hmac != Rows.path_hmac(fk, folder)
 
   # ---- sampling ------------------------------------------------------------
 
@@ -119,9 +204,9 @@ defmodule Engram.Bookkeeping.Canary do
     end
   end
 
-  defp sample(repo, user_id, points, per_point) do
-    with lo when is_binary(lo) <- edge(repo, user_id, :asc),
-         hi when is_binary(hi) <- edge(repo, user_id, :desc) do
+  defp sample(repo, table, user_id, points, per_point) do
+    with lo when is_binary(lo) <- edge(repo, table, user_id, :asc),
+         hi when is_binary(hi) <- edge(repo, table, user_id, :desc) do
       {lo, hi} = {to_int(lo), to_int(hi)}
 
       # The smallest id is always a position, so a table of at most `per_point`
@@ -129,21 +214,21 @@ defmodule Engram.Bookkeeping.Canary do
       positions = [lo | for(_ <- 2..points//1, do: lo + :rand.uniform(hi - lo + 1) - 1)]
 
       positions
-      |> Enum.flat_map(&from_point(repo, user_id, &1, per_point))
+      |> Enum.flat_map(&from_point(repo, table, user_id, &1, per_point))
       |> Enum.uniq()
     else
       nil -> []
     end
   end
 
-  defp edge(repo, user_id, dir) do
-    from(n in "notes", order_by: [{^dir, n.id}], limit: 1, select: type(n.id, Ecto.UUID))
+  defp edge(repo, table, user_id, dir) do
+    from(n in table, order_by: [{^dir, n.id}], limit: 1, select: type(n.id, Ecto.UUID))
     |> scope(user_id)
     |> repo.one()
   end
 
-  defp from_point(repo, user_id, at, per_point) do
-    from(n in "notes",
+  defp from_point(repo, table, user_id, at, per_point) do
+    from(n in table,
       where: n.id >= type(^from_int(at), Ecto.UUID),
       order_by: n.id,
       limit: ^per_point,
