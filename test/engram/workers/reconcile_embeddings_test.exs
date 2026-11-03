@@ -134,9 +134,10 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       {:ok, _} = Vaults.delete_vault(user, note.vault_id)
 
       assert {:ok, _} = Vaults.restore_vault(user, note.vault_id)
-      assert_enqueued(worker: ReconcileEmbeddings, args: %{"mode" => "reverify"})
+      assert_enqueued(worker: ReconcileEmbeddings)
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
+      # The next plain sweep (what the restore kicks) heals it.
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
       assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
     end
 
@@ -156,12 +157,33 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
 
       {:ok, _} = ReconcileEmbeddings.version_check(note.vault_id)
       {:ok, _} = ReconcileEmbeddings.version_check(note.vault_id)
-      assert length(Cursor.with_prefix("reconcile:version_check")) == 1
+      assert length(Cursor.family("reconcile:version_check")) == 1
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
+      {:ok, queries} =
+        QueryRecorder.record(fn -> perform_job(ReconcileEmbeddings, %{}) end)
+
       assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
       refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => other.id})
-      assert Cursor.with_prefix("reconcile:version_check") == []
+      assert Cursor.family("reconcile:version_check") == []
+
+      # Red on 671d1bafc: the scoped version term still walked every id window
+      # of notes (`"id" = ANY(...)` windows). Now no window read, and the
+      # vault-scoped sweep is an index read of notes.
+      reconcile = Enum.filter(queries, &(&1.sql =~ "reconcile_eligible"))
+      refute Enum.any?(reconcile, &(&1.sql =~ ~r/n\d\."id" = ANY/)), inspect(reconcile)
+
+      [scoped | _] = Enum.filter(reconcile, &(&1.sql =~ ~r/"vault_id" = ANY/))
+
+      {:ok, plan} =
+        Repo.transaction(fn ->
+          Repo.query!("SET LOCAL enable_seqscan = off")
+
+          Repo.query!("EXPLAIN " <> scoped.sql, scoped.params).rows
+          |> List.flatten()
+          |> Enum.join("\n")
+        end)
+
+      refute plan =~ "Seq Scan on notes", plan
     end
 
     # Red on 5be4a3373: the request rode in job args, and a later re-verify

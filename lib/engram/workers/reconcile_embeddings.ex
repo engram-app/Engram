@@ -157,6 +157,14 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # same row), or one fleet-wide row for an index-version change.
     name = if vault_id, do: "#{@version_check_pending}:#{vault_id}", else: @version_check_pending
     :ok = Cursor.put(name, %{"id" => Ecto.UUID.generate()})
+    # A vault's check rides the next plain sweep (scoped, cheap); only the
+    # fleet check needs the re-verify chain's hops.
+    version_check_job(vault_id)
+  end
+
+  defp version_check_job(vault_id) when is_binary(vault_id), do: kick()
+
+  defp version_check_job(nil) do
     args = %{"mode" => "reverify"}
     Oban.insert(new(args, replace: replace_args(args)))
   end
@@ -285,7 +293,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # skip rebuilds, never queue extra ones.
     versions = Rebuild.target_versions()
 
-    pending = if reverify?, do: Cursor.with_prefix(@version_check_pending), else: []
+    # Pending version-check requests (`version_check/1`): one indexed read of a
+    # tiny table, every run, so a restore's plain kick sees its request.
+    pending = Cursor.family(@version_check_pending)
 
     %{open?: open?, qdrant_open?: qdrant_open?, version_term?: version_term?} =
       gates(reverify?, pending != [])
@@ -293,139 +303,139 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     version_stale =
       if version_term?, do: IndexVersions.stale_dynamic(versions), else: dynamic(false)
 
-    # Only restore requests pending (and no rollout): those vaults' notes only.
-    scope = version_scope(open?, pending)
+    # `:fleet` (a rollout, or an index-version change at boot) or the vault ids
+    # of pending restores, which never walk the fleet's id windows.
+    scope = if version_term?, do: version_scope(open?, pending), else: :fleet
 
-    version_stale =
-      case scope do
-        :fleet -> version_stale
-        vault_ids -> dynamic([n], n.vault_id in ^vault_ids and ^version_stale)
+    # One sweep: `stale` is the version term; `vaults` (nil = all) limits it to
+    # those vaults through a vault-leading index.
+    sweep_for = fn stale, vaults ->
+      fn repo, ids, remaining ->
+        eligible =
+          IndexVersions.live_notes(ids)
+          |> in_vaults(vaults)
+          # Two ways a note is stale:
+          #   1. content changed since it was indexed (or was never indexed)
+          #   2. it is indexed but has NO dense vectors. That is the backfill for
+          #      notes indexed sparse-only (every Free note from before semantic
+          #      search was every tier's, and any note a spent embed budget left
+          #      sparse) AND the self-heal for notes the removed search-coverage
+          #      cap skipped: those were stamped with no chunk rows and no dense
+          #      hash, and this is the only path that re-opens them. Every pass
+          #      now either writes dense vectors, stamps a no-chunks note as
+          #      dense-complete, or parks it on the embed budget, so (2) no
+          #      longer needs narrowing to avoid a forever-loop.
+          #
+          # A note whose embed budget is spent is kept out by the cooldown filter
+          # below: EmbedNote parks it with a future `embed_retry_after`.
+          #
+          # A floor note (`index_tier` set) has no dense leg by design, so (2)
+          # skips it; it would otherwise come back every tick. (1) and the
+          # version term still reach it: an edit or a version bump re-floors it,
+          # unmetered.
+          |> where(
+            ^dynamic(
+              [n],
+              is_nil(n.embed_hash) or n.embed_hash != n.content_hash or
+                ^stale or (is_nil(n.dense_indexed_hash) and is_nil(n.index_tier))
+            )
+          )
+          # Poison-loop guard: a note that exhausts its EmbedNote attempts gets an
+          # embed_retry_after cooldown stamp. Skip it until the cooldown elapses so a
+          # permanently-failing note re-bills Voyage at most once per window, not
+          # every tick. NULL = no cooldown = eligible now. This same filter is what
+          # preserves a longer (poison) cooldown from the UPDATE below — a note
+          # inside any cooldown isn't selected, so it isn't re-stamped.
+          #
+          # Except a BUDGET park for a user who has since upgraded: the budget
+          # that parked it no longer applies, and waiting out the 24h would make
+          # a paying user's search worse than it needs to be. A poison cooldown
+          # (`embed_budget_parked` not true) still holds for everyone.
+          #
+          # And a too-long park (keyword-only, `EmbedNote.parked_until_edited/0`)
+          # ends when the content changes, not on a clock.
+          #
+          # And a budget park on an old index version, whoever owns it (#2197):
+          # left to wait, a Free note stays on the old layout until its bucket
+          # refills or it is edited (1,101 notes of 5 Free users in the v5
+          # rollout). EmbedNote rebuilds it without spending the bucket and
+          # keeps it parked. Only the park's own sentinel lets it through, so
+          # the #897 backoff stamped below still holds after a crash.
+          |> where(
+            ^dynamic(
+              [n],
+              is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now or
+                (n.embed_budget_parked == true and exists(paid)) or
+                (n.embed_retry_after == ^EmbedNote.parked_until_edited() and
+                   n.embed_hash != n.content_hash) or
+                (n.embed_budget_parked == true and
+                   n.embed_retry_after == ^EmbedNote.parked_until_edited() and ^stale)
+            )
+          )
+          |> oldest_ids(remaining)
+
+        # #897 — crash-independent backoff, done ATOMICALLY. EmbedNote's poison
+        # cooldown only fires on a GRACEFUL terminal `{:error, _}` (maybe_mark_poison);
+        # an OOM/node kill kills the BEAM mid-embed, so the cooldown is never stamped
+        # and this worker would re-enqueue the same poison note every tick →
+        # self-sustaining crash loop (the 2026-07-03 incident). So instead of a
+        # read-only SELECT we UPDATE the eligible notes' embed_retry_after to a short
+        # future cooldown and RETURN their ids in one statement — no select→stamp
+        # race, and still a single `notes` query regardless of vault count. A
+        # successful EmbedNote clears the stamp back to NULL; a graceful terminal
+        # failure extends it to the full poison cooldown. The window MUST outlast the
+        # 5-min chain hop so a crash-poison note skips at least one run.
+        # `kind == "note"` is redundant with the subquery (which already filters it)
+        # but kept explicit so this bulk UPDATE is self-evidently note-scoped — a
+        # folder marker can never get an embed cooldown stamped even if the subquery
+        # changed. Also satisfies NotesScopeLintTest (kind filter on the from/Note).
+        # The eligible ids are a MATERIALIZED CTE, read once. As an `IN
+        # (subquery ... LIMIT)` the plan hinged on row estimates: with stale
+        # statistics (a fresh install's first big import, or the extended
+        # (user_id, vault_id) statistics on an unanalyzed table) Postgres chose a
+        # nested-loop semi join that re-ran the sorted subquery per outer row,
+        # O(N^2): 15 s for 1,205 notes, past the checkout deadline, every tick.
+        {_count, rows} =
+          from(n in Note, as: :note)
+          |> with_cte("reconcile_eligible", as: ^eligible, materialized: true)
+          |> join(:inner, [n], e in "reconcile_eligible", on: field(e, :id) == n.id)
+          |> where([n], n.kind == "note")
+          # The columns `EmbedNote.version_stale?/2` reads, to route each note,
+          # and the owner's plan for its model term.
+          |> select([n], %{
+            id: n.id,
+            user_id: n.user_id,
+            embed_hash: n.embed_hash,
+            content_hash: n.content_hash,
+            dense_indexed_hash: n.dense_indexed_hash,
+            chunker_version: n.chunker_version,
+            embed_model: n.embed_model,
+            updated_at: n.updated_at,
+            paid: exists(paid)
+          })
+          # Clears the budget-park flag with it: the #897 backoff must hold for
+          # this note even for a paying user, or a crash mid-embed re-selects it
+          # every tick. Except a Free park let through only for its version
+          # (#2197, content unchanged): it keeps its flag, so it stays in the
+          # queue; the backoff stamp alone keeps the version arm from
+          # re-selecting it. A paid owner's park is cleared just below.
+          |> update([n],
+            set: [
+              embed_retry_after: ^backoff_until,
+              embed_budget_parked:
+                fragment(
+                  "CASE WHEN ? IS DISTINCT FROM ? THEN NULL ELSE ? END",
+                  n.embed_hash,
+                  n.content_hash,
+                  n.embed_budget_parked
+                )
+            ]
+          )
+          |> repo.update_all([])
+
+        :ok = clear_paid_parks(repo, rows)
+        rows
       end
-
-    sweep_tenant = fn repo, ids, remaining ->
-      eligible =
-        IndexVersions.live_notes(ids)
-        # Two ways a note is stale:
-        #   1. content changed since it was indexed (or was never indexed)
-        #   2. it is indexed but has NO dense vectors. That is the backfill for
-        #      notes indexed sparse-only (every Free note from before semantic
-        #      search was every tier's, and any note a spent embed budget left
-        #      sparse) AND the self-heal for notes the removed search-coverage
-        #      cap skipped: those were stamped with no chunk rows and no dense
-        #      hash, and this is the only path that re-opens them. Every pass
-        #      now either writes dense vectors, stamps a no-chunks note as
-        #      dense-complete, or parks it on the embed budget, so (2) no
-        #      longer needs narrowing to avoid a forever-loop.
-        #
-        # A note whose embed budget is spent is kept out by the cooldown filter
-        # below: EmbedNote parks it with a future `embed_retry_after`.
-        #
-        # A floor note (`index_tier` set) has no dense leg by design, so (2)
-        # skips it; it would otherwise come back every tick. (1) and the
-        # version term still reach it: an edit or a version bump re-floors it,
-        # unmetered.
-        |> where(
-          ^dynamic(
-            [n],
-            is_nil(n.embed_hash) or n.embed_hash != n.content_hash or
-              ^version_stale or (is_nil(n.dense_indexed_hash) and is_nil(n.index_tier))
-          )
-        )
-        # Poison-loop guard: a note that exhausts its EmbedNote attempts gets an
-        # embed_retry_after cooldown stamp. Skip it until the cooldown elapses so a
-        # permanently-failing note re-bills Voyage at most once per window, not
-        # every tick. NULL = no cooldown = eligible now. This same filter is what
-        # preserves a longer (poison) cooldown from the UPDATE below — a note
-        # inside any cooldown isn't selected, so it isn't re-stamped.
-        #
-        # Except a BUDGET park for a user who has since upgraded: the budget
-        # that parked it no longer applies, and waiting out the 24h would make
-        # a paying user's search worse than it needs to be. A poison cooldown
-        # (`embed_budget_parked` not true) still holds for everyone.
-        #
-        # And a too-long park (keyword-only, `EmbedNote.parked_until_edited/0`)
-        # ends when the content changes, not on a clock.
-        #
-        # And a budget park on an old index version, whoever owns it (#2197):
-        # left to wait, a Free note stays on the old layout until its bucket
-        # refills or it is edited (1,101 notes of 5 Free users in the v5
-        # rollout). EmbedNote rebuilds it without spending the bucket and
-        # keeps it parked. Only the park's own sentinel lets it through, so
-        # the #897 backoff stamped below still holds after a crash.
-        |> where(
-          ^dynamic(
-            [n],
-            is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now or
-              (n.embed_budget_parked == true and exists(paid)) or
-              (n.embed_retry_after == ^EmbedNote.parked_until_edited() and
-                 n.embed_hash != n.content_hash) or
-              (n.embed_budget_parked == true and
-                 n.embed_retry_after == ^EmbedNote.parked_until_edited() and ^version_stale)
-          )
-        )
-        |> oldest_ids(remaining)
-
-      # #897 — crash-independent backoff, done ATOMICALLY. EmbedNote's poison
-      # cooldown only fires on a GRACEFUL terminal `{:error, _}` (maybe_mark_poison);
-      # an OOM/node kill kills the BEAM mid-embed, so the cooldown is never stamped
-      # and this worker would re-enqueue the same poison note every tick →
-      # self-sustaining crash loop (the 2026-07-03 incident). So instead of a
-      # read-only SELECT we UPDATE the eligible notes' embed_retry_after to a short
-      # future cooldown and RETURN their ids in one statement — no select→stamp
-      # race, and still a single `notes` query regardless of vault count. A
-      # successful EmbedNote clears the stamp back to NULL; a graceful terminal
-      # failure extends it to the full poison cooldown. The window MUST outlast the
-      # 5-min chain hop so a crash-poison note skips at least one run.
-      # `kind == "note"` is redundant with the subquery (which already filters it)
-      # but kept explicit so this bulk UPDATE is self-evidently note-scoped — a
-      # folder marker can never get an embed cooldown stamped even if the subquery
-      # changed. Also satisfies NotesScopeLintTest (kind filter on the from/Note).
-      # The eligible ids are a MATERIALIZED CTE, read once. As an `IN
-      # (subquery ... LIMIT)` the plan hinged on row estimates: with stale
-      # statistics (a fresh install's first big import, or the extended
-      # (user_id, vault_id) statistics on an unanalyzed table) Postgres chose a
-      # nested-loop semi join that re-ran the sorted subquery per outer row,
-      # O(N^2): 15 s for 1,205 notes, past the checkout deadline, every tick.
-      {_count, rows} =
-        from(n in Note, as: :note)
-        |> with_cte("reconcile_eligible", as: ^eligible, materialized: true)
-        |> join(:inner, [n], e in "reconcile_eligible", on: field(e, :id) == n.id)
-        |> where([n], n.kind == "note")
-        # The columns `EmbedNote.version_stale?/2` reads, to route each note,
-        # and the owner's plan for its model term.
-        |> select([n], %{
-          id: n.id,
-          user_id: n.user_id,
-          embed_hash: n.embed_hash,
-          content_hash: n.content_hash,
-          dense_indexed_hash: n.dense_indexed_hash,
-          chunker_version: n.chunker_version,
-          embed_model: n.embed_model,
-          updated_at: n.updated_at,
-          paid: exists(paid)
-        })
-        # Clears the budget-park flag with it: the #897 backoff must hold for
-        # this note even for a paying user, or a crash mid-embed re-selects it
-        # every tick. Except a Free park let through only for its version
-        # (#2197, content unchanged): it keeps its flag, so it stays in the
-        # queue; the backoff stamp alone keeps the version arm from
-        # re-selecting it. A paid owner's park is cleared just below.
-        |> update([n],
-          set: [
-            embed_retry_after: ^backoff_until,
-            embed_budget_parked:
-              fragment(
-                "CASE WHEN ? IS DISTINCT FROM ? THEN NULL ELSE ? END",
-                n.embed_hash,
-                n.content_hash,
-                n.embed_budget_parked
-              )
-          ]
-        )
-        |> repo.update_all([])
-
-      :ok = clear_paid_parks(repo, rows)
-      rows
     end
 
     # The version term defeats the `notes_reconcile_due` partial index, so
@@ -433,13 +443,22 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # IndexVersions is done the index serves it, one statement per page.
     found = %{now: now, kick?: get_in(job.meta, ["kick"]) == true, qdrant_open?: qdrant_open?}
 
+    sweep = fn stale, vaults, windowed? ->
+      tenant = sweep_for.(stale, vaults)
+      scan(&tenant.(&1, &2, page_size), page_size, &enqueue_page(&1, found), windowed?)
+    end
+
     counts =
-      scan(
-        &sweep_tenant.(&1, &2, page_size),
-        page_size,
-        &enqueue_page(&1, found),
-        version_term?
-      )
+      case scope do
+        # The fleet version term, one id window at a time.
+        :fleet ->
+          sweep.(version_stale, nil, version_term?)
+
+        # A restore: the usual unwindowed sweep with no version term, then the
+        # version term over those vaults alone.
+        vault_ids ->
+          sweep.(dynamic(false), nil, false) ++ sweep.(version_stale, vault_ids, false)
+      end
 
     eligible = Enum.sum(Enum.map(counts, &elem(&1, 0)))
     queued = Enum.sum(Enum.map(counts, &elem(&1, 1)))
@@ -477,7 +496,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # whether the version term and keyword top-up run.
   defp gates(reverify?, version_check?) do
     open? = not IndexVersions.done?()
-    qdrant_open? = not (open? or reverify?) or qdrant_open?()
+    qdrant_open? = not (open? or reverify? or version_check?) or qdrant_open?()
 
     # The version term walks every notes window, so it runs while a rollout is
     # open, and once per event that can put version-stale notes back after the
@@ -1456,6 +1475,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # window the rows were read by primary key (`IndexVersions.live_notes/1`).
   defp oldest_ids(eligible, limit),
     do: eligible |> order_by([n], asc: n.updated_at) |> limit(^limit) |> select([n], n.id)
+
+  defp in_vaults(query, nil), do: query
+  defp in_vaults(query, vault_ids), do: where(query, [n], n.vault_id in ^vault_ids)
 
   defp page_counts(rows, handle), do: {length(rows), handle.(rows)}
 
