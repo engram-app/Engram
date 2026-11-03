@@ -60,6 +60,24 @@ defmodule Engram.Repo do
   def tenancy_unsafe?, do: maintenance() == __MODULE__ and Engram.Repo.TenancyGuard.enforced?()
 
   @doc """
+  Runs `fun` unless `tenancy_unsafe?/0`. Then logs `"<name> refusing to run:
+  <why>"` at :error and returns `{:error, :tenancy_unsafe}` without running
+  it: the one refusal every cross-tenant sweep makes rather than act on a
+  blind read. Pair with `max_attempts: 1` so it discards instead of retrying.
+  """
+  @spec maintenance_only(String.t(), String.t(), (-> result)) ::
+          result | {:error, :tenancy_unsafe}
+        when result: term()
+  def maintenance_only(name, why, fun) do
+    if tenancy_unsafe?() do
+      Logger.error("#{name} refusing to run: #{why}", Metadata.with_category(:error, :oban, []))
+      {:error, :tenancy_unsafe}
+    else
+      fun.()
+    end
+  end
+
+  @doc """
   Take a transaction-scoped Postgres advisory lock keyed on a string id (a
   note/attachment/source-note UUID, etc). Released automatically at
   commit/rollback — the caller must already be inside a transaction (e.g.

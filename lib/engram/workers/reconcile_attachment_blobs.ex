@@ -85,20 +85,15 @@ defmodule Engram.Workers.ReconcileAttachmentBlobs do
   def perform(%Oban.Job{args: %{"user_id" => user_id, "vault_id" => vault_id}}),
     do: reconcile(user_id, vault_id)
 
+  # Bounded: while versions are unavailable every per-vault job would be a
+  # no-op, so one cheap probe asks whether that is still true instead.
   def perform(%Oban.Job{}) do
-    if Repo.tenancy_unsafe?() do
-      Logger.error(
-        "reconcile_attachment_blobs refusing to fan out: RLS is enforced and no maintenance " <>
-          "pool is configured, so no vault would look like it holds attachments",
-        Metadata.with_category(:error, :oban, [])
-      )
-
-      {:error, :tenancy_unsafe}
-    else
-      # Bounded: while versions are unavailable every per-vault job would be
-      # a no-op, so one cheap probe asks whether that is still true instead.
-      if :persistent_term.get(@latch, nil), do: enqueue_probe(), else: fan_out()
-    end
+    Repo.maintenance_only(
+      "reconcile_attachment_blobs",
+      "RLS is enforced and no maintenance " <>
+        "pool is configured, so no vault would look like it holds attachments",
+      fn -> if :persistent_term.get(@latch, nil), do: enqueue_probe(), else: fan_out() end
+    )
   end
 
   defp live_vaults_query,

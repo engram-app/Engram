@@ -20,7 +20,6 @@ defmodule Engram.Workers.FinalizeRevisionSweep do
 
   import Ecto.Query
 
-  alias Engram.Logger.Metadata
   alias Engram.Notes.Revision
   alias Engram.Repo
   alias Engram.Workers.FinalizeRevision
@@ -36,17 +35,12 @@ defmodule Engram.Workers.FinalizeRevisionSweep do
 
   @impl Oban.Worker
   def perform(%Oban.Job{}) do
-    if Repo.tenancy_unsafe?() do
-      Logger.error(
-        "finalize_revision_sweep refusing to run: RLS enforcement could not be ruled out " <>
-          "and no maintenance pool is configured, so the read would return zero rows",
-        Metadata.with_category(:error, :oban, [])
-      )
-
-      {:error, :tenancy_unsafe}
-    else
-      sweep()
-    end
+    Repo.maintenance_only(
+      "finalize_revision_sweep",
+      "RLS enforcement could not be ruled out " <>
+        "and no maintenance pool is configured, so the read would return zero rows",
+      fn -> sweep() end
+    )
   end
 
   defp sweep do

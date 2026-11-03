@@ -67,24 +67,21 @@ defmodule Engram.Workers.AttachmentBlobGC do
 
   @impl Oban.Worker
   def perform(_job) do
-    if Repo.tenancy_unsafe?() do
-      Logger.error(
-        "attachment_blob_gc refusing to run: RLS is enforced and no maintenance pool is " <>
-          "configured, so every blob would look unreferenced",
-        Metadata.with_category(:error, :oban, [])
-      )
+    Repo.maintenance_only(
+      "attachment_blob_gc",
+      "RLS is enforced and no maintenance pool is configured, so every blob would look " <>
+        "unreferenced",
+      fn ->
+        reaped = sweep()
 
-      {:error, :tenancy_unsafe}
-    else
-      reaped = sweep()
+        Logger.info(
+          "attachment_blob_gc complete",
+          Metadata.with_category(:info, :oban, total_count: reaped)
+        )
 
-      Logger.info(
-        "attachment_blob_gc complete",
-        Metadata.with_category(:info, :oban, total_count: reaped)
-      )
-
-      :ok
-    end
+        :ok
+      end
+    )
   end
 
   @doc "Reaps every eligible tombstone blob. Returns how many were reaped."

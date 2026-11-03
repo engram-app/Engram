@@ -168,22 +168,13 @@ defmodule Engram.Workers.CrdtBloatSweep do
   """
   @spec measure_and_emit() :: measurements() | {:error, :tenancy_unsafe}
   def measure_and_emit do
-    if Repo.tenancy_unsafe?() do
-      refuse()
-    else
-      do_measure_and_emit()
-    end
-  end
-
-  defp refuse do
-    Logger.error(
-      "crdt_bloat_sweep refusing to run: RLS enforcement could not be ruled out and no " <>
-        "maintenance pool is configured, so the notes read would return zero rows and the " <>
-        "sweep would report an empty database as a healthy one",
-      Metadata.with_category(:error, :oban, [])
+    Repo.maintenance_only(
+      "crdt_bloat_sweep",
+      "RLS enforcement could not be ruled out and no maintenance pool is configured, so " <>
+        "the notes read would return zero rows and the sweep would report an empty " <>
+        "database as a healthy one",
+      &do_measure_and_emit/0
     )
-
-    {:error, :tenancy_unsafe}
   end
 
   defp do_measure_and_emit do
