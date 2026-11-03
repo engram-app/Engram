@@ -201,6 +201,11 @@ defmodule Engram.Bookkeeping.Drain do
     end
   end
 
+  @doc false
+  # The users a tick's probes return for `kind` (tests compare them with the
+  # repair worker's own selection).
+  def candidates(kind), do: users(kind)
+
   defp users(kind) do
     kind
     |> probes()

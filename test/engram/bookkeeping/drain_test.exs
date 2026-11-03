@@ -148,20 +148,6 @@ defmodule Engram.Bookkeeping.DrainTest do
 
     for {kind, names} <- @indexes do
       test "#{kind}" do
-        # Other partial indexes on `notes` share the live-note terms and tie on cost in
-        # a tiny test table; drop every non-constraint competitor so the question is
-        # whether the drift index CAN serve the probe (the transaction rolls it back).
-        if unquote(kind) == :folder do
-          Repo.query!("""
-          DO $$ DECLARE r record; BEGIN
-            FOR r IN SELECT indexname FROM pg_indexes
-              WHERE tablename = 'notes' AND indexname <> 'notes_unresolved_folder'
-                AND indexname NOT IN (SELECT conname FROM pg_constraint) LOOP
-              EXECUTE 'DROP INDEX ' || quote_ident(r.indexname);
-            END LOOP; END $$
-          """)
-        end
-
         probes = Drain.probes(unquote(kind))
         assert length(probes) == length(unquote(names))
 
@@ -172,6 +158,62 @@ defmodule Engram.Bookkeeping.DrainTest do
           refute plan =~ "Seq Scan on #{table}", plan
         end
       end
+    end
+  end
+
+  # The folder probe competes with other partial indexes on live notes. With
+  # realistic statistics (many resolved live notes, one unresolved) the planner
+  # must pick the drift index, not walk live notes. Red on c0c603cb9's test,
+  # which dropped every competitor first and so could not tell.
+  test "with real statistics the folder probe picks its index over live-note indexes", %{
+    user: u,
+    vault: v
+  } do
+    for i <- 1..150, do: write!(u, v, "F#{rem(i, 5)}/n#{i}.md")
+    lost = write!(u, v, "Lost/x.md")
+    sql!("UPDATE notes SET folder_ref_id = NULL WHERE id = $1", [Ecto.UUID.dump!(lost.id)])
+
+    [{table, sql}] = Drain.probes(:folder)
+    plan = QueryPlan.generic_plan(sql, analyze: [table])
+    assert plan =~ "notes_unresolved_folder", plan
+  end
+
+  # One definition per drift test in practice: the probe's users are exactly
+  # the users the repair worker's own selection finds, on a mixed fixture.
+  test "each probe finds exactly the users its worker would repair", %{user: u, vault: v} do
+    other = insert(:user)
+    insert(:user_limit_override, user: other, key: "vaults_cap", value: %{"v" => -1})
+    {:ok, other} = Engram.Crypto.ensure_user_dek(other)
+    {:ok, ov, _} = Engram.Vaults.register_vault(other, "Clean", Ecto.UUID.generate())
+    write!(other, ov, "clean.md")
+
+    legacy = write!(u, v, "legacy.md")
+    stale = write!(u, v, "stale.md")
+    stamped = write!(u, v, "pay.md")
+    Engram.Fixtures.insert_chunk!(u, stamped, Ecto.UUID.generate())
+
+    sql!("UPDATE notes SET content_nonce = '\\x000000000000000000000000'::bytea WHERE id = $1", [
+      Ecto.UUID.dump!(legacy.id)
+    ])
+
+    sql!("UPDATE notes SET link_keys_stamp = '\\x00'::bytea WHERE id = $1", [
+      Ecto.UUID.dump!(stale.id)
+    ])
+
+    sql!("UPDATE notes SET payload_hash = NULL WHERE id = $1", [Ecto.UUID.dump!(stamped.id)])
+
+    users = [u.id, other.id]
+
+    for {kind, worker_selects?} <- [
+          envelope: &ReencodeEnvelopes.legacy_rows?/1,
+          link_keys: &BackfillLinkKeys.missing_rows?/1,
+          payload: &Engram.Workers.ReconcileNotePayloads.unstamped_rows?/1
+        ] do
+      expected = users |> Enum.filter(worker_selects?) |> Enum.sort()
+
+      assert (Enum.sort(Drain.candidates(kind)) -- [nil]) |> Enum.filter(&(&1 in users)) ==
+               expected,
+             "#{kind}: probe and worker disagree"
     end
   end
 

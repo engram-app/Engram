@@ -74,6 +74,11 @@ defmodule Engram.Workers.CronScanBoundTest do
              "per-run cap, never to @known_unbounded): #{inspect(unclassified)}"
   end
 
+  # The open list only shrinks: pinned at its size when it was written.
+  test "the known-unbounded list does not grow" do
+    assert map_size(@known_unbounded) <= 10
+  end
+
   test "the classification lists no worker that left the crontab" do
     cron = Engram.Test.ObanWorkers.crontab() |> Enum.map(&elem(&1, 1)) |> MapSet.new()
     listed = Map.keys(@bounded) ++ Map.keys(@known_unbounded)
