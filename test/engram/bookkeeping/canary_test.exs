@@ -103,6 +103,27 @@ defmodule Engram.Bookkeeping.CanaryTest do
     refute log =~ n.id
   end
 
+  # The last-run gauge is the dead-man signal: a run that fails must not
+  # refresh it, or a canary that always crashes would read as alive.
+  test "a failed run does not emit the last-run time" do
+    me = self()
+
+    :telemetry.attach(
+      "canary-ran-test",
+      [:engram, :bookkeeping, :canary_ran],
+      fn _, _, _, _ -> send(me, :ran) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach("canary-ran-test") end)
+
+    # The check step fails mid-run (its state table is gone).
+    Repo.query!("ALTER TABLE note_index_state RENAME TO note_index_state_gone")
+
+    assert_raise Postgrex.Error, fn -> Canary.run() end
+    refute_received :ran
+  end
+
   test "the worker runs the canary and dedups while incomplete" do
     assert :ok = perform_job(BookkeepingCanary, %{})
     {:ok, first} = Oban.insert(BookkeepingCanary.new(%{}))
