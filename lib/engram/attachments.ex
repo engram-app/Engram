@@ -2515,9 +2515,12 @@ defmodule Engram.Attachments do
         if after_write > n do
           {:error, {:storage_cap_reached, current, n}}
         else
-          # The usage once this write commits, for the next pre-check. If it
-          # rolls back instead, the value is high: a pre-check then sums fresh.
-          Engram.Cache.put(:storage_usage, user.id, after_write)
+          # For the next pre-check: never below the usage just summed. A
+          # smaller replacement can roll back, and an upload session start
+          # (`Uploads`) commits nothing, so `after_write` alone could cache a
+          # value below real usage. A high value only makes a pre-check sum
+          # fresh.
+          Engram.Cache.put(:storage_usage, user.id, max(current, after_write))
           :ok
         end
 

@@ -140,9 +140,12 @@ defmodule Engram.NotesGenericPlanTest do
   # non-MCV vault's custom plan walked `notes_recent_index`). No index shape
   # breaks that tie; statistics do. 20261102120000 analyzes `notes` every 2%
   # + 1,000 changed rows and keeps 1,000 vaults in the list, so a new vault
-  # is walked for at most a few thousand writes. This pins the settings and
-  # that, once analyzed, the fresh vault's lookups read the path index.
-  test "a vault new to the statistics reads notes_path_live once analyzed", %{user: u} do
+  # is walked for at most a few thousand writes. The settings asserts are
+  # what guard that change. The plan half only shows the remedy (an analyzed
+  # vault reads the path index); it passes on default statistics too, since
+  # this DB has fewer than 100 vaults and any of them fits the list.
+  test "notes keeps 1,000-entry stats and fast analyze; an analyzed new vault reads notes_path_live",
+       %{user: u} do
     %{rows: [[target, user_target]]} =
       Repo.query!("""
       SELECT max(attstattarget) FILTER (WHERE attname = 'vault_id'),

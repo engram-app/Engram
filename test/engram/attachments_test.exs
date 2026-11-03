@@ -444,6 +444,16 @@ defmodule Engram.AttachmentsTest do
       assert {{:ok, _}, 2} = upload_sums(user, vault, "c.png", "cccc")
     end
 
+    # A smaller replacement caches `current - prior + new`, below real usage
+    # if it rolls back (and an upload session start commits nothing): the
+    # cached value must never drop below the usage just summed.
+    test "a smaller replacement never caches usage below the sum", %{user: user, vault: vault} do
+      {{:ok, big}, _} = upload_sums(user, vault, "f.png", String.duplicate("f", 600))
+      :ok = Attachments.validate_storage_cap(user, big, 100)
+      assert {:ok, used} = Engram.Cache.get(:storage_usage, user.id)
+      assert used >= 600
+    end
+
     test "an upload over the cap is still refused", %{user: user, vault: vault} do
       {{:ok, _}, _} = upload_sums(user, vault, "d.png", "dddd")
 
