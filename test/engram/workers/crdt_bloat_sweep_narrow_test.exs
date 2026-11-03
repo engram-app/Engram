@@ -108,7 +108,10 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
       end)
 
     # [inserts, updates, of which HOT]
-    assert delta["notes"] == [0, 2, 1], inspect(delta)
+    # notes' HOT count is left out: this PR adds no index on a column these
+    # writes change, and whether the content save fits its page (1 HOT on a
+    # fresh page, 0 behind earlier tests' dead rows) depends on test order.
+    assert [0, 2, _] = delta["notes"], inspect(delta)
     assert delta["note_bodies"] == [0, 2, 2], inspect(delta)
     assert Map.get(delta, "note_index_state", [0, 0, 0]) == [0, 0, 0], inspect(delta)
   end

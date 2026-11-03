@@ -15,6 +15,8 @@ defmodule Engram.DataMigrations.NoteSizes do
   """
   @behaviour Engram.DataMigration
 
+  @max_fixed 50_000
+
   import Ecto.Query
 
   alias Engram.Backfill.IdWindows
@@ -68,7 +70,13 @@ defmodule Engram.DataMigrations.NoteSizes do
 
   @doc false
   def run_pass(opts) do
-    IdWindows.heal_pass(name(), Note, &heal/2, batch_size: Keyword.get(opts, :batch, @batch))
+    # At most @max_fixed rows per pass: each fill is one non-HOT body version
+    # (the `envelope_legacy` flag goes NULL -> false), so the WAL per hourly
+    # pass is bounded by rows, not only by the runner's time budget.
+    IdWindows.heal_pass(name(), Note, &heal/2,
+      batch_size: Keyword.get(opts, :batch, @batch),
+      max_fixed: Keyword.get(opts, :max_fixed, @max_fixed)
+    )
   end
 
   # Sizes from `note_bodies` (`nonce field (13) || ciphertext`, less the
