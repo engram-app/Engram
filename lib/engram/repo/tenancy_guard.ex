@@ -210,8 +210,9 @@ defmodule Engram.Repo.TenancyGuard do
   @doc """
   What the connection can actually see: the behavioural probe.
 
-  Adopts a tenant that owns nothing and asks, of EVERY tenant table, whether
-  any row is reachable anyway. One leak anywhere is decisive: RLS state is
+  Checks the RLS flags, the role and the policies of EVERY tenant table, then
+  adopts a tenant that owns nothing and asks whether a real user's row is
+  reachable anyway (through the `user_id` index, never a scan). One leak anywhere is decisive: RLS state is
   per-table, and this repo toggles it per-table as routine practice — ten
   migrations under `priv/repo/migrations` issue `ALTER TABLE <t> NO FORCE ROW
   LEVEL SECURITY` and re-`FORCE` at the end. An interrupted one leaves a single

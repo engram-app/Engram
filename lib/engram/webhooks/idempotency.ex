@@ -97,26 +97,40 @@ defmodule Engram.Webhooks.Idempotency do
     cutoff = DateTime.add(now, -@retention_days, :day)
     claim_cutoff = DateTime.add(now, -@claim_retention_days, :day)
 
+    # Two predicates, each the head of the `inserted_at` index: the 730-day
+    # claims never sit in front of the 7-day rows a batch deletes.
     n =
-      Engram.Maintenance.Prune.batched(
-        fn batch ->
-          %{num_rows: n} =
-            Repo.query!(
-              """
-              DELETE FROM processed_webhook_events WHERE (provider, event_id) IN (
-                SELECT provider, event_id FROM processed_webhook_events
-                WHERE inserted_at < $1 AND (provider <> ALL($3) OR inserted_at < $2)
-                ORDER BY inserted_at LIMIT $4)
-              """,
-              [cutoff, claim_cutoff, @claim_sources, batch]
-            )
-
-          n
-        end,
+      delete_batched(
+        "inserted_at < $1 AND provider <> ALL($2)",
+        [cutoff, @claim_sources],
         batch,
         max_batches
-      )
+      ) + delete_batched("inserted_at < $1", [claim_cutoff], batch, max_batches)
 
     {:ok, n}
+  end
+
+  # `where` is one of the two literal predicates above, never input.
+  # sobelow_skip ["SQL.Query"]
+  defp delete_batched(where, params, batch, max_batches) do
+    limit = "$#{length(params) + 1}"
+
+    Engram.Maintenance.Prune.batched(
+      fn batch ->
+        %{num_rows: n} =
+          Repo.query!(
+            """
+            DELETE FROM processed_webhook_events WHERE (provider, event_id) IN (
+              SELECT provider, event_id FROM processed_webhook_events
+              WHERE #{where} ORDER BY inserted_at LIMIT #{limit})
+            """,
+            params ++ [batch]
+          )
+
+        n
+      end,
+      batch,
+      max_batches
+    )
   end
 end

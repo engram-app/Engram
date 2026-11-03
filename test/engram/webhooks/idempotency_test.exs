@@ -57,5 +57,17 @@ defmodule Engram.Webhooks.IdempotencyTest do
       refute Idempotency.claim(:paddle_adjustment, id)
       assert Idempotency.check(:paddle, id) == :proceed
     end
+
+    test "a claim older than its 730-day retention is pruned" do
+      id = "adj_#{System.unique_integer([:positive])}"
+      assert Idempotency.claim(:paddle_adjustment, id)
+
+      Repo.update_all(from(e in "processed_webhook_events", where: e.event_id == ^id),
+        set: [inserted_at: DateTime.add(DateTime.utc_now(), -731, :day)]
+      )
+
+      {:ok, _} = Idempotency.prune()
+      assert Idempotency.claim(:paddle_adjustment, id)
+    end
   end
 end

@@ -128,7 +128,7 @@ defmodule Engram.Repo.TenancyGuardTest do
       assert verdict == :bypassed
     end
 
-    test "a real user's row visible under a tenant that owns nothing is a bypass" do
+    test "a USING (true) policy granted to the app role by name is a bypass" do
       user = insert(:user)
       vault = insert(:vault, user: user)
       _ = insert(:note, user: user, vault: vault)
@@ -150,7 +150,7 @@ defmodule Engram.Repo.TenancyGuardTest do
 
     # Red on c0c603cb9: the probe read every tenant table (under a 250 ms
     # timeout that counted as "no leak" and leaked into the caller). It now
-    # reads the catalog only and sets no session state.
+    # reads tenant tables only through user_id indexes and sets no timeout.
     test "the probe reads a tenant table only by user_id and sets no timeout" do
       {_, queries} =
         Engram.QueryRecorder.record(fn ->

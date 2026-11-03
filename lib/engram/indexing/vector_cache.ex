@@ -68,6 +68,10 @@ defmodule Engram.Indexing.VectorCache do
   @version "v1"
   @table "embedding_cache"
   @put_rows 1_000
+  # A miss only re-embeds (paid Voyage tokens, never a failure). 24 h covers
+  # EmbedNote's worst retry path (~9.5 h). Not covered, accepted: jobs held by
+  # `Rebuild.hold/1` through a rebuild longer than a day, and a Qdrant outage
+  # longer than a day; both re-embed their pending notes once.
   @retention_hours 24
   @prune_batch 10_000
 
