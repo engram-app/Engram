@@ -132,10 +132,11 @@ jobs:
 
   # ── Reaps ad-hoc test accounts from the STAGING Clerk instance (also used
   # by local saas-dev). Agents running staging checks mint
-  # `<name>+clerk_test@example.com` users and never delete them (62 users,
-  # 24 stale, 2026-11-02). Own job, no `needs`, so an unrelated red job
-  # (native-deep) never blocks it. load-sim-* accounts (e2e/load/sim.py) are
-  # kept; a user is reaped only when created AND last active >7d ago.
+  # `<name>+clerk_test@...` users and never delete them (62 users, 24 stale
+  # agent accounts, 2026-11-02). Own job, no `needs`, so an unrelated red job
+  # (native-deep) never blocks it. Reaps a user only when EVERY email carries
+  # `+clerk_test@` and it was created AND last active >1d ago; >100 matches
+  # = red run, nothing deleted.
   staging-clerk-reap:
     if: |
       github.event_name == 'schedule'
@@ -158,7 +159,7 @@ jobs:
       - name: Ensure requests is available
         run: python3 -m pip install --user --quiet --break-system-packages "requests>=2.33.0"
 
-      - name: Reap stale staging Clerk test users older than 7d
+      - name: Reap stale staging Clerk test users older than 1d
         env:
           STAGING_CLERK_SECRET_KEY: ${{ secrets.STAGING_CLERK_SECRET_KEY }}
         run: |
@@ -166,7 +167,7 @@ jobs:
             echo "STAGING_CLERK_SECRET_KEY not set, skipping." >&2
             exit 0
           fi
-          python3 e2e/scripts/cleanup_clerk_users.py --target staging --older-than 7d
+          python3 e2e/scripts/cleanup_clerk_users.py --target staging --older-than 1d
 
   # ── Keeps the runner pool's pre-extracted Obsidian AppImage at the latest
   # released version so E2E tests exercise up-to-date Obsidian.

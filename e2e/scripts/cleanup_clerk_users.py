@@ -5,13 +5,13 @@ Usage:
     E2E_CLERK_SECRET_KEY=sk_test_... python e2e/scripts/cleanup_clerk_users.py [--dry-run]
     E2E_CLERK_SECRET_KEY=sk_test_... python e2e/scripts/cleanup_clerk_users.py --older-than 1h
     STAGING_CLERK_SECRET_KEY=sk_test_... python e2e/scripts/cleanup_clerk_users.py \
-        --target staging --older-than 7d [--dry-run]
+        --target staging --older-than 1d [--dry-run]
 
 Fetches all Clerk users, filters to test-user email patterns, and deletes them.
 ``--target ci`` (default) owns e2e-* users on the CI instance. ``--target
-staging`` owns ad-hoc ``+clerk_test@example.com`` accounts on the staging
-instance (except load-sim-*), and only once BOTH creation and last activity
-are older than ``--older-than``. Each target reads its own secret env var
+staging`` owns staging accounts whose emails ALL carry the ``+clerk_test@``
+tag (any domain), and only once BOTH creation and last activity are older
+than ``--older-than``. Each target reads its own secret env var
 (``SECRET_ENV``) so the CI and staging keys cannot be crossed.
 The ``--older-than`` filter is the safety belt for the per-run reaper (verify.yml e2e-clerk) and the daily
 ``cron.yml`` backstop: without it, a reaper could
@@ -48,10 +48,8 @@ SECRET_ENV = {"ci": "E2E_CLERK_SECRET_KEY", "staging": "STAGING_CLERK_SECRET_KEY
 
 # Staging guard rails: the job deletes unattended on an instance real humans
 # share, so a drifted matcher or a mis-pasted secret must fail loudly instead.
-STAGING_MAX_DELETES = 40  # ~24 expected on 2026-11-02; over this = red run, no deletes
+STAGING_MAX_DELETES = 100  # over this = red run, nothing deleted
 STAGING_MIN_AGE = timedelta(days=1)
-# Any of these on an account means someone adopted it: keep it.
-OTHER_IDENTIFIERS = ("phone_numbers", "external_accounts", "web3_wallets", "enterprise_accounts")
 
 
 def get_all_users(session: requests.Session) -> list[dict]:
@@ -79,17 +77,12 @@ def get_all_users(session: requests.Session) -> list[dict]:
 def is_target_user(user: dict, target: str) -> bool:
     """Check if a Clerk user is a test user owned by this reaper target.
 
-    staging requires EVERY email to match and no other identifier (phone,
-    OAuth/enterprise account, web3 wallet): any of those means a human may
-    own the account, so it is kept.
+    staging requires EVERY email to carry the tag: one untagged address means
+    a human may own the account, so it is kept.
     """
     emails = [ea.get("email_address", "") for ea in user.get("email_addresses", [])]
     if target == "staging":
-        return (
-            bool(emails)
-            and all(is_staging_test_clerk_email(e) for e in emails)
-            and not any(user.get(f) for f in OTHER_IDENTIFIERS)
-        )
+        return bool(emails) and all(is_staging_test_clerk_email(e) for e in emails)
     return any(is_e2e_clerk_email(e) for e in emails)
 
 
@@ -149,8 +142,8 @@ def main():
         "--target",
         choices=sorted(SECRET_ENV),
         default="ci",
-        help="ci: e2e-* users on the CI instance. staging: +clerk_test@example.com "
-        "users on the staging instance (load-sim-* kept); requires --older-than.",
+        help="ci: e2e-* users on the CI instance. staging: users whose emails all "
+        "carry +clerk_test@ on the staging instance; requires --older-than >= 1d.",
     )
     parser.add_argument(
         "--max-deletes",

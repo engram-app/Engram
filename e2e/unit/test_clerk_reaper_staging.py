@@ -2,9 +2,10 @@
 
 Staging's Clerk instance (`key-longhorn-79`, also local saas-dev) had no
 sweep, so ad-hoc agent/QA accounts (`<anything>+clerk_test@example.com`)
-piled up. The reaper's `--target staging` mode owns those, except the
-`load-sim-uNN` accounts that e2e/load/sim.py reuses across runs, and only
-once BOTH creation and last activity are older than `--older-than`.
+piled up. The reaper's `--target staging` mode owns any account whose emails ALL carry
+the `+clerk_test@` tag (any domain, any case; owner's decision 2026-11-02,
+load-sim-* included since sim.py recreates them), once creation and last
+activity are both older than `--older-than`.
 """
 
 import importlib.util
@@ -14,11 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from helpers.clerk_constants import (
-    LOAD_SIM_PREFIX,
-    is_e2e_clerk_email,
-    is_staging_test_clerk_email,
-)
+from helpers.clerk_constants import is_e2e_clerk_email, is_staging_test_clerk_email
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "cleanup_clerk_users.py"
 _spec = importlib.util.spec_from_file_location("cleanup_clerk_users", _SCRIPT)
@@ -52,17 +49,23 @@ def test_staging_matcher_owns_tagged_agent_accounts():
         assert is_staging_test_clerk_email(f"{local}+clerk_test@example.com"), local
 
 
-def test_staging_matcher_spares_load_sim_accounts():
-    assert not is_staging_test_clerk_email("load-sim-u01+clerk_test@example.com")
-    assert not is_staging_test_clerk_email("load-sim-u20+clerk_test@example.com")
+def test_staging_matcher_includes_load_sim_accounts():
+    # sim.py does find-or-create, so a reaped load-sim account is recreated.
+    assert is_staging_test_clerk_email("load-sim-u01+clerk_test@example.com")
 
 
-def test_staging_matcher_never_matches_real_domains():
+def test_staging_matcher_any_domain_any_case():
+    assert is_staging_test_clerk_email("todd+clerk_test@engram.page")
+    assert is_staging_test_clerk_email("someone+clerk_test@gmail.com")
+    assert is_staging_test_clerk_email("QA+Clerk_Test@Example.COM")
+
+
+def test_staging_matcher_requires_the_tag():
     assert not is_staging_test_clerk_email("todd@engram.page")
-    assert not is_staging_test_clerk_email("todd+clerk_test@engram.page")
-    assert not is_staging_test_clerk_email("someone+clerk_test@gmail.com")
-    assert not is_staging_test_clerk_email("someone@example.com")  # tag required
-    assert not is_staging_test_clerk_email("x+clerk_test@example.com.evil.io")
+    assert not is_staging_test_clerk_email("someone@gmail.com")
+    assert not is_staging_test_clerk_email("someone@example.com")
+    assert not is_staging_test_clerk_email("x+clerk_tester@example.com")
+    assert not is_staging_test_clerk_email("clerk_test@example.com")
     assert not is_staging_test_clerk_email("")
 
 
@@ -134,19 +137,11 @@ def test_staging_activity_uses_most_recent_timestamp():
     assert reaper.is_old_enough(u, NOW, WEEK, "staging") is False
 
 
-@pytest.mark.parametrize("field", ["phone_numbers", "external_accounts", "web3_wallets",
-                                   "enterprise_accounts"])
-def test_staging_user_with_other_identifiers_is_kept(field):
-    u = _user("tabtest+clerk_test@example.com")
-    u[field] = [{"id": "x"}]
-    assert reaper.is_target_user(u, "staging") is False
-
-
-def test_sim_default_prefix_is_the_kept_prefix():
-    from load import sim
-
-    assert sim.LOAD_SIM_PREFIX == LOAD_SIM_PREFIX
-    assert not is_staging_test_clerk_email(f"{LOAD_SIM_PREFIX}-u01+clerk_test@example.com")
+def test_staging_tag_is_the_only_rule():
+    # Owner's decision: the email tag decides; other identifiers don't protect.
+    u = _user("tabtest+clerk_test@gmail.com")
+    u["phone_numbers"] = [{"id": "x"}]
+    assert reaper.is_target_user(u, "staging") is True
 
 
 # ── main() end to end, HTTP mocked ───────────────────────────────────────
@@ -206,19 +201,19 @@ def run(monkeypatch):
     return _run
 
 
-STAGING = ["--target", "staging", "--older-than", "7d"]
+STAGING = ["--target", "staging", "--older-than", "1d"]
 STG_KEY = {"STAGING_CLERK_SECRET_KEY": "sk_test_stg"}
 USERS = [
     _stale("tabtest+clerk_test@example.com", "u1"),
     _stale("load-sim-u01+clerk_test@example.com", "u2"),
     _stale("todd@engram.page", "u3"),
-    _stale("qc-flows+clerk_test@example.com", "u4"),
+    _stale("qc-flows+clerk_test@gmail.com", "u4"),
 ]
 
 
 def test_main_staging_deletes_only_tagged_users(run):
     code, sess = run(STAGING, USERS, STG_KEY)
-    assert code == 0 and sess.deletes == ["u1", "u4"]
+    assert code == 0 and sess.deletes == ["u1", "u2", "u4"]
 
 
 def test_main_staging_dry_run_issues_no_delete(run):
@@ -252,17 +247,17 @@ def test_main_refuses_over_cap_before_any_delete(run):
     assert code == 1 and sess.deletes == []
 
 
-def test_main_staging_default_cap_is_40(run):
-    many = [_stale(f"t{i}+clerk_test@example.com", f"u{i}") for i in range(41)]
+def test_main_staging_default_cap_is_100(run):
+    many = [_stale(f"t{i}+clerk_test@example.com", f"u{i}") for i in range(101)]
     code, sess = run(STAGING, many, STG_KEY)
     assert code == 1 and sess.deletes == []
-    code, sess = run(STAGING, many[:40], STG_KEY)
-    assert code == 0 and len(sess.deletes) == 40
+    code, sess = run(STAGING, many[:100], STG_KEY)
+    assert code == 0 and len(sess.deletes) == 100
 
 
 def test_main_failed_delete_exits_nonzero_after_trying_all(run):
     code, sess = run(STAGING, USERS, STG_KEY, delete_status=500)
-    assert code == 1 and sess.deletes == ["u1", "u4"]
+    assert code == 1 and sess.deletes == ["u1", "u2", "u4"]
 
 
 def test_main_ci_target_unchanged(run):

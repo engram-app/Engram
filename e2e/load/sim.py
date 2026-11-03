@@ -53,7 +53,6 @@ from load.guards import (  # noqa: E402
     check_target,
 )
 from helpers.clerk_auth import ClerkAuth  # noqa: E402
-from helpers.clerk_constants import LOAD_SIM_PREFIX  # noqa: E402
 
 # --------------------------------------------------------------------------
 # Workload shape
@@ -976,10 +975,7 @@ def main() -> int:
         help="allow a target outside the staging allowlist (never prod)",
     )
     ap.add_argument(
-        "--prefix",
-        default=LOAD_SIM_PREFIX,
-        help="account email prefix; stable across runs. Only the default is spared "
-        "by the staging Clerk reaper; any other prefix is reaped after 7d idle",
+        "--prefix", default="load-sim", help="account email prefix; stable across runs"
     )
     ap.add_argument("--accounts", type=int, default=len(VAULT_SIZES))
     ap.add_argument("--duration", type=int, default=7200)
