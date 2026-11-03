@@ -527,7 +527,15 @@ defmodule Engram.Repo do
       end
     end
 
-    {query, opts}
+    {query, custom_plan(query, opts)}
+  end
+
+  # A lookup of `notes` by key runs unnamed: a custom plan every call, never
+  # the generic plan of a reused prepared statement (`Engram.Notes.Keys.lookup?/1`).
+  defp custom_plan(query, opts) do
+    if Engram.Notes.Keys.lookup?(query),
+      do: Keyword.put_new(opts, :prepare, :unnamed),
+      else: opts
   end
 
   @tenant_table_strings Enum.map(@tenant_tables, &Atom.to_string/1)
