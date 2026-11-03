@@ -209,7 +209,8 @@ defmodule Engram.Jobs do
   def unique_keys, do: Map.keys(@unique)
 
   @doc "Seconds a finished job is kept before the Pruner deletes it."
-  @spec retention_seconds() :: pos_integer()
+  # No `@spec`: the body is a constant, so pos_integer() is a dialyzer
+  # `contract_supertype` (as `Rebuild.build_versions/0`).
   def retention_seconds, do: @retention_seconds
 
   @doc """
