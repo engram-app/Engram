@@ -71,44 +71,6 @@ defmodule Engram.Notes.NoteBodyWriteTest do
     {result, body_writes() - before}
   end
 
-  # The trigger's mapping (20261021110200), restated independently: every
-  # `kind = 'note'` row of `user` whose body row is missing or disagrees in
-  # any column, with the columns that disagree. Ids and column names only.
-  defp diverged(user_id) do
-    merged = fn ct, nonce ->
-      """
-      CASE WHEN n.#{ct} IS NULL THEN NULL
-        WHEN n.#{nonce} IS NULL THEN n.#{ct}
-        WHEN length(n.#{nonce}) = 13 THEN n.#{nonce} || n.#{ct}
-        ELSE '\\x00'::bytea || n.#{nonce} || n.#{ct} END
-      """
-    end
-
-    %{rows: rows} =
-      Repo.query!(
-        """
-        SELECT n.id::text,
-          b.note_id IS NULL,
-          b.user_id IS DISTINCT FROM n.user_id,
-          b.key_version IS DISTINCT FROM
-            (CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END),
-          b.content_ct IS DISTINCT FROM (#{merged.("content_ciphertext", "content_nonce")}),
-          b.crdt_ct IS DISTINCT FROM (#{merged.("crdt_state_ciphertext", "crdt_state_nonce")}),
-          b.crdt_head IS DISTINCT FROM (CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$'
-            THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END)
-        FROM notes n LEFT JOIN note_bodies b ON b.note_id = n.id
-        WHERE n.user_id = $1 AND n.kind = 'note'
-        """,
-        [Ecto.UUID.dump!(user_id)]
-      )
-
-    names = [:missing, :user_id, :key_version, :content, :crdt, :head]
-
-    for [id | flags] <- rows, Enum.any?(flags) do
-      {id, for({name, true} <- Enum.zip(names, flags), do: name)}
-    end
-  end
-
   defp note_count(user_id) do
     Repo.one(
       from(n in Note, where: n.user_id == ^user_id and n.kind == "note", select: count()),
@@ -118,7 +80,35 @@ defmodule Engram.Notes.NoteBodyWriteTest do
 
   defp assert_in_step!(user_id) do
     assert note_count(user_id) > 0
-    assert diverged(user_id) == []
+    assert Engram.Fixtures.note_body_divergence(user_id) == []
+  end
+
+  # `[:engram, :note_body, :sync_wrote]` events this process emits during `fun`.
+  defp sync_wrote_during(fun) do
+    ref = make_ref()
+    me = self()
+
+    :telemetry.attach(
+      "sync-wrote-#{inspect(ref)}",
+      [:engram, :note_body, :sync_wrote],
+      fn _, %{count: n}, _, _ -> if self() == me, do: send(me, {ref, n}) end,
+      nil
+    )
+
+    try do
+      fun.()
+      collect(ref, 0)
+    after
+      :telemetry.detach("sync-wrote-#{inspect(ref)}")
+    end
+  end
+
+  defp collect(ref, acc) do
+    receive do
+      {^ref, n} -> collect(ref, acc + n)
+    after
+      0 -> acc
+    end
   end
 
   defp doc_with(text) do
@@ -166,6 +156,20 @@ defmodule Engram.Notes.NoteBodyWriteTest do
       {_, n} = writes_during(fn -> {:ok, _} = Notes.rename_note(u, v, "one.md", "two.md") end)
       assert n == 2
     end
+
+    # The signal the next release's gate reads: with the trigger live,
+    # `sync!/3` never has anything left to write.
+    test "sync! reports no write of its own", %{user: u, vault: v} do
+      wrote =
+        sync_wrote_during(fn ->
+          note = write!(u, v, "one.md", "first")
+          write!(u, v, "one.md", "second")
+          :ok = CrdtCheckpoint.checkpoint(u.id, v.id, note.id, doc_with("x"))
+          {:ok, _} = Notes.rename_note(u, v, "one.md", "two.md")
+        end)
+
+      assert wrote == 0
+    end
   end
 
   describe "in step without the trigger (the next release drops it)" do
@@ -175,7 +179,8 @@ defmodule Engram.Notes.NoteBodyWriteTest do
     end
 
     test "create and update", %{user: u, vault: v} do
-      write!(u, v, "a.md", "first")
+      # Without the trigger, sync! is the writer, and says so.
+      assert sync_wrote_during(fn -> write!(u, v, "a.md", "first") end) == 1
       assert_in_step!(u.id)
       write!(u, v, "a.md", "second")
       assert_in_step!(u.id)
@@ -226,6 +231,12 @@ defmodule Engram.Notes.NoteBodyWriteTest do
         end)
 
       :ok = CrdtCheckpoint.checkpoint(u.id, v.id, note.id, doc)
+      assert_in_step!(u.id)
+    end
+
+    test "structural (.canvas) checkpoint", %{user: u, vault: v} do
+      note = write!(u, v, "board.canvas", ~s({"nodes":[],"edges":[]}))
+      :ok = CrdtCheckpoint.checkpoint(u.id, v.id, note.id, doc_with("x"))
       assert_in_step!(u.id)
     end
 
@@ -414,6 +425,7 @@ defmodule Engram.Notes.NoteBodyRotationTest do
   test "rotation keeps note_bodies in step without the trigger", %{user: u, vault: v} do
     Repo.query!("ALTER TABLE notes DISABLE TRIGGER notes_sync_body")
     assert :ok = UserDekRotation.rotate_user(u.id)
+    assert Engram.Fixtures.note_body_divergence(u.id) == []
     DekCache.invalidate_all()
     u = Engram.Accounts.get_user!(u.id)
     assert {:ok, %{content: "from notes"}} = Notes.get_note(u, v, "r.md")
