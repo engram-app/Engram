@@ -84,7 +84,8 @@ defmodule Engram.Rebuild do
   # The last versions every install rebuilds automatically, without the
   # switch: the stamps prod notes carry before the v5 pass (chunker 3,
   # keyword 2). The build is at 5 / 5 (PR-17, phrase pairs, then dropped); that waits
-  # for `on`.
+  # for `on`. Once a pass has completed, `off` targets the newest one
+  # (`newest_completed/0`); the pins only serve installs that never ran v5.
   # `:rebuild_pinned_versions` is a test seam only (no env var, set by
   # `test_helper.exs` to the build's versions so the suite runs pins == build).
   @pinned {3, 2}
@@ -131,7 +132,7 @@ defmodule Engram.Rebuild do
 
   defp on_mode, do: if(halted?(), do: :off, else: :on)
 
-  @doc "`{chunker, keyword}` versions `off` and `dry_run` target: prod's pre-v5 stamps."
+  @doc "`{chunker, keyword}` floor `off` and `dry_run` target before any newer pass completes: prod's pre-v5 stamps."
   # No `@spec`, as `build_versions/0`.
   def pinned_versions, do: @pinned
 
@@ -142,8 +143,9 @@ defmodule Engram.Rebuild do
 
   @doc """
   `{chunker, keyword}` versions every index version check rebuilds up to:
-  the build's while `on`, else the pins (never above the build: a rollback
-  build older than a pin keeps its own). The ONE accessor: the reconcile
+  the build's while `on`, else the newest completed pass, never below the
+  pins (and never above the build: a rollback build older than a pin keeps
+  its own). The ONE accessor: the reconcile
   sweep, `EmbedNote.version_stale?/1`, `RefreshKeywordVectors` and
   `IndexVersions` all read it.
   """
@@ -155,8 +157,28 @@ defmodule Engram.Rebuild do
       {chunker, keyword}
     else
       {pin_chunker, pin_keyword} = ServiceConfig.get(:rebuild_pinned_versions, pinned_versions())
-      {min(chunker, pin_chunker), min(keyword, pin_keyword)}
+      pins = {min(chunker, pin_chunker), min(keyword, pin_keyword)}
+
+      case newest_completed() do
+        nil ->
+          pins
+
+        {done_chunker, done_keyword} ->
+          {max(done_chunker, elem(pins, 0)), max(done_keyword, elem(pins, 1))}
+      end
     end
+  end
+
+  # The newest completed pass (`IndexVersions.newest_completed/1`), so `off`
+  # is the steady state after a pass and stays so across the next bump: an
+  # edit is stamped with the versions the last pass proved, never back down
+  # to the pins. An install that never ran the v5 pass has only pre-v5 rows
+  # (or none) and keeps the pins, so its old notes stay current and nothing
+  # re-embeds. Cached as the halt flag (`:rebuild`, 30 s): every embed reads it.
+  defp newest_completed do
+    Cache.fetch(:rebuild, :newest_completed, fn ->
+      Engram.DataMigrations.IndexVersions.newest_completed(build_versions())
+    end)
   end
 
   @doc """

@@ -1,6 +1,6 @@
 # Index changes heal themselves: version stamps + the reconcile sweep
 
-_Last verified: 2026-10-30_
+_Last verified: 2026-11-03_
 
 **The standard:** a change to how notes are indexed must reach every EXISTING
 note on its own, on SaaS and on every self-host install. A release that needs
@@ -117,7 +117,7 @@ chunking before it is expensive: bundle boundary changes into one bump.
   must go through `fingerprint_models/0`.
 - `INDEX_REBUILD=dry_run` does not stop the keyword sweep, by design. The
   sweep runs in every mode against `Rebuild.target_versions/0` (the pins,
-  `{3, 2}`, off and dry_run), and a NULL `keyword_version` (cleared by payload
+  `{3, 2}`, off and dry_run, until the build's pass has completed), and a NULL `keyword_version` (cleared by payload
   drift healing in `ReconcileNotePayloads`, a DEK rotation, or kept NULL by
   EmbedNote's compare-and-set stamp) is behind any target.
 - Watch it: `RefreshKeywordVectors` jobs in the `embed` queue at backfill priority; the
@@ -147,6 +147,31 @@ upsert, never `PUT /points/payload`) and stamps the note. It is compared with
 `<`: a newer stamp is current, so a rollback rebuilds nothing. It is NOT a
 reason to bump `KeywordIndex`/`chunker` versions, and it never calls the
 embedder. Rollout order and rollback rule: `docs/context/payload-v6.md`.
+
+## Off after the pass is the steady state
+
+`Rebuild.target_versions/0` under `off`/`dry_run` is the newest completed
+`index_versions:chunker=C,keyword=K,model=*` pass (`IndexVersions.newest_completed/1`:
+any model, any ledger version, capped at the build, cached 30 s), never below
+the pins `{3, 2}`. So after the v5 pass, turning `INDEX_REBUILD` off stamps
+edits 5 / 5 (what their points hold) instead of regressing them to 3 / 2, and
+the next chunker or keyword bump keeps stamping 5 / 5 until ITS pass completes.
+A self-host install that never ran the v5 pass has only the pre-v5 row (or
+none) and keeps the pins: its old notes stay current and nothing re-embeds.
+The model is left out because it has its own stale term.
+
+Accepted risk: an install that completed a pass, rolled back to an older
+chunker, edited notes there, then rolled forward finds those edits
+version-stale against the completed pass under `off`, and rebuilds them
+without the `on` pacing or ledger. The stamps are honest (those points really
+are older), the case needs a rollback across a completed pass, and the
+rebuild is the correct work.
+
+A cleared keyword stamp after the ledger closed (payload drift heal in
+`ReconcileNotePayloads`) used to wait for the daily re-verify: the prod v5
+gate found exactly one such note on 2026-11-02 (heal at 05:54 UTC, after the
+04:02 re-verify). The heal now queues `RefreshKeywordVectors` for the note
+itself, as `RepathNoteIndex` does after a rename.
 
 ## The completion ledger stops the version scans
 

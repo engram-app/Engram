@@ -8,8 +8,8 @@ defmodule Engram.DataMigrations.IndexVersions do
   of them is a new, not-done migration.
 
   The versions are `Engram.Rebuild.target_versions/0`: the build's while
-  `INDEX_REBUILD=on`, else the pinned pre-v5 versions (today's build, so
-  `off` changes nothing). A stamp bump past the pins renames nothing and
+  `INDEX_REBUILD=on`, else the newest completed pass (`newest_completed/1`),
+  never below the pinned pre-v5 versions. A stamp bump past the pins renames nothing and
   rebuilds nothing until the switch is `on`, which reopens the migration.
   """
   @behaviour Engram.DataMigration
@@ -20,15 +20,50 @@ defmodule Engram.DataMigrations.IndexVersions do
   alias Engram.Indexing
   alias Engram.Notes.Note
   alias Engram.Rebuild
+  alias Engram.Repo
   alias Engram.Vaults.Vault
 
   @impl true
-  def name do
-    {chunker, keyword} = Rebuild.target_versions()
+  def name, do: prefix(Rebuild.target_versions()) <> (Indexing.embed_model() || "none")
 
-    "index_versions:chunker=#{chunker},keyword=#{keyword},model=#{Indexing.embed_model() || "none"}"
+  @doc """
+  The newest `{chunker, keyword}` pass that has completed, under ANY embed
+  model, capped at `build` (a rollback build older than the pass keeps its
+  own); nil when none has. Every content-current note held at least those
+  versions when it closed. One real row wins (tuple order), never a mix of
+  two rows' components. The model is left out because it has its own stale
+  term (`stale_dynamic/1`). Rows whose pass is open again (a `version/0` bump
+  that found work) do not count. Read by `Rebuild.target_versions/0`, so
+  `off` keeps stamping the last completed pass after the next chunker or
+  keyword bump.
+  """
+  @spec newest_completed({pos_integer(), pos_integer()}) :: {pos_integer(), pos_integer()} | nil
+  def newest_completed({build_chunker, build_keyword}) do
+    from(e in DataMigrations.Entry,
+      where: like(e.name, "index_versions:%") and not is_nil(e.completed_at),
+      select: e.name
+    )
+    |> Repo.all()
+    |> Enum.flat_map(fn name ->
+      case Regex.run(~r/^index_versions:chunker=(\d+),keyword=(\d+),model=/, name) do
+        [_, c, k] ->
+          [{min(String.to_integer(c), build_chunker), min(String.to_integer(k), build_keyword)}]
+
+        nil ->
+          []
+      end
+    end)
+    |> Enum.max(fn -> nil end)
   end
 
+  defp prefix({chunker, keyword}),
+    do: "index_versions:chunker=#{chunker},keyword=#{keyword},model="
+
+  # Bumping this reopens the pass. `newest_completed/1` does not filter on
+  # it, but once the bumped pass finds work the runner reopens the SAME row
+  # (`note_open/2` clears `completed_at`), so `off` falls back to the next
+  # older completed pass, or the pins, until it closes again. Stamps can
+  # then only be lower than the data, never higher.
   @impl true
   def version, do: 1
 

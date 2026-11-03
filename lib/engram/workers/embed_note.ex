@@ -1196,11 +1196,13 @@ defmodule Engram.Workers.EmbedNote do
     # A full pass encodes the current keyword version too, so it stamps both,
     # except a stamp the pass's reused points do not meet (`Rebuild.pass_stamp/2`,
     # #2199): those keep the vectors they were built with.
-    # The TARGET versions, not the build's: before `INDEX_REBUILD=on` they are
-    # the pins, so a note edited then keeps a pre-v5 stamp and the v5 pass
-    # still rewrites it in the pass's layout and encoding (pinned avgdl).
-    # Stamping the build would make the pass skip it for good. A pass that
-    # reuses every vector costs it 0 Voyage tokens.
+    # The TARGET versions, not the build's. Before a pass completes they are
+    # the pins under `off`, so a note edited then keeps a pre-v5 stamp and the
+    # v5 pass still rewrites it in the pass's layout and encoding (pinned
+    # avgdl); stamping the build would make the pass skip it for good. After
+    # the pass `off` targets the completed pass: edits stamp it, encoded with
+    # the live avgdl, which is the steady state (the query side reads no
+    # avgdl). A pass that reuses every vector costs it 0 Voyage tokens.
     # ponytail: read at stamp time, so an off->on flip DURING this index
     # stamps the build for a pass that did not use the pinned avgdl; capture
     # the target before indexing if that window ever matters.
