@@ -75,9 +75,10 @@ others.
 Bump `version/0` to reopen a migration. `DataMigrations.done?/2` treats a stored
 higher version as done, so a rollback to older code does not redo work. Only
 `true` is cached (in `:persistent_term`). A done migration goes back to
-not-done only through a code change (which restarts the node) or a re-verify
-that finds work (`DataMigrations.reopen/2`, below), which drops the cache on
-the node that ran it; other nodes keep their cached `true` until restart.
+not-done only through a code change (which restarts the node) or
+`DataMigrations.reopen/2` (a re-verify that finds work, or the runbook
+below), which drops the cache on every connected node (a cache-sync
+broadcast).
 
 `IndexVersions` is the exception: its `name/0` embeds the chunker, keyword and
 embed model versions, so bumping any of them is a new, not-done migration.
@@ -95,7 +96,7 @@ whose last verification (`completed_at`, rewritten by every `:done`
 re-verify) is over 25 h old (`DataMigrations.verified_before?/2`). `:done` calls
 `mark_done/2` (idempotent; it re-closes a row another node reopened while this
 node still cached `done?`); `:more` calls `DataMigrations.reopen/2` (clears
-`completed_at`, restarts the stuck clock, drops this node's cached `done?`),
+`completed_at`, restarts the stuck clock, drops the cached `done?` on every node),
 and the hourly passes take over until it closes again. The reopen logs at
 `:info` ("data migration reopened by re-verify: found users=n"), not
 `:warning`: `EnvelopeFormat` reopens most days from rows written while a
@@ -120,7 +121,7 @@ discovery that reads O(broken rows) over a walk of the table.
 | Migration | Re-verified | Why |
 |---|---|---|
 | `NoteSplit` | no | Invariant kept by the `notes_derive_core_keys` / `notes_sync_body` triggers for every writer of any release. Its daily walk + drift report was ~95 windows/day at ~700 ms and 1.6-1.9k disk reads each, and did not reopen once in 14 days of prod logs (2026-10-19..11-02). |
-| `NoteIndexState` | no | Kept by `notes_sync_index_state` and the `chunks_sync_note_counts_*` triggers, which every writer of any release fires. Its daily walk was ~95 windows/day at ~600 ms and ~1.9k disk reads each; every pass logged since found 0 rows. |
+| `NoteIndexState` | no (v2: one recount on upgrade) | Kept by `notes_sync_index_state` and the `chunks_sync_note_counts_*` triggers, which every writer of any release fires. Its daily walk was ~95 windows/day at ~600 ms and ~1.9k disk reads each; every pass logged since found 0 rows. |
 | `EnvelopeFormat` | yes | Reopens in prod (rows written while a rolling deploy held the compression gate shut). Discovery is one EXISTS per user per column, cheap at prod scale. |
 | `LinkResolutionKeys` | yes | Reopens several times a week in prod (an older node re-encrypts without restamping). One EXISTS per user per table. |
 | `NotePayloadStamps` | yes | Reopens in prod (a lost write race NULLs a stamp after the migration closed). One EXISTS per user (~10 ms). |
@@ -128,10 +129,43 @@ discovery that reads O(broken rows) over a walk of the table.
 | `IndexVersions` | its own (04:02) | See `index-version-self-heal.md`. |
 
 A migration that is not re-verified only goes back to work on a
-`version/0` bump or `DataMigrations.reopen/2`. The one gap a trigger cannot
-close is a write with triggers disabled (`session_replication_role =
-replica`, a data-only `pg_restore --disable-triggers`); whoever does that
-reopens the trigger-kept ledgers (`note_split`, `note_index_state`) by hand.
+`version/0` bump or `DataMigrations.reopen/2`. `NoteIndexState` is at
+version 2 for that reason: its counters were app-kept on 0.66/0.67 and
+drifted, so an instance skipping from those releases recounts once.
+
+### Runbook: after a write with triggers disabled
+
+The one gap a trigger cannot close is a write with triggers disabled
+(`session_replication_role = replica`, a data-only `pg_restore
+--disable-triggers`). After one, reopen the trigger-kept ledgers. `reopen/2`
+is cluster-wide: it clears `completed_at` in the table and drops the cached
+`done?` on every connected node (cache-sync broadcast), so run it on ANY one
+node.
+
+```bash
+# Prod (ECS). Staging on FastRaid: docker exec engram /app/bin/engram rpc '...'
+aws ecs execute-command --cluster engram-prod --task <any-task-id> \
+  --container engram --interactive \
+  --command "/app/bin/engram rpc 'Engram.DataMigrations.reopen(\"note_split\", 1); Engram.DataMigrations.reopen(\"note_index_state\", 2)'"
+```
+
+Confirm on every node (each entry must be `{:ok, false}`; a missing node
+means it is not clustered, so restart it):
+
+```bash
+/app/bin/engram rpc 'IO.inspect(for n <- ["note_split", "note_index_state"], v = (if n == "note_split", do: 1, else: 2), do: {n, :erpc.multicall([node() | Node.list()], Engram.DataMigrations, :cached_done?, [n, v])})'
+```
+
+and in the table (`completed_at` NULL, `opened_at` now):
+
+```sql
+SELECT name, version, completed_at, opened_at FROM data_migrations
+WHERE name IN ('note_split', 'note_index_state');
+```
+
+The next hourly runner pass (minute 33) walks the table and heals the rows;
+`Keys.ids?` falls back to the HMAC columns within a minute and switches back
+when `note_split` closes.
 
 ## Cross-tenant discovery
 

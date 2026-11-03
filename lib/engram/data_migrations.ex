@@ -25,8 +25,8 @@ defmodule Engram.DataMigrations do
   @spec done?(String.t(), pos_integer()) :: boolean()
   def done?(name, version) do
     # Only `true` is cached: done goes back to not-done only through a code
-    # change (which restarts the node) or `reopen/2` (which drops this node's
-    # entry; other nodes keep theirs until restart).
+    # change (which restarts the node) or `reopen/2` (which drops the entry
+    # on every node, `forget/2`).
     case :persistent_term.get({__MODULE__, name, version}, false) do
       true ->
         true
@@ -147,17 +147,39 @@ defmodule Engram.DataMigrations do
   end
 
   @doc """
-  Reopens a done migration (a re-verify found work again): `note_open/2`
-  clears `completed_at` and restarts the stuck clock, and this node's cached
-  `done?` is dropped. Another node's cache lasts until it restarts; the runner
-  only runs on the Cron leader, and its next re-verify reopens again.
+  Reopens a done migration (a re-verify found work, or an operator after a
+  restore with triggers disabled): `note_open/2` clears `completed_at` and
+  restarts the stuck clock, and every node drops its cached `done?`: this
+  one at once, its peers on the cache-sync broadcast
+  (`Engram.Cluster.CacheSync`, applied by `Engram.Cache.Server`). Without
+  the broadcast a peer that cached `true` kept skipping the migration until
+  it restarted, which mattered once the trigger-kept ledgers stopped
+  re-verifying daily.
   """
   @spec reopen(String.t(), pos_integer()) :: :ok
   def reopen(name, version) do
     _ = note_open(name, version)
-    :persistent_term.erase({__MODULE__, name, version})
+    :ok = forget(name, version)
+
+    Engram.Cluster.CacheSync.broadcast_from(
+      Process.whereis(Engram.Cache.Server),
+      {:data_migration_reopen, name, version}
+    )
+  end
+
+  @doc "Drops this node's cached `done?` for `name` at `version` (a peer's reopen)."
+  @spec forget(String.t(), pos_integer()) :: :ok
+  def forget(name, version) do
+    _ = :persistent_term.erase({__MODULE__, name, version})
     :ok
   end
+
+  @doc """
+  True when this node holds a cached `done?` for `name` at `version`. For the
+  reopen runbook: after `reopen/2`, every node must answer `false`.
+  """
+  @spec cached_done?(String.t(), pos_integer()) :: boolean()
+  def cached_done?(name, version), do: :persistent_term.get({__MODULE__, name, version}, false)
 
   @doc """
   Holds an OPEN row's stuck clock while its migration is disabled: resets

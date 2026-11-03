@@ -137,6 +137,36 @@ defmodule Engram.DataMigrationsTest do
     end
   end
 
+  describe "reopen/2 is cluster-wide" do
+    # Without a daily re-verify, a hand reopen (after a restore with triggers
+    # disabled) is the only way back to work. `done?/2` caches `true` per
+    # node for the node's lifetime, so a reopen that cleared only its own
+    # node left the runner skipping on every other node until a restart.
+    test "a reopen broadcasts it on the cache-sync topic" do
+      :ok = Engram.Cluster.CacheSync.subscribe()
+      :ok = DataMigrations.mark_done("test_reopen", 1)
+      assert DataMigrations.done?("test_reopen", 1)
+
+      :ok = DataMigrations.reopen("test_reopen", 1)
+
+      assert_receive {:cache_sync, {:data_migration_reopen, "test_reopen", 1}}
+      refute DataMigrations.cached_done?("test_reopen", 1)
+      refute DataMigrations.done?("test_reopen", 1)
+    end
+
+    test "a peer's reopen drops this node's cached done" do
+      :ok = DataMigrations.mark_done("test_reopen", 1)
+      assert DataMigrations.done?("test_reopen", 1)
+      assert DataMigrations.cached_done?("test_reopen", 1)
+
+      # What a peer's reopen/2 sends; this node never ran the reopen.
+      :ok = Engram.Cluster.CacheSync.broadcast({:data_migration_reopen, "test_reopen", 1})
+      _ = :sys.get_state(Engram.Cache.Server)
+
+      refute DataMigrations.cached_done?("test_reopen", 1)
+    end
+  end
+
   describe "jobs_in_flight?/1" do
     test "sees an available job of that worker only" do
       refute DataMigrations.jobs_in_flight?(Engram.Workers.BackfillCrdtHead)

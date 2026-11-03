@@ -29,8 +29,9 @@ defmodule Engram.DataMigrations.NoteSplit do
   brings this ledger row back from the same dump as the rows it vouches for.
   What remains is a write with triggers disabled (`session_replication_role
   = replica`, a data-only `pg_restore --disable-triggers`): an operator who
-  does that reopens the ledger (`DataMigrations.reopen/2`) or bumps
-  `version/0`, and the next pass heals it.
+  does that reopens the ledger cluster-wide (`DataMigrations.reopen/2`,
+  runbook in `docs/context/data-migrations-ledger.md`), and the next hourly
+  pass heals it.
   """
   @behaviour Engram.DataMigration
 
