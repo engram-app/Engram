@@ -1,23 +1,19 @@
 defmodule Engram.Notes.NoteBodyWriteTest do
   @moduledoc """
-  R8 release N: the app writes `note_bodies` itself (`NoteBody.sync!/3`),
-  in the transaction that writes the `notes` body columns, while the
-  `notes_sync_body` trigger stays live for the previous release's nodes.
+  R8: the app writes `note_bodies` itself (`NoteBody.sync!/3`), in the
+  transaction that writes the `notes` body columns. Release N+1 dropped the
+  `notes_sync_body` trigger (20261103000000), so `sync!/3` is the only
+  writer.
 
-    * "one body write per save": with the trigger live, a save still writes
-      the `note_bodies` row ONCE (the trigger's write, then `sync!/3` finds
-      the row in step and writes nothing). Counted from
-      `pg_stat_xact_user_tables`, which reports this transaction's own
-      inserts and updates.
-    * "in step without the trigger": the next release drops the trigger, so
-      every write path must keep `note_bodies` right on its own. Each test
-      disables the trigger (in the sandbox transaction, rolled back after),
-      runs one writer and compares every body column against the mapping
-      the trigger defines (20261021110200).
+    * "the trigger is gone": a raw `notes` write that skips `sync!/3`
+      leaves `note_bodies` as it was.
+    * "one body write per save": a save writes the `note_bodies` row ONCE,
+      and that write is `sync!/3`'s. Counted from `pg_stat_xact_user_tables`,
+      which reports this transaction's own inserts and updates.
+    * "in step with sync! as the only writer": each test runs one writer
+      and compares every body column against the mapping the dropped
+      trigger defined (20261021110200).
     * Row-locked reads take the body from `note_bodies`.
-
-  Not async: `ALTER TABLE ... DISABLE TRIGGER` takes an ACCESS EXCLUSIVE lock
-  on `notes` until the sandbox rolls back.
   """
   use Engram.DataCase, async: false
 
@@ -52,8 +48,6 @@ defmodule Engram.Notes.NoteBodyWriteTest do
     note
   end
 
-  defp disable_trigger!, do: Repo.query!("ALTER TABLE notes DISABLE TRIGGER notes_sync_body")
-
   # This transaction's note_bodies tuple writes so far.
   defp body_writes do
     %{rows: [[n]]} =
@@ -65,10 +59,14 @@ defmodule Engram.Notes.NoteBodyWriteTest do
     n
   end
 
-  defp writes_during(fun) do
+  # This transaction's note_bodies writes during `fun`, asserting every one
+  # was sync!'s own (the telemetry the release gate reads).
+  defp sync_writes_during(fun) do
     before = body_writes()
-    result = fun.()
-    {result, body_writes() - before}
+    wrote = sync_wrote_during(fun)
+    n = body_writes() - before
+    assert wrote == n
+    n
   end
 
   defp note_count(user_id) do
@@ -118,68 +116,62 @@ defmodule Engram.Notes.NoteBodyWriteTest do
     doc
   end
 
-  describe "one note_bodies write per save, trigger live" do
+  describe "the trigger is gone" do
+    test "a raw notes write that skips sync! leaves note_bodies as it was",
+         %{user: u, vault: v} do
+      note = write!(u, v, "one.md", "first")
+      id = Ecto.UUID.dump!(note.id)
+      body = fn -> Repo.query!("SELECT content_ct FROM note_bodies WHERE note_id = $1", [id]) end
+      before = body.()
+
+      Repo.query!(
+        "UPDATE notes SET content_ciphertext = $2, content_nonce = $3 WHERE id = $1",
+        [id, :crypto.strong_rand_bytes(40), <<1>> <> :crypto.strong_rand_bytes(12)]
+      )
+
+      assert body.() == before
+      assert [{_, [:content]}] = Engram.Fixtures.note_body_divergence(u.id)
+    end
+  end
+
+  describe "one note_bodies write per save" do
     test "create inserts the body once", %{user: u, vault: v} do
-      {_, n} = writes_during(fn -> write!(u, v, "one.md", "first") end)
-      assert n == 1
+      assert sync_writes_during(fn -> write!(u, v, "one.md", "first") end) == 1
     end
 
     test "an update writes the body once", %{user: u, vault: v} do
       write!(u, v, "one.md", "first")
-      {_, n} = writes_during(fn -> write!(u, v, "one.md", "second") end)
-      assert n == 1
+      assert sync_writes_during(fn -> write!(u, v, "one.md", "second") end) == 1
     end
 
     test "a locked read-modify-write writes the body once", %{user: u, vault: v} do
       write!(u, v, "one.md", "first")
 
-      {_, n} =
-        writes_during(fn ->
-          assert {{:ok, _}, _} =
-                   Notes.rmw_note(u, v, "one.md", &(&1 <> " more"), actor: "api")
-        end)
-
-      assert n == 1
+      assert sync_writes_during(fn ->
+               assert {{:ok, _}, _} =
+                        Notes.rmw_note(u, v, "one.md", &(&1 <> " more"), actor: "api")
+             end) == 1
     end
 
     test "a content checkpoint writes the body once", %{user: u, vault: v} do
       note = write!(u, v, "one.md", "first")
 
-      {_, n} =
-        writes_during(fn -> CrdtCheckpoint.checkpoint(u.id, v.id, note.id, doc_with("x")) end)
-
-      assert n == 1
+      assert sync_writes_during(fn ->
+               CrdtCheckpoint.checkpoint(u.id, v.id, note.id, doc_with("x"))
+             end) == 1
     end
 
     test "a rename writes the moved body once and the tombstone once", %{user: u, vault: v} do
       write!(u, v, "one.md", "first")
-      {_, n} = writes_during(fn -> {:ok, _} = Notes.rename_note(u, v, "one.md", "two.md") end)
-      assert n == 2
-    end
 
-    # The signal the next release's gate reads: with the trigger live,
-    # `sync!/3` never has anything left to write.
-    test "sync! reports no write of its own", %{user: u, vault: v} do
-      wrote =
-        sync_wrote_during(fn ->
-          note = write!(u, v, "one.md", "first")
-          write!(u, v, "one.md", "second")
-          :ok = CrdtCheckpoint.checkpoint(u.id, v.id, note.id, doc_with("x"))
-          {:ok, _} = Notes.rename_note(u, v, "one.md", "two.md")
-        end)
-
-      assert wrote == 0
+      assert sync_writes_during(fn ->
+               {:ok, _} = Notes.rename_note(u, v, "one.md", "two.md")
+             end) == 2
     end
   end
 
-  describe "in step without the trigger (the next release drops it)" do
-    setup do
-      disable_trigger!()
-      :ok
-    end
-
+  describe "in step with sync! as the only writer" do
     test "create and update", %{user: u, vault: v} do
-      # Without the trigger, sync! is the writer, and says so.
       assert sync_wrote_during(fn -> write!(u, v, "a.md", "first") end) == 1
       assert_in_step!(u.id)
       write!(u, v, "a.md", "second")
@@ -422,8 +414,7 @@ defmodule Engram.Notes.NoteBodyRotationTest do
     assert {:ok, %{content: "from bodies"}} = Notes.get_note(u, v, "r.md")
   end
 
-  test "rotation keeps note_bodies in step without the trigger", %{user: u, vault: v} do
-    Repo.query!("ALTER TABLE notes DISABLE TRIGGER notes_sync_body")
+  test "rotation keeps note_bodies in step", %{user: u, vault: v} do
     assert :ok = UserDekRotation.rotate_user(u.id)
     assert Engram.Fixtures.note_body_divergence(u.id) == []
     DekCache.invalidate_all()
