@@ -69,6 +69,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # by nothing. It reports boot-time role and pool configuration, so a raw
     # term is a plausible future addition.
     "lib/engram/repo/tenancy_guard.ex",
+    # Reads note and user ids to drive repairs and logs COUNTS only; in scope
+    # so a future log of an id or a raw term is scanned.
+    "lib/engram/bookkeeping/",
     "lib/engram/links/",
     "lib/engram/rerankers/",
     "lib/engram_web/channels/",
