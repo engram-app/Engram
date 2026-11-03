@@ -28,6 +28,7 @@ on:
         required: true
         options:
           - e2e-orphans
+          - staging-clerk-reap
           - obsidian-update
           - plan-triage
           - frontend-major-updates
@@ -128,6 +129,45 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           python3 e2e/scripts/cleanup_qdrant_collections.py
+
+  # ── Reaps ad-hoc test accounts from the STAGING Clerk instance (also used
+  # by local saas-dev). Agents running staging checks mint
+  # `<name>+clerk_test@...` users and never delete them (62 users, 24 stale
+  # agent accounts, 2026-11-02). Own job, no `needs`, so an unrelated red job
+  # (native-deep) never blocks it. Reaps a user only when EVERY email carries
+  # `+clerk_test@` and it was created AND last active >1d ago; >100 matches
+  # = red run, nothing deleted.
+  staging-clerk-reap:
+    if: |
+      github.event_name == 'schedule'
+      || github.event.inputs.task == 'staging-clerk-reap'
+    runs-on: [self-hosted, linux, x64, isolated, light]
+    permissions:
+      contents: read
+    concurrency:
+      group: staging-clerk-reap
+      cancel-in-progress: false
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            e2e/scripts/cleanup_clerk_users.py
+            e2e/helpers/__init__.py
+            e2e/helpers/clerk_constants.py
+
+      - name: Ensure requests is available
+        run: python3 -m pip install --user --quiet --break-system-packages "requests>=2.33.0"
+
+      - name: Reap stale staging Clerk test users older than 1d
+        env:
+          STAGING_CLERK_SECRET_KEY: ${{ secrets.STAGING_CLERK_SECRET_KEY }}
+        run: |
+          if [ -z "${STAGING_CLERK_SECRET_KEY}" ]; then
+            echo "STAGING_CLERK_SECRET_KEY not set, skipping." >&2
+            exit 0
+          fi
+          python3 e2e/scripts/cleanup_clerk_users.py --target staging --older-than 1d
 
   # ── Keeps the runner pool's pre-extracted Obsidian AppImage at the latest
   # released version so E2E tests exercise up-to-date Obsidian.

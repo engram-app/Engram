@@ -4,8 +4,15 @@
 Usage:
     E2E_CLERK_SECRET_KEY=sk_test_... python e2e/scripts/cleanup_clerk_users.py [--dry-run]
     E2E_CLERK_SECRET_KEY=sk_test_... python e2e/scripts/cleanup_clerk_users.py --older-than 1h
+    STAGING_CLERK_SECRET_KEY=sk_test_... python e2e/scripts/cleanup_clerk_users.py \
+        --target staging --older-than 1d [--dry-run]
 
-Fetches all Clerk users, filters to e2e-* email patterns, and deletes them.
+Fetches all Clerk users, filters to test-user email patterns, and deletes them.
+``--target ci`` (default) owns e2e-* users on the CI instance. ``--target
+staging`` owns staging accounts whose emails ALL carry the ``+clerk_test@``
+tag (any domain), and only once BOTH creation and last activity are older
+than ``--older-than``. Each target reads its own secret env var
+(``SECRET_ENV``) so the CI and staging keys cannot be crossed.
 The ``--older-than`` filter is the safety belt for the per-run reaper (verify.yml e2e-clerk) and the daily
 ``cron.yml`` backstop: without it, a reaper could
 race against an in-flight CI run whose users are still active. See issue #160.
@@ -32,7 +39,17 @@ CLERK_API = "https://api.clerk.dev/v1"
 # tag) rather than a per-suite prefix list — the old hard-coded lists kept
 # missing new suites (e2e-conn-, …), leaking users until the 100-user cap (#558).
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from helpers.clerk_constants import is_e2e_clerk_email  # noqa: E402
+from helpers.clerk_constants import (  # noqa: E402
+    is_e2e_clerk_email,
+    is_staging_test_clerk_email,
+)
+
+SECRET_ENV = {"ci": "E2E_CLERK_SECRET_KEY", "staging": "STAGING_CLERK_SECRET_KEY"}
+
+# Staging guard rails: the job deletes unattended on an instance real humans
+# share, so a drifted matcher or a mis-pasted secret must fail loudly instead.
+STAGING_MAX_DELETES = 100  # over this = red run, nothing deleted
+STAGING_MIN_AGE = timedelta(days=1)
 
 
 def get_all_users(session: requests.Session) -> list[dict]:
@@ -57,12 +74,16 @@ def get_all_users(session: requests.Session) -> list[dict]:
     return users
 
 
-def is_e2e_user(user: dict) -> bool:
-    """Check if a Clerk user was created by E2E tests."""
-    return any(
-        is_e2e_clerk_email(ea.get("email_address", ""))
-        for ea in user.get("email_addresses", [])
-    )
+def is_target_user(user: dict, target: str) -> bool:
+    """Check if a Clerk user is a test user owned by this reaper target.
+
+    staging requires EVERY email to carry the tag: one untagged address means
+    a human may own the account, so it is kept.
+    """
+    emails = [ea.get("email_address", "") for ea in user.get("email_addresses", [])]
+    if target == "staging":
+        return bool(emails) and all(is_staging_test_clerk_email(e) for e in emails)
+    return any(is_e2e_clerk_email(e) for e in emails)
 
 
 _DURATION_RE = re.compile(r"^(\d+)([smhd])$")
@@ -84,19 +105,27 @@ def parse_duration(s: str) -> timedelta:
     }[unit]
 
 
-def user_age(user: dict, now: datetime) -> timedelta | None:
-    """Return how long ago this Clerk user was created. None if unknown.
-
-    Clerk's ``created_at`` is unix-millis (per Clerk Backend API docs).
-    """
-    raw = user.get("created_at")
+def _age(raw, now: datetime) -> timedelta | None:
+    """Age of a Clerk unix-millis timestamp (per Clerk Backend API docs). None if unknown."""
     if raw is None:
         return None
     try:
-        created = datetime.fromtimestamp(int(raw) / 1000, tz=timezone.utc)
+        return now - datetime.fromtimestamp(int(raw) / 1000, tz=timezone.utc)
     except (TypeError, ValueError):
         return None
-    return now - created
+
+
+def is_old_enough(user: dict, now: datetime, older_than: timedelta, target: str) -> bool:
+    """Age gate. ci: created_at only. staging: the MOST RECENT of created_at,
+    last_active_at and last_sign_in_at must be older. Unknown created_at is
+    always kept."""
+    created = _age(user.get("created_at"), now)
+    if created is None or created < older_than:
+        return False
+    if target != "staging":
+        return True
+    ages = [_age(user.get(k), now) for k in ("last_active_at", "last_sign_in_at")]
+    return min([created, *(a for a in ages if a is not None)]) >= older_than
 
 
 def main():
@@ -109,11 +138,37 @@ def main():
         help="Only delete users older than this (e.g. '1h', '30m', '2d'). "
         "Required by the cron reaper to avoid racing in-flight CI runs.",
     )
+    parser.add_argument(
+        "--target",
+        choices=sorted(SECRET_ENV),
+        default="ci",
+        help="ci: e2e-* users on the CI instance. staging: users whose emails all "
+        "carry +clerk_test@ on the staging instance; requires --older-than >= 1d.",
+    )
+    parser.add_argument(
+        "--max-deletes",
+        type=int,
+        default=None,
+        help=f"Refuse (exit 1, delete nothing) if more users match. "
+        f"Default: {STAGING_MAX_DELETES} for staging, no cap for ci.",
+    )
     args = parser.parse_args()
+    if args.target == "staging":
+        if args.older_than is None:
+            parser.error("--target staging requires --older-than")
+        if args.older_than < STAGING_MIN_AGE:
+            parser.error(f"--target staging requires --older-than >= {STAGING_MIN_AGE}")
+        if args.max_deletes is None:
+            args.max_deletes = STAGING_MAX_DELETES
 
-    secret = os.environ.get("E2E_CLERK_SECRET_KEY", "")
+    secret_env = SECRET_ENV[args.target]
+    secret = os.environ.get(secret_env, "")
     if not secret:
-        logger.error("E2E_CLERK_SECRET_KEY not set")
+        logger.error("%s not set", secret_env)
+        sys.exit(1)
+    if args.target == "staging" and not secret.startswith("sk_test_"):
+        # Staging is a Clerk dev instance; anything else (sk_live_) is prod.
+        logger.error("%s is not a sk_test_ key; refusing", secret_env)
         sys.exit(1)
 
     session = requests.Session()
@@ -124,9 +179,11 @@ def main():
     all_users = get_all_users(session)
     logger.info("Total users in instance: %d", len(all_users))
 
-    e2e_users = [u for u in all_users if is_e2e_user(u)]
+    e2e_users = [u for u in all_users if is_target_user(u, args.target)]
     non_e2e = len(all_users) - len(e2e_users)
-    logger.info("E2E test users: %d | Real users: %d", len(e2e_users), non_e2e)
+    logger.info(
+        "[%s] Test users: %d | Other users: %d", args.target, len(e2e_users), non_e2e
+    )
 
     if args.older_than is not None:
         now = datetime.now(timezone.utc)
@@ -134,7 +191,7 @@ def main():
         e2e_users = [
             u
             for u in e2e_users
-            if (age := user_age(u, now)) is not None and age >= args.older_than
+            if is_old_enough(u, now, args.older_than, args.target)
         ]
         logger.info(
             "Age filter --older-than %s: kept %d / %d e2e users",
@@ -147,6 +204,18 @@ def main():
         logger.info("Nothing to clean up.")
         return
 
+    if args.max_deletes is not None and len(e2e_users) > args.max_deletes:
+        for user in e2e_users:
+            emails = [ea["email_address"] for ea in user.get("email_addresses", [])]
+            logger.error("Over cap, would delete: %s (%s)", user["id"], ", ".join(emails))
+        logger.error(
+            "%d users match, over --max-deletes %d; deleting nothing.",
+            len(e2e_users),
+            args.max_deletes,
+        )
+        sys.exit(1)
+
+    failed = 0
     for user in e2e_users:
         emails = [ea["email_address"] for ea in user.get("email_addresses", [])]
         email_str = ", ".join(emails)
@@ -159,11 +228,16 @@ def main():
             elif resp.ok:
                 logger.info("Deleted: %s (%s)", user["id"], email_str)
             else:
+                failed += 1
                 logger.error("Failed to delete %s: %s %s", user["id"], resp.status_code, resp.text)
             # Respect rate limits
             time.sleep(0.1)
 
-    logger.info("Done. Deleted %d e2e users.", len(e2e_users))
+    verb = "Would delete" if args.dry_run else "Deleted"
+    logger.info("Done. %s %d %s test users.", verb, len(e2e_users) - failed, args.target)
+    if failed:
+        logger.error("%d deletes failed", failed)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

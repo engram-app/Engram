@@ -27,3 +27,17 @@ def is_e2e_clerk_email(email: str) -> bool:
     return email.startswith("e2e-") and (
         "+clerk_test@" in email or email.endswith("@test.com")
     )
+
+
+
+# Staging (Clerk `key-longhorn-79`, shared with local saas-dev) has no CI
+# churn, only ad-hoc agent/QA accounts. Convention (AGENTS.md): every such
+# account carries the `+clerk_test@` tag, so the reaper owns it. Owner's rule
+# (2026-11-02): the tag alone decides, on any domain. load-sim-* accounts are
+# included: e2e/load/sim.py finds-or-creates them, so a reaped one comes back.
+STAGING_TEST_EMAIL_TAG = "+clerk_test@"
+
+
+def is_staging_test_clerk_email(email: str) -> bool:
+    """True iff `email` carries the disposable-test tag (case-insensitive)."""
+    return STAGING_TEST_EMAIL_TAG in email.lower()

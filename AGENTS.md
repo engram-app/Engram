@@ -138,6 +138,10 @@ preflight, tooling locations): `docs/context/migrations-playbook.md`.
 
 ### Other rules
 
+- **Ad-hoc staging Clerk accounts use `<name>+clerk_test@example.com`.** The
+  daily `cron.yml` `staging-clerk-reap` job deletes any staging account whose
+  emails all carry `+clerk_test@` once it was created and last active over a
+  day ago. Accounts without the tag are never reaped and pile up.
 - **No version bumps in feature PRs.** release-please owns versions and the changelog.
 - **Plan limits:** `Engram.Billing.LimitKeys` `@catalog` is the only source of truth.
   Never restate the limit matrix in a doc. Self-host (no `PADDLE_API_KEY`) has no billing.
