@@ -32,7 +32,7 @@ defmodule Engram.Repo.Migrations.IndexNotesUserVaultLiveAndDueExpand do
   Write cost: both predicates name only columns other `notes` indexes
   already read (`vault_id`, `deleted_at`, `kind`, `updated_at`, the embed
   hashes, `embed_budget_parked`), so no update that was HOT stops being HOT.
-  A non-HOT write adds one entry to `notes_vault_live` (every live row) and
+  A non-HOT write adds one entry to `notes_user_vault_live` (every live row) and
   to `notes_reconcile_due_v2` only while the note is in the embed backlog.
 
   Each index is dropped by name first, so a retry after a failed
