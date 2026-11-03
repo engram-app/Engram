@@ -71,6 +71,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   alias Engram.Repo
   alias Engram.Vector.PayloadKeys
   alias Engram.Vector.Qdrant
+  alias Engram.Workers.RefreshKeywordVectors
 
   require Logger
 
@@ -572,6 +573,14 @@ defmodule Engram.Workers.ReconcileNotePayloads do
         end
       end)
 
+    # The cleared stamp is healed now, not by the keyword sweep: once
+    # `IndexVersions` is done that sweep runs only in the daily re-verify, so
+    # the note searched on stale sparse vectors for up to a day (the prod v5
+    # gate's one keyword-stale note, 2026-11-02). Queued on a missed stamp
+    # too: a redundant resparse costs no embedder call, and the job's own
+    # compare-and-set stamps only the row it read.
+    # ponytail: one insert per drifted note; rare outside a DEK rotation.
+    _ = if resparse?, do: Oban.insert(RefreshKeywordVectors.new_for_note(note.id, note.user_id))
     :ok
   end
 

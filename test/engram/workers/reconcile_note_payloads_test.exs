@@ -126,6 +126,26 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     assert NotePayloadStamps.run_pass() == :done
   end
 
+  # The prod v5 gate's one keyword-stale note (2026-11-02): a heal at 05:54
+  # NULLed a content-current note's `keyword_version` after `IndexVersions`
+  # closed, and only the next day's re-verify sweep would have refreshed it.
+  # Whoever clears the stamp queues the refresh, as `RepathNoteIndex` does.
+  test "queues the keyword refresh for the note whose stamp it cleared", ctx do
+    assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+    assert reload(ctx.stale).keyword_version == nil
+
+    assert_enqueued(
+      worker: Engram.Workers.RefreshKeywordVectors,
+      args: %{"note_id" => ctx.stale.id}
+    )
+
+    refute_enqueued(
+      worker: Engram.Workers.RefreshKeywordVectors,
+      args: %{"note_id" => ctx.healthy.id}
+    )
+  end
+
   test "reports what it checked and rewrote", ctx do
     ref =
       :telemetry_test.attach_event_handlers(self(), [[:engram, :indexing, :payload_reconcile]])
