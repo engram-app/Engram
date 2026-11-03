@@ -134,6 +134,48 @@ defmodule Engram.NotesGenericPlanTest do
     assert plan =~ "notes_basename", plan
   end
 
+  # A vault created after the last ANALYZE (a first sync) has no entry in the
+  # most-common-values list, so even its custom plan estimates it at ~1 row,
+  # and any vault-led index ties with the path index at one page (prod E1a: a
+  # non-MCV vault's custom plan walked `notes_recent_index`). No index shape
+  # breaks that tie; statistics do. 20261102120000 analyzes `notes` every 2%
+  # + 1,000 changed rows and keeps 1,000 vaults in the list, so a new vault
+  # is walked for at most a few thousand writes. This pins the settings and
+  # that, once analyzed, the fresh vault's lookups read the path index.
+  test "a vault new to the statistics reads notes_path_live once analyzed", %{user: u} do
+    %{rows: [[target, user_target]]} =
+      Repo.query!("""
+      SELECT max(attstattarget) FILTER (WHERE attname = 'vault_id'),
+             max(attstattarget) FILTER (WHERE attname = 'user_id')
+      FROM pg_attribute WHERE attrelid = 'notes'::regclass
+      """)
+
+    assert {target, user_target} == {1000, 1000}
+
+    %{rows: [[opts]]} =
+      Repo.query!("SELECT reloptions FROM pg_class WHERE oid = 'notes'::regclass")
+
+    assert "autovacuum_analyze_scale_factor=0.02" in opts
+    assert "autovacuum_analyze_threshold=1000" in opts
+
+    {:ok, fresh, _} = Engram.Vaults.register_vault(u, "Fresh", Ecto.UUID.generate())
+    {:ok, _} = Notes.upsert_note(u, fresh, %{"path" => "A.md", "content" => "x"}, actor: "api")
+
+    for _ <- 1..1000 do
+      insert(:note,
+        user: u,
+        vault: fresh,
+        path_hmac: :crypto.strong_rand_bytes(32),
+        folder_hmac: :crypto.strong_rand_bytes(32),
+        basename_hmac: :crypto.strong_rand_bytes(32)
+      )
+    end
+
+    Repo.query!("ANALYZE notes")
+    plan = plan_of(fn -> assert Notes.note_exists?(u, fresh, "A.md") end, ~r/"path_id" = \$/)
+    assert plan =~ "notes_path_live", plan
+  end
+
   test "a whole-vault read stays a named (cached) statement" do
     # Only key lookups pay for a plan per call.
     refute Notes.Keys.lookup?(

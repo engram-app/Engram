@@ -5,7 +5,9 @@ defmodule Engram.Repo.Migrations.IndexSyncManifestCovering do
 
   @moduledoc """
   The manifest's `note_bodies` read and the per-user attachment usage sum
-  become index-only (EngramWeb.SyncManifestPlanTest).
+  become index-only, and the planner gets per-vault statistics fast enough
+  for a key lookup to see a vault's real size (EngramWeb.SyncManifestPlanTest,
+  Engram.NotesGenericPlanTest).
 
   Prod 2026-11-02 (engram_app, RLS set), 40k-note vault: the manifest
   hash-joined every `note_bodies` heap row of the user for `crdt_head`
@@ -23,6 +25,20 @@ defmodule Engram.Repo.Migrations.IndexSyncManifestCovering do
     * `attachments_user_live_size`: the usage sum (`user_id` prefix) reads
       it alone; `vault_id` is a key so the manifest's `(user_id, vault_id)`
       read can use it too instead of tying with it.
+
+  Statistics. `SET STATISTICS 1000` on `notes.user_id` / `vault_id` keeps up
+  to 1,000 vaults in the most-common-values list (default 100), so a custom
+  plan sees a big vault's row count. Analyze sooner (2% of rows + 1,000,
+  default 10%): a new vault in its first sync gets stats within a few
+  thousand writes. Cost: the larger target makes ANALYZE sample up to 300k
+  rows, i.e. read all of `notes` (~237 MB heap, cached), about every 4k
+  changed rows.
+
+  Vacuum on `note_bodies` (2% + 1,000 for dead and for inserted rows,
+  default 20% + 50 / 1,000): keeps its visibility map fresh, which an
+  index-only scan needs to skip the heap. Two indexes, so a run is cheap.
+  `notes` keeps the defaults: its manifest read is a heap read now, and a
+  vacuum there scans 28 indexes.
 
   Additive for the previous release (no code names an index; the settings
   are reloptions). Each index is dropped by name first, so a retry after a
@@ -44,9 +60,28 @@ defmodule Engram.Repo.Migrations.IndexSyncManifestCovering do
     end
 
     execute "DROP INDEX CONCURRENTLY IF EXISTS note_bodies_user_note"
+
+    execute "ALTER TABLE notes ALTER COLUMN vault_id SET STATISTICS 1000"
+    execute "ALTER TABLE notes ALTER COLUMN user_id SET STATISTICS 1000"
+
+    execute "ALTER TABLE notes SET (autovacuum_analyze_scale_factor = 0.02, " <>
+              "autovacuum_analyze_threshold = 1000)"
+
+    execute "ALTER TABLE note_bodies SET (autovacuum_vacuum_scale_factor = 0.02, " <>
+              "autovacuum_vacuum_threshold = 1000, " <>
+              "autovacuum_vacuum_insert_scale_factor = 0.02, " <>
+              "autovacuum_vacuum_insert_threshold = 1000)"
   end
 
   def down do
+    execute "ALTER TABLE note_bodies RESET (autovacuum_vacuum_scale_factor, " <>
+              "autovacuum_vacuum_threshold, autovacuum_vacuum_insert_scale_factor, " <>
+              "autovacuum_vacuum_insert_threshold)"
+
+    execute "ALTER TABLE notes RESET (autovacuum_analyze_scale_factor, autovacuum_analyze_threshold)"
+    execute "ALTER TABLE notes ALTER COLUMN user_id SET STATISTICS -1"
+    execute "ALTER TABLE notes ALTER COLUMN vault_id SET STATISTICS -1"
+
     execute "DROP INDEX CONCURRENTLY IF EXISTS note_bodies_user_note"
     execute "CREATE INDEX CONCURRENTLY note_bodies_user_note ON note_bodies (user_id, note_id)"
 
