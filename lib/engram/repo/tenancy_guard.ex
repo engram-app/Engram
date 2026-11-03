@@ -330,8 +330,8 @@ defmodule Engram.Repo.TenancyGuard do
   defp probe_all_tenant_tables do
     names = Enum.map(Engram.Repo.tenant_tables(), &Atom.to_string/1)
 
-    # Four checks, none of which can scan a table (the old row probe proved
-    # "nothing visible" by reading the whole table under RLS: prod
+    # Four checks, none of which reads a table end to end (the old row probe
+    # proved "nothing visible" by reading the whole table under RLS: prod
     # `chunk_points` up to 7.3 s per boot, Job Load Audit 2026-11-03). Any
     # one failing is a bypass; all passing is still no opinion, as before.
     cond do
@@ -345,15 +345,14 @@ defmodule Engram.Repo.TenancyGuard do
 
   # 1. Catalog: `row_security_active/1` is false for a table with RLS
   #    disabled, an owner without FORCE, BYPASSRLS or a superuser.
+  @rls_active """
+  SELECT bool_and(row_security_active(c.oid)), count(*)
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public' AND c.relname = ANY($1)
+  """
+
   defp rls_inactive?(names) do
-    case query(
-           """
-           SELECT bool_and(row_security_active(c.oid)), count(*)
-           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-           WHERE n.nspname = 'public' AND c.relname = ANY($1)
-           """,
-           [names]
-         ) do
+    case Engram.Repo.query(@rls_active, [names], source: "tenancy_guard") do
       {:ok, %{rows: [[true, n]]}} -> n != length(names)
       {:ok, _} -> true
       _ -> false
@@ -364,7 +363,7 @@ defmodule Engram.Repo.TenancyGuard do
   #    `maintenance_all ... USING (true)` policies admit every row), or any
   #    other role, reads other tenants' rows with every flag right.
   defp app_role? do
-    case query("SELECT current_user::text", []) do
+    case Engram.Repo.query("SELECT current_user::text", [], source: "tenancy_guard") do
       {:ok, %{rows: [[role]]}} -> role == app_role()
       _ -> true
     end
@@ -373,23 +372,28 @@ defmodule Engram.Repo.TenancyGuard do
   @doc false
   def app_role, do: Application.get_env(:engram, :app_db_role, "engram_app")
 
-  # Permissive policies that may apply to the app role besides the tenant
-  # predicates: `subscriptions_discovery` matches only with NO tenant set (the
-  # webhook lookup by Paddle id); its qual is checked, not just its name.
+  # The deparsed (`pg_get_expr`, PG 18) tenant predicate every
+  # `tenant_isolation_<table>` policy must carry as both USING and WITH CHECK,
+  # and the "no tenant set" predicate of the read-only discovery policies.
+  @tenant_qual ~S|(user_id = ( SELECT (NULLIF(( SELECT current_setting('app.current_tenant'::text, true) AS current_setting), ''::text))::uuid AS "nullif"))|
+  @no_tenant_qual ~S|(COALESCE(( SELECT current_setting('app.current_tenant'::text, true) AS current_setting), ''::text) = ''::text)|
   @discovery_policies ["subscriptions_discovery"]
 
   # 3. Policies: every permissive policy that applies to `current_user`
-  #    (PUBLIC, or a role it is a member of) must be the table's tenant
-  #    predicate on `app.current_tenant`, or an allowed discovery policy whose
-  #    qual is "no tenant set". A `USING (true)` policy, a tenant policy that
-  #    does not test the tenant, or a table with no tenant policy fails.
+  #    (PUBLIC, or a role it is a member of) must be the table's tenant policy
+  #    with exactly the tenant predicate as USING and WITH CHECK, or an allowed
+  #    SELECT-only discovery policy with exactly the "no tenant" predicate.
+  #    Exact text, not a pattern: `... OR true` or a `WITH CHECK (true)`
+  #    fails. Every table must have its tenant policy.
   @policy_audit """
   WITH t AS (
     SELECT c.oid, c.relname FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public' AND c.relname = ANY($1)),
   p AS (
-    SELECT t.relname, p.polname, pg_get_expr(p.polqual, p.polrelid) AS qual
+    SELECT t.relname, p.polname, p.polcmd,
+           pg_get_expr(p.polqual, p.polrelid) AS qual,
+           pg_get_expr(p.polwithcheck, p.polrelid) AS chk
     FROM pg_policy p JOIN t ON t.oid = p.polrelid
     WHERE p.polpermissive
       AND (0 = ANY(p.polroles) OR EXISTS (
@@ -398,45 +402,79 @@ defmodule Engram.Repo.TenancyGuard do
   SELECT
     EXISTS (SELECT 1 FROM p
             WHERE NOT (p.polname = 'tenant_isolation_' || p.relname
-                       AND p.qual LIKE '%user_id = %app.current_tenant%')
-              AND NOT (p.polname = ANY($2)
-                       AND p.qual LIKE '%COALESCE(%app.current_tenant%) = %'))
+                       AND p.qual = $3 AND coalesce(p.chk, $3) = $3)
+              AND NOT (p.polname = ANY($2) AND p.polcmd = 'r'
+                       AND p.qual = $4 AND p.chk IS NULL))
     OR EXISTS (SELECT 1 FROM t WHERE NOT EXISTS (
             SELECT 1 FROM p WHERE p.relname = t.relname
               AND p.polname = 'tenant_isolation_' || t.relname))
   """
 
   defp leaky_policy?(names) do
-    case query(@policy_audit, [names, @discovery_policies]) do
+    case Engram.Repo.query(
+           @policy_audit,
+           [names, @discovery_policies, @tenant_qual, @no_tenant_qual],
+           source: "tenancy_guard"
+         ) do
       {:ok, %{rows: [[leaky]]}} -> leaky
       _ -> false
     end
   end
 
   # 4. Behaviour, index-bounded: under a tenant that owns nothing, can a row
-  #    of a real user be read? Each read is `user_id = ANY(<up to 20 user
-  #    ids>)` with LIMIT 1 on a table whose index leads with `user_id`: at most
-  #    20 index descents, never a scan. A table without such an index is
-  #    covered by checks 1-3.
+  #    of a real user be read? `user_id = ANY(<up to 20 ids>)` LIMIT 1, only
+  #    on a table with a valid, NON-partial index whose first key is
+  #    `user_id` (a partial one cannot serve the probe, so the planner would
+  #    scan the table, and on an enforcing database no row stops it early).
+  #    A table without one is verified by checks 1-3 alone (logged once as
+  #    catalog-verified); no index is added for the probe's sake.
   @user_id_indexed """
-  SELECT DISTINCT c.relname FROM pg_index i
-  JOIN pg_class c ON c.oid = i.indrelid
-  JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
-  WHERE c.relname = ANY($1) AND a.attname = 'user_id'
+  SELECT c.relname, bool_or(i.indpred IS NULL AND i.indisvalid AND i.indisready
+                            AND a.attname = 'user_id')
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
+  LEFT JOIN pg_index i ON i.indrelid = c.oid
+  LEFT JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
+  WHERE c.relname = ANY($1)
+  GROUP BY c.relname
   """
 
-  defp rows_visible?(names) do
-    with {:ok, %{rows: [_ | _] = users}} <-
-           query("SELECT id FROM users ORDER BY id LIMIT 20", []),
-         {:ok, %{rows: tables}} <- query(@user_id_indexed, [names]) do
-      ids = Enum.map(users, fn [id] -> Ecto.UUID.load!(id) end)
-      Enum.any?(tables, fn [table] -> visible?(String.to_existing_atom(table), ids) end)
-    else
-      _ -> false
+  @doc false
+  # `{probed, catalog_only}` table names (the plan test reads the first).
+  def probe_tables do
+    names = Enum.map(Engram.Repo.tenant_tables(), &Atom.to_string/1)
+
+    case Engram.Repo.query(@user_id_indexed, [names], source: "tenancy_guard") do
+      {:ok, %{rows: rows}} ->
+        {for([t, true] <- rows, do: t), for([t, ok] <- rows, ok != true, do: t)}
+
+      _ ->
+        {[], names}
     end
   end
 
-  defp query(sql, params), do: Engram.Repo.query(sql, params, source: "tenancy_guard")
+  defp rows_visible?(_names) do
+    {probed, catalog_only} = probe_tables()
+
+    _ =
+      if catalog_only != [] do
+        Logger.info(
+          "RLS tenancy probe: catalog-verified only (no plain user_id index)",
+          Metadata.with_category(:info, :boot, table: Enum.join(catalog_only, ","))
+        )
+      end
+
+    case Engram.Repo.query("SELECT id FROM users ORDER BY id LIMIT 20", [],
+           source: "tenancy_guard"
+         ) do
+      {:ok, %{rows: [_ | _] = users}} ->
+        ids = Enum.map(users, fn [id] -> Ecto.UUID.load!(id) end)
+        Enum.any?(probed, &visible?(String.to_existing_atom(&1), ids))
+
+      _ ->
+        false
+    end
+  end
 
   defp current_tenant do
     case Engram.Repo.query("SELECT current_setting('app.current_tenant', true)", [],

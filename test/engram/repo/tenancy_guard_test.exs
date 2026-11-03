@@ -170,6 +170,64 @@ defmodule Engram.Repo.TenancyGuardTest do
             assert(sql =~ ~s("user_id" = ANY), "#{table} read without the user_id bound: #{sql}")
     end
 
+    # Red on 5be4a3373: tables whose only user_id-leading index is partial
+    # (chunk_points, crdt_update_log, note_index_state) were probed and
+    # seq-scanned. Every probe statement, EXPLAINed as the app role under a
+    # tenant that owns nothing, with its real parameters, uses an index.
+    test "every probe read of a tenant table is an index read for the app role" do
+      _ = insert(:user)
+
+      {_, queries} =
+        Engram.QueryRecorder.record(fn ->
+          Repo.transaction(fn ->
+            Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
+            Repo.rollback(TenancyGuard.observed_enforcement())
+          end)
+        end)
+
+      reads =
+        for %{pid: pid, sql: sql, params: params} <- queries,
+            pid == self(),
+            Enum.any?(Engram.Repo.tenant_tables(), &(sql =~ ~s(FROM "#{&1}"))),
+            do: {sql, params}
+
+      assert length(reads) > 5
+
+      {:error, plans} =
+        Repo.transaction(fn ->
+          Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
+          Repo.query!("SELECT set_config('app.current_tenant', $1, true)", [Ecto.UUID.generate()])
+          Repo.query!("SET LOCAL enable_seqscan = off")
+
+          Repo.rollback(
+            for {sql, params} <- reads,
+                do:
+                  {sql,
+                   Repo.query!("EXPLAIN " <> sql, params).rows
+                   |> List.flatten()
+                   |> Enum.join("\n")}
+          )
+        end)
+
+      for {sql, plan} <- plans, do: refute(plan =~ "Seq Scan", "#{sql}\n#{plan}")
+
+      {probed, catalog_only} = TenancyGuard.probe_tables()
+      assert "chunk_points" in catalog_only
+      refute "chunk_points" in probed
+    end
+
+    test "a tenant policy widened with OR true is a bypass" do
+      assert as_app([
+               "ALTER POLICY tenant_isolation_rebuild_manifest_vaults ON rebuild_manifest_vaults USING (user_id = (SELECT NULLIF(current_setting('app.current_tenant', true), '')::uuid) OR true)"
+             ]) == :bypassed
+    end
+
+    test "a permissive WITH CHECK (true) is a bypass" do
+      assert as_app([
+               "ALTER POLICY tenant_isolation_rebuild_manifest_vaults ON rebuild_manifest_vaults WITH CHECK (true)"
+             ]) == :bypassed
+    end
+
     test "leaves the caller's tenant untouched" do
       # The guard borrows a pooled connection that goes straight back into
       # service, and it sets `app.current_tenant` to do its work. If that leaked
