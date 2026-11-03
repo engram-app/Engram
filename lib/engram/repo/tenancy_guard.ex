@@ -365,11 +365,46 @@ defmodule Engram.Repo.TenancyGuard do
   # worth having.
   for table <- Engram.Repo.tenant_tables() do
     defp probe_visibility(unquote(table)) do
-      Engram.Repo.exists?(from(t in unquote(Atom.to_string(table))),
-        skip_tenant_check: true,
-        source: "tenancy_guard"
-      )
+      bounded(fn ->
+        Engram.Repo.exists?(from(t in unquote(Atom.to_string(table))),
+          skip_tenant_check: true,
+          source: "tenancy_guard"
+        )
+      end)
     end
+  end
+
+  # Time budget of one table's probe. A LEAK (the policy is missing or the role
+  # bypasses it) shows up on the first rows read, so it is found at once. An
+  # ENFORCED table can only be proven empty by reading all of it: prod's
+  # `chunk_points` probe took up to 7.3 s per boot and grows with the table
+  # (Job Load Audit 2026-11-03, #3). The probe has no opinion on "saw nothing"
+  # anyway (see `probe_all_tenant_tables/0`), so running out of budget is the
+  # same answer as an empty read: `false`, no leak seen.
+  @probe_timeout_ms 250
+
+  defp bounded(fun) do
+    case Engram.Repo.transaction(
+           fn ->
+             {:ok, _} =
+               Engram.Repo.query(
+                 "SELECT set_config('statement_timeout', $1, true)",
+                 [Integer.to_string(@probe_timeout_ms)],
+                 source: "tenancy_guard"
+               )
+
+             fun.()
+           end,
+           mode: :savepoint
+         ) do
+      {:ok, seen?} -> seen?
+      {:error, _} -> false
+    end
+  rescue
+    e in Postgrex.Error ->
+      if match?(%{postgres: %{code: :query_canceled}}, e),
+        do: false,
+        else: reraise(e, __STACKTRACE__)
   end
 
   @doc """

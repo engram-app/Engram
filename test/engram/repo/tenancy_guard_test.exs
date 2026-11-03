@@ -110,6 +110,27 @@ defmodule Engram.Repo.TenancyGuardTest do
       end
     end
 
+    # Red before the bound: an enforced table is proven empty by reading all of
+    # it (prod chunk_points: up to 7.3 s per boot). Each table's read now runs
+    # under its own statement_timeout, set right before it.
+    test "every table read is bounded by a statement timeout set just before it" do
+      {_, queries} =
+        Engram.QueryRecorder.record(fn ->
+          Repo.transaction(fn ->
+            Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
+            Repo.rollback(TenancyGuard.observed_enforcement())
+          end)
+        end)
+
+      sqls = for %{pid: pid, sql: sql} <- queries, pid == self(), do: sql
+
+      for table <- Engram.Repo.tenant_tables() do
+        idx = Enum.find_index(sqls, &(&1 =~ ~s(FROM "#{table}")))
+        assert idx, "#{table} was never probed"
+        assert Enum.at(sqls, idx - 1) =~ "statement_timeout", "#{table} probe is unbounded"
+      end
+    end
+
     test "leaves the caller's tenant untouched" do
       # The guard borrows a pooled connection that goes straight back into
       # service, and it sets `app.current_tenant` to do its work. If that leaked
