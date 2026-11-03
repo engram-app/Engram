@@ -132,23 +132,52 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       {:ok, _} = Engram.Vaults.delete_vault(user, note.vault_id)
 
       assert {:ok, _} = Engram.Vaults.restore_vault(user, note.vault_id)
+      assert_enqueued(worker: ReconcileEmbeddings, args: %{"mode" => "reverify"})
 
-      assert_enqueued(
-        worker: ReconcileEmbeddings,
-        args: %{"mode" => "reverify", "version_check" => true}
-      )
-
-      assert :ok =
-               perform_job(ReconcileEmbeddings, %{"mode" => "reverify", "version_check" => true})
-
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
       assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
     end
 
-    test "a new build queues one version re-check, the same build none" do
-      assert :ok = ReconcileEmbeddings.version_check_on_new_build("sha-a")
-      assert_enqueued(worker: ReconcileEmbeddings, args: %{"version_check" => true})
-      assert :skipped = ReconcileEmbeddings.version_check_on_new_build("sha-a")
-      assert :skipped = ReconcileEmbeddings.version_check_on_new_build(nil)
+    # Red on 5be4a3373: the request rode in job args, and a later re-verify
+    # insert (the daily cron, a chain hop) replaced them before it ran.
+    test "a later re-verify replacing the queued job keeps the version check" do
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+      note = current_note(user, chunker_version: nil, keyword_version: nil)
+      :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
+
+      {:ok, _} = ReconcileEmbeddings.version_check()
+
+      {:ok, _} =
+        Oban.insert(
+          ReconcileEmbeddings.new(%{"mode" => "reverify", "hop" => 2},
+            replace: ReconcileEmbeddings.replace_args(%{"mode" => "reverify"})
+          )
+        )
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify", "hop" => 2})
+      assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
+    end
+
+    test "the request clears only after a complete version-term run" do
+      :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
+      {:ok, _} = ReconcileEmbeddings.version_check()
+      assert Engram.Maintenance.Cursor.get("reconcile:version_check")
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
+      refute Engram.Maintenance.Cursor.get("reconcile:version_check")
+      # A plain re-verify with no request does not run the version term.
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
+    end
+
+    # Red on 5be4a3373: every new build queued the walk, so every deploy
+    # (and every staging auto-bump) paid it.
+    test "a boot re-checks only when the index versions changed" do
+      assert :skipped != ReconcileEmbeddings.version_check_on_version_change("v1")
+      refute_enqueued(worker: ReconcileEmbeddings)
+      assert :skipped = ReconcileEmbeddings.version_check_on_version_change("v1")
+      refute_enqueued(worker: ReconcileEmbeddings)
+      assert :ok = ReconcileEmbeddings.version_check_on_version_change("v2")
+      assert_enqueued(worker: ReconcileEmbeddings, args: %{"mode" => "reverify"})
     end
 
     test "once IndexVersions is done, the keyword sweep does not run, re-verify included" do

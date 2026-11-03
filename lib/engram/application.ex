@@ -418,9 +418,10 @@ defmodule Engram.Application do
         {Task,
          fn ->
            _ = Engram.Workers.ReconcileEmbeddings.kick(%{"boot" => true})
-           # Once per build: a rollback then roll-forward self-heals.
-           Engram.Workers.ReconcileEmbeddings.version_check_on_new_build(
-             System.get_env("RELEASE_SHA")
+           # Only when the index versions changed: a rollback then
+           # roll-forward self-heals; an ordinary deploy queues nothing.
+           Engram.Workers.ReconcileEmbeddings.version_check_on_version_change(
+             Engram.DataMigrations.IndexVersions.name()
            )
          end}
   end

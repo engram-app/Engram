@@ -43,6 +43,19 @@ defmodule Engram.Maintenance.Cursor do
     :ok
   end
 
+  @doc "Deletes `name` only while it still holds `value`; true when it did."
+  @spec reset_if(String.t(), map()) :: boolean()
+  def reset_if(name, %{} = value) do
+    {n, _} =
+      Repo.delete_all(
+        from(c in "maintenance_cursors",
+          where: c.name == ^name and c.cursor == type(^value, :map)
+        )
+      )
+
+    n == 1
+  end
+
   @doc """
   `put/2` when a run filled its cap (`size == cap`, more may follow), else
   `reset/1` (the run reached the end).
