@@ -1,12 +1,14 @@
 defmodule EngramWeb.SyncManifestPlanTest do
-  # Guard: the sync manifest and the attachment usage sum read indexes only.
+  # Guard: the sync manifest reads `crdt_head` from an index only, and the
+  # attachment usage sum reads an index only.
   #
   # Prod 2026-11-02 (engram_app, RLS set), a 40k-note vault: the notes half
-  # read every notes heap row (40k buffers, 78 ms) and hash-joined every
-  # note_bodies heap row of the user for `crdt_head` (40k buffers, 8k disk
-  # reads, 604 ms): 839 ms in all. The attachments half (14.8k rows) did a
-  # bitmap heap scan with 1,885 disk reads (38 ms), and the per-user usage sum
-  # read the same 2,307 heap pages (10 ms, 203k calls in 5 days).
+  # read every notes heap row (40k buffers, all cached, 78 ms) and hash-joined
+  # every note_bodies heap row of the user for `crdt_head` (40k buffers, 8k
+  # disk reads, 604 ms): 839 ms in all. The per-user usage sum read 2,307
+  # attachments heap pages (10 ms, 203k calls in 5 days). The notes and
+  # attachments heap reads stay: no index carries the uncapped
+  # `path_ciphertext` (a btree entry over ~2.7 KB would refuse the write).
   #
   # The plan asserted is the generic one with seq scans off
   # (`Engram.QueryPlan`): the question is whether the covering indexes
@@ -32,6 +34,9 @@ defmodule EngramWeb.SyncManifestPlanTest do
 
     for _ <- 1..300, do: insert(:note, user: user, vault: vault)
     for _ <- 1..300, do: insert(:attachment, user: user, vault: vault)
+    # A second vault, so the usage sum's `user_id` prefix spans vaults.
+    other = insert(:vault, user: user)
+    for _ <- 1..50, do: insert(:attachment, user: user, vault: other)
 
     %{conn: put_req_header(conn, "authorization", "Bearer #{api_key}"), user: user}
   end
@@ -71,24 +76,14 @@ defmodule EngramWeb.SyncManifestPlanTest do
     QueryPlan.generic_plan(sql, bitmapscan: false)
   end
 
-  test "the manifest's notes read is index-only on notes and note_bodies", %{conn: conn} do
+  test "the manifest reads crdt_head index-only from note_bodies", %{conn: conn} do
     [sql] =
       for sql <- statements(manifest(conn), "notes"),
           sql =~ ~s|uuid_send(n0."id")|,
           do: sql
 
     plan = plan(sql)
-    assert plan =~ "Index Only Scan using notes_manifest", plan
     assert plan =~ "Index Only Scan using note_bodies_user_note_head", plan
-  end
-
-  test "the manifest's attachments read is index-only", %{conn: conn} do
-    [sql] =
-      for sql <- statements(manifest(conn), "attachments"),
-          sql =~ ~s|uuid_send(a0."id")|,
-          do: sql
-
-    assert plan(sql) =~ "Index Only Scan using attachments_manifest"
   end
 
   test "the per-user attachment usage sum is index-only", %{user: user} do

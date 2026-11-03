@@ -285,6 +285,34 @@ defmodule EngramWeb.SyncControllerTest do
              "manifest attachment must carry a valid UUID id, got: #{inspect(att["id"])}"
     end
 
+    # A path has a per-segment cap (255 bytes) but no total cap, so no index
+    # may carry its ciphertext: a btree entry over ~2.7 KB refuses the write.
+    # A ~3 KB path must write, and come back in the manifest.
+    test "a ~3 KB path writes and stays in the manifest (note and attachment)", %{conn: conn} do
+      dir = Enum.map_join(1..12, "/", &(String.duplicate("d", 240) <> "#{&1}"))
+      note_path = dir <> "/N.md"
+      att_path = dir <> "/a.png"
+      assert byte_size(note_path) > 2_900
+
+      assert %{status: s1} =
+               post(conn, "/api/notes", %{path: note_path, content: "# Long", mtime: 1_000.0})
+
+      assert s1 in 200..201
+
+      assert %{status: s2} =
+               post(conn, "/api/attachments", %{
+                 path: att_path,
+                 content_base64: Base.encode64("binary data"),
+                 mtime: 1_000.0
+               })
+
+      assert s2 in 200..201
+
+      body = conn |> get("/api/sync/manifest") |> json_response(200)
+      assert Enum.any?(body["notes"], &(&1["path"] == note_path))
+      assert Enum.any?(body["attachments"], &(&1["path"] == att_path))
+    end
+
     test "includes attachments with path and content_hash", %{conn: conn} do
       post(conn, "/api/attachments", %{
         path: "photos/img.png",

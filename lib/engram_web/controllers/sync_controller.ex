@@ -186,8 +186,6 @@ defmodule EngramWeb.SyncController do
     # holding a DB connection across CPU-bound decrypt work is the shape
     # behind the 2026-07-09 CRDT pool-exhaustion incident.
     # `crdt_head` from the note's body row (`NoteBody`), the rest from notes.
-    # Both sides are index-only scans (`notes_manifest`,
-    # `note_bodies_user_note_head`; EngramWeb.SyncManifestPlanTest).
     notes =
       from(n in Note,
         where:
@@ -204,7 +202,7 @@ defmodule EngramWeb.SyncController do
         }
       )
       |> NoteBody.join()
-      |> select_merge(^%{crdt_head: NoteBody.head_off_notes_scan()})
+      |> select_merge(^NoteBody.fields([:crdt_head]))
       |> Repo.all()
 
     attachments =
