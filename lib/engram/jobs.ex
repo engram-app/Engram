@@ -320,8 +320,11 @@ defmodule Engram.Jobs do
   def release_suspended(tag, limit \\ @release_per_run) do
     ids = from(j in suspended_query(tag), order_by: j.id, limit: ^limit, select: j.id)
 
+    # The outer query re-checks `suspended`: Postgres re-evaluates only the
+    # outer predicate on a row a concurrent release just changed, so two
+    # overlapping releases never free (and run) one job twice.
     {count, _} =
-      from(j in Oban.Job, where: j.id in subquery(ids))
+      from(j in suspended_query(tag), where: j.id in subquery(ids))
       |> Repo.update_all(set: [state: "available", scheduled_at: DateTime.utc_now()])
 
     count

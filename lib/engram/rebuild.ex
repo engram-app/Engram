@@ -494,13 +494,17 @@ defmodule Engram.Rebuild do
   @spec holding?() :: boolean()
   def holding?, do: ServiceConfig.get(:index_rebuild, "off") == "on" and not pass_done?()
 
-  # The exact open pass: this build's chunker and keyword versions, the
-  # current embed model and the migration version (`IndexVersions.name/0`).
-  # Not `newest_completed/0`, which ignores the model: a model switch on the
-  # same versions is a full re-embed and must stay held (review of #2424).
-  # Cached like the halt flag: every held job's run reads it.
-  defp pass_done?,
-    do: Cache.fetch(:rebuild, :pass_done, fn -> Engram.DataMigrations.IndexVersions.done?() end)
+  # THIS build's pass: its chunker and keyword versions, the current embed
+  # model and the migration version. Not `newest_completed/0` (it ignores the
+  # model, and a model switch is a full re-embed), and not the target
+  # versions (a budget halt falls back to the newest COMPLETED pass, which
+  # would lift the hold mid-pass). Reviews of #2424. Cached like the halt
+  # flag: every held job's run reads it.
+  defp pass_done? do
+    Cache.fetch(:rebuild, :pass_done, fn ->
+      Engram.DataMigrations.IndexVersions.done?(build_versions())
+    end)
+  end
 
   @doc """
   Parks `job` until `holding?/0` is false (Task 16.4) and returns `:ok`

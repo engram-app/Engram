@@ -116,6 +116,43 @@ defmodule Engram.RebuildExclusionTest do
       assert [%{state: "suspended"}] = all_enqueued(worker: RotateUserDek)
     end
 
+    # Delta review of #2424: a halt makes target_versions/0 fall back to the
+    # newest completed pass, which is done by definition. The hold must ask
+    # about THIS build's pass, or a halt mid-pass frees held rotations.
+    test "a budget halt keeps holding with an earlier pass completed" do
+      on!()
+      # Prod's shape: pins below the build (test_helper pins them to the build).
+      ServiceConfig.put_override(:rebuild_pinned_versions, Rebuild.pinned_versions())
+
+      mark_pass_done!(
+        "index_versions:chunker=3,keyword=2,model=#{Engram.Indexing.embed_model() || "none"}"
+      )
+
+      Rebuild.set_budget(5)
+      assert Rebuild.debit(10) == :halt
+      Engram.Cache.clear_local(:rebuild)
+
+      assert Rebuild.holding?()
+      user = insert(:user)
+      assert :ok = perform_job(RotateUserDek, %{user_id: user.id})
+      assert Rebuild.release_held() == 0
+    end
+
+    # Two overlapping releases (two nodes' crons) pick the same ids in their
+    # subqueries. Postgres re-checks only the OUTER predicate of a row another
+    # transaction just changed, so the outer UPDATE must itself require
+    # `suspended`, or the second release re-frees a job already running.
+    test "the release UPDATE re-checks suspended outside its id subquery" do
+      {_, queries} =
+        Engram.QueryRecorder.record(fn -> Engram.Jobs.release_suspended("rebuild") end)
+
+      me = self()
+      [sql] = for %{sql: "UPDATE" <> _ = sql, pid: ^me} <- queries, sql =~ "oban_jobs", do: sql
+      [outer | _] = String.split(sql, "IN (SELECT")
+
+      assert outer =~ ~s("state" = 'suspended'), sql
+    end
+
     test "a DEK rotation runs when the pass is off" do
       ServiceConfig.put_override(:index_rebuild, "off")
 
