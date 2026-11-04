@@ -307,11 +307,21 @@ defmodule Engram.Jobs do
     count
   end
 
-  @doc "Makes every `tag` copy available now. Returns how many."
-  @spec release_suspended(String.t()) :: non_neg_integer()
-  def release_suspended(tag) do
+  # Held copies one release makes available. Prod had 801 held repaths: all
+  # at once is a burst of Qdrant payload writes and DB updates. The hourly
+  # release drains the rest over the next runs.
+  @release_per_run 200
+
+  @doc """
+  Makes up to `limit` `tag` copies available now, oldest first. Returns how
+  many. The holder's cron calls it each run until it returns 0.
+  """
+  @spec release_suspended(String.t(), pos_integer()) :: non_neg_integer()
+  def release_suspended(tag, limit \\ @release_per_run) do
+    ids = from(j in suspended_query(tag), order_by: j.id, limit: ^limit, select: j.id)
+
     {count, _} =
-      suspended_query(tag)
+      from(j in Oban.Job, where: j.id in subquery(ids))
       |> Repo.update_all(set: [state: "available", scheduled_at: DateTime.utc_now()])
 
     count

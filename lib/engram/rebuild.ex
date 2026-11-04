@@ -484,16 +484,23 @@ defmodule Engram.Rebuild do
   pass; raising the budget resumes it, so a DEK rotation let go during a halt
   could still be running then.
 
-  A completed pass has nothing left to protect, so it stops holding even
+  A completed pass (`IndexVersions.done?/0`: versions, embed model and
+  migration version) has nothing left to protect, so it stops holding even
   with the switch left `on` and the hourly release frees what it held. Prod
   2026-11-03: the 5/5 pass closed on 11-01, the switch stayed `on`, and 801
   bulk repaths sat `suspended` (stale search paths) with nothing to free
   them. A pass that reopens (`IndexVersions`) holds again.
   """
   @spec holding?() :: boolean()
-  def holding?,
-    do:
-      ServiceConfig.get(:index_rebuild, "off") == "on" and newest_completed() != build_versions()
+  def holding?, do: ServiceConfig.get(:index_rebuild, "off") == "on" and not pass_done?()
+
+  # The exact open pass: this build's chunker and keyword versions, the
+  # current embed model and the migration version (`IndexVersions.name/0`).
+  # Not `newest_completed/0`, which ignores the model: a model switch on the
+  # same versions is a full re-embed and must stay held (review of #2424).
+  # Cached like the halt flag: every held job's run reads it.
+  defp pass_done?,
+    do: Cache.fetch(:rebuild, :pass_done, fn -> Engram.DataMigrations.IndexVersions.done?() end)
 
   @doc """
   Parks `job` until `holding?/0` is false (Task 16.4) and returns `:ok`

@@ -5,6 +5,7 @@ defmodule Engram.RebuildExclusionTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  alias Engram.DataMigrations.IndexVersions
   alias Engram.Rebuild
   alias Engram.ServiceConfig
 
@@ -24,6 +25,11 @@ defmodule Engram.RebuildExclusionTest do
   end
 
   defp on!, do: ServiceConfig.put_override(:index_rebuild, "on")
+
+  defp mark_pass_done!(name) do
+    Engram.DataMigrations.mark_done(name, IndexVersions.version())
+    Engram.Cache.clear_local(:rebuild)
+  end
 
   # Every point is written in the v5 layout now, so `on` and the seal need
   # nothing but the switch (and, for `on`, a budget).
@@ -160,18 +166,43 @@ defmodule Engram.RebuildExclusionTest do
       assert :ok = perform_job(RepathNoteIndex, Map.put(args, :bulk, true))
       assert [%{state: "suspended"}] = all_enqueued(worker: RepathNoteIndex)
 
-      {chunker, keyword} = Rebuild.build_versions()
-
-      Engram.DataMigrations.mark_done(
-        "index_versions:chunker=#{chunker},keyword=#{keyword},model=voyage-4-large",
-        Engram.DataMigrations.IndexVersions.version()
-      )
-
-      Engram.Cache.clear_local(:rebuild)
+      # The exact open pass: this build's versions AND embed model.
+      mark_pass_done!(IndexVersions.name())
 
       refute Rebuild.holding?()
       assert :ok = perform_job(ReleaseRebuildHeld, %{})
       assert [%{state: "available"}] = all_enqueued(worker: RepathNoteIndex)
+    end
+
+    # Review of #2424: a model switch on the same chunker/keyword is a full
+    # re-embed. The previous model's completed marker must not lift the hold.
+    test "a completed pass under another embed model keeps holding" do
+      on!()
+      {chunker, keyword} = Rebuild.build_versions()
+      mark_pass_done!("index_versions:chunker=#{chunker},keyword=#{keyword},model=older-model")
+
+      assert Rebuild.holding?()
+    end
+
+    # 801 held repaths must not all wake in one tick (Qdrant writes, DB).
+    test "a release frees at most a bounded batch per run" do
+      ServiceConfig.put_override(:index_rebuild, "off")
+      user = Ecto.UUID.generate()
+
+      for _ <- 1..3 do
+        job = %Oban.Job{
+          worker: "Engram.Workers.RepathNoteIndex",
+          queue: "embed",
+          priority: 0,
+          max_attempts: 3,
+          args: %{"note_id" => Ecto.UUID.generate(), "user_id" => user}
+        }
+
+        Engram.Jobs.suspend_copy(job, "rebuild")
+      end
+
+      assert Engram.Jobs.release_suspended("rebuild", 2) == 2
+      assert Engram.Jobs.release_suspended("rebuild", 2) == 1
     end
 
     test "a bulk repath runs when the pass is off" do
