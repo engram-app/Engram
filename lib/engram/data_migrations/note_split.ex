@@ -24,10 +24,13 @@ defmodule Engram.DataMigrations.NoteSplit do
   walked every notes window and de-TOASTed both bodies of every note for the
   drift report (prod 2026-10-28..11-02: ~95 windows a day, ~700 ms and 1.6-1.9k
   disk reads each, evicting the hot set) and did not reopen it once in 14 days
-  of prod logs. It has nothing to find: the triggers are in the database, so every INSERT and every write of a
-  source column fills the row, from any release's code, during a rolling
-  deploy and after a rollback alike; no code writes a derived column or
-  deletes a `note_bodies` row (the FK cascades with its note). A full restore
+  of prod logs. It has nothing to find: `notes_derive_core_keys` is in the
+  database, so every write fills the core columns from any release's code;
+  since the copy trigger's drop, every body write is `NoteBody.sync!/3`'s,
+  in every release from N on (the release floor N+1 requires), and no code
+  deletes a `note_bodies` row (the FK cascades with its note). A body row
+  missing or out of step is sampled daily by `Engram.Bookkeeping.Canary`
+  (`unfixed_ids/2`, `drift_ids/2`), not by this ledger. A full restore
   brings this ledger row back from the same dump as the rows it vouches for.
   What remains is a write with triggers disabled (`session_replication_role
   = replica`, a data-only `pg_restore --disable-triggers`): an operator who
