@@ -72,6 +72,9 @@ defmodule Engram.Notes.LineageAuditMaintenanceTest do
         skip_tenant_check: true
       )
 
+    # Where every read takes the state from: nothing copies a raw notes write.
+    Fixtures.mirror_body!(note.id)
+
     {user, vault, note.id}
   end
 
