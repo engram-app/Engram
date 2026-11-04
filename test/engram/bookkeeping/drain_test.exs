@@ -85,6 +85,9 @@ defmodule Engram.Bookkeeping.DrainTest do
         ]
       )
 
+      # Where the probe reads it: nothing copies a raw notes write any more.
+      Engram.Fixtures.mirror_body!(n.id)
+
       assert %{envelope: 1} = Drain.run()
       assert %{envelope: 1} = Drain.run()
       assert_enqueued(worker: ReencodeEnvelopes, args: %{"user_id" => u.id})
@@ -313,6 +316,8 @@ defmodule Engram.Bookkeeping.DrainTest do
     sql!("UPDATE notes SET content_nonce = '\\x000000000000000000000000'::bytea WHERE id = $1", [
       Ecto.UUID.dump!(legacy.id)
     ])
+
+    Engram.Fixtures.mirror_body!(legacy.id)
 
     sql!("UPDATE notes SET link_keys_stamp = '\\x00'::bytea WHERE id = $1", [
       Ecto.UUID.dump!(stale.id)

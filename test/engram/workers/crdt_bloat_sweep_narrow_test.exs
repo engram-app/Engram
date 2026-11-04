@@ -103,6 +103,10 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
       [id, :crypto.strong_rand_bytes(80), <<1>> <> :crypto.strong_rand_bytes(12)]
     )
 
+    # The body write each writer makes after its notes write (no trigger
+    # copies a raw one).
+    Engram.Notes.NoteBody.sync!(n.id, [:crdt_state_ciphertext])
+
     # An ordinary content save, raw so no app-level stamp writes run.
     # `clock_timestamp()`: `now()` is constant inside the test transaction, so
     # `updated_at` (indexed) would not move as it does on a real save.
@@ -110,6 +114,8 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
       "UPDATE notes SET content_ciphertext = $2, content_nonce = $3, version = version + 1, updated_at = clock_timestamp() WHERE id = $1",
       [id, :crypto.strong_rand_bytes(40), <<1>> <> :crypto.strong_rand_bytes(12)]
     )
+
+    Engram.Notes.NoteBody.sync!(n.id, [:content_ciphertext])
 
     after_ = stat.()
 
@@ -144,15 +150,13 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
     assert content == body - 13 - Engram.Crypto.Envelope.tag_bytes()
   end
 
-  # R8 N+1 (#2416) drops `notes_sync_body`; the app writes the body itself
+  # R8 N+1 (#2416) dropped `notes_sync_body`; the app writes the body itself
   # (`NoteBody.sync!/3`). The sizes come from the body row's own BEFORE
   # trigger, so they must fill without the notes trigger.
   test "sizes fill on an app body write with notes_sync_body dropped", %{
     user: user,
     vault: vault
   } do
-    Repo.query!("DROP TRIGGER notes_sync_body ON notes")
-
     {:ok, n} =
       Notes.upsert_note(user, vault, %{"path" => "r8.md", "content" => "no trigger"},
         actor: "api"

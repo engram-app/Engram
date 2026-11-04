@@ -41,6 +41,9 @@ defmodule Engram.Insights.SnapshotNarrowTest do
   test "person facts: same counts and bytes, no notes aggregate", %{user: u} do
     wide = traits(u.id)
     done!()
+    # A new note's narrow sizes come from the hourly sweep (the body row is
+    # written after the note, so its state row is seeded without them).
+    Engram.Workers.CrdtBloatSweep.measure_and_emit()
     {narrow, queries} = QueryRecorder.record(fn -> traits(u.id) end)
 
     assert Map.take(narrow, [:total_notes, :total_note_bytes]) ==
