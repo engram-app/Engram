@@ -172,6 +172,30 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
     assert bytes == len - 13 - Engram.Crypto.Envelope.tag_bytes()
   end
 
+  # Red on 38a2a1f1c: the state row is seeded by the notes INSERT, before
+  # the app writes the body, so a new note stayed unsized until the hourly
+  # sweep. `NoteBody.sync!/3` seeds them from the body row it inserts.
+  test "a new note is sized right after its first save", %{user: user, vault: vault} do
+    {:ok, n} =
+      Notes.upsert_note(user, vault, %{"path" => "new.md", "content" => "sized at once"},
+        actor: "api"
+      )
+
+    %{rows: [[state, body]]} =
+      Repo.query!(
+        """
+        SELECT ARRAY[s.content_bytes, s.state_bytes]::int[] || ARRAY[s.has_state::int],
+               ARRAY[b.content_bytes, b.state_bytes]::int[] || ARRAY[(b.state_bytes IS NOT NULL)::int]
+        FROM note_index_state s JOIN note_bodies b ON b.note_id = s.note_id
+        WHERE s.note_id = $1
+        """,
+        [Ecto.UUID.dump!(n.id)]
+      )
+
+    assert Enum.all?(body, &is_integer/1), inspect(body)
+    assert state == body
+  end
+
   test "the ledger fills rows the trigger never saw, then the sweep reads no notes", %{
     notes: notes
   } do
