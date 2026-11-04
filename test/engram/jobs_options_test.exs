@@ -40,9 +40,11 @@ defmodule Engram.JobsOptionsTest do
     assert_raise KeyError, fn -> Jobs.unique(:no_such_policy) end
   end
 
-  # Inline `unique: [..]`, `unique: false`, `unique: @attr`, `unique: var`.
-  # A call to `Engram.Jobs.unique/2` is the only accepted value.
-  @inline ~r/(?<![`\w])unique:\s*(?!Engram\.Jobs\.unique\(|Jobs\.unique\()\S/
+  # Inline `unique: [..]`, `unique: false`, `unique: @attr`, `unique: var`,
+  # with the value on the same line or the next, and `:unique` handed to
+  # Keyword.put/merge. A call to `Engram.Jobs.unique/2` is the only accepted
+  # value. Matched over the whole file (comment lines dropped), not per line.
+  @inline ~r/(?<![`\w])unique:\s*(?!Engram\.Jobs\.unique\(|Jobs\.unique\()\S|Keyword\.(put|merge|put_new)\([^)]*:unique\b/
 
   test "no unique: option is written outside Engram.Jobs" do
     # lib/mix is out: `engram.index_audit` reports a Postgres index's
@@ -50,13 +52,26 @@ defmodule Engram.JobsOptionsTest do
     offenders =
       for path <- Path.wildcard("lib/engram{,_web}/**/*.ex"),
           path != "lib/engram/jobs.ex",
-          {line, n} <- path |> File.read!() |> String.split("\n") |> Enum.with_index(1),
-          not String.starts_with?(String.trim_leading(line), "#"),
-          Regex.match?(@inline, line),
-          do: "#{path}:#{n}: #{String.trim(line)}"
+          code = code_without_comments(path),
+          match <- Regex.scan(@inline, code),
+          do: "#{path}: #{match |> hd() |> String.trim()}"
 
     assert offenders == [],
            "put the policy in Engram.Jobs' @unique and call Engram.Jobs.unique/2:\n" <>
              Enum.join(offenders, "\n")
+  end
+
+  test "the guard sees a value on the next line and Keyword.put" do
+    assert Regex.match?(@inline, "new(args,\n  unique:\n    [period: 1])")
+    assert Regex.match?(@inline, "Keyword.put(opts, :unique, [period: 1])")
+    refute Regex.match?(@inline, "unique: Engram.Jobs.unique(__MODULE__)")
+  end
+
+  defp code_without_comments(path) do
+    path
+    |> File.read!()
+    |> String.split("\n")
+    |> Enum.reject(&String.starts_with?(String.trim_leading(&1), "#"))
+    |> Enum.join("\n")
   end
 end
