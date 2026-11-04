@@ -185,12 +185,6 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
       )
     end
 
-    # Body rows, as every app writer leaves them (the factory writes notes
-    # only, and nothing copies them any more): the head backfill discovers
-    # its candidates in `note_bodies`.
-    Repo.all(from(n in Note, select: n.id), skip_tenant_check: true)
-    |> Engram.Notes.NoteBody.sync!([])
-
     {user, vaults}
   end
 
