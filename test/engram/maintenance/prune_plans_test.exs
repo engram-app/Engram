@@ -41,7 +41,7 @@ defmodule Engram.Maintenance.PrunePlansTest do
   test "idempotency_keys: the expiry index serves the batch" do
     [sql | _] = deletes(fn -> Engram.Idempotency.prune_expired() end, "idempotency_keys")
 
-    assert QueryPlan.generic_plan(sql, analyze: ["idempotency_keys"]) =~
+    assert QueryPlan.generic_plan(sql, analyze: ["idempotency_keys"], fresh: true) =~
              "idempotency_keys_expires_at_index"
   end
 end

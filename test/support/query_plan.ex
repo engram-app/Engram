@@ -23,6 +23,20 @@ defmodule Engram.QueryPlan do
   statement whose index scan the planner costs as several descents (`= ANY($n)`
   is costed as 10) and a tiny test table makes one bitmap over the whole
   vault cheaper. The question stays the same: can the named index serve it.
+
+  `fresh: true` makes the plan depend only on THIS test's rows. Without it,
+  the planner also sees the physical state earlier tests in the same
+  partition left behind, which the sandbox rollback does not undo: dead
+  index pages from rolled-back inserts (index cost reads the physical size),
+  heap pages those rows freed (this test's rows land scattered in them, so
+  the ANALYZE correlation varies), and the visibility map of vacuumed pages.
+  A plan test flipped that way when new test files reshuffled partitions
+  (DrainTest and BackfillCrdtHeadIndexTest on #2424). `fresh` rewrites each
+  `analyze:` table with `CLUSTER ... USING` its primary key inside the
+  test's transaction (rolled back with it): a new heap and new indexes
+  holding only this test's rows, in key order, as a table written in uuidv7
+  order is in prod. CLUSTER holds an ACCESS EXCLUSIVE lock to the end of
+  the test: use it from `async: false` tests only.
   """
   @spec generic_plan(String.t(), keyword()) :: String.t()
   def generic_plan(sql, opts \\ []) do
@@ -38,7 +52,13 @@ defmodule Engram.QueryPlan do
 
     {:ok, text} =
       Repo.transaction(fn ->
-        for table <- Keyword.get(opts, :analyze, []), do: Repo.query!("ANALYZE #{table}")
+        fresh? = Keyword.get(opts, :fresh, false)
+
+        for table <- Keyword.get(opts, :analyze, []) do
+          if fresh?, do: cluster_on_pkey!(table)
+          Repo.query!("ANALYZE #{table}")
+        end
+
         Repo.query!("SET LOCAL plan_cache_mode = force_generic_plan")
         Repo.query!("SET LOCAL enable_seqscan = off")
 
@@ -68,5 +88,16 @@ defmodule Engram.QueryPlan do
   def reading(queries, table) do
     me = self()
     for %{sql: sql, pid: ^me} <- queries, sql =~ ~s(FROM "#{table}"), do: sql
+  end
+
+  defp cluster_on_pkey!(table) do
+    %{rows: [[pkey]]} =
+      Repo.query!(
+        "SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid " <>
+          "WHERE i.indrelid = $1::text::regclass AND i.indisprimary",
+        [table]
+      )
+
+    Repo.query!(~s(CLUSTER "#{table}" USING "#{pkey}"))
   end
 end

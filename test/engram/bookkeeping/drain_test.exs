@@ -163,7 +163,7 @@ defmodule Engram.Bookkeeping.DrainTest do
         assert length(probes) == length(unquote(names))
 
         for {{table, sql}, name} <- Enum.zip(probes, unquote(names)) do
-          plan = QueryPlan.generic_plan(sql, analyze: [table])
+          plan = QueryPlan.generic_plan(sql, analyze: [table], fresh: true)
 
           assert plan =~ name, "#{table} probe does not use #{name}:\n#{plan}"
           refute plan =~ "Seq Scan on #{table}", plan
@@ -185,7 +185,7 @@ defmodule Engram.Bookkeeping.DrainTest do
     sql!("UPDATE notes SET folder_ref_id = NULL WHERE id = $1", [Ecto.UUID.dump!(lost.id)])
 
     [{table, sql}] = Drain.probes(:folder)
-    plan = QueryPlan.generic_plan(sql, analyze: [table])
+    plan = QueryPlan.generic_plan(sql, analyze: [table], fresh: true)
     assert plan =~ "notes_unresolved_folder", plan
   end
 

@@ -200,7 +200,7 @@ defmodule Engram.Notes.NoteBodyReadTest do
           from(b in NoteBody, where: b.user_id == ^ctx.user.id, select: {b.note_id, b.crdt_head})
         )
 
-      plan = Engram.QueryPlan.generic_plan(sql, analyze: ["note_bodies"])
+      plan = Engram.QueryPlan.generic_plan(sql, analyze: ["note_bodies"], fresh: true)
       assert plan =~ "note_bodies_user_note", plan
       assert plan =~ "Index Cond: (user_id = $1)", plan
     end

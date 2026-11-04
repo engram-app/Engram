@@ -64,7 +64,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
     sweeps = for %{sql: "WITH \"reconcile_eligible\"" <> _ = sql} <- queries, do: sql
     assert [sql | _] = sweeps, "recorded no reconcile UPDATE on notes"
 
-    plan = QueryPlan.generic_plan(sql, analyze: ~w(notes vaults))
+    plan = QueryPlan.generic_plan(sql, analyze: ~w(notes vaults), fresh: true)
     assert plan =~ "notes_reconcile_due", "plan:\n#{plan}\n\nsql:\n#{sql}"
   end
 
