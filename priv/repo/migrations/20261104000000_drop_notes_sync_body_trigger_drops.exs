@@ -38,7 +38,7 @@ defmodule Engram.Repo.Migrations.DropNotesSyncBodyTriggerDrops do
     # a leading 0. A NULL nonce means the column already holds that layout.
     # crdt_head is url-safe base64, no padding, of a 32-byte digest.
     execute """
-    CREATE FUNCTION notes_sync_body() RETURNS trigger
+    CREATE OR REPLACE FUNCTION notes_sync_body() RETURNS trigger
     LANGUAGE plpgsql SET search_path = '' AS $$
     DECLARE
       has_body boolean := false;
@@ -110,6 +110,9 @@ defmodule Engram.Repo.Migrations.DropNotesSyncBodyTriggerDrops do
     END
     $$
     """
+
+    # Rerun-safe, with the OR REPLACE above: `down` twice recreates once.
+    execute "DROP TRIGGER IF EXISTS notes_sync_body ON notes"
 
     execute """
     CREATE TRIGGER notes_sync_body
