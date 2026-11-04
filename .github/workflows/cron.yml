@@ -410,6 +410,7 @@ jobs:
           sparse-checkout: |
             scripts/redact_cmdline.sh
           sparse-checkout-cone-mode: false
+          persist-credentials: false
 
       - name: Host identity
         run: |
