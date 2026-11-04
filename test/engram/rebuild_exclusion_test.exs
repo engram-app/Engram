@@ -5,6 +5,7 @@ defmodule Engram.RebuildExclusionTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  alias Engram.DataMigrations.IndexVersions
   alias Engram.Rebuild
   alias Engram.ServiceConfig
 
@@ -24,6 +25,11 @@ defmodule Engram.RebuildExclusionTest do
   end
 
   defp on!, do: ServiceConfig.put_override(:index_rebuild, "on")
+
+  defp mark_pass_done!(name) do
+    Engram.DataMigrations.mark_done(name, IndexVersions.version())
+    Engram.Cache.clear_local(:rebuild)
+  end
 
   # Every point is written in the v5 layout now, so `on` and the seal need
   # nothing but the switch (and, for `on`, a budget).
@@ -110,6 +116,43 @@ defmodule Engram.RebuildExclusionTest do
       assert [%{state: "suspended"}] = all_enqueued(worker: RotateUserDek)
     end
 
+    # Delta review of #2424: a halt makes target_versions/0 fall back to the
+    # newest completed pass, which is done by definition. The hold must ask
+    # about THIS build's pass, or a halt mid-pass frees held rotations.
+    test "a budget halt keeps holding with an earlier pass completed" do
+      on!()
+      # Prod's shape: pins below the build (test_helper pins them to the build).
+      ServiceConfig.put_override(:rebuild_pinned_versions, Rebuild.pinned_versions())
+
+      mark_pass_done!(
+        "index_versions:chunker=3,keyword=2,model=#{Engram.Indexing.embed_model() || "none"}"
+      )
+
+      Rebuild.set_budget(5)
+      assert Rebuild.debit(10) == :halt
+      Engram.Cache.clear_local(:rebuild)
+
+      assert Rebuild.holding?()
+      user = insert(:user)
+      assert :ok = perform_job(RotateUserDek, %{user_id: user.id})
+      assert Rebuild.release_held() == 0
+    end
+
+    # Two overlapping releases (two nodes' crons) pick the same ids in their
+    # subqueries. Postgres re-checks only the OUTER predicate of a row another
+    # transaction just changed, so the outer UPDATE must itself require
+    # `suspended`, or the second release re-frees a job already running.
+    test "the release UPDATE re-checks suspended outside its id subquery" do
+      {_, queries} =
+        Engram.QueryRecorder.record(fn -> Engram.Jobs.release_suspended("rebuild") end)
+
+      me = self()
+      [sql] = for %{sql: "UPDATE" <> _ = sql, pid: ^me} <- queries, sql =~ "oban_jobs", do: sql
+      [outer | _] = String.split(sql, "IN (SELECT")
+
+      assert outer =~ ~s("state" = 'suspended'), sql
+    end
+
     test "a DEK rotation runs when the pass is off" do
       ServiceConfig.put_override(:index_rebuild, "off")
 
@@ -143,6 +186,60 @@ defmodule Engram.RebuildExclusionTest do
       ServiceConfig.put_override(:index_rebuild, "off")
       assert :ok = perform_job(ReleaseRebuildHeld, %{})
       assert [%{state: "available"}] = all_enqueued(worker: RepathNoteIndex)
+    end
+
+    # Prod 2026-11-03: the build's pass closed on 11-01 but the switch was
+    # still `on`, so 801 bulk repaths sat `suspended` (stale search paths)
+    # with nothing to free them. A closed pass has nothing left to protect.
+    test "a completed pass stops holding and frees what it held, switch still on" do
+      on!()
+
+      args = %{
+        note_id: Ecto.UUID.generate(),
+        user_id: Ecto.UUID.generate(),
+        old_path_hmac: "aA=="
+      }
+
+      assert :ok = perform_job(RepathNoteIndex, Map.put(args, :bulk, true))
+      assert [%{state: "suspended"}] = all_enqueued(worker: RepathNoteIndex)
+
+      # The exact open pass: this build's versions AND embed model.
+      mark_pass_done!(IndexVersions.name())
+
+      refute Rebuild.holding?()
+      assert :ok = perform_job(ReleaseRebuildHeld, %{})
+      assert [%{state: "available"}] = all_enqueued(worker: RepathNoteIndex)
+    end
+
+    # Review of #2424: a model switch on the same chunker/keyword is a full
+    # re-embed. The previous model's completed marker must not lift the hold.
+    test "a completed pass under another embed model keeps holding" do
+      on!()
+      {chunker, keyword} = Rebuild.build_versions()
+      mark_pass_done!("index_versions:chunker=#{chunker},keyword=#{keyword},model=older-model")
+
+      assert Rebuild.holding?()
+    end
+
+    # 801 held repaths must not all wake in one tick (Qdrant writes, DB).
+    test "a release frees at most a bounded batch per run" do
+      ServiceConfig.put_override(:index_rebuild, "off")
+      user = Ecto.UUID.generate()
+
+      for _ <- 1..3 do
+        job = %Oban.Job{
+          worker: "Engram.Workers.RepathNoteIndex",
+          queue: "embed",
+          priority: 0,
+          max_attempts: 3,
+          args: %{"note_id" => Ecto.UUID.generate(), "user_id" => user}
+        }
+
+        Engram.Jobs.suspend_copy(job, "rebuild")
+      end
+
+      assert Engram.Jobs.release_suspended("rebuild", 2) == 2
+      assert Engram.Jobs.release_suspended("rebuild", 2) == 1
     end
 
     test "a bulk repath runs when the pass is off" do

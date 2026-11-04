@@ -54,11 +54,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # `replace_args/1`). `executing` is not in `states`: a running sweep is
     # excluded at its start instead (`defer_if_running/1`), so a kick or the
     # re-verify cron during a run is deferred, never dropped.
-    unique: [
-      fields: [:worker, :queue],
-      period: 900,
-      states: [:available, :scheduled, :retryable]
-    ]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   import Ecto.Query
 

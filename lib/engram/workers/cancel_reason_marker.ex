@@ -26,7 +26,7 @@ defmodule Engram.Workers.CancelReasonMarker do
   use Oban.Worker,
     queue: :events,
     max_attempts: 3,
-    unique: [keys: [:user_id, :effective_at], states: [:available, :scheduled], period: :infinity],
+    unique: Engram.Jobs.unique(__MODULE__),
     # A due-but-not-yet-run job keeps its run time: moving it would run it now.
     replace: [scheduled: [:args, :scheduled_at], available: [:args]]
 

@@ -33,19 +33,14 @@ defmodule Engram.Workers.ExportExpirySweep do
 
   @impl Oban.Worker
   def perform(_job) do
-    if Repo.tenancy_unsafe?() do
-      # Filtered by the tenant policy, the read below returns [] and the sweep
-      # reports success while archives of personal data stay in S3 forever.
-      Logger.error(
-        "export_expiry_sweep refusing to run: RLS is enforced and no maintenance pool is " <>
-          "configured, so the expired-export read would return zero rows",
-        Metadata.with_category(:error, :oban, [])
-      )
-
-      {:error, :tenancy_unsafe}
-    else
-      sweep()
-    end
+    # Filtered by the tenant policy, the read below returns [] and the sweep
+    # reports success while archives of personal data stay in S3 forever.
+    Repo.maintenance_only(
+      "export_expiry_sweep",
+      "RLS is enforced and no maintenance pool is " <>
+        "configured, so the expired-export read would return zero rows",
+      fn -> sweep() end
+    )
   end
 
   # Same gate as `OrphanSweep`: the fallback `Repo` is only correct where RLS

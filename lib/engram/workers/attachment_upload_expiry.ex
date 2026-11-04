@@ -27,17 +27,12 @@ defmodule Engram.Workers.AttachmentUploadExpiry do
 
   @impl Oban.Worker
   def perform(_job) do
-    if Repo.tenancy_unsafe?() do
-      # Filtered by the tenant policy, the scan would return [] and report success.
-      Logger.error(
-        "attachment_upload_expiry refusing to run: RLS is enforced and no maintenance pool is configured",
-        Metadata.with_category(:error, :oban, [])
-      )
-
-      {:error, :tenancy_unsafe}
-    else
-      sweep(DateTime.add(DateTime.utc_now(), -@cutoff_hours * 3600, :second))
-    end
+    # Filtered by the tenant policy, the scan would return [] and report success.
+    Repo.maintenance_only(
+      "attachment_upload_expiry",
+      "RLS is enforced and no maintenance pool is configured",
+      fn -> sweep(DateTime.add(DateTime.utc_now(), -@cutoff_hours * 3600, :second)) end
+    )
   end
 
   # Pages until a scan finds nothing. Terminates: expire/1 removes the row even

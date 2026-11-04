@@ -129,7 +129,7 @@ defmodule Engram.Abuse.OriginStats do
   Called by `Engram.Workers.IdempotencyPrune` (hourly). Not a tenant table.
   """
   @spec prune(pos_integer(), pos_integer()) :: non_neg_integer()
-  def prune(batch \\ 5_000, max_batches \\ 20) do
+  def prune(batch \\ 5_000, max_batches \\ Engram.Maintenance.Prune.max_batches()) do
     cutoff = Date.add(Date.utc_today(), -@retention_days)
 
     Engram.Maintenance.Prune.batched(

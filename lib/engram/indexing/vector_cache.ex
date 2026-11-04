@@ -330,11 +330,9 @@ defmodule Engram.Indexing.VectorCache do
   @spec prune(module()) :: non_neg_integer()
   def prune(repo), do: Repo.cross_tenant(fn -> prune_batches(repo) end)
 
-  # The shared bounded loop (`Engram.Maintenance.Prune`): at most 20 batches
-  # per hourly run, so a backlog (the first run after a retention cut) drains
-  # over several runs.
-  @prune_max_batches 20
-
+  # The shared bounded loop (`Engram.Maintenance.Prune`) and its per-run
+  # cap, so a backlog (the first run after a retention cut) drains over
+  # several runs.
   defp prune_batches(repo) do
     Engram.Maintenance.Prune.batched(
       fn batch ->
@@ -352,8 +350,7 @@ defmodule Engram.Indexing.VectorCache do
 
         n
       end,
-      @prune_batch,
-      @prune_max_batches
+      @prune_batch
     )
   end
 

@@ -30,11 +30,7 @@ defmodule Engram.Workers.RebuildDryRun do
     queue: :events,
     max_attempts: 3,
     # Coordinators share the nil `user_id` key, so one runs at a time.
-    unique: [
-      period: :infinity,
-      keys: [:user_id],
-      states: [:available, :scheduled, :executing, :retryable]
-    ]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   import Ecto.Query
 

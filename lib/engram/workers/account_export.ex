@@ -18,7 +18,7 @@ defmodule Engram.Workers.AccountExport do
   use Oban.Worker,
     queue: :export,
     max_attempts: 3,
-    unique: [fields: [:args], period: :infinity]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   import Ecto.Query
 

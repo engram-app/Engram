@@ -8,7 +8,7 @@ defmodule Engram.Workers.BookkeepingDrain do
   use Oban.Worker,
     queue: :maintenance,
     max_attempts: 1,
-    unique: [period: 600, states: :incomplete]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)

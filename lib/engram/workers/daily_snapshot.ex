@@ -6,7 +6,7 @@ defmodule Engram.Workers.DailySnapshot do
   and a retry skips the chunks an earlier attempt wrote. Logs one summary
   line per run.
   """
-  use Oban.Worker, queue: :maintenance, max_attempts: 3, unique: [period: 3000]
+  use Oban.Worker, queue: :maintenance, max_attempts: 3, unique: Engram.Jobs.unique(__MODULE__)
 
   alias Engram.Insights.Snapshot
   alias Engram.Logger.Metadata

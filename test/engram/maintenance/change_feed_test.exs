@@ -87,7 +87,7 @@ defmodule Engram.Maintenance.ChangeFeedTest do
   # updated_at alone, so it walked every row. The feed is a range of the sync
   # index per moved vault.
   test "the notes read is an index range, never a scan of notes" do
-    plan = QueryPlan.generic_plan(ChangeFeed.notes_sql(), analyze: ["notes"])
+    plan = QueryPlan.generic_plan(ChangeFeed.notes_sql(), analyze: ["notes"], fresh: true)
     # Which vault_id index serves it depends on statistics (on a tiny test
     # table any of them); the claim is that one does.
     refute plan =~ "Seq Scan on notes", plan

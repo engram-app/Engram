@@ -7,7 +7,7 @@ defmodule Engram.Billing.Workers.OverrideExpirySweep do
   use Oban.Worker,
     queue: :maintenance,
     max_attempts: 3,
-    unique: [period: 60, fields: [:worker]]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   import Ecto.Query
 

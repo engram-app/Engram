@@ -76,31 +76,26 @@ defmodule Engram.Workers.OrphanSweep do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
-    if Repo.tenancy_unsafe?() do
-      # REFUSE rather than sweep blind. This worker diffs Qdrant against
-      # `chunks`, and `chunks` carries FORCE ROW LEVEL SECURITY — so where RLS
-      # is enforced and no maintenance pool is configured, `chunk_point_ids/1`
-      # returns an EMPTY set and every scanned point looks orphaned.
-      #
-      # `runaway?/2` is not sufficient protection: it requires
-      # `n >= @runaway_floor` (100), so a collection under 100 points falls
-      # through the ratio guard entirely and is deleted in full. The grace
-      # re-check in `confirm_and_delete/2` calls the same blinded function and
-      # concurs. That is irreversible without a paid re-embed.
-      #
-      # `max_attempts: 1`, so this discards and is visible in the Oban
-      # dashboard and the discard telemetry rather than retrying forever.
-      Logger.error(
-        "orphan_sweep refusing to run: RLS is enforced and no maintenance pool is " <>
-          "configured, so the chunk reads this diffs against would return zero rows and " <>
-          "every Qdrant point would look orphaned",
-        Metadata.with_category(:error, :oban, [])
-      )
-
-      {:error, :tenancy_unsafe}
-    else
-      do_perform(args)
-    end
+    # REFUSE rather than sweep blind. This worker diffs Qdrant against
+    # `chunks`, and `chunks` carries FORCE ROW LEVEL SECURITY — so where RLS
+    # is enforced and no maintenance pool is configured, `chunk_point_ids/1`
+    # returns an EMPTY set and every scanned point looks orphaned.
+    #
+    # `runaway?/2` is not sufficient protection: it requires
+    # `n >= @runaway_floor` (100), so a collection under 100 points falls
+    # through the ratio guard entirely and is deleted in full. The grace
+    # re-check in `confirm_and_delete/2` calls the same blinded function and
+    # concurs. That is irreversible without a paid re-embed.
+    #
+    # `max_attempts: 1`, so this discards and is visible in the Oban
+    # dashboard and the discard telemetry rather than retrying forever.
+    Repo.maintenance_only(
+      "orphan_sweep",
+      "RLS is enforced and no maintenance pool is " <>
+        "configured, so the chunk reads this diffs against would return zero rows and " <>
+        "every Qdrant point would look orphaned",
+      fn -> do_perform(args) end
+    )
   end
 
   # One query per daily run. Deliberately not cached: the answer depends on

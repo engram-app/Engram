@@ -156,7 +156,11 @@ defmodule Engram.Workers.EmbedNote.CrashGuard do
   # rebuild gate (chunker v5 Task 16.3).
   defp isolate(note, %Oban.Job{args: args} = job, deaths) do
     :ok = write(note, embed_started_at: nil, embed_started_by: nil, embed_crashes: deaths)
-    {:ok, _} = Oban.insert(worker(job).new(args, queue: @isolated_queue, unique: false))
+
+    {:ok, _} =
+      Oban.insert(
+        worker(job).new(args, queue: @isolated_queue, unique: Engram.Jobs.unique(:none))
+      )
 
     {:cancel, :isolated_after_node_death}
   end

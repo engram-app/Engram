@@ -6,11 +6,26 @@ defmodule Engram.Maintenance.Prune do
   over several runs instead of one WAL and autovacuum burst on a database that
   already swaps. `delete_batch` must bound the rows it READS with an indexed
   predicate (the retention cutoff on an indexed column) and a `LIMIT`.
+
+  `delete_batch` gets the batch size, but a caller whose index choice depends
+  on the LIMIT writes it as a LITERAL (a module attribute) and ignores the
+  argument. The cron reuses a prepared generic plan, and a bound `LIMIT $n`
+  let AnalyticsEventsPrune's plan drop its BRIN for a btree walk.
+  `Engram.Maintenance.PrunePlansTest` pins each caller's plan.
   """
+
+  # The one per-run cap every prune uses unless a test passes its own.
+  @max_batches 20
+
+  @doc "Batches one prune run deletes at most."
+  # No `@spec`: a constant body makes pos_integer() a dialyzer
+  # `contract_supertype`.
+  def max_batches, do: @max_batches
 
   @spec batched((pos_integer() -> non_neg_integer()), pos_integer(), non_neg_integer()) ::
           non_neg_integer()
-  def batched(delete_batch, batch, max_batches), do: loop(delete_batch, batch, max_batches, 0)
+  def batched(delete_batch, batch, max_batches \\ @max_batches),
+    do: loop(delete_batch, batch, max_batches, 0)
 
   defp loop(_delete_batch, _batch, 0, acc), do: acc
 

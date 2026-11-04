@@ -8,7 +8,13 @@ defmodule Engram.Workers.ReconcileEmbeddingsLedgerWindowTest do
   alias Engram.Workers.{RebuildStaleNote, ReconcileEmbeddings}
 
   test "the pruner keeps completed jobs at least as long as the ledger looks back" do
-    plugins = :engram |> Application.fetch_env!(Oban) |> Keyword.fetch!(:plugins)
+    # The Pruner as it boots (`Engram.Jobs.oban_config/1`), not a copy.
+    plugins =
+      :engram
+      |> Application.fetch_env!(Oban)
+      |> Engram.Jobs.oban_config()
+      |> Keyword.fetch!(:plugins)
+
     {Oban.Plugins.Pruner, opts} = Enum.find(plugins, &match?({Oban.Plugins.Pruner, _}, &1))
 
     assert Keyword.fetch!(opts, :max_age) >= ReconcileEmbeddings.ledger_window_seconds()

@@ -73,7 +73,7 @@ defmodule Engram.Workers.ProjectVaultIndex do
   use Oban.Worker,
     queue: :crdt_checkpoint,
     max_attempts: 3,
-    unique: [keys: [:vault_id], states: :incomplete]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   alias Engram.{Accounts, Cache, Crypto, Notes, Repo}
   alias Engram.Crypto.RotationGate

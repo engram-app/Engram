@@ -32,7 +32,7 @@ defmodule Engram.Workers.AnalyticsEventsPrune do
   @impl Oban.Worker
   def perform(%Oban.Job{}) do
     cutoff = DateTime.add(DateTime.utc_now(), -@retention_days, :day)
-    n = prune(cutoff, 0)
+    n = Engram.Maintenance.Prune.batched(&delete_batch(cutoff, &1), @batch)
     metrics = Enum.sum(for {schema, days} <- @metrics_retention, do: prune_days(schema, days))
 
     Logger.info(
@@ -54,9 +54,12 @@ defmodule Engram.Workers.AnalyticsEventsPrune do
     end)
   end
 
-  defp prune(cutoff, acc) do
-    batch = from(e in Event, where: e.inserted_at < ^cutoff, select: e.id, limit: @batch)
-    {n, _} = Repo.delete_all(from(e in Event, where: e.id in subquery(batch)))
-    if n >= @batch, do: prune(cutoff, acc + n), else: acc + n
+  # The LIMIT stays a literal (`@batch`, not the loop's argument): a bound
+  # LIMIT flips the cron's generic plan off the BRIN (`Engram.Maintenance.Prune`,
+  # PrunePlansTest).
+  defp delete_batch(cutoff, _batch) do
+    ids = from(e in Event, where: e.inserted_at < ^cutoff, select: e.id, limit: @batch)
+    {n, _} = Repo.delete_all(from(e in Event, where: e.id in subquery(ids)))
+    n
   end
 end

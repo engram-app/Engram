@@ -36,7 +36,7 @@ defmodule Engram.Workers.RebuildStaleNote do
   use Oban.Worker,
     queue: :rebuild,
     max_attempts: 5,
-    unique: [period: 3600, keys: [:note_id], states: [:available, :scheduled]]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   import Ecto.Query
 

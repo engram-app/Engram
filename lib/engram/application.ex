@@ -26,13 +26,14 @@ defmodule Engram.Application do
     EngramWeb.RequestLogger.attach()
     EngramWeb.RequestExceptionLogger.attach()
     Engram.Telemetry.ObanDiscardHandler.attach()
+    Engram.Telemetry.ObanPluginErrorHandler.attach()
     :ok = Engram.Rebuild.attach()
     Engram.Telemetry.Heartbeat.log_boot_notice()
     Engram.Workers.EmbedNote.CrashGuard.init()
 
     if Engram.Observability.Otel.enabled?(), do: Engram.Observability.Otel.attach_handlers()
 
-    children = children(Application.fetch_env!(:engram, Oban))
+    children = children(Engram.Jobs.oban_config(Application.fetch_env!(:engram, Oban)))
 
     opts = [strategy: :one_for_one, name: Engram.Supervisor]
 

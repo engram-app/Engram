@@ -175,7 +175,7 @@ defmodule Engram.Workers.ExtractNoteLinks do
   def new_debounced(note_id, user_id) do
     new(%{note_id: note_id, user_id: user_id},
       schedule_in: extract_delay_seconds(),
-      unique: [period: 60, keys: [:note_id], states: [:available, :scheduled]]
+      unique: Engram.Jobs.unique({__MODULE__, :debounced})
     )
   end
 
@@ -264,11 +264,7 @@ defmodule Engram.Workers.ExtractNoteLinks do
     |> Map.put("cursor", @start_cursor)
     |> Map.put("sweep", true)
     |> RewriteNoteLinks.new(
-      unique: [
-        period: @repair_window_seconds,
-        keys: [:target_id, :old_basename_hmac],
-        states: [:available, :scheduled]
-      ]
+      unique: Engram.Jobs.unique({RewriteNoteLinks, :repair}, period: @repair_window_seconds)
     )
     |> Engram.Notes.Enqueue.enqueue("rewrite_note_links")
   end

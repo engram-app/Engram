@@ -4,7 +4,7 @@ defmodule Engram.Workers.ClientLogsPruner do
 
   Deletes rows older than `:client_logs_retention_days` (config.exs, 7) in bounded
   batches, so the DELETE never holds a long lock on this write-hot table, and
-  at most `@max_batches` batches per run, so a backlog drains over several
+  at most `Engram.Maintenance.Prune.max_batches/0` batches per run, so a backlog drains over several
   hourly runs instead of one burst.
 
   Added after the 2026-06-29 DB audit found client_logs unbounded at ~98% of
@@ -20,11 +20,10 @@ defmodule Engram.Workers.ClientLogsPruner do
   require Logger
 
   @batch 5_000
-  # At most 100k rows per hourly run. Cutting retention (30 -> 7 days) left a
-  # ~0.5M-row backlog; deleting it in one back-to-back burst is a WAL/IO spike
-  # plus an autovacuum pass on an RDS instance that already swaps. The cron
-  # drains the rest over the next few hours.
-  @max_batches 20
+  # At most `Prune.max_batches/0` batches (100k rows) per hourly run.
+  # Cutting retention (30 -> 7 days) left a ~0.5M-row backlog; deleting it in
+  # one back-to-back burst is a WAL/IO spike plus an autovacuum pass on an RDS
+  # instance that already swaps. The cron drains the rest over the next hours.
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(15)
@@ -36,7 +35,7 @@ defmodule Engram.Workers.ClientLogsPruner do
     cutoff = NaiveDateTime.utc_now() |> NaiveDateTime.add(-days * 24 * 3600, :second)
     # Args exist so a test can exercise the cap with a handful of rows.
     batch = Map.get(args, "batch", @batch)
-    n = prune(cutoff, batch, Map.get(args, "max_batches", @max_batches))
+    n = prune(cutoff, batch, Map.get(args, "max_batches", Engram.Maintenance.Prune.max_batches()))
     if n > 0, do: Logger.info("client_logs_pruner deleted=#{n}")
     {:ok, n}
   end

@@ -46,8 +46,6 @@ defmodule Engram.Workers.PersonOriginSync do
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
 
-  @incomplete [:available, :scheduled, :executing, :retryable]
-
   @doc """
   Start the one-time backfill (run by `DataMigrations.PersonOriginBackfill`).
   The head is `unique` on the `backfill` flag while ANY backfill job is
@@ -59,12 +57,7 @@ defmodule Engram.Workers.PersonOriginSync do
   def backfill do
     Oban.insert(
       new(%{"backfill" => true, "chain" => Ecto.UUID.generate()},
-        unique: [
-          fields: [:worker, :args],
-          keys: [:backfill],
-          period: :infinity,
-          states: @incomplete
-        ]
+        unique: Engram.Jobs.unique({__MODULE__, :backfill_head})
       )
     )
   end
@@ -75,7 +68,7 @@ defmodule Engram.Workers.PersonOriginSync do
     Oban.insert(
       new(%{"user_id" => user_id},
         schedule_in: delay,
-        unique: [period: 300, fields: [:worker, :args]]
+        unique: Engram.Jobs.unique({__MODULE__, :user})
       )
     )
   end
@@ -148,12 +141,7 @@ defmodule Engram.Workers.PersonOriginSync do
     job =
       new(next,
         schedule_in: @next_batch_in,
-        unique: [
-          fields: [:worker, :args],
-          keys: [:chain, :after],
-          period: 7200,
-          states: Oban.Job.states()
-        ]
+        unique: Engram.Jobs.unique({__MODULE__, :chain_next})
       )
 
     case insert_fun().(job) do

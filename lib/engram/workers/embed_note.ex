@@ -35,11 +35,7 @@ defmodule Engram.Workers.EmbedNote do
   use Oban.Worker,
     queue: :embed,
     max_attempts: 5,
-    unique: [
-      period: 60,
-      keys: [:note_id],
-      states: :incomplete
-    ]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   import Ecto.Query
 
@@ -842,7 +838,7 @@ defmodule Engram.Workers.EmbedNote do
             new(%{note_id: note.id, user_id: note.user_id},
               scheduled_at: retry_after,
               priority: backfill_priority(),
-              unique: false
+              unique: Engram.Jobs.unique(:none)
             )
           )
 
@@ -1345,15 +1341,6 @@ defmodule Engram.Workers.EmbedNote do
   `unique`/`replace`, so the ceiling is meaningless there and building the
   changeset reads nothing.
   """
-  # `Engram.Jobs.pending_states/0`, every incomplete state but `executing`: a
-  # running pass may already have read the previous content, so a newer edit
-  # needs its own job (the rule `reject_already_queued/2` applies to bulk
-  # enqueues through the same list). The two passes are
-  # safe together: `Indexing` re-checks `content_hash` under `FOR UPDATE` and
-  # the stale one rolls back `:superseded`, and the `embed_hash` stamp is
-  # optimistic. Before #2294 an edit during a run was absorbed and only the
-  # `ReconcileEmbeddings` sweep caught it.
-  @pending_states Enum.map(Engram.Jobs.pending_states(), &String.to_existing_atom/1)
 
   # `user_id` REQUIRED and positional — see the note on
   # `Engram.Workers.ExtractNoteLinks.new_debounced/2`.
@@ -1385,11 +1372,7 @@ defmodule Engram.Workers.EmbedNote do
       # Override the worker default (60s) so dedup spans the full settle+ceiling
       # window — otherwise a burst longer than the period spawns a second job and
       # resets the ceiling.
-      unique: [
-        period: settle_window_seconds(),
-        keys: [:note_id],
-        states: @pending_states
-      ]
+      unique: Engram.Jobs.unique({__MODULE__, :debounced}, period: settle_window_seconds())
     )
   end
 

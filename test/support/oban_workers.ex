@@ -17,7 +17,11 @@ defmodule Engram.Test.ObanWorkers do
 
   @doc "All `Oban.Worker` modules in the `:engram` application, loaded."
   @spec all() :: [module()]
-  def all do
+  def all, do: implementing(Oban.Worker)
+
+  @doc "All modules in `:engram` declaring `@behaviour behaviour`, loaded."
+  @spec implementing(module()) :: [module()]
+  def implementing(behaviour) do
     # `Application.app_dir/2`, not `:code.lib_dir/2` — the latter is deprecated
     # on newer OTP and CI compiles with `--warnings-as-errors`, so it is fatal
     # there while staying silent on an older local OTP.
@@ -25,7 +29,7 @@ defmodule Engram.Test.ObanWorkers do
     |> Application.app_dir("ebin")
     |> Path.join("*.beam")
     |> Path.wildcard()
-    |> Enum.flat_map(&worker_module/1)
+    |> Enum.flat_map(&implementer(&1, behaviour))
     |> Enum.map(&Code.ensure_loaded!/1)
   end
 
@@ -47,11 +51,11 @@ defmodule Engram.Test.ObanWorkers do
     end)
   end
 
-  defp worker_module(path) do
+  defp implementer(path, behaviour) do
     case :beam_lib.chunks(String.to_charlist(path), [:attributes]) do
       {:ok, {mod, attributes: attrs}} ->
         behaviours = attrs |> Keyword.get_values(:behaviour) |> List.flatten()
-        if Oban.Worker in behaviours, do: [mod], else: []
+        if behaviour in behaviours, do: [mod], else: []
 
       _ ->
         []

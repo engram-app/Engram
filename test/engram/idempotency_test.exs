@@ -117,6 +117,18 @@ defmodule Engram.IdempotencyTest do
     assert length(deletes) == 3
   end
 
+  # The shared prune loop (Engram.Maintenance.Prune): a backlog drains over
+  # several runs, never in one WAL burst. Was an uncapped hand-rolled loop.
+  test "prune_expired/1 stops at the shared per-run batch cap", %{user: user} do
+    cap = Engram.Maintenance.Prune.max_batches()
+
+    for _ <- 1..(cap + 3),
+        do: :ok = Idempotency.remember(user, key(), @scope, %{status: 200, body: %{}}, ttl_ms: -1)
+
+    assert Idempotency.prune_expired(1) == {:ok, cap}
+    assert Idempotency.prune_expired(1) == {:ok, 3}
+  end
+
   # #1869: the key alone matched, so a credential scoped to vault B could
   # replay vault A's cached batch response (plaintext note paths).
   test "lookup is vault-scoped — another vault cannot replay the key", %{user: user} do

@@ -23,7 +23,7 @@ defmodule Engram.Billing.Workers.PaddleReconcile do
     # :args too: the daily drift run and the stalled scan are the same worker,
     # and [:worker] alone would drop one as a duplicate whenever they land
     # within the 60 s period (a manual run, a retry, a future schedule move).
-    unique: [period: 60, fields: [:worker, :args]]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   alias Engram.Billing.Reconciliation
 

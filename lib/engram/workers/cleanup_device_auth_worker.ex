@@ -9,7 +9,7 @@ defmodule Engram.Workers.CleanupDeviceAuthWorker do
   use Oban.Worker,
     queue: :maintenance,
     max_attempts: 3,
-    unique: [period: 600, states: [:available, :scheduled, :executing]]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   alias Engram.Auth.DeviceFlow
   alias Engram.OAuth

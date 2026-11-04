@@ -31,10 +31,7 @@ defmodule Engram.Workers.RotateUserDek do
   use Oban.Worker,
     queue: :crypto_backfill,
     max_attempts: 3,
-    unique: [
-      keys: [:user_id],
-      states: :incomplete
-    ]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   alias Engram.Crypto.UserDekRotation
 

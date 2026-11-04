@@ -56,7 +56,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     queue: :crdt_backfill,
     priority: 3,
     max_attempts: 5,
-    unique: [keys: [:user_id], period: :infinity, states: [:available, :scheduled, :retryable]]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   import Ecto.Query
 

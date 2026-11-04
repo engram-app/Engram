@@ -28,12 +28,14 @@ defmodule Engram.Workers.InstallPingsPruner do
   def perform(%Oban.Job{}) do
     # DateTime to match the physical `timestamptz` column.
     cutoff = DateTime.utc_now() |> DateTime.add(-@retention_days * 24 * 3600, :second)
-    n = prune(cutoff, 0)
+    n = Engram.Maintenance.Prune.batched(&delete_batch(cutoff, &1), @batch)
     if n > 0, do: Logger.info("install_pings_pruner deleted=#{n}")
     {:ok, n}
   end
 
-  defp prune(cutoff, acc) do
+  # The LIMIT stays a literal (`@batch`, not the loop's argument): see
+  # `Engram.Maintenance.Prune`. PrunePlansTest pins it.
+  defp delete_batch(cutoff, _batch) do
     {n, _} =
       Repo.delete_all(
         from(p in "install_pings",
@@ -48,6 +50,6 @@ defmodule Engram.Workers.InstallPingsPruner do
         )
       )
 
-    if n >= @batch, do: prune(cutoff, acc + n), else: acc + n
+    n
   end
 end

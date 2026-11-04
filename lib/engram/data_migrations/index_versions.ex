@@ -25,7 +25,10 @@ defmodule Engram.DataMigrations.IndexVersions do
   alias Engram.Vaults.Vault
 
   @impl true
-  def name, do: prefix(Rebuild.target_versions()) <> (Indexing.embed_model() || "none")
+  def name, do: name(Rebuild.target_versions())
+
+  # The pass for `{chunker, keyword}` under the current embed model.
+  defp name(versions), do: prefix(versions) <> (Indexing.embed_model() || "none")
 
   @doc """
   The newest `{chunker, keyword}` pass that has completed, under ANY embed
@@ -69,7 +72,16 @@ defmodule Engram.DataMigrations.IndexVersions do
   def version, do: 1
 
   @spec done?() :: boolean()
-  def done?, do: DataMigrations.done?(name(), version())
+  def done?, do: done?(Rebuild.target_versions())
+
+  @doc """
+  Whether the pass for `versions` (`{chunker, keyword}`) under the current
+  embed model and this migration version has completed. `Rebuild.holding?/0`
+  asks about the BUILD's versions: under a budget halt `target_versions/0`
+  falls back to the newest completed pass, which is done by definition.
+  """
+  @spec done?({pos_integer(), pos_integer()}) :: boolean()
+  def done?(versions), do: DataMigrations.done?(name(versions), version())
 
   # Content-stale notes are excluded: the live sweep embeds them, which
   # stamps current versions. Counting them would hold this open on every

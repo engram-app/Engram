@@ -92,7 +92,7 @@ defmodule Engram.Webhooks.Idempotency do
   two days, `docs/context/paddle-integration.md`) with margin.
   """
   @spec prune(pos_integer(), pos_integer()) :: {:ok, non_neg_integer()}
-  def prune(batch \\ 5_000, max_batches \\ 20) do
+  def prune(batch \\ 5_000, max_batches \\ Engram.Maintenance.Prune.max_batches()) do
     now = DateTime.utc_now()
     cutoff = DateTime.add(now, -@retention_days, :day)
     claim_cutoff = DateTime.add(now, -@claim_retention_days, :day)

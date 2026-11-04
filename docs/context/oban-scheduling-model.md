@@ -89,11 +89,36 @@ assert no tenant-table query reaches it).
   cap); a new cron fails that test until it does.
 - Drift in app-kept bookkeeping is found through partial indexes by
   `BookkeepingDrain` (`12,27,42,57 * * * *`), never by re-walking a table.
+- `Oban.Reindexer` (not a crontab entry, `Engram.Jobs.reindexer/0`) rebuilds every `oban_jobs` index
+  daily at 10:37, a minute no cron uses (`oban_reindexer_test.exs`). Its
+  index list must match the table; adding or dropping an `oban_jobs` index
+  fails that test until the list follows. Runbook and failure cleanup:
+  `oban-jobs-reindex.md`.
+
+## The oban_jobs table
+
+- Completed, cancelled and discarded jobs live 24 h (Pruner `max_age`).
+  `suspended` is never pruned: the only producer is `Engram.Rebuild.hold/1`,
+  and a held job is real work. They are freed when the rebuild switch is off
+  or the build's pass has completed (`Rebuild.holding?/0`). The count is
+  `engram_prom_ex_oban_queue_length_count{state="suspended"}`.
+- **Every job option lives in `Engram.Jobs`**: each `unique:` policy (by
+  worker or `{worker, call_site}`, read via `Jobs.unique/2`), retention
+  (`retention_seconds/0`), the Reindexer (`reindexer/0`), and suspended-job
+  handling (`suspend_copy/2`, `release_suspended/1`). `JobsOptionsTest` fails
+  on an inline `unique:` anywhere else in lib/.
+- Unique checks always carry `queue` (`Jobs.unique/2` adds it to a narrowed
+  `fields:`): without it the check seq-scans the table (3.8 s in prod,
+  2026-11-03).
+- fillfactor is the default 100: no Oban update can be HOT (each changes the
+  indexed `state`).
 
 ## Checklist for a new worker
 
 - `max_attempts` set on purpose (Oban's default is 20).
-- `unique` for anything a cron or a burst of events can enqueue twice. Note
+- `unique` for anything a cron or a burst of events can enqueue twice: add
+  the policy to `Engram.Jobs`' `@unique` and pass
+  `unique: Engram.Jobs.unique(__MODULE__)`. Note
   that `Oban.insert_all` ignores `unique`: dedupe with
   `Engram.Jobs.reject_pending/3`.
 - An explicit `timeout/1`.

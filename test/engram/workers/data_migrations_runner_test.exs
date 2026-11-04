@@ -306,6 +306,16 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     end
   end
 
+  # The runner's list is hand-kept (order matters), so a new DataMigration
+  # that is never registered would silently never run.
+  test "every DataMigration in the app is registered with the runner" do
+    missing =
+      Engram.Test.ObanWorkers.implementing(Engram.DataMigration) --
+        DataMigrationsRunner.migrations()
+
+    assert missing == [], "register in DataMigrationsRunner @migrations: #{inspect(missing)}"
+  end
+
   test "every registered module implements the behaviour" do
     for mod <- DataMigrationsRunner.migrations() do
       Code.ensure_loaded!(mod)

@@ -44,7 +44,7 @@ defmodule Engram.Workers.BackfillCrdtHeadIndexTest do
     assert candidate, "discovery no longer reads note_bodies"
     refute Enum.any?(queries, &(&1.sql =~ ~r/FROM "notes" AS \w+ WHERE .*"id" >/))
 
-    plan = QueryPlan.generic_plan(candidate.sql, analyze: ["note_bodies"])
+    plan = QueryPlan.generic_plan(candidate.sql, analyze: ["note_bodies"], fresh: true)
     assert plan =~ "note_bodies_pkey", plan
     assert plan =~ "Limit", plan
   end
