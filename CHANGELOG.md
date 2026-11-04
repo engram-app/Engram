@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.72.4](https://github.com/engram-app/Engram/compare/0.72.3...0.72.4) (2026-11-04)
+
+
+### Performance Improvements
+
+* **folders:** stamp folder_ref, drain instead of nightly walk ([#2423](https://github.com/engram-app/Engram/issues/2423)) ([e0fb5d4](https://github.com/engram-app/Engram/commit/e0fb5d475aeffe0ba832736085a12e2cdcfbf811))
+* **notes:** R7 live-vault index, pkey id probes, due index ([#2407](https://github.com/engram-app/Engram/issues/2407)) ([76bc78b](https://github.com/engram-app/Engram/commit/76bc78b7566570237418a1d168c8ea7a31e6a16a))
+* **oban:** root fixes for oban_jobs bloat, unique scans, stuck jobs ([#2424](https://github.com/engram-app/Engram/issues/2424)) ([efff4e3](https://github.com/engram-app/Engram/commit/efff4e3770a264894be18b2099c5b2ec07080e04))
+
 ## [0.72.3](https://github.com/engram-app/Engram/compare/0.72.2...0.72.3) (2026-11-03)
 
 
