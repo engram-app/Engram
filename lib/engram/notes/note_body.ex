@@ -138,6 +138,11 @@ defmodule Engram.Notes.NoteBody do
   # One statement per set of fields a write touched (`sync!/3`): update the
   # body rows that exist and differ in those fields (plus the owner and key
   # version, which live on `notes` for good), insert the missing ones whole.
+  # An insert also seeds the note's narrow sizes (`note_index_state`, whose
+  # row the notes INSERT trigger made before the body existed) from the
+  # values the `note_bodies_sizes` BEFORE trigger computed (RETURNING sees
+  # them), so a new note is sized at once; later edits reach them through
+  # `CrdtBloatSweep`, as before.
   # Both CTEs read the statement's snapshot, so a row is in exactly one of
   # them. Built at compile time for every subset (eight).
   @sync_sql (for content? <- [false, true],
@@ -169,7 +174,14 @@ defmodule Engram.Notes.NoteBody do
                   WHERE n.id = ANY($1) AND n.kind = 'note'
                     AND NOT EXISTS (SELECT 1 FROM note_bodies x WHERE x.note_id = n.id)
                   ON CONFLICT (note_id) DO NOTHING
-                  RETURNING 1
+                  RETURNING note_id, content_bytes, state_bytes
+                ), sized AS (
+                  UPDATE note_index_state s SET
+                    content_bytes = i.content_bytes,
+                    state_bytes = i.state_bytes,
+                    has_state = i.state_bytes IS NOT NULL
+                  FROM ins i
+                  WHERE s.note_id = i.note_id
                 )
                 SELECT ((SELECT count(*) FROM upd) + (SELECT count(*) FROM ins))::int
                 """}
@@ -356,29 +368,25 @@ defmodule Engram.Notes.NoteBody do
         dynamic([n], fragment("(SELECT h.crdt_head FROM notes AS h WHERE h.id = ?)", n.id))
       )
 
-  @doc """
-  True when the note's `:crdt_head` or `:crdt_state_ciphertext` is NULL as
-  every read sees it: from its body row, else (no body row, or one owned by
-  another user, as `join/1` treats it) from `notes`. For a predicate on a
-  query whose first binding is a `Note`. The body row is read by a per-row
-  primary-key subquery, not a join, so a query that reads its notes by key
-  (`IdWindows.by_id/2`) keeps that plan (#2403). NULL-ness only: nothing is
-  de-TOASTed. Not for a write fence in a `notes` UPDATE: after a row-lock
-  wait the subquery still sees the pre-wait body (see the moduledoc).
-  """
-  @spec null?(:crdt_head | :crdt_state_ciphertext) :: Ecto.Query.dynamic_expr()
-  def null?(:crdt_head) do
-    dynamic(
-      [n],
-      fragment(
-        "coalesce((SELECT b.crdt_head IS NULL FROM note_bodies AS b WHERE b.note_id = ? AND b.user_id = ?), ? IS NULL)",
-        n.id,
-        n.user_id,
-        n.crdt_head
-      )
-    )
+  # The 32-byte body digest as the url-safe, unpadded base64
+  # `notes.crdt_head` holds (a 32-byte base64 is 44 chars, one `=`, no line
+  # break).
+  defmacrop url_b64(digest) do
+    quote do
+      fragment("rtrim(translate(encode(?, 'base64'), '+/', '-_'), '=')", unquote(digest))
+    end
   end
 
+  @doc """
+  True when the note's CRDT state is NULL as every read sees it: from its
+  body row, else (no body row, or one owned by another user, as `join/1`
+  treats it) from `notes`. For a predicate on a query whose first binding
+  is a `Note`. The body row is read by a per-row primary-key subquery, not
+  a join. NULL-ness only: nothing is de-TOASTed. Not for a write fence in a
+  `notes` UPDATE: after a row-lock wait the subquery still sees the
+  pre-wait body (see the moduledoc).
+  """
+  @spec null?(:crdt_state_ciphertext) :: Ecto.Query.dynamic_expr()
   def null?(:crdt_state_ciphertext) do
     dynamic(
       [n],
@@ -389,6 +397,29 @@ defmodule Engram.Notes.NoteBody do
         n.crdt_state_ciphertext
       )
     )
+  end
+
+  @doc """
+  True when a note's head needs warming: either copy (`notes.crdt_head`,
+  the body row's) is NULL, there is no body row, or the two disagree. With
+  the copy trigger gone nothing else heals a split, so warming must find
+  every shape of one (`CrdtTransport.store_head_if_unchanged/4` copies the
+  notes head over when its compare-and-set loses). A per-row primary-key
+  probe of `note_bodies` (index-only on `note_bodies_user_note_head`), not
+  a join, so a query that reads its notes by key (`IdWindows.by_id/2`)
+  keeps that plan (#2403). The note binding must be named `:note`.
+  """
+  @spec head_cold() :: Ecto.Query.dynamic_expr()
+  def head_cold do
+    in_step =
+      from(b in __MODULE__,
+        where:
+          b.note_id == parent_as(:note).id and b.user_id == parent_as(:note).user_id and
+            url_b64(b.crdt_head) == parent_as(:note).crdt_head,
+        select: 1
+      )
+
+    dynamic(not exists(in_step))
   end
 
   # The ciphertext starts at byte 14 in both merged formats: a format 1
@@ -403,18 +434,17 @@ defmodule Engram.Notes.NoteBody do
 
   defp field_expr(:crdt_head), do: head_expr(dynamic([n], n.crdt_head))
 
-  # The body's 32-byte digest as the url-safe, unpadded base64
-  # `notes.crdt_head` holds (a 32-byte base64 is 44 chars, one `=`, no line
-  # break); `fallback` (the notes-side head) for a note with no body row.
+  # The body's head as `url_b64/1`; `fallback` (the notes-side head) for a
+  # note with no body row.
   defp head_expr(fallback) do
     dynamic(
       [n, note_body: b],
       type(
         fragment(
-          "CASE WHEN ? IS NULL THEN ? ELSE rtrim(translate(encode(?, 'base64'), '+/', '-_'), '=') END",
+          "CASE WHEN ? IS NULL THEN ? ELSE ? END",
           b.note_id,
           ^fallback,
-          b.crdt_head
+          url_b64(b.crdt_head)
         ),
         :string
       )

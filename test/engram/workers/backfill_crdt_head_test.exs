@@ -267,13 +267,40 @@ defmodule Engram.Workers.BackfillCrdtHeadTest do
       )
     end
 
-    test "the batch skips a note whose body head is set", ctx do
+    # A split either way heals on the next warm (with the copy trigger gone,
+    # nothing else would). Red on 38a2a1f1c: the batch skipped (notes NULL),
+    # and a lost compare-and-set left the body NULL (body NULL).
+    test "a split with the notes head NULL heals on the next warm", ctx do
       raw!("UPDATE notes SET crdt_head = NULL WHERE id = $1", ctx.note)
 
       :ok = warm!(ctx.user, ctx.vault)
 
-      # Not rebuilt: the notes copy stays as the raw write left it.
-      assert is_nil(notes_head(ctx.note))
+      assert is_binary(notes_head(ctx.note))
+      assert in_step?(ctx.note)
+    end
+
+    test "a split with the body head NULL heals on the next warm", ctx do
+      raw!("UPDATE note_bodies SET crdt_head = NULL WHERE note_id = $1", ctx.note)
+
+      :ok = warm!(ctx.user, ctx.vault)
+
+      assert is_binary(body_head(ctx.note))
+      assert in_step?(ctx.note)
+    end
+
+    # Red on 38a2a1f1c: the append's reset read only the notes copy, so a
+    # body head over a NULL notes head was served as current after the doc
+    # moved on.
+    test "an append resets a body head the notes copy no longer holds", ctx do
+      raw!("UPDATE notes SET crdt_head = NULL WHERE id = $1", ctx.note)
+
+      {:ok, %{state: upd}} = Engram.Notes.CrdtBridge.merge_plaintext(nil, "moved on")
+      doc = Engram.Notes.CrdtBridge.new_doc()
+      :ok = Yex.apply_update(doc, upd)
+      st = %{user_id: ctx.user.id, vault_id: ctx.vault.id, note_id: ctx.note.id}
+      _ = Engram.Notes.CrdtPersistence.update_v1(st, upd, ctx.note.id, doc)
+
+      assert is_nil(body_head(ctx.note))
     end
   end
 
@@ -292,6 +319,8 @@ defmodule Engram.Workers.BackfillCrdtHeadTest do
 
   defp body_head(note),
     do: one!("SELECT crdt_head FROM note_bodies WHERE note_id = $1", note)
+
+  defp in_step?(note), do: Engram.Fixtures.note_body_divergence(note.user_id) == []
 
   defp one!(sql, note) do
     %{rows: [[v]]} = raw!(sql, note)
