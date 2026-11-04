@@ -95,7 +95,7 @@ defmodule Engram.Folders.Rows do
   unreadable), but it is excluded from `attachments_folder_ref_stale`, so the
   drain does not re-run the user forever. A writer's fresh nonce ends it.
   """
-  @spec unreadable_attachment_stamp(binary()) :: binary()
+  @spec unreadable_attachment_stamp(binary()) :: nonempty_binary()
   def unreadable_attachment_stamp(path_nonce), do: <<0>> <> path_nonce
 
   @doc "`a.folder_ref_stamp = a.path_nonce` on the attachment bound as `:a`."

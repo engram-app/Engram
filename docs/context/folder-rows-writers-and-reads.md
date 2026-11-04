@@ -79,11 +79,15 @@ path hash.
   previous release's write use `Engram.Fixtures.insert_note!` (no folder row)
   or, for an attachment, NULL `folder_ref_stamp` (or rewrite `path_nonce`).
 - A restore that cannot revive a folder row (a live sibling took the name) leaves
-  restored notes pointing at a deleted row. Readers treat a reference to a
-  deleted row as unresolved (read by path), so this is a slow path, not a wrong
-  answer. Since the nightly re-verify is gone nothing re-points such a note
-  until its user is drained for another reason (no partial index can express
-  "names a deleted row").
+  restored notes pointing at a deleted row. Folder rows are soft-deleted, so
+  the `ON DELETE SET NULL` FK never fires for them; the
+  `notes_set_folder_ref_on_restore` trigger (20261103140200) re-resolves the
+  reference on the restore itself (the live row, or NULL for the drain). The
+  canary's `folder_ref` invariant counts any reference to a deleted row that
+  is left (no partial index can express "names a deleted row").
+- An attachment whose path does not decrypt is stamped `'\x00' || path_nonce`
+  (`Rows.unreadable_attachment_stamp/1`) by `FolderTable`: logged once, out of
+  the drain's index until a writer gives it a fresh nonce, never trusted.
 - Hard-deleting a folder row (only a vault purge does) runs the FK's
   `ON DELETE SET NULL` lookup on `notes` / `attachments`; the vault-leading
   indexes serve it and the purge deletes those rows first, so no extra index.
