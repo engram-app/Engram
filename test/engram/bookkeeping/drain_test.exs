@@ -146,6 +146,17 @@ defmodule Engram.Bookkeeping.DrainTest do
       folder: ~w(notes_unresolved_folder)
     }
 
+    # Realistic statistics, set by this test: many clean live notes, no drift.
+    # On an empty table every candidate index costs the same (8.15) and the
+    # planner's pick depends on whatever reltuples/relpages an EARLIER test's
+    # ANALYZE left behind (ANALYZE writes those in place, so the sandbox
+    # rollback does not undo them). CI on #2424 drew notes_user_id_vault_id_
+    # path_ci_hmac_index that way once new test files reshuffled partitions.
+    setup %{user: u, vault: v} do
+      for i <- 1..100, do: write!(u, v, "Clean#{rem(i, 5)}/n#{i}.md")
+      :ok
+    end
+
     for {kind, names} <- @indexes do
       test "#{kind}" do
         probes = Drain.probes(unquote(kind))
