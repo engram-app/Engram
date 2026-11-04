@@ -286,6 +286,11 @@ defmodule Engram.Notes.NoteBodyWriteTest do
       assert_in_step!(u.id)
     end
 
+    test "the insert_note! fixture", %{user: u, vault: v} do
+      Engram.Fixtures.insert_note!(u, v, %{"path" => "fixture.md"})
+      assert_in_step!(u.id)
+    end
+
     test "NoteSplit fills a missing body row", %{user: u, vault: v} do
       note = write!(u, v, "a.md", "first")
       Repo.query!("DELETE FROM note_bodies WHERE note_id = $1", [Ecto.UUID.dump!(note.id)])

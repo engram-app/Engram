@@ -131,9 +131,14 @@ defmodule Engram.Fixtures do
         # row-lock contract) unless the caller overrode it.
         note_attrs = Map.put_new(note_attrs, :seq, Engram.Vaults.next_seq!(vault.id))
 
-        %Note{}
-        |> Note.changeset(note_attrs)
-        |> Repo.insert!()
+        note =
+          %Note{}
+          |> Note.changeset(note_attrs)
+          |> Repo.insert!()
+
+        # As every app writer: the body row in the same transaction.
+        _ = Engram.Notes.NoteBody.sync!(note.id, note_attrs)
+        note
       end)
 
     # Splice virtual fields so callers can read note.path / .folder / .tags
