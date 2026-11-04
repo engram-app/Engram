@@ -20,7 +20,6 @@ defmodule Engram.Attachments do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Crypto.RotationGate
-  alias Engram.DataMigrations.FolderTable
   alias Engram.Folders.Rows
   alias Engram.Links
   alias Engram.Logger.Metadata
@@ -609,7 +608,7 @@ defmodule Engram.Attachments do
       changeset_attrs =
         changeset_attrs
         |> Map.put(:seq, seq)
-        |> Map.put(:folder_ref_id, folder_ref)
+        |> Map.merge(Map.new(Rows.attachment_ref(folder_ref, changeset_attrs.path_nonce)))
         |> then(fn attrs ->
           case existing do
             %Attachment{version: v} -> Map.put(attrs, :version, v + 1)
@@ -1055,10 +1054,11 @@ defmodule Engram.Attachments do
                     path_nonce: path_n,
                     path_hmac: new_hmac,
                     basename_hmac: new_basename_hmac,
-                    folder_ref_id: folder_ref,
                     updated_at: now,
                     seq: seq
-                  ] ++ Links.path_keys(filter_key, new_path, path_n)
+                  ] ++
+                    Rows.attachment_ref(folder_ref, path_n) ++
+                    Links.path_keys(filter_key, new_path, path_n)
               )
 
             # Insert the old-path tombstone (fresh uuid, path encrypted under
@@ -1394,9 +1394,10 @@ defmodule Engram.Attachments do
             path_ciphertext: path_ct,
             path_nonce: path_n,
             path_hmac: item.new_hmac,
-            basename_hmac: item.new_basename_hmac,
-            folder_ref_id: Map.fetch!(refs, Helpers.extract_folder(item.new_path))
-          ] ++ Links.path_keys(filter_key, item.new_path, path_n)
+            basename_hmac: item.new_basename_hmac
+          ] ++
+            Rows.attachment_ref(Map.fetch!(refs, Helpers.extract_folder(item.new_path)), path_n) ++
+            Links.path_keys(filter_key, item.new_path, path_n)
 
         {item, seq, cols, struct(%{att | path: item.new_path, updated_at: now, seq: seq}, cols)}
       end)
@@ -2065,8 +2066,17 @@ defmodule Engram.Attachments do
            end)
            |> unwrap_tenant() do
       {rows, expired} = Enum.split_with(rows, &(DateTime.compare(&1.deleted_at, cutoff) != :lt))
+      by_id = Map.new(rows, &{&1.id, &1})
       hmac_of = Map.new(rows, &{&1.id, &1.path_hmac})
-      metas = Enum.map(decrypt_tree_rows(rows, user), &Map.put(&1, :path_hmac, hmac_of[&1.id]))
+
+      # `path_nonce`: the restore re-points each row's folder reference stamped
+      # with the nonce its path was decrypted under (`repoint_folder_refs/3`).
+      metas =
+        Enum.map(
+          decrypt_tree_rows(rows, user),
+          &Map.merge(&1, Map.take(by_id[&1.id], [:path_hmac, :path_nonce]))
+        )
+
       taken = live_hmacs(user, vault, Map.values(hmac_of))
       {taken, free} = Enum.split_with(metas, &MapSet.member?(taken, &1.path_hmac))
       bytes = free |> Enum.map(& &1.size_bytes) |> Enum.sum()
@@ -2141,18 +2151,31 @@ defmodule Engram.Attachments do
 
   # A restored row keeps the reference it was deleted with, which may name a
   # folder row the undo could not revive (a live sibling took the name). Point
-  # each at the live row for its path.
+  # each at the live row for the path just decrypted from it, stamped with the
+  # nonce that path was read under (`Rows.attachment_ref/2`): a row whose path
+  # moved since keeps its old stamp, a mismatch the drain heals.
   defp repoint_folder_refs(_user, _vault, []), do: :ok
 
   defp repoint_folder_refs(user, vault, metas) do
-    by_folder = Enum.group_by(metas, &Helpers.extract_folder(&1.path), & &1.id)
+    by_folder = Enum.group_by(metas, &Helpers.extract_folder(&1.path))
 
     Repo.with_tenant!(user.id, fn ->
       {:ok, refs} = Rows.ensure_all(user, vault.id, Map.keys(by_folder))
 
-      for {folder, ids} <- by_folder do
-        from(a in Attachment, where: a.id in ^ids)
-        |> Repo.update_all(set: [folder_ref_id: Map.fetch!(refs, folder)])
+      # One statement per folder. The set-based form of `Rows.attachment_ref/2`:
+      # the stamp is the row's own nonce, and only rows still at the nonce the
+      # path was decrypted under match (nonces are random per write, so the
+      # `IN` pairs them with their ids).
+      for {folder, rows} <- by_folder do
+        ids = Enum.map(rows, & &1.id)
+        nonces = Enum.map(rows, & &1.path_nonce)
+        ref = Map.fetch!(refs, folder)
+
+        from(a in Attachment,
+          where: a.id in ^ids and a.path_nonce in ^nonces,
+          update: [set: [folder_ref_id: ^ref, folder_ref_stamp: a.path_nonce]]
+        )
+        |> Repo.update_all([])
       end
     end)
 
@@ -2177,13 +2200,15 @@ defmodule Engram.Attachments do
   The one place a folder operation (rename, delete, move, listing) finds the
   attachments it concerns. It decrypts the folder's own rows, not the vault's:
 
-    * rows whose `folder_ref_id` is in the folder's subtree AND that have not been
-      written since `FolderTable.verified_until/0` are trusted by reference;
-    * every row written since then is checked against its decrypted path, because
-      a task still on the previous release writes a NULL reference (an upload) or
-      leaves a stale one (a move) and nothing has re-verified it yet;
-    * while the backfill has never completed (or a re-verify reopened it) nothing
-      is trusted and the scan is the old whole-vault decrypt.
+    * rows whose `folder_ref_id` is in the folder's subtree AND whose reference is
+      current (`Rows.attachment_ref_current/0`: stamped with the row's
+      `path_nonce`) are trusted by reference;
+    * every row whose stamp does not match is checked against its decrypted path:
+      a writer that rewrote the path without re-pointing it (the previous release
+      during a rolling deploy) left a NULL or stale reference, and
+      `Engram.Bookkeeping.Drain` has not healed it yet. Before the `FolderTable`
+      version 2 pass has stamped a vault, that is every row (the old
+      whole-vault decrypt).
 
   Whatever the route, a row is kept only if its DECRYPTED path is in `folders`: the
   stored path stays authoritative, the reference only narrows what is read.
@@ -2197,9 +2222,8 @@ defmodule Engram.Attachments do
     user = fresh_user(user)
     direct? = Keyword.get(opts, :direct, false)
     folders = Enum.map(folders, &String.trim_trailing(&1, "/"))
-    verified = FolderTable.verified_until()
 
-    Repo.with_tenant(user.id, fn -> candidate_rows(user, vault, folders, verified, direct?) end)
+    Repo.with_tenant(user.id, fn -> candidate_rows(user, vault, folders, direct?) end)
     |> unwrap_tenant()
     |> case do
       {:ok, rows} ->
@@ -2216,15 +2240,16 @@ defmodule Engram.Attachments do
     end
   end
 
-  # Everything is a candidate when nothing is verified or the root is asked for
-  # as a subtree; otherwise the folders' referenced rows plus the unverified ones.
-  defp candidate_rows(user, vault, folders, verified, direct?) do
+  # Everything is a candidate when the root is asked for as a subtree;
+  # otherwise the folders' referenced rows plus the ones whose reference is not
+  # current.
+  defp candidate_rows(user, vault, folders, direct?) do
     base = from(a in scoped_live(user, vault), as: :a, select: struct(a, @tree_attachment_fields))
 
-    if is_nil(verified) or (not direct? and "" in folders) do
+    if not direct? and "" in folders do
       Repo.all(base)
     else
-      verified = DateTime.truncate(verified, :second)
+      current = Rows.attachment_ref_current()
       ids = folder_ids(user, vault, folders, direct?)
       root? = direct? and "" in folders
 
@@ -2246,7 +2271,8 @@ defmodule Engram.Attachments do
           where:
             ^dynamic(
               [a],
-              (^trusted and a.updated_at <= ^verified) or a.updated_at > ^verified or
+              (^trusted and ^current) or not (^current) or
+                is_nil(a.folder_ref_stamp) or
                 (not is_nil(a.folder_ref_id) and not exists(live_ref))
             )
         )

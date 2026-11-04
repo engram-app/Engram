@@ -12,8 +12,6 @@ defmodule Engram.Folders.DeltaFixesTest do
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
     vault = insert(:vault, user: user)
-    Application.put_env(:engram, :folder_ref_verify_margin_s, 0)
-    on_exit(fn -> Application.delete_env(:engram, :folder_ref_verify_margin_s) end)
     %{user: user, vault: vault}
   end
 
@@ -70,7 +68,7 @@ defmodule Engram.Folders.DeltaFixesTest do
       ])
 
       kill_row!(other)
-      # Verified after every write: the reference is "trusted" by age.
+      # The stamp still matches the path: the reference alone would be trusted.
       DataMigrations.mark_done(FolderTable.name(), FolderTable.version())
 
       assert {:ok, %{attachments: 1}} = Folders.rename(u, v, "Y", "Z")

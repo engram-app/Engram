@@ -12,10 +12,6 @@ defmodule Engram.Folders.ReadsTest do
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
     vault = insert(:vault, user: user)
-    # The verified instant is `completed_at` itself in these tests.
-    Application.put_env(:engram, :folder_ref_verify_margin_s, 0)
-    on_exit(fn -> Application.delete_env(:engram, :folder_ref_verify_margin_s) end)
-
     # Counts the rows `Attachments` decrypts, the oracle for "no whole-vault decrypt".
     test_pid = self()
     handler = "reads-test-#{System.unique_integer([:positive])}"
@@ -53,11 +49,11 @@ defmodule Engram.Folders.ReadsTest do
   # Everything the backfill would have done is done: the ledger is closed.
   defp verified!, do: DataMigrations.mark_done(FolderTable.name(), FolderTable.version())
 
-  # A task still on the previous release touched this attachment after the
-  # verification: it may now carry no reference, or a stale one.
+  # A task still on the previous release rewrote this attachment's path: it
+  # may now carry no reference, or a stale one, and not this release's stamp.
   defp old_release_touch!(att, ref) do
     Repo.query!(
-      "UPDATE attachments SET folder_ref_id = $2, updated_at = now() + interval '10 minutes' WHERE id = $1",
+      "UPDATE attachments SET folder_ref_id = $2, folder_ref_stamp = NULL WHERE id = $1",
       [Ecto.UUID.dump!(att.id), ref && Ecto.UUID.dump!(ref)]
     )
   end
@@ -135,11 +131,11 @@ defmodule Engram.Folders.ReadsTest do
     end
   end
 
-  describe "control: rows the backfill has not verified resolve through the old path" do
-    test "no ledger entry: NULL references are still found, by decrypting everything", ctx do
+  describe "control: rows the backfill has not stamped resolve through the old path" do
+    test "before the version 2 pass: NULL references are found by decrypting everything", ctx do
       %{user: u, vault: v} = ctx
       [a, b] = seed_attachments!(u, v)
-      Repo.query!("UPDATE attachments SET folder_ref_id = NULL")
+      Repo.query!("UPDATE attachments SET folder_ref_id = NULL, folder_ref_stamp = NULL")
       drain_decrypts()
 
       assert {:ok, %{attachments: 2}} = Folders.rename(u, v, "Target", "Renamed")
@@ -149,15 +145,89 @@ defmodule Engram.Folders.ReadsTest do
       _ = {a, b}
     end
 
-    test "a re-verify that found work reopens the ledger: back to the old path", ctx do
+    # #2413: the stamp, not the ledger or a row's age, decides what is trusted.
+    # The row's path is in Target; its reference names Other. Red before: the
+    # stamp did not exist, so the reference was trusted by age.
+    test "a reference whose stamp does not match the path is not trusted", ctx do
       %{user: u, vault: v} = ctx
       seed_attachments!(u, v)
+      att = put_att(u, v, "Target/in.png")
       verified!()
-      DataMigrations.reopen(FolderTable.name(), FolderTable.version())
+
+      Repo.query!(
+        "UPDATE attachments SET folder_ref_id = $2, folder_ref_stamp = '\\x00'::bytea WHERE id = $1",
+        [Ecto.UUID.dump!(att.id), Ecto.UUID.dump!(FolderRows.tree(u)["Other"].id)]
+      )
+
       drain_decrypts()
+      assert {:ok, %{attachments: 3}} = Folders.rename(u, v, "Target", "Renamed")
+      # The 2 trusted rows of Target + the 1 mismatched row, read by its path.
+      assert drain_decrypts() == 3
+      assert "Renamed/in.png" in live_paths(u, v)
+    end
+
+    test "control: the same wrong reference with a matching stamp is trusted", ctx do
+      %{user: u, vault: v} = ctx
+      seed_attachments!(u, v)
+      att = put_att(u, v, "Target/in.png")
+
+      Repo.query!(
+        "UPDATE attachments SET folder_ref_id = $2, folder_ref_stamp = path_nonce WHERE id = $1",
+        [Ecto.UUID.dump!(att.id), Ecto.UUID.dump!(FolderRows.tree(u)["Other"].id)]
+      )
 
       assert {:ok, %{attachments: 2}} = Folders.rename(u, v, "Target", "Renamed")
-      assert drain_decrypts() == 15
+      assert "Target/in.png" in live_paths(u, v)
+    end
+  end
+
+  # #2413: every writer of a reference stamps it (`Rows.attachment_ref/2`),
+  # so the drain's index stays empty in steady state.
+  describe "every attachment writer stamps its reference" do
+    defp stale_count do
+      %{rows: [[n]]} =
+        Repo.query!(
+          "SELECT count(*) FROM attachments WHERE deleted_at IS NULL AND folder_ref_stamp IS DISTINCT FROM path_nonce"
+        )
+
+      n
+    end
+
+    test "upload, move, folder rename, delete and restore", %{user: u, vault: v} do
+      put_att(u, v, "A/a.png")
+      put_att(u, v, "A/B/b.png")
+      put_att(u, v, "root.png")
+      assert stale_count() == 0
+
+      {:ok, _} = Attachments.move_attachment(u, v, "A/a.png", "C/a.png")
+      assert stale_count() == 0
+
+      assert {:ok, _} = Folders.rename(u, v, "A", "Z")
+      assert stale_count() == 0
+
+      op = Ecto.UUID.generate()
+      assert {:ok, _} = Folders.delete(u, v, "Z", recursive: true, op_id: op)
+      assert {:ok, %{attachments: 1}} = Folders.restore_op(u, v, op)
+      assert stale_count() == 0
+      assert "Z/B/b.png" in live_paths(u, v)
+    end
+
+    # The restore's own stamp: a row that was already stale when it was
+    # deleted (the previous release moved it, then it went to the trash) comes
+    # back re-pointed and stamped, not left for the drain.
+    test "restore stamps a row that was stale when it was deleted", %{user: u, vault: v} do
+      att = put_att(u, v, "P/a.png")
+      op = Ecto.UUID.generate()
+      assert {:ok, _} = Folders.delete(u, v, "P", recursive: true, op_id: op)
+
+      Repo.query!(
+        "UPDATE attachments SET folder_ref_id = NULL, folder_ref_stamp = NULL WHERE id = $1",
+        [Ecto.UUID.dump!(att.id)]
+      )
+
+      assert {:ok, %{attachments: 1}} = Folders.restore_op(u, v, op)
+      assert stale_count() == 0
+      assert FolderRows.ref("attachments", att.id) == FolderRows.tree(u)["P"].id
     end
   end
 

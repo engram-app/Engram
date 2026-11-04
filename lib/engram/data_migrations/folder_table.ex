@@ -4,7 +4,8 @@ defmodule Engram.DataMigrations.FolderTable do
   `notes_set_folder_ref` trigger and folder rows existed (migrations
   20261029000000..800). Every later note write resolves its own folder in
   the database, so this only catches up and heals what a previous-release
-  writer left behind (re-verifies daily).
+  writer left behind. No daily re-verify: `Engram.Bookkeeping.Drain` finds the
+  users with drift through partial indexes and runs `run_pass/1` for them.
 
   Per user, through the maintenance pool where one is configured (SaaS) and
   per tenant otherwise, like `NoteSplit` (`TenantScan`):
@@ -18,9 +19,13 @@ defmodule Engram.DataMigrations.FolderTable do
        `folder_ref_id`, so it fires none of the notes triggers
        (`notes_set_folder_ref` is `UPDATE OF folder_hmac`), and `seq` and
        `updated_at` stay put: no sync feed or cache sees a change.
-    3. Attachments have no folder hash: each live attachment's path is
-       decrypted once (a page at a time), its folder find-or-created and
-       `folder_ref_id` set by id.
+    3. Attachments have no folder hash: each live attachment whose reference
+       is not current (`folder_ref_stamp` differs from `path_nonce`, the
+       `attachments_folder_ref_stale` index) has its path decrypted once (a
+       page at a time), its folder find-or-created, and `folder_ref_id` set by
+       id with the stamp of the nonce it was decrypted under
+       (`Rows.attachment_ref/2`), compare-and-set on that nonce. Version 2
+       stamps every row written before the stamp existed.
 
   A row a writer holds is skipped (`FOR UPDATE SKIP LOCKED`), never waited
   on; the pass reports `:more` until a look finds nothing left. A
@@ -35,7 +40,9 @@ defmodule Engram.DataMigrations.FolderTable do
   here (writers own that); a marker created after a derived row of the same
   name exists makes that row `explicit` and keeps ITS id.
 
-  Readers trust a row's `folder_ref_id` only up to `verified_until/0`.
+  Readers trust an attachment's `folder_ref_id` only while its stamp matches
+  (`Rows.attachment_ref_current/0`); a note's is kept by the
+  `notes_set_folder_ref` trigger.
   """
   @behaviour Engram.DataMigration
 
@@ -57,19 +64,16 @@ defmodule Engram.DataMigrations.FolderTable do
 
   @batch 1_000
   # Wall-clock budget for one user's attachment walk. The walk is keyset-paged
-  # and restarts from the first id every pass; unchanged rows cost a decrypt and
-  # nothing else, so this is far above the largest vault (34k paths decrypt in
-  # seconds) and only bounds a pathological one.
+  # over the unstamped rows only, so this is far above the largest vault (34k
+  # paths decrypt in seconds) and only bounds a pathological one.
   @attachment_budget_ms 20 * 60 * 1000
 
   @impl true
   def name, do: "folder_table"
 
   @impl true
-  def version, do: 1
-
-  @impl true
-  def reverify?, do: true
+  # 2: stamps `attachments.folder_ref_stamp` (20261103140000) on every row.
+  def version, do: 2
 
   @impl true
   def run_pass, do: run_pass([])
@@ -78,38 +82,6 @@ defmodule Engram.DataMigrations.FolderTable do
   @spec done?() :: boolean()
   def done?, do: DataMigrations.done?(name(), version())
 
-  # Rows written this close to a verification may have been written by a task
-  # still running the previous release while the pass was reading them.
-  # Must stay above the longest a pass can run: the attachment walk budget
-  # (20 min) and the runner job's own timeout (30 min).
-  @verify_margin_s 3_600
-
-  @doc """
-  The instant up to which a row's `folder_ref_id` is vouched for, or `nil` while
-  nothing is. A reader trusts the reference of a row it has not touched since
-  then and checks every newer row against its stored path.
-
-  Why a time and not `done?/0`: the ledger only saves work (see
-  `docs/context/data-migrations-ledger.md`). After it closes, a task on the
-  previous release can still write an attachment (reference NULL) or move one
-  (reference stale), and `done?/0` stays true until the daily re-verify finds
-  them. `completed_at` is rewritten by every re-verify, and reset the moment one
-  finds work, so a row's `updated_at` against it says whether the pass has seen
-  the row's current state. The margin covers a write that landed while the pass
-  was still running (`:folder_ref_verify_margin_s` lowers it, tests).
-  """
-  @spec verified_until() :: DateTime.t() | nil
-  def verified_until do
-    case DataMigrations.completed_at(name(), version()) do
-      nil ->
-        nil
-
-      %DateTime{} = at ->
-        margin = Application.get_env(:engram, :folder_ref_verify_margin_s, @verify_margin_s)
-        DateTime.add(at, -margin, :second)
-    end
-  end
-
   @doc false
   # `batch:` overrides the batch size (tests page over a few rows), `user_ids:`
   # restricts the pass to those users (tests prove the others are untouched).
@@ -117,14 +89,9 @@ defmodule Engram.DataMigrations.FolderTable do
     batch = Keyword.get(opts, :batch, @batch)
     budget = Keyword.get(opts, :attachment_budget_ms, @attachment_budget_ms)
 
-    # Attachments untouched since the last clean verification are vouched for
-    # (`verified_until/0`), so a pass over a closed ledger decrypts only the
-    # rows written since; `nil` (never verified, or reopened) walks them all.
-    since = Keyword.get_lazy(opts, :attachments_since, &verified_until/0)
-
     stats =
       Keyword.get_lazy(opts, :user_ids, &TenantScan.user_ids/0)
-      |> Enum.map(&safe_migrate_user(&1, batch, budget, since))
+      |> Enum.map(&safe_migrate_user(&1, batch, budget))
       |> Enum.reduce(zero(), &add/2)
 
     if stats.changed + stats.blocked + stats.more == 0,
@@ -141,8 +108,8 @@ defmodule Engram.DataMigrations.FolderTable do
   # timeout) must not stop the users after it, on every pass: it is logged and
   # counted as blocked, which keeps the ledger open. Its steps are separate
   # transactions, so what it already wrote stays and the next pass resumes.
-  defp safe_migrate_user(user_id, batch, budget, since) do
-    migrate_user(user_id, batch, budget, since)
+  defp safe_migrate_user(user_id, batch, budget) do
+    migrate_user(user_id, batch, budget)
   rescue
     # Deferred, not failed: the rotation ends in minutes and the next pass
     # (the ledger stays open through `blocked`) finds the user unlocked.
@@ -174,7 +141,7 @@ defmodule Engram.DataMigrations.FolderTable do
     %{zero() | blocked: 1}
   end
 
-  defp migrate_user(user_id, batch, budget, since) do
+  defp migrate_user(user_id, batch, budget) do
     # Read the key's version BEFORE the key itself (`RotationGate.check/2`).
     dek_version = RotationGate.dek_version(user_id)
 
@@ -186,7 +153,6 @@ defmodule Engram.DataMigrations.FolderTable do
         dek_version: dek_version,
         fk: Crypto.dek_filter_key_from_bytes(dek),
         batch: batch,
-        since: since && DateTime.to_naive(since),
         deadline: System.monotonic_time(:millisecond) + budget
       }
 
@@ -597,10 +563,11 @@ defmodule Engram.DataMigrations.FolderTable do
             """
             SELECT id, vault_id, dek_version, path_ciphertext, path_nonce, folder_ref_id FROM attachments
             WHERE user_id = $1 AND deleted_at IS NULL AND ($2::uuid IS NULL OR id > $2)
-              AND ($4::timestamp IS NULL OR updated_at > $4)
+              AND folder_ref_stamp IS DISTINCT FROM path_nonce
+              AND folder_ref_stamp IS DISTINCT FROM ('\\x00'::bytea || path_nonce)
             ORDER BY id LIMIT $3
             """,
-            [dump(ctx.user_id), after_id, ctx.batch, ctx.since]
+            [dump(ctx.user_id), after_id, ctx.batch]
           )
 
         {tree, stats, wanted} =
@@ -614,12 +581,17 @@ defmodule Engram.DataMigrations.FolderTable do
                     folder -> ensure_path(repo, ctx, {tree, stats}, vault, folder)
                   end
 
-                if leaf == current,
-                  do: {tree, stats, wanted},
-                  else: {tree, stats, [{id, leaf} | wanted]}
+                # Unstamped: written even when the reference is right, to stamp it.
+                {tree, stats, [{id, leaf, nonce, nonce} | wanted]}
 
+              # Logged once, then marked unreadable at this nonce: out of the
+              # drain's index until a writer rewrites the path (a fresh nonce),
+              # and never trusted by readers (the stamp is not the nonce).
               :error ->
-                {tree, blocked(stats, "attachment path", id), wanted}
+                stamp = Rows.unreadable_attachment_stamp(nonce)
+
+                {tree, blocked(stats, "attachment path", id),
+                 [{id, current, nonce, stamp} | wanted]}
             end
           end)
 
@@ -634,21 +606,31 @@ defmodule Engram.DataMigrations.FolderTable do
       else: attachments(ctx, tree, last, stats)
   end
 
-  # By id, locked rows skipped. Returns the rows updated.
+  # By id, locked rows skipped. The set-based form of `Rows.attachment_ref/2`:
+  # `{id, folder, nonce, stamp}` is written only where the row still holds the
+  # nonce its path was read under (a path rewritten since is the writer's,
+  # stamped by it). The stamp is the nonce, or `Rows.unreadable_attachment_stamp/1`
+  # for a path that did not decrypt (its reference is left as it was).
+  # Returns the rows updated.
   defp point_attachments(_repo, []), do: 0
 
   defp point_attachments(repo, wanted) do
-    {ids, leaves} = Enum.unzip(wanted)
+    {ids, leaves, nonces, stamps} =
+      Enum.reduce(Enum.reverse(wanted), {[], [], [], []}, fn {id, leaf, nonce, stamp},
+                                                             {i, l, n, st} ->
+        {[id | i], [leaf | l], [nonce | n], [stamp | st]}
+      end)
 
     %{num_rows: count} =
       repo.query!(
         """
         WITH locked AS (SELECT id FROM attachments WHERE id = ANY($1::uuid[]) FOR UPDATE SKIP LOCKED)
-        UPDATE attachments a SET folder_ref_id = v.fid
-        FROM unnest($1::uuid[], $2::uuid[]) AS v(id, fid), locked l
-        WHERE a.id = v.id AND l.id = a.id
+        UPDATE attachments a SET folder_ref_id = v.fid, folder_ref_stamp = v.stamp
+        FROM unnest($1::uuid[], $2::uuid[], $3::bytea[], $4::bytea[]) AS v(id, fid, nonce, stamp),
+             locked l
+        WHERE a.id = v.id AND l.id = a.id AND a.path_nonce = v.nonce
         """,
-        [ids, leaves]
+        [ids, leaves, nonces, stamps]
       )
 
     count

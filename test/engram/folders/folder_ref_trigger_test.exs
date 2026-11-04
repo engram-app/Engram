@@ -110,5 +110,38 @@ defmodule Engram.Folders.FolderRefTriggerTest do
       Repo.query!("DELETE FROM folders WHERE id = $1", [dump(f)])
       assert folder_ref(note.id) == nil
     end
+
+    # #2413: folder rows are soft-deleted, so the FK never nulls a reference to
+    # one. A note restored after its folder row died re-resolves on the restore
+    # (NULL here, which the drain heals; the live row once one exists). Red
+    # before: it kept the dead row's id and nothing ever re-pointed it.
+    test "restoring a note re-resolves a reference to a soft-deleted folder row", %{
+      user: u,
+      vault: v
+    } do
+      note = write!(u, v, "Gone/A.md")
+      dead = folder_ref(note.id)
+      assert dead
+
+      Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [dump(note.id)])
+      Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [dump(dead)])
+      Repo.query!("UPDATE notes SET deleted_at = NULL WHERE id = $1", [dump(note.id)])
+      assert folder_ref(note.id) == nil
+
+      # With a live row at the path again, a later restore points at it.
+      revived = write!(u, v, "Gone/B.md") |> Map.fetch!(:id) |> folder_ref()
+      Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [dump(note.id)])
+      Repo.query!("UPDATE notes SET deleted_at = NULL WHERE id = $1", [dump(note.id)])
+      assert folder_ref(note.id) == revived
+    end
+
+    test "a delete or an ordinary save does not touch the reference", %{user: u, vault: v} do
+      note = write!(u, v, "Keep/A.md")
+      ref = folder_ref(note.id)
+      Repo.query!("UPDATE notes SET folder_ref_id = NULL WHERE id = $1", [dump(note.id)])
+      Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [dump(note.id)])
+      assert folder_ref(note.id) == nil
+      assert ref
+    end
   end
 end
