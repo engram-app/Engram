@@ -90,7 +90,7 @@ assert no tenant-table query reaches it).
 - Drift in app-kept bookkeeping is found through partial indexes by
   `BookkeepingDrain` (`12,27,42,57 * * * *`), never by re-walking a table.
 - `Oban.Reindexer` (not a crontab entry, `Engram.Jobs.reindexer/0`) rebuilds every `oban_jobs` index
-  Sundays at 10:37, a minute no cron uses (`oban_reindexer_test.exs`). Its
+  daily at 10:37, a minute no cron uses (`oban_reindexer_test.exs`). Its
   index list must match the table; adding or dropping an `oban_jobs` index
   fails that test until the list follows. Runbook and failure cleanup:
   `oban-jobs-reindex.md`.

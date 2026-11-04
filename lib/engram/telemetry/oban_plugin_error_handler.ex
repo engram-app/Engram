@@ -5,7 +5,7 @@ defmodule Engram.Telemetry.ObanPluginErrorHandler do
   metadata `error:` (or `[:oban, :plugin, :exception]`), and nothing else
   listened, so a failed run was silent.
 
-  The one that matters most: a weekly `Oban.Reindexer` run cut short leaves
+  The one that matters most: a daily `Oban.Reindexer` run cut short leaves
   an invalid `oban_jobs*_ccnew` index that every write still maintains and
   only the table owner can drop (`docs/context/oban-jobs-reindex.md`).
 

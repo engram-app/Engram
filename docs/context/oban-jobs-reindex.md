@@ -1,4 +1,4 @@
-# oban_jobs reindex: one-off runbook and the weekly Reindexer
+# oban_jobs reindex: one-off runbook and the daily Reindexer
 
 _Last verified: 2026-11-03 (prod read-only, Postgres 18.3, Oban 2.24.2)_
 
@@ -10,10 +10,10 @@ the indexes grow past the live data. Prod on 2026-11-03: 150 MB total, heap
 76 MB for 17 MB of live rows (44,894), indexes 73 MB (`oban_jobs_args_index`
 36 MB, `..._state_queue_priority_scheduled_at_id_index` 19 MB, pkey 7.5 MB).
 
-`Oban.Reindexer` (`Engram.Jobs.reindexer/0`) now rebuilds every index Sundays 10:37
+`Oban.Reindexer` (`Engram.Jobs.reindexer/0`) now rebuilds every index daily at 10:37
 UTC as `engram_app`, which holds MAINTAIN on the table (migration
 20261103200000). This runbook is the ONE manual catch-up before the first
-weekly run, and the cleanup if a run fails.
+daily run, and the cleanup if a run fails.
 
 Heap bloat is left alone: `VACUUM FULL` takes ACCESS EXCLUSIVE (stops every
 Oban insert and fetch), pg_repack is not installed, and the free space inside
@@ -81,7 +81,12 @@ SELECT c.relname FROM pg_index x JOIN pg_class c ON c.oid = x.indexrelid
 Afterwards: stop the bastion, kill the port-forward PID, write the before and
 after sizes into the vault note `50 Engineering/Oban Jobs Table Slimming 2026-11-03`.
 
-## If a run fails midway (manual or the weekly Reindexer)
+**Confirm the cadence.** For a week after the one-off REINDEX, record the
+oban_jobs index sizes once a day, after the 10:37 UTC Reindexer run (read-only
+as `engram_audit_ro`; the post-check query above). Daily sizes that stay
+roughly flat mean daily is enough; growth between runs means it is not.
+
+## If a run fails midway (manual or the daily Reindexer)
 
 A cancelled or timed-out concurrent build leaves an invalid copy named
 `<index>_ccnew` (or `_ccold` if it failed after the swap). Postgres still

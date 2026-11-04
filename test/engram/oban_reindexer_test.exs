@@ -2,7 +2,7 @@ defmodule Engram.ObanReindexerTest do
   @moduledoc """
   oban_jobs is a queue table: rows live a day, VACUUM never shrinks its
   indexes, and prod held 73 MB of index for 17 MB of rows on 2026-11-03.
-  `Oban.Reindexer` rebuilds them weekly. It runs `REINDEX INDEX
+  `Oban.Reindexer` rebuilds them daily. It runs `REINDEX INDEX
   CONCURRENTLY` on exactly the names it is given, so a stale list fails every
   run (Oban's default names an index we dropped) and a missing one bloats.
   """
@@ -28,11 +28,12 @@ defmodule Engram.ObanReindexerTest do
     assert reindexer_opts()[:timeout] >= :timer.minutes(5)
   end
 
-  # Weekly, inside the 10:00-11:15 UTC heavy window, on a minute no cron
+  # Daily (Todd 11-03: weekly is too rare for this churn), inside the
+  # 10:00-11:15 UTC heavy window, on a minute no cron
   # entry fires (same rule as ObanCronTest).
-  test "runs weekly in the off-peak window on a free minute" do
+  test "runs daily in the off-peak window on a free minute" do
     parsed = Expression.parse!(reindexer_opts()[:schedule])
-    assert MapSet.size(parsed.weekdays) == 1
+    assert MapSet.size(parsed.weekdays) == 7 and MapSet.size(parsed.days) == 31
     [hour] = MapSet.to_list(parsed.hours)
     [minute] = MapSet.to_list(parsed.minutes)
     assert (hour * 60 + minute) in (10 * 60)..(11 * 60 + 15)

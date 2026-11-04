@@ -222,7 +222,8 @@ defmodule Engram.Jobs do
     * `indexes`: every index oban_jobs has (ObanReindexerTest checks the
       migrated schema). Oban's default names `oban_jobs_meta_index`, which
       we dropped, so it would fail every run.
-    * `schedule`: Sunday 10:37 UTC, inside the 10:00-11:15 window, on a
+    * `schedule`: daily 10:37 UTC (weekly was too rare for a table that
+      turns over every day), inside the 10:00-11:15 window, on a
       minute no cron uses (ObanReindexerTest).
     * `timeout`: per statement; Oban's 15 s default is short for the GIN.
 
@@ -233,7 +234,7 @@ defmodule Engram.Jobs do
   @spec reindexer() :: keyword()
   def reindexer do
     [
-      schedule: "37 10 * * 0",
+      schedule: "37 10 * * *",
       timeout: :timer.minutes(10),
       indexes: ~w(
         oban_jobs_pkey
