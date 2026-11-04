@@ -278,13 +278,19 @@ defmodule Engram.Notes.LineageAudit do
   defp targets(opts) do
     repo = Repo.maintenance()
 
+    # The snapshot as every read sees it (`NoteBody.null?/1`).
+    has_state =
+      dynamic(
+        [n],
+        not (^NoteBody.null?(:crdt_state_ciphertext)) or
+          exists(from(l in CrdtUpdateLog, where: l.note_id == parent_as(:note).id))
+      )
+
     query =
       from(n in Note,
         as: :note,
-        where:
-          n.kind == "note" and is_nil(n.deleted_at) and
-            (not is_nil(n.crdt_state_ciphertext) or
-               exists(from(l in CrdtUpdateLog, where: l.note_id == parent_as(:note).id))),
+        where: n.kind == "note" and is_nil(n.deleted_at),
+        where: ^has_state,
         order_by: n.id,
         select: {n.user_id, n.vault_id, n.id}
       )

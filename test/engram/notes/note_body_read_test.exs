@@ -100,6 +100,18 @@ defmodule Engram.Notes.NoteBodyReadTest do
                Engram.Notes.LineageAudit.scan_note(ctx.user, ctx.vault, ctx.note.id)
     end
 
+    test "CRDT state: the lineage audit targets a note by its body row", ctx do
+      # A NULL notes copy and no tail: only the body row says it has state.
+      raw!("DELETE FROM crdt_update_log WHERE note_id = $1", ctx.note)
+
+      raw!(
+        "UPDATE notes SET crdt_state_ciphertext = NULL, crdt_state_nonce = NULL WHERE id = $1",
+        ctx.note
+      )
+
+      assert {:ok, %{scanned: 1}} = Engram.Notes.LineageAudit.run(user_id: ctx.user.id)
+    end
+
     test "the catch-up page serves the body row", ctx do
       corrupt_notes_copy!(ctx.note, "content_ciphertext")
 
