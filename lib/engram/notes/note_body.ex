@@ -7,7 +7,7 @@ defmodule Engram.Notes.NoteBody do
   body columns calls after its `notes` write, in the same transaction. R8
   (stop storing every body twice) runs in three releases: N added `sync!/3`
   beside the `notes_sync_body` trigger, N+1 dropped the trigger
-  (20261103120000), so a raw `notes` write that skips `sync!/3` no longer
+  (20261104000000), so a raw `notes` write that skips `sync!/3` no longer
   reaches this table; N+2 stops writing the `notes` body columns. Order
   matters: nulling the `notes` columns under a live trigger would copy the
   NULLs here, so N+2 must refuse to run while the trigger exists.

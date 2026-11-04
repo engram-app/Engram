@@ -2,7 +2,7 @@ defmodule Engram.Notes.NoteBodyWriteTest do
   @moduledoc """
   R8: the app writes `note_bodies` itself (`NoteBody.sync!/3`), in the
   transaction that writes the `notes` body columns. Release N+1 dropped the
-  `notes_sync_body` trigger (20261103120000), so `sync!/3` is the only
+  `notes_sync_body` trigger (20261104000000), so `sync!/3` is the only
   writer.
 
     * "the trigger is gone": a raw `notes` write that skips `sync!/3`
