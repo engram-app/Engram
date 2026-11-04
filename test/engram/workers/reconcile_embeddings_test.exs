@@ -186,6 +186,29 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       refute plan =~ "Seq Scan on notes", plan
     end
 
+    # The fleet sweep leaves an unchanged budget park to WakeBudgetParked
+    # (`notes_reconcile_due_v2`), but a restore's version term must still
+    # rebuild one (#2197): its bucket wait does not fix an old index layout.
+    # Red with the park filter applied to the restore's vault-scoped sweep.
+    test "a restore's version re-check still rebuilds an unchanged budget park" do
+      user = insert(:user)
+
+      parked =
+        current_note(user,
+          chunker_version: nil,
+          keyword_version: nil,
+          embed_budget_parked: true,
+          embed_budget_parked_at: DateTime.utc_now(),
+          embed_retry_after: EmbedNote.parked_until_edited()
+        )
+
+      :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
+      {:ok, _} = ReconcileEmbeddings.version_check(parked.vault_id)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => parked.id})
+    end
+
     # Red on 5be4a3373: the request rode in job args, and a later re-verify
     # insert (the daily cron, a chain hop) replaced them before it ran.
     test "a later re-verify replacing the queued job keeps the version check" do
