@@ -23,8 +23,10 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
 
   alias Engram.DataMigrations
   alias Engram.DataMigrations.IndexVersions
+  alias Engram.Notes.Note
   alias Engram.QueryPlan
   alias Engram.QueryRecorder
+  alias Engram.Workers.EmbedNote
   alias Engram.Workers.ReconcileEmbeddings
 
   # Indexed notes beside the one due: enough that scanning the vault costs
@@ -32,6 +34,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
   @indexed 200
   @small_vaults 400
   @done :crypto.hash(:sha256, "# Test note content") |> Base.encode16(case: :lower)
+  @other_tenants 50
 
   setup do
     DataMigrations.reset_cache()
@@ -206,5 +209,107 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
     |> Enum.drop(1)
     |> Enum.take_while(&String.starts_with?(&1, "    "))
     |> Enum.join("\n")
+  end
+
+  # A Free note parked on the embed bucket waits for `WakeBudgetParked`, at
+  # the time its bucket can pay. In `notes_reconcile_due` it still sat in the
+  # backlog predicate (no dense vectors), so every sweep read and rejected it
+  # (prod 2026-11-02: 1,662 entries, all parked). `notes_reconcile_due_v2`
+  # leaves out a parked note whose content is unchanged, so a sweep reads the
+  # notes that can be due, not every parked one. On the 7th run, custom and
+  # generic plan alike.
+  test "the sweep reads notes_reconcile_due_v2, which holds no unchanged park" do
+    user = insert(:user)
+    vault = insert(:vault, user: user)
+    # An empty bucket: the sweep's backstop wake leaves the parks parked.
+    insert(:user_limit_override, user: user, key: "embed_token_bucket", value: %{"v" => 0})
+
+    insert_list(@indexed, :note,
+      user: user,
+      vault: vault,
+      embed_hash: @done,
+      dense_indexed_hash: @done
+    )
+
+    parked =
+      insert_list(@indexed, :note,
+        user: user,
+        vault: vault,
+        embed_hash: @done,
+        dense_indexed_hash: nil,
+        embed_budget_parked: true,
+        embed_budget_parked_at: DateTime.utc_now(),
+        embed_retry_after: EmbedNote.parked_until_edited()
+      )
+
+    due = insert(:note, user: user, vault: vault, embed_hash: nil)
+
+    # Other tenants' indexed notes: a table of many vaults, as prod's is.
+    for _ <- 1..@other_tenants do
+      other = insert(:user)
+
+      insert_list(20, :note,
+        user: other,
+        vault: insert(:vault, user: other),
+        embed_hash: @done,
+        dense_indexed_hash: @done
+      )
+    end
+
+    Repo.query!("ANALYZE notes")
+    Repo.query!("ANALYZE vaults")
+
+    tick = DateTime.new!(Date.utc_today(), ~T[03:57:00])
+
+    %{custom: custom, generic: generic} =
+      QueryPlan.after_runs(
+        fn -> assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick) end,
+        ~r/^WITH "reconcile_eligible"/
+      )
+
+    assert_enqueued(worker: EmbedNote, args: %{"note_id" => due.id})
+
+    for plan <- [custom, generic] do
+      assert plan =~ "notes_reconcile_due_v2", plan
+      refute plan =~ ~r/notes_reconcile_due\b(?!_v2)/, plan
+    end
+
+    # The parks were never stamped: no sweep picked them.
+    ids = Enum.map(parked, & &1.id)
+
+    assert [EmbedNote.parked_until_edited()] ==
+             Repo.all(
+               from(n in Note,
+                 where: n.id in ^ids,
+                 distinct: true,
+                 select: n.embed_retry_after
+               ),
+               skip_tenant_check: true
+             )
+
+    refute_enqueued(worker: EmbedNote, args: %{"note_id" => hd(ids)})
+  end
+
+  # The index leaves a park out only while its content is unchanged: an
+  # edited one stays in it, so a sweep still finds it when the edit's own
+  # job was lost.
+  test "an edited park stays in notes_reconcile_due_v2 and is swept" do
+    user = insert(:user)
+    vault = insert(:vault, user: user)
+    insert(:user_limit_override, user: user, key: "embed_token_bucket", value: %{"v" => 0})
+
+    edited =
+      insert(:note,
+        user: user,
+        vault: vault,
+        embed_hash: "old",
+        dense_indexed_hash: nil,
+        embed_budget_parked: true,
+        embed_budget_parked_at: DateTime.utc_now(),
+        embed_retry_after: EmbedNote.parked_until_edited()
+      )
+
+    assert :ok = perform_job(ReconcileEmbeddings, %{})
+    assert_enqueued(worker: EmbedNote, args: %{"note_id" => edited.id})
   end
 end

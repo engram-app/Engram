@@ -313,6 +313,24 @@ defmodule EngramWeb.SyncControllerTest do
       assert Enum.any?(body["attachments"], &(&1["path"] == att_path))
     end
 
+    # A note with no body row (before or during the R8 split) gets the head
+    # stored on notes (`NoteBody.head_off_notes_scan/0`), not a null.
+    test "a note with no body row carries its notes-side crdt_head", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "NoBody.md", content: "# x", mtime: 1_000.0})
+
+      [%{"id" => id}] =
+        conn |> get("/api/sync/manifest") |> json_response(200) |> Map.get("notes")
+
+      head = String.duplicate("h", 43)
+      raw = Ecto.UUID.dump!(id)
+
+      Engram.Repo.query!("UPDATE notes SET crdt_head = $2 WHERE id = $1", [raw, head])
+      Engram.Repo.query!("DELETE FROM note_bodies WHERE note_id = $1", [raw])
+
+      assert [%{"id" => ^id, "crdt_head" => ^head}] =
+               conn |> get("/api/sync/manifest") |> json_response(200) |> Map.get("notes")
+    end
+
     test "includes attachments with path and content_hash", %{conn: conn} do
       post(conn, "/api/attachments", %{
         path: "photos/img.png",

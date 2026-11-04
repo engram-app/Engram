@@ -27,6 +27,7 @@ defmodule Engram.Notes.FieldCatalog do
 
   import Ecto.Query
 
+  alias Engram.Backfill.IdWindows
   alias Engram.Cache
   alias Engram.Crypto
   alias Engram.Logger.DecryptFailure
@@ -251,9 +252,11 @@ defmodule Engram.Notes.FieldCatalog do
   defp value_texts(user, vault, values, fk) do
     ids = values |> Enum.map(&List.last/1) |> Enum.uniq() |> Enum.map(&Ecto.UUID.load!/1)
 
+    # Each sample by primary key, never a walk of the vault.
     query =
-      from(n in Notes.scoped_live(user, vault), where: n.id in ^ids)
+      Notes.scoped_live(user, vault)
       |> NoteBody.select_note(@fields)
+      |> IdWindows.by_id(ids)
 
     notes = Repo.with_tenant!(user.id, fn -> Repo.all(query) end)
 

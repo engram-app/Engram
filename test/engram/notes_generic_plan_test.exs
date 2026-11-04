@@ -10,9 +10,10 @@ defmodule Engram.NotesGenericPlanTest do
   # buffers). `Engram.Notes.Keys.lookup?/1` + `Engram.Repo.prepare_query/3`
   # run every such lookup unnamed, so each call gets a custom plan.
   #
-  # Each test runs the real call 7 times on the sandbox connection, then reads
-  # `pg_prepared_statements.generic_plans` for its SQL (a named statement that
-  # went generic) and the custom plan for the recorded values.
+  # Each test runs the real call 7 times on the sandbox connection
+  # (`QueryPlan.after_runs/3`, `no_generic: true`): no named statement with
+  # its SQL may go generic, and its custom plan for the recorded values must
+  # read the key index.
   #
   # The tenancy shape is set with `ALTER COLUMN ... SET (n_distinct = 40)`:
   # the planner sees 40 tenants, as prod sees hundreds, so a generic
@@ -24,7 +25,7 @@ defmodule Engram.NotesGenericPlanTest do
   alias Engram.DataMigrations
   alias Engram.Links
   alias Engram.Notes
-  alias Engram.QueryRecorder
+  alias Engram.QueryPlan
   alias Engram.Repo
 
   setup do
@@ -63,46 +64,10 @@ defmodule Engram.NotesGenericPlanTest do
     %{user: user, vault: vault}
   end
 
-  # Runs `fun` 7 times (past the 5 custom plans Postgres tries first), then
-  # returns the plan the matching statement ran on: fails if any named
-  # statement with its SQL went generic, else the custom plan for its values.
-  defp plan_of(fun, pattern) do
-    %{sql: sql, params: params} =
-      for(_ <- 1..7, do: record(fun, pattern)) |> List.last()
-
-    %{rows: [[generic]]} =
-      Repo.query!(
-        "SELECT coalesce(sum(generic_plans), 0)::int FROM pg_prepared_statements WHERE statement = $1",
-        [sql]
-      )
-
-    assert generic == 0, "ran on a generic plan #{generic} times:\n#{sql}"
-
-    Repo.query!("EXPLAIN " <> inline(sql, params)).rows |> List.flatten() |> Enum.join("\n")
-  end
-
-  defp record(fun, pattern) do
-    {_, queries} = QueryRecorder.record(fun)
-    me = self()
-    [q | _] = for %{pid: ^me, sql: sql} = q <- queries, sql =~ pattern, do: q
-    q
-  end
-
-  # The statement with its recorded values in place of $n (highest first, so
-  # $1 does not eat $10): a one-off EXPLAIN plans it as a custom plan would.
-  defp inline(sql, params) do
-    params
-    |> Enum.with_index(1)
-    |> Enum.reverse()
-    |> Enum.reduce(sql, fn {v, i}, acc -> String.replace(acc, "$#{i}", literal(v)) end)
-  end
-
-  defp literal(list) when is_list(list),
-    do: "ARRAY[" <> Enum.map_join(list, ", ", &literal/1) <> "]"
-
-  defp literal(<<_::binary-16>> = uuid), do: "'#{Ecto.UUID.load!(uuid)}'::uuid"
-  defp literal(v) when is_integer(v), do: Integer.to_string(v)
-  defp literal(v) when is_binary(v), do: "'" <> String.replace(v, "'", "''") <> "'"
+  # The custom plan of the statement `fun` sends, after 7 runs in which no
+  # named statement with its SQL went generic.
+  defp plan_of(fun, pattern),
+    do: QueryPlan.after_runs(fun, pattern, no_generic: true).custom
 
   test "note_exists?/3 (note_by_path_query) reads notes_path_live", %{user: u, vault: v} do
     plan = plan_of(fn -> assert Notes.note_exists?(u, v, "A.md") end, ~r/"path_id" = \$/)

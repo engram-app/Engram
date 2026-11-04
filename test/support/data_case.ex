@@ -115,7 +115,12 @@ defmodule Engram.DataCase do
 
   @doc """
   Empties the request-lookup caches (user, api_key, subscription, vaults,
-  onboarding actions, note counts).
+  onboarding actions, note counts, and `:note_split`, the ledger read behind
+  `Engram.Notes.Keys.ids?/0`).
+
+  `:note_split` lives 60 s. Left out, an entry another test warmed could
+  expire between a budget test's warm-up and its measured call, and the
+  measured call paid one `data_migrations` read (CI: append 18 vs 17).
 
   They are node-global ETS tables, so this clears EVERY test's entries. A test
   that counts queries or with_tenant blocks over a request must therefore run
@@ -130,7 +135,8 @@ defmodule Engram.DataCase do
           :subscription,
           :vaults,
           :onboarding_actions,
-          :note_counts
+          :note_counts,
+          :note_split
         ],
         do: Engram.Cache.clear_local(c)
 

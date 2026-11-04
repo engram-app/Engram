@@ -234,7 +234,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
         handler_id,
         [:engram, :repo, :query],
         fn _event, _measurements, %{query: q}, _config ->
-          if self() == test_pid and q =~ ~s("kind" = 'note') and q =~ "ANY(" and
+          if self() == test_pid and q =~ ~s("kind" = 'note') and (q =~ "ANY(" or q =~ "unnest(") and
                Process.put(:stale_snapshot_injected, true) == nil do
             {:ok, _} = Notes.rename_note(ctx.user, ctx.vault, "P/a.md", "Q/a.md", index: :skip)
             send(test_pid, {:intruder, note(ctx, "P/a.md")})
@@ -971,7 +971,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
         {__MODULE__, ref},
         [:engram, :repo, :query],
         fn _event, _measure, meta, _cfg ->
-          if meta[:source] == "notes", do: send(test_pid, {ref, meta[:query]})
+          if notes_read?(meta), do: send(test_pid, {ref, meta[:query]})
         end,
         nil
       )
@@ -1058,7 +1058,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
         {__MODULE__, ref},
         [:engram, :repo, :query],
         fn _event, _measure, meta, _cfg ->
-          if meta[:source] == "notes", do: send(test_pid, {ref, meta[:query]})
+          if notes_read?(meta), do: send(test_pid, {ref, meta[:query]})
         end,
         nil
       )
@@ -1074,7 +1074,10 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       assert length(queries) == 1,
              "expected one bulk notes read for 12 entries, got #{length(queries)}"
 
-      refute Enum.any?(queries, &String.contains?(&1, "content_ciphertext")),
+      # The outer select list only: the primary-key probe
+      # (`IdWindows.by_id/2`) is a `SELECT *` subquery, whose unused content
+      # column passes as a TOAST pointer and is never detoasted.
+      refute Enum.any?(queries, &(selected(&1) =~ "content_ciphertext")),
              "projection only needs the path; it must not fetch note content"
 
       for n <- notes, do: assert(path_of(ctx, n.id) == n.path)
@@ -1083,6 +1086,17 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
 
   # Not a zero timeout: a handler's send/2 can still be in flight, and for a
   # budget assertion an undercount is a false pass.
+  # A statement reading `notes`: as its source, or probed per id behind an
+  # `unnest` of the ids (`IdWindows.by_id/2`, whose source is the fragment).
+  defp notes_read?(%{source: "notes"}), do: true
+
+  defp notes_read?(%{query: q}) when is_binary(q),
+    do: q =~ "INNER JOIN LATERAL" and q =~ ~s(FROM "notes")
+
+  defp notes_read?(_meta), do: false
+
+  defp selected(sql), do: sql |> String.split(" FROM ", parts: 2) |> hd()
+
   defp drain_queries(ref, acc) do
     receive do
       {^ref, query} -> drain_queries(ref, [query | acc])

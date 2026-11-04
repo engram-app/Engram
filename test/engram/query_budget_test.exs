@@ -83,9 +83,12 @@ defmodule Engram.QueryBudgetTest do
     # Every 60 s cache cold: the warm 5, the ONE grant query
     # (`OAuth.load_grant/1`: liveness, levels, owner, granted_at), the
     # subscription block (4), the onboarding gate's users row, the vault list
-    # block (4), and the `mcp_tool_calls_per_min` override lookup (1, the
-    # OAuth tools/call budget, 2026-10-24; warm it is the override cache).
-    "mcp get_notes oauth cold" => 16,
+    # block (4), the `mcp_tool_calls_per_min` override lookup (1, the
+    # OAuth tools/call budget, 2026-10-24; warm it is the override cache),
+    # and the `note_split` ledger read behind `Notes.Keys.ids?/0` (1, a 60 s
+    # cache too; the reset missed it until 2026-11-02, so a cold run paid it
+    # only when the entry happened to have expired).
+    "mcp get_notes oauth cold" => 17,
     # Each kept query required:
     #  1 rotation lock: a write reads it fresh from the DB (RotationGate).
     #  2, 3, 11 begin / tenant_enter / commit: the one tenant txn (RLS).

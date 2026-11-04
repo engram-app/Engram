@@ -345,6 +345,21 @@ defmodule Engram.Notes.NoteBody do
   @spec fields([atom()]) :: %{atom() => Ecto.Query.dynamic_expr()}
   def fields(fields), do: Map.new(fields, &{&1, field_expr(&1)})
 
+  @doc """
+  `crdt_head` as `fields([:crdt_head])` reads it, for a whole-vault read
+  whose `notes` side must stay an index-only scan (the sync manifest on
+  `notes_manifest`, which does not carry the head: head stores would lose
+  HOT on `notes`). The no-body fallback reads `notes.crdt_head` by a per-row
+  primary-key subquery that only a row without a body runs, instead of as a
+  column of the outer scan. EngramWeb.SyncManifestPlanTest.
+  """
+  @spec head_off_notes_scan() :: Ecto.Query.dynamic_expr()
+  def head_off_notes_scan,
+    do:
+      head_expr(
+        dynamic([n], fragment("(SELECT h.crdt_head FROM notes AS h WHERE h.id = ?)", n.id))
+      )
+
   # The ciphertext starts at byte 14 in both merged formats: a format 1
   # nonce field is 13 bytes (leading 1), a format 0 nonce (12 bytes) sits
   # behind a 0 byte. `substring ... FOR n` reads a slice of an EXTERNAL
@@ -355,16 +370,19 @@ defmodule Engram.Notes.NoteBody do
   defp field_expr(:crdt_state_ciphertext), do: ct_expr(:crdt_ct, :crdt_state_ciphertext)
   defp field_expr(:crdt_state_nonce), do: nonce_expr(:crdt_ct, :crdt_state_nonce)
 
-  # The 32-byte digest as the url-safe, unpadded base64 `notes.crdt_head`
-  # holds (a 32-byte base64 is 44 chars, one `=`, no line break).
-  defp field_expr(:crdt_head) do
+  defp field_expr(:crdt_head), do: head_expr(dynamic([n], n.crdt_head))
+
+  # The body's 32-byte digest as the url-safe, unpadded base64
+  # `notes.crdt_head` holds (a 32-byte base64 is 44 chars, one `=`, no line
+  # break); `fallback` (the notes-side head) for a note with no body row.
+  defp head_expr(fallback) do
     dynamic(
       [n, note_body: b],
       type(
         fragment(
           "CASE WHEN ? IS NULL THEN ? ELSE rtrim(translate(encode(?, 'base64'), '+/', '-_'), '=') END",
           b.note_id,
-          n.crdt_head,
+          ^fallback,
           b.crdt_head
         ),
         :string

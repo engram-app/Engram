@@ -37,6 +37,8 @@ defmodule Engram.QueryPlan do
   holding only this test's rows, in key order, as a table written in uuidv7
   order is in prod. CLUSTER holds an ACCESS EXCLUSIVE lock to the end of
   the test: use it from `async: false` tests only.
+
+  `seqscan: true` keeps seq scans on, to ask which plan Postgres picks.
   """
   @spec generic_plan(String.t(), keyword()) :: String.t()
   def generic_plan(sql, opts \\ []) do
@@ -60,7 +62,9 @@ defmodule Engram.QueryPlan do
         end
 
         Repo.query!("SET LOCAL plan_cache_mode = force_generic_plan")
-        Repo.query!("SET LOCAL enable_seqscan = off")
+
+        unless Keyword.get(opts, :seqscan, false),
+          do: Repo.query!("SET LOCAL enable_seqscan = off")
 
         unless Keyword.get(opts, :bitmapscan, true),
           do: Repo.query!("SET LOCAL enable_bitmapscan = off")
@@ -78,6 +82,54 @@ defmodule Engram.QueryPlan do
 
     text
   end
+
+  @doc """
+  The custom and the generic plan of the statement `fun` sends: runs `fun`
+  `runs:` times (default 7, past the 5 custom plans Postgres tries first),
+  takes the last statement of this process whose SQL matches `pattern`, and
+  returns `%{custom:, generic:}`.
+
+    * `custom`: a one-off parameterised EXPLAIN with the recorded values,
+      the plan each of the first 5 executions of a prepared statement gets;
+    * `generic`: `generic_plan/2` (a fresh `PREPARE` under
+      `force_generic_plan`, seq scans left on), the plan with no values a
+      6th or later execution may switch to.
+
+  Neither reads the prepared statement the runs built: asserting BOTH plans
+  proves the statement reads the right index whichever plan Postgres picks
+  after the 5th execution, not which one it picked. `no_generic: true` also
+  asks that: it fails if any named statement with this SQL ran on a generic
+  plan (`pg_prepared_statements.generic_plans`), for a statement the app
+  must run unnamed (`Engram.Notes.Keys.lookup?/1`), where only the 7 runs
+  can show it.
+  """
+  @spec after_runs((-> term()), Regex.t(), keyword()) :: %{
+          custom: String.t(),
+          generic: String.t()
+        }
+  def after_runs(fun, pattern, opts \\ []) do
+    %{sql: sql, params: params} =
+      Enum.reduce(1..Keyword.get(opts, :runs, 7), nil, fn _, _ ->
+        {_, queries} = Engram.QueryRecorder.record(fun)
+        me = self()
+        queries |> Enum.filter(&(&1.pid == me and &1.sql =~ pattern)) |> List.last()
+      end) || flunk("no statement matched #{inspect(pattern)}")
+
+    if Keyword.get(opts, :no_generic, false) do
+      %{rows: [[n]]} =
+        Repo.query!(
+          "SELECT coalesce(sum(generic_plans), 0)::int FROM pg_prepared_statements WHERE statement = $1",
+          [sql]
+        )
+
+      if n > 0, do: flunk("ran on a generic plan #{n} times:\n#{sql}")
+    end
+
+    custom = Repo.query!("EXPLAIN " <> sql, params).rows |> List.flatten() |> Enum.join("\n")
+    %{custom: custom, generic: generic_plan(sql, seqscan: true)}
+  end
+
+  defp flunk(message), do: raise(ExUnit.AssertionError, message: message)
 
   @doc """
   The statements the calling process recorded whose SQL reads `table`, in

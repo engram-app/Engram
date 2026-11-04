@@ -7,6 +7,7 @@ defmodule Engram.Notes do
   import Ecto.Query
   import Engram.Pager, only: [keyset_gt: 4]
 
+  alias Engram.Backfill.IdWindows
   alias Engram.Batch
   alias Engram.Billing
   alias Engram.Crypto
@@ -3798,11 +3799,15 @@ defmodule Engram.Notes do
         if map_size(by_uuid) == 0 do
           []
         else
+          # Each id by primary key (`IdWindows.by_id/2`): as `id = ANY(ids)`
+          # beside the vault filter the planner walked the whole vault on a
+          # vault-leading index once the list held more than a few ids.
           query =
             from(n in scoped_live(user, vault),
-              where: n.id in ^Map.keys(by_uuid) and n.kind == "note",
+              where: n.kind == "note",
               select: struct(n, @note_meta_fields)
             )
+            |> IdWindows.by_id(Map.keys(by_uuid))
 
           Repo.with_tenant!(user.id, fn -> Repo.all(query) end)
         end
