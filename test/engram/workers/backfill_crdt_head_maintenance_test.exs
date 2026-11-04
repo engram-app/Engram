@@ -43,7 +43,10 @@ defmodule Engram.Workers.BackfillCrdtHeadMaintenanceTest do
             email = "#{@email_prefix}#{i}-#{System.unique_integer([:positive])}@t.co"
             user = insert(:user, email: email)
             vault = insert(:vault, user: user)
-            insert(:note, user: user, vault: vault, crdt_head: nil)
+            note = insert(:note, user: user, vault: vault, crdt_head: nil)
+            # The factory inserts no body row (nothing copies one any more),
+            # and discovery reads `note_bodies`.
+            Engram.Fixtures.mirror_body!(note.id)
             {user.id, vault.id}
           end
         end)

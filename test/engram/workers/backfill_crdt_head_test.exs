@@ -242,4 +242,59 @@ defmodule Engram.Workers.BackfillCrdtHeadTest do
       )
     end
   end
+
+  # R8 N+1: the manifest serves the body row's head (`NoteBody`), so warming
+  # must judge "NULL" by the body row too, not by the `notes` copy. A split
+  # brain (a raw write to one side, which nothing copies) tells them apart.
+  describe "judges the head by the body row" do
+    setup %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "H.md", content: "# H", mtime: 1.0}, actor: "api")
+
+      :ok = warm!(user, vault)
+      assert is_binary(notes_head(note)) and is_binary(body_head(note))
+      %{note: note}
+    end
+
+    test "enqueue_all queues a note whose body head is NULL", ctx do
+      raw!("UPDATE note_bodies SET crdt_head = NULL WHERE note_id = $1", ctx.note)
+
+      BackfillCrdtHead.enqueue_all()
+
+      assert_enqueued(
+        worker: BackfillCrdtHead,
+        args: %{"user_id" => ctx.user.id, "vault_id" => ctx.vault.id}
+      )
+    end
+
+    test "the batch skips a note whose body head is set", ctx do
+      raw!("UPDATE notes SET crdt_head = NULL WHERE id = $1", ctx.note)
+
+      :ok = warm!(ctx.user, ctx.vault)
+
+      # Not rebuilt: the notes copy stays as the raw write left it.
+      assert is_nil(notes_head(ctx.note))
+    end
+  end
+
+  defp warm!(user, vault) do
+    perform_job(BackfillCrdtHead, %{
+      "user_id" => user.id,
+      "vault_id" => vault.id,
+      "cursor" => "00000000-0000-0000-0000-000000000000"
+    })
+  end
+
+  defp raw!(sql, note), do: Engram.Repo.query!(sql, [Ecto.UUID.dump!(note.id)])
+
+  defp notes_head(note),
+    do: one!("SELECT crdt_head FROM notes WHERE id = $1", note)
+
+  defp body_head(note),
+    do: one!("SELECT crdt_head FROM note_bodies WHERE note_id = $1", note)
+
+  defp one!(sql, note) do
+    %{rows: [[v]]} = raw!(sql, note)
+    v
+  end
 end

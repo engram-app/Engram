@@ -356,6 +356,41 @@ defmodule Engram.Notes.NoteBody do
         dynamic([n], fragment("(SELECT h.crdt_head FROM notes AS h WHERE h.id = ?)", n.id))
       )
 
+  @doc """
+  True when the note's `:crdt_head` or `:crdt_state_ciphertext` is NULL as
+  every read sees it: from its body row, else (no body row, or one owned by
+  another user, as `join/1` treats it) from `notes`. For a predicate on a
+  query whose first binding is a `Note`. The body row is read by a per-row
+  primary-key subquery, not a join, so a query that reads its notes by key
+  (`IdWindows.by_id/2`) keeps that plan (#2403). NULL-ness only: nothing is
+  de-TOASTed. Not for a write fence in a `notes` UPDATE: after a row-lock
+  wait the subquery still sees the pre-wait body (see the moduledoc).
+  """
+  @spec null?(:crdt_head | :crdt_state_ciphertext) :: Ecto.Query.dynamic_expr()
+  def null?(:crdt_head) do
+    dynamic(
+      [n],
+      fragment(
+        "coalesce((SELECT b.crdt_head IS NULL FROM note_bodies AS b WHERE b.note_id = ? AND b.user_id = ?), ? IS NULL)",
+        n.id,
+        n.user_id,
+        n.crdt_head
+      )
+    )
+  end
+
+  def null?(:crdt_state_ciphertext) do
+    dynamic(
+      [n],
+      fragment(
+        "coalesce((SELECT b.crdt_ct IS NULL FROM note_bodies AS b WHERE b.note_id = ? AND b.user_id = ?), ? IS NULL)",
+        n.id,
+        n.user_id,
+        n.crdt_state_ciphertext
+      )
+    )
+  end
+
   # The ciphertext starts at byte 14 in both merged formats: a format 1
   # nonce field is 13 bytes (leading 1), a format 0 nonce (12 bytes) sits
   # behind a 0 byte. `substring ... FOR n` reads a slice of an EXTERNAL

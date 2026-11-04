@@ -1,6 +1,6 @@
 defmodule Engram.Workers.WarmCrdtHeads do
   @moduledoc """
-  Hourly cron: re-warm NULL `notes.crdt_head` values. Every CRDT persist
+  Hourly cron: re-warm NULL note heads (`crdt_head`, from the body row). Every CRDT persist
   NULLs the head (`CrdtPersistence.update_v1/4`, plus a trigger on
   `crdt_state` writes), and only `BackfillCrdtHead` fills it back in, so
   without this the cold-reconcile head fast path degrades as notes are

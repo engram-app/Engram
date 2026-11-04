@@ -30,11 +30,13 @@ defmodule Engram.Workers.BackfillCrdtHeadIndexTest do
       {:ok, _} = Notes.upsert_note(u, v, %{"path" => "w#{i}.md", "content" => "w"}, actor: "api")
     end
 
-    head = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-    Repo.query!("UPDATE notes SET crdt_head = $1 WHERE path_ciphertext IS NOT NULL", [head])
+    # Heads are read from the body row (raw writes reach only the table
+    # they name: the copy trigger is gone).
+    Repo.query!("UPDATE note_bodies SET crdt_head = $1", [:crypto.strong_rand_bytes(32)])
 
     Repo.query!(
-      "UPDATE notes SET crdt_head = NULL WHERE id = (SELECT id FROM notes ORDER BY id LIMIT 1)"
+      "UPDATE note_bodies SET crdt_head = NULL " <>
+        "WHERE note_id = (SELECT note_id FROM note_bodies ORDER BY note_id LIMIT 1)"
     )
 
     {count, queries} = QueryRecorder.record(fn -> BackfillCrdtHead.enqueue_all() end)
@@ -50,9 +52,7 @@ defmodule Engram.Workers.BackfillCrdtHeadIndexTest do
   end
 
   test "a note whose head is set is not a candidate", %{user: u} do
-    Repo.query!("UPDATE notes SET crdt_head = $1", [
-      Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-    ])
+    Repo.query!("UPDATE note_bodies SET crdt_head = $1", [:crypto.strong_rand_bytes(32)])
 
     assert BackfillCrdtHead.enqueue_all() == 0
     _ = u
@@ -92,13 +92,16 @@ defmodule Engram.Workers.BackfillCrdtHeadIndexTest do
           {:ok, _} =
             Notes.upsert_note(u, v, %{"path" => "k#{i}.md", "content" => "k"}, actor: "api")
 
-    head = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-    Repo.query!("UPDATE notes SET crdt_head = $1", [head])
+    Repo.query!("UPDATE note_bodies SET crdt_head = $1", [:crypto.strong_rand_bytes(32)])
     assert BackfillCrdtHead.enqueue_all() == 0
 
     # A write takes a seq (the sync change feed); its head is then cleared.
     {:ok, n} = Notes.upsert_note(u, v, %{"path" => "k5.md", "content" => "edited"}, actor: "api")
-    Repo.query!("UPDATE notes SET crdt_head = NULL WHERE id = $1", [Ecto.UUID.dump!(n.id)])
+
+    Repo.query!("UPDATE note_bodies SET crdt_head = NULL WHERE note_id = $1", [
+      Ecto.UUID.dump!(n.id)
+    ])
+
     assert BackfillCrdtHead.enqueue_all() == 1
   end
 end
