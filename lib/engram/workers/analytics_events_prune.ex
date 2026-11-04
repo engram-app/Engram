@@ -54,8 +54,11 @@ defmodule Engram.Workers.AnalyticsEventsPrune do
     end)
   end
 
-  defp delete_batch(cutoff, batch) do
-    ids = from(e in Event, where: e.inserted_at < ^cutoff, select: e.id, limit: ^batch)
+  # The LIMIT stays a literal (`@batch`, not the loop's argument): a bound
+  # LIMIT flips the cron's generic plan off the BRIN (`Engram.Maintenance.Prune`,
+  # PrunePlansTest).
+  defp delete_batch(cutoff, _batch) do
+    ids = from(e in Event, where: e.inserted_at < ^cutoff, select: e.id, limit: @batch)
     {n, _} = Repo.delete_all(from(e in Event, where: e.id in subquery(ids)))
     n
   end

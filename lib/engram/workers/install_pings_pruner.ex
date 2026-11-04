@@ -33,7 +33,9 @@ defmodule Engram.Workers.InstallPingsPruner do
     {:ok, n}
   end
 
-  defp delete_batch(cutoff, batch) do
+  # The LIMIT stays a literal (`@batch`, not the loop's argument): see
+  # `Engram.Maintenance.Prune`. PrunePlansTest pins it.
+  defp delete_batch(cutoff, _batch) do
     {n, _} =
       Repo.delete_all(
         from(p in "install_pings",
@@ -42,7 +44,7 @@ defmodule Engram.Workers.InstallPingsPruner do
               from(s in "install_pings",
                 where: s.updated_at < ^cutoff,
                 select: s.id,
-                limit: ^batch
+                limit: @batch
               )
             )
         )
