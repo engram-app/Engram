@@ -33,6 +33,16 @@ defmodule Engram.Vector.QdrantStrictCallersTest do
       assert @strict["condition_max_size"] >= 2 * Qdrant.max_ids()
     end
 
+    test "note-id filters: every n block fits one condition, all blocks fit one filter" do
+      # `Qdrant.build_tenant_filter/1` with `:note_scope`: up to
+      # `max_note_ids/0` ids in `match.any` blocks of `max_ids/0`, beside the
+      # tenant conditions (each `u`/`v` may be a legacy+v5 `should` pair).
+      assert @strict["condition_max_size"] >= 2 * Qdrant.max_ids()
+      blocks = div(Qdrant.max_note_ids(), Qdrant.max_ids())
+      assert blocks * Qdrant.max_ids() == Qdrant.max_note_ids()
+      assert blocks + 4 <= @strict["filter_max_conditions"]
+    end
+
     test "write batches: 2x headroom over the largest batch" do
       assert @strict["upsert_max_batchsize"] >= 2 * Qdrant.max_write_batch()
     end

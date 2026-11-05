@@ -37,8 +37,17 @@ defmodule Engram.Vector.PayloadKeysTest do
              fm_priority: "pr",
              fm_attrs: "fa",
              fm_timestamp_src: "us",
-             fm_created_src: "cs"
+             fm_created_src: "cs",
+             note: "n"
            }
+  end
+
+  # `n` is the point's note: identity, not metadata. A payload refresh drops
+  # the known keys its payload omits (`Qdrant.overwrite_payload/3`), so `n`
+  # must never be one of them, or a release that does not write `n` strips
+  # it from every point a newer node stamped.
+  test "n is never a key a payload refresh deletes" do
+    refute "n" in PayloadKeys.note_keys()
   end
 
   test "an unknown logical name raises instead of writing a long key" do

@@ -352,7 +352,8 @@ defmodule Engram.Vector.QdrantReconcileTest do
     test "the v3 cluster's shape: no hnsw_config PATCH, ever", %{bypass: bypass} do
       ServiceConfig.put_override(:legacy_filter_fields, false)
       assert @v3_info["config"]["hnsw_config"]["m"] == 0
-      assert map_size(@v3_info["payload_schema"]) == 21
+      # 21 recorded on v3, plus the `n` index boot adds for the note-id reader.
+      assert map_size(@v3_info["payload_schema"]) == 22
 
       boot_1192(bypass, @v3_info)
       assert {:ok, _} = Qdrant.reconcile_config("engram_notes")

@@ -62,7 +62,8 @@ defmodule Engram.Indexing.PayloadV5SchemaTest do
     p = payload(n, @full)
 
     # Every key but the two default source flags (fm).
-    assert MapSet.new(Map.keys(p)) == MapSet.difference(@allowed, MapSet.new(~w(us cs)))
+    # `n` (the note id) is indexed and read from R1, written from R2.
+    assert MapSet.new(Map.keys(p)) == MapSet.difference(@allowed, MapSet.new(~w(us cs n)))
   end
 
   test "fa: one entry per user value, `h` exact, `n` / `d` plaintext" do

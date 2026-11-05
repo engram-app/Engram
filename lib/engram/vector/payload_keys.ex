@@ -28,7 +28,10 @@ defmodule Engram.Vector.PayloadKeys do
     fm_priority: "pr",
     fm_attrs: "fa",
     fm_timestamp_src: "us",
-    fm_created_src: "cs"
+    fm_created_src: "cs",
+    # The point's note row id (immutable chunk index, Engram#2263): what a
+    # filtered search matches once Postgres has resolved the filters to notes.
+    note: "n"
   ]
 
   @short Map.new(@keys)
@@ -59,10 +62,13 @@ defmodule Engram.Vector.PayloadKeys do
   @doc """
   Every payload key a point may hold: the v5 short keys plus the legacy long
   ones. What a payload refresh drops when the new payload omits it
-  (`Engram.Vector.Qdrant.overwrite_payload/3`).
+  (`Engram.Vector.Qdrant.overwrite_payload/3`). Not `n`: a point never
+  changes note, and a release that does not write `n` must not strip it from
+  the points a newer one stamped.
   """
   @spec note_keys() :: [String.t()]
-  def note_keys, do: Map.keys(@long) ++ @legacy ++ @leaked_plaintext ++ ["note_id"]
+  def note_keys,
+    do: (Map.keys(@long) -- [short(:note)]) ++ @legacy ++ @leaked_plaintext ++ ["note_id"]
 
   @doc "Logical names, in declaration order."
   @spec logical_names() :: [atom()]
@@ -90,7 +96,7 @@ defmodule Engram.Vector.PayloadKeys do
   @spec index_fields() :: [{String.t(), map()}]
   def index_fields do
     uuid = ~w(user_id vault_id path_id folder_id type_id tags_id status_id author_id
-              rev_by_id src_id proj_id)a
+              rev_by_id src_id proj_id note)a
 
     range = ~w(fm_timestamp fm_created fm_reviewed fm_expires fm_due)a
 
