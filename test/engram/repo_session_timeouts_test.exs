@@ -28,10 +28,23 @@ defmodule Engram.RepoSessionTimeoutsTest do
     refute Keyword.has_key?(params, :statement_timeout)
   end
 
-  test "the migrator drops the session parameters and keeps everything else" do
+  test "the migrator drops the session timeouts, keeps UTC and everything else" do
     config = [url: "ecto://x", pool_size: 3, parameters: RuntimeConfig.repo_parameters(:app)]
+    migrator = Release.migrator_config(config)
 
-    assert Release.migrator_config(config) == [url: "ecto://x", pool_size: 3]
+    assert migrator[:parameters] == [timezone: "UTC"]
+    assert Keyword.delete(migrator, :parameters) == [url: "ecto://x", pool_size: 3]
+  end
+
+  # `timestamp` columns hold UTC wall time; any SQL converting between them
+  # and `timestamptz` reads the session TimeZone, which a self-hosted server
+  # can set to anything (staging's is America/Los_Angeles).
+  test "every pool and the migrator run in UTC" do
+    for pool <- [:app, :maintenance, :migrator] do
+      assert RuntimeConfig.repo_parameters(pool)[:timezone] == "UTC", "#{pool}"
+    end
+
+    assert Release.migrator_config([])[:parameters][:timezone] == "UTC"
   end
 
   test "config/runtime.exs wires both pools" do
@@ -57,6 +70,7 @@ defmodule Engram.RepoSessionTimeoutsTest do
 
     try do
       assert %{rows: [["10s"]]} = Postgrex.query!(conn, "SHOW lock_timeout", [])
+      assert %{rows: [["UTC"]]} = Postgrex.query!(conn, "SHOW TimeZone", [])
 
       assert %{rows: [["1min"]]} =
                Postgrex.query!(conn, "SHOW idle_in_transaction_session_timeout", [])

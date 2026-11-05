@@ -75,14 +75,14 @@ defmodule Engram.ReleaseTest do
       )
     end
 
-    test "verify_schema_baseline/0 drops the app Repo's session parameters" do
+    test "verify_schema_baseline/0 swaps the app Repo's session parameters for UTC only" do
       assert :ok == Release.verify_schema_baseline()
-      refute Keyword.has_key?(Application.get_env(:engram, Repo), :parameters)
+      assert Application.get_env(:engram, Repo)[:parameters] == [timezone: "UTC"]
     end
 
-    test "prepare_database/0 drops the app Repo's session parameters" do
+    test "prepare_database/0 swaps the app Repo's session parameters for UTC only" do
       assert :ok == Release.prepare_database()
-      refute Keyword.has_key?(Application.get_env(:engram, Repo), :parameters)
+      assert Application.get_env(:engram, Repo)[:parameters] == [timezone: "UTC"]
     end
   end
 
@@ -159,7 +159,7 @@ defmodule Engram.ReleaseTest do
     # It replays every migration when it fires, so it must open the migrator's
     # session like migrate/0 does: the app Repo's lock_timeout would fail a
     # CREATE INDEX CONCURRENTLY and leave an INVALID index behind.
-    test "drops the app Repo's session parameters before it runs, like migrate/0" do
+    test "swaps the app Repo's session parameters for UTC only before it runs, like migrate/0" do
       original = Application.get_env(:engram, Repo)
       on_exit(fn -> Application.put_env(:engram, Repo, original) end)
 
@@ -172,7 +172,7 @@ defmodule Engram.ReleaseTest do
       # A healthy uuid schema: the reset itself is a no-op.
       assert :ok == Release.reset_baseline()
 
-      refute Keyword.has_key?(Application.get_env(:engram, Repo), :parameters)
+      assert Application.get_env(:engram, Repo)[:parameters] == [timezone: "UTC"]
     end
   end
 

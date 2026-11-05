@@ -264,15 +264,27 @@ defmodule Engram.RuntimeConfig do
   The maintenance pool runs cross-tenant sweeps, so it gets a longer idle
   bound and no lock timeout. Migrations must not inherit either (a
   `CREATE INDEX CONCURRENTLY` waits on other transactions through the lock
-  manager): `Engram.Release` strips them for the migrator.
+  manager): `Engram.Release` gives the migrator `repo_parameters(:migrator)`.
+
+    * `timezone: "UTC"` (every pool, the migrator too): `timestamp` columns
+      hold UTC wall time, and any SQL that converts between `timestamp` and
+      `timestamptz` (a `timestamp` compared to `now()`, a `timestamptz`
+      written to a `timestamp` column, a `timestamp` -> `timestamptz`
+      conversion) goes through the session TimeZone. Prod RDS defaults to
+      UTC, but a self-hosted Postgres can be set to anything (staging's is
+      America/Los_Angeles). Code written with `Engram.Repo.Utc` does not
+      depend on this; it covers the SQL that is not.
 
   No `@spec`: each clause returns a compile-time constant, so any keyword
   spec is a dialyzer `contract_supertype` (see `Engram.Repo.tenant_tables/0`).
   """
   def repo_parameters(:app),
-    do: [idle_in_transaction_session_timeout: "60s", lock_timeout: "10s"]
+    do: [timezone: "UTC", idle_in_transaction_session_timeout: "60s", lock_timeout: "10s"]
 
-  def repo_parameters(:maintenance), do: [idle_in_transaction_session_timeout: "10min"]
+  def repo_parameters(:maintenance),
+    do: [timezone: "UTC", idle_in_transaction_session_timeout: "10min"]
+
+  def repo_parameters(:migrator), do: [timezone: "UTC"]
 
   @doc """
   The `statement_timeout` and `lock_timeout` (ms) a request's tenant
