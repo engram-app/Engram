@@ -688,6 +688,25 @@ defmodule Engram.OAuth.CimdTest do
       assert byte_size(client.client_name) == 200
     end
 
+    # oauth_clients.scope is varchar(255). The document is attacker-controlled;
+    # an uncapped scope raised on INSERT instead of refusing the document.
+    test "refuses a document whose scope exceeds 255 characters" do
+      long = String.duplicate("a", 256)
+      expect(FetcherMock, :fetch, fn @url -> {:ok, document(%{"scope" => long})} end)
+
+      assert {:error, {:invalid_document, errors}} = Cimd.ensure_client(@url)
+      assert Keyword.has_key?(errors, :scope)
+      assert Repo.aggregate(Client, :count) == 0
+    end
+
+    test "stores a 255-character scope" do
+      scope = String.duplicate("a", 255)
+      expect(FetcherMock, :fetch, fn @url -> {:ok, document(%{"scope" => scope})} end)
+
+      assert {:ok, client} = Cimd.ensure_client(@url)
+      assert client.scope == scope
+    end
+
     test "an absent grant_types/response_types still gets our defaults" do
       expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
 
