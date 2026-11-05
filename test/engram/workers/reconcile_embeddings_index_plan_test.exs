@@ -220,7 +220,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
   # generic plan alike, with seq scans off: the planner costs the sweep as
   # matching most of the table (`embed_hash <> content_hash` is a default
   # 0.995), so on a test-sized table a seq scan and sort can win, and did on
-  # CI once an earlier test had ANALYZEd an empty `subscriptions` (its
+  # CI once `subscriptions` had been vacuumed or ANALYZEd while empty (its
   # EXISTS then costs 0). What is asserted is that v2 CAN serve the sweep.
   test "the sweep reads notes_reconcile_due_v2, which holds no unchanged park" do
     user = insert(:user)
