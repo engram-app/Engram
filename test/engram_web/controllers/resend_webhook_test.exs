@@ -82,6 +82,22 @@ defmodule EngramWeb.ResendWebhookTest do
       assert Suppression.suppressed?("b@example.com")
     end
 
+    # An over-long address used to raise on INSERT: a 500, so Resend retried the
+    # payload forever and the event's other recipients were never suppressed.
+    test "acks and logs an over-long address, still suppressing the rest", %{conn: conn} do
+      long = String.duplicate("a", 300) <> "@example.com"
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          conn = post_resend(conn, "evt_long", "email.bounced", [long, "ok@example.com"])
+          assert json_response(conn, 200)["status"] == "ok"
+        end)
+
+      assert log =~ "Resend suppression insert failed"
+      refute log =~ long
+      assert Suppression.suppressed?("ok@example.com")
+    end
+
     test "acknowledges an event with no recipients without crashing", %{conn: conn} do
       payload = Jason.encode!(%{type: "email.bounced", data: %{}})
       ts = System.system_time(:second)

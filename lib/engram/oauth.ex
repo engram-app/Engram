@@ -1,4 +1,7 @@
 defmodule Engram.OAuth do
+  # RFC 7636 §4.1: 43-128 characters of the unreserved set.
+  @code_challenge_format ~r/\A[A-Za-z0-9\-._~]{43,128}\z/
+
   @moduledoc """
   High-level context for the OAuth 2.1 authorization server.
 
@@ -1988,10 +1991,12 @@ defmodule Engram.OAuth do
     # OAuth 2.1 §4.1.1 / RFC 7636 §4.3: an absent method means `plain`, which we
     # do not support, so it is refused like `plain` itself. Never read as S256:
     # the consent page already refused such requests, so no client relied on it.
-    case params["code_challenge_method"] do
-      "S256" -> :ok
-      _ -> {:redirect_error, redirect_uri, "invalid_request", params["state"]}
-    end
+    # RFC 7636 §4.1 shape (43-128 unreserved chars) is checked here, where the
+    # error can still redirect: unchecked, a value over the varchar(255) column
+    # only failed at Approve, as a 500.
+    if params["code_challenge_method"] == "S256" and challenge =~ @code_challenge_format,
+      do: :ok,
+      else: {:redirect_error, redirect_uri, "invalid_request", params["state"]}
   end
 
   defp check_pkce(params, redirect_uri),

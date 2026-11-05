@@ -261,7 +261,7 @@ defmodule EngramWeb.OAuthRevokeControllerTest do
           "client_id" => client.client_id,
           "redirect_uri" => hd(client.redirect_uris),
           "response_type" => "code",
-          "code_challenge" => "abc",
+          "code_challenge" => "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
           "code_challenge_method" => "S256"
         })
 
