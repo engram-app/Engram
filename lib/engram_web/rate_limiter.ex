@@ -98,6 +98,25 @@ defmodule EngramWeb.RateLimiter do
     `07:24:00.000` (60s window) both went red in one CI run.
     """
     def reset_buckets! do
+      clear_buckets!()
+
+      case fresh_window_wait_ms(System.system_time(:millisecond)) do
+        0 -> :ok
+        wait -> Process.sleep(wait)
+      end
+
+      :ok
+    end
+
+    @doc """
+    Wipe every bucket without waiting for a fresh window (test setup only).
+
+    For a reset that runs before every test (`Engram.DataCase`): the wait in
+    `reset_buckets!/0` costs ~50 ms a call on average (10% of calls, up to
+    1 s), and thousands of sync tests run one at a time. A test that bursts
+    to a deny calls `reset_buckets!/0` itself.
+    """
+    def clear_buckets! do
       try do
         case backend() do
           :distributed_ets ->
@@ -110,11 +129,6 @@ defmodule EngramWeb.RateLimiter do
         # Safe no-op when the backend's ETS table isn't started (e.g. the
         # :distributed_ets supervisor isn't running under the current test config).
         ArgumentError -> :ok
-      end
-
-      case fresh_window_wait_ms(System.system_time(:millisecond)) do
-        0 -> :ok
-        wait -> Process.sleep(wait)
       end
 
       :ok

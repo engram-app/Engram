@@ -26,4 +26,22 @@ defmodule Engram.DataCaseNodeStateTest do
       Engram.Cache.put(:rebuild, :pass_done, true)
     end
   end
+
+  # The reset runs before every sync test (~5,400 of them, one at a time), so
+  # it must not take `reset_buckets!/0`'s fresh-window wait: inside the last
+  # second of a 10 s window that sleeps up to 1 s. Start the call there.
+  test "the per-test reset does not wait for a fresh window" do
+    await_window_tail()
+    {us, :ok} = :timer.tc(&Engram.DataCase.reset_rebuild_gate/0)
+    assert us < 100_000, "reset took #{div(us, 1000)} ms"
+  end
+
+  defp await_window_tail do
+    if rem(System.system_time(:millisecond), 10_000) in 9_100..9_700 do
+      :ok
+    else
+      Process.sleep(20)
+      await_window_tail()
+    end
+  end
 end
