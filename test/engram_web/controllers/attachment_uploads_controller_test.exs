@@ -162,6 +162,18 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
                conn |> start("a.exe", 10) |> json_response(415)
     end
 
+    test "an mtime out of range is 422, even past the largest double", %{conn: conn} do
+      for mtime <- ["1.0e19", "1#{String.duplicate("0", 400)}"] do
+        body = ~s({"path": "a.bin", "size_bytes": 10, "mtime": #{mtime}})
+
+        assert %{"error" => "mtime is out of range"} =
+                 conn
+                 |> put_req_header("content-type", "application/json")
+                 |> post("/api/attachment-uploads", body)
+                 |> json_response(422)
+      end
+    end
+
     test "a mime_type with header bytes is 422", %{conn: conn} do
       assert %{"error" => "invalid_mime_type"} =
                conn

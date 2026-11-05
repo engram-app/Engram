@@ -63,12 +63,22 @@ defmodule EngramWeb.AttachmentUploadsController do
 
     with :ok <- feature(user),
          :ok <- text_gate(user, params),
+         :ok <- mtime_in_range(params),
          {:ok, up} <- Uploads.start(user, conn.assigns.current_vault, params) do
       conn
       |> put_status(201)
       |> json(%{upload_id: up.id, part_size: up.part_size, part_count: up.part_count})
     else
       {:error, reason} -> refuse(conn, reason)
+    end
+  end
+
+  # The client boundary's file-time check (`Engram.FileTime`), before the
+  # request cast (which raises on an integer past the largest double).
+  defp mtime_in_range(params) do
+    case Engram.FileTime.check(params, ~w(mtime)) do
+      :ok -> :ok
+      {:error, _} -> {:error, :mtime_out_of_range}
     end
   end
 
@@ -293,6 +303,9 @@ defmodule EngramWeb.AttachmentUploadsController do
 
   defp refuse(conn, :invalid_mime),
     do: conn |> put_status(422) |> json(%{error: "invalid_mime_type"})
+
+  defp refuse(conn, :mtime_out_of_range),
+    do: conn |> put_status(422) |> json(%{error: "mtime is out of range"})
 
   defp refuse(conn, {:too_large, limit}),
     do: EngramWeb.LimitResponse.halt(conn, "file_too_large", :max_file_bytes, limit, nil)

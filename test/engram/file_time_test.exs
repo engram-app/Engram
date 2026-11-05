@@ -33,6 +33,9 @@ defmodule Engram.FileTimeTest do
     assert FileTime.to_at(-1.0e19) == {:error, :out_of_range}
     # About year -7500 as milliseconds: Elixir takes it, Postgres would not.
     assert FileTime.to_at(-3.0e14) == {:error, :out_of_range}
+    # Huge doubles would overflow the scaling: out of range, never a raise.
+    assert FileTime.to_at(1.0e306) == {:error, :out_of_range}
+    assert FileTime.to_at(Integer.pow(10, 400)) == {:error, :out_of_range}
     assert {:ok, %DateTime{year: 1}} = FileTime.to_at(-62_135_596_800)
     assert FileTime.to_at(-62_135_596_801) == {:error, :out_of_range}
   end
@@ -57,6 +60,8 @@ defmodule Engram.FileTimeTest do
     assert FileTime.check(%{"mtime" => "1.0e19"}, ~w(mtime)) == {:error, "mtime"}
     assert FileTime.check(%{"mtime" => "1.5"}, ~w(mtime)) == :ok
     assert FileTime.check(%{"mtime" => "soon"}, ~w(mtime)) == :ok
+    # JSON `1e400` written out as an integer: past the largest double.
+    assert FileTime.check(%{"mtime" => Integer.pow(10, 400)}, ~w(mtime)) == {:error, "mtime"}
     assert FileTime.check(%{}, ~w(mtime ctime)) == :ok
   end
 

@@ -36,6 +36,7 @@ defmodule Engram.FileTime do
   require Logger
 
   @ms_from 100_000_000_000
+  @max_abs 1.0e16
   # 0001-01-01T00:00:00Z; Postgres takes down to 4713 BC, Elixir to -9999,
   # so without this a negative millisecond value passes here and the write
   # fails in Postgres.
@@ -45,6 +46,9 @@ defmodule Engram.FileTime do
   @spec to_at(number() | nil) :: {:ok, DateTime.t() | nil} | {:error, :out_of_range}
   def to_at(nil), do: {:ok, nil}
   def to_at(t) when t == 0, do: {:ok, nil}
+  # Past year 9999 even as milliseconds (2.5e14), and the scaling below
+  # would overflow a double near 1e302.
+  def to_at(t) when is_number(t) and abs(t) > @max_abs, do: {:error, :out_of_range}
 
   def to_at(t) when is_number(t) do
     us = if abs(t) < @ms_from, do: t * 1_000_000, else: t * 1_000
@@ -73,7 +77,7 @@ defmodule Engram.FileTime do
   @spec check(map(), [String.t()]) :: :ok | {:error, String.t()}
   def check(params, names) do
     Enum.find_value(names, :ok, fn name ->
-      with {:ok, t} when is_float(t) <- Ecto.Type.cast(:float, params[name]),
+      with {:ok, t} when is_float(t) <- cast(params[name]),
            {:error, :out_of_range} <- to_at(t) do
         {:error, name}
       else
@@ -81,6 +85,11 @@ defmodule Engram.FileTime do
       end
     end)
   end
+
+  # An integer past the largest double (a JSON `1e400` written out) makes
+  # the float cast raise; it is out of range, not a 500.
+  defp cast(v) when is_integer(v) and abs(v) > 1.0e308, do: {:ok, 1.0e308}
+  defp cast(v), do: Ecto.Type.cast(:float, v)
 
   @doc "A request changeset's validator: `field` out of range is an error."
   @spec validate(Ecto.Changeset.t(), atom()) :: Ecto.Changeset.t()
