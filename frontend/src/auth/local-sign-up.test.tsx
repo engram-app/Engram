@@ -112,6 +112,18 @@ describe("LocalSignUp first-run setup", () => {
 		expect(screen.queryByRole("link", { name: /sign in/iu })).not.toBeInTheDocument();
 	});
 
+	// The welcome note used to promise invite links on every instance, while an
+	// `open` one shows the normal sign-up form after the claim.
+	it.each([
+		["invite_only", /new accounts will need an invite link/iu],
+		["open", /anyone with the link can create an account/iu],
+		["closed", /no one else can create an account until you allow it/iu],
+	])("describes sign-ups after the claim for %s mode", (mode, text) => {
+		boot.value = { bootstrap_pending: true, registration_mode: mode };
+		renderPage();
+		expect(screen.getByText(text)).toBeInTheDocument();
+	});
+
 	it("has no setup token field once the instance is claimed", () => {
 		boot.value = { bootstrap_pending: false, registration_mode: "open" };
 		renderPage();
