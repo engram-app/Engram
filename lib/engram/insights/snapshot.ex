@@ -23,7 +23,6 @@ defmodule Engram.Insights.Snapshot do
   note content, titles, paths or vault names.
   """
   import Ecto.Query
-  import Engram.Repo.Utc, only: [utc_date: 1]
 
   alias Engram.Accounts.User
   alias Engram.Analytics.Event
@@ -251,9 +250,9 @@ defmodule Engram.Insights.Snapshot do
 
     days =
       from(e in base,
-        group_by: [e.user_id, utc_date(e.inserted_at)],
+        group_by: [e.user_id, fragment("(? AT TIME ZONE 'UTC')::date", e.inserted_at)],
         select: {
-          {e.user_id, utc_date(e.inserted_at)},
+          {e.user_id, fragment("(? AT TIME ZONE 'UTC')::date", e.inserted_at)},
           %{
             searches: filter(count(), e.event == "search_performed"),
             web_edited:
@@ -275,11 +274,11 @@ defmodule Engram.Insights.Snapshot do
         where: e.event in ["mcp_tool_called", "mcp_tool_called_rollup"],
         group_by: [
           e.user_id,
-          utc_date(e.inserted_at),
+          fragment("(? AT TIME ZONE 'UTC')::date", e.inserted_at),
           fragment("?->>'tool'", e.props)
         ],
         select: {
-          {e.user_id, utc_date(e.inserted_at)},
+          {e.user_id, fragment("(? AT TIME ZONE 'UTC')::date", e.inserted_at)},
           fragment("?->>'tool'", e.props),
           type(sum(fragment("coalesce((?->>'calls')::bigint, 1)", e.props)), :integer)
         }

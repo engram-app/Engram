@@ -346,8 +346,9 @@ defmodule Engram.Logs do
   # Re-emit severity is capped at :warning (see normalize_level/1 below): a
   # client-side "error" is a bug in ONE user's plugin, not a backend failure,
   # and must never inflate engram-prod-loki-error-rate (severity="error").
-  # The original client severity survives in `client_severity` metadata so
-  # it's still queryable/greppable in Loki.
+  # The client severity survives in `client_severity` metadata so it's still
+  # queryable/greppable in Loki, bounded at ingest to
+  # `PersistPolicy.levels/0` (an unknown level arrives here as "other").
   # Takes the BOUNDED entries built by insert_logs/2, not the raw request body,
   # so an oversized message is not shipped downstream at full size.
   defp reemit_to_logger(user, entries) do

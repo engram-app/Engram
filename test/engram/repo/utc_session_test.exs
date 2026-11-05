@@ -195,14 +195,32 @@ defmodule Engram.Repo.UtcSessionTest do
         end)
       end
 
-      test "CrdtBloatSweep binds its window against notes.updated_at" do
+      # No baseline, so the window is the last 65 minutes. A note written 30
+      # minutes ago is in it, one written 5 hours ago is not: a window moved
+      # 8 hours either way flips one of them.
+      test "CrdtBloatSweep counts only notes written inside its window" do
         in_la(@type_, [{"notes", "updated_at"}], fn ->
+          Engram.Cache.evict(:crdt_sweep_versions, :last)
+          on_exit(fn -> Engram.Cache.evict(:crdt_sweep_versions, :last) end)
+
           user = insert(:user)
           vault = insert(:vault, user: user)
-          _ = Engram.Fixtures.insert_note!(user, vault, %{path: "b.md", content: "x"})
+          inside = Engram.Fixtures.insert_note!(user, vault, %{path: "in.md", content: "x"})
+          outside = Engram.Fixtures.insert_note!(user, vault, %{path: "out.md", content: "x"})
+          now = DateTime.utc_now()
+
+          for {note, age_s} <- [{inside, 1_800}, {outside, 5 * 3_600}] do
+            Repo.query!("UPDATE notes SET updated_at = $1 WHERE id = $2", [
+              DateTime.add(now, -age_s, :second),
+              Ecto.UUID.dump!(note.id)
+            ])
+          end
 
           assert %{notes: n} = CrdtBloatSweep.measure_and_emit()
-          assert n >= 1
+          assert n >= 2
+          {:ok, {_at, written}} = Engram.Cache.get(:crdt_sweep_versions, :last)
+          assert Map.has_key?(written, inside.id)
+          refute Map.has_key?(written, outside.id)
         end)
       end
 

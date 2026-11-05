@@ -52,7 +52,7 @@ defmodule EngramWeb.Schemas.Note do
       },
       parse_status: %Schema{
         type: :string,
-        enum: ["ok", "degraded"],
+        enum: Engram.Notes.Note.parse_statuses(),
         nullable: true,
         description: "Frontmatter parse outcome"
       },
@@ -173,7 +173,7 @@ defmodule EngramWeb.Schemas.NoteMeta do
       updated_at: %Schema{type: :string, format: :"date-time", nullable: true},
       parse_status: %Schema{
         type: :string,
-        enum: ["ok", "degraded"],
+        enum: Engram.Notes.Note.parse_statuses(),
         nullable: true,
         description: "Frontmatter parse outcome"
       },

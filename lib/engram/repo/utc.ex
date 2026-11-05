@@ -2,10 +2,15 @@ defmodule Engram.Repo.Utc do
   @moduledoc """
   Time values that mean the same instant whether a column is
   `timestamp without time zone` (holding UTC wall time) or `timestamptz`,
-  and whatever the session `TimeZone` is. Every pool sets the session to UTC
-  (`Engram.RuntimeConfig.repo_parameters/1`), but code written against these
-  helpers does not depend on it, so it keeps working before, during and after
-  the `timestamp` -> `timestamptz` conversion.
+  and whatever the session `TimeZone` is, so raw SQL written with them is
+  correct before, during and after the `timestamp` -> `timestamptz`
+  conversion.
+
+  This does NOT make the UTC session pin (`Engram.RuntimeConfig.repo_parameters/1`)
+  optional. Ecto's named prepared statements keep the parameter types they
+  were prepared with, so a statement prepared against a `timestamp` column
+  still binds a `timestamp` after the ALTER, converted in the session zone.
+  The pin is load-bearing during and after the conversion; never remove it.
 
   Rules for raw SQL (enforced by `test/engram/repo/utc_session_test.exs`):
 

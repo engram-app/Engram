@@ -264,27 +264,36 @@ defmodule Engram.RuntimeConfig do
   The maintenance pool runs cross-tenant sweeps, so it gets a longer idle
   bound and no lock timeout. Migrations must not inherit either (a
   `CREATE INDEX CONCURRENTLY` waits on other transactions through the lock
-  manager): `Engram.Release` gives the migrator `repo_parameters(:migrator)`.
+  manager): `Engram.Release` gives the migrator `repo_parameters(:base)`.
 
-    * `timezone: "UTC"` (every pool, the migrator too): `timestamp` columns
-      hold UTC wall time, and any SQL that converts between `timestamp` and
-      `timestamptz` (a `timestamp` compared to `now()`, a `timestamptz`
-      written to a `timestamp` column, a `timestamp` -> `timestamptz`
-      conversion) goes through the session TimeZone. Prod RDS defaults to
-      UTC, but a self-hosted Postgres can be set to anything (staging's is
-      America/Los_Angeles). Code written with `Engram.Repo.Utc` does not
-      depend on this; it covers the SQL that is not.
+    * `timezone: "UTC"` (`repo_parameters(:base)`, in every clause; also the
+      dev/test Repo config in runtime.exs, so `mix ecto.migrate`, CI and the
+      suite get it): `timestamp` columns hold UTC wall time, and any SQL that
+      converts between `timestamp` and `timestamptz` goes through the session
+      TimeZone. Prod RDS defaults to UTC, but a self-hosted Postgres can be
+      set to anything (staging's is America/Los_Angeles).
+
+      LOAD-BEARING, never remove it, not even after the `timestamp` ->
+      `timestamptz` conversion. Ecto queries are named prepared statements
+      cached per pooled connection, and Postgres fixes a parameter's type
+      when the statement is prepared: a statement prepared against a
+      `timestamp` column keeps a `timestamp` parameter after the column is
+      ALTERed, and that parameter is converted to `timestamptz` in the
+      session zone. `Engram.Repo.Utc` makes raw SQL zone-proof; it cannot fix
+      that, so the pin is what keeps those statements correct.
 
   No `@spec`: each clause returns a compile-time constant, so any keyword
   spec is a dialyzer `contract_supertype` (see `Engram.Repo.tenant_tables/0`).
   """
   def repo_parameters(:app),
-    do: [timezone: "UTC", idle_in_transaction_session_timeout: "60s", lock_timeout: "10s"]
+    do:
+      repo_parameters(:base) ++ [idle_in_transaction_session_timeout: "60s", lock_timeout: "10s"]
 
   def repo_parameters(:maintenance),
-    do: [timezone: "UTC", idle_in_transaction_session_timeout: "10min"]
+    do: repo_parameters(:base) ++ [idle_in_transaction_session_timeout: "10min"]
 
-  def repo_parameters(:migrator), do: [timezone: "UTC"]
+  # The UTC pin alone: the migrator, and the dev/test Repo (config/runtime.exs).
+  def repo_parameters(:base), do: [timezone: "UTC"]
 
   @doc """
   The `statement_timeout` and `lock_timeout` (ms) a request's tenant
