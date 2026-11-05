@@ -14,6 +14,7 @@ defmodule Engram.Notes do
   alias Engram.Crypto.Envelope
   alias Engram.Crypto.PathCrypto
   alias Engram.Crypto.RotationGate
+  alias Engram.FileTime
   alias Engram.Jobs
   alias Engram.Links
   alias Engram.Logger.DecryptFailure
@@ -665,6 +666,7 @@ defmodule Engram.Notes do
               version: 1,
               dek_version: Crypto.row_version_aad_bound(),
               mtime: DateTime.to_unix(now) + 0.0,
+              mtime_at: FileTime.to_at!(DateTime.to_unix(now)),
               folder_ciphertext: ct,
               folder_nonce: nonce,
               folder_hmac: hmac,
@@ -1130,24 +1132,29 @@ defmodule Engram.Notes do
   def set_client_ctimes(user, vault, entries) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
-      {hmacs, ctimes} =
+      # `ctime_at` beside the double (`Engram.FileTime`); the controller
+      # refused an out-of-range ctime, so `to_at!/1` holds.
+      {hmacs, ctimes, ats} =
         entries
         |> Map.new(fn %{path: path, ctime: ctime} ->
           {Crypto.hmac_field(filter_key, PathSanitizer.sanitize(path)), ctime * 1.0}
         end)
-        |> Enum.unzip()
+        |> Enum.reduce({[], [], []}, fn {h, c}, {hs, cs, as} ->
+          {[h | hs], [c | cs], [FileTime.to_at!(c) | as]}
+        end)
 
       query =
         from(n in scoped_live(user, vault),
           join:
             v in fragment(
-              "SELECT * FROM unnest(?::bytea[], ?::float8[]) AS t(h, c)",
+              "SELECT * FROM unnest(?::bytea[], ?::float8[], ?::timestamptz[]) AS t(h, c, a)",
               ^hmacs,
-              ^ctimes
+              ^ctimes,
+              ^ats
             ),
           on: n.path_hmac == field(v, :h),
           where: is_nil(n.ctime) and n.kind == "note",
-          update: [set: [ctime: field(v, :c)]]
+          update: [set: [ctime: field(v, :c), ctime_at: field(v, :a)]]
         )
 
       {n, _} = Repo.with_tenant!(user.id, fn -> Repo.update_all(query, []) end)
@@ -4586,6 +4593,7 @@ defmodule Engram.Notes do
             id: tomb_id,
             content_hash: "",
             mtime: mtime_float,
+            mtime_at: FileTime.to_at!(mtime_float),
             user_id: user.id,
             vault_id: note.vault_id,
             created_at: now,
@@ -7274,6 +7282,7 @@ defmodule Engram.Notes do
                     id: tomb_id,
                     content_hash: "",
                     mtime: mtime_float,
+                    mtime_at: FileTime.to_at!(mtime_float),
                     user_id: user.id,
                     vault_id: vault.id,
                     created_at: now,

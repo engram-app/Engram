@@ -5,6 +5,7 @@ defmodule EngramWeb.NotesController do
 
   alias Engram.Batch
   alias Engram.Crypto
+  alias Engram.FileTime
   alias Engram.Links
   alias Engram.Logger.Metadata
   alias Engram.Notes
@@ -40,7 +41,16 @@ defmodule EngramWeb.NotesController do
     ]
   )
 
+  # A client file time out of range is the caller's error: a 422 here, the
+  # one strict check (`Engram.FileTime`); every write behind it is lenient.
   def upsert(conn, params) do
+    case FileTime.check(params, ~w(mtime ctime)) do
+      :ok -> write_upsert(conn, params)
+      {:error, name} -> conn |> put_status(422) |> json(%{error: "#{name} is out of range"})
+    end
+  end
+
+  defp write_upsert(conn, params) do
     content = params["content"] || params[:content] || ""
 
     if byte_size(content) > Notes.max_note_bytes() do
@@ -578,7 +588,11 @@ defmodule EngramWeb.NotesController do
   defp parse_ctime_entries(entries) do
     Enum.reduce_while(entries, {:ok, []}, fn
       %{"path" => p, "ctime" => c}, {:ok, acc} when is_binary(p) and is_number(c) and c > 0 ->
-        {:cont, {:ok, [%{path: p, ctime: c} | acc]}}
+        # Out of range (`Engram.FileTime`) is the caller's error, not a 500.
+        case FileTime.to_at(c) do
+          {:ok, _} -> {:cont, {:ok, [%{path: p, ctime: c} | acc]}}
+          {:error, _} -> {:halt, :error}
+        end
 
       _, _ ->
         {:halt, :error}

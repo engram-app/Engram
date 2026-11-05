@@ -415,6 +415,8 @@ defmodule Engram.Attachments.Uploads do
     |> Ecto.Changeset.cast(attrs, Map.keys(@request_types))
     |> Ecto.Changeset.validate_required([:path, :size_bytes])
     |> Ecto.Changeset.validate_number(:size_bytes, greater_than: 0)
+    # Before the S3 multipart opens: a bad mtime costs no round trip.
+    |> Engram.FileTime.validate(:mtime)
     |> Ecto.Changeset.apply_action(:insert)
   end
 

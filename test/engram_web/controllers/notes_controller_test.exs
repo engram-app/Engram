@@ -52,6 +52,28 @@ defmodule EngramWeb.NotesControllerTest do
 
       big = for i <- 1..501, do: %{path: "n#{i}.md", ctime: 1.0}
       assert conn |> post("/api/notes/ctime", %{entries: big}) |> json_response(400)
+
+      huge = post(conn, "/api/notes/ctime", %{entries: [%{path: "a.md", ctime: 1.0e19}]})
+      assert json_response(huge, 400)
+    end
+
+    # Jason decodes it to an integer the float cast cannot hold.
+    test "422, not 500, for an integer mtime past the largest double", %{conn: conn} do
+      body = ~s({"path": "huge.md", "content": "x", "mtime": 1#{String.duplicate("0", 400)}})
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/api/notes", body)
+
+      assert json_response(conn, 422)["error"] == "mtime is out of range"
+    end
+
+    test "422 for an out-of-range mtime or ctime", %{conn: conn} do
+      for field <- [:mtime, :ctime], value <- [1.0e19, "1.0e19"] do
+        conn = post(conn, "/api/notes", %{:path => "big.md", :content => "x", field => value})
+        assert json_response(conn, 422)
+      end
     end
 
     test "upserts an existing note and increments version", %{conn: conn} do

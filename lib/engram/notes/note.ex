@@ -3,6 +3,8 @@ defmodule Engram.Notes.Note do
   use Engram.Schema
   import Ecto.Changeset
 
+  alias Engram.FileTime
+
   @type t :: %__MODULE__{}
 
   # Every value `notes.parse_status` can hold (`Notes.put_parse_status/3`).
@@ -93,6 +95,10 @@ defmodule Engram.Notes.Note do
     field :rebuild_paid_at, :utc_datetime_usec
     field :mtime, :float
     field :ctime, :float
+    # The file times as timestamps (`Engram.FileTime`), derived from the
+    # doubles above by `changeset/2`: phase expand of the timestamptz move.
+    field :mtime_at, :utc_datetime_usec
+    field :ctime_at, :utc_datetime_usec
     field :deleted_at, :utc_datetime_usec
     # The undoable delete that tombstoned this row (#609), restored by
     # `Engram.Folders.restore_op/3`. Nil on live rows and rename tombstones.
@@ -258,6 +264,8 @@ defmodule Engram.Notes.Note do
     )
     |> validate_inclusion(:kind, ["note", "folder"])
     |> validate_inclusion(:parse_status, @parse_statuses)
+    |> FileTime.put_at(:mtime, :mtime_at)
+    |> FileTime.put_at(:ctime, :ctime_at)
     |> validate_required_for_kind()
     |> validate_format(:id, ~r/^[0-9a-f-]{36}$/i)
     |> unique_constraint([:user_id, :vault_id, :path_hmac],
