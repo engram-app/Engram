@@ -147,22 +147,15 @@ defmodule Engram.Indexing.ChunkDiffWriteTest do
     assert length(rows(longer)) == @sections
   end
 
-  # chunks.created_at had no reader: rows stop carrying it, and the column
-  # is nullable so the contract release can drop it.
-  test "chunk rows are written without created_at", ctx do
-    note = put!(ctx.user, ctx.vault, content(3, "Fifth."))
-    {:ok, _} = Indexing.index_note(note, ctx.vault)
+  # chunks.created_at had no reader: 20261026000300 stopped writing it and
+  # the contract migration dropped it.
+  test "chunks has no created_at column" do
+    %{rows: [[n]]} =
+      Repo.query!("""
+      SELECT count(*)::int FROM information_schema.columns
+      WHERE table_name = 'chunks' AND column_name = 'created_at'
+      """)
 
-    %{rows: [[set, nullable]]} =
-      Repo.query!(
-        """
-        SELECT (SELECT count(*)::int FROM chunks WHERE note_id = $1 AND created_at IS NOT NULL),
-               (SELECT is_nullable FROM information_schema.columns
-                WHERE table_name = 'chunks' AND column_name = 'created_at')
-        """,
-        [Ecto.UUID.dump!(note.id)]
-      )
-
-    assert {set, nullable} == {0, "YES"}
+    assert n == 0
   end
 end
