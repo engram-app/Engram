@@ -64,35 +64,46 @@ defmodule Engram.Repo.Migrations.IndexNotesEffectiveDatesExpand do
     {"timestamptz", "floor(extract(epoch FROM $1))::bigint"}
   ]
 
+  # statement_timeout bounds the whole build (the scans and the wait for
+  # older snapshots), so a stuck build fails the deploy and the next boot
+  # retries it, instead of hanging. No lock_timeout, deliberately: a
+  # CONCURRENTLY build waits out older transactions through lock waits, so a
+  # short lock_timeout fails it on any transaction open longer than that and
+  # leaves an INVALID index (why `Engram.Release.migrator_config/1` keeps the
+  # app Repo's lock_timeout off the migrator). All on one pinned connection
+  # (`MigrationSession`): with no DDL transaction, `execute` statements can
+  # each land on a different pooled connection.
   def up do
-    invalid = Enum.filter(Map.keys(@exprs), &invalid?/1)
-    # statement_timeout bounds the whole build (the scans and the wait for
-    # older snapshots), so a stuck build fails the deploy and the next boot
-    # retries it, instead of hanging. No lock_timeout, deliberately: a
-    # CONCURRENTLY build waits out older transactions through lock waits, so
-    # a short lock_timeout fails it on any transaction open longer than that
-    # and leaves an INVALID index (why `Engram.Release.migrator_config/1`
-    # keeps the app Repo's lock_timeout off the migrator).
-    execute "SET statement_timeout = '10min'"
+    Engram.Repo.MigrationSession.with_session_settings(
+      repo(),
+      [{"statement_timeout", "10min"}],
+      fn ->
+        for {type, body} <- @epoch_fns do
+          repo().query!(
+            """
+            CREATE OR REPLACE FUNCTION engram_epoch_s(#{type}) RETURNS bigint
+            LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path = ''
+            AS $fn$ SELECT #{body} $fn$
+            """,
+            []
+          )
+        end
 
-    for {type, body} <- @epoch_fns do
-      execute """
-      CREATE OR REPLACE FUNCTION engram_epoch_s(#{type}) RETURNS bigint
-      LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path = ''
-      AS $fn$ SELECT #{body} $fn$
-      """
-    end
+        for {name, expr} <- @exprs do
+          if invalid?(name),
+            do: repo().query!("DROP INDEX CONCURRENTLY IF EXISTS #{name}", [], timeout: :infinity)
 
-    for {name, expr} <- @exprs do
-      if name in invalid, do: execute("DROP INDEX CONCURRENTLY IF EXISTS #{name}")
-
-      execute """
-      CREATE INDEX CONCURRENTLY IF NOT EXISTS #{name} ON notes (vault_id, (#{expr}))
-      INCLUDE (#{Enum.join(@include[name], ", ")}) WHERE #{@live}
-      """
-    end
-
-    execute "RESET statement_timeout"
+          repo().query!(
+            """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS #{name} ON notes (vault_id, (#{expr}))
+            INCLUDE (#{Enum.join(@include[name], ", ")}) WHERE #{@live}
+            """,
+            [],
+            timeout: :infinity
+          )
+        end
+      end
+    )
   end
 
   def down do
@@ -105,8 +116,7 @@ defmodule Engram.Repo.Migrations.IndexNotesEffectiveDatesExpand do
 
   # A CONCURRENTLY build that fails or times out leaves an INVALID index;
   # a retry must drop it, never keep it, and never rebuild a good one
-  # (20261103050000's pattern). Read before any command runs: Ecto buffers
-  # the `execute`s below.
+  # (20261103050000's pattern).
   defp invalid?(name) do
     %{rows: rows} =
       repo().query!(

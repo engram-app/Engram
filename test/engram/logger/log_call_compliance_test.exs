@@ -228,6 +228,10 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # numbers only) and clamps page sizes. No Logger call, never touches
     # content, path, title or a query.
     "lib/engram/pager.ex",
+    # Pins one connection and sets/resets session settings for a
+    # non-transactional migration. No Logger call, never touches content,
+    # path, title or a query's text beyond setting names.
+    "lib/engram/repo/migration_session.ex",
     # Converts an epoch number to a DateTime. Its one Logger call carries a
     # field name only; never touches content, path, title or a query.
     "lib/engram/file_time.ex",
