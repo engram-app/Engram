@@ -575,7 +575,9 @@ defmodule Engram.Vector.QdrantLayoutTest do
     end
 
     test "the 1.19.2 GET echoes every index schema as created" do
-      schema = @tenant_info["payload_schema"]
+      # The capture predates the `n` index (immutable chunk index R1); it is
+      # added here in the shape 1.19.2 echoes for every other uuid key.
+      schema = Map.put(@tenant_info["payload_schema"], "n", @tenant_info["payload_schema"]["j"])
 
       for {field, want} <- QdrantLayout.payload_indexes(@v1192, true) do
         have = schema[field]["params"]
