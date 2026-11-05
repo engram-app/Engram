@@ -44,6 +44,7 @@ defmodule Engram.Vector.Qdrant do
   @max_page 4096
   @max_ids 2048
   @max_write_batch 64
+  @max_note_ids 5 * @max_ids
 
   # No @specs on these constant accessors: dialyzer's :underspecs flags
   # `pos_integer()` against the literal's success typing.
@@ -58,7 +59,7 @@ defmodule Engram.Vector.Qdrant do
   Most note ids one search filter carries on `n` (`build_tenant_filter/1`'s
   `:note_scope`): 5 `match.any` blocks of `max_ids/0`.
   """
-  def max_note_ids, do: 5 * @max_ids
+  def max_note_ids, do: @max_note_ids
 
   @doc """
   Whether search filters by note id on `n` (immutable chunk index,
@@ -1974,7 +1975,7 @@ defmodule Engram.Vector.Qdrant do
   # the strict condition limits, so it raises: the resolver caps below it.
   defp note_scope(filter, nil), do: filter
 
-  defp note_scope(_filter, {_, ids}) when length(ids) > 5 * @max_ids,
+  defp note_scope(_filter, {_, ids}) when length(ids) > @max_note_ids,
     do: raise(ArgumentError, "note_scope: #{length(ids)} ids > #{max_note_ids()}")
 
   defp note_scope(filter, {:ids, ids}),
@@ -2203,7 +2204,14 @@ defmodule Engram.Vector.Qdrant do
     %{
       query: %{recommend: %{positive: point_ids, strategy: "average_vector"}},
       using: "dense",
-      filter: Map.put(build_tenant_filter(search_opts), :must_not, has_ids(point_ids)),
+      # Added to, never replacing, the note scope's own `must_not`.
+      filter:
+        Map.update(
+          build_tenant_filter(search_opts),
+          :must_not,
+          has_ids(point_ids),
+          &(&1 ++ has_ids(point_ids))
+        ),
       limit: Keyword.get(search_opts, :limit, 5),
       with_payload: false
     }

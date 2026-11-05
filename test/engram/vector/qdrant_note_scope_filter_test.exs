@@ -78,6 +78,17 @@ defmodule Engram.Vector.QdrantNoteScopeFilterTest do
     end
   end
 
+  test "recommend keeps the note scope's must_not beside its own source points" do
+    note = Ecto.UUID.generate()
+    source = Ecto.UUID.generate()
+    body = Qdrant.recommend_body([source], @base ++ [note_scope: {:exclude, [note]}])
+
+    assert body.filter.must_not == [
+             %{key: "n", match: %{any: [FilterId.uuid(note)]}},
+             %{has_id: [source]}
+           ]
+  end
+
   test "no :note_scope leaves the filter exactly as before" do
     opts = @base ++ [folder_hmac: Base.encode64(:crypto.strong_rand_bytes(32))]
     refute inspect(Qdrant.build_tenant_filter(opts)) =~ ~s(key: "n")
