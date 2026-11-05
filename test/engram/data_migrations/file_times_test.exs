@@ -7,6 +7,7 @@ defmodule Engram.DataMigrations.FileTimesTest do
   stopping the walk, and a rerun is a no-op.
   """
   use Engram.DataCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   import ExUnit.CaptureLog
 
@@ -20,6 +21,8 @@ defmodule Engram.DataMigrations.FileTimesTest do
   alias Engram.Notes.Note
 
   setup do
+    FileTimes.forget()
+    on_exit(&FileTimes.forget/0)
     {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
     %{user: user, vault: insert(:vault, user: user)}
   end
@@ -53,13 +56,7 @@ defmodule Engram.DataMigrations.FileTimesTest do
 
   defp assert_parity!(ctx, schema, pairs) do
     for row <- rows(ctx, schema, pairs), {double, at} <- pairs do
-      want =
-        case FileTime.to_at(row[double]) do
-          {:ok, want} -> want
-          {:error, :out_of_range} -> nil
-        end
-
-      assert row[at] == want, inspect({schema, row})
+      assert FileTime.same_at?(row[at], FileTime.normalize(row[double])), inspect({schema, row})
     end
   end
 
@@ -127,5 +124,71 @@ defmodule Engram.DataMigrations.FileTimesTest do
 
   test "is registered with the runner" do
     assert FileTimes in Engram.Workers.DataMigrationsRunner.migrations()
+  end
+
+  defp oor_lines(log),
+    do: log |> String.split("\n") |> Enum.filter(&(&1 =~ "file_time_out_of_range"))
+
+  test "out of range is logged once per pass per table, with the count", ctx do
+    for p <- ~w(a b c d) do
+      id = note!(ctx, "#{p}.md", %{"mtime" => 1.0})
+      set!(ctx, Note, id, mtime: 1.0e19, mtime_at: ~U[2020-01-01 00:00:00.000000Z])
+    end
+
+    log = capture_log(fn -> FileTimes.run_pass(batch: 1) end)
+    assert [line] = oor_lines(log)
+    assert line =~ "total_count=4"
+    assert line =~ "table=notes"
+
+    # Written once: a later walk finds them clean and says nothing.
+    log = capture_log(fn -> run_to_done(batch: 1) end)
+    assert oor_lines(log) == []
+  end
+
+  test "a table that walked clean is not re-walked while another is open", ctx do
+    {:ok, att} =
+      Attachments.upsert_attachment(ctx.user, ctx.vault, %{
+        "path" => "a.png",
+        :content => "png",
+        "mtime" => 1_776_072_500.5
+      })
+
+    for p <- ~w(a b c),
+        do: set!(ctx, Note, note!(ctx, "#{p}.md", %{"mtime" => 7.0}), mtime_at: nil)
+
+    # One note per pass keeps notes open; attachments and uploads walk clean.
+    assert {:more, _} = FileTimes.run_pass(batch: 1, max_fixed: 1)
+
+    # Drift written after attachments closed is not visited again this run.
+    set!(ctx, Attachment, att.id, mtime_at: nil)
+    run_to_done(batch: 1, max_fixed: 1)
+    assert [%{mtime_at: nil}] = rows(ctx, Attachment, mtime: :mtime_at)
+    assert_parity!(ctx, Note, mtime: :mtime_at, ctime: :ctime_at)
+
+    # Once the ledger closed the memory is gone: a new run walks every table.
+    run_to_done(batch: 1)
+    assert_parity!(ctx, Attachment, mtime: :mtime_at)
+  end
+
+  test "a fixed millisecond note gets its payload refreshed; no other note is touched", ctx do
+    ms = note!(ctx, "ms.md", %{"mtime" => 1.0})
+    s = note!(ctx, "s.md", %{"mtime" => 1.0})
+    set!(ctx, Note, ms, mtime: 1_776_072_500_928.0, mtime_at: nil, payload_hash: <<1::256>>)
+    set!(ctx, Note, s, mtime: 1_776_072_500.5, mtime_at: nil, payload_hash: <<2::256>>)
+
+    run_to_done()
+
+    hashes =
+      Repo.with_tenant!(ctx.user.id, fn ->
+        Map.new(Repo.all(from(n in Note, select: {n.id, n.payload_hash})))
+      end)
+
+    assert hashes[ms] == nil
+    assert hashes[s] == <<2::256>>
+
+    assert_enqueued(
+      worker: Engram.Workers.ReconcileNotePayloads,
+      args: %{"user_id" => ctx.user.id}
+    )
   end
 end
