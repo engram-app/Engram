@@ -36,7 +36,7 @@ scan_bypass() {
         { if (buf == "") start = FNR; line = buf $0 }
         /\\$/ { sub(/\\$/, " ", line); buf = line; next }
         { buf = ""; print FILENAME ":" start ":" line }' \
-    | grep -E ':[0-9]+:.*[^[:alnum:]_./-]docker[[:space:]]+(run|create|container[[:space:]]+(run|create)|network[[:space:]]+create|volume[[:space:]]+create)\b|^[^:]+:[0-9]+:docker[[:space:]]+(run|create)\b' \
+    | grep -E '^[^:]+:[0-9]+:(.*[^[:alnum:]_./-])?docker[[:space:]]+(run|create|container[[:space:]]+(run|create)|network[[:space:]]+create|volume[[:space:]]+create)\b' \
     | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' \
     | grep -vE '^[^:]+:[0-9]+:.*\b(echo|printf)\b.*docker' || true
   # Programmatic spawns, e.g. execFileSync("docker", ["run", ...]) or a
@@ -67,12 +67,12 @@ mkdir "$TMP/fx" && (
           echo "Attempt 1: docker run failed" OK
           # docker run in a comment OK
 EOF
-  printf 'docker run alpine BYPASS8\n' > ci/s.sh
+  printf 'docker run alpine BYPASS8\ndocker volume create BYPASS10\ndocker container run alpine BYPASS11\n' > ci/s.sh
   printf 'subprocess.run(\n    ["docker",\n     "run", "x"])  # BYPASS9\n' > e2e/p.py
   printf 'subprocess.run(["docker", "exec", "c"])\n' > e2e/ok.py
   git add -A
   out=$(scan_bypass .github ci e2e)
-  for i in 1 2 3 4 5 6 7 8; do
+  for i in 1 2 3 4 5 6 7 8 10 11; do
     grep -q "BYPASS$i" <<<"$out" || fail "scanner missed BYPASS$i: $out"
   done
   grep -q 'e2e/p.py' <<<"$out" || fail "scanner missed a multi-line argv spawn: $out"
