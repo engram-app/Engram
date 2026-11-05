@@ -343,7 +343,7 @@ defmodule Engram.OAuth.Client do
       message: "contains an unsupported response_type"
     )
     |> validate_auth_method(Keyword.get(opts, :auth_methods, @valid_auth_methods))
-    |> validate_length(:client_name, max: @client_name_max_length)
+    |> validate_length(:client_name, max: @client_name_max_length, count: :codepoints)
     # Attacker-controlled on a public, unauthenticated endpoint; cap to bound
     # row/metadata size.
     # varchar(255) columns. Postgres counts codepoints; Ecto's default counts

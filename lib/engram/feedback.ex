@@ -369,7 +369,7 @@ defmodule Engram.Feedback do
   defp text(value, max) when is_binary(value) do
     case String.trim(value) do
       "" -> nil
-      trimmed -> String.slice(trimmed, 0, max)
+      trimmed -> Engram.Text.truncate(trimmed, max)
     end
   end
 

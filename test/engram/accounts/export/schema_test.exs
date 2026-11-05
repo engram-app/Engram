@@ -93,4 +93,25 @@ defmodule Engram.Accounts.Export.SchemaTest do
 
     assert e.error_reason == ":timeout"
   end
+
+  test "clearing error_reason to nil is allowed" do
+    user = insert(:user)
+
+    {:ok, e} =
+      %Schema{}
+      |> Schema.changeset(%{
+        user_id: user.id,
+        status: :failed,
+        reason: :user_request,
+        error_reason: ":timeout"
+      })
+      |> Repo.insert(skip_tenant_check: true)
+
+    {:ok, cleared} =
+      e
+      |> Schema.changeset(%{error_reason: nil})
+      |> Repo.update(skip_tenant_check: true)
+
+    assert is_nil(cleared.error_reason)
+  end
 end

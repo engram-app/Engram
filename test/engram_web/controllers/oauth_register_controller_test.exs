@@ -391,6 +391,25 @@ defmodule EngramWeb.OAuthRegisterControllerTest do
       assert body["error"] == "invalid_client_metadata"
     end
 
+    # client_name caps at 200, but varchar(255) counts codepoints: 200 accented
+    # pairs (400 codepoints) and one letter with 300 marks (301) both passed a
+    # grapheme count and raised on INSERT (500).
+    for {label, name} <- [
+          {"200 accent pairs", String.duplicate("e\u0301", 200)},
+          {"one letter with 300 marks", "e" <> String.duplicate("\u0301", 300)}
+        ] do
+      test "rejects a client_name over 200 codepoints: #{label}", %{conn: conn} do
+        conn =
+          post(conn, "/oauth/register", %{
+            "redirect_uris" => ["https://x/cb"],
+            "client_name" => unquote(name)
+          })
+
+        body = json_response(conn, 400)
+        assert body["error"] == "invalid_client_metadata"
+      end
+    end
+
     test "accepts a 255-character scope", %{conn: conn} do
       scope = String.duplicate("a", 255)
 
