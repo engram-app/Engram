@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# ci/bin/check-gates NAME:RESULT:SKIP_INTENDED ...
+#
+# The merge-gate verdict for verify.yml's aggregate `ci` job. One argument per
+# gate: its `needs.<job>.result` and whether that job's own `if:` asked it to
+# skip on this run (fingerprint `skip-<job>=true`, or an event filter such as
+# repository_dispatch). Exits 1 unless every gate either succeeded or was
+# skipped on purpose.
+#
+# A `skipped` result alone proves nothing. GitHub also reports `skipped` when
+# an UPSTREAM job failed: on #2431 (run 42023674269) prebuild-mix hit a Docker
+# Hub pull timeout, unit-tests / lint / migration-gates skipped for want of it,
+# and `ci` went green with zero tests run (#2453). So a skip passes only when
+# SKIP_INTENDED is `true`; any other skip is an upstream failure.
+#
+# Intended skips are listed in the step summary: green then means "nothing
+# these gates cover changed since an earlier tree passed", not "they passed".
+set -euo pipefail
+
+inherited=()
+bad=0
+for arg in "$@"; do
+  IFS=: read -r name result intended <<<"$arg"
+  case "$result" in
+    success) ;;
+    skipped)
+      if [ "$intended" = true ]; then
+        inherited+=("$name")
+      else
+        echo "::error::$name was skipped but its fingerprint/event filter did not ask it to: an upstream job failed, so it never ran"
+        bad=1
+      fi
+      ;;
+    *)
+      echo "::error::$name failed: ${result:-<no result>}"
+      bad=1
+      ;;
+  esac
+done
+
+if [ ${#inherited[@]} -gt 0 ]; then
+  list=$(IFS=', '; echo "${inherited[*]}")
+  echo "::warning title=${#inherited[@]} gate(s) did not run on this commit::Inherited from an earlier tree via the content fingerprint, NOT verified on this SHA: $list"
+  {
+    echo "### :warning: ${#inherited[@]} gate(s) did NOT run on this commit"
+    echo
+    echo "Result inherited from an earlier tree via the content fingerprint,"
+    echo "**not verified on \`${GITHUB_SHA:-this commit}\`**:"
+    echo
+    for n in "${inherited[@]}"; do echo "- \`$n\`"; done
+    echo
+    echo "A green \`ci\` here means *nothing changed that these gates cover*,"
+    echo "not *these gates passed*. Force a real run with a \`workflow_dispatch\`"
+    echo "and \`force_full=true\`, or push a change that touches their inputs."
+  } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+elif [ "$bad" = 0 ]; then
+  echo "All gates executed on this commit (no fingerprint inheritance)."
+fi
+
+exit "$bad"
