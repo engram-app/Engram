@@ -13,6 +13,14 @@
 # have none (docs/context/local-qdrant-sigill-no-avx2.md), so
 # headless-protocol, which can land there, stays on the shared Qdrant.
 
+# Runner-ownership labels, same keys as ci/bin/ci-docker (see there). The
+# runner host's reaper removes a killed job's stack at once by these. Off a
+# runner the values are empty and nothing matches them.
+x-ci-labels: &ci-labels
+  engram-ci.runner: ${RUNNER_NAME:-}
+  engram-ci.run: ${GITHUB_RUN_ID:-}
+  engram-ci.run-attempt: ${GITHUB_RUN_ATTEMPT:-}
+
 services:
   engram:
     environment:
@@ -22,6 +30,7 @@ services:
         condition: service_healthy
 
   qdrant:
+    labels: *ci-labels
     # CI sets CI_QDRANT_IMAGE once at the workflow level; the default is for
     # running this file by hand.
     image: ${CI_QDRANT_IMAGE:-qdrant/qdrant:v1.19.2}
