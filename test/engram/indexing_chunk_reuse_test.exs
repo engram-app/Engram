@@ -296,9 +296,8 @@ defmodule Engram.IndexingChunkReuseTest do
 
       # Same content, so every chunk is reused; only a note-level input moved
       # (no frontmatter `updated`, so the payload's `up` is the file mtime,
-      # rounded up to the hour: 1_000 -> 3_600, 5_000 -> 7_200). A writer
-      # moves the double and its `mtime_at` together; readers trust `mtime_at`.
-      moved = %{fresh(note, ctx.user) | mtime: 5_000.0, mtime_at: Engram.FileTime.to_at!(5_000.0)}
+      # rounded up to the hour: 1_000 -> 3_600, 5_000 -> 7_200).
+      moved = %{fresh(note, ctx.user) | mtime: 5_000.0}
       assert {:ok, _} = Indexing.index_note(moved, ctx.vault)
 
       assert upserts(ctx.recorder) == []
@@ -320,7 +319,7 @@ defmodule Engram.IndexingChunkReuseTest do
       assert {:ok, _} = Indexing.index_note(note, ctx.vault)
       reset(ctx.recorder)
 
-      moved = %{fresh(note, ctx.user) | mtime: 2_000.0, mtime_at: Engram.FileTime.to_at!(2_000.0)}
+      moved = %{fresh(note, ctx.user) | mtime: 2_000.0}
       assert {:ok, _} = Indexing.index_note(moved, ctx.vault)
 
       assert upserts(ctx.recorder) == []

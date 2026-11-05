@@ -1,10 +1,10 @@
 defmodule EngramWeb.FileTimeReadersTest do
   @moduledoc """
   R25 migrate-data: every reader of `notes.mtime` / `ctime` and
-  `attachments.mtime` sends `Engram.FileTime.epoch/2` of the `*_at` column.
-  The wire format is unchanged (epoch seconds): a seconds double goes out
-  bit-identical, a millisecond double goes out as seconds, and a row the
-  backfill has not reached yet (`*_at` NULL) sends its double as stored.
+  `attachments.mtime` sends `Engram.FileTime.epoch/2`. The wire format is
+  unchanged (epoch seconds): a seconds double goes out bit-identical, a
+  millisecond double goes out as seconds. The double is the fresher value
+  during migrate-data, so a NULL or stale `*_at` changes nothing.
   """
   use EngramWeb.ConnCase, async: false
 
@@ -29,14 +29,18 @@ defmodule EngramWeb.FileTimeReadersTest do
       |> post("/api/attachments", %{path: path, content_base64: Base.encode64("B"), mtime: mtime})
       |> json_response(200)
 
-  defp unbackfill(user, schema) do
+  # NULL (backfill not reached) or stale (a pre-expand writer moved the
+  # double alone) twins.
+  defp twins(user, schema, at) do
     Repo.with_tenant!(user.id, fn ->
       case schema do
-        Note -> Repo.update_all(Note, set: [mtime_at: nil, ctime_at: nil])
-        Attachment -> Repo.update_all(Attachment, set: [mtime_at: nil])
+        Note -> Repo.update_all(Note, set: [mtime_at: at, ctime_at: at])
+        Attachment -> Repo.update_all(Attachment, set: [mtime_at: at])
       end
     end)
   end
+
+  @stale ~U[2000-01-01 00:00:00.000000Z]
 
   defp notes_by_path(list), do: Map.new(list, &{&1["path"], &1})
 
@@ -55,13 +59,14 @@ defmodule EngramWeb.FileTimeReadersTest do
       assert {ms["mtime"], ms["ctime"]} === {@s, 1_510_897_528.861}
     end
 
-    test "before the backfill (NULL *_at) the double goes out as stored", %{
-      conn: conn,
-      user: user
-    } do
-      unbackfill(user, Note)
-      ms = conn |> get("/api/notes/ms.md") |> json_response(200)
-      assert {ms["mtime"], ms["ctime"]} === {@ms, 1_510_897_528_861.0}
+    test "a NULL or stale *_at changes nothing: the double is read", %{conn: conn, user: user} do
+      for at <- [nil, @stale] do
+        twins(user, Note, at)
+        ms = conn |> get("/api/notes/ms.md") |> json_response(200)
+        assert {ms["mtime"], ms["ctime"]} === {@s, 1_510_897_528.861}
+        s = conn |> get("/api/notes/s.md") |> json_response(200)
+        assert {s["mtime"], s["ctime"]} === {@s, 1_510_897_528.861}
+      end
     end
 
     test "the seq change feed and the folder listing send the same value", ctx do
@@ -99,12 +104,13 @@ defmodule EngramWeb.FileTimeReadersTest do
       assert list["s.png"]["mtime"] === @s
     end
 
-    test "before the backfill (NULL mtime_at) the double goes out as stored", %{
-      conn: conn,
-      user: user
-    } do
-      unbackfill(user, Attachment)
-      assert (conn |> get("/api/attachments/ms.png") |> json_response(200))["mtime"] === @ms
+    test "a NULL or stale mtime_at changes nothing: the double is read", %{conn: conn, user: user} do
+      for at <- [nil, @stale] do
+        twins(user, Attachment, at)
+        assert (conn |> get("/api/attachments/ms.png") |> json_response(200))["mtime"] === @s
+        raw = get(conn, "/api/attachments/s.png?raw=1")
+        assert get_resp_header(raw, "x-engram-mtime") == [Jason.encode!(@s)]
+      end
     end
   end
 end
