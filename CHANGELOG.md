@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.72.7](https://github.com/engram-app/Engram/compare/0.72.6...0.72.7) (2026-11-05)
+
+
+### Bug Fixes
+
+* column-type audit correctness (scope, export reason, tier default) ([#2444](https://github.com/engram-app/Engram/issues/2444)) ([219238f](https://github.com/engram-app/Engram/commit/219238f58d8ef5c953ab00101b57f6fbee0397e3))
+
 ## [0.72.6](https://github.com/engram-app/Engram/compare/0.72.5...0.72.6) (2026-11-05)
 
 
