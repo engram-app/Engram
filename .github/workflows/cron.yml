@@ -403,6 +403,15 @@ jobs:
       contents: read
     timeout-minutes: 5
     steps:
+      # Only the redactor: process command lines below can carry OTHER
+      # runners' `--jitconfig` credential, and these logs are public.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            scripts/redact_cmdline.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Host identity
         run: |
           echo "=== Host ==="
@@ -428,7 +437,9 @@ jobs:
       - name: Concurrent browser/runtime footprint
         run: |
           echo "=== Live obsidian/chromium/xvfb/playwright procs ==="
+          # Redact BEFORE truncating, so a cut never leaves a partial secret.
           ps -eo pid,rss,etime,cmd 2>/dev/null \
+            | bash scripts/redact_cmdline.sh \
             | grep -iE 'obsidian|chromium|chrome|xvfb|playwright|node.*plugin' \
             | grep -v grep \
             | awk '{
@@ -532,7 +543,8 @@ jobs:
       - name: Runner agents on this host
         run: |
           echo "=== Active runner processes ==="
-          pgrep -af 'Runner.Listener|Runner.Worker' 2>/dev/null || echo "(none — this output should never print, runner is executing this!)"
+          # pid + name only: full argv holds each runner's --jitconfig credential.
+          pgrep -l 'Runner.Listener|Runner.Worker' 2>/dev/null || echo "(none — this output should never print, runner is executing this!)"
           echo "=== Runner work dirs ==="
           ls -ld "$HOME"/actions-runner* 2>/dev/null || echo "(no actions-runner* dirs in HOME)"
 

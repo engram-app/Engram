@@ -3598,6 +3598,12 @@ jobs:
           bash test/scripts/discord_release_notes_test.sh
           bash test/scripts/deployable_paths_test.sh
 
+      - name: Process cmdline redaction self-check
+        # Guards scripts/redact_cmdline.sh and asserts every workflow line
+        # that prints full process argv pipes through it. runner-diagnostics
+        # once leaked other runners' --jitconfig credentials into public logs.
+        run: bash test/scripts/redact_cmdline_test.sh
+
       - name: BEAM scheduler clamp self-check
         # Guards rel/env.sh's scheduler sizing. It ran in prod for an unknown
         # period doing NOTHING: written for cgroup quotas, but Fargate enforces
