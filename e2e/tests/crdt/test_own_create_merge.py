@@ -12,7 +12,13 @@ fix keeps the body the create sent (`ownGenesis`) and merges three-way
 Stage: on A, drop every inbound frame (the create reply and fan-out never
 arrive) while the create goes out, wait until the server holds the body, apply
 the remote edit through the API, then restore inbound and close the socket so
-the plugin rejoins and replays the create. The oracle is note content on the
+the plugin rejoins and replays the create. Branch covered: disk still equals the body the create sent, so the
+replay takes the base === disk branch (keep the server text, `ownGenesis` or
+the acked baseline as base), not `mergeOwnCreateDrift` (disk != base), which
+the plugin unit tests pin. A disk edit during the window was left out: it
+would race the flush of the remote edit onto A.
+
+The oracle is note content on the
 server, A and B only; no client-log needle (the plugin log diet raised the
 remote log level).
 
@@ -23,16 +29,29 @@ Passes on plugin main (09dc2cd, PR 673).
 
 from __future__ import annotations
 
+import asyncio
+import json
+import time
+
 import pytest
 
 from helpers.cdp import PLUGIN_PATH
 from helpers.latency import DELIVERY_TIMEOUT
+
+# TODO: dedupe with the swallow-frames helper in test/e2e-unacked-redeliver
+# (PR 2435) once it is on main; not coupled here.
 from helpers.vault import wait_for_content, write_note
 
 CRDT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound, not a latency assert
 MARKER = "REMOTE-EDIT-ON-FRESH-NOTE"
 # The only reach into plugin privates: the channel's inbound frame handler.
 _STREAM = f"{PLUGIN_PATH}.noteStream"
+_RECONNECTED = f"(() => {{ const w = {_STREAM}.ws; return !!w && w !== window.__oldWs && w.readyState === 1; }})()"
+
+
+# Create-ack evidence: the engine records this head only when the server acks.
+def _acked_expr(path: str) -> str:
+    return f"({PLUGIN_PATH}.syncEngine.getCrdtHead({json.dumps(path)}) === '__crdt_created__')"
 
 
 async def _drop_inbound(cdp) -> None:
@@ -67,15 +86,28 @@ async def test_remote_edit_survives_replayed_create_of_own_new_note(
 
     # Socket dies; the plugin rejoins and replays the unacked create, which now
     # lands on a row holding body + remote edit.
-    await cdp_a.evaluate(f"(() => {{ {_STREAM}.ws?.close(); return 'closed'; }})()")
+    await cdp_a.evaluate(
+        f"(() => {{ window.__oldWs = {_STREAM}.ws; {_STREAM}.ws?.close(); return 'closed'; }})()"
+    )
 
-    # The server held the marker before the close, so only a settled queue
-    # (the replayed create acked and its adopt done) makes the checks below
-    # a verdict on the merge rather than on the staging.
-    await cdp_a.wait_for_stream_connected()
+    # A REAL reconnect (a new, open socket), then the replayed create acked:
+    # the head flips to the created sentinel only on the create's ack, and the
+    # reply was dropped, so it cannot be set by the first send.
+    deadline = time.monotonic() + CRDT_TIMEOUT
+    while not await cdp_a.evaluate(_RECONNECTED):
+        assert time.monotonic() < deadline, "plugin never opened a new socket"
+        await asyncio.sleep(0.5)
+    while not await cdp_a.evaluate(_acked_expr(path)):
+        assert time.monotonic() < deadline, "replayed create never acked on A"
+        await asyncio.sleep(0.5)
     await cdp_a.wait_for_crdt_queue_drain(timeout=CRDT_TIMEOUT)
+
+    # Settled: every copy must hold body and edit. B got the marker by fan-out
+    # alone, so A and the server are the verdict; B must still agree.
     for vault in (vault_a, vault_b):
         final = wait_for_content(vault, path, MARKER, timeout=CRDT_TIMEOUT)
         assert "created on A" in final, f"own body lost: {final!r}"
-    server = str(api_sync.get_note(path))
-    assert MARKER in server and "created on A" in server, "server lost an edit"
+    server = api_sync.get_note(path)["content"]
+    assert MARKER in server and "created on A" in server, (
+        f"server lost an edit: {server!r}"
+    )
