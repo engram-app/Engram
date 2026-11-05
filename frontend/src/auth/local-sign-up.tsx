@@ -46,6 +46,27 @@ function registrationErrorMessage(raw: string, t: Translate): string {
 	}
 }
 
+// What happens to sign-ups once this first account exists. It follows the mode
+// the instance will actually use (the bootstrap response reports it before the
+// claim), so an `open` or `closed` instance doesn't promise invite links.
+// Whole sentences per mode, so each one translates as a unit.
+function claimNote(mode: string | undefined, t: Translate): string {
+	switch (mode) {
+		case "open":
+			return t(
+				"This first account becomes the administrator. After signup, anyone with the link can create an account. Manage members, invites, and registration mode under Settings → Administration.",
+			);
+		case "closed":
+			return t(
+				"This first account becomes the administrator. After signup, no one else can create an account until you allow it. Manage members, invites, and registration mode under Settings → Administration.",
+			);
+		default:
+			return t(
+				"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.",
+			);
+	}
+}
+
 export default function LocalSignUp() {
 	const { t } = useT();
 	const { register, isSignedIn } = useAuthAdapter();
@@ -203,9 +224,7 @@ export default function LocalSignUp() {
 						>
 							<p className="font-medium">{t("Welcome — you're setting up this instance.")}</p>
 							<p className="mt-1 text-muted-foreground">
-								{t(
-									"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.",
-								)}
+								{claimNote(bootstrap?.registration_mode, t)}
 							</p>
 						</aside>
 
