@@ -295,8 +295,9 @@ defmodule Engram.IndexingChunkReuseTest do
       reset(ctx.recorder)
 
       # Same content, so every chunk is reused; only a note-level input moved
-      # (no frontmatter `updated`, so the payload's `up` is the file mtime).
-      moved = %{fresh(note, ctx.user) | mtime: 2_000.0}
+      # (no frontmatter `updated`, so the payload's `up` is the file mtime,
+      # rounded up to the hour: 1_000 -> 3_600, 5_000 -> 7_200).
+      moved = %{fresh(note, ctx.user) | mtime: 5_000.0}
       assert {:ok, _} = Indexing.index_note(moved, ctx.vault)
 
       assert upserts(ctx.recorder) == []
@@ -306,6 +307,23 @@ defmodule Engram.IndexingChunkReuseTest do
                set_payloads(ctx.recorder)
 
       assert Enum.sort(points) == Enum.sort(all_ids)
+    end
+
+    # #2263: a fallback `up` moves on every save; rounded to the hour, a
+    # second save in the same hour leaves the payload hash alone, so the
+    # reused points are not rewritten.
+    test "an mtime move within the same hour rewrites nothing", ctx do
+      note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
+      stub_embedder(self())
+
+      assert {:ok, _} = Indexing.index_note(note, ctx.vault)
+      reset(ctx.recorder)
+
+      moved = %{fresh(note, ctx.user) | mtime: 2_000.0}
+      assert {:ok, _} = Indexing.index_note(moved, ctx.vault)
+
+      assert upserts(ctx.recorder) == []
+      assert set_payloads(ctx.recorder) == []
     end
   end
 

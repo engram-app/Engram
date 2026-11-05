@@ -126,11 +126,73 @@ defmodule Engram.Indexing.PayloadV5SchemaTest do
 
   describe "date fallback" do
     test "mtime is the file time, else updated_at is the server time" do
+      # 1_760_000_000 is 2025-10-09 08:53:20Z: rounded up to 09:00:00Z.
       p = PayloadV5.build(note(%{mtime: 1_760_000_000.9}), FlatFields.empty())
-      assert {p["up"], p["us"]} == {1_760_000_000, 1}
+      assert {p["up"], p["us"]} == {DateTime.to_unix(~U[2025-10-09 09:00:00Z]), 1}
 
       p = PayloadV5.build(note(), FlatFields.empty())
       assert {p["up"], p["us"]} == {DateTime.to_unix(~U[2026-01-02 00:00:00Z]), 2}
+    end
+
+    defp up_of(attrs), do: PayloadV5.build(note(attrs), FlatFields.empty())["up"]
+    defp unix(dt), do: DateTime.to_unix(dt)
+
+    test "a fallback mtime rounds UP to the next full hour" do
+      assert up_of(%{mtime: unix(~U[2026-04-01 14:20:05Z]) * 1.0}) ==
+               unix(~U[2026-04-01 15:00:00Z])
+
+      # A fraction of a second past the hour is past the hour.
+      assert up_of(%{mtime: unix(~U[2026-04-01 14:00:00Z]) + 0.5}) ==
+               unix(~U[2026-04-01 15:00:00Z])
+    end
+
+    test "a fallback exactly on the hour stays as it is" do
+      assert up_of(%{mtime: unix(~U[2026-04-01 14:00:00Z]) * 1.0}) ==
+               unix(~U[2026-04-01 14:00:00Z])
+
+      assert up_of(%{mtime: nil, updated_at: ~U[2026-04-01 14:00:00.000000Z]}) ==
+               unix(~U[2026-04-01 14:00:00Z])
+    end
+
+    test "the updated_at fallback rounds up the same way" do
+      p =
+        PayloadV5.build(note(%{updated_at: ~U[2026-04-01 14:20:05.123456Z]}), FlatFields.empty())
+
+      assert {p["up"], p["us"]} == {unix(~U[2026-04-01 15:00:00Z]), 2}
+    end
+
+    test "a nil or 0 mtime falls to updated_at, rounded" do
+      for mtime <- [nil, 0, 0.0] do
+        p =
+          PayloadV5.build(
+            note(%{mtime: mtime, updated_at: ~U[2026-04-01 14:20:05.000000Z]}),
+            FlatFields.empty()
+          )
+
+        assert {p["up"], p["us"]} == {unix(~U[2026-04-01 15:00:00Z]), 2}, inspect(mtime)
+      end
+    end
+
+    test "a frontmatter updated stays exact, unrounded" do
+      p = payload(note(%{mtime: 1_760_000_000.0}), "updated: 2026-04-01T14:20:05Z\n")
+      assert p["up"] == unix(~U[2026-04-01 14:20:05Z])
+      refute Map.has_key?(p, "us")
+    end
+
+    test "two passes within the same hour give an equal payload hash" do
+      n = note()
+      early = %{n | mtime: unix(~U[2026-04-01 14:00:01Z]) * 1.0}
+      late = %{n | mtime: unix(~U[2026-04-01 14:59:59Z]) * 1.0}
+      next = %{n | mtime: unix(~U[2026-04-01 15:00:01Z]) * 1.0}
+      hash = &Engram.Indexing.note_payload_hash(PayloadV5.build(&1, FlatFields.empty()))
+
+      assert hash.(early) == hash.(late)
+      refute hash.(late) == hash.(next)
+
+      at = &%{n | updated_at: &1}
+
+      assert hash.(at.(~U[2026-04-01 14:00:01.000000Z])) ==
+               hash.(at.(~U[2026-04-01 14:59:59.000000Z]))
     end
 
     test "a frontmatter updated wins over mtime" do

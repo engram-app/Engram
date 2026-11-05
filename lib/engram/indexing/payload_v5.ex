@@ -15,6 +15,15 @@ defmodule Engram.Indexing.PayloadV5 do
   file) or the row's `updated_at` (2, server), and `cr` to the file ctime
   (`cs` = 1) or `created_at` (2). The flags are small integers rather than
   strings to keep a point small.
+
+  A fallback `up` is rounded UP to the next full hour (an exact hour stays):
+  it moves on every save, and a moved `up` changes the payload hash, so an
+  unrounded one made every index pass of an edited note rewrite its points
+  (#2263). Rounded, a note edited all day refreshes them about once an hour.
+  Ceil, not floor, so `updated_after` never misses an edit; the cost is that
+  date filters on these notes are hour-accurate. A frontmatter `updated` is
+  the user's own value and stays exact, as does `cr` (it does not move on
+  edit).
   """
 
   import Engram.Vector.PayloadKeys, only: [short: 1]
@@ -26,6 +35,7 @@ defmodule Engram.Indexing.PayloadV5 do
   @file_src 1
   @server_src 2
   @day 86_400
+  @hour 3_600
 
   @spec build(map(), FlatFields.t()) :: %{String.t() => term()}
   def build(note, flat) do
@@ -78,10 +88,13 @@ defmodule Engram.Indexing.PayloadV5 do
 
   defp updated(note, nil) do
     case note.mtime do
-      t when is_number(t) and t > 0 -> {trunc(t), @file_src}
-      _ -> {unix(note.updated_at), @server_src}
+      t when is_number(t) and t > 0 -> {ceil_hour(t), @file_src}
+      _ -> {ceil_hour(unix(note.updated_at)), @server_src}
     end
   end
+
+  defp ceil_hour(nil), do: nil
+  defp ceil_hour(t), do: ceil(t / @hour) * @hour
 
   # `ctime` lands with #2082 (`notes.ctime`); read defensively until then.
   defp created(_note, fm) when is_integer(fm), do: {fm, nil}
