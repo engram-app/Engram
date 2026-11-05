@@ -53,7 +53,10 @@ defmodule Engram.FileTimeTest do
     assert FileTime.check(%{"mtime" => 1.0, "ctime" => 1.0e19}, ~w(mtime ctime)) ==
              {:error, "ctime"}
 
-    assert FileTime.check(%{"mtime" => "1.0e19"}, ~w(mtime)) == :ok
+    # Read as the double column's cast reads it: a numeric string counts.
+    assert FileTime.check(%{"mtime" => "1.0e19"}, ~w(mtime)) == {:error, "mtime"}
+    assert FileTime.check(%{"mtime" => "1.5"}, ~w(mtime)) == :ok
+    assert FileTime.check(%{"mtime" => "soon"}, ~w(mtime)) == :ok
     assert FileTime.check(%{}, ~w(mtime ctime)) == :ok
   end
 

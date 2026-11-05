@@ -9,7 +9,8 @@ defmodule Engram.FileTime do
   1e11 in magnitude is seconds (1e11 s is the year 5138), at or above it
   milliseconds (1e11 ms is 1973). `0` is the plugin's "unknown": NULL.
   Floored to the microsecond, never rounded, so a seconds value keeps
-  `DateTime.to_unix(at) == trunc(t)` (payload hashes depend on it). Outside
+  `DateTime.to_unix(at) == trunc(t)` (payload hashes depend on it). Floor
+  equals trunc only for `t >= 0`, which is all the payload hash reads. Outside
   years 1 to 9999 is out of range.
 
   Strict only at the client boundary: `check/2` (REST params, 422) and
@@ -24,7 +25,10 @@ defmodule Engram.FileTime do
   without its `*_at`, so migrate-data must recompute every row where
   `*_at IS DISTINCT FROM` the normalized double (not only NULL ones) and
   report how many it repaired: that count is the guard against a writer
-  that skips the twin.
+  that skips the twin. It must normalize with this module (or the same
+  floor and bounds in SQL; never `to_timestamp`, which rounds to the
+  microsecond), and count out-of-range legacy rows separately instead of
+  aborting the batch.
   """
 
   alias Engram.Logger.Metadata
@@ -61,15 +65,20 @@ defmodule Engram.FileTime do
   end
 
   @doc """
-  `:ok`, or `{:error, name}` for the first of `names` whose param is a
-  number out of range: the client boundary (REST answers 422). Non-numbers
-  are left to the changeset's cast.
+  `:ok`, or `{:error, name}` for the first of `names` whose param is out of
+  range: the client boundary (REST answers 422). The param is read as the
+  double column's own cast reads it (`Ecto.Type.cast(:float, _)`, so a
+  numeric string counts); anything that cast refuses is left to it.
   """
   @spec check(map(), [String.t()]) :: :ok | {:error, String.t()}
   def check(params, names) do
     Enum.find_value(names, :ok, fn name ->
-      v = params[name]
-      if is_number(v) and to_at(v) == {:error, :out_of_range}, do: {:error, name}
+      with {:ok, t} when is_float(t) <- Ecto.Type.cast(:float, params[name]),
+           {:error, :out_of_range} <- to_at(t) do
+        {:error, name}
+      else
+        _ -> nil
+      end
     end)
   end
 

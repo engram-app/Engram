@@ -58,8 +58,8 @@ defmodule EngramWeb.NotesControllerTest do
     end
 
     test "422 for an out-of-range mtime or ctime", %{conn: conn} do
-      for field <- [:mtime, :ctime] do
-        conn = post(conn, "/api/notes", %{:path => "big.md", :content => "x", field => 1.0e19})
+      for field <- [:mtime, :ctime], value <- [1.0e19, "1.0e19"] do
+        conn = post(conn, "/api/notes", %{:path => "big.md", :content => "x", field => value})
         assert json_response(conn, 422)
       end
     end
