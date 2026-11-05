@@ -75,7 +75,9 @@ defmodule Engram.QueryPlan do
         |> List.flatten()
         |> Enum.join("\n")
       after
-        Repo.query!("DEALLOCATE #{name}")
+        # Not `query!`: after a failed EXPLAIN the transaction is aborted, and
+        # a DEALLOCATE error would hide the EXPLAIN's own.
+        Repo.query("DEALLOCATE #{name}")
       end
     end)
   end

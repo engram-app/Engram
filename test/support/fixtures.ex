@@ -89,8 +89,10 @@ defmodule Engram.Fixtures do
       for entry <- entries do
         note =
           case entry do
+            # The factory's seq is a placeholder: the allocator's block
+            # below stamps it, as it does an attrs entry without `seq`.
             %Note{} = note ->
-              note
+              %{note | seq: nil}
 
             attrs ->
               {note_attrs, _, _, _} = note_attrs(user, vault, attrs)
