@@ -153,7 +153,8 @@ defmodule Engram.Indexing.ChunkDiffWriteTest do
     %{rows: [[n]]} =
       Repo.query!("""
       SELECT count(*)::int FROM information_schema.columns
-      WHERE table_name = 'chunks' AND column_name = 'created_at'
+      WHERE table_schema = 'public' AND table_name = 'chunks'
+        AND column_name = 'created_at'
       """)
 
     assert n == 0
