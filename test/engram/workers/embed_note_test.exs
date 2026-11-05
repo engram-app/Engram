@@ -1870,6 +1870,72 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert updated.embed_started_by == CrashGuard.runner_id()
     end
 
+    # Only a killed node leaves the stamp. A raise, exit or throw returns
+    # control here, so it releases it, but it is no success: the count stays.
+    for kind <- [:raise, :exit, :throw] do
+      test "an embedder that #{kind}s releases the stamp and keeps the crash count", %{
+        bypass: bypass,
+        note: note
+      } do
+        stamp!(note, embed_started_at: nil, embed_started_by: nil, embed_crashes: 1)
+        stub_qdrant_optional(bypass)
+
+        expect(Engram.MockEmbedder, :embed_texts, fn _texts ->
+          case unquote(kind) do
+            :raise -> raise "boom"
+            :exit -> exit(:timeout)
+            :throw -> throw(:boom)
+          end
+        end)
+
+        crashed =
+          try do
+            perform_job(EmbedNote, args(note), queue: :embed_isolated)
+          catch
+            _kind, _reason -> :crashed
+          end
+
+        assert crashed == :crashed
+
+        updated = reload(note)
+        assert is_nil(updated.embed_started_at)
+        assert updated.embed_crashes == 1
+      end
+    end
+
+    # A failing release (DB down) must not replace the attempt's own result or
+    # exception, so it logs and returns instead of raising.
+    test "a release that fails logs and returns :error instead of raising" do
+      broken = %Note{id: Ecto.UUID.generate(), user_id: "not-a-uuid"}
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert CrashGuard.release(broken, DateTime.utc_now()) == :error
+        end)
+
+      assert log =~ "embed_crash_stamp_release_failed"
+    end
+
+    test "a snooze on a stamp minutes old logs the note; a fresh one does not", %{note: note} do
+      stamp!(note, embed_started_by: CrashGuard.runner_id())
+
+      refute ExUnit.CaptureLog.capture_log(fn ->
+               assert {:snooze, 60} = perform_job(EmbedNote, args(note))
+             end) =~ "embed_crash_guard_repeat_snooze"
+
+      stamp!(note,
+        embed_started_by: CrashGuard.runner_id(),
+        embed_started_at: DateTime.add(DateTime.utc_now(), -3 * 60)
+      )
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:snooze, 60} = perform_job(EmbedNote, args(note))
+        end)
+
+      assert log =~ "embed_crash_guard_repeat_snooze"
+    end
+
     test "a live-stamp snooze emits telemetry", %{note: note} do
       stamp!(note, embed_started_by: CrashGuard.runner_id())
       parent = self()

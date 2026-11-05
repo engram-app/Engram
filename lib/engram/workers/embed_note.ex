@@ -383,15 +383,16 @@ defmodule Engram.Workers.EmbedNote do
     try do
       run_embed(note, user, vault, old_path_hmac_b64, opts)
     catch
+      # `release/2` never raises, so the original is what propagates.
       kind, reason ->
-        _ = CrashGuard.release(note, started_at)
+        CrashGuard.release(note, started_at)
         :erlang.raise(kind, reason, __STACKTRACE__)
     else
       {:ok, :stamp_cleared} ->
         :ok
 
       result ->
-        :ok = CrashGuard.release(note, started_at)
+        CrashGuard.release(note, started_at)
         result
     end
   end

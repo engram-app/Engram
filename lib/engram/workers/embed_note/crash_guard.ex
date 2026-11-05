@@ -87,15 +87,7 @@ defmodule Engram.Workers.EmbedNote.CrashGuard do
 
     cond do
       live_stamp?(note) ->
-        # Counted: a stamp an attempt failed to release looks exactly like
-        # this, and snoozes the note's every job until it ages out (#2449).
-        :telemetry.execute(
-          [:engram, :embed, :crash_guard_snooze],
-          %{count: 1},
-          %{reason: :live_stamp}
-        )
-
-        {:snooze, 60}
+        snooze_on_live_stamp(note)
 
       dead_stamp?(note) and same_content? and known + 1 >= 2 ->
         quarantine(note, job, known + 1)
@@ -141,9 +133,15 @@ defmodule Engram.Workers.EmbedNote.CrashGuard do
 
   @doc """
   Remove the stamp `stamp/1` wrote at `started_at`, on any return of the
-  attempt. Keeps the crash count (the poison cooldown handles graceful
-  failures). Matching `started_at` leaves a newer attempt's stamp alone, and
-  makes this a no-op once `clear/1` ran.
+  attempt, raise, exit and throw included. Keeps the crash count: only a
+  success forgives it. (Only a RETURNED `{:error, _}` on the last attempt is
+  poison-parked; a note that raises every attempt is not, #2451.) Matching
+  `started_at` leaves a newer attempt's stamp alone, and makes this a no-op
+  once `clear/1` ran.
+
+  Never raises: it runs on the way out of an attempt, and a failure here (DB
+  down) must not replace the attempt's own result or exception. Logged and
+  returned as `:error`; the stamp then ages out like a dead one.
   """
   def release(%Note{} = note, %DateTime{} = started_at) do
     {:ok, _} =
@@ -157,6 +155,49 @@ defmodule Engram.Workers.EmbedNote.CrashGuard do
       end)
 
     :ok
+  rescue
+    e ->
+      Logger.warning(
+        "embed_crash_stamp_release_failed",
+        Metadata.with_category(:warning, :search,
+          user_id: note.user_id,
+          note_id: note.id,
+          error_kind: Engram.Telemetry.error_kind(e)
+        )
+      )
+
+      :error
+  end
+
+  # Real embeds finish p99 under 5 s, so a live stamp this old on a snooze
+  # (the note's second or later in a row) is most likely one nobody released.
+  @stale_snooze_log_seconds 120
+
+  # Counted: a stamp an attempt failed to release looks exactly like this, and
+  # snoozes the note's every job until it ages out (#2449). The counter has no
+  # note id; the log line names the note once its stamp looks stuck.
+  defp snooze_on_live_stamp(note) do
+    :telemetry.execute(
+      [:engram, :embed, :crash_guard_snooze],
+      %{count: 1},
+      %{reason: :live_stamp}
+    )
+
+    age = DateTime.diff(DateTime.utc_now(), note.embed_started_at)
+
+    if age >= @stale_snooze_log_seconds do
+      Logger.warning(
+        "embed_crash_guard_repeat_snooze",
+        Metadata.with_category(:warning, :search,
+          user_id: note.user_id,
+          vault_id: note.vault_id,
+          note_id: note.id,
+          result: %{stamp_age_seconds: age}
+        )
+      )
+    end
+
+    {:snooze, 60}
   end
 
   defp live_stamp?(note), do: note.embed_started_at != nil and not dead_stamp?(note)
