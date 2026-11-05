@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# `docker`, plus runner-ownership labels on everything a CI job creates.
+#
+# Every CI `docker run`/`docker create`/`docker network create`/
+# `docker volume create` goes through this wrapper (test/scripts/
+# ci_docker_labels_test.sh fails on a bypass). It adds:
+#   engram-ci.runner=$RUNNER_NAME        the runner slot that owns it
+#   engram-ci.run=$GITHUB_RUN_ID         the workflow run
+#   engram-ci.run-attempt=$GITHUB_RUN_ATTEMPT
+# The runner host's reaper (homelab reap-ci-stacks.sh) removes objects
+# labelled with its own slot at ANY age once no Runner.Worker of that slot
+# is alive. Unlabelled CI containers wait out a ~100 min age floor, so a
+# killed job's stack used to hold its memory that long.
+#
+# Compose containers get the same labels from x-ci-labels in ci/compose*.yml.
+#
+# No-op off a runner: when RUNNER_NAME is unset (dev box) this is plain docker.
+set -euo pipefail
+
+labels=()
+if [ -n "${RUNNER_NAME:-}" ]; then
+  labels=(
+    --label "engram-ci.runner=$RUNNER_NAME"
+    --label "engram-ci.run=${GITHUB_RUN_ID:-}"
+    --label "engram-ci.run-attempt=${GITHUB_RUN_ATTEMPT:-}"
+  )
+fi
+
+case "${1:-} ${2:-}" in
+  # `ci-docker show-labels ID...`: log the ownership labels, so a CI log
+  # proves the labels landed.
+  "show-labels "*)
+    exec docker inspect -f '{{.Name}} engram-ci.runner={{index .Config.Labels "engram-ci.runner"}} engram-ci.run={{index .Config.Labels "engram-ci.run"}}' "${@:2}" ;;
+  "run "* | "create "*) exec docker "$1" "${labels[@]}" "${@:2}" ;;
+  "network create" | "volume create" | "container run" | "container create")
+    exec docker "$1" "$2" "${labels[@]}" "${@:3}" ;;
+  *) exec docker "$@" ;;
+esac

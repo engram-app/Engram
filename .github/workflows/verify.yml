@@ -820,7 +820,7 @@ jobs:
         # patch version; see docs/context/ci-mix-compile-cache-runner-path.md).
         run: |
           docker pull -q "$MIX_BUILDER_IMAGE" >/dev/null
-          TAG=$(docker run --rm "$MIX_BUILDER_IMAGE" sh -c '
+          TAG=$(ci/bin/ci-docker run --rm "$MIX_BUILDER_IMAGE" sh -c '
             OTP=$(erl -eval "io:format(\"~s\",[erlang:system_info(otp_release)]),halt()" -noshell)
             ERTS=$(erl -eval "io:format(\"~s\",[erlang:system_info(version)]),halt()" -noshell)
             ELX=$(elixir --short-version)
@@ -953,7 +953,7 @@ jobs:
         # SAME path on every runner.
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: |
-          docker run --rm \
+          ci/bin/ci-docker run --rm \
             -v "$PWD:/app" -w /app \
             -e HEX_MIRROR="${HEX_MIRROR:-}" \
             engram-mix-builder:ci \
@@ -986,7 +986,7 @@ jobs:
           # satisfied across runs on different runners.
           # $3 (optional): extra `docker run` args, e.g. a mount.
           run_mix() {
-            docker run --rm \
+            ci/bin/ci-docker run --rm \
               -v "$PWD:/app" -w /app \
               ${3:-} \
               -e MIX_ENV="$1" \
@@ -1337,6 +1337,8 @@ jobs:
                 | xargs -r docker inspect --format '{{.Name}} {{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{end}}' || true
               [ "$attempt" = 2 ] || docker compose -f ci/compose.yml -f ci/compose.qdrant.yml -p "$CI_PROJECT" down -v --remove-orphans || true
             done
+            docker ps -q --filter "label=com.docker.compose.project=$CI_PROJECT" \
+              | xargs -r ci/bin/ci-docker show-labels || true
 
             # Quick verification — compose --wait already confirmed healthcheck,
             # this just confirms the port mapping is reachable from the host
@@ -1432,6 +1434,10 @@ jobs:
           if [ ! -f "${MARKER_PREFIX}-stack.marker" ]; then
             echo "CI stack timed out (5 min). Logs:"; cat "${MARKER_PREFIX}-stack.log"; exit 1
           fi
+          # The stack starts in the background, so its ci-docker show-labels
+          # line lands in the stack log; print it, or nothing proves the
+          # compose labels landed.
+          grep 'engram-ci.runner=' "${MARKER_PREFIX}-stack.log" || true
 
           echo "Waiting for Ollama check..."
           for i in $(seq 1 30); do
@@ -2497,7 +2503,7 @@ jobs:
           for attempt in 1 2 3 4 5; do
             # Throwaway DB: tmpfs data dir + no fsync. max_connections=300 because
             # the test partitions each open a schedulers*2+10 pool (3 x 38 > 100).
-            if docker run -d --name "$PG_CONTAINER" \
+            if ci/bin/ci-docker run -d --name "$PG_CONTAINER" \
                 -e POSTGRES_USER=engram \
                 -e POSTGRES_PASSWORD=engram \
                 -e POSTGRES_DB=engram_test \
@@ -2551,7 +2557,7 @@ jobs:
           # runner disk each fsync-bound payload-index build swung 0.1 to 15 s
           # with host IO, which spent the 60 s test budget in setup (#2064).
           for attempt in 1 2 3 4 5; do
-            if docker run -d --name "$QDRANT_CONTAINER" -p 127.0.0.1:0:6333 \
+            if ci/bin/ci-docker run -d --name "$QDRANT_CONTAINER" -p 127.0.0.1:0:6333 \
                 --tmpfs /qdrant/storage:rw,size=2g --tmpfs /qdrant/snapshots:rw,size=256m \
                 "$QDRANT_IMAGE"; then
               break
@@ -2823,7 +2829,7 @@ jobs:
           if [ -n "${LOCAL_REGISTRY:-}" ] && docker pull "${LOCAL_REGISTRY}/${IMAGE}" 2>/dev/null; then
             IMAGE="${LOCAL_REGISTRY}/${IMAGE}"
           fi
-          docker run -d --name "$C" -p 127.0.0.1:0:6333 \
+          ci/bin/ci-docker run -d --name "$C" -p 127.0.0.1:0:6333 \
             --tmpfs /qdrant/storage:rw,size=2g --tmpfs /qdrant/snapshots:rw,size=256m "$IMAGE"
           PORT=$(docker port "$C" 6333/tcp | head -1 | awk -F: '{print $NF}')
           for i in $(seq 1 30); do
@@ -2999,7 +3005,7 @@ jobs:
           fi
           # Same port-race retry as unit-tests.
           for attempt in 1 2 3 4 5; do
-            docker run -d --name "$PG_CONTAINER" -e POSTGRES_USER=engram -e POSTGRES_PASSWORD=engram \
+            ci/bin/ci-docker run -d --name "$PG_CONTAINER" -e POSTGRES_USER=engram -e POSTGRES_PASSWORD=engram \
               -e POSTGRES_DB=engram_test -p 0:5432 --tmpfs /var/lib/postgresql "$PG_IMAGE" \
               -c fsync=off -c synchronous_commit=off -c full_page_writes=off && break
             docker rm -f "$PG_CONTAINER" 2>/dev/null || true
@@ -3604,6 +3610,13 @@ jobs:
         # once leaked other runners' --jitconfig credentials into public logs.
         run: bash test/scripts/redact_cmdline_test.sh
 
+      - name: CI container runner-label guard
+        # Every CI container must carry engram-ci.runner, so the runner
+        # host's reaper removes a killed job's stack at once instead of after
+        # ~100 min (engram-infra#1758). Fails on a plain `docker run` that
+        # bypasses ci/bin/ci-docker, or a compose service without the labels.
+        run: bash test/scripts/ci_docker_labels_test.sh
+
       - name: BEAM scheduler clamp self-check
         # Guards rel/env.sh's scheduler sizing. It ran in prod for an unknown
         # period doing NOTHING: written for cgroup quotas, but Fargate enforces
@@ -4204,7 +4217,7 @@ jobs:
           # learn nothing. Observed on run 30662527833. Retry up to 5 times;
           # each attempt gets a fresh allocation.
           for attempt in 1 2 3 4 5; do
-            if docker run -d --name "$PG_CONTAINER" \
+            if ci/bin/ci-docker run -d --name "$PG_CONTAINER" \
                 -e POSTGRES_USER=engram \
                 -e POSTGRES_PASSWORD=engram \
                 -e POSTGRES_DB=engram_n1 \
@@ -4643,11 +4656,11 @@ jobs:
           # and reaches postgres as `pg` here; the host (db-cleanup.ts) keeps
           # using the published port.
           docker network rm "$PG_CONTAINER-net" 2>/dev/null || true
-          docker network create "$PG_CONTAINER-net" >/dev/null
+          ci/bin/ci-docker network create "$PG_CONTAINER-net" >/dev/null
           echo "MIXW_NETWORK=$PG_CONTAINER-net" >> "$GITHUB_ENV"
           echo "MIXW_DATABASE_URL=postgresql://engram:engram@pg:5432/engram_dev" >> "$GITHUB_ENV"
           for attempt in 1 2 3 4 5; do
-            if docker run -d --name "$PG_CONTAINER" \
+            if ci/bin/ci-docker run -d --name "$PG_CONTAINER" \
                 --network "$PG_CONTAINER-net" --network-alias pg \
                 -e POSTGRES_USER=engram \
                 -e POSTGRES_PASSWORD=engram \
@@ -4672,6 +4685,7 @@ jobs:
           PG_PORT=$(docker port "$PG_CONTAINER" 5432/tcp | head -1 | cut -d: -f2)
           echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
           echo "Postgres on port $PG_PORT"
+          ci/bin/ci-docker show-labels "$PG_CONTAINER"
 
       - name: Containerized mix (reuse the prebuilt _build)
         # Same as unit-tests/lint: mix (including Playwright's `mix phx.server`

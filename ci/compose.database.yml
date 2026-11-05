@@ -12,8 +12,17 @@
 
 name: engram-ci-db
 
+# Runner-ownership labels, same keys as ci/bin/ci-docker (see there). The
+# runner host's reaper removes a killed job's stack at once by these. Off a
+# runner the values are empty and nothing matches them.
+x-ci-labels: &ci-labels
+  engram-ci.runner: ${RUNNER_NAME:-}
+  engram-ci.run: ${GITHUB_RUN_ID:-}
+  engram-ci.run-attempt: ${GITHUB_RUN_ATTEMPT:-}
+
 services:
   engram:
+    labels: *ci-labels
     image: ${ENGRAM_CI_IMAGE:-engram-ci:local}
     build:
       context: ..
@@ -48,6 +57,7 @@ services:
     restart: "no"
 
   postgres:
+    labels: *ci-labels
     image: postgres:18.4
     # Throwaway data dir in RAM, as the unit-tests job does. On the gamingpc
     # VMs a shared-disk sync stalled initdb 23 s plus a 6 s shutdown
