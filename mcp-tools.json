@@ -260,11 +260,11 @@
             "type": "string"
           },
           "updated_after": {
-            "description": "Only notes updated at/after this ISO 8601 datetime (frontmatter timestamp/modified)",
+            "description": "Only notes updated at/after this ISO 8601 datetime (frontmatter timestamp/modified; without one, the file's modified time rounded up to the hour). Because that fallback rounds up, it can be up to an hour ahead, so updated_before set to now can leave out notes edited in the current hour.",
             "type": "string"
           },
           "updated_before": {
-            "description": "Only notes updated at/before this ISO 8601 datetime",
+            "description": "Only notes updated at/before this ISO 8601 datetime (frontmatter timestamp/modified; without one, the file's modified time rounded up to the hour). Because that fallback rounds up, it can be up to an hour ahead, so updated_before set to now can leave out notes edited in the current hour.",
             "type": "string"
           },
           "vault_id": {

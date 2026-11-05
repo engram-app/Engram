@@ -499,11 +499,18 @@ defmodule Engram.MCP.Tools do
           "updated_after" => %{
             "type" => "string",
             "description" =>
-              "Only notes updated at/after this ISO 8601 datetime (frontmatter timestamp/modified)"
+              "Only notes updated at/after this ISO 8601 datetime (frontmatter timestamp/modified; " <>
+                "without one, the file's modified time rounded up to the hour). " <>
+                "Because that fallback rounds up, it can be up to an hour ahead, so " <>
+                "updated_before set to now can leave out notes edited in the current hour."
           },
           "updated_before" => %{
             "type" => "string",
-            "description" => "Only notes updated at/before this ISO 8601 datetime"
+            "description" =>
+              "Only notes updated at/before this ISO 8601 datetime (frontmatter timestamp/modified; " <>
+                "without one, the file's modified time rounded up to the hour). " <>
+                "Because that fallback rounds up, it can be up to an hour ahead, so " <>
+                "updated_before set to now can leave out notes edited in the current hour."
           },
           "mode" => %{
             "type" => "string",
