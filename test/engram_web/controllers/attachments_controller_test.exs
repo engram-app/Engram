@@ -806,9 +806,18 @@ defmodule EngramWeb.AttachmentsControllerTest do
     end
 
     # Past year 9999 as milliseconds: the caller's error, not a 500.
-    test "422 for an out-of-range mtime", %{conn: conn} do
+    test "422 for an out-of-range mtime, raw or JSON", %{conn: conn} do
       conn1 = raw_post(conn, %{path: "big.png", mtime: "1.0e19"}, @sample_content)
-      assert json_response(conn1, 422)
+      assert json_response(conn1, 422)["error"] == "mtime is out of range"
+
+      conn2 =
+        post(conn, "/api/attachments", %{
+          path: "big2.png",
+          content_base64: Base.encode64(@sample_content),
+          mtime: 1.0e19
+        })
+
+      assert json_response(conn2, 422)["error"] == "mtime is out of range"
     end
 
     for bad <- ["NaN", "1,5", "", "inf", "1e400"] do

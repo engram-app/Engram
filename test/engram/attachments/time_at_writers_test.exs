@@ -56,11 +56,17 @@ defmodule Engram.Attachments.TimeAtWritersTest do
     assert rows(ctx) == [{0.0, nil}]
   end
 
-  test "an out-of-range time is refused", ctx do
-    assert {:error, %Ecto.Changeset{errors: [mtime: {"is out of range", _}]}} =
-             put(ctx, "big.png", 1.0e19)
+  # A legacy out-of-range double (REST refuses new ones with a 422) never
+  # blocks a server-side copy: the move's tombstone gets a NULL timestamp.
+  test "a move copies a legacy out-of-range time instead of failing", ctx do
+    {:ok, att} = put(ctx, "old.png", 1.0)
 
-    assert rows(ctx) == []
+    Repo.with_tenant!(ctx.user.id, fn ->
+      Repo.update_all(from(a in Attachment, where: a.id == ^att.id), set: [mtime: 1.0e19])
+    end)
+
+    assert {:ok, _} = Attachments.move_attachment(ctx.user, ctx.vault, "old.png", "new.png")
+    assert {1.0e19, nil} in rows(ctx)
   end
 
   test "a move's tombstone, a delete and a restore keep the timestamp with the double", ctx do

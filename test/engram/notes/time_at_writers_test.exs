@@ -67,11 +67,12 @@ defmodule Engram.Notes.TimeAtWritersTest do
     assert {row(ctx, z.id).mtime_at, row(ctx, none.id).mtime_at} == {nil, nil}
   end
 
-  test "an out-of-range file time is refused, nothing stored", ctx do
-    for field <- ~w(mtime ctime) do
-      assert {:error, %Ecto.Changeset{} = cs} = put(ctx, "#{field}.md", %{field => 1.0e19})
-      assert {"is out of range", _} = cs.errors[String.to_existing_atom(field)]
-    end
+  # Behind the client boundary (REST refuses it with a 422) a stored legacy
+  # value is copied, never refused: the timestamp is NULL.
+  test "an out-of-range file time past the boundary saves with a NULL timestamp", ctx do
+    {:ok, n} = put(ctx, "big.md", %{"mtime" => 1.0e19, "ctime" => 1.0e19})
+    n = row(ctx, n.id)
+    assert {n.mtime, n.mtime_at, n.ctime_at} == {1.0e19, nil, nil}
   end
 
   test "the ctime batch writes ctime_at, normalized", ctx do

@@ -9,6 +9,7 @@ defmodule EngramWeb.AttachmentsController do
 
   alias Engram.Attachments
   alias Engram.Billing
+  alias Engram.FileTime
   alias Engram.Links
   alias Engram.Storage.MimeWhitelist
 
@@ -311,6 +312,14 @@ defmodule EngramWeb.AttachmentsController do
     do: String.starts_with?(MimeWhitelist.normalize(mime), "text/")
 
   defp do_upload(conn, user, vault, params) do
+    # The client boundary's one strict file-time check (`Engram.FileTime`).
+    case FileTime.check(params, ~w(mtime)) do
+      :ok -> store_upload(conn, user, vault, params)
+      {:error, name} -> conn |> put_status(422) |> json(%{error: "#{name} is out of range"})
+    end
+  end
+
+  defp store_upload(conn, user, vault, params) do
     case Attachments.upsert_attachment(user, vault, params) do
       {:ok, att} ->
         json(conn, %{attachment: serialize_metadata(att)})

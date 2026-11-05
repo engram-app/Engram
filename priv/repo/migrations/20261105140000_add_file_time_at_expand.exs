@@ -10,6 +10,11 @@ defmodule Engram.Repo.Migrations.AddFileTimeAtExpand do
   only them. No backfill and no index here: the migrate-data phase fills old
   rows and moves the readers, the contract phase drops the doubles.
 
+  The previous release, during the rollout or after a rollback, moves a
+  double without its `*_at`. So migrate-data recomputes every row where
+  `*_at IS DISTINCT FROM` the normalized double, not only NULL ones, and
+  reports the repaired count: the guard against a writer that skips it.
+
   Nullable, no default: catalog-only, `lock_timeout` so a busy table fails
   the deploy fast instead of queueing writers behind the lock.
   """
