@@ -674,24 +674,21 @@ defmodule Engram.Search do
     end
   end
 
-  # The filter keys the Postgres resolver takes, named as the search opts.
-  @note_filter_keys [:folder, :tags, :type, :fields | @date_params]
-
   # The search's filter opts, and the post-filter a `:too_wide` filter needs
   # (nil otherwise). `:no_match` when no note can match: no Qdrant request.
   #
   # With `Qdrant.note_id_filter?/0` on, Postgres resolves every filter to
   # note ids (`note_filter/0`) and Qdrant matches them on `n`. Off (until
   # every point carries `n`), the filters go to Qdrant as payload conditions.
+  # The opts go to the resolver as they are: it takes its own filter keys
+  # (the search opt names) and ignores the rest.
   defp search_filter(user, vault, opts, {folder, tags, type}) do
-    filter = opts |> Keyword.take(@note_filter_keys) |> Map.new()
-
-    if Qdrant.note_id_filter?() and note_filter().any?(filter) do
+    if Qdrant.note_id_filter?() and note_filter().any?(opts) do
       vaults = filter_vaults(user, vault, opts)
 
-      case note_filter().resolve(user, vaults, filter, []) do
+      case note_filter().resolve(user, vaults, opts, []) do
         {:ok, {:ids, []}} -> :no_match
-        {:ok, :too_wide} -> {:ok, [], {vaults, filter}}
+        {:ok, :too_wide} -> {:ok, [], {vaults, opts}}
         {:ok, scope} -> {:ok, [note_scope: scope], nil}
         {:error, _} = error -> error
       end
@@ -719,16 +716,12 @@ defmodule Engram.Search do
   # :too_wide`, `within:` for the post-filter), a seam so tests stub it.
   defp note_filter, do: Engram.ServiceConfig.get(:note_filter, Engram.Search.NoteFilter)
 
-  # The vaults a search covers, as `put_vault_filter/3` scopes it.
-  defp filter_vaults(_user, %Engram.Vaults.Vault{} = vault, _opts), do: vault
-
-  defp filter_vaults(user, nil, opts) do
-    case Keyword.get(opts, :vault_ids) do
-      ids when is_list(ids) and ids != [] ->
-        user |> Engram.Vaults.list_for_ids(ids) |> Map.values()
-
-      _ ->
-        Engram.Vaults.list_vaults(user)
+  # The resolver's vaults for the scope `put_vault_filter/3` gives Qdrant.
+  defp filter_vaults(user, vault, opts) do
+    case vault_scope(vault, opts) do
+      {:vault, vault} -> vault
+      {:ids, ids} -> user |> Engram.Vaults.list_for_ids(ids) |> Map.values()
+      :all -> Engram.Vaults.list_vaults(user)
     end
   end
 
@@ -754,8 +747,7 @@ defmodule Engram.Search do
     wider = min(keep * @widen_factor, Qdrant.max_page())
 
     with {:ok, raw} <- legs.(search_opts),
-         {:ok, {candidates, hits}} <- postgres_hits(raw, user),
-         {:ok, kept} <- within_filter(candidates, hits, user, within, keep) do
+         {:ok, kept} <- within_filter(raw, user, within, keep) do
       # A Qdrant page under its limit is all the tenant holds: nothing to widen.
       short? = length(kept) < keep and length(raw) >= limit
 
@@ -767,7 +759,8 @@ defmodule Engram.Search do
           short: short?
         })
 
-        {:ok, {kept, hits}}
+        # Only the survivors are loaded and decrypted, once.
+        postgres_hits(kept, user)
       end
     end
   end
@@ -787,16 +780,16 @@ defmodule Engram.Search do
     end)
   end
 
-  # `:too_wide`: keep the hits whose note the filter matches, the page's
-  # `keep` best.
-  defp within_filter(candidates, hits, user, {vaults, filter}, keep) do
-    note_ids = candidates |> Enum.map(&hits[&1.qdrant_id].note_id) |> Enum.uniq()
+  # `:too_wide`: keep the candidates whose note the filter matches, the
+  # page's `keep` best. Notes come from the chunk rows alone (no decrypt); a
+  # point with no chunk row is dropped here, as `postgres_hits/2` would.
+  defp within_filter(candidates, user, {vaults, filter}, keep) do
+    notes = Engram.Notes.note_ids_by_qdrant_points(user, Enum.map(candidates, & &1.qdrant_id))
+    note_ids = notes |> Map.values() |> Enum.uniq()
 
     with {:ok, {:ids, matched}} <- note_filter().resolve(user, vaults, filter, within: note_ids) do
       matched = MapSet.new(matched)
-
-      {:ok,
-       candidates |> Enum.filter(&(hits[&1.qdrant_id].note_id in matched)) |> Enum.take(keep)}
+      {:ok, candidates |> Enum.filter(&(notes[&1.qdrant_id] in matched)) |> Enum.take(keep)}
     end
   end
 
@@ -1068,16 +1061,22 @@ defmodule Engram.Search do
   # guard (a non-empty list narrows; anything else — including omitted
   # `vault_ids` — keeps the existing unfiltered cross-vault behavior), not a
   # second place that decides "empty means unfiltered."
-  defp put_vault_filter(search_opts, %Engram.Vaults.Vault{} = vault, _opts),
-    do: Keyword.put(search_opts, :vault_id, to_string(vault.id))
+  defp put_vault_filter(search_opts, vault, opts) do
+    case vault_scope(vault, opts) do
+      {:vault, vault} -> Keyword.put(search_opts, :vault_id, to_string(vault.id))
+      {:ids, ids} -> Keyword.put(search_opts, :vault_id, Enum.map(ids, &to_string/1))
+      :all -> search_opts
+    end
+  end
 
-  defp put_vault_filter(search_opts, nil, opts) do
+  # The one place a search's vault scope is decided: one vault, a set of
+  # vault ids, or every vault of the user.
+  defp vault_scope(%Engram.Vaults.Vault{} = vault, _opts), do: {:vault, vault}
+
+  defp vault_scope(nil, opts) do
     case Keyword.get(opts, :vault_ids) do
-      ids when is_list(ids) and ids != [] ->
-        Keyword.put(search_opts, :vault_id, Enum.map(ids, &to_string/1))
-
-      _ ->
-        search_opts
+      ids when is_list(ids) and ids != [] -> {:ids, ids}
+      _ -> :all
     end
   end
 

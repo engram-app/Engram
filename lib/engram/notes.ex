@@ -218,18 +218,12 @@ defmodule Engram.Notes do
   def search_hits_by_qdrant_points(_user, []), do: {:ok, %{}}
 
   def search_hits_by_qdrant_points(user, qdrant_ids) when is_list(qdrant_ids) do
-    uuids =
-      for id <- qdrant_ids, is_binary(id), {:ok, u} <- [Ecto.UUID.cast(id)], uniq: true, do: u
-
     {:ok, rows} =
       Repo.with_tenant(user.id, fn ->
         Repo.all(
-          from(c in Chunk,
-            join: n in ^notes_only(),
-            on: n.id == c.note_id,
+          from([c, n] in point_chunks(qdrant_ids),
             left_join: p in ChunkPoint,
             on: p.point_id == c.qdrant_point_id,
-            where: c.qdrant_point_id in ^uuids,
             select:
               {%{
                  qdrant_point_id: c.qdrant_point_id,
@@ -257,6 +251,41 @@ defmodule Engram.Notes do
        end)
        |> tap(&emit_text_stale/1)}
     end
+  end
+
+  @doc """
+  `%{point_id => note_id}` for the given Qdrant point ids, from the chunk
+  rows alone: no note row loaded, nothing decrypted. A point with no chunk
+  row is absent. Search's post-filter narrows its candidates with this
+  before `search_hits_by_qdrant_points/2` decrypts the survivors.
+  """
+  @spec note_ids_by_qdrant_points(Engram.Accounts.User.t(), [String.t()]) :: %{
+          String.t() => Ecto.UUID.t()
+        }
+  def note_ids_by_qdrant_points(_user, []), do: %{}
+
+  def note_ids_by_qdrant_points(user, qdrant_ids) when is_list(qdrant_ids) do
+    {:ok, rows} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.all(
+          from([c, _n] in point_chunks(qdrant_ids), select: {c.qdrant_point_id, c.note_id})
+        )
+      end)
+
+    Map.new(rows, fn {point, note} -> {to_string(point), note} end)
+  end
+
+  # The chunk rows (binding `c`) of live-kind notes (`n`) naming these
+  # Qdrant point ids; a malformed id names nothing.
+  defp point_chunks(qdrant_ids) do
+    uuids =
+      for id <- qdrant_ids, is_binary(id), {:ok, u} <- [Ecto.UUID.cast(id)], uniq: true, do: u
+
+    from(c in Chunk,
+      join: n in ^notes_only(),
+      on: n.id == c.note_id,
+      where: c.qdrant_point_id in ^uuids
+    )
   end
 
   # Search rows are one per HIT, and the hits of a query cluster in a few
