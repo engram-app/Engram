@@ -22,15 +22,14 @@ The oracle is note content on the
 server, A and B only; no client-log needle (the plugin log diet raised the
 remote log level).
 
-Fails on plugin 1.39.1 and older: the replayed create diffs two-way and the
-remote edit vanishes from the server, A and B (the assertion on the marker).
-Passes on plugin main (09dc2cd, PR 673).
+Expected: red on the pre-fix plugin (1.39.1, commit 307b121a), where the replayed
+create diffs two-way and drops the remote edit; green on plugin main (fix is
+PR 673). Proof is CI runs pinned to each plugin, not this file.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 
 import pytest
@@ -50,8 +49,6 @@ _RECONNECTED = f"(() => {{ const w = {_STREAM}.ws; return !!w && w !== window.__
 
 
 # Create-ack evidence: the engine records this head only when the server acks.
-def _acked_expr(path: str) -> str:
-    return f"({PLUGIN_PATH}.syncEngine.getCrdtHead({json.dumps(path)}) === '__crdt_created__')"
 
 
 async def _drop_inbound(cdp) -> None:
@@ -86,20 +83,29 @@ async def test_remote_edit_survives_replayed_create_of_own_new_note(
 
     # Socket dies; the plugin rejoins and replays the unacked create, which now
     # lands on a row holding body + remote edit.
-    await cdp_a.evaluate(
-        f"(() => {{ window.__oldWs = {_STREAM}.ws; {_STREAM}.ws?.close(); return 'closed'; }})()"
-    )
+    try:
+        await cdp_a.evaluate(
+            f"(() => {{ window.__oldWs = {_STREAM}.ws; {_STREAM}.ws?.close(); return 'closed'; }})()"
+        )
 
-    # A REAL reconnect (a new, open socket), then the replayed create acked:
-    # the head flips to the created sentinel only on the create's ack, and the
-    # reply was dropped, so it cannot be set by the first send.
-    deadline = time.monotonic() + CRDT_TIMEOUT
-    while not await cdp_a.evaluate(_RECONNECTED):
-        assert time.monotonic() < deadline, "plugin never opened a new socket"
-        await asyncio.sleep(0.5)
-    while not await cdp_a.evaluate(_acked_expr(path)):
-        assert time.monotonic() < deadline, "replayed create never acked on A"
-        await asyncio.sleep(0.5)
+        # A REAL reconnect (a new, open socket). The failed create is queued for
+        # the replay; it is done when its queue entry for this path was seen and is
+        # gone again. (The created head is no proof: catch-up sets it too.)
+        deadline = time.monotonic() + CRDT_TIMEOUT
+        seen = False
+        while True:
+            ops = await cdp_a.get_crdt_queue_ops()
+            queued = any(o["kind"] == "create" and o["path"] == path for o in ops)
+            seen = seen or queued
+            reconnected = await cdp_a.evaluate(_RECONNECTED)
+            if reconnected and seen and not queued:
+                break
+            assert time.monotonic() < deadline, (
+                f"replayed create not done: reconnected={reconnected} queued_seen={seen}"
+            )
+            await asyncio.sleep(0.2)
+    finally:
+        await cdp_a.evaluate("(() => { delete window.__oldWs; return 'ok'; })()")
     await cdp_a.wait_for_crdt_queue_drain(timeout=CRDT_TIMEOUT)
 
     # Settled: every copy must hold body and edit. B got the marker by fan-out
