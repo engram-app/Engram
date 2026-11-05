@@ -264,7 +264,7 @@ defmodule Engram.Notes.FrontmatterKeys do
 
     candidates =
       unused
-      |> where([k], k.inserted_at < ago(^min_age_s, "second"))
+      |> where([k], k.inserted_at < ^DateTime.add(DateTime.utc_now(), -min_age_s, :second))
       |> select([k], k.key_id)
       # Same lock order as `Indexing.hold_key_ids!/2`.
       |> order_by([k], k.key_id)

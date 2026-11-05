@@ -58,6 +58,7 @@ defmodule Engram.Workers.CimdRefresh do
   use Oban.Worker, queue: :maintenance, max_attempts: 3
 
   import Ecto.Query
+  import Engram.Repo.Utc, only: [utc_wall: 1]
 
   alias Engram.Logger.Metadata
   alias Engram.OAuth.Cimd
@@ -155,14 +156,20 @@ defmodule Engram.Workers.CimdRefresh do
             )
           ),
       select:
-        {c.jwks_uri,
-         type(
-           fragment(
-             "(SELECT max(r.last_used_at) FROM oauth_refresh_tokens r WHERE r.client_id = ? AND r.revoked_at IS NULL)",
-             c.client_id
-           ),
-           :utc_datetime_usec
-         )}
+        {
+          c.jwks_uri,
+          # `utc_wall`: Ecto casts this to `timestamp`, which would read a
+          # `timestamptz` through the session TimeZone (`Engram.Repo.Utc`).
+          type(
+            utc_wall(
+              fragment(
+                "(SELECT max(r.last_used_at) FROM oauth_refresh_tokens r WHERE r.client_id = ? AND r.revoked_at IS NULL)",
+                c.client_id
+              )
+            ),
+            :utc_datetime_usec
+          )
+        }
     )
     |> Repo.all(skip_tenant_check: true)
     |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))

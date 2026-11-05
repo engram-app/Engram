@@ -19,6 +19,7 @@ defmodule Engram.Insights do
   """
 
   import Ecto.Query
+  import Engram.Repo.Utc, only: [utc_date: 1]
 
   alias Engram.Accounts.User
   alias Engram.Analytics.Event
@@ -28,6 +29,7 @@ defmodule Engram.Insights do
   alias Engram.Insights.VaultDailyMetric
   alias Engram.Onboarding.Action
   alias Engram.Repo
+  alias Engram.Repo.Utc
   alias Engram.Vaults.Vault
 
   @reports ~w(funnel converters path_to_paid limits surfaces ai_apps vaults retention billing churn_signals)
@@ -136,9 +138,13 @@ defmodule Engram.Insights do
 
   @tool_events ["mcp_tool_called", "mcp_tool_called_rollup"]
 
-  # `users.created_at` is a UTC `timestamp(0)`: raw SQL compares it to a
-  # naive time, an Ecto query to a second-precision DateTime.
-  defp naive(%DateTime{} = dt), do: dt |> DateTime.to_naive() |> NaiveDateTime.truncate(:second)
+  # Raw SQL binds `start` uncast against `users.created_at`, a UTC
+  # `timestamp(0)` today and `timestamptz` later: a UTC DateTime is the same
+  # instant in both (`Engram.Repo.Utc`).
+  defp since_param(%DateTime{} = dt), do: DateTime.truncate(dt, :second)
+
+  # `users.created_at` as a `timestamptz`, whichever type the column has.
+  @signup_at Utc.instant_sql("u.created_at")
 
   defp sql(repo, statement, params) do
     %{columns: columns, rows: rows} = repo.query!(statement, params, timeout: :timer.minutes(1))
@@ -188,9 +194,9 @@ defmodule Engram.Insights do
               min(e.inserted_at),
               e.event == "surface_active" and
                 fragment(
-                  "(? AT TIME ZONE 'UTC')::date - ?::date >= 1",
-                  e.inserted_at,
-                  u.created_at
+                  "? - ? >= 1",
+                  utc_date(e.inserted_at),
+                  utc_date(u.created_at)
                 )
             ),
           day7:
@@ -198,9 +204,9 @@ defmodule Engram.Insights do
               min(e.inserted_at),
               e.event == "surface_active" and
                 fragment(
-                  "(? AT TIME ZONE 'UTC')::date - ?::date >= 7",
-                  e.inserted_at,
-                  u.created_at
+                  "? - ? >= 7",
+                  utc_date(e.inserted_at),
+                  utc_date(u.created_at)
                 )
             ),
           paywall: filter(min(e.inserted_at), e.event == "paywall_shown"),
@@ -258,21 +264,21 @@ defmodule Engram.Insights do
 
   defp with_steps(%{e: e} = row) do
     e = e || %{}
-    signup = to_utc(row.created_at)
+    signup = Utc.to_utc(row.created_at)
 
     steps = %{
       "signed_up" => signup,
-      "survey_answered" => to_utc(e[:survey]),
-      "vault_created" => to_utc(row.vault_at),
-      "first_note" => to_utc(e[:first_note]),
-      "obsidian_linked" => earliest([to_utc(row.plugin_at), to_utc(e[:obsidian])]),
-      "ai_connected" => earliest([to_utc(row.ai_at), to_utc(e[:ai])]),
-      "first_search" => to_utc(e[:search]),
-      "day2_return" => to_utc(e[:day2]),
-      "day7_return" => to_utc(e[:day7]),
-      "paywall_shown" => to_utc(e[:paywall]),
-      "checkout_opened" => to_utc(e[:checkout]),
-      "paid" => to_utc(e[:paid])
+      "survey_answered" => Utc.to_utc(e[:survey]),
+      "vault_created" => Utc.to_utc(row.vault_at),
+      "first_note" => Utc.to_utc(e[:first_note]),
+      "obsidian_linked" => earliest([Utc.to_utc(row.plugin_at), Utc.to_utc(e[:obsidian])]),
+      "ai_connected" => earliest([Utc.to_utc(row.ai_at), Utc.to_utc(e[:ai])]),
+      "first_search" => Utc.to_utc(e[:search]),
+      "day2_return" => Utc.to_utc(e[:day2]),
+      "day7_return" => Utc.to_utc(e[:day7]),
+      "paywall_shown" => Utc.to_utc(e[:paywall]),
+      "checkout_opened" => Utc.to_utc(e[:checkout]),
+      "paid" => Utc.to_utc(e[:paid])
     }
 
     %{id: row.id, created_at: signup, signup_source: row.signup_source, steps: steps}
@@ -284,10 +290,6 @@ defmodule Engram.Insights do
       list -> Enum.min(list, DateTime)
     end
   end
-
-  defp to_utc(nil), do: nil
-  defp to_utc(%DateTime{} = dt), do: dt
-  defp to_utc(%NaiveDateTime{} = dt), do: DateTime.from_naive!(dt, "Etc/UTC")
 
   defp week(%DateTime{} = dt), do: dt |> DateTime.to_date() |> Date.beginning_of_week()
 
@@ -370,7 +372,7 @@ defmodule Engram.Insights do
         repo,
         """
         WITH included AS (
-          SELECT u.id, u.created_at AT TIME ZONE 'UTC' AS created_at FROM users u
+          SELECT u.id, #{@signup_at} AS created_at FROM users u
           WHERE #{@included_sql} AND u.created_at >= $1
         ),
         paid AS (
@@ -432,7 +434,7 @@ defmodule Engram.Insights do
         GROUP BY y.payer_id, y.tenure, y.paid_at
         ORDER BY y.paid_at
         """,
-        [naive(start), start, @tool_events]
+        [since_param(start), start, @tool_events]
       )
 
     keys = ~w(notes vault_count obsidian_devices ai_apps tools_used limits_hit days_active)a
@@ -693,7 +695,7 @@ defmodule Engram.Insights do
           AND e.event = 'surface_active'
         ORDER BY e.user_id, e.inserted_at
         """,
-        [naive(start), start]
+        [since_param(start), start]
       )
       |> Map.new(&{Ecto.UUID.cast!(&1["user_id"]), &1["surface"]})
 
@@ -708,7 +710,7 @@ defmodule Engram.Insights do
         WHERE #{@included_sql} AND u.created_at >= $1 AND e.inserted_at >= $2
           AND e.event = 'surface_active'
         """,
-        [naive(start), start]
+        [since_param(start), start]
       )
       |> Enum.group_by(&Ecto.UUID.cast!(&1["user_id"]), & &1["week"])
 

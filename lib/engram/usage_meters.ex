@@ -126,14 +126,17 @@ defmodule Engram.UsageMeters do
   # Module attributes, not local strings: sobelow's SQL.Query check cannot
   # prove a variable passed to `Repo.query/2` is constant. Fully parameterized.
   #
-  # $1 user_id, $2 tokens, $3 capacity, $4 now, $5 refill per second.
+  # $1 user_id, $2 tokens, $3 capacity, $4 now, $5 refill per second, $6 now
+  # again, uncast: Postgres types it from `updated_at`, so the same UTC
+  # DateTime lands as the same instant whether that column is `timestamp` or
+  # `timestamptz`, whatever the session TimeZone.
   # GREATEST(0, ...) guards a clock that moved backward (`now` is the calling
   # node's), and the stamp never moves backward either, so a skewed node can
   # neither mint nor destroy refill.
   @take_sql """
   INSERT INTO usage_meters AS m
     (user_id, embed_bucket_tokens, embed_bucket_at, lifetime_embed_tokens, updated_at)
-  VALUES ($1::uuid, $3::float8 - $2::bigint, $4::timestamptz, $2::bigint, $4::timestamptz AT TIME ZONE 'UTC')
+  VALUES ($1::uuid, $3::float8 - $2::bigint, $4::timestamptz, $2::bigint, $6)
   ON CONFLICT (user_id) DO UPDATE SET
     embed_bucket_tokens = LEAST($3::float8,
       COALESCE(m.embed_bucket_tokens, $3::float8)
@@ -141,7 +144,7 @@ defmodule Engram.UsageMeters do
         * $5::float8) - $2::bigint,
     embed_bucket_at = GREATEST($4::timestamptz, COALESCE(m.embed_bucket_at, $4::timestamptz)),
     lifetime_embed_tokens = m.lifetime_embed_tokens + $2::bigint,
-    updated_at = $4::timestamptz AT TIME ZONE 'UTC'
+    updated_at = EXCLUDED.updated_at
   WHERE LEAST($3::float8,
       COALESCE(m.embed_bucket_tokens, $3::float8)
       + GREATEST(0, EXTRACT(EPOCH FROM ($4::timestamptz - COALESCE(m.embed_bucket_at, $4::timestamptz))))::float8
@@ -169,7 +172,8 @@ defmodule Engram.UsageMeters do
     if tokens > capacity do
       {:error, :bucket_empty}
     else
-      args = [Ecto.UUID.dump!(user_id), tokens, capacity * 1.0, utc_now(opts), rate(capacity)]
+      now = utc_now(opts)
+      args = [Ecto.UUID.dump!(user_id), tokens, capacity * 1.0, now, rate(capacity), now]
 
       case Repo.query!(@take_sql, args) do
         %{rows: [[left]]} -> {:ok, trunc(max(left, 0.0))}

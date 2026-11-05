@@ -31,8 +31,10 @@ defmodule Engram.Workers.ClientLogsPruner do
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
     days = Application.fetch_env!(:engram, :client_logs_retention_days)
-    # NaiveDateTime to match the physical `timestamp without time zone` column.
-    cutoff = NaiveDateTime.utc_now() |> NaiveDateTime.add(-days * 24 * 3600, :second)
+    # A UTC DateTime, bound uncast below: Postgres types the parameter from
+    # `created_at`, so the cutoff is the same instant whether that column is
+    # `timestamp` or `timestamptz`, whatever the session TimeZone.
+    cutoff = DateTime.add(DateTime.utc_now(), -days * 24 * 3600, :second)
     # Args exist so a test can exercise the cap with a handful of rows.
     batch = Map.get(args, "batch", @batch)
     n = prune(cutoff, batch, Map.get(args, "max_batches", Engram.Maintenance.Prune.max_batches()))
@@ -49,7 +51,6 @@ defmodule Engram.Workers.ClientLogsPruner do
   defp prune(cutoff, batch, max_batches) do
     floor =
       cutoff
-      |> DateTime.from_naive!("Etc/UTC")
       |> DateTime.to_unix(:millisecond)
       |> id_floor()
 

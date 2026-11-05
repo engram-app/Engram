@@ -26,6 +26,7 @@ defmodule Engram.Workers.InactivityCleanup do
   alias Engram.Logger.Metadata
   alias Engram.Mailer
   alias Engram.Repo
+  alias Engram.Repo.Utc
   alias Engram.UsageMeters
 
   require Logger
@@ -144,13 +145,9 @@ defmodule Engram.Workers.InactivityCleanup do
     end)
   end
 
-  # Raw column lands as NaiveDateTime when joined via string table name;
-  # coerce to DateTime so the comparison works regardless of how the row
-  # was selected.
-  defp compare_lt?(%DateTime{} = a, %DateTime{} = b), do: DateTime.compare(a, b) == :lt
-
-  defp compare_lt?(%NaiveDateTime{} = a, %DateTime{} = b),
-    do: DateTime.compare(DateTime.from_naive!(a, "Etc/UTC"), b) == :lt
+  # Selected through the schemaless "usage_meters" join, so the raw column
+  # type decides: NaiveDateTime from `timestamp`, DateTime from `timestamptz`.
+  defp compare_lt?(a, %DateTime{} = b), do: DateTime.compare(Utc.to_utc(a), b) == :lt
 
   defp soft_delete(user) do
     :ok = Lifecycle.soft_delete(user, :inactivity)

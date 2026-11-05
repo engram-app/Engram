@@ -238,8 +238,9 @@ defmodule Engram.Workers.CrdtBloatSweep do
           @bloat_threshold * 1.0,
           CrdtBloat.min_content_bytes(),
           CrdtBloat.alert_min_state_bytes(),
-          # `notes.updated_at` is `timestamp without time zone`, written in UTC.
-          DateTime.to_naive(since)
+          # A UTC DateTime: `n.updated_at >= $5` types it from the column, so
+          # it is the same instant in `timestamp` or `timestamptz`.
+          since
         ],
         timeout: :timer.minutes(5)
       )
@@ -311,7 +312,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
         coalesce(s.state_bytes, 0)::float8 / greatest(coalesce(s.content_bytes, 0), 1)::float8 AS ratio
       FROM note_index_state s
       -- $1 and $5 are bound for both shapes; Postgres rejects an unused parameter.
-      WHERE s.note_live AND $1::int >= 0 AND $5::timestamp IS NOT NULL
+      WHERE s.note_live AND $1::int >= 0 AND $5::timestamptz IS NOT NULL
       """
     else
       """
