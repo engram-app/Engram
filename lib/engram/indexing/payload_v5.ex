@@ -28,6 +28,7 @@ defmodule Engram.Indexing.PayloadV5 do
 
   import Engram.Vector.PayloadKeys, only: [short: 1]
 
+  alias Engram.FileTime
   alias Engram.Notes.EffectiveDates
   alias Engram.Notes.FlatFields
   alias Engram.Notes.OkfFields
@@ -35,10 +36,12 @@ defmodule Engram.Indexing.PayloadV5 do
 
   @day 86_400
   @hour 3_600
+  # `EffectiveDates`' source flag for the file time.
+  @file_src 1
 
   @spec build(map(), FlatFields.t()) :: %{String.t() => term()}
   def build(note, flat) do
-    {up, us} = note |> EffectiveDates.updated(flat.fm_updated) |> ceil_fallback()
+    {up, us} = note |> EffectiveDates.updated(flat.fm_updated) |> ceil_fallback(note)
     {cr, cs} = EffectiveDates.created(note, flat.fm_created)
 
     [
@@ -68,10 +71,17 @@ defmodule Engram.Indexing.PayloadV5 do
   end
 
   # The hour ceil is the payload's alone: `EffectiveDates` and the Postgres
-  # date columns stay exact.
-  defp ceil_fallback({up, nil}), do: {up, nil}
-  defp ceil_fallback({nil, src}), do: {nil, src}
-  defp ceil_fallback({up, src}), do: {ceil(up / @hour) * @hour, src}
+  # date columns stay exact. A file time is ceiled from its full precision
+  # (`FileTime`), not the floored second, so `14:00:00.5` is `15:00`.
+  defp ceil_fallback({up, nil}, _note), do: {up, nil}
+  defp ceil_fallback({nil, src}, _note), do: {nil, src}
+
+  defp ceil_fallback({_up, @file_src}, note) do
+    {:ok, at} = FileTime.to_at(note.mtime)
+    {ceil(DateTime.to_unix(at, :microsecond) / (@hour * 1_000_000)) * @hour, @file_src}
+  end
+
+  defp ceil_fallback({up, src}, _note), do: {ceil(up / @hour) * @hour, src}
 
   defp id(hmac), do: FilterId.from_hmac(hmac)
 

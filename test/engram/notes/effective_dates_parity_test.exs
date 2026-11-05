@@ -47,7 +47,9 @@ defmodule Engram.Notes.EffectiveDatesParityTest do
     {"Obsidian datetime, no seconds", "---\ncreated: 2024-01-01T10:00\n---\nx\n",
      %{"ctime" => 1000.0}},
     {"Obsidian datetime, no offset", "---\ncreated: 2024-01-01T10:00:00\n---\nx\n",
-     %{"ctime" => 1000.0}}
+     %{"ctime" => 1000.0}},
+    {"file times in milliseconds", "x\n",
+     %{"mtime" => 1_793_442_859_572.0, "ctime" => 1_510_897_528_861.5}}
   ]
 
   for {{name, content, times}, i} <- Enum.with_index(@cases) do
@@ -102,38 +104,46 @@ defmodule Engram.Notes.EffectiveDatesParityTest do
     assert sql == DateTime.to_unix(~U[2024-01-01 10:00:00Z])
   end
 
-  describe "file times" do
-    test "a usable file time is above 0 and fits a bigint" do
+  describe "file times (through Engram.FileTime)" do
+    test "seconds floored, milliseconds normalized, 0 and out of range unknown" do
       assert EffectiveDates.stored(nil, 1_700_000_000.9) == 1_700_000_000
+      assert EffectiveDates.stored(nil, 1_700_000_000_900.0) == 1_700_000_000
       assert EffectiveDates.stored(nil, nil) == nil
       assert EffectiveDates.stored(nil, 0.0) == nil
-      assert EffectiveDates.stored(nil, -5.0) == nil
       assert EffectiveDates.stored(nil, 1.0e19) == nil
       assert EffectiveDates.stored(42, 1_700_000_000.0) == 42
     end
 
-    # Before: the index cast `trunc(mtime)::bigint` raised
-    # `bigint out of range` on every save of such a row.
-    test "a save refuses a file time past a bigint; one below it saves", ctx do
-      for {field, path} <- [{"mtime", "big.md"}, {"ctime", "bigc.md"}] do
-        assert {:error, %Ecto.Changeset{} = cs} =
-                 Notes.upsert_note(
-                   ctx.user,
-                   ctx.vault,
-                   %{"path" => path, "content" => "x\n", field => 1.0e19},
-                   actor: "api"
-                 )
+    # Prod 2026-11-05 holds millisecond mtimes; `trunc(mtime)` put them near
+    # the year 58,000. The stored date and the payload now agree on seconds.
+    test "a millisecond mtime filters and indexes as its second", ctx do
+      {:ok, saved} =
+        Notes.upsert_note(
+          ctx.user,
+          ctx.vault,
+          %{"path" => "ms.md", "content" => "x\n", "mtime" => 1_793_442_859_572.0},
+          actor: "api"
+        )
 
-        assert Keyword.has_key?(cs.errors, String.to_existing_atom(field))
-      end
+      row = Repo.with_tenant!(ctx.user.id, fn -> Repo.get!(Note, saved.id) end)
+      assert row.eff_updated == 1_793_442_859
+      assert EffectiveDates.updated(row, nil) == {1_793_442_859, 1}
+    end
 
-      assert {:ok, _} =
-               Notes.upsert_note(
-                 ctx.user,
-                 ctx.vault,
-                 %{"path" => "ok.md", "content" => "x\n", "mtime" => 9.1e18},
-                 actor: "api"
-               )
+    # The client boundary (REST) refuses these with a 422; behind it a save
+    # never fails on one, and the date falls back to the row time.
+    test "an out-of-range file time saves, with the row time", ctx do
+      {:ok, saved} =
+        Notes.upsert_note(
+          ctx.user,
+          ctx.vault,
+          %{"path" => "big.md", "content" => "x\n", "mtime" => 1.0e19},
+          actor: "api"
+        )
+
+      row = Repo.with_tenant!(ctx.user.id, fn -> Repo.get!(Note, saved.id) end)
+      assert row.eff_updated == nil
+      assert elem(EffectiveDates.updated(row, nil), 1) == 2
     end
   end
 
