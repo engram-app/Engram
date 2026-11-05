@@ -15,14 +15,17 @@ reports the doc unacked, prove the server never got the edit, then close the
 socket so the plugin rejoins. The oracle is content on the server and on B
 only; no client-log needle (the plugin log-diet raised the remote log level).
 
-Fails on plugin 1.39.1 and older: nothing re-sends the swallowed frame, so
-the server and B stay on the base text until timeout. Passes on plugin main
+Fails on plugin 1.39.1 and older: `unackedDocIds` does not exist there, so
+the test falls back to a short bounded wait, and nothing re-sends the
+swallowed frame: the server and B stay on the base text until timeout, which
+is the failing assertion (not a missing probe). Passes on plugin main
 (09dc2cd, PR 673).
 """
 
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -31,8 +34,32 @@ from helpers.latency import DELIVERY_TIMEOUT
 from helpers.vault import wait_for_content, write_note
 
 CRDT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound, not a latency assert
-NS = f"{PLUGIN_PATH}.noteStream"
 MARKER = "EDIT-ON-HALF-DEAD-SOCKET"
+# Fallback unacked window when the plugin has no probe (<= 1.39.1). Kept far
+# below the ~30-60s after which a swallowed heartbeat makes the plugin close
+# the socket by itself; an early rejoin there would still be tolerated, the
+# convergence assertions below do not care who closed the socket.
+FALLBACK_WINDOW = 5
+# The only reach into plugin privates: the live socket and the CRDT registry.
+_WS = f"{PLUGIN_PATH}.noteStream.ws"
+_UNACKED = (
+    f"(() => {{ const c = {PLUGIN_PATH}.syncEngine.crdt;"
+    " return typeof c?.unackedDocIds === 'function' ? c.unackedDocIds() : null; })()"
+)
+
+
+async def _unacked(cdp) -> list[str] | None:
+    """Unacked resident doc ids, or None when this plugin has no probe."""
+    return await cdp.evaluate(_UNACKED)
+
+
+async def _swallow_sends(cdp) -> None:
+    await cdp.evaluate(f"(() => {{ {_WS}.send = () => {{}}; return 'ok'; }})()")
+
+
+async def _restore_sends(cdp) -> None:
+    # Drops the instance override; harmless if the socket was already replaced.
+    await cdp.evaluate(f"(() => {{ if ({_WS}) delete {_WS}.send; return 'ok'; }})()")
 
 
 @pytest.mark.asyncio
@@ -42,42 +69,45 @@ async def test_edit_sent_on_half_dead_socket_is_redelivered_after_rejoin(
     path = "E2E/Crdt/UnackedRedeliver.md"
     base = "# Unacked Redeliver\nbase line.\n"
 
-    # Shared base: the note is resident (and acked) on A, present on B.
+    # Shared base: the note is resident on A and present on B.
     write_note(vault_a, path, base)
     api_sync.wait_for_note_content(path, "base line", timeout=CRDT_TIMEOUT)
     wait_for_content(vault_b, path, "base line", timeout=CRDT_TIMEOUT)
-    note = api_sync.wait_for_note(path, timeout=CRDT_TIMEOUT)
-    inner = note.get("note", note)
-    note_id = str(inner.get("id") or inner.get("note_id") or inner.get("uuid"))
+    note_id = await cdp_a.wait_for_note_id_for_path(path, timeout=CRDT_TIMEOUT)
     await cdp_a.wait_for_stream_connected()
 
-    # Half-open: sends are swallowed, readyState stays OPEN.
-    await cdp_a.evaluate(f"(() => {{ {NS}.ws.send = () => {{}}; return 'ok'; }})()")
-
-    write_note(vault_a, path, base + f"{MARKER}\n")
-
-    # The plugin sent into the void: the doc is resident and unacked.
-    deadline = asyncio.get_event_loop().time() + CRDT_TIMEOUT
-    while True:
-        unacked = await cdp_a.evaluate(
-            f"{PLUGIN_PATH}.syncEngine.crdt?.unackedDocIds?.() ?? []"
-        )
-        if note_id in unacked:
-            break
-        assert asyncio.get_event_loop().time() < deadline, (
-            f"edit never became an unacked doc on A (unacked={unacked!r}); "
-            "the edit did not take the live crdt_msg path"
-        )
+    # Baseline: the doc must be acked before the edit, so "unacked" later
+    # proves the edit's frame was lost (a receipt-less doc also reads unacked).
+    deadline = time.monotonic() + CRDT_TIMEOUT
+    while (unacked := await _unacked(cdp_a)) is not None and note_id in unacked:
+        assert time.monotonic() < deadline, f"base never acked on A: {unacked!r}"
         await asyncio.sleep(0.5)
+    supported = unacked is not None
 
-    # The server must not have the edit yet (the frame really was lost).
-    server = api_sync.get_note(path)
-    assert MARKER not in str(server), (
-        "server already has the edit; socket was not black-holed"
-    )
+    await _swallow_sends(cdp_a)
+    try:
+        write_note(vault_a, path, base + f"{MARKER}\n")
 
-    # Socket dies; the plugin reconnects and rejoins, which must re-send.
-    await cdp_a.evaluate(f"(() => {{ {NS}.ws.close(); return 'closed'; }})()")
+        if supported:
+            deadline = time.monotonic() + CRDT_TIMEOUT
+            while note_id not in (unacked := await _unacked(cdp_a) or []):
+                assert time.monotonic() < deadline, (
+                    f"edit never became an unacked doc on A (unacked={unacked!r}); "
+                    "the edit did not take the live crdt_msg path"
+                )
+                await asyncio.sleep(0.5)
+        else:
+            await asyncio.sleep(FALLBACK_WINDOW)
+
+        # The frame really was lost: the server still lacks the edit.
+        assert MARKER not in str(api_sync.get_note(path)), (
+            "server already has the edit; the socket was not black-holed"
+        )
+
+        # Socket dies; the plugin reconnects and rejoins, which must re-send.
+        await cdp_a.evaluate(f"(() => {{ {_WS}.close(); return 'closed'; }})()")
+    finally:
+        await _restore_sends(cdp_a)
 
     api_sync.wait_for_note_content(path, MARKER, timeout=CRDT_TIMEOUT)
     final = wait_for_content(vault_b, path, MARKER, timeout=CRDT_TIMEOUT)
