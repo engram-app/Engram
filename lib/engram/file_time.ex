@@ -42,6 +42,10 @@ defmodule Engram.FileTime do
   # fails in Postgres.
   @min_us -62_135_596_800_000_000
 
+  @doc "Whether `t` is in seconds (below 1e11 in magnitude), not milliseconds."
+  @spec seconds?(number()) :: boolean()
+  def seconds?(t) when is_number(t), do: abs(t) < @ms_from
+
   @doc "`{:ok, DateTime | nil}`, or `{:error, :out_of_range}`."
   @spec to_at(number() | nil) :: {:ok, DateTime.t() | nil} | {:error, :out_of_range}
   def to_at(nil), do: {:ok, nil}

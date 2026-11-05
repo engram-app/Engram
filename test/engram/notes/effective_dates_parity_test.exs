@@ -105,11 +105,13 @@ defmodule Engram.Notes.EffectiveDatesParityTest do
   end
 
   describe "file times (through Engram.FileTime)" do
-    test "seconds floored, milliseconds normalized, 0 and out of range unknown" do
+    test "seconds truncated, milliseconds normalized, 0, negatives and out of range unknown" do
       assert EffectiveDates.stored(nil, 1_700_000_000.9) == 1_700_000_000
       assert EffectiveDates.stored(nil, 1_700_000_000_900.0) == 1_700_000_000
       assert EffectiveDates.stored(nil, nil) == nil
       assert EffectiveDates.stored(nil, 0.0) == nil
+      # At or below 0 is unknown, as main's payload had it.
+      assert EffectiveDates.stored(nil, -5.0) == nil
       assert EffectiveDates.stored(nil, 1.0e19) == nil
       assert EffectiveDates.stored(42, 1_700_000_000.0) == 42
     end

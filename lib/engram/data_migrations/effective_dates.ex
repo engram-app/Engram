@@ -35,7 +35,12 @@ defmodule Engram.DataMigrations.EffectiveDates do
   @batch 1_000
   @max_fixed 50_000
 
-  @needs "n.kind = 'note' AND n.eff_v IS DISTINCT FROM n.version"
+  # Also a note whose ctime a previous release's ctime batch filled (no
+  # `version` bump, no `eff_created`): `stored/2` gives it a value exactly
+  # when `ctime > 0` and `ctime_at` is set, so the set still shrinks.
+  @needs "n.kind = 'note' AND (n.eff_v IS DISTINCT FROM n.version OR " <>
+           "(n.eff_created IS NULL AND n.fm_created_s IS NULL AND n.ctime > 0 AND " <>
+           "n.ctime_at IS NOT NULL))"
 
   @impl true
   def name, do: "note_effective_dates"

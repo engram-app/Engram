@@ -50,10 +50,9 @@ defmodule Engram.Notes.EffectiveDates do
 
   @doc """
   The stored part of an effective date: the frontmatter date `fm`, else the
-  file time `t` in whole seconds, else nil (the row time then applies). The
-  file time goes through `Engram.FileTime` (the one normalizer: milliseconds
-  to seconds, 0 is unknown, out of range is unknown), floored, so a seconds
-  value is `trunc(t)`.
+  file time `t` in whole seconds when above 0, else nil (the row time then
+  applies). Units follow `Engram.FileTime` (the one normalizer: milliseconds
+  to seconds, out of range is unknown); a seconds value is `trunc(t)`.
 
   Read from the double, not `mtime_at` / `ctime_at`: during the file-time
   expand both releases write the double, while a previous release moves it
@@ -62,12 +61,22 @@ defmodule Engram.Notes.EffectiveDates do
   """
   def stored(fm, _t) when is_integer(fm), do: fm
 
-  def stored(nil, t) do
-    case FileTime.to_at(t) do
-      {:ok, %DateTime{} = at} -> DateTime.to_unix(at)
-      _ -> nil
+  # Seconds (all of prod's `ctime` and all but 3 `mtime` rows): main's
+  # payload formula verbatim, `trunc(t)` behind `t > 0`, so a payload hash
+  # cannot move by construction. Milliseconds: `FileTime` (they move once,
+  # out of the year 58,000).
+  def stored(nil, t) when is_number(t) and t > 0 do
+    if FileTime.seconds?(t) do
+      trunc(t)
+    else
+      case FileTime.to_at(t) do
+        {:ok, %DateTime{} = at} -> DateTime.to_unix(at)
+        _ -> nil
+      end
     end
   end
+
+  def stored(nil, _t), do: nil
 
   @doc "Effective updated date. `fm` is the frontmatter's (nil when absent)."
   def updated(_note, fm) when is_integer(fm), do: {fm, nil}

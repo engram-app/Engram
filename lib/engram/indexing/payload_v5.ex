@@ -71,14 +71,20 @@ defmodule Engram.Indexing.PayloadV5 do
   end
 
   # The hour ceil is the payload's alone: `EffectiveDates` and the Postgres
-  # date columns stay exact. A file time is ceiled from its full precision
-  # (`FileTime`), not the floored second, so `14:00:00.5` is `15:00`.
+  # date columns stay exact. A file time is ceiled from its full precision,
+  # not the floored second, so `14:00:00.5` is `15:00`.
   defp ceil_fallback({up, nil}, _note), do: {up, nil}
   defp ceil_fallback({nil, src}, _note), do: {nil, src}
 
-  defp ceil_fallback({_up, @file_src}, note) do
-    {:ok, at} = FileTime.to_at(note.mtime)
-    {ceil(DateTime.to_unix(at, :microsecond) / (@hour * 1_000_000)) * @hour, @file_src}
+  # Seconds: main's formula verbatim on the raw double (hash identity by
+  # construction). Milliseconds: from `FileTime`'s full precision.
+  defp ceil_fallback({_up, @file_src}, %{mtime: t}) do
+    if FileTime.seconds?(t) do
+      {ceil(t / @hour) * @hour, @file_src}
+    else
+      {:ok, at} = FileTime.to_at(t)
+      {ceil(DateTime.to_unix(at, :microsecond) / (@hour * 1_000_000)) * @hour, @file_src}
+    end
   end
 
   defp ceil_fallback({up, src}, _note), do: {ceil(up / @hour) * @hour, src}
