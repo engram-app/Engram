@@ -43,15 +43,7 @@ defmodule Engram.NotesGenericPlanTest do
       {:ok, _} = Notes.upsert_note(user, vault, %{"path" => path, "content" => "x"}, actor: "api")
     end
 
-    for _ <- 1..1000 do
-      insert(:note,
-        user: user,
-        vault: vault,
-        path_hmac: :crypto.strong_rand_bytes(32),
-        folder_hmac: :crypto.strong_rand_bytes(32),
-        basename_hmac: :crypto.strong_rand_bytes(32)
-      )
-    end
+    seed_notes!(user, vault)
 
     Repo.query!("ALTER TABLE notes ALTER COLUMN user_id SET (n_distinct = 40)")
     Repo.query!("ALTER TABLE notes ALTER COLUMN vault_id SET (n_distinct = 40)")
@@ -62,6 +54,23 @@ defmodule Engram.NotesGenericPlanTest do
     assert Notes.Keys.ids?()
 
     %{user: user, vault: vault}
+  end
+
+  # 1,000 notes of random keys, in one INSERT (`Fixtures.insert_notes!/3`).
+  defp seed_notes!(user, vault) do
+    Engram.Fixtures.insert_notes!(
+      user,
+      vault,
+      for(
+        _ <- 1..1000,
+        do:
+          build(:note,
+            path_hmac: :crypto.strong_rand_bytes(32),
+            folder_hmac: :crypto.strong_rand_bytes(32),
+            basename_hmac: :crypto.strong_rand_bytes(32)
+          )
+      )
+    )
   end
 
   # The custom plan of the statement `fun` sends, after 7 runs in which no
@@ -129,15 +138,7 @@ defmodule Engram.NotesGenericPlanTest do
     {:ok, fresh, _} = Engram.Vaults.register_vault(u, "Fresh", Ecto.UUID.generate())
     {:ok, _} = Notes.upsert_note(u, fresh, %{"path" => "A.md", "content" => "x"}, actor: "api")
 
-    for _ <- 1..1000 do
-      insert(:note,
-        user: u,
-        vault: fresh,
-        path_hmac: :crypto.strong_rand_bytes(32),
-        folder_hmac: :crypto.strong_rand_bytes(32),
-        basename_hmac: :crypto.strong_rand_bytes(32)
-      )
-    end
+    seed_notes!(u, fresh)
 
     Repo.query!("ANALYZE notes")
     plan = plan_of(fn -> assert Notes.note_exists?(u, fresh, "A.md") end, ~r/"path_id" = \$/)

@@ -737,12 +737,18 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       vault_a = insert(:vault, user: user)
       vault_b = insert(:vault, user: user)
 
-      for {vault, label, count} <- [{vault_a, "a", 700}, {vault_b, "b", 505}],
-          i <- 1..count do
-        Engram.Fixtures.insert_note!(user, vault,
-          path: "batch-#{label}/note-#{i}.md",
-          content: "# Note #{label} #{i}",
-          embed_hash: nil
+      for {vault, label, count} <- [{vault_a, "a", 700}, {vault_b, "b", 505}] do
+        Engram.Fixtures.insert_notes!(
+          user,
+          vault,
+          for(
+            i <- 1..count,
+            do: %{
+              path: "batch-#{label}/note-#{i}.md",
+              content: "# Note #{label} #{i}",
+              embed_hash: nil
+            }
+          )
         )
       end
 
