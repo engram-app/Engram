@@ -28,7 +28,7 @@ defmodule Engram.Notes.Chunk do
     belongs_to :vault, Engram.Vaults.Vault
 
     # No `created_at`: nothing read it. Unwritten since 20261026000300,
-    # dropped by 20261105000000.
+    # dropped by 20261105020000.
   end
 
   def changeset(chunk, attrs) do
