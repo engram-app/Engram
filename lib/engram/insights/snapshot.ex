@@ -383,24 +383,21 @@ defmodule Engram.Insights.Snapshot do
   defp scan_vaults(repo, ids, seqs, day) do
     notes = notes_in(ids)
 
-    # Derived folders and empty-folder markers alike.
-    folders =
+    # Folders (derived and empty-folder markers alike) and tags (notes only)
+    # in ONE pass over the live rows: `notes` is the widest heap here, and one
+    # subquery for each read it twice per chunk. The lateral unnest keeps an
+    # untagged row (tag NULL), so its folder still counts.
+    folders_tags =
       from(n in Note,
-        where: n.vault_id in ^ids and is_nil(n.deleted_at) and not is_nil(n.folder_hmac),
+        left_lateral_join: t in fragment("SELECT unnest(?) AS tag", n.tags_hmac),
+        on: true,
+        where: n.vault_id in ^ids and is_nil(n.deleted_at),
         group_by: n.vault_id,
-        select: %{vault_id: n.vault_id, n: count(n.folder_hmac, :distinct)}
-      )
-
-    tag_rows =
-      from(n in Note,
-        where: n.vault_id in ^ids and is_nil(n.deleted_at) and n.kind == "note",
-        select: %{vault_id: n.vault_id, tag: fragment("unnest(?)", n.tags_hmac)}
-      )
-
-    tags =
-      from(t in subquery(tag_rows),
-        group_by: t.vault_id,
-        select: %{vault_id: t.vault_id, n: count(t.tag, :distinct)}
+        select: %{
+          vault_id: n.vault_id,
+          folders: count(n.folder_hmac, :distinct),
+          tags: filter(count(t.tag, :distinct), n.kind == "note")
+        }
       )
 
     links =
@@ -420,10 +417,8 @@ defmodule Engram.Insights.Snapshot do
     from(v in Vault,
       left_join: nv in subquery(notes),
       on: nv.vault_id == v.id,
-      left_join: fv in subquery(folders),
-      on: fv.vault_id == v.id,
-      left_join: tv in subquery(tags),
-      on: tv.vault_id == v.id,
+      left_join: ft in subquery(folders_tags),
+      on: ft.vault_id == v.id,
       left_join: lv in subquery(links),
       on: lv.vault_id == v.id,
       left_join: av in subquery(attachments),
@@ -437,9 +432,9 @@ defmodule Engram.Insights.Snapshot do
         note_bytes: type(coalesce(nv.bytes, 0), :integer),
         attachments: type(coalesce(av.n, 0), :integer),
         attachment_bytes: type(coalesce(av.bytes, 0), :integer),
-        folders: type(coalesce(fv.n, 0), :integer),
+        folders: type(coalesce(ft.folders, 0), :integer),
         links: type(coalesce(lv.n, 0), :integer),
-        tags: type(coalesce(tv.n, 0), :integer)
+        tags: type(coalesce(ft.tags, 0), :integer)
       }
     )
     |> repo.all(timeout: @chunk_timeout)
