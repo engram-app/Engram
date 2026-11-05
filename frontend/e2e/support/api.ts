@@ -2,11 +2,15 @@ import { expect, type Page } from "@playwright/test";
 
 export const PASS = "E2eTestPass!99";
 
+// First-run admin claim token, pinned on the backend via ENGRAM_SETUP_TOKEN
+// (verify.yml). Sent on every register: any of them may be the first signup.
+export const SETUP_TOKEN = process.env.ENGRAM_SETUP_TOKEN ?? "e2e-setup-token";
+
 export async function registerAndLogin(baseURL: string, email: string): Promise<string> {
 	const reg = await fetch(`${baseURL}/api/auth/register`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ email, password: PASS }),
+		body: JSON.stringify({ email, password: PASS, setup_token: SETUP_TOKEN }),
 	});
 	if (!reg.ok && reg.status !== 422) {
 		throw new Error(`register failed: ${reg.status} ${await reg.text()}`);

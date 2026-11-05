@@ -10,7 +10,8 @@ export interface AuthAdapter {
 	getToken(opts?: { skipCache?: boolean }): Promise<string | null>;
 
 	login?(email: string, password: string): Promise<void>;
-	register?(email: string, password: string, invite?: string): Promise<void>;
+	/** `setupToken` is the self-host first-run token, required only while no admin exists. */
+	register?(email: string, password: string, invite?: string, setupToken?: string): Promise<void>;
 	logout(): Promise<void>;
 
 	/** Clerk renders its own SignIn/SignUp/UserButton; local mode uses custom components */

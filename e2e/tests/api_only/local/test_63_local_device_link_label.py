@@ -17,6 +17,7 @@ import uuid
 
 import requests
 
+from helpers.auth_provider import SETUP_TOKEN
 from helpers.billing import grant_vault_headroom
 
 API_URL = os.environ.get("ENGRAM_API_URL") or "http://localhost:8100/api"
@@ -32,7 +33,7 @@ def _register(label: str, email: str | None = None) -> str:
     """Register a local user and return its access token."""
     resp = requests.post(
         f"{API_URL}/auth/register",
-        json={"email": email or _email(label), "password": PASSWORD},
+        json={"setup_token": SETUP_TOKEN, "email": email or _email(label), "password": PASSWORD},
         timeout=TIMEOUT,
     )
     assert resp.status_code == 201, f"register failed: {resp.status_code} {resp.text}"
