@@ -200,7 +200,10 @@ defmodule Engram.QueryPlan do
   on statistics earlier tests left behind (CI drew `note_attrs_pkey` over
   the field catalog's partial index that way). Prod's cold rows are
   all-visible. Run it after the ANALYZE (`fresh!/1`), which resets the
-  count. Inside the test's transaction, rolled back with it.
+  count. It changes only the planner's cost estimate (an UPDATE of
+  `pg_class.relallvisible` inside the test's transaction, rolled back with
+  it), never the visibility map itself or any data: the executor still
+  checks each heap page.
   """
   @spec all_visible!([String.t()]) :: :ok
   def all_visible!(tables) do
