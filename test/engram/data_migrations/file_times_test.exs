@@ -145,7 +145,7 @@ defmodule Engram.DataMigrations.FileTimesTest do
     assert oor_lines(log) == []
   end
 
-  test "a table that walked clean is not re-walked while another is open", ctx do
+  test "a clean table is skipped while another is open, then confirmed before done", ctx do
     {:ok, att} =
       Attachments.upsert_attachment(ctx.user, ctx.vault, %{
         "path" => "a.png",
@@ -159,14 +159,39 @@ defmodule Engram.DataMigrations.FileTimesTest do
     # One note per pass keeps notes open; attachments and uploads walk clean.
     assert {:more, _} = FileTimes.run_pass(batch: 1, max_fixed: 1)
 
-    # Drift written after attachments closed is not visited again this run.
+    # Drift written after attachments walked clean is skipped while notes
+    # stay open...
     set!(ctx, Attachment, att.id, mtime_at: nil)
-    run_to_done(batch: 1, max_fixed: 1)
+    assert {:more, _} = FileTimes.run_pass(batch: 1, max_fixed: 1)
     assert [%{mtime_at: nil}] = rows(ctx, Attachment, mtime: :mtime_at)
-    assert_parity!(ctx, Note, mtime: :mtime_at, ctime: :ctime_at)
 
-    # Once the ledger closed the memory is gone: a new run walks every table.
-    run_to_done(batch: 1)
+    # ...but the ledger closes only after one confirming pass over all
+    # three tables, so it is repaired before `:done`.
+    run_to_done(batch: 1, max_fixed: 1)
+    assert_parity!(ctx, Attachment, mtime: :mtime_at)
+    assert_parity!(ctx, Note, mtime: :mtime_at, ctime: :ctime_at)
+  end
+
+  test "the runner sets completed_at only after drift behind a clean walk is repaired", ctx do
+    {:ok, att} =
+      Attachments.upsert_attachment(ctx.user, ctx.vault, %{
+        "path" => "a.png",
+        :content => "png",
+        "mtime" => 1_776_072_500.5
+      })
+
+    set!(ctx, Note, note!(ctx, "a.md", %{"mtime" => 7.0}), mtime_at: nil)
+    set!(ctx, Note, note!(ctx, "b.md", %{"mtime" => 8.0}), mtime_at: nil)
+
+    # Attachments walk clean now; notes stay open (one row per walk).
+    assert {:more, _} = FileTimes.run_pass(batch: 1, max_fixed: 1)
+    set!(ctx, Attachment, att.id, mtime_at: nil)
+
+    Stream.repeatedly(fn -> Engram.Workers.DataMigrationsRunner.run(FileTimes) end)
+    |> Stream.take(20)
+    |> Enum.find(&(&1 in [:done, :skipped]))
+
+    assert Engram.DataMigrations.done?(FileTimes.name(), FileTimes.version())
     assert_parity!(ctx, Attachment, mtime: :mtime_at)
   end
 

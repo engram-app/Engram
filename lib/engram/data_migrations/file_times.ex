@@ -53,7 +53,6 @@ defmodule Engram.DataMigrations.FileTimes do
   # non-HOT (every index gets an entry) on a 4 GB RDS that has swapped.
   @batch 200
   @max_fixed 10_000
-  @ms_from 100_000_000_000
 
   @tables [
     {Engram.Notes.Note, [mtime: :mtime_at, ctime: :ctime_at]},
@@ -89,17 +88,27 @@ defmodule Engram.DataMigrations.FileTimes do
           {:more, rows} <- [walk(schema, table, pairs, opts)],
           do: {table, rows}
 
-    clean =
-      MapSet.new(for {s, _} <- @tables, do: s.__schema__(:source))
-      |> MapSet.difference(MapSet.new(open, &elem(&1, 0)))
+    cond do
+      open != [] ->
+        :persistent_term.put(@clean, clean_now(open))
+        {:more, rows: open |> Enum.map(&elem(&1, 1)) |> Enum.sum()}
 
-    if open == [] do
-      forget()
-      :done
-    else
-      :persistent_term.put(@clean, clean)
-      {:more, rows: open |> Enum.map(&elem(&1, 1)) |> Enum.sum()}
+      # The last open table closed, but a table skipped this pass walked
+      # clean in an earlier one: drift written since would be missed. One
+      # confirming pass over all three before done.
+      MapSet.size(clean) > 0 ->
+        forget()
+        {:more, rows: 0}
+
+      true ->
+        forget()
+        :done
     end
+  end
+
+  defp clean_now(open) do
+    MapSet.new(for {s, _} <- @tables, do: s.__schema__(:source))
+    |> MapSet.difference(MapSet.new(open, &elem(&1, 0)))
   end
 
   defp walk(schema, table, pairs, opts) do
@@ -188,7 +197,7 @@ defmodule Engram.DataMigrations.FileTimes do
   end
 
   defp refresh_ms_payloads(repo, Engram.Notes.Note, pairs, fixed, tally) do
-    ms = for {row, _} <- fixed, Enum.any?(pairs, fn {d, _} -> ms?(row[d]) end), do: row
+    ms = for {row, _} <- fixed, Enum.any?(pairs, fn {d, _} -> FileTime.ms?(row[d]) end), do: row
 
     if ms != [] do
       ids = Enum.map(ms, & &1.id)
@@ -208,8 +217,6 @@ defmodule Engram.DataMigrations.FileTimes do
   end
 
   defp refresh_ms_payloads(_repo, _schema, _pairs, _fixed, _tally), do: :ok
-
-  defp ms?(t), do: is_number(t) and abs(t) >= @ms_from and FileTime.normalize(t) != nil
 
   defp write(_repo, _schema, []), do: []
 

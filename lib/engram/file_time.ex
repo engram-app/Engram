@@ -103,14 +103,14 @@ defmodule Engram.FileTime do
   @spec epoch(DateTime.t() | nil, number() | nil) :: number() | nil
   def epoch(at, nil), do: at && seconds(at)
 
-  def epoch(_at, t) when abs(t) < @ms_from, do: t
+  def epoch(_at, t), do: if(ms?(t), do: seconds(normalize(t)), else: t)
 
-  def epoch(_at, t) do
-    case normalize(t) do
-      nil -> t
-      at -> seconds(at)
-    end
-  end
+  @doc """
+  True for an in-range double in milliseconds: the one value whose served
+  seconds differ from the stored number (`epoch/2`).
+  """
+  @spec ms?(number() | nil) :: boolean()
+  def ms?(t), do: is_number(t) and abs(t) >= @ms_from and normalize(t) != nil
 
   defp seconds(at), do: DateTime.to_unix(at, :microsecond) / 1_000_000
 
