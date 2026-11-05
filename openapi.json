@@ -1071,14 +1071,14 @@
             "x-validate": null
           },
           "updated_after": {
-            "description": "Only notes whose frontmatter timestamp is at or after this ISO 8601 instant.",
+            "description": "Only notes whose frontmatter timestamp is at or after this ISO 8601 instant. A note without one uses its file's modified time, rounded up to the hour.",
             "format": "date-time",
             "type": "string",
             "x-struct": null,
             "x-validate": null
           },
           "updated_before": {
-            "description": "Only notes whose frontmatter timestamp is at or before this ISO 8601 instant.",
+            "description": "Only notes whose frontmatter timestamp is at or before this ISO 8601 instant. A note without one uses its file's modified time, rounded up to the hour.",
             "format": "date-time",
             "type": "string",
             "x-struct": null,
