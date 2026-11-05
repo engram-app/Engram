@@ -83,8 +83,8 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
           Repo.query!(
             """
             INSERT INTO chunks
-              (note_id, user_id, vault_id, position, char_start, char_end, qdrant_point_id, created_at)
-            SELECT $1, $2, $3, g, 0, 1, gen_random_uuid(), now()
+              (note_id, user_id, vault_id, position, char_start, char_end, qdrant_point_id)
+            SELECT $1, $2, $3, g, 0, 1, gen_random_uuid()
             FROM generate_series(1, $4) g
             """,
             [
