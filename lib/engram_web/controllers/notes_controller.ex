@@ -578,7 +578,11 @@ defmodule EngramWeb.NotesController do
   defp parse_ctime_entries(entries) do
     Enum.reduce_while(entries, {:ok, []}, fn
       %{"path" => p, "ctime" => c}, {:ok, acc} when is_binary(p) and is_number(c) and c > 0 ->
-        {:cont, {:ok, [%{path: p, ctime: c} | acc]}}
+        # Out of range (`Engram.FileTime`) is the caller's error, not a 500.
+        case Engram.FileTime.to_at(c) do
+          {:ok, _} -> {:cont, {:ok, [%{path: p, ctime: c} | acc]}}
+          {:error, _} -> {:halt, :error}
+        end
 
       _, _ ->
         {:halt, :error}

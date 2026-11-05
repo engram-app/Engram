@@ -52,6 +52,16 @@ defmodule EngramWeb.NotesControllerTest do
 
       big = for i <- 1..501, do: %{path: "n#{i}.md", ctime: 1.0}
       assert conn |> post("/api/notes/ctime", %{entries: big}) |> json_response(400)
+
+      huge = post(conn, "/api/notes/ctime", %{entries: [%{path: "a.md", ctime: 1.0e19}]})
+      assert json_response(huge, 400)
+    end
+
+    test "422 for an out-of-range mtime or ctime", %{conn: conn} do
+      for field <- [:mtime, :ctime] do
+        conn = post(conn, "/api/notes", %{:path => "big.md", :content => "x", field => 1.0e19})
+        assert json_response(conn, 422)
+      end
     end
 
     test "upserts an existing note and increments version", %{conn: conn} do

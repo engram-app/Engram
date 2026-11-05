@@ -6,6 +6,8 @@ defmodule Engram.Attachments.Upload do
   use Engram.Schema
   import Ecto.Changeset
 
+  alias Engram.FileTime
+
   @type t :: %__MODULE__{}
 
   @fields [
@@ -35,6 +37,8 @@ defmodule Engram.Attachments.Upload do
     field :mime_type, :string
     field :size_bytes, :integer
     field :mtime, :float
+    # `mtime` as a timestamp (`Engram.FileTime`), derived by `changeset/2`.
+    field :mtime_at, :utc_datetime_usec
     field :part_size, :integer
     field :part_count, :integer
     field :storage_key, :string
@@ -59,6 +63,7 @@ defmodule Engram.Attachments.Upload do
     upload
     |> cast(attrs, @fields)
     |> validate_required(@fields -- [:mtime])
+    |> FileTime.put_at(:mtime, :mtime_at)
     |> validate_number(:size_bytes, greater_than: 0)
   end
 end

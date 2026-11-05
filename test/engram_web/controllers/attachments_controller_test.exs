@@ -805,6 +805,12 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert state.req_body == "PNG"
     end
 
+    # Past year 9999 as milliseconds: the caller's error, not a 500.
+    test "422 for an out-of-range mtime", %{conn: conn} do
+      conn1 = raw_post(conn, %{path: "big.png", mtime: "1.0e19"}, @sample_content)
+      assert json_response(conn1, 422)
+    end
+
     for bad <- ["NaN", "1,5", "", "inf", "1e400"] do
       test "422 for mtime #{inspect(bad)} and nothing is stored", %{conn: conn} do
         conn1 = raw_post(conn, %{path: "m.png", mtime: unquote(bad)}, @sample_content)

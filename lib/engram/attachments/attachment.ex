@@ -3,6 +3,8 @@ defmodule Engram.Attachments.Attachment do
   use Engram.Schema
   import Ecto.Changeset
 
+  alias Engram.FileTime
+
   @type t :: %__MODULE__{}
 
   schema "attachments" do
@@ -33,6 +35,8 @@ defmodule Engram.Attachments.Attachment do
     field :mime_type, :string
     field :size_bytes, :integer
     field :mtime, :float
+    # `mtime` as a timestamp (`Engram.FileTime`), derived by `changeset/2`.
+    field :mtime_at, :utc_datetime_usec
     field :storage_key, :string
     field :deleted_at, :utc_datetime
     # The undoable delete that tombstoned this row (#609), restored by
@@ -99,6 +103,7 @@ defmodule Engram.Attachments.Attachment do
       :segment_size,
       :segment_count
     ])
+    |> FileTime.put_at(:mtime, :mtime_at)
     |> validate_required([
       :user_id,
       :vault_id,
