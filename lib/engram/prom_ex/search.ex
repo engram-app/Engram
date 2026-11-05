@@ -64,6 +64,12 @@ defmodule Engram.PromEx.Search do
         # still `status: :ok` with results — so without this counter an operator
         # whose embedder is slow or down just gets quietly worse search. `reason`
         # is `Search.error_label/1`, deliberately bounded for cardinality.
+        counter(
+          metric_prefix ++ [:degraded, :total],
+          event_name: @degraded_event,
+          description: "Searches that degraded to a single leg (embed failure).",
+          tags: [:leg, :reason]
+        ),
         # A `:too_wide` filter (immutable chunk index): the search ran over
         # the whole tenant and post-filtered in Postgres. `rounds` 2 is the
         # one widen (16x); `short` true means the page came back under its
@@ -73,12 +79,6 @@ defmodule Engram.PromEx.Search do
           event_name: @post_filter_event,
           description: "Post-filtered (too-wide) searches, by Qdrant rounds and short page.",
           tags: [:rounds, :short]
-        ),
-        counter(
-          metric_prefix ++ [:degraded, :total],
-          event_name: @degraded_event,
-          description: "Searches that degraded to a single leg (embed failure).",
-          tags: [:leg, :reason]
         ),
         # Hits dropped, by `reason`: `no_chunk_row` (Qdrant upsert lands
         # before the rows commit; brief per edit, a sustained rate means
