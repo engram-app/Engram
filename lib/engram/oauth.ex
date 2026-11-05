@@ -1,7 +1,4 @@
 defmodule Engram.OAuth do
-  # RFC 7636 §4.1: 43-128 characters of the unreserved set.
-  @code_challenge_format ~r/\A[A-Za-z0-9\-._~]{43,128}\z/
-
   @moduledoc """
   High-level context for the OAuth 2.1 authorization server.
 
@@ -1985,6 +1982,9 @@ defmodule Engram.OAuth do
 
   defp check_response_type(params, redirect_uri),
     do: {:redirect_error, redirect_uri, "unsupported_response_type", params["state"]}
+
+  # RFC 7636 §4.1: 43-128 characters of the unreserved set.
+  @code_challenge_format ~r/\A[A-Za-z0-9\-._~]{43,128}\z/
 
   defp check_pkce(%{"code_challenge" => challenge} = params, redirect_uri)
        when is_binary(challenge) and challenge != "" do
