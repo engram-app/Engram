@@ -261,6 +261,41 @@ defmodule Engram.SearchNoteFilterTest do
     end
   end
 
+  test ":too_wide counts a point with no chunk row as a dropped hit, once",
+       %{bypass: bypass, user: user, vault: vault} do
+    {keep, point} = note_with_point(user, vault, "Health/keep.md")
+    test_pid = self()
+    ref = make_ref()
+    event = [:engram, :search, :hit_dropped]
+
+    :telemetry.attach(
+      {__MODULE__, ref},
+      event,
+      fn ^event, m, meta, _ -> send(test_pid, {:dropped, m.count, meta.reason}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
+
+    answer(fn
+      [] -> {:ok, :too_wide}
+      [within: _] -> {:ok, {:ids, [keep.id]}}
+    end)
+
+    embed()
+    # A short page (2 < 20): no widen, so one round.
+    expect_query(bypass, [
+      %{"id" => Ecto.UUID.generate(), "score" => 0.9},
+      %{"id" => point, "score" => 0.8}
+    ])
+
+    assert {:ok, [_hit]} =
+             Search.search(user, vault, "q", folder: "Health", mode: :vector, diversity: 0.0)
+
+    assert_received {:dropped, 1, :no_chunk_row}
+    refute_received {:dropped, _, _}
+  end
+
   test ":too_wide with nothing kept by within: is an empty page",
        %{bypass: bypass, user: user, vault: vault} do
     {_note, point} = note_with_point(user, vault, "Health/a.md")

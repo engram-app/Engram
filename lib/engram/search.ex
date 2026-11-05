@@ -782,10 +782,16 @@ defmodule Engram.Search do
 
   # `:too_wide`: keep the candidates whose note the filter matches, the
   # page's `keep` best. Notes come from the chunk rows alone (no decrypt); a
-  # point with no chunk row is dropped here, as `postgres_hits/2` would.
+  # point with no chunk row is dropped and counted here, as
+  # `postgres_hits/2` would.
   defp within_filter(candidates, user, {vaults, filter}, keep) do
     notes = Engram.Notes.note_ids_by_qdrant_points(user, Enum.map(candidates, & &1.qdrant_id))
     note_ids = notes |> Map.values() |> Enum.uniq()
+
+    case Enum.count(candidates, &(not is_map_key(notes, &1.qdrant_id))) do
+      0 -> :ok
+      rowless -> emit_hit_dropped(:no_chunk_row, rowless, user)
+    end
 
     with {:ok, {:ids, matched}} <- note_filter().resolve(user, vaults, filter, within: note_ids) do
       matched = MapSet.new(matched)
