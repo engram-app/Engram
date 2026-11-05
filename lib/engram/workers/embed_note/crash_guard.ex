@@ -8,8 +8,8 @@ defmodule Engram.Workers.EmbedNote.CrashGuard do
   and ReconcileEmbeddings kept enqueuing fresh jobs.
 
   Dead-man stamp on the note row. `stamp/1` writes who started an attempt (this
-  node and VM incarnation) and for which content, right before embedding;
-  `clear/2` removes it when the attempt returns, however it returns. A stamp
+  node and VM incarnation) and for which content, right before embedding; a
+  success clears it (`clear/1`) and `release/2` removes it on any other return. A stamp
   still present when the next attempt starts, left by a runner that is no
   longer alive, is ONE death charged to THIS note: per-note, so jobs that merely
   shared the dying node are not blamed for the culprit.
@@ -87,6 +87,14 @@ defmodule Engram.Workers.EmbedNote.CrashGuard do
 
     cond do
       live_stamp?(note) ->
+        # Counted: a stamp an attempt failed to release looks exactly like
+        # this, and snoozes the note's every job until it ages out (#2449).
+        :telemetry.execute(
+          [:engram, :embed, :crash_guard_snooze],
+          %{count: 1},
+          %{reason: :live_stamp}
+        )
+
         {:snooze, 60}
 
       dead_stamp?(note) and same_content? and known + 1 >= 2 ->
@@ -106,25 +114,50 @@ defmodule Engram.Workers.EmbedNote.CrashGuard do
     end
   end
 
-  @doc "Write the dead-man stamp right before embedding."
+  @doc """
+  Write the dead-man stamp right before embedding. Returns its `started_at`,
+  which `release/2` needs.
+  """
   def stamp(%Note{} = note) do
-    write(note,
-      embed_started_at: DateTime.utc_now(),
-      embed_started_by: runner_id(),
-      embed_started_hash: note.content_hash,
-      embed_crashes: if(note.embed_started_hash == note.content_hash, do: note.embed_crashes)
-    )
+    at = DateTime.utc_now()
+
+    :ok =
+      write(note,
+        embed_started_at: at,
+        embed_started_by: runner_id(),
+        embed_started_hash: note.content_hash,
+        embed_crashes: if(note.embed_started_hash == note.content_hash, do: note.embed_crashes)
+      )
+
+    {:ok, at}
   end
 
   @doc """
-  Remove the stamp once the attempt returned. A success also forgives the
-  count; a graceful failure keeps it (the poison cooldown handles those).
+  Remove the stamp once the attempt succeeded, and forgive the crash count.
+  Runs inside the index write's transaction.
   """
-  def clear(%Note{} = note, :ok),
+  def clear(%Note{} = note),
     do: write(note, embed_started_at: nil, embed_started_by: nil, embed_crashes: nil)
 
-  def clear(%Note{} = note, _result),
-    do: write(note, embed_started_at: nil, embed_started_by: nil)
+  @doc """
+  Remove the stamp `stamp/1` wrote at `started_at`, on any return of the
+  attempt. Keeps the crash count (the poison cooldown handles graceful
+  failures). Matching `started_at` leaves a newer attempt's stamp alone, and
+  makes this a no-op once `clear/1` ran.
+  """
+  def release(%Note{} = note, %DateTime{} = started_at) do
+    {:ok, _} =
+      Repo.with_tenant(note.user_id, fn ->
+        Repo.update_all(
+          from(n in Note,
+            where: n.id == ^note.id and n.kind == "note" and n.embed_started_at == ^started_at
+          ),
+          set: [embed_started_at: nil, embed_started_by: nil]
+        )
+      end)
+
+    :ok
+  end
 
   defp live_stamp?(note), do: note.embed_started_at != nil and not dead_stamp?(note)
 

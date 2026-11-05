@@ -369,25 +369,30 @@ defmodule Engram.Workers.EmbedNote do
 
   defp preflight(other), do: other
 
-  # The dead-man stamp brackets the embed: written before, cleared however the
-  # attempt returns, raise and exit included. Only a killed node leaves it.
-  # A success clears it inside the index write's transaction
-  # (`stamp_embed_hash/3`), so only the other outcomes clear it here.
+  # The dead-man stamp brackets the embed: written before, released however
+  # the attempt returns, raise and exit included. Only a killed node leaves it.
+  # A committed index write clears it in its own transaction
+  # (`stamp_embed_hash/3`, which also forgives the crash count) and says so
+  # with `{:ok, :stamp_cleared}`. Every other return releases it here, the
+  # `:ok`s that never reach that transaction included (`:superseded`,
+  # `:over_budget`, `:rebuild_double_pay`: #2449, they left the stamp and the
+  # note's next jobs snoozed until it aged out).
   defp guarded_embed(note, user, vault, old_path_hmac_b64, opts) do
-    :ok = CrashGuard.stamp(note)
+    {:ok, started_at} = CrashGuard.stamp(note)
 
     try do
-      result = run_embed(note, user, vault, old_path_hmac_b64, opts)
-      if result != :ok, do: :ok = CrashGuard.clear(note, result)
-      result
-    rescue
-      e ->
-        _ = CrashGuard.clear(note, :error)
-        reraise e, __STACKTRACE__
+      run_embed(note, user, vault, old_path_hmac_b64, opts)
     catch
-      :exit, reason ->
-        _ = CrashGuard.clear(note, :error)
-        exit(reason)
+      kind, reason ->
+        _ = CrashGuard.release(note, started_at)
+        :erlang.raise(kind, reason, __STACKTRACE__)
+    else
+      {:ok, :stamp_cleared} ->
+        :ok
+
+      result ->
+        :ok = CrashGuard.release(note, started_at)
+        result
     end
   end
 
@@ -906,7 +911,7 @@ defmodule Engram.Workers.EmbedNote do
           # per note of a former over-cap vault).
           {:ok, _count, _embedded_bytes, _dense?} ->
             if parked? and !opts[:budget_spent], do: newly_parked(note, user), else: :ok
-            :ok
+            {:ok, :stamp_cleared}
 
           # The v5 rebuild left `on` (halted, or switched off) after this job
           # was routed: no Voyage call. Re-routed a minute later, it either
@@ -1051,7 +1056,7 @@ defmodule Engram.Workers.EmbedNote do
     ]
 
     case Indexing.index_note_with_usage(decrypted_note, vault, user, opts) do
-      {:ok, _count, _bytes, _dense?} -> :ok
+      {:ok, _count, _bytes, _dense?} -> {:ok, :stamp_cleared}
       # A refused reservation still runs dense when it would charge nothing
       # (index budget on, every changed chunk already known). Past the pass
       # embed budget that pass continues like any other: snooze, no attempt.
@@ -1104,7 +1109,7 @@ defmodule Engram.Workers.EmbedNote do
   defp stamp_embed_hash(%Note{content_hash: nil} = note, dense?, count, pass, park, model) do
     case indexed_hash(note) do
       {:ok, hash} -> stamp(note, hash, dense?, count, pass, park, model)
-      _ -> CrashGuard.clear(note, :ok)
+      _ -> CrashGuard.clear(note)
     end
   end
 
@@ -1266,7 +1271,7 @@ defmodule Engram.Workers.EmbedNote do
     parked? = count > 0 and Keyword.get(set, :embed_budget_parked) == true
     if parked?, do: :ok = back_off_stale_park(note, stamped)
 
-    :ok = CrashGuard.clear(note, :ok)
+    :ok = CrashGuard.clear(note)
 
     if parked?,
       do:

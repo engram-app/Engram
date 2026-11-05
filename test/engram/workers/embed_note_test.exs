@@ -1823,6 +1823,72 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert {:cancel, :isolated_after_node_death} = perform_job(EmbedNote, args(note))
     end
+
+    # #2449: an `:ok` that never reached the success transaction left the
+    # stamp, so every later job for the note snoozed until it aged out (15 min).
+    test "a pass superseded by a newer edit clears its stamp", %{bypass: bypass, note: note} do
+      stub_qdrant(bypass)
+
+      expect(Engram.MockEmbedder, :embed_texts, fn texts ->
+        from(n in Note, where: n.id == ^note.id)
+        |> Repo.update_all([set: [content_hash: "changed_during_embed"]],
+          skip_tenant_check: true
+        )
+
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      assert :ok = perform_job(EmbedNote, args(note))
+
+      updated = reload(note)
+      assert is_nil(updated.embed_started_at)
+      assert CrashGuard.check(updated, %Oban.Job{queue: "embed"}) == :run
+    end
+
+    test "a node killed mid-embed leaves its stamp for the dead-man", %{
+      bypass: bypass,
+      note: note
+    } do
+      stub_qdrant_optional(bypass)
+      parent = self()
+
+      {:ok, pid} =
+        Task.start(fn ->
+          stub(Engram.MockEmbedder, :embed_texts, fn _texts ->
+            send(parent, :embedding)
+            Process.sleep(:infinity)
+          end)
+
+          perform_job(EmbedNote, args(note))
+        end)
+
+      assert_receive :embedding, 5_000
+      Process.exit(pid, :kill)
+
+      updated = reload(note)
+      assert updated.embed_started_at
+      assert updated.embed_started_by == CrashGuard.runner_id()
+    end
+
+    test "a live-stamp snooze emits telemetry", %{note: note} do
+      stamp!(note, embed_started_by: CrashGuard.runner_id())
+      parent = self()
+      id = {:crash_guard_snooze, make_ref()}
+
+      :telemetry.attach(
+        id,
+        [:engram, :embed, :crash_guard_snooze],
+        fn _e, m, meta, _ ->
+          send(parent, {:snoozed, m, meta})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(id) end)
+
+      assert {:snooze, 60} = perform_job(EmbedNote, args(note))
+      assert_receive {:snoozed, %{count: 1}, %{reason: :live_stamp}}
+    end
   end
 
   # Model per plan (`Engram.EmbedModels`): the owner's plan picks the doc model

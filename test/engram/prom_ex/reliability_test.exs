@@ -76,6 +76,10 @@ defmodule Engram.PromEx.ReliabilityTest do
       assert :table in tags
     end
 
+    test "counts crash-guard stamp snoozes by reason (no note or user id)" do
+      assert %{tags: [:reason]} = counter_for([:engram, :embed, :crash_guard_snooze])
+    end
+
     test "counts embed failures tagged by error_kind + status" do
       assert %{tags: tags} = counter_for([:engram, :embed, :failed])
       assert :error_kind in tags

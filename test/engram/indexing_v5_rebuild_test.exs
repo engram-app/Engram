@@ -523,6 +523,41 @@ defmodule Engram.IndexingV5RebuildTest do
     assert reload(note).embed_retry_after == EmbedNote.parked_until_edited()
   end
 
+  # #2449: the double-pay park returns `:ok` without the success transaction
+  # that clears the crash guard's stamp, so the note's next jobs snoozed.
+  test "a rebuild parked rebuild_double_pay clears its crash stamp", ctx do
+    note = indexed(ctx)
+
+    tenant(ctx.user, fn ->
+      Repo.update_all(from(n in Note, where: n.id == ^note.id),
+        set: [
+          embed_hash: note.content_hash,
+          dense_indexed_hash: note.content_hash,
+          embed_model: Indexing.embed_model(),
+          chunker_version: 3,
+          keyword_version: 2,
+          rebuild_paid_at: DateTime.utc_now()
+        ]
+      )
+    end)
+
+    drop_dense(ctx.store)
+    clear_vector_cache()
+    Engram.DataMigrations.reset_cache()
+    Engram.Cache.clear_local(:rebuild)
+    Repo.query!("DELETE FROM rebuild_ledger")
+    Engram.Rebuild.set_budget(1_000_000)
+    ServiceConfig.put_override(:index_rebuild, "on")
+
+    assert :ok = perform_job(EmbedNote, %{note_id: note.id, user_id: ctx.user.id})
+    assert embedded() == []
+
+    row = reload(note)
+    assert row.embed_retry_after == EmbedNote.parked_until_edited()
+    assert is_nil(row.embed_started_at)
+    assert CrashGuard.check(row, %Oban.Job{queue: "embed"}) == :run
+  end
+
   test "a rebuild job that killed its node reruns isolated as a rebuild", ctx do
     note = indexed(ctx)
 
