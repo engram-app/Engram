@@ -191,6 +191,28 @@ defmodule Engram.QueryPlan do
     :ok
   end
 
+  @doc """
+  The visibility map of `tables` counted as fully set (`relallvisible =
+  relpages`), for a test that asserts an index-only scan. A sandbox cannot
+  VACUUM, so no page of a test's rows is all-visible and the planner costs
+  every index-only scan as a heap fetch per row: it then ties with a plain
+  index scan of another index at the cost floor, and which one wins turns
+  on statistics earlier tests left behind (CI drew `note_attrs_pkey` over
+  the field catalog's partial index that way). Prod's cold rows are
+  all-visible. Run it after the ANALYZE (`fresh!/1`), which resets the
+  count. Inside the test's transaction, rolled back with it.
+  """
+  @spec all_visible!([String.t()]) :: :ok
+  def all_visible!(tables) do
+    Repo.query!(
+      "UPDATE pg_class SET relallvisible = relpages " <>
+        "WHERE relname = ANY($1) AND relnamespace = 'public'::regnamespace",
+      [tables]
+    )
+
+    :ok
+  end
+
   defp cluster_on_pkey!(table) do
     %{rows: [[pkey]]} =
       Repo.query!(

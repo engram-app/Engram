@@ -68,10 +68,7 @@ defmodule EngramWeb.SyncManifestPlanTest do
       Engram.Repo.query!("ANALYZE #{t}")
     end
 
-    Engram.Repo.query!(
-      "UPDATE pg_class SET relallvisible = relpages WHERE relname = ANY($1) AND relnamespace = 'public'::regnamespace",
-      [@tables]
-    )
+    QueryPlan.all_visible!(@tables)
 
     if tenant,
       do:
