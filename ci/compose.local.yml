@@ -17,3 +17,6 @@ services:
       # API-only e2e fixtures (which register many users) don't need to seed
       # an admin + flip the gate before every test.
       ENGRAM_DEFAULT_REGISTRATION_MODE: open
+      # Fixed first-run setup token so e2e fixtures can claim the admin
+      # without reading logs (e2e helpers send the same default).
+      ENGRAM_SETUP_TOKEN: e2e-setup-token

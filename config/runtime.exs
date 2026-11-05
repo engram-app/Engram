@@ -521,6 +521,11 @@ default_registration_mode =
 
 config :engram, :default_registration_mode, default_registration_mode
 
+# Fixed self-host first-run setup token (Engram.Instance.SetupToken) in place of
+# the random one printed at boot. For CI, e2e stacks and local dev, which claim
+# the admin without reading logs. Only honored while no admin exists; never logged.
+config :engram, :setup_token, System.get_env("ENGRAM_SETUP_TOKEN")
+
 # Upgrade URL surfaced in 402 limit-exceeded responses (see EngramWeb.LimitResponse).
 # SaaS points at the in-app billing page; self-hosters can override or set to nil.
 config :engram,

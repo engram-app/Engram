@@ -35,6 +35,10 @@ function registrationErrorMessage(raw: string, t: Translate): string {
 			return t("Sign-ups require an invite link. Contact your admin to request one.");
 		case "invite_invalid":
 			return t("This invite link is invalid or has already been used.");
+		case "setup_token_required":
+			return t("Enter the setup token from the server log.");
+		case "setup_token_invalid":
+			return t("That setup token is not valid. Use the newest one in the server log.");
 		case "Registration not available for this auth provider":
 			return t("Registration not available for this auth provider");
 		default:
@@ -63,6 +67,7 @@ export default function LocalSignUp() {
 	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
 	const [confirm, setConfirm] = useState("");
+	const [setupToken, setSetupToken] = useState("");
 	const [error, setError] = useState("");
 	const [loading, setLoading] = useState(false);
 
@@ -99,7 +104,12 @@ export default function LocalSignUp() {
 			if (!register) {
 				throw new Error("Registration not available for this auth provider");
 			}
-			await register(email, password, invite || undefined);
+			await register(
+				email,
+				password,
+				invite || undefined,
+				bootstrap?.bootstrap_pending ? setupToken.trim() : undefined,
+			);
 		} catch (err) {
 			setError(
 				registrationErrorMessage(err instanceof Error ? err.message : "Registration failed", t),
@@ -255,6 +265,27 @@ export default function LocalSignUp() {
 					</p>
 				)}
 
+				{Boolean(bootstrap?.bootstrap_pending) && (
+					<div>
+						<label className="block">
+							<span className="font-medium text-foreground text-sm">{t("Setup token")}</span>
+							<Input
+								type="text"
+								required
+								autoComplete="off"
+								spellCheck={false}
+								value={setupToken}
+								onChange={(e) => setSetupToken(e.target.value)}
+								aria-describedby="setup-token-hint"
+								className="mt-1 block font-mono"
+							/>
+						</label>
+						<p id="setup-token-hint" className="mt-1 text-muted-foreground text-xs">
+							{t("Printed in the Engram server log when it started.")}
+						</p>
+					</div>
+				)}
+
 				<label className="block">
 					<span className="font-medium text-foreground text-sm">{t("Email")}</span>
 					<Input
@@ -293,21 +324,25 @@ export default function LocalSignUp() {
 					{loading ? t("Creating account…") : t("Create account")}
 				</Button>
 
-				<p className="text-center text-muted-foreground text-sm">
-					<Trans
-						text="Already have an account? {signin}"
-						slots={{
-							signin: (
-								<Link
-									to={authUrlWithReturnTo(ROUTES.SIGN_IN, returnTo)}
-									className="font-medium text-primary-ink hover:underline"
-								>
-									{t("Sign in")}
-								</Link>
-							),
-						}}
-					/>
-				</p>
+				{/* Hidden during first-run: no account exists yet, and /sign-in
+				    bounces straight back here while bootstrap is pending. */}
+				{!bootstrap?.bootstrap_pending && (
+					<p className="text-center text-muted-foreground text-sm">
+						<Trans
+							text="Already have an account? {signin}"
+							slots={{
+								signin: (
+									<Link
+										to={authUrlWithReturnTo(ROUTES.SIGN_IN, returnTo)}
+										className="font-medium text-primary-ink hover:underline"
+									>
+										{t("Sign in")}
+									</Link>
+								),
+							}}
+						/>
+					</p>
+				)}
 			</form>
 		</AuthLayout>
 	);
