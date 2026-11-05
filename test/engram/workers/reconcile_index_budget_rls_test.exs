@@ -114,8 +114,8 @@ defmodule Engram.Workers.ReconcileIndexBudgetRlsTest do
       """
       INSERT INTO chunks
         (note_id, user_id, vault_id, position, char_start, char_end, qdrant_point_id,
-         created_at, token_count, context_hmac)
-      SELECT $1, $2, $3, g, 0, 1, gen_random_uuid(), now(), 1, 'h'
+         token_count, context_hmac)
+      SELECT $1, $2, $3, g, 0, 1, gen_random_uuid(), 1, 'h'
       FROM generate_series(0, $4 - 1) g
       """,
       [Ecto.UUID.dump!(note.id), Ecto.UUID.dump!(user.id), Ecto.UUID.dump!(vault.id), rows]

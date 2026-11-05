@@ -106,8 +106,8 @@ defmodule EngramWeb.BillingUsageTest do
       {:ok, _} =
         Engram.Repo.with_tenant(user.id, fn ->
           Engram.Repo.query!(
-            "INSERT INTO chunks (note_id, user_id, vault_id, position, char_start, char_end, qdrant_point_id, created_at) " <>
-              "SELECT $1, $2, $3, g, 0, 1, gen_random_uuid(), now() FROM generate_series(1, 7) g",
+            "INSERT INTO chunks (note_id, user_id, vault_id, position, char_start, char_end, qdrant_point_id) " <>
+              "SELECT $1, $2, $3, g, 0, 1, gen_random_uuid() FROM generate_series(1, 7) g",
             [Ecto.UUID.dump!(note.id), Ecto.UUID.dump!(user.id), Ecto.UUID.dump!(vault.id)]
           )
 
