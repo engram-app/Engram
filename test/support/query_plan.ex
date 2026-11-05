@@ -96,7 +96,12 @@ defmodule Engram.QueryPlan do
 
   Neither reads the prepared statement the runs built: asserting BOTH plans
   proves the statement reads the right index whichever plan Postgres picks
-  after the 5th execution, not which one it picked. `no_generic: true` also
+  after the 5th execution, not which one it picked. `seqscan: false` plans
+  both with seq scans off, for a statement the planner costs as matching
+  most of the table: on a test-sized table a seq scan and sort is then the
+  cheaper plan, and the verdict turns on statistics other tests left behind
+  (an ANALYZEd empty `subscriptions` costs a per-row EXISTS at 0). It then
+  asks whether the index CAN serve each plan. `no_generic: true` also
   asks that: it fails if any named statement with this SQL ran on a generic
   plan (`pg_prepared_statements.generic_plans`), for a statement the app
   must run unnamed (`Engram.Notes.Keys.lookup?/1`), where only the 7 runs
@@ -124,8 +129,21 @@ defmodule Engram.QueryPlan do
       if n > 0, do: flunk("ran on a generic plan #{n} times:\n#{sql}")
     end
 
-    custom = Repo.query!("EXPLAIN " <> sql, params).rows |> List.flatten() |> Enum.join("\n")
-    %{custom: custom, generic: generic_plan(sql, seqscan: true)}
+    seqscan? = Keyword.get(opts, :seqscan, true)
+    %{custom: custom_plan(sql, params, seqscan?), generic: generic_plan(sql, seqscan: seqscan?)}
+  end
+
+  # In a savepoint rolled back after the EXPLAIN, so `enable_seqscan = off`
+  # ends with it instead of lasting to the end of the test.
+  defp custom_plan(sql, params, seqscan?) do
+    {:error, {:plan, text}} =
+      Repo.transaction(fn ->
+        unless seqscan?, do: Repo.query!("SET LOCAL enable_seqscan = off")
+        plan = Repo.query!("EXPLAIN " <> sql, params).rows |> List.flatten() |> Enum.join("\n")
+        Repo.rollback({:plan, plan})
+      end)
+
+    text
   end
 
   defp flunk(message), do: raise(ExUnit.AssertionError, message: message)
