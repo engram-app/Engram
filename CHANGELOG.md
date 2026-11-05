@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.72.6](https://github.com/engram-app/Engram/compare/0.72.5...0.72.6) (2026-11-05)
+
+
+### Bug Fixes
+
+* **ci:** redact runner jitconfig in diagnostics ([#2428](https://github.com/engram-app/Engram/issues/2428)) ([f7038f7](https://github.com/engram-app/Engram/commit/f7038f7934d2e22c20600bbf81e21ca4e3ece023))
+* **test:** reset rebuild gate state per sync test ([#2440](https://github.com/engram-app/Engram/issues/2440)) ([902ad9b](https://github.com/engram-app/Engram/commit/902ad9bd1581a84bc96e0af57f547e72ea304631))
+
+
+### Performance Improvements
+
+* **db:** cut cold notes reads behind RDS swap spikes ([#2438](https://github.com/engram-app/Engram/issues/2438)) ([653cd46](https://github.com/engram-app/Engram/commit/653cd469c3c6822d6e09b6c2a6eb53aa67d47e57))
+
 ## [0.72.5](https://github.com/engram-app/Engram/compare/0.72.4...0.72.5) (2026-11-05)
 
 
