@@ -82,6 +82,7 @@ export default {
 	"Already have an account? {signin}": "이미 계정이 있으신가요? {signin}",
 	"Loading...": "로딩 중...",
 	"An account with this email already exists": "이 이메일로 등록된 계정이 이미 있습니다",
+	"Contact support to restore access.": "접근 권한 복구를 위해 지원팀에 문의하세요.",
 	"Billing history": "결제 내역",
 	"No transactions yet.": "아직 거래 내역이 없습니다.",
 	Date: "날짜",
@@ -218,7 +219,6 @@ export default {
 	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
 		"무료 플랜의 기기 연결 제한에 도달했습니다. 사용하지 않는 기기를 연결 해제하여 이 기기를 연결하거나, 더 많은 기기를 연결하려면 유료 플랜으로 업그레이드하세요.",
 	"Account suspended": "계정이 정지되었습니다",
-	"Contact support to restore access.": "접근 권한 복구를 위해 지원팀에 문의하세요.",
 	"Account setup incomplete": "계정 설정이 완료되지 않았습니다",
 	"Please complete onboarding.": "온보딩을 완료해주세요.",
 	"Limit reached": "제한에 도달했습니다",

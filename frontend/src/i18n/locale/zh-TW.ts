@@ -77,6 +77,7 @@ export default {
 	"Already have an account? {signin}": "已經有帳戶？{signin}",
 	"Loading...": "載入中...",
 	"An account with this email already exists": "此電子郵件已存在帳戶",
+	"Contact support to restore access.": "請聯絡客服以恢復存取權。",
 	"Billing history": "帳單紀錄",
 	"No transactions yet.": "尚未有任何交易。",
 	Date: "日期",
@@ -204,7 +205,6 @@ export default {
 	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
 		"您已達到免費方案的裝置數量上限。斷開您不使用的裝置，以連接此裝置，或升級方案以連接更多裝置。",
 	"Account suspended": "帳戶已停用",
-	"Contact support to restore access.": "請聯絡客服以恢復存取權。",
 	"Account setup incomplete": "帳戶設定未完成",
 	"Please complete onboarding.": "請完成設定。",
 	"Limit reached": "已達上限",
