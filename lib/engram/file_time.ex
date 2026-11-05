@@ -65,6 +65,35 @@ defmodule Engram.FileTime do
     end
   end
 
+  @doc """
+  The epoch-seconds number a reader sends for `at` (the `*_at` column),
+  given the stored double `t`: the wire format is unchanged, the timestamp
+  is the authority. A seconds double that normalizes to `at` goes out
+  bit-identical (payload hashes and client comparisons depend on it);
+  otherwise (milliseconds, a drifted double, no double) the seconds are
+  derived from `at`. With no `at` (backfill not done yet, `0`, out of
+  range) the double goes out as stored.
+  """
+  @spec epoch(DateTime.t() | nil, number() | nil) :: number() | nil
+  def epoch(nil, t), do: t
+
+  def epoch(%DateTime{} = at, t) do
+    if is_number(t) and abs(t) < @ms_from and same?(to_at(t), at),
+      do: t,
+      else: DateTime.to_unix(at, :microsecond) / 1_000_000
+  end
+
+  defp same?({:ok, %DateTime{} = a}, b), do: DateTime.compare(a, b) == :eq
+  defp same?(_, _), do: false
+
+  @doc "`epoch/2` of a row's (or map's) `mtime_at` and `mtime`."
+  @spec mtime(map()) :: number() | nil
+  def mtime(row), do: epoch(Map.get(row, :mtime_at), Map.get(row, :mtime))
+
+  @doc "`epoch/2` of a note's `ctime_at` and `ctime`."
+  @spec ctime(map()) :: number() | nil
+  def ctime(row), do: epoch(Map.get(row, :ctime_at), Map.get(row, :ctime))
+
   @doc "`to_at/1` for a time the server made or already validated; raises out of range."
   @spec to_at!(number() | nil) :: DateTime.t() | nil
   def to_at!(t) do

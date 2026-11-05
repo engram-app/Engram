@@ -94,4 +94,38 @@ defmodule Engram.FileTimeTest do
     assert bad.valid?
     assert Ecto.Changeset.get_field(bad, :mtime_at) == nil
   end
+
+  describe "epoch/2 and mtime/1, the readers' wire value" do
+    test "a seconds double that normalizes to the timestamp is sent bit-identical" do
+      for t <- [1_776_072_500.9, 1_776_072_500.928, 1_700_000_000.0, 1.0, -86_400.5] do
+        {:ok, at} = FileTime.to_at(t)
+        assert FileTime.epoch(at, t) === t
+      end
+    end
+
+    test "milliseconds go out as seconds, from the timestamp" do
+      {:ok, at} = FileTime.to_at(1_776_072_500_928.0)
+      assert FileTime.epoch(at, 1_776_072_500_928.0) === 1_776_072_500.928
+    end
+
+    test "the timestamp wins over a drifted double, and stands alone" do
+      at = ~U[2026-04-13 09:28:20.500000Z]
+      assert FileTime.epoch(at, 1.0) === 1_776_072_500.5
+      assert FileTime.epoch(at, nil) === 1_776_072_500.5
+    end
+
+    test "with no timestamp the double is sent as stored (backfill not done, 0, out of range)" do
+      assert FileTime.epoch(nil, 1_776_072_500.9) === 1_776_072_500.9
+      assert FileTime.epoch(nil, 0.0) === 0.0
+      assert FileTime.epoch(nil, 1.0e19) === 1.0e19
+      assert FileTime.epoch(nil, nil) == nil
+    end
+
+    test "mtime/1 and ctime/1 read a row or a map" do
+      row = %{mtime: 1_776_072_500_928.0, mtime_at: ~U[2026-04-13 09:28:20.928000Z], ctime: 5.0}
+      assert FileTime.mtime(row) === 1_776_072_500.928
+      assert FileTime.ctime(row) === 5.0
+      assert FileTime.mtime(%{mtime: 2.0}) === 2.0
+    end
+  end
 end

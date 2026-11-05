@@ -535,7 +535,7 @@ defmodule EngramWeb.FoldersController do
       folder: note.folder || "",
       tags: note.tags || [],
       version: note.version,
-      mtime: note.mtime,
+      mtime: Engram.FileTime.mtime(note),
       created_at: note.created_at,
       updated_at: note.updated_at
     }
