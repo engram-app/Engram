@@ -291,6 +291,32 @@ defmodule Engram.Notes.NoteBodyWriteTest do
       assert_in_step!(u.id)
     end
 
+    test "the insert_notes! fixture, attrs and built notes", %{user: u, vault: v} do
+      ids =
+        Engram.Fixtures.insert_notes!(u, v, [
+          %{"path" => "bulk/a.md", "embed_hash" => nil},
+          %{path: "bulk/b.md"},
+          build(:note)
+        ])
+
+      assert length(ids) == 3
+      assert {:ok, %{id: id}} = Notes.get_note(u, v, "bulk/b.md")
+      assert id == Enum.at(ids, 1)
+
+      # Every note, the built one too (its factory seq is a placeholder),
+      # takes its seq from the vault's allocator block, in order.
+      %{rows: seqs} =
+        Repo.query!(
+          "SELECT n.seq, v.change_seq FROM unnest($1::uuid[]) WITH ORDINALITY AS i(id, ord) " <>
+            "JOIN notes n ON n.id = i.id JOIN vaults v ON v.id = n.vault_id ORDER BY i.ord",
+          [Enum.map(ids, &Ecto.UUID.dump!/1)]
+        )
+
+      [[_, last] | _] = seqs
+      assert Enum.map(seqs, &hd/1) == Enum.to_list((last - 2)..last)
+      assert_in_step!(u.id)
+    end
+
     test "NoteSplit fills a missing body row", %{user: u, vault: v} do
       note = write!(u, v, "a.md", "first")
       Repo.query!("DELETE FROM note_bodies WHERE note_id = $1", [Ecto.UUID.dump!(note.id)])

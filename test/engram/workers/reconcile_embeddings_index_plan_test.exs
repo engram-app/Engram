@@ -217,7 +217,11 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
   # (prod 2026-11-02: 1,662 entries, all parked). `notes_reconcile_due_v2`
   # leaves out a parked note whose content is unchanged, so a sweep reads the
   # notes that can be due, not every parked one. On the 7th run, custom and
-  # generic plan alike.
+  # generic plan alike, with seq scans off: the planner costs the sweep as
+  # matching most of the table (`embed_hash <> content_hash` is a default
+  # 0.995), so on a test-sized table a seq scan and sort can win, and did on
+  # CI once `subscriptions` had been vacuumed or ANALYZEd while empty (its
+  # EXISTS then costs 0). What is asserted is that v2 CAN serve the sweep.
   test "the sweep reads notes_reconcile_due_v2, which holds no unchanged park" do
     user = insert(:user)
     vault = insert(:vault, user: user)
@@ -266,7 +270,8 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
     %{custom: custom, generic: generic} =
       QueryPlan.after_runs(
         fn -> assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick) end,
-        ~r/^WITH "reconcile_eligible"/
+        ~r/^WITH "reconcile_eligible"/,
+        seqscan: false
       )
 
     assert_enqueued(worker: EmbedNote, args: %{"note_id" => due.id})

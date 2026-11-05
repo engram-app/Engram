@@ -6,6 +6,7 @@ defmodule Engram.Fixtures do
   alias Engram.Accounts.User
   alias Engram.Crypto.Envelope
   alias Engram.Notes.Note
+  alias Engram.Notes.NoteBody
   alias Engram.Repo
   alias Engram.Vaults.Vault
 
@@ -44,16 +45,94 @@ defmodule Engram.Fixtures do
   attrs) as keyword/string-keyed map overrides.
   """
   def insert_note!(user, vault, attrs \\ %{}) do
-    user =
-      case user.encrypted_dek do
-        nil ->
-          {:ok, u} = Engram.Crypto.ensure_user_dek(user)
-          u
+    user = with_dek(user)
+    {note_attrs, path, folder, tags} = note_attrs(user, vault, attrs)
+    now = DateTime.utc_now()
 
-        _ ->
-          user
+    {:ok, inserted} =
+      Repo.with_tenant(user.id, fn ->
+        # DB-enforced NOT NULL (NULL-seq rows vanish from the sync feed) —
+        # stamp a real per-vault seq inside the tenant txn (next_seq!'s
+        # row-lock contract) unless the caller overrode it.
+        note_attrs = Map.put_new(note_attrs, :seq, Engram.Vaults.next_seq!(vault.id))
+
+        note =
+          %Note{}
+          |> Note.changeset(note_attrs)
+          |> Repo.insert!()
+
+        # As every app writer: the body row in the same transaction.
+        _ = NoteBody.sync!(note.id, note_attrs)
+        note
+      end)
+
+    # Splice virtual fields so callers can read note.path / .folder / .tags
+    # without re-fetching + decrypting.
+    %{inserted | path: path, folder: folder, tags: tags, created_at: now, updated_at: now}
+  end
+
+  @doc """
+  Many notes of one vault in a few statements, for a test that needs a
+  table of thousands: one seq block, one INSERT per 1,000 rows and one
+  `NoteBody.sync!/3` for all, instead of four or five round trips a note
+  (a 1,205-note seed ran past the 60 s test timeout on CI). Each entry is
+  either attrs, written as `insert_note!/3` writes them (real ciphertext
+  and HMACs), or a built `%Note{}` (`build(:note, ...)`), written as is in
+  this vault. Returns the ids, in order.
+  """
+  def insert_notes!(user, vault, entries) do
+    user = with_dek(user)
+    now = DateTime.utc_now()
+    fields = Note.__schema__(:fields)
+
+    rows =
+      for entry <- entries do
+        note =
+          case entry do
+            # The factory's seq is a placeholder: the allocator's block
+            # below stamps it, as it does an attrs entry without `seq`.
+            %Note{} = note ->
+              %{note | seq: nil}
+
+            attrs ->
+              {note_attrs, _, _, _} = note_attrs(user, vault, attrs)
+              %Note{} |> Note.changeset(note_attrs) |> Ecto.Changeset.apply_changes()
+          end
+
+        note
+        |> Map.take(fields)
+        |> Map.merge(%{user_id: user.id, vault_id: vault.id, created_at: now, updated_at: now})
+        |> Map.update!(:id, &(&1 || Engram.Notes.mint_id()))
+        # Nil fields left out, as `Repo.insert!/2` leaves out a nil
+        # read-after-write column: the column default fills them.
+        |> Map.reject(fn {_, v} -> is_nil(v) end)
       end
 
+    Repo.with_tenant!(user.id, fn ->
+      last = Engram.Vaults.next_seq_block!(vault.id, length(rows))
+
+      rows =
+        rows
+        |> Enum.with_index(last - length(rows) + 1)
+        |> Enum.map(fn {row, seq} -> Map.put_new(row, :seq, seq) end)
+
+      for chunk <- Enum.chunk_every(rows, 1000), do: Repo.insert_all(Note, chunk)
+      ids = Enum.map(rows, & &1.id)
+      _ = NoteBody.sync!(ids, [])
+      ids
+    end)
+  end
+
+  defp with_dek(%{encrypted_dek: nil} = user) do
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    user
+  end
+
+  defp with_dek(user), do: user
+
+  # The `notes` columns of a note `insert_note!/3` writes, and its path,
+  # folder and tags (virtual on the schema).
+  defp note_attrs(user, vault, attrs) do
     attrs = Enum.into(attrs, %{}, fn {k, v} -> {to_string(k), v} end)
     seq = System.unique_integer([:positive, :monotonic])
     path = Map.get(attrs, "path", "test/note-#{seq}.md")
@@ -74,7 +153,6 @@ defmodule Engram.Fixtures do
 
     tags = Map.get(attrs, "tags", [])
     mtime = Map.get(attrs, "mtime", 1_000.0)
-    now = DateTime.utc_now()
 
     {:ok, dek} = Engram.Crypto.get_dek(user)
     {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
@@ -122,28 +200,7 @@ defmodule Engram.Fixtures do
       |> Map.drop(["path", "folder", "tags", "content", "title", "mtime", "content_hash"])
       |> Enum.into(%{}, fn {k, v} -> {String.to_existing_atom(k), v} end)
 
-    note_attrs = Map.merge(base_attrs, extras)
-
-    {:ok, inserted} =
-      Repo.with_tenant(user.id, fn ->
-        # DB-enforced NOT NULL (NULL-seq rows vanish from the sync feed) —
-        # stamp a real per-vault seq inside the tenant txn (next_seq!'s
-        # row-lock contract) unless the caller overrode it.
-        note_attrs = Map.put_new(note_attrs, :seq, Engram.Vaults.next_seq!(vault.id))
-
-        note =
-          %Note{}
-          |> Note.changeset(note_attrs)
-          |> Repo.insert!()
-
-        # As every app writer: the body row in the same transaction.
-        _ = Engram.Notes.NoteBody.sync!(note.id, note_attrs)
-        note
-      end)
-
-    # Splice virtual fields so callers can read note.path / .folder / .tags
-    # without re-fetching + decrypting.
-    %{inserted | path: path, folder: folder, tags: tags, created_at: now, updated_at: now}
+    {Map.merge(base_attrs, extras), path, folder, tags}
   end
 
   @doc """
@@ -421,7 +478,7 @@ defmodule Engram.Fixtures do
   def mirror_body!(note_id) do
     # With no body row, `sync!/3` inserts it whole from the notes columns.
     Engram.Repo.query!("DELETE FROM note_bodies WHERE note_id = $1", [Ecto.UUID.dump!(note_id)])
-    Engram.Notes.NoteBody.sync!(note_id, [])
+    NoteBody.sync!(note_id, [])
     :ok
   end
 

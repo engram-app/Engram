@@ -35,8 +35,9 @@ defmodule Engram.QueryPlan do
   `analyze:` table with `CLUSTER ... USING` its primary key inside the
   test's transaction (rolled back with it): a new heap and new indexes
   holding only this test's rows, in key order, as a table written in uuidv7
-  order is in prod. CLUSTER holds an ACCESS EXCLUSIVE lock to the end of
-  the test: use it from `async: false` tests only.
+  order is in prod. The plan runs in a savepoint rolled back after it, so
+  the rewrite and its ACCESS EXCLUSIVE lock end with the plan; use it from
+  `async: false` tests only all the same.
 
   `seqscan: true` keeps seq scans on, to ask which plan Postgres picks.
   """
@@ -52,34 +53,33 @@ defmodule Engram.QueryPlan do
     args = if nulls == [], do: "", else: "(" <> Enum.join(nulls, ", ") <> ")"
     name = "plan_#{System.unique_integer([:positive])}"
 
-    {:ok, text} =
-      Repo.transaction(fn ->
-        fresh? = Keyword.get(opts, :fresh, false)
+    rolled_back(fn ->
+      fresh? = Keyword.get(opts, :fresh, false)
 
-        for table <- Keyword.get(opts, :analyze, []) do
-          if fresh?, do: fresh!(table), else: Repo.query!("ANALYZE #{table}")
-        end
+      for table <- Keyword.get(opts, :analyze, []) do
+        if fresh?, do: fresh!(table), else: Repo.query!("ANALYZE #{table}")
+      end
 
-        Repo.query!("SET LOCAL plan_cache_mode = force_generic_plan")
+      Repo.query!("SET LOCAL plan_cache_mode = force_generic_plan")
 
-        unless Keyword.get(opts, :seqscan, false),
-          do: Repo.query!("SET LOCAL enable_seqscan = off")
+      unless Keyword.get(opts, :seqscan, false),
+        do: Repo.query!("SET LOCAL enable_seqscan = off")
 
-        unless Keyword.get(opts, :bitmapscan, true),
-          do: Repo.query!("SET LOCAL enable_bitmapscan = off")
+      unless Keyword.get(opts, :bitmapscan, true),
+        do: Repo.query!("SET LOCAL enable_bitmapscan = off")
 
-        Repo.query!("PREPARE #{name} AS " <> sql)
+      Repo.query!("PREPARE #{name} AS " <> sql)
 
-        try do
-          Repo.query!("EXPLAIN EXECUTE #{name}#{args}").rows
-          |> List.flatten()
-          |> Enum.join("\n")
-        after
-          Repo.query!("DEALLOCATE #{name}")
-        end
-      end)
-
-    text
+      try do
+        Repo.query!("EXPLAIN EXECUTE #{name}#{args}").rows
+        |> List.flatten()
+        |> Enum.join("\n")
+      after
+        # Not `query!`: after a failed EXPLAIN the transaction is aborted, and
+        # a DEALLOCATE error would hide the EXPLAIN's own.
+        Repo.query("DEALLOCATE #{name}")
+      end
+    end)
   end
 
   @doc """
@@ -96,8 +96,13 @@ defmodule Engram.QueryPlan do
 
   Neither reads the prepared statement the runs built: asserting BOTH plans
   proves the statement reads the right index whichever plan Postgres picks
-  after the 5th execution, not which one it picked. `no_generic: true` also
-  asks that: it fails if any named statement with this SQL ran on a generic
+  after the 5th execution, not which one it picked. `seqscan: false` plans
+  both with seq scans off, for a statement the planner costs as matching
+  most of the table: on a test-sized table a seq scan and sort is then the
+  cheaper plan, and the verdict turns on statistics other tests left behind
+  (`subscriptions` vacuumed or ANALYZEd while empty costs a per-row EXISTS
+  at 0). It then asks whether the index CAN serve each plan.
+  `no_generic: true` also asks that: it fails if any named statement with this SQL ran on a generic
   plan (`pg_prepared_statements.generic_plans`), for a statement the app
   must run unnamed (`Engram.Notes.Keys.lookup?/1`), where only the 7 runs
   can show it.
@@ -124,8 +129,39 @@ defmodule Engram.QueryPlan do
       if n > 0, do: flunk("ran on a generic plan #{n} times:\n#{sql}")
     end
 
-    custom = Repo.query!("EXPLAIN " <> sql, params).rows |> List.flatten() |> Enum.join("\n")
-    %{custom: custom, generic: generic_plan(sql, seqscan: true)}
+    seqscan? = Keyword.get(opts, :seqscan, true)
+    %{custom: custom_plan(sql, params, seqscan?), generic: generic_plan(sql, seqscan: seqscan?)}
+  end
+
+  defp custom_plan(sql, params, seqscan?) do
+    rolled_back(fn ->
+      unless seqscan?, do: Repo.query!("SET LOCAL enable_seqscan = off")
+      Repo.query!("EXPLAIN " <> sql, params).rows |> List.flatten() |> Enum.join("\n")
+    end)
+  end
+
+  # `fun`'s result, in a savepoint rolled back after it: its SET LOCALs (and
+  # a `fresh` CLUSTER, ANALYZE and their locks) end with the plan instead of
+  # lasting to the end of the test. A raw SAVEPOINT, not `Repo.rollback/1`:
+  # that would mark an enclosing Ecto transaction (`Repo.with_tenant!/2`) as
+  # rolling back too. Inside `Repo.transaction/1`, because the sandbox wraps
+  # (and releases) each statement run outside one in its own savepoint.
+  defp rolled_back(fun) do
+    savepoint = "query_plan_#{System.unique_integer([:positive])}"
+
+    {:ok, result} =
+      Repo.transaction(fn ->
+        Repo.query!("SAVEPOINT #{savepoint}")
+
+        try do
+          fun.()
+        after
+          Repo.query!("ROLLBACK TO SAVEPOINT #{savepoint}")
+          Repo.query!("RELEASE SAVEPOINT #{savepoint}")
+        end
+      end)
+
+    result
   end
 
   defp flunk(message), do: raise(ExUnit.AssertionError, message: message)
