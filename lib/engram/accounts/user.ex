@@ -8,6 +8,13 @@ defmodule Engram.Accounts.User do
 
   @type t :: %__MODULE__{}
 
+  # Every value `users.role` can hold. `operator` is granted only by
+  # `Engram.Release.grant_operator/1`; `Accounts.set_role/2` sets the rest.
+  @roles ~w(admin member operator)
+
+  @doc "Every value `users.role` can hold."
+  def roles, do: @roles
+
   schema "users" do
     field :email, :string, redact: true
     field :normalized_email, :string, redact: true

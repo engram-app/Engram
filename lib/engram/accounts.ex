@@ -1168,7 +1168,8 @@ defmodule Engram.Accounts do
   end
 
   @doc "Sets a user's role. Refuses to demote the last active admin."
-  def set_role(%User{} = user, role) when role in ~w(admin member) do
+  @settable_roles User.roles() -- ["operator"]
+  def set_role(%User{} = user, role) when role in @settable_roles do
     with_admin_lock(fn ->
       user = Repo.reload!(user, skip_tenant_check: true)
 

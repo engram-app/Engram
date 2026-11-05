@@ -962,7 +962,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       |> Map.new()
     end
 
-    floors = smallest.(dynamic([n], n.index_tier in ["floor", "floor_paid"]))
+    floors = smallest.(dynamic([n], n.index_tier in ^Note.index_tiers()))
     merged = smallest.(dynamic([n], is_nil(n.index_tier) and not is_nil(n.chunk_count)))
 
     # Users with an indexed note the version pass can still reach and has not

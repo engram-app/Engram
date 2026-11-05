@@ -205,7 +205,7 @@ defmodule Engram.Logs do
   defp bound_entry(entry, now) do
     %{
       ts: parse_ts(get(entry, "ts", :ts)) || now,
-      level: get(entry, "level", :level) |> default("info") |> clamp(@max_short_chars),
+      level: get(entry, "level", :level) |> default("info") |> PersistPolicy.metric_level(),
       category: get(entry, "category", :category) |> default("") |> clamp(@max_short_chars),
       # Scrub BEFORE the final clamp: truncating first can cut a quoted path
       # off its closing quote, and a half path then passes every rule. The
