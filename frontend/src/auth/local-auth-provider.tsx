@@ -4,6 +4,7 @@ import { setTokenGetter } from "../api/client";
 import { queryClient } from "../api/query-client";
 import { type AuthAdapter, AuthContext } from "./auth-context";
 import { postClearingCache } from "./clear-http-cache";
+import { markBootstrapComplete } from "./use-bootstrap";
 import { useClearQueryCacheOnUserChange } from "./use-clear-query-cache-on-user-change";
 import { useWipeCrdtOnUserChange } from "./use-wipe-crdt-on-user-change";
 
@@ -145,6 +146,8 @@ export default function LocalAuthProvider({ children }: { children: React.ReactN
 			}
 
 			const data = await res.json();
+			// An account now exists, so the first-run claim window is closed.
+			markBootstrapComplete();
 			setAccessToken(data.access_token);
 			setUser({ email: data.user.email });
 		},
