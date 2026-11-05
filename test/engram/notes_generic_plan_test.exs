@@ -112,10 +112,12 @@ defmodule Engram.NotesGenericPlanTest do
   # most-common-values list, so even its custom plan estimates it at ~1 row,
   # and any vault-led index ties with the path index at one page (prod E1a: a
   # non-MCV vault's custom plan walked `notes_recent_index`). No index shape
-  # breaks that tie; statistics do. 20261102120000 analyzes `notes` every 2%
-  # + 1,000 changed rows and keeps 1,000 vaults in the list, so a new vault
-  # is walked for at most a few thousand writes. The settings asserts are
-  # what guard that change. The plan half only shows the remedy (an analyzed
+  # breaks that tie; statistics do. 20261102120000 keeps 1,000 vaults in the
+  # list. It also analyzed every 2% + 1,000 changed rows; 20261104120000
+  # moved that to 20% + 1,000, because each ANALYZE at this target reads the
+  # whole heap (prod: ~257 MB, ~8 times a day, a swap spike on the 4 GB
+  # box). A new vault now waits up to about a day of writes for its entry.
+  # The settings asserts are what guard both choices. The plan half only shows the remedy (an analyzed
   # vault reads the path index); it passes on default statistics too, since
   # this DB has fewer than 100 vaults and any of them fits the list.
   test "notes keeps 1,000-entry stats and fast analyze; an analyzed new vault reads notes_path_live",
@@ -132,7 +134,7 @@ defmodule Engram.NotesGenericPlanTest do
     %{rows: [[opts]]} =
       Repo.query!("SELECT reloptions FROM pg_class WHERE oid = 'notes'::regclass")
 
-    assert "autovacuum_analyze_scale_factor=0.02" in opts
+    assert "autovacuum_analyze_scale_factor=0.2" in opts
     assert "autovacuum_analyze_threshold=1000" in opts
 
     {:ok, fresh, _} = Engram.Vaults.register_vault(u, "Fresh", Ecto.UUID.generate())
