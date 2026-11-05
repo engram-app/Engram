@@ -230,6 +230,25 @@ defmodule Engram.Attachments.UploadsTest do
     end
   end
 
+  # Refused at the request cast, before any storage round trip.
+  test "an out-of-range mtime never opens the multipart", %{user: user, vault: vault} do
+    prev = Application.get_env(:engram, :storage)
+    Application.put_env(:engram, :storage, Engram.MockStorage)
+    on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+    stub_with(Engram.MockStorage, InMemory)
+    test = self()
+
+    stub(Engram.MockStorage, :start_multipart, fn key ->
+      send(test, :multipart_started)
+      InMemory.start_multipart(key)
+    end)
+
+    assert {:error, %Ecto.Changeset{errors: [mtime: {"is out of range", _}]}} =
+             Uploads.start(user, vault, %{path: "a.bin", size_bytes: 10, mtime: 1.0e19})
+
+    refute_received :multipart_started
+  end
+
   test "a raise after the multipart started still aborts it", %{user: user, vault: vault} do
     prev = Application.get_env(:engram, :storage)
     Application.put_env(:engram, :storage, Engram.MockStorage)
