@@ -54,7 +54,8 @@ defmodule Engram.Repo.Migrations.IndexNotesEffectiveDatesExpand do
   # so declaring them IMMUTABLE is sound. ALTER COLUMN TYPE rebuilds the
   # indexes from their text, which then resolves the timestamptz overload.
   # `floor`, not a bare cast: the numeric cast rounds, `DateTime.to_unix/1`
-  # truncates.
+  # truncates. An empty `search_path`, as the repo's other functions (the
+  # schema lint's `function_search_path_mutable`): the bodies use built-ins.
   @epoch_fns [
     {"timestamp", "floor(extract(epoch FROM $1 - timestamp '1970-01-01'))::bigint"},
     {"timestamptz", "floor(extract(epoch FROM $1))::bigint"}
@@ -64,7 +65,8 @@ defmodule Engram.Repo.Migrations.IndexNotesEffectiveDatesExpand do
     for {type, body} <- @epoch_fns do
       execute """
       CREATE OR REPLACE FUNCTION engram_epoch_s(#{type}) RETURNS bigint
-      LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $fn$ SELECT #{body} $fn$
+      LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path = ''
+      AS $fn$ SELECT #{body} $fn$
       """
     end
 
