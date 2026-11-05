@@ -8,7 +8,7 @@
     "url": "https://github.com/engram-app/engram",
     "source": "github"
   },
-  "version": "0.72.6",
+  "version": "0.72.7",
   "remotes": [
     {
       "type": "streamable-http",
