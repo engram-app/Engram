@@ -76,9 +76,7 @@ if config_env() in [:dev, :test] do
   # The UTC session pin (see `Engram.RuntimeConfig.repo_parameters/1`): prod
   # gets it through `repo_parameters(:app)` below, dev and test here, so
   # `mix ecto.migrate`, CI and the suite never run in a server's own zone.
-  config :engram,
-         Engram.Repo,
-         repo_conn ++ [parameters: Engram.RuntimeConfig.repo_parameters(:base)]
+  config :engram, Engram.Repo, Engram.RuntimeConfig.dev_test_repo_opts(repo_conn)
 end
 
 if config_env() == :test do

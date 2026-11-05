@@ -52,14 +52,18 @@ defmodule Engram.RepoSessionTimeoutsTest do
   # self-host from source) and the test suite connect with the dev/test
   # Repo config, and cached prepared statements keep `timestamp` parameter
   # types through the conversion, so each of them needs the UTC session.
-  # Evaluates runtime.exs itself: the live test-env config cannot prove this,
-  # because the `test` alias runs `engram.prepare_database`, whose migrator
-  # session sets the pin on its own.
-  for env <- [:dev, :test] do
-    test "config/runtime.exs pins the #{env} Repo to UTC" do
-      config = Config.Reader.read!(@runtime, env: unquote(env), target: :host)
-      assert config[:engram][Engram.Repo][:parameters] == RuntimeConfig.repo_parameters(:base)
-    end
+  # Checked through the function runtime.exs calls, not by evaluating
+  # runtime.exs (that reads and writes process env). The live test-env config
+  # cannot prove it either: the `test` alias runs `engram.prepare_database`,
+  # whose migrator session sets the pin on its own.
+  test "the dev/test Repo config carries the UTC pin" do
+    assert File.read!(@runtime) =~
+             "config :engram, Engram.Repo, Engram.RuntimeConfig.dev_test_repo_opts(repo_conn)"
+
+    assert RuntimeConfig.dev_test_repo_opts(database: "x")[:parameters] ==
+             RuntimeConfig.repo_parameters(:base)
+
+    assert RuntimeConfig.repo_parameters(:base) == [timezone: "UTC"]
   end
 
   # A server or role whose default zone is not UTC: the pin must override it.
@@ -70,17 +74,21 @@ defmodule Engram.RepoSessionTimeoutsTest do
       Engram.Repo.config()
       |> Keyword.take([:hostname, :username, :password, :database, :port])
 
-    {:ok, admin} = Postgrex.start_link(base)
-    role = "r27_tz_#{System.unique_integer([:positive])}"
+    role = "r27_tz_#{Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)}"
     pw = Base.encode16(:crypto.strong_rand_bytes(12))
-    Postgrex.query!(admin, "CREATE ROLE #{role} LOGIN PASSWORD '#{pw}'", [])
-    Postgrex.query!(admin, "ALTER ROLE #{role} SET timezone = 'America/Los_Angeles'", [])
 
+    # Registered first, so a failure between CREATE and the asserts still
+    # drops the role.
     on_exit(fn ->
       {:ok, c} = Postgrex.start_link(base)
       Postgrex.query!(c, "DROP ROLE IF EXISTS #{role}", [])
       GenServer.stop(c)
     end)
+
+    {:ok, admin} = Postgrex.start_link(base)
+    Postgrex.query!(admin, "CREATE ROLE #{role} LOGIN PASSWORD '#{pw}'", [])
+    Postgrex.query!(admin, "ALTER ROLE #{role} SET timezone = 'America/Los_Angeles'", [])
+    GenServer.stop(admin)
 
     as_role = Keyword.merge(base, username: role, password: pw)
 

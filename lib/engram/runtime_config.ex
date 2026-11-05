@@ -296,6 +296,15 @@ defmodule Engram.RuntimeConfig do
   def repo_parameters(:base), do: [timezone: "UTC"]
 
   @doc """
+  The dev/test `Engram.Repo` options: the env-derived connection plus the UTC
+  session pin, so `mix ecto.migrate`, CI and the suite never run in a
+  server's own zone. Here (not inline in runtime.exs) so a test can check it
+  without evaluating runtime.exs.
+  """
+  @spec dev_test_repo_opts(keyword()) :: keyword()
+  def dev_test_repo_opts(conn), do: conn ++ [parameters: repo_parameters(:base)]
+
+  @doc """
   The `statement_timeout` and `lock_timeout` (ms) a request's tenant
   transactions apply, by route class (`:auth_read`, `:write`, `:account_delete`).
   The values and the measurements behind them live in `config/config.exs`
