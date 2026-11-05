@@ -52,4 +52,45 @@ defmodule Engram.Accounts.Export.SchemaTest do
     Repo.delete!(user, skip_tenant_check: true)
     assert Repo.aggregate(Schema, :count, skip_tenant_check: true) == 0
   end
+
+  # error_reason is varchar(255) and the worker writes an inspected error term.
+  # A longer reason raised on the UPDATE meant to record the failure, so the
+  # export never reached :failed. Postgres counts codepoints, so a grapheme cut
+  # ("e" + combining acute is one grapheme, two codepoints) would still overflow.
+  test "an over-long error_reason is truncated to 255 codepoints and the export fails" do
+    user = insert(:user)
+
+    export =
+      %Schema{}
+      |> Schema.changeset(%{user_id: user.id, status: :running, reason: :user_request})
+      |> Repo.insert!(skip_tenant_check: true)
+
+    huge = String.duplicate("e\u0301", 10_000)
+
+    {:ok, _} =
+      export
+      |> Schema.changeset(%{status: :failed, error_reason: huge})
+      |> Repo.update(skip_tenant_check: true)
+
+    reloaded = Repo.get!(Schema, export.id, skip_tenant_check: true)
+    assert reloaded.status == :failed
+    assert length(String.codepoints(reloaded.error_reason)) == 255
+    assert String.valid?(reloaded.error_reason)
+  end
+
+  test "a short error_reason is stored as is" do
+    user = insert(:user)
+
+    {:ok, e} =
+      %Schema{}
+      |> Schema.changeset(%{
+        user_id: user.id,
+        status: :failed,
+        reason: :user_request,
+        error_reason: ":timeout"
+      })
+      |> Repo.insert(skip_tenant_check: true)
+
+    assert e.error_reason == ":timeout"
+  end
 end

@@ -269,10 +269,8 @@ defmodule Engram.Logs do
 
   # Only strings are clamped. A non-binary would fail at the DB anyway, and
   # silently coercing it here would hide a malformed client rather than surface
-  # it. Counts characters, not bytes, so a multi-byte codepoint is never split.
-  defp clamp(value, max) when is_binary(value) do
-    if String.length(value) > max, do: String.slice(value, 0, max), else: value
-  end
+  # it. Counts codepoints, not bytes, so a multi-byte codepoint is never split.
+  defp clamp(value, max) when is_binary(value), do: Engram.Text.truncate(value, max)
 
   defp clamp(value, _max), do: value
 

@@ -44,6 +44,8 @@ defmodule Engram.Accounts.Export.Schema do
     timestamps(type: :utc_datetime_usec)
   end
 
+  @error_reason_max 255
+
   def changeset(struct, attrs) do
     struct
     |> cast(attrs, [
@@ -58,6 +60,11 @@ defmodule Engram.Accounts.Export.Schema do
       :downloaded_at,
       :reason
     ])
+    # varchar(255), written from an inspected error term of any size. An
+    # overflow raised on the very UPDATE meant to record the failure, leaving
+    # the export stuck in :running. Truncate rather than reject: the reason is
+    # diagnostic, the :failed status is what must land.
+    |> update_change(:error_reason, &Engram.Text.truncate(&1, @error_reason_max))
     |> validate_required([:user_id, :status, :reason])
     |> unique_constraint(:user_id, name: :account_exports_one_active_per_user)
   end
