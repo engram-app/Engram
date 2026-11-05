@@ -114,9 +114,9 @@ defmodule Engram.NotesGenericPlanTest do
   # non-MCV vault's custom plan walked `notes_recent_index`). No index shape
   # breaks that tie; statistics do. 20261102120000 keeps 1,000 vaults in the
   # list. It also analyzed every 2% + 1,000 changed rows; 20261104120000
-  # moved that to 20% + 1,000, because each ANALYZE at this target reads the
+  # moved that to 5% + 1,000, because each ANALYZE at this target reads the
   # whole heap (prod: ~257 MB, ~8 times a day, a swap spike on the 4 GB
-  # box). A new vault now waits up to about a day of writes for its entry.
+  # box). A first-sync vault over ~8k notes still gets same-day stats.
   # The settings asserts are what guard both choices. The plan half only shows the remedy (an analyzed
   # vault reads the path index); it passes on default statistics too, since
   # this DB has fewer than 100 vaults and any of them fits the list.
@@ -134,7 +134,7 @@ defmodule Engram.NotesGenericPlanTest do
     %{rows: [[opts]]} =
       Repo.query!("SELECT reloptions FROM pg_class WHERE oid = 'notes'::regclass")
 
-    assert "autovacuum_analyze_scale_factor=0.2" in opts
+    assert "autovacuum_analyze_scale_factor=0.05" in opts
     assert "autovacuum_analyze_threshold=1000" in opts
 
     {:ok, fresh, _} = Engram.Vaults.register_vault(u, "Fresh", Ecto.UUID.generate())
