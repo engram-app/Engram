@@ -193,7 +193,7 @@ defmodule EngramWeb.DeviceAuthController do
   defp normalize_vault_name(name) when is_binary(name) do
     case String.trim(name) do
       "" -> nil
-      trimmed -> String.slice(trimmed, 0, 100)
+      trimmed -> Engram.Text.truncate(trimmed, 100)
     end
   end
 

@@ -52,7 +52,7 @@ defmodule EngramWeb.OAuthIssuerHostTest do
       "client_id" => client.client_id,
       "redirect_uri" => @redirect,
       "response_type" => "code",
-      "code_challenge" => "abc123challenge",
+      "code_challenge" => "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
       "code_challenge_method" => "S256",
       "state" => "s"
     }
@@ -97,7 +97,7 @@ defmodule EngramWeb.OAuthIssuerHostTest do
         "client_id" => client.client_id,
         "redirect_uri" => @redirect,
         "response_type" => "token",
-        "code_challenge" => "abc123challenge",
+        "code_challenge" => "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
         "code_challenge_method" => "S256"
       })
       |> get_resp_header("location")
@@ -148,7 +148,7 @@ defmodule EngramWeb.OAuthIssuerHostTest do
         "client_id" => client.client_id,
         "redirect_uri" => @redirect,
         "response_type" => "code",
-        "code_challenge" => "abc123challenge",
+        "code_challenge" => "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
         "code_challenge_method" => "S256",
         "iss" => "https://attacker.example"
       })

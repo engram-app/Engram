@@ -365,6 +365,60 @@ defmodule EngramWeb.OAuthRegisterControllerTest do
       assert body["error"] == "invalid_client_metadata"
     end
 
+    # oauth_clients.scope is varchar(255): an uncapped scope reached the INSERT
+    # and raised (500) on this unauthenticated endpoint.
+    test "rejects overlong scope", %{conn: conn} do
+      conn =
+        post(conn, "/oauth/register", %{
+          "redirect_uris" => ["https://x/cb"],
+          "scope" => String.duplicate("a", 256)
+        })
+
+      body = json_response(conn, 400)
+      assert body["error"] == "invalid_client_metadata"
+    end
+
+    # Postgres varchar counts codepoints; a grapheme count lets 255 "e + combining
+    # acute" pairs (510 codepoints) through to the INSERT.
+    test "rejects a scope over 255 codepoints even when under 255 graphemes", %{conn: conn} do
+      conn =
+        post(conn, "/oauth/register", %{
+          "redirect_uris" => ["https://x/cb"],
+          "scope" => String.duplicate("e\u0301", 255)
+        })
+
+      body = json_response(conn, 400)
+      assert body["error"] == "invalid_client_metadata"
+    end
+
+    # client_name caps at 200, but varchar(255) counts codepoints: 200 accented
+    # pairs (400 codepoints) and one letter with 300 marks (301) both passed a
+    # grapheme count and raised on INSERT (500).
+    for {label, name} <- [
+          {"200 accent pairs", String.duplicate("e\u0301", 200)},
+          {"one letter with 300 marks", "e" <> String.duplicate("\u0301", 300)}
+        ] do
+      test "rejects a client_name over 200 codepoints: #{label}", %{conn: conn} do
+        conn =
+          post(conn, "/oauth/register", %{
+            "redirect_uris" => ["https://x/cb"],
+            "client_name" => unquote(name)
+          })
+
+        body = json_response(conn, 400)
+        assert body["error"] == "invalid_client_metadata"
+      end
+    end
+
+    test "accepts a 255-character scope", %{conn: conn} do
+      scope = String.duplicate("a", 255)
+
+      conn =
+        post(conn, "/oauth/register", %{"redirect_uris" => ["https://x/cb"], "scope" => scope})
+
+      assert json_response(conn, 201)["scope"] == scope
+    end
+
     test "emits dcr register telemetry on success", %{conn: conn} do
       ref =
         :telemetry_test.attach_event_handlers(self(), [[:engram, :mcp, :dcr, :register]])

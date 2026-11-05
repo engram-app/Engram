@@ -146,7 +146,9 @@ defmodule Engram.Feedback do
   # must never be gated on giving feedback.
   def submit(user, "delete_account", params) do
     reason = params["reason"]
-    detail = params["detail"] |> text() |> scrub_emails()
+    # Redact before the cap: a cut can leave "name@" with no domain, which the
+    # pattern no longer matches.
+    detail = params["detail"] |> scrub_emails() |> text()
 
     cond do
       not (is_nil(reason) or reason in @cancel_reasons) ->
@@ -369,7 +371,7 @@ defmodule Engram.Feedback do
   defp text(value, max) when is_binary(value) do
     case String.trim(value) do
       "" -> nil
-      trimmed -> String.slice(trimmed, 0, max)
+      trimmed -> Engram.Text.truncate(trimmed, max)
     end
   end
 
@@ -378,10 +380,10 @@ defmodule Engram.Feedback do
   # The delete answer outlives the account with no link back to it, so an email
   # typed into it could never be found or erased later. Possessive quantifiers:
   # no backtracking on long input.
-  defp scrub_emails(nil), do: nil
-
-  defp scrub_emails(text),
+  defp scrub_emails(text) when is_binary(text),
     do: Regex.replace(~r/[^\s@]++@[^\s@.]++(?:\.[^\s@.]++)+/u, text, "[email]")
+
+  defp scrub_emails(other), do: other
 
   # A user with no email has no analytics id; their answer still lands in the
   # profile (onboarding) but has nowhere to go in PostHog.

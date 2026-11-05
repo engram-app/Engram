@@ -364,6 +364,23 @@ defmodule Engram.FeedbackTest do
       refute_receive {:posthog, _}, 200
     end
 
+    # Redact before the 2,000-char cut: cutting first left "jane.doe@" with no
+    # domain, which the email pattern no longer matches, so the fragment stayed.
+    test "an email straddling the length cap is redacted, not left as a fragment",
+         %{user: user} do
+      detail = String.duplicate("a", 1990) <> " jane.doe@example.com"
+
+      assert :ok =
+               Feedback.submit(user, "delete_account", %{
+                 "reason" => "switched_tool",
+                 "detail" => detail
+               })
+
+      stored = profile(user)["delete_detail"]
+      refute stored =~ "jane.doe"
+      assert String.ends_with?(stored, "[email]")
+    end
+
     test "a second submit replaces the first", %{user: user} do
       assert :ok = Feedback.submit(user, "delete_account", %{"reason" => "too_expensive"})
       assert :ok = Feedback.submit(user, "delete_account", %{"detail" => "just leaving"})

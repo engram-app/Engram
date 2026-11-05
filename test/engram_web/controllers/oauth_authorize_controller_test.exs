@@ -33,7 +33,7 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       "client_id" => client_id,
       "redirect_uri" => redirect_uri,
       "response_type" => "code",
-      "code_challenge" => "abc123challenge",
+      "code_challenge" => "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
       "code_challenge_method" => "S256",
       "state" => "xyz",
       "scope" => "mcp"
@@ -65,7 +65,7 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       assert query["client_id"] == client.client_id
       assert query["redirect_uri"] == redirect_uri
       assert query["response_type"] == "code"
-      assert query["code_challenge"] == "abc123challenge"
+      assert query["code_challenge"] == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
       assert query["code_challenge_method"] == "S256"
       assert query["state"] == "xyz"
       assert query["scope"] == "mcp"
@@ -252,6 +252,51 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       assert conn.status == 302
       [location] = get_resp_header(conn, "location")
       assert location =~ "error=invalid_request"
+    end
+
+    # RFC 7636 §4.1: 43-128 chars of [A-Za-z0-9-._~]. The column is
+    # varchar(255), so an unchecked value only failed at Approve, as a 500.
+    for {label, challenge} <- [
+          {"129 chars", String.duplicate("a", 129)},
+          {"300 chars", String.duplicate("a", 300)},
+          {"42 chars", String.duplicate("a", 42)},
+          {"a character outside the unreserved set", String.duplicate("a", 42) <> "+"}
+        ] do
+      test "redirects with invalid_request for a code_challenge of #{label}", %{conn: conn} do
+        client = register_client()
+        redirect_uri = hd(client.redirect_uris)
+
+        params =
+          client.client_id
+          |> valid_params(redirect_uri)
+          |> Map.put("code_challenge", unquote(challenge))
+
+        conn = get(conn, "/oauth/authorize", params)
+
+        assert conn.status == 302
+        [location] = get_resp_header(conn, "location")
+        assert String.starts_with?(location, redirect_uri)
+        assert location =~ "error=invalid_request"
+      end
+    end
+
+    for len <- [43, 128] do
+      test "accepts a #{len}-char code_challenge of unreserved characters", %{conn: conn} do
+        client = register_client()
+        redirect_uri = hd(client.redirect_uris)
+        challenge = String.duplicate("aZ0-._~", 19) |> binary_part(0, unquote(len))
+
+        params =
+          client.client_id
+          |> valid_params(redirect_uri)
+          |> Map.put("code_challenge", challenge)
+
+        conn = get(conn, "/oauth/authorize", params)
+
+        assert conn.status == 302
+        [location] = get_resp_header(conn, "location")
+        refute location =~ "error="
+      end
     end
 
     # RFC 7636 §4.3: absent means `plain`, which is refused.

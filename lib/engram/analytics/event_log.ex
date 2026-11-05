@@ -133,7 +133,7 @@ defmodule Engram.Analytics.EventLog do
         do: {k, v}
   end
 
-  defp value(v) when is_binary(v), do: String.slice(v, 0, @max_string)
+  defp value(v) when is_binary(v), do: Engram.Text.truncate(v, @max_string)
   defp value(v) when is_number(v) or is_boolean(v) or is_nil(v), do: v
   defp value(v) when is_atom(v), do: v |> Atom.to_string() |> value()
 

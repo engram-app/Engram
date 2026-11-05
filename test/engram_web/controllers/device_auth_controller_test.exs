@@ -75,6 +75,29 @@ defmodule EngramWeb.DeviceAuthControllerTest do
       {:ok, stored} = DeviceFlow.view_pending_code(resp["user_code"], reader.id)
       assert String.length(stored) == 100
     end
+
+    # vault_name is varchar(255). A grapheme cut keeps every codepoint of one
+    # letter carrying 300 combining marks (301 codepoints), and the INSERT raised.
+    test "cuts vault_name to 100 codepoints, not graphemes", %{conn: conn} do
+      reader = insert(:user)
+      name = "e" <> String.duplicate("\u0301", 300)
+      conn = post(conn, "/api/auth/device", %{client_id: "test_client", vault_name: name})
+      resp = json_response(conn, 200)
+      {:ok, stored} = DeviceFlow.view_pending_code(resp["user_code"], reader.id)
+      assert length(String.codepoints(stored)) == 100
+    end
+
+    # client_id is varchar(255) on this public endpoint and was never checked:
+    # a longer value raised on INSERT (500).
+    test "rejects a client_id over 255 codepoints", %{conn: conn} do
+      conn = post(conn, "/api/auth/device", %{client_id: String.duplicate("a", 256)})
+      assert json_response(conn, 422)["error"] == "failed to start device flow"
+    end
+
+    test "accepts a 255-character client_id", %{conn: conn} do
+      conn = post(conn, "/api/auth/device", %{client_id: String.duplicate("a", 255)})
+      assert is_binary(json_response(conn, 200)["device_code"])
+    end
   end
 
   describe "POST /api/auth/device/authorize" do

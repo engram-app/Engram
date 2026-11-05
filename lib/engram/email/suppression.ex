@@ -42,6 +42,9 @@ defmodule Engram.Email.Suppression do
     |> cast(attrs, [:email, :reason])
     |> update_change(:email, &String.downcase/1)
     |> validate_required([:email, :reason])
+    # varchar(255), fed by the Resend webhook: an over-long address must come
+    # back as a changeset error (acked + logged), not raise into a retry loop.
+    |> validate_length(:email, max: 255, count: :codepoints)
     |> unique_constraint(:email)
     |> check_constraint(:reason, name: :reason_must_be_valid)
   end

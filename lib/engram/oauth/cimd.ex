@@ -327,8 +327,10 @@ defmodule Engram.OAuth.Cimd do
 
   defp intersect(_declared, _supported, _empty_error), do: {:ok, nil}
 
+  # Codepoints, as the varchar column counts them: a grapheme cut kept up to
+  # 400 codepoints of 200 accented pairs and the INSERT raised.
   defp truncate_name(name) when is_binary(name),
-    do: String.slice(name, 0, Client.client_name_max_length())
+    do: Engram.Text.truncate(name, Client.client_name_max_length())
 
   defp truncate_name(other), do: other
 

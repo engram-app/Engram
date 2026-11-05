@@ -29,4 +29,16 @@ defmodule Engram.Email.SuppressionTest do
     assert {:ok, s} = Suppression.suppress("atom@example.com", :bounced)
     assert s.reason == :bounced
   end
+
+  # email_suppressions.email is varchar(255), fed from the Resend webhook. An
+  # over-long address raised on INSERT instead of returning a changeset error.
+  test "refuses an address over 255 codepoints and accepts 255" do
+    long = String.duplicate("a", 244) <> "@example.com"
+    assert String.length(long) == 256
+    assert {:error, %Ecto.Changeset{errors: errors}} = Suppression.suppress(long, :bounced)
+    assert Keyword.has_key?(errors, :email)
+
+    ok = String.duplicate("a", 243) <> "@example.com"
+    assert {:ok, _} = Suppression.suppress(ok, :bounced)
+  end
 end
