@@ -44,7 +44,7 @@ scan_bypass() {
   # flattened.
   local f
   for f in $(git grep -lIE "[\"']docker[\"']" -- "$@" ':!*.md'); do
-    tr '\n' ' ' < "$f" | grep -qE "[\"']docker[\"'][[:space:]]*,[[:space:]]*\[?[[:space:]]*[\"'](run|create)[\"']" \
+    grep -qE "[\"']docker[\"'][[:space:]]*,[[:space:]]*\[?[[:space:]]*[\"'](run|create)[\"']" <<<"$(tr '\n' ' ' < "$f")" \
       && echo "$f: programmatic docker run/create"
   done
   return 0
