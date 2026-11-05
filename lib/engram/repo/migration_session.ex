@@ -12,6 +12,10 @@ defmodule Engram.Repo.MigrationSession do
   pinned connection); `execute/1` is buffered and runs after `up/0` returns,
   outside the checkout. Pass `timeout: :infinity` to a long statement:
   `statement_timeout` is the bound, not the client's default 15 s.
+
+  Frozen once a merged migration calls it: a migration must not change with
+  the app code, so this function's behaviour never changes. A different
+  behaviour needs a new function name.
   """
 
   @doc "Runs `fun` on one connection of `repo` with `settings` (`[{name, value}]`) set."
