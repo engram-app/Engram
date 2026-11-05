@@ -127,6 +127,8 @@ defmodule Engram.Notes.CrdtTransportTest do
           set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
         )
       end)
+
+      Engram.Fixtures.mirror_body!(note.id)
     end
 
     test "a diff against a state vector from another lineage is refused, and nothing of it is kept",
@@ -673,6 +675,8 @@ defmodule Engram.Notes.CrdtTransportTest do
           |> Repo.update_all(set: [crdt_state_ciphertext: <<9, 9, 9>>])
         end)
 
+      Engram.Fixtures.mirror_body!(note.id)
+
       {:ok, reloaded} = Notes.get_note_by_id(user, vault, note.id)
 
       assert is_nil(reloaded.crdt_head),
@@ -698,6 +702,8 @@ defmodule Engram.Notes.CrdtTransportTest do
           from(n in Note, where: n.id == ^note.id)
           |> Repo.update_all(set: [crdt_head: @head_manual])
         end)
+
+      Engram.Fixtures.mirror_body!(note.id)
 
       {:ok, reloaded} = Notes.get_note_by_id(user, vault, note.id)
       assert reloaded.crdt_head == @head_manual, "trigger must not fire on a crdt_head-only write"

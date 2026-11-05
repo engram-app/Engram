@@ -307,7 +307,8 @@ defmodule Engram.Insights.Snapshot do
     # Read BEFORE the sizes, so a write landing mid-scan leaves a seq older
     # than the sizes: the next day reads the vault again.
     seqs = Map.new(repo.all(from(v in Vault, where: v.id in ^ids, select: {v.id, v.change_seq})))
-    # With trigger-kept sizes the weekly byte rescan is not needed.
+    # With kept sizes (seeded on create, refreshed by the hourly
+    # CrdtBloatSweep) the weekly byte rescan is not needed.
     since =
       if NoteSizes.done?(),
         do: ~D[1970-01-01],
@@ -347,9 +348,10 @@ defmodule Engram.Insights.Snapshot do
     from(x in NoteSizes.live_totals_by_vault(), where: x.vault_id in ^ids)
   end
 
-  # Once `NoteSizes` is done the stored sizes are trigger-kept, so a copied
-  # vault takes its note count and bytes fresh from the narrow state rows (a
-  # re-encode moves bytes without a seq) and is never rescanned for them.
+  # Once `NoteSizes` is done the stored sizes are kept (seeded on create,
+  # refreshed by the hourly CrdtBloatSweep), so a copied vault takes its
+  # note count and bytes fresh from the narrow state rows (a re-encode moves
+  # bytes without a seq) and is never rescanned for them.
   defp refresh_sizes(rows, _repo, []), do: rows
 
   defp refresh_sizes(rows, repo, ids) do

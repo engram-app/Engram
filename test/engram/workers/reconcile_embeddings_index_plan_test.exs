@@ -256,8 +256,10 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
       )
     end
 
-    Repo.query!("ANALYZE notes")
-    Repo.query!("ANALYZE vaults")
+    # Only this test's rows: earlier tests in the partition leave dead pages
+    # that flipped this plan to a seq scan on CI (QueryPlan.generic_plan/2).
+    QueryPlan.fresh!("notes")
+    QueryPlan.fresh!("vaults")
 
     tick = DateTime.new!(Date.utc_today(), ~T[03:57:00])
 

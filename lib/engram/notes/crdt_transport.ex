@@ -518,7 +518,11 @@ defmodule Engram.Notes.CrdtTransport do
             )
       )
       |> Repo.update_all(set: [crdt_head: head])
-      |> tap(fn {n, _} -> if n > 0, do: NoteBody.sync!(note_id, [:crdt_head]) end)
+      # Won or lost, the body head follows the notes one: a lost CAS over a
+      # split (body NULL or different, notes set) heals it, so the next warm
+      # does not rebuild the doc again (`NoteBody.head_cold/0`). In step, it
+      # writes nothing.
+      |> tap(fn _ -> NoteBody.sync!(note_id, [:crdt_head]) end)
     end)
   end
 

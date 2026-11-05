@@ -18,7 +18,7 @@ defmodule Engram.Notes.ContentOutboxTest do
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
   alias Engram.Crypto.Envelope
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog, Note, NoteBody}
   alias Engram.Workers.{EmbedNote, NoteCommitted}
 
   setup do
@@ -210,6 +210,9 @@ defmodule Engram.Notes.ContentOutboxTest do
           Repo.update_all(from(n in Note, where: n.id == ^note_id),
             set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
           )
+
+          # As every app writer: the body row too (no trigger copies it).
+          NoteBody.sync!(note_id, [:crdt_state_ciphertext])
         end)
 
       :ok
@@ -290,6 +293,8 @@ defmodule Engram.Notes.ContentOutboxTest do
           Repo.update_all(from(n in Note, where: n.id == ^note.id),
             set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
           )
+
+          NoteBody.sync!(note.id, [:crdt_state_ciphertext])
         end)
 
       Yex.Map.set(Yex.Doc.get_map(doc, "nodes"), "n1", "hi")

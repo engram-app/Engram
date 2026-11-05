@@ -44,6 +44,8 @@ defmodule Engram.Notes.Utf8BackfillTest do
         )
       end)
 
+    Engram.Fixtures.mirror_body!(note.id)
+
     note
   end
 

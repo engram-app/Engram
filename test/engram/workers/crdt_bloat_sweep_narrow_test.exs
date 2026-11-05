@@ -103,6 +103,10 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
       [id, :crypto.strong_rand_bytes(80), <<1>> <> :crypto.strong_rand_bytes(12)]
     )
 
+    # The body write each writer makes after its notes write (no trigger
+    # copies a raw one).
+    Engram.Notes.NoteBody.sync!(n.id, [:crdt_state_ciphertext])
+
     # An ordinary content save, raw so no app-level stamp writes run.
     # `clock_timestamp()`: `now()` is constant inside the test transaction, so
     # `updated_at` (indexed) would not move as it does on a real save.
@@ -110,6 +114,8 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
       "UPDATE notes SET content_ciphertext = $2, content_nonce = $3, version = version + 1, updated_at = clock_timestamp() WHERE id = $1",
       [id, :crypto.strong_rand_bytes(40), <<1>> <> :crypto.strong_rand_bytes(12)]
     )
+
+    Engram.Notes.NoteBody.sync!(n.id, [:content_ciphertext])
 
     after_ = stat.()
 
@@ -144,15 +150,13 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
     assert content == body - 13 - Engram.Crypto.Envelope.tag_bytes()
   end
 
-  # R8 N+1 (#2416) drops `notes_sync_body`; the app writes the body itself
+  # R8 N+1 (#2416) dropped `notes_sync_body`; the app writes the body itself
   # (`NoteBody.sync!/3`). The sizes come from the body row's own BEFORE
   # trigger, so they must fill without the notes trigger.
   test "sizes fill on an app body write with notes_sync_body dropped", %{
     user: user,
     vault: vault
   } do
-    Repo.query!("DROP TRIGGER notes_sync_body ON notes")
-
     {:ok, n} =
       Notes.upsert_note(user, vault, %{"path" => "r8.md", "content" => "no trigger"},
         actor: "api"
@@ -166,6 +170,30 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
 
     assert is_integer(len)
     assert bytes == len - 13 - Engram.Crypto.Envelope.tag_bytes()
+  end
+
+  # Red on 38a2a1f1c: the state row is seeded by the notes INSERT, before
+  # the app writes the body, so a new note stayed unsized until the hourly
+  # sweep. `NoteBody.sync!/3` seeds them from the body row it inserts.
+  test "a new note is sized right after its first save", %{user: user, vault: vault} do
+    {:ok, n} =
+      Notes.upsert_note(user, vault, %{"path" => "new.md", "content" => "sized at once"},
+        actor: "api"
+      )
+
+    %{rows: [[state, body]]} =
+      Repo.query!(
+        """
+        SELECT ARRAY[s.content_bytes, s.state_bytes]::int[] || ARRAY[s.has_state::int],
+               ARRAY[b.content_bytes, b.state_bytes]::int[] || ARRAY[(b.state_bytes IS NOT NULL)::int]
+        FROM note_index_state s JOIN note_bodies b ON b.note_id = s.note_id
+        WHERE s.note_id = $1
+        """,
+        [Ecto.UUID.dump!(n.id)]
+      )
+
+    assert Enum.all?(body, &is_integer/1), inspect(body)
+    assert state == body
   end
 
   test "the ledger fills rows the trigger never saw, then the sweep reads no notes", %{

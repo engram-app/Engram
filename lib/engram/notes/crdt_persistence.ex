@@ -344,7 +344,10 @@ defmodule Engram.Notes.CrdtPersistence do
   # in the same transaction (the BackfillCrdtHead worker re-warms it from
   # snapshot + full tail), guarded on not-NULL so an already-invalidated note
   # skips the write, and setting ONLY crdt_head (checkpoint owns
-  # version/seq/updated_at).
+  # version/seq/updated_at). Either copy counts: with the copy trigger gone a
+  # body head left set over a NULL notes head would otherwise be served as
+  # current after this append. The body probe is an index-only lookup on
+  # `note_bodies_user_note_head`, and only runs once the notes head is NULL.
   #
   # seq: the note's current vault-global change seq, carried on the fanout for
   # gap-heal (spec §3 Phase D2). Read by the outer SELECT, which sees the row as
@@ -360,7 +363,9 @@ defmodule Engram.Notes.CrdtPersistence do
     VALUES ($1, $2, $3, $4, $5, $6)
   ), head_reset AS (
     UPDATE notes SET crdt_head = NULL
-    WHERE id = $2 AND kind = 'note' AND crdt_head IS NOT NULL
+    WHERE id = $2 AND kind = 'note' AND (crdt_head IS NOT NULL OR EXISTS (
+      SELECT 1 FROM note_bodies b
+      WHERE b.note_id = $2 AND b.user_id = $3 AND b.crdt_head IS NOT NULL))
     RETURNING 1
   )
   SELECT seq, EXISTS (SELECT 1 FROM head_reset) FROM notes WHERE id = $2

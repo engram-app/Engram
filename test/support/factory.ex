@@ -5,7 +5,8 @@ defmodule Engram.Factory do
   encryption constraints; tests exercising real decryption override these.
   """
 
-  use ExMachina.Ecto, repo: Engram.Repo
+  # Notes get their body row as the app writes it (`Engram.FactoryRepo`).
+  use ExMachina.Ecto, repo: Engram.FactoryRepo
 
   # Phase B.3 dropped the plaintext path/folder/tags/name columns. Every
   # row now requires _ciphertext + _nonce + _hmac. For tests that don't

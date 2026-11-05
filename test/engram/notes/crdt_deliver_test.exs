@@ -118,6 +118,8 @@ defmodule Engram.Notes.CrdtDeliverTest do
           )
         end)
 
+      Engram.Fixtures.mirror_body!(note.id)
+
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
       EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
 
@@ -144,6 +146,8 @@ defmodule Engram.Notes.CrdtDeliverTest do
             set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
           )
         end)
+
+      Engram.Fixtures.mirror_body!(note.id)
 
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
@@ -491,6 +495,8 @@ defmodule Engram.Notes.CrdtDeliverTest do
           )
         end)
 
+      Engram.Fixtures.mirror_body!(note.id)
+
       room = start_bare_room(note.id, "orig")
       ref = Process.monitor(room)
 
@@ -513,6 +519,8 @@ defmodule Engram.Notes.CrdtDeliverTest do
             set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
           )
         end)
+
+      Engram.Fixtures.mirror_body!(note.id)
 
       room = start_bare_room(note.id, "orig")
 
@@ -541,6 +549,8 @@ defmodule Engram.Notes.CrdtDeliverTest do
             set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
           )
         end)
+
+      Engram.Fixtures.mirror_body!(note.id)
 
       room = start_bare_room(note.id, "child body")
       EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")

@@ -4,9 +4,9 @@ defmodule Engram.Notes.NoteBodyReadTest do
   manifest head) comes from `note_bodies` (`Engram.Notes.NoteBody`), with the
   `notes` columns as the per-row fallback for a note that has no body row yet.
 
-  The proof is a split brain: the `notes` copy is overwritten at rest with a
-  value the trigger does not propagate (same nonce, so `notes_sync_body`
-  keeps the body row), and the read must still return the real body. Before
+  The proof is a split brain: the `notes` copy is overwritten at rest by a
+  raw write that skips `NoteBody.sync!/3`, so the body row keeps the real
+  body, and the read must still return it. Before
   the switch every one of these reads the `notes` copy and fails.
 
   The RLS half drops to `engram_app` (`Engram.RlsCase`): the suite connects
@@ -46,8 +46,8 @@ defmodule Engram.Notes.NoteBodyReadTest do
     cols |> Enum.zip(row) |> Map.new()
   end
 
-  # Overwrites the `notes` copy only: the nonce is unchanged, so the
-  # `notes_sync_body` trigger leaves the body row as it was.
+  # Overwrites the `notes` copy only: a raw write skips `NoteBody.sync!/3`,
+  # so the body row stays as it was.
   defp corrupt_notes_copy!(note, column) do
     raw!("UPDATE notes SET #{column} = '\\xdeadbeefdeadbeefdeadbeefdeadbeef' WHERE id = $1", note)
   end
@@ -98,6 +98,18 @@ defmodule Engram.Notes.NoteBodyReadTest do
 
       assert {:ok, %{live_root_count: 1}} =
                Engram.Notes.LineageAudit.scan_note(ctx.user, ctx.vault, ctx.note.id)
+    end
+
+    test "CRDT state: the lineage audit targets a note by its body row", ctx do
+      # A NULL notes copy and no tail: only the body row says it has state.
+      raw!("DELETE FROM crdt_update_log WHERE note_id = $1", ctx.note)
+
+      raw!(
+        "UPDATE notes SET crdt_state_ciphertext = NULL, crdt_state_nonce = NULL WHERE id = $1",
+        ctx.note
+      )
+
+      assert {:ok, %{scanned: 1}} = Engram.Notes.LineageAudit.run(user_id: ctx.user.id)
     end
 
     test "the catch-up page serves the body row", ctx do

@@ -2,13 +2,15 @@ defmodule Engram.DataMigrations.NoteSplit do
   @moduledoc """
   Fills wave 3's narrow `notes` columns and `note_bodies` for rows written
   before the `notes_derive_core_keys` / `notes_sync_body` triggers existed
-  (migration 20261021110200). Every later write fills them itself, from any
-  release's code, so this only catches up.
+  (migration 20261021110200; `notes_sync_body` was dropped in
+  20261104000000). Every later write fills them itself, so this only
+  catches up.
 
-  The work is the triggers' own: a pass touches `kind` (`SET kind = kind`),
-  which both triggers list, so each row is derived by exactly the code that
-  derives new writes. `seq` and `updated_at` are untouched: no sync feed or
-  cache sees a change.
+  The core columns are the trigger's own work: a pass touches `kind`
+  (`SET kind = kind`), which `notes_derive_core_keys` lists, so each row is
+  derived by exactly the code that derives new writes. A missing body row is
+  inserted by `NoteBody.sync!/3`, the app's one body writer. `seq` and
+  `updated_at` are untouched: no sync feed or cache sees a change.
 
   A row needs work when its derived columns were never set (`is_folder` is
   NULL; the trigger always sets it) or it is a note with no body row.
@@ -22,10 +24,13 @@ defmodule Engram.DataMigrations.NoteSplit do
   walked every notes window and de-TOASTed both bodies of every note for the
   drift report (prod 2026-10-28..11-02: ~95 windows a day, ~700 ms and 1.6-1.9k
   disk reads each, evicting the hot set) and did not reopen it once in 14 days
-  of prod logs. It has nothing to find: the triggers are in the database, so every INSERT and every write of a
-  source column fills the row, from any release's code, during a rolling
-  deploy and after a rollback alike; no code writes a derived column or
-  deletes a `note_bodies` row (the FK cascades with its note). A full restore
+  of prod logs. It has nothing to find: `notes_derive_core_keys` is in the
+  database, so every write fills the core columns from any release's code;
+  since the copy trigger's drop, every body write is `NoteBody.sync!/3`'s,
+  in every release from N on (the release floor N+1 requires), and no code
+  deletes a `note_bodies` row (the FK cascades with its note). A body row
+  missing or out of step is sampled daily by `Engram.Bookkeeping.Canary`
+  (`unfixed_ids/2`, `drift_ids/2`), not by this ledger. A full restore
   brings this ledger row back from the same dump as the rows it vouches for.
   What remains is a write with triggers disabled (`session_replication_role
   = replica`, a data-only `pg_restore --disable-triggers`): an operator who
@@ -80,8 +85,8 @@ defmodule Engram.DataMigrations.NoteSplit do
   # touch skipped because a writer held it.
   defp heal(ids, %{repo: repo}) do
     touched = touch(repo, needing(ids))
-    # A missing body row, written by this pass rather than by the trigger
-    # (the next release drops it). Present rows are left as they are.
+    # A missing body row, written by this pass. Present rows are left as
+    # they are.
     _ = NoteBody.sync!(touched, [], repo: repo)
     left? = repo.exists?(where(unfixed(), [n], field(n, :id) in type(^ids, {:array, Ecto.UUID})))
     {length(touched), left?}

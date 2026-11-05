@@ -57,8 +57,7 @@ defmodule Engram.QueryPlan do
         fresh? = Keyword.get(opts, :fresh, false)
 
         for table <- Keyword.get(opts, :analyze, []) do
-          if fresh?, do: cluster_on_pkey!(table)
-          Repo.query!("ANALYZE #{table}")
+          if fresh?, do: fresh!(table), else: Repo.query!("ANALYZE #{table}")
         end
 
         Repo.query!("SET LOCAL plan_cache_mode = force_generic_plan")
@@ -140,6 +139,20 @@ defmodule Engram.QueryPlan do
   def reading(queries, table) do
     me = self()
     for %{sql: sql, pid: ^me} <- queries, sql =~ ~s(FROM "#{table}"), do: sql
+  end
+
+  @doc """
+  `table` rewritten as `fresh: true` does (CLUSTER on its primary key, see
+  `generic_plan/2`), then ANALYZEd: statistics and physical layout from this
+  test's rows only, for a test that reads a plan some other way (a recorded
+  custom plan). Inside the test's transaction, rolled back with it. CLUSTER
+  holds an ACCESS EXCLUSIVE lock to the end of the test: `async: false` only.
+  """
+  @spec fresh!(String.t()) :: :ok
+  def fresh!(table) do
+    cluster_on_pkey!(table)
+    Repo.query!("ANALYZE #{table}")
+    :ok
   end
 
   defp cluster_on_pkey!(table) do

@@ -912,6 +912,8 @@ defmodule Engram.Crypto.UserDekRotationTest do
         skip_tenant_check: true
       )
 
+      Engram.Fixtures.mirror_body!(note.id)
+
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       reloaded_user =
@@ -995,6 +997,8 @@ defmodule Engram.Crypto.UserDekRotationTest do
         skip_tenant_check: true
       )
 
+      Engram.Fixtures.mirror_body!(note.id)
+
       # Must NOT raise: base_columns' both-DEKs-failed arm aborts the sweep after
       # earlier batches have committed under a DEK final_flip has not persisted.
       assert :ok = UserDekRotation.rotate_user(user.id)
@@ -1064,6 +1068,8 @@ defmodule Engram.Crypto.UserDekRotationTest do
         [set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]],
         skip_tenant_check: true
       )
+
+      Engram.Fixtures.mirror_body!(note.id)
 
       assert :ok = UserDekRotation.rotate_user(user.id)
 

@@ -160,6 +160,8 @@ defmodule Engram.Workers.BackfillCrdtHeadTest do
           )
         end)
 
+      Engram.Fixtures.mirror_body!(bad.id)
+
       log =
         ExUnit.CaptureLog.capture_log(fn ->
           assert :ok =
@@ -239,5 +241,89 @@ defmodule Engram.Workers.BackfillCrdtHeadTest do
         args: %{"user_id" => other.id, "vault_id" => other_vault.id}
       )
     end
+  end
+
+  # R8 N+1: the manifest serves the body row's head (`NoteBody`), so warming
+  # must judge "NULL" by the body row too, not by the `notes` copy. A split
+  # brain (a raw write to one side, which nothing copies) tells them apart.
+  describe "judges the head by the body row" do
+    setup %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "H.md", content: "# H", mtime: 1.0}, actor: "api")
+
+      :ok = warm!(user, vault)
+      assert is_binary(notes_head(note)) and is_binary(body_head(note))
+      %{note: note}
+    end
+
+    test "enqueue_all queues a note whose body head is NULL", ctx do
+      raw!("UPDATE note_bodies SET crdt_head = NULL WHERE note_id = $1", ctx.note)
+
+      BackfillCrdtHead.enqueue_all()
+
+      assert_enqueued(
+        worker: BackfillCrdtHead,
+        args: %{"user_id" => ctx.user.id, "vault_id" => ctx.vault.id}
+      )
+    end
+
+    # A split either way heals on the next warm (with the copy trigger gone,
+    # nothing else would). Red on 38a2a1f1c: the batch skipped (notes NULL),
+    # and a lost compare-and-set left the body NULL (body NULL).
+    test "a split with the notes head NULL heals on the next warm", ctx do
+      raw!("UPDATE notes SET crdt_head = NULL WHERE id = $1", ctx.note)
+
+      :ok = warm!(ctx.user, ctx.vault)
+
+      assert is_binary(notes_head(ctx.note))
+      assert in_step?(ctx.note)
+    end
+
+    test "a split with the body head NULL heals on the next warm", ctx do
+      raw!("UPDATE note_bodies SET crdt_head = NULL WHERE note_id = $1", ctx.note)
+
+      :ok = warm!(ctx.user, ctx.vault)
+
+      assert is_binary(body_head(ctx.note))
+      assert in_step?(ctx.note)
+    end
+
+    # Red on 38a2a1f1c: the append's reset read only the notes copy, so a
+    # body head over a NULL notes head was served as current after the doc
+    # moved on.
+    test "an append resets a body head the notes copy no longer holds", ctx do
+      raw!("UPDATE notes SET crdt_head = NULL WHERE id = $1", ctx.note)
+
+      {:ok, %{state: upd}} = Engram.Notes.CrdtBridge.merge_plaintext(nil, "moved on")
+      doc = Engram.Notes.CrdtBridge.new_doc()
+      :ok = Yex.apply_update(doc, upd)
+      st = %{user_id: ctx.user.id, vault_id: ctx.vault.id, note_id: ctx.note.id}
+      _ = Engram.Notes.CrdtPersistence.update_v1(st, upd, ctx.note.id, doc)
+
+      assert is_nil(body_head(ctx.note))
+    end
+  end
+
+  defp warm!(user, vault) do
+    perform_job(BackfillCrdtHead, %{
+      "user_id" => user.id,
+      "vault_id" => vault.id,
+      "cursor" => "00000000-0000-0000-0000-000000000000"
+    })
+  end
+
+  defp raw!(sql, note), do: Engram.Repo.query!(sql, [Ecto.UUID.dump!(note.id)])
+
+  defp notes_head(note),
+    do: one!("SELECT crdt_head FROM notes WHERE id = $1", note)
+
+  defp body_head(note),
+    do: one!("SELECT crdt_head FROM note_bodies WHERE note_id = $1", note)
+
+  defp in_step?(note), do: Engram.Fixtures.note_body_divergence(note.user_id) == []
+
+  defp one!(sql, note) do
+    %{rows: [[v]]} = raw!(sql, note)
+    v
   end
 end

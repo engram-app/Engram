@@ -107,7 +107,9 @@ defmodule Engram.Indexing.NoteCountsTest do
     sqls = Enum.map(queries, & &1.sql)
     chunk_write = Enum.find_index(sqls, &(&1 =~ ~r/^(INSERT INTO|UPDATE|DELETE FROM) "?chunks"?/))
     tier_stamp = Enum.find_index(sqls, &(&1 =~ ~r/^UPDATE "notes" .*"index_tier" = /s))
-    recount = Enum.find_index(sqls, &(&1 =~ "UPDATE note_index_state"))
+    # The counter recount itself, not any statement that writes the state
+    # row (`NoteBody.sync!/3` seeds a new note's sizes there too).
+    recount = Enum.find_index(sqls, &(&1 =~ "UPDATE note_index_state s SET points ="))
 
     assert chunk_write && recount && tier_stamp
     assert chunk_write < recount and recount < tier_stamp

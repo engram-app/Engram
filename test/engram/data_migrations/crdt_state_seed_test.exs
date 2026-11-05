@@ -31,6 +31,8 @@ defmodule Engram.DataMigrations.CrdtStateSeedTest do
           set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
         )
       end)
+
+    Engram.Fixtures.mirror_body!(note.id)
   end
 
   test "registered with the runner" do

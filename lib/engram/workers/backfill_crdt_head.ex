@@ -1,6 +1,6 @@
 defmodule Engram.Workers.BackfillCrdtHead do
   @moduledoc """
-  Warm the `notes.crdt_head` column so the sync manifest
+  Warm NULL note heads (`crdt_head`, read from the body row) so the sync manifest
   (`SyncController.manifest`) serves a real head marker per note instead of
   `nil`. The manifest passes `crdt_head` through as-is (a NULL flows as `nil`),
   so a cold client can only diff its per-note heads once the column is
@@ -158,12 +158,15 @@ defmodule Engram.Workers.BackfillCrdtHead do
     # predicate `IdWindows.all/2` used here before (#2403): no join to
     # `note_bodies`, whose user-leading index the planner otherwise walked
     # once per candidate under a tenant's RLS (CI: one statement past the
-    # 15 s checkout). The notes head is the trigger-kept source of the copy.
+    # 15 s checkout). A head is cold when either copy is (`NoteBody.head_cold/0`,
+    # a primary-key probe of the body row).
     query = fn ids ->
       from(n in Note,
+        as: :note,
         join: v in Vault,
         on: v.id == n.vault_id and is_nil(v.deleted_at),
-        where: n.kind == "note" and is_nil(n.crdt_head) and is_nil(n.deleted_at),
+        where: n.kind == "note" and is_nil(n.deleted_at),
+        where: ^NoteBody.head_cold(),
         distinct: true,
         select: {n.user_id, n.vault_id}
       )
@@ -243,9 +246,11 @@ defmodule Engram.Workers.BackfillCrdtHead do
     {:ok, ids} =
       Repo.with_tenant(user.id, fn ->
         from(n in Note,
+          as: :note,
           where:
             n.vault_id == ^vault.id and n.kind == "note" and n.id > ^cursor and
-              is_nil(n.crdt_head) and is_nil(n.deleted_at),
+              is_nil(n.deleted_at),
+          where: ^NoteBody.head_cold(),
           order_by: [asc: n.id],
           select: n.id,
           limit: ^limit

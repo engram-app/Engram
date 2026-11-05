@@ -124,6 +124,8 @@ defmodule Engram.Notes.CrdtPersistenceTest do
       |> Repo.update_all(set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce])
     end)
 
+    Engram.Fixtures.mirror_body!(note.id)
+
     st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
 
     capture_log(fn ->
@@ -142,6 +144,8 @@ defmodule Engram.Notes.CrdtPersistenceTest do
       from(n in Note, where: n.id == ^note.id)
       |> Repo.update_all(set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil])
     end)
+
+    Engram.Fixtures.mirror_body!(note.id)
 
     st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
     doc = CrdtBridge.new_doc()
@@ -181,6 +185,8 @@ defmodule Engram.Notes.CrdtPersistenceTest do
           set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
         )
       end)
+
+    Engram.Fixtures.mirror_body!(note2.id)
 
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
     doc = CrdtBridge.new_doc()
@@ -228,6 +234,8 @@ defmodule Engram.Notes.CrdtPersistenceTest do
         )
       end)
 
+    Engram.Fixtures.mirror_body!(note2.id)
+
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
 
     # Append a tail-log update that sets the CRDT text to a distinct value.
@@ -258,6 +266,8 @@ defmodule Engram.Notes.CrdtPersistenceTest do
         )
       end)
 
+    Engram.Fixtures.mirror_body!(note2.id)
+
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
     doc = CrdtBridge.new_doc()
     _returned = CrdtPersistence.bind(st, note2.id, doc)
@@ -286,6 +296,8 @@ defmodule Engram.Notes.CrdtPersistenceTest do
           set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
         )
       end)
+
+    Engram.Fixtures.mirror_body!(note2.id)
 
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
     doc = CrdtBridge.new_doc()
@@ -320,6 +332,8 @@ defmodule Engram.Notes.CrdtPersistenceTest do
         )
       end)
 
+    Engram.Fixtures.mirror_body!(note2.id)
+
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
     doc = CrdtBridge.new_doc()
     _returned = CrdtPersistence.bind(st, note2.id, doc)
@@ -347,6 +361,8 @@ defmodule Engram.Notes.CrdtPersistenceTest do
         )
       end)
 
+    Engram.Fixtures.mirror_body!(note2.id)
+
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
     doc = CrdtBridge.new_doc()
     _returned = CrdtPersistence.bind(st, note2.id, doc)
@@ -372,6 +388,8 @@ defmodule Engram.Notes.CrdtPersistenceTest do
           set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
         )
       end)
+
+    Engram.Fixtures.mirror_body!(note2.id)
 
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
 
@@ -415,6 +433,8 @@ defmodule Engram.Notes.CrdtPersistenceTest do
           set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
         )
       end)
+
+    Engram.Fixtures.mirror_body!(note2.id)
 
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
     doc = CrdtBridge.new_doc()
@@ -539,6 +559,8 @@ defmodule Engram.Notes.CrdtPersistenceTest do
       Repo.with_tenant(user.id, fn ->
         Repo.update_all(from(n in Note, where: n.id == ^note.id), set: [crdt_head: "stale-head"])
       end)
+
+    Engram.Fixtures.mirror_body!(note.id)
 
     {:ok, %{state: upd}} = CrdtBridge.merge_plaintext(nil, "returning path")
     doc = CrdtBridge.new_doc()
@@ -750,6 +772,8 @@ defmodule Engram.Notes.CrdtPersistenceTest do
       from(n in Note, where: n.id == ^note.id)
       |> Repo.update_all(set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce])
     end)
+
+    Engram.Fixtures.mirror_body!(note.id)
 
     st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
     bound = CrdtBridge.new_doc()

@@ -131,9 +131,14 @@ defmodule Engram.Fixtures do
         # row-lock contract) unless the caller overrode it.
         note_attrs = Map.put_new(note_attrs, :seq, Engram.Vaults.next_seq!(vault.id))
 
-        %Note{}
-        |> Note.changeset(note_attrs)
-        |> Repo.insert!()
+        note =
+          %Note{}
+          |> Note.changeset(note_attrs)
+          |> Repo.insert!()
+
+        # As every app writer: the body row in the same transaction.
+        _ = Engram.Notes.NoteBody.sync!(note.id, note_attrs)
+        note
       end)
 
     # Splice virtual fields so callers can read note.path / .folder / .tags
@@ -367,7 +372,7 @@ defmodule Engram.Fixtures do
   @doc """
   Every `kind = 'note'` row of `user_id` whose `note_bodies` row is missing
   or disagrees with its `notes` body columns, as `{id, [column]}`, compared
-  in full against the `notes_sync_body` trigger's mapping (20261021110200),
+  in full against the dropped `notes_sync_body` trigger's mapping (20261021110200),
   restated here independently of `Engram.Notes.NoteBody`. Ids and column
   names only, never content. `[]` means in step.
   """
@@ -407,11 +412,11 @@ defmodule Engram.Fixtures do
   end
 
   @doc """
-  Copies a note's `notes` body columns into its `note_bodies` row, merged as
-  the `notes_sync_body` trigger stores them. Readers take the body from
-  `note_bodies`, and a write is copied only when its nonce changed, so a
-  test that tampers with a `notes` ciphertext at rest calls this to put the
-  tampered bytes where they are read.
+  Copies a note's `notes` body columns into its `note_bodies` row whole
+  (the mapping of `Engram.Notes.NoteBody.sync!/3`). Readers take the body
+  from `note_bodies`, and nothing copies a raw `notes` write there, so a
+  test that writes `notes` body columns directly (a tampered ciphertext, a
+  legacy shape) calls this to put the bytes where they are read.
   """
   def mirror_body!(note_id) do
     # With no body row, `sync!/3` inserts it whole from the notes columns.

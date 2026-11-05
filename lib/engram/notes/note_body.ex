@@ -3,15 +3,14 @@ defmodule Engram.Notes.NoteBody do
   A note's body, 1:1 with `notes` (migration 20261021110100): materialized
   content, CRDT state and manifest head.
 
-  Written twice over, on purpose, while R8 (stop storing every body twice)
-  rolls out: by the `notes_sync_body` trigger, which every writer of the
-  `notes` body columns fires (the previous release's nodes, raw SQL), AND by
-  `sync!/3`, which every app writer of those columns calls after its `notes`
-  write, in the same transaction. With the trigger live, `sync!/3` finds the
-  row already in step and writes nothing, so a save still writes this row
-  once. The next release drops the trigger and `sync!/3` is the only writer;
-  the one after stops writing the `notes` columns. Order matters: nulling
-  the `notes` columns under a live trigger copies the NULLs here.
+  Written by one function, `sync!/3`, which every app writer of the `notes`
+  body columns calls after its `notes` write, in the same transaction. R8
+  (stop storing every body twice) runs in three releases: N added `sync!/3`
+  beside the `notes_sync_body` trigger, N+1 dropped the trigger
+  (20261104000000), so a raw `notes` write that skips `sync!/3` no longer
+  reaches this table; N+2 stops writing the `notes` body columns. Order
+  matters: nulling the `notes` columns under a live trigger would copy the
+  NULLs here, so N+2 must refuse to run while the trigger exists.
 
   Wave 3 migrate-data (`docs/context/notes-chunks-hyperopt.md` 6.1 step 2):
   every READ of a body column goes through `select_note/2` (or `join/1` +
@@ -43,10 +42,10 @@ defmodule Engram.Notes.NoteBody do
   re-fetches only the locked relation (EvalPlanQual), so a joined body row
   would be the pre-wait version (LockedReadBodyTest). No lock is needed on
   this table: every writer of a body row holds that note's `notes` row lock
-  (the trigger and `sync!/3` run after a `notes` write in the same
-  transaction; the cascade runs inside the `notes` DELETE), so once the
-  reader holds it, the fresh statement sees the last committed body and
-  nothing can change it until the reader commits.
+  (`sync!/3` runs after a `notes` write in the same transaction; the
+  cascade runs inside the `notes` DELETE), so once the reader holds it, the
+  fresh statement sees the last committed body and nothing can change it
+  until the reader commits.
 
   Write fences (`snapshot_fence`, `rename_fence`, `snapshot_fenced`) compare
   the `notes.crdt_state_nonce` column (inline, never TOASTed) against the
@@ -139,6 +138,11 @@ defmodule Engram.Notes.NoteBody do
   # One statement per set of fields a write touched (`sync!/3`): update the
   # body rows that exist and differ in those fields (plus the owner and key
   # version, which live on `notes` for good), insert the missing ones whole.
+  # An insert also seeds the note's narrow sizes (`note_index_state`, whose
+  # row the notes INSERT trigger made before the body existed) from the
+  # values the `note_bodies_sizes` BEFORE trigger computed (RETURNING sees
+  # them), so a new note is sized at once; later edits reach them through
+  # `CrdtBloatSweep`, as before.
   # Both CTEs read the statement's snapshot, so a row is in exactly one of
   # them. Built at compile time for every subset (eight).
   @sync_sql (for content? <- [false, true],
@@ -170,7 +174,14 @@ defmodule Engram.Notes.NoteBody do
                   WHERE n.id = ANY($1) AND n.kind = 'note'
                     AND NOT EXISTS (SELECT 1 FROM note_bodies x WHERE x.note_id = n.id)
                   ON CONFLICT (note_id) DO NOTHING
-                  RETURNING 1
+                  RETURNING note_id, content_bytes, state_bytes
+                ), sized AS (
+                  UPDATE note_index_state s SET
+                    content_bytes = i.content_bytes,
+                    state_bytes = i.state_bytes,
+                    has_state = i.state_bytes IS NOT NULL
+                  FROM ins i
+                  WHERE s.note_id = i.note_id
                 )
                 SELECT ((SELECT count(*) FROM upd) + (SELECT count(*) FROM ins))::int
                 """}
@@ -256,35 +267,32 @@ defmodule Engram.Notes.NoteBody do
 
   @doc """
   Brings the `note_bodies` rows of the notes `ids` in step with the `notes`
-  body columns a write just set, as the `notes_sync_body` trigger maps them
-  (20261021110200), and returns how many rows it wrote. The one function
-  every app writer of a `notes` body column (content, CRDT state, head,
-  `dek_version`) calls after that write, in the same transaction, so the
-  `notes` rows are already locked (`notes` before `note_bodies`, the
-  trigger's order).
+  body columns a write just set, with the mapping the dropped
+  `notes_sync_body` trigger defined (20261021110200), and returns how many
+  rows it wrote. The one function every app writer of a `notes` body column
+  (content, CRDT state, head, `dek_version`) calls after that write, in the
+  same transaction, so the `notes` rows are already locked (`notes` before
+  `note_bodies`).
 
   `written` names the `notes` columns the write set (a list, or the
   keyword list / changes map it wrote), and only the body fields copied
-  from those are compared and copied, as the trigger copies only the
+  from those are compared and copied, as the trigger copied only the
   columns whose nonce changed. That is load-bearing for the release that
   stops writing the `notes` body columns: an older node beside it must not
   copy a stale `notes` column it did not write over a newer body. A CRDT
   state write also copies the head (the `notes_crdt_head_invalidate`
   trigger NULLs it). The owner and key version (`dek_version`, which stays
   on `notes`) are always kept in step. A missing body row (written before
-  the trigger) is inserted whole.
+  the body table) is inserted whole.
 
   Compared cheaply: per body column its NULL-ness, its length, the 13-byte
   nonce field and the 16-byte AEAD tag (slices of an EXTERNAL value, so
-  nothing is de-TOASTed; every encryption takes a fresh nonce, the
-  trigger's own change test). A row already in step (the trigger just
-  wrote it) is not touched, so a save writes it once.
+  nothing is de-TOASTed; every encryption takes a fresh nonce, so a new
+  nonce names a new ciphertext). A row already in step is not touched.
 
   Emits `[:engram, :note_body, :sync_wrote]` (`%{count: rows}`) when it
-  wrote anything (`engram_prom_ex_notes_body_sync_wrote_rows_total`). While
-  the trigger is live that means the trigger left a row behind; it should
-  stay at zero, which is the evidence the release dropping the trigger
-  waits for.
+  wrote anything (`engram_prom_ex_notes_body_sync_wrote_rows_total`): the
+  body write rate.
 
   Options: `:repo` (default `Engram.Repo`, or the maintenance repo a ledger
   runs on); the rest go to the query (`mode: :savepoint`,
@@ -324,7 +332,7 @@ defmodule Engram.Notes.NoteBody do
   Matches `user_id` as well as `note_id`: a caller's `n.user_id == ^id`
   then reaches `note_bodies` as an index condition (`note_bodies_user_note_head`),
   so a vault-wide join reads the owner's bodies, not every tenant's (R5).
-  The trigger writes the note's own `user_id`, so no row changes sides.
+  `sync!/3` writes the note's own `user_id`, so no row changes sides.
   """
   @spec join(Ecto.Queryable.t()) :: Ecto.Query.t()
   def join(query) do
@@ -360,6 +368,60 @@ defmodule Engram.Notes.NoteBody do
         dynamic([n], fragment("(SELECT h.crdt_head FROM notes AS h WHERE h.id = ?)", n.id))
       )
 
+  # The 32-byte body digest as the url-safe, unpadded base64
+  # `notes.crdt_head` holds (a 32-byte base64 is 44 chars, one `=`, no line
+  # break).
+  defmacrop url_b64(digest) do
+    quote do
+      fragment("rtrim(translate(encode(?, 'base64'), '+/', '-_'), '=')", unquote(digest))
+    end
+  end
+
+  @doc """
+  True when the note's CRDT state is NULL as every read sees it: from its
+  body row, else (no body row, or one owned by another user, as `join/1`
+  treats it) from `notes`. For a predicate on a query whose first binding
+  is a `Note`. The body row is read by a per-row primary-key subquery, not
+  a join. NULL-ness only: nothing is de-TOASTed. Not for a write fence in a
+  `notes` UPDATE: after a row-lock wait the subquery still sees the
+  pre-wait body (see the moduledoc).
+  """
+  @spec null?(:crdt_state_ciphertext) :: Ecto.Query.dynamic_expr()
+  def null?(:crdt_state_ciphertext) do
+    dynamic(
+      [n],
+      fragment(
+        "coalesce((SELECT b.crdt_ct IS NULL FROM note_bodies AS b WHERE b.note_id = ? AND b.user_id = ?), ? IS NULL)",
+        n.id,
+        n.user_id,
+        n.crdt_state_ciphertext
+      )
+    )
+  end
+
+  @doc """
+  True when a note's head needs warming: either copy (`notes.crdt_head`,
+  the body row's) is NULL, there is no body row, or the two disagree. With
+  the copy trigger gone nothing else heals a split, so warming must find
+  every shape of one (`CrdtTransport.store_head_if_unchanged/4` copies the
+  notes head over when its compare-and-set loses). A per-row primary-key
+  probe of `note_bodies` (index-only on `note_bodies_user_note_head`), not
+  a join, so a query that reads its notes by key (`IdWindows.by_id/2`)
+  keeps that plan (#2403). The note binding must be named `:note`.
+  """
+  @spec head_cold() :: Ecto.Query.dynamic_expr()
+  def head_cold do
+    in_step =
+      from(b in __MODULE__,
+        where:
+          b.note_id == parent_as(:note).id and b.user_id == parent_as(:note).user_id and
+            url_b64(b.crdt_head) == parent_as(:note).crdt_head,
+        select: 1
+      )
+
+    dynamic(not exists(in_step))
+  end
+
   # The ciphertext starts at byte 14 in both merged formats: a format 1
   # nonce field is 13 bytes (leading 1), a format 0 nonce (12 bytes) sits
   # behind a 0 byte. `substring ... FOR n` reads a slice of an EXTERNAL
@@ -372,18 +434,17 @@ defmodule Engram.Notes.NoteBody do
 
   defp field_expr(:crdt_head), do: head_expr(dynamic([n], n.crdt_head))
 
-  # The body's 32-byte digest as the url-safe, unpadded base64
-  # `notes.crdt_head` holds (a 32-byte base64 is 44 chars, one `=`, no line
-  # break); `fallback` (the notes-side head) for a note with no body row.
+  # The body's head as `url_b64/1`; `fallback` (the notes-side head) for a
+  # note with no body row.
   defp head_expr(fallback) do
     dynamic(
       [n, note_body: b],
       type(
         fragment(
-          "CASE WHEN ? IS NULL THEN ? ELSE rtrim(translate(encode(?, 'base64'), '+/', '-_'), '=') END",
+          "CASE WHEN ? IS NULL THEN ? ELSE ? END",
           b.note_id,
           ^fallback,
-          b.crdt_head
+          url_b64(b.crdt_head)
         ),
         :string
       )
