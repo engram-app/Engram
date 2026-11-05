@@ -52,7 +52,7 @@ if [ -n "${MIXW_NETWORK:-}" ]; then
   if [ -n "${MIXW_DATABASE_URL:-}" ]; then net_args+=(-e "DATABASE_URL=$MIXW_DATABASE_URL"); fi
 fi
 
-exec docker run --rm -i --init "${net_args[@]}" \
+exec "$(dirname "$0")/ci-docker" run --rm -i --init "${net_args[@]}" \
   --label "engram-mixw=${GITHUB_RUN_ID:-local}-${GITHUB_JOB:-local}" \
   "${mounts[@]}" -w "/app$rel" \
   "${env_args[@]}" \

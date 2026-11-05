@@ -914,7 +914,7 @@ jobs:
           fi
 
           for attempt in 1 2 3 4 5; do
-            if docker run -d --name "$PG_CONTAINER" \
+            if ci/bin/ci-docker run -d --name "$PG_CONTAINER" \
                 -e POSTGRES_USER=engram \
                 -e POSTGRES_PASSWORD=engram \
                 -e POSTGRES_DB=engram_test \
