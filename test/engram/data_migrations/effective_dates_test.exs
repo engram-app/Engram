@@ -117,6 +117,7 @@ defmodule Engram.DataMigrations.EffectiveDatesTest do
     end)
 
     user = Repo.get!(Engram.Accounts.User, ctx.user.id)
+
     {:ok, note} =
       Repo.with_tenant!(user.id, fn -> Repo.get!(Note, note.id) end)
       |> Engram.Crypto.maybe_decrypt_note_fields(user)

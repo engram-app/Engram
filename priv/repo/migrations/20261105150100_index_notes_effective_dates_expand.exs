@@ -33,10 +33,8 @@ defmodule Engram.Repo.Migrations.IndexNotesEffectiveDatesExpand do
   @live "deleted_at IS NULL AND kind = 'note'"
 
   @exprs %{
-    "notes_eff_updated_live" =>
-      "COALESCE(eff_updated, floor(extract(epoch FROM updated_at - timestamp '1970-01-01'))::bigint)",
-    "notes_eff_created_live" =>
-      "COALESCE(eff_created, floor(extract(epoch FROM created_at - timestamp '1970-01-01'))::bigint)"
+    "notes_eff_updated_live" => "COALESCE(eff_updated, engram_epoch_s(updated_at))",
+    "notes_eff_created_live" => "COALESCE(eff_created, engram_epoch_s(created_at))"
   }
 
   # `id, user_id` for the answer and the RLS policy, plus the expression's
@@ -48,7 +46,28 @@ defmodule Engram.Repo.Migrations.IndexNotesEffectiveDatesExpand do
     "notes_eff_created_live" => ~w(id user_id eff_created created_at)
   }
 
+  # Whole unix seconds of a row time, for both column types: notes'
+  # `updated_at` / `created_at` are `timestamp` today and move to
+  # `timestamptz` (`Engram.Repo.Utc`). An index expression must be IMMUTABLE;
+  # both bodies are zone-independent (the interval since a `timestamp` 1970,
+  # and the epoch of a `timestamptz`, which is the same instant in any zone),
+  # so declaring them IMMUTABLE is sound. ALTER COLUMN TYPE rebuilds the
+  # indexes from their text, which then resolves the timestamptz overload.
+  # `floor`, not a bare cast: the numeric cast rounds, `DateTime.to_unix/1`
+  # truncates.
+  @epoch_fns [
+    {"timestamp", "floor(extract(epoch FROM $1 - timestamp '1970-01-01'))::bigint"},
+    {"timestamptz", "floor(extract(epoch FROM $1))::bigint"}
+  ]
+
   def up do
+    for {type, body} <- @epoch_fns do
+      execute """
+      CREATE OR REPLACE FUNCTION engram_epoch_s(#{type}) RETURNS bigint
+      LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $fn$ SELECT #{body} $fn$
+      """
+    end
+
     for {name, expr} <- @exprs do
       execute "DROP INDEX CONCURRENTLY IF EXISTS #{name}"
 
@@ -63,5 +82,7 @@ defmodule Engram.Repo.Migrations.IndexNotesEffectiveDatesExpand do
     for name <- Map.keys(@exprs) do
       execute "DROP INDEX CONCURRENTLY IF EXISTS #{name}"
     end
+
+    for {type, _} <- @epoch_fns, do: execute("DROP FUNCTION IF EXISTS engram_epoch_s(#{type})")
   end
 end

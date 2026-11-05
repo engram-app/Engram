@@ -31,14 +31,15 @@ defmodule Engram.Notes.EffectiveDates do
   @file_src 1
   @server_src 2
 
-  # `floor(...)`, not a bare `::bigint`: extract returns numeric and the cast
-  # rounds, while `DateTime.to_unix/1` truncates. The epoch of the interval
-  # since 1970, not of the timestamp itself: an index expression must be
-  # IMMUTABLE, and `extract(epoch FROM timestamp)` is not.
-  @updated_sql "COALESCE(?, floor(extract(epoch FROM ? - timestamp '1970-01-01'))::bigint)"
+  # `engram_epoch_s/1` (migration 20261105150100): whole unix seconds of a
+  # row time, IMMUTABLE so an index can use it, overloaded for `timestamp`
+  # and `timestamptz`. `notes.updated_at` / `created_at` move to timestamptz
+  # (`Engram.Repo.Utc`); ALTER COLUMN TYPE rebuilds the indexes from their
+  # text and picks the other overload, so the indexes need no change then.
+  @updated_sql "COALESCE(?, engram_epoch_s(?))"
   @updated_cols ~w(eff_updated updated_at)
 
-  @created_sql "COALESCE(?, floor(extract(epoch FROM ? - timestamp '1970-01-01'))::bigint)"
+  @created_sql "COALESCE(?, engram_epoch_s(?))"
   @created_cols ~w(eff_created created_at)
 
   @typedoc "`{unix seconds, source}` (see the moduledoc)."

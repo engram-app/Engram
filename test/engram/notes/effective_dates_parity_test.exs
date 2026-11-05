@@ -149,6 +149,42 @@ defmodule Engram.Notes.EffectiveDatesParityTest do
     end
   end
 
+  # `notes.updated_at` / `created_at` move to timestamptz (`Engram.Repo.Utc`).
+  # The indexes must survive that ALTER (an expression on the timestamp form
+  # stops being IMMUTABLE and the ALTER fails), and the date must not move.
+  test "the row-time fallback survives the timestamptz conversion", ctx do
+    {:ok, saved} =
+      Notes.upsert_note(ctx.user, ctx.vault, %{"path" => "t.md", "content" => "x\n"},
+        actor: "api"
+      )
+
+    read = fn ->
+      Repo.one!(
+        from(n in Note,
+          where: n.id == ^saved.id,
+          select: {EffectiveDates.updated_sql(n), EffectiveDates.created_sql(n)}
+        ),
+        skip_tenant_check: true
+      )
+    end
+
+    before = read.()
+
+    {:error, :rolled_back} =
+      Repo.transaction(fn ->
+        Repo.query!("SET LOCAL TimeZone = 'America/Los_Angeles'")
+
+        for col <- ~w(updated_at created_at) do
+          Repo.query!(
+            "ALTER TABLE notes ALTER COLUMN #{col} TYPE timestamptz USING #{col} AT TIME ZONE 'UTC'"
+          )
+        end
+
+        assert read.() == before
+        Repo.rollback(:rolled_back)
+      end)
+  end
+
   # Postgres matches an expression index only to an identical expression:
   # the migrated indexes must be built on exactly `index_sql/1`.
   for {kind, index} <- [updated: "notes_eff_updated_live", created: "notes_eff_created_live"] do
