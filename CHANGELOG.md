@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.72.5](https://github.com/engram-app/Engram/compare/0.72.4...0.72.5) (2026-11-05)
+
+
+### Performance Improvements
+
+* **notes:** R8 N+1, drop the note body copy trigger ([#2416](https://github.com/engram-app/Engram/issues/2416)) ([7721e68](https://github.com/engram-app/Engram/commit/7721e6860fd9cce743488ee55e2db542fe1dd161))
+
 ## [0.72.4](https://github.com/engram-app/Engram/compare/0.72.3...0.72.4) (2026-11-04)
 
 
