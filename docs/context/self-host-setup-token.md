@@ -55,7 +55,13 @@ claim the admin without reading logs. It only counts while bootstrap is pending.
 |---|---|
 | `ci/compose.local.yml`, Playwright job in `verify.yml`, `frontend/playwright.config.ts` local backend | `e2e-setup-token` |
 | e2e senders: `e2e/helpers/auth_provider.py` `SETUP_TOKEN`, `frontend/e2e/support/api.ts` `SETUP_TOKEN`, `e2e/headless/run.ts` | env, else `e2e-setup-token` |
-| `.env.local-selfhost.example` (`make dev-selfhost`) | `local-dev-setup-token` |
+| `.env.local-selfhost.example` (`make dev-selfhost`, workspace `make dev-local`) | unset, commented out: local dev gets the real random-token flow |
+
+Local dev deliberately leaves it unset so the team keeps seeing what a
+self-hoster sees. To pin it, uncomment the line in your own
+`.env.local-selfhost` (`make dev-selfhost`). Or pass it inline:
+`ENGRAM_SETUP_TOKEN=... make dev-local`. The workspace script sources the
+example file without clearing your shell value, so an inline value still applies.
 
 Every e2e register call sends the token, because any of them may be the first
 signup on a fresh stack. After the claim the backend ignores it.
