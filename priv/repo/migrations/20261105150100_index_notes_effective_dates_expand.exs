@@ -26,8 +26,11 @@ defmodule Engram.Repo.Migrations.IndexNotesEffectiveDatesExpand do
   entry per index and no HOT update is lost. The ctime batch fill touches
   `eff_created` only on rows with no created date yet (once per note).
 
-  Additive: the previous release ignores them. Dropped by name first, so a
-  retry after a failed CONCURRENTLY build rebuilds an INVALID index.
+  Additive: the previous release ignores them. Rerun-safe with no operator
+  step: an index a failed or timed-out CONCURRENTLY build left INVALID is
+  dropped, then each is built IF NOT EXISTS, so a retry neither keeps a
+  broken index nor rebuilds a good one. A 10 min
+  `statement_timeout` bounds each build (no `lock_timeout`: see `up/0`).
   """
 
   @live "deleted_at IS NULL AND kind = 'note'"
@@ -62,6 +65,16 @@ defmodule Engram.Repo.Migrations.IndexNotesEffectiveDatesExpand do
   ]
 
   def up do
+    invalid = Enum.filter(Map.keys(@exprs), &invalid?/1)
+    # statement_timeout bounds the whole build (the scans and the wait for
+    # older snapshots), so a stuck build fails the deploy and the next boot
+    # retries it, instead of hanging. No lock_timeout, deliberately: a
+    # CONCURRENTLY build waits out older transactions through lock waits, so
+    # a short lock_timeout fails it on any transaction open longer than that
+    # and leaves an INVALID index (why `Engram.Release.migrator_config/1`
+    # keeps the app Repo's lock_timeout off the migrator).
+    execute "SET statement_timeout = '10min'"
+
     for {type, body} <- @epoch_fns do
       execute """
       CREATE OR REPLACE FUNCTION engram_epoch_s(#{type}) RETURNS bigint
@@ -71,13 +84,15 @@ defmodule Engram.Repo.Migrations.IndexNotesEffectiveDatesExpand do
     end
 
     for {name, expr} <- @exprs do
-      execute "DROP INDEX CONCURRENTLY IF EXISTS #{name}"
+      if name in invalid, do: execute("DROP INDEX CONCURRENTLY IF EXISTS #{name}")
 
       execute """
-      CREATE INDEX CONCURRENTLY #{name} ON notes (vault_id, (#{expr}))
+      CREATE INDEX CONCURRENTLY IF NOT EXISTS #{name} ON notes (vault_id, (#{expr}))
       INCLUDE (#{Enum.join(@include[name], ", ")}) WHERE #{@live}
       """
     end
+
+    execute "RESET statement_timeout"
   end
 
   def down do
@@ -86,5 +101,21 @@ defmodule Engram.Repo.Migrations.IndexNotesEffectiveDatesExpand do
     end
 
     for {type, _} <- @epoch_fns, do: execute("DROP FUNCTION IF EXISTS engram_epoch_s(#{type})")
+  end
+
+  # A CONCURRENTLY build that fails or times out leaves an INVALID index;
+  # a retry must drop it, never keep it, and never rebuild a good one
+  # (20261103050000's pattern). Read before any command runs: Ecto buffers
+  # the `execute`s below.
+  defp invalid?(name) do
+    %{rows: rows} =
+      repo().query!(
+        "SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid " <>
+          "WHERE c.relname = $1 AND NOT i.indisvalid",
+        [name],
+        log: false
+      )
+
+    rows != []
   end
 end
