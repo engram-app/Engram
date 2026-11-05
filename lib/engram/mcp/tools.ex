@@ -424,7 +424,8 @@ defmodule Engram.MCP.Tools do
       description:
         "Search your personal knowledge base. Finds relevant notes using semantic " <>
           "search. Searches across ALL your vaults by default; pass vault_id to limit " <>
-          "to one. Omit query to list the most recently updated notes instead. Pass " <>
+          "to one. Omit query to list the most recently updated notes instead (filters " <>
+          "still apply). Pass " <>
           "similar_to with a note path, instead of query, to find notes like that one. " <>
           "Use when the user asks about their notes, vault, knowledge, or memory.",
       inputSchema: %{
@@ -434,7 +435,7 @@ defmodule Engram.MCP.Tools do
             "type" => "string",
             "description" =>
               "Natural language search query. Omit, or leave empty, to list the most " <>
-                "recently updated notes (filters then do not apply)."
+                "recently updated notes that match the filters."
           },
           "similar_to" => %{
             "type" => "string",

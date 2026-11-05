@@ -29,7 +29,9 @@ defmodule Engram.Notes do
     CrdtDeliver,
     CrdtPersistence,
     CrdtUpdateLog,
+    EffectiveDates,
     Enqueue,
+    FlatFields,
     Frontmatter,
     Helpers,
     Identity,
@@ -1120,10 +1122,13 @@ defmodule Engram.Notes do
   @doc """
   Fills `ctime` for existing live notes from `[%{path, ctime}]` in ONE statement.
 
-  Metadata-only: touches no content, version, seq, `updated_at`, CRDT state or
-  index, emits no fan-out, and fills only NULL ctimes, so it is idempotent and
-  never clobbers a value (re-sends and older plugins are harmless). Unknown
-  paths are skipped. Returns `{:ok, updated_count}`.
+  Metadata-only: touches no content, version, seq, `updated_at` or CRDT
+  state, emits no fan-out, and fills only NULL ctimes, so it is idempotent and
+  never clobbers a value (re-sends and older plugins are harmless). It also
+  fills `eff_created` where the note has no created date yet (the
+  `notes_eff_created_live` index): those rows take one non-HOT version, once.
+  Unknown paths and unusable ctimes are skipped. Returns
+  `{:ok, updated_count}`.
   """
   @spec set_client_ctimes(map(), map(), [%{path: String.t(), ctime: number()}]) ::
           {:ok, non_neg_integer()} | {:error, term()}
@@ -1132,29 +1137,41 @@ defmodule Engram.Notes do
   def set_client_ctimes(user, vault, entries) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
-      # `ctime_at` beside the double (`Engram.FileTime`); the controller
-      # refused an out-of-range ctime, so `to_at!/1` holds.
-      {hmacs, ctimes, ats} =
+      # `ctime_at` beside the double (`Engram.FileTime`; the controller
+      # refused an out-of-range ctime, so `to_at!/1` holds). The stored
+      # created date is the frontmatter's when the note has one, else this
+      # ctime: with ctime NULL until now it is the frontmatter's or NULL, so
+      # `COALESCE(eff_created, ctime)` is its new value. Rows with a
+      # frontmatter date keep `eff_created`; the others change one indexed
+      # value, once per note.
+      {hmacs, ctimes, ats, effs} =
         entries
         |> Map.new(fn %{path: path, ctime: ctime} ->
           {Crypto.hmac_field(filter_key, PathSanitizer.sanitize(path)), ctime * 1.0}
         end)
-        |> Enum.reduce({[], [], []}, fn {h, c}, {hs, cs, as} ->
-          {[h | hs], [c | cs], [FileTime.to_at!(c) | as]}
+        |> Enum.reduce({[], [], [], []}, fn {h, c}, {hs, cs, as, es} ->
+          {[h | hs], [c | cs], [FileTime.to_at!(c) | as], [EffectiveDates.stored(nil, c) | es]}
         end)
 
       query =
         from(n in scoped_live(user, vault),
           join:
             v in fragment(
-              "SELECT * FROM unnest(?::bytea[], ?::float8[], ?::timestamptz[]) AS t(h, c, a)",
+              "SELECT * FROM unnest(?::bytea[], ?::float8[], ?::timestamptz[], ?::bigint[]) AS t(h, c, a, e)",
               ^hmacs,
               ^ctimes,
-              ^ats
+              ^ats,
+              ^effs
             ),
           on: n.path_hmac == field(v, :h),
           where: is_nil(n.ctime) and n.kind == "note",
-          update: [set: [ctime: field(v, :c), ctime_at: field(v, :a)]]
+          update: [
+            set: [
+              ctime: field(v, :c),
+              ctime_at: field(v, :a),
+              eff_created: fragment("COALESCE(?, ?)", n.eff_created, field(v, :e))
+            ]
+          ]
         )
 
       {n, _} = Repo.with_tenant!(user.id, fn -> Repo.update_all(query, []) end)
@@ -6686,13 +6703,15 @@ defmodule Engram.Notes do
   Most recently updated live notes in `vault`, newest first, metadata only.
   Backs `search_notes` with no query ("what changed recently") and pages
   MCP `resources/list` via `before: {updated_at, id}` (keyset, so a deep page
-  costs the same as the first). `notes_recent_index` serves both.
+  costs the same as the first). `notes_recent_index` serves both. `:where`
+  narrows it with a dynamic over the note (`Engram.Search.NoteFilter.page/4`).
   """
   @spec list_recent_notes(map(), map(), pos_integer(), keyword()) :: {:ok, [Note.t()]}
   def list_recent_notes(user, vault, limit, opts \\ []) when is_integer(limit) and limit > 0 do
     query =
       from(n in scoped_live(user, vault),
         where: n.kind == "note",
+        where: ^Keyword.get(opts, :where, dynamic(true)),
         order_by: [desc: n.updated_at, desc: n.id],
         limit: ^limit,
         select: struct(n, @note_meta_fields)
@@ -8775,7 +8794,17 @@ defmodule Engram.Notes do
 
     attrs
     |> put_okf_fields(user, note_id, OkfFields.from_parse(parsed))
+    |> put_fm_dates(parsed)
     |> put_parse_status(block, parsed)
+  end
+
+  # The v5 frontmatter dates (`FlatFields.dates/1`, the payload's parser,
+  # not the OKF one above), on every save: `Note.changeset/2` derives the
+  # stored effective dates from them. This write is already non-HOT, so they
+  # cost no extra row version.
+  defp put_fm_dates(attrs, parsed) do
+    %{fm_updated: up, fm_created: cr} = parsed |> OkfFields.values() |> FlatFields.dates()
+    Map.merge(attrs, %{fm_updated: up, fm_created_s: cr})
   end
 
   # OKF v0.1 fields. Sets ALL columns on every write: nil when the key is

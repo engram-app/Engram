@@ -51,8 +51,8 @@ defmodule Engram.Notes.Keys do
   end
 
   @doc "The column a lookup of `kind` compares."
-  @spec col(kind()) :: atom()
-  def col(kind), do: kind |> pick() |> elem(0)
+  @spec col(kind(), boolean()) :: atom()
+  def col(kind, ids? \\ ids?()), do: kind |> pick(ids?) |> elem(0)
 
   @doc "What that column holds for a key whose HMAC is `hmac`."
   @spec value(kind(), binary()) :: binary()

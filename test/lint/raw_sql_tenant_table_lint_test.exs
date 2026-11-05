@@ -69,6 +69,10 @@ defmodule Engram.RawSqlTenantTableLintTest do
     # NoteSizes: the same shape, an id-window UPDATE of note_index_state from notes,
     # run on the fleet pool or inside a tenant by IdWindows.
     "engram/data_migrations/note_sizes.ex",
+    # EffectiveDates: the same id-window shape, a locked SELECT of notes and
+    # their note_attrs dates and an `unnest` batch UPDATE of notes.eff_*, run
+    # on the fleet pool or inside a tenant by IdWindows.
+    "engram/data_migrations/effective_dates.ex",
     # DataMigrations.FolderTable: raw SQL on `folders` (Ecto has no schema for
     # it yet), `DISTINCT ON` folder discovery and `unnest` batch updates. Every
     # statement filters `user_id` and runs per user inside `Repo.with_tenant/2`,

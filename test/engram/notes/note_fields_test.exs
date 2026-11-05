@@ -119,8 +119,12 @@ defmodule Engram.Notes.NoteFieldsTest do
       Repo.query!("SELECT column_name FROM information_schema.columns WHERE table_name = 'notes'").rows
       |> List.flatten()
 
+    # The dates are the exception (2026-11-05, #2431): `fm_updated` /
+    # `fm_created_s` and the derived `eff_updated` / `eff_created` feed the
+    # note filter's date indexes, written by the content save in the row
+    # version it already writes. Every other field stays in note_attrs.
     for c <- ~w(status_hmac status_ciphertext author_hmac rev_by_hmac src_hmac proj_hmac
-                fm_updated fm_reviewed fm_expires fm_due fm_priority),
+                fm_reviewed fm_expires fm_due fm_priority),
         do: refute(c in cols, c)
   end
 

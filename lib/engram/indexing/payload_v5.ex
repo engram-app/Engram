@@ -13,7 +13,7 @@ defmodule Engram.Indexing.PayloadV5 do
   day numbers (days since 1970-01-01). When the frontmatter has no
   `updated`/`created`, `up` falls back to the file mtime (flag `us` = 1,
   file) or the row's `updated_at` (2, server), and `cr` to the file ctime
-  (`cs` = 1) or `created_at` (2). The flags are small integers rather than
+  (`cs` = 1) or `created_at` (2): `Engram.Notes.EffectiveDates`. The flags are small integers rather than
   strings to keep a point small.
 
   A fallback `up` is rounded UP to the next full hour (an exact hour stays):
@@ -28,19 +28,18 @@ defmodule Engram.Indexing.PayloadV5 do
 
   import Engram.Vector.PayloadKeys, only: [short: 1]
 
+  alias Engram.Notes.EffectiveDates
   alias Engram.Notes.FlatFields
   alias Engram.Notes.OkfFields
   alias Engram.Vector.FilterId
 
-  @file_src 1
-  @server_src 2
   @day 86_400
   @hour 3_600
 
   @spec build(map(), FlatFields.t()) :: %{String.t() => term()}
   def build(note, flat) do
-    {up, us} = updated(note, flat.fm_updated)
-    {cr, cs} = created(note, flat.fm_created)
+    {up, us} = note |> EffectiveDates.updated(flat.fm_updated) |> ceil_fallback()
+    {cr, cs} = EffectiveDates.created(note, flat.fm_created)
 
     [
       user_id: FilterId.uuid(to_string(note.user_id)),
@@ -68,6 +67,12 @@ defmodule Engram.Indexing.PayloadV5 do
     |> Map.new(fn {k, v} -> {short(k), v} end)
   end
 
+  # The hour ceil is the payload's alone: `EffectiveDates` and the Postgres
+  # date columns stay exact.
+  defp ceil_fallback({up, nil}), do: {up, nil}
+  defp ceil_fallback({nil, src}), do: {nil, src}
+  defp ceil_fallback({up, src}), do: {ceil(up / @hour) * @hour, src}
+
   defp id(hmac), do: FilterId.from_hmac(hmac)
 
   # One nested entry per user-added value, keyed by the per-user dictionary
@@ -83,29 +88,4 @@ defmodule Engram.Indexing.PayloadV5 do
 
   defp day(nil), do: nil
   defp day(unix), do: Integer.floor_div(unix, @day)
-
-  defp updated(_note, fm) when is_integer(fm), do: {fm, nil}
-
-  defp updated(note, nil) do
-    case note.mtime do
-      t when is_number(t) and t > 0 -> {ceil_hour(t), @file_src}
-      _ -> {ceil_hour(unix(note.updated_at)), @server_src}
-    end
-  end
-
-  defp ceil_hour(nil), do: nil
-  defp ceil_hour(t), do: ceil(t / @hour) * @hour
-
-  # `ctime` lands with #2082 (`notes.ctime`); read defensively until then.
-  defp created(_note, fm) when is_integer(fm), do: {fm, nil}
-
-  defp created(note, nil) do
-    case Map.get(note, :ctime) do
-      t when is_number(t) and t > 0 -> {trunc(t), @file_src}
-      _ -> {unix(note.created_at), @server_src}
-    end
-  end
-
-  defp unix(nil), do: nil
-  defp unix(%DateTime{} = dt), do: DateTime.to_unix(dt)
 end

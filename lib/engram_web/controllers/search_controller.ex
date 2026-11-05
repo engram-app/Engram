@@ -4,9 +4,20 @@ defmodule EngramWeb.SearchController do
   alias EngramWeb.Schemas
 
   alias Engram.Notes
+  alias Engram.Pager
   alias Engram.Search
+  alias Engram.Search.NoteFilter
 
   @max_search_limit 50
+
+  # `Engram.Search.FieldFilters.error()`: a bad `fields` filter is the caller's.
+  @field_errors [
+    :unknown_field,
+    :field_not_indexed,
+    :reserved_field,
+    :invalid_field_filter,
+    :too_many_field_filters
+  ]
 
   operation(:search,
     operation_id: "search",
@@ -15,7 +26,9 @@ defmodule EngramWeb.SearchController do
       "Searches the current vault and returns one result per matching note (chunk hits are " <>
         "grouped by note, ranked by best chunk score). `mode` selects vector, keyword, or hybrid " <>
         "(default) retrieval, and results may be narrowed by `tags` or `folder`. Setting " <>
-        "`cross_vault` searches across all of the user's vaults and requires the Pro plan (403 otherwise).",
+        "`cross_vault` searches across all of the user's vaults and requires the Pro plan (403 otherwise). " <>
+        "With a blank `query` and at least one filter, lists the matching notes of the current " <>
+        "vault newest first instead (no ranking, no search budget, `cursor` / `next_cursor` paging).",
     tags: ["Search"],
     request_body: {"Search query", "application/json", Schemas.SearchRequest, required: true},
     responses: [
@@ -25,45 +38,90 @@ defmodule EngramWeb.SearchController do
     ]
   )
 
-  def search(conn, %{"query" => query} = params) do
-    user = conn.assigns.current_user
-    vault = conn.assigns.current_vault
-    note_limit = params["limit"] |> clamp_limit()
-    tags = params["tags"]
-    folder = params["folder"]
-    type = params["type"]
-    cross_vault = parse_bool(params["cross_vault"])
+  def search(conn, params) do
+    query = params["query"]
+    blank? = not is_binary(query) or String.trim(query) == ""
 
-    case parse_date_params(params) do
-      {:ok, date_opts} ->
-        opts =
-          [
-            limit: note_limit,
-            cross_vault: cross_vault,
-            mode: Search.parse_mode(params["mode"]),
-            group_by_note: true,
-            surface: EngramWeb.RequestMeta.surface(conn.assigns)
-          ]
-          |> then(&if(tags, do: Keyword.put(&1, :tags, tags), else: &1))
-          |> then(&if(folder, do: Keyword.put(&1, :folder, folder), else: &1))
-          |> then(&if(type, do: Keyword.put(&1, :type, type), else: &1))
-          |> Keyword.merge(date_opts)
-          |> maybe_put_diversity(params["diversity"])
-          |> then(&if(cross_vault, do: narrow_to_vault_scope(&1, conn), else: &1))
-
-        do_search(conn, user, vault, query, note_limit, opts)
-
-      {:error, param} ->
+    case Search.filter_opts(params) do
+      {_filters, [param | _]} ->
         conn
         |> put_status(:unprocessable_entity)
-        |> json(%{error: "invalid ISO 8601 datetime in #{param}"})
+        |> json(%{error: invalid_param(param)})
+
+      {filters, []} ->
+        cond do
+          blank? and NoteFilter.any?(filters) -> filter_only(conn, params, filters)
+          is_binary(query) -> query_search(conn, params, query, filters)
+          true -> conn |> put_status(422) |> json(%{error: "query is required"})
+        end
     end
   end
 
-  def search(conn, _params) do
-    conn
-    |> put_status(422)
-    |> json(%{error: "query is required"})
+  defp invalid_param(param) do
+    if param in Enum.map(Search.date_params(), &to_string/1),
+      do: "invalid ISO 8601 datetime in #{param}",
+      else: "invalid #{param}"
+  end
+
+  defp query_search(conn, params, query, filters) do
+    note_limit = params["limit"] |> clamp_limit()
+    cross_vault = parse_bool(params["cross_vault"])
+
+    opts =
+      [
+        limit: note_limit,
+        cross_vault: cross_vault,
+        mode: Search.parse_mode(params["mode"]),
+        group_by_note: true,
+        surface: EngramWeb.RequestMeta.surface(conn.assigns)
+      ]
+      |> Kernel.++(filters)
+      |> maybe_put_diversity(params["diversity"])
+      |> then(&if(cross_vault, do: narrow_to_vault_scope(&1, conn), else: &1))
+
+    do_search(
+      conn,
+      conn.assigns.current_user,
+      conn.assigns.current_vault,
+      query,
+      note_limit,
+      opts
+    )
+  end
+
+  # Filters with no query (#2083): answered in Postgres, newest first, keyset
+  # paged (`cursor` / `limit`), no embed and no search budget. One vault.
+  defp filter_only(conn, params, filters) do
+    if parse_bool(params["cross_vault"]) do
+      conn |> put_status(422) |> json(%{error: "cross_vault needs a query"})
+    else
+      user = conn.assigns.current_user
+
+      case NoteFilter.page(user, conn.assigns.current_vault, filters, Pager.rest_opts(params)) do
+        {:ok, %{notes: notes, next_cursor: next}} ->
+          results =
+            Enum.map(notes, fn n ->
+              %{
+                id: n.id,
+                path: n.path,
+                title: n.title || derive_title(n.path),
+                folder: n.folder || derive_folder(n.path),
+                heading_path: nil,
+                snippet: "",
+                score: 0,
+                match_count: 0
+              }
+            end)
+
+          json(conn, Map.merge(%{results: results}, Pager.page_meta(next)))
+
+        {:error, :invalid_cursor} ->
+          conn |> put_status(422) |> json(%{error: "invalid cursor"})
+
+        {:error, reason} ->
+          conn |> put_status(422) |> json(%{error: Search.input_error_message(reason)})
+      end
+    end
   end
 
   defp clamp_limit(nil), do: 5
@@ -77,29 +135,6 @@ defmodule EngramWeb.SearchController do
   end
 
   defp clamp_limit(_), do: 5
-
-  # Parses the four OKF date-range params into Search opts. Absent params are
-  # skipped; the first param with an unparseable ISO 8601 value halts with
-  # its name so the controller can return a 422 naming the offending param.
-  defp parse_date_params(params) do
-    Enum.reduce_while(Search.date_params(), {:ok, []}, fn key, {:ok, acc} ->
-      param = to_string(key)
-
-      case params[param] do
-        nil ->
-          {:cont, {:ok, acc}}
-
-        value when is_binary(value) ->
-          case DateTime.from_iso8601(value) do
-            {:ok, dt, _} -> {:cont, {:ok, [{key, dt} | acc]}}
-            {:error, _} -> {:halt, {:error, param}}
-          end
-
-        _non_binary ->
-          {:halt, {:error, param}}
-      end
-    end)
-  end
 
   # `?cross_vault=false` arrives as the STRING "false", which is truthy in
   # Elixir — so reading the param raw turned an explicit opt-OUT into an
@@ -243,7 +278,8 @@ defmodule EngramWeb.SearchController do
         |> json(%{error: "Cross-vault search requires Pro plan"})
 
       {:error, reason}
-      when reason in [:query_too_long, :too_many_tags, :folder_subtree_too_large] ->
+      when reason in [:query_too_long, :too_many_tags, :folder_subtree_too_large] or
+             (is_tuple(reason) and elem(reason, 0) in @field_errors) ->
         conn
         |> put_status(:unprocessable_entity)
         |> json(%{error: Search.input_error_message(reason)})

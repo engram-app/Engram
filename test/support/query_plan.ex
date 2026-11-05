@@ -40,6 +40,12 @@ defmodule Engram.QueryPlan do
   `async: false` tests only all the same.
 
   `seqscan: true` keeps seq scans on, to ask which plan Postgres picks.
+
+  `all_visible: true` tells the planner every heap page of each `analyze:`
+  table is all-visible (`pg_class.relallvisible`, rolled back with the
+  plan), as a vacuumed prod table mostly is. `fresh` leaves the visibility
+  map empty, so an index-only scan would be costed like a heap read and a
+  covering index would look no better than any other.
   """
   @spec generic_plan(String.t(), keyword()) :: String.t()
   def generic_plan(sql, opts \\ []) do
@@ -58,6 +64,13 @@ defmodule Engram.QueryPlan do
 
       for table <- Keyword.get(opts, :analyze, []) do
         if fresh?, do: fresh!(table), else: Repo.query!("ANALYZE #{table}")
+
+        # Rolled back with the savepoint (catalog rows are transactional).
+        if Keyword.get(opts, :all_visible, false),
+          do:
+            Repo.query!(
+              "UPDATE pg_class SET relallvisible = relpages WHERE oid = '#{table}'::regclass"
+            )
       end
 
       Repo.query!("SET LOCAL plan_cache_mode = force_generic_plan")

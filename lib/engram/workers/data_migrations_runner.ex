@@ -39,7 +39,8 @@ defmodule Engram.Workers.DataMigrationsRunner do
     Engram.DataMigrations.NoteSizes,
     Engram.DataMigrations.FolderTable,
     Engram.DataMigrations.KeyAliases,
-    Engram.DataMigrations.PersonOriginBackfill
+    Engram.DataMigrations.PersonOriginBackfill,
+    Engram.DataMigrations.EffectiveDates
   ]
 
   @impl Oban.Worker

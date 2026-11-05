@@ -82,26 +82,66 @@ defmodule Engram.Search.FieldFilters do
   @doc "Longest key echoed back in an error message."
   def max_echo, do: @max_echo
 
+  @typedoc """
+  One parsed filter, independent of the store it runs on. `key_id` is the
+  `note_attrs.key_id` (`FrontmatterKeys`: a reserved id for a named field, a
+  dictionary id for a user-added key); `field` is the v5 payload field of a
+  named key (nil for a user-added one). Exact values are the raw 32-byte
+  HMACs `note_attrs.h` holds (a scalar for `eq`, a list for `in`); ranges are
+  `%{gte | gt | lt | lte => value}`, dates in unix seconds.
+  """
+  @type spec ::
+          {:h, atom() | nil, integer(), binary() | [binary()]}
+          | {:status, boolean(), [binary()]}
+          | {:range, atom() | nil, integer(), :n | :d, map()}
+          | {:any, [spec()]}
+
   @doc """
   The Qdrant conditions for `filters`, or the first error. `filter_key` is
   the user's filter key (`Crypto.dek_filter_key/1`).
   """
   @spec to_conditions(Ecto.UUID.t(), binary(), [map()]) :: {:ok, [map()]} | {:error, error()}
-  def to_conditions(_user_id, _filter_key, []), do: {:ok, []}
+  def to_conditions(user_id, filter_key, filters) do
+    with {:ok, specs} <- to_specs(user_id, filter_key, filters),
+         do: {:ok, Enum.map(specs, &qdrant(&1, filter_key))}
+  end
 
-  def to_conditions(_user_id, _filter_key, filters) when length(filters) > @max_filters,
+  @doc """
+  The parsed `filters` (`t:spec/0`), or the first error: the one parse both
+  the Qdrant conditions (`to_conditions/3`) and the Postgres resolver
+  (`Engram.Search.NoteFilter`) read.
+  """
+  @spec to_specs(Ecto.UUID.t(), binary(), [map()]) :: {:ok, [spec()]} | {:error, error()}
+  def to_specs(_user_id, _filter_key, []), do: {:ok, []}
+
+  def to_specs(_user_id, _filter_key, filters) when length(filters) > @max_filters,
     do: {:error, {:too_many_field_filters, @max_filters}}
 
-  def to_conditions(user_id, filter_key, filters) do
+  def to_specs(user_id, filter_key, filters) do
     with {:ok, parsed} <- collect(filters, &parse/1) do
       user_keys = for {{:user, key}, _op, _v} <- parsed, do: key
       hmacs = Map.new(user_keys, &{&1, FilterId.key_hmac(filter_key, &1)})
       ids = FrontmatterKeys.lookup(user_id, Map.values(hmacs))
       ctx = %{fk: filter_key, ids: ids, hmacs: hmacs, user_id: user_id}
 
-      collect(parsed, fn {field, op, value} -> condition(field, op, value, ctx) end)
+      collect(parsed, fn {field, op, value} -> spec(field, op, value, ctx) end)
     end
   end
+
+  @doc "The exact-match spec for notes tagged with any of `tags` (no prefix expansion)."
+  @spec tags_spec(binary(), [String.t()]) :: {:h, :tags, non_neg_integer(), [binary()]}
+  def tags_spec(filter_key, tags),
+    do: {:h, :tags, named_id(:tags), Enum.map(tags, &Crypto.hmac_field(filter_key, &1))}
+
+  @doc "The exact-match spec for notes whose OKF `type` is `type`."
+  @spec type_spec(binary(), String.t()) :: {:h, :type, non_neg_integer(), binary()}
+  def type_spec(filter_key, type), do: {:h, :type, named_id(:type), type_hmac(filter_key, type)}
+
+  @doc "The range spec for `:created` or `:updated` (unix-second bounds)."
+  @spec date_spec(:created | :updated, map()) ::
+          {:range, :fm_created | :fm_timestamp, non_neg_integer(), :d, map()}
+  def date_spec(:created, range), do: {:range, :fm_created, named_id(:created), :d, range}
+  def date_spec(:updated, range), do: {:range, :fm_timestamp, named_id(:updated), :d, range}
 
   defp collect(items, fun) do
     items
@@ -147,59 +187,57 @@ defmodule Engram.Search.FieldFilters do
 
   # -- named fields ---------------------------------------------------------
 
-  defp condition({:named, :type, key}, op, value, ctx) do
+  defp spec({:named, :type, key}, op, value, ctx) do
     with {:ok, values} <- exact_values(op, value, key) do
-      ids = Enum.map(values, &type_b64(ctx.fk, &1))
-      {:ok, Qdrant.match_filter(:type, if(op == "in", do: ids, else: hd(ids)))}
+      hmacs = Enum.map(values, &type_hmac(ctx.fk, &1))
+      {:ok, {:h, :type, named_id(:type), if(op == "in", do: hmacs, else: hd(hmacs))}}
     end
   end
 
-  defp condition({:named, :tags, key}, op, value, ctx) do
-    with {:ok, values} <- exact_values(op, value, key) do
-      tags = Enum.map(values, &Base.encode64(Crypto.hmac_field(ctx.fk, to_string(&1))))
-      {:ok, Qdrant.match_filter(:tags, tags)}
-    end
+  defp spec({:named, :tags, key}, op, value, ctx) do
+    with {:ok, values} <- exact_values(op, value, key),
+         do: {:ok, tags_spec(ctx.fk, Enum.map(values, &to_string/1))}
   end
 
-  defp condition({:named, {:exact, :status_id}, key}, op, value, ctx) do
+  defp spec({:named, {:exact, :status_id}, key}, op, value, ctx) do
     with {:ok, values} <- exact_values(op, value, key) do
       {stable, others} = Enum.split_with(values, &stable?/1)
-      matches = if others == [], do: [], else: [top_match(:status_id, others, ctx.fk)]
-      empty = if stable == [], do: [], else: [%{is_empty: %{key: PayloadKeys.short(:status_id)}}]
-
-      case empty ++ matches do
-        [one] -> {:ok, one}
-        both -> {:ok, %{should: both}}
-      end
+      {:ok, {:status, stable != [], Enum.map(others, &value_hmac(ctx.fk, &1))}}
     end
   end
 
-  defp condition({:named, {:exact, field}, key}, op, value, ctx) do
-    with {:ok, values} <- exact_values(op, value, key),
-         do: {:ok, top_match(field, values, ctx.fk)}
+  defp spec({:named, {:exact, field}, key}, op, value, ctx) do
+    with {:ok, values} <- exact_values(op, value, key) do
+      hmacs = Enum.map(values, &value_hmac(ctx.fk, &1))
+      {:ok, {:h, field, key_id(field), hmacs}}
+    end
   end
 
-  defp condition({:named, {kind, field}, key}, op, value, _ctx) when kind in [:date, :day] do
+  defp spec({:named, {:date, field}, key}, op, value, _ctx) do
+    with {:ok, range} <- date_range(op, value, key),
+         do: {:ok, {:range, field, key_id(field), :d, range}}
+  end
+
+  # A date-only field holds a day (its midnight): each bound is floored to
+  # its day here, in the store-neutral spec, so Postgres (seconds) and
+  # Qdrant (day numbers, `div_day/1`) compare the same days.
+  defp spec({:named, {:day, field}, key}, op, value, _ctx) do
     with {:ok, range} <- date_range(op, value, key) do
-      range = if kind == :day, do: Map.new(range, fn {o, t} -> {o, div_day(t)} end), else: range
-
-      case field do
-        f when f in [:fm_created, :fm_timestamp] -> {:ok, Qdrant.range_filter(f, range)}
-        f -> {:ok, %{key: PayloadKeys.short(f), range: range}}
-      end
+      days = Map.new(range, fn {o, t} -> {o, div_day(t) * @day} end)
+      {:ok, {:range, field, key_id(field), :d, days}}
     end
   end
 
-  defp condition({:named, {:num, field}, key}, op, value, _ctx) do
+  defp spec({:named, {:num, field}, key}, op, value, _ctx) do
     with {:ok, range} <- num_range(op, value, key),
-         do: {:ok, %{key: PayloadKeys.short(field), range: range}}
+         do: {:ok, {:range, field, key_id(field), :n, range}}
   end
 
   # -- user-added keys ------------------------------------------------------
 
-  defp condition({:user, key}, op, value, ctx) do
+  defp spec({:user, key}, op, value, ctx) do
     case Map.fetch(ctx.ids, ctx.hmacs[key]) do
-      {:ok, id} -> user_condition(id, op, value, ctx.fk, key)
+      {:ok, id} -> user_spec(id, op, value, ctx.fk, key)
       :error -> missing_key(ctx.user_id, key)
     end
   end
@@ -210,38 +248,96 @@ defmodule Engram.Search.FieldFilters do
       else: {:error, {:unknown_field, echo(key)}}
   end
 
-  defp user_condition(id, "in", values, fk, key) do
+  defp user_spec(id, "in", values, fk, key) do
     if Enum.all?(values, &exact?/1) do
-      {:ok, Qdrant.attr_filter(id, {:h, Enum.map(values, &value_id(fk, &1))})}
+      {:ok, {:h, nil, id, Enum.map(values, &value_hmac(fk, &1))}}
     else
-      with {:ok, conds} <- collect(values, &user_condition(id, "eq", &1, fk, key)),
-           do: {:ok, %{should: conds}}
+      with {:ok, specs} <- collect(values, &user_spec(id, "eq", &1, fk, key)),
+           do: {:ok, {:any, specs}}
     end
   end
 
-  defp user_condition(id, "eq", value, fk, key) do
+  defp user_spec(id, "eq", value, fk, key) do
     cond do
-      number?(value) -> {:ok, Qdrant.attr_filter(id, {:n, gte: value, lte: value})}
-      date(value) -> with {:ok, r} <- date_range("eq", value, key), do: attr(id, :d, r)
-      exact?(value) -> {:ok, Qdrant.attr_filter(id, {:h, value_id(fk, value)})}
+      number?(value) -> {:ok, {:range, nil, id, :n, %{gte: value, lte: value}}}
+      date(value) -> with {:ok, r} <- date_range("eq", value, key), do: user_range(id, :d, r)
+      exact?(value) -> {:ok, {:h, nil, id, value_hmac(fk, value)}}
       true -> invalid(key)
     end
   end
 
-  defp user_condition(id, op, value, _fk, key) do
+  defp user_spec(id, op, value, _fk, key) do
     cond do
       op in ~w(gt gte lt lte) and number?(value) ->
-        attr(id, :n, %{@range_ops[op] => value})
+        user_range(id, :n, %{@range_ops[op] => value})
 
       date(value) ->
-        with {:ok, r} <- date_range(op, value, key), do: attr(id, :d, r)
+        with {:ok, r} <- date_range(op, value, key), do: user_range(id, :d, r)
 
       true ->
         invalid(key)
     end
   end
 
-  defp attr(id, field, range), do: {:ok, Qdrant.attr_filter(id, {field, range})}
+  defp user_range(id, col, range), do: {:ok, {:range, nil, id, col, range}}
+
+  # -- Qdrant conditions ----------------------------------------------------
+
+  defp qdrant({:h, :type, _id, v}, _fk), do: Qdrant.match_filter(:type, b64(v))
+  defp qdrant({:h, :tags, _id, v}, _fk), do: Qdrant.match_filter(:tags, b64(v))
+  defp qdrant({:h, nil, id, v}, _fk), do: Qdrant.attr_filter(id, {:h, filter_id(v)})
+
+  defp qdrant({:h, field, _id, hmacs}, _fk) do
+    ids = filter_id(hmacs)
+    match = if length(ids) == 1, do: %{value: hd(ids)}, else: %{any: ids}
+    %{key: PayloadKeys.short(field), match: match}
+  end
+
+  defp qdrant({:status, stable?, hmacs}, fk) do
+    matches = if hmacs == [], do: [], else: [qdrant({:h, :status_id, nil, hmacs}, fk)]
+    empty = if stable?, do: [%{is_empty: %{key: PayloadKeys.short(:status_id)}}], else: []
+
+    case empty ++ matches do
+      [one] -> one
+      both -> %{should: both}
+    end
+  end
+
+  defp qdrant({:range, f, _id, :d, range}, _fk) when f in [:fm_created, :fm_timestamp],
+    do: Qdrant.range_filter(f, range)
+
+  # Date-only payload fields hold day numbers; the operator is kept, so a
+  # midnight bound maps to its day exactly.
+  defp qdrant({:range, f, _id, :d, range}, _fk) when f in [:fm_expires, :fm_due],
+    do: %{key: PayloadKeys.short(f), range: Map.new(range, fn {o, t} -> {o, div_day(t)} end)}
+
+  defp qdrant({:range, nil, id, col, range}, _fk), do: Qdrant.attr_filter(id, {col, range})
+  defp qdrant({:range, f, _id, _col, range}, _fk), do: %{key: PayloadKeys.short(f), range: range}
+  defp qdrant({:any, specs}, fk), do: %{should: Enum.map(specs, &qdrant(&1, fk))}
+
+  defp b64(v) when is_list(v), do: Enum.map(v, &Base.encode64/1)
+  defp b64(v), do: Base.encode64(v)
+
+  defp filter_id(v) when is_list(v), do: Enum.map(v, &FilterId.from_hmac/1)
+  defp filter_id(v), do: FilterId.from_hmac(v)
+
+  # The `note_attrs.key_id` of a named payload field.
+  @key_names %{
+    status_id: :status,
+    author_id: :author,
+    rev_by_id: :reviewed_by,
+    proj_id: :project,
+    src_id: :source,
+    fm_created: :created,
+    fm_timestamp: :updated,
+    fm_reviewed: :reviewed,
+    fm_expires: :expires,
+    fm_due: :due,
+    fm_priority: :priority
+  }
+
+  defp key_id(field), do: named_id(Map.fetch!(@key_names, field))
+  defp named_id(name), do: FrontmatterKeys.named_id(name)
 
   # -- values ---------------------------------------------------------------
 
@@ -254,12 +350,6 @@ defmodule Engram.Search.FieldFilters do
     do: if(Enum.all?(values, &text?/1), do: {:ok, values}, else: invalid(key))
 
   defp exact_values(_op, _value, key), do: invalid(key)
-
-  defp top_match(field, values, fk) do
-    ids = Enum.map(values, &value_id(fk, &1))
-    match = if length(ids) == 1, do: %{value: hd(ids)}, else: %{any: ids}
-    %{key: PayloadKeys.short(field), match: match}
-  end
 
   defp num_range("eq", v, key),
     do: if(number?(v), do: {:ok, %{gte: v, lte: v}}, else: invalid(key))
@@ -311,10 +401,9 @@ defmodule Engram.Search.FieldFilters do
 
   defp stable?(v), do: is_binary(v) and OkfFields.normalize_type(v) == "stable"
 
-  defp value_id(fk, v), do: FilterId.attr_value(fk, to_string(v))
+  defp value_hmac(fk, v), do: FilterId.value_hmac(fk, to_string(v))
 
-  defp type_b64(fk, v),
-    do: Base.encode64(Crypto.hmac_field(fk, OkfFields.normalize_type(to_string(v))))
+  defp type_hmac(fk, v), do: Crypto.hmac_field(fk, OkfFields.normalize_type(to_string(v)))
 
   defp invalid(key), do: {:error, {:invalid_field_filter, echo(key)}}
 

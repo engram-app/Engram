@@ -54,6 +54,12 @@ defmodule Engram.Vector.Qdrant do
   @doc "Largest id or value list in one `has_id` / `match.any` condition."
   def max_ids, do: @max_ids
 
+  @doc """
+  Most note ids one search filter carries on `n` (`build_tenant_filter/1`'s
+  `:note_scope`): 5 `match.any` blocks of `max_ids/0`.
+  """
+  def max_note_ids, do: 5 * @max_ids
+
   @doc "Largest point batch one upsert or vector update sends."
   def max_write_batch, do: @max_write_batch
 

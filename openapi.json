@@ -1020,11 +1020,28 @@
             "x-struct": null,
             "x-validate": null
           },
+          "cursor": {
+            "description": "Filter-only listing: the previous page's `next_cursor`.",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "diversity": {
             "description": "Result diversity (MMR). 0 = most relevant (default, tuned per plan); 1 = most varied.",
             "maximum": 1.0,
             "minimum": 0.0,
             "type": "number",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "fields": {
+            "description": "Frontmatter filters, each {key, op, value}; op one of eq (default), in, gt, gte, lt, lte, after, before. Keys: see GET /api/fields.",
+            "items": {
+              "type": "object",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
             "x-struct": null,
             "x-validate": null
           },
@@ -1050,6 +1067,7 @@
             "x-validate": null
           },
           "query": {
+            "description": "Search text. Omit or leave blank WITH a filter to list the matching notes newest first (no ranking, `cursor` paged); blank with no filter is a 422.",
             "type": "string",
             "x-struct": null,
             "x-validate": null
@@ -1085,9 +1103,6 @@
             "x-validate": null
           }
         },
-        "required": [
-          "query"
-        ],
         "title": "SearchRequest",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.SearchRequest",
@@ -3035,11 +3050,24 @@
       },
       "SearchResponse": {
         "properties": {
+          "next_cursor": {
+            "description": "Filter-only listing: the next page's cursor, null on the last page.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "results": {
             "items": {
               "$ref": "#/components/schemas/SearchResult"
             },
             "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "truncated": {
+            "description": "Filter-only listing: more pages follow.",
+            "type": "boolean",
             "x-struct": null,
             "x-validate": null
           }
@@ -6568,7 +6596,7 @@
     "/api/search": {
       "post": {
         "callbacks": {},
-        "description": "Searches the current vault and returns one result per matching note (chunk hits are grouped by note, ranked by best chunk score). `mode` selects vector, keyword, or hybrid (default) retrieval, and results may be narrowed by `tags` or `folder`. Setting `cross_vault` searches across all of the user's vaults and requires the Pro plan (403 otherwise).",
+        "description": "Searches the current vault and returns one result per matching note (chunk hits are grouped by note, ranked by best chunk score). `mode` selects vector, keyword, or hybrid (default) retrieval, and results may be narrowed by `tags` or `folder`. Setting `cross_vault` searches across all of the user's vaults and requires the Pro plan (403 otherwise). With a blank `query` and at least one filter, lists the matching notes of the current vault newest first instead (no ranking, no search budget, `cursor` / `next_cursor` paging).",
         "operationId": "search",
         "parameters": [],
         "requestBody": {

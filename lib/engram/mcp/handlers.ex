@@ -120,6 +120,9 @@ defmodule Engram.MCP.Handlers do
         |> Enum.take(limit)
         |> render_recent(names)
 
+      {:ok, :filter} ->
+        filtered(user, vaults, args, names)
+
       {:ok, :query} ->
         render_search(Search.search(user, nil, args["query"], opts), names)
 
@@ -141,6 +144,9 @@ defmodule Engram.MCP.Handlers do
       {:ok, :recent} ->
         {:ok, notes} = Notes.list_recent_notes(user, vault, max(1, min(args["limit"] || 5, 20)))
         render_recent(Enum.map(notes, &{&1, vault}), %{})
+
+      {:ok, :filter} ->
+        filtered(user, [vault], args, %{})
 
       {:ok, :query} ->
         render_search(Search.search(user, vault, args["query"], build_search_opts(args)), %{})
@@ -1303,32 +1309,15 @@ defmodule Engram.MCP.Handlers do
   """
   def build_search_opts(args) do
     limit = min(args["limit"] || 5, 20)
-    tags = args["tags"]
-
-    opts = [limit: limit, mode: search_mode(args), surface: "mcp"]
-    opts = if tags, do: Keyword.put(opts, :tags, tags), else: opts
-    opts = if args["folder"], do: Keyword.put(opts, :folder, args["folder"]), else: opts
-    opts = if args["type"], do: Keyword.put(opts, :type, args["type"]), else: opts
-    opts = if is_list(args["fields"]), do: Keyword.put(opts, :fields, args["fields"]), else: opts
-
-    opts =
-      Enum.reduce(Search.date_params(), opts, fn key, acc ->
-        put_date_opt(acc, key, args[to_string(key)])
-      end)
+    # One parser with REST. Beside a query a param that does not parse is
+    # dropped; a filter-only call refuses it (`search_kind/1`).
+    {filters, _bad} = Search.filter_opts(args)
+    opts = [limit: limit, mode: search_mode(args), surface: "mcp"] ++ filters
 
     if is_number(args["diversity"]),
       do: Keyword.put(opts, :diversity, args["diversity"]),
       else: opts
   end
-
-  defp put_date_opt(opts, key, value) when is_binary(value) do
-    case DateTime.from_iso8601(value) do
-      {:ok, dt, _} -> Keyword.put(opts, key, dt)
-      _ -> opts
-    end
-  end
-
-  defp put_date_opt(opts, _key, _value), do: opts
 
   @doc "Map the MCP `mode` arg to a Search mode (unknown → :hybrid)."
   def search_mode(args), do: Search.parse_mode(args["mode"])
@@ -1479,8 +1468,6 @@ defmodule Engram.MCP.Handlers do
   def render_search({:error, reason}, _names),
     do: {:error, Search.input_error_message(reason) || "Search unavailable."}
 
-  @search_filters ~w(tags folder type fields created_after created_before updated_after updated_before)
-
   # `:recent` when query is blank AND similar_to is absent. `similar_to` and a
   # non-blank query never combine: naming a source note AND asking a question
   # is an ambiguous request, not a widened one. A blank query plus a ranking
@@ -1501,13 +1488,15 @@ defmodule Engram.MCP.Handlers do
       is_binary(similar) ->
         {:ok, :similar}
 
+      # A param that does not parse is an error here, not dropped: dropping
+      # the only filter would list every recent note as if it were filtered.
       blank? ->
-        case Enum.find(@search_filters, &(not is_nil(args[&1]))) do
-          nil ->
-            {:ok, :recent}
+        case Search.filter_opts(args) do
+          {_, [_ | _] = bad} ->
+            {:error, "Invalid #{Enum.join(bad, ", ")}"}
 
-          p ->
-            {:error, "#{p} needs a query or similar_to; omit it to list recently updated notes"}
+          {filters, []} ->
+            if Search.NoteFilter.any?(filters), do: {:ok, :filter}, else: {:ok, :recent}
         end
 
       true ->
@@ -1586,10 +1575,35 @@ defmodule Engram.MCP.Handlers do
     do: result[:source_path] == path and to_string(result[:vault_id]) == to_string(note.vault_id)
 
   # Same result shape as render_search/2; vault labels only in cross-vault mode.
-  defp render_recent(pairs, names) do
+  # Filters with no query (#2083): answered in Postgres, newest first, no
+  # embed and no search budget. Each vault gives its newest `limit`, merged.
+  defp filtered(user, vaults, args, names) do
+    limit = max(1, min(args["limit"] || 5, 20))
+    filter = build_search_opts(args)
+
+    vaults
+    |> Enum.reduce_while({:ok, []}, fn v, {:ok, acc} ->
+      case Engram.Search.NoteFilter.page(user, v, filter, limit: limit) do
+        {:ok, %{notes: notes}} -> {:cont, {:ok, acc ++ Enum.map(notes, &{&1, v})}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, pairs} ->
+        pairs
+        |> Enum.sort_by(fn {n, _v} -> n.updated_at end, {:desc, DateTime})
+        |> Enum.take(limit)
+        |> render_recent(names, "No notes match these filters.")
+
+      err ->
+        render_search(err, names)
+    end
+  end
+
+  defp render_recent(pairs, names, empty_text \\ "No notes yet.") do
     text =
       if pairs == [] do
-        "No notes yet."
+        empty_text
       else
         Enum.join(
           [
