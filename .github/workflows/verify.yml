@@ -4852,8 +4852,9 @@ jobs:
     # 16-28 min e2e-browser the PR's wall-clock even though `ci` ignored its
     # result. record-pass waits on them instead, so the e2e marker still means
     # "e2e passed".
-    # prebuild-ci-image is here only so its result is readable below (it is
-    # upstream of storage-database already, so it adds no wait).
+    # prebuild-ci-image is here only so its result is readable below. When
+    # storage-database skips by its own `if:` while the image still builds,
+    # `ci` now waits for that build too.
     needs: [fingerprint, prebuild-ci-image, version-check, unit-tests, lint, frontend-lint, e2e-lint, storage-database, migration-gates, static-checks]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
@@ -4904,8 +4905,10 @@ jobs:
           # `skipped` result passes ONLY when it is true: GitHub also reports
           # `skipped` when an upstream job failed, and treating that as a pass
           # turned `ci` green with zero tests run (#2453). If you change a
-          # gate's `if:`, change its SKIP_INTENDED here too; a mismatch fails
-          # closed (red `ci`), never open.
+          # gate's `if:`, change its SKIP_INTENDED here too. A skip added to
+          # `if:` alone fails closed (red `ci`); a skip removed from `if:` alone,
+          # or a gate added to `needs` alone, fails OPEN.
+          # test/scripts/check_gates_test.sh checks this mirror.
           #
           # An intended skip is still not a verified pass: it renders as green
           # but means "an earlier tree passed and nothing this job covers has
