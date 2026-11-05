@@ -10,6 +10,7 @@ defmodule Engram.Notes.FieldCatalogTest do
 
   alias Engram.Notes
   alias Engram.Notes.FieldCatalog
+  alias Engram.QueryPlan
   alias Engram.Repo
 
   setup do
@@ -253,6 +254,12 @@ defmodule Engram.Notes.FieldCatalogTest do
   test "the aggregates are index-only scans under RLS", %{user: user, vault: vault} do
     seed!(user, vault)
     [{stats, params}, {values, params}] = FieldCatalog.explain_queries(vault.id)
+
+    # Only this test's rows, all-visible as prod's cold rows are: with no
+    # all-visible page an index-only scan ties a `note_attrs_pkey` scan at
+    # the cost floor, and CI drew the pkey (QueryPlan.all_visible!/1).
+    QueryPlan.fresh!("note_attrs")
+    QueryPlan.all_visible!(["note_attrs"])
 
     for {sql, indexes} <- [{stats, ~w(h n d)}, {values, ~w(h)}] do
       plan = plan!(user, sql, params)
