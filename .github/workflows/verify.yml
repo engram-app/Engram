@@ -1434,6 +1434,10 @@ jobs:
           if [ ! -f "${MARKER_PREFIX}-stack.marker" ]; then
             echo "CI stack timed out (5 min). Logs:"; cat "${MARKER_PREFIX}-stack.log"; exit 1
           fi
+          # The stack starts in the background, so its ci-docker show-labels
+          # line lands in the stack log; print it, or nothing proves the
+          # compose labels landed.
+          grep 'engram-ci.runner=' "${MARKER_PREFIX}-stack.log" || true
 
           echo "Waiting for Ollama check..."
           for i in $(seq 1 30); do

@@ -32,6 +32,7 @@ case "${1:-} ${2:-}" in
   "show-labels "*)
     exec docker inspect -f '{{.Name}} engram-ci.runner={{index .Config.Labels "engram-ci.runner"}} engram-ci.run={{index .Config.Labels "engram-ci.run"}}' "${@:2}" ;;
   "run "* | "create "*) exec docker "$1" "${labels[@]}" "${@:2}" ;;
-  "network create" | "volume create") exec docker "$1" "$2" "${labels[@]}" "${@:3}" ;;
+  "network create" | "volume create" | "container run" | "container create")
+    exec docker "$1" "$2" "${labels[@]}" "${@:3}" ;;
   *) exec docker "$@" ;;
 esac
