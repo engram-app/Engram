@@ -33,14 +33,18 @@ defmodule EngramWeb.Schemas.SearchRequest do
         format: :"date-time",
         description:
           "Only notes whose frontmatter timestamp is at or after this ISO 8601 instant. " <>
-            "A note without one uses its file's modified time, rounded up to the hour."
+            "A note without one uses its file's modified time, rounded up to the hour. " <>
+            "Because that fallback rounds up, it can be up to an hour ahead, so " <>
+            "updated_before set to now can leave out notes edited in the current hour."
       },
       updated_before: %Schema{
         type: :string,
         format: :"date-time",
         description:
           "Only notes whose frontmatter timestamp is at or before this ISO 8601 instant. " <>
-            "A note without one uses its file's modified time, rounded up to the hour."
+            "A note without one uses its file's modified time, rounded up to the hour. " <>
+            "Because that fallback rounds up, it can be up to an hour ahead, so " <>
+            "updated_before set to now can leave out notes edited in the current hour."
       },
       mode: %Schema{type: :string, enum: ["keyword", "vector", "hybrid"]},
       cross_vault: %Schema{type: :boolean, description: "Pro plan only."},
