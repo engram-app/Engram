@@ -27,26 +27,22 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderLiveExpand do
   # The 10 min statement_timeout bounds the build; no lock_timeout, on one
   # pinned connection: see 20261105150100's `up/0`.
   def up do
-    Engram.Repo.MigrationSession.with_session_settings(
-      repo(),
-      [{"statement_timeout", "10min"}],
-      fn ->
-        if invalid?("notes_folder_live"),
-          do:
-            repo().query!("DROP INDEX CONCURRENTLY IF EXISTS notes_folder_live", [],
-              timeout: :infinity
-            )
+    with_statement_timeout(fn ->
+      if invalid?("notes_folder_live"),
+        do:
+          repo().query!("DROP INDEX CONCURRENTLY IF EXISTS notes_folder_live", [],
+            timeout: :infinity
+          )
 
-        repo().query!(
-          """
-          CREATE INDEX CONCURRENTLY IF NOT EXISTS notes_folder_live ON notes (vault_id, folder_id)
-          INCLUDE (id, user_id) WHERE deleted_at IS NULL AND kind = 'note'
-          """,
-          [],
-          timeout: :infinity
-        )
-      end
-    )
+      repo().query!(
+        """
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS notes_folder_live ON notes (vault_id, folder_id)
+        INCLUDE (id, user_id) WHERE deleted_at IS NULL AND kind = 'note'
+        """,
+        [],
+        timeout: :infinity
+      )
+    end)
   end
 
   def down do
@@ -66,5 +62,23 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderLiveExpand do
       )
 
     rows != []
+  end
+
+  # One pinned connection for the whole body: with no DDL transaction each
+  # `execute` can land on a different pooled connection (the release
+  # migrator's pool is 2), so a bare SET could miss the build and leak into
+  # later migrations. Inlined, not shared: the N-1 gate runs this file on
+  # the previous release's code, so a migration calls no app module. Plain
+  # SQL, no bind params, so squawk can parse what it logs.
+  defp with_statement_timeout(fun) do
+    repo().checkout(fn ->
+      repo().query!("SET statement_timeout = '10min'")
+
+      try do
+        fun.()
+      after
+        repo().query!("RESET statement_timeout")
+      end
+    end)
   end
 end

@@ -71,39 +71,35 @@ defmodule Engram.Repo.Migrations.IndexNotesEffectiveDatesExpand do
   # short lock_timeout fails it on any transaction open longer than that and
   # leaves an INVALID index (why `Engram.Release.migrator_config/1` keeps the
   # app Repo's lock_timeout off the migrator). All on one pinned connection
-  # (`MigrationSession`): with no DDL transaction, `execute` statements can
+  # (`with_statement_timeout/1`): with no DDL transaction, `execute` statements can
   # each land on a different pooled connection.
   def up do
-    Engram.Repo.MigrationSession.with_session_settings(
-      repo(),
-      [{"statement_timeout", "10min"}],
-      fn ->
-        for {type, body} <- @epoch_fns do
-          repo().query!(
-            """
-            CREATE OR REPLACE FUNCTION engram_epoch_s(#{type}) RETURNS bigint
-            LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path = ''
-            AS $fn$ SELECT #{body} $fn$
-            """,
-            []
-          )
-        end
-
-        for {name, expr} <- @exprs do
-          if invalid?(name),
-            do: repo().query!("DROP INDEX CONCURRENTLY IF EXISTS #{name}", [], timeout: :infinity)
-
-          repo().query!(
-            """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS #{name} ON notes (vault_id, (#{expr}))
-            INCLUDE (#{Enum.join(@include[name], ", ")}) WHERE #{@live}
-            """,
-            [],
-            timeout: :infinity
-          )
-        end
+    with_statement_timeout(fn ->
+      for {type, body} <- @epoch_fns do
+        repo().query!(
+          """
+          CREATE OR REPLACE FUNCTION engram_epoch_s(#{type}) RETURNS bigint
+          LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path = ''
+          AS $fn$ SELECT #{body} $fn$
+          """,
+          []
+        )
       end
-    )
+
+      for {name, expr} <- @exprs do
+        if invalid?(name),
+          do: repo().query!("DROP INDEX CONCURRENTLY IF EXISTS #{name}", [], timeout: :infinity)
+
+        repo().query!(
+          """
+          CREATE INDEX CONCURRENTLY IF NOT EXISTS #{name} ON notes (vault_id, (#{expr}))
+          INCLUDE (#{Enum.join(@include[name], ", ")}) WHERE #{@live}
+          """,
+          [],
+          timeout: :infinity
+        )
+      end
+    end)
   end
 
   def down do
@@ -127,5 +123,23 @@ defmodule Engram.Repo.Migrations.IndexNotesEffectiveDatesExpand do
       )
 
     rows != []
+  end
+
+  # One pinned connection for the whole body: with no DDL transaction each
+  # `execute` can land on a different pooled connection (the release
+  # migrator's pool is 2), so a bare SET could miss the build and leak into
+  # later migrations. Inlined, not shared: the N-1 gate runs this file on
+  # the previous release's code, so a migration calls no app module. Plain
+  # SQL, no bind params, so squawk can parse what it logs.
+  defp with_statement_timeout(fun) do
+    repo().checkout(fn ->
+      repo().query!("SET statement_timeout = '10min'")
+
+      try do
+        fun.()
+      after
+        repo().query!("RESET statement_timeout")
+      end
+    end)
   end
 end

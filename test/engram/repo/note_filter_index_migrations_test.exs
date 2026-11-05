@@ -39,11 +39,9 @@ defmodule Engram.Repo.NoteFilterIndexMigrationsTest do
   end
 
   defp run!(mod) do
-    try do
-      Ecto.Migrator.up(Repo, @version, mod, log: false, dynamic_repo: Repo.get_dynamic_repo())
-    after
-      Repo.query!("DELETE FROM schema_migrations WHERE version = $1", [@version])
-    end
+    Ecto.Migrator.up(Repo, @version, mod, log: false, dynamic_repo: Repo.get_dynamic_repo())
+  after
+    Repo.query!("DELETE FROM schema_migrations WHERE version = $1", [@version])
   end
 
   # `{connection_id, sql}` of every statement sent while `fun` runs (the
@@ -104,41 +102,15 @@ defmodule Engram.Repo.NoteFilterIndexMigrationsTest do
         sent = statements(fn -> run!(mod) end)
         on = fn pat -> for {c, sql} <- sent, sql =~ pat, do: c end
 
-        [set] = on.(~r/set_config.*\$2, false\)|^SET statement_timeout/s)
+        [set] = on.(~r/^SET statement_timeout/)
         builds = on.(~r/CREATE INDEX CONCURRENTLY/)
         assert length(builds) == length(unquote(names))
         assert Enum.all?(builds ++ on.(~r/DROP INDEX CONCURRENTLY/), &(&1 == set))
-        assert on.(~r/reset_val|^RESET statement_timeout/) == [set]
+        assert on.(~r/^RESET statement_timeout/) == [set]
       end
 
       begin.()
     end
-  end
-
-  test "with_session_settings sets on the pinned connection and resets after" do
-    Sandbox.unboxed_run(Repo, fn ->
-      {inside, conn} =
-        Engram.Repo.MigrationSession.with_session_settings(
-          Repo,
-          [{"statement_timeout", "10min"}],
-          fn ->
-            %{rows: [[v]], connection_id: c} = Repo.query!("SHOW statement_timeout")
-            {v, c}
-          end
-        )
-
-      assert inside == "10min"
-
-      # Every pooled connection is back to its default, the pinned one included.
-      seen =
-        for _ <- 1..20 do
-          %{rows: [[v]], connection_id: c} = Repo.query!("SHOW statement_timeout")
-          {c, v}
-        end
-
-      refute Enum.any?(seen, fn {_c, v} -> v == "10min" end)
-      assert is_integer(conn)
-    end)
   end
 
   for {file, [broken | kept]} <- @migrations do
