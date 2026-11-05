@@ -70,7 +70,26 @@ defmodule Engram.DataCase do
       # this, one test marking IndexVersions done (the runner's perform does,
       # on an empty DB) turns off the version sweeps in every later test.
       Engram.DataMigrations.reset_cache()
+      reset_rebuild_gate()
     end
+  end
+
+  @doc """
+  Empties the rebuild gate's node-global inputs.
+
+  The rebuild gate (`Engram.Rebuild.gate/1`) reads two inputs no sandbox
+  rolls back: the Hammer maintenance token bucket (a 60 s window) and the
+  `:rebuild` cache (30 s TTL: the halt flag, `:pass_done`, the Qdrant
+  verdict). A test that spends the bucket left every gated rebuild later in
+  that wall-clock minute snoozing (CI run 41968893624). Every sync test
+  starts with both cold.
+
+  `clear_buckets!/0`, not `reset_buckets!/0`: this runs before every sync
+  test, and the latter's fresh-window wait would add ~50 ms to each.
+  """
+  def reset_rebuild_gate do
+    EngramWeb.RateLimiter.clear_buckets!()
+    Engram.Cache.clear_local(:rebuild)
   end
 
   # Runs the suite as `engram_app` rather than the cluster superuser, so the RLS
