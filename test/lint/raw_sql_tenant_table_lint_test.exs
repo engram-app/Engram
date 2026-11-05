@@ -48,7 +48,7 @@ defmodule Engram.RawSqlTenantTableLintTest do
     # tenant context is active. Moved out of attachments.ex (#2159) so that
     # file needs no exemption.
     "engram/attachments/bulk_update.ex",
-    # Notes.BulkRename.update!/3 — the folder-rename cascade's batched
+    # Notes.BulkRename.update!/4 — the folder-rename cascade's batched
     # `UPDATE notes ... FROM (VALUES ...)`: each row carries distinct
     # re-encrypted ciphertexts (per-row values, one statement). Runs inside
     # do_rename_folder's `Repo.with_tenant/2` transaction — RLS context active.

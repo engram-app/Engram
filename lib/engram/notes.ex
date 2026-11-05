@@ -7251,9 +7251,9 @@ defmodule Engram.Notes do
             # AND tombstones; the seq feed orders by (seq, id), so same-stamp
             # runs are harmless.
             grouped = group_rename_updates(user, updates, content_by_id)
-            marker_rows = stamp_rename_rows(grouped[:marker] || [], now)
-            v2_rows = stamp_rename_rows(grouped[:v2] || [], now)
-            v1_rows = stamp_rename_rows(grouped[:v1] || [], now)
+            marker_rows = grouped[:marker] || []
+            v2_rows = grouped[:v2] || []
+            v1_rows = grouped[:v1] || []
 
             # Soft-deleted tombstones for old paths so the seq feed
             # (list_changes_by_seq, no deleted_at filter) carries delete
@@ -7329,9 +7329,9 @@ defmodule Engram.Notes do
                     Enum.map(updates, fn {_n, _old, _new, folder, _t} -> folder end)
                   )
 
-                BulkRename.update!(marker_rows, @marker_rename_cols, seq)
-                BulkRename.update!(v2_rows, @v2_rename_cols, seq)
-                BulkRename.update!(v1_rows, @v1_rename_cols, seq)
+                BulkRename.update!(marker_rows, @marker_rename_cols, seq, now)
+                BulkRename.update!(v2_rows, @v2_rename_cols, seq, now)
+                BulkRename.update!(v1_rows, @v1_rename_cols, seq, now)
 
                 # Batched: one tombstone per note under the folder, so a big
                 # folder overflows the protocol's 65535 bind cap in one statement.
@@ -8914,12 +8914,6 @@ defmodule Engram.Notes do
         tags_hmac: Enum.map(tags, &Crypto.hmac_field(filter_key, &1)),
         dek_version: Crypto.row_version_aad_bound()
       ]
-  end
-
-  # Attaches the cascade's shared timestamp to each {id, kw} rename row,
-  # producing the [{id, stamp, kw}] shape BulkRename.update!/3 consumes.
-  defp stamp_rename_rows(rows, now) do
-    Enum.map(rows, fn {id, kw} -> {id, now, kw} end)
   end
 
   # Marker-only rename helper. Re-encrypts JUST the folder envelope under the

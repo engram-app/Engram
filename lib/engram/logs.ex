@@ -205,7 +205,7 @@ defmodule Engram.Logs do
   defp bound_entry(entry, now) do
     %{
       ts: parse_ts(get(entry, "ts", :ts)) || now,
-      level: get(entry, "level", :level) |> default("info") |> clamp(@max_short_chars),
+      level: get(entry, "level", :level) |> default("info") |> PersistPolicy.metric_level(),
       category: get(entry, "category", :category) |> default("") |> clamp(@max_short_chars),
       # Scrub BEFORE the final clamp: truncating first can cut a quoted path
       # off its closing quote, and a half path then passes every rule. The
@@ -346,8 +346,9 @@ defmodule Engram.Logs do
   # Re-emit severity is capped at :warning (see normalize_level/1 below): a
   # client-side "error" is a bug in ONE user's plugin, not a backend failure,
   # and must never inflate engram-prod-loki-error-rate (severity="error").
-  # The original client severity survives in `client_severity` metadata so
-  # it's still queryable/greppable in Loki.
+  # The client severity survives in `client_severity` metadata so it's still
+  # queryable/greppable in Loki, bounded at ingest to
+  # `PersistPolicy.levels/0` (an unknown level arrives here as "other").
   # Takes the BOUNDED entries built by insert_logs/2, not the raw request body,
   # so an oversized message is not shipped downstream at full size.
   defp reemit_to_logger(user, entries) do

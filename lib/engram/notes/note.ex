@@ -5,6 +5,18 @@ defmodule Engram.Notes.Note do
 
   @type t :: %__MODULE__{}
 
+  # Every value `notes.parse_status` can hold (`Notes.put_parse_status/3`).
+  @parse_statuses ~w(ok degraded)
+  # Every non-NULL value `index_tier` can hold, here and on
+  # `note_index_state`: the Free index budget's floor tiers (NULL = full).
+  @index_tiers ~w(floor floor_paid)
+
+  @doc "Every value `notes.parse_status` can hold."
+  def parse_statuses, do: @parse_statuses
+
+  @doc "Every non-NULL value `index_tier` can hold (NULL is a full index)."
+  def index_tiers, do: @index_tiers
+
   schema "notes" do
     # Phase B.3 + B.4: path/folder/tags/content/title are virtual — only
     # ciphertext + HMAC columns are persisted. Engram.Crypto.maybe_decrypt_note_fields/2
@@ -245,6 +257,7 @@ defmodule Engram.Notes.Note do
       empty_values: []
     )
     |> validate_inclusion(:kind, ["note", "folder"])
+    |> validate_inclusion(:parse_status, @parse_statuses)
     |> validate_required_for_kind()
     |> validate_format(:id, ~r/^[0-9a-f-]{36}$/i)
     |> unique_constraint([:user_id, :vault_id, :path_hmac],

@@ -50,8 +50,9 @@ defmodule Engram.Logs.PersistPolicy do
     "resync ("
   ]
 
-  # Bounded label set for the dropped-lines metric: the client sends any
-  # string as `level`, and a raw value would be a cardinality bomb.
+  # The levels a client may send. Anything else is stored and counted as
+  # "other": the client sends any string as `level`, and a raw value would be
+  # a cardinality bomb on the metric and an open set in `client_logs.level`.
   @metric_levels ~w(debug info warn error)
 
   @doc "Info message prefixes that are stored even when filtering."
@@ -62,7 +63,10 @@ defmodule Engram.Logs.PersistPolicy do
     level in @stored_levels or String.starts_with?(message, @info_allowlist)
   end
 
-  @doc "`level` as a bounded metric tag."
+  @doc "Every value `client_logs.level` can hold: `metric_level/1`'s range."
+  def levels, do: @metric_levels ++ ["other"]
+
+  @doc "`level` bounded to `levels/0`: the metric tag and the stored value."
   def metric_level(level) when level in @metric_levels, do: level
   def metric_level(_level), do: "other"
 end

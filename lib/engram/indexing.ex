@@ -422,7 +422,7 @@ defmodule Engram.Indexing do
 
   defp stamp_okf_timestamp(_prepared), do: :ok
 
-  @floor_tiers ["floor", "floor_paid"]
+  @floor_tiers Note.index_tiers()
 
   defp merged?(plan), do: Enum.any?(plan.entries, &Map.get(entry_chunk(&1), :merged, false))
 

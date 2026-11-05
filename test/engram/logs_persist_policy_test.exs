@@ -101,6 +101,24 @@ defmodule Engram.LogsPersistPolicyTest do
       refute_receive {:dropped, _, _}
     end
 
+    # `client_logs.level` holds only `PersistPolicy.levels/0`: anything else
+    # the client sends is stored as "other", like the metric tag.
+    test "stores an unknown level as other", %{user: user} do
+      assert {:ok, 1} =
+               Logs.insert_logs(user, [line("FATAL", "boom")], nil, persist_all: true)
+
+      assert ["other"] =
+               Engram.Repo.all(
+                 Ecto.Query.from(l in "client_logs",
+                   where: l.user_id == type(^user.id, Ecto.UUID),
+                   select: l.level
+                 ),
+                 skip_tenant_check: true
+               )
+
+      assert "other" in PersistPolicy.levels()
+    end
+
     test "is the test-env default, so the e2e oracle still sees everything", %{user: user} do
       assert {:ok, 1} = Logs.insert_logs(user, [line("info", "Push start")])
     end

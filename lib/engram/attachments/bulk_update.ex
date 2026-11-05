@@ -69,7 +69,7 @@ defmodule Engram.Attachments.BulkUpdate do
         end)
 
       params = [
-        DateTime.to_naive(now)
+        now
         | Enum.flat_map(chunk, fn {id, seq, cols} ->
             [Ecto.UUID.dump!(id), seq | Enum.map(names, &dump_col(&1, Keyword.fetch!(cols, &1)))]
           end)
@@ -111,7 +111,7 @@ defmodule Engram.Attachments.BulkUpdate do
         |> Enum.map_join(", ", fn {_pair, i} -> "($#{i * 2 + 2}::uuid, $#{i * 2 + 3}::bigint)" end)
 
       params = [
-        DateTime.to_naive(now)
+        now
         | Enum.flat_map(chunk, fn {id, seq} -> [Ecto.UUID.dump!(id), seq] end)
       ]
 

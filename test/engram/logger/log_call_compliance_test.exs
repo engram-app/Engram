@@ -349,6 +349,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # touches content, path, title or a query. Listed as the file, not
     # `lib/engram/repo/`, so `tenancy_guard.ex` stays in scope.
     "lib/engram/repo/shed_error.ex",
+    # Time helpers (`to_utc/1`) and Ecto fragment macros. No Logger call,
+    # never touches content, path, title or a query's values.
+    "lib/engram/repo/utc.ex",
     # The readiness probe's own one-connection pool: `SELECT 1` and a
     # timeout. No Logger call, never touches content, path, title or a query.
     "lib/engram/health_probe.ex",

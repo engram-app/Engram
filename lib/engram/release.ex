@@ -279,15 +279,18 @@ defmodule Engram.Release do
   # The app Repo's session timeouts (`RuntimeConfig.repo_parameters/1`) must
   # not reach the migrator: `lock_timeout` would fail a
   # `CREATE INDEX CONCURRENTLY` that is waiting out older transactions, and
-  # leave an INVALID index behind. The migrator runs in its own `eval` before
-  # the app boots, so changing the env here touches nothing else.
+  # leave an INVALID index behind. Its UTC session TimeZone must: a
+  # `timestamp` -> `timestamptz` conversion reads `timestamp` values in it.
+  # The migrator runs in its own `eval` before the app boots, so changing the
+  # env here touches nothing else.
   defp use_migrator_session(repo) do
     Application.put_env(@app, repo, migrator_config(Application.get_env(@app, repo, [])))
   end
 
   @doc false
   @spec migrator_config(keyword()) :: keyword()
-  def migrator_config(config), do: Keyword.delete(config, :parameters)
+  def migrator_config(config),
+    do: Keyword.put(config, :parameters, Engram.RuntimeConfig.repo_parameters(:base))
 
   @doc """
   Grant the platform `operator` role (the operator insights page) to the

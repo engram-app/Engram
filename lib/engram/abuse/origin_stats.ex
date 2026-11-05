@@ -106,7 +106,9 @@ defmodule Engram.Abuse.OriginStats do
     days = Enum.map(rows, &elem(&1, 1))
     classes = Enum.map(rows, &elem(&1, 2))
     ns = Enum.map(rows, &elem(&1, 3))
-    now = NaiveDateTime.utc_now()
+    # UTC DateTime: `$5` is typed from the target column, so it lands as the
+    # same instant in `timestamp` or `timestamptz`.
+    now = DateTime.utc_now()
     _ = Repo.query!(@upsert, [uids, days, classes, ns, now])
     :ok
   rescue

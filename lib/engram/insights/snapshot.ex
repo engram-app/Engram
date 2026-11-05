@@ -36,6 +36,7 @@ defmodule Engram.Insights.Snapshot do
   alias Engram.Links.NoteLink
   alias Engram.Notes.Note
   alias Engram.Repo
+  alias Engram.Repo.Utc
   alias Engram.Vaults.Vault
 
   @heal_days 7
@@ -184,9 +185,10 @@ defmodule Engram.Insights.Snapshot do
 
   defp empty_rollup, do: %{searches: 0, mcp_tool_calls: %{}, web_edited: false}
 
+  # `usage_meters.last_active_at` reads as NaiveDateTime from a `timestamp`
+  # column and DateTime from a `timestamptz` one.
   defp usec(nil), do: nil
-  defp usec(%DateTime{} = dt), do: DateTime.add(dt, 0, :microsecond)
-  defp usec(%NaiveDateTime{} = dt), do: dt |> DateTime.from_naive!("Etc/UTC") |> usec()
+  defp usec(dt), do: dt |> Utc.to_utc() |> DateTime.add(0, :microsecond)
 
   # Share of the refilling embed bucket currently spent (0 = full, 100 =
   # empty). A per-user override wins (-1 / nil: no bucket); else the tier's.

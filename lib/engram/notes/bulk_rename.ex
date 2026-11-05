@@ -22,20 +22,20 @@ defmodule Engram.Notes.BulkRename do
   class gets DISTINCT ciphertexts, so this can't be a single update_all — but
   it must not be one UPDATE per note either (the N+1 this replaces). Runs
   inside the caller's with_tenant transaction: the RLS role restricts the raw
-  UPDATE to the tenant's rows, and the shared `seq` keeps the #614
-  one-op-one-seq contract. `rows` is [{note_id, stamp, kw}] where `kw`
-  holds a value for every column in `cols`. A nested-collision unique
-  violation raises Postgrex.Error exactly like the per-note update_all did.
+  UPDATE to the tenant's rows, and the shared `seq` and `stamp` keep the
+  #614 one-op-one-seq contract. `rows` is [{note_id, kw}], `kw` holding a
+  value for every column in `cols`. A nested-collision unique violation
+  raises Postgrex.Error exactly like the per-note update_all did.
   """
-  @spec update!([{binary(), DateTime.t(), keyword()}], [atom()], integer()) :: :ok
-  def update!([], _cols, _seq), do: :ok
+  @spec update!([{binary(), keyword()}], [atom()], integer(), DateTime.t()) :: :ok
+  def update!([], _cols, _seq, _stamp), do: :ok
 
-  def update!(rows, cols, seq) do
-    set_sql =
-      Enum.map_join(cols, ", ", &"#{&1} = v.#{&1}") <> ", updated_at = v.updated_at, seq = $1"
-
-    # id + updated_at + the class's columns, per VALUES row.
-    ncols = length(cols) + 2
+  def update!(rows, cols, seq, stamp) do
+    # `updated_at = $2`, uncast: Postgres types it from the column, so a UTC
+    # DateTime lands as the same instant whether the column is `timestamp`
+    # or `timestamptz`, whatever the session TimeZone.
+    set_sql = Enum.map_join(cols, ", ", &"#{&1} = v.#{&1}") <> ", updated_at = $2, seq = $1"
+    ncols = length(cols) + 1
 
     rows
     |> Enum.chunk_every(@chunk)
@@ -44,25 +44,25 @@ defmodule Engram.Notes.BulkRename do
         chunk
         |> Enum.with_index()
         |> Enum.map_join(", ", fn {_row, i} ->
-          base = 2 + i * ncols
+          # id + the class's columns, per VALUES row.
+          base = 3 + i * ncols
 
           col_placeholders =
             cols
-            |> Enum.with_index(2)
+            |> Enum.with_index(1)
             |> Enum.map_join(", ", fn {col, j} ->
               "$#{base + j}::#{sql_type(col)}"
             end)
 
-          "($#{base}::uuid, $#{base + 1}::timestamp, #{col_placeholders})"
+          "($#{base}::uuid, #{col_placeholders})"
         end)
 
+      # $1 = seq, $2 = the cascade's shared stamp (a UTC DateTime), then
+      # each row's id and columns.
       params =
-        [seq] ++
-          Enum.flat_map(chunk, fn {id, stamp, kw} ->
-            [
-              Ecto.UUID.dump!(id),
-              DateTime.to_naive(stamp) | Enum.map(cols, &Keyword.fetch!(kw, &1))
-            ]
+        [seq, stamp] ++
+          Enum.flat_map(chunk, fn {id, kw} ->
+            [Ecto.UUID.dump!(id) | Enum.map(cols, &Keyword.fetch!(kw, &1))]
           end)
 
       _ =
@@ -70,7 +70,7 @@ defmodule Engram.Notes.BulkRename do
           """
           UPDATE notes AS n
           SET #{set_sql}
-          FROM (VALUES #{values_sql}) AS v(id, updated_at, #{Enum.join(cols, ", ")})
+          FROM (VALUES #{values_sql}) AS v(id, #{Enum.join(cols, ", ")})
           WHERE n.id = v.id
           """,
           params
@@ -84,7 +84,7 @@ defmodule Engram.Notes.BulkRename do
 
   # A class that rewrites a body column (or the key version) keeps
   # `note_bodies` in step, chunk by chunk, in the caller's transaction.
-  # (Below `update!/3`, and no alias, so the pinned `Repo.query!` line stays.)
+  # (Below `update!/4`, and no alias, so the pinned `Repo.query!` line stays.)
   defp sync_bodies(chunk, cols) do
     if Enum.any?(cols, &(&1 in [:dek_version | Engram.Notes.NoteBody.body_fields()])),
       do: Engram.Notes.NoteBody.sync!(Enum.map(chunk, &elem(&1, 0)), cols)

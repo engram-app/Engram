@@ -12,6 +12,7 @@ defmodule Engram.OAuth do
   not the user).
   """
   import Ecto.Query
+  import Engram.Repo.Utc, only: [utc_instant: 1, utc_wall: 1]
   alias Engram.Accounts
   alias Engram.Analytics.McpClient
   alias Engram.Logger.Metadata
@@ -1516,12 +1517,22 @@ defmodule Engram.OAuth do
         default_access: t.default_access,
         vault_ids: t.vault_ids,
         vault_id: t.vault_id,
+        # `inserted_at` is `timestamp` until its conversion, `granted_at`
+        # `timestamptz`: both go through `Engram.Repo.Utc` so neither the
+        # COALESCE nor Ecto's `::timestamp` cast reads the session TimeZone.
         granted_at:
           type(
-            fragment(
-              "COALESCE(?, (SELECT min(f.inserted_at) FROM oauth_refresh_tokens f WHERE f.family_id = ?))",
-              t.granted_at,
-              t.family_id
+            utc_wall(
+              fragment(
+                "COALESCE(?, ?)",
+                t.granted_at,
+                utc_instant(
+                  fragment(
+                    "(SELECT min(f.inserted_at) FROM oauth_refresh_tokens f WHERE f.family_id = ?)",
+                    t.family_id
+                  )
+                )
+              )
             ),
             :utc_datetime_usec
           )
