@@ -20,6 +20,10 @@ defmodule Engram.PromEx.Reliability do
     * `[:engram, :embed, :failed]` → `..._embed_failed_total`, tags
       `[:error_kind, :status]` — per-attempt embed failures, visible before the
       terminal Oban discard.
+    * `[:engram, :embed, :crash_guard_snooze]` →
+      `..._embed_crash_guard_snooze_total`, tags `[:reason]` — EmbedNote
+      attempts snoozed 60 s by another attempt's live dead-man stamp. Repeat
+      snoozes on one note are a stamp nobody released (#2449).
     * `[:engram, :oban, :discarded]` → `..._oban_discarded_total`, tags
       `[:worker, :queue, :error_kind]` — jobs dropped after max_attempts.
     * `[:engram, :oban, :timeout]` → `..._oban_timeout_total`, tags
@@ -169,6 +173,13 @@ defmodule Engram.PromEx.Reliability do
           event_name: [:engram, :embed, :failed],
           description: "Per-attempt embed failures by error class + HTTP status.",
           tags: [:error_kind, :status]
+        ),
+        counter(
+          metric_prefix ++ [:embed, :crash_guard_snooze, :total],
+          event_name: [:engram, :embed, :crash_guard_snooze],
+          description:
+            "EmbedNote attempts snoozed by a live crash-guard stamp on the note (#2449).",
+          tags: [:reason]
         ),
         counter(
           metric_prefix ++ [:oban, :discarded, :total],

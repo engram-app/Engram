@@ -298,6 +298,27 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
       assert Enum.map(rows_for(note), & &1.qdrant_point_id) == ids
       assert reload(note).index_tier == nil
     end
+
+    # #2449: the over-budget `:ok` skipped the success transaction that clears
+    # the crash guard's stamp, so the note's next jobs snoozed for 15 min.
+    test "a recap over budget clears its crash stamp", %{user: user, vault: vault, note: note} do
+      stub_embedder()
+      assert :ok = embed(note)
+      seed_points(user, vault, 12_600)
+
+      assert :ok =
+               perform_job(EmbedNote, %{
+                 "note_id" => note.id,
+                 "user_id" => note.user_id,
+                 "recap" => true
+               })
+
+      updated = reload(note)
+      assert is_nil(updated.embed_started_at)
+
+      assert Engram.Workers.EmbedNote.CrashGuard.check(updated, %Oban.Job{queue: "embed"}) ==
+               :run
+    end
   end
 
   describe "other tiers" do
