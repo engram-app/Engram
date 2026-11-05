@@ -7,7 +7,8 @@ defmodule Engram.MixProject do
       # x-release-please-start-version
       version: "0.72.6",
       # x-release-please-end-version
-      elixir: "~> 1.15",
+      # 1.16+: Engram.Text uses String.replace_invalid/1.
+      elixir: "~> 1.16",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),

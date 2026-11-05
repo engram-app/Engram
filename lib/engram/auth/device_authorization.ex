@@ -33,7 +33,10 @@ defmodule Engram.Auth.DeviceAuthorization do
       :device_name
     ])
     |> validate_required([:device_code, :user_code, :client_id, :status, :expires_at])
-    |> validate_length(:vault_name, max: 100)
+    # varchar(255) columns; Postgres counts codepoints. client_id arrives
+    # unchecked from the public POST /api/auth/device body.
+    |> validate_length(:client_id, max: 255, count: :codepoints)
+    |> validate_length(:vault_name, max: 100, count: :codepoints)
     |> validate_inclusion(:status, ~w(pending authorized consumed expired))
     |> unique_constraint(:device_code)
     |> unique_constraint(:user_code)
