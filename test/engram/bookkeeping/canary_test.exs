@@ -133,12 +133,17 @@ defmodule Engram.Bookkeeping.CanaryTest do
       %{user: u, vault: v} = ctx
       {:ok, n} = Notes.upsert_note(u, v, %{"path" => "F/n.md", "content" => "x"}, actor: "api")
 
-      Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [
-        Ecto.UUID.dump!(folder_id(u, "F"))
+      dead = folder_id(u, "F")
+      Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(dead)])
+
+      # `folders_release_refs` NULLs it on the delete; a row written before
+      # that trigger can still name the dead row, and the canary must see it.
+      Repo.query!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [
+        Ecto.UUID.dump!(n.id),
+        Ecto.UUID.dump!(dead)
       ])
 
       assert drift_of(Canary.run()) == %{folder_ref: 1}
-      _ = n
     end
 
     # Mid-rotation, rows and folder rows are re-keyed in separate sweeps: a

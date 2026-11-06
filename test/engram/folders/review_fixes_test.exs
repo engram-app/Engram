@@ -102,6 +102,13 @@ defmodule Engram.Folders.ReviewFixesTest do
       note = put_note(u, v, "Y/n.md")
       row = FolderRows.tree(u)["Y"].id
       Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(row)])
+      # `folders_release_refs` now NULLs it; a row written before that trigger
+      # (or by a writer outside the vault lock) can still name the dead row.
+      Repo.query!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [
+        Ecto.UUID.dump!(note.id),
+        Ecto.UUID.dump!(row)
+      ])
+
       assert FolderRows.ref("notes", note.id) == row
 
       {:ok, rows} = Notes.scan_folders(u, v, ["Y"])
