@@ -15,6 +15,7 @@ defmodule Engram.Indexing do
   alias Engram.EmbedModels
   alias Engram.Indexing.ChunkRows
   alias Engram.Indexing.PayloadV5
+  alias Engram.Indexing.PayloadV6
   alias Engram.Indexing.PointId
   alias Engram.Indexing.RetainedVectors
   alias Engram.Indexing.VectorCache
@@ -1255,8 +1256,12 @@ defmodule Engram.Indexing do
   end
 
   # Every point of the note now carries `note_payload`: upserted ones were
-  # built from it, reused ones were just PATCHed (or already held it).
-  defp stamp_payload_hash(%Note{payload_hash: hash}, hash), do: :ok
+  # built from it, reused ones were just PATCHed (or already held it). The
+  # payload holds `n`, so the points carry the current payload version too
+  # (`PayloadV6.stamp/2`): a note indexed after the `n` backfill passed it is
+  # never selected by it. Only while the row holds this hash.
+  defp stamp_payload_hash(%Note{payload_hash: hash} = note, hash),
+    do: PayloadV6.stamp(note.id, hash: hash)
 
   #
   # Compare-and-set on the hash this pass loaded (review L1): a NULL-clear
@@ -1283,7 +1288,7 @@ defmodule Engram.Indexing do
         []
       )
 
-    :ok
+    PayloadV6.stamp(note.id, hash: hash)
   end
 
   # One event per (kind, dense) pair, never per point. Only points written in

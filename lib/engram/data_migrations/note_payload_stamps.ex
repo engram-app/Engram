@@ -14,6 +14,11 @@ defmodule Engram.DataMigrations.NotePayloadStamps do
   rotation rewrites and stamps it (`UserDekRotation`); a lost write race
   NULLs a stamp, and `Engram.Bookkeeping.Drain` finds those through the
   partial index `note_index_state_unstamped`.
+
+  Version 2 (`PayloadV6.version/0` 6) backfills `n`, the note row id, onto
+  every v5 point (`ReconcileNotePayloads`); search filters by note id for a
+  user once that user's notes are all stamped
+  (`ReconcileNotePayloads.n_backfilled?/1`).
   """
   @behaviour Engram.DataMigration
 
@@ -30,10 +35,23 @@ defmodule Engram.DataMigrations.NotePayloadStamps do
   @impl true
   def version, do: PayloadV6.version() - PayloadV6.baseline() + 1
 
+  @doc "Whether this version's pass is done (cached once true, `Engram.DataMigrations.done?/2`)."
+  @spec done?() :: boolean()
+  def done?, do: Engram.DataMigrations.done?(name(), version())
+
+  # Done when no note is behind AND no point of a live note lacks `n`: a
+  # previous-release node can upsert one after its note was stamped (a
+  # rolling deploy); `requeue_unbackfilled/0` unstamps those notes, and the
+  # next pass queues their users.
   @impl true
   def run_pass do
-    case ReconcileNotePayloads.enqueue_missing() do
-      0 -> :done
+    with 0 <- ReconcileNotePayloads.enqueue_missing(),
+         :clean <- ReconcileNotePayloads.requeue_unbackfilled() do
+      :done
+    else
+      {:ok, users} -> {:more, users: users}
+      # Qdrant unreadable: not proven done, the next pass asks again.
+      {:error, _} -> :more
       users -> {:more, users: users}
     end
   end

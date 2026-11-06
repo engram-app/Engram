@@ -75,7 +75,8 @@ defmodule Engram.PromEx.Indexing do
       sustained rate means the cache is not saving the retries it exists for.
     * `engram_prom_ex_indexing_payload_reconcile_total`: notes handled by
       `ReconcileNotePayloads`, tagged by `:outcome` (`checked | drifted |
-      rewritten | skipped_v5`). `rewritten / checked` is how much of the
+      rewritten | skipped_v5`, and `n_points`: POINTS the `n` backfill
+      wrote). `rewritten / checked` is how much of the
       collection the heal is rewriting; expected near zero outside a rotation.
     * `engram_prom_ex_indexing_payload_reconcile_cancelled_total`: reconcile
       jobs cancelled on a 4xx Qdrant refusal, tagged by `:http_status`
@@ -320,7 +321,7 @@ defmodule Engram.PromEx.Indexing do
           measurement: :count,
           description:
             "Notes handled by ReconcileNotePayloads, by outcome (checked, drifted, " <>
-              "rewritten, skipped_v5).",
+              "rewritten, skipped_v5); n_points counts points given n.",
           tags: [:outcome]
         ),
         sum(

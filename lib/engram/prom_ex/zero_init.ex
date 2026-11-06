@@ -73,7 +73,7 @@ defmodule Engram.PromEx.ZeroInit do
           do: {@row_failed, %{count: 0}, %{table: table, phase: phase, status: status}}
 
     reconcile_series =
-      for outcome <- [:checked, :drifted, :rewritten, :skipped_v5],
+      for outcome <- [:checked, :drifted, :rewritten, :skipped_v5, :n_points],
           do: {@payload_reconcile, %{count: 0}, %{outcome: outcome}}
 
     cancelled_series =
