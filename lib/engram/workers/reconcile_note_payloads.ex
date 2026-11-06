@@ -76,6 +76,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   import Ecto.Query
 
   alias Engram.Accounts.User
+  alias Engram.Backfill.IdWindows
   alias Engram.Backfill.TenantScan
   alias Engram.Cluster.Capability
   alias Engram.Crypto
@@ -162,13 +163,38 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     {:snooze, 60}
   end
 
-  @doc "Enqueues a chain for every user with an unstamped indexed note. Returns how many."
+  @doc """
+  Enqueues a chain for every user with an unstamped indexed note, found by
+  one walk over the notes primary key in fixed id windows
+  (`Engram.Backfill.IdWindows.all/2`), the stale predicate applied only
+  inside each window: bounded rows READ per statement at any fleet size.
+  Returns how many users. The ledger pass uses the budgeted, resumable form
+  (`queue_window/2` under `IdWindows.heal_pass/4`).
+  """
   @spec enqueue_missing() :: non_neg_integer()
   def enqueue_missing do
-    TenantScan.flat_map_users(fn uid ->
-      if Repo.exists?(where(unstamped(), [n], n.user_id == ^uid)), do: [uid], else: []
-    end)
+    unstamped()
+    |> select([note: n], n.user_id)
+    |> IdWindows.all()
+    |> Enum.uniq()
     |> then(&TenantScan.enqueue_users(__MODULE__, &1))
+  end
+
+  @doc """
+  One id window of the ledger's walk (`IdWindows.heal_pass/4`): queues the
+  users whose notes in `ids` are unstamped or behind the version. Returns
+  `{users queued, false}`; any queued makes the walk dirty.
+  """
+  @spec queue_window([Ecto.UUID.t()], map()) :: {non_neg_integer(), false}
+  def queue_window(ids, %{repo: repo}) do
+    users =
+      unstamped()
+      |> select([note: n], n.user_id)
+      |> distinct(true)
+      |> IdWindows.by_id(ids)
+      |> repo.all()
+
+    {TenantScan.enqueue_users(__MODULE__, users), false}
   end
 
   @doc "True while the user has an unstamped indexed note (the worker's own selection predicate)."

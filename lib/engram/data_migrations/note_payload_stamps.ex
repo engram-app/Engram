@@ -22,7 +22,9 @@ defmodule Engram.DataMigrations.NotePayloadStamps do
   """
   @behaviour Engram.DataMigration
 
+  alias Engram.Backfill.IdWindows
   alias Engram.Indexing.PayloadV6
+  alias Engram.Notes.Note
   alias Engram.Workers.ReconcileNotePayloads
 
   @impl true
@@ -50,14 +52,22 @@ defmodule Engram.DataMigrations.NotePayloadStamps do
   @doc "`run_pass/0` with the cluster probe's options (tests: `:peers`, `:multicall`)."
   @spec run_pass(keyword()) :: :done | :more | {:more, keyword()}
   def run_pass(opts) do
-    users = ReconcileNotePayloads.enqueue_missing()
+    # The notes primary key in fixed id windows, budgeted and resumable
+    # (`IdWindows.heal_pass/4`): done only after one whole walk queued nobody.
+    notes = IdWindows.heal_pass(name(), Note, &ReconcileNotePayloads.queue_window/2, [])
 
-    case ReconcileNotePayloads.requeue_unbackfilled(opts) do
-      :clean when users == 0 -> :done
-      :clean -> {:more, users: users}
-      {:ok, requeued} -> {:more, users: users + requeued}
+    queued = queued(notes)
+
+    case {notes, ReconcileNotePayloads.requeue_unbackfilled(opts)} do
+      {:done, :clean} -> :done
+      {_, :clean} -> {:more, users: queued}
+      {_, {:ok, requeued}} -> {:more, users: queued + requeued}
       # Qdrant unreadable: not proven done, the next pass asks again.
-      {:error, _} -> :more
+      {_, {:error, _}} -> :more
     end
   end
+
+  # Users the walk's windows queued this pass (`heal_pass/4` counts them as rows).
+  defp queued(:done), do: 0
+  defp queued({:more, found}), do: Keyword.get(found, :rows, 0)
 end

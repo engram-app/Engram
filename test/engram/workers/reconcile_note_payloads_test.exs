@@ -181,15 +181,16 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
 
     assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
 
+    # One event per outcome, all five (`n_points`: points the `n` backfill wrote).
     counts =
-      for _ <- 1..4, into: %{} do
+      for _ <- 1..5, into: %{} do
         assert_receive {[:engram, :indexing, :payload_reconcile], ^ref, %{count: n},
                         %{outcome: o}}
 
         {o, n}
       end
 
-    assert counts == %{checked: 2, drifted: 1, rewritten: 1, skipped_v5: 0}
+    assert counts == %{checked: 2, drifted: 1, rewritten: 1, skipped_v5: 0, n_points: 0}
   end
 
   # #2087's short-key layout. Healed with the v5 payload, REPLACED (a v3
@@ -858,6 +859,25 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       # The next walk, every node new from its start: done.
       refute NotePayloadStamps.run_pass(role: nil, query: nil, peers: fn -> [] end) == :done
       assert NotePayloadStamps.run_pass(role: nil, query: nil, peers: fn -> [] end) == :done
+    end
+
+    # The hourly pass must not run an unindexed "any note behind?" EXISTS
+    # per user (it reads every note when the answer is no): it walks the
+    # notes primary key in fixed windows (`Engram.Backfill.IdWindows`), and
+    # the stale predicate only ever sees one window's ids.
+    test "the ledger pass finds stale notes by id windows, never a per-user scan", ctx do
+      null_versions(ctx)
+
+      {result, queries} =
+        Engram.QueryRecorder.record(fn ->
+          NotePayloadStamps.run_pass(role: nil, query: nil, peers: fn -> [] end)
+        end)
+
+      assert {:more, _} = result
+      stale = for q <- queries, q.pid == self(), q.sql =~ "payload_version", do: q.sql
+      assert stale != []
+      assert Enum.all?(stale, &(&1 =~ "unnest"))
+      assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
     end
 
     # A just-booted node in a rolling deploy, not yet joined to the old ones:
