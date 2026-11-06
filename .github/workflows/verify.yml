@@ -3617,6 +3617,13 @@ jobs:
         # bypasses ci/bin/ci-docker, or a compose service without the labels.
         run: bash test/scripts/ci_docker_labels_test.sh
 
+      - name: ci aggregate gate self-check
+        # Guards ci/bin/check-gates: a gate skipped because an upstream job
+        # failed must fail `ci`; only a fingerprint/event-filter skip passes.
+        # The old inline loop passed every skip, so a prebuild-mix pull timeout
+        # turned `ci` green with zero tests run (#2453).
+        run: bash test/scripts/check_gates_test.sh
+
       - name: BEAM scheduler clamp self-check
         # Guards rel/env.sh's scheduler sizing. It ran in prod for an unknown
         # period doing NOTHING: written for cgroup quotas, but Fargate enforces
@@ -4831,9 +4838,9 @@ jobs:
     # pushes, and buys an unambiguous answer to "was this SHA actually
     # verified, or did it inherit a proof?" on every single run.
     #
-    # The GATE is unchanged — the loop below still treats `skipped` as
-    # non-failing, because a content-addressed marker hit is a sound reason not
-    # to re-run. Only the reporting is new.
+    # A `skipped` gate passes only when its fingerprint/event filter asked it
+    # to skip (a content-addressed marker hit is a sound reason not to re-run).
+    # A skip caused by a failed upstream job fails `ci` (#2453).
     #
     # `!cancelled()`, not `always()`: always() also ran after a newer push
     # superseded the run, read its cancelled gates and exited 1, so 25 PR runs
@@ -4845,25 +4852,41 @@ jobs:
     # 16-28 min e2e-browser the PR's wall-clock even though `ci` ignored its
     # result. record-pass waits on them instead, so the e2e marker still means
     # "e2e passed".
-    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, e2e-lint, storage-database, migration-gates, static-checks]
+    # prebuild-ci-image is here only so its result is readable below. When
+    # storage-database skips by its own `if:` while the image still builds,
+    # `ci` now waits for that build too.
+    needs: [fingerprint, prebuild-ci-image, version-check, unit-tests, lint, frontend-lint, e2e-lint, storage-database, migration-gates, static-checks]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
+      # Needs ci/bin/check-gates. Same leak guard as the other checkouts: a
+      # cron.yml sparse checkout on this runner would otherwise hide ci/bin.
+      - name: Reset sparse-checkout leaked from cross-repo jobs
+        run: |
+          if [ -d .git ] && { [ -f .git/info/sparse-checkout ] || [ "$(git config --get core.sparseCheckout 2>/dev/null)" = "true" ]; }; then
+            echo "::warning::Sparse-checkout leak detected — removing .git for fresh clone"
+            rm -rf .git
+          fi
+
+      - uses: actions/checkout@v7
+
       - name: Check required jobs
         run: |
           VC="${{ needs.version-check.result }}"
-          UT="${{ needs.unit-tests.result }}"
-          LN="${{ needs.lint.result }}"
-          FL="${{ needs.frontend-lint.result }}"
-          EL="${{ needs.e2e-lint.result }}"
-          SD="${{ needs.storage-database.result }}"
-          SC="${{ needs.static-checks.result }}"
-          MG="${{ needs.migration-gates.result }}"
 
           # Phase 4: a targeted e2e run ([e2e: suite/pattern]) is NEVER mergeable —
           # only one suite ran (with -k), so the full integration matrix is unproven.
           # Drop the tag and push to run the full suite before merging.
           if [ -n "${{ needs.fingerprint.outputs.e2e-target-suite }}" ]; then
             echo "::error::Targeted e2e run ([e2e: ${{ needs.fingerprint.outputs.e2e-target-suite }}/...]) is not mergeable — remove the [e2e: ...] tag and push to run the full e2e suite."
+            exit 1
+          fi
+
+          # fingerprint is the ONE job that must have actually succeeded. It has
+          # no `if:` guard, so it cannot legitimately skip, and if it fails
+          # every job below skips for want of its outputs and this run verified
+          # nothing at all. Checked first so that is the error you read.
+          if [ "${{ needs.fingerprint.result }}" != "success" ]; then
+            echo "::error::fingerprint did not succeed (${{ needs.fingerprint.result }}) — every downstream gate skipped for want of its outputs, so this run verified nothing."
             exit 1
           fi
 
@@ -4876,70 +4899,39 @@ jobs:
           # Full-Obsidian e2e (e2e-clerk / e2e-crdt / e2e-browser) is REPORT-ONLY
           # (docs/context/testing-architecture-migration.md) and is not in this
           # job's needs: each posts its own PR check; the release-v* gate blocks.
-          # A SKIPPED job is not a pass — it is "an earlier tree passed, and the
-          # content fingerprint says nothing this job covers has changed since".
-          # That inference is sound, but it renders identically to a verified
-          # green, and the two are not the same claim.
           #
-          # #1531: e2e-crdt fingerprint-skipped on every routine main run, so a
-          # real fan-out regression sat on main for three days behind a green
-          # tick, and reproducing it at all needed a manual force_full dispatch.
-          # Worse, a recorded pass is trusted forever — and #1525 proved a pass
-          # can be worthless (the fan-out suppression helper stubbed nothing, so
-          # four "proof" tests measured nothing and went green with the feature
-          # dead). Those greens were still in the marker store being trusted.
+          # Each gate is NAME:RESULT:SKIP_INTENDED. SKIP_INTENDED mirrors that
+          # job's own `if:` (fingerprint skip-<job> output, event filter). A
+          # `skipped` result passes ONLY when it is true: GitHub also reports
+          # `skipped` when an upstream job failed, and treating that as a pass
+          # turned `ci` green with zero tests run (#2453). If you change a
+          # gate's `if:`, change its SKIP_INTENDED here too. A skip added to
+          # `if:` alone fails closed (red `ci`); a skip removed from `if:` alone,
+          # or a gate added to `needs` alone, fails OPEN.
+          # test/scripts/check_gates_test.sh checks this mirror.
           #
-          # Never-skip-on-main (#1531 option B) was tried and reverted: is-full
-          # is deliberately false on main, so prebuild-ci-image skips on a
-          # cache-hit merge and e2e-crdt then dies on `docker pull ""`. Doing it
-          # properly means a full image prebuild on every main push (~61/week).
-          # So gate the same, but stop the SIGNAL from lying (option C).
-          SKIPPED=()
-          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "e2e-lint=$EL" \
-                      "storage-database=$SD" "static-checks=$SC" "migration-gates=$MG"; do
-            [ "${pair#*=}" = "skipped" ] && SKIPPED+=("${pair%=*}")
-          done
-          if [ ${#SKIPPED[@]} -gt 0 ]; then
-            LIST=$(IFS=', '; echo "${SKIPPED[*]}")
-            echo "::warning title=${#SKIPPED[@]} gate(s) did not run on this commit::Inherited from an earlier tree via the content fingerprint, NOT verified on this SHA: $LIST"
-            {
-              echo "### :warning: ${#SKIPPED[@]} gate(s) did NOT run on this commit"
-              echo
-              echo "Result inherited from an earlier tree via the content fingerprint —"
-              echo "**not verified on \`${{ github.sha }}\`**:"
-              echo
-              for n in "${SKIPPED[@]}"; do echo "- \`$n\`"; done
-              echo
-              echo "A green \`ci\` here means *nothing changed that these gates cover*,"
-              echo "not *these gates passed*. Force a real run with a \`workflow_dispatch\`"
-              echo "and \`force_full=true\`, or push a change that touches their inputs."
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "All gates executed on this commit (no fingerprint inheritance)."
-          fi
-
-          # On cross-repo plugin dispatch (plugin-e2e-trigger), unit-tests / lint
-          # are intentionally skipped — plugin cannot regress backend internals.
-          # Only assert success when those jobs actually ran. (e2e-* moved to the
-          # report-only warnings above; deterministic jobs remain the merge gate.)
-          for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "e2e-lint=$EL" "storage-database=$SD" "static-checks=$SC" "migration-gates=$MG"; do
-            name="${pair%=*}"; result="${pair#*=}"
-            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
-              echo "::error::$name failed: $result"
-              exit 1
-            fi
-          done
-
-          # fingerprint is the ONE job that must have actually succeeded. It has
-          # no `if:` guard, so it cannot legitimately skip — and if it fails,
-          # every job above it skips for want of its outputs, the loop reads a
-          # wall of `skipped`, and `ci` goes green having verified nothing at
-          # all. That is the same "green means nothing ran" failure the report
-          # above exists to surface, in its most complete form.
-          if [ "${{ needs.fingerprint.result }}" != "success" ]; then
-            echo "::error::fingerprint did not succeed (${{ needs.fingerprint.result }}) — every downstream gate skipped for want of its outputs, so this run verified nothing."
-            exit 1
-          fi
+          # An intended skip is still not a verified pass: it renders as green
+          # but means "an earlier tree passed and nothing this job covers has
+          # changed". check-gates lists those in the step summary. #1531: a
+          # fingerprint-skipped e2e-crdt hid a fan-out regression on main for
+          # three days. Never-skip-on-main (#1531 option B) was tried and
+          # reverted (is-full is false on main, so prebuild-ci-image skips and
+          # e2e-crdt died on `docker pull ""`); option C is gate the same but
+          # stop the SIGNAL from lying.
+          #
+          # repository_dispatch (plugin-e2e-trigger) skips the backend gates on
+          # purpose: a plugin change cannot regress backend internals.
+          # storage-database also skips (implicit success()) whenever
+          # prebuild-ci-image skipped on a cache hit; that skip is intended. A
+          # prebuild-ci-image FAILURE skips it too, and that fails here.
+          ci/bin/check-gates \
+            "unit-tests:${{ needs.unit-tests.result }}:${{ github.event_name == 'repository_dispatch' || needs.fingerprint.outputs.skip-unit-tests == 'true' }}" \
+            "lint:${{ needs.lint.result }}:${{ github.event_name == 'repository_dispatch' || needs.fingerprint.outputs.skip-lint == 'true' }}" \
+            "frontend-lint:${{ needs.frontend-lint.result }}:${{ github.event_name == 'repository_dispatch' || needs.fingerprint.outputs.skip-frontend-lint == 'true' }}" \
+            "e2e-lint:${{ needs.e2e-lint.result }}:${{ github.event_name == 'repository_dispatch' }}" \
+            "storage-database:${{ needs.storage-database.result }}:${{ github.event_name == 'repository_dispatch' || needs.fingerprint.outputs.skip-storage-database == 'true' || needs.prebuild-ci-image.result == 'skipped' }}" \
+            "static-checks:${{ needs.static-checks.result }}:${{ github.event_name == 'repository_dispatch' }}" \
+            "migration-gates:${{ needs.migration-gates.result }}:${{ !(github.event_name == 'push' && github.ref != 'refs/heads/main') }}"
 
   # Nightly convergence ledger. MEASUREMENT ONLY — never gates anything (the
   # `ci` aggregate above already treats e2e-* as report-only per #1076) and is
