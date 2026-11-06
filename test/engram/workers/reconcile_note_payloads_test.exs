@@ -880,6 +880,69 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
     end
 
+    defp orphans!(ctx, count) do
+      for i <- 1..count do
+        orphan = "00000000-0000-4000-8000-" <> String.pad_leading("#{i}", 12, "0")
+        Agent.update(ctx.store, &put_in(&1.points[orphan], %{"u" => FilterId.uuid(ctx.user.id)}))
+      end
+    end
+
+    defp old_cluster do
+      old = :"old@10.0.0.9"
+
+      [
+        peers: fn -> [old] end,
+        multicall: fn nodes ->
+          Enum.map(
+            nodes,
+            &if(&1 == old, do: {:error, {:exception, :undef, []}}, else: {:ok, true})
+          )
+        end
+      ]
+    end
+
+    # The fleet ledger is cached for good once done: a walk that began while
+    # an older node could still write points without `n` proves nothing.
+    test "the ledger never closes on a walk that began with an old node present", ctx do
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+      # One-page walk, old node present at its start.
+      refute NotePayloadStamps.run_pass(old_cluster()) == :done
+
+      # Two-page walk: begun with the old node, finished without it.
+      orphans!(ctx, 257)
+      refute NotePayloadStamps.run_pass(old_cluster()) == :done
+      refute NotePayloadStamps.run_pass(peers: fn -> [] end) == :done
+
+      # The next walk, every node new from its start: done.
+      refute NotePayloadStamps.run_pass(peers: fn -> [] end) == :done
+      assert NotePayloadStamps.run_pass(peers: fn -> [] end) == :done
+    end
+
+    test "the marker check pages past a first page of orphans", ctx do
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      :ok = ReconcileNotePayloads.forget_marker(ctx.user.id)
+
+      orphans!(ctx, 256)
+      id = hd(point_ids(ctx.stale))
+      Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.delete(p, "n") end))
+
+      :ok = ReconcileNotePayloads.mark_backfilled(ctx.user.id)
+
+      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
+      assert nil in payload_versions(ctx)
+      assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
+    end
+
+    # A chain still running when the account is deleted must not re-create
+    # the marker after the delete dropped it.
+    test "no marker for a user whose row is gone", ctx do
+      gone = Ecto.UUID.generate()
+      :ok = ReconcileNotePayloads.mark_backfilled(gone)
+      refute ReconcileNotePayloads.n_backfilled?(gone)
+      _ = ctx
+    end
+
     # A rolling deploy: an older node still writes points without `n`.
     test "no marker while an older release is in the cluster", ctx do
       assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
