@@ -368,6 +368,33 @@ defmodule Engram.Search.NoteFilterTest do
       # A narrow answer carries no sample.
       assert resolve(ctx, %{tags: ["t"]}, sample: 4) == {:ids, ids(tl(tagged))}
     end
+
+    test "cross-vault sample: a mostly-matching vault is {1, 2}, a wide one passes its sample through",
+         ctx do
+      mostly = insert(:vault, user: ctx.user)
+      wide = insert(:vault, user: ctx.user)
+      for i <- 1..3, do: write_indexed!(ctx.user, mostly, "t#{i}.md", "---\ntags: [t]\n---\n")
+      write_indexed!(ctx.user, mostly, "u.md", "body\n")
+
+      for i <- 1..2 do
+        write_indexed!(ctx.user, wide, "t#{i}.md", "---\ntags: [t]\n---\n")
+        write_indexed!(ctx.user, wide, "u#{i}.md", "body\n")
+      end
+
+      run = fn vaults ->
+        {:ok, out} = NoteFilter.resolve(ctx.user, vaults, %{tags: ["t"]}, cap: 1, sample: 100)
+        out
+      end
+
+      # Alone, `mostly` is {:exclude, [u]} (1 non-match <= cap 1): more than
+      # half matches, so the cross-vault answer is the half sample.
+      assert NoteFilter.resolve(ctx.user, mostly, %{tags: ["t"]}, cap: 1) |> elem(1) |> elem(0) ==
+               :exclude
+
+      assert run.([mostly, wide]) == {:too_wide, {1, 2}}
+      # `wide` is :too_wide on its own: its own sample (2 of 4) comes through.
+      assert run.([wide, mostly]) == {:too_wide, {2, 4}}
+    end
   end
 
   describe "page/4 (filter-only search)" do
