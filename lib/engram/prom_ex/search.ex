@@ -24,6 +24,8 @@ defmodule Engram.PromEx.Search do
     * `engram_prom_ex_search_hits_total`: sum of `count` from
       `[:engram, :search, :hits]`, every candidate on the Postgres read path
       (the ratio denominator for the two above).
+    * `engram_prom_ex_search_post_filter_total`: `[:engram, :search,
+      :post_filter]`, tags `[:rounds, :short]`.
     * `engram_prom_ex_search_phrase_checked_total` and
       `..._phrase_promoted_total`: `checked` / `promoted` of
       `[:engram, :search, :phrase_check]`.
@@ -41,6 +43,7 @@ defmodule Engram.PromEx.Search do
   @hits_event [:engram, :search, :hits]
   @text_stale_event [:engram, :search, :text_stale]
   @phrase_check_event [:engram, :search, :phrase_check]
+  @post_filter_event [:engram, :search, :post_filter]
 
   @impl true
   def event_metrics(opts) do
@@ -66,6 +69,16 @@ defmodule Engram.PromEx.Search do
           event_name: @degraded_event,
           description: "Searches that degraded to a single leg (embed failure).",
           tags: [:leg, :reason]
+        ),
+        # A `:too_wide` filter (immutable chunk index): the search ran over
+        # the whole tenant and post-filtered in Postgres. `rounds` 2 is the
+        # one widen (16x); `short` true means the page came back under its
+        # limit while Qdrant had more, i.e. the round cap cost recall.
+        counter(
+          metric_prefix ++ [:post_filter, :total],
+          event_name: @post_filter_event,
+          description: "Post-filtered (too-wide) searches, by Qdrant rounds and short page.",
+          tags: [:rounds, :short]
         ),
         # Hits dropped, by `reason`: `no_chunk_row` (Qdrant upsert lands
         # before the rows commit; brief per edit, a sustained rate means

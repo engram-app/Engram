@@ -1366,11 +1366,13 @@ defmodule EngramWeb.CrdtChannelTest do
 
   describe "crdt_delete" do
     # Shortens the channel gate budget for this test and returns it (ms).
-    defp short_channel_budget do
+    defp short_channel_budget, do: channel_budget(200)
+
+    defp channel_budget(ms) do
       prev = Application.fetch_env!(:engram, :seq_gate_channel_wait_ms)
-      Application.put_env(:engram, :seq_gate_channel_wait_ms, 200)
+      Application.put_env(:engram, :seq_gate_channel_wait_ms, ms)
       on_exit(fn -> Application.put_env(:engram, :seq_gate_channel_wait_ms, prev) end)
-      200
+      ms
     end
 
     # Holds the vault's write gate from another process until sent :release.
@@ -1417,19 +1419,37 @@ defmodule EngramWeb.CrdtChannelTest do
       user: user,
       vault: vault
     } do
+      {:ok, waiting} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/wait.md", "content" => "x"},
+          actor: "api"
+        )
+
       {:ok, note} =
         Notes.upsert_note(user, vault, %{"path" => "Notes/busy.md", "content" => "x"},
           actor: "api"
         )
 
+      # The socket keeps serving while a delete waits. Proved by ORDER, not by
+      # the clock: the gate stays held and the budget outlasts the test, so the
+      # delete cannot reply until release. A catch-up reply that lands first
+      # was served past it. (A 200 ms window here raced the catch-up's own DB
+      # reads on a loaded CI runner.)
+      channel_budget(60_000)
+      holder = hold_vault_gate(vault.id)
+      ref = push(socket, "crdt_delete", %{"doc_id" => waiting.id})
+      other = push(socket, "crdt_catchup_since", %{"cursor_seq" => 0})
+      assert_reply other, :ok, %{changes: _}, 5_000
+      refute_received %Phoenix.Socket.Reply{ref: ^ref}
+
+      send(holder.pid, :release)
+      Task.await(holder)
+      assert_reply ref, :ok, %{doc_id: _}, 5_000
+
+      # Behind a held gate, the delete sheds on the channel budget.
       budget = short_channel_budget()
       holder = hold_vault_gate(vault.id)
       started = System.monotonic_time(:millisecond)
       ref = push(socket, "crdt_delete", %{"doc_id" => note.id})
-      other = push(socket, "crdt_catchup_since", %{"cursor_seq" => 0})
-
-      # The socket keeps serving while the delete waits.
-      assert_reply other, :ok, %{changes: _}, budget
       assert_reply ref, :error, %{reason: "busy"}, budget * 5
       assert System.monotonic_time(:millisecond) - started < budget * 5
 

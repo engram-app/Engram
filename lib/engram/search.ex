@@ -596,7 +596,6 @@ defmodule Engram.Search do
     tags = opts |> Keyword.get(:tags) |> tag_filter()
     folder = Keyword.get(opts, :folder)
     type = Keyword.get(opts, :type)
-    date_bounds = date_bound_kw(opts)
 
     # On the grouped path `limit` is the NOTE count, not the chunk count.
     group? = Keyword.get(opts, :group_by_note, false)
@@ -630,20 +629,29 @@ defmodule Engram.Search do
     # (unchanged chunk-path behavior).
     rerank_keep = if group? or diversify?, do: pool, else: limit
 
-    case translate_phase_b_filters(user, folder, tags, type) do
-      {:ok, phase_b_kw} ->
+    case search_filter(user, vault, opts, {folder, tags, type}) do
+      {:ok, filter_kw, within} ->
+        # A filter Postgres could not narrow to `max_note_ids` notes either
+        # way is searched over the whole tenant, oversampled by its matching
+        # fraction (`oversample/1`), then post-filtered.
+        qdrant_limit =
+          if within,
+            do: min(fetch_limit * oversample(within), Qdrant.max_page()),
+            else: fetch_limit
+
         search_opts =
-          [user_id: to_string(user.id), limit: fetch_limit]
+          [user_id: to_string(user.id), limit: qdrant_limit]
           |> then(&put_vault_filter(&1, vault, opts))
-          |> Keyword.merge(phase_b_kw)
-          |> Keyword.merge(date_bounds)
-          |> Keyword.put(:attr_filters, Keyword.get(opts, :attr_filters, []))
+          |> Keyword.merge(filter_kw)
           |> Keyword.put(:with_vector, diversify?)
           |> Keyword.put(:full_precision, profile.full_precision)
           |> Keyword.put(:tenant_idf, mode in [:keyword, :hybrid] and tenant_idf?(user))
+          |> embed_once(within, mode, query, profile)
 
-        with {:ok, candidates} <- run_legs(mode, user, query, search_opts, profile),
-             {:ok, {candidates, hits}} <- postgres_hits(candidates, user),
+        legs = &run_legs(mode, user, query, &1, profile)
+
+        with {:ok, {candidates, hits}} <-
+               ranked_hits(legs, user, search_opts, within, fetch_limit),
              {:ok, candidates} <- payload_fallback(candidates, hits, user),
              vaults_by_id = load_candidate_vaults(user, vault, candidates),
              {:ok, decrypted} <- decrypt_candidates(candidates, user, vaults_by_id, hits) do
@@ -662,12 +670,149 @@ defmodule Engram.Search do
           end
         end
 
-      :no_dek_with_filter ->
+      :no_match ->
+        {:ok, []}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  # The search's filter opts, and the post-filter a `:too_wide` filter needs
+  # (nil otherwise). `:no_match` when no note can match: no Qdrant request.
+  #
+  # With `Qdrant.note_id_filter?/0` on, Postgres resolves every filter to
+  # note ids (`note_filter/0`) and Qdrant matches them on `n`. Off (until
+  # every point carries `n`), the filters go to Qdrant as payload conditions.
+  # The opts go to the resolver as they are: it takes its own filter keys
+  # (the search opt names) and ignores the rest.
+  defp search_filter(user, vault, opts, {folder, tags, type}) do
+    if Qdrant.note_id_filter?() and note_filter().any?(opts) do
+      vaults = filter_vaults(user, vault, opts)
+
+      case note_filter().resolve(user, vaults, opts, sample: true) do
+        {:ok, {:ids, []}} -> :no_match
+        {:ok, {:too_wide, sample}} -> {:ok, [], {vaults, opts, sample}}
+        {:ok, scope} -> {:ok, [note_scope: scope], nil}
+        {:error, _} = error -> error
+      end
+    else
+      case translate_phase_b_filters(user, folder, tags, type) do
+        {:ok, phase_b_kw} ->
+          kw =
+            phase_b_kw
+            |> Keyword.merge(date_bound_kw(opts))
+            |> Keyword.put(:attr_filters, Keyword.get(opts, :attr_filters, []))
+
+          {:ok, kw, nil}
+
         # Caller asked to filter by folder/tags/type but has no DEK
         # provisioned, so it's impossible to derive HMAC, and the user has no
         # encrypted points to match anyway. Mirrors list_folders (B.2.2)
         # defensive empty.
-        {:ok, []}
+        :no_dek_with_filter ->
+          :no_match
+      end
+    end
+  end
+
+  # The most a `:too_wide` search fetches: 16x the page, in at most two rounds.
+  @widen_factor 16
+
+  # The first round's oversample: twice the pool that holds the page at the
+  # matching fraction of the resolver's bounded sample (`matched / sampled`),
+  # at most `@widen_factor`. A sample with no match (a sparse filter, or an
+  # empty vault) is the most, 16x.
+  defp oversample({_vaults, _filter, {0, _sampled}}), do: @widen_factor
+
+  defp oversample({_vaults, _filter, {matched, sampled}}),
+    do: min(div(2 * sampled + matched - 1, matched), @widen_factor)
+
+  # The Postgres note-filter resolver (`{:ids, _} | {:exclude, _} |
+  # :too_wide`, `within:` for the post-filter), a seam so tests stub it.
+  defp note_filter, do: Engram.ServiceConfig.get(:note_filter, Engram.Search.NoteFilter)
+
+  # The resolver's vaults for the scope `put_vault_filter/3` gives Qdrant.
+  defp filter_vaults(user, vault, opts) do
+    case vault_scope(vault, opts) do
+      {:vault, vault} -> vault
+      {:ids, ids} -> user |> Engram.Vaults.list_for_ids(ids) |> Map.values()
+      :all -> Engram.Vaults.list_vaults(user)
+    end
+  end
+
+  # The ranked candidates with their Postgres rows (`postgres_hits/2`).
+  #
+  # A `:too_wide` search (`within`) post-filters a pool sized by the
+  # filter's matching fraction (`oversample/1`, at most 16x); when that
+  # leaves the page short while Qdrant had more, it queries ONCE more at 16x,
+  # then returns what matched. At most two Qdrant rounds and one query embed
+  # (`embed_once/5`), so a search's cost stays bounded. Each post-filtered
+  # search counts once in `[:engram, :search, :post_filter]` by rounds and
+  # whether the page came back short.
+  defp ranked_hits(legs, user, search_opts, nil, _keep) do
+    with {:ok, candidates} <- legs.(search_opts), do: postgres_hits(candidates, user)
+  end
+
+  defp ranked_hits(legs, user, search_opts, within, keep),
+    do: post_filtered(legs, user, search_opts, within, keep, 1)
+
+  defp post_filtered(legs, user, search_opts, within, keep, round) do
+    limit = Keyword.fetch!(search_opts, :limit)
+    wider = min(keep * @widen_factor, Qdrant.max_page())
+
+    with {:ok, raw} <- legs.(search_opts),
+         {:ok, {kept, rowless}} <- within_filter(raw, user, within, keep) do
+      # A Qdrant page under its limit is all the tenant holds: nothing to widen.
+      short? = length(kept) < keep and length(raw) >= limit
+
+      if short? and round == 1 and wider > limit do
+        post_filtered(legs, user, Keyword.put(search_opts, :limit, wider), within, keep, 2)
+      else
+        :telemetry.execute([:engram, :search, :post_filter], %{count: 1}, %{
+          rounds: round,
+          short: short?
+        })
+
+        # Counted from the returned round only: a widened round refetches
+        # the first one's points.
+        if rowless > 0, do: emit_hit_dropped(:no_chunk_row, rowless, user)
+
+        # Only the survivors are loaded and decrypted, once.
+        postgres_hits(kept, user)
+      end
+    end
+  end
+
+  # A post-filtered search may query Qdrant twice; the query embed (a paid
+  # call) happens once, here, and `query_embedding/3` reuses it.
+  defp embed_once(search_opts, nil, _mode, _query, _profile), do: search_opts
+
+  defp embed_once(search_opts, _within, mode, query, profile) when mode in [:vector, :hybrid],
+    do: Keyword.put(search_opts, :query_embedding, embed_for_search(query, profile.query_model))
+
+  defp embed_once(search_opts, _within, _mode, _query, _profile), do: search_opts
+
+  defp query_embedding(query, search_opts, profile) do
+    Keyword.get_lazy(search_opts, :query_embedding, fn ->
+      embed_for_search(query, profile.query_model)
+    end)
+  end
+
+  # `:too_wide`: keep the candidates whose note the filter matches, the
+  # page's `keep` best, and how many points had no chunk row. Notes come
+  # from the chunk rows alone (no decrypt); a point with no chunk row is
+  # dropped, and `post_filtered/6` counts it as `postgres_hits/2` would.
+  defp within_filter(candidates, user, {vaults, filter, _sample}, keep) do
+    notes = Engram.Notes.note_ids_by_qdrant_points(user, Enum.map(candidates, & &1.qdrant_id))
+    note_ids = notes |> Map.values() |> Enum.uniq()
+
+    rowless = Enum.count(candidates, &(not is_map_key(notes, &1.qdrant_id)))
+
+    with {:ok, {:ids, matched}} <- note_filter().resolve(user, vaults, filter, within: note_ids) do
+      matched = MapSet.new(matched)
+      kept = candidates |> Enum.filter(&(notes[&1.qdrant_id] in matched)) |> Enum.take(keep)
+      {:ok, {kept, rowless}}
     end
   end
 
@@ -697,7 +842,7 @@ defmodule Engram.Search do
 
   # Vector leg: embed query → dense Qdrant search (existing behavior preserved).
   defp run_legs(:vector, _user, query, search_opts, profile) do
-    with {:ok, [vector]} <- embed_for_search(query, profile.query_model) do
+    with {:ok, [vector]} <- query_embedding(query, search_opts, profile) do
       Qdrant.search(collection(), vector, search_opts)
     end
   end
@@ -714,7 +859,7 @@ defmodule Engram.Search do
   # vector-only. Embedding failure (backend down/rate-limited) degrades to
   # keyword-only rather than failing a search the keyword leg could still serve.
   defp run_legs(:hybrid, user, query, search_opts, profile) do
-    case embed_for_search(query, profile.query_model) do
+    case query_embedding(query, search_opts, profile) do
       {:ok, [vector]} ->
         case sparse_query(user, query) do
           {:ok, sparse} -> Qdrant.hybrid_search(collection(), vector, sparse, search_opts)
@@ -939,16 +1084,22 @@ defmodule Engram.Search do
   # guard (a non-empty list narrows; anything else — including omitted
   # `vault_ids` — keeps the existing unfiltered cross-vault behavior), not a
   # second place that decides "empty means unfiltered."
-  defp put_vault_filter(search_opts, %Engram.Vaults.Vault{} = vault, _opts),
-    do: Keyword.put(search_opts, :vault_id, to_string(vault.id))
+  defp put_vault_filter(search_opts, vault, opts) do
+    case vault_scope(vault, opts) do
+      {:vault, vault} -> Keyword.put(search_opts, :vault_id, to_string(vault.id))
+      {:ids, ids} -> Keyword.put(search_opts, :vault_id, Enum.map(ids, &to_string/1))
+      :all -> search_opts
+    end
+  end
 
-  defp put_vault_filter(search_opts, nil, opts) do
+  # The one place a search's vault scope is decided: one vault, a set of
+  # vault ids, or every vault of the user.
+  defp vault_scope(%Engram.Vaults.Vault{} = vault, _opts), do: {:vault, vault}
+
+  defp vault_scope(nil, opts) do
     case Keyword.get(opts, :vault_ids) do
-      ids when is_list(ids) and ids != [] ->
-        Keyword.put(search_opts, :vault_id, Enum.map(ids, &to_string/1))
-
-      _ ->
-        search_opts
+      ids when is_list(ids) and ids != [] -> {:ids, ids}
+      _ -> :all
     end
   end
 

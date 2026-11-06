@@ -422,7 +422,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     with {:ok, plain} <- Crypto.maybe_decrypt_note_fields(note, user),
          {:ok, v5} <- Indexing.expected_v5_payload(plain, user) do
       want = normalize(v5)
-      drifted = Enum.reject(v5_ids, &(Map.take(stored[&1], v5_keys()) == want))
+      drifted = Enum.filter(v5_ids, &drifted?(stored[&1], want))
       # A key the new payload omits is deleted, not left behind by the merge.
       {:ok, v5, for(id <- drifted, do: {id, v5, dropped(stored[id], want)})}
     else
@@ -431,7 +431,16 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     end
   end
 
-  defp dropped(point, want), do: Map.keys(Map.take(point, v5_keys())) -- Map.keys(want)
+  defp dropped(point, want),
+    do: Map.keys(Map.take(point, PayloadKeys.refresh_keys())) -- Map.keys(want)
+
+  # Compared on `PayloadKeys.refresh_keys/0` only: the identity keys (`u`,
+  # `v`, `n`) never change for a point, and a release that does not write
+  # `n` must not see a point holding it as drifted.
+  defp drifted?(point, want) do
+    keys = PayloadKeys.refresh_keys()
+    Map.take(point, keys) != Map.take(want, keys)
+  end
 
   defp write_refresh(plans, counts) do
     pairs = for {_note, {:ok, _payload, pairs}} <- plans, pair <- pairs, do: pair
@@ -475,7 +484,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     with {:ok, plain} <- Crypto.maybe_decrypt_note_fields(note, user),
          {:ok, v5} <- Indexing.expected_v5_payload(plain, user) do
       want = normalize(v5)
-      drifted = Enum.reject(v5_ids, &(Map.take(stored[&1], v5_keys()) == want))
+      drifted = Enum.filter(v5_ids, &drifted?(stored[&1], want))
       writes = if drifted == [], do: [], else: [{:overwrite, drifted, v5}]
       {:ok, writes ++ v3_writes(v3_ids, stored, Indexing.expected_note_payload(note)), v5}
     else

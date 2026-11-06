@@ -277,6 +277,34 @@ defmodule Engram.Vector.QdrantCollectionTest do
     refute_receive :index_called
   end
 
+  # Immutable chunk index R1: the note-id reader filters on `n`, and strict
+  # mode 400s a filter on an unindexed key, so boot adds the `n` index to a
+  # collection that has every other one BEFORE any reader can use it.
+  test "an existing collection without the n index gets it, as a uuid index",
+       %{bypass: bypass} do
+    test_pid = self()
+    v5_without_n = Enum.reject(@v5_fields, fn {f, _} -> f == "n" end)
+
+    expect_existing(
+      bypass,
+      "c1",
+      schema_for(@indexed_fields, "keyword")
+      |> Map.merge(schema_for(@integer_indexed_fields, "integer"))
+      |> Map.merge(Map.new(v5_without_n, fn {f, s} -> {f, %{data_type: s["type"]}} end))
+    )
+
+    Bypass.expect(bypass, "PUT", "/collections/c1/index", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      json = Jason.decode!(body)
+      send(test_pid, {:index, json["field_name"], json["field_schema"]})
+      Plug.Conn.send_resp(conn, 200, ~s({"status":"ok"}))
+    end)
+
+    assert :ok = Qdrant.ensure_collection("c1", 1024)
+    assert_receive {:index, "n", %{"type" => "uuid", "on_disk" => true}}
+    refute_received {:index, _, _}
+  end
+
   # #1609: indexes were only created on a fresh collection, so any field added
   # to the list later never reached a collection that already existed. Prod
   # carried only these four, and strict mode 400s a filter on the rest.

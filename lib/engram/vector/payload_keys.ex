@@ -28,7 +28,10 @@ defmodule Engram.Vector.PayloadKeys do
     fm_priority: "pr",
     fm_attrs: "fa",
     fm_timestamp_src: "us",
-    fm_created_src: "cs"
+    fm_created_src: "cs",
+    # The point's note row id (immutable chunk index, Engram#2263): what a
+    # filtered search matches once Postgres has resolved the filters to notes.
+    note: "n"
   ]
 
   @short Map.new(@keys)
@@ -56,13 +59,27 @@ defmodule Engram.Vector.PayloadKeys do
   @spec leaked_plaintext_keys() :: [String.t()]
   def leaked_plaintext_keys, do: @leaked_plaintext
 
+  # What a point IS, not what its note says: the tenant and the note. They
+  # never change for a point (its id is derived from the note), so no
+  # refresh compares or deletes them. Load-bearing for `n`: a release that
+  # does not write it must never strip it from points a newer one stamped.
+  @identity [:user_id, :vault_id, :note]
+
   @doc """
-  Every payload key a point may hold: the v5 short keys plus the legacy long
-  ones. What a payload refresh drops when the new payload omits it
-  (`Engram.Vector.Qdrant.overwrite_payload/3`).
+  The v5 short keys a payload refresh compares and drops when its payload
+  omits them: every v5 key but the identity keys (`u`, `v`, `n`). The one
+  list `note_keys/0` and `Engram.Workers.ReconcileNotePayloads` derive from.
+  """
+  @spec refresh_keys() :: [String.t()]
+  def refresh_keys, do: for({name, short} <- @keys, name not in @identity, do: short)
+
+  @doc """
+  Every payload key a refresh may delete: the v5 `refresh_keys/0` plus the
+  legacy long ones. What a payload refresh drops when the new payload omits
+  it (`Engram.Vector.Qdrant.overwrite_payload/3`).
   """
   @spec note_keys() :: [String.t()]
-  def note_keys, do: Map.keys(@long) ++ @legacy ++ @leaked_plaintext ++ ["note_id"]
+  def note_keys, do: refresh_keys() ++ @legacy ++ @leaked_plaintext ++ ["note_id"]
 
   @doc "Logical names, in declaration order."
   @spec logical_names() :: [atom()]
@@ -90,7 +107,7 @@ defmodule Engram.Vector.PayloadKeys do
   @spec index_fields() :: [{String.t(), map()}]
   def index_fields do
     uuid = ~w(user_id vault_id path_id folder_id type_id tags_id status_id author_id
-              rev_by_id src_id proj_id)a
+              rev_by_id src_id proj_id note)a
 
     range = ~w(fm_timestamp fm_created fm_reviewed fm_expires fm_due)a
 

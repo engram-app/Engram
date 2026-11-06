@@ -676,6 +676,48 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       assert payload_versions(ctx) == [PayloadV6.baseline() + 1, PayloadV6.baseline() + 1]
     end
 
+    # Immutable chunk index (Engram#2263): a newer release stamps `n` (the
+    # note id) on points; this release's expected payload has no `n`. A point
+    # holding it is not drifted, and no refresh deletes it, or a rolling
+    # deploy (or a rollback) strips `n` and re-PATCHes every backfilled point.
+    test "a point holding n is neither drifted nor stripped of n", ctx do
+      ServiceConfig.put_override(:payload_version, PayloadV6.baseline() + 1)
+      stamp_n(ctx)
+
+      no_embed()
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+      assert Agent.get(ctx.store, & &1.batches) == []
+      assert Enum.all?(Agent.get(ctx.store, &Map.take(&1.points, ctx.ids)), &n_kept?(ctx, &1))
+    end
+
+    test "a drifted point holding n keeps n through the refresh", ctx do
+      ServiceConfig.put_override(:payload_version, PayloadV6.baseline() + 1)
+      stamp_n(ctx)
+      id = hd(point_ids(ctx.stale))
+      Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.put(p, "o", ["gone"]) end))
+
+      no_embed()
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+      assert [[^id]] = Agent.get(ctx.store, & &1.batches)
+      point = Agent.get(ctx.store, &Map.fetch!(&1.points, id))
+      refute Map.has_key?(point, "o")
+      assert n_kept?(ctx, {id, point})
+    end
+
+    defp stamp_n(ctx) do
+      for note <- [ctx.stale, ctx.healthy], id <- point_ids(note) do
+        n = FilterId.uuid(note.id)
+        Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.put(p, "n", n) end))
+      end
+    end
+
+    defp n_kept?(ctx, {id, point}) do
+      note = if id in point_ids(ctx.stale), do: ctx.stale, else: ctx.healthy
+      point["n"] == FilterId.uuid(note.id)
+    end
+
     test "a newer stamp is current: a rollback selects nothing", ctx do
       ServiceConfig.put_override(:payload_version, PayloadV6.baseline() + 1)
 

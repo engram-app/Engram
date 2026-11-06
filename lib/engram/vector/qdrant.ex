@@ -60,6 +60,15 @@ defmodule Engram.Vector.Qdrant do
   """
   def max_note_ids, do: 5 * @max_ids
 
+  @doc """
+  Whether search filters by note id on `n` (immutable chunk index,
+  Engram#2263): Postgres resolves the filters to notes, Qdrant matches the
+  tenant and the ids. Off until every point carries `n` (R2's backfill);
+  off, search sends today's filters.
+  """
+  @spec note_id_filter?() :: boolean()
+  def note_id_filter?, do: ServiceConfig.get(:note_id_filter, false) == true
+
   @doc "Largest point batch one upsert or vector update sends."
   def max_write_batch, do: @max_write_batch
 
@@ -1954,7 +1963,40 @@ defmodule Engram.Vector.Qdrant do
     # conditions (`Engram.Search.FieldFilters`).
     |> Kernel.++(Keyword.get(search_opts, :attr_filters, []))
     |> then(&%{must: &1})
+    |> note_scope(Keyword.get(search_opts, :note_scope))
   end
+
+  # `:note_scope`, the Postgres resolver's answer (`Engram.Search`): the
+  # matching notes (`{:ids, _}`, any of the `n` blocks, ANDed with the tenant
+  # by the one nested `should`) or the non-matching ones (`{:exclude, _}`,
+  # `must_not`). An empty `{:ids, _}` matches nothing; an empty complement
+  # matches the whole tenant. Past `max_note_ids/0` the filter would break
+  # the strict condition limits, so it raises: the resolver caps below it.
+  defp note_scope(filter, nil), do: filter
+
+  defp note_scope(filter, {_, ids} = scope) do
+    if length(ids) > max_note_ids(),
+      do: raise(ArgumentError, "note_scope: #{length(ids)} ids > #{max_note_ids()}")
+
+    scoped(filter, scope)
+  end
+
+  defp scoped(filter, {:ids, ids}),
+    do: Map.update!(filter, :must, &(&1 ++ [%{should: n_blocks(ids)}]))
+
+  defp scoped(filter, {:exclude, []}), do: filter
+  defp scoped(filter, {:exclude, ids}), do: Map.put(filter, :must_not, n_blocks(ids))
+
+  # No ids stays one condition that matches nothing: an empty `should`
+  # matches everything.
+  defp n_blocks([]), do: [n_any([])]
+  defp n_blocks(ids), do: id_blocks(ids, &n_any/1)
+
+  defp n_any(ids),
+    do: %{
+      key: PayloadKeys.short(:note),
+      match: %{any: Enum.map(ids, &FilterId.uuid(to_string(&1)))}
+    }
 
   defp add_range_clause(must, key, opts, gte_key, lte_key) do
     range =
@@ -2165,7 +2207,14 @@ defmodule Engram.Vector.Qdrant do
     %{
       query: %{recommend: %{positive: point_ids, strategy: "average_vector"}},
       using: "dense",
-      filter: Map.put(build_tenant_filter(search_opts), :must_not, has_ids(point_ids)),
+      # Added to, never replacing, the note scope's own `must_not`.
+      filter:
+        Map.update(
+          build_tenant_filter(search_opts),
+          :must_not,
+          has_ids(point_ids),
+          &(&1 ++ has_ids(point_ids))
+        ),
       limit: Keyword.get(search_opts, :limit, 5),
       with_payload: false
     }
@@ -2182,8 +2231,10 @@ defmodule Engram.Vector.Qdrant do
   # each condition stays under the Cloud `condition_max_size`.
   # ponytail: a note past ~110k points (64 filter conditions) still trips
   # `filter_max_conditions`; average a sample of its points if one appears.
-  defp has_ids(point_ids),
-    do: point_ids |> Enum.chunk_every(@max_ids) |> Enum.map(&%{has_id: &1})
+  defp has_ids(point_ids), do: id_blocks(point_ids, &%{has_id: &1})
+
+  # One condition per `max_ids/0` ids (`has_id`, `n` any).
+  defp id_blocks(ids, condition), do: ids |> Enum.chunk_every(@max_ids) |> Enum.map(condition)
 
   # Any of the ids (`should` is OR), for a write that must skip missing ones.
   defp ids_filter(point_ids), do: %{should: has_ids(point_ids)}

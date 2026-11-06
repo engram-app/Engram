@@ -48,11 +48,18 @@ defmodule Engram.Search.NoteFilter do
   @min_s -9_223_372_036_854_775_808
   @max_s 9_223_372_036_854_775_807
 
+  # A `:too_wide` answer's `sample:` reads at most this many live notes.
+  @sample_rows 2_048
+
   # Filter-only pages: at most this many matches page over their ids.
   @page_ids 1_000
 
   @type filter :: map() | keyword()
-  @type resolved :: {:ids, [Ecto.UUID.t()]} | {:exclude, [Ecto.UUID.t()]} | :too_wide
+  @type resolved ::
+          {:ids, [Ecto.UUID.t()]}
+          | {:exclude, [Ecto.UUID.t()]}
+          | :too_wide
+          | {:too_wide, {non_neg_integer(), non_neg_integer()}}
 
   @doc """
   The notes `filter` matches, in the cheapest form for Qdrant:
@@ -69,7 +76,12 @@ defmodule Engram.Search.NoteFilter do
 
   Options: `:within` (a list of note ids) returns `{:ids, subset}`, the ids in
   it the filter matches (a post-filter for an oversampled candidate set; no
-  cap); `:cap` overrides `Qdrant.max_note_ids/0` (tests). Ids are in no particular order.
+  cap); `:cap` overrides `Qdrant.max_note_ids/0` (tests); `:sample` (`true`
+  = 2,048 rows, or a row count) answers `{:too_wide, {matched, sampled}}`
+  instead of `:too_wide`: how many of a bounded prefix of live notes the same
+  compiled filter matches, so a post-filtered search can size its
+  oversample in the same transaction, at constant cost. Ids are in no
+  particular order.
   """
   @spec resolve(map(), map() | [map()], filter(), keyword()) ::
           {:ok, resolved()} | {:error, FieldFilters.error()}
@@ -77,6 +89,7 @@ defmodule Engram.Search.NoteFilter do
 
   def resolve(user, vaults, filter, opts) when is_list(vaults) do
     cap = Keyword.get_lazy(opts, :cap, &Qdrant.max_note_ids/0)
+    sample? = opts[:sample] != nil
 
     Enum.reduce_while(vaults, {:ok, {:ids, []}}, fn vault, {:ok, {:ids, acc}} ->
       # Each vault is capped at what the union has left, so a wide one stops early.
@@ -84,6 +97,9 @@ defmodule Engram.Search.NoteFilter do
 
       case resolve(user, vault, filter, Keyword.put(opts, :cap, max(left, 0))) do
         {:ok, {:ids, ids}} -> {:cont, {:ok, {:ids, acc ++ ids}}}
+        {:ok, {:too_wide, _sample} = wide} -> {:halt, {:ok, wide}}
+        # More of this vault matches than not: at least half, as a sample.
+        {:ok, {:exclude, _}} when sample? -> {:halt, {:ok, {:too_wide, {1, 2}}}}
         {:ok, _wide_or_exclude} -> {:halt, {:ok, :too_wide}}
         error -> {:halt, error}
       end
@@ -99,16 +115,34 @@ defmodule Engram.Search.NoteFilter do
     {:ok, out} =
       Repo.with_tenant(user.id, fn ->
         with {:ok, cond} <- compile(user, vault, filter) do
-          base = from(n in Notes.scoped_live(user, vault), where: n.kind == "note", select: n.id)
+          base = live_ids(user, vault)
 
-          if within,
-            do: {:ok, {:ids, within(base, cond, within)}},
-            else: {:ok, capped(base, cond, cap)}
+          out = if within, do: {:ids, within(base, cond, within)}, else: capped(base, cond, cap)
+          {:ok, sampled(out, base, cond, opts[:sample])}
         end
       end)
 
     out
   end
+
+  # The live notes (`kind = 'note'`, not trashed) of `user` in `vault`, as ids.
+  defp live_ids(user, vault),
+    do: from(n in Notes.scoped_live(user, vault), where: n.kind == "note", select: n.id)
+
+  # `{matched, sampled}` over at most `rows` live notes (`base`), the same
+  # compiled `cond`: constant in vault size. The prefix is not random, which
+  # costs at most one extra search round, never a wrong result (the
+  # `within:` post-filter is exact). A sparse filter can match none of it.
+  defp sample(base, cond, rows) do
+    rows = if rows == true, do: @sample_rows, else: rows
+    picked = from(n in exclude(base, :select), select: ^%{hit: cond}, limit: ^rows)
+    Repo.one(from(s in subquery(picked), select: {filter(count(), s.hit), count()}))
+  end
+
+  defp sampled(:too_wide, base, cond, rows) when rows != nil,
+    do: {:too_wide, sample(base, cond, rows)}
+
+  defp sampled(out, _base, _cond, _rows), do: out
 
   defp within(_base, _cond, []), do: []
 
@@ -178,7 +212,7 @@ defmodule Engram.Search.NoteFilter do
     {:ok, out} =
       Repo.with_tenant(user.id, fn ->
         with {:ok, cond} <- compile(user, vault, filter) do
-          base = from(n in Notes.scoped_live(user, vault), where: n.kind == "note", select: n.id)
+          base = live_ids(user, vault)
 
           case ids(base, cond, page_ids) do
             ids when length(ids) <= page_ids ->

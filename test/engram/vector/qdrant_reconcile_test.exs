@@ -827,7 +827,8 @@ defmodule Engram.Vector.QdrantReconcileTest do
     # payload index prod already has and create none, and never set
     # `unindexed_filtering_update` (prod leaves it unset). The 2026-10-18
     # fixture predates the v5 indexes, so its schema is the v3 cluster's.
-    test "prod flags: the ensure on prod creates no payload index", %{bypass: bypass} do
+    # The one index it lacks is `n` (immutable chunk index R1), created once.
+    test "prod flags: the ensure on prod creates only the n index", %{bypass: bypass} do
       test_pid = self()
       ServiceConfig.put_override(:legacy_filter_fields, false)
       prod_v3 = Map.put(@prod_info, "payload_schema", @v3_info["payload_schema"])
@@ -838,12 +839,14 @@ defmodule Engram.Vector.QdrantReconcileTest do
       end)
 
       Bypass.stub(bypass, "PUT", "/collections/engram_notes/index", fn conn ->
-        send(test_pid, :index)
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:index, Jason.decode!(body)["field_name"]})
         json(conn, 200, %{status: "ok"})
       end)
 
       assert :ok = Qdrant.ensure_collection("engram_notes", 1024)
-      refute_received :index
+      assert_received {:index, "n"}
+      refute_received {:index, _}
 
       for {:patch, %{"strict_mode_config" => strict}} <- flush() do
         assert Map.get(strict, "unindexed_filtering_retrieve", false) == false
