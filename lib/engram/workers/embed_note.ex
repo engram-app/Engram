@@ -1525,7 +1525,7 @@ defmodule Engram.Workers.EmbedNote do
   than this with no job pending is one its write's event path should
   already have queued.
   """
-  @spec settle_window_seconds(non_neg_integer() | nil) :: number()
+  @spec settle_window_seconds(non_neg_integer() | nil) :: pos_integer()
   def settle_window_seconds(chunks), do: max_wait_seconds(chunks) + settle_seconds()
 
   @doc """
