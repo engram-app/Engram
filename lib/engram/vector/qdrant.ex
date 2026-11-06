@@ -44,7 +44,6 @@ defmodule Engram.Vector.Qdrant do
   @max_page 4096
   @max_ids 2048
   @max_write_batch 64
-  @max_note_ids 5 * @max_ids
 
   # No @specs on these constant accessors: dialyzer's :underspecs flags
   # `pos_integer()` against the literal's success typing.
@@ -59,7 +58,7 @@ defmodule Engram.Vector.Qdrant do
   Most note ids one search filter carries on `n` (`build_tenant_filter/1`'s
   `:note_scope`): 5 `match.any` blocks of `max_ids/0`.
   """
-  def max_note_ids, do: @max_note_ids
+  def max_note_ids, do: 5 * @max_ids
 
   @doc """
   Whether search filters by note id on `n` (immutable chunk index,
@@ -1975,14 +1974,18 @@ defmodule Engram.Vector.Qdrant do
   # the strict condition limits, so it raises: the resolver caps below it.
   defp note_scope(filter, nil), do: filter
 
-  defp note_scope(_filter, {_, ids}) when length(ids) > @max_note_ids,
-    do: raise(ArgumentError, "note_scope: #{length(ids)} ids > #{max_note_ids()}")
+  defp note_scope(filter, {_, ids} = scope) do
+    if length(ids) > max_note_ids(),
+      do: raise(ArgumentError, "note_scope: #{length(ids)} ids > #{max_note_ids()}")
 
-  defp note_scope(filter, {:ids, ids}),
+    scoped(filter, scope)
+  end
+
+  defp scoped(filter, {:ids, ids}),
     do: Map.update!(filter, :must, &(&1 ++ [%{should: n_blocks(ids)}]))
 
-  defp note_scope(filter, {:exclude, []}), do: filter
-  defp note_scope(filter, {:exclude, ids}), do: Map.put(filter, :must_not, n_blocks(ids))
+  defp scoped(filter, {:exclude, []}), do: filter
+  defp scoped(filter, {:exclude, ids}), do: Map.put(filter, :must_not, n_blocks(ids))
 
   # No ids stays one condition that matches nothing: an empty `should`
   # matches everything.
