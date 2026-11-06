@@ -29,8 +29,9 @@ defmodule EngramWeb.Schemas.SearchRequest do
       folder: %Schema{
         type: :string,
         description:
-          "Folder path. With a query, only notes directly in this folder (not its " <>
-            "subfolders); with a blank query, the folder and all its subfolders."
+          "Folder path. With a blank query, the folder and all its subfolders. With a " <>
+            "query, only notes directly in this folder, or the folder and all its " <>
+            "subfolders where the server's note-id search filter is on."
       },
       type: %Schema{
         type: :string,

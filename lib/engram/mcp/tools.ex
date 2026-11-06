@@ -458,9 +458,10 @@ defmodule Engram.MCP.Tools do
           "folder" => %{
             "type" => "string",
             "description" =>
-              "Optional folder path to scope the search to. With a query, only notes " <>
-                "directly in this folder (not its subfolders); with no query, the folder " <>
-                "and all its subfolders."
+              "Optional folder path to scope the search to. With no query, the folder " <>
+                "and all its subfolders. With a query, only notes directly in this " <>
+                "folder, or the folder and all its subfolders where the server's " <>
+                "note-id search filter is on."
           },
           "type" => %{
             "type" => "string",
