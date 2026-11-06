@@ -460,8 +460,8 @@ defmodule Engram.MCP.Tools do
             "description" =>
               "Optional folder path to scope the search to. With no query, the folder " <>
                 "and all its subfolders. With a query, the folder and all its subfolders " <>
-                "once the account's search index is upgraded; until then, only notes " <>
-                "directly in this folder."
+                "for notes the search index has already upgraded, and only notes directly " <>
+                "in this folder for the rest, until the upgrade finishes."
           },
           "type" => %{
             "type" => "string",

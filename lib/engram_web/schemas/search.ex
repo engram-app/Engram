@@ -30,8 +30,9 @@ defmodule EngramWeb.Schemas.SearchRequest do
         type: :string,
         description:
           "Folder path. With a blank query, the folder and all its subfolders. With a " <>
-            "query, the folder and all its subfolders once the account's search index " <>
-            "is upgraded; until then, only notes directly in this folder."
+            "query, the folder and all its subfolders for notes the search index has " <>
+            "already upgraded, and only notes directly in this folder for the rest, " <>
+            "until the upgrade finishes."
       },
       type: %Schema{
         type: :string,
