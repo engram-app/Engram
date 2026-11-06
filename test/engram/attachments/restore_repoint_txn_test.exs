@@ -125,7 +125,8 @@ defmodule Engram.Attachments.RestoreRepointTxnTest do
     repoints =
       for %{sql: sql, pid: pid} <- queries,
           pid == self(),
-          sql =~ ~r/^\s*(WITH .*)?UPDATE "?attachments"?.*\bSET\b.*"?folder_ref_id"?\s*=/s,
+          sql =~
+            ~r/^\s*(WITH .*)?UPDATE "?attachments"?.*\bSET\b(?:(?!\bWHERE\b).)*"?folder_ref_id"?\s*=/s,
           do: sql
 
     assert length(repoints) == 1, Enum.join(repoints, "\n")

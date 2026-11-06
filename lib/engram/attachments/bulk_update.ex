@@ -136,4 +136,42 @@ defmodule Engram.Attachments.BulkUpdate do
   defp dump_col(:folder_ref_id, nil), do: nil
   defp dump_col(:folder_ref_id, id), do: Ecto.UUID.dump!(id)
   defp dump_col(_name, value), do: value
+
+  @doc """
+  The set-based form of `Engram.Folders.Rows.attachment_ref/2`, ONE
+  statement for any number of rows and folders: each
+  `{id, folder_ref, nonce, stamp}` (dumped uuids, `folder_ref` nil at the
+  root) is written only where the row still holds the `nonce` its path was
+  read under (a path rewritten since is that writer's, stamped by it).
+  `stamp` is the nonce, or `Engram.Folders.Rows.unreadable_attachment_stamp/1`.
+  Rows another transaction holds are skipped (the caller's own are not).
+  Run through `repo`: `Engram.Repo` inside the restore's `Repo.with_tenant/2`
+  transaction, or `FolderTable`'s per-user scope (`Repo.with_tenant!/2`, or
+  the maintenance pool where there is one). Returns the rows updated.
+  """
+  @spec point_attachments(module(), [{binary(), binary() | nil, binary(), binary()}]) ::
+          non_neg_integer()
+  def point_attachments(_repo, []), do: 0
+
+  def point_attachments(repo, rows) do
+    {ids, refs, nonces, stamps} =
+      Enum.reduce(Enum.reverse(rows), {[], [], [], []}, fn {id, ref, nonce, stamp},
+                                                           {i, r, n, st} ->
+        {[id | i], [ref | r], [nonce | n], [stamp | st]}
+      end)
+
+    %{num_rows: count} =
+      repo.query!(
+        """
+        WITH locked AS (SELECT id FROM attachments WHERE id = ANY($1::uuid[]) FOR UPDATE SKIP LOCKED)
+        UPDATE attachments a SET folder_ref_id = v.fid, folder_ref_stamp = v.stamp
+        FROM unnest($1::uuid[], $2::uuid[], $3::bytea[], $4::bytea[]) AS v(id, fid, nonce, stamp),
+             locked l
+        WHERE a.id = v.id AND l.id = a.id AND a.path_nonce = v.nonce
+        """,
+        [ids, refs, nonces, stamps]
+      )
+
+    count
+  end
 end

@@ -2175,7 +2175,7 @@ defmodule Engram.Attachments do
     # One statement for the chunk, however many folders it spans: the stamp is
     # the row's own nonce, matched against the nonce the path was decrypted under.
     _ =
-      Rows.point_attachments(
+      BulkUpdate.point_attachments(
         Repo,
         Enum.map(metas, fn m ->
           ref = Map.fetch!(refs, Helpers.extract_folder(m.path))

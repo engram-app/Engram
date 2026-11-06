@@ -46,7 +46,12 @@ defmodule Engram.RawSqlTenantTableLintTest do
     # columns for a batch move), a shape `update_all` cannot express.
     # Runs inside the caller's `Repo.with_tenant/2` transaction, so RLS
     # tenant context is active. Moved out of attachments.ex (#2159) so that
-    # file needs no exemption.
+    # file needs no exemption. Also `point_attachments/2`, the set-based folder
+    # re-point (a `FOR UPDATE SKIP LOCKED` CTE plus an `unnest` UPDATE) shared
+    # by attachment restore (inside its `Repo.with_tenant/2`) and FolderTable's
+    # per-user pass (`Repo.with_tenant!/2` when there is no maintenance pool,
+    # else `Repo.maintenance()`); it filters by the caller's ids only, never
+    # cross-tenant on the app pool.
     "engram/attachments/bulk_update.ex",
     # Notes.BulkRename.update!/4 — the folder-rename cascade's batched
     # `UPDATE notes ... FROM (VALUES ...)`: each row carries distinct
@@ -79,13 +84,6 @@ defmodule Engram.RawSqlTenantTableLintTest do
     # or on `Repo.maintenance()` (maintenance_all); never cross-tenant on the
     # app pool.
     "engram/data_migrations/folder_table.ex",
-    # Folders.Rows.point_attachments/2: the set-based attachment re-point both
-    # FolderTable and attachment restore share (a `FOR UPDATE SKIP LOCKED` CTE
-    # plus an `unnest` UPDATE, which Ecto cannot express). It filters by the
-    # caller's attachment ids only, so it is called solely inside the restore's
-    # `Repo.with_tenant/2` transaction or FolderTable's per-user pass on
-    # `Repo.maintenance()`; never cross-tenant on the app pool.
-    "engram/folders/rows.ex",
     # Crypto.UserDekRotation.sweep_folders: re-keys a user's folder rows and
     # rebuilds `full_path_hmac` with one `UPDATE folders ... FROM unnest(...)`
     # (each row its own value; Ecto has no schema for `folders` yet). Filters

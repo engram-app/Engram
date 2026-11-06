@@ -54,6 +54,7 @@ defmodule Engram.DataMigrations.FolderTable do
   @behaviour Engram.DataMigration
 
   alias Engram.Accounts.User
+  alias Engram.Attachments.BulkUpdate
   alias Engram.Backfill.TenantScan
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
@@ -644,7 +645,7 @@ defmodule Engram.DataMigrations.FolderTable do
             end
           end)
 
-        updated = Rows.point_attachments(repo, wanted)
+        updated = BulkUpdate.point_attachments(repo, wanted)
         skipped = length(wanted) - updated
         stats = %{stats | changed: stats.changed + updated, blocked: stats.blocked + skipped}
         {tree, stats, rows |> List.last() |> then(&(&1 && hd(&1))), length(rows)}

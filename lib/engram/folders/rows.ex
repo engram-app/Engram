@@ -103,42 +103,6 @@ defmodule Engram.Folders.Rows do
   @spec unreadable_attachment_stamp(binary()) :: nonempty_binary()
   def unreadable_attachment_stamp(path_nonce), do: <<0>> <> path_nonce
 
-  @doc """
-  The set-based form of `attachment_ref/2`, ONE statement for any number of
-  rows and folders: each `{id, folder_ref, nonce, stamp}` (dumped uuids,
-  `folder_ref` nil at the root) is written only where the row still holds the
-  `nonce` its path was read under (a path rewritten since is that writer's,
-  stamped by it). `stamp` is the nonce, or `unreadable_attachment_stamp/1`.
-  Rows another transaction holds are skipped (the caller's own are not).
-  Run through `repo` (a scoped connection or `Engram.Repo`); returns the rows
-  updated.
-  """
-  @spec point_attachments(module(), [{binary(), binary() | nil, binary(), binary()}]) ::
-          non_neg_integer()
-  def point_attachments(_repo, []), do: 0
-
-  def point_attachments(repo, rows) do
-    {ids, refs, nonces, stamps} =
-      Enum.reduce(Enum.reverse(rows), {[], [], [], []}, fn {id, ref, nonce, stamp},
-                                                           {i, r, n, st} ->
-        {[id | i], [ref | r], [nonce | n], [stamp | st]}
-      end)
-
-    %{num_rows: count} =
-      repo.query!(
-        """
-        WITH locked AS (SELECT id FROM attachments WHERE id = ANY($1::uuid[]) FOR UPDATE SKIP LOCKED)
-        UPDATE attachments a SET folder_ref_id = v.fid, folder_ref_stamp = v.stamp
-        FROM unnest($1::uuid[], $2::uuid[], $3::bytea[], $4::bytea[]) AS v(id, fid, nonce, stamp),
-             locked l
-        WHERE a.id = v.id AND l.id = a.id AND a.path_nonce = v.nonce
-        """,
-        [ids, refs, nonces, stamps]
-      )
-
-    count
-  end
-
   @doc "`a.folder_ref_stamp = a.path_nonce` on the attachment bound as `:a`."
   @spec attachment_ref_current() :: Ecto.Query.dynamic_expr()
   def attachment_ref_current,
