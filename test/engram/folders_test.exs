@@ -427,6 +427,13 @@ defmodule Engram.FoldersTest do
       # rename: cold, they add 3 statements, and whether they are cold depends
       # on which test ran first (seed), not on the code under test.
       put_att(user, vault, "Warm/f.png")
+      # The steady state: the `FolderTable` ledger closed, so the folder reads
+      # go by folder id (`Rows.refs_trusted?/1`, one probe per reader).
+      Engram.DataMigrations.mark_done(
+        Engram.DataMigrations.FolderTable.name(),
+        Engram.DataMigrations.FolderTable.version()
+      )
+
       assert {:ok, %{attachments: 1}} = Folders.rename(user, vault, "Warm", "Warmed")
 
       {{:ok, %{attachments: 30}}, queries} =

@@ -350,4 +350,105 @@ defmodule Engram.Folders.ReadsTest do
       assert folders == ["A", "A/B", "M/Only", "OR"]
     end
   end
+
+  # R9.5 read switch: with the ledger closed and no drift for the user
+  # (`Rows.refs_trusted?/1`), a folder read uses the folder id alone. Each red
+  # test plants a row only the path route would read (a reference to a deleted
+  # folder row, outside the target, whose stored folder is unreadable or whose
+  # path would be decrypted) and proves the steady-state read never touches it.
+  describe "steady state: folder reads use the folder id only" do
+    defp kill_folder_row!(user, name) do
+      Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [
+        Ecto.UUID.dump!(FolderRows.tree(user)[name].id)
+      ])
+    end
+
+    test "attachments: a row outside the target is never read", ctx do
+      %{user: u, vault: v} = ctx
+      seed_attachments!(u, v)
+      bad = put_att(u, v, "Other/bad.png")
+
+      # Its path no longer decrypts, and `FolderTable` marked it so (the stamp
+      # the drain's index leaves out). The path route reads every row whose
+      # stamp is not current, so it opens this one and counts it unreadable.
+      Repo.query!(
+        "UPDATE attachments SET path_ciphertext = '\\x00', " <>
+          "folder_ref_stamp = '\\x00'::bytea || path_nonce WHERE id = $1",
+        [Ecto.UUID.dump!(bad.id)]
+      )
+
+      verified!()
+      drain_decrypts()
+
+      # Fails with the path route: unreadable 1, and 3 rows decrypted.
+      assert {:ok, %{metas: metas, unreadable: 0}} = Attachments.scan_under(u, v, ["Target"])
+      assert metas |> Enum.map(& &1.path) |> Enum.sort() == ["Target/Sub/b.png", "Target/a.png"]
+      assert drain_decrypts() == 2
+    end
+
+    test "attachments: a dead reference is still found (restore crash window)", ctx do
+      %{user: u, vault: v} = ctx
+      seed_attachments!(u, v)
+      put_att(u, v, "Gone/x.png")
+      gone = FolderRows.tree(u)["Gone"].id
+      lost = put_att(u, v, "Target/lost.png")
+
+      # A restore revived it but crashed before re-pointing it: its reference
+      # names a deleted row, under a stamp that is current.
+      Repo.query!("UPDATE attachments SET folder_ref_id = $2 WHERE id = $1", [
+        Ecto.UUID.dump!(lost.id),
+        Ecto.UUID.dump!(gone)
+      ])
+
+      kill_folder_row!(u, "Gone")
+      verified!()
+
+      assert {:ok, %{attachments: 3}} = Folders.rename(u, v, "Target", "Renamed")
+      assert "Renamed/lost.png" in live_paths(u, v)
+      assert "Gone/x.png" in live_paths(u, v)
+    end
+
+    test "notes: scan_folders never reads a note outside the target", ctx do
+      %{user: u, vault: v} = ctx
+      put_note(u, v, "Target/n1.md")
+      other = put_note(u, v, "Gone/n2.md")
+      kill_folder_row!(u, "Gone")
+
+      # Fails with the path route: it picks up the dead-reference note as a
+      # stray and opens its (corrupt) folder envelope, which raises.
+      Repo.query!("UPDATE notes SET folder_ciphertext = '\\x00' WHERE id = $1", [
+        Ecto.UUID.dump!(other.id)
+      ])
+
+      verified!()
+      assert {:ok, rows} = Notes.scan_folders(u, v, ["Target"])
+      assert Enum.map(rows, & &1.path) == ["Target/n1.md"]
+    end
+
+    test "control: drift for the user still takes the path route, ledger closed", ctx do
+      %{user: u, vault: v} = ctx
+      put_note(u, v, "Target/n1.md")
+      old = Engram.Fixtures.insert_note!(u, v, %{path: "Target/Fresh/old.md", content: "x"})
+      assert FolderRows.ref("notes", old.id) == nil
+      verified!()
+
+      Repo.with_tenant!(u.id, fn -> refute Engram.Folders.Rows.refs_trusted?(u.id) end)
+      {:ok, rows} = Notes.scan_folders(u, v, ["Target"])
+      assert "Target/Fresh/old.md" in Enum.map(rows, & &1.path)
+    end
+
+    test "trusted only with the ledger closed and no drift", ctx do
+      %{user: u, vault: v} = ctx
+      put_note(u, v, "Target/n1.md")
+      put_att(u, v, "Target/a.png")
+
+      trusted? = fn ->
+        Repo.with_tenant!(u.id, fn -> Engram.Folders.Rows.refs_trusted?(u.id) end)
+      end
+
+      refute trusted?.()
+      verified!()
+      assert trusted?.()
+    end
+  end
 end

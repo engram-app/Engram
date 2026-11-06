@@ -2200,10 +2200,13 @@ defmodule Engram.Attachments do
   The one place a folder operation (rename, delete, move, listing) finds the
   attachments it concerns. It decrypts the folder's own rows, not the vault's:
 
-    * rows whose `folder_ref_id` is in the folder's subtree AND whose reference is
-      current (`Rows.attachment_ref_current/0`: stamped with the row's
-      `path_nonce`) are trusted by reference;
-    * every row whose stamp does not match is checked against its decrypted path:
+    * in steady state (`Rows.refs_trusted?/1`: the `FolderTable` ledger closed,
+      no drift for the user) by `folder_ref_id` alone: the rows whose reference
+      is in the folder's subtree;
+    * otherwise rows in the subtree whose reference is current
+      (`Rows.attachment_ref_current/0`: stamped with the row's `path_nonce`) are
+      trusted by reference, and every row whose stamp does not match is checked
+      against its decrypted path:
       a writer that rewrote the path without re-pointing it (the previous release
       during a rolling deploy) left a NULL or stale reference, and
       `Engram.Bookkeeping.Drain` has not healed it yet. Before the `FolderTable`
@@ -2241,43 +2244,73 @@ defmodule Engram.Attachments do
   end
 
   # Everything is a candidate when the root is asked for as a subtree;
-  # otherwise the folders' referenced rows plus the ones whose reference is not
-  # current.
+  # otherwise the folders' referenced rows (plus, off the steady state, the
+  # ones whose reference is not current).
   defp candidate_rows(user, vault, folders, direct?) do
     base = from(a in scoped_live(user, vault), as: :a, select: struct(a, @tree_attachment_fields))
 
-    if not direct? and "" in folders do
-      Repo.all(base)
-    else
-      current = Rows.attachment_ref_current()
-      ids = folder_ids(user, vault, folders, direct?)
-      root? = direct? and "" in folders
+    cond do
+      not direct? and "" in folders ->
+        Repo.all(base)
 
-      trusted =
-        if root?,
-          do: dynamic([a], is_nil(a.folder_ref_id) or a.folder_ref_id in ^ids),
-          else: dynamic([a], a.folder_ref_id in ^ids)
+      Rows.refs_trusted?(user.id) ->
+        # Steady state: by reference alone, on `(vault_id, folder_ref_id)`.
+        # Plus the rows whose reference names a DELETED folder row, joined by
+        # id (none in steady state): a restore revives an attachment and
+        # re-points it in separate transactions, so a crash between them
+        # leaves a current stamp on a dead reference, which no drift index sees.
+        dead =
+          from(a in base,
+            join: f in Engram.Folders.Folder,
+            on: f.id == a.folder_ref_id and f.vault_id == a.vault_id,
+            where: not is_nil(f.deleted_at)
+          )
 
-      # A reference to a deleted or missing folder row vouches for nothing,
-      # whatever the row's age (an undo that could not revive the row; a crash
-      # between a restore and its re-point): such a row is read by its path.
-      live_ref =
-        from(f in Engram.Folders.Folder,
-          where: f.id == parent_as(:a).folder_ref_id and is_nil(f.deleted_at)
-        )
+        from(a in base, where: ^referenced(user, vault, folders, direct?))
+        |> union_all(^dead)
+        |> Repo.all()
 
-      Repo.all(
-        from(a in base,
-          where:
-            ^dynamic(
-              [a],
-              (^trusted and ^current) or not (^current) or
-                is_nil(a.folder_ref_stamp) or
-                (not is_nil(a.folder_ref_id) and not exists(live_ref))
-            )
-        )
-      )
+      true ->
+        candidate_rows_by_path(base, user, vault, folders, direct?)
     end
+  end
+
+  # The path route, while `Rows.refs_trusted?/1` is false: the referenced rows
+  # with a current reference, plus every row whose reference is not current,
+  # each checked against its decrypted path.
+  defp candidate_rows_by_path(base, user, vault, folders, direct?) do
+    current = Rows.attachment_ref_current()
+    trusted = referenced(user, vault, folders, direct?)
+
+    # A reference to a deleted or missing folder row vouches for nothing,
+    # whatever the row's age (an undo that could not revive the row; a crash
+    # between a restore and its re-point): such a row is read by its path.
+    live_ref =
+      from(f in Engram.Folders.Folder,
+        where: f.id == parent_as(:a).folder_ref_id and is_nil(f.deleted_at)
+      )
+
+    Repo.all(
+      from(a in base,
+        where:
+          ^dynamic(
+            [a],
+            (^trusted and ^current) or not (^current) or
+              is_nil(a.folder_ref_stamp) or
+              (not is_nil(a.folder_ref_id) and not exists(live_ref))
+          )
+      )
+    )
+  end
+
+  # The rows whose reference names one of the folders' rows (and, for the
+  # root's direct children, the rows with no reference).
+  defp referenced(user, vault, folders, direct?) do
+    ids = folder_ids(user, vault, folders, direct?)
+
+    if direct? and "" in folders,
+      do: dynamic([a], is_nil(a.folder_ref_id) or a.folder_ref_id in ^ids),
+      else: dynamic([a], a.folder_ref_id in ^ids)
   end
 
   defp folder_ids(user, vault, folders, true), do: Rows.ids_at(user, vault.id, folders)

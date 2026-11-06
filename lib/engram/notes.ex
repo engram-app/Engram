@@ -6947,10 +6947,11 @@ defmodule Engram.Notes do
   # for a folder cascade (rename, move, delete). The folders are found by their
   # rows (`Folders.Rows.subtree_refs/3`: a walk over folder rows, no decrypt) and
   # the notes by `folder_ref_id`; folder markers have no reference and join on
-  # the row's path hash. Only notes the rows cannot vouch for (`unresolved_hmacs/4`:
-  # no reference, because the previous release made their folder) still go
-  # through a decrypt of one envelope per distinct folder, and in steady state
-  # there are none. The final `folder_in?` filter keeps the stored path
+  # the row's path hash. Only while `Rows.refs_trusted?/1` is false (an upgrade
+  # still backfilling, drift the drain has not reached) are the notes the rows
+  # cannot vouch for (`unresolved_hmacs/4`) looked for, with a decrypt of one
+  # envelope per distinct such folder; in steady state that vault-wide scan does
+  # not run. The final `folder_in?` filter keeps the stored path
   # authoritative: a reference only narrows what is read.
   # Markers hydrate their single folder envelope; real notes go through the
   # parallel batch decryptor. Always meta-projected (#863): callers only need
@@ -6959,9 +6960,11 @@ defmodule Engram.Notes do
   defp fetch_decrypted_live_rows(user, vault, folders) do
     {:ok, dek} = Crypto.get_dek(user)
 
+    # Trusted references (steady state) need no vault-wide look for strays.
     {refs, stray} =
       Repo.with_tenant!(user.id, fn ->
-        {Rows.subtree_refs(user, vault.id, folders), raw_unresolved_rows(user, vault)}
+        stray = if Rows.refs_trusted?(user.id), do: [], else: raw_unresolved_rows(user, vault)
+        {Rows.subtree_refs(user, vault.id, folders), stray}
       end)
 
     ids = Enum.map(refs, & &1.id)
