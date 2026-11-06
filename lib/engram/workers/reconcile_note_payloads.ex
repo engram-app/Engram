@@ -507,11 +507,18 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   defp mark_if_qdrant_clean(user_id) do
     case Qdrant.count(Qdrant.collection_name(), missing_n_filter(user_id)) do
-      {:ok, 0} -> Cursor.put(marker(user_id), %{"version" => @n_version})
+      {:ok, 0} -> put_marker(user_id)
       {:ok, _} -> requeue_missing_n(user_id)
       # Unreadable: not proven, the user's next chain asks again.
       {:error, _} -> :ok
     end
+  end
+
+  # Write first, then re-check: an unstamp that raced the decision (its
+  # marker reset ran before this write) is behind now, so the marker goes.
+  defp put_marker(user_id) do
+    :ok = Cursor.put(marker(user_id), %{"version" => @n_version})
+    if behind?(user_id), do: Cursor.reset(marker(user_id)), else: :ok
   end
 
   defp behind?(user_id) do

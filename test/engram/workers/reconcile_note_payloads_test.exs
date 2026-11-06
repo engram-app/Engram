@@ -865,6 +865,21 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
     end
 
+    # A concurrent unstamp (the requeue) lands between the check and the
+    # marker write, and its marker reset runs before our write: the marker
+    # must not survive it.
+    test "a note unstamped while the marker is decided leaves no marker", ctx do
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      :ok = ReconcileNotePayloads.forget_marker(ctx.user.id)
+
+      Agent.update(ctx.store, fn s ->
+        %{s | on_count: fn -> null_versions(ctx) end}
+      end)
+
+      :ok = ReconcileNotePayloads.mark_backfilled(ctx.user.id)
+      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
+    end
+
     # A rolling deploy: an older node still writes points without `n`.
     test "no marker while an older release is in the cluster", ctx do
       assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
