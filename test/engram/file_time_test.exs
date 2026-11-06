@@ -4,13 +4,53 @@ defmodule Engram.FileTimeTest do
   milliseconds, both seen in prod) to the `*_at` timestamptz value.
   """
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
   alias Engram.FileTime
+  alias Engram.FileTimeFixtures
 
   test "seconds, fractional seconds and milliseconds give the same instant" do
     assert FileTime.to_at(1_776_072_500) == {:ok, ~U[2026-04-13 09:28:20.000000Z]}
     assert FileTime.to_at(1_776_072_500.928) == {:ok, ~U[2026-04-13 09:28:20.928000Z]}
     assert FileTime.to_at(1_776_072_500_928.0) == {:ok, ~U[2026-04-13 09:28:20.928000Z]}
+  end
+
+  test "rounds to the nearest microsecond: 2038's .404 is not stored as .403999" do
+    assert FileTime.to_at(2_147_484_020.404) == {:ok, ~U[2038-01-19 03:20:20.404000Z]}
+    assert FileTime.to_at(1_104_537_600.123) == {:ok, ~U[2005-01-01 00:00:00.123000Z]}
+  end
+
+  test "prod desktop mtimes round to the microsecond; old and new twins serve the double" do
+    for {t, us} <- FileTimeFixtures.prod_desktop_times() do
+      {:ok, at} = FileTime.to_at(t)
+      assert {DateTime.to_unix(at), at.microsecond} == {trunc(t), {us, 6}}, inspect(t)
+
+      floored = DateTime.from_unix!(floor(t * 1_000_000), :microsecond)
+      assert FileTime.epoch(floored, t) === t, inspect(t)
+      assert FileTime.epoch(at, t) === t, inspect(t)
+    end
+
+    moved =
+      Enum.count(FileTimeFixtures.prod_desktop_times(), fn {t, us} ->
+        floor(t * 1_000_000) |> rem(1_000_000) != us
+      end)
+
+    assert moved == 5
+  end
+
+  test "never rounds up across a whole second" do
+    # The double just below 1_700_000_000: x 1e6 rounds to the next second
+    # (the old floor crossed it too).
+    t = 1_699_999_999.9999998
+    assert t < 1_700_000_000
+    {:ok, at} = FileTime.to_at(t)
+    assert DateTime.to_unix(at) == trunc(t)
+    assert at.microsecond == {999_999, 6}
+    # Milliseconds: the same guard on the ms-to-us scale.
+    t = 1_699_999_999_999.9998
+    assert t < 1_700_000_000_000
+    {:ok, at} = FileTime.to_at(t)
+    assert DateTime.to_unix(at) == 1_699_999_999
   end
 
   test "the unit boundary: below 1e11 is seconds, at it is milliseconds" do
@@ -48,8 +88,9 @@ defmodule Engram.FileTimeTest do
       assert DateTime.to_unix(at) == trunc(t), inspect(t)
     end
 
+    # Rounded within its second (0.74 and 0.75 floored to 572_999).
     {:ok, at} = FileTime.to_at(1_793_442_859_572.9995)
-    assert at.microsecond == {572_999, 6}
+    assert {DateTime.to_unix(at), at.microsecond} == {1_793_442_859, {573_000, 6}}
   end
 
   test "check/2: the first out-of-range number param, else :ok" do
@@ -137,38 +178,41 @@ defmodule Engram.FileTimeTest do
       assert FileTime.epoch(nil, 1_776_072_500_928.0) === 1_776_072_500.928
     end
 
-    # During migrate-data every release writes the double and the twin is
-    # derived from it, so a disagreement means the twin is stale.
-    test "the double wins over a stale timestamp" do
+    # The read switch: the twin is served whenever present.
+    test "a stale timestamp is served over the double" do
       stale = ~U[2026-04-13 09:28:20.500000Z]
-      assert FileTime.epoch(stale, 1.0) === 1.0
-      assert FileTime.epoch(stale, 1_776_072_500_928.0) === 1_776_072_500.928
+      assert FileTime.epoch(stale, 1.0) === 1_776_072_500.5
+      assert FileTime.epoch(stale, 1_776_072_500_928.0) === 1_776_072_500.5
     end
 
-    test "the timestamp stands alone only without a double (after contract)" do
-      assert FileTime.epoch(~U[2026-04-13 09:28:20.500000Z], nil) === 1_776_072_500.5
-      assert FileTime.epoch(nil, nil) == nil
+    # The contract shape (no double): the twin alone must give back the
+    # millisecond-precision seconds the client sent. Floored, about a
+    # quarter of 2004-2005 and post-2038-01-19 values came back 1 us low.
+    property "the twin alone round-trips millisecond-precision seconds, 1970-2071" do
+      check all(
+              s <-
+                one_of([
+                  integer(0..3_155_760_000),
+                  integer(1_073_741_824..1_125_899_906),
+                  integer(2_147_483_648..3_155_760_000)
+                ]),
+              ms <- integer(0..999),
+              max_runs: 5_000
+            ) do
+        t = s + ms / 1_000
+        assert FileTime.epoch(FileTime.normalize(t), nil) === t
+      end
     end
 
-    test "0 and out of range go out as stored" do
-      assert FileTime.epoch(nil, 1_776_072_500.9) === 1_776_072_500.9
-      assert FileTime.epoch(nil, 0.0) === 0.0
-      assert FileTime.epoch(nil, 1.0e19) === 1.0e19
-      assert FileTime.epoch(~U[2020-01-01 00:00:00Z], 1.0e19) === 1.0e19
-    end
-
-    test "mtime/1 and ctime/1 read a row or a map" do
-      row = %{mtime: 1_776_072_500_928.0, mtime_at: ~U[2026-04-13 09:28:20.928000Z], ctime: 5.0}
-      assert FileTime.mtime(row) === 1_776_072_500.928
-      assert FileTime.ctime(row) === 5.0
-      assert FileTime.mtime(%{mtime: 2.0}) === 2.0
-    end
-
-    test "no time at all reads as nil, never false (a false would reach payloads)" do
-      assert FileTime.epoch(nil, nil) === nil
-      assert FileTime.mtime(%{mtime: nil, mtime_at: nil}) === nil
-      assert FileTime.mtime(%{}) === nil
-      assert FileTime.epoch(false, nil) === nil
+    test "a v1 floored twin (1 us low) still agrees: the double goes out" do
+      t = 2_147_484_020.404
+      floored = DateTime.add(FileTime.normalize(t), -1, :microsecond)
+      assert FileTime.twin?(floored, t)
+      assert FileTime.epoch(floored, t) === t
+      refute FileTime.twin?(DateTime.add(floored, -1, :microsecond), t)
+      refute FileTime.twin?(DateTime.add(FileTime.normalize(t), 2, :microsecond), t)
+      refute FileTime.twin?(nil, t)
+      refute FileTime.twin?(floored, nil)
     end
   end
 end

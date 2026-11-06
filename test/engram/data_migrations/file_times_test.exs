@@ -19,6 +19,7 @@ defmodule Engram.DataMigrations.FileTimesTest do
   alias Engram.FileTime
   alias Engram.Notes
   alias Engram.Notes.Note
+  alias Engram.Workers.DataMigrationsRunner
 
   setup do
     FileTimes.forget()
@@ -123,7 +124,7 @@ defmodule Engram.DataMigrations.FileTimesTest do
   end
 
   test "is registered with the runner" do
-    assert FileTimes in Engram.Workers.DataMigrationsRunner.migrations()
+    assert FileTimes in DataMigrationsRunner.migrations()
   end
 
   defp oor_lines(log),
@@ -187,7 +188,7 @@ defmodule Engram.DataMigrations.FileTimesTest do
     assert {:more, _} = FileTimes.run_pass(batch: 1, max_fixed: 1)
     set!(ctx, Attachment, att.id, mtime_at: nil)
 
-    Stream.repeatedly(fn -> Engram.Workers.DataMigrationsRunner.run(FileTimes) end)
+    Stream.repeatedly(fn -> DataMigrationsRunner.run(FileTimes) end)
     |> Stream.take(20)
     |> Enum.find(&(&1 in [:done, :skipped]))
 
@@ -215,5 +216,127 @@ defmodule Engram.DataMigrations.FileTimesTest do
       worker: Engram.Workers.ReconcileNotePayloads,
       args: %{"user_id" => ctx.user.id}
     )
+  end
+
+  # v2: 0.74 and 0.75 floored the twin to the microsecond, about a quarter
+  # of 2004-2005 and post-2038 millisecond values 1 us low. Readers already
+  # sent the double for those (`FileTime.twin?/2`), so no payload refresh.
+  test "v2 rewrites a floored v1 twin to the rounded value, no payload refresh", ctx do
+    t = 2_147_484_020.404
+    ms = 1_104_537_600_123.0
+    s_id = note!(ctx, "s.md", %{"mtime" => t})
+    ms_id = note!(ctx, "ms.md", %{"mtime" => 1.0})
+    low = &DateTime.add(FileTime.normalize(&1), -1, :microsecond)
+    set!(ctx, Note, s_id, mtime_at: low.(t), payload_hash: <<1::256>>)
+    set!(ctx, Note, ms_id, mtime: ms, mtime_at: low.(ms), payload_hash: <<2::256>>)
+
+    capture_log(fn -> run_to_done() end)
+
+    by_id = Map.new(rows(ctx, Note, mtime: :mtime_at), &{&1.id, &1})
+    assert by_id[s_id].mtime_at == ~U[2038-01-19 03:20:20.404000Z]
+    assert by_id[ms_id].mtime_at == ~U[2005-01-01 00:00:00.123000Z]
+
+    hashes =
+      Repo.with_tenant!(ctx.user.id, fn ->
+        Map.new(Repo.all(from(n in Note, select: {n.id, n.payload_hash})))
+      end)
+
+    assert {hashes[s_id], hashes[ms_id]} == {<<1::256>>, <<2::256>>}
+    refute_enqueued(worker: Engram.Workers.ReconcileNotePayloads)
+  end
+
+  test "kill switch: with file_times_backfill off the runner runs no pass", ctx do
+    id = note!(ctx, "a.md", %{"mtime" => 7.0})
+    set!(ctx, Note, id, mtime_at: nil)
+    Engram.ServiceConfig.put_override(:file_times_backfill, false)
+
+    refute FileTimes.enabled?()
+    assert DataMigrationsRunner.run(FileTimes) == :skipped
+    assert [%{mtime_at: nil}] = rows(ctx, Note, mtime: :mtime_at)
+    refute Engram.DataMigrations.done?(FileTimes.name(), FileTimes.version())
+  end
+
+  # A 0.75-or-older node floors every twin it writes: the ledger must not
+  # close while one runs, and the walk that closes it must start after.
+  test "the ledger stays open while an old-build node is reported", ctx do
+    t = 2_147_484_020.404
+    id = note!(ctx, "s.md", %{"mtime" => t})
+    floored = DateTime.add(FileTime.normalize(t), -1, :microsecond)
+    set!(ctx, Note, id, mtime_at: floored)
+
+    old = [
+      peers: fn -> [:"engram@10.0.0.9"] end,
+      sync: fn -> :ok end,
+      multicall: fn _ -> [{:error, {:exception, :undef, []}}] end
+    ]
+
+    for _ <- 1..3, do: assert(FileTimes.run_pass(batch: 2, fleet: old) == {:more, rows: 0})
+    assert [%{mtime_at: ^floored}] = rows(ctx, Note, mtime: :mtime_at)
+
+    new = Keyword.put(old, :multicall, fn _ -> [{:ok, 1}] end)
+    capture_log(fn -> run_to_done(batch: 2, fleet: new) end)
+    assert [%{mtime_at: ~U[2038-01-19 03:20:20.404000Z]}] = rows(ctx, Note, mtime: :mtime_at)
+    assert FileTimes.run_pass(batch: 2, fleet: new) == :done
+  end
+
+  # Acceptance: all four columns, compared to the ROUNDED twin in Elixir;
+  # `count_drift/1` is the read-only prod verification (`bin/engram rpc`).
+  test "count_drift/1 counts each column's drifted twins; zero after the walk", ctx do
+    t = 2_147_484_020.404
+    low = DateTime.add(FileTime.normalize(t), -1, :microsecond)
+    id = note!(ctx, "n.md", %{"mtime" => t, "ctime" => t})
+    set!(ctx, Note, id, mtime_at: low, ctime_at: nil)
+
+    {:ok, att} =
+      Attachments.upsert_attachment(ctx.user, ctx.vault, %{
+        "path" => "a.png",
+        :content => "png",
+        "mtime" => t
+      })
+
+    {:ok, up} = Uploads.start(ctx.user, ctx.vault, %{path: "d.bin", size_bytes: 3, mtime: t})
+    set!(ctx, Attachment, att.id, mtime_at: low)
+    set!(ctx, Upload, up.id, mtime_at: low)
+
+    before = rows(ctx, Note, mtime: :mtime_at, ctime: :ctime_at)
+
+    assert FileTimes.count_drift(batch_size: 1) == %{
+             "notes.mtime" => 1,
+             "notes.ctime" => 1,
+             "attachments.mtime" => 1,
+             "attachment_uploads.mtime" => 1
+           }
+
+    assert rows(ctx, Note, mtime: :mtime_at, ctime: :ctime_at) == before
+
+    capture_log(fn -> run_to_done() end)
+
+    assert FileTimes.count_drift() |> Map.values() |> Enum.uniq() == [0]
+  end
+
+  # A 0.75 node that joins after close floors twins again; the daily
+  # re-walk (`reverify?/0`) finds them and reopens the ledger.
+  test "a done ledger reopens when the re-verify walk finds drift", ctx do
+    t = 2_147_484_020.404
+    id = note!(ctx, "s.md", %{"mtime" => t})
+
+    Stream.repeatedly(fn -> DataMigrationsRunner.run(FileTimes) end)
+    |> Stream.take(20)
+    |> Enum.find(&(&1 in [:done, :skipped]))
+
+    assert Engram.DataMigrations.done?(FileTimes.name(), FileTimes.version())
+    assert FileTimes.reverify?()
+
+    set!(ctx, Note, id, mtime_at: DateTime.add(FileTime.normalize(t), -1, :microsecond))
+
+    capture_log(fn -> assert DataMigrationsRunner.run(FileTimes, true) == :more end)
+    refute Engram.DataMigrations.done?(FileTimes.name(), FileTimes.version())
+    assert [%{mtime_at: ~U[2038-01-19 03:20:20.404000Z]}] = rows(ctx, Note, mtime: :mtime_at)
+  end
+
+  test "the fleet gate never calls :global.sync/0 (it stalls on a partition)" do
+    assert FileTimes.fleet_opts([])[:sync].() == :ok
+    own = fn -> :called end
+    assert FileTimes.fleet_opts(fleet: [sync: own])[:sync] == own
   end
 end

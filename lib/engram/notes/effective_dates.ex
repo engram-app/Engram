@@ -55,10 +55,12 @@ defmodule Engram.Notes.EffectiveDates do
   applies). Units follow `Engram.FileTime` (the one normalizer: milliseconds
   to seconds, out of range is unknown); a seconds value is `trunc(t)`.
 
-  Read from the double, not `mtime_at` / `ctime_at`: during the file-time
-  expand both releases write the double, while a previous release moves it
-  without its `*_at`. The two are equal on every row this release writes
-  (`FileTime.put_at/3`); this switches to `*_at` when the doubles go.
+  `stored/2` itself takes the double (the write side: `eff_created` /
+  `eff_updated` are derived from what the client sent). `updated/2` and
+  `created/2` read through `FileTime.mtime/1` / `ctime/1`, which since the
+  R25 read switch serve the `*_at` twin's instant. The two agree on every
+  row `FileTime.put_at/3` wrote and the backfill healed; the write side
+  moves to `*_at` when the doubles go.
   """
   def stored(fm, _t) when is_integer(fm), do: fm
 

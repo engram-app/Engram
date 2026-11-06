@@ -8,10 +8,11 @@ defmodule Engram.DataMigrations.FileTimes do
   of its double, NULL or not: a release before expand, running during a
   rollout or after a rollback, moves a double without its twin and leaves a
   stale non-NULL value. Values come from `FileTime` (never `to_timestamp`,
-  which rounds), the same normalizer every writer uses. Readers derive from
-  the double until contract (`FileTime.epoch/2`), so a stale twin is never
-  served; this backfill and `FileTime.put_at/3` (which heals the twin on
-  every write) make the twins right for contract.
+  which rounds), the same normalizer every writer uses. Readers serve the
+  twin since the R25 read switch (`FileTime.epoch/2`, the double only while
+  the twin is NULL), so this backfill and `FileTime.put_at/3` (which heals
+  the twin on every write) are what make the served value right. It was
+  confirmed done in prod before the switch shipped.
 
   Each table is its own `IdWindows.heal_pass/4` walk (cursor
   `file_times:<table>`). A table whose walk came back clean is not walked
@@ -34,8 +35,14 @@ defmodule Engram.DataMigrations.FileTimes do
   NULLed (only those notes) and `ReconcileNotePayloads` is queued for its
   user, which rewrites only unstamped notes' points.
 
-  Not re-verified; contract bumps `version/0` to take one last clean walk
-  before dropping the doubles.
+  v2 re-walks for the rounding fix (`version/0`). A pass first asks every
+  cluster node for `FileTime.twin_rounding/0` (`Readiness.peers_report/4`,
+  the gate `CompressionGate` uses); while any node is older (it floors) or
+  unreachable, the pass walks nothing, resets the walks and stays open. `enabled?/0` is the
+  `file_times_backfill` service override (default on). Re-verified daily
+  (`reverify?/0`): a 0.75-or-older node that joins after close floors
+  twins again, and nothing else finds a 1 us drift. Contract bumps
+  `version/0` to take one last clean walk before dropping the doubles.
   """
   @behaviour Engram.DataMigration
 
@@ -43,6 +50,7 @@ defmodule Engram.DataMigrations.FileTimes do
 
   alias Engram.Backfill.IdWindows
   alias Engram.Backfill.TenantScan
+  alias Engram.Cluster.Readiness
   alias Engram.FileTime
   alias Engram.Logger.Metadata
   alias Engram.Workers.ReconcileNotePayloads
@@ -66,8 +74,22 @@ defmodule Engram.DataMigrations.FileTimes do
   @impl true
   def name, do: "file_times"
 
+  # v2: `FileTime.to_at/1` rounds to the microsecond. 0.74 and 0.75
+  # floored, leaving desktop sub-millisecond values one microsecond low
+  # about half the time (5 prod rows), and about a quarter of millisecond
+  # values dated 2004-2005 or past 2038-01-19. The re-walk rewrites them.
   @impl true
-  def version, do: 1
+  def version, do: 2
+
+  @impl true
+  def reverify?, do: true
+
+  @doc """
+  Kill switch: the `file_times_backfill` service override (default on).
+  Off, the runner runs no pass and the ledger stays open.
+  """
+  @impl true
+  def enabled?, do: Engram.ServiceConfig.get(:file_times_backfill, true) == true
 
   @impl true
   def run_pass, do: run_pass([])
@@ -78,7 +100,39 @@ defmodule Engram.DataMigrations.FileTimes do
 
   @doc false
   # `batch:` overrides the window size, `max_fixed:` the per-walk cap.
+  # `fleet:` overrides the `Readiness.peers_report/4` collaborators.
   def run_pass(opts) do
+    case Readiness.peers_report(FileTime, :twin_rounding, 1, fleet_opts(opts)) do
+      :ok -> walk_tables(opts)
+      blocked -> wait_for_fleet(blocked)
+    end
+  end
+
+  # No `:global.sync/0` (as `CompressionGate`): the version question needs
+  # no global registry, and a sync stalls on a partition, holding the
+  # runner job and every migration after this one.
+  @doc false
+  def fleet_opts(opts), do: Keyword.merge([sync: fn -> :ok end], Keyword.get(opts, :fleet, []))
+
+  # An older node (0.75 or before) floors every twin it writes, so a walk
+  # that ran beside one could close over rows it floors later. No walking
+  # until the whole fleet rounds, and the walks start over, so every window
+  # of the walk that closes the ledger ran with no older node left.
+  defp wait_for_fleet({reason, node}) do
+    forget()
+
+    for {schema, _} <- @tables,
+        do: IdWindows.reset_walk("#{name()}:#{schema.__schema__(:source)}")
+
+    Logger.info(
+      "file times waiting for the fleet",
+      Metadata.with_category(:info, :data, reason: reason, peer: inspect(node))
+    )
+
+    {:more, rows: 0}
+  end
+
+  defp walk_tables(opts) do
     clean = :persistent_term.get(@clean, MapSet.new())
 
     open =
@@ -164,16 +218,8 @@ defmodule Engram.DataMigrations.FileTimes do
   # One window: read the rows' doubles and twins by primary key, compute the
   # wanted twins with `FileTime.normalize/1`, write only the drifted rows.
   defp heal(ids, %{repo: repo}, schema, pairs, tally) do
-    fields = [:id, :user_id | Enum.flat_map(pairs, &Tuple.to_list/1)]
-    # The probe subquery drops the uuid type: ids come back as 16 raw bytes.
-    rows =
-      from(r in schema, select: map(r, ^fields))
-      |> IdWindows.by_id(ids)
-      |> repo.all()
-      |> Enum.map(&%{&1 | id: Ecto.UUID.cast!(&1.id), user_id: Ecto.UUID.cast!(&1.user_id)})
-
     drift =
-      for row <- rows,
+      for row <- read_rows(repo, schema, pairs, ids),
           wanted = Map.new(pairs, fn {d, at} -> {at, FileTime.normalize(row[d])} end),
           not Enum.all?(pairs, fn {_, at} -> FileTime.same_at?(row[at], wanted[at]) end),
           do: {row, wanted}
@@ -196,8 +242,63 @@ defmodule Engram.DataMigrations.FileTimes do
     {length(written), length(written) < length(drift)}
   end
 
+  # The window's id, user, doubles and twins, by primary key.
+  defp read_rows(repo, schema, pairs, ids) do
+    fields = [:id, :user_id | Enum.flat_map(pairs, &Tuple.to_list/1)]
+    # The probe subquery drops the uuid type: ids come back as 16 raw bytes.
+    from(r in schema, select: map(r, ^fields))
+    |> IdWindows.by_id(ids)
+    |> repo.all()
+    |> Enum.map(&%{&1 | id: Ecto.UUID.cast!(&1.id), user_id: Ecto.UUID.cast!(&1.user_id)})
+  end
+
+  @doc """
+  Read-only verification, for `bin/engram rpc`: per column
+  (`"notes.mtime"`, `"notes.ctime"`, `"attachments.mtime"`,
+  `"attachment_uploads.mtime"`), how many rows hold a twin that differs
+  from `FileTime.normalize/1` of their double, compared in Elixir (never
+  Postgres `numeric`, whose float8 cast shows digits the double does not
+  hold). Every tenant, one id window at a time, writes nothing. Expect all
+  zeros once the ledger is done. `batch_size:` overrides the window.
+  """
+  @spec count_drift(keyword()) :: %{String.t() => non_neg_integer()}
+  def count_drift(opts \\ []) do
+    for {schema, pairs} <- @tables, reduce: %{} do
+      acc ->
+        table = schema.__schema__(:source)
+        zero = Map.new(pairs, fn {d, _} -> {"#{table}.#{d}", 0} end)
+
+        {:ok, counts} =
+          IdWindows.reduce_all(
+            schema,
+            zero,
+            fn ids, %{repo: repo}, counts ->
+              {:cont, tally_drift(read_rows(repo, schema, pairs, ids), table, pairs, counts)}
+            end,
+            Keyword.put_new(opts, :batch_size, @batch)
+          )
+
+        Map.merge(acc, counts)
+    end
+  end
+
+  defp tally_drift(rows, table, pairs, counts) do
+    for row <- rows,
+        {d, at} <- pairs,
+        not FileTime.same_at?(row[at], FileTime.normalize(row[d])),
+        reduce: counts,
+        do: (counts -> Map.update!(counts, "#{table}.#{d}", &(&1 + 1)))
+  end
+
   defp refresh_ms_payloads(repo, Engram.Notes.Note, pairs, fixed, tally) do
-    ms = for {row, _} <- fixed, Enum.any?(pairs, fn {d, _} -> FileTime.ms?(row[d]) end), do: row
+    # Only rows whose served time moved: a v1 floored twin is within
+    # `FileTime.twin?/2`, so `epoch/2` already sent the double.
+    ms =
+      for {row, _} <- fixed,
+          Enum.any?(pairs, fn {d, at} ->
+            FileTime.ms?(row[d]) and not FileTime.twin?(row[at], row[d])
+          end),
+          do: row
 
     if ms != [] do
       ids = Enum.map(ms, & &1.id)

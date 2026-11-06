@@ -8,7 +8,8 @@ defmodule Engram.ServiceConfig.Overrides do
   moves every node within seconds and a task booted later reads the same
   row, so there is no split brain between old and new tasks. The keys left
   are the v5 rebuild kill switch (`index_rebuild`) and the v5 step not
-  taken yet (`tenant_idf`).
+  taken yet (`tenant_idf`), plus the `FileTimes` data migration's kill
+  switch (`file_times_backfill`).
 
   ## Reads
 
@@ -51,7 +52,8 @@ defmodule Engram.ServiceConfig.Overrides do
     index_rebuild: {:enum, ~w(off dry_run on)},
     keyword_refresh: :boolean,
     keyword_refresh_backlog: {:integer, 0..1_000_000},
-    rebuild_max_disk_percent: {:integer, 1..100}
+    rebuild_max_disk_percent: {:integer, 1..100},
+    file_times_backfill: :boolean
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})

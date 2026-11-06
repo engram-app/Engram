@@ -415,6 +415,10 @@ defmodule Engram.Backfill.IdWindows do
 
   defp spanning(_name, _passes), do: :ok
 
+  @doc "Drops the cursor of the walk `name`: its next `heal_pass/4` starts over."
+  @spec reset_walk(String.t()) :: :ok
+  def reset_walk(name), do: Agent.update(@cursors, &Map.delete(&1, name))
+
   @doc false
   # Drops every walk cursor (tests; `Engram.DataMigrations.reset_cache/0`).
   def reset_walks, do: Agent.update(@cursors, fn _ -> %{} end)

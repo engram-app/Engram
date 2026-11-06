@@ -8,10 +8,22 @@ defmodule Engram.FileTime do
   `notes.mtime` min 1,776,072,500.9 s, max 1,793,442,859,572.0 ms). Below
   1e11 in magnitude is seconds (1e11 s is the year 5138), at or above it
   milliseconds (1e11 ms is 1973). `0` is the plugin's "unknown": NULL.
-  Floored to the microsecond, never rounded, so a seconds value keeps
-  `DateTime.to_unix(at) == trunc(t)` (payload hashes depend on it). Floor
-  equals trunc only for `t >= 0`, which is all the payload hash reads. Outside
-  years 1 to 9999 is out of range.
+  Rounded to the nearest microsecond, so a millisecond-precision value
+  keeps its digits (`t * 1e6` often lands just below the decimal the
+  client sent: floored, 2147484020.404 was stored as .403999). Never
+  across a whole second: that would break `DateTime.to_unix(at) ==
+  trunc(t)` (payload hashes depend on it), so a value within a
+  microsecond below a second is clamped to its .999999 (the old floor
+  could cross too, when `t * 1e6` itself rounded up). Floor equals trunc
+  only for `t >= 0`, which is all the payload hash reads. Outside years 1 to 9999 is out of range. 0.74 and 0.75 floored;
+  `twin?/2` accepts their twins (within 1 us) as agreeing, and
+  `Engram.DataMigrations.FileTimes` v2 rewrites them.
+
+  Desktop Obsidian sends sub-microsecond digits (`stat.mtimeMs` has
+  sub-millisecond fractions; the plugin divides by 1000). Those are
+  precision noise: after contract the wire serves the value rounded to the
+  microsecond (a change under 1 us). No client sees it: the plugin never
+  compares server mtimes, and the web tree shows minutes or seconds.
 
   Strict only at the client boundary: `check/2` (REST params, 422) and
   `validate/2` (a request changeset). Every write behind it is lenient,
@@ -20,10 +32,14 @@ defmodule Engram.FileTime do
   Rows built for `insert_all` / `update_all` use `to_at!/1` on values the
   server made or already checked.
 
-  Phase migrate-data (R25): readers go through `epoch/2` (`mtime/1`,
-  `ctime/1`), which still derives from the double, the fresher value until
-  contract; `put_at/3` repairs a stale twin on every write, and
-  `Engram.DataMigrations.FileTimes` backfills the rest.
+  Phase migrate-data (R25), read switch: readers go through `epoch/2`
+  (`mtime/1`, `ctime/1`), which serves the `*_at` twin's instant (the
+  double's exact digits when the two agree) and falls back to the double
+  only while the twin is NULL. `put_at/3` repairs a stale twin
+  on every write, and `Engram.DataMigrations.FileTimes` backfilled the
+  rest (done in prod before this switch). No rollback below 0.74.0: an
+  older release moves the double without its twin, and this release would
+  serve that stale twin.
 
   Phase expand: the doubles are still written exactly as sent. A previous
   release running during the rollout, or after a rollback, moves a double
@@ -31,8 +47,8 @@ defmodule Engram.FileTime do
   `*_at IS DISTINCT FROM` the normalized double (not only NULL ones) and
   report how many it repaired: that count is the guard against a writer
   that skips the twin. It must normalize with this module (or the same
-  floor and bounds in SQL; never `to_timestamp`, which rounds to the
-  microsecond), and count out-of-range legacy rows separately instead of
+  rounding, second guard and bounds in SQL; never `to_timestamp`, which
+  rounds across a second), and count out-of-range legacy rows separately instead of
   aborting the batch.
   """
 
@@ -47,6 +63,14 @@ defmodule Engram.FileTime do
   # fails in Postgres.
   @min_us -62_135_596_800_000_000
 
+  @doc """
+  The twin rounding this build writes: 1 = rounded to the microsecond
+  (`to_at/1`). 0.75 and older lack it and floored.
+  `Engram.DataMigrations.FileTimes` asks every peer before it closes.
+  """
+  @spec twin_rounding() :: 1
+  def twin_rounding, do: 1
+
   @doc "Whether `t` is in seconds (below 1e11 in magnitude), not milliseconds."
   @spec seconds?(number()) :: boolean()
   def seconds?(t) when is_number(t), do: abs(t) < @ms_from
@@ -60,9 +84,13 @@ defmodule Engram.FileTime do
   def to_at(t) when is_number(t) and abs(t) > @max_abs, do: {:error, :out_of_range}
 
   def to_at(t) when is_number(t) do
-    us = if abs(t) < @ms_from, do: t * 1_000_000, else: t * 1_000
+    {x, sec} =
+      if abs(t) < @ms_from,
+        do: {t * 1_000_000, floor(t)},
+        else: {t * 1_000, Integer.floor_div(floor(t), 1_000)}
 
-    us = floor(us)
+    # Clamped into `t`'s own second: the product can round across it.
+    us = x |> round() |> max(sec * 1_000_000) |> min(sec * 1_000_000 + 999_999)
 
     case us >= @min_us and DateTime.from_unix(us, :microsecond) do
       {:ok, at} -> {:ok, at}
@@ -92,19 +120,36 @@ defmodule Engram.FileTime do
   The epoch-seconds number a reader sends, given the `*_at` column `at` and
   the stored double `t`. The wire format is unchanged.
 
-  During migrate-data the DOUBLE is the fresher value: every release writes
-  it, and the twin is derived from it (a release before expand moves the
-  double alone and leaves a stale twin). So the value comes from the double,
-  normalized: a seconds double goes out bit-identical (payload hashes and
-  client comparisons depend on it), a millisecond double goes out as its
-  seconds, `0` and out of range go out as stored. `at` is read only when
-  there is no double (after contract drops it).
+  The twin `at` is the authority on the instant (the read switch): a twin
+  that disagrees with the double (a stale one) is served as its seconds.
+  A twin that agrees (`twin?/2`) is the same instant to the microsecond,
+  so the double goes out instead and a seconds double stays bit-identical
+  (payload hashes and client comparisons depend on it). Without a twin (a
+  row the backfill has not reached, or a `0` / out-of-range double the
+  twin holds as NULL) the double is the fallback. A double goes out
+  normalized: a millisecond double as its seconds, anything else as
+  stored.
   """
   @spec epoch(DateTime.t() | nil, number() | nil) :: number() | nil
-  def epoch(nil, nil), do: nil
-  def epoch(%DateTime{} = at, nil), do: seconds(at)
+  def epoch(%DateTime{} = at, t),
+    do: if(twin?(at, t), do: epoch(nil, t), else: seconds(at))
 
   def epoch(_at, t), do: if(ms?(t), do: seconds(normalize(t)), else: t)
+
+  @doc """
+  True when `at` is the twin of the double `t`: `normalize(t)`, give or
+  take 1 us (0.74 and 0.75 floored to the microsecond instead of rounding
+  and clamping).
+  """
+  @spec twin?(DateTime.t() | nil, number() | nil) :: boolean()
+  def twin?(%DateTime{} = at, t) do
+    case normalize(t) do
+      %DateTime{} = want -> DateTime.diff(want, at, :microsecond) in -1..1
+      nil -> false
+    end
+  end
+
+  def twin?(_at, _t), do: false
 
   @doc """
   True for an in-range double in milliseconds: the one value whose served

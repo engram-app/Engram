@@ -268,4 +268,44 @@ defmodule Engram.Cluster.ReadinessTest do
       assert Keyword.fetch!(opts, :retry) == 1
     end
   end
+
+  describe "peers_report/4" do
+    @a :"engram@10.0.0.1"
+    @b :"engram@10.0.0.2"
+
+    defp report(results, extra \\ []) do
+      Readiness.peers_report(
+        Engram.FileTime,
+        :twin_rounding,
+        1,
+        Keyword.merge(
+          [
+            role: nil,
+            query: nil,
+            peers: fn -> [@a, @b] end,
+            multicall: fn [@a, @b] -> results end
+          ],
+          extra
+        )
+      )
+    end
+
+    test "every peer at or above min is :ok" do
+      assert report([{:ok, 1}, {:ok, 2}]) == :ok
+    end
+
+    test "an older build (lower value or no such function) is behind" do
+      assert report([{:ok, 1}, {:ok, 0}]) == {:peer_behind, @b}
+      assert report([{:error, {:exception, :undef, []}}, {:ok, 1}]) == {:peer_behind, @a}
+    end
+
+    test "an erpc error or timeout is unreachable" do
+      assert report([{:ok, 1}, {:error, {:erpc, :timeout}}]) == {:peer_unreachable, @b}
+    end
+
+    test "a missing member blocks before any peer is asked" do
+      assert report(:never, role: :web, peers: fn -> [] end, sync: fn -> :ok end) ==
+               {:members_missing, nil}
+    end
+  end
 end
