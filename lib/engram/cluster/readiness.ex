@@ -32,6 +32,7 @@ defmodule Engram.Cluster.Readiness do
   """
 
   @default_grace_ms :timer.seconds(60)
+  @erpc_timeout_ms 2_000
 
   @type decision :: :ready | {:ready, :alone} | {:ready, :grace_expired} | :waiting
   @type status :: :not_clustered | decision
@@ -103,6 +104,42 @@ defmodule Engram.Cluster.Readiness do
       _ = Keyword.get(opts, :sync, &:global.sync/0).()
       peers = Keyword.get(opts, :peers, &Node.list/0).()
       peers != [] and covers_discovered?(peers, query, opts)
+    end
+  end
+
+  @doc """
+  Whether every cluster node runs a build that has a capability: every
+  expected member is connected (`rooms_reachable?/1`) and every connected
+  peer answers `mod.fun()` over `:erpc` with an integer `>= min`. A peer
+  without the function (an older build) counts as behind; an erpc error or
+  timeout as unreachable. `:ok`, or `{:members_missing, nil}`,
+  `{:peer_behind, node}`, `{:peer_unreachable, node}`. The one fleet gate
+  for "no older node is still writing" (`Engram.Crypto.CompressionGate`,
+  `Engram.DataMigrations.FileTimes`).
+
+  Options: those of `rooms_reachable?/1`, plus `:multicall` (fun of the
+  peer list returning `:erpc.multicall/5`-shaped results).
+  """
+  @spec peers_report(module(), atom(), integer(), keyword()) ::
+          :ok | {:members_missing | :peer_behind | :peer_unreachable, node() | nil}
+  def peers_report(mod, fun, min, opts \\ []) do
+    peers = Keyword.get(opts, :peers, &Node.list/0).()
+    opts = Keyword.put(opts, :peers, fn -> peers end)
+
+    multicall =
+      Keyword.get(opts, :multicall, &:erpc.multicall(&1, mod, fun, [], @erpc_timeout_ms))
+
+    if rooms_reachable?(opts) do
+      peers
+      |> Enum.zip(multicall.(peers))
+      |> Enum.find_value(:ok, fn
+        {_node, {:ok, v}} when is_integer(v) and v >= min -> nil
+        {node, {:ok, _}} -> {:peer_behind, node}
+        {node, {:error, {:exception, :undef, _}}} -> {:peer_behind, node}
+        {node, _} -> {:peer_unreachable, node}
+      end)
+    else
+      {:members_missing, nil}
     end
   end
 

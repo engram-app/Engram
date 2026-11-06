@@ -41,7 +41,6 @@ defmodule Engram.Crypto.CompressionGate do
 
   @key {__MODULE__, :allowed}
   @refresh_ms :timer.seconds(30)
-  @erpc_timeout_ms 2_000
 
   @type reason ::
           :cluster_reads_format_1
@@ -89,26 +88,15 @@ defmodule Engram.Crypto.CompressionGate do
 
     readiness =
       opts
-      |> Keyword.take([:role, :query, :resolver, :self_ip])
+      |> Keyword.take([:role, :query, :resolver, :self_ip, :multicall])
       |> Keyword.merge(peers: fn -> peers end, sync: fn -> :ok end)
 
-    if Readiness.rooms_reachable?(readiness),
-      do: peers_verdict(peers, Keyword.get(opts, :multicall, &multicall/1)),
-      else: {:blocked, :members_missing, nil}
-  end
-
-  defp multicall(peers),
-    do: :erpc.multicall(peers, Envelope, :max_read_format, [], @erpc_timeout_ms)
-
-  defp peers_verdict(peers, multicall) do
-    peers
-    |> Enum.zip(multicall.(peers))
-    |> Enum.find_value({:allowed, :cluster_reads_format_1, nil}, fn
-      {_node, {:ok, format}} when is_integer(format) and format >= 1 -> nil
-      {node, {:ok, _}} -> {:blocked, :peer_cannot_read, node}
-      {node, {:error, {:exception, :undef, _}}} -> {:blocked, :peer_cannot_read, node}
-      {node, _} -> {:blocked, :peer_unreachable, node}
-    end)
+    case Readiness.peers_report(Envelope, :max_read_format, 1, readiness) do
+      :ok -> {:allowed, :cluster_reads_format_1, nil}
+      {:members_missing, nil} -> {:blocked, :members_missing, nil}
+      {:peer_behind, node} -> {:blocked, :peer_cannot_read, node}
+      {:peer_unreachable, node} -> {:blocked, :peer_unreachable, node}
+    end
   end
 
   @impl true
