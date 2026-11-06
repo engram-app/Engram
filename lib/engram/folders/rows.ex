@@ -794,11 +794,15 @@ defmodule Engram.Folders.Rows do
   defp retire_merged(merged), do: Enum.each(merged, fn {row, keeper} -> retire(row, keeper) end)
 
   # `row` lost its place to `keeper`: its explicit flag moves over, it is retired.
+  # The flag is read from the row NOW, in the same statement, not from the
+  # struct queued earlier: in a chained merge (one owner, the second merge's
+  # source is the first one's keeper) the first retire sets it after the
+  # second was queued. The queue is FIFO, so the flag lands at the end.
   defp retire(row, keeper) do
-    if row.explicit do
-      from(f in Folder, where: f.id == ^keeper)
-      |> Repo.update_all(set: [explicit: true, updated_at: now()])
-    end
+    explicit = from(s in Folder, where: s.id == ^row.id and s.explicit, select: 1)
+
+    from(f in Folder, where: f.id == ^keeper and not f.explicit and exists(explicit))
+    |> Repo.update_all(set: [explicit: true, updated_at: now()])
 
     from(f in Folder, where: f.id == ^row.id)
     |> Repo.update_all(set: [deleted_at: now(), updated_at: now()])

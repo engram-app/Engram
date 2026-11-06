@@ -175,6 +175,33 @@ defmodule Engram.Folders.RowsTest do
       assert length(live) == length(Enum.uniq_by(live, & &1.full_path_hmac))
     end
 
+    # Two merges in one owner (`Folders.atomic/1`'s queue), the second's
+    # source the first's keeper: what a batch move of a folder and its own
+    # descendant marker does when both landing paths have rows. The explicit
+    # flag must travel both hops. Red at fe52be836, whose queued retire read
+    # the flag from the struct captured before the first retire set it.
+    test "a chained merge in one owner carries the explicit flag both hops", ctx do
+      %{user: u, vault: v, fk: fk} = ctx
+      ensure!(u, v, "A/B", explicit: Ecto.UUID.generate())
+      ensure!(u, v, "T/A/B")
+      ensure!(u, v, "T/B")
+
+      assert {:ok, :done} =
+               Rows.with_deferred_retires(fn ->
+                 in_tenant(u, fn ->
+                   :ok = Rows.rename(u, v.id, "A", "T/A")
+                   :ok = Rows.rename(u, v.id, "T/A/B", "T/B")
+                 end)
+
+                 {:ok, :done}
+               end)
+
+      at = by_path(u, v, fk)
+      assert at.("T/B").explicit
+      assert at.("A") == nil
+      assert at.("T/A/B") == nil
+    end
+
     test "soft_delete stamps the subtree and restore_op brings it back", ctx do
       %{user: u, vault: v, fk: fk} = ctx
       ensure!(u, v, "A/B/C")
