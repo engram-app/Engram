@@ -576,19 +576,26 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   cursor is never seen, and the ledger's done is cached for good. Else how
   many users this page requeued. Options as `cluster_writes_n?/1`.
   """
+  # ponytail: at most 16 pages (4,096 points without `n`) per pass, stopping
+  # at the first page that requeues anyone. Hourly, that walks ~100k orphan
+  # points a day; a bigger orphan backlog is `OrphanSweep`'s to reap first.
+  @requeue_pages 16
+
   @spec requeue_unbackfilled(keyword()) :: :clean | {:ok, non_neg_integer()} | {:error, term()}
   def requeue_unbackfilled(opts \\ []) do
-    filter = missing_n_filter()
-
     walk =
       case Cursor.get(@requeue_cursor) do
         %{"offset" => _} = walk -> walk
         _ -> %{"fresh" => cluster_writes_n?(opts)}
       end
 
+    requeue_pages(walk, Keyword.get(opts, :pages, @requeue_pages))
+  end
+
+  defp requeue_pages(walk, pages_left) do
     with {:ok, %{points: points, next_page_offset: next}} <-
            Qdrant.scroll(Qdrant.collection_name(),
-             filter: filter,
+             filter: missing_n_filter(),
              with_payload: ["u"],
              limit: @refresh_page,
              offset: walk["offset"]
@@ -599,23 +606,28 @@ defmodule Engram.Workers.ReconcileNotePayloads do
         |> Enum.filter(fn {uid, ids} -> unstamp_versions(uid, ids) > 0 end)
         |> Enum.map(&elem(&1, 0))
 
-      dirty = walk["dirty"] == true or users != []
-
-      # The end of the walk: the next call starts a fresh one.
-      if next == nil,
-        do: Cursor.reset(@requeue_cursor),
-        else:
-          Cursor.put(@requeue_cursor, %{
-            "offset" => next,
-            "dirty" => dirty,
-            "fresh" => walk["fresh"] == true
-          })
+      walk = %{
+        "offset" => next,
+        "dirty" => walk["dirty"] == true or users != [],
+        "fresh" => walk["fresh"] == true
+      }
 
       cond do
-        users != [] -> {:ok, TenantScan.enqueue_users(__MODULE__, users)}
-        next == nil and not dirty and walk["fresh"] == true -> :clean
-        true -> {:ok, 0}
+        users != [] or pages_left <= 1 or next == nil -> end_requeue(walk, users, next)
+        true -> requeue_pages(walk, pages_left - 1)
       end
+    end
+  end
+
+  # The end of the walk resets it (the next call starts a fresh one);
+  # otherwise the next call resumes at `next`.
+  defp end_requeue(walk, users, next) do
+    if next == nil, do: Cursor.reset(@requeue_cursor), else: Cursor.put(@requeue_cursor, walk)
+
+    cond do
+      users != [] -> {:ok, TenantScan.enqueue_users(__MODULE__, users)}
+      next == nil and not walk["dirty"] and walk["fresh"] -> :clean
+      true -> {:ok, 0}
     end
   end
 

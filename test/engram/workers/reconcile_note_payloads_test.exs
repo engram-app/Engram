@@ -15,6 +15,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   import Mox
 
   alias Engram.Crypto
+  alias Engram.DataMigrations
   alias Engram.DataMigrations.NotePayloadStamps
   alias Engram.Indexing
   alias Engram.Indexing.PayloadV6
@@ -420,8 +421,13 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     assert NotePayloadStamps.run_pass() == :done
     Indexing.unstamp_payload_hash(reload(ctx.stale))
 
-    # No daily re-run: `Engram.Bookkeeping.Drain` finds the unstamped row.
-    refute function_exported?(NotePayloadStamps, :reverify?, 0)
+    # `Engram.Bookkeeping.Drain` finds the unstamped row. The daily
+    # re-verify exists for points without `n` only (a Qdrant walk, never a
+    # walk of every note), so a done ledger stays done for this.
+    DataMigrations.mark_done(NotePayloadStamps.name(), NotePayloadStamps.version())
+    assert NotePayloadStamps.reverify?()
+    assert NotePayloadStamps.run_pass() == :done
+    DataMigrations.reopen(NotePayloadStamps.name(), NotePayloadStamps.version())
     assert {:more, users: 1} = NotePayloadStamps.run_pass()
     assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
   end
@@ -777,9 +783,9 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       id = hd(point_ids(ctx.stale))
       Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.delete(p, "n") end))
 
-      # One page a pass: the orphans, then the live point.
-      assert {:more, users: 0} = NotePayloadStamps.run_pass()
-      assert {:more, users: 1} = NotePayloadStamps.run_pass()
+      # One page a pass (`pages: 1`): the orphans, then the live point.
+      assert {:more, users: 0} = NotePayloadStamps.run_pass(pages: 1)
+      assert {:more, users: 1} = NotePayloadStamps.run_pass(pages: 1)
       assert nil in payload_versions(ctx)
 
       assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
@@ -853,12 +859,44 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
 
       # Two-page walk: begun with the old node, finished without it.
       orphans!(ctx, 257)
-      refute NotePayloadStamps.run_pass(old_cluster()) == :done
-      refute NotePayloadStamps.run_pass(role: nil, query: nil, peers: fn -> [] end) == :done
+      refute NotePayloadStamps.run_pass([pages: 1] ++ old_cluster()) == :done
+
+      refute NotePayloadStamps.run_pass(pages: 1, role: nil, query: nil, peers: fn -> [] end) ==
+               :done
 
       # The next walk, every node new from its start: done.
-      refute NotePayloadStamps.run_pass(role: nil, query: nil, peers: fn -> [] end) == :done
-      assert NotePayloadStamps.run_pass(role: nil, query: nil, peers: fn -> [] end) == :done
+      refute NotePayloadStamps.run_pass(pages: 1, role: nil, query: nil, peers: fn -> [] end) ==
+               :done
+
+      assert NotePayloadStamps.run_pass(pages: 1, role: nil, query: nil, peers: fn -> [] end) ==
+               :done
+    end
+
+    # Rollback then roll-forward: the older release re-upserted a note's
+    # points without `n` while the ledger was done (cached for good) and the
+    # stamp stayed 6. No operator step: the daily re-verify finds the points,
+    # reopens the ledger and requeues the user; the next chain heals them.
+    test "a rollback's points without n reopen the done ledger by themselves", ctx do
+      alias Engram.Workers.DataMigrationsRunner
+
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      DataMigrations.mark_done(NotePayloadStamps.name(), NotePayloadStamps.version())
+      assert DataMigrations.done?(NotePayloadStamps.name(), NotePayloadStamps.version())
+
+      # A clean re-verify stays done.
+      assert DataMigrationsRunner.run(NotePayloadStamps, true) == :done
+
+      id = hd(point_ids(ctx.stale))
+      Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.delete(p, "n") end))
+      assert payload_versions(ctx) == [6, 6]
+
+      assert DataMigrationsRunner.run(NotePayloadStamps, true) == :more
+      refute DataMigrations.done?(NotePayloadStamps.name(), NotePayloadStamps.version())
+      assert nil in payload_versions(ctx)
+      assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
+
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      assert n_kept?(ctx, {id, Agent.get(ctx.store, &Map.fetch!(&1.points, id))})
     end
 
     # The hourly pass must not run an unindexed "any note behind?" EXISTS

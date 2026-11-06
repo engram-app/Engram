@@ -10,10 +10,12 @@ defmodule Engram.DataMigrations.NotePayloadStamps do
   (`set_payload`, no re-embed), so for everyone else this costs reads and a
   row stamp per note.
 
-  Not re-verified daily. Every writer since #2044 stamps the hash and a
+  The hash side is not re-verified daily. Every writer since #2044 stamps the hash and a
   rotation rewrites and stamps it (`UserDekRotation`); a lost write race
   NULLs a stamp, and `Engram.Bookkeeping.Drain` finds those through the
-  partial index `note_index_state_unstamped`.
+  partial index `note_index_state_unstamped`. The daily re-verify
+  (`reverify?/0`) covers only points without `n`, a Qdrant walk: a rollback's
+  re-upserts reopen the ledger by themselves.
 
   Version 2 (`PayloadV6.version/0` 6) backfills `n`, the note row id, onto
   every v5 point (`ReconcileNotePayloads`). Search does not wait on it (a
@@ -52,6 +54,28 @@ defmodule Engram.DataMigrations.NotePayloadStamps do
   @doc "`run_pass/0` with the cluster probe's options (tests: `:peers`, `:multicall`)."
   @spec run_pass(keyword()) :: :done | :more | {:more, keyword()}
   def run_pass(opts) do
+    if Engram.DataMigrations.done?(name(), version()), do: reverify(opts), else: pass(opts)
+  end
+
+  # Re-verified daily (`reverify?/0`), so a rollback heals itself: an older
+  # release re-upserts points without `n` while the ledger is done, and their
+  # stamps stay 6, so only Qdrant can see them. The re-verify runs the Qdrant
+  # walk alone (points without `n`, a filtered scroll: after the backfill only
+  # orphans and such points match), never the notes walk, which would read
+  # every note daily. Finding a live point reopens the ledger (the runner's
+  # `:more`) and requeues its user; the hourly passes then heal and close it.
+  @impl true
+  def reverify?, do: true
+
+  defp reverify(opts) do
+    case ReconcileNotePayloads.requeue_unbackfilled(opts) do
+      {:ok, requeued} when requeued > 0 -> {:more, users: requeued}
+      # Nothing found yet (or Qdrant unreadable): stays done, tomorrow resumes.
+      _ -> :done
+    end
+  end
+
+  defp pass(opts) do
     # The notes primary key in fixed id windows, budgeted and resumable
     # (`IdWindows.heal_pass/4`): done only after one whole walk queued nobody.
     notes = IdWindows.heal_pass(name(), Note, &ReconcileNotePayloads.queue_window/2, [])
