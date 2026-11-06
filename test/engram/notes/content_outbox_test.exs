@@ -211,8 +211,9 @@ defmodule Engram.Notes.ContentOutboxTest do
             set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
           )
 
-          # As every app writer: the body row too (no trigger copies it).
-          NoteBody.sync!(note_id, [:crdt_state_ciphertext])
+          # As every app writer: the body row too, with the values written
+          # (a copy from `notes` never NULLs a body).
+          NoteBody.put!({note_id, crdt_state_ciphertext: nil, crdt_state_nonce: nil})
         end)
 
       :ok

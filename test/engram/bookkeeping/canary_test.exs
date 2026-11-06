@@ -64,10 +64,12 @@ defmodule Engram.Bookkeeping.CanaryTest do
       assert drift_of(Canary.run()) == %{note_split: 1}
     end
 
-    test "a body whose ciphertext tail differs under the same nonce", %{notes: [n | _]} do
+    # Compared by nonce (R8 b1): a later release stops writing the `notes`
+    # ciphertext, so only the nonce names the body. A body corrupted under
+    # its own nonce fails its AEAD tag on read instead.
+    test "a body whose nonce differs from its notes row", %{notes: [n | _]} do
       sql(n, """
-      UPDATE note_bodies SET content_ct =
-        overlay(content_ct PLACING '\\x00'::bytea FROM length(content_ct))
+      UPDATE note_bodies SET content_ct = set_byte(content_ct, 4, get_byte(content_ct, 4) # 255)
       WHERE note_id = $1
       """)
 

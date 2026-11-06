@@ -43,7 +43,7 @@ defmodule Engram.Workers.BackfillCrdtStateLockTest do
 
           Repo.delete_all(from(l in Engram.Notes.CrdtUpdateLog, where: l.note_id == ^note.id))
 
-          NoteBody.sync!(note.id, [:crdt_state_ciphertext])
+          NoteBody.put!({note.id, crdt_state_ciphertext: nil, crdt_state_nonce: nil})
         end)
 
       on_exit(fn ->

@@ -256,7 +256,7 @@ defmodule Engram.Notes.NoteBodyWriteTest do
           set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
         )
 
-        NoteBody.sync!(note.id, NoteBody.body_fields())
+        NoteBody.put!({note.id, crdt_state_ciphertext: nil, crdt_state_nonce: nil})
         Repo.query!("DELETE FROM crdt_update_log WHERE note_id = $1", [Ecto.UUID.dump!(note.id)])
         assert BackfillCrdtState.write_seed(note.id, ct, nonce) == 1
       end)
