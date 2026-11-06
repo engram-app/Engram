@@ -20,10 +20,14 @@ defmodule Engram.FileTime do
   Rows built for `insert_all` / `update_all` use `to_at!/1` on values the
   server made or already checked.
 
-  Phase migrate-data (R25): readers go through `epoch/2` (`mtime/1`,
-  `ctime/1`), which still derives from the double, the fresher value until
-  contract; `put_at/3` repairs a stale twin on every write, and
-  `Engram.DataMigrations.FileTimes` backfills the rest.
+  Phase migrate-data (R25), read switch: readers go through `epoch/2`
+  (`mtime/1`, `ctime/1`), which serves the `*_at` twin's instant (the
+  double's exact digits when the two agree) and falls back to the double
+  only while the twin is NULL. `put_at/3` repairs a stale twin
+  on every write, and `Engram.DataMigrations.FileTimes` backfilled the
+  rest (done in prod before this switch). No rollback below 0.74.0: an
+  older release moves the double without its twin, and this release would
+  serve that stale twin.
 
   Phase expand: the doubles are still written exactly as sent. A previous
   release running during the rollout, or after a rollback, moves a double
@@ -92,17 +96,19 @@ defmodule Engram.FileTime do
   The epoch-seconds number a reader sends, given the `*_at` column `at` and
   the stored double `t`. The wire format is unchanged.
 
-  During migrate-data the DOUBLE is the fresher value: every release writes
-  it, and the twin is derived from it (a release before expand moves the
-  double alone and leaves a stale twin). So the value comes from the double,
-  normalized: a seconds double goes out bit-identical (payload hashes and
-  client comparisons depend on it), a millisecond double goes out as its
-  seconds, `0` and out of range go out as stored. `at` is read only when
-  there is no double (after contract drops it).
+  The twin `at` is the authority on the instant (the read switch): a twin
+  that disagrees with the double (a stale one) is served as its seconds.
+  A twin that agrees is the double floored to the microsecond, so the
+  double goes out instead: it is the same instant, and a seconds double
+  stays bit-identical (`seconds(at)` alone would send 2147484020.404 as
+  2147484020.403999 and move payload hashes). Without a twin (a row the
+  backfill has not reached, or a `0` / out-of-range double the twin holds
+  as NULL) the double is the fallback. A double goes out normalized: a
+  millisecond double as its seconds, anything else as stored.
   """
   @spec epoch(DateTime.t() | nil, number() | nil) :: number() | nil
-  def epoch(nil, nil), do: nil
-  def epoch(%DateTime{} = at, nil), do: seconds(at)
+  def epoch(%DateTime{} = at, t),
+    do: if(same_at?(at, normalize(t)), do: epoch(nil, t), else: seconds(at))
 
   def epoch(_at, t), do: if(ms?(t), do: seconds(normalize(t)), else: t)
 

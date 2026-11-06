@@ -4,6 +4,7 @@ defmodule Engram.FileTimeTest do
   milliseconds, both seen in prod) to the `*_at` timestamptz value.
   """
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
   alias Engram.FileTime
 
@@ -137,12 +138,24 @@ defmodule Engram.FileTimeTest do
       assert FileTime.epoch(nil, 1_776_072_500_928.0) === 1_776_072_500.928
     end
 
-    # During migrate-data every release writes the double and the twin is
-    # derived from it, so a disagreement means the twin is stale.
-    test "the double wins over a stale timestamp" do
+    # The read switch: the twin is served whenever present.
+    test "a stale timestamp is served over the double" do
       stale = ~U[2026-04-13 09:28:20.500000Z]
-      assert FileTime.epoch(stale, 1.0) === 1.0
-      assert FileTime.epoch(stale, 1_776_072_500_928.0) === 1_776_072_500.928
+      assert FileTime.epoch(stale, 1.0) === 1_776_072_500.5
+      assert FileTime.epoch(stale, 1_776_072_500_928.0) === 1_776_072_500.5
+    end
+
+    # Clients send millisecond-fraction seconds; serving the twin must send
+    # those back bit-identical.
+    property "a millisecond-fraction seconds double round-trips through its twin" do
+      check all(
+              s <- integer(-2_000_000_000..4_000_000_000),
+              ms <- integer(0..999),
+              max_runs: 5_000
+            ) do
+        t = s + ms / 1_000
+        assert FileTime.epoch(FileTime.normalize(t), t) === t
+      end
     end
 
     test "the timestamp stands alone only without a double (after contract)" do
@@ -154,7 +167,6 @@ defmodule Engram.FileTimeTest do
       assert FileTime.epoch(nil, 1_776_072_500.9) === 1_776_072_500.9
       assert FileTime.epoch(nil, 0.0) === 0.0
       assert FileTime.epoch(nil, 1.0e19) === 1.0e19
-      assert FileTime.epoch(~U[2020-01-01 00:00:00Z], 1.0e19) === 1.0e19
     end
 
     test "mtime/1 and ctime/1 read a row or a map" do

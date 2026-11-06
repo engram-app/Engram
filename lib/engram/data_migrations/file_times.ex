@@ -8,10 +8,11 @@ defmodule Engram.DataMigrations.FileTimes do
   of its double, NULL or not: a release before expand, running during a
   rollout or after a rollback, moves a double without its twin and leaves a
   stale non-NULL value. Values come from `FileTime` (never `to_timestamp`,
-  which rounds), the same normalizer every writer uses. Readers derive from
-  the double until contract (`FileTime.epoch/2`), so a stale twin is never
-  served; this backfill and `FileTime.put_at/3` (which heals the twin on
-  every write) make the twins right for contract.
+  which rounds), the same normalizer every writer uses. Readers serve the
+  twin since the R25 read switch (`FileTime.epoch/2`, the double only while
+  the twin is NULL), so this backfill and `FileTime.put_at/3` (which heals
+  the twin on every write) are what make the served value right. It was
+  confirmed done in prod before the switch shipped.
 
   Each table is its own `IdWindows.heal_pass/4` walk (cursor
   `file_times:<table>`). A table whose walk came back clean is not walked

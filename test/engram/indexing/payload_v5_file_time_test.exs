@@ -1,7 +1,7 @@
 defmodule Engram.Indexing.PayloadV5FileTimeTest do
   @moduledoc """
-  R25 migrate-data: `PayloadV5` reads the file times through
-  `Engram.FileTime` (`mtime_at` / `ctime_at`). For every seconds-unit note
+  R25 migrate-data read switch: `PayloadV5` reads the file times through
+  `Engram.FileTime.epoch/2` (the `mtime_at` / `ctime_at` twin's instant). For every seconds-unit note
   the payload, and so its hash, must stay bit-identical to the formula on
   main before the switch (a changed hash rewrites the note's points): only
   millisecond notes change, once.
@@ -92,13 +92,16 @@ defmodule Engram.Indexing.PayloadV5FileTimeTest do
     assert PayloadV5.build(n, FlatFields.empty()) == old_payload(n)
   end
 
-  test "a drifted twin: the seconds double wins, payload and stored date agree" do
+  # The read switch: a twin that disagrees with the double is served. The
+  # stored `eff_updated` (`EffectiveDates.stored/2`, write side) stays on
+  # the double until contract; after the backfill no twin is stale.
+  test "a drifted twin: the twin wins, payload and effective date agree" do
     n = %{note(1_776_072_500.928, 1_510_897_528.861) | mtime_at: ~U[2020-01-01 00:00:00Z]}
     p = PayloadV5.build(n, FlatFields.empty())
-    assert p == old_payload(n)
-    {stored, 1} = Engram.Notes.EffectiveDates.updated(n, nil)
-    assert stored == trunc(n.mtime)
-    assert p["up"] == ceil(stored / @hour) * @hour
+    twin = DateTime.to_unix(n.mtime_at)
+    assert {^twin, 1} = Engram.Notes.EffectiveDates.updated(n, nil)
+    assert p["up"] == ceil(twin / @hour) * @hour
+    assert p["cr"] == old_payload(n)["cr"]
   end
 
   test "the contract shape (no double, *_at set) ceils the twin" do
