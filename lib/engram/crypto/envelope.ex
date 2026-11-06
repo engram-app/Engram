@@ -141,10 +141,15 @@ defmodule Engram.Crypto.Envelope do
 
   def split_merged(_), do: :error
 
-  @doc "The merged layout `split_merged/1` reads."
-  @spec merge(<<_::96>> | <<_::104>>, binary()) :: binary()
-  def merge(<<1, _::binary-12>> = nonce, ct), do: nonce <> ct
-  def merge(<<_::binary-12>> = nonce, ct), do: <<0>> <> nonce <> ct
+  @doc """
+  The merged layout `split_merged/1` reads. Byte for byte the layout the
+  `notes_sync_body` trigger defined (20261021110200) for any nonce: a
+  13-byte one is prepended as is, any other behind a 0 byte. A nonce of an
+  unusual length never raises here; `split_merged/1` rejects the result.
+  """
+  @spec merge(binary(), binary()) :: binary()
+  def merge(<<_::binary-13>> = nonce, ct), do: nonce <> ct
+  def merge(nonce, ct) when is_binary(nonce), do: <<0>> <> nonce <> ct
 
   @doc """
   `decrypt/4` for one column across many rows, under one key schedule:

@@ -1425,14 +1425,20 @@ defmodule Engram.Notes do
         |> Ecto.Changeset.put_change(:seq, seq)
         |> Ecto.Changeset.put_change(:folder_ref_id, folder_ref)
 
+      # The content nonce this insert wrote: fresh per encryption, so a row
+      # holding it is the row this insert made.
+      ours = changeset.changes.content_nonce
+
       case Repo.insert(changeset, on_conflict: :nothing) do
         {:ok, _} ->
           case Repo.one(lookup_query) do
-            %Note{id: ^note_id} = inserted ->
-              # Ours, so it was inserted: its body row, same transaction,
-              # from the values it wrote. The lookup ran before the body
-              # existed, so it read the `notes` copy; carry the written
-              # values instead.
+            # Ours: its id AND its nonce. A row with our id but another
+            # nonce is a create with the same client id that committed
+            # first (an offline replay racing the live push), and this
+            # INSERT no-op'd: it is theirs, and its body is left alone.
+            # The lookup ran before our body row existed, so it read the
+            # `notes` copy; carry the written values instead.
+            %Note{id: ^note_id, content_nonce: ^ours} = inserted ->
               _ = NoteBody.put!({note_id, changeset.changes})
               :ok = UsageMeters.inc_notes_count(user.id, 1)
               body = Map.take(changeset.changes, NoteBody.body_fields())
