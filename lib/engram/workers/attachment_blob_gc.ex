@@ -111,7 +111,7 @@ defmodule Engram.Workers.AttachmentBlobGC do
   # A STALE claim on a row that is no longer due: the run died or its S3 call
   # raised, and the owner's retention went up since (an upgrade, an override).
   # The normal path never re-claims it (it is inside its window), and
-  # `Attachments.revive_tombstones/3` refuses every claimed row, so without
+  # `Attachments.revive_tombstones/4` refuses every claimed row, so without
   # this it would stay unrestorable for the rest of its window while its
   # bytes may well exist. Settle it by asking storage: blob gone, finalize the
   # row the way a finished delete would (`storage_key` cleared); blob there,
@@ -276,7 +276,7 @@ defmodule Engram.Workers.AttachmentBlobGC do
   # re-check cannot see it. Likewise a future undelete must take the vault
   # lock and must not revive a row that carries a fresh `blob_gc_claimed_at`
   # (its blob may be mid-delete, or gone if the run died after it);
-  # `Attachments.revive_tombstones/3` is that path, takes the lock and refuses
+  # `Attachments.revive_tombstones/4` is that path, takes the lock and refuses
   # every claimed row (#2195). Finalize also refuses to touch a live row.
   defp claim(vault_id, cutoff, after_id) do
     repo = Repo.maintenance()

@@ -1787,11 +1787,18 @@ defmodule Engram.Attachments do
   restore either has its blob or is refused; it never leaves a live row
   pointing at nothing.
 
+  `repoint` is the decrypted metas (`id`, `path`, `path_nonce`) of rows whose
+  folder reference is re-pointed in the SAME transaction (#2469): a revived
+  row keeps the reference it was deleted with, which may name a dead folder
+  row under a stamp that still reads current, a state no drift index sees.
+  The revive also clears the stamp, so a row revived without a re-point is
+  read by path and healed by `Engram.Bookkeeping.Drain`.
+
   Returns `{:ok, %{restored: ids, unrestored: ids, seqs: %{id => seq}}}`,
   `seqs` holding each restored row's committed seq. Broadcasting is the
   caller's (it has the decrypted paths).
   """
-  @spec revive_tombstones(map(), map(), [String.t()]) ::
+  @spec revive_tombstones(map(), map(), [String.t()], [map()]) ::
           {:ok,
            %{
              restored: [String.t()],
@@ -1799,9 +1806,12 @@ defmodule Engram.Attachments do
              seqs: %{String.t() => integer()}
            }}
           | {:error, term()}
-  def revive_tombstones(_user, _vault, []), do: {:ok, %{restored: [], unrestored: [], seqs: %{}}}
+  def revive_tombstones(user, vault, ids, repoint \\ [])
 
-  def revive_tombstones(user, vault, ids) do
+  def revive_tombstones(_user, _vault, [], _repoint),
+    do: {:ok, %{restored: [], unrestored: [], seqs: %{}}}
+
+  def revive_tombstones(user, vault, ids, repoint) do
     ids = Enum.uniq(ids)
     now = DateTime.utc_now(:second)
 
@@ -1828,7 +1838,7 @@ defmodule Engram.Attachments do
                 ),
             select: a.id
           ),
-          set: [deleted_at: nil, delete_op_id: nil, updated_at: now]
+          set: [deleted_at: nil, delete_op_id: nil, folder_ref_stamp: nil, updated_at: now]
         )
 
       # Now live, so `stamp_seqs!`'s live-row guard admits them. Unused seqs
@@ -1839,6 +1849,9 @@ defmodule Engram.Attachments do
         |> Enum.with_index(last_seq - length(ids) + 1)
 
       _ = BulkUpdate.stamp_seqs!(id_seqs, :touch, now)
+
+      back = MapSet.new(revived)
+      :ok = repoint_folder_refs(user, vault, Enum.filter(repoint, &MapSet.member?(back, &1.id)))
 
       if revived != [], do: :ok = evict_counts(user.id)
       %{restored: revived, unrestored: ids -- revived, seqs: Map.new(id_seqs)}
@@ -2109,7 +2122,7 @@ defmodule Engram.Attachments do
   end
 
   @doc """
-  Brings back `metas` (from `plan_restore/4`) through `revive_tombstones/3`,
+  Brings back `metas` (from `plan_restore/4`) through `revive_tombstones/4`,
   in chunks, and announces each restored path. Rows the revive refuses (blob
   reaped or mid-reap, path taken since the plan) come back as skipped
   `:unavailable`.
@@ -2120,12 +2133,11 @@ defmodule Engram.Attachments do
     metas
     |> Enum.chunk_every(delete_chunk_size())
     |> Enum.reduce_while({:ok, %{restored: [], skipped: []}}, fn chunk, {:ok, acc} ->
-      case revive_tombstones(user, vault, Enum.map(chunk, & &1.id)) do
+      case revive_tombstones(user, vault, Enum.map(chunk, & &1.id), chunk) do
         {:ok, %{restored: ids, seqs: seqs}} ->
           back = MapSet.new(ids)
           {restored, refused} = Enum.split_with(chunk, &MapSet.member?(back, &1.id))
           now = DateTime.utc_now(:second)
-          :ok = repoint_folder_refs(user, vault, restored)
 
           for m <- restored do
             fields = Map.take(m, @tree_attachment_fields)
@@ -2153,31 +2165,30 @@ defmodule Engram.Attachments do
   # folder row the undo could not revive (a live sibling took the name). Point
   # each at the live row for the path just decrypted from it, stamped with the
   # nonce that path was read under (`Rows.attachment_ref/2`): a row whose path
-  # moved since keeps its old stamp, a mismatch the drain heals.
+  # moved since keeps its old stamp, a mismatch the drain heals. Runs inside
+  # `revive_tombstones/4`'s transaction, after its vault lock (the order every
+  # writer takes `Rows.ensure_all/3` in).
   defp repoint_folder_refs(_user, _vault, []), do: :ok
 
   defp repoint_folder_refs(user, vault, metas) do
     by_folder = Enum.group_by(metas, &Helpers.extract_folder(&1.path))
+    {:ok, refs} = Rows.ensure_all(user, vault.id, Map.keys(by_folder))
 
-    Repo.with_tenant!(user.id, fn ->
-      {:ok, refs} = Rows.ensure_all(user, vault.id, Map.keys(by_folder))
+    # One statement per folder. The set-based form of `Rows.attachment_ref/2`:
+    # the stamp is the row's own nonce, and only rows still at the nonce the
+    # path was decrypted under match (nonces are random per write, so the
+    # `IN` pairs them with their ids).
+    for {folder, rows} <- by_folder do
+      ids = Enum.map(rows, & &1.id)
+      nonces = Enum.map(rows, & &1.path_nonce)
+      ref = Map.fetch!(refs, folder)
 
-      # One statement per folder. The set-based form of `Rows.attachment_ref/2`:
-      # the stamp is the row's own nonce, and only rows still at the nonce the
-      # path was decrypted under match (nonces are random per write, so the
-      # `IN` pairs them with their ids).
-      for {folder, rows} <- by_folder do
-        ids = Enum.map(rows, & &1.id)
-        nonces = Enum.map(rows, & &1.path_nonce)
-        ref = Map.fetch!(refs, folder)
-
-        from(a in Attachment,
-          where: a.id in ^ids and a.path_nonce in ^nonces,
-          update: [set: [folder_ref_id: ^ref, folder_ref_stamp: a.path_nonce]]
-        )
-        |> Repo.update_all([])
-      end
-    end)
+      from(a in Attachment,
+        where: a.id in ^ids and a.path_nonce in ^nonces,
+        update: [set: [folder_ref_id: ^ref, folder_ref_stamp: a.path_nonce]]
+      )
+      |> Repo.update_all([])
+    end
 
     :ok
   end
