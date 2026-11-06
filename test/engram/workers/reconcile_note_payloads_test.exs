@@ -919,6 +919,39 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       assert NotePayloadStamps.run_pass(peers: fn -> [] end) == :done
     end
 
+    # A walk cursor the previous release saved has an offset but no "fresh":
+    # nothing proves the cluster wrote `n` when that walk began.
+    test "a walk resumed from an old release's cursor never closes the ledger", ctx do
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+      :ok =
+        Engram.Maintenance.Cursor.put("payload_n_requeue", %{
+          "offset" => "ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "dirty" => false
+        })
+
+      refute NotePayloadStamps.run_pass(peers: fn -> [] end) == :done
+      # The next walk re-checks the cluster from its start: done.
+      assert NotePayloadStamps.run_pass(peers: fn -> [] end) == :done
+    end
+
+    # The marker check stops after 4 pages: a live point behind more orphans
+    # than that is not found, so the user is neither marked nor requeued.
+    test "past the 4-page cap of orphans: no marker and no requeue", ctx do
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      :ok = ReconcileNotePayloads.forget_marker(ctx.user.id)
+
+      orphans!(ctx, 4 * 256 + 1)
+      id = hd(point_ids(ctx.stale))
+      Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.delete(p, "n") end))
+
+      :ok = ReconcileNotePayloads.mark_backfilled(ctx.user.id)
+
+      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
+      assert payload_versions(ctx) == [6, 6]
+      refute_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
+    end
+
     test "the marker check pages past a first page of orphans", ctx do
       assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
       :ok = ReconcileNotePayloads.forget_marker(ctx.user.id)
