@@ -308,6 +308,30 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
       refute ReencodeEnvelopes.legacy_rows?(u.id)
     end
 
+    # A body whose nonce disagrees with its `notes` row (drift, which
+    # `NoteSplit` reports and never repairs) can never pass the nonce CAS, so
+    # it is not work: no re-read, no re-seal, no perpetual re-queue.
+    test "a drifted body is not work", %{user: u, vault: v} do
+      note = legacy_note!(u, v, "drift.md", @big)
+
+      tenant!(u, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^note.id),
+          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        )
+      end)
+
+      Engram.Fixtures.mirror_body!(note.id)
+      assert ReencodeEnvelopes.legacy_rows?(u.id)
+
+      # The `notes` nonce moves without the body: the two copies now disagree.
+      Repo.query!("UPDATE notes SET content_nonce = $2 WHERE id = $1", [
+        Ecto.UUID.dump!(note.id),
+        :crypto.strong_rand_bytes(12)
+      ])
+
+      refute ReencodeEnvelopes.legacy_rows?(u.id)
+    end
+
     test "a row changed since it was read is not overwritten (CAS)", %{user: u, vault: v} do
       note = legacy_note!(u, v, "a.md", @big)
       stale = reload(Note, id: note.id)

@@ -74,6 +74,10 @@ defmodule Engram.Notes.NoteBody do
     # (migration 20261103130000); `state_bytes` NULL without CRDT state.
     field :content_bytes, :integer
     field :state_bytes, :integer
+    # True when either envelope is format 0 (the content one only on an
+    # AAD-bound row), set by the same trigger; NULL until `NoteSizes` fills
+    # it. `ReencodeEnvelopes` selects on it, `Bookkeeping.Drain` probes it.
+    field :envelope_legacy, :boolean
   end
 
   @body [

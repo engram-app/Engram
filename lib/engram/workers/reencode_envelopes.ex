@@ -323,16 +323,30 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   #
   # The two `notes` columns are read from the body (`note_bodies`, through
   # `NoteBody`, which falls back to the `notes` copy for a note with no body
-  # row): the split-out nonce slices 13 bytes, the length is the varlena
-  # header, so nothing is de-TOASTed.
+  # row). Whether a body holds a format 0 envelope at all is its
+  # `envelope_legacy` flag (the `note_bodies_sizes` trigger's test, the one
+  # the Drain probes), so an unflagged body costs no envelope read; the flag
+  # is per row, so the column's own nonce and length (13-byte slice and
+  # varlena header, nothing de-TOASTed) say which envelope it is. A NULL
+  # flag (no body row, or `NoteSizes` not there yet) takes that test alone.
+  #
+  # A body whose nonce disagrees with its `notes` row is not work: the CAS
+  # (`write_row/5`) compares the `notes` nonce and could never pass, so the
+  # row would be re-read and re-sealed on every pass. `NoteSplit`'s drift
+  # report and `Bookkeeping.Canary` (`NoteBody.drift_ids/2`) surface it.
   defp legacy(%{label: name, schema: Note, body: body, nonce: nonce}) do
     nonce_expr = NoteBody.fields([nonce])[nonce]
-    size = NoteBody.byte_length(body)
+
+    work =
+      dynamic(
+        [n, note_body: b],
+        coalesce(b.envelope_legacy, true) and fragment("octet_length(?) = 12", ^nonce_expr) and
+          ^NoteBody.byte_length(body) > 16 and ^nonce_expr == field(n, ^nonce)
+      )
 
     Note
     |> NoteBody.join()
-    |> where(^dynamic(fragment("octet_length(?) = 12", ^nonce_expr)))
-    |> where(^dynamic(^size > 16))
+    |> where(^work)
     |> body_with_bound_aad(name)
   end
 
