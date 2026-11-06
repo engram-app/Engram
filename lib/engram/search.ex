@@ -632,8 +632,12 @@ defmodule Engram.Search do
     case search_filter(user, vault, opts, {folder, tags, type}) do
       {:ok, filter_kw, within} ->
         # A filter Postgres could not narrow to `max_note_ids` notes either
-        # way is searched over the whole tenant at 4x, then post-filtered.
-        qdrant_limit = if within, do: min(fetch_limit * 4, Qdrant.max_page()), else: fetch_limit
+        # way is searched over the whole tenant, oversampled by its matching
+        # fraction (`oversample/1`), then post-filtered.
+        qdrant_limit =
+          if within,
+            do: min(fetch_limit * oversample(within), Qdrant.max_page()),
+            else: fetch_limit
 
         search_opts =
           [user_id: to_string(user.id), limit: qdrant_limit]
@@ -688,7 +692,7 @@ defmodule Engram.Search do
 
       case note_filter().resolve(user, vaults, opts, []) do
         {:ok, {:ids, []}} -> :no_match
-        {:ok, :too_wide} -> {:ok, [], {vaults, opts}}
+        {:ok, :too_wide} -> too_wide(user, vaults, opts)
         {:ok, scope} -> {:ok, [note_scope: scope], nil}
         {:error, _} = error -> error
       end
@@ -712,6 +716,23 @@ defmodule Engram.Search do
     end
   end
 
+  # The post-filter of a `:too_wide` filter: its vaults, the filter, and the
+  # live notes it matches against those there are (`{matched, live}`).
+  defp too_wide(user, vaults, opts) do
+    with {:ok, counts} <- note_filter().count(user, vaults, opts),
+         do: {:ok, [], {vaults, opts, counts}}
+  end
+
+  # The most a `:too_wide` search fetches: 16x the page, in at most two rounds.
+  @widen_factor 16
+
+  # The first round's oversample: twice the pool that holds the page at the
+  # vault's matching fraction (`live / matched`), at most `@widen_factor`.
+  defp oversample({_vaults, _filter, {0, _live}}), do: @widen_factor
+
+  defp oversample({_vaults, _filter, {matched, live}}),
+    do: min(div(2 * live + matched - 1, matched), @widen_factor)
+
   # The Postgres note-filter resolver (`{:ids, _} | {:exclude, _} |
   # :too_wide`, `within:` for the post-filter), a seam so tests stub it.
   defp note_filter, do: Engram.ServiceConfig.get(:note_filter, Engram.Search.NoteFilter)
@@ -727,9 +748,10 @@ defmodule Engram.Search do
 
   # The ranked candidates with their Postgres rows (`postgres_hits/2`).
   #
-  # A `:too_wide` search (`within`) post-filters a 4x pool; when that leaves
-  # the page short while Qdrant had more, it queries ONCE more at 16x, then
-  # returns what matched. At most two Qdrant rounds and one query embed
+  # A `:too_wide` search (`within`) post-filters a pool sized by the
+  # filter's matching fraction (`oversample/1`, at most 16x); when that
+  # leaves the page short while Qdrant had more, it queries ONCE more at 16x,
+  # then returns what matched. At most two Qdrant rounds and one query embed
   # (`embed_once/5`), so a search's cost stays bounded. Each post-filtered
   # search counts once in `[:engram, :search, :post_filter]` by rounds and
   # whether the page came back short.
@@ -739,8 +761,6 @@ defmodule Engram.Search do
 
   defp ranked_hits(legs, user, search_opts, within, keep),
     do: post_filtered(legs, user, search_opts, within, keep, 1)
-
-  @widen_factor 16
 
   defp post_filtered(legs, user, search_opts, within, keep, round) do
     limit = Keyword.fetch!(search_opts, :limit)
@@ -784,7 +804,7 @@ defmodule Engram.Search do
   # page's `keep` best. Notes come from the chunk rows alone (no decrypt); a
   # point with no chunk row is dropped and counted here, as
   # `postgres_hits/2` would.
-  defp within_filter(candidates, user, {vaults, filter}, keep) do
+  defp within_filter(candidates, user, {vaults, filter, _counts}, keep) do
     notes = Engram.Notes.note_ids_by_qdrant_points(user, Enum.map(candidates, & &1.qdrant_id))
     note_ids = notes |> Map.values() |> Enum.uniq()
 

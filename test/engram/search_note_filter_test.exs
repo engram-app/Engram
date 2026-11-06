@@ -31,6 +31,9 @@ defmodule Engram.SearchNoteFilterTest do
       send(self(), {:resolve, vault, filter, opts})
       Process.get(:resolve).(opts)
     end
+
+    # `{matched, live}`; by default half the vault matches (a 4x oversample).
+    def count(_user, _vault, _filter), do: Process.get(:count, {:ok, {1, 2}})
   end
 
   setup do
@@ -258,6 +261,86 @@ defmodule Engram.SearchNoteFilterTest do
       assert_received {:limit, 4}
       refute_received {:limit, _}
       assert_received {:post_filter, %{count: 1}, %{rounds: 1, short: false}}
+    end
+  end
+
+  # The first round is sized by the matching fraction: 20% of the vault
+  # matches, so a 5-hit page fetches 2 / 0.2 = 10x (50 points) and finds
+  # all 5 in one round, where a fixed 4x (20 points) came back short.
+  test ":too_wide sizes the oversample by the matching fraction: full top-k in one round",
+       %{bypass: bypass, user: user, vault: vault} do
+    drop = insert_note!(user, vault, %{path: "Other/drop.md"})
+    keeps = for i <- 1..5, do: note_with_point(user, vault, "Health/keep#{i}.md")
+    keep_ids = Enum.map(keeps, fn {note, _} -> note.id end)
+
+    # Every 5th point matches: 4 drops, then a keep.
+    pool =
+      for {{_note, keep_point}, i} <- Enum.with_index(keeps), reduce: [] do
+        acc ->
+          drops =
+            for d <- 0..3 do
+              point = Ecto.UUID.generate()
+              insert_chunk!(user, drop, point, text: "ferritin", position: i * 4 + d)
+              point
+            end
+
+          acc ++ drops ++ [keep_point]
+      end
+
+    points =
+      pool
+      |> Enum.with_index()
+      |> Enum.map(fn {id, i} -> %{"id" => id, "score" => 1 - i / 100} end)
+
+    test_pid = self()
+
+    Bypass.expect(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      %{"limit" => limit} = Jason.decode!(body)
+      send(test_pid, {:limit, limit})
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, Jason.encode!(%{result: %{points: Enum.take(points, limit)}}))
+    end)
+
+    Process.put(:count, {:ok, {2_000, 10_000}})
+
+    answer(fn
+      [] -> {:ok, :too_wide}
+      [within: ids] -> {:ok, {:ids, Enum.filter(ids, &(&1 in keep_ids))}}
+    end)
+
+    embed()
+
+    assert {:ok, hits} =
+             Search.search(user, vault, "q", folder: "Health", mode: :vector, diversity: 0.0)
+
+    assert hits |> Enum.map(& &1.source_path) |> Enum.sort() ==
+             Enum.map(1..5, &"Health/keep#{&1}.md")
+
+    assert_received {:limit, 50}
+    refute_received {:limit, _}
+  end
+
+  test ":too_wide oversample: a tiny or zero fraction is 16x, never more",
+       %{bypass: bypass, user: user, vault: vault} do
+    for count <- [{:ok, {1, 1_000_000}}, {:ok, {0, 0}}] do
+      Process.put(:count, count)
+
+      answer(fn
+        [] -> {:ok, :too_wide}
+        [within: _] -> {:ok, {:ids, []}}
+      end)
+
+      embed()
+      expect_query(bypass, [])
+
+      assert {:ok, []} =
+               Search.search(user, vault, "q", folder: "Health", mode: :vector, diversity: 0.0)
+
+      assert_received {:query, %{"limit" => 80}}
+      refute_received {:query, _}
     end
   end
 

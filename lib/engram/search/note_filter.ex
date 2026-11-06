@@ -99,7 +99,7 @@ defmodule Engram.Search.NoteFilter do
     {:ok, out} =
       Repo.with_tenant(user.id, fn ->
         with {:ok, cond} <- compile(user, vault, filter) do
-          base = from(n in Notes.scoped_live(user, vault), where: n.kind == "note", select: n.id)
+          base = live_ids(user, vault)
 
           if within,
             do: {:ok, {:ids, within(base, cond, within)}},
@@ -109,6 +109,47 @@ defmodule Engram.Search.NoteFilter do
 
     out
   end
+
+  @doc """
+  `{matched, live}`: how many live notes `filter` matches, and how many live
+  notes there are, in one pass over the vault's live notes. A `:too_wide`
+  search sizes its oversample by `matched / live`. `vault` may be a list:
+  the counts sum.
+  """
+  @spec count(map(), map() | [map()], filter()) ::
+          {:ok, {non_neg_integer(), non_neg_integer()}} | {:error, FieldFilters.error()}
+  def count(user, vaults, filter) when is_list(vaults) do
+    Enum.reduce_while(vaults, {:ok, {0, 0}}, fn vault, {:ok, {matched, live}} ->
+      case count(user, vault, filter) do
+        {:ok, {m, l}} -> {:cont, {:ok, {matched + m, live + l}}}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  # ponytail: an exact count reads every live note of the vault; only a
+  # `:too_wide` filter (over `max_note_ids/0` matches AND non-matches) pays
+  # it. Sample a bounded prefix if a vault that size makes it slow.
+  def count(user, vault, filter) do
+    {:ok, out} =
+      Repo.with_tenant(user.id, fn ->
+        with {:ok, cond} <- compile(user, vault, filter) do
+          counts = %{
+            matched: dynamic([n], filter(count(n.id), ^cond)),
+            live: dynamic([n], count(n.id))
+          }
+
+          %{matched: m, live: l} = Repo.one(from(n in live(user, vault), select: ^counts))
+          {:ok, {m, l}}
+        end
+      end)
+
+    out
+  end
+
+  # The live notes (`kind = 'note'`, not trashed) of `user` in `vault`.
+  defp live(user, vault), do: from(n in Notes.scoped_live(user, vault), where: n.kind == "note")
+  defp live_ids(user, vault), do: from(n in live(user, vault), select: n.id)
 
   defp within(_base, _cond, []), do: []
 
@@ -178,7 +219,7 @@ defmodule Engram.Search.NoteFilter do
     {:ok, out} =
       Repo.with_tenant(user.id, fn ->
         with {:ok, cond} <- compile(user, vault, filter) do
-          base = from(n in Notes.scoped_live(user, vault), where: n.kind == "note", select: n.id)
+          base = live_ids(user, vault)
 
           case ids(base, cond, page_ids) do
             ids when length(ids) <= page_ids ->

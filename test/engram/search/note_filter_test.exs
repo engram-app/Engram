@@ -351,6 +351,21 @@ defmodule Engram.Search.NoteFilterTest do
       assert run.(cap: 1) == :too_wide
       assert run.(cap: 1, within: [a.id, b.id]) == {:ids, ids([a, b])}
     end
+
+    test "count/3: {matched, live} live notes, summed across vaults", ctx do
+      v2 = insert(:vault, user: ctx.user)
+      note!(ctx, "a.md", "tags: [t]")
+      note!(ctx, "b.md")
+      gone = note!(ctx, "c.md", "tags: [t]")
+      set_note!(ctx, gone, deleted_at: DateTime.utc_now())
+      write_indexed!(ctx.user, v2, "d.md", "---\ntags: [t]\n---\n")
+
+      assert NoteFilter.count(ctx.user, ctx.vault, %{tags: ["t"]}) == {:ok, {1, 2}}
+      assert NoteFilter.count(ctx.user, [ctx.vault, v2], %{tags: ["t"]}) == {:ok, {2, 3}}
+
+      assert NoteFilter.count(ctx.user, insert(:vault, user: ctx.user), %{tags: ["t"]}) ==
+               {:ok, {0, 0}}
+    end
   end
 
   describe "page/4 (filter-only search)" do
