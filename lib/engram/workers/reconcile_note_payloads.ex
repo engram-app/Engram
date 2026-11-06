@@ -431,9 +431,11 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   # A note stamped but behind the version: the `n` backfill (`backfill_n/5`)
   # already wrote what the version adds, and its hash vouches for the rest,
-  # so it is only stamped. No decrypt, no drift check.
+  # so it is only stamped. No decrypt, no drift check. Only while the row
+  # still holds the hash read: a previous-release node that re-upserted the
+  # note since (without `n`) changed or NULLed it, and must not be vouched for.
   defp refresh_stale(_user, notes, _points, _stored, counts) do
-    Enum.each(notes, &stamp_version/1)
+    Enum.each(notes, &stamp_version(&1, hash: &1.payload_hash))
     {:ok, Enum.reduce(notes, counts, fn _note, acc -> bump(acc, :checked) end)}
   end
 
@@ -731,8 +733,8 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   defp same_stamp(%{payload_hash: hash, id: id}),
     do: dynamic([n], n.id == ^id and n.payload_hash == ^hash)
 
-  defp stamp_version(note),
-    do: elem(Repo.with_tenant(note.user_id, fn -> put_version(note) end), 0)
+  defp stamp_version(note, opts),
+    do: elem(Repo.with_tenant(note.user_id, fn -> PayloadV6.stamp(note.id, opts) end), 0)
 
   defp put_version(note), do: PayloadV6.stamp(note.id)
 

@@ -42,17 +42,18 @@ defmodule Engram.DataMigrations.NotePayloadStamps do
   # Done when no note is behind AND no point of a live note lacks `n`: a
   # previous-release node can upsert one after its note was stamped (a
   # rolling deploy); `requeue_unbackfilled/0` unstamps those notes, and the
-  # next pass queues their users.
+  # next pass queues their users. Its one bounded page runs EVERY pass, not
+  # only once the queue drained, so its walk advances while the backfill runs.
   @impl true
   def run_pass do
-    with 0 <- ReconcileNotePayloads.enqueue_missing(),
-         :clean <- ReconcileNotePayloads.requeue_unbackfilled() do
-      :done
-    else
-      {:ok, users} -> {:more, users: users}
+    users = ReconcileNotePayloads.enqueue_missing()
+
+    case ReconcileNotePayloads.requeue_unbackfilled() do
+      :clean when users == 0 -> :done
+      :clean -> {:more, users: users}
+      {:ok, requeued} -> {:more, users: users + requeued}
       # Qdrant unreadable: not proven done, the next pass asks again.
       {:error, _} -> :more
-      users -> {:more, users: users}
     end
   end
 end
