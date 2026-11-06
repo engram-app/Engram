@@ -605,7 +605,8 @@ defmodule Engram.SearchNoteFilterTest do
       top = write_indexed!(user, vault, "Health/a.md", "body\n")
       sub = write_indexed!(user, vault, "Health/Sub/b.md", "body\n")
       _beside = write_indexed!(user, vault, "Other/c.md", "body\n")
-      %{top: top, sub: sub}
+      look_alike = write_indexed!(user, vault, "Healthy/d.md", "body\n")
+      %{top: top, sub: sub, look_alike: look_alike}
     end
 
     test "switch off: only the folder itself, an exact folder_hmac match",
@@ -626,7 +627,7 @@ defmodule Engram.SearchNoteFilterTest do
     end
 
     test "switch on: the folder and its whole subtree, via the real resolver",
-         %{bypass: bypass, user: user, vault: vault, top: top, sub: sub} do
+         %{bypass: bypass, user: user, vault: vault, top: top, sub: sub, look_alike: look_alike} do
       ServiceConfig.put_override(:note_filter, Engram.Search.NoteFilter)
       embed()
       expect_query(bypass, [])
@@ -638,6 +639,7 @@ defmodule Engram.SearchNoteFilterTest do
                Enum.filter(filter["must"], &match?(%{"should" => [%{"key" => "n"} | _]}, &1))
 
       assert Enum.sort(any) == Enum.sort(Enum.map([top.id, sub.id], &FilterId.uuid/1))
+      refute FilterId.uuid(look_alike.id) in any
       assert tenant_keys(filter["must"]) == {true, true}
       refute inspect(filter) =~ "folder_hmac"
     end
