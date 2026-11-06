@@ -145,6 +145,8 @@ defmodule Engram.Workers.HealKeyAliases do
 
   defp reindex(note, user) do
     okf = Notes.inject_frontmatter_fields_pub(%{}, user, note.id, note.content)
+    # The frontmatter dates moved with the reparse: so do the stored ones.
+    okf = Map.merge(okf, Notes.Note.effective_dates(Map.merge(Map.from_struct(note), okf)))
 
     Repo.with_tenant!(note.user_id, fn ->
       Repo.update_all(cas(note), set: Map.to_list(okf))

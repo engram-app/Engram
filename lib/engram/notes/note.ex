@@ -4,6 +4,7 @@ defmodule Engram.Notes.Note do
   import Ecto.Changeset
 
   alias Engram.FileTime
+  alias Engram.Notes.EffectiveDates
 
   @type t :: %__MODULE__{}
 
@@ -38,6 +39,20 @@ defmodule Engram.Notes.Note do
     field :resource, :string, virtual: true, redact: true
     field :fm_timestamp, :utc_datetime
     field :fm_created, :utc_datetime
+    # The v5 frontmatter `updated` / `created` dates in unix seconds
+    # (`FlatFields.dates/1`, the payload's parser; `fm_timestamp` /
+    # `fm_created` keep OKF's), written by every content save. With the file
+    # times they give the stored effective dates `eff_updated` /
+    # `eff_created` (`EffectiveDates.stored/2`), derived in `changeset/2`
+    # and read through the `EffectiveDates` index expressions. `eff_v` is the
+    # `version` they were derived at: a row whose `version` moved past it
+    # (a write by a release without them) is recomputed by
+    # `Engram.DataMigrations.EffectiveDates`.
+    field :fm_updated, :integer
+    field :fm_created_s, :integer
+    field :eff_updated, :integer
+    field :eff_created, :integer
+    field :eff_v, :integer
 
     field :version, :integer, default: 1
     # Sync change-log backbone (PR A): per-row latest change sequence, allocated
@@ -257,6 +272,8 @@ defmodule Engram.Notes.Note do
         :kind,
         :fm_timestamp,
         :fm_created,
+        :fm_updated,
+        :fm_created_s,
         :parse_status,
         :parse_reason
       ] ++ @encryption_fields,
@@ -266,6 +283,7 @@ defmodule Engram.Notes.Note do
     |> validate_inclusion(:parse_status, @parse_statuses)
     |> FileTime.put_at(:mtime, :mtime_at)
     |> FileTime.put_at(:ctime, :ctime_at)
+    |> put_effective_dates()
     |> validate_required_for_kind()
     |> validate_format(:id, ~r/^[0-9a-f-]{36}$/i)
     |> unique_constraint([:user_id, :vault_id, :path_hmac],
@@ -279,6 +297,37 @@ defmodule Engram.Notes.Note do
     # both names map to the same error.
     |> unique_constraint([:user_id, :vault_id, :path_hmac], name: :notes_path_live)
     |> unique_constraint([:user_id, :vault_id, :folder_hmac], name: :notes_folder_marker)
+  end
+
+  # The stored effective dates, from the frontmatter dates and file times
+  # this write leaves on the row, whenever one of them changes; `eff_v`
+  # follows `version` so a write that did not derive them is visible.
+  @eff_inputs [:fm_updated, :fm_created_s, :mtime, :ctime, :version]
+  defp put_effective_dates(changeset) do
+    # An insert always derives them: its inputs may all be defaults.
+    if changeset.data.__meta__.state == :built or
+         Enum.any?(@eff_inputs, &Map.has_key?(changeset.changes, &1)) do
+      fields = Map.new(@eff_inputs, &{&1, get_field(changeset, &1)})
+
+      changeset
+      |> change(effective_dates(fields))
+      |> put_change(:eff_v, fields.version)
+    else
+      changeset
+    end
+  end
+
+  @doc """
+  `eff_updated` / `eff_created` for a row holding `fields` (its
+  `fm_updated`, `fm_created_s`, `mtime`, `ctime`): what `changeset/2`
+  stores, for a writer that sets the frontmatter dates without it.
+  """
+  @spec effective_dates(map()) :: %{eff_updated: integer() | nil, eff_created: integer() | nil}
+  def effective_dates(fields) do
+    %{
+      eff_updated: EffectiveDates.stored(fields.fm_updated, fields.mtime),
+      eff_created: EffectiveDates.stored(fields.fm_created_s, fields.ctime)
+    }
   end
 
   defp validate_required_for_kind(changeset) do

@@ -61,9 +61,30 @@ defmodule Engram.MCP.HandlersRecentTest do
     assert second["vault_id"] == to_string(v.id)
   end
 
-  test "a filter without a query is a fixable error; a null filter is not", %{user: u, vault: v} do
-    assert {:error, "tags needs a query or similar_to; omit it to list recently updated notes"} =
+  # #2083: filters with no query are answered in Postgres (no embed, no budget).
+  test "a filter without a query lists the matching notes; a null filter is no filter",
+       %{user: u, vault: v} do
+    # Tag filters read note_attrs, which the index pass writes.
+    Engram.FieldCatalogHelpers.write_indexed!(u, v, "t.md", "---\ntags: [x]\n---\nt")
+
+    assert {:ok, text, %{"results" => [hit]}} =
              Handlers.handle("search_notes", u, v, %{"tags" => ["x"]})
+
+    assert hit["source_path"] == "t.md"
+    assert text =~ "Recently updated"
+
+    assert {:ok, "No notes match these filters.", %{"results" => []}} =
+             Handlers.handle("search_notes", u, v, %{"tags" => ["nope"]})
+
+    assert {:ok, _, %{"results" => [_]}} =
+             Handlers.handle("search_notes", u, {:cross_vault, [v]}, %{"tags" => ["x"]})
+
+    assert {:error, msg} =
+             Handlers.handle("search_notes", u, v, %{
+               "fields" => [%{"key" => "nope", "value" => 1}]
+             })
+
+    assert msg =~ "nope"
 
     assert {:ok, _, _} =
              Handlers.handle("search_notes", u, v, %{
@@ -71,6 +92,17 @@ defmodule Engram.MCP.HandlersRecentTest do
                "mode" => "hybrid",
                "diversity" => 0.3
              })
+  end
+
+  # Dropping the only filter would list every recent note as if filtered.
+  test "a filter-only call with a param that does not parse is an error", %{user: u, vault: v} do
+    assert {:error, msg} =
+             Handlers.handle("search_notes", u, v, %{"updated_after" => "last tuesday"})
+
+    assert msg =~ "updated_after"
+
+    assert {:error, msg} = Handlers.handle("search_notes", u, v, %{"folder" => 5})
+    assert msg =~ "folder"
   end
 
   test "limit 0 or negative floors to 1 instead of crashing", %{user: u, vault: v} do

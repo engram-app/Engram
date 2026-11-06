@@ -7,8 +7,24 @@ defmodule EngramWeb.Schemas.SearchRequest do
     title: "SearchRequest",
     type: :object,
     properties: %{
-      query: %Schema{type: :string},
+      query: %Schema{
+        type: :string,
+        description:
+          "Search text. Omit or leave blank WITH a filter to list the matching notes " <>
+            "newest first (no ranking, `cursor` paged); blank with no filter is a 422."
+      },
       limit: %Schema{type: :integer, description: "1..50, default 5"},
+      cursor: %Schema{
+        type: :string,
+        description: "Filter-only listing: the previous page's `next_cursor`."
+      },
+      fields: %Schema{
+        type: :array,
+        description:
+          "Frontmatter filters, each {key, op, value}; op one of eq (default), in, gt, " <>
+            "gte, lt, lte, after, before. Keys: see GET /api/fields.",
+        items: %Schema{type: :object}
+      },
       tags: %Schema{type: :array, items: %Schema{type: :string}},
       folder: %Schema{type: :string},
       type: %Schema{
@@ -56,7 +72,6 @@ defmodule EngramWeb.Schemas.SearchRequest do
           "Result diversity (MMR). 0 = most relevant (default, tuned per plan); 1 = most varied."
       }
     },
-    required: [:query],
     example: %{
       "query" => "omega-3 dosage",
       "limit" => 5,
@@ -96,7 +111,18 @@ defmodule EngramWeb.Schemas.SearchResponse do
   OpenApiSpex.schema(%{
     title: "SearchResponse",
     type: :object,
-    properties: %{results: %Schema{type: :array, items: EngramWeb.Schemas.SearchResult}},
+    properties: %{
+      results: %Schema{type: :array, items: EngramWeb.Schemas.SearchResult},
+      next_cursor: %Schema{
+        type: :string,
+        nullable: true,
+        description: "Filter-only listing: the next page's cursor, null on the last page."
+      },
+      truncated: %Schema{
+        type: :boolean,
+        description: "Filter-only listing: more pages follow."
+      }
+    },
     required: [:results]
   })
 end

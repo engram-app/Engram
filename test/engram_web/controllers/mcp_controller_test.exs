@@ -1923,12 +1923,25 @@ defmodule EngramWeb.McpControllerTest do
       assert tool_text(conn) =~ "Recently updated"
     end
 
-    test "a filter with no query is a tool error naming the filter", %{conn: conn} do
-      conn = call_tool(conn, "search_notes", %{"tags" => ["health"]})
+    test "a filter with no query lists matching notes (#2083)", %{conn: conn} = ctx do
+      Engram.FieldCatalogHelpers.write_indexed!(
+        ctx.user,
+        ctx.vault,
+        "Tagged/one.md",
+        "---\ntags: [filter-only]\n---\nx"
+      )
+
+      conn = call_tool(conn, "search_notes", %{"tags" => ["filter-only"]})
       resp = json_response(conn, 200)
 
-      assert_tool_error(resp)
-      assert tool_text(conn) =~ "tags needs a query or similar_to"
+      refute resp["error"]
+      assert tool_text(conn) =~ "Tagged/one.md"
+    end
+
+    test "a filter no note matches says so", %{conn: conn} do
+      conn = call_tool(conn, "search_notes", %{"tags" => ["no-such-tag"]})
+      refute json_response(conn, 200)["error"]
+      assert tool_text(conn) =~ "No notes match these filters."
     end
 
     # The schema's "minimum" is advertisory only — validate_declared_args

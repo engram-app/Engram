@@ -555,6 +555,96 @@ defmodule EngramWeb.SearchControllerTest do
   # Asserting on the canned response body instead would pass whether or not the
   # filter is applied, which proves nothing.
   # ---------------------------------------------------------------------------
+  # #2083: a blank query with filters lists the matching notes from Postgres.
+  # No embedder expectation is set, so Mox fails the test if it embeds.
+  describe "POST /search filter-only" do
+    # Tag filters read note_attrs, which the index pass writes.
+    defp tagged!(user, vault, path, tags) do
+      note =
+        Engram.FieldCatalogHelpers.write_indexed!(
+          user,
+          vault,
+          path,
+          "---\ntags: [#{tags}]\n---\nbody"
+        )
+
+      Process.sleep(2)
+      note
+    end
+
+    test "lists matching notes newest first, cursor paged, no search", ctx do
+      %{conn: conn, user: user, vault: vault} = ctx
+      a = tagged!(user, vault, "P/a.md", "proj/x")
+      b = tagged!(user, vault, "b.md", "proj")
+      tagged!(user, vault, "c.md", "other")
+
+      body = json_response(post(conn, ~p"/api/search", %{"tags" => ["proj"], "limit" => 1}), 200)
+      assert [%{"id" => id, "path" => "b.md", "score" => 0}] = body["results"]
+      assert id == b.id
+      assert body["truncated"]
+
+      next =
+        json_response(
+          post(conn, ~p"/api/search", %{
+            "query" => " ",
+            "tags" => ["proj"],
+            "limit" => 1,
+            "cursor" => body["next_cursor"]
+          }),
+          200
+        )
+
+      assert [%{"path" => "P/a.md", "folder" => "P"}] = next["results"]
+      assert next["next_cursor"] == nil
+      assert a.id == hd(next["results"])["id"]
+    end
+
+    test "folder is a subtree; fields filter; bad input is a 422", %{conn: conn} = ctx do
+      tagged!(ctx.user, ctx.vault, "P/Q/deep.md", "t")
+      tagged!(ctx.user, ctx.vault, "top.md", "t")
+
+      assert [%{"path" => "P/Q/deep.md"}] =
+               json_response(post(conn, ~p"/api/search", %{"folder" => "P"}), 200)["results"]
+
+      assert %{"error" => msg} =
+               json_response(
+                 post(conn, ~p"/api/search", %{"fields" => [%{"key" => "nope", "value" => 1}]}),
+                 422
+               )
+
+      assert msg =~ "nope"
+
+      assert json_response(post(conn, ~p"/api/search", %{"tags" => ["t"], "cursor" => "x"}), 422)
+
+      assert %{"error" => "cross_vault needs a query"} =
+               json_response(
+                 post(conn, ~p"/api/search", %{"tags" => ["t"], "cross_vault" => true}),
+                 422
+               )
+    end
+
+    # Wrong-shaped filters are the caller's error: a 422, never a 500 or a
+    # list silently joined into one string.
+    test "a wrong-shaped filter is a 422 naming it", %{conn: conn} do
+      for {param, value} <- [
+            {"folder", 5},
+            {"folder", ["a"]},
+            {"type", ["a", "b"]},
+            {"tags", [%{"x" => 1}]},
+            {"fields", "status"}
+          ] do
+        assert %{"error" => msg} =
+                 json_response(post(conn, ~p"/api/search", %{param => value}), 422)
+
+        assert msg == "invalid #{param}"
+      end
+    end
+
+    test "a blank query with no filter is still a 422", %{conn: conn} do
+      assert json_response(post(conn, ~p"/api/search", %{"tags" => [""]}), 422)
+    end
+  end
+
   describe "POST /search with cross_vault" do
     setup %{user: user, vault: vault} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})

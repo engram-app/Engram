@@ -528,6 +528,63 @@ defmodule Engram.Search do
   @doc "The date-bound opt keys `search/4` accepts (also their param names)."
   def date_params, do: @date_params
 
+  @doc """
+  The filter opts out of request params, for REST (`SearchController`) and
+  MCP (`search_notes`) alike: `tags`, `folder`, `type`, `fields` (a list)
+  and the date bounds (ISO 8601, parsed to `DateTime`). Returns the opts
+  that parsed and the names of the params that did not (the date params
+  first, in `date_params/0` order, then a wrong-shaped `tags` / `folder` /
+  `type` / `fields`): REST refuses the first (422); MCP refuses them on a
+  filter-only call and drops them beside a query.
+  """
+  @spec filter_opts(map()) :: {keyword(), [String.t()]}
+  def filter_opts(params) do
+    {plain, bad_plain} =
+      Enum.reduce([{"tags", :tags}, {"folder", :folder}, {"type", :type}], {[], []}, fn
+        {param, key}, {ok, bad} ->
+          case params[param] do
+            v when v in [nil, false] -> {ok, bad}
+            v -> if shape?(key, v), do: {[{key, v} | ok], bad}, else: {ok, [param | bad]}
+          end
+      end)
+
+    {fields, bad_fields} =
+      case params["fields"] do
+        nil -> {[], []}
+        f when is_list(f) -> {[fields: f], []}
+        _ -> {[], ["fields"]}
+      end
+
+    {dates, bad} =
+      Enum.reduce(@date_params, {[], []}, fn key, {ok, bad} ->
+        case date_param(params[to_string(key)]) do
+          nil -> {ok, bad}
+          {:ok, dt} -> {[{key, dt} | ok], bad}
+          :error -> {ok, [to_string(key) | bad]}
+        end
+      end)
+
+    {Enum.reverse(plain) ++ fields ++ Enum.reverse(dates),
+     Enum.reverse(bad) ++ Enum.reverse(bad_plain) ++ bad_fields}
+  end
+
+  # `tags`: a tag or a list of them; `folder` / `type`: one string. Anything
+  # else is the caller's error, not a crash further in (or a list joined into
+  # one string).
+  defp shape?(:tags, v) when is_list(v), do: Enum.all?(v, &is_binary/1)
+  defp shape?(_key, v), do: is_binary(v)
+
+  defp date_param(nil), do: nil
+
+  defp date_param(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, dt, _} -> {:ok, dt}
+      _ -> :error
+    end
+  end
+
+  defp date_param(_non_binary), do: :error
+
   defp do_search(user, vault, query, opts) do
     # Hybrid, not dense-only, when the caller names no mode (MCP's
     # `suggest_folder` and note auto-placement). A note indexed while its

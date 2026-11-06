@@ -1,5 +1,6 @@
 defmodule Engram.Indexing.PayloadV5SchemaTest do
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
   alias Engram.Indexing.PayloadV5
   alias Engram.Notes.FlatFields
@@ -159,6 +160,61 @@ defmodule Engram.Indexing.PayloadV5SchemaTest do
         PayloadV5.build(note(%{updated_at: ~U[2026-04-01 14:20:05.123456Z]}), FlatFields.empty())
 
       assert {p["up"], p["us"]} == {unix(~U[2026-04-01 15:00:00Z]), 2}
+    end
+
+    # Main's formula before the stored dates (#2434), verbatim: the payload
+    # hash of a seconds-unit note must not move. Only millisecond values may.
+    defp main_up(t, _updated_at) when is_number(t) and t > 0, do: {ceil(t / 3600) * 3600, 1}
+    defp main_up(_t, updated_at), do: {ceil(DateTime.to_unix(updated_at) / 3600) * 3600, 2}
+    defp main_cr(t, _created_at) when is_number(t) and t > 0, do: {trunc(t), 1}
+    defp main_cr(_t, created_at), do: {DateTime.to_unix(created_at), 2}
+
+    defp same_as_main!(t) do
+      n = note(%{mtime: t, ctime: t})
+      p = PayloadV5.build(n, FlatFields.empty())
+      assert {p["up"], p["us"]} == main_up(t, n.updated_at), inspect(t)
+      assert {p["cr"], p["cs"]} == main_cr(t, n.created_at), inspect(t)
+    end
+
+    property "seconds-unit file times give main's up and cr exactly" do
+      hour = 3600
+
+      check all(
+              base <- integer(1..99_999_999_999),
+              frac <- float(min: 0.0, max: 0.999999999),
+              near <- member_of([0, 1, -1]),
+              max_runs: 2_000
+            ) do
+        t = base + frac
+        if t < 1.0e11, do: same_as_main!(t)
+        # On and around exact hours, plus a sub-microsecond past one.
+        h = div(base, hour) * hour + near
+        if h > 0, do: same_as_main!(h * 1.0)
+      end
+    end
+
+    test "edge values: one ulp past an hour, negatives and 0 are main's" do
+      for t <- [
+            1_819_922_400.0000002,
+            1_776_072_500.9999995,
+            3600.0,
+            0.5,
+            -1.0,
+            -86_400.5,
+            0,
+            0.0,
+            nil
+          ] do
+        same_as_main!(t)
+      end
+    end
+
+    test "only a millisecond-unit file time differs from main" do
+      n = note(%{mtime: 1_793_442_859_572.0, ctime: 1_793_442_859_572.0})
+      p = PayloadV5.build(n, FlatFields.empty())
+      assert p["cr"] == 1_793_442_859
+      assert p["up"] == ceil(1_793_442_859.572 / 3600) * 3600
+      refute {p["up"], p["us"]} == main_up(1_793_442_859_572.0, n.updated_at)
     end
 
     test "a nil or 0 mtime falls to updated_at, rounded" do

@@ -1,0 +1,145 @@
+defmodule Engram.Repo.Migrations.IndexNotesEffectiveDatesExpand do
+  use Ecto.Migration
+  @disable_ddl_transaction true
+  @disable_migration_lock true
+
+  @moduledoc """
+  `notes_eff_updated_live` / `notes_eff_created_live`: a date-range filter
+  (`Engram.Search.NoteFilter`) as one index range over a vault's live notes,
+  on the effective date (frontmatter, else file time, else row time).
+  INCLUDE `(id, user_id)` and the expression's columns so the range and its
+  complement are index-only (`user_id` because the RLS policy reads it).
+
+  The expression is `COALESCE(stored effective date, row time)`
+  (`Engram.Notes.EffectiveDates.index_sql/1`): the stored part is computed
+  in Elixir by the content save, so no date is parsed and no client number
+  is cast in SQL. It is written out here because a migration must not
+  change with the code: Postgres uses an expression index only for an
+  identical expression, and
+  `effective_dates_parity_test.exs` fails if these and `index_sql/1` drift.
+
+  Staging EXPLAIN 2026-11-05 (1,518-note vault): without them a date range
+  read the heap of every live note, 7 to 13 ms per 1k notes.
+
+  Write cost: their columns change only on a content save, which is already
+  non-HOT (`notes_recent_index` holds `updated_at`), so each save adds one
+  entry per index and no HOT update is lost. The ctime batch fill touches
+  `eff_created` only on rows with no created date yet (once per note).
+
+  Additive: the previous release ignores them. Rerun-safe with no operator
+  step: an index a failed or timed-out CONCURRENTLY build left INVALID is
+  dropped, then each is built IF NOT EXISTS, so a retry neither keeps a
+  broken index nor rebuilds a good one. A 10 min
+  `statement_timeout` bounds each build (no `lock_timeout`: see `up/0`).
+  """
+
+  @live "deleted_at IS NULL AND kind = 'note'"
+
+  @exprs %{
+    "notes_eff_updated_live" => "COALESCE(eff_updated, engram_epoch_s(updated_at))",
+    "notes_eff_created_live" => "COALESCE(eff_created, engram_epoch_s(created_at))"
+  }
+
+  # `id, user_id` for the answer and the RLS policy, plus the expression's
+  # own columns: Postgres plans an index-only scan only when every column
+  # the query names is in the index, the ones inside an indexed expression
+  # included.
+  @include %{
+    "notes_eff_updated_live" => ~w(id user_id eff_updated updated_at),
+    "notes_eff_created_live" => ~w(id user_id eff_created created_at)
+  }
+
+  # Whole unix seconds of a row time, for both column types: notes'
+  # `updated_at` / `created_at` are `timestamp` today and move to
+  # `timestamptz` (`Engram.Repo.Utc`). An index expression must be IMMUTABLE;
+  # both bodies are zone-independent (the interval since a `timestamp` 1970,
+  # and the epoch of a `timestamptz`, which is the same instant in any zone),
+  # so declaring them IMMUTABLE is sound. ALTER COLUMN TYPE rebuilds the
+  # indexes from their text, which then resolves the timestamptz overload.
+  # `floor`, not a bare cast: the numeric cast rounds, `DateTime.to_unix/1`
+  # truncates. An empty `search_path`, as the repo's other functions (the
+  # schema lint's `function_search_path_mutable`): the bodies use built-ins.
+  @epoch_fns [
+    {"timestamp", "floor(extract(epoch FROM $1 - timestamp '1970-01-01'))::bigint"},
+    {"timestamptz", "floor(extract(epoch FROM $1))::bigint"}
+  ]
+
+  # statement_timeout bounds the whole build (the scans and the wait for
+  # older snapshots), so a stuck build fails the deploy and the next boot
+  # retries it, instead of hanging. No lock_timeout, deliberately: a
+  # CONCURRENTLY build waits out older transactions through lock waits, so a
+  # short lock_timeout fails it on any transaction open longer than that and
+  # leaves an INVALID index (why `Engram.Release.migrator_config/1` keeps the
+  # app Repo's lock_timeout off the migrator). All on one pinned connection
+  # (`with_statement_timeout/1`): with no DDL transaction, `execute` statements can
+  # each land on a different pooled connection.
+  def up do
+    with_statement_timeout(fn ->
+      for {type, body} <- @epoch_fns do
+        repo().query!(
+          """
+          CREATE OR REPLACE FUNCTION engram_epoch_s(#{type}) RETURNS bigint
+          LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path = ''
+          AS $fn$ SELECT #{body} $fn$
+          """,
+          []
+        )
+      end
+
+      for {name, expr} <- @exprs do
+        if invalid?(name),
+          do: repo().query!("DROP INDEX CONCURRENTLY IF EXISTS #{name}", [], timeout: :infinity)
+
+        repo().query!(
+          """
+          CREATE INDEX CONCURRENTLY IF NOT EXISTS #{name} ON notes (vault_id, (#{expr}))
+          INCLUDE (#{Enum.join(@include[name], ", ")}) WHERE #{@live}
+          """,
+          [],
+          timeout: :infinity
+        )
+      end
+    end)
+  end
+
+  def down do
+    for name <- Map.keys(@exprs) do
+      execute "DROP INDEX CONCURRENTLY IF EXISTS #{name}"
+    end
+
+    for {type, _} <- @epoch_fns, do: execute("DROP FUNCTION IF EXISTS engram_epoch_s(#{type})")
+  end
+
+  # A CONCURRENTLY build that fails or times out leaves an INVALID index;
+  # a retry must drop it, never keep it, and never rebuild a good one
+  # (20261103050000's pattern).
+  defp invalid?(name) do
+    %{rows: rows} =
+      repo().query!(
+        "SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid " <>
+          "WHERE c.relname = $1 AND NOT i.indisvalid",
+        [name],
+        log: false
+      )
+
+    rows != []
+  end
+
+  # One pinned connection for the whole body: with no DDL transaction each
+  # `execute` can land on a different pooled connection (the release
+  # migrator's pool is 2), so a bare SET could miss the build and leak into
+  # later migrations. Inlined, not shared: the N-1 gate runs this file on
+  # the previous release's code, so a migration calls no app module. Plain
+  # SQL, no bind params, so squawk can parse what it logs.
+  defp with_statement_timeout(fun) do
+    repo().checkout(fn ->
+      repo().query!("SET statement_timeout = '10min'")
+
+      try do
+        fun.()
+      after
+        repo().query!("RESET statement_timeout")
+      end
+    end)
+  end
+end

@@ -3556,7 +3556,8 @@ defmodule Engram.Indexing do
        note_payload: note_payload,
        payload_hash: payload_hash(note_payload),
        rebuild?: rebuild?,
-       attr_rows: FlatFields.attr_rows(flat, note)
+       attr_rows: FlatFields.attr_rows(flat, note),
+       fm_dates: %{fm_updated: flat.fm_updated, fm_created_s: flat.fm_created}
      }}
   end
 
@@ -3855,7 +3856,7 @@ defmodule Engram.Indexing do
   # with its indexes) on every pass (notes-chunks-hyperopt 4.2). The check
   # is the rows themselves, not a stored hash of them: same read the delete
   # did, no new column, no collision.
-  defp stamp_flat_fields(%{note: note, attr_rows: rows}) do
+  defp stamp_flat_fields(%{note: note, attr_rows: rows} = prepared) do
     old =
       from(a in NoteAttr,
         where: a.note_id == ^note.id,
@@ -3870,6 +3871,7 @@ defmodule Engram.Indexing do
       :ok = hold_key_ids!(note, rows)
       _ = Repo.delete_all(from(a in NoteAttr, where: a.note_id == ^note.id))
       _ = rows |> Enum.chunk_every(@insert_batch) |> Enum.each(&Repo.insert_all(NoteAttr, &1))
+      :ok = stamp_effective_dates(note, Map.get(prepared, :fm_dates))
 
       # The field catalog is cached on change_seq, which this pass does not
       # move, so a pass that changed the rows evicts it (after this
@@ -3879,6 +3881,36 @@ defmodule Engram.Indexing do
   end
 
   defp stamp_flat_fields(_prepared), do: :ok
+
+  # The stored dates follow the frontmatter this pass indexed. A date
+  # backfill that reached the note before its index pass (a previous
+  # release's save, or a note never indexed) read stale or missing
+  # note_attrs; this corrects it. Only when the rows changed and a date
+  # differs (one non-HOT version, rarely), and only while the content and
+  # file times are still the ones this pass read.
+  defp stamp_effective_dates(_note, nil), do: :ok
+
+  defp stamp_effective_dates(note, %{fm_updated: up, fm_created_s: cr} = dates) do
+    %{eff_updated: eu, eff_created: ec} =
+      Note.effective_dates(Map.merge(dates, %{mtime: note.mtime, ctime: note.ctime}))
+
+    {_, _} =
+      Repo.update_all(
+        from(n in Note,
+          where:
+            n.kind == "note" and n.id == ^note.id and n.content_hash == ^note.content_hash and
+              fragment("? IS NOT DISTINCT FROM ?", n.mtime, ^note.mtime) and
+              fragment("? IS NOT DISTINCT FROM ?", n.ctime, ^note.ctime) and
+              (fragment("? IS DISTINCT FROM ?", n.fm_updated, ^up) or
+                 fragment("? IS DISTINCT FROM ?", n.fm_created_s, ^cr) or
+                 fragment("? IS DISTINCT FROM ?", n.eff_updated, ^eu) or
+                 fragment("? IS DISTINCT FROM ?", n.eff_created, ^ec))
+        ),
+        set: [fm_updated: up, fm_created_s: cr, eff_updated: eu, eff_created: ec]
+      )
+
+    :ok
+  end
 
   # The user-key ids this pass writes were resolved before the Voyage call, so
   # the daily reaper may have deleted one since (a key back after a day with no

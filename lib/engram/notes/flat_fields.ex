@@ -125,7 +125,10 @@ defmodule Engram.Notes.FlatFields do
 
     # The long tail from the keys as written (the HMAC folds case), so the
     # dictionary keeps the user's spelling.
-    Map.merge(FrontmatterAttrs.extract(values, fk), %{
+    values
+    |> FrontmatterAttrs.extract(fk)
+    |> Map.merge(dates(values))
+    |> Map.merge(%{
       key_ids: %{},
       status: status,
       author: author,
@@ -137,13 +140,28 @@ defmodule Engram.Notes.FlatFields do
       rev_by_hmac: hmac(fk, reviewed_by),
       proj_hmac: hmac(fk, project),
       src_hmac: Enum.map(source, &FilterId.value_hmac(fk, &1)),
-      fm_updated: instant(first_date(v, @updated)),
-      fm_created: instant(first_date(v, @created)),
       fm_reviewed: instant(FrontmatterDate.parse(v["reviewed"], :lenient)) || verified_at,
       fm_expires: written_day(first_date(v, @expires)),
       fm_due: written_day(FrontmatterDate.parse(v["due"], :lenient)),
       fm_priority: FrontmatterAttrs.number(v["priority"])
     })
+  end
+
+  @doc """
+  Just the `updated` / `created` dates (unix seconds, nil when absent) of
+  decoded frontmatter values (`OkfFields.values/1`), with `extract/2`'s
+  precedence. The content save stores them on the note row
+  (`notes.fm_updated`, and `fm_created`, whose OKF precedence is the same)
+  for the `EffectiveDates` index expressions, without the HMAC work of a
+  full `extract/2`.
+  """
+  @spec dates(%{String.t() => term()}) :: %{
+          fm_updated: integer() | nil,
+          fm_created: integer() | nil
+        }
+  def dates(values) do
+    v = lower_keys(values)
+    %{fm_updated: instant(first_date(v, @updated)), fm_created: instant(first_date(v, @created))}
   end
 
   @doc "`flat` with the dictionary ids of its user-added keys (`FrontmatterKeys.resolve/3`)."
