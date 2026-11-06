@@ -235,6 +235,7 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
         )
       end)
 
+      Engram.Fixtures.mirror_body!(note.id)
       Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.BackfillCrdtHead"))
 
       assert :ok = run(u)
@@ -348,6 +349,22 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
       assert_received {:drifted, %{count: 1}}
       assert log =~ "legacy note bodies skipped"
       refute log =~ note.id
+    end
+
+    # A NULL `notes` nonce against a format 0 body is drift too (`IS DISTINCT
+    # FROM`), not a row that is neither work nor counted.
+    test "a NULL notes nonce over a legacy body counts as drift", %{user: u, vault: v} do
+      note = legacy_note!(u, v, "null-nonce.md", @big)
+      seed_crdt_state!(u, note, @big <> "state")
+
+      Repo.query!(
+        "UPDATE notes SET crdt_state_ciphertext = NULL, crdt_state_nonce = NULL WHERE id = $1",
+        [Ecto.UUID.dump!(note.id)]
+      )
+
+      assert tenant!(u, fn ->
+               Repo.aggregate(ReencodeEnvelopes.drifted_query(:notes_crdt_state, u.id), :count)
+             end) == 1
     end
 
     test "a row changed since it was read is not overwritten (CAS)", %{user: u, vault: v} do

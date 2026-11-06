@@ -312,11 +312,19 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   end
 
   defp drifted_legacy(user_id) do
-    for %{schema: Note} = column <- @columns, reduce: 0 do
-      acc ->
-        acc +
-          Repo.aggregate(where(note_legacy(column, :drifted), [r], r.user_id == ^user_id), :count)
+    for %{schema: Note, label: label} <- @columns, reduce: 0 do
+      acc -> acc + Repo.aggregate(drifted_query(label, user_id), :count)
     end
+  end
+
+  @doc false
+  # The drifted legacy rows of one `notes` column for a user. Public for the
+  # plan test.
+  def drifted_query(label, user_id) do
+    @columns
+    |> Enum.find(&(&1.label == label))
+    |> note_legacy(:drifted)
+    |> where([r], r.user_id == ^user_id)
   end
 
   defp report_drifted(0), do: :ok
@@ -368,19 +376,30 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   end
 
   # `:work` the rows in step with their `notes` row, `:drifted` the others
-  # (counted by `enqueue_missing/0`, never re-encoded).
+  # (counted by `enqueue_missing/0`, never re-encoded). A drifted row always
+  # has a body row (without one both nonces are the `notes` nonce), so
+  # `:drifted` needs the flag itself, not `coalesce(flag, true)`: the planner
+  # then starts from the `note_bodies_envelope_legacy` partial index, empty
+  # in steady state, instead of walking the user's notes (ReencodeDriftPlanTest).
+  # A body whose flag `NoteSizes` has not filled yet is not counted; the
+  # ledger fills it. `IS DISTINCT FROM`: a NULL `notes` nonce against a body
+  # nonce is drift too.
   defp note_legacy(%{label: name, body: body, nonce: nonce}, kind) do
     nonce_expr = NoteBody.fields([nonce])[nonce]
 
-    in_step =
+    {flagged, in_step} =
       if kind == :work,
-        do: dynamic([n], ^nonce_expr == field(n, ^nonce)),
-        else: dynamic([n], ^nonce_expr != field(n, ^nonce))
+        do:
+          {dynamic([note_body: b], coalesce(b.envelope_legacy, true)),
+           dynamic([n], ^nonce_expr == field(n, ^nonce))},
+        else:
+          {dynamic([note_body: b], b.envelope_legacy),
+           dynamic([n], fragment("? IS DISTINCT FROM ?", ^nonce_expr, field(n, ^nonce)))}
 
     legacy =
       dynamic(
-        [n, note_body: b],
-        coalesce(b.envelope_legacy, true) and fragment("octet_length(?) = 12", ^nonce_expr) and
+        [n],
+        ^flagged and fragment("octet_length(?) = 12", ^nonce_expr) and
           ^NoteBody.byte_length(body) > 16 and ^in_step
       )
 
