@@ -612,10 +612,9 @@ defmodule Engram.Workers.ReconcileNotePayloads do
         "fresh" => walk["fresh"] == true
       }
 
-      cond do
-        users != [] or pages_left <= 1 or next == nil -> end_requeue(walk, users, next)
-        true -> requeue_pages(walk, pages_left - 1)
-      end
+      if users != [] or pages_left <= 1 or next == nil,
+        do: end_requeue(walk, users, next),
+        else: requeue_pages(walk, pages_left - 1)
     end
   end
 
