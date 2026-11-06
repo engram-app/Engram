@@ -1,22 +1,3 @@
-defmodule Engram.Crypto.UserDekRotationTest.FixedDekProvider do
-  @moduledoc false
-  # `KeyProvider.Local`, except `rotate_dek/2` hands out the DEK the test put
-  # in `:test_fixed_rotation_dek`, so a test can pre-seed rows "already
-  # rotated" by a crashed run under the very key the retry will use.
-  alias Engram.Crypto.KeyProvider.Local
-
-  for {name, arity} <- Local.__info__(:functions), name != :rotate_dek do
-    args = Macro.generate_arguments(arity, __MODULE__)
-    def unquote(name)(unquote_splicing(args)), do: Local.unquote(name)(unquote_splicing(args))
-  end
-
-  def rotate_dek(_old_wrapped, ctx) do
-    dek = Application.fetch_env!(:engram, :test_fixed_rotation_dek)
-    {:ok, wrapped} = Local.wrap_dek(dek, ctx)
-    {:ok, wrapped, dek}
-  end
-end
-
 defmodule Engram.Crypto.UserDekRotationTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
@@ -1545,18 +1526,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
       user: user,
       vault: vault
     } do
-      new_dek = :crypto.strong_rand_bytes(32)
-      prev = Application.get_env(:engram, :key_provider)
-      Application.put_env(:engram, :key_provider, __MODULE__.FixedDekProvider)
-      Application.put_env(:engram, :test_fixed_rotation_dek, new_dek)
-
-      on_exit(fn ->
-        if prev,
-          do: Application.put_env(:engram, :key_provider, prev),
-          else: Application.delete_env(:engram, :key_provider)
-
-        Application.delete_env(:engram, :test_fixed_rotation_dek)
-      end)
+      new_dek = Engram.Test.FixedDekProvider.install!()
 
       bytes = :crypto.strong_rand_bytes(3000)
       {:ok, up} = Uploads.start(user, vault, %{path: "done.txt", size_bytes: 3000, mtime: 1.0})
