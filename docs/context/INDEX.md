@@ -22,6 +22,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Widening a column type without rewriting the table (`varchar[]` → `text[]` DOES rewrite; how to measure with relfilenode; when `# squawk-ignore-file` is justified) → `docs/context/migration-column-type-rewrites.md`
 - All env vars by category → `docs/context/environment-variables.md`
 - Undoing a delete, `delete_op_id`/`restore_deleted`, trash retention (`trash_retention_days`), or writing `deleted_at: nil` on an attachment (the GC revive race, #2195) → `docs/context/safer-delete-trash-ops.md`
+- ALB 5xx with `dropped from queue` on unrelated requests, one tenant's burst starving the web pool, `next_seq!` vault-lock convoy, or proposing pool_size / PgBouncer / RDS Proxy as the fix (also: why staging can't reproduce it) → `docs/context/vault-write-pool-starvation-2026-10-31.md`
 - Rate limiter + `ai_searches_per_day` budget: BEAM-only (Hammer ETS + PubSub), zero Redis; why NOT Mnesia → `docs/context/rate-limiter-architecture.md`
 - Gating API keys or MCP by plan, re-adding a connection cap, or "is the API Pro-only?" (no: keys work everywhere on every tier; one cost meter + rate limits; removing a limit key needs no migration) → `docs/context/api-access-and-mcp-limits.md`
 - Adding a plan-limit / abuse gate as a plug, or a Free cap is not firing for a user clearly over it (a `request_path` guard cannot see MCP — every tool is one route, named in the JSON-RPC body) → `docs/context/mcp-bypasses-path-shaped-plugs.md`
@@ -57,6 +58,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Stranded Qdrant points after a rename → delete race → `docs/context/qdrant-orphan-points-rename-delete-race.md`
 - `DELETE /api/me` slow or 410 on retry, adding Qdrant work to a request path, or `test_62 test_member_delete_blocks_future_login` red on every branch at once (shared CI Qdrant stalled; e2e retry policy is `e2e/helpers/http_retry.py`) → `docs/context/account-delete-off-qdrant.md`
 - Qdrant `op=set_payload` p95 jumped from ~10ms to seconds on workers, or a payload write path needs a latency split (use Qdrant's own `rest_responses_duration_seconds` by method; PUT vs POST on `/points/payload`; cause unproven) → `docs/context/qdrant-payload-put-slowdown-2026-10-26.md`
+- Qdrant CPU pegged on a low request rate, `POST /points/payload` p99 in seconds, or adding a payload key to chunk points (per-edit note metadata like fallback `up` rewrites EVERY chunk on every edit; `rest_responses_max_duration_seconds` is a since-restart max, use the histogram) → `docs/context/qdrant-payload-rewrite-churn.md`
 - Qdrant payload indexes missing or rejected under strict mode (`ensure_collection/2` reconciles them on every boot) → `docs/context/qdrant-payload-indexes-strict-mode.md`
 - A Qdrant scroll/search/filter 400s on every retry (prod strict mode refuses unindexed payload keys; `ReconcileNotePayloads` v5 key `u`, #2138; build filters via `Qdrant.match_filter(:user, ...)`, index a key before any reader uses it) → `docs/context/qdrant-strict-mode-unindexed-filter.md`
 - Bulk-copying or re-ingesting into a small Qdrant node (mx1 0.5 vCPU / 4 GiB) OOMs or trips strict-mode backpressure, or a collection sits grey with RAM flat and never drains → `docs/context/qdrant-small-node-ingest-oom.md`
@@ -169,6 +171,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Invalid UTF-8 at rest (bytea bypasses PG validation) → `Jason.encode` 500 at every JSON egress; fix + backfill task → `docs/context/invalid-utf8-at-rest-json-500.md`
 
 **Perf & Quality**
+- Prod RDS SwapUsage alert while RAM looks fine, finding which job/query loaded the DB (RDSOSMetrics processList, slow log, PI group names), or adding a cron/maintenance job (no O(table) scans, no index on a save-written column, `cron_scan_bound_test`) → `docs/context/maintenance-job-db-load.md`
 - Read-path decrypt perf — parallel_map economics, when it helps vs hurts → `docs/context/read-path-decrypt-perf.md`
 - Perf caches + invalidation contracts (2026-06-12 audit wave) → `docs/context/perf-caching-invalidation.md`
 - Replacing hand-rolled code with a shared helper (consolidating a PARSER silently drops accepted input shapes no test names — CRLF frontmatter read as "no frontmatter"), or a log metadata key built inside a helper that Credo cannot see → `docs/context/consolidation-drops-undocumented-tolerances.md`
