@@ -1,11 +1,12 @@
 # Context Doc: CI runner network and disk gotchas
 
-_Last verified: 2026-10-20_
+_Last verified: 2026-11-05_
 
 **Trigger:** "Checkout plugin" slow (minutes) or hung until cancelled; CI
 Postgres "unhealthy" or "Wait for DB + ecto setup" fails on a `gamingpc-*`
 runner; e2e-browser `Failed to sign in ... Too Many Requests`; marketing lychee
-`https://sentry.io/privacy/ Connection refused`; a job ends `failure` with a
+`https://sentry.io/privacy/ Connection refused`, Sentry release or source-map
+upload fails on `gamingpc-*`/`minipc-*`; a job ends `failure` with a
 step still `in_progress` and no log; engram-infra `main` red from
 `bin/assert-main-tip.sh`; plugin release-please PR red on intermediate pushes.
 
@@ -68,17 +69,53 @@ last 10 e2e-browser failures.
 
 **How found.** Grouping the last 10 e2e-browser failures by error message.
 
-## 4. Marketing lychee: sentry.io connection refused
+## 4. sentry.io is DNS-sinkholed on gamingpc and minipc runners
 
-**Symptom.** `https://sentry.io/privacy/ Connection refused` on every
-`gamingpc-*` runner (4 of 4), never on `runner-*` or `fastraid-*`.
+**Symptom.** Every Sentry call fails on `gamingpc-*` and `minipc-*`, never on
+`runner-*` (slowraid) or `fastraid-*`:
+- marketing lychee: `https://sentry.io/privacy/ Connection refused`
+- frontend build: `[sentry-vite-plugin] non-fatal: sourcemap/release step
+  failed ... Failed to create release: Network error / fetch failed`
+- backend `Sentry releases` step: exit 127, because `curl -sL .../get-cli/ | bash`
+  downloaded nothing and the pipe hid it.
 
-**Cause.** lychee's connection path on those runners. `sentry-cli` uploads from
-the same runners succeed. Likely IPv6 without fallback; unverified.
+CI stays green (all three are non-fatal), so prod frontends built on those
+runners ship without source maps. Tally 2026-11-03..05 on main: backend step
+gamingpc+minipc 12/12 failed, slowraid 23/23 ok; frontend upload gamingpc+minipc
+9/10 failed, fastraid 22/22 and slowraid 13/13 ok.
 
-**Fix (engram-marketing PR #252).** Exclude `sentry.io` from lychee.
+**Cause.** DNS, not IPv6. The LAN AdGuard Home pair (10.0.20.253 and
+10.0.20.254) blocks sentry.io and answers `0.0.0.0` / `::`. The gamingpc and
+minipc runner VMs resolve through their host's libvirt dnsmasq (10.20.98.1,
+10.20.97.1), which forwards to that AdGuard pair. slowraid-runner uses 1.1.1.1
+directly and is unaffected.
 
-**How found.** Correlating lychee failures with runner name.
+```
+$ getent ahosts sentry.io          # on gpc-runner-vm / minipc-runner-vm
+0.0.0.0  STREAM sentry.io
+::       STREAM
+$ dig +short @10.0.20.253 sentry.io
+0.0.0.0
+$ dig +short @1.1.1.1 sentry.io
+34.8.226.60
+```
+
+The old entry here blamed IPv6 and said sentry-cli uploads succeeded on these
+runners. Both were wrong. The lychee exclude (engram-marketing PR #252) only
+hid the symptom.
+
+**Visibility.** `.github/scripts/sentry-dns-check.sh` runs before both upload
+paths in verify.yml and emits a `::warning::` naming the runner when sentry.io
+resolves to a sinkhole address. The `Sentry releases` step also runs with
+`pipefail` and `curl -f`, so a failed download fails at the download.
+
+**Real fix (not in this repo).** Either allowlist `@@||sentry.io^$important` in
+both AdGuard instances, or give `engram-runner-net` on gaming-pc and mini-pc
+`<dns><forwarder addr='1.1.1.1'/></dns>` to match slowraid. Those libvirt
+networks are not in the homelab ansible inventory yet.
+
+**How found.** Correlating failures with runner name, then `getent` / `dig`
+on a failing and a passing runner VM.
 
 ## 5. Runner lost mid-job
 

@@ -5621,10 +5621,14 @@ jobs:
           BACKEND_PROJECT: ${{ vars.SENTRY_PROJECT_BACKEND }}
           VERSION: ${{ github.sha }}
         run: |
+          # pipefail + curl -f: a failed download must fail HERE, loudly, not
+          # as a silent empty pipe and a confusing exit 127 on "$CLI" below.
+          set -o pipefail
+          .github/scripts/sentry-dns-check.sh
           # `INSTALL_DIR=` belongs on the `bash` side of the pipe — the env on
           # the curl side stays with the curl process and the install script
           # falls back to /usr/local/bin, which then needs sudo on this runner.
-          curl -sL https://sentry.io/get-cli/ | INSTALL_DIR="${RUNNER_TEMP}" bash
+          curl -fsSL https://sentry.io/get-cli/ | INSTALL_DIR="${RUNNER_TEMP}" bash
           CLI="${RUNNER_TEMP}/sentry-cli"
 
           # Single release name (commit SHA) associated with BOTH projects via
@@ -6103,6 +6107,11 @@ jobs:
       - name: Install
         working-directory: frontend
         run: bun install --frozen-lockfile
+
+      # The Vite Sentry plugin uploads source maps inside the build below and
+      # treats a failure as non-fatal. Surface a DNS sinkhole as a warning.
+      - name: Check Sentry DNS
+        run: .github/scripts/sentry-dns-check.sh
 
       - name: Build (saas)
         working-directory: frontend
