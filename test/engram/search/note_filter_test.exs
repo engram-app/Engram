@@ -30,7 +30,7 @@ defmodule Engram.Search.NoteFilterTest do
     sorted(out)
   end
 
-  defp sorted({tag, ids}), do: {tag, Enum.sort(ids)}
+  defp sorted({tag, ids}) when is_list(ids), do: {tag, Enum.sort(ids)}
   defp sorted(other), do: other
 
   defp ids(notes), do: notes |> Enum.map(& &1.id) |> Enum.sort()
@@ -352,19 +352,21 @@ defmodule Engram.Search.NoteFilterTest do
       assert run.(cap: 1, within: [a.id, b.id]) == {:ids, ids([a, b])}
     end
 
-    test "count/3: {matched, live} live notes, summed across vaults", ctx do
-      v2 = insert(:vault, user: ctx.user)
-      note!(ctx, "a.md", "tags: [t]")
-      note!(ctx, "b.md")
-      gone = note!(ctx, "c.md", "tags: [t]")
+    test "sample: a :too_wide answer carries {matched, sampled}, bounded by the sample", ctx do
+      tagged = for i <- 1..3, do: note!(ctx, "t#{i}.md", "tags: [t]")
+      for i <- 1..3, do: note!(ctx, "u#{i}.md")
+      gone = hd(tagged)
+      note!(ctx, "u4.md")
       set_note!(ctx, gone, deleted_at: DateTime.utc_now())
-      write_indexed!(ctx.user, v2, "d.md", "---\ntags: [t]\n---\n")
 
-      assert NoteFilter.count(ctx.user, ctx.vault, %{tags: ["t"]}) == {:ok, {1, 2}}
-      assert NoteFilter.count(ctx.user, [ctx.vault, v2], %{tags: ["t"]}) == {:ok, {2, 3}}
-
-      assert NoteFilter.count(ctx.user, insert(:vault, user: ctx.user), %{tags: ["t"]}) ==
-               {:ok, {0, 0}}
+      # 2 tagged + 4 untagged live notes; the sample reads at most 4 of them.
+      assert {:too_wide, {matched, 4}} = resolve(ctx, %{tags: ["t"]}, cap: 1, sample: 4)
+      assert matched in 0..2
+      assert resolve(ctx, %{tags: ["t"]}, cap: 1, sample: 100) == {:too_wide, {2, 6}}
+      # No `sample:`: the plain contract.
+      assert resolve(ctx, %{tags: ["t"]}, cap: 1) == :too_wide
+      # A narrow answer carries no sample.
+      assert resolve(ctx, %{tags: ["t"]}, sample: 4) == {:ids, ids(tl(tagged))}
     end
   end
 

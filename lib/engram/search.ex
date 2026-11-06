@@ -690,9 +690,9 @@ defmodule Engram.Search do
     if Qdrant.note_id_filter?() and note_filter().any?(opts) do
       vaults = filter_vaults(user, vault, opts)
 
-      case note_filter().resolve(user, vaults, opts, []) do
+      case note_filter().resolve(user, vaults, opts, sample: true) do
         {:ok, {:ids, []}} -> :no_match
-        {:ok, :too_wide} -> too_wide(user, vaults, opts)
+        {:ok, {:too_wide, sample}} -> {:ok, [], {vaults, opts, sample}}
         {:ok, scope} -> {:ok, [note_scope: scope], nil}
         {:error, _} = error -> error
       end
@@ -716,22 +716,17 @@ defmodule Engram.Search do
     end
   end
 
-  # The post-filter of a `:too_wide` filter: its vaults, the filter, and the
-  # live notes it matches against those there are (`{matched, live}`).
-  defp too_wide(user, vaults, opts) do
-    with {:ok, counts} <- note_filter().count(user, vaults, opts),
-         do: {:ok, [], {vaults, opts, counts}}
-  end
-
   # The most a `:too_wide` search fetches: 16x the page, in at most two rounds.
   @widen_factor 16
 
   # The first round's oversample: twice the pool that holds the page at the
-  # vault's matching fraction (`live / matched`), at most `@widen_factor`.
-  defp oversample({_vaults, _filter, {0, _live}}), do: @widen_factor
+  # matching fraction of the resolver's bounded sample (`matched / sampled`),
+  # at most `@widen_factor`. A sample with no match (a sparse filter, or an
+  # empty vault) is the most, 16x.
+  defp oversample({_vaults, _filter, {0, _sampled}}), do: @widen_factor
 
-  defp oversample({_vaults, _filter, {matched, live}}),
-    do: min(div(2 * live + matched - 1, matched), @widen_factor)
+  defp oversample({_vaults, _filter, {matched, sampled}}),
+    do: min(div(2 * sampled + matched - 1, matched), @widen_factor)
 
   # The Postgres note-filter resolver (`{:ids, _} | {:exclude, _} |
   # :too_wide`, `within:` for the post-filter), a seam so tests stub it.
@@ -767,7 +762,7 @@ defmodule Engram.Search do
     wider = min(keep * @widen_factor, Qdrant.max_page())
 
     with {:ok, raw} <- legs.(search_opts),
-         {:ok, kept} <- within_filter(raw, user, within, keep) do
+         {:ok, {kept, rowless}} <- within_filter(raw, user, within, keep) do
       # A Qdrant page under its limit is all the tenant holds: nothing to widen.
       short? = length(kept) < keep and length(raw) >= limit
 
@@ -778,6 +773,10 @@ defmodule Engram.Search do
           rounds: round,
           short: short?
         })
+
+        # Counted from the returned round only: a widened round refetches
+        # the first one's points.
+        if rowless > 0, do: emit_hit_dropped(:no_chunk_row, rowless, user)
 
         # Only the survivors are loaded and decrypted, once.
         postgres_hits(kept, user)
@@ -801,21 +800,19 @@ defmodule Engram.Search do
   end
 
   # `:too_wide`: keep the candidates whose note the filter matches, the
-  # page's `keep` best. Notes come from the chunk rows alone (no decrypt); a
-  # point with no chunk row is dropped and counted here, as
-  # `postgres_hits/2` would.
-  defp within_filter(candidates, user, {vaults, filter, _counts}, keep) do
+  # page's `keep` best, and how many points had no chunk row. Notes come
+  # from the chunk rows alone (no decrypt); a point with no chunk row is
+  # dropped, and `post_filtered/6` counts it as `postgres_hits/2` would.
+  defp within_filter(candidates, user, {vaults, filter, _sample}, keep) do
     notes = Engram.Notes.note_ids_by_qdrant_points(user, Enum.map(candidates, & &1.qdrant_id))
     note_ids = notes |> Map.values() |> Enum.uniq()
 
-    case Enum.count(candidates, &(not is_map_key(notes, &1.qdrant_id))) do
-      0 -> :ok
-      rowless -> emit_hit_dropped(:no_chunk_row, rowless, user)
-    end
+    rowless = Enum.count(candidates, &(not is_map_key(notes, &1.qdrant_id)))
 
     with {:ok, {:ids, matched}} <- note_filter().resolve(user, vaults, filter, within: note_ids) do
       matched = MapSet.new(matched)
-      {:ok, candidates |> Enum.filter(&(notes[&1.qdrant_id] in matched)) |> Enum.take(keep)}
+      kept = candidates |> Enum.filter(&(notes[&1.qdrant_id] in matched)) |> Enum.take(keep)
+      {:ok, {kept, rowless}}
     end
   end
 

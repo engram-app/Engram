@@ -27,13 +27,18 @@ defmodule Engram.SearchNoteFilterTest do
     @keys ~w(folder tags type fields created_after created_before updated_after updated_before)a
     def any?(opts), do: Enum.any?(opts, fn {k, v} -> k in @keys and v not in [nil, [], ""] end)
 
+    # With `sample:`, `:too_wide` carries its `{matched, sampled}` sample:
+    # `Process.get(:count)`, by default half matching (a 4x oversample). The
+    # answer funs and the reported opts see the opts without `:sample`.
     def resolve(_user, vault, filter, opts) do
+      {sample, opts} = Keyword.pop(opts, :sample)
       send(self(), {:resolve, vault, filter, opts})
-      Process.get(:resolve).(opts)
-    end
 
-    # `{matched, live}`; by default half the vault matches (a 4x oversample).
-    def count(_user, _vault, _filter), do: Process.get(:count, {:ok, {1, 2}})
+      case Process.get(:resolve).(opts) do
+        {:ok, :too_wide} when sample != nil -> {:ok, {:too_wide, Process.get(:count, {1, 2})}}
+        out -> out
+      end
+    end
   end
 
   setup do
@@ -304,7 +309,7 @@ defmodule Engram.SearchNoteFilterTest do
       |> Plug.Conn.send_resp(200, Jason.encode!(%{result: %{points: Enum.take(points, limit)}}))
     end)
 
-    Process.put(:count, {:ok, {2_000, 10_000}})
+    Process.put(:count, {2_000, 10_000})
 
     answer(fn
       [] -> {:ok, :too_wide}
@@ -325,7 +330,7 @@ defmodule Engram.SearchNoteFilterTest do
 
   test ":too_wide oversample: a tiny or zero fraction is 16x, never more",
        %{bypass: bypass, user: user, vault: vault} do
-    for count <- [{:ok, {1, 1_000_000}}, {:ok, {0, 0}}] do
+    for count <- [{1, 2_048}, {0, 2_048}] do
       Process.put(:count, count)
 
       answer(fn
@@ -379,6 +384,60 @@ defmodule Engram.SearchNoteFilterTest do
     refute_received {:dropped, _, _}
   end
 
+  test ":too_wide counts a rowless point once when the search widens to a second round",
+       %{bypass: bypass, user: user, vault: vault} do
+    {keep, keep_point} = note_with_point(user, vault, "Health/keep.md")
+    drop = insert_note!(user, vault, %{path: "Other/drop.md"})
+
+    drops =
+      for pos <- 0..13 do
+        point = Ecto.UUID.generate()
+        insert_chunk!(user, drop, point, text: "ferritin #{pos}", position: pos)
+        point
+      end
+
+    rowless = Ecto.UUID.generate()
+    pool = Enum.with_index([rowless | drops] ++ [keep_point])
+    points = Enum.map(pool, fn {id, i} -> %{"id" => id, "score" => 1 - i / 100} end)
+    test_pid = self()
+    ref = make_ref()
+    event = [:engram, :search, :hit_dropped]
+
+    :telemetry.attach(
+      {__MODULE__, ref},
+      event,
+      fn ^event, m, meta, _ -> send(test_pid, {:dropped, m.count, meta.reason}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
+
+    # Round 1 (4 points) holds the rowless point and no match; round 2 (16)
+    # holds it again and the match.
+    Bypass.expect(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      %{"limit" => limit} = Jason.decode!(body)
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, Jason.encode!(%{result: %{points: Enum.take(points, limit)}}))
+    end)
+
+    answer(fn
+      [] -> {:ok, :too_wide}
+      [within: ids] -> {:ok, {:ids, Enum.filter(ids, &(&1 == keep.id))}}
+    end)
+
+    embed()
+
+    assert {:ok, [hit]} =
+             Search.search(user, vault, "q", folder: "H", mode: :vector, diversity: 0.0, limit: 1)
+
+    assert hit.source_path == "Health/keep.md"
+    assert_received {:dropped, 1, :no_chunk_row}
+    refute_received {:dropped, _, _}
+  end
+
   test ":too_wide with nothing kept by within: is an empty page",
        %{bypass: bypass, user: user, vault: vault} do
     {_note, point} = note_with_point(user, vault, "Health/a.md")
@@ -409,15 +468,13 @@ defmodule Engram.SearchNoteFilterTest do
     refute inspect(filter) =~ ~s("n")
   end
 
-  # Every filter at once, hybrid: the whole request body is what main's
-  # builder makes from today's opts (the query vectors are the only inputs
-  # taken from the request itself).
-  test "switch off: the resolver is never called and the body is today's",
-       %{bypass: bypass, user: user, vault: vault} do
+  # Switch off, every filter at once: the search opts, and the opts main's
+  # builders take for them (the payload conditions of today's path). Any
+  # resolver call fails the test.
+  defp switch_off_filters(user) do
     ServiceConfig.put_override(:note_id_filter, false)
     answer(fn _ -> flunk("resolver called with the switch off") end)
     embed()
-    test_pid = self()
 
     {:ok, dek} = Engram.Crypto.get_dek(user)
     {:ok, fk} = Engram.Crypto.dek_filter_key(user)
@@ -425,6 +482,89 @@ defmodule Engram.SearchNoteFilterTest do
     {_ids, 0} = Engram.Notes.FrontmatterKeys.resolve(user.id, dek, names)
     fields = [%{"key" => "phase", "op" => "eq", "value" => "Draft"}]
     {:ok, attr_filters} = Engram.Search.FieldFilters.to_conditions(user.id, fk, fields)
+
+    dates = [
+      created_after: ~U[2026-01-01 00:00:00Z],
+      created_before: ~U[2026-02-01 00:00:00Z],
+      updated_after: ~U[2026-03-01 00:00:00Z],
+      updated_before: ~U[2026-04-01 00:00:00Z]
+    ]
+
+    hmac = &Base.encode64(Engram.Crypto.hmac_field(fk, &1))
+    unix = &DateTime.to_unix(dates[&1])
+
+    payload = [
+      folder_hmac: hmac.("Health"),
+      tags_hmac: Enum.map(["a", "b"], hmac),
+      type_hmac: hmac.("playbook"),
+      fm_timestamp_gte: unix.(:updated_after),
+      fm_timestamp_lte: unix.(:updated_before),
+      fm_created_gte: unix.(:created_after),
+      fm_created_lte: unix.(:created_before),
+      attr_filters: attr_filters
+    ]
+
+    {[folder: "Health", tags: ["a", "b"], type: "Playbook", fields: fields] ++ dates, payload}
+  end
+
+  # The one vector query body of a switch-off search.
+  defp vector_body(bypass, user, vault, opts) do
+    expect_query(bypass, [])
+    assert {:ok, []} = Search.search(user, vault, "q", opts)
+    assert_received {:query, body}
+    refute_received {:query, _}
+    refute inspect(body) =~ ~s("n")
+    body
+  end
+
+  defp vector_today(user, body, scope, payload) do
+    today =
+      Qdrant.search_body(
+        body["query"],
+        scope ++
+          [limit: 5] ++
+          payload ++
+          [
+            with_vector: false,
+            full_precision: Engram.Search.SearchProfile.resolve(user).full_precision,
+            tenant_idf: false
+          ]
+      )
+
+    Jason.decode!(Jason.encode!(today))
+  end
+
+  test "switch off, vector: the body is today's",
+       %{bypass: bypass, user: user, vault: vault} do
+    {opts, payload} = switch_off_filters(user)
+    body = vector_body(bypass, user, vault, opts ++ [mode: :vector, diversity: 0.0])
+    assert body == vector_today(user, body, tenant(user, vault), payload)
+  end
+
+  test "switch off, cross-vault vault_ids: the body is today's",
+       %{bypass: bypass, user: user, vault: vault} do
+    other = insert(:vault, user: user)
+    {opts, payload} = switch_off_filters(user)
+
+    body =
+      vector_body(
+        bypass,
+        user,
+        nil,
+        opts ++ [mode: :vector, diversity: 0.0, vault_ids: [vault.id, other.id]]
+      )
+
+    scope = [user_id: to_string(user.id), vault_id: [to_string(vault.id), to_string(other.id)]]
+    assert body == vector_today(user, body, scope, payload)
+  end
+
+  # Every filter at once, hybrid: the whole request body is what main's
+  # builder makes from today's opts (the query vectors are the only inputs
+  # taken from the request itself).
+  test "switch off: the resolver is never called and the body is today's",
+       %{bypass: bypass, user: user, vault: vault} do
+    {opts, payload} = switch_off_filters(user)
+    test_pid = self()
 
     Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -435,38 +575,17 @@ defmodule Engram.SearchNoteFilterTest do
       |> Plug.Conn.send_resp(200, ~s({"result": [{"points": []}, {"points": []}]}))
     end)
 
-    dates = [
-      created_after: ~U[2026-01-01 00:00:00Z],
-      created_before: ~U[2026-02-01 00:00:00Z],
-      updated_after: ~U[2026-03-01 00:00:00Z],
-      updated_before: ~U[2026-04-01 00:00:00Z]
-    ]
-
-    opts =
-      [folder: "Health", tags: ["a", "b"], type: "Playbook", fields: fields] ++
-        dates ++ [mode: :hybrid, diversity: 0.0]
-
-    assert {:ok, []} = Search.search(user, vault, "q", opts)
+    assert {:ok, []} = Search.search(user, vault, "q", opts ++ [mode: :hybrid, diversity: 0.0])
     assert_received {:batch, %{"searches" => [dense, sparse]} = body}
-
-    hmac = &Base.encode64(Engram.Crypto.hmac_field(fk, &1))
-    unix = &DateTime.to_unix(dates[&1])
 
     today =
       Qdrant.hybrid_search_body(
         dense["query"],
         %{indices: sparse["query"]["indices"], values: sparse["query"]["values"]},
         tenant(user, vault) ++
+          [limit: 5] ++
+          payload ++
           [
-            limit: 5,
-            folder_hmac: hmac.("Health"),
-            tags_hmac: Enum.map(["a", "b"], hmac),
-            type_hmac: hmac.("playbook"),
-            fm_timestamp_gte: unix.(:updated_after),
-            fm_timestamp_lte: unix.(:updated_before),
-            fm_created_gte: unix.(:created_after),
-            fm_created_lte: unix.(:created_before),
-            attr_filters: attr_filters,
             with_vector: false,
             full_precision: Engram.Search.SearchProfile.resolve(user).full_precision,
             tenant_idf: Search.tenant_idf?(user)
