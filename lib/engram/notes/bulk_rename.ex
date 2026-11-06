@@ -13,7 +13,7 @@ defmodule Engram.Notes.BulkRename do
 
   alias Engram.Repo
 
-  # Same bound as Engram.Notes' @rename_update_chunk: 500 rows x <=16 params
+  # Same bound as Engram.Notes' @rename_update_chunk: 500 rows x <=20 params
   # stays well under Postgres's 65535-bind-param protocol limit.
   @chunk 500
 
@@ -93,5 +93,6 @@ defmodule Engram.Notes.BulkRename do
   defp sql_type(:tags_hmac), do: "bytea[]"
   defp sql_type(:dek_version), do: "integer"
   defp sql_type(:path_length), do: "integer"
+  defp sql_type(:folder_ref_id), do: "uuid"
   defp sql_type(_col), do: "bytea"
 end

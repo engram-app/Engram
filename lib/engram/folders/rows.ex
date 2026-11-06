@@ -6,9 +6,11 @@ defmodule Engram.Folders.Rows do
 
   Every function that touches the table MUST run inside the caller's
   `Repo.with_tenant/2` (the table has FORCE row security). Writers call
-  `ensure/4` inside the transaction that writes the note or attachment, so the
-  row exists when the `notes_set_folder_ref` trigger looks it up and the
-  composite foreign key checks it.
+  `ensure/4` (or `ensure_all/3`) inside the transaction that writes the note or
+  attachment and set its `folder_ref_id` from the result in the same write, so
+  the composite foreign key finds the row. The `notes_set_folder_ref` trigger
+  derives the same value from `folder_hmac`; it stays only as the previous
+  release's backstop during a rolling deploy.
 
   Names are one path SEGMENT, encrypted under the account's per-user DEK with
   AAD `Crypto.aad_for_row(:folders, :name, id)` (the key scheme of
