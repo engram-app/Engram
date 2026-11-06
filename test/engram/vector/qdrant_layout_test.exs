@@ -242,9 +242,10 @@ defmodule Engram.Vector.QdrantLayoutTest do
                "upsert_max_batchsize" => 256,
                "filter_max_conditions" => 64,
                "condition_max_size" => 4096,
-               "max_points_count" => 1_500_000,
                "max_timeout" => 30,
-               "search_max_batchsize" => 8
+               "search_max_batchsize" => 8,
+               # Retired breaker: lifted to the ceiling, see `@retired_limits`.
+               "max_points_count" => 2_147_483_647
              }
 
       refute Map.has_key?(QdrantLayout.desired_strict(:cloud), "search_allow_exact")
@@ -305,6 +306,22 @@ defmodule Engram.Vector.QdrantLayoutTest do
                "max_disk_usage_percent" => 100,
                "max_resident_memory_percent" => 100
              }
+    end
+
+    # A live cluster still holds the retired 1.5M. A missing key is not drift
+    # (`diff/2` is a subset check) and a PATCH merges, so only an explicit
+    # ceiling makes the reconcile clear it.
+    test "a stale max_points_count breaker is drift and is lifted by the PATCH" do
+      config =
+        applied(@prod_info)["config"]
+        |> update_in(["strict_mode_config"], fn strict ->
+          strict
+          |> Map.merge(QdrantLayout.desired_strict(:cloud))
+          |> Map.put("max_points_count", 1_500_000)
+        end)
+
+      patch = QdrantLayout.diff(config, QdrantLayout.desired(@v1182, nil, true, :cloud))
+      assert patch["strict_mode_config"]["max_points_count"] == 2_147_483_647
     end
 
     test "an applied cloud config is no drift" do
