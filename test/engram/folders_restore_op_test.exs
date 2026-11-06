@@ -11,7 +11,7 @@ defmodule Engram.FoldersRestoreOpTest do
 
   alias Engram.{Attachments, Folders, Notes, Repo, Storage}
   alias Engram.Attachments.Attachment
-  alias Engram.Notes.Note
+  alias Engram.Notes.{Note, NoteBody}
 
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
@@ -49,6 +49,10 @@ defmodule Engram.FoldersRestoreOpTest do
         [set: [{field, <<head::binary, Bitwise.bxor(byte, 0xFF)>>}]],
         skip_tenant_check: true
       )
+
+    # A body column is read from `note_bodies`; the app's writers keep it in
+    # step (`NoteBody.sync!/3`).
+    if schema == Note and field in NoteBody.body_fields(), do: Engram.Fixtures.mirror_body!(id)
   end
 
   # Runs the queued index releases, the delete's and the restore's.
