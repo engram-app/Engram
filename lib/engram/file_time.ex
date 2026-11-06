@@ -19,6 +19,12 @@ defmodule Engram.FileTime do
   `twin?/2` accepts their twins (within 1 us) as agreeing, and
   `Engram.DataMigrations.FileTimes` v2 rewrites them.
 
+  Desktop Obsidian sends sub-microsecond digits (`stat.mtimeMs` has
+  sub-millisecond fractions; the plugin divides by 1000). Those are
+  precision noise: after contract the wire serves the value rounded to the
+  microsecond (a change under 1 us). No client sees it: the plugin never
+  compares server mtimes, and the web tree shows minutes or seconds.
+
   Strict only at the client boundary: `check/2` (REST params, 422) and
   `validate/2` (a request changeset). Every write behind it is lenient,
   `put_at/3`: a stored out-of-range double (a legacy row a move or restore
