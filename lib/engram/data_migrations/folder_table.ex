@@ -27,6 +27,13 @@ defmodule Engram.DataMigrations.FolderTable do
        (`Rows.attachment_ref/2`), compare-and-set on that nonce. Version 2
        stamps every row written before the stamp existed.
 
+  Version 3 heals the references that name a soft-deleted folder row, left
+  by rows written before the `folders_release_refs` trigger (20261106100000)
+  released them (#2466 review, H1 and H2): a note's is re-pointed by step 2
+  (its selection takes a dead reference), an attachment's is released first
+  (reference and stamp NULL, `release_dead_attachment_refs/1`) so step 3
+  re-resolves it, and a live marker whose row died gets one back from step 1.
+
   A row a writer holds is skipped (`FOR UPDATE SKIP LOCKED`), never waited
   on; the pass reports `:more` until a look finds nothing left. A
   folder or path that does not decrypt keeps the ledger open too (a closed
@@ -73,7 +80,8 @@ defmodule Engram.DataMigrations.FolderTable do
 
   @impl true
   # 2: stamps `attachments.folder_ref_stamp` (20261103140000) on every row.
-  def version, do: 2
+  # 3: heals references to soft-deleted folder rows (see the moduledoc).
+  def version, do: 3
 
   @impl true
   def run_pass, do: run_pass([])
@@ -160,9 +168,10 @@ defmodule Engram.DataMigrations.FolderTable do
 
       {tree, markers} = markers(ctx, tree)
       {tree, notes} = notes(ctx, tree)
+      released = %{zero() | changed: release_dead_attachment_refs(ctx)}
       {_tree, attachments} = attachments(ctx, tree)
 
-      Enum.reduce([markers, notes, attachments], zero(), &add(&2, &1))
+      Enum.reduce([markers, notes, released, attachments], zero(), &add(&2, &1))
     else
       # No DEK, no encrypted rows.
       {:error, :no_dek} ->
@@ -543,6 +552,34 @@ defmodule Engram.DataMigrations.FolderTable do
   end
 
   # ---- 3. attachments ------------------------------------------------------
+
+  # A live attachment whose reference names a soft-deleted row, with a stamp
+  # that is still current (so the walk below would not look at it): reference
+  # and stamp NULL, as `folders_release_refs` does for a delete today, `batch`
+  # rows at a time, locked rows skipped (the next pass takes them). Cost: one
+  # walk of the user's folder rows (`folders_user`), each dead one probing
+  # `attachments_folder_ref`; empty once healed. Returns the rows released.
+  defp release_dead_attachment_refs(ctx, n \\ 0) do
+    count =
+      scope(ctx, fn repo ->
+        %{num_rows: count} =
+          repo.query!(
+            """
+            UPDATE attachments SET folder_ref_id = NULL, folder_ref_stamp = NULL
+            WHERE id = ANY(ARRAY(
+              SELECT a.id FROM folders f
+              JOIN attachments a ON a.vault_id = f.vault_id AND a.folder_ref_id = f.id
+              WHERE f.user_id = $1 AND f.deleted_at IS NOT NULL AND a.deleted_at IS NULL
+              ORDER BY a.id LIMIT $2 FOR UPDATE OF a SKIP LOCKED))
+            """,
+            [dump(ctx.user_id), ctx.batch]
+          )
+
+        count
+      end)
+
+    if count < ctx.batch, do: n + count, else: release_dead_attachment_refs(ctx, n + count)
+  end
 
   defp attachments(ctx, tree, after_id \\ nil, stats \\ zero())
 

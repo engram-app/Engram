@@ -107,7 +107,7 @@ defmodule Engram.DataMigrations.FolderTableTest do
 
     test "no daily re-verify: the drain owns drift once the ledger closes" do
       refute function_exported?(FolderTable, :reverify?, 0)
-      assert FolderTable.version() == 2
+      assert FolderTable.version() == 3
     end
   end
 
