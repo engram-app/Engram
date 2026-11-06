@@ -37,7 +37,6 @@ defmodule Engram.Accounts.LifecycleTest do
   alias Engram.Accounts.Lifecycle
   alias Engram.Accounts.User
   alias Engram.Auth.RefreshToken
-  alias Engram.Maintenance.Cursor
   alias Engram.Repo
   alias Engram.Storage.InMemory
   alias Engram.Test.LogCapture
@@ -283,21 +282,6 @@ defmodule Engram.Accounts.LifecycleTest do
 
       refute Repo.get(User, user.id, skip_tenant_check: true)
       refute_enqueued(worker: PurgeUserVectors)
-    end
-
-    # The search switch's per-user marker (`ReconcileNotePayloads`) is a
-    # `maintenance_cursors` row, not a tenant table: nothing cascades it.
-    test "deletes the user's n-backfill marker" do
-      user = insert(:user, external_id: nil)
-      other = insert(:user, external_id: nil)
-
-      for u <- [user, other],
-          do: :ok = Cursor.put("payload_n_backfilled:#{u.id}", %{"version" => 6})
-
-      assert :ok = Lifecycle.hard_delete(user, :user)
-
-      refute Cursor.get("payload_n_backfilled:#{user.id}")
-      assert Cursor.get("payload_n_backfilled:#{other.id}")
     end
 
     test "no-op when user already deleted (re-entry guard)" do

@@ -79,7 +79,6 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   alias Engram.Backfill.TenantScan
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
-  alias Engram.DataMigrations.NotePayloadStamps
   alias Engram.Indexing
   alias Engram.Indexing.PayloadV6
   alias Engram.Jobs
@@ -132,7 +131,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
       case result do
         :done ->
-          mark_backfilled(user_id)
+          :ok
 
         {:more, after_id} ->
           {:ok, _} = Oban.insert(new(%{"user_id" => user_id, "after" => after_id}))
@@ -450,154 +449,17 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     Map.take(point, keys) != Map.take(want, keys)
   end
 
-  @doc """
-  True once every indexed note of the user carries the `n` payload version
-  (`note_index_state.payload_version >= 6`): the user's points can be
-  searched by note id. Constant once `NotePayloadStamps` is done (a cached
-  ledger read); before that, one keyed read of the user's marker, written
-  when the user's backfill chain finished with nothing behind
-  (`mark_backfilled/1`). Never a scan: this is on the search path (callers
-  cache it, `Engram.Search`). A user never queued waits for the ledger.
-  """
-  @spec n_backfilled?(Ecto.UUID.t()) :: boolean()
-  def n_backfilled?(user_id) do
-    cond do
-      PayloadV6.version() < @n_version -> false
-      NotePayloadStamps.done?() -> true
-      true -> Cursor.get(marker(user_id)) != nil
-    end
-  end
-
-  # The per-user "backfill done" marker: one `maintenance_cursors` row, keyed.
-  defp marker(user_id), do: "payload_n_backfilled:" <> to_string(user_id)
-
-  @doc """
-  Deletes the user's `n_backfilled?/1` marker. `maintenance_cursors` is not a
-  tenant table, so nothing cascades it: the account hard delete calls this.
-  """
-  @spec forget_marker(Ecto.UUID.t()) :: :ok
-  def forget_marker(user_id), do: Cursor.reset(marker(user_id))
-
-  @doc """
-  Writes (or clears) the user's `n_backfilled?/1` marker: run at the end of
-  the user's chain, a background job, never on the search path. Written only
-  when all three hold:
-
-    * no note of the user is behind the version (one EXISTS that stops at
-      the first);
-    * every node of the cluster runs a release that writes `n`
-      (`PayloadV5.writes_n?/0` over `:erpc`, 2 s; an unreachable node or one
-      without it counts as old): an older node re-upserts points without
-      `n` after the stamp, which never lowers, so Postgres cannot see them;
-    * Qdrant holds no v5 point of the user without `n` (one exact count).
-      If it does, that page's notes are unstamped and the user requeued.
-
-  Options (tests): `:peers` (0-arity, default `Node.list/0`) and
-  `:multicall` (fun of the node list, `:erpc.multicall/5`-shaped results).
-  """
-  @spec mark_backfilled(Ecto.UUID.t(), keyword()) :: :ok
-  def mark_backfilled(user_id, opts \\ []) do
-    cond do
-      PayloadV6.version() < @n_version -> :ok
-      behind?(user_id) -> Cursor.reset(marker(user_id))
-      not cluster_writes_n?(opts) -> :ok
-      true -> mark_if_qdrant_clean(user_id)
-    end
-  end
-
-  defp mark_if_qdrant_clean(user_id) do
-    case Qdrant.count(Qdrant.collection_name(), missing_n_filter(user_id)) do
-      {:ok, 0} -> put_marker(user_id)
-      {:ok, _} -> requeue_missing_n(user_id)
-      # Unreadable: not proven, the user's next chain asks again.
-      {:error, _} -> :ok
-    end
-  end
-
-  # Write first, then re-check: an unstamp that raced the decision (its
-  # marker reset ran before this write) is behind now, so the marker goes.
-  #
-  # Only while the user row exists, checked under `FOR KEY SHARE` in the
-  # write's transaction: a hard delete racing this either committed first
-  # (no row, no marker) or waits on the lock and drops the marker after
-  # (`forget_marker/1` in its transaction), so a chain still running when
-  # the account goes cannot re-create it.
-  defp put_marker(user_id) do
-    {:ok, _} =
-      Repo.transaction(fn ->
-        user =
-          Repo.one(
-            from(u in User, where: u.id == ^user_id, select: u.id, lock: "FOR KEY SHARE"),
-            skip_tenant_check: true
-          )
-
-        if user, do: Cursor.put(marker(user_id), %{"version" => @n_version})
-      end)
-
-    if behind?(user_id), do: Cursor.reset(marker(user_id)), else: :ok
-  end
-
-  defp behind?(user_id) do
-    {:ok, behind} =
-      Repo.with_tenant(user_id, fn ->
-        indexed_notes()
-        |> where([note: n], n.user_id == ^user_id)
-        |> where(^stale())
-        |> Repo.exists?()
-      end)
-
-    behind
-  end
-
-  # v5 points (`u` set) without `n`; the user's own when given.
-  defp missing_n_filter(user_id \\ nil) do
-    tenant = if user_id, do: [Qdrant.match_filter(:user, user_id)], else: []
-    %{must: [%{is_empty: %{key: @n_key}} | tenant], must_not: [%{is_empty: %{key: "u"}}]}
-  end
-
-  # The user's points without `n`, page by page until one belongs to a live
-  # note: those notes lose the version stamp and the user is requeued, so the
-  # next chain backfills them. Orphans (no chunk row) unstamp nothing;
-  # `OrphanSweep` reaps them.
-  # ponytail: at most 4 pages (1,024 points) per marker attempt. A user with
-  # more orphans than that ahead of a live point stays unmarked (still
-  # correct, old filters) until the sweep reaps them or the ledger closes.
-  @missing_n_pages 4
-  defp requeue_missing_n(user_id), do: requeue_missing_n(user_id, nil, @missing_n_pages)
-
-  defp requeue_missing_n(_user_id, _offset, 0), do: :ok
-
-  defp requeue_missing_n(user_id, offset, pages) do
-    case Qdrant.scroll(Qdrant.collection_name(),
-           filter: missing_n_filter(user_id),
-           with_payload: ["u"],
-           limit: @refresh_page,
-           offset: offset
-         ) do
-      {:ok, %{points: points, next_page_offset: next}} ->
-        cond do
-          unstamp_versions(user_id, Enum.map(points, & &1["id"])) > 0 ->
-            _ = TenantScan.enqueue_users(__MODULE__, [user_id])
-            :ok
-
-          next == nil ->
-            :ok
-
-          true ->
-            requeue_missing_n(user_id, next, pages - 1)
-        end
-
-      {:error, _} ->
-        :ok
-    end
-  end
+  # v5 points (`u` set) without `n`, fleet-wide.
+  defp missing_n_filter,
+    do: %{must: [%{is_empty: %{key: @n_key}}], must_not: [%{is_empty: %{key: "u"}}]}
 
   @erpc_timeout_ms 2_000
 
   @doc """
   True when every node of the cluster runs a release that writes `n`
   (`PayloadV5.writes_n?/0` over `:erpc`, 2 s; an unreachable node or one
-  without it counts as old). Options as `mark_backfilled/2`.
+  without it counts as old). Options (tests): `:peers` (0-arity, default
+  `Node.list/0`) and `:multicall` (fun of the node list, `:erpc.multicall/5`-shaped).
   """
   @spec cluster_writes_n?(keyword()) :: boolean()
   def cluster_writes_n?(opts \\ []) do
@@ -678,7 +540,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   end, requeued nobody AND began while every node wrote `n`
   (`cluster_writes_n?/1`): a point an older node wrote behind the walk's
   cursor is never seen, and the ledger's done is cached for good. Else how
-  many users this page requeued. Options as `mark_backfilled/2`.
+  many users this page requeued. Options as `cluster_writes_n?/1`.
   """
   @spec requeue_unbackfilled(keyword()) :: :clean | {:ok, non_neg_integer()} | {:error, term()}
   def requeue_unbackfilled(opts \\ []) do
@@ -740,7 +602,6 @@ defmodule Engram.Workers.ReconcileNotePayloads do
             )
           end)
 
-        if n > 0, do: Cursor.reset(marker(user_id))
         n
     end
   end

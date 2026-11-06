@@ -43,7 +43,7 @@ defmodule Engram.Indexing.PayloadV5 do
   @doc """
   True on a release whose `build/2` writes `n`. A capability probe: a peer
   asked over `:erpc` that lacks it (`:undef`) is a previous release still
-  writing points without `n` (`ReconcileNotePayloads.mark_backfilled/2`).
+  writing points without `n` (`ReconcileNotePayloads.cluster_writes_n?/1`).
   """
   @spec writes_n?() :: true
   def writes_n?, do: true

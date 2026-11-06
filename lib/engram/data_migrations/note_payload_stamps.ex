@@ -16,9 +16,9 @@ defmodule Engram.DataMigrations.NotePayloadStamps do
   partial index `note_index_state_unstamped`.
 
   Version 2 (`PayloadV6.version/0` 6) backfills `n`, the note row id, onto
-  every v5 point (`ReconcileNotePayloads`); search filters by note id for a
-  user once that user's notes are all stamped
-  (`ReconcileNotePayloads.n_backfilled?/1`).
+  every v5 point (`ReconcileNotePayloads`). Search does not wait on it (a
+  point without `n` is matched by its payload, per point): done is the
+  signal the payload-field drop (R3) waits on.
   """
   @behaviour Engram.DataMigration
 

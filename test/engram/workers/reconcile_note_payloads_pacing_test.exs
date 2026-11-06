@@ -134,15 +134,6 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
             found = for {id, p} <- held, do: %{"id" => id, "payload" => p}
             {"application/json", Jason.encode!(%{"result" => found, "status" => "ok"})}
 
-          # The marker's check: this user's v5 points without `n` (the only
-          # points held).
-          {"POST", path} when path == col <> "/points/count" ->
-            count =
-              Agent.get(points, &Enum.count(&1, fn {_id, p} -> not Map.has_key?(p, "n") end))
-
-            {"application/json",
-             Jason.encode!(%{"result" => %{"count" => count}, "status" => "ok"})}
-
           _ ->
             {"application/json", ~s({"result":true,"status":"ok"})}
         end
@@ -172,7 +163,6 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
     assert {:snooze, 30} = sweep(ctx)
     refute_received :rewrite
     assert_received {[:engram, :rebuild, :gated], _, %{count: 1}, %{reason: :disk}}
-    refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
   end
 
   test "an optimizer backlog snoozes before any write", ctx do
@@ -192,7 +182,6 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
     assert :ok = sweep(ctx)
     assert_received :rewrite
     assert all_n?(ctx)
-    assert ReconcileNotePayloads.n_backfilled?(ctx.user.id)
   end
 
   test "a spent points-per-minute bucket snoozes to the window's end", ctx do

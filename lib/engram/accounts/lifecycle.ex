@@ -253,8 +253,6 @@ defmodule Engram.Accounts.Lifecycle do
                     skip_tenant_check: true
                   ) do
                {1, _} ->
-                 # Not a tenant table, so the user-row delete cascades nothing here.
-                 :ok = Engram.Workers.ReconcileNotePayloads.forget_marker(user.id)
                  enqueue_vector_purge!(user.id)
 
                {0, _} ->

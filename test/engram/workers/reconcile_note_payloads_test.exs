@@ -15,7 +15,6 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   import Mox
 
   alias Engram.Crypto
-  alias Engram.DataMigrations
   alias Engram.DataMigrations.NotePayloadStamps
   alias Engram.Indexing
   alias Engram.Indexing.PayloadV6
@@ -37,7 +36,6 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           overwrites: [],
           batches: [],
           on_scroll: nil,
-          on_count: nil,
           on_write: nil,
           on_upsert: nil,
           payload_status: 200,
@@ -632,14 +630,12 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
       assert Agent.get(ctx.store, & &1.batches) == []
       assert payload_versions(ctx) |> Enum.all?(&is_nil/1)
-      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
     end
 
     test "points without n get only n, in one merge batch, with no DEK and no embed", ctx do
       %{ids: ids, passed: passed} = ctx
       pre_n(ctx)
       no_dek(ctx)
-      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
       assert ReconcileNotePayloads.enqueue_missing() == 1
 
       no_embed()
@@ -655,7 +651,6 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       # Exactly what an R2 pass writes, and stamped.
       assert Agent.get(ctx.store, &Map.take(&1.points, ids)) == passed
       assert payload_versions(ctx) == [6, 6]
-      assert ReconcileNotePayloads.n_backfilled?(ctx.user.id)
 
       # Converged: nothing left to select, nothing more written.
       assert ReconcileNotePayloads.enqueue_missing() == 0
@@ -709,7 +704,6 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       assert Enum.all?(payload_versions(ctx), &is_nil/1)
       # Still in view of the sweep: nothing claims the new shape was written.
       assert ReconcileNotePayloads.enqueue_missing() == 1
-      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
     end
 
     test "points already holding the payload are only stamped", ctx do
@@ -761,7 +755,6 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
 
       assert {:more, users: 1} = NotePayloadStamps.run_pass()
       assert nil in payload_versions(ctx)
-      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
 
       assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
       assert n_kept?(ctx, {id, Agent.get(ctx.store, &Map.fetch!(&1.points, id))})
@@ -826,58 +819,6 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
 
       assert versions[ctx.stale.id] == nil
       assert versions[ctx.healthy.id] == 6
-      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
-    end
-
-    # On the search path: a keyed marker, never a scan of the user's notes.
-    test "n_backfilled? reads the marker the chain writes, not the notes", ctx do
-      DataMigrations.reopen(NotePayloadStamps.name(), NotePayloadStamps.version())
-
-      {2, _} =
-        Repo.update_all(
-          from(s in NoteIndexState, where: s.user_id == ^ctx.user.id),
-          [set: [payload_version: 6]],
-          skip_tenant_check: true
-        )
-
-      # Every note stamped, but no chain finished: not yet.
-      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
-      :ok = ReconcileNotePayloads.mark_backfilled(ctx.user.id)
-      assert ReconcileNotePayloads.n_backfilled?(ctx.user.id)
-    end
-
-    # A previous-release node re-upserts a note's points without `n` AFTER
-    # the v6 stamp (which never lowers): Postgres cannot see it, so the marker
-    # asks Qdrant once before it vouches for the user.
-    test "a v6-stamped note whose points lack n gets no marker, and is requeued", ctx do
-      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-      assert ReconcileNotePayloads.n_backfilled?(ctx.user.id)
-      :ok = ReconcileNotePayloads.forget_marker(ctx.user.id)
-
-      id = hd(point_ids(ctx.stale))
-      Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.delete(p, "n") end))
-      assert payload_versions(ctx) == [6, 6]
-
-      :ok = ReconcileNotePayloads.mark_backfilled(ctx.user.id)
-
-      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
-      assert nil in payload_versions(ctx)
-      assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
-    end
-
-    # A concurrent unstamp (the requeue) lands between the check and the
-    # marker write, and its marker reset runs before our write: the marker
-    # must not survive it.
-    test "a note unstamped while the marker is decided leaves no marker", ctx do
-      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-      :ok = ReconcileNotePayloads.forget_marker(ctx.user.id)
-
-      Agent.update(ctx.store, fn s ->
-        %{s | on_count: fn -> null_versions(ctx) end}
-      end)
-
-      :ok = ReconcileNotePayloads.mark_backfilled(ctx.user.id)
-      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
     end
 
     defp orphans!(ctx, count) do
@@ -933,84 +874,6 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       refute NotePayloadStamps.run_pass(peers: fn -> [] end) == :done
       # The next walk re-checks the cluster from its start: done.
       assert NotePayloadStamps.run_pass(peers: fn -> [] end) == :done
-    end
-
-    # The marker check stops after 4 pages: a live point behind more orphans
-    # than that is not found, so the user is neither marked nor requeued.
-    test "past the 4-page cap of orphans: no marker and no requeue", ctx do
-      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-      :ok = ReconcileNotePayloads.forget_marker(ctx.user.id)
-
-      orphans!(ctx, 4 * 256 + 1)
-      id = hd(point_ids(ctx.stale))
-      Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.delete(p, "n") end))
-
-      :ok = ReconcileNotePayloads.mark_backfilled(ctx.user.id)
-
-      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
-      assert payload_versions(ctx) == [6, 6]
-      refute_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
-    end
-
-    test "the marker check pages past a first page of orphans", ctx do
-      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-      :ok = ReconcileNotePayloads.forget_marker(ctx.user.id)
-
-      orphans!(ctx, 256)
-      id = hd(point_ids(ctx.stale))
-      Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.delete(p, "n") end))
-
-      :ok = ReconcileNotePayloads.mark_backfilled(ctx.user.id)
-
-      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
-      assert nil in payload_versions(ctx)
-      assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
-    end
-
-    # A chain still running when the account is deleted must not re-create
-    # the marker after the delete dropped it.
-    test "no marker for a user whose row is gone", ctx do
-      gone = Ecto.UUID.generate()
-      :ok = ReconcileNotePayloads.mark_backfilled(gone)
-      refute ReconcileNotePayloads.n_backfilled?(gone)
-      _ = ctx
-    end
-
-    # A rolling deploy: an older node still writes points without `n`.
-    test "no marker while an older release is in the cluster", ctx do
-      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-      :ok = ReconcileNotePayloads.forget_marker(ctx.user.id)
-
-      old = :"old@10.0.0.9"
-
-      answer = fn nodes ->
-        Enum.map(nodes, &if(&1 == old, do: {:error, {:exception, :undef, []}}, else: {:ok, true}))
-      end
-
-      :ok =
-        ReconcileNotePayloads.mark_backfilled(ctx.user.id,
-          peers: fn -> [old] end,
-          multicall: answer
-        )
-
-      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
-
-      # Unreachable counts as old.
-      down = fn nodes ->
-        Enum.map(nodes, &if(&1 == old, do: {:error, :timeout}, else: {:ok, true}))
-      end
-
-      :ok =
-        ReconcileNotePayloads.mark_backfilled(ctx.user.id,
-          peers: fn -> [old] end,
-          multicall: down
-        )
-
-      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
-
-      # Every node on this release: marked.
-      :ok = ReconcileNotePayloads.mark_backfilled(ctx.user.id, peers: fn -> [] end)
-      assert ReconcileNotePayloads.n_backfilled?(ctx.user.id)
     end
 
     test "an orphan point without n (no chunk row) does not hold the pass open", ctx do
@@ -1200,11 +1063,6 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
         {"POST", "/collections/engram_notes/points/scroll"} ->
           fake_scroll(store, body)
 
-        {"POST", "/collections/engram_notes/points/count"} ->
-          if hook = Agent.get(store, & &1.on_count), do: hook.()
-          points = Agent.get(store, & &1.points)
-          %{"count" => Enum.count(points, fn {id, p} -> filter?(id, p, body["filter"]) end)}
-
         _other ->
           true
       end
@@ -1219,12 +1077,11 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
 
     # The whole filter is evaluated, as Qdrant would: a heal whose
     # filter hides a point layout must not pass here by accident.
-    # By id, or v5 points without `n` (the done check's, fleet-wide, or the
-    # marker's, one user's). Every key indexed.
+    # By id, or the done check's v5 points without `n` (every key indexed).
     filter = body["filter"]
 
     assert Enum.any?(filter["must"] || [], &Map.has_key?(&1, "has_id")) or
-             match?([%{"is_empty" => %{"key" => "n"}} | _], filter["must"])
+             filter["must"] == [%{"is_empty" => %{"key" => "n"}}]
 
     # Paged as Qdrant pages: id order, from `offset`, `limit` points,
     # and the next id as `next_page_offset`.

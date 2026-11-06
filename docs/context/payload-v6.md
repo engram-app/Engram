@@ -7,8 +7,11 @@ _Last verified: 2026-10-27 (release R-a, nothing rewritten yet)_
 > folder row id below. `ReconcileNotePayloads` backfills `n` (merge only, no
 > decrypt, paced: `:payload_backfill` kill switch, `Rebuild.qdrant_pace/1`,
 > `:payload_backfill_points_per_min` default 500), `commit_index` stamps the
-> version in-pass (`PayloadV6.stamp/2`), and search filters by note id per
-> user once `ReconcileNotePayloads.n_backfilled?/1` and the `n` index hold.
+> version in-pass (`PayloadV6.stamp/2`). Once the `n` index exists, search
+> decides PER POINT: a point with `n` by its note id, one without by today's
+> payload conditions, so it is correct during the backfill and after a
+> rollback with no switch. The `NotePayloadStamps` ledger is the signal R3
+> (dropping the payload filter fields) waits on.
 > The folder-row-id design is retired: folders resolve in Postgres. Plan:
 > `docs/superpowers/plans/2026-11-05-immutable-chunk-index-qdrant.md`.
 
