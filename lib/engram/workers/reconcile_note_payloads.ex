@@ -480,27 +480,85 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   @doc """
   Writes (or clears) the user's `n_backfilled?/1` marker: run at the end of
-  the user's chain, a background job, never on the search path. One EXISTS
-  that stops at the first note still behind.
-  """
-  @spec mark_backfilled(Ecto.UUID.t()) :: :ok
-  def mark_backfilled(user_id) do
-    if PayloadV6.version() >= @n_version do
-      {:ok, behind} =
-        Repo.with_tenant(user_id, fn ->
-          indexed_notes()
-          |> where([note: n], n.user_id == ^user_id)
-          |> where(^stale())
-          |> Repo.exists?()
-        end)
+  the user's chain, a background job, never on the search path. Written only
+  when all three hold:
 
-      if behind,
-        do: Cursor.reset(marker(user_id)),
-        else: Cursor.put(marker(user_id), %{"version" => @n_version})
+    * no note of the user is behind the version (one EXISTS that stops at
+      the first);
+    * every node of the cluster runs a release that writes `n`
+      (`PayloadV5.writes_n?/0` over `:erpc`, 2 s; an unreachable node or one
+      without it counts as old): an older node re-upserts points without
+      `n` after the stamp, which never lowers, so Postgres cannot see them;
+    * Qdrant holds no v5 point of the user without `n` (one exact count).
+      If it does, that page's notes are unstamped and the user requeued.
+
+  Options (tests): `:peers` (0-arity, default `Node.list/0`) and
+  `:multicall` (fun of the node list, `:erpc.multicall/5`-shaped results).
+  """
+  @spec mark_backfilled(Ecto.UUID.t(), keyword()) :: :ok
+  def mark_backfilled(user_id, opts \\ []) do
+    cond do
+      PayloadV6.version() < @n_version -> :ok
+      behind?(user_id) -> Cursor.reset(marker(user_id))
+      not cluster_writes_n?(opts) -> :ok
+      true -> mark_if_qdrant_clean(user_id)
+    end
+  end
+
+  defp mark_if_qdrant_clean(user_id) do
+    case Qdrant.count(Qdrant.collection_name(), missing_n_filter(user_id)) do
+      {:ok, 0} -> Cursor.put(marker(user_id), %{"version" => @n_version})
+      {:ok, _} -> requeue_missing_n(user_id)
+      # Unreadable: not proven, the user's next chain asks again.
+      {:error, _} -> :ok
+    end
+  end
+
+  defp behind?(user_id) do
+    {:ok, behind} =
+      Repo.with_tenant(user_id, fn ->
+        indexed_notes()
+        |> where([note: n], n.user_id == ^user_id)
+        |> where(^stale())
+        |> Repo.exists?()
+      end)
+
+    behind
+  end
+
+  # v5 points (`u` set) without `n`; the user's own when given.
+  defp missing_n_filter(user_id \\ nil) do
+    tenant = if user_id, do: [Qdrant.match_filter(:user, user_id)], else: []
+    %{must: [%{is_empty: %{key: @n_key}} | tenant], must_not: [%{is_empty: %{key: "u"}}]}
+  end
+
+  # One page of the user's points without `n`: their notes lose the version
+  # stamp, so the user's next chain backfills them. Orphans (no chunk row)
+  # unstamp nothing and queue nothing; `OrphanSweep` reaps them.
+  defp requeue_missing_n(user_id) do
+    with {:ok, %{points: points}} <-
+           Qdrant.scroll(Qdrant.collection_name(),
+             filter: missing_n_filter(user_id),
+             with_payload: ["u"],
+             limit: @refresh_page
+           ),
+         n when n > 0 <- unstamp_versions(user_id, Enum.map(points, & &1["id"])) do
+      _ = TenantScan.enqueue_users(__MODULE__, [user_id])
     end
 
     :ok
   end
+
+  @erpc_timeout_ms 2_000
+
+  defp cluster_writes_n?(opts) do
+    nodes = [node() | Keyword.get(opts, :peers, &Node.list/0).()]
+    multicall = Keyword.get(opts, :multicall, &probe_writes_n/1)
+    nodes |> multicall.() |> Enum.all?(&match?({:ok, true}, &1))
+  end
+
+  defp probe_writes_n(nodes),
+    do: :erpc.multicall(nodes, Engram.Indexing.PayloadV5, :writes_n?, [], @erpc_timeout_ms)
 
   # Every v5 point of the batch's notes the read shows without `n` gets it,
   # merged, in paced pages. A point missing from the read is not written: a
@@ -572,7 +630,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   """
   @spec requeue_unbackfilled() :: :clean | {:ok, non_neg_integer()} | {:error, term()}
   def requeue_unbackfilled do
-    filter = %{must: [%{is_empty: %{key: @n_key}}], must_not: [%{is_empty: %{key: "u"}}]}
+    filter = missing_n_filter()
     walk = Cursor.get(@requeue_cursor) || %{}
 
     with {:ok, %{points: points, next_page_offset: next}} <-

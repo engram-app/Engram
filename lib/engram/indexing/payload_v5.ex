@@ -40,6 +40,14 @@ defmodule Engram.Indexing.PayloadV5 do
   # `EffectiveDates`' source flag for the file time.
   @file_src 1
 
+  @doc """
+  True on a release whose `build/2` writes `n`. A capability probe: a peer
+  asked over `:erpc` that lacks it (`:undef`) is a previous release still
+  writing points without `n` (`ReconcileNotePayloads.mark_backfilled/2`).
+  """
+  @spec writes_n?() :: true
+  def writes_n?, do: true
+
   @spec build(map(), FlatFields.t()) :: %{String.t() => term()}
   def build(note, flat) do
     {up, us} = note |> EffectiveDates.updated(flat.fm_updated) |> ceil_fallback(note)

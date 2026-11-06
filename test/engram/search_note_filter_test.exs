@@ -704,6 +704,13 @@ defmodule Engram.SearchNoteFilterTest do
           skip_tenant_check: true
         )
 
+      # The marker's one Qdrant check: no point of the user lacks `n`.
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/count", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result":{"count":0},"status":"ok"}))
+      end)
+
       :ok = Engram.Workers.ReconcileNotePayloads.mark_backfilled(user.id)
 
       Engram.Cache.clear_local(:note_id_filter)

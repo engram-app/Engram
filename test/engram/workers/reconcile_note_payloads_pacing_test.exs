@@ -134,6 +134,15 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
             found = for {id, p} <- held, do: %{"id" => id, "payload" => p}
             {"application/json", Jason.encode!(%{"result" => found, "status" => "ok"})}
 
+          # The marker's check: this user's v5 points without `n` (the only
+          # points held).
+          {"POST", path} when path == col <> "/points/count" ->
+            count =
+              Agent.get(points, &Enum.count(&1, fn {_id, p} -> not Map.has_key?(p, "n") end))
+
+            {"application/json",
+             Jason.encode!(%{"result" => %{"count" => count}, "status" => "ok"})}
+
           _ ->
             {"application/json", ~s({"result":true,"status":"ok"})}
         end

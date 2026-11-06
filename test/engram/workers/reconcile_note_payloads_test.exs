@@ -37,6 +37,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           overwrites: [],
           batches: [],
           on_scroll: nil,
+          on_count: nil,
           on_write: nil,
           on_upsert: nil,
           payload_status: 200,
@@ -845,6 +846,62 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       assert ReconcileNotePayloads.n_backfilled?(ctx.user.id)
     end
 
+    # A previous-release node re-upserts a note's points without `n` AFTER
+    # the v6 stamp (which never lowers): Postgres cannot see it, so the marker
+    # asks Qdrant once before it vouches for the user.
+    test "a v6-stamped note whose points lack n gets no marker, and is requeued", ctx do
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      assert ReconcileNotePayloads.n_backfilled?(ctx.user.id)
+      :ok = ReconcileNotePayloads.forget_marker(ctx.user.id)
+
+      id = hd(point_ids(ctx.stale))
+      Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.delete(p, "n") end))
+      assert payload_versions(ctx) == [6, 6]
+
+      :ok = ReconcileNotePayloads.mark_backfilled(ctx.user.id)
+
+      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
+      assert nil in payload_versions(ctx)
+      assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
+    end
+
+    # A rolling deploy: an older node still writes points without `n`.
+    test "no marker while an older release is in the cluster", ctx do
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      :ok = ReconcileNotePayloads.forget_marker(ctx.user.id)
+
+      old = :"old@10.0.0.9"
+
+      answer = fn nodes ->
+        Enum.map(nodes, &if(&1 == old, do: {:error, {:exception, :undef, []}}, else: {:ok, true}))
+      end
+
+      :ok =
+        ReconcileNotePayloads.mark_backfilled(ctx.user.id,
+          peers: fn -> [old] end,
+          multicall: answer
+        )
+
+      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
+
+      # Unreachable counts as old.
+      down = fn nodes ->
+        Enum.map(nodes, &if(&1 == old, do: {:error, :timeout}, else: {:ok, true}))
+      end
+
+      :ok =
+        ReconcileNotePayloads.mark_backfilled(ctx.user.id,
+          peers: fn -> [old] end,
+          multicall: down
+        )
+
+      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
+
+      # Every node on this release: marked.
+      :ok = ReconcileNotePayloads.mark_backfilled(ctx.user.id, peers: fn -> [] end)
+      assert ReconcileNotePayloads.n_backfilled?(ctx.user.id)
+    end
+
     test "an orphan point without n (no chunk row) does not hold the pass open", ctx do
       orphan = Ecto.UUID.generate()
       Agent.update(ctx.store, &put_in(&1.points[orphan], %{"u" => FilterId.uuid(ctx.user.id)}))
@@ -1032,6 +1089,11 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
         {"POST", "/collections/engram_notes/points/scroll"} ->
           fake_scroll(store, body)
 
+        {"POST", "/collections/engram_notes/points/count"} ->
+          if hook = Agent.get(store, & &1.on_count), do: hook.()
+          points = Agent.get(store, & &1.points)
+          %{"count" => Enum.count(points, fn {id, p} -> filter?(id, p, body["filter"]) end)}
+
         _other ->
           true
       end
@@ -1046,11 +1108,12 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
 
     # The whole filter is evaluated, as Qdrant would: a heal whose
     # filter hides a point layout must not pass here by accident.
-    # By id, or the done check's v5 points without `n` (every key indexed).
+    # By id, or v5 points without `n` (the done check's, fleet-wide, or the
+    # marker's, one user's). Every key indexed.
     filter = body["filter"]
 
     assert Enum.any?(filter["must"] || [], &Map.has_key?(&1, "has_id")) or
-             filter["must"] == [%{"is_empty" => %{"key" => "n"}}]
+             match?([%{"is_empty" => %{"key" => "n"}} | _], filter["must"])
 
     # Paged as Qdrant pages: id order, from `offset`, `limit` points,
     # and the next id as `next_page_offset`.

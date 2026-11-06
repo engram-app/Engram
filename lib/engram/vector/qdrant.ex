@@ -1554,11 +1554,13 @@ defmodule Engram.Vector.Qdrant do
   repath worker (#746) to confirm points exist before/after a payload PATCH and
   to detect an embedded note whose points went missing.
   """
-  def count_by_note(col \\ nil, user_id, vault_id, path_hmac) do
+  def count_by_note(col \\ nil, user_id, vault_id, path_hmac),
+    do: count(col, note_filter(user_id, vault_id, path_hmac))
+
+  @doc "Exact count of the points matching `filter` (`{:ok, n}`)."
+  @spec count(String.t() | nil, map()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def count(col, filter) do
     col = col || collection()
-
-    filter = note_filter(user_id, vault_id, path_hmac)
-
     opts = [json: %{filter: filter, exact: true}] ++ req_opts()
 
     instrument(:count, fn ->
