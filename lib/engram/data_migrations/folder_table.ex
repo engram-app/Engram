@@ -507,17 +507,27 @@ defmodule Engram.DataMigrations.FolderTable do
     updated = Enum.reduce(leaves, 0, fn leaf, n -> n + point_notes(ctx, leaf) end)
     stats = %{stats | changed: stats.changed + updated}
 
-    # A note a writer held was skipped; look once for any left.
+    # A note a writer held was skipped; look once for any left. The predicate
+    # is `point_notes/2`'s, per leaf: a held note whose reference names a dead
+    # row is left over too, not only a NULL one (the drain sees only NULLs).
     left? =
       leaves != [] and
         scope(ctx, fn repo ->
           %{rows: [[left?]]} =
             repo.query!(
               """
-              SELECT EXISTS (SELECT 1 FROM notes WHERE user_id = $1 AND kind = 'note'
-                AND deleted_at IS NULL AND folder_ref_id IS NULL AND folder_hmac = ANY($2))
+              SELECT EXISTS (SELECT 1 FROM notes n
+                JOIN unnest($2::uuid[], $3::bytea[], $4::uuid[]) AS l(vault_id, hmac, leaf)
+                  ON n.vault_id = l.vault_id AND n.folder_hmac = l.hmac
+                WHERE n.user_id = $1 AND n.kind = 'note' AND n.deleted_at IS NULL
+                  AND n.folder_ref_id IS DISTINCT FROM l.leaf)
               """,
-              [dump(ctx.user_id), Enum.map(leaves, &elem(&1, 1))]
+              [
+                dump(ctx.user_id),
+                Enum.map(leaves, &elem(&1, 0)),
+                Enum.map(leaves, &elem(&1, 1)),
+                Enum.map(leaves, &elem(&1, 2))
+              ]
             )
 
           left?
@@ -558,7 +568,9 @@ defmodule Engram.DataMigrations.FolderTable do
   # and stamp NULL, as `folders_release_refs` does for a delete today, `batch`
   # rows at a time, locked rows skipped (the next pass takes them). Cost: one
   # walk of the user's folder rows (`folders_user`), each dead one probing
-  # `attachments_folder_ref`; empty once healed. Returns the rows released.
+  # `attachments_folder_ref`; empty once healed. Dead folder rows are never
+  # purged, so this walk grows with them (small: one row per deleted folder);
+  # it runs on drain-triggered passes too. Returns the rows released.
   defp release_dead_attachment_refs(ctx, n \\ 0) do
     count =
       scope(ctx, fn repo ->

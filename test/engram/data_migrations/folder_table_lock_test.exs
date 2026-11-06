@@ -84,6 +84,63 @@ defmodule Engram.DataMigrations.FolderTableLockTest do
     assert :done = FolderTable.run_pass(user_ids: [user.id])
   end
 
+  # Version 3: the "anything left?" look after a skip used only the NULL
+  # test, so a held note whose reference names a DEAD row was not left over,
+  # and a pass with nothing else to do reported `:done` over it (the drain
+  # sees only NULLs, so nothing would ever heal it). Red before.
+  test "a held note whose reference names a dead row keeps the pass open", %{
+    user: user,
+    vault: vault
+  } do
+    {:ok, note} =
+      Engram.Notes.upsert_note(user, vault, %{"path" => "Dir/h.md", "content" => "x"},
+        actor: "api"
+      )
+
+    live = ref(user, note.id)
+
+    dead =
+      Engram.FolderRows.insert!(user, vault, <<0::256>>, deleted_at: ~U[2026-11-01 00:00:00Z])
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.query!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [
+          Ecto.UUID.dump!(note.id),
+          Ecto.UUID.dump!(dead)
+        ])
+      end)
+
+    test = self()
+
+    holder =
+      Task.async(fn ->
+        CheckpointInterleave.checkout_real!()
+
+        Repo.with_tenant(user.id, fn ->
+          Repo.query!("SELECT id FROM notes WHERE id = $1 FOR UPDATE", [Ecto.UUID.dump!(note.id)])
+          send(test, :locked)
+
+          receive do
+            :release -> :ok
+          after
+            15_000 -> Repo.rollback(:test_timeout)
+          end
+        end)
+      end)
+
+    assert_receive :locked, 5_000
+
+    refute FolderTable.run_pass(user_ids: [user.id]) == :done
+    assert ref(user, note.id) == Ecto.UUID.dump!(dead)
+
+    send(holder.pid, :release)
+    Task.await(holder)
+
+    assert {:more, _} = FolderTable.run_pass(user_ids: [user.id])
+    assert ref(user, note.id) == live
+    assert :done = FolderTable.run_pass(user_ids: [user.id])
+  end
+
   # #2339: `delete_account` deletes the user's vaults, then the user row.
   # FolderTable's chunk transaction held the user row FOR SHARE (the rotation
   # gate) and then wanted the vault row (the folders FK): opposite orders, and
