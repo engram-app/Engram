@@ -1046,6 +1046,7 @@
             "x-validate": null
           },
           "folder": {
+            "description": "Folder path. With a query, only notes directly in this folder (not its subfolders); with a blank query, the folder and all its subfolders.",
             "type": "string",
             "x-struct": null,
             "x-validate": null

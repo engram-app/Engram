@@ -26,7 +26,12 @@ defmodule EngramWeb.Schemas.SearchRequest do
         items: %Schema{type: :object}
       },
       tags: %Schema{type: :array, items: %Schema{type: :string}},
-      folder: %Schema{type: :string},
+      folder: %Schema{
+        type: :string,
+        description:
+          "Folder path. With a query, only notes directly in this folder (not its " <>
+            "subfolders); with a blank query, the folder and all its subfolders."
+      },
       type: %Schema{
         type: :string,
         description:

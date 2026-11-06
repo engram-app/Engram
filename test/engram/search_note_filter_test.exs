@@ -8,6 +8,7 @@ defmodule Engram.SearchNoteFilterTest do
   """
   use Engram.DataCase, async: false
 
+  import Engram.FieldCatalogHelpers, only: [write_indexed!: 4]
   import Engram.Fixtures, only: [insert_chunk!: 4, insert_note!: 3]
   import Mox
 
@@ -594,6 +595,50 @@ defmodule Engram.SearchNoteFilterTest do
 
     assert body == Jason.decode!(Jason.encode!(today))
     refute inspect(body) =~ ~s("n")
+  end
+
+  # `folder` with a query: switch off (today), the one folder only, an exact
+  # `folder_hmac` match; switch on, the real resolver's folder and subtree.
+  # A blank-query listing (`NoteFilter.page/4`) is the subtree either way.
+  describe "folder semantics with a query" do
+    setup %{user: user, vault: vault} do
+      top = write_indexed!(user, vault, "Health/a.md", "body\n")
+      sub = write_indexed!(user, vault, "Health/Sub/b.md", "body\n")
+      _beside = write_indexed!(user, vault, "Other/c.md", "body\n")
+      %{top: top, sub: sub}
+    end
+
+    test "switch off: only the folder itself, an exact folder_hmac match",
+         %{bypass: bypass, user: user, vault: vault} do
+      ServiceConfig.put_override(:note_id_filter, false)
+      answer(fn _ -> flunk("resolver called with the switch off") end)
+      embed()
+      expect_query(bypass, [])
+
+      assert {:ok, []} = Search.search(user, vault, "q", folder: "Health", mode: :vector)
+      assert_received {:query, %{"filter" => filter}}
+
+      {:ok, fk} = Engram.Crypto.dek_filter_key(user)
+      exact = Base.encode64(Engram.Crypto.hmac_field(fk, "Health"))
+      today = Qdrant.build_tenant_filter(tenant(user, vault) ++ [folder_hmac: exact])
+      assert filter == Jason.decode!(Jason.encode!(today))
+      refute inspect(filter) =~ ~s("n")
+    end
+
+    test "switch on: the folder and its whole subtree, via the real resolver",
+         %{bypass: bypass, user: user, vault: vault, top: top, sub: sub} do
+      ServiceConfig.put_override(:note_filter, Engram.Search.NoteFilter)
+      embed()
+      expect_query(bypass, [])
+
+      assert {:ok, []} = Search.search(user, vault, "q", folder: "Health", mode: :vector)
+      assert_received {:query, %{"filter" => filter}}
+
+      assert [%{"should" => [%{"key" => "n", "match" => %{"any" => any}}]}] =
+               Enum.filter(filter["must"], &match?(%{"should" => [%{"key" => "n"} | _]}, &1))
+
+      assert Enum.sort(any) == Enum.sort(Enum.map([top.id, sub.id], &FilterId.uuid/1))
+    end
   end
 
   test "cross-vault: the resolver gets every vault the search covers",
