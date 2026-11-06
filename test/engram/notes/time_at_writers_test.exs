@@ -90,6 +90,23 @@ defmodule Engram.Notes.TimeAtWritersTest do
     assert row(ctx, b.id).ctime == 1_510_897_528_861.0
   end
 
+  # A pre-expand writer moved the double alone; the next write that carries
+  # the same double (a re-push, an edit, a move) heals the twin.
+  test "a write carrying an unchanged double heals a stale twin", ctx do
+    {:ok, n} = put(ctx, "h.md", %{"mtime" => 1_776_072_500.5, "ctime" => 1_510_897_528.0})
+
+    Repo.with_tenant!(ctx.user.id, fn ->
+      Repo.update_all(from(x in Note, where: x.id == ^n.id),
+        set: [mtime_at: ~U[2000-01-01 00:00:00.000000Z], ctime_at: nil]
+      )
+    end)
+
+    {:ok, _} = put(ctx, "h.md", %{"mtime" => 1_776_072_500.5}, "y\n")
+    n = row(ctx, n.id)
+    assert n.mtime_at == FileTime.to_at!(1_776_072_500.5)
+    assert n.ctime_at == FileTime.to_at!(1_510_897_528.0)
+  end
+
   test "rename, folder rename and edit keep the timestamps with the doubles", ctx do
     {:ok, _} = put(ctx, "F/a.md", %{"mtime" => 1_776_072_500_928.0, "ctime" => 1_510_897_528.0})
     {:ok, _} = put(ctx, "F/b.md", %{"mtime" => 1_776_072_500.5})

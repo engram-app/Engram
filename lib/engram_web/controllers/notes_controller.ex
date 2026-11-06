@@ -790,8 +790,8 @@ defmodule EngramWeb.NotesController do
       # broadcasts / fields=meta pages can be compared without refetching.
       # The hash is keyed server-side (HMAC); clients treat it as opaque.
       content_hash: note.content_hash,
-      mtime: note.mtime,
-      ctime: note.ctime,
+      mtime: FileTime.mtime(note),
+      ctime: FileTime.ctime(note),
       updated_at: note.updated_at,
       type: note.type,
       description: note.description,

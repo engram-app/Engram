@@ -85,7 +85,7 @@ defmodule Engram.Notes.EffectiveDates do
   # The row time is read only when there is no file time: callers building
   # a payload from a partial map need not carry it.
   def updated(note, nil) do
-    case stored(nil, note.mtime) do
+    case stored(nil, FileTime.mtime(note)) do
       nil -> {unix(note.updated_at), @server_src}
       file -> {file, @file_src}
     end
@@ -94,9 +94,8 @@ defmodule Engram.Notes.EffectiveDates do
   @doc "Effective created date. `fm` is the frontmatter's (nil when absent)."
   def created(_note, fm) when is_integer(fm), do: {fm, nil}
 
-  # `ctime` lands with #2082 (`notes.ctime`); read defensively until then.
   def created(note, nil) do
-    case stored(nil, Map.get(note, :ctime)) do
+    case stored(nil, FileTime.ctime(note)) do
       nil -> {unix(note.created_at), @server_src}
       file -> {file, @file_src}
     end

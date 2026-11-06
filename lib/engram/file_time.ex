@@ -20,6 +20,11 @@ defmodule Engram.FileTime do
   Rows built for `insert_all` / `update_all` use `to_at!/1` on values the
   server made or already checked.
 
+  Phase migrate-data (R25): readers go through `epoch/2` (`mtime/1`,
+  `ctime/1`), which still derives from the double, the fresher value until
+  contract; `put_at/3` repairs a stale twin on every write, and
+  `Engram.DataMigrations.FileTimes` backfills the rest.
+
   Phase expand: the doubles are still written exactly as sent. A previous
   release running during the rollout, or after a rollback, moves a double
   without its `*_at`, so migrate-data must recompute every row where
@@ -65,6 +70,59 @@ defmodule Engram.FileTime do
     end
   end
 
+  @doc """
+  `to_at/1`, lenient: out of range is NULL. The one "what the twin should
+  hold" for every writer and the backfill.
+  """
+  @spec normalize(number() | nil) :: DateTime.t() | nil
+  def normalize(t) do
+    case to_at(t) do
+      {:ok, at} -> at
+      {:error, :out_of_range} -> nil
+    end
+  end
+
+  @doc "True when two `*_at` values are the same instant (or both NULL)."
+  @spec same_at?(DateTime.t() | nil, DateTime.t() | nil) :: boolean()
+  def same_at?(nil, nil), do: true
+  def same_at?(%DateTime{} = a, %DateTime{} = b), do: DateTime.compare(a, b) == :eq
+  def same_at?(_, _), do: false
+
+  @doc """
+  The epoch-seconds number a reader sends, given the `*_at` column `at` and
+  the stored double `t`. The wire format is unchanged.
+
+  During migrate-data the DOUBLE is the fresher value: every release writes
+  it, and the twin is derived from it (a release before expand moves the
+  double alone and leaves a stale twin). So the value comes from the double,
+  normalized: a seconds double goes out bit-identical (payload hashes and
+  client comparisons depend on it), a millisecond double goes out as its
+  seconds, `0` and out of range go out as stored. `at` is read only when
+  there is no double (after contract drops it).
+  """
+  @spec epoch(DateTime.t() | nil, number() | nil) :: number() | nil
+  def epoch(nil, nil), do: nil
+  def epoch(%DateTime{} = at, nil), do: seconds(at)
+
+  def epoch(_at, t), do: if(ms?(t), do: seconds(normalize(t)), else: t)
+
+  @doc """
+  True for an in-range double in milliseconds: the one value whose served
+  seconds differ from the stored number (`epoch/2`).
+  """
+  @spec ms?(number() | nil) :: boolean()
+  def ms?(t), do: is_number(t) and abs(t) >= @ms_from and normalize(t) != nil
+
+  defp seconds(at), do: DateTime.to_unix(at, :microsecond) / 1_000_000
+
+  @doc "`epoch/2` of a row's (or map's) `mtime_at` and `mtime`."
+  @spec mtime(map()) :: number() | nil
+  def mtime(row), do: epoch(Map.get(row, :mtime_at), Map.get(row, :mtime))
+
+  @doc "`epoch/2` of a note's `ctime_at` and `ctime`."
+  @spec ctime(map()) :: number() | nil
+  def ctime(row), do: epoch(Map.get(row, :ctime_at), Map.get(row, :ctime))
+
   @doc "`to_at/1` for a time the server made or already validated; raises out of range."
   @spec to_at!(number() | nil) :: DateTime.t() | nil
   def to_at!(t) do
@@ -104,29 +162,29 @@ defmodule Engram.FileTime do
   end
 
   @doc """
-  When `changeset` changes `field`, puts its `to_at/1` in `at_field`. Out
-  of range (checked at the client boundary, so only a stored legacy value
-  gets here) is NULL plus one warning, never an error.
+  Puts `normalize/1` of `field` in `at_field` whenever it differs from the
+  stored twin: on a change of `field`, and on any write that carries an
+  unchanged double over a stale twin (a pre-expand writer moved the double
+  alone), so every write heals. Out of range (checked at the client
+  boundary, so only a stored legacy value gets here) is NULL plus one
+  warning, never an error.
   """
   @spec put_at(Ecto.Changeset.t(), atom(), atom()) :: Ecto.Changeset.t()
   def put_at(changeset, field, at_field) do
-    case Ecto.Changeset.fetch_change(changeset, field) do
-      {:ok, t} ->
-        case to_at(t) do
-          {:ok, at} ->
-            Ecto.Changeset.put_change(changeset, at_field, at)
+    t = Ecto.Changeset.get_field(changeset, field)
+    at = normalize(t)
 
-          {:error, :out_of_range} ->
-            Logger.warning(
-              "file_time_out_of_range",
-              Metadata.with_category(:warning, :data, field: field)
-            )
+    if same_at?(at, Ecto.Changeset.get_field(changeset, at_field)) do
+      changeset
+    else
+      if match?({:error, _}, to_at(t)) do
+        Logger.warning(
+          "file_time_out_of_range",
+          Metadata.with_category(:warning, :data, field: field)
+        )
+      end
 
-            Ecto.Changeset.put_change(changeset, at_field, nil)
-        end
-
-      :error ->
-        changeset
+      Ecto.Changeset.put_change(changeset, at_field, at)
     end
   end
 end

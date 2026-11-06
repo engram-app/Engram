@@ -555,7 +555,7 @@ defmodule EngramWeb.AttachmentsController do
                   path: a.path,
                   mime_type: a.mime_type,
                   size_bytes: a.size_bytes,
-                  mtime: a.mtime,
+                  mtime: FileTime.mtime(a),
                   content_hash: a.content_hash,
                   updated_at: a.updated_at
                 }
@@ -775,7 +775,7 @@ defmodule EngramWeb.AttachmentsController do
       path: att.path,
       mime_type: att.mime_type,
       size_bytes: att.size_bytes,
-      mtime: att.mtime,
+      mtime: FileTime.mtime(att),
       content_hash: att.content_hash,
       # Pre-quoted fragment: the base64 alphabet needs no JSON escaping,
       # so this skips Jason's escape scan over a multi-MB string. Same
@@ -991,7 +991,7 @@ defmodule EngramWeb.AttachmentsController do
     [
       {"x-engram-content-hash", att.content_hash},
       {"x-engram-mime-type", att.mime_type},
-      {"x-engram-mtime", att.mtime && Jason.encode!(att.mtime)},
+      {"x-engram-mtime", encode_mtime(FileTime.mtime(att))},
       {"x-engram-updated-at", att.updated_at && DateTime.to_iso8601(att.updated_at)}
     ]
     |> Enum.reduce(conn, fn
@@ -1000,6 +1000,9 @@ defmodule EngramWeb.AttachmentsController do
     end)
   end
 
+  defp encode_mtime(nil), do: nil
+  defp encode_mtime(mtime), do: Jason.encode!(mtime)
+
   @doc false
   def serialize_metadata(att) do
     %{
@@ -1007,7 +1010,7 @@ defmodule EngramWeb.AttachmentsController do
       path: att.path,
       mime_type: att.mime_type,
       size_bytes: att.size_bytes,
-      mtime: att.mtime,
+      mtime: FileTime.mtime(att),
       content_hash: att.content_hash,
       created_at: att.created_at,
       updated_at: att.updated_at

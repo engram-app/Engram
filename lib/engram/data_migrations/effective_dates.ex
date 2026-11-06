@@ -14,7 +14,7 @@ defmodule Engram.DataMigrations.EffectiveDates do
   until its next save.
 
   Order against the file-time migrate-data (the `mtime_at` / `ctime_at`
-  backfill, not built yet): none needed. The file time is read from the
+  backfill, `Engram.DataMigrations.FileTimes`): none needed. The file time is read from the
   double through `Engram.FileTime`, the function that fills `*_at`, so this
   pass gives the same value whether or not that backfill has run, and a
   previous release's write that moved the double without its `*_at` cannot
