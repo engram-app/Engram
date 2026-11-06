@@ -23,9 +23,10 @@ defmodule Engram.Repo.Migrations.FoldersReleaseRefsTriggerExpand do
   outermost COMMIT, which `Folders.atomic/1` reaches after `with_tenant` has
   reset the role and tenant, so under the non-bypass prod role and FORCE RLS
   it would update nothing (#2468 delta review, H1). The two-writes-per-note
-  cost of a merge rename is fixed at the caller instead: the rename retires
-  the merged-away source rows after it re-points the moved notes
-  (`Rows.retire_merged/1`), so only stragglers are released.
+  cost of a merge rename is fixed at the caller instead: the merged-away
+  source rows are retired after the notes and attachments have moved
+  (`Rows.with_deferred_retires/1`, in `Folders.atomic/1`), so only
+  stragglers are released.
 
   Fired only on the live-to-deleted flip. Live rows only (`kind = 'note'`
   for notes): the statements are served by `notes_folder_ref_live` /
@@ -68,8 +69,13 @@ defmodule Engram.Repo.Migrations.FoldersReleaseRefsTriggerExpand do
     $$
     """
 
+    # Dropped first: a database that ran an earlier, unmerged revision of this
+    # migration holds a CONSTRAINT trigger of this name, which CREATE OR
+    # REPLACE refuses to replace. DROP IF EXISTS takes no lock when it is absent.
+    execute "DROP TRIGGER IF EXISTS folders_release_refs ON folders"
+
     execute """
-    CREATE OR REPLACE TRIGGER folders_release_refs
+    CREATE TRIGGER folders_release_refs
       AFTER UPDATE OF deleted_at ON folders
       FOR EACH ROW
       WHEN (OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL)
