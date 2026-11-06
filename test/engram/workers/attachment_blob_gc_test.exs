@@ -205,7 +205,7 @@ defmodule Engram.Workers.AttachmentBlobGCTest do
       assert row.storage_key == att.storage_key
       assert blob?(att.storage_key)
 
-      assert {:ok, %{restored: [_]}} = Attachments.revive_tombstones(user, vault, [att.id])
+      assert {:ok, %{restored: [_]}} = Attachments.revive_tombstones(user, vault, [att.id], [])
     end
 
     # A storage error is "unknown": the row must not be finalized (its blob

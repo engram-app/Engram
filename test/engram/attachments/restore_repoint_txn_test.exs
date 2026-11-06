@@ -15,6 +15,7 @@ defmodule Engram.Attachments.RestoreRepointTxnTest do
 
   alias Engram.{Attachments, Folders, Notes, Repo}
   alias Engram.FolderRows
+  alias Engram.QueryRecorder
 
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
@@ -73,37 +74,19 @@ defmodule Engram.Attachments.RestoreRepointTxnTest do
     """)
   end
 
-  # `engram_app` for code that RAISES out of its own transactions. Neither
-  # `Engram.RlsCase` helper fits: a raise out of a nested transaction marks
-  # their enclosing one as rolling back, discarding the very commits under
-  # test. Here the restore's transactions are the outermost the app opens (the
-  # sandbox makes them savepoints), so a raise rolls back only its own.
-  defp as_app_raising(fun) do
-    Repo.query!("SELECT set_config('app.current_tenant', '', false)")
-    Repo.query!("SET SESSION AUTHORIZATION engram_app")
-
-    try do
-      fun.()
-    after
-      Repo.query!("RESET SESSION AUTHORIZATION")
-    end
-  end
-
   # Red on main: the revive had committed, so the row came back live with the
-  # dead reference and a current stamp.
+  # dead reference and a current stamp. One transaction: the revive rolls back
+  # with the re-point.
   test "a crash before the re-point leaves no live row trusting a dead reference", ctx do
     fail_repoint!()
 
-    as_app_raising(fn ->
+    as_prod_role_raising(fn ->
       assert_raise Postgrex.Error, ~r/crash before re-point/, fn ->
         Folders.restore_op(ctx.user, ctx.vault, ctx.op)
       end
     end)
 
-    r = row(ctx.att.id)
-    assert r.deleted? or r.ref == ctx.live_ref or not r.current?, inspect(r)
-    # One transaction: the revive rolled back with the re-point.
-    assert r.deleted?
+    assert %{deleted?: true} = row(ctx.att.id)
   end
 
   test "a restore revives the row pointing at the live folder, stamp current", ctx do
@@ -114,10 +97,50 @@ defmodule Engram.Attachments.RestoreRepointTxnTest do
     assert row(ctx.att.id) == %{deleted?: false, ref: ctx.live_ref, current?: true}
   end
 
+  # The re-point runs under the vault lock every writer of the vault waits on:
+  # its statement count must not grow with the folders a chunk spans. Red on
+  # 61be8aaaf, which sent one UPDATE per folder.
+  test "a chunk spread over many folders is re-pointed in one statement", %{user: u, vault: v} do
+    atts =
+      for i <- 1..50 do
+        {:ok, a} =
+          Attachments.upsert_attachment(u, v, %{
+            "path" => "Many/f#{i}/a.png",
+            "content_base64" => Base.encode64("bytes #{i}")
+          })
+
+        {"Many/f#{i}", a}
+      end
+
+    op = Ecto.UUID.generate()
+    assert {:ok, _} = Folders.delete(u, v, "Many", recursive: true, op_id: op)
+
+    {_, queries} =
+      QueryRecorder.record(fn ->
+        as_prod_role_committing(fn ->
+          assert {:ok, %{attachments: 50}} = Folders.restore_op(u, v, op)
+        end)
+      end)
+
+    repoints =
+      for %{sql: sql, pid: pid} <- queries,
+          pid == self(),
+          sql =~ ~r/^\s*(WITH .*)?UPDATE "?attachments"?.*SET "?folder_ref_id"?/s,
+          do: sql
+
+    assert length(repoints) == 1, Enum.join(repoints, "\n")
+
+    tree = FolderRows.tree(u)
+
+    for {folder, a} <- atts do
+      assert row(a.id) == %{deleted?: false, ref: tree[folder].id, current?: true}
+    end
+  end
+
   test "a revive without a re-point clears the stamp, so the drain sees it", ctx do
     as_prod_role_committing(fn ->
       assert {:ok, %{restored: [_]}} =
-               Attachments.revive_tombstones(ctx.user, ctx.vault, [ctx.att.id])
+               Attachments.revive_tombstones(ctx.user, ctx.vault, [ctx.att.id], [])
     end)
 
     assert %{deleted?: false, ref: ref, current?: false} = row(ctx.att.id)
@@ -125,9 +148,12 @@ defmodule Engram.Attachments.RestoreRepointTxnTest do
   end
 
   test "control: engram_app with no tenant sees zero attachments", %{att: att} do
-    as_prod_role_committing(fn ->
-      assert %{rows: [[0]]} =
-               Repo.query!("SELECT count(*)::int FROM attachments WHERE id = $1", [dump(att.id)])
-    end)
+    count = fn ->
+      Repo.query!("SELECT count(*)::int FROM attachments WHERE id = $1", [dump(att.id)])
+    end
+
+    # The row is there; only the role drop hides it.
+    assert %{rows: [[1]]} = count.()
+    as_prod_role_committing(fn -> assert %{rows: [[0]]} = count.() end)
   end
 end

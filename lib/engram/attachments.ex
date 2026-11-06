@@ -1806,8 +1806,6 @@ defmodule Engram.Attachments do
              seqs: %{String.t() => integer()}
            }}
           | {:error, term()}
-  def revive_tombstones(user, vault, ids, repoint \\ [])
-
   def revive_tombstones(_user, _vault, [], _repoint),
     do: {:ok, %{restored: [], unrestored: [], seqs: %{}}}
 
@@ -2165,30 +2163,25 @@ defmodule Engram.Attachments do
   # folder row the undo could not revive (a live sibling took the name). Point
   # each at the live row for the path just decrypted from it, stamped with the
   # nonce that path was read under (`Rows.attachment_ref/2`): a row whose path
-  # moved since keeps its old stamp, a mismatch the drain heals. Runs inside
+  # moved since keeps the NULL stamp the revive left, for the drain. Runs inside
   # `revive_tombstones/4`'s transaction, after its vault lock (the order every
   # writer takes `Rows.ensure_all/3` in).
   defp repoint_folder_refs(_user, _vault, []), do: :ok
 
   defp repoint_folder_refs(user, vault, metas) do
-    by_folder = Enum.group_by(metas, &Helpers.extract_folder(&1.path))
-    {:ok, refs} = Rows.ensure_all(user, vault.id, Map.keys(by_folder))
+    {:ok, refs} =
+      Rows.ensure_all(user, vault.id, Enum.map(metas, &Helpers.extract_folder(&1.path)))
 
-    # One statement per folder. The set-based form of `Rows.attachment_ref/2`:
-    # the stamp is the row's own nonce, and only rows still at the nonce the
-    # path was decrypted under match (nonces are random per write, so the
-    # `IN` pairs them with their ids).
-    for {folder, rows} <- by_folder do
-      ids = Enum.map(rows, & &1.id)
-      nonces = Enum.map(rows, & &1.path_nonce)
-      ref = Map.fetch!(refs, folder)
-
-      from(a in Attachment,
-        where: a.id in ^ids and a.path_nonce in ^nonces,
-        update: [set: [folder_ref_id: ^ref, folder_ref_stamp: a.path_nonce]]
+    # One statement for the chunk, however many folders it spans: the stamp is
+    # the row's own nonce, matched against the nonce the path was decrypted under.
+    _ =
+      Rows.point_attachments(
+        Repo,
+        Enum.map(metas, fn m ->
+          ref = Map.fetch!(refs, Helpers.extract_folder(m.path))
+          {Ecto.UUID.dump!(m.id), ref && Ecto.UUID.dump!(ref), m.path_nonce, m.path_nonce}
+        end)
       )
-      |> Repo.update_all([])
-    end
 
     :ok
   end

@@ -9,7 +9,7 @@ defmodule Engram.RlsCase do
   nothing; it has to drop to `engram_app` first. That drop is what the two
   helpers here do.
 
-  ## Two variants, and why there cannot be a third
+  ## Two variants, and the one exception
 
   The choice is a single axis — rollback or commit — and everything else
   follows from it:
@@ -28,6 +28,15 @@ defmodule Engram.RlsCase do
   `commit + rescue` is not on the menu. A rescued raise leaves an aborted
   transaction that can be neither reset nor committed. That is a constraint of
   Postgres, not a gap here.
+
+  The exception, `as_prod_role_raising/1`: code that raises out of ITS OWN
+  transactions, where the test must see what those transactions committed
+  before the raise (a crash between two of them, #2469). Wrapping it in a
+  helper's transaction makes the app's transactions nested ones, and a raise
+  out of a nested one marks the wrapper as rolling back, discarding those
+  commits. So that variant opens no transaction: the app's own are the
+  outermost (savepoints of the sandbox's), a raise rolls back only its own,
+  and the sandbox transaction stays usable for the reset.
 
   ## Why `SESSION AUTHORIZATION` and not `SET ROLE`
 
@@ -171,5 +180,31 @@ defmodule Engram.RlsCase do
       end)
 
     result
+  end
+
+  @doc """
+  Runs `fun` as `engram_app` with NO tenant set, in NO transaction of its
+  own; returns or raises what `fun` does. For code that raises out of its own
+  transactions, when the test asserts what they committed before the raise
+  (see the moduledoc). The `SET LOCAL` state is scoped by the sandbox's
+  transaction and reset here either way; on a raise the reset is best-effort,
+  so a reset failure (an aborted sandbox transaction) never masks the real
+  error.
+  """
+  def as_prod_role_raising(fun) when is_function(fun, 0) do
+    Repo.query!("SELECT set_config('app.current_tenant', '', true)")
+    Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
+
+    try do
+      fun.()
+    rescue
+      e ->
+        _ = Repo.query("RESET SESSION AUTHORIZATION")
+        reraise e, __STACKTRACE__
+    else
+      result ->
+        Repo.query!("RESET SESSION AUTHORIZATION")
+        result
+    end
   end
 end
