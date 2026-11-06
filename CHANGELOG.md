@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.75.0](https://github.com/engram-app/Engram/compare/0.74.0...0.75.0) (2026-11-06)
+
+
+### Features
+
+* **folders:** trustworthy folder_ref_id (expand) ([#2468](https://github.com/engram-app/Engram/issues/2468)) ([4841b8d](https://github.com/engram-app/Engram/commit/4841b8d0b7e1ac22d12e51613726fb2606cb0be9))
+* **notes:** R8 read switch for the last body readers ([#2465](https://github.com/engram-app/Engram/issues/2465)) ([942a012](https://github.com/engram-app/Engram/commit/942a01266e08ff6eee0388a471403ae4644499cc))
+* **notes:** writers set folder_ref_id directly ([#2471](https://github.com/engram-app/Engram/issues/2471)) ([5cc1f40](https://github.com/engram-app/Engram/commit/5cc1f403b1c7ac8420489e74b689bedb4ffb1d99))
+
 ## [0.74.0](https://github.com/engram-app/Engram/compare/0.73.0...0.74.0) (2026-11-06)
 
 
