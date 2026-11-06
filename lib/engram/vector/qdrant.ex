@@ -1946,21 +1946,21 @@ defmodule Engram.Vector.Qdrant do
     folder_hmac = Keyword.get(search_opts, :folder_hmac)
     type_hmac = Keyword.get(search_opts, :type_hmac)
 
-    must = [match_filter(:user, user_id)]
+    tenant = [match_filter(:user, user_id)]
     # `vault_id` accepts one id or a set. The set form is what a multi-vault
     # OAuth grant (and a subset-restricted API key) needs: without it the only
     # options were one query per vault or dropping the filter entirely, and
     # dropping it leaks every vault the credential was scoped away from (#729).
     # `vault_id` is already a payload index (`QdrantLayout.payload_indexes/2`), so
     # `any` needs no new index — same shape as tags_hmac below.
-    must =
+    tenant =
       case vault_id do
-        nil -> must
-        id when is_binary(id) -> must ++ [match_filter(:vault, id)]
-        ids when is_list(ids) -> must ++ [match_filter(:vault, ids)]
+        nil -> tenant
+        id when is_binary(id) -> tenant ++ [match_filter(:vault, id)]
+        ids when is_list(ids) -> tenant ++ [match_filter(:vault, ids)]
       end
 
-    must = if tags_hmac, do: [match_filter(:tags, tags_hmac) | must], else: must
+    must = if tags_hmac, do: [match_filter(:tags, tags_hmac) | tenant], else: tenant
     must = if folder_hmac, do: [match_filter(:folder, folder_hmac) | must], else: must
     must = if type_hmac, do: [match_filter(:type, type_hmac) | must], else: must
 
@@ -1970,30 +1970,35 @@ defmodule Engram.Vector.Qdrant do
     # User-added frontmatter key filters, already resolved to nested
     # conditions (`Engram.Search.FieldFilters`).
     |> Kernel.++(Keyword.get(search_opts, :attr_filters, []))
-    |> then(&%{must: &1})
-    |> note_scope(Keyword.get(search_opts, :note_scope))
+    |> note_scope(tenant, Keyword.get(search_opts, :note_scope))
   end
 
-  # `:note_scope`, the Postgres resolver's answer (`Engram.Search`): the
-  # matching notes (`{:ids, _}`, any of the `n` blocks, ANDed with the tenant
-  # by the one nested `should`) or the non-matching ones (`{:exclude, _}`,
-  # `must_not`). An empty `{:ids, _}` matches nothing; an empty complement
-  # matches the whole tenant. Past `max_note_ids/0` the filter would break
-  # the strict condition limits, so it raises: the resolver caps below it.
-  defp note_scope(filter, nil), do: filter
+  # `:note_scope`, the Postgres resolver's answer (`Engram.Search`), decided
+  # PER POINT: a point with `n` is matched by its note id (the matching notes
+  # for `{:ids, _}`, any but the excluded ones for `{:exclude, _}`), a point
+  # without `n` (not yet backfilled, or rewritten by an older release) by
+  # today's payload conditions. So the filter is correct at every moment of
+  # the backfill, with no switch. The tenant (`u`, `v`) stays in the top-level
+  # `must`, outside the per-point `should`, so it holds in both branches.
+  # An empty `{:ids, _}` matches nothing; an empty complement matches the
+  # whole tenant. Past `max_note_ids/0` the filter would break the strict
+  # condition limits, so it raises: the resolver caps below it.
+  defp note_scope(must, _tenant, nil), do: %{must: must}
+  defp note_scope(_must, tenant, {:exclude, []}), do: %{must: tenant}
+  defp note_scope(_must, tenant, {:ids, []}), do: %{must: tenant ++ [%{should: n_blocks([])}]}
 
-  defp note_scope(filter, {_, ids} = scope) do
+  defp note_scope(must, tenant, {kind, ids}) do
     if length(ids) > max_note_ids(),
       do: raise(ArgumentError, "note_scope: #{length(ids)} ids > #{max_note_ids()}")
 
-    scoped(filter, scope)
+    fallback = %{must: [n_empty() | must -- tenant]}
+    %{must: tenant ++ [%{should: [n_path(kind, ids), fallback]}]}
   end
 
-  defp scoped(filter, {:ids, ids}),
-    do: Map.update!(filter, :must, &(&1 ++ [%{should: n_blocks(ids)}]))
+  defp n_empty, do: %{is_empty: %{key: PayloadKeys.short(:note)}}
 
-  defp scoped(filter, {:exclude, []}), do: filter
-  defp scoped(filter, {:exclude, ids}), do: Map.put(filter, :must_not, n_blocks(ids))
+  defp n_path(:ids, ids), do: %{should: n_blocks(ids)}
+  defp n_path(:exclude, ids), do: %{must_not: [n_empty() | n_blocks(ids)]}
 
   # No ids stays one condition that matches nothing: an empty `should`
   # matches everything.

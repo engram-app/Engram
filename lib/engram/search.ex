@@ -681,53 +681,54 @@ defmodule Engram.Search do
   # The search's filter opts, and the post-filter a `:too_wide` filter needs
   # (nil otherwise). `:no_match` when no note can match: no Qdrant request.
   #
-  # Once `note_id_filter?/1` holds for the user, Postgres resolves every
-  # filter to note ids (`note_filter/0`) and Qdrant matches them on `n`.
-  # Until then, the filters go to Qdrant as payload conditions.
-  # The opts go to the resolver as they are: it takes its own filter keys
-  # (the search opt names) and ignores the rest.
-  defp search_filter(user, vault, opts, {folder, tags, type}) do
-    if note_filter().any?(opts) and note_id_filter?(user) do
-      vaults = filter_vaults(user, vault, opts)
+  # Once the collection has its `n` index, Postgres resolves every filter to
+  # note ids (`note_filter/0`) and the Qdrant filter decides per point
+  # (`Qdrant.build_tenant_filter/1`, `:note_scope`): a point with `n` by its
+  # note id, one without `n` by today's payload conditions, which ride along.
+  # Correct at every moment of the `n` backfill, so there is no per-user
+  # switch. Without the index (strict mode refuses an unindexed filter), the
+  # payload conditions alone, as before. The opts go to the resolver as they
+  # are: it takes its own filter keys (the search opt names) and ignores the
+  # rest.
+  defp search_filter(user, vault, opts, ffs) do
+    with {:ok, payload} <- payload_filter(user, opts, ffs) do
+      if note_filter().any?(opts) and n_indexed?() do
+        vaults = filter_vaults(user, vault, opts)
 
-      case note_filter().resolve(user, vaults, opts, sample: true) do
-        {:ok, {:ids, []}} -> :no_match
-        {:ok, {:too_wide, sample}} -> {:ok, [], {vaults, opts, sample}}
-        {:ok, scope} -> {:ok, [note_scope: scope], nil}
-        {:error, _} = error -> error
-      end
-    else
-      case translate_phase_b_filters(user, folder, tags, type) do
-        {:ok, phase_b_kw} ->
-          kw =
-            phase_b_kw
-            |> Keyword.merge(date_bound_kw(opts))
-            |> Keyword.put(:attr_filters, Keyword.get(opts, :attr_filters, []))
-
-          {:ok, kw, nil}
-
-        # Caller asked to filter by folder/tags/type but has no DEK
-        # provisioned, so it's impossible to derive HMAC, and the user has no
-        # encrypted points to match anyway. Mirrors list_folders (B.2.2)
-        # defensive empty.
-        :no_dek_with_filter ->
-          :no_match
+        case note_filter().resolve(user, vaults, opts, sample: true) do
+          {:ok, {:ids, []}} -> :no_match
+          {:ok, {:too_wide, sample}} -> {:ok, [], {vaults, opts, sample}}
+          {:ok, scope} -> {:ok, payload ++ [note_scope: scope], nil}
+          {:error, _} = error -> error
+        end
+      else
+        {:ok, payload, nil}
       end
     end
   end
 
-  # Search by note id needs both, checked automatically (no flag): the
-  # collection's `n` index (strict mode refuses an unindexed filter) and the
-  # user's `n` backfill (`ReconcileNotePayloads.n_backfilled?/1`; a point
-  # without `n` would be missed). Cached per node for a minute each, so a
-  # search pays at most one collection-info read and one keyed marker read
-  # (one `maintenance_cursors` row by primary key, never a scan) a minute.
-  defp note_id_filter?(user) do
-    Engram.Cache.fetch(:note_id_filter, {:n_index, Qdrant.base_url()}, &Qdrant.n_indexed?/0) and
-      Engram.Cache.fetch(:note_id_filter, user.id, fn ->
-        Engram.Workers.ReconcileNotePayloads.n_backfilled?(user.id)
-      end)
+  # Today's payload conditions for the filter opts.
+  defp payload_filter(user, opts, {folder, tags, type}) do
+    case translate_phase_b_filters(user, folder, tags, type) do
+      {:ok, phase_b_kw} ->
+        {:ok,
+         phase_b_kw
+         |> Keyword.merge(date_bound_kw(opts))
+         |> Keyword.put(:attr_filters, Keyword.get(opts, :attr_filters, []))}
+
+      # Caller asked to filter by folder/tags/type but has no DEK
+      # provisioned, so it's impossible to derive HMAC, and the user has no
+      # encrypted points to match anyway. Mirrors list_folders (B.2.2)
+      # defensive empty.
+      :no_dek_with_filter ->
+        :no_match
+    end
   end
+
+  # Whether the collection has its `n` index, cached per node for a minute:
+  # a filtered search pays at most one collection-info read a minute.
+  defp n_indexed?,
+    do: Engram.Cache.fetch(:note_id_filter, {:n_index, Qdrant.base_url()}, &Qdrant.n_indexed?/0)
 
   # The most a `:too_wide` search fetches: 16x the page, in at most two rounds.
   @widen_factor 16
