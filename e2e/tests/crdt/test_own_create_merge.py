@@ -12,15 +12,20 @@ fix keeps the body the create sent (`ownGenesis`) and merges three-way
 Stage: on A, drop every inbound frame (the create reply and fan-out never
 arrive) while the create goes out, wait until the server holds the body, apply
 the remote edit through the API, then restore inbound and close the socket so
-the plugin rejoins and replays the create. Branch covered: disk still equals the body the create sent, so the
-replay takes the base === disk branch (keep the server text, `ownGenesis` or
-the acked baseline as base), not `mergeOwnCreateDrift` (disk != base), which
-the plugin unit tests pin. A disk edit during the window was left out: it
-would race the flush of the remote edit onto A.
+the plugin rejoins and replays the create.
 
-The oracle is note content on the
-server, A and B only; no client-log needle (the plugin log diet raised the
-remote log level).
+The disk-lag race is FAKED: `flushFromCrdt`, the sole writer of remote text to
+disk, is a no-op from just before the remote edit until the replayed create
+has adopted. In the real race the edit reaches the doc but not yet the disk;
+without the hook the rejoin catch-up flushes the marker to A's disk first, the
+old plugin's two-way diff of disk onto the doc is then a no-op, and the test
+cannot go red. Branch covered: disk still equals the body the create sent, so
+the replay takes the base === disk branch (keep the server text, `ownGenesis`
+or the acked baseline as base), not `mergeOwnCreateDrift` (disk != base),
+which the plugin unit tests pin.
+
+The oracle is note content on the server, A and B only; no client-log needle
+(the plugin log diet raised the remote log level).
 
 Expected: red on the pre-fix plugin (1.39.1, commit 307b121a), where the replayed
 create diffs two-way and drops the remote edit; green on plugin main (fix is
@@ -31,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import time
 
 import pytest
@@ -65,6 +71,20 @@ async def _count_create_enqueues(cdp, path: str) -> None:
     )
 
 
+_ENGINE = f"{PLUGIN_PATH}.syncEngine"
+
+
+async def _hold_disk(cdp) -> None:
+    """Fake the disk-lag window: remote text is not written to disk."""
+    await cdp.evaluate(
+        f"(() => {{ {_ENGINE}.flushFromCrdt = async () => true; return 'ok'; }})()"
+    )
+
+
+async def _release_disk(cdp) -> None:
+    await cdp.evaluate(f"(() => {{ delete {_ENGINE}.flushFromCrdt; return 'ok'; }})()")
+
+
 async def _drop_inbound(cdp) -> None:
     await cdp.evaluate(
         f"(() => {{ {_STREAM}.handleMessage = () => {{}}; return 'ok'; }})()"
@@ -90,11 +110,14 @@ async def test_remote_edit_survives_replayed_create_of_own_new_note(
         write_note(vault_a, path, body)
         # The create reached the server (only its reply is lost).
         api_sync.wait_for_note_content(path, "created on A", timeout=CRDT_TIMEOUT)
+        await _hold_disk(cdp_a)
         status = api_sync.append_note(path, f"{MARKER}\n")
         assert status == 200, f"remote edit rejected: {status}"
         api_sync.wait_for_note_content(path, MARKER, timeout=CRDT_TIMEOUT)
     finally:
         await _restore_inbound(cdp_a)
+        if sys.exc_info()[0] is not None:
+            await _release_disk(cdp_a)
 
     # Socket dies; the plugin rejoins and replays the unacked create, which now
     # lands on a row holding body + remote edit.
@@ -115,17 +138,18 @@ async def test_remote_edit_survives_replayed_create_of_own_new_note(
             reconnected = await cdp_a.evaluate(_RECONNECTED)
             if reconnected and seen and not queued:
                 break
-            if time.monotonic() > deadline:
-                # Fall back to the content oracle below; it fails if the edit
-                # was lost, and a create never enqueued is not this test's bug.
-                assert reconnected, "plugin never opened a new socket"
-                break
+            assert time.monotonic() < deadline, (
+                f"replay not seen: reconnected={reconnected} enqueued={seen} queued={queued}"
+            )
             await asyncio.sleep(0.2)
     finally:
+        await _release_disk(cdp_a)
         await cdp_a.evaluate(
             f"(() => {{ delete window.__oldWs; delete window.__createEnq; delete {PLUGIN_PATH}.crdtOpQueue.enqueue; return 'ok'; }})()"
         )
     await cdp_a.wait_for_crdt_queue_drain(timeout=CRDT_TIMEOUT)
+    # Disk writes are back; pull the doc (body + marker) onto A's disk.
+    await cdp_a.trigger_catch_up()
 
     # Settled: every copy must hold body and edit. B got the marker by fan-out
     # alone, so A and the server are the verdict; B must still agree.
