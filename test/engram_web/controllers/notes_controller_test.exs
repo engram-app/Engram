@@ -818,6 +818,8 @@ defmodule EngramWeb.NotesControllerTest do
         skip_tenant_check: true
       )
 
+    # Content is read from `note_bodies`; app writers keep it in step.
+    Engram.Fixtures.mirror_body!(note_id)
     :ok
   end
 end
