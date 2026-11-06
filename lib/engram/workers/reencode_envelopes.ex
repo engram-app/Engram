@@ -359,6 +359,14 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   # report and `Bookkeeping.Canary` (`NoteBody.drift_ids/2`) surface it.
   defp legacy(%{schema: Note} = column), do: note_legacy(column, :work)
 
+  defp legacy(%{label: name, schema: schema, ct: ct, nonce: nonce}) do
+    from(r in schema,
+      where: fragment("octet_length(?) = 12", field(r, ^nonce)),
+      where: fragment("octet_length(?) > 16", field(r, ^ct))
+    )
+    |> body_with_bound_aad(name)
+  end
+
   # `:work` the rows in step with their `notes` row, `:drifted` the others
   # (counted by `enqueue_missing/0`, never re-encoded).
   defp note_legacy(%{label: name, body: body, nonce: nonce}, kind) do
@@ -379,14 +387,6 @@ defmodule Engram.Workers.ReencodeEnvelopes do
     Note
     |> NoteBody.join()
     |> where(^legacy)
-    |> body_with_bound_aad(name)
-  end
-
-  defp legacy(%{label: name, schema: schema, ct: ct, nonce: nonce}) do
-    from(r in schema,
-      where: fragment("octet_length(?) = 12", field(r, ^nonce)),
-      where: fragment("octet_length(?) > 16", field(r, ^ct))
-    )
     |> body_with_bound_aad(name)
   end
 
