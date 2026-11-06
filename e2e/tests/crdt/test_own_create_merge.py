@@ -16,7 +16,7 @@ the plugin rejoins and replays the create.
 
 The disk-lag race is FAKED: `flushFromCrdt`, the sole writer of remote text to
 disk, is a no-op from just before the remote edit until the replayed create
-has adopted. In the real race the edit reaches the doc but not yet the disk;
+has adopted, then one flush of the doc's projection lands it. In the real race the edit reaches the doc but not yet the disk;
 without the hook the rejoin catch-up flushes the marker to A's disk first, the
 old plugin's two-way diff of disk onto the doc is then a no-op, and the test
 cannot go red. Branch covered: disk still equals the body the create sent, so
@@ -85,6 +85,22 @@ async def _release_disk(cdp) -> None:
     await cdp.evaluate(f"(() => {{ delete {_ENGINE}.flushFromCrdt; return 'ok'; }})()")
 
 
+async def _flush_doc_to_disk(cdp, path: str, note_id: str) -> None:
+    """The delayed disk write finally landing: write what the doc now holds.
+
+    The hook swallowed the plugin's own flushes (including the replay's), and
+    nothing else re-flushes an unchanged doc, so A's disk would stay body-only
+    on every plugin. Writing the doc's projection is the honest end of the
+    faked lag: the marker reaches disk iff the doc kept it.
+    """
+    await cdp.evaluate(
+        f"(async () => {{ const e = {_ENGINE};"
+        f" await e.flushFromCrdt({json.dumps(path)},"
+        f" await e.crdt.projectedText({json.dumps(note_id)})); return 'ok'; }})()",
+        await_promise=True,
+    )
+
+
 async def _drop_inbound(cdp) -> None:
     await cdp.evaluate(
         f"(() => {{ {_STREAM}.handleMessage = () => {{}}; return 'ok'; }})()"
@@ -148,8 +164,9 @@ async def test_remote_edit_survives_replayed_create_of_own_new_note(
             f"(() => {{ delete window.__oldWs; delete window.__createEnq; delete {PLUGIN_PATH}.crdtOpQueue.enqueue; return 'ok'; }})()"
         )
     await cdp_a.wait_for_crdt_queue_drain(timeout=CRDT_TIMEOUT)
-    # Disk writes are back; pull the doc (body + marker) onto A's disk.
-    await cdp_a.trigger_catch_up()
+    # Disk writes are back; land the delayed flush of whatever the doc holds.
+    note_id = await cdp_a.wait_for_note_id_for_path(path, timeout=CRDT_TIMEOUT)
+    await _flush_doc_to_disk(cdp_a, path, note_id)
 
     # Settled: every copy must hold body and edit. B got the marker by fan-out
     # alone, so A and the server are the verdict; B must still agree.
