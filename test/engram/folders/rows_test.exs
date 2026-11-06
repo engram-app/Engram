@@ -130,7 +130,7 @@ defmodule Engram.Folders.RowsTest do
       ensure!(u, v, "Z")
       before_ids = rows(u, v) |> Enum.map(& &1.id) |> Enum.sort()
 
-      assert :ok = in_tenant(u, fn -> Rows.rename(u, v.id, "A/B", "Z/Y") end)
+      assert {:ok, []} = in_tenant(u, fn -> Rows.rename(u, v.id, "A/B", "Z/Y") end)
 
       # No row was created or replaced: identity survives the rename.
       assert rows(u, v) |> Enum.map(& &1.id) |> Enum.sort() == before_ids
@@ -163,7 +163,11 @@ defmodule Engram.Folders.RowsTest do
       marker = Ecto.UUID.generate()
       ensure!(u, v, "A/Same/Deep", explicit: marker)
 
-      assert :ok = in_tenant(u, fn -> Rows.rename(u, v.id, "A", "Z") end)
+      assert :ok =
+               in_tenant(u, fn ->
+                 {:ok, merged} = Rows.rename(u, v.id, "A", "Z")
+                 Rows.retire_merged(merged)
+               end)
 
       at = by_path(u, v, fk)
       assert %{id: ^keeper} = at.("Z/Same")

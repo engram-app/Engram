@@ -547,9 +547,17 @@ defmodule Engram.Folders.Rows do
   and its explicit flag moves to the occupant. Rows the previous release made
   without a row simply have nothing to rename here; `ensure/4` fills the new
   paths.
+
+  Returns `{:ok, merged}`: the source rows a merge folds away, NOT yet
+  retired. The caller retires them with `retire_merged/1` after it has
+  re-pointed the notes, in the same transaction: retiring first would make the
+  `folders_release_refs` trigger NULL every moved note's reference before the
+  note rewrite points it at the keeper, two writes per note (#2468 review, M1).
+  Only the stragglers (notes the cascade did not move) are released then.
   """
-  @spec rename(map(), Ecto.UUID.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def rename(_user, _vault_id, same, same), do: :ok
+  @spec rename(map(), Ecto.UUID.t(), String.t(), String.t()) ::
+          {:ok, [merged()]} | {:error, term()}
+  def rename(_user, _vault_id, same, same), do: {:ok, []}
 
   def rename(_user, _vault_id, old_folder, new_folder)
       when old_folder == "" or new_folder == "",
@@ -600,7 +608,7 @@ defmodule Engram.Folders.Rows do
       ctx = %{user_id: user.id, vault_id: vault_id, dek: dek, fk: fk}
 
       case subtree(user, vault_id, [old_folder]) do
-        [] -> :ok
+        [] -> {:ok, []}
         rows -> move_subtree(ctx, rows, new_folder)
       end
     end
@@ -642,7 +650,7 @@ defmodule Engram.Folders.Rows do
 
         rest = for r <- rows, r.id != root.id, Map.has_key?(paths, r.id), do: {r.id, paths[r.id]}
         write_path_hmacs(ctx, rest)
-        :ok
+        {:ok, []}
     end
   end
 
@@ -698,26 +706,28 @@ defmodule Engram.Folders.Rows do
     :ok
   end
 
+  @typedoc "A source row a merge folds into `keeper`, still to be retired."
+  @type merged() :: {%{id: Ecto.UUID.t(), explicit: boolean()}, Ecto.UUID.t()}
+
   # The target of the rename already has a live row: fold each source row into
-  # the row that holds its new place, or move it there.
+  # the row that holds its new place, or move it there. The rows that lose
+  # their place are returned, not retired (see `rename/4`).
   defp merge_subtree(ctx, rows, paths, root_id, occupant, new_parent) do
-    _ =
-      Enum.reduce(rows, %{root_id => occupant}, fn row, placed ->
+    {_placed, merged} =
+      Enum.reduce(rows, {%{root_id => occupant}, []}, fn row, {placed, merged} ->
         case Map.fetch(paths, row.id) do
           :error ->
-            placed
+            {placed, merged}
 
           {:ok, _path} when row.id == root_id ->
-            retire(row, occupant)
-            placed
+            {placed, [{row, occupant} | merged]}
 
           {:ok, path} ->
             parent = Map.get(placed, row.parent_id, new_parent)
 
             case live_child(ctx.vault_id, parent, row.name_hmac) do
               %{id: taken} when taken != row.id ->
-                retire(row, taken)
-                Map.put(placed, row.id, taken)
+                {Map.put(placed, row.id, taken), [{row, taken} | merged]}
 
               _ ->
                 from(f in Folder, where: f.id == ^row.id)
@@ -729,13 +739,21 @@ defmodule Engram.Folders.Rows do
                   ]
                 )
 
-                Map.put(placed, row.id, row.id)
+                {Map.put(placed, row.id, row.id), merged}
             end
         end
       end)
 
-    :ok
+    {:ok, Enum.reverse(merged)}
   end
+
+  @doc """
+  Retires the rows `rename/4` folded away: each one's explicit flag moves to
+  its keeper, and it is soft-deleted. Call it in the rename's transaction,
+  after the notes are re-pointed.
+  """
+  @spec retire_merged([merged()]) :: :ok
+  def retire_merged(merged), do: Enum.each(merged, fn {row, keeper} -> retire(row, keeper) end)
 
   # `row` lost its place to `keeper`: its explicit flag moves over, it is retired.
   defp retire(row, keeper) do

@@ -7365,10 +7365,11 @@ defmodule Engram.Notes do
                 # check at the top of this function passed. Throwing rolls the
                 # transaction back; the claim already committed is reported
                 # below, like any other failure past it.
-                case Rows.rename(user, vault.id, old_folder, new_folder) do
-                  :ok -> :ok
-                  {:error, reason} -> throw({:rename_refused, reason})
-                end
+                merged =
+                  case Rows.rename(user, vault.id, old_folder, new_folder) do
+                    {:ok, merged} -> merged
+                    {:error, reason} -> throw({:rename_refused, reason})
+                  end
 
                 {:ok, _} =
                   Rows.ensure_all(
@@ -7390,6 +7391,10 @@ defmodule Engram.Notes do
                   _ = Repo.insert_all(Note, rows, on_conflict: :nothing)
                   NoteBody.sync!(Enum.map(rows, & &1.id), NoteBody.body_fields())
                 end)
+
+                # Merged-away source rows go last, once every moved note names
+                # its keeper: the release trigger then finds only stragglers.
+                :ok = Rows.retire_merged(merged)
 
                 # The reindex + link-rewrite fan-out commits with the rows it
                 # covers (bulk inserts, bounded by Engram.Batch.insert_rows/0).

@@ -5,7 +5,14 @@ defmodule Engram.Folders.FolderRefReleaseTest do
   # the soft delete, and a NULL lands in the drift indexes the drain already
   # reads. A folder row a live marker names is not soft-deleted at all.
   # `FolderTable` version 3 heals the rows written before both.
+  #
+  # Every write that fires the trigger runs as the prod-like `engram_app`
+  # (no SUPERUSER, no BYPASSRLS) under FORCE RLS, through `Engram.RlsCase`:
+  # the suite's superuser would see every row whatever the tenant
+  # (docs/context/rls-enforcement-testing-traps.md).
   use Engram.DataCase, async: false
+
+  import Engram.RlsCase
 
   alias Engram.Attachments
   alias Engram.Bookkeeping.Drain
@@ -42,13 +49,57 @@ defmodule Engram.Folders.FolderRefReleaseTest do
     a
   end
 
-  defp kill_row!(id),
-    do: Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [dump(id)])
-
-  # The trigger is DEFERRED: it runs at COMMIT, which a sandboxed test never
-  # reaches. `SET CONSTRAINTS ALL IMMEDIATE` fires every pending deferred
-  # event at this point, as COMMIT would (and every later one immediately).
+  # What COMMIT would run that a sandboxed test never reaches: every pending
+  # deferred constraint or trigger, fired here. Called where prod's COMMIT
+  # runs, after `with_tenant` has exited (role back to the session role,
+  # tenant cleared), so a deferred trigger that cannot see the tenant's rows
+  # at commit fails these tests (it did, #2468 delta review H1). A no-op for
+  # the immediate trigger.
   defp commit!, do: Repo.query!("SET CONSTRAINTS ALL IMMEDIATE")
+
+  # `fun` as a request does it: `engram_app`, inside the tenant's block, then
+  # the commit point outside it. Returns `fun`'s value.
+  defp app_write!(u, fun) do
+    as_prod_role_committing(fn ->
+      result = Repo.with_tenant!(u.id, fun)
+      commit!()
+      result
+    end)
+  end
+
+  # A REST folder call as prod runs it: `engram_app`, NO tenant around it
+  # (`Folders.atomic/1` opens its outer transaction with none; the legs open
+  # their own tenant blocks), then the commit point.
+  defp rest_call!(fun) do
+    as_prod_role_committing(fn ->
+      result = fun.()
+      commit!()
+      result
+    end)
+  end
+
+  defp kill_row!(u, id),
+    do:
+      app_write!(u, fn ->
+        Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [dump(id)])
+      end)
+
+  # A folder at `path` whose only note was deleted: its row stays, so a
+  # rename onto it merges. Returns `{deleted note, row id}`.
+  defp emptied_folder!(u, v, path) do
+    n = note!(u, v, path <> "/m.md")
+    row = FolderRows.ref("notes", n.id)
+    Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [dump(n.id)])
+    {n, row}
+  end
+
+  # A live note outside the folder whose reference names `row`.
+  defp straggler!(u, v, row) do
+    n = note!(u, v, "Elsewhere/s.md")
+    Repo.query!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [dump(n.id), dump(row)])
+    assert FolderRows.ref("notes", n.id) == row
+    n
+  end
 
   defp stamp(att_id) do
     %{rows: [[stamp, nonce]]} =
@@ -134,10 +185,7 @@ defmodule Engram.Folders.FolderRefReleaseTest do
       assert row
       refute u.id in drift_users()
 
-      kill_row!(row)
-      # Deferred: nothing happens before commit.
-      assert FolderRows.ref("notes", lost.id) == row
-      commit!()
+      kill_row!(u, row)
 
       assert FolderRows.ref("notes", lost.id) == nil
       assert u.id in drift_users()
@@ -156,8 +204,7 @@ defmodule Engram.Folders.FolderRefReleaseTest do
       assert stamp == nonce
       refute u.id in drift_users()
 
-      kill_row!(row)
-      commit!()
+      kill_row!(u, row)
 
       assert FolderRows.ref("attachments", att.id) == nil
       assert {nil, _} = stamp(att.id)
@@ -168,8 +215,7 @@ defmodule Engram.Folders.FolderRefReleaseTest do
       :ok = Engram.DataMigrations.mark_done(FolderTable.name(), FolderTable.version())
       lost = note!(u, v, "Gone/lost.md")
       att = attachment!(u, v, "Gone/a.png")
-      kill_row!(FolderRows.ref("notes", lost.id))
-      commit!()
+      kill_row!(u, FolderRows.ref("notes", lost.id))
 
       Drain.run()
 
@@ -179,42 +225,13 @@ defmodule Engram.Folders.FolderRefReleaseTest do
       refute u.id in drift_users()
     end
 
-    # The delete and later statements in ONE transaction: the trigger sees
-    # the state at commit. Red before (an immediate trigger nulled the note
-    # the later statement then re-pointed, and released a revived row's).
-    test "a later statement in the same transaction wins over the release", %{
-      user: u,
-      vault: v
-    } do
-      moved = note!(u, v, "Gone/moved.md")
-      gone = FolderRows.ref("notes", moved.id)
-      kept = note!(u, v, "Back/kept.md")
-      back = FolderRows.ref("notes", kept.id)
-      live = note!(u, v, "Live/x.md") |> Map.fetch!(:id) |> then(&FolderRows.ref("notes", &1))
-
-      kill_row!(gone)
-
-      Repo.query!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [
-        dump(moved.id),
-        dump(live)
-      ])
-
-      kill_row!(back)
-      Repo.query!("UPDATE folders SET deleted_at = NULL WHERE id = $1", [dump(back)])
-      commit!()
-
-      assert FolderRows.ref("notes", moved.id) == live
-      assert FolderRows.ref("notes", kept.id) == back
-    end
-
     # Controls: what the trigger must not touch.
     test "a deleted note keeps its reference (a restore re-resolves it)", %{user: u, vault: v} do
       trashed = note!(u, v, "Gone/trashed.md")
       row = FolderRows.ref("notes", trashed.id)
       Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [dump(trashed.id)])
 
-      kill_row!(row)
-      commit!()
+      kill_row!(u, row)
 
       assert FolderRows.ref("notes", trashed.id) == row
     end
@@ -230,8 +247,7 @@ defmodule Engram.Folders.FolderRefReleaseTest do
 
       # An update that is not a live-to-deleted flip fires nothing.
       Repo.query!("UPDATE folders SET updated_at = now() WHERE id = $1", [dump(kept_row)])
-      kill_row!(gone_row)
-      commit!()
+      kill_row!(u, gone_row)
       assert FolderRows.ref("notes", kept.id) == kept_row
 
       # Re-deleting an already deleted row (a second delete) is not a flip either.
@@ -244,27 +260,79 @@ defmodule Engram.Folders.FolderRefReleaseTest do
       assert FolderRows.ref("notes", gone.id) == gone_row
     end
 
-    # M1: a merge rename retires the source row BEFORE its bulk update moves
-    # the notes. Measured on the immediate trigger: 40 row versions for 20
-    # notes (each NULLed, then re-pointed). Deferred, the moved notes no
-    # longer name the source row at commit: one write each.
+    # M1: a merge rename used to retire the source row BEFORE its bulk update
+    # moved the notes, so the trigger NULLed every moved note and the update
+    # re-pointed it: 40 row versions for 20 notes (measured). The source rows
+    # are now retired after the notes move: one write each. Red before.
     test "a merge rename of 20 notes writes 20 note rows, not 40", %{user: u, vault: v} do
       moved = for i <- 1..20, do: note!(u, v, "Src/n#{i}.md")
       src = FolderRows.ref("notes", hd(moved).id)
-      # An emptied folder keeps its row: the rename then folds Src into it.
-      gone = note!(u, v, "Dst/m.md")
-      keeper = FolderRows.ref("notes", gone.id)
-      Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [dump(gone.id)])
+      {_gone, keeper} = emptied_folder!(u, v, "Dst")
 
       before = xact("notes")
-      assert {:ok, _} = Engram.Folders.rename(u, v, "Src", "Dst")
-      commit!()
+      assert {:ok, _} = rest_call!(fn -> Engram.Folders.rename(u, v, "Src", "Dst") end)
       {_, _, updates} = delta(xact("notes"), before)
 
       assert updates == 20
       assert FolderRows.row(src).deleted_at
       for n <- moved, do: assert(FolderRows.ref("notes", n.id) == keeper)
       refute u.id in drift_users()
+    end
+
+    # The #2468 delta review's probe. A straggler: a live note that names the
+    # source folder row but that the cascade does not move (its stored path is
+    # elsewhere; written in the gap, in the review's H1 race). The merge
+    # retires the row, and the straggler must lose the reference, under the
+    # app role, through the REST entry points (an outer transaction with NO
+    # tenant). Red on d5dbcd173, whose deferred trigger ran at that outer
+    # commit with no tenant and so, under FORCE RLS, updated nothing.
+    test "a REST merge rename leaves no reference to the retired row", %{user: u, vault: v} do
+      note!(u, v, "Src/n.md")
+      src = FolderRows.tree(u)["Src"].id
+      straggler = straggler!(u, v, src)
+      emptied_folder!(u, v, "Dst")
+
+      assert {:ok, _} = rest_call!(fn -> Engram.Folders.rename(u, v, "Src", "Dst") end)
+
+      assert FolderRows.row(src).deleted_at
+      assert FolderRows.ref("notes", straggler.id) == nil
+      assert u.id in drift_users()
+    end
+
+    test "a REST batch move into an existing folder leaves no reference to the retired row", %{
+      user: u,
+      vault: v
+    } do
+      {:ok, marker} = Notes.create_folder_marker(u, v, "Src")
+      note!(u, v, "Src/n.md")
+      src = FolderRows.tree(u)["Src"].id
+      straggler = straggler!(u, v, src)
+      emptied_folder!(u, v, "T/Src")
+      {:ok, target} = Notes.create_folder_marker(u, v, "T")
+
+      assert {:ok, _} =
+               rest_call!(fn -> Engram.Folders.batch_move(u, v, [marker.id], target.id) end)
+
+      assert FolderRows.row(src).deleted_at
+      assert FolderRows.ref("notes", straggler.id) == nil
+      assert u.id in drift_users()
+    end
+
+    # CONTROL: the role these tests drop to really is RLS-bound. With no
+    # tenant set it sees none of the rows the superuser sees, so a green test
+    # above cannot be the role drop silently not engaging.
+    test "control: engram_app with no tenant sees zero notes and folders", %{user: u, vault: v} do
+      note!(u, v, "Ctl/n.md")
+      assert Repo.one(from(n in "notes", select: count()), skip_tenant_check: true) > 0
+
+      assert {0, 0} =
+               as_prod_role_committing(fn ->
+                 {Repo.one(from(n in "notes", select: count()), skip_tenant_check: true),
+                  Repo.one(from(f in "folders", select: count()), skip_tenant_check: true)}
+               end)
+
+      assert %{rows: [["engram_app"]]} =
+               as_prod_role_committing(fn -> Repo.query!("SELECT current_user") end)
     end
 
     # M2: the folder's trashed notes keep their reference, so a lookup on the
@@ -293,8 +361,7 @@ defmodule Engram.Folders.FolderRefReleaseTest do
       QueryPlan.fresh!("notes")
       QueryPlan.fresh!("attachments")
       before = {xact("notes"), xact("attachments")}
-      kill_row!(row)
-      commit!()
+      kill_row!(u, row)
 
       assert delta(xact("notes"), elem(before, 0)) == {0, 0, 0}
       assert delta(xact("attachments"), elem(before, 1)) == {0, 0, 0}
@@ -397,8 +464,8 @@ defmodule Engram.Folders.FolderRefReleaseTest do
     test "a live marker whose rows died gets a live row again", %{user: u, vault: v} do
       {:ok, _} = Notes.create_folder_marker(u, v, "F/Sub")
       t = FolderRows.tree(u)
-      kill_row!(t["F/Sub"].id)
-      kill_row!(t["F"].id)
+      kill_row!(u, t["F/Sub"].id)
+      kill_row!(u, t["F"].id)
       assert FolderRows.tree(u) == %{}
 
       assert {:more, _} = FolderTable.run_pass(user_ids: [u.id])

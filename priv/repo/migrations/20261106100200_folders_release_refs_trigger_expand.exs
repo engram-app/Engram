@@ -3,7 +3,7 @@ defmodule Engram.Repo.Migrations.FoldersReleaseRefsTriggerExpand do
 
   @moduledoc """
   `folders_release_refs`: when a folder row is soft-deleted, the live notes
-  and attachments that still name it at COMMIT lose the reference, for every
+  and attachments that still name it lose the reference, for every
   writer of any release (the soft-delete twin of the `ON DELETE SET NULL`
   foreign keys of 20261029000400/500, which fire only on a hard delete).
 
@@ -18,17 +18,21 @@ defmodule Engram.Repo.Migrations.FoldersReleaseRefsTriggerExpand do
       (20261103140100) holds it. A NULL reference with a current stamp would be
       trusted by readers as "at the root".
 
-  A CONSTRAINT trigger, DEFERRABLE INITIALLY DEFERRED: it runs at commit, so a
-  merge rename, which retires the source row BEFORE its bulk update re-points
-  the moved notes at the keeper, releases only the stragglers instead of
-  writing every moved note twice. Fired only on the live-to-deleted flip, and
-  it does nothing if the row is live again by commit (a revive in the same
-  transaction). Live rows only (`kind = 'note'` for notes): the statements
-  are served by `notes_folder_ref_live` / `attachments_folder_ref_live`
-  (20261106100000/100), so the cost is O(live references), not the folder's
-  deleted history, and 0 on a recursive delete, which deletes the content
-  first. A deleted note keeps its reference (the restore trigger of
-  20261103140200 re-resolves it).
+  An ordinary AFTER ROW trigger, run inside the writer's statement and so
+  inside its tenant scope. Not deferred: a deferred trigger fires at the
+  outermost COMMIT, which `Folders.atomic/1` reaches after `with_tenant` has
+  reset the role and tenant, so under the non-bypass prod role and FORCE RLS
+  it would update nothing (#2468 delta review, H1). The two-writes-per-note
+  cost of a merge rename is fixed at the caller instead: the rename retires
+  the merged-away source rows after it re-points the moved notes
+  (`Rows.retire_merged/1`), so only stragglers are released.
+
+  Fired only on the live-to-deleted flip. Live rows only (`kind = 'note'`
+  for notes): the statements are served by `notes_folder_ref_live` /
+  `attachments_folder_ref_live` (20261106100000/100), so the cost is
+  O(live references), not the folder's deleted history, and 0 on a recursive
+  delete, which deletes the content first. A deleted note keeps its reference
+  (the restore trigger of 20261103140200 re-resolves it).
 
   The statements list only the reference columns, so no notes trigger fires
   (`notes_set_folder_ref` is `UPDATE OF folder_hmac`) and `seq` and
@@ -37,8 +41,8 @@ defmodule Engram.Repo.Migrations.FoldersReleaseRefsTriggerExpand do
   rename that calls `retire/2`), which every note and attachment writer takes
   first, so a write is either committed and released here or made after and
   resolved against the dead row (NULL). Every caller today is a request in
-  the `:write` class, whose 5s `statement_timeout` also bounds the work done
-  at COMMIT; a future background caller needs its own bound.
+  the `:write` class, whose 5s `statement_timeout` bounds the folder
+  statement this runs inside; a future background caller needs its own bound.
 
   Runs as the invoking role, in the folder writer's tenant scope: the rows it
   touches are that tenant's. No app module is called (N-1 gate).
@@ -47,17 +51,13 @@ defmodule Engram.Repo.Migrations.FoldersReleaseRefsTriggerExpand do
   def up do
     # CREATE TRIGGER takes SHARE ROW EXCLUSIVE on folders only (not on notes or
     # attachments); DROP TRIGGER IF EXISTS on a missing trigger takes none.
-    # Fail fast, the boot migrator retries. (CREATE OR REPLACE is not
-    # supported for a constraint trigger.)
+    # Fail fast, the boot migrator retries.
     execute "SET lock_timeout = '5s'"
 
     execute """
     CREATE OR REPLACE FUNCTION folders_release_refs() RETURNS trigger
     LANGUAGE plpgsql SET search_path = '' AS $$
     BEGIN
-      IF EXISTS (SELECT 1 FROM public.folders WHERE id = NEW.id AND deleted_at IS NULL) THEN
-        RETURN NULL;
-      END IF;
       UPDATE public.notes SET folder_ref_id = NULL
         WHERE vault_id = NEW.vault_id AND folder_ref_id = NEW.id
           AND deleted_at IS NULL AND kind = 'note';
@@ -68,12 +68,9 @@ defmodule Engram.Repo.Migrations.FoldersReleaseRefsTriggerExpand do
     $$
     """
 
-    execute "DROP TRIGGER IF EXISTS folders_release_refs ON folders"
-
     execute """
-    CREATE CONSTRAINT TRIGGER folders_release_refs
+    CREATE OR REPLACE TRIGGER folders_release_refs
       AFTER UPDATE OF deleted_at ON folders
-      DEFERRABLE INITIALLY DEFERRED
       FOR EACH ROW
       WHEN (OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL)
       EXECUTE FUNCTION folders_release_refs()
