@@ -331,6 +331,187 @@ defmodule Engram.Notes.NoteBodyWriteTest do
     end
   end
 
+  @doc false
+  # Makes every later `notes` write in this test store a stale content
+  # ciphertext and a NULL CRDT state ciphertext (nonces as written), as a
+  # release that stops writing those columns would leave them. A test-only
+  # trigger, rolled back with the sandbox. A body built by copying from
+  # `notes` then holds the wrong bytes; one written from the writer's own
+  # values does not.
+  def stale_notes_body! do
+    Repo.query!("""
+    CREATE FUNCTION r8_test_stale_notes_body() RETURNS trigger AS $$
+    BEGIN
+      IF NEW.kind = 'note' THEN
+        NEW.content_ciphertext := '\\x00'::bytea;
+        NEW.crdt_state_ciphertext := NULL;
+      END IF;
+      RETURN NEW;
+    END $$ LANGUAGE plpgsql
+    """)
+
+    Repo.query!("""
+    CREATE TRIGGER zz_r8_test_stale_notes_body BEFORE INSERT OR UPDATE ON notes
+    FOR EACH ROW EXECUTE FUNCTION r8_test_stale_notes_body()
+    """)
+  end
+
+  defp raw_notes(id) do
+    %{rows: [row]} =
+      Repo.query!(
+        "SELECT content_ciphertext, crdt_state_ciphertext, crdt_state_nonce FROM notes WHERE id = $1",
+        [Ecto.UUID.dump!(id)]
+      )
+
+    row
+  end
+
+  defp body_row(id) do
+    Repo.query!(
+      "SELECT user_id, key_version, content_ct, crdt_ct, crdt_head FROM note_bodies WHERE note_id = $1",
+      [Ecto.UUID.dump!(id)]
+    ).rows
+  end
+
+  defp crdt_state!(u, id) do
+    {:ok, state} =
+      Repo.with_tenant!(u.id, fn -> Crypto.decrypt_crdt_state(NoteBody.get(id), u) end)
+
+    state
+  end
+
+  describe "R8(b1): the body is what the writer wrote, not a copy of notes" do
+    test "create", %{user: u, vault: v} do
+      stale_notes_body!()
+      note = write!(u, v, "a.md", "first")
+      assert [<<0>>, nil, _] = raw_notes(note.id)
+      assert {:ok, %{content: "first"}} = Notes.get_note(u, v, "a.md")
+      assert is_binary(crdt_state!(u, note.id))
+    end
+
+    test "update", %{user: u, vault: v} do
+      note = write!(u, v, "a.md", "first")
+      stale_notes_body!()
+      write!(u, v, "a.md", "second")
+      assert [<<0>>, nil, _] = raw_notes(note.id)
+      assert {:ok, %{content: "second"}} = Notes.get_note(u, v, "a.md")
+      assert is_binary(crdt_state!(u, note.id))
+    end
+
+    test "content checkpoint, then compaction", %{user: u, vault: v} do
+      note = write!(u, v, "a.md", "first")
+      stale_notes_body!()
+      :ok = CrdtCheckpoint.checkpoint(u.id, v.id, note.id, doc_with("changed"))
+      assert {:ok, %{content: text}} = Notes.get_note(u, v, "a.md")
+      assert text =~ "changed"
+      {:ok, doc} = CrdtBridge.doc_from_state(crdt_state!(u, note.id))
+      :ok = CrdtCheckpoint.checkpoint(u.id, v.id, note.id, doc)
+      assert [<<0>>, nil, _] = raw_notes(note.id)
+      assert {:ok, %{content: ^text}} = Notes.get_note(u, v, "a.md")
+      assert is_binary(crdt_state!(u, note.id))
+    end
+
+    test "rename, with its tombstone", %{user: u, vault: v} do
+      note = write!(u, v, "a.md", "first")
+      stale_notes_body!()
+      assert {:ok, _} = Notes.rename_note(u, v, "a.md", "b.md")
+      assert [<<0>>, _, _] = raw_notes(note.id)
+      assert {:ok, %{content: "first"}} = Notes.get_note(u, v, "b.md")
+      assert is_binary(crdt_state!(u, note.id))
+    end
+  end
+
+  describe "R8(b1): an old release's copy from notes cannot erase a body" do
+    # 0.74's DEK rotation copies every body field from `notes`
+    # (`NoteBody.sync!(ids, body_fields())`, user_dek_rotation.ex:294), and
+    # `NoteSplit` heals by the same copy. Beside a release that stops writing
+    # the `notes` ciphertexts, those columns are NULL or stale while the
+    # nonces stay current.
+    setup %{user: u, vault: v} do
+      note = write!(u, v, "a.md", "first")
+      %{note: note, id: Ecto.UUID.dump!(note.id), before: body_row(note.id)}
+    end
+
+    defp old_copy!(note_id) do
+      NoteBody.sync!([note_id], NoteBody.body_fields())
+      NoteSplit.run_pass()
+    end
+
+    defp assert_body_kept!(ctx) do
+      assert body_row(ctx.note.id) == ctx.before
+      assert {:ok, %{content: "first"}} = Notes.get_note(ctx.user, ctx.vault, "a.md")
+      assert is_binary(crdt_state!(ctx.user, ctx.note.id))
+    end
+
+    test "NULL notes ciphertexts", ctx do
+      Repo.query!(
+        "UPDATE notes SET content_ciphertext = NULL, crdt_state_ciphertext = NULL WHERE id = $1",
+        [ctx.id]
+      )
+
+      old_copy!(ctx.note.id)
+      assert_body_kept!(ctx)
+    end
+
+    test "stale notes ciphertexts under current nonces", ctx do
+      Repo.query!(
+        "UPDATE notes SET content_ciphertext = $2, crdt_state_ciphertext = $2 WHERE id = $1",
+        [ctx.id, :crypto.strong_rand_bytes(40)]
+      )
+
+      old_copy!(ctx.note.id)
+      assert_body_kept!(ctx)
+    end
+
+    test "NULL ciphertexts while the copy rewrites the row (key version out of step)", ctx do
+      Repo.query!(
+        "UPDATE notes SET content_ciphertext = NULL, crdt_state_ciphertext = NULL WHERE id = $1",
+        [ctx.id]
+      )
+
+      [[_, kv | _]] = ctx.before
+      Repo.query!("UPDATE note_bodies SET key_version = $2 WHERE note_id = $1", [ctx.id, kv + 1])
+      assert NoteBody.sync!([ctx.note.id], NoteBody.body_fields()) == 1
+      assert_body_kept!(ctx)
+    end
+  end
+
+  describe "R8(b1) schema prep" do
+    test "a nonce-only CRDT state write resets the head; nulling the ciphertext does not",
+         %{user: u, vault: v} do
+      note = write!(u, v, "a.md", "first")
+      id = Ecto.UUID.dump!(note.id)
+      head = String.duplicate("A", 43)
+      head_of = fn -> Repo.query!("SELECT crdt_head FROM notes WHERE id = $1", [id]).rows end
+
+      Repo.query!("UPDATE notes SET crdt_head = $2 WHERE id = $1", [id, head])
+      Repo.query!("UPDATE notes SET crdt_state_ciphertext = NULL WHERE id = $1", [id])
+      assert head_of.() == [[head]]
+
+      Repo.query!("UPDATE notes SET crdt_state_nonce = $2 WHERE id = $1", [
+        id,
+        <<1>> <> :crypto.strong_rand_bytes(12)
+      ])
+
+      assert head_of.() == [[nil]]
+    end
+
+    test "a note may drop its content ciphertext but not also its nonce", %{user: u, vault: v} do
+      note = write!(u, v, "a.md", "first")
+      id = Ecto.UUID.dump!(note.id)
+
+      assert {:ok, _} =
+               Repo.query("UPDATE notes SET content_ciphertext = NULL WHERE id = $1", [id],
+                 mode: :savepoint
+               )
+
+      assert {:error, %Postgrex.Error{postgres: %{code: :check_violation}}} =
+               Repo.query("UPDATE notes SET content_nonce = NULL WHERE id = $1", [id],
+                 mode: :savepoint
+               )
+    end
+  end
+
   describe "row-locked reads take the body from note_bodies" do
     test "get_note_for_update", %{user: u, vault: v} do
       note = write!(u, v, "a.md", "first")
@@ -450,6 +631,39 @@ defmodule Engram.Notes.NoteBodyRotationTest do
     u = Engram.Accounts.get_user!(u.id)
     assert {:ok, %{content: "from bodies"}} = Notes.get_note(u, v, "r.md")
   end
+
+  test "R8(b1): rotation writes the rewrapped body, not a copy of notes",
+       %{user: u, vault: v, note: note} do
+    Engram.Notes.NoteBodyWriteTest.stale_notes_body!()
+    assert :ok = UserDekRotation.rotate_user(u.id)
+    assert [[<<0>>]] = content_in_notes(note.id)
+    DekCache.invalidate_all()
+    u = Engram.Accounts.get_user!(u.id)
+    assert {:ok, %{content: "from notes"}} = Notes.get_note(u, v, "r.md")
+  end
+
+  test "R8(b1): a resumed rotation keeps a body already rotated, whatever notes holds",
+       %{user: u, vault: v, note: note} do
+    new_dek = Engram.Test.FixedDekProvider.install!()
+    aad = Crypto.aad_for_row(:notes, :content, note.id)
+    {ct, nonce} = Envelope.encrypt("rotated by the crashed run", new_dek, aad)
+    id = Ecto.UUID.dump!(note.id)
+
+    # The crashed run rewrapped the body; `notes` still holds the old copy.
+    Repo.query!("UPDATE note_bodies SET content_ct = $2 WHERE note_id = $1", [
+      id,
+      Envelope.merge(nonce, ct)
+    ])
+
+    assert :ok = UserDekRotation.rotate_user(u.id)
+    DekCache.invalidate_all()
+    u = Engram.Accounts.get_user!(u.id)
+    assert {:ok, %{content: "rotated by the crashed run"}} = Notes.get_note(u, v, "r.md")
+  end
+
+  defp content_in_notes(id),
+    do:
+      Repo.query!("SELECT content_ciphertext FROM notes WHERE id = $1", [Ecto.UUID.dump!(id)]).rows
 
   test "rotation keeps note_bodies in step", %{user: u, vault: v} do
     assert :ok = UserDekRotation.rotate_user(u.id)
