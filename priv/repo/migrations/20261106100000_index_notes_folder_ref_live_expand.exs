@@ -10,12 +10,14 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderRefLiveExpand do
   `:exclude` path), as index-only scans over a vault's live notes. The
   `folder_ref_id` twin of `notes_folder_live` (20261105150200), INCLUDE
   `(id, user_id)` for the same reason (`user_id`: the RLS policy reads it).
-  No reader uses it yet: this is the expand step.
+  No reader uses it yet: this is the expand step. `folders_release_refs`
+  (20261106100200) looks up a folder row's live notes on it.
 
   `notes_folder_ref (vault_id, folder_ref_id)` (20261029000600) stays: it is
-  not partial on purpose (the foreign key's `ON DELETE SET NULL` action and
-  `folders_release_refs` look references up with no liveness predicate) and
-  not covering, so a filter on it reads one heap block per match.
+  not partial on purpose (the foreign key's `ON DELETE SET NULL` action looks
+  references up with no liveness predicate), so a lookup of LIVE notes on it
+  also reads every trashed note and rename tombstone that names the folder,
+  and it is not covering, so a filter on it reads one heap block per match.
 
   Write cost: one more entry on a non-HOT note write; `folder_ref_id` is
   already indexed (and `notes_recent_index` makes every content write

@@ -20,7 +20,9 @@ defmodule Engram.Repo.NoteFilterIndexMigrationsTest do
     {"20261105150100_index_notes_effective_dates_expand.exs",
      ~w(notes_eff_updated_live notes_eff_created_live)},
     {"20261105150200_index_notes_folder_live_expand.exs", ~w(notes_folder_live)},
-    {"20261106100100_index_notes_folder_ref_live_expand.exs", ~w(notes_folder_ref_live)}
+    {"20261106100000_index_notes_folder_ref_live_expand.exs", ~w(notes_folder_ref_live)},
+    {"20261106100100_index_attachments_folder_ref_live_expand.exs",
+     ~w(attachments_folder_ref_live)}
   ]
 
   defp load(file) do
