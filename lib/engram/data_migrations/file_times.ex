@@ -39,9 +39,10 @@ defmodule Engram.DataMigrations.FileTimes do
   cluster node for `FileTime.twin_rounding/0` (`Readiness.peers_report/4`,
   the gate `CompressionGate` uses); while any node is older (it floors) or
   unreachable, the pass walks nothing, resets the walks and stays open. `enabled?/0` is the
-  `file_times_backfill` service override (default on). Not re-verified;
-  contract bumps `version/0` to take one last clean walk before dropping
-  the doubles.
+  `file_times_backfill` service override (default on). Re-verified daily
+  (`reverify?/0`): a 0.75-or-older node that joins after close floors
+  twins again, and nothing else finds a 1 us drift. Contract bumps
+  `version/0` to take one last clean walk before dropping the doubles.
   """
   @behaviour Engram.DataMigration
 
@@ -73,11 +74,15 @@ defmodule Engram.DataMigrations.FileTimes do
   @impl true
   def name, do: "file_times"
 
-  # v2: `FileTime.to_at/1` rounds to the microsecond (0.74 and 0.75
-  # floored, leaving about a quarter of millisecond values dated 2004-2005
-  # or past 2038-01-19 one microsecond low). The re-walk rewrites them.
+  # v2: `FileTime.to_at/1` rounds to the microsecond. 0.74 and 0.75
+  # floored, leaving desktop sub-millisecond values one microsecond low
+  # about half the time (5 prod rows), and about a quarter of millisecond
+  # values dated 2004-2005 or past 2038-01-19. The re-walk rewrites them.
   @impl true
   def version, do: 2
+
+  @impl true
+  def reverify?, do: true
 
   @doc """
   Kill switch: the `file_times_backfill` service override (default on).
@@ -97,11 +102,17 @@ defmodule Engram.DataMigrations.FileTimes do
   # `batch:` overrides the window size, `max_fixed:` the per-walk cap.
   # `fleet:` overrides the `Readiness.peers_report/4` collaborators.
   def run_pass(opts) do
-    case Readiness.peers_report(FileTime, :twin_rounding, 1, Keyword.get(opts, :fleet, [])) do
+    case Readiness.peers_report(FileTime, :twin_rounding, 1, fleet_opts(opts)) do
       :ok -> walk_tables(opts)
       blocked -> wait_for_fleet(blocked)
     end
   end
+
+  # No `:global.sync/0` (as `CompressionGate`): the version question needs
+  # no global registry, and a sync stalls on a partition, holding the
+  # runner job and every migration after this one.
+  @doc false
+  def fleet_opts(opts), do: Keyword.merge([sync: fn -> :ok end], Keyword.get(opts, :fleet, []))
 
   # An older node (0.75 or before) floors every twin it writes, so a walk
   # that ran beside one could close over rows it floors later. No walking

@@ -48,7 +48,12 @@ defmodule Engram.Crypto.CompressionGate do
           | :peer_cannot_read
           | :peer_unreachable
           | :evaluation_failed
-  @type verdict :: {:allowed | :blocked, reason(), node() | nil}
+  @typedoc "What `evaluate/1` returns."
+  @type evaluated ::
+          {:allowed, :cluster_reads_format_1, nil}
+          | {:blocked, :members_missing | :peer_cannot_read | :peer_unreachable, node() | nil}
+  @typedoc "`evaluated/0`, or the fail-closed verdict when evaluating raised."
+  @type verdict :: evaluated() | {:blocked, :evaluation_failed, nil}
 
   @reasons [
     :cluster_reads_format_1,
@@ -82,7 +87,7 @@ defmodule Engram.Crypto.CompressionGate do
   `Readiness.rooms_reachable?/1` options (`:role`, `:query`, `:resolver`,
   `:self_ip`).
   """
-  @spec evaluate(keyword()) :: verdict()
+  @spec evaluate(keyword()) :: evaluated()
   def evaluate(opts \\ []) do
     peers = Keyword.get(opts, :peers, &Node.list/0).()
 

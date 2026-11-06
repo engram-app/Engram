@@ -313,4 +313,30 @@ defmodule Engram.DataMigrations.FileTimesTest do
 
     assert FileTimes.count_drift() |> Map.values() |> Enum.uniq() == [0]
   end
+
+  # A 0.75 node that joins after close floors twins again; the daily
+  # re-walk (`reverify?/0`) finds them and reopens the ledger.
+  test "a done ledger reopens when the re-verify walk finds drift", ctx do
+    t = 2_147_484_020.404
+    id = note!(ctx, "s.md", %{"mtime" => t})
+
+    Stream.repeatedly(fn -> DataMigrationsRunner.run(FileTimes) end)
+    |> Stream.take(20)
+    |> Enum.find(&(&1 in [:done, :skipped]))
+
+    assert Engram.DataMigrations.done?(FileTimes.name(), FileTimes.version())
+    assert FileTimes.reverify?()
+
+    set!(ctx, Note, id, mtime_at: DateTime.add(FileTime.normalize(t), -1, :microsecond))
+
+    capture_log(fn -> assert DataMigrationsRunner.run(FileTimes, true) == :more end)
+    refute Engram.DataMigrations.done?(FileTimes.name(), FileTimes.version())
+    assert [%{mtime_at: ~U[2038-01-19 03:20:20.404000Z]}] = rows(ctx, Note, mtime: :mtime_at)
+  end
+
+  test "the fleet gate never calls :global.sync/0 (it stalls on a partition)" do
+    assert FileTimes.fleet_opts([])[:sync].() == :ok
+    own = fn -> :called end
+    assert FileTimes.fleet_opts(fleet: [sync: own])[:sync] == own
+  end
 end
