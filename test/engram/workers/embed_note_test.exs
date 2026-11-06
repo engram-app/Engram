@@ -843,6 +843,8 @@ defmodule Engram.Workers.EmbedNoteTest do
       Enum.each(points, fn p ->
         payload = p["payload"]
         assert Map.has_key?(payload, "p")
+        # Every upserted point names its note row (R2, Engram#2263).
+        assert payload["n"] == String.replace(note.id, "-", "")
         refute Enum.any?(~w(text text_nonce title title_nonce), &Map.has_key?(payload, &1))
         refute Jason.encode!(payload) =~ "Classified"
       end)
