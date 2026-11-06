@@ -250,8 +250,8 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
 
   # R8 read switch: before `NoteSizes` is done the sweep aggregates every
   # note itself, and the body it sizes is the `note_bodies` one. A note whose
-  # `notes` ciphertext is NULL (the shape the R8 contract release leaves) still
-  # counts its stored bytes and its state.
+  # `notes` ciphertext no longer holds the body (the shape the R8 contract
+  # release leaves) still counts its stored bytes and its state.
   test "the wide path sizes bodies from note_bodies, not the notes copy", ctx do
     %{user: user, vault: vault} = ctx
     refute Engram.DataMigrations.NoteSizes.done?()

@@ -273,8 +273,9 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
     end
 
     # R8 read switch: the legacy body is found and read in `note_bodies`. A
-    # note whose `notes` ciphertext is NULL (the R8 contract shape; the nonce
-    # columns stay) is still re-encoded, and the body copy is rewritten.
+    # note whose `notes` ciphertext no longer holds the body (the R8 contract
+    # shape; the nonce columns stay) is still re-encoded, and the body copy
+    # is rewritten.
     test "re-encodes a legacy body from note_bodies, not the notes copy", %{user: u, vault: v} do
       note = legacy_note!(u, v, "split.md", @big)
       seed_crdt_state!(u, note, @big <> "state")
