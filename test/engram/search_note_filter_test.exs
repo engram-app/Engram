@@ -642,6 +642,7 @@ defmodule Engram.SearchNoteFilterTest do
       refute FilterId.uuid(look_alike.id) in any
       assert tenant_keys(filter["must"]) == {true, true}
       refute inspect(filter) =~ "folder_hmac"
+      refute inspect(filter) =~ ~s("f")
     end
   end
 
