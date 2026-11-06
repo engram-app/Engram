@@ -278,7 +278,7 @@ defmodule Engram.Crypto.AadRebind do
         )
 
       if count == 1 do
-        _ = NoteBody.sync!(id, [:content_ciphertext])
+        _ = NoteBody.put!({id, content_ciphertext: content_ct, content_nonce: content_n})
         :ok
       else
         :stale

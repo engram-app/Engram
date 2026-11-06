@@ -385,7 +385,10 @@ defmodule Engram.Workers.BackfillCrdtState do
         set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
       )
 
-    _ = if count > 0, do: NoteBody.sync!(note_id, [:crdt_state_ciphertext])
+    _ =
+      if count > 0,
+        do: NoteBody.put!({note_id, crdt_state_ciphertext: ct, crdt_state_nonce: nonce})
+
     count
   end
 

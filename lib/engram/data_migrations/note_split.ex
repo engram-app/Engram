@@ -9,7 +9,8 @@ defmodule Engram.DataMigrations.NoteSplit do
   The core columns are the trigger's own work: a pass touches `kind`
   (`SET kind = kind`), which `notes_derive_core_keys` lists, so each row is
   derived by exactly the code that derives new writes. A missing body row is
-  inserted by `NoteBody.sync!/3`, the app's one body writer. `seq` and
+  inserted by `NoteBody.sync!/3`, which never copies a NULL `notes`
+  ciphertext over a body. `seq` and
   `updated_at` are untouched: no sync feed or cache sees a change.
 
   A row needs work when its derived columns were never set (`is_folder` is
@@ -28,8 +29,9 @@ defmodule Engram.DataMigrations.NoteSplit do
   disk reads each, evicting the hot set) and did not reopen it once in 14 days
   of prod logs. It has nothing to find: `notes_derive_core_keys` is in the
   database, so every write fills the core columns from any release's code;
-  since the copy trigger's drop, every body write is `NoteBody.sync!/3`'s,
-  in every release from N on (the release floor N+1 requires), and no code
+  since the copy trigger's drop, every body write is `NoteBody`'s
+  (`put!/2` from R8(b1) on, `sync!/3` before), in every release from N on
+  (the release floor N+1 requires), and no code
   deletes a `note_bodies` row (the FK cascades with its note). A body row
   missing or out of step is sampled daily by `Engram.Bookkeeping.Canary`
   (`unfixed_ids/2`, `drift_ids/2`), not by this ledger. A full restore

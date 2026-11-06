@@ -596,7 +596,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   # an unchanged nonce is an unchanged envelope, and the R8 contract release
   # keeps writing the nonce columns. A `note_bodies` compare inside this
   # UPDATE would see the pre-wait body after a row-lock wait. Writers still
-  # write both copies: the `notes` columns here, the body by `sync!/3`.
+  # write both copies: the `notes` columns here, the body by `put!/2`.
   def write_row(name, id, {old_ct, old_nonce}, new_ct, new_nonce) do
     %{schema: schema, key: key, ct: ct, nonce: nonce} = Enum.find(@columns, &(&1.label == name))
 
@@ -607,6 +607,8 @@ defmodule Engram.Workers.ReencodeEnvelopes do
 
     from(r in schema, where: field(r, ^key) == ^id, where: ^cas)
     |> Repo.update_all(set: [{ct, new_ct}, {nonce, new_nonce}])
-    |> tap(fn {n, _} -> if schema == Note and n > 0, do: NoteBody.sync!(id, [ct]) end)
+    |> tap(fn {n, _} ->
+      if schema == Note and n > 0, do: NoteBody.put!({id, [{ct, new_ct}, {nonce, new_nonce}]})
+    end)
   end
 end

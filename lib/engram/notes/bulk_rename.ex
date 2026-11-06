@@ -82,12 +82,13 @@ defmodule Engram.Notes.BulkRename do
     :ok
   end
 
-  # A class that rewrites a body column (or the key version) keeps
-  # `note_bodies` in step, chunk by chunk, in the caller's transaction.
-  # (Below `update!/4`, and no alias, so the pinned `Repo.query!` line stays.)
+  # A class that rewrites a body column (or the key version) writes the
+  # values it set to `note_bodies`, chunk by chunk, in the caller's
+  # transaction. (Below `update!/4`, and no alias, so the pinned `Repo.query!`
+  # line stays.)
   defp sync_bodies(chunk, cols) do
     if Enum.any?(cols, &(&1 in [:dek_version | Engram.Notes.NoteBody.body_fields()])),
-      do: Engram.Notes.NoteBody.sync!(Enum.map(chunk, &elem(&1, 0)), cols)
+      do: Engram.Notes.NoteBody.put!(chunk)
   end
 
   defp sql_type(:tags_hmac), do: "bytea[]"
