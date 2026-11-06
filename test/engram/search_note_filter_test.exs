@@ -638,6 +638,8 @@ defmodule Engram.SearchNoteFilterTest do
                Enum.filter(filter["must"], &match?(%{"should" => [%{"key" => "n"} | _]}, &1))
 
       assert Enum.sort(any) == Enum.sort(Enum.map([top.id, sub.id], &FilterId.uuid/1))
+      assert tenant_keys(filter["must"]) == {true, true}
+      refute inspect(filter) =~ "folder_hmac"
     end
   end
 
