@@ -36,6 +36,7 @@ from helpers.vault import wait_for_content, write_note
 
 CRDT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound, not a latency assert
 MARKER = "EDIT-ON-HALF-DEAD-SOCKET"
+BASELINE_SETTLE = 10
 # The only reach into plugin privates: the live socket and the CRDT registry.
 _WS = f"{PLUGIN_PATH}.noteStream.ws"
 NO_PROBE = "no-probe"  # plugin predates unackedDocIds (<= 1.39.1)
@@ -61,10 +62,10 @@ async def _swallow_sends(cdp) -> None:
 
 
 async def _swallowed_for(cdp, note_id: str) -> int:
-    """Frames swallowed so far that carry `note_id` (heartbeats do not)."""
+    """crdt_msg frames swallowed so far that carry `note_id`."""
     return await cdp.evaluate(
         f"(() => ({_WS}?.swallowed ?? []).filter("
-        f"(f) => f.includes({json.dumps(note_id)})).length)()"
+        f"(f) => f.includes('\"crdt_msg\"') && f.includes({json.dumps(note_id)})).length)()"
     )
 
 
@@ -87,17 +88,21 @@ async def test_edit_sent_on_half_dead_socket_is_redelivered_after_rejoin(
     note_id = await cdp_a.wait_for_note_id_for_path(path, timeout=CRDT_TIMEOUT)
     await cdp_a.wait_for_stream_connected()
 
-    # Baseline: the doc must be acked before the edit, so "unacked" later
-    # proves the edit's frame was lost (a receipt-less doc also reads unacked).
-    deadline = time.monotonic() + CRDT_TIMEOUT
-    while True:
+    # Baseline: let the doc settle to acked so "unacked" later means the edit's
+    # frame was lost. Bounded: a live-only first push may never record a
+    # receipt, and the base is already proven on server and B above. The oracle
+    # is the swallowed frame plus the server lacking the marker, not this wait.
+    deadline = time.monotonic() + BASELINE_SETTLE
+    while time.monotonic() < deadline:
         unacked = await _unacked(cdp_a)
         if unacked != NOT_READY and not (
             isinstance(unacked, list) and note_id in unacked
         ):
             break
-        assert time.monotonic() < deadline, f"base never acked on A: {unacked!r}"
         await asyncio.sleep(0.5)
+    else:
+        unacked = await _unacked(cdp_a)
+        assert unacked != NOT_READY, "crdt registry never became ready on A"
     supported = unacked != NO_PROBE
 
     await _swallow_sends(cdp_a)
