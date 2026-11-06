@@ -1030,28 +1030,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           end
 
         {"POST", "/collections/engram_notes/points/scroll"} ->
-          if hook = Agent.get(store, & &1.on_scroll), do: hook.()
-
-          # The whole filter is evaluated, as Qdrant would: a heal whose
-          # filter hides a point layout must not pass here by accident.
-          # By id, or the done check's v5 points without `n` (every key indexed).
-          filter = body["filter"]
-
-          assert Enum.any?(filter["must"] || [], &Map.has_key?(&1, "has_id")) or
-                   filter["must"] == [%{"is_empty" => %{"key" => "n"}}]
-
-          # Paged as Qdrant pages: id order, from `offset`, `limit` points,
-          # and the next id as `next_page_offset`.
-          matching =
-            for(
-              {id, payload} <- Enum.sort(Agent.get(store, & &1.points)),
-              filter?(id, payload, filter),
-              body["offset"] == nil or id >= body["offset"],
-              do: %{"id" => id, "payload" => Map.take(payload, body["with_payload"])}
-            )
-
-          {page, rest} = Enum.split(matching, body["limit"] || length(matching))
-          %{"points" => page, "next_page_offset" => if(rest == [], do: nil, else: hd(rest)["id"])}
+          fake_scroll(store, body)
 
         _other ->
           true
@@ -1060,5 +1039,30 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
     |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => result, "status" => "ok"}))
+  end
+
+  defp fake_scroll(store, body) do
+    if hook = Agent.get(store, & &1.on_scroll), do: hook.()
+
+    # The whole filter is evaluated, as Qdrant would: a heal whose
+    # filter hides a point layout must not pass here by accident.
+    # By id, or the done check's v5 points without `n` (every key indexed).
+    filter = body["filter"]
+
+    assert Enum.any?(filter["must"] || [], &Map.has_key?(&1, "has_id")) or
+             filter["must"] == [%{"is_empty" => %{"key" => "n"}}]
+
+    # Paged as Qdrant pages: id order, from `offset`, `limit` points,
+    # and the next id as `next_page_offset`.
+    matching =
+      for(
+        {id, payload} <- Enum.sort(Agent.get(store, & &1.points)),
+        filter?(id, payload, filter),
+        body["offset"] == nil or id >= body["offset"],
+        do: %{"id" => id, "payload" => Map.take(payload, body["with_payload"])}
+      )
+
+    {page, rest} = Enum.split(matching, body["limit"] || length(matching))
+    %{"points" => page, "next_page_offset" => if(rest == [], do: nil, else: hd(rest)["id"])}
   end
 end
