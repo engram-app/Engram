@@ -751,10 +751,18 @@ defmodule Engram.Folders.Rows do
   Soft-deletes the live rows at `folders` and every descendant, stamping
   `op_id` (the undo id, nil for a plain delete). Returns how many rows.
 
-  A row that still has a live note or attachment pointing at it, and every
-  ancestor of such a row, is left alone: the delete's content legs commit in
-  their own transactions, so something written into the folder in between must
-  not end up attached to a deleted row. The next delete of the folder finishes it.
+  A row that still has a live note or attachment pointing at it, or a live
+  folder marker at its path, and every ancestor of such a row, is left alone:
+  the delete's content legs commit in their own transactions, so something
+  written into the folder in between must not end up attached to a deleted
+  row. The next delete of the folder finishes it. Every writer takes the
+  vault row lock this takes first, so what it counts is everything committed.
+
+  A marker counts like content (#2466 review, H2): a marker created after
+  the delete's scan would otherwise be left live over a deleted row, a folder
+  the tree still shows and no later delete or rename can find. Markers carry
+  no `folder_ref_id` (the previous release's folder counts would drop an
+  empty marker folder that had one), so they are matched by path hash.
   """
   @spec soft_delete(map(), Ecto.UUID.t(), [String.t()], Ecto.UUID.t() | nil) :: non_neg_integer()
   def soft_delete(user, vault_id, folders, op_id) do
@@ -769,7 +777,8 @@ defmodule Engram.Folders.Rows do
 
       rows ->
         ids = Enum.map(rows, & &1.id)
-        keep = with_ancestors(live_content_folders(ids), Map.new(rows, &{&1.id, &1.parent_id}))
+        live = MapSet.union(live_content_folders(ids), live_marker_folders(user, vault_id, rows))
+        keep = with_ancestors(live, Map.new(rows, &{&1.id, &1.parent_id}))
         doomed = Enum.reject(ids, &MapSet.member?(keep, &1))
 
         {n, _} =
@@ -799,6 +808,13 @@ defmodule Engram.Folders.Rows do
       )
 
     MapSet.new(Repo.all(notes) ++ Repo.all(attachments))
+  end
+
+  # Folder ids (among `rows`) whose path a live folder marker names.
+  defp live_marker_folders(user, vault_id, rows) do
+    hmacs = for %{full_path_hmac: h} when is_binary(h) <- rows, do: h
+    named = Engram.Notes.live_folder_marker_hmacs(user, vault_id, hmacs)
+    for %{id: id, full_path_hmac: h} <- rows, MapSet.member?(named, h), into: MapSet.new(), do: id
   end
 
   defp with_ancestors(set, parents) do
