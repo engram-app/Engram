@@ -18,7 +18,9 @@ defmodule Engram.DataMigrations.NoteSplit do
   one fleet walk on the maintenance pool on SaaS, a per-user walk on
   self-host. Each statement reads one window (#2276).
 
-  Readers keep using the old columns; nothing gates on this yet.
+  Readers take the body from `note_bodies` and fall back to the `notes`
+  columns per row for a note with no body row (`NoteBody`), so nothing gates
+  on this ledger: a self-hoster who skipped releases reads right while it runs.
 
   Not re-verified once done (`reverify?/0` stays `false`). The daily re-verify
   walked every notes window and de-TOASTed both bodies of every note for the

@@ -302,6 +302,41 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
     assert %Note{crdt_state_ciphertext: nil} = reload(user, note.id)
   end
 
+  # R8 read switch: whether a note has CRDT state is read from `note_bodies`;
+  # the seed UPDATE's fence stays on the locked `notes` row (its nonce, which
+  # the R8 contract release keeps writing). A NULL `notes` ciphertext over a
+  # live body state must neither select the note nor let the seed overwrite it.
+  test "seedable reads the state from note_bodies; the seed fence stays on notes", ctx do
+    %{user: user, vault: vault} = ctx
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "split.md", "content" => "BODY"}, actor: "api")
+
+    id = Ecto.UUID.dump!(note.id)
+
+    seedable? = fn ->
+      {:ok, any} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.exists?(where(BackfillCrdtState.seedable(), [n], n.id == ^note.id))
+        end)
+
+      any
+    end
+
+    Repo.query!("UPDATE notes SET crdt_state_ciphertext = NULL WHERE id = $1", [id])
+    refute seedable?.()
+
+    assert {:ok, 0} =
+             Repo.with_tenant(user.id, fn ->
+               BackfillCrdtState.write_seed(note.id, <<1, 2, 3>>, <<4, 5, 6>>)
+             end)
+
+    # Control: with the body state gone too, the note is seedable, so the
+    # refusal above is the body read and not some other predicate.
+    Repo.query!("UPDATE note_bodies SET crdt_ct = NULL WHERE note_id = $1", [id])
+    assert seedable?.()
+  end
+
   # A room bound on the NULL-state note before the seed holds an EMPTY doc. Left
   # resident, its first edit lands a tail on that empty lineage on top of the
   # seeded snapshot, and the next bind unions two lineages.

@@ -106,6 +106,9 @@ defmodule Engram.DataMigrations.EnvelopeFormatTest do
         )
       end)
 
+    # The app's writers keep `note_bodies` in step (`NoteBody.sync!/3`).
+    Engram.Fixtures.mirror_body!(note.id)
+
     assert :ok = perform_job(ReencodeEnvelopes, %{"user_id" => u.id})
     Repo.delete_all(Oban.Job)
     assert EnvelopeFormat.run_pass() == {:more, users: 1}

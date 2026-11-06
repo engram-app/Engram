@@ -280,7 +280,13 @@ defmodule Engram.Notes.NoteBodyWriteTest do
 
       {1, _} =
         Repo.with_tenant!(u.id, fn ->
-          ReencodeEnvelopes.write_row(:notes_content, note.id, raw.content_ciphertext, ct, nonce)
+          ReencodeEnvelopes.write_row(
+            :notes_content,
+            note.id,
+            {raw.content_ciphertext, raw.content_nonce},
+            ct,
+            nonce
+          )
         end)
 
       assert_in_step!(u.id)

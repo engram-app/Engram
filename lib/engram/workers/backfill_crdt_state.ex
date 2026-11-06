@@ -137,12 +137,17 @@ defmodule Engram.Workers.BackfillCrdtState do
   defp vault_job(user_id, vault_id),
     do: __MODULE__.new(%{"user_id" => user_id, "vault_id" => vault_id, "cursor" => @start_cursor})
 
-  @doc "Notes this worker seeds: live, NULL state, and no un-checkpointed tail."
+  @doc """
+  Notes this worker seeds: live, NULL state as every read sees it (from the
+  body row, `NoteBody.null?/1`), and no un-checkpointed tail.
+  """
   @spec seedable() :: Ecto.Query.t()
-  def seedable do
+  def seedable, do: where(live_without_tail(), ^NoteBody.null?(:crdt_state_ciphertext))
+
+  defp live_without_tail do
     from(n in Note,
       as: :note,
-      where: n.kind == "note" and is_nil(n.crdt_state_ciphertext) and is_nil(n.deleted_at),
+      where: n.kind == "note" and is_nil(n.deleted_at),
       where:
         not exists(from(l in CrdtUpdateLog, where: l.note_id == parent_as(:note).id, select: 1))
     )
@@ -362,7 +367,11 @@ defmodule Engram.Workers.BackfillCrdtState do
 
   # Re-asserts `seedable/0` in the UPDATE: the read in seed_note/2 and this
   # write are not atomic, so a note that gained state or a tail in between is
-  # left alone. Representation only: content/content_hash/version/seq are
+  # left alone. The state test here is the locked `notes` row's
+  # `crdt_state_nonce`, not the body read: a `note_bodies` subquery inside
+  # this UPDATE sees the pre-wait body after a row-lock wait (EvalPlanQual,
+  # `NoteBody` moduledoc), and the R8 contract release keeps writing the
+  # nonce columns for exactly these fences. Representation only: content/content_hash/version/seq are
   # untouched. Returns the row count. Caller must be inside the note owner's
   # `Repo.with_tenant/2`. Public only as a test seam for that fence.
   @doc false
@@ -370,7 +379,9 @@ defmodule Engram.Workers.BackfillCrdtState do
   def write_seed(note_id, ct, nonce) do
     {count, _} =
       Repo.update_all(
-        from(n in seedable(), where: n.id == ^note_id),
+        from(n in live_without_tail(),
+          where: n.id == ^note_id and is_nil(n.crdt_state_nonce)
+        ),
         set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
       )
 

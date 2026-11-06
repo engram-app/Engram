@@ -60,6 +60,9 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
     tenant!(user, fn ->
       Repo.update_all(from(n in Note, where: n.id == ^note.id), set: [crdt_head: "warm"])
     end)
+
+    # The app's writers keep `note_bodies` in step (`NoteBody.sync!/3`).
+    Engram.Fixtures.mirror_body!(note.id)
   end
 
   defp seed_tail!(user, vault, note, update) do
@@ -264,6 +267,43 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
         )
       end)
 
+      Engram.Fixtures.mirror_body!(note.id)
+
+      refute ReencodeEnvelopes.legacy_rows?(u.id)
+    end
+
+    # R8 read switch: the legacy body is found and read in `note_bodies`. A
+    # note whose `notes` ciphertext is NULL (the R8 contract shape; the nonce
+    # columns stay) is still re-encoded, and the body copy is rewritten.
+    test "re-encodes a legacy body from note_bodies, not the notes copy", %{user: u, vault: v} do
+      note = legacy_note!(u, v, "split.md", @big)
+      seed_crdt_state!(u, note, @big <> "state")
+      id = Ecto.UUID.dump!(note.id)
+
+      first_bytes = fn ->
+        %{rows: [row]} =
+          Repo.query!(
+            "SELECT substring(content_ct FROM 1 FOR 1), substring(crdt_ct FROM 1 FOR 1) FROM note_bodies WHERE note_id = $1",
+            [id]
+          )
+
+        row
+      end
+
+      assert first_bytes.() == [<<0>>, <<0>>]
+
+      Repo.query!(
+        # `notes_kind_shape_check` keeps a note's content NOT NULL, so the
+        # content copy is a bare 16-byte tag-sized junk value instead.
+        "UPDATE notes SET content_ciphertext = '\\xdeadbeefdeadbeefdeadbeefdeadbeef', crdt_state_ciphertext = NULL WHERE id = $1",
+        [id]
+      )
+
+      assert ReencodeEnvelopes.legacy_rows?(u.id)
+      assert :ok = run(u)
+
+      assert first_bytes.() == [<<1>>, <<1>>]
+      assert {:ok, %{content: @big}} = Notes.get_note(u, v, "split.md")
       refute ReencodeEnvelopes.legacy_rows?(u.id)
     end
 
@@ -285,7 +325,7 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
                  ReencodeEnvelopes.write_row(
                    :notes_content,
                    note.id,
-                   stale.content_ciphertext,
+                   {stale.content_ciphertext, stale.content_nonce},
                    "x",
                    "y"
                  )
@@ -338,6 +378,8 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
           set: [content_ciphertext: corrupt]
         )
       end)
+
+      Engram.Fixtures.mirror_body!(note.id)
 
       log = capture_log(fn -> assert :ok = run(u) end)
 
