@@ -548,16 +548,16 @@ defmodule Engram.Folders.Rows do
   without a row simply have nothing to rename here; `ensure/4` fills the new
   paths.
 
-  Returns `{:ok, merged}`: the source rows a merge folds away, NOT yet
-  retired. The caller retires them with `retire_merged/1` after it has
-  re-pointed the notes, in the same transaction: retiring first would make the
-  `folders_release_refs` trigger NULL every moved note's reference before the
-  note rewrite points it at the keeper, two writes per note (#2468 review, M1).
-  Only the stragglers (notes the cascade did not move) are released then.
+  The source rows a merge folds away are retired by `retire_later/2`: at
+  the end of the enclosing `with_deferred_retires/1` (every REST and MCP
+  folder move, through `Folders.atomic/1`), after the notes AND attachments
+  have been re-pointed; at once with no such owner. Retiring before the moves
+  would make the `folders_release_refs` trigger NULL every moved row's
+  reference and the move write it again: two writes per row (#2468 reviews).
+  After them it releases only the stragglers.
   """
-  @spec rename(map(), Ecto.UUID.t(), String.t(), String.t()) ::
-          {:ok, [merged()]} | {:error, term()}
-  def rename(_user, _vault_id, same, same), do: {:ok, []}
+  @spec rename(map(), Ecto.UUID.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def rename(_user, _vault_id, same, same), do: :ok
 
   def rename(_user, _vault_id, old_folder, new_folder)
       when old_folder == "" or new_folder == "",
@@ -608,7 +608,7 @@ defmodule Engram.Folders.Rows do
       ctx = %{user_id: user.id, vault_id: vault_id, dek: dek, fk: fk}
 
       case subtree(user, vault_id, [old_folder]) do
-        [] -> {:ok, []}
+        [] -> :ok
         rows -> move_subtree(ctx, rows, new_folder)
       end
     end
@@ -650,7 +650,7 @@ defmodule Engram.Folders.Rows do
 
         rest = for r <- rows, r.id != root.id, Map.has_key?(paths, r.id), do: {r.id, paths[r.id]}
         write_path_hmacs(ctx, rest)
-        {:ok, []}
+        :ok
     end
   end
 
@@ -706,12 +706,9 @@ defmodule Engram.Folders.Rows do
     :ok
   end
 
-  @typedoc "A source row a merge folds into `keeper`, still to be retired."
-  @type merged() :: {%{id: Ecto.UUID.t(), explicit: boolean()}, Ecto.UUID.t()}
-
   # The target of the rename already has a live row: fold each source row into
   # the row that holds its new place, or move it there. The rows that lose
-  # their place are returned, not retired (see `rename/4`).
+  # their place are retired by `retire_later/2` (see `rename/4`).
   defp merge_subtree(ctx, rows, paths, root_id, occupant, new_parent) do
     {_placed, merged} =
       Enum.reduce(rows, {%{root_id => occupant}, []}, fn row, {placed, merged} ->
@@ -744,16 +741,57 @@ defmodule Engram.Folders.Rows do
         end
       end)
 
-    {:ok, Enum.reverse(merged)}
+    retire_later(ctx.user_id, Enum.reverse(merged))
   end
 
+  @retires :engram_folder_retires
+
   @doc """
-  Retires the rows `rename/4` folded away: each one's explicit flag moves to
-  its keeper, and it is soft-deleted. Call it in the rename's transaction,
-  after the notes are re-pointed.
+  Runs `fun` (returning `{:ok, _}` or `{:error, _}`) as the owner of the
+  merge retires `rename/4` queues: on `{:ok, _}` they run last, each in its
+  user's tenant block, inside the caller's transaction (a rollback undoes
+  them); on an error they are dropped with the rest. Nested calls join the
+  outer owner. The `Repo.after_commit/1` pattern, for a step that must stay
+  inside the transaction.
   """
-  @spec retire_merged([merged()]) :: :ok
-  def retire_merged(merged), do: Enum.each(merged, fn {row, keeper} -> retire(row, keeper) end)
+  @spec with_deferred_retires((-> {:ok, term()} | {:error, term()})) ::
+          {:ok, term()} | {:error, term()}
+  def with_deferred_retires(fun) do
+    if Process.get(@retires) do
+      fun.()
+    else
+      Process.put(@retires, [])
+
+      try do
+        with {:ok, _} = ok <- fun.() do
+          @retires
+          |> Process.get()
+          |> Enum.reverse()
+          |> Enum.each(fn {user_id, merged} ->
+            Repo.with_tenant!(user_id, fn -> retire_merged(merged) end)
+          end)
+
+          ok
+        end
+      after
+        Process.delete(@retires)
+      end
+    end
+  end
+
+  # Queued for the owner, or retired at once (inside the caller's tenant block).
+  defp retire_later(_user_id, []), do: :ok
+
+  defp retire_later(user_id, merged) do
+    case Process.get(@retires) do
+      nil -> retire_merged(merged)
+      queue -> Process.put(@retires, [{user_id, merged} | queue])
+    end
+
+    :ok
+  end
+
+  defp retire_merged(merged), do: Enum.each(merged, fn {row, keeper} -> retire(row, keeper) end)
 
   # `row` lost its place to `keeper`: its explicit flag moves over, it is retired.
   defp retire(row, keeper) do

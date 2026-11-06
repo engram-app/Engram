@@ -79,9 +79,11 @@ defmodule Engram.Folders do
     # back, leaving clients with delete/upsert events that never persisted.
     # `transaction_after_commit`: the legs' after_commit work (a delete's room
     # stops) waits for THIS commit, not each leg's nested block.
+    # `Rows.with_deferred_retires/1`: a merge's source folder rows are retired
+    # after BOTH legs have moved their rows, inside this transaction (#2468).
     Broadcast.deferred(fn ->
       Repo.transaction_after_commit(fn ->
-        case fun.() do
+        case Rows.with_deferred_retires(fun) do
           {:ok, result} -> result
           {:error, reason} -> Repo.rollback(reason)
         end

@@ -260,22 +260,31 @@ defmodule Engram.Folders.FolderRefReleaseTest do
       assert FolderRows.ref("notes", gone.id) == gone_row
     end
 
-    # M1: a merge rename used to retire the source row BEFORE its bulk update
-    # moved the notes, so the trigger NULLed every moved note and the update
-    # re-pointed it: 40 row versions for 20 notes (measured). The source rows
-    # are now retired after the notes move: one write each. Red before.
-    test "a merge rename of 20 notes writes 20 note rows, not 40", %{user: u, vault: v} do
+    # M1: a merge rename used to retire the source row BEFORE its moves, so
+    # the trigger NULLed every moved row and the move wrote it again: 40 note
+    # row versions for 20 notes (46f61399b), then 20 attachment row versions
+    # for 10 attachments once the retire sat between the notes and the
+    # attachments leg (219907090). The source rows are now retired after both
+    # legs: one write per moved row. Red at both.
+    test "a merge rename of 20 notes and 10 attachments writes each row once", %{
+      user: u,
+      vault: v
+    } do
       moved = for i <- 1..20, do: note!(u, v, "Src/n#{i}.md")
+      atts = for i <- 1..10, do: attachment!(u, v, "Src/a#{i}.png")
       src = FolderRows.ref("notes", hd(moved).id)
       {_gone, keeper} = emptied_folder!(u, v, "Dst")
 
-      before = xact("notes")
+      before = {xact("notes"), xact("attachments")}
       assert {:ok, _} = rest_call!(fn -> Engram.Folders.rename(u, v, "Src", "Dst") end)
-      {_, _, updates} = delta(xact("notes"), before)
+      {_, _, note_updates} = delta(xact("notes"), elem(before, 0))
+      {_, _, att_updates} = delta(xact("attachments"), elem(before, 1))
 
-      assert updates == 20
+      assert note_updates == 20
+      assert att_updates == 10
       assert FolderRows.row(src).deleted_at
       for n <- moved, do: assert(FolderRows.ref("notes", n.id) == keeper)
+      for a <- atts, do: assert(FolderRows.ref("attachments", a.id) == keeper)
       refute u.id in drift_users()
     end
 
