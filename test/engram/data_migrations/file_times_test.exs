@@ -255,4 +255,62 @@ defmodule Engram.DataMigrations.FileTimesTest do
     assert [%{mtime_at: nil}] = rows(ctx, Note, mtime: :mtime_at)
     refute Engram.DataMigrations.done?(FileTimes.name(), FileTimes.version())
   end
+
+  # A 0.75-or-older node floors every twin it writes: the ledger must not
+  # close while one runs, and the walk that closes it must start after.
+  test "the ledger stays open while an old-build node is reported", ctx do
+    t = 2_147_484_020.404
+    id = note!(ctx, "s.md", %{"mtime" => t})
+    floored = DateTime.add(FileTime.normalize(t), -1, :microsecond)
+    set!(ctx, Note, id, mtime_at: floored)
+
+    old = [
+      peers: fn -> [:"engram@10.0.0.9"] end,
+      sync: fn -> :ok end,
+      multicall: fn _ -> [{:error, {:exception, :undef, []}}] end
+    ]
+
+    for _ <- 1..3, do: assert(FileTimes.run_pass(batch: 2, fleet: old) == {:more, rows: 0})
+    assert [%{mtime_at: ^floored}] = rows(ctx, Note, mtime: :mtime_at)
+
+    new = Keyword.put(old, :multicall, fn _ -> [{:ok, 1}] end)
+    capture_log(fn -> run_to_done(batch: 2, fleet: new) end)
+    assert [%{mtime_at: ~U[2038-01-19 03:20:20.404000Z]}] = rows(ctx, Note, mtime: :mtime_at)
+    assert FileTimes.run_pass(batch: 2, fleet: new) == :done
+  end
+
+  # Acceptance: all four columns, compared to the ROUNDED twin in Elixir;
+  # `count_drift/1` is the read-only prod verification (`bin/engram rpc`).
+  test "count_drift/1 counts each column's drifted twins; zero after the walk", ctx do
+    t = 2_147_484_020.404
+    low = DateTime.add(FileTime.normalize(t), -1, :microsecond)
+    id = note!(ctx, "n.md", %{"mtime" => t, "ctime" => t})
+    set!(ctx, Note, id, mtime_at: low, ctime_at: nil)
+
+    {:ok, att} =
+      Attachments.upsert_attachment(ctx.user, ctx.vault, %{
+        "path" => "a.png",
+        :content => "png",
+        "mtime" => t
+      })
+
+    {:ok, up} = Uploads.start(ctx.user, ctx.vault, %{path: "d.bin", size_bytes: 3, mtime: t})
+    set!(ctx, Attachment, att.id, mtime_at: low)
+    set!(ctx, Upload, up.id, mtime_at: low)
+
+    before = rows(ctx, Note, mtime: :mtime_at, ctime: :ctime_at)
+
+    assert FileTimes.count_drift(batch_size: 1) == %{
+             "notes.mtime" => 1,
+             "notes.ctime" => 1,
+             "attachments.mtime" => 1,
+             "attachment_uploads.mtime" => 1
+           }
+
+    assert rows(ctx, Note, mtime: :mtime_at, ctime: :ctime_at) == before
+
+    capture_log(fn -> run_to_done() end)
+
+    assert FileTimes.count_drift() |> Map.values() |> Enum.uniq() == [0]
+  end
 end

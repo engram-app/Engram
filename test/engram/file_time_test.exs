@@ -7,6 +7,7 @@ defmodule Engram.FileTimeTest do
   use ExUnitProperties
 
   alias Engram.FileTime
+  alias Engram.FileTimeFixtures
 
   test "seconds, fractional seconds and milliseconds give the same instant" do
     assert FileTime.to_at(1_776_072_500) == {:ok, ~U[2026-04-13 09:28:20.000000Z]}
@@ -19,26 +20,8 @@ defmodule Engram.FileTimeTest do
     assert FileTime.to_at(1_104_537_600.123) == {:ok, ~U[2005-01-01 00:00:00.123000Z]}
   end
 
-  # Real prod `notes.mtime` values (2026-11): desktop Obsidian's
-  # `stat.mtimeMs` carries sub-millisecond digits, which the plugin divides
-  # by 1000. Five floored 1 us low on 0.74/0.75; the other seven agree.
-  @prod_times [
-    {1_792_507_938.5950112, 595_011},
-    {1_792_374_456.8065336, 806_534},
-    {1_792_355_282.670638, 670_638},
-    {1_793_463_598.414629, 414_629},
-    {1_792_348_622.2113965, 211_397},
-    {1_793_434_092.091588, 91_588},
-    {1_792_744_305.7469757, 746_976},
-    {1_793_152_317.489393, 489_393},
-    {1_793_392_404.6805549, 680_555},
-    {1_792_152_782.1053593, 105_359},
-    {1_793_152_881.2996936, 299_694},
-    {1_793_504_975.8445764, 844_576}
-  ]
-
   test "prod desktop mtimes round to the microsecond; old and new twins serve the double" do
-    for {t, us} <- @prod_times do
+    for {t, us} <- FileTimeFixtures.prod_desktop_times() do
       {:ok, at} = FileTime.to_at(t)
       assert {DateTime.to_unix(at), at.microsecond} == {trunc(t), {us, 6}}, inspect(t)
 
@@ -48,7 +31,9 @@ defmodule Engram.FileTimeTest do
     end
 
     moved =
-      Enum.count(@prod_times, fn {t, us} -> floor(t * 1_000_000) |> rem(1_000_000) != us end)
+      Enum.count(FileTimeFixtures.prod_desktop_times(), fn {t, us} ->
+        floor(t * 1_000_000) |> rem(1_000_000) != us
+      end)
 
     assert moved == 5
   end

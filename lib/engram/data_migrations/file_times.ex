@@ -35,7 +35,10 @@ defmodule Engram.DataMigrations.FileTimes do
   NULLed (only those notes) and `ReconcileNotePayloads` is queued for its
   user, which rewrites only unstamped notes' points.
 
-  v2 re-walks for the rounding fix (`version/0`). `enabled?/0` is the
+  v2 re-walks for the rounding fix (`version/0`). A pass first asks every
+  cluster node for `FileTime.twin_rounding/0` (`Readiness.peers_report/4`,
+  the gate `CompressionGate` uses); while any node is older (it floors) or
+  unreachable, the pass walks nothing, resets the walks and stays open. `enabled?/0` is the
   `file_times_backfill` service override (default on). Not re-verified;
   contract bumps `version/0` to take one last clean walk before dropping
   the doubles.
@@ -46,6 +49,7 @@ defmodule Engram.DataMigrations.FileTimes do
 
   alias Engram.Backfill.IdWindows
   alias Engram.Backfill.TenantScan
+  alias Engram.Cluster.Readiness
   alias Engram.FileTime
   alias Engram.Logger.Metadata
   alias Engram.Workers.ReconcileNotePayloads
@@ -91,7 +95,33 @@ defmodule Engram.DataMigrations.FileTimes do
 
   @doc false
   # `batch:` overrides the window size, `max_fixed:` the per-walk cap.
+  # `fleet:` overrides the `Readiness.peers_report/4` collaborators.
   def run_pass(opts) do
+    case Readiness.peers_report(FileTime, :twin_rounding, 1, Keyword.get(opts, :fleet, [])) do
+      :ok -> walk_tables(opts)
+      blocked -> wait_for_fleet(blocked)
+    end
+  end
+
+  # An older node (0.75 or before) floors every twin it writes, so a walk
+  # that ran beside one could close over rows it floors later. No walking
+  # until the whole fleet rounds, and the walks start over, so every window
+  # of the walk that closes the ledger ran with no older node left.
+  defp wait_for_fleet({reason, node}) do
+    forget()
+
+    for {schema, _} <- @tables,
+        do: IdWindows.reset_walk("#{name()}:#{schema.__schema__(:source)}")
+
+    Logger.info(
+      "file times waiting for the fleet",
+      Metadata.with_category(:info, :data, reason: reason, peer: inspect(node))
+    )
+
+    {:more, rows: 0}
+  end
+
+  defp walk_tables(opts) do
     clean = :persistent_term.get(@clean, MapSet.new())
 
     open =
@@ -177,16 +207,8 @@ defmodule Engram.DataMigrations.FileTimes do
   # One window: read the rows' doubles and twins by primary key, compute the
   # wanted twins with `FileTime.normalize/1`, write only the drifted rows.
   defp heal(ids, %{repo: repo}, schema, pairs, tally) do
-    fields = [:id, :user_id | Enum.flat_map(pairs, &Tuple.to_list/1)]
-    # The probe subquery drops the uuid type: ids come back as 16 raw bytes.
-    rows =
-      from(r in schema, select: map(r, ^fields))
-      |> IdWindows.by_id(ids)
-      |> repo.all()
-      |> Enum.map(&%{&1 | id: Ecto.UUID.cast!(&1.id), user_id: Ecto.UUID.cast!(&1.user_id)})
-
     drift =
-      for row <- rows,
+      for row <- read_rows(repo, schema, pairs, ids),
           wanted = Map.new(pairs, fn {d, at} -> {at, FileTime.normalize(row[d])} end),
           not Enum.all?(pairs, fn {_, at} -> FileTime.same_at?(row[at], wanted[at]) end),
           do: {row, wanted}
@@ -207,6 +229,54 @@ defmodule Engram.DataMigrations.FileTimes do
 
     refresh_ms_payloads(repo, schema, pairs, fixed, tally)
     {length(written), length(written) < length(drift)}
+  end
+
+  # The window's id, user, doubles and twins, by primary key.
+  defp read_rows(repo, schema, pairs, ids) do
+    fields = [:id, :user_id | Enum.flat_map(pairs, &Tuple.to_list/1)]
+    # The probe subquery drops the uuid type: ids come back as 16 raw bytes.
+    from(r in schema, select: map(r, ^fields))
+    |> IdWindows.by_id(ids)
+    |> repo.all()
+    |> Enum.map(&%{&1 | id: Ecto.UUID.cast!(&1.id), user_id: Ecto.UUID.cast!(&1.user_id)})
+  end
+
+  @doc """
+  Read-only verification, for `bin/engram rpc`: per column
+  (`"notes.mtime"`, `"notes.ctime"`, `"attachments.mtime"`,
+  `"attachment_uploads.mtime"`), how many rows hold a twin that differs
+  from `FileTime.normalize/1` of their double, compared in Elixir (never
+  Postgres `numeric`, whose float8 cast shows digits the double does not
+  hold). Every tenant, one id window at a time, writes nothing. Expect all
+  zeros once the ledger is done. `batch_size:` overrides the window.
+  """
+  @spec count_drift(keyword()) :: %{String.t() => non_neg_integer()}
+  def count_drift(opts \\ []) do
+    for {schema, pairs} <- @tables, reduce: %{} do
+      acc ->
+        table = schema.__schema__(:source)
+        zero = Map.new(pairs, fn {d, _} -> {"#{table}.#{d}", 0} end)
+
+        {:ok, counts} =
+          IdWindows.reduce_all(
+            schema,
+            zero,
+            fn ids, %{repo: repo}, counts ->
+              {:cont, tally_drift(read_rows(repo, schema, pairs, ids), table, pairs, counts)}
+            end,
+            Keyword.put_new(opts, :batch_size, @batch)
+          )
+
+        Map.merge(acc, counts)
+    end
+  end
+
+  defp tally_drift(rows, table, pairs, counts) do
+    for row <- rows,
+        {d, at} <- pairs,
+        not FileTime.same_at?(row[at], FileTime.normalize(row[d])),
+        reduce: counts,
+        do: (counts -> Map.update!(counts, "#{table}.#{d}", &(&1 + 1)))
   end
 
   defp refresh_ms_payloads(repo, Engram.Notes.Note, pairs, fixed, tally) do

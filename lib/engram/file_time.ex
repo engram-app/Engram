@@ -63,6 +63,14 @@ defmodule Engram.FileTime do
   # fails in Postgres.
   @min_us -62_135_596_800_000_000
 
+  @doc """
+  The twin rounding this build writes: 1 = rounded to the microsecond
+  (`to_at/1`). 0.75 and older lack it and floored.
+  `Engram.DataMigrations.FileTimes` asks every peer before it closes.
+  """
+  @spec twin_rounding() :: 1
+  def twin_rounding, do: 1
+
   @doc "Whether `t` is in seconds (below 1e11 in magnitude), not milliseconds."
   @spec seconds?(number()) :: boolean()
   def seconds?(t) when is_number(t), do: abs(t) < @ms_from
