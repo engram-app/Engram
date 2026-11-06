@@ -77,6 +77,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   alias Engram.Accounts.User
   alias Engram.Backfill.TenantScan
+  alias Engram.Cluster.Capability
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
   alias Engram.Indexing
@@ -453,23 +454,16 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   defp missing_n_filter,
     do: %{must: [%{is_empty: %{key: @n_key}}], must_not: [%{is_empty: %{key: "u"}}]}
 
-  @erpc_timeout_ms 2_000
-
   @doc """
   True when every node of the cluster runs a release that writes `n`
-  (`PayloadV5.writes_n?/0` over `:erpc`, 2 s; an unreachable node or one
-  without it counts as old). Options (tests): `:peers` (0-arity, default
-  `Node.list/0`) and `:multicall` (fun of the node list, `:erpc.multicall/5`-shaped).
+  (`Engram.Cluster.Capability` over `PayloadV5.writes_n?/0`: every expected
+  member connected, so a just-booted node fails closed, and every peer
+  answering). Options as `Capability.evaluate/4`.
   """
   @spec cluster_writes_n?(keyword()) :: boolean()
-  def cluster_writes_n?(opts \\ []) do
-    nodes = [node() | Keyword.get(opts, :peers, &Node.list/0).()]
-    multicall = Keyword.get(opts, :multicall, &probe_writes_n/1)
-    nodes |> multicall.() |> Enum.all?(&match?({:ok, true}, &1))
-  end
-
-  defp probe_writes_n(nodes),
-    do: :erpc.multicall(nodes, Engram.Indexing.PayloadV5, :writes_n?, [], @erpc_timeout_ms)
+  def cluster_writes_n?(opts \\ []),
+    do:
+      Capability.evaluate(Engram.Indexing.PayloadV5, :writes_n?, &(&1 == true), opts) == :allowed
 
   # Every v5 point of the batch's notes the read shows without `n` gets it,
   # merged, in paced pages. A point missing from the read is not written: a

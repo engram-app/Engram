@@ -853,11 +853,28 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       # Two-page walk: begun with the old node, finished without it.
       orphans!(ctx, 257)
       refute NotePayloadStamps.run_pass(old_cluster()) == :done
-      refute NotePayloadStamps.run_pass(peers: fn -> [] end) == :done
+      refute NotePayloadStamps.run_pass(role: nil, query: nil, peers: fn -> [] end) == :done
 
       # The next walk, every node new from its start: done.
-      refute NotePayloadStamps.run_pass(peers: fn -> [] end) == :done
-      assert NotePayloadStamps.run_pass(peers: fn -> [] end) == :done
+      refute NotePayloadStamps.run_pass(role: nil, query: nil, peers: fn -> [] end) == :done
+      assert NotePayloadStamps.run_pass(role: nil, query: nil, peers: fn -> [] end) == :done
+    end
+
+    # A just-booted node in a rolling deploy, not yet joined to the old ones:
+    # `Node.list/0` is empty, but discovery still lists them. Not a fresh walk.
+    test "a walk begun before this node joined the cluster never closes the ledger", ctx do
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+      alone = [
+        role: "app",
+        query: "engram.internal",
+        resolver: fn _ -> ["10.0.0.1", "10.0.0.2"] end,
+        self_ip: "10.0.0.1",
+        peers: fn -> [] end
+      ]
+
+      refute NotePayloadStamps.run_pass(alone) == :done
+      assert NotePayloadStamps.run_pass(role: nil, query: nil, peers: fn -> [] end) == :done
     end
 
     # A walk cursor the previous release saved has an offset but no "fresh":
@@ -871,9 +888,9 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           "dirty" => false
         })
 
-      refute NotePayloadStamps.run_pass(peers: fn -> [] end) == :done
+      refute NotePayloadStamps.run_pass(role: nil, query: nil, peers: fn -> [] end) == :done
       # The next walk re-checks the cluster from its start: done.
-      assert NotePayloadStamps.run_pass(peers: fn -> [] end) == :done
+      assert NotePayloadStamps.run_pass(role: nil, query: nil, peers: fn -> [] end) == :done
     end
 
     test "an orphan point without n (no chunk row) does not hold the pass open", ctx do
