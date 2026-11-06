@@ -432,7 +432,8 @@ defmodule Engram.Notes do
   # transaction. Returns the folder's id (nil at the root): every note writer
   # that sets a path puts it in `folder_ref_id` in the same write, so nothing
   # depends on `notes_set_folder_ref` (kept only for the previous release).
-  # Tombstones (deleted rows, never read by folder) are left to the trigger.
+  # Tombstones do not set it: they are deleted rows, no reader looks at their
+  # reference, and an undelete (`move_note/5`) resolves its own.
   # Call it after the vault seq lock is taken, so two writers creating the same
   # new folder queue on that lock instead of racing for the unique index
   # (`Rows.ensure/4` is safe against that race anyway). The stored `folder_*`

@@ -18,6 +18,8 @@ defmodule Engram.Folders.WritersSetFolderRefTest do
   alias Engram.Attachments
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.Crypto.UserDekRotation
+  alias Engram.DataMigrations.FolderTable
   alias Engram.FolderRows
   alias Engram.Folders
   alias Engram.Notes
@@ -202,5 +204,78 @@ defmodule Engram.Folders.WritersSetFolderRefTest do
 
     assert {:ok, %{notes: 1, attachments: 1}} = app!(fn -> Folders.restore_op(u, v, op) end)
     assert assert_refs!(u, v) == 2
+  end
+
+  test "REST upsert by id: a live note revived from its tombstone at a new folder",
+       %{user: u, vault: v} do
+    n = note!(u, v, "Was/n.md")
+    :ok = app!(fn -> Notes.delete_note(u, v, n.path) end)
+
+    # The plugin's id-keyed rename: DELETE old, then POST new with the same id.
+    {:ok, _} =
+      app!(fn ->
+        Notes.upsert_note(
+          u,
+          v,
+          %{"id" => n.id, "path" => "Now/Here/n.md", "content" => "# T\n\nbody"},
+          actor: "api"
+        )
+      end)
+
+    assert FolderRows.ref("notes", n.id) == FolderRows.tree(u)["Now/Here"].id
+    assert assert_refs!(u, v) == 1
+  end
+
+  test "same-path rewrite of a legacy (empty-AAD) row keeps its reference",
+       %{user: u, vault: v} do
+    legacy = Engram.Fixtures.insert_note!(u, v, %{path: "Old/legacy.md", content: "# T\n\nv1"})
+    # The backfilled state a legacy row is in before its first rewrite.
+    FolderTable.run_pass(user_ids: [u.id])
+    assert FolderRows.ref("notes", legacy.id)
+
+    {:ok, _} =
+      app!(fn ->
+        Notes.upsert_note(u, v, %{"path" => "Old/legacy.md", "content" => "# T\n\nv2"},
+          actor: "api"
+        )
+      end)
+
+    # The rewrite re-encrypted the legacy row (its folder envelope included).
+    assert %{rows: [[2]]} =
+             Repo.query!("SELECT dek_version FROM notes WHERE id = $1", [dump(legacy.id)])
+
+    assert assert_refs!(u, v) == 1
+  end
+
+  test "DEK rotation re-keys every folder hash and keeps every reference" do
+    # Rotation decrypts the vault name, which the factory vault does not
+    # encrypt; a fresh user, as the setup's vault fills the plan's one slot.
+    {:ok, u} = Engram.Fixtures.user_with_dek_fixture()
+    {:ok, v, _} = Engram.Vaults.register_vault(u, "Rotation", Ecto.UUID.generate())
+    bypass = Bypass.open()
+    Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
+    on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
+
+    Bypass.stub(bypass, "POST", "/collections/engram_notes/points/scroll", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(
+        200,
+        Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => nil}})
+      )
+    end)
+
+    note!(u, v, "P/A/one.md")
+    note!(u, v, "P/A/B/two.md")
+    note!(u, v, "top.md")
+    attachment!(u, v, "P/pic.png")
+    {:ok, old_fk} = Crypto.dek_filter_key(u)
+
+    assert :ok = UserDekRotation.rotate_user(u.id)
+
+    u = Engram.Accounts.get_user_uncached(u.id)
+    {:ok, new_fk} = Crypto.dek_filter_key(u)
+    refute new_fk == old_fk
+    assert assert_refs!(u, v) == 4
   end
 end
