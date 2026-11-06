@@ -28,7 +28,10 @@ defmodule Engram.Folders.Rows do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Folders.Folder
+  alias Engram.Logger.Metadata
   alias Engram.Repo
+
+  require Logger
 
   # ---- keys and names (pure) ----------------------------------------------
 
@@ -777,8 +780,13 @@ defmodule Engram.Folders.Rows do
 
       rows ->
         ids = Enum.map(rows, & &1.id)
-        live = MapSet.union(live_content_folders(ids), live_marker_folders(user, vault_id, rows))
-        keep = with_ancestors(live, Map.new(rows, &{&1.id, &1.parent_id}))
+        content = live_content_folders(ids)
+        marked = live_marker_folders(user, vault_id, rows)
+        log_kept_by_marker(user, vault_id, MapSet.size(MapSet.difference(marked, content)))
+
+        keep =
+          with_ancestors(MapSet.union(content, marked), Map.new(rows, &{&1.id, &1.parent_id}))
+
         doomed = Enum.reject(ids, &MapSet.member?(keep, &1))
 
         {n, _} =
@@ -808,6 +816,22 @@ defmodule Engram.Folders.Rows do
       )
 
     MapSet.new(Repo.all(notes) ++ Repo.all(attachments))
+  end
+
+  # A marker the delete's own marker leg did not remove (its path did not
+  # decrypt, or the membership fence skipped it as moved) keeps its folder:
+  # say so, by count only, rather than report a clean delete silently.
+  defp log_kept_by_marker(_user, _vault_id, 0), do: :ok
+
+  defp log_kept_by_marker(user, vault_id, count) do
+    Logger.warning(
+      "folder delete: rows kept for live folder markers",
+      Metadata.with_category(:warning, :sync,
+        user_id: user.id,
+        vault_id: vault_id,
+        kept_count: count
+      )
+    )
   end
 
   # Folder ids (among `rows`) whose path a live folder marker names.

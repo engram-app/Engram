@@ -324,6 +324,36 @@ defmodule Engram.Folders.FolderRefReleaseTest do
       assert FolderRows.row(t["F"].id).deleted_at
     end
 
+    # L3: a marker the delete's marker leg could not see (an undecryptable
+    # path, a fence skip) keeps the folder; that is logged, by count only.
+    test "rows kept for a live marker are logged with a count and no path or id", %{
+      user: u,
+      vault: v
+    } do
+      {:ok, m} = Notes.create_folder_marker(u, v, "F/Sub")
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          Repo.with_tenant!(u.id, fn -> Rows.soft_delete(u, v.id, ["F"], nil) end)
+        end)
+
+      assert log =~ "folder delete: rows kept for live folder markers"
+      assert log =~ "kept_count=1"
+      refute log =~ "Sub"
+      refute log =~ m.id
+    end
+
+    test "a delete that removed its markers logs nothing", %{user: u, vault: v} do
+      {:ok, _} = Notes.create_folder_marker(u, v, "F/Sub")
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, _} = Engram.Folders.delete(u, v, "F", recursive: true)
+        end)
+
+      refute log =~ "rows kept for live folder markers"
+    end
+
     test "a deleted marker does not keep its row", %{user: u, vault: v} do
       {:ok, m} = Notes.create_folder_marker(u, v, "F")
       Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [dump(m.id)])
