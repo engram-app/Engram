@@ -25,8 +25,10 @@ defmodule Engram.Folders.Rows do
 
   import Ecto.Query
 
+  alias Engram.Bookkeeping.Drain
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.DataMigrations.FolderTable
   alias Engram.Folders.Folder
   alias Engram.Repo
 
@@ -97,6 +99,26 @@ defmodule Engram.Folders.Rows do
   """
   @spec unreadable_attachment_stamp(binary()) :: nonempty_binary()
   def unreadable_attachment_stamp(path_nonce), do: <<0>> <> path_nonce
+
+  @doc """
+  True when `user_id`'s folder references can be read alone, with no fallback
+  to the stored path or folder hash: the `FolderTable` ledger is closed (every
+  row written before folder rows existed is pointed, every attachment stamped,
+  every marker has its row) and neither `:folder` drift index holds the user
+  (`Engram.Bookkeeping.Drain.drift?/2`: a note filed into a folder with no row,
+  an attachment whose reference was not computed from its current path; what a
+  previous-release writer leaves until the drain heals it).
+
+  Every folder reader asks this one question. While it is false (a self-hoster
+  whose upgrade is still backfilling, drift the drain has not reached) the
+  reader takes its path route, which is correct and only slower. Cost: one
+  statement probing two partial indexes that are empty in steady state (the
+  ledger flag is cached once closed). MUST run inside the caller's
+  `Repo.with_tenant/2`.
+  """
+  @spec refs_trusted?(Ecto.UUID.t()) :: boolean()
+  def refs_trusted?(user_id),
+    do: FolderTable.done?() and not Drain.drift?(:folder, user_id)
 
   @doc "`a.folder_ref_stamp = a.path_nonce` on the attachment bound as `:a`."
   @spec attachment_ref_current() :: Ecto.Query.dynamic_expr()

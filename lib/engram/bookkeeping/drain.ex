@@ -147,6 +147,21 @@ defmodule Engram.Bookkeeping.Drain do
   def probes(:payload), do: @payload
   def probes(:folder), do: @folder
 
+  @doc """
+  True when `user_id` has a row in one of `kind`'s drift indexes. One statement
+  in the caller's transaction (inside its `Repo.with_tenant/2`): the probes'
+  own text, so each arm is a read of a partial index that is empty in steady
+  state.
+  """
+  @spec drift?(:envelope | :link_keys | :payload | :folder, Ecto.UUID.t()) :: boolean()
+  # Sobelow cannot see that the statement is built only from this module's
+  # literal probes (never input).
+  # sobelow_skip ["SQL.Query"]
+  def drift?(kind, user_id) do
+    sql = kind |> probes() |> Enum.map_join(" UNION ALL ", fn {_table, sql} -> "(#{sql})" end)
+    Repo.query!(sql <> " LIMIT 1", [Ecto.UUID.dump!(user_id), nil]).num_rows > 0
+  end
+
   @doc "One tick. Returns the users handed to each repair."
   @spec run() :: %{
           envelope: non_neg_integer(),
