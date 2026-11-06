@@ -472,6 +472,13 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   defp marker(user_id), do: "payload_n_backfilled:" <> to_string(user_id)
 
   @doc """
+  Deletes the user's `n_backfilled?/1` marker. `maintenance_cursors` is not a
+  tenant table, so nothing cascades it: the account hard delete calls this.
+  """
+  @spec forget_marker(Ecto.UUID.t()) :: :ok
+  def forget_marker(user_id), do: Cursor.reset(marker(user_id))
+
+  @doc """
   Writes (or clears) the user's `n_backfilled?/1` marker: run at the end of
   the user's chain, a background job, never on the search path. One EXISTS
   that stops at the first note still behind.

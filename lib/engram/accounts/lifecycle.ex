@@ -252,8 +252,13 @@ defmodule Engram.Accounts.Lifecycle do
              case Repo.delete_all(from(u in User, where: u.id == ^user.id),
                     skip_tenant_check: true
                   ) do
-               {1, _} -> enqueue_vector_purge!(user.id)
-               {0, _} -> Repo.rollback(:already_deleted)
+               {1, _} ->
+                 # Not a tenant table, so the user-row delete cascades nothing here.
+                 :ok = Engram.Workers.ReconcileNotePayloads.forget_marker(user.id)
+                 enqueue_vector_purge!(user.id)
+
+               {0, _} ->
+                 Repo.rollback(:already_deleted)
              end
            end
          ) do
