@@ -558,7 +558,13 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   @erpc_timeout_ms 2_000
 
-  defp cluster_writes_n?(opts) do
+  @doc """
+  True when every node of the cluster runs a release that writes `n`
+  (`PayloadV5.writes_n?/0` over `:erpc`, 2 s; an unreachable node or one
+  without it counts as old). Options as `mark_backfilled/2`.
+  """
+  @spec cluster_writes_n?(keyword()) :: boolean()
+  def cluster_writes_n?(opts \\ []) do
     nodes = [node() | Keyword.get(opts, :peers, &Node.list/0).()]
     multicall = Keyword.get(opts, :multicall, &probe_writes_n/1)
     nodes |> multicall.() |> Enum.all?(&match?({:ok, true}, &1))
@@ -633,12 +639,20 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   lose their version stamp, so the sweep selects them again. Points with no
   chunk row are orphans: `OrphanSweep` reaps them, no `n` filter matches
   them, and they count as clean. `:clean` only when a whole walk, start to
-  end, requeued nobody; else how many users this page requeued.
+  end, requeued nobody AND began while every node wrote `n`
+  (`cluster_writes_n?/1`): a point an older node wrote behind the walk's
+  cursor is never seen, and the ledger's done is cached for good. Else how
+  many users this page requeued. Options as `mark_backfilled/2`.
   """
-  @spec requeue_unbackfilled() :: :clean | {:ok, non_neg_integer()} | {:error, term()}
-  def requeue_unbackfilled do
+  @spec requeue_unbackfilled(keyword()) :: :clean | {:ok, non_neg_integer()} | {:error, term()}
+  def requeue_unbackfilled(opts \\ []) do
     filter = missing_n_filter()
-    walk = Cursor.get(@requeue_cursor) || %{}
+
+    walk =
+      case Cursor.get(@requeue_cursor) do
+        %{"offset" => _} = walk -> walk
+        _ -> %{"fresh" => cluster_writes_n?(opts)}
+      end
 
     with {:ok, %{points: points, next_page_offset: next}} <-
            Qdrant.scroll(Qdrant.collection_name(),
@@ -658,11 +672,16 @@ defmodule Engram.Workers.ReconcileNotePayloads do
       # The end of the walk: the next call starts a fresh one.
       if next == nil,
         do: Cursor.reset(@requeue_cursor),
-        else: Cursor.put(@requeue_cursor, %{"offset" => next, "dirty" => dirty})
+        else:
+          Cursor.put(@requeue_cursor, %{
+            "offset" => next,
+            "dirty" => dirty,
+            "fresh" => walk["fresh"] == true
+          })
 
       cond do
         users != [] -> {:ok, TenantScan.enqueue_users(__MODULE__, users)}
-        next == nil and not dirty -> :clean
+        next == nil and not dirty and walk["fresh"] == true -> :clean
         true -> {:ok, 0}
       end
     end

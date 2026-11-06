@@ -45,10 +45,14 @@ defmodule Engram.DataMigrations.NotePayloadStamps do
   # next pass queues their users. Its one bounded page runs EVERY pass, not
   # only once the queue drained, so its walk advances while the backfill runs.
   @impl true
-  def run_pass do
+  def run_pass, do: run_pass([])
+
+  @doc "`run_pass/0` with the cluster probe's options (tests: `:peers`, `:multicall`)."
+  @spec run_pass(keyword()) :: :done | :more | {:more, keyword()}
+  def run_pass(opts) do
     users = ReconcileNotePayloads.enqueue_missing()
 
-    case ReconcileNotePayloads.requeue_unbackfilled() do
+    case ReconcileNotePayloads.requeue_unbackfilled(opts) do
       :clean when users == 0 -> :done
       :clean -> {:more, users: users}
       {:ok, requeued} -> {:more, users: users + requeued}
