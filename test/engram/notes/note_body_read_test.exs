@@ -119,6 +119,26 @@ defmodule Engram.Notes.NoteBodyReadTest do
       assert change.content == @content
     end
 
+    test "trash restore brings back the body row, not the notes copy", ctx do
+      {:ok, note} =
+        Notes.upsert_note(ctx.user, ctx.vault, %{"path" => "T/R.md", "content" => @content},
+          actor: "api"
+        )
+
+      op = Ecto.UUID.generate()
+
+      assert {:ok, %{notes: 1}} =
+               Engram.Folders.delete(ctx.user, ctx.vault, "T", recursive: true, op_id: op)
+
+      {:ok, plan} =
+        Notes.plan_restore(ctx.user, ctx.vault, op, DateTime.add(DateTime.utc_now(), -1, :day))
+
+      corrupt_notes_copy!(note, "content_ciphertext")
+
+      assert {:ok, %{restored: [_]}} = Notes.restore_notes(ctx.user, ctx.vault, op, plan.notes)
+      assert {:ok, %{content: @content}} = Notes.get_note(ctx.user, ctx.vault, "T/R.md")
+    end
+
     test "a note with no body row falls back to its notes columns", ctx do
       raw!("DELETE FROM note_bodies WHERE note_id = $1", ctx.note)
 

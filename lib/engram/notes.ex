@@ -7981,6 +7981,8 @@ defmodule Engram.Notes do
             n.id in ^ids and n.kind == "note" and n.delete_op_id == ^op_id and
               not is_nil(n.deleted_at)
         )
+        # The restored body is the one `note_bodies` holds (`NoteBody`).
+        |> NoteBody.select_note()
         |> Repo.all()
         |> restore_rows(user, vault)
         |> tap(&enqueue_restored_jobs(user, &1))
