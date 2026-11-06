@@ -101,7 +101,8 @@ defmodule Engram.FileTime do
   there is no double (after contract drops it).
   """
   @spec epoch(DateTime.t() | nil, number() | nil) :: number() | nil
-  def epoch(at, nil), do: at && seconds(at)
+  def epoch(nil, nil), do: nil
+  def epoch(%DateTime{} = at, nil), do: seconds(at)
 
   def epoch(_at, t), do: if(ms?(t), do: seconds(normalize(t)), else: t)
 

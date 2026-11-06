@@ -163,5 +163,12 @@ defmodule Engram.FileTimeTest do
       assert FileTime.ctime(row) === 5.0
       assert FileTime.mtime(%{mtime: 2.0}) === 2.0
     end
+
+    test "no time at all reads as nil, never false (a false would reach payloads)" do
+      assert FileTime.epoch(nil, nil) === nil
+      assert FileTime.mtime(%{mtime: nil, mtime_at: nil}) === nil
+      assert FileTime.mtime(%{}) === nil
+      assert FileTime.epoch(false, nil) === nil
+    end
   end
 end
