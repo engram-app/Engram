@@ -15,6 +15,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   import Mox
 
   alias Engram.Crypto
+  alias Engram.DataMigrations
   alias Engram.DataMigrations.NotePayloadStamps
   alias Engram.Indexing
   alias Engram.Indexing.PayloadV6
@@ -47,6 +48,8 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     bypass = Bypass.open()
     Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
     Bypass.stub(bypass, :any, :any, &fake_qdrant(&1, store))
+    # The `n` backfill is paced on the collection's health (`Rebuild.qdrant_pace/1`).
+    Engram.QdrantStub.stub_healthy(bypass)
 
     stub(Engram.MockEmbedder, :embed_texts, fn texts ->
       {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
@@ -764,6 +767,84 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       assert NotePayloadStamps.run_pass() == :done
     end
 
+    # A full page of orphans ahead of a live point: the walk must move past
+    # them (its offset persists across passes), or the pass never sees the
+    # live point and never closes.
+    test "a page of orphans does not hide a live point without n", ctx do
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      assert NotePayloadStamps.run_pass() == :done
+
+      for i <- 1..256 do
+        orphan = "00000000-0000-4000-8000-" <> String.pad_leading("#{i}", 12, "0")
+        Agent.update(ctx.store, &put_in(&1.points[orphan], %{"u" => FilterId.uuid(ctx.user.id)}))
+      end
+
+      id = hd(point_ids(ctx.stale))
+      Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.delete(p, "n") end))
+
+      # One page a pass: the orphans, then the live point.
+      assert {:more, users: 0} = NotePayloadStamps.run_pass()
+      assert {:more, users: 1} = NotePayloadStamps.run_pass()
+      assert nil in payload_versions(ctx)
+
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      # A fresh walk, start to end, finds only orphans: done.
+      assert NotePayloadStamps.run_pass() == :done
+    end
+
+    # A previous-release node re-upserts a note without `n` after the batch
+    # read (its pass NULLs then re-stamps the hash): the version stamp of a
+    # stamped-but-behind note must not vouch for it.
+    test "a stale note whose hash changed after the read is not version-stamped", ctx do
+      pre_n(ctx)
+      no_embed()
+
+      Agent.update(ctx.store, fn s ->
+        hook = fn ->
+          Repo.update_all(
+            from(n in Note, where: n.id == ^ctx.stale.id),
+            [set: [payload_hash: :crypto.strong_rand_bytes(32)]],
+            skip_tenant_check: true
+          )
+        end
+
+        %{s | on_scroll: hook}
+      end)
+
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+      versions =
+        Repo.all(
+          from(s in NoteIndexState,
+            where: s.user_id == ^ctx.user.id,
+            select: {s.note_id, s.payload_version}
+          ),
+          skip_tenant_check: true
+        )
+        |> Map.new()
+
+      assert versions[ctx.stale.id] == nil
+      assert versions[ctx.healthy.id] == 6
+      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
+    end
+
+    # On the search path: a keyed marker, never a scan of the user's notes.
+    test "n_backfilled? reads the marker the chain writes, not the notes", ctx do
+      DataMigrations.reopen(NotePayloadStamps.name(), NotePayloadStamps.version())
+
+      {2, _} =
+        Repo.update_all(
+          from(s in NoteIndexState, where: s.user_id == ^ctx.user.id),
+          [set: [payload_version: 6]],
+          skip_tenant_check: true
+        )
+
+      # Every note stamped, but no chain finished: not yet.
+      refute ReconcileNotePayloads.n_backfilled?(ctx.user.id)
+      :ok = ReconcileNotePayloads.mark_backfilled(ctx.user.id)
+      assert ReconcileNotePayloads.n_backfilled?(ctx.user.id)
+    end
+
     test "an orphan point without n (no chunk row) does not hold the pass open", ctx do
       orphan = Ecto.UUID.generate()
       Agent.update(ctx.store, &put_in(&1.points[orphan], %{"u" => FilterId.uuid(ctx.user.id)}))
@@ -959,15 +1040,18 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           assert Enum.any?(filter["must"] || [], &Map.has_key?(&1, "has_id")) or
                    filter["must"] == [%{"is_empty" => %{"key" => "n"}}]
 
-          %{
-            "points" =>
-              for(
-                {id, payload} <- Agent.get(store, & &1.points),
-                filter?(id, payload, filter),
-                do: %{"id" => id, "payload" => Map.take(payload, body["with_payload"])}
-              ),
-            "next_page_offset" => nil
-          }
+          # Paged as Qdrant pages: id order, from `offset`, `limit` points,
+          # and the next id as `next_page_offset`.
+          matching =
+            for(
+              {id, payload} <- Enum.sort(Agent.get(store, & &1.points)),
+              filter?(id, payload, filter),
+              body["offset"] == nil or id >= body["offset"],
+              do: %{"id" => id, "payload" => Map.take(payload, body["with_payload"])}
+            )
+
+          {page, rest} = Enum.split(matching, body["limit"] || length(matching))
+          %{"points" => page, "next_page_offset" => if(rest == [], do: nil, else: hd(rest)["id"])}
 
         _other ->
           true
