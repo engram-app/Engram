@@ -34,7 +34,17 @@ defmodule Engram.Workers.HealKeyAliases do
   alias Engram.Crypto.RotationGate
   alias Engram.DataMigrations.IndexVersions
   alias Engram.Notes
-  alias Engram.Notes.{FlatFields, Frontmatter, FrontmatterKeys, KeyAliases, NoteAttr, OkfFields}
+
+  alias Engram.Notes.{
+    FlatFields,
+    Frontmatter,
+    FrontmatterKeys,
+    KeyAliases,
+    NoteAttr,
+    NoteBody,
+    OkfFields
+  }
+
   alias Engram.Repo
   alias Engram.Workers.{EmbedNote, RebuildStaleNote}
 
@@ -98,9 +108,12 @@ defmodule Engram.Workers.HealKeyAliases do
     )
   end
 
+  # The content comes from `note_bodies` (`NoteBody`); the heal never reads
+  # the CRDT state.
   defp page(user_id, after_id) do
     q = stale() |> where([n], n.user_id == ^user_id) |> order_by([n], n.id) |> limit(@batch)
-    if after_id, do: where(q, [n], n.id > ^after_id), else: q
+    q = if after_id, do: where(q, [n], n.id > ^after_id), else: q
+    NoteBody.select_note(q, NoteBody.without_crdt())
   end
 
   defp heal(note, user, fk) do

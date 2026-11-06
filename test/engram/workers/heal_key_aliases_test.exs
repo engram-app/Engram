@@ -55,6 +55,21 @@ defmodule Engram.Workers.HealKeyAliasesTest do
     assert Map.delete(after_, :key_alias_version) == Map.delete(before, :key_alias_version)
   end
 
+  # R8 read switch: the heal parses the body `note_bodies` holds. With the
+  # `notes` copy overwritten (a raw write that skips `NoteBody.sync!/3`), a
+  # heal that read it could not decrypt the note and would leave it unhealed.
+  test "heals from the body row, not the notes copy", ctx do
+    affected = indexed(ctx, "---\n種類: 会議\n---\n# A\n", nil)
+
+    Repo.query!(
+      "UPDATE notes SET content_ciphertext = '\\xdeadbeefdeadbeefdeadbeefdeadbeef' WHERE id = $1",
+      [Ecto.UUID.dump!(affected.id)]
+    )
+
+    assert :ok = perform_job(HealKeyAliases, %{"user_id" => ctx.user.id})
+    assert row(affected).type_hmac == Crypto.hmac_field(ctx.fk, "会議")
+  end
+
   # Review of #2126: the heal re-encrypts type/description/resource. Written
   # under a DEK a rotation is replacing, they would be unreadable afterwards.
   test "snoozes while the user's DEK rotation holds the lock, writing nothing", ctx do
