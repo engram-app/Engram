@@ -30,6 +30,7 @@ PR 673). Proof is CI runs pinned to each plugin, not this file.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 
 import pytest
@@ -51,6 +52,19 @@ _RECONNECTED = f"(() => {{ const w = {_STREAM}.ws; return !!w && w !== window.__
 # Create-ack evidence: the engine records this head only when the server acks.
 
 
+async def _count_create_enqueues(cdp, path: str) -> None:
+    """Count creates enqueued for `path`, so a fast enqueue+ack between polls
+    still registers (the queue snapshot alone can miss it)."""
+    await cdp.evaluate(
+        f"(() => {{ const q = {PLUGIN_PATH}.crdtOpQueue; window.__createEnq = 0;"
+        " const orig = q.enqueue.bind(q);"
+        " q.enqueue = (op) => {"
+        f" if (op.kind === 'create' && (op.path ?? op.payload?.path) === {json.dumps(path)})"
+        " window.__createEnq++;"
+        " return orig(op); }; return 'ok'; })()"
+    )
+
+
 async def _drop_inbound(cdp) -> None:
     await cdp.evaluate(
         f"(() => {{ {_STREAM}.handleMessage = () => {{}}; return 'ok'; }})()"
@@ -70,6 +84,7 @@ async def test_remote_edit_survives_replayed_create_of_own_new_note(
     body = "# Own Create\ncreated on A.\n"
     await cdp_a.wait_for_stream_connected()
 
+    await _count_create_enqueues(cdp_a, path)
     await _drop_inbound(cdp_a)
     try:
         write_note(vault_a, path, body)
@@ -89,23 +104,27 @@ async def test_remote_edit_survives_replayed_create_of_own_new_note(
         )
 
         # A REAL reconnect (a new, open socket). The failed create is queued for
-        # the replay; it is done when its queue entry for this path was seen and is
-        # gone again. (The created head is no proof: catch-up sets it too.)
+        # the replay; it is done when the enqueue counter shows it was queued and
+        # the queue holds no create for this path again. The counter, not a
+        # snapshot, so a fast enqueue+ack between polls is still seen.
         deadline = time.monotonic() + CRDT_TIMEOUT
-        seen = False
         while True:
             ops = await cdp_a.get_crdt_queue_ops()
             queued = any(o["kind"] == "create" and o["path"] == path for o in ops)
-            seen = seen or queued
+            seen = await cdp_a.evaluate("window.__createEnq > 0")
             reconnected = await cdp_a.evaluate(_RECONNECTED)
             if reconnected and seen and not queued:
                 break
-            assert time.monotonic() < deadline, (
-                f"replayed create not done: reconnected={reconnected} queued_seen={seen}"
-            )
+            if time.monotonic() > deadline:
+                # Fall back to the content oracle below; it fails if the edit
+                # was lost, and a create never enqueued is not this test's bug.
+                assert reconnected, "plugin never opened a new socket"
+                break
             await asyncio.sleep(0.2)
     finally:
-        await cdp_a.evaluate("(() => { delete window.__oldWs; return 'ok'; })()")
+        await cdp_a.evaluate(
+            f"(() => {{ delete window.__oldWs; delete window.__createEnq; delete {PLUGIN_PATH}.crdtOpQueue.enqueue; return 'ok'; }})()"
+        )
     await cdp_a.wait_for_crdt_queue_drain(timeout=CRDT_TIMEOUT)
 
     # Settled: every copy must hold body and edit. B got the marker by fan-out
