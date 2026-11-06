@@ -330,6 +330,24 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
       ])
 
       refute ReencodeEnvelopes.legacy_rows?(u.id)
+
+      # Not silent: each discovery pass counts the drifted legacy rows.
+      id = "reencode-drifted-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        id,
+        [:engram, :reencode_envelopes, :drifted],
+        fn _e, m, _meta, _ -> send(test_pid, {:drifted, m}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(id) end)
+
+      log = capture_log(fn -> assert ReencodeEnvelopes.enqueue_missing() == 0 end)
+      assert_received {:drifted, %{count: 1}}
+      assert log =~ "legacy note bodies skipped"
+      refute log =~ note.id
     end
 
     test "a row changed since it was read is not overwritten (CAS)", %{user: u, vault: v} do

@@ -299,12 +299,35 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   runs inside each user's tenant context (`TenantScan`, #1349).
   """
   @spec enqueue_missing() :: non_neg_integer()
-  # Each per-user EXISTS is served by a partial index whose predicate is
-  # `legacy/1` (migration 20261103130200); `Engram.Bookkeeping.Drain` finds the
-  # drifted users from those indexes every few minutes.
+  # Each per-user EXISTS walks the user's rows; the `*_envelope_legacy`
+  # partial indexes (migration 20261103130200) serve `Engram.Bookkeeping.Drain`'s
+  # probes, not this query. A legacy note body that drifted from its `notes`
+  # row is not work (`legacy/1`), so without a count the migration would close
+  # over it silently: each pass counts them (`drifted_legacy/1`), warns and
+  # emits `[:engram, :reencode_envelopes, :drifted]`.
   def enqueue_missing do
-    TenantScan.flat_map_users(fn uid -> if any_legacy?(uid), do: [uid], else: [] end)
-    |> then(&TenantScan.enqueue_users(__MODULE__, &1))
+    rows = TenantScan.flat_map_users(fn uid -> [{uid, any_legacy?(uid), drifted_legacy(uid)}] end)
+    report_drifted(rows |> Enum.map(&elem(&1, 2)) |> Enum.sum())
+    TenantScan.enqueue_users(__MODULE__, for({uid, true, _} <- rows, do: uid))
+  end
+
+  defp drifted_legacy(user_id) do
+    for %{schema: Note} = column <- @columns, reduce: 0 do
+      acc ->
+        acc +
+          Repo.aggregate(where(note_legacy(column, :drifted), [r], r.user_id == ^user_id), :count)
+    end
+  end
+
+  defp report_drifted(0), do: :ok
+
+  defp report_drifted(count) do
+    Logger.warning(
+      "envelope re-encode: legacy note bodies skipped, their notes row disagrees (drift)",
+      Metadata.with_category(:warning, :crypto, table: :notes, total_count: count)
+    )
+
+    :telemetry.execute([:engram, :reencode_envelopes, :drifted], %{count: count}, %{})
   end
 
   @doc "True while the user still has a row this worker would re-encode."
@@ -334,19 +357,28 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   # (`write_row/5`) compares the `notes` nonce and could never pass, so the
   # row would be re-read and re-sealed on every pass. `NoteSplit`'s drift
   # report and `Bookkeeping.Canary` (`NoteBody.drift_ids/2`) surface it.
-  defp legacy(%{label: name, schema: Note, body: body, nonce: nonce}) do
+  defp legacy(%{schema: Note} = column), do: note_legacy(column, :work)
+
+  # `:work` the rows in step with their `notes` row, `:drifted` the others
+  # (counted by `enqueue_missing/0`, never re-encoded).
+  defp note_legacy(%{label: name, body: body, nonce: nonce}, kind) do
     nonce_expr = NoteBody.fields([nonce])[nonce]
 
-    work =
+    in_step =
+      if kind == :work,
+        do: dynamic([n], ^nonce_expr == field(n, ^nonce)),
+        else: dynamic([n], ^nonce_expr != field(n, ^nonce))
+
+    legacy =
       dynamic(
         [n, note_body: b],
         coalesce(b.envelope_legacy, true) and fragment("octet_length(?) = 12", ^nonce_expr) and
-          ^NoteBody.byte_length(body) > 16 and ^nonce_expr == field(n, ^nonce)
+          ^NoteBody.byte_length(body) > 16 and ^in_step
       )
 
     Note
     |> NoteBody.join()
-    |> where(^work)
+    |> where(^legacy)
     |> body_with_bound_aad(name)
   end
 
