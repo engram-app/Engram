@@ -970,6 +970,10 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert EmbedNote.max_wait_cap_seconds() == 1_800
       # The dedup window spans the longest ceiling, or a long burst forks a job.
       assert EmbedNote.settle_window_seconds() == 1_800 + 30
+      # A note's own grace is its own ceiling: a small note is not given a big one's.
+      assert EmbedNote.settle_window_seconds(nil) == 300 + 30
+      assert EmbedNote.settle_window_seconds(300) == 900 + 30
+      assert EmbedNote.settle_window_seconds(100_000) == 1_800 + 30
     end
 
     test "a re-insert inside the ceiling keeps the full settle window", %{note: note} do

@@ -410,6 +410,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
             chunker_version: n.chunker_version,
             embed_model: n.embed_model,
             updated_at: n.updated_at,
+            chunk_count: n.chunk_count,
             paid: exists(paid)
           })
           # Clears the budget-park flag with it: the #897 backoff must hold for
@@ -1578,16 +1579,17 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # how often the backstop is needed. `missed: true` is a note the event path
   # should have queued and did not: its content changed (or was never
   # indexed), no job is pending for it, its last write is older than the
-  # embed debounce can hold a job back (`EmbedNote.settle_window_seconds/0`),
+  # embed debounce can hold that note's job back (`EmbedNote.settle_window_seconds/1`),
   # and no `kick/0` explains this run. Version rebuilds, the dense backfill
   # (`dense_missing`) and the link re-extraction (`relink`) are expected work,
   # never missed. `relink` counts the same notes as `content_stale` and
   # `never_embedded` a second time, so sum notes without it. A boot sweep
   # (`meta.boot`) is not a kick: what it finds can be missed.
   defp report_found(rebuild_rows, embed_rows, queued, relinked, found) do
-    settled_before = DateTime.add(found.now, -EmbedNote.settle_window_seconds(), :second)
-
     missed? = fn row, reason ->
+      grace = EmbedNote.settle_window_seconds(Map.get(row, :chunk_count))
+      settled_before = DateTime.add(found.now, -grace, :second)
+
       reason in [:content_stale, :never_embedded] and not found.kick? and
         MapSet.member?(queued, row.id) and
         DateTime.compare(row.updated_at, settled_before) == :lt

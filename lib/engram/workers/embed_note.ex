@@ -1511,14 +1511,22 @@ defmodule Engram.Workers.EmbedNote do
   def max_wait_cap_seconds, do: @max_wait_cap
 
   @doc """
-  The longest a debounced embed can wait after an edit: the longest max-wait
-  ceiling (a big note's, `max_wait_seconds/1`) plus one settle. A note edited
-  longer ago than this with no job pending is one its write's event path
-  should already have queued.
+  The longest ANY debounced embed can wait after an edit: the longest
+  max-wait ceiling (a big note's, `max_wait_seconds/1`) plus one settle. The
+  dedup period, which must span every note's window.
   """
   @spec settle_window_seconds() :: number()
   def settle_window_seconds,
     do: max(settle_max_wait_seconds(), @max_wait_cap) + settle_seconds()
+
+  @doc """
+  The longest the debounce can hold back a note of `chunks` chunks: its own
+  ceiling (`max_wait_seconds/1`) plus one settle. A note edited longer ago
+  than this with no job pending is one its write's event path should
+  already have queued.
+  """
+  @spec settle_window_seconds(non_neg_integer() | nil) :: number()
+  def settle_window_seconds(chunks), do: max_wait_seconds(chunks) + settle_seconds()
 
   @doc """
   Inserts `new_debounced/3` through `Engram.Notes.Enqueue`, clamped to the
