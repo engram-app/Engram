@@ -516,7 +516,11 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   # Kill switch, then the Qdrant gate, then the points-per-minute bucket. A
   # denied page snoozes to the window's end (Hammer counts the denied hit
-  # too, so the window stays shut until it rolls: slower, never faster).
+  # too, so the window stays shut until it rolls).
+  # ponytail: a fixed window lets up to 2x the rate through across a window
+  # boundary (a full bucket at the end of one, another at the start of the
+  # next). Accepted: the disk and optimizer gate (`Rebuild.qdrant_pace/1`) is
+  # the real guard; a sliding window is the upgrade if 2x bursts ever show.
   defp n_gate(job, count) do
     with :ok <- if(backfill_enabled?(), do: :ok, else: {:snooze, @paused_snooze}),
          :ok <- Rebuild.qdrant_pace(job) do
