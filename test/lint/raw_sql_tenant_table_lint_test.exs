@@ -79,6 +79,13 @@ defmodule Engram.RawSqlTenantTableLintTest do
     # or on `Repo.maintenance()` (maintenance_all); never cross-tenant on the
     # app pool.
     "engram/data_migrations/folder_table.ex",
+    # Folders.Rows.point_attachments/2: the set-based attachment re-point both
+    # FolderTable and attachment restore share (a `FOR UPDATE SKIP LOCKED` CTE
+    # plus an `unnest` UPDATE, which Ecto cannot express). It filters by the
+    # caller's attachment ids only, so it is called solely inside the restore's
+    # `Repo.with_tenant/2` transaction or FolderTable's per-user pass on
+    # `Repo.maintenance()`; never cross-tenant on the app pool.
+    "engram/folders/rows.ex",
     # Crypto.UserDekRotation.sweep_folders: re-keys a user's folder rows and
     # rebuilds `full_path_hmac` with one `UPDATE folders ... FROM unnest(...)`
     # (each row its own value; Ecto has no schema for `folders` yet). Filters
