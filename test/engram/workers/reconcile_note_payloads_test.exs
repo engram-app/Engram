@@ -843,7 +843,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
         multicall: fn nodes ->
           Enum.map(
             nodes,
-            &if(&1 == old, do: {:error, {:exception, :undef, []}}, else: {:ok, true})
+            &if(&1 == old, do: {:ok, Engram.Indexing.PayloadV6.baseline()}, else: {:ok, 6})
           )
         end
       ]

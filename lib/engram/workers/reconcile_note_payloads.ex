@@ -78,7 +78,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   alias Engram.Accounts.User
   alias Engram.Backfill.IdWindows
   alias Engram.Backfill.TenantScan
-  alias Engram.Cluster.Capability
+  alias Engram.Cluster.Readiness
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
   alias Engram.Indexing
@@ -481,15 +481,15 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     do: %{must: [%{is_empty: %{key: @n_key}}], must_not: [%{is_empty: %{key: "u"}}]}
 
   @doc """
-  True when every node of the cluster runs a release that writes `n`
-  (`Engram.Cluster.Capability` over `PayloadV5.writes_n?/0`: every expected
-  member connected, so a just-booted node fails closed, and every peer
-  answering). Options as `Capability.evaluate/4`.
+  True when every node of the cluster runs a release that writes `n`: the
+  one fleet gate, `Engram.Cluster.Readiness.peers_report/4`, over
+  `PayloadV6.version/0 >= 6` (an older release answers 5, or lacks the
+  function). Every expected member must be connected, so a just-booted node
+  not yet joined to the old ones fails closed. Options as `peers_report/4`.
   """
   @spec cluster_writes_n?(keyword()) :: boolean()
   def cluster_writes_n?(opts \\ []),
-    do:
-      Capability.evaluate(Engram.Indexing.PayloadV5, :writes_n?, &(&1 == true), opts) == :allowed
+    do: Readiness.peers_report(PayloadV6, :version, @n_version, opts) == :ok
 
   # Every v5 point of the batch's notes the read shows without `n` gets it,
   # merged, in paced pages. A point missing from the read is not written: a
