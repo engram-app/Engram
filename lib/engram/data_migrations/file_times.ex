@@ -35,8 +35,10 @@ defmodule Engram.DataMigrations.FileTimes do
   NULLed (only those notes) and `ReconcileNotePayloads` is queued for its
   user, which rewrites only unstamped notes' points.
 
-  Not re-verified; contract bumps `version/0` to take one last clean walk
-  before dropping the doubles.
+  v2 re-walks for the rounding fix (`version/0`). `enabled?/0` is the
+  `file_times_backfill` service override (default on). Not re-verified;
+  contract bumps `version/0` to take one last clean walk before dropping
+  the doubles.
   """
   @behaviour Engram.DataMigration
 
@@ -67,8 +69,18 @@ defmodule Engram.DataMigrations.FileTimes do
   @impl true
   def name, do: "file_times"
 
+  # v2: `FileTime.to_at/1` rounds to the microsecond (0.74 and 0.75
+  # floored, leaving about a quarter of millisecond values dated 2004-2005
+  # or past 2038-01-19 one microsecond low). The re-walk rewrites them.
   @impl true
-  def version, do: 1
+  def version, do: 2
+
+  @doc """
+  Kill switch: the `file_times_backfill` service override (default on).
+  Off, the runner runs no pass and the ledger stays open.
+  """
+  @impl true
+  def enabled?, do: Engram.ServiceConfig.get(:file_times_backfill, true) == true
 
   @impl true
   def run_pass, do: run_pass([])
@@ -198,7 +210,14 @@ defmodule Engram.DataMigrations.FileTimes do
   end
 
   defp refresh_ms_payloads(repo, Engram.Notes.Note, pairs, fixed, tally) do
-    ms = for {row, _} <- fixed, Enum.any?(pairs, fn {d, _} -> FileTime.ms?(row[d]) end), do: row
+    # Only rows whose served time moved: a v1 floored twin is within
+    # `FileTime.twin?/2`, so `epoch/2` already sent the double.
+    ms =
+      for {row, _} <- fixed,
+          Enum.any?(pairs, fn {d, at} ->
+            FileTime.ms?(row[d]) and not FileTime.twin?(row[at], row[d])
+          end),
+          do: row
 
     if ms != [] do
       ids = Enum.map(ms, & &1.id)
