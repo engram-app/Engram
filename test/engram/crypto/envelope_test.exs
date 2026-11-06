@@ -127,6 +127,18 @@ defmodule Engram.Crypto.EnvelopeTest do
       assert {:ok, ^ct, ^nonce} = Envelope.split_merged(merged)
     end
 
+    test "an unusual nonce never raises: the trigger's layout, rejected on read" do
+      ct = :crypto.strong_rand_bytes(20)
+
+      for nonce <- [<<>>, :crypto.strong_rand_bytes(5), <<7>> <> :crypto.strong_rand_bytes(12)] do
+        merged = Envelope.merge(nonce, ct)
+
+        expected = if byte_size(nonce) == 13, do: nonce <> ct, else: <<0>> <> nonce <> ct
+        assert merged == expected
+        assert Envelope.split_merged(merged) == :error
+      end
+    end
+
     test "garbage is :error, never a raise" do
       for bad <- [<<>>, <<2, 0>>, <<1>> <> :binary.copy(<<0>>, 20), <<0, 1, 2>>] do
         assert Envelope.split_merged(bad) == :error

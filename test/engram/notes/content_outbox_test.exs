@@ -45,16 +45,7 @@ defmodule Engram.Notes.ContentOutboxTest do
     CrdtCheckpoint.checkpoint(u.id, v.id, note_id, doc)
   end
 
-  defp put_hook(fun) do
-    prev = Application.get_env(:engram, :checkpoint_interleave_hook)
-    Application.put_env(:engram, :checkpoint_interleave_hook, fun)
-
-    on_exit(fn ->
-      if prev,
-        do: Application.put_env(:engram, :checkpoint_interleave_hook, prev),
-        else: Application.delete_env(:engram, :checkpoint_interleave_hook)
-    end)
-  end
+  defp put_hook(fun), do: Engram.CheckpointInterleave.put_hook(fun)
 
   describe "CRDT checkpoint" do
     setup %{user: u, vault: v} do
@@ -211,8 +202,9 @@ defmodule Engram.Notes.ContentOutboxTest do
             set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
           )
 
-          # As every app writer: the body row too (no trigger copies it).
-          NoteBody.sync!(note_id, [:crdt_state_ciphertext])
+          # As every app writer: the body row too, with the values written
+          # (a copy from `notes` never NULLs a body).
+          NoteBody.put!({note_id, crdt_state_ciphertext: nil, crdt_state_nonce: nil})
         end)
 
       :ok

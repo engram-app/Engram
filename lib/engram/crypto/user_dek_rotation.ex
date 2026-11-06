@@ -262,36 +262,43 @@ defmodule Engram.Crypto.UserDekRotation do
 
           rewrap_crdt_tail(batch_ids, old_dek, new_dek)
 
-          Enum.each(notes, fn note ->
-            updates = rewrap_note_columns(note, old_dek, new_dek, new_filter_key, new_dek_version)
+          written =
+            Enum.map(notes, fn note ->
+              updates =
+                rewrap_note_columns(note, old_dek, new_dek, new_filter_key, new_dek_version)
 
-            if updates != [] do
-              case from(n in Engram.Notes.Note, where: n.id == ^note.id)
-                   |> Repo.update_all(
-                     [set: updates ++ [dek_version: new_dek_version]],
-                     skip_tenant_check: true
-                   ) do
-                {1, _} ->
-                  :ok
+              if updates != [] do
+                case from(n in Engram.Notes.Note, where: n.id == ^note.id)
+                     |> Repo.update_all(
+                       [set: updates ++ [dek_version: new_dek_version]],
+                       skip_tenant_check: true
+                     ) do
+                  {1, _} ->
+                    :ok
 
-                {0, _} ->
-                  Logger.error(
-                    "T3.7 sweep_notes: row vanished during rotation",
-                    Metadata.with_category(:error, :crypto,
-                      user_id: user_id,
-                      table: :notes,
-                      row_id: note.id,
-                      phase: :sweep_notes
+                  {0, _} ->
+                    Logger.error(
+                      "T3.7 sweep_notes: row vanished during rotation",
+                      Metadata.with_category(:error, :crypto,
+                        user_id: user_id,
+                        table: :notes,
+                        row_id: note.id,
+                        phase: :sweep_notes
+                      )
                     )
-                  )
 
-                  raise "T3.7 sweep_notes: row vanished mid-rotation table=notes row_id=#{note.id}"
+                    raise "T3.7 sweep_notes: row vanished mid-rotation table=notes row_id=#{note.id}"
+                end
               end
-            end
-          end)
 
-          # The rewrapped bodies, in this transaction, for the whole batch.
-          _ = NoteBody.sync!(Enum.map(notes, & &1.id), NoteBody.body_fields())
+              {note.id, updates}
+            end)
+
+          # The rewrapped values, in this transaction, for the whole batch: a
+          # column left alone (`:already_rotated`, a resumed run) keeps its
+          # body, whatever its `notes` copy holds. A note with nothing to
+          # rewrap still has its key version kept in step.
+          _ = NoteBody.put!(written)
         end)
         |> case do
           {:ok, _} -> :ok

@@ -338,7 +338,7 @@ defmodule Engram.Notes.CrdtPersistence do
 
   # ONE statement per keystroke (this is the hot path): the tail insert, the
   # crdt_head reset and the seq read for the fanout below. A second one
-  # (`NoteBody.sync!/3`) only when the head was reset.
+  # (`NoteBody.put!/2`) only when the head was reset.
   #
   # crdt_head: this update advanced the doc, so a stored head is stale. NULL it
   # in the same transaction (the BackfillCrdtHead worker re-warms it from
@@ -388,7 +388,7 @@ defmodule Engram.Notes.CrdtPersistence do
       # The head was reset: its body row too, in this transaction. Only the
       # first append after a head was stored, not every keystroke.
       %{rows: [[seq, true]]} ->
-        _ = NoteBody.sync!(note_id, [:crdt_head])
+        _ = NoteBody.put!({note_id, crdt_head: nil})
         seq
 
       %{rows: []} ->

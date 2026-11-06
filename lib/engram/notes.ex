@@ -1425,14 +1425,24 @@ defmodule Engram.Notes do
         |> Ecto.Changeset.put_change(:seq, seq)
         |> Ecto.Changeset.put_change(:folder_ref_id, folder_ref)
 
+      # The content nonce this insert wrote: fresh per encryption, so a row
+      # holding it is the row this insert made.
+      ours = changeset.changes.content_nonce
+
       case Repo.insert(changeset, on_conflict: :nothing) do
         {:ok, _} ->
           case Repo.one(lookup_query) do
-            %Note{id: ^note_id} = inserted ->
-              # Ours, so it was inserted: its body row, same transaction.
-              _ = NoteBody.sync!(note_id, NoteBody.body_fields())
+            # Ours: its id AND its nonce. A row with our id but another
+            # nonce is a create with the same client id that committed
+            # first (an offline replay racing the live push), and this
+            # INSERT no-op'd: it is theirs, and its body is left alone.
+            # The lookup ran before our body row existed, so it read the
+            # `notes` copy; carry the written values instead.
+            %Note{id: ^note_id, content_nonce: ^ours} = inserted ->
+              _ = NoteBody.put!({note_id, changeset.changes})
               :ok = UsageMeters.inc_notes_count(user.id, 1)
-              {:inserted, inserted, crdt}
+              body = Map.take(changeset.changes, NoteBody.body_fields())
+              {:inserted, struct(inserted, body), crdt}
 
             %Note{} = existing ->
               :ok = NoteCommitted.discard!(job)
@@ -3155,12 +3165,12 @@ defmodule Engram.Notes do
   # rows), so there is no aborted-statement state and the enclosing transaction
   # stays usable, including on the `mode: :savepoint` batch path.
   #
-  # A write that landed brings `note_bodies` in step in the same transaction
-  # (`NoteBody.sync!/3`); a lost fence or a failed write wrote nothing, so it
-  # syncs nothing.
+  # A write that landed writes the body values it wrote to `note_bodies` in
+  # the same transaction (`NoteBody.put!/2`); a lost fence or a failed write
+  # wrote nothing, so it puts nothing.
   defp fenced_update(changeset, db_opts) do
     with {:ok, updated} <- Repo.update(changeset, db_opts) do
-      _ = NoteBody.sync!(updated.id, changeset.changes, db_opts)
+      _ = NoteBody.put!({updated.id, changeset.changes}, db_opts)
       {:ok, updated}
     end
   rescue
@@ -4164,7 +4174,7 @@ defmodule Engram.Notes do
   # because the only live path index is the partial
   # `notes_user_vault_path_v2 ... WHERE deleted_at IS NULL AND kind = 'note'`
   # and Postgres uses it only when the query states both conditions (it does not
-  # read `notes_kind_shape_check`). Folder markers have `path_hmac IS NULL` by
+  # read `notes_kind_shape_v2_check`). Folder markers have `path_hmac IS NULL` by
   # that CHECK, so the kind filter drops nothing a path lookup could match.
   # NotesPathIndexPlanTest pins the plans.
   defp live_notes(user, vault, ids?) do
@@ -4681,7 +4691,7 @@ defmodule Engram.Notes do
       # if that ever stops holding (e.g. an index-semantics change), since a
       # dropped tombstone silently reopens the offline-resurrection gap.
       {inserted, _} = Repo.insert_all(Note, [tombstone], on_conflict: :nothing)
-      _ = NoteBody.sync!([note.id, tomb_id], full_kw)
+      _ = NoteBody.put!([{note.id, full_kw}, {tomb_id, tomb_kw}])
 
       if inserted == 0 do
         require Logger
@@ -7436,7 +7446,7 @@ defmodule Engram.Notes do
                 |> Enum.chunk_every(@tombstone_insert_chunk)
                 |> Enum.each(fn rows ->
                   _ = Repo.insert_all(Note, rows, on_conflict: :nothing)
-                  NoteBody.sync!(Enum.map(rows, & &1.id), NoteBody.body_fields())
+                  NoteBody.put!(Enum.map(rows, &{&1.id, &1}))
                 end)
 
                 # The reindex + link-rewrite fan-out commits with the rows it
@@ -8193,8 +8203,8 @@ defmodule Engram.Notes do
   end
 
   # The membership fence itself. `folder_hmac` is NOT NULL for both `kind`s by
-  # check constraint (`notes_kind_shape_check`, validated in the empty-folders
-  # phase-2 migration), so the hmac list can never contain a nil that would
+  # check constraint (`notes_kind_shape_v2_check`; the empty-folders
+  # check before it), so the hmac list can never contain a nil that would
   # silently drop a row from the match set.
   defp fenced_delete_query(chunk) do
     ids = Enum.map(chunk, & &1.id)
