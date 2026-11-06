@@ -681,13 +681,13 @@ defmodule Engram.Search do
   # The search's filter opts, and the post-filter a `:too_wide` filter needs
   # (nil otherwise). `:no_match` when no note can match: no Qdrant request.
   #
-  # With `Qdrant.note_id_filter?/0` on, Postgres resolves every filter to
-  # note ids (`note_filter/0`) and Qdrant matches them on `n`. Off (until
-  # every point carries `n`), the filters go to Qdrant as payload conditions.
+  # Once `note_id_filter?/1` holds for the user, Postgres resolves every
+  # filter to note ids (`note_filter/0`) and Qdrant matches them on `n`.
+  # Until then, the filters go to Qdrant as payload conditions.
   # The opts go to the resolver as they are: it takes its own filter keys
   # (the search opt names) and ignores the rest.
   defp search_filter(user, vault, opts, {folder, tags, type}) do
-    if Qdrant.note_id_filter?() and note_filter().any?(opts) do
+    if note_filter().any?(opts) and note_id_filter?(user) do
       vaults = filter_vaults(user, vault, opts)
 
       case note_filter().resolve(user, vaults, opts, sample: true) do
@@ -714,6 +714,18 @@ defmodule Engram.Search do
           :no_match
       end
     end
+  end
+
+  # Search by note id needs both, checked automatically (no flag): the
+  # collection's `n` index (strict mode refuses an unindexed filter) and the
+  # user's `n` backfill (`ReconcileNotePayloads.n_backfilled?/1`; a point
+  # without `n` would be missed). Cached per node for a minute each, so a
+  # search pays at most one collection-info read and one EXISTS a minute.
+  defp note_id_filter?(user) do
+    Engram.Cache.fetch(:note_id_filter, {:n_index, Qdrant.base_url()}, &Qdrant.n_indexed?/0) and
+      Engram.Cache.fetch(:note_id_filter, user.id, fn ->
+        Engram.Workers.ReconcileNotePayloads.n_backfilled?(user.id)
+      end)
   end
 
   # The most a `:too_wide` search fetches: 16x the page, in at most two rounds.

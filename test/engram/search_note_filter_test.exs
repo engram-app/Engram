@@ -1,17 +1,22 @@
 defmodule Engram.SearchNoteFilterTest do
   @moduledoc """
-  The note-id reader (immutable chunk index R1, Engram#2263). With
-  `Qdrant.note_id_filter?/0` on, a filtered search resolves its filters in
+  The note-id reader (immutable chunk index, Engram#2263). Once the
+  collection has its `n` index and the user's `n` backfill is done (checked
+  automatically, no flag), a filtered search resolves its filters in
   Postgres (`:note_filter`, the resolver seam, stubbed here) and Qdrant gets
-  the tenant plus note ids on `n`. Off (the default until R2 backfills `n`),
-  the resolver is never called and the request is today's.
+  the tenant plus note ids on `n`. Until both hold ("switch off" below), the
+  resolver is never called and the request is today's.
   """
   use Engram.DataCase, async: false
 
+  import Ecto.Query, only: [from: 2]
   import Engram.FieldCatalogHelpers, only: [write_indexed!: 4]
   import Engram.Fixtures, only: [insert_chunk!: 4, insert_note!: 3]
   import Mox
 
+  alias Engram.DataMigrations
+  alias Engram.DataMigrations.NotePayloadStamps
+  alias Engram.Indexing.PayloadV6
   alias Engram.Search
   alias Engram.ServiceConfig
   alias Engram.Vector.FilterId
@@ -46,12 +51,30 @@ defmodule Engram.SearchNoteFilterTest do
     bypass = Bypass.open()
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
     ServiceConfig.put_override(:note_filter, StubFilter)
-    ServiceConfig.put_override(:note_id_filter, true)
+
+    # Switch on by default: the collection holds the `n` index, and the `n`
+    # backfill is done (its ledger). Both verdicts are cached per node.
+    Engram.Cache.clear_local(:note_id_filter)
+    on_exit(fn -> Engram.Cache.clear_local(:note_id_filter) end)
+    {:ok, schema} = Agent.start_link(fn -> %{"n" => %{"data_type" => "uuid"}} end)
+
+    Bypass.stub(bypass, "GET", "/collections/engram_notes", fn conn ->
+      info = %{"status" => "green", "payload_schema" => Agent.get(schema, & &1)}
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, Jason.encode!(%{result: info, status: "ok"}))
+    end)
+
+    DataMigrations.mark_done(NotePayloadStamps.name(), NotePayloadStamps.version())
 
     {:ok, user} = insert(:user) |> Engram.Crypto.ensure_user_dek()
     vault = insert(:vault, user: user)
-    %{bypass: bypass, user: user, vault: vault}
+    %{bypass: bypass, user: user, vault: vault, schema: schema}
   end
+
+  # Switch off: a release before the `n` payload version.
+  defp switch_off, do: ServiceConfig.put_override(:payload_version, PayloadV6.baseline())
 
   defp answer(fun), do: Process.put(:resolve, fun)
 
@@ -473,7 +496,7 @@ defmodule Engram.SearchNoteFilterTest do
   # builders take for them (the payload conditions of today's path). Any
   # resolver call fails the test.
   defp switch_off_filters(user) do
-    ServiceConfig.put_override(:note_id_filter, false)
+    switch_off()
     answer(fn _ -> flunk("resolver called with the switch off") end)
     embed()
 
@@ -611,7 +634,7 @@ defmodule Engram.SearchNoteFilterTest do
 
     test "switch off: only the folder itself, an exact folder_hmac match",
          %{bypass: bypass, user: user, vault: vault} do
-      ServiceConfig.put_override(:note_id_filter, false)
+      switch_off()
       answer(fn _ -> flunk("resolver called with the switch off") end)
       embed()
       expect_query(bypass, [])
@@ -643,6 +666,57 @@ defmodule Engram.SearchNoteFilterTest do
       assert tenant_keys(filter["must"]) == {true, true}
       refute inspect(filter) =~ "folder_hmac"
       refute inspect(filter) =~ ~s("f")
+    end
+  end
+
+  # The switch is automatic (R2): both halves must hold, per user.
+  describe "the switch turns on by itself" do
+    test "no n index on the collection: today's filters",
+         %{bypass: bypass, user: user, vault: vault, schema: schema} do
+      Agent.update(schema, &Map.delete(&1, "n"))
+      answer(fn _ -> flunk("resolver called without the n index") end)
+      embed()
+      expect_query(bypass, [])
+
+      assert {:ok, []} = Search.search(user, vault, "q", folder: "Health", mode: :vector)
+      assert_received {:query, %{"filter" => filter}}
+      refute inspect(filter) =~ ~s("n")
+    end
+
+    test "a user with a note behind the n version: today's filters, until it is stamped",
+         %{bypass: bypass, user: user, vault: vault} do
+      DataMigrations.reopen(NotePayloadStamps.name(), NotePayloadStamps.version())
+      {note, _point} = note_with_point(user, vault, "Health/a.md")
+      answer(fn _ -> flunk("resolver called before the user's backfill") end)
+      embed()
+      expect_query(bypass, [])
+
+      assert {:ok, []} = Search.search(user, vault, "q", folder: "Health", mode: :vector)
+      assert_received {:query, %{"filter" => filter}}
+      refute inspect(filter) =~ ~s("n")
+
+      # Stamped (the sweep or an index pass), and the cached verdict expired.
+      {1, _} =
+        Repo.update_all(
+          from(s in Engram.Notes.NoteIndexState, where: s.note_id == ^note.id),
+          [set: [payload_version: PayloadV6.version()]],
+          skip_tenant_check: true
+        )
+
+      Engram.Cache.clear_local(:note_id_filter)
+      answer(fn [] -> {:ok, {:ids, [note.id]}} end)
+      embed()
+
+      assert {:ok, []} = Search.search(user, vault, "q", folder: "Health", mode: :vector)
+      assert_received {:resolve, _, _, []}
+    end
+
+    test "an unfiltered search checks nothing", %{bypass: bypass, user: user, vault: vault} do
+      Bypass.stub(bypass, "GET", "/collections/engram_notes", fn _ -> flunk("checked") end)
+      embed()
+      expect_query(bypass, [])
+
+      assert {:ok, []} = Search.search(user, vault, "q", mode: :vector)
     end
   end
 

@@ -61,13 +61,19 @@ defmodule Engram.Vector.Qdrant do
   def max_note_ids, do: 5 * @max_ids
 
   @doc """
-  Whether search filters by note id on `n` (immutable chunk index,
-  Engram#2263): Postgres resolves the filters to notes, Qdrant matches the
-  tenant and the ids. Off until every point carries `n` (R2's backfill);
-  off, search sends today's filters.
+  Whether the collection has its `n` payload index (immutable chunk index,
+  Engram#2263). Strict mode answers 400 to a filter on an unindexed key, and
+  the index is created by the first index pass per node
+  (`ensure_collection/2`), so a reader checks before it filters on `n`.
+  Unreadable counts as no. Callers cache it (`Engram.Search`).
   """
-  @spec note_id_filter?() :: boolean()
-  def note_id_filter?, do: ServiceConfig.get(:note_id_filter, false) == true
+  @spec n_indexed?() :: boolean()
+  def n_indexed? do
+    case collection_info(collection(), :search) do
+      {:ok, %{"payload_schema" => %{} = schema}} -> is_map_key(schema, PayloadKeys.short(:note))
+      _ -> false
+    end
+  end
 
   @doc "Largest point batch one upsert or vector update sends."
   def max_write_batch, do: @max_write_batch

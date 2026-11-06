@@ -200,6 +200,11 @@ defmodule Engram.Cache.Registry do
       evict_match: :key,
       pg_channel: nil
     },
+    # Search by note id (immutable chunk index, Engram#2263): `{:n_index,
+    # base URL}` => the collection has its `n` index; a user id => that
+    # user's points all carry `n`. TTL-only: both only ever turn true within
+    # a release, and a minute of the old filter path is correct, just slower.
+    %{name: :note_id_filter, ttl: 60_000, cache_nil: false, evict_match: :key, pg_channel: nil},
     # Qdrant base URL => `%{disk:, heap:}` percent (Qdrant.pressure/0). The
     # TTL is the freshness: EmbedNote's preflight reads it per job.
     %{name: :qdrant_pressure, ttl: 60_000, cache_nil: false, evict_match: :key, pg_channel: nil},
