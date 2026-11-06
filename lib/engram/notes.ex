@@ -429,13 +429,15 @@ defmodule Engram.Notes do
   def mint_id, do: UUIDv7.generate()
 
   # The folder row must exist before the note row that names it, in the same
-  # transaction: `notes_set_folder_ref` then finds it, and the note is born
-  # pointing at its folder. Call it after the vault seq lock is taken, so two
-  # writers creating the same new folder queue on that lock instead of racing
-  # for the unique index (`Rows.ensure/4` is safe against that race anyway).
-  # The stored `folder_*` columns stay authoritative and are still written.
-  # Returns the folder's id (nil at the root) so a writer that does not change
-  # `folder_hmac` (the trigger would not refire) can still set the reference.
+  # transaction. Returns the folder's id (nil at the root): every note writer
+  # that sets a path puts it in `folder_ref_id` in the same write, so nothing
+  # depends on `notes_set_folder_ref` (kept only for the previous release).
+  # Tombstones do not set it: they are deleted rows, no reader looks at their
+  # reference, and an undelete (`move_note/5`) resolves its own.
+  # Call it after the vault seq lock is taken, so two writers creating the same
+  # new folder queue on that lock instead of racing for the unique index
+  # (`Rows.ensure/4` is safe against that race anyway). The stored `folder_*`
+  # columns stay authoritative and are still written.
   defp ensure_folder_row!(user, vault_id, folder) do
     {:ok, id} = Rows.ensure(user, vault_id, folder)
     id
@@ -1387,8 +1389,12 @@ defmodule Engram.Notes do
       # Test seam: a competing row can land here (a path or id race).
       interleave_hook(:before_bare_insert)
       seq = Engram.Vaults.next_seq!(insert_attrs.vault_id)
-      _ = ensure_folder_row!(user, insert_attrs.vault_id, folder)
-      changeset = Ecto.Changeset.put_change(changeset, :seq, seq)
+      folder_ref = ensure_folder_row!(user, insert_attrs.vault_id, folder)
+
+      changeset =
+        changeset
+        |> Ecto.Changeset.put_change(:seq, seq)
+        |> Ecto.Changeset.put_change(:folder_ref_id, folder_ref)
 
       case Repo.insert(changeset, on_conflict: :nothing) do
         {:ok, _} ->
@@ -2609,8 +2615,7 @@ defmodule Engram.Notes do
           prior
           |> Note.changeset(Map.put(phase_b, :version, prior.version + 1))
           |> Ecto.Changeset.put_change(:seq, seq)
-          # A restore or resurrect may leave `folder_hmac` as it was, so the
-          # trigger does not refire: point at the live row explicitly.
+          # Every leg names its live row, a restore or resurrect included.
           |> Ecto.Changeset.put_change(:folder_ref_id, folder_ref)
           |> Ecto.Changeset.put_change(:deleted_at, nil)
           # Any undelete leaves the op that deleted it (#609), so a later
@@ -7122,10 +7127,12 @@ defmodule Engram.Notes do
 
   # Per-class column sets for the folder-rename batch UPDATE. Each list MUST
   # equal the keys the matching kw builder returns (folder_only_aad_bound /
-  # phase_b_path_folder_for / full_aad_bound_kw) — values are fetched from the
-  # kw by these names when the VALUES rows are built.
+  # phase_b_path_folder_for / full_aad_bound_kw), plus the `folder_ref_id` the
+  # cascade adds for notes (markers have no reference) — values are fetched
+  # from the kw by these names when the VALUES rows are built.
   @marker_rename_cols [:folder_ciphertext, :folder_nonce, :folder_hmac]
   @v2_rename_cols [
+    :folder_ref_id,
     :path_ciphertext,
     :path_nonce,
     :path_hmac,
@@ -7138,6 +7145,7 @@ defmodule Engram.Notes do
     :folder_hmac
   ]
   @v1_rename_cols [
+    :folder_ref_id,
     :content_ciphertext,
     :content_nonce,
     :title_ciphertext,
@@ -7357,9 +7365,9 @@ defmodule Engram.Notes do
                 seq = Engram.Vaults.next_seq!(vault.id)
 
                 # Folder rows first: the renamed subtree keeps its rows (and
-                # ids) under the new path hashes, so the trigger on the notes
-                # update below resolves every note straight back to its own
-                # folder. Descendant FOLDERS only; the notes join by id.
+                # ids) under the new path hashes, so every note below keeps
+                # (or, after a merge, gets) its own folder's id.
+                # Descendant FOLDERS only; the notes join by id.
                 # The row-level move guard runs again here, in the write
                 # transaction: a concurrent move can make it refuse after the
                 # check at the top of this function passed. Throwing rolls the
@@ -7370,16 +7378,27 @@ defmodule Engram.Notes do
                   {:error, reason} -> throw({:rename_refused, reason})
                 end
 
-                {:ok, _} =
+                {:ok, refs} =
                   Rows.ensure_all(
                     user,
                     vault.id,
                     Enum.map(updates, fn {_n, _old, _new, folder, _t} -> folder end)
                   )
 
+                # Each moved note names its folder row in the same statement;
+                # the trigger is only the previous release's backstop.
+                ref_of =
+                  Map.new(updates, fn {n, _old, _new, folder, _t} ->
+                    {n.id, refs[folder] && Ecto.UUID.dump!(refs[folder])}
+                  end)
+
+                with_ref = fn rows ->
+                  Enum.map(rows, fn {id, kw} -> {id, [{:folder_ref_id, ref_of[id]} | kw]} end)
+                end
+
                 BulkRename.update!(marker_rows, @marker_rename_cols, seq, now)
-                BulkRename.update!(v2_rows, @v2_rename_cols, seq, now)
-                BulkRename.update!(v1_rows, @v1_rename_cols, seq, now)
+                BulkRename.update!(with_ref.(v2_rows), @v2_rename_cols, seq, now)
+                BulkRename.update!(with_ref.(v1_rows), @v1_rename_cols, seq, now)
 
                 # Batched: one tombstone per note under the folder, so a big
                 # folder overflows the protocol's 65535 bind cap in one statement.

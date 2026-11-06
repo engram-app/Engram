@@ -180,9 +180,11 @@ defmodule Engram.Notes.Note do
     # put by the app; lookups filter on them through Engram.Notes.Keys.
     field :path_id, :binary_id
     field :folder_id, :binary_id
-    # The folder ROW this note sits in (migration 20261029000100). Written by the
-    # `notes_set_folder_ref` trigger from `folder_hmac`, never cast. NULL = root,
-    # or a folder with no row yet.
+    # The folder ROW this note sits in (migration 20261029000100). Never cast:
+    # every writer that sets a path puts it from `Rows.ensure/4` in the same
+    # write; the `notes_set_folder_ref` trigger derives the same value from
+    # `folder_hmac` for the previous release. NULL = root, or a folder with no
+    # row yet.
     field :folder_ref_id, Ecto.UUID
     field :basename_id, :binary_id
     field :path_ci_id, :binary_id
