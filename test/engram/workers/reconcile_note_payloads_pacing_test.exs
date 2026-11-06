@@ -172,10 +172,37 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
     refute_received :rewrite
   end
 
+  # Pulled because Qdrant is struggling: the job must not even read it.
+  # Every gate runs before the job's first Postgres or Qdrant read.
+  test "with the kill switch off, the job makes no Repo and no Qdrant call", ctx do
+    ServiceConfig.put_override(:payload_backfill, false)
+    # A Qdrant with no routes: any request fails the test.
+    silent = Bypass.open()
+    ServiceConfig.put_override(:qdrant_url, "http://localhost:#{silent.port}")
+    job = build_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+    {result, queries} = Engram.QueryRecorder.record(fn -> ReconcileNotePayloads.perform(job) end)
+
+    assert {:snooze, s} = result
+    assert s == Engram.Rebuild.gate_snooze(0)
+    assert Enum.filter(queries, &(&1.pid == self())) == []
+  end
+
+  test "a gated job's snooze grows and is jittered (Rebuild.gate_snooze/1)", ctx do
+    ServiceConfig.put_override(:payload_backfill, false)
+    job = build_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+    snoozes =
+      for _ <- 1..20, do: elem(ReconcileNotePayloads.perform(%{job | meta: %{"snoozed" => 3}}), 1)
+
+    assert Enum.all?(snoozes, &(&1 in 240..300))
+    assert length(Enum.uniq(snoozes)) > 1
+  end
+
   test "the kill switch snoozes it, and it resumes once back on", ctx do
     ServiceConfig.put_override(:payload_backfill, false)
 
-    assert {:snooze, 300} = sweep(ctx)
+    assert {:snooze, 30} = sweep(ctx)
     refute_received :rewrite
 
     ServiceConfig.put_override(:payload_backfill, true)
@@ -184,12 +211,13 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
     assert all_n?(ctx)
   end
 
-  test "a spent points-per-minute bucket snoozes to the window's end", ctx do
+  test "a spent points-per-minute bucket snoozes before any read", ctx do
     {:allow, _} =
       EngramWeb.RateLimiter.hit("payload_backfill_points", 60_000, 500, :other, 500)
 
-    assert {:snooze, s} = sweep(ctx)
-    assert s in 1..60
+    {result, queries} = Engram.QueryRecorder.record(fn -> sweep(ctx) end)
+    assert {:snooze, 30} = result
+    refute Enum.any?(queries, &(&1.pid == self() and &1.source in ["notes", "chunks"]))
     refute_received :rewrite
   end
 

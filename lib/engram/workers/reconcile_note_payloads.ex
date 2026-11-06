@@ -114,8 +114,6 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   @n_bucket "payload_backfill_points"
   @n_window_ms 60_000
   @n_per_min 500
-  # A paused backfill (kill switch off) rechecks this rarely.
-  @paused_snooze 300
   # Where `requeue_unbackfilled/0`'s walk resumes.
   @requeue_cursor "payload_n_requeue"
 
@@ -124,7 +122,8 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"user_id" => user_id} = args} = job) do
-    with %User{} = user <- Repo.get(User, user_id),
+    with :ok <- pre_gate(job),
+         %User{} = user <- Repo.get(User, user_id),
          :ok <- RotationGate.check_user(user) do
       deadline = System.monotonic_time(:millisecond) + @budget_ms
       {result, counts} = heal(user, args["after"], {deadline, job}, @zero)
@@ -142,6 +141,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
           other
       end
     else
+      {:snooze, _} = gated -> gated
       nil -> :ok
       {:error, :rotation_in_progress} -> locked_snooze(user_id, job)
     end
@@ -505,21 +505,35 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   # A page never exceeds the bucket, or it could never be let through.
   defp n_page, do: min(@refresh_page, n_per_min())
 
-  # Kill switch, then the Qdrant gate, then the points-per-minute bucket. A
-  # denied page snoozes to the window's end (Hammer counts the denied hit
-  # too, so the window stays shut until it rolls).
+  # Kill switch, then the Qdrant gate, then the points-per-minute bucket.
+  # Every denial snoozes the way every gated Qdrant writer does
+  # (`Rebuild.gate_snooze/1`: 30 s, doubling per snooze to 600 s, jittered
+  # from the second), so a queue of denied jobs neither churns nor wakes in
+  # lockstep. Hammer counts a denied hit too, so the window stays shut until
+  # it rolls.
   # ponytail: a fixed window lets up to 2x the rate through across a window
   # boundary (a full bucket at the end of one, another at the start of the
   # next). Accepted: the disk and optimizer gate (`Rebuild.qdrant_pace/1`) is
   # the real guard; a sliding window is the upgrade if 2x bursts ever show.
   defp n_gate(job, count) do
-    with :ok <- if(backfill_enabled?(), do: :ok, else: {:snooze, @paused_snooze}),
+    with :ok <- if(backfill_enabled?(), do: :ok, else: gated(job)),
          :ok <- Rebuild.qdrant_pace(job) do
       case RateLimiter.hit(@n_bucket, @n_window_ms, n_per_min(), :other, count) do
         {:allow, _} -> :ok
-        {:deny, ms} -> {:snooze, ms |> div(1000) |> max(1) |> min(div(@n_window_ms, 1000))}
+        {:deny, _ms} -> gated(job)
       end
     end
+  end
+
+  defp gated(%Oban.Job{meta: meta}),
+    do: {:snooze, Rebuild.gate_snooze(Map.get(meta || %{}, "snoozed", 0))}
+
+  # Before the job's first read: a denied job reads nothing from Postgres or
+  # Qdrant, so a shut gate costs one snooze per wake, not a batch read.
+  # ponytail: the bucket pre-check reserves one point per wake (Hammer has no
+  # peek); at 500/min that is noise against 256-point pages.
+  defp pre_gate(job) do
+    if PayloadV6.version() >= @n_version, do: n_gate(job, 1), else: :ok
   end
 
   @doc """
