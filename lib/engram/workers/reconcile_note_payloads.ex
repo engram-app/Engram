@@ -79,6 +79,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   alias Engram.Backfill.TenantScan
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
+  alias Engram.DataMigrations.NotePayloadStamps
   alias Engram.Indexing
   alias Engram.Indexing.PayloadV6
   alias Engram.Jobs
@@ -456,7 +457,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
       PayloadV6.version() < @n_version ->
         false
 
-      Engram.DataMigrations.NotePayloadStamps.done?() ->
+      NotePayloadStamps.done?() ->
         true
 
       true ->
