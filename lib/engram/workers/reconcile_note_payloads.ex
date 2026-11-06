@@ -516,8 +516,24 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   # Write first, then re-check: an unstamp that raced the decision (its
   # marker reset ran before this write) is behind now, so the marker goes.
+  #
+  # Only while the user row exists, checked under `FOR KEY SHARE` in the
+  # write's transaction: a hard delete racing this either committed first
+  # (no row, no marker) or waits on the lock and drops the marker after
+  # (`forget_marker/1` in its transaction), so a chain still running when
+  # the account goes cannot re-create it.
   defp put_marker(user_id) do
-    :ok = Cursor.put(marker(user_id), %{"version" => @n_version})
+    {:ok, _} =
+      Repo.transaction(fn ->
+        user =
+          Repo.one(
+            from(u in User, where: u.id == ^user_id, select: u.id, lock: "FOR KEY SHARE"),
+            skip_tenant_check: true
+          )
+
+        if user, do: Cursor.put(marker(user_id), %{"version" => @n_version})
+      end)
+
     if behind?(user_id), do: Cursor.reset(marker(user_id)), else: :ok
   end
 
