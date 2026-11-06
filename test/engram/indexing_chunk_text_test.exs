@@ -146,12 +146,7 @@ defmodule Engram.IndexingChunkTextTest do
 
       # Search reads the envelope, not the content: corrupting the content
       # ciphertext leaves every hit's text intact.
-      {:ok, _} =
-        Repo.with_tenant(ctx.user.id, fn ->
-          Repo.update_all(from(n in Engram.Notes.Note, where: n.id == ^note.id),
-            set: [content_ciphertext: :crypto.strong_rand_bytes(64)]
-          )
-        end)
+      corrupt_content(note, ctx.user)
 
       pairs = texts(note, ctx.user)
       assert {_text, heading} = Enum.find(pairs, fn {t, _} -> t =~ "Ferritin levels are low." end)
@@ -174,6 +169,9 @@ defmodule Engram.IndexingChunkTextTest do
             set: [content_ciphertext: :crypto.strong_rand_bytes(64)]
           )
         end)
+
+      # Content is read from `note_bodies`: damage the copy readers see.
+      Engram.Fixtures.mirror_body!(note.id)
     end
 
     test "a note of exactly 32 KB stores display_ct and displays from it", ctx do

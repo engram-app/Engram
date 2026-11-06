@@ -234,6 +234,8 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
         )
       end)
 
+    Engram.Fixtures.mirror_body!(note.id)
+
     attach()
 
     assert :ok = perform_job(CrdtBloatSweep, %{})
@@ -244,6 +246,43 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
 
     # The load-bearing part: the stateless note's bytes are still on disk.
     assert m.content_bytes_total == stored_content_bytes(user)
+  end
+
+  # R8 read switch: before `NoteSizes` is done the sweep aggregates every
+  # note itself, and the body it sizes is the `note_bodies` one. A note whose
+  # `notes` ciphertext no longer holds the body (the shape the R8 contract
+  # release leaves) still counts its stored bytes and its state.
+  test "the wide path sizes bodies from note_bodies, not the notes copy", ctx do
+    %{user: user, vault: vault} = ctx
+    refute Engram.DataMigrations.NoteSizes.done?()
+
+    note = seeded_note(user, vault, "a.md", noisy(150))
+    id = Ecto.UUID.dump!(note.id)
+
+    %{rows: [[content_ct, crdt_ct]]} =
+      Repo.query!(
+        "SELECT octet_length(content_ct), octet_length(crdt_ct) FROM note_bodies WHERE note_id = $1",
+        [id]
+      )
+
+    Repo.query!(
+      # `notes_kind_shape_check` keeps a note's content NOT NULL, so the
+      # content copy is a bare 16-byte tag-sized junk value instead.
+      "UPDATE notes SET content_ciphertext = '\\xdeadbeefdeadbeefdeadbeefdeadbeef', crdt_state_ciphertext = NULL WHERE id = $1",
+      [id]
+    )
+
+    attach()
+    assert :ok = perform_job(CrdtBloatSweep, %{})
+    assert_receive {:sweep, m, _meta}
+
+    # The merged body is `nonce field (13) || ciphertext`; the sweep reports
+    # ciphertext minus the tag.
+    stored = fn merged -> merged - 13 - Envelope.tag_bytes() end
+    assert m.notes == 1
+    assert m.notes_with_state == 1
+    assert m.content_bytes_total == stored.(content_ct)
+    assert m.state_bytes_total == stored.(crdt_ct)
   end
 
   # The guard used to live in `perform/1`, which left the hand-invocation route
@@ -275,6 +314,9 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
           ]
         )
       end)
+
+    # The app's writers keep `note_bodies` in step (`NoteBody.sync!/3`).
+    Engram.Fixtures.mirror_body!(note.id)
   end
 
   defp bump_version!(user, note, by) do

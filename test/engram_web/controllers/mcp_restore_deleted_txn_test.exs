@@ -75,6 +75,10 @@ defmodule EngramWeb.McpRestoreDeletedTxnTest do
         [set: [content_ciphertext: <<head::binary, Bitwise.bxor(byte, 0xFF)>>]],
         skip_tenant_check: true
       )
+
+    # Restore reads the body from `note_bodies`: put the damaged bytes there,
+    # as the app's writers keep it in step (`NoteBody.sync!/3`).
+    Engram.Fixtures.mirror_body!(id)
   end
 
   defp call(tool_name, user, vault, args) do

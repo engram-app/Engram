@@ -60,6 +60,9 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
     tenant!(user, fn ->
       Repo.update_all(from(n in Note, where: n.id == ^note.id), set: [crdt_head: "warm"])
     end)
+
+    # The app's writers keep `note_bodies` in step (`NoteBody.sync!/3`).
+    Engram.Fixtures.mirror_body!(note.id)
   end
 
   defp seed_tail!(user, vault, note, update) do
@@ -232,6 +235,7 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
         )
       end)
 
+      Engram.Fixtures.mirror_body!(note.id)
       Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.BackfillCrdtHead"))
 
       assert :ok = run(u)
@@ -264,7 +268,103 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
         )
       end)
 
+      Engram.Fixtures.mirror_body!(note.id)
+
       refute ReencodeEnvelopes.legacy_rows?(u.id)
+    end
+
+    # R8 read switch: the legacy body is found and read in `note_bodies`. A
+    # note whose `notes` ciphertext no longer holds the body (the R8 contract
+    # shape; the nonce columns stay) is still re-encoded, and the body copy
+    # is rewritten.
+    test "re-encodes a legacy body from note_bodies, not the notes copy", %{user: u, vault: v} do
+      note = legacy_note!(u, v, "split.md", @big)
+      seed_crdt_state!(u, note, @big <> "state")
+      id = Ecto.UUID.dump!(note.id)
+
+      first_bytes = fn ->
+        %{rows: [row]} =
+          Repo.query!(
+            "SELECT substring(content_ct FROM 1 FOR 1), substring(crdt_ct FROM 1 FOR 1) FROM note_bodies WHERE note_id = $1",
+            [id]
+          )
+
+        row
+      end
+
+      assert first_bytes.() == [<<0>>, <<0>>]
+
+      Repo.query!(
+        # `notes_kind_shape_check` keeps a note's content NOT NULL, so the
+        # content copy is a bare 16-byte tag-sized junk value instead.
+        "UPDATE notes SET content_ciphertext = '\\xdeadbeefdeadbeefdeadbeefdeadbeef', crdt_state_ciphertext = NULL WHERE id = $1",
+        [id]
+      )
+
+      assert ReencodeEnvelopes.legacy_rows?(u.id)
+      assert :ok = run(u)
+
+      assert first_bytes.() == [<<1>>, <<1>>]
+      assert {:ok, %{content: @big}} = Notes.get_note(u, v, "split.md")
+      refute ReencodeEnvelopes.legacy_rows?(u.id)
+    end
+
+    # A body whose nonce disagrees with its `notes` row (drift, which
+    # `NoteSplit` reports and never repairs) can never pass the nonce CAS, so
+    # it is not work: no re-read, no re-seal, no perpetual re-queue.
+    test "a drifted body is not work", %{user: u, vault: v} do
+      note = legacy_note!(u, v, "drift.md", @big)
+
+      tenant!(u, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^note.id),
+          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        )
+      end)
+
+      Engram.Fixtures.mirror_body!(note.id)
+      assert ReencodeEnvelopes.legacy_rows?(u.id)
+
+      # The `notes` nonce moves without the body: the two copies now disagree.
+      Repo.query!("UPDATE notes SET content_nonce = $2 WHERE id = $1", [
+        Ecto.UUID.dump!(note.id),
+        :crypto.strong_rand_bytes(12)
+      ])
+
+      refute ReencodeEnvelopes.legacy_rows?(u.id)
+
+      # Not silent: each discovery pass counts the drifted legacy rows.
+      id = "reencode-drifted-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        id,
+        [:engram, :reencode_envelopes, :drifted],
+        fn _e, m, _meta, _ -> send(test_pid, {:drifted, m}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(id) end)
+
+      log = capture_log(fn -> assert ReencodeEnvelopes.enqueue_missing() == 0 end)
+      assert_received {:drifted, %{count: 1}}
+      assert log =~ "legacy note bodies skipped"
+      refute log =~ note.id
+    end
+
+    # A NULL `notes` nonce against a format 0 body is drift too (`IS DISTINCT
+    # FROM`), not a row that is neither work nor counted.
+    test "a NULL notes nonce over a legacy body counts as drift", %{user: u, vault: v} do
+      note = legacy_note!(u, v, "null-nonce.md", @big)
+      seed_crdt_state!(u, note, @big <> "state")
+
+      Repo.query!(
+        "UPDATE notes SET crdt_state_ciphertext = NULL, crdt_state_nonce = NULL WHERE id = $1",
+        [Ecto.UUID.dump!(note.id)]
+      )
+
+      assert tenant!(u, fn ->
+               Repo.aggregate(ReencodeEnvelopes.drifted_query(:notes_crdt_state, u.id), :count)
+             end) == 1
     end
 
     test "a row changed since it was read is not overwritten (CAS)", %{user: u, vault: v} do
@@ -285,7 +385,7 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
                  ReencodeEnvelopes.write_row(
                    :notes_content,
                    note.id,
-                   stale.content_ciphertext,
+                   {stale.content_ciphertext, stale.content_nonce},
                    "x",
                    "y"
                  )
@@ -338,6 +438,8 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
           set: [content_ciphertext: corrupt]
         )
       end)
+
+      Engram.Fixtures.mirror_body!(note.id)
 
       log = capture_log(fn -> assert :ok = run(u) end)
 

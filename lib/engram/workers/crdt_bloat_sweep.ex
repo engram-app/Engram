@@ -96,10 +96,12 @@ defmodule Engram.Workers.CrdtBloatSweep do
   """
   use Oban.Worker, queue: :maintenance, max_attempts: 1
 
+  import Ecto.Query
+
   alias Engram.Crypto.Envelope
   alias Engram.DataMigrations.NoteSizes
   alias Engram.Logger.Metadata
-  alias Engram.Notes.CrdtBloat
+  alias Engram.Notes.{CrdtBloat, Note, NoteBody}
   alias Engram.Repo
 
   require Logger
@@ -293,7 +295,8 @@ defmodule Engram.Workers.CrdtBloatSweep do
   # The per-note sizes, one row per live note. Once `NoteSizes` has filled the
   # narrow `note_index_state` columns (`refresh_sizes/1` keeps them current)
   # the sweep reads that table; until then (a fresh upgrade) it
-  # aggregates `notes`, which is the slow heap scan the narrow read replaces.
+  # aggregates every live note and its body row, the slow scan the narrow
+  # read replaces.
   # Same column names and values either way.
   defp sized_rows(narrow?) do
     if narrow? do
@@ -315,22 +318,39 @@ defmodule Engram.Workers.CrdtBloatSweep do
       WHERE s.note_live AND $1::int >= 0 AND $5::timestamptz IS NOT NULL
       """
     else
+      # Ciphertext lengths of each live note's body, read through `NoteBody`
+      # (the `note_bodies` copy, else the `notes` one for a note with no body
+      # row), so this path and every other body read agree. The subquery
+      # names its columns; it has no parameters of its own.
+      {lengths, []} = Repo.to_sql(:all, from(w in subquery(wide_lengths()), select: w))
+
       """
       SELECT
-        n.id,
-        n.version,
-        n.updated_at >= $5 AS written,
-        n.crdt_state_ciphertext IS NOT NULL AS has_state,
-        greatest(octet_length(n.crdt_state_ciphertext) - $1::int, 0) AS state_bytes,
-        greatest(octet_length(n.content_ciphertext) - $1::int, 0) AS content_bytes,
-        greatest(octet_length(n.content_ciphertext) - $1::int, 0) >= $3::int AS big,
-        greatest(octet_length(n.crdt_state_ciphertext) - $1::int, 0)::float8
-          / greatest(octet_length(n.content_ciphertext) - $1::int, 1)::float8 AS ratio
-      FROM notes n
-      WHERE n.deleted_at IS NULL
-        AND n.kind = 'note'
+        w.id,
+        w.version,
+        w.updated_at >= $5 AS written,
+        w.state_len > 0 AS has_state,
+        greatest(w.state_len - $1::int, 0) AS state_bytes,
+        greatest(w.content_len - $1::int, 0) AS content_bytes,
+        greatest(w.content_len - $1::int, 0) >= $3::int AS big,
+        greatest(w.state_len - $1::int, 0)::float8
+          / greatest(w.content_len - $1::int, 1)::float8 AS ratio
+      FROM (#{lengths}) w
       """
     end
+  end
+
+  # `NoteBody.byte_length/1` is 0 for a NULL ciphertext; a stored one is
+  # never 0 bytes (the 16-byte tag), so `state_len > 0` is "has state".
+  defp wide_lengths do
+    from(n in Note,
+      where: is_nil(n.deleted_at) and n.kind == "note",
+      select: %{id: n.id, version: n.version, updated_at: n.updated_at}
+    )
+    |> NoteBody.join()
+    |> select_merge(
+      ^%{content_len: NoteBody.byte_length(:content), state_len: NoteBody.byte_length(:crdt)}
+    )
   end
 
   # Copies the body sizes (`note_bodies`, BEFORE-trigger columns) of the notes

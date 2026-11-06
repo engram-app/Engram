@@ -221,6 +221,9 @@ defmodule Engram.Notes.CrdtCheckpointBackpressureTest do
         |> Repo.update_all(set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil])
       end)
 
+      # CRDT state is read from `note_bodies`; app writers keep it in step.
+      Engram.Fixtures.mirror_body!(note.id)
+
       assert :ok =
                perform_job(CheckpointNote, %{
                  "user_id" => user.id,

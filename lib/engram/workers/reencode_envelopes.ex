@@ -43,6 +43,8 @@ defmodule Engram.Workers.ReencodeEnvelopes do
 
   Reads only the key, the AAD id and the one ciphertext + nonce pair being
   processed, never whole rows (a note carries several ciphertext columns).
+  A note's content and CRDT state are read from its body (`note_bodies`,
+  `Engram.Notes.NoteBody`), and the re-encoded pair is written to both copies.
   Memory and lock time are bounded by STORED bytes, not row count: each
   200-id batch is cut into chunks of at most `@chunk_bytes` (always at least
   one row, so one huge note still progresses), each committed on its own.
@@ -123,6 +125,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
       key: :id,
       ct: :content_ciphertext,
       nonce: :content_nonce,
+      body: :content,
       aad: {:notes, :content, :id}
     },
     %{
@@ -131,6 +134,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
       key: :id,
       ct: :crdt_state_ciphertext,
       nonce: :crdt_state_nonce,
+      body: :crdt,
       aad: {:notes, :crdt_state, :id}
     },
     %{
@@ -295,12 +299,43 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   runs inside each user's tenant context (`TenantScan`, #1349).
   """
   @spec enqueue_missing() :: non_neg_integer()
-  # Each per-user EXISTS is served by a partial index whose predicate is
-  # `legacy/1` (migration 20261103130200); `Engram.Bookkeeping.Drain` finds the
-  # drifted users from those indexes every few minutes.
+  # Each per-user EXISTS walks the user's rows; the `*_envelope_legacy`
+  # partial indexes (migration 20261103130200) serve `Engram.Bookkeeping.Drain`'s
+  # probes, not this query. A legacy note body that drifted from its `notes`
+  # row is not work (`legacy/1`), so without a count the migration would close
+  # over it silently: each pass counts them (`drifted_legacy/1`), warns and
+  # emits `[:engram, :reencode_envelopes, :drifted]`.
   def enqueue_missing do
-    TenantScan.flat_map_users(fn uid -> if any_legacy?(uid), do: [uid], else: [] end)
-    |> then(&TenantScan.enqueue_users(__MODULE__, &1))
+    rows = TenantScan.flat_map_users(fn uid -> [{uid, any_legacy?(uid), drifted_legacy(uid)}] end)
+    report_drifted(rows |> Enum.map(&elem(&1, 2)) |> Enum.sum())
+    TenantScan.enqueue_users(__MODULE__, for({uid, true, _} <- rows, do: uid))
+  end
+
+  defp drifted_legacy(user_id) do
+    for %{schema: Note, label: label} <- @columns, reduce: 0 do
+      acc -> acc + Repo.aggregate(drifted_query(label, user_id), :count)
+    end
+  end
+
+  @doc false
+  # The drifted legacy rows of one `notes` column for a user. Public for the
+  # plan test.
+  def drifted_query(label, user_id) do
+    @columns
+    |> Enum.find(&(&1.label == label))
+    |> note_legacy(:drifted)
+    |> where([r], r.user_id == ^user_id)
+  end
+
+  defp report_drifted(0), do: :ok
+
+  defp report_drifted(count) do
+    Logger.warning(
+      "envelope re-encode: legacy note bodies skipped, their notes row disagrees (drift)",
+      Metadata.with_category(:warning, :crypto, table: :notes, total_count: count)
+    )
+
+    :telemetry.execute([:engram, :reencode_envelopes, :drifted], %{count: count}, %{})
   end
 
   @doc "True while the user still has a row this worker would re-encode."
@@ -316,11 +351,61 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   # The done predicate and the worker's selection, one definition. A 16-byte
   # ciphertext is the tag alone (empty plaintext, format 0 by design); a
   # 13-byte nonce is format 1, done whatever its codec.
+  #
+  # The two `notes` columns are read from the body (`note_bodies`, through
+  # `NoteBody`, which falls back to the `notes` copy for a note with no body
+  # row). Whether a body holds a format 0 envelope at all is its
+  # `envelope_legacy` flag (the `note_bodies_sizes` trigger's test, the one
+  # the Drain probes), so an unflagged body costs no envelope read; the flag
+  # is per row, so the column's own nonce and length (13-byte slice and
+  # varlena header, nothing de-TOASTed) say which envelope it is. A NULL
+  # flag (no body row, or `NoteSizes` not there yet) takes that test alone.
+  #
+  # A body whose nonce disagrees with its `notes` row is not work: the CAS
+  # (`write_row/5`) compares the `notes` nonce and could never pass, so the
+  # row would be re-read and re-sealed on every pass. `NoteSplit`'s drift
+  # report and `Bookkeeping.Canary` (`NoteBody.drift_ids/2`) surface it.
+  defp legacy(%{schema: Note} = column), do: note_legacy(column, :work)
+
   defp legacy(%{label: name, schema: schema, ct: ct, nonce: nonce}) do
     from(r in schema,
       where: fragment("octet_length(?) = 12", field(r, ^nonce)),
       where: fragment("octet_length(?) > 16", field(r, ^ct))
     )
+    |> body_with_bound_aad(name)
+  end
+
+  # `:work` the rows in step with their `notes` row, `:drifted` the others
+  # (counted by `enqueue_missing/0`, never re-encoded). A drifted row always
+  # has a body row (without one both nonces are the `notes` nonce), so
+  # `:drifted` needs the flag itself, not `coalesce(flag, true)`: the planner
+  # then starts from the `note_bodies_envelope_legacy` partial index, empty
+  # in steady state, instead of walking the user's notes (ReencodeDriftPlanTest).
+  # A body whose flag `NoteSizes` has not filled yet is not counted; the
+  # ledger fills it. `IS DISTINCT FROM`: a NULL `notes` nonce against a body
+  # nonce is drift too.
+  defp note_legacy(%{label: name, body: body, nonce: nonce}, kind) do
+    nonce_expr = NoteBody.fields([nonce])[nonce]
+
+    {flagged, in_step} =
+      if kind == :work,
+        do:
+          {dynamic([note_body: b], coalesce(b.envelope_legacy, true)),
+           dynamic([n], ^nonce_expr == field(n, ^nonce))},
+        else:
+          {dynamic([note_body: b], b.envelope_legacy),
+           dynamic([n], fragment("? IS DISTINCT FROM ?", ^nonce_expr, field(n, ^nonce)))}
+
+    legacy =
+      dynamic(
+        [n],
+        ^flagged and fragment("octet_length(?) = 12", ^nonce_expr) and
+          ^NoteBody.byte_length(body) > 16 and ^in_step
+      )
+
+    Note
+    |> NoteBody.join()
+    |> where(^legacy)
     |> body_with_bound_aad(name)
   end
 
@@ -348,6 +433,16 @@ defmodule Engram.Workers.ReencodeEnvelopes do
 
   # `octet_length` reads the varlena header (no detoast) and is the
   # uncompressed size, which is what a chunk costs in memory.
+  defp stored_sizes(%{schema: Note, body: body} = column, ids) do
+    column
+    |> legacy()
+    |> where([r], r.id in ^ids)
+    |> order_by([r], r.id)
+    |> select(^%{id: dynamic([r], r.id), size: NoteBody.byte_length(body)})
+    |> Repo.all()
+    |> Enum.map(&{&1.id, &1.size})
+  end
+
   defp stored_sizes(%{key: key, ct: ct} = column, ids) do
     column
     |> legacy()
@@ -416,12 +511,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
           column
           |> legacy()
           |> where([r], field(r, ^key) in ^ids)
-          |> select([r], %{
-            id: field(r, ^key),
-            aad_id: field(r, ^aad_id),
-            ct: field(r, ^ct),
-            nonce: field(r, ^nonce)
-          })
+          |> select(^envelope_select(column, key, aad_id, ct, nonce))
           |> Repo.all()
           |> Enum.reduce(0, &(reencode_row(column, &1, dek) + &2))
           |> then(&{:ok, &1})
@@ -436,6 +526,27 @@ defmodule Engram.Workers.ReencodeEnvelopes do
         })
 
     result
+  end
+
+  # The `notes` envelope comes from the body (`NoteBody`), split back into the
+  # `{ciphertext, nonce}` pair the `notes` columns hold.
+  defp envelope_select(%{schema: Note}, key, aad_id, ct, nonce) do
+    Map.merge(
+      %{id: dynamic([r], field(r, ^key)), aad_id: dynamic([r], field(r, ^aad_id))},
+      Map.new(NoteBody.fields([ct, nonce]), fn
+        {^ct, expr} -> {:ct, expr}
+        {^nonce, expr} -> {:nonce, expr}
+      end)
+    )
+  end
+
+  defp envelope_select(_column, key, aad_id, ct, nonce) do
+    %{
+      id: dynamic([r], field(r, ^key)),
+      aad_id: dynamic([r], field(r, ^aad_id)),
+      ct: dynamic([r], field(r, ^ct)),
+      nonce: dynamic([r], field(r, ^nonce))
+    }
   end
 
   defp current_dek(user_id) do
@@ -455,7 +566,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
     case Envelope.decrypt(ct, nonce, dek, aad) do
       {:ok, plaintext} ->
         {new_ct, new_nonce} = Envelope.encrypt(plaintext, dek, aad)
-        {rows, _} = write_row(name, id, ct, new_ct, new_nonce)
+        {rows, _} = write_row(name, id, {ct, nonce}, new_ct, new_nonce)
         rows
 
       :error ->
@@ -471,14 +582,30 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   @doc false
   # The CAS write. Public as the seam for the stale-read test. Must run in
   # the user's tenant context. A miss (0 rows) means the row changed since it
-  # was read; it is left for the next pass. The CAS is a byte-for-byte bytea
-  # comparison, so the OLD ciphertext travels back to Postgres as a query
+  # was read; it is left for the next pass. `old` is the `{ciphertext, nonce}`
+  # pair that was read.
+  #
+  # Outside `notes` the CAS is a byte-for-byte bytea comparison of the
+  # ciphertext, so the OLD ciphertext travels back to Postgres as a query
   # parameter: each write sends about twice the row's stored bytes, cheap next
   # to the decrypt + seal.
-  def write_row(name, id, old_ct, new_ct, new_nonce) do
+  #
+  # On `notes` the pair was read from the body (`note_bodies`), and the CAS
+  # compares the nonce column of the locked `notes` row, as the other write
+  # fences do (`NoteBody` moduledoc): every encryption takes a fresh nonce, so
+  # an unchanged nonce is an unchanged envelope, and the R8 contract release
+  # keeps writing the nonce columns. A `note_bodies` compare inside this
+  # UPDATE would see the pre-wait body after a row-lock wait. Writers still
+  # write both copies: the `notes` columns here, the body by `sync!/3`.
+  def write_row(name, id, {old_ct, old_nonce}, new_ct, new_nonce) do
     %{schema: schema, key: key, ct: ct, nonce: nonce} = Enum.find(@columns, &(&1.label == name))
 
-    from(r in schema, where: field(r, ^key) == ^id and field(r, ^ct) == ^old_ct)
+    cas =
+      if schema == Note,
+        do: dynamic([r], field(r, ^nonce) == ^old_nonce),
+        else: dynamic([r], field(r, ^ct) == ^old_ct)
+
+    from(r in schema, where: field(r, ^key) == ^id, where: ^cas)
     |> Repo.update_all(set: [{ct, new_ct}, {nonce, new_nonce}])
     |> tap(fn {n, _} -> if schema == Note and n > 0, do: NoteBody.sync!(id, [ct]) end)
   end

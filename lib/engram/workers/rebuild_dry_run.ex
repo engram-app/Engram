@@ -40,6 +40,7 @@ defmodule Engram.Workers.RebuildDryRun do
   alias Engram.DataMigrations.IndexVersions
   alias Engram.Indexing
   alias Engram.Logger.Metadata
+  alias Engram.Notes.NoteBody
   alias Engram.Rebuild
   alias Engram.Rebuild.Manifest
   alias Engram.Repo
@@ -183,6 +184,8 @@ defmodule Engram.Workers.RebuildDryRun do
     |> then(&if(after_id, do: where(&1, [n], n.id > ^after_id), else: &1))
     |> order_by([n], asc: n.id)
     |> limit(@page)
-    |> select([n], n)
+    # The content comes from `note_bodies` (`NoteBody`); planning never reads
+    # the CRDT state.
+    |> NoteBody.select_note(NoteBody.without_crdt())
   end
 end

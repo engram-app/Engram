@@ -174,8 +174,10 @@ defmodule Engram.Bookkeeping.Drain do
     counts
   end
 
-  # A note's body is probed on `note_bodies` (the copy that survives the R8
-  # contract) while the worker still selects on the `notes` columns, so each
+  # A note's body is probed on `note_bodies` through its `envelope_legacy`
+  # flag, which the worker also selects on; the worker adds terms the index
+  # cannot carry (which column, the bound-AAD gate for content, and a body
+  # whose nonce disagrees with its `notes` row is left alone), so each
   # candidate is confirmed with the worker's own predicate. While compression is
   # off (or a node cannot read format 1) a re-encode would write format 0 again:
   # the worker cancels itself, so the drain does not queue it.

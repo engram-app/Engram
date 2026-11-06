@@ -36,6 +36,9 @@ defmodule Engram.MCP.HandlersDeleteCorruptTest do
         skip_tenant_check: true
       )
 
+    # Content is read from `note_bodies`: damage the copy readers see.
+    Engram.Fixtures.mirror_body!(note.id)
+
     assert {:ok, text, structured} =
              Handlers.handle("delete_note", user, vault, %{"path" => "a.md"})
 

@@ -264,6 +264,25 @@ defmodule Engram.RebuildTest do
     defp planner_jobs(user),
       do: all_enqueued(worker: RebuildDryRun, args: %{"user_id" => user.id})
 
+    # R8 read switch: the planner estimates the body `note_bodies` holds. With
+    # the `notes` copy overwritten (a raw write that skips `NoteBody.sync!/3`),
+    # a planner that read it could not decrypt and would leave the row pending.
+    test "plans from the body row, not the notes copy", %{user: user, vault: vault} do
+      a = stale_note!(user, vault, "A.md", "# Alpha\n\n" <> String.duplicate("alpha words ", 200))
+
+      Repo.query!(
+        "UPDATE notes SET content_ciphertext = '\\xdeadbeefdeadbeefdeadbeefdeadbeef' WHERE id = $1",
+        [Ecto.UUID.dump!(a.id)]
+      )
+
+      mode!("dry_run")
+      assert :ok = perform_job(RebuildDryRun, %{"user_id" => user.id})
+
+      assert [%{note_id: id, planned?: true, est_tokens: tokens}] = manifest(user.id)
+      assert id == a.id
+      assert tokens > 0
+    end
+
     test "writes manifest rows, vault avgdl and the budget with 0 Voyage and 0 Qdrant calls",
          %{user: user, vault: vault} do
       a = stale_note!(user, vault, "A.md", "# Alpha\n\n" <> String.duplicate("alpha words ", 200))
