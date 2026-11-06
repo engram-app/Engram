@@ -716,6 +716,24 @@ defmodule Engram.Notes do
     end)
   end
 
+  @doc """
+  The folder hashes, among `hmacs`, that a LIVE folder marker of the vault
+  sits at. One read on the marker key index; for `Folders.Rows.soft_delete/4`,
+  which keeps those folder rows.
+  """
+  @spec live_folder_marker_hmacs(map(), Ecto.UUID.t(), [binary()]) :: MapSet.t(binary())
+  def live_folder_marker_hmacs(_user, _vault_id, []), do: MapSet.new()
+
+  def live_folder_marker_hmacs(user, vault_id, hmacs) do
+    user
+    |> folder_markers_by_hmac_query(vault_id, hmacs)
+    |> where([n], is_nil(n.deleted_at))
+    |> distinct(true)
+    |> select([n], n.folder_hmac)
+    |> Repo.all()
+    |> MapSet.new()
+  end
+
   defp folder_markers_by_hmac_query(user, vault, hmacs) do
     ids? = Keys.ids?()
 

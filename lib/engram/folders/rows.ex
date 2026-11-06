@@ -28,7 +28,10 @@ defmodule Engram.Folders.Rows do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Folders.Folder
+  alias Engram.Logger.Metadata
   alias Engram.Repo
+
+  require Logger
 
   # ---- keys and names (pure) ----------------------------------------------
 
@@ -544,6 +547,14 @@ defmodule Engram.Folders.Rows do
   and its explicit flag moves to the occupant. Rows the previous release made
   without a row simply have nothing to rename here; `ensure/4` fills the new
   paths.
+
+  The source rows a merge folds away are retired by `retire_later/2`: at
+  the end of the enclosing `with_deferred_retires/1` (every REST and MCP
+  folder move, through `Folders.atomic/1`), after the notes AND attachments
+  have been re-pointed; at once with no such owner. Retiring before the moves
+  would make the `folders_release_refs` trigger NULL every moved row's
+  reference and the move write it again: two writes per row (#2468 reviews).
+  After them it releases only the stragglers.
   """
   @spec rename(map(), Ecto.UUID.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def rename(_user, _vault_id, same, same), do: :ok
@@ -696,25 +707,24 @@ defmodule Engram.Folders.Rows do
   end
 
   # The target of the rename already has a live row: fold each source row into
-  # the row that holds its new place, or move it there.
+  # the row that holds its new place, or move it there. The rows that lose
+  # their place are retired by `retire_later/2` (see `rename/4`).
   defp merge_subtree(ctx, rows, paths, root_id, occupant, new_parent) do
-    _ =
-      Enum.reduce(rows, %{root_id => occupant}, fn row, placed ->
+    {_placed, merged} =
+      Enum.reduce(rows, {%{root_id => occupant}, []}, fn row, {placed, merged} ->
         case Map.fetch(paths, row.id) do
           :error ->
-            placed
+            {placed, merged}
 
           {:ok, _path} when row.id == root_id ->
-            retire(row, occupant)
-            placed
+            {placed, [{row, occupant} | merged]}
 
           {:ok, path} ->
             parent = Map.get(placed, row.parent_id, new_parent)
 
             case live_child(ctx.vault_id, parent, row.name_hmac) do
               %{id: taken} when taken != row.id ->
-                retire(row, taken)
-                Map.put(placed, row.id, taken)
+                {Map.put(placed, row.id, taken), [{row, taken} | merged]}
 
               _ ->
                 from(f in Folder, where: f.id == ^row.id)
@@ -726,20 +736,73 @@ defmodule Engram.Folders.Rows do
                   ]
                 )
 
-                Map.put(placed, row.id, row.id)
+                {Map.put(placed, row.id, row.id), merged}
             end
         end
       end)
 
+    retire_later(ctx.user_id, Enum.reverse(merged))
+  end
+
+  @retires :engram_folder_retires
+
+  @doc """
+  Runs `fun` (returning `{:ok, _}` or `{:error, _}`) as the owner of the
+  merge retires `rename/4` queues: on `{:ok, _}` they run last, each in its
+  user's tenant block, inside the caller's transaction (a rollback undoes
+  them); on an error they are dropped with the rest. Nested calls join the
+  outer owner. The `Repo.after_commit/1` pattern, for a step that must stay
+  inside the transaction.
+  """
+  @spec with_deferred_retires((-> {:ok, term()} | {:error, term()})) ::
+          {:ok, term()} | {:error, term()}
+  def with_deferred_retires(fun) do
+    if Process.get(@retires) do
+      fun.()
+    else
+      Process.put(@retires, [])
+
+      try do
+        with {:ok, _} = ok <- fun.() do
+          @retires
+          |> Process.get()
+          |> Enum.reverse()
+          |> Enum.each(fn {user_id, merged} ->
+            Repo.with_tenant!(user_id, fn -> retire_merged(merged) end)
+          end)
+
+          ok
+        end
+      after
+        Process.delete(@retires)
+      end
+    end
+  end
+
+  # Queued for the owner, or retired at once (inside the caller's tenant block).
+  defp retire_later(_user_id, []), do: :ok
+
+  defp retire_later(user_id, merged) do
+    case Process.get(@retires) do
+      nil -> retire_merged(merged)
+      queue -> Process.put(@retires, [{user_id, merged} | queue])
+    end
+
     :ok
   end
 
+  defp retire_merged(merged), do: Enum.each(merged, fn {row, keeper} -> retire(row, keeper) end)
+
   # `row` lost its place to `keeper`: its explicit flag moves over, it is retired.
+  # The flag is read from the row NOW, in the same statement, not from the
+  # struct queued earlier: in a chained merge (one owner, the second merge's
+  # source is the first one's keeper) the first retire sets it after the
+  # second was queued. The queue is FIFO, so the flag lands at the end.
   defp retire(row, keeper) do
-    if row.explicit do
-      from(f in Folder, where: f.id == ^keeper)
-      |> Repo.update_all(set: [explicit: true, updated_at: now()])
-    end
+    explicit = from(s in Folder, where: s.id == ^row.id and s.explicit, select: 1)
+
+    from(f in Folder, where: f.id == ^keeper and not f.explicit and exists(explicit))
+    |> Repo.update_all(set: [explicit: true, updated_at: now()])
 
     from(f in Folder, where: f.id == ^row.id)
     |> Repo.update_all(set: [deleted_at: now(), updated_at: now()])
@@ -751,10 +814,18 @@ defmodule Engram.Folders.Rows do
   Soft-deletes the live rows at `folders` and every descendant, stamping
   `op_id` (the undo id, nil for a plain delete). Returns how many rows.
 
-  A row that still has a live note or attachment pointing at it, and every
-  ancestor of such a row, is left alone: the delete's content legs commit in
-  their own transactions, so something written into the folder in between must
-  not end up attached to a deleted row. The next delete of the folder finishes it.
+  A row that still has a live note or attachment pointing at it, or a live
+  folder marker at its path, and every ancestor of such a row, is left alone:
+  the delete's content legs commit in their own transactions, so something
+  written into the folder in between must not end up attached to a deleted
+  row. The next delete of the folder finishes it. Every writer takes the
+  vault row lock this takes first, so what it counts is everything committed.
+
+  A marker counts like content (#2466 review, H2): a marker created after
+  the delete's scan would otherwise be left live over a deleted row, a folder
+  the tree still shows and no later delete or rename can find. Markers carry
+  no `folder_ref_id` (the previous release's folder counts would drop an
+  empty marker folder that had one), so they are matched by path hash.
   """
   @spec soft_delete(map(), Ecto.UUID.t(), [String.t()], Ecto.UUID.t() | nil) :: non_neg_integer()
   def soft_delete(user, vault_id, folders, op_id) do
@@ -769,7 +840,13 @@ defmodule Engram.Folders.Rows do
 
       rows ->
         ids = Enum.map(rows, & &1.id)
-        keep = with_ancestors(live_content_folders(ids), Map.new(rows, &{&1.id, &1.parent_id}))
+        content = live_content_folders(ids)
+        marked = live_marker_folders(user, vault_id, rows)
+        log_kept_by_marker(user, vault_id, MapSet.size(MapSet.difference(marked, content)))
+
+        keep =
+          with_ancestors(MapSet.union(content, marked), Map.new(rows, &{&1.id, &1.parent_id}))
+
         doomed = Enum.reject(ids, &MapSet.member?(keep, &1))
 
         {n, _} =
@@ -799,6 +876,29 @@ defmodule Engram.Folders.Rows do
       )
 
     MapSet.new(Repo.all(notes) ++ Repo.all(attachments))
+  end
+
+  # A marker the delete's own marker leg did not remove (its path did not
+  # decrypt, or the membership fence skipped it as moved) keeps its folder:
+  # say so, by count only, rather than report a clean delete silently.
+  defp log_kept_by_marker(_user, _vault_id, 0), do: :ok
+
+  defp log_kept_by_marker(user, vault_id, count) do
+    Logger.warning(
+      "folder delete: rows kept for live folder markers",
+      Metadata.with_category(:warning, :sync,
+        user_id: user.id,
+        vault_id: vault_id,
+        kept_count: count
+      )
+    )
+  end
+
+  # Folder ids (among `rows`) whose path a live folder marker names.
+  defp live_marker_folders(user, vault_id, rows) do
+    hmacs = for %{full_path_hmac: h} when is_binary(h) <- rows, do: h
+    named = Engram.Notes.live_folder_marker_hmacs(user, vault_id, hmacs)
+    for %{id: id, full_path_hmac: h} <- rows, MapSet.member?(named, h), into: MapSet.new(), do: id
   end
 
   defp with_ancestors(set, parents) do
