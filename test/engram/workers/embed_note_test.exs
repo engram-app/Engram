@@ -921,6 +921,57 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert returned.scheduled_at == job.scheduled_at
     end
 
+    # A big note edited all day re-indexed every 5 minutes (prod 2026-11-05:
+    # 500-760 chunk notes, 95-209 passes a day), and every pass re-chunks the
+    # whole note. Its ceiling scales with its size, to a fixed cap.
+    defp set_chunks(note, count) do
+      {1, _} =
+        Repo.update_all(
+          from(s in Engram.Notes.NoteIndexState, where: s.note_id == ^note.id),
+          [set: [chunk_count: count]],
+          skip_tenant_check: true
+        )
+    end
+
+    defp backdate_burst(note, seconds) do
+      from(j in Oban.Job, where: fragment("? ->> 'note_id' = ?", j.args, ^to_string(note.id)))
+      |> Repo.update_all(set: [inserted_at: DateTime.add(DateTime.utc_now(), -seconds, :second)])
+    end
+
+    test "a big note's ceiling scales with its size: past 300s it still settles",
+         %{note: note} do
+      set_chunks(note, 600)
+      {:ok, _} = EmbedNote.insert_debounced(note.id, note.user_id)
+      backdate_burst(note, 400)
+
+      {:ok, _} = EmbedNote.insert_debounced(note.id, note.user_id)
+
+      diff = DateTime.diff(embed_job(note.id).scheduled_at, DateTime.utc_now(), :second)
+      assert diff in 25..35
+    end
+
+    test "the scaled ceiling has a fixed cap", %{note: note} do
+      set_chunks(note, 1_000_000)
+      {:ok, _} = EmbedNote.insert_debounced(note.id, note.user_id)
+      backdate_burst(note, EmbedNote.max_wait_cap_seconds() - 10)
+
+      {:ok, _} = EmbedNote.insert_debounced(note.id, note.user_id)
+
+      diff = DateTime.diff(embed_job(note.id).scheduled_at, DateTime.utc_now(), :second)
+      assert diff <= 15
+    end
+
+    test "max_wait_seconds: the base for a small note, 3 s a chunk, capped" do
+      assert EmbedNote.max_wait_seconds(nil) == 300
+      assert EmbedNote.max_wait_seconds(10) == 300
+      assert EmbedNote.max_wait_seconds(300) == 900
+      assert EmbedNote.max_wait_seconds(600) == 1_800
+      assert EmbedNote.max_wait_seconds(100_000) == EmbedNote.max_wait_cap_seconds()
+      assert EmbedNote.max_wait_cap_seconds() == 1_800
+      # The dedup window spans the longest ceiling, or a long burst forks a job.
+      assert EmbedNote.settle_window_seconds() == 1_800 + 30
+    end
+
     test "a re-insert inside the ceiling keeps the full settle window", %{note: note} do
       {:ok, _} = EmbedNote.insert_debounced(note.id, note.user_id)
       burst_start = DateTime.add(DateTime.utc_now(), -60, :second)
