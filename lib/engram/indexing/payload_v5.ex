@@ -76,16 +76,14 @@ defmodule Engram.Indexing.PayloadV5 do
   defp ceil_fallback({up, nil}, _note), do: {up, nil}
   defp ceil_fallback({nil, src}, _note), do: {nil, src}
 
-  # Seconds: main's formula verbatim on the raw double (hash identity by
-  # construction). Milliseconds: from `FileTime`'s full precision.
-  defp ceil_fallback({_up, @file_src}, %{mtime: t}) do
-    if FileTime.seconds?(t) do
-      {ceil(t / @hour) * @hour, @file_src}
-    else
-      {:ok, at} = FileTime.to_at(t)
-      {ceil(DateTime.to_unix(at, :microsecond) / (@hour * 1_000_000)) * @hour, @file_src}
-    end
-  end
+  # `FileTime.mtime/1`: a seconds double verbatim (main's formula, hash
+  # identity by construction); a millisecond one as seconds at microsecond
+  # precision, whose ceil equals the previous microsecond ceil: exactly below
+  # ~2096 (a double's ulp is under 1 us there), and in a 1M-sample check
+  # across years 1-9999 beyond it.
+  # Also the contract shape, `mtime` gone and `mtime_at` set.
+  defp ceil_fallback({_up, @file_src}, note),
+    do: {ceil(FileTime.mtime(note) / @hour) * @hour, @file_src}
 
   defp ceil_fallback({up, src}, _note), do: {ceil(up / @hour) * @hour, src}
 

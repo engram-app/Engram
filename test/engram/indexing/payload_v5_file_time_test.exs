@@ -91,4 +91,19 @@ defmodule Engram.Indexing.PayloadV5FileTimeTest do
     n = %{note(1_776_072_500.928, 5.5) | mtime_at: nil, ctime_at: nil}
     assert PayloadV5.build(n, FlatFields.empty()) == old_payload(n)
   end
+
+  test "a drifted twin: the seconds double wins, payload and stored date agree" do
+    n = %{note(1_776_072_500.928, 1_510_897_528.861) | mtime_at: ~U[2020-01-01 00:00:00Z]}
+    p = PayloadV5.build(n, FlatFields.empty())
+    assert p == old_payload(n)
+    {stored, 1} = Engram.Notes.EffectiveDates.updated(n, nil)
+    assert stored == trunc(n.mtime)
+    assert p["up"] == ceil(stored / @hour) * @hour
+  end
+
+  test "the contract shape (no double, *_at set) ceils the twin" do
+    n = %{note(1_776_072_500.928, 5.5) | mtime: nil}
+    assert %{"up" => up, "us" => 1} = PayloadV5.build(n, FlatFields.empty())
+    assert up == ceil(1_776_072_500.928 / @hour) * @hour
+  end
 end
