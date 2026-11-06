@@ -84,6 +84,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   alias Engram.Indexing.PayloadV6
   alias Engram.Jobs
   alias Engram.Logger.Metadata
+  alias Engram.Maintenance.Cursor
   alias Engram.Notes.{Chunk, Note, NoteBody, NoteIndexState}
   alias Engram.Rebuild
   alias Engram.Repo
@@ -115,6 +116,8 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   @n_per_min 500
   # A paused backfill (kill switch off) rechecks this rarely.
   @paused_snooze 300
+  # Where `requeue_unbackfilled/0`'s walk resumes.
+  @requeue_cursor "payload_n_requeue"
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
@@ -535,22 +538,26 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   @doc """
   The done check's second half: points a previous-release node upserted
-  without `n` after their note was stamped (a rolling deploy). One scroll of
-  at most 256 v5 points without `n`, fleet-wide; the notes they belong to
-  (through their chunk rows) lose their version stamp, so the sweep selects
-  them again. Points with no chunk row are orphans: `OrphanSweep` reaps them
-  and no `n` filter matches them. `:clean` when the page found no point of a
-  live note and nothing follows it; else how many users it requeued.
+  without `n` after their note was stamped (a rolling deploy). ONE scroll
+  page of at most 256 v5 points without `n` per call, fleet-wide, resuming
+  from the page the last call reached (`Engram.Maintenance.Cursor`, so it
+  survives deploys); the notes they belong to (through their chunk rows)
+  lose their version stamp, so the sweep selects them again. Points with no
+  chunk row are orphans: `OrphanSweep` reaps them, no `n` filter matches
+  them, and they count as clean. `:clean` only when a whole walk, start to
+  end, requeued nobody; else how many users this page requeued.
   """
   @spec requeue_unbackfilled() :: :clean | {:ok, non_neg_integer()} | {:error, term()}
   def requeue_unbackfilled do
     filter = %{must: [%{is_empty: %{key: @n_key}}], must_not: [%{is_empty: %{key: "u"}}]}
+    walk = Cursor.get(@requeue_cursor) || %{}
 
     with {:ok, %{points: points, next_page_offset: next}} <-
            Qdrant.scroll(Qdrant.collection_name(),
              filter: filter,
              with_payload: ["u"],
-             limit: @refresh_page
+             limit: @refresh_page,
+             offset: walk["offset"]
            ) do
       users =
         points
@@ -558,9 +565,16 @@ defmodule Engram.Workers.ReconcileNotePayloads do
         |> Enum.filter(fn {uid, ids} -> unstamp_versions(uid, ids) > 0 end)
         |> Enum.map(&elem(&1, 0))
 
+      dirty = walk["dirty"] == true or users != []
+
+      # The end of the walk: the next call starts a fresh one.
+      if next == nil,
+        do: Cursor.reset(@requeue_cursor),
+        else: Cursor.put(@requeue_cursor, %{"offset" => next, "dirty" => dirty})
+
       cond do
         users != [] -> {:ok, TenantScan.enqueue_users(__MODULE__, users)}
-        next == nil -> :clean
+        next == nil and not dirty -> :clean
         true -> {:ok, 0}
       end
     end
