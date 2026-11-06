@@ -123,6 +123,21 @@ defmodule Engram.CheckpointInterleave do
   end
 
   @doc """
+  Install `fun` as the interleave hook (called with each seam's name) for
+  the calling test, restored on exit.
+  """
+  def put_hook(fun) when is_function(fun, 1) do
+    prev = Application.get_env(:engram, @hook_key)
+    Application.put_env(:engram, @hook_key, fun)
+
+    ExUnit.Callbacks.on_exit(fn ->
+      if is_nil(prev),
+        do: Application.delete_env(:engram, @hook_key),
+        else: Application.put_env(:engram, @hook_key, prev)
+    end)
+  end
+
+  @doc """
   Block until the checkpoint reports it is parked at `point`.
 
   Fails the test rather than returning if it never parks — a silent pass here

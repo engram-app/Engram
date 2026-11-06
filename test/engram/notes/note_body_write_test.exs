@@ -421,12 +421,10 @@ defmodule Engram.Notes.NoteBodyWriteTest do
     end
   end
 
-  describe "R8(b1): an old release's copy from notes cannot erase a body" do
-    # 0.74's DEK rotation copies every body field from `notes`
-    # (`NoteBody.sync!(ids, body_fields())`, user_dek_rotation.ex:294), and
-    # `NoteSplit` heals by the same copy. Beside a release that stops writing
-    # the `notes` ciphertexts, those columns are NULL or stale while the
-    # nonces stay current.
+  describe "R8(b1): this release's copy from notes (sync!, NoteSplit) never erases a body" do
+    # The copy that remains (`NoteSplit`, the head self-heal) beside a
+    # release that stops writing the `notes` ciphertexts: those columns are
+    # NULL or stale while the nonces stay current.
     setup %{user: u, vault: v} do
       note = write!(u, v, "a.md", "first")
       %{note: note, id: Ecto.UUID.dump!(note.id), before: body_row(note.id)}
@@ -463,16 +461,194 @@ defmodule Engram.Notes.NoteBodyWriteTest do
       assert_body_kept!(ctx)
     end
 
-    test "NULL ciphertexts while the copy rewrites the row (key version out of step)", ctx do
-      Repo.query!(
-        "UPDATE notes SET content_ciphertext = NULL, crdt_state_ciphertext = NULL WHERE id = $1",
-        [ctx.id]
-      )
+    for {name, value} <- [{"NULL", nil}, {"stale", :stale}] do
+      test "#{name} ciphertexts while the copy rewrites the row (key version out of step)", ctx do
+        value = if unquote(value) == :stale, do: :crypto.strong_rand_bytes(40)
 
-      [[_, kv | _]] = ctx.before
-      Repo.query!("UPDATE note_bodies SET key_version = $2 WHERE note_id = $1", [ctx.id, kv + 1])
-      assert NoteBody.sync!([ctx.note.id], NoteBody.body_fields()) == 1
-      assert_body_kept!(ctx)
+        Repo.query!(
+          "UPDATE notes SET content_ciphertext = $2, crdt_state_ciphertext = $2 WHERE id = $1",
+          [ctx.id, value]
+        )
+
+        [[_, kv | _]] = ctx.before
+
+        Repo.query!("UPDATE note_bodies SET key_version = $2 WHERE note_id = $1", [ctx.id, kv + 1])
+
+        assert NoteBody.sync!([ctx.note.id], NoteBody.body_fields()) == 1
+        assert_body_kept!(ctx)
+      end
+    end
+  end
+
+  # The previous release's copy, verbatim: release-v0.75.0's
+  # `NoteBody.sync!(ids, body_fields())` statement (lib/engram/notes/note_body.ex
+  # `@sync_sql` for [:content, :crdt, :head]), which its DEK rotation runs
+  # (user_dek_rotation.ex:294). Rendered from `git show
+  # release-v0.75.0:lib/engram/notes/note_body.ex`; do not edit.
+  @copy_sql_v0_75_0 """
+  WITH upd AS (
+    UPDATE note_bodies b SET
+      user_id = n.user_id,
+      key_version = CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END,
+        content_ct = CASE WHEN n.content_ciphertext IS NULL THEN NULL
+    WHEN n.content_nonce IS NULL THEN n.content_ciphertext
+    WHEN length(n.content_nonce) = 13 THEN n.content_nonce || n.content_ciphertext
+    ELSE '\\x00'::bytea || n.content_nonce || n.content_ciphertext END
+  ,
+        crdt_ct = CASE WHEN n.crdt_state_ciphertext IS NULL THEN NULL
+    WHEN n.crdt_state_nonce IS NULL THEN n.crdt_state_ciphertext
+    WHEN length(n.crdt_state_nonce) = 13 THEN n.crdt_state_nonce || n.crdt_state_ciphertext
+    ELSE '\\x00'::bytea || n.crdt_state_nonce || n.crdt_state_ciphertext END
+  ,
+        crdt_head = CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$' THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END
+    FROM notes n
+    WHERE b.note_id = n.id AND n.id = ANY($1) AND n.kind = 'note'
+      AND (b.user_id <> n.user_id OR b.key_version <> CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END OR ((b.content_ct IS NULL) <> (n.content_ciphertext IS NULL) OR (n.content_ciphertext IS NOT NULL AND (
+    octet_length(b.content_ct) <> octet_length(n.content_ciphertext) + octet_length(CASE WHEN n.content_nonce IS NULL THEN ''::bytea WHEN length(n.content_nonce) = 13 THEN n.content_nonce ELSE '\\x00'::bytea || n.content_nonce END)
+    OR substring(b.content_ct FROM 1 FOR 13)
+      <> substring((CASE WHEN n.content_nonce IS NULL THEN ''::bytea WHEN length(n.content_nonce) = 13 THEN n.content_nonce ELSE '\\x00'::bytea || n.content_nonce END) || substring(n.content_ciphertext FROM 1 FOR 13) FROM 1 FOR 13)
+    OR substring(b.content_ct FROM greatest(octet_length(b.content_ct) - 15, 1))
+      <> substring(n.content_ciphertext FROM greatest(octet_length(n.content_ciphertext) - 15, 1)))))
+   OR ((b.crdt_ct IS NULL) <> (n.crdt_state_ciphertext IS NULL) OR (n.crdt_state_ciphertext IS NOT NULL AND (
+    octet_length(b.crdt_ct) <> octet_length(n.crdt_state_ciphertext) + octet_length(CASE WHEN n.crdt_state_nonce IS NULL THEN ''::bytea WHEN length(n.crdt_state_nonce) = 13 THEN n.crdt_state_nonce ELSE '\\x00'::bytea || n.crdt_state_nonce END)
+    OR substring(b.crdt_ct FROM 1 FOR 13)
+      <> substring((CASE WHEN n.crdt_state_nonce IS NULL THEN ''::bytea WHEN length(n.crdt_state_nonce) = 13 THEN n.crdt_state_nonce ELSE '\\x00'::bytea || n.crdt_state_nonce END) || substring(n.crdt_state_ciphertext FROM 1 FOR 13) FROM 1 FOR 13)
+    OR substring(b.crdt_ct FROM greatest(octet_length(b.crdt_ct) - 15, 1))
+      <> substring(n.crdt_state_ciphertext FROM greatest(octet_length(n.crdt_state_ciphertext) - 15, 1)))))
+   OR b.crdt_head IS DISTINCT FROM CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$' THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END)
+    RETURNING 1
+  ), ins AS (
+    INSERT INTO note_bodies (note_id, user_id, key_version, content_ct, crdt_ct, crdt_head)
+    SELECT n.id, n.user_id, CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END, CASE WHEN n.content_ciphertext IS NULL THEN NULL
+    WHEN n.content_nonce IS NULL THEN n.content_ciphertext
+    WHEN length(n.content_nonce) = 13 THEN n.content_nonce || n.content_ciphertext
+    ELSE '\\x00'::bytea || n.content_nonce || n.content_ciphertext END
+  , CASE WHEN n.crdt_state_ciphertext IS NULL THEN NULL
+    WHEN n.crdt_state_nonce IS NULL THEN n.crdt_state_ciphertext
+    WHEN length(n.crdt_state_nonce) = 13 THEN n.crdt_state_nonce || n.crdt_state_ciphertext
+    ELSE '\\x00'::bytea || n.crdt_state_nonce || n.crdt_state_ciphertext END
+  , CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$' THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END
+    FROM notes n
+    WHERE n.id = ANY($1) AND n.kind = 'note'
+      AND NOT EXISTS (SELECT 1 FROM note_bodies x WHERE x.note_id = n.id)
+    ON CONFLICT (note_id) DO NOTHING
+    RETURNING note_id, content_bytes, state_bytes
+  ), sized AS (
+    UPDATE note_index_state s SET
+      content_bytes = i.content_bytes,
+      state_bytes = i.state_bytes,
+      has_state = i.state_bytes IS NOT NULL
+    FROM ins i
+    WHERE s.note_id = i.note_id
+  )
+  SELECT ((SELECT count(*) FROM upd) + (SELECT count(*) FROM ins))::int
+  """
+
+  describe "R8(b1): 0.75's copy over rows this release wrote" do
+    # Beside this release the previous one still runs its copy. This release
+    # still writes the `notes` columns with the values it hands `put!/2`, so
+    # that copy finds every row in step and writes nothing.
+    defp copy_v0_75_0!(ids) do
+      %{rows: [[n]]} = Repo.query!(@copy_sql_v0_75_0, [Enum.map(ids, &Ecto.UUID.dump!/1)])
+      n
+    end
+
+    defp bodies(u) do
+      Repo.query!(
+        "SELECT b.note_id, b.user_id, b.key_version, b.content_ct, b.crdt_ct, b.crdt_head " <>
+          "FROM note_bodies b WHERE b.user_id = $1 ORDER BY b.note_id",
+        [Ecto.UUID.dump!(u.id)]
+      ).rows
+    end
+
+    defp ids(u) do
+      Repo.query!("SELECT id::text FROM notes WHERE user_id = $1 AND kind = 'note'", [
+        Ecto.UUID.dump!(u.id)
+      ]).rows
+      |> Enum.map(&hd/1)
+    end
+
+    defp assert_copy_writes_nothing!(u) do
+      before = bodies(u)
+      assert copy_v0_75_0!(ids(u)) == 0
+      assert bodies(u) == before
+    end
+
+    test "after create, update, checkpoint, rename and folder rename", %{user: u, vault: v} do
+      note = write!(u, v, "d/a.md", "first")
+      assert_copy_writes_nothing!(u)
+      write!(u, v, "d/a.md", "second")
+      assert_copy_writes_nothing!(u)
+      :ok = CrdtCheckpoint.checkpoint(u.id, v.id, note.id, doc_with("changed"))
+      assert_copy_writes_nothing!(u)
+      assert {:ok, _} = Notes.rename_note(u, v, "d/a.md", "d/b.md")
+      assert_copy_writes_nothing!(u)
+      assert {:ok, _} = Notes.rename_folder(u, v, "d", "e")
+      assert_copy_writes_nothing!(u)
+      assert {:ok, %{content: text}} = Notes.get_note(u, v, "e/b.md")
+      assert text =~ "changed"
+    end
+
+    test "a control: it does copy over a body out of step", %{user: u, vault: v} do
+      note = write!(u, v, "a.md", "first")
+
+      Repo.query!("UPDATE note_bodies SET content_ct = NULL WHERE note_id = $1", [
+        Ecto.UUID.dump!(note.id)
+      ])
+
+      assert copy_v0_75_0!([note.id]) == 1
+      assert {:ok, %{content: "first"}} = Notes.get_note(u, v, "a.md")
+    end
+  end
+
+  describe "R8(b1): put!" do
+    test "writes nothing when the row already holds the values", %{user: u, vault: v} do
+      note = write!(u, v, "a.md", "first")
+      raw = Repo.reload!(note, skip_tenant_check: true)
+      values = Map.take(raw, NoteBody.body_fields())
+
+      assert NoteBody.put!({note.id, values}) == 0
+      assert NoteBody.put!({note.id, %{}}) == 0
+      assert NoteBody.put!({note.id, %{values | crdt_head: String.duplicate("A", 43)}}) == 1
+    end
+  end
+
+  describe "R8(b1): a create that lost a same-id race" do
+    # Two creates under one client id (an offline replay racing the live
+    # push): the second INSERT no-ops behind the first. It must not take the
+    # row as its own and write its body over the winner's.
+    test "leaves the winner's body, and the note stays writable", %{user: u, vault: v} do
+      id = Ecto.UUID.generate()
+      attrs = &%{"path" => "same.md", "content" => &1, "id" => id}
+
+      Engram.CheckpointInterleave.put_hook(fn
+        :before_bare_insert ->
+          if Process.put(:same_id_race_ran, true) != true do
+            {:ok, _} = Notes.upsert_note(u, v, attrs.("theirs"), actor: "api")
+          end
+
+        _ ->
+          :ok
+      end)
+
+      _ = Notes.upsert_note(u, v, attrs.("mine"), actor: "api")
+
+      %{rows: [[content_in_step, crdt_in_step]]} =
+        Repo.query!(
+          "SELECT n.content_nonce = substring(b.content_ct FROM 1 FOR 13), " <>
+            "n.crdt_state_nonce = substring(b.crdt_ct FROM 1 FOR 13) " <>
+            "FROM notes n JOIN note_bodies b ON b.note_id = n.id WHERE n.id = $1",
+          [Ecto.UUID.dump!(id)]
+        )
+
+      assert content_in_step and crdt_in_step
+      assert NoteBody.drift_ids(Repo, [id]) == []
+      assert {:ok, %{content: "theirs"}} = Notes.get_note(u, v, "same.md")
+
+      assert {:ok, _} =
+               Notes.upsert_note(u, v, %{"path" => "same.md", "content" => "third"}, actor: "api")
+
+      assert {:ok, %{content: "third"}} = Notes.get_note(u, v, "same.md")
     end
   end
 
