@@ -695,13 +695,16 @@ defmodule Engram.SearchNoteFilterTest do
       assert_received {:query, %{"filter" => filter}}
       refute inspect(filter) =~ ~s("n")
 
-      # Stamped (the sweep or an index pass), and the cached verdict expired.
+      # Stamped, the user's backfill chain finished (its marker), and the
+      # cached verdict expired.
       {1, _} =
         Repo.update_all(
           from(s in Engram.Notes.NoteIndexState, where: s.note_id == ^note.id),
           [set: [payload_version: PayloadV6.version()]],
           skip_tenant_check: true
         )
+
+      :ok = Engram.Workers.ReconcileNotePayloads.mark_backfilled(user.id)
 
       Engram.Cache.clear_local(:note_id_filter)
       answer(fn [] -> {:ok, {:ids, [note.id]}} end)

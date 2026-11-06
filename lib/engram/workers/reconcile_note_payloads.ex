@@ -132,7 +132,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
       case result do
         :done ->
-          :ok
+          mark_backfilled(user_id)
 
         {:more, after_id} ->
           {:ok, _} = Oban.insert(new(%{"user_id" => user_id, "after" => after_id}))
@@ -454,29 +454,45 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   True once every indexed note of the user carries the `n` payload version
   (`note_index_state.payload_version >= 6`): the user's points can be
   searched by note id. Constant once `NotePayloadStamps` is done (a cached
-  ledger read); before that, one EXISTS over the user's notes, which stops
-  at the first note still behind (callers cache it, `Engram.Search`).
+  ledger read); before that, one keyed read of the user's marker, written
+  when the user's backfill chain finished with nothing behind
+  (`mark_backfilled/1`). Never a scan: this is on the search path (callers
+  cache it, `Engram.Search`). A user never queued waits for the ledger.
   """
   @spec n_backfilled?(Ecto.UUID.t()) :: boolean()
   def n_backfilled?(user_id) do
     cond do
-      PayloadV6.version() < @n_version ->
-        false
-
-      NotePayloadStamps.done?() ->
-        true
-
-      true ->
-        {:ok, any} =
-          Repo.with_tenant(user_id, fn ->
-            indexed_notes()
-            |> where([note: n], n.user_id == ^user_id)
-            |> where(^stale())
-            |> Repo.exists?()
-          end)
-
-        not any
+      PayloadV6.version() < @n_version -> false
+      NotePayloadStamps.done?() -> true
+      true -> Cursor.get(marker(user_id)) != nil
     end
+  end
+
+  # The per-user "backfill done" marker: one `maintenance_cursors` row, keyed.
+  defp marker(user_id), do: "payload_n_backfilled:" <> to_string(user_id)
+
+  @doc """
+  Writes (or clears) the user's `n_backfilled?/1` marker: run at the end of
+  the user's chain, a background job, never on the search path. One EXISTS
+  that stops at the first note still behind.
+  """
+  @spec mark_backfilled(Ecto.UUID.t()) :: :ok
+  def mark_backfilled(user_id) do
+    if PayloadV6.version() >= @n_version do
+      {:ok, behind} =
+        Repo.with_tenant(user_id, fn ->
+          indexed_notes()
+          |> where([note: n], n.user_id == ^user_id)
+          |> where(^stale())
+          |> Repo.exists?()
+        end)
+
+      if behind,
+        do: Cursor.reset(marker(user_id)),
+        else: Cursor.put(marker(user_id), %{"version" => @n_version})
+    end
+
+    :ok
   end
 
   # Every v5 point of the batch's notes the read shows without `n` gets it,
@@ -597,6 +613,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
             )
           end)
 
+        if n > 0, do: Cursor.reset(marker(user_id))
         n
     end
   end
