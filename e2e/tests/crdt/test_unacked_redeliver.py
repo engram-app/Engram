@@ -15,11 +15,12 @@ reports the doc unacked, prove the server never got the edit, then close the
 socket so the plugin rejoins. The oracle is content on the server and on B
 only; no client-log needle (the plugin log-diet raised the remote log level).
 
-Fails on plugin 1.39.1 and older: `unackedDocIds` does not exist there, so
-the test skips that probe (the swallowed-frame wait works everywhere), and nothing re-sends the
-swallowed frame: the server and B stay on the base text until timeout, which
-is the failing assertion (not a missing probe). Passes on plugin main
-(09dc2cd, PR 673).
+Before closing, the room is un-advertised and the persisted resend mark is
+dropped (see `_leave_only_receipt_path`), so the other heal paths 1.39.1 has
+(open-room handshake, `resendUnacked`) cannot deliver the edit: only the
+receipt-based `redeliverUnackedDocs` can. Expected RED on plugin 1.39.1
+(`unackedDocIds` is absent there, the probe is skipped, the server and B stay
+on the base text until timeout) and GREEN on plugin main (09dc2cd, PR 673).
 """
 
 from __future__ import annotations
@@ -36,7 +37,6 @@ from helpers.vault import wait_for_content, write_note
 
 CRDT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound, not a latency assert
 MARKER = "EDIT-ON-HALF-DEAD-SOCKET"
-BASELINE_SETTLE = 10
 # The only reach into plugin privates: the live socket and the CRDT registry.
 _WS = f"{PLUGIN_PATH}.noteStream.ws"
 NO_PROBE = "no-probe"  # plugin predates unackedDocIds (<= 1.39.1)
@@ -69,6 +69,22 @@ async def _swallowed_for(cdp, note_id: str) -> int:
     )
 
 
+async def _leave_only_receipt_path(cdp, note_id: str) -> None:
+    """Strip every signal but the missing delivery receipt (private state).
+
+    Plugin 1.39.1 heals an unacked doc by two OTHER paths: an open room (the
+    rejoin advertises syncStep1 and the server's reply returns the edit) and
+    the persisted `resendIds` mark (`resendUnacked`). Un-advertise the room
+    with the registry's own `reset`, and drop the mark, so the doc is
+    resident and unacked but invisible to both. Only `redeliverUnackedDocs`
+    (receipt-based) can then deliver it."""
+    await cdp.evaluate(
+        f"(() => {{ const c = {PLUGIN_PATH}.syncEngine.crdt;"
+        f" c.reset({json.dumps(note_id)});"
+        f" c.resendIds.delete({json.dumps(note_id)}); return 'ok'; }})()"
+    )
+
+
 async def _restore_sends(cdp) -> None:
     # Drops the instance override; harmless if the socket was already replaced.
     await cdp.evaluate(f"(() => {{ if ({_WS}) delete {_WS}.send; return 'ok'; }})()")
@@ -88,21 +104,17 @@ async def test_edit_sent_on_half_dead_socket_is_redelivered_after_rejoin(
     note_id = await cdp_a.wait_for_note_id_for_path(path, timeout=CRDT_TIMEOUT)
     await cdp_a.wait_for_stream_connected()
 
-    # Baseline: let the doc settle to acked so "unacked" later means the edit's
-    # frame was lost. Bounded: a live-only first push may never record a
-    # receipt, and the base is already proven on server and B above. The oracle
-    # is the swallowed frame plus the server lacking the marker, not this wait.
-    deadline = time.monotonic() + BASELINE_SETTLE
-    while time.monotonic() < deadline:
+    # Baseline: the doc must be acked before the edit, so "unacked" later
+    # means the edit's frame was lost (a receipt-less doc also reads unacked).
+    deadline = time.monotonic() + CRDT_TIMEOUT
+    while True:
         unacked = await _unacked(cdp_a)
         if unacked != NOT_READY and not (
             isinstance(unacked, list) and note_id in unacked
         ):
             break
+        assert time.monotonic() < deadline, f"base never acked on A: {unacked!r}"
         await asyncio.sleep(0.5)
-    else:
-        unacked = await _unacked(cdp_a)
-        assert unacked != NOT_READY, "crdt registry never became ready on A"
     supported = unacked != NO_PROBE
 
     await _swallow_sends(cdp_a)
@@ -123,6 +135,8 @@ async def test_edit_sent_on_half_dead_socket_is_redelivered_after_rejoin(
         if supported:
             unacked = await _unacked(cdp_a)
             assert isinstance(unacked, list) and note_id in unacked, unacked
+
+        await _leave_only_receipt_path(cdp_a, note_id)
 
         # The frame really was lost: the server still lacks the edit.
         assert MARKER not in str(api_sync.get_note(path)), (
