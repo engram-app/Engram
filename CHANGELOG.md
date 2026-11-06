@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.73.0](https://github.com/engram-app/Engram/compare/0.72.7...0.73.0) (2026-11-05)
+
+
+### Features
+
+* **db:** add file-time timestamptz (expand) ([#2445](https://github.com/engram-app/Engram/issues/2445)) ([b738d94](https://github.com/engram-app/Engram/commit/b738d94444245ba8111a4b22a09ed9b7a3334b2c))
+
+
+### Bug Fixes
+
+* **embed:** release crash stamp on every exit ([#2450](https://github.com/engram-app/Engram/issues/2450)) ([f606087](https://github.com/engram-app/Engram/commit/f606087c7cae49f968d4825d32af650f7487aa07))
+* **indexing:** round fallback updated time up to the hour ([#2434](https://github.com/engram-app/Engram/issues/2434)) ([008c4f3](https://github.com/engram-app/Engram/commit/008c4f3b59f70b374ca32fbc91f9a9d12523184b))
+
 ## [0.72.7](https://github.com/engram-app/Engram/compare/0.72.6...0.72.7) (2026-11-05)
 
 
