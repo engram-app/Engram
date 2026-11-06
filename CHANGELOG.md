@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.74.0](https://github.com/engram-app/Engram/compare/0.73.0...0.74.0) (2026-11-06)
+
+
+### Features
+
+* **db:** file-time migrate-data (R25) ([#2458](https://github.com/engram-app/Engram/issues/2458)) ([67cd3fa](https://github.com/engram-app/Engram/commit/67cd3fa0ec1ccfbd8ba88ff38c6eef1c209f5934))
+* **search:** Postgres filter resolver (R10.2, R10.3) ([#2431](https://github.com/engram-app/Engram/issues/2431)) ([681c9c1](https://github.com/engram-app/Engram/commit/681c9c106a8898be8572da081d1e9e428a7c71d9))
+
+
+### Bug Fixes
+
+* **ci:** fail ci on upstream-failure skips ([#2454](https://github.com/engram-app/Engram/issues/2454)) ([5b6d3fe](https://github.com/engram-app/Engram/commit/5b6d3fe19f7956ae6a169628634263312a0ede01))
+* **ci:** surface sentry.io DNS sinkhole on runners ([#2464](https://github.com/engram-app/Engram/issues/2464)) ([0888bf1](https://github.com/engram-app/Engram/commit/0888bf11b6ce20efb86e5081bb62df4eefc3676a))
+* **qdrant:** remove max_points_count 1.5M breaker ([#2338](https://github.com/engram-app/Engram/issues/2338)) ([df153f7](https://github.com/engram-app/Engram/commit/df153f7bd1f0295fbe4e240707da4ac22d3f5b33))
+
 ## [0.73.0](https://github.com/engram-app/Engram/compare/0.72.7...0.73.0) (2026-11-05)
 
 
