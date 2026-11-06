@@ -1,9 +1,9 @@
 # Context Doc: Web DB pool starvation from a vault-lock convoy (2026-10-31)
 
-_Last verified: 2026-10-31_
+_Last verified: 2026-11-05_
 
 ## Status
-Mitigation in flight: Engram PR 2356 (SeqGate), plugin PR 671 (batch deletes), load script PR 2357, plus a lock-discipline PR still to come. Not yet on prod.
+Engram PR 2356 (SeqGate) is merged and shipped, first in release 0.70.0. Plugin PR 671 (batch deletes) is merged. The load script was not merged (closed PR 2357, branch kept). A lock-discipline PR is still to come.
 
 ## When to read this
 ALB 5xx with auth/onboarding queries failing `DBConnection ... dropped from queue`, one tenant's burst taking everyone down, or someone proposes raising `pool_size` / PgBouncer / RDS Proxy as the fix.
@@ -29,7 +29,7 @@ ALB 5xx with auth/onboarding queries failing `DBConnection ... dropped from queu
 - Staging Postgres is on the same host (no network hop): ~450 deletes/s, queue drains in ~1.5 s, nothing dropped. Prod RDS pays a round trip per statement inside the lock.
 - Loki and Tempo hold only `env=prod`; staging server evidence comes from `docker logs`.
 - Measure pool-using endpoint latency instead: `/vaults` and `/health/deep` p99 went 28 ms -> ~1.5 s during a 400-delete burst. `/health` (no DB) is the flat control. `GET /me` never touches the pool (cached), so it is a useless probe.
-- Script: `e2e/load/attachment_delete_burst.py` (PR 2357). Needs raw sockets for a 400-concurrency burst from the dev box (httpx is CPU-bound client-side), and a ~61 s wait after seeding or the 600/60 s limiter 429s half the deletes.
+- Load script: closed PR 2357, branch kept (`test/attachment-delete-burst-repro`). Needs raw sockets for a 400-concurrency burst from the dev box (httpx is CPU-bound client-side), and a ~61 s wait after seeding or the 600/60 s limiter 429s half the deletes.
 
 ## References
 - Reports (session scratchpad, may be gone): `audit-db-code.md`, `audit-db-telemetry.md`, `bulk-write-best-practice.md`, `repro-before.md`.
