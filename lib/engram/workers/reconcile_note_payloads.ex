@@ -539,21 +539,41 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     %{must: [%{is_empty: %{key: @n_key}} | tenant], must_not: [%{is_empty: %{key: "u"}}]}
   end
 
-  # One page of the user's points without `n`: their notes lose the version
-  # stamp, so the user's next chain backfills them. Orphans (no chunk row)
-  # unstamp nothing and queue nothing; `OrphanSweep` reaps them.
-  defp requeue_missing_n(user_id) do
-    with {:ok, %{points: points}} <-
-           Qdrant.scroll(Qdrant.collection_name(),
-             filter: missing_n_filter(user_id),
-             with_payload: ["u"],
-             limit: @refresh_page
-           ),
-         n when n > 0 <- unstamp_versions(user_id, Enum.map(points, & &1["id"])) do
-      _ = TenantScan.enqueue_users(__MODULE__, [user_id])
-    end
+  # The user's points without `n`, page by page until one belongs to a live
+  # note: those notes lose the version stamp and the user is requeued, so the
+  # next chain backfills them. Orphans (no chunk row) unstamp nothing;
+  # `OrphanSweep` reaps them.
+  # ponytail: at most 4 pages (1,024 points) per marker attempt. A user with
+  # more orphans than that ahead of a live point stays unmarked (still
+  # correct, old filters) until the sweep reaps them or the ledger closes.
+  @missing_n_pages 4
+  defp requeue_missing_n(user_id), do: requeue_missing_n(user_id, nil, @missing_n_pages)
 
-    :ok
+  defp requeue_missing_n(_user_id, _offset, 0), do: :ok
+
+  defp requeue_missing_n(user_id, offset, pages) do
+    case Qdrant.scroll(Qdrant.collection_name(),
+           filter: missing_n_filter(user_id),
+           with_payload: ["u"],
+           limit: @refresh_page,
+           offset: offset
+         ) do
+      {:ok, %{points: points, next_page_offset: next}} ->
+        cond do
+          unstamp_versions(user_id, Enum.map(points, & &1["id"])) > 0 ->
+            _ = TenantScan.enqueue_users(__MODULE__, [user_id])
+            :ok
+
+          next == nil ->
+            :ok
+
+          true ->
+            requeue_missing_n(user_id, next, pages - 1)
+        end
+
+      {:error, _} ->
+        :ok
+    end
   end
 
   @erpc_timeout_ms 2_000
