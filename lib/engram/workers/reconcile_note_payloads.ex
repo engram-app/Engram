@@ -213,7 +213,8 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     dynamic(
       exists(
         from(s in NoteIndexState,
-          where: s.note_id == parent_as(:note).id and coalesce(s.payload_version, ^base) < ^version
+          where:
+            s.note_id == parent_as(:note).id and coalesce(s.payload_version, ^base) < ^version
         )
       )
     )
@@ -483,11 +484,11 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   end
 
   defp n_pairs(notes, points, stored) do
-      for note <- notes,
-          id <- Map.get(points, note.id, []),
-          point = stored[id],
-          point != nil and v5?(point) and not Map.has_key?(point, @n_key),
-          do: {id, %{@n_key => FilterId.uuid(to_string(note.id))}}
+    for note <- notes,
+        id <- Map.get(points, note.id, []),
+        point = stored[id],
+        point != nil and v5?(point) and not Map.has_key?(point, @n_key),
+        do: {id, %{@n_key => FilterId.uuid(to_string(note.id))}}
   end
 
   defp write_n(pairs, job, counts) do
@@ -561,7 +562,9 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   # NULLs the version stamp of the live notes these points belong to.
   defp unstamp_versions(user_id, point_ids) do
-    case %User{id: user_id} |> Engram.Notes.note_ids_by_qdrant_points(point_ids) |> Map.values() do
+    case %User{id: user_id}
+         |> Engram.Notes.note_ids_by_qdrant_points(point_ids)
+         |> Map.values() do
       [] ->
         0
 
