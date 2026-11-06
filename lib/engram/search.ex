@@ -720,7 +720,8 @@ defmodule Engram.Search do
   # collection's `n` index (strict mode refuses an unindexed filter) and the
   # user's `n` backfill (`ReconcileNotePayloads.n_backfilled?/1`; a point
   # without `n` would be missed). Cached per node for a minute each, so a
-  # search pays at most one collection-info read and one EXISTS a minute.
+  # search pays at most one collection-info read and one keyed marker read
+  # (one `maintenance_cursors` row by primary key, never a scan) a minute.
   defp note_id_filter?(user) do
     Engram.Cache.fetch(:note_id_filter, {:n_index, Qdrant.base_url()}, &Qdrant.n_indexed?/0) and
       Engram.Cache.fetch(:note_id_filter, user.id, fn ->
