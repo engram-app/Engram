@@ -3,8 +3,9 @@ defmodule EngramWeb.FileTimeReadersTest do
   R25 migrate-data: every reader of `notes.mtime` / `ctime` and
   `attachments.mtime` sends `Engram.FileTime.epoch/2`. The wire format is
   unchanged (epoch seconds): a seconds double goes out bit-identical, a
-  millisecond double goes out as seconds. The double is the fresher value
-  during migrate-data, so a NULL or stale `*_at` changes nothing.
+  millisecond double goes out as seconds. The read switch serves the
+  `*_at` twin when present (a stale one included) and falls back to the
+  double only when the twin is NULL.
   """
   use EngramWeb.ConnCase, async: false
 
@@ -29,8 +30,7 @@ defmodule EngramWeb.FileTimeReadersTest do
       |> post("/api/attachments", %{path: path, content_base64: Base.encode64("B"), mtime: mtime})
       |> json_response(200)
 
-  # NULL (backfill not reached) or stale (a pre-expand writer moved the
-  # double alone) twins.
+  # NULL (backfill not reached) or stale (set by hand here) twins.
   defp twins(user, schema, at) do
     Repo.with_tenant!(user.id, fn ->
       case schema do
@@ -41,6 +41,7 @@ defmodule EngramWeb.FileTimeReadersTest do
   end
 
   @stale ~U[2000-01-01 00:00:00.000000Z]
+  @stale_s 946_684_800.0
 
   defp notes_by_path(list), do: Map.new(list, &{&1["path"], &1})
 
@@ -59,13 +60,20 @@ defmodule EngramWeb.FileTimeReadersTest do
       assert {ms["mtime"], ms["ctime"]} === {@s, 1_510_897_528.861}
     end
 
-    test "a NULL or stale *_at changes nothing: the double is read", %{conn: conn, user: user} do
-      for at <- [nil, @stale] do
-        twins(user, Note, at)
-        ms = conn |> get("/api/notes/ms.md") |> json_response(200)
-        assert {ms["mtime"], ms["ctime"]} === {@s, 1_510_897_528.861}
-        s = conn |> get("/api/notes/s.md") |> json_response(200)
-        assert {s["mtime"], s["ctime"]} === {@s, 1_510_897_528.861}
+    test "a NULL *_at falls back to the double", %{conn: conn, user: user} do
+      twins(user, Note, nil)
+      ms = conn |> get("/api/notes/ms.md") |> json_response(200)
+      assert {ms["mtime"], ms["ctime"]} === {@s, 1_510_897_528.861}
+      s = conn |> get("/api/notes/s.md") |> json_response(200)
+      assert {s["mtime"], s["ctime"]} === {@s, 1_510_897_528.861}
+    end
+
+    test "a stale *_at is served: the twin is read", %{conn: conn, user: user} do
+      twins(user, Note, @stale)
+
+      for path <- ["ms.md", "s.md"] do
+        n = conn |> get("/api/notes/#{path}") |> json_response(200)
+        assert {n["mtime"], n["ctime"]} === {@stale_s, @stale_s}
       end
     end
 
@@ -104,13 +112,18 @@ defmodule EngramWeb.FileTimeReadersTest do
       assert list["s.png"]["mtime"] === @s
     end
 
-    test "a NULL or stale mtime_at changes nothing: the double is read", %{conn: conn, user: user} do
-      for at <- [nil, @stale] do
-        twins(user, Attachment, at)
-        assert (conn |> get("/api/attachments/ms.png") |> json_response(200))["mtime"] === @s
-        raw = get(conn, "/api/attachments/s.png?raw=1")
-        assert get_resp_header(raw, "x-engram-mtime") == [Jason.encode!(@s)]
-      end
+    test "a NULL mtime_at falls back to the double", %{conn: conn, user: user} do
+      twins(user, Attachment, nil)
+      assert (conn |> get("/api/attachments/ms.png") |> json_response(200))["mtime"] === @s
+      raw = get(conn, "/api/attachments/s.png?raw=1")
+      assert get_resp_header(raw, "x-engram-mtime") == [Jason.encode!(@s)]
+    end
+
+    test "a stale mtime_at is served: the twin is read", %{conn: conn, user: user} do
+      twins(user, Attachment, @stale)
+      assert (conn |> get("/api/attachments/ms.png") |> json_response(200))["mtime"] === @stale_s
+      raw = get(conn, "/api/attachments/s.png?raw=1")
+      assert get_resp_header(raw, "x-engram-mtime") == [Jason.encode!(@stale_s)]
     end
   end
 end
