@@ -29,6 +29,10 @@ defmodule Engram.PromEx.Search do
     * `engram_prom_ex_search_phrase_checked_total` and
       `..._phrase_promoted_total`: `checked` / `promoted` of
       `[:engram, :search, :phrase_check]`.
+    * `engram_prom_ex_search_name_terms_scan_capped_total`: sum of `count`
+      from `[:engram, :search, :name_terms, :scan_capped]`, tag `[:kind]`
+      (0 notes, 1 folders): query terms whose name-terms scan hit its cap
+      before its live budget, i.e. dead rows outran the sweep.
 
   Cardinality contract: only the booleans/atoms above. NEVER add
   user_id, vault_id, or the query string.
@@ -44,6 +48,7 @@ defmodule Engram.PromEx.Search do
   @text_stale_event [:engram, :search, :text_stale]
   @phrase_check_event [:engram, :search, :phrase_check]
   @post_filter_event [:engram, :search, :post_filter]
+  @name_terms_capped_event [:engram, :search, :name_terms, :scan_capped]
 
   @impl true
   def event_metrics(opts) do
@@ -74,6 +79,17 @@ defmodule Engram.PromEx.Search do
         # the whole tenant and post-filtered in Postgres. `rounds` 2 is the
         # one widen (16x); `short` true means the page came back under its
         # limit while Qdrant had more, i.e. the round cap cost recall.
+        # The name leg (`Search.NameTerms.hits/3`): a query term whose
+        # bounded scan (2,000 postings) ended before 500 live ones. Zero in
+        # steady state; a rate means dead rows outran the delete hooks and
+        # the drain's orphan sweep, and a live name may be missed.
+        sum(
+          metric_prefix ++ [:name_terms_scan_capped, :total],
+          event_name: @name_terms_capped_event,
+          measurement: :count,
+          description: "Name-leg query terms whose scan hit its cap before its live budget.",
+          tags: [:kind]
+        ),
         counter(
           metric_prefix ++ [:post_filter, :total],
           event_name: @post_filter_event,
