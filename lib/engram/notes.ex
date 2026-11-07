@@ -1631,7 +1631,10 @@ defmodule Engram.Notes do
             :ok = CrdtDeliver.announce_ready(user.id, vault.id, note.path, note.id)
             # crdt_doc_ready never reaches the sync topic the name index reads.
             :ok = Engram.Notes.NameIndex.announce(vault.id, note.id, note.path, note.title)
-            :ok = NameTerms.on_note_written(user, note)
+            # A create's name terms come with its index pass
+            # (`NameTerms.on_note_written/2` in `Indexing`), so the create
+            # writes its row once; a bare note never indexed is healed by the
+            # drain (its stamp is NULL, so stale).
 
             # vault_populated was probed inside the row transaction
             # (probe_vault_populated/2) and its broadcast already ran on commit.

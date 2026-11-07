@@ -19,7 +19,8 @@ defmodule Engram.Search.NameTerms do
     * `on_note_written/2`: the index pass (`Engram.Indexing.run_in_commit`,
       under a savepoint; covers web and MCP creates and H1 title edits), note
       rename and move (`Notes.rename_note/5`, after its commit) and CRDT
-      create / rename (`Notes.genesis_crdt_note/5`);
+      rename-as-move (`Notes.genesis_crdt_note/5`; a create gets its terms
+      from its index pass, so it still writes its row once);
     * `put_folders/3`: folder create, revive and rename (`Engram.Folders.Rows`);
     * `on_note_deleted/2` (`Engram.Workers.DeleteNoteIndex`, every soft
       delete) and `on_folders_deleted/1` (`Folders.Rows` delete and merge
@@ -186,7 +187,7 @@ defmodule Engram.Search.NameTerms do
 
   @doc """
   The single post-write hook of every note writer (index pass, rename, move,
-  CRDT create and rename): rewrites the note's terms from its decrypted
+  CRDT rename-as-move): rewrites the note's terms from its decrypted
   `path` and `title`. Inside a caller's transaction (the index pass commit)
   it runs under a savepoint, so a failure here rolls back only its own
   statements. Never fails the caller's write: any error is logged, and the
