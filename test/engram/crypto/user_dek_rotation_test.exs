@@ -1219,9 +1219,20 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
       stamp = :crypto.strong_rand_bytes(32)
 
+      # Indexed at their current content and versions, as EmbedNote stamps.
       Repo.update_all(
-        from(n in Engram.Notes.Note, where: n.user_id == ^user.id),
-        [set: [payload_hash: stamp]],
+        from(n in Engram.Notes.Note,
+          where: n.user_id == ^user.id,
+          update: [
+            set: [
+              payload_hash: ^stamp,
+              embed_hash: n.content_hash,
+              dense_indexed_hash: n.content_hash,
+              chunker_version: ^Engram.Parsers.Markdown.chunker_version()
+            ]
+          ]
+        ),
+        [],
         skip_tenant_check: true
       )
 
@@ -1241,25 +1252,36 @@ defmodule Engram.Crypto.UserDekRotationTest do
         )
       end)
 
-      {:ok, notes: notes, note: hd(notes), stamp: stamp}
+      {:ok, notes: notes, note: hd(notes), stamp: stamp, bypass: bypass}
     end
 
-    test "the flip keeps payload_hash and queues a resparse for every note, no payload heal",
-         %{user: user, notes: notes, stamp: stamp} do
+    # The flip commits the NULL `keyword_version` only (no per-note job inside
+    # its transaction, which would be O(vault)); after the commit it asks the
+    # paced sweep for a fleet version check, whose keyword top-up queues the
+    # resparse, capped by its backlog.
+    test "the flip keeps payload_hash, queues no job per note, and the paced sweep resparses",
+         %{user: user, notes: notes, stamp: stamp, bypass: bypass} do
+      Engram.QdrantStub.stub_healthy(bypass)
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       for note <- notes do
         raw = Engram.Fixtures.raw_note!(note.id)
         assert raw.payload_hash == stamp
         assert raw.keyword_version == nil
+      end
 
+      refute_enqueued(worker: Engram.Workers.RefreshKeywordVectors)
+      refute_enqueued(worker: Engram.Workers.ReconcileNotePayloads)
+      assert_enqueued(worker: Engram.Workers.ReconcileEmbeddings, args: %{"mode" => "reverify"})
+
+      assert :ok = perform_job(Engram.Workers.ReconcileEmbeddings, %{"mode" => "reverify"})
+
+      for note <- notes do
         assert_enqueued(
           worker: Engram.Workers.RefreshKeywordVectors,
           args: %{"note_id" => to_string(note.id)}
         )
       end
-
-      refute_enqueued(worker: Engram.Workers.ReconcileNotePayloads)
     end
 
     test "note_attrs are rewritten under the new key", %{user: user, note: note} do

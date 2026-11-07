@@ -42,7 +42,6 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Folders.Folder
   alias Engram.Indexing
   alias Engram.Indexing.ChunkRows
-  alias Engram.Jobs
   alias Engram.Logger.Metadata
   alias Engram.Notes.CrdtUpdateLog
   alias Engram.Notes.FieldCatalog
@@ -51,7 +50,7 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Notes.NoteBody
   alias Engram.Repo
   alias Engram.Vector.Qdrant
-  alias Engram.Workers.{EmbedNote, RefreshKeywordVectors, RotationTextGuard}
+  alias Engram.Workers.{EmbedNote, ReconcileEmbeddings, RotationTextGuard}
 
   require Logger
 
@@ -1282,9 +1281,10 @@ defmodule Engram.Crypto.UserDekRotation do
   # (#1507: persist the pending wrapped DEK before `sweep_notes`).
   #
   # * Keyword (sparse) vectors (dimensions are filter-key HMACs of the
-  #   tokens): `final_flip` itself NULLs `keyword_version` and enqueues a
-  #   `RefreshKeywordVectors` per note (resparse in place, no embedder), in
-  #   its own transaction, so neither depends on anything below. A point's
+  #   tokens): `final_flip` itself NULLs `keyword_version` in its own
+  #   transaction, and after the commit asks `ReconcileEmbeddings` for a
+  #   fleet version check, whose paced keyword top-up queues
+  #   `RefreshKeywordVectors` (resparse in place, no embedder). A point's
   #   payload holds no filter HMAC since R3a (`u`, `v`, `n` only), so no
   #   payload is rewritten.
   # * Chunk reuse (here): `chunks.context_hmac` is keyed on the content-hash
@@ -2525,25 +2525,17 @@ defmodule Engram.Crypto.UserDekRotation do
   defp old_aad_for(_table, _column, _row), do: <<>>
 
   # Inside the flip's transaction: the sparse vectors are on the retired key
-  # from this commit on, so the NULLs and their resparse jobs commit with it,
-  # or not at all (a rotation is the one bulk resparse; `Jobs.insert_chunked`
-  # pages the inserts). ponytail: one job per note, O(vault) like the rest of
-  # a rotation. Returns the text guard, which this process cancels once its
-  # own text sweep is done (`cancel_text_guard/1`).
+  # from this commit on, so their NULL `keyword_version` commits with it, or
+  # not at all. No per-note job here (O(vault) rows inside the flip): the
+  # resparse is queued after the commit (`resparse_after_flip/0`). Returns
+  # the text guard, which this process cancels once its own text sweep is
+  # done (`cancel_text_guard/1`).
   defp queue_resparse(user_id, new_dek_version) do
-    {:ok, {_, note_ids}} =
+    {:ok, {_, _}} =
       Repo.with_tenant(user_id, fn ->
-        from(n in Engram.Notes.Note,
-          where: n.user_id == ^user_id and n.kind == "note",
-          select: n.id
-        )
+        from(n in Engram.Notes.Note, where: n.user_id == ^user_id and n.kind == "note")
         |> Repo.update_all(set: [keyword_version: nil])
       end)
-
-    _ =
-      note_ids
-      |> Enum.map(&RefreshKeywordVectors.new_for_note(&1, user_id))
-      |> Jobs.insert_chunked()
 
     Oban.insert(
       RotationTextGuard.new(
@@ -2551,6 +2543,17 @@ defmodule Engram.Crypto.UserDekRotation do
         schedule_in: RotationTextGuard.delay_seconds()
       )
     )
+  end
+
+  # After the flip commits: the paced keyword top-up of a fleet version
+  # check (`ReconcileEmbeddings.version_check/0`) finds the NULL
+  # `keyword_version` notes and queues `RefreshKeywordVectors`, capped by its
+  # backlog. A plain `kick/0` would not: once `IndexVersions` is done its
+  # keyword sweep runs only under a version check. A node that dies before
+  # this line leaves the NULLs for the next fleet version check.
+  defp resparse_after_flip do
+    {:ok, _} = ReconcileEmbeddings.version_check()
+    :ok
   end
 
   defp cancel_text_guard(%Oban.Job{id: id}) when is_integer(id), do: Oban.cancel_job(id)
@@ -2606,6 +2609,7 @@ defmodule Engram.Crypto.UserDekRotation do
         # covers peers whose :user eviction has not landed yet.)
         Engram.Accounts.evict_user(user.id)
         DekCache.invalidate(user.id)
+        resparse_after_flip()
         {:ok, guard}
 
       {:error, {:user_vanished_mid_rotation, _uid}} = err ->
