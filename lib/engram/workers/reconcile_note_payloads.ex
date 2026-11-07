@@ -24,14 +24,16 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   vouches for the rest of its payload. A v3 (legacy) point never gets `n`
   (it has no `u` either, so no `n` search can reach it).
 
-  The backfill is paced fleet-wide, before every page: the kill switch
-  `:payload_backfill` (runtime override, default on) snoozes 300 s;
-  `Engram.Rebuild.qdrant_pace/1` (disk at the 75% gate, optimizer and queue
-  backlog) snoozes; and a distributed token bucket of
-  `:payload_backfill_points_per_min` (default 500) snoozes to the next
-  window. A snoozed job reruns its hop from the hop's cursor: the notes it
-  stamped are not selected again and the points it wrote are skipped, so a
-  restart or a snooze resumes without rewriting anything.
+  The backfill is paced fleet-wide, and its gates hold ONLY the `n` write
+  and the version stamp, never the heals below: the kill switch
+  `:payload_backfill` (runtime override, default on; off, the job ends after
+  its heal and the ledger pauses); `Engram.Rebuild.qdrant_pace/1` (disk at
+  the 75% gate, optimizer and queue backlog; a growing snooze); and a
+  distributed token bucket of `:payload_backfill_points_per_min` (default
+  500), each page capped at what the window has left, a spent window
+  snoozing to its edge. A snoozed job reruns its hop from the hop's cursor:
+  the notes it stamped are not selected again and the points it wrote are
+  skipped, so a restart or a snooze resumes without rewriting anything.
 
   A note is checked while its `payload_hash` is NULL. Its points are READ
   (payload keys only); if every one already holds the expected payload the
