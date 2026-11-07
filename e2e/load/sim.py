@@ -311,6 +311,10 @@ class Account:
     def s(self, vault: bool = True) -> requests.Session:
         sess = requests.Session()
         sess.headers["Authorization"] = f"Bearer {self.key}"
+        # The REST ops model the Obsidian plugin, which reports its version. An
+        # API-key caller WITHOUT it must send base_hash to replace a note
+        # (Engram#2480), and these pushes would all 409.
+        sess.headers["X-Plugin-Version"] = "9.9.9"
         if vault:
             sess.headers["X-Vault-ID"] = self.vault_id
         return sess
@@ -811,6 +815,11 @@ def run_op(op: str, acct: Account, rng: random.Random, args, rec: Recorder) -> N
             r = mcp(acct, name, args_)
             status = r.status_code
             ok, err = mcp_ok(r)
+            conflict = "already exists" in err or "version_conflict" in err
+            if not ok and name == "write_note" and conflict:
+                # Replacing an existing note without base_hash is refused by
+                # design (Engram#2480): the expected answer, not a fault.
+                ok, status = True, "write_needs_base"
             if not ok and name == "edit_note" and "not found" in err.lower():
                 # The target was never created yet or the find text is the other state: not a server fault.
                 ok, status = True, "edit_miss"

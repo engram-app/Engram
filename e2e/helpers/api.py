@@ -59,7 +59,13 @@ class ApiClient:
     def create_note(
         self, path: str, content: str, mtime: float | None = None
     ) -> dict:
-        """POST /notes — upsert a note."""
+        """POST /notes — upsert a note, replacing it if it exists.
+
+        An API-key caller must send base_hash to replace an existing note
+        (Engram#2480): without one the server answers 409 with the current
+        note and writes nothing. Tests overwrite on purpose, so a 409 of that
+        shape is retried once with the server note's content_hash as the base.
+        """
         payload: dict = {
             "path": path,
             "content": content,
@@ -68,6 +74,14 @@ class ApiClient:
         resp = self.session.post(
             f"{self.base_url}/notes", json=payload, timeout=10
         )
+        server_note = (
+            resp.json().get("server_note") if resp.status_code == 409 else None
+        )
+        if server_note and server_note.get("content_hash"):
+            payload["base_hash"] = server_note["content_hash"]
+            resp = self.session.post(
+                f"{self.base_url}/notes", json=payload, timeout=10
+            )
         self._raise_for_status(resp)
         return resp.json()
 
