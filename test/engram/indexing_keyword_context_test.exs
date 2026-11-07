@@ -95,35 +95,45 @@ defmodule Engram.IndexingKeywordContextTest do
 
   # The title the note's own bytes name still reaches every keyword input,
   # in a folder or not.
-  for {label, head} <- [
-        {"frontmatter title", "---\ntitle: Kubernetes Upgrade\n---\n"},
-        {"H1", "# Kubernetes Upgrade\n\n"}
+  # Two sections over 512 B each: two prose chunks, plus the frontmatter
+  # chunk when there is one. The count is pinned so "every input" holds
+  # over every chunk, not over a lone one.
+  @two_sections "Drain each node first. #{@pad}\n\n## Rollback\n\nRestore etcd. #{@pad}"
+
+  # The title the note's own bytes name still reaches every keyword input,
+  # in a folder or not.
+  for {label, head, chunks} <- [
+        {"frontmatter title", "---\ntitle: Kubernetes Upgrade\n---\n", 3},
+        {"H1", "# Kubernetes Upgrade\n\n", 2}
       ],
       path <- ["Ops/Runbook.md", "Runbook.md"] do
     test "a #{label} reaches every keyword input (#{path})", ctx do
-      body = "Drain each node first. #{@pad}\n\n## Rollback\n\nRestore etcd. #{@pad}"
-      note = note!(ctx.user, ctx.vault, unquote(path), unquote(head) <> body)
+      note = note!(ctx.user, ctx.vault, unquote(path), unquote(head) <> @two_sections)
       {:ok, _} = Indexing.prepare_index(note, ctx.vault)
 
-      assert_received {:encoded_texts, [_ | _] = texts}
+      assert_received {:encoded_texts, texts}
+      assert length(texts) == unquote(chunks), inspect(texts)
       assert Enum.all?(texts, &(&1 =~ "Kubernetes Upgrade")), inspect(texts)
       refute Enum.any?(texts, &(&1 =~ "Ops" or &1 =~ "Runbook")), inspect(texts)
     end
   end
 
-  test "a sparse-only re-index encodes what a full index does", ctx do
+  # The title is in the frontmatter only (not in the body), over several
+  # chunks: each re-sparsed keyword input must carry it from the prefix.
+  test "a sparse-only re-index encodes the title into every chunk, never the path", ctx do
     %{vault: vault, user: user} = ctx
-    note = note!(user, vault, "Ops/Runbook.md", "# Kubernetes Upgrade\n\nDrain each node first.")
+    content = "---\ntitle: Kubernetes Upgrade\n---\n" <> @two_sections
+    note = note!(user, vault, "Ops/Runbook.md", content)
     {:ok, _} = Indexing.index_note(note, vault, user)
     assert_received {:encoded_texts, indexed}
 
-    assert {:ok, count, 0} = Indexing.resparse_note(note, user)
-    assert count > 0
+    assert {:ok, 3, 0} = Indexing.resparse_note(note, user)
 
-    assert_received {:encoded_texts, [_ | _] = texts}
+    assert_received {:encoded_texts, texts}
+    assert length(texts) == 3, inspect(texts)
     assert texts == indexed
-    assert Enum.all?(texts, &(&1 =~ "Kubernetes Upgrade"))
-    refute Enum.any?(texts, &(&1 =~ "Ops"))
+    assert Enum.all?(texts, &(&1 =~ "Kubernetes Upgrade")), inspect(texts)
+    refute Enum.any?(texts, &(&1 =~ "Ops" or &1 =~ "Runbook")), inspect(texts)
   end
 
   # `chunks.token_count` is the only input to the vault's `avgdl`. A resparse
