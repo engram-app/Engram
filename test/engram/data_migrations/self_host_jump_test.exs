@@ -6,14 +6,16 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
   20261107120000 gives every note its body row, byte for byte what the app
   writes, so every note reads before any data migration runs. Then writes
   land before the ledgers reach them; run every registered data migration
-  until NoteSplit and NoteBodyColumnsNull are done: every note reads its
-  latest content throughout, and both `notes` ciphertext columns end NULL.
+  until NoteSplit is done: every note reads its latest content throughout
+  and keeps its body row (what R8(e) checks before it drops the two `notes`
+  ciphertext columns; the copies left there are dead since R8(d) retired
+  the null batch).
   """
   use Engram.DataCase, async: false
 
   alias Engram.Backfill.IdWindows
   alias Engram.DataMigrations
-  alias Engram.DataMigrations.{NoteBodyColumnsNull, NoteSplit}
+  alias Engram.DataMigrations.NoteSplit
   alias Engram.Notes
   alias Engram.Notes.CrdtCheckpoint
   alias Engram.Workers.DataMigrationsRunner
@@ -54,11 +56,13 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
     Repo.query!("DELETE FROM note_bodies WHERE user_id = $1", [Ecto.UUID.dump!(u.id)])
   end
 
-  defp copies(u) do
+  # R8(e)'s guard: notes with no body row of the same owner.
+  defp without_body(u) do
     Repo.query!(
       """
-      SELECT count(*) FILTER (WHERE content_ciphertext IS NOT NULL OR crdt_state_ciphertext IS NOT NULL)
-      FROM notes WHERE user_id = $1 AND kind = 'note'
+      SELECT count(*) FROM notes n
+      WHERE n.user_id = $1 AND n.kind = 'note' AND NOT EXISTS (
+        SELECT 1 FROM note_bodies b WHERE b.note_id = n.id AND b.user_id = n.user_id)
       """,
       [Ecto.UUID.dump!(u.id)]
     ).rows
@@ -80,12 +84,9 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
     :ok
   end
 
-  defp both_done? do
-    DataMigrations.done?(NoteSplit.name(), NoteSplit.version()) and
-      DataMigrations.done?(NoteBodyColumnsNull.name(), NoteBodyColumnsNull.version())
-  end
+  defp split_done?, do: DataMigrations.done?(NoteSplit.name(), NoteSplit.version())
 
-  test "pre-split notes plus release-B writes: every ledger closes, reads stay right, no copies",
+  test "pre-split notes plus release-B writes: every ledger closes, reads stay right, every note keeps its body",
        %{user: u, vault: v} do
     edited = write!(u, v, "edited.md", "old text")
     checkpointed = write!(u, v, "board.md", "board text")
@@ -115,11 +116,11 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
 
     Enum.reduce_while(1..8, nil, fn _, _ ->
       run_all()
-      if both_done?(), do: {:halt, :ok}, else: {:cont, nil}
+      if split_done?(), do: {:halt, :ok}, else: {:cont, nil}
     end)
 
-    assert both_done?(), "NoteSplit and NoteBodyColumnsNull must both reach :done"
-    assert copies(u) == [[0]]
+    assert split_done?(), "NoteSplit must reach :done"
+    assert without_body(u) == [[0]]
 
     for {path, text} <- Map.delete(expected, "board.md"), do: assert(read!(u, v, path) == text)
     assert read!(u, v, "board.md") =~ "checkpointed"
