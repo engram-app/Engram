@@ -3,10 +3,11 @@ defmodule Engram.MCP.Repro2480BlindOverwriteTest do
   #
   # Two MCP clients on one account. Client 2 reads the note, client 1 runs
   # edit_note replace_section, then client 2 writes based on its OLDER read.
-  # Tests named "repro 2480" are RED on main by design: the write lands with
-  # no compare-and-swap and client 1's section reverts to the old text. Each
-  # is labelled "by design or bug" in the issue; the guards ("2480 guard")
-  # pin what must keep working and pass today.
+  # The "repro 2480" tests were red before the fix: the stale write landed with
+  # no compare-and-swap and client 1's section reverted to the old text. Now
+  # replacing an existing note needs a base_hash, and edit/append take one,
+  # so each stale write is refused and the section survives. The guards
+  # ("2480 guard") pin what must keep working.
   use EngramWeb.ConnCase, async: true
 
   alias Engram.MCP.Handlers
@@ -26,11 +27,22 @@ defmodule Engram.MCP.Repro2480BlindOverwriteTest do
     %{conn: put_req_header(conn, "authorization", "Bearer #{api_key}"), user: user, vault: vault}
   end
 
-  defp body(user, vault) do
-    {:ok, note} = Notes.get_note(user, vault, @path)
+  defp body(user, vault), do: body_at(user, vault, @path)
+
+  defp body_at(user, vault, path) do
+    {:ok, note} = Notes.get_note(user, vault, path)
     {:ok, content} = Notes.authoritative_content(user, note)
     content
   end
+
+  # The content_hash get_notes hands an agent for its later base_hash.
+  defp read_hash(u, v, path \\ @path) do
+    {:ok, _text, %{"notes" => [note]}} = Handlers.handle("get_notes", u, v, %{"paths" => [path]})
+    assert is_binary(note["content_hash"])
+    note["content_hash"]
+  end
+
+  defp assert_conflict({:error, {:version_conflict, msg}}), do: assert(msg =~ "get_notes")
 
   # Client 2's read, then client 1's edit_note replace_section.
   defp stale_read_then_mcp_edit(u, v) do
@@ -55,48 +67,190 @@ defmodule Engram.MCP.Repro2480BlindOverwriteTest do
            "#{how} reverted client 1's edit_note section to the old text. Note now:\n#{now}"
   end
 
-  test "repro 2480 C1: write_note without base_hash from a stale read clobbers the edit", %{
+  test "repro 2480 C1: write_note without base_hash from a stale read is refused", %{
     user: u,
     vault: v
   } do
     stale = stale_read_then_mcp_edit(u, v)
     # Client 2 adds a line to its stale copy and writes the whole note back.
-    assert {:ok, _, _} =
-             Handlers.handle("write_note", u, v, %{
-               "path" => @path,
-               "content" => stale <> "\nclient 2 line\n"
-             })
+    assert_conflict(
+      Handlers.handle("write_note", u, v, %{
+        "path" => @path,
+        "content" => stale <> "\nclient 2 line\n"
+      })
+    )
 
     assert_mcp_kept(u, v, "write_note (no base_hash)")
   end
 
-  test "repro 2480 C2: edit_note replace_section built from a stale read clobbers the edit", %{
+  # Why C2 reverted: replace_section has no old_text to miss. Client 2 sends
+  # the section text it read ("old section" plus its addition) as the NEW
+  # content, so the server faithfully writes the old text back. Nothing in
+  # that request says it was built from a stale read; only the base_hash of
+  # that read can. With it, the rewrite is refused.
+  test "repro 2480 C2: edit_note replace_section from a stale read is refused by base_hash", %{
     user: u,
     vault: v
   } do
+    stale_hash = read_hash(u, v)
     _stale = stale_read_then_mcp_edit(u, v)
-    # Client 2 rewrites the same section from what it read: the old text plus
-    # its own addition. No base to check it against.
-    assert {:ok, _, _} =
-             Handlers.handle("edit_note", u, v, %{
-               "path" => @path,
-               "mode" => "replace_section",
-               "heading" => "Goals",
-               "content" => "old section\nclient 2 addition\n"
-             })
 
-    assert_mcp_kept(u, v, "edit_note replace_section (no base_hash)")
+    assert_conflict(
+      Handlers.handle("edit_note", u, v, %{
+        "path" => @path,
+        "mode" => "replace_section",
+        "heading" => "Goals",
+        "content" => "old section\nclient 2 addition\n",
+        "base_hash" => stale_hash
+      })
+    )
+
+    assert_mcp_kept(u, v, "edit_note replace_section (stale base_hash)")
   end
 
-  test "repro 2480 C3: REST POST /notes without base_hash from a stale read clobbers the edit",
+  test "repro 2480 C3: REST POST /notes with an API key and no base_hash is refused",
        %{conn: conn, user: u, vault: v} do
     stale = stale_read_then_mcp_edit(u, v)
 
+    body =
+      conn
+      |> post("/api/notes", %{path: @path, content: stale <> "\nrest line\n", mtime: 2.0})
+      |> json_response(409)
+
+    assert body["conflict"] == true
+    assert body["server_note"]["content"] =~ @mcp
+    assert_mcp_kept(u, v, "POST /notes (no base_hash)")
+  end
+
+  # -- Edge cases of the base_hash rule --
+
+  test "2480 edge: write_note creates a new note without base_hash", %{user: u, vault: v} do
+    assert {:ok, _, _} =
+             Handlers.handle("write_note", u, v, %{"path" => "Fresh.md", "content" => "hi\n"})
+
+    {:ok, note} = Notes.get_note(u, v, "Fresh.md")
+    assert {:ok, "hi\n"} = Notes.authoritative_content(u, note)
+  end
+
+  test "2480 edge: write_note with the base_hash get_notes returned replaces the note", %{
+    user: u,
+    vault: v
+  } do
+    base = read_hash(u, v)
+
+    assert {:ok, _, _} =
+             Handlers.handle("write_note", u, v, %{
+               "path" => @path,
+               "content" => "replaced\n",
+               "base_hash" => base
+             })
+
+    assert body(u, v) == "replaced\n"
+  end
+
+  test "2480 edge: write_note retried with its old base after it landed succeeds", %{
+    user: u,
+    vault: v
+  } do
+    args = %{"path" => @path, "content" => "replaced\n", "base_hash" => read_hash(u, v)}
+    assert {:ok, _, _} = Handlers.handle("write_note", u, v, args)
+    # The response was lost; the agent retries the same call.
+    assert {:ok, _, _} = Handlers.handle("write_note", u, v, args)
+    assert body(u, v) == "replaced\n"
+  end
+
+  test "2480 edge: edit_note and append_to_note with a fresh base_hash write", %{
+    user: u,
+    vault: v
+  } do
+    assert {:ok, _, _} =
+             Handlers.handle("edit_note", u, v, %{
+               "path" => @path,
+               "mode" => "replace_text",
+               "find" => "keep me",
+               "replace" => "kept",
+               "base_hash" => read_hash(u, v)
+             })
+
+    assert {:ok, _, _} =
+             Handlers.handle("append_to_note", u, v, %{
+               "path" => @path,
+               "text" => "tail\n",
+               "base_hash" => read_hash(u, v)
+             })
+
+    assert body(u, v) =~ "kept"
+    assert body(u, v) =~ "tail"
+  end
+
+  test "2480 edge: edit_note replace_text and append_to_note with a stale base_hash refuse",
+       %{user: u, vault: v} do
+    stale_hash = read_hash(u, v)
+    _ = stale_read_then_mcp_edit(u, v)
+    before = body(u, v)
+
+    assert_conflict(
+      Handlers.handle("edit_note", u, v, %{
+        "path" => @path,
+        "mode" => "replace_text",
+        "find" => "keep me",
+        "replace" => "client 2",
+        "base_hash" => stale_hash
+      })
+    )
+
+    assert_conflict(
+      Handlers.handle("append_to_note", u, v, %{
+        "path" => @path,
+        "text" => "client 2 tail\n",
+        "base_hash" => stale_hash
+      })
+    )
+
+    assert body(u, v) == before
+  end
+
+  test "2480 edge: REST create without base_hash and replace with a fresh one both work", %{
+    conn: conn,
+    user: u,
+    vault: v
+  } do
     conn
-    |> post("/api/notes", %{path: @path, content: stale <> "\nrest line\n", mtime: 2.0})
+    |> post("/api/notes", %{path: "New.md", content: "one\n", mtime: 1.0})
     |> json_response(200)
 
-    assert_mcp_kept(u, v, "POST /notes (no base_hash)")
+    hash = read_hash(u, v, "New.md")
+
+    conn
+    |> post("/api/notes", %{path: "New.md", content: "two\n", mtime: 2.0, base_hash: hash})
+    |> json_response(200)
+
+    assert body_at(u, v, "New.md") == "two\n"
+  end
+
+  test "2480 edge: the Obsidian plugin (X-Plugin-Version) still pushes without base_hash", %{
+    conn: conn,
+    user: u,
+    vault: v
+  } do
+    conn
+    |> put_req_header("x-plugin-version", "9.0.0")
+    |> post("/api/notes", %{path: @path, content: "from obsidian\n", mtime: 2.0})
+    |> json_response(200)
+
+    assert body(u, v) == "from obsidian\n"
+  end
+
+  test "2480 edge: a user-token client (web app, device-flow plugin) pushes without base_hash", %{
+    user: u,
+    vault: v
+  } do
+    build_conn()
+    |> authenticate(u)
+    |> post("/api/notes", %{path: @path, content: "from web\n", mtime: 2.0})
+    |> json_response(200)
+
+    assert body(u, v) == "from web\n"
   end
 
   test "2480 guard: write_note with the stale base_hash is refused and writes nothing", %{

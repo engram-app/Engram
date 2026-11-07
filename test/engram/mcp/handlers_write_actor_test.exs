@@ -22,7 +22,7 @@ defmodule Engram.MCP.HandlersWriteActorTest do
   test "write_note records as mcp", %{user: u, vault: v} do
     {:ok, note} = Notes.upsert_note(u, v, %{"path" => "m.md", "content" => "mine"}, actor: "api")
 
-    Handlers.handle("write_note", u, v, %{"path" => "m.md", "content" => "the AI's"})
+    Engram.Test.McpOverwrite.write_note(u, v, %{"path" => "m.md", "content" => "the AI's"})
 
     {:ok, open} =
       Repo.with_tenant(u.id, fn ->

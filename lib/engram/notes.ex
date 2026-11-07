@@ -962,6 +962,11 @@ defmodule Engram.Notes do
     * `merge_doc: doc`: with `locked_note:`, the tail-replayed doc from
       `authoritative_doc/2` that the new content was derived from. The merge
       diffs into it instead of replaying the tail again.
+    * `require_base: true` — refuse (`{:error, :version_conflict, note}`) to
+      replace an EXISTING note when no `base_hash` is declared (#2480). For
+      writers that must not blind-overwrite: MCP and external REST callers.
+      Creating a new note, and re-pushing the content the note already holds,
+      need no base.
     * `broadcast_from: pid` — emit the `note_changed` broadcast via
       `Endpoint.broadcast_from/4` so the given subscriber (the pushing
       channel process) is excluded. Channel pushes pass `self()`; HTTP
@@ -1134,6 +1139,22 @@ defmodule Engram.Notes do
           # greppable key so the rate is monitorable in Loki.
           Logger.warning(
             "note_stale_base_rejected",
+            Metadata.with_category(:warning, :sync,
+              user_id: user.id,
+              vault_id: vault.id,
+              note_id: existing.id,
+              server_version: existing.version
+            )
+          )
+
+          {:error, :version_conflict, decrypt_or_raise!(existing, user)}
+
+        {:ok, {:base_required, existing}} ->
+          # #2480: an overwrite of an existing note with no base_hash, from a
+          # writer that must declare one (`require_base: true`). Its own key, so
+          # the rate of agents and scripts still writing blind is monitorable.
+          Logger.warning(
+            "note_base_hash_required",
             Metadata.with_category(:warning, :sync,
               user_id: user.id,
               vault_id: vault.id,
@@ -2780,6 +2801,11 @@ defmodule Engram.Notes do
           not Keyword.get(opts, :force, false) ->
         idempotent_repush(existing, base_attrs)
 
+      # #2480: a writer that must not blind-overwrite (MCP, external REST)
+      # declared no base. Creating stays open; replacing needs the hash it read.
+      is_nil(base_hash) and Keyword.get(opts, :require_base, false) ->
+        {:base_required, existing}
+
       stale_base?(existing.content_hash, base_hash, base_attrs.content_hash) ->
         # Stale base declared: the row moved since this writer read it. Refuse
         # to merge (see upsert_note — a stale full-content push deletes newer
@@ -3521,12 +3547,18 @@ defmodule Engram.Notes do
   such hold: open one first if you create on a miss.
 
   `opts` are `upsert_note/4`'s; `mtime:` defaults to the note's own.
+  `base_hash:` (the `content_hash` the caller read) refuses the write with
+  `{:error, :stale_base}` unless the current authority text still hashes to
+  it, or the rebuild leaves the text as it is (a retry that already landed).
   """
   @spec rmw_note(map(), map(), String.t(), (String.t() -> term()), keyword()) ::
           {term(), term()}
   def rmw_note(user, vault, path, rebuild, opts) do
     key = {:rmw_rebuild, make_ref()}
-    rebuild = memo_rebuild(rebuild, key)
+    {base_hash, opts} = Keyword.pop(opts, :base_hash)
+    # Fenced OUTSIDE the memo: a `rebuilt:` seed skips the memoized rebuild,
+    # and must not skip the base check with it.
+    rebuild = rebuild |> memo_rebuild(key) |> fence_base(user, base_hash)
     # `rebuilt:` (rmw_prepare/4's result, computed before the caller opened
     # its transaction) seeds the memo, so an unchanged note is not re-parsed.
     # Its note and tail are the optimistic snapshot, so the note is read once.
@@ -3604,6 +3636,29 @@ defmodule Engram.Notes do
     do: authority(user, note, CrdtPersistence.tail_rows(note.id, note.vault_id))
 
   defp attempt_authority(user, note, tail), do: authority(user, note, tail)
+
+  # #2480: compare-and-swap on the text the rebuild runs against (the
+  # authority, tail included), so an edit made after the caller's read refuses
+  # instead of being rebuilt over. A rebuild that changes nothing is the
+  # caller's own retry, as in `stale_base?/3`.
+  defp fence_base(rebuild, _user, nil), do: rebuild
+
+  defp fence_base(rebuild, user, base_hash) do
+    fn current ->
+      case content_hash(user, current) do
+        {:ok, ^base_hash} -> rebuild.(current)
+        {:ok, _moved} -> unchanged_or_stale(rebuild.(current), current)
+        {:error, _} = err -> err
+      end
+    end
+  end
+
+  defp unchanged_or_stale(rebuilt, current) do
+    case rebuild_result(rebuilt) do
+      {:ok, ^current, _meta} -> rebuilt
+      _ -> {:error, :stale_base}
+    end
+  end
 
   defp memo_rebuild(rebuild, key) do
     fn current ->

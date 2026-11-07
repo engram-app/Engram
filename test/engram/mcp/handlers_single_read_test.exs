@@ -128,15 +128,26 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     Engram.DataCase.clear_request_caches()
 
     conn
-    |> call_tool("write_note", %{"path" => "a.md", "content" => "# A\n\nwarm\n"})
+    |> call_tool("write_note", %{
+      "path" => "a.md",
+      "content" => "# A\n\nwarm\n",
+      "base_hash" => hash_of(user, "# A\n\n## Body\n\nbody text\n")
+    })
     |> tool_ok!()
 
     EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
+    # Replacing needs the hash of what it replaces (#2480), taken up front.
+    base = hash_of(user, "# A\n\nwarm\n")
+
     {_, qs} =
       QueryRecorder.record(fn ->
         conn
-        |> call_tool("write_note", %{"path" => "a.md", "content" => "# A\n\nfanned\n"})
+        |> call_tool("write_note", %{
+          "path" => "a.md",
+          "content" => "# A\n\nfanned\n",
+          "base_hash" => base
+        })
         |> tool_ok!()
       end)
 
@@ -560,14 +571,21 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     assert body["result"]["_meta"]["engram.page/error_code"] == "version_conflict"
   end
 
-  test "write_note without base_hash replaces the note as before", ctx do
+  # #2480: a blind replace from a stale read silently reverted another
+  # client's edit, so replacing an existing note now needs a base_hash.
+  test "write_note without base_hash refuses to replace an existing note", ctx do
     %{conn: conn, user: user, vault: vault} = ctx
+    before = text_of(user, vault, "a.md")
 
-    conn
-    |> call_tool("write_note", %{"path" => "a.md", "content" => "# A\n\nreplaced\n"})
-    |> tool_ok!()
+    body =
+      conn
+      |> call_tool("write_note", %{"path" => "a.md", "content" => "# A\n\nreplaced\n"})
+      |> json_response(200)
 
-    assert text_of(user, vault, "a.md") == "# A\n\nreplaced\n"
+    assert body["result"]["isError"], inspect(body)
+    assert result_text(body) =~ "get_notes"
+    assert body["result"]["_meta"]["engram.page/error_code"] == "version_conflict"
+    assert text_of(user, vault, "a.md") == before
   end
 end
 

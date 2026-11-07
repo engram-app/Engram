@@ -509,7 +509,9 @@ defmodule Engram.MCP.Handlers do
 
       # One transaction (re-entrant inside the MCP request's): a miss returns
       # with the vault lock held, so the create below cannot race another.
-      Repo.with_tenant!(user.id, fn -> append_or_create(user, vault, path, text, rebuild) end)
+      Repo.with_tenant!(user.id, fn ->
+        append_or_create(user, vault, path, text, rebuild, rmw_opts(args))
+      end)
     end
   end
 
@@ -525,7 +527,8 @@ defmodule Engram.MCP.Handlers do
       path,
       %{find: find, replace: replace, occurrence: occurrence},
       nil,
-      "patch_note"
+      "patch_note",
+      rmw_opts(args)
     )
   end
 
@@ -543,7 +546,7 @@ defmodule Engram.MCP.Handlers do
       new_content,
       level,
       "update_section",
-      args[:rmw_prepared]
+      rmw_opts(args)
     )
   end
 
@@ -965,7 +968,8 @@ defmodule Engram.MCP.Handlers do
           path,
           %{find: find, replace: replace, occurrence: args["occurrence"] || 0},
           args["expected_replacements"],
-          "edit_note"
+          "edit_note",
+          rmw_opts(args)
         )
         |> tag_mode("replace_text", %{"heading" => nil})
     end
@@ -988,7 +992,7 @@ defmodule Engram.MCP.Handlers do
           args["content"],
           args["level"] || 2,
           "edit_note",
-          args[:rmw_prepared]
+          rmw_opts(args)
         )
         |> tag_mode("replace_section", %{"replacements" => nil})
     end
@@ -1014,7 +1018,7 @@ defmodule Engram.MCP.Handlers do
             vault,
             path,
             {args["heading"], level, position, args["content"]},
-            args[:rmw_prepared]
+            rmw_opts(args)
           )
           |> tag_mode("insert_section", %{"replacements" => nil})
         end
@@ -1027,8 +1031,8 @@ defmodule Engram.MCP.Handlers do
 
   # Through rmw_upsert: the rebuild runs against the authority (#1159) of the
   # locked row, and a missing heading refuses inside it, so nothing is written.
-  defp insert_section(user, vault, path, {heading, _level, position, _text} = spec, prepared) do
-    case rmw_upsert(user, vault, path, inserted_section(spec), prepared) do
+  defp insert_section(user, vault, path, {heading, _level, position, _text} = spec, rmw_opts) do
+    case rmw_upsert(user, vault, path, inserted_section(spec), rmw_opts) do
       {:error, :not_found} ->
         ToolError.error(:note_not_found, "Note not found: #{path}")
 
@@ -1125,7 +1129,8 @@ defmodule Engram.MCP.Handlers do
          path,
          %{find: find, replace: replace, occurrence: occurrence},
          expected,
-         op
+         op,
+         rmw_opts
        ) do
     cond do
       find == "" ->
@@ -1135,14 +1140,14 @@ defmodule Engram.MCP.Handlers do
         {:error, "occurrence must be -1 (all) or 0 or greater"}
 
       true ->
-        do_patch_text(user, vault, path, find, replace, occurrence, expected, op)
+        do_patch_text(user, vault, path, {find, replace, occurrence}, expected, op, rmw_opts)
     end
   end
 
-  defp do_patch_text(user, vault, path, find, replace, occurrence, expected, op) do
-    rebuild = fn current -> patched_text(current, path, {find, replace, occurrence}, expected) end
+  defp do_patch_text(user, vault, path, patch, expected, op, rmw_opts) do
+    rebuild = fn current -> patched_text(current, path, patch, expected) end
 
-    case rmw(user, vault, path, rebuild) do
+    case rmw(user, vault, path, rebuild, rmw_opts) do
       {{:error, :not_found} = e, _} ->
         read_error(e, op, path)
 
@@ -1225,15 +1230,15 @@ defmodule Engram.MCP.Handlers do
   # removes the mismatch instead of also clamping the end-scan to match.
   # The finder (`Engram.MCP.Sections.find/3`) is a CommonMark parser;
   # the level guard still refuses 0 or 7+ before any lookup.
-  defp replace_section(_user, _vault, _path, _heading, _new_content, level, _op, _prepared)
+  defp replace_section(_user, _vault, _path, _heading, _new_content, level, _op, _rmw_opts)
        when level < 1 or level > 6 do
     {:error, "level must be between 1 and 6"}
   end
 
-  defp replace_section(user, vault, path, heading, new_content, level, op, prepared) do
+  defp replace_section(user, vault, path, heading, new_content, level, op, rmw_opts) do
     rebuild = fn current -> replaced_section(current, heading, new_content, level) end
 
-    case rmw(user, vault, path, rebuild, prepared) do
+    case rmw(user, vault, path, rebuild, rmw_opts) do
       {{:error, :not_found} = e, _} ->
         read_error(e, op, path)
 
@@ -1328,12 +1333,12 @@ defmodule Engram.MCP.Handlers do
   # `a/../b.md` missed the existing `a/b.md` and the create overwrote it with
   # only the appended text. Try the raw path first (rows stored before #2005
   # can be unsanitized), then the sanitized one, and create at the sanitized one.
-  defp append_or_create(user, vault, raw, text, rebuild) do
+  defp append_or_create(user, vault, raw, text, rebuild, rmw_opts) do
     path = Notes.PathSanitizer.sanitize(raw)
 
     found =
       Enum.reduce_while(Enum.uniq([raw, path]), {:error, :not_found}, fn p, miss ->
-        case rmw_upsert(user, vault, p, rebuild) do
+        case rmw_upsert(user, vault, p, rebuild, rmw_opts) do
           {:error, :not_found} -> {:cont, miss}
           result -> {:halt, {p, result}}
         end
@@ -1383,48 +1388,57 @@ defmodule Engram.MCP.Handlers do
   # content and returns the new content (a binary), OR `{:error, reason}` to
   # refuse the write entirely: rmw_upsert returns that error as-is and writes
   # nothing. Returns `{:error, :not_found}` for a missing note, with the vault
-  # lock held until the caller's transaction ends. Public (doc: false) for tests.
-  def rmw_upsert(user, vault, path, rebuild, prepared \\ nil) do
-    case rmw(user, vault, path, rebuild, prepared) do
+  # lock held until the caller's transaction ends. `rmw_opts` (see rmw_opts/1)
+  # carry the before_txn rebuild and the agent's base_hash. Public (doc: false)
+  # for tests.
+  def rmw_upsert(user, vault, path, rebuild, rmw_opts \\ []) do
+    case rmw(user, vault, path, rebuild, rmw_opts) do
       {{:error, {:authority, reason}}, _} -> {:error, reason}
       {result, _meta} -> result
     end
   end
 
-  defp rmw(user, vault, path, rebuild, prepared \\ nil),
-    do:
-      Notes.rmw_note(
-        user,
-        vault,
-        path,
-        rebuild,
-        [mtime: now(), rebuilt: prepared] ++ @write_opts
+  # Every MCP read-modify-write goes through here. A `base_hash` the note no
+  # longer matches refuses inside `Notes.rmw_note/5` (#2480), the one place it
+  # is checked, against the same authority text the rebuild runs on.
+  defp rmw(user, vault, path, rebuild, rmw_opts) do
+    opts =
+      Notes.put_base_hash_opt(
+        [mtime: now(), rebuilt: rmw_opts[:rebuilt]],
+        %{"base_hash" => rmw_opts[:base_hash]}
       )
 
-  # No base_hash: a blind replace, as before base_hash existed.
-  defp write_whole(user, vault, path, content, nil),
-    do:
-      Notes.upsert_note(
-        user,
-        vault,
-        %{"path" => path, "content" => content, "mtime" => now()},
-        @write_opts
-      )
+    case Notes.rmw_note(user, vault, path, rebuild, opts ++ @write_opts) do
+      {{:error, :stale_base}, _} -> {{:error, stale_base_error(path)}, nil}
+      done -> done
+    end
+  end
+
+  # The optional per-call rmw inputs from a tool's args: the rebuild
+  # before_txn/4 prepared, and the agent's base_hash.
+  defp rmw_opts(args), do: [rebuilt: args[:rmw_prepared], base_hash: args["base_hash"]]
+
+  # No base_hash: creates a new note, and refuses to replace an existing one
+  # (#2480). A second agent writing back an older read silently reverted
+  # another client's edit; `require_base` refuses that in `Notes.upsert_note/4`.
+  defp write_whole(user, vault, path, content, base_hash) when base_hash in [nil, ""] do
+    case Notes.upsert_note(
+           user,
+           vault,
+           %{"path" => path, "content" => content, "mtime" => now()},
+           [require_base: true] ++ @write_opts
+         ) do
+      {:error, :version_conflict, _note} -> {:error, base_required_error(path)}
+      result -> result
+    end
+  end
 
   # With base_hash: a read-modify-write that replaces the note only if its
   # CURRENT text (the authority, tail included) still hashes to the base the
   # agent read. Compared against the stored row's hash instead, a user edit
   # still in the tail would pass, and the replace would delete it.
   defp write_whole(user, vault, path, content, base_hash) do
-    rebuild = fn current ->
-      case Notes.content_hash(user, current) do
-        {:ok, ^base_hash} -> content
-        {:ok, _moved} -> {:error, stale_base_error(path)}
-        {:error, _} = err -> err
-      end
-    end
-
-    case rmw_upsert(user, vault, path, rebuild) do
+    case rmw_upsert(user, vault, path, fn _current -> content end, base_hash: base_hash) do
       # The agent read a note that is gone or moved: same answer, re-read.
       {:error, :not_found} -> {:error, stale_base_error(path)}
       result -> result
@@ -1435,7 +1449,14 @@ defmodule Engram.MCP.Handlers do
     {:version_conflict,
      "#{Notes.PathSanitizer.sanitize(path)} changed since you read it (base_hash no longer " <>
        "matches), so nothing was written. Call get_notes on it again, apply your change to " <>
-       "the content it returns, and call write_note with that content_hash as base_hash."}
+       "the content it returns, and retry with that content_hash as base_hash."}
+  end
+
+  defp base_required_error(path) do
+    {:version_conflict,
+     "A note already exists at #{Notes.PathSanitizer.sanitize(path)}, so nothing was " <>
+       "written: replacing it needs a base_hash. Call get_notes on it, apply your change to " <>
+       "the content it returns, and call write_note again with that content_hash as base_hash."}
   end
 
   @doc false
