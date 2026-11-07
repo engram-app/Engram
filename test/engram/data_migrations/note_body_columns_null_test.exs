@@ -92,34 +92,69 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNullTest do
     assert Engram.Fixtures.note_body_divergence(u.id) == []
   end
 
-  test "never nulls a drifted row, and stays open for it", %{user: u, vault: v} do
+  test "never nulls a notes nonce the body does not hold, and stays open for it",
+       %{user: u, vault: v} do
     ok = write!(u, v, "ok.md", "fine")
-    same_nonce = write!(u, v, "same.md", "drifted under its nonce")
-    new_nonce = write!(u, v, "new.md", "drifted nonce")
-    for n <- [ok, same_nonce, new_nonce], do: old_release_copy!(n.id)
-
-    # Same nonce, other bytes (a hand edit or a restore).
-    Repo.query!("UPDATE notes SET content_ciphertext = $2 WHERE id = $1", [
-      Ecto.UUID.dump!(same_nonce.id),
-      :crypto.strong_rand_bytes(48)
-    ])
+    drifted = write!(u, v, "new.md", "drifted nonce")
+    for n <- [ok, drifted], do: old_release_copy!(n.id)
 
     # A notes nonce the body does not hold.
     Repo.query!("UPDATE notes SET content_nonce = $2 WHERE id = $1", [
-      Ecto.UUID.dump!(new_nonce.id),
+      Ecto.UUID.dump!(drifted.id),
       <<1>> <> :crypto.strong_rand_bytes(12)
     ])
 
-    drifted = for n <- [same_nonce, new_nonce], do: raw(n.id)
+    [ct, _, cn, _] = raw(drifted.id)
 
     assert {:more, _} = Null.run_pass()
     assert {:more, _} = Null.run_pass()
 
     assert [nil, nil, _, _] = raw(ok.id)
     # The content column stays; the in-step CRDT column of the same row goes.
-    for {n, [ct, _, cn, _]} <- Enum.zip([same_nonce, new_nonce], drifted) do
-      assert [^ct, nil, ^cn, _] = raw(n.id)
-    end
+    assert [^ct, nil, ^cn, _] = raw(drifted.id)
+  end
+
+  test "a stale copy under the body's nonce is nulled and counted", %{user: u, vault: v} do
+    n = write!(u, v, "same.md", "stale under its nonce")
+    old_release_copy!(n.id)
+
+    # Same nonce, other bytes: what a release-B write leaves.
+    Repo.query!("UPDATE notes SET content_ciphertext = $2 WHERE id = $1", [
+      Ecto.UUID.dump!(n.id),
+      :crypto.strong_rand_bytes(48)
+    ])
+
+    _ = Engram.DataMigration.take_stats()
+    assert run_to_done() == :done
+    assert [nil, nil, _, _] = raw(n.id)
+    assert {:ok, %{content: "stale under its nonce"}} = Notes.get_note(u, v, "same.md")
+  end
+
+  # Review HIGH-1: release B writes only the nonce, so every note it edits
+  # keeps an old notes copy under a new nonce. The batch must still close.
+  test "a 0.76-style row that release B then edits and checkpoints: done, both NULL",
+       %{user: u, vault: v} do
+    n = write!(u, v, "edited.md", "first")
+    old_release_copy!(n.id)
+    write!(u, v, "edited.md", "second")
+    :ok = CrdtCheckpoint.checkpoint(u.id, v.id, n.id, doc_with("third"))
+    [ct, st, _, _] = raw(n.id)
+    assert is_binary(ct) and is_binary(st)
+
+    assert run_to_done() == :done
+    assert [nil, nil, cn, sn] = raw(n.id)
+    assert is_binary(cn) and is_binary(sn)
+    assert {:ok, %{content: text}} = Notes.get_note(u, v, "edited.md")
+    assert text =~ "third"
+  end
+
+  test "a 0.76-style row that release B renames: done, both NULL", %{user: u, vault: v} do
+    n = write!(u, v, "r.md", "body")
+    old_release_copy!(n.id)
+    assert {:ok, _} = Notes.rename_note(u, v, "r.md", "s.md")
+    assert run_to_done() == :done
+    assert [nil, nil, _, _] = raw(n.id)
+    assert {:ok, %{content: "body"}} = Notes.get_note(u, v, "s.md")
   end
 
   test "a note with no body row yet is left until it has one", %{user: u, vault: v} do

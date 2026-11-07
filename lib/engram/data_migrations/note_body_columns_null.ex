@@ -8,15 +8,25 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
   (`content_nonce`, `crdt_state_nonce`) and `crdt_head` stay: the write
   fences compare the nonces.
 
-  A column is nulled only when its body row (owned by the same user) holds
-  the same envelope: the same 13-byte nonce field, the same length and the
-  same 16-byte AEAD tag (the last bytes), the cheap slices `NoteBody` uses.
-  Anything else (no body row yet, a NULL nonce, a body that disagrees) is
-  left as it is and keeps the ledger open: a row `NoteSplit` has not reached
-  is nulled once it has, and a real disagreement must be looked at before
-  R8(c) drops the column. Nulling the CRDT ciphertext alone (same nonce)
-  does not fire `notes_crdt_head_invalidate`, so heads stay warm; no
-  `seq`/`updated_at` moves, no fan-out.
+  A column is nulled when its notes copy is still set and its body row (owned
+  by the same user) holds an envelope under the same nonce: the in-step test
+  `NoteBody.sync!/3`, the drift report, the Canary and every write fence use.
+  Release B writes only the nonce, so a note it edited keeps old notes bytes
+  under the new nonce; that copy is stale (it cannot be decrypted) and is
+  nulled too, counted as `stale` in the runner's summary line. A notes nonce
+  the body does not hold, a NULL nonce (pre-nonce layout) or a note with no
+  body row yet is left as it is and keeps the ledger open: a row `NoteSplit`
+  has not reached is nulled once it has, and a real disagreement must be
+  looked at. Nulling the CRDT ciphertext alone (same nonce) does not fire
+  `notes_crdt_head_invalidate`, so heads stay warm; no `seq`/`updated_at`
+  moves, no fan-out.
+
+  Done does not mean the columns stay empty: a release-A (0.76) node still
+  writes both copies, and the fleet guard lets it run (its writes are safe),
+  so a row it writes after its window passed holds a copy again, and the
+  ledger is not re-verified. R8(c) must not take this ledger as proof that
+  the columns are empty: it needs its own check once every node runs B or
+  later (a read-only count of non-NULL ciphertexts).
 
   Discovery and writes go through `Engram.Backfill.IdWindows.heal_pass/4`
   (`notes` primary-key windows of 200, at most 10,000 rows per pass; one
@@ -47,8 +57,6 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
   alias Engram.Notes.Note
   alias Engram.Notes.NoteBody
   alias Engram.Repo
-
-  require Logger
 
   @batch 200
   @max_fixed 10_000
@@ -129,88 +137,99 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
   defp level({:ok, false}), do: {:ok, 0}
   defp level(other), do: other
 
+  # The runner's per-pass summary line carries the reason (and the peer).
   defp blocked(reason) do
     IdWindows.reset_walk(name())
-    :ok = Engram.DataMigration.report(blocked: with({r, _node} <- reason, do: r))
-
-    Logger.info(
-      "note body columns null blocked",
-      Engram.DataMigration.progress_metadata(blocked_by(reason))
-    )
-
+    :ok = Engram.DataMigration.report(blocked_by(reason))
     {:more, rows: 0, blocked: 1}
   end
 
-  defp blocked_by({reason, node}), do: [reason: reason, peer: inspect(node)]
-  defp blocked_by(reason), do: [reason: reason]
+  defp blocked_by({reason, node}), do: [blocked: reason, peer: inspect(node)]
+  defp blocked_by(reason), do: [blocked: reason]
 
   defp walk(opts) do
+    stale = :counters.new(1, [])
+
     result =
-      IdWindows.heal_pass(name(), Note, &null/2,
+      IdWindows.heal_pass(name(), Note, &null(&1, &2, stale),
         batch_size: Keyword.get(opts, :batch, @batch),
         max_fixed: Keyword.get(opts, :max_fixed, @max_fixed)
       )
 
-    with {:more, found} <- result,
-         rows when rows > 0 <- Keyword.get(found, :rows, 0) do
-      Logger.info(
-        "note body columns nulled",
-        Engram.DataMigration.progress_metadata(total_count: rows)
-      )
-    end
-
+    # Copies a release-B write left stale (new nonce on notes and body, old
+    # bytes on notes): nulled like any in-step copy, counted for the summary.
+    :ok = Engram.DataMigration.report(stale: :counters.get(stale, 1))
     result
   end
 
-  # Per ciphertext column: the body row holds the same envelope (same
-  # nonce field, length and tag). `n` the notes row, `b` its body row.
+  # Per ciphertext column: the notes copy is still set and the body row holds
+  # an envelope under the same nonce, the in-step test `sync!/3`, the drift
+  # report, the Canary and every write fence use. Release B writes only the
+  # nonce, so a row it edited keeps old notes bytes under the new nonce: in
+  # step, and nulled (the stale copy cannot even be decrypted). A notes nonce
+  # the body does not hold, a NULL nonce (pre-nonce layout) or no body row is
+  # left as it is. `n` the notes row, `b` its body row.
   in_step = fn ct, nonce, body ->
     prefix =
       "CASE WHEN length(n.#{nonce}) = 13 THEN n.#{nonce} ELSE '\\x00'::bytea || n.#{nonce} END"
 
     """
     (n.#{ct} IS NOT NULL AND n.#{nonce} IS NOT NULL AND b.#{body} IS NOT NULL
-      AND substring(b.#{body} FROM 1 FOR 13) = substring((#{prefix}) FROM 1 FOR 13)
-      AND octet_length(b.#{body}) = 13 + octet_length(n.#{ct})
-      AND substring(b.#{body} FROM octet_length(b.#{body}) - 15)
-        = substring(n.#{ct} FROM greatest(octet_length(n.#{ct}) - 15, 1)))
+      AND substring(b.#{body} FROM 1 FOR 13) = substring((#{prefix}) FROM 1 FOR 13))
+    """
+  end
+
+  # In step, but the notes bytes are not the body's (length or 16-byte tag).
+  stale = fn ct, body ->
+    """
+    (octet_length(b.#{body}) <> 13 + octet_length(n.#{ct})
+      OR substring(b.#{body} FROM octet_length(b.#{body}) - 15)
+        <> substring(n.#{ct} FROM greatest(octet_length(n.#{ct}) - 15, 1)))
     """
   end
 
   content = in_step.("content_ciphertext", "content_nonce", "content_ct")
   crdt = in_step.("crdt_state_ciphertext", "crdt_state_nonce", "crdt_ct")
+  content_stale = stale.("content_ciphertext", "content_ct")
+  crdt_stale = stale.("crdt_state_ciphertext", "crdt_ct")
 
   # One statement: lock the window's in-step rows (skipping a row a writer
-  # holds), null the in-step columns. `= ANY(ARRAY(...))`: an InitPlan,
-  # evaluated once (see `NoteSplit.touch/2`).
+  # holds) in a MATERIALIZED CTE, evaluated once (see `NoteSplit.touch/2` for
+  # why a rescanned LIMIT .. SKIP LOCKED subquery is wrong), then null the
+  # in-step columns. Returns per row whether a nulled copy was stale.
   @null_sql """
+  WITH c AS MATERIALIZED (
+    SELECT n.id, #{content} AS c_ok, #{crdt} AS s_ok,
+      (#{content} AND #{content_stale}) OR (#{crdt} AND #{crdt_stale}) AS stale
+    FROM notes AS n
+    JOIN note_bodies AS b ON b.note_id = n.id AND b.user_id = n.user_id
+    WHERE n.id = ANY($1) AND n.kind = 'note' AND (#{content} OR #{crdt})
+    ORDER BY n.id
+    FOR UPDATE OF n SKIP LOCKED
+  )
   UPDATE notes AS n SET
-    content_ciphertext = CASE WHEN #{content} THEN NULL ELSE n.content_ciphertext END,
-    crdt_state_ciphertext = CASE WHEN #{crdt} THEN NULL ELSE n.crdt_state_ciphertext END
-  FROM note_bodies AS b
-  WHERE b.note_id = n.id AND b.user_id = n.user_id
-    AND n.id = ANY(ARRAY(
-      SELECT n.id FROM notes AS n
-      JOIN note_bodies AS b ON b.note_id = n.id AND b.user_id = n.user_id
-      WHERE n.id = ANY($1) AND n.kind = 'note' AND (#{content} OR #{crdt})
-      ORDER BY n.id
-      FOR UPDATE OF n SKIP LOCKED))
-  RETURNING n.id
+    content_ciphertext = CASE WHEN c.c_ok THEN NULL ELSE n.content_ciphertext END,
+    crdt_state_ciphertext = CASE WHEN c.s_ok THEN NULL ELSE n.crdt_state_ciphertext END
+  FROM c
+  WHERE n.id = c.id
+  RETURNING c.stale
   """
 
-  # What is left in a window: a ciphertext still on `notes` (skipped on a
-  # lock, drifted, or with no body row yet). Varlena headers only.
+  # What is left in a window: a note whose ciphertext is still on `notes`
+  # (skipped on a lock, a nonce the body does not hold, or no body row yet).
+  # Varlena headers only.
   @left_sql """
   SELECT count(*)::int FROM notes AS n
-  WHERE n.id = ANY($1)
+  WHERE n.id = ANY($1) AND n.kind = 'note'
     AND (n.content_ciphertext IS NOT NULL OR n.crdt_state_ciphertext IS NOT NULL)
   """
 
-  defp null(ids, %{repo: repo}) do
+  defp null(ids, %{repo: repo}, stale) do
     ids = Enum.map(ids, &Ecto.UUID.dump!/1)
     _ = repo.query!("SET LOCAL lock_timeout = '2s'", [])
     _ = repo.query!("SET LOCAL statement_timeout = '5s'", [])
-    %{num_rows: fixed} = repo.query!(@null_sql, [ids])
+    %{num_rows: fixed, rows: rows} = repo.query!(@null_sql, [ids])
+    :counters.add(stale, 1, Enum.count(rows, &(&1 == [true])))
     %{rows: [[left]]} = repo.query!(@left_sql, [ids])
     {fixed, left > 0}
   end
