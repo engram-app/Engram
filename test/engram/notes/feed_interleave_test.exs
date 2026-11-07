@@ -88,7 +88,7 @@ defmodule Engram.Notes.FeedInterleaveTest do
       content_nonce: blank_nonce,
       # nil, matching `genesis_insert_bare`. Leaving the old hash in place
       # would make the checkpoint see prev == content_hash and take the
-      # COMPACTION branch, which never touches notes.content — so the test
+      # COMPACTION branch, which never touches notes.content, so the test
       # would be asserting against a state production never reaches.
       content_hash: nil
     )
