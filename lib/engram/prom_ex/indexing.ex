@@ -59,10 +59,10 @@ defmodule Engram.PromEx.Indexing do
     * `engram_prom_ex_indexing_payload_reconcile_total`: notes handled by
       `ReconcileNotePayloads`, tagged by `:outcome` (`checked`: notes the
       heal stamped or the `n` backfill checked; `n_points`: POINTS the `n`
-      backfill wrote; `legacy_v3`: notes it left unstamped for their legacy
-      v3 points, with those points in `legacy_v3_points`. Re-counted every
-      lap until the notes are re-indexed, and they hold the
-      `note_payload_stamps` ledger open). The heal rewrites no point (R3a).
+      backfill wrote; `legacy_v3`: notes with legacy v3 points, with those
+      points in `legacy_v3_points`; the backfill merges the identity
+      `u v n` onto them and stamps the note, so each is counted once). The
+      heal rewrites no point (R3a).
     * `engram_prom_ex_indexing_payload_reconcile_cancelled_total`: reconcile
       jobs cancelled on a 4xx Qdrant refusal, tagged by `:http_status`
       (100..599, bounded). Any increase means a request Qdrant refuses on
