@@ -1650,12 +1650,8 @@ defmodule Engram.Notes do
                 :ok =
                   broadcast_change(user.id, vault.id, "delete", old_path, note.id, seq: note.seq)
 
-                # A move makes no Qdrant write (R3a: a point holds no path). A
-                # resurrect-rename's points went with its tombstone, so it embeds
-                # fresh; a live relocate is already embedded and queues nothing.
-                _ =
-                  if note.content_hash != note.embed_hash,
-                    do: EmbedNote.insert_debounced(note.id, user.id)
+                # A move queues no index work (R3a: a point holds no path). A
+                # restore's embed comes from `move_note`'s own outbox.
               end
 
             {:ok, note}

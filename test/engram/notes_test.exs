@@ -2977,8 +2977,8 @@ defmodule Engram.NotesTest do
   # The zero-call invariant (note/folder rename and move, plus every job they
   # queue) lives in `Engram.RenameZeroIndexWritesTest`.
   describe "rename index jobs" do
-    # The tombstone's points were deleted with it, so the resurrected note
-    # embeds fresh (its embed_hash no longer matches); still no repath.
+    # The tombstone's points were deleted with it, so the restored note
+    # embeds fresh; still no repath.
     test "crdt_create resurrect-rename embeds, never repaths", %{user: user, vault: vault} do
       note =
         Engram.Fixtures.insert_note!(user, vault, %{path: "A/Note1.md", content: "# x\n\nbody"})
@@ -2989,7 +2989,11 @@ defmodule Engram.NotesTest do
 
       refute_enqueued(worker: Engram.Workers.RepathNoteIndex)
       refute_enqueued(worker: Engram.Workers.RefreshKeywordVectors)
-      assert_enqueued(worker: Engram.Workers.EmbedNote, args: %{note_id: note.id})
+
+      # Exactly one embed, from the restore's own outbox (`move_note`'s
+      # NoteCommitted), not a second one from the move.
+      Oban.drain_queue(queue: :events)
+      assert [_] = all_enqueued(worker: Engram.Workers.EmbedNote, args: %{note_id: note.id})
     end
   end
 
