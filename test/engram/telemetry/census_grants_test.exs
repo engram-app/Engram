@@ -16,8 +16,7 @@ defmodule Engram.Telemetry.CensusGrantsTest do
 
   alias Engram.Repo
 
-  @migration_mod Engram.Repo.Migrations.GrantCensusTablesExpand
-  @migration_file "priv/repo/migrations/20261004090000_grant_census_tables_expand.exs"
+  @migration_file "20261004090000_grant_census_tables_expand.exs"
 
   defp uuid_bin, do: Ecto.UUID.dump!(Ecto.UUID.generate())
 
@@ -55,14 +54,8 @@ defmodule Engram.Telemetry.CensusGrantsTest do
     :ok
   end
 
-  # The migration module is already loaded when the migrator compiled it for the
-  # test run; otherwise load the file. Deleting the migration fails this test.
-  defp migration do
-    unless Code.ensure_loaded?(@migration_mod),
-      do: Code.require_file(Path.expand(@migration_file))
-
-    @migration_mod
-  end
+  # Deleting the migration fails this test.
+  defp migration, do: Engram.MigrationFile.load!(@migration_file)
 
   test "the role drop engaged: the helper really runs as engram_app" do
     assert {:returned, [["engram_app"]]} =

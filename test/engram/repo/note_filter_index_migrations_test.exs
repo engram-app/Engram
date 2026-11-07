@@ -25,10 +25,7 @@ defmodule Engram.Repo.NoteFilterIndexMigrationsTest do
      ~w(attachments_folder_ref_live)}
   ]
 
-  defp load(file) do
-    [{mod, _}] = Code.compile_file(Path.join("priv/repo/migrations", file))
-    mod
-  end
+  defp load(file), do: Engram.MigrationFile.load!(file)
 
   defp index(name) do
     %{rows: [[oid, valid?]]} =

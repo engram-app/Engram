@@ -37,6 +37,8 @@ defmodule Engram.Folders.Folder do
     field :explicit, :boolean, default: false
     field :deleted_at, :utc_datetime_usec
     field :delete_op_id, Ecto.UUID
+    # `Engram.Search.NameTerms`: `<<version>> <> name_hmac` its terms were written for.
+    field :name_terms_stamp, :binary
 
     timestamps(type: :utc_datetime_usec)
   end

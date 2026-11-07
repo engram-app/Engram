@@ -60,6 +60,15 @@ defmodule Engram.ServiceConfig.Overrides do
     rebuild_max_disk_percent: {:integer, 1..100},
     file_times_backfill: :boolean,
     note_body_columns_null: :boolean,
+    # `name_terms` backfill kill switch and the search leg's (`Engram.Search.NameTerms`).
+    name_terms_backfill: :boolean,
+    name_terms_search: :boolean,
+    # The name leg's fusion weights (percent of a Qdrant leg's) and its cap on
+    # folder-only page slots (`Engram.Search.NameTerms.weights/0`), tuned by the
+    # search-quality eval without a deploy.
+    name_terms_title_weight_pct: {:integer, 0..1_000},
+    name_terms_folder_weight_pct: {:integer, 0..1_000},
+    name_terms_folder_slots: {:integer, 0..1_000},
     # Folder rename/move size cap (`Engram.Folders`, #2492).
     folder_op_max_rows: {:integer, 0..1_000_000},
     # The null batch's per-pass cap (rows), to slow it without a deploy.
