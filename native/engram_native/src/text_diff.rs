@@ -50,8 +50,9 @@ fn trim(cur: &str, inc: &str) -> (usize, usize) {
 
 /// Bound on the line diff. Past it Myers returns a valid, coarser diff (a
 /// larger replaced block), never a wrong one; the worst case is one hunk,
-/// which is what `diff` gives.
-const DEADLINE: Duration = Duration::from_millis(50);
+/// which is what `diff` gives. Kept short: above 16 KB this runs on a dirty
+/// CPU scheduler, and prod has one.
+const DEADLINE: Duration = Duration::from_millis(20);
 
 /// The edits that turn `cur` into `inc`, ascending and non-overlapping:
 /// `[(offset_u16, delete_u16, insert_start, insert_len)]`, offsets and

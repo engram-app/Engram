@@ -57,14 +57,25 @@ passes vacuously.
 
 `Notes.CrdtWrite.apply_text/4` replaces the snapshot merge for markdown
 updates: the incoming text is hunk-diffed (`Native.text_hunks/2`, line diff
-plus per-block trim) into the doc the writer read, the delta is checkpointed
-into the row in the request (`CrdtCheckpoint`, the room's own materializer),
-and post-commit the same delta bytes, not the snapshot, go into a live room
-(`deliver_out(..., delta:)`). Still one encoder per change. Two traps:
+plus per-block trim) into the doc the writer read, the stored snapshot is that
+doc's state (the existing fenced row update), and post-commit the same delta
+bytes, not the snapshot, go into a live room (`deliver_out(..., delta:)`).
+Still one encoder per change. Traps:
 
-- **Do not call the room from inside the write's transaction.** The room's
-  append resets `notes.crdt_head` on the row the writer holds `FOR NO KEY
-  UPDATE`, so room and writer wait on each other.
+- **Never call a room while holding the note row lock.** The room's append
+  resets `notes.crdt_head` on that row, so room and writer wait on each
+  other. A plain no-base push holds no lock until its row UPDATE, so it diffs
+  INSIDE the room (the room's doc holds edits whose append has not landed; a
+  push that echoes one would otherwise insert it twice). An rmw locks first,
+  so it diffs the stored doc and the room merges the delta.
+- **A writer with a base must not diff against the room.** Its text was
+  derived from the stored view; diffing it against the room deletes room
+  edits it never saw.
+- **Do not rescue inside the write's transaction.** `CrdtCheckpoint` rescues
+  everything (right for a room exit); run inside a request transaction it let
+  a half-written row commit (new `notes` nonce over the old `note_bodies`
+  ciphertext). The ops path writes through the fenced update, which rescues
+  only the lost-fence case.
 - **The single-span diff is itself a doubling source.** A rewrite of lines 2
   and 200 deletes and re-inserts 3-199, so a concurrent edit on line 100
   comes back next to the old text. `crdt_write_test.exs` "an edit on line 100

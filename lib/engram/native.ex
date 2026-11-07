@@ -201,7 +201,7 @@ defmodule Engram.Native do
   @doc """
   The multi-hunk diff for `CrdtBridge.diff_hunks_into_text/2`: `[{offset_u16,
   delete_u16, insert_start, insert_len}]`, ascending and non-overlapping, in
-  the same units as `text_diff/2`. A line diff bounded by a 50 ms deadline
+  the same units as `text_diff/2`. A line diff bounded by a 20 ms deadline
   (past it the diff is coarser, never wrong), each changed block trimmed to
   its changed span. Valid UTF-8 only.
   """
