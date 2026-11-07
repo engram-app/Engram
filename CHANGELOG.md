@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.78.0](https://github.com/engram-app/Engram/compare/0.77.0...0.78.0) (2026-11-07)
+
+
+### Features
+
+* **folders:** R9.5 step 3 folder read switch ([#2485](https://github.com/engram-app/Engram/issues/2485)) ([1d34972](https://github.com/engram-app/Engram/commit/1d34972dd136f3781c7d461cc710b19e617e08a3))
+* **notes:** R8(b2) stop writing notes body ciphertexts ([#2493](https://github.com/engram-app/Engram/issues/2493)) ([812ca66](https://github.com/engram-app/Engram/commit/812ca66ee48510dfdd0251dfa6c217d5a1da425b))
+
 ## [0.77.0](https://github.com/engram-app/Engram/compare/0.76.0...0.77.0) (2026-11-07)
 
 
