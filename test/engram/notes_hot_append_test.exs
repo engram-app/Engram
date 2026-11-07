@@ -77,12 +77,10 @@ defmodule Engram.NotesHotAppendTest do
     before = hot.()
 
     Repo.query!(
-      "UPDATE notes SET crdt_state_ciphertext = $2, crdt_state_nonce = $3, dek_version = dek_version WHERE id = $1",
-      [
-        Ecto.UUID.dump!(note.id),
-        :crypto.strong_rand_bytes(64),
-        <<1>> <> :crypto.strong_rand_bytes(12)
-      ]
+      # Since R8(b2) the state itself goes to `note_bodies`; `notes` takes
+      # its nonce.
+      "UPDATE notes SET crdt_state_nonce = $2, dek_version = dek_version WHERE id = $1",
+      [Ecto.UUID.dump!(note.id), <<1>> <> :crypto.strong_rand_bytes(12)]
     )
 
     assert hot.() == before + 1

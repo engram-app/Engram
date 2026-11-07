@@ -896,41 +896,7 @@ defmodule Engram.Notes.NoteBodyWriteTest do
     end
   end
 
-  describe "R8(b1) schema prep" do
-    test "a nonce-only CRDT state write resets the head; nulling the ciphertext does not",
-         %{user: u, vault: v} do
-      note = write!(u, v, "a.md", "first")
-      id = Ecto.UUID.dump!(note.id)
-      head = String.duplicate("A", 43)
-      head_of = fn -> Repo.query!("SELECT crdt_head FROM notes WHERE id = $1", [id]).rows end
-
-      Repo.query!("UPDATE notes SET crdt_head = $2 WHERE id = $1", [id, head])
-      Repo.query!("UPDATE notes SET crdt_state_ciphertext = NULL WHERE id = $1", [id])
-      assert head_of.() == [[head]]
-
-      Repo.query!("UPDATE notes SET crdt_state_nonce = $2 WHERE id = $1", [
-        id,
-        <<1>> <> :crypto.strong_rand_bytes(12)
-      ])
-
-      assert head_of.() == [[nil]]
-    end
-
-    test "a note may drop its content ciphertext but not also its nonce", %{user: u, vault: v} do
-      note = write!(u, v, "a.md", "first")
-      id = Ecto.UUID.dump!(note.id)
-
-      assert {:ok, _} =
-               Repo.query("UPDATE notes SET content_ciphertext = NULL WHERE id = $1", [id],
-                 mode: :savepoint
-               )
-
-      assert {:error, %Postgrex.Error{postgres: %{code: :check_violation}}} =
-               Repo.query("UPDATE notes SET content_nonce = NULL WHERE id = $1", [id],
-                 mode: :savepoint
-               )
-    end
-  end
+  # The trigger and shape-check semantics: NotesBodyColumnsUnreferencedTest.
 
   describe "row-locked reads take the body from note_bodies" do
     test "get_note_for_update", %{user: u, vault: v} do

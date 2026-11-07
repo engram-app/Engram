@@ -17,8 +17,8 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   next tick); a rename racing it uses its single retry. Neither loses data.
   A change to those fences must keep the re-encoder in mind.
 
-  One side effect: rewriting `notes.crdt_state_ciphertext` fires the
-  `notes_crdt_head_invalidate` trigger, which NULLs `crdt_head`. Left NULL,
+  One side effect: rewriting a CRDT state (a fresh `notes.crdt_state_nonce`)
+  fires the `notes_crdt_head_invalidate` trigger, which NULLs `crdt_head`. Left NULL,
   every live-bound note re-handshakes on each manifest reconcile (#1341), so
   when a chain that rewrote a row there finishes that column it enqueues
   `BackfillCrdtHead` per vault (`BackfillCrdtHead.enqueue_user/1`, as DEK
