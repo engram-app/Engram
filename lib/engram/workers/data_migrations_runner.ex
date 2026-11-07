@@ -43,7 +43,8 @@ defmodule Engram.Workers.DataMigrationsRunner do
     Engram.DataMigrations.PersonOriginBackfill,
     Engram.DataMigrations.EffectiveDates,
     Engram.DataMigrations.FileTimes,
-    Engram.DataMigrations.NameTerms
+    Engram.DataMigrations.NameTerms,
+    Engram.DataMigrations.NoteName
   ]
 
   @impl Oban.Worker
