@@ -43,8 +43,10 @@ defmodule Engram.PromEx.Indexing do
       dropped; canvas and base are labelled from the note path.
 
     * `engram_prom_ex_indexing_chunks_total`: chunks per committed pass, tagged
-      by `:outcome` (`embedded | reused`); the reuse ratio is
-      `reused / (embedded + reused)`.
+      by `:outcome` (`embedded | reused | legacy`); the reuse ratio is
+      `(reused + legacy) / (embedded + reused + legacy)`. `legacy`: reused
+      only by its pre-R3c inputs (`Indexing.legacy_reuse/6`); the R3c
+      contract deletes that candidate once it reads 0 for 30 days.
     * `engram_prom_ex_indexing_frontmatter_keys_skipped_total`: new
       user-added frontmatter keys left out of the payload and `note_attrs`
       because the user is at the per-user key cap (`FrontmatterKeys.cap/0`).
@@ -214,7 +216,7 @@ defmodule Engram.PromEx.Indexing do
           event_name: @chunks_event,
           measurement: :count,
           description:
-            "Chunks a committed indexing pass wrote, by outcome: embedded (new point) or reused (kept in place). reused / (embedded + reused) is the reuse ratio.",
+            "Chunks a committed indexing pass wrote, by outcome: embedded (new point), reused (kept in place), or legacy (kept, matched by its pre-R3c inputs). (reused + legacy) / all is the reuse ratio.",
           tags: [:outcome]
         ),
         sum(
