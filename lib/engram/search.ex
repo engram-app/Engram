@@ -633,7 +633,7 @@ defmodule Engram.Search do
         # oversampled by its matching fraction (`oversample/1`), then
         # post-filtered.
         qdrant_limit =
-          if post_filter?(within),
+          if within,
             do: min(fetch_limit * oversample(within), Qdrant.max_page()),
             else: fetch_limit
 
@@ -716,9 +716,6 @@ defmodule Engram.Search do
   # No sample to size by: the widest oversample (`oversample/1`, 16x).
   defp resolve_scope(_user, vaults, opts, false), do: {:ok, [], {vaults, opts, {0, 0}}}
 
-  defp post_filter?({_vaults, _filter, _sample}), do: true
-  defp post_filter?(_within), do: false
-
   # The most a `:too_wide` search fetches: 16x the page, in at most two rounds.
   @widen_factor 16
 
@@ -726,6 +723,14 @@ defmodule Engram.Search do
   # matching fraction of the resolver's bounded sample (`matched / sampled`),
   # at most `@widen_factor`. A sample with no match (a sparse filter, or an
   # empty vault) is the most, 16x.
+  #
+  # A note-scoped search drops in Postgres the points without `n` it lets
+  # through; until the backfill is done (the ledger) there can be many, so
+  # it fetches the widest pool, in one round. Done: the page size. The
+  # ledger read is cached once done (`DataMigrations.done?/2`).
+  defp oversample({:scope, _scope}),
+    do: if(Engram.DataMigrations.NotePayloadStamps.done?(), do: 1, else: @widen_factor)
+
   defp oversample({_vaults, _filter, {0, _sampled}}), do: @widen_factor
 
   defp oversample({_vaults, _filter, {matched, sampled}}),

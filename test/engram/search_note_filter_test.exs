@@ -110,6 +110,7 @@ defmodule Engram.SearchNoteFilterTest do
 
   test "{:ids, ids}: n any or no n at the page size, then hits outside the ids are dropped",
        %{bypass: bypass, user: user, vault: vault} do
+    ledger_done()
     {keep, kept_point} = note_with_point(user, vault, "Health/keep.md")
     # A point not yet backfilled (no `n`) passes `is_empty(n)`; its note does
     # not match, so Postgres drops it.
@@ -588,16 +589,35 @@ defmodule Engram.SearchNoteFilterTest do
 
     # Amendment 2: search never waits on the ledger. With the index, the note
     # scope is sent while `NotePayloadStamps` is still open.
-    test "an open note_payload_stamps ledger still sends the note scope",
+    # Review LOW-5: until the backfill is done, points without `n` pass the
+    # scope and are post-filtered, so the scope path oversamples as a
+    # post-filtered search does (`oversample/1`'s widest, one round).
+    test "an open note_payload_stamps ledger still sends the note scope, oversampled",
          %{bypass: bypass, user: user, vault: vault} do
       refute Engram.DataMigrations.NotePayloadStamps.done?()
       answer(fn [] -> {:ok, {:ids, [Ecto.UUID.generate()]}} end)
       embed()
       expect_query(bypass, [])
 
-      assert {:ok, []} = Search.search(user, vault, "q", tags: ["x"], mode: :vector)
-      assert_received {:query, %{"filter" => filter}}
+      assert {:ok, []} =
+               Search.search(user, vault, "q", tags: ["x"], mode: :vector, diversity: 0.0)
+
+      assert_received {:query, %{"filter" => filter, "limit" => limit}}
+      assert limit == 5 * 16
       assert %{"should" => [_, %{"is_empty" => _}]} = scope_clause(filter, user, vault)
+    end
+
+    test "a done ledger sends the note scope at the page size",
+         %{bypass: bypass, user: user, vault: vault} do
+      ledger_done()
+      answer(fn [] -> {:ok, {:ids, [Ecto.UUID.generate()]}} end)
+      embed()
+      expect_query(bypass, [])
+
+      assert {:ok, []} =
+               Search.search(user, vault, "q", tags: ["x"], mode: :vector, diversity: 0.0)
+
+      assert_received {:query, %{"limit" => 5}}
     end
 
     test "an unfiltered search checks nothing", %{bypass: bypass, user: user, vault: vault} do
@@ -625,6 +645,11 @@ defmodule Engram.SearchNoteFilterTest do
 
     assert_received {:resolve, vaults, _, []}
     assert Enum.sort(Enum.map(vaults, & &1.id)) == Enum.sort([vault.id, other.id])
+  end
+
+  defp ledger_done do
+    alias Engram.DataMigrations.NotePayloadStamps
+    Engram.DataMigrations.mark_done(NotePayloadStamps.name(), NotePayloadStamps.version())
   end
 
   defp tenant(user, vault), do: [user_id: to_string(user.id), vault_id: to_string(vault.id)]
