@@ -334,7 +334,11 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       assert n_kept?(ctx, {id, point})
     end
 
-    test "a note still on legacy points is healed, not stamped with the new version", ctx do
+    # Design (g)1, review MED-4: R3a never rewrites a reused point, so a note
+    # still on legacy v3 points would never get `n` and would hold the ledger
+    # open forever. The fleet job merges the identity payload (`u`, `v`, `n`)
+    # onto them, paced like any `n` write, no embed, then stamps the note.
+    test "a note still on legacy points gets the identity merged and is stamped", ctx do
       null_versions(ctx)
 
       # Back on v3 points, with a hash from an earlier pass.
@@ -348,11 +352,16 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       no_embed()
       assert :ok = sweep(ctx)
 
-      # A v3 point never gets `n`.
-      assert Agent.get(ctx.store, & &1.batches) == []
-      assert Enum.all?(payload_versions(ctx), &is_nil/1)
-      # Still in view of the sweep: nothing claims the new shape was written.
-      assert queued_users() == 1
+      for note <- [ctx.stale, ctx.healthy], id <- point_ids(note) do
+        point = Agent.get(ctx.store, &Map.fetch!(&1.points, id))
+        assert point["n"] == FilterId.uuid(note.id)
+        assert point["u"] == FilterId.uuid(ctx.user.id)
+        assert point["v"] == FilterId.uuid(note.vault_id)
+      end
+
+      assert payload_versions(ctx) == [6, 6]
+      assert queued_users() == 0
+      assert NotePayloadStamps.run_pass() == :done
     end
 
     test "points already holding the payload are only stamped", ctx do
