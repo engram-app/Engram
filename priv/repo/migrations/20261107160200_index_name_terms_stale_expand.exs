@@ -14,8 +14,13 @@ defmodule Engram.Repo.Migrations.IndexNameTermsStaleExpand do
   Empty in steady state. Holds every live note and folder between this
   migration and the end of the `NameTerms` backfill.
 
-  HOT: `basename_hmac`, `name_hmac` and `deleted_at` are already indexed;
-  the stamp changes only when the terms are rewritten.
+  Not HOT for the stamp: `name_terms_stamp` is in these predicates, so a
+  stamp write is a non-HOT update (an entry in every `notes` / `folders`
+  index). It changes only when a ref's name does (create, rename, delete,
+  rotation), plus once per live note and folder during the backfill: a
+  one-time cost of one row version per ref, paced by the backfill chain.
+  Every other predicate column is already indexed, so no other write that
+  was heap-only stops being so.
 
   Additive: the previous release ignores them. Dropped by name first, so a
   retry after a failed CONCURRENTLY build rebuilds an INVALID index.

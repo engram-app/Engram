@@ -83,6 +83,8 @@ defmodule Engram.Workers.DeleteNoteIndex do
   defp unlink_then_delete_index(%{id: note_id, user_id: user_id} = note) do
     # #591 — the note is gone: drop its outgoing edges.
     :ok = Links.on_note_soft_deleted(user_id, note_id)
+    # S1: its name terms go too (Postgres only).
+    :ok = Engram.Search.NameTerms.on_note_deleted(user_id, note_id)
 
     # Strict mode never refuses a delete; mapped anyway so a refusal is a
     # snooze here like on every other Qdrant writer.

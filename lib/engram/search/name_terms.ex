@@ -14,16 +14,21 @@ defmodule Engram.Search.NameTerms do
 
   ## Writers
 
-  One entry point per kind, `on_note_written/2` and `put_folders/3`, every
-  writer goes through:
+  Shared hooks every writer goes through (all Postgres only):
 
-    * `on_note_written/2`: the index pass (`Engram.Indexing`, inside its
-      commit; a content edit can change the H1 title), note rename and move
-      (`Notes.rename_note/5`, after its commit) and CRDT create / rename
-      (`Notes.genesis_crdt_note/5`);
-    * `put_folders/3`: folder create and rename (`Engram.Folders.Rows`);
-    * DEK rotation (`resync/4`) and the self-heal (`heal_window/3`, run by
-      the `NameTerms` ledger and `Engram.Bookkeeping.Drain`).
+    * `on_note_written/2`: the index pass (`Engram.Indexing.run_in_commit`,
+      under a savepoint; covers web and MCP creates and H1 title edits), note
+      rename and move (`Notes.rename_note/5`, after its commit) and CRDT
+      create / rename (`Notes.genesis_crdt_note/5`);
+    * `put_folders/3`: folder create, revive and rename (`Engram.Folders.Rows`);
+    * `on_note_deleted/2` (`Engram.Workers.DeleteNoteIndex`, every soft
+      delete) and `on_folders_deleted/1` (`Folders.Rows` delete and merge
+      retire): a deleted ref's rows go and its stamp is cleared, so a
+      restore reads as stale and is rewritten;
+    * DEK rotation (`resync/4`) and the self-heal (`heal_window/3`, the
+      backfill chain `Engram.Workers.BackfillNameTerms` and
+      `Engram.Bookkeeping.Drain`, which also sweeps orphans,
+      `sweep_orphans/2`).
 
   A note's terms are the tokens of its title (frontmatter, else first H1,
   else filename) and of its filename stem; a folder's, the tokens of its own
@@ -37,38 +42,50 @@ defmodule Engram.Search.NameTerms do
   writer that renames without rewriting the terms (the previous release, a
   rolling deploy, a rollback) leaves the stamp behind the hmac, and the
   partial indexes `notes_name_terms_stale` / `folders_name_terms_stale` hold
-  exactly those rows: the ledger walks heal them, the drain heals what an
+  exactly those rows: the backfill chain heals them, the drain heals what an
   older node writes after the ledger closed. A folder rename leaves its
   child notes' basenames, and so their stamps, alone. A name that never
-  decrypts is stamped `<<0>> <> hmac` and leaves the index. Not covered: a
-  previous-release content edit that changes only the H1 title keeps the
-  old title terms until this release's next index pass of the note
-  (ranking only; Qdrant holds the new title).
+  decrypts is stamped `<<0>> <> hmac` and leaves the index.
+
+  Accepted (ranking only): a previous-release content edit that changes only
+  the H1 title keeps the old title terms until this release's next index
+  pass (Qdrant holds the new title); two concurrent index passes of one note
+  with different titles can leave the union of both term sets.
 
   ## Search
 
-  `leg/5` is the seam `Engram.Search` gathers its legs through: off (search
-  unchanged) until the ledger is done, or with the `name_terms_search`
-  service override false. On, it fuses one more ranked list into the Qdrant
-  candidates by RRF (`Engram.Search.Fusion`, k = 2): exact-filename notes
-  first (`HMAC(basename_key(query))`, one probe on the `basename_hmac`
-  index), then notes by matching title terms, then live notes directly in a
-  matching folder. Each note stands for its first chunk's point, so every
-  later step (scope filter, hydrate, rerank) is the existing one.
+  `leg/6` is the seam `Engram.Search` gathers its legs through (keyword and
+  hybrid; `:vector` never gets it). On unless the `name_terms_search`
+  override is false, from the first rename after deploy: not gated on the
+  backfill, since a ref without terms is simply not found by this leg. Its
+  notes are narrowed to the search's filters first (`Search.in_scope/3`),
+  then fused into the Qdrant candidates by RRF (`Engram.Search.Fusion`,
+  k = 2): exact-filename notes first (`HMAC(basename_key(query))`, one probe
+  on the `basename_hmac` index), then notes by matching title terms, then
+  the notes anywhere under matching folders. Each note stands for its first
+  chunk's point, so every later step (hydrate, rerank, MMR) is the existing
+  one. B2's re-rank can replace `fuse/3`.
 
   ## Cost per operation
 
-    * note rename or move: read at most 32 term rows, delete plus insert at
-      most 32, one stamp write; only that note's rows. A move keeps the
-      basename, so it writes nothing.
+    * note rename: read at most 32 term rows, delete plus insert at most 32,
+      one stamp write; only that note's rows. A move keeps the basename, so
+      it writes nothing.
     * folder create or rename: the same for that folder's rows only. Child
       notes and descendant folders are not touched.
+    * note or folder delete: delete at most 32 rows, one stamp write.
     * index pass: the read; writes only when the title's terms changed.
-    * search: at most #{16} query terms x #{500} postings (index-only on the
-      primary key), one exact-name probe, at most #{50} folder-child notes,
-      one first-chunk lookup for at most #{3 * 50} notes. Constant in vault
-      size: a term with more postings is truncated, which acts as a
-      stopword.
+    * search, constant in vault size and in notes per folder:
+      - at most #{16} query terms x 2 kinds x #{500} LIVE postings each
+        (notes and folders have separate budgets; each posting is one
+        primary-key probe of its ref, so dead rows are skipped inside the
+        bound and never fill it; delete hooks and the orphan sweep keep them
+        near zero);
+      - one exact-name probe;
+      - folders: at most #{200} descendant folders, at most #{32} levels, one
+        query per level; then at most #{50} notes per folder, cut to #{50};
+      - one first-chunk probe (LIMIT 1) per note, at most #{3 * 50} notes;
+      - one bounded filter resolve for a filtered search.
     * DEK rotation: one rewrite of the user's rows, O(notes + folders),
       Postgres only, no Voyage call.
 
@@ -115,6 +132,8 @@ defmodule Engram.Search.NameTerms do
   @max_query_terms 16
   @postings 500
   @k 50
+  @max_folders 200
+  @max_depth 32
   @rrf_k 2
   @lang :en
   @note 0
@@ -157,9 +176,10 @@ defmodule Engram.Search.NameTerms do
   @doc """
   The single post-write hook of every note writer (index pass, rename, move,
   CRDT create and rename): rewrites the note's terms from its decrypted
-  `path` and `title`. Joins the caller's tenant transaction, else opens one.
-  Never fails the caller's write: an error is logged, and the stale stamp
-  leaves the note to the self-heal.
+  `path` and `title`. Inside a caller's transaction (the index pass commit)
+  it runs under a savepoint, so a failure here rolls back only its own
+  statements. Never fails the caller's write: any error is logged, and the
+  stale stamp leaves the note to the self-heal.
   """
   @spec on_note_written(map() | Ecto.UUID.t(), map()) :: :ok
   def on_note_written(_user, %{kind: kind}) when kind not in [nil, "note"], do: :ok
@@ -168,15 +188,34 @@ defmodule Engram.Search.NameTerms do
     with %{} = user <- load_user(user),
          {:ok, fk} <- Crypto.dek_filter_key(user) do
       ref = {id, note.vault_id, dims(note_texts(path, Map.get(note, :title)), fk), hmac(fk, path)}
-      Repo.with_tenant!(user.id, fn -> put(Repo, user.id, @note, [ref]) end)
+      Repo.with_tenant!(user.id, fn -> savepoint(fn -> put(Repo, user.id, @note, [ref]) end) end)
     end
 
     :ok
   rescue
-    e in [DBConnection.ConnectionError, Postgrex.Error] -> write_failed(e)
+    e -> write_failed(e)
   end
 
   def on_note_written(_user, _note), do: :ok
+
+  # In a transaction, a failed statement aborts it: isolate ours.
+  defp savepoint(fun) do
+    if Repo.in_transaction?() do
+      Repo.query!("SAVEPOINT s1_terms")
+
+      try do
+        result = fun.()
+        Repo.query!("RELEASE SAVEPOINT s1_terms")
+        result
+      rescue
+        e ->
+          Repo.query!("ROLLBACK TO SAVEPOINT s1_terms")
+          reraise e, __STACKTRACE__
+      end
+    else
+      fun.()
+    end
+  end
 
   @doc """
   The folder writers' hook (`Engram.Folders.Rows` create and rename):
@@ -197,6 +236,74 @@ defmodule Engram.Search.NameTerms do
       )
     )
   end
+
+  @doc """
+  The shared delete hook of notes (`Engram.Workers.DeleteNoteIndex`, which
+  every soft delete, trash and folder-delete cascade enqueues): the note's
+  rows go, and its stamp is cleared so a restore reads as stale and the
+  drain rewrites it. Postgres only, idempotent.
+  """
+  @spec on_note_deleted(Ecto.UUID.t(), Ecto.UUID.t()) :: :ok
+  def on_note_deleted(user_id, note_id) do
+    Repo.with_tenant!(user_id, fn -> forget(Repo, Note, @note, [note_id]) end)
+  end
+
+  @doc "`on_note_deleted/2` for folder rows (`Folders.Rows` delete and merge retire), in the caller's tenant."
+  @spec on_folders_deleted([Ecto.UUID.t()]) :: :ok
+  def on_folders_deleted([]), do: :ok
+  def on_folders_deleted(ids), do: forget(Repo, Folder, @folder, ids)
+
+  defp forget(repo, schema, kind, ids) do
+    repo.delete_all(from(r in Row, where: r.ref_id in ^ids and r.ref_kind == ^kind))
+
+    repo.update_all(
+      from(r in schema,
+        where: r.id in ^ids and not is_nil(r.deleted_at) and not is_nil(r.name_terms_stamp)
+      ),
+      set: [name_terms_stamp: nil]
+    )
+
+    :ok
+  end
+
+  @doc """
+  One page of the orphan sweep (`Engram.Bookkeeping.Drain`): the next #{500}
+  refs after `after_id` (on `name_terms_ref`), and the rows of those whose
+  note or folder is gone or deleted are removed (a purge or an older
+  release's delete that skipped `on_note_deleted/2`). `{refs_read, last_ref |
+  nil, removed}`. `repo` is the scope's.
+  """
+  @spec sweep_orphans(module(), Ecto.UUID.t() | nil) ::
+          {non_neg_integer(), Ecto.UUID.t() | nil, non_neg_integer()}
+  def sweep_orphans(repo, after_id) do
+    refs =
+      from(r in Row, distinct: true, order_by: r.ref_id, limit: 500, select: {r.ref_id, r.ref_kind})
+      |> then(fn q -> if after_id, do: where(q, [r], r.ref_id > ^after_id), else: q end)
+      |> repo.all()
+
+    live =
+      MapSet.new(
+        live_ids(repo, Note, for({id, @note} <- refs, do: id)) ++
+          live_ids(repo, Folder, for({id, @folder} <- refs, do: id))
+      )
+
+    dead = for {id, _} <- refs, not MapSet.member?(live, id), do: id
+
+    {removed, _} =
+      if dead == [],
+        do: {0, nil},
+        else: repo.delete_all(from(r in Row, where: r.ref_id in ^dead))
+
+    {length(refs), refs |> List.last() |> then(&(&1 && elem(&1, 0))), removed}
+  end
+
+  defp live_ids(_repo, _schema, []), do: []
+
+  defp live_ids(repo, Note, ids),
+    do: repo.all(from(n in Note, where: n.id in ^ids and n.kind == "note" and is_nil(n.deleted_at), select: n.id))
+
+  defp live_ids(repo, Folder, ids),
+    do: repo.all(from(f in Folder, where: f.id in ^ids and is_nil(f.deleted_at), select: f.id))
 
   defp hmac(fk, path), do: Crypto.hmac_field(fk, Links.basename_key(path))
   defp name_hmac(fk, segment), do: Folder.name_hmac(fk, segment)
@@ -347,9 +454,7 @@ defmodule Engram.Search.NameTerms do
     {:ok, fixed} =
       Repo.with_tenant(user_id, fn ->
         ids =
-          from(r in schema, where: r.user_id == ^user_id, limit: 1_000, select: r.id)
-          |> live(schema)
-          |> stale_only(:stale, hmac_col(schema))
+          from(r in stale_query(schema), where: r.user_id == ^user_id, limit: 1_000, select: r.id)
           |> Repo.all()
 
         if ids == [], do: 0, else: ids |> then(&heal_window(schema, &1, %{repo: Repo})) |> elem(0)
@@ -357,6 +462,11 @@ defmodule Engram.Search.NameTerms do
 
     fixed
   end
+
+  @doc "The live refs of `schema` whose terms are stale: the stale partial indexes' predicate."
+  @spec stale_query(module()) :: Ecto.Query.t()
+  def stale_query(schema),
+    do: from(r in schema) |> live(schema) |> stale_only(:stale, hmac_col(schema))
 
   defp live(query, Note),
     do:
@@ -516,29 +626,35 @@ defmodule Engram.Search.NameTerms do
   @doc """
   Search's legs (`legs`, a function of the search opts returning
   `{:ok, candidates}`), with this leg fused in for a text query in keyword or
-  hybrid mode while the leg is on. `scope` is `Search`'s vault scope.
+  hybrid mode (`:vector` is meaning only, so it never gets the leg). `scope`
+  is `Search`'s vault scope; `keep` narrows a list of note ids to the ones
+  the search's filters allow, so an out-of-scope name hit never takes a
+  page slot from an in-scope Qdrant hit.
   """
-  @spec leg(function(), map(), term(), atom(), term()) :: function()
-  def leg(legs, user, scope, mode, query) when mode in [:keyword, :hybrid] and is_binary(query) do
-    case if(on?(), do: recall(user, scope, query), else: []) do
-      [] ->
-        legs
+  @spec leg(function(), map(), term(), atom(), term(), ([Ecto.UUID.t()] -> [Ecto.UUID.t()])) ::
+          function()
+  def leg(legs, user, scope, mode, query, keep)
+      when mode in [:keyword, :hybrid] and is_binary(query) do
+    names = if on?(), do: recall(user, scope, query, keep), else: []
 
-      names ->
-        fn opts ->
-          with {:ok, candidates} <- legs.(opts),
-               do: {:ok, fuse(candidates, names, Keyword.fetch!(opts, :limit))}
-        end
+    if names == [] do
+      legs
+    else
+      fn opts ->
+        with {:ok, candidates} <- legs.(opts),
+             do: {:ok, fuse(candidates, names, Keyword.fetch!(opts, :limit))}
+      end
     end
   end
 
-  def leg(legs, _user, _scope, _mode, _query), do: legs
+  def leg(legs, _user, _scope, _mode, _query, _keep), do: legs
 
-  @doc "On once the `NameTerms` ledger is done, unless the `name_terms_search` override is false."
-  def on? do
-    Engram.ServiceConfig.get(:name_terms_search, true) == true and
-      Engram.DataMigrations.NameTerms.done?()
-  end
+  @doc """
+  On unless the `name_terms_search` override is false. Not gated on the
+  backfill: a ref without terms yet is simply not found by this leg (search
+  as before), and a renamed note must be findable from its first rename.
+  """
+  def on?, do: Engram.ServiceConfig.get(:name_terms_search, true) == true
 
   defp fuse(candidates, names, limit) do
     [Enum.map(candidates, &Map.put(&1, :id, &1.qdrant_id)), names]
@@ -550,15 +666,19 @@ defmodule Engram.Search.NameTerms do
   @doc """
   The leg's ranked candidates, best first, at most #{3 * 50}: `%{id:
   point_id, qdrant_id: point_id, score: 0.0}` of each matched live note's
-  first chunk. [] on no DEK, no query term or a database error (logged).
+  first chunk, after `keep`. [] on no DEK, no query term or a database error
+  (logged).
   """
-  @spec recall(map(), term(), String.t()) :: [map()]
-  def recall(user, scope, query) do
+  @spec recall(map(), term(), String.t(), ([Ecto.UUID.t()] -> [Ecto.UUID.t()])) :: [map()]
+  def recall(user, scope, query, keep \\ & &1) do
     with {:ok, fk} <- Crypto.dek_filter_key(user),
          [_ | _] = dims <- dims([query], fk, @max_query_terms),
-         [_ | _] = vault_ids <- vault_ids(user, scope) do
-      {:ok, hits} = Repo.with_tenant(user.id, fn -> ranked(vault_ids, dims, fk, query) end)
-      hits
+         [_ | _] = vault_ids <- vault_ids(user, scope),
+         {:ok, [_ | _] = order} <-
+           Repo.with_tenant(user.id, fn -> ranked(vault_ids, dims, fk, query) end),
+         [_ | _] = kept <- keep.(order),
+         {:ok, points} <- Repo.with_tenant(user.id, fn -> first_points(kept) end) do
+      for id <- kept, p = points[id], do: %{id: p, qdrant_id: p, score: 0.0}
     else
       _ -> []
     end
@@ -576,9 +696,9 @@ defmodule Engram.Search.NameTerms do
   defp vault_ids(_user, {:ids, ids}), do: ids
   defp vault_ids(user, :all), do: user |> Engram.Vaults.list_vaults() |> Enum.map(& &1.id)
 
+  # Live note ids, best first: exact filename, then by matched title terms,
+  # then the notes under matching folders.
   defp ranked(vault_ids, dims, fk, query) do
-    hits = hits(vault_ids, dims)
-
     exact =
       Repo.all(
         from(n in Note,
@@ -590,69 +710,159 @@ defmodule Engram.Search.NameTerms do
         )
       )
 
-    titled = for {@note, id, _n} <- hits, do: id
-    folders = for {@folder, id, _n} <- hits, do: id
+    titled = for {id, _n} <- hits(vault_ids, dims, @note), do: id
+    folders = for {id, _n} <- hits(vault_ids, dims, @folder), do: id
 
-    order = Enum.uniq(exact ++ titled ++ in_folders(vault_ids, folders))
-    points = first_points(order)
-    for id <- order, p = points[id], do: %{id: p, qdrant_id: p, score: 0.0}
+    Enum.uniq(exact ++ titled ++ under_folders(vault_ids, folders))
   end
 
   @doc """
-  The top #{50} refs `{ref_kind, ref_id, matched terms}` for `dims` in
-  `vault_ids`, at most #{500} postings read per dim. Runs in the caller's
+  The top #{50} live refs of `kind` (0 notes, 1 folders) for `dims` in
+  `vault_ids`, `{ref_id, matched terms}` best first. Each dim reads at most
+  #{500} LIVE postings of that kind: notes and folders have separate budgets,
+  and a dead ref's posting is skipped inside the bounded read (a primary-key
+  probe of the ref), so dead rows can never fill it. Runs in the caller's
   tenant.
   """
-  @spec hits([Ecto.UUID.t()], [integer()]) :: [{0 | 1, Ecto.UUID.t(), pos_integer()}]
-  def hits(vault_ids, dims) do
-    postings =
-      from(r in Row,
-        where: r.vault_id in ^vault_ids and r.dim == field(parent_as(:q), :dim),
-        limit: ^@postings,
-        select: %{ref_kind: r.ref_kind, ref_id: r.ref_id}
-      )
+  @spec hits([Ecto.UUID.t()], [integer()], 0 | 1) :: [{Ecto.UUID.t(), pos_integer()}]
+  def hits(vault_ids, dims, kind), do: vault_ids |> hits_query(dims, kind) |> Repo.all()
 
+  @doc false
+  # The query `hits/3` runs (its plan test reads it).
+  def hits_query(vault_ids, dims, kind) do
     from(q in fragment("SELECT unnest(?::int4[]) AS dim", ^dims),
       as: :q,
-      inner_lateral_join: t in subquery(postings),
+      inner_lateral_join: t in subquery(postings(vault_ids, kind)),
       on: true,
-      group_by: [t.ref_kind, t.ref_id],
+      group_by: t.ref_id,
       order_by: [desc: count(t.ref_id), asc: t.ref_id],
       limit: ^@k,
-      select: {t.ref_kind, t.ref_id, count(t.ref_id)}
+      select: {t.ref_id, count(t.ref_id)}
+    )
+  end
+
+  defp postings(vault_ids, @note) do
+    from(r in Row,
+      join: n in Note,
+      on: n.id == r.ref_id and n.kind == "note" and is_nil(n.deleted_at),
+      where:
+        r.vault_id in ^vault_ids and r.ref_kind == @note and
+          r.dim == field(parent_as(:q), :dim),
+      limit: ^@postings,
+      select: %{ref_id: r.ref_id}
+    )
+  end
+
+  defp postings(vault_ids, @folder) do
+    from(r in Row,
+      join: f in Folder,
+      on: f.id == r.ref_id and is_nil(f.deleted_at),
+      where:
+        r.vault_id in ^vault_ids and r.ref_kind == @folder and
+          r.dim == field(parent_as(:q), :dim),
+      limit: ^@postings,
+      select: %{ref_id: r.ref_id}
+    )
+  end
+
+  @doc """
+  The live notes anywhere under `folders` (best first), at most #{50},
+  newest first (UUIDv7 ids: `id DESC` is creation order; not `updated_at`,
+  which every save writes, so it is not indexed). Bounded on both sides: at most #{200} folders,
+  walked breadth first over `folders_parent` (one query per level, at most
+  #{32} levels), then at most #{50} notes per folder off
+  `notes_folder_ref_newest`, merged and cut to #{50}. Never reads more than
+  #{200} x #{50} index entries, however many notes a folder holds.
+  """
+  @spec under_folders([Ecto.UUID.t()], [Ecto.UUID.t()]) :: [Ecto.UUID.t()]
+  def under_folders(_vault_ids, []), do: []
+
+  def under_folders(vault_ids, folders) do
+    tree = descendants(vault_ids, folders)
+
+    from(f in fragment(
+           "SELECT * FROM unnest(?::uuid[], ?::uuid[]) AS t(id, vault_id)",
+           type(^Enum.map(tree, &elem(&1, 0)), {:array, Ecto.UUID}),
+           type(^Enum.map(tree, &elem(&1, 1)), {:array, Ecto.UUID})
+         ),
+      as: :f,
+      inner_lateral_join: n in subquery(newest_in_folder()),
+      on: true,
+      order_by: [desc: n.id],
+      limit: ^@k,
+      select: n.id
     )
     |> Repo.all()
   end
 
-  # Live notes directly in the folders, by the folders' rank.
-  defp in_folders(_vault_ids, []), do: []
-
-  defp in_folders(vault_ids, folders) do
-    by_folder =
-      from(n in Note,
-        where:
-          n.vault_id in ^vault_ids and n.folder_ref_id in ^folders and n.kind == "note" and
-            is_nil(n.deleted_at),
-        limit: ^@k,
-        select: {n.folder_ref_id, n.id}
-      )
-      |> Repo.all()
-      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
-
-    Enum.flat_map(folders, &Map.get(by_folder, &1, []))
+  defp newest_in_folder do
+    from(n in Note,
+      where:
+        n.vault_id == field(parent_as(:f), :vault_id) and
+          n.folder_ref_id == field(parent_as(:f), :id) and n.kind == "note" and
+          is_nil(n.deleted_at),
+      order_by: [desc: n.id],
+      limit: ^@k,
+      select: %{id: n.id}
+    )
   end
 
-  # %{note_id => point id of its first chunk}, live notes only.
+  # `{id, vault_id}` of the live roots and their descendants, at most
+  # `@max_folders`, shallowest first.
+  defp descendants(vault_ids, roots) do
+    level =
+      Repo.all(
+        from(f in Folder,
+          where: f.id in ^roots and f.vault_id in ^vault_ids and is_nil(f.deleted_at),
+          select: {f.id, f.vault_id}
+        )
+      )
+
+    walk(vault_ids, level, level, @max_depth)
+  end
+
+  defp walk(_vault_ids, acc, [], _depth), do: acc
+  defp walk(_vault_ids, acc, _frontier, 0), do: acc
+
+  defp walk(vault_ids, acc, frontier, depth) do
+    case @max_folders - length(acc) do
+      left when left <= 0 ->
+        Enum.take(acc, @max_folders)
+
+      left ->
+        parents = Enum.map(frontier, &elem(&1, 0))
+
+        kids =
+          Repo.all(
+            from(f in Folder,
+              where: f.vault_id in ^vault_ids and f.parent_id in ^parents and is_nil(f.deleted_at),
+              limit: ^left,
+              select: {f.id, f.vault_id}
+            )
+          )
+
+        walk(vault_ids, acc ++ kids, kids, depth - 1)
+    end
+  end
+
+  # %{note_id => point id of its first chunk}: one `chunks_note_id_position`
+  # probe per note (LIMIT 1), never the note's other chunks.
   defp first_points([]), do: %{}
 
   defp first_points(note_ids) do
-    from(c in Chunk,
-      join: n in Note,
-      on: n.id == c.note_id and n.kind == "note" and is_nil(n.deleted_at),
-      where: c.note_id in ^note_ids and not is_nil(c.qdrant_point_id),
-      distinct: c.note_id,
-      order_by: [c.note_id, c.position],
-      select: {c.note_id, c.qdrant_point_id}
+    first =
+      from(c in Chunk,
+        where: c.note_id == field(parent_as(:n), :id) and not is_nil(c.qdrant_point_id),
+        order_by: c.position,
+        limit: 1,
+        select: %{point: c.qdrant_point_id}
+      )
+
+    from(n in fragment("SELECT unnest(?::uuid[]) AS id", type(^note_ids, {:array, Ecto.UUID})),
+      as: :n,
+      inner_lateral_join: c in subquery(first),
+      on: true,
+      select: {type(field(n, :id), Ecto.UUID), c.point}
     )
     |> Repo.all()
     |> Map.new(fn {n, p} -> {n, to_string(p)} end)
