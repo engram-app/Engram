@@ -32,6 +32,7 @@ defmodule Engram.Notes do
     EffectiveDates,
     Enqueue,
     FlatFields,
+    FolderHash,
     Frontmatter,
     Helpers,
     Identity,
@@ -9494,7 +9495,7 @@ defmodule Engram.Notes do
       [
         folder_ciphertext: folder_ct,
         folder_nonce: folder_n,
-        folder_hmac: Crypto.hmac_field(filter_key, folder),
+        folder_hmac: FolderHash.for_note(filter_key, folder),
         tags_ciphertext: tags_ct,
         tags_nonce: tags_n,
         tags_hmac: Enum.map(tags || [], &Crypto.hmac_field(filter_key, &1)),
@@ -9523,7 +9524,7 @@ defmodule Engram.Notes do
       [
         folder_ciphertext: folder_ct,
         folder_nonce: folder_n,
-        folder_hmac: Crypto.hmac_field(filter_key, folder)
+        folder_hmac: FolderHash.for_note(filter_key, folder)
       ]
   end
 end

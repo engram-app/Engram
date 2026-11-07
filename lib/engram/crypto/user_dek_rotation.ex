@@ -2308,10 +2308,17 @@ defmodule Engram.Crypto.UserDekRotation do
               ct_updates = [{ct_field, new_ct}, {nonce_field, new_nonce}]
 
               hmac_updates =
-                if hmac_key && is_binary(plaintext) do
-                  [{hmac_key, Crypto.hmac_field(new_filter_key, hmac_transform.(plaintext))}]
-                else
-                  []
+                cond do
+                  # A note's folder hash goes through the R9 write gate
+                  # (`Engram.Notes.FolderHash`); a marker keeps its hash.
+                  column == :folder and note.kind == "note" and is_binary(plaintext) ->
+                    [{hmac_key, Engram.Notes.FolderHash.for_note(new_filter_key, plaintext)}]
+
+                  hmac_key && is_binary(plaintext) ->
+                    [{hmac_key, Crypto.hmac_field(new_filter_key, hmac_transform.(plaintext))}]
+
+                  true ->
+                    []
                 end
 
               # T4-deferred Critical (#591): `path` also drives note_links
