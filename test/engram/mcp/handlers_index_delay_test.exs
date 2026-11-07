@@ -11,8 +11,8 @@ defmodule Engram.MCP.HandlersIndexDelayTest do
   import Ecto.Query
 
   alias Engram.MCP.Handlers
-  alias Engram.Test.McpOverwrite
   alias Engram.{Notes, Repo}
+  alias Engram.Test.McpOverwrite
   alias Engram.Workers.EmbedNote
 
   setup do
