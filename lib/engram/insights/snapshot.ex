@@ -397,8 +397,10 @@ defmodule Engram.Insights.Snapshot do
     # that row's id). Plus one for the root when a live note has no reference
     # (the root has no row; a drift note, rare and healed by the drain,
     # counts there too). Cost: one `folders` primary-key probe per live note.
+    # Both kinds on purpose: a marker is a folder (an empty one counts).
     folders_tags =
       from(n in Note,
+        where: n.kind == "note" or n.kind == "folder",
         left_lateral_join: t in fragment("SELECT unnest(?) AS tag", n.tags_hmac),
         on: true,
         left_join: f in Folder,
