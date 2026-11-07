@@ -296,6 +296,12 @@ defmodule Engram.Bookkeeping.DrainTest do
       Repo.to_sql(:all, Engram.Workers.ReconcileNotePayloads.n_behind_probe(u.id))
 
     assert sql =~ "coalesce("
+    # The probe's and the index's literals are the baseline and the version:
+    # a payload version bump turns this red until a new index ships.
+    assert sql =~ "5) < 6"
+    assert Engram.Workers.ReconcileNotePayloads.n_version() == 6
+    assert Engram.Indexing.PayloadV6.baseline() == 5
+    assert Engram.Indexing.PayloadV6.version() == 6
     plan = QueryPlan.generic_plan(sql, analyze: ["note_index_state"], fresh: true)
     assert plan =~ "note_index_state_n_behind", plan
     refute plan =~ "Seq Scan on note_index_state", plan
