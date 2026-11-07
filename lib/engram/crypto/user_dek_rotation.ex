@@ -29,7 +29,7 @@ defmodule Engram.Crypto.UserDekRotation do
   See `docs/encryption-tier-3-audit.md` § Phase T3.7.
   """
 
-  import Ecto.Query, only: [dynamic: 2, from: 2, where: 3]
+  import Ecto.Query, only: [dynamic: 2, from: 2, select: 3, where: 3]
 
   alias Engram.Accounts.User
   alias Engram.Attachments.SegmentedCipher
@@ -2534,16 +2534,32 @@ defmodule Engram.Crypto.UserDekRotation do
   # here (O(vault) rows inside the flip). A plain `kick/0` would not do: once
   # `IndexVersions` is done its keyword sweep runs only under a version check.
   #
+  # The sweep skips a note inside an embed cooldown, so the request is not
+  # cleared before the latest timed cooldown among this user's notes ends
+  # (`not_before`). ponytail: a note whose cooldown is re-extended past that
+  # keeps its old-key sparse vectors until its next edit; carry a per-user
+  # request if that ever matters.
+  #
   # Returns the text guard, which this process cancels once its own text
   # sweep is done (`cancel_text_guard/1`).
   defp queue_resparse(user_id, new_dek_version) do
-    {:ok, {_, _}} =
+    now = DateTime.utc_now()
+
+    {:ok, not_before} =
       Repo.with_tenant(user_id, fn ->
-        from(n in Engram.Notes.Note, where: n.user_id == ^user_id and n.kind == "note")
-        |> Repo.update_all(set: [keyword_version: nil])
+        notes = from(n in Engram.Notes.Note, where: n.user_id == ^user_id and n.kind == "note")
+        {_, _} = Repo.update_all(notes, set: [keyword_version: nil])
+
+        notes
+        |> where(
+          [n],
+          n.embed_retry_after > ^now and n.embed_retry_after != ^EmbedNote.parked_until_edited()
+        )
+        |> select([n], max(n.embed_retry_after))
+        |> Repo.one()
       end)
 
-    :ok = ReconcileEmbeddings.request_version_check()
+    :ok = ReconcileEmbeddings.request_version_check(nil, not_before)
 
     Oban.insert(
       RotationTextGuard.new(
