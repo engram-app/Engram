@@ -1028,7 +1028,7 @@
         "readOnlyHint": false,
         "title": "Append to Note"
       },
-      "description": "Add text to the end of a note. Existing text is kept. If the note does not exist it is created with a `# <name>` title line first. Use for logs, journals and running lists. Set position to start to insert at the top (after any frontmatter) instead. To change existing text use edit_note. To replace the whole note use write_note.",
+      "description": "Add text to the end of a note. Existing text is kept. If the note does not exist it is created with a `# <name>` title line first. Use for logs, journals and running lists. Set position to start to insert at the top (after any frontmatter) instead. To change existing text use edit_note. To replace the whole note use write_note. Optional base_hash: pass the content_hash from your get_notes read, and if the note changed since, nothing is written; read it again and retry.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1099,7 +1099,7 @@
         "readOnlyHint": false,
         "title": "Edit Note"
       },
-      "description": "Change part of an existing note. mode replace_text finds exact text and replaces it (first occurrence by default); mode replace_section replaces everything under one heading; mode insert_section adds content under a heading, at the start or end of that section, keeping what is there. Fails without writing if the text or heading is not found, if expected_replacements does not match, or if base_hash is given and the note changed since that read. To add text at the top or bottom of the note use append_to_note. To rewrite the whole note use write_note.",
+      "description": "Change part of an existing note. mode replace_text finds exact text and replaces it (first occurrence by default); mode replace_section replaces everything under one heading; mode insert_section adds content under a heading, at the start or end of that section, keeping what is there. Fails without writing if the text or heading is not found, if expected_replacements does not match, or if base_hash is given and the note changed since that read. To add text at the top or bottom of the note use append_to_note. To rewrite the whole note use write_note. Optional base_hash: pass the content_hash from your get_notes read, and if the note changed since, nothing is written; read it again and retry.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {

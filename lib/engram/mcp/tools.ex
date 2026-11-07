@@ -889,6 +889,11 @@ defmodule Engram.MCP.Tools do
         "you read."
   }
 
+  # The base_hash sentence both optional-base tools end their description with
+  # (#2506), so an agent knows it can send one and where it comes from.
+  @edit_base_hash_hint " Optional base_hash: pass the content_hash from your get_notes read, " <>
+                         "and if the note changed since, nothing is written; read it again and retry."
+
   defp get_note_def do
     %{
       name: "get_note",
@@ -1120,7 +1125,8 @@ defmodule Engram.MCP.Tools do
           "it is created with a `# <name>` title line first. Use for logs, journals and " <>
           "running lists. Set position to start to insert at the top (after any " <>
           "frontmatter) instead. " <>
-          "To change existing text use edit_note. To replace the whole note use write_note.",
+          "To change existing text use edit_note. To replace the whole note use write_note." <>
+          @edit_base_hash_hint,
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -1164,7 +1170,8 @@ defmodule Engram.MCP.Tools do
           "end of that section, keeping what is there. Fails without writing if the text or " <>
           "heading is not found, if expected_replacements does not match, or if base_hash is " <>
           "given and the note changed since that read. To add text at " <>
-          "the top or bottom of the note use append_to_note. To rewrite the whole note use write_note.",
+          "the top or bottom of the note use append_to_note. To rewrite the whole note use write_note." <>
+          @edit_base_hash_hint,
       inputSchema: %{
         "type" => "object",
         "properties" => %{
