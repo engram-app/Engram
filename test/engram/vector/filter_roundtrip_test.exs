@@ -43,6 +43,11 @@ defmodule Engram.Vector.FilterRoundtripTest do
 
   setup do
     ServiceConfig.put_override(:qdrant_url, qdrant_url())
+    # The per-note filters' `n` arm (`config/test.exs` turns its probe off
+    # for the Bypass suites). Every per-note call here goes through it.
+    ServiceConfig.put_override(:qdrant_note_id_filter, true)
+    Engram.Cache.clear_local(:note_id_filter)
+    on_exit(fn -> Engram.Cache.clear_local(:note_id_filter) end)
     :ok
   end
 
@@ -75,8 +80,9 @@ defmodule Engram.Vector.FilterRoundtripTest do
     }
   end
 
-  defp v5_point(t, yaml) do
+  defp v5_point(t, yaml, note_id \\ nil) do
     note = %Note{
+      id: note_id,
       user_id: t.user_id,
       vault_id: t.vault_id,
       path_hmac: t.path,
@@ -138,10 +144,98 @@ defmodule Engram.Vector.FilterRoundtripTest do
     assert ids(col, base ++ [vault_id: [t.vault_id]]) == both
     assert ids(col, base ++ [fm_timestamp_gte: 1_699_999_999]) == both
 
+    # Neither point carries `n` (v3 never does, this v5 one has no note id),
+    # so the per-note filters match both by path, as before `n` existed.
     path = Base.encode64(t.path)
-    assert {:ok, 2} = Qdrant.count_by_note(col, t.user_id, t.vault_id, path)
-    assert :ok = Qdrant.delete_by_note(col, t.user_id, t.vault_id, path)
-    assert {:ok, 0} = Qdrant.count_by_note(col, t.user_id, t.vault_id, path)
+    id = Ecto.UUID.generate()
+    assert {:ok, 2} = Qdrant.count_by_note(col, t.user_id, t.vault_id, id, path)
+    assert :ok = Qdrant.delete_by_note(col, t.user_id, t.vault_id, id, path)
+    assert {:ok, 0} = Qdrant.count_by_note(col, t.user_id, t.vault_id, id, path)
+  end
+
+  # An R3a chunk point: `n`, no path key.
+  defp r3a_point(t, note_id) do
+    point = v5_point(t, "", note_id)
+    %{point | payload: Map.delete(point.payload, "p")}
+  end
+
+  defp left(col, t), do: ids(col, user_id: t.user_id, vault_id: t.vault_id)
+
+  test "a note's points match by n, and by path only without n", %{col: col} do
+    t = tenant()
+    id = Ecto.UUID.generate()
+    [v3, v5, r3a] = [v3_point(t), v5_point(t, "", id), r3a_point(t, id)]
+    :ok = Qdrant.upsert_points(col, [v3, v5, r3a])
+    path = Base.encode64(t.path)
+
+    assert {:ok, 3} = Qdrant.count_by_note(col, t.user_id, t.vault_id, id, path)
+
+    assert :ok = Qdrant.delete_by_note_except(col, t.user_id, t.vault_id, id, path, [r3a.id])
+    assert left(col, t) == [r3a.id]
+
+    assert :ok = Qdrant.delete_by_note_except(col, t.user_id, t.vault_id, id, path, [v5.id])
+    assert left(col, t) == []
+
+    :ok = Qdrant.upsert_points(col, [r3a])
+    assert :ok = Qdrant.delete_by_note(col, t.user_id, t.vault_id, id, path)
+    assert {:ok, 0} = Qdrant.count_by_note(col, t.user_id, t.vault_id, id, path)
+  end
+
+  # Rename swap: note A left path X, note B moved onto X. A's old-path
+  # delete must not reach B's points. A point with `n` is matched by `n`
+  # only; a point with no `n` can only be matched by path (as before).
+  test "a note's old path never reaches another note's points that carry n", %{col: col} do
+    t = tenant()
+    [a, b] = [Ecto.UUID.generate(), Ecto.UUID.generate()]
+    b_point = v5_point(t, "", b)
+    no_n = v5_point(t, "")
+    :ok = Qdrant.upsert_points(col, [b_point, no_n, r3a_point(t, a)])
+    path = Base.encode64(t.path)
+
+    assert {:ok, 2} = Qdrant.count_by_note(col, t.user_id, t.vault_id, a, path)
+    assert :ok = Qdrant.delete_by_note(col, t.user_id, t.vault_id, a, path)
+    assert left(col, t) == [b_point.id]
+  end
+
+  # Strict mode 400s a filter on `n` while the collection has no `n` index:
+  # the per-note filters fall back to the path alone.
+  test "without the n index the per-note filters match by path alone, no 400" do
+    col =
+      "engram_rt_non_#{System.get_env("MIX_TEST_PARTITION")}_#{System.unique_integer([:positive])}"
+
+    {:ok, %{status: 200}} =
+      Req.put("#{qdrant_url()}/collections/#{col}",
+        json: %{vectors: %{"dense" => %{size: @dims, distance: "Cosine"}}}
+      )
+
+    Engram.QdrantIntegration.drop_on_exit(col)
+
+    for {field, type} <-
+          [u: "uuid", v: "uuid", p: "uuid"] ++
+            [user_id: "keyword", vault_id: "keyword", path_hmac: "keyword"] do
+      {:ok, %{status: 200}} =
+        Req.put("#{qdrant_url()}/collections/#{col}/index?wait=true",
+          json: %{field_name: field, field_schema: type}
+        )
+    end
+
+    {:ok, %{status: 200}} =
+      Req.patch("#{qdrant_url()}/collections/#{col}",
+        json: %{strict_mode_config: %{enabled: true, unindexed_filtering_retrieve: false}}
+      )
+
+    refute Qdrant.n_filterable?(col)
+
+    t = tenant()
+    id = Ecto.UUID.generate()
+    r3a = r3a_point(t, id)
+    :ok = Qdrant.upsert_points(col, [v5_point(t, "", id), r3a])
+    path = Base.encode64(t.path)
+
+    assert {:ok, 1} = Qdrant.count_by_note(col, t.user_id, t.vault_id, id, path)
+    assert :ok = Qdrant.delete_by_note(col, t.user_id, t.vault_id, id, path)
+    assert {:ok, 0} = Qdrant.count_by_note(col, t.user_id, t.vault_id, id, path)
+    assert count(col, %{must: [%{has_id: [r3a.id]}]}) == 1
   end
 
   test "repath rewrites each format with its own keys", %{col: col} do
@@ -156,7 +250,15 @@ defmodule Engram.Vector.FilterRoundtripTest do
                "folder_hmac" => nil
              })
 
-    assert {:ok, 2} = Qdrant.count_by_note(col, t.user_id, t.vault_id, Base.encode64(new_path))
+    assert {:ok, 2} =
+             Qdrant.count_by_note(
+               col,
+               t.user_id,
+               t.vault_id,
+               Ecto.UUID.generate(),
+               Base.encode64(new_path)
+             )
+
     assert count(col, %{must: [%{key: "p", match: %{value: FilterId.from_hmac(new_path)}}]}) == 1
 
     assert count(col, %{

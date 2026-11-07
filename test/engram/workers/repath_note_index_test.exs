@@ -8,6 +8,8 @@ defmodule Engram.Workers.RepathNoteIndexTest do
   alias Engram.Crypto
   alias Engram.Notes.Note
   alias Engram.Repo
+  alias Engram.ServiceConfig
+  alias Engram.Vector.FilterId
   alias Engram.Workers.{EmbedNote, RepathNoteIndex}
 
   setup :verify_on_exit!
@@ -92,6 +94,73 @@ defmodule Engram.Workers.RepathNoteIndexTest do
       args: %{note_id: note.id, user_id: note.user_id}
     )
   end
+
+  # An R3a chunk point carries the note id `n` and no path key, so only the
+  # filter's `n` arm counts it. The fake answers like Qdrant would: 1 point
+  # if the count filter matches `n == note.id`, none if it is path-only.
+  test "an R3a point (n, no path key) counts, so the rename resparses it", %{
+    bypass: bypass,
+    note: note
+  } do
+    ServiceConfig.put_override(:qdrant_note_id_filter, true)
+    Engram.Cache.clear_local(:note_id_filter)
+    on_exit(fn -> Engram.Cache.clear_local(:note_id_filter) end)
+
+    Bypass.stub(bypass, "GET", "/collections/engram_notes", fn conn ->
+      info = %{"status" => "green", "payload_schema" => %{"n" => %{"data_type" => "uuid"}}}
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, Jason.encode!(%{result: info, status: "ok"}))
+    end)
+
+    by_id = %{"key" => "n", "match" => %{"value" => FilterId.uuid(note.id)}}
+
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/count", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      count = if body |> Jason.decode!() |> has_condition?(by_id), do: 1, else: 0
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, ~s({"result": {"count": #{count}}}))
+    end)
+
+    Bypass.stub(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
+      Plug.Conn.send_resp(conn, 200, ~s({"result": true}))
+    end)
+
+    ref = make_ref()
+    test_pid = self()
+    handler = "repath-r3a-#{inspect(ref)}"
+
+    :telemetry.attach(
+      handler,
+      [:engram, :indexing, :repath, :stop],
+      fn _event, measurements, meta, _ -> send(test_pid, {ref, measurements, meta}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    assert :ok =
+             perform_job(RepathNoteIndex, %{note_id: note.id, old_path_hmac: Base.encode64(<<7>>)})
+
+    # `:ok` with the point counted, not `:missing_points`.
+    assert_received {^ref, %{count: 1}, %{outcome: :ok}}
+
+    assert_enqueued(
+      worker: Engram.Workers.RefreshKeywordVectors,
+      args: %{note_id: note.id, user_id: note.user_id}
+    )
+  end
+
+  defp has_condition?(cond, cond), do: true
+  defp has_condition?(%{} = map, cond), do: Enum.any?(Map.values(map), &has_condition?(&1, cond))
+
+  defp has_condition?(list, cond) when is_list(list),
+    do: Enum.any?(list, &has_condition?(&1, cond))
+
+  defp has_condition?(_, _), do: false
 
   test "enqueues EmbedNote when zero points and content not yet embedded", %{
     bypass: bypass,
