@@ -105,7 +105,12 @@ defmodule Engram.DataMigrations.FileTimes do
   # `batch:` overrides the window size, `max_fixed:` the per-walk cap.
   # `fleet:` overrides the `Readiness.peers_report/4` collaborators.
   def run_pass(opts) do
-    case Readiness.peers_report(FileTime, :twin_rounding, 2, fleet_opts(opts)) do
+    case Readiness.peers_report(
+           FileTime,
+           :twin_rounding,
+           FileTime.twin_rounding(),
+           fleet_opts(opts)
+         ) do
       :ok -> walk_tables(opts)
       blocked -> wait_for_fleet(blocked)
     end
