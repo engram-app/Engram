@@ -284,7 +284,7 @@ defmodule Engram.Vector.QdrantTest do
     end
   end
 
-  describe "delete_by_note/4" do
+  describe "delete_by_note/5" do
     test "posts filter delete keyed on path_hmac (T3.2)", %{bypass: bypass} do
       # T3.2 — Qdrant filter keys off `path_hmac` (HMAC base64) instead of
       # plaintext `source_path`. Plaintext path in `oban_jobs.args` would
@@ -305,7 +305,14 @@ defmodule Engram.Vector.QdrantTest do
         |> Plug.Conn.send_resp(200, ~s({"result": {"status": "ok"}}))
       end)
 
-      assert :ok = Qdrant.delete_by_note("test_col", "user-1", "vault-1", "stub-hmac-base64")
+      assert :ok =
+               Qdrant.delete_by_note(
+                 "test_col",
+                 "user-1",
+                 "vault-1",
+                 "33333333-3333-3333-3333-333333333333",
+                 "stub-hmac-base64"
+               )
     end
   end
 
@@ -325,14 +332,21 @@ defmodule Engram.Vector.QdrantTest do
       assert :ok = Qdrant.delete_points("test_col", [Ecto.UUID.generate()])
     end
 
-    test "delete_by_note/4 treats 404 as nothing to delete", %{bypass: bypass} do
+    test "delete_by_note/5 treats 404 as nothing to delete", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/delete", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.send_resp(404, ~s({"status":{"error":"Collection not found"}}))
       end)
 
-      assert :ok = Qdrant.delete_by_note("test_col", "user-1", "vault-1", "stub-hmac-base64")
+      assert :ok =
+               Qdrant.delete_by_note(
+                 "test_col",
+                 "user-1",
+                 "vault-1",
+                 "33333333-3333-3333-3333-333333333333",
+                 "stub-hmac-base64"
+               )
     end
 
     test "a 500 is still an error", %{bypass: bypass} do
@@ -346,7 +360,7 @@ defmodule Engram.Vector.QdrantTest do
     end
   end
 
-  describe "count_by_note/4" do
+  describe "count_by_note/5" do
     test "returns the exact point count for the filter", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/count", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -365,7 +379,14 @@ defmodule Engram.Vector.QdrantTest do
         |> Plug.Conn.send_resp(200, ~s({"result": {"count": 3}}))
       end)
 
-      assert {:ok, 3} = Qdrant.count_by_note("engram_notes", "7", "9", "oldp==")
+      assert {:ok, 3} =
+               Qdrant.count_by_note(
+                 "engram_notes",
+                 "7",
+                 "9",
+                 "33333333-3333-3333-3333-333333333333",
+                 "oldp=="
+               )
     end
 
     test "returns {:error, _} on non-200", %{bypass: bypass} do
@@ -373,7 +394,14 @@ defmodule Engram.Vector.QdrantTest do
         Plug.Conn.send_resp(conn, 503, ~s({"status":"error"}))
       end)
 
-      assert {:error, {503, _}} = Qdrant.count_by_note("engram_notes", "7", "9", "oldp==")
+      assert {:error, {503, _}} =
+               Qdrant.count_by_note(
+                 "engram_notes",
+                 "7",
+                 "9",
+                 "33333333-3333-3333-3333-333333333333",
+                 "oldp=="
+               )
     end
   end
 

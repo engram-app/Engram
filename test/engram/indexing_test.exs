@@ -732,7 +732,7 @@ defmodule Engram.IndexingTest do
     @tag capture_log: true
     test "filters by base64 path_hmac, not plaintext path (T3.2 / T3-audit C1)",
          %{bypass: bypass, user: user} do
-      # Regression: T3.2 changed Qdrant.delete_by_note/4 to match against the
+      # Regression: T3.2 changed Qdrant.delete_by_note/5 to match against the
       # `path_hmac` payload key, but commit_index/1 was missed in the sweep
       # and kept passing plaintext `note.path`. Result: zero points deleted on
       # every re-index → orphaned ghost chunks accumulate per edit.

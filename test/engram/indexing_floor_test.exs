@@ -18,6 +18,7 @@ defmodule Engram.IndexingFloorTest do
   alias Engram.Repo
   alias Engram.ServiceConfig
   alias Engram.UsageMeters
+  alias Engram.Vector.FilterId
   alias Engram.Workers.{EmbedNote, RebuildStaleNote, ReconcileEmbeddings}
 
   setup :verify_on_exit!
@@ -221,6 +222,47 @@ defmodule Engram.IndexingFloorTest do
       {:ok, prepared} = Indexing.prepare_index(note, vault, user, index_tier: "floor")
 
       assert length(prepared.qdrant_points) <= cap
+    end
+
+    # The belt after a floor pass (`drop_replaced_points/4`) deletes the
+    # note's other points by its id `n` as well as its path: an R3a chunk
+    # point has `n` and no path key, and a path-only belt would strand it.
+    test "the floor belt delete matches the note's points by n", %{user: user, vault: vault} do
+      bypass = Bypass.open()
+      ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+      ServiceConfig.put_override(:qdrant_note_id_filter, true)
+      Engram.Cache.clear_local(:note_id_filter)
+      on_exit(fn -> Engram.Cache.clear_local(:note_id_filter) end)
+      test_pid = self()
+
+      Bypass.stub(bypass, :any, :any, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+
+        resp =
+          case {conn.method, conn.request_path} do
+            {"GET", "/collections/engram_notes"} ->
+              schema = %{"n" => %{"data_type" => "uuid"}}
+              Jason.encode!(%{result: %{"status" => "green", "payload_schema" => schema}})
+
+            {"POST", "/collections/engram_notes/points/delete"} ->
+              send(test_pid, {:delete, Jason.decode!(body)})
+              ~s({"result": true})
+
+            _ ->
+              ~s({"result": true})
+          end
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, resp)
+      end)
+
+      note = floor_note(user, vault)
+      {:ok, 1, 0, false} = Indexing.index_note_with_usage(note, vault, user, index_tier: "floor")
+
+      by_id = %{"key" => "n", "match" => %{"value" => FilterId.uuid(note.id)}}
+      assert_received {:delete, %{"filter" => %{"must_not" => [_], "must" => must}}}
+      assert Enum.any?(must, &match?(%{"should" => [^by_id, _]}, &1))
     end
 
     test "the floor vector carries every section's terms", %{user: user, vault: vault} do
