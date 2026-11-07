@@ -594,7 +594,8 @@ defmodule Engram.Folders.FolderRefReleaseTest do
             all_visible: true
           )
 
-        assert plan =~ "Index Only Scan using notes_folder_ref_live", plan
+        # Exact name (" on" ends it): not `notes_folder_ref_live_id` (S1).
+        assert plan =~ "Index Only Scan using notes_folder_ref_live on", plan
       end
     end
 
