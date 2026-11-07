@@ -215,6 +215,35 @@ defmodule Engram.IndexingVectorCacheTest do
     assert embedded() == 0
   end
 
+  # #2532: the digests of every text (O(note) CPU) and the lookup ran inside
+  # the planning transaction, which held a pooled connection past the 15 s
+  # checkout limit on a 10 MB note in prod. The digests run right before the
+  # lookup, so a lookup in a transaction of its own (nothing else in it)
+  # means no transaction is open while they run.
+  test "the cache lookup, and the digests before it, run outside the planning transaction",
+       ctx do
+    stub_embedder()
+    note = put_note(ctx.user, ctx.vault, "Txn.md", body(4))
+
+    {{:ok, _}, queries} =
+      Engram.QueryRecorder.record(fn -> Indexing.index_note(note, ctx.vault) end)
+
+    lookups =
+      queries
+      |> Engram.QueryRecorder.transactions()
+      |> Enum.filter(fn txn -> Enum.any?(txn, &(&1 =~ "FROM embedding_cache WHERE")) end)
+
+    assert lookups != [], Engram.QueryRecorder.format(queries)
+
+    for txn <- lookups,
+        sql <- txn,
+        do:
+          assert(
+            sql =~ ~r/embedding_cache|set_config/,
+            "the cache lookup shares a transaction with #{inspect(sql)}"
+          )
+  end
+
   test "a note past one pass's embed budget finishes densely over several passes", ctx do
     stub_embedder()
     Application.put_env(:engram, :max_pass_embed_bytes, 3_000)
