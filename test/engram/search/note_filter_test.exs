@@ -597,15 +597,17 @@ defmodule Engram.Search.NoteFilterTest do
 
     # Staging 2026-11-05: `folder_ref_id = ANY OR folder_id = ANY` (in a
     # coalesce) read the heap of every live note, and so did its complement.
-    # Both are index-only scans of notes_folder_live.
-    test "a folder filter and its complement are index-only on notes_folder_live", ctx do
+    # Both are index-only scans of the folder index. R9.5 step 3 moved the
+    # filter from the hash keys (`notes_folder_live`) to `folder_ref_id`, the
+    # covering `notes_folder_ref_live` #2468 built for it.
+    test "a folder filter and its complement are index-only on notes_folder_ref_live", ctx do
       seed_spread!(ctx)
       note_split_done!()
 
       # cap 0: the match query AND the complement query run.
       for sql <- statements(ctx, %{folder: "F7"}, cap: 0) do
         plan = index_only_plan(sql)
-        assert plan =~ "Index Only Scan using notes_folder_live", plan
+        assert plan =~ "Index Only Scan using notes_folder_ref_live", plan
       end
     end
 

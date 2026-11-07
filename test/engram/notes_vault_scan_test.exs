@@ -113,8 +113,9 @@ defmodule Engram.NotesVaultScanTest do
     end
 
     # Every row kind the count distinguishes: a note in a live folder row,
-    # one in a nested live row, notes whose reference names a DELETED row
-    # (counted by their folder hash, two different dead rows under one hash
+    # one in a nested live row, notes whose reference named a row that was
+    # then DELETED (`folders_release_refs` NULLs the reference, so they are
+    # drift, counted by their decrypted folder: two dead rows, one folder,
     # summed), a root note, a soft-deleted note, and an empty marker.
     test "counts live, nested, dead-ref, root and marker rows", %{user: u, vault: v} do
       put!(u, v, "Live/a.md", "a")
@@ -149,7 +150,9 @@ defmodule Engram.NotesVaultScanTest do
     # the unreferenced rest), each with a correlated live-folder probe; the
     # by-reference half became a nested loop over every folder row (231 ms on
     # a 13k-folder staging vault). One grouped scan, liveness decided from the
-    # folder rows already loaded.
+    # folder rows already loaded. R9.5 step 3: the envelopes the group cannot
+    # name (drift notes, folder markers) are legs of that same statement, each
+    # on its own index, so one snapshot holds the whole count (#2485 MED-1).
     test "reads the vault's notes once", %{user: u, vault: v} do
       put!(u, v, "Work/A.md", "a")
       put!(u, v, "root.md", "r")
@@ -157,7 +160,8 @@ defmodule Engram.NotesVaultScanTest do
       {_, reads} =
         notes_reads(fn -> Repo.with_tenant!(u.id, fn -> Notes.raw_folder_count_rows(u, v) end) end)
 
-      assert length(reads) == 1, "notes reads:\n#{Enum.join(reads, "\n")}"
+      assert [one] = reads, "notes reads:\n#{Enum.join(reads, "\n")}"
+      assert one =~ "GROUP BY" and one =~ "UNION ALL"
     end
   end
 
@@ -185,8 +189,13 @@ defmodule Engram.NotesVaultScanTest do
       # A vault big enough that the plan reflects selectivity, not a tiny
       # table's cost ties (as NotesPathIndexPlanTest). Added after the rename:
       # their ciphertext is not real, and only the plan reads them.
-      for _ <- 1..1000,
-          do: insert(:note, user: u, vault: v, folder_ref_id: nil)
+      # One bulk INSERT (`Fixtures.insert_notes!/3`), not 1,000 round trips:
+      # the same factory rows, through the same triggers.
+      Engram.Fixtures.insert_notes!(
+        u,
+        v,
+        for(_ <- 1..1000, do: build(:note, folder_ref_id: nil))
+      )
 
       plan = QueryPlan.generic_plan(fetch, analyze: ["notes"], bitmapscan: false)
       assert plan =~ "notes_folder_ref", plan

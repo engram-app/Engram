@@ -95,10 +95,12 @@ defmodule Engram.Folders.Rows do
 
   @doc """
   The stamp `FolderTable` leaves on an attachment whose path did not decrypt
-  under `path_nonce`: the nonce behind a 0 byte. It is not the nonce, so
-  readers never trust the reference and read the row by path (and count it
-  unreadable), but it is excluded from `attachments_folder_ref_stale`, so the
-  drain does not re-run the user forever. A writer's fresh nonce ends it.
+  under `path_nonce`: the nonce behind a 0 byte. It is excluded from
+  `attachments_folder_ref_stale`, so the drain does not re-run the user
+  forever. A folder reader takes such a row only by the reference it still
+  carries (`attachment_ref_placed/0`) and counts it unreadable (a refusal, an
+  orphan log); one with no reference is in no folder. A writer's fresh nonce
+  ends it.
   """
   @spec unreadable_attachment_stamp(binary()) :: nonempty_binary()
   def unreadable_attachment_stamp(path_nonce), do: <<0>> <> path_nonce
@@ -107,6 +109,20 @@ defmodule Engram.Folders.Rows do
   @spec attachment_ref_current() :: Ecto.Query.dynamic_expr()
   def attachment_ref_current,
     do: dynamic([a: a], a.folder_ref_stamp == a.path_nonce)
+
+  @doc """
+  The rows whose reference places them in a folder, on the attachment bound
+  as `:a`: a current reference, or one `FolderTable` stamped unreadable
+  (`unreadable_attachment_stamp/1`), which the caller counts unreadable.
+  """
+  @spec attachment_ref_placed() :: Ecto.Query.dynamic_expr()
+  def attachment_ref_placed,
+    do:
+      dynamic(
+        [a: a],
+        ^attachment_ref_current() or
+          fragment("? = ('\\x00'::bytea || ?)", a.folder_ref_stamp, a.path_nonce)
+      )
 
   # ---- find-or-create ------------------------------------------------------
 

@@ -98,24 +98,44 @@ defmodule Engram.Folders.ReviewFixesTest do
       _ = live_id
     end
 
-    test "a ref to a deleted row is treated as unresolved by every scan", %{user: u, vault: v} do
+    # A live reference to a dead row cannot arise: `folders_release_refs`
+    # (20261106100200) NULLs every live reference, and an attachment's stamp,
+    # in the statement that soft-deletes the row. The note is then drift,
+    # which every folder reader places by its decrypted folder (#2485 delta).
+    test "a soft-deleted row's content is released and found by every reader", ctx do
+      %{user: u, vault: v} = ctx
       note = put_note(u, v, "Y/n.md")
+
+      {:ok, att} =
+        Attachments.upsert_attachment(u, v, %{
+          "path" => "Y/a.png",
+          "content_base64" => Base.encode64("bytes")
+        })
+
       row = FolderRows.tree(u)["Y"].id
       Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(row)])
-      # `folders_release_refs` now NULLs it; a row written before that trigger
-      # (or by a writer outside the vault lock) can still name the dead row.
-      Repo.query!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [
-        Ecto.UUID.dump!(note.id),
-        Ecto.UUID.dump!(row)
-      ])
 
-      assert FolderRows.ref("notes", note.id) == row
+      assert FolderRows.ref("notes", note.id) == nil
+      assert FolderRows.ref("attachments", att.id) == nil
 
       {:ok, rows} = Notes.scan_folders(u, v, ["Y"])
       assert Enum.map(rows, & &1.path) == ["Y/n.md"]
+      {:ok, %{notes: page}} = Notes.list_notes_in_folder_page(u, v, "Y")
+      assert Enum.map(page, & &1.id) == [note.id]
+      {:ok, counts} = Notes.list_folders_with_counts(u, v)
+      assert %{folder: "Y", count: 1} in counts
+      assert {:ok, [%{path: "Y/a.png"}]} = Attachments.list_in_folder(u, v, "Y")
 
-      assert {:ok, 1} = Folders.rename(u, v, "Y", "Z") |> then(fn {:ok, r} -> {:ok, r.notes} end)
+      assert {:ok, %{notes: 1, attachments: 1}} = Folders.rename(u, v, "Y", "Z")
       assert live_paths(u, v) == ["Z/n.md"]
+    end
+
+    test "the release trigger is installed and enabled on folders" do
+      assert %{rows: [["O"]]} =
+               Repo.query!(
+                 "SELECT tgenabled::text FROM pg_trigger " <>
+                   "WHERE tgrelid = 'folders'::regclass AND tgname = 'folders_release_refs'"
+               )
     end
 
     test "a folder row with live content is not deleted from under it", %{user: u, vault: v} do

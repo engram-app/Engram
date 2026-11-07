@@ -53,8 +53,11 @@ defmodule EngramWeb.VaultTreeController do
     # each its own transaction). Decrypt happens entirely below, OUTSIDE
     # this block — holding a DB connection across that CPU-bound work is
     # the shape behind the 2026-07-09 CRDT pool-exhaustion incident (#1211).
-    {:ok, raw} =
-      Repo.with_tenant(user.id, fn ->
+    # One snapshot (`Repo.with_tenant_snapshot!/2`): the seq, the etag and
+    # every row set below agree, so a folder count cannot disagree with the
+    # rows it is shown beside.
+    raw =
+      Repo.with_tenant_snapshot!(user.id, fn ->
         seq = Vaults.raw_current_seq(vault.id)
         etag = etag(user, vault, seq)
 

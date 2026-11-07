@@ -20,6 +20,7 @@ defmodule Engram.Attachments do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Crypto.RotationGate
+  alias Engram.Folders.Drift
   alias Engram.Folders.Rows
   alias Engram.Links
   alias Engram.Logger.Metadata
@@ -2207,12 +2208,14 @@ defmodule Engram.Attachments do
     * rows whose `folder_ref_id` is in the folder's subtree AND whose reference is
       current (`Rows.attachment_ref_current/0`: stamped with the row's
       `path_nonce`) are trusted by reference;
-    * every row whose stamp does not match is checked against its decrypted path:
-      a writer that rewrote the path without re-pointing it (the previous release
-      during a rolling deploy) left a NULL or stale reference, and
-      `Engram.Bookkeeping.Drain` has not healed it yet. Before the `FolderTable`
-      version 2 pass has stamped a vault, that is every row (the old
-      whole-vault decrypt).
+    * every row on the `attachments_folder_ref_stale` predicate is checked
+      against its decrypted path: a writer that rewrote the path without
+      re-pointing it (the previous release during a rolling deploy) left a NULL
+      or stale reference, or its folder row died (`folders_release_refs` clears
+      the stamp), and `Engram.Bookkeeping.Drain` has not healed it yet. Before
+      the `FolderTable` version 2 pass has stamped a vault, that is every row
+      (the old whole-vault decrypt). A row FolderTable stamped unreadable is
+      neither: its folder is unknowable.
 
   Whatever the route, a row is kept only if its DECRYPTED path is in `folders`: the
   stored path stays authoritative, the reference only narrows what is read.
@@ -2227,7 +2230,10 @@ defmodule Engram.Attachments do
     direct? = Keyword.get(opts, :direct, false)
     folders = Enum.map(folders, &String.trim_trailing(&1, "/"))
 
-    Repo.with_tenant(user.id, fn -> candidate_rows(user, vault, folders, direct?) end)
+    # One snapshot (`Repo.with_tenant_snapshot!/2`): a heal stamping a row
+    # between the stale and the placed read cannot hide it.
+    {:ok,
+     Repo.with_tenant_snapshot!(user.id, fn -> candidate_rows(user, vault, folders, direct?) end)}
     |> unwrap_tenant()
     |> case do
       {:ok, rows} ->
@@ -2245,41 +2251,32 @@ defmodule Engram.Attachments do
   end
 
   # Everything is a candidate when the root is asked for as a subtree;
-  # otherwise the folders' referenced rows plus the ones whose reference is not
-  # current.
+  # otherwise the stale rows, then the folders' placed references
+  # (`attachments_folder_ref_live`), two statements so each keeps its index.
+  # Stale first, as the notes readers read drift first: harmless in the
+  # caller's snapshot, and right for a READ COMMITTED caller (a row stamped
+  # after the stale read is placed by the time the placed read runs).
   defp candidate_rows(user, vault, folders, direct?) do
     base = from(a in scoped_live(user, vault), as: :a, select: struct(a, @tree_attachment_fields))
 
     if not direct? and "" in folders do
       Repo.all(base)
     else
-      current = Rows.attachment_ref_current()
+      stale = Repo.all(from(a in base, where: ^Drift.attachments_stale()))
       ids = folder_ids(user, vault, folders, direct?)
-      root? = direct? and "" in folders
 
       trusted =
-        if root?,
+        if direct? and "" in folders,
           do: dynamic([a], is_nil(a.folder_ref_id) or a.folder_ref_id in ^ids),
           else: dynamic([a], a.folder_ref_id in ^ids)
 
-      # A reference to a deleted or missing folder row vouches for nothing,
-      # whatever the row's age (an undo that could not revive the row; a crash
-      # between a restore and its re-point): such a row is read by its path.
-      live_ref =
-        from(f in Engram.Folders.Folder,
-          where: f.id == parent_as(:a).folder_ref_id and is_nil(f.deleted_at)
-        )
+      placed = Rows.attachment_ref_placed()
 
-      Repo.all(
-        from(a in base,
-          where:
-            ^dynamic(
-              [a],
-              (^trusted and ^current) or not (^current) or
-                is_nil(a.folder_ref_stamp) or
-                (not is_nil(a.folder_ref_id) and not exists(live_ref))
-            )
-        )
+      # A row stamped between the two reads (a READ COMMITTED caller) is in
+      # both: keep it once.
+      Enum.uniq_by(
+        stale ++ Repo.all(from(a in base, where: ^dynamic([a], ^trusted and ^placed))),
+        & &1.id
       )
     end
   end

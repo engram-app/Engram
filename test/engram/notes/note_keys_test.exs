@@ -123,11 +123,12 @@ defmodule Engram.Notes.NoteKeysTest do
     assert Map.keys(ids) == ["F/one.md"]
     assert p =~ "notes_path_live", p
 
+    # R9.5 step 3: the folder page reads by `folder_ref_id`, not the key.
     {{:ok, [one]}, p} =
-      plan.(fn -> Notes.list_notes_in_folder(u, v, "F") end, ~r/"folder_id" = \$/)
+      plan.(fn -> Notes.list_notes_in_folder(u, v, "F") end, ~r/"folder_ref_id" = \$/)
 
     assert one.path == "F/one.md"
-    assert p =~ "notes_folder", p
+    assert p =~ "notes_folder_ref", p
 
     {_, p} =
       plan.(fn -> Notes.create_folder_marker(u, v, "Marked") end, ~r/"folder_id" (= ANY|=)/)

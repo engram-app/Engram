@@ -91,8 +91,10 @@ defmodule Engram.Repo do
   UNRELATED ids are tolerable (an unrelated write waits, a latency cost, not
   a correctness issue).
 
-  Current caller: `Engram.Links.lock_source_note!/1`, serializing concurrent
-  link-extraction writes for the same source note. The CRDT genesis-seed lock
+  Current callers: `Engram.Links.lock_source_note!/1`, serializing concurrent
+  link-extraction writes for the same source note, and
+  `Engram.Vaults.lock_folder_writes!/1` (its `try` side is
+  `try_advisory_locks/2`). The CRDT genesis-seed lock
   this was originally added for (#1409) was removed in round 4 — a
   post-commit room eviction replaced it, so genesis seeding no longer takes
   this lock.
@@ -101,6 +103,24 @@ defmodule Engram.Repo do
   def advisory_lock!(id) when is_binary(id) do
     _ = query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [id])
     :ok
+  end
+
+  @doc """
+  `advisory_lock!/1`'s lock on every one of `ids`, without waiting, on `repo`
+  (this one, or a maintenance repo) in the caller's transaction: true when
+  all were free (and are now held to the end of the transaction). The same
+  key formula as `advisory_lock!/1`, so a `try` and a `lock` on one id meet.
+  """
+  @spec try_advisory_locks(module(), [String.t()]) :: boolean()
+  def try_advisory_locks(repo, ids) when is_list(ids) do
+    %{rows: [[free?]]} =
+      repo.query!(
+        "SELECT coalesce(bool_and(pg_try_advisory_xact_lock(hashtextextended(k, 0))), true) " <>
+          "FROM unnest($1::text[]) AS k",
+        [ids]
+      )
+
+    free?
   end
 
   @doc """
@@ -185,6 +205,46 @@ defmodule Engram.Repo do
   def with_tenant!(tenant_id, fun) do
     {:ok, result} = with_tenant(tenant_id, fun)
     result
+  end
+
+  @doc """
+  `with_tenant!/2` for a READER that must see one snapshot: every statement
+  of `fun` reads the same committed state, so a concurrent commit (a drift
+  heal, a folder rename) cannot land between two of them and make the reader
+  see a row in neither, or in both.
+
+  Top level (a real BEGIN on the app pool): the transaction opens with
+  `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY` before the
+  tenant is entered, one more round trip (the `tenant_snapshot` statement).
+  READ ONLY: a write inside raises, so only reads go here.
+
+  Nested (`in_transaction?/0` true): the isolation of a transaction can only
+  be set by its first statement, so `fun` runs inline in the caller's
+  transaction and under its rules. The folder writes (`Engram.Folders`
+  rename, batch move) take the vault's folder-write lock first
+  (`Vaults.lock_folder_writes!/1`), which `DataMigrations.FolderTable`'s heal
+  also takes, so no heal commits in between. The MCP request transaction
+  nests the folder listings too: they stay correct at READ COMMITTED (one
+  statement for the counts, drift read before rows, stale before placed).
+
+  The test sandbox runs every transaction as a savepoint, so there `fun` runs
+  at READ COMMITTED and read-write: READ ONLY is enforced in prod only, and a
+  write added inside a snapshot block passes the suite and raises `25006` in
+  prod (`Engram.Repo.SnapshotTest` covers the real top level).
+  """
+  @spec with_tenant_snapshot!(Ecto.UUID.t(), (-> result)) :: result when result: term()
+  def with_tenant_snapshot!(tenant_id, fun) do
+    if in_transaction?() do
+      with_tenant!(tenant_id, fun)
+    else
+      Process.put(:engram_tenant_snapshot, true)
+
+      try do
+        with_tenant!(tenant_id, fun)
+      after
+        Process.delete(:engram_tenant_snapshot)
+      end
+    end
   end
 
   @doc """
@@ -384,6 +444,8 @@ defmodule Engram.Repo do
     # Decided before the transaction opens: inside it, in_transaction? is
     # always true.
     exit_source = tenant_exit_source()
+    # Taken here so a block nested inside never sees it.
+    snapshot? = Process.delete(:engram_tenant_snapshot) == true and real_top_level?(exit_source)
     Process.put(:engram_tenant, uuid)
 
     try do
@@ -412,6 +474,14 @@ defmodule Engram.Repo do
           # of a lock taken on another node without a separate round trip.
           # `users` carries no RLS, so the role drop does not hide the row.
           gated? = Process.get(:engram_write_gate, false)
+
+          # `with_tenant_snapshot!/2`: the first statement of the transaction.
+          _ =
+            if snapshot?,
+              do:
+                query!("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY", [],
+                  source: "tenant_snapshot"
+                )
 
           %{rows: [row]} = enter_tenant(uuid, gated?)
 
@@ -479,6 +549,13 @@ defmodule Engram.Repo do
       end
     end
   end
+
+  # A real BEGIN: the app pool's top level (`tenant_exit_source/0` nil), or a
+  # test's `Ecto.Adapters.SQL.Sandbox.unboxed_run/2`, which runs outside the
+  # sandbox's transaction and says so with `:engram_unboxed_top_level`
+  # (test-only; `Engram.Repo.SnapshotTest`).
+  defp real_top_level?(exit_source),
+    do: is_nil(exit_source) or Process.get(:engram_unboxed_top_level, false)
 
   defp run_after_commit(queue) do
     queue

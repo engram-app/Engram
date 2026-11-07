@@ -27,7 +27,10 @@ defmodule Engram.Notes.Keys do
     type: {:type_hmac, :type_id}
   }
 
-  @key_columns @cols |> Map.values() |> Enum.flat_map(&Tuple.to_list/1)
+  # Plus `folder_ref_id` (R9.5 step 3): the folder readers look notes up by
+  # their folder row, and a generic plan costs that like any key, for an
+  # average vault (`NotesGenericPlanTest`, "a folder listing").
+  @key_columns (@cols |> Map.values() |> Enum.flat_map(&Tuple.to_list/1)) ++ [:folder_ref_id]
 
   @typedoc "The key families `notes` carries both ways."
   @type kind :: :path | :folder | :basename | :path_ci | :type
