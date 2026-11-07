@@ -236,7 +236,8 @@ defmodule Engram.Folders do
   # scan. No decrypt, and every read is bounded by what is left of limit + 1,
   # stopping once the running sum is over:
   #
-  #   * the subtree's folder rows (an unordered, LIMITed walk), one item each;
+  #   * the subtree's folder rows below the selected roots (an unordered,
+  #     LIMITed walk; a root's own row is not an item), one item each;
   #   * notes and attachments placed by reference in those rows;
   #   * drift notes (`Drift.notes_unresolved/0`) whose folder key is one of
   #     those rows' paths, and stale attachments (`Drift.attachments_stale/0`)
@@ -260,8 +261,19 @@ defmodule Engram.Folders do
   end
 
   defp over_limit?(user, vault, folders, limit) do
+    roots = outermost(folders)
+    # No key, no rows: the walk below finds nothing either.
+    root_hmacs =
+      case Crypto.dek_filter_key(user) do
+        {:ok, fk} -> MapSet.new(roots, &Rows.path_hmac(fk, &1))
+        {:error, _} -> MapSet.new()
+      end
+
     Repo.with_tenant!(user.id, fn ->
-      refs = Rows.subtree_refs(user, vault.id, outermost(folders), limit: limit + 1)
+      # The roots' own rows come first in the walk (depth 0) and are not items:
+      # read them plus at most limit + 1 descendant rows.
+      refs = Rows.subtree_refs(user, vault.id, roots, limit: limit + 1 + length(roots))
+      descendants = Enum.count(refs, &(not MapSet.member?(root_hmacs, &1.full_path_hmac)))
       ids = for %{id: id} <- refs, do: id
       hmacs = for %{full_path_hmac: h} when is_binary(h) <- refs, do: h
       notes = from(n in Notes.scoped_live(user, vault), where: n.kind == "note")
@@ -283,9 +295,9 @@ defmodule Engram.Folders do
       ]
 
       # `left`: how many more items would put the subtree over the limit. Each
-      # folder row is one (it and its marker move under the lock); the walk
-      # alone over the limit refuses before any count runs.
-      Enum.reduce_while(arms, limit + 1 - length(refs), fn arm, left ->
+      # descendant folder row is one (it and its marker move under the lock);
+      # the walk alone over the limit refuses before any count runs.
+      Enum.reduce_while(arms, limit + 1 - descendants, fn arm, left ->
         if left <= 0, do: {:halt, 0}, else: {:cont, left - arm.(left)}
       end) <= 0
     end)

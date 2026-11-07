@@ -586,6 +586,35 @@ defmodule Engram.Fixtures do
   end
 
   @doc """
+  Fills `folder` with exactly `n` direct children, for the folder-op size cap
+  (#2492) boundary tests: 5 empty subfolder rows, `atts` attachments (the
+  caller stubs storage), the rest notes in one bulk insert. The folder rows
+  exist first, so `notes_set_folder_ref` gives every note its reference.
+  """
+  def fill_folder!(user, vault, folder, n, atts \\ 2) when n >= 5 + atts do
+    # One key for the rows and the notes: a user without a DEK would get one
+    # minted by each writer below.
+    user = with_dek(user)
+    subfolders = for i <- 1..5, do: "#{folder}/s#{i}"
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Engram.Folders.Rows.ensure_all(user, vault.id, [folder | subfolders])
+      end)
+
+    for i <- 1..atts//1 do
+      {:ok, _} =
+        Engram.Attachments.upsert_attachment(user, vault, %{
+          "path" => "#{folder}/a#{i}.png",
+          "content_base64" => Base.encode64("x")
+        })
+    end
+
+    insert_notes!(user, vault, for(i <- 1..(n - 5 - atts), do: %{"path" => "#{folder}/n#{i}.md"}))
+    :ok
+  end
+
+  @doc """
   Sets a note's `notes` content and CRDT state ciphertexts to the envelopes
   its body row holds: the row a release before R8(b2) (which still wrote
   those columns) leaves. For the null batch (`NoteBodyColumnsNull`) and the

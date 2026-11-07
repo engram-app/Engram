@@ -5,6 +5,8 @@ defmodule Engram.Folders.OpSizeCapTest do
   use Engram.DataCase, async: false
 
   alias Engram.{Attachments, Folders, Notes, QueryRecorder, Repo, ServiceConfig, Vaults}
+  alias Engram.Fixtures
+  alias Engram.MCP.Handlers
   alias Engram.Notes.{CrdtIndexDoc, CrdtIndexPersistence}
 
   setup do
@@ -114,11 +116,11 @@ defmodule Engram.Folders.OpSizeCapTest do
     {result, queries} = QueryRecorder.record(fn -> Folders.rename(u, v, "A", "B") end)
 
     assert result == {:error, {:folder_too_large, 2}}
-    # The folder row A takes 1 of limit + 1 = 3, so one notes count LIMIT 2;
-    # the attachment count never runs.
+    # A's own row is not an item, so one notes count LIMIT limit + 1 = 3
+    # finds 3 and the attachment count never runs.
     assert [%{sql: sql, params: params}] = Enum.filter(queries, &(&1.sql =~ ~r/count\(/i))
     assert sql =~ ~r/LIMIT/i
-    assert 2 in params
+    assert 3 in params
   end
 
   test "empty subfolders count: their rows and markers move under the lock too", %{
@@ -144,11 +146,12 @@ defmodule Engram.Folders.OpSizeCapTest do
     {result, queries} = QueryRecorder.record(fn -> Folders.rename(u, v, "A", "B") end)
 
     assert result == {:error, {:folder_too_large, 2}}
-    # The walk is the only read of folder rows, LIMITed to 3; no count runs.
+    # The walk is the only read of folder rows, LIMITed to the root's row plus
+    # limit + 1 = 3 descendants; no count runs.
     assert [%{sql: sql, params: params}] =
              Enum.filter(queries, &(&1.sql =~ ~r/folder_subtree/))
 
-    assert sql =~ ~r/LIMIT/i and 3 in params
+    assert sql =~ ~r/LIMIT/i and 4 in params
     refute sql =~ ~r/ORDER BY/i
     assert counts(queries) == 0
   end
@@ -159,7 +162,10 @@ defmodule Engram.Folders.OpSizeCapTest do
     user: u,
     vault: v
   } do
-    {:ok, %{folders: [a, b, _c]}} = Notes.create_folder_markers(u, v, ["A", "A/B", "A/C"])
+    # Three children under A (B, C, D), over the cap of 2; A's own row is not one.
+    {:ok, %{folders: [a, b, _c, _d]}} =
+      Notes.create_folder_markers(u, v, ["A", "A/B", "A/C", "A/D"])
+
     {:ok, _} = Notes.create_folder_marker(u, v, "Dst")
 
     assert {:error, {:folder_too_large, 2}} =
@@ -185,8 +191,9 @@ defmodule Engram.Folders.OpSizeCapTest do
     user: u,
     vault: v
   } do
-    # Two is its folder row, a note and an attachment: exactly the cap.
-    ServiceConfig.put_override(:folder_op_max_rows, 3)
+    # Two holds a note and an attachment: exactly the cap (its own row is not
+    # an item).
+    ServiceConfig.put_override(:folder_op_max_rows, 2)
     put_note(u, v, "One/x.md")
     put_note(u, v, "Two/x.md")
     put_att(u, v, "Two/a.png")
@@ -200,13 +207,72 @@ defmodule Engram.Folders.OpSizeCapTest do
     assert snapshot(u, v).notes == ["One2/x.md", "Two2/x.md"]
   end
 
+  # The folder's own row is not one of its items: exactly the cap of children
+  # (notes, subfolders, attachments) runs, one more is refused.
+  describe "the cap counts children, not the folder itself" do
+    setup do
+      ServiceConfig.put_override(:folder_op_max_rows, 200)
+    end
+
+    test "a rename of exactly 200 children runs", %{user: u, vault: v} do
+      :ok = Fixtures.fill_folder!(u, v, "A", 200)
+      assert {:ok, %{notes: 193, attachments: 2}} = Folders.rename(u, v, "A", "B")
+    end
+
+    test "a rename of 201 children is refused", %{user: u, vault: v} do
+      :ok = Fixtures.fill_folder!(u, v, "A", 201)
+      assert {:error, {:folder_too_large, 200}} = Folders.rename(u, v, "A", "B")
+    end
+
+    test "MCP rename_folder of exactly 200 children runs", %{user: u, vault: v} do
+      :ok = Fixtures.fill_folder!(u, v, "A", 200)
+
+      assert {:ok, "Folder renamed: A -> B (193 notes, 2 attachments updated)", _} =
+               Handlers.handle("rename_folder", u, v, %{
+                 "old_folder" => "A",
+                 "new_folder" => "B"
+               })
+    end
+
+    test "MCP rename_folder of 201 children is refused", %{user: u, vault: v} do
+      :ok = Fixtures.fill_folder!(u, v, "A", 201)
+
+      assert {:error, {:folder_too_large, _}} =
+               Handlers.handle("rename_folder", u, v, %{
+                 "old_folder" => "A",
+                 "new_folder" => "B"
+               })
+    end
+
+    test "a batch move of roots holding 200 children in total runs", %{user: u, vault: v} do
+      {:ok, %{folders: [a, b, _dst]}} = Notes.create_folder_markers(u, v, ["A", "B", "Dst"])
+      :ok = Fixtures.fill_folder!(u, v, "A", 100)
+      :ok = Fixtures.fill_folder!(u, v, "B", 100)
+      ids = [a.id, b.id]
+
+      assert {:ok, _} = Folders.batch_move(u, v, ids, {:path, "Dst"})
+    end
+
+    test "a batch move of roots holding 201 children in total is refused", %{
+      user: u,
+      vault: v
+    } do
+      {:ok, %{folders: [a, b, _dst]}} = Notes.create_folder_markers(u, v, ["A", "B", "Dst"])
+      :ok = Fixtures.fill_folder!(u, v, "A", 100)
+      :ok = Fixtures.fill_folder!(u, v, "B", 101)
+      ids = [a.id, b.id]
+
+      assert {:error, {:folder_too_large, 200}} = Folders.batch_move(u, v, ids, {:path, "Dst"})
+    end
+  end
+
   test "MCP rename_folder refuses an over-cap folder with the web app's text", %{
     user: u,
     vault: v
   } do
     for p <- ~w(A/x.md A/y.md A/z.md), do: put_note(u, v, p)
 
-    assert Engram.MCP.Handlers.handle("rename_folder", u, v, %{
+    assert Handlers.handle("rename_folder", u, v, %{
              "old_folder" => "A",
              "new_folder" => "B"
            }) ==
