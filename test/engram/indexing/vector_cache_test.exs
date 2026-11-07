@@ -101,7 +101,7 @@ defmodule Engram.Indexing.VectorCacheTest do
       assert %{^key => _} = VectorCache.get_many(user.id, dek, [key])
     end
 
-    test "a 10 MiB note's worth of vectors (6,000) writes and reads back in one lookup" do
+    test "a 10 MiB note's worth of vectors (6,000) reads back in bounded batches" do
       {user, dek} = user_and_dek()
       vec = vector(11)
 
@@ -114,8 +114,15 @@ defmodule Engram.Indexing.VectorCacheTest do
       :ok = VectorCache.put_many(user.id, nil, dek, entries)
       keys = Enum.map(entries, &elem(&1, 0))
 
-      {:ok, hits} = count_queries(fn -> VectorCache.get_many(user.id, dek, keys) end)
+      {queries, hits} = count_queries(fn -> VectorCache.get_many(user.id, dek, keys) end)
       assert map_size(hits) == 6_000
+      assert Enum.all?(entries, fn {key, _, _} -> hits[key] == vec end)
+
+      # One query per batch of keys, so a lookup's cost per query is fixed
+      # whatever the note size (#2364: one query for every key hit the DB
+      # timeout on a 10 MB note).
+      assert queries == ceil(6_000 / VectorCache.rows_per_query())
+      assert queries > 1
     end
 
     test "emits hit and miss counts" do
@@ -340,9 +347,7 @@ defmodule Engram.Indexing.VectorCacheTest do
 
     result = fun.()
     :telemetry.detach(inspect(ref))
-    count = drain(ref, 0)
-    assert count == 1, "expected ONE embedding_cache query, got #{count}"
-    {:ok, result}
+    {drain(ref, 0), result}
   end
 
   defp drain(ref, n) do
