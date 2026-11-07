@@ -10,7 +10,8 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
 
   Nothing touches Qdrant between the note rewrap and the flip: a failure
   there strands the notes under a DEK that was never saved. The sparse
-  vectors are refreshed after the flip (`RefreshKeywordVectors`).
+  vectors are refreshed after the flip (the paced `ReconcileEmbeddings` keyword
+  top-up queues `RefreshKeywordVectors`).
 
   Qdrant is a small in-memory fake behind Bypass: it keeps each point's
   payload and answers a query with the points its filter matches. The writer
@@ -132,10 +133,9 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
       # No payload heal: the filters resolve in Postgres, under the new key.
       refute_enqueued(worker: ReconcileNotePayloads)
 
-      assert_enqueued(
-        worker: RefreshKeywordVectors,
-        args: %{"note_id" => ctx.note.id, "user_id" => ctx.user.id}
-      )
+      # The resparse is the paced sweep's, asked for after the commit.
+      assert_enqueued(worker: Engram.Workers.ReconcileEmbeddings, args: %{"mode" => "reverify"})
+      assert Repo.reload!(ctx.note, skip_tenant_check: true).keyword_version == nil
 
       # v5 points only: a v3 point's text lives in its payload under the
       # retired DEK until the rotation's text sweep, which this fake does not
@@ -187,7 +187,7 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
     user = reload_user(ctx.user)
     assert user.dek_rotation_locked_at == nil
     assert fresh(ctx.note, user).content =~ "Page the secondary"
-    assert_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => ctx.note.id})
+    assert_enqueued(worker: Engram.Workers.ReconcileEmbeddings, args: %{"mode" => "reverify"})
 
     raw = Repo.one!(from(n in Notes.Note, where: n.id == ^ctx.note.id), skip_tenant_check: true)
     assert raw.chunker_version == nil, "version-stale, so EmbedNote rebuilds it as maintenance"
