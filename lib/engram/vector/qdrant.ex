@@ -62,29 +62,27 @@ defmodule Engram.Vector.Qdrant do
 
   @doc """
   Whether the collection has its `n` payload index (immutable chunk index,
-  Engram#2263). Strict mode answers 400 to a filter on an unindexed key, and
-  the index is created by the first index pass per node
-  (`ensure_collection/2`), so a reader checks before it filters on `n`.
-  Unreadable counts as no. Readers go through `n_filterable?/1`, the cached
-  form.
-  """
-  @spec n_indexed?(String.t() | nil) :: boolean()
-  def n_indexed?(col \\ nil) do
-    case collection_info(col || collection(), :search) do
-      {:ok, %{"payload_schema" => %{} = schema}} -> is_map_key(schema, PayloadKeys.short(:note))
-      _ -> false
-    end
-  end
+  Engram#2263), cached per node for a minute. Strict mode answers 400 to a
+  filter on an unindexed key, and the index is created by the first index
+  pass per node (`ensure_collection/2`, which then marks it here), so a
+  reader checks before it filters on `n`: a filtered search, and the
+  per-note deletes and counts. Each pays at most one collection-info read a
+  minute per collection.
 
-  @doc """
-  `n_indexed?/1`, cached per node for a minute: a reader that filters on `n`
-  (a filtered search, the per-note deletes and counts) pays at most one
-  collection-info read a minute per collection.
+  A failed read answers no but is not cached: a cached "no" would keep the
+  per-note filters path-only for a minute, missing every point with no `p`.
   """
   @spec n_filterable?(String.t() | nil) :: boolean()
   def n_filterable?(col \\ nil) do
     col = col || collection()
-    Engram.Cache.fetch(:note_id_filter, n_index_key(col), fn -> n_indexed?(col) end)
+
+    Engram.Cache.fetch(:note_id_filter, n_index_key(col), fn ->
+      case collection_info(col, :search) do
+        {:ok, %{"payload_schema" => %{} = schema}} -> is_map_key(schema, PayloadKeys.short(:note))
+        {:ok, _} -> false
+        {:error, _} -> Engram.Cache.no_store(false)
+      end
+    end)
   end
 
   defp n_index_key(col), do: {:n_index, base_url(), col}
