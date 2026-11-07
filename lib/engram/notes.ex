@@ -49,6 +49,7 @@ defmodule Engram.Notes do
   alias Engram.Folders.Rows
   alias Engram.Pager
   alias Engram.Repo
+  alias Engram.Search.NameTerms
   alias Engram.Sync.Broadcast
   alias Engram.Telemetry
   alias Engram.UsageMeters
@@ -1627,6 +1628,7 @@ defmodule Engram.Notes do
             :ok = CrdtDeliver.announce_ready(user.id, vault.id, note.path, note.id)
             # crdt_doc_ready never reaches the sync topic the name index reads.
             :ok = Engram.Notes.NameIndex.announce(vault.id, note.id, note.path, note.title)
+            :ok = NameTerms.on_note_written(user, note)
 
             # vault_populated was probed inside the row transaction
             # (probe_vault_populated/2) and its broadcast already ran on commit.
@@ -1644,6 +1646,7 @@ defmodule Engram.Notes do
             # local mirror) keeps the note in its old folder forever. Fired
             # post-commit, same as the :announce leg above.
             :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, [])
+            :ok = NameTerms.on_note_written(user, note)
 
             _ =
               if old_path != note.path do
@@ -4754,6 +4757,8 @@ defmodule Engram.Notes do
         # delete as a relocation leg (id now lives elsewhere) instead of
         # tearing the note's CRDT room down by id before it can materialize.
         decrypted = decrypt_or_raise!(note, user)
+        # The shared post-write name-terms hook (rename and move).
+        :ok = NameTerms.on_note_written(user, decrypted)
 
         :ok = broadcast_change(user.id, vault.id, "upsert", note.path, decrypted, [])
         :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, seq: note.seq)

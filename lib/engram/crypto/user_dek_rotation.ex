@@ -49,6 +49,7 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Notes.FrontmatterKeys
   alias Engram.Notes.NoteBody
   alias Engram.Repo
+  alias Engram.Search.NameTerms
   alias Engram.Vector.Qdrant
   alias Engram.Workers.{EmbedNote, ReconcileEmbeddings, RotationTextGuard}
 
@@ -207,6 +208,10 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- Engram.Indexing.VectorCache.rotate(to_string(user_id), old_dek, new_dek),
          :ok <- sweep_frontmatter_keys(user, old_dek, new_dek, new_filter_key),
          :ok <- resync_note_attrs(user, new_dek, new_filter_key),
+         # `name_terms` dims are keyed like the sparse dims: rewritten under the
+         # new key (Postgres only), after the sweeps re-keyed the name hmacs.
+         :ok <- NameTerms.resync(user.id, new_dek, new_filter_key, Engram.Notes.Note),
+         :ok <- NameTerms.resync(user.id, new_dek, new_filter_key, Folder),
          {:ok, guard} <- final_flip(user, new_dek_version, new_wrapped) do
       # The index is derived data, so it never fails the rotation: see
       # `post_flip_index_repairs/3`. The DB-only remap goes first, while few

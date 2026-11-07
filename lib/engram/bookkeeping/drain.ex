@@ -30,10 +30,12 @@ defmodule Engram.Bookkeeping.Drain do
   alias Engram.Backfill.TenantScan
   alias Engram.Crypto.Envelope
   alias Engram.DataMigrations.FolderTable
+  alias Engram.DataMigrations.NameTerms, as: NameTermsMigration
   alias Engram.Folders.Drift
   alias Engram.Logger.Metadata
   alias Engram.Maintenance.Cursor
   alias Engram.Repo
+  alias Engram.Search.NameTerms
   alias Engram.Workers.BackfillLinkKeys
   alias Engram.Workers.ReconcileNotePayloads
   alias Engram.Workers.ReencodeEnvelopes
@@ -140,15 +142,39 @@ defmodule Engram.Bookkeeping.Drain do
        """}
   ]
 
+  # `name_terms` rows not written for the ref's current name (a previous
+  # release's rename or create): `Engram.Search.NameTerms`' stale predicates,
+  # the text of `notes_name_terms_stale` / `folders_name_terms_stale`.
+  @name_terms [
+    {"notes",
+     "SELECT DISTINCT user_id FROM notes WHERE " <>
+       NameTerms.stale_sql(:notes) <>
+       """
+
+         AND ($1::uuid IS NULL OR user_id = $1)
+         AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 100
+       """},
+    {"folders",
+     "SELECT DISTINCT user_id FROM folders WHERE " <>
+       NameTerms.stale_sql(:folders) <>
+       """
+
+         AND ($1::uuid IS NULL OR user_id = $1)
+         AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 100
+       """}
+  ]
+
   @doc """
   `{table, sql}` for each probe, by kind (`:envelope | :link_keys | :payload |
-  :folder`). Public for the plan test.
+  :folder | :name_terms`). Public for the plan test.
   """
-  @spec probes(:envelope | :link_keys | :payload | :folder) :: [{String.t(), String.t()}]
+  @spec probes(:envelope | :link_keys | :payload | :folder | :name_terms) ::
+          [{String.t(), String.t()}]
   def probes(:envelope), do: @envelope
   def probes(:link_keys), do: @link_keys
   def probes(:payload), do: @payload
   def probes(:folder), do: @folder
+  def probes(:name_terms), do: @name_terms
 
   @doc "One tick. Returns the users handed to each repair."
   @spec run() :: %{
@@ -156,7 +182,8 @@ defmodule Engram.Bookkeeping.Drain do
           link_keys: non_neg_integer(),
           payload: non_neg_integer(),
           folder: non_neg_integer(),
-          folder_blocked: non_neg_integer()
+          folder_blocked: non_neg_integer(),
+          name_terms: non_neg_integer()
         }
   def run do
     {folder, folder_blocked} = folder()
@@ -166,7 +193,8 @@ defmodule Engram.Bookkeeping.Drain do
       link_keys: enqueue(:link_keys, BackfillLinkKeys, &BackfillLinkKeys.missing_rows?/1),
       payload: enqueue(:payload, ReconcileNotePayloads, &ReconcileNotePayloads.unstamped_rows?/1),
       folder: folder,
-      folder_blocked: folder_blocked
+      folder_blocked: folder_blocked,
+      name_terms: name_terms()
     }
 
     Logger.info(
@@ -223,6 +251,20 @@ defmodule Engram.Bookkeeping.Drain do
           end
 
         {length(users), blocked}
+    end
+  end
+
+  # Stale name terms, healed inline: each user's stale refs off the stale
+  # index, at most 1,000 per table per user (`NameTerms.heal_user/2`), no
+  # job. Only once the ledger has closed; an open ledger is the runner's.
+  defp name_terms do
+    case users(:name_terms) do
+      [] ->
+        0
+
+      users ->
+        _ = if NameTermsMigration.done?(), do: NameTermsMigration.run_pass(user_ids: users)
+        length(users)
     end
   end
 

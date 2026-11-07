@@ -61,7 +61,10 @@ defmodule Engram.ServiceConfig.Overrides do
     rebuild_max_disk_percent: {:integer, 1..100},
     file_times_backfill: :boolean,
     # The plugin's `folder_op` wire (#2523 S4), default off: `Engram.Folders.Wire`.
-    folder_ops: :boolean
+    folder_ops: :boolean,
+    # `name_terms` backfill kill switch and the search leg's (`Engram.Search.NameTerms`).
+    name_terms_backfill: :boolean,
+    name_terms_search: :boolean
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})
