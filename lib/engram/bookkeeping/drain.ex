@@ -183,7 +183,8 @@ defmodule Engram.Bookkeeping.Drain do
           payload: non_neg_integer(),
           folder: non_neg_integer(),
           folder_blocked: non_neg_integer(),
-          name_terms: non_neg_integer()
+          name_terms: non_neg_integer(),
+          name_terms_orphans: non_neg_integer()
         }
   def run do
     {folder, folder_blocked} = folder()
@@ -194,7 +195,8 @@ defmodule Engram.Bookkeeping.Drain do
       payload: enqueue(:payload, ReconcileNotePayloads, &ReconcileNotePayloads.unstamped_rows?/1),
       folder: folder,
       folder_blocked: folder_blocked,
-      name_terms: name_terms()
+      name_terms: name_terms(),
+      name_terms_orphans: name_terms_orphans()
     }
 
     Logger.info(
@@ -256,15 +258,45 @@ defmodule Engram.Bookkeeping.Drain do
 
   # Stale name terms, healed inline: each user's stale refs off the stale
   # index, at most 1,000 per table per user (`NameTerms.heal_user/2`), no
-  # job. Only once the ledger has closed; an open ledger is the runner's.
+  # job. Only once the ledger has closed (an open ledger is the backfill
+  # chain's); 0 while it is open, as nothing was repaired.
   defp name_terms do
-    case users(:name_terms) do
-      [] ->
-        0
+    with true <- NameTermsMigration.done?(),
+         [_ | _] = users <- users(:name_terms) do
+      _ = NameTermsMigration.run_pass(user_ids: users)
+      length(users)
+    else
+      _ -> 0
+    end
+  end
 
-      users ->
-        _ = if NameTermsMigration.done?(), do: NameTermsMigration.run_pass(user_ids: users)
-        length(users)
+  # One page (500 refs) of the `name_terms` orphan sweep per tick, cycling
+  # the table: rows whose note or folder is gone or deleted (a purge, or an
+  # older release's delete that skipped `NameTerms.on_note_deleted/2`).
+  # Returns the rows removed.
+  @orphan_cursor "drain:name_terms_orphans"
+  defp name_terms_orphans do
+    case TenantScan.pool() do
+      {:fleet, repo} ->
+        from = Cursor.get(@orphan_cursor)
+        {read, last, removed} = NameTerms.sweep_orphans(repo, from && from["ref_id"])
+        :ok = Cursor.advance(@orphan_cursor, last && %{"ref_id" => last}, read, 500)
+        removed
+
+      # Self-host: each user's refs from the start, at most 10 pages a tick.
+      # ponytail: a user past 5,000 refs has its tail swept only by a later
+      # page cursor; add a per-user cursor if a self-host gets that big.
+      :per_user ->
+        TenantScan.flat_map_users(fn _uid -> [sweep_pages(nil, 10, 0)] end) |> Enum.sum()
+    end
+  end
+
+  defp sweep_pages(_after, 0, removed), do: removed
+
+  defp sweep_pages(after_id, pages, removed) do
+    case NameTerms.sweep_orphans(Repo, after_id) do
+      {500, last, n} -> sweep_pages(last, pages - 1, removed + n)
+      {_short, _last, n} -> removed + n
     end
   end
 

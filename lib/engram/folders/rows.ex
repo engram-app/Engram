@@ -1004,6 +1004,8 @@ defmodule Engram.Folders.Rows do
 
     from(f in Folder, where: f.id == ^row.id)
     |> Repo.update_all(set: [deleted_at: now(), updated_at: now()])
+
+    NameTerms.on_folders_deleted([row.id])
   end
 
   # ---- delete, restore -----------------------------------------------------
@@ -1053,6 +1055,7 @@ defmodule Engram.Folders.Rows do
             set: [deleted_at: now(), delete_op_id: op_id, explicit: false, updated_at: now()]
           )
 
+        :ok = NameTerms.on_folders_deleted(doomed)
         n
     end
   end
