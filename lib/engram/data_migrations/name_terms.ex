@@ -93,7 +93,9 @@ defmodule Engram.DataMigrations.NameTerms do
         TenantScan.user_ids()
         |> Enum.any?(fn uid ->
           {:ok, found?} =
-            Repo.with_tenant(uid, fn -> probe.(Repo, from(r in query, where: r.user_id == ^uid)) end)
+            Repo.with_tenant(uid, fn ->
+              probe.(Repo, from(r in query, where: r.user_id == ^uid))
+            end)
 
           found?
         end)

@@ -199,7 +199,7 @@ defmodule Engram.NotesVaultScanTest do
 
       plan = QueryPlan.generic_plan(fetch, analyze: ["notes"], bitmapscan: false)
       # Any reference index, named exactly (S1 added `notes_folder_ref_live_id`).
-      assert plan =~ ~r/using notes_folder_ref(_live|_live_id)? on/, plan
+      assert plan =~ ~r/(using|Scan on) notes_folder_ref(_live|_live_id)? /, plan
     end
 
     test "scan_folders returns the folder and its descendants only", %{user: u, vault: v} do
