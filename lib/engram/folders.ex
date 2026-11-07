@@ -42,6 +42,7 @@ defmodule Engram.Folders do
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Folders.Rows
+  alias Engram.Folders.Wire
   alias Engram.Logger.Metadata
   alias Engram.Notes
   alias Engram.Notes.PathSanitizer
@@ -149,17 +150,20 @@ defmodule Engram.Folders do
 
   A re-create of a live folder changes nothing, so it broadcasts nothing; a
   peer would only re-poll `/folders/explicit` for it.
+
+  `origin_device_id:` names the device that asked, for its `folder_changed`
+  echo (`Engram.Folders.Wire`).
   """
-  @spec create_markers(map(), map(), [String.t()]) ::
+  @spec create_markers(map(), map(), [String.t()], keyword()) ::
           {:ok, %{folders: [map()], rejected: [String.t()]}}
           | {:error, {:rate_limited, non_neg_integer()} | term()}
-  def create_markers(user, vault, inputs) when is_list(inputs) do
+  def create_markers(user, vault, inputs, opts \\ []) when is_list(inputs) do
     # Validate first: a request that can write nothing (empty, all-root, over
     # the batch cap) spends no budget.
     with {:ok, [_ | _], _rejected} <- Notes.prepare_folder_inputs(inputs),
          :ok <- spend_create_budget(user),
          {:ok, %{folders: entries}} = ok <- Notes.create_folder_markers(user, vault, inputs) do
-      broadcast_created(user, vault, entries)
+      broadcast_created(user, vault, entries, opts[:origin_device_id])
       ok
     else
       {:ok, [], rejected} -> {:ok, %{folders: [], rejected: rejected}}
@@ -184,7 +188,7 @@ defmodule Engram.Folders do
   # `markers` carries each row's id so the web app can patch its tree instead
   # of re-fetching the vault; `folder` is kept for a single create, the shape
   # POST /folders and MCP always sent.
-  defp broadcast_created(user, vault, entries) do
+  defp broadcast_created(user, vault, entries, device_id) do
     case for %{created: true, name: n, id: id} <- entries, uniq: true, do: %{id: id, name: n} do
       [] ->
         :ok
@@ -194,11 +198,21 @@ defmodule Engram.Folders do
         payload = %{op: "create", folders: names, markers: created}
         payload = if match?([_], names), do: Map.put(payload, :folder, hd(names)), else: payload
         Broadcast.emit("sync:#{user.id}:#{vault.id}", "folders.batch", payload)
+        _ = Wire.changed(user, vault, names, device_id)
+        :ok
     end
   end
 
-  @spec rename(map(), map(), String.t(), String.t()) :: {:ok, counts()} | {:error, term()}
-  def rename(user, vault, old_folder, new_folder) do
+  @doc """
+  Renames or moves `old_folder` to `new_folder`, notes and attachments in one
+  transaction. The counts carry `seq:`, the op's seq, when the folder-op wire
+  is on (`Engram.Folders.Wire.changed/4`), else nil. `origin_device_id:`
+  names the device that asked, for its `folder_changed` echo.
+  """
+  @spec rename(map(), map(), String.t(), String.t(), keyword()) ::
+          {:ok, %{notes: non_neg_integer(), attachments: non_neg_integer(), seq: integer() | nil}}
+          | {:error, term()}
+  def rename(user, vault, old_folder, new_folder, opts \\ []) do
     # Sanitize the target once here: it is the only entry for REST and MCP
     # folder renames, and both legs below would otherwise write it verbatim.
     #
@@ -214,7 +228,8 @@ defmodule Engram.Folders do
       atomic(vault, fn ->
         with {:ok, notes} <- Notes.rename_folder(user, vault, old_folder, new_folder),
              {:ok, atts} <- Attachments.move_folder_pairs(user, vault, att_pairs) do
-          {:ok, %{notes: notes, attachments: atts}}
+          seq = Wire.changed(user, vault, [new_folder], opts[:origin_device_id])
+          {:ok, %{notes: notes, attachments: atts, seq: seq}}
         end
       end)
     end
@@ -457,7 +472,7 @@ defmodule Engram.Folders do
     |> Enum.reduce_while({:ok, 0}, fn chunk, {:ok, n} ->
       case Notes.create_folder_markers(user, vault, chunk) do
         {:ok, %{folders: entries}} ->
-          broadcast_created(user, vault, entries)
+          broadcast_created(user, vault, entries, nil)
           {:cont, {:ok, n + Enum.count(entries, & &1.created)}}
 
         {:error, _} = err ->
@@ -479,6 +494,7 @@ defmodule Engram.Folders do
         with {:ok, %{moved: notes, pairs: pairs}} <-
                Notes.batch_move_folders(user, vault, marker_ids, target),
              {:ok, atts} <- rename_attachments_for(user, vault, metas, pairs) do
+          _ = Wire.changed(user, vault, Enum.map(pairs, &elem(&1, 1)), nil)
           {:ok, %{notes: notes, attachments: atts}}
         end
       end)
