@@ -40,10 +40,9 @@ defmodule Engram.Rebuild do
 
   ## Other writers while `on` (Task 16.4)
 
-  A DEK rotation (`RotateUserDek`) and a bulk repath (a folder rename moving
-  over 100 notes) are held (`hold/1`) and write nothing until the switch
-  leaves `on` (`holding?/0`, a budget halt still holds); a single-note
-  rename still repaths. The recap cron (`IndexCapMaintenance`)
+  A DEK rotation (`RotateUserDek`) is held (`hold/1`) and writes nothing
+  until the switch leaves `on` (`holding?/0`, a budget halt still holds).
+  A rename makes no Qdrant write at all (R3a). The recap cron (`IndexCapMaintenance`)
   is already a no-op.
 
   ## Pacing (Task 16.2)

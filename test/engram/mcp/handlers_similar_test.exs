@@ -14,7 +14,7 @@ defmodule Engram.MCP.HandlersSimilarTest do
     bypass = Bypass.open()
     Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
-    # Search reads the collection info for its `n` index (`Qdrant.n_indexed?/0`).
+    # Search reads the collection info for its `n` index (`Qdrant.n_filterable?/1`).
     Engram.QdrantStub.stub_healthy(bypass)
 
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
@@ -330,18 +330,19 @@ defmodule Engram.MCP.HandlersSimilarTest do
     assert Enum.map(results, & &1["source_path"]) == ["O.md"]
   end
 
-  test "folder, tags, and limit reach the Qdrant request", %{bypass: bypass, user: u, vault: v} do
+  # R3a: folder and tags resolve in Postgres, never as a payload condition.
+  # No `n` index here, so the tenant is searched oversampled and post-filtered.
+  test "folder, tags, and limit shape the Qdrant request", %{bypass: bypass, user: u, vault: v} do
     dense_points(bypass, note_with_points(u, v, "S.md", 1, true))
 
     Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       json = Jason.decode!(body)
       # Grouped (group_by_note: true) always over-fetches the candidate pool
-      # (max(limit * 4, profile default 20)); limit=6 -> 24.
-      assert json["limit"] == 24
+      # (max(limit * 4, profile default 20)); limit=6 -> 24, at 16x -> 384.
+      assert json["limit"] == 24 * 16
       must = legacy_view(json["filter"]["must"])
-      assert Enum.any?(must, &(&1["key"] == "folder_hmac"))
-      assert Enum.any?(must, &(&1["key"] == "tags_hmac"))
+      refute Enum.any?(must, &(&1["key"] in ["folder_hmac", "tags_hmac", "f", "g"]))
       respond(conn, [])
     end)
 

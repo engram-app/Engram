@@ -116,8 +116,7 @@ defmodule Engram.Folders do
   pass it up as a refusal (`Search.input_error_message/1` has its text and
   `SearchController` renders it as 422), never as an empty result: the caller
   narrows the folder. There is no Qdrant-side path-prefix scan to fall back to
-  (the path is an encrypted blind index). Only meaningful once the payload
-  sweep has rewritten `f` to row ids (`docs/context/payload-v6.md`).
+  (the path is an encrypted blind index).
   """
   @spec descendant_ids(map(), Ecto.UUID.t(), pos_integer()) ::
           {:ok, [Ecto.UUID.t()]} | {:error, :folder_subtree_too_large | term()}
@@ -126,15 +125,6 @@ defmodule Engram.Folders do
            Repo.with_tenant(user_id, fn -> Rows.descendant_ids(vault_id, root_id, cap + 1) end) do
       if length(ids) > cap, do: {:error, :folder_subtree_too_large}, else: {:ok, ids}
     end
-  end
-
-  @doc "The Qdrant condition for a folder and its whole subtree (`descendant_ids/2`)."
-  @spec subtree_filter(map(), Ecto.UUID.t()) ::
-          {:ok, Qdrant.key_condition() | %{should: [Qdrant.key_condition()]}}
-          | {:error, :folder_subtree_too_large | term()}
-  def subtree_filter(vault, root_id) do
-    with {:ok, ids} <- descendant_ids(vault, root_id),
-         do: {:ok, Qdrant.match_filter(:folder, ids)}
   end
 
   @doc """

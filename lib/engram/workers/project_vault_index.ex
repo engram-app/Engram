@@ -46,7 +46,7 @@ defmodule Engram.Workers.ProjectVaultIndex do
 
   `CrdtIndexPersistence.unbind/3` runs inside `terminate/2` against a shutdown
   budget. A projection pass is N renames, and `Notes.rename_note/4` re-encrypts
-  the path, rewrites `path_hmac`, repaths Qdrant points and enqueues link
+  the path, rewrites `path_hmac` and enqueues link
   rewrites. Doing that in a terminating process during a deploy stampede loses
   the checkpoint AND the projection.
 

@@ -48,17 +48,6 @@ defmodule Engram.Vector.QdrantWaitTest do
     assert_wait("/collections/#{@col}/points/vectors")
   end
 
-  test "set_payload and set_payload_by_filter wait", %{bypass: bypass} do
-    path = "/collections/#{@col}/points/payload"
-    capture(bypass, "POST", path)
-    assert :ok = Qdrant.set_payload(@col, ["p1"], %{"a" => 1})
-    assert_wait(path)
-
-    capture(bypass, "POST", path)
-    assert :ok = Qdrant.set_payload_by_filter(@col, @user, @vault, "hmac", %{"a" => 1})
-    assert_wait(path)
-  end
-
   test "delete_payload_keys waits", %{bypass: bypass} do
     capture(bypass, "POST", "/collections/#{@col}/points/payload/delete")
     assert :ok = Qdrant.delete_payload_keys(@col, ["text"])
@@ -70,7 +59,7 @@ defmodule Engram.Vector.QdrantWaitTest do
 
     for delete <- [
           fn -> Qdrant.delete_points(@col, ["p1"]) end,
-          fn -> Qdrant.delete_by_note(@col, @user, @vault, "hmac") end,
+          fn -> Qdrant.delete_by_note(@col, @user, @vault, Ecto.UUID.generate(), "hmac") end,
           fn -> Qdrant.delete_by_vault(@col, @user, @vault) end,
           fn -> Qdrant.delete_by_user(@col, @user) end
         ] do
@@ -132,12 +121,10 @@ defmodule Engram.Vector.QdrantWaitTest do
        fn -> Qdrant.upsert_points(@col, [%{id: "p1", vector: [0.1], payload: %{}}]) end},
       {"PUT", "/points/vectors",
        fn -> Qdrant.update_vectors(@col, [%{id: "p1", vector: %{}}]) end},
-      {"POST", "/points/payload", fn -> Qdrant.set_payload(@col, ["p1"], %{"a" => 1}) end},
-      {"POST", "/points/payload",
-       fn -> Qdrant.set_payload_by_filter(@col, @user, @vault, "h", %{"a" => 1}) end},
       {"POST", "/points/payload/delete", fn -> Qdrant.delete_payload_keys(@col, ["k"]) end},
       {"POST", "/points/delete", fn -> Qdrant.delete_points(@col, ["p1"]) end},
-      {"POST", "/points/delete", fn -> Qdrant.delete_by_note(@col, @user, @vault, "h") end},
+      {"POST", "/points/delete",
+       fn -> Qdrant.delete_by_note(@col, @user, @vault, Ecto.UUID.generate(), "h") end},
       {"POST", "/points/delete", fn -> Qdrant.delete_by_user(@col, @user) end},
       {"POST", "/points/delete", fn -> Qdrant.delete_by_vault(@col, @user, @vault) end}
     ]

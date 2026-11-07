@@ -1,18 +1,7 @@
 defmodule Engram.PromEx.Indexing do
   @moduledoc """
-  PromEx plugin for index-maintenance telemetry — currently the rename repath
-  worker (`Engram.Workers.RepathNoteIndex`, #746/#753).
-
-  Subscribes to:
-
-    * `[:engram, :indexing, :repath, :stop]` — `%{count}`, metadata
-      `%{outcome: :ok | :missing_points | :fallback}`:
-        - `:ok`             — points PATCHed in place (the cheap, 0-Voyage path);
-          `count` is the number of points repathed.
-        - `:missing_points` — embedded note had zero points under the old path
-          (benign on rapid multi-rename; a real inconsistency otherwise).
-        - `:fallback`       — repath exhausted retries and fell back to a full
-          re-embed; `count` is 1 (an event tick).
+  PromEx plugin for index-maintenance telemetry. The rename repath metrics
+  went with the repath (R3a: a rename makes no Qdrant write).
 
   Metrics:
 
@@ -33,12 +22,6 @@ defmodule Engram.PromEx.Indexing do
       minute), `disk` (Qdrant volume over `:rebuild_max_disk_percent`),
       `queue` (update queue over 100), `optimizer` (not green or points
       awaiting optimization) or `unavailable` (collection info unreadable).
-    * `engram_prom_ex_indexing_repath_total` — counter of repath events by
-      `:outcome`. Alert on `:fallback` / `:missing_points` rate; the `:ok` rate
-      is the "renames took the cheap path" signal.
-    * `engram_prom_ex_indexing_repath_points_total` — sum of `count` by
-      `:outcome`. For `:ok` this is total points repathed = the zero-Voyage
-      volume saved.
     * `engram_prom_ex_indexing_link_rewrite_failures_total` — counter of
       per-source-note link-rewrite failures from `RewriteNoteLinks`
       (rename propagation, #648/#1231), tagged by `:reason`.
@@ -60,8 +43,10 @@ defmodule Engram.PromEx.Indexing do
       dropped; canvas and base are labelled from the note path.
 
     * `engram_prom_ex_indexing_chunks_total`: chunks per committed pass, tagged
-      by `:outcome` (`embedded | reused`); the reuse ratio is
-      `reused / (embedded + reused)`.
+      by `:outcome` (`embedded | reused | legacy`); the reuse ratio is
+      `(reused + legacy) / (embedded + reused + legacy)`. `legacy`: reused
+      only by its pre-R3c inputs (`Indexing.legacy_reuse/6`); the R3c
+      contract deletes that candidate once it reads 0 for 30 days.
     * `engram_prom_ex_indexing_frontmatter_keys_skipped_total`: new
       user-added frontmatter keys left out of the payload and `note_attrs`
       because the user is at the per-user key cap (`FrontmatterKeys.cap/0`).
@@ -74,13 +59,12 @@ defmodule Engram.PromEx.Indexing do
       refused to write, tagged by `:reason` (`rotation | note_deleted`). A
       sustained rate means the cache is not saving the retries it exists for.
     * `engram_prom_ex_indexing_payload_reconcile_total`: notes handled by
-      `ReconcileNotePayloads`, tagged by `:outcome` (`checked | drifted |
-      rewritten | skipped_v5`; `n_points`: POINTS the `n` backfill wrote;
-      `legacy_v3`: notes it left unstamped for their legacy v3 points, with
-      those points in `legacy_v3_points`. Re-counted every lap until the
-      notes are re-indexed, and they hold the `note_payload_stamps` ledger
-      open). `rewritten / checked` is how much of the
-      collection the heal is rewriting; expected near zero outside a rotation.
+      `ReconcileNotePayloads`, tagged by `:outcome` (`checked`: notes the
+      heal stamped or the `n` backfill checked; `n_points`: POINTS the `n`
+      backfill wrote; `legacy_v3`: notes with legacy v3 points, with those
+      points in `legacy_v3_points`; the backfill merges the identity
+      `u v n` onto them and stamps the note, so each is counted once). The
+      heal rewrites no point (R3a).
     * `engram_prom_ex_indexing_payload_reconcile_cancelled_total`: reconcile
       jobs cancelled on a 4xx Qdrant refusal, tagged by `:http_status`
       (100..599, bounded). Any increase means a request Qdrant refuses on
@@ -101,7 +85,6 @@ defmodule Engram.PromEx.Indexing do
 
   require Logger
 
-  @repath_stop_event [:engram, :indexing, :repath, :stop]
   @link_rewrite_failed_event [:engram, :links, :rewrite, :failed]
   @stale_points_leaked_event [:engram, :indexing, :stale_points_leaked]
   @rebuild_halted_event [:engram, :rebuild, :halted]
@@ -194,20 +177,6 @@ defmodule Engram.PromEx.Indexing do
           tags: [:reason, :missed]
         ),
         counter(
-          metric_prefix ++ [:repath, :total],
-          event_name: @repath_stop_event,
-          description: "Rename repath outcomes from the RepathNoteIndex worker.",
-          tags: [:outcome]
-        ),
-        sum(
-          metric_prefix ++ [:repath, :points, :total],
-          event_name: @repath_stop_event,
-          measurement: :count,
-          description:
-            "Qdrant points repathed in place by outcome (0-Voyage volume saved on :ok).",
-          tags: [:outcome]
-        ),
-        counter(
           metric_prefix ++ [:link_rewrite, :failures, :total],
           event_name: @link_rewrite_failed_event,
           description:
@@ -247,7 +216,7 @@ defmodule Engram.PromEx.Indexing do
           event_name: @chunks_event,
           measurement: :count,
           description:
-            "Chunks a committed indexing pass wrote, by outcome: embedded (new point) or reused (kept in place). reused / (embedded + reused) is the reuse ratio.",
+            "Chunks a committed indexing pass wrote, by outcome: embedded (new point), reused (kept in place), or legacy (kept, matched by its pre-R3c inputs). (reused + legacy) / all is the reuse ratio.",
           tags: [:outcome]
         ),
         sum(
@@ -323,8 +292,8 @@ defmodule Engram.PromEx.Indexing do
           event_name: @payload_reconcile_event,
           measurement: :count,
           description:
-            "Notes handled by ReconcileNotePayloads, by outcome (checked, drifted, " <>
-              "rewritten, skipped_v5, legacy_v3); n_points counts points given n, " <>
+            "Notes handled by ReconcileNotePayloads, by outcome (checked, legacy_v3); " <>
+              "n_points counts points given n, " <>
               "legacy_v3_points the v3 points of legacy_v3 notes.",
           tags: [:outcome]
         ),

@@ -9,15 +9,15 @@ Phase B.4: toggle helpers (`wait_for_encryption_status`, `backdate_*`,
 plaintext-path probes (`_fetch_note_row`, `_fetch_attachment_row`,
 `assert_note_ciphertext_at_rest`, `assert_attachment_ciphertext_at_rest`)
 were retired with the encryption toggle. The Qdrant probes match the
-v5 payload (`v5_path_id/1`, `v5_uuid/1`); a v5 point carries no text, so the
-payload-ciphertext probe went with the legacy writer. To restore plaintext-path → row probes, add a release rpc
+point payload, which is only the note's identity (`u`, `v`, `n`, R3a; ids
+as `v5_uuid/1`): a point carries no text and no path, so a note's points
+are found by its note id (`note_id_for/2`). To restore plaintext-path → row probes, add a release rpc
 that translates the path under the user's filter_key and fetches by
 path_hmac.
 """
 
 from __future__ import annotations
 
-import base64
 import logging
 import os
 import re
@@ -57,16 +57,7 @@ def latest_note_path_hmac(vault_id: str) -> str:
         f"WHERE vault_id = '{vault_id}' AND kind = 'note' "
         "ORDER BY created_at DESC, id DESC LIMIT 1;"
     )
-    result = subprocess.run(
-        ["docker", "exec", "-i", CI_POSTGRES_CONTAINER,
-         "psql", "-U", "engram", "-d", "engram", "-tA", "-c", sql],
-        capture_output=True, text=True, timeout=10,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"latest_note_path_hmac({vault_id}) failed: {result.stderr.strip()}"
-        )
-    val = result.stdout.strip()
+    val = _psql_one(sql, f"latest_note_path_hmac({vault_id})")
     if not val:
         raise RuntimeError(
             f"latest_note_path_hmac({vault_id}): no note row found in vault"
@@ -74,14 +65,8 @@ def latest_note_path_hmac(vault_id: str) -> str:
     return val
 
 
-def v5_path_id(path_hmac_b64: str) -> str:
-    """The v5 payload's path id (`p`) for a base64 path HMAC: its first 128
-    bits as 32 lowercase hex digits (`Engram.Vector.FilterId.from_hmac/1`)."""
-    return base64.b64decode(path_hmac_b64)[:16].hex()
-
-
 def v5_uuid(id_: str) -> str:
-    """A user or vault id as the v5 payload stores it (`FilterId.uuid/1`)."""
+    """A user, vault or note id as the payload stores it (`FilterId.uuid/1`)."""
     return str(id_).replace("-", "")
 
 
@@ -90,27 +75,93 @@ _ALIVE_STATES = {"available", "scheduled", "executing", "retryable"}
 _DEAD_STATES = {"discarded", "cancelled"}
 
 
+def note_id_for(vault_id: str, path_hmac_b64: str) -> str | None:
+    """The id of the live note at `path_hmac_b64` in `vault_id`, or None."""
+    if not _UUID_RE.match(vault_id):
+        raise ValueError(f"Unsafe vault_id rejected: {vault_id!r}")
+    if not _B64_RE.fullmatch(path_hmac_b64):
+        raise ValueError(f"Unsafe path_hmac rejected: {path_hmac_b64!r}")
+
+    sql = (
+        "SELECT id FROM notes "
+        f"WHERE vault_id = '{vault_id}' "
+        f"AND path_hmac = decode('{path_hmac_b64}', 'base64') "
+        "AND kind = 'note' AND deleted_at IS NULL LIMIT 1;"
+    )
+    return _psql_one(sql, f"note_id_for({vault_id})") or None
+
+
+def _psql_one(sql: str, what: str) -> str:
+    result = subprocess.run(
+        ["docker", "exec", "-i", CI_POSTGRES_CONTAINER,
+         "psql", "-U", "engram", "-d", "engram", "-tA", "-c", sql],
+        capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"{what} failed: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def db_now() -> str:
+    """The database's clock (ISO text), so a later `inserted_at >=` compare
+    is free of host clock skew."""
+    return _psql_one("SELECT now()::text;", "db_now")
+
+
+_INDEX_WORKERS = (
+    "Engram.Workers.EmbedNote",
+    "Engram.Workers.RepathNoteIndex",
+    "Engram.Workers.RefreshKeywordVectors",
+)
+
+
+def index_jobs_since(note_id: str, since: str) -> list[str]:
+    """Workers of the index jobs (embed, repath, keyword refresh) inserted
+    for `note_id` at or after `since` (a `db_now/0` value). A Qdrant write
+    for a note goes through one of them; point ids cannot show one, since
+    they are deterministic (`Engram.Indexing.PointId`)."""
+    if not _UUID_RE.match(note_id):
+        raise ValueError(f"Unsafe note_id rejected: {note_id!r}")
+    if not re.fullmatch(r"[0-9: .+-]+", since):
+        raise ValueError(f"Unsafe timestamp rejected: {since!r}")
+
+    workers = ", ".join(f"'{w}'" for w in _INDEX_WORKERS)
+    out = _psql_one(
+        "SELECT worker FROM oban_jobs "
+        f"WHERE args->>'note_id' = '{note_id}' AND inserted_at >= '{since}' "
+        f"AND worker IN ({workers}) ORDER BY id;",
+        f"index_jobs_since({note_id})",
+    )
+    return out.splitlines()
+
+
+def qdrant_point_ids(vault_id: str, note_id: str) -> list[str]:
+    """Sorted ids of the note's Qdrant points (matched on `v` + `n`)."""
+    resp = requests.post(
+        f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/scroll",
+        json={
+            "filter": {
+                "must": [
+                    {"key": "v", "match": {"value": v5_uuid(vault_id)}},
+                    {"key": "n", "match": {"value": v5_uuid(note_id)}},
+                ]
+            },
+            "limit": 1000,
+            "with_payload": False,
+            "with_vector": False,
+        },
+        timeout=5,
+    )
+    resp.raise_for_status()
+    return sorted(str(p["id"]) for p in resp.json()["result"]["points"])
+
+
 def _qdrant_has_point(vault_id: str, path_hmac_b64: str) -> bool:
     try:
-        resp = requests.post(
-            f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/scroll",
-            json={
-                # Every point is written in the v5 layout: short keys, ids
-                # as 32 hex digits.
-                "filter": {
-                    "must": [
-                        {"key": "v", "match": {"value": v5_uuid(vault_id)}},
-                        {"key": "p", "match": {"value": v5_path_id(path_hmac_b64)}},
-                    ]
-                },
-                "limit": 1,
-                "with_payload": False,
-                "with_vector": False,
-            },
-            timeout=5,
-        )
-        return bool(resp.ok and resp.json()["result"]["points"])
-    except (requests.ConnectionError, requests.Timeout, KeyError):
+        note_id = note_id_for(vault_id, path_hmac_b64)
+        return note_id is not None and bool(qdrant_point_ids(vault_id, note_id))
+    # A poll: a transient psql or Qdrant failure is a "not yet", retried.
+    except (requests.RequestException, KeyError, RuntimeError, subprocess.TimeoutExpired):
         return False
 
 

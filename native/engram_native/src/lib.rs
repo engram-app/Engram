@@ -467,10 +467,19 @@ fn chunk<'a>(
     title: &str,
     aliases: Vec<String>,
     lead: Option<String>,
+    legacy: bool,
 ) -> (Vec<Term<'a>>, usize) {
     memory::measured(|| {
         let mut out = Terms::new(env);
-        chunker::each_chunk(content, folder, title, &aliases, lead.as_deref(), &mut out);
+        chunker::each_chunk(
+            content,
+            folder,
+            title,
+            &aliases,
+            lead.as_deref(),
+            legacy,
+            &mut out,
+        );
         out.out
     })
 }
@@ -515,7 +524,7 @@ impl rustler::Resource for ChunkJob {}
 /// Segments per `chunk_step_nif` call.
 const STEP_SEGMENTS: usize = 1;
 
-/// `{job, peak}` for `chunk/5`'s arguments. Dirty: it copies the body.
+/// `{job, peak}` for `chunk/6`'s arguments. Dirty: it copies the body.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn chunk_job_nif(
     content: &str,
@@ -523,9 +532,10 @@ fn chunk_job_nif(
     title: &str,
     aliases: Vec<String>,
     lead: Option<String>,
+    legacy: bool,
 ) -> (ResourceArc<ChunkJob>, usize) {
     memory::measured(|| {
-        let job = chunker::Job::new(content, folder, title, &aliases, lead.as_deref());
+        let job = chunker::Job::new(content, folder, title, &aliases, lead.as_deref(), legacy);
         ResourceArc::new(ChunkJob(std::sync::Mutex::new(job.into_owned())))
     })
 }
@@ -550,7 +560,7 @@ fn chunk_step_nif<'a>(env: Env<'a>, job: ResourceArc<ChunkJob>) -> NifResult<(St
     Ok(((done, terms.cleared, terms.out), peak))
 }
 
-sized_nif!(chunk, chunk_nif, chunk_dirty_nif, <'a>(env, content: &str, folder: &str, title: &str, aliases: Vec<String>, lead: Option<String>) [content, folder, title, aliases, lead] -> (Vec<Term<'a>>, usize));
+sized_nif!(chunk, chunk_nif, chunk_dirty_nif, <'a>(env, content: &str, folder: &str, title: &str, aliases: Vec<String>, lead: Option<String>, legacy: bool) [content, folder, title, aliases, lead, legacy] -> (Vec<Term<'a>>, usize));
 
 /// `Frontmatter.split/1` as offsets: nil, or {block_start, block_end,
 /// body_start, add_newline}, with the native peak. Takes raw bytes: invalid
