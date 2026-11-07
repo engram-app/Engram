@@ -231,7 +231,7 @@ defmodule Engram.Workers.CleanupVaultTest do
 
       assert :ok = CleanupVault.perform_cleanup(vault.id, user.id)
 
-      refute Repo.get(Note, note.id, skip_tenant_check: true)
+      refute Engram.Fixtures.raw_note(note.id)
       refute Repo.get(Attachment, attachment.id, skip_tenant_check: true)
       refute Repo.get(Vault, vault.id, skip_tenant_check: true)
     end
@@ -547,7 +547,7 @@ defmodule Engram.Workers.CleanupVaultTest do
       assert log =~ "Qdrant delete failed"
 
       # DB cleanup still happened despite Qdrant error
-      refute Repo.get(Note, note.id, skip_tenant_check: true)
+      refute Engram.Fixtures.raw_note(note.id)
       refute Repo.get(Vault, vault.id, skip_tenant_check: true)
     end
 
@@ -565,7 +565,7 @@ defmodule Engram.Workers.CleanupVaultTest do
 
       assert log =~ "owner mismatch"
       # Tenant data untouched.
-      assert Repo.get(Note, note.id, skip_tenant_check: true)
+      assert Engram.Fixtures.raw_note(note.id)
       assert Repo.get(Vault, vault.id, skip_tenant_check: true)
     end
   end
@@ -625,7 +625,7 @@ defmodule Engram.Workers.CleanupVaultTest do
       assert log =~ "storage delete raised"
 
       # DB cleanup completed successfully
-      refute Repo.get(Note, note.id, skip_tenant_check: true)
+      refute Engram.Fixtures.raw_note(note.id)
       refute Repo.get(Attachment, attachment.id, skip_tenant_check: true)
       refute Repo.get(Vault, vault.id, skip_tenant_check: true)
     end

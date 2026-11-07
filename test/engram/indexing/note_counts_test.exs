@@ -54,7 +54,7 @@ defmodule Engram.Indexing.NoteCountsTest do
 
     {:ok, note} =
       note
-      |> Repo.reload!(skip_tenant_check: true)
+      |> Engram.Fixtures.raw_note!()
       |> Engram.Crypto.maybe_decrypt_note_fields(user)
 
     {:ok, _} = Indexing.index_note(note, vault)
@@ -148,7 +148,7 @@ defmodule Engram.Indexing.NoteCountsTest do
     assert drifted() == 0
 
     # The purge of a note's index.
-    :ok = Indexing.delete_note_index(Repo.reload!(a, skip_tenant_check: true))
+    :ok = Indexing.delete_note_index(Engram.Fixtures.raw_note!(a))
     assert drifted() == 0
 
     # The FK cascade takes the row with it.

@@ -31,7 +31,7 @@ defmodule Engram.Workers.HealKeyAliasesTest do
     note
   end
 
-  defp row(note), do: Repo.get!(Note, note.id, skip_tenant_check: true)
+  defp row(note), do: Engram.Fixtures.raw_note!(note.id)
 
   test "a bump heals an affected note and leaves an unaffected note untouched", ctx do
     # `種類` was not an alias under the old table, so the row has no type.

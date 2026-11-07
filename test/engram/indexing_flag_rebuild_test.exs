@@ -40,7 +40,7 @@ defmodule Engram.IndexingFlagRebuildTest do
 
     assert is_nil(Repo.get!(Chunk, chunk.id, skip_tenant_check: true).context_hmac)
 
-    reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
+    reloaded = Engram.Fixtures.raw_note!(note.id)
     assert is_nil(reloaded.embed_hash)
     # The marker EmbedNote reads to run this rebuild unmetered.
     assert reloaded.dense_indexed_hash == "same"

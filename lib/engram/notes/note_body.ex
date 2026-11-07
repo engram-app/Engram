@@ -345,7 +345,9 @@ defmodule Engram.Notes.NoteBody do
   """
   @spec select_note(Ecto.Queryable.t(), [atom()]) :: Ecto.Query.t()
   def select_note(query, fields \\ note_fields()) do
-    query = from(n in query, select: struct(n, ^(fields -- @body)))
+    # A struct select needs one field of its own: a body-only list keeps the id.
+    core = with [] <- fields -- @body, do: [:id]
+    query = from(n in query, select: struct(n, ^core))
 
     case Enum.filter(@body, &(&1 in fields)) do
       [] -> query
@@ -607,7 +609,8 @@ defmodule Engram.Notes.NoteBody do
   @doc """
   True when the note's CRDT state is NULL as every read sees it: from its
   body row, else (no body row, or one owned by another user, as `join/1`
-  treats it) from `notes`. For a predicate on a query whose first binding
+  treats it) from `notes.crdt_state_nonce`, which every release writes and
+  clears with the state. For a predicate on a query whose first binding
   is a `Note`. The body row is read by a per-row primary-key subquery, not
   a join. NULL-ness only: nothing is de-TOASTed. Not for a write fence in a
   `notes` UPDATE: after a row-lock wait the subquery still sees the
@@ -621,7 +624,7 @@ defmodule Engram.Notes.NoteBody do
         "coalesce((SELECT b.crdt_ct IS NULL FROM note_bodies AS b WHERE b.note_id = ? AND b.user_id = ?), ? IS NULL)",
         n.id,
         n.user_id,
-        ^pre_split(:crdt_state_ciphertext)
+        n.crdt_state_nonce
       )
     )
   end

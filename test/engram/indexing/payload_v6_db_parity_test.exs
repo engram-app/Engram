@@ -91,7 +91,7 @@ defmodule Engram.Indexing.PayloadV6DbParityTest do
         skip_tenant_check: true
       )
 
-    {Repo.get!(Note, note.id, skip_tenant_check: true), user}
+    {Engram.Fixtures.raw_note!(note.id), user}
   end
 
   defp rows(note),
@@ -174,7 +174,7 @@ defmodule Engram.Indexing.PayloadV6DbParityTest do
         actor: "api"
       )
 
-    edited = Repo.get!(Note, edited.id, skip_tenant_check: true)
+    edited = Engram.Fixtures.raw_note!(edited.id)
     refute PayloadV6.fresh?(edited)
     {:ok, plain} = Crypto.maybe_decrypt_note_fields(edited, user)
     flat = flat_for(plain, user)

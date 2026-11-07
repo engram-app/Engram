@@ -107,7 +107,7 @@ defmodule Engram.NotesResurrectReindexTest do
     assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
     assert chunk_count(note) > 0
-    reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
+    reloaded = Engram.Fixtures.raw_note!(note.id)
     assert reloaded.embed_hash == reloaded.content_hash
   end
 

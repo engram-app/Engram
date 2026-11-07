@@ -100,7 +100,7 @@ defmodule Engram.Crypto.AadRebindRlsTest do
     note =
       %Note{}
       |> Ecto.Changeset.cast(fields, Map.keys(fields))
-      |> Repo.insert!(skip_tenant_check: true)
+      |> Engram.Fixtures.insert_note_row!()
 
     # Guard the fixture itself: if this ever lands v2, every assertion below
     # would pass for the wrong reason.
@@ -135,7 +135,7 @@ defmodule Engram.Crypto.AadRebindRlsTest do
       # and the user is reported `:skipped` with legacy rows still in place.
       assert result == :ok
 
-      reloaded = Repo.get!(Note, note_id, skip_tenant_check: true)
+      reloaded = Engram.Fixtures.raw_note!(note_id)
       assert reloaded.dek_version == Crypto.row_version_aad_bound()
     end
   end

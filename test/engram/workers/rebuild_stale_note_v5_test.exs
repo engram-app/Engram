@@ -160,7 +160,7 @@ defmodule Engram.Workers.RebuildStaleNoteV5Test do
     assert :ok = rebuild(first)
     assert {:snooze, 30} = rebuild(second)
 
-    assert Repo.with_tenant!(user.id, fn -> Repo.get!(Note, second.id) end).chunker_version ==
+    assert Repo.with_tenant!(user.id, fn -> Engram.Fixtures.raw_note!(second.id) end).chunker_version ==
              elem(@pins, 0)
   end
 
@@ -217,7 +217,10 @@ defmodule Engram.Workers.RebuildStaleNoteV5Test do
     end
 
     defp chunker(note),
-      do: Repo.with_tenant!(note.user_id, fn -> Repo.get!(Note, note.id).chunker_version end)
+      do:
+        Repo.with_tenant!(note.user_id, fn ->
+          Engram.Fixtures.raw_note!(note.id).chunker_version
+        end)
 
     test "the next sweep re-queues the halted notes", %{user: user, vault: vault} do
       done = stale_note!(user, vault, "A.md")
@@ -271,7 +274,7 @@ defmodule Engram.Workers.RebuildStaleNoteV5Test do
       assert :ok = rebuild(parked)
 
       retry_after = fn note ->
-        Repo.with_tenant!(user.id, fn -> Repo.get!(Note, note.id).embed_retry_after end)
+        Repo.with_tenant!(user.id, fn -> Engram.Fixtures.raw_note!(note.id).embed_retry_after end)
       end
 
       assert DateTime.compare(retry_after.(poisoned), DateTime.utc_now()) == :gt

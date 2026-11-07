@@ -27,12 +27,11 @@ defmodule Engram.DataMigrations.CrdtStateSeedTest do
   defp null_state!(user, note) do
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.update_all(from(n in Note, where: n.id == ^note.id),
-          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        Engram.Fixtures.write_note_body!(note.id,
+          crdt_state_ciphertext: nil,
+          crdt_state_nonce: nil
         )
       end)
-
-    Engram.Fixtures.mirror_body!(note.id)
   end
 
   test "registered with the runner" do

@@ -23,7 +23,9 @@ defmodule Engram.NotesSeqTest do
   defp all_rows(user, vault) do
     {:ok, rows} =
       Engram.Repo.with_tenant(user.id, fn ->
-        Engram.Repo.all(from(n in Engram.Notes.Note, where: n.vault_id == ^vault.id))
+        Engram.from(n in Engram.Notes.Note, where: n.vault_id == ^vault.id)
+        |> Engram.Notes.NoteBody.select_note()
+        |> Repo.all()
       end)
 
     rows
@@ -67,7 +69,7 @@ defmodule Engram.NotesSeqTest do
 
     {:ok, row} =
       Engram.Repo.with_tenant(user.id, fn ->
-        Engram.Repo.get(Engram.Notes.Note, n.id)
+        Engram.Fixtures.raw_note(n.id)
       end)
 
     assert row.deleted_at != nil

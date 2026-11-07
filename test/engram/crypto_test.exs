@@ -286,7 +286,7 @@ defmodule Engram.CryptoTest do
       note = insert(:note, user: user, vault: vault)
 
       reloaded =
-        Engram.Repo.get!(Engram.Notes.Note, note.id, skip_tenant_check: true)
+        Engram.Fixtures.raw_note!(note.id)
 
       assert reloaded.dek_version == 1
     end

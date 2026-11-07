@@ -149,14 +149,7 @@ defmodule Engram.Notes.EncryptionTest do
       <<first, rest::binary>> = raw.content_ciphertext
       tampered_ct = <<Bitwise.bxor(first, 1), rest::binary>>
 
-      {:ok, _} =
-        Engram.Repo.with_tenant(user.id, fn ->
-          raw
-          |> Ecto.Changeset.change(content_ciphertext: tampered_ct)
-          |> Engram.Repo.update()
-        end)
-
-      Engram.Fixtures.mirror_body!(raw.id)
+      Engram.Fixtures.write_note_body!(raw.id, content_ciphertext: tampered_ct)
 
       # Clear DEK cache to force a fresh unwrap (removes a confounding variable)
       Engram.Crypto.DekCache.invalidate(user.id)

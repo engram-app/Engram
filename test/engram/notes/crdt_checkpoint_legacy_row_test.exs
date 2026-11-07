@@ -46,7 +46,7 @@ defmodule Engram.Notes.CrdtCheckpointLegacyRowTest do
 
     :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
 
-    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get(Note, note.id) end)
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note(note.id) end)
 
     # The row must still be internally consistent: whatever dek_version it
     # claims, every envelope on it must decrypt under that version.
@@ -79,7 +79,7 @@ defmodule Engram.Notes.CrdtCheckpointLegacyRowTest do
 
     :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
 
-    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get(Note, note.id) end)
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note(note.id) end)
 
     assert {:ok, fresh} = Crypto.maybe_decrypt_note_fields(raw, user),
            """
@@ -143,7 +143,7 @@ defmodule Engram.Notes.CrdtCheckpointLegacyRowTest do
       Repo.with_tenant(user.id, fn ->
         %Note{}
         |> Ecto.Changeset.cast(attrs, Map.keys(attrs))
-        |> Repo.insert!()
+        |> Engram.Fixtures.insert_note_row!()
       end)
 
     note

@@ -57,8 +57,7 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
   end
 
   test "the trigger keeps the stored sizes of a write and a soft delete", %{notes: [n | _]} do
-    %{rows: [[ct]]} =
-      Repo.query!("SELECT content_ciphertext FROM notes WHERE id = $1", [Ecto.UUID.dump!(n.id)])
+    ct = Engram.Fixtures.raw_note!(n.id).content_ciphertext
 
     assert [content, _state, _has, true] = sizes(n)
     assert content == byte_size(ct) - 16

@@ -36,21 +36,19 @@ defmodule Engram.Notes.Utf8BackfillTest do
     bad = "# Title\n\nlead" <> <<0xE2>> <> "byte"
     {:ok, enc} = Crypto.encrypt_note_fields(%{content: bad, title: "Title"}, user, note.id)
 
-    {:ok, {1, _}} =
+    {:ok, :ok} =
       Repo.with_tenant(user.id, fn ->
-        from(n in Note, where: n.id == ^note.id)
-        |> Repo.update_all(
-          set: [content_ciphertext: enc.content_ciphertext, content_nonce: enc.content_nonce]
+        Engram.Fixtures.write_note_body!(note.id,
+          content_ciphertext: enc.content_ciphertext,
+          content_nonce: enc.content_nonce
         )
       end)
-
-    Engram.Fixtures.mirror_body!(note.id)
 
     note
   end
 
   defp raw_content(user, note_id) do
-    {:ok, note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note_id) end)
+    {:ok, note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note_id) end)
     {:ok, decrypted} = Crypto.decrypt_note_fields_unscrubbed(note, user)
     decrypted.content
   end
@@ -132,10 +130,12 @@ defmodule Engram.Notes.Utf8BackfillTest do
         Crypto.aad_for_row(:notes, :tags, note.id)
       )
 
-    {:ok, {1, _}} =
+    {:ok, :ok} =
       Repo.with_tenant(user.id, fn ->
-        from(n in Note, where: n.id == ^note.id)
-        |> Repo.update_all(set: [tags_ciphertext: tags_ct, tags_nonce: tags_nonce])
+        Engram.Fixtures.write_note_body!(note.id,
+          tags_ciphertext: tags_ct,
+          tags_nonce: tags_nonce
+        )
       end)
 
     assert %{corrupt: 1} = Utf8Backfill.scan()

@@ -17,7 +17,7 @@ defmodule Engram.Workers.FinalizeRevisionSweepTest do
     {:ok, note} =
       Notes.upsert_note(user, vault, %{"path" => "s.md", "content" => "stranded"}, actor: "api")
 
-    {:ok, existing} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, existing} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
 
     {:ok, :ok} =
       Repo.with_tenant(user.id, fn -> Revisions.record_write(existing, "sync", true) end)

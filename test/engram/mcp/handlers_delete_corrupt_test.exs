@@ -29,15 +29,9 @@ defmodule Engram.MCP.HandlersDeleteCorruptTest do
 
     # Corrupt the ciphertext in place — the row stays live and findable by
     # path, but any decrypt of it raises.
-    {1, _} =
-      Engram.Repo.update_all(
-        Ecto.Query.from(n in Notes.Note, where: n.id == ^note.id),
-        [set: [content_ciphertext: :crypto.strong_rand_bytes(48)]],
-        skip_tenant_check: true
-      )
+    Engram.Fixtures.write_note_body!(note.id, content_ciphertext: :crypto.strong_rand_bytes(48))
 
     # Content is read from `note_bodies`: damage the copy readers see.
-    Engram.Fixtures.mirror_body!(note.id)
 
     assert {:ok, text, structured} =
              Handlers.handle("delete_note", user, vault, %{"path" => "a.md"})

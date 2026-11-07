@@ -907,7 +907,7 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       ids = stale_ids(chunk + 1)
       seed_index(ctx, Enum.with_index(ids, fn id, i -> {"ghost/#{i}.md", id} end))
       bad = note(ctx, "bad.md")
-      original_ct = Repo.get!(Engram.Notes.Note, bad.id, skip_tenant_check: true).path_ciphertext
+      original_ct = Engram.Fixtures.raw_note!(bad.id).path_ciphertext
       last = byte_size(original_ct) - 1
       <<head::binary-size(last), byte>> = original_ct
       set_path_ciphertext!(bad, <<head::binary, Bitwise.bxor(byte, 0xFF)>>)

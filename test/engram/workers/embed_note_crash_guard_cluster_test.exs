@@ -53,7 +53,7 @@ defmodule Engram.Workers.EmbedNoteCrashGuardClusterTest do
 
     # The peer is up: its attempt may still be running, so wait, don't count.
     assert {:snooze, _} = perform_job(EmbedNote, args(note))
-    assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_crashes in [nil, 0]
+    assert Engram.Fixtures.raw_note!(note.id).embed_crashes in [nil, 0]
 
     # Die the way an OOM kill does: the VM halts, nothing cleans up.
     catch_exit(:peer.call(peer_pid, :erlang, :halt, [137]))
@@ -61,7 +61,7 @@ defmodule Engram.Workers.EmbedNoteCrashGuardClusterTest do
 
     assert {:cancel, :isolated_after_node_death} = perform_job(EmbedNote, args(note))
 
-    updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+    updated = Engram.Fixtures.raw_note!(note.id)
     assert updated.embed_crashes == 1
     assert is_nil(updated.embed_started_at)
     assert_enqueued(worker: EmbedNote, queue: :embed_isolated, args: %{note_id: note.id})

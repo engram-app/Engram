@@ -68,7 +68,7 @@ defmodule Engram.Notes.ContentCommitTest do
   defp run_dispatchers, do: Engram.Test.NoteCommittedDispatch.run()
 
   defp checkpoint_text(u, v, note_id, text) do
-    {:ok, raw} = Repo.with_tenant(u.id, fn -> Repo.get!(Note, note_id) end)
+    {:ok, raw} = Repo.with_tenant(u.id, fn -> Engram.Fixtures.raw_note!(note_id) end)
     {:ok, state} = Crypto.decrypt_crdt_state(raw, u)
     {:ok, doc} = CrdtBridge.doc_from_state(state)
     :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), text)

@@ -230,14 +230,7 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     <<first, rest::binary>> = raw.content_ciphertext
     tampered_ct = <<Bitwise.bxor(first, 1), rest::binary>>
 
-    {:ok, _} =
-      Engram.Repo.with_tenant(user.id, fn ->
-        raw
-        |> Ecto.Changeset.change(content_ciphertext: tampered_ct)
-        |> Engram.Repo.update()
-      end)
-
-    Engram.Fixtures.mirror_body!(note.id)
+    Engram.Fixtures.write_note_body!(note.id, content_ciphertext: tampered_ct)
 
     Crypto.DekCache.invalidate(user.id)
 

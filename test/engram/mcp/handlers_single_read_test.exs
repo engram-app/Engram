@@ -291,10 +291,7 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     {:ok, {ct, nonce}} = Engram.Crypto.encrypt_crdt_state(update, user, note.id)
 
     Engram.Repo.with_tenant!(user.id, fn ->
-      Engram.Repo.update_all(
-        from(n in Engram.Notes.Note, where: n.id == ^note.id),
-        set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
-      )
+      Engram.Fixtures.write_note_body!(note.id, crdt_state_ciphertext: nil, crdt_state_nonce: nil)
 
       Engram.Repo.insert_all(Engram.Notes.CrdtUpdateLog, [
         %{
@@ -308,8 +305,6 @@ defmodule Engram.MCP.HandlersSingleReadTest do
         }
       ])
     end)
-
-    Engram.Fixtures.mirror_body!(note.id)
 
     assert count(text_of(user, vault, "a.md"), "TAILEDIT") == 1
 
@@ -839,13 +834,8 @@ defmodule Engram.MCP.HandlersSingleReadConcurrencyTest do
     on_exit(fn -> Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer, prev) end)
 
     Repo.with_tenant!(user.id, fn ->
-      Repo.update_all(
-        from(n in Engram.Notes.Note, where: n.id == ^note.id),
-        set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
-      )
+      Engram.Fixtures.write_note_body!(note.id, crdt_state_ciphertext: nil, crdt_state_nonce: nil)
     end)
-
-    Engram.Fixtures.mirror_body!(note.id)
 
     slow = parked_rmw(user, vault, "c.md", "APPENDED\n")
     assert_receive {:rebuild_parked, parked}, 15_000
@@ -893,13 +883,8 @@ defmodule Engram.MCP.HandlersSingleReadConcurrencyTest do
     on_exit(fn -> Application.put_env(:engram, Engram.Notes.CrdtCheckpointTimer, prev) end)
 
     Repo.with_tenant!(user.id, fn ->
-      Repo.update_all(
-        from(n in Engram.Notes.Note, where: n.id == ^note.id),
-        set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
-      )
+      Engram.Fixtures.write_note_body!(note.id, crdt_state_ciphertext: nil, crdt_state_nonce: nil)
     end)
-
-    Engram.Fixtures.mirror_body!(note.id)
 
     on_exit(CheckpointInterleave.arm(:before_expected_lock))
 

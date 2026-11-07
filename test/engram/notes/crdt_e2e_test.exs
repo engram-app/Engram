@@ -116,7 +116,7 @@ defmodule Engram.Notes.CrdtE2ETest do
     # must return the Note directly (not {:ok, Note}) to avoid double-wrapping.
     {:ok, raw} =
       Repo.with_tenant(user.id, fn ->
-        Repo.get!(Note, note.id)
+        Engram.Fixtures.raw_note!(note.id)
       end)
 
     refute raw.crdt_state_ciphertext == nil,
@@ -223,7 +223,7 @@ defmodule Engram.Notes.CrdtE2ETest do
     # in {:ok, result}, so the inner fn returns the Note directly (not {:ok, Note}).
     {:ok, raw} =
       Repo.with_tenant(user.id, fn ->
-        Repo.get!(Note, note.id)
+        Engram.Fixtures.raw_note!(note.id)
       end)
 
     refute raw.crdt_state_ciphertext == nil

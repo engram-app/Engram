@@ -27,7 +27,7 @@ defmodule Engram.NotesOkfWriteTest do
     {:ok, note} =
       Notes.upsert_note(user, vault, %{"path" => "a/x.md", "content" => @content}, actor: "api")
 
-    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     assert raw.fm_timestamp == ~U[2026-05-28 14:30:00Z]
     assert raw.fm_created == ~U[2026-05-01 00:00:00Z]
     refute is_nil(raw.type_ciphertext)
@@ -45,7 +45,7 @@ defmodule Engram.NotesOkfWriteTest do
     {:ok, note} =
       Notes.upsert_note(user, vault, %{"path" => "b/y.md", "content" => @content}, actor: "api")
 
-    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
 
     {:ok, filter_key} = Crypto.dek_filter_key(user)
     assert raw.type_hmac == Crypto.hmac_field(filter_key, "playbook")
@@ -60,7 +60,7 @@ defmodule Engram.NotesOkfWriteTest do
         actor: "api"
       )
 
-    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     assert is_nil(raw.fm_timestamp)
     assert is_nil(raw.type_ciphertext)
     assert is_nil(raw.type_hmac)

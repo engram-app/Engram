@@ -140,7 +140,7 @@ defmodule Engram.Accounts.LifecycleRlsTest do
 
       # The note is the row whose FK blocks the user delete, so its absence is
       # what proves the cascade actually ran rather than being skipped.
-      refute Repo.get(Engram.Notes.Note, note_id, skip_tenant_check: true)
+      refute Engram.Fixtures.raw_note(note_id)
     end
   end
 end

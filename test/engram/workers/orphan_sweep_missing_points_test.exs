@@ -80,7 +80,7 @@ defmodule Engram.Workers.OrphanSweepMissingPointsTest do
     )
   end
 
-  defp reload(note), do: Repo.get!(Note, note.id, skip_tenant_check: true)
+  defp reload(note), do: Engram.Fixtures.raw_note!(note.id)
 
   test "clears embed_hash when a chunk names a point Qdrant does not have", %{
     bypass: bypass

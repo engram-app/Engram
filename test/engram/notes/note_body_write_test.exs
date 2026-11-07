@@ -865,7 +865,7 @@ defmodule Engram.Notes.NoteBodyWriteTest do
 
   # Hand-built legacy note (dek_version 1, empty AAD), as AadRebindTest does.
   # A fixture writes `notes` directly, so it puts its body row in place the
-  # way every writer does (`put!/2`; the content ciphertext is virtual).
+  # way every writer does (`insert_note_row!/2`).
   defp insert_legacy_note!(user, vault, path, content) do
     {:ok, dek} = Crypto.get_dek(user)
     {:ok, filter_key} = Crypto.dek_filter_key(user)
@@ -878,32 +878,28 @@ defmodule Engram.Notes.NoteBodyWriteTest do
     {tags_ct, tags_n} = enc.(:erlang.term_to_binary([]))
 
     note =
-      Repo.insert!(
-        %Note{
-          content_hash: "h",
-          seq: 1,
-          mtime: 0.0,
-          user_id: user.id,
-          vault_id: vault.id,
-          content_ciphertext: content_ct,
-          content_nonce: content_n,
-          title_ciphertext: title_ct,
-          title_nonce: title_n,
-          path_ciphertext: path_ct,
-          path_nonce: path_n,
-          path_hmac: Crypto.hmac_field(filter_key, path),
-          folder_ciphertext: folder_ct,
-          folder_nonce: folder_n,
-          folder_hmac: Crypto.hmac_field(filter_key, folder),
-          tags_ciphertext: tags_ct,
-          tags_nonce: tags_n,
-          tags_hmac: [],
-          dek_version: 1
-        },
-        skip_tenant_check: true
-      )
+      Engram.Fixtures.insert_note_row!(%Note{
+        content_hash: "h",
+        seq: 1,
+        mtime: 0.0,
+        user_id: user.id,
+        vault_id: vault.id,
+        content_ciphertext: content_ct,
+        content_nonce: content_n,
+        title_ciphertext: title_ct,
+        title_nonce: title_n,
+        path_ciphertext: path_ct,
+        path_nonce: path_n,
+        path_hmac: Crypto.hmac_field(filter_key, path),
+        folder_ciphertext: folder_ct,
+        folder_nonce: folder_n,
+        folder_hmac: Crypto.hmac_field(filter_key, folder),
+        tags_ciphertext: tags_ct,
+        tags_nonce: tags_n,
+        tags_hmac: [],
+        dek_version: 1
+      })
 
-    NoteBody.put!({note.id, content_ciphertext: content_ct, content_nonce: content_n})
     note
   end
 end

@@ -30,8 +30,8 @@ defmodule Engram.Crypto.AadTamperTest do
 
     # Pull both rows fresh — `upsert_note` returns the decrypted struct,
     # but we want the raw ciphertext columns from disk.
-    raw_a = Repo.get!(Engram.Notes.Note, note_a.id, skip_tenant_check: true)
-    raw_b = Repo.get!(Engram.Notes.Note, note_b.id, skip_tenant_check: true)
+    raw_a = Engram.Fixtures.raw_note!(note_a.id)
+    raw_b = Engram.Fixtures.raw_note!(note_b.id)
 
     # Splice A's content ciphertext + nonce into B's record (in-memory) and
     # ask the read path to decrypt. AAD reconstructed from B's row id MUST
@@ -47,7 +47,7 @@ defmodule Engram.Crypto.AadTamperTest do
     {:ok, note} =
       Notes.upsert_note(user, vault, %{path: "swap.md", content: "secret-content"}, actor: "api")
 
-    raw = Repo.get!(Engram.Notes.Note, note.id, skip_tenant_check: true)
+    raw = Engram.Fixtures.raw_note!(note.id)
 
     forged =
       %{raw | title_ciphertext: raw.content_ciphertext, title_nonce: raw.content_nonce}
@@ -70,8 +70,8 @@ defmodule Engram.Crypto.AadTamperTest do
     {:ok, note_b} =
       Notes.upsert_note(user_b, vault_b, %{path: "b.md", content: "user-b-secret"}, actor: "api")
 
-    raw_a = Repo.get!(Engram.Notes.Note, note_a.id, skip_tenant_check: true)
-    raw_b = Repo.get!(Engram.Notes.Note, note_b.id, skip_tenant_check: true)
+    raw_a = Engram.Fixtures.raw_note!(note_a.id)
+    raw_b = Engram.Fixtures.raw_note!(note_b.id)
 
     # Place B's ciphertext on A's row in memory. Per-user DEK already
     # blocks this, but adding row-id AAD makes the decryption attempt fail
@@ -106,7 +106,7 @@ defmodule Engram.Crypto.AadTamperTest do
     {:ok, note} =
       Notes.upsert_note(user, vault, %{path: "no-aad.md", content: "needs-aad"}, actor: "api")
 
-    raw = Repo.get!(Engram.Notes.Note, note.id, skip_tenant_check: true)
+    raw = Engram.Fixtures.raw_note!(note.id)
     {:ok, dek} = Crypto.get_dek(user)
 
     # Decrypt without supplying any AAD — empty AAD does not match
@@ -157,8 +157,8 @@ defmodule Engram.Crypto.AadTamperTest do
       rotated_user = Repo.get!(Engram.Accounts.User, user.id, skip_tenant_check: true)
 
       # Pull fresh raw rows — ciphertext is now under the new DEK.
-      raw_a = Repo.get!(Engram.Notes.Note, note_a.id, skip_tenant_check: true)
-      raw_b = Repo.get!(Engram.Notes.Note, note_b.id, skip_tenant_check: true)
+      raw_a = Engram.Fixtures.raw_note!(note_a.id)
+      raw_b = Engram.Fixtures.raw_note!(note_b.id)
 
       # Splice A's rotated ciphertext + nonce into B's in-memory struct.
       # AAD reconstructed from B's row id ("notes:content:<B.id>") must NOT

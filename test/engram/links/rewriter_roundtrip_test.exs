@@ -253,7 +253,7 @@ defmodule Engram.Links.RewriterRoundtripTest do
   end
 
   defp raw_note!(user, id) do
-    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get(Engram.Notes.Note, id) end)
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note(id) end)
     raw
   end
 end

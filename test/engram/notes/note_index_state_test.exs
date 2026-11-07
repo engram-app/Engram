@@ -31,7 +31,7 @@ defmodule Engram.Notes.NoteIndexStateTest do
   end
 
   defp state(id), do: Repo.get(NoteIndexState, id, skip_tenant_check: true)
-  defp note(id), do: Repo.get!(Note, id, skip_tenant_check: true)
+  defp note(id), do: Engram.Fixtures.raw_note!(id)
 
   defp xmin(id) do
     %{rows: [[x]]} =

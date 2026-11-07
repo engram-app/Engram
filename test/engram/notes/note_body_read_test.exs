@@ -34,6 +34,10 @@ defmodule Engram.Notes.NoteBodyReadTest do
     {:ok, note} =
       Notes.upsert_note(user, vault, %{"path" => "Body.md", "content" => @content}, actor: "api")
 
+    # The row an older release leaves: its `notes` copy set (this release
+    # writes only the body, R8(b2)), so the split brain below has two sides.
+    :ok = Engram.Fixtures.old_release_notes_copy!(note.id)
+
     %{user: user, vault: vault, note: note}
   end
 

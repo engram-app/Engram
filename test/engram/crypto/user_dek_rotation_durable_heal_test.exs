@@ -160,7 +160,7 @@ defmodule Engram.Crypto.UserDekRotationDurableHealTest do
     do: %{"user_id" => ctx.user.id, "dek_version" => ctx.user.dek_version || 1}
 
   defp raw(note),
-    do: Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+    do: Engram.Fixtures.raw_note!(note.id)
 
   # A v3 point whose text is sealed under `dek`, AAD-bound as the index binds it.
   defp text_point(id, user, dek) do
@@ -294,9 +294,7 @@ defmodule Engram.Crypto.UserDekRotationDurableHealTest do
     refute_enqueued(worker: EmbedNote)
 
     raw =
-      Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^ctx.note.id),
-        skip_tenant_check: true
-      )
+      Engram.Fixtures.raw_note!(ctx.note.id)
 
     assert raw.chunker_version == 1
     assert raw.payload_hash == nil, "left for the retry"

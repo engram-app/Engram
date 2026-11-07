@@ -38,7 +38,7 @@ defmodule Engram.Notes.ContentOutboxTest do
   end
 
   defp checkpoint_text(u, v, note_id, text) do
-    {:ok, raw} = Repo.with_tenant(u.id, fn -> Repo.get!(Note, note_id) end)
+    {:ok, raw} = Repo.with_tenant(u.id, fn -> Engram.Fixtures.raw_note!(note_id) end)
     {:ok, state} = Crypto.decrypt_crdt_state(raw, u)
     {:ok, doc} = CrdtBridge.doc_from_state(state)
     :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), text)
@@ -166,7 +166,7 @@ defmodule Engram.Notes.ContentOutboxTest do
   describe "a live note relocated by id" do
     # Appends `text` as an uncheckpointed tail update over the row's snapshot.
     defp tail_edit!(u, v, note_id, text) do
-      {:ok, raw} = Repo.with_tenant(u.id, fn -> Repo.get!(Note, note_id) end)
+      {:ok, raw} = Repo.with_tenant(u.id, fn -> Engram.Fixtures.raw_note!(note_id) end)
       {:ok, state} = Crypto.decrypt_crdt_state(raw, u)
       {:ok, doc} = CrdtBridge.doc_from_state(state)
       :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), text)
@@ -198,8 +198,9 @@ defmodule Engram.Notes.ContentOutboxTest do
     defp drop_snapshot!(u, note_id) do
       {:ok, _} =
         Repo.with_tenant(u.id, fn ->
-          Repo.update_all(from(n in Note, where: n.id == ^note_id),
-            set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+          Engram.Fixtures.write_note_body!(note_id,
+            crdt_state_ciphertext: nil,
+            crdt_state_nonce: nil
           )
 
           # As every app writer: the body row too, with the values written
@@ -211,7 +212,7 @@ defmodule Engram.Notes.ContentOutboxTest do
     end
 
     defp stored(u, note_id) do
-      {:ok, raw} = Repo.with_tenant(u.id, fn -> Repo.get!(Note, note_id) end)
+      {:ok, raw} = Repo.with_tenant(u.id, fn -> Engram.Fixtures.raw_note!(note_id) end)
       {:ok, note} = Crypto.maybe_decrypt_note_fields(raw, u)
       note
     end
@@ -282,8 +283,9 @@ defmodule Engram.Notes.ContentOutboxTest do
 
       {:ok, _} =
         Repo.with_tenant(u.id, fn ->
-          Repo.update_all(from(n in Note, where: n.id == ^note.id),
-            set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+          Engram.Fixtures.write_note_body!(note.id,
+            crdt_state_ciphertext: ct,
+            crdt_state_nonce: nonce
           )
 
           NoteBody.sync!(note.id, [:crdt_state_ciphertext])
@@ -381,7 +383,7 @@ defmodule Engram.Notes.ContentOutboxTest do
       {:ok, note} =
         Notes.upsert_note(u, v, %{"path" => "f.md", "content" => "before"}, actor: "api")
 
-      {:ok, raw} = Repo.with_tenant(u.id, fn -> Repo.get!(Note, note.id) end)
+      {:ok, raw} = Repo.with_tenant(u.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
       {:ok, state} = Crypto.decrypt_crdt_state(raw, u)
       {:ok, doc} = CrdtBridge.doc_from_state(state)
       :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "room edit")

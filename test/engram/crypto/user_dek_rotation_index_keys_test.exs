@@ -292,7 +292,7 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
   defp fresh(note, user) do
     {:ok, note} =
       note
-      |> Repo.reload!(skip_tenant_check: true)
+      |> Engram.Fixtures.raw_note!()
       |> Crypto.maybe_decrypt_note_fields(reload_user(user))
 
     note

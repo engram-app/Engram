@@ -59,7 +59,7 @@ defmodule Engram.Notes.FeedInterleaveTest do
     # no snapshot, blank facade. That is what a CRDT-genesis note looks like
     # before its first checkpoint, and it is the shape whose resolution depends
     # entirely on the tail still being there.
-    raw = Repo.one!(from(n in Note, where: n.id == ^note.id), skip_tenant_check: true)
+    raw = Engram.Fixtures.raw_note!(note.id)
     {:ok, state} = Crypto.decrypt_crdt_state(raw, user)
     {:ok, dek} = Crypto.get_dek(user)
 
@@ -81,22 +81,16 @@ defmodule Engram.Notes.FeedInterleaveTest do
       skip_tenant_check: true
     )
 
-    Repo.update_all(
-      from(n in Note, where: n.id == ^note.id),
-      [
-        set: [
-          crdt_state_ciphertext: nil,
-          crdt_state_nonce: nil,
-          content_ciphertext: blank_ct,
-          content_nonce: blank_nonce,
-          # nil, matching `genesis_insert_bare`. Leaving the old hash in place
-          # would make the checkpoint see prev == content_hash and take the
-          # COMPACTION branch, which never touches notes.content — so the test
-          # would be asserting against a state production never reaches.
-          content_hash: nil
-        ]
-      ],
-      skip_tenant_check: true
+    Engram.Fixtures.write_note_body!(note.id,
+      crdt_state_ciphertext: nil,
+      crdt_state_nonce: nil,
+      content_ciphertext: blank_ct,
+      content_nonce: blank_nonce,
+      # nil, matching `genesis_insert_bare`. Leaving the old hash in place
+      # would make the checkpoint see prev == content_hash and take the
+      # COMPACTION branch, which never touches notes.content — so the test
+      # would be asserting against a state production never reaches.
+      content_hash: nil
     )
 
     on_exit(CheckpointInterleave.arm(:feed_after_page_read))

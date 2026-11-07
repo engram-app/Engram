@@ -27,7 +27,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     %{user: user, vault: vault, note: note} = ctx
 
     # Seed the tail-log with a couple of raw updates so we can assert they get pruned.
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
 
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
@@ -119,14 +119,14 @@ defmodule Engram.Notes.CrdtCheckpointTest do
   test "a checkpoint of a deleted note writes nothing", ctx do
     %{user: user, vault: vault, note: note} = ctx
     :ok = Notes.delete_note(user, vault, "p.md")
-    {:ok, before} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, before} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
 
     {:ok, doc} = CrdtBridge.doc_from_state(nil)
     :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "revived")
 
     assert :skipped = CrdtCheckpoint.checkpoint_pruning(user.id, vault.id, note.id, doc)
 
-    {:ok, after_run} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, after_run} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     assert after_run.seq == before.seq
     assert after_run.crdt_state_ciphertext == before.crdt_state_ciphertext
     assert after_run.content_hash == before.content_hash
@@ -160,14 +160,14 @@ defmodule Engram.Notes.CrdtCheckpointTest do
       end)
 
     assert log =~ "post-commit"
-    {:ok, row} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, row} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     refute row.content_hash == note.content_hash
   end
 
   test "checkpoint emits doc bloat telemetry", ctx do
     %{user: user, vault: vault, note: note} = ctx
 
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
     # Must clear CrdtBloat.min_content_bytes/0 or no ratio sample is taken.
@@ -201,7 +201,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
   test "checkpoint emits bloat telemetry with an empty projection (divide guard)", ctx do
     %{user: user, vault: vault, note: note} = ctx
 
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
 
@@ -235,7 +235,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
   test "checkpoint emits bloat telemetry on the unchanged-text compaction path", ctx do
     %{user: user, vault: vault, note: note} = ctx
 
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
     settled = String.duplicate("settled body ", 12)
@@ -287,7 +287,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
   test "checkpoint returns :ok (does not raise) when get_user raises", ctx do
     %{user: user, vault: vault, note: note} = ctx
 
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
     :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "before AFTER")
@@ -337,7 +337,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     %{user: user, vault: vault, note: note} = ctx
     EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
 
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
 
@@ -372,13 +372,11 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     # Drop the REST-era crdt_state so the checkpoint folds only the live canvas doc.
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note.id),
-          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        Engram.Fixtures.write_note_body!(note.id,
+          crdt_state_ciphertext: nil,
+          crdt_state_nonce: nil
         )
       end)
-
-    Engram.Fixtures.mirror_body!(note.id)
 
     # A canvas-shaped live doc: structural data in a Y.Map, content Y.Text empty.
     doc = CrdtBridge.new_doc()
@@ -396,7 +394,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     assert Vaults.current_seq(user.id, vault.id) == seq0
 
     # The structural Yjs state IS persisted (nodes map survived the checkpoint).
-    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, state} = Crypto.decrypt_crdt_state(raw, user)
     {:ok, rebuilt} = CrdtBridge.doc_from_state(state)
     assert Yex.Map.to_map(Yex.Doc.get_map(rebuilt, "nodes")) == %{"n1" => "hi"}
@@ -410,7 +408,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     # Rebuild the doc from stored state WITHOUT editing the text — this is the
     # idle compaction path (hash-equal), which must not touch seq/content and
     # must not announce.
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
 
@@ -426,7 +424,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
 
     # The live room holds a doc that still projects the ORIGINAL "before" content,
     # captured at the note's current version. This is the stale-room snapshot.
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
     captured_version = raw_note.version
@@ -467,7 +465,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
 
     # The room doc is built from the ORIGINAL state and diverges with a live
     # edit — but it never receives the REST write below (a missed deliver_out).
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
     :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "before EDIT")
@@ -497,7 +495,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     # The persisted CRDT state must also carry the union: rebuilding a doc from
     # it must project the merged text (the row state is the durable truth the
     # next bind hydrates from — content alone converging is not enough).
-    {:ok, after_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, after_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, after_state} = Crypto.decrypt_crdt_state(after_note, user)
     {:ok, rebuilt} = CrdtBridge.doc_from_state(after_state)
     rebuilt_text = CrdtBridge.text_of(rebuilt)
@@ -518,7 +516,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     {:ok, _} =
       Notes.upsert_note(user, vault, %{"path" => "p.md", "content" => body}, actor: "api")
 
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
 
@@ -534,7 +532,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
 
     # Checkpoint 1 really persisted a doc past the old gate, on the live doc's
     # lineage (`checkpoint/5` returns :ok on a skip too).
-    {:ok, row} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, row} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, stored} = Crypto.decrypt_crdt_state(row, user)
     {:ok, stored_doc} = CrdtBridge.doc_from_state(stored)
     assert byte_size(stored) >= 500_000
@@ -562,7 +560,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     %{user: user, vault: vault, note: note} = ctx
 
     # Divergent room doc, as above.
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
     :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "before EDIT")
@@ -571,16 +569,15 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     # longer prove its write is a superset of the durable truth, so it must not
     # write at all (unreadable ≠ absent — overwriting could destroy data).
     Repo.with_tenant(user.id, fn ->
-      Repo.update_all(from(n in Note, where: n.id == ^note.id),
-        set: [crdt_state_ciphertext: <<0, 1, 2, 3>>, crdt_state_nonce: <<0::96>>]
+      Engram.Fixtures.write_note_body!(note.id,
+        crdt_state_ciphertext: <<0, 1, 2, 3>>,
+        crdt_state_nonce: <<0::96>>
       )
     end)
 
-    Engram.Fixtures.mirror_body!(note.id)
-
     :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
 
-    {:ok, after_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, after_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     assert after_note.version == note.version, "checkpoint wrote despite unreadable stored state"
 
     assert after_note.crdt_state_ciphertext == <<0, 1, 2, 3>>,
@@ -592,18 +589,17 @@ defmodule Engram.Notes.CrdtCheckpointTest do
   # Helper: make the row's stored state undecryptable and hand back a divergent
   # live doc, i.e. the exact state the abort path is written for.
   defp wedge_unreadable_state(user, note) do
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
     :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "before EDIT")
 
     Repo.with_tenant(user.id, fn ->
-      Repo.update_all(from(n in Note, where: n.id == ^note.id),
-        set: [crdt_state_ciphertext: <<0, 1, 2, 3>>, crdt_state_nonce: <<0::96>>]
+      Engram.Fixtures.write_note_body!(note.id,
+        crdt_state_ciphertext: <<0, 1, 2, 3>>,
+        crdt_state_nonce: <<0::96>>
       )
     end)
-
-    Engram.Fixtures.mirror_body!(note.id)
 
     doc
   end
@@ -700,7 +696,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     # Escalating must not start writing. The whole reason this aborts is that we
     # cannot prove a write is a superset of the durable truth, and crossing a
     # depth threshold does not change that.
-    {:ok, after_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, after_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     assert after_note.crdt_state_ciphertext == <<0, 1, 2, 3>>
     assert after_note.version == note.version
   end
@@ -710,7 +706,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
   test "checkpoint advances updated_at so the /changes timestamp feed sees the edit", ctx do
     %{user: user, vault: vault, note: note} = ctx
 
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     before_updated_at = raw_note.updated_at
 
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
@@ -721,7 +717,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
 
     :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
 
-    {:ok, fresh} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, fresh} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
 
     # The content-write branch persists via update_all, which does NOT
     # auto-manage timestamps. updated_at must still be set explicitly so the
@@ -737,7 +733,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
        ctx do
     %{user: user, vault: vault, note: note} = ctx
 
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     captured_version = raw_note.version
 
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
@@ -796,7 +792,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
         actor: "api"
       )
 
-    {:ok, raw_note2} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note2.id) end)
+    {:ok, raw_note2} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note2.id) end)
     {:ok, raw_state2} = Crypto.decrypt_crdt_state(raw_note2, user)
 
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state2)
@@ -821,7 +817,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
   test "checkpoint enqueues a debounced embed when content changes", ctx do
     %{user: user, vault: vault, note: note} = ctx
 
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
 
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
@@ -839,7 +835,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     %{user: user, vault: vault, note: note} = ctx
 
     # Load the existing state without changing the text.
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
 
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
@@ -862,7 +858,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
   test "checkpoint with unchanged content compacts crdt_state without bumping version/seq", ctx do
     %{user: user, vault: vault, note: note} = ctx
 
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
     # No text mutation — doc projects the same content the row already has.
@@ -872,7 +868,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
 
     :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
 
-    {:ok, after_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, after_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     assert after_note.version == raw_note.version
     assert after_note.seq == raw_note.seq
 
@@ -954,7 +950,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
        ctx do
     %{user: user, vault: vault, note: note} = ctx
 
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
 
@@ -995,7 +991,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     %{user: user, vault: vault, note: note} = ctx
 
     # Seed the tail-log with one row.
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
 
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
@@ -1065,7 +1061,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
         actor: "api"
       )
 
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
 
@@ -1079,7 +1075,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
 
     :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
 
-    {:ok, fresh} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, fresh} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, filter_key} = Crypto.dek_filter_key(user)
     assert fresh.type_hmac == Crypto.hmac_field(filter_key, "reference")
   end
@@ -1093,7 +1089,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
   test "checkpoint on a DELETED note skips quietly — no raise, no error log", ctx do
     %{user: user, vault: vault, note: note} = ctx
 
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
 
@@ -1115,7 +1111,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
   test "checkpoint on a DELETED user skips quietly — no raise, no error log", ctx do
     %{user: user, vault: vault, note: note} = ctx
 
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
 
@@ -1140,7 +1136,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
         actor: "api"
       )
 
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
 
@@ -1148,7 +1144,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
 
     :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
 
-    {:ok, fresh} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, fresh} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     assert is_nil(fresh.type_hmac)
     assert is_nil(fresh.type_ciphertext)
     assert is_nil(fresh.fm_timestamp)
@@ -1172,14 +1168,14 @@ defmodule Engram.Notes.CrdtCheckpointTest do
 
     assert note.parse_status == "degraded"
 
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
 
     :ok = CrdtBridge.ingest_plaintext(doc, "---\ndate: 2026-01-01\n---\nx\n")
     :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
 
-    {:ok, fresh} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, fresh} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     assert fresh.parse_status == "ok"
     assert is_nil(fresh.parse_reason)
   end
@@ -1270,20 +1266,18 @@ defmodule Engram.Notes.CrdtCheckpointTest do
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note.id),
-          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        Engram.Fixtures.write_note_body!(note.id,
+          crdt_state_ciphertext: nil,
+          crdt_state_nonce: nil
         )
       end)
-
-    Engram.Fixtures.mirror_body!(note.id)
 
     # Exactly what bind/3 now produces for such a row: an empty doc.
     doc = CrdtBridge.new_doc()
 
     :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
 
-    {:ok, reloaded} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, reloaded} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, reloaded} = Crypto.maybe_decrypt_note_fields(reloaded, user)
     assert reloaded.content == "IMPORTANT"
   end

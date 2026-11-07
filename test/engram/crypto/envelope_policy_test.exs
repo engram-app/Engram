@@ -84,7 +84,7 @@ defmodule Engram.Crypto.EnvelopePolicyTest do
       %{user: user, vault: vault}
     end
 
-    defp raw_note(id), do: Repo.one!(from(n in Note, where: n.id == ^id), skip_tenant_check: true)
+    defp raw_note(id), do: Engram.Fixtures.raw_note!(id)
 
     defp reload(user),
       do:
@@ -107,13 +107,10 @@ defmodule Engram.Crypto.EnvelopePolicyTest do
       {:ok, state} = Yex.encode_state_as_update(doc)
       {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(state, user, note.id)
 
-      Repo.update_all(
-        from(n in Note, where: n.id == ^note.id),
-        [set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]],
-        skip_tenant_check: true
+      Engram.Fixtures.write_note_body!(note.id,
+        crdt_state_ciphertext: ct,
+        crdt_state_nonce: nonce
       )
-
-      Engram.Fixtures.mirror_body!(note.id)
 
       before = raw_note(note.id)
       assert byte_size(before.content_nonce) == 13
@@ -155,30 +152,27 @@ defmodule Engram.Crypto.EnvelopePolicyTest do
       {tags_ct, tags_n} = enc.(:erlang.term_to_binary([]))
 
       legacy =
-        Repo.insert!(
-          %Note{
-            content_hash: "h",
-            seq: 1,
-            mtime: 0.0,
-            user_id: user.id,
-            vault_id: vault.id,
-            content_ciphertext: content_ct,
-            content_nonce: content_n,
-            title_ciphertext: title_ct,
-            title_nonce: title_n,
-            path_ciphertext: path_ct,
-            path_nonce: path_n,
-            path_hmac: Crypto.hmac_field(filter_key, "legacy/p.md"),
-            folder_ciphertext: folder_ct,
-            folder_nonce: folder_n,
-            folder_hmac: Crypto.hmac_field(filter_key, "legacy"),
-            tags_ciphertext: tags_ct,
-            tags_nonce: tags_n,
-            tags_hmac: [],
-            dek_version: 1
-          },
-          skip_tenant_check: true
-        )
+        Engram.Fixtures.insert_note_row!(%Note{
+          content_hash: "h",
+          seq: 1,
+          mtime: 0.0,
+          user_id: user.id,
+          vault_id: vault.id,
+          content_ciphertext: content_ct,
+          content_nonce: content_n,
+          title_ciphertext: title_ct,
+          title_nonce: title_n,
+          path_ciphertext: path_ct,
+          path_nonce: path_n,
+          path_hmac: Crypto.hmac_field(filter_key, "legacy/p.md"),
+          folder_ciphertext: folder_ct,
+          folder_nonce: folder_n,
+          folder_hmac: Crypto.hmac_field(filter_key, "legacy"),
+          tags_ciphertext: tags_ct,
+          tags_nonce: tags_n,
+          tags_hmac: [],
+          dek_version: 1
+        })
 
       assert byte_size(legacy.content_nonce) == 12
       assert :ok = Engram.Crypto.AadRebind.rebind_user(user.id)

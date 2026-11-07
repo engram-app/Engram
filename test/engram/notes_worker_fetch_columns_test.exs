@@ -49,7 +49,7 @@ defmodule Engram.NotesWorkerFetchColumnsTest do
     user: u,
     note: note
   } do
-    stored = Repo.get!(Note, note.id, skip_tenant_check: true)
+    stored = Engram.Fixtures.raw_note!(note.id)
     assert stored.crdt_state_ciphertext, "precondition: the note has CRDT state"
 
     {{:ok, %Note{} = fetched}, queries} =

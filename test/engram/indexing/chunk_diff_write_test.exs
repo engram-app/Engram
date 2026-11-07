@@ -56,7 +56,7 @@ defmodule Engram.Indexing.ChunkDiffWriteTest do
 
     {:ok, note} =
       note
-      |> Repo.reload!(skip_tenant_check: true)
+      |> Engram.Fixtures.raw_note!()
       |> Engram.Crypto.maybe_decrypt_note_fields(user)
 
     note

@@ -33,7 +33,7 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
 
     # upsert_note alone may leave crdt_state unset; a checkpoint is what writes
     # the column this sweep measures.
-    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, state} = Crypto.decrypt_crdt_state(raw, user)
     {:ok, doc} = CrdtBridge.doc_from_state(state)
     :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), content)
@@ -47,7 +47,10 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
   defp stored_content_bytes(user) do
     {:ok, lens} =
       Repo.with_tenant(user.id, fn ->
-        Repo.all(from(n in Note, where: is_nil(n.deleted_at), select: n.content_ciphertext))
+        from(n in Note, where: is_nil(n.deleted_at))
+        |> Engram.Notes.NoteBody.select_note([:id, :content_ciphertext])
+        |> Repo.all()
+        |> Enum.map(& &1.content_ciphertext)
       end)
 
     lens |> Enum.map(&(byte_size(&1) - Engram.Crypto.Envelope.tag_bytes())) |> Enum.sum()
@@ -118,7 +121,10 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
 
     {:ok, rows} =
       Repo.with_tenant(user.id, fn ->
-        Repo.all(from(n in Note, select: {n.content_nonce, n.content_ciphertext}))
+        from(n in Note)
+        |> Engram.Notes.NoteBody.select_note([:content_nonce, :content_ciphertext])
+        |> Repo.all()
+        |> Enum.map(&{&1.content_nonce, &1.content_ciphertext})
       end)
 
     assert [{_, _}, {_, f1_ct}] = Enum.sort_by(rows, fn {nonce, _} -> byte_size(nonce) end)
@@ -226,15 +232,13 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
     {:ok, note} =
       Notes.upsert_note(user, vault, %{"path" => "bare.md", "content" => stateless}, actor: "api")
 
-    {:ok, {1, _}} =
+    {:ok, :ok} =
       Repo.with_tenant(user.id, fn ->
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note.id),
-          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        Engram.Fixtures.write_note_body!(note.id,
+          crdt_state_ciphertext: nil,
+          crdt_state_nonce: nil
         )
       end)
-
-    Engram.Fixtures.mirror_body!(note.id)
 
     attach()
 
@@ -307,16 +311,13 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.update_all(from(n in Note, where: n.id == ^note.id),
-          set: [
-            crdt_state_ciphertext: :crypto.strong_rand_bytes(state_bytes + tag),
-            content_ciphertext: :crypto.strong_rand_bytes(content_bytes + tag)
-          ]
+        Engram.Fixtures.write_note_body!(note.id,
+          crdt_state_ciphertext: :crypto.strong_rand_bytes(state_bytes + tag),
+          content_ciphertext: :crypto.strong_rand_bytes(content_bytes + tag)
         )
       end)
 
     # The app's writers keep `note_bodies` in step (`NoteBody.sync!/3`).
-    Engram.Fixtures.mirror_body!(note.id)
   end
 
   defp bump_version!(user, note, by) do

@@ -23,7 +23,7 @@ defmodule Engram.Notes.TimeAtWritersTest do
   end
 
   defp row(ctx, id) do
-    Repo.with_tenant!(ctx.user.id, fn -> Repo.get!(Note, id) end)
+    Repo.with_tenant!(ctx.user.id, fn -> Engram.Fixtures.raw_note!(id) end)
   end
 
   # Every row of the vault, live, tombstoned and folder markers alike.

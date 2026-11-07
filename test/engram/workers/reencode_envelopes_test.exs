@@ -51,8 +51,9 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
     {:ok, {ct, nonce}} = legacy(fn -> Crypto.encrypt_crdt_state(state, user, note.id) end)
 
     tenant!(user, fn ->
-      Repo.update_all(from(n in Note, where: n.id == ^note.id),
-        set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+      Engram.Fixtures.write_note_body!(note.id,
+        crdt_state_ciphertext: ct,
+        crdt_state_nonce: nonce
       )
     end)
 
@@ -62,7 +63,6 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
     end)
 
     # The app's writers keep `note_bodies` in step (`NoteBody.sync!/3`).
-    Engram.Fixtures.mirror_body!(note.id)
   end
 
   defp seed_tail!(user, vault, note, update) do
@@ -118,6 +118,13 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
 
     id
   end
+
+  # A note reads its body ciphertexts from `note_bodies` (virtual on `Note`).
+  defp reload(Note, clauses),
+    do:
+      from(r in Note, where: ^clauses)
+      |> Engram.Notes.NoteBody.select_note()
+      |> Repo.one!(skip_tenant_check: true)
 
   defp reload(schema, clauses),
     do: Repo.one!(from(r in schema, where: ^clauses), skip_tenant_check: true)
@@ -230,12 +237,12 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
       note = legacy_note!(u, v, "a.md", @big)
 
       tenant!(u, fn ->
-        Repo.update_all(from(n in Note, where: n.id == ^note.id),
-          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        Engram.Fixtures.write_note_body!(note.id,
+          crdt_state_ciphertext: nil,
+          crdt_state_nonce: nil
         )
       end)
 
-      Engram.Fixtures.mirror_body!(note.id)
       Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.BackfillCrdtHead"))
 
       assert :ok = run(u)
@@ -263,12 +270,12 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
       note = legacy_note!(u, v, "v1.md", @big)
 
       tenant!(u, fn ->
-        Repo.update_all(from(n in Note, where: n.id == ^note.id),
-          set: [dek_version: 1, crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        Engram.Fixtures.write_note_body!(note.id,
+          dek_version: 1,
+          crdt_state_ciphertext: nil,
+          crdt_state_nonce: nil
         )
       end)
-
-      Engram.Fixtures.mirror_body!(note.id)
 
       refute ReencodeEnvelopes.legacy_rows?(u.id)
     end
@@ -316,12 +323,12 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
       note = legacy_note!(u, v, "drift.md", @big)
 
       tenant!(u, fn ->
-        Repo.update_all(from(n in Note, where: n.id == ^note.id),
-          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        Engram.Fixtures.write_note_body!(note.id,
+          crdt_state_ciphertext: nil,
+          crdt_state_nonce: nil
         )
       end)
 
-      Engram.Fixtures.mirror_body!(note.id)
       assert ReencodeEnvelopes.legacy_rows?(u.id)
 
       # The `notes` nonce moves without the body: the two copies now disagree.
@@ -375,8 +382,9 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
         Envelope.encrypt("edited", dek(u), Crypto.aad_for_row(:notes, :content, note.id))
 
       tenant!(u, fn ->
-        Repo.update_all(from(n in Note, where: n.id == ^note.id),
-          set: [content_ciphertext: fresh_ct, content_nonce: fresh_nonce]
+        Engram.Fixtures.write_note_body!(note.id,
+          content_ciphertext: fresh_ct,
+          content_nonce: fresh_nonce
         )
       end)
 
@@ -434,12 +442,8 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
       corrupt = <<head::binary, Bitwise.bxor(last, 0xFF)>>
 
       tenant!(u, fn ->
-        Repo.update_all(from(n in Note, where: n.id == ^note.id),
-          set: [content_ciphertext: corrupt]
-        )
+        Engram.Fixtures.write_note_body!(note.id, content_ciphertext: corrupt)
       end)
-
-      Engram.Fixtures.mirror_body!(note.id)
 
       log = capture_log(fn -> assert :ok = run(u) end)
 

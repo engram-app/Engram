@@ -15,7 +15,7 @@ defmodule Engram.Notes.CrdtMergePathTest do
   end
 
   defp load_raw(user, id) do
-    {:ok, {:ok, note}} = Repo.with_tenant(user.id, fn -> {:ok, Repo.get!(Note, id)} end)
+    {:ok, {:ok, note}} = Repo.with_tenant(user.id, fn -> {:ok, Engram.Fixtures.raw_note!(id)} end)
     note
   end
 
@@ -56,19 +56,11 @@ defmodule Engram.Notes.CrdtMergePathTest do
     {:ok, %{state: server_state}} = CrdtBridge.merge_plaintext(state, "shared base + SERVER")
     {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(server_state, user, note.id)
 
-    {:ok, _} =
-      Repo.with_tenant(user.id, fn ->
-        {:ok,
-         Repo.update!(
-           Note.changeset(raw, %{
-             crdt_state_ciphertext: ct,
-             crdt_state_nonce: nonce,
-             version: note.version + 1
-           })
-         )}
-      end)
-
-    Engram.Fixtures.mirror_body!(note.id)
+    Engram.Fixtures.write_note_body!(note.id,
+      crdt_state_ciphertext: ct,
+      crdt_state_nonce: nonce,
+      version: note.version + 1
+    )
 
     # REST writer pushes a diverging body under the NOW-STALE original version.
     # This MUST NOT return {:error, :version_conflict, _} — the key invariant
@@ -205,13 +197,11 @@ defmodule Engram.Notes.CrdtMergePathTest do
     # path: no snapshot + a tail update seeded from an empty doc).
     Repo.with_tenant(user.id, fn ->
       {:ok,
-       Repo.update_all(
-         from(n in Engram.Notes.Note, where: n.id == ^note.id),
-         set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+       Engram.Fixtures.write_note_body!(note.id,
+         crdt_state_ciphertext: nil,
+         crdt_state_nonce: nil
        )}
     end)
-
-    Engram.Fixtures.mirror_body!(note.id)
 
     # Simulate bind/3's seed_from_content path: it starts from a FRESH empty doc
     # and ingests the full text — producing a tail row that encodes the full body
@@ -279,13 +269,11 @@ defmodule Engram.Notes.CrdtMergePathTest do
 
     Repo.with_tenant(user.id, fn ->
       {:ok,
-       Repo.update_all(
-         from(n in Engram.Notes.Note, where: n.id == ^note.id),
-         set: [crdt_state_ciphertext: ect, crdt_state_nonce: enonce]
+       Engram.Fixtures.write_note_body!(note.id,
+         crdt_state_ciphertext: ect,
+         crdt_state_nonce: enonce
        )}
     end)
-
-    Engram.Fixtures.mirror_body!(note.id)
 
     # Bind-time seed lineage in the tail: full text inserted against an empty doc.
     seed_doc = CrdtBridge.new_doc()

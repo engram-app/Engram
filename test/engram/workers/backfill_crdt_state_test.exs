@@ -25,13 +25,11 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note.id),
-          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        Engram.Fixtures.write_note_body!(note.id,
+          crdt_state_ciphertext: nil,
+          crdt_state_nonce: nil
         )
       end)
-
-    Engram.Fixtures.mirror_body!(note.id)
 
     note
   end
@@ -80,7 +78,7 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
       Repo.with_tenant(user.id, fn ->
         %Note{}
         |> Ecto.Changeset.cast(attrs, Map.keys(attrs))
-        |> Repo.insert!()
+        |> Engram.Fixtures.insert_note_row!()
       end)
 
     note
@@ -119,7 +117,7 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
   end
 
   defp reload(user, note_id) do
-    {:ok, note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note_id) end)
+    {:ok, note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note_id) end)
     note
   end
 

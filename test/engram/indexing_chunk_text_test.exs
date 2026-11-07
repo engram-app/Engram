@@ -165,13 +165,12 @@ defmodule Engram.IndexingChunkTextTest do
     defp corrupt_content(note, user) do
       {:ok, _} =
         Repo.with_tenant(user.id, fn ->
-          Repo.update_all(from(n in Engram.Notes.Note, where: n.id == ^note.id),
-            set: [content_ciphertext: :crypto.strong_rand_bytes(64)]
+          Engram.Fixtures.write_note_body!(note.id,
+            content_ciphertext: :crypto.strong_rand_bytes(64)
           )
         end)
 
       # Content is read from `note_bodies`: damage the copy readers see.
-      Engram.Fixtures.mirror_body!(note.id)
     end
 
     test "a note of exactly 32 KB stores display_ct and displays from it", ctx do

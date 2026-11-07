@@ -36,7 +36,7 @@ defmodule Engram.DeleteOpIdTest do
     att
   end
 
-  defp op_of(Note, id), do: Repo.get!(Note, id, skip_tenant_check: true).delete_op_id
+  defp op_of(Note, id), do: Engram.Fixtures.raw_note!(id).delete_op_id
   defp op_of(Attachment, id), do: Repo.get!(Attachment, id, skip_tenant_check: true).delete_op_id
 
   defp stamped(schema, vault, op) do
@@ -144,7 +144,7 @@ defmodule Engram.DeleteOpIdTest do
 
     {:ok, _} = Notes.create_folder_markers(user, vault, ["Docs"])
 
-    marker = Repo.get!(Note, marker_id, skip_tenant_check: true)
+    marker = Engram.Fixtures.raw_note!(marker_id)
     assert is_nil(marker.deleted_at)
     assert is_nil(marker.delete_op_id)
   end

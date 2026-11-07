@@ -159,7 +159,7 @@ defmodule Engram.NotePointsCapFlagTest do
 
   defp reindex(note, vault, user) do
     {:ok, note} =
-      Repo.with_tenant!(user.id, fn -> Repo.get!(Note, note.id) end)
+      Repo.with_tenant!(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
       |> Crypto.maybe_decrypt_note_fields(user)
 
     assert {:ok, _} =

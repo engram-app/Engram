@@ -2766,13 +2766,11 @@ defmodule EngramWeb.CrdtChannelTest do
 
       {:ok, _} =
         Engram.Repo.with_tenant(user.id, fn ->
-          Engram.Repo.update_all(
-            from(n in Engram.Notes.Note, where: n.id == ^created_id),
-            set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+          Engram.Fixtures.write_note_body!(created_id,
+            crdt_state_ciphertext: ct,
+            crdt_state_nonce: nonce
           )
         end)
-
-      Engram.Fixtures.mirror_body!(created_id)
 
       client = CrdtBridge.new_doc()
       {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
