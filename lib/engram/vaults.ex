@@ -128,10 +128,11 @@ defmodule Engram.Vaults do
   """
   @spec lock_folder_writes!(Ecto.UUID.t()) :: :ok
   def lock_folder_writes!(vault_id) do
-    Repo.query!(
-      "SELECT pg_advisory_xact_lock(hashtextextended('folder_writes:' || $1::text, 0))",
-      [vault_id]
-    )
+    _ =
+      Repo.query!(
+        "SELECT pg_advisory_xact_lock(hashtextextended('folder_writes:' || $1::text, 0))",
+        [vault_id]
+      )
 
     :ok
   end
