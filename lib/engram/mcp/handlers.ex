@@ -619,10 +619,10 @@ defmodule Engram.MCP.Handlers do
         )
 
       # Same copy as the web app's rename toast (frontend/src/api/queries.ts).
-      {:error, {:folder_too_large, count, _limit}} ->
+      {:error, {:folder_too_large, limit}} ->
         ToolError.error(
           :folder_too_large,
-          "Folder too large to rename here (#{count} items). Rename it in Obsidian."
+          "Folder too large to rename here (more than #{limit} items). Rename it in Obsidian."
         )
 
       # Catch-all (Bug 2): Folders.rename can surface a non-:conflict

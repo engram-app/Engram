@@ -629,8 +629,9 @@ config :engram, :folder_create_rate_limit, limit: 120, period_ms: 60_000
 
 # Interim cap (#2492): a web or MCP folder rename/move holds the vault lock
 # for its whole subtree, so one over this many live notes + attachments is
-# refused with 422 folder_too_large (Engram.Folders). Lifted once the chunked
-# rename ships. Delete is already chunked and has no cap.
+# refused with 422 folder_too_large (Engram.Folders). Runtime-tunable via
+# Engram.ServiceConfig.override(:folder_op_max_rows, n). Lifted once the
+# chunked rename ships. Delete is already chunked and has no cap.
 config :engram, :folder_op_max_rows, 200
 
 # GET /api/billing/checkout-transactions/:id makes one live Paddle call per

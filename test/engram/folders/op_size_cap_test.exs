@@ -1,10 +1,10 @@
 defmodule Engram.Folders.OpSizeCapTest do
   # #2492: a folder rename or move holds the vault lock for its whole
   # subtree, so one over `:folder_op_max_rows` is refused before any lock,
-  # claim or scan. async: false, since the cap is lowered globally.
+  # claim or scan. async: false for the global `:storage` mock.
   use Engram.DataCase, async: false
 
-  alias Engram.{Attachments, Folders, Notes, QueryRecorder, Repo, Vaults}
+  alias Engram.{Attachments, Folders, Notes, QueryRecorder, Repo, ServiceConfig, Vaults}
   alias Engram.Notes.{CrdtIndexDoc, CrdtIndexPersistence}
 
   setup do
@@ -12,13 +12,8 @@ defmodule Engram.Folders.OpSizeCapTest do
     Application.put_env(:engram, :storage, Engram.MockStorage)
     Mox.stub(Engram.MockStorage, :put, fn _key, _bin, _opts -> :ok end)
 
-    cap = Application.get_env(:engram, :folder_op_max_rows)
-    Application.put_env(:engram, :folder_op_max_rows, 2)
-
-    on_exit(fn ->
-      Application.put_env(:engram, :storage, prev)
-      Application.put_env(:engram, :folder_op_max_rows, cap)
-    end)
+    ServiceConfig.put_override(:folder_op_max_rows, 2)
+    on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
 
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
     %{user: user, vault: insert(:vault, user: user)}
@@ -74,7 +69,7 @@ defmodule Engram.Folders.OpSizeCapTest do
 
     {result, queries} = QueryRecorder.record(fn -> Folders.rename(u, v, "A", "B") end)
 
-    assert result == {:error, {:folder_too_large, 3, 2}}
+    assert result == {:error, {:folder_too_large, 2}}
     assert writes(queries) == [], "wrote before refusing: #{inspect(writes(queries))}"
     assert snapshot(u, v) == before
     refute Enum.any?(claimed_paths(u, v), &String.starts_with?(&1, "B/"))
@@ -89,7 +84,7 @@ defmodule Engram.Folders.OpSizeCapTest do
       Ecto.UUID.dump!(z.id)
     ])
 
-    assert {:error, {:folder_too_large, 3, 2}} = Folders.rename(u, v, "A", "B")
+    assert {:error, {:folder_too_large, 2}} = Folders.rename(u, v, "A", "B")
   end
 
   test "an over-cap batch move sums every selected folder and changes nothing", %{
@@ -107,9 +102,34 @@ defmodule Engram.Folders.OpSizeCapTest do
     {result, queries} =
       QueryRecorder.record(fn -> Folders.batch_move(u, v, [a.id, b.id], {:path, "Dst"}) end)
 
-    assert result == {:error, {:folder_too_large, 3, 2}}
+    assert result == {:error, {:folder_too_large, 2}}
     assert writes(queries) == [], "wrote before refusing: #{inspect(writes(queries))}"
     assert snapshot(u, v) == before
+  end
+
+  test "the count stops reading once the folder is over the cap", %{user: u, vault: v} do
+    for p <- ~w(A/x.md A/y.md A/z.md A/w.md), do: put_note(u, v, p)
+    put_att(u, v, "A/a.png")
+
+    {result, queries} = QueryRecorder.record(fn -> Folders.rename(u, v, "A", "B") end)
+
+    assert result == {:error, {:folder_too_large, 2}}
+    # One bounded notes count (limit + 1 = 3 rows at most); the attachment
+    # count never runs.
+    assert [%{sql: sql, params: params}] = Enum.filter(queries, &(&1.sql =~ ~r/count\(/i))
+    assert sql =~ ~r/LIMIT/i
+    assert 3 in params
+  end
+
+  test "drift in another folder does not refuse a small folder", %{user: u, vault: v} do
+    ServiceConfig.put_override(:folder_op_max_rows, 200)
+    for i <- 1..5, do: put_note(u, v, "Small/n#{i}.md")
+    drift = for i <- 1..300, do: Ecto.UUID.dump!(put_note(u, v, "Other/d#{i}.md").id)
+
+    %{num_rows: 300} =
+      Repo.query!("UPDATE notes SET folder_ref_id = NULL WHERE id = ANY($1)", [drift])
+
+    assert {:ok, %{notes: 5}} = Folders.rename(u, v, "Small", "Renamed")
   end
 
   test "at the cap a rename runs, and the check costs the same statements at any size", %{
@@ -141,6 +161,6 @@ defmodule Engram.Folders.OpSizeCapTest do
            }) ==
              {:error,
               {:folder_too_large,
-               "Folder too large to rename here (3 items). Rename it in Obsidian."}}
+               "Folder too large to rename here (more than 2 items). Rename it in Obsidian."}}
   end
 end

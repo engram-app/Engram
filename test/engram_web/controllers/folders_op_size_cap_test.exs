@@ -1,16 +1,13 @@
 defmodule EngramWeb.FoldersOpSizeCapTest do
   # #2492: an over-cap folder rename or move is a 422 with the count.
-  # async: false, since the cap is lowered globally.
-  use EngramWeb.ConnCase, async: false
+  use EngramWeb.ConnCase, async: true
 
   alias Engram.Notes
 
   setup :authed_api_conn
 
   setup do
-    cap = Application.get_env(:engram, :folder_op_max_rows)
-    Application.put_env(:engram, :folder_op_max_rows, 1)
-    on_exit(fn -> Application.put_env(:engram, :folder_op_max_rows, cap) end)
+    Engram.ServiceConfig.put_override(:folder_op_max_rows, 1)
   end
 
   defp put_note(user, vault, path) do
@@ -30,7 +27,7 @@ defmodule EngramWeb.FoldersOpSizeCapTest do
       |> post(~p"/api/folders/rename", %{"old_path" => "A", "new_path" => "B"})
       |> json_response(422)
 
-    assert body == %{"error" => "folder_too_large", "count" => 2, "limit" => 1}
+    assert body == %{"error" => "folder_too_large", "limit" => 1, "over_limit" => true}
   end
 
   test "POST /api/folders/batch-move over the cap is a 422 with count and limit", %{
@@ -48,6 +45,6 @@ defmodule EngramWeb.FoldersOpSizeCapTest do
       |> post(~p"/api/folders/batch-move", %{"ids" => [a.id], "target_parent" => "Dst"})
       |> json_response(422)
 
-    assert body == %{"error" => "folder_too_large", "count" => 2, "limit" => 1}
+    assert body == %{"error" => "folder_too_large", "limit" => 1, "over_limit" => true}
   end
 end

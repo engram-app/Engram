@@ -38,7 +38,7 @@ defmodule Engram.Folders do
   retry rescans and finishes. Each chunk broadcasts once it commits.
   """
 
-  import Ecto.Query, only: [from: 2]
+  import Ecto.Query, only: [from: 2, subquery: 1]
 
   alias Engram.Attachments
   alias Engram.Billing
@@ -47,8 +47,10 @@ defmodule Engram.Folders do
   alias Engram.Folders.Rows
   alias Engram.Logger.Metadata
   alias Engram.Notes
+  alias Engram.Notes.Keys
   alias Engram.Notes.PathSanitizer
   alias Engram.Repo
+  alias Engram.ServiceConfig
   alias Engram.Sync.Broadcast
   alias Engram.Vaults
   alias Engram.Vector.Qdrant
@@ -229,40 +231,65 @@ defmodule Engram.Folders do
   end
 
   # Interim cap (#2492): a rename or move holds the vault lock for its whole
-  # subtree, so one over `:folder_op_max_rows` is refused before any lock,
-  # claim or scan. Index-only, no decrypt: one walk over folder rows, then up
-  # to four counts (notes by `notes_folder_ref_live`, attachments by
-  # `attachments_folder_ref_live`, and the two drift partial indexes).
-  # ponytail: the drift arms count the whole vault's drift (0 in steady state)
-  # so the count is never low; scope them by path if drift ever lingers.
-  # Counting is O(subtree) index entries; a LIMIT cap+1 would bound it at the
-  # cost of an exact count in the error.
+  # subtree, so one over `:folder_op_max_rows` (a `ServiceConfig` runtime
+  # override, default in config.exs) is refused before any lock, claim or
+  # scan. No decrypt, and each count reads at most limit + 1 matching index
+  # entries, stopping once the running sum is over:
+  #
+  #   * notes and attachments placed by reference in the subtree's rows;
+  #   * drift notes (`Drift.notes_unresolved/0`) whose folder key is one of
+  #     those rows' paths, and stale attachments (`Drift.attachments_stale/0`)
+  #     whose reference still names one of them. Scoped to the subtree, so
+  #     drift elsewhere in the vault never refuses a small folder.
+  #
+  # ponytail: drift in a folder with no row yet, and a stale attachment with
+  # a NULL reference, are not counted (the readers place those by decrypting
+  # the vault's drift, which would double a rename's decrypt budget); both
+  # are 0 in steady state and the drain heals them.
   defp refuse_too_large(user, vault, folders) do
-    limit = Application.fetch_env!(:engram, :folder_op_max_rows)
-    count = subtree_size(user, vault, folders)
-    if count > limit, do: {:error, {:folder_too_large, count, limit}}, else: :ok
+    limit = ServiceConfig.get(:folder_op_max_rows)
+
+    if over_limit?(user, vault, folders, limit),
+      do: {:error, {:folder_too_large, limit}},
+      else: :ok
   end
 
-  defp subtree_size(user, vault, folders) do
+  defp over_limit?(user, vault, folders, limit) do
     Repo.with_tenant!(user.id, fn ->
-      ids = for %{id: id} <- Rows.subtree_refs(user, vault.id, folders), do: id
-      notes = Notes.scoped_live(user, vault)
-      atts = Attachments.scoped_live(user, vault)
+      refs = Rows.subtree_refs(user, vault.id, folders)
+      ids = for %{id: id} <- refs, do: id
+      hmacs = for %{full_path_hmac: h} when is_binary(h) <- refs, do: h
+      notes = from(n in Notes.scoped_live(user, vault), where: n.kind == "note")
+      atts = from(a in Attachments.scoped_live(user, vault), as: :a)
 
-      by_ref =
-        if ids == [],
-          do: 0,
-          else:
-            Repo.aggregate(
-              from(n in notes, where: n.kind == "note" and n.folder_ref_id in ^ids),
-              :count
-            ) +
-              Repo.aggregate(from(a in atts, where: a.folder_ref_id in ^ids), :count)
+      by_ref = fn query ->
+        &bounded_count(from(r in query, where: r.folder_ref_id in ^ids), ids, &1)
+      end
 
-      by_ref + Repo.aggregate(from(n in notes, where: ^Drift.notes_unresolved()), :count) +
-        Repo.aggregate(from(a in atts, where: ^Drift.attachments_stale()), :count)
+      arms = [
+        by_ref.(notes),
+        by_ref.(from(a in atts, where: ^Rows.attachment_ref_placed())),
+        &bounded_count(
+          from(n in notes, where: ^Drift.notes_unresolved(), where: ^Keys.in_any(:folder, hmacs)),
+          hmacs,
+          &1
+        ),
+        by_ref.(from(a in atts, where: ^Drift.attachments_stale()))
+      ]
+
+      # `left`: how many more rows would put the subtree over the limit.
+      Enum.reduce_while(arms, limit + 1, fn arm, left ->
+        left = left - arm.(left)
+        if left <= 0, do: {:halt, 0}, else: {:cont, left}
+      end) == 0
     end)
   end
+
+  # `keys`: what the query filters on; none means no rows, so no statement.
+  defp bounded_count(_query, [], _k), do: 0
+
+  defp bounded_count(query, _keys, k),
+    do: Repo.aggregate(subquery(from(r in query, select: %{id: r.id}, limit: ^k)), :count)
 
   @doc """
   Deletes a folder and, when `recursive: true`, everything under it.
