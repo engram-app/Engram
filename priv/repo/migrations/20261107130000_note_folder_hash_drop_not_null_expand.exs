@@ -3,7 +3,7 @@
 # ACCESS EXCLUSIVE lock under this migration's lock_timeout (5s). N-1 safe:
 # release C (this one) and 0.78 still write folder_hmac on every note, so no
 # NULL exists until release D, the first that writes NULL; markers keep the
-# hash required by notes_kind_shape_v3_check (20261107100000). The markers are
+# hash required by notes_kind_shape_v3_check (20261107130100). The markers are
 # per-rule and per-file (no per-statement ignore), so this file holds only
 # this one statement.
 defmodule Engram.Repo.Migrations.NoteFolderHashDropNotNullExpand do
@@ -12,7 +12,7 @@ defmodule Engram.Repo.Migrations.NoteFolderHashDropNotNullExpand do
   @moduledoc """
   R9 schema prep: `notes.folder_hmac` becomes nullable so a later release can
   stop writing it on notes (a note's folder is its `folder_ref_id`).
-  20261107100000 moves the marker requirement into the kind-shape check and
+  20261107130100 moves the marker requirement into the kind-shape check and
   makes `notes_set_folder_ref()` keep a hashless note's reference. Calls no
   app module (N-1 gate).
   """

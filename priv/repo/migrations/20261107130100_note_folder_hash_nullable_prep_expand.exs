@@ -11,7 +11,7 @@ defmodule Engram.Repo.Migrations.NoteFolderHashNullablePrepExpand do
   path identity.
 
     * The column's NOT NULL is dropped by the migration before this one
-      (20261107095000, kept alone so its squawk exemption covers one
+      (20261107130000, kept alone so its squawk exemption covers one
       statement). A marker still needs the hash, by the check below.
     * `notes_kind_shape_v2_check` required `folder_hmac` on a note. It is
       replaced by `notes_kind_shape_v3_check`, identical but for that clause
