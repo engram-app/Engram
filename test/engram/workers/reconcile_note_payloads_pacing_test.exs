@@ -154,7 +154,17 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
     """
   end
 
-  defp sweep(ctx), do: perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+  # The `n` backfill job (`mode: "n"`); `heal/1` is the heal job.
+  defp sweep(ctx),
+    do: perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id, "mode" => "n"})
+
+  defp heal(ctx), do: perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+  # Every Repo query this process made, and whether a point was read.
+  defp reads(fun) do
+    {result, queries} = Engram.QueryRecorder.record(fun)
+    {result, Enum.filter(queries, &(&1.pid == self()))}
+  end
 
   defp versions(ctx) do
     Repo.all(
@@ -195,15 +205,57 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
     refute_received :rewrite
   end
 
-  # The switch gates only the `n` write and the version stamp: the job
-  # still heals (a DEK rotation or FileTimes may have queued it), writes no
-  # `n`, stamps no version, and ends rather than retrying while off.
-  test "with the kill switch off, the job writes no n, stamps nothing, and ends", ctx do
-    ServiceConfig.put_override(:payload_backfill, false)
+  # A paused `n` job reads nothing: every gate runs before its first
+  # Postgres or Qdrant read (only the cached Qdrant health gate is asked).
+  for gate <- [:switch_off, :disk_gate, :bucket_spent] do
+    @gate gate
+    test "#{gate}: a paused n job snoozes with 0 Repo queries and 0 point reads", ctx do
+      close(@gate, ctx)
+      {result, queries} = reads(fn -> sweep(ctx) end)
 
-    assert :ok = sweep(ctx)
+      assert {:snooze, _} = result
+      assert queries == []
+      refute_received :read
+      refute_received :rewrite
+    end
+  end
+
+  defp close(:switch_off, _ctx), do: ServiceConfig.put_override(:payload_backfill, false)
+  defp close(:disk_gate, ctx), do: Agent.update(ctx.health, fn _ -> {@green, 0, 76} end)
+
+  defp close(:bucket_spent, _ctx),
+    do:
+      {:allow, _} = EngramWeb.RateLimiter.hit("payload_backfill_points", 60_000, 500, :other, 500)
+
+  # The heal job never asks an `n` gate: under the disk gate a DEK
+  # rotation's heal completes as on main. The fixture's points lack `n` (the
+  # setup strips it), so a heal that still touched the `n` path would pause.
+  test "disk gate closed: a DEK rotation's heal job completes as on main", ctx do
+    close(:disk_gate, ctx)
+
+    {1, _} =
+      Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^ctx.note.id),
+        [set: [payload_hash: nil, keyword_version: nil]],
+        skip_tenant_check: true
+      )
+
+    assert :ok = heal(ctx)
+
+    assert Repo.one!(
+             from(n in Engram.Notes.Note, where: n.id == ^ctx.note.id, select: n.payload_hash),
+             skip_tenant_check: true
+           )
+
     refute_received :rewrite
     refute all_n?(ctx)
+  end
+
+  test "the kill switch pauses it, and it resumes once back on", ctx do
+    ServiceConfig.put_override(:payload_backfill, false)
+
+    assert {:snooze, _} = sweep(ctx)
+    refute_received :rewrite
     assert versions(ctx) |> Enum.all?(&is_nil/1)
 
     ServiceConfig.put_override(:payload_backfill, true)
@@ -216,7 +268,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
   # jittered backoff (it is temporary; the bucket's edge snooze is not this).
   test "a disk-gated job's snooze grows and is jittered (Rebuild.gate_snooze/1)", ctx do
     Agent.update(ctx.health, fn _ -> {@green, 0, 76} end)
-    job = build_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+    job = build_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id, "mode" => "n"})
 
     snoozes =
       for _ <- 1..20, do: elem(ReconcileNotePayloads.perform(%{job | meta: %{"snoozed" => 3}}), 1)
@@ -244,9 +296,8 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
 
   # A spent bucket: the job still heals, writes no `n`, and snoozes to the
   # window's edge (plus jitter), not into a growing backoff.
-  test "an exhausted bucket holds the n write and snoozes to the window edge", ctx do
-    {:allow, _} =
-      EngramWeb.RateLimiter.hit("payload_backfill_points", 60_000, 500, :other, 500)
+  test "an exhausted bucket snoozes to the window edge, not into a backoff", ctx do
+    close(:bucket_spent, ctx)
 
     assert {:snooze, s} = sweep(ctx)
     assert s in 1..70
@@ -256,12 +307,17 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
 
   # Each page is capped at what the window has left, so the whole budget
   # goes through: 256 + 244 at 500/min, then the job waits for the edge.
-  test "at 500/min a window lets 500 points through, then the job snoozes to its edge", ctx do
+  # The held window is queued again as a fresh job at the window's edge
+  # (its cursor exact), so the next window carries on from it.
+  test "at 500/min a window lets 500 points through, then the rest waits for its edge", ctx do
     more_points(ctx, 600)
 
-    assert {:snooze, s} = sweep(ctx)
-    assert s in 1..70
+    assert :ok = sweep(ctx)
     assert written(ctx) == 500
+
+    [next] = all_enqueued(worker: ReconcileNotePayloads, args: %{"mode" => "n"})
+    wait = DateTime.diff(next.scheduled_at, DateTime.utc_now(), :second)
+    assert wait in 0..70
     assert EngramWeb.RateLimiter.peek("payload_backfill_points", 60_000, 500) == 0
   end
 
@@ -285,7 +341,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
        ctx do
     for _ <- 1..50 do
       {:ok, idle} = Crypto.ensure_user_dek(insert(:user))
-      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => idle.id})
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => idle.id, "mode" => "n"})
     end
 
     assert EngramWeb.RateLimiter.peek("payload_backfill_points", 60_000, 500) == 500

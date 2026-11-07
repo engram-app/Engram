@@ -137,8 +137,10 @@ defmodule Engram.Jobs do
       period: 900,
       states: [:available, :scheduled, :retryable]
     ],
+    # `mode`: a heal (no mode) and an `n` backfill (`"n"`) never share a
+    # slot, so a paused backfill cannot swallow a DEK rotation's heal.
     Engram.Workers.ReconcileNotePayloads => [
-      keys: [:user_id],
+      keys: [:user_id, :mode],
       period: :infinity,
       states: [:available, :scheduled, :retryable]
     ],
