@@ -451,11 +451,12 @@ defmodule Engram.Repo do
           gated? = Process.get(:engram_write_gate, false)
 
           # `with_tenant_snapshot!/2`: the first statement of the transaction.
-          if snapshot?,
-            do:
-              query!("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY", [],
-                source: "tenant_snapshot"
-              )
+          _ =
+            if snapshot?,
+              do:
+                query!("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY", [],
+                  source: "tenant_snapshot"
+                )
 
           %{rows: [row]} = enter_tenant(uuid, gated?)
 
