@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.78.1](https://github.com/engram-app/Engram/compare/0.78.0...0.78.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **notes:** refuse blind overwrites without base_hash ([#2486](https://github.com/engram-app/Engram/issues/2486)) ([5deca7e](https://github.com/engram-app/Engram/commit/5deca7eb0a18e59060f3d763ce00a4dc131411dd))
+* **qdrant:** one fleet n backfill job, no snooze herd ([#2501](https://github.com/engram-app/Engram/issues/2501)) ([9cb8ced](https://github.com/engram-app/Engram/commit/9cb8ced5a1913ff16c23d7dbe0eca2f7b20990bc))
+
 ## [0.78.0](https://github.com/engram-app/Engram/compare/0.77.0...0.78.0) (2026-11-07)
 
 
