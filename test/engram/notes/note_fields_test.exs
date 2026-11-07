@@ -98,11 +98,6 @@ defmodule Engram.Notes.NoteFieldsTest do
 
   # Qdrant's keyword `match` semantics on one payload: `value` matches a
   # scalar or any element of a list, `any` matches if one of them does.
-  defp payload_matches?(p, %{key: k, match: %{value: v}}), do: v in List.wrap(p[k])
-
-  defp payload_matches?(p, %{key: k, match: %{any: vs}}),
-    do: Enum.any?(vs, &(&1 in List.wrap(p[k])))
-
   defp dictionary(user_id),
     do:
       Repo.all(from(k in FrontmatterKey, where: k.user_id == ^user_id, order_by: k.key_id),
@@ -384,7 +379,7 @@ defmodule Engram.Notes.NoteFieldsTest do
     assert Enum.map(attrs(note.id), & &1.key_id) == [named(:author)]
   end
 
-  describe "Postgres and the v5 Qdrant payload agree" do
+  describe "Postgres holds the fields; the point holds the identity (R3a)" do
     # YAML reads `status: 2` as a number and `reviewed_by: true` as a
     # boolean; a named exact field must still hold their text, or a filter
     # for "2" finds nothing. Date-shaped strings stay text too.
@@ -416,88 +411,20 @@ defmodule Engram.Notes.NoteFieldsTest do
       assert h.(:reviewed_by) == [v.("true")]
       assert h.(:project) == [v.("2026-01-01")]
       assert Enum.sort(h.(:source)) == Enum.sort([v.("2024"), v.("1.5"), v.("https://a")])
+    end
 
+    test "the point payload is exactly u, v and n", %{user: user, vault: vault} do
+      {note, _user} = index!(user, vault, @full)
       assert_received {:upsert, body}
-      %{"points" => [%{"payload" => p} | _]} = Jason.decode!(body)
+      %{"points" => points} = Jason.decode!(body)
 
-      for {key, value} <- [
-            {"status", "2"},
-            {"status", 2},
-            {"author", "42"},
-            {"reviewed_by", true},
-            {"project", "2026-01-01"},
-            {"source", "2024"},
-            {"source", 1.5}
-          ] do
-        assert {:ok, [c]} =
-                 Engram.Search.FieldFilters.to_conditions(user.id, fk, [
-                   %{"key" => key, "value" => value}
-                 ])
-
-        assert payload_matches?(p, c), "#{key} #{inspect(value)}"
+      for %{"payload" => p} <- points do
+        assert p == %{
+                 "u" => FilterId.uuid(note.user_id),
+                 "v" => FilterId.uuid(note.vault_id),
+                 "n" => FilterId.uuid(note.id)
+               }
       end
-    end
-
-    test "field for field", %{user: user, vault: vault} do
-      {note, user} = index!(user, vault, @full)
-      {:ok, fk} = Crypto.dek_filter_key(user)
-      assert_received {:upsert, body}
-      %{"points" => [%{"payload" => p, "id" => id} | _]} = Jason.decode!(body)
-      rows = attrs(note.id)
-      one = fn field -> Enum.find(rows, &(&1.key_id == named(field))) end
-
-      assert p["s"] == FilterId.from_hmac(one.(:status).h)
-      assert p["a"] == FilterId.from_hmac(one.(:author).h)
-      assert p["r"] == FilterId.from_hmac(one.(:reviewed_by).h)
-      assert p["j"] == FilterId.from_hmac(one.(:project).h)
-      assert p["up"] == one.(:updated).d
-      assert p["rd"] == one.(:reviewed).d
-      assert p["ex"] == div(one.(:expires).d, 86_400)
-      assert p["du"] == div(one.(:due).d, 86_400)
-      assert p["pr"] == one.(:priority).n
-      assert p["u"] == FilterId.uuid(note.user_id)
-
-      # `fa` mirrors the user-key rows: same key id, same value.
-      user_rows = for r <- rows, r.key_id >= 64, do: r
-
-      expected =
-        for r <- user_rows do
-          cond do
-            r.h -> %{"k" => r.key_id, "h" => FilterId.from_hmac(r.h)}
-            r.n -> %{"k" => r.key_id, "n" => r.n}
-            r.d -> %{"k" => r.key_id, "d" => r.d}
-          end
-        end
-
-      assert Enum.sort(p["fa"]) == Enum.sort(expected)
-      refute Map.has_key?(p, "at") or Map.has_key?(p, "nm") or Map.has_key?(p, "dt")
-      # No key name or key HMAC in the payload: only small integer ids.
-      for %{"k" => k} <- p["fa"], do: assert(is_integer(k))
-      refute inspect(p) =~ FilterId.attr(fk, "mood")
-
-      assert String.at(id, 14) == "5"
-      refute Map.has_key?(p, "text")
-    end
-
-    # Review H2: a reused point is refreshed as a replace (merge the new payload,
-    # then delete the known keys it omits), so a key removed from the frontmatter
-    # (or a move to the root) leaves no stale key. Skipping the delete step
-    # would leave "s" on the point, which this test catches.
-    test "a removed key disappears from a reused point", %{user: user, vault: vault} do
-      body = "\n# Fields\n\nBody text that yields at least one chunk.\n"
-      {_note, _user} = index!(user, vault, "---\nstatus: draft\ndue: 2026-11-01\n---" <> body)
-      {_note, _user} = index!(user, vault, "---\ndue: 2026-11-01\n---" <> body)
-
-      assert_received {:payload, "POST", refresh}
-      refute_received {:payload, _, _}
-      payload = Jason.decode!(refresh)["payload"]
-      refute Map.has_key?(payload, "s")
-      assert Map.has_key?(payload, "du")
-
-      assert_received {:payload_delete, deleted}
-      keys = Jason.decode!(deleted)["keys"]
-      assert "s" in keys
-      refute "du" in keys
     end
 
     test "deterministic ids, no text", %{user: user, vault: vault} do

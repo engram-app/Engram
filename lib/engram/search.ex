@@ -102,9 +102,10 @@ defmodule Engram.Search do
     end
   end
 
-  # `:fields` (frontmatter key filters) resolve to Qdrant conditions ONCE per
-  # request, before the budget is spent: an unknown key is an explicit error,
-  # never an empty result (`Engram.Search.FieldFilters`).
+  # `:fields` (frontmatter key filters) are validated ONCE per request,
+  # before the budget is spent: an unknown key is an explicit error, never an
+  # empty result (`Engram.Search.FieldFilters`). Postgres resolves them
+  # (`Engram.Search.NoteFilter`, from the same parse).
   defp resolve_field_filters(user, opts) do
     case Keyword.get(opts, :fields, []) do
       [] ->
@@ -112,9 +113,8 @@ defmodule Engram.Search do
 
       fields ->
         with {:ok, fk} <- field_filter_key(user, fields),
-             {:ok, conditions} <- FieldFilters.to_conditions(to_string(user.id), fk, fields) do
-          {:ok, Keyword.put(opts, :attr_filters, conditions)}
-        end
+             {:ok, _specs} <- FieldFilters.to_specs(to_string(user.id), fk, fields),
+             do: {:ok, opts}
     end
   end
 
@@ -593,9 +593,6 @@ defmodule Engram.Search do
     # keyword when the query embed fails.
     mode = Keyword.get(opts, :mode, :hybrid)
     limit = opts |> Keyword.get(:limit, 5) |> clamp_limit()
-    tags = opts |> Keyword.get(:tags) |> tag_filter()
-    folder = Keyword.get(opts, :folder)
-    type = Keyword.get(opts, :type)
 
     # On the grouped path `limit` is the NOTE count, not the chunk count.
     group? = Keyword.get(opts, :group_by_note, false)
@@ -629,13 +626,14 @@ defmodule Engram.Search do
     # (unchanged chunk-path behavior).
     rerank_keep = if group? or diversify?, do: pool, else: limit
 
-    case search_filter(user, vault, opts, {folder, tags, type}) do
+    case search_filter(user, vault, opts) do
       {:ok, filter_kw, within} ->
         # A filter Postgres could not narrow to `max_note_ids` notes either
-        # way is searched over the whole tenant, oversampled by its matching
-        # fraction (`oversample/1`), then post-filtered.
+        # way (or no `n` index) is searched over the whole tenant,
+        # oversampled by its matching fraction (`oversample/1`), then
+        # post-filtered.
         qdrant_limit =
-          if within,
+          if post_filter?(within),
             do: min(fetch_limit * oversample(within), Qdrant.max_page()),
             else: fetch_limit
 
@@ -678,52 +676,48 @@ defmodule Engram.Search do
     end
   end
 
-  # The search's filter opts, and the post-filter a `:too_wide` filter needs
-  # (nil otherwise). `:no_match` when no note can match: no Qdrant request.
+  # The search's filter opts and its post-filter: nil (no filter),
+  # `{:scope, scope}` (the hits' notes checked against the resolved ids), or
+  # a `{vaults, filter, sample}` oversampled post-filter. `:no_match` when no
+  # note can match: no Qdrant request.
   #
-  # Once the collection has its `n` index, Postgres resolves every filter to
-  # note ids (`note_filter/0`) and the Qdrant filter decides per point
-  # (`Qdrant.build_tenant_filter/1`, `:note_scope`): a point with `n` by its
-  # note id, one without `n` by today's payload conditions, which ride along.
-  # Correct at every moment of the `n` backfill, so there is no per-user
-  # switch. Without the index (strict mode refuses an unindexed filter), the
-  # payload conditions alone, as before. The opts go to the resolver as they
-  # are: it takes its own filter keys (the search opt names) and ignores the
-  # rest.
-  defp search_filter(user, vault, opts, ffs) do
-    with {:ok, payload} <- payload_filter(user, opts, ffs) do
-      if note_filter().any?(opts) and Qdrant.n_filterable?() do
-        vaults = filter_vaults(user, vault, opts)
+  # Postgres resolves every filter (R3a: no point carries a filter field).
+  # With the collection's `n` index the Qdrant filter is the note ids on `n`,
+  # or `is_empty(n)` for a point not yet backfilled
+  # (`Qdrant.build_tenant_filter/1`); every hit is then checked against the
+  # scope by its chunk row's note, so such a point is found and never wrong.
+  # Without the index (strict mode refuses an unindexed filter), the tenant
+  # alone at the widest oversample, post-filtered. Never gated on the
+  # `note_payload_stamps` ledger. The opts go to the resolver as they are: it
+  # takes its own filter keys (the search opt names) and ignores the rest.
+  defp search_filter(user, vault, opts) do
+    cond do
+      not note_filter().any?(opts) ->
+        {:ok, [], nil}
 
-        case note_filter().resolve(user, vaults, opts, sample: true) do
-          {:ok, {:ids, []}} -> :no_match
-          {:ok, {:too_wide, sample}} -> {:ok, [], {vaults, opts, sample}}
-          {:ok, scope} -> {:ok, payload ++ [note_scope: scope], nil}
-          {:error, _} = error -> error
-        end
-      else
-        {:ok, payload, nil}
-      end
-    end
-  end
-
-  # Today's payload conditions for the filter opts.
-  defp payload_filter(user, opts, {folder, tags, type}) do
-    case translate_phase_b_filters(user, folder, tags, type) do
-      {:ok, phase_b_kw} ->
-        {:ok,
-         phase_b_kw
-         |> Keyword.merge(date_bound_kw(opts))
-         |> Keyword.put(:attr_filters, Keyword.get(opts, :attr_filters, []))}
-
-      # Caller asked to filter by folder/tags/type but has no DEK
-      # provisioned, so it's impossible to derive HMAC, and the user has no
-      # encrypted points to match anyway. Mirrors list_folders (B.2.2)
-      # defensive empty.
-      :no_dek_with_filter ->
+      # No DEK, no encrypted notes: nothing can match, and no Qdrant request.
+      Engram.Crypto.dek_filter_key(user) == {:error, :no_dek} ->
         :no_match
+
+      true ->
+        resolve_scope(user, filter_vaults(user, vault, opts), opts, Qdrant.n_filterable?())
     end
   end
+
+  defp resolve_scope(user, vaults, opts, true = _n_filterable?) do
+    case note_filter().resolve(user, vaults, opts, sample: true) do
+      {:ok, {:ids, []}} -> :no_match
+      {:ok, {:too_wide, sample}} -> {:ok, [], {vaults, opts, sample}}
+      {:ok, scope} -> {:ok, [note_scope: scope], {:scope, scope}}
+      {:error, _} = error -> error
+    end
+  end
+
+  # No sample to size by: the widest oversample (`oversample/1`, 16x).
+  defp resolve_scope(_user, vaults, opts, false), do: {:ok, [], {vaults, opts, {0, 0}}}
+
+  defp post_filter?({_vaults, _filter, _sample}), do: true
+  defp post_filter?(_within), do: false
 
   # The most a `:too_wide` search fetches: 16x the page, in at most two rounds.
   @widen_factor 16
@@ -763,6 +757,18 @@ defmodule Engram.Search do
     with {:ok, candidates} <- legs.(search_opts), do: postgres_hits(candidates, user)
   end
 
+  # A note-scoped search: a hit whose note is outside the scope (a point
+  # without `n` let through by `is_empty(n)`) is dropped, from the chunk rows
+  # `postgres_hits/2` already read. No extra query.
+  defp ranked_hits(legs, user, search_opts, {:scope, scope}, keep) do
+    with {:ok, {candidates, hits}} <- ranked_hits(legs, user, search_opts, nil, keep) do
+      {kind, ids} = scope
+      ids = MapSet.new(ids)
+      keep? = &(MapSet.member?(ids, hits[&1.qdrant_id].note_id) == (kind == :ids))
+      {:ok, {Enum.filter(candidates, keep?), hits}}
+    end
+  end
+
   defp ranked_hits(legs, user, search_opts, within, keep),
     do: post_filtered(legs, user, search_opts, within, keep, 1)
 
@@ -796,6 +802,7 @@ defmodule Engram.Search do
   # A post-filtered search may query Qdrant twice; the query embed (a paid
   # call) happens once, here, and `query_embedding/3` reuses it.
   defp embed_once(search_opts, nil, _mode, _query, _profile), do: search_opts
+  defp embed_once(search_opts, {:scope, _}, _mode, _query, _profile), do: search_opts
 
   defp embed_once(search_opts, _within, mode, query, profile) when mode in [:vector, :hybrid],
     do: Keyword.put(search_opts, :query_embedding, embed_for_search(query, profile.query_model))
@@ -1014,73 +1021,6 @@ defmodule Engram.Search do
   end
 
   defp detect_query_language(query), do: Engram.KeywordIndex.LangDetect.detect(query) || :en
-
-  # Returns either {:ok, kw} where kw is the [folder_hmac: ..., tags_hmac: ...,
-  # type_hmac: ...] subset to merge into Qdrant search opts, or
-  # :no_dek_with_filter when the caller asked for a filter but has no DEK to
-  # derive the HMAC. An unfiltered search (no folder, no tags, no type) is
-  # always {:ok, []}, no DEK required.
-  defp translate_phase_b_filters(_user, nil, nil, nil), do: {:ok, []}
-
-  defp translate_phase_b_filters(user, folder, tags, type) do
-    case Engram.Crypto.dek_filter_key(user) do
-      {:ok, filter_key} ->
-        kw =
-          []
-          |> maybe_put_folder_hmac(filter_key, folder)
-          |> maybe_put_tags_hmac(filter_key, tags)
-          |> maybe_put_type_hmac(filter_key, type)
-
-        {:ok, kw}
-
-      {:error, :no_dek} ->
-        :no_dek_with_filter
-    end
-  end
-
-  defp maybe_put_folder_hmac(kw, _filter_key, nil), do: kw
-
-  defp maybe_put_folder_hmac(kw, filter_key, folder),
-    do: Keyword.put(kw, :folder_hmac, Base.encode64(Engram.Crypto.hmac_field(filter_key, folder)))
-
-  # No tags named is no tag filter: MCP clients send `"tags": []`, and REST
-  # `tags[]=` decodes as `[""]`. Left in, either matched nothing.
-  defp tag_filter(tags) when is_list(tags) do
-    case Enum.reject(tags, &(&1 == "")) do
-      [] -> nil
-      named -> named
-    end
-  end
-
-  defp tag_filter(tags), do: tags
-
-  defp maybe_put_tags_hmac(kw, _filter_key, nil), do: kw
-
-  defp maybe_put_tags_hmac(kw, filter_key, tags) do
-    encoded = Enum.map(tags, &Base.encode64(Engram.Crypto.hmac_field(filter_key, &1)))
-    Keyword.put(kw, :tags_hmac, encoded)
-  end
-
-  defp maybe_put_type_hmac(kw, _filter_key, nil), do: kw
-
-  defp maybe_put_type_hmac(kw, filter_key, type) do
-    normalized = Engram.Notes.OkfFields.normalize_type(type)
-    Keyword.put(kw, :type_hmac, Base.encode64(Engram.Crypto.hmac_field(filter_key, normalized)))
-  end
-
-  # Plaintext date bounds need no DEK; translated straight to unix seconds
-  # and merged into search_opts regardless of DEK availability (unlike
-  # folder/tags/type, which require a DEK to derive an HMAC).
-  defp date_bound_kw(opts) do
-    [
-      fm_timestamp_gte: opts[:updated_after],
-      fm_timestamp_lte: opts[:updated_before],
-      fm_created_gte: opts[:created_after],
-      fm_created_lte: opts[:created_before]
-    ]
-    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-    |> Enum.map(fn {k, %DateTime{} = dt} -> {k, DateTime.to_unix(dt)} end)
-  end
 
   # A concrete vault narrows to one id; `vault_ids` narrows to a set (a
   # multi-vault OAuth grant or a subset-restricted API key); neither means an

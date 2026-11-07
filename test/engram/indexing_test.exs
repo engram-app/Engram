@@ -8,7 +8,6 @@ defmodule Engram.IndexingTest do
   alias Engram.Crypto.DekCache
   alias Engram.Indexing
   alias Engram.Notes
-  alias Engram.Vector.FilterId
 
   # Mox requires that expectations are verified after each test
   setup :verify_on_exit!
@@ -521,63 +520,8 @@ defmodule Engram.IndexingTest do
         refute Map.has_key?(payload, "source_path")
         refute Map.has_key?(payload, "folder")
         refute Map.has_key?(payload, "tags")
-        # HMAC-derived filter ids retained: scoped vector search must keep working.
-        assert Map.has_key?(payload, "p")
-        assert Map.has_key?(payload, "f")
-        assert Map.has_key?(payload, "g")
-        # No display field: the title is rendered from Postgres.
-        refute Map.has_key?(payload, "title_nonce")
-      end)
-    end
-
-    test "Phase B: payload includes the path/folder/tags hmac filter ids",
-         %{bypass: bypass, user: user} do
-      DekCache.invalidate_all()
-      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
-      vault = insert(:vault, user: user)
-
-      {:ok, note} =
-        Notes.upsert_note(
-          user,
-          vault,
-          %{
-            "path" => "Health/iron.md",
-            "content" => "---\ntags: [labs, ferritin]\n---\n# Iron",
-            "mtime" => 1_000.0
-          },
-          actor: "api"
-        )
-
-      Engram.MockEmbedder
-      |> expect(:embed_texts, fn texts ->
-        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
-      end)
-
-      test_pid = self()
-
-      Bypass.expect(bypass, fn conn ->
-        if String.contains?(conn.request_path, "/points") and conn.method == "PUT" do
-          {:ok, body, conn} = Plug.Conn.read_body(conn)
-          send(test_pid, {:upsert_body, Jason.decode!(body)})
-          Plug.Conn.send_resp(conn, 200, ~s({"result": true}))
-        else
-          Plug.Conn.send_resp(conn, 200, ~s({"result": true}))
-        end
-      end)
-
-      assert {:ok, _} = Indexing.index_note(note, vault)
-      assert_received {:upsert_body, body}
-
-      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
-      id = &FilterId.from_hmac(Engram.Crypto.hmac_field(filter_key, &1))
-
-      Enum.each(body["points"], fn p ->
-        payload = p["payload"]
-        assert payload["p"] == id.("Health/iron.md")
-        assert payload["f"] == id.("Health")
-        assert is_list(payload["g"])
-        assert id.("labs") in payload["g"]
-        assert id.("ferritin") in payload["g"]
+        # R3a: the identity only; filters resolve in Postgres.
+        assert Map.keys(payload) |> Enum.sort() == ~w(n u v)
       end)
     end
 
@@ -842,44 +786,14 @@ defmodule Engram.IndexingTest do
   end
 
   # ---------------------------------------------------------------------------
-  # repath_points/2 + count_points_by_path_hmac/2 (#746)
+  # count_points_by_path_hmac/2 (#746)
   # ---------------------------------------------------------------------------
 
-  describe "repath_points/2 + count_points_by_path_hmac/2 (#746)" do
+  describe "count_points_by_path_hmac/2 (#746)" do
     setup do
       bypass = Bypass.open()
       Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
       %{bypass: bypass}
-    end
-
-    test "repath_points PATCHes current path/folder hmac onto old-path points", %{bypass: bypass} do
-      user = insert(:user)
-      vault = insert(:vault, user: user)
-
-      note = %Engram.Notes.Note{
-        id: Ecto.UUID.generate(),
-        user_id: user.id,
-        vault_id: vault.id,
-        path_hmac: <<1, 2, 3>>,
-        folder_hmac: <<4, 5, 6>>
-      }
-
-      old_b64 = Base.encode64(<<9, 9, 9>>)
-
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        decoded = Jason.decode!(body)
-
-        assert decoded["payload"]["path_hmac"] == Base.encode64(<<1, 2, 3>>)
-        assert decoded["payload"]["folder_hmac"] == Base.encode64(<<4, 5, 6>>)
-
-        assert %{"key" => "path_hmac", "match" => %{"value" => ^old_b64}} =
-                 Enum.find(legacy_view(decoded["filter"]["must"]), &(&1["key"] == "path_hmac"))
-
-        Plug.Conn.send_resp(conn, 200, ~s({"result": true}))
-      end)
-
-      assert :ok = Engram.Indexing.repath_points(note, old_b64)
     end
 
     test "count_points_by_path_hmac returns the count", %{bypass: bypass} do

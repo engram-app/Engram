@@ -6,8 +6,8 @@ defmodule Engram.Notes.EffectiveDates do
   else the row's `updated_at` / `created_at`. The one place that
   fallback is decided:
 
-    * `updated/2` / `created/2`: the v5 payload's `up` / `cr`
-      (`Engram.Indexing.PayloadV5`).
+    * `updated/2` / `created/2`: the reference the SQL is pinned to (no
+      point carries a date since R3a; it lives in Postgres only).
     * `stored/2`: the frontmatter-or-file part, which the content save stores
       in `notes.eff_updated` / `eff_created` (`Note.changeset/2`), computed
       by this module, never reparsed in SQL.
@@ -22,8 +22,7 @@ defmodule Engram.Notes.EffectiveDates do
   `created/2` and the migrated indexes to `index_sql/1`.
 
   `updated/2` / `created/2` return `{unix, source}`: `source` is nil for the
-  frontmatter, `1` for the file time, `2` for the row time (the payload's
-  `us` / `cs` flags).
+  frontmatter, `1` for the file time, `2` for the row time.
   """
 
   alias Engram.FileTime
@@ -45,9 +44,8 @@ defmodule Engram.Notes.EffectiveDates do
   @typedoc "`{unix seconds, source}` (see the moduledoc)."
   @type t :: {integer() | nil, nil | 1 | 2}
 
-  # No @spec on the functions below. updated/2 and created/2 were private
-  # to `PayloadV5`, which dialyzer typed from their success typing; a
-  # contract here made `:underspecs` flag `PayloadV6.build/2` on CI.
+  # No @spec on the functions below: a contract here made `:underspecs`
+  # flag their callers on CI.
 
   @doc """
   The stored part of an effective date: the frontmatter date `fm`, else the
