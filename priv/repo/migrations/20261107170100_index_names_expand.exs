@@ -13,11 +13,11 @@ defmodule Engram.Repo.Migrations.IndexNamesExpand do
       NOT unique: rows the previous release wrote carry no name yet, and drift
       rows may already collide. S3 builds the unique twin after a duplicate
       check.
-    * `notes_folder_ref_live_id` / `attachments_folder_ref_live_id`: a
-      folder's live rows in id order (`(vault_id, folder_ref_id, id)`,
-      INCLUDE `user_id` for the RLS policy), so the old-client feed view can
-      page a folder's rows by id. `notes_folder_ref_live` holds `id` only as
-      an INCLUDE column, so it cannot.
+    * `attachments_folder_ref_live_id`: a folder's live attachments in id
+      order (`(vault_id, folder_ref_id, id)`, INCLUDE `user_id` for the RLS
+      policy), so the old-client feed view can page them by id.
+      `attachments_folder_ref_live` holds `id` only as an INCLUDE column, so
+      it cannot. The notes twin is S1's (one definition).
     * `folders_vault_seq`: folders by structural change seq, empty until S5
       writes `folders.seq`.
 
@@ -37,9 +37,6 @@ defmodule Engram.Repo.Migrations.IndexNamesExpand do
      "ON notes (vault_id, folder_ref_id, name_ci_hmac) WHERE deleted_at IS NULL AND kind = 'note'"},
     {"attachments_folder_name_ci",
      "ON attachments (vault_id, folder_ref_id, name_ci_hmac) WHERE deleted_at IS NULL"},
-    {"notes_folder_ref_live_id",
-     "ON notes (vault_id, folder_ref_id, id) INCLUDE (user_id) " <>
-       "WHERE deleted_at IS NULL AND kind = 'note'"},
     {"attachments_folder_ref_live_id",
      "ON attachments (vault_id, folder_ref_id, id) INCLUDE (user_id) WHERE deleted_at IS NULL"},
     {"folders_vault_seq", "ON folders (vault_id, seq) WHERE seq IS NOT NULL"}
