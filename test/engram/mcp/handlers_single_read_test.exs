@@ -563,6 +563,32 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     assert count(text, "SCRIPT") == 1, inspect(text)
   end
 
+  # Review round 3: a 409 on a tailed note rebuilt the served view three times
+  # (base check, retry check, conflict body). It is built once per write now.
+  test "a REST 409 on a tailed note builds the served view once", ctx do
+    %{conn: conn, user: user, vault: vault} = ctx
+    {id, doc} = base_doc(user, vault)
+    land_tail(user, vault, id, doc, &(&1 <> "LIVEEDIT\n"))
+    ref = make_ref()
+    test = self()
+
+    :telemetry.attach(
+      "409-rebuild-#{inspect(ref)}",
+      [:engram, :notes, :read_rebuild],
+      fn _, _, _, _ -> send(test, {:rebuilt, ref}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach("409-rebuild-#{inspect(ref)}") end)
+
+    conn
+    |> post("/api/notes", %{path: "a.md", content: "x\n", mtime: 2.0, base_hash: "deadbeef"})
+    |> json_response(409)
+
+    assert_received {:rebuilt, ^ref}
+    refute_received {:rebuilt, ^ref}
+  end
+
   test "REST 409 hands back the GET view, whose hash then writes", ctx do
     %{conn: conn, user: user, vault: vault} = ctx
     {_text, before} = read_note(conn)
