@@ -9,6 +9,8 @@ defmodule Engram.Crypto.UserDekRotationTest do
   alias Engram.Crypto
   alias Engram.Crypto.{DekCache, Envelope, UserDekRotation}
 
+  alias Engram.Maintenance.Cursor
+
   alias Engram.Notes.{
     CrdtBridge,
     CrdtIndexDoc,
@@ -1302,6 +1304,57 @@ defmodule Engram.Crypto.UserDekRotationTest do
         end)
 
       assert Enum.any?(flip, &(&1 =~ ~r/INSERT INTO "maintenance_cursors"/))
+    end
+
+    # A note inside an embed cooldown at the flip is not swept until the
+    # cooldown ends, so the request must outlive it: cleared only once every
+    # NULLed note could have been covered.
+    test "a note in embed cooldown at the flip is still resparsed after its cooldown",
+         %{user: user, notes: [cooling | rest], bypass: bypass} do
+      Engram.QdrantStub.stub_healthy(bypass)
+      until = DateTime.add(DateTime.utc_now(), 3600, :second)
+      set_retry_after!(cooling, until)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+      assert :ok = perform_job(Engram.Workers.ReconcileEmbeddings, %{"mode" => "reverify"})
+
+      for note <- rest,
+          do:
+            assert_enqueued(
+              worker: Engram.Workers.RefreshKeywordVectors,
+              args: %{"note_id" => to_string(note.id)}
+            )
+
+      refute_enqueued(
+        worker: Engram.Workers.RefreshKeywordVectors,
+        args: %{"note_id" => to_string(cooling.id)}
+      )
+
+      # Still requested: the run swept everything it could and did not clear it.
+      assert %{} = Cursor.get("reconcile:version_check")
+
+      # The cooldown ends (moved, not waited for).
+      past = DateTime.add(DateTime.utc_now(), -1, :second)
+      set_retry_after!(cooling, past)
+
+      Cursor.put(
+        "reconcile:version_check",
+        Map.put(Cursor.get("reconcile:version_check"), "not_before", DateTime.to_iso8601(past))
+      )
+
+      assert :ok = perform_job(Engram.Workers.ReconcileEmbeddings, %{})
+
+      assert_enqueued(
+        worker: Engram.Workers.RefreshKeywordVectors,
+        args: %{"note_id" => to_string(cooling.id)}
+      )
+
+      assert Cursor.get("reconcile:version_check") == nil
+    end
+
+    defp set_retry_after!(note, at) do
+      from(n in Engram.Notes.Note, where: n.id == ^note.id)
+      |> Repo.update_all([set: [embed_retry_after: at]], skip_tenant_check: true)
     end
 
     test "note_attrs are rewritten under the new key", %{user: user, note: note} do

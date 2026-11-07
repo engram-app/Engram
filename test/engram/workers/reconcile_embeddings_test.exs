@@ -230,6 +230,19 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
     end
 
+    test "a request is not cleared before its not_before; a repeat keeps the later one" do
+      :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
+      later = DateTime.add(DateTime.utc_now(), 3600, :second)
+      :ok = ReconcileEmbeddings.request_version_check(nil, later)
+      :ok = ReconcileEmbeddings.request_version_check(nil, DateTime.add(later, -1800, :second))
+      :ok = ReconcileEmbeddings.request_version_check()
+      assert %{"not_before" => kept} = Cursor.get("reconcile:version_check")
+      assert {:ok, ^later, _} = DateTime.from_iso8601(kept)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{"mode" => "reverify"})
+      assert Cursor.get("reconcile:version_check")
+    end
+
     test "the request clears only after a complete version-term run" do
       :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
       {:ok, _} = ReconcileEmbeddings.version_check()
