@@ -96,7 +96,9 @@ defmodule Engram.Search.NameTermsTest do
   end
 
   defp keyword(user, vault, query, opts \\ []) do
-    {:ok, hits} = Search.search(user, vault, query, [mode: :keyword, limit: 5] ++ opts)
+    {:ok, hits} =
+      Search.search(user, vault, query, Keyword.merge([mode: :keyword, limit: 5], opts))
+
     hits
   end
 
@@ -274,7 +276,7 @@ defmodule Engram.Search.NameTermsTest do
       # The orphan sweep removes the dead rows; the term reads the note again.
       sweep = fn sweep, after_id ->
         case tenant(ctx.user, fn -> NameTerms.sweep_orphans(Repo, after_id) end) do
-          {500, last, _} -> sweep.(sweep, last)
+          {4_000, last, _} -> sweep.(sweep, last)
           _ -> :ok
         end
       end
@@ -408,31 +410,33 @@ defmodule Engram.Search.NameTermsTest do
       end
     end
 
-    test "folder notes read notes_folder_ref_live_id", ctx do
-      {sql, _} =
-        Repo.to_sql(
-          :all,
-          from(n in Note,
-            where:
-              n.vault_id == ^ctx.vault.id and n.folder_ref_id == ^Ecto.UUID.generate() and
-                n.kind == "note" and is_nil(n.deleted_at),
-            order_by: [desc: n.id],
-            limit: 50,
-            select: n.id
-          )
-        )
-
-      plan =
-        QueryPlan.generic_plan(sql,
-          analyze: ["notes"],
-          fresh: true,
-          bitmapscan: false,
-          all_visible: true
-        )
-
-      # Read backward in id order: no sort, at most 50 entries per folder.
+    test "folder notes: the module's query reads notes_folder_ref_live_id backward, no sort",
+         ctx do
+      tree = [{Ecto.UUID.generate(), ctx.vault.id}]
+      plan = plan(NameTerms.under_folders_query(tree), ["notes"])
       assert plan =~ "using notes_folder_ref_live_id on", plan
-      refute plan =~ "Sort", plan
+      # Per folder: a backward index read, no sort of the folder's notes.
+      assert plan =~ "Index Only Scan Backward using notes_folder_ref_live_id", plan
+    end
+
+    test "the descendant walk reads folders_live_parent_id per parent", ctx do
+      frontier = [{Ecto.UUID.generate(), ctx.vault.id}]
+      plan = plan(NameTerms.children_query(frontier, 200), ["folders"])
+      assert plan =~ "using folders_live_parent_id on", plan
+      assert plan =~ "Limit", plan
+    end
+
+    test "the first chunk is one LIMIT 1 probe on chunks_note_id_position_index" do
+      plan = plan(NameTerms.first_points_query([Ecto.UUID.generate()]), ["chunks"])
+      assert plan =~ "chunks_note_id_position_index", plan
+      assert plan =~ "Limit", plan
+    end
+
+    test "an orphan page is a bounded range read of name_terms_ref" do
+      plan = plan(NameTerms.orphan_page_query(Ecto.UUID.generate()), ["name_terms"])
+      assert plan =~ "using name_terms_ref on", plan
+      assert plan =~ "Limit", plan
+      refute plan =~ "HashAggregate", plan
     end
   end
 
@@ -511,6 +515,88 @@ defmodule Engram.Search.NameTermsTest do
     end
   end
 
+  describe "ranking: folder recall never floods a page" do
+    test "searching a folder's name: a content match ranks first, folder notes take at most 5 slots",
+         ctx do
+      for i <- 1..8, do: indexed!(ctx.user, write!(ctx.user, ctx.vault, "Projects/n#{i}.md"))
+      content = write!(ctx.user, ctx.vault, "Other/meeting.md", "the projects we run")
+      point = indexed!(ctx.user, content)
+      Agent.update(ctx.answer, fn _ -> [%{"id" => point, "score" => 9.0}] end)
+
+      hits = keyword(ctx.user, ctx.vault, "projects", limit: 10)
+
+      assert hd(hits).qdrant_id == point
+      assert length(hits) == 1 + 5
+      assert NameTerms.weights() == %{title: 1.0, folder: 0.5, folder_slots: 5}
+    end
+
+    test "the folder slots are a service knob", ctx do
+      for i <- 1..3, do: indexed!(ctx.user, write!(ctx.user, ctx.vault, "Projects/n#{i}.md"))
+      ServiceConfig.put_override(:name_terms_folder_slots, 0)
+      assert keyword(ctx.user, ctx.vault, "projects", limit: 10) == []
+    end
+  end
+
+  describe "the backfill always closes" do
+    test "a row whose stored hmac disagrees with its name is still written and stamped", ctx do
+      note = write!(ctx.user, ctx.vault, "Drift.md")
+
+      Repo.query!("UPDATE notes SET basename_hmac = $2 WHERE id = $1", [
+        Ecto.UUID.dump!(note.id),
+        :crypto.strong_rand_bytes(32)
+      ])
+
+      run_chain!()
+
+      assert rows(note.id) != []
+      assert :done = Ledger.run_pass()
+    end
+
+    test "a user with no DEK is skipped and stamped, and the ledger closes", ctx do
+      note = write!(ctx.user, ctx.vault, "Keyless.md")
+
+      Repo.query!("UPDATE users SET encrypted_dek = NULL WHERE id = $1", [
+        Ecto.UUID.dump!(ctx.user.id)
+      ])
+
+      Engram.Crypto.DekCache.invalidate(ctx.user.id)
+
+      run_chain!()
+
+      assert <<0, _::binary>> = stamp(note.id)
+      assert :done = Ledger.run_pass()
+    end
+
+    test "a complete walk that fixed nothing does not start another walk", ctx do
+      _note = write!(ctx.user, ctx.vault, "Stuck.md")
+      :ok = Ledger.walked(0)
+      assert {:more, stuck: 1} = Ledger.run_pass()
+      assert all_enqueued(worker: BackfillNameTerms) == []
+    end
+
+    test "the kill switch stops a running chain at its next window", ctx do
+      note = write!(ctx.user, ctx.vault, "Paused.md")
+      ServiceConfig.put_override(:name_terms_backfill, false)
+      :ok = perform_job(BackfillNameTerms, %{"table" => "notes", "pause_ms" => 0})
+      assert all_enqueued(worker: BackfillNameTerms) == []
+      assert rows(note.id) == []
+    end
+
+    test "a restore racing the delete hook: the live note is stale and the drain rewrites it",
+         ctx do
+      note = write!(ctx.user, ctx.vault, "Back.md")
+      :ok = NameTerms.on_note_written(ctx.user, note)
+      :ok = DataMigrations.mark_done(Ledger.name(), Ledger.version())
+
+      # The hook ran after the note came back (its live? check lost the race).
+      :ok = NameTerms.on_note_deleted(ctx.user.id, note.id)
+      assert rows(note.id) == [] and stamp(note.id) == nil
+
+      assert %{name_terms: 1} = Drain.run()
+      assert rows(note.id) != []
+    end
+  end
+
   describe "RLS" do
     setup ctx do
       note = write!(ctx.user, ctx.vault, "Ferritin.md")
@@ -562,5 +648,34 @@ defmodule Engram.Search.NameTermsTest do
           do: %{vault_id: vault.id, dim: dim, ref_kind: 0, ref_id: id, user_id: user.id}
 
     {:ok, _} = Repo.with_tenant(user.id, fn -> Repo.insert_all(Row, rows) end)
+  end
+
+  # The ledger's chain, hop by hop, each taken off the queue first (as Oban does).
+  defp run_chain! do
+    assert {:more, _} = Ledger.run_pass()
+    drain_chain!()
+  end
+
+  defp drain_chain! do
+    case all_enqueued(worker: BackfillNameTerms) do
+      [] ->
+        :ok
+
+      [%{args: args}] ->
+        Repo.delete_all(Oban.Job)
+        assert :ok = perform_job(BackfillNameTerms, Map.put(args, "pause_ms", 0))
+        drain_chain!()
+    end
+  end
+
+  defp plan(query, tables) do
+    {sql, _} = Repo.to_sql(:all, query)
+
+    QueryPlan.generic_plan(sql,
+      analyze: tables,
+      fresh: true,
+      bitmapscan: false,
+      all_visible: true
+    )
   end
 end

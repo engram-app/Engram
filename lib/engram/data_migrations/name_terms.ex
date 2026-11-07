@@ -27,6 +27,7 @@ defmodule Engram.DataMigrations.NameTerms do
   alias Engram.Backfill.TenantScan
   alias Engram.DataMigrations
   alias Engram.Folders.Folder
+  alias Engram.Maintenance.Cursor
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Search.NameTerms
@@ -69,12 +70,36 @@ defmodule Engram.DataMigrations.NameTerms do
       DataMigrations.jobs_in_flight?(BackfillNameTerms) ->
         {:more, chain: 1}
 
-      stale?() ->
-        {:ok, _} = Oban.insert(BackfillNameTerms.start())
-        {:more, chain: 1}
+      not stale?() ->
+        :done
+
+      fruitless_walk?() ->
+        {:more, stuck: 1}
 
       true ->
-        :done
+        {:ok, _} = Oban.insert(BackfillNameTerms.start())
+        {:more, chain: 1}
+    end
+  end
+
+  @last_walk "name_terms:last_walk"
+  @retry_after_s 86_400
+
+  @doc "Records a complete chain walk (`BackfillNameTerms`) and how many refs it fixed."
+  @spec walked(non_neg_integer()) :: :ok
+  def walked(fixed) do
+    Cursor.put(@last_walk, %{"fixed" => fixed, "at" => DateTime.to_iso8601(DateTime.utc_now())})
+  end
+
+  # The last complete walk fixed nothing and is under a day old: what is
+  # still stale needs a writer (a transient key error), not another walk of
+  # every row. The ledger stays open, so the stuck alert still reports it.
+  defp fruitless_walk? do
+    with %{"fixed" => 0, "at" => at} <- Cursor.get(@last_walk),
+         {:ok, at, _} <- DateTime.from_iso8601(at) do
+      DateTime.diff(DateTime.utc_now(), at) < @retry_after_s
+    else
+      _ -> false
     end
   end
 

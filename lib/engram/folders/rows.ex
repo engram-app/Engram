@@ -285,7 +285,8 @@ defmodule Engram.Folders.Rows do
 
     put_names(
       ctx,
-      for({path, _, _, id, _} <- rows, MapSet.member?(written, id), do: {id, segment(path)})
+      for({path, _, _, id, _} <- rows, MapSet.member?(written, id), do: {id, segment(path)}),
+      :new
     )
 
     Enum.reduce(rows, ids, fn {path, parent, marker, id, _row}, ids ->
@@ -328,7 +329,7 @@ defmodule Engram.Folders.Rows do
            else: 0
          ) do
       1 ->
-        put_names(ctx, [{id, segment}])
+        put_names(ctx, [{id, segment}], :new)
         id
 
       0 ->
@@ -400,6 +401,8 @@ defmodule Engram.Folders.Rows do
       name_ciphertext: ct,
       name_nonce: nonce,
       name_hmac: name_hmac(ctx.fk, segment),
+      # Its terms are written by `put_names/3` in the same transaction.
+      name_terms_stamp: NameTerms.stamp(name_hmac(ctx.fk, segment)),
       full_path_hmac: full_h,
       dek_version: Crypto.row_version_aad_bound(),
       explicit: explicit?,
@@ -456,6 +459,16 @@ defmodule Engram.Folders.Rows do
         ctx.user_id,
         ctx.fk,
         for({id, seg} <- refs, do: {id, ctx.vault_id, seg})
+      )
+
+  # Rows just inserted by `build_row/6`, which set their stamp: the terms only.
+  defp put_names(ctx, refs, :new),
+    do:
+      NameTerms.put_folders(
+        ctx.user_id,
+        ctx.fk,
+        for({id, seg} <- refs, do: {id, ctx.vault_id, seg}),
+        :new
       )
 
   defp segment(path), do: path |> String.split("/") |> List.last()
