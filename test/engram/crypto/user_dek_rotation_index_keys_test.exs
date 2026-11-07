@@ -1,19 +1,19 @@
 defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
   @moduledoc """
-  Every key the index matches on derives from the DEK: the Qdrant filter
-  HMACs (`Crypto.dek_filter_key/1`) and the chunk-reuse fingerprints
-  (`Crypto.dek_content_hash_key/1`). A rotation that rewraps only the point
-  text leaves type/tag/folder/path filters matching nothing, and makes the
-  next index of every note re-embed every chunk. The keyword (sparse)
-  vectors are keyed on the filter key too.
+  Every key the index matches on derives from the DEK: the filter HMACs
+  (`Crypto.dek_filter_key/1`, held in Postgres: the note row and
+  `note_attrs`) and the chunk-reuse fingerprints
+  (`Crypto.dek_content_hash_key/1`). A rotation that missed them would leave
+  type/tag/folder filters matching nothing, and make the next index of every
+  note re-embed every chunk. The keyword (sparse) vectors are keyed on the
+  filter key too. Since R3a no point carries a filter key (`u`, `v`, `n`).
 
   Nothing touches Qdrant between the note rewrap and the flip: a failure
-  there strands the notes under a DEK that was never saved. Points are
-  healed after the flip (`ReconcileNotePayloads`, `RefreshKeywordVectors`).
+  there strands the notes under a DEK that was never saved. The sparse
+  vectors are refreshed after the flip (`RefreshKeywordVectors`).
 
   Qdrant is a small in-memory fake behind Bypass: it keeps each point's
-  payload and applies `set_payload` and `overwrite_payload`, so a search's
-  filter can be evaluated against what a point actually holds. The writer
+  payload and answers a query with the points its filter matches. The writer
   indexes v5 points; the v3 variants re-key them to the legacy layout
   (`Engram.LegacyPoints`) that self-host collections still hold.
   """
@@ -129,24 +129,23 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
       assert :ok = UserDekRotation.rotate_user(ctx.user.id)
       user = reload_user(ctx.user)
 
-      assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
-      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      # No payload heal: the filters resolve in Postgres, under the new key.
+      refute_enqueued(worker: ReconcileNotePayloads)
 
-      for {opts, legacy_key, v5_field} <- [
-            {[type: "Playbook"], "type_hmac", :type_id},
-            {[tags: ["ops"]], "tags_hmac", :tags_id},
-            {[folder: "Ops"], "folder_hmac", :folder_id}
-          ] do
-        key = if ctx.layout == :v3, do: legacy_key, else: PayloadKeys.short(v5_field)
-        assert {:ok, _} = Search.search(user, ctx.vault, "pager", [mode: :vector] ++ opts)
-        filter = last_query(ctx.store)["filter"]["must"]
-        assert key in condition_keys(filter), "the search must filter on #{key}"
+      assert_enqueued(
+        worker: RefreshKeywordVectors,
+        args: %{"note_id" => ctx.note.id, "user_id" => ctx.user.id}
+      )
 
-        ids = point_ids(ctx.note)
-        matched = for id <- ids, matches?(point(ctx.store, id), filter), do: id
+      # v5 points only: a v3 point's text lives in its payload under the
+      # retired DEK until the rotation's text sweep, which this fake does not
+      # replay; the filter path is the same for both layouts.
+      for opts <- [[type: "Playbook"], [tags: ["ops"]], [folder: "Ops"]], ctx.layout == :v5 do
+        assert {:ok, hits} =
+                 Search.search(user, ctx.vault, "pager", [mode: :vector, diversity: 0.0] ++ opts)
 
-        assert Enum.sort(matched) == Enum.sort(ids),
-               "#{key}: a #{inspect(opts)} search must still find every chunk of the note"
+        assert hits != [] and Enum.all?(hits, &(&1.source_path == "Ops/Pager.md")),
+               "a #{inspect(opts)} search must still find the note"
       end
     end
   end
@@ -188,7 +187,7 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
     user = reload_user(ctx.user)
     assert user.dek_rotation_locked_at == nil
     assert fresh(ctx.note, user).content =~ "Page the secondary"
-    assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
+    assert_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => ctx.note.id})
 
     raw = Repo.one!(from(n in Notes.Note, where: n.id == ^ctx.note.id), skip_tenant_check: true)
     assert raw.chunker_version == nil, "version-stale, so EmbedNote rebuilds it as maintenance"
@@ -334,14 +333,6 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
 
   defp condition?(_payload, _other), do: true
 
-  defp condition_keys(conditions) do
-    Enum.flat_map(conditions, fn
-      %{"should" => nested} -> condition_keys(nested)
-      %{"key" => key} -> [key]
-      _other -> []
-    end)
-  end
-
   defp fake_qdrant(conn, store) do
     {:ok, body, conn} = Plug.Conn.read_body(conn, length: 10_000_000)
     body = if body == "", do: %{}, else: Jason.decode!(body)
@@ -430,9 +421,24 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
             "next_page_offset" => nil
           }
 
+        # Retrieve by id (search's payload fallback for v3 points' text).
+        {"POST", "/collections/engram_notes/points"} ->
+          points = Agent.get(store, & &1.points)
+
+          for id <- body["ids"],
+              Map.has_key?(points, id),
+              do: %{"id" => id, "payload" => points[id]}
+
         {"POST", "/collections/engram_notes/points/query"} ->
           Agent.update(store, &%{&1 | queries: [body | &1.queries]})
-          %{"points" => []}
+          must = get_in(body, ["filter", "must"]) || []
+
+          points =
+            for {id, payload} <- Agent.get(store, & &1.points),
+                matches?(payload, must),
+                do: %{"id" => id, "score" => 0.5}
+
+          %{"points" => points}
 
         _other ->
           true

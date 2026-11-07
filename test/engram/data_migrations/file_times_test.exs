@@ -196,7 +196,9 @@ defmodule Engram.DataMigrations.FileTimesTest do
     assert_parity!(ctx, Attachment, mtime: :mtime_at)
   end
 
-  test "a fixed millisecond note gets its payload refreshed; no other note is touched", ctx do
+  # R3a: no point carries a date, so a fixed twin rewrites no payload and
+  # leaves every stamp alone.
+  test "a fixed millisecond note keeps its payload stamp; no heal is queued", ctx do
     ms = note!(ctx, "ms.md", %{"mtime" => 1.0})
     s = note!(ctx, "s.md", %{"mtime" => 1.0})
     set!(ctx, Note, ms, mtime: 1_776_072_500_928.0, mtime_at: nil, payload_hash: <<1::256>>)
@@ -209,13 +211,9 @@ defmodule Engram.DataMigrations.FileTimesTest do
         Map.new(Repo.all(from(n in Note, select: {n.id, n.payload_hash})))
       end)
 
-    assert hashes[ms] == nil
+    assert hashes[ms] == <<1::256>>
     assert hashes[s] == <<2::256>>
-
-    assert_enqueued(
-      worker: Engram.Workers.ReconcileNotePayloads,
-      args: %{"user_id" => ctx.user.id}
-    )
+    refute_enqueued(worker: Engram.Workers.ReconcileNotePayloads)
   end
 
   # v2: 0.74 and 0.75 floored the twin to the microsecond, about a quarter
