@@ -329,16 +329,15 @@ defmodule Engram.IndexingPathFreeReuseTest do
           do: assert(rekeyed[old] == new)
     end
 
-    # A note already on its R3c fingerprints pays no legacy parse: the
-    # pass's own parse is the one chunk call.
-    test "a second edit on a migrated note makes exactly one chunk NIF call", ctx do
+    # A note already on its R3c fingerprints, every row matched, pays no
+    # legacy parse: the pass's own parse is the one chunk call.
+    test "a re-index of a migrated note makes exactly one chunk NIF call", ctx do
       path = "Health/Iron Panel.md"
       note = put(ctx, path, "# Iron Panel\n\n" <> body("Beta"))
       index!(note, ctx)
       put(ctx, path, "# Iron Panel\n\n" <> body("Beta Edited"))
       index!(note, ctx)
 
-      put(ctx, path, "# Iron Panel\n\n" <> body("Beta Edited Again"))
       indexed = fresh(note, ctx)
       ref = Engram.NativeScheduled.attach_nif_events()
       assert {:ok, _} = Indexing.index_note(indexed, ctx.vault)
@@ -356,6 +355,29 @@ defmodule Engram.IndexingPathFreeReuseTest do
         |> Enum.count(&(&1 == :chunk))
 
       assert calls == 1
+    end
+
+    # Some chunks fingerprint the same in both modes (here the frontmatter
+    # chunk's row is left on its R3c fingerprint). One such match must not
+    # switch the candidate off for the rest of a legacy note.
+    test "a chunk that matched under the new inputs does not skip the rest", ctx do
+      path = "Health/Iron Panel.md"
+      head = "---\ntags: [iron]\n---\n# Iron Panel\n\n"
+      note = put(ctx, path, head <> body("Beta"))
+      index!(note, ctx)
+      legacy = Markdown.parse(fresh(note, ctx).content, path, legacy: true)
+      assert List.last(legacy).kind == "frontmatter"
+
+      for {chunk, hmac} <- Enum.zip(legacy, fingerprints(legacy, ctx.user)),
+          chunk.kind != "frontmatter" do
+        Repo.update_all(
+          from(c in Chunk, where: c.note_id == ^note.id and c.position == ^chunk.position),
+          [set: [context_hmac: hmac]],
+          skip_tenant_check: true
+        )
+      end
+
+      assert_one_chunk_edit(ctx, note, head <> body("Beta Edited"))
     end
 
     test "an unedited note re-indexes with no Voyage call and no Qdrant write", ctx do
