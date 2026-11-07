@@ -234,18 +234,21 @@ defmodule Engram.Notes.CrdtWriteTest do
 
   describe "cost per write" do
     # Constant in the vault: the statements a write issues do not grow with
-    # the number of other notes. Cap: 40 statements per markdown update,
+    # the number of other notes. Cap: 20 statements per markdown update (17 measured),
     # tail and checkpoint included.
     test "the statement count does not depend on vault size", %{user: user, vault: vault} do
       on!()
       create!(user, vault, "x.md", "one\n")
+      # Warm the per-node caches (user, entitlements, overrides) the first
+      # write fills, so both measurements see the same cache state.
+      {:ok, _} = write(user, vault, "x.md", "zero\n")
       small = statements(fn -> write(user, vault, "x.md", "one\ntwo\n") end)
 
       for n <- 1..30, do: create!(user, vault, "f#{n}.md", "filler #{n}\n")
       large = statements(fn -> write(user, vault, "x.md", "one\ntwo\nthree\n") end)
 
       assert small == large
-      assert small <= 40
+      assert small <= 20
     end
   end
 
