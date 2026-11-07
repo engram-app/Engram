@@ -99,6 +99,43 @@ defmodule Engram.Folders.FolderRefTriggerTest do
       assert folder_ref(note.id) == nil
     end
 
+    # #2413 / owner rule (a note never leaves a folder listing): a raw restore
+    # of a note whose folder row died must not leave a live note naming the
+    # dead row, which no listing places and the drain's index
+    # (`notes_unresolved_folder`, NULL references only) cannot find.
+    test "a raw restore NULLs a reference to a dead folder row; the drain re-links it", %{
+      user: u,
+      vault: v
+    } do
+      note = write!(u, v, "Gone/A.md")
+      dead = folder_ref(note.id)
+      assert dead
+
+      Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [dump(note.id)])
+      # A row written before `folders_release_refs`: the trashed note still
+      # names the row when it dies (replayed with triggers off).
+      Repo.query!("SET LOCAL session_replication_role = replica")
+      Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [dump(dead)])
+      Repo.query!("SET LOCAL session_replication_role = origin")
+      assert folder_ref(note.id) == dead
+
+      Repo.query!("UPDATE notes SET deleted_at = NULL WHERE id = $1", [dump(note.id)])
+      assert folder_ref(note.id) == nil
+
+      %{rows: [[unresolved]]} =
+        Repo.query!(
+          "SELECT count(*)::int FROM notes WHERE id = $1 AND " <>
+            Engram.Folders.Drift.notes_unresolved_sql(),
+          [dump(note.id)]
+        )
+
+      assert unresolved == 1
+
+      Engram.DataMigrations.FolderTable.run_pass(user_ids: [u.id])
+      relinked = folder_ref(note.id)
+      assert relinked && relinked != dead
+    end
+
     test "a delete or an ordinary save does not touch the reference", %{user: u, vault: v} do
       note = write!(u, v, "Keep/A.md")
       ref = folder_ref(note.id)
