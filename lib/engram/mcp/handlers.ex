@@ -444,24 +444,27 @@ defmodule Engram.MCP.Handlers do
     if Notes.note_exists?(user, vault, stored) do
       path_conflict_error(stored)
     else
-      Notes.upsert_note(
-        user,
-        vault,
-        %{"path" => path, "content" => content, "mtime" => now()},
-        [require_base: true] ++ @write_opts
-      )
-      |> case do
-        {:error, :version_conflict, _note} -> path_conflict_error(stored)
-        result -> result
-      end
-      |> upsert_reply(
+      result =
+        Notes.upsert_note(
+          user,
+          vault,
+          %{"path" => path, "content" => content, "mtime" => now()},
+          [require_base: true] ++ @write_opts
+        )
+        |> case do
+          {:error, :version_conflict, _note} -> path_conflict_error(stored)
+          result -> result
+        end
+
+      upsert_reply(
+        result,
         [
           ok: "Note created: #{stored}",
           conflict: "Note changed on the server, retry: #{stored}",
           deleted: "Note was deleted: #{stored}",
           error: "Failed to create note: #{stored}"
         ],
-        %{"path" => stored}
+        with_served_hash(result, %{"path" => stored})
       )
     end
   end
@@ -479,17 +482,17 @@ defmodule Engram.MCP.Handlers do
       ToolError.error(:note_too_large, "note exceeds maximum size of 10MB")
     else
       stored = Notes.PathSanitizer.sanitize(path)
+      result = write_whole(user, vault, path, content, args["base_hash"])
 
-      user
-      |> write_whole(vault, path, content, args["base_hash"])
-      |> upsert_reply(
+      upsert_reply(
+        result,
         [
           ok: "Note saved: #{stored}",
           conflict: "Note changed on the server, retry: #{stored}",
           deleted: "Note was deleted: #{stored}",
           error: "Failed to save note: #{stored}"
         ],
-        %{"path" => stored}
+        with_served_hash(result, %{"path" => stored})
       )
     end
   end
@@ -1455,11 +1458,25 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
+  # #2486 fix-forward: the content_hash a client passes straight back as
+  # base_hash, so an agent can rewrite the note it just wrote. It is
+  # `served_hash`, what get_notes serves after the write: the written row's
+  # hash, or on a no-op over a pending CRDT tail the hash of the view the
+  # content already matched. The one exception is a live edit landing
+  # between the merge and the commit; then this hash is older than the note,
+  # and a write with it is refused, never applied. Read from the result, not
+  # by reading the note again: the write path re-reads nothing after commit.
+  defp with_served_hash({:ok, %{served_hash: hash}}, structured) when is_binary(hash),
+    do: Map.put(structured, "content_hash", hash)
+
+  defp with_served_hash(_result, structured), do: structured
+
   defp stale_base_error(path) do
     {:version_conflict,
      "#{Notes.PathSanitizer.sanitize(path)} changed since you read it (base_hash no longer " <>
-       "matches), so nothing was written. Call get_notes on it again, apply your change to " <>
-       "the content it returns, and retry with that content_hash as base_hash."}
+       "matches), so nothing was written. Call get_notes on it, apply your change to the " <>
+       "content it returns, and retry with base_hash = the content_hash it returns. To " <>
+       "change one section, use edit_note instead."}
   end
 
   defp path_conflict_error(stored),
@@ -1473,8 +1490,9 @@ defmodule Engram.MCP.Handlers do
   defp base_required_error(path) do
     {:version_conflict,
      "A note already exists at #{Notes.PathSanitizer.sanitize(path)}, so nothing was " <>
-       "written: replacing it needs a base_hash. Call get_notes on it, apply your change to " <>
-       "the content it returns, and call write_note again with that content_hash as base_hash."}
+       "written: replacing it needs a base_hash. Retry write_note with base_hash = the " <>
+       "note's content_hash, from get_notes or from the write_note/create_note reply that " <>
+       "made it. To change one section, use edit_note instead."}
   end
 
   @doc false
