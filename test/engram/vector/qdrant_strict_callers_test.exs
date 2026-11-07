@@ -43,6 +43,31 @@ defmodule Engram.Vector.QdrantStrictCallersTest do
       assert blocks + 4 <= @strict["filter_max_conditions"]
     end
 
+    # The largest filter a search can send: every payload filter at its
+    # largest (16 attribute filters, tags, folder, type, both date ranges)
+    # in the per-point fallback, beside the 5 `n` blocks and the tenant.
+    test "the per-point note-id filter at its worst case fits filter_max_conditions" do
+      attrs =
+        for key_id <- 1..16,
+            do:
+              Qdrant.attr_filter(key_id, {:h, Engram.Vector.FilterId.from_hmac(<<key_id::256>>)})
+
+      ids = for _ <- 1..Qdrant.max_note_ids(), do: Ecto.UUID.generate()
+
+      for scope <- [{:ids, ids}, {:exclude, ids}] do
+        filter =
+          (full_filters() ++ [attr_filters: attrs, note_scope: scope])
+          |> Qdrant.build_tenant_filter()
+          |> Jason.encode!()
+          |> Jason.decode!()
+
+        assert condition_count(filter) <= @strict["filter_max_conditions"],
+               "#{elem(scope, 0)}: #{condition_count(filter)} conditions"
+
+        assert Enum.all?(condition_sizes(filter), &(&1 <= @strict["condition_max_size"]))
+      end
+    end
+
     test "write batches: 2x headroom over the largest batch" do
       assert @strict["upsert_max_batchsize"] >= 2 * Qdrant.max_write_batch()
     end
