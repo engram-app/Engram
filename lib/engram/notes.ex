@@ -7027,15 +7027,26 @@ defmodule Engram.Notes do
     {:ok, dek} = Crypto.get_dek(user)
     target_hmac = Crypto.hmac_field(filter_key, folder)
 
+    # The notes leg and the marker leg in ONE statement, each arm on its own
+    # index.
     Repo.with_tenant!(user.id, fn ->
       live = scoped_live(user, vault)
 
-      Repo.exists?(
-        from(n in live, where: n.kind == "note", where: ^directly_in(user, vault, folder, dek))
-      ) or
-        Repo.exists?(
-          from(n in live, where: n.kind == "folder", where: ^Keys.eq(:folder, target_hmac))
+      notes =
+        from(n in live,
+          where: n.kind == "note",
+          where: ^directly_in(user, vault, folder, dek),
+          select: 1
         )
+
+      markers =
+        from(n in live,
+          where: n.kind == "folder",
+          where: ^Keys.eq(:folder, target_hmac),
+          select: 1
+        )
+
+      Repo.one(from(u in subquery(union_all(notes, ^markers)), select: true, limit: 1)) == true
     end)
   end
 
@@ -7123,7 +7134,7 @@ defmodule Engram.Notes do
   # the notes by `folder_ref_id`, folder markers (no reference) by the rows'
   # path hashes. Two bounded fallbacks, empty in steady state: the drift notes
   # (`drift_note_folders/3`, by decrypted folder, then by id) and the markers
-  # with no live row (`raw_rowless_markers/2`). A drift envelope that will not
+  # with no live row (`folder_markers_in/2`). A drift envelope that will not
   # open raises: a cascade must not report a folder done while a note it
   # could not place survives under it. The final `folder_in?` filter keeps
   # the stored path authoritative: a reference only narrows what is read.
@@ -7134,22 +7145,19 @@ defmodule Engram.Notes do
   defp fetch_decrypted_live_rows(user, vault, folders) do
     {:ok, dek} = Crypto.get_dek(user)
 
-    {refs, {drift, undecryptable}, rowless} =
-      Repo.with_tenant!(user.id, fn ->
-        {Rows.subtree_refs(user, vault.id, folders), drift_note_folders(user, vault, dek),
-         raw_rowless_markers(user, vault)}
-      end)
-
-    if undecryptable > 0, do: raise("Phase B envelope decryption failed")
-
-    ids = Enum.map(refs, & &1.id)
-    row_hmacs = for %{full_path_hmac: h} when is_binary(h) <- refs, do: h
-    drift_ids = for {id, folder} <- drift, folder_in?(folder, folders), do: id
-
-    # One indexed read per kind of evidence (not one OR: each arm then has its
-    # own index, `notes_folder_ref_live` for the references), skipped when empty.
+    # ONE tenant block: the folder walk, the drift page, then one indexed read
+    # per kind of evidence (not one OR across kinds: each arm has its own
+    # index), the by-id ones skipped when empty. Only the drift (0 rows in
+    # steady state) is decrypted inside it.
     rows =
       Repo.with_tenant!(user.id, fn ->
+        refs = Rows.subtree_refs(user, vault.id, folders)
+        {drift, undecryptable} = drift_note_folders(user, vault, dek)
+        if undecryptable > 0, do: raise("Phase B envelope decryption failed")
+
+        ids = Enum.map(refs, & &1.id)
+        row_hmacs = for %{full_path_hmac: h} when is_binary(h) <- refs, do: h
+        drift_ids = for {id, folder} <- drift, folder_in?(folder, folders), do: id
         live = from(n in scoped_live(user, vault), select: struct(n, @note_meta_fields))
 
         by_ref =
@@ -7157,20 +7165,9 @@ defmodule Engram.Notes do
             do: [],
             else: Repo.all(from(n in live, where: n.kind == "note" and n.folder_ref_id in ^ids))
 
-        markers =
-          if row_hmacs == [],
-            do: [],
-            else:
-              Repo.all(
-                from(n in live,
-                  where: n.kind == "folder",
-                  where: ^Keys.in_any(:folder, row_hmacs)
-                )
-              )
-
         drifted = if drift_ids == [], do: [], else: Repo.all(where(live, [n], n.id in ^drift_ids))
 
-        Enum.uniq_by(by_ref ++ markers ++ rowless ++ drifted, & &1.id)
+        Enum.uniq_by(by_ref ++ folder_markers_in(live, row_hmacs) ++ drifted, & &1.id)
       end)
 
     # Marker rows have nil path_ciphertext, so the standard decrypt path
@@ -7182,11 +7179,13 @@ defmodule Engram.Notes do
     |> Enum.filter(&folder_in?(&1.folder || "", folders))
   end
 
-  # The live folder markers with no live folder row at their path (a row that
-  # died under a marker, a marker the previous release wrote before its row):
-  # nothing else finds them. Read on `notes_user_vault_folder_marker`: the
-  # vault's markers, not its notes.
-  defp raw_rowless_markers(user, vault) do
+  # The live folder markers a cascade must see, in one read on
+  # `notes_user_vault_folder_marker` (the vault's markers, not its notes): those
+  # at the subtree rows' path hashes, and those with no live folder row at
+  # their path at all (a row that died under a marker, a marker the previous
+  # release wrote before its row), which nothing else finds. The caller's
+  # final path filter keeps only the target's.
+  defp folder_markers_in(live, row_hmacs) do
     live_row =
       from(f in Engram.Folders.Folder,
         where:
@@ -7195,10 +7194,10 @@ defmodule Engram.Notes do
       )
 
     Repo.all(
-      from(n in scoped_live(user, vault),
+      from(n in live,
         as: :n,
-        where: n.kind == "folder" and not exists(live_row),
-        select: struct(n, @note_meta_fields)
+        where: n.kind == "folder",
+        where: ^dynamic([n], ^Keys.in_any(:folder, row_hmacs) or not exists(live_row))
       )
     )
   end
