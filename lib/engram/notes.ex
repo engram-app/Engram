@@ -1055,8 +1055,8 @@ defmodule Engram.Notes do
         {:ok, :stale_expected} ->
           {:error, :stale_note}
 
-        {:ok, {:ok, {prev_hash, note, _merged_text, _content_hash}}} ->
-          note = decrypt_or_raise!(note, user)
+        {:ok, {:ok, {prev_hash, note, _merged_text, served_hash}}} ->
+          note = %{decrypt_or_raise!(note, user) | served_hash: served_hash}
           maybe_log_path_rewrite(user, vault, path, sanitized_path, note.id)
 
           # Hash equality means do_update_note short-circuited (no version/seq
@@ -2927,12 +2927,13 @@ defmodule Engram.Notes do
   # Repair paths that re-derive persisted fields from unchanged content
   # (e.g. Utf8Backfill fixing corrupt tags) pass `force: true` to opt out.
   # Return shape matches do_rewrite_note's 4-tuple: merged_text is the
-  # incoming content (hash-equal to the stored merged content by the guard
-  # in do_update_note), so callers thread the same digest fields either way.
+  # incoming content, which every caller has already found equal to what a
+  # reader is served, so the last field is its hash. That can differ from
+  # the row's when a CRDT tail is pending; the row is returned unchanged.
   # Checked BEFORE the stale-base gate: a hash-equal push is a no-op whatever
   # base the writer declared.
   defp idempotent_repush(existing, base_attrs) do
-    {:ok, {existing.content_hash, existing, base_attrs.content, existing.content_hash}}
+    {:ok, {existing.content_hash, existing, base_attrs.content, base_attrs.content_hash}}
   end
 
   # The whole read-then-write, retried ONCE when the write loses its snapshot

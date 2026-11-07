@@ -464,7 +464,7 @@ defmodule Engram.MCP.Handlers do
           deleted: "Note was deleted: #{stored}",
           error: "Failed to create note: #{stored}"
         ],
-        with_served_hash(result, user, vault, %{"path" => stored})
+        with_served_hash(result, %{"path" => stored})
       )
     end
   end
@@ -492,7 +492,7 @@ defmodule Engram.MCP.Handlers do
           deleted: "Note was deleted: #{stored}",
           error: "Failed to save note: #{stored}"
         ],
-        with_served_hash(result, user, vault, %{"path" => stored})
+        with_served_hash(result, %{"path" => stored})
       )
     end
   end
@@ -1459,18 +1459,17 @@ defmodule Engram.MCP.Handlers do
   end
 
   # #2486 fix-forward: the content_hash a client passes straight back as
-  # base_hash, so an agent can rewrite the note it just wrote. It is the
-  # written row's hash, which is what get_notes serves: the write left the row
-  # equal to its doc's projection (replaying tail rows the merge already
-  # folded in changes nothing). The one exception is a live edit landing
+  # base_hash, so an agent can rewrite the note it just wrote. It is
+  # `served_hash`, what get_notes serves after the write: the written row's
+  # hash, or on a no-op over a pending CRDT tail the hash of the view the
+  # content already matched. The one exception is a live edit landing
   # between the merge and the commit; then this hash is older than the note,
   # and a write with it is refused, never applied. Read from the result, not
   # by reading the note again: the write path re-reads nothing after commit.
-  defp with_served_hash({:ok, %{content_hash: hash}}, _user, _vault, structured)
-       when is_binary(hash),
-       do: Map.put(structured, "content_hash", hash)
+  defp with_served_hash({:ok, %{served_hash: hash}}, structured) when is_binary(hash),
+    do: Map.put(structured, "content_hash", hash)
 
-  defp with_served_hash(_result, _user, _vault, structured), do: structured
+  defp with_served_hash(_result, structured), do: structured
 
   defp stale_base_error(path) do
     {:version_conflict,
