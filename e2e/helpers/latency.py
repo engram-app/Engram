@@ -53,7 +53,7 @@ DELIVERY_TIMEOUT = float(os.environ.get("E2E_DELIVERY_TIMEOUT", "120"))
 # alone and left only a few seconds for everything after it, which is how the
 # ReadTimeout class comes back. Below the poll windows so a genuinely slow
 # search reports as a slow search, rather than eating a whole 90s poll loop and
-# being reported as "the repath never landed", or killed by SIGALRM.
+# being reported as a missing result, or killed by SIGALRM.
 #
 # 120s was the first cut and did not nest either: it exceeded every window
 # BELOW it, so it was unreachable in the tests that use it.

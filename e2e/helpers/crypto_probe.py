@@ -9,15 +9,15 @@ Phase B.4: toggle helpers (`wait_for_encryption_status`, `backdate_*`,
 plaintext-path probes (`_fetch_note_row`, `_fetch_attachment_row`,
 `assert_note_ciphertext_at_rest`, `assert_attachment_ciphertext_at_rest`)
 were retired with the encryption toggle. The Qdrant probes match the
-v5 payload (`v5_path_id/1`, `v5_uuid/1`); a v5 point carries no text, so the
-payload-ciphertext probe went with the legacy writer. To restore plaintext-path → row probes, add a release rpc
+point payload, which is only the note's identity (`u`, `v`, `n`, R3a; ids
+as `v5_uuid/1`): a point carries no text and no path, so a note's points
+are found by its note id (`note_id_for/2`). To restore plaintext-path → row probes, add a release rpc
 that translates the path under the user's filter_key and fetches by
 path_hmac.
 """
 
 from __future__ import annotations
 
-import base64
 import logging
 import os
 import re
@@ -74,14 +74,8 @@ def latest_note_path_hmac(vault_id: str) -> str:
     return val
 
 
-def v5_path_id(path_hmac_b64: str) -> str:
-    """The v5 payload's path id (`p`) for a base64 path HMAC: its first 128
-    bits as 32 lowercase hex digits (`Engram.Vector.FilterId.from_hmac/1`)."""
-    return base64.b64decode(path_hmac_b64)[:16].hex()
-
-
 def v5_uuid(id_: str) -> str:
-    """A user or vault id as the v5 payload stores it (`FilterId.uuid/1`)."""
+    """A user, vault or note id as the payload stores it (`FilterId.uuid/1`)."""
     return str(id_).replace("-", "")
 
 
@@ -90,27 +84,55 @@ _ALIVE_STATES = {"available", "scheduled", "executing", "retryable"}
 _DEAD_STATES = {"discarded", "cancelled"}
 
 
+def note_id_for(vault_id: str, path_hmac_b64: str) -> str | None:
+    """The id of the live note at `path_hmac_b64` in `vault_id`, or None."""
+    if not _UUID_RE.match(vault_id):
+        raise ValueError(f"Unsafe vault_id rejected: {vault_id!r}")
+    if not _B64_RE.fullmatch(path_hmac_b64):
+        raise ValueError(f"Unsafe path_hmac rejected: {path_hmac_b64!r}")
+
+    sql = (
+        "SELECT id FROM notes "
+        f"WHERE vault_id = '{vault_id}' "
+        f"AND path_hmac = decode('{path_hmac_b64}', 'base64') "
+        "AND kind = 'note' AND deleted_at IS NULL LIMIT 1;"
+    )
+    result = subprocess.run(
+        ["docker", "exec", "-i", CI_POSTGRES_CONTAINER,
+         "psql", "-U", "engram", "-d", "engram", "-tA", "-c", sql],
+        capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"note_id_for({vault_id}) failed: {result.stderr.strip()}")
+    return result.stdout.strip() or None
+
+
+def qdrant_point_ids(vault_id: str, note_id: str) -> list[str]:
+    """Sorted ids of the note's Qdrant points (matched on `v` + `n`)."""
+    resp = requests.post(
+        f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/scroll",
+        json={
+            "filter": {
+                "must": [
+                    {"key": "v", "match": {"value": v5_uuid(vault_id)}},
+                    {"key": "n", "match": {"value": v5_uuid(note_id)}},
+                ]
+            },
+            "limit": 1000,
+            "with_payload": False,
+            "with_vector": False,
+        },
+        timeout=5,
+    )
+    resp.raise_for_status()
+    return sorted(str(p["id"]) for p in resp.json()["result"]["points"])
+
+
 def _qdrant_has_point(vault_id: str, path_hmac_b64: str) -> bool:
     try:
-        resp = requests.post(
-            f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/scroll",
-            json={
-                # Every point is written in the v5 layout: short keys, ids
-                # as 32 hex digits.
-                "filter": {
-                    "must": [
-                        {"key": "v", "match": {"value": v5_uuid(vault_id)}},
-                        {"key": "p", "match": {"value": v5_path_id(path_hmac_b64)}},
-                    ]
-                },
-                "limit": 1,
-                "with_payload": False,
-                "with_vector": False,
-            },
-            timeout=5,
-        )
-        return bool(resp.ok and resp.json()["result"]["points"])
-    except (requests.ConnectionError, requests.Timeout, KeyError):
+        note_id = note_id_for(vault_id, path_hmac_b64)
+        return note_id is not None and bool(qdrant_point_ids(vault_id, note_id))
+    except (requests.RequestException, KeyError):
         return False
 
 

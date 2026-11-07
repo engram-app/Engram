@@ -68,8 +68,8 @@ PREFIX = "fsproof"
 PLUGIN_REPO = "https://github.com/engram-app/Engram-obsidian.git"
 NPM_MIRROR = "http://10.0.20.214:4873"
 QDRANT_URL = "http://10.0.20.201:6333"  # staging's
-# Queues whose workers write to Qdrant (EmbedNote, RefreshKeywordVectors,
-# RepathNoteIndex on :embed; ExtractNoteLinks, DeleteNoteIndex on :indexing).
+# Queues whose workers write to Qdrant (EmbedNote, RefreshKeywordVectors on
+# :embed; ExtractNoteLinks, DeleteNoteIndex on :indexing).
 # Staging shares that Qdrant with CI (Engram#2318), so they stay paused for the
 # whole run. Oban keeps pauses in memory: every container start resumes them,
 # so the watcher re-pauses after each start it sees. Any point the run user
