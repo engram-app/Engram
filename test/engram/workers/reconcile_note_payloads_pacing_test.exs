@@ -42,7 +42,9 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
     {:ok, health} = Agent.start_link(fn -> {@green, 0, nil} end)
     # point id => payload, as the fake Qdrant holds it
     {:ok, points} = Agent.start_link(fn -> %{} end)
-    stub_qdrant(bypass, health, points)
+    # point ids whose payload write Qdrant refuses with a 400
+    {:ok, refuse} = Agent.start_link(fn -> MapSet.new() end)
+    stub_qdrant(bypass, health, points, refuse)
 
     stub(Engram.MockEmbedder, :embed_texts, fn texts ->
       {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
@@ -74,10 +76,10 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
       )
 
     ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :rebuild, :gated]])
-    %{user: user, note: note, health: health, points: points, ref: ref}
+    %{user: user, note: note, health: health, points: points, refuse: refuse, ref: ref}
   end
 
-  defp stub_qdrant(bypass, health, points) do
+  defp stub_qdrant(bypass, health, points, refuse) do
     test_pid = self()
     col = "/collections/#{Qdrant.collection_name()}"
 
@@ -118,16 +120,22 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
 
           {"POST", path} when path == col <> "/points/batch" ->
             send(test_pid, :rewrite)
+            ids = for %{"set_payload" => %{"points" => [id]}} <- body["operations"], do: id
+            refused = Agent.get(refuse, &Enum.any?(ids, fn id -> MapSet.member?(&1, id) end))
 
-            Agent.update(points, fn held ->
-              Enum.reduce(body["operations"], held, fn
-                %{"set_payload" => %{"points" => [id], "payload" => pl}}, acc ->
-                  Map.update(acc, id, pl, &Map.merge(&1, pl))
+            if refused do
+              {:refused, ~s({"status":{"error":"Bad request: refused"}})}
+            else
+              Agent.update(points, fn held ->
+                Enum.reduce(body["operations"], held, fn
+                  %{"set_payload" => %{"points" => [id], "payload" => pl}}, acc ->
+                    Map.update(acc, id, pl, &Map.merge(&1, pl))
+                end)
               end)
-            end)
 
-            ops = Enum.map(body["operations"], fn _ -> %{"status" => "completed"} end)
-            {"application/json", Jason.encode!(%{"result" => ops, "status" => "ok"})}
+              ops = Enum.map(body["operations"], fn _ -> %{"status" => "completed"} end)
+              {"application/json", Jason.encode!(%{"result" => ops, "status" => "ok"})}
+            end
 
           # `set_payloads/3`'s read-back.
           {"POST", path} when path == col <> "/points" ->
@@ -139,9 +147,11 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
             {"application/json", ~s({"result":true,"status":"ok"})}
         end
 
+      {type, status} = if type == :refused, do: {"application/json", 400}, else: {type, 200}
+
       conn
       |> Plug.Conn.put_resp_content_type(type)
-      |> Plug.Conn.send_resp(200, reply)
+      |> Plug.Conn.send_resp(status, reply)
     end)
   end
 
@@ -598,6 +608,32 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
       # A second legacy job does not add another.
       assert {:cancel, :superseded} = legacy(ctx)
       assert [_] = fleet_jobs()
+    end
+
+    # A user whose payload write Qdrant refuses (4xx) is logged and counted
+    # once, and the run carries on: the users after it are written in the
+    # same run, and the job does not end.
+    test "a 4xx on one user does not stop the others in the same run", ctx do
+      users = stale_users(ctx, 3, 1) |> Enum.sort()
+      [{_, first}, {refused_uid, refused}, {_, last}] = users
+      Agent.update(ctx.refuse, fn _ -> MapSet.new(refused) end)
+
+      cancelled =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :indexing, :payload_reconcile_cancelled]
+        ])
+
+      assert :ok = fleet()
+
+      held = Agent.get(ctx.points, & &1)
+      assert Enum.all?(first ++ last, &Map.has_key?(held[&1], "n"))
+      refute Enum.any?(refused, &Map.has_key?(held[&1], "n"))
+
+      assert_received {[:engram, :indexing, :payload_reconcile_cancelled], ^cancelled,
+                       %{count: 1}, %{http_status: 400}}
+
+      assert length(users_written(ctx, users)) == 2
+      refute refused_uid in users_written(ctx, users)
     end
 
     # Prod held users with two scheduled per-user jobs (the unique race):

@@ -643,9 +643,10 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   end
 
   # A user under a rotation lock is passed over: the ledger finds it behind
-  # again, and the next lap writes it. A 4xx refusal cancels the job (logged
-  # and counted by `answer/2`) with the cursor past the user, so one user's
-  # refusal never holds the fleet.
+  # again, and the next lap writes it. A 4xx refusal is logged and counted
+  # once by `answer/2` (the `payload_reconcile_cancelled` alert), and the
+  # walk carries on with the next user, so one user's refusal never holds
+  # the fleet.
   defp fleet_user(%User{id: id} = user, cursor, deadline) do
     after_id = if match?(%{"user" => ^id}, cursor), do: cursor["after"]
     past = %{"past" => id}
@@ -670,7 +671,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     case stop do
       :done -> {:cont, past}
       :ok -> {:cont, past}
-      {:cancel, _} -> {:halt, {:stop, stop, past}}
+      {:cancel, _} -> {:cont, past}
       stop -> {:halt, {:stop, stop, %{"user" => id, "after" => done}}}
     end
   end

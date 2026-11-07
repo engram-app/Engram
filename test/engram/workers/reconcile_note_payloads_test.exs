@@ -981,7 +981,8 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           do: assert(Agent.get(ctx.store, &Map.fetch!(&1.points, id))["y"] == ctx.passed[id]["y"])
 
       assert reload(ctx.stale).payload_hash && reload(ctx.healthy).payload_hash
-      assert {:cancel, _} = n_job(ctx)
+      # The fleet job logs and counts the refusal and carries on past the user.
+      assert :ok = n_job(ctx)
       assert reload(ctx.stale).payload_hash
     end
 
