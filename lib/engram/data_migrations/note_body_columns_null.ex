@@ -91,23 +91,21 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
     end
   end
 
-  defp copy_trigger?,
-    do: catalog("SELECT count(*)::int FROM pg_trigger #{trigger("notes_sync_body")}") > 0
+  @copy_trigger_sql """
+  SELECT count(*)::int FROM pg_trigger
+  WHERE tgname = 'notes_sync_body' AND tgrelid = 'public.notes'::regclass AND NOT tgisinternal
+  """
 
-  defp head_trigger_on_nonce? do
-    catalog("""
-    SELECT count(*)::int FROM pg_trigger #{trigger("notes_crdt_head_invalidate")}
-      AND pg_get_triggerdef(oid) LIKE '%crdt_state_nonce%'
-    """) > 0
-  end
+  @head_trigger_sql """
+  SELECT count(*)::int FROM pg_trigger
+  WHERE tgname = 'notes_crdt_head_invalidate' AND tgrelid = 'public.notes'::regclass
+    AND NOT tgisinternal AND pg_get_triggerdef(oid) LIKE '%crdt_state_nonce%'
+  """
 
-  defp trigger(name),
-    do: "WHERE tgname = '#{name}' AND tgrelid = 'public.notes'::regclass AND NOT tgisinternal"
+  defp copy_trigger?, do: match?(%{rows: [[n]]} when n > 0, Repo.query!(@copy_trigger_sql, []))
 
-  defp catalog(sql) do
-    %{rows: [[n]]} = Repo.query!(sql, [])
-    n
-  end
+  defp head_trigger_on_nonce?,
+    do: match?(%{rows: [[n]]} when n > 0, Repo.query!(@head_trigger_sql, []))
 
   # Release A is the first with `NoteBody.put!/2`: a peer without it is
   # older. `function_exported?` is enough: releases boot in embedded mode,
