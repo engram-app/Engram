@@ -6590,7 +6590,9 @@ defmodule Engram.Notes do
 
     {root, by_ref, dead} =
       Enum.reduce(groups, {0, [], 0}, fn
-        {nil, count}, {_, refs, dead} -> {count, refs, dead}
+        {nil, count}, {_, refs, dead} ->
+          {count, refs, dead}
+
         {ref, count}, {root, refs, dead} ->
           if MapSet.member?(live, ref),
             do: {root, [%{ref: ref, count: count} | refs], dead},
@@ -6625,7 +6627,13 @@ defmodule Engram.Notes do
 
     markers =
       for m <- raw_folder_marker_rows(user, vault),
-          do: %{id: m.id, dv: m.dek_version, ct: m.folder_ciphertext, nonce: m.folder_nonce, count: 0}
+          do: %{
+            id: m.id,
+            dv: m.dek_version,
+            ct: m.folder_ciphertext,
+            nonce: m.folder_nonce,
+            count: 0
+          }
 
     root = root - length(drift)
 

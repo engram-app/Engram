@@ -7,7 +7,17 @@ defmodule Engram.Folders.ReadsTest do
 
   import Engram.RlsCase
 
-  alias Engram.{Attachments, Crypto, DataMigrations, Folders, Notes, QueryPlan, QueryRecorder, Repo}
+  alias Engram.{
+    Attachments,
+    Crypto,
+    DataMigrations,
+    Folders,
+    Notes,
+    QueryPlan,
+    QueryRecorder,
+    Repo
+  }
+
   alias Engram.Search.NoteFilter
   alias Engram.DataMigrations.FolderTable
   alias Engram.FolderRows
