@@ -534,9 +534,11 @@ defmodule Engram.Notes.CrdtPersistence do
   @doc """
   A note's current doc: its decrypted snapshot with tail `rows` folded in
   (`:read` reads them now). `{:ok, doc, applied_ids}`, or the decrypt or decode
-  error. The one copy of bind's recipe for callers outside a room (the REST
-  write path, the unedited merge, the transport's step-1 load). Runs in the
-  caller's tenant transaction, like `replay_tail/4`.
+  error. Bind's recipe for callers outside a room that already hold a tenant
+  transaction (the REST write path, the unedited merge). Runs in it, like
+  `replay_tail/4`, decrypt included. `CrdtTransport.load_doc/3` keeps its own
+  copy on purpose: it decrypts OUTSIDE the transaction, so a slow key
+  provider does not hold one open.
   """
   @spec load_doc(Note.t(), map(), :read | [struct()]) ::
           {:ok, Yex.Doc.t(), [Ecto.UUID.t()]} | {:error, term()}

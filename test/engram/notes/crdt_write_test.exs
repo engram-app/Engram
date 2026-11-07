@@ -190,6 +190,22 @@ defmodule Engram.Notes.CrdtWriteTest do
       assert served!(user, vault, "c.md") == "base\nadded\n"
     end
 
+    # The doc (snapshot plus tail) already holds the pushed text, the row does
+    # not. Red-first on 02c420935: the reply was the stale row (idempotent
+    # repush), whose hash a client then sent back as a base and got a 409.
+    test "a push the tail already holds answers with what a read serves",
+         %{user: user, vault: vault} do
+      on!()
+      note = create!(user, vault, "t.md", "alpha\n")
+      tail_edit!(user, vault, note.id, &(&1 <> "beta\n"))
+
+      assert {:ok, reply} = write(user, vault, "t.md", "alpha\nbeta\n")
+      {:ok, read} = Notes.get_note(user, vault, "t.md")
+
+      assert reply.content == "alpha\nbeta\n"
+      assert {reply.content_hash, reply.version} == {read.content_hash, read.version}
+    end
+
     test "the reply's content_hash and version are what the next read serves",
          %{user: user, vault: vault} do
       on!()
@@ -207,7 +223,14 @@ defmodule Engram.Notes.CrdtWriteTest do
     test "a raise after the row update leaves notes and note_bodies unchanged",
          %{user: user, vault: vault} do
       on!()
-      note = create!(user, vault, "r.md", "before\n")
+      note = create!(user, vault, "r.md", "zero\n")
+
+      # The seam sits on the path this write takes: the same write without the
+      # raise is an ops-path write (its post-write step runs).
+      ref = attach_written()
+      assert {:ok, _} = write(user, vault, "r.md", "before\n")
+      assert_received {:crdt_written, ^ref, _}
+
       body_before = Fixtures.raw_note!(note.id)
       row_before = notes_row(note.id)
 
@@ -364,6 +387,24 @@ defmodule Engram.Notes.CrdtWriteTest do
       end
 
       assert served!(user, vault, "live.md") == "Iteration 10\n"
+    end
+
+    # A room that raises (or times out) wrote nothing we can rely on: the write
+    # reads again once, then answers a conflict (a 409 the writer retries)
+    # instead of an opaque error. Nothing lands beside the room.
+    test "a room that raises answers a version conflict, not a crash",
+         %{user: user, vault: vault} do
+      on!()
+      note = create!(user, vault, "raise.md", "x\n")
+      room = live_room!(user, vault, note)
+      real_doc = :sys.get_state(room).doc
+      :sys.replace_state(room, &%{&1 | doc: :not_a_doc})
+
+      assert {:error, :version_conflict, conflict} = write(user, vault, "raise.md", "x\ny\n")
+      assert conflict.id == note.id
+
+      :sys.replace_state(room, &%{&1 | doc: real_doc})
+      assert served!(user, vault, "raise.md") == "x\n"
     end
 
     # Red-first without the delivery fix: the result hashes like the row (the

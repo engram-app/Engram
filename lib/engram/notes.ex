@@ -2897,14 +2897,22 @@ defmodule Engram.Notes do
   end
 
   # The ops path's merge result: the same encrypted-state map
-  # `maybe_merge_crdt` returns, plus the write's `delta` (for deliver-out), or
-  # `:noop`. A room takes the diff only for a write that holds no row lock (an
-  # rmw locks the row before it writes) and declares no base: its text is the
+  # `maybe_merge_crdt` returns, plus the write's `delta` (for deliver-out). A
+  # doc that already held the text (its tail or a room did, the row did not)
+  # gives an empty delta, and the row is still written: the reply then carries
+  # what a read serves, not the stale row.
+  #
+  # A room takes the diff only for a write that holds no row lock (an rmw
+  # locks the row before it writes) and declares no base: its text is the
   # whole note as the writer has it (a plugin push), so it is diffed against
   # everything the room holds. A writer with a base (an rmw's doc, a matched
   # `base_hash`) authored its change against the STORED view, and diffing it
-  # against the room would delete room edits it never saw; it merges as a
-  # concurrent edit instead.
+  # against the room would delete room edits it never saw (another device's
+  # keystrokes); it merges as a concurrent edit instead. Accepted risk: if
+  # such a text also carries a room edit whose tail append has not landed
+  # (only the plugin's own oversized REST push, milliseconds after its own
+  # keystroke), that edit goes in twice. Deleting another device's edit is the
+  # worse failure; the plugin sends its base from BaseStore in step 5.
   defp crdt_ops_merge(existing, content, user, path, opts) do
     {base, room?} =
       case Keyword.get(opts, :merge_doc) do
@@ -2919,9 +2927,6 @@ defmodule Engram.Notes do
       end
 
     case CrdtWrite.apply_text(user, existing, content, base: base, room: room?) do
-      {:ok, :noop} ->
-        :noop
-
       {:ok, %{state: state, text: text, delta: delta}} ->
         with {:ok, crdt} <-
                crdt_merge_result(%{state: state, text: text}, user, existing.id, path),
@@ -3236,11 +3241,7 @@ defmodule Engram.Notes do
         prepare_rewrite(existing, base_attrs, user, sanitized_path, folder, opts)
       end)
 
-    case prepared do
-      # The ops path found the doc already holding the text: nothing to write.
-      :noop -> idempotent_repush(existing, base_attrs)
-      prepared -> write_prepared(existing, prepared, db_opts, opts)
-    end
+    write_prepared(existing, prepared, db_opts, opts)
   end
 
   defp write_prepared(existing, prepared, db_opts, opts) do

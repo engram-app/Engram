@@ -35,6 +35,18 @@ defmodule Engram.Notes.CrdtWrite do
   `notes.crdt_head` on the note row, so it would wait on us. A room is never
   started (`CrdtRegistry.lookup/1` is non-creating).
 
+  Durability on this route: the room appends the delta to the tail on its
+  own connection, BEFORE the request's transaction commits. If the request
+  then fails (a raise, a lost fence twice, a 409), the edit is still durable
+  in the tail and in the room, though the reply says it failed. It is the
+  edit the writer asked for, applied once, so a retry finds the doc holding
+  the text and only brings the row up to it (an empty delta). A room that
+  does not answer holds the request's pool connection for up to two room
+  call timeouts (one retry).
+
+  Writers with a base never take this route; see `Notes.crdt_ops_merge/5`
+  for why, and for the duplicate it accepts.
+
   ## Cost per write
 
   O(note) for the doc load (one snapshot decrypt, the tail replay) and the
@@ -69,14 +81,14 @@ defmodule Engram.Notes.CrdtWrite do
     * `room: true`: a `:current` write holding no row lock may diff inside a
       resident room (see the moduledoc).
 
-  Returns `{:ok, :noop}` when the doc already holds `new_text` (no op is
-  minted), `{:ok, %{state: state, text: text, delta: delta}}` (the full state
-  to store, its projection, the write's ops), or an error, in which case
-  nothing was written anywhere.
+  Returns `{:ok, %{state: state, text: text, delta: delta}}`: the full state
+  to store, its projection, and the write's ops. When the doc already holds
+  `new_text` (its tail or a room has it, the row does not yet) no op is minted
+  and `delta` is the empty update, so the row is still brought up to what a
+  read serves. An error means nothing was authored.
   """
   @spec apply_text(map(), Note.t(), String.t(), keyword()) ::
-          {:ok, :noop | %{state: binary(), text: String.t(), delta: binary()}}
-          | {:error, term()}
+          {:ok, %{state: binary(), text: String.t(), delta: binary()}} | {:error, term()}
   def apply_text(user, %Note{} = note, new_text, opts \\ []) when is_binary(new_text) do
     case Keyword.get(opts, :base, :current) do
       {:doc, %Yex.Doc{} = doc} ->
@@ -95,7 +107,6 @@ defmodule Engram.Notes.CrdtWrite do
          {:ok, %{state: room_state} = authored} <- in_room(room, note, new_text) do
       with_row_state(user, note, room_state, authored)
     else
-      {:ok, :noop} -> {:ok, :noop}
       {:error, _} = err -> err
       _no_room -> {:error, :room_gone}
     end
@@ -105,7 +116,7 @@ defmodule Engram.Notes.CrdtWrite do
   # state folded onto the row's snapshot, so a room that missed a committed
   # write can never store a state without it.
   defp with_row_state(user, note, room_state, authored) do
-    with {:ok, doc, []} <- CrdtPersistence.load_doc(note, user, []),
+    with {:ok, doc, _none} <- CrdtPersistence.load_doc(note, user, []),
          :ok <- Yex.apply_update(doc, room_state) do
       {:ok,
        %{authored | state: Yex.encode_state_as_update!(doc), text: CrdtBridge.project_doc(doc)}}
@@ -113,27 +124,26 @@ defmodule Engram.Notes.CrdtWrite do
   end
 
   # Mints no op when the doc already holds the text (an idempotent write must
-  # not make the writer a new client: the third lineage mechanism).
+  # not make the writer a new client: the third lineage mechanism); the delta
+  # is then the empty update.
   defp author(doc, new_text) do
-    if CrdtBridge.project_doc(doc) == new_text do
-      {:ok, :noop}
-    else
-      sv = Yex.encode_state_vector!(doc)
+    sv = Yex.encode_state_vector!(doc)
 
-      # One Yjs transaction for the frontmatter keys and every hunk: a room's
-      # update_v1 then appends and broadcasts ONE update for the write.
-      _ =
+    # One Yjs transaction for the frontmatter keys and every hunk: a room's
+    # update_v1 then appends and broadcasts ONE update for the write.
+    _ =
+      if CrdtBridge.project_doc(doc) != new_text do
         Yex.Doc.transaction(doc, "crdt_write", fn ->
           CrdtBridge.ingest_plaintext(doc, new_text, diff: :hunks)
         end)
+      end
 
-      {:ok,
-       %{
-         state: Yex.encode_state_as_update!(doc),
-         text: CrdtBridge.project_doc(doc),
-         delta: Yex.encode_state_as_update!(doc, sv)
-       }}
-    end
+    {:ok,
+     %{
+       state: Yex.encode_state_as_update!(doc),
+       text: CrdtBridge.project_doc(doc),
+       delta: Yex.encode_state_as_update!(doc, sv)
+     }}
   end
 
   # The diff on the room's own doc, in the room process: the room's update_v1
