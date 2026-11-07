@@ -382,4 +382,227 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
     assert :ok = sweep(ctx)
     refute_received :rewrite
   end
+
+  # One fleet-wide `n` job (`mode: "n_fleet"`), never one per user: prod
+  # 0.77.0 queued ~1,160 per-user jobs whose bucket snoozes all woke in the
+  # same ~70 s band (~20 oban_jobs UPDATEs a second, ~0 points delivered).
+  describe "the fleet n job" do
+    alias Engram.DataMigrations.NotePayloadStamps
+
+    @fleet %{"mode" => "n_fleet"}
+
+    defp fleet, do: perform_job(ReconcileNotePayloads, @fleet)
+    defp fleet(meta), do: ReconcileNotePayloads.perform(%{fleet_job() | meta: meta})
+    defp fleet_job, do: build_job(ReconcileNotePayloads, @fleet)
+
+    defp fleet_jobs, do: all_enqueued(worker: ReconcileNotePayloads, args: @fleet)
+    defp n_jobs, do: all_enqueued(worker: ReconcileNotePayloads, args: %{"mode" => "n"})
+
+    defp clear_jobs, do: Repo.delete_all(Oban.Job)
+
+    defp ledger, do: NotePayloadStamps.run_pass(peers: fn -> [] end)
+
+    # `count` users, each with one stamped note behind the version and `per`
+    # v5 points without `n`. Returns `{user id, [point id]}` pairs.
+    defp stale_users(ctx, count, per) do
+      users =
+        for _ <- 1..count do
+          user = insert(:user)
+          vault = insert(:vault, user: user)
+          note = insert(:note, user: user, vault: vault, payload_hash: :crypto.strong_rand_bytes(32))
+          points = for _ <- 1..per, do: Ecto.UUID.generate()
+          {user, note, points}
+        end
+
+      rows =
+        for {user, note, points} <- users, {point, i} <- Enum.with_index(points) do
+          %{
+            note_id: note.id,
+            user_id: user.id,
+            vault_id: note.vault_id,
+            position: i,
+            char_start: 0,
+            char_end: 1,
+            qdrant_point_id: point
+          }
+        end
+
+      rows
+      |> Enum.chunk_every(5_000)
+      |> Enum.each(&Repo.insert_all(Engram.Notes.Chunk, &1, skip_tenant_check: true))
+
+      Agent.update(ctx.points, fn held ->
+        for {user, _note, points} <- users,
+            point <- points,
+            into: held,
+            do: {point, %{"u" => Engram.Vector.FilterId.uuid(user.id)}}
+      end)
+
+      {_, _} =
+        Repo.update_all(
+          from(s in NoteIndexState, where: not is_nil(s.note_id)),
+          [set: [payload_version: nil]],
+          skip_tenant_check: true
+        )
+
+      for {user, _note, points} <- users, do: {user.id, points}
+    end
+
+    # User ids whose points carry `n` now.
+    defp users_written(ctx, users) do
+      held = Agent.get(ctx.points, & &1)
+
+      for {uid, points} <- users,
+          Enum.any?(points, &Map.has_key?(held[&1], "n")),
+          do: uid
+    end
+
+    test "many users needing n queue exactly one fleet job, never one per user", ctx do
+      stale_users(ctx, 20, 1)
+
+      assert {:more, _} = ledger()
+      assert [_] = fleet_jobs()
+      assert n_jobs() == []
+
+      # Every later pass keeps it at one.
+      assert {:more, _} = ledger()
+      assert [_] = fleet_jobs()
+    end
+
+    test "a spent bucket re-queues the fleet job once at the window edge, never N wakes", ctx do
+      stale_users(ctx, 30, 1)
+      close(:bucket_spent, ctx)
+
+      {result, queries} = reads(fn -> fleet() end)
+      assert :ok = result
+      refute_received :read
+      refute_received :rewrite
+      refute Enum.any?(queries, &(&1.sql =~ ~r/"(notes|chunks|users)"/))
+
+      assert [next] = fleet_jobs()
+      assert DateTime.diff(next.scheduled_at, DateTime.utc_now(), :second) in 0..70
+      assert n_jobs() == []
+    end
+
+    test "with the switch off it cancels as paused, reads nothing, and the ledger re-adds it",
+         ctx do
+      stale_users(ctx, 5, 1)
+      ServiceConfig.put_override(:payload_backfill, false)
+
+      {result, queries} = reads(fn -> fleet() end)
+      assert {:cancel, :paused} = result
+      assert queries == []
+      refute_received :read
+      assert fleet_jobs() == []
+
+      refute NotePayloadStamps.enabled?()
+      assert Engram.Workers.DataMigrationsRunner.run(NotePayloadStamps) == :skipped
+      assert fleet_jobs() == []
+
+      ServiceConfig.put_override(:payload_backfill, true)
+      assert {:more, _} = ledger()
+      assert [_] = fleet_jobs()
+    end
+
+    test "the optimizer gate backs off on its own count, not on bucket snoozes", ctx do
+      Agent.update(ctx.health, fn _ -> {@green, 50_001, nil} end)
+
+      # Fifty bucket waits behind it (`snoozed`), never a gate hit: 30 s.
+      assert :ok = fleet(%{"snoozed" => 50})
+      assert [first] = fleet_jobs()
+      assert first.meta["gated"] == 1
+      assert DateTime.diff(first.scheduled_at, DateTime.utc_now(), :second) in 25..30
+
+      # Its third gate hit: 240 s jittered to 300, whatever `snoozed` says.
+      clear_jobs()
+      assert :ok = fleet(%{"snoozed" => 50, "gated" => 3})
+      assert [third] = fleet_jobs()
+      assert third.meta["gated"] == 4
+      assert DateTime.diff(third.scheduled_at, DateTime.utc_now(), :second) in 235..300
+
+      # A bucket wait neither grows it nor is grown by it.
+      Agent.update(ctx.health, fn _ -> {@green, 0, nil} end)
+      Engram.Cache.clear_local(:rebuild)
+      close(:bucket_spent, ctx)
+      clear_jobs()
+      assert :ok = fleet(%{"snoozed" => 50, "gated" => 3})
+      assert [edge] = fleet_jobs()
+      assert edge.meta["gated"] == 0
+    end
+
+    test "a legacy per-user n job cancels itself and makes sure the fleet job exists", ctx do
+      assert {:cancel, :superseded} = sweep(ctx)
+      refute_received :read
+      assert [_] = fleet_jobs()
+
+      # A second legacy job does not add another.
+      assert {:cancel, :superseded} = sweep(ctx)
+      assert [_] = fleet_jobs()
+    end
+
+    # ~1,250 users at the 500 setting, ten windows on a fake clock (the
+    # bucket reset is the window edge): every window delivers the setting,
+    # spread over the users in cursor order, through ONE job.
+    @tag timeout: 300_000
+    test "the sustained rate is the setting across 1,250 users over ten windows", ctx do
+      users = stale_users(ctx, 1_250, 4)
+      clear_jobs()
+      before = written(ctx)
+
+      totals =
+        for _window <- 1..10, reduce: [] do
+          acc ->
+            fresh_window()
+            clear_jobs()
+            assert :ok = fleet()
+            assert [next] = fleet_jobs()
+            assert DateTime.diff(next.scheduled_at, DateTime.utc_now(), :second) in 0..70
+            [written(ctx) - before | acc]
+        end
+
+      deltas =
+        totals |> Enum.reverse() |> then(&Enum.zip([0 | &1], &1)) |> Enum.map(fn {a, b} -> b - a end)
+
+      assert deltas == List.duplicate(500, 10)
+      # 5,000 points, 4 a user (the setup's user holds a few too).
+      assert length(users_written(ctx, users)) >= 1_240
+    end
+
+    # The bucket is Hammer's real 60 s fix window: start each fake window
+    # with 15 s ahead of the real edge, so one run never spans two.
+    defp fresh_window do
+      EngramWeb.RateLimiter.clear_buckets!()
+      left = 60_000 - rem(System.system_time(:millisecond), 60_000)
+      if left < 15_000, do: Process.sleep(left + 1)
+    end
+
+    # The insert_unique advisory-lock race: the self re-queue reports a
+    # conflict and inserts nothing, so no fleet job is pending. The next
+    # hourly ledger pass re-adds it, and the backfill finishes.
+    test "a lost self re-queue is logged, re-added by the next ledger pass, and nothing strands",
+         ctx do
+      users = stale_users(ctx, 10, 1)
+      ServiceConfig.put_override(:payload_backfill_points_per_min, 4)
+
+      Application.put_env(:engram, :reconcile_n_insert_fun, fn changeset ->
+        {:ok, %{Ecto.Changeset.apply_action!(changeset, :insert) | conflict?: true}}
+      end)
+
+      on_exit(fn -> Application.delete_env(:engram, :reconcile_n_insert_fun) end)
+
+      log = ExUnit.CaptureLog.capture_log(fn -> assert :ok = fleet() end)
+      assert log =~ "fleet re-queue lost"
+      assert fleet_jobs() == []
+
+      Application.delete_env(:engram, :reconcile_n_insert_fun)
+      ServiceConfig.put_override(:payload_backfill_points_per_min, 500)
+      EngramWeb.RateLimiter.reset_buckets!()
+
+      assert {:more, _} = ledger()
+      assert [_] = fleet_jobs()
+
+      assert :ok = fleet()
+      assert length(users_written(ctx, users)) == 10
+    end
+  end
 end
