@@ -9,9 +9,7 @@ defmodule Engram.Repo.Migrations.BackfillOAuthRefreshTokensSupersededAtTest do
   alias Engram.OAuth.RefreshToken
   alias Engram.Repo
 
-  Code.require_file(
-    "priv/repo/migrations/20261015060000_backfill_oauth_refresh_tokens_superseded_at.exs"
-  )
+  Engram.MigrationFile.load!("20261015060000_backfill_oauth_refresh_tokens_superseded_at.exs")
 
   alias Engram.Repo.Migrations.BackfillOAuthRefreshTokensSupersededAt, as: Migration
 

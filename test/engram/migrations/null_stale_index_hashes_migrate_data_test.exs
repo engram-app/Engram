@@ -5,9 +5,7 @@ defmodule Engram.Repo.Migrations.NullStaleIndexHashesMigrateDataTest do
   alias Engram.Notes.{Chunk, Note}
   alias Engram.Repo
 
-  Code.require_file(
-    "priv/repo/migrations/20261004120000_null_stale_index_hashes_migrate_data.exs"
-  )
+  Engram.MigrationFile.load!("20261004120000_null_stale_index_hashes_migrate_data.exs")
 
   alias Engram.Repo.Migrations.NullStaleIndexHashesMigrateData, as: Migration
 
