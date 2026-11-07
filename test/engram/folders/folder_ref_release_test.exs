@@ -251,10 +251,16 @@ defmodule Engram.Folders.FolderRefReleaseTest do
       assert FolderRows.ref("notes", kept.id) == kept_row
 
       # Re-deleting an already deleted row (a second delete) is not a flip either.
+      # The reference to the dead row is replayed with triggers off: written
+      # now, `folder_ref_live_only` (20261107090000) would turn it into NULL.
+      Repo.query!("SET LOCAL session_replication_role = replica")
+
       Repo.query!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [
         dump(gone.id),
         dump(gone_row)
       ])
+
+      Repo.query!("SET LOCAL session_replication_role = origin")
 
       Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [dump(gone_row)])
       assert FolderRows.ref("notes", gone.id) == gone_row
