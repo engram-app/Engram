@@ -36,6 +36,7 @@ defmodule Engram.Notes do
     Helpers,
     Identity,
     Keys,
+    Name,
     Note,
     NoteBody,
     OkfFields,
@@ -7543,6 +7544,11 @@ defmodule Engram.Notes do
     :path_ci_hmac,
     :path_length,
     :link_keys_stamp,
+    :name_ciphertext,
+    :name_nonce,
+    :name_hmac,
+    :name_ci_hmac,
+    :name_stamp,
     :folder_ciphertext,
     :folder_nonce,
     :folder_hmac
@@ -7561,6 +7567,11 @@ defmodule Engram.Notes do
     :path_ci_hmac,
     :path_length,
     :link_keys_stamp,
+    :name_ciphertext,
+    :name_nonce,
+    :name_hmac,
+    :name_ci_hmac,
+    :name_stamp,
     :folder_ciphertext,
     :folder_nonce,
     :folder_hmac,
@@ -7570,13 +7581,13 @@ defmodule Engram.Notes do
     :dek_version
   ]
 
-  # Statement-size bound for the VALUES join: 500 rows × ≤20 params stays
+  # Statement-size bound for the VALUES join: 500 rows × ≤25 params stays
   # well under Postgres's 65535-bind-param protocol limit.
   @rename_update_chunk 500
 
-  # Rows per tombstone `insert_all` in rename_folder/4. A tombstone binds 24
-  # parameters (9 base columns + 15 from full_aad_bound_kw/7), so 65535 allows
-  # 2730; 1000 is a half-margin so a new column cannot re-arm the overflow.
+  # Rows per tombstone `insert_all` in rename_folder/4. A tombstone binds 29
+  # parameters (9 base columns + 20 from full_aad_bound_kw/7), so 65535 allows
+  # 2259; 1000 keeps a margin so a new column cannot re-arm the overflow.
   @tombstone_insert_chunk 1000
 
   defp do_rename_folder(user, vault, old_folder, old_prefix, new_folder, rows) do
@@ -9362,6 +9373,11 @@ defmodule Engram.Notes do
     :path_ci_hmac,
     :path_length,
     :link_keys_stamp,
+    :name_ciphertext,
+    :name_nonce,
+    :name_hmac,
+    :name_ci_hmac,
+    :name_stamp,
     :folder_ciphertext,
     :folder_nonce,
     :folder_hmac
@@ -9490,13 +9506,6 @@ defmodule Engram.Notes do
         Crypto.aad_for_row(:notes, :title, note_id)
       )
 
-    {path_ct, path_n} =
-      Envelope.encrypt(
-        path,
-        dek,
-        Crypto.aad_for_row(:notes, :path, note_id)
-      )
-
     {folder_ct, folder_n} =
       Envelope.encrypt(
         folder,
@@ -9515,13 +9524,9 @@ defmodule Engram.Notes do
       content_ciphertext: content_ct,
       content_nonce: content_n,
       title_ciphertext: title_ct,
-      title_nonce: title_n,
-      path_ciphertext: path_ct,
-      path_nonce: path_n,
-      path_hmac: Crypto.hmac_field(filter_key, path),
-      basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(path))
+      title_nonce: title_n
     ] ++
-      Links.path_keys(filter_key, path, path_n) ++
+      path_kw(dek, filter_key, note_id, path) ++
       [
         folder_ciphertext: folder_ct,
         folder_nonce: folder_n,
@@ -9539,10 +9544,24 @@ defmodule Engram.Notes do
   defp phase_b_path_folder_for(user, note_id, path, folder) do
     {:ok, dek} = Crypto.get_dek(user)
     {:ok, filter_key} = Crypto.dek_filter_key(user)
-    path_aad = Crypto.aad_for_row(:notes, :path, note_id)
     folder_aad = Crypto.aad_for_row(:notes, :folder, note_id)
-    {path_ct, path_n} = Envelope.encrypt(path, dek, path_aad)
     {folder_ct, folder_n} = Envelope.encrypt(folder, dek, folder_aad)
+
+    path_kw(dek, filter_key, note_id, path) ++
+      [
+        folder_ciphertext: folder_ct,
+        folder_nonce: folder_n,
+        folder_hmac: Crypto.hmac_field(filter_key, folder)
+      ]
+  end
+
+  # Every column a note's path derives, from one encryption of it: the path
+  # envelope and hashes, the link resolution keys, and the row's own name
+  # (`Name.keys/6`, O(1) folder rename plan S2). The one place a note path is
+  # written: both builders above call it, so every note writer stamps the name
+  # from the same nonce as the path.
+  defp path_kw(dek, filter_key, note_id, path) do
+    {path_ct, path_n} = Envelope.encrypt(path, dek, Crypto.aad_for_row(:notes, :path, note_id))
 
     [
       path_ciphertext: path_ct,
@@ -9551,10 +9570,6 @@ defmodule Engram.Notes do
       basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(path))
     ] ++
       Links.path_keys(filter_key, path, path_n) ++
-      [
-        folder_ciphertext: folder_ct,
-        folder_nonce: folder_n,
-        folder_hmac: Crypto.hmac_field(filter_key, folder)
-      ]
+      Name.keys(:notes, dek, filter_key, note_id, path, path_n)
   end
 end

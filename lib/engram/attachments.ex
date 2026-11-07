@@ -27,6 +27,7 @@ defmodule Engram.Attachments do
   alias Engram.Notes
   alias Engram.Notes.Enqueue
   alias Engram.Notes.Helpers
+  alias Engram.Notes.Name
   alias Engram.Notes.PathSanitizer
   alias Engram.Pager
   alias Engram.Repo
@@ -1043,23 +1044,20 @@ defmodule Engram.Attachments do
             # Repoint the live row: re-encrypt path under the SAME id-AAD (id is
             # unchanged, so the AAD bind is unchanged), recompute path_hmac, bump
             # updated_at + seq. storage_key + blob untouched.
-            path_aad = Crypto.aad_for_row(:attachments, :path, live.id)
-            {path_ct, path_n} = Envelope.encrypt(new_path, dek, path_aad)
+            path_cols =
+              dek
+              |> path_attrs(live.id, new_path, {new_hmac, new_basename_hmac})
+              |> Map.to_list()
+
+            %{path_ciphertext: path_ct, path_nonce: path_n} = Map.new(path_cols)
 
             {1, _} =
               from(a in Attachment, where: a.id == ^live.id)
               |> Repo.update_all(
                 set:
-                  [
-                    path_ciphertext: path_ct,
-                    path_nonce: path_n,
-                    path_hmac: new_hmac,
-                    basename_hmac: new_basename_hmac,
-                    updated_at: now,
-                    seq: seq
-                  ] ++
-                    Rows.attachment_ref(folder_ref, path_n) ++
-                    Links.path_keys(filter_key, new_path, path_n)
+                  path_cols ++
+                    [updated_at: now, seq: seq] ++
+                    Rows.attachment_ref(folder_ref, path_n)
               )
 
             # Insert the old-path tombstone (fresh uuid, path encrypted under
@@ -1145,16 +1143,11 @@ defmodule Engram.Attachments do
          now
        ) do
     tomb_id = Ecto.UUID.generate()
-    path_aad = Crypto.aad_for_row(:attachments, :path, tomb_id)
-    {path_ct, path_n} = Envelope.encrypt(old_path, dek, path_aad)
 
     Attachment.changeset(
       %Attachment{id: tomb_id},
-      %{
-        path_ciphertext: path_ct,
-        path_nonce: path_n,
-        path_hmac: old_hmac,
-        basename_hmac: old_basename_hmac,
+      path_attrs(dek, tomb_id, old_path, {old_hmac, old_basename_hmac})
+      |> Map.merge(%{
         content_hash: live.content_hash,
         mime_type: live.mime_type,
         size_bytes: live.size_bytes,
@@ -1166,7 +1159,7 @@ defmodule Engram.Attachments do
         seq: seq,
         version: 1,
         dek_version: Crypto.row_version_aad_bound()
-      }
+      })
       |> Map.merge(content_format(live))
     )
   end
@@ -1372,7 +1365,7 @@ defmodule Engram.Attachments do
   # Returns `[{item, updated_attachment}]` for the broadcasts.
   defp apply_moves(_user, _vault, _keys, [], _live), do: []
 
-  defp apply_moves(user, vault, {dek, filter_key}, moving, live) do
+  defp apply_moves(user, vault, {dek, _filter_key}, moving, live) do
     now = DateTime.utc_now(:second)
     n = length(moving)
     last_seq = Engram.Vaults.next_seq_block!(vault.id, n)
@@ -1387,18 +1380,17 @@ defmodule Engram.Attachments do
       |> Enum.map(fn {item, seq} ->
         att = Map.fetch!(live, item.old_hmac)
 
-        {path_ct, path_n} =
-          Envelope.encrypt(item.new_path, dek, Crypto.aad_for_row(:attachments, :path, att.id))
+        path_cols =
+          dek
+          |> path_attrs(att.id, item.new_path, {item.new_hmac, item.new_basename_hmac})
+          |> Map.to_list()
 
         cols =
-          [
-            path_ciphertext: path_ct,
-            path_nonce: path_n,
-            path_hmac: item.new_hmac,
-            basename_hmac: item.new_basename_hmac
-          ] ++
-            Rows.attachment_ref(Map.fetch!(refs, Helpers.extract_folder(item.new_path)), path_n) ++
-            Links.path_keys(filter_key, item.new_path, path_n)
+          path_cols ++
+            Rows.attachment_ref(
+              Map.fetch!(refs, Helpers.extract_folder(item.new_path)),
+              Keyword.fetch!(path_cols, :path_nonce)
+            )
 
         {item, seq, cols, struct(%{att | path: item.new_path, updated_at: now, seq: seq}, cols)}
       end)
@@ -2602,11 +2594,15 @@ defmodule Engram.Attachments do
 
   @doc false
   # The path columns of an attachment row: ciphertext bound to `att_id`, the
-  # lookup HMACs, and the link-resolution keys.
+  # lookup HMACs, the link-resolution keys and the row's own name
+  # (`Engram.Notes.Name.keys/6`, O(1) folder rename plan S2). The one place an
+  # attachment path is written: create, upload, move, folder move and the
+  # move's tombstone all build their path columns here.
   @spec path_attrs(binary(), Ecto.UUID.t(), String.t(), {binary(), binary()}) :: map()
   def path_attrs(dek, att_id, path, {path_hmac, basename_hmac}) do
     path_aad = Crypto.aad_for_row(:attachments, :path, att_id)
     {path_ct, path_n} = Envelope.encrypt(path, dek, path_aad)
+    filter_key = Crypto.dek_filter_key_from_bytes(dek)
 
     Map.merge(
       %{
@@ -2615,7 +2611,10 @@ defmodule Engram.Attachments do
         path_hmac: path_hmac,
         basename_hmac: basename_hmac
       },
-      Map.new(Links.path_keys(Crypto.dek_filter_key_from_bytes(dek), path, path_n))
+      Map.new(
+        Links.path_keys(filter_key, path, path_n) ++
+          Name.keys(:attachments, dek, filter_key, att_id, path, path_n)
+      )
     )
   end
 

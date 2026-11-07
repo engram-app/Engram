@@ -396,7 +396,6 @@ defmodule Engram.Folders.Rows do
       parent_id: parent_id,
       name_ciphertext: ct,
       name_nonce: nonce,
-      name_hmac: name_hmac(ctx.fk, segment),
       # Its terms are written by `put_names/3` in the same transaction.
       name_terms_stamp: NameTerms.stamp(name_hmac(ctx.fk, segment)),
       full_path_hmac: full_h,
@@ -405,6 +404,7 @@ defmodule Engram.Folders.Rows do
       inserted_at: now,
       updated_at: now
     }
+    |> Map.merge(Map.new(Folder.name_keys(ctx.fk, segment, nonce)))
   end
 
   defp insert(ctx, id, parent_id, segment, full_h, explicit?) do
@@ -430,18 +430,18 @@ defmodule Engram.Folders.Rows do
       where: f.id == ^id and f.vault_id == ^ctx.vault_id and not exists(subquery(free))
     )
     |> Repo.update_all(
-      set: [
-        parent_id: parent_id,
-        name_ciphertext: ct,
-        name_nonce: nonce,
-        name_hmac: name_h,
-        full_path_hmac: full_h,
-        dek_version: Crypto.row_version_aad_bound(),
-        explicit: true,
-        deleted_at: nil,
-        delete_op_id: nil,
-        updated_at: now()
-      ]
+      set:
+        [
+          parent_id: parent_id,
+          name_ciphertext: ct,
+          name_nonce: nonce,
+          full_path_hmac: full_h,
+          dek_version: Crypto.row_version_aad_bound(),
+          explicit: true,
+          deleted_at: nil,
+          delete_op_id: nil,
+          updated_at: now()
+        ] ++ Folder.name_keys(ctx.fk, segment, nonce)
     )
 
     put_names(ctx, [{id, segment}])
@@ -851,11 +851,10 @@ defmodule Engram.Folders.Rows do
             parent_id: new_parent,
             name_ciphertext: ct,
             name_nonce: nonce,
-            name_hmac: new_name_h,
             full_path_hmac: path_hmac(ctx.fk, new_folder),
             dek_version: Crypto.row_version_aad_bound(),
             updated_at: now()
-          ]
+          ] ++ Folder.name_keys(ctx.fk, new_segment, nonce)
         )
 
         :ok = put_names(ctx, [{root.id, new_segment}])

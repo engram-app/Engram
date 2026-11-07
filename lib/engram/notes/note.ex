@@ -155,6 +155,15 @@ defmodule Engram.Notes.Note do
     # `Engram.Search.NameTerms`: `<<version>> <> basename_hmac` its terms were written for.
     field :name_terms_stamp, :binary
 
+    # The row's own name (`Engram.Notes.Name`, O(1) folder rename plan S2):
+    # written by every path writer, read by nothing until S3. Current only
+    # while `name_stamp` matches `path_nonce`.
+    field :name_ciphertext, :binary
+    field :name_nonce, :binary
+    field :name_hmac, :binary
+    field :name_ci_hmac, :binary
+    field :name_stamp, :binary
+
     # CRDT (Yjs) document state for posture-C file-level sync. The full v1
     # `Yex.encode_state_as_update` snapshot, AES-256-GCM encrypted under the
     # per-user DEK with AAD `aad_for_row(:notes, :crdt_state, id)`. NULL until
@@ -233,6 +242,11 @@ defmodule Engram.Notes.Note do
     :path_ci_hmac,
     :path_length,
     :link_keys_stamp,
+    :name_ciphertext,
+    :name_nonce,
+    :name_hmac,
+    :name_ci_hmac,
+    :name_stamp,
     :crdt_state_ciphertext,
     :crdt_state_nonce,
     :type_ciphertext,
