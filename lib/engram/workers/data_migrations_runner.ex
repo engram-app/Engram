@@ -204,7 +204,6 @@ defmodule Engram.Workers.DataMigrationsRunner do
           end),
         blocked: blocked && to_string(blocked),
         peer: stats[:peer],
-        stale: stats[:stale],
         open: stats[:open],
         clean: stats[:clean]
       ]

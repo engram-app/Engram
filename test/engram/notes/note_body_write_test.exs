@@ -321,13 +321,13 @@ defmodule Engram.Notes.NoteBodyWriteTest do
       assert_in_step!(u.id)
     end
 
-    test "NoteSplit fills a missing body row", %{user: u, vault: v} do
+    test "the pre-boot split fills a missing body row", %{user: u, vault: v} do
       # A row an older release wrote (its notes ciphertexts set), before the
-      # body table: the copy NoteSplit makes is from those columns.
+      # body table: migration 20261107120000 copies from those columns.
       note = write!(u, v, "a.md", "first")
       Engram.Fixtures.old_release_notes_copy!(note.id)
       Repo.query!("DELETE FROM note_bodies WHERE note_id = $1", [Ecto.UUID.dump!(note.id)])
-      NoteSplit.run_pass()
+      Engram.Fixtures.complete_split!()
       assert_in_step!(u.id)
     end
   end
@@ -422,17 +422,17 @@ defmodule Engram.Notes.NoteBodyWriteTest do
     end
   end
 
-  describe "R8(b1): this release's copy from notes (sync!, NoteSplit) never erases a body" do
-    # The copy that remains (`NoteSplit`, the head self-heal) beside a
-    # release that stops writing the `notes` ciphertexts: those columns are
-    # NULL or stale while the nonces stay current.
+  describe "R8(c): the head step (sync!) and NoteSplit never touch a body ciphertext" do
+    # What remains of the copy from `notes` (the head self-heal, NoteSplit's
+    # core keys) over `notes` ciphertexts that are NULL or stale while the
+    # nonces stay current: neither reads them.
     setup %{user: u, vault: v} do
       note = write!(u, v, "a.md", "first")
       %{note: note, id: Ecto.UUID.dump!(note.id), before: body_row(note.id)}
     end
 
     defp old_copy!(note_id) do
-      NoteBody.sync!([note_id], NoteBody.body_fields())
+      NoteBody.sync!([note_id], [:crdt_head])
       NoteSplit.run_pass()
     end
 
@@ -475,9 +475,14 @@ defmodule Engram.Notes.NoteBodyWriteTest do
 
         Repo.query!("UPDATE note_bodies SET key_version = $2 WHERE note_id = $1", [ctx.id, kv + 1])
 
-        assert NoteBody.sync!([ctx.note.id], NoteBody.body_fields()) == 1
+        assert NoteBody.sync!([ctx.note.id], [:crdt_head]) == 1
         assert_body_kept!(ctx)
       end
+    end
+
+    test "a ciphertext column is refused, not copied", ctx do
+      assert_raise ArgumentError, fn -> NoteBody.sync!([ctx.note.id], NoteBody.body_fields()) end
+      assert body_row(ctx.note.id) == ctx.before
     end
   end
 
@@ -545,12 +550,92 @@ defmodule Engram.Notes.NoteBodyWriteTest do
   SELECT ((SELECT count(*) FROM upd) + (SELECT count(*) FROM ins))::int
   """
 
+  # The previous release's copy, verbatim: release-v0.78.0's
+  # `NoteBody.sync!(ids, body_fields())` statement (`@sync_sql` for
+  # [:content, :crdt, :head]). Rendered from `git show
+  # release-v0.78.0:lib/engram/notes/note_body.ex`; do not edit.
+  @copy_sql_v0_78_0 """
+  WITH upd AS (
+    UPDATE note_bodies b SET
+      user_id = n.user_id,
+      key_version = CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END,
+        content_ct = CASE WHEN (CASE WHEN n.content_nonce IS NOT NULL THEN
+    b.content_ct IS NULL OR substring(b.content_ct FROM 1 FOR 13) <> substring((CASE WHEN length(n.content_nonce) = 13 THEN n.content_nonce ELSE '\\x00'::bytea || n.content_nonce END) FROM 1 FOR 13)
+  ELSE (b.content_ct IS NULL) <> (n.content_ciphertext IS NULL) OR (n.content_ciphertext IS NOT NULL AND (
+    octet_length(b.content_ct) <> octet_length(n.content_ciphertext)
+    OR substring(b.content_ct FROM 1 FOR 13) <> substring(n.content_ciphertext FROM 1 FOR 13)
+    OR substring(b.content_ct FROM greatest(octet_length(b.content_ct) - 15, 1))
+      <> substring(n.content_ciphertext FROM greatest(octet_length(n.content_ciphertext) - 15, 1)))) END)
+   THEN COALESCE(CASE WHEN n.content_ciphertext IS NULL THEN NULL
+    WHEN n.content_nonce IS NULL THEN n.content_ciphertext
+    WHEN length(n.content_nonce) = 13 THEN n.content_nonce || n.content_ciphertext
+    ELSE '\\x00'::bytea || n.content_nonce || n.content_ciphertext END
+  , b.content_ct) ELSE b.content_ct END,
+        crdt_ct = CASE WHEN (CASE WHEN n.crdt_state_nonce IS NOT NULL THEN
+    b.crdt_ct IS NULL OR substring(b.crdt_ct FROM 1 FOR 13) <> substring((CASE WHEN length(n.crdt_state_nonce) = 13 THEN n.crdt_state_nonce ELSE '\\x00'::bytea || n.crdt_state_nonce END) FROM 1 FOR 13)
+  ELSE (b.crdt_ct IS NULL) <> (n.crdt_state_ciphertext IS NULL) OR (n.crdt_state_ciphertext IS NOT NULL AND (
+    octet_length(b.crdt_ct) <> octet_length(n.crdt_state_ciphertext)
+    OR substring(b.crdt_ct FROM 1 FOR 13) <> substring(n.crdt_state_ciphertext FROM 1 FOR 13)
+    OR substring(b.crdt_ct FROM greatest(octet_length(b.crdt_ct) - 15, 1))
+      <> substring(n.crdt_state_ciphertext FROM greatest(octet_length(n.crdt_state_ciphertext) - 15, 1)))) END)
+   THEN COALESCE(CASE WHEN n.crdt_state_ciphertext IS NULL THEN NULL
+    WHEN n.crdt_state_nonce IS NULL THEN n.crdt_state_ciphertext
+    WHEN length(n.crdt_state_nonce) = 13 THEN n.crdt_state_nonce || n.crdt_state_ciphertext
+    ELSE '\\x00'::bytea || n.crdt_state_nonce || n.crdt_state_ciphertext END
+  , b.crdt_ct) ELSE b.crdt_ct END,
+        crdt_head = CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$' THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END
+    FROM notes n
+    WHERE b.note_id = n.id AND n.id = ANY($1) AND n.kind = 'note'
+      AND (b.user_id <> n.user_id OR b.key_version <> CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END OR (CASE WHEN n.content_nonce IS NOT NULL THEN
+    b.content_ct IS NULL OR substring(b.content_ct FROM 1 FOR 13) <> substring((CASE WHEN length(n.content_nonce) = 13 THEN n.content_nonce ELSE '\\x00'::bytea || n.content_nonce END) FROM 1 FOR 13)
+  ELSE (b.content_ct IS NULL) <> (n.content_ciphertext IS NULL) OR (n.content_ciphertext IS NOT NULL AND (
+    octet_length(b.content_ct) <> octet_length(n.content_ciphertext)
+    OR substring(b.content_ct FROM 1 FOR 13) <> substring(n.content_ciphertext FROM 1 FOR 13)
+    OR substring(b.content_ct FROM greatest(octet_length(b.content_ct) - 15, 1))
+      <> substring(n.content_ciphertext FROM greatest(octet_length(n.content_ciphertext) - 15, 1)))) END)
+   OR (CASE WHEN n.crdt_state_nonce IS NOT NULL THEN
+    b.crdt_ct IS NULL OR substring(b.crdt_ct FROM 1 FOR 13) <> substring((CASE WHEN length(n.crdt_state_nonce) = 13 THEN n.crdt_state_nonce ELSE '\\x00'::bytea || n.crdt_state_nonce END) FROM 1 FOR 13)
+  ELSE (b.crdt_ct IS NULL) <> (n.crdt_state_ciphertext IS NULL) OR (n.crdt_state_ciphertext IS NOT NULL AND (
+    octet_length(b.crdt_ct) <> octet_length(n.crdt_state_ciphertext)
+    OR substring(b.crdt_ct FROM 1 FOR 13) <> substring(n.crdt_state_ciphertext FROM 1 FOR 13)
+    OR substring(b.crdt_ct FROM greatest(octet_length(b.crdt_ct) - 15, 1))
+      <> substring(n.crdt_state_ciphertext FROM greatest(octet_length(n.crdt_state_ciphertext) - 15, 1)))) END)
+   OR b.crdt_head IS DISTINCT FROM CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$' THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END)
+    RETURNING 1
+  ), ins AS (
+    INSERT INTO note_bodies (note_id, user_id, key_version, content_ct, crdt_ct, crdt_head)
+    SELECT n.id, n.user_id, CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END, CASE WHEN n.content_ciphertext IS NULL THEN NULL
+    WHEN n.content_nonce IS NULL THEN n.content_ciphertext
+    WHEN length(n.content_nonce) = 13 THEN n.content_nonce || n.content_ciphertext
+    ELSE '\\x00'::bytea || n.content_nonce || n.content_ciphertext END
+  , CASE WHEN n.crdt_state_ciphertext IS NULL THEN NULL
+    WHEN n.crdt_state_nonce IS NULL THEN n.crdt_state_ciphertext
+    WHEN length(n.crdt_state_nonce) = 13 THEN n.crdt_state_nonce || n.crdt_state_ciphertext
+    ELSE '\\x00'::bytea || n.crdt_state_nonce || n.crdt_state_ciphertext END
+  , CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$' THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END
+    FROM notes n WHERE n.id = ANY($1) AND n.kind = 'note' AND NOT EXISTS (SELECT 1 FROM note_bodies x WHERE x.note_id = n.id)
+
+    ON CONFLICT (note_id) DO NOTHING
+    RETURNING note_id, content_bytes, state_bytes
+  ), sized AS (
+    UPDATE note_index_state s SET
+      content_bytes = i.content_bytes,
+      state_bytes = i.state_bytes,
+      has_state = i.state_bytes IS NOT NULL
+    FROM ins i
+    WHERE s.note_id = i.note_id
+  )
+
+  SELECT ((SELECT count(*) FROM upd) + (SELECT count(*) FROM ins))::int
+  """
+
   describe "R8(b2): the copies older releases run, over rows this release wrote" do
-    # Beside this release the previous one (release A, R8(b1)) still runs
-    # its copy (`sync!/3`: COALESCE, nonce compare): this release writes the
-    # nonces, so that copy finds every row in step and writes nothing. 0.75's
-    # copy has neither, which is why this release ships only after A has
-    # fully rolled out and the null batch refuses to run beside an older node.
+    # Beside this release the previous one (0.78, R8(b2)) still runs its
+    # copy (`sync!/3`: COALESCE, nonce compare) in its NoteSplit and head
+    # self-heal: this release writes the nonces, so that copy finds every
+    # row in step and writes nothing. 0.75's copy has neither, which is why
+    # R8(b2) shipped only after A had fully rolled out and the null batch
+    # refuses to run beside an older node.
     defp copy_v0_75_0!(ids) do
       %{rows: [[n]]} = Repo.query!(@copy_sql_v0_75_0, [Enum.map(ids, &Ecto.UUID.dump!/1)])
       n
@@ -573,7 +658,10 @@ defmodule Engram.Notes.NoteBodyWriteTest do
 
     defp assert_copy_writes_nothing!(u) do
       before = bodies(u)
-      assert NoteBody.sync!(ids(u), NoteBody.body_fields()) == 0
+
+      assert %{rows: [[0]]} =
+               Repo.query!(@copy_sql_v0_78_0, [Enum.map(ids(u), &Ecto.UUID.dump!/1)])
+
       assert bodies(u) == before
     end
 

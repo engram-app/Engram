@@ -75,7 +75,7 @@ defmodule Engram.Fixtures do
   @doc """
   Many notes of one vault in a few statements, for a test that needs a
   table of thousands: one seq block, one INSERT per 1,000 rows and one
-  `NoteBody.sync!/3` for all, instead of four or five round trips a note
+  `NoteBody.put!/2` for all, instead of four or five round trips a note
   (a 1,205-note seed ran past the 60 s test timeout on CI). Each entry is
   either attrs, written as `insert_note!/3` writes them (real ciphertext
   and HMACs), or a built `%Note{}` (`build(:note, ...)`), written as is in
@@ -605,8 +605,39 @@ defmodule Engram.Fixtures do
   end
 
   @doc """
+  Runs migration 20261107120000 (R8(c): every note gets its body row before
+  boot) on the test's sandbox connection, as an upgrade runs it. `role:`
+  runs it as that database role (`"engram_app"`: RLS enforced, no bypass).
+  """
+  def complete_split!(opts \\ []) do
+    Code.require_file(
+      "priv/repo/migrations/20261107120000_note_bodies_complete_split_migrate.exs"
+    )
+
+    # By name at runtime: migrations are not compiled with the app.
+    mod = String.to_existing_atom("Elixir.Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate")
+
+    case Keyword.fetch(opts, :role) do
+      {:ok, role} ->
+        # SESSION AUTHORIZATION, not SET ROLE: a role reset lands back on
+        # this role, not the suite's superuser (rls-enforcement-testing-traps
+        # trap 6). In the sandbox transaction, so `LOCAL` lasts the run.
+        Engram.Repo.query!("SET LOCAL SESSION AUTHORIZATION #{role}")
+
+        try do
+          mod.complete_split(Engram.Repo)
+        after
+          Engram.Repo.query!("SET LOCAL SESSION AUTHORIZATION DEFAULT")
+        end
+
+      :error ->
+        mod.complete_split(Engram.Repo)
+    end
+  end
+
+  @doc """
   Copies a note's `notes` body columns into its `note_bodies` row whole
-  (the mapping of `Engram.Notes.NoteBody.sync!/3`). Readers take the body
+  (the trigger's mapping; a missing row is inserted). Readers take the body
   from `note_bodies`, and nothing copies a raw `notes` write there, so a
   test that writes `notes` body columns directly (a tampered ciphertext, a
   legacy shape) calls this to put the bytes where they are read.
@@ -616,7 +647,7 @@ defmodule Engram.Fixtures do
     # or (not written there since R8(b2)) the ciphertext the body holds. The
     # `notes` row is not touched, so no trigger fires.
     merged = fn ct, nonce, body ->
-      ct = "COALESCE(n.#{ct}, substring(b.#{body} FROM 14))"
+      ct = if body, do: "COALESCE(n.#{ct}, substring(b.#{body} FROM 14))", else: "n.#{ct}"
 
       """
       CASE WHEN #{ct} IS NULL THEN NULL
@@ -641,8 +672,24 @@ defmodule Engram.Fixtures do
         [Ecto.UUID.dump!(note_id)]
       )
 
-    # With no body row, `sync!/3` inserts it whole from the notes columns.
-    if n == 0, do: NoteBody.sync!(note_id, [])
+    # With no body row, insert it whole from the notes columns (the R8(c)
+    # split migration's insert).
+    if n == 0 do
+      Engram.Repo.query!(
+        """
+        INSERT INTO note_bodies (note_id, user_id, key_version, content_ct, crdt_ct, crdt_head)
+        SELECT n.id, n.user_id,
+          CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END,
+          #{merged.("content_ciphertext", "content_nonce", nil)},
+          #{merged.("crdt_state_ciphertext", "crdt_state_nonce", nil)},
+          CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$'
+            THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END
+        FROM notes AS n WHERE n.id = $1 AND n.kind = 'note'
+        """,
+        [Ecto.UUID.dump!(note_id)]
+      )
+    end
+
     :ok
   end
 

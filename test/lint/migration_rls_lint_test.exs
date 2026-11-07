@@ -37,7 +37,14 @@ defmodule Engram.MigrationRlsLintTest do
   # Migrations allowed to run tenant-table DML without the NO FORCE dance.
   # Each entry needs a comment explaining why (e.g. predates FORCE RLS and is
   # already applied in every environment).
-  @allowlist []
+  @allowlist [
+    # Writes inside each user's RLS context (`set_config('app.current_tenant',
+    # ...)` per transaction), so the tenant policy admits the rows instead of
+    # filtering them, with no ACCESS EXCLUSIVE lock per window; ends each
+    # user with a fail-loud count in the same context.
+    # `SelfHostJumpTest`, `NoteSplitTest`.
+    "20261107120000_note_bodies_complete_split_migrate.exs"
+  ]
 
   test "tenant-table DML in migrations handles FORCE ROW LEVEL SECURITY" do
     offenders =

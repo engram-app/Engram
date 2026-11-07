@@ -114,7 +114,7 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNullTest do
     assert [^ct, nil, ^cn, _] = raw(drifted.id)
   end
 
-  test "a stale copy under the body's nonce is nulled and counted", %{user: u, vault: v} do
+  test "a stale copy under the body's nonce is nulled", %{user: u, vault: v} do
     n = write!(u, v, "same.md", "stale under its nonce")
     old_release_copy!(n.id)
 
@@ -164,7 +164,6 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNullTest do
     assert {:more, _} = Null.run_pass()
     assert [ct, _, _, _] = raw(n.id)
     assert is_binary(ct)
-    assert {:ok, %{content: "x"}} = Notes.get_note(u, v, "a.md")
   end
 
   test "a row already NULL is no work: the walk is done", %{user: u, vault: v} do
@@ -289,6 +288,133 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNullTest do
 
     test "on by default" do
       assert Null.enabled?()
+    end
+  end
+
+  describe "per-pass cap (note_body_columns_null_max_fixed)" do
+    import ExUnit.CaptureLog
+
+    # 700 notes with the `notes` copies an older release left, in a few
+    # statements.
+    defp copies!(u, v, n) do
+      _ = Engram.Fixtures.insert_notes!(u, v, for(i <- 1..n, do: %{path: "cap/#{i}.md"}))
+
+      Repo.query!(
+        """
+        UPDATE notes AS n SET content_ciphertext = substring(b.content_ct FROM 14)
+        FROM note_bodies AS b WHERE b.note_id = n.id AND n.user_id = $1
+        """,
+        [Ecto.UUID.dump!(u.id)]
+      )
+    end
+
+    defp nulled(u) do
+      [[n]] =
+        Repo.query!(
+          "SELECT count(*)::int FROM notes WHERE user_id = $1 AND kind = 'note' AND content_ciphertext IS NULL",
+          [Ecto.UUID.dump!(u.id)]
+        ).rows
+
+      n
+    end
+
+    test "an override of 400 fixes at most 400 plus one window in a pass", %{user: u, vault: v} do
+      copies!(u, v, 700)
+      Engram.ServiceConfig.put_override(:note_body_columns_null_max_fixed, 400)
+
+      assert {:more, _} = Null.run_pass()
+      assert nulled(u) in 400..600
+    end
+
+    test "an invalid override falls back to 2,000, with a warning", %{user: u, vault: v} do
+      copies!(u, v, 700)
+      Engram.ServiceConfig.put_override(:note_body_columns_null_max_fixed, -5)
+
+      log = capture_log([level: :warning], fn -> Null.run_pass() end)
+      assert nulled(u) == 700
+      assert log =~ "note_body_columns_null_max_fixed"
+      assert capture_log(fn -> assert Null.max_fixed() == 2_000 end) =~ "positive integer"
+    end
+
+    # A resumed batch starts gentle (prod swap 220 -> 709 MB per 10k pass).
+    test "defaults to 2,000" do
+      assert Null.max_fixed() == 2_000
+    end
+
+    # Prod 2026-11-07: every pass read every byte of both copies. A tail
+    # slice (or the length of an inline-compressed value) of a TOASTed
+    # ciphertext decompresses the whole value; a 13-byte prefix of an
+    # EXTERNAL one fetches one chunk. Red on main's statement (its `stale`
+    # test reads `octet_length` and the last 16 bytes of all four columns).
+    test "the null statement reads only the 13-byte prefix of a ciphertext column" do
+      sql = Null.null_sql()
+      cols = ~w(b.content_ct b.crdt_ct n.content_ciphertext n.crdt_state_ciphertext)
+
+      for col <- cols do
+        refute sql =~ "octet_length(#{col})", col
+        refute sql =~ "length(#{col})", col
+
+        for [slice] <- Regex.scan(~r/substring\(#{Regex.escape(col)} FROM [^)]*\)/, sql),
+            do: assert(slice == "substring(#{col} FROM 1 FOR 13)", slice)
+      end
+    end
+
+    # One window's plan: both tables are probed by the window's ids, so the
+    # planner can bound either side by the window whatever join it picks
+    # (on main the body rows were reachable only through the join, so at
+    # prod size a hash join could scan all of `note_bodies`). The suite's
+    # tables are tiny, where a scan is the cheapest plan, so scans are
+    # disabled to show the access path; the row estimate is the real one.
+    # Red on main's statement (its `note_bodies` probe has no window
+    # condition).
+    test "the null statement probes both tables by the window's ids", %{user: u, vault: v} do
+      copies!(u, v, 700)
+      Repo.query!("ANALYZE notes")
+      Repo.query!("ANALYZE note_bodies")
+      Repo.query!("SET LOCAL enable_seqscan = off")
+      ids = for _ <- 1..200, do: Ecto.UUID.dump!(Ecto.UUID.generate())
+
+      %{rows: [[[plan]]]} = Repo.query!("EXPLAIN (FORMAT JSON) " <> Null.null_sql(), [ids])
+
+      nodes = plan_nodes(plan["Plan"])
+      rels = ~w(notes note_bodies)
+      refute Enum.any?(nodes, &(&1["Node Type"] == "Seq Scan" and &1["Relation Name"] in rels))
+
+      # Every read of either table is index-driven: an Index (Only) Scan, or
+      # a Bitmap Heap Scan over a Bitmap Index Scan (the planner picks by
+      # stats; both are bounded).
+      scans =
+        for n <- nodes, n["Relation Name"] in rels, n["Node Type"] != "ModifyTable" do
+          assert n["Node Type"] in ["Index Scan", "Index Only Scan", "Bitmap Heap Scan"],
+                 inspect(n["Node Type"])
+
+          if n["Node Type"] == "Bitmap Heap Scan",
+            do: assert(Enum.map(n["Plans"] || [], & &1["Node Type"]) == ["Bitmap Index Scan"])
+
+          cond = n["Index Cond"] || n["Recheck Cond"] || ""
+          assert n["Plan Rows"] <= 200, inspect({n["Relation Name"], n["Plan Rows"]})
+          {n["Relation Name"], cond}
+        end
+
+      # The body rows by the window's ids, not only through the join.
+      assert Enum.any?(scans, fn {rel, cond} -> rel == "note_bodies" and cond =~ "ANY" end),
+             inspect(scans)
+
+      for {"notes", cond} <- scans, do: assert(cond =~ "ANY" or cond =~ "c.id", cond)
+    end
+
+    defp plan_nodes(node), do: [node | Enum.flat_map(node["Plans"] || [], &plan_nodes/1)]
+
+    test "run_pass/1's max_fixed: wins over the override", %{user: u, vault: v} do
+      copies!(u, v, 700)
+      Engram.ServiceConfig.put_override(:note_body_columns_null_max_fixed, 10_000)
+
+      assert {:more, _} = Null.run_pass(max_fixed: 200)
+      assert nulled(u) in 200..400
+    end
+
+    test "is overridable at runtime" do
+      assert :note_body_columns_null_max_fixed in Engram.ServiceConfig.Overrides.keys()
     end
   end
 end

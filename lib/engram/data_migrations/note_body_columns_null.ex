@@ -13,7 +13,8 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
   `NoteBody.sync!/3`, the drift report, the Canary and every write fence use.
   Release B writes only the nonce, so a note it edited keeps old notes bytes
   under the new nonce; that copy is stale (it cannot be decrypted) and is
-  nulled too, counted as `stale` in the runner's summary line. A notes nonce
+  nulled too, like any in-step copy (only the 13-byte prefix is compared,
+  so the two are not told apart). A notes nonce
   the body does not hold, a NULL nonce (pre-nonce layout) or a note with no
   body row yet is left as it is and keeps the ledger open: a row `NoteSplit`
   has not reached is nulled once it has, and a real disagreement must be
@@ -29,7 +30,7 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
   later (a read-only count of non-NULL ciphertexts).
 
   Discovery and writes go through `Engram.Backfill.IdWindows.heal_pass/4`
-  (`notes` primary-key windows of 200, at most 10,000 rows per pass; one
+  (`notes` primary-key windows of 200, at most 2,000 rows per pass by default; one
   fleet walk on the maintenance pool on SaaS, per tenant on self-host). Each
   window is one statement under `SET LOCAL lock_timeout = '2s'` and
   `statement_timeout = '5s'`, locking with `FOR UPDATE OF n SKIP LOCKED`: a
@@ -46,7 +47,10 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
       `notes` ciphertext over a body. A single node (self-host) passes.
 
   Kill switch: `enabled?/0` is the `note_body_columns_null` service
-  override (default on). Not re-verified: no release from R8(b2) on writes
+  override (default on). Pace: the per-pass cap is the
+  `note_body_columns_null_max_fixed` service override (rows, default
+  2,000; prod RDS swap rose 197 to 508 MB, then 220 to 709 MB, on each
+  10k-row pass on 2026-11-07), so prod can slow the batch without a deploy. Not re-verified: no release from R8(b2) on writes
   the columns, and the rollback floor is release A (rolling back below it
   is data loss: its readers take the `notes` columns).
   """
@@ -54,12 +58,15 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
 
   alias Engram.Backfill.IdWindows
   alias Engram.Cluster.Readiness
+  alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Notes.NoteBody
   alias Engram.Repo
 
+  require Logger
+
   @batch 200
-  @max_fixed 10_000
+  @max_fixed 2_000
   @erpc_timeout_ms 5_000
 
   @impl true
@@ -148,18 +155,29 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
   defp blocked_by(reason), do: [blocked: reason]
 
   defp walk(opts) do
-    stale = :counters.new(1, [])
+    IdWindows.heal_pass(name(), Note, &null/2,
+      batch_size: Keyword.get(opts, :batch, @batch),
+      max_fixed: Keyword.get_lazy(opts, :max_fixed, &max_fixed/0)
+    )
+  end
 
-    result =
-      IdWindows.heal_pass(name(), Note, &null(&1, &2, stale),
-        batch_size: Keyword.get(opts, :batch, @batch),
-        max_fixed: Keyword.get(opts, :max_fixed, @max_fixed)
-      )
+  @doc false
+  # The per-pass cap: the service override when it is a positive integer,
+  # else (an invalid value reaching it through env) the default, with a
+  # warning. The override table itself refuses an invalid value.
+  def max_fixed do
+    case Engram.ServiceConfig.get(:note_body_columns_null_max_fixed, @max_fixed) do
+      n when is_integer(n) and n > 0 ->
+        n
 
-    # Copies a release-B write left stale (new nonce on notes and body, old
-    # bytes on notes): nulled like any in-step copy, counted for the summary.
-    :ok = Engram.DataMigration.report(stale: :counters.get(stale, 1))
-    result
+      _ ->
+        Logger.warning(
+          "note_body_columns_null_max_fixed is not a positive integer, using #{@max_fixed}",
+          Metadata.with_category(:warning, :data)
+        )
+
+        @max_fixed
+    end
   end
 
   # Per ciphertext column: the notes copy is still set and the body row holds
@@ -179,31 +197,25 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
     """
   end
 
-  # In step, but the notes bytes are not the body's (length or 16-byte tag).
-  stale = fn ct, body ->
-    """
-    (octet_length(b.#{body}) <> 13 + octet_length(n.#{ct})
-      OR substring(b.#{body} FROM octet_length(b.#{body}) - 15)
-        <> substring(n.#{ct} FROM greatest(octet_length(n.#{ct}) - 15, 1)))
-    """
-  end
-
   content = in_step.("content_ciphertext", "content_nonce", "content_ct")
   crdt = in_step.("crdt_state_ciphertext", "crdt_state_nonce", "crdt_ct")
-  content_stale = stale.("content_ciphertext", "content_ct")
-  crdt_stale = stale.("crdt_state_ciphertext", "crdt_ct")
 
   # One statement: lock the window's in-step rows (skipping a row a writer
   # holds) in a MATERIALIZED CTE, evaluated once (see `NoteSplit.touch/2` for
   # why a rescanned LIMIT .. SKIP LOCKED subquery is wrong), then null the
-  # in-step columns. Returns per row whether a nulled copy was stale.
+  # in-step columns. Reads each ciphertext's 13-byte prefix only. Both
+  # tables are probed by the window's ids (`b.note_id = ANY($1)` too), so
+  # neither is scanned. The pass itself is cheap: the measured load
+  # (Performance Insights, 2026-11-07 07:32-07:42Z) is autovacuum of `notes`
+  # and its TOAST table cleaning the chunks the nulling leaves dead, so the
+  # per-pass cap (`max_fixed/0`) is the lever.
   @null_sql """
   WITH c AS MATERIALIZED (
-    SELECT n.id, #{content} AS c_ok, #{crdt} AS s_ok,
-      (#{content} AND #{content_stale}) OR (#{crdt} AND #{crdt_stale}) AS stale
+    SELECT n.id, #{content} AS c_ok, #{crdt} AS s_ok
     FROM notes AS n
     JOIN note_bodies AS b ON b.note_id = n.id AND b.user_id = n.user_id
-    WHERE n.id = ANY($1) AND n.kind = 'note' AND (#{content} OR #{crdt})
+    WHERE n.id = ANY($1) AND b.note_id = ANY($1) AND n.kind = 'note'
+      AND (#{content} OR #{crdt})
     ORDER BY n.id
     FOR UPDATE OF n SKIP LOCKED
   )
@@ -212,8 +224,11 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
     crdt_state_ciphertext = CASE WHEN c.s_ok THEN NULL ELSE n.crdt_state_ciphertext END
   FROM c
   WHERE n.id = c.id
-  RETURNING c.stale
   """
+
+  @doc false
+  # For the prefix-only and plan guards (NoteBodyColumnsNullTest).
+  def null_sql, do: @null_sql
 
   # What is left in a window: a note whose ciphertext is still on `notes`
   # (skipped on a lock, a nonce the body does not hold, or no body row yet).
@@ -224,12 +239,11 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
     AND (n.content_ciphertext IS NOT NULL OR n.crdt_state_ciphertext IS NOT NULL)
   """
 
-  defp null(ids, %{repo: repo}, stale) do
+  defp null(ids, %{repo: repo}) do
     ids = Enum.map(ids, &Ecto.UUID.dump!/1)
     _ = repo.query!("SET LOCAL lock_timeout = '2s'", [])
     _ = repo.query!("SET LOCAL statement_timeout = '5s'", [])
-    %{num_rows: fixed, rows: rows} = repo.query!(@null_sql, [ids])
-    :counters.add(stale, 1, Enum.count(rows, &(&1 == [true])))
+    %{num_rows: fixed} = repo.query!(@null_sql, [ids])
     %{rows: [[left]]} = repo.query!(@left_sql, [ids])
     {fixed, left > 0}
   end

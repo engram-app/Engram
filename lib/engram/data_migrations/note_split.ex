@@ -8,10 +8,13 @@ defmodule Engram.DataMigrations.NoteSplit do
 
   The core columns are the trigger's own work: a pass touches `kind`
   (`SET kind = kind`), which `notes_derive_core_keys` lists, so each row is
-  derived by exactly the code that derives new writes. A missing body row is
-  inserted by `NoteBody.sync!/3`, which never copies a NULL `notes`
-  ciphertext over a body. `seq` and
+  derived by exactly the code that derives new writes. `seq` and
   `updated_at` are untouched: no sync feed or cache sees a change.
+
+  A missing body row is no longer this ledger's to insert: migration
+  20261107120000 (R8(c)) inserts every one before boot, from the `notes`
+  ciphertexts R8(d) drops. A note still without one keeps the ledger open
+  (`unfixed/0`), so the stuck alert and the Canary name it.
 
   A row needs work when its derived columns were never set (`is_folder` is
   NULL; the trigger always sets it) or it is a note with no body row.
@@ -19,9 +22,10 @@ defmodule Engram.DataMigrations.NoteSplit do
   one fleet walk on the maintenance pool on SaaS, a per-user walk on
   self-host. Each statement reads one window (#2276).
 
-  Readers take the body from `note_bodies` and fall back to the `notes`
-  columns per row for a note with no body row (`NoteBody`), so nothing gates
-  on this ledger: a self-hoster who skipped releases reads right while it runs.
+  Readers take the body from `note_bodies` only (`NoteBody`), and every note
+  has a body row before boot, so nothing but the key switch
+  (`Engram.Notes.Keys.ids?/0`) gates on this ledger: a self-hoster who
+  skipped releases reads right while it runs.
 
   Not re-verified once done (`reverify?/0` stays `false`). The daily re-verify
   walked every notes window and de-TOASTed both bodies of every note for the
@@ -89,9 +93,6 @@ defmodule Engram.DataMigrations.NoteSplit do
   # touch skipped because a writer held it.
   defp heal(ids, %{repo: repo}) do
     touched = touch(repo, needing(ids))
-    # A missing body row, written by this pass. Present rows are left as
-    # they are.
-    _ = NoteBody.sync!(touched, [], repo: repo)
     left? = repo.exists?(where(unfixed(), [n], field(n, :id) in type(^ids, {:array, Ecto.UUID})))
     {length(touched), left?}
   end

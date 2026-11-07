@@ -97,24 +97,34 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
 
     # A compaction checkpoint, as `CrdtCheckpoint` writes it: CRDT state and
     # DEK version only (no version/seq/updated_at).
+    {state_ct, state_nonce} =
+      {:crypto.strong_rand_bytes(80), <<1>> <> :crypto.strong_rand_bytes(12)}
+
     Repo.query!(
-      "UPDATE notes SET crdt_state_ciphertext = $2, crdt_state_nonce = $3, dek_version = dek_version WHERE id = $1",
-      [id, :crypto.strong_rand_bytes(80), <<1>> <> :crypto.strong_rand_bytes(12)]
+      "UPDATE notes SET crdt_state_nonce = $2, dek_version = dek_version WHERE id = $1",
+      [id, state_nonce]
     )
 
     # The body write each writer makes after its notes write (no trigger
     # copies a raw one).
-    Engram.Notes.NoteBody.sync!(n.id, [:crdt_state_ciphertext])
+    Engram.Notes.NoteBody.put!(
+      {n.id, crdt_state_ciphertext: state_ct, crdt_state_nonce: state_nonce}
+    )
 
     # An ordinary content save, raw so no app-level stamp writes run.
     # `clock_timestamp()`: `now()` is constant inside the test transaction, so
     # `updated_at` (indexed) would not move as it does on a real save.
+    {content_ct, content_nonce} =
+      {:crypto.strong_rand_bytes(40), <<1>> <> :crypto.strong_rand_bytes(12)}
+
     Repo.query!(
-      "UPDATE notes SET content_ciphertext = $2, content_nonce = $3, version = version + 1, updated_at = clock_timestamp() WHERE id = $1",
-      [id, :crypto.strong_rand_bytes(40), <<1>> <> :crypto.strong_rand_bytes(12)]
+      "UPDATE notes SET content_nonce = $2, version = version + 1, updated_at = clock_timestamp() WHERE id = $1",
+      [id, content_nonce]
     )
 
-    Engram.Notes.NoteBody.sync!(n.id, [:content_ciphertext])
+    Engram.Notes.NoteBody.put!(
+      {n.id, content_ciphertext: content_ct, content_nonce: content_nonce}
+    )
 
     after_ = stat.()
 

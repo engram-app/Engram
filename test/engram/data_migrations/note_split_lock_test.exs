@@ -43,7 +43,8 @@ defmodule Engram.DataMigrations.NoteSplitLockTest do
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.query!("DELETE FROM note_bodies WHERE note_id = $1", [id])
+        # Lists no source column, so the derive trigger does not fire.
+        Repo.query!("UPDATE notes SET is_folder = NULL WHERE id = $1", [id])
       end)
 
     test = self()
@@ -74,10 +75,10 @@ defmodule Engram.DataMigrations.NoteSplitLockTest do
 
     assert {:more, _} = NoteSplit.run_pass()
 
-    # Inside the tenant: note_bodies is under FORCE ROW LEVEL SECURITY.
-    assert {:ok, %{rows: [[true]]}} =
+    # Inside the tenant: notes is under FORCE ROW LEVEL SECURITY.
+    assert {:ok, %{rows: [[false]]}} =
              Repo.with_tenant(user.id, fn ->
-               Repo.query!("SELECT count(*) > 0 FROM note_bodies WHERE note_id = $1", [id])
+               Repo.query!("SELECT is_folder FROM notes WHERE id = $1", [id])
              end)
   end
 end

@@ -723,12 +723,14 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
           end
         end)
         |> Enum.take_while(& &1)
-        |> Enum.filter(&(&1 =~ ~r/^SELECT .*content_ciphertext/))
+        # The body read names the `note_bodies` column (R8(c): no `notes`
+        # ciphertext fallback).
+        |> Enum.filter(&(&1 =~ ~r/^SELECT .*content_ct\b/))
 
       assert selects != []
 
       for q <- selects,
-          do: refute(q =~ ~r/title_ciphertext|path_ciphertext|crdt_state_ciphertext/)
+          do: refute(q =~ ~r/title_ciphertext|path_ciphertext|crdt_state_ciphertext|crdt_ct\b/)
     end
   end
 

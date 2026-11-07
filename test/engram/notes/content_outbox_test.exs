@@ -285,8 +285,6 @@ defmodule Engram.Notes.ContentOutboxTest do
             crdt_state_ciphertext: ct,
             crdt_state_nonce: nonce
           )
-
-          NoteBody.sync!(note.id, [:crdt_state_ciphertext])
         end)
 
       Yex.Map.set(Yex.Doc.get_map(doc, "nodes"), "n1", "hi")

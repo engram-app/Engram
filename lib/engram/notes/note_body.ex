@@ -8,17 +8,15 @@ defmodule Engram.Notes.NoteBody do
   copy of the `notes` columns. R8 (stop storing every body twice) runs in
   releases: N added `sync!/3` (a copy from `notes`) beside the
   `notes_sync_body` trigger, N+1 dropped the trigger (20261104000000), R8(b1)
-  (release A) moved every writer to `put!/2`, and R8(b2) (this release)
-  stops writing `notes.content_ciphertext` / `crdt_state_ciphertext`: those
-  `Note` fields are virtual, a raw write drops them (`notes_row/1`), and
-  `Engram.DataMigrations.NoteBodyColumnsNull` nulls the older rows. The
+  (release A) moved every writer to `put!/2`, R8(b2) stopped writing
+  `notes.content_ciphertext` / `crdt_state_ciphertext` (those `Note` fields
+  are virtual, a raw write drops them, `notes_row/1`;
+  `Engram.DataMigrations.NoteBodyColumnsNull` nulls the older rows), and
+  R8(c) (this release) stops reading them: migration 20261107120000 gives
+  every note its body row before boot, so nothing here falls back to the
+  `notes` ciphertexts or copies from them. R8(d) drops the two columns. The
   nonces and `crdt_head` are still written on `notes` (the fences below).
-  Order matters: a copy from `notes` over a NULL column would erase a body,
-  so this release ships only after A has rolled out everywhere (A's
-  `sync!/3` never copies a NULL and compares nonces), and the null batch
-  refuses to run beside an older node. Rollback floor: A. R8(c) drops the
-  two columns. `sync!/3` remains for `NoteSplit` (a missing body row) and
-  the head self-heal.
+  Rollback floor: 0.76 (the first release that reads bodies from here).
 
   Wave 3 migrate-data (`docs/context/notes-chunks-hyperopt.md` 6.1 step 2):
   every READ of a body column goes through `select_note/2` (or `join/1` +
@@ -41,14 +39,13 @@ defmodule Engram.Notes.NoteBody do
   path is unchanged. `crdt_head` comes back as the 43-char url-safe base64
   `notes.crdt_head` stores.
 
-  A note with no body row (written before the trigger, before the
-  `NoteSplit` ledger reaches it) reads its `notes` columns instead, per row.
-  So no ledger gate is needed: a skip-release self-host reads right while
-  its ledger runs, and a reopened ledger that finds a missed row costs nothing.
-  The fallback is a `CASE` branch, so when the body row exists Postgres
-  never de-TOASTs the `notes` copy. `NoteSplit` REPORTS a body row that
-  disagrees with its notes row (`drift/0`) and never repairs it: from the
-  next release on, the body is the newer side.
+  Every note has a body row: every writer inserts it with the note, and
+  migration 20261107120000 inserted it, before boot, for a note written
+  before the trigger (a self-hoster who skipped releases). A note without
+  one would read with a NULL body; `Engram.Bookkeeping.Canary` samples for
+  that (`NoteSplit.unfixed_ids/2`). `NoteSplit` REPORTS a body row that
+  disagrees with its notes row (`drift/0`) and never repairs it: the body
+  is the newer side.
 
   Row-locked reads (`Notes.lock_for_write/2`, DEK rotation) lock the notes
   row in one statement and read the body from here in a fresh one
@@ -102,84 +99,54 @@ defmodule Engram.Notes.NoteBody do
     :crdt_head
   ]
 
-  # The `notes` columns each body field is copied from.
-  @sources [
-    content: [:content_ciphertext, :content_nonce],
-    crdt: [:crdt_state_ciphertext, :crdt_state_nonce],
-    head: [:crdt_head]
-  ]
-
-  # The trigger's merged layout of one `notes` (ciphertext, nonce) pair.
-  merged = fn ct, nonce ->
-    """
-    CASE WHEN n.#{ct} IS NULL THEN NULL
-      WHEN n.#{nonce} IS NULL THEN n.#{ct}
-      WHEN length(n.#{nonce}) = 13 THEN n.#{nonce} || n.#{ct}
-      ELSE '\\x00'::bytea || n.#{nonce} || n.#{ct} END
-    """
-  end
-
-  # True when body column `body` does not hold `merged` of (ct, nonce). With
-  # a nonce: NULL-ness and the 13-byte nonce field only. Every encryption
-  # takes a fresh nonce, so a matching nonce names the same envelope, and it
-  # is the column the write fences compare; the `notes` ciphertext is not
-  # consulted, so a NULL or stale one (the release that stops writing it) is
-  # never drift. Without a nonce (a pre-nonce row): NULL-ness, length, the
-  # first 13 bytes and the tag (last 16) of the ciphertext.
-  differs = fn body, ct, nonce ->
-    prefix =
-      "CASE WHEN length(n.#{nonce}) = 13 THEN n.#{nonce} ELSE '\\x00'::bytea || n.#{nonce} END"
-
-    """
-    (CASE WHEN n.#{nonce} IS NOT NULL THEN
-      b.#{body} IS NULL OR substring(b.#{body} FROM 1 FOR 13) <> substring((#{prefix}) FROM 1 FOR 13)
-    ELSE (b.#{body} IS NULL) <> (n.#{ct} IS NULL) OR (n.#{ct} IS NOT NULL AND (
-      octet_length(b.#{body}) <> octet_length(n.#{ct})
-      OR substring(b.#{body} FROM 1 FOR 13) <> substring(n.#{ct} FROM 1 FOR 13)
-      OR substring(b.#{body} FROM greatest(octet_length(b.#{body}) - 15, 1))
-        <> substring(n.#{ct} FROM greatest(octet_length(n.#{ct}) - 15, 1)))) END)
-    """
-  end
-
   key_version = "CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END"
 
   head =
     "CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$' " <>
       "THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END"
 
-  content = merged.("content_ciphertext", "content_nonce")
-  crdt = merged.("crdt_state_ciphertext", "crdt_state_nonce")
+  head_differs = "b.crdt_head IS DISTINCT FROM #{head}"
 
-  # A ciphertext field's SET: rewritten only when it differs by the test
-  # above (a field under its current nonce keeps its body, even when the row
-  # is rewritten for its owner or key version), and never to NULL
-  # (`COALESCE`: a NULL `notes` ciphertext keeps the body).
-  copy_ct = fn body, merged_expr, differs_expr ->
-    "#{body} = CASE WHEN #{differs_expr} THEN COALESCE(#{merged_expr}, b.#{body}) ELSE b.#{body} END"
-  end
+  # True when body column `body` does not hold the envelope under the
+  # `notes` nonce: NULL-ness and the 13-byte nonce field. Every encryption
+  # takes a fresh nonce, so a matching nonce names the same envelope, and it
+  # is the column the write fences compare. A row with no nonce (a pre-nonce
+  # envelope, merged in its ciphertext) has nothing on `notes` to compare
+  # since R8(b2), and is never drift.
+  differs = fn body, nonce ->
+    prefix =
+      "CASE WHEN length(n.#{nonce}) = 13 THEN n.#{nonce} ELSE '\\x00'::bytea || n.#{nonce} END"
 
-  content_differs = differs.("content_ct", "content_ciphertext", "content_nonce")
-  crdt_differs = differs.("crdt_ct", "crdt_state_ciphertext", "crdt_state_nonce")
-
-  # Per body field: its SET clause and its "differs" test.
-  copy = %{
-    content: {copy_ct.("content_ct", content, content_differs), content_differs},
-    crdt: {copy_ct.("crdt_ct", crdt, crdt_differs), crdt_differs},
-    head: {"crdt_head = #{head}", "b.crdt_head IS DISTINCT FROM #{head}"}
-  }
-
-  # Shared by `sync!/3` and `put!/2`: the body-row INSERT of the given value
-  # expressions over a `FROM` that binds the note as `n`, and the CTE that
-  # seeds a newly inserted note's narrow sizes (`note_index_state`, whose row
-  # the notes INSERT trigger made before the body existed) from the values
-  # the `note_bodies_sizes` BEFORE trigger computed (RETURNING sees them).
-  insert_body = fn {content_expr, crdt_expr, head_expr}, from ->
     """
-    INSERT INTO note_bodies (note_id, user_id, key_version, content_ct, crdt_ct, crdt_head)
-      SELECT n.id, n.user_id, #{key_version}, #{content_expr}, #{crdt_expr}, #{head_expr}
-      FROM #{from}
+    (n.#{nonce} IS NOT NULL AND (b.#{body} IS NULL
+      OR substring(b.#{body} FROM 1 FOR 13) <> substring((#{prefix}) FROM 1 FOR 13)))
     """
   end
+
+  # The head-and-owner step (`sync!/3`): update the body rows of $1 whose
+  # owner, key version or (when `head?`) head differ from their `notes` row.
+  # A note with no body row is not touched: since R8(c) every note has one
+  # (migration 20261107120000).
+  @sync_sql (for head? <- [false, true], into: %{} do
+               {set, diff} =
+                 if head?,
+                   do: {",\n      crdt_head = #{head}", " OR #{head_differs}"},
+                   else: {"", ""}
+
+               {head?,
+                """
+                WITH upd AS (
+                  UPDATE note_bodies b SET
+                    user_id = n.user_id,
+                    key_version = #{key_version}#{set}
+                  FROM notes n
+                  WHERE b.note_id = n.id AND n.id = ANY($1) AND n.kind = 'note'
+                    AND (b.user_id <> n.user_id OR b.key_version <> #{key_version}#{diff})
+                  RETURNING 1
+                )
+                SELECT count(*)::int FROM upd
+                """}
+             end)
 
   sized = fn source, inserted_only ->
     """
@@ -194,73 +161,29 @@ defmodule Engram.Notes.NoteBody do
     """
   end
 
-  sync_insert =
-    insert_body.(
-      {content, crdt, head},
-      "notes n WHERE n.id = ANY($1) AND n.kind = 'note' " <>
-        "AND NOT EXISTS (SELECT 1 FROM note_bodies x WHERE x.note_id = n.id)"
-    )
-
   put_from =
     "unnest($1::uuid[], $2::bytea[], $3::bytea[], $4::bytea[]) " <>
       "AS v(id, content_ct, crdt_ct, crdt_head) JOIN notes n ON n.id = v.id AND n.kind = 'note'"
-
-  # One statement per set of fields a write touched (`sync!/3`): update the
-  # body rows that exist and differ in those fields (plus the owner and key
-  # version, which live on `notes` for good), insert the missing ones whole.
-  # An insert also seeds the note's narrow sizes (`note_index_state`, whose
-  # row the notes INSERT trigger made before the body existed) from the
-  # values the `note_bodies_sizes` BEFORE trigger computed (RETURNING sees
-  # them), so a new note is sized at once; later edits reach them through
-  # `CrdtBloatSweep`, as before.
-  # Both CTEs read the statement's snapshot, so a row is in exactly one of
-  # them. Built at compile time for every subset (eight).
-  @sync_sql (for content? <- [false, true],
-                 crdt? <- [false, true],
-                 head? <- [false, true],
-                 into: %{} do
-               fields =
-                 for {f, true} <- [content: content?, crdt: crdt?, head: head?], do: f
-
-               set =
-                 Enum.map_join(fields, "", fn f -> ",\n      " <> elem(copy[f], 0) end)
-
-               diff = Enum.map_join(fields, "", fn f -> " OR " <> elem(copy[f], 1) end)
-
-               {fields,
-                """
-                WITH upd AS (
-                  UPDATE note_bodies b SET
-                    user_id = n.user_id,
-                    key_version = #{key_version}#{set}
-                  FROM notes n
-                  WHERE b.note_id = n.id AND n.id = ANY($1) AND n.kind = 'note'
-                    AND (b.user_id <> n.user_id OR b.key_version <> #{key_version}#{diff})
-                  RETURNING 1
-                ), ins AS (
-                  #{sync_insert}
-                  ON CONFLICT (note_id) DO NOTHING
-                  RETURNING note_id, content_bytes, state_bytes
-                ), #{sized.("ins", "")}
-                SELECT ((SELECT count(*) FROM upd) + (SELECT count(*) FROM ins))::int
-                """}
-             end)
 
   # One statement per set of body fields a writer provides (`put!/2`): upsert
   # each note's body row with the values the writer just wrote ($2..$4, one
   # array element per note), the owner and key version from its `notes` row
   # (they live there for good). An existing row gets only the provided
   # fields, and is not rewritten when it already holds them (owner, key
-  # version, the 13-byte nonce field of each given envelope, the head); a new
-  # row takes the rest from its `notes` columns, as `sync!/3` inserts one,
-  # and seeds the note's narrow sizes the same way.
+  # version, the 13-byte nonce field of each given envelope, the head). A
+  # new row (a new note) takes NULL for a ciphertext not given and the
+  # `notes.crdt_head` for a head not given, and seeds the note's narrow
+  # sizes (`note_index_state`, whose row the notes INSERT trigger made
+  # before the body existed) from the values the `note_bodies_sizes` BEFORE
+  # trigger computed (RETURNING sees them); later edits reach them through
+  # `CrdtBloatSweep`.
   @put_sql (for content? <- [false, true],
                 crdt? <- [false, true],
                 head? <- [false, true],
                 into: %{} do
               given = for {f, true} <- [content: content?, crdt: crdt?, head: head?], do: f
               col = %{content: "content_ct", crdt: "crdt_ct", head: "crdt_head"}
-              fallback = %{content: content, crdt: crdt, head: head}
+              fallback = %{content: "NULL", crdt: "NULL", head: head}
 
               value = fn f ->
                 if f in given, do: "v.#{col[f]}", else: fallback[f]
@@ -283,7 +206,9 @@ defmodule Engram.Notes.NoteBody do
               {given,
                """
                WITH up AS (
-                 #{insert_body.({value.(:content), value.(:crdt), value.(:head)}, put_from)}
+                 INSERT INTO note_bodies (note_id, user_id, key_version, content_ct, crdt_ct, crdt_head)
+                   SELECT n.id, n.user_id, #{key_version}, #{value.(:content)}, #{value.(:crdt)}, #{value.(:head)}
+                   FROM #{put_from}
                  ON CONFLICT (note_id) DO UPDATE SET
                    user_id = EXCLUDED.user_id,
                    key_version = EXCLUDED.key_version#{set}
@@ -296,14 +221,14 @@ defmodule Engram.Notes.NoteBody do
             end)
 
   # The ids among $1 whose body row exists and disagrees with its notes row
-  # in any copied column: the same per-field tests `sync!/3` writes on, all
-  # fields at once (`drift_ids/2`).
-  all_differ = Enum.map_join([:content, :crdt, :head], " OR ", &elem(copy[&1], 1))
-
+  # (`drift_ids/2`): owner, key version, either envelope's nonce, the head.
   @drift_sql """
   SELECT n.id::text FROM notes n JOIN note_bodies b ON b.note_id = n.id
   WHERE n.id = ANY($1) AND n.kind = 'note'
-    AND (b.user_id <> n.user_id OR b.key_version <> #{key_version} OR #{all_differ})
+    AND (b.user_id <> n.user_id OR b.key_version <> #{key_version}
+      OR #{differs.("content_ct", "content_nonce")}
+      OR #{differs.("crdt_ct", "crdt_state_nonce")}
+      OR #{head_differs})
   """
 
   # Virtual on `Note` since R8(b2): stored only here.
@@ -398,50 +323,25 @@ defmodule Engram.Notes.NoteBody do
   end
 
   @doc """
-  Brings the `note_bodies` rows of the notes `ids` in step with their
-  `notes` body columns, with the mapping the dropped `notes_sync_body`
-  trigger defined (20261021110200), and returns how many rows it wrote.
-  Writers use `put!/2` instead; this copy is for `NoteSplit` (a missing
-  body row) and the head self-heal, inside a transaction that holds the
-  `notes` rows (`notes` before `note_bodies`).
+  Brings the existing `note_bodies` rows of the notes `ids` in step with
+  their `notes` row's owner, key version (`dek_version`) and, when
+  `written` names `:crdt_head`, head, and returns how many rows it wrote.
+  For the head self-heal (`CrdtTransport.store_head_if_unchanged/4`),
+  inside a transaction that holds the `notes` rows (`notes` before
+  `note_bodies`). It never reads or writes a ciphertext: a body write goes
+  through `put!/2`, and `written` naming a ciphertext or nonce column
+  raises. A note with no body row is left alone: since R8(c) every note has
+  one (migration 20261107120000), and the `notes` ciphertext columns it
+  would have been copied from are going away (R8(d)).
 
-  What it guarantees about a ciphertext field (content, CRDT state):
+  `written` is a list, or the keyword list / changes map the write set. A
+  row already in step is not touched. Emits `[:engram, :note_body,
+  :sync_wrote]` (`%{count: rows}`) when it wrote anything
+  (`engram_prom_ex_notes_body_sync_wrote_rows_total`): the body write rate.
 
-    * a NULL `notes` ciphertext is never copied: the body keeps its value;
-    * a field whose `notes` nonce matches the body's is never rewritten,
-      even when the row is rewritten for its owner or key version, so a
-      stale ciphertext under the current nonce is ignored;
-    * a field whose `notes` nonce differs from the body's is copied, stale
-      or not: this copy cannot tell a stale non-NULL ciphertext under a new
-      nonce from a current one.
-
-  The previous release's `sync!/3` has none of these (it copies NULL), so
-  it must never run beside `notes` ciphertexts that are NULL or stale.
-
-  `written` names the `notes` columns the write set (a list, or the
-  keyword list / changes map it wrote), and only the body fields copied
-  from those are compared and copied, as the trigger copied only the
-  columns whose nonce changed. That is load-bearing for the release that
-  stops writing the `notes` body columns: an older node beside it must not
-  copy a stale `notes` column it did not write over a newer body. A CRDT
-  state write also copies the head (the `notes_crdt_head_invalidate`
-  trigger NULLs it). The owner and key version (`dek_version`, which stays
-  on `notes`) are always kept in step. A missing body row (written before
-  the body table) is inserted whole.
-
-  Compared cheaply: per body column its NULL-ness and the 13-byte nonce
-  field (with no `notes` nonce: the length, first 13 bytes and 16-byte AEAD
-  tag), slices of an EXTERNAL value, so nothing is de-TOASTed; every
-  encryption takes a fresh nonce, so a new nonce names a new ciphertext. A
-  row already in step is not touched.
-
-  Emits `[:engram, :note_body, :sync_wrote]` (`%{count: rows}`) when it
-  wrote anything (`engram_prom_ex_notes_body_sync_wrote_rows_total`): the
-  body write rate.
-
-  Options: `:repo` (default `Engram.Repo`, or the maintenance repo a ledger
-  runs on); the rest go to the query (`mode: :savepoint`,
-  `skip_tenant_check:` is ignored by raw SQL and harmless).
+  Options: `:repo` (default `Engram.Repo`); the rest go to the query
+  (`mode: :savepoint`, `skip_tenant_check:` is ignored by raw SQL and
+  harmless).
   """
   @spec sync!(Ecto.UUID.t() | [Ecto.UUID.t()], [atom()] | keyword() | map(), keyword()) ::
           non_neg_integer()
@@ -526,7 +426,7 @@ defmodule Engram.Notes.NoteBody do
     end
   end
 
-  # The trigger's merged layout (`merged` above), via `Envelope.merge/2`.
+  # The merged layout (`nonce || ciphertext`), via `Envelope.merge/2`.
   defp merge(ct, nil), do: ct
   defp merge(ct, nonce), do: Engram.Crypto.Envelope.merge(nonce, ct)
 
@@ -541,6 +441,14 @@ defmodule Engram.Notes.NoteBody do
 
   defp head_bytes(_), do: nil
 
+  @ciphertext_cols [
+    :content_ciphertext,
+    :content_nonce,
+    :crdt_state_ciphertext,
+    :crdt_state_nonce
+  ]
+
+  # True when `written` names the head; a ciphertext column raises.
   defp synced_fields(written) when is_map(written), do: synced_fields(Map.keys(written))
 
   defp synced_fields(written) when is_list(written) do
@@ -550,9 +458,10 @@ defmodule Engram.Notes.NoteBody do
         col -> col
       end)
 
-    # A CRDT state write also resets the head (`notes_crdt_head_invalidate`).
-    cols = if Enum.any?(@sources[:crdt], &(&1 in cols)), do: [:crdt_head | cols], else: cols
-    for {field, srcs} <- @sources, Enum.any?(srcs, &(&1 in cols)), do: field
+    if Enum.any?(@ciphertext_cols, &(&1 in cols)),
+      do: raise(ArgumentError, "NoteBody.sync!/3 copies no ciphertext; write it with put!/2")
+
+    :crdt_head in cols
   end
 
   @doc """
@@ -656,10 +565,11 @@ defmodule Engram.Notes.NoteBody do
   # nonce field is 13 bytes (leading 1), a format 0 nonce (12 bytes) sits
   # behind a 0 byte. `substring ... FOR n` reads a slice of an EXTERNAL
   # value, so the nonce costs a 13-byte fetch; the ciphertext (`FROM 14`,
-  # no length) is the full value.
-  defp field_expr(:content_ciphertext), do: ct_expr(:content_ct, :content_ciphertext)
+  # no length) is the full value. Read from the body row only: since R8(c)
+  # every note has one (migration 20261107120000).
+  defp field_expr(:content_ciphertext), do: ct_expr(:content_ct)
   defp field_expr(:content_nonce), do: nonce_expr(:content_ct, :content_nonce)
-  defp field_expr(:crdt_state_ciphertext), do: ct_expr(:crdt_ct, :crdt_state_ciphertext)
+  defp field_expr(:crdt_state_ciphertext), do: ct_expr(:crdt_ct)
   defp field_expr(:crdt_state_nonce), do: nonce_expr(:crdt_ct, :crdt_state_nonce)
 
   defp field_expr(:crdt_head), do: head_expr(dynamic([n], n.crdt_head))
@@ -681,24 +591,12 @@ defmodule Engram.Notes.NoteBody do
     )
   end
 
-  # The no-body fallback reads the `notes` ciphertext by a per-row
-  # primary-key subquery (`pre_split/2`): the column is not in the `Note`
-  # schema (R8(b2)), and only a row without a body runs it.
-  defp ct_expr(body, notes) do
-    dynamic(
-      [n, note_body: b],
-      type(
-        fragment(
-          "CASE WHEN ? IS NULL THEN ? ELSE substring(? FROM 14) END",
-          b.note_id,
-          ^pre_split(notes),
-          field(b, ^body)
-        ),
-        :binary
-      )
-    )
-  end
+  defp ct_expr(body),
+    do: dynamic([note_body: b], type(fragment("substring(? FROM 14)", field(b, ^body)), :binary))
 
+  # The nonce falls back to the `notes` column (kept: the write fences
+  # compare it) for a row read before its body row is written in the same
+  # transaction (a create's own re-read, `Notes.do_bare_insert`).
   defp nonce_expr(body, notes) do
     dynamic(
       [n, note_body: b],
@@ -718,43 +616,16 @@ defmodule Engram.Notes.NoteBody do
 
   @doc """
   The byte length of a note's content (`:content`) or CRDT state (`:crdt`)
-  ciphertext, from its body row (less the merged nonce field), else from
-  `notes`. `octet_length` reads the varlena header, so nothing is
+  ciphertext, from its body row (less the merged nonce field), 0 when it
+  has none. `octet_length` reads the varlena header, so nothing is
   de-TOASTed. For byte budgets and size metrics on a query through `join/1`.
   """
   @spec byte_length(:content | :crdt) :: Ecto.Query.dynamic_expr()
-  def byte_length(:content), do: length_expr(:content_ct, :content_ciphertext)
-  def byte_length(:crdt), do: length_expr(:crdt_ct, :crdt_state_ciphertext)
+  def byte_length(:content), do: length_expr(:content_ct)
+  def byte_length(:crdt), do: length_expr(:crdt_ct)
 
-  defp length_expr(body, notes) do
-    dynamic(
-      [n, note_body: b],
-      fragment(
-        "coalesce(CASE WHEN ? IS NULL THEN octet_length(?) ELSE octet_length(?) - 13 END, 0)",
-        b.note_id,
-        ^pre_split(notes),
-        field(b, ^body)
-      )
-    )
-  end
-
-  # The `notes` ciphertext column `col` of the row bound as `n`, for a note
-  # with no body row (a self-hoster who skipped releases, before `NoteSplit`
-  # reaches it). By name in SQL, by primary key, so nothing outside this
-  # module names the column and a row with a body never reads it. The
-  # pre-split fallbacks (this, the `put!/2` / `sync!/3` insert of a missing
-  # row, the drift test) are the last references R8(c) removes before it
-  # drops the columns.
-  defp pre_split(:content_ciphertext),
-    do:
-      dynamic([n], fragment("(SELECT x.content_ciphertext FROM notes AS x WHERE x.id = ?)", n.id))
-
-  defp pre_split(:crdt_state_ciphertext),
-    do:
-      dynamic(
-        [n],
-        fragment("(SELECT x.crdt_state_ciphertext FROM notes AS x WHERE x.id = ?)", n.id)
-      )
+  defp length_expr(body),
+    do: dynamic([note_body: b], fragment("coalesce(octet_length(?) - 13, 0)", field(b, ^body)))
 
   @doc """
   The notes among `ids` whose body row exists and disagrees with its `notes`
