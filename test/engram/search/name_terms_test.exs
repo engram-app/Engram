@@ -397,13 +397,28 @@ defmodule Engram.Search.NameTermsTest do
       for i <- 1..50,
           do: indexed!(ctx.user, write!(ctx.user, ctx.vault, "P#{rem(i, 5)}/n#{i}.md"))
 
+      # Realistic folder statistics: many folders under a few parents.
+      {:ok, _} =
+        Repo.with_tenant(ctx.user.id, fn ->
+          Engram.Folders.Rows.ensure_all(
+            ctx.user,
+            ctx.vault.id,
+            for(i <- 1..300, do: "Q#{rem(i, 3)}/f#{i}")
+          )
+        end)
+
       :ok
     end
 
     test "postings read the primary key and probe each ref by its key", ctx do
       for {kind, ref_pkey} <- [{0, "notes_pkey"}, {1, "folders_pkey"}] do
-        {sql, _} = Repo.to_sql(:all, NameTerms.hits_query([ctx.vault.id], [1, 2], kind))
-        plan = QueryPlan.generic_plan(sql, analyze: ["name_terms", "notes", "folders"])
+        plan =
+          plan(NameTerms.hits_query([ctx.vault.id], [1, 2], kind), [
+            "name_terms",
+            "notes",
+            "folders"
+          ])
+
         assert plan =~ "name_terms_pkey", plan
         assert plan =~ ref_pkey, plan
         assert plan =~ "Limit", plan

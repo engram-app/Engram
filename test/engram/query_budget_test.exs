@@ -155,7 +155,12 @@ defmodule Engram.QueryBudgetTest do
     #  23-24 the link-rewrite job insert + its pg_notify. The unique repath
     #  job (own txn, -4) is gone: R3a, a rename makes no Qdrant write.
     #  25-29 idle-room fanout (fresh users row + note read). 30-33 links txn.
-    "POST notes/rename" => 33,
+    #  34-40 S1 name terms after the commit (`NameTerms.on_note_written/2`):
+    #  begin, enter, the row check + current terms in one SELECT, DELETE of
+    #  the old name's terms, INSERT of the new name's, the stamp UPDATE,
+    #  commit. Constant: each a set-based statement over at most 32 rows;
+    #  a note with no terms yet (this test) skips the DELETE, so 39 here.
+    "POST notes/rename" => 39,
     # begin, enter, the note row, seq bump, tombstone, usage_meters, the
     # index-delete job insert + its pg_notify, the release joining the
     # warm-up's pending release job (one UPDATE, no insert), commit. With no
