@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.77.0](https://github.com/engram-app/Engram/compare/0.76.0...0.77.0) (2026-11-07)
+
+
+### Features
+
+* **qdrant:** note-id writer and n backfill ([#2476](https://github.com/engram-app/Engram/issues/2476)) ([5f04381](https://github.com/engram-app/Engram/commit/5f04381cd41ec2096ab6acfba754ee5044b10ce2))
+
 ## [0.76.0](https://github.com/engram-app/Engram/compare/0.75.0...0.76.0) (2026-11-07)
 
 
