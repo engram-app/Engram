@@ -176,8 +176,9 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   end
 
   # A per-user `n` job queued by 0.77.0: the fleet job owns its work now.
+  # The cancel comes first: with the switch off it reads nothing.
   def perform(%Oban.Job{args: %{"mode" => "n"}}) do
-    :ok = ensure_fleet()
+    if backfill_enabled?(), do: :ok = ensure_fleet()
     {:cancel, :superseded}
   end
 
@@ -618,7 +619,15 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   defp n_fleet do
     deadline = System.monotonic_time(:millisecond) + @budget_ms
 
-    {result, _locked} = fleet_walk(Cursor.get(@fleet_cursor), deadline, 0)
+    {result, locked} = fleet_walk(Cursor.get(@fleet_cursor), deadline, 0)
+
+    # Skipped users keep the ledger open; this line says why a lap repeats.
+    if locked > 0 do
+      Logger.info(
+        "note payload reconcile: skipped rotation-locked users",
+        Metadata.with_category(:info, :oban, count: locked)
+      )
+    end
 
     case result do
       :lap ->

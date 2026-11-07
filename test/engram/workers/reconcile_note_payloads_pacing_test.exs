@@ -662,6 +662,17 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
       assert length(queries) <= 5 * (length(users) + 1) + 10
     end
 
+    # With the switch off a legacy job cancels having read nothing, and
+    # queues no fleet job (the ledger adds it once the switch is on).
+    test "with the switch off a legacy n job cancels with 0 queries", ctx do
+      close(:switch_off, ctx)
+      {result, queries} = reads(fn -> legacy(ctx) end)
+
+      assert {:cancel, :superseded} = result
+      assert queries == []
+      assert fleet_jobs() == []
+    end
+
     # Prod held users with two scheduled per-user jobs (the unique race):
     # each one cancels itself on wake, and only one fleet job results.
     test "a user holding two legacy n jobs gets both cancelled and one fleet job", ctx do
