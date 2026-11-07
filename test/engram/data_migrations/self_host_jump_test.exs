@@ -179,22 +179,51 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
     ])
   end
 
-  test "a body row owned by another user, notes copy present: rebuilt from the copy",
+  test "a body row owned by another user, body NULL, notes copy present: rebuilt from the copy",
        %{user: u, vault: v} do
     note = write!(u, v, "owned.md", "owned text")
     Engram.Fixtures.old_release_notes_copy!(note.id)
 
-    # The foreign row's bytes are not the note's: only the notes copy reads.
-    Repo.query!(
-      "UPDATE note_bodies SET content_ct = $2 WHERE note_id = $1",
-      [Ecto.UUID.dump!(note.id), <<1>> <> :crypto.strong_rand_bytes(60)]
-    )
+    Repo.query!("UPDATE note_bodies SET content_ct = NULL WHERE note_id = $1", [
+      Ecto.UUID.dump!(note.id)
+    ])
 
     foreign_body!(note)
     assert read!(u, v, "owned.md") == nil
 
     Engram.Fixtures.complete_split!()
     assert read!(u, v, "owned.md") == "owned text"
+  end
+
+  # Strictly non-destructive: SQL cannot tell a stale notes copy from a
+  # stale body, so existing body bytes are never overwritten. A body that
+  # does not match the notes nonce is handed back as it is, with a warning
+  # for a human look.
+  test "a body row owned by another user, body not matching the nonce: kept, warned",
+       %{user: u, vault: v} do
+    import ExUnit.CaptureLog
+    note = write!(u, v, "owned.md", "owned text")
+    Engram.Fixtures.old_release_notes_copy!(note.id)
+    odd = <<1>> <> :crypto.strong_rand_bytes(60)
+
+    Repo.query!("UPDATE note_bodies SET content_ct = $2 WHERE note_id = $1", [
+      Ecto.UUID.dump!(note.id),
+      odd
+    ])
+
+    foreign_body!(note)
+
+    log = capture_log([level: :warning], fn -> assert :ok = Engram.Fixtures.complete_split!() end)
+    assert log =~ "does not match"
+    assert log =~ note.id
+
+    %{rows: [[ct, owner]]} =
+      Repo.query!("SELECT content_ct, user_id FROM note_bodies WHERE note_id = $1", [
+        Ecto.UUID.dump!(note.id)
+      ])
+
+    assert ct == odd
+    assert Ecto.UUID.load!(owner) == u.id
   end
 
   test "a body row owned by another user, no notes copy: handed back to the owner",
@@ -205,7 +234,7 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
     assert read!(u, v, "owned.md") == nil
 
     log = capture_log([level: :warning], fn -> assert :ok = Engram.Fixtures.complete_split!() end)
-    assert log =~ "may not decrypt"
+    assert log =~ "handed back to their owner (content: body"
     assert read!(u, v, "owned.md") == "owned text"
   end
 

@@ -203,11 +203,12 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
   # One statement: lock the window's in-step rows (skipping a row a writer
   # holds) in a MATERIALIZED CTE, evaluated once (see `NoteSplit.touch/2` for
   # why a rescanned LIMIT .. SKIP LOCKED subquery is wrong), then null the
-  # in-step columns. Reads each ciphertext's 13-byte prefix only: a tail
-  # slice of a TOASTed value fetches (and decompresses) all of it, which
-  # swapped prod RDS (220 -> 709 MB per 10k-row pass, 2026-11-07). Both
+  # in-step columns. Reads each ciphertext's 13-byte prefix only. Both
   # tables are probed by the window's ids (`b.note_id = ANY($1)` too), so
-  # neither is scanned.
+  # neither is scanned. The pass itself is cheap: the measured load
+  # (Performance Insights, 2026-11-07 07:32-07:42Z) is autovacuum of `notes`
+  # and its TOAST table cleaning the chunks the nulling leaves dead, so the
+  # per-pass cap (`max_fixed/0`) is the lever.
   @null_sql """
   WITH c AS MATERIALIZED (
     SELECT n.id, #{content} AS c_ok, #{crdt} AS s_ok

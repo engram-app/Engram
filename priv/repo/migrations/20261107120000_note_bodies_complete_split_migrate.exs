@@ -42,17 +42,18 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   Nothing else heals it, so the check repairs it: for those notes only, in
   one transaction with `note_bodies` under `NO FORCE ROW LEVEL SECURITY`
   (the documented bypass; ACCESS EXCLUSIVE on `note_bodies`, restored by
-  FORCE or the rollback), the body row goes back to the note's owner. Per
-  column the body bytes are kept when they hold the envelope under the
-  `notes` nonce (the copy or newer: release B writes only the nonce on
-  `notes`, so a copy can be stale under a newer nonce), rebuilt from the
-  `notes` copy only when they do not (or are NULL) and a copy exists, and
-  otherwise kept unverified. A note's envelopes are bound to its own id
-  (AAD) and its owner's key, so bytes written for it decrypt once the row is
-  the owner's again. Each path is logged with the note ids; the repair
-  repeats until the user has no such note, and a note still unreadable after
-  that logs a warning. Never a raise: a raising migration blocks every boot
-  (zero operator action).
+  FORCE or the rollback), the body row goes back to the note's owner.
+  Strictly non-destructive: existing body bytes are never overwritten (a
+  `notes` copy can be stale under a newer nonce, release B writes only the
+  nonce, and SQL cannot tell that from a stale body); a body that does not
+  match the `notes` nonce is kept and logged for a human look, and only a
+  NULL body column is rebuilt from the `notes` copy, when the copy's nonce
+  is set. A note's envelopes are bound to its own id (AAD) and its owner's
+  key, so bytes written for it decrypt once the row is the owner's again.
+  Each path is logged with the note ids; the repair repeats until the user
+  has no such note, and a note still unreadable after that logs a warning.
+  Never a raise: a raising migration blocks every boot (zero operator
+  action).
 
   Prod (2026-11-07): 0 notes without a body row and 0 body rows under
   another owner, so it inserts nothing, takes no table lock, and reads each
@@ -134,26 +135,34 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
       "THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END"
 
   # The repair, RLS bypassed on `note_bodies`: the row goes back to the
-  # note's owner. Per column, the body is kept when it holds the envelope
-  # under the `notes` nonce (it is the copy or newer: release B writes only
-  # the nonce on `notes`, so the copy can be stale under a newer nonce), and
-  # rebuilt from the `notes` copy only when it does not (or is NULL) and a
-  # copy exists; else kept as it is, which may not decrypt. The head follows
-  # the CRDT state it was computed from. Returns each note's path per column:
-  # `body`, `copy` or `unverified`.
-  path = fn ok, copy ->
-    "CASE WHEN #{ok} THEN 'body' WHEN #{copy} IS NOT NULL THEN 'copy' ELSE 'unverified' END"
+  # note's owner, and existing body bytes are never overwritten (SQL cannot
+  # tell a stale `notes` copy, which release B leaves under a newer nonce,
+  # from a stale body). Per column: a body value is kept (`body` when it
+  # holds the envelope under the `notes` nonce, `mismatch` when it does not,
+  # logged for a human look); a NULL body is rebuilt from the `notes` copy
+  # when the copy's nonce is set (`copy`), else stays NULL (`none`). The head
+  # follows the CRDT state it was computed from.
+  path = fn body, ok, nonce, copy ->
+    """
+    CASE WHEN b.#{body} IS NOT NULL THEN (CASE WHEN #{ok} THEN 'body' ELSE 'mismatch' END)
+      WHEN n.#{nonce} IS NOT NULL AND #{copy} IS NOT NULL THEN 'copy' ELSE 'none' END
+    """
+  end
+
+  value = fn body, nonce, copy ->
+    "CASE WHEN b.#{body} IS NOT NULL THEN b.#{body} WHEN n.#{nonce} IS NOT NULL THEN #{copy} END"
   end
 
   @repair """
   WITH r AS (
     SELECT n.id, n.user_id,
       CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END AS key_version,
-      #{path.(c_ok, c_copy)} AS c_path,
-      #{path.(s_ok, s_copy)} AS s_path,
-      CASE WHEN #{c_ok} THEN b.content_ct ELSE COALESCE(#{c_copy}, b.content_ct) END AS content_ct,
-      CASE WHEN #{s_ok} THEN b.crdt_ct ELSE COALESCE(#{s_copy}, b.crdt_ct) END AS crdt_ct,
-      CASE WHEN #{s_ok} OR #{s_copy} IS NULL THEN b.crdt_head ELSE #{head} END AS crdt_head
+      #{path.("content_ct", c_ok, "content_nonce", c_copy)} AS c_path,
+      #{path.("crdt_ct", s_ok, "crdt_state_nonce", s_copy)} AS s_path,
+      #{value.("content_ct", "content_nonce", c_copy)} AS content_ct,
+      #{value.("crdt_ct", "crdt_state_nonce", s_copy)} AS crdt_ct,
+      CASE WHEN b.crdt_ct IS NULL AND n.crdt_state_nonce IS NOT NULL AND #{s_copy} IS NOT NULL
+        THEN #{head} ELSE b.crdt_head END AS crdt_head
     FROM notes n JOIN note_bodies b ON b.note_id = n.id
     WHERE n.id = ANY($1::uuid[]) AND b.note_id = ANY($1::uuid[]) AND n.user_id = $2
       AND n.kind = 'note' AND b.user_id <> n.user_id
@@ -224,17 +233,29 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
         rows
       end)
 
+    meta = [category: :data, user_id: Ecto.UUID.load!(user_id)]
+
     rows
     |> Enum.group_by(fn [_id, c, s] -> {c, s} end, &hd/1)
     |> Enum.each(fn {{c, s}, note_ids} ->
       Logger.warning(
         "note_bodies split: body rows handed back to their owner " <>
-          "(content from #{c}, CRDT state from #{s}; unverified may not decrypt)",
-        category: :data,
-        user_id: Ecto.UUID.load!(user_id),
-        note_ids: note_ids
+          "(content: #{c}, CRDT state: #{s}; none = no body)",
+        meta ++ [note_ids: note_ids]
       )
     end)
+
+    case for [id, c, s] <- rows, "mismatch" in [c, s], do: id do
+      [] ->
+        :ok
+
+      odd ->
+        Logger.warning(
+          "note_bodies split: a body kept as it is does not match its notes nonce, " <>
+            "check it by hand (note ids: #{Enum.join(odd, ", ")})",
+          meta ++ [note_ids: odd]
+        )
+    end
   end
 
   defp walk(repo, user_id, after_id) do
