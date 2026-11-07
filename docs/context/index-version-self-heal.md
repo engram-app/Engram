@@ -23,7 +23,7 @@ next chained run asks again.
 | Keyword encoding: tokenizer, stemmer, BM25 weighting, WHICH text is encoded | `Engram.KeywordIndex` `@version` | `notes.keyword_version` | `RefreshKeywordVectors` (sparse vectors rewritten in place) | no embedder call |
 | Chunk boundaries or chunk text | `Engram.Parsers.Markdown` `@chunker_version` | `notes.chunker_version` | `RebuildStaleNote` (EmbedNote's maintenance path) | re-embed, unmetered |
 | Embed model (`DOC_EMBED_MODEL` / `EMBED_MODEL` / the embedder's default) | nothing: config | `notes.embed_model` (dense notes only) | `RebuildStaleNote` | re-embed, unmetered |
-| Payload shape only (a key's value or form on the points, vectors unchanged) | `Engram.Indexing.PayloadV6` `@version` | `note_index_state.payload_version` | `ReconcileNotePayloads` (one `set_payloads` batch per page) | zero embedder calls |
+| Payload shape only (since R3a the payload is the identity `u`, `v`, `n`, so this means only `n`; vectors unchanged) | `Engram.Indexing.PayloadV6` `@version` | `note_index_state.payload_version` | `ReconcileNotePayloads` (one `set_payloads` batch per page) | zero embedder calls |
 
 **Version rebuilds are unmetered (decided 2026-10-04).** A rebuild of unchanged
 content is our maintenance, not the user's usage: it never counts against an
@@ -136,7 +136,8 @@ order, so a model rollback still rebuilds.
 
 ## A payload-only change has its own stamp
 
-`payload_hash` is the note's OWN computed payload at its last index pass; a new
+`payload_hash` is the hash of the note's identity payload (`u`, `v`, `n`,
+`Indexing.identity_hash/1`, R3a), stamped by every index pass; a new
 payload SHAPE never clears it, so before the stamp a new shape reached only
 edited notes. `note_index_state.payload_version` (NULL = the baseline, the
 shape before the column existed) is the stamp for the shape.

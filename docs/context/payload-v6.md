@@ -1,5 +1,15 @@
 # Payload v6: the folder row id on the points, in three releases
 
+> **Superseded again 2026-11-07 (R3a, the immutable chunk payload).** A point's
+> payload is now exactly `{u, v, n}` (`Indexing.identity_payload/1`), the same
+> for every point of a note and never rewritten: no refresh, no repath, no
+> `overwrite_payload`. `payload_hash` is the identity hash. Filters resolve in
+> Postgres; with the `n` index Qdrant gets `should [n any ids, is_empty(n)]`
+> (or `must_not n any`) and `Engram.Search` drops hits outside the scope by
+> their chunk row's note. Search no longer waits on `NotePayloadStamps`; its
+> done (now also requiring the `n` index) gates R3b, which drops the retired
+> payload indexes. `PayloadV5` and the v6 builders are deleted.
+
 _Last verified: 2026-10-27 (release R-a, nothing rewritten yet)_
 
 > **Superseded 2026-11-06 (immutable chunk index R2, Engram#2263).** Payload
