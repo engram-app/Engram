@@ -99,6 +99,25 @@ defmodule Engram.RenameZeroIndexWritesTest do
     assert_zero_index_calls(fn -> Notes.rename_folder(u, v, "A/Sub", "B/Sub") end)
   end
 
+  # A live note whose embed is not current (a poison cooldown, a budget
+  # park, an edit still in its debounce) is moved as it is: the move must
+  # not queue the embed its state is holding back.
+  test "web-app move of a live note whose embed is stale (in cooldown)",
+       %{user: u, vault: v, ids: ids} do
+    id = ids["A/Two.md"]
+
+    from(n in Engram.Notes.Note, where: n.id == ^id)
+    |> Repo.update_all(
+      [set: [embed_hash: "stale", embed_retry_after: DateTime.add(DateTime.utc_now(), 3600)]],
+      skip_tenant_check: true
+    )
+
+    assert {:ok, _} = Notes.genesis_crdt_note(u, v, id, "B/Two.md")
+    refute_enqueued(worker: Engram.Workers.EmbedNote)
+
+    assert_zero_index_calls(fn -> {:ok, :already_moved} end)
+  end
+
   # The web app moves notes through crdt_create (#1612).
   test "web-app move (crdt_create live relocate)", %{user: u, vault: v, ids: ids} do
     id = ids["A/Two.md"]
