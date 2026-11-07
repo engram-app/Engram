@@ -5,7 +5,9 @@ defmodule Engram.Folders.WireRlsTest do
   The ops refuse without writing, so `as_prod_role_committing/1` is used and
   the victim's row is read back afterwards as the suite's superuser.
   """
-  use Engram.RlsCase
+  use Engram.DataCase, async: false
+
+  import Engram.RlsCase
 
   alias Engram.{Crypto, Folders, Repo, Vaults}
   alias Engram.Folders.{Folder, Rows, Wire}

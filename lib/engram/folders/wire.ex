@@ -86,7 +86,7 @@ defmodule Engram.Folders.Wire do
          {:ok, target} <- target(user, vault, parent, name) do
       if target == from,
         do: {:ok, %{folder_id: id, seq: Vaults.current_seq(user.id, vault.id)}},
-        else: move(user, vault, id, from, target, device_id)
+        else: move(user, vault, {id, parent}, from, target, device_id)
     end
   end
 
@@ -102,7 +102,9 @@ defmodule Engram.Folders.Wire do
                Vaults.raw_current_seq(vault.id)}
             end)
 
-          {:ok, %{folder_id: id, seq: seq}}
+          # nil: a move emptied the path between the create and this read.
+          # `conflict` makes the client retry, never an ok with no id.
+          if id, do: {:ok, %{folder_id: id, seq: seq}}, else: {:error, "conflict"}
 
         {:ok, _rejected} ->
           {:error, "invalid_name"}
@@ -118,16 +120,18 @@ defmodule Engram.Folders.Wire do
 
   defp do_apply(_user, _vault, _payload, _device_id), do: {:error, "bad_frame"}
 
-  # ponytail: resolves the ids to paths before the transaction and moves by
-  # path (today's cascade); a move racing in between can make it miss
-  # (not_found) or refuse. S5 moves by id under the vault lock.
-  defp move(user, vault, id, from, target, device_id) do
-    case Folders.rename(user, vault, from, target, origin_device_id: device_id) do
-      {:ok, %{notes: 0, attachments: 0}} -> {:error, "not_found"}
+  # The ids are resolved to paths before the folder lock and the move runs by
+  # path (today's cascade). `expect:` re-checks both ids under the lock, so a
+  # move racing in between is refused `not_found` (the client re-resolves and
+  # retries) instead of moving whatever now sits at those paths. S5 moves by
+  # id under the lock.
+  defp move(user, vault, {id, _parent} = expect, from, target, device_id) do
+    case Folders.rename(user, vault, from, target, origin_device_id: device_id, expect: expect) do
       {:ok, %{seq: seq}} when is_integer(seq) -> {:ok, %{folder_id: id, seq: seq}}
       # The switch went off mid-op: no seq was read with the write.
       {:ok, _} -> {:ok, %{folder_id: id, seq: Vaults.current_seq(user.id, vault.id)}}
       {:error, :conflict} -> {:error, "conflict"}
+      {:error, :not_found} -> {:error, "not_found"}
       {:error, :invalid_path} -> {:error, "cycle"}
       {:error, _} -> {:error, "failed"}
     end
@@ -183,7 +187,7 @@ defmodule Engram.Folders.Wire do
     with true <- enabled?(),
          {:ok, user} <- Crypto.ensure_user_dek(user) do
       folders = Enum.uniq(folders)
-      parents = Map.new(folders, &{&1, parent_path(&1)})
+      parents = Map.new(folders, &{&1, Rows.parent_path(&1)})
 
       Repo.with_tenant!(user.id, fn ->
         ids = Rows.ids_by_path(user, vault.id, Enum.uniq(folders ++ Map.values(parents)))
@@ -238,7 +242,7 @@ defmodule Engram.Folders.Wire do
     id_of = Map.new(tree, &{&1.path, &1.id})
 
     notes =
-      Enum.map(notes, fn n -> Map.put(n, :folder_id, id_of[parent_path(n.path)]) end)
+      Enum.map(notes, fn n -> Map.put(n, :folder_id, id_of[Rows.parent_path(n.path)]) end)
 
     Map.merge(body, %{
       notes: notes,
@@ -253,7 +257,7 @@ defmodule Engram.Folders.Wire do
   @spec create_reply(map(), map(), map()) :: map()
   def create_reply(user, vault, note) do
     if enabled?() do
-      folder = if is_binary(note.path), do: parent_path(note.path), else: ""
+      folder = if is_binary(note.path), do: Rows.parent_path(note.path), else: ""
       %{folder_id: Map.get(note, :folder_ref_id), folders: chain(user, vault, folder)}
     else
       %{}
@@ -295,8 +299,6 @@ defmodule Engram.Folders.Wire do
     |> elem(0)
     |> Enum.reverse()
   end
-
-  defp parent_path(path), do: path |> String.split("/") |> Enum.drop(-1) |> Enum.join("/")
 
   # A trailing slash keeps a folder named like a note off the plugin's CRDT
   # branch (`isCrdtEligiblePath` matches the extension).
