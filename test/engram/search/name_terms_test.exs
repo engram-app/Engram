@@ -218,9 +218,42 @@ defmodule Engram.Search.NameTermsTest do
                [point]
     end
 
-    test "a query of only stopwords gets nothing from the leg", ctx do
-      indexed!(ctx.user, write!(ctx.user, ctx.vault, "To Do.md"))
-      assert NameTerms.recall(ctx.user, {:vault, ctx.vault}, "to do") == []
+    test "a query of only stopwords matches only an exact name", ctx do
+      about = indexed!(ctx.user, write!(ctx.user, ctx.vault, "About.md"))
+      indexed!(ctx.user, write!(ctx.user, ctx.vault, "About this.md"))
+      indexed!(ctx.user, write!(ctx.user, ctx.vault, "About/inside.md"))
+
+      assert [%{qdrant_id: ^about, via: :name}] =
+               NameTerms.recall(ctx.user, {:vault, ctx.vault}, "About")
+    end
+
+    test "a word matches its raw form or its stem: inflections find each other", ctx do
+      note = indexed!(ctx.user, write!(ctx.user, ctx.vault, "Meeting note.md"))
+      plan = indexed!(ctx.user, write!(ctx.user, ctx.vault, "Plan.md"))
+
+      assert [%{qdrant_id: ^note}] =
+               NameTerms.recall(ctx.user, {:vault, ctx.vault}, "meeting notes")
+
+      assert [%{qdrant_id: ^plan}] = NameTerms.recall(ctx.user, {:vault, ctx.vault}, "plans")
+    end
+
+    test "a one-letter piece of an apostrophe split is not required: o'clock", ctx do
+      five = indexed!(ctx.user, write!(ctx.user, ctx.vault, "Five o'clock.md"))
+      indexed!(ctx.user, write!(ctx.user, ctx.vault, "Five O ring.md"))
+
+      assert [%{qdrant_id: ^five}] =
+               NameTerms.recall(ctx.user, {:vault, ctx.vault}, "five o'clock")
+    end
+
+    test "matches come newest first", ctx do
+      old = write!(ctx.user, ctx.vault, "Zebra one.md")
+      new = write!(ctx.user, ctx.vault, "Zebra two.md")
+      for n <- [old, new], do: :ok = NameTerms.on_note_written(ctx.user, n)
+      {:ok, fk} = Crypto.dek_filter_key(ctx.user)
+
+      assert tenant(ctx.user, fn ->
+               NameTerms.hits([ctx.vault.id], NameTerms.query_terms("zebra", fk), 0)
+             end) == [new.id, old.id]
     end
 
     test "a partial-word overlap returns nothing", ctx do

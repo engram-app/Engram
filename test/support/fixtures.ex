@@ -661,12 +661,7 @@ defmodule Engram.Fixtures do
   runs it as that database role (`"engram_app"`: RLS enforced, no bypass).
   """
   def complete_split!(opts \\ []) do
-    Code.require_file(
-      "priv/repo/migrations/20261107120000_note_bodies_complete_split_migrate.exs"
-    )
-
-    # By name at runtime: migrations are not compiled with the app.
-    mod = String.to_existing_atom("Elixir.Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate")
+    mod = Engram.MigrationFile.load!("20261107120000_note_bodies_complete_split_migrate.exs")
     repo = Keyword.get(opts, :repo, Engram.Repo)
 
     case {opts[:only_load], Keyword.fetch(opts, :role)} do

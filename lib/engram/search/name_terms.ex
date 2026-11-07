@@ -62,9 +62,9 @@ defmodule Engram.Search.NameTerms do
 
   Match gate: the query's stopwords are dropped (`Engram.KeywordIndex.Stopwords`)
   and a note or folder counts only when its own name terms hold EVERY
-  remaining query term (dims, stems included; a contraction matches with
-  or without its apostrophe fragment, `query_terms/2`). A query of only
-  stopwords gets nothing from the leg. Ranking names by how many query words they
+  remaining query word, by its raw form or its stem (a contraction with or
+  without its apostrophe fragment; `query_terms/2`). A query of only
+  stopwords gets only the exact-filename probe. Ranking names by how many query words they
   share instead let a name that shares "to" and "the" tie the best content
   hit (the R10.1 eval: NDCG@10 0.84 of baseline; gated, 0.997). Its
   notes are narrowed to the search's filters first (`Search.in_scope/3`),
@@ -190,45 +190,41 @@ defmodule Engram.Search.NameTerms do
   @apostrophes ["'", "\u2019"]
 
   @doc """
-  The query's required terms for the match gate, at most #{16} dims: one
-  group per required term, a ref matches a group when it holds ANY of its
-  dims. Stopwords are dropped (`Stopwords.drop/1`). A plain word's dims
-  (raw and stem) are each their own group, so all are required. A
-  contraction is one group: its tokens without the fragment the apostrophe
-  splits off (`Stopwords.contraction_fragments/0`) or the word with the
-  apostrophe removed, so "Alex's" matches "Alex" and "Alex's", and "don't"
-  matches "Dont". [] when only stopwords are left.
+  The query's required terms for the match gate, one group per query word
+  (at most #{16}): a ref matches a group when it holds ANY of its dims.
+  Stopwords are dropped (`Stopwords.drop/1`). A word's group is its raw
+  and stem dims, so "plans" finds "Plan" and "notes" finds "note", while
+  "2" still never matches "3". A contraction's group adds the word with
+  its apostrophe removed and leaves out what the split cuts off (the
+  `Stopwords.contraction_fragments/0` and any one-letter piece): "Alex's"
+  finds "Alex" and "Alex's", "don't" finds "Dont", "o'clock" never
+  matches a lone "o". [] when only stopwords are left.
   """
   @spec query_terms(String.t(), binary()) :: [[integer()]]
   def query_terms(query, fk) do
-    {contracted, plain} =
-      query |> String.split() |> Enum.split_with(&String.contains?(&1, @apostrophes))
-
-    singles =
-      for d <- dims([Stopwords.drop(Enum.join(plain, " "))], fk, @max_query_terms), do: [d]
-
-    groups =
-      for word <- contracted,
-          kept = word |> unfragment() |> Stopwords.drop(),
-          kept != "",
-          do: dims([kept, String.replace(word, @apostrophes, "")], fk, @max_query_terms)
-
-    cap(singles ++ groups, @max_query_terms)
+    query
+    |> String.split()
+    |> Enum.flat_map(&word_texts/1)
+    |> Enum.map(&dims(&1, fk))
+    |> Enum.reject(&(&1 == []))
+    |> Enum.uniq()
+    |> Enum.take(@max_query_terms)
   end
 
-  # The word's tokens minus any contraction fragment after the first.
-  defp unfragment(word) do
-    [first | rest] = Tokenizer.tokens(word, nil) |> then(&if(&1 == [], do: [""], else: &1))
-    Enum.join([first | rest -- Stopwords.contraction_fragments()], " ")
-  end
+  # The texts of each required group a whitespace-separated word gives.
+  defp word_texts(word) do
+    if String.contains?(word, @apostrophes) do
+      kept =
+        word
+        |> Tokenizer.tokens(nil)
+        |> Enum.reject(&(String.length(&1) == 1 or &1 in Stopwords.contraction_fragments()))
+        |> Enum.join(" ")
+        |> Stopwords.drop()
 
-  defp cap(groups, max) do
-    groups
-    |> Enum.reduce_while({[], 0}, fn g, {acc, n} ->
-      if n + length(g) > max, do: {:halt, {acc, n}}, else: {:cont, {[g | acc], n + length(g)}}
-    end)
-    |> elem(0)
-    |> Enum.reverse()
+      if kept == "", do: [], else: [[kept, String.replace(word, @apostrophes, "")]]
+    else
+      for token <- String.split(Stopwords.drop(word)), do: [token]
+    end
   end
 
   defp signed(u32) do
@@ -827,10 +823,10 @@ defmodule Engram.Search.NameTerms do
   @spec recall(map(), term(), String.t(), ([Ecto.UUID.t()] -> [Ecto.UUID.t()])) :: [map()]
   def recall(user, scope, query, keep \\ & &1) do
     with {:ok, fk} <- Crypto.dek_filter_key(user),
-         [_ | _] = dims <- query_terms(query, fk),
+         terms = query_terms(query, fk),
          [_ | _] = vault_ids <- vault_ids(user, scope),
          {:ok, {named, foldered}} <-
-           Repo.with_tenant(user.id, fn -> ranked(vault_ids, dims, fk, query) end),
+           Repo.with_tenant(user.id, fn -> ranked(vault_ids, terms, fk, query) end),
          kept = MapSet.new(keep.(Enum.uniq(named ++ foldered))),
          order =
            for(id <- named, id in kept, do: {id, :name}) ++
@@ -856,9 +852,10 @@ defmodule Engram.Search.NameTerms do
   defp vault_ids(_user, {:ids, ids}), do: ids
   defp vault_ids(user, :all), do: user |> Engram.Vaults.list_vaults() |> Enum.map(& &1.id)
 
-  # Live note ids, best first: exact filename, then by matched title terms,
-  # then the notes under matching folders.
-  defp ranked(vault_ids, dims, fk, query) do
+  # Live note ids: exact filename first (even for a name of only stopwords),
+  # then the notes whose title holds every term, newest first; and the
+  # notes under folders whose name holds every term.
+  defp ranked(vault_ids, terms, fk, query) do
     exact =
       Repo.all(
         from(n in Note,
@@ -870,8 +867,8 @@ defmodule Engram.Search.NameTerms do
         )
       )
 
-    titled = hits(vault_ids, dims, @note)
-    folders = hits(vault_ids, dims, @folder)
+    titled = if terms == [], do: [], else: hits(vault_ids, terms, @note)
+    folders = if terms == [], do: [], else: hits(vault_ids, terms, @folder)
 
     {Enum.uniq(exact ++ titled), under_folders(vault_ids, folders)}
   end
@@ -879,7 +876,8 @@ defmodule Engram.Search.NameTerms do
   @doc """
   The live refs of `kind` (0 notes, 1 folders) in `vault_ids` that match
   every group of `terms` (a group is a dim or a list of dims, matched when
-  the ref holds any of them; `query_terms/2`), at most #{50}, in id order.
+  the ref holds any of them; `query_terms/2`), at most #{50}, newest first
+  (UUIDv7 `id DESC`).
   Two queries, no per-candidate round trip: `counts_query/3` counts each
   dim's postings (up to #{2_000} each) and the group with the fewest drives;
   `hits_query/5` scans at most #{2_000} postings per driving dim (index
@@ -910,7 +908,7 @@ defmodule Engram.Search.NameTerms do
             kind: kind
           })
 
-      live |> Enum.uniq() |> Enum.sort() |> Enum.take(@k)
+      live |> Enum.uniq() |> Enum.sort(:desc) |> Enum.take(@k)
     end
   end
 
