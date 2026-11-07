@@ -538,6 +538,61 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     end
   end
 
+  # #2480 review: REST checked base_hash against the stored row, not the text
+  # GET serves. A script whose GET included a live (un-checkpointed) edit got
+  # a false 409, and the 409's row hash, which never saw the edit, passed.
+  test "REST POST with the GET hash writes while a live edit sits in the tail", ctx do
+    %{conn: conn, user: user, vault: vault} = ctx
+    {id, doc} = base_doc(user, vault)
+    land_tail(user, vault, id, doc, &(&1 <> "LIVEEDIT\n"))
+
+    got = conn |> get("/api/notes/a.md") |> json_response(200)
+    assert got["content"] =~ "LIVEEDIT"
+
+    conn
+    |> post("/api/notes", %{
+      path: "a.md",
+      content: got["content"] <> "SCRIPT\n",
+      mtime: 2.0,
+      base_hash: got["content_hash"]
+    })
+    |> json_response(200)
+
+    text = text_of(user, vault, "a.md")
+    assert count(text, "LIVEEDIT") == 1, inspect(text)
+    assert count(text, "SCRIPT") == 1, inspect(text)
+  end
+
+  test "REST 409 hands back the GET view, whose hash then writes", ctx do
+    %{conn: conn, user: user, vault: vault} = ctx
+    {_text, before} = read_note(conn)
+    {id, doc} = base_doc(user, vault)
+    land_tail(user, vault, id, doc, &(&1 <> "LIVEEDIT\n"))
+
+    stale =
+      conn
+      |> post("/api/notes", %{
+        path: "a.md",
+        content: "# A\n\nscript\n",
+        mtime: 2.0,
+        base_hash: before["content_hash"]
+      })
+      |> json_response(409)
+
+    got = conn |> get("/api/notes/a.md") |> json_response(200)
+    assert stale["server_note"]["content"] =~ "LIVEEDIT"
+    assert stale["server_note"]["content_hash"] == got["content_hash"]
+
+    # Missing base: same 409 body.
+    missing =
+      conn
+      |> post("/api/notes", %{path: "a.md", content: "x\n", mtime: 2.0})
+      |> json_response(409)
+
+    assert missing["server_note"]["content_hash"] == got["content_hash"]
+    assert count(text_of(user, vault, "a.md"), "LIVEEDIT") == 1
+  end
+
   test "write_note with a fresh base_hash writes across a checkpoint of the same text", ctx do
     %{conn: conn, user: user, vault: vault} = ctx
     {id, doc} = base_doc(user, vault)

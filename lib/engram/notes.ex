@@ -1147,7 +1147,7 @@ defmodule Engram.Notes do
             )
           )
 
-          {:error, :version_conflict, decrypt_or_raise!(existing, user)}
+          {:error, :version_conflict, served_note(user, existing)}
 
         {:ok, {:base_required, existing}} ->
           # #2480: an overwrite of an existing note with no base_hash, from a
@@ -1163,7 +1163,7 @@ defmodule Engram.Notes do
             )
           )
 
-          {:error, :version_conflict, decrypt_or_raise!(existing, user)}
+          {:error, :version_conflict, served_note(user, existing)}
 
         {:ok, {:id_collision, live}} ->
           # A push carried a note_id that already names a LIVE note at another
@@ -2806,12 +2806,18 @@ defmodule Engram.Notes do
       is_nil(base_hash) and Keyword.get(opts, :require_base, false) ->
         {:base_required, existing}
 
-      stale_base?(existing.content_hash, base_hash, base_attrs.content_hash) ->
-        # Stale base declared: the row moved since this writer read it. Refuse
+      is_binary(base_hash) ->
+        # Stale base declared: the note moved since this writer read it. Refuse
         # to merge (see upsert_note — a stale full-content push deletes newer
         # content convergently); the writer re-reads and retries or surfaces a
         # conflict. Matches the long-documented-but-missing 409 contract.
-        {:stale_base, existing}
+        case served_base(user, existing, base_hash, base_attrs.content_hash) do
+          :stale ->
+            {:stale_base, existing}
+
+          {:ok, merge} ->
+            rewrite(existing, base_attrs, user, sanitized_path, folder, merge ++ opts)
+        end
 
       true ->
         rewrite(existing, base_attrs, user, sanitized_path, folder, opts)
@@ -2847,6 +2853,40 @@ defmodule Engram.Notes do
   # in do_update_note), so callers thread the same digest fields either way.
   # Checked BEFORE the stale-base gate: a hash-equal push is a no-op whatever
   # base the writer declared.
+  # #2480: the base check compares against the hash a reader was SERVED
+  # (`get_note/3`: tail included), not the stored row's. Against the row, a
+  # writer whose read included an un-checkpointed edit got a false conflict,
+  # and the conflict body's row hash, which never saw that edit, passed.
+  #
+  # A base that matches proves the writer derived its text from the
+  # tail-inclusive authority, so the write merges two-way into that replayed
+  # doc (`merge_doc:`, as a read-modify-write does). The default three-way
+  # merge against the snapshot would re-insert the tail edit the writer
+  # already holds, doubling it. An empty tail (the common case) costs only the
+  # tail read and changes nothing about the merge.
+  defp served_base(user, %Note{} = row, base_hash, incoming_hash) do
+    case CrdtPersistence.tail_rows(row.id, row.vault_id) do
+      [] ->
+        if stale_base?(row.content_hash, base_hash, incoming_hash), do: :stale, else: {:ok, []}
+
+      tail ->
+        with {:ok, text, doc} <- authority(user, decrypt_or_raise!(row, user), tail),
+             {:ok, served} <- content_hash(user, text),
+             false <- stale_base?(served, base_hash, incoming_hash) do
+          {:ok, [merge_doc: doc || :empty_tail]}
+        else
+          _ -> :stale
+        end
+    end
+  end
+
+  # The note a conflict hands back: what a GET returns now, so its
+  # content_hash is a base the writer can retry with.
+  defp served_note(user, %Note{} = row) do
+    tail = Repo.with_tenant!(user.id, fn -> CrdtPersistence.tail_rows(row.id, row.vault_id) end)
+    current_note(user, decrypt_or_raise!(row, user), tail)
+  end
+
   defp idempotent_repush(existing, base_attrs) do
     {:ok, {existing.content_hash, existing, base_attrs.content, existing.content_hash}}
   end
