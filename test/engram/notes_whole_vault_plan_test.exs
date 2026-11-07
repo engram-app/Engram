@@ -154,14 +154,16 @@ defmodule Engram.NotesWholeVaultPlanTest do
     end
   end
 
-  test "folder counts group by reference on notes_folder_ref_live", %{user: u, vault: v} do
+  test "folder counts group by reference on a vault-scoped index", %{user: u, vault: v} do
     plans =
       QueryPlan.after_runs(
         fn -> Repo.with_tenant!(u.id, fn -> Notes.raw_folder_count_rows(u, v) end) end,
         ~r/GROUP BY n0\."folder_ref_id"/
       )
 
-    assert_index(plans, "Index Only Scan using notes_folder_ref_live")
+    # A whole-vault aggregate either way: the live vault index, or the covering
+    # reference index once the heap is all-visible (reads_test.exs pins that).
+    assert_index(plans, ~r/notes_user_vault_live|notes_folder_ref_live/)
   end
 
   test "tag counts read notes_user_vault_live", %{user: u, vault: v} do
