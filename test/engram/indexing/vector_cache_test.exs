@@ -125,6 +125,36 @@ defmodule Engram.Indexing.VectorCacheTest do
       assert queries > 1
     end
 
+    # #2532: a connection is held per batch, never for the whole lookup, so
+    # the hold time is fixed whatever the note size.
+    test "each batch of a lookup is its own tenant transaction" do
+      {user, dek} = user_and_dek()
+      vec = vector(3)
+
+      entries =
+        for i <- 1..2_500 do
+          digest = VectorCache.digest("row #{i}", @opts)
+          {VectorCache.key_for_digest(@ck, digest), digest, vec}
+        end
+
+      :ok = VectorCache.put_many(user.id, nil, dek, entries)
+      keys = Enum.map(entries, &elem(&1, 0))
+
+      {hits, queries} =
+        Engram.QueryRecorder.record(fn -> VectorCache.get_many(user.id, dek, keys) end)
+
+      assert map_size(hits) == 2_500
+
+      lookups =
+        for txn <- Engram.QueryRecorder.transactions(queries),
+            n = Enum.count(txn, &(&1 =~ "FROM embedding_cache WHERE")),
+            n > 0,
+            do: n
+
+      assert lookups == List.duplicate(1, ceil(2_500 / VectorCache.rows_per_query())),
+             Engram.QueryRecorder.format(queries)
+    end
+
     test "emits hit and miss counts" do
       {user, dek} = user_and_dek()
       key = put(user, dek, "a", vector(2))

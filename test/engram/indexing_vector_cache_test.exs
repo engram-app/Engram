@@ -223,10 +223,14 @@ defmodule Engram.IndexingVectorCacheTest do
   test "the cache lookup, and the digests before it, run outside the planning transaction",
        ctx do
     stub_embedder()
-    note = put_note(ctx.user, ctx.vault, "Txn.md", body(4))
+    # Past one lookup batch (1,000 keys) and uncapped (one point a chunk),
+    # so the lookup takes 2 batches.
+    note = put_note(ctx.user, ctx.vault, "Txn.md", body(1_100))
 
     {{:ok, _}, queries} =
-      Engram.QueryRecorder.record(fn -> Indexing.index_note(note, ctx.vault) end)
+      without_limits(fn ->
+        Engram.QueryRecorder.record(fn -> Indexing.index_note(note, ctx.vault) end)
+      end)
 
     lookups =
       queries
@@ -242,6 +246,12 @@ defmodule Engram.IndexingVectorCacheTest do
             sql =~ ~r/embedding_cache|set_config/,
             "the cache lookup shares a transaction with #{inspect(sql)}"
           )
+
+    # And one batch query per transaction: the hold is bounded, not O(note).
+    assert length(lookups) == 2, Engram.QueryRecorder.format(queries)
+
+    for txn <- lookups,
+        do: assert(Enum.count(txn, &(&1 =~ "FROM embedding_cache WHERE")) == 1)
   end
 
   test "a note past one pass's embed budget finishes densely over several passes", ctx do

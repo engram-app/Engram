@@ -329,6 +329,9 @@ defmodule Engram.IndexingHugeNotesTest do
       end)
 
     {result, _} = List.last(passes)
+    # Fails loudly (not as a harness timeout) if a note ever needs more
+    # passes than the harness timeout allows.
+    assert length(passes) <= 3, "#{length(passes)} passes"
     per_pass = Enum.map(passes, &elem(&1, 1))
 
     report = %{
