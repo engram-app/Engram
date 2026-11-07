@@ -417,7 +417,7 @@ defmodule Engram.Search.NameTermsTest do
         )
 
       plan = QueryPlan.generic_plan(sql, analyze: ["notes"])
-      assert plan =~ "notes_folder_ref_live_id", plan
+      assert plan =~ "using notes_folder_ref_live_id on", plan
     end
   end
 

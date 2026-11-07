@@ -607,7 +607,8 @@ defmodule Engram.Search.NoteFilterTest do
       # cap 0: the match query AND the complement query run.
       for sql <- statements(ctx, %{folder: "F7"}, cap: 0) do
         plan = index_only_plan(sql)
-        assert plan =~ "Index Only Scan using notes_folder_ref_live", plan
+        # Exact name (" on" ends it): not `notes_folder_ref_live_id` (S1).
+        assert plan =~ "Index Only Scan using notes_folder_ref_live on", plan
       end
     end
 

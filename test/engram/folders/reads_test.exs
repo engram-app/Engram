@@ -588,8 +588,10 @@ defmodule Engram.Folders.ReadsTest do
         )
 
       assert_index!(all, ~r/octet_length\(.*\) > 16/, "notes_unresolved_folder")
-      assert_index!(all, ~r/GROUP BY .*folder_ref_id/s, "notes_folder_ref_live")
-      # The page fetches the row, so either reference index serves it.
+      # Exact name (" on" ends it): not `notes_folder_ref_live_id` (S1).
+      assert_index!(all, ~r/GROUP BY .*folder_ref_id/s, "notes_folder_ref_live on")
+      # The page fetches the row, so any reference index serves it
+      # (`notes_folder_ref`, `_live` or S1's `_live_id`).
       assert_index!(all, ~r/folder_ref_id" = (ANY|\$)/, "using notes_folder_ref")
       # The root page: a NULL reference that is not drift.
       assert_index!(all, ~r/coalesce\(octet_length/, "using notes_folder_ref")
