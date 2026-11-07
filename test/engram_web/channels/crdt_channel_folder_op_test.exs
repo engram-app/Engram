@@ -158,6 +158,60 @@ defmodule EngramWeb.CrdtChannelFolderOpTest do
       assert_reply ref, :error, %{reason: "not_found"}
     end
 
+    # M2: ids from another vault of the same user, or another user's vault,
+    # never resolve. The superuser suite bypasses RLS, so this pins the
+    # `vault_id` filter itself; the RLS proof is FolderOpsRlsTest.
+    test "a folder or parent from another vault or user is not_found, nothing changes",
+         %{user: user, vault: vault, a: a} do
+      vault2 = insert(:vault, user: user)
+      other = insert(:user)
+      {:ok, other} = Crypto.ensure_user_dek(other)
+      {:ok, vault3, _} = Vaults.register_vault(other, "Theirs", Ecto.UUID.generate())
+
+      foreign =
+        for {u, v} <- [{user, vault2}, {other, vault3}] do
+          {:ok, _} = Folders.create_markers(u, v, ["F"])
+          {u, v, id_of(u, v, "F")}
+        end
+
+      socket = join!(user, vault)
+
+      for {u, v, f} <- foreign do
+        ref = push(socket, "folder_op", move(f, nil, "Stolen"))
+        assert_reply ref, :error, %{reason: "not_found"}
+
+        ref = push(socket, "folder_op", move(a, f, "A"))
+        assert_reply ref, :error, %{reason: "not_found"}
+
+        ref = push(socket, "folder_op", %{"op" => "create", "parent_id" => f, "name" => "In"})
+        assert_reply ref, :error, %{reason: "not_found"}
+
+        assert id_of(u, v, "F") == f
+        assert id_of(u, v, "F/In") == nil
+      end
+
+      assert id_of(user, vault, "A") == a
+      assert id_of(user, vault, "Stolen") == nil
+    end
+
+    # L2: a live folder row with no marker and no notes (the last note under a
+    # path-made folder was deleted) is listed by the manifest, so it must move.
+    test "a folder row with no marker and no notes moves", %{user: user, vault: vault} do
+      {:ok, _} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "E/n.md", "content" => "x"},
+          actor: "api"
+        )
+
+      :ok = Engram.Notes.delete_note(user, vault, "E/n.md")
+      e = id_of(user, vault, "E")
+      assert e
+
+      socket = join!(user, vault)
+      ref = push(socket, "folder_op", move(e, nil, "E2"))
+      assert_reply ref, :ok, %{folder_id: ^e}
+      assert id_of(user, vault, "E2") == e
+    end
+
     test "a malformed op is a bad_frame", %{user: user, vault: vault} do
       socket = join!(user, vault)
 

@@ -192,6 +192,42 @@ defmodule Engram.Folders.WireTest do
              ]
     end
 
+    # M1: the wire resolves ids to paths before the folder lock, so a move can
+    # race one that empties the path. `expect:` re-checks the ids under the
+    # lock; these drive the gap by resolving first, then changing the paths.
+    test "a move whose folder left its path in the gap is refused, nothing moves",
+         %{user: user, vault: vault} do
+      x = id_of(user, vault, "A")
+      b = id_of(user, vault, "B")
+      {:ok, _} = Folders.rename(user, vault, "A", "C")
+      {:ok, _} = Folders.create_markers(user, vault, ["A"])
+      y = id_of(user, vault, "A")
+
+      assert {:error, :not_found} = Folders.rename(user, vault, "A", "B/A", expect: {x, b})
+      assert id_of(user, vault, "A") == y
+      assert id_of(user, vault, "C") == x
+    end
+
+    test "a move whose parent left its path in the gap is refused, nothing moves",
+         %{user: user, vault: vault} do
+      a = id_of(user, vault, "A")
+      b = id_of(user, vault, "B")
+      {:ok, _} = Folders.rename(user, vault, "B", "B2")
+      {:ok, _} = Folders.create_markers(user, vault, ["B"])
+
+      assert {:error, :not_found} = Folders.rename(user, vault, "A", "B/A", expect: {a, b})
+      assert id_of(user, vault, "A") == a
+    end
+
+    test "control: a move whose ids still match goes through", %{user: user, vault: vault} do
+      a = id_of(user, vault, "A")
+      b = id_of(user, vault, "B")
+
+      assert {:ok, %{seq: seq}} = Folders.rename(user, vault, "A", "B/A", expect: {a, b})
+      assert is_integer(seq)
+      assert id_of(user, vault, "B/A") == a
+    end
+
     test "rename returns the op's seq", %{user: user, vault: vault} do
       assert {:ok, %{seq: seq}} = Folders.rename(user, vault, "A", "A2")
       assert seq == Engram.Vaults.current_seq(user.id, vault.id)
