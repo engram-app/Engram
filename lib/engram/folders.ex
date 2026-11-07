@@ -38,9 +38,12 @@ defmodule Engram.Folders do
   retry rescans and finishes. Each chunk broadcasts once it commits.
   """
 
+  import Ecto.Query, only: [from: 2]
+
   alias Engram.Attachments
   alias Engram.Billing
   alias Engram.Crypto
+  alias Engram.Folders.Drift
   alias Engram.Folders.Rows
   alias Engram.Logger.Metadata
   alias Engram.Notes
@@ -209,6 +212,7 @@ defmodule Engram.Folders do
     with {:ok, new_folder} <- PathSanitizer.sanitize_target(new_folder),
          # Never into its own subtree: refused before any scan or write.
          :ok <- refuse_own_subtree(String.trim_trailing(old_folder, "/"), new_folder),
+         :ok <- refuse_too_large(user, vault, [String.trim_trailing(old_folder, "/")]),
          {:ok, att_pairs} <-
            Attachments.folder_rename_pairs(user, vault, old_folder, new_folder) do
       atomic(vault, fn ->
@@ -222,6 +226,42 @@ defmodule Engram.Folders do
 
   defp refuse_own_subtree(old, new) do
     if old != new and Rows.into_own_subtree?(old, new), do: {:error, :invalid_path}, else: :ok
+  end
+
+  # Interim cap (#2492): a rename or move holds the vault lock for its whole
+  # subtree, so one over `:folder_op_max_rows` is refused before any lock,
+  # claim or scan. Index-only, no decrypt: one walk over folder rows, then up
+  # to four counts (notes by `notes_folder_ref_live`, attachments by
+  # `attachments_folder_ref_live`, and the two drift partial indexes).
+  # ponytail: the drift arms count the whole vault's drift (0 in steady state)
+  # so the count is never low; scope them by path if drift ever lingers.
+  # Counting is O(subtree) index entries; a LIMIT cap+1 would bound it at the
+  # cost of an exact count in the error.
+  defp refuse_too_large(user, vault, folders) do
+    limit = Application.fetch_env!(:engram, :folder_op_max_rows)
+    count = subtree_size(user, vault, folders)
+    if count > limit, do: {:error, {:folder_too_large, count, limit}}, else: :ok
+  end
+
+  defp subtree_size(user, vault, folders) do
+    Repo.with_tenant!(user.id, fn ->
+      ids = for %{id: id} <- Rows.subtree_refs(user, vault.id, folders), do: id
+      notes = Notes.scoped_live(user, vault)
+      atts = Attachments.scoped_live(user, vault)
+
+      by_ref =
+        if ids == [],
+          do: 0,
+          else:
+            Repo.aggregate(
+              from(n in notes, where: n.kind == "note" and n.folder_ref_id in ^ids),
+              :count
+            ) +
+              Repo.aggregate(from(a in atts, where: a.folder_ref_id in ^ids), :count)
+
+      by_ref + Repo.aggregate(from(n in notes, where: ^Drift.notes_unresolved()), :count) +
+        Repo.aggregate(from(a in atts, where: ^Drift.attachments_stale()), :count)
+    end)
   end
 
   @doc """
@@ -474,6 +514,7 @@ defmodule Engram.Folders do
     # Attachment scan before the transaction (#2159), like `rename/4`; only the
     # moved folders' attachments are read.
     with {:ok, folders} <- Notes.resolve_folder_markers(user, vault, marker_ids),
+         :ok <- refuse_too_large(user, vault, folders),
          {:ok, %{metas: metas}} <- Attachments.scan_under(user, vault, folders) do
       atomic(vault, fn ->
         with {:ok, %{moved: notes, pairs: pairs}} <-

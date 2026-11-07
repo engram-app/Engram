@@ -335,15 +335,18 @@ defmodule EngramWeb.FoldersController do
     summary: "Rename / move a folder",
     description:
       "Renames or moves a folder from `old_path` to `new_path`, re-homing every note beneath it, " <>
-        "and returns the affected note count. Returns 404 when the source folder does not exist and " <>
-        "409 when the target path is already occupied.",
+        "and returns the affected note count. Returns 404 when the source folder does not exist, " <>
+        "409 when the target path is already occupied, and 422 `folder_too_large` (with `count` " <>
+        "and `limit`) when the folder holds more live notes and attachments than the server allows " <>
+        "in one rename.",
     tags: ["Folders"],
     request_body: {"Old + new path", "application/json", Schemas.RenameRequest, required: true},
     responses: [
       ok: {"Renamed", "application/json", Schemas.FolderRenameResponse},
       not_found: {"No such folder", "application/json", Schemas.Error},
       conflict: {"Target exists", "application/json", Schemas.Error},
-      unprocessable_entity: {"Target path cleans to nothing", "application/json", Schemas.Error}
+      unprocessable_entity:
+        {"Target path cleans to nothing, or folder_too_large", "application/json", Schemas.Error}
     ]
   )
 
@@ -436,7 +439,9 @@ defmodule EngramWeb.FoldersController do
     description:
       "Re-parents multiple folders under `target_parent_id` (or the literal `\"root\"` for top " <>
         "level) in one transaction and returns the moved count. Requires the `X-Idempotency-Key` " <>
-        "header. Returns 404 for a missing id and 409 (with `item_id`) on a conflict or a cycle.",
+        "header. Returns 404 for a missing id, 409 (with `item_id`) on a conflict or a cycle, and " <>
+        "422 `folder_too_large` (with `count` and `limit`) when the selected folders together hold " <>
+        "more live notes and attachments than the server allows in one move.",
     tags: ["Folders"],
     request_body:
       {"Ids + target parent", "application/json", Schemas.BatchMoveFoldersRequest, required: true},
@@ -445,7 +450,8 @@ defmodule EngramWeb.FoldersController do
       bad_request: {"Invalid input", "application/json", Schemas.Error},
       not_found: {"Some ids not found", "application/json", Schemas.Error},
       conflict: {"Conflict", "application/json", Schemas.Error},
-      unprocessable_entity: {"Target path cleans to nothing", "application/json", Schemas.Error}
+      unprocessable_entity:
+        {"Target path cleans to nothing, or folder_too_large", "application/json", Schemas.Error}
     ]
   )
 
