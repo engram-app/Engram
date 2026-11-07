@@ -77,12 +77,9 @@ pub fn hunks(cur: &str, inc: &str) -> Vec<(usize, usize, usize, usize)> {
         let (new_lines, new_at) = lines(new, p);
         let deadline = Instant::now() + DEADLINE;
 
-        for op in capture_diff_slices_deadline(
-            Algorithm::Myers,
-            &old_lines,
-            &new_lines,
-            Some(deadline),
-        ) {
+        for op in
+            capture_diff_slices_deadline(Algorithm::Myers, &old_lines, &new_lines, Some(deadline))
+        {
             let (o, n) = (op.old_range(), op.new_range());
             if let DiffOp::Equal { .. } = op {
                 continue;
@@ -257,8 +254,12 @@ mod tests {
     fn hunks_full_rewrite_of_a_big_note_is_bounded() {
         // Every line differs: the worst case for Myers. The deadline bounds
         // it and the result is still exact.
-        let cur: String = (0..20_000).map(|n| format!("old line {n} with text\n")).collect();
-        let inc: String = (0..20_000).map(|n| format!("new row {n} other words\n")).collect();
+        let cur: String = (0..20_000)
+            .map(|n| format!("old line {n} with text\n"))
+            .collect();
+        let inc: String = (0..20_000)
+            .map(|n| format!("new row {n} other words\n"))
+            .collect();
         let t = std::time::Instant::now();
         assert_eq!(apply(&cur, &inc), inc);
         assert!(t.elapsed().as_secs() < 2);
