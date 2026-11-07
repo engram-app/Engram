@@ -164,7 +164,6 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNullTest do
     assert {:more, _} = Null.run_pass()
     assert [ct, _, _, _] = raw(n.id)
     assert is_binary(ct)
-    assert {:ok, %{content: "x"}} = Notes.get_note(u, v, "a.md")
   end
 
   test "a row already NULL is no work: the walk is done", %{user: u, vault: v} do

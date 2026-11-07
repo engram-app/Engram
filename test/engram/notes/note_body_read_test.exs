@@ -143,11 +143,17 @@ defmodule Engram.Notes.NoteBodyReadTest do
       assert {:ok, %{content: @content}} = Notes.get_note(ctx.user, ctx.vault, "T/R.md")
     end
 
-    test "a note with no body row falls back to its notes columns", ctx do
+    # R8(c): every note has a body row before boot (migration
+    # 20261107120000), so no read falls back to the `notes` ciphertexts
+    # R8(d) drops. A row without one reads no ciphertext, even with the
+    # `notes` copies an older release left.
+    test "a note with no body row reads no notes ciphertext", ctx do
+      Engram.Fixtures.old_release_notes_copy!(ctx.note.id)
       raw!("DELETE FROM note_bodies WHERE note_id = $1", ctx.note)
 
-      assert {:ok, %{content: @content}} = Notes.get_note(ctx.user, ctx.vault, "Body.md")
-      assert {:ok, @content} = Notes.authoritative_content(ctx.user, ctx.note)
+      note = read!(ctx.user.id, ctx.note.id, NoteBody.note_fields())
+      assert note.content_ciphertext == nil
+      assert note.crdt_state_ciphertext == nil
     end
 
     test "crdt_head is the body's digest in the notes column's base64", ctx do

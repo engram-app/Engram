@@ -76,14 +76,17 @@ defmodule Engram.Notes.LockedReadBodyTest do
       Task.async(fn ->
         Sandbox.unboxed_run(Repo, fn ->
           Repo.transaction(fn ->
-            # A checkpoint-shaped write: a new snapshot under a new nonce.
+            # A checkpoint-shaped write: a new snapshot under a new nonce,
+            # the nonce on `notes` and the body in `note_bodies`, as the app
+            # writes it (`NoteBody.put!/2`), in one transaction.
             Repo.query!(
-              "UPDATE notes SET crdt_state_ciphertext = $2, crdt_state_nonce = $3 WHERE id = $1",
-              [Ecto.UUID.dump!(ctx.note.id), ct, nonce]
+              "UPDATE notes SET crdt_state_nonce = $2 WHERE id = $1",
+              [Ecto.UUID.dump!(ctx.note.id), nonce]
             )
 
-            # The app's body write, in the same transaction (`NoteBody.sync!/3`).
-            Engram.Notes.NoteBody.sync!(ctx.note.id, [:crdt_state_ciphertext])
+            Engram.Notes.NoteBody.put!(
+              {ctx.note.id, crdt_state_ciphertext: ct, crdt_state_nonce: nonce}
+            )
 
             send(parent, :locked)
             receive do: (:commit -> :ok)

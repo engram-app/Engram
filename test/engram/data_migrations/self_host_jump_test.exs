@@ -1,11 +1,13 @@
 defmodule Engram.DataMigrations.SelfHostJumpTest do
   @moduledoc """
   A self-hoster jumping from a release before `note_bodies` straight to
-  R8(b2), on one node: every note is pre-split (only the `notes` columns,
-  no body row), and release-B writes land before the ledgers reach them.
-  Run every registered data migration until NoteSplit and NoteBodyColumnsNull
-  are done: every note reads its latest content throughout, and both `notes`
-  ciphertext columns end NULL.
+  R8(c), on one node: every note is pre-split (only the `notes` columns, no
+  body row). The upgrade's migrations run before boot, and migration
+  20261107120000 gives every note its body row, byte for byte what the app
+  writes, so every note reads before any data migration runs. Then writes
+  land before the ledgers reach them; run every registered data migration
+  until NoteSplit and NoteBodyColumnsNull are done: every note reads its
+  latest content throughout, and both `notes` ciphertext columns end NULL.
   """
   use Engram.DataCase, async: false
 
@@ -62,6 +64,17 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
     ).rows
   end
 
+  defp bodies(u) do
+    Repo.query!(
+      """
+      SELECT note_id, user_id, key_version, content_ct, crdt_ct, crdt_head,
+        content_bytes, state_bytes, envelope_legacy
+      FROM note_bodies WHERE user_id = $1 ORDER BY note_id
+      """,
+      [Ecto.UUID.dump!(u.id)]
+    ).rows
+  end
+
   defp run_all do
     for mod <- DataMigrationsRunner.migrations(), do: DataMigrationsRunner.run(mod)
     :ok
@@ -80,6 +93,8 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
     _ = write!(u, v, "moved.md", "moved text")
     {:ok, _} = Notes.rename_note(u, v, "moved.md", "Dir/moved.md")
     pre_split!(u)
+    # The upgrade's migrations, before boot.
+    Engram.Fixtures.complete_split!()
 
     expected = %{
       "edited.md" => "old text",
@@ -108,5 +123,32 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
 
     for {path, text} <- Map.delete(expected, "board.md"), do: assert(read!(u, v, path) == text)
     assert read!(u, v, "board.md") =~ "checkpointed"
+  end
+
+  test "a pre-split database booted on this release: every note has its body row, byte for byte, and reads before any data migration runs",
+       %{user: u, vault: v} do
+    checkpointed = write!(u, v, "board.md", "board text")
+    :ok = CrdtCheckpoint.checkpoint(u.id, v.id, checkpointed.id, doc_with("checkpointed"))
+    _ = write!(u, v, "plain.md", "plain text")
+    _ = write!(u, v, "moved.md", "moved text")
+    {:ok, _} = Notes.rename_note(u, v, "moved.md", "Dir/moved.md")
+    written = bodies(u)
+    assert length(written) >= 3
+    assert Enum.any?(written, fn row -> Enum.at(row, 4) != nil end), "one CRDT state"
+
+    pre_split!(u)
+    assert bodies(u) == []
+
+    Engram.Fixtures.complete_split!()
+
+    assert bodies(u) == written
+    refute DataMigrations.done?(NoteSplit.name(), NoteSplit.version())
+    assert read!(u, v, "plain.md") == "plain text"
+    assert read!(u, v, "Dir/moved.md") == "moved text"
+    assert read!(u, v, "board.md") =~ "checkpointed"
+
+    # Rerun-safe: a second run (a retried boot) writes nothing.
+    Engram.Fixtures.complete_split!()
+    assert bodies(u) == written
   end
 end

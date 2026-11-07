@@ -1,8 +1,9 @@
 defmodule Engram.Notes.NoteSplitTest do
   # Wave 3: the notes_derive_core_keys trigger keeps the narrow core columns
-  # in step with every write, `NoteBody.sync!/3` (the app's one body writer
-  # since the notes_sync_body trigger was dropped) keeps note_bodies in
-  # step, and the NoteSplit data migration fills rows written before them.
+  # in step with every write, `NoteBody.put!/2` (every writer, since the
+  # notes_sync_body trigger was dropped) keeps note_bodies in step, and the
+  # NoteSplit data migration fills the core columns of rows written before
+  # them (their body rows: migration 20261107120000, before boot).
   # Not async: `NoteSplit.run_pass/1` resumes a node-global walk cursor
   # (`IdWindows.heal_pass/4`), which DataCase resets before each sync test.
   use Engram.DataCase, async: false
@@ -167,7 +168,10 @@ defmodule Engram.Notes.NoteSplitTest do
       else: assert(r["link_keys_v"] == nil)
   end
 
-  test "a merged column (NULL nonce) is followed by its bytes", %{user: u, vault: v} do
+  test "the pre-boot split copies a merged column (NULL nonce) as its bytes", %{
+    user: u,
+    vault: v
+  } do
     note = write!(u, v, "merged.md", "x")
     id = Ecto.UUID.dump!(note.id)
     merged = <<1>> <> :crypto.strong_rand_bytes(40)
@@ -177,13 +181,9 @@ defmodule Engram.Notes.NoteSplitTest do
       [id, merged]
     )
 
-    NoteBody.sync!(note.id, [:content_ciphertext])
+    Repo.query!("DELETE FROM note_bodies WHERE note_id = $1", [id])
+    Engram.Fixtures.complete_split!()
     assert row(note.id)["b_content"] == merged
-
-    merged2 = <<1>> <> :crypto.strong_rand_bytes(40)
-    Repo.query!("UPDATE notes SET content_ciphertext = $2 WHERE id = $1", [id, merged2])
-    NoteBody.sync!(note.id, [:content_ciphertext])
-    assert row(note.id)["b_content"] == merged2
   end
 
   describe "NoteSplit" do
@@ -191,24 +191,43 @@ defmodule Engram.Notes.NoteSplitTest do
       a = write!(u, v, "a.md", "a")
       b = write!(u, v, "b.md", "b")
 
-      # What a pre-trigger row looks like.
-      Repo.query!("DELETE FROM note_bodies WHERE note_id = $1", [Ecto.UUID.dump!(a.id)])
-
-      # Lists no source column, so the derive trigger does not fire.
-      Repo.query!("UPDATE notes SET path_id = NULL, is_folder = NULL WHERE id = $1", [
-        Ecto.UUID.dump!(b.id)
-      ])
+      # What a pre-trigger row looks like. Lists no source column, so the
+      # derive trigger does not fire.
+      for n <- [a, b] do
+        Repo.query!("UPDATE notes SET path_id = NULL, is_folder = NULL WHERE id = $1", [
+          Ecto.UUID.dump!(n.id)
+        ])
+      end
 
       seqs = Enum.map([a, b], &row(&1.id)["seq"])
 
       assert {:more, rows: 2} = NoteSplit.run_pass()
-      assert row(a.id)["has_body"]
-      assert row(b.id)["is_folder"] == false
-      assert Ecto.UUID.load!(row(b.id)["path_id"]) == id16(row(b.id)["path_hmac"])
+
+      for n <- [a, b] do
+        assert row(n.id)["is_folder"] == false
+        assert Ecto.UUID.load!(row(n.id)["path_id"]) == id16(row(n.id)["path_hmac"])
+      end
+
       # A catch-up, not a write: no seq moves.
       assert Enum.map([a, b], &row(&1.id)["seq"]) == seqs
 
       assert :done = NoteSplit.run_pass()
+    end
+
+    # Since R8(c) a body row is the pre-boot migration's to insert (the
+    # `notes` ciphertexts it copies from go away in R8(d)). A note still
+    # without one is a fault: the ledger stays open (the stuck alert names
+    # it) instead of closing over a note that reads empty.
+    test "a note with no body row keeps the ledger open and is not filled", %{
+      user: u,
+      vault: v
+    } do
+      note = write!(u, v, "nobody.md", "x")
+      Repo.query!("DELETE FROM note_bodies WHERE note_id = $1", [Ecto.UUID.dump!(note.id)])
+
+      refute NoteSplit.run_pass() == :done
+      refute NoteSplit.run_pass() == :done
+      refute row(note.id)["has_body"]
     end
 
     # Drift is REPORTED, never repaired: the release that stops writing the
@@ -308,7 +327,10 @@ defmodule Engram.Notes.NoteSplitTest do
     test "a row at the end of the table, every statement one window", %{user: u, vault: v} do
       notes = for i <- 1..9, do: write!(u, v, "w#{i}.md", "w#{i}")
       last = Enum.max_by(notes, & &1.id)
-      Repo.query!("DELETE FROM note_bodies WHERE note_id = $1", [Ecto.UUID.dump!(last.id)])
+
+      Repo.query!("UPDATE notes SET is_folder = NULL WHERE id = $1", [
+        Ecto.UUID.dump!(last.id)
+      ])
 
       {_, queries} =
         QueryRecorder.record(fn ->
@@ -316,7 +338,7 @@ defmodule Engram.Notes.NoteSplitTest do
           assert :done = NoteSplit.run_pass(batch: 2)
         end)
 
-      assert row(last.id)["has_body"]
+      assert row(last.id)["is_folder"] == false
       assert Enum.any?(queries, &(&1.sql =~ "notes"))
       assert QueryRecorder.unwindowed(queries, "notes", 2) == []
     end
@@ -325,12 +347,12 @@ defmodule Engram.Notes.NoteSplitTest do
       notes = for p <- ~w(p1.md p2.md p3.md), do: write!(u, v, p, p)
 
       for n <- notes do
-        Repo.query!("DELETE FROM note_bodies WHERE note_id = $1", [Ecto.UUID.dump!(n.id)])
+        Repo.query!("UPDATE notes SET is_folder = NULL WHERE id = $1", [Ecto.UUID.dump!(n.id)])
       end
 
       # Batches of 2: a full batch, then a short one that ends the pass.
       assert {:more, rows: 3} = NoteSplit.run_pass(batch: 2)
-      assert Enum.all?(notes, &row(&1.id)["has_body"])
+      assert Enum.all?(notes, &(row(&1.id)["is_folder"] == false))
       assert :done = NoteSplit.run_pass(batch: 2)
     end
   end

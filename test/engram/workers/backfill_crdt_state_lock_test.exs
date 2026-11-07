@@ -99,13 +99,14 @@ defmodule Engram.Workers.BackfillCrdtStateLockTest do
       Task.async(fn ->
         Sandbox.unboxed_run(Repo, fn ->
           Repo.transaction(fn ->
-            # A checkpoint: the first snapshot, both copies, one transaction.
+            # A checkpoint: the first snapshot, the nonce on `notes` and the
+            # body in `note_bodies`, one transaction.
             Repo.query!(
-              "UPDATE notes SET crdt_state_ciphertext = $2, crdt_state_nonce = $3 WHERE id = $1",
-              [Ecto.UUID.dump!(ctx.note.id), ct, nonce]
+              "UPDATE notes SET crdt_state_nonce = $2 WHERE id = $1",
+              [Ecto.UUID.dump!(ctx.note.id), nonce]
             )
 
-            NoteBody.sync!(ctx.note.id, [:crdt_state_ciphertext])
+            NoteBody.put!({ctx.note.id, crdt_state_ciphertext: ct, crdt_state_nonce: nonce})
 
             send(parent, :locked)
             receive do: (:commit -> :ok)
