@@ -85,6 +85,7 @@ export default {
 	"Already have an account? {signin}": "Už máte účet? {signin}",
 	"Loading...": "Načítá se…",
 	"An account with this email already exists": "Účet s touto e-mailovou adresou již existuje",
+	"Contact support to restore access.": "Kontaktujte podporu pro obnovení přístupu.",
 	"Billing history": "Historie plateb",
 	"No transactions yet.": "Zatím žádné transakce.",
 	Date: "Datum",
@@ -235,7 +236,6 @@ export default {
 	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
 		"Dosáhli jste limitu zařízení ve svém bezplatném plánu. Odpojte zařízení, které nepoužíváte, abyste mohli připojit toto, nebo upgradujte pro připojení více zařízení.",
 	"Account suspended": "Účet byl pozastaven",
-	"Contact support to restore access.": "Kontaktujte podporu pro obnovení přístupu.",
 	"Account setup incomplete": "Nastavení účtu nebylo dokončeno",
 	"Please complete onboarding.": "Prosím, dokončete registraci.",
 	"Limit reached": "Limit byl dosažen",

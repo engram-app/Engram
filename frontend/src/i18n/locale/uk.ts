@@ -87,6 +87,7 @@ export default {
 	"Loading...": "Завантаження…",
 	"An account with this email already exists":
 		"Обліковий запис з цією електронною адресою вже існує",
+	"Contact support to restore access.": "Зв'яжіться зі службою підтримки, щоб відновити доступ.",
 	"Billing history": "Історія платежів",
 	"No transactions yet.": "Поки немає транзакцій.",
 	Date: "Дата",
@@ -239,7 +240,6 @@ export default {
 	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
 		"Ви досягли ліміту пристроїв у вашому безкоштовному плані. Від'єднайте пристрій, який ви не використовуєте, щоб підключити цей, або оновіть, щоб підключити більше пристроїв.",
 	"Account suspended": "Обліковий запис заблоковано",
-	"Contact support to restore access.": "Зв'яжіться зі службою підтримки, щоб відновити доступ.",
 	"Account setup incomplete": "Налаштування облікового запису не завершено",
 	"Please complete onboarding.": "Будь ласка, завершіть процес налаштування.",
 	"Limit reached": "Ліміт досягнуто",

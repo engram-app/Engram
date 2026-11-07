@@ -86,6 +86,7 @@ export default {
 	"Already have an account? {signin}": "Sudah memiliki akun? {signin}",
 	"Loading...": "Memuat...",
 	"An account with this email already exists": "Akun dengan email ini sudah ada",
+	"Contact support to restore access.": "Hubungi dukungan untuk memulihkan akses.",
 	"Billing history": "Riwayat pembayaran",
 	"No transactions yet.": "Belum ada transaksi.",
 	Date: "Tanggal",
@@ -226,7 +227,6 @@ export default {
 	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
 		"Anda telah mencapai batas perangkat pada paket Gratis Anda. Putuskan sambungan perangkat yang tidak Anda gunakan untuk menghubungkan perangkat ini, atau lakukan upgrade untuk menghubungkan lebih banyak perangkat.",
 	"Account suspended": "Akun ditangguhkan",
-	"Contact support to restore access.": "Hubungi dukungan untuk memulihkan akses.",
 	"Account setup incomplete": "Pengaturan akun belum selesai",
 	"Please complete onboarding.": "Silakan selesaikan proses pengaturan awal.",
 	"Limit reached": "Batas tercapai",

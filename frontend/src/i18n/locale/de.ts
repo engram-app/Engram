@@ -88,6 +88,8 @@ export default {
 	"Already have an account? {signin}": "Hast du bereits ein Konto? {signin}",
 	"Loading...": "Lädt...",
 	"An account with this email already exists": "Ein Konto mit dieser E-Mail existiert bereits",
+	"Contact support to restore access.":
+		"Kontaktiere den Support, um den Zugriff wiederherzustellen.",
 	"Billing history": "Abrechnungshistorie",
 	"No transactions yet.": "Noch keine Transaktionen.",
 	Date: "Datum",
@@ -235,8 +237,6 @@ export default {
 	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
 		"Du hast das Geräte-Limit deines kostenlosen Plans erreicht. Trenne ein Gerät, das du nicht benutzt, um dieses anzuschließen, oder upgrade, um mehr Geräte anzuschließen.",
 	"Account suspended": "Konto gesperrt",
-	"Contact support to restore access.":
-		"Kontaktiere den Support, um den Zugriff wiederherzustellen.",
 	"Account setup incomplete": "Kontoeinrichtung nicht abgeschlossen",
 	"Please complete onboarding.": "Bitte schließe die Einrichtung ab.",
 	"Limit reached": "Limit erreicht",

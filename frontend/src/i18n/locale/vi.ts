@@ -84,6 +84,7 @@ export default {
 	"Already have an account? {signin}": "Đã có tài khoản? {signin}",
 	"Loading...": "Đang tải...",
 	"An account with this email already exists": "Đã có tài khoản với email này",
+	"Contact support to restore access.": "Liên hệ bộ phận hỗ trợ để khôi phục quyền truy cập.",
 	"Billing history": "Lịch sử thanh toán",
 	"No transactions yet.": "Chưa có giao dịch nào.",
 	Date: "Ngày",
@@ -221,7 +222,6 @@ export default {
 	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
 		"Bạn đã đạt giới hạn thiết bị trên gói Free. Hủy kết nối một thiết bị bạn không sử dụng để kết nối thiết bị này, hoặc nâng cấp để kết nối nhiều thiết bị hơn.",
 	"Account suspended": "Tài khoản đã bị đình chỉ",
-	"Contact support to restore access.": "Liên hệ bộ phận hỗ trợ để khôi phục quyền truy cập.",
 	"Account setup incomplete": "Thiết lập tài khoản chưa hoàn tất",
 	"Please complete onboarding.": "Vui lòng hoàn tất quá trình hướng dẫn.",
 	"Limit reached": "Đã đạt giới hạn",
