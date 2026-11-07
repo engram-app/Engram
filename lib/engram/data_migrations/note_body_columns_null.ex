@@ -57,9 +57,9 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
 
   alias Engram.Backfill.IdWindows
   alias Engram.Cluster.Readiness
+  alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Notes.NoteBody
-  alias Engram.Logger.Metadata
   alias Engram.Repo
 
   require Logger

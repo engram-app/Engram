@@ -609,7 +609,10 @@ defmodule Engram.Fixtures do
   boot) on the test's sandbox connection, as an upgrade runs it.
   """
   def complete_split! do
-    Code.require_file("priv/repo/migrations/20261107120000_note_bodies_complete_split_migrate.exs")
+    Code.require_file(
+      "priv/repo/migrations/20261107120000_note_bodies_complete_split_migrate.exs"
+    )
+
     # By name at runtime: migrations are not compiled with the app.
     mod = String.to_existing_atom("Elixir.Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate")
     mod.complete_split(Engram.Repo)

@@ -129,7 +129,9 @@ defmodule Engram.Notes.NoteBody do
   # (migration 20261107120000).
   @sync_sql (for head? <- [false, true], into: %{} do
                {set, diff} =
-                 if head?, do: {",\n      crdt_head = #{head}", " OR #{head_differs}"}, else: {"", ""}
+                 if head?,
+                   do: {",\n      crdt_head = #{head}", " OR #{head_differs}"},
+                   else: {"", ""}
 
                {head?,
                 """
@@ -439,7 +441,12 @@ defmodule Engram.Notes.NoteBody do
 
   defp head_bytes(_), do: nil
 
-  @ciphertext_cols [:content_ciphertext, :content_nonce, :crdt_state_ciphertext, :crdt_state_nonce]
+  @ciphertext_cols [
+    :content_ciphertext,
+    :content_nonce,
+    :crdt_state_ciphertext,
+    :crdt_state_nonce
+  ]
 
   # True when `written` names the head; a ciphertext column raises.
   defp synced_fields(written) when is_map(written), do: synced_fields(Map.keys(written))
