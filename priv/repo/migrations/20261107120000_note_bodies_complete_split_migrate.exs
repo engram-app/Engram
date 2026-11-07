@@ -31,12 +31,22 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   policy has no `TO` clause, so it applies to the owner too. No table lock
   is taken (the `NO FORCE` pattern would hold ACCESS EXCLUSIVE on `notes`
   for every window). Each user's walk ends with a check in the same
-  context: a note of that user still without a body row raises.
+  context: a note of that user that still reads with no body logs a
+  warning. Never a raise: a raising migration blocks every boot (zero
+  operator action). The insert takes every `kind = 'note'` row of the
+  user, tombstones and NULL-nonce rows included (their envelopes, NULL or
+  merged, copied as they are); folder rows have no body. The one row it can
+  skip is a note whose body row exists under another owner (drift; ON
+  CONFLICT keeps it): every read joins on the owner, so that note reads
+  with a NULL body, and `Engram.Bookkeeping.Canary` reports it as owner
+  drift (`NoteBody.drift_ids/2`).
 
   Prod (2026-11-07): 0 notes without a body row, so it inserts nothing; it
   reads each user's note ids once. Rerun-safe; no `down` work (the rows
   are what every release from 0.76 on writes). Calls no app module.
   """
+
+  require Logger
 
   @window 1_000
 
@@ -78,10 +88,13 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   SELECT (SELECT id FROM w ORDER BY id DESC LIMIT 1), (SELECT count(*) FROM ins)::int
   """
 
+  # Notes of the user that read with no body: no body row of the same
+  # owner (`NoteBody.join/1` matches the owner too). The same answer with or
+  # without RLS bypass.
   @left """
   SELECT count(*)::int FROM notes n
   WHERE n.user_id = $1 AND n.kind = 'note'
-    AND NOT EXISTS (SELECT 1 FROM note_bodies x WHERE x.note_id = n.id)
+    AND NOT EXISTS (SELECT 1 FROM note_bodies x WHERE x.note_id = n.id AND x.user_id = n.user_id)
   """
 
   def up, do: complete_split(repo())
@@ -106,9 +119,13 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   defp user!(repo, user_id) do
     walk(repo, user_id, <<0::128>>)
 
+    # A warning, never a raise: a raising migration blocks every boot.
     case tenant(repo, user_id, fn -> repo.query!(@left, [user_id]).rows end) do
-      [[0]] -> :ok
-      [[n]] -> raise "note_bodies split incomplete: #{n} notes of a user have no body row"
+      [[0]] ->
+        :ok
+
+      [[n]] ->
+        Logger.warning("note_bodies split incomplete: #{n} notes of a user have no body row")
     end
   end
 

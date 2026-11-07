@@ -151,4 +151,21 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
     Engram.Fixtures.complete_split!()
     assert bodies(u) == written
   end
+
+  # The one note the insert can skip: its body row exists but is owned by
+  # another user (drift), so the tenant policy hides it and ON CONFLICT DO
+  # NOTHING keeps it. A raising migration would block every boot; this one
+  # warns and boots, and the Canary reports the row as owner drift.
+  test "a body row owned by another user warns, does not block boot", %{user: u, vault: v} do
+    import ExUnit.CaptureLog
+    note = write!(u, v, "owned.md", "owned text")
+
+    Repo.query!("UPDATE note_bodies SET user_id = $2 WHERE note_id = $1", [
+      Ecto.UUID.dump!(note.id),
+      Ecto.UUID.dump!(insert(:user).id)
+    ])
+
+    log = capture_log([level: :warning], fn -> assert :ok = Engram.Fixtures.complete_split!() end)
+    assert log =~ "note_bodies split incomplete"
+  end
 end
