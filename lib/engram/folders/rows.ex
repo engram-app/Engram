@@ -78,6 +78,10 @@ defmodule Engram.Folders.Rows do
     Envelope.decrypt(ct, nonce, dek, aad)
   end
 
+  @doc "The parent path of `path` (\"\" for a folder at the root)."
+  @spec parent_path(String.t()) :: String.t()
+  def parent_path(path), do: path |> String.split("/") |> Enum.drop(-1) |> Enum.join("/")
+
   @doc "Every ancestor path of `path`, shallowest first, `path` itself last."
   @spec prefixes(String.t()) :: [String.t()]
   def prefixes(path) do
@@ -286,13 +290,6 @@ defmodule Engram.Folders.Rows do
         do: Map.put(ids, path, id),
         else: Map.put(ids, path, step(ctx, parent, path, marker, 3, false))
     end)
-  end
-
-  defp parent_path(path) do
-    case String.split(path, "/") do
-      [_only] -> nil
-      segments -> segments |> Enum.drop(-1) |> Enum.join("/")
-    end
   end
 
   defp live_ids_by_path_hmac(_vault_id, []), do: %{}
@@ -593,8 +590,7 @@ defmodule Engram.Folders.Rows do
   @spec decrypt_tree(binary(), [map()]) :: [map()]
   def decrypt_tree(dek, rows) do
     named =
-      for r <- rows,
-          {:ok, name} <- [decrypt_name(dek, r.id, r.dek_version, r.ct, r.nonce)],
+      for {r, {:ok, name}} <- Enum.zip(rows, decrypt_names(dek, rows)),
           into: %{},
           do: {r.id, %{id: r.id, parent_id: r.parent_id, name: name}}
 
@@ -602,6 +598,25 @@ defmodule Engram.Folders.Rows do
     # parents (preorder: parents first). A cycle never links to the root, so
     # it is never reached. Recursion is as deep as the tree.
     named |> Map.values() |> Enum.group_by(& &1.parent_id) |> place(nil, "")
+  end
+
+  # `live_rows/1`'s names in one native call (`Envelope.decrypt_many/3`, the
+  # batch the manifest's paths use), `{:ok, name} | :error` per row. The batch
+  # is all-or-nothing, so a row that will not open sends the page through the
+  # per-row decrypt, which skips just that row.
+  defp decrypt_names(dek, rows) do
+    bound = Crypto.row_version_aad_bound()
+
+    fields =
+      Enum.map(rows, fn r ->
+        {Ecto.UUID.dump!(r.id), is_integer(r.dek_version) and r.dek_version >= bound, r.ct,
+         r.nonce}
+      end)
+
+    case Envelope.decrypt_many(dek, Crypto.aad_prefix(:folders, :name), fields) do
+      {:ok, names} -> Enum.map(names, &{:ok, &1})
+      :error -> Enum.map(rows, &decrypt_name(dek, &1.id, &1.dek_version, &1.ct, &1.nonce))
+    end
   end
 
   defp place(children, parent, prefix) do
@@ -741,7 +756,7 @@ defmodule Engram.Folders.Rows do
   @spec check_move(map(), Ecto.UUID.t(), String.t(), String.t()) ::
           :ok | {:error, :invalid_path}
   def check_move(user, vault_id, old_folder, new_folder) do
-    parent_path = new_folder |> String.split("/") |> Enum.drop(-1) |> Enum.join("/")
+    parent_path = parent_path(new_folder)
 
     cond do
       old_folder == "" or new_folder == "" ->
@@ -779,7 +794,7 @@ defmodule Engram.Folders.Rows do
 
   defp move_subtree(ctx, [root | _] = rows, new_folder) do
     new_segment = new_folder |> String.split("/") |> List.last()
-    parent_path = new_folder |> String.split("/") |> Enum.drop(-1) |> Enum.join("/")
+    parent_path = parent_path(new_folder)
 
     new_parent =
       if parent_path == "", do: nil, else: resolve_all(ctx, %{parent_path => nil})[parent_path]

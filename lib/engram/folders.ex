@@ -208,6 +208,15 @@ defmodule Engram.Folders do
   transaction. The counts carry `seq:`, the op's seq, when the folder-op wire
   is on (`Engram.Folders.Wire.changed/4`), else nil. `origin_device_id:`
   names the device that asked, for its `folder_changed` echo.
+
+  `expect: {folder_id, parent_id}` (the folder-op wire, which names folders
+  by id): under the folder lock, before anything moves, the live rows at
+  `old_folder` and at `new_folder`'s parent must still be those ids (nil
+  parent: the root), else `{:error, :not_found}` and nothing changes. The
+  caller resolved the ids to paths before the lock; a move racing in between
+  would otherwise move whatever now sits at the old path, or reparent under
+  a new row at the parent's old path. One read, O(1). With it, a folder row
+  that holds no note and no marker (its last note was deleted) moves too.
   """
   @spec rename(map(), map(), String.t(), String.t(), keyword()) ::
           {:ok, %{notes: non_neg_integer(), attachments: non_neg_integer(), seq: integer() | nil}}
@@ -225,8 +234,12 @@ defmodule Engram.Folders do
          :ok <- refuse_own_subtree(String.trim_trailing(old_folder, "/"), new_folder),
          {:ok, att_pairs} <-
            Attachments.folder_rename_pairs(user, vault, old_folder, new_folder) do
+      expect = opts[:expect]
+
       atomic(vault, fn ->
-        with {:ok, notes} <- Notes.rename_folder(user, vault, old_folder, new_folder),
+        with :ok <- check_expected(user, vault, old_folder, new_folder, expect),
+             {:ok, notes} <- Notes.rename_folder(user, vault, old_folder, new_folder),
+             :ok <- move_bare_row(user, vault, old_folder, new_folder, notes, expect),
              {:ok, atts} <- Attachments.move_folder_pairs(user, vault, att_pairs) do
           seq = Wire.changed(user, vault, [new_folder], opts[:origin_device_id])
           {:ok, %{notes: notes, attachments: atts, seq: seq}}
@@ -234,6 +247,29 @@ defmodule Engram.Folders do
       end)
     end
   end
+
+  defp check_expected(_user, _vault, _old, _new, nil), do: :ok
+
+  defp check_expected(user, vault, old, new, {id, parent_id}) do
+    parent = Rows.parent_path(new)
+    ids = Repo.with_tenant!(user.id, fn -> Rows.ids_by_path(user, vault.id, [old, parent]) end)
+
+    if ids[old] == id and ids[parent] == parent_id, do: :ok, else: {:error, :not_found}
+  end
+
+  # The notes leg moves the folder row only when something under the path is
+  # a note or marker. A bare row (a path-made folder whose notes are all gone)
+  # still has an id the wire hands out, so the wire moves it here, under the
+  # vault seq lock like every folder write. REST and MCP keep today's 404
+  # for such a folder (no `expect:`).
+  defp move_bare_row(user, vault, old, new, 0, {_id, _parent}) do
+    Repo.with_tenant!(user.id, fn ->
+      _ = Vaults.next_seq!(vault.id)
+      Rows.rename(user, vault.id, old, new)
+    end)
+  end
+
+  defp move_bare_row(_user, _vault, _old, _new, _notes, _expect), do: :ok
 
   defp refuse_own_subtree(old, new) do
     if old != new and Rows.into_own_subtree?(old, new), do: {:error, :invalid_path}, else: :ok
