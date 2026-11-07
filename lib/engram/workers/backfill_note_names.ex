@@ -8,8 +8,9 @@ defmodule Engram.Workers.BackfillNoteNames do
 
   ## Pace
 
-  A hop fixes at most `NoteName.max_rows/0` rows (default 500) or works 30 s,
-  whichever is first, then schedules its successor 45 s out with its cursor in
+  A hop (`Engram.Backfill.PacedChain.walk/5`) fixes at most
+  `NoteName.max_rows/0` rows (default 500) or works 30 s, whichever is first,
+  then schedules its successor 45 s out with its cursor in
   the args, so the lane (`:crdt_backfill`, concurrency 1) is free between
   hops and the database sees short bursts: about 600 rows a minute at most.
   ~67k prod notes plus their tombstones and attachments: about 2-3 h. A window
@@ -31,7 +32,8 @@ defmodule Engram.Workers.BackfillNoteNames do
   At the end of the last table: a walk that fixed rows starts a new walk; a
   walk that fixed nothing and left nothing marks the ledger done; a walk that
   only left rows stops the chain (the next hourly runner pass starts a new
-  one).
+  one). The kill switch is read before every window: off stops the hop at
+  once, with no successor.
   """
   use Oban.Worker,
     queue: :crdt_backfill,
@@ -43,7 +45,7 @@ defmodule Engram.Workers.BackfillNoteNames do
 
   alias Engram.Accounts.User
   alias Engram.Attachments.Attachment
-  alias Engram.Backfill.IdWindows
+  alias Engram.Backfill.{IdWindows, PacedChain}
   alias Engram.Crypto
   alias Engram.Crypto.{Envelope, PathCrypto, RotationGate}
   alias Engram.DataMigrations
@@ -98,7 +100,7 @@ defmodule Engram.Workers.BackfillNoteNames do
     o = %{
       max_rows: Keyword.get(opts, :max_rows, NoteName.max_rows()),
       batch: Keyword.get(opts, :batch_size, @batch_size),
-      deadline: System.monotonic_time(:millisecond) + Keyword.get(opts, :budget_ms, @budget_ms)
+      deadline: PacedChain.deadline(Keyword.get(opts, :budget_ms, @budget_ms))
     }
 
     result = walk(st, o)
@@ -112,35 +114,28 @@ defmodule Engram.Workers.BackfillNoteNames do
     table = Enum.at(@tables, st.t)
 
     step = fn ids, ctx, st ->
-      # Every hop processes at least one window, so it always progresses.
-      if st.windows > 0 and
-           (st.hop_fixed >= o.max_rows or System.monotonic_time(:millisecond) > o.deadline) do
-        {:halt, Map.put(st, :stop, true)}
-      else
-        {fixed, left} = heal_window(table, ids, ctx)
+      {fixed, left} = heal_window(table, ids, ctx)
 
-        {:cont,
-         %{
-           st
-           | hop_fixed: st.hop_fixed + fixed,
-             windows: st.windows + 1,
-             walk_fixed: st.walk_fixed or fixed > 0,
-             walk_left: st.walk_left or left,
-             from: {ctx.user_id, List.last(ids)}
-         }}
-      end
+      %{
+        st
+        | hop_fixed: st.hop_fixed + fixed,
+          windows: st.windows + 1,
+          walk_fixed: st.walk_fixed or fixed > 0,
+          walk_left: st.walk_left or left
+      }
     end
 
-    {:ok, st} =
-      IdWindows.reduce_all(schema(table), st, step,
-        from: st.from,
-        batch_size: o.batch,
-        fun_in_tenant: false
-      )
+    stop? = fn st -> st.hop_fixed >= o.max_rows or PacedChain.past?(o.deadline) end
 
-    case Map.pop(st, :stop) do
-      {true, st} -> {{:next, args(st)}, st}
-      {nil, st} -> walk(%{st | t: st.t + 1, from: nil}, o)
+    case PacedChain.walk(schema(table), st.from, st, step,
+           stop?: stop?,
+           continue?: &NoteName.enabled?/0,
+           batch_size: o.batch,
+           fun_in_tenant: false
+         ) do
+      {:aborted, st} -> {:stopped, st}
+      {:stopped, at, st} -> {{:next, args(%{st | from: at})}, st}
+      {:walked, st} -> walk(%{st | t: st.t + 1, from: nil}, o)
     end
   end
 
@@ -217,7 +212,12 @@ defmodule Engram.Workers.BackfillNoteNames do
     from(f in Folder,
       where:
         not is_nil(f.name_ciphertext) and
-          fragment("? IS DISTINCT FROM (? || ?::bytea)", f.name_stamp, f.name_nonce, ^Name.version()),
+          fragment(
+            "? IS DISTINCT FROM (? || ?::bytea)",
+            f.name_stamp,
+            f.name_nonce,
+            ^Name.version()
+          ),
       select: %{
         id: f.id,
         user_id: f.user_id,
@@ -232,7 +232,12 @@ defmodule Engram.Workers.BackfillNoteNames do
     from(r in schema(table),
       where:
         not is_nil(r.path_ciphertext) and
-          fragment("? IS DISTINCT FROM (? || ?::bytea)", r.name_stamp, r.path_nonce, ^Name.version()),
+          fragment(
+            "? IS DISTINCT FROM (? || ?::bytea)",
+            r.name_stamp,
+            r.path_nonce,
+            ^Name.version()
+          ),
       select: %{
         id: r.id,
         user_id: r.user_id,
