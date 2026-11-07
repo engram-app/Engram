@@ -104,15 +104,17 @@ defmodule Engram.DataMigrations.FolderTableLockTest do
 
     # A reference written before `folder_ref_live_only` (20261107090000),
     # which now turns a new one to a dead row into NULL: replay it with the
-    # triggers off (an operator restore's `replica` role), then back on.
-    Repo.query!("SET LOCAL session_replication_role = replica")
+    # triggers off (an operator restore's `replica` role) in one transaction
+    # (this file runs on real connections: SET LOCAL needs one).
+    {:ok, _} =
+      Repo.transaction(fn ->
+        Repo.query!("SET LOCAL session_replication_role = replica")
 
-    Repo.query!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [
-      Ecto.UUID.dump!(note.id),
-      Ecto.UUID.dump!(dead)
-    ])
-
-    Repo.query!("SET LOCAL session_replication_role = origin")
+        Repo.query!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [
+          Ecto.UUID.dump!(note.id),
+          Ecto.UUID.dump!(dead)
+        ])
+      end)
 
     test = self()
 

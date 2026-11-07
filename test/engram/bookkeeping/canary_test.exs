@@ -138,12 +138,17 @@ defmodule Engram.Bookkeeping.CanaryTest do
       dead = folder_id(u, "F")
       Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(dead)])
 
-      # `folders_release_refs` NULLs it on the delete; a row written before
-      # that trigger can still name the dead row, and the canary must see it.
+      # `folders_release_refs` NULLs it on the delete, and `folder_ref_live_only`
+      # NULLs one written after; a row written before both (replayed here with
+      # triggers off) can still name the dead row, and the canary must see it.
+      Repo.query!("SET LOCAL session_replication_role = replica")
+
       Repo.query!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [
         Ecto.UUID.dump!(n.id),
         Ecto.UUID.dump!(dead)
       ])
+
+      Repo.query!("SET LOCAL session_replication_role = origin")
 
       assert drift_of(Canary.run()) == %{folder_ref: 1}
     end
