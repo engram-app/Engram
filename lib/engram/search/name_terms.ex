@@ -76,11 +76,12 @@ defmodule Engram.Search.NameTerms do
     * note or folder delete: delete at most 32 rows, one stamp write.
     * index pass: the read; writes only when the title's terms changed.
     * search, constant in vault size and in notes per folder:
-      - at most #{16} query terms x 2 kinds x #{500} LIVE postings each
-        (notes and folders have separate budgets; each posting is one
-        primary-key probe of its ref, so dead rows are skipped inside the
-        bound and never fill it; delete hooks and the orphan sweep keep them
-        near zero);
+      - at most #{16} query terms x 2 kinds x #{2_000} postings scanned
+        (index order), each one primary-key probe of its ref, of which at
+        most #{500} live ones count (notes and folders have separate budgets;
+        dead rows never fill the live budget; past #{2_000} dead rows on one
+        term a live ref can be missed, counted as `scan_capped`, until the
+        delete hooks or the orphan sweep remove them);
       - one exact-name probe;
       - folders: at most #{200} descendant folders, at most #{32} levels, one
         query per level; then at most #{50} notes per folder, cut to #{50};
@@ -132,6 +133,7 @@ defmodule Engram.Search.NameTerms do
   @max_query_terms 16
   @postings 500
   @k 50
+  @scan_cap 2_000
   @max_folders 200
   @max_depth 32
   @rrf_k 2
@@ -718,49 +720,69 @@ defmodule Engram.Search.NameTerms do
 
   @doc """
   The top #{50} live refs of `kind` (0 notes, 1 folders) for `dims` in
-  `vault_ids`, `{ref_id, matched terms}` best first. Each dim reads at most
-  #{500} LIVE postings of that kind: notes and folders have separate budgets,
-  and a dead ref's posting is skipped inside the bounded read (a primary-key
-  probe of the ref), so dead rows can never fill it. Runs in the caller's
-  tenant.
+  `vault_ids`, `{ref_id, matched terms}` best first. Per dim at most #{2_000}
+  postings of that kind are SCANNED (index order), each probed for liveness
+  by its ref's primary key, and at most #{500} live ones count: notes and
+  folders have separate budgets, and dead rows can never fill the live
+  budget. A dim whose scan hits #{2_000} before #{500} live postings is
+  counted in `[:engram, :search, :name_terms, :scan_capped]`: past that
+  many dead rows a live ref may be missed until the delete hooks or the
+  drain's orphan sweep remove them. Runs in the caller's tenant.
   """
   @spec hits([Ecto.UUID.t()], [integer()], 0 | 1) :: [{Ecto.UUID.t(), pos_integer()}]
-  def hits(vault_ids, dims, kind), do: vault_ids |> hits_query(dims, kind) |> Repo.all()
+  def hits(vault_ids, dims, kind) do
+    per_dim = vault_ids |> hits_query(dims, kind) |> Repo.all()
+
+    capped =
+      Enum.count(per_dim, fn {scanned, live} ->
+        scanned == @scan_cap and length(live) < @postings
+      end)
+
+    if capped > 0,
+      do:
+        :telemetry.execute([:engram, :search, :name_terms, :scan_capped], %{count: capped}, %{
+          kind: kind
+        })
+
+    per_dim
+    |> Enum.flat_map(fn {_scanned, live} -> Enum.take(live, @postings) end)
+    |> Enum.frequencies()
+    |> Enum.sort_by(fn {id, n} -> {-n, id} end)
+    |> Enum.take(@k)
+  end
 
   @doc false
-  # The query `hits/3` runs (its plan test reads it).
+  # Per dim: `{postings scanned, live ref ids}` (the query `hits/3` runs;
+  # its plan test reads it).
   def hits_query(vault_ids, dims, kind) do
+    {schema, live} =
+      if kind == @note,
+        do: {Note, dynamic([n: n], n.kind == "note" and is_nil(n.deleted_at))},
+        else: {Folder, dynamic([n: n], is_nil(n.deleted_at))}
+
     from(q in fragment("SELECT unnest(?::int4[]) AS dim", ^dims),
       as: :q,
-      inner_lateral_join: t in subquery(postings(vault_ids, kind)),
+      inner_lateral_join: x in subquery(scan(vault_ids, kind)),
       on: true,
-      group_by: t.ref_id,
-      order_by: [desc: count(t.ref_id), asc: t.ref_id],
-      limit: ^@k,
-      select: {t.ref_id, count(t.ref_id)}
+      left_join: n in ^schema,
+      as: :n,
+      on: n.id == x.ref_id and ^live,
+      group_by: field(q, :dim),
+      select:
+        {count(x.ref_id),
+         type(
+           fragment("coalesce((array_agg(?) FILTER (WHERE ? IS NOT NULL))[1:?], '{}')", x.ref_id, n.id, ^@postings),
+           {:array, Ecto.UUID}
+         )}
     )
   end
 
-  defp postings(vault_ids, @note) do
+  defp scan(vault_ids, kind) do
     from(r in Row,
-      join: n in Note,
-      on: n.id == r.ref_id and n.kind == "note" and is_nil(n.deleted_at),
       where:
-        r.vault_id in ^vault_ids and r.ref_kind == @note and
+        r.vault_id in ^vault_ids and r.ref_kind == ^kind and
           r.dim == field(parent_as(:q), :dim),
-      limit: ^@postings,
-      select: %{ref_id: r.ref_id}
-    )
-  end
-
-  defp postings(vault_ids, @folder) do
-    from(r in Row,
-      join: f in Folder,
-      on: f.id == r.ref_id and is_nil(f.deleted_at),
-      where:
-        r.vault_id in ^vault_ids and r.ref_kind == @folder and
-          r.dim == field(parent_as(:q), :dim),
-      limit: ^@postings,
+      limit: ^@scan_cap,
       select: %{ref_id: r.ref_id}
     )
   end
@@ -771,7 +793,7 @@ defmodule Engram.Search.NameTerms do
   which every save writes, so it is not indexed). Bounded on both sides: at most #{200} folders,
   walked breadth first over `folders_parent` (one query per level, at most
   #{32} levels), then at most #{50} notes per folder off
-  `notes_folder_ref_newest`, merged and cut to #{50}. Never reads more than
+  `notes_folder_ref_live_id`, merged and cut to #{50}. Never reads more than
   #{200} x #{50} index entries, however many notes a folder holds.
   """
   @spec under_folders([Ecto.UUID.t()], [Ecto.UUID.t()]) :: [Ecto.UUID.t()]

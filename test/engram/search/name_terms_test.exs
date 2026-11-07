@@ -239,6 +239,48 @@ defmodule Engram.Search.NameTermsTest do
       dead_rows!(ctx.user, ctx.vault, dim, 600)
 
       assert [%{qdrant_id: ^point}] = NameTerms.recall(ctx.user, {:vault, ctx.vault}, "common")
+      # Through the postings, not only the exact-filename probe.
+      nid = note.id
+      assert [{^nid, 1}] = tenant(ctx.user, fn -> NameTerms.hits([ctx.vault.id], [dim], 0) end)
+    end
+
+    test "3,000 dead rows: the scan stops at its cap, counts it, and the sweep restores recall",
+         ctx do
+      {:ok, fk} = Crypto.dek_filter_key(ctx.user)
+      [dim] = NameTerms.dims(["common"], fk)
+      note = write!(ctx.user, ctx.vault, "common.md")
+      point = indexed!(ctx.user, note)
+      dead_rows!(ctx.user, ctx.vault, dim, 3_000)
+
+      ref = make_ref()
+      test_pid = self()
+
+      :telemetry.attach(
+        "#{inspect(ref)}",
+        [:engram, :search, :name_terms, :scan_capped],
+        fn _e, m, meta, _ -> send(test_pid, {ref, m, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("#{inspect(ref)}") end)
+
+      # Honest limit: 2,000 postings scanned, all dead, before the live one.
+      # Bounded and counted; the note's exact-filename probe still finds it.
+      assert [%{qdrant_id: ^point}] = NameTerms.recall(ctx.user, {:vault, ctx.vault}, "common")
+      assert_received {^ref, %{count: 1}, %{kind: 0}}
+      assert tenant(ctx.user, fn -> NameTerms.hits([ctx.vault.id], [dim], 0) end) == []
+
+      # The orphan sweep removes the dead rows; the term reads the note again.
+      sweep = fn sweep, after_id ->
+        case tenant(ctx.user, fn -> NameTerms.sweep_orphans(Repo, after_id) end) do
+          {500, last, _} -> sweep.(sweep, last)
+          _ -> :ok
+        end
+      end
+
+      sweep.(sweep, nil)
+      assert [{id, 1}] = tenant(ctx.user, fn -> NameTerms.hits([ctx.vault.id], [dim], 0) end)
+      assert id == note.id
     end
   end
 
@@ -360,7 +402,7 @@ defmodule Engram.Search.NameTermsTest do
       end
     end
 
-    test "folder notes read notes_folder_ref_newest", ctx do
+    test "folder notes read notes_folder_ref_live_id", ctx do
       {sql, _} =
         Repo.to_sql(
           :all,
@@ -375,7 +417,7 @@ defmodule Engram.Search.NameTermsTest do
         )
 
       plan = QueryPlan.generic_plan(sql, analyze: ["notes"])
-      assert plan =~ "notes_folder_ref_newest", plan
+      assert plan =~ "notes_folder_ref_live_id", plan
     end
   end
 
