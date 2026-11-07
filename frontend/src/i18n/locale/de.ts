@@ -5,6 +5,8 @@ export default {
 		"Du hast dein Notizlimit erreicht — aktualisiere dein Abonnement, um mehr hinzuzufügen.",
 	"Changes can't be saved: your account can't sync right now.":
 		"Änderungen können nicht gespeichert werden: Dein Konto kann derzeit nicht synchronisiert werden.",
+	"Folder too large to rename here (more than {limit} items). Rename it in Obsidian.":
+		"Der Ordner ist zu groß, um ihn hier umzubenennen (mehr als {limit} Elemente). Benenne ihn in Obsidian um.",
 	"A note with that name already exists.": "Eine Notiz mit diesem Namen existiert bereits.",
 	"A folder with that name already exists.": "Ein Ordner mit diesem Namen existiert bereits.",
 	"A file with that name already exists.": "Eine Datei mit diesem Namen existiert bereits.",
@@ -88,6 +90,8 @@ export default {
 	"Already have an account? {signin}": "Hast du bereits ein Konto? {signin}",
 	"Loading...": "Lädt...",
 	"An account with this email already exists": "Ein Konto mit dieser E-Mail existiert bereits",
+	"Contact support to restore access.":
+		"Kontaktiere den Support, um den Zugriff wiederherzustellen.",
 	"Billing history": "Abrechnungshistorie",
 	"No transactions yet.": "Noch keine Transaktionen.",
 	Date: "Datum",
@@ -235,8 +239,6 @@ export default {
 	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
 		"Du hast das Geräte-Limit deines kostenlosen Plans erreicht. Trenne ein Gerät, das du nicht benutzt, um dieses anzuschließen, oder upgrade, um mehr Geräte anzuschließen.",
 	"Account suspended": "Konto gesperrt",
-	"Contact support to restore access.":
-		"Kontaktiere den Support, um den Zugriff wiederherzustellen.",
 	"Account setup incomplete": "Kontoeinrichtung nicht abgeschlossen",
 	"Please complete onboarding.": "Bitte schließe die Einrichtung ab.",
 	"Limit reached": "Limit erreicht",

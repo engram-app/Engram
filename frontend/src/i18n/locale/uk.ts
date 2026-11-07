@@ -5,6 +5,8 @@ export default {
 		"Ви досягли ліміту нотаток — оновіть підписку, щоб додати більше.",
 	"Changes can't be saved: your account can't sync right now.":
 		"Зміни не вдалося зберегти: ваш обліковий запис не може синхронізуватися зараз.",
+	"Folder too large to rename here (more than {limit} items). Rename it in Obsidian.":
+		"Папка занадто велика для перейменування тут (більше ніж {limit} елементів). Перейменуйте її в Obsidian.",
 	"A note with that name already exists.": "Замітка з таким іменем вже існує.",
 	"A folder with that name already exists.": "Папка з таким іменем вже існує.",
 	"A file with that name already exists.": "Файл з таким іменем вже існує.",
@@ -87,6 +89,7 @@ export default {
 	"Loading...": "Завантаження…",
 	"An account with this email already exists":
 		"Обліковий запис з цією електронною адресою вже існує",
+	"Contact support to restore access.": "Зв'яжіться зі службою підтримки, щоб відновити доступ.",
 	"Billing history": "Історія платежів",
 	"No transactions yet.": "Поки немає транзакцій.",
 	Date: "Дата",
@@ -239,7 +242,6 @@ export default {
 	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
 		"Ви досягли ліміту пристроїв у вашому безкоштовному плані. Від'єднайте пристрій, який ви не використовуєте, щоб підключити цей, або оновіть, щоб підключити більше пристроїв.",
 	"Account suspended": "Обліковий запис заблоковано",
-	"Contact support to restore access.": "Зв'яжіться зі службою підтримки, щоб відновити доступ.",
 	"Account setup incomplete": "Налаштування облікового запису не завершено",
 	"Please complete onboarding.": "Будь ласка, завершіть процес налаштування.",
 	"Limit reached": "Ліміт досягнуто",

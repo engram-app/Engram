@@ -21,7 +21,7 @@ defmodule Engram.MCP.ToolError do
     vault_not_found vault_required vault_ambiguous vault_read_only
     path_conflict version_conflict invalid_path invalid_arguments
     note_not_found note_too_large notes_cap_exceeded rate_limited tool_error
-    attachment_not_found section_not_found
+    attachment_not_found section_not_found folder_too_large
   )a
 
   @meta_key "engram.page/error_code"
@@ -42,6 +42,7 @@ defmodule Engram.MCP.ToolError do
           | :tool_error
           | :attachment_not_found
           | :section_not_found
+          | :folder_too_large
   @type t :: String.t() | {code(), String.t()}
   @type result :: %{
           required(String.t()) => boolean() | [map(), ...] | %{String.t() => String.t()}

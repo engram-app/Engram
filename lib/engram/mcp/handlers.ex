@@ -618,6 +618,13 @@ defmodule Engram.MCP.Handlers do
           "new_folder must be a non-empty path outside the folder being renamed"
         )
 
+      # Same copy as the web app's rename toast (frontend/src/api/queries.ts).
+      {:error, {:folder_too_large, limit}} ->
+        ToolError.error(
+          :folder_too_large,
+          "Folder too large to rename here (more than #{limit} items). Rename it in Obsidian."
+        )
+
       # Catch-all (Bug 2): Folders.rename can surface a non-:conflict
       # {:error, reason} (e.g. a crypto failure in the attachment leg). Without
       # this clause it CaseClauseError'd → 500.

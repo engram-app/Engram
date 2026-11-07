@@ -5,6 +5,8 @@ export default {
 		"Dosařili jste limit poznámek – upgradujte pro přidání dalších.",
 	"Changes can't be saved: your account can't sync right now.":
 		"Změny nelze uložit: váš účet nemůže být synchronizován.",
+	"Folder too large to rename here (more than {limit} items). Rename it in Obsidian.":
+		"Složka je příliš velká pro přejmenování zde (více než {limit} položek). Přejmenujte ji v Obsidian.",
 	"A note with that name already exists.": "Poznámka s tímto názvem již existuje.",
 	"A folder with that name already exists.": "Složka s tímto názvem již existuje.",
 	"A file with that name already exists.": "Soubor s tímto názvem již existuje.",
@@ -85,6 +87,7 @@ export default {
 	"Already have an account? {signin}": "Už máte účet? {signin}",
 	"Loading...": "Načítá se…",
 	"An account with this email already exists": "Účet s touto e-mailovou adresou již existuje",
+	"Contact support to restore access.": "Kontaktujte podporu pro obnovení přístupu.",
 	"Billing history": "Historie plateb",
 	"No transactions yet.": "Zatím žádné transakce.",
 	Date: "Datum",
@@ -235,7 +238,6 @@ export default {
 	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
 		"Dosáhli jste limitu zařízení ve svém bezplatném plánu. Odpojte zařízení, které nepoužíváte, abyste mohli připojit toto, nebo upgradujte pro připojení více zařízení.",
 	"Account suspended": "Účet byl pozastaven",
-	"Contact support to restore access.": "Kontaktujte podporu pro obnovení přístupu.",
 	"Account setup incomplete": "Nastavení účtu nebylo dokončeno",
 	"Please complete onboarding.": "Prosím, dokončete registraci.",
 	"Limit reached": "Limit byl dosažen",

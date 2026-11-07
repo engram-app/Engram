@@ -5,6 +5,8 @@ export default {
 		"Has alcanzado el límite de notas. Actualiza para añadir más.",
 	"Changes can't be saved: your account can't sync right now.":
 		"No se pueden guardar los cambios: tu cuenta no puede sincronizarse ahora mismo.",
+	"Folder too large to rename here (more than {limit} items). Rename it in Obsidian.":
+		"La carpeta es demasiado grande para renombrarla aquí (más de {limit} elementos). Renómbrala en Obsidian.",
 	"A note with that name already exists.": "Ya existe una nota con ese nombre.",
 	"A folder with that name already exists.": "Ya existe una carpeta con ese nombre.",
 	"A file with that name already exists.": "Ya existe un archivo con ese nombre.",
@@ -86,6 +88,7 @@ export default {
 	"Already have an account? {signin}": "¿Ya tienes una cuenta? {signin}",
 	"Loading...": "Cargando...",
 	"An account with this email already exists": "Ya existe una cuenta con este correo electrónico",
+	"Contact support to restore access.": "Contacta con soporte para recuperar el acceso.",
 	"Billing history": "Historial de facturación",
 	"No transactions yet.": "Aún no hay transacciones.",
 	Date: "Fecha",
@@ -236,7 +239,6 @@ export default {
 	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
 		"Has alcanzado el límite de dispositivos en tu plan Gratuito. Desconecta un dispositivo que no estés usando para conectar este, o actualiza para conectar más dispositivos.",
 	"Account suspended": "Cuenta suspendida",
-	"Contact support to restore access.": "Contacta con soporte para recuperar el acceso.",
 	"Account setup incomplete": "Configuración de la cuenta incompleta",
 	"Please complete onboarding.": "Completa el proceso de configuración.",
 	"Limit reached": "Límite alcanzado",

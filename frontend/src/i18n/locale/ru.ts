@@ -5,6 +5,8 @@ export default {
 		"Вы достигли лимита заметок — обновите подписку, чтобы добавить больше.",
 	"Changes can't be saved: your account can't sync right now.":
 		"Изменения не могут быть сохранены: в данный момент ваша учётная запись не может синхронизироваться.",
+	"Folder too large to rename here (more than {limit} items). Rename it in Obsidian.":
+		"Папка слишком большая для переименования здесь (более {limit} элементов). Переименуйте её в Obsidian.",
 	"A note with that name already exists.": "Заметка с таким именем уже существует.",
 	"A folder with that name already exists.": "Папка с таким именем уже существует.",
 	"A file with that name already exists.": "Файл с таким именем уже существует.",
@@ -88,6 +90,7 @@ export default {
 	"Loading...": "Загрузка...",
 	"An account with this email already exists":
 		"Учётная запись с этим адресом электронной почты уже существует",
+	"Contact support to restore access.": "Обратитесь в службу поддержки для восстановления доступа.",
 	"Billing history": "История платежей",
 	"No transactions yet.": "Операций пока нет.",
 	Date: "Дата",
@@ -240,7 +243,6 @@ export default {
 	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
 		"Вы достигли лимита устройств для вашего бесплатного плана. Отключите устройство, которым не пользуетесь, чтобы подключить это, или обновите подписку, чтобы подключить больше устройств.",
 	"Account suspended": "Учётная запись заблокирована",
-	"Contact support to restore access.": "Обратитесь в службу поддержки для восстановления доступа.",
 	"Account setup incomplete": "Настройка учётной записи не завершена",
 	"Please complete onboarding.": "Пожалуйста, завершите процесс регистрации.",
 	"Limit reached": "Достигнут лимит",

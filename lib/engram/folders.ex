@@ -38,14 +38,19 @@ defmodule Engram.Folders do
   retry rescans and finishes. Each chunk broadcasts once it commits.
   """
 
+  import Ecto.Query, only: [from: 2, subquery: 1]
+
   alias Engram.Attachments
   alias Engram.Billing
   alias Engram.Crypto
+  alias Engram.Folders.Drift
   alias Engram.Folders.Rows
   alias Engram.Logger.Metadata
   alias Engram.Notes
+  alias Engram.Notes.Keys
   alias Engram.Notes.PathSanitizer
   alias Engram.Repo
+  alias Engram.ServiceConfig
   alias Engram.Sync.Broadcast
   alias Engram.Vaults
   alias Engram.Vector.Qdrant
@@ -209,6 +214,7 @@ defmodule Engram.Folders do
     with {:ok, new_folder} <- PathSanitizer.sanitize_target(new_folder),
          # Never into its own subtree: refused before any scan or write.
          :ok <- refuse_own_subtree(String.trim_trailing(old_folder, "/"), new_folder),
+         :ok <- refuse_too_large(user, vault, [String.trim_trailing(old_folder, "/")]),
          {:ok, att_pairs} <-
            Attachments.folder_rename_pairs(user, vault, old_folder, new_folder) do
       atomic(vault, fn ->
@@ -223,6 +229,79 @@ defmodule Engram.Folders do
   defp refuse_own_subtree(old, new) do
     if old != new and Rows.into_own_subtree?(old, new), do: {:error, :invalid_path}, else: :ok
   end
+
+  # Interim cap (#2492): a rename or move holds the vault lock for its whole
+  # subtree, so one over `:folder_op_max_rows` (a `ServiceConfig` runtime
+  # override, default in config.exs) is refused before any lock, claim or
+  # scan. No decrypt, and every read is bounded by what is left of limit + 1,
+  # stopping once the running sum is over:
+  #
+  #   * the subtree's folder rows (an unordered, LIMITed walk), one item each;
+  #   * notes and attachments placed by reference in those rows;
+  #   * drift notes (`Drift.notes_unresolved/0`) whose folder key is one of
+  #     those rows' paths, and stale attachments (`Drift.attachments_stale/0`)
+  #     whose reference still names one of them. Scoped to the subtree, so
+  #     drift elsewhere in the vault never refuses a small folder.
+  #
+  # ponytail: drift in a folder with no row yet, and a stale attachment with
+  # a NULL reference, are not counted (the readers place those by decrypting
+  # the vault's drift, which would double a rename's decrypt budget); both
+  # are 0 in steady state and the drain heals them. A stale attachment whose
+  # old reference names a subtree row but whose path is elsewhere counts
+  # though it does not move (high, only inside drift). The count is READ
+  # COMMITTED, before the lock: uploads landing in between can take a rename
+  # a few rows past the cap.
+  defp refuse_too_large(user, vault, folders) do
+    limit = ServiceConfig.get(:folder_op_max_rows)
+
+    if over_limit?(user, vault, folders, limit),
+      do: {:error, {:folder_too_large, limit}},
+      else: :ok
+  end
+
+  defp over_limit?(user, vault, folders, limit) do
+    Repo.with_tenant!(user.id, fn ->
+      refs = Rows.subtree_refs(user, vault.id, outermost(folders), limit: limit + 1)
+      ids = for %{id: id} <- refs, do: id
+      hmacs = for %{full_path_hmac: h} when is_binary(h) <- refs, do: h
+      notes = from(n in Notes.scoped_live(user, vault), where: n.kind == "note")
+      atts = from(a in Attachments.scoped_live(user, vault), as: :a)
+
+      by_ref = fn query ->
+        &bounded_count(from(r in query, where: r.folder_ref_id in ^ids), ids, &1)
+      end
+
+      arms = [
+        by_ref.(notes),
+        by_ref.(from(a in atts, where: ^Rows.attachment_ref_placed())),
+        &bounded_count(
+          from(n in notes, where: ^Drift.notes_unresolved(), where: ^Keys.in_any(:folder, hmacs)),
+          hmacs,
+          &1
+        ),
+        by_ref.(from(a in atts, where: ^Drift.attachments_stale()))
+      ]
+
+      # `left`: how many more items would put the subtree over the limit. Each
+      # folder row is one (it and its marker move under the lock); the walk
+      # alone over the limit refuses before any count runs.
+      Enum.reduce_while(arms, limit + 1 - length(refs), fn arm, left ->
+        if left <= 0, do: {:halt, 0}, else: {:cont, left - arm.(left)}
+      end) <= 0
+    end)
+  end
+
+  # A batch selecting a folder and one inside it walks the inner one once.
+  defp outermost(folders) do
+    folders = Enum.uniq(folders)
+    Enum.reject(folders, fn f -> Enum.any?(folders, &String.starts_with?(f, &1 <> "/")) end)
+  end
+
+  # `keys`: what the query filters on; none means no rows, so no statement.
+  defp bounded_count(_query, [], _k), do: 0
+
+  defp bounded_count(query, _keys, k),
+    do: Repo.aggregate(subquery(from(r in query, select: %{id: r.id}, limit: ^k)), :count)
 
   @doc """
   Deletes a folder and, when `recursive: true`, everything under it.
@@ -474,6 +553,7 @@ defmodule Engram.Folders do
     # Attachment scan before the transaction (#2159), like `rename/4`; only the
     # moved folders' attachments are read.
     with {:ok, folders} <- Notes.resolve_folder_markers(user, vault, marker_ids),
+         :ok <- refuse_too_large(user, vault, folders),
          {:ok, %{metas: metas}} <- Attachments.scan_under(user, vault, folders) do
       atomic(vault, fn ->
         with {:ok, %{moved: notes, pairs: pairs}} <-

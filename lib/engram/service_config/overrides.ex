@@ -58,7 +58,9 @@ defmodule Engram.ServiceConfig.Overrides do
     payload_backfill_points_per_min: {:integer, 1..100_000},
     rebuild_max_disk_percent: {:integer, 1..100},
     file_times_backfill: :boolean,
-    note_body_columns_null: :boolean
+    note_body_columns_null: :boolean,
+    # Folder rename/move size cap (`Engram.Folders`, #2492).
+    folder_op_max_rows: {:integer, 0..1_000_000}
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})

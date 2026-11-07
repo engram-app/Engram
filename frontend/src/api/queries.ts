@@ -129,6 +129,19 @@ function joinRefused(err: unknown, t: Translate): boolean {
 	return false;
 }
 
+/** True (and toasts) when `err` is the server's folder-op cap refusal (#2492). */
+function folderTooLarge(err: unknown, t: Translate): boolean {
+	if (!(err instanceof ApiError && err.status === 422 && err.message === "folder_too_large")) {
+		return false;
+	}
+	notify.error(
+		t("Folder too large to rename here (more than {limit} items). Rename it in Obsidian.", {
+			limit: Number(err.body.limit),
+		}),
+	);
+	return true;
+}
+
 // 409/404/etc → human-grade toast copy. Centralised so all four
 // mutations (and the standalone drop handler) speak the same dialect.
 // Shared by note rename (CRDT → CrdtOpError) and folder/attachment rename
@@ -136,7 +149,7 @@ function joinRefused(err: unknown, t: Translate): boolean {
 // crdt_create's `create_failed`; the REST paths use HTTP 409/404.
 // "file" is a note (the tree's word for it); "attachment" is any other file.
 function renameErrorToast(err: unknown, kind: "file" | "folder" | "attachment", t: Translate) {
-	if (joinRefused(err, t)) {
+	if (joinRefused(err, t) || folderTooLarge(err, t)) {
 		return;
 	}
 	const conflict =
@@ -2646,7 +2659,7 @@ export function useBatchMoveFolders() {
 		},
 		onError: (err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
-			if (!joinRefused(err, t)) {
+			if (!(joinRefused(err, t) || folderTooLarge(err, t))) {
 				notify.error(t("Batch move failed."));
 			}
 		},
