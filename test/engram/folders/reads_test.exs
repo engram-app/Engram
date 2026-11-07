@@ -5,7 +5,10 @@ defmodule Engram.Folders.ReadsTest do
   # backfill has not verified is read the old way.
   use Engram.DataCase, async: false
 
-  alias Engram.{Attachments, DataMigrations, Folders, Notes, Repo}
+  import Engram.RlsCase
+
+  alias Engram.{Attachments, Crypto, DataMigrations, Folders, Notes, QueryPlan, QueryRecorder, Repo}
+  alias Engram.Search.NoteFilter
   alias Engram.DataMigrations.FolderTable
   alias Engram.FolderRows
 
@@ -348,6 +351,270 @@ defmodule Engram.Folders.ReadsTest do
 
       {:ok, folders} = Notes.list_folders(u, v)
       assert folders == ["A", "A/B", "M/Only", "OR"]
+    end
+  end
+
+  # R9.5 step 3: the folder readers take a note's folder from `folder_ref_id`,
+  # not from `folder_hmac`. A note with no reference yet (the drift the drain
+  # heals, `notes_unresolved_folder`) is read by its decrypted folder, so it
+  # never leaves a listing, even for the drain's window.
+  describe "readers take the folder from the reference" do
+    defp dump(id), do: Ecto.UUID.dump!(id)
+
+    defp hash(u, folder) do
+      {:ok, fk} = Crypto.dek_filter_key(u)
+      Crypto.hmac_field(fk, folder)
+    end
+
+    # The rotation case: the hash names "A", the reference (and the envelope)
+    # say "B". The hash write fires `notes_set_folder_ref` (which re-derives
+    # the reference from it), so the reference is written back after it.
+    defp hash_says_a!(u, n) do
+      Repo.query!("UPDATE notes SET folder_hmac = $1 WHERE id = $2", [hash(u, "A"), dump(n.id)])
+
+      Repo.query!("UPDATE notes SET folder_ref_id = $1 WHERE id = $2", [
+        dump(FolderRows.tree(u)["B"].id),
+        dump(n.id)
+      ])
+    end
+
+    # Drift: a non-root note with no reference (only the reference column is
+    # written, so no notes trigger fires).
+    defp unref!(n),
+      do: Repo.query!("UPDATE notes SET folder_ref_id = NULL WHERE id = $1", [dump(n.id)])
+
+    defp page_ids(u, v, folder) do
+      {:ok, %{notes: notes}} = Notes.list_notes_in_folder_page(u, v, folder)
+      notes |> Enum.map(& &1.id) |> Enum.sort()
+    end
+
+    defp counts(u, v) do
+      {:ok, counts} = Notes.list_folders_with_counts(u, v)
+      Map.new(counts, &{&1.folder, &1.count})
+    end
+
+    defp filter(u, v, f, within) do
+      {:ok, {:ids, ids}} = NoteFilter.resolve(u, v, f, within: within)
+      Enum.sort(ids)
+    end
+
+    defp seed(u, v) do
+      put_note(u, v, "A/a.md")
+      n = put_note(u, v, "B/n.md")
+      put_note(u, v, "X/x.md")
+      root = put_note(u, v, "root.md")
+      {n, root}
+    end
+
+    test "hash names A, reference names B: every reader says B", %{user: u, vault: v} do
+      {n, root} = seed(u, v)
+      hash_says_a!(u, n)
+
+      assert n.id in page_ids(u, v, "B")
+      refute n.id in page_ids(u, v, "A")
+      assert counts(u, v)["B"] == 1 and counts(u, v)["A"] == 1
+
+      ids = [n.id, root.id]
+      assert filter(u, v, %{folder: "B"}, ids) == [n.id]
+      assert filter(u, v, %{not: %{folder: "B"}}, ids) == [root.id]
+      assert filter(u, v, %{folder: "A"}, ids) == []
+
+      # X -> B collides with B/n.md, which only the reference places in B.
+      assert {:error, :conflict} = Notes.rename_folder(u, v, "X", "B")
+    end
+
+    test "a non-root note with no reference stays in every reader", %{user: u, vault: v} do
+      {n, root} = seed(u, v)
+      unref!(n)
+
+      assert n.id in page_ids(u, v, "B")
+      # Control: it is not taken for a root note.
+      refute n.id in page_ids(u, v, "")
+      assert root.id in page_ids(u, v, "")
+      assert counts(u, v) |> Map.take(["", "B"]) == %{"" => 1, "B" => 1}
+
+      ids = [n.id, root.id]
+      assert filter(u, v, %{folder: "B"}, ids) == [n.id]
+      assert filter(u, v, %{not: %{folder: "B"}}, ids) == [root.id]
+      assert {:error, :conflict} = Notes.rename_folder(u, v, "X", "B")
+      assert {:ok, folders} = Notes.list_folders_implied_by_notes(u, v)
+      assert "B" in folders
+
+      assert {:ok, rows} = Notes.scan_folders(u, v, ["B"])
+      assert n.id in Enum.map(rows, & &1.id)
+      assert {:ok, %{notes: 1}} = Folders.delete(u, v, "B", recursive: true)
+    end
+
+    test "control: the counts equal the listings (#728) with drift and a moved hash", ctx do
+      %{user: u, vault: v} = ctx
+      {n, _root} = seed(u, v)
+      hash_says_a!(u, n)
+      unref!(put_note(u, v, "B/Deep/d.md"))
+
+      for {folder, count} <- counts(u, v),
+          do: assert(length(page_ids(u, v, folder)) == count, folder)
+    end
+
+    # The #2466 review's probes (H1, H2): a folder row that dies under its
+    # content must not strand it. `folders_release_refs` NULLs the reference,
+    # so the note is drift and the cascade reads it.
+    defp kill_row!(u, path),
+      do:
+        Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [
+          dump(FolderRows.tree(u)[path].id)
+        ])
+
+    test "probe: a note whose row died moves with a rename of its folder", %{user: u, vault: v} do
+      put_note(u, v, "Target/n1.md")
+      lost = put_note(u, v, "Target/lost.md")
+      put_note(u, v, "Gone/x.md")
+
+      Repo.query!("UPDATE notes SET folder_ref_id = $1 WHERE id = $2", [
+        dump(FolderRows.tree(u)["Gone"].id),
+        dump(lost.id)
+      ])
+
+      kill_row!(u, "Gone")
+      verified!()
+
+      assert {:ok, _} = Folders.rename(u, v, "Target", "Renamed")
+      {:ok, rows} = Notes.scan_folders(u, v, ["Renamed"])
+      assert "Renamed/lost.md" in Enum.map(rows, & &1.path)
+    end
+
+    test "probe: a note under a retired row is deleted by a recursive delete", ctx do
+      %{user: u, vault: v} = ctx
+      put_note(u, v, "Src/n.md")
+      kill_row!(u, "Src")
+      verified!()
+
+      assert {:ok, %{notes: 1}} = Folders.delete(u, v, "Src", recursive: true)
+    end
+
+    test "probe: a marker whose rows died is cleared", %{user: u, vault: v} do
+      {:ok, _} = Notes.create_folder_marker(u, v, "F/Sub")
+      kill_row!(u, "F/Sub")
+      kill_row!(u, "F")
+      verified!()
+
+      assert {:ok, _} = Folders.delete(u, v, "F", recursive: true)
+
+      assert %{rows: [[0]]} =
+               Repo.query!(
+                 "SELECT count(*) FROM notes WHERE vault_id = $1 AND kind = 'folder' AND deleted_at IS NULL",
+                 [dump(v.id)]
+               )
+    end
+  end
+
+  # Each new statement, as the app role sends it: an index read, never a scan
+  # of the vault's notes or attachments.
+  describe "plans" do
+    defp plans(fun, table) do
+      {_, queries} = QueryRecorder.record(fun)
+
+      for sql <- QueryPlan.reading(queries, table),
+          do:
+            {sql,
+             QueryPlan.generic_plan(sql,
+               analyze: [table],
+               fresh: true,
+               bitmapscan: false,
+               all_visible: true
+             )}
+    end
+
+    defp assert_index!(sql_plans, pattern, index) do
+      matching = for {sql, plan} <- sql_plans, sql =~ pattern, do: plan
+      assert matching != [], "no statement matches #{inspect(pattern)}"
+
+      for plan <- matching do
+        assert plan =~ index, plan
+        refute plan =~ ~r/Seq Scan on (notes|attachments)/, plan
+      end
+    end
+
+    # Real statistics: B is a small part of the vault, as a folder is.
+    test "drift, listing page, counts, target check and filter", %{user: u, vault: v} do
+      for i <- 1..150, do: put_note(u, v, "F#{rem(i, 75)}/n#{i}.md")
+      put_note(u, v, "B/n.md")
+      put_note(u, v, "root.md")
+
+      all =
+        plans(
+          fn ->
+            Notes.list_notes_in_folder_page(u, v, "B")
+            Notes.list_notes_in_folder_page(u, v, "")
+            Notes.list_folders_with_counts(u, v)
+            Notes.rename_folder(u, v, "Q", "B")
+            NoteFilter.resolve(u, v, %{folder: "B"})
+          end,
+          "notes"
+        )
+
+      assert_index!(all, ~r/octet_length\(.*\) > 16/, "notes_unresolved_folder")
+      assert_index!(all, ~r/GROUP BY .*folder_ref_id/s, "notes_folder_ref_live")
+      # The page fetches the row, so either reference index serves it.
+      assert_index!(all, ~r/folder_ref_id" = (ANY|\$)/, "using notes_folder_ref")
+    end
+
+    test "the scan's marker arm and the attachments' stale arm", %{user: u, vault: v} do
+      put_note(u, v, "Target/n.md")
+      put_att(u, v, "Target/a.png")
+      fun = fn -> Folders.delete(u, v, "Target", recursive: true) end
+
+      assert_index!(plans(fun, "notes"), ~r/'folder'.*exists/is, "notes_user_vault_folder_marker")
+      assert_index!(plans(fun, "attachments"), "IS DISTINCT FROM", "attachments_folder_ref_stale")
+    end
+  end
+
+  # Under FORCE RLS as `engram_app`: every new read returns the tenant's rows
+  # and nothing of another tenant's, whatever ids it is handed.
+  describe "RLS" do
+    test "the readers see the tenant's drift and references", %{user: u, vault: v} do
+      {n, _root} = {put_note(u, v, "B/n.md"), put_note(u, v, "root.md")}
+      d = put_note(u, v, "B/d.md")
+      Repo.query!("UPDATE notes SET folder_ref_id = NULL WHERE id = $1", [dump(d.id)])
+
+      {:returned, {page, drift}} =
+        as_prod_role(fn ->
+          Repo.with_tenant!(u.id, fn ->
+            {:ok, dek} = Crypto.get_dek(u)
+            {:ok, %{notes: page}} = Notes.list_notes_in_folder_page(u, v, "B")
+            {page, Notes.drift_note_folders(u, v, dek)}
+          end)
+        end)
+
+      assert page |> Enum.map(& &1.id) |> Enum.sort() == Enum.sort([n.id, d.id])
+      assert drift == {[{d.id, "B"}], 0}
+    end
+
+    test "control: another tenant reading this vault's ids gets zero rows", %{user: u, vault: v} do
+      put_note(u, v, "B/n.md")
+      d = put_note(u, v, "B/d.md")
+      Repo.query!("UPDATE notes SET folder_ref_id = NULL WHERE id = $1", [dump(d.id)])
+      {:ok, other} = Engram.Fixtures.user_with_dek_fixture()
+      ids = [FolderRows.tree(u)["B"].id]
+
+      # The same statements, user 1's vault and user 1's ids, under user 2's
+      # tenant: RLS, not the WHERE clause, has to hide them.
+      {:returned, {by_ref, drift}} =
+        as_prod_role(fn ->
+          Repo.with_tenant!(other.id, fn ->
+            {Repo.all(
+               from(n in Engram.Notes.Note,
+                 where: n.vault_id == ^v.id and n.kind == "note" and n.folder_ref_id in ^ids,
+                 select: n.id
+               )
+             ), Repo.all(from(n in Notes.drift_query(u, v), select: n.id))}
+          end)
+        end)
+
+      assert {by_ref, drift} == {[], []}
+      # And the superuser does see them: the fixture is not empty.
+      assert Repo.with_tenant!(u.id, fn ->
+               Repo.all(from(n in Notes.drift_query(u, v), select: n.id))
+             end) == [d.id]
     end
   end
 end
