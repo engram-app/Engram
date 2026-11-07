@@ -176,6 +176,12 @@ defmodule Engram.IndexingPathFreeReuseTest do
     assert kept == map_size(now) - 1, "every unchanged chunk keeps its point"
   end
 
+  # Prod runs INDEX_REBUILD=on, where `Rebuild.target_versions/0` is the
+  # build's: any version bump here would open a new pass over every note.
+  test "R3c bumps neither the chunker nor the keyword version" do
+    assert {Markdown.chunker_version(), Engram.KeywordIndex.version()} == {5, 5}
+  end
+
   describe "the next edit after a rename or a move (Engram#2523)" do
     setup ctx do
       # A note with no H1 (its file name was its title) and one with one.
@@ -200,6 +206,11 @@ defmodule Engram.IndexingPathFreeReuseTest do
     test "folder rename (same parent)", ctx do
       assert {:ok, _} = Notes.rename_folder(ctx.user, ctx.vault, "A", "Z")
       assert_one_chunk_edit(ctx, ctx.plain, body("Beta Edited"))
+      assert_one_chunk_edit(ctx, ctx.titled, "# Titled\n\n" <> body("Beta Edited"))
+    end
+
+    test "case-only note rename", ctx do
+      assert {:ok, _} = Notes.rename_note(ctx.user, ctx.vault, "A/Titled.md", "A/titled.md")
       assert_one_chunk_edit(ctx, ctx.titled, "# Titled\n\n" <> body("Beta Edited"))
     end
 
@@ -316,6 +327,35 @@ defmodule Engram.IndexingPathFreeReuseTest do
 
       for {old, new} <- Enum.zip(fingerprints(legacy, old_key), fingerprints(legacy, new_key)),
           do: assert(rekeyed[old] == new)
+    end
+
+    # A note already on its R3c fingerprints pays no legacy parse: the
+    # pass's own parse is the one chunk call.
+    test "a second edit on a migrated note makes exactly one chunk NIF call", ctx do
+      path = "Health/Iron Panel.md"
+      note = put(ctx, path, "# Iron Panel\n\n" <> body("Beta"))
+      index!(note, ctx)
+      put(ctx, path, "# Iron Panel\n\n" <> body("Beta Edited"))
+      index!(note, ctx)
+
+      put(ctx, path, "# Iron Panel\n\n" <> body("Beta Edited Again"))
+      indexed = fresh(note, ctx)
+      ref = Engram.NativeScheduled.attach_nif_events()
+      assert {:ok, _} = Indexing.index_note(indexed, ctx.vault)
+
+      calls =
+        Stream.repeatedly(fn ->
+          receive do
+            {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :chunk}} -> :chunk
+            {[:engram, :nif, :call, :stop], ^ref, _, _} -> :other
+          after
+            0 -> nil
+          end
+        end)
+        |> Enum.take_while(& &1)
+        |> Enum.count(&(&1 == :chunk))
+
+      assert calls == 1
     end
 
     test "an unedited note re-indexes with no Voyage call and no Qdrant write", ctx do

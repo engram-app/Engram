@@ -2716,21 +2716,24 @@ defmodule Engram.Indexing do
   # inputs (the folder, the file-name title, aliases in every prefix), so
   # every chunk of an unrenamed note misses above, and R3c alone would
   # re-embed the fleet on its next edits. Each chunk still unmatched tries
-  # its `legacy_twins/2` fingerprints (under each model, as above) against
+  # its `legacy_twins/3` fingerprints (under each model, as above) against
   # the rows still unmatched; a hit keeps the point, 0 Voyage and 0 Qdrant,
   # and writes the chunk's NEW fingerprint, so the note is rename-free from
   # this pass on. The twin is built at the note's CURRENT path: a note
   # renamed before R3c and not edited since misses and re-embeds once.
   #
-  # Lazy: only when a chunk missed while rows are left over, so an edit
-  # after the migration pays one extra parse when it has a new chunk.
-  # ponytail: that parse is the cost until the contract, which deletes
-  # this and `Markdown.parse/3`'s `:legacy` once `outcome="legacy"` of
+  # Lazy: only when NO chunk matched a stored row and rows are left. A
+  # pass rewrites every row of the note, so one row on its R3c fingerprint
+  # means all are (a legacy row cannot match an R3c fingerprint while the
+  # inputs differ, and they differ for the whole note or for none of it):
+  # a migrated note's edits pay no legacy parse. The contract deletes this
+  # and `Markdown.parse/3`'s `:legacy` once `outcome="legacy"` of
   # `[:engram, :indexing, :chunks]` reads 0 for 30 days.
   defp legacy_reuse(entries, alts, left, {note, stored}, content_key, dense?) do
     missed = for {{:embed, _chunk}, i} <- Enum.with_index(entries), do: i
 
-    if missed == [] or Enum.all?(left, &(elem(&1, 1) == [])) do
+    if missed == [] or length(missed) < length(entries) or
+         Enum.all?(left, &(elem(&1, 1) == [])) do
       {entries, 0}
     else
       twins =
@@ -3396,11 +3399,6 @@ defmodule Engram.Indexing do
     # Dense candidates: one per plan model (`fingerprint_models/0`). This runs
     # outside an index pass, so a lone `fingerprints/4` would name the build's
     # model and miss every point a Free pass fingerprinted with lite.
-    #
-    # Then the same over the chunks' pre-R3c inputs (`legacy_twins/2`; a
-    # chunk without a twin repeats its own), for points indexed before R3c.
-    twins = Enum.zip_with(chunks, legacy_twins(chunks, note, length(rows)), &(&2 || &1))
-
     candidates =
       Enum.map(fingerprint_models(), &fingerprints(content_key, chunks, true, &1)) ++
         [
@@ -3410,23 +3408,26 @@ defmodule Engram.Indexing do
             "",
             Enum.map(chunks, &IO.iodata_to_binary(&1.context_text))
           )
-        ] ++
-        Enum.map(fingerprint_models(), &fingerprints(content_key, twins, true, &1)) ++
-        [fingerprints(content_key, twins, false)]
+        ]
 
-    keyed = Enum.zip(chunks, Enum.zip_with(candidates, & &1))
+    by_fingerprint = match_fingerprints(chunks, candidates, by_hmac)
 
-    {by_fingerprint, _left} =
-      Enum.map_reduce(keyed, by_hmac, fn {chunk, hmac_candidates}, hmacs ->
-        case Enum.find(hmac_candidates, &match?([_ | _], Map.get(hmacs, &1))) do
-          nil ->
-            {{chunk, nil}, hmacs}
+    # Then, only when nothing matched (a note not yet on its R3c
+    # fingerprints, as `legacy_reuse/6` decides it), the same over the
+    # chunks' pre-R3c inputs (`legacy_twins/3`; a chunk without a twin
+    # repeats its own), for points indexed before R3c.
+    by_fingerprint =
+      if by_hmac != %{} and Enum.all?(by_fingerprint, &is_nil(elem(&1, 1))) do
+        twins = Enum.zip_with(chunks, legacy_twins(chunks, note, length(rows)), &(&2 || &1))
 
-          hmac ->
-            [id | rest] = Map.fetch!(hmacs, hmac)
-            {{chunk, id}, Map.put(hmacs, hmac, rest)}
-        end
-      end)
+        legacy =
+          Enum.map(fingerprint_models(), &fingerprints(content_key, twins, true, &1)) ++
+            [fingerprints(content_key, twins, false)]
+
+        match_fingerprints(chunks, candidates ++ legacy, by_hmac)
+      else
+        by_fingerprint
+      end
 
     # A chunk no fingerprint matched falls back to a row at its position and
     # offsets that no other chunk took. A row with NO fingerprint (written
@@ -3462,6 +3463,25 @@ defmodule Engram.Indexing do
       end)
 
     {matched, length(rows) - length(matched)}
+  end
+
+  # Per chunk, `{chunk, id}` of the first candidate fingerprint (one list
+  # per kind of candidate, in `chunks` order) with a stored row left, or
+  # `{chunk, nil}`. Rows are taken by multiplicity.
+  defp match_fingerprints(chunks, candidates, by_hmac) do
+    chunks
+    |> Enum.zip(Enum.zip_with(candidates, & &1))
+    |> Enum.map_reduce(by_hmac, fn {chunk, hmac_candidates}, hmacs ->
+      case Enum.find(hmac_candidates, &match?([_ | _], Map.get(hmacs, &1))) do
+        nil ->
+          {{chunk, nil}, hmacs}
+
+        hmac ->
+          [id | rest] = Map.fetch!(hmacs, hmac)
+          {{chunk, id}, Map.put(hmacs, hmac, rest)}
+      end
+    end)
+    |> elem(0)
   end
 
   defp same_text?({nil, _id, _offsets, _sum}, _chunk, _content_key), do: true
@@ -3807,7 +3827,7 @@ defmodule Engram.Indexing do
         %{}
 
       chunks ->
-        # And the chunks' pre-R3c twins (`legacy_twins/2`): a row not yet
+        # And the chunks' pre-R3c twins (`legacy_twins/3`): a row not yet
         # moved to its R3c fingerprint keeps its old-input one, rekeyed, or
         # the next index could no longer match it and would re-embed.
         twins = chunks |> legacy_twins(note, 0) |> Enum.reject(&is_nil/1)
