@@ -795,7 +795,7 @@ defmodule Engram.Notes.CrdtIndexPersistence do
     # Project the index onto the notes path columns (#1151 step 2) — in a
     # worker, never here. This runs inside terminate/2 against a shutdown
     # budget, and a projection pass is N renames, each re-encrypting a path,
-    # rewriting path_hmac, repathing Qdrant points and enqueueing link
+    # rewriting path_hmac and enqueueing link
     # rewrites. Doing that in a terminating process during a deploy stampede
     # loses the checkpoint AND the projection.
     #

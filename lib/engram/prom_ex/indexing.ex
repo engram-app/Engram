@@ -1,19 +1,7 @@
 defmodule Engram.PromEx.Indexing do
   @moduledoc """
-  PromEx plugin for index-maintenance telemetry — currently the rename repath
-  worker (`Engram.Workers.RepathNoteIndex`, #746/#753).
-
-  Subscribes to:
-
-    * `[:engram, :indexing, :repath, :stop]` — `%{count}`, metadata
-      `%{outcome: :ok | :missing_points | :fallback}`:
-        - `:ok`             — the cheap, 0-Voyage path: no payload write (R3a,
-          a point holds no path), only a keyword refresh; `count` is the
-          note's points `Qdrant.count_by_note/5` found.
-        - `:missing_points` — embedded note had zero points under the old path
-          (benign on rapid multi-rename; a real inconsistency otherwise).
-        - `:fallback`       — repath exhausted retries and fell back to a full
-          re-embed; `count` is 1 (an event tick).
+  PromEx plugin for index-maintenance telemetry. The rename repath metrics
+  went with the repath (R3a: a rename makes no Qdrant write).
 
   Metrics:
 
@@ -34,9 +22,6 @@ defmodule Engram.PromEx.Indexing do
       minute), `disk` (Qdrant volume over `:rebuild_max_disk_percent`),
       `queue` (update queue over 100), `optimizer` (not green or points
       awaiting optimization) or `unavailable` (collection info unreadable).
-    * `engram_prom_ex_indexing_repath_total` — counter of repath events by
-      `:outcome`. Alert on `:fallback` / `:missing_points` rate; the `:ok` rate
-      is the "renames took the cheap path" signal.
     * `engram_prom_ex_indexing_link_rewrite_failures_total` — counter of
       per-source-note link-rewrite failures from `RewriteNoteLinks`
       (rename propagation, #648/#1231), tagged by `:reason`.
@@ -98,7 +83,6 @@ defmodule Engram.PromEx.Indexing do
 
   require Logger
 
-  @repath_stop_event [:engram, :indexing, :repath, :stop]
   @link_rewrite_failed_event [:engram, :links, :rewrite, :failed]
   @stale_points_leaked_event [:engram, :indexing, :stale_points_leaked]
   @rebuild_halted_event [:engram, :rebuild, :halted]
@@ -189,12 +173,6 @@ defmodule Engram.PromEx.Indexing do
             "Notes the reconcile backstop queued, by reason; missed=true is a content " <>
               "change no event queued (expected near zero).",
           tags: [:reason, :missed]
-        ),
-        counter(
-          metric_prefix ++ [:repath, :total],
-          event_name: @repath_stop_event,
-          description: "Rename repath outcomes from the RepathNoteIndex worker.",
-          tags: [:outcome]
         ),
         counter(
           metric_prefix ++ [:link_rewrite, :failures, :total],

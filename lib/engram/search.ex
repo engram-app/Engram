@@ -1221,7 +1221,7 @@ defmodule Engram.Search do
   # #590: Qdrant payloads no longer carry plaintext source_path/tags. Refill
   # them, and the title, on the final (post-rerank) result set from the
   # encrypted `notes` rows, keyed by qdrant_point_id. The title in the payload
-  # goes stale on rename (repath patches only the HMACs), so the row wins. Candidates whose note row is missing keep
+  # goes stale on rename (a rename writes no payload), so the row wins. Candidates whose note row is missing keep
   # whatever the payload provided (nil), rather than dropping the hit. A hit
   # whose note is soft-deleted IS dropped: its points outlive the delete until
   # DeleteNoteIndex succeeds, and they must not answer searches meanwhile

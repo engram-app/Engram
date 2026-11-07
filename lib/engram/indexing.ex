@@ -1662,22 +1662,6 @@ defmodule Engram.Indexing do
   end
 
   @doc """
-  Exact count of a note's Qdrant points (#746): the ones carrying its id, and
-  the ones with no id under `path_hmac` (`Qdrant.count_by_note/5`). Used by the
-  repath worker to branch between a keyword refresh, re-embed self-heal, and
-  the embedded-but-missing inconsistency warning.
-  """
-  def count_points_by_path_hmac(note, path_hmac) do
-    Qdrant.count_by_note(
-      collection(),
-      to_string(note.user_id),
-      to_string(note.vault_id),
-      note.id,
-      path_hmac
-    )
-  end
-
-  @doc """
   Remove all indexed data for a note (Qdrant points first, then Postgres
   chunks). T3.2 — Qdrant filter keys off `path_hmac` (base64), not plaintext
   `source_path`. The note row's `path_hmac` is the source of truth.
@@ -3299,7 +3283,7 @@ defmodule Engram.Indexing do
     # offsets that no other chunk took. A row with NO fingerprint (written
     # before context_hmac existed, or cleared by a DEK rotation) needs nothing
     # more. A row WITH one also needs its stored text checksum to equal the
-    # chunk's: a rename (`RepathNoteIndex` moves points, never re-indexes)
+    # chunk's: a rename (no Qdrant write, never re-indexes)
     # leaves every row fingerprinted under the old path's context prefix
     # (#2345), while an equal checksum at equal offsets says the point holds
     # this text. The fingerprint is left as is: the dense vector still has

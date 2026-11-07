@@ -2970,92 +2970,90 @@ defmodule Engram.NotesTest do
   end
 
   # ---------------------------------------------------------------------------
-  # #746 — rename must repath Qdrant points, not re-embed through Voyage
+  # A rename or move makes ZERO Qdrant writes (R3a): a point's payload is the
+  # note's identity `{u, v, n}`, which a rename does not change, and the
+  # keyword vectors' stale path prefix is accepted until the once-only rebuild.
+  # No re-embed either (#746).
   # ---------------------------------------------------------------------------
 
-  describe "rename does not re-embed (#746)" do
-    test "single-note rename enqueues RepathNoteIndex, not EmbedNote, and keeps embed_hash",
-         %{user: user, vault: vault} do
-      note =
-        Engram.Fixtures.insert_note!(user, vault, %{path: "A/Note.md", content: "# x\n\nbody"})
+  describe "a rename makes no Qdrant call and queues no index job" do
+    setup %{user: user, vault: vault} do
+      test = self()
+      handler = {__MODULE__, make_ref()}
 
+      # Global handler, this process only (the module is async).
+      :telemetry.attach(
+        handler,
+        [:engram, :qdrant, :request, :start],
+        fn _, _, meta, _ -> if self() == test, do: send(test, {:qdrant_request, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      notes =
+        for i <- 1..3 do
+          note =
+            Engram.Fixtures.insert_note!(user, vault, %{
+              path: "A/Note#{i}.md",
+              content: "# x\n\nbody #{i}"
+            })
+
+          embedded!(note)
+        end
+
+      %{notes: notes}
+    end
+
+    defp embedded!(note) do
       import Ecto.Query
 
       from(n in Engram.Notes.Note, where: n.id == ^note.id)
       |> Engram.Repo.update_all([set: [embed_hash: note.content_hash]], skip_tenant_check: true)
 
-      assert {:ok, _} = Engram.Notes.rename_note(user, vault, "A/Note.md", "B/Note.md")
+      note
+    end
 
-      assert_enqueued(worker: Engram.Workers.RepathNoteIndex, args: %{note_id: note.id})
+    defp refute_index_work do
+      refute_received {:qdrant_request, _}
+      refute_enqueued(worker: Engram.Workers.RepathNoteIndex)
+      refute_enqueued(worker: Engram.Workers.RefreshKeywordVectors)
       refute_enqueued(worker: Engram.Workers.EmbedNote)
-
-      reloaded = Engram.Fixtures.raw_note!(note.id)
-      assert reloaded.embed_hash == note.content_hash
     end
 
-    test "folder rename enqueues RepathNoteIndex for each note, not EmbedNote",
-         %{user: user, vault: vault} do
-      note =
-        Engram.Fixtures.insert_note!(user, vault, %{path: "Old/Note.md", content: "# x\n\nbody"})
+    test "single-note rename", %{user: user, vault: vault, notes: [note | _]} do
+      assert {:ok, _} = Engram.Notes.rename_note(user, vault, "A/Note1.md", "B/Note1.md")
 
-      import Ecto.Query
-
-      from(n in Engram.Notes.Note, where: n.id == ^note.id)
-      |> Engram.Repo.update_all([set: [embed_hash: note.content_hash]], skip_tenant_check: true)
-
-      assert {:ok, _} = Engram.Notes.rename_folder(user, vault, "Old", "New")
-
-      assert_enqueued(worker: Engram.Workers.RepathNoteIndex, args: %{note_id: note.id})
-      refute_enqueued(worker: Engram.Workers.EmbedNote)
-
-      reloaded = Engram.Fixtures.raw_note!(note.id)
-      assert reloaded.embed_hash == note.content_hash
+      refute_index_work()
+      assert Engram.Fixtures.raw_note!(note.id).embed_hash == note.content_hash
     end
 
-    # #1612 — the web app renames/moves every note through crdt_create, so the
-    # live-relocate leg is the PRIMARY rename path and must repath too.
-    test "crdt_create live relocate enqueues RepathNoteIndex under the old path hmac",
-         %{user: user, vault: vault} do
-      note =
-        Engram.Fixtures.insert_note!(user, vault, %{path: "A/Note.md", content: "# x\n\nbody"})
+    test "folder rename moving many notes", %{user: user, vault: vault, notes: notes} do
+      assert {:ok, _} = Engram.Notes.rename_folder(user, vault, "A", "B")
 
-      assert {:ok, moved} = Engram.Notes.genesis_crdt_note(user, vault, note.id, "B/Note.md")
-      assert moved.path == "B/Note.md"
-
-      assert_enqueued(
-        worker: Engram.Workers.RepathNoteIndex,
-        args: %{note_id: note.id, old_path_hmac: path_hmac_b64(user, "A/Note.md")}
-      )
+      refute_index_work()
+      for n <- notes, do: assert(Engram.Fixtures.raw_note!(n.id).embed_hash == n.content_hash)
     end
 
-    test "crdt_create resurrect-rename enqueues RepathNoteIndex under the tombstone path hmac",
-         %{user: user, vault: vault} do
-      note =
-        Engram.Fixtures.insert_note!(user, vault, %{path: "A/Note.md", content: "# x\n\nbody"})
+    # #1612: the web app moves every note through crdt_create.
+    test "crdt_create live relocate", %{user: user, vault: vault, notes: [note | _]} do
+      assert {:ok, moved} = Engram.Notes.genesis_crdt_note(user, vault, note.id, "B/Note1.md")
+      assert moved.path == "B/Note1.md"
 
-      :ok = Engram.Notes.delete_note(user, vault, "A/Note.md")
-
-      assert {:ok, _} = Engram.Notes.genesis_crdt_note(user, vault, note.id, "B/Note.md")
-
-      assert_enqueued(
-        worker: Engram.Workers.RepathNoteIndex,
-        args: %{note_id: note.id, old_path_hmac: path_hmac_b64(user, "A/Note.md")}
-      )
+      refute_index_work()
     end
 
-    test "crdt_create at the note's own path does not enqueue RepathNoteIndex",
-         %{user: user, vault: vault} do
-      note =
-        Engram.Fixtures.insert_note!(user, vault, %{path: "A/Note.md", content: "# x\n\nbody"})
+    # The tombstone's points were deleted with it, so the resurrected note
+    # embeds fresh (its embed_hash no longer matches); still no repath.
+    test "crdt_create resurrect-rename embeds, never repaths",
+         %{user: user, vault: vault, notes: [note | _]} do
+      :ok = Engram.Notes.delete_note(user, vault, "A/Note1.md")
 
-      assert {:ok, _} = Engram.Notes.genesis_crdt_note(user, vault, note.id, "A/Note.md")
+      assert {:ok, _} = Engram.Notes.genesis_crdt_note(user, vault, note.id, "B/Note1.md")
 
       refute_enqueued(worker: Engram.Workers.RepathNoteIndex)
-    end
-
-    defp path_hmac_b64(user, path) do
-      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
-      filter_key |> Engram.Crypto.hmac_field(path) |> Base.encode64()
+      refute_enqueued(worker: Engram.Workers.RefreshKeywordVectors)
+      assert_enqueued(worker: Engram.Workers.EmbedNote, args: %{note_id: note.id})
     end
   end
 

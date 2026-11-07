@@ -60,7 +60,6 @@ defmodule Engram.Notes do
     EmbedNote,
     NoteCommitted,
     ReleaseIndexEntries,
-    RepathNoteIndex,
     RewriteNoteLinks
   }
 
@@ -70,7 +69,7 @@ defmodule Engram.Notes do
   # stored bytes. Read by a catch-up page (`list_changes_by_seq/4`,
   # `fields: :all`; change maps carry no state, and stale-facade resolution
   # re-reads its own rows, so selecting it shipped bytes the byte budget never
-  # counted) and by `fetch_note_for_worker/1,2` (the embed, repath and keyword
+  # counted) and by `fetch_note_for_worker/1,2` (the embed and keyword
   # workers use the facade; the link worker's legacy path re-reads through
   # `authoritative_content/2`). Computed from the schema so a new column is
   # fed by default.
@@ -1651,17 +1650,12 @@ defmodule Engram.Notes do
                 :ok =
                   broadcast_change(user.id, vault.id, "delete", old_path, note.id, seq: note.seq)
 
-                # #1612 — same repath rename_note enqueues (#746). Without it the
-                # points keep the old path/folder hmacs and folder-filtered search
-                # misses the moved note. A resurrect-rename usually has no points, so it
-                # re-embeds; if it beat DeleteNoteIndex (#1610), they are patched instead.
+                # A move makes no Qdrant write (R3a: a point holds no path). A
+                # resurrect-rename's points went with its tombstone, so it embeds
+                # fresh; a live relocate is already embedded and queues nothing.
                 _ =
-                  Enqueue.enqueue(
-                    RepathNoteIndex.new_debounced(note.id, user.id,
-                      old_path_hmac: old_path_hmac_b64!(user, old_path)
-                    ),
-                    "repath_note_index"
-                  )
+                  if note.content_hash != note.embed_hash,
+                    do: EmbedNote.insert_debounced(note.id, user.id)
               end
 
             {:ok, note}
@@ -4736,15 +4730,8 @@ defmodule Engram.Notes do
 
     case result do
       {:ok, {:ok, note}} ->
-        # #746 — rename only changes the path; repath the existing Qdrant
-        # points instead of re-embedding through Voyage. T3.2: base64 hmac, never plaintext.
-        _ =
-          Enqueue.enqueue(
-            RepathNoteIndex.new_debounced(note.id, user.id,
-              old_path_hmac: old_path_hmac_b64!(user, old_path)
-            ),
-            "repath_note_index"
-          )
+        # #746: no re-embed, and no Qdrant write either (R3a: a point holds
+        # no path, so its index is already right after a rename).
 
         # #648/#1231 — server-side link rewrite for REST/MCP-origin renames.
         # Plugin-origin renames never reach rename_note (Obsidian rewrites
@@ -7762,9 +7749,6 @@ defmodule Engram.Notes do
                  old_path_hmac_b64!(user, old_note_path)}
               end)
 
-            # A rename this large is maintenance: it waits out the v5 rebuild.
-            bulk_repath? = length(real_note_updates) > RepathNoteIndex.bulk_threshold()
-
             # One seq for the whole folder-rename op, shared across every
             # touched row (renamed updates + old-path tombstones), in a SINGLE
             # transaction so a cursor-based pull (`WHERE seq > cursor`) can
@@ -7831,9 +7815,9 @@ defmodule Engram.Notes do
                   NoteBody.put!(for r <- rows, r.id in made, do: {r.id, r})
                 end)
 
-                # The reindex + link-rewrite fan-out commits with the rows it
+                # The link-rewrite fan-out commits with the rows it
                 # covers (bulk inserts, bounded by Engram.Batch.insert_rows/0).
-                enqueue_rename_cascade_jobs(user, vault, moves, bulk_repath?)
+                enqueue_rename_cascade_jobs(user, vault, moves)
 
                 seq
               end)
@@ -7915,19 +7899,13 @@ defmodule Engram.Notes do
     end)
   end
 
-  # The folder-rename cascade's reindex + link-rewrite jobs for every moved
-  # note, as two bulk inserts instead of 2N single ones (#2169).
+  # The folder-rename cascade's link-rewrite jobs for every moved note, as
+  # one bulk insert instead of N single ones (#2169).
   #
   # `moves` is `{note, old_path, new_path, new_folder, old_path_hmac_b64}`.
   # T3.2 - hmac-only args, never plaintext.
   #
-  # Repath: `Oban.insert_all/1` ignores the worker's `unique`, so notes that
-  # already have a pending RepathNoteIndex job are dropped with
-  # `Jobs.reject_pending/3` (what `unique: [keys: [:note_id, ...]]` did, one
-  # probe per 50 ids). A pending job reads the note's CURRENT path when it
-  # runs, so it also covers a second rename that landed before it ran; a job
-  # already EXECUTING may have read the older path, so it does not count
-  # (`executing: false`) and a fresh job is queued.
+  # No index job: a move makes no Qdrant write (R3a, a point holds no path).
   #
   # Rewrite: RewriteNoteLinks has no `unique` (a cursor worker re-enqueues
   # its own successor), so nothing to drop. #648/#1231 Phase 3 - a folder
@@ -7940,29 +7918,9 @@ defmodule Engram.Notes do
   # so every caller here is web/MCP and must rewrite. Gated on a real move:
   # the idempotent same-folder branch reaches this with old == new.
   #
-  # One job per folder rename was rejected: repath patches ONE note's Qdrant
-  # points under that note's own old hmac and retries/falls back per note, and
-  # the rewrite job's cursor and target are per note.
-  defp enqueue_rename_cascade_jobs(user, vault, moves, bulk_repath?) do
-    to_repath =
-      RepathNoteIndex
-      |> Enqueue.reject_pending(
-        Enum.map(moves, fn {n, _, _, _, _} -> n.id end),
-        [executing: false],
-        "repath_note_index"
-      )
-      |> MapSet.new()
-
-    moves
-    |> Enum.filter(fn {n, _, _, _, _} -> MapSet.member?(to_repath, n.id) end)
-    |> Enum.map(fn {note, _old, _new, _folder, old_hmac} ->
-      RepathNoteIndex.new_debounced(note.id, user.id,
-        old_path_hmac: old_hmac,
-        bulk: bulk_repath?
-      )
-    end)
-    |> Enqueue.enqueue_all("repath_note_index")
-
+  # One job per folder rename was rejected: the rewrite job's cursor and
+  # target are per note.
+  defp enqueue_rename_cascade_jobs(user, vault, moves) do
     moves
     |> Enum.filter(fn {_n, old, new, _f, _h} -> old != new end)
     |> Enum.map(fn {note, old, _new, _folder, old_hmac} ->

@@ -48,7 +48,6 @@ defmodule Engram.Workers.WorkerTenantArgsRlsTest do
   alias Engram.Vaults.Vault
   alias Engram.Workers.EmbedNote
   alias Engram.Workers.ExtractNoteLinks
-  alias Engram.Workers.RepathNoteIndex
 
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
@@ -229,11 +228,6 @@ defmodule Engram.Workers.WorkerTenantArgsRlsTest do
 
     test "ExtractNoteLinks.new_debounced/2", %{note: note, user: user} do
       assert tenant_arg(ExtractNoteLinks.new_debounced(note.id, user.id)) == user.id
-    end
-
-    test "RepathNoteIndex.new_debounced/3", %{note: note, user: user} do
-      assert tenant_arg(RepathNoteIndex.new_debounced(note.id, user.id, old_path_hmac: "abc")) ==
-               user.id
     end
   end
 
