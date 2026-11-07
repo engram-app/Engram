@@ -70,6 +70,8 @@ config :engram, :admin_bootstrap_lock_enabled, false
 # covered directly by Engram.Repo.TenancyGuardTest, which can also drop the
 # role — the interesting case a boot-time call could never reach.
 config :engram, :tenancy_guard_enabled, false
+# No boot-time mint under the SQL sandbox; tests mint via SetupToken.mint/1.
+config :engram, :setup_token_on_boot, false
 
 # Configure your database. The connection (DATABASE_URL, MIX_TEST_PARTITION)
 # and pool_size are env-derived, so they live in config/runtime.exs; see the

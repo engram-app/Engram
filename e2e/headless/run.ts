@@ -170,7 +170,13 @@ async function setupSession(): Promise<Session> {
 	const reg = await jsonFetch("/auth/register", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ email, password }),
+		// First-run admin claim token (ENGRAM_SETUP_TOKEN on the backend); ignored
+		// once the instance has an admin.
+		body: JSON.stringify({
+			email,
+			password,
+			setup_token: process.env.ENGRAM_SETUP_TOKEN ?? "e2e-setup-token",
+		}),
 	});
 	if (reg.status !== 201) throw new Error(`register failed: ${reg.status} ${JSON.stringify(reg.body)}`);
 	const accessToken = reg.body.access_token as string;

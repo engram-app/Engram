@@ -108,6 +108,8 @@ export default defineConfig({
 				// :debug logs every SQL query (~55k lines per CI run).
 				LOG_LEVEL: process.env.LOG_LEVEL ?? (isCI ? "info" : "debug"),
 				AUTH_PROVIDER: "local",
+				// First-run admin claim token; e2e/support/api.ts sends the same default.
+				ENGRAM_SETUP_TOKEN: process.env.ENGRAM_SETUP_TOKEN ?? "e2e-setup-token",
 				PHX_SERVER: "true",
 				PORT: String(LOCAL_BACKEND_PORT),
 				// ENCRYPTION_MASTER_KEY: MIX_ENV=dev falls back to the dev-only key

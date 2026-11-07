@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 
 AUTH_PROVIDER = os.environ.get("AUTH_PROVIDER", "local")
 
+# First-run admin claim token. The local-auth stacks pin ENGRAM_SETUP_TOKEN to
+# this default (ci/compose.local.yml); every register call sends it, since any
+# of them may be the instance's first signup. Ignored once the admin exists.
+SETUP_TOKEN = os.environ.get("ENGRAM_SETUP_TOKEN", "e2e-setup-token")
+
 
 class AuthProvider(ABC):
     """Base class for E2E auth provider adapters."""
@@ -130,7 +135,7 @@ class LocalAuthProvider(AuthProvider):
         # 1. Register via local auth endpoint
         resp = requests.post(
             f"{self.api_url}/auth/register",
-            json={"email": email, "password": password},
+            json={"email": email, "password": password, "setup_token": SETUP_TOKEN},
             timeout=10,
         )
         if resp.status_code != 201:

@@ -283,9 +283,11 @@ defmodule Engram.Accounts do
     {:error, :password_too_short}
   end
 
+  # Closing the claim window also burns the one-time setup token, in the same
+  # transaction, so it cannot outlive the admin it was minted for.
   defp maybe_close_bootstrap(true) do
     case Engram.Instance.mark_bootstrap_complete() do
-      {:ok, _} -> :ok
+      {:ok, _} -> Engram.Instance.SetupToken.burn()
       {:error, cs} -> {:error, cs}
     end
   end
