@@ -506,6 +506,133 @@ defmodule Engram.Folders.Rows do
   # path must not pin a connection in an endless recursion) is cut at this depth.
   @max_depth 512
 
+  @doc """
+  `%{path => id}` for the live rows at `paths`, read only (`ensure_all/3`
+  without the create): a path with no live row maps to nil, as does the root.
+  """
+  @spec ids_by_path(map(), Ecto.UUID.t(), [String.t()]) :: %{String.t() => Ecto.UUID.t() | nil}
+  def ids_by_path(user, vault_id, paths) do
+    case Crypto.dek_filter_key(user) do
+      {:ok, fk} ->
+        hmacs = for p <- paths, p != "", into: %{}, do: {p, path_hmac(fk, p)}
+        known = live_ids_by_path_hmac(vault_id, Map.values(hmacs))
+        Map.new(paths, &{&1, Map.get(known, hmacs[&1])})
+
+      {:error, _} ->
+        Map.new(paths, &{&1, nil})
+    end
+  end
+
+  @doc """
+  The full path of the live folder row `id`, from its chain of parents up to
+  the root: one recursive read, O(depth), and one name decrypt per level.
+  `{:error, :not_found}` when the row, or any ancestor, is missing or dead, or
+  a name will not open.
+  """
+  @spec path_by_id(map(), Ecto.UUID.t(), Ecto.UUID.t()) ::
+          {:ok, String.t()} | {:error, :not_found}
+  def path_by_id(user, vault_id, id) do
+    live = fn query -> where(query, [f], f.vault_id == ^vault_id and is_nil(f.deleted_at)) end
+
+    leaf =
+      from(f in Folder,
+        where: f.id == ^id,
+        select: %{id: f.id, parent_id: f.parent_id, depth: fragment("0")}
+      )
+      |> live.()
+
+    up =
+      from(f in Folder,
+        join: t in "folder_up",
+        on: f.id == t.parent_id,
+        where: t.depth < @max_depth,
+        select: %{id: f.id, parent_id: f.parent_id, depth: fragment("? + 1", t.depth)}
+      )
+      |> live.()
+
+    chain =
+      from(f in Folder, join: t in "folder_up", on: f.id == t.id, order_by: [desc: t.depth])
+      |> recursive_ctes(true)
+      |> with_cte("folder_up", as: ^union_all(leaf, ^up))
+      |> Repo.all()
+
+    with {:ok, dek} <- Crypto.get_dek(user),
+         [%{parent_id: nil} | _] <- chain,
+         {:ok, names} <- decrypt_chain(dek, chain) do
+      {:ok, Enum.join(names, "/")}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Every live folder row of `vault_id`, names still encrypted: what
+  `decrypt_tree/2` takes. O(folders). Runs inside the caller's tenant
+  transaction; decrypt outside it.
+  """
+  @spec live_rows(Ecto.UUID.t()) :: [map()]
+  def live_rows(vault_id) do
+    from(f in Folder,
+      where: f.vault_id == ^vault_id and is_nil(f.deleted_at),
+      select: %{
+        id: f.id,
+        parent_id: f.parent_id,
+        dek_version: f.dek_version,
+        ct: f.name_ciphertext,
+        nonce: f.name_nonce
+      }
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  `live_rows/1` with names decrypted and each row's full `path`, as
+  `[%{id, parent_id, name, path}]`, parents before children. A row whose name
+  or ancestor chain does not open (a dead or missing parent, a cycle) is
+  left out: it has no place to show, and the FolderTable heal repairs it.
+  """
+  @spec decrypt_tree(binary(), [map()]) :: [map()]
+  def decrypt_tree(dek, rows) do
+    named =
+      for r <- rows,
+          {:ok, name} <- [decrypt_name(dek, r.id, r.dek_version, r.ct, r.nonce)],
+          into: %{},
+          do: {r.id, %{id: r.id, parent_id: r.parent_id, name: name}}
+
+    # Depth-first from the root, so a row is reached only through live, named
+    # parents (preorder: parents first). A cycle never links to the root, so
+    # it is never reached. Recursion is as deep as the tree.
+    named |> Map.values() |> Enum.group_by(& &1.parent_id) |> place(nil, "")
+  end
+
+  defp place(children, parent, prefix) do
+    children
+    |> Map.get(parent, [])
+    |> Enum.flat_map(fn kid ->
+      row = Map.put(kid, :path, Path.join(prefix, kid.name))
+      [row | place(children, kid.id, row.path)]
+    end)
+  end
+
+  # Root first; each row must be the parent of the next, so a missing or dead
+  # ancestor (the walk stops at it) leaves a chain that does not reach root.
+  defp decrypt_chain(dek, chain) do
+    chain
+    |> Enum.reduce_while({:ok, [], nil}, fn row, {:ok, acc, parent} ->
+      with true <- row.parent_id == parent,
+           {:ok, name} <-
+             decrypt_name(dek, row.id, row.dek_version, row.name_ciphertext, row.name_nonce) do
+        {:cont, {:ok, [name | acc], row.id}}
+      else
+        _ -> {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, names, _} -> {:ok, Enum.reverse(names)}
+      :error -> :error
+    end
+  end
+
   # The recursive walk from `roots` (a query of `%{id, depth}`) down the live
   # folders of `vault_id`: the CTE pieces, for `subtree_query/2` and
   # `descendant_ids/3` to select from.

@@ -329,6 +329,14 @@
             "x-struct": null,
             "x-validate": null
           },
+          "folder_id": {
+            "description": "Notes only, and only while the server's folder_ops switch is on: the id of the note's folder (null at the root, or for a folder with no row yet).",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "id": {
             "description": "Stable note/attachment id — lets a client reconcile its path↔id map.",
             "format": "uuid",
@@ -678,6 +686,42 @@
           "change_seq": {
             "description": "Current per-vault sequence watermark.",
             "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "folders": {
+            "description": "Only while the server's folder_ops switch is on: every live folder. The root has no entry; its children have parent_id null.",
+            "items": {
+              "properties": {
+                "id": {
+                  "format": "uuid",
+                  "type": "string",
+                  "x-struct": null,
+                  "x-validate": null
+                },
+                "name": {
+                  "type": "string",
+                  "x-struct": null,
+                  "x-validate": null
+                },
+                "parent_id": {
+                  "format": "uuid",
+                  "nullable": true,
+                  "type": "string",
+                  "x-struct": null,
+                  "x-validate": null
+                }
+              },
+              "required": [
+                "id",
+                "parent_id",
+                "name"
+              ],
+              "type": "object",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
             "x-struct": null,
             "x-validate": null
           },

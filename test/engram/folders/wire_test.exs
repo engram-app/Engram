@@ -13,10 +13,11 @@ defmodule Engram.Folders.WireTest do
   setup :authed_api_conn
 
   setup %{user: user, vault: vault} do
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     :ok = EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
     {:ok, _} = Folders.create_markers(user, vault, ["A", "B"])
     flush_broadcasts()
-    :ok
+    %{user: user}
   end
 
   defp on!, do: ServiceConfig.put_override(:folder_ops, true)
@@ -67,6 +68,23 @@ defmodule Engram.Folders.WireTest do
       assert events != [], "the ops must still broadcast today's events"
       assert folder_changed(events) == []
       assert nudges(events) == []
+    end
+
+    test "the manifest carries no folders and no folder_id", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "A/n.md", "content" => "x"},
+          actor: "api"
+        )
+
+      body = conn |> get(~p"/api/sync/manifest") |> json_response(200)
+
+      refute Map.has_key?(body, "folders")
+      assert [note] = body["notes"]
+      refute Map.has_key?(note, "folder_id")
     end
 
     test "rename reports no seq", %{user: user, vault: vault} do
@@ -126,6 +144,31 @@ defmodule Engram.Folders.WireTest do
       assert [%{name: "C", parent_id: parent}] = folder_changed(events)
       assert parent == id_of(user, vault, "A")
       assert [%{path: "A/C"}] = nudges(events)
+    end
+
+    test "the manifest lists every folder and each note's folder_id",
+         %{conn: conn, user: user, vault: vault} do
+      {:ok, _} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "A/Sub/n.md", "content" => "x"},
+          actor: "api"
+        )
+
+      {:ok, _} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "x"}, actor: "api")
+
+      a = id_of(user, vault, "A")
+      sub = id_of(user, vault, "A/Sub")
+
+      body = conn |> get(~p"/api/sync/manifest") |> json_response(200)
+
+      assert Enum.sort_by(body["folders"], & &1["name"]) == [
+               %{"id" => a, "parent_id" => nil, "name" => "A"},
+               %{"id" => id_of(user, vault, "B"), "parent_id" => nil, "name" => "B"},
+               %{"id" => sub, "parent_id" => a, "name" => "Sub"}
+             ]
+
+      by_path = Map.new(body["notes"], &{&1["path"], &1["folder_id"]})
+      assert by_path == %{"A/Sub/n.md" => sub, "r.md" => nil}
     end
 
     test "rename returns the op's seq", %{user: user, vault: vault} do

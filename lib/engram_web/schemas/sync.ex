@@ -27,6 +27,14 @@ defmodule EngramWeb.Schemas.ManifestEntry do
         description:
           "CRDT head fingerprint (notes only) — equality with the client's " <>
             "recorded head proves a live-bound doc is converged without content transfer."
+      },
+      folder_id: %Schema{
+        type: :string,
+        format: :uuid,
+        nullable: true,
+        description:
+          "Notes only, and only while the server's folder_ops switch is on: the id of " <>
+            "the note's folder (null at the root, or for a folder with no row yet)."
       }
     },
     required: [:id, :path]
@@ -47,6 +55,21 @@ defmodule EngramWeb.Schemas.ManifestResponse do
       total_notes: %Schema{type: :integer},
       total_attachments: %Schema{type: :integer},
       change_seq: %Schema{type: :integer, description: "Current per-vault sequence watermark."},
+      folders: %Schema{
+        type: :array,
+        description:
+          "Only while the server's folder_ops switch is on: every live folder. " <>
+            "The root has no entry; its children have parent_id null.",
+        items: %Schema{
+          type: :object,
+          properties: %{
+            id: %Schema{type: :string, format: :uuid},
+            parent_id: %Schema{type: :string, format: :uuid, nullable: true},
+            name: %Schema{type: :string}
+          },
+          required: [:id, :parent_id, :name]
+        }
+      },
       unchanged: %Schema{
         type: :boolean,
         nullable: true,

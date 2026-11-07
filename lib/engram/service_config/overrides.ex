@@ -61,7 +61,9 @@ defmodule Engram.ServiceConfig.Overrides do
     file_times_backfill: :boolean,
     note_body_columns_null: :boolean,
     # The null batch's per-pass cap (rows), to slow it without a deploy.
-    note_body_columns_null_max_fixed: {:integer, 1..1_000_000}
+    note_body_columns_null_max_fixed: {:integer, 1..1_000_000},
+    # The plugin's `folder_op` wire (#2523 S4), default off: `Engram.Folders.Wire`.
+    folder_ops: :boolean
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})

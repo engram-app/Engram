@@ -59,6 +59,13 @@ defmodule EngramWeb.CrdtChannelFolderOpTest do
       assert id_of(user, vault, "A") == a
     end
 
+    test "the crdt_create reply carries no folder_id", %{user: user, vault: vault} do
+      socket = join!(user, vault)
+      ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "A/n.md"})
+      assert_reply ref, :ok, reply
+      refute Map.has_key?(reply, :folder_id)
+    end
+
     test "the join replies do not advertise folder_ops", %{user: user, vault: vault} do
       {:ok, reply, _} = subscribe_and_join(user_socket(user), "user:#{user.id}", %{})
       refute reply.features[:folder_ops]
@@ -88,7 +95,7 @@ defmodule EngramWeb.CrdtChannelFolderOpTest do
       socket = join!(user, vault)
 
       ref = push(socket, "folder_op", move(a, b, "A"))
-      assert_reply ref, :ok, %{seq: seq}
+      assert_reply ref, :ok, %{folder_id: ^a, seq: seq}
       assert seq == Vaults.current_seq(user.id, vault.id)
       assert id_of(user, vault, "B/A") == a
 
@@ -150,18 +157,57 @@ defmodule EngramWeb.CrdtChannelFolderOpTest do
       assert_reply ref, :error, %{reason: "not_found"}
     end
 
-    test "a malformed op is a bad_frame", %{user: user, vault: vault, a: a} do
+    test "a malformed op is a bad_frame", %{user: user, vault: vault} do
       socket = join!(user, vault)
 
-      for payload <- [
-            move("nope", nil, "A"),
-            move(a, nil, "x/y"),
-            move(a, nil, ""),
-            %{"op" => "zap"}
-          ] do
+      for payload <- [move("nope", nil, "A"), %{"op" => "zap"}] do
         ref = push(socket, "folder_op", payload)
         assert_reply ref, :error, %{reason: "bad_frame"}
       end
+    end
+
+    test "a name that is not one segment is invalid_name", %{user: user, vault: vault, a: a} do
+      socket = join!(user, vault)
+
+      for name <- ["x/y", "", "..", nil] do
+        ref = push(socket, "folder_op", move(a, nil, name))
+        assert_reply ref, :error, %{reason: "invalid_name"}
+
+        ref = push(socket, "folder_op", %{"op" => "create", "parent_id" => nil, "name" => name})
+        assert_reply ref, :error, %{reason: "invalid_name"}
+      end
+
+      assert id_of(user, vault, "A") == a
+    end
+
+    test "create of a name that exists returns that folder, not a conflict",
+         %{user: user, vault: vault, a: a, b: b} do
+      socket = join!(user, vault)
+
+      ref = push(socket, "folder_op", %{"op" => "create", "parent_id" => nil, "name" => "A"})
+      assert_reply ref, :ok, %{folder_id: ^a}
+
+      # A folder only a note's path made (no marker) is found the same way.
+      {:ok, _} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "B/Derived/n.md", "content" => "x"},
+          actor: "api"
+        )
+
+      derived = id_of(user, vault, "B/Derived")
+      assert derived
+
+      ref = push(socket, "folder_op", %{"op" => "create", "parent_id" => b, "name" => "Derived"})
+      assert_reply ref, :ok, %{folder_id: ^derived}
+    end
+
+    test "crdt_create replies with the note's folder_id", %{user: user, vault: vault, a: a} do
+      socket = join!(user, vault)
+
+      ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "A/n.md"})
+      assert_reply ref, :ok, %{folder_id: ^a}
+
+      ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "r.md"})
+      assert_reply ref, :ok, %{folder_id: nil}
     end
 
     test "create is idempotent by path", %{user: user, vault: vault, b: b} do
