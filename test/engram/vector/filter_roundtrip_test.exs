@@ -198,31 +198,13 @@ defmodule Engram.Vector.FilterRoundtripTest do
   end
 
   # Strict mode 400s a filter on `n` while the collection has no `n` index:
-  # the per-note filters fall back to the path alone.
-  test "without the n index the per-note filters match by path alone, no 400" do
-    col =
-      "engram_rt_non_#{System.get_env("MIX_TEST_PARTITION")}_#{System.unique_integer([:positive])}"
-
-    {:ok, %{status: 200}} =
-      Req.put("#{qdrant_url()}/collections/#{col}",
-        json: %{vectors: %{"dense" => %{size: @dims, distance: "Cosine"}}}
-      )
-
-    Engram.QdrantIntegration.drop_on_exit(col)
-
-    for {field, type} <-
-          [u: "uuid", v: "uuid", p: "uuid"] ++
-            [user_id: "keyword", vault_id: "keyword", path_hmac: "keyword"] do
-      {:ok, %{status: 200}} =
-        Req.put("#{qdrant_url()}/collections/#{col}/index?wait=true",
-          json: %{field_name: field, field_schema: type}
-        )
-    end
-
-    {:ok, %{status: 200}} =
-      Req.patch("#{qdrant_url()}/collections/#{col}",
-        json: %{strict_mode_config: %{enabled: true, unindexed_filtering_retrieve: false}}
-      )
+  # the per-note filters fall back to the path alone. `ensure_collection/2`
+  # rebuilding the index replaces the cached "no", so the very next filter
+  # takes the `n` arm (no stale-"no" minute after boot).
+  test "without the n index: path alone, no 400; ensure_collection turns the n arm on",
+       %{col: col} do
+    {:ok, %{status: 200}} = Req.delete("#{qdrant_url()}/collections/#{col}/index/n?wait=true")
+    on_exit(fn -> Qdrant.ensure_collection(col, @dims) end)
 
     refute Qdrant.n_filterable?(col)
 
@@ -234,8 +216,12 @@ defmodule Engram.Vector.FilterRoundtripTest do
 
     assert {:ok, 1} = Qdrant.count_by_note(col, t.user_id, t.vault_id, id, path)
     assert :ok = Qdrant.delete_by_note(col, t.user_id, t.vault_id, id, path)
-    assert {:ok, 0} = Qdrant.count_by_note(col, t.user_id, t.vault_id, id, path)
-    assert count(col, %{must: [%{has_id: [r3a.id]}]}) == 1
+    assert left(col, t) == [r3a.id]
+
+    assert :ok = Qdrant.ensure_collection(col, @dims)
+    assert {:ok, 1} = Qdrant.count_by_note(col, t.user_id, t.vault_id, id, path)
+    assert :ok = Qdrant.delete_by_note(col, t.user_id, t.vault_id, id, path)
+    assert left(col, t) == []
   end
 
   test "repath rewrites each format with its own keys", %{col: col} do

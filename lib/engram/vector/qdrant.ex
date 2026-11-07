@@ -84,8 +84,10 @@ defmodule Engram.Vector.Qdrant do
   @spec n_filterable?(String.t() | nil) :: boolean()
   def n_filterable?(col \\ nil) do
     col = col || collection()
-    Engram.Cache.fetch(:note_id_filter, {:n_index, base_url(), col}, fn -> n_indexed?(col) end)
+    Engram.Cache.fetch(:note_id_filter, n_index_key(col), fn -> n_indexed?(col) end)
   end
+
+  defp n_index_key(col), do: {:n_index, base_url(), col}
 
   @doc "Largest point batch one upsert or vector update sends."
   def max_write_batch, do: @max_write_batch
@@ -350,8 +352,12 @@ defmodule Engram.Vector.Qdrant do
   # Storage/safety params are best-effort: a failed reconcile is logged and
   # retried next boot, never a reason to stop indexing. Only the payload
   # indexes above gate `:verified`, because strict mode 400s without them.
+  # Every payload index exists now, `n` included: say so to `n_filterable?/1`,
+  # replacing a cached "no" from before the index was built (a reader that ran
+  # first after boot), so the per-note filters use the `n` arm at once.
   defp reconciled(col) do
     _ = reconcile_config(col)
+    Engram.Cache.put(:note_id_filter, n_index_key(col), true)
     {:ok, :verified}
   end
 
