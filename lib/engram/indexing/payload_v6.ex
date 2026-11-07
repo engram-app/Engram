@@ -70,7 +70,12 @@ defmodule Engram.Indexing.PayloadV6 do
     query =
       case Keyword.fetch(opts, :hash) do
         {:ok, hash} ->
-          held = from(n in Note, where: n.id == ^note_id and n.payload_hash == ^hash, select: 1)
+          held =
+            from(n in Note,
+              where: n.kind == "note" and n.id == ^note_id and n.payload_hash == ^hash,
+              select: 1
+            )
+
           where(query, exists(held))
 
         :error ->

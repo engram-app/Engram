@@ -51,8 +51,10 @@ defmodule Engram.Indexing.PayloadV5 do
       # The note row (immutable chunk index, Engram#2263): what a filtered
       # search matches once Postgres resolved the filters. It is in the
       # payload hash, so the first pass after R2 refreshes a note's reused
-      # points with it; `ReconcileNotePayloads` backfills the rest.
-      note: FilterId.uuid(to_string(note.id)),
+      # points with it; `ReconcileNotePayloads` backfills the rest. Absent
+      # like every other field when the map has no id (a note not yet
+      # persisted), never a crash.
+      note: if(id = Map.get(note, :id), do: FilterId.uuid(to_string(id))),
       path_id: FilterId.from_hmac(note.path_hmac),
       folder_id: FilterId.from_hmac(note.folder_hmac),
       type_id: FilterId.from_hmac(note.type_hmac),
