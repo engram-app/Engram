@@ -90,10 +90,10 @@ defmodule Engram.Folders.NoteFolderHashNullTest do
 
       Repo.query!("UPDATE notes SET deleted_at = NULL WHERE id = $1", [dump(n.id)])
 
-      # No restore trigger since release D: the raw restore keeps the dead
-      # reference, and the FolderTable pass (it selects dead references)
-      # re-points the note at a live row for its folder.
-      assert ref(n) == a
+      # Release D: `notes_folder_ref_live_only` fires on the restore and
+      # NULLs the dead reference (the restore twin is gone), so the drain's
+      # index finds the note and the FolderTable pass re-links it.
+      assert ref(n) == nil
       FolderTable.run_pass(user_ids: [u.id])
       assert ref(n) == row_at(u, "A")
     end
