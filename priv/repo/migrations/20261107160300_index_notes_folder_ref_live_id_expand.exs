@@ -8,7 +8,16 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderRefLiveIdExpand do
   are UUIDv7, so a backward scan is newest first). The name-terms search
   leg (`Engram.Search.NameTerms.under_folders/2`) reads at most 50 per
   folder for at most 200 folders, so its cost never grows with the notes in
-  a folder. Shared with S2 (one definition, here).
+  a folder. Shared with S2 (one definition, here). INCLUDE (user_id): the
+  RLS policy reads it, so an index-only scan answers the tenant check with
+  no heap fetch.
+
+  A superset of `notes_folder_ref_live` (20261106100000: `(vault_id,
+  folder_ref_id) INCLUDE (id, user_id)`, the same predicate): same leading
+  keys, `id` moved from INCLUDE into the key, so every scan that index
+  serves this one serves too, plus id order. That one is now redundant; it
+  is dropped in a contract step (S6), not here, as the previous release may
+  still plan on it.
 
   Not on `updated_at` (rule 2 of `docs/context/maintenance-job-db-load.md`):
   every key column changes only on create, move or delete, never on a
@@ -24,7 +33,7 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderRefLiveIdExpand do
 
     execute """
     CREATE INDEX CONCURRENTLY notes_folder_ref_live_id
-    ON notes (vault_id, folder_ref_id, id)
+    ON notes (vault_id, folder_ref_id, id) INCLUDE (user_id)
     WHERE deleted_at IS NULL AND kind = 'note'
     """
   end
