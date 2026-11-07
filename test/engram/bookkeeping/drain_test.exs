@@ -6,11 +6,13 @@ defmodule Engram.Bookkeeping.DrainTest do
   alias Engram.Bookkeeping.Drain
   alias Engram.DataMigrations
   alias Engram.DataMigrations.FolderTable
+  alias Engram.Indexing.PayloadV6
   alias Engram.Notes
   alias Engram.QueryPlan
   alias Engram.Repo
   alias Engram.Workers.BackfillLinkKeys
   alias Engram.Workers.BookkeepingDrain
+  alias Engram.Workers.ReconcileNotePayloads
   alias Engram.Workers.ReencodeEnvelopes
 
   setup do
@@ -293,15 +295,15 @@ defmodule Engram.Bookkeeping.DrainTest do
     for i <- 1..100, do: write!(u, v, "Clean#{rem(i, 5)}/n#{i}.md")
 
     {sql, _params} =
-      Repo.to_sql(:all, Engram.Workers.ReconcileNotePayloads.n_behind_probe(u.id))
+      Repo.to_sql(:all, ReconcileNotePayloads.n_behind_probe(u.id))
 
     assert sql =~ "coalesce("
     # The probe's and the index's literals are the baseline and the version:
     # a payload version bump turns this red until a new index ships.
     assert sql =~ "5) < 6"
-    assert Engram.Workers.ReconcileNotePayloads.n_version() == 6
-    assert Engram.Indexing.PayloadV6.baseline() == 5
-    assert Engram.Indexing.PayloadV6.version() == 6
+    assert ReconcileNotePayloads.n_version() == 6
+    assert PayloadV6.baseline() == 5
+    assert PayloadV6.version() == 6
     plan = QueryPlan.generic_plan(sql, analyze: ["note_index_state"], fresh: true)
     assert plan =~ "note_index_state_n_behind", plan
     refute plan =~ "Seq Scan on note_index_state", plan
@@ -355,7 +357,7 @@ defmodule Engram.Bookkeeping.DrainTest do
     for {kind, worker_selects?} <- [
           envelope: &ReencodeEnvelopes.legacy_rows?/1,
           link_keys: &BackfillLinkKeys.missing_rows?/1,
-          payload: &Engram.Workers.ReconcileNotePayloads.unstamped_rows?/1
+          payload: &ReconcileNotePayloads.unstamped_rows?/1
         ] do
       expected = users |> Enum.filter(worker_selects?) |> Enum.sort()
 

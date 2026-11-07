@@ -78,8 +78,7 @@ defmodule Engram.Vector.FilterRoundtripTest do
 
   # A v3 writer's point: long keys only.
   defp v3_point(t),
-    do:
-      point(%{user_id: t.user_id, vault_id: t.vault_id, path_hmac: Base.encode64(t.path)})
+    do: point(%{user_id: t.user_id, vault_id: t.vault_id, path_hmac: Base.encode64(t.path)})
 
   defp ids(col, opts) do
     {:ok, hits} = Qdrant.search(col, @vector, [limit: 10] ++ opts)
