@@ -6543,7 +6543,7 @@ defmodule Engram.Notes do
   """
   @spec raw_folder_count_rows(map(), map()) :: [map()]
   def raw_folder_count_rows(user, vault) do
-    # Four reads, each cheap in Postgres and decrypted outside it:
+    # Three reads, each cheap in Postgres and decrypted outside it:
     #
     #  * `%{ref:, count:}`: live notes grouped by `folder_ref_id`, the folder
     #    ROW they sit in, an index-only scan of `notes_folder_ref_live` (no
@@ -6552,11 +6552,10 @@ defmodule Engram.Notes do
     #  * `%{folder_row: ...}`: the vault's folder rows, which name those
     #    references (a folder's name is one segment, so a path is assembled
     #    from its ancestors);
-    #  * `%{id:, dv:, ct:, nonce:, count: 1}`: one per drift note
-    #    (`drift_query/2`), placed by its own folder envelope: 0 rows in
-    #    steady state;
-    #  * `%{id:, ..., count: 0}`: one per folder marker, so an empty explicit
-    #    folder is listed.
+    #  * `%{id:, dv:, ct:, nonce:, count:}`: one per drift note
+    #    (`drift_query/2`, count 1), placed by its own folder envelope (0 rows
+    #    in steady state), and one per folder marker (count 0), so an empty
+    #    explicit folder is listed.
     #
     # The root is the NULL group minus the drift: the same rows as the root
     # page of `list_notes_in_folder_page/4`.
@@ -6612,34 +6611,32 @@ defmodule Engram.Notes do
           )
         )
 
-    drift =
-      Repo.all(
-        from(n in drift_query(user, vault),
-          select: %{
-            id: n.id,
-            dv: n.dek_version,
-            ct: n.folder_ciphertext,
-            nonce: n.folder_nonce,
-            count: 1
-          }
-        )
+    # The drift notes (count 1 each) and the folder markers (count 0) in ONE
+    # statement, each arm on its own index (`notes_unresolved_folder`,
+    # `notes_user_vault_folder_marker`).
+    envelope = fn query, count ->
+      from(n in query,
+        select: %{
+          id: n.id,
+          dv: n.dek_version,
+          ct: n.folder_ciphertext,
+          nonce: n.folder_nonce,
+          count: fragment("?::int", ^count)
+        }
       )
+    end
 
-    markers =
-      for m <- raw_folder_marker_rows(user, vault),
-          do: %{
-            id: m.id,
-            dv: m.dek_version,
-            ct: m.folder_ciphertext,
-            nonce: m.folder_nonce,
-            count: 0
-          }
+    markers = from(n in scoped_live(user, vault), where: n.kind == "folder")
 
+    envelopes =
+      Repo.all(union_all(envelope.(drift_query(user, vault), 1), ^envelope.(markers, 0)))
+
+    root = root - Enum.count(envelopes, &(&1.count == 1))
     root = root - length(drift)
 
     by_ref ++
       if(by_ref == [], do: [], else: Enum.reverse(folder_rows)) ++
-      drift ++ markers ++ if(root > 0, do: [%{folder: "", count: root}], else: [])
+      envelopes ++ if(root > 0, do: [%{folder: "", count: root}], else: [])
   end
 
   @doc """

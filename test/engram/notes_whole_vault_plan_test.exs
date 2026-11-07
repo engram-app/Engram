@@ -3,9 +3,11 @@ defmodule Engram.NotesWholeVaultPlanTest do
   # runs on, on its 7th execution (past the 5 custom plans Postgres tries
   # before it may switch a named statement to a GENERIC plan).
   #
-  # Whole-vault live reads that do not state `kind = 'note'` (folder counts,
-  # tag counts, the folder cascade's unresolved rows) read
-  # `notes_user_vault_live (user_id, vault_id) WHERE deleted_at IS NULL`. Before it they
+  # Whole-vault live reads that do not state `kind = 'note'` (tag counts)
+  # read `notes_user_vault_live (user_id, vault_id) WHERE deleted_at IS NULL`.
+  # The folder counts group the live notes by `folder_ref_id` (R9.5 step 3),
+  # an index-only scan of `notes_folder_ref_live`; the drift both folder
+  # readers merge is a page of `notes_unresolved_folder`. Before it they
   # borrowed `notes_user_id_vault_id_basename_hmac_index`, the only other
   # live-only `(.., vault_id, ..)` index (prod 2026-11-02: 277 scans/h).
   #
@@ -144,14 +146,22 @@ defmodule Engram.NotesWholeVaultPlanTest do
     end
   end
 
-  test "folder counts read notes_user_vault_live", %{user: u, vault: v} do
+  # The plans, custom and generic, read `index` and never scan `notes`.
+  defp assert_index(%{custom: custom, generic: generic}, index) do
+    for plan <- [custom, generic] do
+      assert plan =~ index, plan
+      refute plan =~ "Seq Scan on notes", plan
+    end
+  end
+
+  test "folder counts group by reference on notes_folder_ref_live", %{user: u, vault: v} do
     plans =
       QueryPlan.after_runs(
         fn -> Repo.with_tenant!(u.id, fn -> Notes.raw_folder_count_rows(u, v) end) end,
-        ~r/GROUP BY n0\."folder_ref_id", n0\."folder_hmac"/
+        ~r/GROUP BY n0\."folder_ref_id"/
       )
 
-    assert_vault_live(plans)
+    assert_index(plans, "Index Only Scan using notes_folder_ref_live")
   end
 
   test "tag counts read notes_user_vault_live", %{user: u, vault: v} do
@@ -164,14 +174,17 @@ defmodule Engram.NotesWholeVaultPlanTest do
     assert_vault_live(plans)
   end
 
-  test "the folder cascade's unresolved rows read notes_user_vault_live", %{user: u, vault: v} do
+  test "the folder cascade's drift read is a page of notes_unresolved_folder", %{
+    user: u,
+    vault: v
+  } do
     plans =
       QueryPlan.after_runs(
         fn -> {:ok, _} = Notes.scan_folders(u, v, ["F"]) end,
-        ~r/GROUP BY n0\."folder_hmac"/
+        ~r/octet_length\(.*\) > 16/
       )
 
-    assert_vault_live(plans)
+    assert_index(plans, "notes_unresolved_folder")
   end
 
   test "get_note_meta_by_ids fetches each id by primary key", %{user: u, vault: v, ids: ids} do

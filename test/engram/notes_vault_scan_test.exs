@@ -113,8 +113,9 @@ defmodule Engram.NotesVaultScanTest do
     end
 
     # Every row kind the count distinguishes: a note in a live folder row,
-    # one in a nested live row, notes whose reference names a DELETED row
-    # (counted by their folder hash, two different dead rows under one hash
+    # one in a nested live row, notes whose reference named a row that was
+    # then DELETED (`folders_release_refs` NULLs the reference, so they are
+    # drift, counted by their decrypted folder: two dead rows, one folder,
     # summed), a root note, a soft-deleted note, and an empty marker.
     test "counts live, nested, dead-ref, root and marker rows", %{user: u, vault: v} do
       put!(u, v, "Live/a.md", "a")
@@ -149,7 +150,9 @@ defmodule Engram.NotesVaultScanTest do
     # the unreferenced rest), each with a correlated live-folder probe; the
     # by-reference half became a nested loop over every folder row (231 ms on
     # a 13k-folder staging vault). One grouped scan, liveness decided from the
-    # folder rows already loaded.
+    # folder rows already loaded. R9.5 step 3: plus ONE bounded read of the
+    # envelopes the group cannot name (drift notes and folder markers, each
+    # arm on its own partial index), never a second scan of the vault.
     test "reads the vault's notes once", %{user: u, vault: v} do
       put!(u, v, "Work/A.md", "a")
       put!(u, v, "root.md", "r")
@@ -157,7 +160,10 @@ defmodule Engram.NotesVaultScanTest do
       {_, reads} =
         notes_reads(fn -> Repo.with_tenant!(u.id, fn -> Notes.raw_folder_count_rows(u, v) end) end)
 
-      assert length(reads) == 1, "notes reads:\n#{Enum.join(reads, "\n")}"
+      report = "notes reads:\n#{Enum.join(reads, "\n")}"
+      assert length(reads) == 2, report
+      assert [_grouped] = Enum.filter(reads, &(&1 =~ "GROUP BY")), report
+      assert [_envelopes] = Enum.filter(reads, &(&1 =~ "UNION ALL")), report
     end
   end
 
