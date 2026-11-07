@@ -39,3 +39,6 @@ base64 = "0.22"
 # Rival-lineage audit (yjs_lineage.rs): walks a stored Yjs update with yrs's
 # public decoder. Same version as y_ex, so both read the same wire format.
 yrs = "0.25"
+# Line diff (Myers with a deadline) behind text_diff::hunks, the multi-hunk
+# diff Notes.CrdtWrite applies (Engram#2519). Pure Rust, no default features.
+similar = { version = "2", default-features = false }

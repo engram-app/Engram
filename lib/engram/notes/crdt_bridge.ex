@@ -267,17 +267,44 @@ defmodule Engram.Notes.CrdtBridge do
   end
 
   @doc """
+  `diff_into_text/2` with the multi-hunk diff (`Engram.Native.text_hunks/2`):
+  each changed region is its own delete and insert, so the text between two
+  changed lines is left alone and a concurrent edit there survives the merge.
+  Hunks apply last to first, so the earlier offsets stay valid. No-op when
+  already equal.
+  """
+  @spec diff_hunks_into_text(Yex.Text.t(), String.t()) :: :ok
+  def diff_hunks_into_text(%Yex.Text{} = text, incoming) when is_binary(incoming) do
+    current = Yex.Text.to_string(text)
+
+    if current != incoming do
+      current
+      |> Native.text_hunks(incoming)
+      |> Enum.reverse()
+      |> Enum.each(fn {off, delete_u16, start, len} ->
+        if delete_u16 > 0, do: Yex.Text.delete(text, off, delete_u16)
+        if len > 0, do: Yex.Text.insert(text, off, binary_part(incoming, start, len))
+      end)
+    end
+
+    :ok
+  end
+
+  @doc """
   Ingest full note plaintext into the doc's frontmatter Y.Map + order Y.Array and
   body Y.Text. Only changed map keys are written. Malformed frontmatter falls
   back to treating the entire text as body.
+
+  `diff: :hunks` diffs the body with `diff_hunks_into_text/2` instead of the
+  single span (`Notes.CrdtWrite`).
 
   Raises `ArgumentError` on invalid UTF-8 before any mutation. Checked up
   front because the frontmatter map is written before the body diff, which
   would otherwise raise with the map half-applied. `String.valid?/1` costs
   about 6 ms on a 1.2 MB note (min of 5), small next to the ingest itself.
   """
-  @spec ingest_plaintext(Yex.Doc.t(), String.t()) :: :ok
-  def ingest_plaintext(%Yex.Doc{} = doc, plaintext) when is_binary(plaintext) do
+  @spec ingest_plaintext(Yex.Doc.t(), String.t(), keyword()) :: :ok
+  def ingest_plaintext(%Yex.Doc{} = doc, plaintext, opts \\ []) when is_binary(plaintext) do
     if not String.valid?(plaintext) do
       raise ArgumentError, "ingest_plaintext: plaintext is not valid UTF-8"
     end
@@ -296,7 +323,12 @@ defmodule Engram.Notes.CrdtBridge do
 
     apply_frontmatter(doc, order, values, raws)
     text = Yex.Doc.get_text(doc, @text_name)
-    :ok = diff_into_text(text, body)
+
+    :ok =
+      if Keyword.get(opts, :diff) == :hunks,
+        do: diff_hunks_into_text(text, body),
+        else: diff_into_text(text, body)
+
     :ok
   end
 
