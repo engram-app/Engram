@@ -41,9 +41,28 @@ defmodule Engram.Folders.Rows do
   @spec name_hmac(binary(), String.t()) :: binary()
   defdelegate name_hmac(filter_key, segment), to: Folder
 
-  @doc "HMAC of a whole folder path: the value `notes.folder_hmac` holds."
+  @doc "HMAC of a whole folder path: a folder row's `full_path_hmac`, a marker's `folder_hmac`."
   @spec path_hmac(binary(), String.t()) :: binary()
   def path_hmac(filter_key, path), do: Crypto.hmac_field(filter_key, path)
+
+  @doc """
+  Decrypts one row-bound envelope, `table.column` of the row `id` (raw 16
+  bytes, as Postgrex returns it) at `dek_version`, under `dek`:
+  `{:ok, plaintext}`, or `:error` for a missing or undecryptable one.
+  """
+  @spec decrypt_field(binary(), atom(), atom(), binary(), integer(), binary() | nil, binary()) ::
+          {:ok, binary()} | :error
+  def decrypt_field(dek, table, column, id, dek_version, ct, nonce) do
+    aad =
+      if Crypto.aad_bound?(dek_version),
+        do: Crypto.aad_for_row(table, column, Ecto.UUID.load!(id)),
+        else: <<>>
+
+    case ct && Envelope.decrypt(ct, nonce, dek, aad) do
+      {:ok, plaintext} -> {:ok, plaintext}
+      _ -> :error
+    end
+  end
 
   @doc "Encrypts a segment for the folder row `id` (a canonical UUID string)."
   @spec encrypt_name(<<_::256>>, binary(), binary()) :: {binary(), binary()}

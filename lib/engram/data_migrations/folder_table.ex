@@ -12,13 +12,15 @@ defmodule Engram.DataMigrations.FolderTable do
 
     1. `kind = 'folder'` marker rows become `explicit` folders that KEEP the
        marker's UUID, so web and plugin ids stay stable.
-    2. Notes: one envelope per DISTINCT `folder_hmac` is decrypted (the
-       folder, never a note), split on `/`, and the ancestor chain is
-       find-or-created. Then `UPDATE notes SET folder_ref_id = ? WHERE
-       folder_hmac = ?` in batches of 1,000. The statement lists only
-       `folder_ref_id`, so it fires none of the notes triggers
-       (`notes_set_folder_ref` is `UPDATE OF folder_hmac`), and `seq` and
-       `updated_at` stay put: no sync feed or cache sees a change.
+    2. Notes: each unresolved note (no reference, or one to a dead row) in
+       a non-root folder, a page of 1,000 at a time, has its own folder
+       envelope decrypted (never `notes.folder_hmac`, which a note may not
+       carry, R9), the ancestor chain is find-or-created once per folder of
+       the page, and `folder_ref_id` is set by id, compare-and-set on the
+       folder nonce. The statement lists only `folder_ref_id`, so it fires
+       none of the notes triggers but `folder_ref_live_only`, and `seq` and
+       `updated_at` stay put: no sync feed or cache sees a change. Unresolved
+       notes are drift (0 in steady state), so a decrypt per note is cheap.
     3. Attachments have no folder hash: each live attachment whose reference
        is not current (`folder_ref_stamp` differs from `path_nonce`, the
        `attachments_folder_ref_stale` index) has its path decrypted once (a
@@ -57,7 +59,6 @@ defmodule Engram.DataMigrations.FolderTable do
   alias Engram.Attachments.BulkUpdate
   alias Engram.Backfill.TenantScan
   alias Engram.Crypto
-  alias Engram.Crypto.Envelope
   alias Engram.Crypto.RotationGate
   alias Engram.Crypto.RotationInProgressError
   alias Engram.DataMigrations
@@ -479,98 +480,90 @@ defmodule Engram.DataMigrations.FolderTable do
 
   # ---- 2. notes ------------------------------------------------------------
 
-  # One look at the distinct folders that need work (no ref, or a ref to a
-  # folder that is gone): one envelope each, never a note's.
-  defp notes(ctx, tree) do
+  # The live notes in a non-root folder whose reference is missing or names a
+  # dead row, a page of `batch` at a time by id. Each one's own folder envelope
+  # is decrypted: never `notes.folder_hmac`, which a note may not carry (R9).
+  # The root (an empty envelope, the 16-byte tag) has no row and is never
+  # selected. The NULL arm is `notes_unresolved_folder`'s drift; the dead arm
+  # the version 3 heal.
+  @unresolved_note_page """
+  SELECT n.id, n.vault_id, n.dek_version, n.folder_ciphertext, n.folder_nonce
+  FROM notes n
+  WHERE n.user_id = $1 AND ($2::uuid IS NULL OR n.id > $2)
+    AND n.kind = 'note' AND n.deleted_at IS NULL AND octet_length(n.folder_ciphertext) > 16
+    AND (n.folder_ref_id IS NULL OR NOT EXISTS (
+           SELECT 1 FROM folders f WHERE f.id = n.folder_ref_id AND f.deleted_at IS NULL))
+  ORDER BY n.id LIMIT $3
+  """
+
+  defp notes(ctx, tree, after_id \\ nil, stats \\ zero()) do
     %{rows: rows} =
-      scope(ctx, fn repo ->
-        repo.query!(
-          """
-          SELECT DISTINCT ON (n.vault_id, n.folder_hmac)
-                 n.vault_id, n.folder_hmac, n.id, n.dek_version, n.folder_ciphertext, n.folder_nonce
-          FROM notes n
-          WHERE n.user_id = $1 AND n.kind = 'note' AND n.deleted_at IS NULL
-            AND n.folder_hmac IS NOT NULL
-            AND (n.folder_ref_id IS NULL OR NOT EXISTS (
-                   SELECT 1 FROM folders f WHERE f.id = n.folder_ref_id AND f.deleted_at IS NULL))
-          ORDER BY n.vault_id, n.folder_hmac, n.id
-          """,
-          [dump(ctx.user_id)]
-        )
-      end)
+      scope(ctx, & &1.query!(@unresolved_note_page, [dump(ctx.user_id), after_id, ctx.batch]))
 
-    stats = zero()
-
-    {folders, stats} =
-      Enum.reduce(rows, {[], stats}, fn [vault, hmac, id, dv, ct, nonce], {acc, stats} ->
+    {found, stats} =
+      Enum.reduce(rows, {[], stats}, fn [id, vault, dv, ct, nonce], {acc, stats} ->
         case decrypt_folder(ctx, id, dv, ct, nonce) do
           {:ok, ""} -> {acc, stats}
-          {:ok, path} -> {[{vault, hmac, path} | acc], stats}
+          {:ok, path} -> {[{id, nonce, vault, path} | acc], stats}
           :error -> {acc, blocked(stats, "note folder", id)}
         end
       end)
 
+    # One find-or-create per distinct folder of the page.
     {leaves, {tree, stats}} =
-      in_chunks(ctx, folders, {tree, stats}, fn repo, {vault, hmac, path}, state ->
-        {leaf, state} = ensure_path(repo, ctx, state, vault, path)
-        {[{vault, hmac, leaf}], state}
-      end)
+      in_chunks(
+        ctx,
+        found |> Enum.map(&{elem(&1, 2), elem(&1, 3)}) |> Enum.uniq(),
+        {tree, stats},
+        fn repo, {vault, path}, state ->
+          {leaf, state} = ensure_path(repo, ctx, state, vault, path)
+          {[{{vault, path}, leaf}], state}
+        end
+      )
 
-    updated = Enum.reduce(leaves, 0, fn leaf, n -> n + point_notes(ctx, leaf) end)
+    leaf_of = Map.new(leaves)
+    points = for {id, nonce, vault, path} <- found, do: {id, nonce, leaf_of[{vault, path}]}
+    updated = point_notes(ctx, points)
+
+    # A note a writer held (skipped) or moved since the read (its nonce
+    # changed) keeps the ledger open; the next pass looks again.
     stats = %{stats | changed: stats.changed + updated}
+    stats = if updated < length(points), do: %{stats | blocked: stats.blocked + 1}, else: stats
 
-    # A note a writer held was skipped; look once for any left. The predicate
-    # is `point_notes/2`'s, per leaf: a held note whose reference names a dead
-    # row is left over too, not only a NULL one (the drain sees only NULLs).
-    left? =
-      leaves != [] and
-        scope(ctx, fn repo ->
-          %{rows: [[left?]]} =
-            repo.query!(
-              """
-              SELECT EXISTS (SELECT 1 FROM notes n
-                JOIN unnest($2::uuid[], $3::bytea[], $4::uuid[]) AS l(vault_id, hmac, leaf)
-                  ON n.vault_id = l.vault_id AND n.folder_hmac = l.hmac
-                WHERE n.user_id = $1 AND n.kind = 'note' AND n.deleted_at IS NULL
-                  AND n.folder_ref_id IS DISTINCT FROM l.leaf)
-              """,
-              [
-                dump(ctx.user_id),
-                Enum.map(leaves, &elem(&1, 0)),
-                Enum.map(leaves, &elem(&1, 1)),
-                Enum.map(leaves, &elem(&1, 2))
-              ]
-            )
-
-          left?
-        end)
-
-    {tree, if(left?, do: %{stats | blocked: stats.blocked + 1}, else: stats)}
+    if length(rows) == ctx.batch,
+      do: notes(ctx, tree, rows |> List.last() |> hd(), stats),
+      else: {tree, stats}
   end
 
-  # `UPDATE notes SET folder_ref_id = ? WHERE folder_hmac = ?`, `batch` rows at
-  # a time, locked rows skipped. `= ANY(ARRAY(...))` is an InitPlan, run once:
-  # an IN subquery may be re-planned per row and, with SKIP LOCKED, drift.
-  defp point_notes(ctx, {vault, hmac, leaf}, n \\ 0) do
-    count =
-      scope(ctx, fn repo ->
-        %{num_rows: count} =
-          repo.query!(
-            """
-            UPDATE notes SET folder_ref_id = $1
-            WHERE id = ANY(ARRAY(
-              SELECT id FROM notes
-              WHERE user_id = $2 AND vault_id = $3 AND folder_hmac = $4 AND kind = 'note'
-                AND deleted_at IS NULL AND folder_ref_id IS DISTINCT FROM $1
-              ORDER BY id LIMIT $5 FOR UPDATE SKIP LOCKED))
-            """,
-            [leaf, dump(ctx.user_id), vault, hmac, ctx.batch]
-          )
+  # `UPDATE notes SET folder_ref_id = leaf` by id, compare-and-set on the
+  # folder nonce the envelope was decrypted under, locked rows skipped. Lists
+  # only `folder_ref_id`: no sync feed or cache sees a change. Cost: one
+  # primary-key probe per note.
+  defp point_notes(_ctx, []), do: 0
 
-        count
+  defp point_notes(ctx, points) do
+    {ids, nonces, leaves} =
+      Enum.reduce(points, {[], [], []}, fn {id, nonce, leaf}, {i, n, l} ->
+        {[id | i], [nonce | n], [leaf | l]}
       end)
 
-    if count < ctx.batch, do: n + count, else: point_notes(ctx, {vault, hmac, leaf}, n + count)
+    scope(ctx, fn repo ->
+      %{num_rows: count} =
+        repo.query!(
+          """
+          UPDATE notes n SET folder_ref_id = l.leaf
+          FROM unnest($2::uuid[], $3::bytea[], $4::uuid[]) AS l(id, nonce, leaf)
+          WHERE n.id = l.id AND n.folder_nonce = l.nonce
+            AND n.id = ANY(ARRAY(
+              SELECT id FROM notes
+              WHERE user_id = $1 AND id = ANY($2) AND kind = 'note' AND deleted_at IS NULL
+              ORDER BY id FOR UPDATE SKIP LOCKED))
+          """,
+          [dump(ctx.user_id), ids, nonces, leaves]
+        )
+
+      count
+    end)
   end
 
   # ---- 3. attachments ------------------------------------------------------
@@ -664,22 +657,10 @@ defmodule Engram.DataMigrations.FolderTable do
   # ---- decrypt -------------------------------------------------------------
 
   defp decrypt_folder(ctx, id, dv, ct, nonce),
-    do: decrypt(ctx, :notes, :folder, id, dv, ct, nonce)
+    do: Rows.decrypt_field(ctx.dek, :notes, :folder, id, dv, ct, nonce)
 
   defp decrypt_path(ctx, id, dv, ct, nonce),
-    do: decrypt(ctx, :attachments, :path, id, dv, ct, nonce)
-
-  defp decrypt(ctx, table, column, id, dv, ct, nonce) do
-    aad =
-      if Crypto.aad_bound?(dv),
-        do: Crypto.aad_for_row(table, column, Ecto.UUID.load!(id)),
-        else: <<>>
-
-    case ct && Envelope.decrypt(ct, nonce, ctx.dek, aad) do
-      {:ok, plaintext} -> {:ok, plaintext}
-      _ -> :error
-    end
-  end
+    do: Rows.decrypt_field(ctx.dek, :attachments, :path, id, dv, ct, nonce)
 
   defp blocked(stats, what, id) do
     Logger.warning(
