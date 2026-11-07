@@ -460,8 +460,8 @@ defmodule Engram.Notes do
 
   # The folder row must exist before the note row that names it, in the same
   # transaction. Returns the folder's id (nil at the root): every note writer
-  # that sets a path puts it in `folder_ref_id` in the same write, so nothing
-  # depends on `notes_set_folder_ref` (kept only for the previous release).
+  # that sets a path puts it in `folder_ref_id` in the same write (there is
+  # no `notes_set_folder_ref` trigger since R9 release D).
   # Tombstones do not set it: they are deleted rows, no reader looks at their
   # reference, and an undelete (`move_note/5`) resolves its own.
   # Call it after the vault seq lock is taken, so two writers creating the same
