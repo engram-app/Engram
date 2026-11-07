@@ -273,7 +273,12 @@ defmodule Engram.DataMigrations.FileTimesTest do
     for _ <- 1..3, do: assert(FileTimes.run_pass(batch: 2, fleet: old) == {:more, rows: 0})
     assert [%{mtime_at: ^floored}] = rows(ctx, Note, mtime: :mtime_at)
 
-    new = Keyword.put(old, :multicall, fn _ -> [{:ok, 1}] end)
+    # A v2 node (rounds the float product) holds it open too.
+    v2 = Keyword.put(old, :multicall, fn _ -> [{:ok, 1}] end)
+    assert FileTimes.run_pass(batch: 2, fleet: v2) == {:more, rows: 0}
+    assert [%{mtime_at: ^floored}] = rows(ctx, Note, mtime: :mtime_at)
+
+    new = Keyword.put(old, :multicall, fn _ -> [{:ok, 2}] end)
     capture_log(fn -> run_to_done(batch: 2, fleet: new) end)
     assert [%{mtime_at: ~U[2038-01-19 03:20:20.404000Z]}] = rows(ctx, Note, mtime: :mtime_at)
     assert FileTimes.run_pass(batch: 2, fleet: new) == :done
@@ -338,5 +343,19 @@ defmodule Engram.DataMigrations.FileTimesTest do
     assert FileTimes.fleet_opts([])[:sync].() == :ok
     own = fn -> :called end
     assert FileTimes.fleet_opts(fleet: [sync: own])[:sync] == own
+  end
+
+  # v3: v2 rounded the float product, so 1792348622.2113965 (exactly
+  # ...2113964557...) was stored ...211397; the exact rounding is ...211396.
+  test "v3 rewrites a v2 float-product twin to the exact rounding", ctx do
+    t5 = 1_792_348_622.2113965
+    id = note!(ctx, "t5.md", %{"mtime" => t5})
+    set!(ctx, Note, id, mtime_at: ~U[2026-10-18 18:37:02.211397Z], payload_hash: <<1::256>>)
+    assert FileTime.twin?(~U[2026-10-18 18:37:02.211397Z], t5)
+
+    capture_log(fn -> run_to_done() end)
+
+    assert [%{mtime_at: ~U[2026-10-18 18:37:02.211396Z]}] = rows(ctx, Note, mtime: :mtime_at)
+    refute_enqueued(worker: Engram.Workers.ReconcileNotePayloads)
   end
 end

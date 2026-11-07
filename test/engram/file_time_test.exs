@@ -35,7 +35,71 @@ defmodule Engram.FileTimeTest do
         floor(t * 1_000_000) |> rem(1_000_000) != us
       end)
 
-    assert moved == 5
+    assert moved == 4
+  end
+
+  # Staging R25.4d: exactly 1792348622.2113964557647705078125, so the
+  # microsecond is 211396. In float `t * 1e6` is 1792348622211396.5, which
+  # `round/1` took to 211397.
+  test "t5: rounds the exact binary value, not the float product" do
+    t5 = 1_792_348_622.2113965
+    assert t5 * 1_000_000 == 1_792_348_622_211_396.5
+    assert FileTime.to_at(t5) == {:ok, ~U[2026-10-18 18:37:02.211396Z]}
+  end
+
+  # The oracle: the double's exact decimal expansion (`:decimals` prints
+  # it exactly while it has at most 100 fractional digits; a double >= 1e-3
+  # has at most 62), times 1e6 or 1e3, rounded half away from zero,
+  # clamped into t's own second.
+  defp oracle_us(t) do
+    {scale, sec} =
+      if abs(t) < 1.0e11,
+        do: {1_000_000, floor(t)},
+        else: {1_000, Integer.floor_div(floor(t), 1_000)}
+
+    [int, frac] = t |> :erlang.float_to_binary(decimals: 100) |> String.split(".")
+    frac = String.trim_trailing(frac, "0")
+    coef = String.to_integer(String.trim_leading(int, "-") <> frac)
+    sign = if String.starts_with?(int, "-"), do: -1, else: 1
+
+    Decimal.new(sign, coef, -String.length(frac))
+    |> Decimal.mult(scale)
+    |> Decimal.round(0, :half_up)
+    |> Decimal.to_integer()
+    |> max(sec * 1_000_000)
+    |> min(sec * 1_000_000 + 999_999)
+  end
+
+  defp below(x) when x > 0 do
+    <<bits::64>> = <<x::float>>
+    <<y::float>> = <<bits - 1::64>>
+    y
+  end
+
+  defp exact_inputs do
+    one_of([
+      # Seconds with 3 to 7 fractional digits, as clients send them.
+      tuple({integer(1_000_000_000..4_000_000_000), integer(3..7)})
+      |> bind(fn {s, d} ->
+        integer(0..(Integer.pow(10, d) - 1)) |> map(&(s + &1 / Integer.pow(10, d)))
+      end),
+      # Milliseconds, with sub-millisecond digits.
+      tuple({integer(100_000_000_000..4_000_000_000_000), integer(0..9_999)})
+      |> map(fn {ms, f} -> ms + f / 10_000 end),
+      # Negatives (before 1970).
+      tuple({integer(1..2_000_000_000), integer(0..9_999_999)})
+      |> map(fn {s, f} -> -(s + f / 10_000_000) end),
+      # The double just below a whole second (the clamp) and ties.
+      integer(1_000_000_000..4_000_000_000) |> map(&below(&1 * 1.0)),
+      integer(1..1_000_000) |> map(&(&1 / 128))
+    ])
+  end
+
+  property "to_at/1 equals the exact-decimal oracle" do
+    check all(t <- exact_inputs(), max_runs: 20_000) do
+      {:ok, at} = FileTime.to_at(t)
+      assert DateTime.to_unix(at, :microsecond) == oracle_us(t), inspect(t)
+    end
   end
 
   test "never rounds up across a whole second" do

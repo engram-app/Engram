@@ -8,16 +8,19 @@ defmodule Engram.FileTime do
   `notes.mtime` min 1,776,072,500.9 s, max 1,793,442,859,572.0 ms). Below
   1e11 in magnitude is seconds (1e11 s is the year 5138), at or above it
   milliseconds (1e11 ms is 1973). `0` is the plugin's "unknown": NULL.
-  Rounded to the nearest microsecond, so a millisecond-precision value
-  keeps its digits (`t * 1e6` often lands just below the decimal the
-  client sent: floored, 2147484020.404 was stored as .403999). Never
+  Rounded to the nearest microsecond from the double's exact binary value
+  (half away from zero, integer math, no float multiply), so a
+  millisecond-precision value keeps its digits (floored, 2147484020.404
+  was stored as .403999) and a sub-microsecond one rounds by its true
+  digits (the float product made 1792348622.2113965, exactly
+  ...2113964557..., the tie ...211396.5). Never
   across a whole second: that would break `DateTime.to_unix(at) ==
   trunc(t)` (payload hashes depend on it), so a value within a
   microsecond below a second is clamped to its .999999 (the old floor
-  could cross too, when `t * 1e6` itself rounded up). Floor equals trunc
-  only for `t >= 0`, which is all the payload hash reads. Outside years 1 to 9999 is out of range. 0.74 and 0.75 floored;
-  `twin?/2` accepts their twins (within 1 us) as agreeing, and
-  `Engram.DataMigrations.FileTimes` v2 rewrites them.
+  could cross too, when the float `t * 1e6` rounded up). Floor equals trunc
+  only for `t >= 0`, which is all the payload hash reads. Outside years 1 to 9999 is out of range. 0.74 and 0.75 floored, and the FileTimes v2 build (main and staging only, never released) rounded the float product; `twin?/2`
+  accepts their twins (within 1 us) as agreeing, and
+  `Engram.DataMigrations.FileTimes` v3 rewrites them.
 
   Desktop Obsidian sends sub-microsecond digits (`stat.mtimeMs` has
   sub-millisecond fractions; the plugin divides by 1000). Those are
@@ -64,12 +67,13 @@ defmodule Engram.FileTime do
   @min_us -62_135_596_800_000_000
 
   @doc """
-  The twin rounding this build writes: 1 = rounded to the microsecond
-  (`to_at/1`). 0.75 and older lack it and floored.
+  The twin rounding this build writes: 2 = the exact value rounded to the
+  microsecond (`to_at/1`). 1 (the FileTimes v2 build, never released) rounded the float product; 0.75 and
+  older lack it and floored.
   `Engram.DataMigrations.FileTimes` asks every peer before it closes.
   """
-  @spec twin_rounding() :: 1
-  def twin_rounding, do: 1
+  @spec twin_rounding() :: 2
+  def twin_rounding, do: 2
 
   @doc "Whether `t` is in seconds (below 1e11 in magnitude), not milliseconds."
   @spec seconds?(number()) :: boolean()
@@ -84,18 +88,43 @@ defmodule Engram.FileTime do
   def to_at(t) when is_number(t) and abs(t) > @max_abs, do: {:error, :out_of_range}
 
   def to_at(t) when is_number(t) do
-    {x, sec} =
+    {scale, sec} =
       if abs(t) < @ms_from,
-        do: {t * 1_000_000, floor(t)},
-        else: {t * 1_000, Integer.floor_div(floor(t), 1_000)}
+        do: {1_000_000, floor(t)},
+        else: {1_000, Integer.floor_div(floor(t), 1_000)}
 
-    # Clamped into `t`'s own second: the product can round across it.
-    us = x |> round() |> max(sec * 1_000_000) |> min(sec * 1_000_000 + 999_999)
+    # Clamped into `t`'s own second: a value under half a microsecond below
+    # a second rounds across it.
+    us = t |> exact_round(scale) |> max(sec * 1_000_000) |> min(sec * 1_000_000 + 999_999)
 
     case us >= @min_us and DateTime.from_unix(us, :microsecond) do
       {:ok, at} -> {:ok, at}
       _ -> {:error, :out_of_range}
     end
+  end
+
+  # `t * scale` rounded half away from zero, from the double's EXACT binary
+  # value (`mant * 2^exp`, integer math), never a float multiply: in float,
+  # 1792348622.2113965 * 1e6 is the tie ...211396.5, though the double is
+  # exactly ...2113964557..., so `round/1` gave ...397.
+  defp exact_round(t, scale) when is_integer(t), do: t * scale
+
+  defp exact_round(t, scale) do
+    {num, den} = ratio(t)
+    n = abs(num) * scale
+    q = div(2 * n + den, 2 * den)
+    if num < 0, do: -q, else: q
+  end
+
+  # `t` as `num / den`, exactly; `den` a power of two.
+  defp ratio(t) do
+    <<sign::1, e::11, m::52>> = <<t::float>>
+    {mant, exp} = if e == 0, do: {m, -1074}, else: {m + 0x10000000000000, e - 1075}
+    mant = if sign == 1, do: -mant, else: mant
+
+    if exp >= 0,
+      do: {mant * Integer.pow(2, exp), 1},
+      else: {mant, Integer.pow(2, -exp)}
   end
 
   @doc """
@@ -138,8 +167,8 @@ defmodule Engram.FileTime do
 
   @doc """
   True when `at` is the twin of the double `t`: `normalize(t)`, give or
-  take 1 us (0.74 and 0.75 floored to the microsecond instead of rounding
-  and clamping).
+  take 1 us (0.74 and 0.75 floored, and the v2 build rounded the float
+  product, each at most 1 us from the exact rounding).
   """
   @spec twin?(DateTime.t() | nil, number() | nil) :: boolean()
   def twin?(%DateTime{} = at, t) do
