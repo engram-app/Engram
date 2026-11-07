@@ -62,18 +62,30 @@ defmodule Engram.Vector.Qdrant do
 
   @doc """
   Whether the collection has its `n` payload index (immutable chunk index,
-  Engram#2263). Strict mode answers 400 to a filter on an unindexed key, and
-  the index is created by the first index pass per node
-  (`ensure_collection/2`), so a reader checks before it filters on `n`.
-  Unreadable counts as no. Callers cache it (`Engram.Search`).
+  Engram#2263), cached per node for a minute. Strict mode answers 400 to a
+  filter on an unindexed key, and the index is created by the first index
+  pass per node (`ensure_collection/2`, which then marks it here), so a
+  reader checks before it filters on `n`: a filtered search, and the
+  per-note deletes and counts. Each pays at most one collection-info read a
+  minute per collection.
+
+  A failed read answers no but is not cached: a cached "no" would keep the
+  per-note filters path-only for a minute, missing every point with no `p`.
   """
-  @spec n_indexed?() :: boolean()
-  def n_indexed? do
-    case collection_info(collection(), :search) do
-      {:ok, %{"payload_schema" => %{} = schema}} -> is_map_key(schema, PayloadKeys.short(:note))
-      _ -> false
-    end
+  @spec n_filterable?(String.t() | nil) :: boolean()
+  def n_filterable?(col \\ nil) do
+    col = col || collection()
+
+    Engram.Cache.fetch(:note_id_filter, n_index_key(col), fn ->
+      case collection_info(col, :search) do
+        {:ok, %{"payload_schema" => %{} = schema}} -> is_map_key(schema, PayloadKeys.short(:note))
+        {:ok, _} -> false
+        {:error, _} -> Engram.Cache.no_store(false)
+      end
+    end)
   end
+
+  defp n_index_key(col), do: {:n_index, base_url(), col}
 
   @doc "Largest point batch one upsert or vector update sends."
   def max_write_batch, do: @max_write_batch
@@ -338,8 +350,15 @@ defmodule Engram.Vector.Qdrant do
   # Storage/safety params are best-effort: a failed reconcile is logged and
   # retried next boot, never a reason to stop indexing. Only the payload
   # indexes above gate `:verified`, because strict mode 400s without them.
+  # Every payload index exists now, `n` included: say so to `n_filterable?/1`,
+  # replacing a cached "no" from before the index was built (a reader that ran
+  # first after boot), so the per-note filters use the `n` arm at once.
+  # Behind the memo switch for the memo's reason: the key is the base URL, a
+  # recycled Bypass port under test, so the marker would leak into unrelated
+  # tests (and turn on a search's `n` scope against a fake with no `n`).
   defp reconciled(col) do
     _ = reconcile_config(col)
+    if memo_enabled?(), do: Engram.Cache.put(:note_id_filter, n_index_key(col), true)
     {:ok, :verified}
   end
 
@@ -1491,8 +1510,9 @@ defmodule Engram.Vector.Qdrant do
 
   The identity-safe delete: point ids come from `chunks.qdrant_point_id`, so
   this reaches a note's points no matter what its `path_hmac` has since become.
-  `delete_by_note/4` cannot — a rename retags the note row while the points keep
-  the old hmac, and the filter then matches nothing. Callers use both.
+  `delete_by_note/5` cannot for a point with no `n`: a rename retags the note
+  row while the points keep the old hmac, and the path arm then matches
+  nothing. Callers use both.
   """
   def delete_points(col \\ nil, point_ids)
   def delete_points(_col, []), do: :ok
@@ -1516,22 +1536,23 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
-  Delete all points for a given user+vault+path-hmac combination.
+  Delete all points of one note in a user+vault: the ones carrying its id
+  `n`, and the ones with no `n` under `path_hmac` (see `note_filter/5`).
 
   T3.2 — `path_hmac` is the base64-encoded HMAC of the note path under the
   user's filter key. Qdrant payloads carry `path_hmac` as a plaintext-safe
   filter key alongside the encrypted `source_path` (Phase B.2.4).
   """
-  def delete_by_note(col \\ nil, user_id, vault_id, path_hmac),
-    do: delete_by_note_except(col, user_id, vault_id, path_hmac, [])
+  def delete_by_note(col \\ nil, user_id, vault_id, note_id, path_hmac),
+    do: delete_by_note_except(col, user_id, vault_id, note_id, path_hmac, [])
 
   @doc """
-  `delete_by_note/4`, keeping the points in `keep_ids`.
+  `delete_by_note/5`, keeping the points in `keep_ids`.
   """
-  def delete_by_note_except(col, user_id, vault_id, path_hmac, keep_ids) do
+  def delete_by_note_except(col, user_id, vault_id, note_id, path_hmac, keep_ids) do
     col = col || collection()
 
-    filter = note_filter(user_id, vault_id, path_hmac)
+    filter = note_filter(col, user_id, vault_id, note_id, path_hmac)
 
     filter =
       if keep_ids == [], do: filter, else: Map.put(filter, :must_not, [%{has_id: keep_ids}])
@@ -1550,12 +1571,14 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
-  Exact count of points matching `{user_id, vault_id, path_hmac}`. Used by the
-  repath worker (#746) to confirm points exist before/after a payload PATCH and
-  to detect an embedded note whose points went missing.
+  Exact count of one note's points, matched as `delete_by_note/5` does. Used
+  by the repath worker (#746) to confirm points exist before/after a payload
+  PATCH and to detect an embedded note whose points went missing.
   """
-  def count_by_note(col \\ nil, user_id, vault_id, path_hmac),
-    do: count(col, note_filter(user_id, vault_id, path_hmac))
+  def count_by_note(col \\ nil, user_id, vault_id, note_id, path_hmac) do
+    col = col || collection()
+    count(col, note_filter(col, user_id, vault_id, note_id, path_hmac))
+  end
 
   @doc "Exact count of the points matching `filter` (`{:ok, n}`)."
   @spec count(String.t() | nil, map()) :: {:ok, non_neg_integer()} | {:error, term()}
@@ -1925,14 +1948,24 @@ defmodule Engram.Vector.Qdrant do
 
   defp v5_eq(name, value), do: %{key: PayloadKeys.short(name), match: %{value: value}}
 
-  defp note_filter(user_id, vault_id, path_hmac) do
-    %{
-      must: [
-        match_filter(:user, user_id),
-        match_filter(:vault, vault_id),
-        match_filter(:path, path_hmac)
-      ]
-    }
+  # One note's points, decided per point like `note_scope/3`: a point with
+  # `n` by its note id, a point without one (v3 never has `n`; a v5 point the
+  # backfill has not reached) by its path. A point with `n` never matches by
+  # path, so after a rename swap a note's old path cannot reach the other
+  # note's points. An R3a chunk point carries `n` and no `p`, so only the
+  # `n` arm finds it. Without the `n` index (strict mode 400s an unindexed
+  # key) the path alone, as before. `config/test.exs` turns the probe off so
+  # the Bypass suites see no extra collection-info GET.
+  defp note_filter(col, user_id, vault_id, note_id, path_hmac) do
+    tenant = [match_filter(:user, user_id), match_filter(:vault, vault_id)]
+    path = match_filter(:path, path_hmac)
+
+    if ServiceConfig.get(:qdrant_note_id_filter, true) and n_filterable?(col) do
+      by_id = v5_eq(:note, FilterId.uuid(to_string(note_id)))
+      %{must: tenant ++ [%{should: [by_id, %{must: [n_empty(), path]}]}]}
+    else
+      %{must: tenant ++ [path]}
+    end
   end
 
   @doc false
