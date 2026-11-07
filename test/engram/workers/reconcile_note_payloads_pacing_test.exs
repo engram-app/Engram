@@ -42,7 +42,10 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
     {:ok, health} = Agent.start_link(fn -> {@green, 0, nil} end)
     # point id => payload, as the fake Qdrant holds it
     {:ok, points} = Agent.start_link(fn -> %{} end)
-    stub_qdrant(bypass, health, points)
+    # Run on each point read, in the fake's process: stands in for other
+    # jobs waking between this job's gate and its first write.
+    {:ok, on_read} = Agent.start_link(fn -> fn -> :ok end end)
+    stub_qdrant(bypass, health, points, on_read)
 
     stub(Engram.MockEmbedder, :embed_texts, fn texts ->
       {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
@@ -74,10 +77,10 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
       )
 
     ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :rebuild, :gated]])
-    %{user: user, note: note, health: health, points: points, ref: ref}
+    %{user: user, note: note, health: health, points: points, ref: ref, on_read: on_read}
   end
 
-  defp stub_qdrant(bypass, health, points) do
+  defp stub_qdrant(bypass, health, points, on_read) do
     test_pid = self()
     col = "/collections/#{Qdrant.collection_name()}"
 
@@ -109,6 +112,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
             {"application/json", ~s({"result":{"status":"completed"},"status":"ok"})}
 
           {"POST", path} when path == col <> "/points/scroll" ->
+            Agent.get(on_read, & &1).()
             ids = for %{"has_id" => ids} <- body["filter"]["must"], id <- ids, do: id
             held = Agent.get(points, &Map.take(&1, ids))
             found = for {id, p} <- held, do: %{"id" => id, "payload" => p}
@@ -213,6 +217,22 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
     assert Enum.filter(queries, &(&1.pid == self())) == []
   end
 
+  # Jobs waking between this job's gate and its first page take bucket
+  # points too. The gate reserved a whole page, so the page still goes
+  # through, and the crowd is denied a full page each (they read nothing).
+  test "a crowd of waking jobs cannot starve a reserved page", ctx do
+    crowd = fn ->
+      for _ <- 1..300,
+          do: EngramWeb.RateLimiter.hit("payload_backfill_points", 60_000, 500, :other, 256)
+    end
+
+    Agent.update(ctx.on_read, fn _ -> crowd end)
+
+    assert :ok = sweep(ctx)
+    assert_received :rewrite
+    assert all_n?(ctx)
+  end
+
   test "the kill switch snoozes it, and it resumes once back on", ctx do
     ServiceConfig.put_override(:payload_backfill, false)
 
@@ -260,6 +280,9 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
         skip_tenant_check: true
       )
 
+    # In the next limiter window: every wake reserves a page, so a rerun in
+    # the same minute is denied before it reads (nothing written either way).
+    EngramWeb.RateLimiter.reset_buckets!()
     assert :ok = sweep(ctx)
     refute_received :rewrite
   end

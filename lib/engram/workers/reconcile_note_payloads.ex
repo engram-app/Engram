@@ -123,11 +123,11 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"user_id" => user_id} = args} = job) do
-    with :ok <- pre_gate(job),
+    with {:ok, reserved} <- pre_gate(job),
          %User{} = user <- Repo.get(User, user_id),
          :ok <- RotationGate.check_user(user) do
       deadline = System.monotonic_time(:millisecond) + @budget_ms
-      {result, counts} = heal(user, args["after"], {deadline, job}, @zero)
+      {result, counts} = heal(user, args["after"], {deadline, job, reserved}, @zero)
       report(user_id, counts)
 
       case result do
@@ -232,7 +232,9 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     )
   end
 
-  defp heal(%User{id: user_id} = user, after_id, {deadline, job} = hop, counts) do
+  # `hop`: the deadline, the job, and the bucket points `pre_gate/1` reserved
+  # for the first `n` page (spent there, never twice).
+  defp heal(%User{id: user_id} = user, after_id, {deadline, job, reserved}, counts) do
     {notes, points} = batch(user_id, after_id)
 
     cond do
@@ -247,13 +249,14 @@ defmodule Engram.Workers.ReconcileNotePayloads do
              # Per batch, after the read and before any write: a rotation
              # that started since would have its fresh keys overwritten.
              :ok <- RotationGate.check(user_id),
-             {:ok, counts} <- backfill_n(notes, points, stored, job, counts),
+             {:ok, counts, reserved} <-
+               backfill_n(notes, points, stored, {job, reserved}, counts),
              {:ok, counts} <- heal_notes(user, notes, points, stored, counts) do
           if length(notes) < @batch_size do
             {:done, counts}
           else
             Process.sleep(@pause_ms)
-            heal(user, List.last(notes).id, hop, counts)
+            heal(user, List.last(notes).id, {deadline, job, reserved}, counts)
           end
         else
           {:snooze, _} = snooze -> {snooze, counts}
@@ -477,10 +480,10 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   # Every v5 point of the batch's notes the read shows without `n` gets it,
   # merged, in paced pages. A point missing from the read is not written: a
   # note whose points are gone is re-created by its next index.
-  defp backfill_n(notes, points, stored, job, counts) do
+  defp backfill_n(notes, points, stored, {job, reserved}, counts) do
     if PayloadV6.version() >= @n_version,
-      do: write_n(n_pairs(notes, points, stored), job, counts),
-      else: {:ok, counts}
+      do: write_n(n_pairs(notes, points, stored), job, counts, reserved),
+      else: {:ok, counts, reserved}
   end
 
   defp n_pairs(notes, points, stored) do
@@ -491,13 +494,20 @@ defmodule Engram.Workers.ReconcileNotePayloads do
         do: {id, %{@n_key => FilterId.uuid(to_string(note.id))}}
   end
 
-  defp write_n(pairs, job, counts) do
+  # A page the reservation covers spends it (its gate skips the bucket);
+  # every later page takes its own points from the bucket.
+  defp write_n(pairs, job, counts, reserved) do
     pairs
     |> Enum.chunk_every(n_page())
-    |> Enum.reduce_while({:ok, counts}, fn page, {:ok, counts} ->
-      with :ok <- n_gate(job, length(page)),
+    |> Enum.reduce_while({:ok, counts, reserved}, fn page, {:ok, counts, reserved} ->
+      {gate, left} =
+        if reserved >= length(page),
+          do: {n_open(job), 0},
+          else: {n_gate(job, length(page)), reserved}
+
+      with :ok <- gate,
            :ok <- Qdrant.set_payloads(Qdrant.collection_name(), page, caller: :reconcile) do
-        {:cont, {:ok, Map.update!(counts, :n_points, &(&1 + length(page)))}}
+        {:cont, {:ok, Map.update!(counts, :n_points, &(&1 + length(page))), left}}
       else
         {:snooze, _} = snooze -> {:halt, snooze}
         {:error, reason} -> {:halt, {:error, reason, counts}}
@@ -529,8 +539,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   # next). Accepted: the disk and optimizer gate (`Rebuild.qdrant_pace/1`) is
   # the real guard; a sliding window is the upgrade if 2x bursts ever show.
   defp n_gate(job, count) do
-    with :ok <- if(backfill_enabled?(), do: :ok, else: gated(job)),
-         :ok <- Rebuild.qdrant_pace(job) do
+    with :ok <- n_open(job) do
       case RateLimiter.hit(@n_bucket, @n_window_ms, n_per_min(), :other, count) do
         {:allow, _} -> :ok
         {:deny, _ms} -> gated(job)
@@ -538,15 +547,28 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     end
   end
 
+  # The kill switch, then the Qdrant gate: no bucket points spent.
+  defp n_open(job) do
+    with :ok <- if(backfill_enabled?(), do: :ok, else: gated(job)),
+         do: Rebuild.qdrant_pace(job)
+  end
+
   defp gated(%Oban.Job{meta: meta}),
     do: {:snooze, Rebuild.gate_snooze(Map.get(meta || %{}, "snoozed", 0))}
 
   # Before the job's first read: a denied job reads nothing from Postgres or
-  # Qdrant, so a shut gate costs one snooze per wake, not a batch read.
-  # ponytail: the bucket pre-check reserves one point per wake (Hammer has no
-  # peek); at 500/min that is noise against 256-point pages.
+  # Qdrant, so a shut gate costs one snooze per wake, not a batch read. It
+  # reserves a whole page (`n_page/0`) and the first page spends it, so a
+  # crowd of waking jobs cannot nibble the bucket below one page: the first
+  # wakes of a window each hold a full page, the rest are denied and snooze.
+  # ponytail: a job with nothing to write still spends its reservation
+  # (Hammer cannot refund); a no-op wake costs one page of the window.
   defp pre_gate(job) do
-    if PayloadV6.version() >= @n_version, do: n_gate(job, 1), else: :ok
+    if PayloadV6.version() >= @n_version do
+      with :ok <- n_gate(job, n_page()), do: {:ok, n_page()}
+    else
+      {:ok, 0}
+    end
   end
 
   @doc """
