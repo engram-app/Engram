@@ -23,6 +23,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   alias Engram.Notes.{Chunk, Note, NoteIndexState}
   alias Engram.ServiceConfig
   alias Engram.Vector.{FilterId, QdrantLayout}
+  alias Engram.Workers.DataMigrationsRunner
   alias Engram.Workers.ReconcileNotePayloads
 
   setup :verify_on_exit!
@@ -42,7 +43,9 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           payload_status: 200,
           scroll_status: nil,
           batch_status: nil,
-          legacy_indexes: true
+          legacy_indexes: true,
+          schema: %{"u" => %{}, "v" => %{}, "n" => %{"data_type" => "uuid"}},
+          requests: []
         }
       end)
 
@@ -50,7 +53,10 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
     Bypass.stub(bypass, :any, :any, &fake_qdrant(&1, store))
     # The `n` backfill is paced on the collection's health (`Rebuild.qdrant_pace/1`).
-    Engram.QdrantStub.stub_healthy(bypass)
+    # The ledger's done also needs the collection's `n` index (`schema`).
+    Engram.QdrantStub.stub_healthy(bypass, "engram_notes",
+      payload_schema: fn -> Agent.get(store, & &1.schema) end
+    )
 
     stub(Engram.MockEmbedder, :embed_texts, fn texts ->
       {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
@@ -102,91 +108,16 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     %{user: user, stale: stale, healthy: healthy, store: store}
   end
 
-  test "rewrites only the drifted points, without re-embedding, and converges", ctx do
-    expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("embed during reconcile") end)
-
-    assert {:more, users: 1} = NotePayloadStamps.run_pass()
-    assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-
-    raw = reload(ctx.stale)
-    want = Indexing.expected_note_payload(raw) |> Jason.encode!() |> Jason.decode!()
-
-    for id <- point_ids(ctx.stale) do
-      point = Agent.get(ctx.store, &Map.fetch!(&1.points, id))
-      assert point["type_hmac"] == want["type_hmac"]
-      assert point["tags_hmac"] == want["tags_hmac"]
-    end
-
-    # One set_payload, for the drifted note only; the healthy one is just stamped.
-    assert [ids] = Agent.get(ctx.store, & &1.set_payloads)
-    assert Enum.sort(ids) == Enum.sort(point_ids(ctx.stale))
-    assert Agent.get(ctx.store, & &1.upserts) == 0
-
-    assert reload(ctx.stale).payload_hash
-    assert reload(ctx.healthy).payload_hash
-    # Drifted filter keys mean a rotation, so its sparse vectors are stale too.
-    assert reload(ctx.stale).keyword_version == nil
-    refute reload(ctx.healthy).keyword_version == nil
-    assert NotePayloadStamps.run_pass() == :done
-  end
-
-  # The prod v5 gate's one keyword-stale note (2026-11-02): a heal at 05:54
-  # NULLed a content-current note's `keyword_version` after `IndexVersions`
-  # closed, and only the next day's re-verify sweep would have refreshed it.
-  # Whoever clears the stamp queues the refresh, as `RepathNoteIndex` does.
-  test "queues the keyword refresh for the note whose stamp it cleared", ctx do
-    assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-
-    assert reload(ctx.stale).keyword_version == nil
-
-    assert_enqueued(
-      worker: Engram.Workers.RefreshKeywordVectors,
-      args: %{"note_id" => ctx.stale.id}
-    )
-
-    refute_enqueued(
-      worker: Engram.Workers.RefreshKeywordVectors,
-      args: %{"note_id" => ctx.healthy.id}
-    )
-  end
-
-  # The NULL and its job commit together: a lost insert would strand the note
-  # until the daily re-verify, the gap the enqueue closes.
-  test "a failed refresh insert rolls the cleared stamp back with it", ctx do
-    Repo.query!("""
-    CREATE FUNCTION pg_temp.refuse_refresh() RETURNS trigger LANGUAGE plpgsql AS $$
-    BEGIN RAISE EXCEPTION 'refresh insert refused'; END $$
-    """)
-
-    Repo.query!("""
-    CREATE TRIGGER refuse_refresh BEFORE INSERT ON oban_jobs FOR EACH ROW
-    WHEN (NEW.worker = 'Engram.Workers.RefreshKeywordVectors')
-    EXECUTE FUNCTION pg_temp.refuse_refresh()
-    """)
-
-    before = reload(ctx.stale).keyword_version
-    refute before == nil
-
-    try do
-      perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-    rescue
-      _ -> :ok
-    end
-
-    assert reload(ctx.stale).keyword_version == before
-    refute_enqueued(worker: Engram.Workers.RefreshKeywordVectors)
-  end
-
-  test "reports what it checked and rewrote", ctx do
+  test "reports what it checked", ctx do
     ref =
       :telemetry_test.attach_event_handlers(self(), [[:engram, :indexing, :payload_reconcile]])
 
     assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
 
-    # One event per outcome, all seven (`n_points`: points the `n` backfill
+    # One event per outcome, all four (`n_points`: points the `n` backfill
     # wrote; `legacy_v3`/`legacy_v3_points`: notes it left for their v3 points).
     counts =
-      for _ <- 1..7, into: %{} do
+      for _ <- 1..4, into: %{} do
         assert_receive {[:engram, :indexing, :payload_reconcile], ^ref, %{count: n},
                         %{outcome: o}}
 
@@ -195,246 +126,10 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
 
     assert counts == %{
              checked: 2,
-             drifted: 1,
-             rewritten: 1,
-             skipped_v5: 0,
              n_points: 0,
              legacy_v3: 0,
              legacy_v3_points: 0
            }
-  end
-
-  # #2087's short-key layout. Healed with the v5 payload, REPLACED (a v3
-  # merge would leave the layouts mixed), and stamped with its hash. Before
-  # #2067 this note was skipped and left unstamped, so a rotation left every
-  # v5 point on the retired key for good.
-  # `want` is what a real v5 index pass wrote, never `expected_v5_payload/2`
-  # (the function under test): drift between the heal and the pass, or an
-  # overwrite that drops a key the pass writes, fails here.
-  test "a v5-shaped point is replaced with exactly what a v5 pass writes", ctx do
-    vault = Repo.get!(Engram.Vaults.Vault, ctx.stale.vault_id, skip_tenant_check: true)
-    {:ok, plain} = Crypto.maybe_decrypt_note_fields(reload(ctx.stale), ctx.user)
-    assert {:ok, _} = Indexing.index_note(plain, vault)
-
-    ids = point_ids(ctx.stale)
-    passed = Agent.get(ctx.store, &Map.take(&1.points, ids))
-    assert map_size(passed) == length(ids) and ids != []
-    pass_hash = reload(ctx.stale).payload_hash
-    Agent.update(ctx.store, &%{&1 | overwrites: []})
-
-    # A rotation left the points on the retired key, and the stamp NULL.
-    for id <- ids,
-        do: Agent.update(ctx.store, &put_in(&1.points[id], retired_v5(ctx)))
-
-    {1, _} =
-      Repo.update_all(from(n in Note, where: n.id == ^ctx.stale.id), [set: [payload_hash: nil]],
-        skip_tenant_check: true
-      )
-
-    expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("embed during reconcile") end)
-    assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-
-    assert [written] = Agent.get(ctx.store, & &1.overwrites)
-    assert Enum.sort(written) == Enum.sort(ids)
-    assert Agent.get(ctx.store, &Map.take(&1.points, ids)) == passed
-
-    assert Agent.get(ctx.store, & &1.set_payloads) == []
-    assert reload(ctx.stale).payload_hash == pass_hash
-    assert reload(ctx.healthy).payload_hash
-  end
-
-  # An index commits (and stamps its own payload) after the heal read the
-  # row and before its write lands: the heal's write may have replaced the
-  # fresher payload, so the row must not keep a stamp that vouches for it.
-  test "a write that lost the race to an index leaves the row unstamped", ctx do
-    stale_id = ctx.stale.id
-
-    Agent.update(ctx.store, fn s ->
-      %{
-        s
-        | on_write: fn ->
-            Repo.update_all(
-              from(n in Note, where: n.id == ^stale_id),
-              [set: [content_hash: "edited", payload_hash: "stamped-by-the-index"]],
-              skip_tenant_check: true
-            )
-          end
-      }
-    end)
-
-    assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-    assert [_] = Agent.get(ctx.store, & &1.set_payloads)
-    assert reload(ctx.stale).payload_hash == nil
-    assert reload(ctx.healthy).payload_hash
-  end
-
-  # An EmbedNote commit between the heal's read and its stamp: stamping the
-  # hash read before it would vouch for HMACs the row no longer holds.
-  test "a row that moved under the heal is left unstamped", ctx do
-    stale_id = ctx.stale.id
-
-    Agent.update(ctx.store, fn s ->
-      %{
-        s
-        | on_scroll: fn ->
-            Repo.update_all(
-              from(n in Note, where: n.id == ^stale_id),
-              [set: [tags_hmac: [<<1, 2, 3>>]]],
-              skip_tenant_check: true
-            )
-          end
-      }
-    end)
-
-    assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-    assert reload(ctx.stale).payload_hash == nil
-    assert reload(ctx.healthy).payload_hash
-  end
-
-  # The same race on the index pass: it overwrites its reused points' payload,
-  # then an edit commits (and stamps) first and the pass rolls back
-  # superseded. Its write may have replaced the edit's payload, so the row is
-  # unstamped.
-  test "a pass superseded after refreshing reused points leaves the row unstamped", ctx do
-    id = ctx.healthy.id
-
-    Agent.update(ctx.store, fn s ->
-      %{
-        s
-        | on_write: fn ->
-            Repo.update_all(
-              from(n in Note, where: n.id == ^id),
-              [set: [content_hash: "edited", payload_hash: "stamped-by-the-edit"]],
-              skip_tenant_check: true
-            )
-          end
-      }
-    end)
-
-    vault = Repo.get!(Engram.Vaults.Vault, ctx.healthy.vault_id, skip_tenant_check: true)
-    {:ok, plain} = Crypto.maybe_decrypt_note_fields(reload(ctx.healthy), ctx.user)
-
-    assert {:error, :superseded} = Indexing.index_note(plain, vault)
-    assert [_] = Agent.get(ctx.store, & &1.overwrites)
-    assert reload(ctx.healthy).payload_hash == nil
-  end
-
-  # Under the v5 layout point ids are deterministic, so a losing pass can
-  # UPSERT over the very points the winning pass wrote (not only PATCH
-  # reused ones). Those points then hold the older filter fields.
-  test "a superseded v5 pass that upserted points leaves the row unstamped", ctx do
-    vault = Repo.get!(Engram.Vaults.Vault, ctx.healthy.vault_id, skip_tenant_check: true)
-
-    # Never indexed, so the pass embeds and upserts every point.
-    {:ok, note} =
-      Notes.upsert_note(
-        ctx.user,
-        vault,
-        %{"path" => "Ops/Fresh.md", "content" => "---\ntype: Runbook\n---\n# F\n\nNew.\n"},
-        actor: "api"
-      )
-
-    id = note.id
-
-    Agent.update(ctx.store, fn s ->
-      %{
-        s
-        | on_upsert: fn ->
-            Repo.update_all(
-              from(n in Note, where: n.id == ^id),
-              [set: [content_hash: "edited", payload_hash: "stamped-by-the-edit"]],
-              skip_tenant_check: true
-            )
-          end
-      }
-    end)
-
-    {:ok, plain} = Crypto.maybe_decrypt_note_fields(reload(note), ctx.user)
-
-    assert {:error, :superseded} = Indexing.index_note(plain, vault)
-    assert reload(note).payload_hash == nil
-  end
-
-  # The v3 index set has no legacy index: a legacy key in the heal scroll 400s.
-  test "on the v3 cluster the heal filters on v5 keys only (no strict 400)", ctx do
-    v3_on(ctx)
-
-    for id <- point_ids(ctx.stale),
-        do: Agent.update(ctx.store, &put_in(&1.points[id], retired_v5(ctx)))
-
-    Engram.Fixtures.write_note_body!(ctx.stale.id,
-      content_ciphertext: :crypto.strong_rand_bytes(48)
-    )
-
-    assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-    assert reload(ctx.stale).payload_hash == ReconcileNotePayloads.undecryptable_stamp()
-  end
-
-  # A v5 note whose row no longer decrypts cannot be healed. Left NULL, the
-  # daily re-check would requeue its user forever; it is marked (never
-  # deleted), counted, and skipped by the re-check until a pass rewrites it.
-  test "an undecryptable v5 note is marked, counted, and not re-picked", ctx do
-    for id <- point_ids(ctx.stale),
-        do: Agent.update(ctx.store, &put_in(&1.points[id], retired_v5(ctx)))
-
-    Engram.Fixtures.write_note_body!(ctx.stale.id,
-      content_ciphertext: :crypto.strong_rand_bytes(48)
-    )
-
-    ref =
-      :telemetry_test.attach_event_handlers(self(), [[:engram, :indexing, :payload_reconcile]])
-
-    assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-
-    assert_receive {[:engram, :indexing, :payload_reconcile], ^ref, %{count: 1},
-                    %{outcome: :skipped_v5}}
-
-    assert reload(ctx.stale).payload_hash == ReconcileNotePayloads.undecryptable_stamp()
-    assert Repo.exists?(from(n in Note, where: n.id == ^ctx.stale.id), skip_tenant_check: true)
-    assert Agent.get(ctx.store, & &1.overwrites) == []
-    # The heal does not vouch for the payload version, and the stale note's
-    # points lack `n`: the ledger's walk finds them and queues the `n`
-    # backfill, after which it is done.
-    assert {:more, _} = NotePayloadStamps.run_pass()
-    assert :ok = n_job(ctx)
-    assert NotePayloadStamps.run_pass() == :done
-  end
-
-  # A key-provider or DEK-load failure is not "this note is undecryptable":
-  # the note stays NULL (the daily re-check still covers it) and the job
-  # fails so Oban backs off.
-  test "a transient key failure marks nothing and fails the job", ctx do
-    for id <- point_ids(ctx.stale),
-        do: Agent.update(ctx.store, &put_in(&1.points[id], retired_v5(ctx)))
-
-    {1, _} =
-      Repo.update_all(
-        from(u in Engram.Accounts.User, where: u.id == ^ctx.user.id),
-        [set: [encrypted_dek: nil]],
-        skip_tenant_check: true
-      )
-
-    assert {:error, _} = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-    assert reload(ctx.stale).payload_hash == nil
-    assert Agent.get(ctx.store, & &1.overwrites) == []
-  end
-
-  # Once done, the migration re-checks daily on the existing runner cron, so
-  # a row a lost race unstamped is healed without waiting for an edit.
-  test "a done migration reopens for a row unstamped later", ctx do
-    assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-    assert NotePayloadStamps.run_pass() == :done
-    Indexing.unstamp_payload_hash(reload(ctx.stale))
-
-    # `Engram.Bookkeeping.Drain` finds the unstamped row. The daily
-    # re-verify exists for points without `n` only (a Qdrant walk, never a
-    # walk of every note), so a done ledger stays done for this.
-    DataMigrations.mark_done(NotePayloadStamps.name(), NotePayloadStamps.version())
-    assert NotePayloadStamps.reverify?()
-    assert NotePayloadStamps.run_pass() == :done
-    DataMigrations.reopen(NotePayloadStamps.name(), NotePayloadStamps.version())
-    assert {:more, users: 1} = NotePayloadStamps.run_pass()
-    assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
   end
 
   # The drain probes only `payload_hash IS NULL`; a payload-shape bump is a new
@@ -444,41 +139,14 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   # no daily re-verify the stale-version notes never healed.
   test "a payload_version bump reopens the done ledger and queues the stale notes", ctx do
     assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-    assert Engram.Workers.DataMigrationsRunner.run(NotePayloadStamps) == :done
+    assert DataMigrationsRunner.run(NotePayloadStamps) == :done
     v1 = NotePayloadStamps.version()
 
     Engram.ServiceConfig.put_override(:payload_version, Engram.Indexing.PayloadV6.version() + 1)
     assert NotePayloadStamps.version() == v1 + 1
 
-    assert Engram.Workers.DataMigrationsRunner.run(NotePayloadStamps) == :more
+    assert DataMigrationsRunner.run(NotePayloadStamps) == :more
     assert_enqueued(worker: ReconcileNotePayloads, args: %{"mode" => "n_fleet"})
-  end
-
-  test "a rotation that starts mid-job snoozes it before any write", ctx do
-    uid = ctx.user.id
-
-    Agent.update(ctx.store, fn s ->
-      %{
-        s
-        | on_scroll: fn ->
-            Repo.update_all(
-              from(u in Engram.Accounts.User, where: u.id == ^uid),
-              [set: [dek_rotation_locked_at: DateTime.utc_now()]],
-              skip_tenant_check: true
-            )
-          end
-      }
-    end)
-
-    assert {:snooze, _} = perform_job(ReconcileNotePayloads, %{"user_id" => uid})
-    assert Agent.get(ctx.store, & &1.set_payloads) == []
-    assert reload(ctx.healthy).payload_hash == nil
-  end
-
-  test "Qdrant refusing writes (507) snoozes the job instead of burning an attempt", ctx do
-    Agent.update(ctx.store, &%{&1 | payload_status: 507})
-    assert {:snooze, _} = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-    assert reload(ctx.stale).payload_hash == nil
   end
 
   test "snoozes while the user's DEK rotation holds the lock", ctx do
@@ -529,52 +197,21 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     assert NotePayloadStamps.run_pass() == :done
   end
 
-  # A request Qdrant will refuse on every retry is cancelled once, with its
-  # status logged, instead of five redacted `:error` attempts.
-  # A cancel is retried by the hourly re-check, so a refusal that never clears
-  # would cancel once an hour forever. The counter is what an alert sees.
-  test "a permanent scroll refusal cancels the job and logs its status", ctx do
-    Agent.update(ctx.store, &%{&1 | scroll_status: 400})
-    event = [:engram, :indexing, :payload_reconcile_cancelled]
-    ref = :telemetry_test.attach_event_handlers(self(), [event])
-
-    log =
-      ExUnit.CaptureLog.capture_log(fn ->
-        assert {:cancel, {:qdrant_scroll, 400, _}} =
-                 perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-      end)
-
-    assert log =~ "note payload reconcile failed"
-    assert log =~ ":qdrant_scroll 400"
-    refute log =~ ctx.stale.id
-    assert reload(ctx.stale).payload_hash == nil
-    assert_receive {^event, ^ref, %{count: 1}, %{http_status: 400}}
-  end
-
-  test "a transient scroll error (503) snoozes, a 500 fails for a backoff", ctx do
-    Agent.update(ctx.store, &%{&1 | scroll_status: 503})
-    assert {:snooze, _} = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-
-    Agent.update(ctx.store, &%{&1 | scroll_status: 500})
-
-    assert {:error, {:qdrant_scroll, 500, _}} =
-             perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-  end
-
-  test "a permanent payload-write refusal cancels the job", ctx do
-    Agent.update(ctx.store, &%{&1 | payload_status: 422})
-
-    assert {:cancel, {422, _}} =
-             perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
-  end
-
   # The v5 format on, as prod runs it after the rebuild: `u` is indexed.
   # The v3 cluster: LEGACY_FILTER_FIELDS=false, so the fake has no legacy
   # index and refuses any filter on a legacy key, as v3 would.
   describe "payload version sweep" do
-    # Both notes on v5 points written by a real v5 pass, stamped by it.
+    # Both notes on v5 points written by a real v5 pass, stamped by it. The
+    # v3 points are not reused (R3a never rewrites a reused point's payload,
+    # so a reused v3 point would stay v3).
     setup ctx do
       vault = Repo.get!(Engram.Vaults.Vault, ctx.stale.vault_id, skip_tenant_check: true)
+
+      Repo.update_all(
+        from(c in Chunk, where: c.user_id == ^ctx.user.id),
+        [set: [context_hmac: nil]],
+        skip_tenant_check: true
+      )
 
       for note <- [ctx.stale, ctx.healthy] do
         {:ok, plain} = Crypto.maybe_decrypt_note_fields(reload(note), ctx.user)
@@ -882,8 +519,6 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     # stamp stayed 6. No operator step: the daily re-verify finds the points,
     # reopens the ledger and requeues the user; the next chain heals them.
     test "a rollback's points without n reopen the done ledger by themselves", ctx do
-      alias Engram.Workers.DataMigrationsRunner
-
       assert :ok = sweep(ctx)
       DataMigrations.mark_done(NotePayloadStamps.name(), NotePayloadStamps.version())
       assert DataMigrations.done?(NotePayloadStamps.name(), NotePayloadStamps.version())
@@ -925,11 +560,45 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
 
     # `n` jobs sort behind heals on the one `crdt_backfill` lane: a heal
     # inserted after a minute's worth of `n` wakes still goes first.
-    test "an n job has a lower priority than a heal" do
+    test "the fleet n job runs at the heal's priority (3), so neither starves the other" do
       heal = ReconcileNotePayloads.new(%{"user_id" => Ecto.UUID.generate()})
       n = ReconcileNotePayloads.new(%{"mode" => "n_fleet"})
 
-      assert Ecto.Changeset.get_field(n, :priority) > Ecto.Changeset.get_field(heal, :priority)
+      assert Ecto.Changeset.get_field(n, :priority) == 3
+      assert Ecto.Changeset.get_field(n, :priority) == Ecto.Changeset.get_field(heal, :priority)
+    end
+
+    # A heal stream on the one lane must not hold the fleet job back: an
+    # executing heal for this user neither blocks the fleet enqueue nor
+    # absorbs it (separate unique slots).
+    test "a running heal job does not stop the window from queueing the fleet n job", ctx do
+      pre_n(ctx)
+
+      {:ok, heal} = Oban.insert(ReconcileNotePayloads.new(%{"user_id" => ctx.user.id}))
+
+      Repo.update_all(from(j in Oban.Job, where: j.id == ^heal.id),
+        set: [state: "executing", attempted_at: DateTime.utc_now()]
+      )
+
+      assert queued_users() > 0
+      assert_enqueued(worker: ReconcileNotePayloads, args: %{"mode" => "n_fleet"})
+      assert Repo.get!(Oban.Job, heal.id).args == %{"user_id" => ctx.user.id, "mode" => "heal"}
+    end
+
+    # The walk's `fresh` flag is re-checked on every call, not only at its
+    # start: an older node that joins mid-walk can write points without `n`
+    # behind the cursor, so that walk must never close the ledger.
+    test "a walk begun fresh that an old node joins mid-walk never closes the ledger", ctx do
+      assert :ok = sweep(ctx)
+      orphans!(ctx, 257)
+      new = [role: nil, query: nil, peers: fn -> [] end]
+
+      refute NotePayloadStamps.run_pass([pages: 1] ++ new) == :done
+      refute NotePayloadStamps.run_pass([pages: 1] ++ old_cluster()) == :done
+
+      # The next walk, every node new from its start: done.
+      refute NotePayloadStamps.run_pass([pages: 1] ++ new) == :done
+      assert NotePayloadStamps.run_pass([pages: 1] ++ new) == :done
     end
 
     # The heal and the `n` backfill are separate jobs with separate unique
@@ -986,8 +655,9 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
 
       assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
 
+      # The heal stamps the row and writes no point (R3a).
       for id <- point_ids(ctx.stale),
-          do: assert(Agent.get(ctx.store, &Map.fetch!(&1.points, id))["y"] == ctx.passed[id]["y"])
+          do: assert(Agent.get(ctx.store, &Map.fetch!(&1.points, id))["y"] == "b2xk")
 
       assert reload(ctx.stale).payload_hash && reload(ctx.healthy).payload_hash
       # The fleet job logs and counts the refusal and carries on past the user.
@@ -1076,14 +746,89 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     end
   end
 
-  defp v3_on(ctx) do
-    Engram.ServiceConfig.put_override(:legacy_filter_fields, false)
-    Agent.update(ctx.store, &%{&1 | legacy_indexes: false})
+  # The ledger's done also needs the collection's `n` index: search filters
+  # on `n`, and a done ledger is cached for good.
+  describe "the n index in the ledger's done" do
+    setup ctx do
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      assert NotePayloadStamps.run_pass() == :done
+      DataMigrations.reopen(NotePayloadStamps.name(), NotePayloadStamps.version())
+      :ok
+    end
+
+    defp no_n_index(ctx), do: Agent.update(ctx.store, &%{&1 | schema: %{"u" => %{}}})
+
+    test "clean walks and no n index: more, the ledger stays open, the index is ensured",
+         ctx do
+      no_n_index(ctx)
+      test_pid = self()
+      ensure = fn -> send(test_pid, :ensured) && :ok end
+
+      assert {:more, n_index_missing: 1} = NotePayloadStamps.run_pass(ensure_collection: ensure)
+      assert_received :ensured
+      refute NotePayloadStamps.done?()
+    end
+
+    test "clean walks and the n index present: done", _ctx do
+      assert NotePayloadStamps.run_pass() == :done
+    end
+
+    test "a done ledger whose n index went missing reopens at re-verify, cache erased", ctx do
+      assert DataMigrationsRunner.run(NotePayloadStamps) == :done
+      assert NotePayloadStamps.done?()
+      no_n_index(ctx)
+
+      assert DataMigrationsRunner.run(NotePayloadStamps, true) == :more
+      refute NotePayloadStamps.done?()
+    end
+
+    test "an unreadable schema keeps a done ledger done and an open one open", ctx do
+      Agent.update(ctx.store, &%{&1 | schema: nil})
+      refute NotePayloadStamps.run_pass() == :done
+
+      DataMigrations.mark_done(NotePayloadStamps.name(), NotePayloadStamps.version())
+      assert NotePayloadStamps.run_pass() == :done
+    end
   end
 
-  # A v5 point a rotation left on the retired key. `u` is the tenant id, not
-  # an HMAC, so a rotation never changes it.
-  defp retired_v5(ctx), do: %{"u" => FilterId.uuid(ctx.user.id), "y" => "b2xk"}
+  describe "the heal (R3a)" do
+    # The hash an index pass stamps: of the identity payload, the same for
+    # every point of the note.
+    defp identity_hash(note) do
+      payload = %{
+        "u" => FilterId.uuid(note.user_id),
+        "v" => FilterId.uuid(note.vault_id),
+        "n" => FilterId.uuid(note.id)
+      }
+
+      :crypto.hash(:sha256, :erlang.term_to_binary(payload, [:deterministic]))
+    end
+
+    test "stamps the identity hash on NULL rows with no Qdrant call and no decrypt", ctx do
+      expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("embed during heal") end)
+      Agent.update(ctx.store, &%{&1 | requests: []})
+
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+      assert Agent.get(ctx.store, & &1.requests) == []
+      assert reload(ctx.stale).payload_hash == identity_hash(ctx.stale)
+      assert reload(ctx.healthy).payload_hash == identity_hash(ctx.healthy)
+    end
+
+    test "leaves a stamped row alone", ctx do
+      kept = :crypto.strong_rand_bytes(32)
+
+      Repo.update_all(
+        from(n in Note, where: n.id == ^ctx.healthy.id),
+        [set: [payload_hash: kept]],
+        skip_tenant_check: true
+      )
+
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      assert reload(ctx.healthy).payload_hash == kept
+      assert reload(ctx.stale).payload_hash == identity_hash(ctx.stale)
+    end
+  end
 
   # What one whole walk of the ledger's id windows queues
   # (`ReconcileNotePayloads.queue_window/2`): users with a note to heal.
@@ -1121,6 +866,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
 
   defp fake_qdrant(conn, store) do
     {:ok, body, conn} = Plug.Conn.read_body(conn, length: 10_000_000)
+    Agent.update(store, &%{&1 | requests: [{conn.method, conn.request_path} | &1.requests]})
     body = if body == "", do: %{}, else: Jason.decode!(body)
     status = Agent.get(store, & &1.payload_status)
     scroll_status = Agent.get(store, & &1.scroll_status)

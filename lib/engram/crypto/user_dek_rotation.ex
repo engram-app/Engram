@@ -42,6 +42,7 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Folders.Folder
   alias Engram.Indexing
   alias Engram.Indexing.ChunkRows
+  alias Engram.Jobs
   alias Engram.Logger.Metadata
   alias Engram.Notes.CrdtUpdateLog
   alias Engram.Notes.FieldCatalog
@@ -50,7 +51,7 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Notes.NoteBody
   alias Engram.Repo
   alias Engram.Vector.Qdrant
-  alias Engram.Workers.{EmbedNote, ReconcileNotePayloads, RotationTextGuard}
+  alias Engram.Workers.{EmbedNote, RefreshKeywordVectors, RotationTextGuard}
 
   require Logger
 
@@ -1282,13 +1283,12 @@ defmodule Engram.Crypto.UserDekRotation do
   # that window any more; the S3 I/O in `sweep_attachments` still does
   # (#1507: persist the pending wrapped DEK before `sweep_notes`).
   #
-  # * Filter HMACs on the points (`path/folder/tags/type_hmac`, from
-  #   `Crypto.dek_filter_key/1`) and keyword (sparse) vectors (dimensions are
-  #   filter-key HMACs of the tokens): `final_flip` itself NULLs
-  #   `payload_hash` and `keyword_version` and enqueues
-  #   `ReconcileNotePayloads`, in its own transaction, so neither depends on
-  #   anything below. `ReconcileEmbeddings` then enqueues
-  #   `RefreshKeywordVectors` (resparse in place, no embedder).
+  # * Keyword (sparse) vectors (dimensions are filter-key HMACs of the
+  #   tokens): `final_flip` itself NULLs `keyword_version` and enqueues a
+  #   `RefreshKeywordVectors` per note (resparse in place, no embedder), in
+  #   its own transaction, so neither depends on anything below. A point's
+  #   payload holds no filter HMAC since R3a (`u`, `v`, `n` only), so no
+  #   payload is rewritten.
   # * Chunk reuse (here): `chunks.context_hmac` is keyed on the content-hash
   #   subkey (`Crypto.dek_content_hash_key/1`). Cleared (the old behaviour),
   #   the next index of any note re-embedded every chunk. It is remapped
@@ -1301,21 +1301,18 @@ defmodule Engram.Crypto.UserDekRotation do
   # `embed_hash` does with it (they stay equal, so EmbedNote still skips).
   #
   # Every filter key derives from the DEK (`Crypto.dek_filter_key/1`), so a
-  # rotation changes every HMAC a Qdrant filter matches on: `path/folder/
-  # tags/type_hmac` on v3 points, the short ids on v5 points, and the
-  # `note_attrs` rows. Nothing re-indexes after a rotation, and a re-index
-  # would re-embed every chunk, so the keys are rewritten here from the
+  # rotation changes every HMAC a filter matches on: the note row's HMACs and
+  # the `note_attrs` rows (Postgres resolves every filter since R3a). Nothing
+  # re-indexes after a rotation, and a re-index would re-embed every chunk,
+  # so the keys are rewritten here from the
   # rotated rows and the decrypted frontmatter. No embedder call: a rotation
   # costs $0 in Voyage.
   #
   # Split by where it writes, so nothing network-bound runs between the
   # rewrap and the flip. `note_attrs` is DB only: rewritten here, before the
   # flip like every other DB sweep (after `sweep_notes` recomputed the row
-  # HMACs and `sweep_frontmatter_keys/4` rekeyed the dictionary). The points
-  # are Qdrant: `ReconcileNotePayloads`, which the flip commits with itself,
-  # rewrites v3 and v5 filter keys from the rows as they are when it runs, so
-  # a node dying after the flip loses nothing and a later edit is not
-  # reverted.
+  # HMACs and `sweep_frontmatter_keys/4` rekeyed the dictionary). Old v3
+  # and v5 points keep stale filter keys nothing reads.
   defp resync_note_attrs(%User{id: user_id}, new_dek, new_filter_key) do
     IdWindows.each_batch(
       user_id,
@@ -1871,7 +1868,7 @@ defmodule Engram.Crypto.UserDekRotation do
   # cursor after `:max_pages` pages. `:on_page` runs after each page.
   #
   # Only legacy-format points hold ciphertext (a v5 payload has none,
-  # `Engram.Indexing.PayloadV5`), so the scroll is on the legacy `user_id` key
+  # `Engram.Indexing.identity_payload/1`), so the scroll is on the legacy `user_id` key
   # alone: paging the user's v5 points would find nothing to rewrap. Once no
   # legacy point can exist (legacy filters off: the v3 cluster, which has no
   # `user_id` index) there is nothing to sweep and no call is made.
@@ -2529,19 +2526,26 @@ defmodule Engram.Crypto.UserDekRotation do
 
   defp old_aad_for(_table, _column, _row), do: <<>>
 
-  # Inside the flip's transaction: the points' filter HMACs and sparse
-  # vectors are on the retired key from this commit on, so the NULLs the
-  # heals select on and the heal jobs commit with it, or not at all. Returns
-  # the text guard, which this process cancels once its own text sweep is
-  # done (`cancel_text_guard/1`).
-  defp hand_points_to_heals(user_id, new_dek_version) do
-    {:ok, {_, _}} =
+  # Inside the flip's transaction: the sparse vectors are on the retired key
+  # from this commit on, so the NULLs and their resparse jobs commit with it,
+  # or not at all (a rotation is the one bulk resparse; `Jobs.insert_chunked`
+  # pages the inserts). ponytail: one job per note, O(vault) like the rest of
+  # a rotation. Returns the text guard, which this process cancels once its
+  # own text sweep is done (`cancel_text_guard/1`).
+  defp queue_resparse(user_id, new_dek_version) do
+    {:ok, {_, note_ids}} =
       Repo.with_tenant(user_id, fn ->
-        from(n in Engram.Notes.Note, where: n.user_id == ^user_id and n.kind == "note")
-        |> Repo.update_all(set: [payload_hash: nil, keyword_version: nil])
+        from(n in Engram.Notes.Note,
+          where: n.user_id == ^user_id and n.kind == "note",
+          select: n.id
+        )
+        |> Repo.update_all(set: [keyword_version: nil])
       end)
 
-    {:ok, _} = Oban.insert(ReconcileNotePayloads.new(%{"user_id" => user_id}))
+    _ =
+      note_ids
+      |> Enum.map(&RefreshKeywordVectors.new_for_note(&1, user_id))
+      |> Jobs.insert_chunked()
 
     Oban.insert(
       RotationTextGuard.new(
@@ -2577,7 +2581,7 @@ defmodule Engram.Crypto.UserDekRotation do
                skip_tenant_check: true
              ) do
           {1, _} ->
-            {:ok, guard} = hand_points_to_heals(user.id, new_dek_version)
+            {:ok, guard} = queue_resparse(user.id, new_dek_version)
             guard
 
           {0, _} ->
