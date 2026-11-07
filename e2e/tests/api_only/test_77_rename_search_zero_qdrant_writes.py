@@ -22,6 +22,8 @@ import time
 
 from helpers.crypto_probe import (
     latest_note_path_hmac,
+    note_id_for,
+    qdrant_point_ids,
     wait_for_chunks_committed,
     wait_for_qdrant_indexed,
 )
@@ -31,24 +33,24 @@ API_URL = os.environ.get("ENGRAM_API_URL") or "http://localhost:8100/api"
 logger = logging.getLogger(__name__)
 
 
-class TestRenameRepathSearch:
-    """A folder rename must move the note's Qdrant points to the new
-    folder_hmac without re-embedding, so folder-filtered search follows it."""
+class TestRenameSearchZeroQdrantWrites:
+    """A folder rename makes no Qdrant write, and folder-filtered search
+    still follows the note (Postgres resolves the folder)."""
 
-    def test_folder_rename_repaths_points_in_qdrant(self, api_sync):
+    def test_folder_rename_moves_search_with_zero_qdrant_writes(self, api_sync):
         vaults = api_sync.list_vaults()
         assert vaults, "api_sync should have a registered vault"
         vault_id = vaults[0]["id"]
         client = api_sync.with_vault(vault_id)
 
         ts = int(time.time())
-        src_folder = f"repath-src-{ts}"
-        dst_folder = f"repath-dst-{ts}"
+        src_folder = f"rename-src-{ts}"
+        dst_folder = f"rename-dst-{ts}"
         filename = f"note-{ts}.md"
         old_path = f"{src_folder}/{filename}"
         new_path = f"{dst_folder}/{filename}"
         # Distinctive token so the query matches exactly this note.
-        query = f"zzrepathfingerprint{ts}"
+        query = f"zzrenamefingerprint{ts}"
 
         # 1. Seed one note in the source folder and let the embed worker land
         #    it in Qdrant under the old path_hmac.
@@ -56,7 +58,7 @@ class TestRenameRepathSearch:
             f"{API_URL}/notes",
             json={
                 "path": old_path,
-                "content": f"# Repath note\n\n{query} body content here.\n",
+                "content": f"# Rename note\n\n{query} body content here.\n",
                 "mtime": time.time(),
             },
             timeout=10,
@@ -68,6 +70,11 @@ class TestRenameRepathSearch:
         # Search rehydrates hits from chunk rows, which commit AFTER the
         # Qdrant upsert; a hit with no row yet is dropped.
         wait_for_chunks_committed(vault_id, old_path_hmac, old_path, timeout=90)
+
+        note_id = note_id_for(vault_id, old_path_hmac)
+        assert note_id, f"no note row for {old_path!r}"
+        points_before = qdrant_point_ids(vault_id, note_id)
+        assert points_before, f"no Qdrant points for {old_path!r}"
 
         # 1a. Baseline: folder-scoped search finds it under the OLD folder.
         before = self._search(client, query, folder=src_folder, limit=10)
@@ -96,6 +103,14 @@ class TestRenameRepathSearch:
             f"got {[r.get('path') for r in after_old]}"
         )
 
+        # 5. Zero Qdrant writes: the note's points are the same points (no
+        #    re-embed, no re-upsert under new ids).
+        points_after = qdrant_point_ids(vault_id, note_id)
+        assert points_after == points_before, (
+            f"a folder rename must not rewrite the note's Qdrant points: "
+            f"before {points_before}, after {points_after}"
+        )
+
     @staticmethod
     def _search(
         client,
@@ -118,7 +133,7 @@ class TestRenameRepathSearch:
         want: str,
         timeout: float = 90.0,
     ) -> bool:
-        """Poll folder-scoped search until `want` appears (repath is async)."""
+        """Poll folder-scoped search until `want` appears."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             results = self._search(client, query, folder=folder, limit=10)

@@ -21,7 +21,7 @@ e2e-clerk on your PR is ambient noise.
 | `test_34_folder_rename_propagation` | Real plugin bug, FIXED (Engram-obsidian#394) |
 | `test_77_bulk_first_sync` | Load-sensitive throughput assert, FIXED (#1773: route count replaces wall clock) |
 | `api_only/test_32_vault_api_key_isolation::test_mcp_search_spans_all_vaults_by_default` | Load-sensitive client timeout, FIXED (see below) |
-| `test_30_sse_catch_up_multi`, `test_49`, `test_37`, `api_only/test_77_rename_repath_search` | Uninvestigated |
+| `test_30_sse_catch_up_multi`, `test_49`, `test_37`, `api_only/test_77_rename_search_zero_qdrant_writes` | Uninvestigated |
 
 One red night had **no `FAILED` line at all**: a job-level failure, not a
 test failure. Don't assume a red suite has a failing test.
