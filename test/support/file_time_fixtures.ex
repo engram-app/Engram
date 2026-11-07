@@ -1,9 +1,12 @@
 defmodule Engram.FileTimeFixtures do
   @moduledoc """
   Real prod `notes.mtime` values (2026-11) with the microsecond
-  `Engram.FileTime.to_at/1` must store for each. Desktop Obsidian's
+  `Engram.FileTime.to_at/1` must store for each: the double's EXACT
+  binary value rounded to the microsecond. Desktop Obsidian's
   `stat.mtimeMs` carries sub-millisecond digits, which the plugin divides
-  by 1000. Five of them floored 1 us low on 0.74 and 0.75.
+  by 1000. Four of them floored 1 us low on 0.74 and 0.75; one
+  (1792348622.2113965, exactly ...2113964557...) was rounded 1 us HIGH by
+  0.76's float multiply (`t * 1e6` is the tie ...211396.5).
   """
 
   @doc "`[{double, microsecond}]`."
@@ -13,7 +16,7 @@ defmodule Engram.FileTimeFixtures do
       {1_792_374_456.8065336, 806_534},
       {1_792_355_282.670638, 670_638},
       {1_793_463_598.414629, 414_629},
-      {1_792_348_622.2113965, 211_397},
+      {1_792_348_622.2113965, 211_396},
       {1_793_434_092.091588, 91_588},
       {1_792_744_305.7469757, 746_976},
       {1_793_152_317.489393, 489_393},
