@@ -464,26 +464,18 @@ defmodule Engram.Folders.Rows do
     end
   end
 
-  @doc """
-  `subtree/3`'s ids and path hashes only: what a reader joins notes on.
-
-  `limit:` reads at most that many rows, unordered, straight off the walk, so
-  Postgres stops walking once it has them (a caller passes its cap plus one
-  to learn the subtree is over it). Without it, the whole subtree.
-  """
-  @spec subtree_refs(map(), Ecto.UUID.t(), [String.t()], keyword()) :: [
+  @doc "`subtree/3`'s ids and path hashes only: what a reader joins notes on."
+  @spec subtree_refs(map(), Ecto.UUID.t(), [String.t()]) :: [
           %{id: Ecto.UUID.t(), full_path_hmac: binary() | nil}
         ]
-  def subtree_refs(user, vault_id, folders, opts \\ []) do
+  def subtree_refs(user, vault_id, folders) do
     case Crypto.dek_filter_key(user) do
       {:ok, fk} ->
         roots = folders |> Enum.reject(&(&1 == "")) |> Enum.map(&path_hmac(fk, &1))
 
-        case Keyword.fetch(opts, :limit) do
-          {:ok, limit} -> limited_refs(vault_id, roots, limit)
-          :error -> subtree_query(vault_id, roots)
-        end
-        |> select([f], %{id: type(f.id, Ecto.UUID), full_path_hmac: f.full_path_hmac})
+        from(f in subtree_query(vault_id, roots),
+          select: %{id: f.id, full_path_hmac: f.full_path_hmac}
+        )
         |> Repo.all()
         |> Enum.uniq_by(& &1.id)
 
@@ -523,39 +515,29 @@ defmodule Engram.Folders.Rows do
         join: t in "folder_subtree",
         on: f.parent_id == t.id,
         where: f.vault_id == ^vault_id and is_nil(f.deleted_at) and t.depth < @max_depth,
-        select: %{id: f.id, full_path_hmac: f.full_path_hmac, depth: fragment("? + 1", t.depth)}
+        select: %{id: f.id, depth: fragment("? + 1", t.depth)}
       )
 
     union_all(roots, ^walk)
   end
 
-  # A CTE scan with a LIMIT and no ORDER BY or join: the recursive walk is
-  # evaluated only as far as the rows fetched.
-  defp limited_refs(_vault_id, [], _limit), do: from(f in Folder, where: false)
-
-  defp limited_refs(vault_id, root_hmacs, limit) do
-    from(t in "folder_subtree", limit: ^limit)
-    |> recursive_ctes(true)
-    |> with_cte("folder_subtree", as: ^walk_down(vault_id, roots(vault_id, root_hmacs)))
-  end
-
-  defp roots(vault_id, root_hmacs) do
-    from(f in Folder,
-      where: f.vault_id == ^vault_id and f.full_path_hmac in ^root_hmacs and is_nil(f.deleted_at),
-      select: %{id: f.id, full_path_hmac: f.full_path_hmac, depth: fragment("0")}
-    )
-  end
-
   defp subtree_query(_vault_id, []), do: from(f in Folder, where: false)
 
   defp subtree_query(vault_id, root_hmacs) do
+    roots =
+      from(f in Folder,
+        where:
+          f.vault_id == ^vault_id and f.full_path_hmac in ^root_hmacs and is_nil(f.deleted_at),
+        select: %{id: f.id, depth: fragment("0")}
+      )
+
     from(f in Folder,
       join: t in "folder_subtree",
       on: f.id == t.id,
       order_by: [asc: t.depth, asc: f.id]
     )
     |> recursive_ctes(true)
-    |> with_cte("folder_subtree", as: ^walk_down(vault_id, roots(vault_id, root_hmacs)))
+    |> with_cte("folder_subtree", as: ^walk_down(vault_id, roots))
   end
 
   @doc """
@@ -572,7 +554,7 @@ defmodule Engram.Folders.Rows do
     roots =
       from(f in Folder,
         where: f.vault_id == ^vault_id and f.id == ^root_id and is_nil(f.deleted_at),
-        select: %{id: f.id, full_path_hmac: f.full_path_hmac, depth: fragment("0")}
+        select: %{id: f.id, depth: fragment("0")}
       )
 
     from(t in "folder_subtree",

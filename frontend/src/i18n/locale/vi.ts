@@ -5,8 +5,6 @@ export default {
 		"Bạn đã đạt giới hạn ghi chú — nâng cấp để thêm nhiều hơn.",
 	"Changes can't be saved: your account can't sync right now.":
 		"Không thể lưu thay đổi: tài khoản của bạn không thể đồng bộ hóa ngay bây giờ.",
-	"Folder too large to rename here (more than {limit} items). Rename it in Obsidian.":
-		"Thư mục quá lớn để đổi tên ở đây (hơn {limit} mục). Đổi tên nó trong Obsidian.",
 	"A note with that name already exists.": "Một ghi chú với tên đó đã tồn tại.",
 	"A folder with that name already exists.": "Một thư mục với tên đó đã tồn tại.",
 	"A file with that name already exists.": "Đã có một tệp với tên đó.",

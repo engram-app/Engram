@@ -586,8 +586,8 @@ defmodule Engram.Fixtures do
   end
 
   @doc """
-  Fills `folder` with exactly `n` direct children, for the folder-op size cap
-  (#2492) boundary tests: 5 empty subfolder rows, `atts` attachments (the
+  Fills `folder` with exactly `n` direct children, for large-folder rename
+  and move tests: 5 empty subfolder rows, `atts` attachments (the
   caller stubs storage), the rest notes in one bulk insert. The folder rows
   exist first, so `notes_set_folder_ref` gives every note its reference.
   """

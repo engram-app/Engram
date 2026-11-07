@@ -4,8 +4,6 @@ export default {
 	"You've hit your note limit — upgrade to add more.": "您已達到筆記數量上限，升級以增加上限。",
 	"Changes can't be saved: your account can't sync right now.":
 		"無法儲存變更：您的帳戶目前無法同步。",
-	"Folder too large to rename here (more than {limit} items). Rename it in Obsidian.":
-		"此資料夾過大，無法在此處重新命名（超過 {limit} 個項目）。請在 Obsidian 中重新命名。",
 	"A note with that name already exists.": "已經存在同名的筆記。",
 	"A folder with that name already exists.": "已經存在同名的資料夾。",
 	"A file with that name already exists.": "已經存在同名的檔案。",

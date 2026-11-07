@@ -60,8 +60,6 @@ defmodule Engram.ServiceConfig.Overrides do
     rebuild_max_disk_percent: {:integer, 1..100},
     file_times_backfill: :boolean,
     note_body_columns_null: :boolean,
-    # Folder rename/move size cap (`Engram.Folders`, #2492).
-    folder_op_max_rows: {:integer, 0..1_000_000},
     # The null batch's per-pass cap (rows), to slow it without a deploy.
     note_body_columns_null_max_fixed: {:integer, 1..1_000_000}
   }
