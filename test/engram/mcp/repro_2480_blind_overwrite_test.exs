@@ -124,6 +124,28 @@ defmodule Engram.MCP.Repro2480BlindOverwriteTest do
 
   # -- Edge cases of the base_hash rule --
 
+  # The gate create_note and append_or_create's create-on-miss pass. A
+  # concurrent create that lands between create_note's existence check and
+  # its write is found by the upsert's own lookup, and must be refused there,
+  # not replaced. (The sandbox runs one connection, so the gap itself cannot
+  # be interleaved here; this pins the refusal the gap reaches.)
+  test "2480 edge: require_base upsert refuses an existing note and creates a new one", %{
+    user: u,
+    vault: v
+  } do
+    before = body(u, v)
+    opts = [actor: "mcp", require_base: true]
+
+    assert {:error, :version_conflict, server} =
+             Notes.upsert_note(u, v, %{"path" => @path, "content" => "loser\n"}, opts)
+
+    assert server.content == before
+    assert body(u, v) == before
+
+    assert {:ok, _} =
+             Notes.upsert_note(u, v, %{"path" => "Brand New.md", "content" => "a\n"}, opts)
+  end
+
   test "2480 edge: write_note creates a new note without base_hash", %{user: u, vault: v} do
     assert {:ok, _, _} =
              Handlers.handle("write_note", u, v, %{"path" => "Fresh.md", "content" => "hi\n"})

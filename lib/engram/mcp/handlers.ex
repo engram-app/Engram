@@ -435,24 +435,25 @@ defmodule Engram.MCP.Handlers do
 
     # create_note is advertised non-destructive, so it must never replace a note
     # at its derived path. Upsert sanitizes the path, so check the same form.
-    # ponytail: check-then-write, two concurrent creates of one title can still
-    # race; a create-only mode on upsert_note closes it if that ever matters.
+    # The check answers the common case with a clear message; `require_base`
+    # closes the race where a concurrent create lands between check and write
+    # (#2480): the loser gets the same answer instead of overwriting.
     # Replies name where the note lands, not the raw argument.
     stored = Notes.PathSanitizer.sanitize(path)
 
     if Notes.note_exists?(user, vault, stored) do
-      ToolError.error(
-        :path_conflict,
-        "A note already exists at #{stored}. Use get_notes to read it, or write_note " <>
-          "to replace it, or pick a different title."
-      )
+      path_conflict_error(stored)
     else
       Notes.upsert_note(
         user,
         vault,
         %{"path" => path, "content" => content, "mtime" => now()},
-        @write_opts
+        [require_base: true] ++ @write_opts
       )
+      |> case do
+        {:error, :version_conflict, _note} -> path_conflict_error(stored)
+        result -> result
+      end
       |> upsert_reply(
         [
           ok: "Note created: #{stored}",
@@ -1356,7 +1357,9 @@ defmodule Engram.MCP.Handlers do
             "content" => content,
             "mtime" => now()
           },
-          @write_opts
+          # The miss holds the vault lock, so this only guards the create
+          # against a writer that does not take it (#2480, defence in depth).
+          [require_base: true] ++ @write_opts
         )
         |> upsert_reply(
           [
@@ -1451,6 +1454,14 @@ defmodule Engram.MCP.Handlers do
        "matches), so nothing was written. Call get_notes on it again, apply your change to " <>
        "the content it returns, and retry with that content_hash as base_hash."}
   end
+
+  defp path_conflict_error(stored),
+    do:
+      ToolError.error(
+        :path_conflict,
+        "A note already exists at #{stored}. Use get_notes to read it, or write_note " <>
+          "to replace it, or pick a different title."
+      )
 
   defp base_required_error(path) do
     {:version_conflict,
