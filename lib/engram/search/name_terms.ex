@@ -62,8 +62,9 @@ defmodule Engram.Search.NameTerms do
 
   Match gate: the query's stopwords are dropped (`Engram.KeywordIndex.Stopwords`)
   and a note or folder counts only when its own name terms hold EVERY
-  remaining query term (dims, stems included). A query of only stopwords
-  gets nothing from the leg. Ranking names by how many query words they
+  remaining query term (dims, stems included; a contraction matches with
+  or without its apostrophe fragment, `query_terms/2`). A query of only
+  stopwords gets nothing from the leg. Ranking names by how many query words they
   share instead let a name that shares "to" and "the" tie the best content
   hit (the R10.1 eval: NDCG@10 0.84 of baseline; gated, 0.997). Its
   notes are narrowed to the search's filters first (`Search.in_scope/3`),
@@ -91,10 +92,10 @@ defmodule Engram.Search.NameTerms do
     * search, constant in vault size and in notes per folder:
       - per kind (notes, folders: separate budgets), the rarest of at most
         #{16} query terms by bounded counts (at most #{16} x #{2_000} index
-        entries), then at most #{2_000} of its postings scanned (index
-        order), each one primary-key probe of its ref plus at most #{16}
-        `name_terms_pkey` probes for the other terms, stopping at #{500}
-        matches (dead rows never fill the budget; past #{2_000} dead rows on
+        entries), then at most #{2_000} postings per dim of that term
+        scanned (index order; one dim, or a contraction's few), each one
+        primary-key probe of its ref plus at most #{16} `name_terms_pkey`
+        probes for the terms, stopping at #{500} matches (dead rows never fill the budget; past #{2_000} dead rows on
         the rarest term a live ref can be missed, counted as `scan_capped`,
         until the delete hooks or the orphan sweep remove them);
       - one exact-name probe;
@@ -184,6 +185,50 @@ defmodule Engram.Search.NameTerms do
     |> Enum.map(&signed(QdrantSparse.dim(filter_key, &1)))
     |> Enum.uniq()
     |> Enum.take(cap)
+  end
+
+  @apostrophes ["'", "\u2019"]
+
+  @doc """
+  The query's required terms for the match gate, at most #{16} dims: one
+  group per required term, a ref matches a group when it holds ANY of its
+  dims. Stopwords are dropped (`Stopwords.drop/1`). A plain word's dims
+  (raw and stem) are each their own group, so all are required. A
+  contraction is one group: its tokens without the fragment the apostrophe
+  splits off (`Stopwords.contraction_fragments/0`) or the word with the
+  apostrophe removed, so "Alex's" matches "Alex" and "Alex's", and "don't"
+  matches "Dont". [] when only stopwords are left.
+  """
+  @spec query_terms(String.t(), binary()) :: [[integer()]]
+  def query_terms(query, fk) do
+    {contracted, plain} =
+      query |> String.split() |> Enum.split_with(&String.contains?(&1, @apostrophes))
+
+    singles =
+      for d <- dims([Stopwords.drop(Enum.join(plain, " "))], fk, @max_query_terms), do: [d]
+
+    groups =
+      for word <- contracted,
+          kept = word |> unfragment() |> Stopwords.drop(),
+          kept != "",
+          do: dims([kept, String.replace(word, @apostrophes, "")], fk, @max_query_terms)
+
+    cap(singles ++ groups, @max_query_terms)
+  end
+
+  # The word's tokens minus any contraction fragment after the first.
+  defp unfragment(word) do
+    [first | rest] = Tokenizer.tokens(word, nil) |> then(&if(&1 == [], do: [""], else: &1))
+    Enum.join([first | rest -- Stopwords.contraction_fragments()], " ")
+  end
+
+  defp cap(groups, max) do
+    groups
+    |> Enum.reduce_while({[], 0}, fn g, {acc, n} ->
+      if n + length(g) > max, do: {:halt, {acc, n}}, else: {:cont, {[g | acc], n + length(g)}}
+    end)
+    |> elem(0)
+    |> Enum.reverse()
   end
 
   defp signed(u32) do
@@ -782,7 +827,7 @@ defmodule Engram.Search.NameTerms do
   @spec recall(map(), term(), String.t(), ([Ecto.UUID.t()] -> [Ecto.UUID.t()])) :: [map()]
   def recall(user, scope, query, keep \\ & &1) do
     with {:ok, fk} <- Crypto.dek_filter_key(user),
-         [_ | _] = dims <- dims([Stopwords.drop(query)], fk, @max_query_terms),
+         [_ | _] = dims <- query_terms(query, fk),
          [_ | _] = vault_ids <- vault_ids(user, scope),
          {:ok, {named, foldered}} <-
            Repo.with_tenant(user.id, fn -> ranked(vault_ids, dims, fk, query) end),
@@ -832,51 +877,50 @@ defmodule Engram.Search.NameTerms do
   end
 
   @doc """
-  The live refs of `kind` (0 notes, 1 folders) in `vault_ids` whose own
-  terms hold EVERY one of `dims`, at most #{50}, in id order. Two queries,
-  no per-candidate round trip: `rarest_query/3` picks the dim with the
-  fewest postings (each counted up to #{2_000}), then `hits_query/4` scans
-  at most #{2_000} of that dim's postings (index order), probes each ref's
-  liveness by its primary key and every other dim by `name_terms_pkey`,
-  and stops at the #{500}th match. Notes and folders have separate budgets,
-  and dead rows never fill the live budget. When the rarest dim's scan hits
-  #{2_000} before #{500} matches it counts in
+  The live refs of `kind` (0 notes, 1 folders) in `vault_ids` that match
+  every group of `terms` (a group is a dim or a list of dims, matched when
+  the ref holds any of them; `query_terms/2`), at most #{50}, in id order.
+  Two queries, no per-candidate round trip: `counts_query/3` counts each
+  dim's postings (up to #{2_000} each) and the group with the fewest drives;
+  `hits_query/5` scans at most #{2_000} postings per driving dim (index
+  order), probes each ref's liveness by its primary key and every group by
+  `name_terms_pkey`, and stops at the #{500}th match. Notes and folders
+  have separate budgets, and dead rows never fill the live budget. When a
+  driving dim's scan hits #{2_000} and fewer than #{500} match it counts in
   `[:engram, :search, :name_terms, :scan_capped]`: past that many dead rows
   a live ref may be missed until the delete hooks or the drain's orphan
   sweep remove them. Runs in the caller's tenant.
   """
-  @spec hits([Ecto.UUID.t()], [integer()], 0 | 1) :: [Ecto.UUID.t()]
-  def hits(vault_ids, dims, kind) do
-    case vault_ids |> rarest_query(dims, kind) |> Repo.one() do
-      nil ->
-        []
+  @spec hits([Ecto.UUID.t()], [integer() | [integer()]], 0 | 1) :: [Ecto.UUID.t()]
+  def hits(vault_ids, terms, kind) do
+    groups = Enum.map(terms, &List.wrap/1)
+    dims = List.flatten(groups)
+    counts = vault_ids |> counts_query(dims, kind) |> Repo.all() |> Map.new()
+    drive = Enum.min_by(groups, fn g -> g |> Enum.map(&Map.get(counts, &1, 0)) |> Enum.sum() end)
 
-      {_dim, 0} ->
-        []
+    if Enum.all?(drive, &(Map.get(counts, &1, 0) == 0)) do
+      []
+    else
+      grps = for {g, i} <- Enum.with_index(groups), _ <- g, do: i
+      live = vault_ids |> hits_query(drive, dims, grps, kind) |> Repo.all()
 
-      {dim, scanned} ->
-        live = vault_ids |> hits_query(dim, dims, kind) |> Repo.all()
+      if Enum.any?(drive, &(counts[&1] == @scan_cap)) and length(live) < @postings,
+        do:
+          :telemetry.execute([:engram, :search, :name_terms, :scan_capped], %{count: 1}, %{
+            kind: kind
+          })
 
-        if scanned == @scan_cap and length(live) < @postings,
-          do:
-            :telemetry.execute([:engram, :search, :name_terms, :scan_capped], %{count: 1}, %{
-              kind: kind
-            })
-
-        live |> Enum.sort() |> Enum.take(@k)
+      live |> Enum.uniq() |> Enum.sort() |> Enum.take(@k)
     end
   end
 
   @doc false
-  # `{dim, postings}` of the dim with the fewest postings of `kind`, each
-  # counted up to #{2_000}, first in query order on a tie.
-  def rarest_query(vault_ids, dims, kind) do
-    from(q in fragment("SELECT * FROM unnest(?::int4[]) WITH ORDINALITY AS q(dim, ord)", ^dims),
+  # `{dim, postings}` per dim of `kind`, each counted up to #{2_000}.
+  def counts_query(vault_ids, dims, kind) do
+    from(q in fragment("SELECT unnest(?::int4[]) AS dim", ^dims),
       as: :q,
       inner_lateral_join: c in subquery(scanned(vault_ids, kind)),
       on: true,
-      order_by: [asc: c.n, asc: field(q, :ord)],
-      limit: 1,
       select: {type(field(q, :dim), :integer), c.n}
     )
   end
@@ -892,35 +936,48 @@ defmodule Engram.Search.NameTerms do
   end
 
   @doc false
-  # The live refs of `kind` among the first #{2_000} postings of `dim` that
-  # also hold every one of `dims`, stopping at the #{500}th (the query
-  # `hits/3` runs; its plan test reads it).
-  def hits_query(vault_ids, dim, dims, kind) do
-    {schema, on} =
-      if kind == @note,
-        do:
-          {Note,
-           dynamic([x: x, n: n], n.id == x.ref_id and n.kind == "note" and is_nil(n.deleted_at))},
-        else: {Folder, dynamic([x: x, n: n], n.id == x.ref_id and is_nil(n.deleted_at))}
-
-    from(d in fragment("SELECT ?::int4 AS dim", ^dim),
+  # The live refs of `kind` among the first #{2_000} postings of each of
+  # `drive` that match every group (`dims` with their group index in
+  # `grps`), stopping at the #{500}th (a ref two driving dims share comes
+  # twice; `hits/3` dedupes) (the query `hits/3` runs;
+  # its plan test reads it).
+  def hits_query(vault_ids, drive, dims, grps, kind) do
+    from(d in fragment("SELECT unnest(?::int4[]) AS dim", ^drive),
       as: :d,
       inner_lateral_join: x in subquery(scan(vault_ids, kind)),
       as: :x,
       on: true,
-      join: n in ^schema,
-      as: :n,
-      on: ^on,
+      # A LIMIT 1 lateral, so liveness is always one primary-key probe per
+      # posting, never a scan of the vault's refs.
+      inner_lateral_join: n in subquery(live_ref(kind)),
+      on: true,
       where:
         fragment(
-          "NOT EXISTS (SELECT 1 FROM unnest(?::int4[]) AS w(dim) WHERE NOT EXISTS (SELECT 1 FROM name_terms t WHERE t.vault_id = ? AND t.dim = w.dim AND t.ref_kind = ? AND t.ref_id = ?))",
+          "NOT EXISTS (SELECT 1 FROM unnest(?::int4[], ?::int4[]) AS w(dim, g) GROUP BY w.g HAVING NOT bool_or(EXISTS (SELECT 1 FROM name_terms t WHERE t.vault_id = ? AND t.dim = w.dim AND t.ref_kind = ? AND t.ref_id = ?)))",
           type(^dims, {:array, :integer}),
+          type(^grps, {:array, :integer}),
           x.vault_id,
           type(^kind, :integer),
           x.ref_id
         ),
       limit: ^@postings,
       select: x.ref_id
+    )
+  end
+
+  defp live_ref(@note) do
+    from(n in Note,
+      where: n.id == field(parent_as(:x), :ref_id) and n.kind == "note" and is_nil(n.deleted_at),
+      limit: 1,
+      select: %{id: n.id}
+    )
+  end
+
+  defp live_ref(@folder) do
+    from(f in Folder,
+      where: f.id == field(parent_as(:x), :ref_id) and is_nil(f.deleted_at),
+      limit: 1,
+      select: %{id: f.id}
     )
   end
 

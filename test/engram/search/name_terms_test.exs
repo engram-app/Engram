@@ -256,6 +256,29 @@ defmodule Engram.Search.NameTermsTest do
       assert hd(keyword(ctx.user, ctx.vault, "refund policy")).qdrant_id == exact
     end
 
+    test "a contraction's fragment is not required: \"Alex's notes\" finds both spellings",
+         ctx do
+      plain = indexed!(ctx.user, write!(ctx.user, ctx.vault, "Alex notes.md"))
+      quoted = indexed!(ctx.user, write!(ctx.user, ctx.vault, "Alex's notes.md"))
+
+      got = NameTerms.recall(ctx.user, {:vault, ctx.vault}, "Alex's notes")
+      assert got |> Enum.map(& &1.qdrant_id) |> Enum.sort() == Enum.sort([plain, quoted])
+    end
+
+    test ~s(a contraction matches its joined spelling: "don't panic" finds "Dont panic"),
+         ctx do
+      point = indexed!(ctx.user, write!(ctx.user, ctx.vault, "Dont panic.md"))
+
+      assert [%{qdrant_id: ^point}] =
+               NameTerms.recall(ctx.user, {:vault, ctx.vault}, "don't panic")
+    end
+
+    test "a single character outside a contraction stays required: Part 2 is not Part 3",
+         ctx do
+      indexed!(ctx.user, write!(ctx.user, ctx.vault, "Part 3.md"))
+      assert NameTerms.recall(ctx.user, {:vault, ctx.vault}, "Part 2") == []
+    end
+
     test "a folder must hold every word too", ctx do
       indexed!(ctx.user, write!(ctx.user, ctx.vault, "Sync/a.md"))
       inside = indexed!(ctx.user, write!(ctx.user, ctx.vault, "Sync regions/b.md"))
@@ -468,7 +491,7 @@ defmodule Engram.Search.NameTermsTest do
 
     test "the rarest term is picked by bounded counts on the primary key", ctx do
       for kind <- [0, 1] do
-        plan = plan(NameTerms.rarest_query([ctx.vault.id], [1, 2], kind), ["name_terms"])
+        plan = plan(NameTerms.counts_query([ctx.vault.id], [1, 2], kind), ["name_terms"])
         assert plan =~ "using name_terms_pkey on", plan
         assert plan =~ "Limit", plan
         refute plan =~ "Seq Scan", plan
@@ -479,7 +502,7 @@ defmodule Engram.Search.NameTermsTest do
          ctx do
       for {kind, ref_pkey} <- [{0, "notes_pkey"}, {1, "folders_pkey"}] do
         plan =
-          plan(NameTerms.hits_query([ctx.vault.id], 1, [1, 2], kind), [
+          plan(NameTerms.hits_query([ctx.vault.id], [1], [1, 2], [0, 1], kind), [
             "name_terms",
             "notes",
             "folders"
