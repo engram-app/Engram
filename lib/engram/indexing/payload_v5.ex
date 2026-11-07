@@ -2,8 +2,9 @@ defmodule Engram.Indexing.PayloadV5 do
   @moduledoc """
   The v5 note-level Qdrant payload (spec 3.3b): filter fields and ids only,
   under the short keys of `Engram.Vector.PayloadKeys`. No text, title,
-  heading, nonce, `aad_version` or `note_id` (Postgres maps a point to its
-  note through `chunks.qdrant_point_id`).
+  heading, nonce, `aad_version` or legacy `note_id`. The note row id is `n`
+  (undashed), the one key a filtered search matches (Engram#2263); Postgres
+  still maps a point to its chunk row through `chunks.qdrant_point_id`.
 
   An absent field is omitted, never `nil` or `[]`. Defaults are omitted too:
   `status: stable` and a date source of frontmatter store no key, so a filter
@@ -47,6 +48,13 @@ defmodule Engram.Indexing.PayloadV5 do
     [
       user_id: FilterId.uuid(to_string(note.user_id)),
       vault_id: FilterId.uuid(to_string(note.vault_id)),
+      # The note row (immutable chunk index, Engram#2263): what a filtered
+      # search matches once Postgres resolved the filters. It is in the
+      # payload hash, so the first pass after R2 refreshes a note's reused
+      # points with it; `ReconcileNotePayloads` backfills the rest. Absent
+      # like every other field when the map has no id (a note not yet
+      # persisted), never a crash.
+      note: if(id = Map.get(note, :id), do: FilterId.uuid(to_string(id))),
       path_id: FilterId.from_hmac(note.path_hmac),
       folder_id: FilterId.from_hmac(note.folder_hmac),
       type_id: FilterId.from_hmac(note.type_hmac),

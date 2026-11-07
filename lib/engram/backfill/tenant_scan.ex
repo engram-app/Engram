@@ -142,14 +142,24 @@ defmodule Engram.Backfill.TenantScan do
   """
   @spec enqueue_users(module(), [Ecto.UUID.t()]) :: non_neg_integer()
   def enqueue_users(worker, user_ids) when is_atom(worker) do
-    executing = executing_user_ids(worker)
+    jobs = Enum.map(user_ids, &{&1, worker.new(%{"user_id" => &1})})
 
-    for uid <- user_ids,
-        not MapSet.member?(executing, uid),
-        do: {:ok, _} = Oban.insert(worker.new(%{"user_id" => uid}))
+    # Per job kind: a worker that runs several (`args.mode`) skips a user
+    # only while a job of the SAME kind executes for them.
+    executing =
+      jobs
+      |> Enum.map(fn {_uid, job} -> mode(job) end)
+      |> Enum.uniq()
+      |> Map.new(&{&1, executing_user_ids(worker, &1)})
+
+    for {uid, job} <- jobs,
+        not MapSet.member?(executing[mode(job)], uid),
+        do: {:ok, _} = Oban.insert(job)
 
     length(user_ids)
   end
+
+  defp mode(job), do: job |> Ecto.Changeset.get_field(:args) |> Map.get("mode")
 
   @doc """
   User ids (`args.user_id`) with an executing `worker` job. A per-user chain
@@ -157,10 +167,12 @@ defmodule Engram.Backfill.TenantScan do
   `unique` state; an `enqueue_missing/0` skips these users instead, or a
   second chain would run beside the first.
   """
-  @spec executing_user_ids(module()) :: MapSet.t(String.t())
-  def executing_user_ids(worker) when is_atom(worker) do
+  @spec executing_user_ids(module(), String.t() | nil) :: MapSet.t(String.t())
+  def executing_user_ids(worker, mode \\ nil) when is_atom(worker) do
     from(j in Oban.Job,
       where: j.worker == ^inspect(worker) and j.state == "executing",
+      # `args.mode`: one kind of job only (nil: a worker with no modes).
+      where: fragment("?->>'mode' IS NOT DISTINCT FROM ?", j.args, ^mode),
       select: fragment("?->>'user_id'", j.args)
     )
     |> Repo.all()

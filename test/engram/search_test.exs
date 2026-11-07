@@ -17,6 +17,8 @@ defmodule Engram.SearchTest do
     Engram.QdrantStub.stub_retrieve(bypass)
     Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
+    # Search reads the collection info for its `n` index (`Qdrant.n_indexed?/0`).
+    Engram.QdrantStub.stub_healthy(bypass)
 
     {:ok, user} = insert(:user) |> Engram.Crypto.ensure_user_dek()
     vault = insert(:vault, user: user)

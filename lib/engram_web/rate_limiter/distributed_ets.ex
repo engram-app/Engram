@@ -88,6 +88,10 @@ defmodule EngramWeb.RateLimiter.DistributedETS do
     Local.hit(key, scale, limit, increment)
   end
 
+  @doc "This node's count for `key` in its current window, counting nothing (`Local.get/2`)."
+  @spec get(String.t(), pos_integer()) :: non_neg_integer()
+  def get(key, scale), do: Local.get(key, scale)
+
   # broadcast_from the Listener pid → PubSub skips delivery back to this node's
   # Listener (which already counted via Local.hit). On a single node this
   # delivers to zero subscribers — a clean no-op.

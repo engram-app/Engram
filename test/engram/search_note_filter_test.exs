@@ -1,10 +1,12 @@
 defmodule Engram.SearchNoteFilterTest do
   @moduledoc """
-  The note-id reader (immutable chunk index R1, Engram#2263). With
-  `Qdrant.note_id_filter?/0` on, a filtered search resolves its filters in
+  The note-id reader (immutable chunk index, Engram#2263). Once the
+  collection has its `n` index, a filtered search resolves its filters in
   Postgres (`:note_filter`, the resolver seam, stubbed here) and Qdrant gets
-  the tenant plus note ids on `n`. Off (the default until R2 backfills `n`),
-  the resolver is never called and the request is today's.
+  the tenant plus ONE per-point `should`: the note ids on `n` for a point
+  with `n`, today's payload conditions for a point without (not yet
+  backfilled). Without the index ("switch off" below), the resolver is never
+  called and the request is today's.
   """
   use Engram.DataCase, async: false
 
@@ -46,12 +48,37 @@ defmodule Engram.SearchNoteFilterTest do
     bypass = Bypass.open()
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
     ServiceConfig.put_override(:note_filter, StubFilter)
-    ServiceConfig.put_override(:note_id_filter, true)
+
+    # Switch on by default: the collection holds the `n` index (cached per node).
+    Engram.Cache.clear_local(:note_id_filter)
+    on_exit(fn -> Engram.Cache.clear_local(:note_id_filter) end)
+    {:ok, schema} = Agent.start_link(fn -> %{"n" => %{"data_type" => "uuid"}} end)
+
+    Bypass.stub(bypass, "GET", "/collections/engram_notes", fn conn ->
+      info = %{"status" => "green", "payload_schema" => Agent.get(schema, & &1)}
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, Jason.encode!(%{result: info, status: "ok"}))
+    end)
 
     {:ok, user} = insert(:user) |> Engram.Crypto.ensure_user_dek()
     vault = insert(:vault, user: user)
-    %{bypass: bypass, user: user, vault: vault}
+    %{bypass: bypass, user: user, vault: vault, schema: schema}
   end
+
+  # Switch off: the collection has no `n` index.
+  defp switch_off(schema), do: Agent.update(schema, &Map.delete(&1, "n"))
+
+  # The per-point `should` beside the tenant: the `n` path and the fallback.
+  defp branches(filter) do
+    [%{"should" => [n_path, fallback]}] =
+      Enum.filter(filter["must"], &match?(%{"should" => [_, %{"must" => _}]}, &1))
+
+    {n_path, fallback}
+  end
+
+  defp n_ids(blocks), do: Enum.flat_map(blocks, & &1["match"]["any"])
 
   defp answer(fun), do: Process.put(:resolve, fun)
 
@@ -81,7 +108,7 @@ defmodule Engram.SearchNoteFilterTest do
     {note, point}
   end
 
-  test "{:ids, ids}: the query sends n any, no folder condition",
+  test "{:ids, ids}: n any for a point with n, today's folder condition for one without",
        %{bypass: bypass, user: user, vault: vault} do
     [a, b] = [Ecto.UUID.generate(), Ecto.UUID.generate()]
     answer(fn [] -> {:ok, {:ids, [a, b]}} end)
@@ -95,12 +122,18 @@ defmodule Engram.SearchNoteFilterTest do
     assert_received {:query, %{"filter" => filter}}
     assert tenant_keys(filter["must"]) == {true, true}
 
-    assert [%{"should" => [%{"key" => "n", "match" => %{"any" => any}}]}] =
-             Enum.filter(filter["must"], &match?(%{"should" => [%{"key" => "n"} | _]}, &1))
+    {%{"should" => blocks}, %{"must" => [empty_n | today]}} = branches(filter)
+    assert n_ids(blocks) == Enum.map([a, b], &FilterId.uuid/1)
+    assert empty_n == %{"is_empty" => %{"key" => "n"}}
 
-    assert any == Enum.map([a, b], &FilterId.uuid/1)
-    refute inspect(filter) =~ "folder_hmac"
-    refute inspect(filter) =~ ~s("f")
+    {:ok, fk} = Engram.Crypto.dek_filter_key(user)
+    exact = Base.encode64(Engram.Crypto.hmac_field(fk, "Health"))
+    folder = Qdrant.build_tenant_filter(tenant(user, vault) ++ [folder_hmac: exact])
+
+    assert today ==
+             Jason.decode!(
+               Jason.encode!(folder.must -- Qdrant.build_tenant_filter(tenant(user, vault)).must)
+             )
   end
 
   test "{:ids, []}: no note matches, so no embed and no Qdrant request",
@@ -109,7 +142,8 @@ defmodule Engram.SearchNoteFilterTest do
     assert {:ok, []} = Search.search(user, vault, "q", tags: ["none"], mode: :vector)
   end
 
-  test "{:exclude, ids}: the ids go under must_not", %{bypass: bypass, user: user, vault: vault} do
+  test "{:exclude, ids}: n outside the ids, or no n and today's type condition",
+       %{bypass: bypass, user: user, vault: vault} do
     a = Ecto.UUID.generate()
     answer(fn [] -> {:ok, {:exclude, [a]}} end)
     embed()
@@ -118,7 +152,10 @@ defmodule Engram.SearchNoteFilterTest do
     assert {:ok, []} = Search.search(user, vault, "q", type: "note", mode: :vector)
 
     assert_received {:query, %{"filter" => filter}}
-    assert filter["must_not"] == [%{"key" => "n", "match" => %{"any" => [FilterId.uuid(a)]}}]
+    refute Map.has_key?(filter, "must_not")
+    {%{"must_not" => [empty_n | blocks]}, %{"must" => [empty_n, _type | _]}} = branches(filter)
+    assert empty_n == %{"is_empty" => %{"key" => "n"}}
+    assert n_ids(blocks) == [FilterId.uuid(a)]
   end
 
   test ":too_wide: u + v only at 4x the fetch, then the within: post-filter",
@@ -472,8 +509,8 @@ defmodule Engram.SearchNoteFilterTest do
   # Switch off, every filter at once: the search opts, and the opts main's
   # builders take for them (the payload conditions of today's path). Any
   # resolver call fails the test.
-  defp switch_off_filters(user) do
-    ServiceConfig.put_override(:note_id_filter, false)
+  defp switch_off_filters(user, schema) do
+    switch_off(schema)
     answer(fn _ -> flunk("resolver called with the switch off") end)
     embed()
 
@@ -536,16 +573,16 @@ defmodule Engram.SearchNoteFilterTest do
   end
 
   test "switch off, vector: the body is today's",
-       %{bypass: bypass, user: user, vault: vault} do
-    {opts, payload} = switch_off_filters(user)
+       %{bypass: bypass, user: user, vault: vault, schema: schema} do
+    {opts, payload} = switch_off_filters(user, schema)
     body = vector_body(bypass, user, vault, opts ++ [mode: :vector, diversity: 0.0])
     assert body == vector_today(user, body, tenant(user, vault), payload)
   end
 
   test "switch off, cross-vault vault_ids: the body is today's",
-       %{bypass: bypass, user: user, vault: vault} do
+       %{bypass: bypass, user: user, vault: vault, schema: schema} do
     other = insert(:vault, user: user)
-    {opts, payload} = switch_off_filters(user)
+    {opts, payload} = switch_off_filters(user, schema)
 
     body =
       vector_body(
@@ -563,8 +600,8 @@ defmodule Engram.SearchNoteFilterTest do
   # builder makes from today's opts (the query vectors are the only inputs
   # taken from the request itself).
   test "switch off: the resolver is never called and the body is today's",
-       %{bypass: bypass, user: user, vault: vault} do
-    {opts, payload} = switch_off_filters(user)
+       %{bypass: bypass, user: user, vault: vault, schema: schema} do
+    {opts, payload} = switch_off_filters(user, schema)
     test_pid = self()
 
     Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
@@ -598,8 +635,10 @@ defmodule Engram.SearchNoteFilterTest do
   end
 
   # `folder` with a query: switch off (today), the one folder only, an exact
-  # `folder_hmac` match; switch on, the real resolver's folder and subtree.
-  # A blank-query listing (`NoteFilter.page/4`) is the subtree either way.
+  # `folder_hmac` match; switch on, PER POINT: a point with `n` matches the
+  # real resolver's folder and subtree, one without `n` still the exact
+  # folder (until the backfill reaches it). A blank-query listing
+  # (`NoteFilter.page/4`) is the subtree either way.
   describe "folder semantics with a query" do
     setup %{user: user, vault: vault} do
       top = write_indexed!(user, vault, "Health/a.md", "body\n")
@@ -610,8 +649,8 @@ defmodule Engram.SearchNoteFilterTest do
     end
 
     test "switch off: only the folder itself, an exact folder_hmac match",
-         %{bypass: bypass, user: user, vault: vault} do
-      ServiceConfig.put_override(:note_id_filter, false)
+         %{bypass: bypass, user: user, vault: vault, schema: schema} do
+      switch_off(schema)
       answer(fn _ -> flunk("resolver called with the switch off") end)
       embed()
       expect_query(bypass, [])
@@ -635,14 +674,35 @@ defmodule Engram.SearchNoteFilterTest do
       assert {:ok, []} = Search.search(user, vault, "q", folder: "Health", mode: :vector)
       assert_received {:query, %{"filter" => filter}}
 
-      assert [%{"should" => [%{"key" => "n", "match" => %{"any" => any}}]}] =
-               Enum.filter(filter["must"], &match?(%{"should" => [%{"key" => "n"} | _]}, &1))
-
+      # A point with `n`: the folder and its subtree, by note id.
+      {%{"should" => blocks}, _fallback} = branches(filter)
+      any = n_ids(blocks)
       assert Enum.sort(any) == Enum.sort(Enum.map([top.id, sub.id], &FilterId.uuid/1))
       refute FilterId.uuid(look_alike.id) in any
       assert tenant_keys(filter["must"]) == {true, true}
-      refute inspect(filter) =~ "folder_hmac"
-      refute inspect(filter) =~ ~s("f")
+    end
+  end
+
+  # The one gate is the collection's `n` index: no per-user switch.
+  describe "the reader is gated on the n index only" do
+    test "no n index on the collection: today's filters",
+         %{bypass: bypass, user: user, vault: vault, schema: schema} do
+      Agent.update(schema, &Map.delete(&1, "n"))
+      answer(fn _ -> flunk("resolver called without the n index") end)
+      embed()
+      expect_query(bypass, [])
+
+      assert {:ok, []} = Search.search(user, vault, "q", folder: "Health", mode: :vector)
+      assert_received {:query, %{"filter" => filter}}
+      refute inspect(filter) =~ ~s("n")
+    end
+
+    test "an unfiltered search checks nothing", %{bypass: bypass, user: user, vault: vault} do
+      Bypass.stub(bypass, "GET", "/collections/engram_notes", fn _ -> flunk("checked") end)
+      embed()
+      expect_query(bypass, [])
+
+      assert {:ok, []} = Search.search(user, vault, "q", mode: :vector)
     end
   end
 

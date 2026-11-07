@@ -11,7 +11,7 @@ defmodule Engram.Indexing.PayloadV5SchemaTest do
   @fk :crypto.strong_rand_bytes(32)
   @id ~r/^[0-9a-f]{32}$/
   @allowed MapSet.new(PayloadKeys.logical_names(), &PayloadKeys.short/1)
-  @always ~w(u v p f up cr)
+  @always ~w(u v n p f up cr)
 
   # `ctime` arrives with #2082; until then it rides as a plain map key, which is
   # how PayloadV5 reads it (`Map.get/2`).
@@ -62,8 +62,14 @@ defmodule Engram.Indexing.PayloadV5SchemaTest do
     p = payload(n, @full)
 
     # Every key but the two default source flags (fm).
-    # `n` (the note id) is indexed and read from R1, written from R2.
-    assert MapSet.new(Map.keys(p)) == MapSet.difference(@allowed, MapSet.new(~w(us cs n)))
+    assert MapSet.new(Map.keys(p)) == MapSet.difference(@allowed, MapSet.new(~w(us cs)))
+  end
+
+  # Immutable chunk index R2 (Engram#2263): every point names its note row,
+  # so a filtered search matches the notes Postgres resolved on `n`.
+  test "n is the note row id, undashed" do
+    n = note()
+    assert PayloadV5.build(n, FlatFields.empty())["n"] == FilterId.uuid(n.id)
   end
 
   test "fa: one entry per user value, `h` exact, `n` / `d` plaintext" do
@@ -278,16 +284,17 @@ defmodule Engram.Indexing.PayloadV5SchemaTest do
   end
 
   describe "size, excluding vectors" do
-    test "a typical note with frontmatter dates is under 200 B" do
+    # `n` (39 B with its comma) is the note's identity, not metadata.
+    test "a typical note with frontmatter dates is under 240 B" do
       p = payload(note(), "updated: 2026-04-01T10:00:00Z\ncreated: 2026-03-01T09:00:00Z\n")
-      assert byte_size(Jason.encode!(p)) < 200, "#{byte_size(Jason.encode!(p))} B"
+      assert byte_size(Jason.encode!(p)) < 240, "#{byte_size(Jason.encode!(p))} B"
     end
 
-    # Known over by the two source flags: 203 B (see the PR). Pinned so a
+    # 203 B with the two source flags, plus 39 B of `n` (R2). Pinned so a
     # change in either direction is a decision, not drift.
-    test "a typical plugin note dated by file times is 203 B" do
+    test "a typical plugin note dated by file times is 242 B" do
       n = note(%{mtime: 1_760_000_000.0, ctime: 1_750_000_000.0})
-      assert byte_size(Jason.encode!(PayloadV5.build(n, FlatFields.empty()))) == 203
+      assert byte_size(Jason.encode!(PayloadV5.build(n, FlatFields.empty()))) == 242
     end
   end
 end

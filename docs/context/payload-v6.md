@@ -2,6 +2,19 @@
 
 _Last verified: 2026-10-27 (release R-a, nothing rewritten yet)_
 
+> **Superseded 2026-11-06 (immutable chunk index R2, Engram#2263).** Payload
+> version 6 now means "every v5 point carries `n`, its note row id", not the
+> folder row id below. `ReconcileNotePayloads` backfills `n` (merge only, no
+> decrypt, paced: `:payload_backfill` kill switch, `Rebuild.qdrant_pace/1`,
+> `:payload_backfill_points_per_min` default 500), `commit_index` stamps the
+> version in-pass (`PayloadV6.stamp/2`). Once the `n` index exists, search
+> decides PER POINT: a point with `n` by its note id, one without by today's
+> payload conditions, so it is correct during the backfill and after a
+> rollback with no switch. The `NotePayloadStamps` ledger is the signal R3
+> (dropping the payload filter fields) waits on.
+> The folder-row-id design is retired: folders resolve in Postgres. Plan:
+> `docs/superpowers/plans/2026-11-05-immutable-chunk-index-qdrant.md`.
+
 **What changes:** the point key `f` (direct folder) goes from the HMAC of the
 folder's path to the folder's ROW id (`notes.folder_ref_id`, undashed uuid), so
 a folder move or rename changes no payload and a subtree search is

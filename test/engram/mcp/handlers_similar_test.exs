@@ -14,6 +14,8 @@ defmodule Engram.MCP.HandlersSimilarTest do
     bypass = Bypass.open()
     Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
+    # Search reads the collection info for its `n` index (`Qdrant.n_indexed?/0`).
+    Engram.QdrantStub.stub_healthy(bypass)
 
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
     vault = insert(:vault, user: user)

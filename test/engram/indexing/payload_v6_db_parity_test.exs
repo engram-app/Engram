@@ -141,16 +141,18 @@ defmodule Engram.Indexing.PayloadV6DbParityTest do
     end
   end
 
-  # Tripwire for the R-b flip: `@version` 6 with `expected_v5_payload/2` still at
-  # the sweep's seam would stamp every note "v6" holding v5 content.
-  test "once the version is 6 or more the sweep's builder emits the folder row id", ctx do
+  # Tripwire: version 6 now means "points carry `n`" (Engram#2263) and the
+  # folder-row-id design is retired (folders resolve in Postgres). At any
+  # version the sweep's builder keeps the folder HMAC: a folder row id reaching
+  # the seam would be a payload no reader filters on.
+  test "at any version the sweep's builder emits the folder HMAC, never the row id", ctx do
     {note, user} = index!(ctx.user, ctx.vault, "Deep/n.md", content("author: Ada", "\n"))
     {:ok, plain} = Crypto.maybe_decrypt_note_fields(note, user)
     {:ok, payload} = Indexing.expected_v5_payload(plain, user)
 
-    if PayloadV6.version() >= 6,
-      do: assert(payload["f"] == FilterId.uuid(note.folder_ref_id)),
-      else: assert(payload["f"] == FilterId.from_hmac(note.folder_hmac))
+    assert PayloadV6.version() >= 6
+    assert payload["f"] == FilterId.from_hmac(note.folder_hmac)
+    refute payload["f"] == FilterId.uuid(note.folder_ref_id)
   end
 
   test "a root note has no f, rows and extraction agree", %{user: user, vault: vault} do

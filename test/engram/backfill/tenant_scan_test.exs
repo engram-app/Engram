@@ -128,4 +128,33 @@ defmodule Engram.Backfill.TenantScanTest do
       assert QueryRecorder.unwindowed(queries, "notes", 1_000) == []
     end
   end
+
+  # The executing-user skip is per job kind: ReconcileNotePayloads runs a
+  # heal (`mode: "heal"`) and an `n` backfill (`mode: "n"`) for the same
+  # user, and one running must not turn the other's enqueue into a no-op.
+  describe "enqueue_users/2 and a moded worker" do
+    alias Engram.Workers.ReconcileNotePayloads
+
+    defp executing!(args) do
+      args
+      |> ReconcileNotePayloads.new()
+      |> Repo.insert!()
+      |> then(fn job ->
+        Repo.update_all(from(j in Oban.Job, where: j.id == ^job.id), set: [state: "executing"])
+      end)
+    end
+
+    test "a running n job does not skip a heal, and a running heal skips a heal", %{user: user} do
+      executing!(%{"user_id" => user.id, "mode" => "n"})
+      assert TenantScan.enqueue_users(ReconcileNotePayloads, [user.id]) == 1
+
+      assert [%{args: %{"mode" => "heal"}}] =
+               Repo.all(from(j in Oban.Job, where: j.state == "available"))
+
+      Repo.delete_all(from(j in Oban.Job))
+      executing!(%{"user_id" => user.id})
+      assert TenantScan.enqueue_users(ReconcileNotePayloads, [user.id]) == 1
+      assert Repo.all(from(j in Oban.Job, where: j.state == "available")) == []
+    end
+  end
 end

@@ -52,6 +52,9 @@ defmodule Engram.ServiceConfig.Overrides do
     index_rebuild: {:enum, ~w(off dry_run on)},
     keyword_refresh: :boolean,
     keyword_refresh_backlog: {:integer, 0..1_000_000},
+    # The `n` backfill (`ReconcileNotePayloads`): kill switch and pace.
+    payload_backfill: :boolean,
+    payload_backfill_points_per_min: {:integer, 1..100_000},
     rebuild_max_disk_percent: {:integer, 1..100},
     file_times_backfill: :boolean
   }

@@ -15,6 +15,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   import Mox
 
   alias Engram.Crypto
+  alias Engram.DataMigrations
   alias Engram.DataMigrations.NotePayloadStamps
   alias Engram.Indexing
   alias Engram.Indexing.PayloadV6
@@ -40,6 +41,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           on_upsert: nil,
           payload_status: 200,
           scroll_status: nil,
+          batch_status: nil,
           legacy_indexes: true
         }
       end)
@@ -47,6 +49,8 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     bypass = Bypass.open()
     Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
     Bypass.stub(bypass, :any, :any, &fake_qdrant(&1, store))
+    # The `n` backfill is paced on the collection's health (`Rebuild.qdrant_pace/1`).
+    Engram.QdrantStub.stub_healthy(bypass)
 
     stub(Engram.MockEmbedder, :embed_texts, fn texts ->
       {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
@@ -179,15 +183,16 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
 
     assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
 
+    # One event per outcome, all five (`n_points`: points the `n` backfill wrote).
     counts =
-      for _ <- 1..4, into: %{} do
+      for _ <- 1..5, into: %{} do
         assert_receive {[:engram, :indexing, :payload_reconcile], ^ref, %{count: n},
                         %{outcome: o}}
 
         {o, n}
       end
 
-    assert counts == %{checked: 2, drifted: 1, rewritten: 1, skipped_v5: 0}
+    assert counts == %{checked: 2, drifted: 1, rewritten: 1, skipped_v5: 0, n_points: 0}
   end
 
   # #2087's short-key layout. Healed with the v5 payload, REPLACED (a v3
@@ -388,6 +393,11 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     assert reload(ctx.stale).payload_hash == ReconcileNotePayloads.undecryptable_stamp()
     assert Repo.exists?(from(n in Note, where: n.id == ^ctx.stale.id), skip_tenant_check: true)
     assert Agent.get(ctx.store, & &1.overwrites) == []
+    # The heal does not vouch for the payload version, and the stale note's
+    # points lack `n`: the ledger's walk finds them and queues the `n`
+    # backfill, after which it is done.
+    assert {:more, _} = NotePayloadStamps.run_pass()
+    assert :ok = n_job(ctx)
     assert NotePayloadStamps.run_pass() == :done
   end
 
@@ -417,8 +427,13 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     assert NotePayloadStamps.run_pass() == :done
     Indexing.unstamp_payload_hash(reload(ctx.stale))
 
-    # No daily re-run: `Engram.Bookkeeping.Drain` finds the unstamped row.
-    refute function_exported?(NotePayloadStamps, :reverify?, 0)
+    # `Engram.Bookkeeping.Drain` finds the unstamped row. The daily
+    # re-verify exists for points without `n` only (a Qdrant walk, never a
+    # walk of every note), so a done ledger stays done for this.
+    DataMigrations.mark_done(NotePayloadStamps.name(), NotePayloadStamps.version())
+    assert NotePayloadStamps.reverify?()
+    assert NotePayloadStamps.run_pass() == :done
+    DataMigrations.reopen(NotePayloadStamps.name(), NotePayloadStamps.version())
     assert {:more, users: 1} = NotePayloadStamps.run_pass()
     assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
   end
@@ -584,71 +599,107 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
 
     defp no_embed, do: expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("embed") end)
 
-    test "with the version at the baseline the sweep selects nothing new", ctx do
-      assert PayloadV6.version() == PayloadV6.baseline()
-      assert ReconcileNotePayloads.enqueue_missing() == 0
+    # The state R2 meets: points written before `n` existed, notes stamped
+    # by a pass but never with a payload version.
+    defp pre_n(ctx) do
+      for id <- ctx.ids,
+          do: Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.delete(p, "n") end))
 
-      Agent.update(ctx.store, fn s ->
-        put_in(s.points[hd(ctx.ids)], retired_v5(ctx))
-      end)
+      null_versions(ctx)
+    end
+
+    defp null_versions(ctx) do
+      Repo.update_all(
+        from(s in NoteIndexState, where: s.user_id == ^ctx.user.id),
+        [set: [payload_version: nil]],
+        skip_tenant_check: true
+      )
+    end
+
+    # Any DEK load fails: a path that decrypts errors the job.
+    defp no_dek(ctx) do
+      {1, _} =
+        Repo.update_all(
+          from(u in Engram.Accounts.User, where: u.id == ^ctx.user.id),
+          [set: [encrypted_dek: nil]],
+          skip_tenant_check: true
+        )
+
+      Engram.Crypto.DekCache.invalidate_all()
+    end
+
+    test "an index pass writes n and stamps the payload version in-pass", ctx do
+      assert Enum.all?(ctx.passed, &n_kept?(ctx, &1))
+      assert payload_versions(ctx) == [PayloadV6.version(), PayloadV6.version()]
+      assert PayloadV6.version() == 6
+    end
+
+    test "with the version at the baseline the sweep writes no n", ctx do
+      ServiceConfig.put_override(:payload_version, PayloadV6.baseline())
+      pre_n(ctx)
+      assert queued_users() == 0
 
       no_embed()
-      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      assert :ok = sweep(ctx)
       assert Agent.get(ctx.store, & &1.batches) == []
       assert payload_versions(ctx) |> Enum.all?(&is_nil/1)
     end
 
-    test "a bumped version rewrites stale points in one set_payloads batch, no embed", ctx do
+    test "points without n get only n, in one merge batch, with no DEK and no embed", ctx do
       %{ids: ids, passed: passed} = ctx
-      ServiceConfig.put_override(:payload_version, PayloadV6.baseline() + 1)
-      # A drifted point on each note.
-      for id <- [hd(point_ids(ctx.stale)), hd(point_ids(ctx.healthy))],
-          do: Agent.update(ctx.store, &put_in(&1.points[id], retired_v5(ctx)))
+      pre_n(ctx)
+      no_dek(ctx)
+      assert queued_users() == 1
 
-      assert ReconcileNotePayloads.enqueue_missing() == 1
       no_embed()
-      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      assert :ok = sweep(ctx)
 
-      # Merged back by one batch: not an upsert, not a PUT, not a POST per point.
+      # One batch of per-point merges: not an upsert, not a PUT, nothing deleted.
       assert [written] = Agent.get(ctx.store, & &1.batches)
-
-      assert Enum.sort(written) ==
-               Enum.sort([hd(point_ids(ctx.stale)), hd(point_ids(ctx.healthy))])
-
+      assert Enum.sort(written) == Enum.sort(ids)
       assert Agent.get(ctx.store, & &1.upserts) == 0
       assert Agent.get(ctx.store, & &1.overwrites) == []
       assert Agent.get(ctx.store, & &1.set_payloads) == []
 
-      # Same points, payloads exactly what the pass wrote, stamped.
+      # Exactly what an R2 pass writes, and stamped.
       assert Agent.get(ctx.store, &Map.take(&1.points, ids)) == passed
-      assert Agent.get(ctx.store, &map_size(&1.points)) == length(ids)
-      assert payload_versions(ctx) == [PayloadV6.baseline() + 1, PayloadV6.baseline() + 1]
+      assert payload_versions(ctx) == [6, 6]
 
       # Converged: nothing left to select, nothing more written.
-      assert ReconcileNotePayloads.enqueue_missing() == 0
-      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      assert queued_users() == 0
+      assert :ok = sweep(ctx)
       assert length(Agent.get(ctx.store, & &1.batches)) == 1
     end
 
-    # The merge alone would keep a key the new payload omits (a root-folder
-    # note's old `f`, an attr the note lost): it is deleted in the same batch.
-    test "a key the payload no longer has is deleted from the point", ctx do
-      ServiceConfig.put_override(:payload_version, PayloadV6.baseline() + 1)
-      id = hd(point_ids(ctx.stale))
-      Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.put(p, "o", ["gone"]) end))
+    test "points already holding n are not written again", ctx do
+      pre_n(ctx)
+
+      for id <- point_ids(ctx.stale),
+          do: Agent.update(ctx.store, &put_in(&1.points[id], ctx.passed[id]))
 
       no_embed()
-      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      assert :ok = sweep(ctx)
+
+      assert [written] = Agent.get(ctx.store, & &1.batches)
+      assert Enum.sort(written) == Enum.sort(point_ids(ctx.healthy))
+      assert payload_versions(ctx) == [6, 6]
+    end
+
+    test "the n backfill only merges: a key it does not own stays", ctx do
+      pre_n(ctx)
+      id = hd(point_ids(ctx.stale))
+      Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.put(p, "o", ["kept"]) end))
+
+      no_embed()
+      assert :ok = sweep(ctx)
 
       point = Agent.get(ctx.store, &Map.fetch!(&1.points, id))
-      refute Map.has_key?(point, "o")
-      assert Map.take(point, Map.keys(ctx.passed[id])) == ctx.passed[id]
-      assert Agent.get(ctx.store, & &1.overwrites) == []
-      assert payload_versions(ctx) == [PayloadV6.baseline() + 1, PayloadV6.baseline() + 1]
+      assert point["o"] == ["kept"]
+      assert n_kept?(ctx, {id, point})
     end
 
     test "a note still on legacy points is healed, not stamped with the new version", ctx do
-      ServiceConfig.put_override(:payload_version, PayloadV6.baseline() + 1)
+      null_versions(ctx)
 
       # Back on v3 points, with a hash from an earlier pass.
       for note <- [ctx.stale, ctx.healthy] do
@@ -656,61 +707,351 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       end
 
       Agent.update(ctx.store, &%{&1 | batches: []})
-      assert ReconcileNotePayloads.enqueue_missing() == 1
+      assert queued_users() == 1
 
       no_embed()
-      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      assert :ok = sweep(ctx)
 
+      # A v3 point never gets `n`.
       assert Agent.get(ctx.store, & &1.batches) == []
       assert Enum.all?(payload_versions(ctx), &is_nil/1)
       # Still in view of the sweep: nothing claims the new shape was written.
-      assert ReconcileNotePayloads.enqueue_missing() == 1
+      assert queued_users() == 1
     end
 
     test "points already holding the payload are only stamped", ctx do
-      ServiceConfig.put_override(:payload_version, PayloadV6.baseline() + 1)
+      null_versions(ctx)
       no_embed()
-      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      assert :ok = sweep(ctx)
 
       assert Agent.get(ctx.store, & &1.batches) == []
-      assert payload_versions(ctx) == [PayloadV6.baseline() + 1, PayloadV6.baseline() + 1]
+      assert payload_versions(ctx) == [6, 6]
     end
 
-    # Immutable chunk index (Engram#2263): a newer release stamps `n` (the
-    # note id) on points; this release's expected payload has no `n`. A point
-    # holding it is not drifted, and no refresh deletes it, or a rolling
-    # deploy (or a rollback) strips `n` and re-PATCHes every backfilled point.
+    # A newer release stamps `n`; the expected payload is compared without
+    # the identity keys, so a point holding it is not drifted and no refresh
+    # deletes it (a rolling deploy or a rollback would strip it otherwise).
     test "a point holding n is neither drifted nor stripped of n", ctx do
-      ServiceConfig.put_override(:payload_version, PayloadV6.baseline() + 1)
-      stamp_n(ctx)
+      null_versions(ctx)
 
       no_embed()
-      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      assert :ok = sweep(ctx)
 
       assert Agent.get(ctx.store, & &1.batches) == []
       assert Enum.all?(Agent.get(ctx.store, &Map.take(&1.points, ctx.ids)), &n_kept?(ctx, &1))
     end
 
-    test "a drifted point holding n keeps n through the refresh", ctx do
-      ServiceConfig.put_override(:payload_version, PayloadV6.baseline() + 1)
-      stamp_n(ctx)
+    # The version stamp's refresh is `n` only: the note's hash vouches for
+    # the rest, so it costs no decrypt (the drift heal is NULL-hash only).
+    test "a stamped note behind the version is neither decrypted nor drift-checked", ctx do
+      null_versions(ctx)
+      no_dek(ctx)
       id = hd(point_ids(ctx.stale))
-      Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.put(p, "o", ["gone"]) end))
+      Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.put(p, "o", ["kept"]) end))
 
       no_embed()
-      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      assert :ok = sweep(ctx)
 
-      assert [[^id]] = Agent.get(ctx.store, & &1.batches)
-      point = Agent.get(ctx.store, &Map.fetch!(&1.points, id))
-      refute Map.has_key?(point, "o")
-      assert n_kept?(ctx, {id, point})
+      assert Agent.get(ctx.store, & &1.batches) == []
+      assert Agent.get(ctx.store, &Map.fetch!(&1.points, id))["o"] == ["kept"]
+      assert payload_versions(ctx) == [6, 6]
     end
 
-    defp stamp_n(ctx) do
-      for note <- [ctx.stale, ctx.healthy], id <- point_ids(note) do
-        n = FilterId.uuid(note.id)
-        Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.put(p, "n", n) end))
+    # A previous-release node upserts a point without `n` after its note was
+    # stamped (a rolling deploy): the pass is not done until it is healed.
+    test "a live point without n keeps the pass open and requeues its user", ctx do
+      assert :ok = sweep(ctx)
+      assert NotePayloadStamps.run_pass() == :done
+
+      id = hd(point_ids(ctx.stale))
+      Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.delete(p, "n") end))
+
+      assert {:more, users: 1} = NotePayloadStamps.run_pass()
+      assert nil in payload_versions(ctx)
+
+      assert :ok = sweep(ctx)
+      assert n_kept?(ctx, {id, Agent.get(ctx.store, &Map.fetch!(&1.points, id))})
+      assert NotePayloadStamps.run_pass() == :done
+    end
+
+    # A full page of orphans ahead of a live point: the walk must move past
+    # them (its offset persists across passes), or the pass never sees the
+    # live point and never closes.
+    test "a page of orphans does not hide a live point without n", ctx do
+      assert :ok = sweep(ctx)
+      assert NotePayloadStamps.run_pass() == :done
+
+      for i <- 1..256 do
+        orphan = "00000000-0000-4000-8000-" <> String.pad_leading("#{i}", 12, "0")
+        Agent.update(ctx.store, &put_in(&1.points[orphan], %{"u" => FilterId.uuid(ctx.user.id)}))
       end
+
+      id = hd(point_ids(ctx.stale))
+      Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.delete(p, "n") end))
+
+      # One page a pass (`pages: 1`): the orphans, then the live point.
+      assert {:more, users: 0} = NotePayloadStamps.run_pass(pages: 1)
+      assert {:more, users: 1} = NotePayloadStamps.run_pass(pages: 1)
+      assert nil in payload_versions(ctx)
+
+      assert :ok = sweep(ctx)
+      # A fresh walk, start to end, finds only orphans: done.
+      assert NotePayloadStamps.run_pass() == :done
+    end
+
+    # A previous-release node re-upserts a note without `n` after the batch
+    # read (its pass NULLs then re-stamps the hash): the version stamp of a
+    # stamped-but-behind note must not vouch for it.
+    test "a stale note whose hash changed after the read is not version-stamped", ctx do
+      pre_n(ctx)
+      no_embed()
+
+      Agent.update(ctx.store, fn s ->
+        hook = fn ->
+          Repo.update_all(
+            from(n in Note, where: n.id == ^ctx.stale.id),
+            [set: [payload_hash: :crypto.strong_rand_bytes(32)]],
+            skip_tenant_check: true
+          )
+        end
+
+        %{s | on_scroll: hook}
+      end)
+
+      assert :ok = sweep(ctx)
+
+      versions =
+        Repo.all(
+          from(s in NoteIndexState,
+            where: s.user_id == ^ctx.user.id,
+            select: {s.note_id, s.payload_version}
+          ),
+          skip_tenant_check: true
+        )
+        |> Map.new()
+
+      assert versions[ctx.stale.id] == nil
+      assert versions[ctx.healthy.id] == 6
+    end
+
+    defp orphans!(ctx, count) do
+      for i <- 1..count do
+        orphan = "00000000-0000-4000-8000-" <> String.pad_leading("#{i}", 12, "0")
+        Agent.update(ctx.store, &put_in(&1.points[orphan], %{"u" => FilterId.uuid(ctx.user.id)}))
+      end
+    end
+
+    defp old_cluster do
+      old = :"old@10.0.0.9"
+
+      [
+        peers: fn -> [old] end,
+        multicall: fn nodes ->
+          Enum.map(
+            nodes,
+            &if(&1 == old, do: {:ok, Engram.Indexing.PayloadV6.baseline()}, else: {:ok, 6})
+          )
+        end
+      ]
+    end
+
+    # The fleet ledger is cached for good once done: a walk that began while
+    # an older node could still write points without `n` proves nothing.
+    test "the ledger never closes on a walk that began with an old node present", ctx do
+      assert :ok = sweep(ctx)
+
+      # One-page walk, old node present at its start.
+      refute NotePayloadStamps.run_pass(old_cluster()) == :done
+
+      # Two-page walk: begun with the old node, finished without it.
+      orphans!(ctx, 257)
+      refute NotePayloadStamps.run_pass([pages: 1] ++ old_cluster()) == :done
+
+      refute NotePayloadStamps.run_pass(pages: 1, role: nil, query: nil, peers: fn -> [] end) ==
+               :done
+
+      # The next walk, every node new from its start: done.
+      refute NotePayloadStamps.run_pass(pages: 1, role: nil, query: nil, peers: fn -> [] end) ==
+               :done
+
+      assert NotePayloadStamps.run_pass(pages: 1, role: nil, query: nil, peers: fn -> [] end) ==
+               :done
+    end
+
+    # Rollback then roll-forward: the older release re-upserted a note's
+    # points without `n` while the ledger was done (cached for good) and the
+    # stamp stayed 6. No operator step: the daily re-verify finds the points,
+    # reopens the ledger and requeues the user; the next chain heals them.
+    test "a rollback's points without n reopen the done ledger by themselves", ctx do
+      alias Engram.Workers.DataMigrationsRunner
+
+      assert :ok = sweep(ctx)
+      DataMigrations.mark_done(NotePayloadStamps.name(), NotePayloadStamps.version())
+      assert DataMigrations.done?(NotePayloadStamps.name(), NotePayloadStamps.version())
+
+      # A clean re-verify stays done.
+      assert DataMigrationsRunner.run(NotePayloadStamps, true) == :done
+
+      id = hd(point_ids(ctx.stale))
+      Agent.update(ctx.store, &update_in(&1.points[id], fn p -> Map.delete(p, "n") end))
+      assert payload_versions(ctx) == [6, 6]
+
+      assert DataMigrationsRunner.run(NotePayloadStamps, true) == :more
+      refute DataMigrations.done?(NotePayloadStamps.name(), NotePayloadStamps.version())
+      assert nil in payload_versions(ctx)
+      assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
+
+      assert :ok = sweep(ctx)
+      assert n_kept?(ctx, {id, Agent.get(ctx.store, &Map.fetch!(&1.points, id))})
+    end
+
+    # The edit path vouches for the version only for points it wrote with
+    # the payload (which holds `n`): an edit that reuses chunk points it did
+    # not rewrite (the payload unchanged) leaves the version, so the `n`
+    # backfill still reaches them.
+    test "an edit that reuses chunks lacking n does not stamp the version", ctx do
+      pre_n(ctx)
+      vault = Repo.get!(Engram.Vaults.Vault, ctx.stale.vault_id, skip_tenant_check: true)
+      {:ok, plain} = Crypto.maybe_decrypt_note_fields(reload(ctx.stale), ctx.user)
+
+      assert {:ok, _} = Indexing.index_note(plain, vault)
+
+      assert Enum.all?(
+               point_ids(ctx.stale),
+               &(not Map.has_key?(Agent.get(ctx.store, fn s -> s.points[&1] end), "n"))
+             )
+
+      assert Enum.all?(payload_versions(ctx), &is_nil/1)
+    end
+
+    # `n` jobs sort behind heals on the one `crdt_backfill` lane: a heal
+    # inserted after a minute's worth of `n` wakes still goes first.
+    test "an n job has a lower priority than a heal" do
+      heal = ReconcileNotePayloads.new(%{"user_id" => Ecto.UUID.generate()})
+      n = ReconcileNotePayloads.new(%{"user_id" => Ecto.UUID.generate(), "mode" => "n"})
+
+      assert Ecto.Changeset.get_field(n, :priority) > Ecto.Changeset.get_field(heal, :priority)
+    end
+
+    # The heal and the `n` backfill are separate jobs with separate unique
+    # slots: a paused backfill chain (scheduled, mid-cursor) must not swallow
+    # a DEK rotation's heal, which heals from the user's first note.
+    test "a paused n job does not swallow a DEK rotation's heal", ctx do
+      top = Enum.max([ctx.stale.id, ctx.healthy.id])
+
+      {:ok, paused} =
+        Oban.insert(
+          ReconcileNotePayloads.new(%{"user_id" => ctx.user.id, "mode" => "n", "after" => top},
+            schedule_in: 600
+          )
+        )
+
+      # What the rotation's flip does: every stamp NULLed, a heal queued.
+      {2, _} =
+        Repo.update_all(
+          from(n in Note, where: n.user_id == ^ctx.user.id),
+          [set: [payload_hash: nil, keyword_version: nil]],
+          skip_tenant_check: true
+        )
+
+      {:ok, heal} = Oban.insert(ReconcileNotePayloads.new(%{"user_id" => ctx.user.id}))
+      refute heal.conflict?
+      refute heal.id == paused.id
+
+      no_embed()
+      assert :ok = perform_job(ReconcileNotePayloads, heal.args)
+      assert reload(ctx.stale).payload_hash && reload(ctx.healthy).payload_hash
+    end
+
+    # A failed `n` write is the backfill job's alone: the heal job never
+    # writes `n`, so its HMAC rewrite cannot be cancelled by one.
+    test "an n write failure leaves the heal unaffected", ctx do
+      pre_n(ctx)
+
+      for id <- point_ids(ctx.stale),
+          do:
+            Agent.update(
+              ctx.store,
+              &update_in(&1.points[id], fn p -> Map.put(p, "y", "b2xk") end)
+            )
+
+      {2, _} =
+        Repo.update_all(
+          from(n in Note, where: n.user_id == ^ctx.user.id),
+          [set: [payload_hash: nil, keyword_version: nil]],
+          skip_tenant_check: true
+        )
+
+      Agent.update(ctx.store, &%{&1 | batch_status: 422})
+      no_embed()
+
+      assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+      for id <- point_ids(ctx.stale),
+          do: assert(Agent.get(ctx.store, &Map.fetch!(&1.points, id))["y"] == ctx.passed[id]["y"])
+
+      assert reload(ctx.stale).payload_hash && reload(ctx.healthy).payload_hash
+      assert {:cancel, _} = n_job(ctx)
+      assert reload(ctx.stale).payload_hash
+    end
+
+    # The hourly pass must not run an unindexed "any note behind?" EXISTS
+    # per user (it reads every note when the answer is no): it walks the
+    # notes primary key in fixed windows (`Engram.Backfill.IdWindows`), and
+    # the stale predicate only ever sees one window's ids.
+    test "the ledger pass finds stale notes by id windows, never a per-user scan", ctx do
+      null_versions(ctx)
+
+      {result, queries} =
+        Engram.QueryRecorder.record(fn ->
+          NotePayloadStamps.run_pass(role: nil, query: nil, peers: fn -> [] end)
+        end)
+
+      assert {:more, _} = result
+      stale = for q <- queries, q.pid == self(), q.sql =~ "payload_version", do: q.sql
+      assert stale != []
+      assert Enum.all?(stale, &(&1 =~ "unnest"))
+      assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
+    end
+
+    # A just-booted node in a rolling deploy, not yet joined to the old ones:
+    # `Node.list/0` is empty, but discovery still lists them. Not a fresh walk.
+    test "a walk begun before this node joined the cluster never closes the ledger", ctx do
+      assert :ok = sweep(ctx)
+
+      alone = [
+        role: "app",
+        query: "engram.internal",
+        resolver: fn _ -> ["10.0.0.1", "10.0.0.2"] end,
+        self_ip: "10.0.0.1",
+        peers: fn -> [] end
+      ]
+
+      refute NotePayloadStamps.run_pass(alone) == :done
+      assert NotePayloadStamps.run_pass(role: nil, query: nil, peers: fn -> [] end) == :done
+    end
+
+    # A walk cursor the previous release saved has an offset but no "fresh":
+    # nothing proves the cluster wrote `n` when that walk began.
+    test "a walk resumed from an old release's cursor never closes the ledger", ctx do
+      assert :ok = sweep(ctx)
+
+      :ok =
+        Engram.Maintenance.Cursor.put("payload_n_requeue", %{
+          "offset" => "ffffffff-ffff-4fff-bfff-ffffffffffff",
+          "dirty" => false
+        })
+
+      refute NotePayloadStamps.run_pass(role: nil, query: nil, peers: fn -> [] end) == :done
+      # The next walk re-checks the cluster from its start: done.
+      assert NotePayloadStamps.run_pass(role: nil, query: nil, peers: fn -> [] end) == :done
+    end
+
+    test "an orphan point without n (no chunk row) does not hold the pass open", ctx do
+      orphan = Ecto.UUID.generate()
+      Agent.update(ctx.store, &put_in(&1.points[orphan], %{"u" => FilterId.uuid(ctx.user.id)}))
+
+      assert NotePayloadStamps.run_pass() == :done
     end
 
     defp n_kept?(ctx, {id, point}) do
@@ -728,10 +1069,10 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           skip_tenant_check: true
         )
 
-      assert ReconcileNotePayloads.enqueue_missing() == 0
+      assert queued_users() == 0
       # And back on the baseline code, the newer stamp is still not behind.
       ServiceConfig.put_override(:payload_version, PayloadV6.baseline())
-      assert ReconcileNotePayloads.enqueue_missing() == 0
+      assert queued_users() == 0
     end
   end
 
@@ -743,6 +1084,31 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   # A v5 point a rotation left on the retired key. `u` is the tenant id, not
   # an HMAC, so a rotation never changes it.
   defp retired_v5(ctx), do: %{"u" => FilterId.uuid(ctx.user.id), "y" => "b2xk"}
+
+  # What one whole walk of the ledger's id windows queues
+  # (`ReconcileNotePayloads.queue_window/2`): users with a note to heal.
+  defp queued_users do
+    {:ok, queued} =
+      Engram.Backfill.IdWindows.reduce_all(Note, 0, fn ids, ctx, acc ->
+        {n, false} = ReconcileNotePayloads.queue_window(ids, ctx)
+        {:cont, acc + n}
+      end)
+
+    queued
+  end
+
+  # What the ledger queues for a user: the heal (no mode) and the `n`
+  # backfill (`mode: "n"`), each its own job. The heal's result is returned
+  # when it fails, else the backfill's.
+  defp sweep(ctx) do
+    case perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id}) do
+      :ok -> n_job(ctx)
+      other -> other
+    end
+  end
+
+  defp n_job(ctx),
+    do: perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id, "mode" => "n"})
 
   defp reload(note),
     do: Repo.one!(from(n in Note, where: n.id == ^note.id), skip_tenant_check: true)
@@ -760,9 +1126,15 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     scroll_status = Agent.get(store, & &1.scroll_status)
     scroll? = String.ends_with?(conn.request_path, "/points/scroll")
 
+    batch_status = Agent.get(store, & &1.batch_status)
+
     cond do
       status != 200 and String.ends_with?(conn.request_path, "/points/payload") ->
         Plug.Conn.send_resp(conn, status, "{}")
+
+      # The `n` backfill's write (`Qdrant.set_payloads/2`).
+      batch_status != nil and String.ends_with?(conn.request_path, "/points/batch") ->
+        Plug.Conn.send_resp(conn, batch_status, "{}")
 
       scroll? and scroll_status != nil ->
         Plug.Conn.send_resp(conn, scroll_status, "{}")
@@ -891,22 +1263,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           end
 
         {"POST", "/collections/engram_notes/points/scroll"} ->
-          if hook = Agent.get(store, & &1.on_scroll), do: hook.()
-
-          # The whole filter is evaluated, as Qdrant would: a heal whose
-          # filter hides a point layout must not pass here by accident.
-          filter = body["filter"]
-          assert Enum.any?(filter["must"] || [], &Map.has_key?(&1, "has_id"))
-
-          %{
-            "points" =>
-              for(
-                {id, payload} <- Agent.get(store, & &1.points),
-                filter?(id, payload, filter),
-                do: %{"id" => id, "payload" => Map.take(payload, body["with_payload"])}
-              ),
-            "next_page_offset" => nil
-          }
+          fake_scroll(store, body)
 
         _other ->
           true
@@ -915,5 +1272,30 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
     |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => result, "status" => "ok"}))
+  end
+
+  defp fake_scroll(store, body) do
+    if hook = Agent.get(store, & &1.on_scroll), do: hook.()
+
+    # The whole filter is evaluated, as Qdrant would: a heal whose
+    # filter hides a point layout must not pass here by accident.
+    # By id, or the done check's v5 points without `n` (every key indexed).
+    filter = body["filter"]
+
+    assert Enum.any?(filter["must"] || [], &Map.has_key?(&1, "has_id")) or
+             filter["must"] == [%{"is_empty" => %{"key" => "n"}}]
+
+    # Paged as Qdrant pages: id order, from `offset`, `limit` points,
+    # and the next id as `next_page_offset`.
+    matching =
+      for(
+        {id, payload} <- Enum.sort(Agent.get(store, & &1.points)),
+        filter?(id, payload, filter),
+        body["offset"] == nil or id >= body["offset"],
+        do: %{"id" => id, "payload" => Map.take(payload, body["with_payload"])}
+      )
+
+    {page, rest} = Enum.split(matching, body["limit"] || length(matching))
+    %{"points" => page, "next_page_offset" => if(rest == [], do: nil, else: hd(rest)["id"])}
   end
 end

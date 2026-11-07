@@ -3,8 +3,8 @@ defmodule Engram.Workers.EmbedNote do
   Oban worker: embeds a note and upserts to Qdrant.
 
   Debounce: 30-second trailing settle (`:embed_settle_seconds`) with a 300s
-  max-wait ceiling, so rapid edits trigger only one Voyage API call. See
-  `new_debounced/3`.
+  max-wait ceiling (scaled with the note's size to a 30-minute cap), so
+  rapid edits trigger only one Voyage API call. See `new_debounced/3`.
 
   Does not write `note_links`; `ExtractNoteLinks` owns those.
 
@@ -1323,7 +1323,8 @@ defmodule Engram.Workers.EmbedNote do
 
   Max-wait ceiling: a note edited continuously would otherwise never embed (the
   timer keeps resetting). `insert_debounced/3` clamps `scheduled_at` to
-  `burst_start + max_wait` (default 5m, `EMBED_SETTLE_MAX_WAIT_SECONDS`), where
+  `burst_start + max_wait` (default 5m, `EMBED_SETTLE_MAX_WAIT_SECONDS`, scaled
+  up for a big note to a 30-minute cap: `max_wait_seconds/1`), where
   `burst_start` is the surviving job's `inserted_at` (never moved).
   The unique `period` is widened to span the whole window so dedup holds until
   the ceiling fires. Inserting this changeset directly skips the debounce: a
@@ -1487,13 +1488,45 @@ defmodule Engram.Workers.EmbedNote do
   defp settle_max_wait_seconds,
     do: Application.get_env(:engram, :embed_settle_max_wait_seconds, 300)
 
+  # A big note's ceiling (`max_wait_seconds/1`): this much per chunk, never
+  # past the cap.
+  @max_wait_per_chunk 3
+  @max_wait_cap 1_800
+
   @doc """
-  The longest a debounced embed can wait after an edit: the max-wait ceiling
-  plus one settle. A note edited longer ago than this with no job pending is
-  one its write's event path should already have queued.
+  The max-wait ceiling of a note with `chunks` chunks: the base
+  (`EMBED_SETTLE_MAX_WAIT_SECONDS`, 300 s) for a small note, 3 s a chunk
+  above it (600 chunks reach 30 minutes), never past
+  `max_wait_cap_seconds/0`. Every pass re-chunks and re-hashes the whole
+  note, so a note of hundreds of chunks edited all day was re-indexed every
+  5 minutes for nothing a search would miss (prod 2026-11-05: 95-209 passes
+  a day). A quiet note still embeds one settle after its last edit.
+  """
+  @spec max_wait_seconds(non_neg_integer() | nil) :: pos_integer()
+  def max_wait_seconds(chunks),
+    do: max(settle_max_wait_seconds(), min((chunks || 0) * @max_wait_per_chunk, @max_wait_cap))
+
+  @doc "The fixed cap on any note's max-wait ceiling (`max_wait_seconds/1`)."
+  @spec max_wait_cap_seconds() :: pos_integer()
+  def max_wait_cap_seconds, do: @max_wait_cap
+
+  @doc """
+  The longest ANY debounced embed can wait after an edit: the longest
+  max-wait ceiling (a big note's, `max_wait_seconds/1`) plus one settle. The
+  dedup period, which must span every note's window.
   """
   @spec settle_window_seconds() :: number()
-  def settle_window_seconds, do: settle_max_wait_seconds() + settle_seconds()
+  def settle_window_seconds,
+    do: max(settle_max_wait_seconds(), @max_wait_cap) + settle_seconds()
+
+  @doc """
+  The longest the debounce can hold back a note of `chunks` chunks: its own
+  ceiling (`max_wait_seconds/1`) plus one settle. A note edited longer ago
+  than this with no job pending is one its write's event path should
+  already have queued.
+  """
+  @spec settle_window_seconds(non_neg_integer() | nil) :: pos_integer()
+  def settle_window_seconds(chunks), do: max_wait_seconds(chunks) + settle_seconds()
 
   @doc """
   Inserts `new_debounced/3` through `Engram.Notes.Enqueue`, clamped to the
@@ -1525,7 +1558,7 @@ defmodule Engram.Workers.EmbedNote do
       {:ok, %Oban.Job{conflict?: true, id: id, inserted_at: %DateTime{} = start} = job}
       when is_integer(id) ->
         Engram.InterleaveHook.run(:embed_after_unique_lookup)
-        ceiling = DateTime.add(start, settle_max_wait_seconds(), :second)
+        ceiling = DateTime.add(start, max_wait_seconds(chunk_count(changeset)), :second)
 
         at =
           changeset
@@ -1538,6 +1571,25 @@ defmodule Engram.Workers.EmbedNote do
       other ->
         other
     end
+  end
+
+  # The note's chunk count from its last pass, for its ceiling: one primary
+  # key read, only on a conflict (an edit while a job is pending). NULL for a
+  # note never indexed.
+  defp chunk_count(changeset) do
+    %{note_id: note_id, user_id: user_id} = Ecto.Changeset.get_field(changeset, :args)
+
+    {:ok, count} =
+      Repo.with_tenant(user_id, fn ->
+        Repo.one(
+          from(s in Engram.Notes.NoteIndexState,
+            where: s.note_id == ^note_id,
+            select: s.chunk_count
+          )
+        )
+      end)
+
+    count
   end
 
   # A job backing off (snoozed for a Voyage 429, Qdrant backpressure or a

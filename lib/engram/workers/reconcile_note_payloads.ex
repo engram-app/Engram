@@ -10,13 +10,32 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   Qdrant call may sit before the rotation's flip). A rotation before this
   worker existed left the points on the old key for good.
 
-  Two reasons select a note. A NULL `payload_hash` (below), and a payload
-  version behind `PayloadV6.version/0` (`note_index_state.payload_version`,
-  NULL = the baseline, compared with `<`): that note's drifted v5 points are
-  merged with ONE `Qdrant.set_payloads/2` batch per page, then it is stamped.
-  No read of the old payload beyond the drift check, no upsert, no PUT, no
-  embedder call. While the version equals the baseline the second reason
-  selects nothing (`docs/context/payload-v6.md`).
+  Two jobs, each its own unique slot (`Engram.Jobs`, keys `[:user_id, :mode]`):
+
+    * the HEAL (`mode: "heal"`, the default of `new/2`): main's path and
+      selection, a note whose `payload_hash` is NULL (below). Queued by a
+      DEK rotation, FileTimes, the Drain and the ledger. It asks no `n`
+      gate, reads nothing for `n`, writes no `n` on its own and never stamps
+      the payload version, so nothing about the backfill can hold, fail or
+      merge into it;
+    * the `n` BACKFILL (`mode: "n"`): payload version 6 means "every v5
+      point carries `n`, its note row id" (immutable chunk index,
+      Engram#2263). Queued by the ledger. Every gate runs FIRST, before any
+      read: the kill switch `:payload_backfill`, `Engram.Rebuild.qdrant_pace/1`
+      (disk at the 75% gate, optimizer and queue backlog; a growing snooze),
+      then a free peek of the fleet-wide bucket
+      `:payload_backfill_points_per_min` (default 500; a spent window
+      snoozes to its edge). A paused job snoozes having read nothing. It
+      walks the user's notes in fixed id windows, selecting only stamped
+      notes behind the version; each v5 point without `n` gets
+      `%{"n" => note}` MERGED (never a key deleted), in pages capped at what
+      the window has left and charged with their real size. No DEK, no
+      decrypt, no upsert, no embedder call. Then the notes are stamped with
+      the version (compare-and-set on the hash), not one holding legacy v3
+      points (they never get `n`, and have no `u` for an `n` search). A held
+      window is queued again as a fresh job at the window's edge, its cursor
+      exact. A snoozed or re-queued job resumes without rewriting anything:
+      stamped notes are not selected again, written points are skipped.
 
   A note is checked while its `payload_hash` is NULL. Its points are READ
   (payload keys only); if every one already holds the expected payload the
@@ -61,18 +80,25 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   import Ecto.Query
 
   alias Engram.Accounts.User
+  alias Engram.Backfill.IdWindows
   alias Engram.Backfill.TenantScan
+  alias Engram.Cluster.Readiness
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
   alias Engram.Indexing
   alias Engram.Indexing.PayloadV6
   alias Engram.Jobs
   alias Engram.Logger.Metadata
+  alias Engram.Maintenance.Cursor
   alias Engram.Notes.{Chunk, Note, NoteBody, NoteIndexState}
+  alias Engram.Rebuild
   alias Engram.Repo
+  alias Engram.ServiceConfig
+  alias Engram.Vector.FilterId
   alias Engram.Vector.PayloadKeys
   alias Engram.Vector.Qdrant
   alias Engram.Workers.RefreshKeywordVectors
+  alias EngramWeb.RateLimiter
 
   require Logger
 
@@ -81,15 +107,69 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   @refresh_page 256
   @event [:engram, :indexing, :payload_reconcile]
   @cancelled_event [:engram, :indexing, :payload_reconcile_cancelled]
-  @zero %{checked: 0, drifted: 0, rewritten: 0, skipped_v5: 0}
+  @zero %{checked: 0, drifted: 0, rewritten: 0, skipped_v5: 0, n_points: 0}
   @budget_ms 30_000
   # Between batches, so a large vault never saturates Qdrant.
   @pause_ms 200
 
+  # The payload version from which every v5 point carries `n`.
+  @n_version 6
+  @n_key PayloadKeys.short(:note)
+  # The `n` backfill's fleet-wide token bucket (`:payload_backfill_points_per_min`).
+  @n_bucket "payload_backfill_points"
+  @n_window_ms 60_000
+  @n_per_min 500
+  # An `n` job's Oban priority: behind the heal's (`priority: 3` above).
+  @n_priority 5
+  # Where `requeue_unbackfilled/0`'s walk resumes.
+  @requeue_cursor "payload_n_requeue"
+
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
 
+  @doc """
+  A job for `args`, as `Oban.Worker.new/2`, with `"mode"` defaulted to
+  `"heal"`. The unique keys are `[:user_id, :mode]`, and Oban compares only
+  the keys a NEW job's args carry: a heal without a mode would match a
+  queued `n` backfill (`mode: "n"`) and be dropped into it. Every caller
+  (DEK rotation, FileTimes, the Drain, the ledger) goes through here.
+  """
   @impl Oban.Worker
+  def new(args, opts) when is_map(args) and is_list(opts) do
+    args = Map.put_new(args, "mode", "heal")
+
+    # `n` jobs sort behind heals on the one `crdt_backfill` lane, so a heal
+    # is never queued behind a minute's worth of `n` wakes.
+    opts = if args["mode"] == "n", do: Keyword.put_new(opts, :priority, @n_priority), else: opts
+    super(args, opts)
+  end
+
+  @impl Oban.Worker
+  # The `n` backfill: a job of its own (`mode: "n"`, its own unique slot),
+  # never mixed with a heal.
+  def perform(%Oban.Job{args: %{"user_id" => user_id, "mode" => "n"} = args} = job) do
+    with :ok <- n_gates(job),
+         %User{} = user <- Repo.get(User, user_id),
+         :ok <- RotationGate.check_user(user) do
+      deadline = System.monotonic_time(:millisecond) + @budget_ms
+      {result, counts} = n_walk(user, args["after"], deadline, job)
+      report(user_id, counts)
+
+      case result do
+        :done -> :ok
+        {:next, after_id, opts} -> n_next(user_id, after_id, opts)
+        other -> other
+      end
+    else
+      {:snooze, _} = paused -> paused
+      nil -> :ok
+      {:error, :rotation_in_progress} -> locked_snooze(user_id, job)
+    end
+  end
+
+  # The heal (a NULL `payload_hash`: DEK rotation, FileTimes, a lost stamp
+  # race, the Drain): main's path and selection, with no `n` gate, no `n`
+  # read and no `n` write, so nothing about the backfill can hold or fail it.
   def perform(%Oban.Job{args: %{"user_id" => user_id} = args} = job) do
     with %User{} = user <- Repo.get(User, user_id),
          :ok <- RotationGate.check_user(user) do
@@ -129,13 +209,37 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     {:snooze, 60}
   end
 
-  @doc "Enqueues a chain for every user with an unstamped indexed note. Returns how many."
-  @spec enqueue_missing() :: non_neg_integer()
-  def enqueue_missing do
-    TenantScan.flat_map_users(fn uid ->
-      if Repo.exists?(where(unstamped(), [n], n.user_id == ^uid)), do: [uid], else: []
-    end)
-    |> then(&TenantScan.enqueue_users(__MODULE__, &1))
+  @doc """
+  One id window of the ledger's walk (`IdWindows.heal_pass/4`,
+  `NotePayloadStamps`): queues a heal for the users whose notes in `ids`
+  are unstamped, and an `n` backfill for those whose stamped notes are
+  behind the version. Returns `{users queued, false}`; any queued makes the
+  walk dirty.
+  """
+  def queue_window(ids, %{repo: repo}) do
+    users = fn query ->
+      query
+      |> select([note: n], n.user_id)
+      |> distinct(true)
+      |> IdWindows.by_id(ids)
+      |> repo.all()
+    end
+
+    healed = TenantScan.enqueue_users(__MODULE__, users.(unstamped()))
+    {healed + enqueue_n(users.(n_behind())), false}
+  end
+
+  @doc "Queues an `n` backfill chain (`mode: \"n\"`) per user. Returns how many."
+  @spec enqueue_n([Ecto.UUID.t()]) :: non_neg_integer()
+  def enqueue_n(user_ids) do
+    executing = TenantScan.executing_user_ids(__MODULE__, "n")
+
+    # One insert per user: Oban's Basic engine ignores `unique` in insert_all.
+    for uid <- user_ids,
+        not MapSet.member?(executing, uid),
+        do: {:ok, _} = Oban.insert(new(%{"user_id" => uid, "mode" => "n"}))
+
+    length(user_ids)
   end
 
   @doc "True while the user has an unstamped indexed note (the worker's own selection predicate)."
@@ -149,11 +253,17 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     any
   end
 
-  # The done predicate and the worker's selection, one definition: an
-  # unstamped note, or one whose points were written with an older payload
-  # version (`PayloadV6.version/0`; NULL counts as the baseline). While the
-  # version equals the baseline no note can be behind, so the term is left out.
-  defp unstamped do
+  # The heal's selection and the drain's confirm, one definition: an
+  # unstamped indexed note (main's predicate).
+  defp unstamped, do: where(indexed_notes(), [note: n], is_nil(n.payload_hash))
+
+  # The `n` backfill's selection: a stamped indexed note whose points were
+  # written with an older payload version. An unstamped one is the heal's.
+  defp n_behind,
+    do: where(indexed_notes(), [note: n], not is_nil(n.payload_hash)) |> where(^stale())
+
+  # Notes with at least one Qdrant point, as `:note`.
+  defp indexed_notes do
     from(n in Note,
       as: :note,
       where:
@@ -164,27 +274,21 @@ defmodule Engram.Workers.ReconcileNotePayloads do
             )
           )
     )
-    |> where(^unstamped_or_stale())
   end
 
-  defp unstamped_or_stale do
+  # The note's points were written with an older payload version.
+  defp stale do
     version = PayloadV6.version()
     base = PayloadV6.baseline()
 
-    if version > base do
-      dynamic(
-        [note: n],
-        is_nil(n.payload_hash) or
-          exists(
-            from(s in NoteIndexState,
-              where:
-                s.note_id == parent_as(:note).id and coalesce(s.payload_version, ^base) < ^version
-            )
-          )
+    dynamic(
+      exists(
+        from(s in NoteIndexState,
+          where:
+            s.note_id == parent_as(:note).id and coalesce(s.payload_version, ^base) < ^version
+        )
       )
-    else
-      dynamic([note: n], is_nil(n.payload_hash))
-    end
+    )
   end
 
   defp heal(%User{id: user_id} = user, after_id, deadline, counts) do
@@ -202,7 +306,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
              # Per batch, after the read and before any write: a rotation
              # that started since would have its fresh keys overwritten.
              :ok <- RotationGate.check(user_id),
-             {:ok, counts} <- heal_notes(user, notes, points, stored, counts) do
+             {:ok, counts} <- heal_unstamped(user, notes, points, stored, counts) do
           if length(notes) < @batch_size do
             {:done, counts}
           else
@@ -354,21 +458,6 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   defp same_dek(%User{id: id, dek_version: v}),
     do: from(u in User, where: u.id == ^id and u.dek_version == ^v, select: 1)
 
-  defp heal_notes(user, notes, points, stored, counts) do
-    # A note with a stamp is selected only for an old payload version: it
-    # needs a rewrite, not the drift check a NULL stamp gets.
-    {stale, unstamped} = Enum.split_with(notes, & &1.payload_hash)
-
-    # A note still holding legacy-layout (v3) points is healed as an unstamped
-    # one: the refresh below rewrites v5 points only, and stamping a note whose
-    # points were not written would vouch for a payload they do not hold.
-    {legacy, stale} = Enum.split_with(stale, &legacy_points?(&1, points, stored))
-
-    with {:ok, counts} <- heal_unstamped(user, unstamped ++ legacy, points, stored, counts) do
-      refresh_stale(user, stale, points, stored, counts)
-    end
-  end
-
   defp legacy_points?(note, points, stored),
     do: Enum.any?(Map.get(points, note.id, []), &(stored[&1] && not v5?(stored[&1])))
 
@@ -380,9 +469,10 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
       case plan_note(user, note, v5_ids, v3_ids, stored) do
         {:ok, writes, payload} ->
-          # Legacy points never take the new shape: their note is not stamped
-          # with a payload version, so the sweep keeps it in view.
-          heal_note(note, payload, writes, counts, v3_ids == [])
+          # The heal never stamps the payload version: its writes carry `n`
+          # (`PayloadV5.build/2`) but a point it did not rewrite may lack it,
+          # so only the `n` backfill vouches for the version.
+          heal_note(note, payload, writes, counts, false)
 
         :skip ->
           mark_undecryptable(note, user)
@@ -394,46 +484,11 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     end)
   end
 
-  # Payload-version refresh: the expected payload is merged onto every v5
-  # point that does not hold it, as ONE `set_payloads` batch per page (never an
-  # upsert, never a PUT: vectors untouched, no embedder), then each note is
-  # stamped. A note whose points all hold it is only stamped.
-  # Seam for the writer flip: `Indexing.expected_v5_payload/2` is the one call
-  # that becomes the v6 builder (`PayloadV6.from_rows_or_extract/4`).
-  defp refresh_stale(_user, [], _points, _stored, counts), do: {:ok, counts}
-
-  defp refresh_stale(user, notes, points, stored, counts) do
-    plans =
-      Enum.map(notes, fn note ->
-        v5_ids = for id <- Map.get(points, note.id, []), v5_point?(stored[id]), do: id
-        {note, plan_refresh(user, note, v5_ids, stored)}
-      end)
-
-    case Enum.find(plans, &match?({_, {:error, _}}, &1)) do
-      {_note, {:error, reason}} -> {:error, reason, counts}
-      nil -> write_refresh(plans, counts)
-    end
-  end
-
-  defp v5_point?(nil), do: false
-  defp v5_point?(point), do: v5?(point)
-
-  defp plan_refresh(user, note, v5_ids, stored) do
-    with {:ok, plain} <- Crypto.maybe_decrypt_note_fields(note, user),
-         {:ok, v5} <- Indexing.expected_v5_payload(plain, user) do
-      want = normalize(v5)
-      drifted = Enum.filter(v5_ids, &drifted?(stored[&1], want))
-      # A key the new payload omits is deleted, not left behind by the merge.
-      {:ok, v5, for(id <- drifted, do: {id, v5, dropped(stored[id], want)})}
-    else
-      {:error, :decrypt_failed} -> :skip
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp dropped(point, want),
-    do: Map.keys(Map.take(point, PayloadKeys.refresh_keys())) -- Map.keys(want)
-
+  # A note stamped but behind the version: the `n` backfill (`backfill_n/5`)
+  # already wrote what the version adds, and its hash vouches for the rest,
+  # so it is only stamped. No decrypt, no drift check. Only while the row
+  # still holds the hash read: a previous-release node that re-upserted the
+  # note since (without `n`) changed or NULLed it, and must not be vouched for.
   # Compared on `PayloadKeys.refresh_keys/0` only: the identity keys (`u`,
   # `v`, `n`) never change for a point, and a release that does not write
   # `n` must not see a point holding it as drifted.
@@ -442,34 +497,293 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     Map.take(point, keys) != Map.take(want, keys)
   end
 
-  defp write_refresh(plans, counts) do
-    pairs = for {_note, {:ok, _payload, pairs}} <- plans, pair <- pairs, do: pair
+  # v5 points (`u` set) without `n`, fleet-wide.
+  defp missing_n_filter,
+    do: %{must: [%{is_empty: %{key: @n_key}}], must_not: [%{is_empty: %{key: "u"}}]}
 
-    pairs
-    |> Enum.chunk_every(@refresh_page)
-    |> Enum.reduce_while(:ok, fn page, :ok ->
-      case Qdrant.set_payloads(Qdrant.collection_name(), page) do
-        :ok -> {:cont, :ok}
-        err -> {:halt, err}
+  @doc """
+  True when every node of the cluster runs a release that writes `n`: the
+  one fleet gate, `Engram.Cluster.Readiness.peers_report/4`, over
+  `PayloadV6.version/0 >= 6` (an older release answers 5, or lacks the
+  function). Every expected member must be connected, so a just-booted node
+  not yet joined to the old ones fails closed. Options as `peers_report/4`.
+  """
+  @spec cluster_writes_n?(keyword()) :: boolean()
+  def cluster_writes_n?(opts \\ []),
+    do: Readiness.peers_report(PayloadV6, :version, @n_version, opts) == :ok
+
+  # Every v5 point of the batch's notes the read shows without `n` gets it,
+  # merged, in paced pages. A point missing from the read is not written: a
+  # note whose points are gone is re-created by its next index.
+  # Every gate, before any read: the kill switch, the Qdrant gate (cached),
+  # then a free peek of the bucket. A paused job snoozes having read nothing
+  # from Postgres or Qdrant.
+  defp n_gates(job) do
+    cond do
+      not backfill_enabled?() -> gated(job)
+      (pace = Rebuild.qdrant_pace(job)) != :ok -> pace
+      RateLimiter.peek(@n_bucket, @n_window_ms, n_per_min()) == 0 -> {:snooze, edge_snooze()}
+      true -> :ok
+    end
+  end
+
+  defp gated(%Oban.Job{meta: meta}),
+    do: {:snooze, Rebuild.gate_snooze(Map.get(meta || %{}, "snoozed", 0))}
+
+  # The user's notes in fixed id windows (`IdWindows.reduce/5`), the
+  # selection (`n_behind/0`) applied only inside each window: bounded rows
+  # READ per statement. The accumulator carries the last id of the last
+  # FINISHED window (`done`): a stop resumes after it, so a held window is
+  # read again from its start. `{:next, done, opts}`: continue now (budget)
+  # or after `opts[:schedule_in]` (the switch, a spent bucket).
+  defp n_walk(user, after_id, deadline, job) do
+    step = fn ids, _ctx, %{counts: counts, done: done} = acc ->
+      cond do
+        System.monotonic_time(:millisecond) > deadline ->
+          {:halt, %{acc | stop: {:next, done, []}}}
+
+        not backfill_enabled?() ->
+          {:halt, %{acc | stop: {:next, done, schedule_in: elem(gated(job), 1)}}}
+
+        true ->
+          case n_window(user, ids, counts) do
+            {:ok, counts} ->
+              {:cont, %{acc | counts: counts, done: List.last(ids)}}
+
+            {:held, counts} ->
+              {:halt, %{acc | counts: counts, stop: {:next, done, schedule_in: edge_snooze()}}}
+
+            {:error, reason, counts} ->
+              {:halt, %{acc | counts: counts, stop: answer(user.id, reason)}}
+          end
       end
-    end)
-    |> case do
-      :ok -> {:ok, Enum.reduce(plans, counts, &stamp_refreshed/2)}
+    end
+
+    acc = %{counts: @zero, done: after_id, stop: :done}
+
+    case IdWindows.reduce({:user, user.id}, Note, acc, step,
+           after: after_id,
+           batch_size: @batch_size,
+           fun_in_tenant: false
+         ) do
+      {:ok, %{stop: stop, counts: counts}} -> {stop, counts}
+      {:error, reason} -> {answer(user.id, reason), @zero}
+    end
+  end
+
+  # One window: its notes behind the version, their points' payloads, `n`
+  # merged onto those without it (paced per page), then the notes stamped
+  # (not one holding legacy v3 points: those never get `n`).
+  defp n_window(user, ids, counts) do
+    {notes, points} = n_batch(user.id, ids)
+
+    with [_ | _] <- notes,
+         {:ok, stored} <- read_payloads(user.id, points |> Map.values() |> List.flatten()),
+         :ok <- RotationGate.check(user.id) do
+      case write_n(n_pairs(notes, points, stored), counts) do
+        {:ok, counts} ->
+          for note <- notes,
+              not legacy_points?(note, points, stored),
+              do: stamp_version(note, hash: note.payload_hash)
+
+          {:ok, Enum.reduce(notes, counts, fn _, acc -> bump(acc, :checked) end)}
+
+        {:denied, counts} ->
+          {:held, counts}
+
+        {:error, _reason, _counts} = error ->
+          error
+      end
+    else
+      [] -> {:ok, counts}
       {:error, reason} -> {:error, reason, counts}
     end
   end
 
-  defp stamp_refreshed({note, {:ok, payload, pairs}}, counts) do
-    counts = bump(counts, :checked)
-    stamp(note, payload, wrote?: pairs != [], resparse?: false, versioned?: true)
-    if pairs == [], do: counts, else: counts |> bump(:drifted) |> bump(:rewritten)
+  defp n_batch(user_id, ids) do
+    {:ok, result} =
+      Repo.with_tenant(user_id, fn ->
+        notes =
+          n_behind()
+          |> select([note: n], %{id: n.id, user_id: n.user_id, payload_hash: n.payload_hash})
+          |> IdWindows.by_id(ids)
+          |> Repo.all()
+
+        note_ids = Enum.map(notes, & &1.id)
+
+        points =
+          from(c in Chunk,
+            where: c.note_id in ^note_ids and not is_nil(c.qdrant_point_id),
+            select: {c.note_id, c.qdrant_point_id}
+          )
+          |> Repo.all()
+          |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+
+        {notes, points}
+      end)
+
+    result
   end
 
-  # Cannot be opened under the current DEK: stamped so the sweep does not
-  # select it every hour; its next index pass writes the real payload.
-  defp stamp_refreshed({note, :skip}, counts) do
-    stamp_version(note)
-    counts |> bump(:checked) |> bump(:skipped_v5)
+  # The next hop, or the held window again after the snooze: a fresh job
+  # (this one is executing, outside the unique states), so the cursor is
+  # exact.
+  defp n_next(user_id, after_id, opts) do
+    args = %{"user_id" => user_id, "mode" => "n"}
+    args = if after_id, do: Map.put(args, "after", after_id), else: args
+    {:ok, _} = Oban.insert(new(args, opts))
+    :ok
+  end
+
+  defp n_pairs(notes, points, stored) do
+    for note <- notes,
+        id <- Map.get(points, note.id, []),
+        point = stored[id],
+        point != nil and v5?(point) and not Map.has_key?(point, @n_key),
+        do: {id, %{@n_key => FilterId.uuid(to_string(note.id))}}
+  end
+
+  # Page by page, each page capped at what the bucket has left this window
+  # (a free peek), then spent with exactly that many points right before its
+  # write. So a window's whole budget goes through (256 + 244 at 500/min),
+  # and a job with nothing to write spends nothing. `{:denied, counts}` once
+  # the window is spent (or a racing job took it first).
+  defp write_n([], counts), do: {:ok, counts}
+
+  defp write_n(pairs, counts) do
+    cap = min(n_page(), RateLimiter.peek(@n_bucket, @n_window_ms, n_per_min()))
+    {page, rest} = Enum.split(pairs, cap)
+    size = length(page)
+
+    with true <- size > 0,
+         {:allow, _} <- RateLimiter.hit(@n_bucket, @n_window_ms, n_per_min(), :other, size),
+         :ok <- Qdrant.set_payloads(Qdrant.collection_name(), page, caller: :reconcile) do
+      write_n(rest, Map.update!(counts, :n_points, &(&1 + size)))
+    else
+      false -> {:denied, counts}
+      {:deny, _ms} -> {:denied, counts}
+      {:error, reason} -> {:error, reason, counts}
+    end
+  end
+
+  @doc "The payload version from which every v5 point carries `n`."
+  @spec n_version() :: 6
+  def n_version, do: @n_version
+
+  @doc "False while the `:payload_backfill` kill switch is off."
+  @spec backfill_enabled?() :: boolean()
+  def backfill_enabled?, do: ServiceConfig.get(:payload_backfill, true) != false
+
+  defp n_per_min, do: ServiceConfig.get(:payload_backfill_points_per_min, @n_per_min)
+
+  # A page never exceeds the bucket, or it could never be let through.
+  defp n_page, do: min(@refresh_page, n_per_min())
+
+  # A spent bucket snoozes to the window's edge plus up to 10 s of jitter, so
+  # the job writes again in the very next window (a growing backoff would
+  # leave windows idle), and jobs denied together do not wake in lockstep.
+  # ponytail: a fixed window lets up to 2x the rate through across a window
+  # boundary (a full bucket at the end of one, another at the start of the
+  # next). Accepted: the disk and optimizer gate (`Rebuild.qdrant_pace/1`) is
+  # the real guard; a sliding window is the upgrade if 2x bursts ever show.
+  @edge_jitter_s 10
+
+  @doc false
+  # Seconds to the end of the bucket's current window (Hammer's fix_window:
+  # `div(now, scale)`), plus jitter. Pure in `now_ms` for the rate test.
+  @spec edge_snooze(integer()) :: pos_integer()
+  def edge_snooze(now_ms \\ System.system_time(:millisecond)) do
+    to_edge_ms = @n_window_ms - rem(now_ms, @n_window_ms)
+    div(to_edge_ms + 999, 1000) + :rand.uniform(@edge_jitter_s) - 1
+  end
+
+  @doc """
+  The done check's second half: points a previous-release node upserted
+  without `n` after their note was stamped (a rolling deploy). ONE scroll
+  page of at most 256 v5 points without `n` per call, fleet-wide, resuming
+  from the page the last call reached (`Engram.Maintenance.Cursor`, so it
+  survives deploys); the notes they belong to (through their chunk rows)
+  lose their version stamp, so the sweep selects them again. Points with no
+  chunk row are orphans: `OrphanSweep` reaps them, no `n` filter matches
+  them, and they count as clean. `:clean` only when a whole walk, start to
+  end, requeued nobody AND began while every node wrote `n`
+  (`cluster_writes_n?/1`): a point an older node wrote behind the walk's
+  cursor is never seen, and the ledger's done is cached for good. Else how
+  many users this page requeued. Options as `cluster_writes_n?/1`.
+  """
+  # ponytail: at most 16 pages (4,096 points without `n`) per pass, stopping
+  # at the first page that requeues anyone. Hourly, that walks ~100k orphan
+  # points a day; a bigger orphan backlog is `OrphanSweep`'s to reap first.
+  @requeue_pages 16
+
+  @spec requeue_unbackfilled(keyword()) :: :clean | {:ok, non_neg_integer()} | {:error, term()}
+  def requeue_unbackfilled(opts \\ []) do
+    walk =
+      case Cursor.get(@requeue_cursor) do
+        %{"offset" => _} = walk -> walk
+        _ -> %{"fresh" => cluster_writes_n?(opts)}
+      end
+
+    requeue_pages(walk, Keyword.get(opts, :pages, @requeue_pages))
+  end
+
+  defp requeue_pages(walk, pages_left) do
+    with {:ok, %{points: points, next_page_offset: next}} <-
+           Qdrant.scroll(Qdrant.collection_name(),
+             filter: missing_n_filter(),
+             with_payload: ["u"],
+             limit: @refresh_page,
+             offset: walk["offset"]
+           ) do
+      users =
+        points
+        |> Enum.group_by(&FilterId.dashed(&1["payload"]["u"]), & &1["id"])
+        |> Enum.filter(fn {uid, ids} -> unstamp_versions(uid, ids) > 0 end)
+        |> Enum.map(&elem(&1, 0))
+
+      walk = %{
+        "offset" => next,
+        "dirty" => walk["dirty"] == true or users != [],
+        "fresh" => walk["fresh"] == true
+      }
+
+      if users != [] or pages_left <= 1 or next == nil,
+        do: end_requeue(walk, users, next),
+        else: requeue_pages(walk, pages_left - 1)
+    end
+  end
+
+  # The end of the walk resets it (the next call starts a fresh one);
+  # otherwise the next call resumes at `next`.
+  defp end_requeue(walk, users, next) do
+    if next == nil, do: Cursor.reset(@requeue_cursor), else: Cursor.put(@requeue_cursor, walk)
+
+    cond do
+      users != [] -> {:ok, enqueue_n(users)}
+      next == nil and not walk["dirty"] and walk["fresh"] -> :clean
+      true -> {:ok, 0}
+    end
+  end
+
+  # NULLs the version stamp of the live notes these points belong to.
+  defp unstamp_versions(user_id, point_ids) do
+    case %User{id: user_id}
+         |> Engram.Notes.note_ids_by_qdrant_points(point_ids)
+         |> Map.values() do
+      [] ->
+        0
+
+      note_ids ->
+        {:ok, {n, _}} =
+          Repo.with_tenant(user_id, fn ->
+            Repo.update_all(
+              from(s in NoteIndexState, where: s.note_id in ^Enum.uniq(note_ids)),
+              set: [payload_version: nil]
+            )
+          end)
+
+        n
+    end
   end
 
   # `{:ok, writes, stamp_payload}`: the drifted points of each layout with
@@ -618,21 +932,10 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   defp same_stamp(%{payload_hash: hash, id: id}),
     do: dynamic([n], n.id == ^id and n.payload_hash == ^hash)
 
-  defp stamp_version(note),
-    do: elem(Repo.with_tenant(note.user_id, fn -> put_version(note) end), 0)
+  defp stamp_version(note, opts),
+    do: elem(Repo.with_tenant(note.user_id, fn -> PayloadV6.stamp(note.id, opts) end), 0)
 
-  # Never lowers a newer stamp (`<` everywhere: a newer stamp is current).
-  defp put_version(note) do
-    version = PayloadV6.version()
-
-    from(s in NoteIndexState,
-      where: s.note_id == ^note.id,
-      where: is_nil(s.payload_version) or s.payload_version < ^version
-    )
-    |> Repo.update_all(set: [payload_version: version])
-
-    :ok
-  end
+  defp put_version(note), do: PayloadV6.stamp(note.id)
 
   # A v3 point always carries `user_id` (`Indexing.expected_note_payload/1`);
   # a v5 one carries `u` instead.
