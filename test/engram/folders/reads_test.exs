@@ -423,23 +423,48 @@ defmodule Engram.Folders.ReadsTest do
       assert {:error, :conflict} = Notes.rename_folder(u, v, "X", "B")
     end
 
-    test "a non-root note with no reference stays in every reader", %{user: u, vault: v} do
+    # A non-root note with no reference: each reader still places it, by its
+    # decrypted folder. One test per reader, so each is red without the
+    # fallback.
+    defp drifted(u, v) do
       {n, root} = seed(u, v)
       unref!(n)
+      {n, root}
+    end
 
+    test "drift: the listing page", %{user: u, vault: v} do
+      {n, root} = drifted(u, v)
       assert n.id in page_ids(u, v, "B")
       # Control: it is not taken for a root note.
       refute n.id in page_ids(u, v, "")
       assert root.id in page_ids(u, v, "")
-      assert counts(u, v) |> Map.take(["", "B"]) == %{"" => 1, "B" => 1}
+    end
 
+    test "drift: the counts", %{user: u, vault: v} do
+      drifted(u, v)
+      assert counts(u, v) |> Map.take(["", "B"]) == %{"" => 1, "B" => 1}
+    end
+
+    test "drift: the note filter and its complement", %{user: u, vault: v} do
+      {n, root} = drifted(u, v)
       ids = [n.id, root.id]
       assert filter(u, v, %{folder: "B"}, ids) == [n.id]
       assert filter(u, v, %{not: %{folder: "B"}}, ids) == [root.id]
+    end
+
+    test "drift: the rename target check", %{user: u, vault: v} do
+      drifted(u, v)
       assert {:error, :conflict} = Notes.rename_folder(u, v, "X", "B")
+    end
+
+    test "drift: the folders implied by notes", %{user: u, vault: v} do
+      drifted(u, v)
       assert {:ok, folders} = Notes.list_folders_implied_by_notes(u, v)
       assert "B" in folders
+    end
 
+    test "drift: the cascade scan and a recursive delete", %{user: u, vault: v} do
+      {n, _root} = drifted(u, v)
       assert {:ok, rows} = Notes.scan_folders(u, v, ["B"])
       assert n.id in Enum.map(rows, & &1.id)
       assert {:ok, %{notes: 1}} = Folders.delete(u, v, "B", recursive: true)
