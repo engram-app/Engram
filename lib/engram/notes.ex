@@ -8524,8 +8524,9 @@ defmodule Engram.Notes do
   #     in place (same id, new path) fails the second half, so a stale delete
   #     of the old path removes nothing. Never `notes.folder_hmac` (R9: notes
   #     stop carrying it).
-  #   * a drift note (no reference at scan, placed by its own folder
-  #     envelope): its `folder_nonce` is unchanged. Every path change
+  #   * a drift note (no reference at scan, or one to a row the scan did not
+  #     walk; placed by its own folder envelope): its `folder_nonce` is
+  #     unchanged. Every path change
   #     re-encrypts the envelope (new nonce); a drain heal that sets the
   #     reference meanwhile does not, so the note still goes. (A legacy
   #     `AadRebind` re-encrypt in between also changes the nonce: that note
@@ -8536,7 +8537,11 @@ defmodule Engram.Notes do
   # a placed note (the EXISTS is by `f.id`).
   defp fenced_delete_query(chunk) do
     {markers, notes} = Enum.split_with(chunk, &(&1.kind == "folder"))
-    {placed, drift} = Enum.split_with(notes, &(&1.folder_ref_id != nil))
+    # Placed = its reference names a folder row the scan walked. A note read
+    # with a reference to a row the scan did not walk (a heal landed between
+    # the scan's statements) is fenced like drift: by its own envelope.
+    {placed, drift} =
+      Enum.split_with(notes, &(&1.folder_ref_id != nil and is_binary(&1.folder_row_hmac)))
 
     fence =
       [placed_arm(placed), drift_arm(drift), marker_arm(markers)]
@@ -8562,7 +8567,7 @@ defmodule Engram.Notes do
   defp placed_arm(rows) do
     ids = Enum.map(rows, & &1.id)
     refs = rows |> Enum.map(& &1.folder_ref_id) |> Enum.uniq()
-    paths = for %{folder_row_hmac: h} when is_binary(h) <- rows, uniq: true, do: h
+    paths = rows |> Enum.map(& &1.folder_row_hmac) |> Enum.uniq()
     # One scan, one vault: bounds the subquery on `folders_full_path`.
     vault_id = hd(rows).vault_id
 
