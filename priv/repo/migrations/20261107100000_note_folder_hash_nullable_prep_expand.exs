@@ -1,3 +1,8 @@
+# Reviewed exception: DROP NOT NULL on notes.folder_hmac is intentional. This
+# release and the previous one write the hash on every note, so no NULL exists
+# until release D (the first that writes NULL); markers keep it NOT NULL through
+# notes_kind_shape_v3_check below.
+# squawk-ignore: ban-drop-not-null
 defmodule Engram.Repo.Migrations.NoteFolderHashNullablePrepExpand do
   use Ecto.Migration
 
