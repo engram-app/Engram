@@ -153,15 +153,17 @@ defmodule Engram.Folders.OpSizeCapTest do
     assert counts(queries) == 0
   end
 
-  test "a batch move selecting a parent and its child counts the child once", %{
+  # Overlapping roots walk the inner subtree twice; deduped after the LIMIT,
+  # a truncated walk would read as complete and undercount.
+  test "a batch move selecting a parent and its child is still refused over the cap", %{
     user: u,
     vault: v
   } do
-    {:ok, %{folders: markers}} = Notes.create_folder_markers(u, v, ["A", "A/B"])
+    {:ok, %{folders: [a, b, _c]}} = Notes.create_folder_markers(u, v, ["A", "A/B", "A/C"])
     {:ok, _} = Notes.create_folder_marker(u, v, "Dst")
 
-    assert {:ok, _} =
-             Folders.batch_move(u, v, Enum.map(markers, & &1.id), {:path, "Dst"})
+    assert {:error, {:folder_too_large, 2}} =
+             Folders.batch_move(u, v, [a.id, b.id], {:path, "Dst"})
   end
 
   test "drift in another folder does not refuse a small folder", %{user: u, vault: v} do

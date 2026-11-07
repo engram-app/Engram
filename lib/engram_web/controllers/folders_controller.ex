@@ -337,8 +337,8 @@ defmodule EngramWeb.FoldersController do
       "Renames or moves a folder from `old_path` to `new_path`, re-homing every note beneath it, " <>
         "and returns the affected note count. Returns 404 when the source folder does not exist, " <>
         "409 when the target path is already occupied, and 422 `folder_too_large` (with `limit` " <>
-        "and `over_limit: true`) when the folder holds more live notes and attachments than the server allows " <>
-        "in one rename.",
+        "and `over_limit: true`) when the folder holds more live notes, attachments and " <>
+        "subfolders than the server allows in one rename.",
     tags: ["Folders"],
     request_body: {"Old + new path", "application/json", Schemas.RenameRequest, required: true},
     responses: [
@@ -441,7 +441,7 @@ defmodule EngramWeb.FoldersController do
         "level) in one transaction and returns the moved count. Requires the `X-Idempotency-Key` " <>
         "header. Returns 404 for a missing id, 409 (with `item_id`) on a conflict or a cycle, and " <>
         "422 `folder_too_large` (with `limit` and `over_limit: true`) when the selected folders together hold " <>
-        "more live notes and attachments than the server allows in one move.",
+        "more live notes, attachments and subfolders than the server allows in one move.",
     tags: ["Folders"],
     request_body:
       {"Ids + target parent", "application/json", Schemas.BatchMoveFoldersRequest, required: true},
