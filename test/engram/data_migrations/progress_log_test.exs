@@ -10,7 +10,7 @@ defmodule Engram.DataMigrations.ProgressLogTest do
   import Ecto.Query
 
   alias Engram.Backfill.IdWindows
-  alias Engram.DataMigrations.{FileTimes, NoteBodyColumnsNull}
+  alias Engram.DataMigrations.{EffectiveDates, FileTimes}
   alias Engram.Notes
   alias Engram.Test.LogCapture
 
@@ -94,32 +94,44 @@ defmodule Engram.DataMigrations.ProgressLogTest do
     end
 
     test "one line with the walk counts", ctx do
-      for p <- ["a.md", "b.md"], do: Engram.Fixtures.old_release_notes_copy!(note!(ctx, p).id)
+      for p <- ["a.md", "b.md"] do
+        n = note!(ctx, p)
+
+        Repo.with_tenant!(ctx.user.id, fn ->
+          Repo.update_all(from(x in Notes.Note, where: x.id == ^n.id), set: [eff_v: nil])
+        end)
+      end
 
       {:more, events} =
-        LogCapture.with_events(fn -> DataMigrationsRunner.run(NoteBodyColumnsNull) end)
+        LogCapture.with_events(fn -> DataMigrationsRunner.run(EffectiveDates) end)
 
       meta = summary(events)
-      assert meta[:migration] == "note_body_columns_null"
+      assert meta[:migration] == "note_effective_dates"
       assert meta[:version] == 1
       assert meta[:result] == :more
       assert meta[:fixed] == 2
       assert meta[:left] == false
       assert meta[:hit_budget] == false
-      assert meta[:walks] =~ "note_body_columns_null fixed=2 left=false"
+      assert meta[:walks] =~ "note_effective_dates fixed=2 left=false"
     end
 
-    test "a guard makes the result :blocked", ctx do
-      Engram.Fixtures.old_release_notes_copy!(note!(ctx, "a.md").id)
-      Repo.query!("DROP TRIGGER notes_crdt_head_invalidate ON notes")
+    test "a guard makes the result :blocked" do
+      defmodule Guarded do
+        @behaviour Engram.DataMigration
+        def name, do: "test_guarded"
+        def version, do: 1
 
-      {:more, events} =
-        LogCapture.with_events(fn -> DataMigrationsRunner.run(NoteBodyColumnsNull) end)
+        def run_pass do
+          :ok = Engram.DataMigration.report(blocked: :test_guard)
+          :more
+        end
+      end
+
+      {:more, events} = LogCapture.with_events(fn -> DataMigrationsRunner.run(Guarded) end)
 
       meta = summary(events)
       assert meta[:result] == :blocked
-      assert meta[:blocked] == "head_trigger_not_on_nonce"
-      assert meta[:fixed] == 0
+      assert meta[:blocked] == "test_guard"
     end
 
     test "FileTimes reports its open and clean tables", ctx do
@@ -132,11 +144,10 @@ defmodule Engram.DataMigrations.ProgressLogTest do
     end
 
     test "a migration that is already done logs nothing" do
-      :ok =
-        Engram.DataMigrations.mark_done(NoteBodyColumnsNull.name(), NoteBodyColumnsNull.version())
+      :ok = Engram.DataMigrations.mark_done(FileTimes.name(), FileTimes.version())
 
       {:skipped, events} =
-        LogCapture.with_events(fn -> DataMigrationsRunner.run(NoteBodyColumnsNull) end)
+        LogCapture.with_events(fn -> DataMigrationsRunner.run(FileTimes) end)
 
       refute Enum.any?(events, &(IO.chardata_to_string(message(&1)) == "data migration pass"))
     end
