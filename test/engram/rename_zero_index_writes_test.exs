@@ -60,24 +60,42 @@ defmodule Engram.RenameZeroIndexWritesTest do
     %{user: user, vault: vault, ids: ids}
   end
 
-  # Runs every job the rename queued, and what those queue in turn, in a
-  # bounded number of passes: a job that snoozes or retries (a paced worker
-  # that cannot read Qdrant) is rescheduled each pass, so draining "until
-  # empty" would never end.
-  defp drain_all do
-    for _pass <- 1..3, queue <- queues(), do: Oban.drain_queue(queue: queue, with_scheduled: true)
+  # Runs every job the rename queued, and what those queue in turn, until no
+  # job is left to run; then asserts none is left at all. A job that keeps
+  # snoozing or retrying (a paced worker that cannot read Qdrant) would make
+  # "drain until empty" spin forever, so the passes are capped and the cap
+  # fails loudly instead of passing on work it never ran.
+  @max_passes 10
+
+  defp drain_all(pass \\ 1) do
+    case incomplete_jobs() do
+      [] ->
+        :ok
+
+      jobs when pass > @max_passes ->
+        flunk("jobs still queued after #{@max_passes} drain passes: #{inspect(jobs)}")
+
+      jobs ->
+        for queue <- jobs |> Enum.map(&elem(&1, 1)) |> Enum.uniq(),
+            do: Oban.drain_queue(queue: String.to_existing_atom(queue), with_scheduled: true)
+
+        drain_all(pass + 1)
+    end
   end
 
-  defp queues do
-    Oban.Job
-    |> Repo.all(skip_tenant_check: true)
-    |> Enum.map(&String.to_existing_atom(&1.queue))
-    |> Enum.uniq()
+  defp incomplete_jobs do
+    Repo.all(
+      from(j in Oban.Job,
+        where: j.state in ~w(available scheduled retryable executing),
+        select: {j.worker, j.queue, j.state}
+      ),
+      skip_tenant_check: true
+    )
   end
 
   defp assert_zero_index_calls(rename) do
     assert {:ok, _} = rename.()
-    drain_all()
+    :ok = drain_all()
 
     refute_received {:qdrant, _, _}
     refute_received {:voyage, _}
