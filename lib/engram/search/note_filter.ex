@@ -8,7 +8,7 @@ defmodule Engram.Search.NoteFilter do
   A filter is a map; its keys AND together:
 
     * `:folder`: a folder path; the folder and its whole subtree
-      (`Folders.Rows.subtree_refs/3`). `""` is the vault root, so no filter.
+      (`Folders.Rows.subtree_refs/3`, by `folder_ref_id`). `""` is the vault root, so no filter.
     * `:tags`: any of these tags, a nested tag included (`a/b` matches
       `a/b/c`), expanded against the vault's tag list at query time.
     * `:type`: the OKF `type` (case and width folded).
@@ -318,23 +318,18 @@ defmodule Engram.Search.NoteFilter do
   defp folder("", _ctx), do: dynamic(true)
 
   defp folder(path, ctx) do
-    refs = for %{full_path_hmac: h} <- Rows.subtree_refs(ctx.user, ctx.vault.id, [path]), do: h
+    ids = for %{id: id} <- Rows.subtree_refs(ctx.user, ctx.vault.id, [path]), do: id
 
-    # The root's own path key too: a note in a folder with no `folders` row
-    # yet (one the previous release wrote, before `DataMigrations.FolderTable`
-    # heals it) still carries that key, as vector search's exact
-    # `folder_hmac` match finds it.
-    hmacs = Enum.uniq([Rows.path_hmac(ctx.fk, path) | Enum.filter(refs, &is_binary/1)])
+    # `folder_ref_id = ANY(...)`, an index-only scan of `notes_folder_ref_live`.
+    # `IS NOT NULL` keeps a root note's NULL false, so the test stays exact
+    # under `not`. The drift notes (no reference yet, `Notes.drift_note_ids_under/3`)
+    # are matched by id: a bounded list, empty in steady state.
+    by_ref = dynamic([n], not is_nil(n.folder_ref_id) and n.folder_ref_id in ^ids)
 
-    # `folder_id = ANY(...)` on `notes_folder (vault_id, folder_id)`: every
-    # note carries its folder's key (a trigger writes it). `IS NOT NULL`
-    # keeps a root note's NULL false (exact under `not`) without hiding the
-    # column from the index, as a `coalesce()` around it did. One `ids?()`
-    # read for the column and its values, so they agree.
-    ids? = Keys.ids?()
-    col = Keys.col(:folder, ids?)
-    match = Keys.in_any(:folder, hmacs, ids?)
-    dynamic([n], not is_nil(field(n, ^col)) and ^match)
+    case Notes.drift_note_ids_under(ctx.user, ctx.vault, [path]) do
+      [] -> by_ref
+      drift -> dynamic([n], ^by_ref or n.id in ^drift)
+    end
   end
 
   # Nested tags: `a/b` is `a/b` and every `a/b/...` the vault uses. Case

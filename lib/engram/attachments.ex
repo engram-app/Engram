@@ -2245,43 +2245,39 @@ defmodule Engram.Attachments do
   end
 
   # Everything is a candidate when the root is asked for as a subtree;
-  # otherwise the folders' referenced rows plus the ones whose reference is not
-  # current.
+  # otherwise the folders' current references (`attachments_folder_ref_live`)
+  # plus the stale ones, two statements so each keeps its index.
   defp candidate_rows(user, vault, folders, direct?) do
     base = from(a in scoped_live(user, vault), as: :a, select: struct(a, @tree_attachment_fields))
 
     if not direct? and "" in folders do
       Repo.all(base)
     else
-      current = Rows.attachment_ref_current()
       ids = folder_ids(user, vault, folders, direct?)
-      root? = direct? and "" in folders
 
       trusted =
-        if root?,
+        if direct? and "" in folders,
           do: dynamic([a], is_nil(a.folder_ref_id) or a.folder_ref_id in ^ids),
           else: dynamic([a], a.folder_ref_id in ^ids)
 
-      # A reference to a deleted or missing folder row vouches for nothing,
-      # whatever the row's age (an undo that could not revive the row; a crash
-      # between a restore and its re-point): such a row is read by its path.
-      live_ref =
-        from(f in Engram.Folders.Folder,
-          where: f.id == parent_as(:a).folder_ref_id and is_nil(f.deleted_at)
-        )
-
-      Repo.all(
-        from(a in base,
-          where:
-            ^dynamic(
-              [a],
-              (^trusted and ^current) or not (^current) or
-                is_nil(a.folder_ref_stamp) or
-                (not is_nil(a.folder_ref_id) and not exists(live_ref))
-            )
-        )
-      )
+      current = Rows.attachment_ref_current()
+      Repo.all(from(a in base, where: ^dynamic([a], ^trusted and ^current))) ++ stale_rows(base)
     end
+  end
+
+  # Rows whose reference is not current, read by their path: the exact
+  # `attachments_folder_ref_stale` predicate (the drain probe's), so 0 rows in
+  # steady state. A dead reference is in it too: `folders_release_refs` clears
+  # the reference and the stamp when a row dies. An unreadable row (stamp
+  # `Rows.unreadable_attachment_stamp/1`) is not: its folder is unknowable.
+  defp stale_rows(base) do
+    Repo.all(
+      from(a in base,
+        where:
+          fragment("? IS DISTINCT FROM ?", a.folder_ref_stamp, a.path_nonce) and
+            fragment("? IS DISTINCT FROM ('\\x00'::bytea || ?)", a.folder_ref_stamp, a.path_nonce)
+      )
+    )
   end
 
   defp folder_ids(user, vault, folders, true), do: Rows.ids_at(user, vault.id, folders)
