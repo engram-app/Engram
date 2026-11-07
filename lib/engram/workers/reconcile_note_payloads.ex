@@ -172,9 +172,6 @@ defmodule Engram.Workers.ReconcileNotePayloads do
         {:more, after_id} ->
           {:ok, _} = Oban.insert(new(%{"user_id" => user_id, "after" => after_id}))
           :ok
-
-        other ->
-          other
       end
     else
       nil -> :ok
