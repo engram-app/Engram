@@ -6877,6 +6877,7 @@ defmodule Engram.Notes do
         # The usual case, one live row: an equality, costed per folder as the
         # old hash match was. `= ANY($n)` is costed as 10 values, which on a
         # paged `ORDER BY id LIMIT` makes the generic plan walk the primary key.
+        [] -> dynamic(false)
         [id] -> dynamic([n], n.folder_ref_id == ^id)
         ids -> dynamic([n], n.folder_ref_id in ^ids)
       end
