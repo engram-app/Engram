@@ -40,6 +40,23 @@ defmodule Engram.MCP.ToolsDescriptionsTest do
     end
   end
 
+  # #2506: edit_note and append_to_note enforce an optional base_hash
+  # (#2486), so an agent must be told it can send one: in the description and
+  # as a schema property shaped like write_note's.
+  for tool <- ~w(write_note edit_note append_to_note) do
+    test "#{tool} describes and declares base_hash" do
+      [t] = Enum.filter(Tools.wire_list(), &(&1["name"] == unquote(tool)))
+      assert t["description"] =~ "base_hash"
+      assert t["description"] =~ "get_notes"
+
+      assert %{"type" => "string", "description" => desc} =
+               t["inputSchema"]["properties"]["base_hash"]
+
+      assert desc =~ "content_hash"
+      refute "base_hash" in (t["inputSchema"]["required"] || [])
+    end
+  end
+
   test "no client-visible tool text uses an em dash" do
     for t <- Tools.wire_list(), s <- strings(t) do
       refute s =~ "—", "#{t["name"]} has an em dash: #{s}"
