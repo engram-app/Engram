@@ -332,9 +332,9 @@ defmodule Engram.Indexing do
          {:ok, dek} <- Crypto.get_dek(user),
          content_key = Crypto.dek_content_hash_key_from_bytes(dek),
          {:ok, opts} <- with_vector_cache(user, note, dek, content_key, dims, opts),
-         {:ok, rows, counted} <- planning_reads(note, user, opts),
+         {:ok, rows, points} <- planning_reads(note, user, opts),
          {tier, dense?, plan, retained} <-
-           plan_index(note, user, chunks, {rows, counted}, content_key, opts),
+           plan_index(note, user, chunks, {rows, points}, content_key, opts),
          {:ok, dense?, plan, retained} <-
            rebuild_sources(note, dense?, plan, retained, content_key, opts),
          :ok = collect_garbage(n),
@@ -435,16 +435,14 @@ defmodule Engram.Indexing do
   # just read).
   defp planning_reads(note, user, opts) do
     forced? = floor_tier(note, opts) != nil
+    # Read once a pass: the points check below takes it with the counts.
+    cap = if !forced?, do: index_points_cap(user)
 
     Repo.with_tenant!(note.user_id, fn ->
       with :ok <- tier_unchanged(note) do
         rows = if forced?, do: [], else: indexed_rows(note)
-
-        counted =
-          if !forced? and index_points_cap(user),
-            do: {point_count(user.id), length(rows)}
-
-        {:ok, rows, counted}
+        counted = if cap, do: {point_count(user.id), length(rows)}
+        {:ok, rows, {cap, counted}}
       end
     end)
   end
@@ -486,7 +484,7 @@ defmodule Engram.Indexing do
 
   # The per-note cap runs first, so the points budget below counts the points
   # a full pass would actually write.
-  defp plan_index(note, user, chunks, {rows, counted}, content_key, opts) do
+  defp plan_index(note, user, chunks, {rows, points}, content_key, opts) do
     forced = floor_tier(note, opts)
     cap = note_points_cap(user)
 
@@ -496,7 +494,7 @@ defmodule Engram.Indexing do
         else: fit_note(chunks, cap, merged_rows?(rows))
 
     case forced || over_note_cap_tier(note, capped, cap) ||
-           over_points_budget_tier(note, user, capped, counted) do
+           over_points_budget_tier(note, user, capped, points) do
       nil ->
         dense_opt = Keyword.get(opts, :dense, true)
 
@@ -548,8 +546,8 @@ defmodule Engram.Indexing do
   # least recently edited notes. Past that it floors.
   @inline_overshoot_pct 5
 
-  defp over_points_budget_tier(note, user, chunks, counted) do
-    unless points_budget_ok?(user, note.id, length(chunks), @inline_overshoot_pct, counted),
+  defp over_points_budget_tier(note, user, chunks, points) do
+    unless points_budget_ok?(user, note.id, length(chunks), @inline_overshoot_pct, points),
       do: demoted_tier(note)
   end
 
@@ -838,19 +836,22 @@ defmodule Engram.Indexing do
   No lock: two concurrent passes can both fit on one reading, so the cap can
   be overshot by one note's chunks. Accepted.
 
-  `counted`: the counter-based `{all, own}` already read by the caller (the
-  index pass reads it with its chunk rows, `planning_reads/3`), so the first
-  check costs no query.
+  `prefetched`: `{cap, {all, own} | nil}`, the cap and counter-based counts
+  already read by the caller (the index pass reads them with its chunk rows,
+  `planning_reads/3`), so the cap is read once and the first check costs no
+  query.
   """
   @spec points_budget_ok?(
           map(),
           Ecto.UUID.t(),
           non_neg_integer(),
           non_neg_integer(),
-          {non_neg_integer(), non_neg_integer()} | nil
+          {non_neg_integer() | nil, {non_neg_integer(), non_neg_integer()} | nil} | nil
         ) :: boolean()
-  def points_budget_ok?(user, note_id, planned_points, overshoot_pct \\ 0, counted \\ nil) do
-    case index_points_cap(user) do
+  def points_budget_ok?(user, note_id, planned_points, overshoot_pct \\ 0, prefetched \\ nil) do
+    {cap, counted} = prefetched || {index_points_cap(user), nil}
+
+    case cap do
       cap when is_integer(cap) ->
         # All the user's points minus this note's rows (at most its point
         # cap). The counters first; a refusal floors the note and drops its

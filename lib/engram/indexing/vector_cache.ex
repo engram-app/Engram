@@ -146,9 +146,10 @@ defmodule Engram.Indexing.VectorCache do
 
   @doc """
   The cached vectors for `keys`, as packed float32 LE (the embed path's form,
-  widened from the stored f16). Read-only, #{@batch_rows} keys a query, so
-  no one query grows with the note (#2364). Missing or unreadable rows are
-  absent.
+  widened from the stored f16). Read-only, #{@batch_rows} keys a query,
+  each batch its own tenant transaction, decrypted before the next is read:
+  neither a query nor a connection hold nor the ciphertext held grows with
+  the note (#2364, #2532). Missing or unreadable rows are absent.
   """
   @spec get_many(String.t(), <<_::256>>, [key()]) :: %{key() => binary()}
   def get_many(_user_id, _dek, []), do: %{}
@@ -156,20 +157,19 @@ defmodule Engram.Indexing.VectorCache do
   def get_many(user_id, <<_::256>> = dek, keys) when is_list(keys) do
     uid = Ecto.UUID.dump!(user_id)
 
-    {:ok, rows} =
-      Repo.with_tenant(user_id, fn ->
-        keys
-        |> Enum.uniq()
-        |> Enum.chunk_every(@batch_rows)
-        |> Enum.flat_map(&Repo.query!(@get_many_sql, [uid, &1]).rows)
-      end)
-
     hits =
-      for [key, ct, nonce] <- rows,
-          {:ok, <<_digest::binary-32, f16::binary>>} <-
-            [Envelope.decrypt(ct, nonce, dek, aad(user_id, key))],
-          into: %{},
-          do: {key, f16_to_f32(f16)}
+      keys
+      |> Enum.uniq()
+      |> Enum.chunk_every(@batch_rows)
+      |> Enum.reduce(%{}, fn batch, acc ->
+        rows = Repo.with_tenant!(user_id, fn -> Repo.query!(@get_many_sql, [uid, batch]).rows end)
+
+        for [key, ct, nonce] <- rows,
+            {:ok, <<_digest::binary-32, f16::binary>>} <-
+              [Envelope.decrypt(ct, nonce, dek, aad(user_id, key))],
+            into: acc,
+            do: {key, f16_to_f32(f16)}
+      end)
 
     :telemetry.execute(
       [:engram, :vector_cache, :lookup],
