@@ -67,7 +67,7 @@ struct Heading {
 #[cfg(test)]
 pub fn chunk(content: &str, folder: &str, title: &str) -> Vec<Chunk> {
     let mut out = Vec::new();
-    each_chunk(content, folder, title, &[], None, &mut out);
+    each_chunk(content, folder, title, &[], None, true, &mut out);
     out
 }
 
@@ -104,6 +104,7 @@ struct Leading<'s, S: Sink> {
     lead: Option<&'s str>,
     unused: Option<&'s str>,
     prose_seen: bool,
+    legacy: bool,
 }
 
 impl<S: Sink> Sink for Leading<'_, S> {
@@ -111,8 +112,13 @@ impl<S: Sink> Sink for Leading<'_, S> {
         let dense = c.6 == PROSE || c.6 == FRONTMATTER_DENSE;
         self.prose_seen |= c.6 == PROSE;
         if let Some(l) = self.unused.filter(|_| dense) {
-            c.1 = with_lead(&c.1, l);
-            c.2 = with_lead(&c.2, l);
+            if self.legacy {
+                c.1 = with_lead(&c.1, l);
+                c.2 = with_lead(&c.2, l);
+            } else {
+                c.1 = with_lead_at(&c.1, &c.0, l);
+                c.2 = with_lead_at(&c.2, &c.0, l);
+            }
             self.unused = None;
         }
         self.sink.push(c)
@@ -143,20 +149,26 @@ const COUNT_FROM: usize = 16 * 1024;
 /// chunk that would pass `budget`; the body is then chunked again with its
 /// small sections coalesced. (A separate count pass chunked every body over
 /// 16 KB twice.)
-/// `aliases` (from the frontmatter, cleaned by the caller) follow the title
-/// in every prefix: `Title (aka A, B) > H1`. `lead` (`Type: description`,
-/// one line, built by the caller) is a line after the prefix of the first
-/// chunk only, in its dense and keyword inputs; it is not note text and
-/// does not count toward MAX_CHUNK.
+/// `lead` (`Type: description`, one line, built by the caller) is a line
+/// after the prefix of the first chunk only, in its dense and keyword
+/// inputs; it is not note text and does not count toward MAX_CHUNK.
+/// `aliases` (from the frontmatter, cleaned by the caller) join the lead:
+/// `Type: description (aka A, B)` (R3c), so an alias edit changes one
+/// chunk, not all of them.
+///
+/// `legacy`: the inputs as they were before R3c, byte for byte (aliases in
+/// every prefix, `Title (aka A, B) > H1`), for the reuse fingerprints of
+/// points indexed then (`Engram.Indexing`). Delete with that candidate.
 pub fn each_chunk(
     content: &str,
     folder: &str,
     title: &str,
     aliases: &[String],
     lead: Option<&str>,
+    legacy: bool,
     sink: &mut impl Sink,
 ) {
-    let mut job = Job::new(content, folder, title, aliases, lead);
+    let mut job = Job::new(content, folder, title, aliases, lead, legacy);
     while !job.step(sink, usize::MAX) {}
 }
 
@@ -183,6 +195,7 @@ impl<'a> Job<'a> {
         title: &str,
         aliases: &[String],
         lead: Option<&str>,
+        legacy: bool,
     ) -> Self {
         // A BOM before the fence still opens frontmatter here. Only for
         // chunking: the shared splitter (CRDT ingest, normalize) keeps its
@@ -196,6 +209,12 @@ impl<'a> Job<'a> {
         let lead = lead
             .filter(|l| !l.is_empty())
             .map(|l| cut(l, MAX_LEAD).to_string());
+        let aka = aka(aliases);
+        let lead = match lead {
+            _ if legacy || aka.is_empty() => lead,
+            Some(l) => Some(format!("{l} (aka {aka})")),
+            None => Some(format!("(aka {aka})")),
+        };
         let limit = if body.len() >= COUNT_FROM {
             budget(body.len())
         } else {
@@ -205,7 +224,7 @@ impl<'a> Job<'a> {
             headings: may_have_heading(&body),
             body,
             block,
-            note: Note::new(folder, title, aliases),
+            note: Note::new(folder, title, &aka, legacy),
             lead_unused: lead.is_some(),
             lead,
             prose_seen: false,
@@ -244,6 +263,7 @@ impl<'a> Job<'a> {
             lead: self.lead.as_deref(),
             unused: self.lead.as_deref().filter(|_| self.lead_unused),
             prose_seen: self.prose_seen,
+            legacy: self.note.legacy,
         };
         let mut read = 0;
         let ended = loop {
@@ -329,11 +349,17 @@ fn tail(
             let mut c = make(note, &path, t, 0, 0, "frontmatter");
             c.3 = (vec!["frontmatter".to_string()], 1);
             if std::mem::take(&mut dense) {
-                c.2 = match props(block) {
+                let input = match props(block) {
                     v if v.is_empty() => note.head.clone(),
+                    v if note.head.is_empty() && !note.legacy => v,
                     v => format!("{}\n\n{v}", note.head),
                 };
-                c.6 = FRONTMATTER_DENSE;
+                // No title, values or lead (R3c): nothing to embed, so the
+                // chunk stays keyword-only rather than send Voyage "".
+                if note.legacy || !input.is_empty() || emit.unused.is_some() {
+                    c.2 = input;
+                    c.6 = FRONTMATTER_DENSE;
+                }
             }
             emit.push(c);
         }
@@ -344,10 +370,13 @@ fn tail(
 struct Note {
     folder: String,
     title: String,
+    /// Pre-R3c inputs (`each_chunk`).
+    legacy: bool,
     /// The title as heading text reads (`clean_heading`), to spot the H1
     /// that is the title: `# my_note` in `my_note.md` (review L1).
     title_text: String,
-    /// The title and its aliases, `Title (aka A, B)`: the prefix head.
+    /// The prefix head: the title, which may be "" (R3c); legacy, the title
+    /// and its aliases, `Title (aka A, B)`.
     head: String,
 }
 
@@ -358,20 +387,29 @@ const MAX_LEAD: usize = 256;
 /// pushed the headings out of the prefix).
 const MAX_AKA: usize = 200;
 
+/// The alias part, `A, B`, cut at MAX_AKA chars; "" without aliases.
+fn aka(aliases: &[String]) -> String {
+    let aka = aliases.join(", ");
+    match aka.char_indices().nth(MAX_AKA) {
+        Some((i, _)) => aka[..i].to_string(),
+        None => aka,
+    }
+}
+
 impl Note {
-    fn new(folder: &str, title: &str, aliases: &[String]) -> Self {
+    fn new(folder: &str, title: &str, aka: &str, legacy: bool) -> Self {
         // Capped as heading text is, so the H1 that is the title still
         // matches it, and every heading path element is bounded.
         let title = cut(title, MAX_PREFIX);
-        let aka = aliases.join(", ");
-        let head = match aka.char_indices().nth(MAX_AKA) {
-            _ if aka.is_empty() => title.to_string(),
-            Some((i, _)) => format!("{title} (aka {})", &aka[..i]),
-            None => format!("{title} (aka {aka})"),
+        let head = if legacy && !aka.is_empty() {
+            format!("{title} (aka {aka})")
+        } else {
+            title.to_string()
         };
         Note {
             folder: folder.to_string(),
             title: title.to_string(),
+            legacy,
             title_text: cut(&clean_heading(title), MAX_PREFIX).to_string(),
             head,
         }
@@ -384,6 +422,34 @@ fn with_lead(input: &str, lead: &str) -> String {
     match input.split_once("\n\n") {
         Some((prefix, rest)) => format!("{prefix}\n{lead}\n\n{rest}"),
         None => format!("{input}\n{lead}"),
+    }
+}
+
+/// `with_lead` for an input whose prefix may be empty (R3c): split at
+/// the chunk's own `text`, not at the first blank line, which may be in it.
+/// A property note's dense input (not prefix and text) takes the lead last.
+fn with_lead_at(input: &str, text: &str, lead: &str) -> String {
+    match input.strip_suffix(text) {
+        Some(p) => joined(&lined(p.strip_suffix("\n\n").unwrap_or(p), lead), text),
+        None => lined(input, lead),
+    }
+}
+
+/// `a\nb`, or `b` when `a` is empty.
+fn lined(a: &str, b: &str) -> String {
+    if a.is_empty() {
+        b.to_string()
+    } else {
+        format!("{a}\n{b}")
+    }
+}
+
+/// `prefix\n\ntext`, or `text` when the prefix is empty.
+fn joined(prefix: &str, text: &str) -> String {
+    if prefix.is_empty() {
+        text.to_string()
+    } else {
+        format!("{prefix}\n\n{text}")
     }
 }
 
@@ -856,7 +922,13 @@ fn wide_word(tok: &str) -> bool {
 /// head (title and aliases) in the title's place.
 fn make(note: &Note, path: &[String], text: &str, s: usize, e: usize, kind: &'static str) -> Chunk {
     let folder = &*note.folder;
-    let emb = prefix(&note.head, &path[1..]);
+    // No title (R3c: a note with no frontmatter title and no H1): the
+    // headings alone, never " > h1".
+    let emb = match path[1..].split_first() {
+        _ if note.legacy || !note.head.is_empty() => prefix(&note.head, &path[1..]),
+        Some((top, rest)) => prefix(top, rest),
+        None => String::new(),
+    };
     let ctx = if folder.is_empty() {
         emb.clone()
     } else {
@@ -867,10 +939,17 @@ fn make(note: &Note, path: &[String], text: &str, s: usize, e: usize, kind: &'st
             f => format!("{f} > {emb}"),
         }
     };
+    let input = |p: &str| {
+        if note.legacy {
+            format!("{p}\n\n{text}")
+        } else {
+            joined(p, text)
+        }
+    };
     (
         text.to_string(),
-        format!("{ctx}\n\n{text}"),
-        format!("{emb}\n\n{text}"),
+        input(&ctx),
+        input(&emb),
         (path.to_vec(), 1),
         s,
         e,
@@ -1476,11 +1555,12 @@ mod tests {
         let long: String = (0..2_000).map(|i| format!("# s{i}\n{pad}\n\n")).collect();
         let fm = format!("---\ndescription: d\n---\n{long}");
         let plain = "no heading at all\n\n".repeat(30_000);
-        for content in [&tree, &long, &fm, &plain] {
+        let al = ["Alias".to_string()];
+        for (content, legacy) in [(&tree, true), (&long, true), (&fm, false), (&plain, false)] {
             let lead = Some("Type: a description");
             let mut whole = Vec::new();
-            each_chunk(content, "f", "T", &[], lead, &mut whole);
-            let mut job = Job::new(content, "f", "T", &[], lead).into_owned();
+            each_chunk(content, "f", "T", &al, lead, legacy, &mut whole);
+            let mut job = Job::new(content, "f", "T", &al, lead, legacy).into_owned();
             let (mut stepped, mut steps) = (Vec::new(), 0);
             loop {
                 CLOSED.with(|n| n.set(0));
@@ -1668,7 +1748,7 @@ mod tests {
             fill(r#"{"id":4821,"ok":true},"#),
         ] {
             let ((), peak) =
-                crate::memory::measured(|| each_chunk(&content, "f", "T", &[], None, &mut 0));
+                crate::memory::measured(|| each_chunk(&content, "f", "T", &[], None, true, &mut 0));
             assert!(peak <= 10 * content.len(), "{peak} for {:?}", &content[..8]);
         }
     }
@@ -2209,7 +2289,7 @@ mod tests {
     fn aka(content: &str, aliases: &[&str]) -> Vec<Chunk> {
         let aliases: Vec<String> = aliases.iter().map(|a| a.to_string()).collect();
         let mut out = Vec::new();
-        each_chunk(content, "", "T", &aliases, None, &mut out);
+        each_chunk(content, "", "T", &aliases, None, true, &mut out);
         out
     }
 
@@ -2353,7 +2433,7 @@ mod tests {
 
     fn led(content: &str, lead: &str) -> Vec<Chunk> {
         let mut out = Vec::new();
-        each_chunk(content, "", "T", &[], Some(lead), &mut out);
+        each_chunk(content, "", "T", &[], Some(lead), true, &mut out);
         out
     }
 
@@ -2436,6 +2516,7 @@ mod tests {
             &emoji,
             &aliases,
             Some(cut(&emoji, 400)),
+            true,
             &mut cs,
         );
         assert!(!cs.is_empty());
@@ -2586,5 +2667,137 @@ mod tests {
     fn single_sections_count_one_member() {
         let cs = chunk(&format!("## A\n{}\n---\nx: 1\n", sized(3000)), "", "T");
         assert!(cs.iter().all(|c| c.3 .1 == 1));
+    }
+
+    // R3c: the inputs a note gets today (legacy: false).
+    fn fresh(content: &str, title: &str, aliases: &[&str], lead: Option<&str>) -> Vec<Chunk> {
+        let aliases: Vec<String> = aliases.iter().map(|a| a.to_string()).collect();
+        let mut out = Vec::new();
+        each_chunk(content, "", title, &aliases, lead, false, &mut out);
+        out
+    }
+
+    /// What precedes a chunk's text in `input` (its prefix and separator).
+    fn before<'a>(input: &'a str, c: &Chunk) -> &'a str {
+        input
+            .strip_suffix(c.0.as_str())
+            .expect("input ends with the text")
+    }
+
+    #[test]
+    fn no_title_means_the_headings_alone() {
+        let cs = fresh(
+            &format!("## A\n{}\n### B\n{}", sized(600), sized(600)),
+            "",
+            &[],
+            None,
+        );
+        assert_eq!(before(&cs[0].2, &cs[0]), "A\n\n");
+        assert_eq!(before(&cs[1].2, &cs[1]), "A > B\n\n");
+        for c in &cs {
+            assert!(
+                !c.1.starts_with(" > ") && !c.2.starts_with(" > "),
+                "{}",
+                c.2
+            );
+        }
+    }
+
+    #[test]
+    fn no_title_and_no_heading_is_the_text_alone() {
+        let cs = fresh("just a paragraph", "", &[], None);
+        assert_eq!(cs[0].1, "just a paragraph");
+        assert_eq!(cs[0].2, "just a paragraph");
+    }
+
+    #[test]
+    fn the_folder_is_still_honoured_when_passed() {
+        let mut cs = Vec::new();
+        each_chunk("## A\nbody", "Work", "", &[], None, false, &mut cs);
+        assert_eq!(before(&cs[0].1, &cs[0]), "Work > A\n\n");
+        assert_eq!(before(&cs[0].2, &cs[0]), "A\n\n");
+    }
+
+    #[test]
+    fn aliases_join_the_lead_of_the_first_chunk_only() {
+        let note = format!("## A\n{}\n## B\n{}", sized(600), sized(600));
+        let cs = fresh(&note, "T", &["Alpha", "B2"], Some("Playbook: x"));
+        assert_eq!(
+            before(&cs[0].2, &cs[0]),
+            "T > A\nPlaybook: x (aka Alpha, B2)\n\n"
+        );
+        assert_eq!(before(&cs[0].1, &cs[0]), before(&cs[0].2, &cs[0]));
+        assert_eq!(before(&cs[1].2, &cs[1]), "T > B\n\n");
+        assert!(cs
+            .iter()
+            .skip(1)
+            .all(|c| !c.1.contains("aka") && !c.2.contains("aka")));
+    }
+
+    #[test]
+    fn aliases_without_a_description_are_the_lead() {
+        let cs = fresh("body", "T", &["Alpha"], None);
+        assert_eq!(cs[0].2, "T\n(aka Alpha)\n\nbody");
+        let cs = fresh("body", "", &["Alpha"], None);
+        assert_eq!(cs[0].2, "(aka Alpha)\n\nbody");
+    }
+
+    #[test]
+    fn a_text_with_blank_lines_takes_the_lead_before_it() {
+        let cs = fresh("one\n\ntwo", "", &[], Some("Type: d"));
+        assert_eq!(cs[0].2, "Type: d\n\none\n\ntwo");
+    }
+
+    #[test]
+    fn the_alias_lead_is_cut_at_200_chars() {
+        let many: Vec<String> = (0..100).map(|i| format!("é{i:03}")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        let cs = fresh("body", "T", &many, None);
+        let lead = cs[0].2.lines().nth(1).unwrap();
+        let part = &lead["(aka ".len()..lead.len() - 1];
+        assert_eq!(part.chars().count(), 200);
+    }
+
+    #[test]
+    fn legacy_keeps_aliases_in_every_prefix() {
+        let note = format!("## A\n{}\n## B\n{}", sized(600), sized(600));
+        let al = vec!["Alpha".to_string()];
+        let mut cs = Vec::new();
+        each_chunk(&note, "", "T", &al, None, true, &mut cs);
+        assert!(cs[1].2.starts_with("T (aka Alpha) > B\n\n"), "{}", cs[1].2);
+    }
+
+    #[test]
+    fn a_property_note_without_a_title_embeds_its_values() {
+        let cs = fresh("---\nproject: zanzibar\n---\n", "", &[], None);
+        assert_eq!((cs[0].2.as_str(), cs[0].6), ("zanzibar", FRONTMATTER_DENSE));
+        let cs = fresh("---\nproject: zanzibar\n---\n", "", &["Z"], None);
+        assert_eq!(cs[0].2, "zanzibar\n(aka Z)");
+    }
+
+    #[test]
+    fn a_property_note_with_nothing_to_embed_stays_keyword_only() {
+        let cs = fresh("---\ntags: [a]\n---\n", "", &[], None);
+        assert_eq!(cs[0].6, "frontmatter");
+    }
+
+    #[test]
+    fn modes_cut_the_same_boundaries() {
+        let note = format!(
+            "---\naliases: [x]\n---\n# Top\n{}\n## A\n{}\n\n{}",
+            sized(700),
+            sized(3000),
+            sized(400)
+        );
+        let al = vec!["x".to_string()];
+        let (mut old, mut new) = (Vec::new(), Vec::new());
+        each_chunk(&note, "a/b", "Top", &al, Some("T: d"), true, &mut old);
+        each_chunk(&note, "", "Top", &al, Some("T: d"), false, &mut new);
+        let cut = |cs: &[Chunk]| {
+            cs.iter()
+                .map(|c| (c.0.clone(), c.4, c.5, c.6))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(cut(&old), cut(&new));
     }
 }
