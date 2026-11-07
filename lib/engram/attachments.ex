@@ -2207,12 +2207,14 @@ defmodule Engram.Attachments do
     * rows whose `folder_ref_id` is in the folder's subtree AND whose reference is
       current (`Rows.attachment_ref_current/0`: stamped with the row's
       `path_nonce`) are trusted by reference;
-    * every row whose stamp does not match is checked against its decrypted path:
-      a writer that rewrote the path without re-pointing it (the previous release
-      during a rolling deploy) left a NULL or stale reference, and
-      `Engram.Bookkeeping.Drain` has not healed it yet. Before the `FolderTable`
-      version 2 pass has stamped a vault, that is every row (the old
-      whole-vault decrypt).
+    * every row on the `attachments_folder_ref_stale` predicate is checked
+      against its decrypted path: a writer that rewrote the path without
+      re-pointing it (the previous release during a rolling deploy) left a NULL
+      or stale reference, or its folder row died (`folders_release_refs` clears
+      the stamp), and `Engram.Bookkeeping.Drain` has not healed it yet. Before
+      the `FolderTable` version 2 pass has stamped a vault, that is every row
+      (the old whole-vault decrypt). A row FolderTable stamped unreadable is
+      neither: its folder is unknowable.
 
   Whatever the route, a row is kept only if its DECRYPTED path is in `folders`: the
   stored path stays authoritative, the reference only narrows what is read.
