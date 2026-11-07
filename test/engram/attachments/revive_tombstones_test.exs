@@ -59,7 +59,7 @@ defmodule Engram.Attachments.ReviveTombstonesTest do
     before = reload(att)
 
     assert {:ok, %{restored: [id], unrestored: []}} =
-             Attachments.revive_tombstones(user, vault, [att.id])
+             Attachments.revive_tombstones(user, vault, [att.id], [])
 
     assert id == att.id
     revived = reload(att)
@@ -82,7 +82,7 @@ defmodule Engram.Attachments.ReviveTombstonesTest do
     test_pid = self()
 
     Mox.stub(Engram.MockStorage, :delete_many, fn keys ->
-      send(test_pid, {:revive, Attachments.revive_tombstones(user, vault, [att.id])})
+      send(test_pid, {:revive, Attachments.revive_tombstones(user, vault, [att.id], [])})
       InMemory.delete_many(keys)
     end)
 
@@ -102,7 +102,7 @@ defmodule Engram.Attachments.ReviveTombstonesTest do
     :ok = Attachments.delete_attachment(user, vault, "a.png")
     backdate!(att)
 
-    assert {:ok, %{restored: [_]}} = Attachments.revive_tombstones(user, vault, [att.id])
+    assert {:ok, %{restored: [_]}} = Attachments.revive_tombstones(user, vault, [att.id], [])
     assert AttachmentBlobGC.sweep() == 0
     assert blob?(att.storage_key)
   end
@@ -114,7 +114,7 @@ defmodule Engram.Attachments.ReviveTombstonesTest do
     assert AttachmentBlobGC.sweep() == 1
 
     assert {:ok, %{restored: [], unrestored: [_]}} =
-             Attachments.revive_tombstones(user, vault, [att.id])
+             Attachments.revive_tombstones(user, vault, [att.id], [])
 
     assert reload(att).deleted_at
   end
@@ -141,7 +141,7 @@ defmodule Engram.Attachments.ReviveTombstonesTest do
     :ok = Storage.adapter().delete(att.storage_key)
 
     assert {:ok, %{restored: [], unrestored: [_]}} =
-             Attachments.revive_tombstones(user, vault, [att.id])
+             Attachments.revive_tombstones(user, vault, [att.id], [])
 
     assert reload(att).deleted_at, "a live row whose blob is gone"
   end
@@ -155,7 +155,7 @@ defmodule Engram.Attachments.ReviveTombstonesTest do
     stamp_claim!(att, DateTime.add(DateTime.utc_now(), -2 * 3600, :second))
 
     assert {:ok, %{restored: [], unrestored: [_]}} =
-             Attachments.revive_tombstones(user, vault, [att.id])
+             Attachments.revive_tombstones(user, vault, [att.id], [])
 
     assert reload(att).deleted_at
   end
@@ -169,7 +169,7 @@ defmodule Engram.Attachments.ReviveTombstonesTest do
     _new = put_att(user, vault, "a.png")
 
     assert {:ok, %{restored: [], unrestored: [_]}} =
-             Attachments.revive_tombstones(user, vault, [att.id])
+             Attachments.revive_tombstones(user, vault, [att.id], [])
 
     assert reload(att).deleted_at
   end

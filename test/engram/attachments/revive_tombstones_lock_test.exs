@@ -83,7 +83,7 @@ defmodule Engram.Attachments.ReviveTombstonesLockTest do
     revive =
       Task.async(fn ->
         Sandbox.unboxed_run(Repo, fn ->
-          Attachments.revive_tombstones(user, vault, [att.id])
+          Attachments.revive_tombstones(user, vault, [att.id], [])
         end)
       end)
 

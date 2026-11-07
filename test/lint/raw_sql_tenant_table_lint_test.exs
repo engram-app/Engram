@@ -46,7 +46,12 @@ defmodule Engram.RawSqlTenantTableLintTest do
     # columns for a batch move), a shape `update_all` cannot express.
     # Runs inside the caller's `Repo.with_tenant/2` transaction, so RLS
     # tenant context is active. Moved out of attachments.ex (#2159) so that
-    # file needs no exemption.
+    # file needs no exemption. Also `point_attachments/2`, the set-based folder
+    # re-point (a `FOR UPDATE SKIP LOCKED` CTE plus an `unnest` UPDATE) shared
+    # by attachment restore (inside its `Repo.with_tenant/2`) and FolderTable's
+    # per-user pass (`Repo.with_tenant!/2` when there is no maintenance pool,
+    # else `Repo.maintenance()`); it filters by the caller's ids only, never
+    # cross-tenant on the app pool.
     "engram/attachments/bulk_update.ex",
     # Notes.BulkRename.update!/4 — the folder-rename cascade's batched
     # `UPDATE notes ... FROM (VALUES ...)`: each row carries distinct

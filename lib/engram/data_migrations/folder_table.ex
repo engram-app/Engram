@@ -54,6 +54,7 @@ defmodule Engram.DataMigrations.FolderTable do
   @behaviour Engram.DataMigration
 
   alias Engram.Accounts.User
+  alias Engram.Attachments.BulkUpdate
   alias Engram.Backfill.TenantScan
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
@@ -644,7 +645,7 @@ defmodule Engram.DataMigrations.FolderTable do
             end
           end)
 
-        updated = point_attachments(repo, wanted)
+        updated = BulkUpdate.point_attachments(repo, wanted)
         skipped = length(wanted) - updated
         stats = %{stats | changed: stats.changed + updated, blocked: stats.blocked + skipped}
         {tree, stats, rows |> List.last() |> then(&(&1 && hd(&1))), length(rows)}
@@ -653,36 +654,6 @@ defmodule Engram.DataMigrations.FolderTable do
     if size < ctx.batch,
       do: {tree, stats},
       else: attachments(ctx, tree, last, stats)
-  end
-
-  # By id, locked rows skipped. The set-based form of `Rows.attachment_ref/2`:
-  # `{id, folder, nonce, stamp}` is written only where the row still holds the
-  # nonce its path was read under (a path rewritten since is the writer's,
-  # stamped by it). The stamp is the nonce, or `Rows.unreadable_attachment_stamp/1`
-  # for a path that did not decrypt (its reference is left as it was).
-  # Returns the rows updated.
-  defp point_attachments(_repo, []), do: 0
-
-  defp point_attachments(repo, wanted) do
-    {ids, leaves, nonces, stamps} =
-      Enum.reduce(Enum.reverse(wanted), {[], [], [], []}, fn {id, leaf, nonce, stamp},
-                                                             {i, l, n, st} ->
-        {[id | i], [leaf | l], [nonce | n], [stamp | st]}
-      end)
-
-    %{num_rows: count} =
-      repo.query!(
-        """
-        WITH locked AS (SELECT id FROM attachments WHERE id = ANY($1::uuid[]) FOR UPDATE SKIP LOCKED)
-        UPDATE attachments a SET folder_ref_id = v.fid, folder_ref_stamp = v.stamp
-        FROM unnest($1::uuid[], $2::uuid[], $3::bytea[], $4::bytea[]) AS v(id, fid, nonce, stamp),
-             locked l
-        WHERE a.id = v.id AND l.id = a.id AND a.path_nonce = v.nonce
-        """,
-        [ids, leaves, nonces, stamps]
-      )
-
-    count
   end
 
   # ---- decrypt -------------------------------------------------------------
