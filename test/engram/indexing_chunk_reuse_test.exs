@@ -235,105 +235,114 @@ defmodule Engram.IndexingChunkReuseTest do
     end
   end
 
-  describe "note-level payload on reused points" do
-    test "a frontmatter tag edit refreshes the tag ids on every reused point", ctx do
-      note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.", "[health]")
+  # R3a: a point's payload is its identity (`u`, `v`, `n`), the same for every
+  # point of a note and never rewritten. Tags, dates and every other filter
+  # field live in Postgres only (`note_attrs`, the note row).
+  describe "the immutable chunk payload" do
+    test "an upserted point's payload has exactly u, v and n", ctx do
+      note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
       stub_embedder(self())
 
       assert {:ok, _} = Indexing.index_note(note, ctx.vault)
-      _ = embedded_texts()
+
+      assert [_ | _] = points = upserts(ctx.recorder)
+
+      for p <- points do
+        assert p["payload"] == %{
+                 "u" => FilterId.uuid(ctx.user.id),
+                 "v" => FilterId.uuid(ctx.vault.id),
+                 "n" => FilterId.uuid(note.id)
+               }
+      end
+    end
+
+    test "a backfilled note's prose edit upserts one point, deletes the stale one, writes no payload",
+         ctx do
+      note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
+      stub_embedder(self())
+      assert {:ok, _} = Indexing.index_note(note, ctx.vault)
+      assert payload_version(note) == Engram.Indexing.PayloadV6.version()
+      assert Repo.reload!(note, skip_tenant_check: true).payload_hash != nil
       reset(ctx.recorder)
 
+      ref = attach_payload_writes()
+      # A prose edit, plus a tag change and an mtime in another hour: on main
+      # each moved the payload hash and rewrote every reused point.
+      edited = put_note(ctx.user, ctx.vault, "Ferritin levels are high.", "[health, labs]")
+      edited = %{edited | mtime: 90_000.0, mtime_at: Engram.FileTime.to_at!(90_000.0)}
+      assert {:ok, _} = Indexing.index_note(edited, ctx.vault)
+
+      refute_received {^ref, :payload_write, _}
+      assert set_payloads(ctx.recorder) == []
+      assert length(upserts(ctx.recorder)) == 2, "the Ferritin chunk and the frontmatter chunk"
+      assert deleted_ids(ctx.recorder) != []
+    end
+
+    test "a frontmatter tag edit upserts only the frontmatter chunk and updates note_attrs",
+         ctx do
+      note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.", "[health]")
+      stub_embedder(self())
+      assert {:ok, _} = Indexing.index_note(note, ctx.vault)
+      reset(ctx.recorder)
+
+      ref = attach_payload_writes()
       retagged = put_note(ctx.user, ctx.vault, "Ferritin levels are low.", "[health, labs]")
       assert {:ok, _} = Indexing.index_note(retagged, ctx.vault)
 
-      expected = Enum.map(retagged.tags_hmac || [], &FilterId.from_hmac/1)
-      assert length(expected) == 2, "fixture must carry both tags"
-
-      reused_ids =
-        retagged
-        |> chunk_rows()
-        |> Enum.map(& &1.qdrant_point_id)
-        |> Enum.reject(&(&1 in Enum.flat_map(upserts(ctx.recorder), fn p -> [p["id"]] end)))
-
-      assert reused_ids != [], "the body chunks must be reused"
-
-      patch = set_payloads(ctx.recorder)
-
-      assert [
-               %{
-                 body: %{"filter" => %{"should" => [%{"has_id" => points}]}, "payload" => payload}
-               }
-             ] =
-               patch
-
-      assert Enum.sort(points) == Enum.sort(reused_ids)
-
-      assert Enum.sort(payload["g"]) == Enum.sort(expected),
-             "reused points would otherwise answer tag filters with the pre-edit tags"
-    end
-
-    # Qdrant 1.18 copies every set_payload target into a new segment, so a
-    # no-op refresh on every pass rewrites the collection (rollout review F1).
-    test "re-indexing an unchanged note issues no set_payload", ctx do
-      note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
-      stub_embedder(self())
-
-      assert {:ok, _} = Indexing.index_note(note, ctx.vault)
-      reset(ctx.recorder)
-
-      assert {:ok, count} = Indexing.index_note(fresh(note, ctx.user), ctx.vault)
-      assert count > 2, "the pass must reuse chunks, not take the no-chunks path"
+      refute_received {^ref, :payload_write, _}
       assert set_payloads(ctx.recorder) == []
+      assert [_] = upserts(ctx.recorder)
+      assert length(retagged.tags_hmac || []) == 2, "fixture must carry both tags"
     end
 
-    test "a note-level payload change refreshes every reused point", ctx do
+    test "a note-level change with no chunk change writes no point", ctx do
       note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
       stub_embedder(self())
-
       assert {:ok, _} = Indexing.index_note(note, ctx.vault)
       reset(ctx.recorder)
 
-      # Same content, so every chunk is reused; only a note-level input moved
-      # (no frontmatter `updated`, so the payload's `up` is the file mtime,
-      # rounded up to the hour: 1_000 -> 3_600, 5_000 -> 7_200).
-      # Both the double and its twin, as every writer sets them.
-      moved = %{fresh(note, ctx.user) | mtime: 5_000.0, mtime_at: Engram.FileTime.to_at!(5_000.0)}
-      assert {:ok, _} = Indexing.index_note(moved, ctx.vault)
-
-      assert upserts(ctx.recorder) == []
-      all_ids = note |> chunk_rows() |> Enum.map(& &1.qdrant_point_id)
-
-      assert [%{body: %{"filter" => %{"should" => [%{"has_id" => points}]}}}] =
-               set_payloads(ctx.recorder)
-
-      assert Enum.sort(points) == Enum.sort(all_ids)
-    end
-
-    # #2263: a fallback `up` moves on every save; rounded to the hour, a
-    # second save in the same hour leaves the payload hash alone, so the
-    # reused points are not rewritten.
-    test "an mtime move within the same hour rewrites nothing", ctx do
-      note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
-      stub_embedder(self())
-
-      assert {:ok, _} = Indexing.index_note(note, ctx.vault)
-      reset(ctx.recorder)
-
-      moved = %{fresh(note, ctx.user) | mtime: 2_000.0, mtime_at: Engram.FileTime.to_at!(2_000.0)}
+      moved = %{fresh(note, ctx.user) | mtime: 9_000.0, mtime_at: Engram.FileTime.to_at!(9_000.0)}
       assert {:ok, _} = Indexing.index_note(moved, ctx.vault)
 
       assert upserts(ctx.recorder) == []
       assert set_payloads(ctx.recorder) == []
+      # The stale-point belt (by filter, keeping every live id) still runs.
+      assert deleted_ids(ctx.recorder) == []
     end
+  end
+
+  defp payload_version(note) do
+    Repo.one!(
+      from(s in Engram.Notes.NoteIndexState,
+        where: s.note_id == ^note.id,
+        select: s.payload_version
+      ),
+      skip_tenant_check: true
+    )
+  end
+
+  defp attach_payload_writes do
+    ref = make_ref()
+    test_pid = self()
+    id = "payload-write-#{inspect(ref)}"
+
+    :telemetry.attach(
+      id,
+      [:engram, :qdrant, :payload_write],
+      fn _e, m, meta, _ -> send(test_pid, {ref, :payload_write, {m, meta}}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(id) end)
+    ref
   end
 
   # OKF v0.2 `generated.at` is read since #2066, but `fm_timestamp` is a
   # write-time column, so a note saved before then holds nil until edited.
   # Its next index (the v5 rebuild pass reaches every note) re-derives it:
-  # payload refreshed on the reused points, row stamped, nothing re-embedded.
+  # row stamped, nothing re-embedded, no point rewritten.
   describe "a v0.2 note saved before generated.at was read" do
-    test "its next index heals fm_timestamp in the payload and the row", ctx do
+    test "its next index heals fm_timestamp in the row and rewrites no point", ctx do
       {:ok, note} =
         Notes.upsert_note(
           ctx.user,
@@ -366,10 +375,8 @@ defmodule Engram.IndexingChunkReuseTest do
 
       assert embedded_texts() == []
       assert upserts(ctx.recorder) == []
-      unix = DateTime.to_unix(~U[2026-08-21 08:00:00Z])
-
-      assert [%{method: "POST", body: %{"payload" => %{"up" => ^unix}}}] =
-               set_payloads(ctx.recorder)
+      # Dates live in Postgres only (R3a): the row heals, no point is rewritten.
+      assert set_payloads(ctx.recorder) == []
 
       assert Repo.reload!(note, skip_tenant_check: true).fm_timestamp == ~U[2026-08-21 08:00:00Z]
     end

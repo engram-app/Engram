@@ -296,7 +296,28 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     end)
 
     Enum.each(posthog, &Application.put_env(:engram, &1, "test"))
+
+    # #2494: an open row no registered migration owns (an index_versions key
+    # a deploy left behind) keeps its clock held, so reviving it later does
+    # not page "stuck" on its first pass of real work.
+    _ = Engram.DataMigrations.note_open("test_unfinished", 1)
+    eight_days_ago = DateTime.add(DateTime.utc_now(), -8 * 86_400)
+
+    Repo.update_all(from(e in Engram.DataMigrations.Entry, where: e.name == "test_unfinished"),
+      set: [opened_at: eight_days_ago]
+    )
+
     assert :ok = perform_job(DataMigrationsRunner, %{})
+
+    orphan = Repo.get!(Engram.DataMigrations.Entry, "test_unfinished")
+    assert DateTime.diff(DateTime.utc_now(), orphan.opened_at) < 60
+
+    revived =
+      ExUnit.CaptureLog.capture_log([level: :error], fn ->
+        DataMigrationsRunner.run(Unfinished)
+      end)
+
+    refute revived =~ "data migration stuck"
 
     # Every pass leaves a ledger row: mark_done/2 on :done, note_open/2 on :more.
     rows = Repo.all(from(e in Engram.DataMigrations.Entry, select: e.name))

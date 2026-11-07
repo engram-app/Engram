@@ -1,13 +1,12 @@
 defmodule Engram.Folders.DescendantsTest do
-  # `Folders.descendant_ids/3` and `subtree_filter/2`: a folder's subtree as the
-  # row ids a point's `f` holds, expanded at query time.
+  # `Folders.descendant_ids/3`: a folder's subtree as the
+  # folder row ids, expanded at query time.
   use Engram.DataCase, async: false
 
   alias Engram.Crypto
   alias Engram.Folders
   alias Engram.Folders.Rows
   alias Engram.Repo
-  alias Engram.Vector.FilterId
 
   setup do
     user = insert(:user)
@@ -81,13 +80,5 @@ defmodule Engram.Folders.DescendantsTest do
     assert {:error, reason} = Folders.descendant_ids(v, a, 2)
     assert is_binary(Engram.Search.input_error_message(reason))
     assert Engram.Search.input_error_message(reason) =~ "subfolders"
-  end
-
-  test "subtree_filter matches any of the row ids, undashed", %{user: u, vault: v} do
-    a = ensure!(u, v, "A")
-    b = ensure!(u, v, "A/B")
-
-    assert {:ok, %{key: "f", match: %{any: any}}} = Folders.subtree_filter(v, a)
-    assert Enum.sort(any) == Enum.sort([FilterId.uuid(a), FilterId.uuid(b)])
   end
 end

@@ -105,7 +105,10 @@ defmodule Engram.PromEx.ZeroInitTest do
     assert Enum.sort(statuses) ==
              Enum.sort(~w(requeue_failed remap_failed after_flip guard_rebuild both_deks_failed))
 
-    assert "drifted" in outcomes and "rewritten" in outcomes
+    # R3a: the heal rewrites no point, so `drifted`/`rewritten` are gone (the
+    # infra `payload-heal-not-converging` alert reads 0 - 0 and is retired).
+    assert "checked" in outcomes and "n_points" in outcomes
+    refute "drifted" in outcomes or "rewritten" in outcomes
   end
 
   test "covers the reconcile cancel statuses the alert selects" do

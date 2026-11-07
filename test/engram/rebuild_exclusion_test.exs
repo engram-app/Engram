@@ -13,7 +13,6 @@ defmodule Engram.RebuildExclusionTest do
     IndexCapMaintenance,
     RebuildDryRun,
     ReleaseRebuildHeld,
-    RepathNoteIndex,
     RotateUserDek
   }
 
@@ -165,27 +164,33 @@ defmodule Engram.RebuildExclusionTest do
       assert :ok = perform_job(IndexCapMaintenance, %{})
     end
 
-    test "a single-note repath still runs; a bulk one is held until the pass is off" do
+    # A held writer (`run_or_hold/2`; `RotateUserDek` is the one left now
+    # that a rename makes no Qdrant write, R3a).
+    defp held_job do
+      %Oban.Job{
+        worker: "Engram.Workers.RotateUserDek",
+        queue: "crypto_backfill",
+        priority: 0,
+        max_attempts: 3,
+        args: %{"user_id" => Ecto.UUID.generate()}
+      }
+    end
+
+    defp held, do: Repo.all(from j in Oban.Job, where: j.worker == "Engram.Workers.RotateUserDek")
+
+    test "a held writer is parked until the pass is off" do
       on!()
 
-      args = %{
-        note_id: Ecto.UUID.generate(),
-        user_id: Ecto.UUID.generate(),
-        old_path_hmac: "aA=="
-      }
-
-      refute match?({:snooze, _}, perform_job(RepathNoteIndex, args))
-      assert :ok = perform_job(RepathNoteIndex, Map.put(args, :bulk, true))
-      assert [%{state: "suspended"} = held] = all_enqueued(worker: RepathNoteIndex)
-      assert held.args["bulk"] == true
+      assert :ok = Rebuild.run_or_hold(held_job(), fn -> flunk("ran while holding") end)
+      assert [%{state: "suspended"}] = held()
 
       # Still on: the release sweep leaves it held.
       assert :ok = perform_job(ReleaseRebuildHeld, %{})
-      assert [%{state: "suspended"}] = all_enqueued(worker: RepathNoteIndex)
+      assert [%{state: "suspended"}] = held()
 
       ServiceConfig.put_override(:index_rebuild, "off")
       assert :ok = perform_job(ReleaseRebuildHeld, %{})
-      assert [%{state: "available"}] = all_enqueued(worker: RepathNoteIndex)
+      assert [%{state: "available"}] = held()
     end
 
     # Prod 2026-11-03: the build's pass closed on 11-01 but the switch was
@@ -194,21 +199,15 @@ defmodule Engram.RebuildExclusionTest do
     test "a completed pass stops holding and frees what it held, switch still on" do
       on!()
 
-      args = %{
-        note_id: Ecto.UUID.generate(),
-        user_id: Ecto.UUID.generate(),
-        old_path_hmac: "aA=="
-      }
-
-      assert :ok = perform_job(RepathNoteIndex, Map.put(args, :bulk, true))
-      assert [%{state: "suspended"}] = all_enqueued(worker: RepathNoteIndex)
+      assert :ok = Rebuild.run_or_hold(held_job(), fn -> flunk("ran while holding") end)
+      assert [%{state: "suspended"}] = held()
 
       # The exact open pass: this build's versions AND embed model.
       mark_pass_done!(IndexVersions.name())
 
       refute Rebuild.holding?()
       assert :ok = perform_job(ReleaseRebuildHeld, %{})
-      assert [%{state: "available"}] = all_enqueued(worker: RepathNoteIndex)
+      assert [%{state: "available"}] = held()
     end
 
     # Review of #2424: a model switch on the same chunker/keyword is a full
@@ -221,15 +220,15 @@ defmodule Engram.RebuildExclusionTest do
       assert Rebuild.holding?()
     end
 
-    # 801 held repaths must not all wake in one tick (Qdrant writes, DB).
+    # 801 held jobs must not all wake in one tick (Qdrant writes, DB).
     test "a release frees at most a bounded batch per run" do
       ServiceConfig.put_override(:index_rebuild, "off")
       user = Ecto.UUID.generate()
 
       for _ <- 1..3 do
         job = %Oban.Job{
-          worker: "Engram.Workers.RepathNoteIndex",
-          queue: "embed",
+          worker: "Engram.Workers.RotateUserDek",
+          queue: "crypto_backfill",
           priority: 0,
           max_attempts: 3,
           args: %{"note_id" => Ecto.UUID.generate(), "user_id" => user}
@@ -242,29 +241,9 @@ defmodule Engram.RebuildExclusionTest do
       assert Engram.Jobs.release_suspended("rebuild", 2) == 1
     end
 
-    test "a bulk repath runs when the pass is off" do
+    test "a held writer runs when the pass is off" do
       ServiceConfig.put_override(:index_rebuild, "off")
-
-      args = %{
-        note_id: Ecto.UUID.generate(),
-        user_id: Ecto.UUID.generate(),
-        old_path_hmac: "aA=="
-      }
-
-      refute match?({:snooze, _}, perform_job(RepathNoteIndex, Map.put(args, :bulk, true)))
-    end
-
-    test "only folder renames over the threshold queue bulk repaths" do
-      id = Ecto.UUID.generate()
-      uid = Ecto.UUID.generate()
-
-      refute Map.has_key?(
-               RepathNoteIndex.new_debounced(id, uid, old_path_hmac: "x").changes.args,
-               :bulk
-             )
-
-      assert RepathNoteIndex.new_debounced(id, uid, old_path_hmac: "x", bulk: true).changes.args.bulk
-      assert RepathNoteIndex.bulk_threshold() == 100
+      assert :ran = Rebuild.run_or_hold(held_job(), fn -> :ran end)
     end
   end
 end

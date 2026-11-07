@@ -1,32 +1,30 @@
 defmodule Engram.DataMigrations.NotePayloadStamps do
   @moduledoc """
-  Every indexed note carries a `payload_hash`, which means its Qdrant points
-  were verified (or rewritten) to hold its note-level payload. Each pass
-  enqueues `ReconcileNotePayloads` per user who still has an unstamped note.
+  Every indexed note carries a `payload_hash`: since R3a the hash of its
+  identity payload (`Engram.Indexing.identity_hash/1`), stamped by every
+  index pass. Each pass enqueues `ReconcileNotePayloads` per user who still
+  has an unstamped note, whose heal stamps that hash (one UPDATE, no Qdrant
+  read, no decrypt), and the fleet `n` backfill when any note is behind.
 
-  The correctness case: a DEK rotation before rotations rewrote filter HMACs
-  left every point of the user on the old filter key, so type/tag/folder/path
-  filters matched nothing. Points are read and only drifted ones are written
-  (`set_payload`, no re-embed), so for everyone else this costs reads and a
-  row stamp per note.
-
-  The hash side is not re-verified daily. Every writer since #2044 stamps the hash and a
-  rotation rewrites and stamps it (`UserDekRotation`); a lost write race
-  NULLs a stamp, and `Engram.Bookkeeping.Drain` finds those through the
-  partial index `note_index_state_unstamped`. The daily re-verify
-  (`reverify?/0`) covers only points without `n`, a Qdrant walk: a rollback's
-  re-upserts reopen the ledger by themselves.
+  The hash side is not re-verified daily: `Engram.Bookkeeping.Drain` finds a
+  NULL stamp through the partial index `note_index_state_unstamped`. The
+  daily re-verify (`reverify?/0`) covers points without `n`, a Qdrant walk: a
+  rollback's re-upserts reopen the ledger by themselves.
 
   Version 2 (`PayloadV6.version/0` 6) backfills `n`, the note row id, onto
-  every v5 point (`ReconcileNotePayloads`). Search does not wait on it (a
-  point without `n` is matched by its payload, per point): done is the
-  signal the payload-field drop (R3) waits on.
+  every v5 point (`ReconcileNotePayloads`). Done means: no unstamped note,
+  none behind v6, no live v5 point without `n`, AND the collection holds the
+  `n` payload index (`Qdrant.n_index/0`). Search does not wait on it (a point
+  without `n` passes `is_empty(n)` and is post-filtered in Postgres); the
+  index drop (R3b) does.
   """
   @behaviour Engram.DataMigration
 
   alias Engram.Backfill.IdWindows
+  alias Engram.Indexing
   alias Engram.Indexing.PayloadV6
   alias Engram.Notes.Note
+  alias Engram.Vector.Qdrant
   alias Engram.Workers.ReconcileNotePayloads
 
   @impl true
@@ -51,7 +49,11 @@ defmodule Engram.DataMigrations.NotePayloadStamps do
   @impl true
   def run_pass, do: run_pass([])
 
-  @doc "`run_pass/0` with the cluster probe's options (tests: `:peers`, `:multicall`)."
+  @doc """
+  `run_pass/0` with the cluster probe's options (tests: `:peers`,
+  `:multicall`), and `:ensure_collection` (a 0-arity fun, default
+  `Indexing.ensure_collection/0`) for the missing-index repair.
+  """
   @spec run_pass(keyword()) :: :done | :more | {:more, keyword()}
   def run_pass(opts) do
     cond do
@@ -96,11 +98,19 @@ defmodule Engram.DataMigrations.NotePayloadStamps do
   @impl true
   def reverify?, do: true
 
+  # A lost `n` index reopens the ledger too (the runner's `:more` reopens and
+  # erases the cached `done?` on every node); an unreadable schema stays done.
   defp reverify(opts) do
     case ReconcileNotePayloads.requeue_unbackfilled(opts) do
-      {:ok, requeued} when requeued > 0 -> {:more, users: requeued}
+      {:ok, requeued} when requeued > 0 ->
+        {:more, users: requeued}
+
       # Nothing found yet (or Qdrant unreadable): stays done, tomorrow resumes.
-      _ -> :done
+      _ ->
+        case Qdrant.n_index() do
+          :missing -> repair_n_index(opts)
+          _present_or_unknown -> :done
+        end
     end
   end
 
@@ -112,12 +122,30 @@ defmodule Engram.DataMigrations.NotePayloadStamps do
     queued = queued(notes)
 
     case {notes, ReconcileNotePayloads.requeue_unbackfilled(opts)} do
-      {:done, :clean} -> :done
+      {:done, :clean} -> done_with_n_index(opts)
       {_, :clean} -> {:more, users: queued}
       {_, {:ok, requeued}} -> {:more, users: queued + requeued}
       # Qdrant unreadable: not proven done, the next pass asks again.
       {_, {:error, _}} -> :more
     end
+  end
+
+  # Clean walks close the ledger only with the `n` index present; an
+  # unreadable schema never closes a pass.
+  defp done_with_n_index(opts) do
+    case Qdrant.n_index() do
+      :present -> :done
+      :missing -> repair_n_index(opts)
+      :unknown -> :more
+    end
+  end
+
+  # Search filters on `n`: create the missing index (a fresh ensure, past the
+  # per-node memo) and stay open until a pass sees it.
+  defp repair_n_index(opts) do
+    Qdrant.forget_collection_memo()
+    _ = Keyword.get(opts, :ensure_collection, &Indexing.ensure_collection/0).()
+    {:more, n_index_missing: 1}
   end
 
   # Users the walk's windows queued this pass (`heal_pass/4` counts them as rows).

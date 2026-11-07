@@ -67,11 +67,11 @@ defmodule Engram.Vector.QdrantBackpressureTest do
       assert {:error, :qdrant_backpressure} = Qdrant.upsert_points("c1", [@point])
     end
 
-    test "set_payload and update_vectors map it too", %{bypass: bypass} do
+    test "a payload delete and update_vectors map it too", %{bypass: bypass} do
       Bypass.expect_once(
         bypass,
         "POST",
-        "/collections/c1/points/payload",
+        "/collections/c1/points/payload/delete",
         &respond(&1, 400, @disk_refusal)
       )
 
@@ -82,7 +82,7 @@ defmodule Engram.Vector.QdrantBackpressureTest do
         &respond(&1, 400, @disk_refusal)
       )
 
-      assert {:error, :qdrant_backpressure} = Qdrant.set_payload("c1", [@point.id], %{"a" => 1})
+      assert {:error, :qdrant_backpressure} = Qdrant.delete_payload_keys("c1", ["a"])
       assert {:error, :qdrant_backpressure} = Qdrant.update_vectors("c1", [@point])
     end
 
@@ -160,7 +160,7 @@ defmodule Engram.Vector.QdrantBackpressureTest do
       Bypass.expect_once(
         bypass,
         "POST",
-        "/collections/c1/points/payload",
+        "/collections/c1/points/payload/delete",
         &respond(&1, 507, @quota_margin_refusal)
       )
 
@@ -172,7 +172,7 @@ defmodule Engram.Vector.QdrantBackpressureTest do
       )
 
       assert {:error, :qdrant_backpressure} = Qdrant.upsert_points("c1", [@point])
-      assert {:error, :qdrant_backpressure} = Qdrant.set_payload("c1", [@point.id], %{"a" => 1})
+      assert {:error, :qdrant_backpressure} = Qdrant.delete_payload_keys("c1", ["a"])
       assert {:error, :qdrant_backpressure} = Qdrant.update_vectors("c1", [@point])
     end
 

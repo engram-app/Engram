@@ -131,8 +131,9 @@ defmodule Engram.IndexingChunkKindTest do
 
     assert {:ok, prepared} = Indexing.prepare_index(note, ctx.vault, ctx.user)
 
+    # The property values; no file-name title (R3c: "Plan" was `Plan.md`).
     assert [sent] = drain(:embedded)
-    assert sent =~ "Plan" and sent =~ "zanzibar"
+    assert sent == "zanzibar"
     assert [point] = prepared.qdrant_points
     assert Map.has_key?(point.vector, "dense")
     assert has_dim?(point, ctx.user, "zanzibar")

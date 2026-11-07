@@ -1,8 +1,10 @@
 defmodule Engram.IndexingKeywordContextTest do
   # The keyword (BM25) leg must index the same `context_text` the dense leg
-  # embeds: folder, title and heading path included. A note with no H1 (the
-  # Obsidian default) otherwise has no token for its own title, so keyword-only
-  # search cannot find it by name (#1615).
+  # embeds: title and heading path included (#1615). Since R3c the inputs are
+  # the note's bytes only: the title is the frontmatter title or the first
+  # H1, and neither the folder nor the file name is in them, so a rename
+  # changes no vector. A note with no title is found by name through the
+  # Postgres name leg instead.
   #
   # async: false — swaps the global :keyword_index adapter via Application env.
   use Engram.DataCase, async: false
@@ -58,8 +60,9 @@ defmodule Engram.IndexingKeywordContextTest do
     {:ok, user} = Crypto.ensure_user_dek(insert(:user))
     vault = insert(:vault, user: user)
 
-    # No H1: the title and folder exist only in the path. Two sections of
-    # different lengths, so per-chunk values cannot line up by accident.
+    # No H1: the title and folder exist only in the path, so (R3c) neither
+    # reaches an input. Two sections of different lengths, so per-chunk
+    # values cannot line up by accident.
     note =
       note!(user, vault, "Ops/Kubernetes Upgrade.md", """
       Drain each node before bumping the control plane. #{@pad}
@@ -82,32 +85,55 @@ defmodule Engram.IndexingKeywordContextTest do
     note
   end
 
-  test "a full index encodes folder, title and heading into the keyword leg", ctx do
+  test "a full index encodes the heading path, never the folder or file name", ctx do
     {:ok, _} = Indexing.prepare_index(ctx.note, ctx.vault)
 
     assert_received {:encoded_texts, [_, _] = texts}
-    assert Enum.all?(texts, &(&1 =~ "Kubernetes Upgrade" and &1 =~ "Ops"))
+    refute Enum.any?(texts, &(&1 =~ "Kubernetes Upgrade" or &1 =~ "Ops")), inspect(texts)
     assert Enum.any?(texts, &(&1 =~ "Rollback" and &1 =~ "etcd"))
   end
 
-  test "a note in the vault root still carries its title", ctx do
-    note = note!(ctx.user, ctx.vault, "Kubernetes Upgrade.md", "Drain each node first.")
-    {:ok, _} = Indexing.prepare_index(note, ctx.vault)
+  # The title the note's own bytes name still reaches every keyword input,
+  # in a folder or not.
+  # Two sections over 512 B each: two prose chunks, plus the frontmatter
+  # chunk when there is one. The count is pinned so "every input" holds
+  # over every chunk, not over a lone one.
+  @two_sections "Drain each node first. #{@pad}\n\n## Rollback\n\nRestore etcd. #{@pad}"
 
-    assert_received {:encoded_texts, [text]}
-    assert text =~ "Kubernetes Upgrade"
+  # The title the note's own bytes name still reaches every keyword input,
+  # in a folder or not.
+  for {label, head, chunks} <- [
+        {"frontmatter title", "---\ntitle: Kubernetes Upgrade\n---\n", 3},
+        {"H1", "# Kubernetes Upgrade\n\n", 2}
+      ],
+      path <- ["Ops/Runbook.md", "Runbook.md"] do
+    test "a #{label} reaches every keyword input (#{path})", ctx do
+      note = note!(ctx.user, ctx.vault, unquote(path), unquote(head) <> @two_sections)
+      {:ok, _} = Indexing.prepare_index(note, ctx.vault)
+
+      assert_received {:encoded_texts, texts}
+      assert length(texts) == unquote(chunks), inspect(texts)
+      assert Enum.all?(texts, &(&1 =~ "Kubernetes Upgrade")), inspect(texts)
+      refute Enum.any?(texts, &(&1 =~ "Ops" or &1 =~ "Runbook")), inspect(texts)
+    end
   end
 
-  test "a sparse-only re-index encodes folder and title too", ctx do
-    %{note: note, vault: vault, user: user} = ctx
+  # The title is in the frontmatter only (not in the body), over several
+  # chunks: each re-sparsed keyword input must carry it from the prefix.
+  test "a sparse-only re-index encodes the title into every chunk, never the path", ctx do
+    %{vault: vault, user: user} = ctx
+    content = "---\ntitle: Kubernetes Upgrade\n---\n" <> @two_sections
+    note = note!(user, vault, "Ops/Runbook.md", content)
     {:ok, _} = Indexing.index_note(note, vault, user)
-    assert_received {:encoded_texts, _}
+    assert_received {:encoded_texts, indexed}
 
-    assert {:ok, count, 0} = Indexing.resparse_note(note, user)
-    assert count > 0
+    assert {:ok, 3, 0} = Indexing.resparse_note(note, user)
 
-    assert_received {:encoded_texts, [_ | _] = texts}
-    assert Enum.all?(texts, &(&1 =~ "Kubernetes Upgrade" and &1 =~ "Ops"))
+    assert_received {:encoded_texts, texts}
+    assert length(texts) == 3, inspect(texts)
+    assert texts == indexed
+    assert Enum.all?(texts, &(&1 =~ "Kubernetes Upgrade")), inspect(texts)
+    refute Enum.any?(texts, &(&1 =~ "Ops" or &1 =~ "Runbook")), inspect(texts)
   end
 
   # `chunks.token_count` is the only input to the vault's `avgdl`. A resparse

@@ -22,7 +22,7 @@ defmodule Engram.Vector.QdrantStrictModeTest do
   @vector List.duplicate(0.1, @dims)
   @user_id "11111111-1111-1111-1111-111111111111"
   @vault_id "22222222-2222-2222-2222-222222222222"
-  @tag_hmac "dGFnLWhtYWM="
+  @note_id "33333333-3333-3333-3333-333333333333"
 
   setup do
     # Per-process override, NOT the global app env. 22 Bypass suites set
@@ -68,11 +68,10 @@ defmodule Engram.Vector.QdrantStrictModeTest do
 
     cases = [
       {"user_id + vault_id", []},
-      {"folder_hmac", [folder_hmac: "Zm9sZGVyLWhtYWM="]},
-      {"tags_hmac", [tags_hmac: [@tag_hmac]]},
-      {"type_hmac", [type_hmac: "dHlwZS1obWFj"]},
-      {"fm_timestamp range", [fm_timestamp_gte: 0, fm_timestamp_lte: 2_000_000_000]},
-      {"fm_created range", [fm_created_gte: 0, fm_created_lte: 2_000_000_000]}
+      # R3a: the note scope (`n any`, `is_empty(n)`, `must_not n any`) is
+      # the only filter beside the tenant.
+      {"note scope ids", [note_scope: {:ids, [Ecto.UUID.generate()]}]},
+      {"note scope exclude", [note_scope: {:exclude, [Ecto.UUID.generate()]}]}
     ]
 
     for {label, opts} <- cases do
@@ -84,9 +83,21 @@ defmodule Engram.Vector.QdrantStrictModeTest do
   end
 
   test "path_hmac, the delete filter key, is indexed too", %{col: col} do
-    # `delete_by_note/4` filters on path_hmac. Under strict mode an unindexed
+    # `delete_by_note/5` filters on path_hmac. Under strict mode an unindexed
     # key fails the DELETE, which would strand a deleted note's points.
-    assert :ok = Qdrant.delete_by_note(col, @user_id, @vault_id, "cGF0aC1obWFj")
+    assert :ok = Qdrant.delete_by_note(col, @user_id, @vault_id, @note_id, "cGF0aC1obWFj")
+  end
+
+  # The per-note filters' `n` arm (`n == id`, `is_empty(n)`) needs the `n`
+  # index, which `ensure_collection/2` creates.
+  test "the per-note filters' n arm is indexed", %{col: col} do
+    ServiceConfig.put_override(:qdrant_note_id_filter, true)
+    Engram.Cache.clear_local(:note_id_filter)
+    on_exit(fn -> Engram.Cache.clear_local(:note_id_filter) end)
+    assert Qdrant.n_filterable?(col)
+
+    assert {:ok, _} = Qdrant.count_by_note(col, @user_id, @vault_id, @note_id, "cGF0aC1obWFj")
+    assert :ok = Qdrant.delete_by_note(col, @user_id, @vault_id, @note_id, "cGF0aC1obWFj")
   end
 
   # The Cloud hard limits on a real server (review H1): Qdrant applies
@@ -117,9 +128,7 @@ defmodule Engram.Vector.QdrantStrictModeTest do
       opts = [
         user_id: @user_id,
         vault_id: for(_ <- 1..Qdrant.max_ids(), do: Ecto.UUID.generate()),
-        tags_hmac: for(i <- 1..Qdrant.max_ids(), do: "t#{i}"),
-        folder_hmac: "Zm9sZGVyLWhtYWM=",
-        fm_timestamp_gte: 0,
+        note_scope: {:ids, for(_ <- 1..Qdrant.max_note_ids(), do: Ecto.UUID.generate())},
         limit: Qdrant.max_page()
       ]
 
@@ -156,7 +165,7 @@ defmodule Engram.Vector.QdrantStrictModeTest do
           note_id: Ecto.UUID.generate(),
           path_hmac: "cGF0aC1obWFj",
           folder_hmac: "Zm9sZGVyLWhtYWM=",
-          tags_hmac: [@tag_hmac],
+          tags_hmac: ["dGFnLWhtYWM="],
           type_hmac: "dHlwZS1obWFj",
           fm_timestamp: 1_700_000_000,
           fm_created: 1_600_000_000

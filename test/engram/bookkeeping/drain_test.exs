@@ -6,11 +6,13 @@ defmodule Engram.Bookkeeping.DrainTest do
   alias Engram.Bookkeeping.Drain
   alias Engram.DataMigrations
   alias Engram.DataMigrations.FolderTable
+  alias Engram.Indexing.PayloadV6
   alias Engram.Notes
   alias Engram.QueryPlan
   alias Engram.Repo
   alias Engram.Workers.BackfillLinkKeys
   alias Engram.Workers.BookkeepingDrain
+  alias Engram.Workers.ReconcileNotePayloads
   alias Engram.Workers.ReencodeEnvelopes
 
   setup do
@@ -282,6 +284,31 @@ defmodule Engram.Bookkeeping.DrainTest do
     end
   end
 
+  # The fleet `n` walk's per-user probe (`ReconcileNotePayloads`) reads
+  # `note_index_state` through its own partial index, so a done user costs a
+  # few index pages, not a walk of its notes. The `coalesce(..., 5) < 6` text
+  # is the index predicate's literal: red if either side changes alone.
+  test "the n backfill's per-user probe is served by note_index_state_n_behind", %{
+    user: u,
+    vault: v
+  } do
+    for i <- 1..100, do: write!(u, v, "Clean#{rem(i, 5)}/n#{i}.md")
+
+    {sql, _params} =
+      Repo.to_sql(:all, ReconcileNotePayloads.n_behind_probe(u.id))
+
+    assert sql =~ "coalesce("
+    # The probe's and the index's literals are the baseline and the version:
+    # a payload version bump turns this red until a new index ships.
+    assert sql =~ "5) < 6"
+    assert ReconcileNotePayloads.n_version() == 6
+    assert PayloadV6.baseline() == 5
+    assert PayloadV6.version() == 6
+    plan = QueryPlan.generic_plan(sql, analyze: ["note_index_state"], fresh: true)
+    assert plan =~ "note_index_state_n_behind", plan
+    refute plan =~ "Seq Scan on note_index_state", plan
+  end
+
   # The folder probe competes with other partial indexes on live notes. With
   # realistic statistics (many resolved live notes, one unresolved) the planner
   # must pick the drift index, not walk live notes. Red on c0c603cb9's test,
@@ -330,7 +357,7 @@ defmodule Engram.Bookkeeping.DrainTest do
     for {kind, worker_selects?} <- [
           envelope: &ReencodeEnvelopes.legacy_rows?/1,
           link_keys: &BackfillLinkKeys.missing_rows?/1,
-          payload: &Engram.Workers.ReconcileNotePayloads.unstamped_rows?/1
+          payload: &ReconcileNotePayloads.unstamped_rows?/1
         ] do
       expected = users |> Enum.filter(worker_selects?) |> Enum.sort()
 

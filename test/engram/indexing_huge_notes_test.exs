@@ -406,7 +406,7 @@ defmodule Engram.IndexingHugeNotesTest do
       # The deepest sentinel with a dense input (a canvas has none).
       case prose_sentinels |> Enum.filter(&MapSet.member?(embedded, &1)) |> List.last() do
         nil -> :ok
-        deep -> assert Search.snippet(input_holding(dir, deep), deep) =~ deep
+        deep -> assert Search.snippet(input_holding(dir, deep, headings), deep) =~ deep
       end
     end
   end
@@ -545,13 +545,19 @@ defmodule Engram.IndexingHugeNotesTest do
     end
   end
 
-  # The chunk text (prefix dropped) of the dense input holding `word`.
-  defp input_holding(dir, word) do
+  # The chunk text (prefix dropped) of the dense input holding `word`. A
+  # note with no title and no heading has no prefix (R3c: the file name is
+  # not a title), so its input is the chunk text alone.
+  defp input_holding(dir, word, prefixed?) do
     input =
       dir |> embedded_texts() |> String.split("\n\u0000\n") |> Enum.find(&(&1 =~ word))
 
-    [_prefix, text] = String.split(input, "\n\n", parts: 2)
-    text
+    if prefixed? do
+      [_prefix, text] = String.split(input, "\n\n", parts: 2)
+      text
+    else
+      input
+    end
   end
 
   # ---------------------------------------------------------------------------
