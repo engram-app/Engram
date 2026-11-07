@@ -847,14 +847,15 @@ defmodule Engram.Folders.Rows do
 
         from(f in Folder, where: f.id == ^root.id)
         |> Repo.update_all(
-          set: [
-            parent_id: new_parent,
-            name_ciphertext: ct,
-            name_nonce: nonce,
-            full_path_hmac: path_hmac(ctx.fk, new_folder),
-            dek_version: Crypto.row_version_aad_bound(),
-            updated_at: now()
-          ] ++ Folder.name_keys(ctx.fk, new_segment, nonce)
+          set:
+            [
+              parent_id: new_parent,
+              name_ciphertext: ct,
+              name_nonce: nonce,
+              full_path_hmac: path_hmac(ctx.fk, new_folder),
+              dek_version: Crypto.row_version_aad_bound(),
+              updated_at: now()
+            ] ++ Folder.name_keys(ctx.fk, new_segment, nonce)
         )
 
         :ok = put_names(ctx, [{root.id, new_segment}])

@@ -22,7 +22,9 @@ defmodule Engram.Notes.NameWritersTest do
   end
 
   defp note!(user, vault, path, content \\ "# T\n\nbody") do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => path, "content" => content}, actor: "api")
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => path, "content" => content}, actor: "api")
+
     note
   end
 
@@ -75,11 +77,18 @@ defmodule Engram.Notes.NameWritersTest do
       id = Ecto.UUID.generate()
       kw = Name.keys(:notes, dek, fk, id, "A/B/Report.MD", <<1, 2, 3>>)
 
-      assert {:ok, "Report.MD"} = Name.decrypt(:notes, dek, id, kw[:name_ciphertext], kw[:name_nonce])
+      assert {:ok, "Report.MD"} =
+               Name.decrypt(:notes, dek, id, kw[:name_ciphertext], kw[:name_nonce])
 
       # Another row's AAD does not open it.
       assert :error =
-               Name.decrypt(:notes, dek, Ecto.UUID.generate(), kw[:name_ciphertext], kw[:name_nonce])
+               Name.decrypt(
+                 :notes,
+                 dek,
+                 Ecto.UUID.generate(),
+                 kw[:name_ciphertext],
+                 kw[:name_nonce]
+               )
 
       assert kw[:name_stamp] == <<1, 2, 3>> <> Name.version()
       # Case folds for the ci key only.
@@ -94,7 +103,9 @@ defmodule Engram.Notes.NameWritersTest do
       {:ok, fk} = Crypto.dek_filter_key(user)
       id = Ecto.UUID.generate()
       kw = Name.keys(:attachments, dek, fk, id, "a.png", "n")
-      assert {:ok, "a.png"} = Name.decrypt(:attachments, dek, id, kw[:name_ciphertext], kw[:name_nonce])
+
+      assert {:ok, "a.png"} =
+               Name.decrypt(:attachments, dek, id, kw[:name_ciphertext], kw[:name_nonce])
     end
   end
 

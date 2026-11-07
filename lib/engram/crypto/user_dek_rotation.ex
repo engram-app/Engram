@@ -2333,7 +2333,7 @@ defmodule Engram.Crypto.UserDekRotation do
                   [
                     {:basename_hmac,
                      Crypto.hmac_field(new_filter_key, Engram.Links.basename_key(plaintext))}
-                      | Engram.Links.path_keys(new_filter_key, plaintext, new_nonce) ++
+                    | Engram.Links.path_keys(new_filter_key, plaintext, new_nonce) ++
                         Engram.Notes.Name.keys(
                           :notes,
                           new_dek,
