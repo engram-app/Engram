@@ -35,9 +35,12 @@ channel never crashes on unknown frames, same posture as #862's stub).
 `crdt:` (#2523 S4) exists only while the `folder_ops` runtime switch is on
 (`ServiceConfig.override(:folder_ops, true)`, default off); the join replies
 advertise it as `features.folder_ops`. Off, it gets the catch-all `bad_frame`
-reply like any unknown frame. Move acks `{seq}`, create `{folder_id, seq}`;
-refusals are `conflict`, `cycle`, `not_found` (plus `bad_frame`,
-`rate_limited`). Owner: `Engram.Folders.Wire`.
+reply like any unknown frame. Both ops ack `{folder_id, seq}`; refusals are
+`conflict`, `cycle`, `not_found`, `invalid_name` (plus `bad_frame`,
+`rate_limited`). Create is find-or-create by (parent, name).
+Owner: `Engram.Folders.Wire`. While on, the `crdt_create` reply also carries
+the note's `folder_id`, and `GET /api/sync/manifest` carries `folders: [{id,
+parent_id, name}]` plus a `folder_id` per note.
 
 ## Server → Client Broadcasts
 
