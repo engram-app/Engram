@@ -103,7 +103,8 @@ defmodule Engram.NotesGenericPlanTest do
         ~r/"folder_ref_id" = \$/
       )
 
-    assert plan =~ "notes_folder_ref", plan
+    # Any reference index, named exactly (S1 added `notes_folder_ref_live_id`).
+    assert plan =~ ~r/using notes_folder_ref(_live|_live_id)? on/, plan
   end
 
   test "wikilink resolution reads notes_basename", %{user: u, vault: v} do
