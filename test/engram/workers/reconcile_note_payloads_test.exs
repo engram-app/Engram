@@ -905,6 +905,25 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       assert n_kept?(ctx, {id, Agent.get(ctx.store, &Map.fetch!(&1.points, id))})
     end
 
+    # The edit path vouches for the version only for points it wrote with
+    # the payload (which holds `n`): an edit that reuses chunk points it did
+    # not rewrite (the payload unchanged) leaves the version, so the `n`
+    # backfill still reaches them.
+    test "an edit that reuses chunks lacking n does not stamp the version", ctx do
+      pre_n(ctx)
+      vault = Repo.get!(Engram.Vaults.Vault, ctx.stale.vault_id, skip_tenant_check: true)
+      {:ok, plain} = Crypto.maybe_decrypt_note_fields(reload(ctx.stale), ctx.user)
+
+      assert {:ok, _} = Indexing.index_note(plain, vault)
+
+      assert Enum.all?(
+               point_ids(ctx.stale),
+               &(not Map.has_key?(Agent.get(ctx.store, fn s -> s.points[&1] end), "n"))
+             )
+
+      assert Enum.all?(payload_versions(ctx), &is_nil/1)
+    end
+
     # The heal and the `n` backfill are separate jobs with separate unique
     # slots: a paused backfill chain (scheduled, mid-cursor) must not swallow
     # a DEK rotation's heal, which heals from the user's first note.

@@ -1175,7 +1175,9 @@ defmodule Engram.Indexing do
 
           write_point_rows(note, Map.get(prepared, :point_rows))
 
-          stamp_payload_hash(note, payload_hash)
+          # The version only when every point holds this payload (which
+          # carries `n`): none reused, or the reused ones just PATCHed.
+          stamp_payload_hash(note, payload_hash, reused_point_ids == [] or refresh_ids != [])
           clear_rebuild_paid(prepared)
           stamp_okf_timestamp(prepared)
           stamp_flat_fields(prepared)
@@ -1257,18 +1259,20 @@ defmodule Engram.Indexing do
 
   # Every point of the note now carries `note_payload`: upserted ones were
   # built from it, reused ones were just PATCHed (or already held it). The
-  # payload holds `n`, so the points carry the current payload version too
-  # (`PayloadV6.stamp/2`): a note indexed after the `n` backfill passed it is
-  # never selected by it. Only while the row holds this hash.
-  defp stamp_payload_hash(%Note{payload_hash: hash} = note, hash),
-    do: PayloadV6.stamp(note.id, hash: hash)
+  # payload holds `n`, so when every point was WRITTEN with it this pass
+  # (`all_written?`: none reused, or the reused ones PATCHed) the points
+  # carry the current payload version too (`PayloadV6.stamp/2`). A reused
+  # point left untouched (the payload unchanged) may predate `n`: the version
+  # is left for the `n` backfill. Only while the row holds this hash.
+  defp stamp_payload_hash(%Note{payload_hash: hash} = note, hash, all_written?),
+    do: if(all_written?, do: PayloadV6.stamp(note.id, hash: hash), else: :ok)
 
   #
   # Compare-and-set on the hash this pass loaded (review L1): a NULL-clear
   # that landed mid-pass (payload drift, a cluster diff, a DEK rotation) or
   # another writer's stamp leaves NULL, so the next pass refreshes the
   # payload instead of this stamp vouching for points it did not check.
-  defp stamp_payload_hash(note, hash) do
+  defp stamp_payload_hash(note, hash, all_written?) do
     {_, _} =
       Repo.update_all(
         from(n in Note,
@@ -1288,7 +1292,7 @@ defmodule Engram.Indexing do
         []
       )
 
-    PayloadV6.stamp(note.id, hash: hash)
+    if all_written?, do: PayloadV6.stamp(note.id, hash: hash), else: :ok
   end
 
   # One event per (kind, dense) pair, never per point. Only points written in
