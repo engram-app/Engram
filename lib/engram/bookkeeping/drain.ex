@@ -30,6 +30,7 @@ defmodule Engram.Bookkeeping.Drain do
   alias Engram.Backfill.TenantScan
   alias Engram.Crypto.Envelope
   alias Engram.DataMigrations.FolderTable
+  alias Engram.Folders.Drift
   alias Engram.Logger.Metadata
   alias Engram.Maintenance.Cursor
   alias Engram.Repo
@@ -118,23 +119,25 @@ defmodule Engram.Bookkeeping.Drain do
      """}
   ]
 
+  # The folder predicates are `Engram.Folders.Drift`'s, joined at compile
+  # time (still one literal per probe): the folder readers use the same text.
   @folder [
     {"notes",
-     """
-     SELECT DISTINCT user_id FROM notes
-     WHERE kind = 'note' AND deleted_at IS NULL AND folder_ref_id IS NULL
-       AND octet_length(folder_ciphertext) > 16
-       AND ($1::uuid IS NULL OR user_id = $1)
-       AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 10
-     """},
+     "SELECT DISTINCT user_id FROM notes WHERE " <>
+       Drift.notes_unresolved_sql() <>
+       """
+
+         AND ($1::uuid IS NULL OR user_id = $1)
+         AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 10
+       """},
     {"attachments",
-     """
-     SELECT DISTINCT user_id FROM attachments
-     WHERE deleted_at IS NULL AND folder_ref_stamp IS DISTINCT FROM path_nonce
-       AND folder_ref_stamp IS DISTINCT FROM ('\\x00'::bytea || path_nonce)
-       AND ($1::uuid IS NULL OR user_id = $1)
-       AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 10
-     """}
+     "SELECT DISTINCT user_id FROM attachments WHERE " <>
+       Drift.attachments_stale_sql() <>
+       """
+
+         AND ($1::uuid IS NULL OR user_id = $1)
+         AND ($2::uuid IS NULL OR user_id > $2) ORDER BY user_id LIMIT 10
+       """}
   ]
 
   @doc """

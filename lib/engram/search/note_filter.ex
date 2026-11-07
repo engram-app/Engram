@@ -318,6 +318,9 @@ defmodule Engram.Search.NoteFilter do
   defp folder("", _ctx), do: dynamic(true)
 
   defp folder(path, ctx) do
+    # The drift FIRST, then the rows (`Engram.Notes` `scan_with_drift/3`: a
+    # heal in between is then seen by one of the two).
+    drift = Notes.drift_note_ids_under(ctx.user, ctx.vault, [path])
     ids = for %{id: id} <- Rows.subtree_refs(ctx.user, ctx.vault.id, [path]), do: id
 
     # `folder_ref_id = ANY(...)`, an index-only scan of `notes_folder_ref_live`.
@@ -326,10 +329,7 @@ defmodule Engram.Search.NoteFilter do
     # are matched by id: a bounded list, empty in steady state.
     by_ref = dynamic([n], not is_nil(n.folder_ref_id) and n.folder_ref_id in ^ids)
 
-    case Notes.drift_note_ids_under(ctx.user, ctx.vault, [path]) do
-      [] -> by_ref
-      drift -> dynamic([n], ^by_ref or n.id in ^drift)
-    end
+    if drift == [], do: by_ref, else: dynamic([n], ^by_ref or n.id in ^drift)
   end
 
   # Nested tags: `a/b` is `a/b` and every `a/b/...` the vault uses. Case

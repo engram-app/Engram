@@ -76,6 +76,14 @@ defmodule Engram.DataMigrations.FolderTable do
   # paths decrypt in seconds) and only bounds a pathological one.
   @attachment_budget_ms 20 * 60 * 1000
 
+  # The stale page: `Engram.Folders.Drift.attachments_stale_sql/0`, the
+  # predicate of `attachments_folder_ref_stale` (joined at compile time).
+  @stale_attachment_page "SELECT id, vault_id, dek_version, path_ciphertext, path_nonce, " <>
+                           "folder_ref_id FROM attachments " <>
+                           "WHERE user_id = $1 AND ($2::uuid IS NULL OR id > $2) AND " <>
+                           Engram.Folders.Drift.attachments_stale_sql() <>
+                           " ORDER BY id LIMIT $3"
+
   @impl true
   def name, do: "folder_table"
 
@@ -610,13 +618,7 @@ defmodule Engram.DataMigrations.FolderTable do
       scope(ctx, fn repo ->
         %{rows: rows} =
           repo.query!(
-            """
-            SELECT id, vault_id, dek_version, path_ciphertext, path_nonce, folder_ref_id FROM attachments
-            WHERE user_id = $1 AND deleted_at IS NULL AND ($2::uuid IS NULL OR id > $2)
-              AND folder_ref_stamp IS DISTINCT FROM path_nonce
-              AND folder_ref_stamp IS DISTINCT FROM ('\\x00'::bytea || path_nonce)
-            ORDER BY id LIMIT $3
-            """,
+            @stale_attachment_page,
             [dump(ctx.user_id), after_id, ctx.batch]
           )
 

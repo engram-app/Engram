@@ -20,6 +20,7 @@ defmodule Engram.Attachments do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Crypto.RotationGate
+  alias Engram.Folders.Drift
   alias Engram.Folders.Rows
   alias Engram.Links
   alias Engram.Logger.Metadata
@@ -2247,7 +2248,7 @@ defmodule Engram.Attachments do
   end
 
   # Everything is a candidate when the root is asked for as a subtree;
-  # otherwise the folders' current references (`attachments_folder_ref_live`)
+  # otherwise the folders' placed references (`attachments_folder_ref_live`)
   # plus the stale ones, two statements so each keeps its index.
   defp candidate_rows(user, vault, folders, direct?) do
     base = from(a in scoped_live(user, vault), as: :a, select: struct(a, @tree_attachment_fields))
@@ -2262,24 +2263,11 @@ defmodule Engram.Attachments do
           do: dynamic([a], is_nil(a.folder_ref_id) or a.folder_ref_id in ^ids),
           else: dynamic([a], a.folder_ref_id in ^ids)
 
-      current = Rows.attachment_ref_current()
-      Repo.all(from(a in base, where: ^dynamic([a], ^trusted and ^current))) ++ stale_rows(base)
-    end
-  end
+      placed = Rows.attachment_ref_placed()
 
-  # Rows whose reference is not current, read by their path: the exact
-  # `attachments_folder_ref_stale` predicate (the drain probe's), so 0 rows in
-  # steady state. A dead reference is in it too: `folders_release_refs` clears
-  # the reference and the stamp when a row dies. An unreadable row (stamp
-  # `Rows.unreadable_attachment_stamp/1`) is not: its folder is unknowable.
-  defp stale_rows(base) do
-    Repo.all(
-      from(a in base,
-        where:
-          fragment("? IS DISTINCT FROM ?", a.folder_ref_stamp, a.path_nonce) and
-            fragment("? IS DISTINCT FROM ('\\x00'::bytea || ?)", a.folder_ref_stamp, a.path_nonce)
-      )
-    )
+      Repo.all(from(a in base, where: ^dynamic([a], ^trusted and ^placed))) ++
+        Repo.all(from(a in base, where: ^Drift.attachments_stale()))
+    end
   end
 
   defp folder_ids(user, vault, folders, true), do: Rows.ids_at(user, vault.id, folders)

@@ -45,6 +45,7 @@ defmodule Engram.Notes do
     VaultScanCache
   }
 
+  alias Engram.Folders.Drift
   alias Engram.Folders.Rows
   alias Engram.Pager
   alias Engram.Repo
@@ -6543,22 +6544,54 @@ defmodule Engram.Notes do
   """
   @spec raw_folder_count_rows(map(), map()) :: [map()]
   def raw_folder_count_rows(user, vault) do
-    # Three reads, each cheap in Postgres and decrypted outside it:
+    # TWO reads, decrypted outside Postgres:
     #
-    #  * `%{ref:, count:}`: live notes grouped by `folder_ref_id`, the folder
-    #    ROW they sit in, an index-only scan of `notes_folder_ref_live` (no
-    #    folder envelope is touched for them). The NULL group is the root
-    #    plus the drift;
-    #  * `%{folder_row: ...}`: the vault's folder rows, which name those
-    #    references (a folder's name is one segment, so a path is assembled
-    #    from its ancestors);
-    #  * `%{id:, dv:, ct:, nonce:, count:}`: one per drift note
-    #    (`drift_query/1`, count 1), placed by its own folder envelope (0 rows
-    #    in steady state), and one per folder marker (count 0), so an empty
-    #    explicit folder is listed.
+    #  1. ONE notes statement (one snapshot), a `UNION ALL` of
+    #     * the live notes grouped by `folder_ref_id` (leg 4), the folder ROW
+    #       they sit in, on `notes_folder_ref_live` (no folder envelope is
+    #       touched for them). The NULL group is the root plus the drift;
+    #     * the drift notes (`drift_query/2`, legs 1 and 2, count 1 each),
+    #       placed by their own folder envelope: 0 rows in steady state;
+    #     * the folder markers (leg 3, count 0), so an empty explicit folder
+    #       is listed.
+    #     A heal (the drain pointing a drift note at its row) between two
+    #     statements would count the note in neither group or in both, and
+    #     the cache would keep the wrong number until the next write: in one
+    #     statement it is in exactly one leg.
+    #  2. The vault's folder rows, which name those references (a folder's
+    #     name is one segment, so a path is assembled from its ancestors).
+    #     Read AFTER the notes: a row a heal creates in between is then
+    #     already there.
     #
-    # The root is the NULL group minus the drift: the same rows as the root
-    # page of `list_notes_in_folder_page/4`.
+    # The root is the NULL group minus the unresolved drift (leg 1): the same
+    # rows as the root page of `list_notes_in_folder_page/4`.
+    markers = from(n in scoped_live(user, vault), where: n.kind == "folder")
+
+    groups =
+      from(n in scoped_live(user, vault),
+        where: n.kind == "note",
+        group_by: n.folder_ref_id,
+        select: %{
+          leg: fragment("4"),
+          id: fragment("NULL::uuid"),
+          vault_id: fragment("NULL::uuid"),
+          ref: n.folder_ref_id,
+          dv: fragment("NULL::int"),
+          ct: fragment("NULL::bytea"),
+          nonce: fragment("NULL::bytea"),
+          count: count()
+        }
+      )
+
+    {grouped, envelopes} =
+      drift_query(user, vault)
+      |> union_all(^drift_select(markers, 3, 0))
+      |> union_all(^groups)
+      |> Repo.all()
+      |> Enum.split_with(&(&1.leg == 4))
+
+    envelopes = Enum.filter(envelopes, &(&1.vault_id == vault.id))
+
     {folder_rows, live} =
       from(f in Engram.Folders.Folder,
         where: f.vault_id == ^vault.id,
@@ -6578,67 +6611,25 @@ defmodule Engram.Notes do
         {[%{folder_row: row} | rows], if(live?, do: MapSet.put(live, row.id), else: live)}
       end)
 
-    groups =
-      Repo.all(
-        from(n in scoped_live(user, vault),
-          where: n.kind == "note",
-          group_by: n.folder_ref_id,
-          select: {n.folder_ref_id, count()}
-        )
-      )
+    # A group whose reference names a dead row is drift (leg 2), counted by
+    # its envelope.
+    {root, by_ref} =
+      Enum.reduce(grouped, {0, []}, fn
+        %{ref: nil, count: count}, {_, refs} ->
+          {count, refs}
 
-    {root, by_ref, dead} =
-      Enum.reduce(groups, {0, [], 0}, fn
-        {nil, count}, {_, refs, dead} ->
-          {count, refs, dead}
-
-        {ref, count}, {root, refs, dead} ->
+        %{ref: ref, count: count}, {root, refs} ->
           if MapSet.member?(live, ref),
-            do: {root, [%{ref: ref, count: count} | refs], dead},
-            else: {root, refs, dead + count}
+            do: {root, [%{ref: ref, count: count} | refs]},
+            else: {root, refs}
       end)
 
-    # `folders_release_refs` NULLs a reference when its row dies, so none
-    # should name a dead row; one that does is not listed, and counted here.
-    if dead > 0,
-      do:
-        Logger.warning(
-          "folder counts: notes name a dead folder row",
-          Metadata.with_category(:warning, :sync,
-            user_id: user.id,
-            vault_id: vault.id,
-            count: dead
-          )
-        )
-
-    # The drift notes (count 1 each) and the folder markers (count 0) in ONE
-    # statement, each arm on its own index (`notes_unresolved_folder`,
-    # `notes_user_vault_folder_marker`).
-    envelope = fn query, count ->
-      from(n in query,
-        select: %{
-          id: n.id,
-          dv: n.dek_version,
-          ct: n.folder_ciphertext,
-          nonce: n.folder_nonce,
-          vault_id: n.vault_id,
-          count: fragment("?::int", ^count)
-        }
-      )
-    end
-
-    markers = from(n in scoped_live(user, vault), where: n.kind == "folder")
-
-    envelopes =
-      union_all(envelope.(drift_query(user), 1), ^envelope.(markers, 0))
-      |> Repo.all()
-      |> Enum.filter(&(&1.vault_id == vault.id))
-
-    root = root - Enum.count(envelopes, &(&1.count == 1))
+    root = root - Enum.count(envelopes, &(&1.leg == 1))
 
     by_ref ++
       if(by_ref == [], do: [], else: Enum.reverse(folder_rows)) ++
-      envelopes ++ if(root > 0, do: [%{folder: "", count: root}], else: [])
+      Enum.map(envelopes, &Map.take(&1, [:id, :dv, :ct, :nonce, :count])) ++
+      if(root > 0, do: [%{folder: "", count: root}], else: [])
   end
 
   @doc """
@@ -6670,7 +6661,7 @@ defmodule Engram.Notes do
   def decrypt_folder_count_rows(rows, dek) do
     by_id = for %{folder_row: row} <- rows, into: %{}, do: {row.id, row}
 
-    {entries, _memo} =
+    {entries, memo} =
       Enum.flat_map_reduce(rows, %{}, fn
         %{folder_row: _}, memo ->
           {[], memo}
@@ -6687,9 +6678,22 @@ defmodule Engram.Notes do
             {:error, memo} -> {[], memo}
           end
 
+        # A drift or marker envelope that will not open is left out (and
+        # counted), as the listing leaves it out: the rest of the vault keeps
+        # being served.
         %{id: id, dv: dv, ct: ct, nonce: nonce, count: count}, memo ->
-          {[{decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :folder, id, dv)), count}], memo}
+          case Envelope.decrypt(ct, nonce, dek, row_aad(:notes, :folder, id, dv)) do
+            {:ok, folder} -> {[{folder, count}], memo}
+            :error -> {[], Map.update(memo, :undecryptable, 1, &(&1 + 1))}
+          end
       end)
+
+    if n = memo[:undecryptable],
+      do:
+        Logger.warning(
+          "folder counts: folder envelopes did not decrypt; left out of the listing",
+          Metadata.with_category(:warning, :sync, count: n)
+        )
 
     entries
     # One folder can arrive twice (a reference group, a drift note, a marker),
@@ -6833,7 +6837,7 @@ defmodule Engram.Notes do
             query =
               from(n in scoped_live(user, vault),
                 where: n.kind == "note",
-                where: ^directly_in(user, vault, folder, dek),
+                where: ^directly_in(user, vault, folder, placed_drift(user, vault, dek)),
                 order_by: [asc: n.id],
                 limit: ^(limit + 1),
                 select: struct(n, @note_meta_fields)
@@ -6861,12 +6865,14 @@ defmodule Engram.Notes do
   end
 
   # The notes directly in `folder` ("" = the root), as a `where` on a notes
-  # query: those whose `folder_ref_id` names the live row at `folder`
-  # (`notes_folder_ref_live`), plus the drift notes (`drift_note_ids/4`) whose
+  # query. `drift` MUST be read before this is called (it reads the rows):
+  # see `scan_with_drift/3` for why the order matters. Those whose
+  # `folder_ref_id` names the live row at `folder`
+  # (`notes_folder_ref_live`), plus the drift notes (`drift`, `placed_drift/3`) whose
   # envelope says `folder`. The root is a NULL reference that is not drift:
   # the drain predicate's complement within the NULL group, so a page and
   # `raw_folder_count_rows/2`'s root agree. MUST run inside the tenant block.
-  defp directly_in(_user, _vault, "", _dek),
+  defp directly_in(_user, _vault, "", _drift),
     do:
       dynamic(
         [n],
@@ -6874,7 +6880,7 @@ defmodule Engram.Notes do
           fragment("coalesce(octet_length(?) <= 16, true)", n.folder_ciphertext)
       )
 
-  defp directly_in(user, vault, folder, dek) do
+  defp directly_in(user, vault, folder, drift) do
     by_ref =
       case Rows.ids_at(user, vault.id, [folder]) do
         # The usual case, one live row: an equality, costed per folder as the
@@ -6885,9 +6891,9 @@ defmodule Engram.Notes do
         ids -> dynamic([n], n.folder_ref_id in ^ids)
       end
 
-    case drift_note_ids(user, vault, dek, &(&1 == folder)) do
+    case for({id, ^folder} <- drift, do: id) do
       [] -> by_ref
-      drift -> dynamic([n], ^by_ref or n.id in ^drift)
+      ids -> dynamic([n], ^by_ref or n.id in ^ids)
     end
   end
 
@@ -6959,7 +6965,7 @@ defmodule Engram.Notes do
           {:ok, integer()} | {:error, :conflict | term()}
   def rename_folder(user, vault, old_folder, new_folder) do
     with {:ok, user} <- Crypto.ensure_user_dek(user) do
-      rename_folder_gated(user, vault, old_folder, new_folder, nil)
+      rename_folder_gated(user, vault, old_folder, new_folder, nil, nil)
     end
   end
 
@@ -6967,7 +6973,7 @@ defmodule Engram.Notes do
   # do_rename_folder scans the vault itself) and the batch-move path (rows =
   # the ONE decrypted scan shared across all K markers). Caller must have run
   # `Crypto.ensure_user_dek/1` already.
-  defp rename_folder_gated(user, vault, old_folder, new_folder, rows) do
+  defp rename_folder_gated(user, vault, old_folder, new_folder, rows, drift) do
     new_folder = String.trim_trailing(new_folder, "/")
     old_prefix = old_folder <> "/"
 
@@ -6986,7 +6992,7 @@ defmodule Engram.Notes do
       old_folder == new_folder ->
         do_rename_folder(user, vault, old_folder, old_prefix, new_folder, rows)
 
-      folder_target_exists?(user, vault, new_folder) ->
+      folder_target_exists?(user, vault, new_folder, drift) ->
         # Pre-check the unique (user, vault, path_hmac) constraint so
         # the caller gets {:error, :conflict} instead of a Postgrex
         # unique_violation crash deeper in the cascade. Matches by
@@ -7025,20 +7031,22 @@ defmodule Engram.Notes do
   # (`rename_folder/4`) gates on `Crypto.ensure_user_dek/1` first, so
   # `:no_dek` is unreachable. Any other crypto failure (KMS down, provider
   # error) crashes loudly here rather than being silently masked.
-  defp folder_target_exists?(user, vault, folder) do
+  # `drift`: `drift_note_folders/3`'s placed rows, read once by a batch
+  # (`do_reduce_move_folders/6`) for all its markers; nil reads it here.
+  defp folder_target_exists?(user, vault, folder, drift) do
     {:ok, filter_key} = Crypto.dek_filter_key(user)
-    {:ok, dek} = Crypto.get_dek(user)
     target_hmac = Crypto.hmac_field(filter_key, folder)
 
     # The notes leg and the marker leg in ONE statement, each arm on its own
     # index.
     Repo.with_tenant!(user.id, fn ->
       live = scoped_live(user, vault)
+      drift = drift || placed_drift(user, vault)
 
       notes =
         from(n in live,
           where: n.kind == "note",
-          where: ^directly_in(user, vault, folder, dek),
+          where: ^directly_in(user, vault, folder, drift),
           select: %{id: n.id}
         )
 
@@ -7054,49 +7062,73 @@ defmodule Engram.Notes do
   end
 
   @doc """
-  The live notes the folder rows cannot place yet: no `folder_ref_id`, but a
-  non-root folder envelope (a write the trigger could not resolve, a folder row
-  that died under it). The WHERE is the drain probe's text
-  (`Engram.Bookkeeping.Drain.probes(:folder)`), so the planner reads the
-  `notes_unresolved_folder` partial index: 0 rows in steady state, O(drift)
-  until the drain heals them. Every folder reader merges these by their
-  decrypted folder, so a note never leaves a listing during that window.
+  The live notes the folder rows cannot place yet, in two arms, both 0 rows
+  in steady state, O(drift) otherwise. Every folder reader merges them by
+  their decrypted folder, so a note never leaves a listing while the drain
+  (or `FolderTable`) has not healed it.
 
-  Scoped to the USER, as the index is, not the vault: with `vault_id` in the
-  WHERE the planner prefers `notes_user_vault_live` and filters the vault's
-  NULL-reference rows (every root note), since it cannot see that the
-  `octet_length` test empties the partial index. Callers keep their vault's
-  rows (`vault_id` is in every select). A query with no `select`. MUST run
-  inside the caller's tenant block.
+    * No `folder_ref_id`, but a non-root folder envelope (a write the trigger
+      could not resolve, a row `folders_release_refs` released). The WHERE is
+      `Engram.Folders.Drift.notes_unresolved_sql/0`, the drain probe's and the
+      index's text, so the planner reads `notes_unresolved_folder (user_id)`. Scoped to the
+      USER, as the index is: with `vault_id` in the WHERE the planner prefers
+      `notes_user_vault_live` and filters every root note of the vault.
+    * A `folder_ref_id` that names a soft-deleted row (written before
+      `folders_release_refs`, or by a writer outside the vault lock): the
+      vault's dead folder rows joined to `notes_folder_ref_live`.
+
+  One `UNION ALL` selecting `drift_select/2`'s map (`ref:` is nil on the
+  first arm); callers keep `vault.id`'s rows. MUST run inside the caller's
+  tenant block.
   """
-  @spec drift_query(map()) :: Ecto.Query.t()
-  def drift_query(user) do
+  @spec drift_query(map(), map()) :: Ecto.Query.t()
+  def drift_query(user, vault) do
     # ponytail: unbounded by design (a note must never be hidden); the ceiling
-    # is the user's drift, which the drain keeps at 0.
-    from(n in Note,
-      where:
-        n.user_id == ^user.id and n.kind == "note" and is_nil(n.deleted_at) and
-          is_nil(n.folder_ref_id) and fragment("octet_length(?) > 16", n.folder_ciphertext)
+    # is the drift itself, which the drain keeps at 0.
+    unresolved =
+      from(n in Note, where: n.user_id == ^user.id, where: ^Drift.notes_unresolved())
+
+    dead_ref =
+      from(n in scoped_live(user, vault),
+        join: f in Engram.Folders.Folder,
+        on: f.id == n.folder_ref_id and f.vault_id == n.vault_id,
+        where: n.kind == "note" and not is_nil(f.deleted_at)
+      )
+
+    union_all(drift_select(unresolved, 1, 1), ^drift_select(dead_ref, 2, 1))
+  end
+
+  # The envelope a folder reader decrypts, per row of `query` (notes as the
+  # first binding), tagged with its `leg:` and a fixed `count:` for the
+  # folder counts (`raw_folder_count_rows/2`).
+  defp drift_select(query, leg, count) do
+    from(n in query,
+      select: %{
+        leg: fragment("?::int", ^leg),
+        id: n.id,
+        vault_id: n.vault_id,
+        ref: n.folder_ref_id,
+        dv: n.dek_version,
+        ct: n.folder_ciphertext,
+        nonce: n.folder_nonce,
+        count: fragment("?::bigint", ^count)
+      }
     )
   end
 
   @doc """
-  `drift_query/1`'s notes in `vault`, with their decrypted folder:
+  `drift_query/2`'s notes in `vault`, with their decrypted folder:
   `{[{id, folder}], undecryptable}`. A row whose envelope will not open is
   counted (and logged), not placed. MUST run inside the caller's tenant block.
   """
   @spec drift_note_folders(map(), map(), binary()) ::
           {[{Ecto.UUID.t(), String.t()}], non_neg_integer()}
   def drift_note_folders(user, vault, dek) do
-    rows =
-      Repo.all(
-        from(n in drift_query(user),
-          select: {n.id, n.vault_id, n.dek_version, n.folder_ciphertext, n.folder_nonce}
-        )
-      )
+    rows = Repo.all(drift_query(user, vault))
 
     {placed, bad} =
-      for({id, vid, dv, ct, nonce} <- rows, vid == vault.id, do: {id, dv, ct, nonce})
+      for(%{vault_id: vid} = r <- rows, vid == vault.id, do: {r.id, r.dv, r.ct, r.nonce})
+      |> Enum.uniq_by(&elem(&1, 0))
       |> Enum.reduce({[], 0}, fn {id, dv, ct, nonce}, {placed, bad} ->
         case Envelope.decrypt(ct, nonce, dek, row_aad(:notes, :folder, id, dv)) do
           {:ok, folder} -> {[{id, folder} | placed], bad}
@@ -7118,21 +7150,22 @@ defmodule Engram.Notes do
     {placed, bad}
   end
 
-  @doc """
-  The ids of the drift notes (`drift_note_folders/3`) whose folder satisfies
-  `keep?`. MUST run inside the caller's tenant block.
-  """
-  @spec drift_note_ids(map(), map(), binary(), (String.t() -> boolean())) :: [Ecto.UUID.t()]
-  def drift_note_ids(user, vault, dek, keep?) do
+  # `drift_note_folders/3`'s placed rows (undecryptable ones are logged
+  # there). MUST run inside the caller's tenant block.
+  defp placed_drift(user, vault, dek \\ nil) do
+    dek = dek || elem(Crypto.get_dek(user), 1)
     {placed, _undecryptable} = drift_note_folders(user, vault, dek)
-    for {id, folder} <- placed, keep?.(folder), do: id
+    placed
   end
 
-  @doc "`drift_note_ids/4` for the notes in `folders` or under them."
+  @doc """
+  The ids of the drift notes (`drift_note_folders/3`) in `folders` or under
+  them. MUST run inside the caller's tenant block.
+  """
   @spec drift_note_ids_under(map(), map(), [String.t()]) :: [Ecto.UUID.t()]
   def drift_note_ids_under(user, vault, folders) do
     case Crypto.get_dek(user) do
-      {:ok, dek} -> drift_note_ids(user, vault, dek, &folder_in?(&1, folders))
+      {:ok, dek} -> for {id, f} <- placed_drift(user, vault, dek), folder_in?(f, folders), do: id
       {:error, _} -> []
     end
   end
@@ -7151,18 +7184,27 @@ defmodule Engram.Notes do
   # parallel batch decryptor. Always meta-projected (#863): callers only need
   # path/folder/kind; content decrypt is targeted per-id where actually
   # required (fetch_v1_contents).
-  defp fetch_decrypted_live_rows(user, vault, folders) do
+  defp fetch_decrypted_live_rows(user, vault, folders),
+    do: user |> scan_with_drift(vault, folders) |> elem(0)
+
+  # `fetch_decrypted_live_rows/3` plus the vault's placed drift it read, for a
+  # batch that also checks targets (`do_reduce_move_folders/6`).
+  defp scan_with_drift(user, vault, folders) do
     {:ok, dek} = Crypto.get_dek(user)
 
-    # ONE tenant block: the folder walk, the drift page, then one indexed read
-    # per kind of evidence (not one OR across kinds: each arm has its own
-    # index), the by-id ones skipped when empty. Only the drift (0 rows in
-    # steady state) is decrypted inside it.
-    rows =
+    # ONE tenant block: the drift page FIRST, then the folder walk, then one
+    # indexed read per kind of evidence (not one OR across kinds: each arm has
+    # its own index), the by-id ones skipped when empty. That order covers a
+    # heal (the drain giving a drift note its row) at any point under READ
+    # COMMITTED: before the drift read, the walk and the by-reference read
+    # see it; after, its id is in `drift_ids`. Walk first, a heal in between
+    # would hide it from both. Only the drift (0 rows in steady state) is
+    # decrypted inside the block.
+    {rows, drift} =
       Repo.with_tenant!(user.id, fn ->
-        refs = Rows.subtree_refs(user, vault.id, folders)
         {drift, undecryptable} = drift_note_folders(user, vault, dek)
         if undecryptable > 0, do: raise("Phase B envelope decryption failed")
+        refs = Rows.subtree_refs(user, vault.id, folders)
 
         ids = Enum.map(refs, & &1.id)
         row_hmacs = for %{full_path_hmac: h} when is_binary(h) <- refs, do: h
@@ -7176,7 +7218,7 @@ defmodule Engram.Notes do
 
         drifted = if drift_ids == [], do: [], else: Repo.all(where(live, [n], n.id in ^drift_ids))
 
-        Enum.uniq_by(by_ref ++ folder_markers_in(live, row_hmacs) ++ drifted, & &1.id)
+        {Enum.uniq_by(by_ref ++ folder_markers_in(live, row_hmacs) ++ drifted, & &1.id), drift}
       end)
 
     # Marker rows have nil path_ciphertext, so the standard decrypt path
@@ -7184,8 +7226,11 @@ defmodule Engram.Notes do
     # through the dedicated hydrate path instead.
     {markers, real} = Enum.split_with(rows, &(&1.kind == "folder"))
 
-    (Enum.map(markers, &hydrate_folder_marker(&1, dek)) ++ decrypt_or_raise!(real, user))
-    |> Enum.filter(&folder_in?(&1.folder || "", folders))
+    rows =
+      (Enum.map(markers, &hydrate_folder_marker(&1, dek)) ++ decrypt_or_raise!(real, user))
+      |> Enum.filter(&folder_in?(&1.folder || "", folders))
+
+    {rows, drift}
   end
 
   # The live folder markers a cascade must see, in one read on
@@ -8509,14 +8554,17 @@ defmodule Engram.Notes do
   # (advance_renamed_rows/3), and its rows were already under the earlier
   # folder, so later lookups by its current folder still find them.
   defp do_reduce_move_folders(user, vault, marker_ids, target_folder, dek, sources) do
-    rows = fetch_decrypted_live_rows(user, vault, sources)
+    # The drift is read once for every marker's target check. A moved drift
+    # note is re-pointed by its cascade, so it leaves the list.
+    {rows, drift} = scan_with_drift(user, vault, sources)
 
     marker_ids
-    |> Enum.reduce_while({%{moved: 0, pairs: []}, rows}, fn id, {acc, rows} ->
-      case move_folder_into(user, vault, id, target_folder, dek, rows) do
+    |> Enum.reduce_while({%{moved: 0, pairs: []}, {rows, drift}}, fn id, {acc, {rows, drift}} ->
+      case move_folder_into(user, vault, id, target_folder, dek, {rows, drift}) do
         {:ok, {old_folder, new_folder}} ->
           acc = %{acc | moved: acc.moved + 1, pairs: [{old_folder, new_folder} | acc.pairs]}
-          {:cont, {acc, advance_renamed_rows(rows, old_folder, new_folder)}}
+          drift = Enum.reject(drift, fn {_id, f} -> folder_in?(f, [old_folder]) end)
+          {:cont, {acc, {advance_renamed_rows(rows, old_folder, new_folder), drift}}}
 
         {:error, :not_found} ->
           {:halt, {:rollback, {:not_found, id}}}
@@ -8572,7 +8620,7 @@ defmodule Engram.Notes do
   # the gated rename (which cascades through descendants, reusing the shared
   # batch scan). Mirrors apply_moves/3's contract: returns {:ok, _}
   # or {:error, atom}.
-  defp move_folder_into(user, vault, id, target_folder, dek, rows) do
+  defp move_folder_into(user, vault, id, target_folder, dek, {rows, drift}) do
     case get_folder_marker_by_id(user, vault, id) do
       {:ok, marker} ->
         source_folder = hydrate_folder_marker(marker, dek).folder
@@ -8599,7 +8647,7 @@ defmodule Engram.Notes do
           # batch has its own :cycle guard above) :invalid_path — the batch entry
           # point already ran ensure_user_dek, so rename_folder/4's wider
           # error surface can't arise here (dialyzer proves the coverage).
-          case rename_folder_gated(user, vault, source_folder, new_folder, rows) do
+          case rename_folder_gated(user, vault, source_folder, new_folder, rows, drift) do
             {:ok, _count} -> {:ok, {source_folder, new_folder}}
             {:error, :conflict} -> {:error, :conflict}
             {:error, :invalid_path} -> {:error, :cycle}
