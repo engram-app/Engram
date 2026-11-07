@@ -90,8 +90,17 @@ defmodule Engram.Indexing.PayloadV6 do
   @spec baseline() :: 5
   def baseline, do: @baseline
 
+  # The note fields `build/2` reads with a type (the HMACs it turns into
+  # filter ids); every other field is read through `PayloadV5.build/2`.
+  @type note :: %{
+          required(:path_hmac) => binary() | nil,
+          required(:folder_hmac) => binary() | nil,
+          required(:type_hmac) => binary() | nil,
+          optional(atom()) => term()
+        }
+
   @doc "The v6 payload for a note and its extracted fields."
-  @spec build(map(), FlatFields.t()) :: %{String.t() => term()}
+  @spec build(note(), FlatFields.t()) :: %{String.t() => term()}
   def build(note, flat) do
     note
     |> PayloadV5.build(flat)
