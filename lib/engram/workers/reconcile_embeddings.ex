@@ -151,18 +151,32 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   """
   @spec version_check(Ecto.UUID.t() | nil) :: {:ok, Oban.Job.t()} | {:error, term()}
   def version_check(vault_id \\ nil) do
+    :ok = request_version_check(vault_id)
+    queue_version_check(vault_id)
+  end
+
+  @doc """
+  `version_check/1`'s request row alone: one row, so a caller can write it
+  inside its own transaction and the request commits with the change that
+  needs it. Any later re-verify or sweep reads it; `queue_version_check/1`
+  after the commit only starts it sooner.
+  """
+  @spec request_version_check(Ecto.UUID.t() | nil) :: :ok
+  def request_version_check(vault_id \\ nil) do
     # One request row per vault (a repeated restore of one vault rewrites the
     # same row), or one fleet-wide row for an index-version change.
     name = if vault_id, do: "#{@version_check_pending}:#{vault_id}", else: @version_check_pending
-    :ok = Cursor.put(name, %{"id" => Ecto.UUID.generate()})
-    # A vault's check rides the next plain sweep (scoped, cheap); only the
-    # fleet check needs the re-verify chain's hops.
-    version_check_job(vault_id)
+    Cursor.put(name, %{"id" => Ecto.UUID.generate()})
   end
 
-  defp version_check_job(vault_id) when is_binary(vault_id), do: kick()
+  @doc "The job that runs a requested version check now (`request_version_check/1`)."
+  @spec queue_version_check(Ecto.UUID.t() | nil) :: {:ok, Oban.Job.t()} | {:error, term()}
+  # A vault's check rides the next plain sweep (scoped, cheap); only the
+  # fleet check needs the re-verify chain's hops.
+  def queue_version_check(vault_id \\ nil)
+  def queue_version_check(vault_id) when is_binary(vault_id), do: kick()
 
-  defp version_check_job(nil) do
+  def queue_version_check(nil) do
     args = %{"mode" => "reverify"}
     Oban.insert(new(args, replace: replace_args(args)))
   end

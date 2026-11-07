@@ -1284,6 +1284,26 @@ defmodule Engram.Crypto.UserDekRotationTest do
       end
     end
 
+    # The resparse request is a row (O(1)), so it commits with the flip: a
+    # node that dies between the commit and the job insert loses nothing,
+    # since any later re-verify reads the pending request.
+    test "the resparse request row commits inside the flip transaction",
+         %{user: user, bypass: bypass} do
+      Engram.QdrantStub.stub_healthy(bypass)
+
+      {:ok = _rotated, queries} =
+        Engram.QueryRecorder.record(fn -> UserDekRotation.rotate_user(user.id) end)
+
+      [flip] =
+        queries
+        |> Engram.QueryRecorder.transactions()
+        |> Enum.filter(fn stmts ->
+          Enum.any?(stmts, &(&1 =~ ~r/UPDATE "users".*encrypted_dek/s))
+        end)
+
+      assert Enum.any?(flip, &(&1 =~ ~r/INSERT INTO "maintenance_cursors"/))
+    end
+
     test "note_attrs are rewritten under the new key", %{user: user, note: note} do
       assert :ok = UserDekRotation.rotate_user(user.id)
       {:ok, new_fk} = Crypto.dek_filter_key(Repo.get!(Engram.Accounts.User, user.id))

@@ -2528,16 +2528,22 @@ defmodule Engram.Crypto.UserDekRotation do
 
   # Inside the flip's transaction: the sparse vectors are on the retired key
   # from this commit on, so their NULL `keyword_version` commits with it, or
-  # not at all. No per-note job here (O(vault) rows inside the flip): the
-  # resparse is queued after the commit (`resparse_after_flip/0`). Returns
-  # the text guard, which this process cancels once its own text sweep is
-  # done (`cancel_text_guard/1`).
+  # not at all, and so does the request that resparses them (one row, the
+  # fleet version check: its keyword top-up finds the NULLs and queues
+  # `RefreshKeywordVectors`, paced and capped by its backlog). No per-note job
+  # here (O(vault) rows inside the flip). A plain `kick/0` would not do: once
+  # `IndexVersions` is done its keyword sweep runs only under a version check.
+  #
+  # Returns the text guard, which this process cancels once its own text
+  # sweep is done (`cancel_text_guard/1`).
   defp queue_resparse(user_id, new_dek_version) do
     {:ok, {_, _}} =
       Repo.with_tenant(user_id, fn ->
         from(n in Engram.Notes.Note, where: n.user_id == ^user_id and n.kind == "note")
         |> Repo.update_all(set: [keyword_version: nil])
       end)
+
+    :ok = ReconcileEmbeddings.request_version_check()
 
     Oban.insert(
       RotationTextGuard.new(
@@ -2547,15 +2553,22 @@ defmodule Engram.Crypto.UserDekRotation do
     )
   end
 
-  # After the flip commits: the paced keyword top-up of a fleet version
-  # check (`ReconcileEmbeddings.version_check/0`) finds the NULL
-  # `keyword_version` notes and queues `RefreshKeywordVectors`, capped by its
-  # backlog. A plain `kick/0` would not: once `IndexVersions` is done its
-  # keyword sweep runs only under a version check. A node that dies before
-  # this line leaves the NULLs for the next fleet version check.
+  # After the flip commits: start the requested version check now. Only
+  # sooner: the request row committed with the flip, so a lost insert (or a
+  # node that dies first) leaves it for the next re-verify or sweep.
   defp resparse_after_flip do
-    {:ok, _} = ReconcileEmbeddings.version_check()
-    :ok
+    case ReconcileEmbeddings.queue_version_check() do
+      {:ok, _job} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "dek rotation: resparse check not queued, left for the next sweep reason=#{Metadata.safe_reason(reason)}",
+          Metadata.with_category(:warning, :crypto, phase: :final_flip)
+        )
+
+        :ok
+    end
   end
 
   defp cancel_text_guard(%Oban.Job{id: id}) when is_integer(id), do: Oban.cancel_job(id)
