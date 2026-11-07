@@ -84,6 +84,14 @@ defmodule Engram.Notes.CrdtCheckpoint do
       every tail row up to now. When both are omitted, the watermark is captured
       here BEFORE the doc is encoded, so rows landing mid-encode survive the
       prune. `:prune_ids` takes precedence when present.
+    * `:actor` — the history actor of the edit (`Revisions.record_write/3`),
+      `"sync"` by default: the user's own CRDT clients. `Notes.CrdtWrite`
+      passes its writer's (`"mcp"`, `"api:<key_id>"`, ...).
+    * `outbox: false` — insert no `NoteCommitted` job: the caller
+      (`Notes.upsert_note/4`, through `Notes.CrdtWrite`) inserts its own, with
+      its writer's embed priority.
+    * `announce: false` — skip the post-commit `crdt_doc_ready` announce: the
+      caller's deliver-out announces once.
 
   Never called per-keystroke — driven by `CrdtCheckpointTimer` (debounced)
   and by `CrdtPersistence.unbind/3` on room exit. Never raises: any internal
@@ -206,7 +214,9 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
     # #1710: decided once, before the transaction (see Revisions moduledoc), so
     # the billing lookup never runs under the vault row lock next_seq! takes.
-    recording = Revisions.recording?(user)
+    # `recording:` is the caller's decision when it runs this inside its own
+    # transaction, already under that lock (`Notes.CrdtWrite`).
+    recording = Keyword.get_lazy(opts, :recording, fn -> Revisions.recording?(user) end)
     opts = Keyword.put(opts, :recording, recording)
 
     # Phase 0 monotonicity (identity-as-CRDT): never materialize the live doc's
@@ -285,7 +295,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
                   if renamed_title,
                     do: Engram.Notes.NameIndex.announce(vault_id, note_id, path, renamed_title)
 
-                if prev_hash != new_hash do
+                if prev_hash != new_hash and Keyword.get(opts, :announce, true) do
                   # Deliver-out gap: a web-editor edit lands ONLY via this checkpoint,
                   # which (unlike REST/MCP writes) never announced. A client not
                   # actively enrolled in the room — e.g. Obsidian — thus never
@@ -595,12 +605,15 @@ defmodule Engram.Notes.CrdtCheckpoint do
         # R6 outbox: the content change's one NoteCommitted job, in this
         # transaction but BEFORE the seq bump, so the insert is not made under
         # the vault seq lock `next_seq!` takes (#1710 kept that lock short).
-        # A lost fence below changed nothing and discards it.
+        # A lost fence below changed nothing and discards it. `outbox: false`:
+        # the caller inserts its own (see checkpoint/5).
         job =
-          NoteCommitted.insert!(note_id, user.id,
-            embed_priority: EmbedNote.priority_for(note),
-            finalize?: finalize?(note, Keyword.fetch!(opts, :recording), prev, content_hash)
-          )
+          if Keyword.get(opts, :outbox, true),
+            do:
+              NoteCommitted.insert!(note_id, user.id,
+                embed_priority: EmbedNote.priority_for(note),
+                finalize?: finalize?(note, Keyword.fetch!(opts, :recording), prev, content_hash)
+              )
 
         changeset =
           note
@@ -637,9 +650,15 @@ defmodule Engram.Notes.CrdtCheckpoint do
             # arm below commits the transaction too, so a history step placed
             # before the write would record a version for a save that never
             # happened. `note` is the PRE-write row, so its content_ciphertext
-            # is exactly the text this checkpoint replaced. Every edit that
-            # reaches a checkpoint is the user's own CRDT clients: actor "sync".
-            _ = Revisions.record_write(note, "sync", Keyword.fetch!(opts, :recording))
+            # is exactly the text this checkpoint replaced. A room's edits are
+            # the user's own CRDT clients (actor "sync"); `Notes.CrdtWrite`
+            # passes its writer's actor.
+            _ =
+              Revisions.record_write(
+                note,
+                Keyword.get(opts, :actor, "sync"),
+                Keyword.fetch!(opts, :recording)
+              )
 
             # The re-derived title rides out for the post-commit name-index
             # announce (a checkpoint broadcasts nothing else that carries it).
@@ -651,7 +670,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
             # revert. Discard this write's job and return equal hashes; the
             # next debounce tick re-captures the now-merged doc and
             # checkpoints that.
-            :ok = NoteCommitted.discard!(job)
+            :ok = if job, do: NoteCommitted.discard!(job), else: :ok
 
             Logger.info(
               "crdt checkpoint skipped stale write note_id=#{note_id} captured_version=#{fence_version}",

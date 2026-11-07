@@ -53,6 +53,23 @@ you must synchronize on the room text converging AND the tail row landing
 before issuing the next REST write, or the race window closes and the test
 passes vacuously.
 
+### The ops path (#2519 step 1, behind `:crdt_write_apply_text`, default off)
+
+`Notes.CrdtWrite.apply_text/4` replaces the snapshot merge for markdown
+updates: the incoming text is hunk-diffed (`Native.text_hunks/2`, line diff
+plus per-block trim) into the doc the writer read, the delta is checkpointed
+into the row in the request (`CrdtCheckpoint`, the room's own materializer),
+and post-commit the same delta bytes, not the snapshot, go into a live room
+(`deliver_out(..., delta:)`). Still one encoder per change. Two traps:
+
+- **Do not call the room from inside the write's transaction.** The room's
+  append resets `notes.crdt_head` on the row the writer holds `FOR NO KEY
+  UPDATE`, so room and writer wait on each other.
+- **The single-span diff is itself a doubling source.** A rewrite of lines 2
+  and 200 deletes and re-inserts 3-199, so a concurrent edit on line 100
+  comes back next to the old text. `crdt_write_test.exs` "an edit on line 100
+  landing after the read survives" goes red if the ops path uses it.
+
 ## Remaining single-encoder hazard
 
 A client that seeds its ydoc from disk while the server already has state injects a

@@ -29,6 +29,7 @@ defmodule Engram.Notes do
     CrdtDeliver,
     CrdtPersistence,
     CrdtUpdateLog,
+    CrdtWrite,
     EffectiveDates,
     Enqueue,
     FlatFields,
@@ -1051,6 +1052,8 @@ defmodule Engram.Notes do
           |> commit_content(user, opts, recording)
         end)
 
+      {result, opts} = crdt_applied(result, opts)
+
       case result do
         {:ok, :stale_expected} ->
           {:error, :stale_note}
@@ -1191,6 +1194,14 @@ defmodule Engram.Notes do
       end
     end
   end
+
+  # A `CrdtWrite` write is an ordinary update from here on, except that
+  # deliver-out pushes its delta into a live room (`crdt_delta:`, read by
+  # `broadcast_change/6`) instead of the stored snapshot.
+  defp crdt_applied({:ok, {:ok, {:crdt_applied, prev, note, text, hash, delta}}}, opts),
+    do: {{:ok, {:ok, {prev, note, text, hash}}}, Keyword.put(opts, :crdt_delta, delta)}
+
+  defp crdt_applied(result, opts), do: {result, opts}
 
   @doc """
   Fills `ctime` for existing live notes from `[%{path, ctime}]` in ONE statement.
@@ -2364,6 +2375,9 @@ defmodule Engram.Notes do
   defp commit_content({:ok, {:moved, prev_hash, note, _text, _hash}} = written, user, opts, rec),
     do: commit_content(written, prev_hash, note, user, opts, rec)
 
+  defp commit_content({:ok, {:crdt_applied, prev, note, _, _, _}} = written, user, opts, rec),
+    do: commit_content(written, prev, note, user, opts, rec)
+
   defp commit_content(other, _user, _opts, _recording), do: other
 
   defp commit_content(written, prev_hash, note, user, opts, recording) do
@@ -2834,14 +2848,59 @@ defmodule Engram.Notes do
   end
 
   defp rewrite(existing, base_attrs, user, sanitized_path, folder, opts) do
-    do_rewrite_note(
-      existing,
-      base_attrs,
-      user,
-      sanitized_path,
-      folder,
-      Keyword.take(opts, [:db_mode, :merge_doc, :prepared, :actor, :recording])
-    )
+    if crdt_write?(existing, sanitized_path, opts) do
+      crdt_write(existing, base_attrs, user, opts)
+    else
+      do_rewrite_note(
+        existing,
+        base_attrs,
+        user,
+        sanitized_path,
+        folder,
+        Keyword.take(opts, [:db_mode, :merge_doc, :prepared, :actor, :recording])
+      )
+    end
+  end
+
+  # #2519 step 1: a markdown content update enters the doc as Yjs ops
+  # (`CrdtWrite.apply_text/4`) instead of as a merged snapshot. The switch is
+  # read once per write. Not yet: a row with no CRDT state (legacy, two-way
+  # into its tail today), a `force:` repair (it rewrites unchanged text, which
+  # the ops path answers as a no-op), and the batch savepoint mode.
+  defp crdt_write?(%Note{} = row, sanitized_path, opts) do
+    CrdtBridge.markdown_path?(sanitized_path) and is_binary(row.crdt_state_nonce) and
+      not Keyword.get(opts, :force, false) and is_nil(Keyword.get(opts, :db_mode)) and
+      CrdtWrite.enabled?()
+  end
+
+  # The committed row comes back tagged with the delta, so deliver-out hands
+  # the room the write's ops (`commit_content/4`, `crdt_applied/2`). The
+  # checkpoint recorded the history step under the writer's actor.
+  defp crdt_write(existing, base_attrs, user, opts) do
+    base =
+      case Keyword.get(opts, :merge_doc) do
+        %Yex.Doc{} = doc -> {:doc, doc}
+        _ -> :current
+      end
+
+    case CrdtWrite.apply_text(user, existing, base_attrs.content,
+           actor: Keyword.fetch!(opts, :actor),
+           recording: Keyword.fetch!(opts, :recording),
+           base: base
+         ) do
+      {:ok, %{outcome: :noop}} ->
+        idempotent_repush(existing, base_attrs)
+
+      {:ok, %{outcome: :applied, note: row, delta: delta}} ->
+        {:ok,
+         {:crdt_applied, existing.content_hash, row, base_attrs.content, row.content_hash, delta}}
+
+      {:error, :stale_snapshot} ->
+        :stale_snapshot
+
+      {:error, _} = err ->
+        err
+    end
   end
 
   # #2480: the base a writer declares is checked against the hash a reader is
@@ -3065,11 +3124,14 @@ defmodule Engram.Notes do
 
   # Runs the merge and encryption for `expected_note:` BEFORE upsert_note opens
   # its transaction, so the row lock taken in lookup_and_write covers only the
-  # write. A no-op (incoming == current text) has nothing to prepare.
+  # write. A no-op (incoming == current text) has nothing to prepare, and
+  # neither has a `CrdtWrite` write (`crdt_write?/3`), which authors its ops
+  # against the locked row.
   defp prepare_expected(opts, base_attrs, user, sanitized_path, folder) do
     case Keyword.get(opts, :expected_note) do
       %Note{} = expected ->
-        if base_attrs.content == Keyword.get(opts, :current_text) do
+        if base_attrs.content == Keyword.get(opts, :current_text) or
+             crdt_write?(expected, sanitized_path, opts) do
           opts
         else
           prepared =
@@ -3100,6 +3162,18 @@ defmodule Engram.Notes do
     |> exclude(:select)
     |> select([n], struct(n, ^@note_core_fields))
     |> lock("FOR NO KEY UPDATE OF n0")
+  end
+
+  @doc false
+  # `Notes.CrdtWrite`'s write lock: `lock_for_write/2` on the note by id (in
+  # the caller's tenant transaction), answering the locked row's `seq`, or nil
+  # when the row is gone. Reads no body.
+  @spec lock_note_seq(Ecto.UUID.t(), Ecto.UUID.t()) :: integer() | nil
+  def lock_note_seq(note_id, vault_id) do
+    case Repo.one(lock_for_write(from(n in Note, where: n.id == ^note_id), vault_id)) do
+      %Note{seq: seq} -> seq
+      nil -> nil
+    end
   end
 
   # Runs a `lock_for_write/2` query, then reads the locked row's body from
@@ -9172,7 +9246,9 @@ defmodule Engram.Notes do
     deliver_note = if is_binary(user), do: note.id, else: note
 
     Repo.after_commit(fn ->
-      CrdtDeliver.deliver_out(user, vault_id, path, deliver_note, note.content || "")
+      CrdtDeliver.deliver_out(user, vault_id, path, deliver_note, note.content || "",
+        delta: Keyword.get(opts, :crdt_delta)
+      )
     end)
 
     :ok
