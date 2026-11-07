@@ -67,7 +67,10 @@ defmodule Engram.Indexing.VectorCache do
 
   @version "v1"
   @table "embedding_cache"
-  @put_rows 1_000
+  # Rows (keys) a statement, for reads and writes alike: a lookup's or a
+  # write's cost per query stays fixed whatever the note size (a 10 MB note
+  # has thousands of chunks). 1,000 rows is ~2 MB of ciphertext a query.
+  @batch_rows 1_000
   # A miss only re-embeds (paid Voyage tokens, never a failure). 24 h covers
   # EmbedNote's worst retry path (~9.5 h). Not covered, accepted: jobs held by
   # `Rebuild.hold/1` through a rebuild longer than a day, and a Qdrant outage
@@ -143,16 +146,22 @@ defmodule Engram.Indexing.VectorCache do
 
   @doc """
   The cached vectors for `keys`, as packed float32 LE (the embed path's form,
-  widened from the stored f16). One read-only query. Missing or unreadable
-  rows are absent.
+  widened from the stored f16). Read-only, #{@batch_rows} keys a query, so
+  no one query grows with the note (#2364). Missing or unreadable rows are
+  absent.
   """
   @spec get_many(String.t(), <<_::256>>, [key()]) :: %{key() => binary()}
   def get_many(_user_id, _dek, []), do: %{}
 
   def get_many(user_id, <<_::256>> = dek, keys) when is_list(keys) do
-    {:ok, %{rows: rows}} =
+    uid = Ecto.UUID.dump!(user_id)
+
+    {:ok, rows} =
       Repo.with_tenant(user_id, fn ->
-        Repo.query!(@get_many_sql, [Ecto.UUID.dump!(user_id), Enum.uniq(keys)])
+        keys
+        |> Enum.uniq()
+        |> Enum.chunk_every(@batch_rows)
+        |> Enum.flat_map(&Repo.query!(@get_many_sql, [uid, &1]).rows)
       end)
 
     hits =
@@ -174,7 +183,7 @@ defmodule Engram.Indexing.VectorCache do
   @doc """
   Stores `{key, digest, packed_f32}` entries for `note_id`, encrypted under
   `dek`, which is DEK version `dek_version` (nil skips that check). Batched
-  (`#{@put_rows}` rows a statement, six parameters, so the 65,535-parameter
+  (`#{@batch_rows}` rows a statement, six parameters, so the 65,535-parameter
   limit never binds). Overwrites an existing key. Never raises on a refused
   write (see "Writes refused").
   """
@@ -195,7 +204,7 @@ defmodule Engram.Indexing.VectorCache do
 
     entries
     |> Enum.uniq_by(&elem(&1, 0))
-    |> Enum.chunk_every(@put_rows)
+    |> Enum.chunk_every(@batch_rows)
     |> Enum.each(fn batch ->
       {keys, cts, nonces} =
         batch
@@ -353,6 +362,9 @@ defmodule Engram.Indexing.VectorCache do
       @prune_batch
     )
   end
+
+  @doc false
+  def rows_per_query, do: @batch_rows
 
   defp aad(user_id, key), do: "embedding_cache:" <> user_id <> ":" <> Base.encode16(key)
 
