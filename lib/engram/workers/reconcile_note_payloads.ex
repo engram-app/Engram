@@ -119,6 +119,8 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   @n_bucket "payload_backfill_points"
   @n_window_ms 60_000
   @n_per_min 500
+  # An `n` job's Oban priority: behind the heal's (`priority: 3` above).
+  @n_priority 5
   # Where `requeue_unbackfilled/0`'s walk resumes.
   @requeue_cursor "payload_n_requeue"
 
@@ -133,8 +135,14 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   (DEK rotation, FileTimes, the Drain, the ledger) goes through here.
   """
   @impl Oban.Worker
-  def new(args, opts) when is_map(args) and is_list(opts),
-    do: super(Map.put_new(args, "mode", "heal"), opts)
+  def new(args, opts) when is_map(args) and is_list(opts) do
+    args = Map.put_new(args, "mode", "heal")
+
+    # `n` jobs sort behind heals on the one `crdt_backfill` lane, so a heal
+    # is never queued behind a minute's worth of `n` wakes.
+    opts = if args["mode"] == "n", do: Keyword.put_new(opts, :priority, @n_priority), else: opts
+    super(args, opts)
+  end
 
   @impl Oban.Worker
   # The `n` backfill: a job of its own (`mode: "n"`, its own unique slot),

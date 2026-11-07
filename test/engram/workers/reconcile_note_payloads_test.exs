@@ -924,6 +924,15 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       assert Enum.all?(payload_versions(ctx), &is_nil/1)
     end
 
+    # `n` jobs sort behind heals on the one `crdt_backfill` lane: a heal
+    # inserted after a minute's worth of `n` wakes still goes first.
+    test "an n job has a lower priority than a heal" do
+      heal = ReconcileNotePayloads.new(%{"user_id" => Ecto.UUID.generate()})
+      n = ReconcileNotePayloads.new(%{"user_id" => Ecto.UUID.generate(), "mode" => "n"})
+
+      assert Ecto.Changeset.get_field(n, :priority) > Ecto.Changeset.get_field(heal, :priority)
+    end
+
     # The heal and the `n` backfill are separate jobs with separate unique
     # slots: a paused backfill chain (scheduled, mid-cursor) must not swallow
     # a DEK rotation's heal, which heals from the user's first note.
