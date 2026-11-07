@@ -592,9 +592,9 @@ defmodule Engram.Folders.ReadsTest do
       assert_index!(all, ~r/GROUP BY .*folder_ref_id/s, "notes_folder_ref_live on")
       # The page fetches the row, so any reference index serves it
       # (`notes_folder_ref`, `_live` or S1's `_live_id`).
-      assert_index!(all, ~r/folder_ref_id" = (ANY|\$)/, "using notes_folder_ref")
+      assert_index!(all, ~r/folder_ref_id" = (ANY|\$)/, ~r/using notes_folder_ref(_live|_live_id)? on/)
       # The root page: a NULL reference that is not drift.
-      assert_index!(all, ~r/coalesce\(octet_length/, "using notes_folder_ref")
+      assert_index!(all, ~r/coalesce\(octet_length/, ~r/using notes_folder_ref(_live|_live_id)? on/)
     end
 
     test "the scan's marker arm and the attachments' stale arm", %{user: u, vault: v} do
