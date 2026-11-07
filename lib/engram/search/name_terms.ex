@@ -91,13 +91,15 @@ defmodule Engram.Search.NameTerms do
     * index pass: the read; writes only when the title's terms changed.
     * search, constant in vault size and in notes per folder:
       - per kind (notes, folders: separate budgets), the rarest of at most
-        #{16} query terms by bounded counts (at most #{16} x #{2_000} index
-        entries), then at most #{2_000} postings per dim of that term
-        scanned (index order; one dim, or a contraction's few), each one
-        primary-key probe of its ref plus at most #{16} `name_terms_pkey`
-        probes for the terms, stopping at #{500} matches (dead rows never fill the budget; past #{2_000} dead rows on
-        the rarest term a live ref can be missed, counted as `scan_capped`,
-        until the delete hooks or the orphan sweep remove them);
+        #{16} query words (at most #{4} dims each, #{32} in all) by bounded
+        counts (at most #{32} x #{2_000} index entries), then at most
+        #{2_000} postings per dim of that word (at most #{4}) scanned newest
+        first (a backward `name_terms_pkey` read), each one primary-key
+        probe of its ref plus at most #{32} `name_terms_pkey` probes for the
+        words, stopping at #{500} matches (dead rows never fill the budget;
+        past #{2_000} dead rows on the rarest word a live ref can be missed,
+        counted as `scan_capped`, until the delete hooks or the orphan sweep
+        remove them);
       - one exact-name probe;
       - folders: at most #{200} descendant folders, at most #{32} levels, one
         query per level; then at most #{50} notes per folder, cut to #{50};
@@ -148,6 +150,8 @@ defmodule Engram.Search.NameTerms do
   @version 1
   @max_terms 32
   @max_query_terms 16
+  @max_word_forms 4
+  @max_query_dims 32
   @postings 500
   @k 50
   @scan_cap 2_000
@@ -191,7 +195,9 @@ defmodule Engram.Search.NameTerms do
 
   @doc """
   The query's required terms for the match gate, one group per query word
-  (at most #{16}): a ref matches a group when it holds ANY of its dims.
+  (at most #{16} groups of at most #{4} dims, at most #{32} dims in all;
+  later words past the total are dropped, before any SQL): a ref matches a
+  group when it holds ANY of its dims.
   Stopwords are dropped (`Stopwords.drop/1`). A word's group is its raw
   and stem dims, so "plans" finds "Plan" and "notes" finds "note", while
   "2" still never matches "3". A contraction's group adds the word with
@@ -205,10 +211,21 @@ defmodule Engram.Search.NameTerms do
     query
     |> String.split()
     |> Enum.flat_map(&word_texts/1)
-    |> Enum.map(&dims(&1, fk))
+    |> Enum.map(&dims(&1, fk, @max_word_forms))
     |> Enum.reject(&(&1 == []))
     |> Enum.uniq()
     |> Enum.take(@max_query_terms)
+    |> within_dims(@max_query_dims)
+  end
+
+  # Whole groups while their dims total at most `max`; the rest are dropped.
+  defp within_dims(groups, max) do
+    groups
+    |> Enum.reduce_while({[], 0}, fn g, {acc, n} ->
+      if n + length(g) > max, do: {:halt, {acc, n}}, else: {:cont, {[g | acc], n + length(g)}}
+    end)
+    |> elem(0)
+    |> Enum.reverse()
   end
 
   # The texts of each required group a whitespace-separated word gives.
@@ -880,8 +897,8 @@ defmodule Engram.Search.NameTerms do
   (UUIDv7 `id DESC`).
   Two queries, no per-candidate round trip: `counts_query/3` counts each
   dim's postings (up to #{2_000} each) and the group with the fewest drives;
-  `hits_query/5` scans at most #{2_000} postings per driving dim (index
-  order), probes each ref's liveness by its primary key and every group by
+  `hits_query/5` scans at most #{2_000} postings per driving dim (newest
+  first), probes each ref's liveness by its primary key and every group by
   `name_terms_pkey`, and stops at the #{500}th match. Notes and folders
   have separate budgets, and dead rows never fill the live budget. When a
   driving dim's scan hits #{2_000} and fewer than #{500} match it counts in
@@ -984,6 +1001,9 @@ defmodule Engram.Search.NameTerms do
       where:
         r.vault_id in ^vault_ids and r.ref_kind == ^kind and
           r.dim == field(parent_as(:d), :dim),
+      # Newest first: a backward read of name_terms_pkey (vault_id, dim,
+      # ref_kind, ref_id), no sort. With several vaults, vault by vault.
+      order_by: [desc: r.vault_id, desc: r.dim, desc: r.ref_kind, desc: r.ref_id],
       limit: ^@scan_cap,
       select: %{ref_id: r.ref_id, vault_id: r.vault_id}
     )

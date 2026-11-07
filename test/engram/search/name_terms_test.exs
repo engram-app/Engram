@@ -118,8 +118,8 @@ defmodule Engram.Search.NameTermsTest do
             vault_id: vault.id,
             dim: dim,
             ref_kind: 0,
-            # All before any live note's id in posting order.
-            ref_id: "00000000-" <> String.slice(Ecto.UUID.generate(), 9..-1//1),
+            # All after any live note's id: the scan reads newest first.
+            ref_id: "ffffffff-" <> String.slice(Ecto.UUID.generate(), 9..-1//1),
             user_id: user.id
           }
 
@@ -425,17 +425,27 @@ defmodule Engram.Search.NameTermsTest do
                NameTerms.recall(ctx.user, {:vault, ctx.vault}, Enum.join(words, " "))
     end
 
+    test "a crafted query stays at 32 terms or fewer (16 words, 4 forms a word)", ctx do
+      {:ok, fk} = Crypto.dek_filter_key(ctx.user)
+      pieces = Enum.map_join(1..40, "-", &"w#{&1}x")
+      query = Enum.map_join(1..16, " ", &"z#{&1} z'#{pieces}")
+
+      terms = NameTerms.query_terms(query, fk)
+      assert length(List.flatten(terms)) <= 32
+      assert Enum.all?(terms, &(length(&1) <= 4))
+    end
+
     test "a term with more than 500 live postings reads 500; a rarer word drives the match",
          ctx do
       {:ok, fk} = Crypto.dek_filter_key(ctx.user)
       [beta] = NameTerms.dims(["beta"], fk)
       b_dims = NameTerms.dims(["beta yak"], fk)
 
-      # 501 live fillers on `beta`, then the target (UUIDv7: every filler
-      # precedes it in posting order).
-      postings!(ctx.user, ctx.vault, beta, 501)
+      # The target, then 501 live fillers on `beta` (UUIDv7: every filler
+      # is newer, so the newest-first scan reads them first).
       b = write!(ctx.user, ctx.vault, "beta yak.md")
       :ok = NameTerms.on_note_written(ctx.user, b)
+      postings!(ctx.user, ctx.vault, beta, 501)
       hits = &tenant(ctx.user, fn -> NameTerms.hits([ctx.vault.id], &1, 0) end)
 
       # `beta` alone: its 500 live postings stop before the target.
@@ -520,6 +530,16 @@ defmodule Engram.Search.NameTermsTest do
         end)
 
       :ok
+    end
+
+    test "postings are scanned newest first: a backward primary-key scan, no sort", ctx do
+      plan =
+        plan(NameTerms.counts_query([ctx.vault.id, Ecto.UUID.generate()], [1, 2], 0), [
+          "name_terms"
+        ])
+
+      assert plan =~ "Index Only Scan Backward using name_terms_pkey", plan
+      refute plan =~ "Sort", plan
     end
 
     test "the rarest term is picked by bounded counts on the primary key", ctx do
