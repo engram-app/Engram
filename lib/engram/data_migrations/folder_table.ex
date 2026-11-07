@@ -1,9 +1,8 @@
 defmodule Engram.DataMigrations.FolderTable do
   @moduledoc """
   Fills the `folders` table and `folder_ref_id` for rows written before the
-  `notes_set_folder_ref` trigger and folder rows existed (migrations
-  20261029000000..800). Every later note write resolves its own folder in
-  the database, so this only catches up and heals what a previous-release
+  folder rows existed (migrations 20261029000000..800). Every later note
+  write sets its own folder reference, so this only catches up and heals what a previous-release
   writer left behind. No daily re-verify: `Engram.Bookkeeping.Drain` finds the
   users with drift through partial indexes and runs `run_pass/1` for them.
 
@@ -50,8 +49,7 @@ defmodule Engram.DataMigrations.FolderTable do
   name exists makes that row `explicit` and keeps ITS id.
 
   Readers trust an attachment's `folder_ref_id` only while its stamp matches
-  (`Rows.attachment_ref_current/0`); a note's is kept by the
-  `notes_set_folder_ref` trigger.
+  (`Rows.attachment_ref_current/0`); a note's is set by its writer.
   """
   @behaviour Engram.DataMigration
 

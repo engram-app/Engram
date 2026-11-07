@@ -99,6 +99,7 @@ defmodule Engram.NotesWholeVaultPlanTest do
   end
 
   # The vault's rows again under another user and vault, in one statement.
+  # No folder reference: the other vault has no folder rows (the foreign key).
   defp copy_vault(vault) do
     other = insert(:user)
     to = insert(:vault, user: other)
@@ -107,7 +108,7 @@ defmodule Engram.NotesWholeVaultPlanTest do
       Repo.query!("""
       SELECT quote_ident(column_name) FROM information_schema.columns
       WHERE table_name = 'notes' AND is_generated = 'NEVER'
-        AND column_name NOT IN ('id', 'user_id', 'vault_id')
+        AND column_name NOT IN ('id', 'user_id', 'vault_id', 'folder_ref_id')
       """)
 
     cols = Enum.map_join(cols, ", ", &hd/1)

@@ -74,7 +74,7 @@ defmodule Engram.Folders.NoteFolderHashNullTest do
       assert ref(n) == a
     end
 
-    test "a raw restore of a note with no hash releases a dead folder reference",
+    test "a raw restore of a note with no hash and a dead reference is healed",
          %{user: u, vault: v} do
       n = note!(u, v, "A/n.md")
       a = ref(n)
@@ -90,7 +90,12 @@ defmodule Engram.Folders.NoteFolderHashNullTest do
 
       Repo.query!("UPDATE notes SET deleted_at = NULL WHERE id = $1", [dump(n.id)])
 
-      assert ref(n) == nil
+      # No restore trigger since release D: the raw restore keeps the dead
+      # reference, and the FolderTable pass (it selects dead references)
+      # re-points the note at a live row for its folder.
+      assert ref(n) == a
+      FolderTable.run_pass(user_ids: [u.id])
+      assert ref(n) == row_at(u, "A")
     end
 
     test "undoing a folder delete places notes that have no hash", %{user: u, vault: v} do
