@@ -7379,16 +7379,21 @@ defmodule Engram.Notes do
         row_hmacs = for %{full_path_hmac: h} when is_binary(h) <- refs, do: h
         drift_ids = for {id, folder} <- drift, folder_in?(folder, folders), do: id
         # `folder_ref_id` too: the delete fence re-checks the scanned row's
-        # folder reference (`fenced_delete_query/2`).
+        # folder reference (`fenced_delete_query/1`).
         live =
           from(n in scoped_live(user, vault),
             select: struct(n, ^[:folder_ref_id | @note_meta_fields])
           )
 
+        row_hmac = Map.new(refs, &{&1.id, &1.full_path_hmac})
+
         by_ref =
           if ids == [],
             do: [],
-            else: Repo.all(from(n in live, where: n.kind == "note" and n.folder_ref_id in ^ids))
+            else:
+              from(n in live, where: n.kind == "note" and n.folder_ref_id in ^ids)
+              |> Repo.all()
+              |> Enum.map(&%{&1 | folder_row_hmac: row_hmac[&1.folder_ref_id]})
 
         drifted = if drift_ids == [], do: [], else: Repo.all(where(live, [n], n.id in ^drift_ids))
 
@@ -8070,8 +8075,6 @@ defmodule Engram.Notes do
       {:ok, %{deleted: 0, notes: 0}}
     else
       now = DateTime.utc_now()
-      # The scan decrypted these rows, so the user has a key.
-      {:ok, fk} = Crypto.dek_filter_key(user)
 
       {:ok, {deleted_ids, seq}} =
         Repo.with_tenant(user.id, fn ->
@@ -8079,7 +8082,7 @@ defmodule Engram.Notes do
 
           # Chunked for the reason `@rename_update_chunk` already documents in
           # this module: each statement binds its rows' ids AND their fence
-          # keys (`fenced_delete_query/2`), so an unchunked delete of a deep
+          # keys (`fenced_delete_query/1`), so an unchunked delete of a deep
           # tree walks into Postgres's 65535-parameter ceiling. Chunking
           # `matches` rather than `ids` keeps each statement's keys scoped to
           # its own rows.
@@ -8089,7 +8092,7 @@ defmodule Engram.Notes do
             |> Enum.reduce(MapSet.new(), fn chunk, acc ->
               {_updated, returned_ids} =
                 chunk
-                |> fenced_delete_query(fk)
+                |> fenced_delete_query()
                 |> Repo.update_all(
                   set: [
                     deleted_at: now,
@@ -8516,39 +8519,50 @@ defmodule Engram.Notes do
   # by the row's primary key and re-asserting what placed it in the scan:
   #
   #   * a note with a folder reference: it still names one of the scanned
-  #     folder rows, and that row is live at a path the scan observed
-  #     (`full_path_hmac`). A folder row renamed in place (same id, new path)
-  #     fails the second half, so a stale delete of the old path removes
-  #     nothing. Never `notes.folder_hmac` (R9: notes stop carrying it).
-  #   * a drift note (no reference, placed by its own folder envelope): its
-  #     `folder_nonce` is unchanged, i.e. no write moved it since the scan.
+  #     folder rows, and that row is live at a path the scan walked it at
+  #     (its `full_path_hmac` then, `folder_row_hmac`). A folder row renamed
+  #     in place (same id, new path) fails the second half, so a stale delete
+  #     of the old path removes nothing. Never `notes.folder_hmac` (R9: notes
+  #     stop carrying it).
+  #   * a drift note (no reference at scan, placed by its own folder
+  #     envelope): its `folder_nonce` is unchanged. Every path change
+  #     re-encrypts the envelope (new nonce); a drain heal that sets the
+  #     reference meanwhile does not, so the note still goes. (A legacy
+  #     `AadRebind` re-encrypt in between also changes the nonce: that note
+  #     is skipped, logged, and a fresh delete takes it.)
   #   * a folder marker: its `folder_hmac`, which is a marker's path identity.
   #
   # Cost per row: one primary-key probe on `notes`, plus one on `folders` for
   # a placed note (the EXISTS is by `f.id`).
-  defp fenced_delete_query(chunk, fk) do
+  defp fenced_delete_query(chunk) do
     {markers, notes} = Enum.split_with(chunk, &(&1.kind == "folder"))
     {placed, drift} = Enum.split_with(notes, &(&1.folder_ref_id != nil))
 
     fence =
-      [placed_arm(placed, fk), drift_arm(drift), marker_arm(markers)]
+      [placed_arm(placed), drift_arm(drift), marker_arm(markers)]
       |> Enum.reject(&is_nil/1)
       |> Enum.reduce(&dynamic([n], ^&2 or ^&1))
 
+    # Every row's id at the top level too, so the plan is a primary-key
+    # lookup: an OR of the arms alone is planned as an index scan with the
+    # arms as a filter.
+    ids = Enum.map(chunk, & &1.id)
+
     from(n in Note,
       as: :n,
+      where: n.id in ^ids,
       where: ^fence,
       where: is_nil(n.deleted_at),
       select: n.id
     )
   end
 
-  defp placed_arm([], _fk), do: nil
+  defp placed_arm([]), do: nil
 
-  defp placed_arm(rows, fk) do
+  defp placed_arm(rows) do
     ids = Enum.map(rows, & &1.id)
     refs = rows |> Enum.map(& &1.folder_ref_id) |> Enum.uniq()
-    paths = rows |> Enum.map(&Rows.path_hmac(fk, &1.folder)) |> Enum.uniq()
+    paths = for %{folder_row_hmac: h} when is_binary(h) <- rows, uniq: true, do: h
 
     live_row =
       from(f in Engram.Folders.Folder,
@@ -8566,7 +8580,7 @@ defmodule Engram.Notes do
   defp drift_arm(rows) do
     ids = Enum.map(rows, & &1.id)
     nonces = Enum.map(rows, & &1.folder_nonce)
-    dynamic([n], n.id in ^ids and is_nil(n.folder_ref_id) and n.folder_nonce in ^nonces)
+    dynamic([n], n.id in ^ids and n.folder_nonce in ^nonces)
   end
 
   # `folder_hmac` is NOT NULL on a marker (`notes_kind_shape_v3_check`), so

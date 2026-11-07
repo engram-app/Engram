@@ -863,6 +863,69 @@ defmodule Engram.FoldersTest do
       assert {:error, :not_found} = Notes.get_note(user, vault, "Docs/a.md")
     end
 
+    # #2508 review F1: a folder delete takes no folder-write lock, so the
+    # drain can heal a drift note (set its reference, envelope untouched)
+    # between scan and delete. The note must still go: otherwise it outlives
+    # the delete and the next drain recreates the folder from its envelope.
+    test "a drift note healed between scan and delete is still deleted", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
+
+      %{rows: [[row]]} =
+        Engram.Repo.query!("SELECT folder_ref_id FROM notes WHERE id = $1", [
+          Ecto.UUID.dump!(note.id)
+        ])
+
+      Engram.Repo.query!("UPDATE notes SET folder_ref_id = NULL WHERE id = $1", [
+        Ecto.UUID.dump!(note.id)
+      ])
+
+      {:ok, matches} = Notes.scan_folders(user, vault, ["Docs"])
+
+      Engram.Repo.query!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [
+        Ecto.UUID.dump!(note.id),
+        row
+      ])
+
+      assert {:ok, %{notes: 1}} = Notes.delete_scanned(user, vault, matches)
+      assert {:error, :not_found} = Notes.get_note(user, vault, "Docs/a.md")
+    end
+
+    # #2508 review F2: the fence is the folder rows the scan walked, not the
+    # note's own envelope. A note whose reference names another row of the
+    # subtree than its envelope's folder is still inside the delete.
+    test "a note whose reference names another scanned folder row is deleted", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "A/B/x.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
+
+      # An empty folder: a row of the subtree that no note's envelope names.
+      {:ok, _} = Notes.create_folder_marker(user, vault, "A/C")
+
+      Engram.Repo.query!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [
+        Ecto.UUID.dump!(note.id),
+        Ecto.UUID.dump!(Engram.FolderRows.tree(user)["A/C"].id)
+      ])
+
+      {:ok, matches} = Notes.scan_folders(user, vault, ["A"])
+
+      assert {:ok, %{notes: 1}} = Notes.delete_scanned(user, vault, matches)
+      assert {:error, :not_found} = Notes.get_note(user, vault, "A/B/x.md")
+    end
+
     # The fence firing is the only in-prod evidence the race is real, and it
     # leaves a live note under a folder whose markers were just removed.
     test "logs a warning when the fence skips a row", %{user: user, vault: vault} do
