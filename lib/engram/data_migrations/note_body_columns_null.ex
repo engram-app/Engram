@@ -51,8 +51,9 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
   `note_body_columns_null_max_fixed` service override (rows, default
   2,000; prod RDS swap rose 197 to 508 MB, then 220 to 709 MB, on each
   10k-row pass on 2026-11-07), so prod can slow the batch without a deploy. Not re-verified: no release from R8(b2) on writes
-  the columns, and the rollback floor is release A (rolling back below it
-  is data loss: its readers take the `notes` columns).
+  the columns, and it needs the rollback floor (`Engram.Release.Floor`) at
+  release A or later (rolling back below it is data loss: its readers take
+  the `notes` columns).
   """
   @behaviour Engram.DataMigration
 

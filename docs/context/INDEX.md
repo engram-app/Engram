@@ -153,6 +153,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 
 **Deploy & Infra**
 - AWS ECS deploy, backups, observability, security checklist → `docs/context/deploy-prod.md`
+- Shipping a change an older release cannot read, rolling prod back below a release, raising the rollback floor, or `release-floor-gate` / engram-infra `engram-rollback-floor` is red (`priv/release_floor`, `Engram.Release.Floor`, `[allow-below-floor]`) → `docs/context/rollback-floor.md`
 - `git push` of a `release-v*` tag is rejected as `already exists` (release-please cuts the tag itself on release-PR merge), or `deploy-prod.yml` / `terraform apply` is green and you are about to call prod deployed (neither waits for the ECS rollout), or verifying a rollout/WORKER tier without AWS credentials, or Loki's newest line stopped after a deploy → `docs/context/deploy-prod.md`
 - Checking whether a frontend change shipped by grepping the deployed SPA, or a `version` field that won't move after a deploy (the entry bundle proves nothing — routes are lazy chunks; trust `build_sha`) → `docs/context/frontend-ship-verification-bundle-grep.md`
 - Expecting a main merge to move prod frontend traffic (`deploy-frontend` only uploads a zero-traffic version; only `frontend-promote.yml` shifts traffic) → `docs/context/frontend-ship-verification-bundle-grep.md`
