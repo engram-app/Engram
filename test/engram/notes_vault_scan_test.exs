@@ -150,9 +150,9 @@ defmodule Engram.NotesVaultScanTest do
     # the unreferenced rest), each with a correlated live-folder probe; the
     # by-reference half became a nested loop over every folder row (231 ms on
     # a 13k-folder staging vault). One grouped scan, liveness decided from the
-    # folder rows already loaded. R9.5 step 3: plus ONE bounded read of the
-    # envelopes the group cannot name (drift notes and folder markers, each
-    # arm on its own partial index), never a second scan of the vault.
+    # folder rows already loaded. R9.5 step 3: the envelopes the group cannot
+    # name (drift notes, folder markers) are legs of that same statement, each
+    # on its own index, so one snapshot holds the whole count (#2485 MED-1).
     test "reads the vault's notes once", %{user: u, vault: v} do
       put!(u, v, "Work/A.md", "a")
       put!(u, v, "root.md", "r")
@@ -160,10 +160,8 @@ defmodule Engram.NotesVaultScanTest do
       {_, reads} =
         notes_reads(fn -> Repo.with_tenant!(u.id, fn -> Notes.raw_folder_count_rows(u, v) end) end)
 
-      report = "notes reads:\n#{Enum.join(reads, "\n")}"
-      assert length(reads) == 2, report
-      assert [_grouped] = Enum.filter(reads, &(&1 =~ "GROUP BY")), report
-      assert [_envelopes] = Enum.filter(reads, &(&1 =~ "UNION ALL")), report
+      assert [one] = reads, "notes reads:\n#{Enum.join(reads, "\n")}"
+      assert one =~ "GROUP BY" and one =~ "UNION ALL"
     end
   end
 

@@ -51,7 +51,13 @@ defmodule Engram.TenantScopeLintTest do
     {"engram/vaults.ex", "defp load_content_counts("},
     # Account-wide storage usage across ALL vaults (billing cap check) —
     # intentionally vault-agnostic, so the vault_id clause is absent.
-    {"engram/attachments.ex", "def storage_usage(user) do"}
+    {"engram/attachments.ex", "def storage_usage(user) do"},
+    # The folder drift read's first arm repeats the drain probe's predicate,
+    # which is USER-scoped like its partial index `notes_unresolved_folder
+    # (user_id)`: with scoped/2's vault clause the planner reads
+    # `notes_user_vault_live` and filters every root note of the vault. The
+    # callers keep their vault's rows; the second arm uses scoped_live/2.
+    {"engram/notes.ex", "def drift_query(user, vault) do"}
   ]
 
   test "tenant-isolation predicates compose from scoped/* helpers" do

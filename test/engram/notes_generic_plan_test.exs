@@ -94,11 +94,16 @@ defmodule Engram.NotesGenericPlanTest do
     assert plan =~ "notes_path_live", plan
   end
 
-  test "a folder listing reads notes_folder", %{user: u, vault: v} do
+  # R9.5 step 3: a folder listing places a note by `folder_ref_id`, so it
+  # reads a reference index, not the folder key's `notes_folder`.
+  test "a folder listing reads notes_folder_ref", %{user: u, vault: v} do
     plan =
-      plan_of(fn -> {:ok, [_]} = Notes.list_notes_in_folder(u, v, "F") end, ~r/"folder_id" = \$/)
+      plan_of(
+        fn -> {:ok, [_]} = Notes.list_notes_in_folder(u, v, "F") end,
+        ~r/"folder_ref_id" = \$/
+      )
 
-    assert plan =~ "notes_folder", plan
+    assert plan =~ "notes_folder_ref", plan
   end
 
   test "wikilink resolution reads notes_basename", %{user: u, vault: v} do

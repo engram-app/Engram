@@ -591,6 +591,8 @@ defmodule Engram.Folders.ReadsTest do
       assert_index!(all, ~r/GROUP BY .*folder_ref_id/s, "notes_folder_ref_live")
       # The page fetches the row, so either reference index serves it.
       assert_index!(all, ~r/folder_ref_id" = (ANY|\$)/, "using notes_folder_ref")
+      # The root page: a NULL reference that is not drift.
+      assert_index!(all, ~r/coalesce\(octet_length/, "using notes_folder_ref")
     end
 
     test "the scan's marker arm and the attachments' stale arm", %{user: u, vault: v} do
@@ -641,15 +643,148 @@ defmodule Engram.Folders.ReadsTest do
                  where: n.vault_id == ^v.id and n.kind == "note" and n.folder_ref_id in ^ids,
                  select: n.id
                )
-             ), Repo.all(from(n in Notes.drift_query(u), select: n.id))}
+             ), Enum.map(Repo.all(Notes.drift_query(u, v)), & &1.id)}
           end)
         end)
 
       assert {by_ref, drift} == {[], []}
+
+      # The real readers, as user 2 on user 1's vault: nothing either.
+      {:returned, {page, placed}} =
+        as_prod_role(fn ->
+          {:ok, %{notes: page}} = Notes.list_notes_in_folder_page(other, v, "B")
+          {:ok, dek} = Crypto.get_dek(other)
+          {page, Repo.with_tenant!(other.id, fn -> Notes.drift_note_folders(other, v, dek) end)}
+        end)
+
+      assert {page, placed} == {[], {[], 0}}
       # And the superuser does see them: the fixture is not empty.
       assert Repo.with_tenant!(u.id, fn ->
-               Repo.all(from(n in Notes.drift_query(u), select: n.id))
+               Enum.map(Repo.all(Notes.drift_query(u, v)), & &1.id)
              end) == [d.id]
     end
+  end
+
+  # The #2485 review (MED-1, MED-2): a heal (the drain giving a drift note
+  # its folder row) that commits between two of a reader's statements must
+  # not hide the note. The heal runs right after the reader's first
+  # `folders` statement inside `frame`, in the reader's own transaction:
+  # what a commit landing between the two statements looks like to the next.
+  describe "a heal between a reader's statements" do
+    defp in_frame?(frame) do
+      {:current_stacktrace, stack} = Process.info(self(), :current_stacktrace)
+
+      Enum.any?(stack, fn {mod, fun, _, _} ->
+        mod == Notes and String.contains?(Atom.to_string(fun), frame)
+      end)
+    end
+
+    defp heal_after_folder_read(frame, heal, fun) do
+      pid = self()
+      id = "heal-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        id,
+        [:engram, :repo, :query],
+        fn _, _, meta, _ ->
+          if self() == pid and meta[:source] == "folders" and not Process.get(:healed, false) and
+               in_frame?(frame) do
+            Process.put(:healed, true)
+            heal.()
+          end
+        end,
+        nil
+      )
+
+      try do
+        result = fun.()
+        assert Process.get(:healed), "the heal never ran"
+        result
+      after
+        :telemetry.detach(id)
+        Process.delete(:healed)
+      end
+    end
+
+    # `A/C/n.md` with no row at A/C (hard-deleted: the FK NULLs the
+    # reference), so the note is drift. The heal re-creates the row and points
+    # the note at it, as `FolderTable` does.
+    defp drifted_deep!(u, v) do
+      n = put_note(u, v, "A/C/n.md")
+      Repo.query!("DELETE FROM folders WHERE id = $1", [dump(FolderRows.tree(u)["A/C"].id)])
+      assert FolderRows.ref("notes", n.id) == nil
+
+      heal = fn ->
+        {:ok, row} = Folders.Rows.ensure(u, v.id, "A/C")
+
+        Repo.query!("UPDATE notes SET folder_ref_id = $1 WHERE id = $2", [
+          dump(row),
+          dump(n.id)
+        ])
+      end
+
+      {n, heal}
+    end
+
+    test "the listing page", %{user: u, vault: v} do
+      {n, heal} = drifted_deep!(u, v)
+
+      ids =
+        heal_after_folder_read("directly_in", heal, fn -> page_ids(u, v, "A/C") end)
+
+      assert n.id in ids
+    end
+
+    test "a rename moves the note with its folder", %{user: u, vault: v} do
+      {n, heal} = drifted_deep!(u, v)
+
+      heal_after_folder_read("scan_with_drift", heal, fn ->
+        assert {:ok, _} = Folders.rename(u, v, "A", "Z")
+      end)
+
+      {:ok, moved} = Notes.get_note_by_id(u, v, n.id)
+      assert moved.path == "Z/C/n.md"
+      assert FolderRows.ref("notes", n.id) == FolderRows.tree(u)["Z/C"].id
+    end
+
+    test "a recursive delete deletes it", %{user: u, vault: v} do
+      {_n, heal} = drifted_deep!(u, v)
+
+      heal_after_folder_read("scan_with_drift", heal, fn ->
+        assert {:ok, %{notes: 1}} = Folders.delete(u, v, "A", recursive: true)
+      end)
+    end
+
+    # MED-1: the counts read the groups, the drift and the markers in one
+    # statement (one snapshot), so no heal can land between them.
+    test "the counts read the vault's notes in ONE statement", %{user: u, vault: v} do
+      put_note(u, v, "B/n.md")
+      unref!(put_note(u, v, "B/d.md"))
+
+      {_, queries} =
+        QueryRecorder.record(fn ->
+          Repo.with_tenant!(u.id, fn -> Notes.raw_folder_count_rows(u, v) end)
+        end)
+
+      assert [one] = QueryPlan.reading(queries, "notes")
+      assert one =~ "GROUP BY" and one =~ "octet_length"
+    end
+  end
+
+  # LOW-1: one drift envelope that will not open is left out of the counts
+  # (and logged), as the listing leaves it out; the rest is served.
+  test "an undecryptable drift envelope is skipped by counts and listing", %{user: u, vault: v} do
+    put_note(u, v, "A/a.md")
+    bad = put_note(u, v, "B/n.md")
+    unref!(bad)
+
+    Repo.query!("UPDATE notes SET folder_ciphertext = $1 WHERE id = $2", [
+      :crypto.strong_rand_bytes(40),
+      dump(bad.id)
+    ])
+
+    assert %{"A" => 1} = counts(u, v)
+    refute Map.has_key?(counts(u, v), "B")
+    assert page_ids(u, v, "B") == []
   end
 end
