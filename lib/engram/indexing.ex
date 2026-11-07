@@ -1390,6 +1390,7 @@ defmodule Engram.Indexing do
         collection(),
         to_string(note.user_id),
         to_string(note.vault_id),
+        note.id,
         encode_hmac(note.path_hmac),
         Enum.map(points, & &1.id) ++ reused
       )
@@ -1575,6 +1576,7 @@ defmodule Engram.Indexing do
              collection(),
              to_string(note.user_id),
              to_string(note.vault_id),
+             note.id,
              path_hmac
            ) do
       forget_chunk_reuse(note)
@@ -1737,7 +1739,8 @@ defmodule Engram.Indexing do
   end
 
   @doc """
-  Exact count of a note's Qdrant points under `path_hmac` (#746). Used by the
+  Exact count of a note's Qdrant points (#746): the ones carrying its id, and
+  the ones with no id under `path_hmac` (`Qdrant.count_by_note/5`). Used by the
   repath worker to branch between PATCH, re-embed self-heal, and the
   embedded-but-missing inconsistency warning.
   """
@@ -1746,6 +1749,7 @@ defmodule Engram.Indexing do
       collection(),
       to_string(note.user_id),
       to_string(note.vault_id),
+      note.id,
       path_hmac
     )
   end
@@ -1791,6 +1795,7 @@ defmodule Engram.Indexing do
       collection(),
       to_string(note.user_id),
       to_string(note.vault_id),
+      note.id,
       encode_hmac(note.path_hmac)
     )
   end
@@ -1800,7 +1805,7 @@ defmodule Engram.Indexing do
   # Runs BEFORE the chunk rows are dropped — once they are gone, nothing names
   # those points and no filter can find them again if the note's `path_hmac`
   # has drifted (rename → debounced repath → delete inside the window). This is
-  # the delete that closes that hole; `delete_by_note/4` stays as the belt for
+  # the delete that closes that hole; `delete_by_note/5` stays as the belt for
   # points whose rows were already lost.
   # Takes the note rather than an id because it needs the tenant. Unscoped this
   # read is filtered to [], so the by-id delete silently removes nothing and

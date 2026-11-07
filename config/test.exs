@@ -248,6 +248,10 @@ config :engram, :orphan_sweep_point_grace_seconds, 0
 config :engram, :ensure_collection_memo, false
 # No boot-time ensure_collection against whatever Qdrant URL a test set.
 config :engram, :qdrant_boot_ensure, false
+# No `n`-index probe in the per-note Qdrant filters (`Qdrant.note_filter/5`):
+# it is a collection-info GET the Bypass suites do not expect. The suites
+# that test the `n` arm override it per process.
+config :engram, :qdrant_note_id_filter, false
 
 # Sentry.Test (setup_sentry/1, pop_sentry_reports/0) needs its registry,
 # which the SDK starts only in test mode. No DSN in test, so nothing is sent.

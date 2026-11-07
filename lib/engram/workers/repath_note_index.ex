@@ -5,7 +5,10 @@ defmodule Engram.Workers.RepathNoteIndex do
   the payload AAD binds to point-UUID, so dense/sparse vectors and ciphertext
   survive — only the plaintext `path_hmac`/`folder_hmac` filter-keys change.
 
-  Branches on the point count under the OLD path_hmac:
+  Branches on the note's point count: points carrying its note id `n`, plus
+  points with no `n` under the OLD path_hmac (`Qdrant.count_by_note/5`). A
+  point with `n` and no path key (an R3a chunk point) counts, so the rename
+  still resparses its keyword vector:
 
     * count > 0                                -> PATCH new hmacs onto the points
     * count == 0 and content_hash != embed_hash -> enqueue EmbedNote (embed fresh)
