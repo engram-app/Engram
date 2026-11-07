@@ -69,6 +69,24 @@ defmodule EngramWeb.RateLimiter do
     result
   end
 
+  @doc """
+  How many hits `key` has left in its current `scale_ms` window under
+  `limit`, WITHOUT counting one (Hammer's `get/2`): a gate that must not
+  spend budget before it knows it will use it. On `:distributed_ets` it reads
+  this node's counter, which peers' hits reach by broadcast (eventually
+  consistent, as `hit/5`).
+  """
+  @spec peek(String.t(), pos_integer(), non_neg_integer()) :: non_neg_integer()
+  def peek(key, scale_ms, limit) do
+    count =
+      case backend() do
+        :distributed_ets -> EngramWeb.RateLimiter.DistributedETS.get(key, scale_ms)
+        _ets -> EngramWeb.RateLimiter.ETS.get(key, scale_ms)
+      end
+
+    max(limit - count, 0)
+  end
+
   @spec backend() :: :ets | :distributed_ets
   def backend do
     :engram |> Application.get_env(__MODULE__, []) |> Keyword.get(:backend, :ets)

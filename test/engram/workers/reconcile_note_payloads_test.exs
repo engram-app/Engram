@@ -50,10 +50,6 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     Bypass.stub(bypass, :any, :any, &fake_qdrant(&1, store))
     # The `n` backfill is paced on the collection's health (`Rebuild.qdrant_pace/1`).
     Engram.QdrantStub.stub_healthy(bypass)
-    # Pacing is the pacing test's subject: here, several jobs a minute run,
-    # each reserving a page from the node-wide bucket, so the cap is raised.
-    Engram.ServiceConfig.put_override(:payload_backfill_points_per_min, 100_000)
-    EngramWeb.RateLimiter.reset_buckets!()
 
     stub(Engram.MockEmbedder, :embed_texts, fn texts ->
       {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}

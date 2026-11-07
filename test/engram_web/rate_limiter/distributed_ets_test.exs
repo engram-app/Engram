@@ -33,6 +33,19 @@ defmodule EngramWeb.RateLimiter.DistributedETSTest do
     assert {:deny, _} = DistributedETS.hit(key, 1000, 1)
   end
 
+  # `EngramWeb.RateLimiter.peek/3` on this backend: the count, local and
+  # remote hits included, without spending one.
+  test "get/2 reads the window's count without counting a hit" do
+    key = "peek:#{System.unique_integer([:positive])}"
+    assert DistributedETS.get(key, 60_000) == 0
+    assert {:allow, 3} = DistributedETS.hit(key, 60_000, 10, 3)
+    send(Process.whereis(DistributedETS.Listener), {:inc, key, 60_000, 2})
+    _ = :sys.get_state(Process.whereis(DistributedETS.Listener))
+
+    assert DistributedETS.get(key, 60_000) == 5
+    assert DistributedETS.get(key, 60_000) == 5
+  end
+
   describe "telemetry — [:engram, :rate_limiter, :remote_inc]" do
     # Cross-node sync / warm-window signal (#687): a freshly-joined node starts
     # with an EMPTY ETS table and no handoff, so this counter is the only proof
