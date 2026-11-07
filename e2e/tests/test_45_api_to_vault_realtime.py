@@ -50,7 +50,7 @@ async def test_api_update_broadcasts_to_vault(vault_b, cdp_b, api_sync):
 
     # Now update (upsert) and measure
     t0 = time.monotonic()
-    api_sync.create_note(path, "# API Update RT\nVersion 2 — updated via API")
+    api_sync.create_note(path, "# API Update RT\nVersion 2 — updated via API", overwrite=True)
     wait_for_content(vault_b, path, "Version 2", timeout=RT_TIMEOUT)
     _log_latency("api_update", t0)
 

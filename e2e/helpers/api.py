@@ -57,31 +57,33 @@ class ApiClient:
         return resp.json()
 
     def create_note(
-        self, path: str, content: str, mtime: float | None = None
+        self,
+        path: str,
+        content: str,
+        mtime: float | None = None,
+        overwrite: bool = False,
     ) -> dict:
-        """POST /notes — upsert a note, replacing it if it exists.
+        """POST /notes — create a note, or replace it with ``overwrite=True``.
 
         An API-key caller must send base_hash to replace an existing note
-        (Engram#2480): without one the server answers 409 with the current
-        note and writes nothing. Tests overwrite on purpose, so a 409 of that
-        shape is retried once with the server note's content_hash as the base.
+        (Engram#2480); without one the server answers 409 and writes nothing,
+        which this raises like any non-2xx. ``overwrite=True`` reads the note
+        first and sends its content_hash, the way a real client replaces a
+        note it read. It never retries a 409: that would be the blind
+        overwrite the server refuses.
         """
         payload: dict = {
             "path": path,
             "content": content,
             "mtime": mtime if mtime is not None else time.time(),
         }
+        if overwrite:
+            current = self.get_note(path)
+            if current is not None:
+                payload["base_hash"] = current["content_hash"]
         resp = self.session.post(
             f"{self.base_url}/notes", json=payload, timeout=10
         )
-        server_note = (
-            resp.json().get("server_note") if resp.status_code == 409 else None
-        )
-        if server_note and server_note.get("content_hash"):
-            payload["base_hash"] = server_note["content_hash"]
-            resp = self.session.post(
-                f"{self.base_url}/notes", json=payload, timeout=10
-            )
         self._raise_for_status(resp)
         return resp.json()
 

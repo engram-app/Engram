@@ -170,7 +170,7 @@ async def test_resume_cold_heals_stay_in_room_budget(vault_a, cdp_a, api_sync, c
 
         # Round 1: live server edits make the docs resident on A.
         for i, p in enumerate(paths):
-            api_sync.create_note(p, _content(i, run, 1))
+            api_sync.create_note(p, _content(i, run, 1), overwrite=True)
         await _wait_converged(vault_a, cdp_a, paths, run, 1, CONVERGE_TIMEOUT_S)
 
         # Drop A's socket (1.38.1 wipes every resident doc's `synced` flag here),
@@ -184,7 +184,7 @@ async def test_resume_cold_heals_stay_in_room_budget(vault_a, cdp_a, api_sync, c
         before = read_room_starts()
         started = time.monotonic()
         for i, p in enumerate(paths):
-            api_sync.create_note(p, _content(i, run, 2))
+            api_sync.create_note(p, _content(i, run, 2), overwrite=True)
         assert not await cdp_a.check_stream_connected(), (
             "A reconnected on its own during the offline writes"
         )

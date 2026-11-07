@@ -72,7 +72,7 @@ async def test_missed_delivery_then_local_push_no_deletion(
 
     try:
         # A third writer advances the server while B can't hear it.
-        api_sync.create_note(path, f"{base}\n{server_marker}\n")
+        api_sync.create_note(path, f"{base}\n{server_marker}\n", overwrite=True)
         api_sync.wait_for_note_content(path, server_marker)
 
         # B, still ignorant of the server edit, makes and pushes its OWN edit
