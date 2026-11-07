@@ -14,6 +14,7 @@ defmodule Engram.Search do
   alias Engram.Notes.Helpers
   alias Engram.Search.FieldFilters
   alias Engram.Search.MMR
+  alias Engram.Search.NameTerms
   alias Engram.Search.PhraseCheck
   alias Engram.Search.SearchProfile
   alias Engram.Vector.Qdrant
@@ -646,7 +647,16 @@ defmodule Engram.Search do
           |> Keyword.put(:tenant_idf, mode in [:keyword, :hybrid] and tenant_idf?(user))
           |> embed_once(within, mode, query, profile)
 
-        legs = &run_legs(mode, user, query, &1, profile)
+        # The Postgres name leg (renamed titles and folders, S1) fuses into
+        # whatever the Qdrant legs return; off until its ledger is done.
+        legs =
+          NameTerms.leg(
+            &run_legs(mode, user, query, &1, profile),
+            user,
+            vault_scope(vault, opts),
+            mode,
+            query
+          )
 
         with {:ok, {candidates, hits}} <-
                ranked_hits(legs, user, search_opts, within, fetch_limit),

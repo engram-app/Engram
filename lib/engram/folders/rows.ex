@@ -32,6 +32,7 @@ defmodule Engram.Folders.Rows do
   alias Engram.Folders.Folder
   alias Engram.Logger.Metadata
   alias Engram.Repo
+  alias Engram.Search.NameTerms
 
   require Logger
 
@@ -261,7 +262,7 @@ defmodule Engram.Folders.Rows do
       Enum.map(level, fn path ->
         parent = ids[parent_path(path)]
         marker = Map.get(targets, path)
-        segment = path |> String.split("/") |> List.last()
+        segment = segment(path)
         id = marker || mint_id()
 
         {path, parent, marker, id,
@@ -281,6 +282,11 @@ defmodule Engram.Folders.Rows do
         Enum.map(ret, & &1.id)
       end)
       |> MapSet.new()
+
+    put_names(
+      ctx,
+      for({path, _, _, id, _} <- rows, MapSet.member?(written, id), do: {id, segment(path)})
+    )
 
     Enum.reduce(rows, ids, fn {path, parent, marker, id, _row}, ids ->
       if MapSet.member?(written, id),
@@ -312,7 +318,7 @@ defmodule Engram.Folders.Rows do
   # there yet, costs one statement; a row that is already there (found by the
   # live-name index, or one a racing creator just committed) is read after.
   defp step(ctx, parent_id, path, explicit, attempts, insert? \\ true) do
-    segment = path |> String.split("/") |> List.last()
+    segment = segment(path)
     name_h = name_hmac(ctx.fk, segment)
     full_h = path_hmac(ctx.fk, path)
     id = explicit || mint_id()
@@ -322,6 +328,7 @@ defmodule Engram.Folders.Rows do
            else: 0
          ) do
       1 ->
+        put_names(ctx, [{id, segment}])
         id
 
       0 ->
@@ -438,8 +445,20 @@ defmodule Engram.Folders.Rows do
       ]
     )
 
-    :ok
+    put_names(ctx, [{id, segment}])
   end
+
+  # The folder name writers' `name_terms` hook (create, revive, rename): only
+  # the rows whose name was just written, never their descendants.
+  defp put_names(ctx, refs),
+    do:
+      NameTerms.put_folders(
+        ctx.user_id,
+        ctx.fk,
+        for({id, seg} <- refs, do: {id, ctx.vault_id, seg})
+      )
+
+  defp segment(path), do: path |> String.split("/") |> List.last()
 
   # ---- subtree -------------------------------------------------------------
 
@@ -670,7 +689,7 @@ defmodule Engram.Folders.Rows do
   end
 
   defp move_subtree(ctx, [root | _] = rows, new_folder) do
-    new_segment = new_folder |> String.split("/") |> List.last()
+    new_segment = segment(new_folder)
     parent_path = new_folder |> String.split("/") |> Enum.drop(-1) |> Enum.join("/")
 
     new_parent =
@@ -703,6 +722,7 @@ defmodule Engram.Folders.Rows do
           ]
         )
 
+        :ok = put_names(ctx, [{root.id, new_segment}])
         rest = for r <- rows, r.id != root.id, Map.has_key?(paths, r.id), do: {r.id, paths[r.id]}
         write_path_hmacs(ctx, rest)
         :ok
