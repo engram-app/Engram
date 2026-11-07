@@ -17,6 +17,10 @@ defmodule Engram.Workers.RepathNoteIndex do
     max_attempts: 5,
     unique: Engram.Jobs.unique(__MODULE__)
 
+  # Finite like every worker (`ObanWorkerTimeoutTest`); a no-op never needs it.
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(10)
+
   @impl Oban.Worker
   def perform(%Oban.Job{}), do: :ok
 end
