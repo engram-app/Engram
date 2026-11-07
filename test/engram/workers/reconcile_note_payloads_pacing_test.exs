@@ -636,6 +636,32 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
       refute refused_uid in users_written(ctx, users)
     end
 
+    # A lap over users with nothing behind costs one probe each: no
+    # per-window note reads (`IdWindows` + the window selection), no chunk
+    # read. Main walked only users the ledger found behind; the fleet walks
+    # every user, so a done one must be near free.
+    test "a lap over done users costs one cheap probe each, no note-page reads", ctx do
+      users = stale_users(ctx, 20, 1)
+
+      {_, _} =
+        Repo.update_all(NoteIndexState, [set: [payload_version: 6]], skip_tenant_check: true)
+
+      {result, queries} = reads(fn -> fleet() end)
+      assert :ok = result
+      assert users_written(ctx, users) == []
+      refute_received :read
+
+      # No id window and no chunk read but the probe's own EXISTS.
+      assert Enum.filter(queries, &(&1.sql =~ "unnest")) == []
+      assert Enum.all?(queries, &(not (&1.sql =~ ~s("chunks")) or &1.sql =~ "payload_version"))
+      # One probe per user (the setup's user too), each one tenant
+      # transaction (begin, two set_configs, the EXISTS, commit), plus the
+      # users page, the cursor and the job check.
+      probes = Enum.count(queries, &(&1.sql =~ "payload_version"))
+      assert probes == length(users) + 1
+      assert length(queries) <= 5 * (length(users) + 1) + 10
+    end
+
     # Prod held users with two scheduled per-user jobs (the unique race):
     # each one cancels itself on wake, and only one fleet job results.
     test "a user holding two legacy n jobs gets both cancelled and one fleet job", ctx do

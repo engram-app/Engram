@@ -656,12 +656,30 @@ defmodule Engram.Workers.ReconcileNotePayloads do
       System.monotonic_time(:millisecond) > deadline ->
         {:halt, {:stop, :budget, %{"user" => id, "after" => after_id}}}
 
-      RotationGate.check_user(user) == :ok ->
-        walk_user(user, after_id, deadline, past)
+      RotationGate.check_user(user) != :ok ->
+        {:cont, past}
+
+      # A done user costs this one probe, not a walk of its notes.
+      not n_behind?(id) ->
+        {:cont, past}
 
       true ->
-        {:cont, past}
+        walk_user(user, after_id, deadline, past)
     end
+  end
+
+  # One EXISTS over the user's notes (`n_behind/0`, the walk's own
+  # selection), on the notes user index; it stops at the first note behind.
+  # ponytail: a done user's probe still reads its index entries once; a
+  # partial index on `note_index_state` (user_id) WHERE behind is the upgrade
+  # if done users with large vaults ever dominate a lap.
+  defp n_behind?(user_id) do
+    {:ok, any} =
+      Repo.with_tenant(user_id, fn ->
+        Repo.exists?(where(n_behind(), [note: n], n.user_id == ^user_id))
+      end)
+
+    any
   end
 
   defp walk_user(%User{id: id} = user, after_id, deadline, past) do
@@ -756,20 +774,24 @@ defmodule Engram.Workers.ReconcileNotePayloads do
           |> IdWindows.by_id(ids)
           |> Repo.all()
 
-        note_ids = Enum.map(notes, & &1.id)
-
-        points =
-          from(c in Chunk,
-            where: c.note_id in ^note_ids and not is_nil(c.qdrant_point_id),
-            select: {c.note_id, c.qdrant_point_id}
-          )
-          |> Repo.all()
-          |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
-
-        {notes, points}
+        {notes, n_points(notes)}
       end)
 
     result
+  end
+
+  # A window with no note behind reads no chunk.
+  defp n_points([]), do: %{}
+
+  defp n_points(notes) do
+    note_ids = Enum.map(notes, & &1.id)
+
+    from(c in Chunk,
+      where: c.note_id in ^note_ids and not is_nil(c.qdrant_point_id),
+      select: {c.note_id, c.qdrant_point_id}
+    )
+    |> Repo.all()
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
   end
 
   defp n_pairs(notes, points, stored) do
