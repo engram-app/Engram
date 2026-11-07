@@ -212,8 +212,16 @@ defmodule Engram.Vector.FilterRoundtripTest do
 
     on_exit(fn ->
       ServiceConfig.put_override(:qdrant_url, url)
+      Application.put_env(:engram, :ensure_collection_memo, false)
+      Qdrant.forget_collection_memo()
       Qdrant.ensure_collection(col, @dims)
     end)
+
+    # `ensure_collection/2` marks the index only where its memo runs (prod;
+    # off under test for its recycled-port keys). This async: false module
+    # opts in, as `QdrantEnsureCollectionMemoTest` does; the collection has
+    # no memo marker yet (setup_all ran with the memo off).
+    Application.put_env(:engram, :ensure_collection_memo, true)
 
     refute Qdrant.n_filterable?(col)
 
