@@ -675,11 +675,15 @@ defmodule Engram.Folders.ReadsTest do
       {:current_stacktrace, stack} = Process.info(self(), :current_stacktrace)
 
       Enum.any?(stack, fn {mod, fun, _, _} ->
-        mod == Notes and String.contains?(Atom.to_string(fun), frame)
+        mod in [Notes, Attachments] and String.contains?(Atom.to_string(fun), frame)
       end)
     end
 
-    defp heal_after_folder_read(frame, heal, fun) do
+    defp heal_after_folder_read(frame, heal, fun),
+      do: heal_after_read("folders", frame, heal, fun)
+
+    # `heal` right after the first statement on `source` sent from `frame`.
+    defp heal_after_read(source, frame, heal, fun) do
       pid = self()
       id = "heal-#{System.unique_integer([:positive])}"
 
@@ -687,7 +691,7 @@ defmodule Engram.Folders.ReadsTest do
         id,
         [:engram, :repo, :query],
         fn _, _, meta, _ ->
-          if self() == pid and meta[:source] == "folders" and not Process.get(:healed, false) and
+          if self() == pid and meta[:source] == source and not Process.get(:healed, false) and
                in_frame?(frame) do
             Process.put(:healed, true)
             heal.()
@@ -786,5 +790,99 @@ defmodule Engram.Folders.ReadsTest do
     assert %{"A" => 1} = counts(u, v)
     refute Map.has_key?(counts(u, v), "B")
     assert page_ids(u, v, "B") == []
+  end
+
+  # The #2485 delta review's probes: a heal or a rename committing between two
+  # of a reader's statements. Each ran red on eb8e12da0.
+  describe "delta review probes" do
+    defp raw_counts(u, v) do
+      {:ok, dek} = Crypto.get_dek(u)
+
+      Repo.with_tenant!(u.id, fn -> Notes.raw_folder_count_rows(u, v) end)
+      |> Notes.decrypt_folder_count_rows(dek)
+      |> Map.new(&{&1.folder, &1.count})
+    end
+
+    # P1: a rename-merge commits after the counts' notes read: n moves to K
+    # and B's row dies. Its count must stay somewhere (red: the folder rows,
+    # read after, saw B dead and dropped its group).
+    test "P1: a row killed during the counts keeps its notes counted", %{user: u, vault: v} do
+      n = put_note(u, v, "B/n.md")
+      put_note(u, v, "K/k.md")
+      tree = FolderRows.tree(u)
+
+      kill = fn ->
+        Repo.query!("UPDATE notes SET folder_ref_id = $1 WHERE id = $2", [
+          dump(tree["K"].id),
+          dump(n.id)
+        ])
+
+        Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [dump(tree["B"].id)])
+      end
+
+      counts = heal_after_read("notes", "raw_folder_count_rows", kill, fn -> raw_counts(u, v) end)
+      assert Map.get(counts, "B", 0) + Map.get(counts, "K", 0) == 2, inspect(counts)
+    end
+
+    # P2: a row revived during the counts is not counted twice (red: the
+    # dead-reference drift arm counted the note, then the later folder-row read
+    # saw the row live and counted its group too).
+    test "P2: a row revived during the counts is not double counted", %{user: u, vault: v} do
+      n = put_note(u, v, "Y/n.md")
+      row = FolderRows.tree(u)["Y"].id
+      Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [dump(row)])
+      # A reference the trigger would have released, set back by hand.
+      Repo.query!("UPDATE notes SET folder_ref_id = $1 WHERE id = $2", [dump(row), dump(n.id)])
+
+      revive = fn ->
+        Repo.query!("UPDATE folders SET deleted_at = NULL WHERE id = $1", [dump(row)])
+      end
+
+      counts =
+        heal_after_read("notes", "raw_folder_count_rows", revive, fn -> raw_counts(u, v) end)
+
+      assert Map.get(counts, "Y", 0) <= 1, inspect(counts)
+    end
+
+    # P3: the folders implied by notes, with a heal after its first read.
+    test "P3: implied folders keep a note healed between their reads", %{user: u, vault: v} do
+      {_n, heal} = drifted_deep!(u, v)
+
+      {:ok, folders} =
+        heal_after_read("notes", "list_folders_implied_by_notes", heal, fn ->
+          Notes.list_folders_implied_by_notes(u, v)
+        end)
+
+      assert "A/C" in folders
+    end
+
+    # P4: a stale attachment that FolderTable stamps after the reader's first
+    # attachments read is still found (red: placed read first, then stale).
+    test "P4: an attachment stamped during a scan is still found", %{user: u, vault: v} do
+      att = put_att(u, v, "P/a.png")
+      old_release_touch!(att, nil)
+      p_row = FolderRows.tree(u)["P"].id
+
+      stamp = fn ->
+        Repo.query!(
+          "UPDATE attachments SET folder_ref_id = $1, folder_ref_stamp = path_nonce WHERE id = $2",
+          [dump(p_row), dump(att.id)]
+        )
+      end
+
+      {:ok, %{metas: metas}} =
+        heal_after_read("attachments", "candidate_rows", stamp, fn ->
+          Attachments.scan_under(u, v, ["P"])
+        end)
+
+      assert Enum.map(metas, & &1.path) == ["P/a.png"]
+    end
+
+    # NEW-5: the root never holds drift, so its page reads none.
+    test "the root page sends no drift read", %{user: u, vault: v} do
+      put_note(u, v, "root.md")
+      {_, queries} = QueryRecorder.record(fn -> Notes.list_notes_in_folder_page(u, v, "") end)
+      refute Enum.any?(QueryPlan.reading(queries, "notes"), &(&1 =~ ~r/octet_length\(.*\) > 16/))
+    end
   end
 end

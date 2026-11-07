@@ -32,8 +32,9 @@ defmodule Engram.Notes.VaultScanCache do
   """
   @spec read(map(), map(), atom(), (-> term()), (term() -> term())) :: term()
   def read(user, vault, what, raw, finish) do
+    # One snapshot: the seq and the rows it is cached under agree.
     {seq, found} =
-      Repo.with_tenant!(user.id, fn ->
+      Repo.with_tenant_snapshot!(user.id, fn ->
         seq = Vaults.raw_current_seq(vault.id)
 
         case get(vault.id, seq, what) do

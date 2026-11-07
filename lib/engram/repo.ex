@@ -188,6 +188,41 @@ defmodule Engram.Repo do
   end
 
   @doc """
+  `with_tenant!/2` for a READER that must see one snapshot: every statement
+  of `fun` reads the same committed state, so a concurrent commit (a drift
+  heal, a folder rename) cannot land between two of them and make the reader
+  see a row in neither, or in both.
+
+  Top level (a real BEGIN on the app pool): the transaction opens with
+  `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY` before the
+  tenant is entered, one more round trip (the `tenant_snapshot` statement).
+  READ ONLY: a write inside raises, so only reads go here.
+
+  Nested (`in_transaction?/0` true): the isolation of a transaction can only
+  be set by its first statement, so `fun` runs inline in the caller's
+  transaction and under its rules. Every such caller today is a folder write
+  (`Engram.Folders` rename, batch move) that takes the vault seq lock first,
+  the lock `DataMigrations.FolderTable`'s heal also takes
+  (`Vaults.lock_user_vaults_nowait!/2`), so no heal commits in between. The
+  test sandbox runs every transaction as a savepoint, so there `fun` runs at
+  READ COMMITTED (`Engram.Repo.SnapshotTest` covers the real top level).
+  """
+  @spec with_tenant_snapshot!(Ecto.UUID.t(), (-> result)) :: result when result: term()
+  def with_tenant_snapshot!(tenant_id, fun) do
+    if in_transaction?() do
+      with_tenant!(tenant_id, fun)
+    else
+      Process.put(:engram_tenant_snapshot, true)
+
+      try do
+        with_tenant!(tenant_id, fun)
+      after
+        Process.delete(:engram_tenant_snapshot)
+      end
+    end
+  end
+
+  @doc """
   Runs `fun` with the tenant tripwire suspended, for queries that legitimately
   span tenants.
 
@@ -384,6 +419,8 @@ defmodule Engram.Repo do
     # Decided before the transaction opens: inside it, in_transaction? is
     # always true.
     exit_source = tenant_exit_source()
+    # Taken here so a block nested inside never sees it.
+    snapshot? = Process.delete(:engram_tenant_snapshot) == true and real_top_level?(exit_source)
     Process.put(:engram_tenant, uuid)
 
     try do
@@ -412,6 +449,13 @@ defmodule Engram.Repo do
           # of a lock taken on another node without a separate round trip.
           # `users` carries no RLS, so the role drop does not hide the row.
           gated? = Process.get(:engram_write_gate, false)
+
+          # `with_tenant_snapshot!/2`: the first statement of the transaction.
+          if snapshot?,
+            do:
+              query!("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY", [],
+                source: "tenant_snapshot"
+              )
 
           %{rows: [row]} = enter_tenant(uuid, gated?)
 
@@ -479,6 +523,13 @@ defmodule Engram.Repo do
       end
     end
   end
+
+  # A real BEGIN: the app pool's top level (`tenant_exit_source/0` nil), or a
+  # test's `Ecto.Adapters.SQL.Sandbox.unboxed_run/2`, which runs outside the
+  # sandbox's transaction and says so with `:engram_unboxed_top_level`
+  # (test-only; `Engram.Repo.SnapshotTest`).
+  defp real_top_level?(exit_source),
+    do: is_nil(exit_source) or Process.get(:engram_unboxed_top_level, false)
 
   defp run_after_commit(queue) do
     queue

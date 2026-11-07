@@ -119,8 +119,15 @@ defmodule Engram.Vaults do
   end
 
   @doc """
-  Takes `FOR KEY SHARE NOWAIT` on every vault row of `user_id`, in id order, or
-  raises `Postgrex.Error` (`:lock_not_available`) at once when one is held.
+  Takes `FOR NO KEY UPDATE NOWAIT` on every vault row of `user_id`, in id
+  order, or raises `Postgrex.Error` (`:lock_not_available`) at once when one
+  is held.
+
+  The mode is the vault seq lock's (`lock_seq/1`), so a sweep and a writer of
+  the same vault exclude each other: a folder write (`Engram.Folders` rename,
+  batch move) takes the seq lock before it scans, so `FolderTable`'s heal
+  cannot commit between its reads (R9.5 step 3). A busy vault defers the
+  sweep (NOWAIT: the caller counts it blocked and retries), never the writer.
 
   For a per-user background sweep that inserts rows referencing `vaults`. An
   account delete deletes the vault rows first and the user row second
@@ -134,7 +141,7 @@ defmodule Engram.Vaults do
   @spec lock_user_vaults_nowait!(module(), Ecto.UUID.t()) :: :ok
   def lock_user_vaults_nowait!(repo, user_id) do
     repo.query!(
-      "SELECT id FROM vaults WHERE user_id = $1 ORDER BY id FOR KEY SHARE NOWAIT",
+      "SELECT id FROM vaults WHERE user_id = $1 ORDER BY id FOR NO KEY UPDATE NOWAIT",
       [Ecto.UUID.dump!(user_id)]
     )
 

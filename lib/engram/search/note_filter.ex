@@ -111,9 +111,10 @@ defmodule Engram.Search.NoteFilter do
     within = opts[:within]
 
     # The folder walk and the tag list read RLS tables too: all of it runs
-    # inside the tenant transaction.
-    {:ok, out} =
-      Repo.with_tenant(user.id, fn ->
+    # inside the tenant transaction, one snapshot (`Repo.with_tenant_snapshot!/2`):
+    # the folder walk, the drift and the id read see the same committed state.
+    out =
+      Repo.with_tenant_snapshot!(user.id, fn ->
         with {:ok, cond} <- compile(user, vault, filter) do
           base = live_ids(user, vault)
 

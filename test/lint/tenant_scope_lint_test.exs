@@ -57,7 +57,7 @@ defmodule Engram.TenantScopeLintTest do
     # (user_id)`: with scoped/2's vault clause the planner reads
     # `notes_user_vault_live` and filters every root note of the vault. The
     # callers keep their vault's rows; the second arm uses scoped_live/2.
-    {"engram/notes.ex", "def drift_query(user, vault) do"}
+    {"engram/notes.ex", "def drift_query("}
   ]
 
   test "tenant-isolation predicates compose from scoped/* helpers" do

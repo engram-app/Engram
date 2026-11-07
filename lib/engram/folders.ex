@@ -47,6 +47,7 @@ defmodule Engram.Folders do
   alias Engram.Notes.PathSanitizer
   alias Engram.Repo
   alias Engram.Sync.Broadcast
+  alias Engram.Vaults
   alias Engram.Vector.Qdrant
 
   require Logger
@@ -66,7 +67,14 @@ defmodule Engram.Folders do
   # `with_tenant` sets and tears down `app.current_tenant` per call. Because the
   # legs run sequentially (not nested under one another), they don't clobber
   # each other's tenant key.
-  defp atomic(fun) do
+  # The vault seq lock comes FIRST (`Vaults.lock_seq!/1`, the lock every note
+  # and attachment writer takes, and `FolderTable`'s heal too:
+  # `Vaults.lock_user_vaults_nowait!/2`), so no heal commits between the
+  # notes leg's scan and its writes: the scan runs inline in this transaction
+  # (`Repo.with_tenant_snapshot!/2` cannot raise its isolation). Cost: the
+  # vault's other writers wait for the whole rename, scan included, not only
+  # its writes.
+  defp atomic(user, vault, fun) do
     # Defer cascade broadcasts until AFTER the outer transaction resolves.
     # Each leg's per-item broadcast routes through `Sync.Broadcast.emit/3`,
     # which — because the buffer is active inside `deferred/1` — buffers rather
@@ -83,6 +91,10 @@ defmodule Engram.Folders do
     # after BOTH legs have moved their rows, inside this transaction (#2468).
     Broadcast.deferred(fn ->
       Repo.transaction_after_commit(fn ->
+        # `:none` (a vault the tenant cannot see) locks nothing: there is
+        # nothing of its to protect, and the legs refuse it as before.
+        _ = Repo.with_tenant!(user.id, fn -> Vaults.lock_seq(vault.id) end)
+
         case Rows.with_deferred_retires(fun) do
           {:ok, result} -> result
           {:error, reason} -> Repo.rollback(reason)
@@ -202,7 +214,7 @@ defmodule Engram.Folders do
          :ok <- refuse_own_subtree(String.trim_trailing(old_folder, "/"), new_folder),
          {:ok, att_pairs} <-
            Attachments.folder_rename_pairs(user, vault, old_folder, new_folder) do
-      atomic(fn ->
+      atomic(user, vault, fn ->
         with {:ok, notes} <- Notes.rename_folder(user, vault, old_folder, new_folder),
              {:ok, atts} <- Attachments.move_folder_pairs(user, vault, att_pairs) do
           {:ok, %{notes: notes, attachments: atts}}
@@ -466,7 +478,7 @@ defmodule Engram.Folders do
     # moved folders' attachments are read.
     with {:ok, folders} <- Notes.resolve_folder_markers(user, vault, marker_ids),
          {:ok, %{metas: metas}} <- Attachments.scan_under(user, vault, folders) do
-      atomic(fn ->
+      atomic(user, vault, fn ->
         with {:ok, %{moved: notes, pairs: pairs}} <-
                Notes.batch_move_folders(user, vault, marker_ids, target),
              {:ok, atts} <- rename_attachments_for(user, vault, metas, pairs) do

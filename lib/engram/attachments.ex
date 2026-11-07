@@ -2230,7 +2230,10 @@ defmodule Engram.Attachments do
     direct? = Keyword.get(opts, :direct, false)
     folders = Enum.map(folders, &String.trim_trailing(&1, "/"))
 
-    Repo.with_tenant(user.id, fn -> candidate_rows(user, vault, folders, direct?) end)
+    # One snapshot (`Repo.with_tenant_snapshot!/2`): a heal stamping a row
+    # between the stale and the placed read cannot hide it.
+    {:ok,
+     Repo.with_tenant_snapshot!(user.id, fn -> candidate_rows(user, vault, folders, direct?) end)}
     |> unwrap_tenant()
     |> case do
       {:ok, rows} ->
@@ -2248,14 +2251,18 @@ defmodule Engram.Attachments do
   end
 
   # Everything is a candidate when the root is asked for as a subtree;
-  # otherwise the folders' placed references (`attachments_folder_ref_live`)
-  # plus the stale ones, two statements so each keeps its index.
+  # otherwise the stale rows, then the folders' placed references
+  # (`attachments_folder_ref_live`), two statements so each keeps its index.
+  # Stale first, as the notes readers read drift first: harmless in the
+  # caller's snapshot, and right for a READ COMMITTED caller (a row stamped
+  # after the stale read is placed by the time the placed read runs).
   defp candidate_rows(user, vault, folders, direct?) do
     base = from(a in scoped_live(user, vault), as: :a, select: struct(a, @tree_attachment_fields))
 
     if not direct? and "" in folders do
       Repo.all(base)
     else
+      stale = Repo.all(from(a in base, where: ^Drift.attachments_stale()))
       ids = folder_ids(user, vault, folders, direct?)
 
       trusted =
@@ -2265,8 +2272,12 @@ defmodule Engram.Attachments do
 
       placed = Rows.attachment_ref_placed()
 
-      Repo.all(from(a in base, where: ^dynamic([a], ^trusted and ^placed))) ++
-        Repo.all(from(a in base, where: ^Drift.attachments_stale()))
+      # A row stamped between the two reads (a READ COMMITTED caller) is in
+      # both: keep it once.
+      Enum.uniq_by(
+        stale ++ Repo.all(from(a in base, where: ^dynamic([a], ^trusted and ^placed))),
+        & &1.id
+      )
     end
   end
 

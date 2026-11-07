@@ -6288,7 +6288,7 @@ defmodule Engram.Notes do
     case Crypto.get_dek(user) do
       {:ok, dek} ->
         {seq, counts, markers} =
-          Repo.with_tenant!(user.id, fn ->
+          Repo.with_tenant_snapshot!(user.id, fn ->
             seq = Engram.Vaults.raw_current_seq(vault.id)
             {seq, raw_folder_counts_at(user, vault, seq), raw_folder_marker_rows(user, vault)}
           end)
@@ -6414,15 +6414,20 @@ defmodule Engram.Notes do
   def list_folders_implied_by_notes(user, vault) do
     case Crypto.get_dek(user) do
       {:ok, dek} ->
-        {:ok, {rows, {drift, _undecryptable}}} =
-          Repo.with_tenant(user.id, fn ->
+        # One snapshot (`Repo.with_tenant_snapshot!/2`); the drift first all
+        # the same, so a heal between the two reads is seen at READ COMMITTED
+        # too (a caller already in a transaction).
+        {rows, {drift, _undecryptable}} =
+          Repo.with_tenant_snapshot!(user.id, fn ->
+            drift = drift_note_folders(user, vault, dek)
+
             {Repo.all(
                from(n in scoped_live(user, vault),
                  where: n.kind == "note" and not is_nil(n.folder_ref_id),
                  distinct: n.folder_ref_id,
                  select: {n.id, n.dek_version, n.folder_ciphertext, n.folder_nonce}
                )
-             ), drift_note_folders(user, vault, dek)}
+             ), drift}
           end)
 
         folders =
@@ -6544,27 +6549,23 @@ defmodule Engram.Notes do
   """
   @spec raw_folder_count_rows(map(), map()) :: [map()]
   def raw_folder_count_rows(user, vault) do
-    # TWO reads, decrypted outside Postgres:
-    #
-    #  1. ONE notes statement (one snapshot), a `UNION ALL` of
-    #     * the live notes grouped by `folder_ref_id` (leg 4), the folder ROW
-    #       they sit in, on `notes_folder_ref_live` (no folder envelope is
-    #       touched for them). The NULL group is the root plus the drift;
-    #     * the drift notes (`drift_query/2`, legs 1 and 2, count 1 each),
-    #       placed by their own folder envelope: 0 rows in steady state;
-    #     * the folder markers (leg 3, count 0), so an empty explicit folder
-    #       is listed.
-    #     A heal (the drain pointing a drift note at its row) between two
-    #     statements would count the note in neither group or in both, and
-    #     the cache would keep the wrong number until the next write: in one
-    #     statement it is in exactly one leg.
-    #  2. The vault's folder rows, which name those references (a folder's
-    #     name is one segment, so a path is assembled from its ancestors).
-    #     Read AFTER the notes: a row a heal creates in between is then
-    #     already there.
-    #
-    # The root is the NULL group minus the unresolved drift (leg 1): the same
-    # rows as the root page of `list_notes_in_folder_page/4`.
+    # ONE statement, so one snapshot whatever the caller's isolation (a heal
+    # or a rename committing between two reads could otherwise count a note
+    # in neither group or in both, and the cache would keep that under the
+    # same seq). A `UNION ALL` of five legs, each on its own index and
+    # decrypted outside Postgres:
+    #  * the live notes grouped by `folder_ref_id` (leg 4), the folder ROW
+    #    they sit in, on `notes_folder_ref_live` (no folder envelope is
+    #    touched for them). The NULL group is the root plus the drift;
+    #  * the drift notes (`drift_query/2`, leg 1, count 1 each), placed by
+    #    their own folder envelope: 0 rows in steady state;
+    #  * the folder markers (leg 3, count 0), so an empty explicit folder is
+    #    listed;
+    #  * the vault's folder rows (leg 5; `ref:` is the parent, `count:` 1 when
+    #    live), which name those references (a folder's name is one segment,
+    #    so a path is assembled from its ancestors).
+    # The root is the NULL group minus the drift: the same rows as the root
+    # page of `list_notes_in_folder_page/4`.
     markers = from(n in scoped_live(user, vault), where: n.kind == "folder")
 
     groups =
@@ -6583,36 +6584,45 @@ defmodule Engram.Notes do
         }
       )
 
-    {grouped, envelopes} =
+    folders =
+      from(f in Engram.Folders.Folder,
+        where: f.vault_id == ^vault.id,
+        select: %{
+          leg: fragment("5"),
+          id: f.id,
+          vault_id: f.vault_id,
+          ref: f.parent_id,
+          dv: f.dek_version,
+          ct: f.name_ciphertext,
+          nonce: f.name_nonce,
+          count: fragment("CASE WHEN ? IS NULL THEN 1 ELSE 0 END", f.deleted_at)
+        }
+      )
+
+    by_leg =
       drift_query(user, vault)
       |> union_all(^drift_select(markers, 3, 0))
       |> union_all(^groups)
+      |> union_all(^folders)
       |> Repo.all()
-      |> Enum.split_with(&(&1.leg == 4))
+      |> Enum.group_by(& &1.leg)
 
-    envelopes = Enum.filter(envelopes, &(&1.vault_id == vault.id))
+    envelopes =
+      for %{vault_id: vid} = e <- Map.get(by_leg, 1, []) ++ Map.get(by_leg, 3, []),
+          vid == vault.id,
+          do: e
 
     {folder_rows, live} =
-      from(f in Engram.Folders.Folder,
-        where: f.vault_id == ^vault.id,
-        select: {
-          %{
-            id: f.id,
-            parent_id: f.parent_id,
-            dv: f.dek_version,
-            ct: f.name_ciphertext,
-            nonce: f.name_nonce
-          },
-          is_nil(f.deleted_at)
-        }
-      )
-      |> Repo.all()
-      |> Enum.reduce({[], MapSet.new()}, fn {row, live?}, {rows, live} ->
-        {[%{folder_row: row} | rows], if(live?, do: MapSet.put(live, row.id), else: live)}
+      Map.get(by_leg, 5, [])
+      |> Enum.reduce({[], MapSet.new()}, fn f, {rows, live} ->
+        row = %{id: f.id, parent_id: f.ref, dv: f.dv, ct: f.ct, nonce: f.nonce}
+        {[%{folder_row: row} | rows], if(f.count == 1, do: MapSet.put(live, f.id), else: live)}
       end)
 
-    # A group whose reference names a dead row is drift (leg 2), counted by
-    # its envelope.
+    grouped = Map.get(by_leg, 4, [])
+
+    # A group whose reference names a dead row (none since
+    # `folders_release_refs`) is not listed.
     {root, by_ref} =
       Enum.reduce(grouped, {0, []}, fn
         %{ref: nil, count: count}, {_, refs} ->
@@ -6829,15 +6839,19 @@ defmodule Engram.Notes do
       scope = Pager.scope({:folder_notes, binary_part(target_hmac, 0, 16)}, user, vault)
 
       with {:ok, after_id} <- Pager.decode(scope, opts[:cursor]) do
-        {:ok, rows} =
-          Repo.with_tenant(user.id, fn ->
+        rows =
+          Repo.with_tenant_snapshot!(user.id, fn ->
+            # The root never holds drift (it is a non-root folder envelope),
+            # so its page reads none.
+            drift = if folder == "", do: [], else: placed_drift(user, vault, dek)
+
             # Metadata projection: every caller serializes summaries (path,
             # title, tags, ...) — content is never returned, so don't fetch
             # or decrypt it.
             query =
               from(n in scoped_live(user, vault),
                 where: n.kind == "note",
-                where: ^directly_in(user, vault, folder, placed_drift(user, vault, dek)),
+                where: ^directly_in(user, vault, folder, drift),
                 order_by: [asc: n.id],
                 limit: ^(limit + 1),
                 select: struct(n, @note_meta_fields)
@@ -7038,8 +7052,8 @@ defmodule Engram.Notes do
     target_hmac = Crypto.hmac_field(filter_key, folder)
 
     # The notes leg and the marker leg in ONE statement, each arm on its own
-    # index.
-    Repo.with_tenant!(user.id, fn ->
+    # index, in one snapshot with the drift read.
+    Repo.with_tenant_snapshot!(user.id, fn ->
       live = scoped_live(user, vault)
       drift = drift || placed_drift(user, vault)
 
@@ -7062,40 +7076,31 @@ defmodule Engram.Notes do
   end
 
   @doc """
-  The live notes the folder rows cannot place yet, in two arms, both 0 rows
-  in steady state, O(drift) otherwise. Every folder reader merges them by
-  their decrypted folder, so a note never leaves a listing while the drain
-  (or `FolderTable`) has not healed it.
+  The live notes the folder rows cannot place yet: no `folder_ref_id`, but a
+  non-root folder envelope (a write the trigger could not resolve, a row
+  `folders_release_refs` released when its folder row died). 0 rows in steady
+  state, O(drift) otherwise. Every folder reader merges them by their
+  decrypted folder, so a note never leaves a listing while the drain (or
+  `FolderTable`) has not healed it.
 
-    * No `folder_ref_id`, but a non-root folder envelope (a write the trigger
-      could not resolve, a row `folders_release_refs` released). The WHERE is
-      `Engram.Folders.Drift.notes_unresolved_sql/0`, the drain probe's and the
-      index's text, so the planner reads `notes_unresolved_folder (user_id)`. Scoped to the
-      USER, as the index is: with `vault_id` in the WHERE the planner prefers
-      `notes_user_vault_live` and filters every root note of the vault.
-    * A `folder_ref_id` that names a soft-deleted row (written before
-      `folders_release_refs`, or by a writer outside the vault lock): the
-      vault's dead folder rows joined to `notes_folder_ref_live`.
+  The WHERE is `Engram.Folders.Drift.notes_unresolved_sql/0`, the drain
+  probe's and the index's text, so the planner reads `notes_unresolved_folder
+  (user_id)`. Scoped to the USER, as the index is: with `vault_id` in the
+  WHERE the planner prefers `notes_user_vault_live` and filters every root
+  note of the vault. Callers keep `vault.id`'s rows.
 
-  One `UNION ALL` selecting `drift_select/2`'s map (`ref:` is nil on the
-  first arm); callers keep `vault.id`'s rows. MUST run inside the caller's
-  tenant block.
+  A live reference to a DEAD row is not drift: `folders_release_refs` NULLs
+  every live reference in the statement that soft-deletes the row
+  (20261106100200), and `FolderTable` version 3 released the older ones.
+
+  `drift_select/3`'s map. MUST run inside the caller's tenant block.
   """
   @spec drift_query(map(), map()) :: Ecto.Query.t()
-  def drift_query(user, vault) do
+  def drift_query(user, _vault) do
     # ponytail: unbounded by design (a note must never be hidden); the ceiling
-    # is the drift itself, which the drain keeps at 0.
-    unresolved =
-      from(n in Note, where: n.user_id == ^user.id, where: ^Drift.notes_unresolved())
-
-    dead_ref =
-      from(n in scoped_live(user, vault),
-        join: f in Engram.Folders.Folder,
-        on: f.id == n.folder_ref_id and f.vault_id == n.vault_id,
-        where: n.kind == "note" and not is_nil(f.deleted_at)
-      )
-
-    union_all(drift_select(unresolved, 1, 1), ^drift_select(dead_ref, 2, 1))
+    # is the user's drift, which the drain keeps at 0.
+    from(n in Note, where: n.user_id == ^user.id, where: ^Drift.notes_unresolved())
+    |> drift_select(1, 1)
   end
 
   # The envelope a folder reader decrypts, per row of `query` (notes as the
@@ -7192,16 +7197,15 @@ defmodule Engram.Notes do
   defp scan_with_drift(user, vault, folders) do
     {:ok, dek} = Crypto.get_dek(user)
 
-    # ONE tenant block: the drift page FIRST, then the folder walk, then one
-    # indexed read per kind of evidence (not one OR across kinds: each arm has
-    # its own index), the by-id ones skipped when empty. That order covers a
-    # heal (the drain giving a drift note its row) at any point under READ
-    # COMMITTED: before the drift read, the walk and the by-reference read
-    # see it; after, its id is in `drift_ids`. Walk first, a heal in between
-    # would hide it from both. Only the drift (0 rows in steady state) is
-    # decrypted inside the block.
+    # ONE snapshot (`Repo.with_tenant_snapshot!/2`: REPEATABLE READ at the top
+    # level; inline in a folder write, which holds the vault seq lock the
+    # heal also takes): the drift page, the folder walk, then one indexed
+    # read per kind of evidence (not one OR across kinds: each arm has its
+    # own index), the by-id ones skipped when empty. Drift first all the
+    # same: harmless, and it keeps a READ COMMITTED caller right. Only the
+    # drift (0 rows in steady state) is decrypted inside the block.
     {rows, drift} =
-      Repo.with_tenant!(user.id, fn ->
+      Repo.with_tenant_snapshot!(user.id, fn ->
         {drift, undecryptable} = drift_note_folders(user, vault, dek)
         if undecryptable > 0, do: raise("Phase B envelope decryption failed")
         refs = Rows.subtree_refs(user, vault.id, folders)
