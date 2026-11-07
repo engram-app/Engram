@@ -65,7 +65,46 @@ jobs:
   #   git push origin release-v0.5.999
   # The bypass is explicit and LOGGED (::warning::). A plain lightweight tag
   # (the normal recipe) has no message, so it can never accidentally bypass.
+  # Rollback floor (`Engram.Release.Floor`, docs/context/rollback-floor.md):
+  # fail the deploy of a tag whose commit does not descend from the floor tag
+  # named in MAIN's priv/release_floor (the deployed commit's own copy is
+  # older on a rollback). Fails closed.
+  #
+  # DEFENSE IN DEPTH ONLY. A tag push runs the deploy-prod.yml OF THE TAGGED
+  # COMMIT, so a rollback to a commit from before this job existed runs a
+  # workflow with no floor gate at all. The gate that sees every prod move is
+  # engram-infra's check on the image-bump PR.
+  #
+  # Incident override, the [skip-release-e2e] pattern: an ANNOTATED tag whose
+  # message contains `[allow-below-floor]` deploys below the floor with a
+  # ::warning:: and a step-summary line.
+  #   git tag -a release-v0.5.999 -m "[allow-below-floor] incident: <reason>" <sha>
+  release-floor-gate:
+    runs-on: [self-hosted, linux, x64, isolated]
+    permissions:
+      contents: read
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Checkout (history and tags, for the ancestry check)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check the rollback floor
+        run: |
+          set -euo pipefail
+          msg=$(bash scripts/tag_message.sh "$TAG")
+          allow=false
+          grep -qiF '[allow-below-floor]' <<<"$msg" && allow=true
+          git fetch -q origin main
+          floor=$(git show origin/main:priv/release_floor | tr -d '[:space:]')
+          ALLOW_BELOW_FLOOR="$allow" bash scripts/check_release_floor.sh "$floor" "$GITHUB_SHA"
+
   release-e2e-gate:
+    needs: release-floor-gate
     runs-on: [self-hosted, linux, x64, isolated]
     permissions:
       contents: read
@@ -78,19 +117,16 @@ jobs:
       TAG: ${{ github.ref_name }}
       HEAD_SHA: ${{ github.sha }}
     steps:
+      - name: Checkout (scripts/tag_message.sh)
+        uses: actions/checkout@v7
+
       - name: Check for emergency override in tag annotation
         id: override
         run: |
           set -euo pipefail
-          # Read the annotated-tag message via the API (no dependence on local
-          # fetch depth). A lightweight tag resolves to a commit object with no
-          # message → no override → gated (the safe default).
-          msg=""
-          obj_type=$(gh api "repos/${GH_REPO}/git/ref/tags/${TAG}" -q '.object.type' 2>/dev/null || echo "")
-          obj_sha=$(gh api "repos/${GH_REPO}/git/ref/tags/${TAG}" -q '.object.sha' 2>/dev/null || echo "")
-          if [ "$obj_type" = "tag" ] && [ -n "$obj_sha" ]; then
-            msg=$(gh api "repos/${GH_REPO}/git/tags/${obj_sha}" -q '.message' 2>/dev/null || echo "")
-          fi
+          # A lightweight tag has no message → no override → gated (the safe
+          # default); scripts/tag_message.sh is the one copy of the lookup.
+          msg=$(bash scripts/tag_message.sh "$TAG")
           if grep -qiF '[skip-release-e2e]' <<<"$msg"; then
             echo "::warning::[skip-release-e2e] found in tag ${TAG} annotation — BYPASSING the full-Obsidian e2e gate. Deploy proceeds WITHOUT real-app proof."
             echo "bypass=true" >> "$GITHUB_OUTPUT"
