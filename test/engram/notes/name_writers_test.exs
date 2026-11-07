@@ -115,6 +115,31 @@ defmodule Engram.Notes.NameWritersTest do
       assert raw("notes", note.id).nonce == before.nonce
     end
 
+    # Every room checkpoint rebuilds the note's write attrs. With the path
+    # unchanged it must not re-derive the name (or the path): no encrypt, no
+    # HMAC, no name or path column in its UPDATE, no extra statement.
+    test "a checkpoint with an unchanged path leaves the name untouched", %{user: u, vault: v} do
+      note = note!(u, v, "A/cp.md")
+      before = raw("notes", note.id)
+
+      doc = Engram.Notes.CrdtBridge.new_doc()
+      :ok = Engram.Notes.CrdtBridge.ingest_plaintext(doc, "# T\n\nedited in a room")
+
+      queries =
+        Engram.TenantQueryCounter.count_matching_queries(
+          fn -> :ok = Engram.Notes.CrdtCheckpoint.checkpoint(u.id, v.id, note.id, doc) end,
+          fn _ -> true end
+        )
+
+      assert {:ok, %{content: "# T\n\nedited in a room"}} = Notes.get_note(u, v, "A/cp.md")
+      assert raw("notes", note.id) == before
+
+      updates = Enum.filter(queries, &(&1 =~ ~s(UPDATE "notes")))
+      assert [_ | _] = updates
+      refute Enum.any?(updates, &(&1 =~ "name_")), Enum.join(updates, "\n")
+      refute Enum.any?(updates, &(&1 =~ "path_nonce")), Enum.join(updates, "\n")
+    end
+
     test "rename and move", %{user: u, vault: v} do
       note = note!(u, v, "A/Old.md")
       {:ok, _} = Notes.rename_note(u, v, "A/Old.md", "A/New.md")

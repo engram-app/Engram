@@ -152,7 +152,7 @@ defmodule Engram.Folders.NoteFolderHashNullTest do
     end
   end
 
-  # `keep_stored_path/2`: a same-path write keeps the stored path and folder
+  # `Notes.stored_path?/3`: a same-path write keeps the stored path and folder
   # envelopes (no re-encrypt, a HOT update). It compared the folder hash too,
   # so a stored NULL hash re-encrypted every write and wrote the hash back.
   test "a same-path write of a note with no hash keeps its folder envelope", %{
