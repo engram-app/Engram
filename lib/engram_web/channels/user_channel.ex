@@ -48,6 +48,9 @@ defmodule EngramWeb.UserChannel do
       raw_attachment_upload: true,
       raw_attachment_download: true,
       crdt_diff_refusal: true,
+      # The `folder_op` frame and `folder_changed` events (#2523 S4): a runtime
+      # switch, read where the wire reads it (`Engram.Folders.Wire.enabled?/0`).
+      folder_ops: Engram.Folders.Wire.enabled?(),
       # The web app has no plan feed (it never joins `user:`), so it gets the
       # executable list here to refuse those files before the upload dialog.
       blocked_extensions: Engram.Billing.advertised_blocked_extensions()

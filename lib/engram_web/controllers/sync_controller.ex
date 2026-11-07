@@ -201,7 +201,8 @@ defmodule EngramWeb.SyncController do
         )
       )
 
-    {notes, attachments}
+    # The folder-op wire's folder rows (#2523 S4), nil with its switch off.
+    {notes, attachments, Engram.Folders.Wire.manifest_rows(vault)}
   end
 
   # The manifest's notes, in two halves of one statement (UNION ALL). A
@@ -240,7 +241,7 @@ defmodule EngramWeb.SyncController do
   defp path_half(query, :long),
     do: where(query, [n], fragment("(octet_length(?) <= 2000) IS NOT TRUE", n.path_ciphertext))
 
-  defp render_manifest(conn, {note_rows, attachment_rows}, dek, current_seq) do
+  defp render_manifest(conn, {note_rows, attachment_rows, folder_rows}, dek, current_seq) do
     # One batch native call per column (`PathCrypto.decrypt_many!/3`): one key
     # schedule, AAD built in Rust from the raw ids selected above. Measured
     # 2-5x the per-row loop (docs/context/native-nifs.md). Parallel was
@@ -272,12 +273,19 @@ defmodule EngramWeb.SyncController do
       end)
       |> Enum.sort_by(& &1.path)
 
-    json(conn, %{
-      notes: notes,
-      attachments: attachments,
-      total_notes: length(notes),
-      total_attachments: length(attachments),
-      change_seq: current_seq
-    })
+    body =
+      Engram.Folders.Wire.manifest(
+        %{
+          notes: notes,
+          attachments: attachments,
+          total_notes: length(notes),
+          total_attachments: length(attachments),
+          change_seq: current_seq
+        },
+        folder_rows,
+        dek
+      )
+
+    json(conn, body)
   end
 end

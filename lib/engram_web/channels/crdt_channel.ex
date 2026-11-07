@@ -19,6 +19,7 @@ defmodule EngramWeb.CrdtChannel do
   use Phoenix.Channel
 
   alias Engram.Crypto.HMAC
+  alias Engram.Folders.Wire
   alias Engram.Logger.Metadata
   alias Engram.{Notes, Repo, Vaults}
   alias Engram.Notes.CrdtBridge
@@ -788,8 +789,27 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
+  # The plugin's folder op (#2523 S4), owned by `Engram.Folders.Wire`. With
+  # the `folder_ops` switch off it is an unknown event, exactly as before.
   @impl true
-  def handle_in(_event, _payload, socket) do
+  def handle_in("folder_op", payload, socket) when is_map(payload) do
+    with true <- Wire.enabled?(),
+         :ok <- check_rate(socket, :handshake) do
+      %{current_user: user, vault: vault} = socket.assigns
+
+      case Wire.apply_op(user, vault, payload, socket.assigns[:device_id]) do
+        {:ok, ack} -> {:reply, {:ok, ack}, socket}
+        {:error, reason} -> {:reply, {:error, %{reason: reason}}, socket}
+      end
+    else
+      false -> unknown_event(socket)
+      {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
+    end
+  end
+
+  def handle_in(_event, _payload, socket), do: unknown_event(socket)
+
+  defp unknown_event(socket) do
     case check_rate(socket, :handshake) do
       :ok -> {:reply, {:error, %{reason: "bad_frame"}}, socket}
       {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
@@ -1061,8 +1081,11 @@ defmodule EngramWeb.CrdtChannel do
       client: activity_surface(socket.assigns[:client_type])
     })
 
+    reply = %{doc_id: note.id, seeded: genesis == :stored, genesis: Atom.to_string(genesis)}
+
     {:reply,
-     {:ok, %{doc_id: note.id, seeded: genesis == :stored, genesis: Atom.to_string(genesis)}},
+     {:ok,
+      Map.merge(reply, Wire.create_reply(socket.assigns.current_user, socket.assigns.vault, note))},
      socket}
   end
 
