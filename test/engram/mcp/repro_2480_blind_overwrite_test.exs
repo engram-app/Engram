@@ -263,6 +263,43 @@ defmodule Engram.MCP.Repro2480BlindOverwriteTest do
     assert body(u, v) == "from obsidian\n"
   end
 
+  for ua <- [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " <>
+          "obsidian/1.12.7 Chrome/142.0.7444.265 Electron/39.8.3 Safari/537.36",
+        "Obsidian/396 CFNetwork/3860.700.2 Darwin/25.6.0",
+        "Dalvik/2.1.0 (Linux; U; Android 15; moto g34 5G Build/V1UGS35H.75-14-6-2-4)"
+      ] do
+    test "2480 edge: a pre-1.29 plugin (no version header, Obsidian UA) pushes: #{ua}", %{
+      conn: conn,
+      user: u,
+      vault: v
+    } do
+      conn
+      |> put_req_header("user-agent", unquote(ua))
+      |> post("/api/notes", %{path: @path, content: "old plugin\n", mtime: 2.0})
+      |> json_response(200)
+
+      assert body(u, v) == "old plugin\n"
+    end
+  end
+
+  test "2480 edge: a script user agent with an API key still needs base_hash", %{
+    conn: conn,
+    user: u,
+    vault: v
+  } do
+    before = body(u, v)
+
+    for ua <- ["Python-urllib/3.12", "node"] do
+      conn
+      |> put_req_header("user-agent", ua)
+      |> post("/api/notes", %{path: @path, content: "script\n", mtime: 2.0})
+      |> json_response(409)
+    end
+
+    assert body(u, v) == before
+  end
+
   test "2480 edge: a user-token client (web app, device-flow plugin) pushes without base_hash", %{
     user: u,
     vault: v
